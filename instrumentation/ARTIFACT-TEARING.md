@@ -1,3 +1,20 @@
+> **CONTROL RESULT — this is NOT a Phase 2A regression.** The identical test on the
+> STOCK shipped agent (`gui-agent.exe.orig`, restored via `swap-agent.ps1 -Restore`)
+> reproduces the same class of corruption, arguably worse: missing title bar, clipped menu
+> bar ("ile Edit Format View Help"), and a stale `line 1` row above `line 501...`.
+> Evidence: `artifact-tearing-STOCK-agent.png` vs `artifact-tearing-phase2a.png`.
+> The "Phase 2A removed accidental pacing and exposed the race" theory below is therefore
+> WRONG as stated — the corruption happens at 6.6 fps too. Phase 2A does not block on this.
+> It is a pre-existing bug in the shipped QWT, worth fixing and worth an upstream issue.
+>
+> Also corrected: MSG_WINDOW_DUMP_ACK (149) is NOT usable as per-frame flow control. The
+> protocol header states it exists so the agent knows "when it can safely unmap a window's
+> grants" — it acknowledges MSG_WINDOW_DUMP, not per-frame damage. Candidate fix (1) is out.
+>
+> Additional confirmed property: the corruption is **persistent, not transient**. Three
+> seconds after scrolling stops the stale band is still there, because nothing damages that
+> region again so dom0 never re-reads it. It does not self-heal.
+
 # Visible artifact after Phase 2A: stale scanline bands (framebuffer read race)
 
 Reported by the user ("i have seen a visible artifact ... not very bad but worth catching")
