@@ -147,29 +147,13 @@ file pushed via qrexec; later: xenstore/qubesdb), dirty-rect-limited processing 
 swapchain loop, hardware cursor enablement, measured comparison vs Basic Display Adapter
 baseline using 1A's harness + ddaprobe.
 
-## Track C — Windows update status/management from dom0 (independent; slot between phases)
+## Track C — Windows update reporting/management: NOT IN THIS REPO
 
-Goal: Windows qubes appear in the Qubes updater like Linux ones. dom0 plumbing is OS-agnostic
-(`qubes.NotifyUpdates` → `updates-available` feature → updater widget); only the guest side is
-missing. Steps:
-1. Locate QWT's qrexec *client* binary in the test VM (Windows→dom0 calls; same mechanism as
-   outbound file copy). Record path in FINDINGS.md.
-2. `guest/qubes-update-check.ps1`: WUA COM search (`Microsoft.Update.Session`,
-   `IsInstalled=0 and IsHidden=0 and Type='Software'`) → pipe the count to
-   `qubes.NotifyUpdates`. Register a scheduled task (daily + boot). Default policy already
-   allows the call.
-3. **Offline test:** report a synthetic count from win-idd-test; user confirms the qube shows
-   pending updates in the updater widget (dom0 visual = ask user, or `qtest`-side check via
-   admin.vm.CurrentState is NOT enough — feature flags aren't in our policy; just ask).
-4. Tier 1 management: guest qrexec service `qubes.WindowsUpdate` (QWT RPC registration) doing
-   elevated WUA download+install with streamed progress + explicit REBOOT_REQUIRED marker;
-   thin `qvm-windows-update` dom0 wrapper script (deliver to user for dom0 install, like the
-   other dom0/ scripts — never install it yourself).
-5. Real WUA end-to-end needs a netvm on a Windows qube — escalate to the user; do not enable
-   network on win-idd-test yourself.
-6. Upstream: reporter script + scheduled task = PR candidate for qubes-windows-tools;
-   `qubes-vm-update` Windows backend = design discussion with upstream first (user approves
-   any contact).
+Windows-update integration (`qubes.NotifyUpdates` reporting, a `qubes.WindowsUpdate` guest
+service, a `qvm-windows-update` dom0 wrapper) is a **Qubes Windows Tools** concern and has
+nothing to do with the indirect display driver. It is tracked separately and deliberately
+kept out of this repository so the scope here stays: Track A (gui-agent performance) and
+Track B (the IddCx display driver). Do not add Track C code or docs here.
 
 ## Phase 3 — integration/protocol work
 
