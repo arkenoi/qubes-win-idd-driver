@@ -140,6 +140,31 @@ window-acceptance predicate (build it into the SetWinEventHook rework):
    windows, not to let the guest opt out of borders. Real-Office validation happens later in
    the user's Office qube (ask first).
 
+## Phase 2B-resize — dynamic resolution following the dom0 window (fullscreen mode)
+
+Goal: resizing the qube's window in dom0 changes the GUEST resolution to match, instead of
+scaling/clipping a fixed-size desktop. Blocked today by the Basic Display Adapter's FIXED
+mode list — arbitrary sizes (e.g. 2566x1022) are simply not offered, so this is unreachable
+without the IDD. With IddCx, reporting arbitrary modes on demand is the driver's core
+capability, making this a natural deliverable of Phase 2B rather than separate work.
+
+Chain to build (verify each link in source before designing):
+1. dom0 -> guest: determine which channel actually carries a fullscreen-window resize —
+   `MSG_CONFIGURE` on the screen window, or the `qubes.SetMonitorLayout` RPC (the channel
+   the LINUX agent consumes to drive xrandr; the Windows counterpart is the missing piece).
+   Read qubes-gui-daemon + qubes-gui-agent-linux to see which fires, then mirror it.
+2. agent -> driver: pass requested geometry to the IDD (IOCTL or named pipe); driver adds
+   the mode and signals a monitor mode change.
+3. Windows switches resolution; DWM re-lays out.
+4. agent re-grants the framebuffer at the new size + fresh `MSG_WINDOW_DUMP`. Partially
+   exists already (the agent re-grants on resolution change).
+
+PREREQUISITE BUG, found in the gui-agent log during provisioning (see mgmt/PROVISION-LOG.md):
+on seamless-mode switch / resolution change, `AcquireNextFrame` fails with 0x887a0026
+"The keyed mutex was abandoned" and the capture thread dies. The resolution-change path is
+therefore already broken in the shipped build — diagnose and fix it (worth an upstream issue
+regardless) before or alongside this feature, since resize exercises exactly that path.
+
 ## Phase 2B — QubesIDD driver (only after 1B verdict)
 
 Rebrand sample (`root\qubesidd`), dynamic mode list (start: read desired modes from a config
