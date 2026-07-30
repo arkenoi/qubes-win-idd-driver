@@ -37,6 +37,18 @@ jobs:
           & $msbuild driver\ /m /p:Configuration=Release /p:Platform=x64 /t:Build
           if ($LASTEXITCODE -ne 0) { throw "msbuild failed" }
 
+      - name: Build ddaprobe
+        shell: pwsh
+        run: |
+          # tools/ddaprobe: Desktop Duplication scoping probe (CLAUDE.md Phase 0.6 / 1B).
+          # Plain v143 toolset + /MT, no WDK dependency -> its own msbuild invocation.
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              Select-Object -First 1
+          & $msbuild tools\ddaprobe\ddaprobe.vcxproj /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "ddaprobe msbuild failed" }
+          Get-ChildItem tools\ddaprobe\x64\Release\ddaprobe.exe
+
       - name: Collect package + tools
         shell: pwsh
         run: |
@@ -69,6 +81,17 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($_.Name)" }
           }
           Remove-Item cert.pfx
+
+      # After signing on purpose: ddaprobe.exe is a user-mode console tool, unreferenced by
+      # any INF; dropping it in before Inf2Cat would put an unrelated binary in the dir the
+      # catalog is generated from.
+      - name: Add unsigned tools to package
+        shell: pwsh
+        run: |
+          $probe = Get-ChildItem tools\ddaprobe -Recurse -Filter ddaprobe.exe -ErrorAction SilentlyContinue |
+              Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
+          if ($probe) { Copy-Item $probe.FullName package\ -Force } else { Write-Warning 'ddaprobe.exe missing from package' }
+          Get-ChildItem package
 
       - uses: actions/upload-artifact@v4
         with:

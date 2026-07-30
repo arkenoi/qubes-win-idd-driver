@@ -20,9 +20,18 @@ adm()     { qrexec-client-vm "$VM" "$1" </dev/null; echo; }
 case "${1:-}" in
   run)     shift; vmshell "$*" ;;
   ps)      shift; vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"$*\"" ;;
-  push)    shift; qvm-copy-to-vm "$VM" "$@" ;;
+  push)    shift
+           # Qubes' file-agent REFUSES to overwrite an existing name in QubesIncoming
+           # ("A file named ... already exists"). Delete the targets first so re-pushing
+           # an edited file during iteration just works.
+           for f in "$@"; do
+               b="$(basename "$f")"
+               vmshell "cmd /c del /q /f \"$INCOMING\\$b\" 2>nul" >/dev/null 2>&1 || true
+           done
+           qvm-copy-to-vm "$VM" "$@" ;;
   pushrun) shift
            f="$1"; base="$(basename "$f")"
+           vmshell "cmd /c del /q /f \"$INCOMING\\$base\" 2>nul" >/dev/null 2>&1 || true
            qvm-copy-to-vm "$VM" "$f"
            vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"$INCOMING\\$base\"" ;;
   start)    adm admin.vm.Start ;;

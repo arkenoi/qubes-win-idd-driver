@@ -1,0 +1,711 @@
+diff --git a/gui-agent/capture.c b/gui-agent/capture.c
+index 962b4ce..64e929b 100644
+--- a/gui-agent/capture.c
++++ b/gui-agent/capture.c
+@@ -345,8 +345,10 @@ static HRESULT GetFrame(IN OUT CAPTURE_CONTEXT* ctx, IN UINT timeout)
+     EnterCriticalSection(&ctx->frame.lock);
+     assert(!ctx->frame.texture);
+ 
++    LONGLONG perf_t0 = PerfNow();
+     HRESULT status = IDXGIOutputDuplication_AcquireNextFrame(ctx->duplication,
+         timeout, &ctx->frame.info, &ctx->frame.texture);
++    ctx->frame.perf.acquire_ticks = PerfNow() - perf_t0;
+     if (FAILED(status))
+     {
+         if (status != DXGI_ERROR_WAIT_TIMEOUT) // don't spam log with timeouts
+@@ -401,7 +403,44 @@ static HRESULT GetFrame(IN OUT CAPTURE_CONTEXT* ctx, IN UINT timeout)
+         assert(ctx->framebuffer == ctx->frame.rect.pBits);
+     }
+ 
++    // Instrumentation: is GetFrameMoveRects ever non-empty? See the TODO below.
++    // MSDN mandates move rects are retrieved before dirty rects, so this must stay here.
++    // The results are only measured, never used to produce output.
++    ctx->frame.perf.move_rects_count = 0;
++    ctx->frame.perf.moverect_ticks = 0;
++    if (g_PerfEnabled)
++    {
++        DXGI_OUTDUPL_MOVE_RECT move_rects[64];
++        UINT mr_size = 0;
++        RECT no_rect = { 0, 0, 0, 0 };
++
++        perf_t0 = PerfNow();
++        HRESULT mr_status = IDXGIOutputDuplication_GetFrameMoveRects(ctx->duplication,
++            (UINT)sizeof(move_rects), move_rects, &mr_size);
++        ctx->frame.perf.moverect_ticks = PerfNow() - perf_t0;
++
++        if (SUCCEEDED(mr_status))
++        {
++            ctx->frame.perf.move_rects_count = mr_size / sizeof(DXGI_OUTDUPL_MOVE_RECT);
++            if (ctx->frame.perf.move_rects_count > 0)
++                PerfNoteMoveRects(ctx->frame.perf.move_rects_count,
++                    move_rects[0].SourcePoint.x, move_rects[0].SourcePoint.y,
++                    &move_rects[0].DestinationRect);
++        }
++        else if (mr_status == DXGI_ERROR_MORE_DATA)
++        {
++            // more than ARRAYSIZE(move_rects) move rects: report the count, don't retry
++            ctx->frame.perf.move_rects_count = mr_size / sizeof(DXGI_OUTDUPL_MOVE_RECT);
++            PerfNoteMoveRects(ctx->frame.perf.move_rects_count, 0, 0, &no_rect);
++        }
++        else
++        {
++            ctx->frame.perf.move_rects_count = (UINT)-1; // query failed
++        }
++    }
++
+     // dirty rects
++    perf_t0 = PerfNow();
+     UINT dr_size = 1; // initial buffer can't be empty
+     RECT temp_rect;
+ 
+@@ -429,6 +468,20 @@ static HRESULT GetFrame(IN OUT CAPTURE_CONTEXT* ctx, IN UINT timeout)
+     }
+ 
+     ctx->frame.dirty_rects_count = dr_size / sizeof(RECT);
++    ctx->frame.perf.dirtyrect_ticks = PerfNow() - perf_t0;
++
++    // Instrumentation: total damaged area, computed outside the timed region so
++    // it doesn't inflate the number it annotates. Capture thread only.
++    ctx->frame.perf.dirty_area = 0;
++    if (g_PerfEnabled)
++    {
++        for (UINT i = 0; i < ctx->frame.dirty_rects_count; i++)
++        {
++            ctx->frame.perf.dirty_area +=
++                (UINT64)(ctx->frame.dirty_rects[i].right - ctx->frame.dirty_rects[i].left) *
++                (UINT64)(ctx->frame.dirty_rects[i].bottom - ctx->frame.dirty_rects[i].top);
++        }
++    }
+ 
+ #ifdef _DEBUG
+     LogVerbose("%u dirty rects", ctx->frame.dirty_rects_count);
+@@ -548,9 +601,13 @@ static DWORD WINAPI CaptureThread(void* param)
+         }
+ 
+         if (capture->frame.dirty_rects_count == 0)
++        {
++            PerfNoteSkippedFrame();
+             goto end_frame; // framebuffer contents not changed
++        }
+ 
+         // notify main loop that there's a new frame
++        capture->frame.perf.signal_qpc = PerfNow();
+         SetEvent(capture->frame_event);
+ 
+         // wait until main loop processes the frame
+diff --git a/gui-agent/capture.h b/gui-agent/capture.h
+index 434a52b..7179d32 100644
+--- a/gui-agent/capture.h
++++ b/gui-agent/capture.h
+@@ -28,6 +28,8 @@
+ 
+ #include <xencontrol.h>
+ 
++#include "perf.h"
++
+ #define ALIGN(x, a)	(((x) + (a) - 1) & ~((a) - 1))
+ #define	FRAMEBUFFER_PAGE_COUNT(width, height)	(ALIGN(((width)*(height)*4), PAGE_SIZE) / PAGE_SIZE)
+ 
+@@ -43,6 +45,7 @@ typedef struct _CAPTURE_FRAME
+ 	UINT dirty_rects_count;
+ 	RECT* dirty_rects;
+ 	CRITICAL_SECTION lock;
++	PERF_CAPTURE perf; // instrumentation, see perf.h (inert unless enabled)
+ } CAPTURE_FRAME;
+ 
+ typedef struct _CAPTURE_CONTEXT
+diff --git a/gui-agent/main.c b/gui-agent/main.c
+index 6e04b96..02c8246 100755
+--- a/gui-agent/main.c
++++ b/gui-agent/main.c
+@@ -39,6 +39,7 @@
+ #include "vchan-handlers.h"
+ #include "util.h"
+ #include "debug.h"
++#include "perf.h"
+ #include "qubes-io.h"
+ 
+ // windows-utils
+@@ -1016,9 +1017,21 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+     WINDOW_DATA *nextEntry;
+     ULONG status = ERROR_SUCCESS;
+ 
++    // Instrumentation (see perf.h). All of these collapse to zero when disabled;
++    // the only cost then is the g_PerfEnabled test inside PerfNow().
++    LONGLONG perfFrameStart = PerfNow();
++    LONGLONG perfSendBase = g_PerfSendTicks;
++    LONG perfSendCountBase = g_PerfSendCount;
++    LONGLONG perfPhase = 0, perfSendPhase = 0;
++    LONGLONG perfUpdate = 0, perfEnum = 0, perfRemove = 0, perfDamage = 0;
++    UINT perfWindows = 0;
++
+     LogVerbose("start");
+     if (!g_SeamlessMode)
+     {
++        perfPhase = PerfNow();
++        perfSendPhase = g_PerfSendTicks;
++
+         if (frame->dirty_rects_count == 0)
+         {
+             // normally we don't get frames with 0 dirty rects unless it's the 1st one
+@@ -1036,6 +1049,12 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+             }
+         }
+ 
++        perfDamage = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
++        PerfEmitFrame(FALSE, perfFrameStart, PerfNow() - perfFrameStart,
++            0, 0, 0, perfDamage,
++            g_PerfSendTicks - perfSendBase, g_PerfSendCount - perfSendCountBase,
++            &frame->perf, frame->dirty_rects_count, 1);
++
+         LogVerbose("end (fullscreen)");
+         return ERROR_SUCCESS;
+     }
+@@ -1044,6 +1063,9 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+ 
+     // TODO: don't enumerate all windows every time, use window hooks to monitor for changes
+ 
++    perfPhase = PerfNow();
++    perfSendPhase = g_PerfSendTicks;
++
+     // Update state of all tracked windows. If a window is no longer eligible (destroyed, hidden...)
+     // then mark it for removal but keep in the list for now, so AddAllWindows() can skip them.
+     entry = (WINDOW_DATA*)g_WatchedWindowsList.Flink;
+@@ -1062,9 +1084,17 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+         entry = nextEntry;
+     }
+ 
++    perfUpdate = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
++    perfPhase = PerfNow();
++    perfSendPhase = g_PerfSendTicks;
++
+     // Enumerate all top-level windows and all eligible ones to the list if not already there.
+     AddAllWindows();
+ 
++    perfEnum = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
++    perfPhase = PerfNow();
++    perfSendPhase = g_PerfSendTicks;
++
+     // Remove windows marked for deletion.
+     entry = (WINDOW_DATA*)g_WatchedWindowsList.Flink;
+     while (entry != (WINDOW_DATA*)&g_WatchedWindowsList)
+@@ -1085,12 +1115,17 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+         entry = nextEntry;
+     }
+ 
++    perfRemove = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
++    perfPhase = PerfNow();
++    perfSendPhase = g_PerfSendTicks;
++
+     // send damage notifications
+     entry = (WINDOW_DATA *)g_WatchedWindowsList.Flink;
+     while (entry != (WINDOW_DATA*)&g_WatchedWindowsList)
+     {
+         entry = CONTAINING_RECORD(entry, WINDOW_DATA, ListEntry);
+         nextEntry = (WINDOW_DATA*)entry->ListEntry.Flink;
++        perfWindows++;
+ 
+         if (entry->IsIconic) // minimized, don't care
+             goto skip;
+@@ -1127,7 +1162,14 @@ skip:
+     }
+ 
+ cleanup:
++    perfDamage = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
+     LeaveCriticalSection(&g_csWatchedWindows);
++
++    PerfEmitFrame(TRUE, perfFrameStart, PerfNow() - perfFrameStart,
++        perfUpdate, perfEnum, perfRemove, perfDamage,
++        g_PerfSendTicks - perfSendBase, g_PerfSendCount - perfSendCountBase,
++        &frame->perf, frame->dirty_rects_count, perfWindows);
++
+     LogVerbose("end (%x)", status);
+     return status;
+ }
+@@ -1257,7 +1299,10 @@ static ULONG WINAPI WatchForEvents(void)
+         if (g_SeamlessMode)
+         {
+             // dump watched windows every second
+-            if (GetTickCount() - dumpLastTime > 1000)
++            // (skip entirely if the output would be discarded: DumpWindows() does
++            // OpenProcess+QueryFullProcessImageName per window and takes both the
++            // watched-windows and the logger lock, once a second, at any log level)
++            if (LogGetLevel() >= LOG_LEVEL_DEBUG && GetTickCount() - dumpLastTime > 1000)
+             {
+                 DumpWindows();
+                 dumpLastTime = GetTickCount();
+@@ -1518,6 +1563,8 @@ static ULONG Init(void)
+         return GetLastError();
+     }
+ 
++    PerfInit();
++
+     EnableUIAccess();
+     status = CfgGetModuleName(moduleName, RTL_NUMBER_OF(moduleName));
+ 
+diff --git a/gui-agent/perf.c b/gui-agent/perf.c
+new file mode 100644
+index 0000000..d3a055f
+--- /dev/null
++++ b/gui-agent/perf.c
+@@ -0,0 +1,219 @@
++/*
++ * The Qubes OS Project, http://www.qubes-os.org
++ *
++ * Copyright (c) Invisible Things Lab
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version 2
++ * of the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
++ *
++ */
++
++#include "perf.h"
++
++#include <log.h>
++#include <config.h>
++
++BOOL     g_PerfEnabled = FALSE;
++LONGLONG g_PerfFreq = 0;
++DWORD    g_PerfEveryN = 1;
++
++__declspec(thread) LONGLONG g_PerfSendTicks = 0;
++__declspec(thread) LONG     g_PerfSendCount = 0;
++
++// Accumulated over g_PerfEveryN frames. Touched only by the main loop.
++typedef struct _PERF_ACC
++{
++    UINT     frames;
++    LONGLONG dt;        // wall time covered by those frames
++    LONGLONG acquire;
++    LONGLONG wakeup;
++    LONGLONG moverect;
++    LONGLONG dirtyrect;
++    LONGLONG update;
++    LONGLONG enumerate;
++    LONGLONG remove;
++    LONGLONG damage;
++    LONGLONG send;
++    LONGLONG total;
++    LONG     sends;
++    UINT     dirty_rects;
++    UINT     move_rects;
++    UINT64   dirty_area;
++    UINT     windows;   // last value, not a sum
++    BOOL     seamless;  // last value
++} PERF_ACC;
++
++static PERF_ACC g_Acc;
++static UINT64   g_Seq = 0;              // processed frames since agent start
++static UINT     g_MoveRectsMax = 0;     // high water mark, survives into every record
++static BOOL     g_MoveRectsReported = FALSE;
++static LONGLONG g_PrevFrameQpc = 0;
++static LONGLONG g_EmitTicks = 0;        // cost of the *previous* emit, reported as "log"
++static volatile LONG g_SkippedFrames = 0;   // capture thread -> main loop
++
++void PerfInit(void)
++{
++    LARGE_INTEGER freq;
++    WCHAR moduleName[CFG_MODULE_MAX];
++    WCHAR env[8];
++    DWORD value;
++    BOOL enabled = (QGA_PERF_DEFAULT != 0);
++
++    QueryPerformanceFrequency(&freq);
++    g_PerfFreq = freq.QuadPart;
++
++    if (ERROR_SUCCESS == CfgGetModuleName(moduleName, RTL_NUMBER_OF(moduleName)))
++    {
++        if (ERROR_SUCCESS == CfgReadDword(moduleName, REG_CONFIG_PERF_VALUE, &value, NULL))
++            enabled = (value != 0);
++
++        if (ERROR_SUCCESS == CfgReadDword(moduleName, REG_CONFIG_PERF_EVERY_VALUE, &value, NULL) && value > 0)
++            g_PerfEveryN = value;
++    }
++
++    if (GetEnvironmentVariable(PERF_ENV_VALUE, env, RTL_NUMBER_OF(env)) > 0)
++        enabled = (env[0] != L'0');
++
++    g_PerfEnabled = enabled;
++
++    if (!g_PerfEnabled)
++    {
++        LogInfo("QGAPERF off");
++        return;
++    }
++
++    // Calibrate the self-cost: on a Xen HVM guest QPC may be backed by the TSC
++    // (~20-30ns) or by an emulated timer (~1us), which changes how much of the
++    // numbers below is measurement overhead. Measure instead of assuming.
++    LARGE_INTEGER a, b, t;
++    LONGLONG sink = 0;
++    QueryPerformanceCounter(&a);
++    for (int i = 0; i < 10000; i++)
++    {
++        QueryPerformanceCounter(&t);
++        sink += t.QuadPart;
++    }
++    QueryPerformanceCounter(&b);
++    LONGLONG qpcCostNs = g_PerfFreq ? ((b.QuadPart - a.QuadPart) * 1000000000LL) / g_PerfFreq / 10000LL : 0;
++
++    LogInfo("QGAPERF on: freq=%I64d everyN=%u qpc_cost_ns=%I64d default=%d (sink %I64d)",
++        g_PerfFreq, g_PerfEveryN, qpcCostNs, QGA_PERF_DEFAULT, sink);
++    LogInfo("QGAPERF-HEADER v=%d fields: seq,n,mode,dt,acq,wak,mrq,drq,upd,enu,rem,dmg,snd,tot,dr,mr,mrmax,area,win,sends,skip,log (times in microseconds)",
++        PERF_RECORD_VERSION);
++}
++
++void PerfNoteSkippedFrame(void)
++{
++    if (!g_PerfEnabled)
++        return;
++
++    InterlockedIncrement(&g_SkippedFrames);
++}
++
++void PerfNoteMoveRects(IN UINT count, IN LONG srcX, IN LONG srcY, IN const RECT* dst)
++{
++    if (!g_PerfEnabled || count == 0)
++        return;
++
++    if (count > g_MoveRectsMax)
++        g_MoveRectsMax = count;
++
++    if (!g_MoveRectsReported)
++    {
++        g_MoveRectsReported = TRUE;
++        // This is the answer to the "they seem to always be empty when testing"
++        // TODO in capture.c: if this line ever appears, move rects are usable.
++        LogInfo("QGAPERF-MOVERECTS: first non-empty GetFrameMoveRects: count=%u src=(%d,%d) dst=(%d,%d)-(%d,%d)",
++            count, srcX, srcY, dst->left, dst->top, dst->right, dst->bottom);
++    }
++}
++
++void PerfEmitFrame(
++    IN BOOL seamless,
++    IN LONGLONG frame_start_qpc,
++    IN LONGLONG total_ticks,
++    IN LONGLONG update_ticks,
++    IN LONGLONG enum_ticks,
++    IN LONGLONG remove_ticks,
++    IN LONGLONG damage_ticks,
++    IN LONGLONG send_ticks,
++    IN LONG send_count,
++    IN const PERF_CAPTURE* cap,
++    IN UINT dirty_rects,
++    IN UINT window_count)
++{
++    if (!g_PerfEnabled)
++        return;
++
++    g_Seq++;
++
++    g_Acc.frames++;
++    g_Acc.dt += g_PrevFrameQpc ? (frame_start_qpc - g_PrevFrameQpc) : 0;
++    g_PrevFrameQpc = frame_start_qpc;
++
++    g_Acc.acquire += cap->acquire_ticks;
++    g_Acc.wakeup += cap->signal_qpc ? (frame_start_qpc - cap->signal_qpc) : 0;
++    g_Acc.moverect += cap->moverect_ticks;
++    g_Acc.dirtyrect += cap->dirtyrect_ticks;
++    g_Acc.dirty_area += cap->dirty_area;
++    if (cap->move_rects_count != (UINT)-1)
++        g_Acc.move_rects += cap->move_rects_count;
++
++    g_Acc.update += update_ticks;
++    g_Acc.enumerate += enum_ticks;
++    g_Acc.remove += remove_ticks;
++    g_Acc.damage += damage_ticks;
++    g_Acc.send += send_ticks;
++    g_Acc.total += total_ticks;
++    g_Acc.sends += send_count;
++    g_Acc.dirty_rects += dirty_rects;
++    g_Acc.windows = window_count;
++    g_Acc.seamless = seamless;
++
++    if (g_Acc.frames < g_PerfEveryN)
++        return;
++
++    LONGLONG emitStart = PerfNow();
++
++    // One line, integers only, no allocation and no string building of our own.
++    LogInfo("QGAPERF,v=%d,seq=%I64u,n=%u,mode=%c,dt=%I64d,acq=%I64d,wak=%I64d,mrq=%I64d,drq=%I64d,"
++        L"upd=%I64d,enu=%I64d,rem=%I64d,dmg=%I64d,snd=%I64d,tot=%I64d,"
++        L"dr=%u,mr=%u,mrmax=%u,area=%I64u,win=%u,sends=%d,skip=%d,log=%I64d",
++        PERF_RECORD_VERSION,
++        g_Seq,
++        g_Acc.frames,
++        g_Acc.seamless ? L's' : L'f',
++        PerfUs(g_Acc.dt),
++        PerfUs(g_Acc.acquire),
++        PerfUs(g_Acc.wakeup),
++        PerfUs(g_Acc.moverect),
++        PerfUs(g_Acc.dirtyrect),
++        PerfUs(g_Acc.update),
++        PerfUs(g_Acc.enumerate),
++        PerfUs(g_Acc.remove),
++        PerfUs(g_Acc.damage),
++        PerfUs(g_Acc.send),
++        PerfUs(g_Acc.total),
++        g_Acc.dirty_rects,
++        g_Acc.move_rects,
++        g_MoveRectsMax,
++        g_Acc.dirty_area,
++        g_Acc.windows,
++        g_Acc.sends,
++        InterlockedExchange(&g_SkippedFrames, 0),
++        PerfUs(g_EmitTicks));
++
++    g_EmitTicks = PerfNow() - emitStart;
++    ZeroMemory(&g_Acc, sizeof(g_Acc));
++}
+diff --git a/gui-agent/perf.h b/gui-agent/perf.h
+new file mode 100644
+index 0000000..fc146f8
+--- /dev/null
++++ b/gui-agent/perf.h
+@@ -0,0 +1,128 @@
++/*
++ * The Qubes OS Project, http://www.qubes-os.org
++ *
++ * Copyright (c) Invisible Things Lab
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version 2
++ * of the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
++ *
++ */
++
++/*
++ * Optional per-frame performance instrumentation for the seamless capture path.
++ *
++ * It answers three questions that decide where the seamless-mode latency goes:
++ *   (a) how much of a frame is spent tracking windows (UpdateWindowData + EnumWindows),
++ *   (b) how much is spent extracting/intersecting damage,
++ *   (c) how much is spent writing messages to the vchan,
++ * and it records whether IDXGIOutputDuplication::GetFrameMoveRects ever returns
++ * anything (the open TODO in capture.c).
++ *
++ * Everything here is inert when disabled: the only cost on the hot path is a
++ * predictable test of a global BOOL. Output goes to the regular agent log
++ * (which already rotates: one file per process start, older than LogRetention
++ * seconds purged at startup), one CSV-ish line per emit, at LOG_LEVEL_INFO so
++ * the default LogLevel=3 does not need to be raised (raising it to DEBUG or
++ * VERBOSE would itself dominate what we are trying to measure).
++ */
++
++#pragma once
++#include <windows.h>
++
++// Compile-time default for the master switch, used when neither the registry
++// value nor the environment variable is present.
++// 1 for the Qubes display-performance measurement builds, 0 for upstream.
++#ifndef QGA_PERF_DEFAULT
++#define QGA_PERF_DEFAULT 1
++#endif
++
++// Registry values, read from HKLM\Software\Invisible Things Lab\Qubes Tools\gui-agent
++// (falling back to the parent key, like every other config value in the agent).
++#define REG_CONFIG_PERF_VALUE       L"PerfLog"      // DWORD 0/1
++#define REG_CONFIG_PERF_EVERY_VALUE L"PerfEveryN"   // DWORD >= 1, frames aggregated per log line
++
++// Environment override (wins over the registry): QUBES_GUI_PERF=0|1
++#define PERF_ENV_VALUE L"QUBES_GUI_PERF"
++
++// Version of the CSV record format, bumped when fields change.
++#define PERF_RECORD_VERSION 1
++
++extern BOOL     g_PerfEnabled;  // master switch
++extern LONGLONG g_PerfFreq;     // QueryPerformanceFrequency, ticks per second
++extern DWORD    g_PerfEveryN;   // emit one line per this many processed frames
++
++// Time spent inside vchan sends, per thread (so the capture thread and the
++// resolution-change thread can't corrupt the main loop's accounting).
++// Maintained by VchanSendTimed(), sampled by ProcessNewFrame().
++extern __declspec(thread) LONGLONG g_PerfSendTicks;
++extern __declspec(thread) LONG     g_PerfSendCount;
++
++// Per-frame numbers produced by the capture thread and consumed by the main
++// loop. Written under CAPTURE_FRAME.lock while the main loop is blocked on
++// frame_event, read by the main loop while the capture thread is blocked on
++// ready_event, so no extra synchronization is needed.
++typedef struct _PERF_CAPTURE
++{
++    LONGLONG acquire_ticks;     // AcquireNextFrame() - mostly idle wait, reported but not part of the total
++    LONGLONG moverect_ticks;    // GetFrameMoveRects()
++    LONGLONG dirtyrect_ticks;   // GetFrameDirtyRects() (size query + fetch + malloc)
++    LONGLONG signal_qpc;        // QPC sampled right before SetEvent(frame_event)
++    UINT     move_rects_count;  // move rects reported for this frame ((UINT)-1 == query failed)
++    UINT64   dirty_area;        // sum of dirty rect areas, pixels
++} PERF_CAPTURE;
++
++// Read config, calibrate QPC, log the banner + CSV header. Call once from Init().
++void PerfInit(void);
++
++// Capture thread: a frame arrived with no dirty rects and was dropped.
++void PerfNoteSkippedFrame(void);
++
++// Capture thread: GetFrameMoveRects returned a non-empty set. Logs the first
++// occurrence loudly (this is the answer to the capture.c move-rects TODO),
++// afterwards only keeps the running maximum.
++void PerfNoteMoveRects(IN UINT count, IN LONG srcX, IN LONG srcY, IN const RECT* dst);
++
++// Main loop: account one processed frame and, every g_PerfEveryN frames, emit the record.
++// All *_ticks are QPC deltas with nested send time already subtracted (except send_ticks).
++void PerfEmitFrame(
++    IN BOOL seamless,
++    IN LONGLONG frame_start_qpc,
++    IN LONGLONG total_ticks,
++    IN LONGLONG update_ticks,
++    IN LONGLONG enum_ticks,
++    IN LONGLONG remove_ticks,
++    IN LONGLONG damage_ticks,
++    IN LONGLONG send_ticks,
++    IN LONG send_count,
++    IN const PERF_CAPTURE* cap,
++    IN UINT dirty_rects,
++    IN UINT window_count);
++
++// Returns 0 when instrumentation is disabled, so all the deltas computed from it are 0.
++static __forceinline LONGLONG PerfNow(void)
++{
++    LARGE_INTEGER li;
++
++    if (!g_PerfEnabled)
++        return 0;
++
++    QueryPerformanceCounter(&li);
++    return li.QuadPart;
++}
++
++// QPC ticks -> microseconds
++static __forceinline LONGLONG PerfUs(IN LONGLONG ticks)
++{
++    return g_PerfFreq ? (ticks * 1000000LL) / g_PerfFreq : 0;
++}
+diff --git a/gui-agent/vchan.c b/gui-agent/vchan.c
+index 2c1ee96..eff931d 100644
+--- a/gui-agent/vchan.c
++++ b/gui-agent/vchan.c
+@@ -22,6 +22,7 @@
+ #include <windows.h>
+ 
+ #include "vchan.h"
++#include "perf.h"
+ 
+ #include <libvchan.h>
+ #include <vchan-common.h>
+@@ -31,16 +32,28 @@ CRITICAL_SECTION g_VchanCriticalSection;
+ 
+ struct libvchan *g_Vchan = NULL;
+ 
++BOOL VchanSendTimed(IN struct libvchan *vchan, IN const void *data, IN size_t size, IN const WCHAR *what)
++{
++    if (!g_PerfEnabled)
++        return VchanSendBuffer(vchan, data, size, what);
++
++    LONGLONG t0 = PerfNow();
++    BOOL status = VchanSendBuffer(vchan, data, size, what);
++    g_PerfSendTicks += PerfNow() - t0;
++    g_PerfSendCount++;
++    return status;
++}
++
+ BOOL VchanSendMessage(IN const struct msg_hdr *header, IN int headerSize, IN const void *data, IN int dataSize, IN const WCHAR *what)
+ {
+     int status;
+ 
+     LogVerbose("msg 0x%x (%s) for window 0x%x, size %d", header->type, what, header->window, header->untrusted_len);
+-    status = VchanSendBuffer(g_Vchan, header, headerSize, what);
++    status = VchanSendTimed(g_Vchan, header, headerSize, what);
+     if (status < 0)
+         return FALSE;
+ 
+-    status = VchanSendBuffer(g_Vchan, data, dataSize, what);
++    status = VchanSendTimed(g_Vchan, data, dataSize, what);
+     if (status < 0)
+         return FALSE;
+ 
+diff --git a/gui-agent/vchan.h b/gui-agent/vchan.h
+index 85cf1f2..bfcfda3 100644
+--- a/gui-agent/vchan.h
++++ b/gui-agent/vchan.h
+@@ -35,9 +35,14 @@ extern struct libvchan *g_Vchan;
+ BOOL VchanInit(IN int domain, IN int port);
+ BOOL VchanSendMessage(IN const struct msg_hdr* header, IN int headerSize, IN const void* data, IN int dataSize, IN const WCHAR* what);
+ 
++// Thin wrapper around VchanSendBuffer that accounts the time spent writing to
++// the vchan (see perf.h). Identical semantics/return value; when instrumentation
++// is disabled it's a direct tail call.
++BOOL VchanSendTimed(IN struct libvchan* vchan, IN const void* data, IN size_t size, IN const WCHAR* what);
++
+ #define VCHAN_SEND_MSG(header, body, what) (\
+     header.untrusted_len = sizeof(body), \
+     VchanSendMessage(&(header), sizeof(header), &(body), sizeof(body), what) \
+     )
+ 
+-#define VCHAN_SEND(x, what) VchanSendBuffer(g_Vchan, &(x), sizeof(x), what)
++#define VCHAN_SEND(x, what) VchanSendTimed(g_Vchan, &(x), sizeof(x), what)
+diff --git a/vs2022/gui-agent/gui-agent.vcxproj b/vs2022/gui-agent/gui-agent.vcxproj
+index 1673f7e..f87fa0c 100644
+--- a/vs2022/gui-agent/gui-agent.vcxproj
++++ b/vs2022/gui-agent/gui-agent.vcxproj
+@@ -13,6 +13,7 @@
+   <ItemGroup>
+     <ClCompile Include="..\..\gui-agent\capture.c" />
+     <ClCompile Include="..\..\gui-agent\main.c" />
++    <ClCompile Include="..\..\gui-agent\perf.c" />
+     <ClCompile Include="..\..\gui-agent\resolution.c" />
+     <ClCompile Include="..\..\gui-agent\send.c" />
+     <ClCompile Include="..\..\gui-agent\util.c" />
+@@ -24,6 +25,7 @@
+   <ItemGroup>
+     <ClInclude Include="..\..\gui-agent\capture.h" />
+     <ClInclude Include="..\..\gui-agent\main.h" />
++    <ClInclude Include="..\..\gui-agent\perf.h" />
+     <ClInclude Include="..\..\gui-agent\resolution.h" />
+     <ClInclude Include="..\..\gui-agent\resource.h" />
+     <ClInclude Include="..\..\gui-agent\send.h" />
+diff --git a/vs2022/gui-agent/gui-agent.vcxproj.filters b/vs2022/gui-agent/gui-agent.vcxproj.filters
+index c408d99..81ad7a9 100644
+--- a/vs2022/gui-agent/gui-agent.vcxproj.filters
++++ b/vs2022/gui-agent/gui-agent.vcxproj.filters
+@@ -21,6 +21,9 @@
+     <ClCompile Include="..\..\gui-agent\main.c">
+       <Filter>Source Files</Filter>
+     </ClCompile>
++    <ClCompile Include="..\..\gui-agent\perf.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
+     <ClCompile Include="..\..\gui-agent\resolution.c">
+       <Filter>Source Files</Filter>
+     </ClCompile>
+@@ -50,6 +53,9 @@
+     <ClInclude Include="..\..\gui-agent\main.h">
+       <Filter>Header Files</Filter>
+     </ClInclude>
++    <ClInclude Include="..\..\gui-agent\perf.h">
++      <Filter>Header Files</Filter>
++    </ClInclude>
+     <ClInclude Include="..\..\gui-agent\resolution.h">
+       <Filter>Header Files</Filter>
+     </ClInclude>
