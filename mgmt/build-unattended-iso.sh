@@ -1,0 +1,81 @@
+#!/bin/bash
+# Run IN win-idd-mgmt. Repacks a Windows install ISO into a zero-click installer:
+# adds autounattend.xml + \payload (firstboot script, build cert, optional QWT installer).
+# Output boots BIOS (Qubes HVM default) and UEFI.
+# Usage: ./build-unattended-iso.sh <source.iso> [image-name] [--with-key]
+#   image-name: exact WIM image name, e.g. "Windows 10 Pro" or
+#               "Windows 10 Enterprise Evaluation" (list with: 7z x -so src.iso sources/install.wim | true;
+#               easier: wiminfo if wimlib installed, or let Windows Setup error tell you)
+#   --with-key: inject the well-known GENERIC Pro install key (installs only, never activates) -
+#               needed on retail multi-edition ISOs so Setup doesn't stop at edition choice.
+set -euo pipefail
+
+SRC="${1:?usage: $0 <source.iso> [image-name] [--with-key]}"
+IMG_NAME="${2:-Windows 10 Pro}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+OUT=~/win-iso/win-idd-unattended.iso
+WORK=~/win-iso/.unattend-work
+
+command -v 7z >/dev/null      || { echo "need p7zip(-plugins): 7z" >&2; exit 1; }
+command -v xorriso >/dev/null || { echo "need xorriso" >&2; exit 1; }
+
+# REUSE_EXTRACT=1 keeps the previously extracted source tree (saves ~2 min of 7z per
+# answer-file iteration). The payload and autounattend.xml are re-staged either way.
+if [ "${REUSE_EXTRACT:-0}" = "1" ] && [ -d "$WORK/sources" ]; then
+    echo "Reusing extracted tree at $WORK"
+    rm -rf "$WORK/payload" "$WORK/sources/\$OEM\$"
+else
+    rm -rf "$WORK"; mkdir -p "$WORK"
+    echo "Extracting $SRC ..."
+    7z x -o"$WORK" "$SRC" >/dev/null
+fi
+
+# answer file (+ optional generic install key)
+sed "s/@IMAGE_NAME@/$IMG_NAME/" "$HERE/autounattend.xml" > "$WORK/autounattend.xml"
+if [ "${3:-}" = "--with-key" ]; then
+    sed -i 's#<!--PRODUCTKEY-->#<ProductKey><Key>VK7JG-NPHTM-C97JM-9MPGT-3V66T</Key><WillShowUI>OnError</WillShowUI></ProductKey>#' \
+        "$WORK/autounattend.xml"
+fi
+
+# payload — staged twice on purpose:
+#   \payload                    : readable from WinPE (RunSynchronous fallback copy)
+#   \sources\$OEM$\$1\payload   : Windows Setup copies this to C:\payload while applying
+#                                 the image. This is the path FirstLogonCommands relies on:
+#                                 a guest reboot destroys the Qubes domain (libvirt
+#                                 on_reboot=destroy) and qvm-start unassigns the cdrom,
+#                                 so the CD is GONE by first logon.
+mkdir -p "$WORK/payload" "$WORK/sources/\$OEM\$/\$1"
+cp "$HERE/payload-setup.cmd" "$WORK/payload/setup.cmd"
+cp "$HERE/payload-setup2.cmd" "$WORK/payload/setup2.cmd"
+cp "$HERE/../guest/firstboot-setup.ps1" "$WORK/payload/"
+# install-qwt.cmd is version-controlled in guest/; the rest are large/derived binaries
+# extracted from the QWT rpm into ~/win-iso (see PROVISION-LOG.md for how to regenerate).
+cp "$HERE/../guest/install-qwt.cmd" "$WORK/payload/" && echo "payload += install-qwt.cmd (from guest/)"
+for f in ~/win-iso/qubesidd-test.cer ~/win-iso/qwt-installer.exe ~/win-iso/qwt-installer.msi \
+         ~/win-iso/qwt-payload/installer.msi ~/win-iso/qwt-payload/vc_redist.x64.exe \
+         ~/win-iso/qwt-certs/SigningCert*.cer; do
+    [ -f "$f" ] && cp "$f" "$WORK/payload/" && echo "payload += $(basename "$f")"
+done
+cp -a "$WORK/payload" "$WORK/sources/\$OEM\$/\$1/payload"
+rm -rf "$WORK/[BOOT]"   # 7z-extracted El Torito images; not needed in the rebuilt ISO
+
+echo "Rebuilding bootable ISO ..."
+# NOTE: no -udf — this xorriso (1.5.8) lacks UDF write support ("Unsupported option
+# '-udf'"). Plain ISO9660 is fine as long as no payload file exceeds 4 GiB
+# (Win10 LTSC 2021 eval install.wim = 3.97 GiB, OK; Win11 LTSC 2024 would NOT fit).
+# LAYOUT (learned the hard way): on original MS media CDBOOT finds BOOTMGR via UDF;
+# without UDF it parses the ISO9660 PVD and needs the classic UPPERCASE-mapped names —
+# "-relaxed-filenames" stored lowercase 'bootmgr' and BIOS boot died with
+# "CDBOOT: Couldn't find BOOTMGR". So: strict ISO9660 (uppercase-mangled PVD, satisfies
+# CDBOOT/bootmgr) + Joliet with long names (-J -joliet-long, preserves case and $OEM$
+# for Windows Setup, which prefers the Joliet tree). Win7-era retail media shipped
+# exactly this layout, no UDF.
+# -d: no trailing period on extensionless PVD names (else 'BOOTMGR.' breaks CDBOOT)
+xorriso -as mkisofs -iso-level 3 -J -joliet-long -D -N -d \
+    -V WIN_IDD_UNATTENDED \
+    -b boot/etfsboot.com -no-emul-boot -boot-load-size 8 \
+    -eltorito-alt-boot -e efi/microsoft/boot/efisys.bin -no-emul-boot \
+    -o "$OUT" "$WORK"
+[ "${REUSE_EXTRACT:-0}" = "1" ] || rm -rf "$WORK"
+ls -sh "$OUT"
+echo "Attach with:  qvm-start win-idd-test --cdrom=win-idd-mgmt:${OUT/#$HOME/\/home\/user}"

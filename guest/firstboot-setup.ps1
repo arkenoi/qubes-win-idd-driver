@@ -17,10 +17,19 @@ if ($cer) {
 
 Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' LongPathsEnabled 1
 
-# no sleep/monitor-off mid-test
+# no sleep/monitor-off mid-test; /h off also kills Fast Startup so qvm-shutdown+start
+# is a real cold boot (and the --cdrom drive stays visible per qubes-doc)
+powercfg /h off
 powercfg /change monitor-timeout-ac 0
 powercfg /change standby-timeout-ac 0
 powercfg /change hibernate-timeout-ac 0
+
+# Pre-seed GUI agent settings BEFORE the MSI runs: its AppSearch skips seeding a value
+# that already exists, so ours win. Default install would be SeamlessMode=0 (fullscreen)
+# and DisableCursor=1.
+New-Item -Path 'HKLM:\Software\Invisible Things Lab\Qubes Tools' -Force | Out-Null
+Set-ItemProperty 'HKLM:\Software\Invisible Things Lab\Qubes Tools' SeamlessMode 1 -Type DWord
+Set-ItemProperty 'HKLM:\Software\Invisible Things Lab\Qubes Tools' DisableCursor 0 -Type DWord
 
 # where did QWT put things? (recorded for Phase 0)
 Write-Output "--- QWT services ---"
