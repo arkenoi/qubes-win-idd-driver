@@ -100,24 +100,173 @@ jobs:
           retention-days: 14   # keep private-tier artifact storage (500 MB) comfortable
 
   # ------------------------------------------- Track A: patched qubes-gui-agent-windows
-  # Skeleton: the QWT agent's build chain (EWDK + Qubes windows lib deps) needs one-time
-  # convergence in CI — see CLAUDE.md Phase 1A. Enable via repo variable AGENT_BUILD=true.
+  # Pure user-mode build: VS2022 v143 + Windows SDK only. NO WDK, NO EWDK. Convergence
+  # per ci-notes/trackA-build.md. Enable via repo variable AGENT_BUILD=true.
   gui-agent:
     if: ${{ vars.AGENT_BUILD == 'true' }}
     runs-on: windows-2022
+    env:
+      CONFIG: Release
+      # Pinned to the versions QWT 4.2.2 installed in win-idd-test (read off the live guest).
+      WINDOWS_UTILS_REF: v4.2.2
+      VCHAN_REF: v4.2.7
+      QUBESDB_REF: v4.3.1
+      PVDRIVERS_REF: v4.2.0-1
+      XENIFACE_SHA: 9cd9a604191bf26da18b564d1686e4ee0ccf3d32
+      GUI_COMMON_REF: v4.3.1     # >= v4.3.1: earlier tags don't compile under MSVC
+      BUILDERV2_REF: main
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive   # agent/ tree with Qubes deps, per bootstrap layout
+          submodules: recursive
 
-      - name: Build agent (converge me)
+      - name: Locate MSBuild and lib.exe
+        id: vs
         shell: pwsh
         run: |
-          # Follow agent/README.md (EWDK-based). Options, in order of preference:
-          #  1. msbuild the .sln with installed WDK if the user-mode components accept it
-          #  2. Download+mount EWDK ISO (large; cache with actions/cache if it works)
-          # Emit binaries (gui-agent.exe + libs) to package-agent\
-          throw "Track A build not converged yet - see CLAUDE.md Phase 1A"
+          $ErrorActionPreference = 'Stop'
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild `
+                       -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          $vsroot  = & $vswhere -latest -property installationPath
+          $tv      = (Get-Content "$vsroot\VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt").Trim()
+          $lib     = "$vsroot\VC\Tools\MSVC\$tv\bin\Hostx64\x64\lib.exe"
+          if (-not (Test-Path $msbuild)) { throw "MSBuild.exe not found" }
+          if (-not (Test-Path $lib)) { throw "lib.exe not found: $lib" }
+          "msbuild=$msbuild" | Out-File -Append $env:GITHUB_OUTPUT
+          "lib=$lib"         | Out-File -Append $env:GITHUB_OUTPUT
+
+      - name: Fetch Qubes dependency sources
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Clone($url, $ref, $dir) {
+            git clone --quiet --depth 1 --branch $ref -c advice.detachedHead=false $url $dir
+            if ($LASTEXITCODE -ne 0) { throw "clone failed: $url @ $ref" }
+          }
+          Clone https://github.com/QubesOS/qubes-windows-utils.git             $env:WINDOWS_UTILS_REF deps-src/windows-utils
+          Clone https://github.com/QubesOS/qubes-core-vchan-xen.git            $env:VCHAN_REF         deps-src/core-vchan-xen
+          Clone https://github.com/QubesOS/qubes-core-qubesdb.git              $env:QUBESDB_REF       deps-src/core-qubesdb
+          Clone https://github.com/QubesOS/qubes-gui-common.git                $env:GUI_COMMON_REF    deps-src/gui-common
+          Clone https://github.com/QubesOS/qubes-vmm-xen-windows-pvdrivers.git $env:PVDRIVERS_REF     deps-src/pvdrivers
+          Clone https://github.com/QubesOS/qubes-builderv2.git                 $env:BUILDERV2_REF     deps-src/builderv2
+          git clone --quiet --no-checkout https://xenbits.xen.org/git-http/pvdrivers/win/xeniface.git deps-src/pvdrivers/xeniface
+          if ($LASTEXITCODE -ne 0) { throw "xeniface clone failed" }
+          git -C deps-src/pvdrivers/xeniface fetch --quiet --depth 1 origin $env:XENIFACE_SHA
+          if ($LASTEXITCODE -ne 0) { throw "xeniface fetch failed" }
+          git -C deps-src/pvdrivers/xeniface checkout --quiet FETCH_HEAD
+          if (-not (Test-Path deps-src/pvdrivers/xeniface/include/xencontrol.h)) { throw "xencontrol.h missing after checkout" }
+
+      - name: Synthesize xencontrol import library
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "deps-src\pvdrivers\xeniface\vs2022\x64\Windows10$env:CONFIG"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          # Array form (not a here-string): avoids the YAML block-scalar indentation trap.
+          $def = @(
+            'LIBRARY xencontrol.dll','EXPORTS',
+            'XcClose','XcEvtchnBindInterdomain','XcEvtchnClose','XcEvtchnNotify',
+            'XcEvtchnOpenUnbound','XcEvtchnUnmask','XcGnttabMapForeignPages',
+            'XcGnttabPermitForeignAccess','XcGnttabPermitForeignAccess2',
+            'XcGnttabRevokeForeignAccess','XcGnttabUnmapForeignPages','XcOpen',
+            'XcRegisterLogger','XcSetLogLevel','XcStoreAddWatch','XcStoreDirectory',
+            'XcStoreRead','XcStoreRemove','XcStoreRemoveWatch','XcStoreSetPermissions',
+            'XcStoreWrite')
+          $def | Set-Content -Encoding ascii "$out\xencontrol.def"
+          & "${{ steps.vs.outputs.lib }}" /nologo /machine:x64 /def:"$out\xencontrol.def" /out:"$out\xencontrol.lib"
+          if ($LASTEXITCODE -ne 0) { throw "lib.exe failed building xencontrol.lib" }
+
+      - name: Build Qubes user-mode dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws      = "${{ github.workspace }}"
+          $msbuild = "${{ steps.vs.outputs.msbuild }}"
+          $cfg     = $env:CONFIG
+          $env:QUBES_REPO  = "$ws\qubes-repo"
+          $env:QB_SCRIPTS  = "$ws\deps-src\builderv2\qubesbuilder\plugins\build_windows\scripts"
+          # BLOCKER FIX D1: libvchan.vcxproj / qubesdb-client.vcxproj resolve their staged
+          # deps ONLY through $(QUBES_INCLUDES)/$(QUBES_LIBS), not $(QUBES_REPO)\...\{inc,lib}.
+          # Rebuild those two env vars from every <comp>\{inc,lib} after each Stage, exactly
+          # like build-sln.ps1 does, or the later dep builds fail C1083/LNK1104.
+          function Refresh-QubesEnv {
+            $inc=@(); $lib=@()
+            Get-ChildItem $env:QUBES_REPO -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+              if (Test-Path "$($_.FullName)\inc") { $inc += "$($_.FullName)\inc" }
+              if (Test-Path "$($_.FullName)\lib") { $lib += "$($_.FullName)\lib" }
+            }
+            $env:QUBES_INCLUDES = ($inc -join ';')
+            $env:QUBES_LIBS     = ($lib -join ';')
+          }
+          function MB([string]$proj, [string]$target) {
+            $a = @($proj, '-nologo', '-m', '-v:minimal', "-p:Platform=x64", "-p:Configuration=$cfg")
+            if ($target) { $a += "-t:$target" }
+            & $msbuild @a
+            if ($LASTEXITCODE -ne 0) { throw "msbuild failed: $proj $target" }
+          }
+          function Stage([string]$comp, [string[]]$inc, [string[]]$lib) {
+            New-Item -ItemType Directory -Force "$env:QUBES_REPO\$comp\inc" | Out-Null
+            New-Item -ItemType Directory -Force "$env:QUBES_REPO\$comp\lib" | Out-Null
+            $inc | ForEach-Object { Copy-Item $_ "$env:QUBES_REPO\$comp\inc\" -Force }
+            $lib | ForEach-Object { Copy-Item $_ "$env:QUBES_REPO\$comp\lib\" -Force }
+            Refresh-QubesEnv
+          }
+
+          MB "$ws\deps-src\pvdrivers\vs2022\vmm-xen-windows-pvdrivers.sln" 'libxenvchan'
+          Stage 'vmm-xen-windows-pvdrivers' `
+            @("$ws\deps-src\pvdrivers\include\libxenvchan.h",
+              "$ws\deps-src\pvdrivers\include\libxenvchan_ring.h",
+              "$ws\deps-src\pvdrivers\xeniface\include\xencontrol.h",
+              "$ws\deps-src\pvdrivers\xeniface\include\xeniface_ioctls.h") `
+            @("$ws\deps-src\pvdrivers\vs2022\x64\$cfg\libxenvchan\libxenvchan.lib",
+              "$ws\deps-src\pvdrivers\xeniface\vs2022\x64\Windows10$cfg\xencontrol.lib")
+
+          MB "$ws\deps-src\core-vchan-xen\windows\vs2022\core-vchan-xen.sln" 'libvchan'
+          Stage 'core-vchan-xen' `
+            @("$ws\deps-src\core-vchan-xen\windows\include\libvchan.h") `
+            @("$ws\deps-src\core-vchan-xen\windows\vs2022\x64\$cfg\libvchan\libvchan.lib")
+
+          MB "$ws\deps-src\windows-utils\vs2022\windows-utils.sln" ''
+          Stage 'windows-utils' `
+            @(Get-ChildItem "$ws\deps-src\windows-utils\include\*.h" | % FullName) `
+            @("$ws\deps-src\windows-utils\vs2022\x64\$cfg\windows-utils\windows-utils.lib")
+
+          MB "$ws\deps-src\core-qubesdb\windows\vs2022\core-qubesdb.sln" 'qubesdb-client'
+          Stage 'core-qubesdb' `
+            @("$ws\deps-src\core-qubesdb\include\qubesdb.h",
+              "$ws\deps-src\core-qubesdb\include\qubesdb-client.h") `
+            @("$ws\deps-src\core-qubesdb\windows\vs2022\x64\$cfg\qubesdb-client\qubesdb-client.lib")
+          "QUBES_INCLUDES=$env:QUBES_INCLUDES" | Out-File -Append $env:GITHUB_ENV
+          "QUBES_LIBS=$env:QUBES_LIBS"         | Out-File -Append $env:GITHUB_ENV
+          "QUBES_REPO=$env:QUBES_REPO"         | Out-File -Append $env:GITHUB_ENV
+
+      - name: Build gui-agent
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws  = "${{ github.workspace }}"
+          $env:QB_SCRIPTS = "$ws\deps-src\builderv2\qubesbuilder\plugins\build_windows\scripts"
+          # gui-common headers (qubes-gui-protocol.h) go FIRST, then the staged dep incs
+          # carried over via $GITHUB_ENV from the previous step.
+          $env:QUBES_INCLUDES = "$ws\deps-src\gui-common\include;" + $env:QUBES_INCLUDES
+          & "${{ steps.vs.outputs.msbuild }}" "$ws\agent\vs2022\gui-agent-windows.sln" `
+              -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
+              "-p:TreatWarningAsError=false"
+          if ($LASTEXITCODE -ne 0) { throw "gui-agent build failed" }
+
+      - name: Collect package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cfg = $env:CONFIG
+          $out = "agent\vs2022\x64\$cfg"
+          New-Item -ItemType Directory -Force package-agent | Out-Null
+          foreach ($p in 'gui-agent','gui-watchdog','dump-windows') {
+            if (Test-Path "$out\$p\$p.exe") { Copy-Item "$out\$p\$p.exe" package-agent\ -Force }
+            if (Test-Path "$out\$p\$p.pdb") { Copy-Item "$out\$p\$p.pdb" package-agent\ -Force }
+          }
+          Get-ChildItem package-agent
 
       - uses: actions/upload-artifact@v4
         if: success()
