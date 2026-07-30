@@ -1,3 +1,21 @@
+> **ACCEPTANCE METHOD CORRECTED — do not count screenshot PNGs.**
+> `local.WinScreenshot` runs `import -window <id>`, which silently FAILS on
+> WS_EX_LAYERED/WS_EX_TRANSPARENT windows, so the tar contained 1 PNG while the agent had
+> actually mapped 5 windows. Counting PNGs would have reported a false PASS before the fix
+> was even installed.
+>
+> Count `SendWindowMap` in the agent log instead — it measures exactly what the agent
+> presents to dom0:
+> ```
+> tools/qtest ps "Get-Content (Get-ChildItem 'C:\Program Files\Qubes Tools\log' -Filter 'gui-agent-*.log' | Sort LastWriteTime -Desc | Select -First 1).FullName | Select-String SendWindowMap"
+> ```
+>
+> **Measured result on win-idd-test (Win10 LTSC 2021, seamless):**
+> | agent | windows mapped |
+> |---|---|
+> | shipped QWT 4.2.2 | **5** (main + 4 shadow strips) |
+> | with the 2A-chrome fix | **1** (main only) |
+
 # chromerepro — Office compound-window repro, without Office
 
 Phase 2A-chrome test harness (see `../../CLAUDE.md` and
