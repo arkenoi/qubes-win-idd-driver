@@ -353,9 +353,14 @@ jobs:
       - name: Assemble package
         shell: pwsh
         run: |
-          $mkArgs = @('-AgentArtifact', 'dl/gui-agent', '-OutDir', 'package-qwt')
+          # HASHTABLE, not array: splatting an array passes the elements POSITIONALLY, so
+          # '-AgentArtifact' itself would bind to $AgentArtifact, 'dl/gui-agent' to
+          # $DriverArtifact, and the next switch has no slot left -> "A positional parameter
+          # cannot be found that accepts argument '-DriverArtifact'". Named splatting needs
+          # a hashtable.
+          $mkArgs = @{ AgentArtifact = 'dl/gui-agent'; OutDir = 'package-qwt' }
           if ('${{ steps.dl_driver.outcome }}' -eq 'success') {
-            $mkArgs += @('-DriverArtifact', 'dl/idd-driver')
+            $mkArgs.DriverArtifact = 'dl/idd-driver'
           } else {
             Write-Warning 'idd-driver artifact unavailable; packaging without optional/idd-driver'
           }
@@ -384,8 +389,8 @@ jobs:
           }
           Remove-Item cert.pfx
           # re-stage so MANIFEST.json / SHA256SUMS.txt describe the SIGNED files
-          $mkArgs = @('-AgentArtifact', 'dl/gui-agent', '-OutDir', 'package-qwt')
-          if ('${{ steps.dl_driver.outcome }}' -eq 'success') { $mkArgs += @('-DriverArtifact', 'dl/idd-driver') }
+          $mkArgs = @{ AgentArtifact = 'dl/gui-agent'; OutDir = 'package-qwt' }
+          if ('${{ steps.dl_driver.outcome }}' -eq 'success') { $mkArgs.DriverArtifact = 'dl/idd-driver' }
           & .\packaging\make-package.ps1 @mkArgs
 
       - name: Show manifest
