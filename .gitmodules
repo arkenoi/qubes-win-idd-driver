@@ -1,0 +1,3 @@
+[submodule "agent"]
+	path = agent
+	url = https://github.com/arkenoi/qubes-gui-agent-windows

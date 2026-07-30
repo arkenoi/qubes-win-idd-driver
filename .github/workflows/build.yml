@@ -1,0 +1,104 @@
+# GitHub Actions: build the IddCx driver (Track B) and the patched gui-agent (Track A).
+# Goes to .github/workflows/build.yml in the driver repo (bootstrap-repo.sh places it).
+#
+# NOTE: the WDK-install recipe below is the standard OSS pattern (choco WDK + WDK.vsix into
+# VS2022) but versions drift — converging this on the first run is Phase 0 of CLAUDE.md.
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # ---------------------------------------------------------------- Track B: IddCx driver
+  idd-driver:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WDK + VS driver targets
+        shell: pwsh
+        run: |
+          choco install windowsdriverkit11 --no-progress -y
+          $vsix = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix" -Recurse -Filter '*.vsix' |
+                  Select-Object -First 1
+          if (-not $vsix) { throw "WDK.vsix not found after choco install" }
+          $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse -Filter VSIXInstaller.exe |
+                  Select-Object -First 1
+          Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -Wait
+
+      - name: Build driver
+        shell: pwsh
+        run: |
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              Select-Object -First 1
+          & $msbuild driver\ /m /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed" }
+
+      - name: Collect package + tools
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          # driver binaries + INF (path depends on the project; sample outputs under x64\Release)
+          Get-ChildItem driver -Recurse -Include *.dll,*.inf,*.cat |
+              Where-Object FullName -match 'x64.*Release' |
+              Copy-Item -Destination package -Force
+          # devcon.exe for root-enumerated device creation in the guest
+          $devcon = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Tools" -Recurse -Filter devcon.exe |
+              Where-Object FullName -match 'x64' | Select-Object -First 1
+          if ($devcon) { Copy-Item $devcon.FullName package\ }
+          Get-ChildItem package
+
+      - name: Test-sign package
+        if: ${{ vars.SIGNING_ENABLED == 'true' }}
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.SIGNING_PFX_B64 }}
+          PFX_PASS: ${{ secrets.SIGNING_PFX_PASS }}
+        run: |
+          [IO.File]::WriteAllBytes('cert.pfx', [Convert]::FromBase64String($env:PFX_B64))
+          $kits = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+          $signtool = Get-ChildItem $kits -Recurse -Filter signtool.exe |
+              Where-Object FullName -match 'x64' | Select-Object -First 1
+          $inf2cat = Get-ChildItem $kits -Recurse -Filter Inf2Cat.exe | Select-Object -First 1
+          & $inf2cat.FullName /driver:package /os:10_x64
+          Get-ChildItem package -Include *.dll,*.cat -Recurse | ForEach-Object {
+              & $signtool.FullName sign /fd sha256 /f cert.pfx /p $env:PFX_PASS $_.FullName
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($_.Name)" }
+          }
+          Remove-Item cert.pfx
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: idd-driver-package
+          path: package/
+          retention-days: 14   # keep private-tier artifact storage (500 MB) comfortable
+
+  # ------------------------------------------- Track A: patched qubes-gui-agent-windows
+  # Skeleton: the QWT agent's build chain (EWDK + Qubes windows lib deps) needs one-time
+  # convergence in CI — see CLAUDE.md Phase 1A. Enable via repo variable AGENT_BUILD=true.
+  gui-agent:
+    if: ${{ vars.AGENT_BUILD == 'true' }}
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # agent/ tree with Qubes deps, per bootstrap layout
+
+      - name: Build agent (converge me)
+        shell: pwsh
+        run: |
+          # Follow agent/README.md (EWDK-based). Options, in order of preference:
+          #  1. msbuild the .sln with installed WDK if the user-mode components accept it
+          #  2. Download+mount EWDK ISO (large; cache with actions/cache if it works)
+          # Emit binaries (gui-agent.exe + libs) to package-agent\
+          throw "Track A build not converged yet - see CLAUDE.md Phase 1A"
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: gui-agent-package
+          path: package-agent/
+          retention-days: 14

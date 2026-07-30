@@ -1,0 +1,35 @@
+#!/bin/bash
+# qrexec helper CLI for driving win-idd-test from the dev qube. No dom0/admin beyond policy.
+# Usage: qtest <command> [args]
+#   run  <cmdline>        run a cmd.exe command line in the VM (output to stdout)
+#   ps   <ps-oneliner>    run a PowerShell command (quoting is fragile -> prefer pushrun)
+#   push <files...>       copy files into the VM (lands in the QubesIncoming dir)
+#   pushrun <script.ps1>  push a PowerShell script and execute it from QubesIncoming
+#   start|shutdown|kill   VM lifecycle via Admin API (policy-gated to this VM only)
+#   state                 admin.vm.CurrentState (raw response; leading "0\x30" = OK)
+#   shot [out.tar]        tar of PNGs of the VM's windows via dom0 local.WinScreenshot
+set -uo pipefail
+
+VM="${QTEST_VM:-win-idd-test}"
+# Discovered in Phase 0; override via env if different.
+INCOMING="${QTEST_INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\$(hostname)}"
+
+vmshell() { printf '%s\n' "$1" | qrexec-client-vm "$VM" qubes.VMShell; }
+adm()     { qrexec-client-vm "$VM" "$1" </dev/null; echo; }
+
+case "${1:-}" in
+  run)     shift; vmshell "$*" ;;
+  ps)      shift; vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"$*\"" ;;
+  push)    shift; qvm-copy-to-vm "$VM" "$@" ;;
+  pushrun) shift
+           f="$1"; base="$(basename "$f")"
+           qvm-copy-to-vm "$VM" "$f"
+           vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"$INCOMING\\$base\"" ;;
+  start)    adm admin.vm.Start ;;
+  shutdown) adm admin.vm.Shutdown ;;
+  kill)     adm admin.vm.Kill ;;
+  state)    adm admin.vm.CurrentState ;;
+  shot)    out="${2:-shots.tar}"
+           qrexec-client-vm dom0 local.WinScreenshot </dev/null > "$out" && echo "saved $out" ;;
+  *) grep '^#   ' "$0" | sed 's/^#   //' >&2; exit 2 ;;
+esac
