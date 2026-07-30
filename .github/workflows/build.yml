@@ -350,6 +350,17 @@ jobs:
           name: idd-driver-package
           path: dl/idd-driver
 
+      # actions/checkout marks the workspace safe inside a TEMPORARY HOME and then restores
+      # HOME, so by this point git reports "detected dubious ownership" and every provenance
+      # lookup in make-package.ps1 fails -> agent_commit/driver_repo_commit = 'unknown'.
+      - name: Mark workspace safe for git
+        shell: pwsh
+        run: |
+          git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$env:GITHUB_WORKSPACE/agent"
+          git -C "$env:GITHUB_WORKSPACE" rev-parse HEAD
+          git -C "$env:GITHUB_WORKSPACE/agent" rev-parse HEAD
+
       - name: Assemble package
         shell: pwsh
         run: |
