@@ -120,6 +120,12 @@ window-acceptance predicate (build it into the SetWinEventHook rework):
 3. Test WITHOUT Office: add `tools/chromerepro` to the repo — a small Win32 app creating a
    main window + 4 layered transparent "shadow" HWNDs + a popup. Verify via `qtest shot`:
    before = 5 bordered windows, after = 1 bordered window (+1px-bordered popup when open).
+3b. Same bug class: the Win11 25H2 "double windows" artifact (QWT docs) is almost certainly
+   a companion HWND the filter should drop. Build `tools/winenum` (dump every top-level
+   HWND: class, styles, exstyles, DWMWA_CLOAKED, owner, rect, layered alpha) — run it on
+   Win10 now as the 2A-chrome baseline; when a Win11 25H2 target exists later, one winenum
+   run while duplicates are visible identifies the distinguishing attribute → extend the
+   same predicate. (Per-window WGC capture, Phase 2/#6, kills this class structurally.)
 4. NEVER weaken daemon-side bordering — the fix is to stop presenting chrome fragments as
    windows, not to let the guest opt out of borders. Real-Office validation happens later in
    the user's Office qube (ask first).
