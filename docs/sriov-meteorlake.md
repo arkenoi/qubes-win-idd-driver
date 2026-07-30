@@ -7,6 +7,22 @@ Commands below are as published; a few had obvious transcription typos in the so
 (missing leading `/`), corrected here and flagged. **Verify against the live thread before
 running anything** — this touches the dom0 kernel.
 
+## TL;DR for an agent reading this
+
+1. **This is background reference. It is NOT a task.** Do not set up SR-IOV, do not attach a
+   VF, do not add it to any plan unless the user explicitly asks.
+2. **dom0 SR-IOV setup is harmless to Windows qubes.** Installing the module, GRUB changes,
+   creating VFs — none of it is visible to a guest. QWT is unaffected. The user may be
+   experimenting with this independently; it does not break your test VM.
+3. **The only risky action is attaching a VF to a Windows qube.** If the desktop then moves
+   off the Basic Display Adapter, `capture.c:176-183` fails fatally (no fallback, capture
+   thread dies, display lost). Reversible by detaching the VF.
+4. **We control this**: the agent is our code, so VF support arrives when we implement it
+   (output pinning + staging-texture fallback). There is no external dependency to wait on
+   and no coordination problem to solve.
+5. Therefore: **do not attach a VF to a Windows qube** during any phase, unless the user
+   explicitly asks for that experiment.
+
 ## Why this file exists
 
 Meteor Lake SR-IOV under Qubes/Xen is **demonstrated for Linux guests** — a user reports a
@@ -15,11 +31,8 @@ browsing is so much smoother with it". Relevant because the target hardware here
 (ASUS NUC 14 Pro+, Core Ultra 9 185H) is the same generation. Note upstream `xe` still does
 NOT support MTL SR-IOV; this works via the out-of-tree strongtz i915 fork.
 
-**It does not currently help the Windows display project.** `qubes-gui-agent-windows`
-`capture.c:176-183` hard-fails when `DesktopImageInSystemMemory` is FALSE, so a VF driving a
-Windows desktop *breaks* QWT capture (seamless AND fullscreen) rather than accelerating it.
-Prerequisite: the staging-texture fallback (Phase 1B/#4 in ../CLAUDE.md). Reproduce this
-with a **Linux** qube first; revisit for Windows only after the fallback lands.
+Recorded so the option is ready when the agent-side work makes it usable — not because it
+is on the critical path. It is not.
 
 ## Security cost (do not skip)
 
@@ -102,22 +115,21 @@ glxheads     # in the guest
 Windows guest + VF under Xen is **unverified anywhere** — every working report is a Linux
 guest. Expect the Intel Windows driver binding to a VF to be its own project.
 
-### Can a VF coexist with QWT, with QWT ignoring it?
+### What happens if a VF is attached to a Windows qube
 
-Depends entirely on which adapter owns the desktop:
+Two outcomes, decided by which adapter ends up owning the desktop:
 
-- **Desktop stays on the Basic Display Adapter (VF present but not driving it).** Works:
-  two display adapters is a normal Windows config, `DesktopImageInSystemMemory` stays TRUE,
-  QWT is unaffected. Gains only what apps explicitly render on the VF (video decode, 3D,
-  browser GPU). DWM still composites in WARP → **no gain on drag/scroll/typing**, which is
-  the metric this project targets. Useful as a low-risk experiment, not as the fix.
-- **Windows moves the desktop to the VF** (likely if the VF exposes display outputs and
-  Windows prefers a real WDDM driver over MSBDD): `DesktopImageInSystemMemory` goes FALSE,
-  `capture.c:176-183` hard-fails, and the VM's display is lost entirely — seamless AND
-  fullscreen. Recover by detaching the VF. Test with a way back in (screenshots + qtest
-  are useless if capture is dead; plan on `qvm-kill` + detach).
+- Desktop stays on the Basic Display Adapter → `DesktopImageInSystemMemory` stays TRUE,
+  QWT unaffected. Only apps explicitly rendering on the VF gain anything; DWM still
+  composites in WARP, so no drag/scroll/typing improvement.
+- Desktop moves to the VF → `DesktopImageInSystemMemory` FALSE →
+  `capture.c:176-183` fails **fatally, with no graceful fallback**: capture thread dies,
+  seamless AND fullscreen are lost. Recover by detaching the VF (`qvm-kill` first; note
+  screenshots and `qtest` are useless while capture is dead).
 
-So "ignore it until supported" is viable ONLY if the desktop can be pinned to MSBDD.
+Since the agent is our code, the fix is ours to write whenever we want it: pin capture to a
+chosen output, and implement the staging-texture fallback so a non-system-memory desktop is
+capturable. Until that is written and tested, **do not attach a VF to a Windows qube.**
 
 ### The actual endgame pairing (why this matters later)
 
