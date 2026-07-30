@@ -99,7 +99,36 @@ glxheads     # in the guest
 
 ## If/when revisiting for Windows
 
-1. Staging-texture fallback in `capture.c` must exist first (../CLAUDE.md Phase 1B / #4).
-2. Windows guest + VF under Xen is **unverified anywhere** — every working report is a Linux
-   guest. Expect the Intel Windows driver to be its own project.
-3. Only then does the "removes the WARP ceiling" payoff become testable.
+Windows guest + VF under Xen is **unverified anywhere** — every working report is a Linux
+guest. Expect the Intel Windows driver binding to a VF to be its own project.
+
+### Can a VF coexist with QWT, with QWT ignoring it?
+
+Depends entirely on which adapter owns the desktop:
+
+- **Desktop stays on the Basic Display Adapter (VF present but not driving it).** Works:
+  two display adapters is a normal Windows config, `DesktopImageInSystemMemory` stays TRUE,
+  QWT is unaffected. Gains only what apps explicitly render on the VF (video decode, 3D,
+  browser GPU). DWM still composites in WARP → **no gain on drag/scroll/typing**, which is
+  the metric this project targets. Useful as a low-risk experiment, not as the fix.
+- **Windows moves the desktop to the VF** (likely if the VF exposes display outputs and
+  Windows prefers a real WDDM driver over MSBDD): `DesktopImageInSystemMemory` goes FALSE,
+  `capture.c:176-183` hard-fails, and the VM's display is lost entirely — seamless AND
+  fullscreen. Recover by detaching the VF. Test with a way back in (screenshots + qtest
+  are useless if capture is dead; plan on `qvm-kill` + detach).
+
+So "ignore it until supported" is viable ONLY if the desktop can be pinned to MSBDD.
+
+### The actual endgame pairing (why this matters later)
+
+VF and the IddCx driver are COMPLEMENTARY, not alternatives. Windows' standard hybrid model
+is: render on one adapter, present to a display-only adapter (how hybrid laptops and every
+IDD product work). Target configuration:
+
+    VF renders → DWM composites in HARDWARE → cross-adapter present into the IDD swapchain
+    → agent grants those frames to dom0
+
+That is where the WARP ceiling actually disappears while seamless keeps working. It requires
+the IDD driver to exist first (../CLAUDE.md Phase 2B) — and in that configuration the
+staging-texture fallback may become unnecessary, since frames arrive via the IDD swapchain
+rather than Desktop Duplication.
