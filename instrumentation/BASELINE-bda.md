@@ -61,3 +61,31 @@ Raw JSON archived alongside this file's commit.
   tracking/damage/send costs and correlate with these source-side numbers.
 - Install the IDD sample (once it targets 19044 and the guest allows elevated install) and
   re-run ddaprobe with the IDD primary → the Outcome-A gate for Track B.
+
+## Build status (2026-07-31)
+
+Track A build chain **converged and green** — no EWDK, no WDK, pure user-mode v143.
+Three CI iterations were needed, each fixing a real, verified defect:
+
+1. `-t:libxenvchan` on the pvdrivers **.sln** still ran the sibling `pvdrivers.vcxproj`
+   custom build (compiles the KMDF drivers via build.ps1) → MSB3073. Fix: build
+   `vs2022/libxenvchan/libxenvchan.vcxproj` directly. Only pvdrivers bundles a driver
+   project; core-vchan-xen / windows-utils / core-qubesdb solutions are user-mode only.
+2. Building a .vcxproj directly roots `$(SolutionDir)`-based OutDirs at the PROJECT dir
+   (`vs2022\libxenvchan\x64\Release\...`), not the solution dir. Fix: `Stage()` now
+   locates each built .lib by filename under `x64\<cfg>`, newest wins.
+3. (from review, pre-applied) `QUBES_INCLUDES`/`QUBES_LIBS` must be rebuilt after every
+   Stage — libvchan and qubesdb-client resolve staged deps only through those vars.
+
+Artifacts now produced by CI (`gui-agent-package`):
+`gui-agent.exe`, `gui-watchdog.exe`, `dump-windows.exe` (+ PDBs).
+
+**Instrumented agent built.** `agent/` submodule bumped to
+`arkenoi/qubes-gui-agent-windows @ phase1a-instrumentation` (363b38a); the patch compiles
+clean under the project's `/W4 /WX-ish /permissive- /std:c17` settings. Verified in the
+shipped binary (UTF-16 strings): `PerfLog`, `QUBES_GUI_PERF`, `QGAPERF-HEADER`,
+the per-frame `QGAPERF,v=..` record, and `QGAPERF-MOVERECTS`. Size 74240 → 79872 bytes.
+
+Remaining to close Phase 1A: swap the instrumented binary in (guest/swap-agent.ps1, needs
+the UAC-disabled VM currently reinstalling), run instrumentation/drag-harness.ps1, and feed
+the log to instrumentation/analyze-perf.py for the tracking-vs-damage-vs-send decision.
