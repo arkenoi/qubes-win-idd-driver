@@ -209,7 +209,29 @@ jobs:
             New-Item -ItemType Directory -Force "$env:QUBES_REPO\$comp\inc" | Out-Null
             New-Item -ItemType Directory -Force "$env:QUBES_REPO\$comp\lib" | Out-Null
             $inc | ForEach-Object { Copy-Item $_ "$env:QUBES_REPO\$comp\inc\" -Force }
-            $lib | ForEach-Object { Copy-Item $_ "$env:QUBES_REPO\$comp\lib\" -Force }
+            # Locate each .lib rather than trusting one hardcoded OutDir: building a
+            # .vcxproj DIRECTLY roots $(SolutionDir)-based OutDirs at the project dir
+            # (vs2022\libxenvchan\x64\...) instead of the solution dir (vs2022\x64\...).
+            # Search the component tree for the exact filename, newest wins.
+            $lib | ForEach-Object {
+              $want = Split-Path $_ -Leaf
+              $src  = $_
+              if (-not (Test-Path $src)) {
+                # walk up to the component root and search for it
+                $root = $src
+                while ($root -and -not (Test-Path (Join-Path $root '.git')) -and (Split-Path $root -Parent)) {
+                  $root = Split-Path $root -Parent
+                }
+                if (-not $root) { $root = "$ws\deps-src" }
+                $hit = Get-ChildItem $root -Recurse -Filter $want -ErrorAction SilentlyContinue |
+                       Where-Object FullName -match "x64\\$cfg" |
+                       Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                if (-not $hit) { throw "cannot locate $want under $root after building $comp" }
+                $src = $hit.FullName
+                Write-Host "  (located $want at $src)"
+              }
+              Copy-Item $src "$env:QUBES_REPO\$comp\lib\" -Force
+            }
             Refresh-QubesEnv
           }
 
