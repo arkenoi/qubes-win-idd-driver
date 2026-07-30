@@ -1,3 +1,9 @@
+> **PARTIALLY RETRACTED — see PHASE1A-RESULT.md.** The latency figures below
+> ("~9 Hz ceiling", "median 82 ms") are artifacts of ddaprobe's own 100 ms
+> `--timeout`, not properties of the adapter: with `--timeout 8` the block time is
+> 16.2 ms and median acquire latency 5.3 ms. The DesktopImageInSystemMemory=TRUE
+> and zero-move-rects findings STAND.
+
 # Baseline measurement — Basic Display Adapter, win-idd-test (Win10 LTSC 2021, 19044.1288)
 
 First real measurements of the QWT capture path, taken with `tools/ddaprobe` against the
