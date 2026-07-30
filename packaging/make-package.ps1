@@ -51,7 +51,11 @@ function Git {
     $saved = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $v = & git @GitArgs 2>$null
+        # -c safe.directory=* is REQUIRED on a GitHub runner. actions/checkout adds the
+        # workspace to safe.directory inside a TEMPORARY HOME and then restores HOME, so by
+        # the time a later step runs, git sees "detected dubious ownership" and fails - which
+        # is why every provenance field came back 'unknown' in CI while working locally.
+        $v = & git '-c' 'safe.directory=*' @GitArgs 2>$null
         if ($LASTEXITCODE -eq 0 -and $v) { return ($v | Select-Object -First 1).Trim() }
     } catch {
     } finally {
