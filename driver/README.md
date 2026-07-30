@@ -1,3 +1,5 @@
+Vendored from https://github.com/microsoft/Windows-driver-samples (video/IndirectDisplay), MIT license (see LICENSE).
+
 ---
 topic: sample
 page_type: sample
