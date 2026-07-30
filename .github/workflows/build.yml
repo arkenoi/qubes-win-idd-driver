@@ -54,7 +54,11 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force package | Out-Null
           # driver binaries + INF (path depends on the project; sample outputs under x64\Release)
-          Get-ChildItem driver -Recurse -Include *.dll,*.inf,*.cat |
+          # *.exe included so IddSampleApp.exe ships: it is what actually ACTIVATES an IDD
+          # monitor (SwDeviceCreate on hardware id "IddSampleDriver", the INF's 2nd models
+          # line). Without it the driver installs but drives no monitor, and the Phase 1B
+          # gate can only be measured connected-but-inactive.
+          Get-ChildItem driver -Recurse -Include *.dll,*.inf,*.cat,*.exe |
               Where-Object FullName -match 'x64.*Release' |
               Copy-Item -Destination package -Force
           # devcon.exe for root-enumerated device creation in the guest
