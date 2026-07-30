@@ -17,6 +17,19 @@ if ($cer) {
 
 Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' LongPathsEnabled 1
 
+# Disable UAC filtering on this DISPOSABLE, OFFLINE driver-dev VM so that qrexec/VMShell
+# (which lands as 'user' in the interactive session) gets a full admin token and can run
+# pnputil/devcon/sc and stop the gui-agent service non-interactively. Without this, every
+# driver install and agent-binary swap fails "Access is denied" with no consent UI reachable
+# from dom0, and there is no in-guest self-elevation path from the medium-integrity qrexec
+# session. This mirrors QWT's own "Disable UAC" installer option. Applies on next reboot
+# (firstboot reboots anyway). SECURITY: only appropriate for a throwaway, network-isolated
+# test VM used for driver development — never for a real or networked Windows qube.
+$sys = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+Set-ItemProperty $sys EnableLUA 0 -Type DWord
+Set-ItemProperty $sys ConsentPromptBehaviorAdmin 0 -Type DWord
+Set-ItemProperty $sys LocalAccountTokenFilterPolicy 1 -Type DWord
+
 # no sleep/monitor-off mid-test; /h off also kills Fast Startup so qvm-shutdown+start
 # is a real cold boot (and the --cdrom drive stays visible per qubes-doc)
 powercfg /h off
