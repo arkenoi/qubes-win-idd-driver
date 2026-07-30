@@ -358,8 +358,18 @@ jobs:
         run: |
           git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
           git config --global --add safe.directory "$env:GITHUB_WORKSPACE/agent"
-          git -C "$env:GITHUB_WORKSPACE" rev-parse HEAD
-          git -C "$env:GITHUB_WORKSPACE/agent" rev-parse HEAD
+          $repoSha  = (git -C "$env:GITHUB_WORKSPACE" rev-parse HEAD).Trim()
+          $agentSha = (git -C "$env:GITHUB_WORKSPACE/agent" rev-parse HEAD).Trim()
+          $agentDesc = (git -C "$env:GITHUB_WORKSPACE/agent" describe --always --dirty --tags 2>$null)
+          if (-not $agentDesc) { $agentDesc = $agentSha }
+          if (-not $repoSha -or -not $agentSha) { throw 'could not resolve provenance SHAs' }
+          Write-Host "repo=$repoSha agent=$agentSha desc=$agentDesc"
+          # Hand them to make-package.ps1 explicitly. Resolving git from inside that script
+          # kept yielding 'unknown' on the runner even though it works here, so stop relying
+          # on it: pass what we already know, and fail loudly above if it is unavailable.
+          "QWT_REPO_SHA=$repoSha"       | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "QWT_AGENT_SHA=$agentSha"     | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "QWT_AGENT_DESCRIBE=$($agentDesc.Trim())" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
       - name: Assemble package
         shell: pwsh

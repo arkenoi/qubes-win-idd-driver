@@ -65,9 +65,20 @@ function Git {
     return $Fallback
 }
 
-$agentSha  = Git @('-C', (Join-Path $RepoRoot 'agent'), 'rev-parse', 'HEAD')
-$agentDesc = Git @('-C', (Join-Path $RepoRoot 'agent'), 'describe', '--always', '--dirty', '--tags')
-$repoSha   = Git @('-C', $RepoRoot, 'rev-parse', 'HEAD')
+# Prefer values the caller resolved (CI sets these; see 'Mark workspace safe for git').
+# Invoking git from inside this script kept returning 'unknown' on GitHub runners even
+# though the identical command succeeds in a plain step, so the env vars are authoritative
+# and git is only the local-developer fallback.
+function Provenance {
+    param([string]$EnvName, [string[]]$GitArgs)
+    $v = [Environment]::GetEnvironmentVariable($EnvName)
+    if ($v) { return $v.Trim() }
+    return (Git $GitArgs)
+}
+
+$agentSha  = Provenance 'QWT_AGENT_SHA'      @('-C', (Join-Path $RepoRoot 'agent'), 'rev-parse', 'HEAD')
+$agentDesc = Provenance 'QWT_AGENT_DESCRIBE' @('-C', (Join-Path $RepoRoot 'agent'), 'describe', '--always', '--dirty', '--tags')
+$repoSha   = Provenance 'QWT_REPO_SHA'       @('-C', $RepoRoot, 'rev-parse', 'HEAD')
 $shortAgent = if ($agentSha -ne 'unknown') { $agentSha.Substring(0, 12) } else { 'unknown' }
 
 # QWT release this overlay targets. Bump deliberately if the agent is ever rebased onto a
