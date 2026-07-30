@@ -90,9 +90,19 @@ interleaved:
 
 ## Phase 1B — stock IDD scoping (Track B)
 
+Strategy: coexistence first, in three stages — (1) IDD installed but IGNORED by QWT (agent
+keeps duplicating the Basic Display Adapter output), (2) agent duplicates the IDD output
+instead, (3) IDD feeds frames directly and DDA drops out. Only stage 1 is Phase 1B.
+
+CRITICAL for stage 1: the IDD monitor must be connected but **INACTIVE** (do not extend the
+desktop — `SetDisplayConfig`). An active second monitor enlarges the desktop bounding box
+the agent maps as the screen, so Windows can place windows in a region dom0 never sees and
+seamless coordinates break. "Ignored" must mean inactive, not merely uncaptured.
+
 Deploy the unmodified IddSampleDriver alongside QWT and answer, in FINDINGS.md:
-1. Does it coexist with the Basic Display Adapter? (Which becomes primary? Can you force it
-   via `SetDisplayConfig`/registry?)
+1. Does it coexist with the Basic Display Adapter? (Which becomes primary? Can you keep the
+   IDD inactive, and force primary via `SetDisplayConfig`/registry?) Confirm seamless is
+   unchanged with the IDD present-but-inactive: same `qtest shot` output as baseline.
 2. With the IDD monitor primary, does Desktop Duplication still work, and — decisive — is
    `DesktopImageInSystemMemory` still TRUE (ddaprobe)? Does the QWT agent keep streaming
    (does `qtest shot` still show a live desktop)?
