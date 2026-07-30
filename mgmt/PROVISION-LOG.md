@@ -354,3 +354,41 @@ same qube, `export QTEST_INCOMING='C:\Users\user\Documents\QubesIncoming\win-idd
   udisksctl loop-setup -r --no-user-interaction -f ~/win-iso/win-idd-unattended.iso
   qvm-start win-idd-test --cdrom=win-idd-mgmt:loop0    # PORT form; path form is dom0-only
   # then restart the qube (WITHOUT --cdrom) at each halt; ~4 halts total.
+
+## 2026-07-30 (later) — Phase 0.6 + 1A progress, and the elevation blocker
+
+### Delivered (committed, adversarially reviewed)
+- **tools/ddaprobe** (Phase 0.6): the Desktop-Duplication scoping probe. Built by the
+  green idd-driver CI job. Answers, per DXGI output, DesktopImageInSystemMemory +
+  AcquireNextFrame latency + dirty/move-rect counts. Needs NO elevation to run.
+- **ci-notes/trackA-build.md** (Phase 1A.1): GO verdict — the gui-agent is 100% user-mode
+  v143, no EWDK/WDK. Dependency map + ready-to-adapt CI job (2 blockers to fix before it
+  goes into build.yml). Enable later with `gh variable set AGENT_BUILD --body true`.
+- **instrumentation/** (Phase 1A.2): timing patch (not yet applied to agent/), analyzer,
+  and SendInput drag/scroll/type harness. Harness needs NO elevation.
+- Deploy round-trip (Phase 0.5) plumbing PROVEN: qtest push→deploy-and-test.ps1→
+  `=== RESULT ===` JSON parses; the sample INF targets NTamd64.10.0...22000 (Win11+),
+  so it does not install on 19044 — expected, that is what the round-trip is for.
+
+### BLOCKER (escalated to user): guest elevation for driver-install & agent-swap
+Verified empirically on the live VM:
+- qrexec/VMShell lands as `win-idd-test\user` in Console session 1 at **Medium** integrity
+  (UAC-filtered). `pnputil /add-driver`, `devcon install`, `sc create`, stopping
+  QubesGuiWatchdog → all "Access is denied".
+- From an AppVM, qrexec CANNOT request a non-default user: `qvm-run --user=SYSTEM` →
+  "non-default user not possible for calls from VM"; the `qubes.VMShell+SYSTEM` arg is
+  ignored (still runs as user).
+- HKLM Policies write denied; Task Scheduler refuses to register any task from Medium IL
+  (so the SYSTEM-task trick that worked during provisioning — under elevated
+  FirstLogonCommands — is unavailable now). ConsentPromptBehaviorAdmin=5, so
+  `Start-Process -Verb RunAs` shows a consent dialog nobody can click.
+⇒ There is NO in-guest self-elevation path from the post-provisioning session.
+DECISION NEEDED (security tradeoff, user's call): disable UAC on this DISPOSABLE, offline
+dev VM (EnableLUA=0 / LocalAccountTokenFilterPolicy=1 in guest/firstboot-setup.ps1, applied
+via a re-provision or one elevated command) — mirrors QWT's own "Disable UAC" option and is
+standard for driver-dev VMs, but I did not apply it (auto-classifier flagged the edit, and
+weakening the guest posture should be an explicit choice). Alternatives: (a) a dom0 qrexec
+policy granting a SYSTEM-target service, (b) accept re-provisioning per driver test.
+NOTE: ddaprobe + the drag harness do NOT need elevation, so all measurement work proceeds
+regardless of this decision. Only Track B driver-install and the Track A agent-binary swap
+are gated on it.
