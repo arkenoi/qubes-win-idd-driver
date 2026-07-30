@@ -1,0 +1,90 @@
+# PROPOSED addition to .github/workflows/build.yml — NOT a workflow file itself.
+# (GitHub Actions only reads .github/workflows/*, so this file is inert where it sits.)
+#
+# Paste the `package:` block below at the end of the existing `jobs:` mapping, after the
+# `gui-agent:` job. It adds one job and changes nothing in the two green jobs.
+#
+# Why it is safe:
+#   * it only READS the artifacts the other two jobs already upload;
+#   * `needs:` names both, but the `if:` lets the package build even if idd-driver fails,
+#     and the idd-driver download step is best-effort;
+#   * if `vars.AGENT_BUILD != 'true'` the gui-agent job is skipped, so this job is skipped
+#     too — correct, since there would be no agent binaries to package.
+
+  # ------------------------------------------------- Deliverable: installable QWT overlay
+  # Produces ONE downloadable artifact ('qwt-improved-package') that a user unpacks in a
+  # Windows qube and installs with install-qwt-improved.ps1. It is an overlay updater for
+  # an existing QWT 4.2.2 install (GUI agent only) — see ci-notes/packaging.md for why a
+  # full patched-MSI / rebuilt-QWT package is not the deliverable.
+  package:
+    needs: [gui-agent, idd-driver]
+    # Build the package whenever the agent built, even if the driver job failed.
+    if: ${{ always() && needs.gui-agent.result == 'success' }}
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0        # so `git describe` in the agent submodule resolves tags
+
+      - name: Download gui-agent artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gui-agent-package
+          path: dl/gui-agent
+
+      - name: Download idd-driver artifact (best effort)
+        id: dl_driver
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: idd-driver-package
+          path: dl/idd-driver
+
+      - name: Assemble package
+        shell: pwsh
+        run: |
+          $mkArgs = @('-AgentArtifact', 'dl/gui-agent', '-OutDir', 'package-qwt')
+          if ('${{ steps.dl_driver.outcome }}' -eq 'success') {
+            $mkArgs += @('-DriverArtifact', 'dl/idd-driver')
+          } else {
+            Write-Warning 'idd-driver artifact unavailable; packaging without optional/idd-driver'
+          }
+          & .\packaging\make-package.ps1 @mkArgs
+
+      # Optional and OFF unless the repo variable is set. Signs the two installable
+      # binaries with the throwaway test cert the driver job already uses, so
+      # Get-AuthenticodeSignature reports a known publisher instead of NotSigned.
+      # Signing rewrites the .exe, which invalidates the hashes the previous step already
+      # baked into MANIFEST.json / SHA256SUMS.txt — so this step re-runs the assembler
+      # afterwards to regenerate them over the signed binaries.
+      - name: Test-sign installable binaries (optional)
+        if: ${{ vars.SIGNING_ENABLED == 'true' }}
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.SIGNING_PFX_B64 }}
+          PFX_PASS: ${{ secrets.SIGNING_PFX_PASS }}
+        run: |
+          [IO.File]::WriteAllBytes('cert.pfx', [Convert]::FromBase64String($env:PFX_B64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+              Where-Object FullName -match 'x64' | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          Get-ChildItem dl\gui-agent -Filter *.exe | ForEach-Object {
+              & $signtool.FullName sign /fd sha256 /f cert.pfx /p $env:PFX_PASS $_.FullName
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($_.Name)" }
+          }
+          Remove-Item cert.pfx
+          # re-stage so MANIFEST.json / SHA256SUMS.txt describe the SIGNED files
+          $mkArgs = @('-AgentArtifact', 'dl/gui-agent', '-OutDir', 'package-qwt')
+          if ('${{ steps.dl_driver.outcome }}' -eq 'success') { $mkArgs += @('-DriverArtifact', 'dl/idd-driver') }
+          & .\packaging\make-package.ps1 @mkArgs
+
+      - name: Show manifest
+        shell: pwsh
+        run: Get-Content package-qwt\MANIFEST.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwt-improved-package
+          path: package-qwt/
+          retention-days: 14

@@ -49,6 +49,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ddaprobe msbuild failed" }
           Get-ChildItem tools\ddaprobe\x64\Release\ddaprobe.exe
 
+      - name: Build chromerepro
+        shell: pwsh
+        run: |
+          # tools/chromerepro: reproduces the Office 2013+ compound-window layout WITHOUT
+          # Office, so the 2A-chrome predicate can be tested (CLAUDE.md Phase 2A-chrome).
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              Select-Object -First 1
+          & $msbuild tools\chromerepro\chromerepro.vcxproj /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "chromerepro msbuild failed" }
+          Get-ChildItem tools\chromerepro\x64\Release\chromerepro.exe
+
       - name: Collect package + tools
         shell: pwsh
         run: |
@@ -95,6 +107,9 @@ jobs:
           $probe = Get-ChildItem tools\ddaprobe -Recurse -Filter ddaprobe.exe -ErrorAction SilentlyContinue |
               Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
           if ($probe) { Copy-Item $probe.FullName package\ -Force } else { Write-Warning 'ddaprobe.exe missing from package' }
+          $repro = Get-ChildItem tools\chromerepro -Recurse -Filter chromerepro.exe -ErrorAction SilentlyContinue |
+              Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
+          if ($repro) { Copy-Item $repro.FullName package\ -Force } else { Write-Warning 'chromerepro.exe missing from package' }
           Get-ChildItem package
 
       - uses: actions/upload-artifact@v4
@@ -303,4 +318,82 @@ jobs:
         with:
           name: gui-agent-package
           path: package-agent/
+          retention-days: 14
+
+  # ------------------------------------------------- Deliverable: installable QWT overlay
+  # Produces ONE downloadable artifact ('qwt-improved-package') that a user unpacks in a
+  # Windows qube and installs with install-qwt-improved.ps1. It is an overlay updater for
+  # an existing QWT 4.2.2 install (GUI agent only) — see ci-notes/packaging.md for why a
+  # full patched-MSI / rebuilt-QWT package is not the deliverable.
+  package:
+    needs: [gui-agent, idd-driver]
+    # Build the package whenever the agent built, even if the driver job failed.
+    if: ${{ always() && needs.gui-agent.result == 'success' }}
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0        # so `git describe` in the agent submodule resolves tags
+
+      - name: Download gui-agent artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gui-agent-package
+          path: dl/gui-agent
+
+      - name: Download idd-driver artifact (best effort)
+        id: dl_driver
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: idd-driver-package
+          path: dl/idd-driver
+
+      - name: Assemble package
+        shell: pwsh
+        run: |
+          $mkArgs = @('-AgentArtifact', 'dl/gui-agent', '-OutDir', 'package-qwt')
+          if ('${{ steps.dl_driver.outcome }}' -eq 'success') {
+            $mkArgs += @('-DriverArtifact', 'dl/idd-driver')
+          } else {
+            Write-Warning 'idd-driver artifact unavailable; packaging without optional/idd-driver'
+          }
+          & .\packaging\make-package.ps1 @mkArgs
+
+      # Optional and OFF unless the repo variable is set. Signs the two installable
+      # binaries with the throwaway test cert the driver job already uses, so
+      # Get-AuthenticodeSignature reports a known publisher instead of NotSigned.
+      # Signing rewrites the .exe, which invalidates the hashes the previous step already
+      # baked into MANIFEST.json / SHA256SUMS.txt — so this step re-runs the assembler
+      # afterwards to regenerate them over the signed binaries.
+      - name: Test-sign installable binaries (optional)
+        if: ${{ vars.SIGNING_ENABLED == 'true' }}
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.SIGNING_PFX_B64 }}
+          PFX_PASS: ${{ secrets.SIGNING_PFX_PASS }}
+        run: |
+          [IO.File]::WriteAllBytes('cert.pfx', [Convert]::FromBase64String($env:PFX_B64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+              Where-Object FullName -match 'x64' | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          Get-ChildItem dl\gui-agent -Filter *.exe | ForEach-Object {
+              & $signtool.FullName sign /fd sha256 /f cert.pfx /p $env:PFX_PASS $_.FullName
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($_.Name)" }
+          }
+          Remove-Item cert.pfx
+          # re-stage so MANIFEST.json / SHA256SUMS.txt describe the SIGNED files
+          $mkArgs = @('-AgentArtifact', 'dl/gui-agent', '-OutDir', 'package-qwt')
+          if ('${{ steps.dl_driver.outcome }}' -eq 'success') { $mkArgs += @('-DriverArtifact', 'dl/idd-driver') }
+          & .\packaging\make-package.ps1 @mkArgs
+
+      - name: Show manifest
+        shell: pwsh
+        run: Get-Content package-qwt\MANIFEST.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwt-improved-package
+          path: package-qwt/
           retention-days: 14
