@@ -39,6 +39,27 @@ on this configuration the dominant cost is enumeration.
 `SetWinEventHook` (`EVENT_OBJECT_LOCATIONCHANGE/CREATE/DESTROY/...`) window tracking.
 Damage coalescing is NOT worth doing first — there is almost nothing to win there.
 
+## CORRECTION: it is not the `EnumWindows` syscall — it is uncached REJECTS
+
+"enu = EnumWindows is slow" was the wrong label. `EnumWindows` itself is cheap. The bracket
+measures `AddAllWindows()`, and the cost is inside the per-window callback:
+
+`AddWindowsProc()` early-outs **only** for windows already in the watched list
+(`FindWindowByHandle`). Every **rejected** window falls through to `GetWindowData()` +
+`ShouldAcceptWindow()` again on **every frame, forever** — rejects are never cached.
+`GetWindowData()` does, per window: `malloc`, **`GetWindowText`** (a synchronous
+CROSS-PROCESS `WM_GETTEXT` for windows owned by other processes), `GetClassName`,
+`IsWindowVisible`, and **`DwmGetWindowAttribute(DWMWA_CLOAKED)`** (an RPC to DWM).
+
+Measured on the guest: **68 top-level windows, exactly 1 accepted → 67 re-interrogated every
+frame**, at ~340 us each (23 ms median / 67). `enu` never falls below 14 ms in 499 frames,
+which is what made the "EnumWindows" label implausible and led to finding this.
+
+This sharpens Phase 2A: the win is not merely "call EnumWindows less often", it is "stop
+re-interrogating windows you already rejected", which SetWinEventHook delivers by
+construction — plus a reject cache with correct invalidation, since a rejected window can
+later become eligible (shown, uncloaked, renamed, moved on-screen).
+
 ## Move rects: dead end, confirmed twice
 
 `max GetFrameMoveRects count seen = 0` across all 499 frames, including a 10 s window drag.
