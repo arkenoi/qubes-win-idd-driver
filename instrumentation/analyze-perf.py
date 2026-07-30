@@ -28,7 +28,9 @@ BANNER = re.compile(r'QGAPERF(?:-HEADER)? (?:on|off|v=|fields)')
 
 # time fields are microseconds summed over `n` frames
 TIME_FIELDS = ['dt', 'acq', 'wak', 'mrq', 'drq', 'upd', 'enu', 'rem', 'dmg', 'snd', 'tot', 'log']
-COUNT_FIELDS = ['dr', 'mr', 'area', 'sends', 'skip']
+# iwn = windows actually interrogated (the Phase 2A headline: was ~67/frame, should
+# approach 0). wev = window events drained. Both are per-record counts.
+COUNT_FIELDS = ['dr', 'mr', 'area', 'sends', 'skip', 'iwn', 'wev']
 LAST_FIELDS = ['win', 'mrmax']
 
 PHASE_GROUPS = OrderedDict([
@@ -118,6 +120,10 @@ def summarize(name, recs):
     area = sum(r.get('area', 0) for r in recs)
     sends = sum(r.get('sends', 0) for r in recs)
     skip = sum(r.get('skip', 0) for r in recs)
+    iwn = sum(r.get('iwn', 0) for r in recs)
+    wev = sum(r.get('wev', 0) for r in recs)
+    print('   INTERROGATED/frame=%.2f  events/frame=%.2f   <- Phase 2A headline (was ~67/frame)'
+          % (iwn / float(n), wev / float(n)))
     print('   counts/frame: dirty_rects=%.2f move_rects=%.3f (max seen %d) dirty_px=%.0f '
           'sends=%.2f  windows=%d  dropped(no-damage)_frames=%d'
           % (dr / float(n), mr / float(n), max(r.get('mrmax', 0) for r in recs),
