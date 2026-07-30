@@ -43,10 +43,20 @@ $payload       = Need (Join-Path $RepoRoot 'packaging\payload') 'packaging paylo
 # ---------------------------------------------------------------- version / provenance
 function Git {
     param([string[]]$GitArgs, [string]$Fallback = 'unknown')
+    # $ErrorActionPreference is 'Stop' for this script, which turns ANYTHING a native command
+    # writes to stderr into a terminating NativeCommandError - and git writes to stderr
+    # routinely even when it succeeds. That made every provenance field silently fall back to
+    # 'unknown' in CI (agent_commit, driver_repo_commit, agent_describe), which is
+    # unacceptable for a package people are meant to install. Drop to Continue for the call.
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
         $v = & git @GitArgs 2>$null
         if ($LASTEXITCODE -eq 0 -and $v) { return ($v | Select-Object -First 1).Trim() }
-    } catch { }
+    } catch {
+    } finally {
+        $ErrorActionPreference = $saved
+    }
     return $Fallback
 }
 
