@@ -213,7 +213,11 @@ jobs:
             Refresh-QubesEnv
           }
 
-          MB "$ws\deps-src\pvdrivers\vs2022\vmm-xen-windows-pvdrivers.sln" 'libxenvchan'
+          # Build the libxenvchan PROJECT directly, NOT the .sln: the solution's sibling
+          # pvdrivers.vcxproj has a custom build step that compiles the KMDF drivers
+          # (xenbus/xeniface/xenvbd/xenvif/xennet via build.ps1) and needs the WDK/EWDK we
+          # deliberately don't have -> MSB3073. The .vcxproj alone is pure user-mode.
+          MB "$ws\deps-src\pvdrivers\vs2022\libxenvchan\libxenvchan.vcxproj" ''
           Stage 'vmm-xen-windows-pvdrivers' `
             @("$ws\deps-src\pvdrivers\include\libxenvchan.h",
               "$ws\deps-src\pvdrivers\include\libxenvchan_ring.h",
