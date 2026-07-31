@@ -14,6 +14,7 @@ public class E {
   [DllImport("user32.dll")] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out R r);
   [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int i);
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int a, out R r, int s);
   public struct R { public int l,t,r,b; }
   public static List<string> Go() {
     var o = new List<string>();
@@ -24,8 +25,10 @@ public class E {
       if (w < 8 || ht < 8) return true;
       var t = new StringBuilder(256); GetWindowTextW(h, t, 256);
       var c = new StringBuilder(256); GetClassNameW(h, c, 256);
-      o.Add(string.Format("{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}",
-        h.ToInt64(), r.l, r.t, w, ht, GetWindowLong(h,-20), t.ToString().Replace("\t"," "), c.ToString()));
+      R e; if (DwmGetWindowAttribute(h, 9, out e, 16) != 0) { e = r; }   // DWMWA_EXTENDED_FRAME_BOUNDS
+      o.Add(string.Format("{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}\t{8}\t{9}\t{10}\t{11}",
+        h.ToInt64(), r.l, r.t, w, ht, GetWindowLong(h,-20), t.ToString().Replace("\t"," "), c.ToString(),
+        e.l, e.t, e.r-e.l, e.b-e.t));
       return true;
     }, IntPtr.Zero);
     return o;

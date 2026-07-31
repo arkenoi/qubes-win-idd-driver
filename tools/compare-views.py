@@ -176,8 +176,15 @@ def main():
         # crop the guest at the dom0 image's actual size, centred on the guest rect, so the
         # border discrepancy above does not masquerade as a content difference
         dh, dw = im.shape[0], im.shape[1]
-        ox = wdef['x'] + (w - dw) // 2
-        oy = wdef['y'] + (h - dh) // 2
+        # Crop at the DWM EXTENDED FRAME BOUNDS - the same rect the agent announces and dom0
+        # renders. Centring GetWindowRect assumed a symmetric inset; the real inset is 0 at the
+        # top and 7 at the bottom, which alone put the crop ~3px out, and the alignment search
+        # then quietly absorbed it.
+        if 'ex_x' in wdef:
+            ox, oy = wdef['ex_x'], wdef['ex_y']
+        else:
+            ox = wdef['x'] + (w - dw) // 2
+            oy = wdef['y'] + (h - dh) // 2
         # CRITICAL: do not assume the dom0 image is centred on the guest rect. The agent
         # reports DWM extended frame bounds and the border discrepancy is not symmetric, so a
         # centred crop can be several rows off - which makes EVERY row of text mismatch and
@@ -207,6 +214,25 @@ def main():
             if worst == 'OK':
                 worst = 'UNRELIABLE'
             continue
+        # An offset is only believable if it is DECISIVELY better than no offset at all. On
+        # periodic content (lines of text) the search finds shallow minima at multiples of the
+        # line height that are marginally better than zero and mean nothing. Registration is
+        # established by the protocol trace, which is exact; this tool must not claim it.
+        if off and off != (0, 0):
+            import numpy as _np
+            g2, d2 = guest.mean(axis=2), im.mean(axis=2)
+            def _score(sx, sy):
+                if sy < 0 or sx < 0 or sy + dh > g2.shape[0] or sx + dw > g2.shape[1]:
+                    return None
+                return float(_np.abs(g2[sy:sy + dh, sx:sx + dw] - d2).mean())
+            s_off, s_zero = _score(ox + off[0], oy + off[1]), _score(ox, oy)
+            if s_off is None or s_zero is None or s_off > s_zero / 2.0:
+                print(f"{title:28s} {w}x{h:<6}  {'ALIGN-WEAK':16s} best offset {off} scores "
+                      f"{s_off:.2f} vs {s_zero:.2f} at zero - not decisive, so no registration "
+                      f"claim is made (content is likely periodic)")
+                if worst == 'OK':
+                    worst = 'ALIGN-WEAK'
+                continue
         if off:
             ox, oy = ox + off[0], oy + off[1]
         verdict, st = classify(guest, im, (ox, oy, dw, dh))
@@ -229,7 +255,7 @@ def main():
         if verdict != 'OK':
             worst = verdict
     print(f"\nWORST: {worst}")
-    if worst in ('AMBIGUOUS', 'UNALIGNABLE', 'UNRELIABLE'):
+    if worst in ('AMBIGUOUS', 'UNALIGNABLE', 'UNRELIABLE', 'ALIGN-WEAK'):
         print(f"{worst} means this run proved nothing about those windows - not that they are ok.")
     return 0 if worst == 'OK' else 1
 

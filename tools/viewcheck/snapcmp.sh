@@ -20,9 +20,10 @@ def parse(rows):
     out={}
     for r in rows:
         p=r.split('\t')
-        if len(p)>=8:
+        if len(p)>=12:
             out[p[0]]=dict(hwnd=p[0],x=int(p[1]),y=int(p[2]),w=int(p[3]),h=int(p[4]),
-                           ex=int(p[5]),title=p[6],cls=p[7])
+                           ex=int(p[5]),title=p[6],cls=p[7],
+                           ex_x=int(p[8]),ex_y=int(p[9]),ex_w=int(p[10]),ex_h=int(p[11]))
     return out
 pre,post=parse(block('GEOPRE')),parse(block('GEOPOST'))
 stable=[v for k,v in pre.items() if k in post and (post[k]['x'],post[k]['y'],post[k]['w'],post[k]['h'])==(v['x'],v['y'],v['w'],v['h'])]
