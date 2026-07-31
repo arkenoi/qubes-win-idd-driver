@@ -133,3 +133,60 @@ against extended frame bounds, which the guest snapshot now reports.
 
 I came close to "fixing" the agent to match a broken invariant. The check that stopped it was
 comparing the announced rect against BOTH candidate ground truths before concluding.
+
+---
+
+# Negative controls: proving a test can fail
+
+A test that has never been observed to fail is not evidence. Every check in this suite was
+written against a build that was already believed good, which is exactly how the previous
+suite came to report green on four visible defects. So each new check is now run against a
+build with the defect deliberately re-introduced.
+
+This immediately paid for itself, in the least comfortable way.
+
+## Control 1 — hidden-window occlusion: the test does NOT catch it
+
+`tools/viewcheck/occlusion-test.ps1` was written specifically to catch the hidden-window
+over-clipping bug found by code review. Built with that bug re-introduced
+(`4.2.2+agent.ca515bff9fde`), the test **passed**:
+
+```
+phase visible: 6 damage rect(s), 0 reaching past x=300
+phase hidden : 12 damage rect(s), 6 reaching past x=300
+both clipping directions correct
+```
+
+Why: hiding a window causes the agent to unmap it (`SendWindowUnmap: Unmapping window
+0xb0078`), and a hidden window also sinks in the z-order returned by `EnumWindows`, so it is
+processed *below* the window it was supposed to wrongly occlude. The buggy code path is not
+reached this way.
+
+**Consequence, stated plainly:** the claim that this regression "would have shipped" as a
+user-visible defect is NOT supported. The `!IsVisible` guard is correct defensively - a hidden
+window must never occlude - but there is no evidence it was reachable, and no test here
+demonstrates it. Reporting it as a caught regression would have been overstating the result.
+
+## Control 2 — occlusion clipping: the test DOES catch it
+
+Built with the clipping itself disabled (`4.2.2+agent.0eabb2b8a0fc`) - the defect that
+actually produced the reported corruption - the test failed as required:
+
+```
+phase visible: 6 damage rect(s), 6 reaching past x=300
+FAIL [under-clip] BASE was sent damage at rx=1 w=300 (reaches 301) while COVER is on
+  top of x>=300: the daemon will paint COVER's pixels into BASE
+```
+
+Restored to the shipping build, it passes again. So the check has demonstrated discriminating
+power for the bug it exists to catch, which is the only thing that makes its PASS meaningful.
+
+## Standing rule
+
+No check enters this suite until it has been seen to fail on a build containing the defect it
+claims to detect. Where that has not been done, the check's PASS is documented as unproven
+rather than counted as evidence.
+
+Currently proven by negative control: **damage clipping (under-clip direction)**.
+Not proven: the over-clip direction, the ACCESS_LOST invariants, the geometry invariants.
+Those are honest checks, but their PASS is weaker evidence than the clipping one.

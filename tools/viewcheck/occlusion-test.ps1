@@ -62,18 +62,21 @@ $cover.TopMost = $true
 $cover.BringToFront(); $cover.Refresh()
 [System.Windows.Forms.Application]::DoEvents()
 Start-Sleep 2
-Write-Output "PHASE visible"
+Write-Output ("PHASE visible {0}" -f (Get-Date).ToString('yyyyMMdd.HHmmss.fff'))
 Repaint-Base
+Write-Output ("PHASE visible-end {0}" -f (Get-Date).ToString('yyyyMMdd.HHmmss.fff'))
 Start-Sleep 2
 
 # --- phase 2: COVER hidden
 $cover.Hide()
 [System.Windows.Forms.Application]::DoEvents()
 Start-Sleep 3
-Write-Output "PHASE hidden"
+Write-Output ("PHASE hidden {0}" -f (Get-Date).ToString('yyyyMMdd.HHmmss.fff'))
 Repaint-Base
+Write-Output ("PHASE hidden-end {0}" -f (Get-Date).ToString('yyyyMMdd.HHmmss.fff'))
 Start-Sleep 2
 
+Write-Output ("PHASE end {0}" -f (Get-Date).ToString('yyyyMMdd.HHmmss.fff'))
 Write-Output "TRACESTART"
 Get-Content $log.FullName | Select-String 'QGAPROTO,' | ForEach-Object { $_.Line }
 Write-Output "TRACEEND"
