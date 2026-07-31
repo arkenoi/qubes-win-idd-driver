@@ -167,7 +167,7 @@ def main():
         # reports DWM extended frame bounds and the border discrepancy is not symmetric, so a
         # centred crop can be several rows off - which makes EVERY row of text mismatch and
         # masquerades as tearing. Find the true alignment first, then judge content there.
-        off, _ = locate(guest, im, (ox, oy), radius=16, step=1, sub=2)
+        off, _ = locate(guest, im, (ox, oy), radius=40, step=1, sub=2)
         if off:
             ox, oy = ox + off[0], oy + off[1]
         verdict, st = classify(guest, im, (ox, oy, dw, dh))
