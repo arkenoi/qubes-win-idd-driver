@@ -438,9 +438,34 @@ static int ModeBench(int K, int durationSec, int w, int h, bool animate, int til
     WaitForSingleObject(st.ready, 10000);
     Sleep(1000); // let DWM compose the scene before measuring
 
+    // Open as many capture channels as the system allows; a per-window failure is a
+    // RESULT (the practical WGC session ceiling), not a crash. Failed channels are
+    // reported and excluded.
     std::vector<Chan> chans(K);
-    for (int i = 0; i < K; i++)
-        OpenChan(d, chans[i], wins[i].hwnd, w, h);
+    int opened = 0;
+    HRESULT firstFail = S_OK;
+    for (int i = 0; i < K; i++) {
+        try {
+            OpenChan(d, chans[i], wins[i].hwnd, w, h);
+            opened++;
+        } catch (hresult_error const &e) {
+            if (firstFail == S_OK) firstFail = e.code();
+            fprintf(stderr, "OpenChan[%d] failed: 0x%08X %ls\n", i,
+                    (unsigned)e.code().value, e.message().c_str());
+            chans.resize(i); // stop at first failure: ceiling reached
+            break;
+        }
+    }
+    if (opened == 0) {
+        printf("no capture channel could be opened (first failure 0x%08X)\n",
+               (unsigned)firstFail);
+        printf("=== WGCPROBE JSON ===\n{\"mode\":\"bench\",\"k\":%d,\"opened\":0,"
+               "\"firstFailHr\":\"0x%08X\"}\n", K, (unsigned)firstFail);
+        st.quit.store(true);
+        WaitForSingleObject(st.thread, 5000);
+        return 1;
+    }
+    const int KEff = opened;
 
     double cpu0 = CpuSeconds(), sys0 = SysBusySeconds();
     LARGE_INTEGER f, t0, t1;
@@ -449,7 +474,7 @@ static int ModeBench(int K, int durationSec, int w, int h, bool animate, int til
     DWORD deadline = GetTickCount() + (DWORD)durationSec * 1000;
     for (;;) {
         bool any = false;
-        for (int i = 0; i < K; i++)
+        for (int i = 0; i < KEff; i++)
             any = PollFrame(d, chans[i], nullptr) || any;
         if (!any)
             Sleep(1); // no frame pending anywhere; don't burn the core
@@ -473,19 +498,20 @@ static int ModeBench(int K, int durationSec, int w, int h, bool animate, int til
         fpsMax = std::max(fpsMax, fps);
         allMap.insert(allMap.end(), c.mapUs.begin(), c.mapUs.end());
     }
-    printf("K=%d size=%dx%d animate=%d tile=%d frames=%zu wall=%.2fs "
+    printf("K=%d opened=%d size=%dx%d animate=%d tile=%d frames=%zu wall=%.2fs "
            "procCpu=%.2fs sysBusy=%.2fs fps-agg=%.1f fps-min=%.1f fps-max=%.1f "
            "map-p50=%.0fus map-p95=%.0fus size-mismatch=%d\n",
-           K, w, h, animate, tile, totFrames, wall, cpu, sys, totFrames / wall,
+           K, KEff, w, h, animate, tile, totFrames, wall, cpu, sys, totFrames / wall,
            fpsMin, fpsMax, Pct(allMap, 50), Pct(allMap, 95), mism);
     printf("=== WGCPROBE JSON ===\n");
-    printf("{\"mode\":\"%s\",\"k\":%d,\"w\":%d,\"h\":%d,\"tile\":%d,\"frames\":%zu,"
+    printf("{\"mode\":\"%s\",\"k\":%d,\"opened\":%d,\"w\":%d,\"h\":%d,\"tile\":%d,"
+           "\"frames\":%zu,"
            "\"wallSec\":%.3f,\"procCpuSec\":%.3f,\"sysBusySec\":%.3f,\"fpsAgg\":%.1f,"
            "\"fpsMin\":%.1f,\"fpsMax\":%.1f,\"mapP50us\":%.0f,\"mapP95us\":%.0f,"
            "\"sizeMismatch\":%d}\n",
-           animate ? "bench" : "benchstatic", K, w, h, tile, totFrames, wall, cpu,
-           sys, totFrames / wall, fpsMin, fpsMax, Pct(allMap, 50), Pct(allMap, 95),
-           mism);
+           animate ? "bench" : "benchstatic", K, KEff, w, h, tile, totFrames, wall,
+           cpu, sys, totFrames / wall, fpsMin, fpsMax, Pct(allMap, 50),
+           Pct(allMap, 95), mism);
     for (auto &c : chans) { c.session.Close(); c.pool.Close(); }
     st.quit.store(true);
     WaitForSingleObject(st.thread, 5000);
@@ -494,7 +520,28 @@ static int ModeBench(int K, int durationSec, int w, int h, bool animate, int til
     return 0;
 }
 
+static int Dispatch(int argc, char **argv);
+
 int main(int argc, char **argv)
+{
+    // stdout is a fully-buffered pipe under qrexec; a crash loses EVERYTHING buffered.
+    // Unbuffer so partial output + the banner always reach the harness.
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    try {
+        return Dispatch(argc, argv);
+    } catch (hresult_error const &e) {
+        printf("FATAL hresult 0x%08X: %ls\n=== WGCPROBE JSON ===\n"
+               "{\"fatalHr\":\"0x%08X\"}\n",
+               (unsigned)e.code().value, e.message().c_str(),
+               (unsigned)e.code().value);
+        return 3;
+    } catch (std::exception const &e) {
+        printf("FATAL: %s\n=== WGCPROBE JSON ===\n{\"fatal\":true}\n", e.what());
+        return 3;
+    }
+}
+
+static int Dispatch(int argc, char **argv)
 {
     SetProcessDPIAware();
     init_apartment(apartment_type::multi_threaded);
