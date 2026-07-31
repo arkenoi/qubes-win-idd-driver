@@ -4,3 +4,4 @@ shots*.tar
 tools/*/x64/
 *.obj
 *.pdb
+upstream/ro/
