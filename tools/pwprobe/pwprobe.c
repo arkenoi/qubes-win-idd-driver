@@ -163,9 +163,81 @@ static double capture_and_compare(HWND hwnd, UINT flags, const char *tag,
     return 100.0 * match / (AW * AH);
 }
 
+static int cmp_dbl(const void *a, const void *b)
+{
+    double d = *(const double *)a - *(const double *)b;
+    return d < 0 ? -1 : d > 0 ? 1 : 0;
+}
+
+/* bench mode: PrintWindow(PW_RENDERFULLCONTENT) latency on an OCCLUDED window,
+ * N iterations, content verified every frame. This prices the no-session-limit
+ * fallback path per frame (WGC allows only ~10 concurrent sessions). */
+static int RunBench(HINSTANCE hi, int iters, const char *dir)
+{
+    g_hA = CreateWindowExW(0, L"pwprobeA", L"pwprobe-A", WS_POPUP | WS_VISIBLE,
+                           AX, AY, AW, AH, NULL, NULL, hi, NULL);
+    UpdateWindow(g_hA);
+    pump(800);
+    g_hB = CreateWindowExW(0, L"pwprobeB", L"pwprobe-B", WS_POPUP | WS_VISIBLE,
+                           BX, BY, BW, BH, NULL, NULL, hi, NULL);
+    UpdateWindow(g_hB);
+    pump(800);
+
+    BITMAPINFO bi;
+    ZeroMemory(&bi, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = AW;
+    bi.bmiHeader.biHeight = -AH;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    VOID *bits = NULL;
+    HDC memdc = CreateCompatibleDC(NULL);
+    HBITMAP bmp = CreateDIBSection(NULL, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    HGDIOBJ old = SelectObject(memdc, bmp);
+
+    double *lat = (double *)malloc(sizeof(double) * iters);
+    int mismatches = 0, fails = 0;
+    LARGE_INTEGER f, t0, t1;
+    QueryPerformanceFrequency(&f);
+    for (int i = 0; i < iters; i++) {
+        QueryPerformanceCounter(&t0);
+        BOOL ok = PrintWindow(g_hA, memdc, PW_RENDERFULLCONTENT);
+        GdiFlush();
+        QueryPerformanceCounter(&t1);
+        lat[i] = 1e6 * (t1.QuadPart - t0.QuadPart) / f.QuadPart;
+        if (!ok) fails++;
+        DWORD *px = (DWORD *)bits;
+        int match = 0;
+        for (int p = 0; p < AW * AH; p++)
+            if ((px[p] & 0x00FFFFFF) == (g_patA[p] & 0x00FFFFFF))
+                match++;
+        if (100.0 * match / (AW * AH) < 99.0) mismatches++;
+        pump(1); /* let the system breathe like a real agent loop would */
+    }
+    qsort(lat, iters, sizeof(double), cmp_dbl);
+    double p50 = lat[iters / 2], p95 = lat[(int)(iters * 0.95)];
+
+    char report[512], rpath[MAX_PATH];
+    int len = _snprintf(report, sizeof(report),
+        "PWPROBE-BENCH: iters=%d size=%dx%d p50=%.0fus p95=%.0fus min=%.0fus "
+        "max=%.0fus pw_fails=%d content_mismatches=%d occluded=YES\r\n",
+        iters, AW, AH, p50, p95, lat[0], lat[iters - 1], fails, mismatches);
+    _snprintf(rpath, sizeof(rpath), "%s\\pwprobe-result.txt", dir);
+    FILE *fp = fopen(rpath, "wb");
+    if (fp) { fwrite(report, 1, len, fp); fclose(fp); }
+    free(lat);
+    SelectObject(memdc, old);
+    DeleteObject(bmp);
+    DeleteDC(memdc);
+    DestroyWindow(g_hB);
+    DestroyWindow(g_hA);
+    return (fails == 0 && mismatches == 0) ? 0 : 1;
+}
+
 int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cmd, int show)
 {
-    (void)hp; (void)cmd; (void)show;
+    (void)hp; (void)show;
     SetProcessDPIAware();
     build_pattern();
 
@@ -175,6 +247,14 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cmd, int show)
     char *slash = strrchr(dir, '\\');
     if (slash) *slash = 0;
 
+    /* result file next to the exe (needed by both modes) */
+    char dir2[MAX_PATH];
+    GetModuleFileNameA(NULL, dir2, MAX_PATH);
+    {
+        char *s2 = strrchr(dir2, '\\');
+        if (s2) *s2 = 0;
+    }
+
     WNDCLASSW wcA = {0}, wcB = {0};
     wcA.lpfnWndProc = WndProcA; wcA.hInstance = hi; wcA.lpszClassName = L"pwprobeA";
     wcA.hbrBackground = NULL; wcA.hCursor = LoadCursor(NULL, IDC_ARROW);
@@ -182,6 +262,13 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cmd, int show)
     wcB.hbrBackground = NULL; wcB.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClassW(&wcA);
     RegisterClassW(&wcB);
+
+    if (cmd && wcsstr(cmd, L"bench")) {
+        int iters = 100;
+        PWSTR sp = wcschr(cmd, L' ');
+        if (sp && _wtoi(sp + 1) > 0) iters = _wtoi(sp + 1);
+        return RunBench(hi, iters, dir2);
+    }
 
     g_hA = CreateWindowExW(0, L"pwprobeA", L"pwprobe-A", WS_POPUP | WS_VISIBLE,
                            AX, AY, AW, AH, NULL, NULL, hi, NULL);
