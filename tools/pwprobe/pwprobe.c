@@ -226,19 +226,26 @@ static int RunBench(HINSTANCE hi, int iters, const char *dir)
     LARGE_INTEGER f, t0, t1;
     QueryPerformanceFrequency(&f);
     g_progress = "bench:loop";
+    static char mark[64];
     for (int i = 0; i < iters; i++) {
+        _snprintf(mark, sizeof(mark), "loop:pw i=%d lat=%p bits=%p", i, (void *)lat,
+                  bits);
+        g_progress = mark;
         QueryPerformanceCounter(&t0);
         BOOL ok = PrintWindow(g_hA, memdc, PW_RENDERFULLCONTENT);
         GdiFlush();
         QueryPerformanceCounter(&t1);
+        _snprintf(mark, sizeof(mark), "loop:store i=%d", i);
         lat[i] = 1e6 * (t1.QuadPart - t0.QuadPart) / f.QuadPart;
         if (!ok) fails++;
+        _snprintf(mark, sizeof(mark), "loop:cmp i=%d", i);
         DWORD *px = (DWORD *)bits;
         int match = 0;
         for (int p = 0; p < AW * AH; p++)
             if ((px[p] & 0x00FFFFFF) == (g_patA[p] & 0x00FFFFFF))
                 match++;
         if (100.0 * match / (AW * AH) < 99.0) mismatches++;
+        _snprintf(mark, sizeof(mark), "loop:pump i=%d", i);
         pump(1); /* let the system breathe like a real agent loop would */
     }
     g_progress = "bench:report";
