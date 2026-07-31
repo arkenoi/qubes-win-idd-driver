@@ -30,3 +30,44 @@ per candidate build.
 
 Until this is fixed the package is not drop-in installable: a user who reboots the qube gets
 an agent that never maps windows.
+
+---
+
+# RETRACTED: the cold-boot bisect, and the justification for the fix
+
+Characterising the check the way the other two metrics had to be characterised shows it is not
+stable. The SAME binary (`EDD43F6F4784`, agent `1aafdc9`) across cold boots:
+
+```
+run 1: EnumWindows_failures=8  => FAIL
+run 2: EnumWindows_failures=0  => PASS
+run 3: EnumWindows_failures=0  => PASS
+```
+
+and a second build of the same commit (`340178330A90`) gave 0 twice. So:
+
+* the bisect result - `final` (7c17564) PASS / `f2` (42beb78) FAIL - is **single samples of an
+  unstable check** and does not establish that the capture-thread desktop re-attach is the
+  cause;
+* commit `a4a64a7` ("Do not close the previously installed desktop handle") is therefore
+  **not justified by the evidence its message cites**. The change itself is defensible on its
+  own terms - MSDN warns against closing a desktop that may still be in use by another thread
+  of the process, and leaking one handle per recovery is cheap - but it must not be described
+  as a bisected fix, and it has NOT been shown to change the failure rate.
+
+## What is actually established
+
+The defect is real and intermittent: 8 `EnumWindows` failures (`0x80070006`) on a cold boot,
+observed on more than one build, roughly 1 run in 3. When it fires, no window enters the
+watched list and the qube renders nothing until the agent is restarted.
+
+Whether stock is immune is also unestablished - stock was measured once (0 failures), which by
+the same standard proves nothing.
+
+## What a valid answer needs
+
+The failure rate is around 1 in 3, so distinguishing builds needs enough runs per build to
+separate ~33% from ~0% - on the order of 8-10 cold boots per candidate, at roughly 8 minutes
+each. That is 1-1.5 hours per build, and a binary search over the candidate range is a day of
+machine time. Sampling more cheaply would need the fault reproduced without a full reboot,
+which nothing found so far does.
