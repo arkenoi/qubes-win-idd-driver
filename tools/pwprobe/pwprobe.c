@@ -217,17 +217,68 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cmd, int show)
     len += _snprintf(report + len, sizeof(report) - len,
         "full: pct=%.1f untouched=%d pw_ok=%d\r\n", full, unt, pwok);
 
-    /* arm 3: occluded + flags=0 (negative control) */
+    /* arm 3: occluded + flags=0 (candidate negative control; on DWM systems this may
+     * still MATCH because every top-level window keeps a redirection surface) */
     double plain = capture_and_compare(g_hA, 0, "plain", dir, &unt, &pwok);
     len += _snprintf(report + len, sizeof(report) - len,
         "plain: pct=%.1f untouched=%d pw_ok=%d\r\n", plain, unt, pwok);
 
+    /* arm 4: guaranteed negative control — BitBlt from the SCREEN DC at A's rect while
+     * occluded. That region of the screen contains B's pixels (occluded=YES asserted
+     * above), so the comparator MUST report MISMATCH here or it cannot fail at all. */
+    double screen = -1.0;
+    {
+        BITMAPINFO bi2;
+        ZeroMemory(&bi2, sizeof(bi2));
+        bi2.bmiHeader.biSize = sizeof(bi2.bmiHeader);
+        bi2.bmiHeader.biWidth = AW;
+        bi2.bmiHeader.biHeight = -AH;
+        bi2.bmiHeader.biPlanes = 1;
+        bi2.bmiHeader.biBitCount = 32;
+        bi2.bmiHeader.biCompression = BI_RGB;
+        VOID *bits2 = NULL;
+        HDC sdc = GetDC(NULL);
+        HDC mdc = CreateCompatibleDC(sdc);
+        HBITMAP bmp2 = CreateDIBSection(NULL, &bi2, DIB_RGB_COLORS, &bits2, NULL, 0);
+        HGDIOBJ old2 = SelectObject(mdc, bmp2);
+        memset(bits2, 0xAA, (size_t)AW * AH * 4);
+        BitBlt(mdc, 0, 0, AW, AH, sdc, AX, AY, SRCCOPY);
+        GdiFlush();
+        DWORD *px2 = (DWORD *)bits2;
+        int match2 = 0;
+        for (int i = 0; i < AW * AH; i++)
+            if ((px2[i] & 0x00FFFFFF) == (g_patA[i] & 0x00FFFFFF))
+                match2++;
+        screen = 100.0 * match2 / (AW * AH);
+        char spath[MAX_PATH];
+        _snprintf(spath, sizeof(spath), "%s\\pw_screen.bmp", dir);
+        FILE *sf = fopen(spath, "wb");
+        if (sf) {
+            BITMAPFILEHEADER fh2;
+            ZeroMemory(&fh2, sizeof(fh2));
+            fh2.bfType = 0x4D42;
+            fh2.bfOffBits = sizeof(fh2) + sizeof(bi2.bmiHeader);
+            fh2.bfSize = fh2.bfOffBits + AW * AH * 4;
+            fwrite(&fh2, sizeof(fh2), 1, sf);
+            fwrite(&bi2.bmiHeader, sizeof(bi2.bmiHeader), 1, sf);
+            fwrite(bits2, 1, (size_t)AW * AH * 4, sf);
+            fclose(sf);
+        }
+        SelectObject(mdc, old2);
+        DeleteObject(bmp2);
+        DeleteDC(mdc);
+        ReleaseDC(NULL, sdc);
+    }
+    len += _snprintf(report + len, sizeof(report) - len,
+        "screen: pct=%.1f (negative control, must MISMATCH)\r\n", screen);
+
     const char *v_full  = (full  >= 99.0) ? "MATCH" : "MISMATCH";
     const char *v_plain = (plain >= 99.0) ? "MATCH" : "MISMATCH";
     const char *v_base  = (base  >= 99.0) ? "MATCH" : "MISMATCH";
+    const char *v_scr   = (screen >= 99.0) ? "MATCH" : "MISMATCH";
     len += _snprintf(report + len, sizeof(report) - len,
-        "PWPROBE: baseline=%s fullcontent=%s plain=%s occluded=%s\r\n",
-        v_base, v_full, v_plain, occluded ? "YES" : "NO");
+        "PWPROBE: baseline=%s fullcontent=%s plain=%s screen=%s occluded=%s\r\n",
+        v_base, v_full, v_plain, v_scr, occluded ? "YES" : "NO");
 
     char rpath[MAX_PATH];
     _snprintf(rpath, sizeof(rpath), "%s\\pwprobe-result.txt", dir);
