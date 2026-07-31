@@ -49,3 +49,21 @@ design issue before code"). Sketch of the options:
 
 Option 1 is the cheap one and the right first design writeup. Worth an upstream issue on its
 own — it is independent of everything else in this repo.
+
+## Why these bugs survive upstream unreported (user observation, worth keeping)
+
+The user notes: most people never enable **focus-follows-mouse**, so they interact with a
+window only *after* clicking it — by which time it is focused, on top, and repainted. Damage
+that is lost or misattributed to an **inactive** window therefore goes unseen: the corruption
+is repaired by the very act of focusing the window before you look at it closely.
+
+With focus-follows-mouse you read and scroll windows that are NOT focused and NOT on top,
+which is exactly the state where:
+* the composited-framebuffer artifact above shows another window's pixels,
+* dropped first-paint damage leaves a window blank (the menu case),
+* stale scanline bands persist because nothing re-dirties the region.
+
+That is a plausible reason all three of these are long-lived defects in shipped QWT rather
+than obvious day-one bugs, and it argues for making focus-follows-mouse part of the manual
+test pass for any GUI-agent change - it is a strictly harder rendering test than the default
+click-to-focus workflow.
