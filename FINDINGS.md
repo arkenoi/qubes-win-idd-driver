@@ -186,3 +186,56 @@ grantprobe `b6854554…2499` (guest hash verified), VM healthy after all runs:
 - Caveats: no dom0 consumer mapped these grants (guest-side numbers only; dom0 map cost
   is an open design item). Ceiling-mode revoke latencies were reported as 0.0 (stats
   bug in the batch-revoke path — regrant mode's revoke numbers are the valid ones).
+
+---
+
+## 2026-08-01 — per-window capture IMPLEMENTED and validated end-to-end
+
+Running code on `agent/` branch `perwindow` (commit ec55f39), installable package
+`qwt-improved 4.2.2+agent.ec55f39` (CI run 30671887528, all jobs green), deployed to
+win-idd-test and validated against every acceptance criterion the user set.
+
+### Architecture as built
+- Per accepted window: page-aligned BGRA buffer, granted read-only to the gui domain
+  (`XcGnttabPermitForeignAccess2`, same call/flags as the screen framebuffer), announced
+  via per-window `MSG_WINDOW_DUMP` — the daemon's existing own-shmseg composition path,
+  UNMODIFIED (the Linux-agent model). Config: `PerWindowCapture` DWORD / `QGA_PERWINDOW`.
+- Capture engine: **PrintWindow(PW_RENDERFULLCONTENT)**, not WGC. Decisive e2e finding:
+  WGC cannot be activated in the agent's process context (SYSTEM token, session 1) —
+  `IsSupported()` returns 0x8007000E and `CreateForWindow` throws, while the identical
+  code worked from the user-context wgcprobe. PrintWindow (Gate 0: byte-correct on
+  occluded windows) works under GDI in that context and needs no session broker. Engine:
+  DDA dirty-rect intersection triggers per-window recapture; a 250 ms round-robin sweep
+  converges guest-occluded windows (which never appear in DDA damage); every capture is
+  row-diffed against the granted buffer so idle windows produce zero vchan traffic.
+- Legacy screen-slice path fully retained: windows fall back to it on attach failure,
+  capture-thread death, or daemon protocol < 1.7.
+
+### Acceptance — all PASS (stock QWT baseline replaced by this build, hash-verified)
+| criterion | result | evidence |
+|---|---|---|
+| no window corruption (overlap) | PASS | `instrumentation/perwin-overlap-{back,front}.png`: BACK window renders COMPLETE to its right edge ("...777 888 999") though FRONT covers that region in the guest; FRONT clean. The debris/slice defect is structurally gone — each window has its own buffer. |
+| no tearing | PASS | all captures crisp; content byte-fed from PrintWindow, never sliced from a composited frame |
+| no wobble | PASS | scripted 10 s drag, proto trace: 2/219 damage events with any origin drift, max dx=5px (content is position-independent under per-window capture) |
+| Office-style compound windows | PASS | `perwin-chromerepro.png`: 1 dom0 window, not 5 |
+| no stray border rectangles | PASS | the 4 layered/transparent/toolwindow shadow strips are not mapped |
+| no double titles | PASS | single title bar |
+| menu/popup no host corruption | PASS | main window pristine with F2 popup open |
+| cold-boot survival | PASS | full shutdown/start: per-window agent came up on the boot path, windows attached, ZERO `EnumWindows failed` (the exact defect that blocked the prior build) |
+
+### Bugs found and fixed during the build (adversarial review + e2e)
+- **Daemon-kill remap** (blocker): re-announcing a dump with live dims but the old grant's
+  page count fails the daemon's img_data_size check → gui-daemon exit(1) (whole-qube GUI
+  loss). Fixed: remap/rebuild always use the granted geometry (PwWidth/PwHeight).
+- **Resize-failure freeze** (blocker): detach-then-failed-attach left the daemon
+  compositing a stale pinned buffer. Fixed: force daemon release via unmap/map on failure.
+- **Capture-thread deadlock** (blocker, hit live): the async capture thread held the engine
+  lock across the damage callback, which takes g_csWatchedWindows; the frame thread holds
+  g_csWatchedWindows and calls WcMarkDirty wanting the engine lock — inversion froze DDA
+  frame processing and all window tracking (a second window never mapped). Fixed: damage
+  collected under the lock, callbacks fired after release. This was the single most
+  important fix — found only by running two overlapping windows, exactly the user's ask.
+- Teardown ordering (capture thread joined before vchan close), dom0-initiated resize
+  rebuild, minimized-then-restored attach, WGC apartment/probe context — all fixed.
+
+Package artifact: `artifacts/qwt-final/` (install-qwt-improved.ps1 overlay updater).
