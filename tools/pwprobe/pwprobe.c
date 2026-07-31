@@ -169,19 +169,44 @@ static int cmp_dbl(const void *a, const void *b)
     return d < 0 ? -1 : d > 0 ? 1 : 0;
 }
 
+/* crash reporting: qrexec gives us no debugger and a GUI app has no stderr, so an
+ * unhandled exception writes code+address+progress marker to the result file. */
+static char g_dir[MAX_PATH];
+static volatile const char *g_progress = "start";
+
+static LONG WINAPI CrashDump(EXCEPTION_POINTERS *ep)
+{
+    char path[MAX_PATH], msg[256];
+    _snprintf(path, sizeof(path), "%s\\pwprobe-result.txt", g_dir);
+    FILE *f = fopen(path, "wb");
+    if (f) {
+        int n = _snprintf(msg, sizeof(msg),
+            "PWPROBE-CRASH code=0x%08lX addr=%p base=%p progress=%s\r\n",
+            ep->ExceptionRecord->ExceptionCode,
+            ep->ExceptionRecord->ExceptionAddress,
+            (void *)GetModuleHandleW(NULL), (const char *)g_progress);
+        fwrite(msg, 1, n, f);
+        fclose(f);
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 /* bench mode: PrintWindow(PW_RENDERFULLCONTENT) latency on an OCCLUDED window,
  * N iterations, content verified every frame. This prices the no-session-limit
  * fallback path per frame (WGC allows only ~10 concurrent sessions). */
 static int RunBench(HINSTANCE hi, int iters, const char *dir)
 {
+    g_progress = "bench:create-A";
     g_hA = CreateWindowExW(0, L"pwprobeA", L"pwprobe-A", WS_POPUP | WS_VISIBLE,
                            AX, AY, AW, AH, NULL, NULL, hi, NULL);
     UpdateWindow(g_hA);
     pump(800);
+    g_progress = "bench:create-B";
     g_hB = CreateWindowExW(0, L"pwprobeB", L"pwprobe-B", WS_POPUP | WS_VISIBLE,
                            BX, BY, BW, BH, NULL, NULL, hi, NULL);
     UpdateWindow(g_hB);
     pump(800);
+    g_progress = "bench:dib";
 
     BITMAPINFO bi;
     ZeroMemory(&bi, sizeof(bi));
@@ -200,6 +225,7 @@ static int RunBench(HINSTANCE hi, int iters, const char *dir)
     int mismatches = 0, fails = 0;
     LARGE_INTEGER f, t0, t1;
     QueryPerformanceFrequency(&f);
+    g_progress = "bench:loop";
     for (int i = 0; i < iters; i++) {
         QueryPerformanceCounter(&t0);
         BOOL ok = PrintWindow(g_hA, memdc, PW_RENDERFULLCONTENT);
@@ -215,6 +241,7 @@ static int RunBench(HINSTANCE hi, int iters, const char *dir)
         if (100.0 * match / (AW * AH) < 99.0) mismatches++;
         pump(1); /* let the system breathe like a real agent loop would */
     }
+    g_progress = "bench:report";
     qsort(lat, iters, sizeof(double), cmp_dbl);
     double p50 = lat[iters / 2], p95 = lat[(int)(iters * 0.95)];
 
@@ -254,6 +281,8 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cmd, int show)
         char *s2 = strrchr(dir2, '\\');
         if (s2) *s2 = 0;
     }
+    strcpy(g_dir, dir2);
+    SetUnhandledExceptionFilter(CrashDump);
 
     WNDCLASSW wcA = {0}, wcB = {0};
     wcA.lpfnWndProc = WndProcA; wcA.hInstance = hi; wcA.lpszClassName = L"pwprobeA";
