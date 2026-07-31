@@ -190,3 +190,48 @@ user review, upstream design issue (referencing #1861) before code. Do not start
 - A dom0/sudo/policy/vCPU change is needed; upstream contact is warranted; a phase's
   acceptance can't be met after ~3 focused iterations; test VM needs reinstall; or a
   security-relevant tradeoff appears (anything weakening isolation is out of scope, period).
+
+## Autonomy enforcement (added 2026-07-31 at the user's instruction)
+
+The repeated failure in this project has not been the bugs. It has been stopping to report,
+declaring work finished on whichever checks happened to pass, and making the user act as the
+loop that finds what the checks could not see. These rules are binding.
+
+**Do not stop to report.** A turn ends when the goal is met or when a genuinely blocking
+external dependency is hit (dom0 action, a credential, an explicit approval CLAUDE.md
+requires). "Here is what I found, what next?" is not a stopping point - continue to the next
+diagnostic or fix. If several things are open, work them in order without checking in.
+
+**Never ask what to do next.** Choose, act, and say what was chosen. Questions are for
+approval gates that CLAUDE.md actually mandates (upstream submission, dom0/policy changes),
+not for direction.
+
+**Absence of a regression is not evidence of intended behaviour.** "No worse than stock" only
+clears a regression check. A fix is done when its *intended effect* is demonstrated - the
+defect is gone, measured, against a control.
+
+**No result counts until the instrument is validated.**
+1. A metric must be shown stable on ONE unchanged binary, at least 3 runs, before any verdict.
+   (A bimodal metric repeatable within a run looked trustworthy and inverted when interleaved -
+   it was measuring scene state, not the build. A whole bisect was voided by this.)
+2. Every build comparison runs at least 3 times per side, interleaved with the control.
+3. Verify the artefact under test is actually installed - compare the running binary's hash to
+   the manifest. A harness that proceeds on a failed install reports results for a build that
+   was never running.
+4. Missing data fails. Never substitute an approximation, never skip silently: a check that
+   cannot fail is worthless, and several here passed only because the data needed to fail them
+   was absent.
+5. A check counts as evidence only once it has been seen to FAIL on a build with the defect
+   deliberately re-introduced. Otherwise record its PASS as unproven.
+
+**Judge output, not logs.** `RecreateDuplication: recovered - windows kept` was logged while
+every dom0 window was frozen. The criterion is whether the pixels changed.
+
+**Test the boot path.** Every check restarted the agent in a live session; a restart *clears*
+the fault the user then hit on a cold boot. A reboot is part of acceptance.
+
+**Run VM-mutating jobs serially.** Concurrent bisects rebooted the test VM underneath each
+other and destroyed hours of results.
+
+**Retract loudly and immediately.** When a claim turns out to be wrong, say so plainly in the
+next message and in the doc, and remove it from any status summary.
