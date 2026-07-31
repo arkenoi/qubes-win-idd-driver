@@ -125,23 +125,35 @@ fi
 
 echo
 echo "== self-test =="
-OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
-if "$SVC" < /dev/null > "$OUT/t.tar" 2>"$OUT/t.err"; then
-    tar -xf "$OUT/t.tar" -C "$OUT" 2>/dev/null
-    if [ -s "$OUT/screen.png" ]; then
-        echo "  OK  screen.png $(identify -format '%wx%h' "$OUT/screen.png" 2>/dev/null || echo '?')" \
-             "($(stat -c%s "$OUT/screen.png") bytes)"
-        grep -h 'capture method' "$OUT/t.err" 2>/dev/null | sed 's/^/  /'"
-        if command -v xwininfo >/dev/null; then
-            echo "  OK  geometry.txt: $(($(grep -vc '^#' "$OUT/geometry.txt" 2>/dev/null || echo 0))) window(s) listed"
-        else
-            echo "  --  geometry omitted (no xwininfo); the screenshot is what matters"
-        fi
-    else
-        echo "  FAIL: tar produced no screen.png"; sed 's/^/    /' "$OUT/t.err"; exit 4
-    fi
+OUT=$(mktemp -d)
+cleanup() { rm -rf "$OUT"; }
+trap cleanup EXIT
+
+if ! "$SVC" < /dev/null > "$OUT/t.tar" 2>"$OUT/t.err"; then
+    rc=$?
+    echo "  FAIL: service exited $rc"
+    sed 's/^/    /' "$OUT/t.err"
+    exit 4
+fi
+
+tar -xf "$OUT/t.tar" -C "$OUT" 2>/dev/null
+
+if [ ! -s "$OUT/screen.png" ]; then
+    echo "  FAIL: tar produced no screen.png"
+    sed 's/^/    /' "$OUT/t.err"
+    exit 4
+fi
+
+dims=$(identify -format '%wx%h' "$OUT/screen.png" 2>/dev/null || echo '?')
+bytes=$(stat -c%s "$OUT/screen.png")
+echo "  OK  screen.png $dims ($bytes bytes)"
+grep -h 'capture method' "$OUT/t.err" 2>/dev/null | sed 's/^/  /'
+
+if command -v xwininfo >/dev/null 2>&1; then
+    gcount=$(grep -vc '^#' "$OUT/geometry.txt" 2>/dev/null || true)
+    echo "  OK  geometry.txt: ${gcount:-0} window(s) listed"
 else
-    echo "  FAIL: service exited $?"; sed 's/^/    /' "$OUT/t.err"; exit 4
+    echo "  --  geometry omitted (no xwininfo); the screenshot is what matters"
 fi
 
 echo
