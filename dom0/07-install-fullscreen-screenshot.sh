@@ -58,6 +58,10 @@ done
 X=(sudo -u "$DOMUSER" env DISPLAY="$DISP" XAUTHORITY="$XA")
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+# The service runs as root, so mktemp -d gives a 0700 root-owned directory - but the capture
+# runs as the desktop user through `sudo -u`, which then cannot write into it. This is what
+# made every method fail with "Permission denied ... WriteBlob Failed".
+chown "$DOMUSER" "$TMP" 2>/dev/null || chmod 0777 "$TMP"
 
 # `import -window root` alone is unreliable: without -screen it grabs the root window's own
 # contents rather than the composited screen, and on some setups it fails outright. Try the
@@ -129,8 +133,9 @@ OUT=$(mktemp -d)
 cleanup() { rm -rf "$OUT"; }
 trap cleanup EXIT
 
-if ! "$SVC" < /dev/null > "$OUT/t.tar" 2>"$OUT/t.err"; then
-    rc=$?
+"$SVC" < /dev/null > "$OUT/t.tar" 2>"$OUT/t.err"
+rc=$?
+if [ $rc -ne 0 ]; then
     echo "  FAIL: service exited $rc"
     sed 's/^/    /' "$OUT/t.err"
     exit 4
