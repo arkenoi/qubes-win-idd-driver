@@ -187,6 +187,46 @@ No check enters this suite until it has been seen to fail on a build containing 
 claims to detect. Where that has not been done, the check's PASS is documented as unproven
 rather than counted as evidence.
 
-Currently proven by negative control: **damage clipping (under-clip direction)**.
-Not proven: the over-clip direction, the ACCESS_LOST invariants, the geometry invariants.
-Those are honest checks, but their PASS is weaker evidence than the clipping one.
+## Control results
+
+Two further control builds were made, each with defects injected on purpose, then the shipping
+build restored and every check re-run.
+
+| check | proven by | control build | result |
+|---|---|---|---|
+| damage clipping, under-clip | clipping disabled | `0eabb2b8a0fc` | FAILED as required |
+| damage clipping, over-clip | everything claimed as covered | `5598a2fbda93` | FAILED as required |
+| `popup-override-redirect` | popups announced `ovr=0` | `91815690594a` | FAILED as required |
+| `damage-within-window` | damage offset 40px outside bounds | `91815690594a` | FAILED as required |
+| `geometry-matches-visible-window` | `GetRealWindowRect` returns raw `GetWindowRect` | `5598a2fbda93` | FAILED as required |
+| `origin-matches-visible-window` | same | `5598a2fbda93` | FAILED as required |
+| ACCESS_LOST content freshness | framebuffer re-grant skipped | `5598a2fbda93` | FAILED as required |
+| ACCESS_LOST in-place recovery | the real pre-fix build | `e4aabd86d898` era | FAILED as required (`failed to recreate after 20 attempts` + unmapping) |
+| wobble desync | the real pre-fix build | before/after | 52% -> 0% |
+
+Two results worth keeping in view:
+
+**A control that invalidated itself.** Control A tried to break the announced geometry in
+`ExamineWindow`, and the geometry invariant did *not* fire - because the per-frame damage
+re-registration calls `GetRealWindowRect` and re-announces, silently repairing the defect
+before the last `CONFIGURE`. The control was wrong, not the check. Breaking
+`GetRealWindowRect` itself (control B) made both geometry invariants fire with exactly the
+"border is off" signature: `announced 2580x1029 but the visible window is 2566x1022`,
+`origin offset by (-7,0)px`.
+
+**The log lies; the output does not.** With the re-grant skipped, the agent logged
+
+    RecreateDuplication: duplication recreated in place after 1 attempt(s) - windows kept
+
+while every dom0 window image was frozen (`0/1 updated`). A log-only acceptance check passes
+that build. This is the whole reason the criterion is now "did the pixels change", not "did
+the agent say it recovered".
+
+## Still not proven by negative control
+
+* `menu-announced` (a menu Windows showed but the agent never mapped)
+* `origin-known-for-damaged-windows` (the guard against the checker proving nothing)
+
+Both are guards against missing data rather than against a code defect, and neither has been
+observed failing on a build that contains the fault it describes. Their PASS is not counted as
+evidence.
