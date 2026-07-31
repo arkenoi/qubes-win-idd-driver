@@ -239,3 +239,63 @@ win-idd-test and validated against every acceptance criterion the user set.
   rebuild, minimized-then-restored attach, WGC apartment/probe context — all fixed.
 
 Package artifact: `artifacts/qwt-final/` (install-qwt-improved.ps1 overlay updater).
+
+## 2026-08-01 (session 2) — Edge broke the per-window build: two daemon-killers + ULW black rendering, all root-caused and fixed
+
+User report: Edge "all rendered wrong"; then the whole qube GUI died (watchdog kept
+respawning gui-agent but no windows appeared — the DOM0 DAEMON was dead, agent-side log
+`WatchForEvents: vchan disconnected`). Reboot of the VM restores it.
+
+### Root causes (all verified against gui-daemon source + adversarially reviewed, workflow wf_787b6e72)
+1. **Daemon kill #1 (the crash)**: capture thread fires damage callbacks AFTER releasing
+   the engine lock (by design, deadlock fix ec55f39) — nothing serialized them against
+   RemoveWindow. Wire order UNMAP(A), DESTROY(A), then SHMIMAGE(A) from thread 492 hit
+   gui-daemon `handle_message` → "msg without CREATE" → `exit(1)` (xside.c:3951-3957;
+   destroy removes the id synchronously, and SHMIMAGE-before-DESTROY is silently dropped —
+   so the observed death itself proves the fatal ordering). Race is latent for ALL window
+   closures; Edge's fullscreen first-run overlay repaints (~4 damage/s continuous) made it
+   probable. Agent-side trace tell: the only DAMAGE line in 2366 lines without `ax=`
+   (short format = hwnd already OS-destroyed at send time), same ms as the unmap.
+2. **Daemon kill #2 (found in review, same class)**: HandleConfigure ACKed daemon
+   configures for UNTRACKED windows — an ACK racing window destroy dies identically.
+3. **"All rendered wrong"**: Edge's first-run overlay is a fullscreen UpdateLayeredWindow
+   surface (welcome card on a ~30%-alpha dimming backdrop). PrintWindow(PW_RENDERFULLCONTENT)
+   returns premultiplied source bits for ULW → backdrop = near-black opaque (measured
+   in-guest: 93.2%% of samples black, alpha=255; screen BitBlt of the same rect shows the
+   real blended content). dom0 displayed a black fullscreen override-redirect window.
+   ULW discriminator: GetLayeredWindowAttributes FAILS on ULW windows ("Restore pages"
+   popup is also ULW). Edge sets WS_EX_LAYERED only AFTER the window is shown (CREATE
+   logged ex=0x101, later maps ex=0x80101) — eligibility must be re-checked on ExStyle
+   change, not just at attach.
+4. **Maximized CONFIGURE ping-pong**: maximized Edge reports DWM rect 3442x1409 on a
+   3440x1400 screen → dom0 WM clamps → daemon configure → HandleConfigure SetWindowPos
+   on the maximized window (bounces/moves it off anchor) → agent re-reports → loop at
+   ~3 Hz, each flip a full ~4700-page grant detach/reattach (26 attaches in the crash
+   log; 11+11 alternating). Also dragged the guest window to x=25,y=56 permanently.
+5. Minor: MSG_CROSSING (127) is unhandled and safely drained (flood is from pointer
+   enter/leave over the fullscreen overlay — cosmetic warn-spam only); ovr flag flapped
+   1↔0 during popup drags because the ACK echoed the daemon's override_redirect instead
+   of the agent's own classification; 4x-duplicate CONFIGUREs measured; SendWindowDestroy
+   was unlogged (instrumentation gap that cost this investigation an hour);
+   dom0 `local.WinScreenshot` does NOT capture override-redirect windows (popups/overlays
+   invisible to qtest shot — user eyeballs needed for those).
+
+### Fixes (agent commit 74665bf on perwindow)
+- SendWindowDamageEvent: holds g_csWatchedWindows (RemoveWindow's lock) across
+  membership-check + vchan send; damage for removed windows dropped. Lock order
+  watched OUTER → vchan INNER preserved; capture engine lock is never held at the
+  callback site (wincapture.cpp fires callbacks unlocked, comment anticipates this).
+- HandleConfigure: ACK under g_csWatchedWindows, tracked windows only, carries agent-side
+  override_redirect. Maximized windows: dom0 geometry ignored, ACK = actual geometry.
+- PwWindowEligible (ULW/colorkey → legacy screen-slice path) gate in PwAttachWindow +
+  runtime PwForceLegacy (detach + unmap/map daemon release) on ExStyle transition.
+- GetWindowData clamps maximized rect to host screen; damage-path rect refresh skips
+  maximized windows; SendWindowConfigureIfChanged dedupes identical consecutive configures
+  (LastCfg* in WINDOW_DATA, primed by HandleConfigure so daemon geometry isn't echoed).
+- RemoveWindow no longer leaks entry on unmap-send failure; DESTROY + detach proto-traced.
+
+### Repro recipes (for regression testing)
+- First-run overlay: `msedge --user-data-dir=C:\temp\<fresh>` — recreates the fullscreen
+  ULW welcome overlay on any profile-less launch.
+- Crash race: open/close Edge windows repeatedly while content repaints.
+- In-guest ULW probe: mgmt scratchpad cmp-overlay.ps1 (PrintWindow vs CopyFromScreen diff).
