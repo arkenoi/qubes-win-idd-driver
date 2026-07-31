@@ -1,37 +1,38 @@
 #!/bin/bash
-# Install a dom0 qrexec service that returns a FULL DESKTOP screenshot to win-idd-mgmt.
+# Install a dom0 qrexec service returning a FULL DESKTOP screenshot to win-idd-mgmt,
+# then SELF-TEST it so failures surface here rather than as an opaque error in the dev qube.
 #
 # SECURITY NOTE - read before installing.
-# The existing local.WinScreenshot deliberately captures ONLY windows belonging to
-# win-idd-test, so the management VM never sees other qubes' content. This service does NOT
-# have that property: it photographs the whole dom0 display, including every other qube's
-# windows and anything else on screen at the time.
+# local.WinScreenshot deliberately captures ONLY win-idd-test's windows, so the management VM
+# never sees other qubes' content. This service does NOT have that property: it photographs
+# the whole dom0 display, every other qube's windows included.
 #
-# It exists because two reported defects - the dom0-drawn rectangle over menus, and the window
-# border being off - are invisible to the per-window service by construction: menus are
+# It exists because defects in the dom0 *rendering* - window borders, the rectangle drawn over
+# menus, desktop artifacts - are invisible to the per-window service by construction: menus are
 # override-redirect (absent from _NET_CLIENT_LIST) and decorations are drawn on the frame, not
 # on the client window that `import -window` captures.
 #
-# Install it while working on this, uninstall it when done:
-#     sudo rm /etc/qubes-rpc/local.WinFullScreen
-# Only install if you accept that win-idd-mgmt can see your whole screen while it is present.
-set -euo pipefail
+# Remove when finished:   sudo rm /etc/qubes-rpc/local.WinFullScreen
+set -uo pipefail
 
 SVC=/etc/qubes-rpc/local.WinFullScreen
-POLICY=/etc/qubes/policy.d/30-win-idd-mgmt.policy
+POLICY=/etc/qubes/policy.d/30-win-idd-fullscreen.policy
+CALLER=win-idd-mgmt
 
-for tool in import xprop xwininfo; do
-    command -v "$tool" >/dev/null || {
-        echo "Missing '$tool' in dom0 - install with: sudo qubes-dom0-update ImageMagick xorg-x11-utils" >&2
-        exit 1
-    }
-done
+[ "$(id -u)" -eq 0 ] || { echo "Run with sudo." >&2; exit 1; }
+
+missing=()
+for tool in import xprop xwininfo; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+if [ ${#missing[@]} -gt 0 ]; then
+    echo "Missing in dom0: ${missing[*]}" >&2
+    echo "  sudo qubes-dom0-update ImageMagick xorg-x11-utils" >&2
+    exit 1
+fi
 
 cat > "$SVC" <<'EOF'
 #!/bin/bash
-# Full-desktop screenshot for visual validation. Returns a tar containing screen.png plus
-# geometry.txt listing every win-idd-test window INCLUDING override-redirect ones (menus) and
-# their frame windows, so the caller can crop and compare without guessing.
+# Full-desktop screenshot. Returns a tar with screen.png and geometry.txt (every win-idd-test
+# window INCLUDING override-redirect ones and frames, so the caller can crop without guessing).
 set -uo pipefail
 VM=win-idd-test
 
@@ -45,48 +46,64 @@ for c in "/run/lightdm/$DOMUSER/xauthority" "/home/$DOMUSER/.Xauthority" \
            xprop -root -notype _NET_SUPPORTED >/dev/null 2>&1; then XA="$c"; break; fi
 done
 [ -n "$XA" ] || { echo "ERROR: no usable X session for $DOMUSER on $DISP" >&2; exit 2; }
-XENV=(env DISPLAY="$DISP" XAUTHORITY="$XA")
+X=(sudo -u "$DOMUSER" env DISPLAY="$DISP" XAUTHORITY="$XA")
 
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
-sudo -u "$DOMUSER" "${XENV[@]}" import -window root "$TMP/screen.png" 2>/dev/null || {
-    echo "ERROR: root window capture failed" >&2; exit 3; }
+"${X[@]}" import -window root "$TMP/screen.png" 2>/dev/null \
+    || { echo "ERROR: root window capture failed" >&2; exit 3; }
 
-# Walk the whole window tree, not _NET_CLIENT_LIST: menus are override-redirect and never
-# appear in the managed-client list. _QUBES_VMNAME is set by dom0 and cannot be forged by the
-# guest, unlike WM_NAME.
+# Geometry is best effort and must never abort the capture: the PNG is the point.
 {
     echo "# id x y w h override_redirect name"
-    sudo -u "$DOMUSER" "${XENV[@]}" xwininfo -root -tree -int 2>/dev/null |
-    grep -oE '^ +[0-9]+ ' | tr -d ' ' | while read -r id; do
-        [ -n "$id" ] || continue
-        owner=$(sudo -u "$DOMUSER" "${XENV[@]}" xprop -id "$id" _QUBES_VMNAME 2>/dev/null |
+    "${X[@]}" xwininfo -root -tree 2>/dev/null |
+      grep -oE '0x[0-9a-f]+' | sort -u | while read -r id; do
+        owner=$("${X[@]}" xprop -id "$id" _QUBES_VMNAME 2>/dev/null |
                 sed -n 's/^_QUBES_VMNAME(STRING) = "\(.*\)"$/\1/p')
         [ "$owner" = "$VM" ] || continue
-        info=$(sudo -u "$DOMUSER" "${XENV[@]}" xwininfo -id "$id" -stats 2>/dev/null) || continue
-        x=$(echo "$info" | sed -n 's/.*Absolute upper-left X: *\([0-9-]*\).*/\1/p')
-        y=$(echo "$info" | sed -n 's/.*Absolute upper-left Y: *\([0-9-]*\).*/\1/p')
-        w=$(echo "$info" | sed -n 's/.*Width: *\([0-9]*\).*/\1/p')
-        h=$(echo "$info" | sed -n 's/.*Height: *\([0-9]*\).*/\1/p')
-        ovr=$(echo "$info" | grep -c 'Override Redirect State: yes' || true)
-        name=$(sudo -u "$DOMUSER" "${XENV[@]}" xprop -id "$id" WM_NAME 2>/dev/null |
+        info=$("${X[@]}" xwininfo -id "$id" -stats 2>/dev/null) || continue
+        x=$(printf '%s' "$info" | sed -n 's/.*Absolute upper-left X: *\([0-9-]*\).*/\1/p' | head -1)
+        y=$(printf '%s' "$info" | sed -n 's/.*Absolute upper-left Y: *\([0-9-]*\).*/\1/p' | head -1)
+        w=$(printf '%s' "$info" | sed -n 's/.*Width: *\([0-9]*\).*/\1/p' | head -1)
+        h=$(printf '%s' "$info" | sed -n 's/.*Height: *\([0-9]*\).*/\1/p' | head -1)
+        ovr=$(printf '%s' "$info" | grep -c 'Override Redirect State: yes')
+        name=$("${X[@]}" xprop -id "$id" WM_NAME 2>/dev/null |
                sed -n 's/^WM_NAME(\(STRING\|UTF8_STRING\)) = "\(.*\)"$/\2/p' | head -1)
-        echo "$id $x $y $w $h $ovr ${name:-?}"
+        echo "$id ${x:-?} ${y:-?} ${w:-?} ${h:-?} $ovr ${name:-?}"
     done
-} > "$TMP/geometry.txt" 2>/dev/null
+} > "$TMP/geometry.txt" 2>/dev/null || true
 
 tar -C "$TMP" -cf - .
 EOF
-
 chmod 755 "$SVC"
 
-if ! grep -q 'local.WinFullScreen' "$POLICY" 2>/dev/null; then
-    printf 'local.WinFullScreen * win-idd-mgmt dom0 allow\n' >> "$POLICY"
-    echo "Added policy line to $POLICY"
+# The existing local.WinScreenshot policy was configured by hand, so do not assume a file -
+# write our own, which is evaluated alongside the others.
+if [ ! -f "$POLICY" ] || ! grep -q 'local.WinFullScreen' "$POLICY" 2>/dev/null; then
+    printf 'local.WinFullScreen * %s dom0 allow\n' "$CALLER" >> "$POLICY"
+    chmod 664 "$POLICY"
+    echo "policy: added 'local.WinFullScreen * $CALLER dom0 allow' to $POLICY"
+else
+    echo "policy: already present in $POLICY"
 fi
 
-echo "Installed $SVC"
 echo
-echo "This captures the WHOLE dom0 display, including other qubes' windows."
-echo "Remove when finished:  sudo rm $SVC"
+echo "== self-test =="
+OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
+if "$SVC" < /dev/null > "$OUT/t.tar" 2>"$OUT/t.err"; then
+    tar -xf "$OUT/t.tar" -C "$OUT" 2>/dev/null
+    if [ -s "$OUT/screen.png" ]; then
+        echo "  OK  screen.png $(identify -format '%wx%h' "$OUT/screen.png" 2>/dev/null || echo '?') " \
+             "($(stat -c%s "$OUT/screen.png") bytes)"
+        echo "  OK  geometry.txt: $(($(wc -l < "$OUT/geometry.txt") - 1)) $VM window(s) listed"
+    else
+        echo "  FAIL: tar produced no screen.png"; sed 's/^/    /' "$OUT/t.err"; exit 4
+    fi
+else
+    echo "  FAIL: service exited $?"; sed 's/^/    /' "$OUT/t.err"; exit 4
+fi
+
+echo
+echo "Installed $SVC and self-tested."
+echo "It captures the WHOLE screen, other qubes included. Remove with:"
+echo "  sudo rm $SVC $POLICY"
