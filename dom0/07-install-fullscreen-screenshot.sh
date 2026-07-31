@@ -59,8 +59,33 @@ X=(sudo -u "$DOMUSER" env DISPLAY="$DISP" XAUTHORITY="$XA")
 
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
-"${X[@]}" import -window root "$TMP/screen.png" 2>/dev/null \
-    || { echo "ERROR: root window capture failed" >&2; exit 3; }
+# `import -window root` alone is unreliable: without -screen it grabs the root window's own
+# contents rather than the composited screen, and on some setups it fails outright. Try the
+# variants in order of fidelity and REPORT the real error instead of swallowing it - the first
+# version of this script hid the reason and just said "capture failed".
+CAP_ERR="$TMP/cap.err"
+captured=""
+if "${X[@]}" import -screen -window root "$TMP/screen.png" 2>>"$CAP_ERR" && [ -s "$TMP/screen.png" ]; then
+    captured="import -screen -window root"
+elif "${X[@]}" import -window root "$TMP/screen.png" 2>>"$CAP_ERR" && [ -s "$TMP/screen.png" ]; then
+    captured="import -window root"
+elif command -v xwd >/dev/null &&
+     "${X[@]}" xwd -root -silent > "$TMP/screen.xwd" 2>>"$CAP_ERR" && [ -s "$TMP/screen.xwd" ] &&
+     convert "$TMP/screen.xwd" "$TMP/screen.png" 2>>"$CAP_ERR" && [ -s "$TMP/screen.png" ]; then
+    captured="xwd -root | convert"
+    rm -f "$TMP/screen.xwd"
+elif command -v gnome-screenshot >/dev/null &&
+     "${X[@]}" gnome-screenshot -f "$TMP/screen.png" 2>>"$CAP_ERR" && [ -s "$TMP/screen.png" ]; then
+    captured="gnome-screenshot"
+fi
+
+if [ -z "$captured" ]; then
+    echo "ERROR: every root-window capture method failed. Tool output:" >&2
+    sed 's/^/  /' "$CAP_ERR" >&2
+    echo "  tried: import -screen -window root | import -window root | xwd+convert | gnome-screenshot" >&2
+    exit 3
+fi
+echo "capture method: $captured" >&2
 
 # Geometry is best effort and must never abort the capture: the PNG is the point. It also
 # requires xwininfo, which dom0 may not have - absence is not an error.
@@ -104,8 +129,9 @@ OUT=$(mktemp -d); trap 'rm -rf "$OUT"' EXIT
 if "$SVC" < /dev/null > "$OUT/t.tar" 2>"$OUT/t.err"; then
     tar -xf "$OUT/t.tar" -C "$OUT" 2>/dev/null
     if [ -s "$OUT/screen.png" ]; then
-        echo "  OK  screen.png $(identify -format '%wx%h' "$OUT/screen.png" 2>/dev/null || echo '?') " \
+        echo "  OK  screen.png $(identify -format '%wx%h' "$OUT/screen.png" 2>/dev/null || echo '?')" \
              "($(stat -c%s "$OUT/screen.png") bytes)"
+        grep -h 'capture method' "$OUT/t.err" 2>/dev/null | sed 's/^/  /'"
         if command -v xwininfo >/dev/null; then
             echo "  OK  geometry.txt: $(($(grep -vc '^#' "$OUT/geometry.txt" 2>/dev/null || echo 0))) window(s) listed"
         else
