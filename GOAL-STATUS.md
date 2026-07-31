@@ -1,6 +1,53 @@
-# Goal status — 2026-07-31 (end-to-end validated build)
+# Goal status — 2026-07-31
 
-All numbers below are from ONE deployed binary: package `4.2.2+agent.12457021ab71`
+## BLOCKING: the build is NOT shippable
+
+After a **cold boot** the agent fails to enumerate windows and the qube renders nothing in
+dom0. Reproduced twice, against a stock control:
+
+| | dom0 windows (same scene) | `EnumWindows` failures |
+|---|---|---|
+| stock QWT 4.2.2 (`3D2E6BCE`) | **3** | 0 |
+| ours (`493ab911fe9a`) | **0** | 5+, `0x80070006 ERROR_INVALID_HANDLE` |
+
+Failing in both `AddAllWindows` and `CollectZOrder`, so windows are never added to the watched
+list and never mapped. The user saw artifacts on the desktop before opening any application.
+
+**Root cause not established.** A fail-safe was added so a failed enumeration degrades to
+"do not clip" instead of "clip against an arbitrary order" (which made the desktop window
+claim the whole screen and suppress everyone's damage). That prevents the worst symptom but
+does not fix the enumeration failure, and the qube is still blank on cold boot.
+
+Stock is currently installed on win-idd-test so the qube works.
+
+## Why this was not caught
+
+Every check in the suite restarted `gui-agent.exe` inside a **live session**. The boot path was
+never exercised. The restart even *clears* the fault, so a suite built on restarts cannot see
+it. `tools/viewcheck/coldboot-test.sh` now exists and does a real shutdown/start, but it was
+written after the user found the defect, not before.
+
+Two control runs during this investigation also reported "0 dom0 windows" purely because the
+scene had silently failed to launch (`qtest pushrun`'s first push intermittently sends 0
+bytes). That nearly produced two wrong conclusions about which build was at fault. The
+cold-boot test now retries until the scene demonstrably ran.
+
+## The pattern being corrected
+
+The repeated failure in this project has not been the individual bugs - it is declaring the
+work finished on the strength of whichever checks happened to pass, and leaving the user to
+find what those checks could not see. Tearing "confirmed" from a mis-cropped comparison,
+menus "verified" from window styles rather than the wire, ACCESS_LOST "verified" from a log
+line while dom0 was frozen, a regression test that "would have caught" a defect it provably
+does not catch, and now a build declared ready that renders nothing after a reboot.
+
+Status below is therefore what has been measured, not a claim that anything is done.
+
+---
+
+
+
+The numbers below are from a LIVE-SESSION binary (no reboot): package `4.2.2+agent.12457021ab71`
 (agent `1245702`, CI run 30622146664), installed on win-idd-test via its own installer and
 re-validated end to end AFTER every fix in this session.
 
