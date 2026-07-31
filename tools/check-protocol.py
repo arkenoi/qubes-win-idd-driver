@@ -152,9 +152,26 @@ def main():
         g = guest.get(hwnd)
         if not g:
             continue
-        if (r['w'], r['h']) != (g['w'], g['h']):
-            fail('geometry-matches-guest',
-                 f"hwnd=0x{hwnd:x} announced {r['w']}x{r['h']} but Windows has {g['w']}x{g['h']}")
+        # Ground truth is the DWM EXTENDED FRAME BOUNDS, not GetWindowRect. Under DWM a window's
+        # GetWindowRect includes invisible resize grips (7px on three sides here), so the
+        # visible window - what dom0's border must hug - is the extended rect. The agent uses
+        # GetRealWindowRect for exactly this reason. An earlier version of this invariant
+        # compared against GetWindowRect and flagged correct behaviour as a defect.
+        ex = (g.get('ex_w'), g.get('ex_h'))
+        if ex == (None, None):
+            fail('geometry-ground-truth',
+                 f"hwnd=0x{hwnd:x}: guest snapshot has no DWM extended frame bounds, so the "
+                 f"announced geometry cannot be judged")
+            continue
+        if (r['w'], r['h']) != ex:
+            fail('geometry-matches-visible-window',
+                 f"hwnd=0x{hwnd:x} announced {r['w']}x{r['h']} but the visible (DWM extended) "
+                 f"window is {ex[0]}x{ex[1]} - dom0 draws the frame at the announced size")
+        if (r['x'], r['y']) != (g['ex_x'], g['ex_y']):
+            fail('origin-matches-visible-window',
+                 f"hwnd=0x{hwnd:x} announced origin ({r['x']},{r['y']}) but the visible window "
+                 f"starts at ({g['ex_x']},{g['ex_y']}) - the frame is offset by "
+                 f"({r['x']-g['ex_x']},{r['y']-g['ex_y']})px")
 
     # --- INVARIANT 4: every menu window Windows showed must have been announced at all.
     announced = {r['hwnd'] for r in recs if r['msg'] == 'MAP'}
