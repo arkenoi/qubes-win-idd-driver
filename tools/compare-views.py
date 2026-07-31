@@ -148,9 +148,24 @@ def main():
             return best[0], best[1]
         return None
 
+    # Windows are matched to dom0 images BY SIZE, which is ambiguous the moment two windows
+    # share dimensions - and then the comparison silently judges the wrong pair and reports a
+    # defect. Refuse to judge instead of guessing.
+    from collections import Counter
+    sizes = Counter((w['w'], w['h']) for w in meta)
+    ambiguous = {sz for sz, n in sizes.items() if n > 1}
+
     print(f"{'window':28s} {'size':>11s}  {'verdict':16s} detail")
     worst = 'OK'
     for wdef in meta:
+        if (wdef['w'], wdef['h']) in ambiguous:
+            title = (wdef.get('title') or wdef.get('cls') or '?')[:26]
+            print(f"{title:28s} {wdef['w']}x{wdef['h']:<6}  {'AMBIGUOUS':16s} "
+                  f"{sizes[(wdef['w'], wdef['h'])]} windows share this size; size-based matching "
+                  f"cannot tell them apart, so no verdict is given")
+            if worst == 'OK':
+                worst = 'AMBIGUOUS'
+            continue
         w, h = wdef['w'], wdef['h']
         got = take(w, h)
         title = (wdef.get('title') or wdef.get('cls') or '?')[:26]
@@ -167,7 +182,31 @@ def main():
         # reports DWM extended frame bounds and the border discrepancy is not symmetric, so a
         # centred crop can be several rows off - which makes EVERY row of text mismatch and
         # masquerades as tearing. Find the true alignment first, then judge content there.
-        off, _ = locate(guest, im, (ox, oy), radius=40, step=1, sub=2)
+        # Alignment is only identifiable if the content has features to align ON. A blank or
+        # near-uniform window (an empty Notepad is a white field) matches equally well at many
+        # offsets, so the search returns an arbitrary minimum and any verdict derived from it
+        # is noise. Refuse rather than report.
+        probe = guest[max(0, oy):oy + dh, max(0, ox):ox + dw]
+        if probe.size and float(probe.std()) < 12.0:
+            print(f"{title:28s} {w}x{h:<6}  {'UNALIGNABLE':16s} guest content is near-uniform "
+                  f"(std={float(probe.std()):.1f}); alignment has no unique minimum, so no "
+                  f"verdict is given")
+            if worst == 'OK':
+                worst = 'UNALIGNABLE'
+            continue
+
+        RADIUS = 40
+        off, _ = locate(guest, im, (ox, oy), radius=RADIUS, step=1, sub=2)
+        # A best match sitting ON the search boundary means the true optimum is outside the
+        # window searched - the number returned is the radius, not the offset. Reporting a
+        # verdict from it is how "(12,-8), about one frame of lag" and a nonexistent tearing
+        # defect were both manufactured.
+        if off and (abs(off[0]) >= RADIUS or abs(off[1]) >= RADIUS):
+            print(f"{title:28s} {w}x{h:<6}  {'UNRELIABLE':16s} best alignment {off} is at the "
+                  f"+/-{RADIUS}px search boundary, so it is the limit rather than a measurement")
+            if worst == 'OK':
+                worst = 'UNRELIABLE'
+            continue
         if off:
             ox, oy = ox + off[0], oy + off[1]
         verdict, st = classify(guest, im, (ox, oy, dw, dh))
@@ -190,6 +229,8 @@ def main():
         if verdict != 'OK':
             worst = verdict
     print(f"\nWORST: {worst}")
+    if worst in ('AMBIGUOUS', 'UNALIGNABLE', 'UNRELIABLE'):
+        print(f"{worst} means this run proved nothing about those windows - not that they are ok.")
     return 0 if worst == 'OK' else 1
 
 
