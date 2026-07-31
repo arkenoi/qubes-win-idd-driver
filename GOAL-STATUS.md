@@ -78,6 +78,18 @@ drag p50                   917 us
 interrogated/frame         1.03
 ```
 
+## Suite credibility
+
+Seven checks have been observed FAILING on builds with the relevant defect injected, and
+passing again on the shipping build (see `instrumentation/ACCEPTANCE-PROTOCOL.md`): both
+clipping directions, `popup-override-redirect`, `damage-within-window`, the two geometry
+invariants, and ACCESS_LOST content freshness. The in-place-recovery assertion and the wobble
+measurement were proven against the real pre-fix builds.
+
+Two checks remain unproven by negative control (`menu-announced`,
+`origin-known-for-damaged-windows`); both guard against missing data rather than a code
+defect, and their PASS is not counted as evidence.
+
 ## Open, with honest status
 
 1. **The dom0 rectangle over menus — UNRESOLVED.** The trace proves the menu is announced
