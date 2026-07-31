@@ -12,7 +12,13 @@ erased when underlying window gets focus."*
 | ours (Phase 2A + chrome + ACCESS_LOST) | window B's dom0 image contains **A's pixels** in the overlap region — A's client area and status bar baked in |
 | **stock shipped QWT 4.2.2** | **identical artifact** (`artifact-zorder-STOCK.png` vs `artifact-zorder-ours.png`; the images differ only in a cursor-column digit) |
 
-**NOT a Phase 2A regression.** Same reasoning as the tearing artifact: control first, blame second.
+**NOT a Phase 2A regression.** Control first, blame second.
+
+(An earlier revision cited "the tearing artifact" as the parallel case. That defect was
+retracted - it was a crop-alignment bug in the measurement tool, see `ARTIFACT-TEARING.md`.
+This finding does not depend on that tool: it is a structural observation - window B's image
+visibly contains window A's client area and status bar - and it reproduces pixel-identically
+on stock QWT 4.2.2.)
 
 ## Mechanism
 
