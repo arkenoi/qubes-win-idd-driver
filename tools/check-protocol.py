@@ -94,6 +94,55 @@ def main():
                          f"hwnd=0x{r['hwnd']:x} damage ({r['rx']},{r['ry']} {r['w']}x{r['h']}) "
                          f"is outside the announced {w}x{h}")
 
+    # --- INVARIANT 2b: damage must not be sent to a window that is OCCLUDED there.
+    # The framebuffer holds the COMPOSITED desktop, so a dirty rect in screen coordinates
+    # intersects every window it overlaps - including ones underneath. Sending it to the lower
+    # window makes dom0 paint the upper window's pixels into the lower window's pixmap, which
+    # is what corrupts a menu's host window on hover and what leaves debris when one window is
+    # dragged over another. Detect it as: the same damage rect, same size, delivered to two
+    # different windows in the same instant at screen positions that coincide.
+    # Origins come from the trace where available, and otherwise from Windows itself. A
+    # window whose CREATE predates the capture window would otherwise be silently skipped -
+    # and skipping on missing data is how a checker reports PASS on a broken build.
+    # ONLY the announced origin is valid here. Substituting Windows' GetWindowRect looks
+    # helpful and is actively harmful: the agent announces DWM extended frame bounds, a
+    # different origin, so the substitution shifts every rect by a few px and the coincidence
+    # this invariant looks for silently stops matching. Missing data must fail, not be guessed.
+    screen = {}
+    for r in recs:
+        if r['msg'] in ('CREATE', 'CONFIGURE') and 'x' in r:
+            screen[r['hwnd']] = (r['x'], r['y'])
+    damaged = {r['hwnd'] for r in recs if r['msg'] == 'DAMAGE'}
+    unknown = damaged - set(screen)
+    if unknown:
+        fail('origin-known-for-damaged-windows',
+             'no origin for hwnd(s) ' + ', '.join(f'0x{h:x}' for h in sorted(unknown)) +
+             ' - occlusion cannot be checked for them, so this run proves nothing about them')
+    bleed = []
+    for i, r in enumerate(recs):
+        if r['msg'] != 'DAMAGE':
+            continue
+        o = screen.get(r['hwnd'])
+        if not o:
+            continue
+        abs_r = (o[0] + r['rx'], o[1] + r['ry'], r['w'], r['h'])
+        for r2 in recs[i + 1:i + 3]:
+            if r2['msg'] != 'DAMAGE' or r2['hwnd'] == r['hwnd']:
+                continue
+            o2 = screen.get(r2['hwnd'])
+            if not o2:
+                continue
+            abs_2 = (o2[0] + r2['rx'], o2[1] + r2['ry'], r2['w'], r2['h'])
+            if abs_r == abs_2:
+                bleed.append((r['hwnd'], r2['hwnd'], abs_r))
+    if bleed:
+        h1, h2, rect = bleed[0]
+        fail('no-damage-to-occluded-window',
+             f"the same screen region {rect[2]}x{rect[3]} at ({rect[0]},{rect[1]}) was sent as "
+             f"damage to BOTH hwnd=0x{h1:x} and hwnd=0x{h2:x} ({len(bleed)} times): the "
+             f"composited framebuffer means the lower window receives the upper window's "
+             f"pixels, corrupting it")
+
     # --- INVARIANT 3: the geometry announced must match what Windows actually has.
     last_cfg = {}
     for r in recs:
