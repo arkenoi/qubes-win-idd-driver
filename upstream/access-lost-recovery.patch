@@ -1,0 +1,550 @@
+From 84d31a0ff71aaeb0e6ef3a91e87d1383393512c0 Mon Sep 17 00:00:00 2001
+From: arkenoi <6000406+arkenoi@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 01:31:57 +0300
+Subject: [PATCH 1/6] capture: recover from DXGI_ERROR_ACCESS_LOST in place,
+ don't unmap every window
+
+ACCESS_LOST (0x887A0026) is the routine 'your duplication object is stale' signal
+- it fires on mode changes, desktop switches, and every trip to the secure
+desktop (UAC/Ctrl-Alt-Del). ACCESS_DENIED (0x887A002B) is the secure desktop
+itself. The old code treated both as fatal: it disabled the capture thread and
+signalled the main loop to reinitialise, which unmaps EVERY window - so the
+qube's windows visibly vanish and reappear after an entirely expected event.
+
+RecreateDuplication() releases any held frame and the stale duplication, then
+re-DuplicateOutput()s with bounded retry (20 x 250ms, covering a secure-desktop
+visit), re-reading the desc since the mode AND DesktopImageInSystemMemory can
+change across the event. The watched window list is left untouched. A genuine
+resolution change still falls through to the full reinit, because the grants and
+the dom0-side window are sized for the old geometry.
+
+ddaprobe already implements exactly this recovery and survived every run on this
+guest, which is direct evidence the approach works here.
+
+The previous log line was also misleading: win_perror2 renders 0x887A0026 via
+FormatMessage(FROM_SYSTEM) as 'The keyed mutex was abandoned', which sent
+earlier investigation chasing a nonexistent mutex bug. See
+instrumentation/ACCESS-LOST-BUG.md.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+(cherry picked from commit d8e6c80319a7e0bedba8dc1f278a21928902b5a2)
+---
+ gui-agent/capture.c | 93 +++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 90 insertions(+), 3 deletions(-)
+
+diff --git a/gui-agent/capture.c b/gui-agent/capture.c
+index 962b4ce..1588b19 100644
+--- a/gui-agent/capture.c
++++ b/gui-agent/capture.c
+@@ -152,6 +152,69 @@ fail:
+     return NULL;
+ }
+ 
++static IDXGIOutputDuplication* GetDuplication(IN IDXGIOutput1* output, IN ID3D11Device* device, OUT UINT* width, OUT UINT* height);
++
++// Rebuild the duplication object in place after DXGI_ERROR_ACCESS_LOST/ACCESS_DENIED,
++// WITHOUT disturbing the watched window list. Returns TRUE if capture can continue.
++//
++// The mode and DesktopImageInSystemMemory can both change across the event (that is
++// often why it fired), so the desc is re-read by GetDuplication and a resolution change
++// is reported the same way the initial setup does. If the desktop is momentarily
++// unavailable - which is exactly what the secure desktop looks like - retry briefly
++// rather than giving up: the secure desktop typically lasts seconds.
++static BOOL RecreateDuplication(IN OUT CAPTURE_CONTEXT* ctx)
++{
++    const UINT maxAttempts = 20;
++    const DWORD retryDelayMs = 250;
++    UINT width = 0, height = 0;
++
++    EnterCriticalSection(&ctx->frame.lock);
++    if (ctx->frame.texture) // never leak a frame we were holding
++    {
++        IDXGIOutputDuplication_ReleaseFrame(ctx->duplication);
++        ID3D11Texture2D_Release(ctx->frame.texture);
++        ctx->frame.texture = NULL;
++    }
++    if (ctx->duplication)
++    {
++        IDXGIOutputDuplication_Release(ctx->duplication);
++        ctx->duplication = NULL;
++    }
++    LeaveCriticalSection(&ctx->frame.lock);
++
++    for (UINT attempt = 0; attempt < maxAttempts; attempt++)
++    {
++        if (!InterlockedCompareExchange(&g_CaptureThreadEnable, FALSE, FALSE))
++            return FALSE; // asked to stop while recovering
++
++        IDXGIOutputDuplication* duplication = GetDuplication(ctx->output, ctx->device, &width, &height);
++        if (duplication)
++        {
++            EnterCriticalSection(&ctx->frame.lock);
++            ctx->duplication = duplication;
++            LeaveCriticalSection(&ctx->frame.lock);
++
++            if (width != ctx->width || height != ctx->height)
++            {
++                // The framebuffer geometry changed underneath us; the grants and the
++                // dom0-side window are sized for the old one, so a full reinit is the
++                // correct response here (unlike a plain ACCESS_LOST).
++                LogWarning("resolution changed during recovery (%ux%u -> %ux%u), reinitializing",
++                    ctx->width, ctx->height, width, height);
++                return FALSE;
++            }
++
++            LogDebug("duplication recreated after %u attempt(s)", attempt + 1);
++            return TRUE;
++        }
++
++        Sleep(retryDelayMs);
++    }
++
++    LogError("failed to recreate duplication after %u attempts", maxAttempts);
++    return FALSE;
++}
++
+ static IDXGIOutputDuplication* GetDuplication(IN IDXGIOutput1* output, IN ID3D11Device* device, OUT UINT* width, OUT UINT* height)
+ {
+     LogVerbose("start");
+@@ -538,9 +601,33 @@ static DWORD WINAPI CaptureThread(void* param)
+                 continue; // no new frame available, wait for next one
+             }
+ 
+-            LogWarning("failed to get frame");
+-            // this usually happens when the capture interface gets invalidated
+-            // (desktop change etc)
++            // DXGI_ERROR_ACCESS_LOST (0x887A0026) is the ROUTINE "your duplication object
++            // is stale, make a new one" signal: it fires on mode changes, desktop
++            // switches, and every trip to the secure desktop (UAC / Ctrl-Alt-Del).
++            // DXGI_ERROR_ACCESS_DENIED (0x887A002B) is the secure desktop itself.
++            //
++            // Tearing everything down for these is wrong and user-visible: the main loop
++            // reinitialises and unmaps EVERY window, so the qube's windows vanish and
++            // reappear in dom0 after an entirely expected event. It also makes
++            // resolution changes (and therefore any future resize-follows-dom0-window
++            // feature) glitch by construction, since those raise ACCESS_LOST constantly.
++            //
++            // Note the log message this used to produce was itself misleading:
++            // win_perror2 renders 0x887A0026 through FormatMessage(FROM_SYSTEM), which
++            // prints the unrelated string "The keyed mutex was abandoned." There is no
++            // keyed mutex involved - see instrumentation/ACCESS-LOST-BUG.md.
++            if (status == DXGI_ERROR_ACCESS_LOST || status == DXGI_ERROR_ACCESS_DENIED)
++            {
++                if (RecreateDuplication(capture))
++                    continue; // recovered in place, window list untouched
++
++                LogError("duplication lost and could not be recreated, reinitializing");
++            }
++            else
++            {
++                LogWarning("failed to get frame");
++            }
++
+             InterlockedExchange(&g_CaptureThreadEnable, FALSE);
+             // notify main loop, it'll reinitialize everything
+             SetEvent(capture->error_event);
+-- 
+2.55.0
+
+
+From 28f9c4a34204b37af21e7939c4c356975fde63ba Mon Sep 17 00:00:00 2001
+From: arkenoi <6000406+arkenoi@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 01:47:26 +0300
+Subject: [PATCH 2/6] capture: handle ACCESS_LOST on ReleaseFrame too - that is
+ where it actually fires
+
+Live verification caught the first fix as incomplete. A forced desktop switch on
+the guest produced:
+  ReleaseFrame: duplication->ReleaseFrame failed with error 0x887a0026
+  SendWindowUnmap x6
+with 'duplication recreated' never logged - i.e. the acquire-side recovery was
+unreachable and the teardown still ran.
+
+By the time a desktop switch or mode change lands the agent is usually HOLDING a
+frame, so the invalidation surfaces on release, not on acquire. Handle
+ACCESS_LOST/ACCESS_DENIED identically at the release call site.
+
+Also reset the whole frame state in RecreateDuplication: ReleaseFrame can fail at
+UnMapDesktopSurface leaving  set, and frees the rects only on the path it
+completes, so the replacement duplication would inherit stale flags and the next
+GetFrame would assert on a non-NULL texture or double-unmap. Fixed the release
+call there too (IDXGIResource_Release, matching how the frame texture is
+acquired and released elsewhere in this file).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+(cherry picked from commit c835adb237bd6e7fdd110df577c0d46b724d827d)
+---
+ gui-agent/capture.c | 24 +++++++++++++++++++++++-
+ 1 file changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/gui-agent/capture.c b/gui-agent/capture.c
+index 1588b19..0e3377a 100644
+--- a/gui-agent/capture.c
++++ b/gui-agent/capture.c
+@@ -172,9 +172,17 @@ static BOOL RecreateDuplication(IN OUT CAPTURE_CONTEXT* ctx)
+     if (ctx->frame.texture) // never leak a frame we were holding
+     {
+         IDXGIOutputDuplication_ReleaseFrame(ctx->duplication);
+-        ID3D11Texture2D_Release(ctx->frame.texture);
++        IDXGIResource_Release(ctx->frame.texture);
+         ctx->frame.texture = NULL;
+     }
++    // ReleaseFrame() can fail at UnMapDesktopSurface and leave `mapped` set, and it frees
++    // the rects only on the path it completes. The duplication object is going away, so
++    // reset the whole frame state or the replacement inherits stale flags and the next
++    // GetFrame asserts on a non-NULL texture / double-unmaps.
++    ctx->frame.mapped = FALSE;
++    free(ctx->frame.dirty_rects);
++    ctx->frame.dirty_rects = NULL;
++    ctx->frame.dirty_rects_count = 0;
+     if (ctx->duplication)
+     {
+         IDXGIOutputDuplication_Release(ctx->duplication);
+@@ -656,6 +664,20 @@ end_frame:
+         status = ReleaseFrame(capture);
+         if (FAILED(status))
+         {
++            // ACCESS_LOST is raised here far more often than from AcquireNextFrame: by the
++            // time a desktop switch or mode change lands we are typically holding a frame,
++            // so the invalidation surfaces on release. Verified on the live guest - a
++            // desktop switch produced two ReleaseFrame 0x887A0026 failures and six window
++            // unmaps, with the acquire-side recovery never firing. Handle it identically
++            // here or the in-place recovery is unreachable in practice.
++            if (status == DXGI_ERROR_ACCESS_LOST || status == DXGI_ERROR_ACCESS_DENIED)
++            {
++                if (RecreateDuplication(capture))
++                    continue; // recovered in place, window list untouched
++
++                LogError("duplication lost on release and could not be recreated, reinitializing");
++            }
++
+             LogDebug("signaling error due to failed frame release");
+             SetEvent(capture->error_event);
+             break;
+-- 
+2.55.0
+
+
+From 4cf62f85dedf47d500492e4e8b410dbe0d870689 Mon Sep 17 00:00:00 2001
+From: arkenoi <6000406+arkenoi@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 01:53:30 +0300
+Subject: [PATCH 3/6] capture: log in-place duplication recovery at INFO, not
+ DEBUG
+
+The guest runs LogLevel=3 (INFO) by default, so the recovery message was
+invisible and 'recovered=0' looked like the fix had not fired - when in fact it
+had (11 frames captured after the ACCESS_LOST, zero window unmaps). Make the
+evidence visible at the default level.
+
+Verified on the live guest across a forced desktop switch:
+  before fix: ReleaseFrame 0x887a0026 -> 6 x SendWindowUnmap (full teardown)
+  after fix:  GetFrameDirtyRects 0x887a0026 -> 0 unmaps, 11 frames captured,
+              agent and mapped windows both survive
+Note ACCESS_LOST can surface from any duplication method - AcquireNextFrame,
+GetFrameDirtyRects and ReleaseFrame have all been observed - which is why it is
+handled at the GetFrame and ReleaseFrame call sites rather than per-API.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+(cherry picked from commit 2248d8f57084bb21d28a9a33b5e45820839668cf)
+---
+ gui-agent/capture.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/gui-agent/capture.c b/gui-agent/capture.c
+index 0e3377a..1d93d05 100644
+--- a/gui-agent/capture.c
++++ b/gui-agent/capture.c
+@@ -212,7 +212,10 @@ static BOOL RecreateDuplication(IN OUT CAPTURE_CONTEXT* ctx)
+                 return FALSE;
+             }
+ 
+-            LogDebug("duplication recreated after %u attempt(s)", attempt + 1);
++            // INFO, not DEBUG: the guest runs LogLevel=3 by default, so at DEBUG this
++            // recovery is invisible and an operator cannot tell in-place recovery from
++            // a silent teardown. This line is the evidence that the fix worked.
++            LogInfo("duplication recreated in place after %u attempt(s) - windows kept", attempt + 1);
+             return TRUE;
+         }
+ 
+-- 
+2.55.0
+
+
+From e51b329004206d271f9617bd3a651deac18a50b7 Mon Sep 17 00:00:00 2001
+From: arkenoi <6000406+arkenoi@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 11:47:24 +0300
+Subject: [PATCH 4/6] ACCESS_LOST recovery: re-attach the capture thread to the
+ input desktop
+
+DuplicateOutput() returns E_ACCESSDENIED when the calling thread is not on the current input
+desktop - which is exactly the state a desktop switch leaves the capture thread in, and a
+desktop switch is one of the main things that invalidates the duplication in the first place.
+
+So the retry loop could not possibly succeed after that trigger: all 20 attempts failed with
+0x80070005, RecreateDuplication gave up, and the caller fell back to the full teardown that
+unmaps every window - the exact outcome the in-place recovery was added to prevent. Observed
+end to end: after a desktop switch the windows stayed mapped but every dom0 window image went
+uniformly black, because the daemon was still reading the framebuffer grant of a duplication
+the agent had torn down.
+
+Re-attach before every attempt rather than once before the loop, since the switch may still be
+in progress on the first try. Only the per-thread part of AttachToInputDesktop() is used, for
+the reasons already documented at the hook thread in main.c.
+
+The earlier 'recreated in place after 13 attempts' successes were the case where the desktop
+had already switched back before the retries ran out; the fix makes it deterministic.
+
+(cherry picked from commit 42beb784f5476d29a9937571f32c499081528df6)
+---
+ gui-agent/capture.c | 40 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 40 insertions(+)
+
+diff --git a/gui-agent/capture.c b/gui-agent/capture.c
+index 1d93d05..32e2a06 100644
+--- a/gui-agent/capture.c
++++ b/gui-agent/capture.c
+@@ -162,6 +162,41 @@ static IDXGIOutputDuplication* GetDuplication(IN IDXGIOutput1* output, IN ID3D11
+ // is reported the same way the initial setup does. If the desktop is momentarily
+ // unavailable - which is exactly what the secure desktop looks like - retry briefly
+ // rather than giving up: the secure desktop typically lasts seconds.
++// Re-attach THIS thread to the current input desktop.
++//
++// DuplicateOutput() returns E_ACCESSDENIED (0x80070005) when the calling thread is not on the
++// input desktop, which is exactly the state a desktop switch leaves the capture thread in -
++// and a desktop switch is one of the main things that invalidates the duplication in the
++// first place. Without this, every retry in RecreateDuplication() fails for the whole retry
++// window, recovery gives up, and the caller falls back to the full teardown that unmaps every
++// window - the precise outcome the in-place recovery exists to avoid.
++//
++// Deliberately NOT AttachToInputDesktop(): that helper also writes the shared globals
++// g_DesktopWindow/g_StartWindow/g_SearchWindow unsynchronised and CloseDesktop()s the
++// process-default desktop handle, which MSDN forbids and which a further caller would
++// double-close. See the same reasoning at the hook thread in main.c. Only the per-thread part
++// is wanted here, and only this thread's own handle is ever closed.
++static void AttachCaptureThreadToInputDesktop(void)
++{
++    static HDESK previous = NULL; // only ever a handle THIS function opened
++
++    HDESK desktop = OpenInputDesktop(0, FALSE, GENERIC_ALL);
++    if (!desktop)
++        return; // not fatal: the retry loop will try again
++
++    if (!SetThreadDesktop(desktop))
++    {
++        // fails if the thread owns windows or hooks; the capture thread owns neither, but
++        // never leak the handle if it ever does
++        CloseDesktop(desktop);
++        return;
++    }
++
++    if (previous)
++        CloseDesktop(previous);
++    previous = desktop;
++}
++
+ static BOOL RecreateDuplication(IN OUT CAPTURE_CONTEXT* ctx)
+ {
+     const UINT maxAttempts = 20;
+@@ -195,6 +230,11 @@ static BOOL RecreateDuplication(IN OUT CAPTURE_CONTEXT* ctx)
+         if (!InterlockedCompareExchange(&g_CaptureThreadEnable, FALSE, FALSE))
+             return FALSE; // asked to stop while recovering
+ 
++        // A desktop switch both invalidates the duplication AND leaves this thread on the
++        // old desktop, so re-attach before every attempt, not once before the loop: the
++        // switch may still be in progress on the first try.
++        AttachCaptureThreadToInputDesktop();
++
+         IDXGIOutputDuplication* duplication = GetDuplication(ctx->output, ctx->device, &width, &height);
+         if (duplication)
+         {
+-- 
+2.55.0
+
+
+From 3043d250497e2678aa72c63cf8c550d707d56e3d Mon Sep 17 00:00:00 2001
+From: arkenoi <6000406+arkenoi@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 11:55:39 +0300
+Subject: [PATCH 5/6] Re-grant the framebuffer after in-place duplication
+ recovery
+
+The desktop surface belongs to the duplication object. RecreateDuplication replaced the
+duplication but kept grant_refs, and GetFrame only maps and grants when grant_refs is NULL -
+so the agent never looked at the new surface and the daemon kept reading the pages of the
+duplication that had been torn down. Windows stayed mapped and correctly positioned while
+their contents froze at the instant of the loss.
+
+Measured: after a desktop switch, dom0's window image was byte-identical (same md5) across
+two captures taken minutes apart with typing in between, while the guest's own screenshot
+changed. Before the earlier input-desktop fix this presented as a uniformly black window,
+because recovery failed outright and the teardown path ran.
+
+Revoke and clear the grant when recreating, let GetFrame re-map and re-grant, and have the
+frame loop re-send MSG_WINDOW_DUMP before any damage for that frame - damage referring to
+pages the daemon has not mapped yet would be painted from stale memory. Then force a full
+repaint, since every window the daemon holds came from the old framebuffer and an idle one
+would otherwise stay frozen indefinitely.
+
+(cherry picked from commit 3174d67e777b6be12addbf3fe9ea3c539ae6d9a4)
+---
+ gui-agent/capture.c | 18 ++++++++++++++++++
+ gui-agent/capture.h |  4 ++++
+ gui-agent/main.c    | 42 ++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 64 insertions(+)
+
+diff --git a/gui-agent/capture.c b/gui-agent/capture.c
+index 32e2a06..735e10c 100644
+--- a/gui-agent/capture.c
++++ b/gui-agent/capture.c
+@@ -223,6 +223,21 @@ static BOOL RecreateDuplication(IN OUT CAPTURE_CONTEXT* ctx)
+         IDXGIOutputDuplication_Release(ctx->duplication);
+         ctx->duplication = NULL;
+     }
++
++    // Drop the framebuffer grant too. The desktop surface belongs to the duplication we are
++    // discarding; the replacement may map somewhere else entirely. GetFrame only maps and
++    // grants when grant_refs is NULL, so leaving it set means the agent never looks at the
++    // new surface and the daemon reads the old pages forever - windows stay mapped and
++    // correctly positioned, but their contents freeze at the moment of the loss.
++    if (ctx->xc && ctx->grant_refs)
++    {
++        ULONG revokeStatus = XcGnttabRevokeForeignAccess(ctx->xc, ctx->framebuffer);
++        if (revokeStatus != ERROR_SUCCESS)
++            win_perror2(revokeStatus, "XcGnttabRevokeForeignAccess (recreate)");
++        free(ctx->grant_refs);
++        ctx->grant_refs = NULL;
++        ctx->framebuffer = NULL;
++    }
+     LeaveCriticalSection(&ctx->frame.lock);
+ 
+     for (UINT attempt = 0; attempt < maxAttempts; attempt++)
+@@ -513,6 +528,9 @@ static HRESULT GetFrame(IN OUT CAPTURE_CONTEXT* ctx, IN UINT timeout)
+         }
+ 
+         assert(ctx->framebuffer == ctx->frame.rect.pBits);
++
++        // Tell the frame loop to re-send MSG_WINDOW_DUMP with these refs.
++        ctx->grants_changed = TRUE;
+     }
+ 
+     // dirty rects
+diff --git a/gui-agent/capture.h b/gui-agent/capture.h
+index 434a52b..17ba58a 100644
+--- a/gui-agent/capture.h
++++ b/gui-agent/capture.h
+@@ -59,6 +59,10 @@ typedef struct _CAPTURE_CONTEXT
+ 	// this gets initialized when the first frame is acquired
+ 	void* framebuffer; // framebuffer address
+ 	ULONG* grant_refs; // xen grant refs for shared framebuffer pages
++	// Set when grant_refs have been re-established for a NEW duplication (see
++	// RecreateDuplication). The frame loop must re-send MSG_WINDOW_DUMP, or the daemon keeps
++	// reading the pages of the duplication that was torn down.
++	BOOL grants_changed;
+ 	HANDLE frame_event; // capture thread -> main loop: new frame
+ 	HANDLE ready_event; // main loop -> capture thread: frame processed
+ 	HANDLE error_event; // capture thread -> main loop: capture error
+diff --git a/gui-agent/main.c b/gui-agent/main.c
+index 6e04b96..00b6390 100755
+--- a/gui-agent/main.c
++++ b/gui-agent/main.c
+@@ -1284,6 +1284,48 @@ static ULONG WINAPI WatchForEvents(void)
+             if (g_VchanClientConnected)
+             {
+                 assert(capture);
++
++                // The duplication was recreated in place after a loss and the framebuffer
++                // was re-granted, so the daemon is still mapping the old pages. Republish
++                // the refs BEFORE sending any damage for this frame: damage that refers to
++                // pages the daemon has not mapped yet would be painted from stale memory.
++                if (capture->grants_changed)
++                {
++                    capture->grants_changed = FALSE;
++                    ULONG grantStatus = SendScreenGrants(
++                        FRAMEBUFFER_PAGE_COUNT(g_ScreenWidth, g_ScreenHeight),
++                        capture->grant_refs);
++                    if (grantStatus != ERROR_SUCCESS)
++                        win_perror2(grantStatus, "SendScreenGrants (after recreate)");
++                    else
++                        LogInfo("framebuffer re-granted after duplication recovery, MSG_WINDOW_DUMP re-sent");
++
++                    // Everything the daemon holds came from the old framebuffer, so repaint
++                    // all of it rather than waiting for each window to happen to be damaged
++                    // again - an idle window would otherwise stay frozen indefinitely.
++                    if (g_SeamlessMode)
++                    {
++                        EnterCriticalSection(&g_csWatchedWindows);
++                        WINDOW_DATA* repaint = (WINDOW_DATA*)g_WatchedWindowsList.Flink;
++                        while (repaint != (WINDOW_DATA*)&g_WatchedWindowsList)
++                        {
++                            repaint = CONTAINING_RECORD(repaint, WINDOW_DATA, ListEntry);
++                            if (repaint->IsVisible && !repaint->IsIconic &&
++                                repaint->Width > 0 && repaint->Height > 0)
++                            {
++                                SendWindowDamageEvent(repaint->Handle, 0, 0,
++                                    repaint->Width, repaint->Height);
++                            }
++                            repaint = (WINDOW_DATA*)repaint->ListEntry.Flink;
++                        }
++                        LeaveCriticalSection(&g_csWatchedWindows);
++                    }
++                    else
++                    {
++                        SendWindowDamageEvent(NULL, 0, 0, g_ScreenWidth, g_ScreenHeight);
++                    }
++                }
++
+                 ProcessNewFrame(&capture->frame);
+             }
+ 
+-- 
+2.55.0
+
+
+From faac65f0af5ecdd079bae8dcad60cfbf2844660a Mon Sep 17 00:00:00 2001
+From: arkenoi <6000406+arkenoi@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 12:01:33 +0300
+Subject: [PATCH 6/6] Only flag a re-grant, not the first grant
+
+StartFrameProcessing already sends MSG_WINDOW_DUMP for the initial grant, so flagging it as
+changed sent a duplicate dump and forced a redundant full-screen repaint at every startup,
+logged as 'after duplication recovery' when no recovery had occurred.
+
+(cherry picked from commit a20fb5b4342e5060c2f13f35a5feb3e1e9452489)
+---
+ gui-agent/capture.c | 8 ++++++--
+ gui-agent/capture.h | 1 +
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/gui-agent/capture.c b/gui-agent/capture.c
+index 735e10c..424e9c2 100644
+--- a/gui-agent/capture.c
++++ b/gui-agent/capture.c
+@@ -529,8 +529,12 @@ static HRESULT GetFrame(IN OUT CAPTURE_CONTEXT* ctx, IN UINT timeout)
+ 
+         assert(ctx->framebuffer == ctx->frame.rect.pBits);
+ 
+-        // Tell the frame loop to re-send MSG_WINDOW_DUMP with these refs.
+-        ctx->grants_changed = TRUE;
++        // Tell the frame loop to re-send MSG_WINDOW_DUMP with these refs - but only if this
++        // is a RE-grant. StartFrameProcessing already sends the refs for the first grant, so
++        // flagging that one too would send a duplicate dump and force a redundant full-screen
++        // repaint on every startup, logged as if a recovery had happened.
++        ctx->grants_changed = ctx->granted_once;
++        ctx->granted_once = TRUE;
+     }
+ 
+     // dirty rects
+diff --git a/gui-agent/capture.h b/gui-agent/capture.h
+index 17ba58a..7765d35 100644
+--- a/gui-agent/capture.h
++++ b/gui-agent/capture.h
+@@ -63,6 +63,7 @@ typedef struct _CAPTURE_CONTEXT
+ 	// RecreateDuplication). The frame loop must re-send MSG_WINDOW_DUMP, or the daemon keeps
+ 	// reading the pages of the duplication that was torn down.
+ 	BOOL grants_changed;
++	BOOL granted_once; // distinguishes the first grant from a re-grant after recovery
+ 	HANDLE frame_event; // capture thread -> main loop: new frame
+ 	HANDLE ready_event; // main loop -> capture thread: frame processed
+ 	HANDLE error_event; // capture thread -> main loop: capture error
+-- 
+2.55.0
+

@@ -1,84 +1,72 @@
-# Upstream PR (DRAFT — NOT SUBMITTED, needs user approval of this exact text)
+# Proposed upstream PR — recover from DXGI_ERROR_ACCESS_LOST in place
 
-Target: `QubesOS/qubes-gui-agent-windows`
-Patch: `upstream/0001-access-lost-recover-in-place.patch` (+104 / −4, one file: `gui-agent/capture.c`)
+**Status: NOT SUBMITTED.** Per CLAUDE.md, upstream contact requires explicit approval of the
+exact diff and text. This file is the proposed text; `access-lost-recovery.patch` is the exact
+diff (6 commits, +224/-3 in `gui-agent/capture.{c,h}` and `gui-agent/main.c`).
 
-This is deliberately split out of our larger work so it can be reviewed on its own. It has
-no dependency on our instrumentation or on the window-tracking rework — it applies to
-pristine `capture.c` and uses only symbols already present there (`GetDuplication`,
-`g_CaptureThreadEnable`, the DXGI wrappers, and `LogInfo`, which `main.c` already uses and
-`capture.c` already has via `#include <log.h>`).
-
----
-
-## Title
-`capture: recover from DXGI_ERROR_ACCESS_LOST in place instead of unmapping every window`
+Target: `QubesOS/qubes-gui-agent-windows`. Branch: `pr-access-lost`, cherry-picked onto
+upstream `431e4517` and **verified to build standalone in CI** (no dependency on the Phase 2A
+work in the same fork).
 
 ## Problem
 
-`DXGI_ERROR_ACCESS_LOST` (0x887A0026) is the routine "your duplication object is stale,
-create a new one" signal. It fires on display mode changes, desktop switches, and every trip
-to the secure desktop (UAC prompt, Ctrl-Alt-Del).
+When the desktop duplication is invalidated - desktop switch, resolution change, session
+change, driver reset - the agent tore down its whole capture context and reinitialised. That
+path sends `MSG_WINDOW_UNMAP` for every window, so from dom0's point of view every window in
+the qube disappears and comes back. In seamless mode the user sees all windows blink out.
 
-The agent currently treats it as a fatal capture failure: it disables the capture thread and
-signals the main loop, which reinitialises and **unmaps every window**. In dom0 the qube's
-windows visibly vanish and reappear after an entirely expected event.
-
-Two secondary problems:
-
-* The log message is misleading. `win_perror2()` renders 0x887A0026 through
-  `FormatMessage(FROM_SYSTEM)`, which prints the unrelated string
-  **"The keyed mutex was abandoned."** There is no keyed mutex involved. This sent our own
-  investigation chasing a nonexistent mutex bug for a while.
-* Because mode changes raise this constantly, any feature that changes resolution (e.g.
-  following a dom0 window resize) glitches by construction.
+`DXGI_ERROR_ACCESS_LOST` is documented as recoverable by recreating the duplication; nothing
+requires discarding window state.
 
 ## Change
 
-Add `RecreateDuplication()`: release the held frame and the stale duplication, then
-`DuplicateOutput()` again with bounded retry (20 × 250 ms, enough to cover a secure-desktop
-visit), re-reading the desc because both the mode *and* `DesktopImageInSystemMemory` can
-change across the event. The watched window list is left untouched.
+Recreate the duplication in place, keeping the watched-window list, with a bounded retry
+(20 x 250 ms) and fallback to the existing reinitialise path if recovery genuinely fails.
 
-Handled at **both** call sites — `GetFrame` and `ReleaseFrame`. That second one matters: by
-the time a desktop switch lands the agent is usually *holding* a frame, so in practice the
-invalidation surfaces on release, and an acquire-only fix never runs (we measured exactly
-that). `ACCESS_LOST` has been observed arriving from `AcquireNextFrame`, `ReleaseFrame` and
-`GetFrameDirtyRects`.
+Four things that are not obvious, each found by testing rather than by reading:
 
-A genuine geometry change still falls through to the existing full reinit, because the
-grants and the dom0-side window are sized for the old framebuffer.
+1. **The failure usually arrives from `ReleaseFrame()`, not `AcquireNextFrame()`.** By the
+   time a desktop switch lands the agent is normally holding a frame, so the invalidation
+   surfaces on release. An acquire-only fix is unreachable in practice. It can also surface
+   from `GetFrameDirtyRects`, so recovery is handled at the `GetFrame`/`ReleaseFrame` call
+   sites rather than per-API.
+
+2. **`DuplicateOutput()` returns `E_ACCESSDENIED` if the calling thread is not on the current
+   input desktop** - exactly the state a desktop switch leaves the capture thread in. Without
+   re-attaching, every retry fails and recovery can never succeed for the most common trigger.
+   Re-attach before *every* attempt: the switch may still be in progress on the first.
+
+3. **The framebuffer grant must be refreshed.** The desktop surface belongs to the duplication
+   object. Keeping `grant_refs` across a recreate means `GetFrame` never maps the new surface
+   and the daemon keeps reading the pages of the duplication that was torn down: windows stay
+   mapped and correctly positioned while their contents freeze permanently. Recovery revokes
+   and clears the grant, re-grants on the next frame, re-sends `MSG_WINDOW_DUMP` *before* any
+   damage for that frame, then forces a full repaint (an idle window would otherwise never be
+   damaged again).
+
+4. `ReleaseFrame()` can fail at `UnMapDesktopSurface` and leave `mapped` set while freeing
+   rects only on the path it completes, so recovery resets the whole frame state; otherwise
+   the replacement inherits stale flags and the next `GetFrame` double-unmaps.
 
 ## Testing
 
-Windows 10 Enterprise LTSC 2021 (19044.1288) HVM on Qubes R4.3, QWT 4.2.2, seamless mode.
-Trigger: a forced desktop switch in the guest (`CreateDesktop` + `SwitchDesktop` away/back),
-which is the same class of event as a mode change.
+win-idd-test, standalone Win10 22H2 HVM, QWT 4.2.2, trigger = `CreateDesktop` +
+`SwitchDesktop` away and back (documented `ACCESS_LOST` cause, same class as a resolution
+change).
 
-Before:
-```
-ReleaseFrame: duplication->ReleaseFrame failed with error 0x887a0026
-SendWindowUnmap: 0x0
-SendWindowUnmap: 0x0
-SendWindowUnmap: 0x500f6        <- every window torn down
-```
+| | before | after |
+|---|---|---|
+| agent log | `duplication lost..., reinitializing` + `SendWindowUnmap` per window | `RecreateDuplication: duplication recreated in place after 1 attempt(s) - windows kept` |
+| dom0 window images | uniformly black (`std = 0.0`) | live, and match the guest's own screenshot to mean abs difference 0.0-1.7 / 255 |
+| contents after recovery | byte-identical across captures minutes apart (frozen) | update normally |
 
-After:
-```
-GetFrame: initial GetFrameDirtyRects failed with error 0x887a0026
-duplication recreated in place after 1 attempt(s) - windows kept
-```
-measured from the log after the error line: **11 frames captured, 0 window unmaps**, agent
-and the mapped window both alive.
+Recovery is logged at INFO deliberately: the guest's default `LogLevel=3` does not show DEBUG,
+which would make a working recovery indistinguishable from a silent teardown.
 
-## Notes for the reviewer
+## Notes for review
 
-* The recovery message is `LogInfo`, not `LogDebug`, on purpose: the default guest config is
-  `LogLevel=3`, and at DEBUG a successful in-place recovery is indistinguishable from a
-  silent teardown.
-* `RecreateDuplication` resets `frame.mapped` and frees `frame.dirty_rects`, because
-  `ReleaseFrame()` can fail at `UnMapDesktopSurface` and leave that state behind; without the
-  reset the replacement duplication inherits stale flags and the next `GetFrame` asserts on a
-  non-NULL texture.
-* Not changed here, but worth a separate issue: `win_perror2()` on `0x887Axxxx` HRESULTs
-  should print the symbolic DXGI name rather than `FormatMessage` text.
+- The in-place path is strictly additive; the previous teardown remains as the fallback.
+- Only the per-thread part of `AttachToInputDesktop()` is used, since that helper also writes
+  shared globals unsynchronised and closes the process-default desktop handle - the same
+  reasoning already applied to the hook thread in `main.c`.
+- No protocol change: `MSG_WINDOW_DUMP` re-send uses the existing message.
