@@ -1,0 +1,90 @@
+Microsoft Windows [Version 10.0.19044.1288]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\drag-harness.ps1"
+# session=1 user=user interactive=True
+# virtual screen origin (0,0) size 3440x1440
+# SendInput verified: cursor (1720,720) -> (1147,480)
+# notepad hwnd=0x401d6 rect=(1320,420)-(2120,1020)
+### PHASE-START idle-pre 20260731.192326.795
+### PHASE-END   idle-pre 20260731.192331.817
+### PHASE-START drag 20260731.192331.829
+#   drag cadence: steps=600 wall_ms=10003 want_ms=10000 jitter_ms p50=15.60 p95=16.23 max=16.44
+### PHASE-END   drag 20260731.192342.087
+### PHASE-START idle-mid1 20260731.192342.103
+### PHASE-END   idle-mid1 20260731.192344.113
+### PHASE-START scroll 20260731.192344.115
+#   scroll cadence: steps=200 wall_ms=10000 want_ms=10000 jitter_ms p50=49.28 p95=49.61 max=49.82
+### PHASE-END   scroll 20260731.192354.328
+### PHASE-START idle-mid2 20260731.192354.329
+### PHASE-END   idle-mid2 20260731.192356.335
+### PHASE-START type 20260731.192356.336
+#   type cadence: steps=100 wall_ms=10000 want_ms=10000 jitter_ms p50=99.76 p95=99.80 max=99.84
+### PHASE-END   type 20260731.192406.652
+### PHASE-START idle-post 20260731.192406.654
+### PHASE-END   idle-post 20260731.192411.661
+=== RESULT ===
+{
+    "ok":  true,
+    "phases":  [
+                   {
+                       "name":  "idle-pre",
+                       "start":  "20260731.192326.795",
+                       "end":  "20260731.192331.817",
+                       "ms":  5012
+                   },
+                   {
+                       "name":  "drag",
+                       "start":  "20260731.192331.829",
+                       "end":  "20260731.192342.087",
+                       "ms":  10257
+                   },
+                   {
+                       "name":  "idle-mid1",
+                       "start":  "20260731.192342.103",
+                       "end":  "20260731.192344.113",
+                       "ms":  2009
+                   },
+                   {
+                       "name":  "scroll",
+                       "start":  "20260731.192344.115",
+                       "end":  "20260731.192354.328",
+                       "ms":  10211
+                   },
+                   {
+                       "name":  "idle-mid2",
+                       "start":  "20260731.192354.329",
+                       "end":  "20260731.192356.335",
+                       "ms":  2005
+                   },
+                   {
+                       "name":  "type",
+                       "start":  "20260731.192356.336",
+                       "end":  "20260731.192406.652",
+                       "ms":  10315
+                   },
+                   {
+                       "name":  "idle-post",
+                       "start":  "20260731.192406.654",
+                       "end":  "20260731.192411.661",
+                       "ms":  5005
+                   }
+               ],
+    "notes":  [
+                  "session=1 user=user interactive=True",
+                  "virtual screen origin (0,0) size 3440x1440",
+                  "SendInput verified: cursor (1720,720) -\u003e (1147,480)",
+                  "notepad hwnd=0x401d6 rect=(1320,420)-(2120,1020)"
+              ],
+    "cadence":  {
+                    "drag":  "steps=600 wall_ms=10003 want_ms=10000 jitter_ms p50=15.60 p95=16.23 max=16.44",
+                    "scroll":  "steps=200 wall_ms=10000 want_ms=10000 jitter_ms p50=49.28 p95=49.61 max=49.82",
+                    "type":  "steps=100 wall_ms=10000 want_ms=10000 jitter_ms p50=99.76 p95=99.80 max=99.84"
+                },
+    "logdir":  "C:\\Program Files\\Qubes Tools\\log",
+    "markerFile":  "C:\\Users\\user\\AppData\\Local\\Temp\\qgaperf-harness-20260731-192411.json",
+    "error":  null,
+    "hwnd":  "0x401d6"
+}
+
+C:\Windows\system32>
