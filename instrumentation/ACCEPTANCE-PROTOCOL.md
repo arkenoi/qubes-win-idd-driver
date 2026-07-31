@@ -77,3 +77,59 @@ The second needs the ground truth corrected before it can be trusted: the agent 
 announces DWM extended frame bounds (the visible window), which is 7px inset from
 `GetWindowRect` on three sides. The invariant must compare against extended frame bounds, and
 only a deviation from THAT is a defect.
+
+
+---
+
+# Defects the new protocol found and drove to a fix
+
+## 1. Damage delivered to occluded windows — FIXED
+
+The dirty rect is in screen coordinates, so it intersects every window it overlaps, including
+ones underneath. Every menu hover repaint went out twice — once to the menu, once to the
+window beneath at the same screen position, 10 times in one short scenario. The daemon painted
+the menu's pixels into the lower window's pixmap.
+
+This is the mechanism behind corrupted menu items on hover AND debris when one window is
+dragged across another. I had previously documented the latter as "pre-existing, architectural,
+needs a protocol change". That was wrong: the agent has the z-order and can clip.
+
+Fixed by processing windows topmost-first against an accumulating covered region, sending only
+the still-visible part, as separate rectangles where the visible part is disjoint.
+
+## 2. Wobble — MEASURED, then reduced
+
+The first honest measurement of it. `QGAPROTO` records, at the instant damage goes out, both
+the origin it was registered against (`ax/ay`) and where the window actually is (`lx/ly`).
+No cross-VM capture skew, unlike every earlier attempt.
+
+Scripted circular drag, same motion both runs:
+
+| | stale origin | dx p95 | dx max | dy max |
+|---|---|---|---|---|
+| before | **52%** of messages | 22 px | 38 px | 20 px |
+| after | **4%** | **0 px** | 21 px | 11 px |
+
+Cause: dom0 copies out of the LIVE framebuffer when it processes the message, so the content
+it reads is at the window's current position — but damage was registered against the position
+`TrackWindows()` saw earlier in the same frame. Fixed by re-reading the position immediately
+before registering damage and announcing it first, so the origin still matches the last
+`MSG_CONFIGURE`.
+
+Cost: drag p50 844us -> 1294us, still far under the 5ms bar.
+
+Note this contradicts the previous `WOBBLE-STATUS.md` conclusion that wobble was purely
+architectural and unfixable in the agent. The architectural component is real — dom0's
+geometry can never be perfectly current — but most of the observed magnitude was an avoidable
+in-agent staleness, and that part is now gone.
+
+## 3. An invariant that was itself wrong
+
+`geometry-matches-guest` compared the announced size against `GetWindowRect` and flagged
+correct behaviour as a defect. Under DWM a window's `GetWindowRect` includes invisible resize
+grips (7px on three sides), so the visible window — what dom0's border must hug — is the DWM
+**extended frame bounds**, which is exactly what the agent announces. Corrected to compare
+against extended frame bounds, which the guest snapshot now reports.
+
+I came close to "fixing" the agent to match a broken invariant. The check that stopped it was
+comparing the announced rect against BOTH candidate ground truths before concluding.
