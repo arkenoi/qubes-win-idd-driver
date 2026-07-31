@@ -109,7 +109,8 @@ static void pump(DWORD ms)
 /* capture A via PrintWindow into a 32bpp DIB pre-filled with sentinel 0xAA;
  * returns %pixels whose BGR bytes equal the expected pattern, plus sentinel count. */
 static double capture_and_compare(HWND hwnd, UINT flags, const char *tag,
-                                  const char *dir, int *untouched_out, BOOL *pw_ok_out)
+                                  const char *dir, int *untouched_out, BOOL *pw_ok_out,
+                                  double *pw_us_out)
 {
     BITMAPINFO bi;
     ZeroMemory(&bi, sizeof(bi));
@@ -126,8 +127,14 @@ static double capture_and_compare(HWND hwnd, UINT flags, const char *tag,
     HGDIOBJ old = SelectObject(memdc, bmp);
     memset(bits, 0xAA, (size_t)AW * AH * 4);
 
+    LARGE_INTEGER qf, q0, q1;
+    QueryPerformanceFrequency(&qf);
+    QueryPerformanceCounter(&q0);
     BOOL ok = PrintWindow(hwnd, memdc, flags);
     GdiFlush();
+    QueryPerformanceCounter(&q1);
+    if (pw_us_out)
+        *pw_us_out = 1e6 * (q1.QuadPart - q0.QuadPart) / qf.QuadPart;
     *pw_ok_out = ok;
 
     DWORD *px = (DWORD *)bits;
@@ -140,10 +147,13 @@ static double capture_and_compare(HWND hwnd, UINT flags, const char *tag,
     }
     *untouched_out = untouched;
 
-    /* dump BMP for eyeball verification */
+    /* dump BMP for eyeball verification (skipped in bench mode: tag == NULL) */
     char path[MAX_PATH];
-    _snprintf(path, sizeof(path), "%s\\pw_%s.bmp", dir, tag);
-    FILE *f = fopen(path, "wb");
+    FILE *f = NULL;
+    if (tag) {
+        _snprintf(path, sizeof(path), "%s\\pw_%s.bmp", dir, tag);
+        f = fopen(path, "wb");
+    }
     if (f) {
         BITMAPFILEHEADER fh;
         ZeroMemory(&fh, sizeof(fh));
@@ -196,102 +206,44 @@ static LONG WINAPI CrashDump(EXCEPTION_POINTERS *ep)
  * fallback path per frame (WGC allows only ~10 concurrent sessions). */
 static int RunBench(HINSTANCE hi, int iters, const char *dir)
 {
-    g_progress = "bench:create-A";
+    g_progress = "bench:create";
     g_hA = CreateWindowExW(0, L"pwprobeA", L"pwprobe-A", WS_POPUP | WS_VISIBLE,
                            AX, AY, AW, AH, NULL, NULL, hi, NULL);
     UpdateWindow(g_hA);
     pump(800);
-    g_progress = "bench:create-B";
     g_hB = CreateWindowExW(0, L"pwprobeB", L"pwprobe-B", WS_POPUP | WS_VISIBLE,
                            BX, BY, BW, BH, NULL, NULL, hi, NULL);
     UpdateWindow(g_hB);
     pump(800);
-    g_progress = "bench:dib";
 
-    BITMAPINFO bi;
-    ZeroMemory(&bi, sizeof(bi));
-    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
-    bi.bmiHeader.biWidth = AW;
-    bi.bmiHeader.biHeight = -AH;
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-    VOID *bits = NULL;
-    HDC memdc = CreateCompatibleDC(NULL);
-    HBITMAP bmp = CreateDIBSection(NULL, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
-    HGDIOBJ old = SelectObject(memdc, bmp);
+    POINT ptc = { AX + AW / 2, AY + AH / 2 };
+    BOOL occluded = GetAncestor(WindowFromPoint(ptc), GA_ROOT) == g_hB;
 
-    double *lat = (double *)malloc(sizeof(double) * (size_t)iters);
+    static double lat[10000];
+    if (iters > 10000) iters = 10000;
     int mismatches = 0, fails = 0;
-    LARGE_INTEGER f, t0, t1;
-    QueryPerformanceFrequency(&f);
-
-    /* preflight: written BEFORE the loop so a crash still leaves the inputs on disk */
-    {
-        char ppath[MAX_PATH], pre[256];
-        _snprintf(ppath, sizeof(ppath), "%s\\pwprobe-preflight.txt", dir);
-        FILE *pf = fopen(ppath, "wb");
-        if (pf) {
-            int n = _snprintf(pre, sizeof(pre),
-                "PREFLIGHT iters=%d lat=%p bits=%p memdc=%p bmp=%p hA=%p hB=%p "
-                "qpf=%lld\r\n",
-                iters, (void *)lat, bits, (void *)memdc, (void *)bmp,
-                (void *)g_hA, (void *)g_hB, (long long)f.QuadPart);
-            fwrite(pre, 1, n, pf);
-            fclose(pf);
-        }
-    }
-    if (!lat || !bits || !memdc || !bmp || !g_hA || !g_hB) {
-        char rpath2[MAX_PATH], er[128];
-        _snprintf(rpath2, sizeof(rpath2), "%s\\pwprobe-result.txt", dir);
-        FILE *rf = fopen(rpath2, "wb");
-        if (rf) {
-            int n = _snprintf(er, sizeof(er),
-                "PWPROBE-BENCH-ERROR null-resource (see preflight)\r\n");
-            fwrite(er, 1, n, rf);
-            fclose(rf);
-        }
-        return 2;
-    }
     g_progress = "bench:loop";
-    static char mark[64];
     for (int i = 0; i < iters; i++) {
-        _snprintf(mark, sizeof(mark), "loop:pw i=%d lat=%p bits=%p", i, (void *)lat,
-                  bits);
-        g_progress = mark;
-        QueryPerformanceCounter(&t0);
-        BOOL ok = PrintWindow(g_hA, memdc, PW_RENDERFULLCONTENT);
-        GdiFlush();
-        QueryPerformanceCounter(&t1);
-        _snprintf(mark, sizeof(mark), "loop:store i=%d", i);
-        lat[i] = 1e6 * (t1.QuadPart - t0.QuadPart) / f.QuadPart;
-        if (!ok) fails++;
-        _snprintf(mark, sizeof(mark), "loop:cmp i=%d", i);
-        DWORD *px = (DWORD *)bits;
-        int match = 0;
-        for (int p = 0; p < AW * AH; p++)
-            if ((px[p] & 0x00FFFFFF) == (g_patA[p] & 0x00FFFFFF))
-                match++;
-        if (100.0 * match / (AW * AH) < 99.0) mismatches++;
-        _snprintf(mark, sizeof(mark), "loop:pump i=%d", i);
-        pump(1); /* let the system breathe like a real agent loop would */
+        int unt; BOOL pwok; double us = 0;
+        double pct = capture_and_compare(g_hA, PW_RENDERFULLCONTENT, NULL, dir,
+                                         &unt, &pwok, &us);
+        lat[i] = us;
+        if (!pwok) fails++;
+        if (pct < 99.0) mismatches++;
+        pump(1);
     }
     g_progress = "bench:report";
     qsort(lat, iters, sizeof(double), cmp_dbl);
-    double p50 = lat[iters / 2], p95 = lat[(int)(iters * 0.95)];
 
     char report[512], rpath[MAX_PATH];
     int len = _snprintf(report, sizeof(report),
         "PWPROBE-BENCH: iters=%d size=%dx%d p50=%.0fus p95=%.0fus min=%.0fus "
-        "max=%.0fus pw_fails=%d content_mismatches=%d occluded=YES\r\n",
-        iters, AW, AH, p50, p95, lat[0], lat[iters - 1], fails, mismatches);
+        "max=%.0fus pw_fails=%d content_mismatches=%d occluded=%s\r\n",
+        iters, AW, AH, lat[iters / 2], lat[(int)(iters * 0.95)], lat[0],
+        lat[iters - 1], fails, mismatches, occluded ? "YES" : "NO");
     _snprintf(rpath, sizeof(rpath), "%s\\pwprobe-result.txt", dir);
     FILE *fp = fopen(rpath, "wb");
     if (fp) { fwrite(report, 1, len, fp); fclose(fp); }
-    free(lat);
-    SelectObject(memdc, old);
-    DeleteObject(bmp);
-    DeleteDC(memdc);
     DestroyWindow(g_hB);
     DestroyWindow(g_hA);
     return (fails == 0 && mismatches == 0) ? 0 : 1;
@@ -344,7 +296,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cmd, int show)
     int unt; BOOL pwok;
 
     /* arm 1: baseline, visible, flags=0 */
-    double base = capture_and_compare(g_hA, 0, "baseline", dir, &unt, &pwok);
+    double base = capture_and_compare(g_hA, 0, "baseline", dir, &unt, &pwok, NULL);
     len += _snprintf(report + len, sizeof(report) - len,
         "baseline: pct=%.1f untouched=%d pw_ok=%d\r\n", base, unt, pwok);
 
@@ -364,13 +316,13 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE hp, PWSTR cmd, int show)
         occluded ? "YES" : "NO", (void *)at, (void *)g_hA, (void *)g_hB);
 
     /* arm 2: occluded + PW_RENDERFULLCONTENT */
-    double full = capture_and_compare(g_hA, PW_RENDERFULLCONTENT, "full", dir, &unt, &pwok);
+    double full = capture_and_compare(g_hA, PW_RENDERFULLCONTENT, "full", dir, &unt, &pwok, NULL);
     len += _snprintf(report + len, sizeof(report) - len,
         "full: pct=%.1f untouched=%d pw_ok=%d\r\n", full, unt, pwok);
 
     /* arm 3: occluded + flags=0 (candidate negative control; on DWM systems this may
      * still MATCH because every top-level window keeps a redirection surface) */
-    double plain = capture_and_compare(g_hA, 0, "plain", dir, &unt, &pwok);
+    double plain = capture_and_compare(g_hA, 0, "plain", dir, &unt, &pwok, NULL);
     len += _snprintf(report + len, sizeof(report) - len,
         "plain: pct=%.1f untouched=%d pw_ok=%d\r\n", plain, unt, pwok);
 
