@@ -14,3 +14,49 @@ Session start state:
   scaling (Q3), grantprobe (Q2), then design writeup for user review.
 
 Findings appended below as steps complete.
+
+### Step 1 / Q1 — VERDICT A: per-window framebuffers are ALREADY the protocol's mainline path
+
+Read read-only clones under `upstream/ro/` (no upstream contact), pinned at:
+- qubes-gui-daemon `f66fb34c90d3400772df7e11dfea47331c08407f`
+- qubes-gui-common `66b879e36d6cd2a01271fc8d4c2c0f3be85d0029`
+- qubes-gui-agent-linux `bc845212eb427db6bd5c41bb5c100ef1221f1ff1`
+
+Evidence chain:
+1. **Dispatch is per-window.** `xside.c` `handle_message` resolves `untrusted_hdr.window`
+   via `remote2local` and passes the resolved `vm_window` to `handle_window_dump`
+   (xside.c:4025-4028). Nothing special-cases window 0 on this path.
+2. **The dump attaches to THAT window.** `handle_window_dump` stores
+   `image_width/image_height` on `vm_window` and `qubes_xcb_send_xen_fd(g, vm_window, ...)`
+   sets `vm_window->shmseg` (xside.c:3869-3916, 3634).
+3. **Composition has a native dual path.** `do_shm_update` (xside.c:2277-2292): if
+   `vm_window->shmseg != QUBES_NO_SHM_SEGMENT`, damage coords are WINDOW-RELATIVE against
+   the window's own image; `else if (g->screen_window)` it slices the screen image offset
+   by `vm_window->x/y` (xside.c:2455-2462) — today's Windows-agent model, as the fallback.
+4. **`screen_window` is just window id 0.** `FULLSCREEN_WINDOW_ID 0` (xside.h:69); a window
+   becomes `g->screen_window` only by being created with remote id 0 (xside.c:455-457).
+5. **The Linux agent uses the per-window path today.** vmside.c: every window map sets
+   `window_dump_pending = True` (vmside.c:610); the next damage notification calls
+   `send_pixmap_grant_refs(g, window)` → `MSG_WINDOW_DUMP` with `hdr.window = <that
+   window>` (vmside.c:379-381, 691-695), followed by window-relative `MSG_SHMIMAGE`.
+
+Consequences:
+- Per-window capture on Windows needs **no protocol change and no daemon change**. It
+  converges the Windows agent with what the Linux agent already does.
+- **Q5 largely answered structurally:** mixed mode is native and per-window — any subset of
+  windows can carry their own buffer (shmseg set) while the rest fall back to screen-slicing.
+  Incremental migration is the daemon's existing behavior, not a feature to build.
+- **Q6 reframed:** placement ownership does NOT need to move for the artifact class to die.
+  With per-window buffers, content is occlusion- and position-independent; dom0 keeps
+  mirroring guest geometry exactly as today (`MSG_CONFIGURE` both directions already exists).
+  Host-owned placement becomes an optional later optimization (Phase 3 discussion), not a
+  prerequisite.
+- Protocol bound relevant to Q2: `MAX_GRANT_REFS_COUNT = NUM_PAGES(16384*6144*4)` ≈ 98k
+  pages per dump (qubes-gui-protocol.h:102-121) — the protocol does not constrain realistic
+  window sizes; the practical grant budget (Step 4) is the real question.
+- `MSG_WINDOW_DUMP_ACK` exists from protocol 0x00010007 (qubes-gui-protocol.h:83-84):
+  the daemon acks dump processing so the agent knows when the old buffer is safe to release
+  — exactly the resize/re-grant handshake per-window capture needs.
+- Caveat: read at gui-daemon master; the user's dom0 runs the R4.3 daemon. Verify the same
+  paths in the R4.3 branch before the design writeup goes out (expected identical — the
+  dual path predates 4.3).
