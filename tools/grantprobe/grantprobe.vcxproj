@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  grantprobe - standalone x64 console EXE, same construction as ddaprobe.vcxproj:
+    * PlatformToolset v143 (plain VS2022), no WDK dependency.
+    * RuntimeLibrary MultiThreaded (/MT): no VC++ redist dependency in the guest.
+    * Plain C source (grantprobe.c), compiled as C by extension.
+
+  Unlike ddaprobe it links xencontrol (xeniface's user-mode DLL, present in the
+  guest via the Xen PV drivers / QWT). The header and import lib are NOT in the
+  Windows SDK; they come from the CI job's existing steps:
+    * headers:  deps-src/pvdrivers/xeniface/include  (xencontrol.h, xeniface_ioctls.h
+                - cloned by the "fetch deps" step, see .github/workflows/build.yml:200-207)
+    * lib:      deps-src/pvdrivers/xeniface/vs2022/x64/Windows10$(Configuration)/xencontrol.lib
+                (synthesized import lib, "Synthesize xencontrol import library" step,
+                build.yml:209-227 - same lib the agent build links)
+  Both are consumed here ONLY through msbuild properties so this project stays
+  path-agnostic; the CI step passes them explicitly:
+
+    msbuild tools\grantprobe\grantprobe.vcxproj /p:Configuration=Release /p:Platform=x64 `
+      /p:XenIncludes="$ws\deps-src\pvdrivers\xeniface\include" `
+      /p:XenLibs="$ws\deps-src\pvdrivers\xeniface\vs2022\x64\Windows10Release"
+
+  The EnsureXenPaths target below fails the build with a clear message if either
+  property is missing, instead of a confusing "cannot open xencontrol.h".
+  Output pinned to tools\grantprobe\x64\Release\grantprobe.exe by OutDir, so the
+  workflow's "Collect package" step can copy it from a known path.
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{7B7BB8D0-64B9-4D34-9E77-2C8E5A1FBB01}</ProjectGuid>
+    <RootNamespace>grantprobe</RootNamespace>
+    <ProjectName>grantprobe</ProjectName>
+    <!-- "10.0" = whichever Windows 10 SDK the runner has installed. -->
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>false</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+
+  <!-- Deterministic, solution-independent output locations. -->
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)$(Platform)\$(Configuration)\obj\</IntDir>
+    <TargetName>grantprobe</TargetName>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(XenIncludes);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(XenLibs);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>xencontrol.lib;kernel32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <AdditionalIncludeDirectories>$(XenIncludes);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(XenLibs);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>xencontrol.lib;kernel32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="grantprobe.c" />
+  </ItemGroup>
+
+  <!-- Fail early and legibly when the xencontrol plumbing was not passed in. -->
+  <Target Name="EnsureXenPaths" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(XenIncludes)' == ''"
+           Text="grantprobe: pass /p:XenIncludes=&lt;dir containing xencontrol.h + xeniface_ioctls.h&gt; (CI: deps-src\pvdrivers\xeniface\include)" />
+    <Error Condition="'$(XenLibs)' == ''"
+           Text="grantprobe: pass /p:XenLibs=&lt;dir containing xencontrol.lib&gt; (CI: deps-src\pvdrivers\xeniface\vs2022\x64\Windows10$(Configuration))" />
+    <Error Condition="'$(XenIncludes)' != '' AND !Exists('$(XenIncludes)\xencontrol.h')"
+           Text="grantprobe: '$(XenIncludes)\xencontrol.h' not found - wrong XenIncludes?" />
+    <Error Condition="'$(XenLibs)' != '' AND !Exists('$(XenLibs)\xencontrol.lib')"
+           Text="grantprobe: '$(XenLibs)\xencontrol.lib' not found - run the 'Synthesize xencontrol import library' step first" />
+  </Target>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

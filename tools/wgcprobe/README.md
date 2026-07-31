@@ -5,12 +5,18 @@ IsCursorCaptureEnabled), then captures a fully occluded static pattern window vi
 byte-compares the delivered frame against the exact pattern. Verdict line
 `WGCPROBE-CHECK: occluded-content=MATCH|MISMATCH`; occlusion asserted via WindowFromPoint.
 
-`wgcprobe bench <K> <frames> [w h]` — K animated (16 ms invalidate) pattern windows, all
-captured concurrently; per-frame staging-copy+Map cost (p50/p95 µs), aggregate fps, process
-CPU seconds. Run K = 1, 4, 10, 30 interleaved with a ddaprobe DDA control on the same guest.
+`wgcprobe bench <K> <seconds> [w h [tile]]` — K animated pattern windows on a DEDICATED
+scene thread (capture polling cannot be starved by painting), all captured concurrently for
+a fixed duration; per-frame staging-copy+Map+**full readback** cost (p50/p95 µs — the honest
+price of feeding the grant transport), per-window and aggregate fps, probe CPU AND
+system-wide busy seconds (WGC's work happens in dwm.exe, invisible to GetProcessTimes).
+`tile` bounds per-tick damage (default 128; 0 = invalidate the whole window each tick), so
+K-scaling can be measured at constant damage and damage-scaling at constant K.
+Run K = 1, 4, 10, 30 interleaved with a ddaprobe DDA control on the same guest.
 
-`wgcprobe benchstatic <K> <seconds> [w h]` — same scene, windows NOT animated: separates
-scales-with-count from scales-with-damage.
+`wgcprobe benchstatic <K> <seconds> [w h [tile]]` — same scene, windows NOT animated:
+separates scales-with-count from scales-with-damage. Runs the full duration regardless of
+how many frames arrive.
 
 Output ends with `=== WGCPROBE JSON ===` + one single-line JSON, ddaprobe-style.
 

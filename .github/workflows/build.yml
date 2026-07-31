@@ -226,6 +226,21 @@ jobs:
           & "${{ steps.vs.outputs.lib }}" /nologo /machine:x64 /def:"$out\xencontrol.def" /out:"$out\xencontrol.lib"
           if ($LASTEXITCODE -ne 0) { throw "lib.exe failed building xencontrol.lib" }
 
+      - name: Build grantprobe
+        shell: pwsh
+        run: |
+          # tools/grantprobe: guest-side grant ceiling/latency probe (per-window-capture
+          # Q2). Lives in THIS job because it links the xencontrol import library
+          # synthesized in the previous step.
+          $ErrorActionPreference = 'Stop'
+          $ws = "${{ github.workspace }}"
+          & "${{ steps.vs.outputs.msbuild }}" tools\grantprobe\grantprobe.vcxproj `
+              -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
+              "-p:XenIncludes=$ws\deps-src\pvdrivers\xeniface\include" `
+              "-p:XenLibs=$ws\deps-src\pvdrivers\xeniface\vs2022\x64\Windows10$env:CONFIG"
+          if ($LASTEXITCODE -ne 0) { throw "grantprobe msbuild failed" }
+          Get-ChildItem tools\grantprobe\x64\Release\grantprobe.exe
+
       - name: Build Qubes user-mode dependencies
         shell: pwsh
         run: |
@@ -341,6 +356,9 @@ jobs:
             if (Test-Path "$out\$p\$p.exe") { Copy-Item "$out\$p\$p.exe" package-agent\ -Force }
             if (Test-Path "$out\$p\$p.pdb") { Copy-Item "$out\$p\$p.pdb" package-agent\ -Force }
           }
+          if (Test-Path tools\grantprobe\x64\Release\grantprobe.exe) {
+            Copy-Item tools\grantprobe\x64\Release\grantprobe.exe package-agent\ -Force
+          } else { Write-Warning 'grantprobe.exe missing from package-agent' }
           Get-ChildItem package-agent
 
       - uses: actions/upload-artifact@v4

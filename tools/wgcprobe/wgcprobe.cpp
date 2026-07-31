@@ -75,35 +75,52 @@ struct PatWin {
     HWND hwnd = nullptr;
     int w = DEF_W, h = DEF_H;
     bool animate = false;
+    int tile = 0;   // 0 = invalidate whole window per tick; else a tile x tile region
 };
 
 static LRESULT CALLBACK PatProc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     PatWin *pw = (PatWin *)GetWindowLongPtrW(h, GWLP_USERDATA);
     switch (m) {
-    case WM_TIMER:
-        g_phase.fetch_add(1);
-        InvalidateRect(h, nullptr, FALSE);
+    case WM_TIMER: {
+        int ph = g_phase.fetch_add(1);
+        if (pw && pw->tile > 0) {
+            // bounded damage: walk a tile across the window so per-tick damage is
+            // constant regardless of window size (Q3: count vs damaged area)
+            int tx = (ph * pw->tile) % (pw->w > pw->tile ? pw->w - pw->tile : 1);
+            int ty = (ph * 37) % (pw->h > pw->tile ? pw->h - pw->tile : 1);
+            RECT r{ tx, ty, tx + pw->tile, ty + pw->tile };
+            InvalidateRect(h, &r, FALSE);
+        } else {
+            InvalidateRect(h, nullptr, FALSE);
+        }
         return 0;
+    }
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(h, &ps);
         if (pw) {
-            static thread_local std::vector<DWORD> buf;
-            buf.resize((size_t)pw->w * pw->h);
-            int phase = pw->animate ? g_phase.load() : 0;
-            for (int y = 0; y < pw->h; y++)
-                for (int x = 0; x < pw->w; x++)
-                    buf[(size_t)y * pw->w + x] = PatternPixel(x, y, phase);
-            BITMAPINFO bi{};
-            bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
-            bi.bmiHeader.biWidth = pw->w;
-            bi.bmiHeader.biHeight = -pw->h;
-            bi.bmiHeader.biPlanes = 1;
-            bi.bmiHeader.biBitCount = 32;
-            bi.bmiHeader.biCompression = BI_RGB;
-            SetDIBitsToDevice(dc, 0, 0, pw->w, pw->h, 0, 0, 0, pw->h,
-                              buf.data(), &bi, DIB_RGB_COLORS);
+            // paint ONLY the invalid rect: scene cost tracks damage, not window size
+            int x0 = ps.rcPaint.left, y0 = ps.rcPaint.top;
+            int pw_ = ps.rcPaint.right - x0, ph_ = ps.rcPaint.bottom - y0;
+            if (pw_ > 0 && ph_ > 0) {
+                static thread_local std::vector<DWORD> buf;
+                buf.resize((size_t)pw_ * ph_);
+                int phase = pw->animate ? g_phase.load() : 0;
+                for (int y = 0; y < ph_; y++)
+                    for (int x = 0; x < pw_; x++)
+                        buf[(size_t)y * pw_ + x] =
+                            PatternPixel(x0 + x, y0 + y, phase);
+                BITMAPINFO bi{};
+                bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+                bi.bmiHeader.biWidth = pw_;
+                bi.bmiHeader.biHeight = -ph_;
+                bi.bmiHeader.biPlanes = 1;
+                bi.bmiHeader.biBitCount = 32;
+                bi.bmiHeader.biCompression = BI_RGB;
+                SetDIBitsToDevice(dc, x0, y0, pw_, ph_, 0, 0, 0, ph_,
+                                  buf.data(), &bi, DIB_RGB_COLORS);
+            }
         }
         EndPaint(h, &ps);
         return 0;
@@ -133,6 +150,37 @@ static HWND MakePatWin(PatWin *pw, int x, int y, const wchar_t *title)
     UpdateWindow(h);
     pw->hwnd = h;
     return h;
+}
+
+// Scene thread: creates the K windows on its OWN thread and pumps them there, so
+// scene generation cannot starve the capture-polling loop (review blocker fix).
+struct SceneThread {
+    std::vector<PatWin> *wins;
+    HANDLE ready = nullptr;
+    HANDLE thread = nullptr;
+    std::atomic<bool> quit{false};
+};
+
+static DWORD WINAPI ScenePump(LPVOID p)
+{
+    SceneThread *st = (SceneThread *)p;
+    int i = 0;
+    for (auto &pw : *st->wins) {
+        MakePatWin(&pw, 40 + (i % 8) * 90, 40 + (i / 8) * 90, L"wgcprobe-bench");
+        i++;
+    }
+    SetEvent(st->ready);
+    MSG msg;
+    while (!st->quit.load()) {
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, 5, QS_ALLINPUT);
+    }
+    for (auto &pw : *st->wins)
+        if (pw.hwnd) DestroyWindow(pw.hwnd);
+    return 0;
 }
 
 static void PumpFor(DWORD ms)
@@ -200,9 +248,11 @@ struct Chan {
     GraphicsCaptureSession session{nullptr};
     com_ptr<ID3D11Texture2D> staging;
     int w, h;
-    std::vector<double> mapUs;   // per-frame copy+map cost
+    std::vector<double> mapUs;   // per-frame copy+map+readback cost
     std::vector<double> arriveMs; // inter-arrival times
     LARGE_INTEGER lastArrive{};
+    std::vector<DWORD> scratch;  // bench-mode readback target
+    int sizeMismatch = 0;        // frames whose ContentSize != pool size
 };
 
 static void OpenChan(D3D &d, Chan &c, HWND hwnd, int w, int h)
@@ -226,7 +276,9 @@ static void OpenChan(D3D &d, Chan &c, HWND hwnd, int w, int h)
     c.session.StartCapture();
 }
 
-// poll one frame; returns true if got one. Measures copy+map on success.
+// poll one frame; returns true if got one. Measures the FULL per-frame CPU price:
+// CopyResource + Map + full-frame readback into system memory — that readback is what
+// feeding the grant-based transport actually costs, so it is never skipped (review fix).
 static bool PollFrame(D3D &d, Chan &c, std::vector<DWORD> *pixelsOut)
 {
     auto frame = c.pool.TryGetNextFrame();
@@ -239,23 +291,22 @@ static bool PollFrame(D3D &d, Chan &c, std::vector<DWORD> *pixelsOut)
         c.arriveMs.push_back(1000.0 * (t0.QuadPart - c.lastArrive.QuadPart) / f.QuadPart);
     c.lastArrive = t0;
 
+    // ContentSize vs pool-buffer mismatch turns the byte-compare into garbage; count it
+    // instead of silently mis-judging (review fix)
+    auto cs = frame.ContentSize();
+    if (cs.Width != c.w || cs.Height != c.h)
+        c.sizeMismatch++;
+
     auto tex = TexFromSurface(frame.Surface());
     d.ctx->CopyResource(c.staging.get(), tex.get());
     D3D11_MAPPED_SUBRESOURCE map{};
     check_hresult(d.ctx->Map(c.staging.get(), 0, D3D11_MAP_READ, 0, &map));
-    if (pixelsOut) {
-        pixelsOut->resize((size_t)c.w * c.h);
-        for (int y = 0; y < c.h; y++)
-            memcpy(pixelsOut->data() + (size_t)y * c.w,
-                   (BYTE *)map.pData + (size_t)y * map.RowPitch,
-                   (size_t)c.w * 4);
-    } else {
-        // touch one line per 64 rows so the map isn't optimized away
-        volatile DWORD sink = 0;
-        for (int y = 0; y < c.h; y += 64)
-            sink += *(DWORD *)((BYTE *)map.pData + (size_t)y * map.RowPitch);
-        (void)sink;
-    }
+    std::vector<DWORD> *dst = pixelsOut ? pixelsOut : &c.scratch;
+    dst->resize((size_t)c.w * c.h);
+    for (int y = 0; y < c.h; y++)
+        memcpy(dst->data() + (size_t)y * c.w,
+               (BYTE *)map.pData + (size_t)y * map.RowPitch,
+               (size_t)c.w * 4);
     d.ctx->Unmap(c.staging.get(), 0);
     QueryPerformanceCounter(&t1);
     c.mapUs.push_back(1e6 * (t1.QuadPart - t0.QuadPart) / f.QuadPart);
@@ -336,8 +387,11 @@ static int ModeCheck()
                     match++;
         pct = 100.0 * match / total;
     }
-    printf("occluded=%s first-frame=%d content-pct=%.1f\n",
-           occluded ? "YES" : "NO", got, pct);
+    printf("occluded=%s first-frame=%d content-pct=%.1f size-mismatch=%d\n",
+           occluded ? "YES" : "NO", got, pct, c.sizeMismatch);
+    if (c.sizeMismatch)
+        printf("WARNING: ContentSize != pool size on %d frame(s) — a MISMATCH verdict "
+               "below is diagnostic of geometry, not of wrong pixels\n", c.sizeMismatch);
     const char *verdict = (got && pct >= 99.0) ? "MATCH" : "MISMATCH";
     printf("WGCPROBE-CHECK: occluded-content=%s\n", verdict);
     printf("=== WGCPROBE JSON ===\n");
@@ -351,60 +405,92 @@ static int ModeCheck()
     return (got && occluded) ? 0 : 1;
 }
 
-static int ModeBench(int K, int framesPer, int w, int h, bool animate)
+// system-wide busy seconds (captures work done in dwm.exe etc., which
+// GetProcessTimes on this process never sees — review fix; probe-only CPU is
+// still reported separately so both are visible)
+static double SysBusySeconds()
+{
+    FILETIME idle, kern, user;
+    if (!GetSystemTimes(&idle, &kern, &user))
+        return -1;
+    auto f = [](FILETIME t) {
+        return ((((ULONGLONG)t.dwHighDateTime) << 32) | t.dwLowDateTime) / 1e7;
+    };
+    // kernel time includes idle; busy = kernel - idle + user
+    return f(kern) - f(idle) + f(user);
+}
+
+// bench: durationSec is ALWAYS a duration; animate only controls the scene.
+// (review fix: previously <seconds> doubled as a per-window frame cap)
+static int ModeBench(int K, int durationSec, int w, int h, bool animate, int tile)
 {
     D3D d;
     if (!MakeD3D(d)) { printf("d3d11-device=FAIL\n"); return 1; }
     std::vector<PatWin> wins(K);
-    std::vector<Chan> chans(K);
     for (int i = 0; i < K; i++) {
         wins[i].w = w; wins[i].h = h; wins[i].animate = animate;
-        MakePatWin(&wins[i], 40 + (i % 8) * 90, 40 + (i / 8) * 90,
-                   L"wgcprobe-bench");
+        wins[i].tile = tile;
     }
-    PumpFor(1000);
+    SceneThread st;
+    st.wins = &wins;
+    st.ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    st.thread = CreateThread(nullptr, 0, ScenePump, &st, 0, nullptr);
+    WaitForSingleObject(st.ready, 10000);
+    Sleep(1000); // let DWM compose the scene before measuring
+
+    std::vector<Chan> chans(K);
     for (int i = 0; i < K; i++)
         OpenChan(d, chans[i], wins[i].hwnd, w, h);
 
-    double cpu0 = CpuSeconds();
+    double cpu0 = CpuSeconds(), sys0 = SysBusySeconds();
     LARGE_INTEGER f, t0, t1;
     QueryPerformanceFrequency(&f);
     QueryPerformanceCounter(&t0);
-    DWORD deadline = GetTickCount() + (animate ? 60000 : framesPer * 1000);
+    DWORD deadline = GetTickCount() + (DWORD)durationSec * 1000;
     for (;;) {
-        bool allDone = true;
-        for (int i = 0; i < K; i++) {
-            if ((int)chans[i].mapUs.size() < framesPer) {
-                allDone = false;
-                PollFrame(d, chans[i], nullptr);
-            }
-        }
-        PumpFor(2); // keep animation timers firing
-        if (allDone || GetTickCount() > deadline)
+        bool any = false;
+        for (int i = 0; i < K; i++)
+            any = PollFrame(d, chans[i], nullptr) || any;
+        if (!any)
+            Sleep(1); // no frame pending anywhere; don't burn the core
+        if ((LONG)(GetTickCount() - deadline) >= 0)
             break;
     }
     QueryPerformanceCounter(&t1);
     double wall = (double)(t1.QuadPart - t0.QuadPart) / f.QuadPart;
     double cpu = CpuSeconds() - cpu0;
+    double sys = (sys0 >= 0) ? SysBusySeconds() - sys0 : -1;
 
     std::vector<double> allMap;
     size_t totFrames = 0;
+    int mism = 0;
+    double fpsMin = 1e9, fpsMax = 0;
     for (auto &c : chans) {
         totFrames += c.mapUs.size();
+        mism += c.sizeMismatch;
+        double fps = c.mapUs.size() / wall;
+        fpsMin = std::min(fpsMin, fps);
+        fpsMax = std::max(fpsMax, fps);
         allMap.insert(allMap.end(), c.mapUs.begin(), c.mapUs.end());
     }
-    printf("K=%d size=%dx%d animate=%d frames=%zu wall=%.2fs cpu=%.2fs "
-           "fps-agg=%.1f map-p50=%.0fus map-p95=%.0fus\n",
-           K, w, h, animate, totFrames, wall, cpu, totFrames / wall,
-           Pct(allMap, 50), Pct(allMap, 95));
+    printf("K=%d size=%dx%d animate=%d tile=%d frames=%zu wall=%.2fs "
+           "procCpu=%.2fs sysBusy=%.2fs fps-agg=%.1f fps-min=%.1f fps-max=%.1f "
+           "map-p50=%.0fus map-p95=%.0fus size-mismatch=%d\n",
+           K, w, h, animate, tile, totFrames, wall, cpu, sys, totFrames / wall,
+           fpsMin, fpsMax, Pct(allMap, 50), Pct(allMap, 95), mism);
     printf("=== WGCPROBE JSON ===\n");
-    printf("{\"mode\":\"%s\",\"k\":%d,\"w\":%d,\"h\":%d,\"frames\":%zu,"
-           "\"wallSec\":%.3f,\"cpuSec\":%.3f,\"fpsAgg\":%.1f,"
-           "\"mapP50us\":%.0f,\"mapP95us\":%.0f}\n",
-           animate ? "bench" : "benchstatic", K, w, h, totFrames, wall, cpu,
-           totFrames / wall, Pct(allMap, 50), Pct(allMap, 95));
+    printf("{\"mode\":\"%s\",\"k\":%d,\"w\":%d,\"h\":%d,\"tile\":%d,\"frames\":%zu,"
+           "\"wallSec\":%.3f,\"procCpuSec\":%.3f,\"sysBusySec\":%.3f,\"fpsAgg\":%.1f,"
+           "\"fpsMin\":%.1f,\"fpsMax\":%.1f,\"mapP50us\":%.0f,\"mapP95us\":%.0f,"
+           "\"sizeMismatch\":%d}\n",
+           animate ? "bench" : "benchstatic", K, w, h, tile, totFrames, wall, cpu,
+           sys, totFrames / wall, fpsMin, fpsMax, Pct(allMap, 50), Pct(allMap, 95),
+           mism);
     for (auto &c : chans) { c.session.Close(); c.pool.Close(); }
-    for (auto &pw : wins) DestroyWindow(pw.hwnd);
+    st.quit.store(true);
+    WaitForSingleObject(st.thread, 5000);
+    CloseHandle(st.thread);
+    CloseHandle(st.ready);
     return 0;
 }
 
@@ -425,12 +511,15 @@ int main(int argc, char **argv)
         return ModeCheck();
     if (argc >= 4 && (strcmp(argv[1], "bench") == 0 ||
                       strcmp(argv[1], "benchstatic") == 0)) {
-        int K = atoi(argv[2]), n = atoi(argv[3]);
+        int K = atoi(argv[2]), secs = atoi(argv[3]);
         int w = (argc >= 6) ? atoi(argv[4]) : DEF_W;
         int h = (argc >= 6) ? atoi(argv[5]) : DEF_H;
-        if (K < 1 || K > 64 || n < 1) { printf("bad args\n"); return 2; }
-        return ModeBench(K, n, w, h, strcmp(argv[1], "bench") == 0);
+        int tile = (argc >= 7) ? atoi(argv[6]) : 128;
+        if (K < 1 || K > 64 || secs < 1 || secs > 120) { printf("bad args\n"); return 2; }
+        return ModeBench(K, secs, w, h, strcmp(argv[1], "bench") == 0, tile);
     }
-    printf("usage: wgcprobe check | bench <K> <frames> [w h] | benchstatic <K> <seconds> [w h]\n");
+    printf("usage: wgcprobe check | bench <K> <seconds> [w h [tile]] | "
+           "benchstatic <K> <seconds> [w h [tile]]\n"
+           "  tile: per-tick invalidation size, 0 = whole window (default 128)\n");
     return 2;
 }

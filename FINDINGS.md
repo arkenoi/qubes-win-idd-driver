@@ -79,3 +79,41 @@ pixels, 0.0% match. The flags=0 arm matching is itself a finding: under DWM ever
 top-level window keeps a redirection surface, so even legacy PrintWindow returns the
 window's own content while occluded. Two independent working retrieval paths — the
 premise of DESIGN-QUESTIONS §2 is verified, document not void.
+
+### Q1 adversarial verification — all three claims SURVIVED (3 independent skeptics)
+
+Each claim was handed to a skeptic agent instructed to refute from source. None refuted;
+all high confidence. Corrections adopted:
+- `window_dump_pending` is set on MAP at vmside.c:1032 (my earlier :610 citation was the
+  init-to-False site); dumps are also sent on configure-of-mapped (vmside.c:1178-1181) and
+  reconnect re-enumeration (vmside.c:1677) — i.e. the resize re-grant path already exists
+  agent-side on Linux.
+- Per-window dumps require MSG_CREATE first (daemon exits on dump-without-create,
+  xside.c:3951-3957) — fine, the Windows agent already creates windows.
+- The screen fallback also requires screen_window->shmseg valid (xside.c:2454); Linux
+  feeds per-window pixmaps from XComposite redirection (vmside.c:2737-2742,
+  xf86-input-mfndev qubes.c:594-681 GetWindowPixmap grant refs).
+
+**R4.3 check: gui-daemon xside.c/xside.h are BYTE-IDENTICAL between master and
+release4.3** (git diff empty, same blob hashes; only pulse/mic code differs). The Q1
+verdict applies to the user's dom0 daemon as-is.
+
+### Step 2 / Q4 (qualitative) — WGC works and is occlusion-independent on this guest
+
+wgcprobe `2ddc8b8c…ebd4` (guest hash verified via certutil), 3/3 check runs on
+win-idd-test (os build 10.0.19044):
+- `wgc-supported=1`; occluded static window captured with `content-pct=100.0` →
+  `occluded-content=MATCH` 3/3 (occlusion asserted per run).
+- `dirty-regions-api=0`: WGC provides NO dirty rects on this build. Per-window damage
+  must come from elsewhere (in-guest diffing, or accept full-window damage per frame).
+- `border-api=0`: `IsBorderRequired` not settable → the system capture border around
+  captured windows cannot be disabled on 19044. Irrelevant in pure per-window mode
+  (nothing captures the screen), but a mixed DDA+WGC mode would show yellow borders in
+  the screen capture. Design must note it.
+- `cursor-api=1`: cursor can be excluded from per-window captures.
+
+Probe-code adversarial review found 1 blocker + 3 major defects in wgcprobe's BENCH mode
+(scene/capture on one starved thread; benchstatic arg conflation; mapUs omitting the
+full readback; procCpu blind to dwm.exe). All fixed before any Q3 numbers were produced;
+check-mode verdicts above are unaffected (full readback path was always used there).
+Bench numbers below come only from the fixed binary.
