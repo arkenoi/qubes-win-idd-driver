@@ -73,6 +73,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "pwprobe msbuild failed" }
           Get-ChildItem tools\pwprobe\x64\Release\pwprobe.exe
 
+      - name: Build wgcprobe
+        shell: pwsh
+        run: |
+          # tools/wgcprobe: Windows.Graphics.Capture probes (per-window-capture Q3/Q4).
+          # C++/WinRT from the Windows SDK; plain v143, no WDK.
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              Select-Object -First 1
+          & $msbuild tools\wgcprobe\wgcprobe.vcxproj /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "wgcprobe msbuild failed" }
+          Get-ChildItem tools\wgcprobe\x64\Release\wgcprobe.exe
+
       - name: Collect package + tools
         shell: pwsh
         run: |
@@ -125,6 +137,9 @@ jobs:
           $pw = Get-ChildItem tools\pwprobe -Recurse -Filter pwprobe.exe -ErrorAction SilentlyContinue |
               Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
           if ($pw) { Copy-Item $pw.FullName package\ -Force } else { Write-Warning 'pwprobe.exe missing from package' }
+          $wgc = Get-ChildItem tools\wgcprobe -Recurse -Filter wgcprobe.exe -ErrorAction SilentlyContinue |
+              Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
+          if ($wgc) { Copy-Item $wgc.FullName package\ -Force } else { Write-Warning 'wgcprobe.exe missing from package' }
           Get-ChildItem package
 
       - uses: actions/upload-artifact@v4

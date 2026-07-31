@@ -60,3 +60,22 @@ Consequences:
 - Caveat: read at gui-daemon master; the user's dom0 runs the R4.3 daemon. Verify the same
   paths in the R4.3 branch before the design writeup goes out (expected identical — the
   dual path predates 4.3).
+
+### Gate 0 — PASSED: occluded-window content IS retrievable (premise holds)
+
+pwprobe `6C9EC6A1…F0872` (hash echoed from the guest each run, matches the CI artifact),
+3/3 runs on win-idd-test, stock QWT, interactive session via pushrun:
+
+| arm | expectation | result (3/3 identical) |
+|---|---|---|
+| baseline (visible, flags=0) | MATCH | MATCH pct=100.0 |
+| fullcontent (occluded, PW_RENDERFULLCONTENT) | the question | **MATCH pct=100.0** |
+| plain (occluded, flags=0) | negative candidate | MATCH pct=100.0 — see note |
+| screen-DC BitBlt of occluded rect | must MISMATCH | MISMATCH pct=0.0 |
+
+Occlusion asserted in-scene every run (`WindowFromPoint` at A's center returned B).
+The screen-DC arm is the proof the comparator can fail: same comparator, provably-wrong
+pixels, 0.0% match. The flags=0 arm matching is itself a finding: under DWM every
+top-level window keeps a redirection surface, so even legacy PrintWindow returns the
+window's own content while occluded. Two independent working retrieval paths — the
+premise of DESIGN-QUESTIONS §2 is verified, document not void.
