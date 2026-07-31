@@ -221,10 +221,38 @@ static int RunBench(HINSTANCE hi, int iters, const char *dir)
     HBITMAP bmp = CreateDIBSection(NULL, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
     HGDIOBJ old = SelectObject(memdc, bmp);
 
-    double *lat = (double *)malloc(sizeof(double) * iters);
+    double *lat = (double *)malloc(sizeof(double) * (size_t)iters);
     int mismatches = 0, fails = 0;
     LARGE_INTEGER f, t0, t1;
     QueryPerformanceFrequency(&f);
+
+    /* preflight: written BEFORE the loop so a crash still leaves the inputs on disk */
+    {
+        char ppath[MAX_PATH], pre[256];
+        _snprintf(ppath, sizeof(ppath), "%s\\pwprobe-preflight.txt", dir);
+        FILE *pf = fopen(ppath, "wb");
+        if (pf) {
+            int n = _snprintf(pre, sizeof(pre),
+                "PREFLIGHT iters=%d lat=%p bits=%p memdc=%p bmp=%p hA=%p hB=%p "
+                "qpf=%lld\r\n",
+                iters, (void *)lat, bits, (void *)memdc, (void *)bmp,
+                (void *)g_hA, (void *)g_hB, (long long)f.QuadPart);
+            fwrite(pre, 1, n, pf);
+            fclose(pf);
+        }
+    }
+    if (!lat || !bits || !memdc || !bmp || !g_hA || !g_hB) {
+        char rpath2[MAX_PATH], er[128];
+        _snprintf(rpath2, sizeof(rpath2), "%s\\pwprobe-result.txt", dir);
+        FILE *rf = fopen(rpath2, "wb");
+        if (rf) {
+            int n = _snprintf(er, sizeof(er),
+                "PWPROBE-BENCH-ERROR null-resource (see preflight)\r\n");
+            fwrite(er, 1, n, rf);
+            fclose(rf);
+        }
+        return 2;
+    }
     g_progress = "bench:loop";
     static char mark[64];
     for (int i = 0; i < iters; i++) {
