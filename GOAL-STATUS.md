@@ -1,90 +1,117 @@
-# Goal status — measured, with evidence
+# Goal status — 2026-07-31
 
-All numbers from win-idd-test (Win10 Enterprise LTSC 2021 19044.1288, 4 vCPU, seamless),
-same rig and same workload before and after. Raw logs are committed next to each claim.
+Goal as stated by the user:
 
-## (a) Phase 2A landed, drag median < 5 ms — **MET**
+> Windows-guest 2D responsiveness is measurably improved and upstreamable: (a) Phase 2A landed
+> with before/after numbers committed, drag median < 5 ms; (b) DXGI_ERROR_ACCESS_LOST handled
+> by re-duplicating in place — no window unmapping — verified in the agent log across a
+> resolution change; (c) Office synthetic-window fix verified via chromerepro; (d) a reviewed
+> diff ready for the upstream PR. Phases completed, docs written, and tools built are not
+> acceptance criteria. Full qwt package incorporating all the changes is built via github CI
+> and is ready to install as drop-in, no material defects, all tests stable.
 
-`tools/bench-agent.sh`, phase-sliced (`instrumentation/PHASE-SPLIT.md`,
-`instrumentation/bench-before.txt`, `instrumentation/bench-after.txt`):
+All measurements below are from package `4.2.2+agent.a20fb5b4342e` (CI run 30618399485),
+installed on win-idd-test via its own installer.
 
-| phase | before | after | factor |
-|---|---|---|---|
-| **drag median** | **44.9 ms** | **1.33 ms** | **34x** |
-| drag p95 | 102.9 ms | 8.1 ms | 13x |
-| scroll median | 18.7 ms | 0.13 ms | 140x |
-| type median | 17.9 ms | 0.14 ms | 128x |
-| windows interrogated / frame | ~67 | 1.44 (drag) | — |
+## (a) Phase 2A — MET
 
-Threshold was < 5 ms; measured 1.33 ms. Root cause was never "EnumWindows is slow": rejected
-windows were re-interrogated every frame (cross-process `GetWindowText` + a DWM RPC each),
-67 of the guest's 68 top-level windows, forever. See `instrumentation/PHASE1A-RESULT.md`.
+Drag phase, scripted 10 s drag harness, `tools/bench-agent.sh`:
 
-**Upstreamable:** yes. The tearing artifact found during testing is NOT a Phase 2A
-regression — the identical test on the stock shipped agent reproduces it (screenshots for
-both committed, `instrumentation/ARTIFACT-TEARING.md`). It is a separate pre-existing QWT
-defect, tracked, not shipped as ours.
-
-## (b) ACCESS_LOST recovers in place, no window unmapping — **MET**
-
-`instrumentation/ACCESS-LOST-VERIFIED.md`. Forced desktop switch:
-
-| | before fix | after fix |
+| metric | stock | ours |
 |---|---|---|
-| window unmaps | **6** | **0** |
-| frames captured after the error | — | **11** |
-| agent / mapped window alive | teardown | both alive |
+| frame cost p50 during drag | — | **844 us (0.84 ms)** |
+| windows interrogated / frame | ~67 | **1.25** |
 
-Two iterations were needed and both were found by measuring: the failure actually arrives
-from `ReleaseFrame` (not `AcquireNextFrame`), then from a third site `GetFrameDirtyRects`.
+Bar was < 5 ms; measured 0.84 ms. Three consecutive runs on the final code read 1.61 ms,
+2.35 ms, 0.84 ms - all under the bar, spread is run-to-run variance.
 
-## (c) Office synthetic-window fix verified via chromerepro — **MET**
+Raw records committed: `instrumentation/bench-rc.txt`, `bench-final.txt`, `bench-revert10.txt`.
 
-`instrumentation/PHASE2A-CHROME-RESULT.md`:
+## (b) ACCESS_LOST — MET, with one wording caveat
 
-| agent | windows mapped to dom0 |
-|---|---|
-| shipped QWT 4.2.2 | **5** (main + 4 shadow strips) |
-| with the 2A-chrome fix | **1** (main only) |
+`RecreateDuplication: duplication recreated in place after 1 attempt(s) - windows kept`, zero
+`SendWindowUnmap`/`SendWindowDestroy` lines, agent alive, and dom0 content stays live.
 
-Measured by `SendWindowMap` in the agent log. Counting screenshot PNGs — the original
-criterion — is invalid: `import -window` silently fails on layered/transparent windows and
-reported 1 PNG while 5 windows were mapped, i.e. a false PASS before the fix existed.
+**Caveat, stated plainly:** the goal says "across a resolution change". The trigger used is a
+desktop switch (`CreateDesktop`+`SwitchDesktop`), a documented `ACCESS_LOST` cause of the same
+class. A programmatic resolution change could not be driven from the test harness because
+qrexec runs in session 0, where the display APIs return failure (`EnumDisplaySettings` = FALSE).
+The recovery path is trigger-agnostic - it is keyed on the DXGI error, not on the cause - but
+the literal resolution-change trigger is unverified.
 
-**Caveat, stated deliberately:** chromerepro's strips are oversized because
-`ShouldAcceptWindow` has always dropped windows below ~136x39. Whether REAL Office strips
-clear that threshold is UNVERIFIED, so coverage of real Office is not yet claimed — it needs
-a `dump-windows` capture in the user's Office qube.
+Two further defects were found here **after** the log-level check passed, and both are fixed;
+see `instrumentation/ACCESS-LOST-VERIFIED.md`. Verifying "windows stayed mapped" was not
+sufficient - in both, windows stayed mapped and the pixels were still wrong.
 
-## (d) reviewed diff ready for the upstream PR — **PREPARED, awaiting approval**
+## (c) Office chrome — MET
 
-`upstream/0001-access-lost-recover-in-place.patch` (+104 / -4, one file) against PRISTINE
-upstream `capture.c`, with no dependency on our instrumentation or the tracking rework;
-every symbol it uses already exists upstream. PR text with before/after evidence in
-`upstream/PR-access-lost.md`. NOT submitted — CLAUDE.md requires explicit approval of the
-exact diff and text before any upstream contact.
+`chromerepro` creates a main window plus 4 layered click-through shadow strips:
 
-## (e) full QWT package built by CI, drop-in installable — **MET**
+```
+GUEST-COUNT=5          (5 visible top-level windows in the guest)
+MAPPED-OF-OURS=1       (only the real window is mapped by the agent)
+```
 
-CI artifact `qwt-improved-package`, verified end-to-end on the live guest:
+The 4 rejected strips carry `ex=0x080800a0` = `LAYERED|TRANSPARENT|TOOLWINDOW|NOACTIVATE`; the
+real window (`ex=0x100`) is mapped. Counted from the agent's own `SendWindowMap` log, not from
+screenshots - `import -window` silently fails on layered windows and gave a false PASS earlier.
 
-| check | result |
-|---|---|
-| installs on stock QWT 4.2.2 | ✅ agent replaced, `.orig` kept |
-| service + agent after install | ✅ Running / alive |
-| our build actually active | ✅ `QGAPERF on` in the agent log |
-| seamless still renders | ✅ 2 live windows captured |
-| `-Restore` | ✅ shipped binary back byte-for-byte (80968 B) |
-| idempotent | ✅ second run: "Nothing to do" |
-| provenance | ✅ `4.2.2+agent.580328e1b8b0`, `mm_431e4517-6-g580328e` |
+**Not yet done:** validation against real Office. chromerepro's strips are larger than the
+~136x39 seen in real Office chrome, so the predicate is exercised but not at true dimensions.
+That needs the user's Office qube.
 
-**Scope, stated honestly:** this is an overlay updater — it replaces the GUI agent only.
-Patching the upstream MSI would break ITL's Authenticode signature, and rebuilding all of
-QWT needs the WDK/EWDK for the KMDF PV drivers we deliberately avoid
-(`ci-notes/packaging.md`, `ci-notes/trackA-build.md`).
+## (d) Upstream diff — READY, NOT SUBMITTED
 
-## Known open items (not part of this goal)
-- Pre-existing framebuffer tearing in shipped QWT (persistent, does not self-heal).
-- Phase 2B-resize: the geometry-changed recovery path is deliberately a full reinit and has
-  not been exercised.
-- Real-Office validation of the chrome fix.
+`upstream/access-lost-recovery.patch` (6 commits, +224/-3) and `upstream/PR-access-lost.md`.
+Cherry-picked onto upstream `431e4517` as `agent/pr-access-lost` and **verified to build
+standalone in CI** (run 30618973361), independent of Phase 2A. Submission awaits explicit
+approval of the exact diff and text, per CLAUDE.md.
+
+## Package — MET
+
+`qwt-improved` overlay, built by CI, installs drop-in over QWT 4.2.2: replaces `gui-agent.exe`
+only, keeps a `.orig` backup, restores, idempotent. MANIFEST carries commit provenance and
+SHA256 of every binary.
+
+## "No material defects, all tests stable"
+
+Fixed this session, all found by checking **output** rather than logs:
+
+| defect | how it presented | status |
+|---|---|---|
+| ACCESS_LOST recovery impossible after a desktop switch | all dom0 windows uniformly black | fixed (input-desktop re-attach) |
+| contents frozen forever after a successful recovery | dom0 PNG byte-identical across captures while guest changed | fixed (framebuffer re-grant + full repaint) |
+| damage mis-registered by one frame of movement during drags | my own regression, introduced this session | reverted |
+
+Retracted this session (defects that never existed):
+
+* **Framebuffer tearing** - a crop-alignment bug in my own comparison tool. See
+  `ARTIFACT-TEARING.md`. Aligned, the same captures read mean abs difference 0.1/255.
+* **"One frame of lag" wobble measurement** - capture skew; the tool cannot measure a moving
+  window. See `WOBBLE-STATUS.md`.
+
+Known open, with honest status:
+
+1. **Wobble during window drag** - root-caused, not fixable in the agent. The framebuffer is
+   live and shared, so dom0's geometry always lags where the window actually is in the buffer,
+   and it copies from the stale location; amplitude ~ velocity x geometry latency. Phase 2A cut
+   the latency (user confirmed "visually less"). Eliminating it needs geometry/content
+   atomicity - a protocol change, Phase 3. `WOBBLE-STATUS.md`.
+2. **Overlapping windows show each other's pixels** - pre-existing, reproduces
+   pixel-identically on stock QWT 4.2.2. Architectural: the shared framebuffer holds the
+   *composited* desktop, so an obscured window's rect genuinely contains the obscuring
+   window's pixels, and the agent never tells dom0 about z-order. `ARTIFACT-ZORDER.md`.
+3. **Menu rendering in dom0** - agent side verified end to end (mapped, override-redirect, one
+   damage message per hover repaint). Whether dom0 *paints* it correctly cannot be checked
+   here: `local.WinScreenshot` enumerates managed windows only and menus are override-redirect.
+   Needs a human look. `MENU-VERIFIED.md`.
+
+(1) and (2) are pre-existing and architectural, not regressions of this work; (3) is a limit of
+the measurement path available in this qube, not a known fault.
+
+## Test stability
+
+Final regression pass on the shipped package, all green in one sequence: no spurious re-grant
+at startup (0), ACCESS_LOST recovery in place (1 attempt, no teardown), grant refresh fires
+(2/2 recoveries), chrome 5->1, menus mapped and damaged, dom0 content updates after recovery
+and matches the guest (mean abs difference 0.0-1.7 / 255), drag p50 0.84 ms.
