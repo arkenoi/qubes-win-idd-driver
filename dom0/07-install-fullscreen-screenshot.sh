@@ -21,12 +21,21 @@ CALLER=win-idd-mgmt
 
 [ "$(id -u)" -eq 0 ] || { echo "Run with sudo." >&2; exit 1; }
 
+# Only `import` and `xprop` are required - both are already used by the existing
+# local.WinScreenshot service, so they are known to be present. `xwininfo` is NOT required:
+# it only adds the per-window geometry listing, and installing extra packages into dom0 to get
+# a debugging nicety is a bad trade. Without it the full-desktop PNG is still produced.
 missing=()
-for tool in import xprop xwininfo; do command -v "$tool" >/dev/null || missing+=("$tool"); done
+for tool in import xprop; do command -v "$tool" >/dev/null || missing+=("$tool"); done
 if [ ${#missing[@]} -gt 0 ]; then
     echo "Missing in dom0: ${missing[*]}" >&2
-    echo "  sudo qubes-dom0-update ImageMagick xorg-x11-utils" >&2
+    echo "  sudo qubes-dom0-update ImageMagick" >&2
     exit 1
+fi
+if command -v xwininfo >/dev/null; then
+    echo "xwininfo present: geometry listing enabled"
+else
+    echo "xwininfo absent: screenshot only, no geometry listing (this is fine)"
 fi
 
 cat > "$SVC" <<'EOF'
@@ -53,9 +62,11 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 "${X[@]}" import -window root "$TMP/screen.png" 2>/dev/null \
     || { echo "ERROR: root window capture failed" >&2; exit 3; }
 
-# Geometry is best effort and must never abort the capture: the PNG is the point.
+# Geometry is best effort and must never abort the capture: the PNG is the point. It also
+# requires xwininfo, which dom0 may not have - absence is not an error.
 {
     echo "# id x y w h override_redirect name"
+    command -v xwininfo >/dev/null || echo "# xwininfo not installed in dom0 - geometry omitted"
     "${X[@]}" xwininfo -root -tree 2>/dev/null |
       grep -oE '0x[0-9a-f]+' | sort -u | while read -r id; do
         owner=$("${X[@]}" xprop -id "$id" _QUBES_VMNAME 2>/dev/null |
@@ -95,7 +106,11 @@ if "$SVC" < /dev/null > "$OUT/t.tar" 2>"$OUT/t.err"; then
     if [ -s "$OUT/screen.png" ]; then
         echo "  OK  screen.png $(identify -format '%wx%h' "$OUT/screen.png" 2>/dev/null || echo '?') " \
              "($(stat -c%s "$OUT/screen.png") bytes)"
-        echo "  OK  geometry.txt: $(($(wc -l < "$OUT/geometry.txt") - 1)) $VM window(s) listed"
+        if command -v xwininfo >/dev/null; then
+            echo "  OK  geometry.txt: $(($(grep -vc '^#' "$OUT/geometry.txt" 2>/dev/null || echo 0))) window(s) listed"
+        else
+            echo "  --  geometry omitted (no xwininfo); the screenshot is what matters"
+        fi
     else
         echo "  FAIL: tar produced no screen.png"; sed 's/^/    /' "$OUT/t.err"; exit 4
     fi
