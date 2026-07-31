@@ -224,6 +224,27 @@ try {
     }
     Note "SendInput verified: cursor ($($before.x),$($before.y)) -> ($($after.x),$($after.y))"
 
+    # ----------------------------------------------------- deterministic desktop --
+    # The drag cost depends on how much has to be repainted, which depends on what the dragged
+    # window passes over. Leaving other windows on screen (the visual scene leaves two Notepads
+    # and chromerepro) makes the damage volume a function of run-to-run window placement: three
+    # runs of ONE unchanged binary spanned 3657-7143us, wider than any difference between
+    # builds, which made the harness useless for comparing them.
+    Get-Process notepad, chromerepro -EA SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 2
+    $others = 0
+    $enum = {
+        param($h, $l)
+        if ([Q.In]::IsWindowVisible($h)) {
+            $r2 = New-Object Q.In+RECT
+            if ([Q.In]::GetWindowRect($h, [ref]$r2)) {
+                if (($r2.right - $r2.left) -gt 200 -and ($r2.bottom - $r2.top) -gt 200) { $script:others++ }
+            }
+        }
+        return $true
+    }
+    Note "cleared other app windows before measuring"
+
     # --------------------------------------------------------------- notepad --
     # Open a pre-made file rather than pasting: the clipboard needs an STA thread
     # and qubes.VMShell does not guarantee one.
@@ -251,6 +272,9 @@ try {
 
     # ----------------------------------------------------------- the phases --
     Phase 'idle-pre'  { Start-Sleep -Seconds $IdleSeconds; $null }
+    # settle before measuring: a repaint still draining into the first drag frames is charged
+    # to the drag phase
+    Start-Sleep -Seconds 2
     Phase 'drag'      { [Q.In]::DragCircle($grabX, $grabY, $DragRadius, $DragPeriod, $DragSeconds, $DragHz) }
     Phase 'idle-mid1' { Start-Sleep -Seconds 2; $null }
     Phase 'scroll'    { [void][Q.In]::SetForegroundWindow($hwnd); [Q.In]::ScrollLoop($clientX, $clientY, $ScrollSeconds, $ScrollHz) }
