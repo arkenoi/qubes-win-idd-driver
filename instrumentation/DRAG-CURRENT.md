@@ -60,3 +60,33 @@ Before any performance claim:
 The optimisation itself is still justified on inspection (a full EnumWindows per frame for a
 case active a second at a time, and a Dwm/monitor/display-settings query per window per frame),
 but it has NOT been shown to help and must not be reported as an improvement.
+
+
+---
+
+# Resolved: the harness was contaminated, not the build
+
+Clearing other app windows before measuring (see `drag-harness.ps1`) collapsed the spread:
+
+| | runs | spread |
+|---|---|---|
+| contaminated harness, one binary | 3657 / 7143 / 4776 | 2.0x, one run OVER the 5 ms bar |
+| fixed harness, one binary | 1817 / 2204 / 1753 | 1.26x |
+
+So the earlier conclusion - that gating the per-frame z-order pass and rect refresh made things
+worse - was wrong. `7143 us` was the bench dragging its Notepad across the two Notepads and
+chromerepro the visual scene had left on screen; damage volume tracked window placement, not
+the build.
+
+## Criterion (a) on the fixed harness
+
+Build `1aafdc9` (`EDD43F6F4784`), binary hash verified before every run, 6 runs:
+
+`1817, 2204, 1753, 3616, 1447, 2230 us` -> **median ~2015 us, max 3616 us, none over 5 ms.**
+
+## Stock cannot be the "before" side
+
+`QGAPERF` is instrumentation added by this work, so stock QWT emits no records and the harness
+measures nothing for it. Attempting a stock-vs-ours comparison on this harness silently
+produced no stock numbers at all. The Phase 2A before/after is the Phase 1A instrumented build
+vs Phase 2A - the committed `INTERROGATED/frame ~67 -> ~1` - not stock.
