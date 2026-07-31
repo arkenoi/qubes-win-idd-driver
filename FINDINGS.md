@@ -136,21 +136,24 @@ WGC per-window capture, 800x600, damage-bounded (128px tile/tick), 15 s runs:
 | 1x1920x1080, full damage | 28.7 / 29.2 | 7904 / 8101 | 2 |
 | K=4 STATIC (no damage) | ~40 (!) | 1973 / 1991 | 2 |
 
-- Per-frame CPU price ≈ constant ~1.7-2.1 ms at 800x600, ~8 ms at 1080p → scales with
-  AREA, not window count. Delivery is ~30 fps/window until aggregate saturation at
-  ~310-355 frames/s (K=30 → ~11 fps/window evenly).
+- Per-frame CPU price ≈ constant ~1.7-2.2 ms at 800x600 (spread across K=1/K=4 rounds),
+  ~8 ms at 1080p (n=2) → scales with AREA, not window count. Delivery is ~30 fps/window;
+  aggregate saturation ~310-355 frames/s and the even ~11 fps/window at K=30 were each
+  observed in single runs (n=1) — indicative, not submission-grade.
 - **Static windows still get ~40 fps redelivery**: with no DirtyRegions API the consumer
   cannot distinguish changed from unchanged frames. A naive per-window agent would BURN
   ~2 ms x 40 fps per idle window; per-window diffing or damage inference is REQUIRED.
-- **WGC session creation is intermittently refused** under rapid session churn:
-  opened=30/18/11/10/7/0 observed across identical `bench 30` invocations (0x80070057);
-  best on fresh boot, worst immediately after a heavy run. Long-lived incremental
-  sessions (the real agent pattern) are less exposed, but creation failure MUST be
-  handled (retry + fallback).
-- Data-loss note: the original 3-round matrix lost K=30 (all rounds), K=10 r3, 1080p r1
-  to a probe crash whose output vanished — root-caused to fully-buffered stdout on the
+- **WGC session creation intermittently fails**: opened=30/18/11/10/7/0 across identical
+  `bench 30` invocations, error 0x80070057 (E_INVALIDARG — not an obvious resource
+  code); best on fresh boot. The refusal is measured; its CAUSE is not established and
+  probe-side leakage was not excluded. opened=0 (total WGC unavailability) was observed
+  once — any design must survive it (degraded mode: legacy screen path).
+- Data-loss note: the original 3-round matrix lost K=30 (all rounds), K=10 r3, 1080p r1,
+  and benchstatic K=4 r1 to a probe crash whose output vanished — root-caused to fully-buffered stdout on the
   qrexec pipe + WinRT exception. Fixed (unbuffered + fatal handler); the failure itself
-  became the session-churn finding above.
+  became the session-failure finding above. The matrix was NOT completed post-fix (iteration
+  budget went to the crash hunt): K=30 and saturation are n=1, K=10/1080p/static n=2,
+  and no static-scene DDA control was taken — listed as measurement debts in the design.
 
 PrintWindow(PW_RENDERFULLCONTENT) fallback price (occluded 400x300, 100 iters x3):
 p50 17.7-18.5 ms, min ~2 ms (bimodal, DWM-tick-synced), 0 failures, 0 content
@@ -158,7 +161,7 @@ mismatches. Too slow as the primary path; fine as damage-driven refresh for the 
 idle window tail if WGC sessions are constrained.
 
 DDA control (ddaprobe, 3440x1440 desktop, K=4 animated scene, 3 interleaved runs):
-acquire median 35.6 / 31.3 / 31.2 ms (~30 acq/s), `DesktopImageInSystemMemory` TRUE
+acquire median 35.6 / 31.3 / 31.2 ms (~24-32 acq/s across rounds), `DesktopImageInSystemMemory` TRUE
 throughout, avg 2-3 dirty rects/frame, and **GetFrameMoveRects was empty on every one
 of 300 frames** — the capture.c:441 folklore ("move rects seem always empty") is now
 measured fact on this guest; Track A should not build on move-rects.
@@ -170,11 +173,12 @@ valid; cause NOT established. Rebuilt on the proven per-iteration capture path
 the tool. The AV is unexplained and recorded here so nobody trusts that fast path
 without understanding it first.
 
-### Step 4 / Q2 — grants are effectively free at per-window scale
+### Step 4 / Q2 — ≥64 windows granted, no ceiling found (true ceiling not located)
 
 grantprobe `b6854554…2499` (guest hash verified), VM healthy after all runs:
-- **ceiling**: 64 windows granted simultaneously (mix 720p/1080p/4K = 232,425 pages,
-  ~908 MB) — NO ceiling hit. Latency scales with size: p50 2.6 ms (720p) / 5.2 ms
+- **ceiling** (single run): 64 windows granted simultaneously (mix 720p/1080p/4K =
+  232,425 pages, ~908 MB) — no failure before the probe's own 64-window cap, so the
+  REAL Xen grant-table ceiling was not located. Latency scales with size: p50 2.6 ms (720p) / 5.2 ms
   (1080p) / 21.3 ms (4K) ≈ 2.5 µs/page.
 - **regrant** (1080p, 100 iters x3): grant p50 4.7 / 5.7 / 6.5 ms; revoke p50
   90-101 µs. A window resize costs one ~5 ms grant — imperceptible against Windows'
