@@ -43,3 +43,48 @@ Do not treat `6258a05f` as the culprit on this evidence.
 * The dom0 GUI session can reach a state where no qube window is delivered at all, for stock
   as well as ours. A VM restart clears it. Any "0 windows" result must be re-confirmed against
   stock before being attributed to a build.
+
+---
+
+# RETRACTED — the whole bisect above measured noise
+
+Interleaving the builds inverted every verdict:
+
+```
+stock: text_px=11626 => FAIL
+pt:    text_px=25872 => PASS      (exactly backwards from the table above)
+```
+
+and the same binary, three consecutive runs, gives both answers:
+
+```
+stock: 25872 => PASS
+stock: 11626 => FAIL
+stock: 11906 => FAIL
+```
+
+The discriminator is bimodal and repeatable *within a run*, which is what made it look
+trustworthy - but it is not a function of the build at all. Every row in the table above is
+void, and so is the conclusion that `3174d67e` introduced anything.
+
+**The "ours truncates content while stock renders it" claim is also retracted.** That was a
+single sample of each on a metric that swings the full range on one binary.
+
+## Actual cause of the swing
+
+The scene creates the second Notepad at Windows' cascade position - overlapping the first -
+and then moves it. Whether the first window has repainted the uncovered area before the
+screenshot is a race. Both agents lose it about half the time.
+
+## What this invalidates beyond the bisect
+
+Any single-sample visual comparison in this project. The chrome-fix result survives because it
+is a *count* of windows delivered to dom0 (8 -> 4, strips absent from `geometry.txt`), not a
+pixel measure, and it reproduced across every capture. The z-order stale-band result survives
+because the band appeared and disappeared under a deliberate stacking change, twice.
+
+## Rule
+
+A visual metric must be run **at least three times per build, interleaved with the control**,
+before any verdict. A metric that has not been shown to be stable on a single unchanged binary
+is not a measurement.
