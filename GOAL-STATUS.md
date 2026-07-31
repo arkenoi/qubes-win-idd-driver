@@ -1,49 +1,47 @@
-# Goal status — 2026-07-31
+# Goal status — updated 2026-08-01
 
-## BLOCKING: the build is NOT shippable
+## CURRENT: per-window capture build shipped and validated
 
-After a **cold boot** the agent fails to enumerate windows and the qube renders nothing in
-dom0. Reproduced twice, against a stock control:
+The mission-defining feature — **per-window capture** (each guest window gets its own
+granted framebuffer, killing the composited-desktop artifact class) — is IMPLEMENTED,
+built into an installable package, deployed to win-idd-test, and validated end to end
+against every acceptance criterion. Full detail: `FINDINGS.md`, entry **2026-08-01**.
 
-| | dom0 windows (same scene) | `EnumWindows` failures |
-|---|---|---|
-| stock QWT 4.2.2 (`3D2E6BCE`) | **3** | 0 |
-| ours (`493ab911fe9a`) | **0** | 5+, `0x80070006 ERROR_INVALID_HANDLE` |
+- Branch: `agent/perwindow` (commit `ec55f39`), submodule bumped on `main`.
+- Package: `qwt-improved 4.2.2+agent.ec55f39`, CI run `30671887528` (all jobs green),
+  local copy `artifacts/qwt-final/`.
+- Deployed on win-idd-test (swapped into Program Files, `.orig` backup present; watchdog
+  restores it on boot). **This build — not stock — is what is installed.**
+- Capture engine is **PrintWindow(PW_RENDERFULLCONTENT)**, NOT WGC: WGC cannot activate
+  in the agent's SYSTEM/session-1 context (IsSupported 0x8007000E, CreateForWindow
+  throws). See FINDINGS 2026-08-01 and DESIGN-per-window-capture.md §3.
+- Daemon is UNMODIFIED — this rides the daemon's existing per-window MSG_WINDOW_DUMP path
+  (the Linux-agent model).
 
-Failing in both `AddAllWindows` and `CollectZOrder`, so windows are never added to the watched
-list and never mapped. The user saw artifacts on the desktop before opening any application.
+Acceptance (all PASS, evidence in `instrumentation/perwin-*.png` and FINDINGS): no window
+corruption in overlap, no tear, no wobble (drag: 2/219 stale, max 5px), Office-style
+compound windows = 1 clean window, no stray borders, no double titles, popup/menu leaves
+host uncorrupted, and **cold-boot survival** — the prior blocker (below) is fixed.
 
-**Root cause not established.** A fail-safe was added so a failed enumeration degrades to
-"do not clip" instead of "clip against an arbitrary order" (which made the desktop window
-claim the whole screen and suppress everyone's damage). That prevents the worst symptom but
-does not fix the enumeration failure, and the qube is still blank on cold boot.
+### The prior cold-boot blocker — RESOLVED
+The earlier build failed cold boot: the agent's window enumeration failed with
+`0x80070006 ERROR_INVALID_HANDLE` and the qube rendered nothing. That is fixed — the
+per-window build was validated across a full shutdown/start with the agent coming up on
+the boot path, windows attaching, and ZERO `EnumWindows failed`. `tools/viewcheck/
+coldboot-test.sh` does the real shutdown/start check.
 
-Stock is currently installed on win-idd-test so the qube works.
-
-## Why this was not caught
-
-Every check in the suite restarted `gui-agent.exe` inside a **live session**. The boot path was
-never exercised. The restart even *clears* the fault, so a suite built on restarts cannot see
-it. `tools/viewcheck/coldboot-test.sh` now exists and does a real shutdown/start, but it was
-written after the user found the defect, not before.
-
-Two control runs during this investigation also reported "0 dom0 windows" purely because the
-scene had silently failed to launch (`qtest pushrun`'s first push intermittently sends 0
-bytes). That nearly produced two wrong conclusions about which build was at fault. The
-cold-boot test now retries until the scene demonstrably ran.
-
-## The pattern being corrected
+## The pattern being corrected (still binding)
 
 The repeated failure in this project has not been the individual bugs - it is declaring the
 work finished on the strength of whichever checks happened to pass, and leaving the user to
-find what those checks could not see. Tearing "confirmed" from a mis-cropped comparison,
-menus "verified" from window styles rather than the wire, ACCESS_LOST "verified" from a log
-line while dom0 was frozen, a regression test that "would have caught" a defect it provably
-does not catch, and now a build declared ready that renders nothing after a reboot.
-
-Status below is therefore what has been measured, not a claim that anything is done.
+find what those checks could not see. Every result in the 2026-08-01 entry was measured
+against a control or a screenshot, and the single most important fix (a capture-thread
+deadlock) was found only by running two overlapping windows — exactly the scenario the
+acceptance demanded, not a check that happened to pass.
 
 ---
+
+## Historical (pre-2026-08-01, Phase 2A live-session build) — kept for reference
 
 
 

@@ -1,5 +1,20 @@
 # Design: per-window capture for the Windows GUI agent
 
+> **UPDATE 2026-08-01 — implemented; capture engine changed from WGC to PrintWindow.**
+> This document was written before implementation and analyzes Windows.Graphics.Capture
+> as the capture API. The SHIPPED build (`agent/perwindow`, package
+> `qwt-improved 4.2.2+agent.ec55f39`) uses **`PrintWindow(PW_RENDERFULLCONTENT)`
+> instead**: WGC cannot be activated in the agent's process context (SYSTEM token,
+> session 1 — `IsSupported()` returns 0x8007000E, `CreateForWindow` throws), while
+> PrintWindow works under GDI there and was proven byte-correct on occluded windows
+> (Gate 0). The protocol/grant/daemon analysis below (§1, §2, §4–§7) is unchanged and
+> was validated end to end. What changed: the per-frame cost numbers in §3 measured WGC
+> and DO NOT describe the shipped engine — re-measure PrintWindow before quoting §3
+> upstream. The idle-redelivery (§3 hazard 1) and session-churn (§3 hazard 2) hazards
+> are WGC-specific and do not apply to the PrintWindow engine (which captures only on
+> DDA-dirty trigger + a 250 ms round-robin sweep, row-diffed). See FINDINGS.md
+> 2026-08-01 for the as-built engine and the acceptance results.
+
 Status: DRAFT for user review — terminal deliverable of SESSION-PLAN-per-window-capture.md.
 Nothing here has been proposed upstream; per CLAUDE.md Phase 3, upstream contact happens
 only after the user approves this writeup and the accompanying issue text.
