@@ -1,0 +1,56 @@
+{
+  "package": "qwt-improved",
+  "package_kind": "overlay",
+  "package_version": "4.2.2+agent.unknown",
+  "description": "Overlay updater: replaces the Qubes Windows Tools GUI agent only. Does not install or modify QWT itself or the Xen PV drivers.",
+  "targets_qwt_version": "4.2.2",
+  "built_utc": "2026-07-30T23:40:31.0536051Z",
+  "source": {
+    "driver_repo_commit": "unknown",
+    "agent_commit": "unknown",
+    "agent_describe": "unknown",
+    "agent_upstream": "https://github.com/QubesOS/qubes-gui-agent-windows"
+  },
+  "ci": {
+    "workflow": "build",
+    "run_id": "30591020896",
+    "run_number": "41",
+    "repository": "arkenoi/qubes-win-idd-driver",
+    "ref": "refs/heads/main",
+    "sha": "a73ab8e160d17a9841326c8f202dfd0858969b28"
+  },
+  "dependency_refs": {
+    "CONFIG": "Release",
+    "WINDOWS_UTILS_REF": "v4.2.2",
+    "VCHAN_REF": "v4.2.7",
+    "QUBESDB_REF": "v4.3.1",
+    "PVDRIVERS_REF": "v4.2.0-1",
+    "XENIFACE_SHA": "9cd9a604191bf26da18b564d1686e4ee0ccf3d32",
+    "GUI_COMMON_REF": "v4.3.1",
+    "BUILDERV2_REF": "main"
+  },
+  "installs": [
+    "bin/gui-agent.exe"
+  ],
+  "installs_optional": [
+    "bin/gui-watchdog.exe"
+  ],
+  "never_installs": [
+    "symbols/",
+    "tools/",
+    "optional/idd-driver/"
+  ],
+  "idd_driver_included": true,
+  "binaries": {
+    "gui-agent.exe": {
+      "size": 88824,
+      "version": "4.2.2.0",
+      "sha256": "81292027F212E7D271E5BB87F1187DE390B31970B2BB7A1CCDA570CEF1F4DDA9"
+    },
+    "gui-watchdog.exe": {
+      "size": 18680,
+      "version": "4.2.2.0",
+      "sha256": "57B5079AD07C22108D5F6AC29A3569BF32C1AC5F2F84D56984028F435FF35CFD"
+    }
+  }
+}
