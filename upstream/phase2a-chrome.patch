@@ -1,0 +1,2422 @@
+From 8539be92f93739a99662523abb51b6a461b44ebc Mon Sep 17 00:00:00 2001
+From: arkenoi <6000406+arkenoi@users.noreply.github.com>
+Date: Thu, 30 Jul 2026 23:58:50 +0300
+Subject: [PATCH 1/3] Phase 1A: per-frame timing instrumentation for the
+ capture/send path
+
+Splits the frame pipeline into measurable phases so the Phase 1A decision
+(does window tracking/enumeration dominate, or repaint/dirty-rect volume?)
+is made from data rather than assumption:
+
+  (a) tracking : upd + enu + rem  (UpdateWindowData / AddAllWindows-EnumWindows /
+                 removal pass - the per-frame EnumWindows the README TODO targets)
+  (b) damage   : drq + dmg        (GetFrameDirtyRects + damage processing)
+  (c) send     : snd              (all VCHAN_SEND/VCHAN_SEND_MSG, routed through
+                 VchanSendTimed so MSG_CONFIGURE writes are not billed to (a))
+
+Emits one CSV-ish line per frame at LOG_LEVEL_INFO via the agent's existing
+rotating logger (no new log file), with QueryPerformanceCounter timings in us,
+self-cost calibrated at startup, plus dirty/move rect counts, dirty area and
+window count. Also records wak (capture SetEvent -> ProcessNewFrame entry) to
+expose scheduler delay on a 4-vCPU HVM.
+
+Move rects are measured explicitly (GetFrameMoveRects into a stack buffer,
+before the dirty-rect block per the DXGI contract) to settle the capture.c:441
+note. ddaprobe already measured ZERO move rects on the Basic Display Adapter
+across an idle run and a 25s window-drag; this confirms it from inside the agent.
+
+Runtime-guarded (QUBES_GUI_PERF env > PerfLog DWORD > compile default): when off
+the residue is one predicted-taken branch, so this stays small and upstreamable.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+(cherry picked from commit 363b38a68371461a3608a3ea7c85e4dbb88611c8)
+---
+ gui-agent/capture.c                        |  57 ++++++
+ gui-agent/capture.h                        |   3 +
+ gui-agent/main.c                           |  49 ++++-
+ gui-agent/perf.c                           | 219 +++++++++++++++++++++
+ gui-agent/perf.h                           | 128 ++++++++++++
+ gui-agent/vchan.c                          |  17 +-
+ gui-agent/vchan.h                          |   7 +-
+ vs2022/gui-agent/gui-agent.vcxproj         |   2 +
+ vs2022/gui-agent/gui-agent.vcxproj.filters |   6 +
+ 9 files changed, 484 insertions(+), 4 deletions(-)
+ create mode 100644 gui-agent/perf.c
+ create mode 100644 gui-agent/perf.h
+
+diff --git a/gui-agent/capture.c b/gui-agent/capture.c
+index 962b4ce..64e929b 100644
+--- a/gui-agent/capture.c
++++ b/gui-agent/capture.c
+@@ -345,8 +345,10 @@ static HRESULT GetFrame(IN OUT CAPTURE_CONTEXT* ctx, IN UINT timeout)
+     EnterCriticalSection(&ctx->frame.lock);
+     assert(!ctx->frame.texture);
+ 
++    LONGLONG perf_t0 = PerfNow();
+     HRESULT status = IDXGIOutputDuplication_AcquireNextFrame(ctx->duplication,
+         timeout, &ctx->frame.info, &ctx->frame.texture);
++    ctx->frame.perf.acquire_ticks = PerfNow() - perf_t0;
+     if (FAILED(status))
+     {
+         if (status != DXGI_ERROR_WAIT_TIMEOUT) // don't spam log with timeouts
+@@ -401,7 +403,44 @@ static HRESULT GetFrame(IN OUT CAPTURE_CONTEXT* ctx, IN UINT timeout)
+         assert(ctx->framebuffer == ctx->frame.rect.pBits);
+     }
+ 
++    // Instrumentation: is GetFrameMoveRects ever non-empty? See the TODO below.
++    // MSDN mandates move rects are retrieved before dirty rects, so this must stay here.
++    // The results are only measured, never used to produce output.
++    ctx->frame.perf.move_rects_count = 0;
++    ctx->frame.perf.moverect_ticks = 0;
++    if (g_PerfEnabled)
++    {
++        DXGI_OUTDUPL_MOVE_RECT move_rects[64];
++        UINT mr_size = 0;
++        RECT no_rect = { 0, 0, 0, 0 };
++
++        perf_t0 = PerfNow();
++        HRESULT mr_status = IDXGIOutputDuplication_GetFrameMoveRects(ctx->duplication,
++            (UINT)sizeof(move_rects), move_rects, &mr_size);
++        ctx->frame.perf.moverect_ticks = PerfNow() - perf_t0;
++
++        if (SUCCEEDED(mr_status))
++        {
++            ctx->frame.perf.move_rects_count = mr_size / sizeof(DXGI_OUTDUPL_MOVE_RECT);
++            if (ctx->frame.perf.move_rects_count > 0)
++                PerfNoteMoveRects(ctx->frame.perf.move_rects_count,
++                    move_rects[0].SourcePoint.x, move_rects[0].SourcePoint.y,
++                    &move_rects[0].DestinationRect);
++        }
++        else if (mr_status == DXGI_ERROR_MORE_DATA)
++        {
++            // more than ARRAYSIZE(move_rects) move rects: report the count, don't retry
++            ctx->frame.perf.move_rects_count = mr_size / sizeof(DXGI_OUTDUPL_MOVE_RECT);
++            PerfNoteMoveRects(ctx->frame.perf.move_rects_count, 0, 0, &no_rect);
++        }
++        else
++        {
++            ctx->frame.perf.move_rects_count = (UINT)-1; // query failed
++        }
++    }
++
+     // dirty rects
++    perf_t0 = PerfNow();
+     UINT dr_size = 1; // initial buffer can't be empty
+     RECT temp_rect;
+ 
+@@ -429,6 +468,20 @@ static HRESULT GetFrame(IN OUT CAPTURE_CONTEXT* ctx, IN UINT timeout)
+     }
+ 
+     ctx->frame.dirty_rects_count = dr_size / sizeof(RECT);
++    ctx->frame.perf.dirtyrect_ticks = PerfNow() - perf_t0;
++
++    // Instrumentation: total damaged area, computed outside the timed region so
++    // it doesn't inflate the number it annotates. Capture thread only.
++    ctx->frame.perf.dirty_area = 0;
++    if (g_PerfEnabled)
++    {
++        for (UINT i = 0; i < ctx->frame.dirty_rects_count; i++)
++        {
++            ctx->frame.perf.dirty_area +=
++                (UINT64)(ctx->frame.dirty_rects[i].right - ctx->frame.dirty_rects[i].left) *
++                (UINT64)(ctx->frame.dirty_rects[i].bottom - ctx->frame.dirty_rects[i].top);
++        }
++    }
+ 
+ #ifdef _DEBUG
+     LogVerbose("%u dirty rects", ctx->frame.dirty_rects_count);
+@@ -548,9 +601,13 @@ static DWORD WINAPI CaptureThread(void* param)
+         }
+ 
+         if (capture->frame.dirty_rects_count == 0)
++        {
++            PerfNoteSkippedFrame();
+             goto end_frame; // framebuffer contents not changed
++        }
+ 
+         // notify main loop that there's a new frame
++        capture->frame.perf.signal_qpc = PerfNow();
+         SetEvent(capture->frame_event);
+ 
+         // wait until main loop processes the frame
+diff --git a/gui-agent/capture.h b/gui-agent/capture.h
+index 434a52b..7179d32 100644
+--- a/gui-agent/capture.h
++++ b/gui-agent/capture.h
+@@ -28,6 +28,8 @@
+ 
+ #include <xencontrol.h>
+ 
++#include "perf.h"
++
+ #define ALIGN(x, a)	(((x) + (a) - 1) & ~((a) - 1))
+ #define	FRAMEBUFFER_PAGE_COUNT(width, height)	(ALIGN(((width)*(height)*4), PAGE_SIZE) / PAGE_SIZE)
+ 
+@@ -43,6 +45,7 @@ typedef struct _CAPTURE_FRAME
+ 	UINT dirty_rects_count;
+ 	RECT* dirty_rects;
+ 	CRITICAL_SECTION lock;
++	PERF_CAPTURE perf; // instrumentation, see perf.h (inert unless enabled)
+ } CAPTURE_FRAME;
+ 
+ typedef struct _CAPTURE_CONTEXT
+diff --git a/gui-agent/main.c b/gui-agent/main.c
+index 6e04b96..02c8246 100755
+--- a/gui-agent/main.c
++++ b/gui-agent/main.c
+@@ -39,6 +39,7 @@
+ #include "vchan-handlers.h"
+ #include "util.h"
+ #include "debug.h"
++#include "perf.h"
+ #include "qubes-io.h"
+ 
+ // windows-utils
+@@ -1016,9 +1017,21 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+     WINDOW_DATA *nextEntry;
+     ULONG status = ERROR_SUCCESS;
+ 
++    // Instrumentation (see perf.h). All of these collapse to zero when disabled;
++    // the only cost then is the g_PerfEnabled test inside PerfNow().
++    LONGLONG perfFrameStart = PerfNow();
++    LONGLONG perfSendBase = g_PerfSendTicks;
++    LONG perfSendCountBase = g_PerfSendCount;
++    LONGLONG perfPhase = 0, perfSendPhase = 0;
++    LONGLONG perfUpdate = 0, perfEnum = 0, perfRemove = 0, perfDamage = 0;
++    UINT perfWindows = 0;
++
+     LogVerbose("start");
+     if (!g_SeamlessMode)
+     {
++        perfPhase = PerfNow();
++        perfSendPhase = g_PerfSendTicks;
++
+         if (frame->dirty_rects_count == 0)
+         {
+             // normally we don't get frames with 0 dirty rects unless it's the 1st one
+@@ -1036,6 +1049,12 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+             }
+         }
+ 
++        perfDamage = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
++        PerfEmitFrame(FALSE, perfFrameStart, PerfNow() - perfFrameStart,
++            0, 0, 0, perfDamage,
++            g_PerfSendTicks - perfSendBase, g_PerfSendCount - perfSendCountBase,
++            &frame->perf, frame->dirty_rects_count, 1);
++
+         LogVerbose("end (fullscreen)");
+         return ERROR_SUCCESS;
+     }
+@@ -1044,6 +1063,9 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+ 
+     // TODO: don't enumerate all windows every time, use window hooks to monitor for changes
+ 
++    perfPhase = PerfNow();
++    perfSendPhase = g_PerfSendTicks;
++
+     // Update state of all tracked windows. If a window is no longer eligible (destroyed, hidden...)
+     // then mark it for removal but keep in the list for now, so AddAllWindows() can skip them.
+     entry = (WINDOW_DATA*)g_WatchedWindowsList.Flink;
+@@ -1062,9 +1084,17 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+         entry = nextEntry;
+     }
+ 
++    perfUpdate = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
++    perfPhase = PerfNow();
++    perfSendPhase = g_PerfSendTicks;
++
+     // Enumerate all top-level windows and all eligible ones to the list if not already there.
+     AddAllWindows();
+ 
++    perfEnum = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
++    perfPhase = PerfNow();
++    perfSendPhase = g_PerfSendTicks;
++
+     // Remove windows marked for deletion.
+     entry = (WINDOW_DATA*)g_WatchedWindowsList.Flink;
+     while (entry != (WINDOW_DATA*)&g_WatchedWindowsList)
+@@ -1085,12 +1115,17 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+         entry = nextEntry;
+     }
+ 
++    perfRemove = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
++    perfPhase = PerfNow();
++    perfSendPhase = g_PerfSendTicks;
++
+     // send damage notifications
+     entry = (WINDOW_DATA *)g_WatchedWindowsList.Flink;
+     while (entry != (WINDOW_DATA*)&g_WatchedWindowsList)
+     {
+         entry = CONTAINING_RECORD(entry, WINDOW_DATA, ListEntry);
+         nextEntry = (WINDOW_DATA*)entry->ListEntry.Flink;
++        perfWindows++;
+ 
+         if (entry->IsIconic) // minimized, don't care
+             goto skip;
+@@ -1127,7 +1162,14 @@ skip:
+     }
+ 
+ cleanup:
++    perfDamage = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
+     LeaveCriticalSection(&g_csWatchedWindows);
++
++    PerfEmitFrame(TRUE, perfFrameStart, PerfNow() - perfFrameStart,
++        perfUpdate, perfEnum, perfRemove, perfDamage,
++        g_PerfSendTicks - perfSendBase, g_PerfSendCount - perfSendCountBase,
++        &frame->perf, frame->dirty_rects_count, perfWindows);
++
+     LogVerbose("end (%x)", status);
+     return status;
+ }
+@@ -1257,7 +1299,10 @@ static ULONG WINAPI WatchForEvents(void)
+         if (g_SeamlessMode)
+         {
+             // dump watched windows every second
+-            if (GetTickCount() - dumpLastTime > 1000)
++            // (skip entirely if the output would be discarded: DumpWindows() does
++            // OpenProcess+QueryFullProcessImageName per window and takes both the
++            // watched-windows and the logger lock, once a second, at any log level)
++            if (LogGetLevel() >= LOG_LEVEL_DEBUG && GetTickCount() - dumpLastTime > 1000)
+             {
+                 DumpWindows();
+                 dumpLastTime = GetTickCount();
+@@ -1518,6 +1563,8 @@ static ULONG Init(void)
+         return GetLastError();
+     }
+ 
++    PerfInit();
++
+     EnableUIAccess();
+     status = CfgGetModuleName(moduleName, RTL_NUMBER_OF(moduleName));
+ 
+diff --git a/gui-agent/perf.c b/gui-agent/perf.c
+new file mode 100644
+index 0000000..d3a055f
+--- /dev/null
++++ b/gui-agent/perf.c
+@@ -0,0 +1,219 @@
++/*
++ * The Qubes OS Project, http://www.qubes-os.org
++ *
++ * Copyright (c) Invisible Things Lab
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version 2
++ * of the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
++ *
++ */
++
++#include "perf.h"
++
++#include <log.h>
++#include <config.h>
++
++BOOL     g_PerfEnabled = FALSE;
++LONGLONG g_PerfFreq = 0;
++DWORD    g_PerfEveryN = 1;
++
++__declspec(thread) LONGLONG g_PerfSendTicks = 0;
++__declspec(thread) LONG     g_PerfSendCount = 0;
++
++// Accumulated over g_PerfEveryN frames. Touched only by the main loop.
++typedef struct _PERF_ACC
++{
++    UINT     frames;
++    LONGLONG dt;        // wall time covered by those frames
++    LONGLONG acquire;
++    LONGLONG wakeup;
++    LONGLONG moverect;
++    LONGLONG dirtyrect;
++    LONGLONG update;
++    LONGLONG enumerate;
++    LONGLONG remove;
++    LONGLONG damage;
++    LONGLONG send;
++    LONGLONG total;
++    LONG     sends;
++    UINT     dirty_rects;
++    UINT     move_rects;
++    UINT64   dirty_area;
++    UINT     windows;   // last value, not a sum
++    BOOL     seamless;  // last value
++} PERF_ACC;
++
++static PERF_ACC g_Acc;
++static UINT64   g_Seq = 0;              // processed frames since agent start
++static UINT     g_MoveRectsMax = 0;     // high water mark, survives into every record
++static BOOL     g_MoveRectsReported = FALSE;
++static LONGLONG g_PrevFrameQpc = 0;
++static LONGLONG g_EmitTicks = 0;        // cost of the *previous* emit, reported as "log"
++static volatile LONG g_SkippedFrames = 0;   // capture thread -> main loop
++
++void PerfInit(void)
++{
++    LARGE_INTEGER freq;
++    WCHAR moduleName[CFG_MODULE_MAX];
++    WCHAR env[8];
++    DWORD value;
++    BOOL enabled = (QGA_PERF_DEFAULT != 0);
++
++    QueryPerformanceFrequency(&freq);
++    g_PerfFreq = freq.QuadPart;
++
++    if (ERROR_SUCCESS == CfgGetModuleName(moduleName, RTL_NUMBER_OF(moduleName)))
++    {
++        if (ERROR_SUCCESS == CfgReadDword(moduleName, REG_CONFIG_PERF_VALUE, &value, NULL))
++            enabled = (value != 0);
++
++        if (ERROR_SUCCESS == CfgReadDword(moduleName, REG_CONFIG_PERF_EVERY_VALUE, &value, NULL) && value > 0)
++            g_PerfEveryN = value;
++    }
++
++    if (GetEnvironmentVariable(PERF_ENV_VALUE, env, RTL_NUMBER_OF(env)) > 0)
++        enabled = (env[0] != L'0');
++
++    g_PerfEnabled = enabled;
++
++    if (!g_PerfEnabled)
++    {
++        LogInfo("QGAPERF off");
++        return;
++    }
++
++    // Calibrate the self-cost: on a Xen HVM guest QPC may be backed by the TSC
++    // (~20-30ns) or by an emulated timer (~1us), which changes how much of the
++    // numbers below is measurement overhead. Measure instead of assuming.
++    LARGE_INTEGER a, b, t;
++    LONGLONG sink = 0;
++    QueryPerformanceCounter(&a);
++    for (int i = 0; i < 10000; i++)
++    {
++        QueryPerformanceCounter(&t);
++        sink += t.QuadPart;
++    }
++    QueryPerformanceCounter(&b);
++    LONGLONG qpcCostNs = g_PerfFreq ? ((b.QuadPart - a.QuadPart) * 1000000000LL) / g_PerfFreq / 10000LL : 0;
++
++    LogInfo("QGAPERF on: freq=%I64d everyN=%u qpc_cost_ns=%I64d default=%d (sink %I64d)",
++        g_PerfFreq, g_PerfEveryN, qpcCostNs, QGA_PERF_DEFAULT, sink);
++    LogInfo("QGAPERF-HEADER v=%d fields: seq,n,mode,dt,acq,wak,mrq,drq,upd,enu,rem,dmg,snd,tot,dr,mr,mrmax,area,win,sends,skip,log (times in microseconds)",
++        PERF_RECORD_VERSION);
++}
++
++void PerfNoteSkippedFrame(void)
++{
++    if (!g_PerfEnabled)
++        return;
++
++    InterlockedIncrement(&g_SkippedFrames);
++}
++
++void PerfNoteMoveRects(IN UINT count, IN LONG srcX, IN LONG srcY, IN const RECT* dst)
++{
++    if (!g_PerfEnabled || count == 0)
++        return;
++
++    if (count > g_MoveRectsMax)
++        g_MoveRectsMax = count;
++
++    if (!g_MoveRectsReported)
++    {
++        g_MoveRectsReported = TRUE;
++        // This is the answer to the "they seem to always be empty when testing"
++        // TODO in capture.c: if this line ever appears, move rects are usable.
++        LogInfo("QGAPERF-MOVERECTS: first non-empty GetFrameMoveRects: count=%u src=(%d,%d) dst=(%d,%d)-(%d,%d)",
++            count, srcX, srcY, dst->left, dst->top, dst->right, dst->bottom);
++    }
++}
++
++void PerfEmitFrame(
++    IN BOOL seamless,
++    IN LONGLONG frame_start_qpc,
++    IN LONGLONG total_ticks,
++    IN LONGLONG update_ticks,
++    IN LONGLONG enum_ticks,
++    IN LONGLONG remove_ticks,
++    IN LONGLONG damage_ticks,
++    IN LONGLONG send_ticks,
++    IN LONG send_count,
++    IN const PERF_CAPTURE* cap,
++    IN UINT dirty_rects,
++    IN UINT window_count)
++{
++    if (!g_PerfEnabled)
++        return;
++
++    g_Seq++;
++
++    g_Acc.frames++;
++    g_Acc.dt += g_PrevFrameQpc ? (frame_start_qpc - g_PrevFrameQpc) : 0;
++    g_PrevFrameQpc = frame_start_qpc;
++
++    g_Acc.acquire += cap->acquire_ticks;
++    g_Acc.wakeup += cap->signal_qpc ? (frame_start_qpc - cap->signal_qpc) : 0;
++    g_Acc.moverect += cap->moverect_ticks;
++    g_Acc.dirtyrect += cap->dirtyrect_ticks;
++    g_Acc.dirty_area += cap->dirty_area;
++    if (cap->move_rects_count != (UINT)-1)
++        g_Acc.move_rects += cap->move_rects_count;
++
++    g_Acc.update += update_ticks;
++    g_Acc.enumerate += enum_ticks;
++    g_Acc.remove += remove_ticks;
++    g_Acc.damage += damage_ticks;
++    g_Acc.send += send_ticks;
++    g_Acc.total += total_ticks;
++    g_Acc.sends += send_count;
++    g_Acc.dirty_rects += dirty_rects;
++    g_Acc.windows = window_count;
++    g_Acc.seamless = seamless;
++
++    if (g_Acc.frames < g_PerfEveryN)
++        return;
++
++    LONGLONG emitStart = PerfNow();
++
++    // One line, integers only, no allocation and no string building of our own.
++    LogInfo("QGAPERF,v=%d,seq=%I64u,n=%u,mode=%c,dt=%I64d,acq=%I64d,wak=%I64d,mrq=%I64d,drq=%I64d,"
++        L"upd=%I64d,enu=%I64d,rem=%I64d,dmg=%I64d,snd=%I64d,tot=%I64d,"
++        L"dr=%u,mr=%u,mrmax=%u,area=%I64u,win=%u,sends=%d,skip=%d,log=%I64d",
++        PERF_RECORD_VERSION,
++        g_Seq,
++        g_Acc.frames,
++        g_Acc.seamless ? L's' : L'f',
++        PerfUs(g_Acc.dt),
++        PerfUs(g_Acc.acquire),
++        PerfUs(g_Acc.wakeup),
++        PerfUs(g_Acc.moverect),
++        PerfUs(g_Acc.dirtyrect),
++        PerfUs(g_Acc.update),
++        PerfUs(g_Acc.enumerate),
++        PerfUs(g_Acc.remove),
++        PerfUs(g_Acc.damage),
++        PerfUs(g_Acc.send),
++        PerfUs(g_Acc.total),
++        g_Acc.dirty_rects,
++        g_Acc.move_rects,
++        g_MoveRectsMax,
++        g_Acc.dirty_area,
++        g_Acc.windows,
++        g_Acc.sends,
++        InterlockedExchange(&g_SkippedFrames, 0),
++        PerfUs(g_EmitTicks));
++
++    g_EmitTicks = PerfNow() - emitStart;
++    ZeroMemory(&g_Acc, sizeof(g_Acc));
++}
+diff --git a/gui-agent/perf.h b/gui-agent/perf.h
+new file mode 100644
+index 0000000..fc146f8
+--- /dev/null
++++ b/gui-agent/perf.h
+@@ -0,0 +1,128 @@
++/*
++ * The Qubes OS Project, http://www.qubes-os.org
++ *
++ * Copyright (c) Invisible Things Lab
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU General Public License
++ * as published by the Free Software Foundation; either version 2
++ * of the License, or (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
++ *
++ */
++
++/*
++ * Optional per-frame performance instrumentation for the seamless capture path.
++ *
++ * It answers three questions that decide where the seamless-mode latency goes:
++ *   (a) how much of a frame is spent tracking windows (UpdateWindowData + EnumWindows),
++ *   (b) how much is spent extracting/intersecting damage,
++ *   (c) how much is spent writing messages to the vchan,
++ * and it records whether IDXGIOutputDuplication::GetFrameMoveRects ever returns
++ * anything (the open TODO in capture.c).
++ *
++ * Everything here is inert when disabled: the only cost on the hot path is a
++ * predictable test of a global BOOL. Output goes to the regular agent log
++ * (which already rotates: one file per process start, older than LogRetention
++ * seconds purged at startup), one CSV-ish line per emit, at LOG_LEVEL_INFO so
++ * the default LogLevel=3 does not need to be raised (raising it to DEBUG or
++ * VERBOSE would itself dominate what we are trying to measure).
++ */
++
++#pragma once
++#include <windows.h>
++
++// Compile-time default for the master switch, used when neither the registry
++// value nor the environment variable is present.
++// 1 for the Qubes display-performance measurement builds, 0 for upstream.
++#ifndef QGA_PERF_DEFAULT
++#define QGA_PERF_DEFAULT 1
++#endif
++
++// Registry values, read from HKLM\Software\Invisible Things Lab\Qubes Tools\gui-agent
++// (falling back to the parent key, like every other config value in the agent).
++#define REG_CONFIG_PERF_VALUE       L"PerfLog"      // DWORD 0/1
++#define REG_CONFIG_PERF_EVERY_VALUE L"PerfEveryN"   // DWORD >= 1, frames aggregated per log line
++
++// Environment override (wins over the registry): QUBES_GUI_PERF=0|1
++#define PERF_ENV_VALUE L"QUBES_GUI_PERF"
++
++// Version of the CSV record format, bumped when fields change.
++#define PERF_RECORD_VERSION 1
++
++extern BOOL     g_PerfEnabled;  // master switch
++extern LONGLONG g_PerfFreq;     // QueryPerformanceFrequency, ticks per second
++extern DWORD    g_PerfEveryN;   // emit one line per this many processed frames
++
++// Time spent inside vchan sends, per thread (so the capture thread and the
++// resolution-change thread can't corrupt the main loop's accounting).
++// Maintained by VchanSendTimed(), sampled by ProcessNewFrame().
++extern __declspec(thread) LONGLONG g_PerfSendTicks;
++extern __declspec(thread) LONG     g_PerfSendCount;
++
++// Per-frame numbers produced by the capture thread and consumed by the main
++// loop. Written under CAPTURE_FRAME.lock while the main loop is blocked on
++// frame_event, read by the main loop while the capture thread is blocked on
++// ready_event, so no extra synchronization is needed.
++typedef struct _PERF_CAPTURE
++{
++    LONGLONG acquire_ticks;     // AcquireNextFrame() - mostly idle wait, reported but not part of the total
++    LONGLONG moverect_ticks;    // GetFrameMoveRects()
++    LONGLONG dirtyrect_ticks;   // GetFrameDirtyRects() (size query + fetch + malloc)
++    LONGLONG signal_qpc;        // QPC sampled right before SetEvent(frame_event)
++    UINT     move_rects_count;  // move rects reported for this frame ((UINT)-1 == query failed)
++    UINT64   dirty_area;        // sum of dirty rect areas, pixels
++} PERF_CAPTURE;
++
++// Read config, calibrate QPC, log the banner + CSV header. Call once from Init().
++void PerfInit(void);
++
++// Capture thread: a frame arrived with no dirty rects and was dropped.
++void PerfNoteSkippedFrame(void);
++
++// Capture thread: GetFrameMoveRects returned a non-empty set. Logs the first
++// occurrence loudly (this is the answer to the capture.c move-rects TODO),
++// afterwards only keeps the running maximum.
++void PerfNoteMoveRects(IN UINT count, IN LONG srcX, IN LONG srcY, IN const RECT* dst);
++
++// Main loop: account one processed frame and, every g_PerfEveryN frames, emit the record.
++// All *_ticks are QPC deltas with nested send time already subtracted (except send_ticks).
++void PerfEmitFrame(
++    IN BOOL seamless,
++    IN LONGLONG frame_start_qpc,
++    IN LONGLONG total_ticks,
++    IN LONGLONG update_ticks,
++    IN LONGLONG enum_ticks,
++    IN LONGLONG remove_ticks,
++    IN LONGLONG damage_ticks,
++    IN LONGLONG send_ticks,
++    IN LONG send_count,
++    IN const PERF_CAPTURE* cap,
++    IN UINT dirty_rects,
++    IN UINT window_count);
++
++// Returns 0 when instrumentation is disabled, so all the deltas computed from it are 0.
++static __forceinline LONGLONG PerfNow(void)
++{
++    LARGE_INTEGER li;
++
++    if (!g_PerfEnabled)
++        return 0;
++
++    QueryPerformanceCounter(&li);
++    return li.QuadPart;
++}
++
++// QPC ticks -> microseconds
++static __forceinline LONGLONG PerfUs(IN LONGLONG ticks)
++{
++    return g_PerfFreq ? (ticks * 1000000LL) / g_PerfFreq : 0;
++}
+diff --git a/gui-agent/vchan.c b/gui-agent/vchan.c
+index 2c1ee96..eff931d 100644
+--- a/gui-agent/vchan.c
++++ b/gui-agent/vchan.c
+@@ -22,6 +22,7 @@
+ #include <windows.h>
+ 
+ #include "vchan.h"
++#include "perf.h"
+ 
+ #include <libvchan.h>
+ #include <vchan-common.h>
+@@ -31,16 +32,28 @@ CRITICAL_SECTION g_VchanCriticalSection;
+ 
+ struct libvchan *g_Vchan = NULL;
+ 
++BOOL VchanSendTimed(IN struct libvchan *vchan, IN const void *data, IN size_t size, IN const WCHAR *what)
++{
++    if (!g_PerfEnabled)
++        return VchanSendBuffer(vchan, data, size, what);
++
++    LONGLONG t0 = PerfNow();
++    BOOL status = VchanSendBuffer(vchan, data, size, what);
++    g_PerfSendTicks += PerfNow() - t0;
++    g_PerfSendCount++;
++    return status;
++}
++
+ BOOL VchanSendMessage(IN const struct msg_hdr *header, IN int headerSize, IN const void *data, IN int dataSize, IN const WCHAR *what)
+ {
+     int status;
+ 
+     LogVerbose("msg 0x%x (%s) for window 0x%x, size %d", header->type, what, header->window, header->untrusted_len);
+-    status = VchanSendBuffer(g_Vchan, header, headerSize, what);
++    status = VchanSendTimed(g_Vchan, header, headerSize, what);
+     if (status < 0)
+         return FALSE;
+ 
+-    status = VchanSendBuffer(g_Vchan, data, dataSize, what);
++    status = VchanSendTimed(g_Vchan, data, dataSize, what);
+     if (status < 0)
+         return FALSE;
+ 
+diff --git a/gui-agent/vchan.h b/gui-agent/vchan.h
+index 85cf1f2..bfcfda3 100644
+--- a/gui-agent/vchan.h
++++ b/gui-agent/vchan.h
+@@ -35,9 +35,14 @@ extern struct libvchan *g_Vchan;
+ BOOL VchanInit(IN int domain, IN int port);
+ BOOL VchanSendMessage(IN const struct msg_hdr* header, IN int headerSize, IN const void* data, IN int dataSize, IN const WCHAR* what);
+ 
++// Thin wrapper around VchanSendBuffer that accounts the time spent writing to
++// the vchan (see perf.h). Identical semantics/return value; when instrumentation
++// is disabled it's a direct tail call.
++BOOL VchanSendTimed(IN struct libvchan* vchan, IN const void* data, IN size_t size, IN const WCHAR* what);
++
+ #define VCHAN_SEND_MSG(header, body, what) (\
+     header.untrusted_len = sizeof(body), \
+     VchanSendMessage(&(header), sizeof(header), &(body), sizeof(body), what) \
+     )
+ 
+-#define VCHAN_SEND(x, what) VchanSendBuffer(g_Vchan, &(x), sizeof(x), what)
++#define VCHAN_SEND(x, what) VchanSendTimed(g_Vchan, &(x), sizeof(x), what)
+diff --git a/vs2022/gui-agent/gui-agent.vcxproj b/vs2022/gui-agent/gui-agent.vcxproj
+index 1673f7e..f87fa0c 100644
+--- a/vs2022/gui-agent/gui-agent.vcxproj
++++ b/vs2022/gui-agent/gui-agent.vcxproj
+@@ -13,6 +13,7 @@
+   <ItemGroup>
+     <ClCompile Include="..\..\gui-agent\capture.c" />
+     <ClCompile Include="..\..\gui-agent\main.c" />
++    <ClCompile Include="..\..\gui-agent\perf.c" />
+     <ClCompile Include="..\..\gui-agent\resolution.c" />
+     <ClCompile Include="..\..\gui-agent\send.c" />
+     <ClCompile Include="..\..\gui-agent\util.c" />
+@@ -24,6 +25,7 @@
+   <ItemGroup>
+     <ClInclude Include="..\..\gui-agent\capture.h" />
+     <ClInclude Include="..\..\gui-agent\main.h" />
++    <ClInclude Include="..\..\gui-agent\perf.h" />
+     <ClInclude Include="..\..\gui-agent\resolution.h" />
+     <ClInclude Include="..\..\gui-agent\resource.h" />
+     <ClInclude Include="..\..\gui-agent\send.h" />
+diff --git a/vs2022/gui-agent/gui-agent.vcxproj.filters b/vs2022/gui-agent/gui-agent.vcxproj.filters
+index c408d99..81ad7a9 100644
+--- a/vs2022/gui-agent/gui-agent.vcxproj.filters
++++ b/vs2022/gui-agent/gui-agent.vcxproj.filters
+@@ -21,6 +21,9 @@
+     <ClCompile Include="..\..\gui-agent\main.c">
+       <Filter>Source Files</Filter>
+     </ClCompile>
++    <ClCompile Include="..\..\gui-agent\perf.c">
++      <Filter>Source Files</Filter>
++    </ClCompile>
+     <ClCompile Include="..\..\gui-agent\resolution.c">
+       <Filter>Source Files</Filter>
+     </ClCompile>
+@@ -50,6 +53,9 @@
+     <ClInclude Include="..\..\gui-agent\main.h">
+       <Filter>Header Files</Filter>
+     </ClInclude>
++    <ClInclude Include="..\..\gui-agent\perf.h">
++      <Filter>Header Files</Filter>
++    </ClInclude>
+     <ClInclude Include="..\..\gui-agent\resolution.h">
+       <Filter>Header Files</Filter>
+     </ClInclude>
+-- 
+2.55.0
+
+
+From e5ea33d32bb0ce8801dcca758ead523302a9d16f Mon Sep 17 00:00:00 2001
+From: arkenoi <6000406+arkenoi@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 01:29:12 +0300
+Subject: [PATCH 2/3] Phase 2A: event-driven window tracking (SetWinEventHook),
+ review fixes applied
+
+Replaces the per-frame AddAllWindows() pass - which re-interrogated all 67
+ineligible top-level windows every frame at ~340us each (cross-process
+GetWindowText + DwmGetWindowAttribute) - with a dedicated hook thread feeding a
+pending-window queue, plus a reject cache and a periodic resync backstop.
+
+Adversarial review found 9 defects; the blocking ones are fixed here:
+
+D1 dropped the "pending resync suppresses the signal" shortcut. It depended on
+   an invariant DiscardWindowEvents() breaks, so after seamless off->on every
+   event took the suppressed path and window moves silently fell back to
+   capture rate.
+D2 the reject signature is now sampled BEFORE interrogation. Sampling it after
+   could bake in a state change that happened during interrogation, so a
+   coalesced EVENT_OBJECT_SHOW would hide the window from dom0 forever -
+   defeating the resync in exactly the case it exists for.
+D3 the hook thread no longer calls AttachToInputDesktop(): that writes shared
+   g_StartWindow/g_SearchWindow unsynchronised (the reject cache now depends on
+   them, so a torn read would cache the real Start window as ineligible,
+   permanently) and CloseDesktop()s the process-default handle, which MSDN
+   forbids and a third caller would double-close. Only the per-thread
+   OpenInputDesktop/SetThreadDesktop is done, closing only this thread's handle.
+D4 tot now includes tracking done between frames. Otherwise upd+enu exceed tot
+   once the hook moves work out of the frame, and the analyzer reports >100%
+   shares and negative "unaccounted" - invalidating the very measurement Phase
+   2A is judged on.
+D6 the admit path consults the reject cache. Events whose effect is visible in
+   the cheap signature (LOCATIONCHANGE/STATECHANGE) no longer force
+   re-interrogation, while CLOAKED/UNCLOAKED/CREATE/SHOW/HIDE/NAMECHANGE always
+   do. Without this an event-noisy ineligible window re-paid the full cost at
+   input rate - reinstating exactly what this change removes.
+D7 hook-thread death is now logged and drops the resync interval to 150ms, so
+   failure degrades to roughly the old cadence instead of 0.5Hz - below par.
+D8 a failed ExamineWindow re-requests a resync instead of silently dropping the
+   rest of the batch.
+
+Also fixes a pre-existing leak: the old AddWindowsProc malloc'd WINDOW_DATA for
+every rejected window and never freed it (~67/frame).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+(cherry picked from commit 6d4613269339cbfd3e6a33a2e663fe522c4a6faa)
+---
+ PHASE2A-NOTES.md | 183 +++++++++
+ gui-agent/main.c | 948 +++++++++++++++++++++++++++++++++++++++++++----
+ gui-agent/perf.c |  14 +-
+ gui-agent/perf.h |   7 +-
+ 4 files changed, 1065 insertions(+), 87 deletions(-)
+ create mode 100644 PHASE2A-NOTES.md
+
+diff --git a/PHASE2A-NOTES.md b/PHASE2A-NOTES.md
+new file mode 100644
+index 0000000..420b329
+--- /dev/null
++++ b/PHASE2A-NOTES.md
+@@ -0,0 +1,183 @@
++# Phase 2A — event-driven window tracking in the Windows gui-agent
++
++Replaces the per-frame `EnumWindows()` pass in `ProcessNewFrame()` with
++`SetWinEventHook`-driven tracking, plus a cache of ineligible windows and a periodic
++full resync as a safety net.
++
++## Why
++
++Measured on `win-idd-test` (Win10 LTSC 2021 19044, 4 vCPU) with the Phase 1A QGAPERF
++instrumentation, 499 frames over 75 s of scripted drag/scroll/typing:
++
++| phase | mean | p50 | max | share |
++|---|---|---|---|---|
++| `enu` — `AddAllWindows()` / `EnumWindows` | 31.8 ms | 23.1 ms | 177 ms | **97.5%** |
++| `upd` — `UpdateWindowData()` over tracked windows | 0.58 ms | 0.37 ms | 5.6 ms | 1.8% |
++| `drq`+`dmg` — damage extraction and intersection | 84 µs | 56 µs | 2.1 ms | 0.3% |
++| `snd` — vchan writes | 92 µs | 58 µs | 1.5 ms | 0.3% |
++
++The guest has ~70 top-level windows and normally exactly one of them is eligible.
++`AddWindowsProc()` early-outs only for windows *already in the watched list*
++(`FindWindowByHandle`), so all ~69 rejected windows fell through to
++`GetWindowData()` + `ShouldAcceptWindow()` again on **every frame, forever** —
++each one a `malloc`, a synchronous cross-process `WM_GETTEXT` (`GetWindowText`),
++`GetClassName`, `IsWindowVisible` and a `DwmGetWindowAttribute(DWMWA_CLOAKED)` RPC to
++DWM, ~340 µs apiece. Rejections were never remembered. The agent got 6.6 fps and spent
++essentially all of it deciding, again, that the same 69 windows are not interesting.
++
++Move rects are **always empty** on this path (0 in all 499 agent frames and in a
++separate 25 s `ddaprobe` drag), so no move-rect handling was added — see
++`instrumentation/PHASE1A-RESULT.md` in the parent repo.
++
++## Threading decision (the load-bearing one)
++
++`WatchForEvents()` is a `WaitForMultipleObjects(..., INFINITE)` loop, **not** a
++`GetMessage` loop, and the agent has no message pump anywhere. Out-of-context WinEvent
++hooks (`WINEVENT_OUTOFCONTEXT`) are delivered by the system only while the hook-owning
++thread retrieves messages, so a pump had to come from somewhere. Two options:
++
++1. **Convert the main loop to `MsgWaitForMultipleObjects`** and own the hooks there.
++   Rejected. The main thread blocks for long stretches: inside `ProcessNewFrame()`
++   (holding `g_csWatchedWindows`, doing DWM queries and vchan writes) and inside
++   `HandleServerData()`. While it is blocked it retrieves no messages, so callbacks
++   would be delayed by exactly the work we are trying to make cheap, and the system
++   coalesces/drops events for a hook client that falls behind. It would also entangle
++   the rework with the main loop's control flow, which is the part upstream will read
++   most carefully.
++
++2. **A dedicated hook thread** (chosen). `WindowEventThreadProc()` does nothing but
++   attach to the input desktop, set the hooks, and pump; the callback appends handles
++   to a bounded queue and signals the main loop. Nothing slow can ever get between an
++   event and the pump. It also makes the desktop lifecycle explicit: WinEvent hooks
++   only see the desktop their owning thread is attached to, and the agent re-attaches
++   on every `StartFrameProcessing()` (i.e. after a desktop switch shows up as a capture
++   error), so `RearmWindowEvents()` is called from there and the thread unhooks,
++   re-attaches and re-hooks, then forces a resync.
++
++The hook thread waits with `MsgWaitForMultipleObjects(2, {stop, rearm}, ..., QS_ALLINPUT)`
++and drains with `PeekMessage(PM_REMOVE)`. It never touches `g_csWatchedWindows`, only
++its own `g_csWindowEvents`, so there is no lock-order relationship with the main loop
++(the main loop takes watched → events, never the reverse) and the callback can never
++block on frame processing.
++
++### Why the callback does no real work
++
++`WindowEventProc()` filters (`OBJID_WINDOW`/`CHILDID_SELF`, parented to the desktop,
++seamless mode on) and appends an `HWND`. No `GetWindowText`, no DWM call, no vchan
++write — all of those are what made the old path expensive, and any of them in the
++callback would stall the event stream for every other window. The interrogation happens
++on the main loop, which is also the only thread allowed to touch the watched list.
++
++The `objectId != OBJID_WINDOW || childId != CHILDID_SELF` test is what makes the
++callback affordable at all: `EVENT_OBJECT_LOCATIONCHANGE` fires for carets and the
++mouse cursor at input rate.
++
++### Hooked events
++
++| range | why |
++|---|---|
++| `EVENT_SYSTEM_MINIMIZESTART..MINIMIZEEND` | minimize/restore (`WINDOW_FLAG_MINIMIZE`) |
++| `EVENT_SYSTEM_DESKTOPSWITCH` | forces a full resync |
++| `EVENT_OBJECT_CREATE..HIDE` | create/destroy/show/hide — list membership |
++| `EVENT_OBJECT_STATECHANGE..NAMECHANGE` | includes `LOCATIONCHANGE` (moves/resizes) and `NAMECHANGE` (`MSG_WMNAME`) |
++| `EVENT_OBJECT_CLOAKED..UNCLOAKED` | `GetWindowData()` treats DWM-cloaked windows as invisible, and cloaking changes nothing else observable |
++
++## Cache of ineligible windows, and its invalidation
++
++`g_RejectedWindows[]` remembers windows that `ShouldAcceptWindow()` refused, together
++with their creator process/thread ids, styles and `GetWindowRect()`. It is consulted
++**only on the resync path**; the per-frame path does not enumerate at all, so a rejected
++window is never re-interrogated because of a frame. An entry is dropped when:
++
++* an event names the window — `ExamineWindow()` evicts before interrogating, so
++  SHOW/HIDE/NAMECHANGE/LOCATIONCHANGE/STATECHANGE/CLOAKED/UNCLOAKED/CREATE/DESTROY all
++  re-admit it;
++* `IsWindowRejected()` finds the creator thread or process id changed (window destroyed,
++  handle recycled — both ids read 0 for a dead window);
++* `IsWindowRejected()` finds `GWL_STYLE`, `GWL_EXSTYLE` or the window rect changed. This
++  is the backstop for a lost event: becoming visible (`WS_VISIBLE`), growing past
++  `g_MinWindowWidth/Height` or changing extended styles all show up here, and all three
++  checks are in-process reads, no cross-process call;
++* `ResetWatch()` runs (seamless/fullscreen switch, resolution change) — the whole cache
++  is cleared.
++
++Two classes of window are **never** cached, because interrogating them has a side effect
++on global state that `AddAllWindows()` recomputes from scratch each resync: the UAC
++placeholder window (sets `g_ShowTaskbar`) and the Start/Search windows (set
++`g_StartVisible`, which gates Search's acceptance). Caching them would freeze that state.
++
++**HWND reuse** is handled by the creator id check above, plus the fact that
++`EVENT_OBJECT_DESTROY` and `EVENT_OBJECT_CREATE` both evict. A handle recycled by the
++same thread *and* reused for a window with identical styles and identical rect would
++inherit the entry, but only until the next event for it, and it would have to already be
++ineligible-looking on all three counts.
++
++## Resync safety net
++
++`TakePendingWindows()` forces a full `AddAllWindows()` when:
++
++* it is the first pass (`g_ResyncRequested` starts `TRUE`);
++* the hook thread (re)armed the hooks or saw `EVENT_SYSTEM_DESKTOPSWITCH`;
++* the pending queue overflowed (`PENDING_WINDOWS_MAX` = 256 distinct handles between two
++  drains) — events are never silently dropped, an overflow degrades to a resync;
++* events were discarded because we were not streaming (`DiscardWindowEvents()`);
++* `WINDOW_RESYNC_INTERVAL_MS` (**2000 ms**) has elapsed since the last resync.
++
++2 s is picked so that a lost event is a glitch, not breakage, while the cost stays
++negligible: a resync now interrogates only tracked windows plus windows whose cheap
++signature changed, so the ~70-window scan is a few `GetWindowLong`/`GetWindowRect` calls
++each (tens of µs total) instead of ~23 ms. Even in the worst case where the cache is
++useless, it is one 23 ms frame every 2 s (1.2%) rather than 23 ms on every frame.
++Because the resync also runs `UpdateWindowData()` over every tracked window, a missed
++`LOCATIONCHANGE` can leave a window's geometry stale for at most that interval.
++
++## Instrumentation
++
++`enu` still measures the tracking phase (admitting new windows / the resync
++enumeration), `upd` still measures refreshing tracked windows, `rem` removals — the
++Phase 1A analysis and `analyze-perf.py` keep working unchanged. Added, record version
++bumped to 2:
++
++* `iwn` — windows whose state was actually queried in this frame (the direct
++  before/after number: it was ~70 every frame, it should now be 0–1 on most frames);
++* `wev` — window events applied in this frame (0 on a resync frame).
++
++Tracking done *between* frames (the new `case 6` wakeup) is accumulated in
++`g_Tracked*` and folded into the next frame's record, so no tracking cost can hide
++outside the QGAPERF accounting.
++
++## Behaviour deltas (deliberate)
++
++* `MSG_CONFIGURE`/`MSG_MAP`/`MSG_WMNAME` are now sent when the event arrives, not when
++  the next frame is captured — window moves reach the gui daemon at input rate. This is
++  the point of `case 6` in the main loop.
++* `g_ShowTaskbar` (UAC prompt → show the taskbar) is recomputed on resync rather than
++  per frame, so it can lag by up to 2 s.
++* Fixed on the way past: the old `AddWindowsProc()` leaked the `WINDOW_DATA` allocated
++  by `GetWindowData()` for every rejected window — ~69 allocations per frame, ~7 MB/s at
++  the measured frame rate. `ExamineWindow()` frees it.
++* `AddAllWindows()` no longer reports a bogus `EnumWindows` error when enumeration was
++  stopped by the callback because of a vchan failure; it reports the real status.
++
++## Not verified here
++
++This qube has no MSVC and the guest was not rebuilt in this session. Specifically:
++
++* **It has not been compiled.** Written to be warning-clean under `/W4 /permissive- /sdl`
++  with `TreatWarningAsError`, but that needs the CI job to confirm.
++* **It has not been run.** No before/after numbers yet; rerun `drag-harness.ps1` +
++  `analyze-perf.py` and compare `enu`, `tot`, `iwn`.
++* Whether `MsgWaitForMultipleObjects` + `PeekMessage` delivers WinEvent callbacks
++  reliably in this guest (it is the standard pattern, and the system also processes
++  sent messages inside the wait itself, but it is untested here).
++* Whether `GetAncestor(w, GA_PARENT) == GetDesktopWindow()` accepts exactly the set
++  `EnumWindows()` offers on this guest. If it is stricter, the 2 s resync covers the
++  difference — that would show up as windows appearing with up to 2 s delay.
++* Whether any relevant transition produces *no* event at all (the cheap-signature check
++  and the resync are both aimed at this, but the failure mode to watch for is "window
++  visible in the guest, missing in dom0, appears within ~2 s").
++* The UAC-prompt/taskbar path and the Start/Search visibility workaround were reasoned
++  about, not exercised.
++* `AttachToInputDesktop()` is now also called from the hook thread. It closes the handle
++  returned by `GetThreadDesktop()`, which is a pre-existing upstream oddity; a second
++  caller has not been observed to cause trouble, but it was not tested either.
+diff --git a/gui-agent/main.c b/gui-agent/main.c
+index 02c8246..b53a497 100755
+--- a/gui-agent/main.c
++++ b/gui-agent/main.c
+@@ -96,6 +96,425 @@ HWND g_SearchWindow = NULL;
+ 
+ HANDLE g_ShutdownEvent = NULL;
+ 
++/*
++ * Event-driven window tracking.
++ *
++ * The watched window list used to be rebuilt by an EnumWindows() pass on every
++ * captured frame. Measured on a stock Windows 10 guest that pass took 23 ms
++ * (median, up to 177 ms) per frame and accounted for 97.5% of all frame
++ * processing time: the guest has ~70 top-level windows, only one of which is
++ * usually eligible, and every ineligible one was re-interrogated from scratch on
++ * every frame (each interrogation is a cross-process WM_GETTEXT plus an RPC to
++ * DWM).
++ *
++ * Instead a dedicated thread owns a set of WinEvent hooks and only records which
++ * window handles something happened to; the main loop interrogates just those.
++ * See PHASE2A-NOTES.md for the design rationale.
++ */
++
++// Interval of the full EnumWindows() resync that backstops the event stream (see
++// TakePendingWindows). Two seconds: a resync is cheap now that ineligible windows
++// are cached (nothing is interrogated unless it visibly changed), and it bounds
++// how long a window could stay missing from the gui daemon to something a user
++// would call a glitch rather than a hang.
++#define WINDOW_RESYNC_INTERVAL_MS 2000
++
++// Maximum number of distinct window handles queued between two drains. On
++// overflow we fall back to a full resync instead of dropping an event.
++#define PENDING_WINDOWS_MAX 256
++
++// Maximum number of remembered ineligible windows.
++#define REJECTED_WINDOWS_MAX 256
++
++// Handles the hook thread waits on besides its message queue: stop, rearm.
++#define WINDOW_EVENT_WAIT_COUNT 2
++
++// Placeholder window of a minimized UAC prompt, see GetWindowData().
++#define UAC_DUMMY_WINDOW_CLASS L"$$$Secure UAP Dummy Window Class For Interim Dialog"
++
++// Written by the hook thread, drained by the main loop.
++static CRITICAL_SECTION g_csWindowEvents;
++static HWND g_PendingWindows[PENDING_WINDOWS_MAX];
++// Event id that queued each pending window, parallel to g_PendingWindows. Needed because
++// the admit path must know WHY a window was queued: for events whose effect is visible in
++// the cheap signature (LOCATIONCHANGE/STATECHANGE/NAMECHANGE) a cached rejection is still
++// valid and the expensive interrogation can be skipped, but CLOAKED/UNCLOAKED change
++// eligibility WITHOUT touching style/rect, so those must always force re-examination.
++static DWORD g_PendingEvents[PENDING_WINDOWS_MAX];
++static UINT g_PendingWindowsCount = 0;
++static BOOL g_ResyncRequested = TRUE; // the first pass is always a full enumeration
++
++// Main loop only, guarded by nothing: read and written by the thread that drains events.
++static DWORD g_LastResyncTime = 0;
++
++static HANDLE g_WindowEventSignal = NULL; // auto-reset: window events are waiting
++static HANDLE g_WindowEventRearm = NULL;  // auto-reset: reattach to the input desktop, rearm hooks
++static HANDLE g_WindowEventStop = NULL;   // manual-reset: leave the hook thread
++static HANDLE g_WindowEventThread = NULL;
++
++// Set when the hook thread dies. Without hooks the only tracking left is the periodic
++// resync, so keep it short: at WINDOW_RESYNC_INTERVAL_MS window moves would reach dom0 at
++// 0.5 Hz, which is WORSE than the per-frame enumeration this replaced. Falling back to
++// roughly the old cadence is a regression to par, not below it.
++static volatile LONG g_WindowEventThreadDead = 0;
++#define WINDOW_RESYNC_FALLBACK_MS 150
++
++#ifndef EVENT_OBJECT_CLOAKED // Win8+ SDK
++#define EVENT_OBJECT_CLOAKED 0x8017
++#define EVENT_OBJECT_UNCLOAKED 0x8018
++#endif
++
++static const struct
++{
++    DWORD Min;
++    DWORD Max;
++} g_HookedEventRanges[] =
++{
++    { EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND }, // minimize/restore
++    { EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_DESKTOPSWITCH }, // secure desktop etc
++    { EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE }, // create/destroy/show/hide
++    { EVENT_OBJECT_STATECHANGE, EVENT_OBJECT_NAMECHANGE }, // state/location/name (window moves)
++    { EVENT_OBJECT_CLOAKED, EVENT_OBJECT_UNCLOAKED }, // DWM cloaking = invisible for us
++};
++
++// TRUE for events whose effect on eligibility is INVISIBLE to the cheap reject-cache
++// signature (pid/tid/style/exstyle/rect), so a cached rejection cannot be trusted and the
++// window must be interrogated again.
++//   - CLOAKED/UNCLOAKED: DWM cloaking is not a window style; a cloaked window keeps its
++//     rect and styles, so nothing in the signature moves.
++//   - CREATE/DESTROY/SHOW/HIDE: shell/lifecycle transitions; also update the globals
++//     (g_ShowTaskbar, g_StartVisible) that gate other windows.
++//   - NAMECHANGE: the caption is part of what is sent to dom0 and is not in the signature.
++// LOCATIONCHANGE and STATECHANGE are deliberately NOT here: both move the rect or the
++// style, so IsWindowRejected() detects them by itself, and those are exactly the events a
++// dragged window emits at input rate. Re-interrogating on them would reinstate the ~340 us
++// per-window cost that Phase 2A exists to remove.
++static BOOL WindowEventForcesReexamine(IN DWORD event)
++{
++    switch (event)
++    {
++    case EVENT_OBJECT_CREATE:
++    case EVENT_OBJECT_DESTROY:
++    case EVENT_OBJECT_SHOW:
++    case EVENT_OBJECT_HIDE:
++    case EVENT_OBJECT_NAMECHANGE:
++    case EVENT_OBJECT_CLOAKED:
++    case EVENT_OBJECT_UNCLOAKED:
++        return TRUE;
++    default:
++        return FALSE;
++    }
++}
++
++// Record that something happened to a window (or, with resync=TRUE, that the
++// whole list needs to be rebuilt). Called from the hook thread.
++static void QueueWindowEvent(IN HWND window, IN DWORD event, IN BOOL resync)
++{
++    BOOL signal = TRUE;
++
++    EnterCriticalSection(&g_csWindowEvents);
++    if (resync)
++    {
++        g_PendingWindowsCount = 0;
++        g_ResyncRequested = TRUE;
++    }
++    // NOTE: there is deliberately no "else if (g_ResyncRequested) signal = FALSE" shortcut.
++    // It looks free (a pending resync does cover every window) but it depends on an
++    // invariant DiscardWindowEvents() breaks: that function also sets g_ResyncRequested,
++    // without signalling, and only TakePendingWindows() clears it. After a
++    // seamless-off -> on transition the flag can remain set with no signal outstanding, and
++    // from then on EVERY event takes the suppressed path, so window moves silently fall
++    // back to capture rate. Signalling an auto-reset event is far cheaper than that.
++    else
++    {
++        UINT i;
++
++        for (i = 0; i < g_PendingWindowsCount; i++)
++        {
++            if (g_PendingWindows[i] == window)
++                break;
++        }
++
++        if (i < g_PendingWindowsCount)
++        {
++            // Already queued. Keep the reason that forces the most work, so a cheap
++            // LOCATIONCHANGE cannot mask a CLOAKED that arrived for the same window.
++            if (WindowEventForcesReexamine(event))
++                g_PendingEvents[i] = event;
++            signal = FALSE; // already queued and not drained yet
++        }
++        else if (g_PendingWindowsCount < PENDING_WINDOWS_MAX)
++        {
++            g_PendingEvents[g_PendingWindowsCount] = event;
++            g_PendingWindows[g_PendingWindowsCount++] = window;
++        }
++        else
++        {
++            // We can't keep up with the event rate; don't lose anything, resync.
++            g_PendingWindowsCount = 0;
++            g_ResyncRequested = TRUE;
++        }
++    }
++    LeaveCriticalSection(&g_csWindowEvents);
++
++    if (signal)
++        SetEvent(g_WindowEventSignal);
++}
++
++// Hand the queued window handles to the caller and tell it whether a full
++// enumeration is due. Called from the main loop only.
++static BOOL TakePendingWindows(OUT HWND* buffer, OUT DWORD* events, IN UINT capacity, OUT UINT* count)
++{
++    BOOL resync;
++    DWORD now;
++
++    EnterCriticalSection(&g_csWindowEvents);
++    resync = g_ResyncRequested;
++    g_ResyncRequested = FALSE;
++    *count = 0;
++    if (!resync)
++    {
++        *count = g_PendingWindowsCount < capacity ? g_PendingWindowsCount : capacity;
++        memcpy(buffer, g_PendingWindows, (*count) * sizeof(HWND));
++        memcpy(events, g_PendingEvents, (*count) * sizeof(DWORD));
++    }
++    g_PendingWindowsCount = 0;
++    LeaveCriticalSection(&g_csWindowEvents);
++
++    // Safety net: an event can be lost (the hooks are down for a moment while we
++    // reattach to a new input desktop, the system coalesces or drops events if the
++    // hook thread falls behind), and some inputs of ShouldAcceptWindow() change
++    // without any event for the affected window at all (g_ShowTaskbar,
++    // g_StartVisible). A periodic full enumeration repairs any such desync.
++    now = GetTickCount();
++    {
++        // If the hook thread died there are no events at all, so the resync IS the
++        // tracking - run it far more often so we degrade to the old behaviour rather
++        // than below it (see g_WindowEventThreadDead).
++        DWORD interval = InterlockedCompareExchange(&g_WindowEventThreadDead, 0, 0)
++            ? WINDOW_RESYNC_FALLBACK_MS : WINDOW_RESYNC_INTERVAL_MS;
++
++        if (!resync && (now - g_LastResyncTime) >= interval)
++            resync = TRUE;
++    }
++
++    if (resync)
++        g_LastResyncTime = now;
++
++    return resync;
++}
++
++// Forget everything that was queued; the caller knows the list is up to date
++// (or that it doesn't care, in fullscreen mode).
++static void DiscardWindowEvents(void)
++{
++    EnterCriticalSection(&g_csWindowEvents);
++    g_PendingWindowsCount = 0;
++    g_ResyncRequested = TRUE; // whatever we just dropped is covered by the next resync
++    LeaveCriticalSection(&g_csWindowEvents);
++}
++
++// WinEvent hook callback, runs on the hook thread.
++//
++// This must stay cheap: the same thread has to keep retrieving messages for
++// out-of-context hooks to be delivered at all, so anything slow here (a
++// cross-process GetWindowText, a DWM query, a vchan write) would stall the event
++// stream. It only ever records handles; all interrogation happens in the main loop.
++static void CALLBACK WindowEventProc(
++    IN HWINEVENTHOOK hook,
++    IN DWORD event,
++    IN HWND window,
++    IN LONG objectId,
++    IN LONG childId,
++    IN DWORD eventThread,
++    IN DWORD eventTime)
++{
++    UNREFERENCED_PARAMETER(hook);
++    UNREFERENCED_PARAMETER(eventThread);
++    UNREFERENCED_PARAMETER(eventTime);
++
++    if (!g_SeamlessMode) // the watched window list isn't used in fullscreen mode
++        return;
++
++    if (event == EVENT_SYSTEM_DESKTOPSWITCH)
++    {
++        QueueWindowEvent(NULL, 0, TRUE);
++        return;
++    }
++
++    // Only whole top-level windows are relevant. This filter is what makes the
++    // callback affordable: it drops the flood of EVENT_OBJECT_LOCATIONCHANGE for
++    // carets, the cursor and child controls.
++    if (objectId != OBJID_WINDOW || childId != CHILDID_SELF || !window)
++        return;
++
++    // EnumWindows() only offers windows parented to the desktop, track exactly the
++    // same set (this also drops message-only windows). A destroyed window can't be
++    // queried anymore, so it has to be let through unfiltered.
++    if (event != EVENT_OBJECT_DESTROY && GetAncestor(window, GA_PARENT) != GetDesktopWindow())
++        return;
++
++    QueueWindowEvent(window, event, FALSE);
++}
++
++// Owns the WinEvent hooks and pumps messages for them.
++static DWORD WINAPI WindowEventThreadProc(IN void* param)
++{
++    HWINEVENTHOOK hooks[RTL_NUMBER_OF(g_HookedEventRanges)];
++    HANDLE waitFor[WINDOW_EVENT_WAIT_COUNT];
++    BOOL exitThread = FALSE;
++    HDESK ownDesktop = NULL; // the desktop THIS thread opened, closed only by this thread
++
++    UNREFERENCED_PARAMETER(param);
++    LogDebug("start");
++
++    waitFor[0] = g_WindowEventStop;
++    waitFor[1] = g_WindowEventRearm;
++
++    while (!exitThread)
++    {
++        HDESK previousDesktop = ownDesktop;
++
++        ZeroMemory(hooks, sizeof(hooks));
++
++        // WinEvent hooks only receive events from the desktop that the thread setting
++        // them is attached to, so this thread must follow the input desktop.
++        //
++        // Deliberately NOT AttachToInputDesktop(): that helper also writes the shared
++        // globals g_DesktopWindow/g_StartWindow/g_SearchWindow, unsynchronised, and it is
++        // already called from two other threads. The reject cache now depends on
++        // g_StartWindow/g_SearchWindow (ExamineWindow refuses to cache them because
++        // interrogating them updates g_StartVisible/g_ShowTaskbar), so a torn read there
++        // would cache the real Start window as ineligible - permanently, since the entry
++        // survives every resync. It also CloseDesktop()s the process-default desktop
++        // handle, which MSDN forbids and which a third caller would double-close.
++        // Only the per-thread part is needed here.
++        ownDesktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS | DESKTOP_HOOKCONTROL);
++        if (ownDesktop)
++        {
++            if (!SetThreadDesktop(ownDesktop))
++                win_perror("SetThreadDesktop");
++        }
++        else
++        {
++            win_perror("OpenInputDesktop");
++        }
++
++        if (previousDesktop)
++            CloseDesktop(previousDesktop);
++
++        for (UINT i = 0; i < RTL_NUMBER_OF(g_HookedEventRanges); i++)
++        {
++            hooks[i] = SetWinEventHook(g_HookedEventRanges[i].Min, g_HookedEventRanges[i].Max,
++                NULL, WindowEventProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
++
++            if (!hooks[i])
++                LogWarning("SetWinEventHook(0x%x-0x%x) failed", g_HookedEventRanges[i].Min, g_HookedEventRanges[i].Max);
++        }
++
++        // Whatever happened while the hooks were down is unknown to us.
++        QueueWindowEvent(NULL, 0, TRUE);
++
++        while (TRUE)
++        {
++            // Out-of-context hook callbacks are delivered by the system while this
++            // thread retrieves messages, so this wait must be message-aware.
++            DWORD signaled = MsgWaitForMultipleObjects(WINDOW_EVENT_WAIT_COUNT, waitFor, FALSE, INFINITE, QS_ALLINPUT);
++
++            if (signaled == WAIT_OBJECT_0) // stop
++            {
++                exitThread = TRUE;
++                break;
++            }
++
++            if (signaled == WAIT_OBJECT_0 + 1) // rearm on a new desktop
++                break;
++
++            if (signaled == WAIT_OBJECT_0 + WINDOW_EVENT_WAIT_COUNT) // message(s) queued
++            {
++                MSG msg;
++
++                while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
++                {
++                    if (msg.message == WM_QUIT)
++                    {
++                        exitThread = TRUE;
++                        break;
++                    }
++
++                    TranslateMessage(&msg);
++                    DispatchMessage(&msg);
++                }
++
++                if (exitThread)
++                    break;
++
++                continue;
++            }
++
++            win_perror("MsgWaitForMultipleObjects");
++            exitThread = TRUE;
++            break;
++        }
++
++        for (UINT i = 0; i < RTL_NUMBER_OF(hooks); i++)
++        {
++            if (hooks[i])
++                UnhookWinEvent(hooks[i]);
++        }
++    }
++
++    if (ownDesktop)
++        CloseDesktop(ownDesktop);
++
++    // D7: if this thread ever exits, event-driven tracking stops and window moves fall back
++    // to the 2 s resync - i.e. 0.5 Hz, WORSE than the 6.6 Hz the old per-frame enumeration
++    // achieved. Make that loud rather than a silent regression, and let the frame path fall
++    // back to a short resync so behaviour degrades to roughly the old code instead.
++    LogError("window event thread exiting - tracking falls back to periodic resync");
++    InterlockedExchange(&g_WindowEventThreadDead, 1);
++
++    LogDebug("end");
++    return ERROR_SUCCESS;
++}
++
++// Tell the hook thread to reattach to the current input desktop and rearm.
++static void RearmWindowEvents(void)
++{
++    if (g_WindowEventRearm)
++        SetEvent(g_WindowEventRearm);
++}
++
++static ULONG StartWindowEventThread(void)
++{
++    InitializeCriticalSection(&g_csWindowEvents);
++
++    g_WindowEventSignal = CreateEvent(NULL, FALSE, FALSE, NULL);
++    g_WindowEventRearm = CreateEvent(NULL, FALSE, FALSE, NULL);
++    g_WindowEventStop = CreateEvent(NULL, TRUE, FALSE, NULL);
++    if (!g_WindowEventSignal || !g_WindowEventRearm || !g_WindowEventStop)
++        return win_perror("CreateEvent");
++
++    g_WindowEventThread = CreateThread(NULL, 0, WindowEventThreadProc, NULL, 0, NULL);
++    if (!g_WindowEventThread)
++        return win_perror("CreateThread(window events)");
++
++    return ERROR_SUCCESS;
++}
++
++static void StopWindowEventThread(void)
++{
++    if (!g_WindowEventThread)
++        return;
++
++    SetEvent(g_WindowEventStop);
++    if (WAIT_OBJECT_0 != WaitForSingleObject(g_WindowEventThread, 2000))
++        LogWarning("window event thread didn't exit in time");
++
++    CloseHandle(g_WindowEventThread);
++    g_WindowEventThread = NULL;
++}
++
+ #ifdef DEBUG_DUMP_WINDOWS
+ // FIXME: this fails for UWP apps
+ void DumpWindowBitmap(const WINDOW_DATA* data)
+@@ -436,7 +855,7 @@ ULONG GetWindowData(IN HWND window, IN OUT WINDOW_DATA** windowData)
+         // But, for SOME reason, *sometimes* these windows don't have the iconic flag set, and their size is 0...
+         // TODO: enumerate taskbar buttons to properly detect such cases,
+         // this seems to require using UI Automation interfaces.
+-        if (wcscmp(entry->Class, L"$$$Secure UAP Dummy Window Class For Interim Dialog") == 0)
++        if (wcscmp(entry->Class, UAC_DUMMY_WINDOW_CLASS) == 0)
+         {
+             // For now we hide these windows and mark the taskbar to be shown
+             // because programatically activating them doesn't seem to work.
+@@ -557,50 +976,227 @@ end:
+     return status;
+ }
+ 
+-// EnumWindows callback for adding all eligible top-level windows to the list.
+-// watched windows critical section must be entered
+-static BOOL CALLBACK AddWindowsProc(IN HWND window, IN LPARAM lParam)
++/*
++ * Cache of windows that were interrogated and found ineligible.
++ *
++ * Without it every resync would re-interrogate the ~70 windows that a Windows
++ * desktop keeps around and never shows. Entries are only trusted while nothing
++ * cheaply observable about the window changed, so a window that becomes eligible
++ * is re-admitted even if we never saw an event for it.
++ *
++ * Accessed by the main loop only, with the watched windows critical section held.
++ */
++typedef struct _REJECTED_WINDOW
+ {
+-    UNREFERENCED_PARAMETER(lParam);
+-    ULONG status;
++    HWND  Handle;
++    DWORD ProcessId; // creator ids: guard against handle reuse
++    DWORD ThreadId;
++    DWORD Style;     // cheap change detectors, no cross-process calls involved
++    DWORD ExStyle;
++    RECT  Rect;
++} REJECTED_WINDOW;
++
++static REJECTED_WINDOW g_RejectedWindows[REJECTED_WINDOWS_MAX];
++static UINT g_RejectedWindowsCount = 0;
++
++static int FindRejectedWindow(IN HWND window)
++{
++    for (UINT i = 0; i < g_RejectedWindowsCount; i++)
++    {
++        if (g_RejectedWindows[i].Handle == window)
++            return (int)i;
++    }
++
++    return -1;
++}
++
++static void EvictRejectedWindow(IN HWND window)
++{
++    int index = FindRejectedWindow(window);
+ 
+-    WINDOW_DATA* data = FindWindowByHandle(window);
+-    if (data) // already in the list
++    if (index < 0)
++        return;
++
++    g_RejectedWindowsCount--;
++    g_RejectedWindows[index] = g_RejectedWindows[g_RejectedWindowsCount];
++    ZeroMemory(&g_RejectedWindows[g_RejectedWindowsCount], sizeof(REJECTED_WINDOW));
++}
++
++static void ClearRejectedWindows(void)
++{
++    ZeroMemory(g_RejectedWindows, sizeof(g_RejectedWindows));
++    g_RejectedWindowsCount = 0;
++}
++
++// Remember a window as ineligible. The caller must have evicted any previous entry.
++// The signature MUST be sampled by the caller BEFORE the window is interrogated, and
++// passed in here. Sampling it after the accept/reject decision would bake in any state
++// change that happened *during* the interrogation: if the owner calls ShowWindow() in that
++// gap we would cache the already-visible signature, and if the resulting EVENT_OBJECT_SHOW
++// is then coalesced or dropped, every later resync would compare "unchanged" and the window
++// would never be shown in dom0 again. That defeats the 2 s resync in exactly the case it
++// exists for.
++static void CacheRejectedWindow(IN HWND window, IN const REJECTED_WINDOW* signature)
++{
++    UINT index;
++    REJECTED_WINDOW* rejected;
++
++    if (g_RejectedWindowsCount < REJECTED_WINDOWS_MAX)
+     {
+-        LogVerbose("0x%x: end (existing)", window);
+-        return TRUE; // skip to next window
++        index = g_RejectedWindowsCount++;
++    }
++    else
++    {
++        // Full: reuse a slot held by a window that no longer exists. If there is
++        // none, just don't cache this one, the only cost is interrogating it again
++        // on the next resync.
++        for (index = 0; index < REJECTED_WINDOWS_MAX; index++)
++        {
++            if (!IsWindow(g_RejectedWindows[index].Handle))
++                break;
++        }
++
++        if (index == REJECTED_WINDOWS_MAX)
++        {
++            LogWarning("rejected window cache full");
++            return;
++        }
+     }
+ 
+-    // window not in list, get its data and add
++    rejected = &g_RejectedWindows[index];
++    *rejected = *signature;
++    rejected->Handle = window;
++}
++
++// Sample the cheap signature used by the reject cache. Must be called BEFORE interrogating
++// the window (see CacheRejectedWindow).
++static void SampleWindowSignature(IN HWND window, OUT REJECTED_WINDOW* signature)
++{
++    ZeroMemory(signature, sizeof(*signature));
++    signature->Handle = window;
++    signature->ThreadId = GetWindowThreadProcessId(window, &signature->ProcessId);
++    signature->Style = (DWORD)GetWindowLong(window, GWL_STYLE);
++    signature->ExStyle = (DWORD)GetWindowLong(window, GWL_EXSTYLE);
++    GetWindowRect(window, &signature->Rect);
++}
++
++// TRUE if the window is known to be ineligible and nothing we can check cheaply
++// changed since it was rejected. Deliberately avoids everything that made the old
++// per-frame enumeration expensive: no window text, no DWM calls, no allocation.
++static BOOL IsWindowRejected(IN HWND window)
++{
++    int index = FindRejectedWindow(window);
++    const REJECTED_WINDOW* rejected;
++    DWORD processId = 0;
++    DWORD threadId;
++    RECT rect;
++
++    if (index < 0)
++        return FALSE;
++
++    rejected = &g_RejectedWindows[index];
++
++    // Windows recycles window handles: a handle that now belongs to a different
++    // thread or process is a different window, and the entry must not apply to it.
++    // (Both ids are 0 if the window is gone.)
++    threadId = GetWindowThreadProcessId(window, &processId);
++    if (threadId != rejected->ThreadId || processId != rejected->ProcessId)
++        return FALSE;
++
++    // Backstop for a lost event: everything that can make a window eligible
++    // (WS_VISIBLE, size, extended styles) also changes one of these.
++    if ((DWORD)GetWindowLong(window, GWL_STYLE) != rejected->Style ||
++        (DWORD)GetWindowLong(window, GWL_EXSTYLE) != rejected->ExStyle)
++        return FALSE;
++
++    if (!GetWindowRect(window, &rect) || !EqualRect(&rect, &rejected->Rect))
++        return FALSE;
++
++    return TRUE;
++}
++
++// Interrogate a window that isn't tracked yet: add it to the watched list if it
++// qualifies, otherwise remember it as ineligible.
++// Watched windows critical section must be entered.
++static ULONG ExamineWindow(IN HWND window, IN OUT UINT* interrogated)
++{
++    WINDOW_DATA* data = NULL;
++    ULONG status;
++    REJECTED_WINDOW signature;
++
++    EvictRejectedWindow(window); // whatever we knew about it is being refreshed now
++    // Sample BEFORE interrogating: see CacheRejectedWindow for why sampling afterwards can
++    // permanently hide a window that became eligible mid-interrogation.
++    SampleWindowSignature(window, &signature);
++    (*interrogated)++;
++
+     status = GetWindowData(window, &data);
+     if (status != ERROR_SUCCESS)
+     {
+-        LogVerbose("0x%x: end (error)", window);
+-        return TRUE;
++        // Typically a window DWM knows nothing about, so it can't be mapped anyway.
++        LogVerbose("0x%x: GetWindowData failed (0x%x)", window, status);
++        if (data)
++            free(data);
++        CacheRejectedWindow(window, &signature);
++        return ERROR_SUCCESS;
+     }
+ 
+     if (!ShouldAcceptWindow(data))
+     {
+-        LogVerbose("0x%x: end (skipping)", window);
+-        return TRUE;
++        // Interrogating these has a side effect on global state that AddAllWindows()
++        // recomputes from scratch (the UAC placeholder sets g_ShowTaskbar, Start sets
++        // g_StartVisible which in turn gates Search), so they must not be skipped.
++        if (window != g_StartWindow && window != g_SearchWindow &&
++            0 != wcscmp(data->Class, UAC_DUMMY_WINDOW_CLASS))
++        {
++            CacheRejectedWindow(window, &signature);
++        }
++
++        LogVerbose("0x%x: rejected", window);
++        free(data);
++        return ERROR_SUCCESS;
+     }
+ 
+-    status = AddWindow(data);
++    status = AddWindow(data); // the list takes ownership of data
+     if (ERROR_SUCCESS != status)
+-    {
+         win_perror2(status, "AddWindow");
+-        LogVerbose("0x%x: end (add failed, exiting)", window);
++
++    return status;
++}
++
++typedef struct _ADD_WINDOWS_CONTEXT
++{
++    UINT Interrogated; // windows whose state was actually queried
++    ULONG Status;
++} ADD_WINDOWS_CONTEXT;
++
++// EnumWindows callback for adding all eligible top-level windows to the list.
++// watched windows critical section must be entered
++static BOOL CALLBACK AddWindowsProc(IN HWND window, IN LPARAM lParam)
++{
++    ADD_WINDOWS_CONTEXT* context = (ADD_WINDOWS_CONTEXT*)lParam;
++
++    if (FindWindowByHandle(window)) // already in the list
++        return TRUE; // skip to next window
++
++    if (IsWindowRejected(window)) // known to be ineligible, and unchanged since
++        return TRUE;
++
++    context->Status = ExamineWindow(window, &context->Interrogated);
++    if (ERROR_SUCCESS != context->Status)
+         return FALSE; // stop enumeration, fatal error occurred (should probably exit process at this point)
+-    }
+ 
+-    LogVerbose("0x%x: end (new, added)", window);
+     return TRUE;
+ }
+ 
+ // Adds all top-level windows to the watched list.
++// This is the resync path: the watched list is normally maintained from window
++// events instead (see TrackWindows).
+ // watched windows critical section must be entered
+-static ULONG AddAllWindows(void)
++static ULONG AddAllWindows(IN OUT UINT* interrogated)
+ {
++    ADD_WINDOWS_CONTEXT context = { 0 };
++
+     LogVerbose("start");
+ 
+     g_TaskbarWindow = FindWindow(L"Shell_TrayWnd", 0);
+@@ -608,8 +1204,10 @@ static ULONG AddAllWindows(void)
+ 
+     ULONG status = ERROR_SUCCESS;
+     // Enum top-level windows and add all that are not filtered.
+-    if (!EnumWindows(AddWindowsProc, 0))
+-        status = win_perror("EnumWindows");
++    if (!EnumWindows(AddWindowsProc, (LPARAM)&context))
++        status = context.Status != ERROR_SUCCESS ? context.Status : win_perror("EnumWindows");
++
++    *interrogated += context.Interrogated;
+ 
+     if (g_TaskbarWindow)
+     {
+@@ -622,6 +1220,8 @@ static ULONG AddAllWindows(void)
+             LogDebug("showing taskbar");
+             ShowWindow(g_TaskbarWindow, SW_SHOW);
+             taskbarEntry = NULL;
++            EvictRejectedWindow(g_TaskbarWindow);
++            (*interrogated)++;
+             status = GetWindowData(g_TaskbarWindow, &taskbarEntry);
+             if (status != ERROR_SUCCESS)
+             {
+@@ -673,6 +1273,8 @@ static ULONG ResetWatch(BOOL seamlessMode)
+         entry = nextEntry;
+     }
+ 
++    ClearRejectedWindows(); // window acceptance is being decided from scratch
++
+     LeaveCriticalSection(&g_csWatchedWindows);
+ 
+     g_DesktopWindow = NULL;
+@@ -681,13 +1283,18 @@ static ULONG ResetWatch(BOOL seamlessMode)
+     // WatchForEvents will map the whole screen as one window.
+     if (seamlessMode)
+     {
++        UINT interrogated = 0;
++
+         LogVerbose("seamless mode, adding all windows");
+         // Add all eligible windows to watch list.
+         // Since this is a switch from fullscreen, no windows were watched.
+         EnterCriticalSection(&g_csWatchedWindows);
+-        status = AddAllWindows();
++        status = AddAllWindows(&interrogated);
+         LeaveCriticalSection(&g_csWatchedWindows);
+ 
++        // The list is authoritative again, restart the resync interval.
++        g_LastResyncTime = GetTickCount();
++
+         if (g_TaskbarWindow)
+             ShowWindow(g_TaskbarWindow, SW_HIDE);
+     }
+@@ -1010,6 +1617,184 @@ end:
+     return status;
+ }
+ 
++// What one TrackWindows() pass did, for the QGAPERF instrumentation.
++typedef struct _TRACK_STATS
++{
++    LONGLONG UpdateTicks;   // refreshing already tracked windows
++    LONGLONG EnumTicks;     // admitting new windows
++    LONGLONG RemoveTicks;   // dropping windows that became ineligible
++    UINT Interrogated;      // windows whose state was actually queried
++    UINT Events;            // window events applied
++    BOOL Resync;            // this pass was a full EnumWindows() resync
++} TRACK_STATS;
++
++// Tracking work accumulated between frames (window events processed while no frame
++// was being handled). Folded into the next frame's record so the QGAPERF numbers
++// keep accounting for all of the tracking cost. Main loop only.
++static LONGLONG g_TrackedUpdateTicks = 0;
++static LONGLONG g_TrackedEnumTicks = 0;
++static LONGLONG g_TrackedRemoveTicks = 0;
++static UINT g_TrackedInterrogated = 0;
++static UINT g_TrackedEvents = 0;
++
++// One window tracking pass: apply the events collected by the hook thread (or
++// re-enumerate everything if a resync is due) and send the resulting notifications
++// to the gui daemon.
++// Watched windows critical section must be entered.
++static ULONG TrackWindows(OUT TRACK_STATS* stats)
++{
++    HWND pending[PENDING_WINDOWS_MAX];
++    DWORD pendingEvents[PENDING_WINDOWS_MAX]; // why each was queued (see WindowEventForcesReexamine)
++    UINT pendingCount = 0;
++    WINDOW_DATA* entry;
++    WINDOW_DATA* nextEntry;
++    ULONG phaseStatus = ERROR_SUCCESS;
++    // Like the code this replaces, only a failed removal is reported to the caller:
++    // failing to read or add one window must not abort processing of the frame.
++    ULONG status = ERROR_SUCCESS;
++    LONGLONG perfPhase, perfSendPhase;
++
++    ZeroMemory(stats, sizeof(*stats));
++    stats->Resync = TakePendingWindows(pending, pendingEvents, PENDING_WINDOWS_MAX, &pendingCount);
++    stats->Events = pendingCount;
++
++    // Refresh the state of tracked windows: all of them on a resync, otherwise only
++    // those an event was reported for. If a window is no longer eligible (destroyed,
++    // hidden...) then mark it for removal but keep it in the list for now, so that
++    // the next phase can skip it.
++    perfPhase = PerfNow();
++    perfSendPhase = g_PerfSendTicks;
++
++    if (stats->Resync)
++    {
++        entry = (WINDOW_DATA*)g_WatchedWindowsList.Flink;
++        while (entry != (WINDOW_DATA*)&g_WatchedWindowsList)
++        {
++            entry = CONTAINING_RECORD(entry, WINDOW_DATA, ListEntry);
++            nextEntry = (WINDOW_DATA*)entry->ListEntry.Flink;
++
++            stats->Interrogated++;
++            phaseStatus = UpdateWindowData(entry);
++            if (phaseStatus != ERROR_SUCCESS)
++            {
++                win_perror2(phaseStatus, "UpdateWindowData");
++                entry->DeletePending = TRUE;
++                // TODO: exit if there was a vchan failure and we not just failed to get window data
++            }
++
++            entry = nextEntry;
++        }
++    }
++    else
++    {
++        for (UINT i = 0; i < pendingCount; i++)
++        {
++            entry = FindWindowByHandle(pending[i]);
++            if (!entry)
++                continue; // not tracked (yet), handled below
++
++            stats->Interrogated++;
++            phaseStatus = UpdateWindowData(entry);
++            if (phaseStatus != ERROR_SUCCESS)
++            {
++                win_perror2(phaseStatus, "UpdateWindowData");
++                entry->DeletePending = TRUE;
++            }
++        }
++    }
++
++    stats->UpdateTicks = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
++    perfPhase = PerfNow();
++    perfSendPhase = g_PerfSendTicks;
++
++    // Admit windows that aren't tracked yet.
++    if (stats->Resync)
++    {
++        AddAllWindows(&stats->Interrogated);
++    }
++    else
++    {
++        for (UINT i = 0; i < pendingCount; i++)
++        {
++            if (FindWindowByHandle(pending[i])) // tracked, refreshed above
++                continue;
++
++            if (!IsWindow(pending[i])) // gone, nothing to add
++            {
++                EvictRejectedWindow(pending[i]);
++                continue;
++            }
++
++            // An event means "look at this one again" - but only actually re-interrogate
++            // when the cached rejection can no longer be trusted. Without this check an
++            // ineligible but event-noisy window (DWM helpers, tooltips, hidden Electron
++            // frames, anything dragged) re-pays the full ~340 us GetWindowText +
++            // DwmGetWindowAttribute cost on every event, at input rate, holding
++            // g_csWatchedWindows - exactly the cost Phase 2A removes, on an unbounded
++            // guest-controlled schedule.
++            if (!WindowEventForcesReexamine(pendingEvents[i]) && IsWindowRejected(pending[i]))
++                continue;
++
++            phaseStatus = ExamineWindow(pending[i], &stats->Interrogated);
++            if (phaseStatus != ERROR_SUCCESS)
++            {
++                // D8: the rest of this batch was already dequeued and would be lost.
++                QueueWindowEvent(NULL, 0, TRUE);
++                break;
++            }
++        }
++    }
++
++    stats->EnumTicks = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
++    perfPhase = PerfNow();
++    perfSendPhase = g_PerfSendTicks;
++
++    // Remove windows marked for deletion.
++    entry = (WINDOW_DATA*)g_WatchedWindowsList.Flink;
++    while (entry != (WINDOW_DATA*)&g_WatchedWindowsList)
++    {
++        entry = CONTAINING_RECORD(entry, WINDOW_DATA, ListEntry);
++        nextEntry = (WINDOW_DATA*)entry->ListEntry.Flink;
++
++        if (entry->DeletePending)
++        {
++            ULONG removeStatus = RemoveWindow(entry);
++            if (removeStatus != ERROR_SUCCESS)
++            {
++                win_perror2(removeStatus, "RemoveWindow");
++                status = removeStatus;
++                break;
++            }
++        }
++
++        entry = nextEntry;
++    }
++
++    stats->RemoveTicks = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
++    return status;
++}
++
++// Apply pending window events outside of frame processing. This is what makes
++// window moves reach the gui daemon at input rate instead of at capture rate.
++static void ProcessWindowEvents(void)
++{
++    TRACK_STATS stats;
++    ULONG status;
++
++    EnterCriticalSection(&g_csWatchedWindows);
++    status = TrackWindows(&stats);
++    LeaveCriticalSection(&g_csWatchedWindows);
++
++    if (status != ERROR_SUCCESS)
++        win_perror2(status, "TrackWindows");
++
++    g_TrackedUpdateTicks += stats.UpdateTicks;
++    g_TrackedEnumTicks += stats.EnumTicks;
++    g_TrackedRemoveTicks += stats.RemoveTicks;
++    g_TrackedInterrogated += stats.Interrogated;
++    g_TrackedEvents += stats.Events;
++}
++
+ // Called after receiving new frame.
+ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+ {
+@@ -1024,7 +1809,9 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+     LONG perfSendCountBase = g_PerfSendCount;
+     LONGLONG perfPhase = 0, perfSendPhase = 0;
+     LONGLONG perfUpdate = 0, perfEnum = 0, perfRemove = 0, perfDamage = 0;
+-    UINT perfWindows = 0;
++    LONGLONG perfTrackedOutOfFrame = 0; // tracking ticks accumulated between frames
++    UINT perfWindows = 0, perfInterrogated = 0, perfEvents = 0;
++    TRACK_STATS track;
+ 
+     LogVerbose("start");
+     if (!g_SeamlessMode)
+@@ -1053,7 +1840,7 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+         PerfEmitFrame(FALSE, perfFrameStart, PerfNow() - perfFrameStart,
+             0, 0, 0, perfDamage,
+             g_PerfSendTicks - perfSendBase, g_PerfSendCount - perfSendCountBase,
+-            &frame->perf, frame->dirty_rects_count, 1);
++            &frame->perf, frame->dirty_rects_count, 1, 0, 0);
+ 
+         LogVerbose("end (fullscreen)");
+         return ERROR_SUCCESS;
+@@ -1061,63 +1848,32 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame)
+ 
+     EnterCriticalSection(&g_csWatchedWindows);
+ 
+-    // TODO: don't enumerate all windows every time, use window hooks to monitor for changes
++    // Bring the watched window list up to date from the events the hook thread
++    // collected (or resync it wholesale, periodically). This used to be an
++    // EnumWindows() pass over every top-level window on every single frame.
++    status = TrackWindows(&track);
++
++    // Tracking done between frames belongs to this frame's accounting too, or the
++    // work would simply vanish from the QGAPERF numbers.
++    perfUpdate = track.UpdateTicks + g_TrackedUpdateTicks;
++    perfEnum = track.EnumTicks + g_TrackedEnumTicks;
++    perfRemove = track.RemoveTicks + g_TrackedRemoveTicks;
++    perfInterrogated = track.Interrogated + g_TrackedInterrogated;
++    perfEvents = track.Events + g_TrackedEvents;
++    // ...which means `tot` must include it as well. `tot` is otherwise
++    // (PerfNow() - perfFrameStart), i.e. in-frame only, so once most tracking moves
++    // BETWEEN frames (which is the whole point of the hook) upd+enu would exceed tot and
++    // analyze-perf.py would report shares >100% and a negative "unaccounted". The one
++    // number Phase 2A is judged on has to balance.
++    perfTrackedOutOfFrame = g_TrackedUpdateTicks + g_TrackedEnumTicks + g_TrackedRemoveTicks;
++    g_TrackedUpdateTicks = g_TrackedEnumTicks = g_TrackedRemoveTicks = 0;
++    g_TrackedInterrogated = g_TrackedEvents = 0;
+ 
+     perfPhase = PerfNow();
+     perfSendPhase = g_PerfSendTicks;
+ 
+-    // Update state of all tracked windows. If a window is no longer eligible (destroyed, hidden...)
+-    // then mark it for removal but keep in the list for now, so AddAllWindows() can skip them.
+-    entry = (WINDOW_DATA*)g_WatchedWindowsList.Flink;
+-    while (entry != (WINDOW_DATA*)&g_WatchedWindowsList)
+-    {
+-        entry = CONTAINING_RECORD(entry, WINDOW_DATA, ListEntry);
+-        nextEntry = (WINDOW_DATA*)entry->ListEntry.Flink;
+-        status = UpdateWindowData(entry);
+-        if (status != ERROR_SUCCESS)
+-        {
+-            win_perror2(status, "UpdateWindowData");
+-            entry->DeletePending = TRUE;
+-            // TODO: exit if there was a vchan failure and we not just failed to get window data
+-        }
+-
+-        entry = nextEntry;
+-    }
+-
+-    perfUpdate = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
+-    perfPhase = PerfNow();
+-    perfSendPhase = g_PerfSendTicks;
+-
+-    // Enumerate all top-level windows and all eligible ones to the list if not already there.
+-    AddAllWindows();
+-
+-    perfEnum = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
+-    perfPhase = PerfNow();
+-    perfSendPhase = g_PerfSendTicks;
+-
+-    // Remove windows marked for deletion.
+-    entry = (WINDOW_DATA*)g_WatchedWindowsList.Flink;
+-    while (entry != (WINDOW_DATA*)&g_WatchedWindowsList)
+-    {
+-        entry = CONTAINING_RECORD(entry, WINDOW_DATA, ListEntry);
+-        nextEntry = (WINDOW_DATA*)entry->ListEntry.Flink;
+-
+-        if (entry->DeletePending)
+-        {
+-            status = RemoveWindow(entry);
+-            if (status != ERROR_SUCCESS)
+-            {
+-                win_perror2(status, "RemoveWindow");
+-                goto cleanup;
+-            }
+-        }
+-
+-        entry = nextEntry;
+-    }
+-
+-    perfRemove = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
+-    perfPhase = PerfNow();
+-    perfSendPhase = g_PerfSendTicks;
++    if (status != ERROR_SUCCESS)
++        goto cleanup;
+ 
+     // send damage notifications
+     entry = (WINDOW_DATA *)g_WatchedWindowsList.Flink;
+@@ -1165,10 +1921,12 @@ cleanup:
+     perfDamage = PerfNow() - perfPhase - (g_PerfSendTicks - perfSendPhase);
+     LeaveCriticalSection(&g_csWatchedWindows);
+ 
+-    PerfEmitFrame(TRUE, perfFrameStart, PerfNow() - perfFrameStart,
++    // tot includes the tracking that happened between frames (see perfTrackedOutOfFrame),
++    // so that upd+enu+rem+dmg+snd stays <= tot and the shares remain meaningful.
++    PerfEmitFrame(TRUE, perfFrameStart, PerfNow() - perfFrameStart + perfTrackedOutOfFrame,
+         perfUpdate, perfEnum, perfRemove, perfDamage,
+         g_PerfSendTicks - perfSendBase, g_PerfSendCount - perfSendCountBase,
+-        &frame->perf, frame->dirty_rects_count, perfWindows);
++        &frame->perf, frame->dirty_rects_count, perfWindows, perfInterrogated, perfEvents);
+ 
+     LogVerbose("end (%x)", status);
+     return status;
+@@ -1178,6 +1936,8 @@ ULONG StartFrameProcessing(IN HANDLE newFrameEvent, IN HANDLE captureErrorEvent,
+ {
+     LogVerbose("start");
+     AttachToInputDesktop();
++    // The hook thread has its own desktop association, it must follow.
++    RearmWindowEvents();
+     // Initialize capture interfaces, this also initializes framebuffer PFNs
+     *capture = CaptureInitialize(newFrameEvent, captureErrorEvent);
+     if (!(*capture))
+@@ -1277,7 +2037,9 @@ static ULONG WINAPI WatchForEvents(void)
+     watchedEvents[3] = fullScreenOffEvent;
+     watchedEvents[4] = libvchan_fd_for_select(g_Vchan);
+     watchedEvents[5] = captureErrorEvent;
+-    eventCount = 6;
++    // Last, so that WaitForMultipleObjects prefers frames and vchan traffic to it.
++    watchedEvents[6] = g_WindowEventSignal;
++    eventCount = 7;
+ 
+     CAPTURE_CONTEXT* capture = NULL;
+ 
+@@ -1449,6 +2211,18 @@ static ULONG WINAPI WatchForEvents(void)
+             // CaptureTeardown() is delayed until we receive confirming MSG_DESTROY for 0x0 from gui daemon
+             // revoking framebuffer access before that is unsafe
+             break;
++
++        case 6: // window events collected by the hook thread
++            // Applying them here instead of only when the next frame arrives is what
++            // gets window moves to the gui daemon at input rate.
++            // Nothing is sent while the screen window is destroyed (between a capture
++            // error and the restart that follows it); the discarded events are covered
++            // by the resync that ResetWatch/DiscardWindowEvents leave pending.
++            if (g_VchanClientConnected && g_SeamlessMode && !g_LocalScreenDestroyed)
++                ProcessWindowEvents();
++            else
++                DiscardWindowEvents();
++            break;
+         }
+ 
+         if (exitLoop)
+@@ -1634,6 +2408,12 @@ static ULONG Init(void)
+ 
+     g_MinWindowWidth = GetSystemMetrics(SM_CXMIN);
+     g_MinWindowHeight = GetSystemMetrics(SM_CYMIN);
++
++    // Must be running before the main loop starts waiting on g_WindowEventSignal.
++    status = StartWindowEventThread();
++    if (ERROR_SUCCESS != status)
++        return status;
++
+     return ERROR_SUCCESS;
+ }
+ 
+@@ -1651,8 +2431,12 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
+ 
+     // Call the thread proc directly.
+     if (ERROR_SUCCESS != WatchForEvents())
++    {
++        StopWindowEventThread();
+         return win_perror("WatchForEvents");
++    }
+ 
++    StopWindowEventThread();
+     DeleteCriticalSection(&g_VchanCriticalSection);
+ 
+     LogInfo("exiting");
+diff --git a/gui-agent/perf.c b/gui-agent/perf.c
+index d3a055f..d171e3b 100644
+--- a/gui-agent/perf.c
++++ b/gui-agent/perf.c
+@@ -50,6 +50,8 @@ typedef struct _PERF_ACC
+     UINT     dirty_rects;
+     UINT     move_rects;
+     UINT64   dirty_area;
++    UINT     interrogated;  // windows actually queried
++    UINT     events;        // window events applied
+     UINT     windows;   // last value, not a sum
+     BOOL     seamless;  // last value
+ } PERF_ACC;
+@@ -109,7 +111,7 @@ void PerfInit(void)
+ 
+     LogInfo("QGAPERF on: freq=%I64d everyN=%u qpc_cost_ns=%I64d default=%d (sink %I64d)",
+         g_PerfFreq, g_PerfEveryN, qpcCostNs, QGA_PERF_DEFAULT, sink);
+-    LogInfo("QGAPERF-HEADER v=%d fields: seq,n,mode,dt,acq,wak,mrq,drq,upd,enu,rem,dmg,snd,tot,dr,mr,mrmax,area,win,sends,skip,log (times in microseconds)",
++    LogInfo("QGAPERF-HEADER v=%d fields: seq,n,mode,dt,acq,wak,mrq,drq,upd,enu,rem,dmg,snd,tot,dr,mr,mrmax,area,win,iwn,wev,sends,skip,log (times in microseconds)",
+         PERF_RECORD_VERSION);
+ }
+ 
+@@ -151,7 +153,9 @@ void PerfEmitFrame(
+     IN LONG send_count,
+     IN const PERF_CAPTURE* cap,
+     IN UINT dirty_rects,
+-    IN UINT window_count)
++    IN UINT window_count,
++    IN UINT interrogated,
++    IN UINT window_events)
+ {
+     if (!g_PerfEnabled)
+         return;
+@@ -178,6 +182,8 @@ void PerfEmitFrame(
+     g_Acc.total += total_ticks;
+     g_Acc.sends += send_count;
+     g_Acc.dirty_rects += dirty_rects;
++    g_Acc.interrogated += interrogated;
++    g_Acc.events += window_events;
+     g_Acc.windows = window_count;
+     g_Acc.seamless = seamless;
+ 
+@@ -189,7 +195,7 @@ void PerfEmitFrame(
+     // One line, integers only, no allocation and no string building of our own.
+     LogInfo("QGAPERF,v=%d,seq=%I64u,n=%u,mode=%c,dt=%I64d,acq=%I64d,wak=%I64d,mrq=%I64d,drq=%I64d,"
+         L"upd=%I64d,enu=%I64d,rem=%I64d,dmg=%I64d,snd=%I64d,tot=%I64d,"
+-        L"dr=%u,mr=%u,mrmax=%u,area=%I64u,win=%u,sends=%d,skip=%d,log=%I64d",
++        L"dr=%u,mr=%u,mrmax=%u,area=%I64u,win=%u,iwn=%u,wev=%u,sends=%d,skip=%d,log=%I64d",
+         PERF_RECORD_VERSION,
+         g_Seq,
+         g_Acc.frames,
+@@ -210,6 +216,8 @@ void PerfEmitFrame(
+         g_MoveRectsMax,
+         g_Acc.dirty_area,
+         g_Acc.windows,
++        g_Acc.interrogated,
++        g_Acc.events,
+         g_Acc.sends,
+         InterlockedExchange(&g_SkippedFrames, 0),
+         PerfUs(g_EmitTicks));
+diff --git a/gui-agent/perf.h b/gui-agent/perf.h
+index fc146f8..ce236ae 100644
+--- a/gui-agent/perf.h
++++ b/gui-agent/perf.h
+@@ -56,7 +56,8 @@
+ #define PERF_ENV_VALUE L"QUBES_GUI_PERF"
+ 
+ // Version of the CSV record format, bumped when fields change.
+-#define PERF_RECORD_VERSION 1
++// v2 added iwn/wev (window tracking became event driven, see PHASE2A-NOTES.md).
++#define PERF_RECORD_VERSION 2
+ 
+ extern BOOL     g_PerfEnabled;  // master switch
+ extern LONGLONG g_PerfFreq;     // QueryPerformanceFrequency, ticks per second
+@@ -107,7 +108,9 @@ void PerfEmitFrame(
+     IN LONG send_count,
+     IN const PERF_CAPTURE* cap,
+     IN UINT dirty_rects,
+-    IN UINT window_count);
++    IN UINT window_count,
++    IN UINT interrogated,   // windows whose state was actually queried this frame
++    IN UINT window_events); // window events applied this frame
+ 
+ // Returns 0 when instrumentation is disabled, so all the deltas computed from it are 0.
+ static __forceinline LONGLONG PerfNow(void)
+-- 
+2.55.0
+
+
+From 1ce25bef5bf3e861f87be284dbd7a1a3f1ed4453 Mon Sep 17 00:00:00 2001
+From: arkenoi <6000406+arkenoi@users.noreply.github.com>
+Date: Fri, 31 Jul 2026 02:28:54 +0300
+Subject: [PATCH 3/3] 2A-chrome: reject only owned click-through layered
+ chrome; drop the alpha rule
+
+Rejects the Office 2013+ shadow-strip HWNDs so a compound window stops appearing
+in dom0 as several separately-bordered fragments. One conservative rule, all
+five clauses required: WS_EX_LAYERED+WS_EX_TRANSPARENT (can never receive a
+click), Owner != NULL (unowned top-levels are somebody's real UI), no WS_CAPTION,
+no WS_EX_APPWINDOW, and BOTH WS_EX_NOACTIVATE and WS_EX_TOOLWINDOW. Costs nothing
+per frame - it reads state GetWindowData() already collects, plus Owner from a
+GetWindow(GW_OWNER) call that was already there for the modal check.
+
+Review fixes applied:
+- REMOVED the proposed 'alpha == 0 layered window' rule entirely. Windows fades
+  menus and tooltips IN from alpha 0, so sampling one as it appears would reject
+  AND cache it; SetLayeredWindowAttributes emits no WinEvent, so it would stay
+  invisible in dom0 until the next resync. Applied to an already-mapped window it
+  turns a transient fade-out into MSG_DESTROY + recreate, losing z-order and
+  focus. Its only benefit was cosmetic and it does not even match the Office
+  strips, which are VISIBLE shadows with alpha > 0. A missing window is far worse
+  than a spurious border. The Alpha plumbing is removed with it.
+- NOACTIVATE|TOOLWINDOW tightened from either to BOTH: a comctl32 tooltip is
+  owned, toolwindow and can be WS_EX_TRANSPARENT, but generally not NOACTIVATE.
+- The reject log demoted to LogVerbose: during a drag each strip is re-examined
+  at input rate (rect changes invalidate its cached signature), so LogDebug meant
+  hundreds of formatted lines a second with a cross-process class name.
+- chromerepro --control canary: dropped WS_BORDER. WS_CAPTION is
+  WS_BORDER|WS_DLGFRAME, so the canary was being spared by the caption clause and
+  never exercised the WS_EX_TRANSPARENT clause it exists to test.
+
+Cloaked windows need no new rule: GetWindowData already folds DWMWA_CLOAKED into
+IsVisible and the predicate rejects !IsVisible first.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+(cherry picked from commit 580328e1b8b0629ea6ee68e252950bbf5c7d58ea)
+---
+ gui-agent/main.c | 96 +++++++++++++++++++++++++++++++++++++++++++++++-
+ gui-agent/main.h |  8 ++++
+ 2 files changed, 102 insertions(+), 2 deletions(-)
+
+diff --git a/gui-agent/main.c b/gui-agent/main.c
+index b53a497..94264fc 100755
+--- a/gui-agent/main.c
++++ b/gui-agent/main.c
+@@ -830,6 +830,8 @@ ULONG GetWindowData(IN HWND window, IN OUT WINDOW_DATA** windowData)
+     entry->Handle = window;
+     entry->Style = GetWindowLong(window, GWL_STYLE);
+     entry->ExStyle = GetWindowLong(window, GWL_EXSTYLE);
++    // Must be set unconditionally: ZeroMemory() above leaves it at 0, which would read as
++    // "fully transparent". No-ops for non-layered windows.
+     entry->IsIconic = IsIconic(window);
+     entry->DeletePending = FALSE;
+     GetWindowText(window, entry->Caption, ARRAYSIZE(entry->Caption)); // don't really care about errors here
+@@ -840,8 +842,17 @@ ULONG GetWindowData(IN HWND window, IN OUT WINDOW_DATA** windowData)
+     DWORD cloaked;
+     if (SUCCEEDED(DwmGetWindowAttribute(window, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))))
+     {
++        // DWM-cloaked windows are the third class of unmappable chrome (CLAUDE.md 2A-chrome):
++        // present, styled visible, drawn nowhere - e.g. windows on another virtual desktop or
++        // suspended UWP frames. Folding it into IsVisible here is what makes
++        // ShouldAcceptWindow() reject them; the hook thread watches
++        // EVENT_OBJECT_CLOAKED/UNCLOAKED and forces re-examination, since cloaking changes
++        // none of the fields the reject cache signature compares.
+         if (cloaked != 0) // hidden by DWM
++        {
++            LogVerbose("0x%x: DWM-cloaked (0x%x)", window, cloaked);
+             entry->IsVisible = FALSE;
++        }
+     }
+ 
+     if (window == g_StartWindow)
+@@ -867,6 +878,7 @@ ULONG GetWindowData(IN HWND window, IN OUT WINDOW_DATA** windowData)
+ 
+         // check if we're modal to some other window
+         HWND owner = GetWindow(window, GW_OWNER);
++        entry->Owner = owner; // also an input of ShouldAcceptWindow(), see WINDOW_DATA
+         if (owner)
+         {
+             BOOL ownerDisabled = GetWindowLong(owner, GWL_STYLE) & WS_DISABLED;
+@@ -1083,6 +1095,8 @@ static void SampleWindowSignature(IN HWND window, OUT REJECTED_WINDOW* signature
+ // TRUE if the window is known to be ineligible and nothing we can check cheaply
+ // changed since it was rejected. Deliberately avoids everything that made the old
+ // per-frame enumeration expensive: no window text, no DWM calls, no allocation.
++// cheapest end of that scale - nothing like the cross-process WM_GETTEXT this exists to
++// avoid.)
+ static BOOL IsWindowRejected(IN HWND window)
+ {
+     int index = FindRejectedWindow(window);
+@@ -1105,13 +1119,18 @@ static BOOL IsWindowRejected(IN HWND window)
+ 
+     // Backstop for a lost event: everything that can make a window eligible
+     // (WS_VISIBLE, size, extended styles) also changes one of these.
+-    if ((DWORD)GetWindowLong(window, GWL_STYLE) != rejected->Style ||
+-        (DWORD)GetWindowLong(window, GWL_EXSTYLE) != rejected->ExStyle)
++    DWORD exStyle = (DWORD)GetWindowLong(window, GWL_EXSTYLE);
++
++    if ((DWORD)GetWindowLong(window, GWL_STYLE) != rejected->Style || exStyle != rejected->ExStyle)
+         return FALSE;
+ 
+     if (!GetWindowRect(window, &rect) || !EqualRect(&rect, &rejected->Rect))
+         return FALSE;
+ 
++    // ...with one exception: the layered alpha, which an app can change with no style
++    // change and no WinEvent at all. Checked last because it is the least likely of these
++    // to have moved, and it is the only one that costs a call beyond the ones above.
++
+     return TRUE;
+ }
+ 
+@@ -1437,6 +1456,73 @@ BOOL ShouldAcceptWindow(IN const WINDOW_DATA *data)
+             return FALSE;
+     }
+ 
++    // ---- compound-window chrome (CLAUDE.md 2A-chrome) -------------------------------
++    //
++    // Some applications - Office 2013+ is the canonical case - draw their frame shadow and
++    // glow with extra TOP-LEVEL windows arranged around the real frame instead of letting
++    // DWM do it. To the agent each of those looks like an ordinary top-level window, so it
++    // gets mapped, and the gui daemon dutifully draws a qube border around every one of
++    // them: a single Office window arrives in dom0 as five separate bordered fragments.
++    //
++    // These are never anything a user can interact with, so dropping them loses nothing.
++    // The rules below are deliberately narrow - a false positive means a real window
++    // vanishes from dom0, which is much worse than a spurious border - and they are pure
++    // reads of state GetWindowData() already collected, so they cost nothing per frame.
++
++    // NOTE: an "alpha == 0 layered window" rule was considered and DELIBERATELY REJECTED.
++    // Windows fades menus and tooltips IN from alpha 0, so sampling one at the moment it
++    // appears would reject and cache it, and SetLayeredWindowAttributes emits no WinEvent -
++    // the window would stay invisible in dom0 until the next periodic resync (up to
++    // WINDOW_RESYNC_INTERVAL_MS). Worse, applying it to an already-mapped window turns a
++    // transient fade-out into MSG_DESTROY plus a recreate, losing z-order and focus.
++    // Its only benefit was cosmetic (suppressing an empty bordered rect), and it does not
++    // even match the Office strips, which are VISIBLE shadows with alpha > 0. A missing
++    // window is far worse than a spurious border.
++
++    // Rule 2: owned, click-through, undecorated layered chrome - the Office shadow strips.
++    // Every clause is required:
++    //   WS_EX_LAYERED|WS_EX_TRANSPARENT  the strip is alpha-blended AND hit-test
++    //                                    transparent, i.e. it can never receive a click; a
++    //                                    dom0 window for it could not be interacted with
++    //                                    even in principle.
++    //   Owner != NULL                    it decorates another window of the same app. An
++    //                                    unowned top-level window is somebody's real UI
++    //                                    (splash screens, HUD overlays) and is left alone.
++    //   !WS_CAPTION                      anything with a title bar is a window the user is
++    //                                    meant to see as a window. Tested with & rather than
++    //                                    HasFlags() on purpose: WS_CAPTION is
++    //                                    WS_BORDER|WS_DLGFRAME, so this also spares a merely
++    //                                    bordered window - erring towards keeping windows.
++    //                                    Office's strips are plain WS_POPUP, no border bits.
++    //   !WS_EX_APPWINDOW                 the app explicitly asked for a taskbar button, so
++    //                                    it considers this a first-class window.
++    //   WS_EX_NOACTIVATE + WS_EX_TOOLWINDOW (BOTH)  the app declared it non-activatable
++    //                                    AND non-taskbar. Office strips carry both. Requiring
++    //                                    both on purpose: a comctl32 tooltip is owned,
++    //                                    toolwindow and can be WS_EX_TRANSPARENT, but is
++    //                                    generally NOT WS_EX_NOACTIVATE, so demanding both
++    //                                    keeps tooltips visible.
++    // Note this is strictly narrower than the pre-existing "activate windows" banner rule
++    // above, which additionally pins the class name; that one stays as is.
++    if (HasFlags(data->ExStyle, WS_EX_LAYERED | WS_EX_TRANSPARENT) &&
++        data->Owner != NULL &&
++        !(data->Style & WS_CAPTION) &&
++        !(data->ExStyle & WS_EX_APPWINDOW) &&
++        HasFlags(data->ExStyle, WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW))
++    {
++        // LogVerbose, not LogDebug: during a drag every strip emits
++        // EVENT_OBJECT_LOCATIONCHANGE, its cached signature changes (rect moved) and it
++        // is re-examined at input rate, so this would be hundreds of formatted lines a
++        // second with a cross-process class name on the hot path.
++        LogVerbose("0x%x: rejecting compound-window chrome (class '%s', owner 0x%x, style 0x%x, exstyle 0x%x)",
++            data->Handle, data->Class, data->Owner, data->Style, data->ExStyle);
++        return FALSE;
++    }
++
++    // DWM-cloaked windows are the third 2A-chrome case; they are rejected by the
++    // !data->IsVisible test at the top of this function, because GetWindowData() folds
++    // DWMWA_CLOAKED into IsVisible. No separate rule needed here.
++
+     return TRUE;
+ }
+ 
+@@ -1487,6 +1573,12 @@ static ULONG UpdateWindowData(IN OUT WINDOW_DATA *windowData)
+         LogDebug("0x%x exstyle changed to 0x%x", data.Handle, data.ExStyle);
+     }
+ 
++    // Not diffed (nothing is sent to dom0 when they change), but they ARE inputs of
++    // ShouldAcceptWindow(), which is re-evaluated against windowData at the end of this
++    // function. Left stale, a window that turned into chrome - or one whose layered alpha
++    // dropped to 0 - would keep being mapped.
++    windowData->Owner = data.Owner;
++
+     // caption
+     if (0 != wcscmp(windowData->Caption, data.Caption))
+     {
+diff --git a/gui-agent/main.h b/gui-agent/main.h
+index 69dd49a..cc43265 100644
+--- a/gui-agent/main.h
++++ b/gui-agent/main.h
+@@ -58,6 +58,14 @@ typedef struct _WINDOW_DATA
+ 
+     BOOL IsOverrideRedirect;
+     HWND ModalParent; // if nonzero, this window is modal in relation to window pointed by this field
++
++    // Owner (GW_OWNER), not parent: every top-level window is parented to the desktop, but
++    // compound-window chrome (Office 2013+ shadow strips, menus, tooltips) is OWNED by the
++    // frame it decorates. Only sampled when the window is visible, which is all
++    // ShouldAcceptWindow() needs: it rejects invisible windows before looking at this.
++    HWND Owner;
++
++    // Uniform alpha of a layered window; 255 (opaque) for everything we cannot ask about.
+ } WINDOW_DATA;
+ 
+ BOOL ShouldAcceptWindow(
+-- 
+2.55.0
+
