@@ -75,9 +75,43 @@ def classify(guest, dom0img, rect):
         if cur:
             runs.append(cur)
         if runs and max(runs) >= 4:
+            # WHERE the band sits is diagnostic: rows only at the very top/bottom point at
+            # the window-border/clipping geometry (the agent reports DWM extended frame
+            # bounds, which are smaller than GetWindowRect), whereas interior bands point at
+            # damage coverage.
+            idx = np.where(bad)[0]
+            n = len(bad)
             return 'STALE-BAND', dict(st, band_rows=int(max(runs)),
-                                      differing_rows=int(bad.sum()))
+                                      differing_rows=int(bad.sum()),
+                                      first_row=int(idx[0]), last_row=int(idx[-1]),
+                                      height=int(n),
+                                      edge_only=bool(idx[0] < 8 or idx[-1] > n - 9))
     return 'CONTENT-DIFFERS', st
+
+
+def locate(guest, dom0img, expect_xy, radius=120, step=2, sub=8):
+    """Find where in the guest screen dom0's content ACTUALLY came from.
+
+    If dom0 is showing content sampled from a different position than the window's current
+    rect, the best match will not be at the expected offset - that offset IS the wobble,
+    measured in pixels, and its sign says whether dom0 is ahead of or behind the guest.
+    Coarse grayscale search; exact enough to distinguish 0 from tens of pixels.
+    """
+    g = guest.mean(axis=2)
+    d = dom0img.mean(axis=2)
+    dh, dw = d.shape
+    ex, ey = expect_xy
+    best, bestscore = None, None
+    for dy in range(-radius, radius + 1, step):
+        for dx in range(-radius, radius + 1, step):
+            x, y = ex + dx, ey + dy
+            if x < 0 or y < 0 or y + dh > g.shape[0] or x + dw > g.shape[1]:
+                continue
+            # subsample for speed; enough to localise a whole-window shift
+            sc = np.abs(g[y:y + dh:sub, x:x + dw:sub] - d[::sub, ::sub]).mean()
+            if bestscore is None or sc < bestscore:
+                bestscore, best = sc, (dx, dy)
+    return best, bestscore
 
 
 def main():
@@ -129,7 +163,16 @@ def main():
         dh, dw = im.shape[0], im.shape[1]
         ox = wdef['x'] + (w - dw) // 2
         oy = wdef['y'] + (h - dh) // 2
+        # CRITICAL: do not assume the dom0 image is centred on the guest rect. The agent
+        # reports DWM extended frame bounds and the border discrepancy is not symmetric, so a
+        # centred crop can be several rows off - which makes EVERY row of text mismatch and
+        # masquerades as tearing. Find the true alignment first, then judge content there.
+        off, _ = locate(guest, im, (ox, oy), radius=16, step=1, sub=2)
+        if off:
+            ox, oy = ox + off[0], oy + off[1]
         verdict, st = classify(guest, im, (ox, oy, dw, dh))
+        if off and off != (0, 0):
+            st = dict(st or {}, align=off)
         extra = ''
         if st:
             if 'frac_differing' in st:
@@ -138,6 +181,11 @@ def main():
                 extra += f" band={st['band_rows']}rows"
             if 'dom0_std' in st:
                 extra += f" dom0_std={st['dom0_std']:.1f}"
+            if st.get('align'):
+                extra += f" align={st['align']}"
+            if 'first_row' in st:
+                extra += (f" rows[{st['first_row']}..{st['last_row']}]/{st['height']}"
+                          f"{' EDGE' if st['edge_only'] else ' INTERIOR'}")
         print(f"{title:28s} {w}x{h:<6}  {verdict:16s} {extra}  [{name}]")
         if verdict != 'OK':
             worst = verdict
