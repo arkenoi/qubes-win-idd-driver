@@ -335,7 +335,7 @@ jobs:
           Get-ChildItem package-qwt-full -File | ForEach-Object {
             "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
           } | Set-Content package-qwt-full\SHA256SUMS.txt
-          Copy-Item agent-bins\gui-agent.exe,agent-bins\gui-watchdog.exe package-qwt-full\
+          Copy-Item agent-bins\gui-agent.exe,agent-bins\gui-watchdog.exe,agent-bins\sign.crt package-qwt-full\
           Get-Content package-qwt-full\MANIFEST.json
 
       - uses: actions/upload-artifact@v4
