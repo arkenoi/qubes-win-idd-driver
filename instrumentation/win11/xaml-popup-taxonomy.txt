@@ -1,0 +1,7 @@
+# win11-idd-test 2026-08-01, per-window build ec55f39, dump-windows.exe excerpt.
+# The Notepad "auto-save" teaching bubble that bypassed composite synthesis:
+0x10272: "Xaml_WindowedPopupClass" "PopupHost" [C:\Program Files\WindowsApps\Microsoft.WindowsNotepad_11.2312.18.0_x64__8wekyb3d8bbwe\Notepad\Notepad.exe] WR(376,323:731,485)(355x162) Border(0,0) DWM(376,323:731,485)(355x162) parent=0x1000c WS_POPUP WS_VISIBLE WS_CLIPSIBLINGS WS_EX_REDIRECTED WS_EX_NOACTIVATE WS_EX_NOREDIRECTIONBITMAP WS_EX_MAKEVISIBLEWHENUNGHOSTED
+# Its owner app main window (bubble is fully inside its rect):
+0x30062: "Notepad" "Untitled - Notepad" [same exe] WR(238,283:2818,1306)(2580x1023) Border(8,8) WS_VISIBLE WS_CLIPSIBLINGS WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME ...
+# Win11 shell surfaces correctly invisible to the agent (CLOAKED or 0x0):
+#   Windows.UI.Core.CoreWindow "Search"/"Start" - CLOAKED; DummyDWMListenerWindow x5 - 0x0 size
