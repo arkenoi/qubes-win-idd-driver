@@ -907,3 +907,57 @@ the Windows port has no such gate). Fix 53056d5 on branch `spin-backoff` was rej
 capture thread on a shutdown-join timeout, permanently removes the vchan server (daemon
 connects once, no retry → unrecoverable no-GUI qube), counts non-launches as launches in
 the backoff, and does not touch the evidenced exit path. Submodule left on perwindow.
+
+### 2026-08-01 (subagent) — work-area/maximize check on pristine Win10 from-source: FAIL
+Full data: `instrumentation/qwtfull-w10/workarea-check.md`. Guest 3440x1440; agent applied
+inferred work area (5,56)-(3435,1435) once at start (source = inference; registry+qubesdb
+absent), Explorer overwrote it back to (0,0)-(3440,1400) and it was never re-asserted:
+**`WorkAreaCreateListener: CreateWindowEx failed 0x5` reproduces on Win10 19045** (3x at
+agent start) — open item #3 is NOT Win11-specific. Result: maximized Notepad = 3440x1400
+dom0 client at (0,56) on a 5120x1440 dom0 span → bottom 16 px off-screen (status bar
+cropped, PNG evidence). Had the agent's rect stuck, it would have fit (bottom 1435<1440).
+
+## 2026-08-02 (subagent) — Win10 regression pass of the five win11-line fixes: BLOCKED
+win-idd-test found wedged before any check could run: ~3.8/4 cores pegged for the whole
+24-min observation, qubes.VMShell data vchan timing out on every probe, dom0 showing only
+one stale "(Windows Desktop)" window (no seamless windows), netvm detached, gui=1.
+Signature matches the session-6 daemon-absent respawn storm; recovery needs a clean VM
+reboot, which the task rules forbade the subagent. ZERO scenarios executed — nothing about
+a5012a5/832ce97/d6ab61c/3c12071/d610454 on Win10 was verified in either direction.
+Full data + rerun recipe: instrumentation/qwtfull-w10/win10-regression.md.
+
+## 2026-08-02 (session 7, orchestrator) — full step-5 sweep, wedge, netvm self-service, fix pipeline
+
+- **Netvm IS settable from this qube** — handoff's "user must attach" claim retracted:
+  `qvm-prefs win-idd-test netvm` write permission verified (no-op set). The whole two-boot
+  retest and stock-control experiment are self-service now.
+- **xenvif flow source-verified** (`ci-notes/xenvif-start-flow.md`, from pinned
+  xenbits pvdrivers 9.1.0 sources): three corrections to session-6's model — (1) arming
+  happens at the XENVIF\DEV_NET child (xennet) start, so "xennet absent" means the chain
+  died BEFORE the arm, nothing was "lost"; (2) `Unplug\NICS` is consumed (deleted) at
+  EVERY xen.sys boot — its absence on the netvm-detached forensics boot was the healthy
+  state, that evidence proved nothing; (3) boot 1 never reboots itself: xenbus_monitor
+  waits forever on a MB_YESNO dialog. Retest tooling: tools/netvm-bootwatch.sh,
+  netvm-instrument.ps1 (SYSTEM schtask collector for starved boots), sharpened
+  netforensics.ps1. Decision tree in the doc maps outcomes → root causes.
+- **Drag bench FAIL** (verifier-upheld): drag p50 17.2/16.1 ms vs 0.917 ms baseline,
+  <5 ms bar; 92.6% is per-frame PrintWindow recapture of the dragged window whose diff is
+  EMPTY (content is position-invariant on pure move). Scroll/type/idle improved 4-6x.
+  Full data: instrumentation/qwtfull-w10/bench-qwtfull-w10.md.
+- **Stock-control ISO built + verified** (subagent, verifier-upheld):
+  ~/win-iso/win-idd-unattended-stock.iso, staged installer.msi bit-identical to vendor
+  stock 70493221…, everything else hash-identical to the current install's media.
+- **Wedge**: guest starved (~3.8 cores, qrexec dead, no seamless windows, netvm detached,
+  gui-daemon alive) between the bench (ended OK ~23:47) and the protocol check (23:57).
+  Cause unattributed — the "respawn storm" label from session 6 does NOT obviously apply
+  (that mechanism needs an absent daemon; here the daemon lived). Dom0 scrollback in the
+  fullshot shows netvm fw-net→'' commands but may be stale from session 6. ACPI shutdown
+  sent 21:49 UTC; guest ignored it for minutes while pegged. Post-recovery: MUST census
+  gui-agent-*.log files (respawn discriminator) + event log for the 23:47-23:57 window.
+- **Both defect fixes drafted, adversarially reviewed (6 reviewers): NEEDS_WORK ×6.**
+  Workarea v1 (mask+lifecycle confirmed correct/necessary) blockers: drift-check
+  unreachable on hook-thread death + starved by frame-path resync drain; g_WaLock used
+  before init once the listener actually lives. Drag v1 blockers: corrupt hand-authored
+  diff; mask-memo defeated by split owner/child interrogations (menu-over-drag pushes
+  masks twice per frame, each WcSetMask forces recapture); unbuilt/unbenched. v2 agents
+  running on clones, branches workarea-fix-v2 / drag-fix-v2.
