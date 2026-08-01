@@ -509,3 +509,29 @@ Suspects, in order: (a) the expired EnterpriseSEval license watchdog interacting
 now-networked boot, (b) QWT network-setup on first netvm attach, (c) unrelated boot stall.
 The last agent build deployed to the guest is CI 30691320005 (synthesis, validated);
 CI 30693970781 (event-driven work-area re-assert) is built but NOT yet deployed.
+
+### Windows ISO acquisition: what actually blocks automation
+Microsoft's software-download connector API is reachable and works headlessly for the
+catalogue steps (session GUID -> page cookies -> vlscppe fingerprint ->
+getskuinformationbyproductedition returns the full SKU list; Win10 22H2 English = SKU
+16067). The FINAL call, GetProductDownloadLinksBySku, returns
+`{"Key":"ErrorSettings.SentinelReject","Value":"Sentinel marked this request as rejected."}`
+even from a residential exit IP - so it is the SESSION that is rejected (no fingerprint
+JS executed), not the address. quickget/Fido fail identically for the same reason.
+Script kept at `tools/get-win-iso.sh` with this documented; finishing it needs a real
+browser engine to run the vlscppe fingerprint once and hand over its cookies.
+Workaround used: Firefox opened in the mgmt qube, link copied, curl'ed.
+ISO in flight: ~/win-iso/Win10_22H2_EnglishInternational_x64v1.iso (5.71 GB).
+
+### NEXT SESSION - clean-room rebuild (user's leftover-independence test)
+The current guest carries sediment from this session (hand-swapped gui-agent.exe +
+.orig backups, a WorkArea registry value, an expired eval license, a mid-life netvm
+attach) and is currently UNREACHABLE (Running, no qrexec, no windows). Plan:
+1. `mgmt/build-unattended-iso.sh ~/win-iso/Win10_22H2_EnglishInternational_x64v1.iso "Windows 10 Pro" --with-key`
+2. wipe + recreate win-idd-test (dom0/02-create-win-qube.sh mirrors the Admin API calls
+   this qube is allowed to make), install unattended with QWT, keep netvm OFF.
+3. deploy CI 30693970781 (composite synthesis + event-driven work-area sync) onto the
+   pristine guest - this validates the agent against stock QWT, not our leftovers.
+4. then: maximized-window geometry check, and the MS Office/Word rendering test the user
+   asked for (Word is the most complex window layout available: ribbon, backstage,
+   dropdowns, task panes - the real synthesis stress test).
