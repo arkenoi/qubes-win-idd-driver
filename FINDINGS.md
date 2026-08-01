@@ -359,3 +359,25 @@ un-layer stay on legacy until recreated.
   fullscreen (needs guid allow_fullscreen), crop guest decorations for maximized windows
   (breaks Chromium tab-in-titlebar), or dom0-side special-casing (gui-daemon change →
   Phase 3 / upstream design discussion).
+
+### True first-run retest (deployed: 4.2.2+agent.6133446e685d) — RESOLVED, plus a non-bug
+- The "instant crash" on genuine first run was NOT the GUI stack at all: **wlms.exe
+  (Windows License Manager) force-shuts the VM down HOURLY** — the EnterpriseSEval
+  license sits in "Notification" (offline VM can never activate the eval). Event 1074
+  says it plainly; there was no BSOD, no agent crash (mid-frame log ends = shutdown
+  kill), and the daemon survived. `slmgr /rearm` consumed a rearm (2→1) but did NOT
+  clear Notification post-reboot. USER DECISION NEEDED: brief network for eval
+  activation, reinstall from a non-eval image, or live with hourly shutdowns.
+- The true-FRE takeover window differs from the per-profile FRE: created with
+  **WS_EX_NOREDIRECTIONBITMAP** (DirectComposition-only, GLWA can succeed) — slipped
+  past the ULW check and attached. Fixed: NRB windows are unconditionally
+  PrintWindow-ineligible (agent 6133446).
+- Retest evidence: FRE overlay 0x101e0 attach → "became PrintWindow-ineligible
+  (layered), dropping to legacy path", 0 disconnects, in-guest fullscreen recorder
+  (mgmt scratchpad recorder.ps1, C:\temp\frames) shows the carousel + dimmed backdrop
+  rendering correctly. dom0 = same pixels by construction (legacy slice).
+- Correction to earlier assumption: dom0 host is 5120x1440 (multi-monitor), guest
+  3440x1440 — the IsPopup size guard therefore does NOT veto 3440-wide fullscreen
+  popups (they map ovr=1, undecorated), and the maximized clamp only bites on height.
+- New instrument: in-guest fullscreen JPEG recorder — the only way to see
+  override-redirect windows (dom0 local.WinScreenshot skips them).
