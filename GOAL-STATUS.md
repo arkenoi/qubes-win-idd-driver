@@ -1,6 +1,16 @@
 # Goal status — updated 2026-08-01
 
-## CURRENT: per-window capture build shipped and validated
+## BLOCKER (2026-08-01, session 6): networking is broken on the current build
+
+The full-source QWT (our agent, upstream WiX installer, stock PV drivers) installs cleanly
+and every display check passes — but **attaching a netvm makes the guest unusable**: xenvif
+installs yet never starts, the emulated-NIC unplug is never armed, ~2 cores burn and qrexec
+stops answering. **This is not a shippable Qubes Windows Tools install.** Nothing here goes
+to a real qube or upstream until networking works. Details, evidence and the two required
+experiments (clean-reboot retest; stock-QWT control install) are in
+`SESSION-HANDOFF-qwt-full.md`.
+
+## Display work: per-window capture build shipped and validated
 
 The mission-defining feature — **per-window capture** (each guest window gets its own
 granted framebuffer, killing the composited-desktop artifact class) — is IMPLEMENTED,
