@@ -487,3 +487,25 @@ agent's SetVideoMode) still overwrites it asynchronously -> needs a periodic re-
 (cheap SPI_GETWORKAREA compare on the existing ~2s tick) before this is reliable.
 No dom0/daemon changes; MSG_WORKAREA dispatch is present but dormant (locally-defined
 constant) until a protocol-1.9 daemon exists.
+
+### Work-area re-assert made event-driven (agent, CI 30693970781 green)
+User asked for event-driven rather than timed. Both halves now are:
+- dom0 watcher: `xprop -root -spy _NET_WORKAREA` blocks until a change (the 60s loop in
+  it is only a re-push safety net for VM restarts, not the change detector);
+- guest: qubesdb `qdb_watch` blocks; and the re-assert against Explorer's overwrite is a
+  hidden top-level window on the window-event thread's existing message loop handling
+  WM_SETTINGCHANGE(SPI_SETWORKAREA)/WM_DISPLAYCHANGE. No timers, no polling. (The
+  listener must be a real top-level window: broadcasts skip HWND_MESSAGE windows.)
+Build note: workarea.c has no <stdint.h>, so no uint32_t casts there.
+
+### BLOCKED: guest unreachable after attaching a netvm (for the Office test)
+User attached `fw-net` to win-idd-test for Windows activation + an Office trial download.
+After the required restart the VM reports power_state=Running with high cputime but:
+qrexec never answers (many probes over ~20 min), and a dom0 full-desktop screenshot shows
+NO win-idd-test windows at all (agent never connected). One kill+start cycle already
+attempted; per CLAUDE.md the second failure stops for user input rather than retrying.
+Nothing in the guest could be driven, so the Office/Word rendering test did not start.
+Suspects, in order: (a) the expired EnterpriseSEval license watchdog interacting with a
+now-networked boot, (b) QWT network-setup on first netvm attach, (c) unrelated boot stall.
+The last agent build deployed to the guest is CI 30691320005 (synthesis, validated);
+CI 30693970781 (event-driven work-area re-assert) is built but NOT yet deployed.
