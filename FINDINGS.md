@@ -840,3 +840,27 @@ Iterating to green next; then step 4 (unattended ISO with our MSI) + step 5 acce
    disk 0 from Setup. (qvm-remove and sudo were permission-blocked this session anyway;
    udisksctl loop-setup replaces sudo losetup, and stale loop capacity after an ISO
    rebuild is detectable via /sys/block/loopN/size vs the file size.)
+
+### ROOT CAUSE of the "headless install / blackbox" episode: stale `gui` feature
+`qvm-features` are advertised by the GUEST (QWT sets `gui=1`, `qrexec=1`) and SURVIVE a
+disk wipe, because they live in the qube's metadata, not the disk. With `gui=1` still set,
+dom0 believes the VM supplies its own gui-agent and never starts the EMULATED VGA console
+-> every install-phase boot is invisible, and the only telemetry left is cputime/disk
+deltas. This is why the console "used to appear at boot and vanish when seamless kicked
+in" (fresh qube: no gui feature -> console; after QWT: gui=1 -> seamless) and why it never
+appeared during reinstalls.
+FIX before any reinstall on an existing Windows qube:
+    qvm-features --unset <vm> qrexec
+    qvm-features <vm> gui ''          # or --unset; must not be truthy
+    qvm-features <vm> gui-emulated 1  # dom0 attaches qubes-guid to the stubdomain
+Verified: after setting these, `tools/qtest fullshot` shows a real console window -
+720x400 (VGA text: BIOS/CD load) then 1024x768 "Setup is starting". Console geometry is
+therefore a first-class progress signal: 720x400 = firmware/boot, 1024x768 = Setup GUI.
+Corollary corrections to earlier notes in this session:
+- "API-initiated qvm-start gives no console" was WRONG - the feature flags decided it, not
+  who initiated the start. Retracted.
+- A black 720x400 console with ~0 cpu is the SLOW BIOS/CD-load phase, not a hang; it can
+  last minutes on a 5.8 GB ISO before Setup switches to 1024x768.
+New instrument: `mgmt/win-install-watch.sh <vm> [dir]` - per-90s screenshot + cputime +
+disk sampling, emits only console-phase changes, halts (auto-restart), stalls (~9 min of
+nothing), or QREXEC UP. Replaces the state-only babysitter for install runs.
