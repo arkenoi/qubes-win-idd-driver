@@ -535,3 +535,49 @@ attach) and is currently UNREACHABLE (Running, no qrexec, no windows). Plan:
 4. then: maximized-window geometry check, and the MS Office/Word rendering test the user
    asked for (Word is the most complex window layout available: ribbon, backstage,
    dropdowns, task panes - the real synthesis stress test).
+
+## 2026-08-01 (session 4, mgmt qube) — win11-idd-test provisioned; per-window build deployed; first Win11 defect
+
+### New test qube: win11-idd-test (Win11 24H2 Enterprise Eval 26100.1742)
+Provisioned fully unattended (mgmt/PROVISION-LOG.md has the recipe: autounattend-win11.xml
+with LabConfig bypasses, split-swm media, same $OEM$ payload). QWT 4.2.2 + testsigning +
+build cert all verified; drive with `QTEST_VM=win11-idd-test` (QubesIncoming path identical).
+dom0 policy extended (tag-scoped lifecycle+block.*, name-scoped VMShell/Filecopy);
+local.WinScreenshot is now an allowlist service taking +<qube>; qtest shot passes it.
+
+### Per-window build ec55f39 (qwt-improved 4.2.2+agent.ec55f39) deployed and healthy on Win11
+Overlay installer OK (sha-verified swap, .orig kept). Evidence of health: PwAttachWindow
+per-window buffers for each app window; QGAPERF v=2 seq advancing; overlap scenario
+(Notepad + elevated Windows Terminal) both pixel-correct in per-window shots; cold boot
+PASS (qrexec 2 s, ENUMFAIL=0, agent up on boot path, 3 buffers attached). Recurring
+benign-looking transient: bursts of `GetWindowData: GetRealWindowRect failed 0x80070006`
+(ERROR_INVALID_HANDLE) around window churn — recovery works, but frequency on Win11 (11 in
+~5 min across two boots) is higher than Win10; watch it.
+
+### DEFECT (user-observed live, dom0-verified): Win11 XAML windowed popups bypass composite synthesis
+Symptom: Notepad's "auto-save" teaching bubble renders in dom0 as its own sticky window
+with a heavy BLACK FRAME over the Notepad window (instrumentation/win11/
+xaml-popup-bypass-dom0.png) instead of being synthesized into the owner.
+Taxonomy (instrumentation/win11/xaml-popup-taxonomy.txt): class `Xaml_WindowedPopupClass`
+title "PopupHost", same process as Notepad, geometrically contained in the main window,
+styles WS_POPUP + WS_EX_NOACTIVATE + WS_EX_NOREDIRECTIONBITMAP — and NONE of the flags the
+override-redirect/synthesis classifier keys on (no TOPMOST, no TOOLWINDOW, no LAYERED),
+and no GW_OWNER visible linkage.
+Two independent classifier gaps:
+1. Ownership: XAML windowed popups don't set GW_OWNER to the app main window -> the
+   owner-contained synthesis predicate can never match. Candidate fix: same-PID +
+   geometric containment (<=4px overhang) as an alternate linkage for
+   Xaml_WindowedPopupClass / WS_EX_NOREDIRECTIONBITMAP popups.
+2. Capture: WS_EX_NOREDIRECTIONBITMAP means the window HAS NO redirection surface —
+   PrintWindow structurally cannot capture it. These windows must be slice-fed
+   unconditionally. The black frame is consistent with blank (black) prefill persisting
+   where no damage-driven patch has landed.
+Impact class: ALL WinUI/XAML apps on Win11 (inbox Notepad, Terminal flyouts, context
+menus, teaching tips, jump-list previews) — this is the default popup mechanism on the
+new shell, not an Office-style corner case.
+NOTE Win11 positives: Search/Start CoreWindows are CLOAKED and correctly invisible;
+DummyDWMListenerWindow spam is 0x0-sized and correctly skipped.
+Next (dev session): add owner-linkage fallback + unconditional slice-feed for
+NOREDIRECTIONBITMAP windows to the acceptance/synthesis predicate; re-test bubble,
+Win11 Notepad context menu (same class), Terminal dropdown; then re-run the full
+Win10 acceptance set for regressions.
