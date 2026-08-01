@@ -443,3 +443,47 @@ Also: DESIGN-workarea-propagation.md written (MSG_WORKAREA daemon→agent + SPI_
 agent-side, frame extents included; compat + alternatives) — awaiting user review before
 any upstream contact. Retail Win10 ISO auto-download blocked by Microsoft by IP
 (quickget); user action needed for a non-eval image or brief network for eval activation.
+
+## 2026-08-01 (session 3) — composite synthesis + work-area sync
+
+### Composite synthesis (agent 49e119a, CI 30691320005) — WORKING, dom0-verified
+Owner-contained override-redirect windows (menus, tooltips, bubbles; <=4px overhang)
+are now SYNTHESIZED: tracked locally, never announced to dom0. Verified with Notepad's
+File menu: dom0 window list = 1 window (was 2), the menu renders INSIDE Notepad with no
+border rectangle of its own, 0 vchan disconnects.
+
+Design choice (adversarial workflow wf_82dac5f5, 5 agents): the analysts' first design
+switched the OWNER to slice-fed while any child existed; the attackers showed that costs
+a full ~19MB grant rebuild per popup show/hide (menu browsing = continuous churn) and
+bleeds every overlapping guest window into the owner for the popup's lifetime. Shipped
+instead: **owner stays PrintWindow-fed + capture MASK + per-rect patch**. wincapture's
+row loop compares/copies only the segments between masked column ranges, so the popup
+region is never overwritten; the frame loop patches exactly that region from the live
+DDA desktop image. No grant churn, no whole-owner bleed, popup pixels are composited
+truth (which is what a topmost popup should show).
+
+Two bugs found by running it, both dom0-verified:
+1. **Invisible menus**: a menu paints ONCE before the tracking pass learns it exists, and
+   a static screen then yields no further DDA frames -> the dirty-rect-driven patch never
+   ran. Fixed by publishing the live framebuffer pointer in globals (valid for the whole
+   duplication - the daemon reads it continuously) and patching immediately at synthesis.
+2. **Daemon killed (whole-qube GUI loss, reproduced live)**: materialization cleared
+   `Synthesized` and relied on the normal removal path to re-add the window, but
+   RemoveWindow's silence gate tested `Synthesized` -> it sent UNMAP+DESTROY for an hwnd
+   the daemon never had a CREATE for. Fixed with an explicit `CreateSent` flag gating all
+   teardown sends (also covers failed announces). The attackers had flagged exactly this
+   divergence between the two analysts' change lists as "itself a latent daemon-killer".
+
+### Work-area sync (agent workarea.c) — implemented, partially validated
+Sources in priority order: registry `WorkArea="x,y,w,h"` / qubesdb `/qubes-workarea`
+(written by the optional dom0 watcher `dom0/09-install-workarea-watcher.sh`, live across
+panel/monitor changes) / inference from daemon-dictated window origins. Applies
+SPI_SETWORKAREA + SetWindowPlacement re-fit of maximized windows.
+Measured: SPI_SETWORKAREA **must not** carry SPIF_SENDCHANGE - the broadcast makes
+Explorer recompute from its own taskbar geometry and revert us (verified both ways
+in-guest); without flags it sticks. OPEN: after an agent restart the value was observed
+back at the OS default, i.e. something (Explorer's WM_DISPLAYCHANGE recompute after the
+agent's SetVideoMode) still overwrites it asynchronously -> needs a periodic re-assert
+(cheap SPI_GETWORKAREA compare on the existing ~2s tick) before this is reliable.
+No dom0/daemon changes; MSG_WORKAREA dispatch is present but dormant (locally-defined
+constant) until a protocol-1.9 daemon exists.
