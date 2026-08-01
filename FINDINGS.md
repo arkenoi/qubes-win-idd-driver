@@ -610,3 +610,22 @@ pass for a5012a5+832ce97 still pending — the fallback only ever fires for popu
 GW_OWNER can't place, and Win10-validated owned popups take the unchanged path, but
 re-run the win-idd-test acceptance set before calling it clean (coordinate with the
 Edge-fixes session which owns that VM right now).
+
+### Keytip badges: small-popup acceptance (agent d6ab61c, dom0-verified)
+User-observed on the synthesis build: Alt-nav keytip badges only PARTIALLY visible.
+Root cause chain: ShouldAcceptWindow's SM_CXMIN/CYMIN floor (~136x39) silently rejects
+the ~40x46 keytip popups; they sit ~20px outside the owner's granted buffer so
+synthesis cannot represent them either; the only pixels that reached dom0 were the
+fragments overlapping the synthesized menu's patch region.
+Fix: override-redirect popups now use a token 4x4 floor (normal windows keep
+SM_CXMIN/CYMIN; DWM-cloaked strips like EdgeUiInputTopWndClass stay excluded via the
+IsVisible fold, verified before shipping). Result (keytips-visible-dom0.png): menu
+synthesized borderless inside Notepad, keytips fully visible as 12 tiny slice-fed
+override-redirect windows - each with the daemon's red qube border, which is the
+DESIGNED presentation for guest windows and stays (2A-chrome rule 4: never weaken
+daemon-side bordering).
+Also observed: one borderline keytip synthesized at creation geometry then cleanly
+materialized when its final position left containment ("no longer owner-contained,
+materializing") - the existing re-check machinery handles the flap.
+Win11 stack now: package 4.2.2+agent.d6ab61cf8659 on win11-idd-test (a5012a5 fallback
+owner + 832ce97 overhang 12 + d6ab61c small popups).
