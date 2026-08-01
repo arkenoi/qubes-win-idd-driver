@@ -381,3 +381,24 @@ un-layer stay on legacy until recreated.
   popups (they map ovr=1, undecorated), and the maximized clamp only bites on height.
 - New instrument: in-guest fullscreen JPEG recorder — the only way to see
   override-redirect windows (dom0 local.WinScreenshot skips them).
+
+### Slice-fed per-window buffers (deployed: 4.2.2+agent.<slice2>, run 30677339109) — FRE RENDERS CORRECTLY
+The dom0 full-desktop screenshot (local.WinFullScreen, ~60-90 s per capture) exposed the
+real defect: the FRE overlay was a daemon-side legacy-slice window, and the daemon
+sources slice pixels by ITS OWN window position — force_on_screen had pushed the ovr
+window to y=31 (below the dom0 panel) while the guest rendered it at y=0, so the whole
+overlay was misregistered by 31px (the "weird ugly double borders").
+Fix: **slice-fed per-window buffers** — PrintWindow-ineligible windows (ULW,
+WS_EX_NOREDIRECTIONBITMAP) now get a normal per-window buffer that ProcessNewFrame fills
+by copying the window's region out of the persistently-granted DDA desktop image
+(composited truth, translucency pre-blended, content window-relative). Iteration note:
+the first cut gated the copy on frame->mapped, which is TRUE only on the very first
+frame (MapDesktopSurface runs once, for the grant pointer) — overlay rendered as an
+all-black box; fixed by passing ctx->framebuffer into ProcessNewFrame.
+Verified via dom0 screenshot: FRE carousel + dimmed backdrop pixel-correct, aligned,
+only the (by-design) 1px red ovr border remains. Occlusion caveat: slice-fed content
+includes whatever covers the window in the guest — acceptable for this class (topmost
+overlays); PrintWindow windows are unaffected.
+Remaining cosmetic: overlay displayed 31px below its guest position (content is
+window-relative so nothing misaligns visually); dom0's force_on_screen padding is the
+cause — a dom0 guid.conf override_redirect_protection tweak could remove even that.
