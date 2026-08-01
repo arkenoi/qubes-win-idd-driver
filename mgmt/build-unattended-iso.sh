@@ -13,7 +13,9 @@ set -euo pipefail
 SRC="${1:?usage: $0 <source.iso> [image-name] [--with-key]}"
 IMG_NAME="${2:-Windows 10 Pro}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OUT=~/win-iso/win-idd-unattended.iso
+# Env overrides (Win11 flow): UNATTEND=<answer file>  OUT=<output iso>
+OUT="${OUT:-$HOME/win-iso/win-idd-unattended.iso}"
+UNATTEND="${UNATTEND:-$HERE/autounattend.xml}"
 WORK=~/win-iso/.unattend-work
 
 command -v 7z >/dev/null      || { echo "need p7zip(-plugins): 7z" >&2; exit 1; }
@@ -31,7 +33,7 @@ else
 fi
 
 # answer file (+ optional generic install key)
-sed "s/@IMAGE_NAME@/$IMG_NAME/" "$HERE/autounattend.xml" > "$WORK/autounattend.xml"
+sed "s/@IMAGE_NAME@/$IMG_NAME/" "$UNATTEND" > "$WORK/autounattend.xml"
 if [ "${3:-}" = "--with-key" ]; then
     sed -i 's#<!--PRODUCTKEY-->#<ProductKey><Key>VK7JG-NPHTM-C97JM-9MPGT-3V66T</Key><WillShowUI>OnError</WillShowUI></ProductKey>#' \
         "$WORK/autounattend.xml"
@@ -56,8 +58,39 @@ for f in ~/win-iso/qubesidd-test.cer ~/win-iso/qwt-installer.exe ~/win-iso/qwt-i
          ~/win-iso/qwt-certs/SigningCert*.cer; do
     [ -f "$f" ] && cp "$f" "$WORK/payload/" && echo "payload += $(basename "$f")"
 done
+# QWT_MSI: stage OUR CI-built installer.msi instead of the stock one (full-source-build
+# plan step 4; artifact qwt-full-package). QWT_MSI_SHA256 (from the CI MANIFEST.json) is
+# verified here at stage time and written alongside for install-qwt.cmd to re-verify.
+if [ -n "${QWT_MSI:-}" ]; then
+    [ -f "$QWT_MSI" ] || { echo "QWT_MSI not found: $QWT_MSI" >&2; exit 1; }
+    have=$(sha256sum "$QWT_MSI" | cut -d' ' -f1)
+    if [ -n "${QWT_MSI_SHA256:-}" ] && [ "$have" != "$QWT_MSI_SHA256" ]; then
+        echo "QWT_MSI sha256 mismatch: $have != $QWT_MSI_SHA256" >&2; exit 1
+    fi
+    cp "$QWT_MSI" "$WORK/payload/installer.msi"
+    echo "$have  installer.msi" > "$WORK/payload/installer.msi.sha256"
+    echo "payload += installer.msi (OURS: $have)"
+fi
 cp -a "$WORK/payload" "$WORK/sources/\$OEM\$/\$1/payload"
 rm -rf "$WORK/[BOOT]"   # 7z-extracted El Torito images; not needed in the rebuilt ISO
+
+# ISO9660-without-UDF cannot carry a >4GiB file (see xorriso NOTE below). Win11 24H2
+# install.wim exceeds that -> split into .swm chunks, which Windows Setup consumes
+# natively (same mechanism as FAT32 USB media; autounattend InstallFrom-by-name works
+# unchanged). Requires wimlib. install.wim is REMOVED after a verified split so Setup
+# cannot pick the unsplit copy.
+WIM="$WORK/sources/install.wim"
+if [ -f "$WIM" ] && [ "$(stat -c%s "$WIM")" -gt 4294967295 ]; then
+    command -v wimlib-imagex >/dev/null || {
+        echo "install.wim >4GiB needs splitting but wimlib-imagex is missing" >&2
+        echo "install it (e.g. dnf install wimlib-utils) and re-run" >&2; exit 1; }
+    echo "install.wim is >4GiB - splitting to .swm ..."
+    wimlib-imagex split "$WIM" "$WORK/sources/install.swm" 3500
+    wimlib-imagex verify "$WORK/sources/install.swm" \
+        --ref="$WORK/sources/install*.swm" >/dev/null
+    rm -f "$WIM"
+    ls -sh "$WORK/sources/"install*.swm
+fi
 
 echo "Rebuilding bootable ISO ..."
 # NOTE: no -udf — this xorriso (1.5.8) lacks UDF write support ("Unsupported option

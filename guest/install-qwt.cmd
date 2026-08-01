@@ -50,6 +50,21 @@ if %errorlevel% neq 0 if %errorlevel% neq 3010 if %errorlevel% neq 1638 (
   exit /b %errorlevel%
 )
 
+REM --- 2b. integrity: when the ISO staged OUR CI-built MSI it also staged its
+REM     expected sha256 (mgmt/build-unattended-iso.sh QWT_MSI); re-verify here so a
+REM     corrupted or wrong installer.msi fails loudly instead of installing silently.
+if not exist "%QWT%installer.msi.sha256" goto hash_done
+set "WANT="
+set "HAVE="
+for /f "tokens=1" %%w in ('type "%QWT%installer.msi.sha256"') do if not defined WANT set "WANT=%%w"
+for /f "skip=1 tokens=1" %%h in ('certutil -hashfile "%QWT%installer.msi" SHA256') do if not defined HAVE set "HAVE=%%h"
+if /i not "%WANT%"=="%HAVE%" (
+  echo FATAL: installer.msi sha256 mismatch: got %HAVE% want %WANT%
+  exit /b 102
+)
+echo installer.msi sha256 OK: %HAVE%
+:hash_done
+
 REM --- 3. Qubes Windows Tools, explicit feature set --------------------------
 REM   INCLUDED : PvDriversCore (xenbus+xeniface -> gnttab/vchan, REQUIRED)
 REM              Core          (qubesdb, qrexec agent, file/clipboard handlers)
