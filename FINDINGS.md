@@ -746,3 +746,35 @@ Repro: deploy on clean guest, open Notepad, Alt+F, `tools/qtest fullshot`.
 
 ### Still open (unchanged): synthesis flap during drags (#2), WorkAreaCreateListener 0x5 (#3),
 ### GetRealWindowRect 0x80070006 bursts (#4), Win10 regression pass for all five fixes (#5).
+
+### 2026-08-01 — "attaching a netvm makes the guest unresponsive" = NO PV NETWORK DRIVER
+User observed twice that giving win-idd-test a netvm renders it unresponsive, and that
+removing the network makes it instantly responsive again. Diagnosed on the clean guest:
+
+| probe | result |
+|---|---|
+| `Xen PV Network Class` PnP device | **Unknown** (never started) |
+| `xenvif` system driver | **Stopped** (while xenbus/xenfilt/xeniface are Running) |
+| `XP0001 XENBUS VBD`, `XENBUS CONS` | **Error** |
+| active NIC | **Realtek RTL8139C+** (emulated), IP 10.137.0.64 |
+| `System` process CPU | **269 s** (top consumer by an order of magnitude) |
+| QWT network-setup log | `GetAdaptersInfo failed with 0xe8, retrying` for ~4 min, then settles on "Adapter 6: Realtek RTL8139C+" |
+
+Mechanism: with no PV netfront the HVM falls back to the QEMU-emulated RTL8139, which
+traps to the device model per packet. That burns kernel time in-guest and device-model
+time out-of-guest, starving the GUI agent and qrexec -> the VM looks hung. Detach the
+netvm and the emulated NIC goes idle -> instant recovery. Both observations explained.
+
+NOT a regression from our agent work: it is a PROVISIONING gap. Our unattended install
+runs QWT's MSI with an ADDLOCAL feature list (guest/install-qwt.cmd); the PV network
+driver is either absent from that list or failed to bind. The PV stack is partial -
+enough for vchan/qrexec (xeniface), not for networking (xenvif stopped).
+
+NEXT SESSION, before the Office test:
+1. Inspect `guest/install-qwt.cmd` ADDLOCAL and compare against the MSI's feature table
+   (`msiinfo`/`msidump` on ~/win-iso/qwt-iso/installer.msi from Linux).
+2. Re-run the MSI with the network feature enabled, reboot, confirm `xenvif=Running` and
+   a `Xen PV Network Class` adapter carrying the IP instead of the Realtek.
+3. Only then attach the netvm for Office + `slmgr /ato`. Expect normal responsiveness.
+This is also a strong argument for the full source build: a correctly-bound PV driver set
+is what a real QWT package installs and what our overlay approach can never fix.
