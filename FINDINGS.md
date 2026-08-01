@@ -701,3 +701,48 @@ NEXT SESSION starts here. Hypotheses, cheapest first:
    guest framebuffer content would mean we are reading dom0-composited pixels - impossible
    -> more likely these are Notepad's own menu-item bitmaps at wrong offsets).
 Repro: deploy on clean guest, open Notepad, Alt+F, `tools/qtest fullshot`.
+
+## 2026-08-01 session-5 (win11 line): drag phantom verified fixed; keytips synthesize-or-drop
+
+**Deployed on win11-idd-test: `4.2.2+agent.d61045417ed6`** (CI 30700488504).
+
+### Snap-layout drag phantom (3c12071): VERIFIED FIXED
+- Deployed `4.2.2+agent.3c1207143254`, then log-verified: dragging raised the transparent
+  `XamlExplorerHostIslandWindow` and `ShouldAcceptWindow` rejected it
+  ("click-through uncapturable shell overlay ... rejecting"), no oversized slice-fed attach.
+- **User dragged by hand and confirmed: no artifacts in dom0.**
+- Contrary to the session-4 note, synthetic input DOES reproduce the drag overlay: a SLOW
+  stepped drag (SetCursorPos+mouse_event, 5px/30ms steps after a proper engage) raises it.
+  Fast/jumpy synthetic drags were what failed. `scratchpad/dragtest.ps1` pattern works.
+- Win+Z raises a DIFFERENT XamlExplorerHostIslandWindow flavor (344x244, NO WS_EX_TRANSPARENT,
+  clickable) - correctly announced+slice-fed+raised, correctly unmapped on dismiss. The
+  rejection triple (TRANSPARENT+NOREDIRECTIONBITMAP+TOOLWINDOW) leaves it alone by design.
+
+### Keytip badges (OPEN #1): FIXED by d610454 (synthesize-or-drop + foreground owner pref)
+- `d610454` in AddWindow: sub-floor override-redirect popups (below SM_CXMIN/CYMIN) that
+  fail SynthQualifies get DeletePending and are dropped SILENTLY instead of being announced
+  as bordered slice-fed fragments (RemoveWindow is already silent for !CreateSent entries).
+  Materialization re-adds through the same gate, so a badge drifting out of its owner is
+  re-dropped, never announced.
+- Also in `d610454`: same-process fallback owner now prefers the FOREGROUND window over
+  topmost-containing (two-same-process-windows ambiguity from session-4).
+- Verified with TWO Notepad windows of one process: log shows per-geometry owner assignment
+  (0x40236/0x60250/0x80238 -> owner 0x301be; 0x9024a at x=2103 -> owner 0x70072), SYNTHPAINT
+  for each, zero announcements/materializations. dom0 fullshot mid-Alt: F/E/V badges render
+  borderless and pixel-correct inside the red-bordered win11 Notepad. No bordered fragments.
+- Alt keytips hold as long as needed for a shot if you don't send Esc; fullshot takes
+  ~20-60s per capture, so budget one shot per ~45s hold (`scratchpad/keytiptest.ps1`).
+
+### Operational notes
+- Agent log level: the effective knob is the PER-MODULE key
+  `HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent\LogLevel` (overrides the base
+  key). The watchdog does NOT recycle the agent on service restart - `Stop-Process gui-agent`
+  and let the watchdog respawn it. LogLevel=4 floods (per-second window dumps; one perf
+  sample showed log=13593us) - restored to 3 after testing.
+- `qrexec-client-vm dom0 local.WinFullScreen` HANGS without `</dev/null` - use
+  `tools/qtest fullshot`, which already does it right.
+- Intervening commit `3f7c956` (synthesis paint-skip diagnostics) from the parallel session
+  is in this build's history; coordinate as before.
+
+### Still open (unchanged): synthesis flap during drags (#2), WorkAreaCreateListener 0x5 (#3),
+### GetRealWindowRect 0x80070006 bursts (#4), Win10 regression pass for all five fixes (#5).

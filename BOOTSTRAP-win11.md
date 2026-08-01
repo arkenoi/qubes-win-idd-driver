@@ -36,11 +36,13 @@ independent interactive UI — announce and slice-feed it.
 
 ## State: what is deployed vs what is built
 
-- **Deployed on win11-idd-test right now:** `qwt-improved 4.2.2+agent.d6ab61cf8659`
-  (fallback owner + overhang 12 + small-popup acceptance).
-- **Pushed but NOT yet built/deployed:** agent `3c12071` (snap-overlay rejection),
-  driver-repo `f3837b3`. **First action in the new session: check that CI run, download
-  `qwt-improved-package`, deploy, and verify the drag phantom is gone.**
+- **Deployed on win11-idd-test right now:** `qwt-improved 4.2.2+agent.d61045417ed6`
+  (all of session-4's fixes + `3f7c956` paint-skip diagnostics + `d610454`
+  sub-floor-synthesize-or-drop + foreground fallback owner). Session-5 (2026-08-01)
+  verified on this build: **drag phantom gone** (user-confirmed by hand + log shows the
+  overlay rejected) and **keytip badges render borderless via synthesis** (dom0 fullshot
+  + log; correct owner split across two same-process Notepad windows). See FINDINGS.md
+  session-5 for repro scripts and the per-module LogLevel gotcha.
 
 ## Fixes landed this session (all on `agent/perwindow`, all dom0-verified except the last)
 
@@ -61,7 +63,7 @@ independent interactive UI — announce and slice-feed it.
 
 ## OPEN defects, in priority order
 
-### 1. Keytip badges are announced as individually bordered windows (REGRESSION-ish, user-visible)
+### 1. FIXED 2026-08-01 by `d610454` (synthesize-or-drop; see FINDINGS session-5) — keytip badges were announced as individually bordered windows
 After fix 3, Alt-nav keytips render as ~12 tiny windows each carrying dom0's red qube
 border, and their slice-fed content bleeds pixels from whatever is behind them
 (`instrumentation/win11/` + shots in `mgmt/shots-w11/keytip-now.png`). Before fix 3 they
