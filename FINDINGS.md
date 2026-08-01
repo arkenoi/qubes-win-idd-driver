@@ -668,17 +668,27 @@ Media attach from this qube: `sudo losetup --find --show --read-only <iso>` then
 `qvm-start win-idd-test --cdrom=win-idd-mgmt:loopN` (the PATH form is dom0-only; the
 loop-device identifier form works from a VM).
 
-### Our build on stock QWT: window suppression OK, composited paint WRONG
+### Our build OVERLAID on stock QWT: window suppression OK, composited paint MISSING
+NOTE (user): this is an OVERLAY (install-qwt-improved.ps1 swaps bin\gui-agent.exe on an
+existing QWT 4.2.2, watchdog left stock) - the GUEST is clean, the QWT install is not
+"our stack installed cleanly". User decision 2026-08-01: go for a FULL SOURCE BUILD of
+qubes-windows-tools with our agent fork integrated, and deploy that instead.
 Deployed 4.2.2+agent.03f04018d508 (CI 30693970781) on the pristine guest: install OK,
 agent 124664 B, 0 vchan disconnects, synthesis activates on Notepad's File menu
 (`msg=SYNTH,hwnd=0x10296,owner=0x30256,x=254,y=309,w=229,h=196`) and dom0 correctly
 shows ONE window (no separate bordered menu window).
-**BUT the painted pixels are wrong**: instead of the dropdown, dom0 shows a vertical
-column of ~30px red-bordered boxes containing single letters (N, W, O, S, A, L, U =
-the menu items' initials). Not separate dom0 windows (geometry.txt lists only VMapp +
-Notepad), so this is content painted INTO Notepad's buffer by PwPatchSynthChildren.
-On the OLD (sediment-laden) guest the identical test rendered the menu perfectly, so
-this is either a fresh-guest-only path or was masked there.
+**CORRECTION (user caught this): the "red-bordered letter boxes" were NOT ours.** The
+full-desktop service captures the WHOLE dom0 screen including other qubes' windows, and
+the parallel session's win11-idd-test Notepad was stacked over ours at those coordinates.
+Cropping win-idd-test's rect out of a full-desktop shot does NOT isolate our VM. Use the
+VM-SCOPED per-window service for anything about OUR window contents
+(`tools/qtest shot` -> local.WinScreenshot+win-idd-test, which does import -window on our
+window ids only); reserve fullshot for dom0-side geometry/border questions, and even then
+read geometry.txt rather than eyeballing overlapping pixels.
+**The real symptom, re-measured VM-scoped with the menu open (MENU=0x4017e):** the
+dropdown is simply NOT PAINTED - Notepad's window shows "File" highlighted and blank
+client area where the menu should be composited. So synthesis suppresses the child window
+(correct) but PwPatchSynthChildren contributes nothing on this guest.
 NEXT SESSION starts here. Hypotheses, cheapest first:
 1. wrong source geometry: the copy uses guest screen coords (c->X/Y) into the granted
    framebuffer; if this guest's screen != the framebuffer stride/size assumed
