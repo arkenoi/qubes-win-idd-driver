@@ -581,3 +581,32 @@ Next (dev session): add owner-linkage fallback + unconditional slice-feed for
 NOREDIRECTIONBITMAP windows to the acceptance/synthesis predicate; re-test bubble,
 Win11 Notepad context menu (same class), Terminal dropdown; then re-run the full
 Win10 acceptance set for regressions.
+
+### Win11 XAML popup synthesis — FIXED (agent a5012a5 + 832ce97, dom0-verified)
+Two-part fix, both on `perwindow`, package `4.2.2+agent.832ce9738328` deployed on
+win11-idd-test:
+1. **Same-process fallback owner** (a5012a5): `Xaml_WindowedPopupClass` popups carry no
+   usable GW_OWNER; SynthQualifies now falls back to the TOPMOST same-process window
+   whose granted buffer contains the popup. GW_OWNER, when tracked, stays exclusive
+   (a menu owned by A must not synthesize into overlapping B); synthesized windows
+   re-qualify only against their recorded owner (no owner-hopping); WINDOW_DATA gains
+   ProcessId. Also fixed en passant: an already-accounted child no longer flunks
+   re-qualification when the owner sits at WC_MAX_MASK capacity.
+2. **Overhang 4 -> 12 px** (832ce97): XAML menus align to the owner's OUTER window rect
+   while the buffer starts at the DWM frame — measured 5 px overhang at 96 DPI, one
+   past the old cap, so the File menu still materialized after fix 1. Both consumers
+   verified clip-safe first (patch loop intersects with buffer rect; capture mask
+   clamps to channel width).
+Evidence: teaching bubble AND File menu both `QGAPROTO,msg=SYNTH` into the Notepad
+main window; dom0 full-desktop shot shows ONE window with the menu inside
+(instrumentation/win11/xaml-popup-synthesized-dom0.png; before:
+xaml-popup-bypass-dom0.png). Alt-nav keytip badges (~40x46, ~20px outside the frame)
+are deliberately NOT synthesized.
+Open Win11 items: (a) `WorkAreaCreateListener: CreateWindowEx failed 0x5 Access is
+denied` twice at agent start — the event-driven work-area re-assert (826ad82) is dead
+on Win11, needs its own look; (b) recurring transient `GetRealWindowRect 0x80070006`
+bursts around window churn — handled, but noisier than Win10; (c) Win10 regression
+pass for a5012a5+832ce97 still pending — the fallback only ever fires for popups
+GW_OWNER can't place, and Win10-validated owned popups take the unchanged path, but
+re-run the win-idd-test acceptance set before calling it clean (coordinate with the
+Edge-fixes session which owns that VM right now).
