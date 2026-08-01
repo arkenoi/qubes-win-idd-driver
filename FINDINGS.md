@@ -340,3 +340,22 @@ on (accepted): UpdateWindowData can stall behind a slow PrintWindow during PwFor
 (same latency class as the pre-existing RemoveWindow path); ULW transition can lag up to
 ~2 s behind the periodic resync (GWL_EXSTYLE changes emit no WinEvent); windows that
 un-layer stay on legacy until recreated.
+
+### Post-review polish (deployed: 4.2.2+agent.be6cacf482af)
+- IsHungAppWindow guard before PrintWindow in the capture pass (review [major]: a hung
+  guest app would otherwise park the capture thread inside the engine lock and freeze
+  the agent behind any removal). Deployed.
+- DaemonMax adoption (maximized windows adopt dom0-WM-dictated size): implemented but
+  measured DORMANT on this dom0 — the WM does not resize oversize windows, it just
+  places them with the bottom off-screen, so no MSG_CONFIGURE ever arrives. Harmless.
+- Maximized-Edge ground truth after all fixes: guest window properly anchored
+  (raw -8,-8..3448,1408; DWM 0,0..3440x1400), geometry stable, no churn, no storms.
+  Remaining user-visible artifacts are PRESENTATION, not defects:
+  (a) dom0 window = 3440x1400 content + dom0 title bar > 1384 usable height → bottom
+      ~16px clipped off-screen ("huge");
+  (b) double chrome: Windows apps draw their own title/tab bar, dom0 WM adds its frame —
+      inherent to QWT seamless for ALL Windows windows (stock QWT identical).
+  Candidate remedies (all need user/policy decisions): map guest-maximize to dom0
+  fullscreen (needs guid allow_fullscreen), crop guest decorations for maximized windows
+  (breaks Chromium tab-in-titlebar), or dom0-side special-casing (gui-daemon change →
+  Phase 3 / upstream design discussion).
