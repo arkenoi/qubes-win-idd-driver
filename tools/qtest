@@ -39,6 +39,8 @@ case "${1:-}" in
   kill)     adm admin.vm.Kill ;;
   state)    adm admin.vm.CurrentState ;;
   shot)    out="${2:-shots.tar}"
-           qrexec-client-vm dom0 local.WinScreenshot </dev/null > "$out" && echo "saved $out" ;;
+           # +$VM argument selects the target among the service's allowlisted test qubes;
+           # a pre-argument service build simply ignores it (captures its baked-in VM).
+           qrexec-client-vm dom0 "local.WinScreenshot+$VM" </dev/null > "$out" && echo "saved $out" ;;
   *) grep '^#   ' "$0" | sed 's/^#   //' >&2; exit 2 ;;
 esac
