@@ -821,3 +821,22 @@ packaging/stage-qwt-repo.ps1 (parses wxs QUBES_REPO refs, stages from admin imag
 hash-dedupe, fails loudly), .distfiles nupkg pinning, fake EWDK tree for the bundle's
 vc_redist, TEST_SIGN=1, CWD=vs2022\installer for the CreateVersionWxi CodeTask.
 Iterating to green next; then step 4 (unattended ISO with our MSI) + step 5 acceptance.
+
+### Session-6 install-path findings (reinstall-over-existing-guest, API-started)
+1. **bootfix.bin**: MS media prompts "Press any key to boot from CD/DVD" whenever the disk
+   already carries a bootable OS; unattended = prompt times out = the OLD install boots.
+   Tell: qrexec ANSWERING during what should be Setup (old QWT lives). Fix landed in
+   build-unattended-iso.sh: delete boot/bootfix.bin from the repacked ISO (promptless CD
+   boot). Fresh/empty disks never hit this - why the session-3b rebuild worked.
+2. **API-initiated qvm-start gives NO VGA console** (OPEN, dom0-side): starts issued from
+   this qube leave the domain labeled Transient and never attach qubes-guid until qrexec
+   connects, so install-phase boots are headless; dom0-initiated starts show the VGA
+   console from BIOS onward (user-confirmed behavior). Consequence: during unattended
+   installs the ONLY instruments are admin.vm.CurrentState cputime deltas (~1 s/s = WIM
+   apply or payload stage; ~0 = wedged) and halt events; qvm-ls state stays Transient
+   throughout, and qvm-start blocks ~10 min returning 0 around the reboot. Do not read
+   Transient as stuck - read cputime.
+3. Reinstall-over-existing-guest needs no qvm-remove: autounattend WillWipeDisk=true wipes
+   disk 0 from Setup. (qvm-remove and sudo were permission-blocked this session anyway;
+   udisksctl loop-setup replaces sudo losetup, and stale loop capacity after an ISO
+   rebuild is detectable via /sys/block/loopN/size vs the file size.)
