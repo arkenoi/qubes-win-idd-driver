@@ -1,0 +1,48 @@
+Microsoft Windows [Version 10.0.26100.1742]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\System32>cmd /c type C:\Users\user\dragrec.txt
+15:25:52.038 hwnd=0x10156 pid=4040 cls="EdgeUiInputTopWndClass" cap="" at(15,0) 3425x4 style=0x94000000 ex=0x8200080 cloaked=1
+15:25:52.038 hwnd=0x100ee pid=4040 cls="Progman" cap="Program Manager" at(0,0) 3440x1440 style=0x96000000 ex=0x200080 cloaked=0
+15:26:11.641 hwnd=0x301be pid=6636 cls="Notepad" cap="Notepad" at(218,233) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:11.641 hwnd=0x70072 pid=6636 cls="Notepad" cap="Notepad" at(296,371) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:13.954 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(228,258) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:14.223 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(316,396) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:16.154 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(341,377) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:16.295 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(344,371) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:16.428 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(411,321) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:16.564 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(475,282) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:16.703 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(555,229) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:16.865 hwnd=0x20244 pid=4040 cls="XamlExplorerHostIslandWindow" cap="" at(440,0) 2560x360 style=0x94000000 ex=0x2800a8 cloaked=0
+15:26:16.865 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(572,215) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:17.004 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(535,307) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:17.149 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(483,372) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:17.275 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(456,391) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:17.409 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(407,420) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:17.566 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(379,433) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:17.696 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(337,435) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:17.841 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(280,382) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:17.974 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(270,358) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:18.103 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(308,334) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:18.236 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(310,338) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:18.367 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(350,374) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:18.511 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(377,416) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:18.636 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(378,417) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:18.769 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(417,403) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:18.903 hwnd=0x70072 pid=6636 cls="Notepad" cap="qgaperf-scrollbuffer - Notepad" at(413,405) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:22.205 hwnd=0x30244 pid=4040 cls="XamlExplorerHostIslandWindow" cap="" at(440,0) 2560x360 style=0x94000000 ex=0x2800a8 cloaked=0
+15:26:22.205 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(279,237) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:22.336 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(293,233) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:22.470 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(326,262) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:22.597 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(361,320) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:22.725 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(379,344) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:22.858 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(414,366) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:22.983 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(489,383) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:23.114 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(503,386) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:23.244 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(536,395) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:23.381 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(541,397) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:23.776 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(535,393) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:23.901 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(489,377) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+15:26:24.031 hwnd=0x301be pid=6636 cls="Notepad" cap="*Untitled - Notepad" at(467,373) 2580x1023 style=0x14cf0000 ex=0x110 cloaked=0
+
+C:\Windows\System32>

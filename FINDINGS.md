@@ -629,3 +629,24 @@ materialized when its final position left containment ("no longer owner-containe
 materializing") - the existing re-check machinery handles the flap.
 Win11 stack now: package 4.2.2+agent.d6ab61cf8659 on win11-idd-test (a5012a5 fallback
 owner + 832ce97 overhang 12 + d6ab61c small popups).
+
+### Drag phantom identified: Win11 snap-layouts overlay (fix 3c12071, NOT yet verified)
+User report: dragging a guest window by its WINDOWS title bar makes a huge phantom window
+full of desktop wallpaper appear at the top of the screen, staying until release.
+Could NOT be reproduced with synthetic input (SetCursorPos/mouse_event drags) - only with
+a real user drag; the high-rate recorder (instrumentation/win11/window-recorder.ps1, run
+while the user dragged) caught it: `XamlExplorerHostIslandWindow` (explorer.exe) 2560x360
+at (440,0), ex=0x2800a8 = TOPMOST|TRANSPARENT|TOOLWINDOW|LAYERED|NOREDIRECTIONBITMAP,
+not cloaked. Corroborated by the agent log: `PwAttachWindow: per-window buffer 2560x360
+(900 pages) attached (slice-fed)` on each drag, plus one 3440x1440 slice-fed attach.
+NOREDIRECTIONBITMAP -> PrintWindow-ineligible -> slice-fed from the composited desktop ->
+wallpaper-filled phantom. Fix 3c12071 rejects click-through + uncapturable + toolwindow
+windows in ShouldAcceptWindow. NOT built/deployed/verified yet - first task next session.
+Full transcript: instrumentation/win11/drag-recording-snaplayout.txt.
+
+### Keytip presentation is still wrong (open, user-flagged)
+d6ab61c made keytips visible but each is announced as its own dom0 window, so the daemon
+borders all ~12 of them and their slice-fed content bleeds the pixels behind them
+(instrumentation/win11/keytips-bordered-defect.png). Neither this nor the pre-fix
+half-cut-fragments state is acceptable. Designed fix in BOOTSTRAP-win11.md OPEN #1:
+announce sub-floor popups only when they synthesize, drop them silently otherwise.
