@@ -650,3 +650,44 @@ borders all ~12 of them and their slice-fed content bleeds the pixels behind the
 (instrumentation/win11/keytips-bordered-defect.png). Neither this nor the pre-fix
 half-cut-fragments state is acceptable. Designed fix in BOOTSTRAP-win11.md OPEN #1:
 announce sub-floor popups only when they synthesize, drop them silently otherwise.
+
+## 2026-08-01 (session 3b) — CLEAN-ROOM REBUILD DONE; synthesis paint defect found on it
+
+### Rebuild (user's leftover-independence test) — SUCCESS
+Retail Win10 22H2 (English International) installed unattended on a wiped win-idd-test:
+`OS=Windows 10 Pro, BUILD=10.0.19045`, testsigning Yes, QdbDaemon/QrexecAgent/
+QubesGuiWatchdog Running, stock `gui-agent.exe` = 80968 B, QubesIncoming path unchanged.
+qrexec answered 16 min after boot. **Retail, not eval** -> no more hourly wlms shutdowns
+(License Status: Notification = unactivated only).
+Two build fixes were needed vs the eval image: (a) `install.wim` is 5.17 GB > ISO9660's
+4 GiB, split to .swm with wimlib (this xorriso has no UDF write support); (b) the answer
+file must match the media language - our en-US autounattend made Setup silently ignore
+the unattend and sit on the locale picker; switched to en-GB (`0809:00000809`),
+`autounattend.xml.enus.bak` keeps the original.
+Media attach from this qube: `sudo losetup --find --show --read-only <iso>` then
+`qvm-start win-idd-test --cdrom=win-idd-mgmt:loopN` (the PATH form is dom0-only; the
+loop-device identifier form works from a VM).
+
+### Our build on stock QWT: window suppression OK, composited paint WRONG
+Deployed 4.2.2+agent.03f04018d508 (CI 30693970781) on the pristine guest: install OK,
+agent 124664 B, 0 vchan disconnects, synthesis activates on Notepad's File menu
+(`msg=SYNTH,hwnd=0x10296,owner=0x30256,x=254,y=309,w=229,h=196`) and dom0 correctly
+shows ONE window (no separate bordered menu window).
+**BUT the painted pixels are wrong**: instead of the dropdown, dom0 shows a vertical
+column of ~30px red-bordered boxes containing single letters (N, W, O, S, A, L, U =
+the menu items' initials). Not separate dom0 windows (geometry.txt lists only VMapp +
+Notepad), so this is content painted INTO Notepad's buffer by PwPatchSynthChildren.
+On the OLD (sediment-laden) guest the identical test rendered the menu perfectly, so
+this is either a fresh-guest-only path or was masked there.
+NEXT SESSION starts here. Hypotheses, cheapest first:
+1. wrong source geometry: the copy uses guest screen coords (c->X/Y) into the granted
+   framebuffer; if this guest's screen != the framebuffer stride/size assumed
+   (g_ScreenWidth vs frame->rect.Pitch), rows smear - check g_FbPitch vs g_ScreenWidth*4
+   on this guest (fresh install may have a different DDA pitch/padding).
+2. mask/patch rect mismatch: WcSetMask clips to PwWidth/PwHeight of the OWNER buffer,
+   patch clips to the same - verify owner PwWidth vs Notepad's actual 2566x1022.
+3. the red borders in the fragments suggest the copied region is NOT the menu at all but
+   another part of the composited desktop (borders are dom0-drawn, so their presence in
+   guest framebuffer content would mean we are reading dom0-composited pixels - impossible
+   -> more likely these are Notepad's own menu-item bitmaps at wrong offsets).
+Repro: deploy on clean guest, open Notepad, Alt+F, `tools/qtest fullshot`.
