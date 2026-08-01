@@ -74,6 +74,14 @@ fi
 cp -a "$WORK/payload" "$WORK/sources/\$OEM\$/\$1/payload"
 rm -rf "$WORK/[BOOT]"   # 7z-extracted El Torito images; not needed in the rebuilt ISO
 
+# bootfix.bin makes bootmgr show "Press any key to boot from CD/DVD" whenever the disk
+# already has a bootable OS - on unattended media that prompt times out and the VM
+# silently boots the OLD install from disk instead of Setup (bitten 2026-08-01: reinstall
+# over an existing guest ran the previous Windows; qrexec answering during "Setup" was
+# the tell). Remove it so CD boot is promptless. UEFI equivalent would be swapping
+# efisys.bin for efisys_noprompt.bin, but Qubes HVMs boot BIOS here.
+rm -f "$WORK/boot/bootfix.bin" && echo "removed boot/bootfix.bin (promptless CD boot)"
+
 # ISO9660-without-UDF cannot carry a >4GiB file (see xorriso NOTE below). Win11 24H2
 # install.wim exceeds that -> split into .swm chunks, which Windows Setup consumes
 # natively (same mechanism as FAT32 USB media; autounattend InstallFrom-by-name works
