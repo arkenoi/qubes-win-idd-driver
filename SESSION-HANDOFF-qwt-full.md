@@ -104,7 +104,19 @@ throttle. Full verdicts: workflow journal `wf_c984e960-ae2`.
   assigned", unassign via `admin.vm.device.block.Unassign+win-idd-mgmt+loop1`.
 - Guest reboots destroy the Qubes domain — something must restart the qube at each phase.
 
-## STEP 4 COMPLETE — acceptance results (measured 2026-08-01 22:45–23:20)
+## STEP 4 — NOT ACCEPTED. The resulting QWT is NON-FUNCTIONAL for networked use.
+
+**Read this before the green table below.** The build installs, renders, and passes every
+display check — and it is still NOT a usable Qubes Windows Tools install, because attaching
+a netvm makes the guest unusable (see BLOCKER). A Windows qube that cannot have a netvm is
+not a working qube. Do not report step 4 as done, do not deploy this to any real qube, and
+do not open any upstream PR on the strength of the table below. The correct status is:
+**installs and renders correctly; networking broken; cause not yet attributed to us or
+upstream.** (Corrected 2026-08-01 after the author initially wrote "STEP 4 COMPLETE /
+acceptance results" — that framing declared success on the checks that happened to pass and
+is exactly the pattern CLAUDE.md forbids.)
+
+### What DOES pass (display/install only — measured 2026-08-01 22:45–23:20)
 
 | check | result |
 |---|---|

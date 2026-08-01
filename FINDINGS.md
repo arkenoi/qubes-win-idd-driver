@@ -867,7 +867,11 @@ nothing), or QREXEC UP. Replaces the state-only babysitter for install runs.
 
 ## 2026-08-01 (session 6, part 2) — from-source QWT INSTALLED and accepted; netvm still blocked
 
-### Step 4 DONE: our source-built QWT installs clean on a wiped Win10 guest
+### Step 4 NOT ACCEPTED: installs and renders, but the result is NON-FUNCTIONAL QWT
+The display/install evidence below is real, but it does NOT make this a usable QWT: with a
+netvm attached the guest is unusable (see the netvm section). A Windows qube that cannot
+have networking is not a working qube. Corrected framing: the original heading said
+"Step 4 DONE" - that declared success on the passing checks and ignored the failing one.
 gui-agent.exe = 654de8eb… (CI MANIFEST), gui-watchdog.exe = d6196059…, **zero .orig
 backups** (MSI-installed, not overlaid), stage-2 log `installer.msi sha256 OK: ff89da3c…`
 + `QWT_INSTALL_OK rc=3010`, ARP shows "Qubes Windows Tools v4.2.2.0", testsigning Yes,
