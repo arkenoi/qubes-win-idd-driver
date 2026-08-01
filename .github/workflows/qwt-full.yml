@@ -1,0 +1,345 @@
+# qwt-full: build the REAL Qubes Windows Tools installer from upstream WiX v4 sources with
+# OUR gui-agent fork integrated. PLAN-full-source-build.md steps 2+3; inventory and the
+# integration decision in ci-notes/qwt-full-build.md.
+#
+# What is built from source here: gui-agent.exe + gui-watchdog.exe (our fork, test-signed
+# with the throwaway cert the guest trusts), install-helper.exe, installer.msi and the Burn
+# bundle (WiX v4.0.5, upstream sources pinned at v4.2.2-1). Everything else in the MSI
+# (PV drivers, qrexec agent, qubesdb, ...) is staged bit-identical from the GPG-verified
+# shipped 4.2.2 MSI (vendor/qwt-4.2.2/), keeping ITL's Authenticode signatures.
+name: qwt-full
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'agent'
+      - 'vendor/qwt-4.2.2/**'
+      - 'packaging/stage-qwt-repo.ps1'
+      - '.github/workflows/qwt-full.yml'
+
+jobs:
+  qwt-full:
+    runs-on: windows-2022
+    env:
+      CONFIG: Release
+      # Agent-dependency pins — identical to build.yml's gui-agent job (proven).
+      WINDOWS_UTILS_REF: v4.2.2
+      VCHAN_REF: v4.2.7
+      QUBESDB_REF: v4.3.1
+      PVDRIVERS_REF: v4.2.0-1
+      XENIFACE_SHA: 9cd9a604191bf26da18b564d1686e4ee0ccf3d32
+      GUI_COMMON_REF: v4.3.1
+      BUILDERV2_REF: main
+      # Installer sources: QubesOS/qubes-installer-qubes-os-windows-tools tag v4.2.2-1.
+      INSTALLER_SHA: 14c189e44fea99c0b42b029e96f172c7eecec5e0
+      # The shipped 4.2.2 MSI we harvest unchanged components from (provenance:
+      # vendor/qwt-4.2.2/README.md — extracted from the GPG-verified dom0 RPM).
+      STOCK_MSI_SHA256: 7049322128d1cf7d9dc2a48f69ef91a5893a8f779d3b2ad7d25fdfc8eee3baf4
+    steps:
+      - name: Require signing config
+        shell: pwsh
+        env:
+          HAVE_PFX: ${{ secrets.SIGNING_PFX_B64 != '' }}
+        run: |
+          if ('${{ vars.SIGNING_ENABLED }}' -ne 'true' -or $env:HAVE_PFX -ne 'true') {
+            throw 'qwt-full requires SIGNING_ENABLED=true and SIGNING_PFX_B64/PASS: the MSI embeds our cert as gui-agent-windows sign.crt'
+          }
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Locate MSBuild and lib.exe
+        id: vs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild `
+                       -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          $vsroot  = & $vswhere -latest -property installationPath
+          $tv      = (Get-Content "$vsroot\VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt").Trim()
+          $lib     = "$vsroot\VC\Tools\MSVC\$tv\bin\Hostx64\x64\lib.exe"
+          if (-not (Test-Path $msbuild)) { throw "MSBuild.exe not found" }
+          if (-not (Test-Path $lib)) { throw "lib.exe not found: $lib" }
+          "msbuild=$msbuild" | Out-File -Append $env:GITHUB_OUTPUT
+          "lib=$lib"         | Out-File -Append $env:GITHUB_OUTPUT
+
+      - name: Fetch sources (agent deps + installer + builderv2)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Clone($url, $ref, $dir) {
+            git clone --quiet --depth 1 --branch $ref -c advice.detachedHead=false $url $dir
+            if ($LASTEXITCODE -ne 0) { throw "clone failed: $url @ $ref" }
+          }
+          Clone https://github.com/QubesOS/qubes-windows-utils.git             $env:WINDOWS_UTILS_REF deps-src/windows-utils
+          Clone https://github.com/QubesOS/qubes-core-vchan-xen.git            $env:VCHAN_REF         deps-src/core-vchan-xen
+          Clone https://github.com/QubesOS/qubes-core-qubesdb.git              $env:QUBESDB_REF       deps-src/core-qubesdb
+          Clone https://github.com/QubesOS/qubes-gui-common.git                $env:GUI_COMMON_REF    deps-src/gui-common
+          Clone https://github.com/QubesOS/qubes-vmm-xen-windows-pvdrivers.git $env:PVDRIVERS_REF     deps-src/pvdrivers
+          Clone https://github.com/QubesOS/qubes-builderv2.git                 $env:BUILDERV2_REF     deps-src/builderv2
+          git clone --quiet --no-checkout https://xenbits.xen.org/git-http/pvdrivers/win/xeniface.git deps-src/pvdrivers/xeniface
+          if ($LASTEXITCODE -ne 0) { throw "xeniface clone failed" }
+          git -C deps-src/pvdrivers/xeniface fetch --quiet --depth 1 origin $env:XENIFACE_SHA
+          if ($LASTEXITCODE -ne 0) { throw "xeniface fetch failed" }
+          git -C deps-src/pvdrivers/xeniface checkout --quiet FETCH_HEAD
+          if (-not (Test-Path deps-src/pvdrivers/xeniface/include/xencontrol.h)) { throw "xencontrol.h missing after checkout" }
+          # Installer sources at the pinned release commit.
+          git clone --quiet https://github.com/QubesOS/qubes-installer-qubes-os-windows-tools.git installer-src
+          if ($LASTEXITCODE -ne 0) { throw "installer clone failed" }
+          git -C installer-src checkout --quiet $env:INSTALLER_SHA
+          if ($LASTEXITCODE -ne 0) { throw "installer checkout failed" }
+
+      - name: Synthesize xencontrol import library
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "deps-src\pvdrivers\xeniface\vs2022\x64\Windows10$env:CONFIG"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          $def = @(
+            'LIBRARY xencontrol.dll','EXPORTS',
+            'XcClose','XcEvtchnBindInterdomain','XcEvtchnClose','XcEvtchnNotify',
+            'XcEvtchnOpenUnbound','XcEvtchnUnmask','XcGnttabMapForeignPages',
+            'XcGnttabPermitForeignAccess','XcGnttabPermitForeignAccess2',
+            'XcGnttabRevokeForeignAccess','XcGnttabUnmapForeignPages','XcOpen',
+            'XcRegisterLogger','XcSetLogLevel','XcStoreAddWatch','XcStoreDirectory',
+            'XcStoreRead','XcStoreRemove','XcStoreRemoveWatch','XcStoreSetPermissions',
+            'XcStoreWrite')
+          $def | Set-Content -Encoding ascii "$out\xencontrol.def"
+          & "${{ steps.vs.outputs.lib }}" /nologo /machine:x64 /def:"$out\xencontrol.def" /out:"$out\xencontrol.lib"
+          if ($LASTEXITCODE -ne 0) { throw "lib.exe failed building xencontrol.lib" }
+
+      - name: Build Qubes user-mode dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws      = "${{ github.workspace }}"
+          $msbuild = "${{ steps.vs.outputs.msbuild }}"
+          $cfg     = $env:CONFIG
+          $env:QUBES_REPO  = "$ws\qubes-repo-libs"
+          $env:QB_SCRIPTS  = "$ws\deps-src\builderv2\qubesbuilder\plugins\build_windows\scripts"
+          function Refresh-QubesEnv {
+            $inc=@(); $lib=@()
+            Get-ChildItem $env:QUBES_REPO -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+              if (Test-Path "$($_.FullName)\inc") { $inc += "$($_.FullName)\inc" }
+              if (Test-Path "$($_.FullName)\lib") { $lib += "$($_.FullName)\lib" }
+            }
+            $env:QUBES_INCLUDES = ($inc -join ';')
+            $env:QUBES_LIBS     = ($lib -join ';')
+          }
+          function MB([string]$proj, [string]$target) {
+            $a = @($proj, '-nologo', '-m', '-v:minimal', "-p:Platform=x64", "-p:Configuration=$cfg")
+            if ($target) { $a += "-t:$target" }
+            & $msbuild @a
+            if ($LASTEXITCODE -ne 0) { throw "msbuild failed: $proj $target" }
+          }
+          function Stage([string]$comp, [string[]]$inc, [string[]]$lib) {
+            New-Item -ItemType Directory -Force "$env:QUBES_REPO\$comp\inc" | Out-Null
+            New-Item -ItemType Directory -Force "$env:QUBES_REPO\$comp\lib" | Out-Null
+            $inc | ForEach-Object { Copy-Item $_ "$env:QUBES_REPO\$comp\inc\" -Force }
+            $lib | ForEach-Object {
+              $want = Split-Path $_ -Leaf
+              $src  = $_
+              if (-not (Test-Path $src)) {
+                $root = $src
+                while ($root -and -not (Test-Path (Join-Path $root '.git')) -and (Split-Path $root -Parent)) {
+                  $root = Split-Path $root -Parent
+                }
+                if (-not $root) { $root = "$ws\deps-src" }
+                $hit = Get-ChildItem $root -Recurse -Filter $want -ErrorAction SilentlyContinue |
+                       Where-Object FullName -match "x64\\$cfg" |
+                       Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                if (-not $hit) { throw "cannot locate $want under $root after building $comp" }
+                $src = $hit.FullName
+                Write-Host "  (located $want at $src)"
+              }
+              Copy-Item $src "$env:QUBES_REPO\$comp\lib\" -Force
+            }
+            Refresh-QubesEnv
+          }
+          MB "$ws\deps-src\pvdrivers\vs2022\libxenvchan\libxenvchan.vcxproj" ''
+          Stage 'vmm-xen-windows-pvdrivers' `
+            @("$ws\deps-src\pvdrivers\include\libxenvchan.h",
+              "$ws\deps-src\pvdrivers\include\libxenvchan_ring.h",
+              "$ws\deps-src\pvdrivers\xeniface\include\xencontrol.h",
+              "$ws\deps-src\pvdrivers\xeniface\include\xeniface_ioctls.h") `
+            @("$ws\deps-src\pvdrivers\vs2022\x64\$cfg\libxenvchan\libxenvchan.lib",
+              "$ws\deps-src\pvdrivers\xeniface\vs2022\x64\Windows10$cfg\xencontrol.lib")
+          MB "$ws\deps-src\core-vchan-xen\windows\vs2022\core-vchan-xen.sln" 'libvchan'
+          Stage 'core-vchan-xen' `
+            @("$ws\deps-src\core-vchan-xen\windows\include\libvchan.h") `
+            @("$ws\deps-src\core-vchan-xen\windows\vs2022\x64\$cfg\libvchan\libvchan.lib")
+          MB "$ws\deps-src\windows-utils\vs2022\windows-utils.sln" ''
+          Stage 'windows-utils' `
+            @(Get-ChildItem "$ws\deps-src\windows-utils\include\*.h" | % FullName) `
+            @("$ws\deps-src\windows-utils\vs2022\x64\$cfg\windows-utils\windows-utils.lib")
+          MB "$ws\deps-src\core-qubesdb\windows\vs2022\core-qubesdb.sln" 'qubesdb-client'
+          Stage 'core-qubesdb' `
+            @("$ws\deps-src\core-qubesdb\include\qubesdb.h",
+              "$ws\deps-src\core-qubesdb\include\qubesdb-client.h") `
+            @("$ws\deps-src\core-qubesdb\windows\vs2022\x64\$cfg\qubesdb-client\qubesdb-client.lib")
+          "QUBES_INCLUDES=$env:QUBES_INCLUDES" | Out-File -Append $env:GITHUB_ENV
+          "QUBES_LIBS=$env:QUBES_LIBS"         | Out-File -Append $env:GITHUB_ENV
+
+      - name: Build gui-agent (our fork)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws  = "${{ github.workspace }}"
+          $env:QB_SCRIPTS = "$ws\deps-src\builderv2\qubesbuilder\plugins\build_windows\scripts"
+          $env:QUBES_INCLUDES = "$ws\deps-src\gui-common\include;" + $env:QUBES_INCLUDES
+          & "${{ steps.vs.outputs.msbuild }}" "$ws\agent\vs2022\gui-agent-windows.sln" `
+              -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
+              "-p:TreatWarningAsError=false"
+          if ($LASTEXITCODE -ne 0) { throw "gui-agent build failed" }
+
+      - name: Sign our agent binaries, export sign.crt
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.SIGNING_PFX_B64 }}
+          PFX_PASS: ${{ secrets.SIGNING_PFX_PASS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = "agent\vs2022\x64\$env:CONFIG"
+          New-Item -ItemType Directory -Force agent-bins | Out-Null
+          Copy-Item "$out\gui-agent\gui-agent.exe"       agent-bins\
+          Copy-Item "$out\gui-watchdog\gui-watchdog.exe" agent-bins\
+          [IO.File]::WriteAllBytes('cert.pfx', [Convert]::FromBase64String($env:PFX_B64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+              Where-Object FullName -match 'x64' | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          Get-ChildItem agent-bins -Filter *.exe | ForEach-Object {
+            & $signtool.FullName sign /fd sha256 /f cert.pfx /p $env:PFX_PASS $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($_.Name)" }
+          }
+          $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+              (Resolve-Path cert.pfx).Path, $env:PFX_PASS)
+          [IO.File]::WriteAllBytes("$pwd\agent-bins\sign.crt",
+              $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+          Remove-Item cert.pfx
+
+      - name: Extract stock MSI (admin image)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = (Resolve-Path 'vendor\qwt-4.2.2\installer.msi').Path
+          $h = (Get-FileHash $msi -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne $env:STOCK_MSI_SHA256) { throw "vendored MSI hash mismatch: $h" }
+          $img = "$env:RUNNER_TEMP\qwt-admin-image"
+          $p = Start-Process msiexec.exe -ArgumentList "/a `"$msi`" /qn TARGETDIR=`"$img`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec /a failed: $($p.ExitCode)" }
+          $n = (Get-ChildItem $img -Recurse -File).Count
+          Write-Host "admin image: $n files"
+          if ($n -lt 60) { throw 'admin image implausibly small' }
+          "QWT_ADMIN_IMAGE=$img" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Stage QUBES_REPO for the installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = "${{ github.workspace }}"
+          & .\packaging\stage-qwt-repo.ps1 `
+            -InstallerRepo "$ws\installer-src" `
+            -AdminImage    $env:QWT_ADMIN_IMAGE `
+            -AgentBins     "$ws\agent-bins" `
+            -OurCert       "$ws\agent-bins\sign.crt" `
+            -VendorCerts   "$ws\vendor\qwt-4.2.2\certs" `
+            -OutRepo       "$ws\qubes-repo"
+          "QUBES_REPO=$ws\qubes-repo" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Populate WiX .distfiles (pinned NuGet packages)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = "${{ github.workspace }}"
+          $dist = "$ws\installer-src\.distfiles"
+          New-Item -ItemType Directory -Force $dist | Out-Null
+          foreach ($p in 'wixtoolset.sdk','wixtoolset.bal.wixext','wixtoolset.difxapp.wixext',
+                         'wixtoolset.iis.wixext','wixtoolset.ui.wixext','wixtoolset.util.wixext') {
+            $f = "$p.4.0.5.nupkg"
+            Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/$p/4.0.5/$f" -OutFile "$dist\$f"
+            $want = (Get-Content "$ws\installer-src\$f.sha256" -Raw).Trim().ToLower()
+            $have = (Get-FileHash "$dist\$f" -Algorithm SHA256).Hash.ToLower()
+            if ($have -ne $want) { throw "sha256 mismatch for ${f}: $have != $want" }
+            Write-Host "$f ok"
+          }
+
+      - name: Stage fake EWDK tree (vc_redist for the bundle)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $redist = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse `
+                    -Filter vc_redist.x64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $redist) { throw 'vc_redist.x64.exe not found on runner' }
+          $fake = "$env:RUNNER_TEMP\fake-ewdk"
+          $dir = "$fake\Program Files\Microsoft Visual Studio\2022\BuildTools\VC\Redist\MSVC\v143"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item $redist.FullName "$dir\vc_redist.x64.exe"
+          "EWDK_PATH=$fake" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Build installer.msi + Burn bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = "${{ github.workspace }}"
+          $msbuild = "${{ steps.vs.outputs.msbuild }}"
+          $env:TEST_SIGN  = '1'
+          $env:QB_SCRIPTS = "$ws\deps-src\builderv2\qubesbuilder\plugins\build_windows\scripts"
+          # CWD must be vs2022\installer: the CreateVersionWxi CodeTask reads ..\..\version
+          # and writes version.wxi relative to the PROCESS working directory.
+          Push-Location "$ws\installer-src\vs2022\installer"
+          & $msbuild ..\install-helper\install-helper.vcxproj -nologo -m -v:minimal `
+              -p:Platform=x64 "-p:Configuration=$env:CONFIG"
+          if ($LASTEXITCODE -ne 0) { throw 'install-helper build failed' }
+          & $msbuild -restore ..\installer.sln -nologo -m:1 -v:minimal `
+              -p:Platform=x64 "-p:Configuration=$env:CONFIG"
+          if ($LASTEXITCODE -ne 0) { throw 'installer.sln build failed' }
+          Pop-Location
+
+      - name: Collect package + MANIFEST
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = "${{ github.workspace }}"
+          New-Item -ItemType Directory -Force package-qwt-full | Out-Null
+          $msi = Get-ChildItem "$ws\installer-src\vs2022\x64\$env:CONFIG" -Recurse -Filter installer.msi |
+                 Select-Object -First 1
+          if (-not $msi) { throw 'installer.msi not produced' }
+          Copy-Item $msi.FullName package-qwt-full\
+          $bundle = Get-ChildItem "$ws\installer-src" -Filter 'qubes-windows-tools-*.exe' |
+                    Select-Object -First 1
+          if ($bundle) { Copy-Item $bundle.FullName package-qwt-full\ }
+          else { Write-Warning 'Burn bundle not found at installer repo root' }
+          git config --global --add safe.directory $ws
+          git config --global --add safe.directory $ws/agent
+          $manifest = [ordered]@{
+            package          = 'qwt-full'
+            built            = (Get-Date -AsUTC -Format o)
+            repo_sha         = (git -C $ws rev-parse HEAD).Trim()
+            agent_sha        = (git -C $ws/agent rev-parse HEAD).Trim()
+            agent_describe   = (git -C $ws/agent describe --tags --long --always).Trim()
+            installer_sha    = $env:INSTALLER_SHA
+            stock_msi_sha256 = $env:STOCK_MSI_SHA256
+            files            = @{}
+          }
+          Get-ChildItem package-qwt-full -File | ForEach-Object {
+            $manifest.files[$_.Name] = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+          }
+          foreach ($f in 'gui-agent.exe','gui-watchdog.exe') {
+            $manifest.files["agent-bins/$f"] = (Get-FileHash "$ws\agent-bins\$f" -Algorithm SHA256).Hash.ToLower()
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content package-qwt-full\MANIFEST.json
+          Get-ChildItem package-qwt-full -File | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          } | Set-Content package-qwt-full\SHA256SUMS.txt
+          Copy-Item agent-bins\gui-agent.exe,agent-bins\gui-watchdog.exe package-qwt-full\
+          Get-Content package-qwt-full\MANIFEST.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwt-full-package
+          path: package-qwt-full/
+          retention-days: 14

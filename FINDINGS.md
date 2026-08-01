@@ -778,3 +778,46 @@ NEXT SESSION, before the Office test:
 3. Only then attach the netvm for Office + `slmgr /ato`. Expect normal responsiveness.
 This is also a strong argument for the full source build: a correctly-bound PV driver set
 is what a real QWT package installs and what our overlay approach can never fix.
+
+## 2026-08-01 (session 6) — full source build: inventory done, qwt-full.yml cut; synth mid-draw fix landed
+
+### Lost fix re-implemented (PLAN hazard cleared)
+The "200 ms full re-copy of synthesized children" fix existed nowhere on disk (previous
+session wrote it but never committed; no stash). Re-implemented as agent `382fa05`:
+`SynthLastFullPatch` (DWORD, GetTickCount) on the owner's WINDOW_DATA, stamped at
+SynthActivate's initial paint; in ProcessNewFrame's PwIsAttached/non-slice branch, when
+SynthChildCount>0 and >=200 ms elapsed, `PwPatchSynthChildren(entry, NULL)` (NULL = full
+child rects, same path as PwPatchSynthRect) + damage via the existing
+PwPatchSynthChildClipped -> SendWindowDamageEvent. Reviewed: lock discipline unchanged
+(runs where the existing patch loop runs), wrap-safe tick math. Limitation (documented in
+commit): tick fires only while frames flow — acceptable, a painting popup IS a frame source.
+
+### PLAN step 1 (inventory) — headline corrections to the plan's assumptions
+Full record: ci-notes/qwt-full-build.md. Upstream clones under upstream/ro/.
+- `QubesOS/qubes-windows-tools` does not exist; QWT 4.2.2 = qubes-builderv2 building
+  independent component repos + `qubes-installer-qubes-os-windows-tools` (WiX v4.0.5,
+  tag v4.2.2-1 = 14c189e). No submodule to override; MSI wants a flat
+  `QUBES_REPO\<comp>\bin\<file>` tree (72 files) + per-component sign.crt.
+- **PV network "packaging gap" was a misdiagnosis**: ADDLOCAL always had PvDriversNetwork
+  and it staged correctly (DifX). xenvif can only bind once a netvm-provided VIF exists,
+  and the emulated-RTL8139 unplug is a two-boot dance (arm Services\XEN\Unplug on first
+  PV start -> reboot -> xen.sys unplugs at early boot; vetoed until a VIF was enumerated
+  once). Expected remedy on the wiped guest: attach netvm, reboot twice. install-qwt.cmd
+  ADDLOCAL needs NO change.
+- EWDK-in-CI infeasible (15 GB); choco-WDK (83 s, WDK 26100) proven by the idd-driver job
+  if drivers-from-source is ever wanted.
+
+### PLAN step 2 decision: rebuild the real installer from source in GitHub CI
+Chosen integration = build installer.msi + Burn bundle from the genuine upstream WiX
+sources (pinned v4.2.2-1) with QUBES_REPO staged from (a) our CI-built, test-signed
+gui-agent/gui-watchdog + our cert as gui-agent-windows sign.crt, (b) all unchanged files
+bit-identical from the GPG-verified shipped MSI (vendored: vendor/qwt-4.2.2/, ITL sigs and
+certs kept). Rationale + rejected options in ci-notes/qwt-full-build.md §2. User directive
+recorded: build remotely on GitHub whenever possible.
+
+### PLAN step 3: .github/workflows/qwt-full.yml added
+Single windows-2022 job; agent steps reused verbatim from build.yml; new pieces:
+packaging/stage-qwt-repo.ps1 (parses wxs QUBES_REPO refs, stages from admin image with
+hash-dedupe, fails loudly), .distfiles nupkg pinning, fake EWDK tree for the bundle's
+vc_redist, TEST_SIGN=1, CWD=vs2022\installer for the CreateVersionWxi CodeTask.
+Iterating to green next; then step 4 (unattended ISO with our MSI) + step 5 acceptance.
