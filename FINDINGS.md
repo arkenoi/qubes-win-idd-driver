@@ -961,3 +961,28 @@ Full data + rerun recipe: instrumentation/qwtfull-w10/win10-regression.md.
   diff; mask-memo defeated by split owner/child interrogations (menu-over-drag pushes
   masks twice per frame, each WcSetMask forces recapture); unbuilt/unbenched. v2 agents
   running on clones, branches workarea-fix-v2 / drag-fix-v2.
+
+### 2026-08-02 — FAIR two-boot netvm retest on our from-source build: the dance is UNSATISFIABLE
+Setup exactly per the source-verified flow: healthy detached boot first (qrexec OK, forensics
+collected), SYSTEM scheduled-task collector installed (survives starvation), **graceful ACPI
+shutdown** (halted in <10 s — proving the guest CAN shut down cleanly when healthy), netvm
+`fw-net` attached **while halted**, then boot.
+
+| boot | netvm | result |
+|---|---|---|
+| 1 | attached | 15 min soak: **~1.9-2.0 cores burned continuously, qrexec never answered**. ACPI shutdown sent → **ignored for 7+ min** (guest never serviced it) → had to destroy. |
+| 2 | attached | 8+ min: **2.02 cores, no qrexec**, no unplug. Same state. |
+| 3 | detached | 15 min: **0.05 cores (idle), still no qrexec, no dom0 windows** → Windows now parked pre-desktop (WinRE/repair after two unclean shutdowns). |
+
+**Conclusions.**
+1. The handoff's remedy ("redo with graceful shutdown, never kill") is **not executable**: with
+   a netvm attached the guest never reaches a state where usermode services ACPI, so a clean
+   reboot between boot 1 and boot 2 CANNOT be produced from inside. The two-boot dance is not
+   "untested due to operator error" — it is unreachable on this install. My session-6
+   self-blame for using `kill` was therefore only half right: kill was forced, not chosen.
+2. Boot 1 shows none of the healthy-flow markers (no xennet install, no reboot dialog) — the
+   chain still dies at "xenvif installed but never started", *before* the arming point.
+3. Repeated destroys wrecked the install's boot path (boot 3 idle-but-dead), which the goal's
+   clean-install requirement resolves anyway.
+4. Cost is not display-side: the burn happens with qrexec dead and no gui-agent windows at
+   all, and the wedge census showed no respawn loop.
