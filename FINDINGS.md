@@ -299,3 +299,44 @@ respawning gui-agent but no windows appeared — the DOM0 DAEMON was dead, agent
   ULW welcome overlay on any profile-less launch.
 - Crash race: open/close Edge windows repeatedly while content repaints.
 - In-guest ULW probe: mgmt scratchpad cmp-overlay.ps1 (PrintWindow vs CopyFromScreen diff).
+
+### Review cycle + deploy (same session, package 4.2.2+agent.f77e71ab2cfd)
+Adversarial review (workflow wf_ec52b044, 3 lenses + refutation verify) caught TWO
+blockers in the first fix commit 74665bf before/while it was on the VM:
+- **ABBA deadlock**: the first damage-race fix held g_csWatchedWindows across the capture
+  thread's vchan send — but the main thread dispatches inbound messages while HOLDING
+  g_VchanCriticalSection (main.c WatchForEvents) and its handlers take the watched lock
+  inside it. Opposite orders on two threads. Redesigned (commit f2f...74665bf→) as a
+  64-entry recently-destroyed-hwnd ring guarded by the vchan lock itself: DESTROY marks in
+  the same hold that emits it, damage checks in the hold that would emit — linearization
+  on ONE lock, capture thread takes no second lock. Cleared on hwnd reuse at CREATE.
+- **ACK livelock (observed live, ~1000 configure/s)**: MSG_CONFIGURE ack must BYTE-ECHO
+  the daemon's values — conf_changed=0 is what clears the daemon's have_queued_configure
+  (xside.c:2124-2134); any other reply makes it re-send its geometry and keep waiting.
+  "ACK with actual geometry" spun daemon↔agent at vchan speed and capped the log in 2 s.
+  Maximized windows now skip APPLYING daemon geometry but still echo-ACK; convergence
+  happens via the deduped tracking-path configure. (Daemon ignores ovr in agent
+  configures — xside.c:2105 — so the ovr "flap" was cosmetic, in our logs only.)
+- Screen-window variant of the destroy race (pre-existing): a pending frame event can
+  emit window-0 damage after StopFrameProcessing sent DESTROY for the screen window →
+  same daemon exit(1). Gated on g_LocalScreenDestroyed (window-0 damage is main-thread
+  only, so a flag check is race-free).
+
+### Validation on win-idd-test (agent f77e71a, pid 6092)
+- Edge stress: 8 open/force-kill cycles under active repaint — 12 DESTROYs, 0 vchan
+  disconnects, agent stable, daemon alive. (Previously: died on first such closure.)
+- Fresh-profile first-run: overlay attached → "became PrintWindow-ineligible (layered),
+  dropping to legacy path" within ~1 s of Edge applying ULW; detach logged; daemon alive.
+- Maximized main window: single attach at CLAMPED 3440x1400 (was 3442x1409 with ~3
+  reattach/s ping-pong); attach count static over 10 s; log growth ~600 B/s (was 160 KB/s
+  during the livelock). dom0 window now 3440x1384 = granted buffer dims, content verified
+  crisp via screenshot.
+- Left open on the VM: an Edge instance with the first-run overlay (profile
+  C:\temp\edgefr2) for the user to eyeball the blended (no longer black) backdrop, plus a
+  normal Edge + notepad.
+
+Deployed package: artifacts/qwt-edgefix2 (CI run 30674710417). Review findings not acted
+on (accepted): UpdateWindowData can stall behind a slow PrintWindow during PwForceLegacy
+(same latency class as the pre-existing RemoveWindow path); ULW transition can lag up to
+~2 s behind the periodic resync (GWL_EXSTYLE changes emit no WinEvent); windows that
+un-layer stay on legacy until recreated.
