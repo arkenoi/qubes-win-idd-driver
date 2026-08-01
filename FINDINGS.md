@@ -426,3 +426,20 @@ nothing is sent to the VM — checked xside.c). Candidate remedies:
       discussion, references the same need Linux guests solve via WM cooperation);
   (c) dom0-side: guid.conf tuning / single-monitor dom0 matches trivially.
 Not pursued unilaterally — needs user decision (b is Phase 3 territory per CLAUDE.md).
+
+### Black "Restore pages" popup — root cause + class fix (deployed: run 30689303099)
+The bubble attached via PrintWindow (not layered at creation) and rendered as a black
+box in dom0 while a USER-context PrintWindow probe captured it perfectly: PrintWindow
+returns BLANK for Chromium bubble windows from the agent's SYSTEM/session-1 context
+(the WGC lesson repeats: user-context probes do not predict SYSTEM-context behavior).
+Blank row-diffs as "no change" vs the blank prefill → zero damage, healthy-looking
+channel, black window forever (damage count stuck at 1 = the initial blank push).
+Fix: **slice-feed ALL override-redirect windows as a class** (menus, tooltips, bubbles,
+overlays): topmost by nature, so the composited screen region is their correct content;
+also full re-copy scheduled when a slice-fed window moves. Verified via dom0
+full-desktop screenshot: popup pixel-correct. Occlusion staleness between overlapping
+popups self-heals via DDA damage.
+Also: DESIGN-workarea-propagation.md written (MSG_WORKAREA daemon→agent + SPI_SETWORKAREA
+agent-side, frame extents included; compat + alternatives) — awaiting user review before
+any upstream contact. Retail Win10 ISO auto-download blocked by Microsoft by IP
+(quickget); user action needed for a non-eval image or brief network for eval activation.
