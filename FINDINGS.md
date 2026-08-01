@@ -864,3 +864,42 @@ Corollary corrections to earlier notes in this session:
 New instrument: `mgmt/win-install-watch.sh <vm> [dir]` - per-90s screenshot + cputime +
 disk sampling, emits only console-phase changes, halts (auto-restart), stalls (~9 min of
 nothing), or QREXEC UP. Replaces the state-only babysitter for install runs.
+
+## 2026-08-01 (session 6, part 2) — from-source QWT INSTALLED and accepted; netvm still blocked
+
+### Step 4 DONE: our source-built QWT installs clean on a wiped Win10 guest
+gui-agent.exe = 654de8eb… (CI MANIFEST), gui-watchdog.exe = d6196059…, **zero .orig
+backups** (MSI-installed, not overlaid), stage-2 log `installer.msi sha256 OK: ff89da3c…`
++ `QWT_INSTALL_OK rc=3010`, ARP shows "Qubes Windows Tools v4.2.2.0", testsigning Yes,
+all Qubes services Running, two cold boots survived, seamless verified (Notepad = own
+dom0 window). **Menu synthesis PASS on Win10**, evidenced from both sides: dom0 shows NO
+separate menu window with the dropdown painted inside Notepad, and the guest log shows
+4x SYNTH, 24x SYNTHPAINT, 0 skips, 0 vchan errors — including repeat paints of the same
+rect minutes after the menu opened, i.e. the new 200 ms tick (382fa05) working.
+
+### netvm attach: xenvif installs but never STARTS (blocker, unresolved)
+Attached fw-net while HALTED (avoids freezing a live session), then two boots: each ran
+>7 min with ~1.95 cores burned, no qrexec, no unplug. Detach → 0.05 cores instantly.
+Forensics from a healthy (detached) boot narrow it a lot:
+- `Enum\XENBUS\...DEV_VIF` EXISTS and `Xen PV Network Class` is present but **Unknown**.
+- setupapi.dev.log 22:51:34: xenvif.inf selected, **service 'xenvif' created**, xenvif.sys
+  hardlinked, PnP proceeded to Start → **install succeeded; the trust/driver-store
+  hypothesis is ELIMINATED**. xennet is correctly blocked behind a started xenvif.
+- `xenvif` = Stopped; `Services\XEN\Unplug` has **no NICS value** → unplug never armed.
+- **Procedural error (mine): I used `qtest kill` (domain destroy) between the attached
+  boots.** The upstream flow needs a CLEAN reboot so the armed registry value survives.
+  The two-boot dance has therefore NOT had a fair test — redo with `qtest shutdown`/
+  in-guest `shutdown /r`, never kill.
+- User rejected (correctly) the argument "our PV drivers are byte-identical to stock, so
+  stock behaves the same". Byte identity is not behavioural proof. A **stock-QWT control
+  install** is now a required experiment (vendor/qwt-4.2.2/installer.msi, same ISO/ADDLOCAL/
+  hardware, same measurements). Note stock QWT is documented to support netvm hotplug.
+
+### Daemon-absent respawn storm: diagnosed, candidate fix REJECTED
+Not a busy-poll: the agent EXITS when it cannot resolve the GUI domain and QgaWatchdog
+relaunches it every second (upstream Linux simply does not run the agent without a daemon;
+the Windows port has no such gate). Fix 53056d5 on branch `spin-backoff` was rejected by
+3 adversarial reviewers (BROKEN/NEEDS_WORK): it introduces a 100%-core busy loop in the
+capture thread on a shutdown-join timeout, permanently removes the vchan server (daemon
+connects once, no retry → unrecoverable no-GUI qube), counts non-launches as launches in
+the backoff, and does not touch the evidenced exit path. Submodule left on perwindow.
