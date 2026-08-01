@@ -91,6 +91,11 @@ when the taskbar moves — the agent re-applies on `WM_SETTINGCHANGE` observatio
   Windows agents (`untrusted_len`-based skip; verified in both codebases).
 - New agent + old daemon: no message arrives; behavior unchanged (current state).
 - Feature-gate on protocol minor version bump; no change to any existing message.
+- **Per-guest opt-in, not global behavior**: the handshake starts with the AGENT
+  announcing its protocol version, so the daemon sends `MSG_WORKAREA` only to agents
+  advertising >= 1.9. Linux guests and stock Windows agents never receive it; the dom0
+  daemon package update is the only global artifact, with no behavior delta for
+  non-participating guests.
 - Security: daemon → agent direction (trusted → untrusted); values are advisory
   layout hints, sanitized guest-side by intersection with the guest screen. No new
   agent → daemon surface.
