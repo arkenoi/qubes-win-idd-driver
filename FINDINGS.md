@@ -402,3 +402,27 @@ overlays); PrintWindow windows are unaffected.
 Remaining cosmetic: overlay displayed 31px below its guest position (content is
 window-relative so nothing misaligns visually); dom0's force_on_screen padding is the
 cause — a dom0 guid.conf override_redirect_protection tweak could remove even that.
+
+### Maximize-propagation experiment — REVERTED (multi-monitor), geometry residue analyzed
+Tried: send WINDOW_FLAG_FULLSCREEN for guest-maximized windows (daemon converts to WM
+maximize when allow_fullscreen=off) so the dom0 client aligns with the workspace.
+Result on THIS dom0: the WM maximized the daemon window to 0,0 5120x1440 — the FULL
+dual-monitor span (dom0 = 5120x1440 total; the guest's 3440x1440 desktop straddles the
+monitor boundary, so no dom0 monitor matches the guest and maximize has no right answer).
+Reverted (agent 82fe92a); redeployed build da62d1e (run 30677339109, artifacts/qwt-slice2).
+
+User's correct decomposition of the remaining TRUE-FRE geometry residue:
+1. The decorated ("lower") maximized window is sized to the guest screen, not to the
+   dom0 available workspace → client lands at 5,56, right edge pokes 5px past the
+   3440 area (the right-side "double border"), bottom cropped by the screen edge.
+2. The borderless overlay ("upper") neither matches the lower window's client area nor
+   its own guest position (daemon force_on_screen offsets it) → the pair is misaligned.
+Root cause for both: the guest work area != dom0 usable workspace, and the protocol has
+NO work-area propagation (daemon reads _NET_WORKAREA for its own force_on_screen only;
+nothing is sent to the VM — checked xside.c). Candidate remedies:
+  (a) guest work-area sync via SPI_SETWORKAREA fed from a CONFIG value (registry pushed
+      over qrexec) — implementable today, static, per-user-setup;
+  (b) protocol extension: daemon sends its work area to the agent (upstream design
+      discussion, references the same need Linux guests solve via WM cooperation);
+  (c) dom0-side: guid.conf tuning / single-monitor dom0 matches trivially.
+Not pursued unilaterally — needs user decision (b is Phase 3 territory per CLAUDE.md).
