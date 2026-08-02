@@ -1,0 +1,966 @@
+﻿[20260802.152652.429-2016-I] LogInit: Log started, module name: gui-agent
+[20260802.152652.429-2016-I] LogInit: System uptime: 1346.078 seconds
+[20260802.152652.429-2016-I] LogInit: Running as user: SYSTEM, process ID: 6140
+[20260802.152652.429-2016-I] LogInit: Module version: 4.2.2.0
+[20260802.152652.429-2016-I] LogInit: Session: 1
+[20260802.152652.429-2016-I] LogInit: Command line: "C:\Program Files\Qubes Tools\bin\gui-agent.exe"
+[20260802.152652.429-2016-D] LogInitDefault: Verbosity level set to 4, safe flush: 0
+[20260802.152652.429-2016-D] ErrRegisterUEF: done
+[20260802.152652.429-2016-D] Init: start
+[20260802.152652.429-2016-D] CreateNamedEvent: Global\QGA_SHUTDOWN
+[20260802.152652.429-2016-I] PerfInit: QGAPROTO 湯
+[20260802.152652.476-2016-I] PerfInit: QGAPERF on: freq=62500000 everyN=1 qpc_cost_ns=4742 default=1 (sink 841335577700035)
+[20260802.152652.476-2016-I] PerfInit: QGAPERF-HEADER v=2 fields: seq,n,mode,dt,acq,wak,mrq,drq,upd,enu,rem,dmg,snd,tot,dr,mr,mrmax,area,win,iwn,wev,sends,skip,log (times in microseconds)
+[20260802.152652.476-2016-I] XcOpen: XenIface handle: 0000000000000218
+[20260802.152652.476-2016-I] PwInit: per-window capture ENABLED (daemon version gate applies at attach)
+[20260802.152652.476-2016-D] EnableUIAccess: start
+[20260802.152652.476-2016-D] DisableEffects: start
+[20260802.152652.476-2016-D] IncreaseProcessWorkingSetSize: New working set size: 262144 pages
+[20260802.152652.476-2016-D] QpsConnect: opening read pipe: \\.\pipe\qubesdb.sock
+[20260802.152652.476-2016-D] QpsConnect: opening write pipe: \\.\pipe\qubesdb.sock-6140-23
+[20260802.152652.523-2016-D] GetDomainName: win-idd-test
+[20260802.152652.523-2016-D] QpsConnect: opening read pipe: \\.\pipe\qubesdb.sock
+[20260802.152652.523-2016-D] QpsConnect: opening write pipe: \\.\pipe\qubesdb.sock-6140-24
+[20260802.152652.585-2016-D] GetGuiDomainId: GUI domain id: 0
+[20260802.152652.585-2016-I] Init: Fullscreen desktop name: win-idd-test
+[20260802.152652.585-2016-D] InitVideoModes: Enumerated 29 supported modes
+[20260802.152652.585-2016-D] InitVideoModes: mode 0: 640x480 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 1: 800x600 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 2: 1024x768 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 3: 1280x1024 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 4: 1600x1200 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 5: 1152x864 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 6: 1280x768 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 7: 1280x800 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 8: 1280x960 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 9: 1440x900 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 10: 1400x1050 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 11: 1680x1050 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 12: 1920x1200 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 13: 2560x1600 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 14: 1280x720 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 15: 1920x1080 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 16: 1600x900 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 17: 2560x1440 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 18: 3840x2160 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 19: 960x540 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 20: 1280x1080 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 21: 2160x1080 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 22: 2560x1080 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 23: 3200x1800 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 24: 3440x1440 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 25: 3840x1080 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 26: 3840x1600 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 27: 2048x1152 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: mode 28: 2048x1536 32 bpp @ 64, flags 0x0
+[20260802.152652.585-2016-D] InitVideoModes: Initialized 29 supported modes
+[20260802.152652.585-2016-D] WatchForEvents: start
+[20260802.152652.585-2016-D] VchanInitServer: domain 0, port 6000, buffer 65536, timeout 300000
+[20260802.152652.585-1916-D] WindowEventThreadProc: start
+[20260802.152652.585-2016-I] XcOpen: XenIface handle: 0000000000000264
+[20260802.152652.585-2016-D] XcEvtchnOpenUnbound: RemoteDomain: 0, Event: 0000000000000268, Mask: 0
+[20260802.152652.585-2016-D] XcEvtchnOpenUnbound: LocalPort: 11
+[20260802.152652.585-2016-D] XcGnttabPermitForeignAccess: RemoteDomain: 0, NumberPages: 1, NotifyOffset: 0x15, NotifyPort: 11, Flags: 0x6
+[20260802.152652.585-2016-D] XcGnttabPermitForeignAccess2: RemoteDomain: 0, Address 0000000000000000, NumberPages: 1, NotifyOffset: 0x15, NotifyPort: 11, Flags: 0x6
+[20260802.152652.585-2016-D] XcGnttabPermitForeignAccess2: Address: 0000025ADA5B0000
+[20260802.152652.585-2016-D] XcGnttabPermitForeignAccess: RemoteDomain: 0, NumberPages: 16, NotifyOffset: 0x0, NotifyPort: 0, Flags: 0x0
+[20260802.152652.585-2016-D] XcGnttabPermitForeignAccess2: RemoteDomain: 0, Address 0000000000000000, NumberPages: 16, NotifyOffset: 0x0, NotifyPort: 0, Flags: 0x0
+[20260802.152652.585-2016-D] XcGnttabPermitForeignAccess2: Address: 0000025ADA5C0000
+[20260802.152652.585-2016-D] XcGnttabPermitForeignAccess: RemoteDomain: 0, NumberPages: 16, NotifyOffset: 0x0, NotifyPort: 0, Flags: 0x0
+[20260802.152652.585-2016-D] XcGnttabPermitForeignAccess2: RemoteDomain: 0, Address 0000000000000000, NumberPages: 16, NotifyOffset: 0x0, NotifyPort: 0, Flags: 0x0
+[20260802.152652.585-2016-D] XcGnttabPermitForeignAccess2: Address: 0000025ADA5D0000
+[20260802.152652.585-2016-D] XcStoreRead: Path: 'domid'
+[20260802.152652.585-2016-D] XcStoreRead: Value: '448'
+[20260802.152652.585-2016-D] XcStoreWrite: Path: 'data/vchan/0/6000/ring-ref', Value: '57874'
+[20260802.152652.585-2016-D] XcStoreSetPermissions: Path: 'data/vchan/0/6000/ring-ref', Count: 2
+[20260802.152652.585-2016-D] XcStoreSetPermissions: Domain: 448, Mask: 0x0
+[20260802.152652.585-2016-D] XcStoreSetPermissions: Domain: 0, Mask: 0x1
+[20260802.152652.585-2016-D] XcStoreWrite: Path: 'data/vchan/0/6000/event-channel', Value: '11'
+[20260802.152652.585-2016-D] XcStoreSetPermissions: Path: 'data/vchan/0/6000/event-channel', Count: 2
+[20260802.152652.585-2016-D] XcStoreSetPermissions: Domain: 448, Mask: 0x0
+[20260802.152652.585-2016-D] XcStoreSetPermissions: Domain: 0, Mask: 0x1
+[20260802.152652.585-2016-D] libxenvchan_server_init: (0000025AD8954D40) returning 0000025AD8954D40
+[20260802.152652.585-2016-D] libvchan_server_init: (0000025AD897E2A0) ctrl 0000025AD897E2A0, xenvchan 0000025AD8954D40, path data/vchan/0/6000
+[20260802.152652.585-2016-D] CreateNamedEvent: QUBES_GUI_AGENT_FULLSCREEN_ON
+[20260802.152652.585-2016-D] CreateNamedEvent: QUBES_GUI_AGENT_FULLSCREEN_OFF
+[20260802.152652.585-2016-I] WatchForEvents: Awaiting for a vchan client, write buffer size: 65536
+[20260802.152652.585-2016-D] libvchan_cleanup: (0000025AD897E2A0) removing xs path data/vchan/0/6000
+[20260802.152652.585-2016-D] XcStoreRemove: Path: 'data/vchan/0/6000'
+[20260802.152652.585-2016-I] WatchForEvents: A vchan client has connected
+[20260802.152652.585-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.585-2016-W] VchanReceiveBuffer: (0000025AD897E2A0, version): no data, blocking read
+[20260802.152652.585-1916-D] WorkAreaCreateListener: work-area listener window 00000000000C0066 created
+[20260802.152652.601-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.601-2016-I] HandleVersion: gui daemon version: 0x10008
+[20260802.152652.601-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.601-2016-I] HandleXconf: host resolution: 5120x1440, mem: 28801, depth: 24
+[20260802.152652.601-2016-D] SelectSupportedMode: Returning exact mode 24 (3440x1440) for 3440x1440
+[20260802.152652.601-2016-I] SetVideoModeInternal: New resolution: 3440 x 1440
+[20260802.152652.601-2016-I] AttachToInputDesktop: QGADESK,tid=2016,from=Default,to=Default,oldh=0x000000000000009C,newh=0x0000000000000288
+[20260802.152652.601-2016-I] AttachToInputDesktop: QGADESK,tid=2016,SetThreadDesktop=ok
+[20260802.152652.601-2016-D] AttachToInputDesktop: desktop: 0x10010, start: 0x10198, search: 0x101ae
+[20260802.152652.601-4472-D] QpsConnect: opening read pipe: \\.\pipe\qubesdb.sock
+[20260802.152652.601-4472-D] QpsConnect: opening write pipe: \\.\pipe\qubesdb.sock-6140-25
+[20260802.152652.601-2016-I] AttachToInputDesktop: QGADESK,tid=2016,from=Default,to=Default,oldh=0x0000000000000288,newh=0x000000000000028C
+[20260802.152652.601-2016-I] AttachToInputDesktop: QGADESK,tid=2016,SetThreadDesktop=ok
+[20260802.152652.601-2016-D] AttachToInputDesktop: desktop: 0x10010, start: 0x10198, search: 0x101ae
+[20260802.152652.601-2016-I] XcOpen: XenIface handle: 00000000000002A0
+[20260802.152652.601-2016-D] GetAdapter: DXGI adapter 0: Microsoft Basic Render Driver
+[20260802.152652.601-2016-D] GetAdapter: DXGI adapter 1: Microsoft Basic Render Driver
+[20260802.152652.616-1916-D] WorkAreaCreateListener: work-area listener window 00000000000D0066 created
+[20260802.152652.616-2016-D] GetOutput: Output 0: \\.\DISPLAY1, attached to desktop: 1
+[20260802.152652.616-2016-D] GetDuplication: Got output duplication. Surface dimensions = 3440x1440 1.00 fps, format 87, scanline order 1, mapped in memory 1
+[20260802.152652.616-2016-D] GetFrame: 1st frame, sharing framebuffer
+[20260802.152652.616-2016-D] XcGnttabPermitForeignAccess2: RemoteDomain: 0, Address 0000025ADC710000, NumberPages: 4838, NotifyOffset: 0x0, NotifyPort: 0, Flags: 0x1
+[20260802.152652.632-2016-D] XcGnttabPermitForeignAccess2: Address: 0000025ADC710000
+[20260802.152652.632-2016-D] SendWindowCreate: fullscreen
+[20260802.152652.632-2016-D] SendWindowCreate: (0,0) 3440x1440
+[20260802.152652.632-2016-I] SendWindowCreate: QGAPROTO,msg=CREATE,hwnd=0x0,x=0,y=0,w=3440,h=1440,ovr=0,style=0x00000000,ex=0x00000000
+[20260802.152652.632-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.632-2016-D] SetSeamlessMode: Seamless mode changing to 1
+[20260802.152652.632-2016-D] SetSeamlessMode: Changing resolution to match host's
+[20260802.152652.632-2016-I] SendWindowUnmap: Unmapping window 0x0
+[20260802.152652.632-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.632-2016-D] ResetWatch: removing all windows
+[20260802.152652.632-2784-D] ResolutionChangeThread: resolution change requested: 5120x1440
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10128: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x202e2: rect (0,0) 3440x1440
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x102ee: rect (0,0) 136x39
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x1017e: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10148: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x100fc: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x100f8: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x100f2: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x100ee: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x100dc: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x100d2: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x100ce: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x100ba: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x100aa: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x100a6: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10166: rect (0,0) 15x15
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10166: clipping region type 3: bounds (0,0) 15x15
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10166: clipping region type 3: final rect (0,0) 15x15
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x1016a: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x1016c: rect (3420,1420) 20x20
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x1016c: clipping region type 2: bounds (0,0) 20x20
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x1016c: clipping region type 2: final rect (3420,1420) 20x20
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10168: rect (3425,0) 15x15
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10168: clipping region type 3: bounds (0,0) 15x15
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10168: clipping region type 3: final rect (3425,0) 15x15
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10164: rect (0,1439) 3440x1
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10162: rect (15,0) 3425x4
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10160: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x1015e: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x101ae: rect (0,0) 3440x1440
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10198: rect (0,0) 3440x1400
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10156: rect (0,0) 136x39
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x1013c: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x201ee: rect (0,0) 1x1
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x2028e: rect (0,0) 3440x1400
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10110: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10102: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10106: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x3001e: rect (0,1400) 3440x40
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x1021e: rect (5,56) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10124: rect (0,0) 0x0
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x10112: rect (0,0) 1x1
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x402d8: rect (1460,560) 340x220
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x402d4: rect (2064,520) 160x460
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x9006e: rect (1264,520) 160x460
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x402d2: rect (1264,980) 960x160
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x802b0: rect (1264,360) 960x160
+[20260802.152652.648-2016-D] GetRealWindowRect: 0x602ce: rect (1431,520) 626x453
+[20260802.152652.648-2016-D] SendWindowCreate: 0x602ce, (1431,520) 626x453, override=0
+[20260802.152652.648-2016-D] SendWindowCreate: (1431,520) 626x453
+[20260802.152652.648-2016-I] SendWindowCreate: QGAPROTO,msg=CREATE,hwnd=0x602ce,x=1431,y=520,w=626,h=453,ovr=0,style=0x14cf0000,ex=0x00000100
+[20260802.152652.648-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.648-2016-D] SendWindowHints: flags: 0x4
+[20260802.152652.648-2016-D] XcGnttabPermitForeignAccess2: RemoteDomain: 0, Address 0000025ADDA00000, NumberPages: 277, NotifyOffset: 0x0, NotifyPort: 0, Flags: 0x1
+[20260802.152652.648-2016-D] XcGnttabPermitForeignAccess2: Address: 0000025ADDA00000
+[20260802.152652.695-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.695-2016-I] PwAttachWindow: 0x602ce: per-window buffer 626x453 (277 pages) attached
+[20260802.152652.695-2016-I] SendWindowMap: Mapping window 0x602ce
+[20260802.152652.695-2016-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x602ce,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000100,vis=1,w=626,h=453
+[20260802.152652.695-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x602ce: rect (1431,520) 626x453
+[20260802.152652.726-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x602ce,rx=0,ry=0,w=626,h=453,ax=1431,ay=520,lx=1431,ly=520
+[20260802.152652.726-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.726-2016-D] SendWindowName: 0x602ce chromerepro - main window
+[20260802.152652.726-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.726-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.726-2016-D] GetRealWindowRect: 0xd0066: rect (0,0) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x702b2: rect (0,0) 3440x1440
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x102a4: rect (5,56) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x1028a: rect (5,56) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x10286: rect (57,108) 2573x1013
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x10280: rect (31,82) 2573x1013
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x10278: rect (317,368) 2573x1013
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x30044: rect (5,56) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x60054: rect (239,290) 2573x1013
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x30056: rect (0,0) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x300a0: rect (0,0) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x201ca: rect (161,212) 2573x1013
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x10226: rect (5,56) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x2015a: rect (5,56) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x10218: rect (5,56) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x1020c: rect (0,0) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x101d0: rect (0,0) 14x14
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x101c0: rect (5,56) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x101b8: rect (0,0) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x1018a: rect (7,0) 3426x1393
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x10174: rect (0,0) 3440x1400
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x101a4: rect (5,56) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x101a6: rect (5,56) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x10176: rect (0,0) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x1016e: rect (15,0) 3425x4
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x1014e: rect (0,0) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x1014c: rect (0,0) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x1013a: rect (5,56) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x10136: rect (5,56) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x1012c: rect (0,0) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x1012a: rect (5,56) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x10104: rect (0,0) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x20034: rect (5,56) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x100de: rect (0,0) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x100c6: rect (5,56) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x100c2: rect (0,0) 136x39
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x10090: rect (5,56) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x3001c: rect (5,56) 0x0
+[20260802.152652.726-2016-D] GetRealWindowRect: 0x10088: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x20020: rect (5,56) 136x39
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x10038: rect (-32000,-32000) 160x28
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x20064: rect (5,56) 136x39
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x1029e: rect (0,0) 1x1
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x201b4: rect (0,33) 1200x900
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x201e2: rect (47,56) 1202x934
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x1011e: rect (0,0) 3440x1440
+[20260802.152652.741-2016-D] IsPopup: 0x1011e: popup too large: 3440x1440, host screen 5120x1440
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x102e6: rect (0,0) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x102f0: rect (0,0) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x10180: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x101ec: rect (0,0) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x101b0: rect (0,0) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x1019a: rect (0,0) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x4029c: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x10118: rect (0,0) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x100a2: rect (0,0) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x702da: rect (0,0) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x4026e: rect (0,0) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0xd0068: rect (0,0) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x102dc: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x2023e: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x10298: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x10288: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x10282: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x1027a: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x30178: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x1021a: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x1020e: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x101c4: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x1018c: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x10138: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x20036: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x100c8: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x1008a: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x901f6: rect (0,0) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x201be: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x10132: rect (5,56) 0x0
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x1008e: rect (5,56) 0x0
+[20260802.152652.741-2016-I] SetSeamlessMode: Seamless mode changed to 1
+[20260802.152652.741-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.741-2016-D] HandleConfigure: 0x602ce: (1436,545) 626x453
+[20260802.152652.741-1784-D] CaptureThread: starting, resolution 3440x1440
+[20260802.152652.741-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x602ce,x=1436,y=545,w=626,h=453,ovr=0
+[20260802.152652.741-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.741-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.741-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.741-2016-D] GetRealWindowRect: 0x602ce: rect (1443,545) 626x453
+[20260802.152652.741-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x602ce,x=1443,y=545,w=626,h=453,ovr=0
+[20260802.152652.741-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.741-2016-I] AddAllWindows: foreground -> 0x602ce, re-mapping to raise it in dom0
+[20260802.152652.741-2016-I] SendWindowMap: Mapping window 0x602ce
+[20260802.152652.741-2016-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x602ce,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000100,vis=1,w=626,h=453
+[20260802.152652.741-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152652.757-2016-D] GetRealWindowRect: 0x101ae: rect (0,0) 3440x1440
+[20260802.152652.757-2016-D] GetRealWindowRect: 0x10198: rect (0,0) 3440x1400
+[20260802.152652.757-2016-D] GetRealWindowRect: 0x402d4: rect (2076,545) 160x460
+[20260802.152652.757-2016-D] GetRealWindowRect: 0x9006e: rect (1276,545) 160x460
+[20260802.152652.757-2016-D] GetRealWindowRect: 0x402d2: rect (1276,1005) 960x160
+[20260802.152652.757-2016-D] GetRealWindowRect: 0x802b0: rect (1276,385) 960x160
+[20260802.152652.757-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=1,n=1,mode=s,dt=0,acq=511,wak=712,mrq=9,drq=56,upd=1029,enu=13594,rem=5,dmg=11,snd=71,tot=14768,dr=1,mr=0,mrmax=0,area=4953600,win=1,iwn=7,wev=0,sends=4,skip=0,log=0
+[20260802.152652.757-2016-D] GetRealWindowRect: 0x602ce: rect (1443,545) 626x453
+[20260802.152652.788-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=2,n=1,mode=s,dt=37540,acq=22550,wak=16,mrq=8,drq=27,upd=315,enu=110,rem=10,dmg=8,snd=0,tot=479,dr=1,mr=0,mrmax=0,area=782460,win=1,iwn=1,wev=4,sends=0,skip=0,log=42
+[20260802.152653.148-2784-I] ResolutionChangeThread: resolution change: 5120x1440
+[20260802.152653.148-2784-D] SelectSupportedMode: Returning mode 24 (3440x1440) for 5120x1440
+[20260802.152653.148-2784-D] SetVideoMode: No change
+[20260802.152659.632-2016-D] DumpWindows: ### Window dump:
+0x602ce: (  1443,   545)  626x 453 V   ovr=0 [QubesChromeReproMain] 'chromerepro - main window' {C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_WINDOWEDGE 
+[20260802.152659.632-2016-D] GetRealWindowRect: 0x602ce: rect (1443,545) 626x453
+[20260802.152659.632-2016-D] GetRealWindowRect: 0x101ae: rect (0,0) 3440x1440
+[20260802.152659.632-2016-D] GetRealWindowRect: 0x10198: rect (0,0) 3440x1400
+[20260802.152708.382-2016-D] DumpWindows: ### Window dump:
+0x602ce: (  1443,   545)  626x 453 V   ovr=0 [QubesChromeReproMain] 'chromerepro - main window' {C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_WINDOWEDGE 
+[20260802.152708.382-2016-D] GetRealWindowRect: 0x602ce: rect (1443,545) 626x453
+[20260802.152708.398-2016-D] GetRealWindowRect: 0x101ae: rect (0,0) 3440x1440
+[20260802.152708.398-2016-D] GetRealWindowRect: 0x10198: rect (0,0) 3440x1400
+[20260802.152708.398-2016-D] GetRealWindowRect: 0x7006c: rect (0,0) 0x0
+[20260802.152708.398-2016-D] GetRealWindowRect: 0x6019c: rect (0,0) 0x0
+[20260802.152708.413-2016-D] GetRealWindowRect: 0x7006c: rect (0,0) 0x0
+[20260802.152708.445-2016-D] GetRealWindowRect: 0xb0080: rect (300,200) 700x500
+[20260802.152708.445-2016-D] GetRealWindowRect: 0xb0080: rect (300,200) 700x500
+[20260802.152708.507-2016-D] GetRealWindowRect: 0xb0080: rect (307,200) 686x493
+[20260802.152708.507-2016-D] SendWindowCreate: 0xb0080, (307,200) 686x493, override=0
+[20260802.152708.507-2016-D] SendWindowCreate: (307,200) 686x493
+[20260802.152708.507-2016-I] SendWindowCreate: QGAPROTO,msg=CREATE,hwnd=0xb0080,x=307,y=200,w=686,h=493,ovr=0,style=0x16cf0000,ex=0x00050100
+[20260802.152708.507-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152708.507-2016-D] SendWindowHints: flags: 0x4
+[20260802.152708.507-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152708.507-2016-D] XcGnttabPermitForeignAccess2: RemoteDomain: 0, Address 0000025ADDB20000, NumberPages: 331, NotifyOffset: 0x0, NotifyPort: 0, Flags: 0x1
+[20260802.152708.507-2016-D] XcGnttabPermitForeignAccess2: Address: 0000025ADDB20000
+[20260802.152708.554-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152708.554-2016-I] PwAttachWindow: 0xb0080: per-window buffer 686x493 (331 pages) attached
+[20260802.152708.554-2016-I] SendWindowMap: Mapping window 0xb0080
+[20260802.152708.554-2016-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0xb0080,ovr=0,transient=0x0,style=0x16cf0000,ex=0x00050100,vis=1,w=686,h=493
+[20260802.152708.616-2016-D] GetRealWindowRect: 0xb0080: rect (307,200) 686x493
+[20260802.152708.616-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=0,ry=0,w=686,h=493,ax=307,ay=200,lx=307,ly=200
+[20260802.152708.616-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152708.616-2016-D] SendWindowName: 0xb0080 JOINT-OWNER
+[20260802.152708.616-2016-D] GetRealWindowRect: 0x902b8: rect (0,0) 0x0
+[20260802.152708.616-2016-D] GetRealWindowRect: 0x8010a: rect (0,0) 0x0
+[20260802.152708.616-2016-D] GetRealWindowRect: 0x602b4: rect (0,0) 1x1
+[20260802.152708.616-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=3,n=1,mode=s,dt=15829583,acq=611319,wak=112345,mrq=12,drq=68,upd=1366,enu=142670,rem=55,dmg=8,snd=0,tot=144137,dr=1,mr=0,mrmax=0,area=398580,win=2,iwn=15,wev=11,sends=0,skip=0,log=65
+[20260802.152708.616-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152708.616-1876-D] GetRealWindowRect: 0xb0080: rect (307,200) 686x493
+[20260802.152708.616-1876-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=0,ry=31,w=686,h=461,ax=307,ay=200,lx=307,ly=200
+[20260802.152708.616-2016-D] HandleConfigure: 0xb0080: (312,225) 686x493
+[20260802.152708.616-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=312,y=225,w=686,h=493,ovr=0
+[20260802.152708.616-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152708.616-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152708.616-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152708.616-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152708.616-1876-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152708.616-2016-D] GetRealWindowRect: 0xb0080: rect (319,225) 686x493
+[20260802.152708.616-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=319,y=225,w=686,h=493,ovr=0
+[20260802.152708.616-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152708.663-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152708.663-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=4,n=1,mode=s,dt=44663,acq=43474,wak=52,mrq=17,drq=37,upd=635,enu=16,rem=16,dmg=64,snd=0,tot=772,dr=4,mr=0,mrmax=0,area=707260,win=2,iwn=1,wev=1,sends=0,skip=0,log=25
+[20260802.152708.757-1876-D] GetRealWindowRect: 0x602ce: rect (1443,545) 626x453
+[20260802.152708.757-1876-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x602ce,rx=0,ry=0,w=626,h=453,ax=1443,ay=545,lx=1443,ly=545
+[20260802.152708.757-1876-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152710.648-2016-D] DumpWindows: ### Window dump:
+0x602ce: (  1443,   545)  626x 453 V   ovr=0 [QubesChromeReproMain] 'chromerepro - main window' {C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_WINDOWEDGE 
+0xb0080: (   319,   225)  686x 493 V   ovr=0 [WindowsForms10.Window.8.app.0.3fd0c2d_r9_ad1] 'JOINT-OWNER' {C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_CLIPCHILDREN WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_APPWINDOW WS_EX_CONTROLPARENT WS_EX_WINDOWEDGE 
+[20260802.152710.648-2016-D] GetRealWindowRect: 0x602ce: rect (1443,545) 626x453
+[20260802.152710.648-2016-D] GetRealWindowRect: 0xb0080: rect (319,225) 686x493
+[20260802.152710.648-2016-I] AddAllWindows: foreground -> 0xb0080, re-mapping to raise it in dom0
+[20260802.152710.648-2016-I] SendWindowMap: Mapping window 0xb0080
+[20260802.152710.648-2016-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0xb0080,ovr=0,transient=0x0,style=0x16cf0000,ex=0x00050100,vis=1,w=686,h=493
+[20260802.152710.648-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152710.648-2016-D] GetRealWindowRect: 0x101ae: rect (0,0) 3440x1440
+[20260802.152710.648-2016-D] GetRealWindowRect: 0x10198: rect (0,0) 3440x1400
+[20260802.152710.648-2016-D] GetRealWindowRect: 0x601ce: rect (400,300) 240x180
+[20260802.152710.648-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152710.648-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152710.648-2016-D] GetRealWindowRect: 0xb0080: rect (319,225) 686x493
+[20260802.152710.648-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=319,ay=225,lx=319,ly=225
+[20260802.152710.648-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152710.648-2016-I] SynthActivate: QGAPROTO,msg=SYNTH,hwnd=0x601ce,owner=0xb0080,x=400,y=300,w=240,h=180
+[20260802.152710.695-2016-D] GetRealWindowRect: 0x601ce: rect (400,300) 240x180
+[20260802.152710.695-2016-D] ProcessNewFrame: QGADRAG,ev=settle,hwnd=0xb0080
+[20260802.152710.695-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152710.695-2016-D] GetRealWindowRect: 0xb0080: rect (319,225) 686x493
+[20260802.152710.695-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=319,ay=225,lx=319,ly=225
+[20260802.152710.695-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152710.695-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=5,n=1,mode=s,dt=2032223,acq=2698,wak=16707,mrq=17,drq=35,upd=27718,enu=20685,rem=19,dmg=841,snd=100,tot=49412,dr=1,mr=0,mrmax=0,area=338198,win=3,iwn=6,wev=2,sends=2,skip=0,log=22
+[20260802.152710.695-1876-D] GetRealWindowRect: 0xb0080: rect (319,225) 686x493
+[20260802.152710.695-1876-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=0,ry=0,w=686,h=493,ax=319,ay=225,lx=319,ly=225
+[20260802.152710.695-1876-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152710.741-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152710.773-2016-D] GetRealWindowRect: 0xb0080: rect (319,225) 686x493
+[20260802.152710.773-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=319,ay=225,lx=319,ly=225
+[20260802.152710.773-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152710.773-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=6,n=1,mode=s,dt=43715,acq=42432,wak=38,mrq=10,drq=29,upd=6,enu=6,rem=7,dmg=32181,snd=59,tot=32317,dr=1,mr=0,mrmax=0,area=43200,win=3,iwn=0,wev=0,sends=2,skip=0,log=37
+[20260802.152714.679-2016-D] DumpWindows: ### Window dump:
+0x602ce: (  1443,   545)  626x 453 V   ovr=0 [QubesChromeReproMain] 'chromerepro - main window' {C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_WINDOWEDGE 
+0xb0080: (   319,   225)  686x 493 V   ovr=0 [WindowsForms10.Window.8.app.0.3fd0c2d_r9_ad1] 'JOINT-OWNER' {C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_CLIPCHILDREN WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_APPWINDOW WS_EX_CONTROLPARENT WS_EX_WINDOWEDGE 
+0x601ce: (   400,   300)  240x 180 V   ovr=1 [WindowsForms10.Window.8.app.0.3fd0c2d_r9_ad1] '' {C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_CLIPCHILDREN WS_MAXIMIZEBOX WS_EX_CONTROLPARENT 
+[20260802.152714.679-2016-D] GetRealWindowRect: 0x602ce: rect (1443,545) 626x453
+[20260802.152714.679-2016-D] GetRealWindowRect: 0xb0080: rect (319,225) 686x493
+[20260802.152714.679-2016-D] GetRealWindowRect: 0x601ce: rect (400,300) 240x180
+[20260802.152714.695-2016-D] GetRealWindowRect: 0x101ae: rect (0,0) 3440x1440
+[20260802.152714.695-2016-D] GetRealWindowRect: 0x10198: rect (0,0) 3440x1400
+[20260802.152717.757-2016-D] DumpWindows: ### Window dump:
+0x602ce: (  1443,   545)  626x 453 V   ovr=0 [QubesChromeReproMain] 'chromerepro - main window' {C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_WINDOWEDGE 
+0xb0080: (   319,   225)  686x 493 V   ovr=0 [WindowsForms10.Window.8.app.0.3fd0c2d_r9_ad1] 'JOINT-OWNER' {C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_CLIPCHILDREN WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_APPWINDOW WS_EX_CONTROLPARENT WS_EX_WINDOWEDGE 
+0x601ce: (   400,   300)  240x 180 V   ovr=1 [WindowsForms10.Window.8.app.0.3fd0c2d_r9_ad1] '' {C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_CLIPCHILDREN WS_MAXIMIZEBOX WS_EX_CONTROLPARENT 
+[20260802.152717.757-2016-D] GetRealWindowRect: 0x602ce: rect (1443,545) 626x453
+[20260802.152717.757-2016-D] GetRealWindowRect: 0xb0080: rect (307,200) 686x493
+[20260802.152717.757-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=307,y=200,w=686,h=493,ovr=0
+[20260802.152717.757-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152717.757-2016-D] GetRealWindowRect: 0x601ce: rect (400,300) 240x180
+[20260802.152717.757-2016-D] GetRealWindowRect: 0x101ae: rect (0,0) 3440x1440
+[20260802.152717.757-2016-D] GetRealWindowRect: 0x10198: rect (0,0) 3440x1400
+[20260802.152717.757-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152717.757-2016-D] GetRealWindowRect: 0x601ce: rect (388,275) 240x180
+[20260802.152717.757-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152717.788-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152717.788-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152717.804-2016-D] GetRealWindowRect: 0xb0080: rect (307,200) 686x493
+[20260802.152717.804-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=307,ay=200,lx=307,ly=200
+[20260802.152717.804-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152717.804-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152717.804-2016-D] GetRealWindowRect: 0xb0080: rect (307,200) 686x493
+[20260802.152717.804-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=307,ay=200,lx=307,ly=200
+[20260802.152717.804-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152717.804-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=7,n=1,mode=s,dt=7048338,acq=955183,wak=34,mrq=9,drq=27,upd=4321,enu=24029,rem=60,dmg=17533,snd=100,tot=46082,dr=1,mr=0,mrmax=0,area=423682,win=3,iwn=11,wev=3,sends=4,skip=0,log=22
+[20260802.152717.835-2016-D] GetRealWindowRect: 0xb0080: rect (313,203) 686x493
+[20260802.152717.835-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=313,y=203,w=686,h=493,ovr=0
+[20260802.152717.835-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152717.835-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152717.835-2016-D] GetRealWindowRect: 0x601ce: rect (394,278) 240x180
+[20260802.152717.835-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152717.866-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152717.866-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152717.898-2016-D] GetRealWindowRect: 0xb0080: rect (313,203) 686x493
+[20260802.152717.898-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=313,ay=203,lx=313,ly=203
+[20260802.152717.898-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152717.898-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=8,n=1,mode=s,dt=78259,acq=60331,wak=20,mrq=10,drq=27,upd=12627,enu=16,rem=1289,dmg=32891,snd=116,tot=46981,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=29
+[20260802.152717.898-2016-D] GetRealWindowRect: 0xb0080: rect (319,206) 686x493
+[20260802.152717.898-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=319,y=206,w=686,h=493,ovr=0
+[20260802.152717.898-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152717.898-2016-D] GetRealWindowRect: 0x601ce: rect (400,281) 240x180
+[20260802.152717.913-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152717.913-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152717.913-2016-D] GetRealWindowRect: 0xb0080: rect (319,206) 686x493
+[20260802.152717.913-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=319,ay=206,lx=319,ly=206
+[20260802.152717.913-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152717.913-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=9,n=1,mode=s,dt=46842,acq=13470,wak=47,mrq=19,drq=41,upd=707,enu=14,rem=13,dmg=692,snd=64,tot=1536,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=54
+[20260802.152717.945-2016-D] GetRealWindowRect: 0xb0080: rect (325,209) 686x493
+[20260802.152717.945-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=325,y=209,w=686,h=493,ovr=0
+[20260802.152717.945-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152717.945-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152717.945-2016-D] GetRealWindowRect: 0x601ce: rect (406,284) 240x180
+[20260802.152717.945-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152717.960-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152717.960-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152717.991-2016-D] GetRealWindowRect: 0xb0080: rect (325,209) 686x493
+[20260802.152717.991-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=325,ay=209,lx=325,ly=209
+[20260802.152717.991-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152717.991-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=10,n=1,mode=s,dt=46553,acq=45473,wak=41,mrq=17,drq=38,upd=1335,enu=15,rem=45,dmg=33990,snd=65,tot=35486,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=23
+[20260802.152718.023-2016-D] GetRealWindowRect: 0xb0080: rect (331,212) 686x493
+[20260802.152718.023-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=331,y=212,w=686,h=493,ovr=0
+[20260802.152718.023-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.023-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.023-2016-D] GetRealWindowRect: 0x601ce: rect (412,287) 240x180
+[20260802.152718.023-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.054-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152718.054-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.070-2016-D] GetRealWindowRect: 0xb0080: rect (331,212) 686x493
+[20260802.152718.070-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=331,ay=212,lx=331,ly=212
+[20260802.152718.070-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.070-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.070-2016-D] GetRealWindowRect: 0xb0080: rect (337,215) 686x493
+[20260802.152718.070-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=331,ay=212,lx=337,ly=215
+[20260802.152718.070-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.070-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=11,n=1,mode=s,dt=93977,acq=59600,wak=34,mrq=10,drq=28,upd=16978,enu=18,rem=1138,dmg=17092,snd=92,tot=35359,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=4,skip=0,log=21
+[20260802.152718.070-2016-D] GetRealWindowRect: 0xb0080: rect (337,215) 686x493
+[20260802.152718.070-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=337,y=215,w=686,h=493,ovr=0
+[20260802.152718.070-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.070-2016-D] GetRealWindowRect: 0x601ce: rect (418,290) 240x180
+[20260802.152718.085-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152718.085-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.085-2016-D] GetRealWindowRect: 0xb0080: rect (337,215) 686x493
+[20260802.152718.085-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=337,ay=215,lx=337,ly=215
+[20260802.152718.085-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.085-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=12,n=1,mode=s,dt=31392,acq=1200,wak=21,mrq=15,drq=29,upd=587,enu=12,rem=14,dmg=764,snd=63,tot=1487,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=1,log=28
+[20260802.152718.132-2016-D] GetRealWindowRect: 0xb0080: rect (343,218) 686x493
+[20260802.152718.132-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=343,y=218,w=686,h=493,ovr=0
+[20260802.152718.132-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.132-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.132-2016-D] GetRealWindowRect: 0x601ce: rect (424,293) 240x180
+[20260802.152718.132-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.163-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152718.163-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.179-2016-D] GetRealWindowRect: 0xb0080: rect (343,218) 686x493
+[20260802.152718.179-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=343,ay=218,lx=343,ly=218
+[20260802.152718.179-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.179-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=13,n=1,mode=s,dt=78078,acq=27753,wak=35,mrq=10,drq=27,upd=1479,enu=16,rem=51,dmg=17260,snd=60,tot=18910,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=1,log=25
+[20260802.152718.210-2016-D] GetRealWindowRect: 0xb0080: rect (349,221) 686x493
+[20260802.152718.210-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=349,y=221,w=686,h=493,ovr=0
+[20260802.152718.210-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.210-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.210-2016-D] GetRealWindowRect: 0x601ce: rect (430,296) 240x180
+[20260802.152718.210-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.226-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152718.226-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.241-2016-D] GetRealWindowRect: 0xb0080: rect (349,221) 686x493
+[20260802.152718.241-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=349,ay=221,lx=349,ly=221
+[20260802.152718.241-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.241-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=14,n=1,mode=s,dt=62107,acq=26240,wak=35,mrq=9,drq=26,upd=17304,enu=13,rem=859,dmg=18541,snd=53,tot=36806,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=1,log=35
+[20260802.152718.257-2016-D] GetRealWindowRect: 0xb0080: rect (355,224) 686x493
+[20260802.152718.257-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=355,y=224,w=686,h=493,ovr=0
+[20260802.152718.257-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.257-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.257-2016-D] GetRealWindowRect: 0x601ce: rect (436,299) 240x180
+[20260802.152718.257-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.273-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152718.273-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.288-2016-D] GetRealWindowRect: 0xb0080: rect (355,224) 686x493
+[20260802.152718.288-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=355,ay=224,lx=355,ly=224
+[20260802.152718.288-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.288-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.288-2016-D] GetRealWindowRect: 0xb0080: rect (355,224) 686x493
+[20260802.152718.288-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=355,ay=224,lx=355,ly=224
+[20260802.152718.288-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.288-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=15,n=1,mode=s,dt=47471,acq=28466,wak=57,mrq=11,drq=28,upd=1879,enu=18,rem=1088,dmg=18168,snd=97,tot=21308,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=4,skip=0,log=21
+[20260802.152718.320-2016-D] GetRealWindowRect: 0xb0080: rect (361,227) 686x493
+[20260802.152718.320-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=361,y=227,w=686,h=493,ovr=0
+[20260802.152718.320-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.320-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.320-2016-D] GetRealWindowRect: 0x601ce: rect (442,302) 240x180
+[20260802.152718.320-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.335-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152718.335-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.366-2016-D] GetRealWindowRect: 0xb0080: rect (361,227) 686x493
+[20260802.152718.366-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=361,ay=227,lx=361,ly=227
+[20260802.152718.366-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.366-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=16,n=1,mode=s,dt=61949,acq=43392,wak=40,mrq=10,drq=27,upd=1261,enu=15,rem=50,dmg=33707,snd=52,tot=35122,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=29
+[20260802.152718.398-2016-D] GetRealWindowRect: 0xb0080: rect (367,230) 686x493
+[20260802.152718.398-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=367,y=230,w=686,h=493,ovr=0
+[20260802.152718.398-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.398-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.398-2016-D] GetRealWindowRect: 0x601ce: rect (448,305) 240x180
+[20260802.152718.398-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.429-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152718.429-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.460-2016-D] GetRealWindowRect: 0xb0080: rect (367,230) 686x493
+[20260802.152718.460-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=367,ay=230,lx=367,ly=230
+[20260802.152718.460-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.460-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=17,n=1,mode=s,dt=93991,acq=59934,wak=22,mrq=10,drq=32,upd=20204,enu=25,rem=1822,dmg=32814,snd=51,tot=54959,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=33
+[20260802.152718.460-2016-D] GetRealWindowRect: 0xb0080: rect (373,233) 686x493
+[20260802.152718.460-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=373,y=233,w=686,h=493,ovr=0
+[20260802.152718.460-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.460-2016-D] GetRealWindowRect: 0x601ce: rect (454,308) 240x180
+[20260802.152718.491-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152718.491-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.523-2016-D] GetRealWindowRect: 0xb0080: rect (373,233) 686x493
+[20260802.152718.523-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=373,ay=233,lx=373,ly=233
+[20260802.152718.523-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.523-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.523-2016-D] GetRealWindowRect: 0xb0080: rect (379,236) 686x493
+[20260802.152718.523-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=373,ay=233,lx=379,ly=236
+[20260802.152718.523-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.523-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=18,n=1,mode=s,dt=62549,acq=29410,wak=16,mrq=17,drq=28,upd=662,enu=13,rem=15,dmg=32762,snd=91,tot=33582,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=4,skip=0,log=22
+[20260802.152718.523-2016-D] GetRealWindowRect: 0xb0080: rect (379,236) 686x493
+[20260802.152718.523-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=379,y=236,w=686,h=493,ovr=0
+[20260802.152718.523-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.523-2016-D] GetRealWindowRect: 0x601ce: rect (460,311) 240x180
+[20260802.152718.554-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152718.554-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.585-2016-D] GetRealWindowRect: 0xb0080: rect (379,236) 686x493
+[20260802.152718.585-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=379,ay=236,lx=379,ly=236
+[20260802.152718.585-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.585-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=19,n=1,mode=s,dt=63412,acq=30190,wak=85,mrq=20,drq=38,upd=565,enu=20,rem=22,dmg=31318,snd=73,tot=32096,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=26
+[20260802.152718.585-2016-D] GetRealWindowRect: 0xb0080: rect (385,239) 686x493
+[20260802.152718.585-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=385,y=239,w=686,h=493,ovr=0
+[20260802.152718.585-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.585-2016-D] GetRealWindowRect: 0x601ce: rect (466,314) 240x180
+[20260802.152718.616-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152718.616-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.616-2016-D] GetRealWindowRect: 0xb0080: rect (385,239) 686x493
+[20260802.152718.616-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=385,ay=239,lx=385,ly=239
+[20260802.152718.616-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.616-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=20,n=1,mode=s,dt=61222,acq=29441,wak=31,mrq=8,drq=25,upd=1984,enu=10,rem=12,dmg=464,snd=65,tot=2579,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=36
+[20260802.152718.632-2016-D] GetRealWindowRect: 0xb0080: rect (391,242) 686x493
+[20260802.152718.632-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=391,y=242,w=686,h=493,ovr=0
+[20260802.152718.632-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.632-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.632-2016-D] GetRealWindowRect: 0x601ce: rect (472,317) 240x180
+[20260802.152718.632-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.648-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152718.648-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.663-2016-D] GetRealWindowRect: 0xb0080: rect (391,242) 686x493
+[20260802.152718.663-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=391,ay=242,lx=391,ly=242
+[20260802.152718.663-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.663-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=21,n=1,mode=s,dt=32953,acq=32139,wak=33,mrq=9,drq=26,upd=1212,enu=16,rem=55,dmg=15034,snd=54,tot=16409,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=36
+[20260802.152718.695-2016-D] GetRealWindowRect: 0xb0080: rect (397,245) 686x493
+[20260802.152718.695-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=397,y=245,w=686,h=493,ovr=0
+[20260802.152718.695-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.695-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.695-2016-D] GetRealWindowRect: 0x601ce: rect (478,320) 240x180
+[20260802.152718.695-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.710-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152718.710-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.741-2016-D] GetRealWindowRect: 0xb0080: rect (397,245) 686x493
+[20260802.152718.741-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=397,ay=245,lx=397,ly=245
+[20260802.152718.741-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.741-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.741-2016-D] GetRealWindowRect: 0xb0080: rect (397,245) 686x493
+[20260802.152718.741-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=397,ay=245,lx=397,ly=245
+[20260802.152718.741-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.741-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=22,n=1,mode=s,dt=60766,acq=45432,wak=26,mrq=9,drq=23,upd=1351,enu=16,rem=813,dmg=34632,snd=92,tot=36940,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=4,skip=0,log=22
+[20260802.152718.773-2016-D] GetRealWindowRect: 0xb0080: rect (403,248) 686x493
+[20260802.152718.773-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=403,y=248,w=686,h=493,ovr=0
+[20260802.152718.773-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.773-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.773-2016-D] DumpWindows: ### Window dump:
+0x602ce: (  1443,   545)  626x 453 V   ovr=0 [QubesChromeReproMain] 'chromerepro - main window' {C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_WINDOWEDGE 
+0xb0080: (   403,   248)  686x 493 V   ovr=0 [WindowsForms10.Window.8.app.0.3fd0c2d_r9_ad1] 'JOINT-OWNER' {C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_CLIPCHILDREN WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_APPWINDOW WS_EX_CONTROLPARENT WS_EX_WINDOWEDGE 
+0x601ce: (   478,   320)  240x 180 V   ovr=1 [WindowsForms10.Window.8.app.0.3fd0c2d_r9_ad1] '' {C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_CLIPCHILDREN WS_MAXIMIZEBOX WS_EX_CONTROLPARENT 
+[20260802.152718.773-2016-D] GetRealWindowRect: 0x601ce: rect (484,323) 240x180
+[20260802.152718.773-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.788-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152718.788-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.820-2016-D] GetRealWindowRect: 0xb0080: rect (403,248) 686x493
+[20260802.152718.820-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=403,ay=248,lx=403,ly=248
+[20260802.152718.820-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.820-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=23,n=1,mode=s,dt=78138,acq=43155,wak=29,mrq=13,drq=26,upd=16929,enu=15,rem=880,dmg=33200,snd=29,tot=51086,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=27
+[20260802.152718.820-2016-D] GetRealWindowRect: 0xb0080: rect (409,251) 686x493
+[20260802.152718.820-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=409,y=251,w=686,h=493,ovr=0
+[20260802.152718.820-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.820-2016-D] GetRealWindowRect: 0x601ce: rect (490,326) 240x180
+[20260802.152718.835-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152718.835-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.835-2016-D] GetRealWindowRect: 0xb0080: rect (409,251) 686x493
+[20260802.152718.835-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=409,ay=251,lx=409,ly=251
+[20260802.152718.835-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.835-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=24,n=1,mode=s,dt=46776,acq=13371,wak=12,mrq=7,drq=20,upd=357,enu=6,rem=7,dmg=307,snd=46,tot=754,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=10
+[20260802.152718.882-2016-D] GetRealWindowRect: 0xb0080: rect (415,254) 686x493
+[20260802.152718.882-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=415,y=254,w=686,h=493,ovr=0
+[20260802.152718.882-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.882-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.882-2016-D] GetRealWindowRect: 0x601ce: rect (496,329) 240x180
+[20260802.152718.882-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.898-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152718.898-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.913-2016-D] GetRealWindowRect: 0xb0080: rect (415,254) 686x493
+[20260802.152718.913-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=415,ay=254,lx=415,ly=254
+[20260802.152718.913-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.913-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=25,n=1,mode=s,dt=62513,acq=61959,wak=24,mrq=14,drq=22,upd=1184,enu=16,rem=44,dmg=17795,snd=52,tot=19126,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=22
+[20260802.152718.945-2016-D] GetRealWindowRect: 0xb0080: rect (421,257) 686x493
+[20260802.152718.945-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=421,y=257,w=686,h=493,ovr=0
+[20260802.152718.945-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.945-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.945-2016-D] GetRealWindowRect: 0x601ce: rect (502,332) 240x180
+[20260802.152718.945-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152718.976-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152718.976-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.991-2016-D] GetRealWindowRect: 0xb0080: rect (421,257) 686x493
+[20260802.152718.991-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=421,ay=257,lx=421,ly=257
+[20260802.152718.991-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.991-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152718.991-2016-D] GetRealWindowRect: 0xb0080: rect (421,257) 686x493
+[20260802.152718.991-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=421,ay=257,lx=421,ly=257
+[20260802.152718.991-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152718.991-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=26,n=1,mode=s,dt=79066,acq=61000,wak=13,mrq=11,drq=24,upd=1226,enu=15,rem=46,dmg=16547,snd=91,tot=17962,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=4,skip=0,log=23
+[20260802.152719.023-2016-D] GetRealWindowRect: 0xb0080: rect (427,260) 686x493
+[20260802.152719.023-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=427,y=260,w=686,h=493,ovr=0
+[20260802.152719.023-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.023-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.023-2016-D] GetRealWindowRect: 0x601ce: rect (508,335) 240x180
+[20260802.152719.023-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.054-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152719.054-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.070-2016-D] GetRealWindowRect: 0xb0080: rect (427,260) 686x493
+[20260802.152719.070-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=427,ay=260,lx=427,ly=260
+[20260802.152719.070-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.070-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=27,n=1,mode=s,dt=79024,acq=62034,wak=43,mrq=23,drq=72,upd=16291,enu=19,rem=1059,dmg=15891,snd=61,tot=33359,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=27
+[20260802.152719.070-2016-D] GetRealWindowRect: 0xb0080: rect (433,263) 686x493
+[20260802.152719.070-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=433,y=263,w=686,h=493,ovr=0
+[20260802.152719.070-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.070-2016-D] GetRealWindowRect: 0x601ce: rect (514,338) 240x180
+[20260802.152719.101-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152719.101-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.116-2016-D] GetRealWindowRect: 0xb0080: rect (433,263) 686x493
+[20260802.152719.116-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=433,ay=263,lx=433,ly=263
+[20260802.152719.116-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.116-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=28,n=1,mode=s,dt=47442,acq=31158,wak=49,mrq=20,drq=38,upd=1361,enu=14,rem=15,dmg=14649,snd=52,tot=16132,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=23
+[20260802.152719.132-2016-D] GetRealWindowRect: 0xb0080: rect (439,266) 686x493
+[20260802.152719.132-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=439,y=266,w=686,h=493,ovr=0
+[20260802.152719.132-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.132-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.132-2016-D] GetRealWindowRect: 0x601ce: rect (520,341) 240x180
+[20260802.152719.132-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.148-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152719.148-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.179-2016-D] GetRealWindowRect: 0xb0080: rect (439,266) 686x493
+[20260802.152719.179-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=439,ay=266,lx=439,ly=266
+[20260802.152719.179-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.179-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=29,n=1,mode=s,dt=44674,acq=29663,wak=39,mrq=17,drq=35,upd=1273,enu=15,rem=141,dmg=33670,snd=69,tot=35205,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=22
+[20260802.152719.195-2016-D] GetRealWindowRect: 0xb0080: rect (445,269) 686x493
+[20260802.152719.195-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=445,y=269,w=686,h=493,ovr=0
+[20260802.152719.195-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.195-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.195-2016-D] GetRealWindowRect: 0x601ce: rect (526,344) 240x180
+[20260802.152719.195-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.210-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152719.210-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.226-2016-D] GetRealWindowRect: 0xb0080: rect (445,269) 686x493
+[20260802.152719.226-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=445,ay=269,lx=445,ly=269
+[20260802.152719.226-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.226-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.226-2016-D] GetRealWindowRect: 0xb0080: rect (445,269) 686x493
+[20260802.152719.226-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=445,ay=269,lx=445,ly=269
+[20260802.152719.226-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.226-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.226-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=30,n=1,mode=s,dt=63585,acq=29371,wak=76,mrq=91,drq=32,upd=2586,enu=43,rem=136,dmg=18653,snd=344,tot=21858,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=4,skip=0,log=37
+[20260802.152719.273-2016-D] GetRealWindowRect: 0xb0080: rect (451,272) 686x493
+[20260802.152719.273-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=451,y=272,w=686,h=493,ovr=0
+[20260802.152719.273-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.273-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.273-2016-D] GetRealWindowRect: 0x601ce: rect (532,347) 240x180
+[20260802.152719.273-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.304-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152719.304-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.320-2016-D] GetRealWindowRect: 0xb0080: rect (451,272) 686x493
+[20260802.152719.320-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=451,ay=272,lx=451,ly=272
+[20260802.152719.320-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.320-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=31,n=1,mode=s,dt=93627,acq=74103,wak=48,mrq=17,drq=36,upd=2607,enu=26,rem=206,dmg=16680,snd=59,tot=19618,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=65
+[20260802.152719.351-2016-D] GetRealWindowRect: 0xb0080: rect (457,275) 686x493
+[20260802.152719.351-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=457,y=275,w=686,h=493,ovr=0
+[20260802.152719.351-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.351-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.351-2016-D] GetRealWindowRect: 0x601ce: rect (538,350) 240x180
+[20260802.152719.351-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.382-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152719.382-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.413-2016-D] GetRealWindowRect: 0xb0080: rect (457,275) 686x493
+[20260802.152719.413-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=457,ay=275,lx=457,ly=275
+[20260802.152719.413-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.413-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=32,n=1,mode=s,dt=77840,acq=60806,wak=41,mrq=11,drq=27,upd=16922,enu=16,rem=986,dmg=32520,snd=69,tot=50555,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=26
+[20260802.152719.413-2016-D] GetRealWindowRect: 0xb0080: rect (463,278) 686x493
+[20260802.152719.413-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=463,y=278,w=686,h=493,ovr=0
+[20260802.152719.413-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.413-2016-D] GetRealWindowRect: 0x601ce: rect (544,353) 240x180
+[20260802.152719.429-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152719.429-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.445-2016-D] GetRealWindowRect: 0xb0080: rect (463,278) 686x493
+[20260802.152719.445-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=463,ay=278,lx=463,ly=278
+[20260802.152719.445-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.445-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.445-2016-D] GetRealWindowRect: 0xb0080: rect (463,278) 686x493
+[20260802.152719.445-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=463,ay=278,lx=463,ly=278
+[20260802.152719.445-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.445-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=33,n=1,mode=s,dt=46270,acq=13382,wak=33,mrq=18,drq=28,upd=705,enu=14,rem=15,dmg=18914,snd=118,tot=19802,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=4,skip=0,log=29
+[20260802.152719.460-2016-D] GetRealWindowRect: 0xb0080: rect (469,281) 686x493
+[20260802.152719.460-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=469,y=281,w=686,h=493,ovr=0
+[20260802.152719.460-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.460-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.460-2016-D] GetRealWindowRect: 0x601ce: rect (550,356) 240x180
+[20260802.152719.460-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.476-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152719.476-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.492-2016-D] GetRealWindowRect: 0xb0080: rect (469,281) 686x493
+[20260802.152719.492-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=469,ay=281,lx=469,ly=281
+[20260802.152719.492-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.492-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=34,n=1,mode=s,dt=48107,acq=28679,wak=65,mrq=31,drq=57,upd=1570,enu=20,rem=49,dmg=20254,snd=102,tot=22057,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=22
+[20260802.152719.554-2016-D] GetRealWindowRect: 0xb0080: rect (475,284) 686x493
+[20260802.152719.554-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=475,y=284,w=686,h=493,ovr=0
+[20260802.152719.554-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.554-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.554-2016-D] GetRealWindowRect: 0x601ce: rect (556,359) 240x180
+[20260802.152719.554-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.585-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152719.585-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.616-2016-D] GetRealWindowRect: 0xb0080: rect (475,284) 686x493
+[20260802.152719.616-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=475,ay=284,lx=475,ly=284
+[20260802.152719.616-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.616-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=35,n=1,mode=s,dt=109007,acq=88251,wak=31,mrq=8,drq=23,upd=17489,enu=16,rem=1489,dmg=32316,snd=48,tot=51394,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=69
+[20260802.152719.616-2016-D] GetRealWindowRect: 0xb0080: rect (481,287) 686x493
+[20260802.152719.616-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=481,y=287,w=686,h=493,ovr=0
+[20260802.152719.616-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.616-2016-D] GetRealWindowRect: 0x601ce: rect (562,362) 240x180
+[20260802.152719.632-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152719.632-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.648-2016-D] GetRealWindowRect: 0xb0080: rect (481,287) 686x493
+[20260802.152719.648-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=481,ay=287,lx=481,ly=287
+[20260802.152719.648-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.648-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.648-2016-D] GetRealWindowRect: 0xb0080: rect (481,287) 686x493
+[20260802.152719.648-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=481,ay=287,lx=481,ly=287
+[20260802.152719.648-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.648-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=36,n=1,mode=s,dt=45682,acq=13080,wak=25,mrq=8,drq=23,upd=727,enu=9,rem=11,dmg=18587,snd=117,tot=19488,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=4,skip=0,log=22
+[20260802.152719.663-2016-D] GetRealWindowRect: 0xb0080: rect (487,290) 686x493
+[20260802.152719.663-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=487,y=290,w=686,h=493,ovr=0
+[20260802.152719.663-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.663-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.663-2016-D] GetRealWindowRect: 0x601ce: rect (568,365) 240x180
+[20260802.152719.663-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.679-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152719.679-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.710-2016-D] GetRealWindowRect: 0xb0080: rect (487,290) 686x493
+[20260802.152719.710-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=487,ay=290,lx=487,ly=290
+[20260802.152719.710-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.710-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=37,n=1,mode=s,dt=47398,acq=28422,wak=32,mrq=8,drq=34,upd=1300,enu=15,rem=54,dmg=33719,snd=73,tot=35204,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=30
+[20260802.152719.726-2016-D] GetRealWindowRect: 0xb0080: rect (493,293) 686x493
+[20260802.152719.726-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=493,y=293,w=686,h=493,ovr=0
+[20260802.152719.726-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.726-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.726-2016-D] GetRealWindowRect: 0x601ce: rect (574,368) 240x180
+[20260802.152719.726-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.741-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152719.741-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.757-2016-D] GetRealWindowRect: 0xb0080: rect (493,293) 686x493
+[20260802.152719.757-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=493,ay=293,lx=493,ly=293
+[20260802.152719.757-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.757-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=38,n=1,mode=s,dt=62147,acq=28088,wak=35,mrq=11,drq=24,upd=1274,enu=15,rem=48,dmg=19091,snd=73,tot=20540,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=37
+[20260802.152719.788-2016-D] DumpWindows: ### Window dump:
+0x602ce: (  1443,   545)  626x 453 V   ovr=0 [QubesChromeReproMain] 'chromerepro - main window' {C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_WINDOWEDGE 
+0xb0080: (   493,   293)  686x 493 V   ovr=0 [WindowsForms10.Window.8.app.0.3fd0c2d_r9_ad1] 'JOINT-OWNER' {C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_CLIPCHILDREN WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_APPWINDOW WS_EX_CONTROLPARENT WS_EX_WINDOWEDGE 
+0x601ce: (   574,   368)  240x 180 V   ovr=1 [WindowsForms10.Window.8.app.0.3fd0c2d_r9_ad1] '' {C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_CLIPCHILDREN WS_MAXIMIZEBOX WS_EX_CONTROLPARENT 
+[20260802.152719.788-2016-D] GetRealWindowRect: 0x602ce: rect (1443,545) 626x453
+[20260802.152719.788-2016-D] GetRealWindowRect: 0xb0080: rect (499,296) 686x493
+[20260802.152719.788-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=499,y=296,w=686,h=493,ovr=0
+[20260802.152719.788-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.788-2016-D] GetRealWindowRect: 0x601ce: rect (580,371) 240x180
+[20260802.152719.788-2016-D] GetRealWindowRect: 0x101ae: rect (0,0) 3440x1440
+[20260802.152719.788-2016-D] GetRealWindowRect: 0x10198: rect (0,0) 3440x1400
+[20260802.152719.820-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152719.820-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.851-2016-D] GetRealWindowRect: 0xb0080: rect (499,296) 686x493
+[20260802.152719.851-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=499,ay=296,lx=499,ly=296
+[20260802.152719.851-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.851-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.851-2016-D] GetRealWindowRect: 0xb0080: rect (505,299) 686x493
+[20260802.152719.851-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=499,ay=296,lx=505,ly=299
+[20260802.152719.851-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.851-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=39,n=1,mode=s,dt=78254,acq=58828,wak=26,mrq=10,drq=22,upd=1069,enu=6873,rem=16,dmg=32560,snd=85,tot=40642,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=5,wev=2,sends=4,skip=0,log=36
+[20260802.152719.851-2016-D] GetRealWindowRect: 0xb0080: rect (505,299) 686x493
+[20260802.152719.851-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=505,y=299,w=686,h=493,ovr=0
+[20260802.152719.851-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.851-2016-D] GetRealWindowRect: 0x601ce: rect (586,374) 240x180
+[20260802.152719.866-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152719.866-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.866-2016-D] GetRealWindowRect: 0xb0080: rect (505,299) 686x493
+[20260802.152719.866-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=505,ay=299,lx=505,ly=299
+[20260802.152719.866-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.866-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=40,n=1,mode=s,dt=46943,acq=14046,wak=36,mrq=9,drq=25,upd=841,enu=13,rem=14,dmg=425,snd=53,tot=1385,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=25
+[20260802.152719.913-2016-D] GetRealWindowRect: 0xb0080: rect (511,302) 686x493
+[20260802.152719.913-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=511,y=302,w=686,h=493,ovr=0
+[20260802.152719.913-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.913-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.913-2016-D] GetRealWindowRect: 0x601ce: rect (592,377) 240x180
+[20260802.152719.913-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.929-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152719.929-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152719.960-2016-D] GetRealWindowRect: 0xb0080: rect (511,302) 686x493
+[20260802.152719.960-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=511,ay=302,lx=511,ly=302
+[20260802.152719.960-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.960-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=41,n=1,mode=s,dt=62481,acq=61731,wak=33,mrq=8,drq=47,upd=1244,enu=16,rem=46,dmg=34304,snd=51,tot=35697,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=38
+[20260802.152719.991-2016-D] GetRealWindowRect: 0xb0080: rect (517,305) 686x493
+[20260802.152719.991-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=517,y=305,w=686,h=493,ovr=0
+[20260802.152719.991-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152719.991-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152719.991-2016-D] GetRealWindowRect: 0x601ce: rect (598,380) 240x180
+[20260802.152719.991-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152720.023-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152720.023-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152720.038-2016-D] GetRealWindowRect: 0xb0080: rect (517,305) 686x493
+[20260802.152720.038-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=517,ay=305,lx=517,ly=305
+[20260802.152720.038-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152720.038-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=42,n=1,mode=s,dt=93654,acq=59050,wak=13,mrq=9,drq=24,upd=17363,enu=16,rem=869,dmg=17095,snd=51,tot=35438,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=22
+[20260802.152720.070-2016-D] GetRealWindowRect: 0xb0080: rect (523,308) 686x493
+[20260802.152720.070-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=523,y=308,w=686,h=493,ovr=0
+[20260802.152720.070-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152720.070-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152720.070-2016-D] GetRealWindowRect: 0x601ce: rect (604,383) 240x180
+[20260802.152720.070-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152720.085-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152720.085-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152720.116-2016-D] GetRealWindowRect: 0xb0080: rect (523,308) 686x493
+[20260802.152720.116-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=523,ay=308,lx=523,ly=308
+[20260802.152720.116-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152720.116-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152720.116-2016-D] GetRealWindowRect: 0xb0080: rect (523,308) 686x493
+[20260802.152720.116-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=523,ay=308,lx=523,ly=308
+[20260802.152720.116-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=43,n=1,mode=s,dt=62535,acq=45070,wak=56,mrq=15,drq=35,upd=17726,enu=22,rem=1550,dmg=36136,snd=95,tot=55568,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=4,skip=0,log=22
+[20260802.152720.148-2016-D] GetRealWindowRect: 0xb0080: rect (529,311) 686x493
+[20260802.152720.148-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=529,y=311,w=686,h=493,ovr=0
+[20260802.152720.148-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152720.148-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152720.148-2016-D] GetRealWindowRect: 0x601ce: rect (610,386) 240x180
+[20260802.152720.148-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152720.163-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152720.163-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152720.195-2016-D] GetRealWindowRect: 0xb0080: rect (529,311) 686x493
+[20260802.152720.195-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=529,ay=311,lx=529,ly=311
+[20260802.152720.195-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152720.195-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=44,n=1,mode=s,dt=78555,acq=42009,wak=48,mrq=10,drq=30,upd=18484,enu=26,rem=93,dmg=34815,snd=116,tot=53591,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=54
+[20260802.152720.210-2016-D] GetRealWindowRect: 0xb0080: rect (535,314) 686x493
+[20260802.152720.210-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=535,y=314,w=686,h=493,ovr=0
+[20260802.152720.210-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152720.210-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152720.210-2016-D] GetRealWindowRect: 0x601ce: rect (616,389) 240x180
+[20260802.152720.210-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152720.226-2016-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0xb0080
+[20260802.152720.226-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152720.242-2016-D] GetRealWindowRect: 0xb0080: rect (535,314) 686x493
+[20260802.152720.242-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=535,ay=314,lx=535,ly=314
+[20260802.152720.242-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152720.242-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=45,n=1,mode=s,dt=62392,acq=27025,wak=41,mrq=37,drq=27,upd=2295,enu=28,rem=123,dmg=18489,snd=138,tot=21126,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=2,skip=0,log=67
+[20260802.152720.273-2016-D] GetRealWindowRect: 0xb0080: rect (541,317) 686x493
+[20260802.152720.273-2016-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0xb0080,x=541,y=317,w=686,h=493,ovr=0
+[20260802.152720.273-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152720.273-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152720.273-2016-D] GetRealWindowRect: 0x601ce: rect (622,392) 240x180
+[20260802.152720.273-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=1
+[20260802.152720.288-2016-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0xb0080
+[20260802.152720.288-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152720.320-2016-D] GetRealWindowRect: 0xb0080: rect (541,317) 686x493
+[20260802.152720.320-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=541,ay=317,lx=541,ly=317
+[20260802.152720.320-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152720.320-2016-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x601ce,owner=0xb0080,rx=81,ry=75,w=240,h=180
+[20260802.152720.320-2016-D] GetRealWindowRect: 0xb0080: rect (541,317) 686x493
+[20260802.152720.320-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=81,ry=75,w=240,h=180,ax=541,ay=317,lx=541,ly=317
+[20260802.152720.320-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152720.320-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=46,n=1,mode=s,dt=62572,acq=43548,wak=33,mrq=8,drq=25,upd=1347,enu=16,rem=45,dmg=33491,snd=113,tot=35052,dr=1,mr=0,mrmax=0,area=404064,win=3,iwn=2,wev=2,sends=4,skip=0,log=68
+[20260802.152720.663-2016-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+[20260802.152723.491-2016-D] DumpWindows: ### Window dump:
+0x602ce: (  1443,   545)  626x 453 V   ovr=0 [QubesChromeReproMain] 'chromerepro - main window' {C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_WINDOWEDGE 
+0xb0080: (   541,   317)  686x 493 V   ovr=0 [WindowsForms10.Window.8.app.0.3fd0c2d_r9_ad1] 'JOINT-OWNER' {C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_CLIPCHILDREN WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_APPWINDOW WS_EX_CONTROLPARENT WS_EX_WINDOWEDGE 
+0x601ce: (   622,   392)  240x 180 V   ovr=1 [WindowsForms10.Window.8.app.0.3fd0c2d_r9_ad1] '' {C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_CLIPCHILDREN WS_MAXIMIZEBOX WS_EX_CONTROLPARENT 
+[20260802.152723.491-2016-D] GetRealWindowRect: 0x602ce: rect (1443,545) 626x453
+[20260802.152723.491-2016-D] GetRealWindowRect: 0xb0080: rect (541,317) 686x493
+[20260802.152723.491-2016-D] GetRealWindowRect: 0x601ce: rect (622,392) 240x180
+[20260802.152723.491-2016-D] GetRealWindowRect: 0x101ae: rect (0,0) 3440x1440
+[20260802.152723.491-2016-D] GetRealWindowRect: 0x10198: rect (0,0) 3440x1400
+[20260802.152723.507-2016-D] GetRealWindowRect: 0xb02c0: rect (0,0) 16x16
+[20260802.152723.523-2016-D] GetRealWindowRect: 0x601ce: rect (622,392) 240x180
+[20260802.152723.523-2016-D] GetRealWindowRect: 0xb02c0: rect (0,0) 16x16
+[20260802.152723.523-2016-D] RemoveWindow: 0x601ce
+[20260802.152723.523-2016-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0xb0080,n=0
+[20260802.152723.523-2016-D] GetRealWindowRect: 0xb0080: rect (541,317) 686x493
+[20260802.152723.523-2016-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0xb0080,rx=0,ry=0,w=686,h=493,ax=541,ay=317,lx=541,ly=317
+[20260802.152723.523-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152723.523-2016-D] ProcessNewFrame: QGADRAG,ev=settle,hwnd=0xb0080
+[20260802.152723.523-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=47,n=1,mode=s,dt=3236848,acq=173701,wak=18505,mrq=9,drq=28,upd=1807,enu=28054,rem=586,dmg=71,snd=69,tot=30634,dr=1,mr=0,mrmax=0,area=43200,win=2,iwn=9,wev=4,sends=2,skip=0,log=34
+[20260802.152723.523-2016-D] GetRealWindowRect: 0xb0080: rect (541,317) 686x493
+[20260802.152723.523-2016-D] UpdateWindowData: 0xb0080 IsVisible changed to 0
+[20260802.152723.523-2016-D] UpdateWindowData: 0xb0080 no longer eligible, marking for removal
+[20260802.152723.523-2016-I] PwDetachWindow: 0xb0080: per-window buffer 686x493 detached
+[20260802.152723.523-2016-D] RemoveWindow: 0xb0080
+[20260802.152723.523-2016-I] SendWindowUnmap: Unmapping window 0xb0080
+[20260802.152723.523-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152723.523-2016-D] SendWindowDestroy: 0xb0080
+[20260802.152723.523-2016-I] SendWindowDestroy: QGAPROTO,msg=DESTROY,hwnd=0xb0080
+[20260802.152723.523-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152723.523-2016-D] HandleDestroy: 0xb0080
+[20260802.152723.538-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=48,n=1,mode=s,dt=13329,acq=10896,wak=39,mrq=18,drq=24,upd=1302,enu=18,rem=206,dmg=6,snd=0,tot=1572,dr=1,mr=0,mrmax=0,area=398580,win=1,iwn=1,wev=1,sends=0,skip=0,log=23
+[20260802.152723.538-2016-D] XcGnttabRevokeForeignAccess: Address: 0000025ADDB20000
+[20260802.152723.538-2016-D] GetRealWindowRect: 0xb0080: rect (541,317) 686x493
+[20260802.152723.554-2016-I] PerfEmitFrame: QGAPERF,v=2,seq=49,n=1,mode=s,dt=19822,acq=19436,wak=16,mrq=22,drq=93,upd=16,enu=1014,rem=13,dmg=9,snd=0,tot=1124,dr=1,mr=0,mrmax=0,area=748800,win=1,iwn=1,wev=1,sends=0,skip=0,log=68
+[20260802.152723.570-1876-D] GetRealWindowRect: 0x602ce: rect (1443,545) 626x453
+[20260802.152723.570-1876-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x602ce,rx=0,ry=0,w=626,h=453,ax=1443,ay=545,lx=1443,ly=545
+[20260802.152723.570-1876-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152723.601-2016-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+[20260802.152723.601-2016-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+[20260802.152733.570-2016-D] DumpWindows: ### Window dump:
+0x602ce: (  1443,   545)  626x 453 V   ovr=0 [QubesChromeReproMain] 'chromerepro - main window' {C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe} parent=0x10010 WS_VISIBLE WS_CLIPSIBLINGS WS_BORDER WS_DLGFRAME WS_SYSMENU WS_THICKFRAME WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_EX_WINDOWEDGE 
+[20260802.152733.570-2016-D] GetRealWindowRect: 0x602ce: rect (1443,545) 626x453
+[20260802.152733.570-2016-I] AddAllWindows: foreground -> 0x602ce, re-mapping to raise it in dom0
+[20260802.152733.570-2016-I] SendWindowMap: Mapping window 0x602ce
+[20260802.152733.570-2016-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x602ce,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000100,vis=1,w=626,h=453
+[20260802.152733.570-2016-D] XcEvtchnNotify: LocalPort: 11
+[20260802.152733.570-2016-D] GetRealWindowRect: 0x101ae: rect (0,0) 3440x1440
+[20260802.152733.570-2016-D] GetRealWindowRect: 0x10198: rect (0,0) 3440x1400
