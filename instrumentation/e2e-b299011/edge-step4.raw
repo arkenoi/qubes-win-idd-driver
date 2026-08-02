@@ -1,0 +1,16 @@
+Microsoft Windows [Version 10.0.19045.2965]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& \"$env:USERPROFILE\Documents\QubesIncoming\win-idd-mgmt\edge-step4-close.ps1\""
+RESULT=T_CLOSE_BEGIN:2026-08-02T15:43:31.2314564+00:00
+RESULT=EDGE_PROCS_BEFORE:8
+RESULT=CLOSING:0x501bc|pid=4688
+RESULT=EDGE_PROCS_AFTER_WMCLOSE:0
+RESULT=EDGE_PROCS_FINAL:0
+RESULT=T_CLOSE_END:2026-08-02T15:43:54.1536117+00:00
+RESULT=LOG:gui-agent-20260802-153022-1976.log|len=260304
+RESULT=LOGCOUNT:16
+RESULT=PID:1976|start=2026-08-02T15:30:22.6676598+00:00
+RESULT=DONE
+
+C:\Windows\system32>
