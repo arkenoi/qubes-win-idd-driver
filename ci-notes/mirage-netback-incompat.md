@@ -430,3 +430,49 @@ a hard kill *and* after a netvm detach, independent of where the hang is. To act
    `Enum\XENVIF` populated, no Xen network adapter. If the guest **still** burns 2 cores with
    xennet disabled, the hang is not in the xenvif frontend at all and this analysis is wrong
    — go look at xenbus/xenfilt instead.
+
+---
+
+## MEASURED STATE OF THE DEADLOCK (2026-08-02, xenstore captured during the hang)
+
+mirage-firewall **0.9.5** (verified live: 4320560 B / sha256 `2bfb4969…`), our QWT `b299011`,
+clean install. Guest domid 446, its stubdomain 447, netvm `fw-net` domid 427.
+
+```
+backend/vif/447/0  type = "vif"        state = "4"   <- stubdom vif: CONNECTED
+backend/vif/446/0  type = "vif_ioemu"  state = "2"   <- guest PV vif: stuck at InitWait
+/local/domain/446/device/vif/0/state = "5"           <- Windows frontend: CLOSING
+both: hotplug-status = ""   feature-sg=1 rx-copy=1 rx-notify=1 gso-tcpv4=0 rx-flip=0 smart-poll=0
+```
+
+Measured, not inferred:
+1. mirage DOES see and thread both vifs (0.9.5's PR #219 fix works): the log shows
+   `add client vif {domid=443}` → `Client 443:0 ready`, then `add client vif {domid=442}`
+   which never becomes ready and never errors.
+2. The guest's vif is **`type = "vif_ioemu"`** — a different device class from the
+   stubdom's plain `vif`. This is why PR #219 did not help us: it fixed the two-thread
+   deadlock, not this path.
+3. mirage wrote `InitWait` (2) on the guest backend, then blocked in
+   `read_frontend_configuration` waiting for frontend `Initialised|Connected`.
+4. The Windows frontend never reached `Initialised`; after xenvif's 120 s `TotalTimeout`
+   (`frontend.c:1350`) it moved to `Closing` (5).
+5. **mirage never notices the close.** `lib/xenstore.ml` treats `Closing`/`Closed` as
+   "keep waiting" — carrying the project's own comment `(* XXX: stop waiting? *)` — so the
+   backend stays at `InitWait` forever and the frontend can never finish closing.
+6. xenvif meanwhile busy-spins (`KeStallExecutionProcessor(1000)` at DISPATCH_LEVEL holding
+   `Frontend->Lock`), which is what turns a stalled handshake into a wedged qube:
+   ~1.93-2.0 cores, qrexec dead, ACPI unserviceable, independent of vCPU count.
+
+### Two upstream defects, both now evidenced
+- **qubes-mirage-firewall**: backend must abort/tear down when the frontend goes
+  `Closing`/`Closed` instead of waiting forever (their own XXX). Additionally the
+  `vif_ioemu` device of an HVM never completes its handshake at all — the primary bug.
+- **Xen Project win-pv-drivers (xenvif)**: unbounded busy-wait at DISPATCH_LEVEL under a
+  lock. Any backend that fails to advance wedges the whole guest rather than failing the
+  device. Robustness bug independent of mirage.
+
+### Consequence for QWT-side workarounds
+No registry knob addresses this: the frontend is behaving per spec and the backend never
+completes. The only guest-side lever that avoids the wedge is not loading the PV network
+driver (emulated RTL8139 instead) — verified working through mirage (ping + HTTP 200), but
+a 100 Mbit QEMU-emulated path, explicitly NOT production-grade per the user.
