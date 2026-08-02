@@ -986,3 +986,55 @@ shutdown** (halted in <10 s — proving the guest CAN shut down cleanly when hea
    clean-install requirement resolves anyway.
 4. Cost is not display-side: the burn happens with qrexec dead and no gui-agent windows at
    all, and the wedge census showed no respawn loop.
+
+## 2026-08-02 (session 7) — CLEAN INSTALL of the fixed package: gates 0 and 1 PASS
+
+Wiped-disk unattended install of `installer.msi f590c878…` (agent `a459f0e` = perwindow +
+workarea 0x5 fix `2c5dad2` + drag suppression `d64bca6`). NOT an overlay: `gui-agent.exe`
+= `663d7e9b…` (CI manifest), **0 `.orig` files**, `QWT_INSTALL_OK`, MSI status 0, ARP
+"Qubes Windows Tools v4.2.2.0", testsigning Yes, services Running.
+
+### Workarea fix: works, and immediately exposed a defect it created
+- `WorkAreaCreateListener … 0x5` count: **0** (was 3/agent-start on every build since
+  6d46132). Root cause was `OpenInputDesktop` lacking `DESKTOP_CREATEWINDOW`.
+- The drift check earns its keep on the very first boot:
+  `work area drifted: OS has (0,0)-(3440,1400), ours was (5,56)-(3435,1435); re-asserting`
+  — exactly the Explorer overwrite that beat the old build.
+- **NEW DEFECT (found by measuring, not reading): re-assert ping-pong.** The now-live
+  listener re-asserted on every broadcast, and Explorer answers each of our
+  SPI_SETWORKAREA with its own: **1018 applies in 84.9 s (~12/s)**, 293 in the last 20 s,
+  each an EnumWindows + cross-process SetWindowPlacement sweep **on the hook thread**.
+  Every one issued a real SPI_SETWORKAREA, i.e. the OS value differed each time →
+  Explorer's disagreement is PERSISTENT, not transient.
+- Fix v1 (`425c439`, sliding-window debounce) was **rejected in review**: a suppressed
+  call still stamped the deadline, so any sustained external broadcast train would starve
+  re-asserts *including the drift-check backstop*. Reworked in `b299011`: CAS gate that
+  leaves the deadline untouched, applied ONLY to WM_SETTINGCHANGE, plus a
+  5-strikes→30 s backoff for a fight we cannot win. Acceptance is a 120 s idle
+  measurement, not a reading.
+
+### Gate 1 (both previously BLOCKED by the wedge) — PASS
+- **Win10 regression for the five win11-line fixes**: occlusion 76/76 damage to the front
+  window, 0 to the occluded one (dom0 pixel check: 0 cover-coloured px in the overlap);
+  menu SYNTHesized into its owner, never announced; drag 526 records "all invariants
+  hold"; announced geometry == DWM extended frame bounds exactly; chromerepro
+  GUEST-COUNT=5 MAPPED-OF-OURS=1; 0 shell-overlay rejections of legitimate windows,
+  0 sub-floor announcements. **Drag-fix engagement proven**: `QGADRAG ev=suppress 153,
+  refresh 59, settle 2` during the drag, `ev=maskpush` only OUTSIDE it (the menu-over-drag
+  criterion).
+- **Edge ULW first-run**: agent pid stable, 0 vchan/daemon-kill signatures, ULW window
+  slice-fed via the shipped fallback while the normal frame took the PrintWindow path,
+  window renders real content, clean unmap on close.
+- Two limitations reported rather than papered over: `check-occlusion.py`'s screen-slice
+  criterion is INVALID for per-window-captured windows and needs a rewrite before its
+  result counts again (ACCEPTANCE-PROTOCOL.md still lists it as proven); Edge's "true
+  first run" is qualified (Windows pre-initialised the profile during install).
+
+### MSI REINSTALL over a healthy install → starvation (do not use this deploy path)
+Deploying `b299011` via `msiexec REINSTALL=ALL REINSTALLMODE=vamus
+ADDLOCAL=…,PvDriversNetwork` dropped qrexec mid-install (expected: it replaces the qrexec
+agent) and, after a clean reboot, left the guest burning **2.5-2.8 cores with qrexec dead**
+— the storm signature. Since the same MSI content installed from wiped disk an hour
+earlier was healthy, the prime suspect is the **PV-driver reinstall's PnP churn**, not the
+agent change; but with qrexec dead the guest's own logs were unreadable, so this is
+UNATTRIBUTED. Discriminator now running: clean wiped-disk install of the same package.

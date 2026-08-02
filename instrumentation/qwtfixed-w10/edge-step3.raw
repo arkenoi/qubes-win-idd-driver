@@ -1,0 +1,353 @@
+Microsoft Windows [Version 10.0.19045.2965]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& \"$env:USERPROFILE\Documents\QubesIncoming\win-idd-mgmt\edge-step3.ps1\""
+RESULT=LOG:gui-agent-20260802-030352-6480.log|len=2623|mtime=2026-08-02T03:03:53.0664999+00:00
+RESULT=PID:6480
+RESULT=REG:LogLevel=3
+RESULT=REG:LogDir=C:\Program Files\Qubes Tools\log
+RESULT=REG:ProtoTrace=
+REGDUMP:
+REGDUMP:
+REGDUMP:SeamlessMode     : 1
+REGDUMP:DisableCursor    : 0
+REGDUMP:LogDir           : C:\Program Files\Qubes Tools\log
+REGDUMP:LogLevel         : 3
+REGDUMP:LogRetention     : 604800
+REGDUMP:LogSafeFlush     : 0
+REGDUMP:InstallDir       : C:\Program Files\Qubes Tools\
+REGDUMP:GuiAgentPath     : C:\Program Files\Qubes Tools\bin\gui-agent.exe
+REGDUMP:Autostart        : {C:\Program Files\Qubes Tools\bin\network-setup.exe}
+REGDUMP:FullscreenWidth  : 3440
+REGDUMP:FullscreenHeight : 1440
+REGDUMP:PSPath           : Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Invisible Things Lab\Qubes Tools
+REGDUMP:PSParentPath     : Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Invisible Things Lab
+REGDUMP:PSChildName      : Qubes Tools
+REGDUMP:PSDrive          : HKLM
+REGDUMP:PSProvider       : Microsoft.PowerShell.Core\Registry
+REGDUMP:
+REGDUMP:
+REGDUMP:
+REGDUMP:
+LOGSTART
+L:[20260802.030352.363-6104-I] LogInit: Log started, module name: gui-agent
+L:[20260802.030352.363-6104-I] LogInit: System uptime: 1489.812 seconds
+L:[20260802.030352.363-6104-I] LogInit: Running as user: SYSTEM, process ID: 6480
+L:[20260802.030352.363-6104-I] LogInit: Module version: 4.2.2.0
+L:[20260802.030352.363-6104-I] LogInit: Session: 1
+L:[20260802.030352.363-6104-I] LogInit: Command line: "C:\Program Files\Qubes Tools\bin\gui-agent.exe"
+L:[20260802.030352.363-6104-I] PerfInit: QGAPROTO ?fQGAPROTO %s
+L:[20260802.030352.426-6104-I] PerfInit: QGAPERF on: freq=62500000 everyN=1 qpc_cost_ns=5105 default=1 (sink 931178418572966)
+L:[20260802.030352.426-6104-I] PerfInit: QGAPERF-HEADER v=2 fields: seq,n,mode,dt,acq,wak,mrq,drq,upd,enu,rem,dmg,snd,tot,dr,mr,mrmax,area,win,iwn,wev,sends,skip,log (times in microseconds)
+L:[20260802.030352.426-6104-I] XcOpen: XenIface handle: 0000000000000220
+L:[20260802.030352.426-6104-I] PwInit: per-window capture ENABLED (daemon version gate applies at attach)
+L:[20260802.030352.504-6104-I] Init: Fullscreen desktop name: win-idd-test
+L:[20260802.030352.504-6104-I] XcOpen: XenIface handle: 000000000000026C
+L:[20260802.030352.504-6104-I] WatchForEvents: Awaiting for a vchan client, write buffer size: 65536
+L:[20260802.030352.504-6104-I] WatchForEvents: A vchan client has connected
+L:[20260802.030352.504-6104-W] VchanReceiveBuffer: (000001D8C87E6200, version): no data, blocking read
+L:[20260802.030352.519-6104-I] HandleVersion: gui daemon version: 0x10008
+L:[20260802.030352.519-6104-I] HandleXconf: host resolution: 5120x1440, mem: 28801, depth: 24
+L:[20260802.030352.519-6104-I] SetVideoModeInternal: New resolution: 3440 x 1440
+L:[20260802.030352.519-6104-I] AttachToInputDesktop: QGADESK,tid=6104,from=Default,to=Default,oldh=0x000000000000008C,newh=0x0000000000000288
+L:[20260802.030352.519-6104-I] AttachToInputDesktop: QGADESK,tid=6104,SetThreadDesktop=ok
+L:[20260802.030352.519-6104-I] AttachToInputDesktop: QGADESK,tid=6104,from=Default,to=Default,oldh=0x0000000000000288,newh=0x0000000000000238
+L:[20260802.030352.519-6104-I] AttachToInputDesktop: QGADESK,tid=6104,SetThreadDesktop=ok
+L:[20260802.030352.519-6104-I] XcOpen: XenIface handle: 00000000000002A0
+L:[20260802.030352.566-6104-I] SendWindowUnmap: Unmapping window 0x0
+L:[20260802.030352.628-6104-I] SetSeamlessMode: Seamless mode changed to 1
+L:[20260802.030352.628-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=1,n=1,mode=s,dt=0,acq=526,wak=6643,mrq=18,drq=86,upd=22,enu=7352,rem=11,dmg=5,snd=0,tot=7495,dr=1,mr=0,mrmax=0,area=4953600,win=0,iwn=2,wev=0,sends=0,skip=0,log=0
+L:[20260802.030353.066-4976-I] ResolutionChangeThread: resolution change: 5120x1440
+L:[20260802.030420.894-6104-I] PwAttachWindow: 0x803ee: per-window buffer 2566x1022 (2561 pages) attached
+L:[20260802.030420.894-6104-I] SendWindowMap: Mapping window 0x803ee
+L:[20260802.030420.910-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=2,n=1,mode=s,dt=28260130,acq=946584,wak=106153,mrq=15,drq=33,upd=155,enu=184198,rem=48,dmg=12,snd=0,tot=184448,dr=1,mr=0,mrmax=0,area=2805750,win=1,iwn=12,wev=8,sends=0,skip=0,log=87
+L:[20260802.030420.941-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=3,n=1,mode=s,dt=41672,acq=22950,wak=17,mrq=8,drq=28,upd=11,enu=11,rem=11,dmg=7,snd=0,tot=98,dr=3,mr=0,mrmax=0,area=3800383,win=1,iwn=0,wev=0,sends=0,skip=0,log=78
+L:[20260802.030420.988-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=4,n=1,mode=s,dt=50400,acq=50097,wak=38,mrq=11,drq=27,upd=24659,enu=12,rem=13,dmg=8,snd=0,tot=24730,dr=1,mr=0,mrmax=0,area=2884200,win=1,iwn=1,wev=1,sends=0,skip=0,log=69
+L:[20260802.030421.050-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=5,n=1,mode=s,dt=59430,acq=11565,wak=34,mrq=7,drq=30,upd=5,enu=5,rem=5,dmg=6,snd=0,tot=70,dr=2,mr=0,mrmax=0,area=59398,win=1,iwn=0,wev=0,sends=0,skip=1,log=68
+L:[20260802.030421.425-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=6,n=1,mode=s,dt=374580,acq=374287,wak=32,mrq=10,drq=28,upd=6,enu=5,rem=5,dmg=7,snd=0,tot=87,dr=1,mr=0,mrmax=0,area=18,win=1,iwn=0,wev=0,sends=0,skip=0,log=73
+L:[20260802.030421.988-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=7,n=1,mode=s,dt=563641,acq=563180,wak=192,mrq=9,drq=28,upd=8,enu=7,rem=7,dmg=11,snd=0,tot=129,dr=1,mr=0,mrmax=0,area=18,win=1,iwn=0,wev=0,sends=0,skip=0,log=64
+L:[20260802.030422.519-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=8,n=1,mode=s,dt=530809,acq=530067,wak=85,mrq=20,drq=45,upd=8,enu=6,rem=7,dmg=10,snd=0,tot=124,dr=1,mr=0,mrmax=0,area=18,win=1,iwn=0,wev=0,sends=0,skip=0,log=247
+L:[20260802.030423.050-6104-I] AddAllWindows: foreground -> 0x803ee, re-mapping to raise it in dom0
+L:[20260802.030423.050-6104-I] SendWindowMap: Mapping window 0x803ee
+L:[20260802.030423.050-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=9,n=1,mode=s,dt=531661,acq=531163,wak=69,mrq=17,drq=43,upd=469,enu=10502,rem=8,dmg=14,snd=63,tot=11114,dr=1,mr=0,mrmax=0,area=18,win=1,iwn=3,wev=0,sends=2,skip=0,log=89
+L:[20260802.030423.597-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=10,n=1,mode=s,dt=546894,acq=535215,wak=57,mrq=31,drq=52,upd=9,enu=7,rem=7,dmg=11,snd=0,tot=91,dr=1,mr=0,mrmax=0,area=18,win=1,iwn=0,wev=0,sends=0,skip=0,log=184
+L:[20260802.030424.113-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=11,n=1,mode=s,dt=515324,acq=514888,wak=41,mrq=17,drq=32,upd=5,enu=5,rem=6,dmg=7,snd=0,tot=104,dr=1,mr=0,mrmax=0,area=18,win=1,iwn=0,wev=0,sends=0,skip=0,log=92
+L:[20260802.030424.644-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=12,n=1,mode=s,dt=531838,acq=531467,wak=43,mrq=14,drq=37,upd=12,enu=11,rem=9,dmg=13,snd=0,tot=238,dr=1,mr=0,mrmax=0,area=18,win=1,iwn=0,wev=0,sends=0,skip=0,log=68
+L:[20260802.030425.160-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=13,n=1,mode=s,dt=515327,acq=514335,wak=26,mrq=142,drq=44,upd=457,enu=10059,rem=7,dmg=14,snd=0,tot=10601,dr=1,mr=0,mrmax=0,area=18,win=1,iwn=3,wev=0,sends=0,skip=0,log=87
+L:[20260802.030425.707-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=14,n=1,mode=s,dt=547206,acq=536162,wak=71,mrq=13,drq=33,upd=9,enu=5,rem=5,dmg=9,snd=0,tot=72,dr=1,mr=0,mrmax=0,area=18,win=1,iwn=0,wev=0,sends=0,skip=0,log=96
+L:[20260802.030426.222-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=15,n=1,mode=s,dt=516127,acq=515660,wak=115,mrq=25,drq=46,upd=9,enu=6,rem=7,dmg=11,snd=0,tot=130,dr=1,mr=0,mrmax=0,area=18,win=1,iwn=0,wev=0,sends=0,skip=0,log=79
+L:[20260802.030432.582-6104-I] PwDetachWindow: 0x803ee: per-window buffer 2566x1022 detached
+L:[20260802.030432.582-6104-I] SendWindowUnmap: Unmapping window 0x803ee
+L:[20260802.030432.582-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=16,n=1,mode=s,dt=6363804,acq=335240,wak=22,mrq=11,drq=28,upd=1583,enu=10554,rem=404,dmg=6,snd=0,tot=12586,dr=1,mr=0,mrmax=0,area=2805750,win=0,iwn=4,wev=9,sends=0,skip=0,log=89
+L:[20260802.030432.707-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=17,n=1,mode=s,dt=119349,acq=119051,wak=38,mrq=12,drq=29,upd=11,enu=6,rem=6,dmg=6,snd=0,tot=138,dr=1,mr=0,mrmax=0,area=7310,win=0,iwn=0,wev=0,sends=0,skip=0,log=65
+L:[20260802.031109.622-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031110.193-6104-I] PwAttachWindow: 0x3041c: per-window buffer 3440x1398 (4697 pages) attached (slice-fed)
+L:[20260802.031110.193-6104-I] SendWindowMap: Mapping window 0x3041c
+L:[20260802.031110.208-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=18,n=1,mode=s,dt=398468460,acq=363531,wak=2266,mrq=12,drq=31,upd=980,enu=126346,rem=185,dmg=9530,snd=121,tot=137220,dr=1,mr=0,mrmax=0,area=4809120,win=1,iwn=31,wev=28,sends=2,skip=8,log=94
+L:[20260802.031110.343-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=19,n=1,mode=s,dt=143159,acq=130610,wak=54,mrq=15,drq=300,upd=31,enu=6965,rem=106,dmg=225,snd=46,tot=7419,dr=1,mr=0,mrmax=0,area=7310,win=1,iwn=3,wev=3,sends=2,skip=0,log=74
+L:[20260802.031110.421-6104-I] PwDetachWindow: 0x3041c: per-window buffer 3440x1398 detached (slice-fed)
+L:[20260802.031110.437-6104-I] PwAttachWindow: 0x3041c: per-window buffer 1705x1380 (2298 pages) attached (slice-fed)
+L:[20260802.031110.452-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=20,n=1,mode=s,dt=93697,acq=87713,wak=5400,mrq=10,drq=30,upd=26010,enu=11,rem=11,dmg=8186,snd=74,tot=34331,dr=1,mr=0,mrmax=0,area=4809120,win=1,iwn=2,wev=2,sends=4,skip=0,log=88
+L:[20260802.031110.482-6104-I] PwDetachWindow: 0x3041c: per-window buffer 1705x1380 detached (slice-fed)
+L:[20260802.031110.550-6104-I] PwAttachWindow: 0x3041c: per-window buffer 3440x1400 (4704 pages) attached (slice-fed)
+L:[20260802.031110.569-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=21,n=1,mode=s,dt=112043,acq=7974,wak=71420,mrq=14,drq=35,upd=85756,enu=83,rem=12,dmg=17142,snd=71,tot=103101,dr=1,mr=0,mrmax=0,area=4816000,win=1,iwn=1,wev=2,sends=2,skip=0,log=71
+L:[20260802.031110.588-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=22,n=1,mode=s,dt=34381,acq=15349,wak=32,mrq=9,drq=29,upd=6,enu=5,rem=5,dmg=2991,snd=44,tot=3124,dr=1,mr=0,mrmax=0,area=4953600,win=1,iwn=0,wev=0,sends=2,skip=0,log=1542
+L:[20260802.031110.676-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=23,n=1,mode=s,dt=76178,acq=72796,wak=30,mrq=10,drq=29,upd=1494,enu=10165,rem=2,dmg=3501,snd=43,tot=15265,dr=1,mr=0,mrmax=0,area=4953600,win=1,iwn=3,wev=0,sends=2,skip=0,log=58
+L:[20260802.031110.731-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=24,n=1,mode=s,dt=69901,acq=54326,wak=21,mrq=10,drq=35,upd=9,enu=6,rem=6,dmg=192,snd=92,tot=351,dr=1,mr=0,mrmax=0,area=17028,win=1,iwn=0,wev=0,sends=2,skip=0,log=36
+L:[20260802.031111.150-6104-I] PwAttachWindow: 0x30430: per-window buffer 3440x1400 (4704 pages) attached
+L:[20260802.031111.150-6104-I] SendWindowMap: Mapping window 0x30430
+L:[20260802.031111.196-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=25,n=1,mode=s,dt=419809,acq=231082,wak=188162,mrq=16,drq=38,upd=19676,enu=277752,rem=19,dmg=25853,snd=75,tot=323401,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=4,sends=2,skip=0,log=53
+L:[20260802.031111.315-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=26,n=1,mode=s,dt=160869,acq=115402,wak=21,mrq=12,drq=34,upd=11,enu=11,rem=12,dmg=3251,snd=88,tot=3424,dr=1,mr=0,mrmax=0,area=4922640,win=2,iwn=0,wev=0,sends=2,skip=0,log=86
+L:[20260802.031111.344-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=27,n=1,mode=s,dt=23116,acq=18682,wak=755,mrq=11,drq=35,upd=7,enu=5,rem=6,dmg=3966,snd=60,tot=4136,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=76
+L:[20260802.031111.474-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=28,n=1,mode=s,dt=139611,acq=123261,wak=19,mrq=4,drq=16,upd=6,enu=4,rem=5,dmg=79,snd=0,tot=157,dr=1,mr=0,mrmax=0,area=137600,win=2,iwn=0,wev=0,sends=0,skip=0,log=7946
+L:[20260802.031111.510-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=29,n=1,mode=s,dt=35455,acq=34520,wak=651,mrq=10,drq=27,upd=602,enu=10,rem=10,dmg=75,snd=0,tot=727,dr=1,mr=0,mrmax=0,area=137600,win=2,iwn=1,wev=1,sends=0,skip=0,log=30
+L:[20260802.031111.535-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=30,n=1,mode=s,dt=22558,acq=22288,wak=12,mrq=5,drq=19,upd=2,enu=2,rem=3,dmg=2415,snd=29,tot=2496,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=47
+L:[20260802.031111.601-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=31,n=1,mode=s,dt=63124,acq=60481,wak=15,mrq=4,drq=18,upd=454,enu=6,rem=6,dmg=5556,snd=47,tot=6091,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=34
+L:[20260802.031111.701-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=32,n=1,mode=s,dt=100150,acq=93690,wak=23,mrq=11,drq=34,upd=2,enu=2,rem=4,dmg=5660,snd=45,tot=5921,dr=2,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=4,skip=0,log=49
+L:[20260802.031111.760-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=33,n=1,mode=s,dt=59236,acq=53069,wak=24,mrq=14,drq=40,upd=8,enu=7,rem=7,dmg=5118,snd=45,tot=5274,dr=1,mr=0,mrmax=0,area=4788480,win=2,iwn=0,wev=0,sends=2,skip=0,log=49
+L:[20260802.031111.805-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=34,n=1,mode=s,dt=47489,acq=37024,wak=14,mrq=16,drq=43,upd=3501,enu=14,rem=15,dmg=2769,snd=35,tot=6354,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=53
+L:[20260802.031111.833-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=35,n=1,mode=s,dt=27188,acq=23792,wak=305,mrq=12,drq=31,upd=585,enu=8,rem=7,dmg=3673,snd=55,tot=4365,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=52
+L:[20260802.031111.939-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=36,n=1,mode=s,dt=106846,acq=62278,wak=40555,mrq=11,drq=32,upd=100018,enu=428,rem=5,dmg=2473,snd=35,tot=102979,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=4,wev=4,sends=2,skip=0,log=71
+L:[20260802.031111.971-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=37,n=1,mode=s,dt=29581,acq=26081,wak=91,mrq=10,drq=31,upd=8,enu=7,rem=8,dmg=5564,snd=31,tot=5673,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=44
+L:[20260802.031112.025-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=38,n=1,mode=s,dt=55686,acq=24157,wak=25656,mrq=12,drq=31,upd=50391,enu=6,rem=6,dmg=2744,snd=30,tot=53195,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=44
+L:[20260802.031112.052-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=39,n=1,mode=s,dt=17098,acq=12015,wak=1387,mrq=14,drq=33,upd=8,enu=7,rem=8,dmg=12893,snd=61,tot=13356,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=53
+L:[20260802.031112.071-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=40,n=1,mode=s,dt=21304,acq=6594,wak=23,mrq=14,drq=38,upd=5736,enu=16,rem=42,dmg=10882,snd=57,tot=16940,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=74
+L:[20260802.031112.142-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=41,n=1,mode=s,dt=77719,acq=66155,wak=21,mrq=19,drq=37,upd=49625,enu=27,rem=30,dmg=3838,snd=37,tot=53612,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=4,sends=2,skip=0,log=107
+L:[20260802.031112.168-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=42,n=1,mode=s,dt=26532,acq=21499,wak=36,mrq=11,drq=32,upd=730,enu=11,rem=12,dmg=4129,snd=48,tot=4975,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=52
+L:[20260802.031112.235-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=43,n=1,mode=s,dt=66969,acq=62362,wak=17,mrq=11,drq=31,upd=50660,enu=18,rem=18,dmg=3609,snd=39,tot=54385,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=155
+L:[20260802.031112.262-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=44,n=1,mode=s,dt=27772,acq=23581,wak=17,mrq=10,drq=28,upd=2660,enu=13,rem=13,dmg=3332,snd=56,tot=6098,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=52
+L:[20260802.031112.501-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=45,n=1,mode=s,dt=236402,acq=168424,wak=64345,mrq=11,drq=31,upd=193447,enu=48,rem=43,dmg=4989,snd=53,tot=198625,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=7,wev=7,sends=2,skip=0,log=68
+L:[20260802.031112.510-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=46,n=1,mode=s,dt=10408,acq=4434,wak=21,mrq=10,drq=34,upd=11,enu=10,rem=13,dmg=3674,snd=46,tot=3831,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=93
+L:[20260802.031112.591-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=47,n=1,mode=s,dt=78337,acq=48136,wak=11,mrq=26175,drq=38,upd=55746,enu=22,rem=16,dmg=6582,snd=59,tot=62448,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=3,sends=2,skip=0,log=69
+L:[20260802.031112.608-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=48,n=1,mode=s,dt=20753,acq=11795,wak=9,mrq=4,drq=50,upd=1920,enu=5,rem=5,dmg=2812,snd=39,tot=4806,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=187
+L:[20260802.031112.638-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=49,n=1,mode=s,dt=29956,acq=26855,wak=18,mrq=9,drq=29,upd=362,enu=10,rem=10,dmg=3293,snd=55,tot=3783,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=59
+L:[20260802.031112.701-6104-I] AddAllWindows: foreground -> 0x30430, re-mapping to raise it in dom0
+L:[20260802.031112.701-6104-I] SendWindowMap: Mapping window 0x30430
+L:[20260802.031112.723-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=50,n=1,mode=s,dt=82080,acq=70501,wak=7866,mrq=12,drq=32,upd=30325,enu=15991,rem=15,dmg=5376,snd=102,tot=51869,dr=2,mr=0,mrmax=0,area=4816000,win=2,iwn=5,wev=2,sends=4,skip=0,log=91
+L:[20260802.031112.794-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=51,n=1,mode=s,dt=66341,acq=34337,wak=24399,mrq=5,drq=20,upd=37179,enu=12,rem=10,dmg=10607,snd=80,tot=47906,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=83
+L:[20260802.031112.824-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=52,n=1,mode=s,dt=36287,acq=24588,wak=26,mrq=21,drq=38,upd=971,enu=8,rem=13,dmg=4236,snd=94,tot=5377,dr=2,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=4,skip=0,log=80
+L:[20260802.031112.937-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=53,n=1,mode=s,dt=112813,acq=108089,wak=12,mrq=11,drq=31,upd=33115,enu=23,rem=23,dmg=4909,snd=126,tot=38233,dr=2,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=4,skip=0,log=77
+L:[20260802.031112.960-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=54,n=1,mode=s,dt=22839,acq=15652,wak=12,mrq=5,drq=20,upd=2,enu=2,rem=3,dmg=4371,snd=36,tot=4457,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=126
+L:[20260802.031113.003-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=55,n=1,mode=s,dt=39140,acq=34391,wak=17,mrq=11,drq=29,upd=26306,enu=16,rem=16,dmg=8609,snd=58,tot=35043,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=123
+L:[20260802.031113.080-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=56,n=1,mode=s,dt=81948,acq=72943,wak=19,mrq=9,drq=30,upd=48065,enu=23,rem=22,dmg=4049,snd=76,tot=52282,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=95
+L:[20260802.031113.121-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=57,n=1,mode=s,dt=42149,acq=37243,wak=417,mrq=10,drq=31,upd=472,enu=8,rem=8,dmg=2569,snd=46,tot=3129,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=93
+L:[20260802.031113.150-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=58,n=1,mode=s,dt=28314,acq=25273,wak=131,mrq=11,drq=35,upd=13584,enu=33,rem=32,dmg=3665,snd=74,tot=17438,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=59
+L:[20260802.031113.177-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=59,n=1,mode=s,dt=25925,acq=21850,wak=12,mrq=4,drq=18,upd=385,enu=8,rem=9,dmg=4490,snd=32,tot=4948,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=96
+L:[20260802.031113.244-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=60,n=1,mode=s,dt=67735,acq=32992,wak=30002,mrq=10,drq=31,upd=59751,enu=8,rem=8,dmg=2743,snd=38,tot=62573,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=49
+L:[20260802.031113.256-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=61,n=1,mode=s,dt=11786,acq=8247,wak=34,mrq=11,drq=29,upd=10,enu=10,rem=10,dmg=4134,snd=47,tot=4276,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=61
+L:[20260802.031113.323-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=62,n=1,mode=s,dt=67537,acq=34378,wak=28579,mrq=11,drq=31,upd=49674,enu=11,rem=10,dmg=3254,snd=50,tot=53031,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=71
+L:[20260802.031113.336-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=63,n=1,mode=s,dt=12002,acq=7936,wak=15,mrq=8,drq=24,upd=12,enu=10,rem=10,dmg=3982,snd=53,tot=4128,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=155
+L:[20260802.031113.445-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=64,n=1,mode=s,dt=107383,acq=61289,wak=41776,mrq=6,drq=19,upd=58020,enu=24,rem=19,dmg=4149,snd=32,tot=62269,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=4,wev=4,sends=2,skip=0,log=71
+L:[20260802.031113.462-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=65,n=1,mode=s,dt=20331,acq=13563,wak=765,mrq=10,drq=31,upd=267,enu=7,rem=6,dmg=2727,snd=35,tot=3065,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=43
+L:[20260802.031113.546-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=66,n=1,mode=s,dt=83700,acq=39639,wak=41121,mrq=4,drq=24,upd=69003,enu=12,rem=13,dmg=2669,snd=39,tot=71758,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=48
+L:[20260802.031113.572-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=67,n=1,mode=s,dt=25083,acq=15947,wak=51,mrq=5,drq=24,upd=8161,enu=14,rem=22,dmg=3319,snd=34,tot=11588,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=58
+L:[20260802.031113.598-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=68,n=1,mode=s,dt=26413,acq=21330,wak=100,mrq=4,drq=51,upd=2172,enu=32,rem=56,dmg=2919,snd=34,tot=5279,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=1429
+L:[20260802.031113.648-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=69,n=1,mode=s,dt=48197,acq=44513,wak=20,mrq=5,drq=157,upd=14724,enu=16,rem=16,dmg=4708,snd=82,tot=19589,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=45
+L:[20260802.031113.672-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=70,n=1,mode=s,dt=26151,acq=20862,wak=181,mrq=5,drq=17,upd=817,enu=9,rem=10,dmg=2860,snd=38,tot=3771,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=95
+L:[20260802.031113.736-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=71,n=1,mode=s,dt=64918,acq=38193,wak=23495,mrq=13,drq=59,upd=59577,enu=5,rem=4,dmg=2449,snd=32,tot=62083,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=49
+L:[20260802.031113.815-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=72,n=1,mode=s,dt=75024,acq=43618,wak=28574,mrq=12,drq=29,upd=40837,enu=16,rem=14,dmg=5538,snd=32,tot=46456,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=48
+L:[20260802.031113.847-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=73,n=1,mode=s,dt=34107,acq=16372,wak=328,mrq=16,drq=19,upd=1219,enu=15,rem=19,dmg=3591,snd=81,tot=4952,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=60
+L:[20260802.031113.905-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=74,n=1,mode=s,dt=56824,acq=52874,wak=14,mrq=4,drq=18,upd=16758,enu=15,rem=16,dmg=4814,snd=33,tot=21658,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=87
+L:[20260802.031113.929-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=75,n=1,mode=s,dt=26031,acq=20895,wak=12,mrq=5,drq=18,upd=566,enu=7,rem=8,dmg=2755,snd=54,tot=3417,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=49
+L:[20260802.031113.998-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=76,n=1,mode=s,dt=65196,acq=62089,wak=31,mrq=6,drq=22,upd=51797,enu=17,rem=17,dmg=7249,snd=45,tot=59176,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=70
+L:[20260802.031114.024-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=77,n=1,mode=s,dt=29497,acq=21884,wak=16,mrq=4,drq=19,upd=925,enu=14,rem=13,dmg=3713,snd=67,tot=4764,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=55
+L:[20260802.031114.118-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=78,n=1,mode=s,dt=93229,acq=89051,wak=68,mrq=11,drq=32,upd=77416,enu=18,rem=16,dmg=3847,snd=57,tot=81402,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=77
+L:[20260802.031114.158-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=79,n=1,mode=s,dt=40850,acq=35176,wak=20,mrq=23,drq=53,upd=1524,enu=27,rem=52,dmg=2836,snd=61,tot=4557,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=82
+L:[20260802.031114.290-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=80,n=1,mode=s,dt=135288,acq=131972,wak=16,mrq=10,drq=27,upd=6,enu=5,rem=5,dmg=319,snd=64,tot=457,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=0,log=70
+L:[20260802.031114.463-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=81,n=1,mode=s,dt=170618,acq=169920,wak=19,mrq=4,drq=18,upd=332,enu=4,rem=5,dmg=2286,snd=34,tot=2682,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=57
+L:[20260802.031114.526-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031114.527-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031114.528-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031114.531-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031114.750-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=82,n=1,mode=s,dt=277025,acq=274460,wak=27,mrq=14,drq=40,upd=855,enu=12639,rem=18,dmg=115,snd=0,tot=13693,dr=1,mr=0,mrmax=0,area=137600,win=2,iwn=8,wev=4,sends=0,skip=0,log=39
+L:[20260802.031114.779-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=83,n=1,mode=s,dt=38360,acq=25571,wak=14,mrq=18,drq=19,upd=558,enu=9,rem=10,dmg=3120,snd=79,tot=3805,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=84
+L:[20260802.031114.832-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=84,n=1,mode=s,dt=56101,acq=52251,wak=51,mrq=8,drq=25,upd=8,enu=7,rem=8,dmg=140,snd=52,tot=294,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=0,log=84
+L:[20260802.031115.309-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=85,n=1,mode=s,dt=474158,acq=32823,wak=33,mrq=33,drq=31,upd=9,enu=8,rem=6,dmg=2838,snd=56,tot=2993,dr=1,mr=0,mrmax=0,area=4461680,win=2,iwn=0,wev=0,sends=2,skip=2,log=74
+L:[20260802.031115.371-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=86,n=1,mode=s,dt=64520,acq=37894,wak=23,mrq=15,drq=33,upd=7,enu=8,rem=5,dmg=155,snd=41,tot=263,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=1,log=73
+L:[20260802.031115.551-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=87,n=1,mode=s,dt=177016,acq=36319,wak=79493,mrq=11,drq=31,upd=107395,enu=14,rem=14,dmg=3702,snd=82,tot=111260,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=2,log=64
+L:[20260802.031115.663-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=88,n=1,mode=s,dt=113313,acq=2098,wak=15,mrq=5028,drq=86,upd=3,enu=2,rem=2,dmg=2015,snd=32,tot=2107,dr=1,mr=0,mrmax=0,area=4461680,win=2,iwn=0,wev=0,sends=2,skip=3,log=88
+L:[20260802.031115.910-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=89,n=1,mode=s,dt=248356,acq=84081,wak=28,mrq=13,drq=28,upd=2,enu=2,rem=4,dmg=78,snd=31,tot=166,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=4,log=196
+L:[20260802.031116.193-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031116.457-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=90,n=1,mode=s,dt=547444,acq=249714,wak=17,mrq=9,drq=22,upd=63,enu=48499,rem=31,dmg=112,snd=44,tot=48793,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=3,wev=6,sends=2,skip=7,log=39
+L:[20260802.031116.802-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=91,n=1,mode=s,dt=345402,acq=344730,wak=202,mrq=7,drq=44,upd=2217,enu=14893,rem=14,dmg=137,snd=0,tot=17320,dr=1,mr=0,mrmax=0,area=137600,win=2,iwn=4,wev=2,sends=0,skip=0,log=56
+L:[20260802.031116.977-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=92,n=1,mode=s,dt=174223,acq=173732,wak=35,mrq=8,drq=24,upd=5,enu=5,rem=6,dmg=89,snd=37,tot=198,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=0,log=90
+L:[20260802.031117.537-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=93,n=1,mode=s,dt=560559,acq=560130,wak=54,mrq=10,drq=30,upd=8,enu=6,rem=7,dmg=143,snd=56,tot=313,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=0,log=52
+L:[20260802.031118.081-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=94,n=1,mode=s,dt=543742,acq=543047,wak=35,mrq=5,drq=25,upd=2,enu=3,rem=8,dmg=132,snd=41,tot=230,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=0,log=88
+L:[20260802.031118.625-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=95,n=1,mode=s,dt=544346,acq=543807,wak=59,mrq=15,drq=37,upd=9,enu=10,rem=5,dmg=147,snd=44,tot=264,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=0,log=84
+L:[20260802.031119.178-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=96,n=1,mode=s,dt=544484,acq=543791,wak=90,mrq=16,drq=42,upd=783,enu=7268,rem=5,dmg=87,snd=43,tot=8230,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=4,wev=0,sends=2,skip=0,log=84
+L:[20260802.031119.713-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=97,n=1,mode=s,dt=543200,acq=534596,wak=53,mrq=28,drq=40,upd=5,enu=5,rem=5,dmg=125,snd=45,tot=229,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=0,log=89
+L:[20260802.031120.257-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=98,n=1,mode=s,dt=543897,acq=543328,wak=31,mrq=13,drq=28,upd=5,enu=5,rem=5,dmg=123,snd=39,tot=216,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=0,log=64
+L:[20260802.031120.801-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=99,n=1,mode=s,dt=544131,acq=543647,wak=52,mrq=9,drq=25,upd=8,enu=7,rem=7,dmg=163,snd=55,tot=294,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=0,log=63
+L:[20260802.031120.913-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031121.352-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=100,n=1,mode=s,dt=543836,acq=543244,wak=41,mrq=15,drq=27,upd=582,enu=7696,rem=19,dmg=75,snd=40,tot=8454,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=5,wev=1,sends=2,skip=0,log=88
+L:[20260802.031121.792-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031121.888-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=101,n=1,mode=s,dt=543158,acq=534996,wak=56,mrq=43,drq=28,upd=20,enu=382,rem=13,dmg=144,snd=53,tot=665,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=1,wev=1,sends=2,skip=0,log=65
+L:[20260802.031122.430-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=102,n=1,mode=s,dt=542154,acq=541561,wak=52,mrq=10,drq=29,upd=6,enu=5,rem=5,dmg=111,snd=40,tot=238,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=0,log=79
+L:[20260802.031122.974-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=103,n=1,mode=s,dt=543704,acq=543240,wak=37,mrq=7,drq=24,upd=6,enu=5,rem=5,dmg=112,snd=41,tot=239,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=0,log=79
+L:[20260802.031123.530-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=104,n=1,mode=s,dt=544154,acq=543641,wak=80,mrq=10,drq=26,upd=963,enu=10821,rem=5,dmg=75,snd=37,tot=11955,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=4,wev=0,sends=2,skip=0,log=79
+L:[20260802.031124.062-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=105,n=1,mode=s,dt=544055,acq=531866,wak=32,mrq=10,drq=30,upd=5,enu=3,rem=5,dmg=172,snd=37,tot=269,dr=1,mr=0,mrmax=0,area=19,win=2,iwn=0,wev=0,sends=2,skip=0,log=75
+L:[20260802.031124.487-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=106,n=1,mode=s,dt=416931,acq=416436,wak=27,mrq=10,drq=31,upd=2097,enu=11,rem=12,dmg=7790,snd=45,tot=10001,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=78
+L:[20260802.031124.546-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=107,n=1,mode=s,dt=63585,acq=54180,wak=32,mrq=11,drq=30,upd=7,enu=5,rem=5,dmg=3825,snd=46,tot=3961,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=71
+L:[20260802.031124.594-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=108,n=1,mode=s,dt=48907,acq=44625,wak=12,mrq=12,drq=27,upd=37005,enu=18,rem=16,dmg=3133,snd=56,tot=40265,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=143
+L:[20260802.031124.633-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=109,n=1,mode=s,dt=38553,acq=34988,wak=28,mrq=15,drq=30,upd=4803,enu=17,rem=18,dmg=3336,snd=61,tot=8276,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=73
+L:[20260802.031124.696-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=110,n=1,mode=s,dt=62208,acq=19906,wak=27278,mrq=10,drq=50,upd=56082,enu=12,rem=11,dmg=3468,snd=56,tot=59664,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=80
+L:[20260802.031124.710-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=111,n=1,mode=s,dt=13797,acq=9226,wak=372,mrq=14,drq=37,upd=12,enu=11,rem=11,dmg=3511,snd=70,tot=3690,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=91
+L:[20260802.031124.748-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=112,n=1,mode=s,dt=35416,acq=31446,wak=43,mrq=12,drq=24,upd=842,enu=19,rem=18,dmg=6244,snd=33,tot=7195,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=72
+L:[20260802.031124.836-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=113,n=1,mode=s,dt=91645,acq=85078,wak=37,mrq=7,drq=27,upd=73143,enu=20,rem=20,dmg=2815,snd=44,tot=76094,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=53
+L:[20260802.031124.875-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=114,n=1,mode=s,dt=39038,acq=35431,wak=382,mrq=14,drq=45,upd=2572,enu=22,rem=22,dmg=3287,snd=47,tot=5987,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=61
+L:[20260802.031124.962-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=115,n=1,mode=s,dt=84603,acq=80891,wak=13,mrq=8,drq=29,upd=69663,enu=19,rem=20,dmg=5709,snd=33,tot=75475,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=135
+L:[20260802.031124.980-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=116,n=1,mode=s,dt=15053,acq=8891,wak=13,mrq=4,drq=15,upd=1206,enu=8,rem=8,dmg=8637,snd=37,tot=9916,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=51
+L:[20260802.031125.011-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=117,n=1,mode=s,dt=35560,acq=26610,wak=48,mrq=4,drq=20,upd=202,enu=5,rem=5,dmg=3743,snd=33,tot=4011,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=51
+L:[20260802.031125.100-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=118,n=1,mode=s,dt=82360,acq=41221,wak=37122,mrq=9,drq=29,upd=78835,enu=16,rem=15,dmg=10127,snd=42,tot=89075,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=53
+L:[20260802.031125.120-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=119,n=1,mode=s,dt=27686,acq=16762,wak=56,mrq=16,drq=45,upd=9,enu=9,rem=8,dmg=3100,snd=53,tot=3268,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=63
+L:[20260802.031128.577-6104-I] AddAllWindows: foreground -> 0x3041c, re-mapping to raise it in dom0
+L:[20260802.031128.578-6104-I] SendWindowMap: Mapping window 0x3041c
+L:[20260802.031128.615-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=120,n=1,mode=s,dt=3491787,acq=463949,wak=6317,mrq=13,drq=32,upd=2002,enu=31732,rem=8,dmg=5154,snd=50,tot=38978,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=5,wev=2,sends=2,skip=0,log=78
+L:[20260802.031128.686-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=121,n=1,mode=s,dt=70146,acq=62878,wak=1378,mrq=4,drq=19,upd=29899,enu=19,rem=18,dmg=6408,snd=40,tot=36418,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=74
+L:[20260802.031128.719-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=122,n=1,mode=s,dt=32622,acq=24707,wak=28,mrq=16,drq=31,upd=825,enu=10,rem=10,dmg=6758,snd=49,tot=7677,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=214
+L:[20260802.031128.763-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=123,n=1,mode=s,dt=44443,acq=37327,wak=29,mrq=5,drq=21,upd=25637,enu=10,rem=10,dmg=6201,snd=49,tot=31950,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=87
+L:[20260802.031128.791-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=124,n=1,mode=s,dt=22377,acq=15790,wak=84,mrq=4,drq=18,upd=1010,enu=19,rem=20,dmg=3158,snd=37,tot=12950,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=72
+L:[20260802.031128.869-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=125,n=1,mode=s,dt=86297,acq=74077,wak=12,mrq=5,drq=18,upd=48900,enu=23,rem=20,dmg=3854,snd=52,tot=52876,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=152
+L:[20260802.031128.902-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=126,n=1,mode=s,dt=33520,acq=29241,wak=70,mrq=10,drq=31,upd=901,enu=84,rem=18,dmg=3554,snd=48,tot=4644,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=109
+L:[20260802.031128.967-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=127,n=1,mode=s,dt=63622,acq=22150,wak=37482,mrq=9,drq=36,upd=59725,enu=15,rem=15,dmg=4675,snd=60,tot=64532,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=88
+L:[20260802.031132.646-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=128,n=1,mode=s,dt=3671394,acq=605670,wak=33020,mrq=25,drq=29,upd=49895,enu=7982,rem=19,dmg=11382,snd=55,tot=69384,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=6,wev=3,sends=2,skip=0,log=99
+L:[20260802.031132.684-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=129,n=1,mode=s,dt=44618,acq=31774,wak=442,mrq=23,drq=62,upd=1057,enu=24,rem=22,dmg=5760,snd=58,tot=6962,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=78
+L:[20260802.031132.720-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=130,n=1,mode=s,dt=35502,acq=29120,wak=114,mrq=10,drq=33,upd=1242,enu=29,rem=18,dmg=6573,snd=46,tot=8053,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=123
+L:[20260802.031132.810-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=131,n=1,mode=s,dt=82868,acq=29210,wak=46543,mrq=10,drq=28,upd=76412,enu=12,rem=10,dmg=13375,snd=64,tot=89914,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=74
+L:[20260802.031132.844-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=132,n=1,mode=s,dt=32120,acq=17729,wak=46,mrq=11,drq=30,upd=2122,enu=23,rem=24,dmg=15054,snd=53,tot=17312,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=95
+L:[20260802.031132.883-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=133,n=1,mode=s,dt=47508,acq=32012,wak=36,mrq=20,drq=47,upd=1620,enu=20,rem=18,dmg=6361,snd=71,tot=8153,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=74
+L:[20260802.031132.953-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=134,n=1,mode=s,dt=68575,acq=61272,wak=218,mrq=58,drq=64,upd=47470,enu=19,rem=19,dmg=8449,snd=90,tot=56112,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=112
+L:[20260802.031132.997-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=135,n=1,mode=s,dt=48927,acq=39680,wak=27,mrq=12,drq=32,upd=852,enu=15,rem=15,dmg=3012,snd=72,tot=4019,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=97
+L:[20260802.031134.494-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031136.607-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=136,n=1,mode=s,dt=3609938,acq=585622,wak=82,mrq=16,drq=36,upd=9739,enu=13611,rem=23,dmg=3475,snd=81,tot=26965,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=6,wev=3,sends=2,skip=0,log=87
+L:[20260802.031136.679-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=137,n=1,mode=s,dt=70611,acq=25472,wak=39027,mrq=10,drq=30,upd=55070,enu=17,rem=18,dmg=3761,snd=53,tot=58962,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=99
+L:[20260802.031136.711-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=138,n=1,mode=s,dt=26489,acq=21508,wak=142,mrq=14,drq=25,upd=978,enu=25,rem=133,dmg=10788,snd=53,tot=12030,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=78
+L:[20260802.031136.785-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=139,n=1,mode=s,dt=71393,acq=33474,wak=26694,mrq=17,drq=35,upd=55784,enu=10,rem=10,dmg=12152,snd=50,tot=68038,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=97
+L:[20260802.031136.832-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=140,n=1,mode=s,dt=55449,acq=41643,wak=58,mrq=16,drq=40,upd=2535,enu=38,rem=42,dmg=4522,snd=175,tot=7356,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=4,wev=4,sends=2,skip=0,log=72
+L:[20260802.031136.904-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=141,n=1,mode=s,dt=66065,acq=23128,wak=37578,mrq=108,drq=43,upd=56308,enu=11,rem=38,dmg=10315,snd=39,tot=66748,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=83
+L:[20260802.031136.943-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=142,n=1,mode=s,dt=47179,acq=35942,wak=47,mrq=130,drq=93,upd=502,enu=16,rem=15,dmg=2625,snd=43,tot=3240,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=55
+L:[20260802.031140.604-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=143,n=1,mode=s,dt=3658196,acq=619473,wak=6623,mrq=11,drq=37,upd=1321,enu=26027,rem=10,dmg=4621,snd=138,tot=32177,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=5,wev=2,sends=2,skip=0,log=69
+L:[20260802.031140.625-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=144,n=1,mode=s,dt=20015,acq=14194,wak=25,mrq=10,drq=28,upd=543,enu=11,rem=11,dmg=6031,snd=66,tot=6703,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=171
+L:[20260802.031140.692-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=145,n=1,mode=s,dt=69297,acq=62823,wak=69,mrq=9,drq=31,upd=1580,enu=22,rem=20,dmg=4030,snd=75,tot=5824,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=81
+L:[20260802.031140.793-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=146,n=1,mode=s,dt=101098,acq=54846,wak=41680,mrq=11,drq=29,upd=67412,enu=18,rem=17,dmg=3110,snd=49,tot=70637,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=4,wev=4,sends=2,skip=0,log=60
+L:[20260802.031140.806-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=147,n=1,mode=s,dt=14625,acq=10656,wak=28,mrq=5,drq=17,upd=10,enu=7,rem=8,dmg=2488,snd=56,tot=2639,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=68
+L:[20260802.031140.885-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=148,n=1,mode=s,dt=69355,acq=41330,wak=25142,mrq=11,drq=26,upd=41380,enu=28,rem=28,dmg=11038,snd=90,tot=52602,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=4,wev=4,sends=2,skip=0,log=63
+L:[20260802.031140.900-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=149,n=1,mode=s,dt=23477,acq=10741,wak=82,mrq=14,drq=44,upd=22,enu=12,rem=13,dmg=3324,snd=34,tot=3492,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=87
+L:[20260802.031140.938-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=150,n=1,mode=s,dt=38564,acq=34733,wak=31,mrq=12,drq=73,upd=598,enu=6,rem=11,dmg=2800,snd=168,tot=3614,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=46
+L:[20260802.031144.551-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031144.553-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031144.584-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=151,n=1,mode=s,dt=3635882,acq=604327,wak=30,mrq=8,drq=23,upd=41204,enu=14774,rem=48,dmg=12887,snd=56,tot=69007,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=8,wev=5,sends=2,skip=0,log=79
+L:[20260802.031144.659-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=152,n=1,mode=s,dt=77837,acq=46025,wak=18511,mrq=7,drq=38,upd=61604,enu=11,rem=9,dmg=10179,snd=38,tot=71872,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=106
+L:[20260802.031144.685-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=153,n=1,mode=s,dt=33473,acq=22744,wak=34,mrq=10,drq=22,upd=1258,enu=16,rem=17,dmg=2316,snd=69,tot=3700,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=57
+L:[20260802.031144.751-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=154,n=1,mode=s,dt=59578,acq=28324,wak=28672,mrq=5,drq=19,upd=50922,enu=5,rem=4,dmg=8877,snd=54,tot=59878,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=70
+L:[20260802.031144.777-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=155,n=1,mode=s,dt=23451,acq=14045,wak=11,mrq=4,drq=17,upd=611,enu=10,rem=11,dmg=10993,snd=84,tot=11744,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=62
+L:[20260802.031144.834-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=156,n=1,mode=s,dt=57453,acq=24567,wak=21554,mrq=4,drq=15,upd=43238,enu=14,rem=14,dmg=10224,snd=42,tot=53573,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=71
+L:[20260802.031144.848-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=157,n=1,mode=s,dt=21683,acq=9283,wak=647,mrq=671,drq=41,upd=590,enu=16,rem=16,dmg=2898,snd=52,tot=3606,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=52
+L:[20260802.031144.883-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=158,n=1,mode=s,dt=35491,acq=32192,wak=55,mrq=8,drq=28,upd=337,enu=7,rem=8,dmg=2559,snd=43,tot=2982,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=65
+L:[20260802.031144.929-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=159,n=1,mode=s,dt=46009,acq=43058,wak=24,mrq=13,drq=35,upd=41508,enu=6,rem=5,dmg=2420,snd=48,tot=44004,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=58
+L:[20260802.031148.594-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=160,n=1,mode=s,dt=3663130,acq=650456,wak=29,mrq=8,drq=26,upd=1776,enu=53269,rem=23,dmg=4712,snd=32,tot=59851,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=5,wev=4,sends=2,skip=0,log=57
+L:[20260802.031148.639-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=161,n=1,mode=s,dt=46066,acq=20382,wak=20363,mrq=10,drq=30,upd=37427,enu=14,rem=13,dmg=3451,snd=48,tot=40985,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=53
+L:[20260802.031148.682-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=162,n=1,mode=s,dt=35459,acq=22984,wak=36,mrq=10,drq=35,upd=830,enu=20,rem=21,dmg=10895,snd=54,tot=11858,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=76
+L:[20260802.031148.829-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=163,n=1,mode=s,dt=135920,acq=34762,wak=89899,mrq=10,drq=30,upd=126772,enu=14325,rem=11,dmg=3122,snd=157,tot=144423,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=5,wev=4,sends=2,skip=0,log=82
+L:[20260802.031148.935-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=164,n=1,mode=s,dt=124341,acq=62128,wak=40014,mrq=8,drq=27,upd=96701,enu=20,rem=17,dmg=3156,snd=43,tot=99959,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=4,wev=5,sends=2,skip=0,log=62
+L:[20260802.031148.950-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=165,n=1,mode=s,dt=13134,acq=9015,wak=77,mrq=10,drq=31,upd=14,enu=11,rem=12,dmg=5184,snd=69,tot=5395,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=65
+L:[20260802.031152.676-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=166,n=1,mode=s,dt=3727593,acq=662616,wak=30901,mrq=14,drq=3516,upd=9695,enu=65457,rem=23,dmg=4693,snd=132,tot=80070,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=5,wev=2,sends=2,skip=0,log=124
+L:[20260802.031152.796-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=167,n=1,mode=s,dt=119791,acq=30108,wak=83222,mrq=7,drq=27,upd=88603,enu=26,rem=19,dmg=4084,snd=42,tot=92806,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=94
+L:[20260802.031152.835-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=168,n=1,mode=s,dt=40159,acq=35261,wak=31,mrq=10,drq=28,upd=1350,enu=26,rem=24,dmg=3162,snd=50,tot=4642,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=120
+L:[20260802.031152.927-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=169,n=1,mode=s,dt=72944,acq=43883,wak=25549,mrq=5,drq=17,upd=67616,enu=16,rem=34,dmg=21240,snd=47,tot=89108,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=70
+L:[20260802.031152.943-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=170,n=1,mode=s,dt=33729,acq=7044,wak=1967,mrq=13,drq=34,upd=27,enu=9,rem=19,dmg=4771,snd=74,tot=5022,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=64
+L:[20260802.031152.968-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=171,n=1,mode=s,dt=25420,acq=19952,wak=52,mrq=44,drq=38,upd=524,enu=18,rem=19,dmg=4259,snd=221,tot=5094,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=97
+L:[20260802.031156.600-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=172,n=1,mode=s,dt=3632961,acq=607144,wak=16,mrq=7,drq=25,upd=1259,enu=7185,rem=15,dmg=3537,snd=43,tot=12071,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=5,wev=2,sends=2,skip=0,log=94
+L:[20260802.031156.668-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=173,n=1,mode=s,dt=58916,acq=33180,wak=21167,mrq=13,drq=44,upd=43961,enu=18,rem=18,dmg=11763,snd=43,tot=55839,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=79
+L:[20260802.031156.705-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=174,n=1,mode=s,dt=37107,acq=23271,wak=884,mrq=11,drq=32,upd=2817,enu=25,rem=27,dmg=12054,snd=43,tot=15020,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=88
+L:[20260802.031156.767-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=175,n=1,mode=s,dt=70973,acq=37679,wak=20811,mrq=20,drq=31,upd=58948,enu=9,rem=7,dmg=3006,snd=33,tot=62025,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=58
+L:[20260802.031156.781-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=176,n=1,mode=s,dt=11865,acq=8198,wak=28,mrq=19,drq=56,upd=12,enu=10,rem=10,dmg=5245,snd=34,tot=5403,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=47
+L:[20260802.031156.898-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=177,n=1,mode=s,dt=118832,acq=112875,wak=298,mrq=5,drq=17,upd=67942,enu=29,rem=29,dmg=3166,snd=49,tot=71269,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=5,wev=5,sends=2,skip=0,log=65
+L:[20260802.031200.594-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=178,n=1,mode=s,dt=3694543,acq=645017,wak=10246,mrq=19,drq=9039,upd=1393,enu=34915,rem=13,dmg=4008,snd=69,tot=40445,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=5,wev=2,sends=2,skip=0,log=70
+L:[20260802.031200.681-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=179,n=1,mode=s,dt=88009,acq=7346,wak=74888,mrq=4,drq=23,upd=78901,enu=29,rem=24,dmg=3631,snd=61,tot=82701,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=524
+L:[20260802.031200.708-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=180,n=1,mode=s,dt=27095,acq=21439,wak=730,mrq=5,drq=298,upd=1933,enu=27,rem=24,dmg=3971,snd=84,tot=6085,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=79
+L:[20260802.031200.791-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=181,n=1,mode=s,dt=83054,acq=34927,wak=43628,mrq=17,drq=35,upd=78285,enu=17,rem=15,dmg=3251,snd=65,tot=81677,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=97
+L:[20260802.031200.804-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=182,n=1,mode=s,dt=13307,acq=9082,wak=30,mrq=13,drq=33,upd=19,enu=16,rem=13,dmg=3458,snd=44,tot=3626,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=132
+L:[20260802.031200.839-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=183,n=1,mode=s,dt=33851,acq=29866,wak=29,mrq=17,drq=42,upd=2559,enu=26,rem=27,dmg=4249,snd=44,tot=6962,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=83
+L:[20260802.031200.908-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=184,n=1,mode=s,dt=70453,acq=65732,wak=27,mrq=15,drq=40,upd=46855,enu=18,rem=20,dmg=3162,snd=45,tot=50160,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=94
+L:[20260802.031200.947-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=185,n=1,mode=s,dt=39916,acq=35896,wak=75,mrq=14,drq=42,upd=625,enu=10,rem=10,dmg=2255,snd=36,tot=2963,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=56
+L:[20260802.031204.572-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=186,n=1,mode=s,dt=3622976,acq=595956,wak=23,mrq=9,drq=26,upd=714,enu=8200,rem=10,dmg=4167,snd=46,tot=13180,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=4,wev=1,sends=2,skip=0,log=52
+L:[20260802.031204.624-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=187,n=1,mode=s,dt=51242,acq=46612,wak=27,mrq=13,drq=40,upd=638,enu=18,rem=20,dmg=4665,snd=62,tot=5459,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=136
+L:[20260802.031204.713-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=188,n=1,mode=s,dt=88087,acq=82973,wak=16,mrq=12,drq=23,upd=71768,enu=17,rem=16,dmg=5883,snd=41,tot=77754,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=74
+L:[20260802.031204.734-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=189,n=1,mode=s,dt=24092,acq=17574,wak=28,mrq=4,drq=18,upd=702,enu=9,rem=7,dmg=2455,snd=35,tot=3230,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=61
+L:[20260802.031204.801-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=190,n=1,mode=s,dt=59271,acq=30701,wak=25861,mrq=5,drq=19,upd=38531,enu=22,rem=15,dmg=10059,snd=133,tot=48807,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=65
+L:[20260802.031204.829-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=191,n=1,mode=s,dt=34984,acq=23984,wak=15,mrq=5,drq=19,upd=508,enu=12,rem=13,dmg=3960,snd=38,tot=4552,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=72
+L:[20260802.031204.896-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=192,n=1,mode=s,dt=66489,acq=32457,wak=29739,mrq=11,drq=32,upd=55608,enu=13,rem=13,dmg=3638,snd=54,tot=59363,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=108
+L:[20260802.031204.909-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=193,n=1,mode=s,dt=12688,acq=8127,wak=210,mrq=4,drq=19,upd=12,enu=9,rem=12,dmg=4720,snd=52,tot=4874,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=73
+L:[20260802.031208.619-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=194,n=1,mode=s,dt=3710522,acq=677307,wak=58,mrq=66,drq=34,upd=2441,enu=5225,rem=26,dmg=4128,snd=71,tot=11946,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=6,wev=3,sends=2,skip=0,log=83
+L:[20260802.031208.712-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=195,n=1,mode=s,dt=83951,acq=47115,wak=32190,mrq=15,drq=36,upd=72590,enu=19,rem=20,dmg=3963,snd=38,tot=76675,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=95
+L:[20260802.031208.717-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=196,n=1,mode=s,dt=13921,acq=823,wak=28,mrq=24,drq=39,upd=15,enu=12,rem=12,dmg=3993,snd=170,tot=4337,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=57
+L:[20260802.031208.849-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=197,n=1,mode=s,dt=131982,acq=57801,wak=69422,mrq=17,drq=40,upd=98206,enu=34,rem=21,dmg=3272,snd=61,tot=101933,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=4,wev=4,sends=2,skip=0,log=115
+L:[20260802.031208.892-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=198,n=1,mode=s,dt=42051,acq=37286,wak=30,mrq=10,drq=58,upd=1819,enu=17,rem=16,dmg=4447,snd=86,tot=6419,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=72
+L:[20260802.031208.992-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=199,n=1,mode=s,dt=101480,acq=67929,wak=28659,mrq=14,drq=35,upd=60389,enu=34,rem=23,dmg=2961,snd=82,tot=63533,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=93
+L:[20260802.031212.592-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=200,n=1,mode=s,dt=3600367,acq=557364,wak=12720,mrq=13,drq=38,upd=1368,enu=24925,rem=8,dmg=2265,snd=28,tot=28627,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=5,wev=2,sends=2,skip=0,log=83
+L:[20260802.031212.603-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=201,n=1,mode=s,dt=12004,acq=8976,wak=39,mrq=14,drq=37,upd=4,enu=4,rem=5,dmg=2316,snd=35,tot=2393,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=49
+L:[20260802.031212.666-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=202,n=1,mode=s,dt=62046,acq=59390,wak=29,mrq=11,drq=29,upd=21721,enu=18,rem=18,dmg=3513,snd=39,tot=25348,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=55
+L:[20260802.031212.698-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=203,n=1,mode=s,dt=31219,acq=27324,wak=35,mrq=13,drq=33,upd=4237,enu=19,rem=21,dmg=3886,snd=50,tot=8260,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=53
+L:[20260802.031212.773-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=204,n=1,mode=s,dt=75886,acq=71608,wak=30,mrq=6,drq=22,upd=60285,enu=19,rem=19,dmg=2936,snd=47,tot=63348,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=92
+L:[20260802.031212.796-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=205,n=1,mode=s,dt=22799,acq=19508,wak=23,mrq=10,drq=28,upd=13142,enu=7,rem=7,dmg=2604,snd=34,tot=15830,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=74
+L:[20260802.031212.829-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=206,n=1,mode=s,dt=31618,acq=28527,wak=33,mrq=11,drq=31,upd=1129,enu=11,rem=12,dmg=4192,snd=28,tot=5393,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=55
+L:[20260802.031212.891-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=207,n=1,mode=s,dt=61004,acq=56409,wak=70,mrq=22,drq=45,upd=55504,enu=32,rem=29,dmg=4221,snd=98,tot=60913,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=73
+L:[20260802.031212.931-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=208,n=1,mode=s,dt=40981,acq=35058,wak=81,mrq=29,drq=59,upd=1616,enu=16,rem=30,dmg=4239,snd=82,tot=6402,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=96
+L:[20260802.031213.760-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031213.920-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031213.952-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031214.208-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031216.616-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=209,n=1,mode=s,dt=3686021,acq=638205,wak=23498,mrq=11,drq=33,upd=1055,enu=41149,rem=37,dmg=2992,snd=57,tot=45401,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=9,wev=6,sends=2,skip=0,log=97
+L:[20260802.031216.684-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=210,n=1,mode=s,dt=61095,acq=33875,wak=23436,mrq=10,drq=26,upd=48074,enu=27,rem=24,dmg=10225,snd=65,tot=58463,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=74
+L:[20260802.031216.712-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=211,n=1,mode=s,dt=34324,acq=23151,wak=28,mrq=14,drq=39,upd=1183,enu=24,rem=22,dmg=3690,snd=58,tot=5030,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=77
+L:[20260802.031216.787-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=212,n=1,mode=s,dt=75523,acq=71376,wak=30,mrq=15,drq=34,upd=54397,enu=22,rem=22,dmg=4007,snd=63,tot=58552,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=105
+L:[20260802.031216.799-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031216.800-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031216.823-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=213,n=1,mode=s,dt=35754,acq=31209,wak=120,mrq=12,drq=32,upd=1396,enu=608,rem=29,dmg=3815,snd=70,tot=5969,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=4,wev=4,sends=2,skip=0,log=74
+L:[20260802.031216.901-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=214,n=1,mode=s,dt=76558,acq=34938,wak=37389,mrq=7,drq=25,upd=72861,enu=13,rem=12,dmg=4083,snd=69,tot=77082,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=92
+L:[20260802.031216.939-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=215,n=1,mode=s,dt=38888,acq=32691,wak=25,mrq=857,drq=29,upd=533,enu=15,rem=22,dmg=3910,snd=41,tot=4590,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=76
+L:[20260802.031217.727-6104-E] GetWindowData: GetRealWindowRect failed with error 0x80070006: The handle is invalid.
+L:[20260802.031220.584-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=216,n=1,mode=s,dt=3645156,acq=606768,wak=8248,mrq=17,drq=40,upd=1593,enu=25383,rem=21,dmg=3173,snd=58,tot=30280,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=6,wev=3,sends=2,skip=0,log=84
+L:[20260802.031220.601-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=217,n=1,mode=s,dt=17271,acq=12882,wak=27,mrq=9,drq=41,upd=262,enu=11,rem=11,dmg=4182,snd=48,tot=4539,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=82
+L:[20260802.031220.670-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=218,n=1,mode=s,dt=68731,acq=63791,wak=22,mrq=12,drq=350,upd=28680,enu=23,rem=24,dmg=4061,snd=159,tot=32988,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=77
+L:[20260802.031220.695-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=219,n=1,mode=s,dt=25896,acq=21202,wak=19,mrq=12,drq=31,upd=826,enu=13,rem=13,dmg=3159,snd=35,tot=4082,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=99
+L:[20260802.031220.777-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=220,n=1,mode=s,dt=71167,acq=32739,wak=34828,mrq=12,drq=96,upd=65677,enu=20,rem=16,dmg=13730,snd=75,tot=79575,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=62
+L:[20260802.031220.814-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=221,n=1,mode=s,dt=46405,acq=30793,wak=620,mrq=14,drq=34,upd=1435,enu=30,rem=35,dmg=4513,snd=60,tot=6113,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=137
+L:[20260802.031220.852-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=222,n=1,mode=s,dt=36640,acq=29180,wak=43,mrq=18,drq=50,upd=2561,enu=22,rem=22,dmg=6127,snd=57,tot=8848,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=785
+L:[20260802.031220.946-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=223,n=1,mode=s,dt=94349,acq=87733,wak=53,mrq=15,drq=36,upd=75852,enu=24,rem=26,dmg=5246,snd=190,tot=81396,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=81
+L:[20260802.031220.971-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=224,n=1,mode=s,dt=26683,acq=20717,wak=65,mrq=21,drq=57,upd=835,enu=20,rem=23,dmg=4030,snd=59,tot=5032,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=122
+L:[20260802.031224.599-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=225,n=1,mode=s,dt=3628960,acq=599140,wak=11,mrq=10,drq=30,upd=2776,enu=22744,rem=12,dmg=2842,snd=33,tot=28436,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=5,wev=2,sends=2,skip=0,log=88
+L:[20260802.031224.618-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=226,n=1,mode=s,dt=19572,acq=16385,wak=35,mrq=14,drq=40,upd=255,enu=9,rem=8,dmg=2755,snd=38,tot=3104,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=50
+L:[20260802.031224.684-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=227,n=1,mode=s,dt=66635,acq=63430,wak=12,mrq=4,drq=18,upd=45418,enu=21,rem=20,dmg=2331,snd=38,tot=47851,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=51
+L:[20260802.031224.714-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=228,n=1,mode=s,dt=29006,acq=20254,wak=11,mrq=5,drq=17,upd=1383,enu=12,rem=14,dmg=2870,snd=35,tot=4335,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=54
+L:[20260802.031224.765-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=229,n=1,mode=s,dt=49084,acq=45818,wak=59,mrq=12,drq=29,upd=28695,enu=28,rem=841,dmg=4964,snd=86,tot=34672,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=52
+L:[20260802.031224.797-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=230,n=1,mode=s,dt=32114,acq=24906,wak=31,mrq=12,drq=35,upd=1254,enu=19,rem=21,dmg=4136,snd=75,tot=5549,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=105
+L:[20260802.031224.888-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=231,n=1,mode=s,dt=89911,acq=80767,wak=4516,mrq=25,drq=41,upd=81435,enu=16,rem=16,dmg=4698,snd=90,tot=86322,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=94
+L:[20260802.031224.920-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=232,n=1,mode=s,dt=34629,acq=27851,wak=43,mrq=16,drq=37,upd=23,enu=20,rem=16,dmg=3126,snd=87,tot=3361,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=88
+L:[20260802.031224.985-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=233,n=1,mode=s,dt=63432,acq=33585,wak=26168,mrq=11,drq=32,upd=52149,enu=19,rem=17,dmg=4855,snd=56,tot=57149,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=96
+L:[20260802.031228.588-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=234,n=1,mode=s,dt=3604060,acq=573540,wak=26,mrq=10,drq=29,upd=1054,enu=11508,rem=16,dmg=3319,snd=50,tot=15990,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=5,wev=2,sends=2,skip=0,log=77
+L:[20260802.031228.665-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=235,n=1,mode=s,dt=60481,acq=26974,wak=29411,mrq=10,drq=30,upd=56962,enu=12,rem=11,dmg=14457,snd=62,tot=71543,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=80
+L:[20260802.031228.786-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=236,n=1,mode=s,dt=128990,acq=25296,wak=83481,mrq=4,drq=20,upd=91948,enu=33,rem=32,dmg=12018,snd=86,tot=104162,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=4,wev=4,sends=2,skip=0,log=82
+L:[20260802.031228.813-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=237,n=1,mode=s,dt=36156,acq=22991,wak=54,mrq=12,drq=95,upd=1552,enu=36,rem=21,dmg=2990,snd=78,tot=4750,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=82
+L:[20260802.031228.906-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=238,n=1,mode=s,dt=93130,acq=89629,wak=25,mrq=35,drq=35,upd=71846,enu=21,rem=19,dmg=4896,snd=47,tot=76871,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=115
+L:[20260802.031232.570-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=239,n=1,mode=s,dt=3663072,acq=634362,wak=4054,mrq=19,drq=28,upd=571,enu=14865,rem=12,dmg=3760,snd=46,tot=19292,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=4,wev=1,sends=2,skip=0,log=76
+L:[20260802.031232.592-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=240,n=1,mode=s,dt=23528,acq=18532,wak=613,mrq=81,drq=48,upd=1361,enu=12,rem=12,dmg=2362,snd=34,tot=3804,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=73
+L:[20260802.031232.663-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=241,n=1,mode=s,dt=62614,acq=25073,wak=34931,mrq=10,drq=30,upd=51470,enu=10,rem=10,dmg=10027,snd=47,tot=61598,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=50
+L:[20260802.031232.688-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=242,n=1,mode=s,dt=32658,acq=21781,wak=72,mrq=74,drq=17,upd=890,enu=18,rem=18,dmg=3160,snd=44,tot=4166,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=73
+L:[20260802.031232.758-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=243,n=1,mode=s,dt=60643,acq=36657,wak=20535,mrq=4,drq=18,upd=53607,enu=11,rem=10,dmg=11643,snd=52,tot=65356,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=65
+L:[20260802.031232.782-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=244,n=1,mode=s,dt=33584,acq=21273,wak=12,mrq=4,drq=23,upd=491,enu=26,rem=13,dmg=2506,snd=26,tot=3082,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=79
+L:[20260802.031232.843-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=245,n=1,mode=s,dt=61026,acq=37942,wak=20285,mrq=10,drq=33,upd=32402,enu=10,rem=10,dmg=2721,snd=30,tot=35196,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=3,wev=3,sends=2,skip=0,log=52
+L:[20260802.031232.879-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=246,n=1,mode=s,dt=34771,acq=23203,wak=1386,mrq=11,drq=34,upd=440,enu=25,rem=17,dmg=3478,snd=40,tot=4068,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=64
+L:[20260802.031232.909-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=247,n=1,mode=s,dt=33205,acq=29385,wak=19,mrq=6,drq=23,upd=504,enu=4,rem=5,dmg=2590,snd=42,tot=3169,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=53
+L:[20260802.031236.630-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=248,n=1,mode=s,dt=3710535,acq=688903,wak=36,mrq=16,drq=36,upd=2674,enu=4187,rem=15,dmg=10860,snd=180,tot=17942,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=6,wev=3,sends=2,skip=0,log=52
+L:[20260802.031236.666-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=249,n=1,mode=s,dt=45033,acq=33340,wak=53,mrq=13,drq=370,upd=8,enu=6,rem=5,dmg=2515,snd=46,tot=2678,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=0,wev=0,sends=2,skip=0,log=80
+L:[20260802.031236.713-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=250,n=1,mode=s,dt=44713,acq=41607,wak=26,mrq=15,drq=38,upd=29417,enu=18,rem=24,dmg=4594,snd=83,tot=34323,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=66
+L:[20260802.031236.797-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=251,n=1,mode=s,dt=75586,acq=59445,wak=10075,mrq=41,drq=78,upd=39021,enu=18,rem=17,dmg=13416,snd=215,tot=52735,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=257
+L:[20260802.031236.824-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=252,n=1,mode=s,dt=34406,acq=19735,wak=28,mrq=31,drq=45,upd=535,enu=12,rem=14,dmg=4810,snd=81,tot=5511,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=2,wev=2,sends=2,skip=0,log=75
+L:[20260802.031236.932-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=253,n=1,mode=s,dt=111039,acq=61357,wak=44364,mrq=13,drq=40,upd=74975,enu=27,rem=17,dmg=2400,snd=77,tot=77563,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=4,wev=4,sends=2,skip=0,log=89
+L:[20260802.031236.964-6104-I] PerfEmitFrame: QGAPERF,v=2,seq=254,n=1,mode=s,dt=28971,acq=25724,wak=26,mrq=15,drq=39,upd=585,enu=71,rem=23,dmg=4855,snd=181,tot=5858,dr=1,mr=0,mrmax=0,area=4816000,win=2,iwn=1,wev=1,sends=2,skip=0,log=75
+LOGEND
+RESULT=DONE
+
+C:\Windows\system32>

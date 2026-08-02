@@ -1,0 +1,181 @@
+In order to avoid typing target qube name twice, use qvm-copy/qvm-move instead of qvm-copy-to-vm/qvm-move-to-vm.
+sent 0/5 KBEOF
+sent 5/5 KB
+Microsoft Windows [Version 10.0.19045.2965]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\w10-scn1.ps1"
+RESULT=LOGFILE gui-agent-20260802-024920-2024.log
+RESULT=BACKHWND 197224
+RESULT=FRONTHWND 132158
+PHASE type 20260802.024948.019
+PHASE type-end 20260802.025000.566
+PHASE menu 20260802.025003.582
+RESULT=MENUHWND 328240 rect 508,370 229x196
+PHASE menu-held 20260802.025009.300
+GEOSTART
+328240	508	370	229	196	393		#32768	508	370	229	196
+132158	500	320	700	500	272	*Untitled - Notepad	Notepad	507	320	686	493
+197224	150	120	700	500	272	Untitled - Notepad	Notepad	157	120	686	493
+459926	0	0	3440	1440	2097152	Microsoft Text Input Application	Windows.UI.Core.CoreWindow	0	0	3440	1440
+196914	45	88	1216	941	2097408	Microsoft Store	ApplicationFrameWindow	52	88	1202	934
+65904	0	0	3440	1400	2097408		ApplicationFrameWindow	7	0	3426	1393
+65876	15	0	3425	4	136315008		EdgeUiInputTopWndClass	15	0	3425	4
+131112	5	56	1200	900	2097152	Microsoft Store	Windows.UI.Core.CoreWindow	5	56	1200	900
+65802	0	0	3440	1440	128	Program Manager	Progman	0	0	3440	1440
+GEOEND
+TRACESTART
+[20260802.024920.941-4492-I] SendWindowCreate: QGAPROTO,msg=CREATE,hwnd=0x0,x=0,y=0,w=3440,h=1440,ovr=0,style=0x00000000,ex=0x00000000
+[20260802.024936.941-4492-I] SendWindowCreate: QGAPROTO,msg=CREATE,hwnd=0x30268,x=215,y=208,w=2566,h=1022,ovr=0,style=0x14cf0000,ex=0x00000110
+[20260802.024937.050-4492-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x30268,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000110,vis=1,w=2566,h=1022
+[20260802.024937.082-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x30268,rx=0,ry=0,w=2566,h=1022,ax=215,ay=208,lx=215,ly=208
+[20260802.024937.097-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x30268,rx=0,ry=31,w=2566,h=990,ax=215,ay=208,lx=215,ly=208
+[20260802.024937.097-4492-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x30268,x=220,y=233,w=2566,h=1022,ovr=0
+[20260802.024937.097-4492-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x30268,x=227,y=233,w=2566,h=1022,ovr=0
+[20260802.024937.097-4492-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x30268,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000110,vis=1,w=2566,h=1022
+[20260802.024937.613-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x30268,rx=0,ry=51,w=2566,h=18,ax=227,ay=233,lx=227,ly=233
+[20260802.024938.144-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x30268,rx=0,ry=51,w=2566,h=18,ax=227,ay=233,lx=227,ly=233
+[20260802.024938.691-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x30268,rx=0,ry=51,w=2566,h=18,ax=227,ay=233,lx=227,ly=233
+[20260802.024939.222-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x30268,rx=0,ry=51,w=2566,h=18,ax=227,ay=233,lx=227,ly=233
+[20260802.024939.738-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x30268,rx=0,ry=51,w=2566,h=18,ax=227,ay=233,lx=227,ly=233
+[20260802.024939.910-4492-I] SendWindowCreate: QGAPROTO,msg=CREATE,hwnd=0x2043e,x=241,y=234,w=2566,h=1022,ovr=0,style=0x14cf0000,ex=0x00000110
+[20260802.024939.972-4492-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x2043e,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000110,vis=1,w=2566,h=1022
+[20260802.024940.008-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=0,w=2566,h=1022,ax=241,ay=234,lx=241,ly=234
+[20260802.024940.019-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=31,w=2566,h=990,ax=241,ay=234,lx=241,ly=234
+[20260802.024940.019-4492-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x2043e,x=246,y=259,w=2566,h=1022,ovr=0
+[20260802.024940.082-4492-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x2043e,x=253,y=259,w=2566,h=1022,ovr=0
+[20260802.024940.113-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x30268,rx=0,ry=0,w=2566,h=1022,ax=227,ay=233,lx=227,ly=233
+[20260802.024940.113-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=2566,h=970,ax=253,ay=259,lx=253,ly=259
+[20260802.024940.668-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=2566,h=18,ax=253,ay=259,lx=253,ly=259
+[20260802.024941.207-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=2566,h=18,ax=253,ay=259,lx=253,ly=259
+[20260802.024941.660-4492-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x2043e,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000110,vis=1,w=2566,h=1022
+[20260802.024941.738-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=2566,h=18,ax=253,ay=259,lx=253,ly=259
+[20260802.024942.254-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=2566,h=18,ax=253,ay=259,lx=253,ly=259
+[20260802.024942.800-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=2566,h=18,ax=253,ay=259,lx=253,ly=259
+[20260802.024942.941-4492-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x30268,x=157,y=120,w=686,h=493,ovr=0
+[20260802.024943.035-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x30268,rx=0,ry=0,w=686,h=493,ax=157,ay=120,lx=157,ly=120
+[20260802.024943.035-4492-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x2043e,x=507,y=320,w=686,h=493,ovr=0
+[20260802.024943.097-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=0,w=686,h=493,ax=507,ay=320,lx=507,ly=320
+[20260802.024943.097-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x30268,rx=0,ry=51,w=686,h=441,ax=157,ay=120,lx=157,ly=120
+[20260802.024943.613-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.024944.128-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.024944.660-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.024945.213-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.024945.738-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.024946.285-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.024946.785-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.024947.333-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.024947.863-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.024948.566-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=11,w=686,h=475,ax=507,ay=320,lx=507,ly=320
+[20260802.024948.675-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.024948.785-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024948.972-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024949.191-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024949.394-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024949.613-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024949.769-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.024949.847-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024950.097-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024950.300-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024950.488-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024950.707-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024950.925-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=417,ax=507,ay=320,lx=507,ly=320
+[20260802.024951.050-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024951.285-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024951.347-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024951.488-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024951.582-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024951.660-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024951.863-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024952.097-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024952.175-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024952.394-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024952.457-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024952.738-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=417,ax=507,ay=320,lx=507,ly=320
+[20260802.024952.800-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024953.050-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024953.113-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024953.254-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024953.363-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024953.457-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024953.675-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024953.785-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024953.847-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024954.050-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024954.160-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024954.222-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=478,w=686,h=8,ax=507,ay=320,lx=507,ly=320
+[20260802.024954.425-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024954.707-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024954.816-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024955.050-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024955.300-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024955.394-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024955.597-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024955.708-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024955.785-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=478,w=686,h=8,ax=507,ay=320,lx=507,ly=320
+[20260802.024955.958-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024956.097-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024956.160-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=477,w=686,h=9,ax=507,ay=320,lx=507,ly=320
+[20260802.024956.363-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=417,ax=507,ay=320,lx=507,ly=320
+[20260802.024956.488-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024956.800-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024957.050-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024957.113-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024957.347-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024957.600-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024957.785-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024957.879-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=417,ax=507,ay=320,lx=507,ly=320
+[20260802.024957.988-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024958.207-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=417,ax=507,ay=320,lx=507,ly=320
+[20260802.024958.316-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=417,ax=507,ay=320,lx=507,ly=320
+[20260802.024958.394-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024958.488-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=477,w=686,h=9,ax=507,ay=320,lx=507,ly=320
+[20260802.024958.722-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=417,ax=507,ay=320,lx=507,ly=320
+[20260802.024958.832-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=417,ax=507,ay=320,lx=507,ly=320
+[20260802.024958.925-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.024959.175-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=417,ax=507,ay=320,lx=507,ly=320
+[20260802.024959.285-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024959.378-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.024959.613-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.024959.738-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.025000.035-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=431,ax=507,ay=320,lx=507,ly=320
+[20260802.025000.332-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=55,w=686,h=413,ax=507,ay=320,lx=507,ly=320
+[20260802.025000.410-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=417,ax=507,ay=320,lx=507,ly=320
+[20260802.025000.488-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=435,ax=507,ay=320,lx=507,ly=320
+[20260802.025001.036-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.025001.599-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.025002.114-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.025002.644-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.025003.175-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=51,w=686,h=18,ax=507,ay=320,lx=507,ly=320
+[20260802.025003.660-6420-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=0,ry=31,w=686,h=19,ax=507,ay=320,lx=507,ly=320
+[20260802.025003.738-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=1,ry=50,w=229,h=196
+[20260802.025003.738-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=1,ry=50,w=229,h=196,ax=507,ay=320,lx=507,ly=320
+[20260802.025003.738-4492-I] SynthActivate: QGAPROTO,msg=SYNTH,hwnd=0x50230,owner=0x2043e,x=508,y=370,w=229,h=196
+[20260802.025003.738-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=1,ry=50,w=229,h=196
+[20260802.025003.738-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=1,ry=50,w=229,h=196,ax=507,ay=320,lx=507,ly=320
+[20260802.025003.753-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=1,ry=50,w=229,h=196
+[20260802.025003.785-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=1,ry=50,w=229,h=196,ax=507,ay=320,lx=507,ly=320
+[20260802.025007.316-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=4,ry=53,w=223,h=44
+[20260802.025007.332-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=4,ry=53,w=223,h=44,ax=507,ay=320,lx=507,ly=320
+[20260802.025007.332-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=1,ry=50,w=229,h=196
+[20260802.025007.347-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=1,ry=50,w=229,h=196,ax=507,ay=320,lx=507,ly=320
+[20260802.025007.722-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=4,ry=75,w=223,h=44
+[20260802.025007.753-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=4,ry=75,w=223,h=44,ax=507,ay=320,lx=507,ly=320
+[20260802.025007.753-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=1,ry=50,w=229,h=196
+[20260802.025007.753-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=1,ry=50,w=229,h=196,ax=507,ay=320,lx=507,ly=320
+[20260802.025008.113-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=4,ry=97,w=223,h=44
+[20260802.025008.113-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=4,ry=97,w=223,h=44,ax=507,ay=320,lx=507,ly=320
+[20260802.025008.113-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=1,ry=50,w=229,h=196
+[20260802.025008.113-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=1,ry=50,w=229,h=196,ax=507,ay=320,lx=507,ly=320
+[20260802.025008.535-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=4,ry=119,w=223,h=44
+[20260802.025008.535-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=4,ry=119,w=223,h=44,ax=507,ay=320,lx=507,ly=320
+[20260802.025008.535-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=1,ry=50,w=229,h=196
+[20260802.025008.535-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=1,ry=50,w=229,h=196,ax=507,ay=320,lx=507,ly=320
+[20260802.025008.925-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=4,ry=141,w=223,h=22
+[20260802.025008.925-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=4,ry=141,w=223,h=22,ax=507,ay=320,lx=507,ly=320
+[20260802.025008.925-4492-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x50230,owner=0x2043e,rx=1,ry=50,w=229,h=196
+[20260802.025008.925-4492-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x2043e,rx=1,ry=50,w=229,h=196,ax=507,ay=320,lx=507,ly=320
+TRACEEND
+RESULT=SCN1DONE menu-left-open
+
+C:\Windows\system32>
