@@ -1338,3 +1338,20 @@ Method note: the first attempt returned RECORDS 0 and looked like a null result.
 SendKeys went nowhere because Word did not have focus after the restart. Fixed by explicitly
 SetForegroundWindow-ing Word and asserting FOREGROUND_IS_WORD=True before typing. A measurement
 that cannot fail loudly will fail quietly.
+
+### 2026-08-02 — agent-side optimisation headroom for Office: bounded, and NOT in throughput
+Asked whether the agent can be optimised to speed Office up. Measured answer:
+- Our cost is **182 us against a 31 ms frame interval = 0.6%**. Reducing it to zero would be
+  imperceptible for typing.
+- We impose **no frame-rate cap**: `GetFrame(capture, FRAME_TIMEOUT)` uses a 1000 ms
+  AcquireNextFrame timeout (capture.c:733, FRAME_TIMEOUT=1000) with no sleep or throttle in the
+  loop, so the ~32 fps observed is the GUEST's present rate.
+Therefore there is no throughput win available agent-side. Real (bounded) opportunities:
+1. **Damage-scoped recapture + diff** — today any intersecting dirty rect triggers a full
+   PrintWindow of the whole window and a full-window row diff; on Word (3430x1379) this produced
+   `upd` spikes to **58 ms**. Scoping both to the damaged band removes the spikes. Same family as
+   d64bca6 (suppress recapture on pure moves), extended from "don't recapture" to "recapture
+   less". Best evidence-backed agent-side change available; benefits every large window.
+2. **slice-fed / PwForceLegacy fallback** fired twice on this guest — that path serves a window
+   from full-desktop slices instead of its own buffer and is materially slower. Find out what
+   triggers it on Office before assuming it is rare.
