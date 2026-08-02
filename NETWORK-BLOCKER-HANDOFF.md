@@ -1,4 +1,49 @@
-# Networking blocker — state of knowledge (handoff, 2026-08-02)
+# Networking blocker — RESOLVED 2026-08-02: the netvm was mirage-firewall
+
+## ROOT CAUSE (found by the user)
+
+The netvm in use for every failing test was **`fw-net` = qubes-mirage-firewall**, a MirageOS
+unikernel. Switching the Windows qube to a conventional (Linux-based) netvm released the
+hang immediately. Nothing on the guest side was ever at fault.
+
+Mechanism, consistent with all telemetry below: the Windows PV network frontend never
+completes its handshake against mirage-firewall's netback, so `xenvif` never starts, no
+`XENVIF\...&DEV_NET` child is enumerated, `xennet` is never installed, `Unplug\NICS` is
+never armed, and the guest spins ~2 cores in PnP retry with qrexec starved out. Detaching
+the netvm removes the frontend and the guest recovers.
+
+**Everything in the sections below was measured against that constant.** They remain useful
+as evidence and as a record of what was eliminated, but the conclusion each was reaching for
+("upstream QWT defect", "our deploy machinery", "PV driver regression") is WRONG. The one
+variable never tested was the other end of the vif.
+
+### What this explains at a stroke
+- Stock QWT 4.2.2 starving identically to our fork (the netvm was the shared constant).
+- Win10 AND Win11 qubes both failing (same netvm).
+- Feature set, vCPU count, memory, MSI byte-identity, offline-install timing all coming back
+  negative — every one of them was a guest-side variable.
+- The user's long-lived Windows qube working fine: conventional netvm, traffic over the
+  emulated Realtek NIC, PV networking never involved.
+- Community users on Qubes 4.3 reporting success: `sys-firewall`, not a unikernel netvm.
+
+### Status of the fix
+User-confirmed on their side ("the lock released itself"). NOT yet re-measured on
+`win-idd-test`: this qube's policy only permits referencing `fw-net`, so the A/B on identical
+hardware needs the user to point it at a conventional netvm (or name it for me).
+
+### Worth reporting upstream
+A Windows HVM with QWT 4.2.2 PV drivers (Xen Project 9.1.0) cannot use qubes-mirage-firewall
+as its netvm; it hangs the guest rather than merely failing to get a link. Candidate venues:
+qubes-mirage-firewall and qubes-issues (C: windows-tools). The source-verified frontend flow
+in `ci-notes/xenvif-start-flow.md` plus the telemetry below is enough material for a report.
+Before filing, capture the mirage side's view (xenstore backend state for the vif) — nothing
+we have shows how far the backend handshake got.
+
+---
+
+# Historical record (pre-root-cause investigation)
+
+
 
 Self-contained brief for a session that has not seen the earlier work. Read this before
 touching anything network-related. Companion documents: `ci-notes/xenvif-start-flow.md`
