@@ -1310,3 +1310,31 @@ daemon-side bordering, and this does not: it stops presenting decoration fragmen
 That removes the precondition regardless of the containment predicate. Keep BOTH: containment
 (no synthesis of a child wholly outside its owner) and the CreateSent audit (any materialization
 burst must be survivable), since neither alone covers non-Office cases.
+
+### 2026-08-02 — Office sluggishness SOLVED: Office hardware acceleration on a GPU-less VM
+User: "works but painfully slow on every key press" (Word, maximized, 3430x1379 buffer).
+
+Measured with QGAPERF while typing 40 chars at 200 ms intervals, Word focused, identical runs:
+
+| metric | HW accel ON (default) | HW accel OFF | change |
+|---|---|---|---|
+| `dt` p50 (frame interval) | 257,317 us (~4 fps) | **30,935 us (~32 fps)** | 8.3x |
+| `acq` p50 (waiting for a frame) | 255,159 us | 30,056 us | 8.5x |
+| `area` p50 (dirty px/frame) | 236,997 | **3,406** | 70x smaller |
+| `tot` p50 (OUR cost) | 98 us | 182 us | irrelevant |
+
+**The agent was never the bottleneck**: 98 us of work per 257 ms frame = idle 99.96% of the time.
+With acceleration on, Word (a) presented only ~4x/second and (b) repainted essentially the whole
+window for a single character. Disabling it makes Word repaint only the changed text and present
+at display rate.
+
+REMEDY (guest configuration, not an agent change):
+`HKCU\Software\Microsoft\Office\16.0\Common\Graphics\DisableHardwareAcceleration = 1`
+(plus `DisableAnimations=1`, `Common\UseAnimations=0`). Worth adding to guest setup/docs for any
+Office-in-a-Windows-qube deployment - this will hit every user of Office under Qubes, and the
+symptom (typing lag) invites blaming the GUI agent, which the numbers exonerate.
+
+Method note: the first attempt returned RECORDS 0 and looked like a null result. It was vacuous -
+SendKeys went nowhere because Word did not have focus after the restart. Fixed by explicitly
+SetForegroundWindow-ing Word and asserting FOREGROUND_IS_WORD=True before typing. A measurement
+that cannot fail loudly will fail quietly.
