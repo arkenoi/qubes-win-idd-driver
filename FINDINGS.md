@@ -1388,3 +1388,44 @@ memory (a memcpy, zero added latency) and use PrintWindow only for genuinely cov
 The window being typed into is almost always unoccluded, so the common case would lose the whole
 25-65 ms. Correctness (an occluded window must still yield its own content - Gate 0) is preserved
 by construction. Design in progress: scratchpad/hybrid-capture-design.md.
+
+### 2026-08-03 — hybrid DDA/PrintWindow capture: design done, one premise of mine corrected
+Full design: `scratchpad/hybrid-capture-design.md`.
+
+**Corrects my brief:** the occlusion machinery I said to reuse does not do what I claimed.
+`rgnCovered` accumulates ONLY override-redirect popups and synthesized windows
+(main.c:2983-2987, 3119-3122, 3271-3272), and `CollectZOrder` skips `EnumWindows` and sets
+`g_ZOrderValid = FALSE` whenever no popup is visible (main.c:2637-2662) - i.e. always, while
+typing. General z-order clipping was tried here and REVERTED with measured evidence
+(main.c:3256-3270). The hybrid therefore needs its own bounded top-down GW_HWNDNEXT walk,
+conservative-on-doubt, which must not feed back into rgnCovered.
+
+**Why Word feels different from Notepad, quantified (INFERRED extrapolation):** measured
+PrintWindow p50 is 49.4 ms at 2.6 Mpx; Word's 3430x1379 = 4.73 Mpx extrapolates to ~76 ms, which
+EXCEEDS the 31 ms frame interval - so the capture thread never catches up and end-to-end lands
+~100-150 ms. Notepad's ~49 ms fits between frames. Matches the user's report exactly.
+
+**Design calls, each with a verified reason:**
+- Per-window binary, NOT per-region: an occlusion-derived mask changes at input rate and
+  `WcSetMask` takes the engine lock EXCLUSIVE and forces a full recapture
+  (wincapture.cpp:339-356) - it would reintroduce the very cost being removed.
+- Partial occlusion falls back ENTIRELY to PrintWindow: the covered region has no change signal
+  (its dirty rects belong to the occluder), so a mixed buffer could sit up to 250 ms stale.
+- Fast path already exists: `PwSliceCopyAndDamage` (main.c:2736-2776), already proven against the
+  daemon for WS_EX_NOREDIRECTIONBITMAP windows; it takes `fb` as a parameter, so it adds ZERO
+  exposure to the g_FbBits dangling hazard (the real dangling reader is SynthActivate ->
+  PwPatchSynthRect, main.c:1171 - separate issue).
+- Eligibility (7 predicates) includes NOT MOVING: d64bca6's position-invariance argument INVERTS
+  for a DDA source. Plus a ~100 ms dwell; exit immediate and asymmetric.
+- `WcSuspend` must take the engine lock SHARED like WcMarkDirty - exclusive would stall up to
+  65 ms while holding g_csWatchedWindows. Order stays g_csWatchedWindows -> engine(shared) ->
+  vchan; no inversion.
+
+**BIGGEST RISK + THE FALSIFIER (do this before writing any code):** the design assumes DDA pixels
+== PrintWindow pixels for an eligible window. Threats: alpha (DDA composes it; a GDI BI_RGB DIB
+likely leaves 0, so memcmp would call every row changed), Win11 rounded corners, DWM effects.
+Cheapest test, no agent change: one guest tool grabbing BOTH sources for the same unoccluded
+window at the same instant, reporting % differing on RGB vs RGBA and per-corner deltas, ~100
+iterations while typing, on Win10 AND Win11. Interior RGB mismatch ~0 => proceed; otherwise the
+design is dead and the fallback is damage-scoped diffing. Prerequisite: time the occlusion walk
+standalone - if >~1 ms/pass it must be memoised against EVENT_SYSTEM_FOREGROUND/LOCATIONCHANGE.
