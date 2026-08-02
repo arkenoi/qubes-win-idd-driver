@@ -1254,3 +1254,28 @@ Real Office chrome DOES reproduce and is NOT correctly handled: the strips are n
 rejected (as chromerepro's are) nor legitimately contained - they are synthesized out of view
 while outside the owner, and the eventual materialization burst is fatal. chromerepro was not
 a faithful proxy: its strips are contained, real Office's are adjacent.
+
+### 2026-08-02 — Office daemon-kill: trigger bounded, NOT yet deterministically reproducible
+Controlled repro added (`tools/viewcheck/office-repro.ps1`, modes Reset/FirstRun/Steady; closes
+Word with WM_CLOSE because repeated Stop-Process kills left Word offering safe mode and poisoned
+later launches - user spotted that the state we were measuring was not the state we thought).
+
+| attempt | SYNTH | outside-owner | materializing | vchan disc | agent respawn |
+|---|---|---|---|---|---|
+| FirstRun, 75 s hold, no input | 5 | 81 | **0** | **0** | no |
+| 6x window MOVE (SetWindowPos) | - | - | **0** | **0** | no |
+| maximize/restore + 3 resizes + maximize | 10->11 | 247 | **0** | **0** | no |
+
+So: **strips synthesized while outside the owner happen on EVERY Word launch and are harmless on
+their own.** The kill additionally requires the strips to STOP qualifying, which produces
+"owner geometry changed, materializing child" for all four at once - and neither a move nor a
+resize does that, because the strips follow the owner and keep satisfying the (proximity)
+predicate. The original kill happened on the FIRST launch after installation; the likeliest
+remaining trigger is the owner being replaced during startup (splash -> main frame) under load,
+i.e. timing-dependent. A post-Reset FirstRun run did not hit it either.
+
+CONSEQUENCE FOR THE FIX: we cannot currently prove the fix by reproduction. The predicate fix
+(require real overlap, not proximity) removes the precondition - the strips are never synthesized
+- and the CreateSent audit must make ANY materialization burst survivable on its own merits.
+Both are being reviewed on branch fix-office-chrome-v2. Do not claim the daemon-kill is fixed on
+the strength of "Word no longer kills the GUI in a run we could not make it kill the GUI in".
