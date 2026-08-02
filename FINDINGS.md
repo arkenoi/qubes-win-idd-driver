@@ -1123,3 +1123,32 @@ was wrong, and the user caught it.
 2. Upstream report: Windows HVM + QWT 4.2.2 PV drivers (Xen Project 9.1.0) hangs when its
    netvm is qubes-mirage-firewall. Capture the mirage-side xenstore backend state first —
    nothing collected so far shows how far the backend handshake got.
+
+### 2026-08-02 — mirage-firewall incompatibility PINNED to a fixed upstream bug
+Full analysis: `ci-notes/mirage-netback-incompat.md`.
+- **qubes-mirage-firewall < 0.9.5** serialises an HVM's TWO vifs (`appvm` + `appvm-dm`,
+  the stubdomain's) on one thread; `read_frontend_configuration` blocks in `Xs.wait` on the
+  first, so the second backend never runs `init_backend` and stays at libxl's `state=1`
+  (Initialising). Fixed upstream by PR #219 / CHANGES 0.9.5 (2025-10-29), which names the
+  symptom "deadlock states because the connection protocol for one interface is not
+  completed". **This is why only HVMs are affected — PV/PVH qubes have a single vif.**
+- xenvif has **no branch for backend state Initialising** (`frontend.c:1545-1576`); it loops,
+  busy-waiting with `KeStallExecutionProcessor(1000)` at DISPATCH_LEVEL **while holding
+  Frontend->Lock**. One core spinning + one blocked on the lock = exactly 2 cores regardless
+  of vCPU count, matching the measurement (2.00 @4 vCPU, 1.95 @2 vCPU). Separate,
+  upstream-worthy robustness defect: any absent/slow backend wedges the whole guest.
+- Corroboration: qubes-mirage-firewall#127 (6 years old, closed unfixed) reports the freeze
+  at `xenvif|FrontendSetMaxQueues` with "use sys-firewall instead" as the workaround. That
+  log line is merely the last Info() before the wedge — `FrontendMaxQueues` is a red herring,
+  and our test of `FrontendMaxQueues=1` correctly changed nothing.
+- Feature negotiation is NOT involved: every backend key mirage omits (multi-queue,
+  split-event-channels, ctrl-ring, multicast, hash) is optional in xenvif with a safe
+  default; at NumQueues==1 xenvif writes the flat legacy ring layout mirage reads.
+- **Correction to my earlier reasoning**: `Enum\XENVIF` empty / xenvif not Running /
+  `Unplug\NICS` unarmed are NOT discriminating evidence — NICS is consumed every boot,
+  detaching the netvm deletes the NET PDO, and the DISPATCH_LEVEL wedge starves the lazy hive
+  writer. Consistent with the model, but they never proved it.
+
+**Verified working today on mirage (fw-net) with PV net disabled**: guest boots in 20 s,
+IP 10.137.0.64, gateway 10.138.21.72, ping to 8.8.8.8 OK, `http://example.com` = **HTTP 200**.
+Cost: emulated RTL8139 (100 Mbit, QEMU-emulated) instead of PV xennet. Disk stays PV.
