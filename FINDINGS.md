@@ -1279,3 +1279,34 @@ CONSEQUENCE FOR THE FIX: we cannot currently prove the fix by reproduction. The 
 - and the CreateSent audit must make ANY materialization burst survivable on its own merits.
 Both are being reviewed on branch fix-office-chrome-v2. Do not claim the daemon-kill is fixed on
 the strength of "Word no longer kills the GUI in a run we could not make it kill the GUI in".
+
+### 2026-08-02 — Office chrome IDENTIFIED: class MSO_BORDEREFFECT_WINDOW_CLASS, owned by the DIALOG
+Enumerated during Word's first-run sign-in state (user reported the GUI died when clicking
+outside the "license required" window):
+
+```
+0x2033e  850x542   @2969,542   NUIDialog                     'Sign in to set up Office'
+0x20326  866x8     @2961,1084  MSO_BORDEREFFECT_WINDOW_CLASS
+0x20340  8x558     @3819,534   MSO_BORDEREFFECT_WINDOW_CLASS
+0x20342  8x558     @2961,534   MSO_BORDEREFFECT_WINDOW_CLASS
+0x20344  866x8     @2961,534   MSO_BORDEREFFECT_WINDOW_CLASS
+0x20306  3446x1395 @-3,48      OpusApp   'Document1 - Microsoft Word'
+```
+
+1. **The four 8 px strips frame the DIALOG (2961-3827 x 534-1092), not the main OpusApp window.**
+   So the materialization burst is triggered by the DIALOG being dismissed/defocused - the strips
+   are orphaned when their owner disappears. That is an ACTIVATION/lifetime event, which is why
+   move (6 steps) and resize (maximize/restore + 3 resizes) both failed to reproduce it.
+2. **Office gives its shadow chrome a dedicated window class: `MSO_BORDEREFFECT_WINDOW_CLASS`.**
+   This is a far more robust discriminator than the layered/transparent/toolwindow style
+   heuristics, and it is something chromerepro could never have taught us (its synthetic strips
+   are ordinary windows, and contained rather than adjacent).
+3. My scripted click at (120,900) landed ON OpusApp (which spans -3..3443), so the modal merely
+   flashed - not equivalent to the user's click. Still no repro: MATERIALIZING 0, VCHANDISC 0.
+
+FIX IMPLICATION: reject MSO_BORDEREFFECT_WINDOW_CLASS in the window-acceptance predicate outright
+- it is pure decoration and dom0 draws its own borders (2A-chrome rule 4 forbids weakening
+daemon-side bordering, and this does not: it stops presenting decoration fragments as windows).
+That removes the precondition regardless of the containment predicate. Keep BOTH: containment
+(no synthesis of a child wholly outside its owner) and the CreateSent audit (any materialization
+burst must be survivable), since neither alone covers non-Office cases.
