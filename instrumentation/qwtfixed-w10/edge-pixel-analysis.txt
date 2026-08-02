@@ -1,0 +1,2 @@
+edge-main-window (qtest shot win-0.png): size=(3440, 1384) mean_rgb=(149.0, 205.0, 223.6) std=59.41 black_frac(<8)=0.000062 white_frac(>247)=0.026553 uniq_colors=280814
+ULW-FRE-overlay (dom0 fullshot crop 0,31 3440x1400): size=(3440, 1400) mean_rgb=(99.0, 130.3, 141.5) std=48.98 black_frac(<8)=0.000067 white_frac(>247)=0.051878 uniq_colors=93659
