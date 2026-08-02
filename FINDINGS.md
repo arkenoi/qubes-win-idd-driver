@@ -1030,11 +1030,53 @@ workarea 0x5 fix `2c5dad2` + drag suppression `d64bca6`). NOT an overlay: `gui-a
   result counts again (ACCEPTANCE-PROTOCOL.md still lists it as proven); Edge's "true
   first run" is qualified (Windows pre-initialised the profile during install).
 
-### MSI REINSTALL over a healthy install → starvation (do not use this deploy path)
-Deploying `b299011` via `msiexec REINSTALL=ALL REINSTALLMODE=vamus
-ADDLOCAL=…,PvDriversNetwork` dropped qrexec mid-install (expected: it replaces the qrexec
-agent) and, after a clean reboot, left the guest burning **2.5-2.8 cores with qrexec dead**
-— the storm signature. Since the same MSI content installed from wiped disk an hour
-earlier was healthy, the prime suspect is the **PV-driver reinstall's PnP churn**, not the
-agent change; but with qrexec dead the guest's own logs were unreadable, so this is
-UNATTRIBUTED. Discriminator now running: clean wiped-disk install of the same package.
+### RETRACTED: "MSI REINSTALL starves the guest"
+I wrote that entry from two mistakes of my own and it is WRONG on both counts.
+1. The reinstall never took effect: `gui-agent.exe` was still `663d7e9b…` (a459f0e)
+   afterwards, so nothing about `b299011` was ever exercised by it.
+2. qrexec had in fact RECOVERED at 01:44:59 — my probes used 12-15 s timeouts against a
+   busy guest and read "slow" as "dead", and I then destroyed the domain on that basis.
+What actually happened: a PV-driver-touching reinstall attempt caused transient boot-time
+PnP churn on the OLD (churning) build, which resolved on its own. Lesson recorded because
+the same short-timeout mistake produced a premature `qtest kill` twice today: when probing
+a guest under load, use >=40 s timeouts and confirm with a cputime trend before killing.
+
+## 2026-08-02 (session 7) — FINAL: clean install of b299011, all display gates PASS
+
+Build: `qwt-full` CI 30724190347, `installer.msi fa774936…`, `gui-agent.exe 4b4ce2b1…`,
+agent `b299011` = perwindow + `2c5dad2` (workarea listener/lifecycle/drift) + `d64bca6`
+(drag move-only suppression) + `b299011` (re-assert throttle + lost-fight backoff).
+Installed by unattended ISO on a **wiped disk**. Netvm DETACHED throughout.
+
+| gate | result |
+|---|---|
+| identity | `gui-agent.exe` = `4b4ce2b1…` (CI manifest), **0 `.orig`**, MSI-installed, testsigning Yes, services Running |
+| workarea listener | **0** `CreateWindowEx 0x5` (was 3 per agent start on every build since 6d46132) |
+| workarea churn (120 s idle, same script, same guest) | **0 applies, 0 drifts, 0.08 s agent CPU** — control on pre-fix `a459f0e`: **1460 applies (12.2/s), 21 drifts, 3.95 s CPU** |
+| drag p50 (bench-agent.sh, identical harness) | **613 us** vs 5 ms bar. Pre-fix `a459f0e`: 17218/16128 us. Old screen-slice baseline: 917 us. 36.1 fps vs 23.7 |
+| other phases p50 | scroll 121 us (base 493), type 96 us (base 531), idle 91/99 us (base 522/684) — all improved |
+| Win10 protocol regression (5 win11-line fixes) | PASS on 526 non-empty records; occlusion 76/76 correct, menu synthesized not announced, geometry == DWM frame bounds, chromerepro 5→1, 0 bad rejections, 0 sub-floor announcements |
+| Edge ULW first-run | PASS on all five points (pid stable, 0 vchan/daemon-kill signatures, ULW slice-fed fallback, real pixels, clean unmap) |
+| cold boot | PASS: 2 guest top-level windows → **exactly 2 dom0 windows**, **0 EnumWindows failures**, agent up on the boot path |
+
+### The work area now STICKS, and the backoff never had to engage
+Only 6 applies + 3 drifts in the whole boot, then zero for 120 s. Once we stopped
+re-asserting at 12 Hz, Explorer stopped counter-setting — the fight was self-sustaining.
+`WA_LOST_FIGHT_TRIES` backoff logged 0 times, i.e. it is dead code on this configuration
+and remains only as a guard.
+
+### Harness defects found and fixed (they produced a FALSE FAIL on a healthy build)
+`tools/viewcheck/coldboot-test.sh` reported "dom0 received 0 windows" on a build that was
+demonstrably fine (2/2 windows visible seconds later). Two causes, both fixed:
+(a) it screenshotted with no settle wait, racing map+first-damage; (b) it hardcoded
+EXPECT=3, a count that assumed `chromerepro` was present — it is absent on a freshly
+installed guest. It now derives the expectation from the scene's own window list and
+settles 20 s first. `scene.ps1`/`vchanchk.ps1` were only in a stale session scratchpad and
+are now committed under `tools/viewcheck/`, so the harness is self-contained.
+
+### NOT claimed
+Networking. With a netvm attached this build behaves exactly as before the display fixes
+(xenvif never starts, ~2 cores, qrexec dead) — unchanged by our work, not fixed by it, and
+still unattributed between us and upstream until the stock-QWT control install runs. The
+stock-control ISO is built and verified (`win-idd-unattended-stock.iso`, staged MSI
+bit-identical to vendor stock) and that experiment is the next task.
