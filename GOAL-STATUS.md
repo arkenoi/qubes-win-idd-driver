@@ -1,4 +1,50 @@
-# Goal status — updated 2026-08-01
+# Goal status — updated 2026-08-02
+
+## Display/agent package: CLEAN-INSTALL VERIFIED, no regressions found
+
+Build `b299011` (package `installer.msi fa774936…`, `gui-agent.exe 4b4ce2b1…`) was
+installed from an unattended ISO onto a **wiped disk** — not overlaid on a stock QWT, no
+`.orig` backups — and passed every display gate by measurement, each against a control:
+
+| gate | number |
+|---|---|
+| drag frame cost p50 | **613 us** (bar 5 ms; pre-fix build 17.2 ms; old baseline 917 us) |
+| work-area re-assert churn, 120 s idle | **0 applies / 0.08 s CPU** (pre-fix 1460 / 3.95 s) |
+| `WorkAreaCreateListener 0x5` | **0** (was 3 per agent start since 6d46132) |
+| Win10 protocol/acceptance regression | all invariants hold on 526 records |
+| Edge ULW first-run | 5/5 points |
+| cold boot | 2 guest windows → 2 dom0 windows, 0 EnumWindows failures |
+
+Two defects were found and fixed this session, both invisible to code review and caught by
+measuring: the work-area listener could never be created on ANY OS (`OpenInputDesktop`
+lacked `DESKTOP_CREATEWINDOW`), and per-frame `PrintWindow` recapture of a dragged window
+was pure waste (its content is position-invariant, so the diff was always empty). Fixing
+the first exposed a third — a 12 Hz re-assert ping-pong with Explorer — which was itself
+found by measurement, not review, and fixed after the first attempt was rejected in
+adversarial review for a starvation bug.
+
+## BLOCKER unchanged: networking
+
+With a netvm attached the guest is still unusable (xenvif installs but never starts,
+~2 cores burned, qrexec dead). This is **not a regression** — it predates and is unaffected
+by the display work — but it means the package is not yet a shippable Qubes Windows Tools
+install. New this session: the "graceful two-boot dance" the previous handoff proposed is
+**unexecutable**, because a netvm-attached guest never becomes responsive enough to service
+ACPI. The next experiment is the stock-QWT control install (ISO built and verified) to
+settle whether the defect is ours or upstream/environmental.
+
+## Standing rule this session kept honoring
+Every claim above is a measurement against a control, and the two results that looked like
+failures were investigated rather than accepted: a cold-boot "FAIL" turned out to be two
+harness defects (no settle wait, hardcoded window count) on a healthy build, and an
+"MSI upgrade starves the guest" entry I wrote was retracted after I found the upgrade had
+never applied and that my own short probe timeouts had misread a live guest as dead.
+
+---
+
+## Historical (pre-2026-08-02)
+
+
 
 ## BLOCKER (2026-08-01, session 6): networking is broken on the current build
 
