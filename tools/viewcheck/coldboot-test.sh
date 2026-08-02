@@ -9,7 +9,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 S="${SCRATCH:-/tmp}"
-EXPECT="${1:-3}"   # expected dom0 window count for the standard scene
+EXPECT="${1:-0}"   # 0 = derive from the scene itself (see below); pass a number to override
 cd "$HERE"
 export QTEST_INCOMING="${QTEST_INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt}"
 
@@ -34,6 +34,16 @@ for attempt in 1 2 3 4 5; do
 done
 [ "$ran" = 1 ] || { echo "FAIL: scene never ran; nothing was verified"; exit 1; }
 
+# Expect what the scene ACTUALLY created, not a hardcoded number: chromerepro is absent on a
+# freshly installed guest, so the old default of 3 failed a healthy build. The scene prints
+# one line per guest top-level window under its header.
+scenecount=$(echo "$OUT" | sed -n '/guest top-level windows now visible/,$p' | grep -cE '^\s+[0-9]+,[0-9]+ ')
+[ "$scenecount" -gt 0 ] 2>/dev/null && EXPECT="$scenecount"
+echo "  scene created $scenecount guest top-level window(s) -> expecting that many in dom0"
+
+# Windows do not reach dom0 the instant the scene returns (map + first damage + daemon
+# pixmap). Without this settle the screenshot races and reports 0 on a healthy build.
+sleep 20
 qrexec-client-vm dom0 local.WinScreenshot </dev/null > "$S/cb.tar" 2>/dev/null
 rm -rf "$S/cb" && mkdir -p "$S/cb" && tar -xf "$S/cb.tar" -C "$S/cb" 2>/dev/null
 n=$(ls "$S/cb"/*.png 2>/dev/null | wc -l)
