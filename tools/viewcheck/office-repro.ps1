@@ -32,7 +32,7 @@ if ($Mode -eq 'Reset') {
     Remove-Item 'HKCU:\Software\Microsoft\Office\16.0\Common\General' -Recurse -Force
     Remove-Item 'HKCU:\Software\Microsoft\Office\16.0\Common\FirstRun' -Recurse -Force
     Remove-Item 'HKCU:\Software\Microsoft\Office\16.0\Word\Options' -Recurse -Force
-    "RESET_DONE — reboot the guest before the FirstRun run"
+    "RESET_DONE - reboot the guest before the FirstRun run"
     "RESULT=OFFICE_REPRO_RESET"
     exit 0
 }
