@@ -301,3 +301,47 @@ design; on a working stock install boot 1 runs at normal load with the dialog wa
 Sustained burn + qrexec dead during PnP install is a separate defect/confounder (agent
 capture load, interrupt storm, or PnP stall) — measure it in the stock-QWT control run the
 handoff already mandates.
+
+---
+
+## 2026-08-02 — where the hang ACTUALLY is (corrects the model above)
+
+Derived by source analysis this session. NOTE ON PROVENANCE: the detailed anatomy/design/review
+documents this summarises were reported as written but were never persisted to disk; only the
+workflow journal retains them
+(`.claude/projects/.../subagents/workflows/wf_b4f88a5a-c8c/journal.jsonl`). What follows is the
+substance, recorded here so it survives.
+
+**Not the connect path.** The wedge is in device ENUMERATION:
+`FdoScan -> __FdoEnumerate -> PdoCreate -> FdoAddPhysicalDeviceObject -> PdoResume ->
+FrontendResume -> FrontendSetState(FRONTEND_CLOSED)`. There is no direct `UNKNOWN -> CLOSED`
+edge, so it runs `FrontendPrepare` (succeeds; backend already at InitWait) then **`FrontendClose`,
+which writes frontend `Closing (5)` and waits forever**. This is the ONLY path that produces the
+pair captured live on 2026-08-02 (`backend=2 InitWait` / `frontend=5 Closing`) — a
+`FrontendConnect` hang would show frontend `4`. That distinction is the acceptance discriminator.
+
+**Why the burn is indefinite rather than 120 s.** `TotalTimeout = 120000` bounds ONE call of
+`FrontendWaitForBackendXenbusStateChange`; the function returns `VOID` with `*State` unchanged, so
+callers cannot detect a timeout. The three enclosing loops have no counter or deadline — only
+`!FrontendIsOnline()`, which a present-but-frozen backend never trips. Plain unbounded `while`,
+not PnP re-entry.
+
+**Log constraints found (they shape any diagnostic):** the free-build filter drops any line not
+starting `xen`; `LOG_BUFFER_SIZE` is 256 with an unchecked `RtlCopyMemory`; the 32-slot ring is
+shared with the other xen* drivers. Keep lines short.
+
+**Buildability:** xenvif builds standalone from the pinned submodule (106 files, matches the
+shipped 9.1.0 binary); CI already installs the WDK for the idd-driver job, though only UMDF has
+been built there. EWDK does not fit the cache.
+
+**v1 was rejected** for (a) a spin/eject/recreate loop leaving no device node at all when the
+backend is stuck BELOW InitWait, and (b) breaking out of `FrontendClose` with a live backend,
+after which grants are revoked and pages freed that the netvm may still map writable.
+
+**v2** (`scratchpad/xenvif-fail-loud-v2.patch`, applies clean, +351/-10, unbuilt): bounded ONLY
+where nothing has been granted (`FrontendPrepare`, `FrontendClose` from PREPARED); the
+CONNECTED teardown and `FrontendConnect` stay unbounded by design, because rings are already
+granted there and revocation failure is silently discarded at all 17 xenvif call sites. Adds
+`FrontendSetOfflineNoEject()` so a stalled probe cannot request an eject, the
+`XENVIF-BACKEND-STALL` diagnostic, and a `FrontendBackendStallTimeout` registry escape hatch
+(0 = exact pre-patch behaviour).
