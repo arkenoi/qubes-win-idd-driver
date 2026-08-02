@@ -1152,3 +1152,14 @@ Full analysis: `ci-notes/mirage-netback-incompat.md`.
 **Verified working today on mirage (fw-net) with PV net disabled**: guest boots in 20 s,
 IP 10.137.0.64, gateway 10.138.21.72, ping to 8.8.8.8 OK, `http://example.com` = **HTTP 200**.
 Cost: emulated RTL8139 (100 Mbit, QEMU-emulated) instead of PV xennet. Disk stays PV.
+
+### 2026-08-02 — upstream issue filed; netvm decision: core-net
+Filed **https://github.com/mirage/qubes-mirage-firewall/issues/230** (text approved by the
+user first, per CLAUDE.md): Windows HVM `vif_ioemu` device never completes its handshake on
+0.9.5, backend stuck at InitWait while the frontend goes to Closing and mirage keeps waiting.
+Includes the xenstore capture, the unikernel log, and everything eliminated by measurement.
+**Decision: `win-idd-test` runs on `core-net`.** mirage-firewall support is deferred to the
+upstream fix; no PV-side workaround exists that keeps PV networking (the emulated-NIC route
+works but is a 100 Mbit QEMU path, rejected as non-production).
+Still to file separately: xenvif's unbounded DISPATCH_LEVEL busy-wait under Frontend->Lock,
+which is what escalates any stalled backend into a wedged qube.
