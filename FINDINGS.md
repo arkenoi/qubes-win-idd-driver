@@ -1163,3 +1163,53 @@ upstream fix; no PV-side workaround exists that keeps PV networking (the emulate
 works but is a 100 Mbit QEMU path, rejected as non-production).
 Still to file separately: xenvif's unbounded DISPATCH_LEVEL busy-wait under Frontend->Lock,
 which is what escalates any stalled backend into a wedged qube.
+
+## 2026-08-02 — END-TO-END on our package b299011 (clean install, core-net)
+
+Wiped-disk unattended install of `installer.msi fa774936…`; in-guest hash check passed,
+`QWT_INSTALL_OK`, `gui-agent.exe 4b4ce2b1…` = CI manifest, **0 `.orig`** (MSI-installed, never
+overlaid), testsigning Yes, Qubes services Running. netvm `core-net`.
+
+| gate | result |
+|---|---|
+| install identity | PASS — `4b4ce2b1…`, MSI hash verified in-guest, 0 `.orig` |
+| work-area churn, 120 s idle | PASS — **0 applies, 0 drifts, 0.27 s CPU** (pre-fix control: 1460 applies, 3.95 s) |
+| drag p50 (settled) | PASS — **698 us** vs 5 ms bar; 1.39 interrogated/frame, 34.2 fps (pre-fix 17.2 ms; earlier install measured 613 us) |
+| Win10 protocol regression | **PARTIAL** — all four acceptance conditions pass on non-empty data (579-record drag run "all invariants hold"; 0 legit-window rejections; 0 sub-floor announcements; chromerepro 5→1). See the negative finding below. |
+| Edge ULW first-run | PASS — 5/5, on a genuinely first-run profile (sentinel absent, FRE takeover appeared), agent pid stable, 0 daemon-kill signatures, real pixels, clean unmap |
+| cold boot | PASS — agent up on boot path, 2 guest windows → 2 dom0 windows, **0 EnumWindows failures** |
+
+First bench right after install read 1.97 ms p50; the settled re-run read 698 us. The first
+number was first-boot background load (Defender/Search/WSD), not a regression — recorded
+because reporting only the good number would be the exact pattern this project bans.
+
+### NEGATIVE FINDING — maskpush storm on joint owner+child motion (new follow-up)
+The regression agent was asked to CONFIRM `ev=maskpush` stays absent during joint motion. It
+found the scripted drag cannot answer that (the harness presses ESC first, so no synthesized
+child exists — `maskpush=0` there is vacuous), then built the condition itself: a Win10 menu
+does NOT travel with its owner, so it constructed an owned caption-less child in lockstep.
+Result: **58 maskpushes in 2.6 s, two per motion step.** Mechanism: `SynthFlushMasks` defers
+per tracking PASS, but `TrackWindows`' non-resync path handles only the current WinEvent
+batch, so owner and child land in different passes — owner interrogated → CONFIGURE →
+maskpush (stale child rect), child interrogated → maskpush (restore). Each takes
+`WcSetMask`'s exclusive lock and forces a full recapture. This is precisely the cost the v2
+single-flush design was meant to remove (adversarial-review blocker 2): it works for the
+plain drag, not for joint motion. No visual defect observed; no acceptance condition depends
+on it. Logged as a follow-up.
+
+### SCOPE LIMIT stated by the agent, and it is right
+This run proves **no Win10 regression only**. None of the five win11-line fixes was positively
+exercised: the Win10 menu has a real `GW_OWNER` (a5012a5's fallback never entered), overhang
+was 0 (832ce97's raised cap never reached), no sub-floor popup occurred (d6ab61c/d610454 never
+entered), and no Win10 window carries TRANSPARENT+NOREDIRECTIONBITMAP+TOOLWINDOW (3c12071
+tested only in its false-positive direction). Each PASS means "the check did not fire", not
+"the check was shown able to fire on this build".
+
+### Harness defects found and fixed/recorded
+`tools/viewcheck/coldboot-test.sh` produced THREE false FAILs on healthy builds: no settle
+before the screenshot (fixed), a hardcoded window expectation (fixed — now derived from the
+scene, excluding chromerepro's deliberately-unmapped shadow strips), and a single screenshot
+with no retry when `local.WinScreenshot` returns an empty tar (fixed). Remaining known flaw:
+`chromerepro` self-exits between scene and screenshot, so its window can never be counted —
+verify cold boot directly rather than trusting that count. `check-occlusion.py` remains
+INVALID for per-window-captured windows and needs a PW-aware rewrite before its result counts.

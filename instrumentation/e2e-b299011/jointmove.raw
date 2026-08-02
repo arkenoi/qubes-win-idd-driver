@@ -1,0 +1,223 @@
+Microsoft Windows [Version 10.0.19045.2965]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& "$env:USERPROFILE\Documents\QubesIncoming\win-idd-mgmt\jointmove.ps1""
+RESULT=LOGFILE gui-agent-20260802-152459-2848.log
+RESULT=OWNERHWND 328092
+RESULT=MENUHWND 328142 rect 408,350 229x196
+PHASE jointmove 20260802.152526.382
+TRACKSTART
+STEP 0 t=20260802.152526.460 owner=400,300 menuvis=1 menu=408,350
+STEP 1 t=20260802.152526.538 owner=406,303 menuvis=1 menu=408,350
+STEP 2 t=20260802.152526.601 owner=412,306 menuvis=1 menu=408,350
+STEP 3 t=20260802.152526.663 owner=418,309 menuvis=1 menu=408,350
+STEP 4 t=20260802.152526.726 owner=424,312 menuvis=1 menu=408,350
+STEP 5 t=20260802.152526.788 owner=430,315 menuvis=1 menu=408,350
+STEP 6 t=20260802.152526.851 owner=436,318 menuvis=1 menu=408,350
+STEP 7 t=20260802.152526.913 owner=442,321 menuvis=1 menu=408,350
+STEP 8 t=20260802.152526.976 owner=448,324 menuvis=1 menu=408,350
+STEP 9 t=20260802.152527.038 owner=454,327 menuvis=1 menu=408,350
+STEP 10 t=20260802.152527.101 owner=460,330 menuvis=1 menu=408,350
+STEP 11 t=20260802.152527.163 owner=466,333 menuvis=1 menu=408,350
+STEP 12 t=20260802.152527.226 owner=472,336 menuvis=1 menu=408,350
+STEP 13 t=20260802.152527.288 owner=478,339 menuvis=1 menu=408,350
+STEP 14 t=20260802.152527.351 owner=484,342 menuvis=1 menu=408,350
+STEP 15 t=20260802.152527.413 owner=490,345 menuvis=1 menu=408,350
+STEP 16 t=20260802.152527.476 owner=496,348 menuvis=1 menu=408,350
+STEP 17 t=20260802.152527.538 owner=502,351 menuvis=1 menu=408,350
+STEP 18 t=20260802.152527.601 owner=508,354 menuvis=1 menu=408,350
+STEP 19 t=20260802.152527.663 owner=514,357 menuvis=1 menu=408,350
+STEP 20 t=20260802.152527.726 owner=520,360 menuvis=1 menu=408,350
+STEP 21 t=20260802.152527.788 owner=526,363 menuvis=1 menu=408,350
+STEP 22 t=20260802.152527.851 owner=532,366 menuvis=1 menu=408,350
+STEP 23 t=20260802.152527.913 owner=538,369 menuvis=1 menu=408,350
+STEP 24 t=20260802.152527.976 owner=544,372 menuvis=1 menu=408,350
+STEP 25 t=20260802.152528.038 owner=550,375 menuvis=1 menu=408,350
+STEP 26 t=20260802.152528.101 owner=556,378 menuvis=1 menu=408,350
+STEP 27 t=20260802.152528.163 owner=562,381 menuvis=1 menu=408,350
+STEP 28 t=20260802.152528.226 owner=568,384 menuvis=1 menu=408,350
+STEP 29 t=20260802.152528.288 owner=574,387 menuvis=1 menu=408,350
+STEP 30 t=20260802.152528.351 owner=580,390 menuvis=1 menu=408,350
+STEP 31 t=20260802.152528.413 owner=586,393 menuvis=1 menu=408,350
+STEP 32 t=20260802.152528.476 owner=592,396 menuvis=1 menu=408,350
+STEP 33 t=20260802.152528.538 owner=598,399 menuvis=1 menu=408,350
+STEP 34 t=20260802.152528.601 owner=604,402 menuvis=1 menu=408,350
+STEP 35 t=20260802.152528.663 owner=610,405 menuvis=1 menu=408,350
+STEP 36 t=20260802.152528.726 owner=616,408 menuvis=1 menu=408,350
+STEP 37 t=20260802.152528.788 owner=622,411 menuvis=1 menu=408,350
+STEP 38 t=20260802.152528.851 owner=628,414 menuvis=1 menu=408,350
+STEP 39 t=20260802.152528.913 owner=634,417 menuvis=1 menu=408,350
+TRACKEND
+PHASE jointmove-end 20260802.152528.913
+PHASE closed 20260802.152532.929
+DRAGSTART
+[20260802.152515.398-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152515.913-7120-D] ProcessNewFrame: QGADRAG,ev=settle,hwnd=0x5019c
+[20260802.152523.398-7120-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0x5019c,n=1
+[20260802.152526.476-7120-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0x5019c,n=1
+[20260802.152526.491-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152526.538-7120-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0x5019c,n=1
+[20260802.152526.554-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152526.601-7120-D] SynthUpdateMask: QGADRAG,ev=maskpush,hwnd=0x5019c,n=0
+[20260802.152526.632-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152526.695-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152526.741-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152526.820-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152526.866-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152526.960-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152526.991-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152527.054-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152527.132-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152527.195-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152527.242-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152527.335-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152527.366-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152527.460-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152527.492-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152527.554-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152527.616-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152527.726-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152527.757-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152527.804-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152527.882-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152527.960-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152527.991-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152528.070-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152528.132-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152528.195-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152528.257-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152528.304-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152528.382-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152528.460-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152528.507-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152528.570-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152528.616-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152528.710-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152528.741-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152528.804-7120-D] ProcessNewFrame: QGADRAG,ev=refresh,hwnd=0x5019c
+[20260802.152528.866-7120-D] ProcessNewFrame: QGADRAG,ev=suppress,hwnd=0x5019c
+[20260802.152530.960-7120-D] ProcessNewFrame: QGADRAG,ev=settle,hwnd=0x5019c
+DRAGEND
+TRACESTART
+[20260802.152459.866-7120-I] SendWindowCreate: QGAPROTO,msg=CREATE,hwnd=0x0,x=0,y=0,w=3440,h=1440,ovr=0,style=0x00000000,ex=0x00000000
+[20260802.152459.898-7120-I] SendWindowCreate: QGAPROTO,msg=CREATE,hwnd=0x602ce,x=1419,y=495,w=626,h=453,ovr=0,style=0x14cf0000,ex=0x00000100
+[20260802.152459.913-7120-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x602ce,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000100,vis=1,w=626,h=453
+[20260802.152459.929-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x602ce,rx=0,ry=0,w=626,h=453,ax=1419,ay=495,lx=1419,ly=495
+[20260802.152459.960-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x602ce,x=1424,y=520,w=626,h=453,ovr=0
+[20260802.152459.960-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x602ce,x=1431,y=520,w=626,h=453,ovr=0
+[20260802.152459.960-7120-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x602ce,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000100,vis=1,w=626,h=453
+[20260802.152515.241-7120-I] SendWindowCreate: QGAPROTO,msg=CREATE,hwnd=0x5019c,x=189,y=182,w=2566,h=1022,ovr=0,style=0x14cf0000,ex=0x00000110
+[20260802.152515.320-7120-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x5019c,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000110,vis=1,w=2566,h=1022
+[20260802.152515.366-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=0,w=2566,h=1022,ax=189,ay=182,lx=189,ly=182
+[20260802.152515.366-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=194,y=207,w=2566,h=1022,ovr=0
+[20260802.152515.382-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=201,y=207,w=2566,h=1022,ovr=0
+[20260802.152515.382-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=31,w=2566,h=990,ax=201,ay=207,lx=201,ly=207
+[20260802.152515.476-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x602ce,rx=0,ry=0,w=626,h=453,ax=1431,ay=520,lx=1431,ly=520
+[20260802.152515.976-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=2566,h=18,ax=201,ay=207,lx=201,ly=207
+[20260802.152516.492-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=2566,h=18,ax=201,ay=207,lx=201,ly=207
+[20260802.152517.023-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=2566,h=18,ax=201,ay=207,lx=201,ly=207
+[20260802.152517.507-7120-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x5019c,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000110,vis=1,w=2566,h=1022
+[20260802.152517.538-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=2566,h=18,ax=201,ay=207,lx=201,ly=207
+[20260802.152518.148-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=2566,h=18,ax=201,ay=207,lx=201,ly=207
+[20260802.152518.632-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=2566,h=18,ax=201,ay=207,lx=201,ly=207
+[20260802.152519.163-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=2566,h=18,ax=201,ay=207,lx=201,ly=207
+[20260802.152519.195-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=407,y=300,w=686,h=493,ovr=0
+[20260802.152519.273-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=0,w=686,h=493,ax=407,ay=300,lx=407,ly=300
+[20260802.152519.820-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=686,h=18,ax=407,ay=300,lx=407,ly=300
+[20260802.152520.351-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=686,h=18,ax=407,ay=300,lx=407,ly=300
+[20260802.152520.866-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=686,h=18,ax=407,ay=300,lx=407,ly=300
+[20260802.152521.413-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=686,h=18,ax=407,ay=300,lx=407,ly=300
+[20260802.152521.929-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=686,h=18,ax=407,ay=300,lx=407,ly=300
+[20260802.152522.398-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=686,h=18,ax=407,ay=300,lx=407,ly=300
+[20260802.152523.023-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=51,w=686,h=18,ax=407,ay=300,lx=407,ly=300
+[20260802.152523.398-7120-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x501ce,owner=0x5019c,rx=1,ry=50,w=229,h=196
+[20260802.152523.398-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=1,ry=50,w=229,h=196,ax=407,ay=300,lx=407,ly=300
+[20260802.152523.398-7120-I] SynthActivate: QGAPROTO,msg=SYNTH,hwnd=0x501ce,owner=0x5019c,x=408,y=350,w=229,h=196
+[20260802.152523.398-7120-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x501ce,owner=0x5019c,rx=1,ry=50,w=229,h=196
+[20260802.152523.398-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=1,ry=50,w=229,h=196,ax=407,ay=300,lx=407,ly=300
+[20260802.152523.398-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=31,w=686,h=19,ax=407,ay=300,lx=407,ly=300
+[20260802.152523.429-7120-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x501ce,owner=0x5019c,rx=1,ry=50,w=229,h=196
+[20260802.152523.445-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=1,ry=50,w=229,h=196,ax=407,ay=300,lx=407,ly=300
+[20260802.152526.476-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=413,y=303,w=686,h=493,ovr=0
+[20260802.152526.491-7120-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x501ce,owner=0x5019c,rx=0,ry=47,w=224,h=196
+[20260802.152526.507-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=47,w=224,h=196,ax=413,ay=303,lx=413,ly=303
+[20260802.152526.507-7120-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x501ce,owner=0x5019c,rx=0,ry=47,w=224,h=196
+[20260802.152526.507-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=47,w=224,h=196,ax=413,ay=303,lx=413,ly=303
+[20260802.152526.507-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=50,w=686,h=196,ax=413,ay=303,lx=413,ly=303
+[20260802.152526.538-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=419,y=306,w=686,h=493,ovr=0
+[20260802.152526.554-7120-I] PwPatchSynthChildClipped: QGAPROTO,msg=SYNTHPAINT,hwnd=0x501ce,owner=0x5019c,rx=0,ry=44,w=218,h=196
+[20260802.152526.570-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=44,w=218,h=196,ax=419,ay=306,lx=419,ly=306
+[20260802.152526.570-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=47,w=686,h=196,ax=419,ay=306,lx=419,ly=306
+[20260802.152526.601-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=425,y=309,w=686,h=493,ovr=0
+[20260802.152526.601-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=0,w=686,h=493,ax=425,ay=309,lx=425,ly=309
+[20260802.152526.648-540-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x5019c,rx=0,ry=44,w=686,h=196,ax=425,ay=309,lx=425,ly=309
+[20260802.152526.679-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=431,y=312,w=686,h=493,ovr=0
+[20260802.152526.726-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=437,y=315,w=686,h=493,ovr=0
+[20260802.152526.788-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=443,y=318,w=686,h=493,ovr=0
+[20260802.152526.851-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=449,y=321,w=686,h=493,ovr=0
+[20260802.152526.945-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=455,y=324,w=686,h=493,ovr=0
+[20260802.152526.976-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=461,y=327,w=686,h=493,ovr=0
+[20260802.152527.038-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=467,y=330,w=686,h=493,ovr=0
+[20260802.152527.101-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=473,y=333,w=686,h=493,ovr=0
+[20260802.152527.179-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=479,y=336,w=686,h=493,ovr=0
+[20260802.152527.226-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=485,y=339,w=686,h=493,ovr=0
+[20260802.152527.288-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=491,y=342,w=686,h=493,ovr=0
+[20260802.152527.320-7120-I] SendWindowCreate: QGAPROTO,msg=CREATE,hwnd=0x501ce,x=408,y=350,w=229,h=196,ovr=1,style=0x94800000,ex=0x00000189
+[20260802.152527.320-7120-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x501ce,ovr=1,transient=0x0,style=0x94800000,ex=0x00000189,vis=1,w=229,h=196
+[20260802.152527.320-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=0,ry=0,w=229,h=196,ax=408,ay=350,lx=408,ly=350
+[20260802.152527.335-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=0,ry=0,w=229,h=196,ax=408,ay=350,lx=408,ly=350
+[20260802.152527.351-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=497,y=345,w=686,h=493,ovr=0
+[20260802.152527.366-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=69,ry=0,w=160,h=196,ax=408,ay=350,lx=408,ly=350
+[20260802.152527.429-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=503,y=348,w=686,h=493,ovr=0
+[20260802.152527.460-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=75,ry=0,w=154,h=196,ax=408,ay=350,lx=408,ly=350
+[20260802.152527.476-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=509,y=351,w=686,h=493,ovr=0
+[20260802.152527.492-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=81,ry=0,w=148,h=196,ax=408,ay=350,lx=408,ly=350
+[20260802.152527.538-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=515,y=354,w=686,h=493,ovr=0
+[20260802.152527.554-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=87,ry=1,w=142,h=195,ax=408,ay=350,lx=408,ly=350
+[20260802.152527.601-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=521,y=357,w=686,h=493,ovr=0
+[20260802.152527.616-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=93,ry=4,w=136,h=192,ax=408,ay=350,lx=408,ly=350
+[20260802.152527.695-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=527,y=360,w=686,h=493,ovr=0
+[20260802.152527.726-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=99,ry=7,w=130,h=189,ax=408,ay=350,lx=408,ly=350
+[20260802.152527.726-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=533,y=363,w=686,h=493,ovr=0
+[20260802.152527.757-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=105,ry=10,w=124,h=186,ax=408,ay=350,lx=408,ly=350
+[20260802.152527.788-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=539,y=366,w=686,h=493,ovr=0
+[20260802.152527.804-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=111,ry=13,w=118,h=183,ax=408,ay=350,lx=408,ly=350
+[20260802.152527.851-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=545,y=369,w=686,h=493,ovr=0
+[20260802.152527.882-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=117,ry=16,w=112,h=180,ax=408,ay=350,lx=408,ly=350
+[20260802.152527.929-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=551,y=372,w=686,h=493,ovr=0
+[20260802.152527.960-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=123,ry=19,w=106,h=177,ax=408,ay=350,lx=408,ly=350
+[20260802.152527.976-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=557,y=375,w=686,h=493,ovr=0
+[20260802.152527.991-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=129,ry=22,w=100,h=174,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.038-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=563,y=378,w=686,h=493,ovr=0
+[20260802.152528.070-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=135,ry=25,w=94,h=171,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.101-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=569,y=381,w=686,h=493,ovr=0
+[20260802.152528.132-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=141,ry=28,w=88,h=168,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.163-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=575,y=384,w=686,h=493,ovr=0
+[20260802.152528.195-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=147,ry=31,w=82,h=165,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.226-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=581,y=387,w=686,h=493,ovr=0
+[20260802.152528.257-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=153,ry=34,w=76,h=162,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.288-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=587,y=390,w=686,h=493,ovr=0
+[20260802.152528.304-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=159,ry=37,w=70,h=159,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.351-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=593,y=393,w=686,h=493,ovr=0
+[20260802.152528.382-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=165,ry=40,w=64,h=156,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.413-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=599,y=396,w=686,h=493,ovr=0
+[20260802.152528.460-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=171,ry=43,w=58,h=153,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.491-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=605,y=399,w=686,h=493,ovr=0
+[20260802.152528.507-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=177,ry=46,w=52,h=150,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.538-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=611,y=402,w=686,h=493,ovr=0
+[20260802.152528.570-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=183,ry=49,w=46,h=147,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.601-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=617,y=405,w=686,h=493,ovr=0
+[20260802.152528.616-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=189,ry=52,w=40,h=144,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.663-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=623,y=408,w=686,h=493,ovr=0
+[20260802.152528.710-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=195,ry=55,w=34,h=141,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.726-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=629,y=411,w=686,h=493,ovr=0
+[20260802.152528.741-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=201,ry=58,w=28,h=138,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.788-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=635,y=414,w=686,h=493,ovr=0
+[20260802.152528.804-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=207,ry=61,w=22,h=135,ax=408,ay=350,lx=408,ly=350
+[20260802.152528.851-7120-I] SendWindowConfigure: QGAPROTO,msg=CONFIGURE,hwnd=0x5019c,x=641,y=417,w=686,h=493,ovr=0
+[20260802.152528.866-7120-I] SendWindowDamageEvent: QGAPROTO,msg=DAMAGE,hwnd=0x501ce,rx=213,ry=64,w=16,h=132,ax=408,ay=350,lx=408,ly=350
+[20260802.152530.960-7120-I] SendWindowDestroy: QGAPROTO,msg=DESTROY,hwnd=0x501ce
+TRACEEND
+RESULT=JOINTDONE
+
+C:\Windows\system32>
