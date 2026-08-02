@@ -1,0 +1,10 @@
+00:28:48
+0^@mem=8388608 mem_static_max=8388608 cputime=6494873728629 power_state=Running
+00:30:18
+0^@mem=8388608 mem_static_max=8388608 cputime=6838048183319 power_state=Running
+00:31:48
+0^@mem=8388608 mem_static_max=8388608 cputime=7178120607059 power_state=Running
+00:33:18
+0^@mem=8388608 mem_static_max=8388608 cputime=7519063555447 power_state=Running
+00:34:48
+0^@mem=8388608 mem_static_max=8388608 cputime=7859024660937 power_state=Running

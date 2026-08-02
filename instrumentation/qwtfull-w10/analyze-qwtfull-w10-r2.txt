@@ -1,0 +1,187 @@
+
+MOVE-RECTS VERDICT: max GetFrameMoveRects count seen = 0  -> always empty, the capture.c TODO is a dead end
+
+== phase idle-pre (20260801.235538.969..20260801.235544.005) ==
+   records=9 frames=9  window=20260801.235539.317..20260801.235543.668  span=4.91s  achieved=1.8 fps
+   field     mean_us     p50_us     p95_us     p99_us     max_us   share_of_tot
+   dt       545666.0   543921.0   575495.0   575495.0   575495.0        -
+   acq      543257.2   543537.0   566864.0   566864.0   566864.0        -
+   wak          45.3       44.0       54.0       54.0       54.0        -
+   mrq          16.2       17.0       22.0       22.0       22.0      0.8%
+   drq          32.0       32.0       39.0       39.0       39.0      1.5%
+   upd          85.2        7.0      440.0      440.0      440.0      4.1%
+   enu        1844.2        6.0     8651.0     8651.0     8651.0     88.7%
+   rem           7.4        6.0       15.0       15.0       15.0      0.4%
+   dmg          11.0        7.0       20.0       20.0       20.0      0.5%
+   snd           6.1        0.0       55.0       55.0       55.0      0.3%
+   tot        2031.4      101.0     9266.0     9266.0     9266.0        -
+   log         113.9       72.0      298.0      298.0      298.0        -
+   INTERROGATED/frame=0.67  events/frame=0.00   <- Phase 2A headline (was ~67/frame)
+   counts/frame: dirty_rects=1.00 move_rects=0.000 (max seen 0) dirty_px=18 sends=0.22  windows=1  dropped(no-damage)_frames=0
+   --- where the frame goes (%% of wall = tot+drq+mrq) ---
+   tracking  (upd+enu+rem)     1936.9 us/frame    93.1% of wall
+   damage    (drq+dmg)           43.0 us/frame     2.1% of wall
+   send      (snd)                6.1 us/frame     0.3% of wall
+   moverects (mrq)               16.2 us/frame     0.8% of wall
+   unaccounted (main)            77.4 us/frame     3.7% of wall
+   wakeup latency (wak)          45.3 us/frame
+   log emit (log)               113.9 us/frame  <- instrumentation self-cost
+
+== phase drag (20260801.235546.019..20260801.235556.264) ==
+   records=305 frames=305  window=20260801.235546.308..20260801.235556.236  span=12.57s  achieved=24.3 fps
+   field     mean_us     p50_us     p95_us     p99_us     max_us   share_of_tot
+   dt        41206.1    31958.0    64631.0   108947.0  2607265.0        -
+   acq       26784.8    31089.0    45792.0    48790.0    63223.0        -
+   wak        3569.4       45.0    21587.0    32896.0    48929.0        -
+   mrq          30.7       16.0       85.0      332.0      745.0      0.2%
+   drq          54.7       34.0      147.0      295.0     1543.0      0.3%
+   upd       16960.5    16000.0    46543.0    62209.0    74320.0     91.7%
+   enu        1348.4       20.0       59.0    47981.0   147493.0      7.3%
+   rem          22.6       19.0       48.0       94.0      146.0      0.1%
+   dmg          13.2        9.0       27.0       89.0      524.0      0.1%
+   snd           9.7        0.0       54.0      122.0      176.0      0.1%
+   tot       18413.4    16128.0    50973.0    81923.0   195065.0        -
+   log          90.8       76.0      151.0      306.0     1007.0        -
+   INTERROGATED/frame=2.04  events/frame=1.99   <- Phase 2A headline (was ~67/frame)
+   counts/frame: dirty_rects=1.13 move_rects=0.000 (max seen 0) dirty_px=542890 sends=0.37  windows=1  dropped(no-damage)_frames=5
+   --- where the frame goes (%% of wall = tot+drq+mrq) ---
+   tracking  (upd+enu+rem)    18331.6 us/frame    99.1% of wall
+   damage    (drq+dmg)           67.9 us/frame     0.4% of wall
+   send      (snd)                9.7 us/frame     0.1% of wall
+   moverects (mrq)               30.7 us/frame     0.2% of wall
+   unaccounted (main)            58.9 us/frame     0.3% of wall
+   wakeup latency (wak)        3569.4 us/frame
+   log emit (log)                90.8 us/frame  <- instrumentation self-cost
+
+== phase idle-mid1 (20260801.235556.290..20260801.235558.295) ==
+   records=1 frames=1  window=20260801.235556.295..20260801.235556.295  span=0.03s  achieved=31.1 fps
+   field     mean_us     p50_us     p95_us     p99_us     max_us   share_of_tot
+   dt        32158.0    32158.0    32158.0    32158.0    32158.0        -
+   acq        4536.0     4536.0     4536.0     4536.0     4536.0        -
+   wak          32.0       32.0       32.0       32.0       32.0        -
+   mrq          15.0       15.0       15.0       15.0       15.0      0.0%
+   drq          26.0       26.0       26.0       26.0       26.0      0.1%
+   upd       28061.0    28061.0    28061.0    28061.0    28061.0     79.7%
+   enu        7042.0     7042.0     7042.0     7042.0     7042.0     20.0%
+   rem           9.0        9.0        9.0        9.0        9.0      0.0%
+   dmg           9.0        9.0        9.0        9.0        9.0      0.0%
+   snd           0.0        0.0        0.0        0.0        0.0      0.0%
+   tot       35162.0    35162.0    35162.0    35162.0    35162.0        -
+   log          62.0       62.0       62.0       62.0       62.0        -
+   INTERROGATED/frame=4.00  events/frame=1.00   <- Phase 2A headline (was ~67/frame)
+   counts/frame: dirty_rects=1.00 move_rects=0.000 (max seen 0) dirty_px=573562 sends=0.00  windows=1  dropped(no-damage)_frames=1
+   --- where the frame goes (%% of wall = tot+drq+mrq) ---
+   tracking  (upd+enu+rem)    35112.0 us/frame    99.7% of wall
+   damage    (drq+dmg)           35.0 us/frame     0.1% of wall
+   send      (snd)                0.0 us/frame     0.0% of wall
+   moverects (mrq)               15.0 us/frame     0.0% of wall
+   unaccounted (main)            41.0 us/frame     0.1% of wall
+   wakeup latency (wak)          32.0 us/frame
+   log emit (log)                62.0 us/frame  <- instrumentation self-cost
+
+== phase scroll (20260801.235558.296..20260801.235608.508) ==
+   records=224 frames=224  window=20260801.235558.321..20260801.235608.473  span=12.20s  achieved=18.4 fps
+   field     mean_us     p50_us     p95_us     p99_us     max_us   share_of_tot
+   dt        54486.1    47949.0    64054.0    79769.0  2046425.0        -
+   acq       44362.9    47581.0    63707.0    78733.0   201850.0        -
+   wak          42.2       35.0       88.0      206.0      212.0        -
+   mrq          14.0       10.0       28.0       84.0      106.0      2.0%
+   drq          30.4       25.0       57.0      108.0      180.0      4.3%
+   upd         244.9        6.0       20.0    16846.0    17434.0     34.5%
+   enu         341.0        5.0       15.0     7359.0    39738.0     48.0%
+   rem           6.5        5.0       12.0       18.0       74.0      0.9%
+   dmg           8.3        7.0       14.0       19.0       22.0      1.2%
+   snd           0.0        0.0        0.0        0.0        0.0      0.0%
+   tot         665.2       86.0      212.0    23201.0    40348.0        -
+   log         156.3       66.0      129.0     1391.0     9177.0        -
+   INTERROGATED/frame=0.08  events/frame=0.00   <- Phase 2A headline (was ~67/frame)
+   counts/frame: dirty_rects=1.03 move_rects=0.000 (max seen 0) dirty_px=159513 sends=0.00  windows=1  dropped(no-damage)_frames=2
+   --- where the frame goes (%% of wall = tot+drq+mrq) ---
+   tracking  (upd+enu+rem)      592.4 us/frame    83.5% of wall
+   damage    (drq+dmg)           38.7 us/frame     5.5% of wall
+   send      (snd)                0.0 us/frame     0.0% of wall
+   moverects (mrq)               14.0 us/frame     2.0% of wall
+   unaccounted (main)            64.6 us/frame     9.1% of wall
+   wakeup latency (wak)          42.2 us/frame
+   log emit (log)               156.3 us/frame  <- instrumentation self-cost
+
+== phase idle-mid2 (20260801.235608.510..20260801.235610.514) ==
+   records=4 frames=4  window=20260801.235608.841..20260801.235610.484  span=1.98s  achieved=2.0 fps
+   field     mean_us     p50_us     p95_us     p99_us     max_us   share_of_tot
+   dt       495955.5   543465.0   544167.0   544167.0   544167.0        -
+   acq      495559.0   543102.0   543664.0   543664.0   543664.0        -
+   wak          37.2       48.0       51.0       51.0       51.0        -
+   mrq          10.0       10.0       12.0       12.0       12.0      0.1%
+   drq          25.0       25.0       27.0       27.0       27.0      0.4%
+   upd        5081.2       18.0    20293.0    20293.0    20293.0     73.8%
+   enu        1670.5       14.0     6656.0     6656.0     6656.0     24.3%
+   rem           8.0        8.0       14.0       14.0       14.0      0.1%
+   dmg          11.8       12.0       19.0       19.0       19.0      0.2%
+   snd           0.0        0.0        0.0        0.0        0.0      0.0%
+   tot        6851.5      211.0    26999.0    26999.0    26999.0        -
+   log          83.2       86.0      103.0      103.0      103.0        -
+   INTERROGATED/frame=0.75  events/frame=0.00   <- Phase 2A headline (was ~67/frame)
+   counts/frame: dirty_rects=1.00 move_rects=0.000 (max seen 0) dirty_px=18 sends=0.00  windows=1  dropped(no-damage)_frames=0
+   --- where the frame goes (%% of wall = tot+drq+mrq) ---
+   tracking  (upd+enu+rem)     6759.8 us/frame    98.2% of wall
+   damage    (drq+dmg)           36.8 us/frame     0.5% of wall
+   send      (snd)                0.0 us/frame     0.0% of wall
+   moverects (mrq)               10.0 us/frame     0.1% of wall
+   unaccounted (main)            80.0 us/frame     1.2% of wall
+   wakeup latency (wak)          37.2 us/frame
+   log emit (log)                83.2 us/frame  <- instrumentation self-cost
+
+== phase type (20260801.235610.515..20260801.235620.867) ==
+   records=109 frames=109  window=20260801.235610.890..20260801.235620.777  span=10.32s  achieved=10.6 fps
+   field     mean_us     p50_us     p95_us     p99_us     max_us   share_of_tot
+   dt        94678.3    96038.0   112769.0   128256.0   433099.0        -
+   acq       89669.1    95670.0   111852.0   127866.0   127927.0        -
+   wak          39.8       34.0       75.0       97.0      113.0        -
+   mrq          14.2       10.0       36.0       71.0       82.0      1.5%
+   drq          32.8       26.0       53.0      225.0      330.0      3.5%
+   upd         486.5        6.0      311.0    16503.0    17980.0     51.3%
+   enu         331.4        5.0       24.0     7288.0     9085.0     35.0%
+   rem           5.9        5.0        9.0       15.0       17.0      0.6%
+   dmg           7.7        7.0       11.0       18.0       24.0      0.8%
+   snd           0.0        0.0        0.0        0.0        0.0      0.0%
+   tot         900.5       81.0     1834.0    25383.0    25670.0        -
+   log         147.8       67.0      123.0      137.0     8318.0        -
+   INTERROGATED/frame=0.15  events/frame=0.01   <- Phase 2A headline (was ~67/frame)
+   counts/frame: dirty_rects=1.50 move_rects=0.000 (max seen 0) dirty_px=293788 sends=0.00  windows=1  dropped(no-damage)_frames=1
+   --- where the frame goes (%% of wall = tot+drq+mrq) ---
+   tracking  (upd+enu+rem)      823.7 us/frame    86.9% of wall
+   damage    (drq+dmg)           40.5 us/frame     4.3% of wall
+   send      (snd)                0.0 us/frame     0.0% of wall
+   moverects (mrq)               14.2 us/frame     1.5% of wall
+   unaccounted (main)            69.1 us/frame     7.3% of wall
+   wakeup latency (wak)          39.8 us/frame
+   log emit (log)               147.8 us/frame  <- instrumentation self-cost
+
+== phase idle-post (20260801.235620.868..20260801.235625.872) ==
+   records=9 frames=9  window=20260801.235621.335..20260801.235625.656  span=4.88s  achieved=1.8 fps
+   field     mean_us     p50_us     p95_us     p99_us     max_us   share_of_tot
+   dt       542119.2   543935.0   561122.0   561122.0   561122.0        -
+   acq      539881.1   542632.0   560792.0   560792.0   560792.0        -
+   wak          41.2       41.0       68.0       68.0       68.0        -
+   mrq          12.8       10.0       33.0       33.0       33.0      0.6%
+   drq          28.9       26.0       53.0       53.0       53.0      1.4%
+   upd          97.0        6.0      553.0      553.0      553.0      4.8%
+   enu        1801.0        5.0    10141.0    10141.0    10141.0     89.6%
+   rem           5.6        5.0        8.0        8.0        8.0      0.3%
+   dmg           8.3        7.0       19.0       19.0       19.0      0.4%
+   snd           0.0        0.0        0.0        0.0        0.0      0.0%
+   tot        1967.9       89.0    10781.0    10781.0    10781.0        -
+   log          73.8       67.0      124.0      124.0      124.0        -
+   INTERROGATED/frame=0.67  events/frame=0.00   <- Phase 2A headline (was ~67/frame)
+   counts/frame: dirty_rects=1.00 move_rects=0.000 (max seen 0) dirty_px=18 sends=0.00  windows=1  dropped(no-damage)_frames=0
+   --- where the frame goes (%% of wall = tot+drq+mrq) ---
+   tracking  (upd+enu+rem)     1903.6 us/frame    94.7% of wall
+   damage    (drq+dmg)           37.2 us/frame     1.9% of wall
+   send      (snd)                0.0 us/frame     0.0% of wall
+   moverects (mrq)               12.8 us/frame     0.6% of wall
+   unaccounted (main)            56.0 us/frame     2.8% of wall
+   wakeup latency (wak)          41.2 us/frame
+   log emit (log)                73.8 us/frame  <- instrumentation self-cost
+[cadence] drag       steps=600 wall_ms=10001 want_ms=10000 jitter_ms p50=15.62 p95=16.28 max=21.73
+[cadence] scroll     steps=200 wall_ms=10000 want_ms=10000 jitter_ms p50=49.55 p95=49.78 max=49.83
+[cadence] type       steps=100 wall_ms=10000 want_ms=10000 jitter_ms p50=99.78 p95=99.82 max=99.82

@@ -1,0 +1,2 @@
+2026-08-02 00:38:36.864 qrexec-client-vm[252700]: vchan_timeout.c:46:qubes_wait_for_vchan_connection_with_timeout: vchan connection timeout
+2026-08-02 00:38:36.864 qrexec-client-vm[252700]: qrexec-agent-data.c:371:handle_data_client: Data vchan connection failed

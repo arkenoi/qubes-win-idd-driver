@@ -1,0 +1,30 @@
+Microsoft Windows [Version 10.0.19045.2965]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& \"$env:USERPROFILE\Documents\QubesIncoming\win-idd-mgmt\edge-step2.ps1\""
+RESULT=PRE_LOG:gui-agent-20260802-030352-6480.log|len=2623
+RESULT=PRE_PID:6480
+RESULT=PRE_LOGCOUNT:13
+RESULT=T_LAUNCH:2026-08-02T03:11:07.6853571+00:00
+RESULT=EDGE_PID:7612
+RESULT=T_SETTLED:2026-08-02T03:12:07.7965328+00:00
+RESULT=POST_LOG:gui-agent-20260802-030352-6480.log|len=2623
+RESULT=POST_LOGCOUNT:13
+RESULT=POST_PID:6480|start=2026-08-02T03:03:52.3370917+00:00
+RESULT=EDGE_PROCS:8
+WINSTART
+0x3041c	pid=7612	0,0	3440x1400	style=0x96080080	ex=0x00080101	glwa=False	Chrome_WidgetWin_1	
+0x30430	pid=7612	-8,-8	3456x1416	style=0x1fcf0000	ex=0x00000100	glwa=False	Chrome_WidgetWin_1	New tab - Profile 1 - Microsoft? Edge
+0x70496	pid=6172	0,0	3440x1440	style=0x94000000	ex=0x00200000	glwa=False	Windows.UI.Core.CoreWindow	Microsoft Text Input Application
+0x30132	pid=3764	45,88	1216x941	style=0x94cf0000	ex=0x00200100	glwa=False	ApplicationFrameWindow	Microsoft Store
+0x10170	pid=4384	0,0	3440x1400	style=0x94cf0000	ex=0x00200100	glwa=False	ApplicationFrameWindow	
+0x1015c	pid=4384	0,0	0x0	style=0x94000000	ex=0x08200080	glwa=False	DummyDWMListenerWindow	
+0x10154	pid=4384	15,0	3425x4	style=0x94000000	ex=0x08200080	glwa=False	EdgeUiInputTopWndClass	
+0x1013a	pid=4384	0,0	0x0	style=0x94000000	ex=0x08200080	glwa=False	DummyDWMListenerWindow	
+0x10138	pid=4384	0,0	0x0	style=0x94000000	ex=0x08200080	glwa=False	DummyDWMListenerWindow	
+0x20028	pid=3720	5,56	1200x900	style=0x94000000	ex=0x00200000	glwa=False	Windows.UI.Core.CoreWindow	Microsoft Store
+0x1010a	pid=4384	0,0	3440x1440	style=0x96000000	ex=0x00000080	glwa=False	Progman	Program Manager
+WINEND
+RESULT=DONE
+
+C:\Windows\system32>
