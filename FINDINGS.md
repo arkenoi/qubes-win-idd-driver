@@ -1213,3 +1213,44 @@ with no retry when `local.WinScreenshot` returns an empty tar (fixed). Remaining
 `chromerepro` self-exits between scene and screenshot, so its window can never be counted —
 verify cold boot directly rather than trusting that count. `check-occlusion.py` remains
 INVALID for per-window-captured windows and needs a PW-aware rewrite before its result counts.
+
+## 2026-08-02 — REAL MS OFFICE REPRODUCES A DAEMON-KILL (first real-Office validation)
+
+Microsoft 365 Apps (Word/Excel/PowerPoint, no licence — reduced-functionality mode still
+renders full chrome) installed on win-idd-test via ODT, netvm core-net, on our build b299011.
+This is the real-Office validation Phase 2A has wanted since the chrome fix was written;
+`PHASE2A-CHROME-RESULT.md` warned chromerepro's synthetic strips are larger than the real ones.
+
+**Real Office strips are 8 px** — `hwnd=0x7037a x=2164,y=501,w=8,h=558` and three siblings
+(left/right/bottom/top). They are ABOVE the SM_CXMIN/CYMIN floor question because they are
+synthesized, not size-rejected.
+
+### What happened (agent log gui-agent-20260802-155607-3392.log)
+1. All four strips are **SYNTHESIZED** (suppressed from dom0) via SynthActivate, but they sit
+   OUTSIDE the owner's buffer: `synth paint 0x7037a: child (2164,501)-(2172,1059) outside owner
+   (1314,509)-(2164,1051)`. The 12 px overhang allowance added in 832ce97 for XAML menus admits
+   strips that are entirely adjacent to, not contained in, the owner. Nothing is ever painted
+   for them; the warning repeats every frame for ~3 s (4x per frame).
+2. Owner geometry changes -> all four **materialize in one burst**:
+   `UpdateWindowData: 0xa0324/0x7037a/0x702fa/0x90326: owner geometry changed, materializing child`
+3. Immediately after, every send fails `libxenvchan_send: vchan not open` -> `WatchForEvents:
+   vchan disconnected` -> clean teardown (`CaptureTeardown` revoke fails 0x490 Element not
+   found) -> `WinMain: WatchForEvents failed 0x490` -> watchdog respawns an agent that then sits
+   at "Awaiting for a vchan client" forever, because dom0's daemon is gone. **Whole-qube GUI
+   loss.** The user observed it live: "it did show then apparently crashed".
+
+The agent did NOT crash: the daemon dropped first and the agent exited cleanly. Precedent:
+FINDINGS 2026-08-01 session 3 records a materialization-driven daemon-kill (UNMAP+DESTROY for
+an hwnd with no CREATE), fixed by the CreateSent gate. This looks like a sibling path that fix
+did not cover. Also seen twice in the run: `HandleServerData: got unknown msg type 127,
+ignoring` (MSG_CROSSING) - noted, not implicated.
+
+### Still needed to name the violation
+dom0's `/var/log/qubes/guid.win-idd-test.log` records why the daemon exited (xside.c logs
+before exit(1)). Requested from the user; this qube cannot read dom0.
+
+### Status of the chrome question
+Real Office chrome DOES reproduce and is NOT correctly handled: the strips are neither cleanly
+rejected (as chromerepro's are) nor legitimately contained - they are synthesized out of view
+while outside the owner, and the eventual materialization burst is fatal. chromerepro was not
+a faithful proxy: its strips are contained, real Office's are adjacent.
