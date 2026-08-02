@@ -203,3 +203,75 @@ never installed, so the emulated-NIC unplug is never armed and the guest burns ~
 qrexec dead for as long as a netvm is attached; every "why didn't the unplug happen" question
 is downstream of that single failure, the evidence gap is what happens *during* an attached
 boot (§7.2), and the experiment that assigns blame is the stock-QWT control install (§7.1).
+
+---
+
+# UPDATE 2026-08-02 (later) — stock control run, and what it did NOT settle
+
+## Stock-QWT control: ran, and the result is a trap for the unwary
+Stock QWT 4.2.2 (`gui-agent.exe` 80968 B, sha `3d2e6bce…`, distinct from ours) installed on a
+wiped disk from `win-idd-unattended-stock.iso`, netvm attached while halted:
+
+| build | cores burned | qrexec |
+|---|---|---|
+| ours (`a459f0e` / `b299011`) | 2.00 sustained | never |
+| **stock 4.2.2** | **1.92–1.99, 8/8 samples** | **never** |
+
+**This exonerates our agent fork and NOTHING ELSE.** The control swapped the MSI *bytes* while
+keeping our unattended ISO, our `install-qwt.cmd`, our `ADDLOCAL`, and our qube-creation
+parameters. Everything those share remains untested by it. I initially wrote this up as
+"upstream/environmental, we are cleared" — that was wrong and the user corrected it.
+
+## Additional variables eliminated by measurement (each an attach + <=4 min sample)
+| variable | outcome |
+|---|---|
+| feature set: our 4-feature `ADDLOCAL` vs `ADDLOCAL=ALL` (adds PvDriversDisk/MoveUsers/Autologon) | identical failure, 1.89–1.98 cores |
+| vCPUs 4 vs 2 | identical failure (on 2 vCPUs that is both cores pegged) |
+| memory 8192 | community script uses 2048; user states not the cause |
+| offline install (no netvm at QWT install time) | community script ALSO installs with `netvm ""` — not a difference |
+| MSI provenance | our vendored MSI is byte-identical to the official R4.3 dom0 RPM's ISO copy (`70493221…`) |
+| OS version | Win10 22H2 AND Win11 24H2 both fail (user's observation) |
+
+## POSITIVE CONTROL — the same machinery works for storage in the same guest
+With `PvDriversDisk` installed: xenvbd started, armed `Unplug\DISKS=1`, requested a reboot
+(the user saw the modal "Xen PV Storage Host Adapter needs to restart the system" dialog —
+exactly the `DriverRequestReboot` path from `ci-notes/xenvif-start-flow.md`), the emulated IDE
+was unplugged, and the disks are now `XENSRC PVDISK`. So arm → reboot → unplug is FUNCTIONAL
+in this guest. Only the network branch never reaches it: `Enum\XENVIF` stays empty, `NICS`
+never armed, and after a re-install the VIF devnode reverts to raw `[Unknown] XP0001 XENBUS VIF`
+with no `xenvif` service at all.
+
+## What the guest looks like while starved (user observation — I am blind here)
+"High CPU load in guest but nothing comes up" — **no dialog on screen**. So the starvation is
+NOT a modal prompt nobody can click; the guest is genuinely wedged. This kills the boot-1
+reboot-dialog explanation for the netvm case.
+
+## Reference guest data (user's long-lived working Windows qube)
+- PV drivers **xenbus 8.2.23, xeniface 8.2.2.1** — the 8.2.x generation, vs our 9.1.0 (2025-04-07).
+- **Networking there runs over the EMULATED Realtek NIC and always has.** PV `xennet` is not
+  what carries traffic. So a working Windows qube does NOT require the PV network path at all.
+- That guest is now itself degraded (qrexec unreliable), so it is not a clean reference.
+- **No older QWT is obtainable to test**: `qubes-windows-tools-4.1.68/4.1.69/4.1.70` RPMs in the
+  r4.1/r4.2 repos are PLACEHOLDERS (a symlink to a 164-byte README, no binaries) post-QSB-091.
+  4.2.2 from the R4.3 dom0 RPM is the only real QWT available.
+
+## Community project (`ElliotKillick/qvm-create-windows-qube`) — what it says
+- Its QWT source is the same `/usr/lib/qubes/qubes-windows-tools.iso` dom0 file we used.
+- It installs via the **Burn bundle** (`start qubes-tools-*.exe /passive`) = default feature set,
+  where we drive `msiexec` with an explicit `ADDLOCAL` subset. Tested — not the cause (above).
+- Issue #99 "completely broken in Qubes 4.3 with Windows 10 & Windows 11" (open). A May 2026
+  comment reports Win10 on 4.3 **working**, with unrelated rough edges; their networking issue
+  was dom0-side (`reject with icmp admin prohibited`, fixed by `qvm-firewall <vm> reset`).
+- Issue #85 "Windows do not have network access" (open, 2024) — undiagnosed.
+- Neither describes a guest burning ~2 cores with qrexec dead. Our failure mode is not
+  documented anywhere public that I could find.
+- ⇒ QWT 4.2.2 + netvm on Qubes 4.3 apparently CAN work, which points back at our qube-creation
+  or provisioning path rather than the package.
+
+## Next step in flight
+User is building a Windows qube manually via the community script; that qube is the missing
+positive control. When it exists, diff EVERY `qvm-prefs`/`qvm-features` value and the guest's
+PV device state against `win-idd-test`. Also in flight here: removing ONLY the PV network
+drivers (xenvif/xennet) from our guest so it must use the emulated Realtek like the user's
+working guest — if the burn disappears, the 9.1.0 PV net driver is the burner and emulated
+networking is a viable workaround.
