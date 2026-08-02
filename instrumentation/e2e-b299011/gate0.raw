@@ -1,0 +1,19 @@
+Microsoft Windows [Version 10.0.19045.2965]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& "$env:USERPROFILE\Documents\QubesIncoming\win-idd-mgmt\gate0.ps1""
+GATE0START
+RESULT=AGENTHASH 4B4CE2B1C5441C88F73A47E4608AA075DCCCA356C2B1FAC48A58DA90D3059E8E
+RESULT=ORIGCOUNT 0
+RESULT=TESTSIGNING testsigning             Yes
+RESULT=SERVICES QdbDaemon=Running;QrexecAgent=Running;QubesGuiWatchdog=Running
+RESULT=AGENTPID 3860 start 2026-08-02 15:04:48
+RESULT=REG [HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent] LogLevel=3 ProtoTrace=<absent> PerfLog=<absent> PerfEveryN=<absent>
+RESULT=REG [HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools] LogLevel=3 ProtoTrace=<absent> PerfLog=<absent> PerfEveryN=<absent>
+RESULT=LOGCOUNT 9
+RESULT=NEWESTLOG gui-agent-20260802-150449-3860.log 463245 2026-08-02 15:10:18
+RESULT=INCOMING C:\Users\user\Documents\QubesIncoming
+RESULT=INCOMINGSUB win-idd-mgmt
+GATE0END
+
+C:\Windows\system32>

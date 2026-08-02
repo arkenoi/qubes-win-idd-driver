@@ -1,0 +1,6 @@
+# id x y w h override_redirect name
+0x1c00188 0 0 3440 1440 0 VMapp command
+0x1c00189 518 345 686 493 0 *Untitled - Notepad
+0x1c0018b 169 145 686 493 0 Untitled - Notepad
+0x1c00191 119 125 586 393 0 OCCLUSION-BASE
+0x1c00193 428 100 244 372 0 OCCLUSION-COVER

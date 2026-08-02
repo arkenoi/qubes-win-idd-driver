@@ -1,0 +1,48 @@
+Microsoft Windows [Version 10.0.19045.2965]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& "$env:USERPROFILE\Documents\QubesIncoming\win-idd-mgmt\chromerepro-run.ps1""
+RESULT=EXEHASH 4F64D30ABECD9C30CD2E25E58CBEF9BF9BD2E7CA3F4A3BA3282D7E725A59E3D2
+RESULT=LOGFILE gui-agent-20260802-152139-3828.log
+RESULT=CHROMEPID 3304
+RESULT=GUEST-COUNT 5
+OURWINSTART
+393934	0x602ce	1412,495	640x460	style=0x14cf0000	ex=0x00000100	QubesChromeReproMain	chromerepro - main window
+262868	0x402d4	2052,495	160x460	style=0x94000000	ex=0x080800a0	QubesChromeReproShadow	
+589934	0x9006e	1252,495	160x460	style=0x94000000	ex=0x080800a0	QubesChromeReproShadow	
+262866	0x402d2	1252,955	960x160	style=0x94000000	ex=0x080800a0	QubesChromeReproShadow	
+524976	0x802b0	1252,335	960x160	style=0x94000000	ex=0x080800a0	QubesChromeReproShadow	
+OURWINEND
+RESULT=MAPPED-OF-OURS 1
+RESULT=MAPPED-HWNDS 0x602ce
+RESULT=TOTAL-SENDWINDOWMAP 10
+MAPSTART
+[20260802.152139.773-3296-I] SendWindowMap: Mapping window 0x402b4
+[20260802.152139.773-3296-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x402b4,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000110,vis=1,w=686,h=493
+[20260802.152139.820-3296-I] SendWindowMap: Mapping window 0x802c0
+[20260802.152139.820-3296-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x802c0,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000110,vis=1,w=686,h=493
+[20260802.152139.882-3296-I] SendWindowMap: Mapping window 0x402b4
+[20260802.152139.882-3296-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x402b4,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000110,vis=1,w=686,h=493
+[20260802.152155.476-3296-I] SendWindowMap: Mapping window 0x602ce
+[20260802.152155.476-3296-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x602ce,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000100,vis=1,w=626,h=453
+[20260802.152205.491-3296-I] SendWindowMap: Mapping window 0x602ce
+[20260802.152205.491-3296-I] SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x602ce,ovr=0,transient=0x0,style=0x14cf0000,ex=0x00000100,vis=1,w=626,h=453
+MAPEND
+INVSTART
+--- chromerepro inventory ---
+min window size filter: SM_CXMIN=136 SM_CYMIN=39, strip thickness=160
+main     hwnd=0x000602CE class=QubesChromeReproMain     style=0x14CF0000 exstyle=0x00000100 owner=0x00000000 rect=(1400,470 640x460) alpha=255 -> ALWAYS shown in dom0 (normal border)
+shadow0  hwnd=0x000802B0 class=QubesChromeReproShadow   style=0x94000000 exstyle=0x080800A0 owner=0x000602CE rect=(1240,310 960x160) alpha=160 -> chrome: shown BEFORE fix, gone AFTER
+shadow1  hwnd=0x000402D2 class=QubesChromeReproShadow   style=0x94000000 exstyle=0x080800A0 owner=0x000602CE rect=(1240,930 960x160) alpha=160 -> chrome: shown BEFORE fix, gone AFTER
+shadow2  hwnd=0x0009006E class=QubesChromeReproShadow   style=0x94000000 exstyle=0x080800A0 owner=0x000602CE rect=(1240,470 160x460) alpha=160 -> chrome: shown BEFORE fix, gone AFTER
+shadow3  hwnd=0x000402D4 class=QubesChromeReproShadow   style=0x94000000 exstyle=0x080800A0 owner=0x000602CE rect=(2040,470 160x460) alpha=160 -> chrome: shown BEFORE fix, gone AFTER
+popup    hwnd=0x000402D8 class=QubesChromeReproPopup    style=0x84800000 exstyle=0x00000000 owner=0x000602CE rect=(1460,560 340x220) alpha=255 -> ALWAYS shown, override_redirect (1px border)
+ghost    (not created)
+control  (not created)
+--- end ---
+INVEND
+REJECTSTART
+REJECTEND
+RESULT=CHROMEDONE
+
+C:\Windows\system32>

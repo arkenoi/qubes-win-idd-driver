@@ -1,0 +1,12 @@
+Microsoft Windows [Version 10.0.19045.2965]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& "$env:USERPROFILE\Documents\QubesIncoming\win-idd-mgmt\trace-off.ps1""
+RESULT=REGRESTORED LogLevel=3 ProtoTracePresent=False
+RESULT=AGENTPID 1976
+RESULT=LOGAFTER gui-agent-20260802-153022-1976.log
+RESULT=PROTORECS-AFTER 0
+RESULT=DEBUGLINES-AFTER 0
+RESULT=PROCS 0
+
+C:\Windows\system32>

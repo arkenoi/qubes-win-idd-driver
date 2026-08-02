@@ -1,0 +1,5 @@
+# id x y w h override_redirect name
+0x1c00188 0 0 3440 1440 0 VMapp command
+0x1c00189 530 370 686 493 0 *Untitled - Notepad
+0x1c0018b 181 170 686 493 0 Untitled - Notepad
+0x1c0018d 1419 495 626 453 0 chromerepro - main window

@@ -1,0 +1,10 @@
+Microsoft Windows [Version 10.0.19045.2965]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& \"$env:USERPROFILE\Documents\QubesIncoming\win-idd-mgmt\cleanup-verify.ps1\""
+RESULT=PROCS 0
+RESULT=REG LogLevel=3 ProtoTracePresent=False
+RESULT=AGENTPID 1976
+RESULT=SERVICES QdbDaemon=Running;QrexecAgent=Running;QubesGuiWatchdog=Running
+
+C:\Windows\system32>
