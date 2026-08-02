@@ -1080,3 +1080,46 @@ Networking. With a netvm attached this build behaves exactly as before the displ
 still unattributed between us and upstream until the stock-QWT control install runs. The
 stock-control ISO is built and verified (`win-idd-unattended-stock.iso`, staged MSI
 bit-identical to vendor stock) and that experiment is the next task.
+
+## 2026-08-02 — NETWORK BLOCKER ROOT-CAUSED (by the user): the netvm was mirage-firewall
+
+`fw-net`, the netvm used for **every** failing measurement in sessions 3-7, is
+**qubes-mirage-firewall** (a MirageOS unikernel). Pointing the Windows qube at a conventional
+Linux netvm released the hang immediately. No guest-side defect was ever involved.
+
+Consistent mechanism: the Windows PV network frontend never completes its handshake with the
+unikernel netback → `xenvif` never starts → no `XENVIF\...&DEV_NET` child → `xennet` never
+installs → `Unplug\NICS` never armed → the guest spins ~2 cores in PnP retry and qrexec is
+starved out. Detach removes the frontend and the guest recovers.
+
+### Why my investigation missed it for so long — worth internalising
+I varied, and eliminated by measurement, EVERY guest-side variable: our agent fork vs stock
+QWT (byte-identical MSI), the ADDLOCAL feature subset vs ALL features, vCPUs 4 vs 2, memory,
+offline-vs-online install timing, Win10 vs Win11. Each negative result should have raised the
+prior on "the variable is not in the guest at all", and instead I kept generating new
+guest-side hypotheses. The netvm was a constant I never questioned because the previous
+session's handoff had already framed the problem as "our PV stack is broken". The user
+supplied the decisive reframes: first that stock QWT works in the wild (so it is our setup),
+then that Win11 fails identically (so it is the deploy), and finally the actual answer.
+
+Corollary: **a control experiment only controls the variable you vary.** My "stock QWT
+control" swapped the MSI bytes and held the netvm, the ISO machinery, the qube parameters and
+the invocation constant — I initially wrote it up as "we are cleared, it is upstream", which
+was wrong, and the user caught it.
+
+### Positive results that survive (they were real, just not the cause)
+- Storage half of the same PV machinery works perfectly here: xenvbd started, armed
+  `Unplug\DISKS=1`, took its reboot (the modal "Xen PV Storage Host Adapter needs to restart"
+  dialog), unplugged the emulated IDE, disks now `XENSRC PVDISK`.
+- `ci-notes/xenvif-start-flow.md` (source-verified frontend flow + decision tree) is accurate
+  and is exactly the material needed for an upstream report.
+- Reference config that works: user's long-lived qube runs PV drivers 8.2.x and carries
+  traffic over the **emulated Realtek**, i.e. PV networking is not required for a working
+  Windows qube.
+
+### Open follow-ups
+1. Re-measure on `win-idd-test` with a conventional netvm for a clean A/B (this qube's policy
+   only permits referencing `fw-net`; needs the user to set it or name it).
+2. Upstream report: Windows HVM + QWT 4.2.2 PV drivers (Xen Project 9.1.0) hangs when its
+   netvm is qubes-mirage-firewall. Capture the mirage-side xenstore backend state first —
+   nothing collected so far shows how far the backend handshake got.
