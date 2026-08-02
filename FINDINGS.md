@@ -1355,3 +1355,36 @@ Therefore there is no throughput win available agent-side. Real (bounded) opport
 2. **slice-fed / PwForceLegacy fallback** fired twice on this guest — that path serves a window
    from full-desktop slices instead of its own buffer and is materially slower. Find out what
    triggers it on Office before assuming it is rare.
+
+### 2026-08-03 — CORRECTION to the Office-latency numbers, and what is actually solid
+User: "more or less fine on notepad but very sluggish in word" - which does not fit the story I
+told, so I re-measured.
+
+**Correction 1: my `dt` figures were confounded by my own harness.** The typing script sends one
+key every 200 ms, so frames arrive ~every 200 ms BECAUSE THAT IS THE INPUT RATE. Notepad typing
+measures dt_p50 = 202,333 us, which is the cadence, not a ceiling. The earlier "4 fps -> 32 fps"
+framing overstated it. What the acceleration test really showed still stands and is still
+significant: with HW accel ON Word's dt was 257 ms - SLOWER than the 200 ms input, i.e. genuinely
+falling behind; with it OFF, 31 ms, comfortably ahead. Cause and remedy unchanged; the magnitude
+claim was wrong.
+
+**Correction 2: the first PrintWindow timing was confounded too.** The row labelled WORD measured
+a 391x8 SHADOW STRIP - Word's MainWindowHandle points at one (itself a useful fact, and the
+reason several enumerations behaved oddly). The real OpusApp window has not yet been timed.
+
+**What is solid (unconfounded, input-rate independent):**
+`PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT)` measured in-guest:
+- 2573x1013 (2.6 Mpx, Notepad): p50 **49.4 ms**, max 68.0 ms
+- 391x8 (3,128 px):             p50 **17.3 ms**, max 32.5 ms  -> ~17 ms FIXED DWM cost
+This lands on EVERY update of a per-window-captured window, independent of typing speed. Word's
+window is 3430x1379 = 4.7 Mpx, ~1.8x Notepad's area, so its per-update cost should be
+proportionally worse - consistent with "Notepad fine, Word sluggish" if ~50 ms is near the
+perceptual edge. NOT YET MEASURED on the real Word window; do that before acting.
+
+**Consequence for the proposed fix:** damage-scoping the DIFF cannot help, because PrintWindow
+has no partial mode - it always re-renders the whole window. The design being explored is a
+HYBRID SOURCE: for an UNOCCLUDED window take pixels from the DDA desktop image already held in
+memory (a memcpy, zero added latency) and use PrintWindow only for genuinely covered regions.
+The window being typed into is almost always unoccluded, so the common case would lose the whole
+25-65 ms. Correctness (an occluded window must still yield its own content - Gate 0) is preserved
+by construction. Design in progress: scratchpad/hybrid-capture-design.md.
