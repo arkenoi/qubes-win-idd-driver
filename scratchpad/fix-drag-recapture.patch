@@ -1,0 +1,200 @@
+DRAFT — not applied, not built. Against agent submodule branch `perwindow` @ 382fa05.
+See scratchpad/drag-cost-analysis.md for the verified mechanism and design rationale.
+
+Summary:
+ 1. main.c ProcessNewFrame: skip the PrintWindow recapture trigger (WcMarkDirty) on
+    move-only frames of an attached window; arm a settle recapture for when motion
+    stops; allow a throttled refresh every PW_MOVE_RECAPTURE_MS mid-motion. The
+    per-window buffer is position-invariant, so a pure move needs only MSG_CONFIGURE
+    (already sent at input rate by the tracking path) — the daemon recomposites via
+    XMoveResizeWindow + expose repaint from the stored image (xside.c:2072/1832/2477).
+ 2. main.c SynthUpdateMask: do not re-push a byte-identical mask — WcSetMask takes the
+    engine lock exclusively (stalls behind an in-flight 15-18 ms PrintWindow) and
+    forces a full recapture; a joint owner+child move computes an identical
+    owner-relative mask at input rate.
+ 3. main.h / perwindow.c: new WINDOW_DATA fields + reset on channel attach/detach.
+
+--- a/gui-agent/main.h
++++ b/gui-agent/main.h
+@@ -122,6 +122,17 @@ typedef struct _WINDOW_DATA
+     // fullscreen overlay below its panel).
+     BOOL PwSliceFed;
+     BOOL PwSliceNeedsFull; // one full-window copy pending (fresh attach/remap)
++
++    // Move-only drag fast path (ProcessNewFrame): a pure position change does not
++    // change the window's own content, so the PrintWindow recapture trigger is
++    // skipped while the window is moving. PwFrameX/Y is the position the previous
++    // processed frame saw; PwSettleDue arms one unconditional recapture for the
++    // first non-moving frame; PwLastMoveCapTick rate-limits mid-motion refreshes.
++    // All maintained under g_csWatchedWindows; reset on channel attach/detach.
++    BOOL PwFrameXYValid;
++    int PwFrameX;
++    int PwFrameY;
++    BOOL PwSettleDue;
++    DWORD PwLastMoveCapTick;
+
+     // Composite synthesis (CLAUDE.md 2A-chrome, taken further): an override-redirect
+     // window fully contained in its owner's rect is NOT announced to dom0 at all -
+@@ -140,6 +151,13 @@ typedef struct _WINDOW_DATA
+     HWND SynthOwner;       // owner hwnd at synthesis time
+     UINT SynthChildCount;  // (owners) number of active synthesized children
+     DWORD SynthLastFullPatch; // (owners) GetTickCount() of the last full-rect child re-copy
++    // Last mask pushed to this owner's capture channel (SynthUpdateMask): WcSetMask
++    // takes the engine lock EXCLUSIVELY (stalls behind an in-flight PrintWindow) and
++    // forces a full recapture, so a byte-identical mask - the per-event case while an
++    // owner and its composited child move together - must not be re-pushed. Zeroed at
++    // entry creation and on channel attach/detach (fresh channels have no mask).
++    int SynthMaskLastCount;
++    RECT SynthMaskLast[8]; // == WC_MAX_MASK; C_ASSERTed in main.c
+ } WINDOW_DATA;
+
+ BOOL ShouldAcceptWindow(
+--- a/gui-agent/main.c
++++ b/gui-agent/main.c
+@@ -1084,9 +1084,13 @@ static BOOL SynthQualifies(IN const WINDOW_DATA* entry, OUT WINDOW_DATA** ownerO
+
+ // Push the current synthesized-child rects of `owner` to its capture channel, so the
+ // owner's PrintWindow pass leaves those pixels alone (the frame loop owns them).
+-static void SynthUpdateMask(IN const WINDOW_DATA* owner)
++// No-ops when the computed mask equals the last one pushed: WcSetMask takes the engine
++// lock exclusively and marks the channel dirty (a forced full PrintWindow), and while
++// an owner is dragged together with its child this is recomputed at input rate with an
++// identical owner-RELATIVE result.
++C_ASSERT(RTL_NUMBER_OF(((WINDOW_DATA*)0)->SynthMaskLast) >= WC_MAX_MASK);
++static void SynthUpdateMask(IN OUT WINDOW_DATA* owner)
+ {
+     RECT mask[WC_MAX_MASK];
+     int n = 0;
+     for (LIST_ENTRY* e = g_WatchedWindowsList.Flink;
+          e != &g_WatchedWindowsList && n < WC_MAX_MASK; e = e->Flink)
+@@ -1101,6 +1105,13 @@ static void SynthUpdateMask(IN const WINDOW_DATA* owner)
+         if (r.right > r.left && r.bottom > r.top)
+             mask[n++] = r;
+     }
++
++    if (n == owner->SynthMaskLastCount &&
++        (n == 0 || memcmp(mask, owner->SynthMaskLast, n * sizeof(RECT)) == 0))
++        return; // identical to what the channel already has
++
++    owner->SynthMaskLastCount = n;
++    if (n > 0)
++        memcpy(owner->SynthMaskLast, mask, n * sizeof(RECT));
+     WcSetMask(owner->Handle, mask, n);
+ }
+
+@@ -2648,6 +2659,12 @@ static UINT CollectZOrder(WINDOW_DATA** sorted, UINT capacity)
+
+ static HWND g_LastPopupDamageWindow = NULL;
+
++// While a PrintWindow-fed window is moving, refresh its content at most this often.
++// Covers content that genuinely changes mid-drag (video, progress bars); the engine's
++// 250 ms round-robin sweep (wincapture.cpp SWEEP_INTERVAL_MS) independently bounds
++// staleness for everything else. Do not lower this to "every frame" - that IS the
++// 17 ms/frame drag regression (see bench-qwtfull-w10.md).
++#define PW_MOVE_RECAPTURE_MS 150
++
+ // Copy `area` (screen coords) of the mapped desktop frame into a slice-fed window's
+ // per-window buffer and send the matching window-relative damage. Clips to the screen,
+ // the window rect, and the granted buffer geometry; silently skips when the frame is
+@@ -2938,17 +2955,63 @@ static ULONG ProcessNewFrame(IN const CAPTURE_FRAME* frame, IN const BYTE* frame
+             else
+             {
+                 // Screen dirty rects are the change TRIGGER for the per-window engine:
+                 // if anything on screen changed where this window is, ask the engine to
+                 // recapture it (content itself comes from PrintWindow, never the screen).
+-                for (UINT pdi = 0; pdi < frame->dirty_rects_count; pdi++)
+-                {
+-                    if (IntersectRect(&pwHit, &frame->dirty_rects[pdi], &pwRect))
+-                    {
+-                        WcMarkDirty(entry->Handle);
+-                        break;
+-                    }
+-                }
++                //
++                // EXCEPT on move-only frames. A dragged window dirties its whole screen
++                // extent every frame, but a pure position change does not alter the
++                // window's OWN content: the PrintWindow buffer is position-invariant,
++                // dom0 repositions it from MSG_CONFIGURE alone (XMoveResizeWindow +
++                // expose repaint from the stored image - no damage needed), and the
++                // row-diff of such a recapture is empty (measured: zero damage sent
++                // during drags). The recapture is pure waste - ~15-18 ms of PrintWindow
++                // per frame on a WARP guest - and tracking interrogations running
++                // concurrently with it stall for ~8 ms each, which is the entire
++                // 17 ms/frame drag regression (instrumentation/qwtfull-w10/
++                // bench-qwtfull-w10.md). So while the window is moving (position
++                // changed since the last processed frame): skip the trigger, refresh at
++                // most once per PW_MOVE_RECAPTURE_MS, and arm one settle recapture -
++                // fired UNCONDITIONALLY on the first non-moving frame, because the
++                // final repaint at the new position may not intersect that frame's
++                // dirty rects. A same-frame RESIZE has already rebuilt the channel
++                // (PwResizeWindow -> fresh channel starts dirty + synchronous prefill),
++                // so skipping the trigger on its accompanying position change loses
++                // nothing. Slice-fed windows never reach this branch - their content
++                // source is the composited screen and IS position-dependent
++                // (PwSliceNeedsFull on move stays required).
++                BOOL pwMoveOnly = FALSE;
++                if (entry->PwFrameXYValid &&
++                    (entry->X != entry->PwFrameX || entry->Y != entry->PwFrameY))
++                {
++                    pwMoveOnly = TRUE;
++                    entry->PwSettleDue = TRUE;
++                    DWORD pwMoveNow = GetTickCount();
++                    if (pwMoveNow - entry->PwLastMoveCapTick >= PW_MOVE_RECAPTURE_MS)
++                    {
++                        entry->PwLastMoveCapTick = pwMoveNow;
++                        pwMoveOnly = FALSE; // throttled mid-motion refresh
++                    }
++                }
++                entry->PwFrameX = entry->X;
++                entry->PwFrameY = entry->Y;
++                entry->PwFrameXYValid = TRUE;
++
++                if (!pwMoveOnly)
++                {
++                    if (entry->PwSettleDue)
++                    {
++                        // Motion stopped (or throttle slot): recapture regardless of
++                        // where this frame's damage landed.
++                        entry->PwSettleDue = FALSE;
++                        WcMarkDirty(entry->Handle);
++                    }
++                    else
++                    {
++                        for (UINT pdi = 0; pdi < frame->dirty_rects_count; pdi++)
++                        {
++                            if (IntersectRect(&pwHit, &frame->dirty_rects[pdi], &pwRect))
++                            {
++                                WcMarkDirty(entry->Handle);
++                                break;
++                            }
++                        }
++                    }
++                }
+
+                 // Composited children live in the masked regions of this buffer and
+                 // are fed from the screen image (PrintWindow does not render owned
+--- a/gui-agent/perwindow.c
++++ b/gui-agent/perwindow.c
+@@ -337,6 +337,11 @@ ULONG PwAttachWindow(IN OUT WINDOW_DATA* entry)
+     entry->PwHeight = entry->Height;
+     entry->PwDumpSent = TRUE;
+     entry->PwSliceFed = sliceFed;
+     entry->PwSliceNeedsFull = sliceFed; // first frame does one full-window copy
++    // Fresh channel: no mask pushed yet, and motion state must not carry over from a
++    // previous buffer (a resize rebuild lands here mid-drag).
++    entry->SynthMaskLastCount = 0;
++    entry->PwFrameXYValid = FALSE;
++    entry->PwSettleDue = FALSE;
+     LogInfo("0x%x: per-window buffer %ux%u (%lu pages) attached%s",
+              entry->Handle, entry->Width, entry->Height, pageCount,
+              sliceFed ? L" (slice-fed)" : L"");
+@@ -360,6 +365,9 @@ void PwDetachWindow(IN OUT WINDOW_DATA* entry)
+     entry->PwWidth = 0;
+     entry->PwHeight = 0;
+     entry->PwDumpSent = FALSE;
+     entry->PwSliceFed = FALSE;
+     entry->PwSliceNeedsFull = FALSE;
++    entry->SynthMaskLastCount = 0; // channel (and its mask) is gone
++    entry->PwFrameXYValid = FALSE;
++    entry->PwSettleDue = FALSE;
+ }

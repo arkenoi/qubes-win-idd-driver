@@ -1,0 +1,200 @@
+Subject: [PATCH] workarea: fix listener CreateWindowEx 0x5 (missing
+ DESKTOP_CREATEWINDOW), listener lifecycle across rearm, resync drift check
+
+DRAFT - not applied, not committed. Apply from the agent submodule root
+(against perwindow @ 382fa05): git apply fix-workarea-listener.patch
+
+The work-area broadcast listener window never came up: the window-event
+thread attaches to the input desktop via a handle it opens with only
+DESKTOP_READOBJECTS | DESKTOP_HOOKCONTROL (main.c WindowEventThreadProc),
+and CreateWindowEx executed on a thread whose desktop handle lacks
+DESKTOP_CREATEWINDOW fails with ERROR_ACCESS_DENIED. That is the 0x5 seen
+3x at agent start (initial hook-arm iteration + one loop iteration per
+RearmWindowEvents: StartFrameProcessing and EnsureOnInputDesktop both
+rearm during startup) - on every OS, not just Win11. With the listener
+dead, Explorer's asynchronous work-area recompute silently overwrites the
+agent-applied rect and maximized windows overflow the dom0 screen by the
+panel height.
+
+Three changes:
+
+1. Open the input desktop with DESKTOP_CREATEWINDOW as well. Fall back to
+   the old narrow mask if the wide open is denied, so the hooks - the
+   critical function of the thread - survive even on a desktop whose ACL
+   refuses window creation (never the case for SYSTEM, but free to guard).
+
+2. Listener lifecycle across desktop rearm. SetThreadDesktop fails for a
+   thread that owns windows on its current desktop, so once creation
+   starts succeeding, the old code would have wedged the thread on its
+   first rearm (listener from iteration N blocks the desktop switch of
+   iteration N+1) and leaked one window per iteration. Destroy the
+   listener after the hooks are unhooked and before the next
+   SetThreadDesktop; creation is idempotent and re-runs after re-attach,
+   which also puts the listener on the NEW desktop (broadcasts are
+   per-desktop, so a stale listener would go deaf anyway).
+
+3. Belt-and-braces drift check. Explorer's overwrite is asynchronous and
+   the listener can be down (rearm gap, hook-thread death, create failure
+   on some future OS): on every tracking resync tick (2 s normally,
+   150 ms in the hook-death fallback) compare SPI_GETWORKAREA against the
+   last applied rect and re-assert on mismatch. One syscall per tick when
+   in agreement; bounds work-area staleness to one resync interval even
+   if the event path fails again. No-op until the first successful apply,
+   so guests with no work-area source are untouched.
+---
+--- a/gui-agent/main.c
++++ b/gui-agent/main.c
+@@ -398,7 +398,17 @@
+         // survives every resync. It also CloseDesktop()s the process-default desktop
+         // handle, which MSDN forbids and which a third caller would double-close.
+         // Only the per-thread part is needed here.
+-        ownDesktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS | DESKTOP_HOOKCONTROL);
++        //
++        // DESKTOP_CREATEWINDOW: this thread also owns the work-area broadcast listener
++        // (WorkAreaCreateListener below), and CreateWindowEx on a thread whose desktop
++        // handle lacks that right fails with ERROR_ACCESS_DENIED - the hooks worked
++        // without it, the listener never could. If the wide open is denied (a desktop
++        // that refuses window creation), fall back to the narrow mask so the hooks -
++        // the critical function of this thread - still come up.
++        ownDesktop = OpenInputDesktop(0, FALSE,
++            DESKTOP_READOBJECTS | DESKTOP_HOOKCONTROL | DESKTOP_CREATEWINDOW);
++        if (!ownDesktop)
++            ownDesktop = OpenInputDesktop(0, FALSE, DESKTOP_READOBJECTS | DESKTOP_HOOKCONTROL);
+         if (ownDesktop)
+         {
+             if (!SetThreadDesktop(ownDesktop))
+@@ -475,6 +485,12 @@
+             if (hooks[i])
+                 UnhookWinEvent(hooks[i]);
+         }
++
++        // The listener must go before the next SetThreadDesktop: a thread that owns a
++        // window on its current desktop cannot switch desktops, and the window would be
++        // stale on the old desktop anyway (broadcasts are per-desktop). Recreated after
++        // re-attach at the top of the loop.
++        WorkAreaDestroyListener();
+     }
+ 
+     if (ownDesktop)
+@@ -2520,6 +2536,13 @@
+     status = TrackWindows(&stats);
+     LeaveCriticalSection(&g_csWatchedWindows);
+ 
++    // Belt-and-braces for the work area: Explorer's overwrite is asynchronous and the
++    // broadcast listener can be down (rearm gap, hook-thread death, CreateWindowEx
++    // failure). One SPI_GETWORKAREA compare per resync tick (2 s; 150 ms in the
++    // hook-death fallback) bounds the staleness even if the event path fails again.
++    if (stats.Resync)
++        WorkAreaEnsureApplied();
++
+     if (status != ERROR_SUCCESS)
+         win_perror2(status, "TrackWindows");
+ 
+--- a/gui-agent/workarea.c
++++ b/gui-agent/workarea.c
+@@ -29,6 +29,10 @@
+ 
+ static RECT g_WaLastApplied;   // zero until first successful apply
+ 
++// Broadcast-listener window. Created, destroyed and used ONLY on the window-event
++// thread (window handles are thread-affine for DestroyWindow), so no lock.
++static HWND g_WaListener = NULL;
++
+ static BOOL WaRectSane(const RECT* r)
+ {
+     return r->right - r->left >= 640 && r->bottom - r->top >= 480 &&
+@@ -275,6 +279,35 @@
+     return DefWindowProc(hwnd, msg, wp, lp);
+ }
+ 
++// Cheap drift check for periodic ticks: if the OS work area no longer matches what
++// we last applied (Explorer recomputed it and the broadcast listener missed it or is
++// down), re-assert. One SystemParametersInfo read when in agreement.
++void WorkAreaEnsureApplied(void)
++{
++    if (!g_WaInitDone)
++        return;
++
++    RECT applied;
++    EnterCriticalSection(&g_WaLock);
++    applied = g_WaLastApplied;
++    LeaveCriticalSection(&g_WaLock);
++
++    if (IsRectEmpty(&applied))
++        return; // never applied anything - nothing to defend
++
++    RECT current;
++    if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &current, 0))
++        return;
++
++    if (EqualRect(&current, &applied))
++        return;
++
++    LogInfo("work area drifted: OS has (%d,%d)-(%d,%d), ours was (%d,%d)-(%d,%d); re-asserting",
++        current.left, current.top, current.right, current.bottom,
++        applied.left, applied.top, applied.right, applied.bottom);
++    WorkAreaReassert();
++}
++
+ void WorkAreaCreateListener(void)
+ {
+     static const WCHAR cls[] = L"QubesGuiAgentWorkArea";
+@@ -282,6 +315,10 @@
+     wc.lpfnWndProc = WaWndProc;
+     wc.hInstance = GetModuleHandle(NULL);
+     wc.lpszClassName = cls;
++
++    if (g_WaListener) // rearm without an intervening destroy: replace, don't leak
++        WorkAreaDestroyListener();
++
+     if (!RegisterClassEx(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+     {
+         win_perror("RegisterClassEx(workarea listener)");
+@@ -292,9 +329,21 @@
+     HWND h = CreateWindowEx(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, cls, L"", WS_POPUP,
+                             0, 0, 0, 0, NULL, NULL, wc.hInstance, NULL);
+     if (!h)
++    {
+         win_perror("CreateWindowEx(workarea listener)");
+-    else
+-        LogDebug("work-area listener window %p created", h);
++        return;
++    }
++    g_WaListener = h;
++    LogDebug("work-area listener window %p created", h);
++}
++
++void WorkAreaDestroyListener(void)
++{
++    if (!g_WaListener)
++        return;
++    if (!DestroyWindow(g_WaListener))
++        win_perror("DestroyWindow(workarea listener)");
++    g_WaListener = NULL;
+ }
+ 
+ void WorkAreaInit(void)
+--- a/gui-agent/workarea.h
++++ b/gui-agent/workarea.h
+@@ -28,9 +28,20 @@
+ void WorkAreaReassert(void);
+ 
+ // Create the hidden top-level window that receives WM_SETTINGCHANGE/WM_DISPLAYCHANGE
+-// broadcasts. Must be called on a thread that pumps messages (the window-event thread).
++// broadcasts. Must be called on a thread that pumps messages (the window-event thread)
++// AND whose desktop handle was opened with DESKTOP_CREATEWINDOW. Idempotent per thread.
+ void WorkAreaCreateListener(void);
+ 
++// Destroy the listener. Must be called on the thread that created it, and before that
++// thread re-attaches to another desktop (SetThreadDesktop fails while the thread owns
++// windows on its current desktop).
++void WorkAreaDestroyListener(void);
++
++// Periodic safety net: re-assert if SPI_GETWORKAREA no longer matches the last applied
++// rect (asynchronous Explorer overwrite that the broadcast listener missed). Cheap; one
++// SystemParametersInfo read when nothing drifted.
++void WorkAreaEnsureApplied(void);
++
+ // Record a dom0-provided work area + frame extents (qubesdb or MSG_WORKAREA).
+ void WorkAreaSetDom0(int x, int y, int w, int h, int fl, int fr, int ft, int fb);
+ 
