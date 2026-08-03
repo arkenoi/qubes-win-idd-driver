@@ -1601,3 +1601,45 @@ so the gate cannot deadlock the agent; (c) `MarkWindowCreatedLocked` runs only A
   is still suspect; the strip fix does not address it.
 - Validation is n=1 on one dialog. The stronger test is real Office under load
   (`tools/viewcheck/office-repro.ps1`), not yet run against 98eed30.
+
+### 2026-08-03 — fix VALIDATED on the live repro (measured here, not inferred)
+The "Sign in to set up Office" dialog reproduces the identical geometry to this morning's
+Document Recovery dialog, and it was on screen while the fixed agent (98eed30, hand-swapped
+gui-agent.exe, PerWindowCapture=1) was running. Live enumeration, owner dialog 0x1201a8
+(1300,454)-(2150,996), four WS_EX_LAYERED|WS_EX_TOOLWINDOW strips 8 px thick:
+
+| strip | rect | vs dialog |
+|---|---|---|
+| 0x10388 top | (1292,446)-(2158,454) | bottom edge == dialog top -> 0 px |
+| 0x80040 bottom | (1292,996)-(2158,1004) | top edge == dialog bottom -> 0 px |
+| 0x10386 left | (1292,446)-(1300,1004) | right edge == dialog left -> 0 px |
+| 0x10384 right | (2150,446)-(2158,1004) | left edge == dialog right -> 0 px |
+
+Agent's actual reaction (its own log, same instant):
+```
+SynthActivate: msg=SYNTH,hwnd=0x80040,owner=0x50322,x=1292,y=996,w=866,h=8
+SynthActivate: msg=SYNTH,hwnd=0x10384,owner=0x50322,x=2150,y=446,w=8,h=558
+SynthActivate: msg=SYNTH,hwnd=0x10386,owner=0x50322,x=1292,y=446,w=8,h=558
+SynthActivate: msg=SYNTH,hwnd=0x10388,owner=0x50322,x=1292,y=446,w=866,h=8
+```
+**owner=0x50322 is Word's MAIN window** (-8,-8)-(3448,1408), which the strips genuinely overlap -
+NOT the dialog 0x1201a8 they merely touch. The overlap test rejected the zero-overlap owner and
+let the candidate fall through to one with real overlap, which is exactly the intent.
+Counters with the strips live: `outside owner` = 0, `materializing child` = 0, gate drops
+("no CREATE was sent") = 0, vchan connected, agent PID stable. Pre-fix the same configuration
+produced SynthActivate x4 onto the DIALOG, then `synth paint ... outside owner` x4 forever, then
+the materialize oscillation, then the daemon's exit. Chain broken at the first link.
+
+Two corrections to my own checks along the way, both mine, both mattered:
+- I scanned agent logs for the strip HWNDs (0x2034x) to see whether the repro had re-run
+  post-fix and read zero as "it never ran". HWNDs are per-session, and the agent does not log
+  class names (`OLD_HAS_CLASSNAME=0`), so that detector could never have matched. The skepticism
+  it produced was unfounded.
+- A first enumeration returned garbage class/title text ("S", "D"): `GetClassNameW`/
+  `GetWindowTextW` need `CharSet=CharSet.Unicode` on the DllImport or the StringBuilder is
+  marshalled ANSI. Geometry was unaffected and is what the verdict rests on.
+
+Deployment caveat: this is a hand-swapped `gui-agent.exe` with `.orig` alongside, NOT a package
+install - a QWT reinstall reverts it. `PerWindowCapture` had been 0 (my typing A/B) and is now 1.
+Unrelated and open: `local.WinScreenshot` currently returns rc=1 with an empty tar even though
+the agent reports a connected vchan; the two SILENT agent deaths remain unexplained.
