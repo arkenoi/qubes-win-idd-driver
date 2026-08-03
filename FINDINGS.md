@@ -1478,3 +1478,64 @@ announce (an announced 391x8 strip becomes its own bordered dom0 sliver); the
 fix-office-chrome-v2 (predicate + CreateSent) and fix-mso-chrome-class (c789199, class rejection)
 both target this; the class rejection is the narrower, more certain cut.
 Still wanted from dom0: `/var/log/qubes/guid.win-idd-test.log` for the daemon's own exit reason.
+
+### 2026-08-03 — Office daemon-kill: the daemon's own verdict, and the fix (branch fix-createsent-gate)
+The user qvm-copied dom0's daemon logs to ~/QubesIncoming/dom0/. `guid.win-idd-test.log.old`
+ends with, verbatim:
+```
+Window 0x1c00192 is still set as transient_for for a 0x1c00194 window, but VM tried to destroy it
+libvchan_is_eof          <- agent died 09:57:00
+Icon size: 128x128       <- daemon restarted
+libvchan_is_eof          <- agent died 09:57:51
+Icon size: 128x128       <- daemon restarted
+msg 0x86 without CREATE for 0x20340    <- daemon exit(1), 09:58:07, never restarted again
+```
+`0x86` = 134 = **MSG_CONFIGURE** (verified against qubes-gui-protocol.h: MSG_MIN=123, and the
+header's own `MSG_UNMAP // 133` / `MSG_DOCK // 143` markers bracket it). `0x20340` is the BOTTOM
+MSO_BORDEREFFECT strip of Word's Document Recovery dialog. So the GUI loss was gui-daemon
+exiting on a protocol violation by us - not a crash, not the VM.
+
+**Full chain, every link verified in source or logs:**
+1. Four strips sit flush against the dialog with EXACTLY zero intersection, 8 px out (geometry
+   in the previous entry).
+2. `SynthOwnerQualifies` (main.c:1013-1020) tested only bounds proximity vs SYNTH_OVERHANG_MAX,
+   with no overlap test -> all four admitted as synthesized children, so none was ever announced
+   (`CreateSent = FALSE`).
+3. `PwPatchSynthChildClipped` intersects to an empty rect -> `synth paint ... outside owner`
+   forever; the strips can never be painted.
+4. Owner geometry shifts -> main.c "materializing child": `SynthDeactivate(c); c->DeletePending
+   = TRUE;`. Clears `Synthesized`, leaves `CreateSent = FALSE`, entry STAYS in the watched list.
+5. `ProcessNewFrame` no longer skipped it (not synthesized, not PwIsAttached) -> legacy branch ->
+   `SendWindowConfigureIfChanged` -> **MSG_CONFIGURE for a window with no CREATE** -> daemon dies.
+
+Not deterministically reproducible before because it needs a DIALOG with zero-overlap chrome AND
+a geometry change; Document Recovery supplies both.
+
+**Fix (98eed30, CI green: idd-driver + gui-agent + package):**
+- **Layer 1, the backstop** - send.c now keeps the set of windows a CREATE actually went out for,
+  maintained under g_VchanCriticalSection by the calls that emit CREATE/DESTROY (the same lock
+  that orders the messages), and all nine window-scoped senders check it; window 0 is exempt.
+  `WINDOW_DATA.CreateSent` cannot serve: it lives under g_csWatchedWindows, which the capture
+  thread must not take (ABBA vs the vchan lock). Before this, `CreateSent` was checked in exactly
+  ONE place (RemoveWindow, main.c:1360). **No agent bug should be able to kill the qube's GUI.**
+- **Layer 2, root cause** - `SynthOwnerQualifies` now requires a non-empty intersection with the
+  owner's granted buffer, not mere proximity.
+- **Layer 3, disposition** - the frame loop skips `DeletePending` entries outright.
+
+`SendResetCreatedWindows()` on client connect is defence in depth only: `WatchForEvents` runs
+once per process and returns on vchan EOF, so a new client always means a respawned agent with an
+empty set. It matters if the agent is ever made to survive a daemon restart - which would also
+require re-announcing existing windows (it does not today).
+
+**Correction to the 2026-08-02 entry**: that one describes a DAEMON-FIRST death (daemon dropped,
+agent tore down cleanly). This is the opposite order and a different variant: the agent died
+SILENTLY twice (log ends mid-frame, no vchan error, no teardown, no WER Application Error in 24 h)
+before the third instance killed the daemon outright. Two silent agent deaths remain UNEXPLAINED -
+the strip bug explains the daemon's exit, not the agent's. The ~10:06 VM restart was mine.
+
+**Operational lesson**: `guid.<vm>.log` is truncated on daemon start. Only `.old` carried the
+fatal line, and only because the daemon happened to restart once more. Pull BOTH before any restart.
+
+NOT yet deployed: the guest is parked in the PerWindowCapture=0 arm awaiting the user's typing
+judgement, and deploying restarts the agent (which drops the dom0 daemon and needs a VM restart).
+Deploy + re-run the Office repro once that judgement is in.
