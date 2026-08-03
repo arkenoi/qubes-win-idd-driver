@@ -1741,3 +1741,52 @@ Undeployed/unvalidated: the shadow-band fix (aaa8c37 + 66fc670).
    killing qrexec. Match the gui-agent's own service, never a DisplayName substring.
 2. Two `qtest kill`s left the volume dirty. The later `qvm-shutdown --wait` worked cleanly - try
    ACPI FIRST; the guest honoured it even with no interactive session.
+
+### 2026-08-03 — RETRACTION: the logon hang was WINDOWS UPDATE, not PerWindowCapture
+
+The entry immediately above is **WRONG in its central claim** and is retracted. I attributed a
+logon hang to `PerWindowCapture` on a correlation, then went to rebuild the VM. The VM recovered
+on its own before the rebuild, and the guest's own event log gives the real cause.
+
+**Proof:**
+- `qvm-prefs win-idd-test netvm` = **`core-net`**. The guest has been ONLINE since the Office
+  install (FINDINGS 2026-08-02) and nobody detached it afterwards.
+- OS build moved **19045.6456 → 19045.6466** across the incident.
+- Hotfixes installed 02-03/08: KB5072653, KB5071959, KB5071982, KB5066130, KB5066135, plus
+  KB5066747 (.NET CU) and KB5001716.
+- Update activity ran 12:12 → 16:05 (`WindowsUpdateClient` 43/44/19 events, incl. "2025-11
+  Cumulative Update for Windows 10 Version 22H2 (KB5071959)" started 12:21).
+- The decisive line, **16:04:24 Event 1074 / User32**:
+  `The process C:\Windows\servicing\TrustedInstaller.exe ... has initiated the restart ... for the
+  following reason: Operating System: Upgrade (Planned)`
+
+So: the `user / Welcome` spinner was **post-update logon servicing**, the "self-reboot" was
+TrustedInstaller's planned servicing restart, and `qubes.VMShell` was mute because no interactive
+session exists while that runs. All of it is ordinary Windows servicing on a networked guest.
+
+**What survives from the retracted entry:**
+- The 09:57 silent agent deaths are still UNEXPLAINED. They predate the 10:16 update activity and
+  are not accounted for here.
+- `PerWindowCapture` was set to 0 at 09:58 by someone, and I re-enabled it at 15:45 without
+  establishing why. That process error stands regardless of the outcome: **do not flip a flag
+  whose current value you cannot explain.**
+- The code default (perwindow.c:70, `enabled = 1`) is still wrong for a shipping build, on general
+  principle - but NOT for the reason I gave, and this is no longer evidence for a release blocker.
+
+**What does NOT survive:** the correlation table, the "PrintWindow into LogonUI stalls session
+init" mechanism, and the "release blocker" conclusion. All withdrawn. The mechanism was never
+observed - I inferred it from a timeline that had a much simpler explanation I had not checked.
+
+**Method failure worth keeping:** I had `netvm=core-net` available from `qvm-prefs` the whole time
+and never looked, because I had internally filed the guest as "offline" from CLAUDE.md's rule. The
+rule describes intent; `qvm-prefs` describes reality. Check the machine, not the memory of the
+machine. The same mistake in miniature as quoting DESIGN-workarea-propagation's problem statement
+instead of reading workarea.c.
+
+**Consequences to act on:**
+1. **Detach the netvm** (`qvm-prefs win-idd-test netvm ''`) now that Office is installed - a guest
+   that services itself mid-run invalidates every latency and CPU measurement taken today, and
+   silently changed the OS build under our benchmarks (6456 → 6466).
+2. Re-check any timing numbers taken 12:12-16:05 today; a cumulative update was installing
+   underneath them.
+3. The VM was NOT rebuilt. It is healthy, updated, and Office is intact.
