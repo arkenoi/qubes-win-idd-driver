@@ -1539,3 +1539,65 @@ fatal line, and only because the daemon happened to restart once more. Pull BOTH
 NOT yet deployed: the guest is parked in the PerWindowCapture=0 arm awaiting the user's typing
 judgement, and deploying restarts the agent (which drops the dom0 daemon and needs a VM restart).
 Deploy + re-run the Office repro once that judgement is in.
+
+### 2026-08-03 — 98eed30 DEPLOYED and VALIDATED against the live repro (supersedes "NOT yet deployed" above)
+
+The "NOT yet deployed" note directly above is superseded: the fix is on the guest and the Office
+repro was re-run against it. The typing judgement it was waiting for is NOT a prerequisite for
+this — the two are independent (that arm is about PrintWindow latency, this is about the daemon
+kill), and leaving a known qube-GUI-killer undeployed to preserve a measurement arm was the wrong
+trade.
+
+**Deploy method (note for whoever touches this guest next): hand-swapped binary, not a package
+install.** `gui-agent.exe` from CI run 30794482470 (`gui-agent-package`, superproject 176264f →
+agent 98eed30) copied over `C:\Program Files\Qubes Tools\bin\gui-agent.exe`, with
+`gui-agent.exe.orig` left beside it for revert. Sequence: `Stop-Service QubesGuiWatchdog` → kill
+`gui-agent` → copy → set `PerWindowCapture=1` → `Start-Service`. **A QWT reinstall silently
+reverts this.** The registry value was found at
+`HKLM\Software\Invisible Things Lab\Qubes Tools` (note: install tree is `C:\Program Files\Qubes
+Tools`, the config key is still under the ITL path).
+
+`PerWindowCapture` was **0** on this guest before the swap, i.e. the synthesis path was dormant
+and none of the strip machinery could run. Anything measured on this guest between the 10:06
+reboot and 15:45 was the legacy screen-slice path. Re-enabled to 1 so the fix is actually exercised.
+
+**Repro**: Word launched cold, producing its crash-recovery prompt ("Word couldn't start last
+time… start in safe mode?") — the same dialog class that owns the four `MSO_BORDEREFFECT` strips.
+Its reappearance is itself a consequence of the unclean 10:06 reboot.
+
+**Result — six checks, agent log gui-agent-20260803-154537-6240.log:**
+
+| check | before (b299011) | after (98eed30) |
+|---|---|---|
+| `synth paint … outside owner` | every frame for 13 h | **0** |
+| `QGAPROTO,msg=SYNTH` for the strips | 4, repeatedly | **0** — overlap test rejects them |
+| `materializing child` oscillation | 4 per burst | **0** |
+| gate drops (`no CREATE was sent`) | n/a (gate did not exist) | **0** — nothing even attempted it |
+| vchan | `not open` → daemon exit → qube GUI lost | **healthy**, daemon 0x10008 |
+| dom0 windows for the dialog | dialog + 4 bordered slivers / broken composite | **1 clean window** |
+
+`local.WinScreenshot` returned exactly one PNG: the dialog, correctly bordered, fully painted, no
+shadow-strip slivers, no black regions. Agent attached one per-window buffer (`0x2031a`, 400x185).
+
+Worth recording explicitly: the strips are now **neither synthesized nor announced**. Layer 3's
+predicted failure mode (rejection from synthesis → four bordered 391x8 slivers in dom0) did NOT
+occur — they are filtered before announcement. So no "synthesize-or-drop" change was needed.
+
+**Review of 98eed30 before deploying** (findings, not just a rubber stamp): the three things that
+could still have been fatal are all correct — (a) `MaySendForWindowLocked` is called inside the
+`g_VchanCriticalSection` hold at every one of the nine sites; (b) both early-return gate sites
+(`SendWindowDump` send.c:73, `SendWindowMap` send.c:504) `LeaveCriticalSection` before returning,
+so the gate cannot deadlock the agent; (c) `MarkWindowCreatedLocked` runs only AFTER
+`VCHAN_SEND_MSG(MSG_CREATE)` succeeds, so the set can never claim more than the daemon was told.
+`SendResetCreatedWindows` is declared (send.h:62) and called at main.c:3587.
+
+**Still open, do not treat the GUI-death class as closed:**
+- The two SILENT agent deaths (09:57:00, 09:57:51) remain unexplained. The strip bug explains the
+  daemon's `exit(1)`, not why the agent process vanished with no log line and no WER entry. The
+  watchdog is not the killer — watchdog.c:160-161 only restarts a process it finds missing, it
+  never terminates one.
+- The ~10:06 VM restart was **unclean**: Kernel-Power Event 41 ("rebooted without cleanly shutting
+  down"), plus EventLog 6008. A hand-swapped agent cannot cause that. Something below the agent
+  is still suspect; the strip fix does not address it.
+- Validation is n=1 on one dialog. The stronger test is real Office under load
+  (`tools/viewcheck/office-repro.ps1`), not yet run against 98eed30.
