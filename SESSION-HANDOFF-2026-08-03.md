@@ -84,12 +84,13 @@ with nothing in its own log at least as well as an agent bug does.
 **Recommendation: do not chase this until the guest has been offline and stable for a full
 session.** If it never recurs on a quiesced guest, it was servicing.
 
-### T5 — Quiesce the guest — **NEW, and now the top priority**
-Not on the original list, and it should have been. `netvm=core-net` caused, directly or
-indirectly, every outage and every retracted conclusion today.
-```
-qvm-prefs win-idd-test netvm ''
-```
+### T5 — Detach the netvm **while measuring** — a control, NOT a solution
+`qvm-prefs win-idd-test netvm ''` before any timing or stability measurement, so servicing
+does not confound it (it confounded everything today).
+
+**This is measurement hygiene only. Do not mistake it for a fix, and do not leave the guest
+offline as the end state** — see T6, which is the actual requirement.
+
 Also worth doing while there (autologon trap, §4.3):
 ```
 net user user qubes
@@ -99,7 +100,35 @@ Ask before the password line — the account was *created* at install on 02/08 1
 4720/4722/4724 under `WIN-IDD-TEST$`, preceded by the same pattern under the setup-time
 name `MINWINPC$`), so `qubes` is the documented value but has not been re-verified.
 
-**Suggested order: T5 → T1 → T2. T3 gated on its own experiment. T4 parked.**
+### T6 — A networked, self-updating Windows qube must stay stable — **THE REAL REQUIREMENT**
+Stated by the user at handoff, and it reframes most of today: the target is a Windows qube
+that has a netvm, installs its own updates, and survives doing so. Today's servicing cycle
+was not noise to be eliminated — **it was the first real test of that requirement, and the
+qube did not pass it cleanly.** What the day actually demonstrated, as requirements:
+
+1. **The gui-daemon must survive, or be restartable.** When it exits, nothing brings it back:
+   the agent parks at "Awaiting for a vchan client" forever and the qube has no GUI until a
+   full restart. `98eed30` removed one cause of daemon death; the *fragility* is untouched.
+   This is the single biggest robustness gap and it is dom0-side, so it needs design
+   discussion before code (Phase 3 discipline).
+2. **A servicing window makes the qube look dead to Qubes tooling.** During the cumulative
+   update the guest was unreachable over qrexec for ~10+ minutes while `power_state=Running`.
+   Check what `qrexec_timeout` is actually set to (kit default 300 s; PROVISION-LOG records
+   7200 applied) and whether dom0 tooling degrades gracefully across that window.
+3. **Autologon must survive an update reboot.** Today's trap (§4.3) is not a lab artifact:
+   updates reboot the machine, autologon retries with an invalid credential, and the account
+   locks itself out. On a real user's Windows qube that is a hard lockout after a routine
+   patch cycle.
+4. **The agent must tolerate repeated unclean restarts and long secure-desktop periods.**
+   Kernel-Power 41 unclean reboots and multi-minute logon-screen stalls both occurred. The
+   agent+watchdog did recover each time — that part worked. `6b5b298` (never capture on the
+   secure desktop) is aimed squarely here and is still unvalidated (T1).
+5. **This connects to Track C** (CLAUDE.md): Windows update status/management from dom0.
+   Today produced a free, unplanned end-to-end sample of what a real update cycle does to a
+   Windows qube. Mine it rather than discard it.
+
+**Suggested order: T5 (as a control) → T1 → T2. T6 is the standing requirement the others
+serve; T3 gated on its own experiment; T4 parked.**
 
 ---
 
@@ -112,6 +141,11 @@ unclean Kernel-Power 41 reboot, a `user / Welcome` logon stall that looked exact
 hang, and an OS build change mid-benchmark. **Any measurement taken on a networked guest is
 worthless.** Check `qvm-prefs`, not CLAUDE.md's "offline" claim — the rule states intent,
 `qvm-prefs` states reality.
+
+**But do not over-correct into "keep it offline".** A networked, self-updating Windows qube
+that stays stable is the actual goal (T6). Offline is a control you switch on for a
+measurement and off again afterwards. The failures above are not reasons to avoid the
+network — they are the defect list for T6.
 
 ### 4.2 `scratchpad/deploy.ps1` has a service-selection bug — do not use it
 ```powershell
