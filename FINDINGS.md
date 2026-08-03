@@ -1643,3 +1643,57 @@ Deployment caveat: this is a hand-swapped `gui-agent.exe` with `.orig` alongside
 install - a QWT reinstall reverts it. `PerWindowCapture` had been 0 (my typing A/B) and is now 1.
 Unrelated and open: `local.WinScreenshot` currently returns rc=1 with an empty tar even though
 the agent reports a connected vchan; the two SILENT agent deaths remain unexplained.
+
+### 2026-08-03 — PerWindowCapture correlates with LOGON-PATH HANGS; flag must default OFF (VM lost to it)
+
+**Symptom**: the guest reaches `user / Welcome` during autologon and stays there indefinitely.
+No interactive session is ever created, so `qubes.VMShell` accepts the connection and returns
+NOTHING (rc=0, no output) while `qubes.Filecopy` keeps working — file-receiver is a service and
+session-independent. `local.WinScreenshot` shows the Welcome spinner. Survives a reboot: the
+guest self-restarted and hung at the SAME stage.
+
+**Correlation, two independent episodes:**
+
+| window | PerWindowCapture | outcome |
+|---|---|---|
+| 2026-08-02 20:50 → 2026-08-03 09:57 | **ENABLED** (`PwInit: per-window capture ENABLED`) | agent died SILENTLY twice (log ends mid-frame, no vchan error, no WER); daemon killed; 10:06 unclean reboot (Kernel-Power 41) |
+| 09:58 → 15:45 | **0** (`disabled by config`) | stable ~6 h, dozens of successful pushruns, Office repro ran fine |
+| 15:45 (set to 1 during this session's deploy) → 16:14 | **1** | worked ~7 min; first idle LOCK at ~16:14 → stuck; self-reboot → stuck again |
+
+The flag was 0 when this session started. **It was set to 0 at 09:58, i.e. immediately after the
+first episode** - that was not a neutral default, it was somebody's workaround, and re-enabling it
+without asking why reproduced the failure. Recording that as the process error it is.
+
+**Suspected mechanism** (INFERRED - not proven, the VM was lost before it could be instrumented):
+`PrintWindow` round-trips **synchronously into the target process** - the engine says so itself
+(wincapture.cpp:99-105, which is why `IsHungAppWindow` is checked at all). The capture thread
+calls `AttachThreadToInputDesktop` and re-attaches whenever a capture fails
+(wincapture.cpp:244-246). Across a lock / secure-desktop transition the input desktop becomes
+Winlogon, and the agent - SYSTEM in session 1 - begins driving `PrintWindow` at LogonUI-owned
+windows. A synchronous round-trip into the logon UI during session init is a credible way to stall
+logon exactly where the guest is stuck. `IsHungAppWindow` does not help here: LogonUI is not hung,
+it is waiting on us.
+
+**Why this matters beyond the test rig**: lock/unlock is a daily event for every real user. If the
+mechanism is right, per-window capture as shipped can wedge a Windows qube's logon. That is a
+release blocker for the feature, not a lab artifact.
+
+**Actions:**
+- `PerWindowCapture` must **default OFF** until this is root-caused. Note the code default is
+  currently ON (perwindow.c:70, `DWORD enabled = 1; // default ON: this build exists to exercise
+  the new path`) - fine for a bring-up build, wrong for anything a user installs.
+- The engine must never capture across a non-default desktop. Candidate guard: record the desktop
+  the channel was created on and skip capture when `OpenInputDesktop` reports a different one
+  (Winlogon/secure), rather than re-attaching to it as the code does today.
+- Repro to run on the rebuilt guest BEFORE trusting the flag again: enable it, lock the session
+  (`rundll32 user32.dll,LockWorkStation`), wait, unlock, and see whether the desktop returns.
+  That is a 2-minute test and would have caught this.
+
+**Evidence lost**: the guest could not be shelled, so the 16:14 agent/qrexec logs and the
+Windows event log for the hang were never extracted, and the VM is being rebuilt. The correlation
+above rests on the boot-time `PwInit` lines already quoted in this file plus the observed
+timeline - it is strong, but the mechanism remains UNPROVEN. Do not present it upstream as
+established without the lock/unlock repro.
+
+**Not lost**: all code and analysis are committed and pushed - `aaa8c37` (MSO chrome by class),
+`66fc670` (no popup re-homing), superproject `ed314d2`, FINDINGS `f71509c`.
