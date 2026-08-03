@@ -180,3 +180,28 @@ cd ~/qubes-win-idd-driver && git log --oneline -3 && git -C agent log --oneline 
 ```
 In-guest: confirm `gui-agent.exe` hash vs `.orig`, `PerWindowCapture`, and that
 QdbDaemon/QrexecAgent/QubesGuiWatchdog are all Running.
+
+## Correction to T4's downgrade (added after review)
+
+T4 (the two silent agent deaths) was parked above on the reasoning that the 10:06 Kernel-Power 41
+unclean restart could explain "a process vanishing with nothing in its own log". **That does not
+fit the timeline and should not be relied on:**
+
+```
+09:57:00  agent 3952 dies silently   -> daemon logs libvchan_is_eof, RESTARTS
+09:57:51  agent 3432 dies silently   -> daemon logs libvchan_is_eof, RESTARTS
+09:58:07  agent 8016 sends MSG_CONFIGURE for an unannounced window
+          -> "msg 0x86 without CREATE for 0x20340" -> daemon exit(1), never restarts
+~10:06    Kernel-Power 41 unclean restart
+```
+
+Both deaths precede the restart by ~8-9 minutes, and the daemon demonstrably kept running and
+restarting between and after them - so the session was live, not tearing down. A host restart at
+10:06 cannot retroactively kill a process at 09:57. The Windows-Update servicing argument does not
+cover it either: servicing restarts processes it owns, and would not produce two agent exits with
+no WER entry while the gui-daemon stayed up.
+
+So T4 is **still unexplained, and still possibly a real bug**. Keep it parked only in the sense of
+"needs a quiet guest before it can be chased", NOT in the sense of "probably wasn't a bug". The
+thing that WAS explained today is the daemon's death at 09:58:07, which is a different event with
+a different cause (the zero-overlap strip chain, fixed).
