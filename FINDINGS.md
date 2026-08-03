@@ -1790,3 +1790,35 @@ instead of reading workarea.c.
 2. Re-check any timing numbers taken 12:12-16:05 today; a cumulative update was installing
    underneath them.
 3. The VM was NOT rebuilt. It is healthy, updated, and Office is intact.
+
+### 2026-08-03 — RETRACTION: the "per-window capture logon hang" was Windows Update
+The entry above titled "SUSPECTED RELEASE BLOCKER: per-window capture correlates with logon-path
+hangs" is **WRONG and withdrawn**. The guest was not wedged. `qvm-prefs win-idd-test netvm` =
+**core-net**: it has been ONLINE since the Office install and was servicing itself all afternoon.
+OS build moved 19045.6456 -> 19045.6466; KB5072653/5071959/5071982/5066130/5066747/5001716
+installed 12:12-16:05; Event 1074 at 16:04:24 records `TrustedInstaller.exe ... initiated the
+restart ... reason: Operating System: Upgrade (Planned)`. The "user / Welcome" spinner was
+post-update logon servicing, the "self-reboot" was TrustedInstaller's planned restart, and
+`qubes.VMShell` was mute because no interactive session exists while that runs. The VM recovered
+on its own; qrexec answers again and Office is intact. **No reinstall was performed** - the user
+had approved one, but its entire premise was this bad diagnosis.
+
+The correlation table was real and still meaningless: per-window capture happened to be ON during
+two windows that also contained update activity. I built a mechanism (PrintWindow into LogonUI)
+that fit the story and stopped looking. **`qvm-prefs` was available the whole time and I never
+ran it**, because CLAUDE.md says the test VM is offline - the rule states intent, the command
+states reality. Second time today I trusted a document over the live system (the other: quoting
+DESIGN-workarea-propagation.md's problem statement instead of reading workarea.c).
+
+Consequences for the record:
+- The two SILENT agent deaths at 09:57 are **still unexplained**; they predate the update activity.
+- **Timing numbers taken 12:12-16:05 today are invalid** - a cumulative update was installing
+  underneath them, and the OS build changed mid-run. Re-take anything from that window.
+- Commit 6b5b298 (capture idles while the secure desktop is up) **keeps its behaviour but loses
+  its evidence**: it is now hardening, not a fix for an observed hang. Capture on the secure
+  desktop is still undesirable on its own merits - PrintWindow round-trips synchronously into
+  LogonUI, DDA returns ACCESS_DENIED there, and the agent has no business sampling the logon UI -
+  but nothing observed today demonstrates harm. Its commit message overstates the case and is
+  corrected here rather than by rewriting the pushed history.
+- Standing rule from this: **before blaming our code for a guest-wide symptom, check netvm,
+  Windows Update state, and the System event log.** A networked Windows guest is never quiescent.
