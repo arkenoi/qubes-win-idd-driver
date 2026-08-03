@@ -1429,3 +1429,52 @@ window at the same instant, reporting % differing on RGB vs RGBA and per-corner 
 iterations while typing, on Win10 AND Win11. Interior RGB mismatch ~0 => proceed; otherwise the
 design is dead and the fallback is damage-scoped diffing. Prerequisite: time the occlusion walk
 standalone - if >~1 ms/pass it must be memoised against EVENT_SYSTEM_FOREGROUND/LOCATIONCHANGE.
+
+### 2026-08-03 — Office daemon-kill: GEOMETRIC PROOF of the cause (no longer "unreproducible")
+Word's Document Recovery dialog (HWND 0x20338, 375x186) carries four MSO_BORDEREFFECT strips
+owned by the DIALOG. Measured geometry at 09:57:21.778, owner (1543,702)-(1918,888):
+
+| strip | rect | overlap |
+|---|---|---|
+| 0x20350 top | (1535,694)-(1926,702) | bottom edge == owner top -> **0 px** |
+| 0x20340 bottom | (1535,888)-(1926,896) | top edge == owner bottom -> **0 px** |
+| 0x20344 left | (1535,694)-(1543,896) | right edge == owner left -> **0 px** |
+| 0x20342 right | (1918,694)-(1926,896) | left edge == owner right -> **0 px** |
+
+All four edge-adjacent, EXACTLY zero intersection, each 8 px outside - inside
+SYNTH_OVERHANG_MAX = 12.
+
+**The bug is `SynthOwnerQualifies` (main.c:1013-1020): it tests BOUNDS PROXIMITY ONLY, with no
+overlap test.** The 12 px allowance from 832ce97 was for XAML popups that stick out slightly
+WHILE STILL OVERLAPPING; it silently admits children entirely outside the owner. Downstream
+`PwPatchSynthChildClipped` (main.c:2799) intersects, gets an empty rect, logs "synth paint ...
+outside owner" and paints nothing - forever.
+
+**Kill mechanism - synth/materialize oscillation:**
+```
+095721.324  SynthActivate x4                                  (strips synthesized)
+095721.653  UpdateWindowData: ... owner geometry changed, materializing child   x4
+095721.778  SynthActivate x4                                  (re-synthesized)
+095721.778  synth paint ... outside owner x4
+```
+Flip-flop inside ~450 ms; materialisation announces them to dom0, and that burst is what precedes
+the vchan loss. Cause is now geometric, not "timing-dependent and unreproducible".
+
+**Two corrections to the 2026-08-02 write-up:**
+1. That entry describes a DAEMON-FIRST death (daemon dropped, agent tore down cleanly). The
+   09:57 death was SILENT: the log ends mid-normal-PerfEmitFrame with no vchan error, no
+   teardown, no WinMain failure, and NO WER/Application Error 1000 for gui-agent.exe in 24 h.
+   The agent did not crash-with-report and did not exit cleanly. Different variant, same family.
+2. Per-window capture was ENABLED in the session that died (only the post-reboot respawns show
+   "disabled by config"), so an earlier reading that the VM was "already in Arm B" was about the
+   wrong instance.
+The ~10:06 reboot was mine (qtest kill/start to restore the GUI after the daemon loss), not a
+self-reboot.
+
+**Fix**: require a NON-EMPTY intersection with the owner's granted rect (PwWidth/PwHeight), not
+bounds proximity - ideally a majority of the child's area inside. Rejection must DROP, never
+announce (an announced 391x8 strip becomes its own bordered dom0 sliver); the
+"synthesize-or-drop, never announce" precedent is main.c:1218-1219 (d610454 keytips). Branches
+fix-office-chrome-v2 (predicate + CreateSent) and fix-mso-chrome-class (c789199, class rejection)
+both target this; the class rejection is the narrower, more certain cut.
+Still wanted from dom0: `/var/log/qubes/guid.win-idd-test.log` for the daemon's own exit reason.
