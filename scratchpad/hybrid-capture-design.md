@@ -478,6 +478,9 @@ robust — PrintWindow is 2–3 orders of magnitude above everything else the ag
    keeping the sweep in DDA mode (§2.3e).
 6. **Scope creep into per-region mixing.** §1.3 says no; reviewers should hold that line.
 
+**PREREQUISITE — see §7. Do not run any of the below until §7 has established that the latency
+is actually downstream of the DDA frame.**
+
 **The cheapest experiment that falsifies the design before anyone writes it** — no agent change,
 no agent build, no daemon involvement:
 
@@ -510,3 +513,93 @@ of §1.2 as a standalone PowerShell/console loop on the live guest desktop. If i
 per pass with a realistic window population, the per-frame verdict must be memoised against
 `EVENT_SYSTEM_FOREGROUND` / `EVENT_OBJECT_LOCATIONCHANGE` instead of recomputed, which is a
 design change worth knowing about before implementation rather than after.
+
+---
+
+## 7. GATE: is the delay before or after the render reaches QWT?
+
+Everything in §1–§6 is worthless if the keystroke→pixels delay happens **before** the changed
+pixels reach the agent. The agent's only change signal is the DDA frame
+(`GetFrame(capture, FRAME_TIMEOUT)`, capture.c:733) — it cannot send damage for a repaint that
+has not been composed and presented yet. So the timeline splits at one point:
+
+```
+   T0 keypress
+        |  (A) app message loop -> app paints -> DWM composes -> DXGI presents
+   T1 AcquireNextFrame returns the frame containing the change      <-- agent's earliest knowledge
+        |  (B) ProcessNewFrame 182 us -> WcMarkDirty -> engine wake 0-8 ms
+        |      -> full-window PrintWindow 17-76 ms -> full-buffer row diff -> damage
+   T2 MSG_SHMIMAGE on the vchan
+        |  (C) gui-daemon reads the granted buffer, X composites, screen
+   T3 user sees the letter
+```
+
+- **(A) is unfixable agent-side.** No design in this document touches it.
+- **(B) is what the hybrid removes** (§5): ~50–90 ms for a large window, ~0 for a small one.
+- **(C) is dom0's and is unchanged.**
+
+**But (A) and (B) are NOT independent, and that is the trap.** `PrintWindow` round-trips
+*synchronously into the target application* — the tree states this in code
+(wincapture.cpp:99-105: "a hung app would park this thread inside the engine lock", hence the
+`IsHungAppWindow` guard at line 104), and the measured 58 ms `upd` spikes on Word are tracking
+interrogations queueing behind it in that same app. **VERIFIED (the code's own claim) /
+INFERRED (that it occupies the app's UI thread).** If the agent is running a 50–76 ms
+`PrintWindow` into Word at ~32 Hz, Word's UI thread is largely owned by the agent — so **part of
+(A) may itself be caused by QWT**. A naive measurement of (A) would then "exonerate" the agent
+for a delay the agent is creating.
+
+### 7.1 The decisive experiment: flip one registry DWORD. No code, no build, no CI.
+
+Per-window capture — and therefore all `PrintWindow` — is behind a runtime switch:
+`HKLM\Software\Invisible Things Lab\Qubes Tools\...` DWORD **`PerWindowCapture`** (default 1)
+or env **`QGA_PERWINDOW=0`** (perwindow.c:21-22, 70-81; perwindow.h:12). **VERIFIED.** With it
+at 0, `PwInit` returns early, no channel is ever created, no `PrintWindow` ever runs, and every
+window falls back to the legacy composited screen-slice path — i.e. **stage (B) collapses to
+the 182 us that was already measured**. Requires an agent service restart (`PwInit` runs once
+from `Init()`), not a reboot.
+
+Protocol (reuse the harness from FINDINGS.md 2026-08-02 — SetForegroundWindow + assert
+`FOREGROUND_IS_WORD=True` before typing; a run without asserted focus is vacuous):
+
+1. Word maximized (3430x1379), Office HW acceleration already off per the 2026-08-02 remedy.
+2. Arm A: `PerWindowCapture=1` (today). Arm B: `PerWindowCapture=0`. Restart the agent between
+   arms. Same text, same cadence, same session.
+3. In both arms collect: QGAPERF `dt`, `acq`, `wak`, `tot`, `area`; and a wall-clock log of each
+   keystroke from the harness, correlated against the `QGAPROTO,msg=DAMAGE` timestamps for that
+   hwnd (both are `[YYYYMMDD.HHMMSS.mmm]`, ~1 ms resolution — adequate at the 50–100 ms scale).
+4. Metric: **p50 and p95 of (first DAMAGE for that hwnd) − (keystroke)**.
+
+Adjudication:
+
+| result | meaning | action |
+|---|---|---|
+| Arm B materially faster (say ≥30 ms at p50) | the delay is **after** the render reaches QWT, and it is `PrintWindow`. | The hybrid is justified; proceed to the §6 pixel-equality experiment. |
+| Arm B the same | the delay is **before** QWT — app/DWM/present. | **Stop.** The hybrid buys nothing for typing. Nothing agent-side helps; the remedy is guest-side (the Office HW-accel class of fix). Say so plainly and close the line of work. |
+| Arm B faster **and** `acq`/`dt` also drop | `PrintWindow` was throttling the app's own paint loop, i.e. (A) was partly our fault too | Strongest possible case for the hybrid — the win is larger than §5 predicts. |
+
+Note arm B is not a shippable configuration (it reintroduces the whole artifact class per-window
+capture exists to fix — DESIGN-per-window-capture.md §1). It is a *measurement* arm only.
+
+### 7.2 Free pre-check, no configuration change at all (do this first, 2 minutes)
+
+`PrintWindow` cost is strongly size-dependent (17.3 ms p50 at 3128 px vs 50.2 ms at 2.6 Mpx —
+the brief's own numbers), while stage (A) is not. So:
+
+> Type into a **small** Notepad window (say 400x300) and into a **maximized** Word window, in the
+> same session, and compare how far behind the letters feel.
+
+- Lag scales with **window area** ⇒ it is `PrintWindow` ⇒ stage (B) ⇒ the hybrid is the fix.
+- Lag is the same in both ⇒ stage (A) ⇒ nothing agent-side helps.
+
+This costs nothing, needs no tooling, and the user can run it. It is a strong indicator, not
+proof (a small window is also a simpler app); §7.1 is the proof.
+
+### 7.3 What the existing data already says (and does not)
+
+FINDINGS.md 2026-08-02 measured, while typing into Word with HW accel off:
+`dt` p50 = 30,935 us, `acq` p50 = 30,056 us. So the agent sits blocked inside
+`AcquireNextFrame` for ~97% of each interval and frames arrive at ~32 fps. **That bounds the
+frame RATE, not the keystroke LATENCY** — it says nothing about how long a given keypress takes
+to appear in a frame, which is exactly (A). No measurement in this repo currently splits T0→T1
+from T1→T2. That gap is the whole reason §7 exists, and it is why §7.1 is gating rather than
+optional.
