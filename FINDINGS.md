@@ -1697,3 +1697,47 @@ established without the lock/unlock repro.
 
 **Not lost**: all code and analysis are committed and pushed - `aaa8c37` (MSO chrome by class),
 `66fc670` (no popup re-homing), superproject `ed314d2`, FINDINGS `f71509c`.
+
+### 2026-08-03 — SUSPECTED RELEASE BLOCKER: per-window capture correlates with logon-path hangs
+win-idd-test is now stuck at autologon ("user / Welcome", spinner) across THREE boots including a
+clean ACPI shutdown. `qubes.Filecopy` works, `qubes.VMShell` returns nothing - qrexec-agent is
+alive, there is simply no interactive session for a shell to run in. The guest is unusable and I
+cannot recover it from here: flipping the registry flag or reverting the binary both need a shell.
+
+**Correlation (2 independent episodes + the morning deaths):**
+
+| window | PerWindowCapture | outcome |
+|---|---|---|
+| 08-02 20:50 -> 08-03 09:57 | ENABLED (log: `PwInit: per-window capture ENABLED`) | agent died SILENTLY twice, daemon killed, 10:06 unclean reboot (Kernel-Power 41) |
+| 09:58 -> 15:45 | 0 (`disabled by config`) | stable all day, dozens of successful pushruns |
+| 15:45 -> now | 1 | ~7 min OK, first idle lock ~16:14 -> stuck; stuck again on every reboot since |
+
+**Proposed mechanism** (plausible, NOT proven): `PrintWindow` round-trips SYNCHRONOUSLY into the
+target process (wincapture.cpp:99-105 - the reason the `IsHungAppWindow` guard exists), and the
+capture thread calls `AttachThreadToInputDesktop`, re-attaching on failure (wincapture.cpp:244-246).
+Across a lock / secure-desktop transition the input desktop becomes Winlogon, so the agent - SYSTEM
+in session 1 - starts driving PrintWindow at LogonUI-owned windows. A synchronous round-trip into
+the logon UI during session init is a credible way to stall logon exactly where we are stuck, and
+`IsHungAppWindow` does not help: LogonUI is not hung, it is waiting on us. This is also the first
+hypothesis that FITS the two silent agent deaths, which I had recorded as unexplained.
+
+**CONFOUND, stated honestly**: the flag was not the only variable. The current episode also
+follows a binary swap to aaa8c37 AND my deploy script wrongly stopping `QdbDaemon` (it matched
+service DisplayName 'Qubes' and picked qubesdb, not the gui agent - qrexec depends on it). Episode
+A (16:14) was 98eed30 + flag=1 with no such interference, which is the cleaner of the two. So the
+flag is the best-supported single explanation but is NOT isolated; the decisive test is a guest
+with the flag OFF and the same binary.
+
+**If it holds, this is a release blocker for the feature, not a test-rig quirk**: every real user
+locks and unlocks daily. Per-window capture must default OFF until root-caused, and the capture
+thread must refuse to touch windows on a desktop other than the interactive one.
+
+**Not lost with the VM**: aaa8c37 (MSO chrome drop), 66fc670 (no popup re-homing onto an untracked
+owner's sibling), ed314d2 (bump), plus the validated daemon-kill chain - all committed and pushed.
+Undeployed/unvalidated: the shadow-band fix (aaa8c37 + 66fc670).
+
+**My operational errors this session, recorded so they are not repeated:**
+1. The deploy script picked the service by `DisplayName -match 'Qubes'` and stopped **QdbDaemon**,
+   killing qrexec. Match the gui-agent's own service, never a DisplayName substring.
+2. Two `qtest kill`s left the volume dirty. The later `qvm-shutdown --wait` worked cleanly - try
+   ACPI FIRST; the guest honoured it even with no interactive session.
