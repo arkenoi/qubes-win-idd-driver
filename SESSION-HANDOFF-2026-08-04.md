@@ -18,7 +18,10 @@ about controls and premises, not about any individual fix.
 | `98eed30` | validated 2026-08-03 (unchanged) |
 | `aaa8c37` | **VALIDATED** — 4/4 strips announced by the pre-fix build, 0/4 by the fix, 3 interleaved rounds, cold boot per side |
 | `66fc670` | **VALIDATED** — control adopted the popup 3/3, fix refused it 3/3, on two opposed signals |
-| `6b5b298` | **still unvalidated**; instrument designed and committed but never run |
+| `6b5b298` | **still unvalidated**; review argues its stated mechanism is impossible and its original justification was retracted -> fix-or-revert, do not just keep |
+| `b4301b1` | **wild-pointer loop in the post-recovery repaint sweep — VALIDATED**: control CRASHES the agent 3/3, fix survives 3/3 |
+| `d3a5fbc` | mask-sort, written days ago and never merged; cherry-picked today, not separately validated |
+| `a4f6961` | framebuffer-pointer invalidation on duplication release; not separately validated |
 
 **FIVE separate instruments were discarded today as incapable of failing.** That is the
 single most useful thing to carry forward: before running any A/B, ask *what makes the
@@ -156,41 +159,64 @@ the parent key. Setting the parent does nothing.
 
 | thing | value |
 |---|---|
-| `netvm` | **detached** — a measurement control only; T6 wants it networked again |
-| `gui-agent.exe` | `4DA9FE96…` — the validated CI build of agent `6b5b298`; `.orig` (`4B4CE2B1…`) intact. Verified live after a cold boot: gui-daemon connected, `SendWindowMap` x2, all services Running |
-| `PerWindowCapture` | **0** — and this is NOT a shipped default, it is our own test leftover (see the FINDINGS retraction). A real install has no such value and runs with capture **ON**. Set it to **1** for any synthesis, shadow, or `6b5b298` work — and note the guest is currently NOT in a real user's configuration |
-| `LogLevel` (`gui-agent` subkey) | **3** — restored. Verbose (5) sits on the hot path and would pollute timing runs |
+| `netvm` | **detached** — measurement control only; T6 wants it networked again |
+| `gui-agent.exe` | `F06C0979` — CI build of agent `a4f6961` (wild-pointer + mask-sort + fb-invalidation on top of `6b5b298`). `.orig` (`4B4CE2B1`) intact |
+| `PerWindowCapture` | **registry value REMOVED** — the guest now matches a fresh install, i.e. capture is **ON** via the code default. This is deliberate: `0` was our own test residue and reading it as "the shipped default" caused a whole day's worth of wrong conclusions |
+| `LogLevel` (`gui-agent` subkey) | 3 |
+| services | QdbDaemon / QrexecAgent / QubesGuiWatchdog all Running |
 
-Also in `QubesIncoming\win-idd-mgmt` on the guest, ready to reuse: `gui-agent-ctl.exe`
-(`6554EFED…`, the pre-fix control), `chromerepro.exe` (`443391F9…`, with `--mso`/`--orphan`),
-`dump-windows.exe`, `install-agent2.ps1`, `boot-measure-orphan.ps1`, `secure-desktop-probe.ps1`.
-Note a `qtest push` of `chromerepro.exe` FAILS while it is running — kill it first.
-| lockout threshold | `Never` (so trap 4.3 cannot bite) |
-| autologon | `AutoAdminLogon=1`, **no** `DefaultPassword` — yet autologon works at boot every time (~12 boots today), so the credential lives in LSA, not the registry |
+**Consequence to expect:** with capture ON you will see the open occlusion artifact (leftovers
+behind a moving window, §7 item 2). To silence it for interactive use:
+`Set-ItemProperty 'HKLM:\Software\Invisible Things Lab\Qubes Tools' -Name PerWindowCapture -Value 0`
+then reboot the qube — but remember that is NOT what a real user gets.
 
-One reboot in roughly nine wedged in `Transient` for >5 min; `qtest kill` + `qtest start`
-recovered it cleanly. Low rate, no cause claimed, but T6 wants reboot survival — watch it.
+Binaries staged in `QubesIncoming\win-idd-mgmt` for reuse: `gui-agent-fixed3.exe` (`F06C0979`),
+`gui-agent.exe` (`4DA9FE96`, pre-wild-pointer control), `gui-agent-ctl.exe` (`6554EFED`,
+pre-`66fc670`), `gui-agent-98eed30.exe` (`3F8F2502`, pre-`aaa8c37`), `chromerepro.exe`
+(`443391F9`, with `--mso` / `--mso-thin` / `--orphan` / `--popup`), `dump-windows.exe`.
+Note a `qtest push` over a RUNNING exe silently fails — kill it first.
 
----
+## 7. What is actually left
 
-## 7. Next steps, in order
+Nothing is half-finished: everything started today is either landed+validated, or landed with
+its unproven status stated, or written down as a plan. The open items, in the order I would
+take them:
 
-1. **`6b5b298`** — the last unproven commit. `scratchpad/secure-desktop-probe.ps1` is written
-   but **never run**. Two pitfalls already baked into it: (a) do **not** count `MSG_SHMIMAGE`
-   — the DDA frame loop keeps emitting it on both sides and only the per-window thread is
-   affected, so it cannot discriminate; count `SendWindowDamageEvent` restricted to HWNDs
-   that hold a per-window buffer instead; (b) the fix's idle path logs **nothing**, so the
-   signal is an absence — which means the control MUST be shown to produce the activity
-   first. Needs `PerWindowCapture=1`. Locking the guest is recoverable by reboot only.
-   Consider instead an instrumented pair of builds (log the input-desktop name each pass) and
-   validate the logic, then ship the uninstrumented binary — stating that plainly.
-2. **T2 → Track B.** The IddCx driver is now the blocking dependency for dynamic resolution.
-   Phase 1B's question (does an IDD-backed desktop keep `DesktopImageInSystemMemory` TRUE)
-   is unanswered and gates everything.
-3. **gui-daemon fragility (§4)** — design writeup, then user review, before any code.
-4. **Upstream framing for `aaa8c37` + `d6ab61c`** — needs explicit user approval of the exact
-   text per CLAUDE.md.
+**1. `6b5b298` — decide it, do not leave it.** The only commit in the tree with no evidence
+either way. The review argues its stated mechanism is impossible in this code and its original
+justification (a guest stuck at "Welcome") was already retracted as Windows Update. It also
+logs nothing on either edge, so as written it is unfalsifiable. Either add logging on both
+edges of the idle branch and test it (control = `98eed30`, needs `PerWindowCapture=1`), or
+revert it. `scratchpad/secure-desktop-probe.ps1` is written but deliberately UNRUN, with its
+traps recorded — do not count `MSG_SHMIMAGE`, the DDA loop emits that on both sides.
 
-Branch `control/aaa8c37` exists solely to build the pre-fix control agent (superproject pins
-the submodule there; build it with `gh workflow run build --ref control/aaa8c37`). **Do not
-merge it**, and keep it — any future synthesis A/B needs that binary.
+**2. The occlusion artifact** (leftovers behind a moving window, `PerWindowCapture=1`). Live,
+user-visible, on the default path. Next experiment: move a tracked window across another and
+count `SendWindowDamageEvent` for the window being UNCOVERED; control = same motion at
+`PerWindowCapture=0`. Probe must be a NATIVE tool — `FindWindowEx`/`SetWindowPos` from the
+SYSTEM qrexec shell cannot see the interactive session's windows. This also REVIVES T3, whose
+premise (path dormant) is retracted.
+
+**3. Desktop size / T2** — see `PLAN-trackb-t2-modes.md` and its work-area addendum. Four
+agent-side fixes can land before any driver work: the preference-vs-cache split, work area as a
+ceiling, making `SelectSupportedMode`'s silent snapping visible, and the silent "No change"
+no-op. Then the geometry-change recovery bug (`RecreateDuplication` bails exactly on the event
+resize generates), then the driver.
+
+**4. Track B proper** — Phase 1B's gating question (`DesktopImageInSystemMemory` under an IDD)
+is still unanswered and gates everything downstream.
+
+**5. Needs YOU, not me:**
+   - **Upstream submission.** Verdict from the review: submit NOTHING yet — not one commit in
+     the cluster is ready as-is. When something is, `aaa8c37` must be described as repairing a
+     regression this fork introduced (`d6ab61c`), and `d6ab61c` has to travel with it.
+   - **dom0 items** in `DESIGN-gui-daemon-restart-survival.md`, including two experiments that
+     need dom0 log access I do not have. Note the daemon log is PERISHABLE — it is truncated on
+     the next non-`-f` guid start, so it survives exactly one recovery cycle.
+   - **The undelivered shutdown request** (~2 in 25 cycles, guest never sees it). Next
+     occurrence must be captured BEFORE recovering, since recovery destroys the evidence.
+
+Branches `control/aaa8c37` and `control/98eed30` exist only to build pre-fix control agents
+(`gh workflow run build --ref <branch>`). **Do not merge them; do not delete them** — every
+future A/B on this subsystem needs a control that can fail, and stock QWT cannot serve, twice
+over (no composite synthesis at all; and the size floor stops Office's strips).
