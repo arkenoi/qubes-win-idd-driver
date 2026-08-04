@@ -1831,7 +1831,16 @@ Guest quiesced first: `qvm-prefs win-idd-test netvm ''` (it was `core-net`). Loc
 was already `Never`, so trap 4.3 cannot bite. `AutoAdminLogon=1` with **no** `DefaultPassword`
 is still the configuration — left alone, since setting the password needs the user.
 
-## FINDING (T2): the display adapter offers a FIXED 29-mode list. 1600x1000 is not in it.
+## FINDING (T2): the BASIC DISPLAY ADAPTER's mode list is fixed and lacks 1600x1000 — so the mode list has to become OURS
+
+Framing correction (user, 2026-08-04): an earlier version of this entry said "the adapter
+offers a fixed 29-mode list" and called T2 *blocked*, as though the mode list were a fact of
+nature to work around. It is not. **The adapter is ours to choose.** Track B exists precisely
+to replace the Basic Display Adapter with an IddCx driver we write, and declaring the mode
+list — including arbitrary, dynamically-added modes — is that driver's core capability. The
+measurement below does not block T2; it establishes that 1600x1000 cannot come from the
+*stock* adapter and must therefore be **supplied by our driver**. T2 is a Track B deliverable,
+not an obstacle.
 
 The feasibility caveat in SESSION-HANDOFF-2026-08-03 §5 is now settled, and it settles against
 the plan. Two independent instruments agree:
@@ -1845,12 +1854,17 @@ the plan. Two independent instruments agree:
 2. **`ChangeDisplaySettings(..., CDS_TEST)`**: 1600x1000 -> -2 (`DISP_CHANGE_BADMODE`),
    1234x777 -> -2, 2566x1022 -> -2, 1920x1080 -> 0 (`DISP_CHANGE_SUCCESSFUL`).
 
-Consequence: **T2 as specified is unreachable on the Basic Display Adapter and is a Track B
-(IddCx) dependency**, exactly as CLAUDE.md Phase 2B-resize predicted. `SelectSupportedMode()`
-does not fail on an unsupported request — it silently snaps to the best-similarity entry in the
-list above, so a naive "default to 1600x1000" change would appear to work and quietly give a
-different resolution. Reporting arbitrary modes on demand is the IddCx driver's core capability;
-this is the concrete argument for building it.
+Consequence: **T2 as specified is unreachable on the STOCK adapter, and is therefore a Track B
+deliverable** — exactly as CLAUDE.md Phase 2B-resize predicted. `SelectSupportedMode()` does
+not fail on an unsupported request; it silently snaps to the best-similarity entry in the list
+above, so a naive "default to 1600x1000" change would appear to work and quietly give a
+different resolution.
+
+Read the right way round, this is the strongest concrete argument yet **for** building the
+IddCx driver rather than a reason to defer T2: once the guest monitor is ours, 1600x1000 (and
+the dom0-window-following resize of Phase 2B-resize, which needs arbitrary sizes like
+2566x1022 that no fixed list will ever contain) becomes a property we simply declare. The 29
+modes above are the stock adapter's limitation, not a requirement we must satisfy.
 
 Caveat, stated rather than hidden: a standalone PowerShell `EnumDisplaySettings` probe written
 for this returned `MODE_COUNT=0` — its DEVMODE marshalling is wrong. Its **mode list output is
