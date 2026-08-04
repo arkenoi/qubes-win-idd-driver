@@ -178,45 +178,58 @@ Note a `qtest push` over a RUNNING exe silently fails — kill it first.
 
 ## 7. What is actually left
 
-Nothing is half-finished: everything started today is either landed+validated, or landed with
-its unproven status stated, or written down as a plan. The open items, in the order I would
-take them:
+Nothing is half-finished. Everything started is either landed+validated, landed with its
+unproven status stated, or written down as a plan with the experiment that would settle it.
 
-**1. `6b5b298` — decide it, do not leave it.** The only commit in the tree with no evidence
-either way. The review argues its stated mechanism is impossible in this code and its original
-justification (a guest stuck at "Welcome") was already retracted as Windows Update. It also
-logs nothing on either edge, so as written it is unfalsifiable. Either add logging on both
-edges of the idle branch and test it (control = `98eed30`, needs `PerWindowCapture=1`), or
-revert it. `scratchpad/secure-desktop-probe.ps1` is written but deliberately UNRUN, with its
-traps recorded — do not count `MSG_SHMIMAGE`, the DDA loop emits that on both sides.
+**1. Stop force-killing the agent — and test the hang hypothesis at the same time.**
+The guest hang is diagnosed as far as guest-side evidence allows (FINDINGS, "GUEST HANG"):
+Windows never bugchecks, the hang PRECEDES the shutdown request, and the freeze is abrupt.
+Leading hypothesis is leaked grants — `capture.c:428` says grants are NOT auto-revoked on handle
+close, revocation lives only in user-mode teardown that `TerminateProcess` skips, per-window
+buffers are ~4838 pages each, and 136,744 pages were granted today. Against it: no grant failure
+is logged.
+Convert `install-agent2.ps1` to signal `Global\QGA_SHUTDOWN` and wait (see
+`scratchpad/graceful-stop.ps1`) instead of `Stop-Process -Force`, then rerun the ~30-cycle
+install/reboot workload. Hangs stop ⇒ supports the leak; hangs persist ⇒ next suspect is the PV
+transport, which needs dom0 and therefore you. **This change is justified regardless** — it is
+also what stops gui-daemon being lost. Two failures, one cause: we were killing the agent
+instead of asking it to stop.
 
-**2. The occlusion artifact** (leftovers behind a moving window, `PerWindowCapture=1`). Live,
-user-visible, on the default path. Next experiment: move a tracked window across another and
-count `SendWindowDamageEvent` for the window being UNCOVERED; control = same motion at
-`PerWindowCapture=0`. Probe must be a NATIVE tool — `FindWindowEx`/`SetWindowPos` from the
-SYSTEM qrexec shell cannot see the interactive session's windows. This also REVIVES T3, whose
-premise (path dormant) is retracted.
+**2. The occlusion artifact** — "leftovers behind a moving window" at per-window capture, which
+is ON by default. The only known user-facing defect outstanding. Move a tracked window across
+another and count `SendWindowDamageEvent` for the window being UNCOVERED; control = the same
+motion at `PerWindowCapture=0`. Two traps already paid for: the probe must be a NATIVE tool
+(P/Invoke from the qrexec shell cannot see session windows), and `SendWindowDamageEvent` logs at
+VERBOSE so `LogLevel` must be 5 or the metric reads zero. Revives T3.
 
-**3. Desktop size / T2** — see `PLAN-trackb-t2-modes.md` and its work-area addendum. Four
+**3. Desktop size / T2** — `PLAN-trackb-t2-modes.md` plus the work-area addendum. Four
 agent-side fixes can land before any driver work: the preference-vs-cache split, work area as a
 ceiling, making `SelectSupportedMode`'s silent snapping visible, and the silent "No change"
-no-op. Then the geometry-change recovery bug (`RecreateDuplication` bails exactly on the event
+no-op. Then the geometry-change recovery bug (`RecreateDuplication` bails on exactly the event
 resize generates), then the driver.
 
-**4. Track B proper** — Phase 1B's gating question (`DesktopImageInSystemMemory` under an IDD)
-is still unanswered and gates everything downstream.
+**4. Track B proper** — Phase 1B's gating question, `DesktopImageInSystemMemory` under an IDD,
+is unanswered and gates everything downstream.
 
-**5. Needs YOU, not me:**
-   - **Upstream submission.** Verdict from the review: submit NOTHING yet — not one commit in
-     the cluster is ready as-is. When something is, `aaa8c37` must be described as repairing a
-     regression this fork introduced (`d6ab61c`), and `d6ab61c` has to travel with it.
-   - **dom0 items** in `DESIGN-gui-daemon-restart-survival.md`, including two experiments that
-     need dom0 log access I do not have. Note the daemon log is PERISHABLE — it is truncated on
-     the next non-`-f` guid start, so it survives exactly one recovery cycle.
-   - **The undelivered shutdown request** (~2 in 25 cycles, guest never sees it). Next
-     occurrence must be captured BEFORE recovering, since recovery destroys the evidence.
+**5. Needs YOU:**
+   - **Non-QWT bug reports**, per your policy now in CLAUDE.md: the two gui-daemon defects in
+     `DESIGN-gui-daemon-restart-survival.md` §3. Nothing from `agent/` goes anywhere until QWT
+     is complete.
+   - **dom0 diagnostics** if the hang survives change 1: `xl dmesg` and the domain console,
+     captured BEFORE recovery. Also the guid log, which is perishable — truncated on the next
+     non-`-f` start, so it survives exactly one recovery cycle.
 
-Branches `control/aaa8c37` and `control/98eed30` exist only to build pre-fix control agents
-(`gh workflow run build --ref <branch>`). **Do not merge them; do not delete them** — every
-future A/B on this subsystem needs a control that can fail, and stock QWT cannot serve, twice
-over (no composite synthesis at all; and the size floor stops Office's strips).
+Branches `control/aaa8c37`, `control/98eed30` and `control/revert-6b5b298` exist only to build
+pre-fix control agents (`gh workflow run build --ref <branch>`). **Do not merge, do not delete**
+— every A/B on this subsystem needs a control able to fail, and stock QWT cannot serve as one.
+
+## 8. The one habit worth carrying forward
+
+Seven instruments were discarded this session for being incapable of failing, and twice the
+PREMISE was wrong rather than the measurement ("stock is a valid control"; "the default is
+off"). Both were one `grep` away. The most serious defect of the day — a wild-pointer loop live
+on the default path — was found by READING code, not by running it, and no test we had would
+have caught it.
+
+Before any comparison: ask what makes the control able to FAIL, and check the premise. Before
+trusting a green run: check the instrument could have gone red.
