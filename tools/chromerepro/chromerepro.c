@@ -59,6 +59,21 @@
 #define CLASS_MSO_STRIP L"MSO_BORDEREFFECT_WINDOW_CLASS"
 #define MSO_THIN_THICKNESS 8
 
+// --orphan: the scene agent 66fc670 fixes - an owned popup whose GW_OWNER the agent does
+// NOT track, sitting inside an unrelated same-process sibling.
+//
+// SynthQualifies() used to test `entry->Owner && FindWindowByHandle(entry->Owner) != NULL`
+// in one condition, so an untracked owner fell through to the same-process fallback, which
+// adopted the popup into whatever topmost sibling contained it. Office hit this with the
+// shadow strips around its sign-in dialog: adopted by the maximized frame, patched in from
+// the composited desktop, then masked out of the owner's own capture - a frozen L-shaped
+// shadow ghost burned into the document that outlived the dialog.
+//
+// The repro needs three windows, and the owner must be genuinely untracked: it is created
+// and never shown, so ShouldAcceptWindow() drops it on !IsVisible - on EVERY build, which
+// keeps the scene identical either side of the fix.
+#define CLASS_ORPHAN L"QubesChromeReproOrphan"
+
 #define SHADOW_COUNT 4
 
 #define ID_TOP    0
@@ -72,6 +87,8 @@ static HWND g_Shadow[SHADOW_COUNT];
 static HWND g_Popup;
 static HWND g_Ghost;
 static HWND g_Control;
+static HWND g_HiddenOwner;
+static HWND g_Orphan;
 
 // Thickness of the shadow strips, in pixels. NOT a realistic Office shadow (those are
 // ~8 px): ShouldAcceptWindow() drops anything smaller than SM_CXMIN x SM_CYMIN (~136x39 on
@@ -85,6 +102,7 @@ static BOOL g_WantGhost;
 static BOOL g_WantControl;
 static BOOL g_WantMso;
 static BOOL g_WantMsoThin;
+static BOOL g_WantOrphan;
 
 static WCHAR g_LogPath[MAX_PATH];
 
@@ -172,6 +190,8 @@ static void ReportAll(void)
     ReportWindow(L"popup", g_Popup, L"ALWAYS shown, override_redirect (1px border)");
     ReportWindow(L"ghost", g_Ghost, L"alpha 0: shown BEFORE fix, gone AFTER");
     ReportWindow(L"control", g_Control, L"layered but visible: ALWAYS shown (regression canary)");
+    ReportWindow(L"hiddenowner", g_HiddenOwner, L"never shown: must never be tracked (owner of 'orphan')");
+    ReportWindow(L"orphan", g_Orphan, L"owned by an UNTRACKED window: synthesized BEFORE 66fc670, refused AFTER");
     LogLine(L"--- end ---");
 }
 
@@ -338,6 +358,11 @@ static BOOL RegisterClasses(void)
     if (!RegisterClassExW(&wc))
         return FALSE;
 
+    wc.lpfnWndProc = PlainProc;
+    wc.lpszClassName = CLASS_ORPHAN;
+    if (!RegisterClassExW(&wc))
+        return FALSE;
+
     return TRUE;
 }
 
@@ -401,6 +426,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
     g_WantControl = (wcsstr(args, L"--control") != NULL);
     g_WantMsoThin = (wcsstr(args, L"--mso-thin") != NULL);
     g_WantMso = g_WantMsoThin || (wcsstr(args, L"--mso") != NULL);
+    g_WantOrphan = (wcsstr(args, L"--orphan") != NULL);
 
     if (!GetTempPathW(ARRAYSIZE(g_LogPath), g_LogPath))
         StringCchCopyW(g_LogPath, ARRAYSIZE(g_LogPath), L".\\");
@@ -467,6 +493,25 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
         WS_POPUP | WS_BORDER,
         mainX + 60, mainY + 90, 340, 220,
         g_Main, NULL, g_Instance, NULL);
+
+    // Orphan-owned popup: see CLASS_ORPHAN. The owner is created and never shown, so every
+    // build rejects it on !IsVisible and it is never tracked; the popup it owns sits well
+    // inside the main frame, which is a same-process, non-override-redirect, tracked
+    // sibling - i.e. exactly the adoption candidate the old fallback would pick.
+    if (g_WantOrphan)
+    {
+        g_HiddenOwner = CreateWindowExW(0, CLASS_ORPHAN, NULL,
+            WS_POPUP,
+            work.left, work.top, 200, 200,
+            NULL, NULL, g_Instance, NULL);   // deliberately never ShowWindow()
+
+        g_Orphan = CreateWindowExW(0, CLASS_ORPHAN, NULL,
+            WS_POPUP | WS_BORDER,
+            mainX + 60, mainY + 90, 340, 220,
+            g_HiddenOwner, NULL, g_Instance, NULL);
+        if (g_Orphan)
+            ShowWindow(g_Orphan, SW_SHOWNA);
+    }
 
     // Regression canary: layered (alpha 200) AND owned AND undecorated, but NOT
     // hit-test transparent - a perfectly ordinary translucent tool window. If the chrome
