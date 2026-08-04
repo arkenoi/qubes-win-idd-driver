@@ -2967,3 +2967,35 @@ ctx-derived sizing, park+ack-gated old-grant revoke with 5 s timeout fallback on
 sweep, bounded 2 s exit drain with ring-headroom guard. Plus **A7-lite** (d256b51, mine):
 StartFrameProcessing retries 10x750 ms on 0x887A0026/0x887A0005 instead of dying — the
 stress-identified crash class. Parent branch t2/a6-stack (CI 30951775933).
+
+# 2026-08-05 (cont 3) — STRESS GATE PASSED 16/16 ON THE A6 STACK; boot acceptance PASSED
+
+**The A6+A7 agent (6254ECF1, branch t2/a6-stack) passed the same stress that killed the A1
+agent twice at cycle 9** — 16/16 cycles, every size exact (1600x1000, 1920x1080, 2566x1022,
+1024x768, 1234x777, 3440x1409 = the real work-area size, 1600x900, 2000x1000, twice each),
+qrexec alive throughout, dom0-follow latency 2-3 s at every checkpoint, ONE agent instance
+across the whole run. The two prior A1 failures ARE the control-that-fails for this pass.
+A6 machinery visibly load-bearing: A6PARK=18, A6ACK=18, A6REVOKE=16 (ack-gated),
+A6ACKTIMEOUT=0, **A7RETRY=3** (the retry saved the process three times), A6LEAK=1 (one grant
+never became revocable and was leaked LOUDLY — the designed fallback; watch the counter).
+
+**Boot acceptance:** revert net disarmed deliberately (IDD-primary is now the intended
+config; recovery path documented: qrexec works headless → re-arm marker → reboot), cold
+boot → A6 agent up, IDD PRIMARY, BDA stayed disabled, display numbering RESET to DISPLAY2
+(identity churn was session-scoped), fresh-boot sync to 2566x1022 ok=True, dom0 window
+2566x1022 live pixels.
+
+**Instrument disclosure:** the stress cputime/livelock slope check was silently a no-op in
+ALL runs — the Admin API response embeds a NUL, grep went binary-mode, and my harness
+"skip-if-empty" guard hid it (the exact 'a check that cannot fail' anti-pattern, again).
+Fixed (tr -d '\0'). Livelock absence in the passing run is evidenced by qrexec liveness,
+sync timeliness, and follow latency — not by that metric.
+
+**D3 negative stands; D4v2 (stable EDID) still broken** — monitor never arrives, root-cause
+hunt with the driver agent in progress; D4 v1 (identity churn per replug, session-scoped)
+is the working driver meanwhile.
+
+**Remaining for the full goal demo:** a live dom0 window DRAG with the sync loop running
+(loop started on the guest). The dom0-originated request chain itself is already proven
+(RESREQ src=dom0 measured from the user's manual drag on 08-04); scripted drag needs the
+_QUBES_VMNAME resize service variant.
