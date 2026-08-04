@@ -2228,3 +2228,74 @@ Twice today the *premise* of a measurement was wrong rather than the measurement
 valid control" (it lacked the feature under test) and now "the default is off" (it is on). Both
 were one grep away. **Check the premise of a comparison before running it, not after it produces
 a clean-looking result** — a wrong premise yields confident, well-replicated, meaningless numbers.
+
+---
+
+# 2026-08-04 (end) — the "weird shadow" is FIXED on real Office; a NEW artifact appears at PerWindowCapture=1
+
+## RESULT: end-to-end on real Microsoft Office, both directions
+
+Run at `PerWindowCapture=1` — mandatory, since the whole chain goes through composite synthesis
+which `AddWindow()` gates on `PwEnabled()`. (An earlier Word run today at `PerWindowCapture=0`
+proved nothing and is retracted as evidence: the shadow could not have appeared on any build.)
+
+| build | Office strips present | synthesized (adopted) | `SYNTHPAINT` lines |
+|---|---|---|---|
+| `98eed30` — pre-`aaa8c37`, pre-`66fc670` | 4 | **4, all into one owner** (`0x102d4/d6/d8/da -> 0x102a0`) | **731** |
+| `6b5b298` — fixed | 4 | **0** | **0** |
+
+Identical scene (four real `MSO_BORDEREFFECT_WINDOW_CLASS` strips present on both sides),
+opposite behaviour. The control **visibly** showed the artifact: a grey band framing the
+document area of Word's window, strips painted into the frame's buffer where they do not
+belong (`scratchpad/shadow-ctl/win-0.png`). The user independently confirmed on the fixed
+build: **"weird shadow is gone."**
+
+So the shadow is closed on the real application, not merely on `chromerepro`. Together with the
+daemon-death chain (`98eed30`, validated 08-03) that closes the Office stability complaint too.
+
+## NEW DEFECT, reported by the user in the same session
+
+> "when you move around the modal dialog, leftovers appear and disappear behind it in pretty
+> ugly way"
+
+Observed on the FIXED build at `PerWindowCapture=1`. This is a **different** defect from the
+shadow and must not be recorded as a regression of the fixes without evidence — but it must not
+be waved away either. What is established:
+
+- It appeared only once `PerWindowCapture=1` was set. The guest had been running
+  `PerWindowCapture=0` all day, where the per-window path is inert.
+- It is therefore most likely a property of **per-window capture**, which — per today's
+  retraction — is **ON by default** in this fork. That makes it a defect real users would hit.
+- Hypothesis ruled OUT: slice-feeding of the participants. The agent log shows Word's frame
+  (`0x1029c`, 3430x1379) and the dialog (`0x402d0`, 850x542) are both `PrintWindow`-captured;
+  only the full-desktop window `0x1003a` is `(slice-fed)`.
+- Leading remaining hypothesis: when a tracked window moves across another, the agent does not
+  emit damage for the region the mover VACATES, so dom0 keeps showing stale pixels there until
+  something else dirties them — "appear and disappear". This is precisely the occlusion problem
+  analysed in `scratchpad/hybrid-capture-design.md`.
+
+**This revives T3.** That design was downgraded on 08-03 because its motivation had evaporated
+(the typing lag was Office hardware acceleration, and the guest ran with the path disabled).
+Its §7 gate — the `PerWindowCapture` 1-vs-0 A/B — now has a concrete, reproducible, visible
+symptom to gate on, and the premise that per-window capture is off is itself retracted.
+
+### Next experiment (not yet run)
+Move a tracked window across another and count `SendWindowDamageEvent` for the window being
+UNCOVERED. Zero damage while the mover crosses it confirms the mechanism. Control: the same
+motion at `PerWindowCapture=0`, where the artifact should be absent.
+
+### Tooling limitation found while attempting it
+`FindWindowEx` / `SetWindowPos` from the qrexec PowerShell (SYSTEM) **cannot see or move the
+interactive session's windows** — both `NUIDialog` and `QubesChromeReproMain` came back as not
+found while `dump-windows.exe` enumerated them fine from the same shell. A separate process
+that attaches to the input desktop works; in-process P/Invoke from that PowerShell does not.
+Any window-manipulation probe must therefore be a small native tool, not a PowerShell snippet.
+
+## Guest left at `PerWindowCapture=0`
+
+Deliberate, and a trade-off worth stating: 0 avoids the new artifact AND makes the shadow
+impossible (synthesis inert), so it is the best interactive experience right now — but it is
+**not** the configuration a real user gets, since nothing in the install path writes the value
+and the code default is 1. Flip it with:
+`Set-ItemProperty 'HKLM:\Software\Invisible Things Lab\Qubes Tools' -Name PerWindowCapture -Value 1`
+then reboot the qube (an in-place agent restart destroys gui-daemon on this build).
