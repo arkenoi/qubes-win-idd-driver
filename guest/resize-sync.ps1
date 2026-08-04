@@ -25,7 +25,8 @@ $logdir = 'C:\Program Files\Qubes Tools\log'
 $state  = 'C:\qubes-idd\resize-sync-state.txt'
 $out    = 'C:\qubes-idd\resize-sync.log'
 
-function Log($m) { ("{0} {1}" -f (Get-Date -Format 'HH:mm:ss.fff'), $m) | Out-File $out -Append -Encoding ascii; Write-Output $m }
+# File-only: functions below RETURN values through the pipeline, so Log must not emit to it.
+function Log($m) { ("{0} {1}" -f (Get-Date -Format 'HH:mm:ss.fff'), $m) | Out-File $out -Append -Encoding ascii }
 
 function CurrentRes {
     $j = & $modeprobe 2>$null | ConvertFrom-Json
