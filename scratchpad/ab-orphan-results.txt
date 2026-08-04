@@ -1,0 +1,54 @@
+=== ctl-r1 ===
+ctl-r1: INSTALL=OK src=gui-agent-ctl.exe hash=6554EFED563FF695
+ORPHAN_PRESENT=1 [0x1029c]
+MAIN=0x7005c MAIN_MAPPED=1
+SYNTH_ALL=1 [0x1029c->0x7005c]
+ORPHAN_SYNTH=1 ADOPTED_BY_MAIN=1
+ORPHAN_MAPPED=0
+LOG=gui-agent-20260804-145215-3956.log AGENT_PID=3956
+RESULT which=ctl status=OK installed=6554EFED563FF695 orphan_synth=1 adopted_by_main=1 orphan_mapped=0
+=== new-r1 ===
+new-r1: INSTALL=OK src=gui-agent.exe hash=4DA9FE967A8A1012
+ORPHAN_PRESENT=1 [0x102a0]
+MAIN=0x10288 MAIN_MAPPED=1
+SYNTH_ALL=0 []
+ORPHAN_SYNTH=0 ADOPTED_BY_MAIN=0
+ORPHAN_MAPPED=1
+LOG=gui-agent-20260804-145357-1444.log AGENT_PID=1444
+RESULT which=new status=OK installed=4DA9FE967A8A1012 orphan_synth=0 adopted_by_main=0 orphan_mapped=1
+=== ctl-r2 ===
+ctl-r2: INSTALL=OK src=gui-agent-ctl.exe hash=6554EFED563FF695
+ORPHAN_PRESENT=1 [0x3025e]
+MAIN=0x10292 MAIN_MAPPED=1
+SYNTH_ALL=1 [0x3025e->0x10292]
+ORPHAN_SYNTH=1 ADOPTED_BY_MAIN=1
+ORPHAN_MAPPED=0
+LOG=gui-agent-20260804-145530-4028.log AGENT_PID=4028
+RESULT which=ctl status=OK installed=6554EFED563FF695 orphan_synth=1 adopted_by_main=1 orphan_mapped=0
+=== new-r2 ===
+new-r2: INSTALL=OK src=gui-agent.exe hash=4DA9FE967A8A1012
+ORPHAN_PRESENT=1 [0x1029e]
+MAIN=0x1027a MAIN_MAPPED=1
+SYNTH_ALL=0 []
+ORPHAN_SYNTH=0 ADOPTED_BY_MAIN=0
+ORPHAN_MAPPED=1
+LOG=gui-agent-20260804-145654-4072.log AGENT_PID=4072
+RESULT which=new status=OK installed=4DA9FE967A8A1012 orphan_synth=0 adopted_by_main=0 orphan_mapped=1
+=== ctl-r3 ===
+ctl-r3: INSTALL=OK src=gui-agent-ctl.exe hash=6554EFED563FF695
+ORPHAN_PRESENT=1 [0x102a4]
+MAIN=0x50164 MAIN_MAPPED=1
+SYNTH_ALL=1 [0x102a4->0x50164]
+ORPHAN_SYNTH=1 ADOPTED_BY_MAIN=1
+ORPHAN_MAPPED=0
+LOG=gui-agent-20260804-145829-4024.log AGENT_PID=4024
+RESULT which=ctl status=OK installed=6554EFED563FF695 orphan_synth=1 adopted_by_main=1 orphan_mapped=0
+=== new-r3 ===
+new-r3: INSTALL=OK src=gui-agent.exe hash=4DA9FE967A8A1012
+ORPHAN_PRESENT=1 [0x30284]
+MAIN=0x40172 MAIN_MAPPED=1
+SYNTH_ALL=0 []
+ORPHAN_SYNTH=0 ADOPTED_BY_MAIN=0
+ORPHAN_MAPPED=1
+LOG=gui-agent-20260804-150011-3708.log AGENT_PID=3708
+RESULT which=new status=OK installed=4DA9FE967A8A1012 orphan_synth=0 adopted_by_main=0 orphan_mapped=1
