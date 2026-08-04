@@ -1855,8 +1855,13 @@ this is the concrete argument for building it.
 Caveat, stated rather than hidden: a standalone PowerShell `EnumDisplaySettings` probe written
 for this returned `MODE_COUNT=0` — its DEVMODE marshalling is wrong. Its **mode list output is
 discarded and is not the basis of anything above**; only its `CDS_TEST` return codes are used,
-and those are corroborated by instrument 1. `scratchpad/modes.ps1` should be fixed or deleted
-before it is trusted for anything.
+and those are corroborated by instrument 1. The probe was left in the session scratchpad rather
+than committed: instrument 1 is production code that already answers this, so a second, broken
+copy of the same question is not worth carrying. (Note: SESSION-HANDOFF §5 says this probe "was
+written (`scratchpad/modes.ps1`)" — that file does not exist in the repo, in any commit. The
+handoff is wrong on that point.) Track B will need a working mode probe to verify the IddCx
+driver reports arbitrary modes; write it then, in C++ alongside `tools/ddaprobe`, not in
+PowerShell marshalling.
 
 Also observed while there: `HandleXconf: host resolution: 5120x1440` -> agent set 3440x1440
 (from the saved `FullscreenWidth/Height`), confirming §5's "registry value is a last-applied
@@ -1907,9 +1912,26 @@ After ~9 gui-agent restarts in 20 minutes, the agent parked at `Awaiting for a v
 **The sends failed because the vchan was already closed — the daemon went first. This is not a
 protocol violation by the build under test**, and must not be recorded as one.
 
-This is SESSION-HANDOFF §T6.1 reproduced on demand: nothing restarts gui-daemon, and the qube
-has no GUI until the whole qube is restarted. Practical consequences:
-- **Restarting gui-agent repeatedly is not a free operation.** A/B harnesses that swap the binary
-  in place should expect to lose the daemon and must verify it is alive per run (now enforced).
+### Sharpened after a cold boot: ONE agent restart is enough
+
+The first read of this was "~9 restarts wore it down". That is wrong and understated. After a
+full qube shutdown/start the GUI came back healthy (fresh daemon, `SendWindowMap` x2, `qtest
+shot` normal). **The very next gui-agent restart — stop watchdog, kill agent, copy the SAME
+binary back, start watchdog — lost the daemon again**: `awaiting_vchan=1`, `total_mapped=0`,
+`qtest shot` = 0 windows. Two for two, from a known-good starting state.
+
+So the rule is: **gui-daemon does not survive a gui-agent restart, and nothing brings it back.**
+Reproducible on demand, no Windows Update or other confound involved (guest offline throughout).
+
+Practical consequences:
+- **In-place binary swapping is not a viable test method for this component**, which invalidates
+  the harness design used earlier today and in previous sessions. Each A/B side now installs its
+  binary and *cold-boots the qube*, measuring the agent instance the fresh daemon connected to.
+  Slower (~4 min/side), but it is the only sound method — and it makes every run a boot-path
+  test, which CLAUDE.md requires anyway.
+- Any "restart the agent to apply a fix" instruction in this repo or in QWT docs is, on this
+  build, an instruction to take the qube's GUI down until it is rebooted.
 - It strengthens the case that daemon fragility, not any one crash cause, is the real robustness
-  gap — dom0-side, so Phase 3 discipline (design writeup before code).
+  gap — dom0-side, so Phase 3 discipline (design writeup before code). Worth an upstream issue
+  on its own: an agent restart is a normal, expected event (upgrades, crashes, watchdog action)
+  and should not be terminal for the qube's GUI.
