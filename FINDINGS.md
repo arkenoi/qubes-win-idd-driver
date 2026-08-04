@@ -2377,3 +2377,59 @@ gui-agent`.
    experiments that would settle attribution) is in
    `DESIGN-gui-daemon-restart-survival.md`. **dom0 items need user approval; nothing dom0-side
    has been touched.**
+
+---
+
+# 2026-08-04 (end) — DIAGNOSIS of the `Transient` wedges (not retried, diagnosed)
+
+Two qube wedges today were recovered with `qtest kill` + `start` and written off as "low rate,
+no cause claimed". That was wrong of me — the user's rule stands: **any failure should be
+diagnosed, not retried.** Here is the diagnosis, from the guest's own event log.
+
+## The guest did not hang, and did not crash
+
+Every normal cycle looks like this, and there are ~20 of them today:
+```
+1074  xenagent_9_1_0_0.exe (WIN-IDD-TEST) has initiated the shutdown
+6006  Event log service was stopped
+13    operating system is shutting down
+12    operating system started
+```
+Measured shutdown duration across 19 consecutive cycles: **10-16 s, every time.** So the
+"guest is slow to halt" hypothesis is dead — I had assumed it and it is not true.
+
+**For the wedged cycle there is NO 1074, NO 6006 and NO 13 at all.** The last clean pair before
+the wedge is `16:22:08 -> 16:22:18`, and the next event 12 is the boot produced by my own
+`qtest kill`. There is no 6008 ("previous shutdown was unexpected") and no Kernel-Power 41 for
+that cycle either.
+
+**Conclusion: Windows never received a shutdown request.** The guest was healthy and idle; the
+shutdown simply did not reach it. Note every real shutdown here is initiated inside the guest
+by `xenagent_9_1_0_0.exe` (the Xen PV agent) in response to the hypervisor's control request —
+so the failure is upstream of the guest OS, in the shutdown-request delivery, not in Windows.
+
+## My harness turned a failed shutdown into a wedge
+
+```bash
+timeout 200 ./tools/qtest shutdown >/dev/null 2>&1
+for i in $(seq 1 40); do [ "$(state)" = Halted ] && break; sleep 5; done   # 200 s, then FALLS THROUGH
+timeout 200 ./tools/qtest start >/dev/null 2>&1                            # <-- runs even if NOT Halted
+```
+The wait loop has no failure branch: when the VM never reaches `Halted` it exits normally and
+the next line issues `start` **against a VM that is still running or mid-transition**, with
+stdout and stderr discarded so the error is invisible. Then the qrexec loop burns another 300 s
+finding nothing. That is exactly the observed signature: the whole compound command produced
+**no output at all**, not even `QREXEC_UP`.
+
+So: an occasional undelivered shutdown request (real, unexplained, low rate) plus a harness that
+cannot see its own failure = a wedge that looks like a guest fault and is not one.
+
+**Fix applied to the harness:** assert the state is `Halted` before calling `start`, and fail
+loudly instead of proceeding. A shutdown that does not land must be a visible error, not a
+silent fall-through into an invalid operation. This is the same class as today's other harness
+bugs (a copy over a running binary, a `[^\r]` that ate the letter r): **the check existed but
+could not fail.**
+
+Still open, and NOT explained: why the shutdown request occasionally does not reach the guest.
+Frequency ~2 in ~25 cycles. Next time it happens, capture `qvm-ls --fields NAME,STATE` plus the
+guest's `xenagent` service state BEFORE recovering, since the recovery destroys the evidence.
