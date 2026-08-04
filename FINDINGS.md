@@ -2433,3 +2433,41 @@ could not fail.**
 Still open, and NOT explained: why the shutdown request occasionally does not reach the guest.
 Frequency ~2 in ~25 cycles. Next time it happens, capture `qvm-ls --fields NAME,STATE` plus the
 guest's `xenagent` service state BEFORE recovering, since the recovery destroys the evidence.
+
+---
+
+# 2026-08-04 (end) — wild-pointer fix VALIDATED: the control CRASHES the agent, 3/3
+
+Tested with a control that was seen to fail, as required. Both preconditions asserted per run,
+so a round where the bug could not have been reached reports VOID rather than PASS:
+`PerWindowCapture=1`, a synthesized window present (`msg=SYNTH` ≥ 1), and a real **in-place**
+duplication recovery (`duplication recreated in place … windows kept`) — the sweep only runs on
+the next frame after `capture->grants_changed`.
+
+Trigger: a desktop SWITCH (`CreateDesktop` + `SwitchDesktop` away and back), which raises
+`DXGI_ERROR_ACCESS_LOST`. Deliberately not `LockWorkStation`: that strands the guest on the
+secure desktop where no frames flow, so the sweep would never run and recovery would need a
+reboot. The scratch-desktop round trip restores frames in seconds and needs no password.
+
+| round | build | synthesized | in-place recoveries | agent survived |
+|---|---|---|---|---|
+| 1 | control `4DA9FE96` | 1 | 1 | **NO** — pid 3636 → 7112, 0 log growth |
+| 1 | fixed `F06C0979` | 1 | 2 | yes — same pid 824, +115 lines |
+| 2 | control | 1 | 1 | **NO** — pid changed, 0 growth |
+| 2 | fixed | 1 | 2 | yes — same pid, still logging |
+| 3 | control | 1 | 1 | **NO** — pid changed, 0 growth |
+| 3 | fixed | 1 | 2 | yes — same pid, still logging |
+
+Unanimous, interleaved, cold boot per side, installed hash checked against the CI manifest every
+round. **On the unfixed build the agent DIES every time** — the watchdog respawns it under a new
+pid and the old instance stops logging mid-sweep, which is what a wild pointer walking backwards
+through the heap while holding `g_csWatchedWindows` looks like from outside. The fixed build
+keeps the same pid and keeps working, across TWO recoveries per round rather than one.
+
+This is the first defect this session that was found by **reading** rather than by testing, and
+it was live on the default path (`PerWindowCapture` defaults to 1). Nothing we ran all day would
+have caught it: it needs a synthesized window to coincide with a duplication recovery, and our
+guest sat at `PerWindowCapture=0` for most of the session.
+
+Shipped in the build now on the guest (`F06C0979`) together with the mask-sort cherry-pick
+(`d3a5fbc`, previously written and never merged) and the framebuffer-pointer invalidation.
