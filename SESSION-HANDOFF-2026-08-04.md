@@ -10,8 +10,8 @@ Everything below was read off the machine or the repo, not recalled. Full detail
 
 ## 1. Headline
 
-**T1 is now partly closed and T2 is now blocked** — and the day's real lesson is about
-controls, not about either fix.
+**T1 is now largely closed and T2 is a Track B deliverable** — and the day's real lesson is
+about controls and premises, not about any individual fix.
 
 | commit | status after today |
 |---|---|
@@ -20,13 +20,13 @@ controls, not about either fix.
 | `66fc670` | **VALIDATED** — control adopted the popup 3/3, fix refused it 3/3, on two opposed signals |
 | `6b5b298` | **still unvalidated**; instrument designed and committed but never run |
 
-**Four separate instruments were discarded today as incapable of failing.** That is the
+**FIVE separate instruments were discarded today as incapable of failing.** That is the
 single most useful thing to carry forward: before running any A/B, ask *what makes the
 control able to FAIL*, and confirm the feature under test even exists on the control side.
 
 ---
 
-## 2. The four dead controls (each failed differently)
+## 2. The five dead controls (each failed differently)
 
 1. **Counting PNGs from `qtest shot`.** `local.WinScreenshot` uses `import -window <id>`,
    which silently fails on `WS_EX_LAYERED` windows. With the control announcing all four
@@ -43,6 +43,15 @@ control able to FAIL*, and confirm the feature under test even exists on the con
 4. **`PerWindowCapture=0`.** `AddWindow()` gates synthesis on `PwEnabled()`, so with capture
    off nothing is ever synthesized and both sides report zero. Two control runs were wasted
    on this before the precondition was added.
+5. **The Word run that "showed the shadow is fixed".** It ran at `PerWindowCapture=0`, where
+   synthesis cannot run, so the frozen shadow band could not have appeared whether or not the
+   fix works. It proved nothing.
+
+And the deeper version of the same mistake, twice: **the PREMISE of the comparison was wrong,
+not the measurement.** "Stock is a valid control" (it lacked the feature under test) and "the
+default is off" (it is ON — see the FINDINGS retraction). Both were one grep away. Check the
+premise BEFORE running the comparison; a wrong premise yields confident, well-replicated,
+meaningless numbers.
 
 Plus two harness bugs that guards caught rather than results:
 `Copy-Item -Force` over a **running** `gui-agent.exe` silently leaves the previous build
@@ -77,9 +86,11 @@ merely suppressed synthesis would drive both counts to zero, and a dead gui-daem
 suppress the announcement too. Only the intended behaviour inverts them.
 
 ### Scope limits — do not overstate these
-- `66fc670`'s defect is **unreachable at the shipped default** (`PerWindowCapture=0`). It is
-  a real fix for a real path, but latent unless per-window capture is on. Same for `6b5b298`,
-  which lives entirely in `wincapture.cpp`.
+- ~~`66fc670`'s defect is unreachable at the shipped default~~ **RETRACTED — see FINDINGS
+  "there is no shipped `PerWindowCapture=0`".** The code default in `PwInit()` is **1 (ON)** and
+  nothing in `guest/ mgmt/ tools/` ever writes the registry value, so a fresh install of this
+  fork RUNS per-window capture. Our guest's 0 is a leftover from an earlier session's A/B. These
+  fixes are **on-path**, and the daemon-killing chain was reachable out of the box.
 - **The Office strip bug is a regression this fork introduced.** `d6ab61c` lowered the size
   floor for override-redirect popups to rescue Win11 keytip badges, which let Office's 8 px
   strips reach the chrome rules; `aaa8c37` closes that. Any upstream submission must say so,
@@ -131,7 +142,7 @@ the parent key. Setting the parent does nothing.
 |---|---|
 | `netvm` | **detached** — a measurement control only; T6 wants it networked again |
 | `gui-agent.exe` | `4DA9FE96…` — the validated CI build of agent `6b5b298`; `.orig` (`4B4CE2B1…`) intact. Verified live after a cold boot: gui-daemon connected, `SendWindowMap` x2, all services Running |
-| `PerWindowCapture` | **0** — restored to the shipped default. Set it to **1** for any synthesis or `6b5b298` work, or the code under test is inert |
+| `PerWindowCapture` | **0** — and this is NOT a shipped default, it is our own test leftover (see the FINDINGS retraction). A real install has no such value and runs with capture **ON**. Set it to **1** for any synthesis, shadow, or `6b5b298` work — and note the guest is currently NOT in a real user's configuration |
 | `LogLevel` (`gui-agent` subkey) | **3** — restored. Verbose (5) sits on the hot path and would pollute timing runs |
 
 Also in `QubesIncoming\win-idd-mgmt` on the guest, ready to reuse: `gui-agent-ctl.exe`
