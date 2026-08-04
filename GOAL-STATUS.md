@@ -1,3 +1,37 @@
+# Goal status — updated 2026-08-04 (evening)
+
+## PRIMARY GOAL (set by the user 2026-08-04): arbitrary guest resolutions in NON-SEAMLESS
+## mode, synced to the dom0 window size and work area (T2 / PLAN-trackb-t2-modes.md)
+
+Progress today, every claim measured against a control (details in FINDINGS 2026-08-04 cont 2-5):
+
+| plan item | status |
+|---|---|
+| exp 0 — 19045 re-baseline (3x ddaprobe) | **PASS 3/3** — flag TRUE, pitch tight, session 1 |
+| exp 0b — instrument validation | **PASS both** — inverted ddaprobe FALSE-path proven on real DXGI; pixel comparator passes AND fails correctly. Caveat: judge ddaprobe by JSON, its exit code never carried the flag |
+| exp 1 — pitch at 1400x1050 (32-not-64-byte aligned) | **PASS — pitch TIGHT (5600)**, flag held. Does not clear 8-byte-aligned widths (2566) |
+| exp 2 — pin non-seamless config | guest half **PASS** (SeamlessMode=0 both keys, survives cold boot, single live dom0 window). dom0 half needs the resize service (user) |
+| exp 7 — PnP auto-revert proof | **PASS** — boot task re-enabled a disabled device, status-readback verified, marker cleared on success only |
+| A0 modeprobe (external witness) | **LANDED + acceptance PASS** (29 modes, CDS_TEST verdicts correct) |
+| A1 snap logging (control build for A2-A4) | **LANDED + VALIDATED both directions** (SNAPPED on 1600x1000→1680x1050; absent on exact match; modeprobe corroborated) |
+| exp 8 — D0 minimal IDD present-and-inactive | in flight (CI iterating; guest baseline taken: wmi_monitors=0, vscreen 3440x1440, 1 VC) |
+
+**Unplanned discovery that reshapes T2:** the guest→dom0 half already works end-to-end in
+non-seamless mode on the current fork build — an externally applied mode change (1400x1050)
+propagated through recovery → re-grant → re-dump, and the dom0 window resized to exactly
+1400x1050 with a live desktop. Remaining: dom0→guest requests (snap to 29 modes today) and
+arbitrary sizes (the IDD).
+
+**New defect knowledge:** graceful agent exit still leaks per-window grants (no detach-all on
+the exit path) — design to fix in DESIGN-a6-grant-lifecycle.md, awaiting user approval.
+**Double-cursor** (user observation): explained — PrintWindow side effect; returns in
+fullscreen mode; T2-mode fix needs IDD hardware cursor or DisableCursor=1 (FINDINGS cont 5).
+
+Infrastructure: graceful agent stop (QGA_SHUTDOWN) adopted everywhere (install-agent3.ps1,
+first use verified `stop=graceful`); deliberate hang-reproduction experiment deferred.
+
+---
+
 # Goal status — updated 2026-08-02
 
 ## Display/agent package: CLEAN-INSTALL VERIFIED, no regressions found
