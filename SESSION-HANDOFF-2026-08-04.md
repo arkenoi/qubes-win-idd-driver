@@ -99,17 +99,33 @@ suppress the announcement too. Only the intended behaviour inverts them.
 
 ---
 
-## 4. NEW, and the biggest robustness finding: one agent restart kills gui-daemon
+## 4. CORRECTED: only a FORCE-KILLED agent restart loses gui-daemon
 
-Reproducible on demand from a known-good cold boot, on an offline guest: stop the watchdog,
-kill the agent, copy the **same** binary back, start the watchdog → the new agent parks at
-`Awaiting for a vchan client` forever, `qtest shot` returns **zero** windows, and only a full
-qube restart recovers it. Two for two.
+An earlier section of this handoff claimed "one agent restart kills gui-daemon, reproducible on
+demand". **Both halves were wrong** — see the FINDINGS retraction. Measured:
 
-Consequences: in-place binary swapping is not a usable test method for this component, and
-any "restart the agent to apply a fix" instruction is, on this build, an instruction to take
-the qube's GUI down until reboot. This is dom0-side → Phase 3 discipline (design writeup and
-user review before code), and worth an upstream issue on its own.
+- `Global\QGA_SHUTDOWN` (`include/common.h:46`, `main.c:3483/3848`) is the supported way to stop
+  the agent. Signalling it: agent exits in 1 s, watchdog respawns it, the new instance gets a
+  vchan client, **dom0 keeps its windows**. `scratchpad/graceful-stop.ps1`.
+- I had concluded "no graceful path exists" from `taskkill` without `/F` — which posts WM_CLOSE
+  to a *windowless* process. Wrong mechanism, wrong generalisation.
+- Every harness here used `Stop-Process -Force`, so the GUI losses blamed on "restarting the
+  agent" were **self-inflicted by the stop method**.
+
+Mechanism (daemon source, `gui-common/txrx-vchan.c`): guid has two EOF paths; the poll helper
+calls `restart_guid()` and survives, while `handle_vchan_error` does a bare `exit(0)` and never
+consults `vchan_at_eof`. Only the WRITE side reaches the fatal branch, and
+`libxenvchan_buffer_space` ignores `is_open` — so it fires only if the daemon had something
+queued at the instant the agent vanished. **A coin flip**, which explains 08-03 recovering twice
+and 08-04 dying twice; my n=2 was never evidence of determinism.
+
+Also dead: the "reconnect race" idea. `libvchan_client_init` waits with an INFINITE timeout for
+the xenstore node, so a re-exec'd guid cannot fail just because the agent is briefly absent.
+
+Practical: **cold-boot-per-side is no longer required for A/B runs** (it was a workaround for a
+problem we caused); keep it for boot-path acceptance. Full options, the dom0 proposal, and the
+attribution experiments are in `DESIGN-gui-daemon-restart-survival.md` — dom0 items need your
+approval and nothing dom0-side has been touched.
 
 ---
 
