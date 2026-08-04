@@ -17,7 +17,7 @@ controls, not about either fix.
 |---|---|
 | `98eed30` | validated 2026-08-03 (unchanged) |
 | `aaa8c37` | **VALIDATED** — 4/4 strips announced by the pre-fix build, 0/4 by the fix, 3 interleaved rounds, cold boot per side |
-| `66fc670` | **A/B run today** — see §3 for the verdict |
+| `66fc670` | **VALIDATED** — control adopted the popup 3/3, fix refused it 3/3, on two opposed signals |
 | `6b5b298` | **still unvalidated**; instrument designed and committed but never run |
 
 **Four separate instruments were discarded today as incapable of failing.** That is the
@@ -65,12 +65,16 @@ Method that works, and the only one that does — `scratchpad/ab-boot.sh`, `ab-o
 **`aaa8c37`** (reject `MSO_BORDEREFFECT_WINDOW_CLASS`): stock announced 4/4 strips every
 round, the fix 0/4 every round, total announcements differing by exactly the four strips.
 
-**`66fc670`** (never re-home an owned popup onto an unrelated sibling): control is agent
-**`aaa8c37`** (`6554EFED…`), test is `6b5b298` (`4DA9FE96…`), `PerWindowCapture=1` asserted.
-Scene is `chromerepro --orphan`. Two signals move in OPPOSITE directions, which is what makes
-it hard to fool: control synthesizes the popup into the frame and never announces it
-(`orphan_synth=1, adopted_by_main=1, orphan_mapped=0`); the fix refuses synthesis and
-announces it normally (`0/0/1`). Results in `scratchpad/ab-orphan-results.txt`.
+**`66fc670`** (never re-home an owned popup onto an unrelated sibling) — **VALIDATED, 3/3 vs
+3/3.** Control is agent **`aaa8c37`** (`6554EFED…`), test is `6b5b298` (`4DA9FE96…`),
+`PerWindowCapture=1` asserted, scene `chromerepro --orphan`. Control adopted the popup into
+the frame every round (`orphan_synth=1, adopted_by_main=1, orphan_mapped=0`, with `SYNTH_ALL`
+naming the exact pair each time); the fix refused synthesis and announced the popup normally
+(`0/0/1`) every round. Results in `scratchpad/ab-orphan-results.txt`.
+
+Two signals moving in OPPOSITE directions is what makes it hard to fool: a confound that
+merely suppressed synthesis would drive both counts to zero, and a dead gui-daemon would
+suppress the announcement too. Only the intended behaviour inverts them.
 
 ### Scope limits — do not overstate these
 - `66fc670`'s defect is **unreachable at the shipped default** (`PerWindowCapture=0`). It is
@@ -118,10 +122,15 @@ the parent key. Setting the parent does nothing.
 
 | thing | value |
 |---|---|
-| `netvm` | **detached** — a measurement control only; T6 wants it networked |
-| `gui-agent.exe` | see §7 — set deliberately before ending the session |
-| `PerWindowCapture` | see §7 |
-| `LogLevel` (`gui-agent` subkey) | see §7 |
+| `netvm` | **detached** — a measurement control only; T6 wants it networked again |
+| `gui-agent.exe` | `4DA9FE96…` — the validated CI build of agent `6b5b298`; `.orig` (`4B4CE2B1…`) intact. Verified live after a cold boot: gui-daemon connected, `SendWindowMap` x2, all services Running |
+| `PerWindowCapture` | **0** — restored to the shipped default. Set it to **1** for any synthesis or `6b5b298` work, or the code under test is inert |
+| `LogLevel` (`gui-agent` subkey) | **3** — restored. Verbose (5) sits on the hot path and would pollute timing runs |
+
+Also in `QubesIncoming\win-idd-mgmt` on the guest, ready to reuse: `gui-agent-ctl.exe`
+(`6554EFED…`, the pre-fix control), `chromerepro.exe` (`443391F9…`, with `--mso`/`--orphan`),
+`dump-windows.exe`, `install-agent2.ps1`, `boot-measure-orphan.ps1`, `secure-desktop-probe.ps1`.
+Note a `qtest push` of `chromerepro.exe` FAILS while it is running — kill it first.
 | lockout threshold | `Never` (so trap 4.3 cannot bite) |
 | autologon | `AutoAdminLogon=1`, **no** `DefaultPassword` — yet autologon works at boot every time (~12 boots today), so the credential lives in LSA, not the registry |
 
