@@ -315,3 +315,41 @@ Single-threaded, strictly sequential. "**COLD BOOT**" = full `qtest shutdown` + 
 Running total to the gating verdict (experiments 0–9): **~26 cold boots.** Everything past 9 is gated on its result and should be re-planned, not pre-committed.
 
 **Two things to do first regardless of anything above:** experiment 0's config reset (otherwise every later number is anchored to a configuration no user has) and experiment 0b's instrument validation (otherwise no result counts).
+---
+
+# ADDENDUM (user, 2026-08-04): in seamless mode, cap the internal resolution at the WORK AREA
+
+Follows directly from §1.1 above. Since the daemon accepts whatever size the guest reports for
+window 0, and the guest therefore de facto owns the screen size, **the seamless desktop does not
+have to be the host's size** — a preset inherited from the old driver, or `g_HostScreenWidth`
+copied from `msg_xconf`, are both arbitrary.
+
+Today seamless does the opposite: `StartFrameProcessing` forces the host resolution on every
+call (`main.c:1888-1897`, invoked with `forceUpdate=TRUE` at `main.c:3409`), so the guest runs a
+5120x1440-derived desktop regardless of how much of it dom0 can ever use.
+
+**Proposal:** in seamless mode, size the internal desktop to the dom0 **work area** (the region
+dom0 can actually place guest windows in), not the host screen and not a preset.
+
+Why it is the right bound, and why it is safe:
+- The constraint CLAUDE.md warns about — "shrinking the screen in seamless constrains where dom0
+  can place guest windows" — is satisfied *by construction* if the size IS the work area: any
+  position dom0 can assign is inside it.
+- Everything downstream is size-agnostic; the framebuffer grant and `MSG_WINDOW_DUMP` are sized
+  from the screen dimensions, so a smaller desktop means a **smaller framebuffer to capture,
+  diff, grant and dump** every frame. That is a direct performance win on the exact hot path
+  Track A is trying to speed up, and it costs nothing in capability.
+- The work-area machinery already exists with three sources in priority order (`workarea.h`).
+
+Open questions before implementing (do not skip):
+1. **Does it actually help performance?** Measure, do not assume: capture/diff cost should fall
+   roughly with pixel count. Control able to fail: the same scripted scene at host-sized vs
+   work-area-sized desktop, comparing `QGAPERF` `acq`/`dmg`/`tot` fields.
+2. **Which work-area source is live on this guest?** Unverified (see SESSION-HANDOFF-2026-08-03
+   §5). If it under-reports, windows get clipped — worse than wasting pixels. Needs the
+   ceiling to be derived from a source proven correct, and a floor below which we refuse.
+3. **It requires arbitrary modes**, i.e. the IddCx driver — a work area is almost never one of
+   the stock adapter's 29 modes, and `SelectSupportedMode` would silently snap to something
+   else. So this lands with Track B, not before it.
+4. Interaction with `RecreateDuplication` returning FALSE on geometry change (§1.4): every
+   work-area change would trigger the broken path until that is fixed.
