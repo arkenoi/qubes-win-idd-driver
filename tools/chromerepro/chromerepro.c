@@ -34,6 +34,21 @@
 #define CLASS_GHOST   L"QubesChromeReproGhost"
 #define CLASS_CONTROL L"QubesChromeReproControl"
 
+// --mso: the strips exactly as a real Microsoft 365 install creates them, measured with
+// tools/dump-windows on win-idd-test around Word's "Normal template" NUIDialog:
+//
+//   0x10348 "MSO_BORDEREFFECT_WINDOW_CLASS" "" (391x8)  WS_POPUP WS_VISIBLE WS_CLIPSIBLINGS
+//           WS_CLIPCHILDREN | WS_EX_LAYERED WS_EX_MAKEVISIBLEWHENUNGHOSTED WS_EX_TOOLWINDOW
+//
+// Two properties make this worth reproducing rather than reusing CLASS_SHADOW above:
+//   - the real strips carry NEITHER WS_EX_TRANSPARENT NOR WS_EX_NOACTIVATE, so the style
+//     heuristic (rule 2) does not and cannot match them; only the class rule does;
+//   - they are 8 px thick, far under SM_CXMIN/SM_CYMIN. They survive the size floor only
+//     because no-caption WS_POPUP makes IsPopup() classify them override-redirect, which
+//     lowers the floor to 4 px. A thicker stand-in would pass for a different reason.
+#define CLASS_MSO_STRIP L"MSO_BORDEREFFECT_WINDOW_CLASS"
+#define MSO_THICKNESS 8
+
 #define SHADOW_COUNT 4
 
 #define ID_TOP    0
@@ -58,6 +73,7 @@ static int g_Thickness = 160;
 static BOOL g_WantPopup;
 static BOOL g_WantGhost;
 static BOOL g_WantControl;
+static BOOL g_WantMso;
 
 static WCHAR g_LogPath[MAX_PATH];
 
@@ -306,6 +322,11 @@ static BOOL RegisterClasses(void)
     if (!RegisterClassExW(&wc))
         return FALSE;
 
+    wc.lpfnWndProc = ShadowProc;
+    wc.lpszClassName = CLASS_MSO_STRIP;
+    if (!RegisterClassExW(&wc))
+        return FALSE;
+
     return TRUE;
 }
 
@@ -329,6 +350,27 @@ static HWND CreateShadow(void)
     return window;
 }
 
+// An Office frame-shadow strip, reproduced attribute for attribute (see CLASS_MSO_STRIP).
+// WS_EX_MAKEVISIBLEWHENUNGHOSTED, which the real ones also carry, is undocumented and set
+// by the shell rather than by the app, so it is not requested here; nothing reads it.
+static HWND CreateMsoStrip(void)
+{
+    HWND window = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TOOLWINDOW,   // NOT transparent, NOT noactivate - as measured
+        CLASS_MSO_STRIP, NULL,
+        WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+        0, 0, 10, 10,
+        g_Main,  // owned by the frame it decorates, like the real strips
+        NULL, g_Instance, NULL);
+
+    if (!window)
+        return NULL;
+
+    SetLayeredWindowAttributes(window, 0, 160, LWA_ALPHA);
+    ShowWindow(window, SW_SHOWNA);
+    return window;
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, int showCommand)
 {
     MSG message;
@@ -346,6 +388,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
     g_WantPopup = (wcsstr(args, L"--popup") != NULL);
     g_WantGhost = (wcsstr(args, L"--ghost") != NULL);
     g_WantControl = (wcsstr(args, L"--control") != NULL);
+    g_WantMso = (wcsstr(args, L"--mso") != NULL);
 
     if (!GetTempPathW(ARRAYSIZE(g_LogPath), g_LogPath))
         StringCchCopyW(g_LogPath, ARRAYSIZE(g_LogPath), L".\\");
@@ -364,6 +407,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
     if (GetSystemMetrics(SM_CYMIN) > minThickness)
         minThickness = GetSystemMetrics(SM_CYMIN);
     g_Thickness = minThickness + 24;
+
+    // --mso reproduces the real 8 px Office strips instead, which clear the size floor via
+    // the override-redirect path rather than by being oversized (see CLASS_MSO_STRIP).
+    if (g_WantMso)
+        g_Thickness = MSO_THICKNESS;
 
     if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0))
     {
@@ -398,7 +446,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
     }
 
     for (i = 0; i < SHADOW_COUNT; i++)
-        g_Shadow[i] = CreateShadow();
+        g_Shadow[i] = g_WantMso ? CreateMsoStrip() : CreateShadow();
 
     // Popup: no caption, so the agent's IsPopup() classifies it as override_redirect and
     // the daemon gives it a 1 px border instead of a full frame - the same treatment the
