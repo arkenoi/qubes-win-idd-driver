@@ -2949,3 +2949,21 @@ verbs IddCx hides. On console IddCx 1.5 the demonstrated-working mechanism is st
 replug with the target as preferred mode; `IddCxMonitorUpdateModes` + CDS (our D3 spike,
 built, untested) is the publicly-untried blink-free candidate. RDP size constraints adopted:
 width EVEN, 200-8192.
+
+# 2026-08-05 (cont 2) — D3 spike NEGATIVE with valid control; A6 stack + A7-lite built; D4v2 in CI
+
+**D3 (runtime IddCxMonitorUpdateModes on console): NEGATIVE.** Spike driver C0F48F3B
+(monitor list incl. 1600x1000, target list excl., thread adds it via UpdateModes ~60 s after
+arrival). Measured: T+10s 1600x1000 BADMODE / control 1600x900 SUCCESSFUL; T+90s (timer
+fired) 1600x1000 STILL BADMODE / control still SUCCESSFUL. The OS does not re-intersect for
+a console IDD on 19045 — consistent with MS Q&A 5924412 and driver-samples#1184. Caveat: the
+spike logs nothing driver-side, so "UpdateModes returned an error" vs "OS ignored it" is not
+distinguished; either way no console path exists here. Replug (stable-EDID, D4v2) is the
+mechanism, exactly as the hypervisor survey predicted.
+
+**A6 implemented** (agent branch t2/a6-grant-lifecycle, commits 67561e0 / 7b73bf8 / 57205f8,
+worktree-isolated build; details in the agent report): in-place geometry survival with
+ctx-derived sizing, park+ack-gated old-grant revoke with 5 s timeout fallback onto a retry
+sweep, bounded 2 s exit drain with ring-headroom guard. Plus **A7-lite** (d256b51, mine):
+StartFrameProcessing retries 10x750 ms on 0x887A0026/0x887A0005 instead of dying — the
+stress-identified crash class. Parent branch t2/a6-stack (CI 30951775933).
