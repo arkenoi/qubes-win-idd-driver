@@ -2920,3 +2920,32 @@ exact on snap — the harness prototype; production home is the agent (mode-cach
 IOCTL instead of replug). NOT yet declared done: the user-required stability stress gate
 (scratchpad/stress-resize.sh, 16 mixed cycles) is running; D3 spike answer pending; A6
 implementation in flight (user approved the design 2026-08-05, "fit tightly").
+
+# 2026-08-05 (cont) — stress gate WORKING AS INTENDED: three named defects under replug churn
+
+The user-required stability stress (16 mixed cycles) fails reproducibly at the same point
+(~9th consecutive replug) with a three-part mechanism, each part now named and evidenced:
+
+1. **Agent crash under churn (the actual killer):** transient `0x887A0026` during a mode
+   switch makes `CaptureInitialize` fail inside `StartFrameProcessing`, and `WatchForEvents`
+   treats that as FATAL → process exit → watchdog respawn (two instances died 12 s apart,
+   logs `...000909` and `...000922`). The fix class is an INIT RETRY on transient
+   ACCESS_LOST (A7-lite), distinct from A6.
+2. **Respawn applies the stale cache:** the fresh instance's HandleXconf re-applied
+   `FullscreenWidth` (1600x900), overriding the in-flight target — the A4
+   preference-vs-cache defect amplifying a crash into a wrong-resolution steady state.
+3. **EDID-less identity churn:** every replug mints a new display instance (guest reached
+   `\\.\DISPLAY29`) — exactly the "runaway registry / random resolutions" failure the
+   hypervisor survey (docs/RESEARCH-hypervisor-resize.md) warns about. Fix: stable EDID
+   (D4v2, building).
+
+Also measured before the crash point: dom0-follow latency is ~3 s per replugged resize
+(cycles 3 and 6, healthy), and the daemon's stale MSG_CONFIGURE echo during the replug
+outage is real and must be converged against (resize-sync retries; observed and handled).
+
+Survey takeaway now driving design (docs/RESEARCH-hypervisor-resize.md): every working stack
+uses agent-pushed custom-mode-slot + user-mode apply, no replug — but those rest on DXGK
+verbs IddCx hides. On console IddCx 1.5 the demonstrated-working mechanism is stable-EDID
+replug with the target as preferred mode; `IddCxMonitorUpdateModes` + CDS (our D3 spike,
+built, untested) is the publicly-untried blink-free candidate. RDP size constraints adopted:
+width EVEN, 200-8192.
