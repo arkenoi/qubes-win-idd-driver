@@ -39,6 +39,13 @@ tested and regression-tested on a guest with no Office installed.
 | `popup` (`--popup`, or F2) | `WS_POPUP\|WS_BORDER`, not layered | `main` | 1px-bordered (override_redirect) | unchanged |
 | `ghost` (`--ghost`, or F3) | `WS_OVERLAPPEDWINDOW` + `LAYERED`, alpha **0** | — | bordered window showing nothing | **gone** |
 | `control` (`--control`) | `WS_POPUP\|WS_BORDER` + `LAYERED` alpha 200 + `TOOLWINDOW`, **not** `TRANSPARENT` | `main` | bordered window | bordered window (**must not disappear**) |
+| `shadow0..3` with `--mso` | class **`MSO_BORDEREFFECT_WINDOW_CLASS`**, `WS_POPUP` + `LAYERED\|TOOLWINDOW` only | `main` | 4 bordered windows | **gone** |
+
+`--mso` swaps the four strips for ones carrying Office's real window class and its real
+ex-styles — note **no `TRANSPARENT`, no `NOACTIVATE`**, which is exactly why the style
+heuristic cannot catch them and the class rule (`aaa8c37`) is needed. Use it to test that
+rule; the default strips test the style heuristic. `--mso-thin` additionally uses Office's
+true 8 px thickness (see below before relying on it).
 
 `control` is the regression canary: it is layered, owned, undecorated and non-taskbar, i.e.
 it matches every clause of the agent's chrome rule *except* `WS_EX_TRANSPARENT`. If a future
@@ -46,18 +53,34 @@ loosening of the predicate makes `control` vanish, the predicate has gone too fa
 
 ### Why the strips are fat
 
-Real Office shadow strips are ~8 px thick. `ShouldAcceptWindow()` has always rejected
-anything smaller than `SM_CXMIN × SM_CYMIN` (~136×39 on a 96 DPI Win10 guest) **in both
-dimensions**, so an 8 px strip would be dropped by the pre-existing size filter and the
-"before" case would never reproduce. chromerepro therefore sizes each strip at
-`max(SM_CXMIN, SM_CYMIN) + 24` px in its thin dimension — computed at runtime, printed in
-the inventory file. The strips are visually fatter than Office's, but they exercise the same
-code path in the agent, which is the point.
+Real Office shadow strips are ~8 px thick. Strips here are sized at
+`max(SM_CXMIN, SM_CYMIN) + 24` px in their thin dimension — computed at runtime, printed in
+the inventory file — so that they clear the size floor on **any** build, including a stock
+control. They are visually fatter than Office's but exercise the same predicate, which is
+the point.
 
-(Corollary, **UNVERIFIED**: whatever Office actually creates must be bigger than
-`SM_CXMIN × SM_CYMIN`, otherwise the old size filter would already have hidden it and the
-bug would not exist. Worth confirming with a `dump-windows` / `winenum` capture in the
-user's real Office qube before claiming the fix covers the real thing.)
+**The corollary that used to be here — "whatever Office creates must be bigger than
+`SM_CXMIN × SM_CYMIN`, otherwise the old size filter would already have hidden it" — is
+FALSE, measured 2026-08-04 (FINDINGS).** `dump-windows` on win-idd-test caught the real
+strips around Word's `NUIDialog`: `MSO_BORDEREFFECT_WINDOW_CLASS`, **391×8 and 8×202**, well
+under the floor. The floor is not applied to them, because `ShouldAcceptWindow()` only
+applies `SM_CXMIN/SM_CYMIN` to non-override-redirect windows; a caption-less `WS_POPUP` is
+classified override-redirect by `IsPopup()` and faces a 4 px floor instead.
+
+That exemption is **fork-local**, added in agent `d6ab61c` ("Accept small override-redirect
+popups: keytip badges died on the SM_CXMIN floor"). Two consequences worth being explicit
+about:
+
+1. **The Office strip bug is a regression this fork introduced.** On stock QWT the 8 px
+   strips die on size and never reach the chrome rules. `d6ab61c` lowered the floor for
+   popups to rescue Win11 keytip badges and let Office's strips through as a side effect;
+   `aaa8c37` (the class rule) closes that hole. The fix is sound, but it is repairing our
+   own regression, not a long-standing upstream defect — which changes how it should be
+   described in any upstream submission.
+2. **Stock QWT is the wrong control for a *thin*-strip test.** With 8 px strips both sides
+   map nothing, for different reasons, and the comparison is all zeros — a check that cannot
+   fail. Hence fat strips by default. `--mso-thin` reproduces the true 8 px geometry and is
+   only meaningful against a fork build that contains `d6ab61c`.
 
 ## Build
 
