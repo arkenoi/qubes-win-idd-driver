@@ -2815,3 +2815,41 @@ StopFrameProcessing → CaptureTeardown.
   arbitrary sizes (the IDD). Not proven: whether window 0 avoided a destroy/create cycle
   (A6's criterion) — only that the outcome converged.
 - Guest left at: 3440x1440, non-seamless, A1 agent `A47E0382` running, netvm detached.
+
+# 2026-08-04 (cont 6) — THE HANG, CAUGHT LIVE WITH DOM0 FORENSICS (first time)
+
+Guest hung at ~23:17, one minute after a modeprobe --apply 3440x1440 that itself followed the
+user's manual dom0 window resize (2956x1224 request → 2560x1080 snap). Evidence captured
+BEFORE recovery (files: instrumentation/hang-2026-08-04/):
+
+1. **The guest is not stopped — it is SPINNING.** xentop: state `-----r`, cputime 2155 s and
+   climbing on a guest booted 62 min earlier (idle accumulation would be a few hundred s);
+   4 vCPUs. xl dmesg is a wall of dom0 CPU thermal throttle messages — the spin is literally
+   heating the host. This is a NEW fact: prior hang diagnosis assumed "the whole VM stopping";
+   it is a livelock, not a stall.
+2. **gui-daemon SURVIVED** (`qubes-guid … -N win-idd-test` running since 22:29 boot) and its
+   log shows `libvchan_is_eof` — the read-path EOF branch (the one that restarts) fired: the
+   agent side of the vchan died first, guid destroyed its windows (hence zero PNGs from the
+   screenshot service) and is waiting for a new client. My exit(1)-page-count theory for THIS
+   event is disproven — guid is alive.
+3. **qrexec is dead too** — even `echo` times out. Whole-guest livelock, consistent with a
+   kernel-level storm (interrupt/DPC), not a stuck user thread.
+4. **No Xen-visible fault.** No gnttab errors, no domain faults in xl dmesg tail.
+5. **Bonus dom0 bug:** `timeout 6 xl console win-idd-test` crashed with
+   `*** buffer overflow detected ***` and dumped core — a dom0 xl defect, outside QWT scope,
+   candidate for upstream report (needs user approval of text, per policy).
+
+**Working hypothesis, sharpened:** the trigger is the RESOLUTION-CHANGE path, not stop-method
+grant leaks alone — this boot had only ~2 grant churns (user resize + my apply) but they were
+seconds apart, and the second arrived while the first recovery (revoke→re-grant→re-dump) may
+still have been in flight. The revoke-while-mapped inversion (DESIGN-a6 §1.2) is exactly the
+kind of thing that can wedge PV machinery. The hang preceded any IDD install — this is the
+stock BDA display path. A6 is therefore not hygiene, it is the likely fix for a
+guest-killing defect on T2's hot path.
+
+**Testable prediction:** N resolution changes with generous settle time (>10 s) should be
+safe; rapid alternation should reproduce the livelock. To be tested DELIBERATELY, once, with
+forensics ready — not stumbled into.
+
+Practice change effective immediately: after any resolution change, wait for the agent log to
+show the re-grant completed (`framebuffer re-granted` line) before issuing the next one.
