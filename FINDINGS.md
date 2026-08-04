@@ -2082,6 +2082,41 @@ Also fixed here: the measurement parsed only the LAST `###` snapshot of `dump-wi
 is empty whenever the process is killed just after writing a header — that read as "the scene
 is missing" and failed a run that was fine. It now scans every snapshot and dedupes by HWND.
 
+## RESULT (`66fc670`): VALIDATED — control failed as required, on two opposed signals
+
+Control = agent **`aaa8c37`** (`6554EFED…`), test = **`6b5b298`** (`4DA9FE96…`),
+`PerWindowCapture=1`, scene `chromerepro --orphan`, one cold boot per side, installed hash
+compared to the manifest every run, 3 interleaved rounds.
+
+| round | build | orphan synthesized | adopted by main frame | orphan announced |
+|---|---|---|---|---|
+| r1 | control `6554EFED…` | **1** | **1** | 0 |
+| r1 | fix `4DA9FE96…`     | 0 | 0 | **1** |
+| r2 | control              | **1** | **1** | 0 |
+| r2 | fix                  | 0 | 0 | **1** |
+| r3 | control              | **1** | **1** | 0 |
+| r3 | fix                  | 0 | 0 | **1** |
+
+Unanimous. The control adopted the popup into the frame every round — `SYNTH_ALL` naming the
+exact pair each time (`0x1029c->0x7005c`, `0x3025e->0x10292`, `0x102a4->0x50164`) — and the fix
+synthesized nothing at all in any round.
+
+What makes this hard to fool is that the **two signals move in opposite directions**. A
+synthesized popup is painted into its owner and deliberately never announced, so the control
+reads adopted-but-unmapped while the fix reads refused-but-announced. A confound that merely
+suppressed synthesis would drive both counts to zero; a dead gui-daemon would suppress the
+announcement too. Only the intended behaviour produces the observed inversion, and
+`ORPHAN_PRESENT=1` on all six runs confirms the scene was actually built every time.
+
+### Scope — same caveats as `aaa8c37`, plus one
+
+- Validates `66fc670` only. **`6b5b298` remains unvalidated.**
+- The defect is **unreachable at the shipped default** (`PerWindowCapture=0`), so this fixes a
+  real path that is latent in the default configuration.
+- Measured against `chromerepro`, not real Office. The mechanism is generic (any app whose
+  owned popup points at an untracked owner), which is precisely why the synthetic repro is
+  appropriate here — but it is not an end-to-end Office test.
+
 ## gui-daemon died again — and it was self-inflicted, by agent restarts
 
 After ~9 gui-agent restarts in 20 minutes, the agent parked at `Awaiting for a vchan client`,
