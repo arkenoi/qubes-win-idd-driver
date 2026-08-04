@@ -24,7 +24,8 @@ using namespace Microsoft::WRL;
 
 #pragma region SampleMonitors
 
-static constexpr DWORD IDD_SAMPLE_MONITOR_COUNT = 3; // If monitor count > ARRAYSIZE(s_SampleMonitors), we create edid-less monitors
+static constexpr DWORD IDD_SAMPLE_MONITOR_COUNT = 1; // If monitor count > ARRAYSIZE(s_SampleMonitors), we create edid-less monitors
+static constexpr DWORD IDD_SAMPLE_EDID_MONITOR_COUNT = 0; // Connectors at index >= this are created EDID-less (modes come from EvtIddCxMonitorGetDefaultDescriptionModes). 0 = every monitor is EDID-less.
 
 // Default modes reported for edid-less monitors. The first mode is set as preferred
 static const struct IndirectSampleMonitor::SampleMonitorMode s_SampleDefaultModes[] = 
@@ -557,7 +558,7 @@ void IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
 
     MonitorInfo.MonitorDescription.Size = sizeof(MonitorInfo.MonitorDescription);
     MonitorInfo.MonitorDescription.Type = IDDCX_MONITOR_DESCRIPTION_TYPE_EDID;
-    if (ConnectorIndex >= ARRAYSIZE(s_SampleMonitors))
+    if (ConnectorIndex >= IDD_SAMPLE_EDID_MONITOR_COUNT)
     {
         MonitorInfo.MonitorDescription.DataSize = 0;
         MonitorInfo.MonitorDescription.pData = nullptr;
