@@ -2633,3 +2633,78 @@ much to adjudicate.
 Both were caught because the checks were written to fail loudly on missing preconditions. That is
 now three separate occasions today where a precondition gate turned a silent wrong answer into a
 visible VOID.
+
+---
+
+# 2026-08-04 (close) — GUEST HANG: diagnosed to a leading hypothesis, and it points back at us
+
+Third diagnosis of this failure today, each sharper than the last. The first two were wrong and
+are superseded; keeping the trail because the corrections are the point.
+
+## What the guest's own record settles
+
+**1. Windows never crashed.** Every Kernel-Power 41 across 7 days carries `BugcheckCode=0`, and
+there is **no `MEMORY.DMP` and no minidump at all** despite `CrashDumpEnabled=7` (automatic) and
+`AutoReboot=1`. A bugcheck would have left both. So this is a HANG, not a blue screen — and the
+41s are all explained by my own `qvm-kill`, which makes them evidence of nothing else.
+
+**2. The shutdown path is healthy — my earlier "the request never reached the guest" was wrong
+in an important way.** `xenagent` logs event id=1 "The tools requested that the local VM shut
+itself down" on every delivery, and **every single one of the ~37 requests logged today was
+followed by an orderly shutdown within 90 s**. There is no case of "request received, shutdown
+never initiated". So during a hang xenagent never sees a request at all — because the guest is
+already unresponsive. **The hang PRECEDES the shutdown attempt; the shutdown merely exposes it.**
+
+**3. The freeze is abrupt, not a slow degradation.** In the 17:58 hang the agent was emitting
+`QGAPERF` frames every 15-46 ms — `seq=1639…1646` — and then simply stops mid-stream, 726 s
+before the next instance starts. Nothing logs a failure, a timeout, or an error on the way down.
+That is the whole VM stopping between one frame and the next.
+
+## Leading hypothesis: leaked grants from force-killed agents
+
+Not proven. Stated as a hypothesis with its disconfirming evidence, because it is actionable and
+it implicates our own practice rather than the guest.
+
+- `capture.c:428` states it outright: **"grants are not automatically revoked when the xeniface
+  device handle is closed"**. Revocation is explicit, in `CaptureTeardown` (`capture.c:430`),
+  `RecreateDuplication` (`:251`) and `PwDetachWindow` (`perwindow.c:181`) — all **user-mode code
+  that does not run under `TerminateProcess`.**
+- Every harness in this project stopped the agent with `Stop-Process -Force` / `taskkill /F`.
+  That leaks every grant the instance held.
+- Per-window capture grants are large: a 3440x1440 buffer is **4838 pages**, and each tracked
+  window gets its own. **136,744 pages were granted across today's agent instances.**
+- Xen's default `max_grant_frames` gives on the order of 16-32k grant entries per domain. A few
+  force-killed instances within one boot, each leaking a framebuffer plus per-window buffers, is
+  the right order of magnitude to exhaust that.
+
+**Evidence against / not yet explained:** no grant failure is logged anywhere —
+`XcGnttabPermitForeignAccess2` failures would go through `win_perror2` and there are none. So if
+exhaustion is the mechanism, it manifests as a hang inside the driver rather than a failed call,
+which is plausible but unverified. Do not present this as established.
+
+## Why this is worth acting on regardless
+
+The fix for the hypothesis is a practice change we already know we want for an unrelated reason:
+**stop the agent with `Global\QGA_SHUTDOWN`, never `TerminateProcess`.** A graceful exit runs the
+teardown path and revokes the grants. The same change independently prevents losing gui-daemon
+(FINDINGS earlier today). Two failures, one cause: *we were killing the agent instead of asking
+it to stop.*
+
+## The experiment that would settle it — cheap, and worth running first next session
+
+Stop force-killing entirely: convert `install-agent2.ps1` to signal `QGA_SHUTDOWN`, wait for
+exit, then copy. Then run the same ~30-cycle install/reboot workload.
+- hangs disappear ⇒ strongly supports the leak (and the practice change is already justified);
+- hangs persist ⇒ the leak is not the cause and the next suspect is the PV transport itself,
+  which needs dom0 (`xl dmesg`, domain console) and therefore the user.
+
+Also worth adding cheaply: log the cumulative granted page count per boot, so exhaustion becomes
+visible instead of inferred.
+
+## Correction trail for this defect
+
+1. "One reboot in nine wedged; no cause claimed" — too passive, and I recovered without looking.
+2. "The shutdown request never reached the guest" — inferred from missing 1074/6006/13, and
+   **wrong**: xenagent proves delivery works, and the guest was already dead.
+3. Current: the guest hangs abruptly with no bugcheck, before any shutdown request, on a workload
+   dominated by force-killed agents that leak large grant allocations. Hypothesis, testable.
