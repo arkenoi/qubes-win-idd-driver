@@ -2815,3 +2815,15 @@ StopFrameProcessing → CaptureTeardown.
   arbitrary sizes (the IDD). Not proven: whether window 0 avoided a destroy/create cycle
   (A6's criterion) — only that the outcome converged.
 - Guest left at: 3440x1440, non-seamless, A1 agent `A47E0382` running, netvm detached.
+
+# 2026-08-04 (cont 4) — experiment 7 PASS: the PnP auto-revert fires
+
+`guest/pnp-revert-setup.ps1` + `pnp-revert-action.ps1`: SYSTEM onstart scheduled task
+QubesIddPnpRevert reads `C:\qubes-idd\revert-request.txt` (device instance id), re-enables via
+devcon, verifies by STATUS READBACK (not exit code alone), logs to revert-result.txt, clears
+the request only on verified success. Measured on `ROOT\KDNIC\0000`: disabled via devcon
+(status: "Device is disabled"), cold boot, task re-enabled it (`devcon_exit=0 running=True`),
+marker cleared. Notes: floppy controller refuses disable (ACPI) — unsuitable test subject;
+`&` in instance ids does not survive qtest's cmd chaining, run devcon commands unchained.
+SetDisplayConfig deliberately NOT implemented (session-0 cannot repair session-1 topology).
+This clears exp 9's precondition: the BDA can be disabled with a proven boot-path revert.
