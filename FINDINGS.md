@@ -1825,7 +1825,10 @@ Consequences for the record:
 
 ---
 
-# 2026-08-04 — T2 is blocked on the IddCx driver (measured); T1 instrument rebuilt
+# 2026-08-04 — T2 needs OUR driver to supply the modes (measured); T1 instrument rebuilt
+
+> Heading corrected: this originally read "T2 is blocked on the IddCx driver". The framing was
+> wrong — the mode list is ours to choose, not an external constraint. See the correction inside.
 
 Guest quiesced first: `qvm-prefs win-idd-test netvm ''` (it was `core-net`). Lockout threshold
 was already `Never`, so trap 4.3 cannot bite. `AutoAdminLogon=1` with **no** `DefaultPassword`
@@ -2471,3 +2474,50 @@ guest sat at `PerWindowCapture=0` for most of the session.
 
 Shipped in the build now on the guest (`F06C0979`) together with the mask-sort cherry-pick
 (`d3a5fbc`, previously written and never merged) and the framebuffer-pointer invalidation.
+
+---
+
+# 2026-08-04 (close of session) — index, and the one experiment left running
+
+## Documents produced today (all committed, all reviewable)
+
+| file | what it is |
+|---|---|
+| `DESIGN-gui-daemon-restart-survival.md` | why gui-daemon dies, ranked guest-side fixes, the dom0/upstream proposal. **dom0 items need user approval.** |
+| `PLAN-trackb-t2-modes.md` | Track B / T2: how our driver supplies arbitrary modes, what gates it, plus the work-area addendum |
+| `REVIEW-synthesis-fix-cluster.md` | per-commit keep/revise/revert verdicts for the synthesis cluster; found the wild-pointer bug |
+| `SESSION-HANDOFF-2026-08-04.md` | entry point for the next session |
+| `scratchpad/` | the harnesses that work: `vmcycle.sh`, `wildptr2.ps1`, `graceful-stop.ps1`, `install-agent2.ps1`, `ab-boot.sh`, `ab-orphan.sh`, `office-shadow-probe.ps1`, and the deliberately-UNRUN `secure-desktop-probe.ps1` |
+
+## IN FLIGHT, not finished: does `6b5b298` do anything?
+
+The user's instruction was "if it does nothing, let's revert". Establishing the "if" first,
+because the review's claim that its mechanism is impossible is itself unverified, and there IS a
+concrete mechanism it would prevent:
+
+`wincapture.cpp:39` `DEAD_AFTER_FAILURES = 5` — five consecutive `PrintWindow` failures set
+`c.dead = true`, and nothing in the file revives a dead channel. Pre-`6b5b298`,
+`AttachThreadToInputDesktop()` followed the input desktop onto Winlogon; captures of *session*
+windows from a thread attached to the *secure* desktop should fail. If they fail five times, the
+channel is dead **permanently** — that window never captures again, even after unlock. That is a
+real harm, and it is NOT the justification in the commit message (which was about stalling logon
+via PrintWindow into LogonUI, and whose supporting evidence was retracted).
+
+**Set up and ready to run:**
+- Control branch `control/revert-6b5b298` (superproject) / `revert-6b5b298` (agent) — `6b5b298`
+  reverted on top of `a4f6961`, so the ONLY difference is the secure-desktop guard. This is a
+  better control than `98eed30`, which also lacks `aaa8c37`, `66fc670`, the wild-pointer fix and
+  the mask sort.
+- CI build dispatched: run `30921242920` (`gh workflow run build --ref control/revert-6b5b298`).
+- Trigger already proven to work: the scratch-desktop switch in `scratchpad/wildptr2.ps1`
+  (`CreateDesktop` + `SwitchDesktop` away and back). It raises a genuine desktop switch without
+  `LockWorkStation`, so no password and no reboot are needed.
+
+**The experiment:** `PerWindowCapture` ON (it now is, by default), a window with a live
+per-window channel, switch desktop away and back, then check whether that window still produces
+`SendWindowDamageEvent` afterwards.
+- control (reverted) → channel dies / window stops capturing ⇒ **`6b5b298` does something, keep it**
+- both sides identical ⇒ **it does nothing, revert it** per the user's instruction
+
+Do not revert it without running this: "it does nothing" is currently an assumption, and this
+session has already been burned six times by checks that could not fail.
