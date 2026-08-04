@@ -2853,3 +2853,48 @@ forensics ready — not stumbled into.
 
 Practice change effective immediately: after any resolution change, wait for the agent log to
 show the re-grant completed (`framebuffer re-granted` line) before issuing the next one.
+
+# 2026-08-04 (close) — D0 DRIVER LIVE: the gating answer is OUTCOME A, and D2 is NEGATIVE
+
+The single most important session of Track B so far. All on the D0 minimal driver
+(branch t2/d0-minimal-idd, 1 monitor, EDID-less, single hw id Root\IddSampleDriver, dll
+ED1CC64A; control build w/ MONITOR_COUNT=3 exists: scratch/d0-monitor3-control, 7128230F).
+
+1. **"Present but inactive" is DEAD for D0.** Installing the driver (pnputil + devcon,
+   deploy-and-test.ps1) brought the IDD monitor UP immediately: desktop extended to
+   2048x768 dual (BDA (0,0)-(1024,768) + IDD (1024,0)-(2048,768) @75Hz). Phase 1B's
+   "inactive" reading does not describe this build. Exp 8's original acceptance is
+   unmeetable-as-written; superseded by the direct measurements below.
+2. **THE GATING MEASUREMENT: DesktopImageInSystemMemory = TRUE on the IDD output**, never
+   flipped, MapDesktopSurface OK, **pitch tight (4096 = 1024*4)**, in BOTH topologies:
+   extended (BDA+IDD) and IDD-primary (BDA disabled). With the BDA disabled the IDD moved to
+   **adapter 0 output 0 — the exact output the agent captures** — and ddaprobe's
+   agent_capture_would_work read TRUE there. **Outcome A, scoped to: D0 driver, WARP
+   renderer, 19045, this topology.** (Formal 3x interleaved cold-boot runs still owed for
+   the record; every hot measurement today agreed.)
+3. **The agent rode every topology change in place** — windows kept, framebuffer re-granted,
+   MSG_WINDOW_DUMP re-sent, dom0 window resized to match (2560x1080 → 1024x768 → …). The
+   fork's recovery path is load-bearing and works.
+4. **D2 (virtual modes): NEGATIVE.** With the IDD owning the desktop, CDS_TEST rejects
+   1600x1000 / 2566x1022 / 1234x777 with DISP_CHANGE_BADMODE. The OS offers exactly the
+   monitor∩target intersection — measured: {1024x768, 1600x900, 1920x1080} on the IDD.
+   **So T2 requires the driver to PUBLISH the desired modes: D3 (runtime UpdateModes spike)
+   and/or D4 (dense grid / IOCTL mode store) are the path.** No shortcut exists.
+5. **BDA disable → Windows spins up the Basic Display DRIVER fallback** (ROOT\BASICDISPLAY,
+   \\.\DISPLAY3, 1024x768-only) rather than leaving the IDD alone — a second attached
+   output, but on adapter 1, so the agent's adapter-0 choice still lands on the IDD.
+6. **The PnP auto-revert is proven on the REAL target**: with the BDA disabled and the
+   marker armed, the boot task re-enabled it (devcon_exit=0, running=True, status readback)
+   at 23:42:02. Note: read revert-result.txt via PowerShell (UTF-16; cmd `type` + grep
+   silently hid the line — instrument-blindness trap #8 of the day).
+7. Cleanup: IDD uninstalled (ROOT\DISPLAY\0000 removed), reboot, BDA-only 3440x1440
+   restored and persisted. Guest ends the day at the shipped-like baseline + A1 agent.
+
+Also this session: A2 (readback-authoritative, agent 2525fdd) and A3 (single-source
+framebuffer size, assert-only 936c07d control + fix 0dbec23) implemented and CI-built on
+branches t2/a2-readback, t2/a3-assert-ctl, t2/a3-single-source — NOT validated yet, that is
+next session's exp 4/5 A/B work.
+
+Next decisive step: **D3 spike** — publish one extra target mode at runtime from the driver
+and see if the OS picks it up; if not, D4's dense pre-declared grid (needs re-agreeing the
+T2 acceptance criterion with the user: "follows to within N px" instead of exact).
