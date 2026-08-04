@@ -2521,3 +2521,52 @@ per-window channel, switch desktop away and back, then check whether that window
 
 Do not revert it without running this: "it does nothing" is currently an assumption, and this
 session has already been burned six times by checks that could not fail.
+
+---
+
+# 2026-08-04 (close) — CORRECTED wedge diagnosis: the guest HANGS, and the upstream policy
+
+## The wedge is a guest hang, not an undelivered shutdown request
+
+Earlier today I diagnosed the `Transient` wedges as "the shutdown request never reached the
+guest", from the absence of events 1074/6006/13. That inference was **too weak**, and the next
+occurrence gave the missing piece. Evidence captured *before* recovering this time, as the rule
+requires:
+
+```
+dom0:    win-idd-test  Running  SrU-----     <- dom0 thinks it is fine
+qrexec:  no answer (timed out)               <- the guest is NOT fine
+guest:   no 1074 / 6006 / 13 for that cycle  <- Windows never began shutting down
+```
+
+qrexec dying at the same time as the shutdown request goes unanswered points at **the guest OS
+being hung**, not at a lost message: `qvm-shutdown` signals through xenstore to `xenagent` in
+the guest, and a hung guest answers neither that nor qrexec. So the correct statement is:
+
+> Occasionally (~3 in ~30 cycles today) the guest hangs hard: dom0 still reports `Running`,
+> qrexec stops answering, and Windows never starts an orderly shutdown. Only `qvm-kill`
+> recovers it.
+
+The cause is still unknown, and I am not going to guess at it — but the hypothesis space is now
+much smaller, and the next occurrence should also capture `xl dmesg` / the domain's console
+(dom0-side, user), because the guest itself cannot be asked anything once it is in this state.
+
+**What worked:** `scratchpad/vmcycle.sh` refused to proceed rather than issuing `start` against a
+running VM, so this time the failure stayed a clean failure instead of compounding into the
+"no output at all" wedge. The fail-loud rewrite paid for itself on its second use.
+
+## Upstream policy set by the user — recorded in CLAUDE.md
+
+> "we submit nothing until our work is done in full and we have new shiny qwt with all the
+> features. until that everything stays in my fork." — "except bugs outside of qwt scope, those
+> we report"
+
+So: **nothing from `agent/` goes upstream** until QWT is complete — this withdraws CLAUDE.md's
+earlier "small, measured, reviewable PRs" framing and settles the open question about how to
+describe `aaa8c37` (it is not being submitted, so the question is moot for now; the regression
+framing stays recorded for whenever it is).
+
+**Bugs in components that are not ours are still reported**, because they are not part of the
+deliverable and sitting on them helps nobody. Currently qualifying: the two gui-daemon defects in
+`DESIGN-gui-daemon-restart-survival.md` §3 (the write-path EOF bypassing `vchan_at_eof`, and the
+`restart_guid` use-after-free). Both still need the user to approve the exact text.
