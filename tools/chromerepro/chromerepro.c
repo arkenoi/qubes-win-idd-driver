@@ -494,25 +494,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
         mainX + 60, mainY + 90, 340, 220,
         g_Main, NULL, g_Instance, NULL);
 
-    // Orphan-owned popup: see CLASS_ORPHAN. The owner is created and never shown, so every
-    // build rejects it on !IsVisible and it is never tracked; the popup it owns sits well
-    // inside the main frame, which is a same-process, non-override-redirect, tracked
-    // sibling - i.e. exactly the adoption candidate the old fallback would pick.
-    if (g_WantOrphan)
-    {
-        g_HiddenOwner = CreateWindowExW(0, CLASS_ORPHAN, NULL,
-            WS_POPUP,
-            work.left, work.top, 200, 200,
-            NULL, NULL, g_Instance, NULL);   // deliberately never ShowWindow()
-
-        g_Orphan = CreateWindowExW(0, CLASS_ORPHAN, NULL,
-            WS_POPUP | WS_BORDER,
-            mainX + 60, mainY + 90, 340, 220,
-            g_HiddenOwner, NULL, g_Instance, NULL);
-        if (g_Orphan)
-            ShowWindow(g_Orphan, SW_SHOWNA);
-    }
-
     // Regression canary: layered (alpha 200) AND owned AND undecorated, but NOT
     // hit-test transparent - a perfectly ordinary translucent tool window. If the chrome
     // rules ever get loosened to drop this, the fix has gone too far.
@@ -555,6 +536,42 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
     ShowWindow(g_Main, showCommand == SW_SHOWDEFAULT ? SW_SHOWNORMAL : showCommand);
     UpdateWindow(g_Main);
     LayoutShadows();
+
+    // Orphan-owned popup: see CLASS_ORPHAN. Created LAST, and only after the agent has had
+    // time to see the main frame. Ordering is the whole experiment: synthesis adopts a
+    // popup into a TRACKED same-process non-override-redirect sibling, and the agent only
+    // tracks the frame once it is visible. Created before ShowWindow(g_Main) - as this
+    // originally was - the popup arrives while no sibling is tracked, SynthQualifies()
+    // fails for want of a candidate, and BOTH builds simply announce it: a control that
+    // cannot exhibit the defect. Measured that way round first; the agent attached the
+    // frame 125 ms after the popup, so the 3 s below is ample.
+    if (g_WantOrphan)
+    {
+        DWORD until = GetTickCount() + 3000;
+        MSG pump;
+        while ((int)(GetTickCount() - until) < 0)
+        {
+            while (PeekMessageW(&pump, NULL, 0, 0, PM_REMOVE))
+            {
+                TranslateMessage(&pump);
+                DispatchMessageW(&pump);
+            }
+            Sleep(50);
+        }
+
+        // never shown, so every build drops it on !IsVisible and never tracks it
+        g_HiddenOwner = CreateWindowExW(0, CLASS_ORPHAN, NULL,
+            WS_POPUP,
+            work.left, work.top, 200, 200,
+            NULL, NULL, g_Instance, NULL);
+
+        g_Orphan = CreateWindowExW(0, CLASS_ORPHAN, NULL,
+            WS_POPUP | WS_BORDER,
+            mainX + 60, mainY + 90, 340, 220,
+            g_HiddenOwner, NULL, g_Instance, NULL);
+        if (g_Orphan)
+            ShowWindow(g_Orphan, SW_SHOWNA);
+    }
 
     if (g_Popup && g_WantPopup)
         ShowWindow(g_Popup, SW_SHOWNA);
