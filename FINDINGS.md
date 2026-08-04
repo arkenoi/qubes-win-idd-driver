@@ -2898,3 +2898,25 @@ next session's exp 4/5 A/B work.
 Next decisive step: **D3 spike** — publish one extra target mode at runtime from the driver
 and see if the OS picks it up; if not, D4's dense pre-declared grid (needs re-agreeing the
 T2 acceptance criterion with the user: "follows to within N px" instead of exact).
+
+# 2026-08-05 — ARBITRARY RESOLUTION END-TO-END: 2566x1022 on the D4 driver, dom0 window follows
+
+The T2 core loop is demonstrated. Driver `t2/d4-registry-modes` (dll D1212687, CI 30949957738):
+reads REG_MULTI_SZ `HKLM\SOFTWARE\QubesIDD\Modes` at monitor arrival, appends the entries to
+both monitor and target mode lists; reload = devcon restart (replug). Sequence measured:
+`guest/resize-sync.ps1 -SyncNow 2566x1022` → registry publish → replug → CDS_TEST turns
+SUCCESSFUL → apply → **readback 2566x1022 match=True** →
+- ddaprobe on the IDD output at 2566x1022: flag TRUE, MapDesktopSurface OK,
+  **pitch 10264 == 2566*4 TIGHT** — the 8-byte-aligned width case that exp 1 could not clear
+  is now cleared. The stride killer is dead on this configuration (three widths measured
+  tight: 3440, 1400/1024 alignments, and 2566).
+- `agent_capture_would_work` TRUE; agent rode the replug; **dom0 window = 2566x1022, live
+  pixels** (decoded, non-flat).
+Configuration: IDD primary, BDA disabled with the (previously boot-proven) revert marker
+armed. The BASICDISPLAY fallback output remains attached at 1024x768 on another adapter;
+does not interfere (agent takes adapter 0 = IDD).
+Sync loop: `resize-sync.ps1` (loop mode) watches A1's `RESREQ … src=dom0` lines and syncs
+exact on snap — the harness prototype; production home is the agent (mode-cache refresh +
+IOCTL instead of replug). NOT yet declared done: the user-required stability stress gate
+(scratchpad/stress-resize.sh, 16 mixed cycles) is running; D3 spike answer pending; A6
+implementation in flight (user approved the design 2026-08-05, "fit tightly").
