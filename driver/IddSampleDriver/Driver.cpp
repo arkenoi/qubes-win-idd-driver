@@ -28,12 +28,106 @@ static constexpr DWORD IDD_SAMPLE_MONITOR_COUNT = 1; // If monitor count > ARRAY
 static constexpr DWORD IDD_SAMPLE_EDID_MONITOR_COUNT = 0; // Connectors at index >= this are created EDID-less (modes come from EvtIddCxMonitorGetDefaultDescriptionModes). 0 = every monitor is EDID-less.
 
 // Default modes reported for edid-less monitors. The first mode is set as preferred
-static const struct IndirectSampleMonitor::SampleMonitorMode s_SampleDefaultModes[] = 
+static const struct IndirectSampleMonitor::SampleMonitorMode s_SampleDefaultModes[] =
 {
     { 1920, 1080, 60 },
     { 1600,  900, 60 },
     { 1024,  768, 75 },
 };
+
+// ==============================
+// Qubes D4 (PLAN-trackb-t2-modes.md §4 D4): extra modes declared at monitor arrival from
+// a registry list the session side can rewrite. All registry modes are reported at 60 Hz
+// and appended, deduplicated, to BOTH the monitor default-description mode list and the
+// target mode list. Missing key/value or zero valid entries -> identical to the D0 build.
+// ==============================
+static constexpr WCHAR QUBES_IDD_MODES_KEY[] = L"SOFTWARE\\QubesIDD";
+static constexpr WCHAR QUBES_IDD_MODES_VALUE[] = L"Modes";
+static constexpr size_t QUBES_IDD_MAX_REG_MODES = 32; // cap on extra modes read from the registry
+static constexpr DWORD QUBES_IDD_MODE_VSYNC = 60;
+static constexpr DWORD QUBES_IDD_MIN_WIDTH = 640;
+static constexpr DWORD QUBES_IDD_MAX_WIDTH = 16384;
+static constexpr DWORD QUBES_IDD_MIN_HEIGHT = 480;
+static constexpr DWORD QUBES_IDD_MAX_HEIGHT = 6144;
+
+struct QubesRegistryMode
+{
+    DWORD Width;
+    DWORD Height;
+};
+
+// Reads REG_MULTI_SZ 'Modes' from HKLM\SOFTWARE\QubesIDD (64-bit view). Each entry is
+// 'WIDTHxHEIGHT', e.g. '2566x1022'. Malformed entries are skipped; dimensions are
+// clamped into [640,16384] x [480,6144]; at most QUBES_IDD_MAX_REG_MODES entries.
+//
+// RELOAD MECHANISM (v1, deliberate): there is no timer and no IOCTL. This is read on the
+// mode-list callbacks that run as part of monitor arrival, so after the session side
+// rewrites the value it restarts the device (devcon restart / disable+enable), which
+// re-runs arrival and re-reads this list.
+static vector<QubesRegistryMode> QubesReadRegistryModes()
+{
+    vector<QubesRegistryMode> Modes;
+
+    DWORD cbData = 0;
+    LSTATUS Err = RegGetValueW(HKEY_LOCAL_MACHINE, QUBES_IDD_MODES_KEY, QUBES_IDD_MODES_VALUE,
+        RRF_RT_REG_MULTI_SZ | RRF_SUBKEY_WOW6464KEY, nullptr, nullptr, &cbData);
+    if (Err != ERROR_SUCCESS || cbData < sizeof(WCHAR))
+    {
+        return Modes; // no key/value -> behave exactly like D0
+    }
+
+    vector<WCHAR> Data(cbData / sizeof(WCHAR) + 2, L'\0');
+    Err = RegGetValueW(HKEY_LOCAL_MACHINE, QUBES_IDD_MODES_KEY, QUBES_IDD_MODES_VALUE,
+        RRF_RT_REG_MULTI_SZ | RRF_SUBKEY_WOW6464KEY, nullptr, Data.data(), &cbData);
+    if (Err != ERROR_SUCCESS)
+    {
+        return Modes;
+    }
+
+    // Walk the MULTI_SZ: entries are NUL-separated, list ends at an empty string.
+    for (const WCHAR* pEntry = Data.data(); *pEntry != L'\0'; pEntry += wcslen(pEntry) + 1)
+    {
+        if (Modes.size() >= QUBES_IDD_MAX_REG_MODES)
+        {
+            break;
+        }
+
+        WCHAR* pEnd = nullptr;
+        unsigned long Width = wcstoul(pEntry, &pEnd, 10);
+        if (pEnd == pEntry || *pEnd != L'x')
+        {
+            continue; // malformed: no leading number or no 'x' separator
+        }
+
+        const WCHAR* pHeight = pEnd + 1;
+        unsigned long Height = wcstoul(pHeight, &pEnd, 10);
+        if (pEnd == pHeight || *pEnd != L'\0')
+        {
+            continue; // malformed: no height number or trailing garbage
+        }
+
+        QubesRegistryMode Mode;
+        Mode.Width  = min(max((DWORD) Width,  QUBES_IDD_MIN_WIDTH),  QUBES_IDD_MAX_WIDTH);
+        Mode.Height = min(max((DWORD) Height, QUBES_IDD_MIN_HEIGHT), QUBES_IDD_MAX_HEIGHT);
+
+        // Dedup within the registry list itself (post-clamp).
+        bool bDuplicate = false;
+        for (const auto& Existing : Modes)
+        {
+            if (Existing.Width == Mode.Width && Existing.Height == Mode.Height)
+            {
+                bDuplicate = true;
+                break;
+            }
+        }
+        if (!bDuplicate)
+        {
+            Modes.push_back(Mode);
+        }
+    }
+
+    return Modes;
+}
 
 // FOR SAMPLE PURPOSES ONLY, Static info about monitors that will be reported to OS
 static const struct IndirectSampleMonitor s_SampleMonitors[] =
@@ -737,23 +831,55 @@ NTSTATUS IddSampleMonitorGetDefaultModes(IDDCX_MONITOR MonitorObject, const IDAR
     // than an EDID, those modes would also be reported here.
     // ==============================
 
+    // Qubes D4: built-in defaults plus the registry-declared modes (at 60 Hz),
+    // deduplicated. The count is dynamic now, so build a vector instead of using the
+    // fixed-arity array directly.
+    vector<IDDCX_MONITOR_MODE> MonitorModes;
+    for (DWORD ModeIndex = 0; ModeIndex < ARRAYSIZE(s_SampleDefaultModes); ModeIndex++)
+    {
+        MonitorModes.push_back(CreateIddCxMonitorMode(
+            s_SampleDefaultModes[ModeIndex].Width,
+            s_SampleDefaultModes[ModeIndex].Height,
+            s_SampleDefaultModes[ModeIndex].VSync,
+            IDDCX_MONITOR_MODE_ORIGIN_DRIVER
+        ));
+    }
+
+    for (const auto& RegMode : QubesReadRegistryModes())
+    {
+        bool bDuplicate = false;
+        for (DWORD ModeIndex = 0; ModeIndex < ARRAYSIZE(s_SampleDefaultModes); ModeIndex++)
+        {
+            if (s_SampleDefaultModes[ModeIndex].Width == RegMode.Width &&
+                s_SampleDefaultModes[ModeIndex].Height == RegMode.Height &&
+                s_SampleDefaultModes[ModeIndex].VSync == QUBES_IDD_MODE_VSYNC)
+            {
+                bDuplicate = true;
+                break;
+            }
+        }
+        if (!bDuplicate)
+        {
+            MonitorModes.push_back(CreateIddCxMonitorMode(
+                RegMode.Width, RegMode.Height, QUBES_IDD_MODE_VSYNC, IDDCX_MONITOR_MODE_ORIGIN_DRIVER));
+        }
+    }
+
     if (pInArgs->DefaultMonitorModeBufferInputCount == 0)
     {
-        pOutArgs->DefaultMonitorModeBufferOutputCount = ARRAYSIZE(s_SampleDefaultModes); 
+        pOutArgs->DefaultMonitorModeBufferOutputCount = (UINT) MonitorModes.size();
     }
     else
     {
-        for (DWORD ModeIndex = 0; ModeIndex < ARRAYSIZE(s_SampleDefaultModes); ModeIndex++)
+        // Guard against the registry changing between the size call and the fill call.
+        UINT ModesToCopy = (UINT) MonitorModes.size();
+        if (ModesToCopy > pInArgs->DefaultMonitorModeBufferInputCount)
         {
-            pInArgs->pDefaultMonitorModes[ModeIndex] = CreateIddCxMonitorMode(
-                s_SampleDefaultModes[ModeIndex].Width,
-                s_SampleDefaultModes[ModeIndex].Height,
-                s_SampleDefaultModes[ModeIndex].VSync,
-                IDDCX_MONITOR_MODE_ORIGIN_DRIVER
-            );
+            ModesToCopy = pInArgs->DefaultMonitorModeBufferInputCount;
         }
+        copy(MonitorModes.begin(), MonitorModes.begin() + ModesToCopy, pInArgs->pDefaultMonitorModes);
 
-        pOutArgs->DefaultMonitorModeBufferOutputCount = ARRAYSIZE(s_SampleDefaultModes); 
+        pOutArgs->DefaultMonitorModeBufferOutputCount = ModesToCopy;
         pOutArgs->PreferredMonitorModeIdx = 0;
     }
 
@@ -781,6 +907,30 @@ NTSTATUS IddSampleMonitorQueryModes(IDDCX_MONITOR MonitorObject, const IDARG_IN_
     TargetModes.push_back(CreateIddCxTargetMode(1600,  900, 60));
     TargetModes.push_back(CreateIddCxTargetMode(1024,  768, 75));
     TargetModes.push_back(CreateIddCxTargetMode(1024,  768, 60));
+
+    // Qubes D4: append the registry-declared modes (at 60 Hz) to the target list too —
+    // the OS offers the intersection of monitor and target modes, so a registry mode is
+    // only reachable if it is in both. Dedup against the built-ins above.
+    const size_t BuiltInCount = TargetModes.size();
+    for (const auto& RegMode : QubesReadRegistryModes())
+    {
+        bool bDuplicate = false;
+        for (size_t ModeIndex = 0; ModeIndex < BuiltInCount; ModeIndex++)
+        {
+            const auto& Existing = TargetModes[ModeIndex].TargetVideoSignalInfo.targetVideoSignalInfo;
+            if (Existing.activeSize.cx == RegMode.Width &&
+                Existing.activeSize.cy == RegMode.Height &&
+                Existing.vSyncFreq.Numerator == QUBES_IDD_MODE_VSYNC)
+            {
+                bDuplicate = true;
+                break;
+            }
+        }
+        if (!bDuplicate)
+        {
+            TargetModes.push_back(CreateIddCxTargetMode(RegMode.Width, RegMode.Height, QUBES_IDD_MODE_VSYNC));
+        }
+    }
 
     pOutArgs->TargetModeBufferOutputCount = (UINT) TargetModes.size();
 
