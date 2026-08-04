@@ -1897,10 +1897,49 @@ floor drops from SM_CXMIN/SM_CYMIN (~136x39) to 4x4 — an 8 px strip survives i
 means rule 2 can never match them: the real strips carry **neither** `WS_EX_TRANSPARENT` nor
 `WS_EX_NOACTIVATE`. Only the class rule can.
 
-**Fix: `tools/chromerepro --mso`** (commit 1c94a62) creates four strips of the literal class
-`MSO_BORDEREFFECT_WINDOW_CLASS` with the measured styles and 8 px thickness — deterministic, and
+**Fix: `tools/chromerepro --mso`** (commits 1c94a62, then corrected) creates four strips of the
+literal class `MSO_BORDEREFFECT_WINDOW_CLASS` with the measured styles — deterministic, and
 independent of Office. The measurement harness now also fails loudly when the main window is not
 mapped, so a dead gui-daemon can no longer masquerade as "the fix worked".
+
+### The Office strip bug is a regression THIS FORK introduced (and instrument 3 was nearly void too)
+
+The first `--mso` used Office's true 8 px thickness. That would have produced a fourth worthless
+instrument, caught by reasoning before it produced a verdict and then confirmed on the guest:
+the stock control run reported `STRIPS_PRESENT=4, STRIPS_MAPPED=0, MAIN_MAPPED=1` — daemon alive,
+instrument working, and the strips still not mapped. **Stock rejects an 8 px strip on SIZE**, so
+both sides would have read zero for different reasons: a check that cannot fail.
+
+The mechanism, which matters well beyond the harness:
+
+- `ShouldAcceptWindow()` applies the `SM_CXMIN x SM_CYMIN` (~136x39) floor only to
+  NON-override-redirect windows. A caption-less `WS_POPUP` is classified override-redirect by
+  `IsPopup()`, and those face a 4 px floor instead.
+- That exemption is **fork-local**: agent `d6ab61c`, "Accept small override-redirect popups:
+  keytip badges died on the SM_CXMIN floor", added to rescue Win11 Alt-nav keytip badges.
+- Office's strips are 391x8 and 8x202 — under the old floor, over the new one.
+
+So: **on stock QWT, Office's shadow strips never reach the chrome rules at all; they die on
+size.** `d6ab61c` lowered the floor for popups and let them through as a side effect, and that
+is what produced the strip adoption, the synthesis flip-flop and ultimately the `msg 0x86
+without CREATE` gui-daemon kill. `aaa8c37` closes it.
+
+The fix stands. Its **description** must change: it repairs a regression introduced by this
+fork's own keytip-badge fix, not a long-standing upstream defect. Any upstream submission that
+presents it as the latter would be wrong, and `d6ab61c` should be submitted (or at least
+described) together with it, since alone it re-opens the hole.
+
+Consequence for testing: **stock QWT is the wrong control for a thin-strip test.** `--mso` now
+keeps a floor-clearing thickness (the class rule is size-blind, so this tests the rule
+faithfully) and `--mso-thin` preserves the realistic 8 px geometry for use against fork builds
+that contain `d6ab61c`.
+
+Harness bug found the same way, worth recording because it is generic: the A/B installed each
+side's binary by `Copy-Item -Force` over `gui-agent.exe` **while the agent was running**.
+Windows locks a running image, so the copy fails; with `-Force` and no error check the harness
+then measured the PREVIOUS build believing it was the new one. Caught by the hash readback
+(`COPIED=4B4C…` on the side that should have been `4DA9…`). Stop the service before copying,
+and always compare the installed hash to the manifest — CLAUDE.md's rule 3, earned again.
 
 ## gui-daemon died again — and it was self-inflicted, by agent restarts
 
