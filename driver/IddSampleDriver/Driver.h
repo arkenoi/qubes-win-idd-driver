@@ -13,6 +13,7 @@
 #include <wrl.h>
 
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include "Trace.h"
@@ -114,9 +115,18 @@ namespace Microsoft
             void AssignSwapChain(IDDCX_SWAPCHAIN SwapChain, LUID RenderAdapter, HANDLE NewFrameEvent);
             void UnassignSwapChain();
 
+            // D3 SPIKE ONLY (never merge): arm a one-shot timer thread that calls
+            // IddCxMonitorUpdateModes ~60 s after monitor arrival. See Driver.cpp.
+            void StartUpdateModesSpike();
+
         private:
             IDDCX_MONITOR m_Monitor;
             std::unique_ptr<SwapChainProcessor> m_ProcessingThread;
+
+            // D3 SPIKE ONLY: timer thread + early-exit event so device removal does not
+            // block for the full delay or leave a thread using a stale monitor handle.
+            Microsoft::WRL::Wrappers::Event m_SpikeExitEvent;
+            std::thread m_SpikeThread;
         } ;
     }
 }

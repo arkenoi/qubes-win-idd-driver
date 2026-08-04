@@ -28,12 +28,25 @@ static constexpr DWORD IDD_SAMPLE_MONITOR_COUNT = 1; // If monitor count > ARRAY
 static constexpr DWORD IDD_SAMPLE_EDID_MONITOR_COUNT = 0; // Connectors at index >= this are created EDID-less (modes come from EvtIddCxMonitorGetDefaultDescriptionModes). 0 = every monitor is EDID-less.
 
 // Default modes reported for edid-less monitors. The first mode is set as preferred
-static const struct IndirectSampleMonitor::SampleMonitorMode s_SampleDefaultModes[] = 
+static const struct IndirectSampleMonitor::SampleMonitorMode s_SampleDefaultModes[] =
 {
     { 1920, 1080, 60 },
     { 1600,  900, 60 },
     { 1024,  768, 75 },
+    // D3 SPIKE: monitor-mode-only entry. Deliberately ABSENT from the target list at
+    // arrival (intersection excludes it -> not settable), then added to the target list
+    // at runtime via IddCxMonitorUpdateModes. If the OS re-intersects, it becomes
+    // settable. Built-in control: 1600x900@60 is in BOTH lists from arrival and must be
+    // settable the whole time.
+    { 1600, 1000, 60 },
 };
+
+// D3 SPIKE: width/height of the runtime-published probe mode, and the delay before
+// IddCxMonitorUpdateModes is fired from the spike thread.
+static constexpr DWORD IDD_SPIKE_MODE_WIDTH = 1600;
+static constexpr DWORD IDD_SPIKE_MODE_HEIGHT = 1000;
+static constexpr DWORD IDD_SPIKE_MODE_VSYNC = 60;
+static constexpr DWORD IDD_SPIKE_DELAY_MS = 60000;
 
 // FOR SAMPLE PURPOSES ONLY, Static info about monitors that will be reported to OS
 static const struct IndirectSampleMonitor s_SampleMonitors[] =
@@ -119,6 +132,9 @@ static IDDCX_TARGET_MODE CreateIddCxTargetMode(DWORD Width, DWORD Height, DWORD 
 
     return Mode;
 }
+
+// D3 SPIKE: defined with the DDI callbacks below; used by the spike thread too.
+static vector<IDDCX_TARGET_MODE> BuildSampleTargetModes(bool bIncludeSpikeMode);
 
 #pragma endregion
 
@@ -597,17 +613,74 @@ void IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
         // Tell the OS that the monitor has been plugged in
         IDARG_OUT_MONITORARRIVAL ArrivalOut;
         Status = IddCxMonitorArrival(MonitorCreateOut.MonitorObject, &ArrivalOut);
+
+        // D3 SPIKE ONLY: arrival has completed successfully; arm the one-shot
+        // IddCxMonitorUpdateModes timer thread.
+        if (NT_SUCCESS(Status))
+        {
+            pMonitorContextWrapper->pContext->StartUpdateModesSpike();
+        }
     }
 }
 
 IndirectMonitorContext::IndirectMonitorContext(_In_ IDDCX_MONITOR Monitor) :
     m_Monitor(Monitor)
 {
+    // D3 SPIKE: manual-reset event used to cancel the pending spike thread on teardown.
+    m_SpikeExitEvent.Attach(CreateEvent(nullptr, TRUE, FALSE, nullptr));
 }
 
 IndirectMonitorContext::~IndirectMonitorContext()
 {
+    // D3 SPIKE: cancel the timer thread (if still waiting) and join it before the
+    // monitor handle it captured goes away.
+    if (m_SpikeExitEvent.IsValid())
+    {
+        SetEvent(m_SpikeExitEvent.Get());
+    }
+    if (m_SpikeThread.joinable())
+    {
+        m_SpikeThread.join();
+    }
+
     m_ProcessingThread.reset();
+}
+
+// D3 SPIKE ONLY — NEVER MERGE.
+// Purpose (PLAN-trackb-t2-modes.md §4 D3): settle whether the OS re-reads/re-intersects
+// modes after IddCxMonitorUpdateModes at runtime. Called from FinishInit strictly AFTER
+// IddCxMonitorArrival has returned success, so the update can never race arrival.
+// ~IDD_SPIKE_DELAY_MS later, a plain std::thread publishes the FULL target list plus
+// 1600x1000@60 (present in the monitor default-description modes from arrival, absent
+// from the target list until now). Observable from the session side:
+//   before timer: ChangeDisplaySettingsEx(CDS_TEST) for 1600x1000 must FAIL;
+//   after timer:  if the OS re-intersects, 1600x1000 becomes settable;
+//   control:      1600x900@60 (in BOTH lists at arrival) must be settable throughout.
+void IndirectMonitorContext::StartUpdateModesSpike()
+{
+    IDDCX_MONITOR Monitor = m_Monitor;
+    HANDLE ExitEvent = m_SpikeExitEvent.Get();
+
+    m_SpikeThread = std::thread([Monitor, ExitEvent]()
+    {
+        // Wait out the delay; wake early (and skip the update) on teardown.
+        if (WaitForSingleObject(ExitEvent, IDD_SPIKE_DELAY_MS) != WAIT_TIMEOUT)
+        {
+            return;
+        }
+
+        vector<IDDCX_TARGET_MODE> TargetModes = BuildSampleTargetModes(true);
+
+        IDARG_IN_UPDATEMODES UpdateModes = {};
+        UpdateModes.Reason = IDDCX_UPDATE_REASON_OTHER;
+        UpdateModes.TargetModeCount = (UINT) TargetModes.size();
+        UpdateModes.pTargetModes = TargetModes.data();
+
+        // Result deliberately unchecked beyond capture into a local: the observable for
+        // this spike is session-side (EnumDisplaySettingsEx/CDS_TEST), not the NTSTATUS.
+        NTSTATUS Status = IddCxMonitorUpdateModes(Monitor, &UpdateModes);
+        UNREFERENCED_PARAMETER(Status);
+    });
 }
 
 void IndirectMonitorContext::AssignSwapChain(IDDCX_SWAPCHAIN SwapChain, LUID RenderAdapter, HANDLE NewFrameEvent)
@@ -760,16 +833,15 @@ NTSTATUS IddSampleMonitorGetDefaultModes(IDDCX_MONITOR MonitorObject, const IDAR
     return STATUS_SUCCESS;
 }
 
-_Use_decl_annotations_
-NTSTATUS IddSampleMonitorQueryModes(IDDCX_MONITOR MonitorObject, const IDARG_IN_QUERYTARGETMODES* pInArgs, IDARG_OUT_QUERYTARGETMODES* pOutArgs)
+// Create a set of modes supported for frame processing and scan-out. These are typically not based on the
+// monitor's descriptor and instead are based on the static processing capability of the device. The OS will
+// report the available set of modes for a given output as the intersection of monitor modes with target modes.
+// D3 SPIKE: shared between EvtIddCxMonitorQueryTargetModes (bIncludeSpikeMode = false: the
+// spike mode is excluded at arrival) and the runtime IddCxMonitorUpdateModes call
+// (bIncludeSpikeMode = true: full list plus the spike mode).
+static vector<IDDCX_TARGET_MODE> BuildSampleTargetModes(bool bIncludeSpikeMode)
 {
-    UNREFERENCED_PARAMETER(MonitorObject);
-
     vector<IDDCX_TARGET_MODE> TargetModes;
-
-    // Create a set of modes supported for frame processing and scan-out. These are typically not based on the
-    // monitor's descriptor and instead are based on the static processing capability of the device. The OS will
-    // report the available set of modes for a given output as the intersection of monitor modes with target modes.
 
     TargetModes.push_back(CreateIddCxTargetMode(3840, 2160, 60));
     TargetModes.push_back(CreateIddCxTargetMode(2560, 1440, 144));
@@ -781,6 +853,21 @@ NTSTATUS IddSampleMonitorQueryModes(IDDCX_MONITOR MonitorObject, const IDARG_IN_
     TargetModes.push_back(CreateIddCxTargetMode(1600,  900, 60));
     TargetModes.push_back(CreateIddCxTargetMode(1024,  768, 75));
     TargetModes.push_back(CreateIddCxTargetMode(1024,  768, 60));
+
+    if (bIncludeSpikeMode)
+    {
+        TargetModes.push_back(CreateIddCxTargetMode(IDD_SPIKE_MODE_WIDTH, IDD_SPIKE_MODE_HEIGHT, IDD_SPIKE_MODE_VSYNC));
+    }
+
+    return TargetModes;
+}
+
+_Use_decl_annotations_
+NTSTATUS IddSampleMonitorQueryModes(IDDCX_MONITOR MonitorObject, const IDARG_IN_QUERYTARGETMODES* pInArgs, IDARG_OUT_QUERYTARGETMODES* pOutArgs)
+{
+    UNREFERENCED_PARAMETER(MonitorObject);
+
+    vector<IDDCX_TARGET_MODE> TargetModes = BuildSampleTargetModes(false);
 
     pOutArgs->TargetModeBufferOutputCount = (UINT) TargetModes.size();
 
