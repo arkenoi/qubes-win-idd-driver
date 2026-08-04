@@ -40,14 +40,24 @@
 //   0x10348 "MSO_BORDEREFFECT_WINDOW_CLASS" "" (391x8)  WS_POPUP WS_VISIBLE WS_CLIPSIBLINGS
 //           WS_CLIPCHILDREN | WS_EX_LAYERED WS_EX_MAKEVISIBLEWHENUNGHOSTED WS_EX_TOOLWINDOW
 //
-// Two properties make this worth reproducing rather than reusing CLASS_SHADOW above:
-//   - the real strips carry NEITHER WS_EX_TRANSPARENT NOR WS_EX_NOACTIVATE, so the style
-//     heuristic (rule 2) does not and cannot match them; only the class rule does;
-//   - they are 8 px thick, far under SM_CXMIN/SM_CYMIN. They survive the size floor only
-//     because no-caption WS_POPUP makes IsPopup() classify them override-redirect, which
-//     lowers the floor to 4 px. A thicker stand-in would pass for a different reason.
+// The reason to reproduce these rather than reuse CLASS_SHADOW: the real strips carry
+// NEITHER WS_EX_TRANSPARENT NOR WS_EX_NOACTIVATE, so the style heuristic (rule 2) does not
+// and cannot match them. Only the class rule can.
+//
+// THICKNESS - the subtle part, and the reason --mso-thin is not the default:
+//   The real strips are 8 px, far under the SM_CXMIN x SM_CYMIN floor. They reach the class
+//   rule at all only because a caption-less WS_POPUP is classified override-redirect, which
+//   lowers the floor to 4 px - and that exemption is fork-local, added in agent d6ab61c
+//   ("Accept small override-redirect popups: keytip badges died on the SM_CXMIN floor").
+//   Stock QWT applies the full floor to every window and drops an 8 px strip on SIZE.
+//   So against a stock control, 8 px strips are rejected by BOTH sides for different
+//   reasons, the comparison is all zeros, and it proves nothing.
+//   Strips therefore clear the floor by default, which the class rule does not care about
+//   (it keys on class alone), so the control is able to fail and the rule is what is being
+//   measured. --mso-thin reproduces the true 8 px geometry, which is only meaningful
+//   against a FORK build that has d6ab61c.
 #define CLASS_MSO_STRIP L"MSO_BORDEREFFECT_WINDOW_CLASS"
-#define MSO_THICKNESS 8
+#define MSO_THIN_THICKNESS 8
 
 #define SHADOW_COUNT 4
 
@@ -74,6 +84,7 @@ static BOOL g_WantPopup;
 static BOOL g_WantGhost;
 static BOOL g_WantControl;
 static BOOL g_WantMso;
+static BOOL g_WantMsoThin;
 
 static WCHAR g_LogPath[MAX_PATH];
 
@@ -388,7 +399,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
     g_WantPopup = (wcsstr(args, L"--popup") != NULL);
     g_WantGhost = (wcsstr(args, L"--ghost") != NULL);
     g_WantControl = (wcsstr(args, L"--control") != NULL);
-    g_WantMso = (wcsstr(args, L"--mso") != NULL);
+    g_WantMsoThin = (wcsstr(args, L"--mso-thin") != NULL);
+    g_WantMso = g_WantMsoThin || (wcsstr(args, L"--mso") != NULL);
 
     if (!GetTempPathW(ARRAYSIZE(g_LogPath), g_LogPath))
         StringCchCopyW(g_LogPath, ARRAYSIZE(g_LogPath), L".\\");
@@ -408,10 +420,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
         minThickness = GetSystemMetrics(SM_CYMIN);
     g_Thickness = minThickness + 24;
 
-    // --mso reproduces the real 8 px Office strips instead, which clear the size floor via
-    // the override-redirect path rather than by being oversized (see CLASS_MSO_STRIP).
-    if (g_WantMso)
-        g_Thickness = MSO_THICKNESS;
+    // --mso keeps the floor-clearing thickness so a stock control can still map the strips;
+    // only --mso-thin drops to Office's true 8 px (see CLASS_MSO_STRIP).
+    if (g_WantMsoThin)
+        g_Thickness = MSO_THIN_THICKNESS;
 
     if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0))
     {
