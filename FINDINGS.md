@@ -2708,3 +2708,51 @@ visible instead of inferred.
    **wrong**: xenagent proves delivery works, and the guest was already dead.
 3. Current: the guest hangs abruptly with no bugcheck, before any shutdown request, on a workload
    dominated by force-killed agents that leak large grant allocations. Hypothesis, testable.
+
+# 2026-08-04 (cont) — goal set: T2 is now THE goal; graceful-stop premises verified in source
+
+**User set the primary goal: arbitrary guest resolutions in non-seamless mode, synced to the
+dom0 window size and work area.** That is PLAN-trackb-t2-modes.md end to end. The deliberate
+hang-reproduction experiment (force-kill vs graceful A/B) is DEFERRED — VM time belongs to T2.
+Graceful stop is adopted as practice anyway, since it is justified independently of the
+hypothesis test. Three premises were verified in source first (3 parallel readers, all claims
+file:line-cited; full detail in the workflow transcript):
+
+## 1. Watchdog stop semantics (watchdog/watchdog.c)
+- `Stop-Service QubesGuiWatchdog` does NOT touch gui-agent.exe: the stop handler (`:264-281`)
+  only reports SERVICE_STOPPED. No TerminateProcess, no job object; child handles are closed
+  right after CreateProcessAsUser (`:137-138`).
+- Respawn = 1 s poll (`:153`, Sleep(1000) + WTSEnumerateProcesses name-PREFIX match `:68`),
+  no backoff, no give-up counter. 20+ stop/respawn cycles in one boot trip nothing.
+- Consequence for installs: stop watchdog first (agent keeps running), THEN signal
+  `Global\QGA_SHUTDOWN`, wait exit, copy, verify hash. `install-agent3.ps1` implements this.
+
+## 2. The graceful-exit premise is only HALF true — graceful stop still leaks per-window grants
+Exit order on QGA_SHUTDOWN (main.c:3541→3768-3781): PwShutdown → libvchan_close →
+StopFrameProcessing → CaptureTeardown.
+- Desktop framebuffer grant: revoke IS attempted (capture.c:430) — but the vchan is already
+  closed, no unmap/destroy handshake reached the daemon (send.c gates on
+  g_VchanClientConnected), so if the daemon still maps the pages the revoke fails and is
+  merely logged (the in-code warning at main.c:3742-3743 admits this).
+- Per-window buffers: **there is NO detach-all loop on the exit path.** The only such loop is
+  ResetWatch (main.c:1797, called from SetSeamlessMode only). PwShutdown (perwindow.c:122)
+  drains just the already-queued revokes, 3 tries / 300 ms. Every still-attached window's
+  grant (~4838 pages each at 3440x1440) leaks even on a graceful stop, silently — not even
+  counted by the "leaking un-revoked grants" warning.
+- So the hang hypothesis's clean dichotomy (force-kill leaks, graceful revokes) is WRONG as
+  stated. Graceful is better (framebuffer revoke attempted, vchan closed, daemon survives)
+  but not leak-free. A leak-free exit needs the ack-gated revoke handshake — same design
+  space as A6 (plan §6.2), Phase 3, design note + user approval first.
+- Also found on the way: `VchanSendBuffer` spins forever (Sleep(1), no is_open check,
+  qubes-windows-utils vchan-common.c:100) when the daemon dies with a full write ring; the
+  WGC damage callback holds g_VchanCriticalSection while sending (send.c:634), survives
+  WcShutdown's 5 s bounded join (wincapture.cpp:326), and the main thread then blocks forever
+  at main.c:3770. I.e. a graceful stop can STALL INDEFINITELY if the daemon died dirty at the
+  wrong moment. Harnesses must keep a bounded wait + loud fallback.
+
+## 3. Grant accounting from logs
+- Per-window: fully countable at LogLevel=3 — `PwAttachWindow: 0x…: per-window buffer WxH
+  (N pages) attached` / `PwDetachWindow: … detached` (perwindow.c:348/358).
+- Screen framebuffer: initial grant logs only at DEBUG (`GetFrame: 1st frame, sharing
+  framebuffer`, capture.c:524) and successful revokes are silent at every level → full screen
+  accounting needs LogLevel=4. Recovery re-grants do log at INFO (main.c:3570).
