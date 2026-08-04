@@ -1941,6 +1941,87 @@ then measured the PREVIOUS build believing it was the new one. Caught by the has
 (`COPIED=4B4C…` on the side that should have been `4DA9…`). Stop the service before copying,
 and always compare the installed hash to the manifest — CLAUDE.md's rule 3, earned again.
 
+Two more harness defects, both caught by guards rather than by results, both worth knowing:
+- **Multi-line PowerShell does not survive the `qtest ps` wrapper.** It arrives as literal text;
+  all six sides "failed to install" without installing anything. Keep guest logic in pushed
+  `.ps1` files, never inline blocks.
+- **`grep -oE 'INSTALL=(OK|FAIL)[^\r]*'` truncates at the first letter `r`.** In a POSIX bracket
+  expression `[^\r]` is "not backslash, not r" — there is no `\r` escape. `INSTALL=OK which=orig`
+  became `INSTALL=OK which=o` and every side was rejected. Use `tr -d '\r'` and match on line.
+
+## RESULT (T1, aaa8c37): VALIDATED — control failed as required
+
+Method: one **cold boot per side** (in-place restarts are unusable, see above), binary installed
+with the agent stopped and the installed hash compared to the CI manifest before every run,
+`chromerepro --mso` for the scene, metric = `SendWindowMap` announcements for the strip HWNDs
+taken from the same `dump-windows` snapshot. Three rounds per side, interleaved.
+
+| round | build | strips present | **strips announced to dom0** | main announced | total |
+|---|---|---|---|---|---|
+| r1 | stock `4B4CE2B1…` | 4 | **4** | 1 | 7 |
+| r1 | fix `4DA9FE96…`   | 4 | **0** | 1 | 3 |
+| r2 | stock              | 4 | **4** | 1 | 7 |
+| r2 | fix                | 4 | **0** | 1 | 3 |
+| r3 | stock              | 4 | **4** | 1 | 7 |
+| r3 | fix                | 4 | **0** | 1 | 3 |
+
+Unanimous and clean: 4/4 vs 0/4, three times each, and the difference in `total` is exactly the
+four strips. **The check has been seen to FAIL on a build carrying the defect**, which is what
+makes the PASS mean anything (CLAUDE.md evidence rule 5). `MAIN_MAPPED=1` on every run proves
+gui-daemon was connected and the instrument live, so a zero is a real rejection and not silence
+from a dead daemon. Every run was also a cold boot, so the boot path is covered.
+
+### Scope of this result — read before quoting it
+
+- It validates **`aaa8c37` only** (reject `MSO_BORDEREFFECT_WINDOW_CLASS`).
+- **`66fc670`** (never re-home an owned popup onto an untracked owner) and **`6b5b298`** (never
+  capture while the secure desktop is up) are **still unvalidated**. They were present in the
+  binary under test but nothing here exercised either path.
+- It is measured against `chromerepro --mso`, i.e. Office's class and ex-styles at a
+  floor-clearing thickness — not against real Office. Given the mechanism is a pure class-name
+  comparison, and real strips were separately observed to be admitted on a fork build, this is
+  strong but not identical to an end-to-end Office test.
+
+### `qtest shot` cannot see layered windows — first instrument was doubly worthless
+
+An attempt to add pixel evidence failed and is recorded rather than dropped: with the **control**
+build announcing all four strips, `qtest shot` still returned exactly **one** PNG, byte-identical
+(md5 `36efd5a5…`) to the fixed build's. `local.WinScreenshot` uses `import -window <id>`, which
+silently fails on `WS_EX_LAYERED` windows — the chromerepro README already warned of this and I
+re-derived it the expensive way.
+
+So counting PNGs, today's first instrument, was not merely noisy: **it is structurally blind to
+exactly the windows this bug creates**, and would report a PASS against a build with the defect
+fully present. No pixel-level before/after is obtainable from this dev qube; the daemon-side
+"five bordered fragments vs one" can only be confirmed by a human looking at dom0's screen.
+The agent's announcement log is the authoritative instrument available here.
+
+## One reboot in ~9 wedged in `Transient` (recorded, not diagnosed)
+
+The last shutdown/start cycle of the session left the qube in `Transient` for >5 minutes with no
+qrexec. `qtest kill` + `qtest start` recovered it cleanly and it has been healthy since. Roughly
+nine full reboots were driven today and exactly one wedged, so this is a low-rate event and no
+cause is claimed — do not read it as related to the build under test, which was also installed
+across the seven reboots that worked. Recorded because **T6 requires a Windows qube that
+survives its own reboots**, and a ~1-in-9 wedge rate on a quiet, offline guest is worth watching.
+
+Watch for it, and if it recurs check whether it correlates with the shutdown that follows an
+agent binary swap (the only unusual thing these cycles do).
+
+## Guest state at end of session
+
+| thing | value |
+|---|---|
+| `netvm` | **detached** (`''`) — still a measurement control, NOT the end state T6 wants |
+| `gui-agent.exe` | `4DA9FE96…` — the **validated** CI build of agent `6b5b298`; `.orig` (`4B4CE2B1…`) intact |
+| gui-daemon | connected and healthy after a cold boot (`SendWindowMap` x2) |
+| services | QdbDaemon / QrexecAgent / QubesGuiWatchdog all Running |
+| `PerWindowCapture` | 0 |
+| `LogLevel` | **5** in the `…\Qubes Tools\gui-agent` subkey — verbose; reset to 3 before timing work |
+
+Deliberately left with the fix installed rather than reverted to stock: the remaining T1 work
+(`66fc670`, `6b5b298`) tests that same binary. Reverting means `install-agent.ps1 -Which orig`.
+
 ## gui-daemon died again — and it was self-inflicted, by agent restarts
 
 After ~9 gui-agent restarts in 20 minutes, the agent parked at `Awaiting for a vchan client`,
