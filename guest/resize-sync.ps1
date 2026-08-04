@@ -49,9 +49,25 @@ function SyncTo([string]$size) {
         if ($t -eq 'DISP_CHANGE_SUCCESSFUL') { $ok = $true; break }
     }
     if (-not $ok) { Log "SYNC fail=mode_never_offered target=$size"; return $false }
-    $r = (& $modeprobe --apply $size 2>$null | ConvertFrom-Json).result
-    Log ("SYNC applied disp=" + $r.disp_change_name + " readback=" + $r.readback.w + "x" + $r.readback.h + " match=" + $r.match)
-    return [bool]$r.match
+    # Apply, then CONVERGE: while the replug's capture outage drains, gui-daemon can echo its
+    # stale window size back as MSG_CONFIGURE and the agent applies it, overriding us
+    # (measured 2026-08-05, stress cycle 9). Re-apply until the readback holds the target
+    # across two spaced checks. Retries are reported — they are a measurement, not noise.
+    $retries = 0
+    for ($a = 0; $a -lt 4; $a++) {
+        $r = (& $modeprobe --apply $size 2>$null | ConvertFrom-Json).result
+        Log ("SYNC apply#$a disp=" + $r.disp_change_name + " readback=" + $r.readback.w + "x" + $r.readback.h)
+        if (-not $r.match) { $retries++; Start-Sleep -Seconds 2; continue }
+        Start-Sleep -Milliseconds 1800
+        if ((CurrentRes) -eq $size) {
+            Start-Sleep -Milliseconds 1800
+            if ((CurrentRes) -eq $size) { Log "SYNC stable target=$size retries=$retries"; return $true }
+        }
+        $retries++
+        Log "SYNC overridden (stale daemon echo), retrying target=$size"
+    }
+    Log "SYNC fail=never_stabilized target=$size retries=$retries"
+    return $false
 }
 
 function LatestLog { Get-ChildItem $logdir -Filter 'gui-agent-*.log' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
