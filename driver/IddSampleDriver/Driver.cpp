@@ -558,6 +558,7 @@ void IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
 
     MonitorInfo.MonitorDescription.Size = sizeof(MonitorInfo.MonitorDescription);
     MonitorInfo.MonitorDescription.Type = IDDCX_MONITOR_DESCRIPTION_TYPE_EDID;
+#pragma warning(suppress: 4296) // '>=' is knowingly always true while IDD_SAMPLE_EDID_MONITOR_COUNT == 0
     if (ConnectorIndex >= IDD_SAMPLE_EDID_MONITOR_COUNT)
     {
         MonitorInfo.MonitorDescription.DataSize = 0;
