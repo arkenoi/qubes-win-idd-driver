@@ -46,7 +46,12 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "advapi32.lib")
 
-#define DDAPROBE_VERSION "1.0"
+// *** INVERTED SCRATCH BUILD (branch scratch/ddaprobe-inverted, experiment 0b) ***
+// This binary deliberately reports the OPPOSITE of DXGI's DesktopImageInSystemMemory
+// at the two points where the flag enters the data model, to prove the FALSE reporting
+// path (JSON, summary, agent_capture_would_work, exit code) can actually fire.
+// NEVER deploy as the real instrument. NEVER merge this branch.
+#define DDAPROBE_VERSION "1.0-INVERTED"
 
 // ---------------------------------------------------------------- small helpers
 
@@ -593,7 +598,8 @@ static void RunCaptureLoop(ProbeResult& r, const Options& opt,
                     r.mode_format = nd.ModeDesc.Format;
                     r.scanline = nd.ModeDesc.ScanlineOrdering;
                     r.dupl_rotation = nd.Rotation;
-                    r.desktop_image_in_system_memory = (nd.DesktopImageInSystemMemory != FALSE);
+                    // INVERTED (experiment 0b): real code is (nd.DesktopImageInSystemMemory != FALSE)
+                    r.desktop_image_in_system_memory = (nd.DesktopImageInSystemMemory == FALSE);
                     if (!r.desktop_image_in_system_memory)
                         r.sysmem_ever_false = true;
                 }
@@ -1092,8 +1098,9 @@ int main(int argc, char** argv)
                                 DXGI_OUTDUPL_DESC ddesc;
                                 ZeroMemory(&ddesc, sizeof(ddesc));
                                 dupl->GetDesc(&ddesc);
+                                // INVERTED (experiment 0b): real code is (... != FALSE)
                                 r.desktop_image_in_system_memory =
-                                    (ddesc.DesktopImageInSystemMemory != FALSE);
+                                    (ddesc.DesktopImageInSystemMemory == FALSE);
                                 if (!r.desktop_image_in_system_memory)
                                     r.sysmem_ever_false = true;
                                 r.mode_width = ddesc.ModeDesc.Width;
@@ -1194,7 +1201,7 @@ int main(int argc, char** argv)
 
     // ---- JSON
     std::string j = "{";
-    j += "\"tool\":\"ddaprobe\",\"version\":\"" DDAPROBE_VERSION "\"";
+    j += "\"tool\":\"ddaprobe-INVERTED\",\"inverted\":true,\"version\":\"" DDAPROBE_VERSION "\"";
     j += ",\"host\":" + JStr(env.host);
     j += ",\"user\":" + JStr(env.user);
     j += ",\"session_id\":" + Fmt("%lu", (unsigned long)env.session_id);
