@@ -2778,3 +2778,40 @@ StopFrameProcessing → CaptureTeardown.
 - **dom0 resize harness written, NOT installed** (needs the user): `dom0/10-install-resize-service.sh`
   installs `local.WinResize+WxH|query` (resize-only, isolation pattern of WinScreenshot);
   `tools/qtest resize` added. Verified refused today (no policy) — fails loud, not silent.
+
+# 2026-08-04 (cont 3) — exp 1 PASS (pitch tight), A1 validated both ways, and T2's guest->dom0 half already works
+
+- **Exp 0b inverted-ddaprobe: VALIDATED.** Scratch build `56BB76C2` (branch
+  `scratch/ddaprobe-inverted`, never merge) run on the real guest DXGI: JSON reports
+  `tool=ddaprobe-INVERTED, inverted=true`, flag FALSE, `ever_false` true,
+  `agent_capture_would_work` false. The FALSE reporting path is now proven against real DXGI.
+  **Caveat found doing it:** ddaprobe's process EXIT CODE never consumed the sysmem flag —
+  even the real instrument exits 0 whenever duplication succeeds. Harnesses must judge the
+  JSON summary, never the exit code. (Plan §2.4's "exit code non-zero" was wrong as written.)
+- **Exp 1 (pitch at 1400x1050): PASS — pitch 5600 == 1400*4, TIGHT** at a 32-but-not-64-byte
+  aligned width; flag TRUE and never flipped across the mode change. Partial by design: does
+  not clear 8-byte-aligned widths (2566). `pitch1400.json` on guest; modeprobe applied the
+  mode dynamically (readback-verified, no registry persistence).
+- **A0 modeprobe: landed + acceptance PASS** (merge f0c1252, CI 30941736145, exe `630DB029`,
+  hash-verified on guest): 29 BDA modes, includes 1920x1080 + 1400x1050, excludes 1600x1000;
+  `--test 1600x1000` → DISP_CHANGE_BADMODE, `--test 1920x1080` → DISP_CHANGE_SUCCESSFUL.
+- **A1 snap logging: landed + VALIDATED both directions** (agent `5b7ad97`, exe `A47E0382`,
+  merge 42ef808, installed on guest via graceful stop):
+  - snap side: cold boot with cached 1600x1000 → `RESREQ 1600x1000 src=lastapplied`,
+    `RESSNAP 1680x1050 SNAPPED`, `RESAPPLIED 1680x1050`; external witness modeprobe
+    ENUM_CURRENT_SETTINGS read 1680x1050. (So the IoU snap of 1600x1000 is 1680x1050, not
+    1920x1080 as the plan guessed — the plan's A1 example was wrong, the mechanism right.)
+  - control side: cold boot with cached 3440x1440 (exact match) → `RESSNAP 3440x1440` with
+    NO SNAPPED marker. The instrument can distinguish.
+- **First graceful install worked:** `install-agent3.ps1` reported `stop=graceful`
+  (watchdog stopped → QGA_SHUTDOWN → exit within window → copy → hash verified).
+- **THE DAY'S BIG UNPLANNED RESULT: T2's guest→dom0 half already works in non-seamless mode.**
+  Applying 1400x1050 externally (modeprobe) on the HEAD fork build produced, per the agent
+  log: geometry-changed ACCESS_LOST → reinit → `ResolutionChangeThread: resolution change:
+  1400x1050` → duplication recreated in place, windows kept → framebuffer re-granted →
+  MSG_WINDOW_DUMP re-sent → **dom0's window resized to exactly 1400x1050 with a live
+  desktop** (decoded screenshot). The fork's recovery fixes carry a mode change end-to-end.
+  Remaining for T2: the dom0→guest request path (exists but snaps to the 29-mode list) and
+  arbitrary sizes (the IDD). Not proven: whether window 0 avoided a destroy/create cycle
+  (A6's criterion) — only that the outcome converged.
+- Guest left at: 3440x1440, non-seamless, A1 agent `A47E0382` running, netvm detached.
