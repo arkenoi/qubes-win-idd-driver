@@ -102,16 +102,23 @@ user review before code), and worth an upstream issue on its own.
 
 ---
 
-## 5. T2 is blocked on the IddCx driver — settled, stop re-deriving it
+## 5. T2 becomes a Track B deliverable — the mode list has to be OURS
 
-The adapter offers a **fixed list of 29 modes** and **1600x1000 is not in it**. Confirmed by
-the agent's own `InitVideoModes()` (at `LogLevel=5`) and independently by
+The **stock Basic Display Adapter** exposes a fixed list of 29 modes and **1600x1000 is not in
+it**. Confirmed by the agent's own `InitVideoModes()` (at `LogLevel=5`) and independently by
 `ChangeDisplaySettings(CDS_TEST)`: 1600x1000 / 1234x777 / 2566x1022 → `DISP_CHANGE_BADMODE`,
 1920x1080 → success.
 
-**The trap:** `SelectSupportedMode()` does not fail on an unsupported request — it silently
-snaps to the nearest entry. Implementing T2 as written would have *looked* like it worked
-while quietly giving a different resolution. T2 is therefore a Track B deliverable.
+**Do not read this as "T2 is blocked."** (An earlier draft did, and the user corrected it.)
+The adapter is ours to choose — replacing it is the entire point of Track B, and declaring the
+mode list, including arbitrary modes added on demand, is an IddCx driver's core capability.
+The measurement establishes only that 1600x1000 cannot come from the *stock* adapter, so it
+must come from **our** driver. It is the strongest concrete argument yet for building the IDD:
+Phase 2B-resize needs sizes like 2566x1022 that no fixed list will ever contain.
+
+**The trap to remember:** `SelectSupportedMode()` does not fail on an unsupported request — it
+silently snaps to the nearest entry, so a naive "default to 1600x1000" would look like it
+worked while quietly giving something else.
 
 `LogLevel` note: the value gui-agent reads is in the **`…\Qubes Tools\gui-agent` subkey**, not
 the parent key. Setting the parent does nothing.
