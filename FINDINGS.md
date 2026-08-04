@@ -2570,3 +2570,66 @@ framing stays recorded for whenever it is).
 deliverable and sitting on them helps nobody. Currently qualifying: the two gui-daemon defects in
 `DESIGN-gui-daemon-restart-survival.md` §3 (the write-path EOF bypassing `vchan_at_eof`, and the
 `restart_guid` use-after-free). Both still need the user to approve the exact text.
+
+---
+
+# 2026-08-04 (close) — `6b5b298` REVERTED: measured, no effect
+
+The user's rule was "if it does nothing, let's revert" — so the "if" was measured rather than
+assumed, because the review's claim that its mechanism was impossible was itself unverified and
+there WAS a concrete mechanism it might have prevented.
+
+## The experiment
+
+Control = `6b5b298` reverted on top of `a4f6961` (`768CA58C`), i.e. a **single variable** — unlike
+`98eed30`, which also lacks four other fixes. Test = `F06C0979`. `PerWindowCapture` on (its
+default). Scene: a console window scrolling text forever, so its per-window channel produces
+continuous damage — a static window emits none even when perfectly healthy, which would have made
+"no damage" unreadable. Trigger: `CreateDesktop` + `SwitchDesktop` away for 8 s (more than the
+five capture attempts needed to trip `DEAD_AFTER_FAILURES`) and back.
+
+| build | damage before | damage after | channel |
+|---|---|---|---|
+| guard REVERTED `768CA58C` | 136 / 12 s | **83 / 12 s** | alive |
+| guard PRESENT `F06C0979` | 176 / 12 s | **118 / 12 s** | alive |
+
+**Identical behaviour.** The hypothesised harm — `AttachThreadToInputDesktop()` following onto a
+non-`Default` desktop, captures failing five times, `DEAD_AFTER_FAILURES` marking the channel
+dead forever — **did not occur without the guard**.
+
+Combined with the rest of the case against it, that is enough to revert:
+- its stated justification (guest stuck at "Welcome", PrintWindow stalling LogonUI from SYSTEM)
+  was **already retracted** — FINDINGS 2026-08-03 shows that hang was Windows Update;
+- it logs **nothing** on either edge of its idle branch, so in production it can never be shown
+  to have acted — unfalsifiable by construction, which CLAUDE.md's instrument rule forbids.
+
+Reverted in agent `8629a9c`.
+
+## The limitation, stated not buried
+
+**A scratch desktop is not Winlogon's secure desktop.** The real lock case is NOT measured, and
+cannot be with the tools available: unlocking needs an interactive password we cannot supply, so
+the state *after* a real lock is unobservable, and measuring only *during* the lock does not
+discriminate (both builds are quiet then, for different reasons). So this result says "no effect
+under the only desktop transition we can raise and return from", not "no effect ever".
+
+If that path is ever shown to matter, reinstate the commit **with logging on both edges** so the
+next person can actually test it — the absence of that logging is most of why this one cost so
+much to adjudicate.
+
+## Two more instrument failures caught by guards (not by luck)
+
+1. **`qvm-kill` rolled back an install.** The guest hung, I killed it, and the binary on disk
+   reverted from `768CA58C` to `F06C0979` — the verified install did not survive, because an
+   unclean kill loses unflushed writes. The probe's hash gate caught it and reported VOID; without
+   it the entire control run would have measured the *fixed* binary while believing it was the
+   control. **Always re-verify the installed hash AFTER any unclean recovery, not just after the
+   install.**
+2. **The metric was invisible at the shipped log level.** `SendWindowDamageEvent` logs at
+   VERBOSE, and I had reset `LogLevel` to 3 at handoff, so the first run read `damage_before=0`
+   and would have been reported as "channel dead" had the gate not required a non-zero baseline
+   before proceeding.
+
+Both were caught because the checks were written to fail loudly on missing preconditions. That is
+now three separate occasions today where a precondition gate turned a silent wrong answer into a
+visible VOID.
