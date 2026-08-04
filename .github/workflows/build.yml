@@ -61,6 +61,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "chromerepro msbuild failed" }
           Get-ChildItem tools\chromerepro\x64\Release\chromerepro.exe
 
+      - name: Build modeprobe
+        shell: pwsh
+        run: |
+          # tools/modeprobe: display-mode witness (PLAN-trackb-t2-modes.md section 3 A0).
+          # Enumerates every display device's mode list + current mode, CDS_TESTs or
+          # applies a requested size, JSON out. Plain v143 + /MT, no WDK dependency.
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              Select-Object -First 1
+          & $msbuild tools\modeprobe\modeprobe.vcxproj /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "modeprobe msbuild failed" }
+          Get-ChildItem tools\modeprobe\x64\Release\modeprobe.exe
+
       - name: Build pwprobe
         shell: pwsh
         run: |
@@ -134,6 +147,9 @@ jobs:
           $repro = Get-ChildItem tools\chromerepro -Recurse -Filter chromerepro.exe -ErrorAction SilentlyContinue |
               Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
           if ($repro) { Copy-Item $repro.FullName package\ -Force } else { Write-Warning 'chromerepro.exe missing from package' }
+          $mode = Get-ChildItem tools\modeprobe -Recurse -Filter modeprobe.exe -ErrorAction SilentlyContinue |
+              Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
+          if ($mode) { Copy-Item $mode.FullName package\ -Force } else { Write-Warning 'modeprobe.exe missing from package' }
           $pw = Get-ChildItem tools\pwprobe -Recurse -Filter pwprobe.exe -ErrorAction SilentlyContinue |
               Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
           if ($pw) { Copy-Item $pw.FullName package\ -Force } else { Write-Warning 'pwprobe.exe missing from package' }
