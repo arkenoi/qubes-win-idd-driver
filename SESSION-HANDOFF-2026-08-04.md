@@ -18,7 +18,7 @@ about controls and premises, not about any individual fix.
 | `98eed30` | validated 2026-08-03 (unchanged) |
 | `aaa8c37` | **VALIDATED** — 4/4 strips announced by the pre-fix build, 0/4 by the fix, 3 interleaved rounds, cold boot per side |
 | `66fc670` | **VALIDATED** — control adopted the popup 3/3, fix refused it 3/3, on two opposed signals |
-| `6b5b298` | **still unvalidated**; review argues its stated mechanism is impossible and its original justification was retracted -> fix-or-revert, do not just keep |
+| `6b5b298` | **REVERTED** (agent `8629a9c`) — measured no effect: guard-reverted 136->83 damage/12s channel alive, guard-present 176->118 alive. Justification already retracted; logged nothing so was unfalsifiable |
 | `b4301b1` | **wild-pointer loop in the post-recovery repaint sweep — VALIDATED**: control CRASHES the agent 3/3, fix survives 3/3 |
 | `d3a5fbc` | mask-sort, written days ago and never merged; cherry-picked today, not separately validated |
 | `a4f6961` | framebuffer-pointer invalidation on duplication release; not separately validated |
@@ -160,9 +160,9 @@ the parent key. Setting the parent does nothing.
 | thing | value |
 |---|---|
 | `netvm` | **detached** — measurement control only; T6 wants it networked again |
-| `gui-agent.exe` | `F06C0979` — CI build of agent `a4f6961` (wild-pointer + mask-sort + fb-invalidation on top of `6b5b298`). `.orig` (`4B4CE2B1`) intact |
+| `gui-agent.exe` | **`EBAE90FD`** — CI build of agent `8629a9c` = HEAD (wild-pointer + mask-sort + fb-invalidation, and `6b5b298` REVERTED). `.orig` (`4B4CE2B1`) intact |
 | `PerWindowCapture` | **registry value REMOVED** — the guest now matches a fresh install, i.e. capture is **ON** via the code default. This is deliberate: `0` was our own test residue and reading it as "the shipped default" caused a whole day's worth of wrong conclusions |
-| `LogLevel` (`gui-agent` subkey) | 3 |
+| `LogLevel` (`gui-agent` subkey) | 3 (raise to 5 for per-window damage lines — `SendWindowDamageEvent` logs at VERBOSE, which silently zeroed a metric today) |
 | services | QdbDaemon / QrexecAgent / QubesGuiWatchdog all Running |
 
 **Consequence to expect:** with capture ON you will see the open occlusion artifact (leftovers
