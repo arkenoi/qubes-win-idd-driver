@@ -2827,3 +2827,29 @@ marker cleared. Notes: floppy controller refuses disable (ACPI) — unsuitable t
 `&` in instance ids does not survive qtest's cmd chaining, run devcon commands unchained.
 SetDisplayConfig deliberately NOT implemented (session-0 cannot repair session-1 topology).
 This clears exp 9's precondition: the BDA can be disabled with a proven boot-path revert.
+
+# 2026-08-04 (cont 5) — why the double cursor vanished (user observation, investigated)
+
+Not a cursor fix; nothing in the fork touches cursors. It is a structural side effect of the
+per-window capture engine: `PrintWindow(PW_RENDERFULLCONTENT)` (engine switch `896407a`,
+architecture `6515cd4`) asks each app to render ITSELF into the buffer — the OS software
+cursor is composited over the desktop, never into window content, so per-window buffers are
+cursor-free and dom0's pointer is the only one visible.
+
+Context that made stock look worse: stock QWT's own workaround is `HideCursors()`
+(DisableCursor default TRUE — blanks 13 standard OCR_* cursors, once, at Init) — weak against
+custom cursors and scheme reloads, hence the double pointer on stock. Our provisioning
+pre-seeds `DisableCursor=0` (`02e1943`), deliberately re-showing the guest cursor.
+
+Where the guest cursor STILL reaches dom0 (all verified in source):
+1. slice-fed windows — all override-redirect (menus/tooltips) as a class, ULW/colorkey,
+   NOREDIRECTIONBITMAP (`PwSliceCopyAndDamage` copies from the granted desktop image);
+2. synthesized popups (patched from `g_FbBits`);
+3. per-window fallback/legacy paths (old daemon, attach failure, dead channel).
+4. **FULLSCREEN (non-seamless) mode entirely** — `ProcessNewFrame` takes the early
+   `!g_SeamlessMode` branch, no window is ever tracked, dom0 shows the DDA desktop image
+   verbatim, software cursor included. **The T2 target mode has the double cursor, same as
+   stock.** Fix options for T2: hardware cursor in the IDD (`IddCxMonitorSetupHardwareCursor`,
+   absent from the sample) + pointer-shape forwarding, or DisableCursor=1 in fullscreen.
+   ddaprobe corroborates the composited-cursor model: `pointer_shape_updates: 0` across all
+   runs (a separately-reported pointer would produce nonzero).
