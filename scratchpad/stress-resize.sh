@@ -40,10 +40,15 @@ for i in $(seq 1 "$CYCLES"); do
   fi
   prev_cpu=$cpu; prev_t=$t
   if [ $((i % 3)) -eq 0 ]; then
+    # dom0-follow is a pipeline with real latency (replug capture outage -> re-dump ->
+    # daemon window resize). Poll until the dom0 window matches the target; REPORT the
+    # latency as a metric. Never converging within the bound is the failure.
     W=${sz%x*}; H=${sz#*x}
-    ./tools/qtest shot "$S/stress-$i.tar" >/dev/null 2>&1
-    rm -rf "$S/stress-$i" && mkdir -p "$S/stress-$i" && tar xf "$S/stress-$i.tar" -C "$S/stress-$i" 2>/dev/null
-    ver=$(python3 - "$S/stress-$i" "$W" "$H" <<'EOF'
+    t0=$(date +%s); ver="FAIL never-sampled"
+    for _ in $(seq 1 12); do
+      ./tools/qtest shot "$S/stress-$i.tar" >/dev/null 2>&1
+      rm -rf "$S/stress-$i" && mkdir -p "$S/stress-$i" && tar xf "$S/stress-$i.tar" -C "$S/stress-$i" 2>/dev/null
+      ver=$(python3 - "$S/stress-$i" "$W" "$H" <<'EOF'
 import sys, glob
 from PIL import Image
 d, w, h = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
@@ -52,14 +57,17 @@ if not f: print('FAIL no-window'); sys.exit()
 im = Image.open(f[0]).convert('RGB')
 ex = im.getextrema()
 flat = all(a == b for a, b in ex)
-# dom0 may clip height (panel); width must match, height within 60 px
 okw = im.size[0] == w
 okh = abs(im.size[1] - h) <= 60
 print('OK' if (okw and okh and not flat) else f'FAIL size={im.size} flat={flat}')
 EOF
 )
-    echo "pixels: $ver" | tee -a "$OUT"
-    if ! printf '%s' "$ver" | grep -q '^OK'; then echo "cycle $i: FAIL pixels" | tee -a "$OUT"; fail=1; break; fi
+      printf '%s' "$ver" | grep -q '^OK' && break
+      sleep 2
+    done
+    lat=$(( $(date +%s) - t0 ))
+    echo "pixels: $ver dom0_follow_latency=${lat}s" | tee -a "$OUT"
+    if ! printf '%s' "$ver" | grep -q '^OK'; then echo "cycle $i: FAIL dom0-follow (never converged in ${lat}s)" | tee -a "$OUT"; fail=1; break; fi
   fi
 done
 if [ "$fail" -eq 0 ]; then echo "STRESS PASS: $CYCLES cycles" | tee -a "$OUT"; else echo "STRESS FAIL at cycle $i" | tee -a "$OUT"; exit 1; fi
