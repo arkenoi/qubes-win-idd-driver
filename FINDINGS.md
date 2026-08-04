@@ -2043,7 +2043,16 @@ Deliberately left with the fix installed rather than reverted to stock: the rema
 Work in progress on the second of the three unproven commits. Recorded now because the
 *preconditions* found here are worth more than the eventual verdict.
 
-## `66fc670`'s defect is UNREACHABLE at the shipped default configuration
+## RETRACTED (same day, see the correction immediately below): "unreachable at the shipped default"
+
+**The heading and reasoning in this subsection are WRONG and are corrected in
+"CORRECTION: there is no shipped `PerWindowCapture=0`" further down.** In short: nothing in the
+install path ever writes `PerWindowCapture`, and the CODE default is **1 (ON)**. Our guest's 0
+is *our own test artifact*. So these fixes are **on-path for a real user of this fork**, not
+latent. The measured facts below stand; the "latent / off-path" conclusion drawn from them does
+not. Left in place rather than deleted so the error is visible.
+
+## `66fc670`'s defect is unreachable ON OUR TEST GUEST (which has `PerWindowCapture=0`)
 
 `AddWindow()` gates the whole composite-synthesis path:
 
@@ -2164,3 +2173,58 @@ Practical consequences:
   gap — dom0-side, so Phase 3 discipline (design writeup before code). Worth an upstream issue
   on its own: an agent restart is a normal, expected event (upgrades, crashes, watchdog action)
   and should not be terminal for the qube's GUI.
+
+---
+
+# 2026-08-04 (later still) — CORRECTION: there is no shipped `PerWindowCapture=0`
+
+Prompted by the user asking whether these "off-path" fixes make any sense at all. Checking the
+premise instead of the fixes inverted it.
+
+**I claimed twice today — in FINDINGS and in the handoff — that `66fc670` and `6b5b298` fix a
+defect that is "unreachable at the shipped default" because "this guest ships with
+`PerWindowCapture=0`". That is wrong. Retracting it.**
+
+The evidence, all of it checkable in seconds:
+
+1. **The code default is ON.** `gui-agent/perwindow.c` `PwInit()`:
+   ```c
+   DWORD enabled = 1; // default ON: this build exists to exercise the new path
+   CfgReadDword(NULL, REG_CONFIG_PERWINDOW_VALUE, &enabled, NULL);
+   ```
+   The registry value only *overrides* that default; absent the value, per-window capture runs.
+2. **Nothing in the install path writes the value.** `grep -rl PerWindowCapture guest/ mgmt/
+   tools/` returns nothing. No installer, no provisioning script, no `.inf`/`.wxs` sets it. A
+   fresh install of this fork therefore has **no** `PerWindowCapture` value at all → default 1.
+3. **Our guest's 0 is our own test artifact.** FINDINGS 2026-08-03: "`PerWindowCapture` was set
+   to 0 at 09:58 by someone, and I re-enabled it at 15:45"; and "`PerWindowCapture` had been 0
+   (my typing A/B)". It came from a prior session's A/B, not from shipping.
+4. **The one written recommendation to default it OFF rests on a retracted finding.** FINDINGS
+   2026-08-03 "PerWindowCapture must **default OFF** until this is root-caused" belongs to the
+   entry titled "PerWindowCapture correlates with LOGON-PATH HANGS", which was **RETRACTED the
+   same day** — the hang was Windows Update. The recommendation was never re-justified.
+
+## What this changes
+
+- **`66fc670` is on-path, not latent.** For a user installing this fork today, synthesis runs,
+  so the orphan-adoption bug it fixes is live. Its validation today is worth full value.
+- **`6b5b298` is likewise on-path** — and still unproven, which now matters more, not less.
+- **`aaa8c37`'s stakes rise.** The daemon-killing chain (strips admitted → synthesized →
+  materialized → `MSG_CONFIGURE` without `CREATE` → guid `exit(1)`) needs synthesis, i.e. needs
+  per-window capture — which is ON by default. So the qube-killing bug was reachable out of the
+  box on this fork, and `aaa8c37` + `98eed30` are load-bearing rather than defensive extras.
+- **Today's Word observation proves nothing about the shadow.** I ran Word on the fixed build at
+  `PerWindowCapture=0`, where synthesis cannot run, so the frozen L-shaped shadow band could not
+  have appeared regardless of whether the fix works. That check could not fail — the fifth such
+  instrument today. The end-to-end Office test must run at `PerWindowCapture=1`.
+- **I restored the guest to `PerWindowCapture=0` at the end of the validation run and called it
+  "the shipped default" in the handoff.** That description is wrong; it is simply the value the
+  guest happened to carry. It also means the guest is currently NOT in the configuration a real
+  user would have.
+
+## The generalisable error
+
+Twice today the *premise* of a measurement was wrong rather than the measurement: "stock is a
+valid control" (it lacked the feature under test) and now "the default is off" (it is on). Both
+were one grep away. **Check the premise of a comparison before running it, not after it produces
+a clean-looking result** — a wrong premise yields confident, well-replicated, meaningless numbers.
