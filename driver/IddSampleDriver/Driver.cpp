@@ -25,7 +25,8 @@ using namespace Microsoft::WRL;
 #pragma region SampleMonitors
 
 static constexpr DWORD IDD_SAMPLE_MONITOR_COUNT = 1; // If monitor count > ARRAYSIZE(s_SampleMonitors), we create edid-less monitors
-static constexpr DWORD IDD_SAMPLE_EDID_MONITOR_COUNT = 0; // Connectors at index >= this are created EDID-less (modes come from EvtIddCxMonitorGetDefaultDescriptionModes). 0 = every monitor is EDID-less.
+// Qubes D4v2: IDD_SAMPLE_EDID_MONITOR_COUNT (0 = all EDID-less) is gone — the single
+// monitor now always carries the stable Qubes EDID (s_QubesMonitor below).
 
 // Default modes reported for edid-less monitors. The first mode is set as preferred
 static const struct IndirectSampleMonitor::SampleMonitorMode s_SampleDefaultModes[] =
@@ -33,6 +34,40 @@ static const struct IndirectSampleMonitor::SampleMonitorMode s_SampleDefaultMode
     { 1920, 1080, 60 },
     { 1600,  900, 60 },
     { 1024,  768, 75 },
+};
+
+// ==============================
+// Qubes D4v2: STABLE EDID identity.
+// An EDID-less monitor gets a fresh display identity on every replug (observed: guest at
+// \\.\DISPLAY29 after ~20 replugs) — the "runaway registry entries / random resolutions"
+// failure mode (docs/RESEARCH-hypervisor-resize.md §6). A constant vendor/product/serial
+// keeps ONE Enum\DISPLAY instance and ONE GraphicsDrivers\Configuration path across
+// replugs, so the monitor below carries a fixed hand-built EDID:
+//   vendor "QBS" (PNP id bits: Q=17,B=2,S=19 -> 0x4453 big-endian), product 0x0001 (LE),
+//   serial 0x00000001 (LE), EDID 1.4, digital input (8 bpc), preferred detailed timing
+//   1920x1080@60 (canonical 148.5 MHz CEA timing), range limits V 50-75 Hz / H 30-90 kHz,
+//   name "QubesIDD", serial string "QBS0001", no extension blocks.
+// CHECKSUM RULE (double-checked): byte 127 makes the sum of ALL 128 bytes == 0 mod 256,
+// i.e. checksum = (256 - (sum of bytes 0..126) % 256) % 256. Here that gives 0x53; the
+// generator asserted sum(edid) % 256 == 0 over the final 128 bytes.
+// ==============================
+static const struct IndirectSampleMonitor s_QubesMonitor =
+{
+    {
+        0x00,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x44,0x53,0x01,0x00,0x01,0x00,0x00,0x00,0x00,0x1E,0x01,
+        0x04,0xA5,0x3C,0x22,0x78,0x2A,0x6C,0xE5,0xA5,0x55,0x50,0xA0,0x23,0x0B,0x50,0x54,0x21,0x08,0x00,
+        0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x02,0x3A,0x80,
+        0x18,0x71,0x38,0x2D,0x40,0x58,0x2C,0x45,0x00,0x56,0x50,0x21,0x00,0x00,0x1E,0x00,0x00,0x00,0xFD,
+        0x00,0x32,0x4B,0x1E,0x5A,0x10,0x01,0x0A,0x20,0x20,0x20,0x20,0x20,0x20,0x00,0x00,0x00,0xFC,0x00,
+        0x51,0x75,0x62,0x65,0x73,0x49,0x44,0x44,0x0A,0x20,0x20,0x20,0x20,0x00,0x00,0x00,0xFF,0x00,0x51,
+        0x42,0x53,0x30,0x30,0x30,0x31,0x0A,0x20,0x20,0x20,0x20,0x20,0x00,0x53
+    },
+    {
+        { 1920, 1080, 60 },
+        { 1600,  900, 60 },
+        { 1024,  768, 60 },
+    },
+    0
 };
 
 // ==============================
@@ -652,17 +687,11 @@ void IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
 
     MonitorInfo.MonitorDescription.Size = sizeof(MonitorInfo.MonitorDescription);
     MonitorInfo.MonitorDescription.Type = IDDCX_MONITOR_DESCRIPTION_TYPE_EDID;
-#pragma warning(suppress: 4296) // '>=' is knowingly always true while IDD_SAMPLE_EDID_MONITOR_COUNT == 0
-    if (ConnectorIndex >= IDD_SAMPLE_EDID_MONITOR_COUNT)
-    {
-        MonitorInfo.MonitorDescription.DataSize = 0;
-        MonitorInfo.MonitorDescription.pData = nullptr;
-    }
-    else
-    {
-        MonitorInfo.MonitorDescription.DataSize = IndirectSampleMonitor::szEdidBlock;
-        MonitorInfo.MonitorDescription.pData = const_cast<BYTE*>(s_SampleMonitors[ConnectorIndex].pEdidBlock);
-    }
+    // Qubes D4v2: always report the stable-identity Qubes EDID (see s_QubesMonitor).
+    // With an EDID present the OS derives monitor modes via
+    // EvtIddCxParseMonitorDescription, NOT EvtIddCxMonitorGetDefaultDescriptionModes.
+    MonitorInfo.MonitorDescription.DataSize = IndirectSampleMonitor::szEdidBlock;
+    MonitorInfo.MonitorDescription.pData = const_cast<BYTE*>(s_QubesMonitor.pEdidBlock);
 
     // ==============================
     // TODO: The monitor's container ID should be distinct from "this" device's container ID if the monitor is not
@@ -775,6 +804,68 @@ NTSTATUS IddSampleParseMonitorDescription(const IDARG_IN_PARSEMONITORDESCRIPTION
     // this sample driver, we hard-code the EDID, so this function can generate known modes.
     // ==============================
 
+    if (pInArgs->MonitorDescription.DataSize != IndirectSampleMonitor::szEdidBlock)
+        return STATUS_INVALID_PARAMETER;
+
+    // Qubes D4v2: with the stable EDID present this callback — not
+    // GetDefaultDescriptionModes — is where the OS gets the monitor modes, so the
+    // registry-declared modes (D4) must be appended HERE. Dispatch on the EDID content
+    // first, because the Qubes mode count is dynamic (built-ins + registry).
+    if (memcmp(pInArgs->MonitorDescription.pData, s_QubesMonitor.pEdidBlock, IndirectSampleMonitor::szEdidBlock) == 0)
+    {
+        vector<IDDCX_MONITOR_MODE> MonitorModes;
+        for (DWORD ModeIndex = 0; ModeIndex < IndirectSampleMonitor::szModeList; ModeIndex++)
+        {
+            MonitorModes.push_back(CreateIddCxMonitorMode(
+                s_QubesMonitor.pModeList[ModeIndex].Width,
+                s_QubesMonitor.pModeList[ModeIndex].Height,
+                s_QubesMonitor.pModeList[ModeIndex].VSync,
+                IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR
+            ));
+        }
+
+        // Registry modes at 60 Hz, deduplicated against the built-ins (same rules as the
+        // D4 GetDefaultDescriptionModes path).
+        for (const auto& RegMode : QubesReadRegistryModes())
+        {
+            bool bDuplicate = false;
+            for (DWORD ModeIndex = 0; ModeIndex < IndirectSampleMonitor::szModeList; ModeIndex++)
+            {
+                if (s_QubesMonitor.pModeList[ModeIndex].Width == RegMode.Width &&
+                    s_QubesMonitor.pModeList[ModeIndex].Height == RegMode.Height &&
+                    s_QubesMonitor.pModeList[ModeIndex].VSync == QUBES_IDD_MODE_VSYNC)
+                {
+                    bDuplicate = true;
+                    break;
+                }
+            }
+            if (!bDuplicate)
+            {
+                MonitorModes.push_back(CreateIddCxMonitorMode(
+                    RegMode.Width, RegMode.Height, QUBES_IDD_MODE_VSYNC, IDDCX_MONITOR_MODE_ORIGIN_DRIVER));
+            }
+        }
+
+        pOutArgs->MonitorModeBufferOutputCount = (UINT) MonitorModes.size();
+
+        if (pInArgs->MonitorModeBufferInputCount == 0)
+        {
+            // The caller was only asking for a count of modes
+            return STATUS_SUCCESS;
+        }
+        if (pInArgs->MonitorModeBufferInputCount < MonitorModes.size())
+        {
+            // Guard against the registry growing between the size call and the fill call
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        copy(MonitorModes.begin(), MonitorModes.end(), pInArgs->pMonitorModes);
+        pOutArgs->PreferredMonitorModeIdx = s_QubesMonitor.ulPreferredModeIdx;
+        return STATUS_SUCCESS;
+    }
+
+    // Original sample path (fixed arity) for the sample monitors — no longer reported by
+    // FinishInit, kept for minimal divergence from upstream.
     pOutArgs->MonitorModeBufferOutputCount = IndirectSampleMonitor::szModeList;
 
     if (pInArgs->MonitorModeBufferInputCount < IndirectSampleMonitor::szModeList)
@@ -787,9 +878,6 @@ NTSTATUS IddSampleParseMonitorDescription(const IDARG_IN_PARSEMONITORDESCRIPTION
         // In the sample driver, we have reported some static information about connected monitors
         // Check which of the reported monitors this call is for by comparing it to the pointer of
         // our known EDID blocks.
-
-        if (pInArgs->MonitorDescription.DataSize != IndirectSampleMonitor::szEdidBlock)
-            return STATUS_INVALID_PARAMETER;
 
         DWORD SampleMonitorIdx = 0;
         for(; SampleMonitorIdx < ARRAYSIZE(s_SampleMonitors); SampleMonitorIdx++)
