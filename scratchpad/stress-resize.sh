@@ -14,7 +14,9 @@ INC='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 SIZES=(1600x1000 1920x1080 2566x1022 1024x768 1234x777 3440x1409 1600x900 2000x1000)
 CYCLES=${CYCLES:-16}
 
-cputime() { timeout 25 ./tools/qtest state 2>/dev/null | grep -oE 'cputime=[0-9]+' | cut -d= -f2; }
+# NB: the Admin API response embeds a NUL byte; without tr, grep goes binary-mode and this
+# silently returns nothing — which made the livelock check a no-op for two whole runs.
+cputime() { timeout 25 ./tools/qtest state 2>/dev/null | tr -d '\0' | grep -oE 'cputime=[0-9]+' | cut -d= -f2; }
 
 : > "$OUT"
 prev_cpu=$(cputime); prev_t=$(date +%s)
