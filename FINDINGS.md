@@ -1822,3 +1822,94 @@ Consequences for the record:
   corrected here rather than by rewriting the pushed history.
 - Standing rule from this: **before blaming our code for a guest-wide symptom, check netvm,
   Windows Update state, and the System event log.** A networked Windows guest is never quiescent.
+
+---
+
+# 2026-08-04 — T2 is blocked on the IddCx driver (measured); T1 instrument rebuilt
+
+Guest quiesced first: `qvm-prefs win-idd-test netvm ''` (it was `core-net`). Lockout threshold
+was already `Never`, so trap 4.3 cannot bite. `AutoAdminLogon=1` with **no** `DefaultPassword`
+is still the configuration — left alone, since setting the password needs the user.
+
+## FINDING (T2): the display adapter offers a FIXED 29-mode list. 1600x1000 is not in it.
+
+The feasibility caveat in SESSION-HANDOFF-2026-08-03 §5 is now settled, and it settles against
+the plan. Two independent instruments agree:
+
+1. **The agent's own `InitVideoModes()`**, at `LogLevel=5` (see the registry note below), logs
+   the list it will actually choose from: `Enumerated 29 supported modes` — 640x480, 800x600,
+   1024x768, 1280x1024, 1600x1200, 1152x864, 1280x768/800/960, 1440x900, 1400x1050, 1680x1050,
+   1920x1200, 2560x1600, 1280x720, 1920x1080, 1600x900, 2560x1440, 3840x2160, 960x540,
+   1280x1080, 2160x1080, 2560x1080, 3200x1800, 3440x1440, 3840x1080, 3840x1600, 2048x1152,
+   2048x1536. **No 1600x1000, and nothing arbitrary.**
+2. **`ChangeDisplaySettings(..., CDS_TEST)`**: 1600x1000 -> -2 (`DISP_CHANGE_BADMODE`),
+   1234x777 -> -2, 2566x1022 -> -2, 1920x1080 -> 0 (`DISP_CHANGE_SUCCESSFUL`).
+
+Consequence: **T2 as specified is unreachable on the Basic Display Adapter and is a Track B
+(IddCx) dependency**, exactly as CLAUDE.md Phase 2B-resize predicted. `SelectSupportedMode()`
+does not fail on an unsupported request — it silently snaps to the best-similarity entry in the
+list above, so a naive "default to 1600x1000" change would appear to work and quietly give a
+different resolution. Reporting arbitrary modes on demand is the IddCx driver's core capability;
+this is the concrete argument for building it.
+
+Caveat, stated rather than hidden: a standalone PowerShell `EnumDisplaySettings` probe written
+for this returned `MODE_COUNT=0` — its DEVMODE marshalling is wrong. Its **mode list output is
+discarded and is not the basis of anything above**; only its `CDS_TEST` return codes are used,
+and those are corroborated by instrument 1. `scratchpad/modes.ps1` should be fixed or deleted
+before it is trusted for anything.
+
+Also observed while there: `HandleXconf: host resolution: 5120x1440` -> agent set 3440x1440
+(from the saved `FullscreenWidth/Height`), confirming §5's "registry value is a last-applied
+cache, read as if it were user intent".
+
+## Registry: `LogLevel` has a PER-MODULE override that wins
+
+`HKLM\Software\Invisible Things Lab\Qubes Tools\LogLevel` is **not** what gui-agent reads.
+There is a subkey `...\Qubes Tools\gui-agent` with its own `LogLevel`, and it takes precedence:
+setting the parent to 5 produced zero `-D]`/`-V]` lines; setting
+`...\Qubes Tools\gui-agent\LogLevel = 5` produced 369 debug lines in the next instance.
+Anything in this repo that says "raise LogLevel" means the subkey.
+
+## T1 (validate aaa8c37): the first two instruments were both worthless — replaced
+
+Deployed the CI build of agent `6b5b298` (`gui-agent.exe` sha256 4da9fe96…, verified against the
+running file, `.orig` kept). Seamless survived it: Notepad and Word's NUIDialog both rendered
+correctly in dom0, and with all four real `MSO_BORDEREFFECT_WINDOW_CLASS` strips present in the
+guest (`dump-windows`: 0x10348/34a/34c/34e around dialog 0x10342), dom0 received **one** window
+for that dialog, not five. That is the intended effect — but it is **not yet proven**, because:
+
+- **Instrument 1 (count PNGs from `qtest shot`) is void.** The pre-fix control produced the same
+  count as the fix. Worse, Word's strips are *transient*: four at 13:37, one at 13:41, none at
+  13:42. The metric was tracking scene state, not the build — the exact trap CLAUDE.md warns
+  about, hit again.
+- **Instrument 2 (grep the agent log for strip HWNDs) was inconclusive**, for the same reason:
+  the control run recorded `STRIPS_PRESENT=0`. Nothing was on screen to reject, so "0 mapped"
+  proves nothing. Recorded as inconclusive, not as a pass.
+
+Rule 3 is at least reachable, which was worth confirming before building a repro for it: the
+strips are caption-less `WS_POPUP`, so `IsPopup()` marks them override-redirect and the size
+floor drops from SM_CXMIN/SM_CYMIN (~136x39) to 4x4 — an 8 px strip survives it. Note this also
+means rule 2 can never match them: the real strips carry **neither** `WS_EX_TRANSPARENT` nor
+`WS_EX_NOACTIVATE`. Only the class rule can.
+
+**Fix: `tools/chromerepro --mso`** (commit 1c94a62) creates four strips of the literal class
+`MSO_BORDEREFFECT_WINDOW_CLASS` with the measured styles and 8 px thickness — deterministic, and
+independent of Office. The measurement harness now also fails loudly when the main window is not
+mapped, so a dead gui-daemon can no longer masquerade as "the fix worked".
+
+## gui-daemon died again — and it was self-inflicted, by agent restarts
+
+After ~9 gui-agent restarts in 20 minutes, the agent parked at `Awaiting for a vchan client`,
+`qtest shot` returned **zero windows**, and it never recovered on its own. Sequence in
+`gui-agent-20260804-134924-7504.log`: `libxenvchan_send: vchan not open` on `MSG_MAP`/
+`MSG_SHMIMAGE`, then `WatchForEvents: vchan disconnected`.
+
+**The sends failed because the vchan was already closed — the daemon went first. This is not a
+protocol violation by the build under test**, and must not be recorded as one.
+
+This is SESSION-HANDOFF §T6.1 reproduced on demand: nothing restarts gui-daemon, and the qube
+has no GUI until the whole qube is restarted. Practical consequences:
+- **Restarting gui-agent repeatedly is not a free operation.** A/B harnesses that swap the binary
+  in place should expect to lose the daemon and must verify it is alive per run (now enforced).
+- It strengthens the case that daemon fragility, not any one crash cause, is the real robustness
+  gap — dom0-side, so Phase 3 discipline (design writeup before code).
