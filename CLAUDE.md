@@ -185,6 +185,26 @@ Track B (the IddCx display driver). Do not add Track C code or docs here.
 Anything touching the GUI protocol, gui-daemon, or grant lifecycle: design writeup first,
 user review, upstream design issue (referencing #1861) before code. Do not start unilaterally.
 
+## Upstream policy (set by the user 2026-08-04) — SUPERSEDES the earlier guidance
+
+**Submit NOTHING upstream until this work is finished in full and there is a new, complete QWT
+with all the features.** Until then everything stays in the user's fork. Do not open PRs, do not
+open feature/fix issues for our own agent work, and do not propose "small reviewable PRs" for
+Track A changes — that earlier framing in this file is withdrawn.
+
+**The one exception: bugs OUTSIDE QWT scope get reported.** Defects we find in components that
+are not ours — `qubes-gui-daemon`, the vchan/libvchan layer, `qubes-core-admin` tooling — are
+reported upstream when found, because withholding them helps nobody and they are not part of the
+QWT deliverable. Still subject to the standing rule that the user approves the exact text first.
+
+Currently qualifying under the exception (see `DESIGN-gui-daemon-restart-survival.md` §3):
+- gui-daemon's `handle_vchan_error` never consults `vchan_at_eof`, so a disconnect noticed on the
+  WRITE path skips the restart the daemon otherwise implements;
+- a use-after-free if `execv` fails in `restart_guid` (the vchan handle is already freed and the
+  main loop keeps dereferencing it).
+NOT qualifying (ours, stays in the fork): everything in `agent/` — `aaa8c37`, `66fc670`,
+`d6ab61c`, `98eed30`, the wild-pointer fix, the mask sort, the framebuffer invalidation.
+
 ## Escalate to the user when
 
 - A dom0/sudo/policy/vCPU change is needed; upstream contact is warranted; a phase's
