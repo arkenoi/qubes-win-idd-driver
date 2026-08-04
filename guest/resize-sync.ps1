@@ -13,6 +13,7 @@
 #        -DeviceId defaults to the D0/D4 root-enumerated instance.
 param(
     [switch]$Once,
+    [string]$SyncNow = '',   # one-shot: sync straight to this WxH and exit (stress harness)
     [string]$DeviceId = 'ROOT\DISPLAY\0000',
     [int]$PollSec = 2
 )
@@ -76,4 +77,8 @@ function Pass {
     SaveMark $log.Name $lines.Count
 }
 
-if ($Once) { Pass } else { Log "resize-sync loop started"; while ($true) { Pass; Start-Sleep -Seconds $PollSec } }
+if ($SyncNow) {
+    $ok = SyncTo $SyncNow
+    Write-Output ("SYNCRESULT target=$SyncNow ok=$ok readback=" + (CurrentRes))
+    if (-not $ok) { exit 1 }
+} elseif ($Once) { Pass } else { Log "resize-sync loop started"; while ($true) { Pass; Start-Sleep -Seconds $PollSec } }
