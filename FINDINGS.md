@@ -2022,6 +2022,66 @@ agent binary swap (the only unusual thing these cycles do).
 Deliberately left with the fix installed rather than reverted to stock: the remaining T1 work
 (`66fc670`, `6b5b298`) tests that same binary. Reverting means `install-agent.ps1 -Which orig`.
 
+---
+
+# 2026-08-04 (later) — validating `66fc670`: three more controls that could not fail
+
+Work in progress on the second of the three unproven commits. Recorded now because the
+*preconditions* found here are worth more than the eventual verdict.
+
+## `66fc670`'s defect is UNREACHABLE at the shipped default configuration
+
+`AddWindow()` gates the whole composite-synthesis path:
+
+```c
+if (PwEnabled() && SynthQualifies(entry, &synthOwner))
+    SynthActivate(entry, synthOwner);
+```
+
+`PwEnabled()` follows the `PerWindowCapture` registry value, and **this guest ships with
+`PerWindowCapture=0`**. With it off, nothing is ever synthesized, so:
+
+- the frozen L-shaped shadow ghost `66fc670` fixes **cannot occur** at the default config;
+- neither can the synthesis→materialize→`MSG_CONFIGURE`-without-`CREATE` chain that killed
+  gui-daemon, at least not by that route;
+- and any A/B of `66fc670` run with `PerWindowCapture=0` reports zero SYNTH on both sides —
+  a fourth check-that-cannot-fail, which is exactly what my first two control runs were
+  (`SYNTH_ALL=0`, control and fix identical). The harness now asserts `PerWindowCapture=1`
+  **and** the absence of `per-window capture disabled by config` in the agent's own log, and
+  fails the run outright otherwise.
+
+This does not make `66fc670` pointless — per-window capture is a supported mode and the
+hybrid-capture work (T3) would turn it on — but it does bound the claim: **the bug it fixes
+is latent unless per-window capture is enabled.** Any upstream description must say so.
+
+## Stock QWT is the wrong control here too — for a different reason than the strips
+
+Composite synthesis does not exist upstream; it arrived in fork commit `0a334c1` ("Composite
+synthesis: owner-contained popups painted into their owner, never announced"). Stock therefore
+emits no `msg=SYNTH` under any circumstances. The control for `66fc670` must be **agent
+`aaa8c37`**, the commit immediately before it, built from throwaway branch `control/aaa8c37`
+(superproject pins the submodule there; `workflow_dispatch` builds it — do not merge that
+branch). Control binary `6554EFED…`, test binary `4DA9FE96…`.
+
+That is now twice in one day that the obvious control — "the binary that shipped" — was
+incapable of exhibiting the defect under test, each time for a different reason. **Before any
+future A/B: ask what makes the control able to FAIL, and confirm the feature under test even
+exists on that side.**
+
+## The repro's own ordering was the third dead control
+
+Synthesis adopts a popup into a **tracked** same-process, non-override-redirect sibling.
+chromerepro created the orphan popup before `ShowWindow(g_Main)`, so the popup reached the
+agent while no sibling was tracked yet; `SynthQualifies()` then failed for want of a
+*candidate* rather than because of the fix, and both builds announced it identically. The
+agent log shows it plainly on the control: `AddWindow` → `SendWindowCreate` for the popup at
+`.564`, and the main frame's `PwAttachWindow` only at `.689`. Fixed by creating the orphan
+last, after pumping messages for 3 s.
+
+Also fixed here: the measurement parsed only the LAST `###` snapshot of `dump-windows`, which
+is empty whenever the process is killed just after writing a header — that read as "the scene
+is missing" and failed a run that was fine. It now scans every snapshot and dedupes by HWND.
+
 ## gui-daemon died again — and it was self-inflicted, by agent restarts
 
 After ~9 gui-agent restarts in 20 minutes, the agent parked at `Awaiting for a vchan client`,
