@@ -2756,3 +2756,25 @@ StopFrameProcessing → CaptureTeardown.
 - Screen framebuffer: initial grant logs only at DEBUG (`GetFrame: 1st frame, sharing
   framebuffer`, capture.c:524) and successful revokes are silent at every level → full screen
   accounting needs LogLevel=4. Recovery re-grants do log at INFO (main.c:3570).
+
+# 2026-08-04 (cont 2) — T2 execution start: exp 0 done, exp 2 guest-half done, comparator validated
+
+- **Exp 0 (baseline on 19045 retail): PASS, 3/3 agree** — `instrumentation/t2-exp0/base-19045-{1,2,3}.json`,
+  ddaprobe `30F6012D` (hash-verified on guest against the CI package manifest, run 30616998988).
+  All runs: session_id 1 / WinSta0 / Default, `agent_capture_would_work` true, flag TRUE and
+  `ever_false` false, MapDesktopSurface OK, **pitch 13760 == 3440*4**, format 87 B8G8R8A8.
+  Bonus vs the void 19044 baseline: acquire latency median 31 ms (was 82 ms) — retail 19045 is
+  a materially different capture environment, vindicating the re-baseline requirement.
+- **Exp 2 (non-seamless pinning), guest half: PASS.** `SeamlessMode=0` set in root + gui-agent
+  subkey; cold boot; registry still 0; agent logged `Seamless mode changed to 0`; ONE dom0
+  window (win-0.png 3440x1384, live desktop). Boot resolution was 3440x1440 = the
+  `FullscreenWidth` cache (the A4 defect, on cue). **The dom0 window shows only 1384 of the
+  guest's 1440 rows — the taskbar lives in the hidden 56 px.** That clipped band is the
+  work-area mismatch T2 exists to fix, now visible in a screenshot.
+  Remaining half (WM-resizable + MSG_CONFIGURE stream) blocked on the dom0 resize service.
+- **Exp 0b comparator half: VALIDATED both directions.** Decoded-pixel compare (PIL, RGB,
+  metadata ignored): static desktop pair → bbox None / 0 diff px; same vs under
+  activity-gen.ps1 → 415,058 diff px. The instrument can both pass and fail.
+- **dom0 resize harness written, NOT installed** (needs the user): `dom0/10-install-resize-service.sh`
+  installs `local.WinResize+WxH|query` (resize-only, isolation pattern of WinScreenshot);
+  `tools/qtest resize` added. Verified refused today (no policy) — fails loud, not silent.
