@@ -2299,3 +2299,81 @@ impossible (synthesis inert), so it is the best interactive experience right now
 and the code default is 1. Flip it with:
 `Set-ItemProperty 'HKLM:\Software\Invisible Things Lab\Qubes Tools' -Name PerWindowCapture -Value 1`
 then reboot the qube (an in-place agent restart destroys gui-daemon on this build).
+
+---
+
+# 2026-08-04 (end) — CORRECTION: a GRACEFUL agent restart does NOT kill gui-daemon
+
+Found by the design workflow, verified on the guest immediately after. **Two claims I made
+earlier today were wrong; both are retracted here.**
+
+## Retraction 1: "there is no graceful shutdown path for gui-agent.exe"
+
+There is. `Global\QGA_SHUTDOWN` (`include/common.h:46`) is created at `main.c:3848` and is
+`watchedEvents[0]` in `WatchForEvents` (`main.c:3483`); signalling it sets `exitLoop` and the
+agent runs its real exit path. I concluded "force-kill is the only way" after `taskkill` without
+`/F` left the process running for 20 s — but that posts `WM_CLOSE`, and gui-agent is windowless,
+so of course it ignored it. **I tested the wrong mechanism and generalised from it.**
+
+## Retraction 2: "one gui-agent restart kills gui-daemon" — too broad
+
+Measured with the supported mechanism (`scratchpad/graceful-stop.ps1`):
+
+```
+STEP1 signalled=True event=Global\QGA_SHUTDOWN
+STEP2 exited=True after_s=1            <- "WatchForEvents: exiting"
+STEP4 respawned_pid=6492 new_log=True
+STEP5 maps=6 awaiting=1 connected=1    <- a vchan client CONNECTED
+qtest shot -> 3 windows in dom0
+```
+
+**The GUI survived an agent restart.** The correct statement is:
+
+> A **force-killed** (`TerminateProcess`) agent restart loses gui-daemon. A **graceful** restart
+> via `Global\QGA_SHUTDOWN` does not.
+
+Every harness in this project used `Stop-Process -Force` / `taskkill /F`, so every GUI loss I
+attributed to "restarting the agent" was **self-inflicted by the stop method**, not inherent.
+
+## Why force-kill loses it — mechanism, from the daemon source
+
+gui-daemon has TWO EOF paths (`gui-common/txrx-vchan.c`) and only one recovers:
+
+| path | code | outcome |
+|---|---|---|
+| poll helper | `wait_for_vchan_or_argfd_once` → `libvchan_is_eof` → `vchan_at_eof()` | `restart_guid()` → re-`execv`s → **survives** |
+| read/write helper | `handle_vchan_error` → `if (!libvchan_is_open) { "EOF"; exit(0); }` | **never restarts** |
+
+`handle_vchan_error` never consults `vchan_at_eof`. In practice only the WRITE side reaches the
+fatal branch (reads are routed through the restarting helper). And `libxenvchan_buffer_space`
+does not check `is_open` — it returns raw ring space after the peer dies — so whether the fatal
+branch fires depends on **whether the daemon happened to have anything queued to send at the
+instant the agent vanished.**
+
+That is a coin flip, and it explains the record better than my "2 for 2 reproducible" did:
+08-03 recovered twice (`libvchan_is_eof` in the daemon log), 08-04 died twice. **Same
+procedure, different daemon-side traffic.** So the force-kill failure is probabilistic, not
+deterministic, and my n=2 was not evidence of determinism. A graceful stop avoids it by letting
+the agent close the vchan properly, which drives the peer down the poll path.
+
+Also established by the workflow, and it kills a hypothesis I was carrying:
+**there is no reconnect race.** `libvchan_client_init` polls with an INFINITE timeout while the
+xenstore node is absent, aborting only if the domain is dead. A re-exec'd guid cannot fail
+merely because gui-agent.exe is briefly absent. "Shorten the agent-absent window" is dead.
+
+One deterministic guest-side hole remains worth closing: the agent removes its xenstore node
+only if a client ever connected (`main.c:3749` gates on `g_VchanClientConnected`), so an agent
+that publishes a node, never gets a client, and then exits leaves a stale node pointing at a
+revoked ring — and a guid that connects to it dies permanently with `Failed to connect to
+gui-agent`.
+
+## Immediate consequences
+
+1. **Tooling fix, no agent code needed:** stop the agent by signalling `Global\QGA_SHUTDOWN`,
+   never `Stop-Process -Force`. `scratchpad/graceful-stop.ps1` does this.
+2. **The A/B harnesses can stop cold-booting per side** — that was a workaround for a problem we
+   were causing. Cold boot remains right for *boot-path* acceptance, not for every comparison.
+3. The full design (guest-side options ranked, dom0 proposal, killed options, and the
+   experiments that would settle attribution) is in
+   `DESIGN-gui-daemon-restart-survival.md`. **dom0 items need user approval; nothing dom0-side
+   has been touched.**
