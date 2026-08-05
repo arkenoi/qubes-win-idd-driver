@@ -15,7 +15,30 @@
 #include <memory>
 #include <vector>
 
+#ifndef CTL_CODE
+#include <winioctl.h>
+#endif
+
 #include "Trace.h"
+
+// ==============================
+// Qubes D4v3: control interface shared with the session side (gui-agent).
+// The agent (runs as SYSTEM) opens the device via this device-interface GUID
+// (CM_Get_Device_Interface_ListW / CreateFileW on the interface path) and issues
+// IOCTL_QIDD_RELOAD_MODES to make the driver replug its monitor WITHOUT a PnP device
+// restart: the driver performs IddCxMonitorDeparture on the current monitor, re-reads
+// the HKLM\SOFTWARE\QubesIDD 'Modes' registry list, and re-does the arrival with the
+// same EDID-less identity. Default interface security (SYSTEM/Administrators) is
+// sufficient. A full device restart (devcon restart) remains a working fallback reload
+// path.
+// Interface GUID: {C7817EB4-B2B6-4996-A48C-04EF247952AB}
+// ==============================
+static const GUID GUID_DEVINTERFACE_QIDD =
+    { 0xC7817EB4, 0xB2B6, 0x4996, { 0xA4, 0x8C, 0x04, 0xEF, 0x24, 0x79, 0x52, 0xAB } };
+
+// METHOD_BUFFERED, FILE_DEVICE_UNKNOWN (0x22), function 0x800, FILE_ANY_ACCESS
+// -> IOCTL code value 0x00222000. No input or output buffer.
+#define IOCTL_QIDD_RELOAD_MODES CTL_CODE(FILE_DEVICE_UNKNOWN, 0x800, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 namespace Microsoft
 {
@@ -98,11 +121,25 @@ namespace Microsoft
             virtual ~IndirectDeviceContext();
 
             void InitAdapter();
-            void FinishInit(UINT ConnectorIndex);
+            NTSTATUS FinishInit(UINT ConnectorIndex);
+
+            // Qubes D4v3: control-interface plumbing. InitDeviceControl registers the
+            // device interface and creates the reload work item; QueueReloadModes is
+            // called from EvtIddCxDeviceIoControl and completes the request from the
+            // work item after ReloadModes (departure + re-arrival) has run.
+            NTSTATUS InitDeviceControl();
+            void QueueReloadModes(_In_ WDFREQUEST Request);
+            NTSTATUS ReloadModes();
 
         protected:
             WDFDEVICE m_WdfDevice;
             IDDCX_ADAPTER m_Adapter;
+
+            // Qubes D4v3 state
+            IDDCX_MONITOR m_Monitor = nullptr;          // current monitor (nullptr after departure)
+            WDFWORKITEM m_ReloadWorkItem = nullptr;
+            WDFREQUEST m_PendingReloadRequest = nullptr; // owned by the in-flight work item
+            volatile LONG m_ReloadPending = 0;
         };
 
         class IndirectMonitorContext
