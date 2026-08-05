@@ -3165,3 +3165,29 @@ qube's lifetime, CopyResource each frame into it, re-dump geometry changes over 
 grant). Kills the accumulation class structurally; also what the smooth-resize plans want.
 Interim mitigations: rate-limit topology churn (planned), and dom0 max_grant_frames raise
 (user action) as headroom.
+
+# 2026-08-05 (cont 9) — LIVELOCK ROOT-CAUSED FROM THE NMI DUMP: xeniface->xenbus grant revoke spins forever
+
+kd (CI-bundled, export-symbol resolution against the guest's own binaries; raw output in
+instrumentation/hang-2026-08-04/wedge2-kd-stacks.txt) on the 392 MB NMI dump:
+
+- **CPU 1 (the spinner):** `xeniface+0xb07d → xeniface+0xc23c` (IOCTL dispatch) →
+  `xenbus+0x11bab → xenbus+0x1cbd1` → DPC/`MmUnlockPages` …→ **`xenbus+0x1cd35`** executing
+  at NMI time. That is the **gnttab IOCTL path (revoke: MmUnlockPages = releasing granted
+  pages) stuck inside xenbus** — an unbounded wait/spin, almost certainly on a grant entry
+  that dom0 STILL MAPS (the 22k pinned entries from the xl dump).
+- CPUs 2-3: idle. CPU 0: NMI handling + NtQuerySystemInformation (the telemetry sampler).
+- Everything downstream (qrexec vchan, gui vchan, ACPI) blocks behind the stuck xenbus —
+  the whole observed syndrome from one spinning revoke.
+
+**Conclusion: the livelock is a Xen Windows PV-driver defect (xenbus/xeniface): a grant
+revoke of a still-mapped entry can spin unboundedly with locks held.** Our workload
+(framebuffer re-grant churn + revokes racing dom0's unmap) is the trigger, not the defect.
+Under the standing policy this is OUTSIDE QWT scope → upstream report (user approves text).
+Note most revokes of mapped grants return 0x490 cleanly — the spin is a rarer race, which
+matches the intermittency.
+
+Guest-side avoidance (ours, already in flight): the staging-grant change (one grant per
+agent lifetime, zero resize-time revokes) removes the trigger from the hot path; the A6
+exit drain should also SKIP revokes for grants dom0 provably still maps (log-and-leak is
+strictly safer than a kernel spin — the domain teardown reclaims them).
