@@ -3273,3 +3273,18 @@ re-run after every applied mode change — exact path, snap path, and externally
 changes observed via duplication recovery (agent commit on t2/never-exit, deployed
 A218AB2E, boot + resize verified). Functional confirmation (shadow stays gone across
 resizes) is the user's check — the blanking has no level-3 log signature.
+
+# 2026-08-05 (addendum 2) — the lost-resize bug: filter ate real intent; now suspect-only + defer
+
+User-reported "last resize failed": the widened settle-window filter DROPPED a genuine
+settled request (2055x1308, 3.3 s after a 2734x941 apply) — a settled drag's request never
+re-arrives, so the drop was a permanent loss. The same trace also delivered the day's best
+performance datum: **the agent-native IOCTL obtain applied a novel size in 356 ms**
+(RESREQ→ioctl-reload→RESEXACT replug=1), no PnP, first live use.
+
+Fix (agent a38c2f5, deployed 3DCEAD75): echo suspects are ONLY the pre-apply size and
+desktop-transit sizes recorded during the obtain (recovery path feeds them via
+ResolutionNoteTransitSize); suspects are DEFERRED to the settle-window end then applied
+(worst case one convergent late bounce), never dropped; fresh sizes apply immediately.
+Machine check: rapid pair 2222x1111 → 2345x999 (second inside the first's window) both
+applied exactly. Real-drag confirmation is the user's.
