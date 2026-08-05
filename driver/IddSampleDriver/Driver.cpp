@@ -24,15 +24,110 @@ using namespace Microsoft::WRL;
 
 #pragma region SampleMonitors
 
-static constexpr DWORD IDD_SAMPLE_MONITOR_COUNT = 3; // If monitor count > ARRAYSIZE(s_SampleMonitors), we create edid-less monitors
+static constexpr DWORD IDD_SAMPLE_MONITOR_COUNT = 1; // If monitor count > ARRAYSIZE(s_SampleMonitors), we create edid-less monitors
+static constexpr DWORD IDD_SAMPLE_EDID_MONITOR_COUNT = 0; // Connectors at index >= this are created EDID-less (modes come from EvtIddCxMonitorGetDefaultDescriptionModes). 0 = every monitor is EDID-less.
 
 // Default modes reported for edid-less monitors. The first mode is set as preferred
-static const struct IndirectSampleMonitor::SampleMonitorMode s_SampleDefaultModes[] = 
+static const struct IndirectSampleMonitor::SampleMonitorMode s_SampleDefaultModes[] =
 {
     { 1920, 1080, 60 },
     { 1600,  900, 60 },
     { 1024,  768, 75 },
 };
+
+// ==============================
+// Qubes D4 (PLAN-trackb-t2-modes.md §4 D4): extra modes declared at monitor arrival from
+// a registry list the session side can rewrite. All registry modes are reported at 60 Hz
+// and appended, deduplicated, to BOTH the monitor default-description mode list and the
+// target mode list. Missing key/value or zero valid entries -> identical to the D0 build.
+// ==============================
+static constexpr WCHAR QUBES_IDD_MODES_KEY[] = L"SOFTWARE\\QubesIDD";
+static constexpr WCHAR QUBES_IDD_MODES_VALUE[] = L"Modes";
+static constexpr size_t QUBES_IDD_MAX_REG_MODES = 32; // cap on extra modes read from the registry
+static constexpr DWORD QUBES_IDD_MODE_VSYNC = 60;
+static constexpr DWORD QUBES_IDD_MIN_WIDTH = 640;
+static constexpr DWORD QUBES_IDD_MAX_WIDTH = 16384;
+static constexpr DWORD QUBES_IDD_MIN_HEIGHT = 480;
+static constexpr DWORD QUBES_IDD_MAX_HEIGHT = 6144;
+
+struct QubesRegistryMode
+{
+    DWORD Width;
+    DWORD Height;
+};
+
+// Reads REG_MULTI_SZ 'Modes' from HKLM\SOFTWARE\QubesIDD (64-bit view). Each entry is
+// 'WIDTHxHEIGHT', e.g. '2566x1022'. Malformed entries are skipped; dimensions are
+// clamped into [640,16384] x [480,6144]; at most QUBES_IDD_MAX_REG_MODES entries.
+//
+// RELOAD MECHANISM (v1, deliberate): there is no timer and no IOCTL. This is read on the
+// mode-list callbacks that run as part of monitor arrival, so after the session side
+// rewrites the value it restarts the device (devcon restart / disable+enable), which
+// re-runs arrival and re-reads this list.
+static vector<QubesRegistryMode> QubesReadRegistryModes()
+{
+    vector<QubesRegistryMode> Modes;
+
+    DWORD cbData = 0;
+    LSTATUS Err = RegGetValueW(HKEY_LOCAL_MACHINE, QUBES_IDD_MODES_KEY, QUBES_IDD_MODES_VALUE,
+        RRF_RT_REG_MULTI_SZ | RRF_SUBKEY_WOW6464KEY, nullptr, nullptr, &cbData);
+    if (Err != ERROR_SUCCESS || cbData < sizeof(WCHAR))
+    {
+        return Modes; // no key/value -> behave exactly like D0
+    }
+
+    vector<WCHAR> Data(cbData / sizeof(WCHAR) + 2, L'\0');
+    Err = RegGetValueW(HKEY_LOCAL_MACHINE, QUBES_IDD_MODES_KEY, QUBES_IDD_MODES_VALUE,
+        RRF_RT_REG_MULTI_SZ | RRF_SUBKEY_WOW6464KEY, nullptr, Data.data(), &cbData);
+    if (Err != ERROR_SUCCESS)
+    {
+        return Modes;
+    }
+
+    // Walk the MULTI_SZ: entries are NUL-separated, list ends at an empty string.
+    for (const WCHAR* pEntry = Data.data(); *pEntry != L'\0'; pEntry += wcslen(pEntry) + 1)
+    {
+        if (Modes.size() >= QUBES_IDD_MAX_REG_MODES)
+        {
+            break;
+        }
+
+        WCHAR* pEnd = nullptr;
+        unsigned long Width = wcstoul(pEntry, &pEnd, 10);
+        if (pEnd == pEntry || *pEnd != L'x')
+        {
+            continue; // malformed: no leading number or no 'x' separator
+        }
+
+        const WCHAR* pHeight = pEnd + 1;
+        unsigned long Height = wcstoul(pHeight, &pEnd, 10);
+        if (pEnd == pHeight || *pEnd != L'\0')
+        {
+            continue; // malformed: no height number or trailing garbage
+        }
+
+        QubesRegistryMode Mode;
+        Mode.Width  = min(max((DWORD) Width,  QUBES_IDD_MIN_WIDTH),  QUBES_IDD_MAX_WIDTH);
+        Mode.Height = min(max((DWORD) Height, QUBES_IDD_MIN_HEIGHT), QUBES_IDD_MAX_HEIGHT);
+
+        // Dedup within the registry list itself (post-clamp).
+        bool bDuplicate = false;
+        for (const auto& Existing : Modes)
+        {
+            if (Existing.Width == Mode.Width && Existing.Height == Mode.Height)
+            {
+                bDuplicate = true;
+                break;
+            }
+        }
+        if (!bDuplicate)
+        {
+            Modes.push_back(Mode);
+        }
+    }
+
+    return Modes;
+}
 
 // FOR SAMPLE PURPOSES ONLY, Static info about monitors that will be reported to OS
 static const struct IndirectSampleMonitor s_SampleMonitors[] =
@@ -136,6 +231,9 @@ EVT_IDD_CX_MONITOR_QUERY_TARGET_MODES IddSampleMonitorQueryModes;
 EVT_IDD_CX_MONITOR_ASSIGN_SWAPCHAIN IddSampleMonitorAssignSwapChain;
 EVT_IDD_CX_MONITOR_UNASSIGN_SWAPCHAIN IddSampleMonitorUnassignSwapChain;
 
+// Qubes D4v3: session-side control channel (IOCTL_QIDD_RELOAD_MODES)
+EVT_IDD_CX_DEVICE_IO_CONTROL IddSampleIoDeviceControl;
+
 struct IndirectDeviceContextWrapper
 {
     IndirectDeviceContext* pContext;
@@ -217,8 +315,10 @@ NTSTATUS IddSampleDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT pDeviceInit)
     IDD_CX_CLIENT_CONFIG_INIT(&IddConfig);
 
     // If the driver wishes to handle custom IoDeviceControl requests, it's necessary to use this callback since IddCx
-    // redirects IoDeviceControl requests to an internal queue. This sample does not need this.
-    // IddConfig.EvtIddCxDeviceIoControl = IddSampleIoDeviceControl;
+    // redirects IoDeviceControl requests to an internal queue.
+    // Qubes D4v3: enabled for IOCTL_QIDD_RELOAD_MODES (monitor-level replug without a PnP
+    // device restart — full restarts disturb the Xen platform device).
+    IddConfig.EvtIddCxDeviceIoControl = IddSampleIoDeviceControl;
 
     IddConfig.EvtIddCxAdapterInitFinished = IddSampleAdapterInitFinished;
 
@@ -259,6 +359,11 @@ NTSTATUS IddSampleDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT pDeviceInit)
     // Create a new device context object and attach it to the WDF device object
     auto* pContext = WdfObjectGet_IndirectDeviceContextWrapper(Device);
     pContext->pContext = new IndirectDeviceContext(Device);
+
+    // Qubes D4v3: register the control device interface and create the reload work item.
+    // Deliberately non-fatal: a failure here disables the IOCTL reload path only — the
+    // device-restart fallback still reloads modes.
+    (void) pContext->pContext->InitDeviceControl();
 
     return Status;
 }
@@ -536,7 +641,7 @@ void IndirectDeviceContext::InitAdapter()
     }
 }
 
-void IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
+NTSTATUS IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
 {
     // ==============================
     // TODO: In a real driver, the EDID should be retrieved dynamically from a connected physical monitor. The EDIDs
@@ -548,6 +653,18 @@ void IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
 
     WDF_OBJECT_ATTRIBUTES Attr;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attr, IndirectMonitorContextWrapper);
+    // Qubes D4v3: monitors can now DEPART (IOCTL reload replug). IddCxMonitorDeparture
+    // destroys the IDDCX_MONITOR object, so free the monitor context from the object's
+    // cleanup callback instead of leaking it (the stock sample never departs a monitor
+    // and sets no cleanup here).
+    Attr.EvtCleanupCallback = [](WDFOBJECT Object)
+    {
+        auto* pContext = WdfObjectGet_IndirectMonitorContextWrapper(Object);
+        if (pContext)
+        {
+            pContext->Cleanup();
+        }
+    };
 
     // In the sample driver, we report a monitor right away but a real driver would do this when a monitor connection event occurs
     IDDCX_MONITOR_INFO MonitorInfo = {};
@@ -557,7 +674,8 @@ void IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
 
     MonitorInfo.MonitorDescription.Size = sizeof(MonitorInfo.MonitorDescription);
     MonitorInfo.MonitorDescription.Type = IDDCX_MONITOR_DESCRIPTION_TYPE_EDID;
-    if (ConnectorIndex >= ARRAYSIZE(s_SampleMonitors))
+#pragma warning(suppress: 4296) // '>=' is knowingly always true while IDD_SAMPLE_EDID_MONITOR_COUNT == 0
+    if (ConnectorIndex >= IDD_SAMPLE_EDID_MONITOR_COUNT)
     {
         MonitorInfo.MonitorDescription.DataSize = 0;
         MonitorInfo.MonitorDescription.pData = nullptr;
@@ -595,7 +713,98 @@ void IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
         // Tell the OS that the monitor has been plugged in
         IDARG_OUT_MONITORARRIVAL ArrivalOut;
         Status = IddCxMonitorArrival(MonitorCreateOut.MonitorObject, &ArrivalOut);
+        if (NT_SUCCESS(Status))
+        {
+            // Qubes D4v3: remember the live monitor so IOCTL_QIDD_RELOAD_MODES can
+            // depart and re-arrive it without a PnP device restart.
+            m_Monitor = MonitorCreateOut.MonitorObject;
+        }
     }
+
+    return Status;
+}
+
+// ==============================
+// Qubes D4v3: monitor-level mode reload (IOCTL_QIDD_RELOAD_MODES).
+// Departure destroys the current monitor object; FinishInit(0) then re-creates the same
+// EDID-less monitor 0, and the arrival-path callbacks re-read the registry mode list
+// (QubesReadRegistryModes). No PnP activity is involved — full device restarts
+// (devcon/DICS_PROPCHANGE) were observed to disturb the Xen platform device (grant-revoke
+// spins, lost event-channel delivery) and remain only as the fallback reload path.
+// ==============================
+
+NTSTATUS IndirectDeviceContext::InitDeviceControl()
+{
+    // Expose the control interface the session side opens.
+    NTSTATUS Status = WdfDeviceCreateDeviceInterface(m_WdfDevice, &GUID_DEVINTERFACE_QIDD, nullptr);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    // One reusable work item; concurrent reloads are rejected with STATUS_DEVICE_BUSY.
+    WDF_WORKITEM_CONFIG WorkItemConfig;
+    WDF_WORKITEM_CONFIG_INIT(&WorkItemConfig, [](WDFWORKITEM WorkItem)
+    {
+        WDFDEVICE Device = (WDFDEVICE) WdfWorkItemGetParentObject(WorkItem);
+        auto* pDeviceContextWrapper = WdfObjectGet_IndirectDeviceContextWrapper(Device);
+        IndirectDeviceContext* pContext = pDeviceContextWrapper->pContext;
+
+        NTSTATUS Status = pContext->ReloadModes();
+
+        WDFREQUEST Request = pContext->m_PendingReloadRequest;
+        pContext->m_PendingReloadRequest = nullptr;
+        InterlockedExchange(&pContext->m_ReloadPending, 0);
+        if (Request != nullptr)
+        {
+            WdfRequestComplete(Request, Status);
+        }
+    });
+
+    WDF_OBJECT_ATTRIBUTES WorkItemAttr;
+    WDF_OBJECT_ATTRIBUTES_INIT(&WorkItemAttr);
+    WorkItemAttr.ParentObject = m_WdfDevice;
+
+    return WdfWorkItemCreate(&WorkItemConfig, &WorkItemAttr, &m_ReloadWorkItem);
+}
+
+void IndirectDeviceContext::QueueReloadModes(WDFREQUEST Request)
+{
+    if (m_ReloadWorkItem == nullptr)
+    {
+        WdfRequestComplete(Request, STATUS_DEVICE_NOT_READY);
+        return;
+    }
+    if (InterlockedCompareExchange(&m_ReloadPending, 1, 0) != 0)
+    {
+        WdfRequestComplete(Request, STATUS_DEVICE_BUSY);
+        return;
+    }
+
+    // Hand the request to the work item: the IOCTL is completed only after the
+    // departure + re-arrival sequence has run, with its status. Departure/arrival are
+    // not called on the IddCx IOCTL dispatch thread.
+    m_PendingReloadRequest = Request;
+    WdfWorkItemEnqueue(m_ReloadWorkItem);
+}
+
+NTSTATUS IndirectDeviceContext::ReloadModes()
+{
+    if (m_Monitor != nullptr)
+    {
+        NTSTATUS Status = IddCxMonitorDeparture(m_Monitor);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        // The departure destroyed the monitor object (its cleanup callback freed the
+        // monitor context).
+        m_Monitor = nullptr;
+    }
+
+    // Re-create and re-arrive monitor 0 with the same identity; the arrival-path
+    // callbacks re-read the registry mode list.
+    return FinishInit(0);
 }
 
 IndirectMonitorContext::IndirectMonitorContext(_In_ IDDCX_MONITOR Monitor) :
@@ -735,23 +944,55 @@ NTSTATUS IddSampleMonitorGetDefaultModes(IDDCX_MONITOR MonitorObject, const IDAR
     // than an EDID, those modes would also be reported here.
     // ==============================
 
+    // Qubes D4: built-in defaults plus the registry-declared modes (at 60 Hz),
+    // deduplicated. The count is dynamic now, so build a vector instead of using the
+    // fixed-arity array directly.
+    vector<IDDCX_MONITOR_MODE> MonitorModes;
+    for (DWORD ModeIndex = 0; ModeIndex < ARRAYSIZE(s_SampleDefaultModes); ModeIndex++)
+    {
+        MonitorModes.push_back(CreateIddCxMonitorMode(
+            s_SampleDefaultModes[ModeIndex].Width,
+            s_SampleDefaultModes[ModeIndex].Height,
+            s_SampleDefaultModes[ModeIndex].VSync,
+            IDDCX_MONITOR_MODE_ORIGIN_DRIVER
+        ));
+    }
+
+    for (const auto& RegMode : QubesReadRegistryModes())
+    {
+        bool bDuplicate = false;
+        for (DWORD ModeIndex = 0; ModeIndex < ARRAYSIZE(s_SampleDefaultModes); ModeIndex++)
+        {
+            if (s_SampleDefaultModes[ModeIndex].Width == RegMode.Width &&
+                s_SampleDefaultModes[ModeIndex].Height == RegMode.Height &&
+                s_SampleDefaultModes[ModeIndex].VSync == QUBES_IDD_MODE_VSYNC)
+            {
+                bDuplicate = true;
+                break;
+            }
+        }
+        if (!bDuplicate)
+        {
+            MonitorModes.push_back(CreateIddCxMonitorMode(
+                RegMode.Width, RegMode.Height, QUBES_IDD_MODE_VSYNC, IDDCX_MONITOR_MODE_ORIGIN_DRIVER));
+        }
+    }
+
     if (pInArgs->DefaultMonitorModeBufferInputCount == 0)
     {
-        pOutArgs->DefaultMonitorModeBufferOutputCount = ARRAYSIZE(s_SampleDefaultModes); 
+        pOutArgs->DefaultMonitorModeBufferOutputCount = (UINT) MonitorModes.size();
     }
     else
     {
-        for (DWORD ModeIndex = 0; ModeIndex < ARRAYSIZE(s_SampleDefaultModes); ModeIndex++)
+        // Guard against the registry changing between the size call and the fill call.
+        UINT ModesToCopy = (UINT) MonitorModes.size();
+        if (ModesToCopy > pInArgs->DefaultMonitorModeBufferInputCount)
         {
-            pInArgs->pDefaultMonitorModes[ModeIndex] = CreateIddCxMonitorMode(
-                s_SampleDefaultModes[ModeIndex].Width,
-                s_SampleDefaultModes[ModeIndex].Height,
-                s_SampleDefaultModes[ModeIndex].VSync,
-                IDDCX_MONITOR_MODE_ORIGIN_DRIVER
-            );
+            ModesToCopy = pInArgs->DefaultMonitorModeBufferInputCount;
         }
+        copy(MonitorModes.begin(), MonitorModes.begin() + ModesToCopy, pInArgs->pDefaultMonitorModes);
 
-        pOutArgs->DefaultMonitorModeBufferOutputCount = ARRAYSIZE(s_SampleDefaultModes); 
+        pOutArgs->DefaultMonitorModeBufferOutputCount = ModesToCopy;
         pOutArgs->PreferredMonitorModeIdx = 0;
     }
 
@@ -780,6 +1021,30 @@ NTSTATUS IddSampleMonitorQueryModes(IDDCX_MONITOR MonitorObject, const IDARG_IN_
     TargetModes.push_back(CreateIddCxTargetMode(1024,  768, 75));
     TargetModes.push_back(CreateIddCxTargetMode(1024,  768, 60));
 
+    // Qubes D4: append the registry-declared modes (at 60 Hz) to the target list too —
+    // the OS offers the intersection of monitor and target modes, so a registry mode is
+    // only reachable if it is in both. Dedup against the built-ins above.
+    const size_t BuiltInCount = TargetModes.size();
+    for (const auto& RegMode : QubesReadRegistryModes())
+    {
+        bool bDuplicate = false;
+        for (size_t ModeIndex = 0; ModeIndex < BuiltInCount; ModeIndex++)
+        {
+            const auto& Existing = TargetModes[ModeIndex].TargetVideoSignalInfo.targetVideoSignalInfo;
+            if (Existing.activeSize.cx == RegMode.Width &&
+                Existing.activeSize.cy == RegMode.Height &&
+                Existing.vSyncFreq.Numerator == QUBES_IDD_MODE_VSYNC)
+            {
+                bDuplicate = true;
+                break;
+            }
+        }
+        if (!bDuplicate)
+        {
+            TargetModes.push_back(CreateIddCxTargetMode(RegMode.Width, RegMode.Height, QUBES_IDD_MODE_VSYNC));
+        }
+    }
+
     pOutArgs->TargetModeBufferOutputCount = (UINT) TargetModes.size();
 
     if (pInArgs->TargetModeBufferInputCount >= TargetModes.size())
@@ -804,6 +1069,31 @@ NTSTATUS IddSampleMonitorUnassignSwapChain(IDDCX_MONITOR MonitorObject)
     auto* pMonitorContextWrapper = WdfObjectGet_IndirectMonitorContextWrapper(MonitorObject);
     pMonitorContextWrapper->pContext->UnassignSwapChain();
     return STATUS_SUCCESS;
+}
+
+// Qubes D4v3: IddCx redirects device I/O to an internal queue and hands it to this
+// callback. Only IOCTL_QIDD_RELOAD_MODES is supported (no input/output buffers). The
+// request is NOT completed here — QueueReloadModes hands it to a work item and completes
+// it after the departure + re-arrival sequence, so the IddCx dispatch thread never
+// blocks on IddCx monitor calls.
+_Use_decl_annotations_
+VOID IddSampleIoDeviceControl(WDFDEVICE Device, WDFREQUEST Request, size_t OutputBufferLength, size_t InputBufferLength, ULONG IoControlCode)
+{
+    UNREFERENCED_PARAMETER(OutputBufferLength);
+    UNREFERENCED_PARAMETER(InputBufferLength);
+
+    switch (IoControlCode)
+    {
+    case IOCTL_QIDD_RELOAD_MODES:
+    {
+        auto* pDeviceContextWrapper = WdfObjectGet_IndirectDeviceContextWrapper(Device);
+        pDeviceContextWrapper->pContext->QueueReloadModes(Request);
+        break;
+    }
+    default:
+        WdfRequestComplete(Request, STATUS_INVALID_DEVICE_REQUEST);
+        break;
+    }
 }
 
 #pragma endregion
