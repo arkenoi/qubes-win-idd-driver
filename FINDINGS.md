@@ -3304,3 +3304,20 @@ Consequence for testing: machine-driving the agent's obtain path requires REAL M
 traffic — i.e. the _QUBES_VMNAME-based dom0 resize service (v2, written, awaiting the user's
 one-command reinstall) or the user's hands. Soak harnesses must not touch the modes registry
 while the agent runs.
+
+# 2026-08-05 (addendum 4) — wrong-jump #3 fixed (75 ms announce race); device sounds silenced
+
+The user's third wrong-size jump: the capture thread's recovery cycle announced a transit
+mode (A6CONFIGURE 1920x1080) 75 ms AFTER the resolution thread's apply cleared the in-flight
+flag — outside the suppression gate — and the daemon echoed it back into an apply. Fix
+(deployed 2977CCD8): the announce gate now covers the whole settle window; while it is open
+ONLY the exact target geometry may be announced, and suppressed geometries are recorded as
+echo suspects (which the defer filter then handles even if one leaks).
+
+Also: monitor replugs fired Windows' device connect/disconnect sounds on every resize —
+silenced via HKCU AppEvents (DeviceConnect/DeviceDisconnect/DeviceFail set to no sound).
+
+Resize-service note: the repo's dom0/10 installer had regressed to the v1 title-matching
+body, which is what the user's reinstall deployed (still no_window). v2 restored in the repo
+from git history (commit 15d530a); needs one more user reinstall to unlock scripted
+real-MSG_CONFIGURE soaks.
