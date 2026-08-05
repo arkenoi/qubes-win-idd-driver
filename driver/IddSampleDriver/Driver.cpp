@@ -231,6 +231,9 @@ EVT_IDD_CX_MONITOR_QUERY_TARGET_MODES IddSampleMonitorQueryModes;
 EVT_IDD_CX_MONITOR_ASSIGN_SWAPCHAIN IddSampleMonitorAssignSwapChain;
 EVT_IDD_CX_MONITOR_UNASSIGN_SWAPCHAIN IddSampleMonitorUnassignSwapChain;
 
+// Qubes D4v3: session-side control channel (IOCTL_QIDD_RELOAD_MODES)
+EVT_IDD_CX_DEVICE_IO_CONTROL IddSampleIoDeviceControl;
+
 struct IndirectDeviceContextWrapper
 {
     IndirectDeviceContext* pContext;
@@ -312,8 +315,10 @@ NTSTATUS IddSampleDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT pDeviceInit)
     IDD_CX_CLIENT_CONFIG_INIT(&IddConfig);
 
     // If the driver wishes to handle custom IoDeviceControl requests, it's necessary to use this callback since IddCx
-    // redirects IoDeviceControl requests to an internal queue. This sample does not need this.
-    // IddConfig.EvtIddCxDeviceIoControl = IddSampleIoDeviceControl;
+    // redirects IoDeviceControl requests to an internal queue.
+    // Qubes D4v3: enabled for IOCTL_QIDD_RELOAD_MODES (monitor-level replug without a PnP
+    // device restart — full restarts disturb the Xen platform device).
+    IddConfig.EvtIddCxDeviceIoControl = IddSampleIoDeviceControl;
 
     IddConfig.EvtIddCxAdapterInitFinished = IddSampleAdapterInitFinished;
 
@@ -354,6 +359,11 @@ NTSTATUS IddSampleDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT pDeviceInit)
     // Create a new device context object and attach it to the WDF device object
     auto* pContext = WdfObjectGet_IndirectDeviceContextWrapper(Device);
     pContext->pContext = new IndirectDeviceContext(Device);
+
+    // Qubes D4v3: register the control device interface and create the reload work item.
+    // Deliberately non-fatal: a failure here disables the IOCTL reload path only — the
+    // device-restart fallback still reloads modes.
+    (void) pContext->pContext->InitDeviceControl();
 
     return Status;
 }
@@ -631,7 +641,7 @@ void IndirectDeviceContext::InitAdapter()
     }
 }
 
-void IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
+NTSTATUS IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
 {
     // ==============================
     // TODO: In a real driver, the EDID should be retrieved dynamically from a connected physical monitor. The EDIDs
@@ -643,6 +653,18 @@ void IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
 
     WDF_OBJECT_ATTRIBUTES Attr;
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attr, IndirectMonitorContextWrapper);
+    // Qubes D4v3: monitors can now DEPART (IOCTL reload replug). IddCxMonitorDeparture
+    // destroys the IDDCX_MONITOR object, so free the monitor context from the object's
+    // cleanup callback instead of leaking it (the stock sample never departs a monitor
+    // and sets no cleanup here).
+    Attr.EvtCleanupCallback = [](WDFOBJECT Object)
+    {
+        auto* pContext = WdfObjectGet_IndirectMonitorContextWrapper(Object);
+        if (pContext)
+        {
+            pContext->Cleanup();
+        }
+    };
 
     // In the sample driver, we report a monitor right away but a real driver would do this when a monitor connection event occurs
     IDDCX_MONITOR_INFO MonitorInfo = {};
@@ -691,7 +713,98 @@ void IndirectDeviceContext::FinishInit(UINT ConnectorIndex)
         // Tell the OS that the monitor has been plugged in
         IDARG_OUT_MONITORARRIVAL ArrivalOut;
         Status = IddCxMonitorArrival(MonitorCreateOut.MonitorObject, &ArrivalOut);
+        if (NT_SUCCESS(Status))
+        {
+            // Qubes D4v3: remember the live monitor so IOCTL_QIDD_RELOAD_MODES can
+            // depart and re-arrive it without a PnP device restart.
+            m_Monitor = MonitorCreateOut.MonitorObject;
+        }
     }
+
+    return Status;
+}
+
+// ==============================
+// Qubes D4v3: monitor-level mode reload (IOCTL_QIDD_RELOAD_MODES).
+// Departure destroys the current monitor object; FinishInit(0) then re-creates the same
+// EDID-less monitor 0, and the arrival-path callbacks re-read the registry mode list
+// (QubesReadRegistryModes). No PnP activity is involved — full device restarts
+// (devcon/DICS_PROPCHANGE) were observed to disturb the Xen platform device (grant-revoke
+// spins, lost event-channel delivery) and remain only as the fallback reload path.
+// ==============================
+
+NTSTATUS IndirectDeviceContext::InitDeviceControl()
+{
+    // Expose the control interface the session side opens.
+    NTSTATUS Status = WdfDeviceCreateDeviceInterface(m_WdfDevice, &GUID_DEVINTERFACE_QIDD, nullptr);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    // One reusable work item; concurrent reloads are rejected with STATUS_DEVICE_BUSY.
+    WDF_WORKITEM_CONFIG WorkItemConfig;
+    WDF_WORKITEM_CONFIG_INIT(&WorkItemConfig, [](WDFWORKITEM WorkItem)
+    {
+        WDFDEVICE Device = (WDFDEVICE) WdfWorkItemGetParentObject(WorkItem);
+        auto* pDeviceContextWrapper = WdfObjectGet_IndirectDeviceContextWrapper(Device);
+        IndirectDeviceContext* pContext = pDeviceContextWrapper->pContext;
+
+        NTSTATUS Status = pContext->ReloadModes();
+
+        WDFREQUEST Request = pContext->m_PendingReloadRequest;
+        pContext->m_PendingReloadRequest = nullptr;
+        InterlockedExchange(&pContext->m_ReloadPending, 0);
+        if (Request != nullptr)
+        {
+            WdfRequestComplete(Request, Status);
+        }
+    });
+
+    WDF_OBJECT_ATTRIBUTES WorkItemAttr;
+    WDF_OBJECT_ATTRIBUTES_INIT(&WorkItemAttr);
+    WorkItemAttr.ParentObject = m_WdfDevice;
+
+    return WdfWorkItemCreate(&WorkItemConfig, &WorkItemAttr, &m_ReloadWorkItem);
+}
+
+void IndirectDeviceContext::QueueReloadModes(WDFREQUEST Request)
+{
+    if (m_ReloadWorkItem == nullptr)
+    {
+        WdfRequestComplete(Request, STATUS_DEVICE_NOT_READY);
+        return;
+    }
+    if (InterlockedCompareExchange(&m_ReloadPending, 1, 0) != 0)
+    {
+        WdfRequestComplete(Request, STATUS_DEVICE_BUSY);
+        return;
+    }
+
+    // Hand the request to the work item: the IOCTL is completed only after the
+    // departure + re-arrival sequence has run, with its status. Departure/arrival are
+    // not called on the IddCx IOCTL dispatch thread.
+    m_PendingReloadRequest = Request;
+    WdfWorkItemEnqueue(m_ReloadWorkItem);
+}
+
+NTSTATUS IndirectDeviceContext::ReloadModes()
+{
+    if (m_Monitor != nullptr)
+    {
+        NTSTATUS Status = IddCxMonitorDeparture(m_Monitor);
+        if (!NT_SUCCESS(Status))
+        {
+            return Status;
+        }
+        // The departure destroyed the monitor object (its cleanup callback freed the
+        // monitor context).
+        m_Monitor = nullptr;
+    }
+
+    // Re-create and re-arrive monitor 0 with the same identity; the arrival-path
+    // callbacks re-read the registry mode list.
+    return FinishInit(0);
 }
 
 IndirectMonitorContext::IndirectMonitorContext(_In_ IDDCX_MONITOR Monitor) :
@@ -956,6 +1069,31 @@ NTSTATUS IddSampleMonitorUnassignSwapChain(IDDCX_MONITOR MonitorObject)
     auto* pMonitorContextWrapper = WdfObjectGet_IndirectMonitorContextWrapper(MonitorObject);
     pMonitorContextWrapper->pContext->UnassignSwapChain();
     return STATUS_SUCCESS;
+}
+
+// Qubes D4v3: IddCx redirects device I/O to an internal queue and hands it to this
+// callback. Only IOCTL_QIDD_RELOAD_MODES is supported (no input/output buffers). The
+// request is NOT completed here — QueueReloadModes hands it to a work item and completes
+// it after the departure + re-arrival sequence, so the IddCx dispatch thread never
+// blocks on IddCx monitor calls.
+_Use_decl_annotations_
+VOID IddSampleIoDeviceControl(WDFDEVICE Device, WDFREQUEST Request, size_t OutputBufferLength, size_t InputBufferLength, ULONG IoControlCode)
+{
+    UNREFERENCED_PARAMETER(OutputBufferLength);
+    UNREFERENCED_PARAMETER(InputBufferLength);
+
+    switch (IoControlCode)
+    {
+    case IOCTL_QIDD_RELOAD_MODES:
+    {
+        auto* pDeviceContextWrapper = WdfObjectGet_IndirectDeviceContextWrapper(Device);
+        pDeviceContextWrapper->pContext->QueueReloadModes(Request);
+        break;
+    }
+    default:
+        WdfRequestComplete(Request, STATUS_INVALID_DEVICE_REQUEST);
+        break;
+    }
 }
 
 #pragma endregion
