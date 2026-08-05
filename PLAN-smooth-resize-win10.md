@@ -373,3 +373,12 @@ at the value M0+M5 justify (target ≤1 s, floor honestly reported if higher), z
 the limiter-on soak, and the ceiling section (§3) reproduced verbatim in the user-facing
 status — mid-drag live resolution tracking is off the table on IddCx 1.5 and is stated as
 such, not promised as future work.
+
+---
+## CONSOLIDATION (user decision 2026-08-05): ONE UNIVERSAL DRIVER
+Comparing this plan with PLAN-smooth-resize-win11.md, the user decided a separate Win11
+branch is not worth it. Ruling: one driver compiled against IddCx 1.5 (runs on Win11
+unchanged), optional newer functions runtime-probed via IDD_IS_FUNCTION_AVAILABLE; the
+Win11 plan's unique items become (a) re-running the measurement gates on a Win11 guest and
+(b) two AGENT-side version conditionals (24H2 SDC_FORCE_MODE_ENUMERATION retry, 25H2
+double-windows predicate). No driver fork.
