@@ -3364,3 +3364,21 @@ and snaps fully painted at the final size, replacing the transient sheared-band 
 - Watcher frame-extents fix live (user-restarted): feed now carries real extents.
 Deployed: agent 385EBAEA (stack: staging + exact-follow + never-exit + echo-family gates +
 held-frame + M6 + A4-lite), driver 57eb5004. All merged to main.
+
+# 2026-08-05 (final 4) — border-aware M6 variants + 15 px habitual snap, verified live
+
+User feedback pair: (1) vertical size off by the border pixels — frame extents are
+WINDOW-STATE-DEPENDENT (this WM hides borders when maximized: real maximized client
+5120x1384 vs bordered computation 5110x1379). Fix: publish BOTH variants of maximize and
+tile-half (dedupe collapses them when extents are 0). (2) "if the size is close (<15px),
+make it snap" — new rule: dom0 requests within 15 px of a WORK-AREA-DERIVED published size
+snap to it (RESSNAP15); deliberately never snaps to the previous target so small manual
+adjustments stick; the daemon nudging the window onto the tile is sanctioned and bounded.
+
+Verified live (agent 2E5DD07026E29091, commits 8410cbe+bef52d7+398566b): feed 5/5/25/5 →
+set `max=5120x1384/5110x1379 half=2560x1384/2550x1379`; request 2556x1382 → RESSNAP15 →
+2560x1384 applied; dom0 window and guest both at 2560x1384. First snap was replug=1 (the
+deferred set became live with it); subsequent habitual snaps are replug=0. Note: after a
+VM reboot the feed is stale up to ~60 s (fresh qubesdb, watcher repopulate tick) — the
+set self-corrects via M6DEFER when the push lands; boot-time sets may briefly lack the
+work-area entries.
