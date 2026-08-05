@@ -3031,3 +3031,28 @@ one more datapoint for the §3 upstream report (DESIGN-gui-daemon-restart-surviv
 
 State: agent AD4DE497 (A6+A7+ackrepaint) running, IDD primary, debounced loop live,
 guest at 2560x1440 clean. D4v2 stable-EDID fix still iterating in CI.
+
+# 2026-08-05 (cont 5) — freeze hunt: 100-cycle soak clean on the current stack; trap stays set
+
+User priority: crashes/freezes above all. State of the hunt:
+- **Soak reproduction: 40 batches (~100 replug cycles), alternating rapid-sequential and
+  3-way-concurrent syncs, ZERO wedges** on agent AD4DE497 in a fresh boot — including the
+  exact concurrent pattern that wedged earlier the same day. The wedge is a genuine but
+  RARE race, possibly involving boot-accumulated display-instance state or real-WM-drag
+  echo storms (not reproducible without the dom0 drag harness).
+- **Trap set for the next occurrence:** in-guest CPU-attribution telemetry
+  (guest/wedge-telemetry.ps1, 2 s samples incl. DPC/interrupt time → survives the wedge on
+  disk), NMICrashDump=1 armed (dom0 `xl trigger <dom> nmi` would produce MEMORY.DMP — needs
+  the user), soak harness committed (scratchpad/soak-wedge.sh, stops AT the wedge without
+  recovering). Re-arm both loops after any reboot: resize-sync.ps1 (debounced) +
+  wedge-telemetry.ps1.
+- **Churn-frequency reduction shipped:** agent 5969284 widens the rolling resolution
+  debounce 500→1200 ms (mid-drag hesitations no longer fire mode changes); deployed as
+  DCFEA348 (stack t2/a6-stack), boot-verified, E2E sync clean post-boot.
+- The earlier "jumped weirdly": mid-drag snap applies + the loop latching a mid-drag pause
+  size (2008x645). The 1200 ms debounce addresses the first; the proper cure for both is
+  the agent-native exact-mode path (agent publishes + replugs + applies itself, no PS loop)
+  — designed next step, deliberately parked BELOW the freeze work per user priority.
+Guest state: DCFEA348 (A3+A6+A7+ackrepaint+1200ms), IDD primary via D4 v1, 2560x1440,
+debounced loop + telemetry running, netvm detached. D4v2 stable-EDID still with the
+driver agent (monitor-arrival regression under root-cause).
