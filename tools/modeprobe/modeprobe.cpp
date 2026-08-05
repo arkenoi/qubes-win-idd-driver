@@ -341,6 +341,7 @@ struct Options
 {
     bool do_test = false;
     bool do_apply = false;
+    bool do_solo = false;       // --solo WxH: target device primary at WxH, all others detached
     Mode req;                   // requested w/h always; bpp/hz 0 = "not specified"
     bool req_has_bpp = false;
     bool req_has_hz = false;
@@ -364,7 +365,11 @@ static void Usage()
         "                       apply the mode DYNAMICALLY (no registry persistence,\n"
         "                       reverts on reboot), then re-read ENUM_CURRENT_SETTINGS\n"
         "                       and report the readback. Exit 3 if readback != request.\n"
-        "  --device NAME        target device for --test/--apply (e.g. \\\\.\\DISPLAY2);\n"
+        "  --solo WxH           topology assertion: make --device primary at WxH at (0,0)\n"
+        "                       and DETACH every other display. Uses CDS_UPDATEREGISTRY on\n"
+        "                       purpose (unlike --apply): the single-display topology must\n"
+        "                       survive a reboot. Requires --device.\n"
+        "  --device NAME        target device for --test/--apply/--solo (e.g. \\\\.\\DISPLAY2);\n"
         "                       default is the primary device.\n"
         "  --json FILE          also write the JSON object to FILE\n"
         "  --help               this text\n"
@@ -417,6 +422,15 @@ int main(int argc, char** argv)
             }
             opt.do_apply = true;
         }
+        else if (_stricmp(a, "--solo") == 0 && i + 1 < argc)
+        {
+            if (!ParseSizeSpec(argv[++i], &opt))
+            {
+                fprintf(stderr, "modeprobe: bad --solo size '%s' (want WxH)\n", argv[i]);
+                return 2;
+            }
+            opt.do_solo = true;
+        }
         else if (_stricmp(a, "--device") == 0 && i + 1 < argc)
         {
             opt.device = argv[++i];
@@ -432,9 +446,14 @@ int main(int argc, char** argv)
             return 2;
         }
     }
-    if (opt.do_test && opt.do_apply)
+    if ((opt.do_test ? 1 : 0) + (opt.do_apply ? 1 : 0) + (opt.do_solo ? 1 : 0) > 1)
     {
-        fprintf(stderr, "modeprobe: --test and --apply are mutually exclusive\n");
+        fprintf(stderr, "modeprobe: --test, --apply and --solo are mutually exclusive\n");
+        return 2;
+    }
+    if (opt.do_solo && opt.device.empty())
+    {
+        fprintf(stderr, "modeprobe: --solo requires --device (refusing to guess which display survives)\n");
         return 2;
     }
 
@@ -447,7 +466,7 @@ int main(int argc, char** argv)
     int exit_code = devices.empty() ? 1 : 0;
     std::string result_json = "null";
 
-    if ((opt.do_test || opt.do_apply) && exit_code == 0)
+    if ((opt.do_test || opt.do_apply || opt.do_solo) && exit_code == 0)
     {
         // Resolve the target device: --device by name, else the primary one.
         const DeviceInfo* target = nullptr;
@@ -485,7 +504,83 @@ int main(int argc, char** argv)
             }
         }
 
-        if (target)
+        if (target && opt.do_solo)
+        {
+            // Topology assertion: target primary at WxH at (0,0), every other display
+            // DETACHED. CDS_UPDATEREGISTRY throughout - unlike --apply, this single-display
+            // topology is MEANT to persist across reboots (it also overwrites the stale
+            // GraphicsDrivers\Configuration entries that DisplaySwitch experiments leave).
+            std::string steps = "[";
+            bool first = true;
+            for (size_t i = 0; i < devices.size(); i++)
+            {
+                if (_wcsicmp(devices[i].name_w.c_str(), target->name_w.c_str()) == 0 ||
+                    !devices[i].attached)
+                    continue;
+                DEVMODEW det;
+                ZeroMemory(&det, sizeof(det));
+                det.dmSize = sizeof(det);
+                det.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT;
+                det.dmPelsWidth = 0;
+                det.dmPelsHeight = 0;
+                LONG drc = ChangeDisplaySettingsExW(devices[i].name_w.c_str(), &det, nullptr,
+                                                    CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+                if (!first) steps += ",";
+                first = false;
+                steps += "{\"device\":" + JStr(devices[i].name) +
+                         ",\"op\":\"detach\",\"disp_change\":" + Fmt("%ld", (long)drc) + "}";
+            }
+            DEVMODEW pm;
+            ZeroMemory(&pm, sizeof(pm));
+            pm.dmSize = sizeof(pm);
+            pm.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT;
+            pm.dmPelsWidth = opt.req.w;
+            pm.dmPelsHeight = opt.req.h;
+            LONG prc = ChangeDisplaySettingsExW(target->name_w.c_str(), &pm, nullptr,
+                                                CDS_SET_PRIMARY | CDS_UPDATEREGISTRY | CDS_NORESET,
+                                                nullptr);
+            if (!first) steps += ",";
+            steps += "{\"device\":" + JStr(target->name) +
+                     ",\"op\":\"primary\",\"disp_change\":" + Fmt("%ld", (long)prc) + "}";
+            LONG crc = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
+            steps += ",{\"op\":\"commit\",\"disp_change\":" + Fmt("%ld", (long)crc) + "}]";
+
+            // Readback truth: re-enumerate. match = target attached+primary at WxH and
+            // ZERO other attached displays. The check can fail; exit 3 when it does.
+            std::vector<DeviceInfo> after = EnumerateDevices();
+            int attached_others = 0;
+            bool tgt_ok = false;
+            Mode rb;
+            bool rb_ok = false;
+            for (size_t i = 0; i < after.size(); i++)
+            {
+                if (_wcsicmp(after[i].name_w.c_str(), target->name_w.c_str()) == 0)
+                {
+                    rb_ok = ReadCurrentMode(after[i].name_w.c_str(), &rb);
+                    tgt_ok = after[i].attached && after[i].primary && rb_ok &&
+                             rb.w == opt.req.w && rb.h == opt.req.h;
+                }
+                else if (after[i].attached)
+                {
+                    attached_others++;
+                }
+            }
+            std::string rj = "{";
+            rj += "\"action\":" + JStr("solo");
+            rj += ",\"device\":" + JStr(target->name);
+            rj += ",\"requested\":{\"w\":" + Fmt("%lu", (unsigned long)opt.req.w) +
+                  ",\"h\":" + Fmt("%lu", (unsigned long)opt.req.h) + "}";
+            rj += ",\"steps\":" + steps;
+            rj += ",\"readback\":" + (rb_ok ? JMode(rb) : std::string("null"));
+            rj += ",\"attached_others\":" + Fmt("%d", attached_others);
+            bool match = tgt_ok && attached_others == 0;
+            rj += ",\"match\":" + JBool(match);
+            if (!match)
+                exit_code = 3;
+            rj += "}";
+            result_json = rj;
+        }
+        else if (target)
         {
             DEVMODEW dm;
             ZeroMemory(&dm, sizeof(dm));
