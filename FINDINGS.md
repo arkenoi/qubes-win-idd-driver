@@ -3263,3 +3263,13 @@ restarts, 6 reboots incl. the previously-wedging shutdown path, zero wedges, zer
 all pixels live, daemon deaths 4/10 restarts (was 6/10; the cleaner exit shrinks the EOF
 race too). The residual daemon coin-flip is the dom0 gui-daemon bug - upstream report
 awaiting user approval; that fix is what makes agent exits fully free.
+
+# 2026-08-05 (addendum) — shadow-cursor regression after resizes: fixed
+
+User-reported: the guest shadow cursor reappeared after a couple of resizes. Cause: a
+display mode change makes Windows reload the cursor scheme, undoing HideCursors()' one-time
+blanking (the exact weakness the cursor investigation predicted). Fix: HideCursors() is
+re-run after every applied mode change — exact path, snap path, and externally-driven
+changes observed via duplication recovery (agent commit on t2/never-exit, deployed
+A218AB2E, boot + resize verified). Functional confirmation (shadow stays gone across
+resizes) is the user's check — the blanking has no level-3 log signature.
