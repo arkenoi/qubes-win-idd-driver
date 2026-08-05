@@ -35,14 +35,19 @@ current_value() {
     x=${arr[$idx]:-0}; y=${arr[$((idx+1))]:-0}
     w=${arr[$((idx+2))]:-0}; h=${arr[$((idx+3))]:-0}
 
-    # frame extents from any managed window of this VM (l, r, t, b)
-    local fl=0 fr=0 ft=0 fb=0 wid
-    for wid in $(xdotool search --name "^\[$VM\]" 2>/dev/null | head -5); do
+    # frame extents from any managed window of this VM (l, r, t, b).
+    # Select by _QUBES_VMNAME - dom0-set and unforgeable; WM_NAME never carries
+    # "[vm]" (that text is WM decoration), so the old title match never found a
+    # window and the extents silently stayed at the 0 fallback (measured: real
+    # title bar is ~25 px; M6 maximize sizes would poke under the panel).
+    local fl=0 fr=0 ft=0 fb=0 wid owner
+    for wid in $(xprop -root _NET_CLIENT_LIST 2>/dev/null | sed 's/.*# *//; s/,//g'); do
+        owner=$(xprop -id "$wid" _QUBES_VMNAME 2>/dev/null | sed -n 's/^_QUBES_VMNAME(STRING) = "\(.*\)"$/\1/p')
+        [ "$owner" = "$VM" ] || continue
         fx=$(xprop -id "$wid" -notype _NET_FRAME_EXTENTS 2>/dev/null | sed 's/.*= //; s/,//g')
-        if [ -n "$fx" ] && [ "$fx" != "_NET_FRAME_EXTENTS:  not found." ]; then
-            read -r fl fr ft fb <<< "$fx"
-            break
-        fi
+        case "$fx" in
+            *[0-9]*) read -r fl fr ft fb <<< "$fx"; break ;;
+        esac
     done
 
     echo "$x $y $w $h ${fl:-0} ${fr:-0} ${ft:-0} ${fb:-0}"
