@@ -3288,3 +3288,19 @@ ResolutionNoteTransitSize); suspects are DEFERRED to the settle-window end then 
 (worst case one convergent late bounce), never dropped; fresh sizes apply immediately.
 Machine check: rapid pair 2222x1111 → 2345x999 (second inside the first's window) both
 applied exactly. Real-drag confirmation is the user's.
+
+# 2026-08-05 (addendum 3) — SyncNow harness retired: it now races the agent it tests
+
+The rapid-pair machine check "failed" (2345x999 mode_never_offered) because of the harness,
+not the agent: the agent's echo-follow processed the daemon's echo of the harness's first
+apply through its FULL native path — RESREQ src=dom0 → WriteRequestedIddMode(2222x1111) →
+QIDD ioctl-reload → RESEXACT replug=1, ~420 ms — and its registry write raced the harness's
+write of the second size. Two writers on HKLM\SOFTWARE\QubesIDD\Modes: the agent is now the
+rightful owner; resize-sync.ps1 -SyncNow is RETIRED as a resize-testing tool (still fine as
+a one-shot recovery hammer when no agent runs). Incidentally this was the first complete
+live validation of the agent-native loop end to end, echo-triggered.
+
+Consequence for testing: machine-driving the agent's obtain path requires REAL MSG_CONFIGURE
+traffic — i.e. the _QUBES_VMNAME-based dom0 resize service (v2, written, awaiting the user's
+one-command reinstall) or the user's hands. Soak harnesses must not touch the modes registry
+while the agent runs.
