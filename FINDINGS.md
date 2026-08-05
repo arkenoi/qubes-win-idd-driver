@@ -3236,3 +3236,30 @@ the same path is soak-proven.
 
 Upstream drafts now pending user approval: gui-daemon EOF (2 defects), xl console overflow,
 xenbus/xeniface revoke spin. All in docs/ + DESIGN-gui-daemon-restart-survival.md.
+
+# 2026-08-05 (final) — the rock-solid-agent answer, measured
+
+User question: "make sure the agent does NOT unexpectedly exit?" Answer shipped and soaked:
+
+1. **NEVEREXIT audit** (agent a776efb): complete inventory of every exit path. Remaining
+   fatal exits ONLY: dead vchan / handshake-on-dead-vchan (exit harmless, daemon gone) and
+   QGA_SHUTDOWN. Converted to degraded-and-retry: capture-init exhaustion (A7DEGRADED state
+   - vchan stays serviced, capture retries every 5 s forever), SetSeamlessMode failures,
+   HandleXconf resolution failure, per-handler failures with fully-consumed bodies, one
+   capture.c exit(OOM). vchan-desync stays fatal deliberately: a desynced stream re-parsed
+   as messages could synthesize keyboard/mouse input - the fatality is an input-integrity
+   boundary. Bonus fixes forced by the audit: duplicate-CREATE(0) guard (a daemon-killer),
+   fullscreen-toggle-during-recovery guard, two NULL-capture crash sites.
+2. **RESECHO filter** (d316f19): the user-observed "applies exact then reverts" was the
+   daemon echoing its stale pre-apply size during the replug outage; a dom0 request equal
+   to the pre-apply size within 4 s of an exact apply is dropped and logged.
+3. **Settle-then-single-pass exit revokes** (ce32fc1): the exit drain's 100 ms revoke
+   retries rolled the xenbus revoke-vs-unmap spin race ~20x per exit and wedged the guest
+   DURING OS SHUTDOWN (soak cycle 5, Transient + full spin signature, state captured).
+   Now: 1 s settle, one attempt per grant, loud abandonment. PwShutdown same.
+
+**Acceptance soak on the final stack (agent D26DC84D): PASS 30/30** - 10 graceful agent
+restarts, 6 reboots incl. the previously-wedging shutdown path, zero wedges, zero reverts,
+all pixels live, daemon deaths 4/10 restarts (was 6/10; the cleaner exit shrinks the EOF
+race too). The residual daemon coin-flip is the dom0 gui-daemon bug - upstream report
+awaiting user approval; that fix is what makes agent exits fully free.
