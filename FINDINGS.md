@@ -3109,3 +3109,30 @@ PLAN-smooth-resize-win11.md (milestones W0-W7, ~16-25 pd).
 - Smooth-resize plans delivered per user directive: PLAN-smooth-resize-win10.md (bee4a42,
   ~10-14 pd, one-replug-per-gesture ceiling) and PLAN-smooth-resize-win11.md (615cacf,
   ~16-25 pd, verdict: Win11 changes nothing structural — replug remains the mechanism).
+
+# 2026-08-05 (cont 7) — "it died" root-caused: ONE denied SendInput killed the agent AND the daemon
+
+The user's window death during their drag was neither the livelock nor grants. The wedged-
+looking state had qrexec ALIVE and zero CPU spin — only gui-daemon was dead. Agent log,
+17:24:39: guest idled ~9 min → lock screen took the input desktop → dom0 sent mouse motion →
+`HandleMotion: SendInput failed with error 0x5 (ACCESS_DENIED)` → **HandleServerData treats
+any handler failure as fatal** → agent exits → vchan closes → gui-daemon EOF death (the
+known dom0 coin-flip) → window gone. A single undeliverable mouse event took down the whole
+GUI chain. This crash class is trivially triggerable: UAC secure desktop, idle lock, any
+desktop switch.
+
+**Fix (agent 8ad3f1e+f37759c, deployed A11F5E60, stack t2/resilience-stack):** all six
+SendInput sites route through InjectInput() — log, best-effort AttachToInputDesktop for the
+next event, DROP the event, continue. Protocol-safe (body already consumed). Input
+injection failures are never fatal again.
+**Hygiene:** the test qube no longer idle-locks or blanks (NoLockScreen=1,
+InactivityTimeoutSecs=0, monitor-timeout 0) — a guest whose input comes from dom0 must
+never take the input desktop away.
+**Also observed:** CaptureTeardown revoke noise 0x490 on that exit path (grant already
+gone) — harmless, but confirms exit-path revokes can no-op.
+
+Full acceptance soak per the user's gate ("test until it does not die, misbehave, or revert
+to 2560x1440") running: scratchpad/soak-full.sh — 30 cycles of exact resizes (never
+2560x1440), agent restarts every 3rd (size must persist; daemon deaths counted separately
+as the KNOWN dom0 bug), reboots every 5th (size+topology must persist), pixel checks,
+stop-at-first-hard-failure.
