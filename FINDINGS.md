@@ -3191,3 +3191,20 @@ Guest-side avoidance (ours, already in flight): the staging-grant change (one gr
 agent lifetime, zero resize-time revokes) removes the trigger from the hot path; the A6
 exit drain should also SKIP revokes for grants dom0 provably still maps (log-and-leak is
 strictly safer than a kernel spin — the domain teardown reclaims them).
+
+# 2026-08-05 (cont 10) — staging build changed the failure: no spin, but qrexec loses EVENT DELIVERY; the common enemy is the PnP replug
+
+Acceptance soak on the staging agent (9D74FF26, STAGING granted 7200 pages once): cycle 3
+failed AGAIN but with a NEW signature — **no CPU spin** (slope 0; the livelock signature is
+gone with grant churn removed), gui window alive, guest idle, but qrexec dead. qrexec-agent's
+log ends at 18:50:18 mid-eventloop: spawned the cycle-3 command wrapper, logged "waiting for
+event" — and never logged again. No crash, no error: **Xen event-channel delivery to
+qrexec's vchan silently stopped** after the third rapid display-device restart.
+
+Unified read: every failure mode (grant-revoke spin, lost evtchn upcalls) correlates with the
+FULL DEVICE PnP restart used to reload driver modes (SetupAPI DICS_PROPCHANGE = device
+remove/start = PnP/interrupt churn touching the Xen platform device). The staging fix
+removed the grant half; the PnP half remains. Fix in flight: **D4v3 IOCTL monitor-level
+reload** (IddCxMonitorDeparture/Arrival inside the running driver — zero PnP), plus the
+agent calling the IOCTL instead of restarting the device. This is plan M5, promoted from
+"blackout reduction" to "stability fix".
