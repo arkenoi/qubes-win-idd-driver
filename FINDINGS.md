@@ -3056,3 +3056,26 @@ User priority: crashes/freezes above all. State of the hunt:
 Guest state: DCFEA348 (A3+A6+A7+ackrepaint+1200ms), IDD primary via D4 v1, 2560x1440,
 debounced loop + telemetry running, netvm detached. D4v2 stable-EDID still with the
 driver agent (monitor-arrival regression under root-cause).
+
+# 2026-08-05 (planning) — Win11 resize plan written: Win11 changes NOTHING structural for console mode updates
+
+Web research (two passes: MS docs/headers + community/field evidence) for
+`PLAN-smooth-resize-win11.md`, verdict: **no Windows 11 build gives a console IDD a
+replug-free way to apply a runtime mode-list change.** IddCxMonitorUpdateModes2 (1.10) is
+the HDR variant of v1, publish-only, target-modes-only; the apply half
+(IddCxAdapterDisplayConfigUpdate/2) is documented remote-only; the "modes based on a
+client window size" flag is IDDCX_ADAPTER_FLAGS_REMOTE_ALL_TARGET_MODES_MONITOR_COMPATIBLE
+(header-verified: one flag, REMOTE prefix, "only valid for remote drivers"). IddCx per
+build: 24H2 = 1.10 (0x1A80 GERMANIUM, WDDM 3.2); 1.11 = 25H2-era, feature-gated. Field
+evidence is net regressive: Looking Glass LGIdd (1.10) documents in-source that
+UpdateModes[2] "does not invalidate Windows' cached mode list" and ships replug; every
+examined console VDD replugs; VirtualDrivers#471 reports 24H2 HALF-APPLIES dynamically
+updated modes (signal mode switches, desktop mode stuck until a Settings poke →
+mitigation: SDC_FORCE_MODE_ENUMERATION retry, same flag QXL ships). Two weak Win11
+"works" claims (#1184 OP, #471-on-23H2) justify exactly one instrumented re-spike (W2),
+expected negative. MS Q&A 5924412 and #1184 remain without Microsoft resolution.
+Header curiosity: IDDCX_VERSION_COBALT_UPDATEMODE_FIX 0x1801 exists, undocumented.
+Consequence: the Win11 plan keeps the Win10 mechanism (stable-EDID replug, agent applies,
+one commit per settled gesture, 2-3 s follow floor), adds the 24H2 half-apply gate to W1,
+and states per-frame follow as impossible on console IddCx (§8). Plan file:
+PLAN-smooth-resize-win11.md (milestones W0-W7, ~16-25 pd).
