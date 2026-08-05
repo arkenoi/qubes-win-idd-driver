@@ -3208,3 +3208,31 @@ removed the grant half; the PnP half remains. Fix in flight: **D4v3 IOCTL monito
 reload** (IddCxMonitorDeparture/Arrival inside the running driver — zero PnP), plus the
 agent calling the IOCTL instead of restarting the device. This is plan M5, promoted from
 "blackout reduction" to "stability fix".
+
+# 2026-08-05 (close) — ACCEPTANCE SOAK PASS 30/30 on the no-PnP stack; the stability arc closes
+
+Stack: agent A8621D1F (staging grant + exact-follow + input resilience + IOCTL reload) +
+driver 57eb5004 (D4v3: IOCTL_QIDD_RELOAD_MODES, monitor-level replug, no PnP).
+
+**SOAK PASS: 30 cycles, 10 graceful agent restarts, 6 reboots, ZERO reverts, ZERO wedges,
+all pixels live, every size exact** — including cycle 3 + restart, the exact pattern that
+killed three earlier builds (those failures are the controls that fail). Sizes persisted
+across every restart and reboot (2340x1100, 1650x950, 2200x1234, 1876x1004, 2464x1200,
+2016x1160).
+
+The three-layer fix that got here, each layer evidence-driven:
+1. **Staging grant** (one grant per agent lifetime) — removed the grant-revoke churn that
+   fed the xenbus revoke spin (NMI-dump-proven).
+2. **IOCTL monitor-level reload** (driver replugs its monitor internally) — removed the
+   full-device PnP storm that killed Xen event-channel delivery (qrexec deaths).
+3. **Input resilience** — a denied SendInput can no longer kill the agent.
+
+Remaining known defect, now the ONLY recurring one: **gui-daemon's EOF coin-flip death on
+agent exit — 6/10 restarts** in this soak. It is the dom0-side bug documented in
+DESIGN-gui-daemon-restart-survival.md §3, upstream report awaiting user approval; guest
+recovers by qube restart. Honest scope note: real interactive drag streams (WM configure
+bursts) remain validated only by the user's manual drags; every machine-drivable layer of
+the same path is soak-proven.
+
+Upstream drafts now pending user approval: gui-daemon EOF (2 defects), xl console overflow,
+xenbus/xeniface revoke spin. All in docs/ + DESIGN-gui-daemon-restart-survival.md.
