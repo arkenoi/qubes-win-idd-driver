@@ -3345,3 +3345,22 @@ exact-obtain/settle no screen damage is sent - the daemon freezes on the last cl
 and snaps fully painted at the final size, replacing the transient sheared-band mangling
 (the last user-visible defect). Scripted drag-stream verification converged exactly
 (2260x1130 triple-equal); the freeze-vs-mangle visual is the user's confirmation.
+
+# 2026-08-05 (final 3) — M6 + A4-lite delivered: blink-free tiles measured, boot tamed
+
+- **M6 (mode-set pre-publish) ACCEPTED BY MEASUREMENT:** the pre-published tile-half applied
+  with `RESEXACT 2560x1409 replug=0` — same-millisecond apply, zero monitor churn, no blink,
+  no sound; triple-converged (dom0 window == guest == request). Set builder (agent 44e1669):
+  target + work-area maximize + tile-half + 1024x768 fallback, deduped, replace-not-append,
+  host-size never added by the builder (rule 2); boot publish + one reload (M6BOOT);
+  work-area changes recompute registry-only (M6DEFER, no blink). Watcher's real frame
+  extents arrived mid-test and the set self-corrected to true tile sizes (2560x1384).
+- **A4-lite boot clamp** (agent d6cb5e9): cached boot size clamped to the work-area ceiling
+  (sync qubesdb read pre-HandleXconf; honest fallback when no feed). Measured boot: cache
+  2100x1100 applied unclamped (correct - within ceiling), fresh daemon window, WM
+  re-maximized, guest followed dom0 - authority order preserved end to end.
+- **Resize service v3** (user-installed): clears maximized/fullscreen state before resizing —
+  the WM-stuck-window failure mode is gone (de-maximize + follow verified live).
+- Watcher frame-extents fix live (user-restarted): feed now carries real extents.
+Deployed: agent 385EBAEA (stack: staging + exact-follow + never-exit + echo-family gates +
+held-frame + M6 + A4-lite), driver 57eb5004. All merged to main.
