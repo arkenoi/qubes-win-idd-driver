@@ -136,6 +136,21 @@ window-acceptance predicate (build it into the SetWinEventHook rework):
    Win10 now as the 2A-chrome baseline; when a Win11 25H2 target exists later, one winenum
    run while duplicates are visible identifies the distinguishing attribute → extend the
    same predicate. (Per-window WGC capture, Phase 2/#6, kills this class structurally.)
+3c. **Toast notifications are a REQUIRED test case, not a separate feature.** Windows
+   Action Center toasts are rendered by shell processes (`ShellExperienceHost` et al.) using
+   topmost + layered + frequently DWM-CLOAKED windows — the very attributes step 1 uses to
+   DROP Office shadows. Same predicate, opposite desired outcome:
+     Office shadow strips -> must be DROPPED
+     Toast popups         -> must be KEPT, mapped override_redirect
+   A naive cloak/layered filter will silently kill all Windows notifications. Acceptance for
+   2A-chrome therefore includes: trigger a toast (PowerShell + `Windows.UI.Notifications`,
+   no extra software needed), `qtest shot`, confirm it still appears after the filter lands.
+   Run `winenum` while a toast is visible to get its real attributes first — if cloak state
+   alone cannot separate the two, the discriminator is likely ownership + zero alpha.
+   NOTE on scope: forwarding notifications to dom0's notification daemon is NOT the goal and
+   must not be built — Linux qubes don't do that either (their notification daemon runs
+   in-VM and the popup arrives as a normal bordered window). dom0 rendering guest-supplied
+   text as native UI would be a spoofing surface and would be rejected upstream.
 4. NEVER weaken daemon-side bordering — the fix is to stop presenting chrome fragments as
    windows, not to let the guest opt out of borders. Real-Office validation happens later in
    the user's Office qube (ask first).
