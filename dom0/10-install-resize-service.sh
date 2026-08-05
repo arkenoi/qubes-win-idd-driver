@@ -84,6 +84,12 @@ if [ "\$REQ" != "query" ]; then
     if [ "\$W" -lt 100 ] || [ "\$H" -lt 100 ] || [ "\$W" -gt 16384 ] || [ "\$H" -gt 6144 ]; then
         echo "GEOM ok=0 err=out_of_range"; exit 0
     fi
+    # v3: a maximized/fullscreen window silently ignores windowsize (measured:
+    # a host-size boot left the window stuck at 5120x1440). Clear those states
+    # first; harmless when not set.
+    X xdotool windowstate --remove MAXIMIZED_VERT "\$best" 2>/dev/null
+    X xdotool windowstate --remove MAXIMIZED_HORZ "\$best" 2>/dev/null
+    X xdotool windowstate --remove FULLSCREEN "\$best" 2>/dev/null
     X xdotool windowsize "\$best" "\$W" "\$H"
     sleep 0.5   # let the WM apply/clamp before reading back
 fi
