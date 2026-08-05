@@ -28,6 +28,36 @@ jobs:
                   Select-Object -First 1
           Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -Wait
 
+      # Kernel-debugger bundle for in-guest analysis of the livelock MEMORY.DMP (offline
+      # guest, no symbol server). Placed directly after the WDK install and uploaded
+      # before the build steps so the bundle ships even if a build step breaks.
+      - name: Package kernel debugger (kd-bundle)
+        shell: pwsh
+        run: |
+          $dbgDir = "${env:ProgramFiles(x86)}\Windows Kits\10\Debuggers\x64"
+          if (-not (Test-Path $dbgDir)) {
+              Write-Host "Debuggers dir absent after WDK install - installing Windows SDK feature OptionId.WindowsDesktopDebuggers (choco windbg)"
+              choco install windbg --no-progress -y
+          }
+          if (-not (Test-Path $dbgDir)) { throw "Windows Debuggers not found at $dbgDir after WDK install and OptionId.WindowsDesktopDebuggers attempt" }
+          Write-Host "=== listing of $dbgDir ==="
+          Get-ChildItem $dbgDir | Format-Table Name, Length -AutoSize | Out-String | Write-Host
+          New-Item -ItemType Directory -Force kd-bundle | Out-Null
+          $want = 'kd.exe','dbgeng.dll','dbghelp.dll','symsrv.dll','dbgcore.dll','dbgmodel.dll'
+          foreach ($f in $want) {
+              $p = Join-Path $dbgDir $f
+              if (Test-Path $p) { Copy-Item $p kd-bundle\; Write-Host "packaged: $f" }
+              else { Write-Warning "NOT FOUND (skipped): $f" }
+          }
+          if (-not (Test-Path 'kd-bundle\kd.exe')) { throw 'kd.exe not found - bundle would be useless' }
+          Get-ChildItem kd-bundle
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kd-bundle
+          path: kd-bundle/
+          retention-days: 14
+
       - name: Build driver
         shell: pwsh
         run: |
