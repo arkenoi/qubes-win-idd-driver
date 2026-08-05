@@ -3136,3 +3136,32 @@ to 2560x1440") running: scratchpad/soak-full.sh — 30 cycles of exact resizes (
 2560x1440), agent restarts every 3rd (size must persist; daemon deaths counted separately
 as the KNOWN dom0 bug), reboots every 5th (size+topology must persist), pixel checks,
 stop-at-first-hard-failure.
+
+# 2026-08-05 (cont 8) — THE WEDGE, CAPTURED IN FULL: 22k pinned grants + NMI kernel dump
+
+Reproducible trigger confirmed (twice): rapid exact resizes + a graceful agent stop →
+whole-guest livelock within ~2 min (soak-full cycle 3 both times). This occurrence was
+captured with every instrument armed:
+
+1. **dom0 grant table (`xl debug-keys g`, instrumentation/hang-2026-08-04/wedge2-xl-dmesg.txt):
+   the wedged domain held ~22,000 ACTIVE grant entries (refs to 0x564a), pinned 0x200 =
+   STILL MAPPED BY DOM0** at freeze time. Dozens of stale framebuffer generations that the
+   guest cannot revoke while dom0 maps them (the 0x490 / A6LEAK / ack-timeout trail). The
+   accumulation mechanism: every resize re-grants; dom0-side release of old mappings is not
+   keeping pace (daemon deaths orphan mappings; rapid re-dumps race the release);
+   unrevocable refs pile up.
+2. **In-guest telemetry ran through the freeze:** final samples (17:49:45) show a HEALTHY
+   guest — cpu bursts from explorer/dwm, dpc <2%, no runaway process — then sampling stops
+   between one 2 s tick and the next. The freeze is instantaneous and invisible to guest
+   user-mode; the vCPU spin seen from dom0 starts AT the freeze → kernel spinning in a
+   hypervisor-coupled path (grant/hypercall), not a user process.
+3. **NMI kernel dump captured: MEMORY.DMP 392 MB** (preserved as C:\qubes-idd\wedge2.dmp)
+   — holds the spinning stacks. In-guest analysis pending a CI-bundled kd (offline guest;
+   module+offset stacks are enough to name the driver).
+
+Strategic fix direction this evidence selects: **stop churning framebuffer grants
+entirely** — the B1-style persistent staging buffer (grant ONE max-size buffer for the
+qube's lifetime, CopyResource each frame into it, re-dump geometry changes over the SAME
+grant). Kills the accumulation class structurally; also what the smooth-resize plans want.
+Interim mitigations: rate-limit topology churn (planned), and dom0 max_grant_frames raise
+(user action) as headroom.
