@@ -3079,3 +3079,33 @@ Consequence: the Win11 plan keeps the Win10 mechanism (stable-EDID replug, agent
 one commit per settled gesture, 2-3 s follow floor), adds the 24H2 half-apply gate to W1,
 and states per-frame follow as impossible on console IddCx (§8). Plan file:
 PLAN-smooth-resize-win11.md (milestones W0-W7, ~16-25 pd).
+
+# 2026-08-05 (cont 6) — exact-follow + --solo deployed; BOOT-PATH wedge caught; leak theory weakened
+
+- **Never-resize-to-viewport ENFORCED in the agent** (user hard rule, saved to memory):
+  exact-follow (agent 8bd39a9, deployed D6D382E1) — src=dom0 requests are applied EXACTLY
+  (obtaining the mode from the IDD registry+replug in-process via SetupAPI) or NOT AT ALL
+  (RESKEEP, resolution untouched). The snap path is unreachable for dom0 requests; the ×1440
+  auto-choice the user hit cannot recur from a drag. The PS resize loop is retired.
+- **modeprobe --solo landed + validated live**: topology assertion (target primary at WxH,
+  all others detached, CDS_UPDATEREGISTRY-persisted). Fixed the DisplaySwitch-polluted
+  Configuration cache in one call; IDD-only topology now survives reboot (verified). The
+  DisplaySwitch /internal|/external roulette is dead — never use it again.
+- **Cursor**: double cursor in fullscreen fixed via DisableCursor=1 (stock mechanism;
+  the fork's provisioning had pre-seeded 0); the CM-scale offset was input-coordinate skew
+  from the phantom fallback display extending the virtual screen — gone with --solo
+  (vscreen == window exactly). IDD hardware cursor remains the proper Track B fix.
+- **BOOT-PATH WEDGE caught (second wedge of the day, NO churn involved):** boot 17:07 →
+  two short-lived agent instances (6 KB + 0 KB logs) → third instance runs normally,
+  pumping ~60fps QGAPERF — and the log STOPS MID-STREAM at 17:08:31.183, identical to the
+  original 08-04 freeze signature. qrexec dead, ~1.6 vcpu-s/s spin, daemon window frozen.
+  Telemetry was not yet running (started too late — boot-time arming needed).
+- **Grant accounting of the wedged boot: near-zero churn** (0 re-grants, 0 per-window
+  attaches across all three instances → ≤3 screen grants ≈ 11k entries). This WEAKENS
+  pure grant-table exhaustion for the boot wedge unless baseline PV usage is far higher
+  than assumed. The freeze is kernel-level and guest-side observability is EXHAUSTED:
+  next wedge requires dom0 — `xl debug-keys g` + `xl dmesg` (grant table state), and
+  `xl trigger <domid> nmi` (NMICrashDump=1 is armed → MEMORY.DMP).
+- Smooth-resize plans delivered per user directive: PLAN-smooth-resize-win10.md (bee4a42,
+  ~10-14 pd, one-replug-per-gesture ceiling) and PLAN-smooth-resize-win11.md (615cacf,
+  ~16-25 pd, verdict: Win11 changes nothing structural — replug remains the mechanism).
