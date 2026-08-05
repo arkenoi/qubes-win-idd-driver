@@ -12,7 +12,6 @@
 # Usage: -Once (single pass over recent log)  or default: poll loop every 2 s.
 #        -DeviceId defaults to the D0/D4 root-enumerated instance.
 param(
-    [switch]$Once,
     [string]$SyncNow = '',   # one-shot: sync straight to this WxH and exit (stress harness)
     [string]$DeviceId = 'ROOT\DISPLAY\0000',
     [int]$PollSec = 2
@@ -72,30 +71,34 @@ function SyncTo([string]$size) {
 
 function LatestLog { Get-ChildItem $logdir -Filter 'gui-agent-*.log' | Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
 
-# state = "logname:lineno" high-water mark so each request is handled once
-function LoadMark { if (Test-Path $state) { (Get-Content $state -TotalCount 1) -split ':',2 } else { @('', 0) } }
-function SaveMark($name, $n) { "$name`:$n" | Out-File $state -Encoding ascii }
-
-function Pass {
-    $log = LatestLog; if (-not $log) { return }
-    $mark = LoadMark
-    $lines = Get-Content $log.FullName
-    $start = if ($mark[0] -eq $log.Name) { [int]$mark[1] } else { 0 }
-    for ($i = $start; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -match 'RESREQ (\d+)x(\d+) src=dom0') {
-            $req = "$($Matches[1])x$($Matches[2])"
-            $snapped = ($i + 1 -lt $lines.Count) -and ($lines[$i+1] -match 'RESSNAP \d+x\d+ SNAPPED')
-            if ($snapped -and $req -ne (CurrentRes)) {
-                Log "REQUEST dom0 asked $req (snapped) - syncing exact"
-                [void](SyncTo $req)
-            }
-        }
-    }
-    SaveMark $log.Name $lines.Count
+# Return the NEWEST dom0-originated request in the log, or ''. A drag produces a stream of
+# MSG_CONFIGUREs; only the final one is intent - syncing to each one in order replugs the
+# monitor mid-drag repeatedly (user-reported breakage 2026-08-05). Latest wins, always.
+function LatestDom0Request {
+    $log = LatestLog; if (-not $log) { return '' }
+    $m = Select-String -Path $log.FullName -Pattern 'RESREQ (\d+)x(\d+) src=dom0' | Select-Object -Last 1
+    if ($m) { $m.Matches[0].Groups[1].Value + 'x' + $m.Matches[0].Groups[2].Value } else { '' }
 }
 
 if ($SyncNow) {
     $ok = SyncTo $SyncNow
     Write-Output ("SYNCRESULT target=$SyncNow ok=$ok readback=" + (CurrentRes))
     if (-not $ok) { exit 1 }
-} elseif ($Once) { Pass } else { Log "resize-sync loop started"; while ($true) { Pass; Start-Sleep -Seconds $PollSec } }
+} else {
+    # Debounced follow loop: act only when the newest dom0 request has been STABLE for two
+    # consecutive polls (the drag ended) and differs from the current resolution.
+    Log "resize-sync loop started (debounced)"
+    $pending = ''; $stable = 0
+    while ($true) {
+        Start-Sleep -Seconds $PollSec
+        $req = LatestDom0Request
+        if (-not $req) { continue }
+        if ($req -ne $pending) { $pending = $req; $stable = 0; continue }
+        $stable++
+        if ($stable -lt 2) { continue }
+        if ($req -eq (CurrentRes)) { continue }   # already there (or a snap echo settled equal)
+        Log "REQUEST dom0 settled on $req - syncing exact"
+        [void](SyncTo $req)
+        $stable = 0
+    }
+}
