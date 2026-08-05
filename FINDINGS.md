@@ -3382,3 +3382,16 @@ deferred set became live with it); subsequent habitual snaps are replug=0. Note:
 VM reboot the feed is stale up to ~60 s (fresh qubesdb, watcher repopulate tick) — the
 set self-corrects via M6DEFER when the push lands; boot-time sets may briefly lack the
 work-area entries.
+
+# 2026-08-06 — invisible bottom border: snap must target bordered sizes only (fullshot-proven)
+
+User-reported and fullshot-CONFIRMED (instrumentation/border-invisible-before.png): the
+taskbar ran to the last screen row with the window's bottom border pushed off-screen. Cause:
+RESSNAP15 snapped a NORMAL (bordered) window to the borderless-maximized height (1384), so
+the total frame (25 title + client + 5 border) overflowed the work area by exactly the
+border height. Fix (agent 8fa1b37, deployed 0DE5239A): snap candidates are the BORDERED
+variants only - maximize gestures hit the borderless sizes exactly and never need snapping;
+anything close-but-not-equal is by definition a normal bordered window. Verified: 2544x1374
+→ RESSNAP15 → 2550x1379, frame fits (border-visible-after.png shows the red qube border
+below the taskbar). Both variants stay PUBLISHED (exact maximize remains replug=0); only
+the snap targeting changed.
