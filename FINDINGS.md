@@ -2999,3 +2999,35 @@ is the working driver meanwhile.
 (loop started on the guest). The dom0-originated request chain itself is already proven
 (RESREQ src=dom0 measured from the user's manual drag on 08-04); scripted drag needs the
 _QUBES_VMNAME resize service variant.
+
+# 2026-08-05 (cont 4) — the user was right: the stress missed the real drag path. Two fixes, one bounded fragility
+
+**User-reported breakage after real manual resizes, screenshot-confirmed:** dom0 window
+showed interleaved content GENERATIONS — a diagonally sheared band of old-geometry pixels
+(own taskbar + watermark) inside the new-size window. My stress had validated settled
+one-at-a-time syncs; a real drag is a MSG_CONFIGURE stream, and the v0 loop replugged the
+monitor PER REQUEST. Two distinct defects:
+
+1. **Stale patchwork after a grant switch.** The existing full repaint fires when the
+   re-grant is SENT; under overlapping recoveries stale damage still interleaves. Fix
+   (agent 177ac32): a second full-screen repaint ON THE WINDOW-0 DUMP ACK — the one point
+   where the new mapping is provably current on both sides. Validated: A6ACKREPAINT fires
+   (3/3 settled syncs), decoded screenshot after churn is a single clean generation.
+2. **Per-request replug during drags.** resize-sync rewritten: debounced latest-wins —
+   act only when the newest dom0 request is stable for 2 polls and differs from current.
+   One replug per gesture, exactly the pattern every hypervisor stack ships (survey §4).
+
+**Bounded remaining fragility, honestly stated:** deliberately bypassing the debounce
+(3 back-to-back -SyncNow, no settle) wedged the guest AGAIN — qrexec dead, cputime slope
+~1.9 vcpu-s/s (measured with the FIXED sampler), ACPI shutdown never processed, kill
+required. The livelock family is real and is triggered by rapid display-topology churn;
+the debounce keeps normal use off that path but does not fix the underlying guest-side
+defect. Next diagnostic requires deliberate reproduction with dom0 forensics staged
+(protocol exists, evidence dir instrumentation/hang-2026-08-04/).
+
+**gui-daemon coin-flip death observed again** on the second graceful agent install of one
+boot (agent waited at "Awaiting for a vchan client", zero dom0 windows, empty screenshot) —
+one more datapoint for the §3 upstream report (DESIGN-gui-daemon-restart-survival.md).
+
+State: agent AD4DE497 (A6+A7+ackrepaint) running, IDD primary, debounced loop live,
+guest at 2560x1440 clean. D4v2 stable-EDID fix still iterating in CI.
