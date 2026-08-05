@@ -3321,3 +3321,27 @@ Resize-service note: the repo's dom0/10 installer had regressed to the v1 title-
 body, which is what the user's reinstall deployed (still no_window). v2 restored in the repo
 from git history (commit 15d530a); needs one more user reinstall to unlock scripted
 real-MSG_CONFIGURE soaks.
+
+# 2026-08-05 (final 2) — REAL-PATH DRAG SOAK 28/28; held-frame masking deployed
+
+**The goal's invariant is machine-proven on the true path.** With the user-installed
+_QUBES_VMNAME resize service, soak-drag.sh drove 28 cycles of REAL dom0 WM resizes
+(14 drag-like configure streams + 14 jumps) through gui-daemon into the agent-native
+exact-follow: 28/28 triple-converged (requested == dom0 window == guest resolution),
+zero wedges, zero reverts, zero crashes — and ALL 7 graceful agent restarts kept
+gui-daemon alive (0 EOF deaths this run; earlier today 4-6 of 10 — the settle-gate
+sequencing has narrowed the dom0 race substantially, dom0 patch still the real fix).
+4 clean reboots, sizes persisted. DeviceFail canary silent across ~40 replugs.
+
+Along the way this session closed, in order, the full echo-family: (1) mid-drag snap
+applies (exact-follow), (2) pre-apply-size echo (RESECHO), (3) transit-size echo via
+A6CONFIGURE (in-flight gate), (4) the 75 ms announce race (settle-window gate), (5) the
+re-dump geometry channel (A6DUMP gate), (6) lost-real-intent from over-filtering
+(suspect-only defer). Plus: device plug sounds silenced (DeviceFail kept as canary),
+shadow-cursor re-blank per mode change.
+
+**Held-frame masking deployed (agent 3362f62, exe 5EA4CDF8, user-committed):** during
+exact-obtain/settle no screen damage is sent - the daemon freezes on the last clean frame
+and snaps fully painted at the final size, replacing the transient sheared-band mangling
+(the last user-visible defect). Scripted drag-stream verification converged exactly
+(2260x1130 triple-equal); the freeze-vs-mangle visual is the user's confirmation.
