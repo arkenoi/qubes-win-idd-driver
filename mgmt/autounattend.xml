@@ -16,23 +16,22 @@
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64"
         publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
         xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-      <DiskConfiguration>
-        <Disk wcm:action="add">
-          <DiskID>0</DiskID>
-          <WillWipeDisk>true</WillWipeDisk>
-          <CreatePartitions>
-            <CreatePartition wcm:action="add">
-              <Order>1</Order><Type>Primary</Type><Extend>true</Extend>
-            </CreatePartition>
-          </CreatePartitions>
-          <ModifyPartitions>
-            <ModifyPartition wcm:action="add">
-              <Order>1</Order><PartitionID>1</PartitionID>
-              <Format>NTFS</Format><Active>true</Active><Letter>C</Letter>
-            </ModifyPartition>
-          </ModifyPartitions>
-        </Disk>
-      </DiskConfiguration>
+      <!-- NO static DiskConfiguration on purpose. A Qubes HVM presents THREE disks
+           (root 80 GiB, private 2 GiB, volatile 10 GiB) and WinPE's enumeration order is
+           NOT guaranteed to match the installed OS's, where root shows up as Disk 0. On
+           2026-08-07 a clean-path run had Setup select a small disk and die with "Windows
+           cannot be installed to the selected partition. Installation requires at least
+           20000 MB of free space", costing a full install cycle. diskprep.cmd (below,
+           RunSynchronous, executes before image apply) partitions the LARGEST disk by
+           size and leaves the others RAW, so InstallToAvailablePartition can only ever
+           land on the right one. -->
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Description>partition the largest disk (size-based, not DiskID-based)</Description>
+          <Path>cmd /c for %d in (C D E F G H I J K L M N O P Q R S T U V) do @if exist %d:\diskprep.cmd call %d:\diskprep.cmd</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
       <ImageInstall>
         <OSImage>
           <InstallFrom>
@@ -40,7 +39,8 @@
               <Key>/IMAGE/NAME</Key><Value>@IMAGE_NAME@</Value>
             </MetaData>
           </InstallFrom>
-          <InstallTo><DiskID>0</DiskID><PartitionID>1</PartitionID></InstallTo>
+          <!-- diskprep.cmd leaves exactly one installable NTFS partition (C:) -->
+          <InstallToAvailablePartition>true</InstallToAvailablePartition>
         </OSImage>
       </ImageInstall>
       <!-- No RunSynchronous payload copy here: windowsPE answer-file settings execute
