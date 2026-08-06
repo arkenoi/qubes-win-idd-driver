@@ -68,10 +68,10 @@ counts as release evidence.
 - **Office window behaviour: blocked** on the seamless host-mode fix (`t2/seamless-hostmode`,
   cb1fa4b, unbuilt) — the M6 mode set does not contain the host size, so seamless mode fails
   `ChangeDisplaySettings` with BADMODE on an IDD-equipped guest.
-- **Visual confirmation is unavailable**: `qtest shot` returns an empty tar for both the test
-  guest and the control, so the dom0 screenshot service — not the guest — is what is broken.
-  Every visual acceptance in this phase is therefore unproven, including the ones that would
-  otherwise have passed.
+- **Visual acceptance still not run** — but NOT because of tooling. The screenshot service
+  works (`fullshot` 1.27 MB, per-VM shot 890 KB, both verified 2026-08-06). An earlier claim
+  in this file that it was broken was wrong and is withdrawn: the empty tars came from guests
+  that genuinely had no mapped windows at the time. Visual checks are simply outstanding.
 
 ## Feature freeze
 
