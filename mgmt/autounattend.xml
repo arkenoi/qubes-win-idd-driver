@@ -9,9 +9,9 @@
     <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64"
         publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
         xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
-      <InputLocale>en-US</InputLocale><SystemLocale>en-US</SystemLocale>
-      <UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale>
+      <SetupUILanguage><UILanguage>@UILANG@</UILanguage></SetupUILanguage>
+      <InputLocale>@UILANG@</InputLocale><SystemLocale>@UILANG@</SystemLocale>
+      <UILanguage>@UILANG@</UILanguage><UserLocale>@UILANG@</UserLocale>
     </component>
     <component name="Microsoft-Windows-Setup" processorArchitecture="amd64"
         publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
@@ -65,10 +65,10 @@
          the -WinPE variant above only covers Setup's own UI. -->
     <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
         publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <InputLocale>0409:00000409</InputLocale>
-      <SystemLocale>en-US</SystemLocale>
-      <UILanguage>en-US</UILanguage>
-      <UserLocale>en-US</UserLocale>
+      <InputLocale>@INPUTLOCALE@</InputLocale>
+      <SystemLocale>@UILANG@</SystemLocale>
+      <UILanguage>@UILANG@</UILanguage>
+      <UserLocale>@UILANG@</UserLocale>
     </component>
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
         publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
