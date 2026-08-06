@@ -1,11 +1,47 @@
-# `packaging/` — source of the `qwt-improved-package` CI artifact
+# `packaging/` — the downloadable artifacts
 
-This directory builds the **one downloadable thing** a user installs in a Windows qube to
-get our improved Qubes GUI agent, instead of hand-swapping `gui-agent.exe`.
+Two different deliverables live here. Pick by what the target guest already has.
 
-It is an **overlay updater**: it requires a working Qubes Windows Tools 4.2.2 install and
-replaces `gui-agent.exe` (optionally `gui-watchdog.exe`) in place, reversibly. It is not a
-QWT installer and does not ship the Xen PV drivers.
+| you want | artifact | built by | assembler |
+|---|---|---|---|
+| install on a **clean** Windows guest | `qwt-improved-setup` (dir) and `qwt-improved-iso` | `.github/workflows/release-package.yml` | `make-setup.ps1` + `make-iso.sh` |
+| update the agent on a guest that **already runs QWT 4.2.2** | `qwt-improved-package` | the `package:` job in `build.yml` | `make-package.ps1` |
+
+## The clean-guest installer — `qwt-improved-setup` / `qwt-improved-iso`
+
+A **full QWT install**, not an overlay. `release-package.yml` calls `qwt-full.yml` (which
+rebuilds the genuine `installer.msi` from the upstream WiX v4 sources with OUR gui-agent
+and every other component bit-identical to the shipped ITL MSI), then stages:
+
+```
+install.cmd                entry point, self-elevating
+Install-QwtImproved.ps1    two-stage installer (testsigning+certs -> reboot -> msiexec)
+README.txt                 what it installs, what it does NOT, and the netvm caveat
+MANIFEST.json              commit / agent commit / CI run id / per-file sha256
+SHA256SUMS.txt             verified by the installer BEFORE it touches the machine
+msi/installer.msi          our rebuilt QWT 4.2.2 MSI
+msi/vc_redist.x64.exe      the Burn bundle's prerequisite package
+certs/                     6 ITL component certs + our CI test-signing cert
+idd-driver/                the IddCx driver (staged only with /idd, never activated)
+reference/                 the gui-agent binaries embedded in the MSI, for hash checks
+```
+
+`qwt-improved-iso` is that same tree as an ISO 9660 + Joliet + Rock Ridge image (not
+bootable) plus `README.txt`, `MANIFEST.json` and `SHA256SUMS.txt` beside it — attach it as
+a CD to a qube with no networking. `make-iso.sh` extracts the image back out and re-checks
+every file against `SHA256SUMS.txt` under **both** the Rock Ridge and the Joliet names, so
+a truncated or mangled payload fails in CI rather than on the user's guest.
+
+Guest install command: `D:\install.cmd` (elevated), or `D:\install.cmd /auto` for a fully
+unattended two-reboot install. See `packaging/setup/README.txt` for the rest, including the
+standing **networking blocker** (attaching a netvm starves the guest; not yet attributed to
+this package vs the upstream PV drivers).
+
+## The overlay updater — `qwt-improved-package`
+
+It requires a working Qubes Windows Tools 4.2.2 install and replaces `gui-agent.exe`
+(optionally `gui-watchdog.exe`) in place, reversibly. It is not a QWT installer and does not
+ship the Xen PV drivers. It stays because it is the fast path for iterating on the agent.
 
 **Read `ci-notes/packaging.md` for the decision record** — why not a patched upstream MSI,
 why not a full QWT rebuild, what is signed and what is not, and the live test evidence.
