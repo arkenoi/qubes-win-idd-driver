@@ -100,7 +100,10 @@ rem win10-clean (two stacked Qubes Windows Tools setup dialogs, guest wedged, 20
 rem The stock payload-setup2.cmd has always done this; the release variant omitted it.
 schtasks /delete /tn QWTStage2 /f >nul 2>&1
 echo === release install (clean path) === >> C:\qubes-win-idd-setup.log
-call C:\payload\release\install.cmd /auto >> C:\qubes-win-idd-setup.log 2>&1
+rem /idd is NOT optional here: without it a clean guest ships on the Basic Display
+rem Adapter with no Qubes IDD driver - no arbitrary-resolution support - and the
+rem 2026-08-06 hash-only acceptance gate passed anyway. The IDD is part of the product.
+call C:\payload\release\install.cmd /auto /idd >> C:\qubes-win-idd-setup.log 2>&1
 echo release install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
 RELEOF
         echo "payload += release/ (our package, installed at firstboot)"
