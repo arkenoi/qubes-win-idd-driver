@@ -3579,3 +3579,35 @@ restarted **without capturing dom0 forensics**, destroying that instance. That w
 evidence the remaining defect needs, and the kit (dom0/11-wedge-forensics.sh) existed and was
 one command away. Rule reaffirmed: when the harness says STATE FROZEN, the next action is the
 dom0 kit — never a kill.
+
+# 2026-08-06 (exp-9 VERDICT) — PASS 6/6 sides: Outcome A formally recorded on the shipped stack
+
+Protocol as specified in PLAN-trackb-t2-modes.md §2.4/§7 row 9: 3 interleaved rounds of
+[BDA control, IDD test], COLD BOOT per side, topology asserted with modeprobe --solo and
+re-verified twice post-boot, ddaprobe hash-checked against the CI manifest before every run,
+activity-gen driving concurrent damage, acceptance evaluated from the JSON (never the exit
+code). Raw JSON + per-side reports: instrumentation/exp9/round-{1,2,3}-{bda,idd}.json.
+
+| side | flag | ever_false | map | pitch | dup | agent_ok | adapter0 attached | acquired | access_lost | redup | fmt | session |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| r1-bda | True | False | ok | 7680=w*4 | ok | True | 1 | 106 | 0 | 0 | 87 | 1 |
+| r1-idd | True | False | ok | 7680=w*4 | ok | True | 1 | 146 | 0 | 0 | 87 | 1 |
+| r2-bda | True | False | ok | 7680=w*4 | ok | True | 1 | 111 | 0 | 0 | 87 | 1 |
+| r2-idd | True | False | ok | 7680=w*4 | ok | True | 1 | 172 | 0 | 0 | 87 | 1 |
+| r3-bda | True | False | ok | 7680=w*4 | ok | True | 1 | 118 | 0 | 0 | 87 | 1 |
+| r3-idd | True | False | ok | 7680=w*4 | ok | True | 1 | 161 | 0 | 0 | 87 | 1 |
+
+**Verdict: OUTCOME A, formally.** An IddCx *console* driver on Win10 19045 keeps
+DesktopImageInSystemMemory TRUE for the whole run, MapDesktopSurface works with TIGHT pitch,
+Desktop Duplication is clean (zero ACCESS_LOST, zero re-duplications across 146-172 acquired
+frames per test side), and the agent's own output selection lands on the IDD. The BDA control
+passed identically every round — the sides are indistinguishable on every acceptance field,
+which is the point: the IDD is not a degraded capture source.
+
+**Scope, per §2.4 — do not overstate:** current driver build (D4v3 + stable EDID 70C64039) +
+staging-grant agent, WARP renderer, 19045, 1920x1080 solo topology. Near-zero odds of holding
+on a guest with a real GPU; a PASS here must not be ported to GPU passthrough.
+
+Track B's gating question is now closed with evidence at the standard CLAUDE.md demands.
+Guest left at IDD-primary 1920x1080, BDA disabled, marker disarmed (the intended steady
+config); restore a preferred size with a dom0 resize.

@@ -1,0 +1,1590 @@
+2026-08-06T08:02:38Z ============================================================
+2026-08-06T08:02:38Z EXP9 formal gating measurement start (PLAN SS2.4 / SS7 row 9)
+2026-08-06T08:02:38Z repo commit: e9f4c92
+2026-08-06T08:02:38Z structure: 3 interleaved rounds x [bda control, idd test], cold boot per side
+2026-08-06T08:02:38Z mode: 1920x1080 solo on both sides; expected ddaprobe SHA256[0:16]=30F6012D0DA2753E
+2026-08-06T08:02:38Z outputs: /home/user/qubes-win-idd-driver/instrumentation/exp9/round-N-{bda,idd}.json + .report.txt; this log appends
+2026-08-06T08:02:38Z VM running
+2026-08-06T08:02:38Z pushing exp9-guest.ps1 + activity-gen.ps1
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action checkpre
+EXP9 elevated=True
+EXP9 devcon_present=True
+EXP9 revert_action_present=True
+EXP9 revert_task_registered=True
+EXP9 ddaprobe_present=True
+EXP9 modeprobe_present=True
+EXP9 activity_present=True
+EXP9 solo_supported=True
+EXP9 checkpre=OK
+
+C:\Windows\system32>
+2026-08-06T08:02:42Z ------------------------------------------------------------
+2026-08-06T08:02:42Z round-1-bda (CONTROL: bda primary, idd detached+disabled)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=disabled
+EXP9 idd_status=running
+EXP9 inventory=OK
+
+C:\Windows\system32>
+2026-08-06T08:02:47Z round-1-bda: to-be-detached device: idd (ROOT\DISPLAY\0000)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action arm -Role idd
+EXP9 armed_id=ROOT\DISPLAY\0000
+EXP9 arm=OK
+
+C:\Windows\system32>
+2026-08-06T08:02:48Z round-1-bda: revert marker ARMED with ROOT\DISPLAY\0000
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action topo -Target bda
+EXP9 enable_exit=0
+EXP9 solo_gdi=\\.\DISPLAY3
+EXP9 solo_exit=0
+EXP9 disable_exit=0
+EXP9 other_status=disabled
+EXP9 topo_gdi=\\.\DISPLAY3
+EXP9 topo=OK
+
+C:\Windows\system32>
+2026-08-06T08:03:09Z round-1-bda: hot topology OK, gdi=\\.\DISPLAY3, idd=disabled
+2026-08-06T08:03:12Z round-1-bda: hot health OK (qrexec + decoded pixels)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action disarm
+EXP9 disarm=OK
+
+C:\Windows\system32>
+2026-08-06T08:03:13Z round-1-bda: marker DISARMED (measurement boot must not be auto-reverted)
+2026-08-06T08:03:13Z cold boot: shutdown...
+2026-08-06T08:03:35Z cold boot: start...
+2026-08-06T08:04:19Z cold boot: qrexec alive
+2026-08-06T08:04:19Z round-1-bda: settling 75 s (M6 boot publish / work-area feed window)
+2026-08-06T08:05:36Z PERSIST FAIL json-unparseable: Expecting value: line 1 column 1 (char 0)
+2026-08-06T08:05:36Z EXP9 STOP: round-1-bda: topology did not persist across cold boot (read 1)
+2026-08-06T08:05:36Z EXP9 STOP: state FROZEN for forensics - no recovery attempted, no kill issued.
+2026-08-06T08:05:36Z EXP9 STOP: headless recovery (if qrexec still answers): write the disabled adapter's
+2026-08-06T08:05:36Z EXP9 STOP:   instance id [ROOT\DISPLAY\0000] to C:\qubes-idd\revert-request.txt and reboot;
+2026-08-06T08:05:36Z EXP9 STOP:   the QubesIddPnpRevert boot task re-enables it (proven 2026-08-04).
+2026-08-06T08:05:36Z EXP9 STOP: if qrexec is dead too: dom0 forensics first (protocol in
+2026-08-06T08:05:36Z EXP9 STOP:   instrumentation/hang-2026-08-04/), then qtest kill + start.
+2026-08-06T08:07:02Z ============================================================
+2026-08-06T08:07:02Z EXP9 formal gating measurement start (PLAN SS2.4 / SS7 row 9)
+2026-08-06T08:07:02Z repo commit: cc8e49a
+2026-08-06T08:07:02Z structure: 3 interleaved rounds x [bda control, idd test], cold boot per side
+2026-08-06T08:07:02Z mode: 1920x1080 solo on both sides; expected ddaprobe SHA256[0:16]=30F6012D0DA2753E
+2026-08-06T08:07:02Z outputs: /home/user/qubes-win-idd-driver/instrumentation/exp9/round-N-{bda,idd}.json + .report.txt; this log appends
+2026-08-06T08:07:02Z VM running
+2026-08-06T08:07:02Z pushing exp9-guest.ps1 + activity-gen.ps1
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action checkpre
+EXP9 elevated=True
+EXP9 devcon_present=True
+EXP9 revert_action_present=True
+EXP9 revert_task_registered=True
+EXP9 ddaprobe_present=True
+EXP9 modeprobe_present=True
+EXP9 activity_present=True
+EXP9 solo_supported=True
+EXP9 checkpre=OK
+
+C:\Windows\system32>
+2026-08-06T08:07:05Z ------------------------------------------------------------
+2026-08-06T08:07:05Z round-1-bda (CONTROL: bda primary, idd detached+disabled)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=running
+EXP9 idd_status=disabled
+EXP9 inventory=OK
+
+C:\Windows\system32>
+2026-08-06T08:07:07Z round-1-bda: to-be-detached device: idd (ROOT\DISPLAY\0000)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action arm -Role idd
+EXP9 armed_id=ROOT\DISPLAY\0000
+EXP9 arm=OK
+
+C:\Windows\system32>
+2026-08-06T08:07:08Z round-1-bda: revert marker ARMED with ROOT\DISPLAY\0000
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action topo -Target bda
+EXP9 enable_exit=0
+EXP9 solo_gdi=\\.\DISPLAY1
+EXP9 solo_exit=0
+EXP9 disable_exit=0
+EXP9 other_status=disabled
+EXP9 topo_gdi=\\.\DISPLAY1
+EXP9 topo=OK
+
+C:\Windows\system32>
+2026-08-06T08:07:27Z round-1-bda: hot topology OK, gdi=\\.\DISPLAY1, idd=disabled
+2026-08-06T08:07:30Z round-1-bda: hot health OK (qrexec + decoded pixels)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action disarm
+EXP9 disarm=OK
+
+C:\Windows\system32>
+2026-08-06T08:07:31Z round-1-bda: marker DISARMED (measurement boot must not be auto-reverted)
+2026-08-06T08:07:31Z cold boot: shutdown...
+2026-08-06T08:07:47Z cold boot: start...
+2026-08-06T08:08:31Z cold boot: qrexec alive
+2026-08-06T08:08:31Z round-1-bda: settling 75 s (M6 boot publish / work-area feed window)
+2026-08-06T08:09:47Z PERSIST FAIL json-unparseable: Expecting value: line 1 column 1 (char 0)
+2026-08-06T08:09:47Z EXP9 STOP: round-1-bda: topology did not persist across cold boot (read 1)
+2026-08-06T08:09:47Z EXP9 STOP: state FROZEN for forensics - no recovery attempted, no kill issued.
+2026-08-06T08:09:47Z EXP9 STOP: headless recovery (if qrexec still answers): write the disabled adapter's
+2026-08-06T08:09:47Z EXP9 STOP:   instance id [ROOT\DISPLAY\0000] to C:\qubes-idd\revert-request.txt and reboot;
+2026-08-06T08:09:47Z EXP9 STOP:   the QubesIddPnpRevert boot task re-enables it (proven 2026-08-04).
+2026-08-06T08:09:47Z EXP9 STOP: if qrexec is dead too: dom0 forensics first (protocol in
+2026-08-06T08:09:47Z EXP9 STOP:   instrumentation/hang-2026-08-04/), then qtest kill + start.
+2026-08-06T12:59:44Z ============================================================
+2026-08-06T12:59:44Z EXP9 formal gating measurement start (PLAN SS2.4 / SS7 row 9)
+2026-08-06T12:59:44Z repo commit: d04f15c
+2026-08-06T12:59:44Z structure: 3 interleaved rounds x [bda control, idd test], cold boot per side
+2026-08-06T12:59:44Z mode: 1920x1080 solo on both sides; expected ddaprobe SHA256[0:16]=30F6012D0DA2753E
+2026-08-06T12:59:44Z outputs: /home/user/qubes-win-idd-driver/instrumentation/exp9/round-N-{bda,idd}.json + .report.txt; this log appends
+2026-08-06T12:59:45Z VM running
+2026-08-06T12:59:45Z pushing exp9-guest.ps1 + activity-gen.ps1
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action checkpre
+EXP9 elevated=True
+EXP9 devcon_present=True
+EXP9 revert_action_present=True
+EXP9 revert_task_registered=True
+EXP9 ddaprobe_present=True
+EXP9 modeprobe_present=True
+EXP9 activity_present=True
+EXP9 solo_supported=True
+EXP9 checkpre=OK
+
+C:\Windows\system32>
+2026-08-06T12:59:49Z ------------------------------------------------------------
+2026-08-06T12:59:49Z round-1-bda (CONTROL: bda primary, idd detached+disabled)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=running
+EXP9 idd_status=running
+EXP9 inventory=OK
+
+C:\Windows\system32>
+2026-08-06T12:59:51Z round-1-bda: to-be-detached device: idd (ROOT\DISPLAY\0000)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action arm -Role idd
+EXP9 armed_id=ROOT\DISPLAY\0000
+EXP9 arm=OK
+
+C:\Windows\system32>
+2026-08-06T12:59:52Z round-1-bda: revert marker ARMED with ROOT\DISPLAY\0000
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action topo -Target bda
+EXP9 enable_exit=0
+EXP9 solo_gdi=\\.\DISPLAY1
+EXP9 solo_exit=0
+EXP9 disable_exit=0
+EXP9 other_status=disabled
+EXP9 topo_gdi=\\.\DISPLAY1
+EXP9 topo=OK
+
+C:\Windows\system32>
+2026-08-06T13:00:12Z round-1-bda: hot topology OK, gdi=\\.\DISPLAY1, idd=disabled
+2026-08-06T13:00:15Z round-1-bda: hot health OK (qrexec + decoded pixels)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action disarm
+EXP9 disarm=OK
+
+C:\Windows\system32>
+2026-08-06T13:00:16Z round-1-bda: marker DISARMED (measurement boot must not be auto-reverted)
+2026-08-06T13:00:16Z cold boot: shutdown...
+2026-08-06T13:00:27Z cold boot: start...
+2026-08-06T13:01:09Z cold boot: qrexec alive
+2026-08-06T13:01:09Z round-1-bda: settling 75 s (M6 boot publish / work-area feed window)
+2026-08-06T13:02:41Z round-1-bda: post-boot topology persisted + stable (PERSIST OK gdi=\\.\DISPLAY1)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=running
+EXP9 idd_status=disabled
+EXP9 inventory=OK
+
+C:\Windows\system32>
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action solo -Target bda
+EXP9 solo_gdi=\\.\DISPLAY1
+EXP9 solo_exit=0
+EXP9 solo_final_gdi=\\.\DISPLAY1
+EXP9 solo=OK
+
+C:\Windows\system32>
+2026-08-06T13:02:47Z round-1-bda: formal modeprobe --solo assert OK on \\.\DISPLAY1
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action hash
+EXP9 ddaprobe_sha256=30F6012D0DA2753ECF9945B22F6A41EB325F1762DF5BAC07EAB04600B9003470
+EXP9 ddaprobe_sha256_16=30F6012D0DA2753E
+EXP9 hash=OK
+
+C:\Windows\system32>
+2026-08-06T13:02:49Z round-1-bda: ddaprobe hash verified (30F6012D0DA2753E)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action measure -Tag round-1-bda
+ddaprobe 1.0 - Desktop Duplication scoping probe
+  host=WIN-IDD-TEST user=user session=1 elevated=yes
+  winsta=WinSta0 desktop=Default os_build=19045.6466
+  frames=100 max_seconds=30.0 timeout_ms=100 map=yes
+
+--- output #0  (adapter 0, output 0) ------------------------------
+  adapter               : Microsoft Basic Render Driver
+  output device name    : \\.\DISPLAY1
+  attached to desktop   : YES
+  desktop coordinates   : (0,0)-(1920,1080)  1920x1080
+  output rotation       : identity
+  D3D11 feature level   : 11_1
+  duplication mode      : 1920x1080 @ 1.00 Hz, format B8G8R8A8_UNORM, scanline 1, rot identity
+  *** DesktopImageInSystemMemory : TRUE ***   (capture.c:176-183 OK)
+  MapDesktopSurface     : OK, pitch=7680, pBits=non-null
+
+  capture loop: 284 iterations in 30050.0 ms
+    acquired frames     : 15  (presented 15, mouse-only 0, accumulated 17)
+    timeouts            : 269  (blocked mean 109.30 ms, max 124.83 ms)
+    errors              : 0  (ACCESS_LOST 0, re-duplications 0, failed 0)
+    pointer shape updates: 0
+
+  AcquireNextFrame latency over 15 successful calls (ms):
+    min 8.781   mean 40.869   median 37.034   p95 67.707   max 96.160
+
+  frame metadata (240 bytes total reported by DXGI):
+    dirty rects  : total 15 over 15 frames (max 1/frame), area 2101360 px
+    MOVE  rects  : total 0 over 0 frames (max 0/frame), area 0 px  <== empty this run (matches capture.c:441 note)
+    per acquired frame: 1.00 dirty, 0.00 move, 140091 px dirty area
+
+=== SUMMARY ===
+  outputs reported             : 1
+  any output attached          : yes
+  any output duplicated        : yes
+  primary output (0,0)         : 0
+  agent's chosen output        : 0 (adapter 0, first attached)
+  DesktopImageInSystemMemory   : all=TRUE any=TRUE
+  -> capture.c:176-183 verdict : PASS (agent capture path survives on its chosen output)
+  move rects ever non-empty    : no
+
+=== DDAPROBE JSON ===
+{"tool":"ddaprobe","version":"1.0","host":"WIN-IDD-TEST","user":"user","session_id":1,"elevated":true,"window_station":"WinSta0","desktop":"Default","os_build":"19045.6466","desktop_attach_note":"","options":{"frames":100,"max_seconds":30.0000,"timeout_ms":100,"only_output":-1,"map_probe":true},"factory_hr":"0x00000000","factory_error":"","outputs":[{"global_index":0,"adapter_index":0,"output_index":0,"adapter":"Microsoft Basic Render Driver","device_name":"\\\\.\\DISPLAY1","attached_to_desktop":true,"desktop_coordinates":{"left":0,"top":0,"right":1920,"bottom":1080},"rotation":"identity","output1_ok":true,"output1_hr":"0x00000000","device_ok":true,"device_hr":"0x00000000","device_hr_name":"S_OK","feature_level":"11_1","duplication_ok":true,"duplication_hr":"0x00000000","duplication_hr_name":"S_OK","duplication_hr_text":"The operation completed successfully.","desktop_image_in_system_memory":true,"desktop_image_in_system_memory_ever_false":false,"mode_changes":0,"mode":{"width":1920,"height":1080,"refresh_numerator":4294967294,"refresh_denominator":4294967294,"format":87,"format_name":"B8G8R8A8_UNORM","scanline_ordering":1,"rotation":"identity"},"map_desktop_surface":{"attempted":true,"ok":true,"hr":"0x00000000","hr_name":"S_OK","pitch":7680,"pbits_non_null":true},"loop":{"iterations":284,"acquired":15,"timeouts":269,"errors":0,"access_lost":0,"reduplications":0,"reduplication_failures":0,"presented_frames":15,"mouse_only_frames":0,"pointer_shape_updates":0,"accumulated_frames":17,"elapsed_ms":30050.0318},"acquire_latency":{"n":15,"min_ms":8.7809,"mean_ms":40.8692,"median_ms":37.0340,"p95_ms":67.7071,"max_ms":96.1597},"timeout_block":{"n":269,"min_ms":98.5180,"mean_ms":109.3035,"median_ms":109.3569,"p95_ms":110.1504,"max_ms":124.8334},"metadata":{"bytes_total":240,"dirty_rects_total":15,"dirty_frames":15,"dirty_max_per_frame":1,"dirty_area_total_px":2101360,"move_rects_total":0,"move_frames":0,"move_max_per_frame":0,"move_area_total_px":0,"move_rects_ever_nonempty":false,"errors":0,"last_error_hr":"0x8000000A","last_error_hr_name":"UNKNOWN"},"errors_seen":[]}],"summary":{"output_count":1,"any_attached":true,"any_duplicated":true,"primary_output_index":0,"agent_output_index":0,"desktop_image_in_system_memory_all":true,"desktop_image_in_system_memory_any":true,"agent_capture_would_work":true,"move_rects_ever_nonempty":false}}
+EXP9 probe_exit=0
+EXP9 json_present=True
+EXP9 measure=OK
+
+C:\Windows\system32>
+2026-08-06T13:03:23Z EVAL FAIL acquired=15<20 - activity-gen ineffective
+EVAL DATA side=bda flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY1 adapter0_attached=1 acquired=15 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:03:23Z EXP9 STOP: round-1-bda: SS2.4 acceptance FAILED - see EVAL FAIL above and /home/user/qubes-win-idd-driver/instrumentation/exp9/round-1-bda.json
+2026-08-06T13:03:23Z EXP9 STOP: state FROZEN for forensics - no recovery attempted, no kill issued.
+2026-08-06T13:03:23Z EXP9 STOP: headless recovery (if qrexec still answers): write the disabled adapter's
+2026-08-06T13:03:23Z EXP9 STOP:   instance id [ROOT\DISPLAY\0000] to C:\qubes-idd\revert-request.txt and reboot;
+2026-08-06T13:03:23Z EXP9 STOP:   the QubesIddPnpRevert boot task re-enables it (proven 2026-08-04).
+2026-08-06T13:03:23Z EXP9 STOP: if qrexec is dead too: dom0 forensics first (protocol in
+2026-08-06T13:03:23Z EXP9 STOP:   instrumentation/hang-2026-08-04/), then qtest kill + start.
+2026-08-06T13:04:14Z ============================================================
+2026-08-06T13:04:14Z EXP9 formal gating measurement start (PLAN SS2.4 / SS7 row 9)
+2026-08-06T13:04:14Z repo commit: 37379b5
+2026-08-06T13:04:14Z structure: 3 interleaved rounds x [bda control, idd test], cold boot per side
+2026-08-06T13:04:14Z mode: 1920x1080 solo on both sides; expected ddaprobe SHA256[0:16]=30F6012D0DA2753E
+2026-08-06T13:04:14Z outputs: /home/user/qubes-win-idd-driver/instrumentation/exp9/round-N-{bda,idd}.json + .report.txt; this log appends
+2026-08-06T13:04:15Z VM running
+2026-08-06T13:04:15Z pushing exp9-guest.ps1 + activity-gen.ps1
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action checkpre
+EXP9 elevated=True
+EXP9 devcon_present=True
+EXP9 revert_action_present=True
+EXP9 revert_task_registered=True
+EXP9 ddaprobe_present=True
+EXP9 modeprobe_present=True
+EXP9 activity_present=True
+EXP9 solo_supported=True
+EXP9 checkpre=OK
+
+C:\Windows\system32>
+2026-08-06T13:04:17Z ------------------------------------------------------------
+2026-08-06T13:04:17Z round-1-bda (CONTROL: bda primary, idd detached+disabled)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=running
+EXP9 idd_status=disabled
+EXP9 inventory=OK
+
+C:\Windows\system32>
+2026-08-06T13:04:19Z round-1-bda: to-be-detached device: idd (ROOT\DISPLAY\0000)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action arm -Role idd
+EXP9 armed_id=ROOT\DISPLAY\0000
+EXP9 arm=OK
+
+C:\Windows\system32>
+2026-08-06T13:04:20Z round-1-bda: revert marker ARMED with ROOT\DISPLAY\0000
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action topo -Target bda
+EXP9 enable_exit=0
+EXP9 solo_gdi=\\.\DISPLAY1
+EXP9 solo_exit=0
+EXP9 disable_exit=0
+EXP9 other_status=disabled
+EXP9 topo_gdi=\\.\DISPLAY1
+EXP9 topo=OK
+
+C:\Windows\system32>
+2026-08-06T13:04:38Z round-1-bda: hot topology OK, gdi=\\.\DISPLAY1, idd=disabled
+2026-08-06T13:04:41Z round-1-bda: hot health OK (qrexec + decoded pixels)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action disarm
+EXP9 disarm=OK
+
+C:\Windows\system32>
+2026-08-06T13:04:42Z round-1-bda: marker DISARMED (measurement boot must not be auto-reverted)
+2026-08-06T13:04:42Z cold boot: shutdown...
+2026-08-06T13:04:58Z cold boot: start...
+2026-08-06T13:05:40Z cold boot: qrexec alive
+2026-08-06T13:05:40Z round-1-bda: settling 75 s (M6 boot publish / work-area feed window)
+2026-08-06T13:07:12Z round-1-bda: post-boot topology persisted + stable (PERSIST OK gdi=\\.\DISPLAY1)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=running
+EXP9 idd_status=disabled
+EXP9 inventory=OK
+
+C:\Windows\system32>
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action solo -Target bda
+EXP9 solo_gdi=\\.\DISPLAY1
+EXP9 solo_exit=0
+EXP9 solo_final_gdi=\\.\DISPLAY1
+EXP9 solo=OK
+
+C:\Windows\system32>
+2026-08-06T13:07:18Z round-1-bda: formal modeprobe --solo assert OK on \\.\DISPLAY1
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action hash
+EXP9 ddaprobe_sha256=30F6012D0DA2753ECF9945B22F6A41EB325F1762DF5BAC07EAB04600B9003470
+EXP9 ddaprobe_sha256_16=30F6012D0DA2753E
+EXP9 hash=OK
+
+C:\Windows\system32>
+2026-08-06T13:07:19Z round-1-bda: ddaprobe hash verified (30F6012D0DA2753E)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action measure -Tag round-1-bda
+ddaprobe 1.0 - Desktop Duplication scoping probe
+  host=WIN-IDD-TEST user=user session=1 elevated=yes
+  winsta=WinSta0 desktop=Default os_build=19045.6466
+  frames=200 max_seconds=75.0 timeout_ms=100 map=yes
+
+--- output #0  (adapter 0, output 0) ------------------------------
+  adapter               : Microsoft Basic Render Driver
+  output device name    : \\.\DISPLAY1
+  attached to desktop   : YES
+  desktop coordinates   : (0,0)-(1920,1080)  1920x1080
+  output rotation       : identity
+  D3D11 feature level   : 11_1
+  duplication mode      : 1920x1080 @ 1.00 Hz, format B8G8R8A8_UNORM, scanline 1, rot identity
+  *** DesktopImageInSystemMemory : TRUE ***   (capture.c:176-183 OK)
+  MapDesktopSurface     : OK, pitch=7680, pBits=non-null
+
+  capture loop: 776 iterations in 75063.1 ms
+    acquired frames     : 119  (presented 119, mouse-only 0, accumulated 123)
+    timeouts            : 657  (blocked mean 109.37 ms, max 124.71 ms)
+    errors              : 0  (ACCESS_LOST 0, re-duplications 0, failed 0)
+    pointer shape updates: 0
+
+  AcquireNextFrame latency over 119 successful calls (ms):
+    min 6.585   mean 26.612   median 30.972   p95 40.232   max 63.697
+
+  frame metadata (1904 bytes total reported by DXGI):
+    dirty rects  : total 119 over 119 frames (max 1/frame), area 2406508 px
+    MOVE  rects  : total 0 over 0 frames (max 0/frame), area 0 px  <== empty this run (matches capture.c:441 note)
+    per acquired frame: 1.00 dirty, 0.00 move, 20223 px dirty area
+
+=== SUMMARY ===
+  outputs reported             : 1
+  any output attached          : yes
+  any output duplicated        : yes
+  primary output (0,0)         : 0
+  agent's chosen output        : 0 (adapter 0, first attached)
+  DesktopImageInSystemMemory   : all=TRUE any=TRUE
+  -> capture.c:176-183 verdict : PASS (agent capture path survives on its chosen output)
+  move rects ever non-empty    : no
+
+=== DDAPROBE JSON ===
+{"tool":"ddaprobe","version":"1.0","host":"WIN-IDD-TEST","user":"user","session_id":1,"elevated":true,"window_station":"WinSta0","desktop":"Default","os_build":"19045.6466","desktop_attach_note":"","options":{"frames":200,"max_seconds":75.0000,"timeout_ms":100,"only_output":-1,"map_probe":true},"factory_hr":"0x00000000","factory_error":"","outputs":[{"global_index":0,"adapter_index":0,"output_index":0,"adapter":"Microsoft Basic Render Driver","device_name":"\\\\.\\DISPLAY1","attached_to_desktop":true,"desktop_coordinates":{"left":0,"top":0,"right":1920,"bottom":1080},"rotation":"identity","output1_ok":true,"output1_hr":"0x00000000","device_ok":true,"device_hr":"0x00000000","device_hr_name":"S_OK","feature_level":"11_1","duplication_ok":true,"duplication_hr":"0x00000000","duplication_hr_name":"S_OK","duplication_hr_text":"The operation completed successfully.","desktop_image_in_system_memory":true,"desktop_image_in_system_memory_ever_false":false,"mode_changes":0,"mode":{"width":1920,"height":1080,"refresh_numerator":4294967294,"refresh_denominator":4294967294,"format":87,"format_name":"B8G8R8A8_UNORM","scanline_ordering":1,"rotation":"identity"},"map_desktop_surface":{"attempted":true,"ok":true,"hr":"0x00000000","hr_name":"S_OK","pitch":7680,"pbits_non_null":true},"loop":{"iterations":776,"acquired":119,"timeouts":657,"errors":0,"access_lost":0,"reduplications":0,"reduplication_failures":0,"presented_frames":119,"mouse_only_frames":0,"pointer_shape_updates":0,"accumulated_frames":123,"elapsed_ms":75063.1387},"acquire_latency":{"n":119,"min_ms":6.5848,"mean_ms":26.6117,"median_ms":30.9721,"p95_ms":40.2319,"max_ms":63.6972},"timeout_block":{"n":657,"min_ms":101.8415,"mean_ms":109.3700,"median_ms":109.3608,"p95_ms":109.4902,"max_ms":124.7075},"metadata":{"bytes_total":1904,"dirty_rects_total":119,"dirty_frames":119,"dirty_max_per_frame":1,"dirty_area_total_px":2406508,"move_rects_total":0,"move_frames":0,"move_max_per_frame":0,"move_area_total_px":0,"move_rects_ever_nonempty":false,"errors":0,"last_error_hr":"0x8000000A","last_error_hr_name":"UNKNOWN"},"errors_seen":[]}],"summary":{"output_count":1,"any_attached":true,"any_duplicated":true,"primary_output_index":0,"agent_output_index":0,"desktop_image_in_system_memory_all":true,"desktop_image_in_system_memory_any":true,"agent_capture_would_work":true,"move_rects_ever_nonempty":false}}
+EXP9 probe_exit=0
+EXP9 json_present=True
+EXP9 measure=OK
+
+C:\Windows\system32>
+2026-08-06T13:08:38Z round-1-bda: EVAL PASS side=bda flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY1 adapter0_attached=1 acquired=119 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:08:41Z round-1-bda: post-measure health OK
+2026-08-06T13:08:41Z round-1-bda PASS
+2026-08-06T13:08:41Z ------------------------------------------------------------
+2026-08-06T13:08:41Z round-1-idd (TEST: idd primary, bda detached+disabled)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=running
+EXP9 idd_status=disabled
+EXP9 inventory=OK
+
+C:\Windows\system32>
+2026-08-06T13:08:42Z round-1-idd: to-be-detached device: bda (PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action arm -Role bda
+EXP9 armed_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 arm=OK
+
+C:\Windows\system32>
+2026-08-06T13:08:43Z round-1-idd: revert marker ARMED with PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action topo -Target idd
+EXP9 enable_exit=0
+EXP9 solo_gdi=\\.\DISPLAY2
+EXP9 solo_exit=0
+EXP9 disable_exit=0
+EXP9 other_status=disabled
+EXP9 topo_gdi=\\.\DISPLAY2
+EXP9 topo=OK
+
+C:\Windows\system32>
+2026-08-06T13:09:01Z round-1-idd: hot topology OK, gdi=\\.\DISPLAY2, bda=disabled
+2026-08-06T13:09:04Z round-1-idd: hot health OK (qrexec + decoded pixels)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action disarm
+EXP9 disarm=OK
+
+C:\Windows\system32>
+2026-08-06T13:09:04Z round-1-idd: marker DISARMED (measurement boot must not be auto-reverted)
+2026-08-06T13:09:04Z cold boot: shutdown...
+2026-08-06T13:09:26Z cold boot: start...
+2026-08-06T13:10:01Z cold boot: qrexec alive
+2026-08-06T13:10:01Z round-1-idd: settling 75 s (M6 boot publish / work-area feed window)
+2026-08-06T13:11:32Z round-1-idd: post-boot topology persisted + stable (PERSIST OK gdi=\\.\DISPLAY2)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=disabled
+EXP9 idd_status=running
+EXP9 inventory=OK
+
+C:\Windows\system32>
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action solo -Target idd
+EXP9 solo_gdi=\\.\DISPLAY2
+EXP9 solo_exit=0
+EXP9 solo_final_gdi=\\.\DISPLAY2
+EXP9 solo=OK
+
+C:\Windows\system32>
+2026-08-06T13:11:37Z round-1-idd: formal modeprobe --solo assert OK on \\.\DISPLAY2
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action hash
+EXP9 ddaprobe_sha256=30F6012D0DA2753ECF9945B22F6A41EB325F1762DF5BAC07EAB04600B9003470
+EXP9 ddaprobe_sha256_16=30F6012D0DA2753E
+EXP9 hash=OK
+
+C:\Windows\system32>
+2026-08-06T13:11:39Z round-1-idd: ddaprobe hash verified (30F6012D0DA2753E)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action measure -Tag round-1-idd
+ddaprobe 1.0 - Desktop Duplication scoping probe
+  host=WIN-IDD-TEST user=user session=1 elevated=yes
+  winsta=WinSta0 desktop=Default os_build=19045.6466
+  frames=200 max_seconds=75.0 timeout_ms=100 map=yes
+
+--- output #0  (adapter 0, output 0) ------------------------------
+  adapter               : Microsoft Basic Render Driver
+  output device name    : \\.\DISPLAY2
+  attached to desktop   : YES
+  desktop coordinates   : (0,0)-(1920,1080)  1920x1080
+  output rotation       : identity
+  D3D11 feature level   : 11_1
+  duplication mode      : 1920x1080 @ 60.00 Hz, format B8G8R8A8_UNORM, scanline 1, rot identity
+  *** DesktopImageInSystemMemory : TRUE ***   (capture.c:176-183 OK)
+  MapDesktopSurface     : OK, pitch=7680, pBits=non-null
+
+  capture loop: 827 iterations in 75040.0 ms
+    acquired frames     : 163  (presented 163, mouse-only 0, accumulated 163)
+    timeouts            : 664  (blocked mean 108.58 ms, max 124.36 ms)
+    errors              : 0  (ACCESS_LOST 0, re-duplications 0, failed 0)
+    pointer shape updates: 0
+
+  AcquireNextFrame latency over 163 successful calls (ms):
+    min 1.475   mean 17.767   median 16.653   p95 25.882   max 95.674
+
+  frame metadata (2608 bytes total reported by DXGI):
+    dirty rects  : total 163 over 163 frames (max 1/frame), area 2545966 px
+    MOVE  rects  : total 0 over 0 frames (max 0/frame), area 0 px  <== empty this run (matches capture.c:441 note)
+    per acquired frame: 1.00 dirty, 0.00 move, 15619 px dirty area
+
+=== SUMMARY ===
+  outputs reported             : 1
+  any output attached          : yes
+  any output duplicated        : yes
+  primary output (0,0)         : 0
+  agent's chosen output        : 0 (adapter 0, first attached)
+  DesktopImageInSystemMemory   : all=TRUE any=TRUE
+  -> capture.c:176-183 verdict : PASS (agent capture path survives on its chosen output)
+  move rects ever non-empty    : no
+
+=== DDAPROBE JSON ===
+{"tool":"ddaprobe","version":"1.0","host":"WIN-IDD-TEST","user":"user","session_id":1,"elevated":true,"window_station":"WinSta0","desktop":"Default","os_build":"19045.6466","desktop_attach_note":"","options":{"frames":200,"max_seconds":75.0000,"timeout_ms":100,"only_output":-1,"map_probe":true},"factory_hr":"0x00000000","factory_error":"","outputs":[{"global_index":0,"adapter_index":0,"output_index":0,"adapter":"Microsoft Basic Render Driver","device_name":"\\\\.\\DISPLAY2","attached_to_desktop":true,"desktop_coordinates":{"left":0,"top":0,"right":1920,"bottom":1080},"rotation":"identity","output1_ok":true,"output1_hr":"0x00000000","device_ok":true,"device_hr":"0x00000000","device_hr_name":"S_OK","feature_level":"11_1","duplication_ok":true,"duplication_hr":"0x00000000","duplication_hr_name":"S_OK","duplication_hr_text":"The operation completed successfully.","desktop_image_in_system_memory":true,"desktop_image_in_system_memory_ever_false":false,"mode_changes":0,"mode":{"width":1920,"height":1080,"refresh_numerator":60,"refresh_denominator":1,"format":87,"format_name":"B8G8R8A8_UNORM","scanline_ordering":1,"rotation":"identity"},"map_desktop_surface":{"attempted":true,"ok":true,"hr":"0x00000000","hr_name":"S_OK","pitch":7680,"pbits_non_null":true},"loop":{"iterations":827,"acquired":163,"timeouts":664,"errors":0,"access_lost":0,"reduplications":0,"reduplication_failures":0,"presented_frames":163,"mouse_only_frames":0,"pointer_shape_updates":0,"accumulated_frames":163,"elapsed_ms":75040.0309},"acquire_latency":{"n":163,"min_ms":1.4752,"mean_ms":17.7668,"median_ms":16.6534,"p95_ms":25.8815,"max_ms":95.6738},"timeout_block":{"n":664,"min_ms":93.3468,"mean_ms":108.5782,"median_ms":113.7038,"p95_ms":117.3092,"max_ms":124.3591},"metadata":{"bytes_total":2608,"dirty_rects_total":163,"dirty_frames":163,"dirty_max_per_frame":1,"dirty_area_total_px":2545966,"move_rects_total":0,"move_frames":0,"move_max_per_frame":0,"move_area_total_px":0,"move_rects_ever_nonempty":false,"errors":0,"last_error_hr":"0x8000000A","last_error_hr_name":"UNKNOWN"},"errors_seen":[]}],"summary":{"output_count":1,"any_attached":true,"any_duplicated":true,"primary_output_index":0,"agent_output_index":0,"desktop_image_in_system_memory_all":true,"desktop_image_in_system_memory_any":true,"agent_capture_would_work":true,"move_rects_ever_nonempty":false}}
+EXP9 probe_exit=0
+EXP9 json_present=True
+EXP9 measure=OK
+
+C:\Windows\system32>
+2026-08-06T13:12:58Z round-1-idd: EVAL PASS side=idd flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY2 adapter0_attached=1 acquired=163 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:13:01Z round-1-idd: post-measure health OK
+2026-08-06T13:13:01Z round-1-idd PASS
+2026-08-06T13:13:01Z ------------------------------------------------------------
+2026-08-06T13:13:01Z round-2-bda (CONTROL: bda primary, idd detached+disabled)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=disabled
+EXP9 idd_status=running
+EXP9 inventory=OK
+
+C:\Windows\system32>
+2026-08-06T13:13:03Z round-2-bda: to-be-detached device: idd (ROOT\DISPLAY\0000)
+2026-08-06 16:15:03.750 qrexec-client-vm[751343]: vchan_timeout.c:46:qubes_wait_for_vchan_connection_with_timeout: vchan connection timeout
+2026-08-06 16:15:03.750 qrexec-client-vm[751343]: qrexec-agent-data.c:371:handle_data_client: Data vchan connection failed
+2026-08-06T13:15:03Z EXP9 STOP: round-2-bda: could not arm revert marker
+2026-08-06T13:15:03Z EXP9 STOP: state FROZEN for forensics - no recovery attempted, no kill issued.
+2026-08-06T13:15:03Z EXP9 STOP: headless recovery (if qrexec still answers): write the disabled adapter's
+2026-08-06T13:15:03Z EXP9 STOP:   instance id [ROOT\DISPLAY\0000] to C:\qubes-idd\revert-request.txt and reboot;
+2026-08-06T13:15:03Z EXP9 STOP:   the QubesIddPnpRevert boot task re-enables it (proven 2026-08-04).
+2026-08-06T13:15:03Z EXP9 STOP: if qrexec is dead too: dom0 forensics first (protocol in
+2026-08-06T13:15:03Z EXP9 STOP:   instrumentation/hang-2026-08-04/), then qtest kill + start.
+2026-08-06T13:17:00Z ============================================================
+2026-08-06T13:17:00Z EXP9 formal gating measurement start (PLAN SS2.4 / SS7 row 9)
+2026-08-06T13:17:00Z repo commit: 37379b5
+2026-08-06T13:17:00Z structure: 3 interleaved rounds x [bda control, idd test], cold boot per side
+2026-08-06T13:17:00Z mode: 1920x1080 solo on both sides; expected ddaprobe SHA256[0:16]=30F6012D0DA2753E
+2026-08-06T13:17:00Z outputs: /home/user/qubes-win-idd-driver/instrumentation/exp9/round-N-{bda,idd}.json + .report.txt; this log appends
+2026-08-06T13:17:01Z VM running
+2026-08-06T13:17:01Z pushing exp9-guest.ps1 + activity-gen.ps1
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action checkpre
+EXP9 elevated=True
+EXP9 devcon_present=True
+EXP9 revert_action_present=True
+EXP9 revert_task_registered=True
+EXP9 ddaprobe_present=True
+EXP9 modeprobe_present=True
+EXP9 activity_present=True
+EXP9 solo_supported=True
+EXP9 checkpre=OK
+
+C:\Windows\system32>
+2026-08-06T13:17:07Z ------------------------------------------------------------
+2026-08-06T13:17:07Z round-1-bda (CONTROL: bda primary, idd detached+disabled)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=disabled
+EXP9 idd_status=running
+EXP9 inventory=OK
+
+C:\Windows\system32>
+2026-08-06T13:17:11Z round-1-bda: to-be-detached device: idd (ROOT\DISPLAY\0000)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action arm -Role idd
+EXP9 armed_id=ROOT\DISPLAY\0000
+EXP9 arm=OK
+
+C:\Windows\system32>
+2026-08-06T13:17:13Z round-1-bda: revert marker ARMED with ROOT\DISPLAY\0000
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action topo -Target bda
+EXP9 enable_exit=0
+EXP9 solo_gdi=\\.\DISPLAY3
+EXP9 solo_exit=0
+EXP9 disable_exit=0
+EXP9 other_status=disabled
+EXP9 topo_gdi=\\.\DISPLAY3
+EXP9 topo=OK
+
+C:\Windows\system32>
+2026-08-06T13:17:35Z round-1-bda: hot topology OK, gdi=\\.\DISPLAY3, idd=disabled
+2026-08-06T13:17:39Z round-1-bda: hot health OK (qrexec + decoded pixels)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action disarm
+EXP9 disarm=OK
+
+C:\Windows\system32>
+2026-08-06T13:17:41Z round-1-bda: marker DISARMED (measurement boot must not be auto-reverted)
+2026-08-06T13:17:41Z cold boot: shutdown...
+2026-08-06T13:18:02Z cold boot: start...
+2026-08-06T13:18:46Z cold boot: qrexec alive
+2026-08-06T13:18:46Z round-1-bda: settling 75 s (M6 boot publish / work-area feed window)
+2026-08-06T13:20:18Z round-1-bda: post-boot topology persisted + stable (PERSIST OK gdi=\\.\DISPLAY1)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=running
+EXP9 idd_status=disabled
+EXP9 inventory=OK
+
+C:\Windows\system32>
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action solo -Target bda
+EXP9 solo_gdi=\\.\DISPLAY1
+EXP9 solo_exit=0
+EXP9 solo_final_gdi=\\.\DISPLAY1
+EXP9 solo=OK
+
+C:\Windows\system32>
+2026-08-06T13:20:22Z round-1-bda: formal modeprobe --solo assert OK on \\.\DISPLAY1
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action hash
+EXP9 ddaprobe_sha256=30F6012D0DA2753ECF9945B22F6A41EB325F1762DF5BAC07EAB04600B9003470
+EXP9 ddaprobe_sha256_16=30F6012D0DA2753E
+EXP9 hash=OK
+
+C:\Windows\system32>
+2026-08-06T13:20:24Z round-1-bda: ddaprobe hash verified (30F6012D0DA2753E)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action measure -Tag round-1-bda
+ddaprobe 1.0 - Desktop Duplication scoping probe
+  host=WIN-IDD-TEST user=user session=1 elevated=yes
+  winsta=WinSta0 desktop=Default os_build=19045.6466
+  frames=200 max_seconds=75.0 timeout_ms=100 map=yes
+
+--- output #0  (adapter 0, output 0) ------------------------------
+  adapter               : Microsoft Basic Render Driver
+  output device name    : \\.\DISPLAY1
+  attached to desktop   : YES
+  desktop coordinates   : (0,0)-(1920,1080)  1920x1080
+  output rotation       : identity
+  D3D11 feature level   : 11_1
+  duplication mode      : 1920x1080 @ 1.00 Hz, format B8G8R8A8_UNORM, scanline 1, rot identity
+  *** DesktopImageInSystemMemory : TRUE ***   (capture.c:176-183 OK)
+  MapDesktopSurface     : OK, pitch=7680, pBits=non-null
+
+  capture loop: 764 iterations in 75008.5 ms
+    acquired frames     : 106  (presented 106, mouse-only 0, accumulated 107)
+    timeouts            : 658  (blocked mean 109.92 ms, max 160.27 ms)
+    errors              : 0  (ACCESS_LOST 0, re-duplications 0, failed 0)
+    pointer shape updates: 0
+
+  AcquireNextFrame latency over 106 successful calls (ms):
+    min 1.209   mean 24.767   median 31.031   p95 31.520   max 63.721
+
+  frame metadata (1696 bytes total reported by DXGI):
+    dirty rects  : total 106 over 106 frames (max 1/frame), area 2386036 px
+    MOVE  rects  : total 0 over 0 frames (max 0/frame), area 0 px  <== empty this run (matches capture.c:441 note)
+    per acquired frame: 1.00 dirty, 0.00 move, 22510 px dirty area
+
+=== SUMMARY ===
+  outputs reported             : 1
+  any output attached          : yes
+  any output duplicated        : yes
+  primary output (0,0)         : 0
+  agent's chosen output        : 0 (adapter 0, first attached)
+  DesktopImageInSystemMemory   : all=TRUE any=TRUE
+  -> capture.c:176-183 verdict : PASS (agent capture path survives on its chosen output)
+  move rects ever non-empty    : no
+
+=== DDAPROBE JSON ===
+{"tool":"ddaprobe","version":"1.0","host":"WIN-IDD-TEST","user":"user","session_id":1,"elevated":true,"window_station":"WinSta0","desktop":"Default","os_build":"19045.6466","desktop_attach_note":"","options":{"frames":200,"max_seconds":75.0000,"timeout_ms":100,"only_output":-1,"map_probe":true},"factory_hr":"0x00000000","factory_error":"","outputs":[{"global_index":0,"adapter_index":0,"output_index":0,"adapter":"Microsoft Basic Render Driver","device_name":"\\\\.\\DISPLAY1","attached_to_desktop":true,"desktop_coordinates":{"left":0,"top":0,"right":1920,"bottom":1080},"rotation":"identity","output1_ok":true,"output1_hr":"0x00000000","device_ok":true,"device_hr":"0x00000000","device_hr_name":"S_OK","feature_level":"11_1","duplication_ok":true,"duplication_hr":"0x00000000","duplication_hr_name":"S_OK","duplication_hr_text":"The operation completed successfully.","desktop_image_in_system_memory":true,"desktop_image_in_system_memory_ever_false":false,"mode_changes":0,"mode":{"width":1920,"height":1080,"refresh_numerator":4294967294,"refresh_denominator":4294967294,"format":87,"format_name":"B8G8R8A8_UNORM","scanline_ordering":1,"rotation":"identity"},"map_desktop_surface":{"attempted":true,"ok":true,"hr":"0x00000000","hr_name":"S_OK","pitch":7680,"pbits_non_null":true},"loop":{"iterations":764,"acquired":106,"timeouts":658,"errors":0,"access_lost":0,"reduplications":0,"reduplication_failures":0,"presented_frames":106,"mouse_only_frames":0,"pointer_shape_updates":0,"accumulated_frames":107,"elapsed_ms":75008.4674},"acquire_latency":{"n":106,"min_ms":1.2092,"mean_ms":24.7671,"median_ms":31.0310,"p95_ms":31.5205,"max_ms":63.7208},"timeout_block":{"n":658,"min_ms":95.9785,"mean_ms":109.9209,"median_ms":109.3624,"p95_ms":111.1762,"max_ms":160.2710},"metadata":{"bytes_total":1696,"dirty_rects_total":106,"dirty_frames":106,"dirty_max_per_frame":1,"dirty_area_total_px":2386036,"move_rects_total":0,"move_frames":0,"move_max_per_frame":0,"move_area_total_px":0,"move_rects_ever_nonempty":false,"errors":0,"last_error_hr":"0x8000000A","last_error_hr_name":"UNKNOWN"},"errors_seen":[]}],"summary":{"output_count":1,"any_attached":true,"any_duplicated":true,"primary_output_index":0,"agent_output_index":0,"desktop_image_in_system_memory_all":true,"desktop_image_in_system_memory_any":true,"agent_capture_would_work":true,"move_rects_ever_nonempty":false}}
+EXP9 probe_exit=0
+EXP9 json_present=True
+EXP9 measure=OK
+
+C:\Windows\system32>
+2026-08-06T13:21:43Z round-1-bda: EVAL PASS side=bda flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY1 adapter0_attached=1 acquired=106 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:21:46Z round-1-bda: post-measure health OK
+2026-08-06T13:21:46Z round-1-bda PASS
+2026-08-06T13:21:46Z ------------------------------------------------------------
+2026-08-06T13:21:46Z round-1-idd (TEST: idd primary, bda detached+disabled)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=running
+EXP9 idd_status=disabled
+EXP9 inventory=OK
+
+C:\Windows\system32>
+2026-08-06T13:21:48Z round-1-idd: to-be-detached device: bda (PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action arm -Role bda
+EXP9 armed_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 arm=OK
+
+C:\Windows\system32>
+2026-08-06T13:21:49Z round-1-idd: revert marker ARMED with PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action topo -Target idd
+EXP9 enable_exit=0
+EXP9 solo_gdi=\\.\DISPLAY2
+EXP9 solo_exit=0
+EXP9 disable_exit=0
+EXP9 other_status=disabled
+EXP9 topo_gdi=\\.\DISPLAY2
+EXP9 topo=OK
+
+C:\Windows\system32>
+2026-08-06T13:22:07Z round-1-idd: hot topology OK, gdi=\\.\DISPLAY2, bda=disabled
+2026-08-06T13:22:10Z round-1-idd: hot health OK (qrexec + decoded pixels)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action disarm
+EXP9 disarm=OK
+
+C:\Windows\system32>
+2026-08-06T13:22:11Z round-1-idd: marker DISARMED (measurement boot must not be auto-reverted)
+2026-08-06T13:22:11Z cold boot: shutdown...
+2026-08-06T13:22:27Z cold boot: start...
+2026-08-06T13:23:14Z cold boot: qrexec alive
+2026-08-06T13:23:14Z round-1-idd: settling 75 s (M6 boot publish / work-area feed window)
+2026-08-06T13:24:46Z round-1-idd: post-boot topology persisted + stable (PERSIST OK gdi=\\.\DISPLAY2)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=disabled
+EXP9 idd_status=running
+EXP9 inventory=OK
+
+C:\Windows\system32>
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action solo -Target idd
+EXP9 solo_gdi=\\.\DISPLAY2
+EXP9 solo_exit=0
+EXP9 solo_final_gdi=\\.\DISPLAY2
+EXP9 solo=OK
+
+C:\Windows\system32>
+2026-08-06T13:24:50Z round-1-idd: formal modeprobe --solo assert OK on \\.\DISPLAY2
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action hash
+EXP9 ddaprobe_sha256=30F6012D0DA2753ECF9945B22F6A41EB325F1762DF5BAC07EAB04600B9003470
+EXP9 ddaprobe_sha256_16=30F6012D0DA2753E
+EXP9 hash=OK
+
+C:\Windows\system32>
+2026-08-06T13:24:51Z round-1-idd: ddaprobe hash verified (30F6012D0DA2753E)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action measure -Tag round-1-idd
+ddaprobe 1.0 - Desktop Duplication scoping probe
+  host=WIN-IDD-TEST user=user session=1 elevated=yes
+  winsta=WinSta0 desktop=Default os_build=19045.6466
+  frames=200 max_seconds=75.0 timeout_ms=100 map=yes
+
+--- output #0  (adapter 0, output 0) ------------------------------
+  adapter               : Microsoft Basic Render Driver
+  output device name    : \\.\DISPLAY2
+  attached to desktop   : YES
+  desktop coordinates   : (0,0)-(1920,1080)  1920x1080
+  output rotation       : identity
+  D3D11 feature level   : 11_1
+  duplication mode      : 1920x1080 @ 60.00 Hz, format B8G8R8A8_UNORM, scanline 1, rot identity
+  *** DesktopImageInSystemMemory : TRUE ***   (capture.c:176-183 OK)
+  MapDesktopSurface     : OK, pitch=7680, pBits=non-null
+
+  capture loop: 809 iterations in 75040.1 ms
+    acquired frames     : 146  (presented 146, mouse-only 0, accumulated 146)
+    timeouts            : 663  (blocked mean 109.30 ms, max 128.35 ms)
+    errors              : 0  (ACCESS_LOST 0, re-duplications 0, failed 0)
+    pointer shape updates: 0
+
+  AcquireNextFrame latency over 146 successful calls (ms):
+    min 1.558   mean 17.384   median 16.610   p95 20.587   max 85.822
+
+  frame metadata (2336 bytes total reported by DXGI):
+    dirty rects  : total 146 over 146 frames (max 1/frame), area 2514206 px
+    MOVE  rects  : total 0 over 0 frames (max 0/frame), area 0 px  <== empty this run (matches capture.c:441 note)
+    per acquired frame: 1.00 dirty, 0.00 move, 17221 px dirty area
+
+=== SUMMARY ===
+  outputs reported             : 1
+  any output attached          : yes
+  any output duplicated        : yes
+  primary output (0,0)         : 0
+  agent's chosen output        : 0 (adapter 0, first attached)
+  DesktopImageInSystemMemory   : all=TRUE any=TRUE
+  -> capture.c:176-183 verdict : PASS (agent capture path survives on its chosen output)
+  move rects ever non-empty    : no
+
+=== DDAPROBE JSON ===
+{"tool":"ddaprobe","version":"1.0","host":"WIN-IDD-TEST","user":"user","session_id":1,"elevated":true,"window_station":"WinSta0","desktop":"Default","os_build":"19045.6466","desktop_attach_note":"","options":{"frames":200,"max_seconds":75.0000,"timeout_ms":100,"only_output":-1,"map_probe":true},"factory_hr":"0x00000000","factory_error":"","outputs":[{"global_index":0,"adapter_index":0,"output_index":0,"adapter":"Microsoft Basic Render Driver","device_name":"\\\\.\\DISPLAY2","attached_to_desktop":true,"desktop_coordinates":{"left":0,"top":0,"right":1920,"bottom":1080},"rotation":"identity","output1_ok":true,"output1_hr":"0x00000000","device_ok":true,"device_hr":"0x00000000","device_hr_name":"S_OK","feature_level":"11_1","duplication_ok":true,"duplication_hr":"0x00000000","duplication_hr_name":"S_OK","duplication_hr_text":"The operation completed successfully.","desktop_image_in_system_memory":true,"desktop_image_in_system_memory_ever_false":false,"mode_changes":0,"mode":{"width":1920,"height":1080,"refresh_numerator":60,"refresh_denominator":1,"format":87,"format_name":"B8G8R8A8_UNORM","scanline_ordering":1,"rotation":"identity"},"map_desktop_surface":{"attempted":true,"ok":true,"hr":"0x00000000","hr_name":"S_OK","pitch":7680,"pbits_non_null":true},"loop":{"iterations":809,"acquired":146,"timeouts":663,"errors":0,"access_lost":0,"reduplications":0,"reduplication_failures":0,"presented_frames":146,"mouse_only_frames":0,"pointer_shape_updates":0,"accumulated_frames":146,"elapsed_ms":75040.1076},"acquire_latency":{"n":146,"min_ms":1.5579,"mean_ms":17.3842,"median_ms":16.6097,"p95_ms":20.5871,"max_ms":85.8224},"timeout_block":{"n":663,"min_ms":94.9034,"mean_ms":109.2968,"median_ms":113.6627,"p95_ms":117.5899,"max_ms":128.3515},"metadata":{"bytes_total":2336,"dirty_rects_total":146,"dirty_frames":146,"dirty_max_per_frame":1,"dirty_area_total_px":2514206,"move_rects_total":0,"move_frames":0,"move_max_per_frame":0,"move_area_total_px":0,"move_rects_ever_nonempty":false,"errors":0,"last_error_hr":"0x8000000A","last_error_hr_name":"UNKNOWN"},"errors_seen":[]}],"summary":{"output_count":1,"any_attached":true,"any_duplicated":true,"primary_output_index":0,"agent_output_index":0,"desktop_image_in_system_memory_all":true,"desktop_image_in_system_memory_any":true,"agent_capture_would_work":true,"move_rects_ever_nonempty":false}}
+EXP9 probe_exit=0
+EXP9 json_present=True
+EXP9 measure=OK
+
+C:\Windows\system32>
+2026-08-06T13:26:11Z round-1-idd: EVAL PASS side=idd flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY2 adapter0_attached=1 acquired=146 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:26:14Z round-1-idd: post-measure health OK
+2026-08-06T13:26:14Z round-1-idd PASS
+2026-08-06T13:26:14Z ------------------------------------------------------------
+2026-08-06T13:26:14Z round-2-bda (CONTROL: bda primary, idd detached+disabled)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=disabled
+EXP9 idd_status=running
+EXP9 inventory=OK
+
+C:\Windows\system32>
+2026-08-06T13:26:16Z round-2-bda: to-be-detached device: idd (ROOT\DISPLAY\0000)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action arm -Role idd
+EXP9 armed_id=ROOT\DISPLAY\0000
+EXP9 arm=OK
+
+C:\Windows\system32>
+2026-08-06T13:26:18Z round-2-bda: revert marker ARMED with ROOT\DISPLAY\0000
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action topo -Target bda
+EXP9 enable_exit=0
+EXP9 solo_gdi=\\.\DISPLAY3
+EXP9 solo_exit=0
+EXP9 disable_exit=0
+EXP9 other_status=disabled
+EXP9 topo_gdi=\\.\DISPLAY3
+EXP9 topo=OK
+
+C:\Windows\system32>
+2026-08-06T13:26:36Z round-2-bda: hot topology OK, gdi=\\.\DISPLAY3, idd=disabled
+2026-08-06T13:26:39Z round-2-bda: hot health OK (qrexec + decoded pixels)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action disarm
+EXP9 disarm=OK
+
+C:\Windows\system32>
+2026-08-06T13:26:39Z round-2-bda: marker DISARMED (measurement boot must not be auto-reverted)
+2026-08-06T13:26:39Z cold boot: shutdown...
+2026-08-06T13:26:55Z cold boot: start...
+2026-08-06T13:27:37Z cold boot: qrexec alive
+2026-08-06T13:27:37Z round-2-bda: settling 75 s (M6 boot publish / work-area feed window)
+2026-08-06T13:29:09Z round-2-bda: post-boot topology persisted + stable (PERSIST OK gdi=\\.\DISPLAY1)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=running
+EXP9 idd_status=disabled
+EXP9 inventory=OK
+
+C:\Windows\system32>
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action solo -Target bda
+EXP9 solo_gdi=\\.\DISPLAY1
+EXP9 solo_exit=0
+EXP9 solo_final_gdi=\\.\DISPLAY1
+EXP9 solo=OK
+
+C:\Windows\system32>
+2026-08-06T13:29:13Z round-2-bda: formal modeprobe --solo assert OK on \\.\DISPLAY1
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action hash
+EXP9 ddaprobe_sha256=30F6012D0DA2753ECF9945B22F6A41EB325F1762DF5BAC07EAB04600B9003470
+EXP9 ddaprobe_sha256_16=30F6012D0DA2753E
+EXP9 hash=OK
+
+C:\Windows\system32>
+2026-08-06T13:29:15Z round-2-bda: ddaprobe hash verified (30F6012D0DA2753E)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action measure -Tag round-2-bda
+ddaprobe 1.0 - Desktop Duplication scoping probe
+  host=WIN-IDD-TEST user=user session=1 elevated=yes
+  winsta=WinSta0 desktop=Default os_build=19045.6466
+  frames=200 max_seconds=75.0 timeout_ms=100 map=yes
+
+--- output #0  (adapter 0, output 0) ------------------------------
+  adapter               : Microsoft Basic Render Driver
+  output device name    : \\.\DISPLAY1
+  attached to desktop   : YES
+  desktop coordinates   : (0,0)-(1920,1080)  1920x1080
+  output rotation       : identity
+  D3D11 feature level   : 11_1
+  duplication mode      : 1920x1080 @ 1.00 Hz, format B8G8R8A8_UNORM, scanline 1, rot identity
+  *** DesktopImageInSystemMemory : TRUE ***   (capture.c:176-183 OK)
+  MapDesktopSurface     : OK, pitch=7680, pBits=non-null
+
+  capture loop: 768 iterations in 75021.4 ms
+    acquired frames     : 111  (presented 111, mouse-only 0, accumulated 114)
+    timeouts            : 657  (blocked mean 109.38 ms, max 125.64 ms)
+    errors              : 0  (ACCESS_LOST 0, re-duplications 0, failed 0)
+    pointer shape updates: 0
+
+  AcquireNextFrame latency over 111 successful calls (ms):
+    min 14.160   mean 28.060   median 31.069   p95 48.116   max 94.935
+
+  frame metadata (1776 bytes total reported by DXGI):
+    dirty rects  : total 111 over 111 frames (max 1/frame), area 2394514 px
+    MOVE  rects  : total 0 over 0 frames (max 0/frame), area 0 px  <== empty this run (matches capture.c:441 note)
+    per acquired frame: 1.00 dirty, 0.00 move, 21572 px dirty area
+
+=== SUMMARY ===
+  outputs reported             : 1
+  any output attached          : yes
+  any output duplicated        : yes
+  primary output (0,0)         : 0
+  agent's chosen output        : 0 (adapter 0, first attached)
+  DesktopImageInSystemMemory   : all=TRUE any=TRUE
+  -> capture.c:176-183 verdict : PASS (agent capture path survives on its chosen output)
+  move rects ever non-empty    : no
+
+=== DDAPROBE JSON ===
+{"tool":"ddaprobe","version":"1.0","host":"WIN-IDD-TEST","user":"user","session_id":1,"elevated":true,"window_station":"WinSta0","desktop":"Default","os_build":"19045.6466","desktop_attach_note":"","options":{"frames":200,"max_seconds":75.0000,"timeout_ms":100,"only_output":-1,"map_probe":true},"factory_hr":"0x00000000","factory_error":"","outputs":[{"global_index":0,"adapter_index":0,"output_index":0,"adapter":"Microsoft Basic Render Driver","device_name":"\\\\.\\DISPLAY1","attached_to_desktop":true,"desktop_coordinates":{"left":0,"top":0,"right":1920,"bottom":1080},"rotation":"identity","output1_ok":true,"output1_hr":"0x00000000","device_ok":true,"device_hr":"0x00000000","device_hr_name":"S_OK","feature_level":"11_1","duplication_ok":true,"duplication_hr":"0x00000000","duplication_hr_name":"S_OK","duplication_hr_text":"The operation completed successfully.","desktop_image_in_system_memory":true,"desktop_image_in_system_memory_ever_false":false,"mode_changes":0,"mode":{"width":1920,"height":1080,"refresh_numerator":4294967294,"refresh_denominator":4294967294,"format":87,"format_name":"B8G8R8A8_UNORM","scanline_ordering":1,"rotation":"identity"},"map_desktop_surface":{"attempted":true,"ok":true,"hr":"0x00000000","hr_name":"S_OK","pitch":7680,"pbits_non_null":true},"loop":{"iterations":768,"acquired":111,"timeouts":657,"errors":0,"access_lost":0,"reduplications":0,"reduplication_failures":0,"presented_frames":111,"mouse_only_frames":0,"pointer_shape_updates":0,"accumulated_frames":114,"elapsed_ms":75021.4366},"acquire_latency":{"n":111,"min_ms":14.1605,"mean_ms":28.0598,"median_ms":31.0686,"p95_ms":48.1158,"max_ms":94.9346},"timeout_block":{"n":657,"min_ms":98.3138,"mean_ms":109.3756,"median_ms":109.3587,"p95_ms":109.5098,"max_ms":125.6437},"metadata":{"bytes_total":1776,"dirty_rects_total":111,"dirty_frames":111,"dirty_max_per_frame":1,"dirty_area_total_px":2394514,"move_rects_total":0,"move_frames":0,"move_max_per_frame":0,"move_area_total_px":0,"move_rects_ever_nonempty":false,"errors":0,"last_error_hr":"0x8000000A","last_error_hr_name":"UNKNOWN"},"errors_seen":[]}],"summary":{"output_count":1,"any_attached":true,"any_duplicated":true,"primary_output_index":0,"agent_output_index":0,"desktop_image_in_system_memory_all":true,"desktop_image_in_system_memory_any":true,"agent_capture_would_work":true,"move_rects_ever_nonempty":false}}
+EXP9 probe_exit=0
+EXP9 json_present=True
+EXP9 measure=OK
+
+C:\Windows\system32>
+2026-08-06T13:30:34Z round-2-bda: EVAL PASS side=bda flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY1 adapter0_attached=1 acquired=111 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:30:37Z round-2-bda: post-measure health OK
+2026-08-06T13:30:37Z round-2-bda PASS
+2026-08-06T13:30:37Z ------------------------------------------------------------
+2026-08-06T13:30:37Z round-2-idd (TEST: idd primary, bda detached+disabled)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=running
+EXP9 idd_status=disabled
+EXP9 inventory=OK
+
+C:\Windows\system32>
+2026-08-06T13:30:38Z round-2-idd: to-be-detached device: bda (PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action arm -Role bda
+EXP9 armed_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 arm=OK
+
+C:\Windows\system32>
+2026-08-06T13:30:40Z round-2-idd: revert marker ARMED with PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action topo -Target idd
+EXP9 enable_exit=0
+EXP9 solo_gdi=\\.\DISPLAY2
+EXP9 solo_exit=0
+EXP9 disable_exit=0
+EXP9 other_status=disabled
+EXP9 topo_gdi=\\.\DISPLAY2
+EXP9 topo=OK
+
+C:\Windows\system32>
+2026-08-06T13:30:58Z round-2-idd: hot topology OK, gdi=\\.\DISPLAY2, bda=disabled
+2026-08-06T13:31:01Z round-2-idd: hot health OK (qrexec + decoded pixels)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action disarm
+EXP9 disarm=OK
+
+C:\Windows\system32>
+2026-08-06T13:31:02Z round-2-idd: marker DISARMED (measurement boot must not be auto-reverted)
+2026-08-06T13:31:02Z cold boot: shutdown...
+2026-08-06T13:31:18Z cold boot: start...
+2026-08-06T13:32:03Z cold boot: qrexec alive
+2026-08-06T13:32:03Z round-2-idd: settling 75 s (M6 boot publish / work-area feed window)
+2026-08-06T13:33:36Z round-2-idd: post-boot topology persisted + stable (PERSIST OK gdi=\\.\DISPLAY2)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=disabled
+EXP9 idd_status=running
+EXP9 inventory=OK
+
+C:\Windows\system32>
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action solo -Target idd
+EXP9 solo_gdi=\\.\DISPLAY2
+EXP9 solo_exit=0
+EXP9 solo_final_gdi=\\.\DISPLAY2
+EXP9 solo=OK
+
+C:\Windows\system32>
+2026-08-06T13:33:41Z round-2-idd: formal modeprobe --solo assert OK on \\.\DISPLAY2
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action hash
+EXP9 ddaprobe_sha256=30F6012D0DA2753ECF9945B22F6A41EB325F1762DF5BAC07EAB04600B9003470
+EXP9 ddaprobe_sha256_16=30F6012D0DA2753E
+EXP9 hash=OK
+
+C:\Windows\system32>
+2026-08-06T13:33:42Z round-2-idd: ddaprobe hash verified (30F6012D0DA2753E)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action measure -Tag round-2-idd
+ddaprobe 1.0 - Desktop Duplication scoping probe
+  host=WIN-IDD-TEST user=user session=1 elevated=yes
+  winsta=WinSta0 desktop=Default os_build=19045.6466
+  frames=200 max_seconds=75.0 timeout_ms=100 map=yes
+
+--- output #0  (adapter 0, output 0) ------------------------------
+  adapter               : Microsoft Basic Render Driver
+  output device name    : \\.\DISPLAY2
+  attached to desktop   : YES
+  desktop coordinates   : (0,0)-(1920,1080)  1920x1080
+  output rotation       : identity
+  D3D11 feature level   : 11_1
+  duplication mode      : 1920x1080 @ 60.00 Hz, format B8G8R8A8_UNORM, scanline 1, rot identity
+  *** DesktopImageInSystemMemory : TRUE ***   (capture.c:176-183 OK)
+  MapDesktopSurface     : OK, pitch=7680, pBits=non-null
+
+  capture loop: 828 iterations in 75005.3 ms
+    acquired frames     : 172  (presented 172, mouse-only 0, accumulated 172)
+    timeouts            : 656  (blocked mean 109.44 ms, max 124.06 ms)
+    errors              : 0  (ACCESS_LOST 0, re-duplications 0, failed 0)
+    pointer shape updates: 0
+
+  AcquireNextFrame latency over 172 successful calls (ms):
+    min 5.756   mean 18.478   median 16.670   p95 30.605   max 85.050
+
+  frame metadata (2752 bytes total reported by DXGI):
+    dirty rects  : total 172 over 172 frames (max 1/frame), area 2563246 px
+    MOVE  rects  : total 0 over 0 frames (max 0/frame), area 0 px  <== empty this run (matches capture.c:441 note)
+    per acquired frame: 1.00 dirty, 0.00 move, 14903 px dirty area
+
+=== SUMMARY ===
+  outputs reported             : 1
+  any output attached          : yes
+  any output duplicated        : yes
+  primary output (0,0)         : 0
+  agent's chosen output        : 0 (adapter 0, first attached)
+  DesktopImageInSystemMemory   : all=TRUE any=TRUE
+  -> capture.c:176-183 verdict : PASS (agent capture path survives on its chosen output)
+  move rects ever non-empty    : no
+
+=== DDAPROBE JSON ===
+{"tool":"ddaprobe","version":"1.0","host":"WIN-IDD-TEST","user":"user","session_id":1,"elevated":true,"window_station":"WinSta0","desktop":"Default","os_build":"19045.6466","desktop_attach_note":"","options":{"frames":200,"max_seconds":75.0000,"timeout_ms":100,"only_output":-1,"map_probe":true},"factory_hr":"0x00000000","factory_error":"","outputs":[{"global_index":0,"adapter_index":0,"output_index":0,"adapter":"Microsoft Basic Render Driver","device_name":"\\\\.\\DISPLAY2","attached_to_desktop":true,"desktop_coordinates":{"left":0,"top":0,"right":1920,"bottom":1080},"rotation":"identity","output1_ok":true,"output1_hr":"0x00000000","device_ok":true,"device_hr":"0x00000000","device_hr_name":"S_OK","feature_level":"11_1","duplication_ok":true,"duplication_hr":"0x00000000","duplication_hr_name":"S_OK","duplication_hr_text":"The operation completed successfully.","desktop_image_in_system_memory":true,"desktop_image_in_system_memory_ever_false":false,"mode_changes":0,"mode":{"width":1920,"height":1080,"refresh_numerator":60,"refresh_denominator":1,"format":87,"format_name":"B8G8R8A8_UNORM","scanline_ordering":1,"rotation":"identity"},"map_desktop_surface":{"attempted":true,"ok":true,"hr":"0x00000000","hr_name":"S_OK","pitch":7680,"pbits_non_null":true},"loop":{"iterations":828,"acquired":172,"timeouts":656,"errors":0,"access_lost":0,"reduplications":0,"reduplication_failures":0,"presented_frames":172,"mouse_only_frames":0,"pointer_shape_updates":0,"accumulated_frames":172,"elapsed_ms":75005.3391},"acquire_latency":{"n":172,"min_ms":5.7557,"mean_ms":18.4777,"median_ms":16.6701,"p95_ms":30.6047,"max_ms":85.0501},"timeout_block":{"n":656,"min_ms":99.6979,"mean_ms":109.4450,"median_ms":115.5254,"p95_ms":117.4698,"max_ms":124.0641},"metadata":{"bytes_total":2752,"dirty_rects_total":172,"dirty_frames":172,"dirty_max_per_frame":1,"dirty_area_total_px":2563246,"move_rects_total":0,"move_frames":0,"move_max_per_frame":0,"move_area_total_px":0,"move_rects_ever_nonempty":false,"errors":0,"last_error_hr":"0x8000000A","last_error_hr_name":"UNKNOWN"},"errors_seen":[]}],"summary":{"output_count":1,"any_attached":true,"any_duplicated":true,"primary_output_index":0,"agent_output_index":0,"desktop_image_in_system_memory_all":true,"desktop_image_in_system_memory_any":true,"agent_capture_would_work":true,"move_rects_ever_nonempty":false}}
+EXP9 probe_exit=0
+EXP9 json_present=True
+EXP9 measure=OK
+
+C:\Windows\system32>
+2026-08-06T13:35:01Z round-2-idd: EVAL PASS side=idd flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY2 adapter0_attached=1 acquired=172 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:35:05Z round-2-idd: post-measure health OK
+2026-08-06T13:35:05Z round-2-idd PASS
+2026-08-06T13:35:05Z ------------------------------------------------------------
+2026-08-06T13:35:05Z round-3-bda (CONTROL: bda primary, idd detached+disabled)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=disabled
+EXP9 idd_status=running
+EXP9 inventory=OK
+
+C:\Windows\system32>
+2026-08-06T13:35:06Z round-3-bda: to-be-detached device: idd (ROOT\DISPLAY\0000)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action arm -Role idd
+EXP9 armed_id=ROOT\DISPLAY\0000
+EXP9 arm=OK
+
+C:\Windows\system32>
+2026-08-06T13:35:07Z round-3-bda: revert marker ARMED with ROOT\DISPLAY\0000
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action topo -Target bda
+EXP9 enable_exit=0
+EXP9 solo_gdi=\\.\DISPLAY3
+EXP9 solo_exit=0
+EXP9 disable_exit=0
+EXP9 other_status=disabled
+EXP9 topo_gdi=\\.\DISPLAY3
+EXP9 topo=OK
+
+C:\Windows\system32>
+2026-08-06T13:35:25Z round-3-bda: hot topology OK, gdi=\\.\DISPLAY3, idd=disabled
+2026-08-06T13:35:28Z round-3-bda: hot health OK (qrexec + decoded pixels)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action disarm
+EXP9 disarm=OK
+
+C:\Windows\system32>
+2026-08-06T13:35:30Z round-3-bda: marker DISARMED (measurement boot must not be auto-reverted)
+2026-08-06T13:35:30Z cold boot: shutdown...
+2026-08-06T13:35:45Z cold boot: start...
+2026-08-06T13:36:30Z cold boot: qrexec alive
+2026-08-06T13:36:30Z round-3-bda: settling 75 s (M6 boot publish / work-area feed window)
+2026-08-06T13:38:01Z round-3-bda: post-boot topology persisted + stable (PERSIST OK gdi=\\.\DISPLAY1)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=running
+EXP9 idd_status=disabled
+EXP9 inventory=OK
+
+C:\Windows\system32>
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action solo -Target bda
+EXP9 solo_gdi=\\.\DISPLAY1
+EXP9 solo_exit=0
+EXP9 solo_final_gdi=\\.\DISPLAY1
+EXP9 solo=OK
+
+C:\Windows\system32>
+2026-08-06T13:38:06Z round-3-bda: formal modeprobe --solo assert OK on \\.\DISPLAY1
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action hash
+EXP9 ddaprobe_sha256=30F6012D0DA2753ECF9945B22F6A41EB325F1762DF5BAC07EAB04600B9003470
+EXP9 ddaprobe_sha256_16=30F6012D0DA2753E
+EXP9 hash=OK
+
+C:\Windows\system32>
+2026-08-06T13:38:08Z round-3-bda: ddaprobe hash verified (30F6012D0DA2753E)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action measure -Tag round-3-bda
+ddaprobe 1.0 - Desktop Duplication scoping probe
+  host=WIN-IDD-TEST user=user session=1 elevated=yes
+  winsta=WinSta0 desktop=Default os_build=19045.6466
+  frames=200 max_seconds=75.0 timeout_ms=100 map=yes
+
+--- output #0  (adapter 0, output 0) ------------------------------
+  adapter               : Microsoft Basic Render Driver
+  output device name    : \\.\DISPLAY1
+  attached to desktop   : YES
+  desktop coordinates   : (0,0)-(1920,1080)  1920x1080
+  output rotation       : identity
+  D3D11 feature level   : 11_1
+  duplication mode      : 1920x1080 @ 1.00 Hz, format B8G8R8A8_UNORM, scanline 1, rot identity
+  *** DesktopImageInSystemMemory : TRUE ***   (capture.c:176-183 OK)
+  MapDesktopSurface     : OK, pitch=7680, pBits=non-null
+
+  capture loop: 776 iterations in 75055.8 ms
+    acquired frames     : 118  (presented 118, mouse-only 0, accumulated 119)
+    timeouts            : 658  (blocked mean 109.40 ms, max 124.94 ms)
+    errors              : 0  (ACCESS_LOST 0, re-duplications 0, failed 0)
+    pointer shape updates: 0
+
+  AcquireNextFrame latency over 118 successful calls (ms):
+    min 7.640   mean 25.589   median 30.911   p95 31.942   max 94.845
+
+  frame metadata (1888 bytes total reported by DXGI):
+    dirty rects  : total 118 over 118 frames (max 1/frame), area 2407954 px
+    MOVE  rects  : total 0 over 0 frames (max 0/frame), area 0 px  <== empty this run (matches capture.c:441 note)
+    per acquired frame: 1.00 dirty, 0.00 move, 20406 px dirty area
+
+=== SUMMARY ===
+  outputs reported             : 1
+  any output attached          : yes
+  any output duplicated        : yes
+  primary output (0,0)         : 0
+  agent's chosen output        : 0 (adapter 0, first attached)
+  DesktopImageInSystemMemory   : all=TRUE any=TRUE
+  -> capture.c:176-183 verdict : PASS (agent capture path survives on its chosen output)
+  move rects ever non-empty    : no
+
+=== DDAPROBE JSON ===
+{"tool":"ddaprobe","version":"1.0","host":"WIN-IDD-TEST","user":"user","session_id":1,"elevated":true,"window_station":"WinSta0","desktop":"Default","os_build":"19045.6466","desktop_attach_note":"","options":{"frames":200,"max_seconds":75.0000,"timeout_ms":100,"only_output":-1,"map_probe":true},"factory_hr":"0x00000000","factory_error":"","outputs":[{"global_index":0,"adapter_index":0,"output_index":0,"adapter":"Microsoft Basic Render Driver","device_name":"\\\\.\\DISPLAY1","attached_to_desktop":true,"desktop_coordinates":{"left":0,"top":0,"right":1920,"bottom":1080},"rotation":"identity","output1_ok":true,"output1_hr":"0x00000000","device_ok":true,"device_hr":"0x00000000","device_hr_name":"S_OK","feature_level":"11_1","duplication_ok":true,"duplication_hr":"0x00000000","duplication_hr_name":"S_OK","duplication_hr_text":"The operation completed successfully.","desktop_image_in_system_memory":true,"desktop_image_in_system_memory_ever_false":false,"mode_changes":0,"mode":{"width":1920,"height":1080,"refresh_numerator":4294967294,"refresh_denominator":4294967294,"format":87,"format_name":"B8G8R8A8_UNORM","scanline_ordering":1,"rotation":"identity"},"map_desktop_surface":{"attempted":true,"ok":true,"hr":"0x00000000","hr_name":"S_OK","pitch":7680,"pbits_non_null":true},"loop":{"iterations":776,"acquired":118,"timeouts":658,"errors":0,"access_lost":0,"reduplications":0,"reduplication_failures":0,"presented_frames":118,"mouse_only_frames":0,"pointer_shape_updates":0,"accumulated_frames":119,"elapsed_ms":75055.7967},"acquire_latency":{"n":118,"min_ms":7.6403,"mean_ms":25.5893,"median_ms":30.9105,"p95_ms":31.9421,"max_ms":94.8446},"timeout_block":{"n":658,"min_ms":104.5803,"mean_ms":109.3992,"median_ms":109.3618,"p95_ms":109.5459,"max_ms":124.9393},"metadata":{"bytes_total":1888,"dirty_rects_total":118,"dirty_frames":118,"dirty_max_per_frame":1,"dirty_area_total_px":2407954,"move_rects_total":0,"move_frames":0,"move_max_per_frame":0,"move_area_total_px":0,"move_rects_ever_nonempty":false,"errors":0,"last_error_hr":"0x8000000A","last_error_hr_name":"UNKNOWN"},"errors_seen":[]}],"summary":{"output_count":1,"any_attached":true,"any_duplicated":true,"primary_output_index":0,"agent_output_index":0,"desktop_image_in_system_memory_all":true,"desktop_image_in_system_memory_any":true,"agent_capture_would_work":true,"move_rects_ever_nonempty":false}}
+EXP9 probe_exit=0
+EXP9 json_present=True
+EXP9 measure=OK
+
+C:\Windows\system32>
+2026-08-06T13:39:26Z round-3-bda: EVAL PASS side=bda flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY1 adapter0_attached=1 acquired=118 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:39:29Z round-3-bda: post-measure health OK
+2026-08-06T13:39:29Z round-3-bda PASS
+2026-08-06T13:39:29Z ------------------------------------------------------------
+2026-08-06T13:39:29Z round-3-idd (TEST: idd primary, bda detached+disabled)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=running
+EXP9 idd_status=disabled
+EXP9 inventory=OK
+
+C:\Windows\system32>
+2026-08-06T13:39:31Z round-3-idd: to-be-detached device: bda (PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action arm -Role bda
+EXP9 armed_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 arm=OK
+
+C:\Windows\system32>
+2026-08-06T13:39:32Z round-3-idd: revert marker ARMED with PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action topo -Target idd
+EXP9 enable_exit=0
+EXP9 solo_gdi=\\.\DISPLAY2
+EXP9 solo_exit=0
+EXP9 disable_exit=0
+EXP9 other_status=disabled
+EXP9 topo_gdi=\\.\DISPLAY2
+EXP9 topo=OK
+
+C:\Windows\system32>
+2026-08-06T13:39:50Z round-3-idd: hot topology OK, gdi=\\.\DISPLAY2, bda=disabled
+2026-08-06T13:39:53Z round-3-idd: hot health OK (qrexec + decoded pixels)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action disarm
+EXP9 disarm=OK
+
+C:\Windows\system32>
+2026-08-06T13:39:54Z round-3-idd: marker DISARMED (measurement boot must not be auto-reverted)
+2026-08-06T13:39:54Z cold boot: shutdown...
+2026-08-06T13:40:10Z cold boot: start...
+2026-08-06T13:40:57Z cold boot: qrexec alive
+2026-08-06T13:40:57Z round-3-idd: settling 75 s (M6 boot publish / work-area feed window)
+2026-08-06T13:42:29Z round-3-idd: post-boot topology persisted + stable (PERSIST OK gdi=\\.\DISPLAY2)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action inventory
+EXP9 bda_count=1
+EXP9 idd_count=1
+EXP9 basicdisplay_count=0
+EXP9 marker_present=False
+EXP9 bda_id=PCI\VEN_1234&DEV_1111&SUBSYS_11001AF4&REV_02\3&267A616A&0&18
+EXP9 idd_id=ROOT\DISPLAY\0000
+EXP9 bda_status=disabled
+EXP9 idd_status=running
+EXP9 inventory=OK
+
+C:\Windows\system32>
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action solo -Target idd
+EXP9 solo_gdi=\\.\DISPLAY2
+EXP9 solo_exit=0
+EXP9 solo_final_gdi=\\.\DISPLAY2
+EXP9 solo=OK
+
+C:\Windows\system32>
+2026-08-06T13:42:35Z round-3-idd: formal modeprobe --solo assert OK on \\.\DISPLAY2
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action hash
+EXP9 ddaprobe_sha256=30F6012D0DA2753ECF9945B22F6A41EB325F1762DF5BAC07EAB04600B9003470
+EXP9 ddaprobe_sha256_16=30F6012D0DA2753E
+EXP9 hash=OK
+
+C:\Windows\system32>
+2026-08-06T13:42:37Z round-3-idd: ddaprobe hash verified (30F6012D0DA2753E)
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action measure -Tag round-3-idd
+ddaprobe 1.0 - Desktop Duplication scoping probe
+  host=WIN-IDD-TEST user=user session=1 elevated=yes
+  winsta=WinSta0 desktop=Default os_build=19045.6466
+  frames=200 max_seconds=75.0 timeout_ms=100 map=yes
+
+--- output #0  (adapter 0, output 0) ------------------------------
+  adapter               : Microsoft Basic Render Driver
+  output device name    : \\.\DISPLAY2
+  attached to desktop   : YES
+  desktop coordinates   : (0,0)-(1920,1080)  1920x1080
+  output rotation       : identity
+  D3D11 feature level   : 11_1
+  duplication mode      : 1920x1080 @ 60.00 Hz, format B8G8R8A8_UNORM, scanline 1, rot identity
+  *** DesktopImageInSystemMemory : TRUE ***   (capture.c:176-183 OK)
+  MapDesktopSurface     : OK, pitch=7680, pBits=non-null
+
+  capture loop: 826 iterations in 75089.9 ms
+    acquired frames     : 161  (presented 161, mouse-only 0, accumulated 162)
+    timeouts            : 665  (blocked mean 108.34 ms, max 123.01 ms)
+    errors              : 0  (ACCESS_LOST 0, re-duplications 0, failed 0)
+    pointer shape updates: 0
+
+  AcquireNextFrame latency over 161 successful calls (ms):
+    min 1.578   mean 18.584   median 16.603   p95 32.476   max 102.011
+
+  frame metadata (2576 bytes total reported by DXGI):
+    dirty rects  : total 161 over 161 frames (max 1/frame), area 2541004 px
+    MOVE  rects  : total 0 over 0 frames (max 0/frame), area 0 px  <== empty this run (matches capture.c:441 note)
+    per acquired frame: 1.00 dirty, 0.00 move, 15783 px dirty area
+
+=== SUMMARY ===
+  outputs reported             : 1
+  any output attached          : yes
+  any output duplicated        : yes
+  primary output (0,0)         : 0
+  agent's chosen output        : 0 (adapter 0, first attached)
+  DesktopImageInSystemMemory   : all=TRUE any=TRUE
+  -> capture.c:176-183 verdict : PASS (agent capture path survives on its chosen output)
+  move rects ever non-empty    : no
+
+=== DDAPROBE JSON ===
+{"tool":"ddaprobe","version":"1.0","host":"WIN-IDD-TEST","user":"user","session_id":1,"elevated":true,"window_station":"WinSta0","desktop":"Default","os_build":"19045.6466","desktop_attach_note":"","options":{"frames":200,"max_seconds":75.0000,"timeout_ms":100,"only_output":-1,"map_probe":true},"factory_hr":"0x00000000","factory_error":"","outputs":[{"global_index":0,"adapter_index":0,"output_index":0,"adapter":"Microsoft Basic Render Driver","device_name":"\\\\.\\DISPLAY2","attached_to_desktop":true,"desktop_coordinates":{"left":0,"top":0,"right":1920,"bottom":1080},"rotation":"identity","output1_ok":true,"output1_hr":"0x00000000","device_ok":true,"device_hr":"0x00000000","device_hr_name":"S_OK","feature_level":"11_1","duplication_ok":true,"duplication_hr":"0x00000000","duplication_hr_name":"S_OK","duplication_hr_text":"The operation completed successfully.","desktop_image_in_system_memory":true,"desktop_image_in_system_memory_ever_false":false,"mode_changes":0,"mode":{"width":1920,"height":1080,"refresh_numerator":60,"refresh_denominator":1,"format":87,"format_name":"B8G8R8A8_UNORM","scanline_ordering":1,"rotation":"identity"},"map_desktop_surface":{"attempted":true,"ok":true,"hr":"0x00000000","hr_name":"S_OK","pitch":7680,"pbits_non_null":true},"loop":{"iterations":826,"acquired":161,"timeouts":665,"errors":0,"access_lost":0,"reduplications":0,"reduplication_failures":0,"presented_frames":161,"mouse_only_frames":0,"pointer_shape_updates":0,"accumulated_frames":162,"elapsed_ms":75089.8595},"acquire_latency":{"n":161,"min_ms":1.5776,"mean_ms":18.5845,"median_ms":16.6032,"p95_ms":32.4760,"max_ms":102.0106},"timeout_block":{"n":665,"min_ms":99.5680,"mean_ms":108.3406,"median_ms":109.3689,"p95_ms":117.3744,"max_ms":123.0063},"metadata":{"bytes_total":2576,"dirty_rects_total":161,"dirty_frames":161,"dirty_max_per_frame":1,"dirty_area_total_px":2541004,"move_rects_total":0,"move_frames":0,"move_max_per_frame":0,"move_area_total_px":0,"move_rects_ever_nonempty":false,"errors":0,"last_error_hr":"0x8000000A","last_error_hr_name":"UNKNOWN"},"errors_seen":[]}],"summary":{"output_count":1,"any_attached":true,"any_duplicated":true,"primary_output_index":0,"agent_output_index":0,"desktop_image_in_system_memory_all":true,"desktop_image_in_system_memory_any":true,"agent_capture_would_work":true,"move_rects_ever_nonempty":false}}
+EXP9 probe_exit=0
+EXP9 json_present=True
+EXP9 measure=OK
+
+C:\Windows\system32>
+2026-08-06T13:43:56Z round-3-idd: EVAL PASS side=idd flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY2 adapter0_attached=1 acquired=161 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:43:59Z round-3-idd: post-measure health OK
+2026-08-06T13:43:59Z round-3-idd PASS
+2026-08-06T13:43:59Z ============================================================
+2026-08-06T13:43:59Z EXP9 VERDICT: PASS 6/6 sides - Outcome A formally recorded.
+2026-08-06T13:43:59Z   round-1-bda: EVAL PASS side=bda flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY1 adapter0_attached=1 acquired=106 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:43:59Z   round-1-idd: EVAL PASS side=idd flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY2 adapter0_attached=1 acquired=146 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:43:59Z   round-2-bda: EVAL PASS side=bda flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY1 adapter0_attached=1 acquired=111 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:43:59Z   round-2-idd: EVAL PASS side=idd flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY2 adapter0_attached=1 acquired=172 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:43:59Z   round-3-bda: EVAL PASS side=bda flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY1 adapter0_attached=1 acquired=118 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:43:59Z   round-3-idd: EVAL PASS side=idd flag=True ever_false=False map_ok=True pitch=7680 (width*4=7680) dup_ok=True agent_ok=True device=\\.\DISPLAY2 adapter0_attached=1 acquired=161 access_lost=0 redup=0 format=87 session=1
+2026-08-06T13:43:59Z SCOPE (SS2.4): verdict applies to the CURRENT driver build + WARP renderer + 19045 at
+2026-08-06T13:43:59Z   1920x1080 solo topology only. Near-zero odds on a real GPU - do not port a PASS.
+2026-08-06T13:43:59Z Guest left: IDD primary 1920x1080, BDA disabled, marker disarmed (intended steady
+2026-08-06T13:43:59Z   config). Restore the preferred desktop size via a dom0 resize when convenient.
+2026-08-06T13:43:59Z Next: append the dated verdict + per-side EVAL lines to FINDINGS.md.
