@@ -1,6 +1,7 @@
 ===========================================================================
  Qubes Windows Tools 4.2.2 -- rebuilt from source with the improved GUI agent
- Self-contained installer for a CLEAN Windows 10 x64 guest.
+ Self-contained installer for a Windows 10 x64 guest, clean or with QWT
+ already installed (an existing QWT is REMOVED first -- see UPGRADING).
 ===========================================================================
 
 WHAT THIS IS
@@ -31,6 +32,8 @@ msiexec is driven with ADDLOCAL=PvDriversCore,Core,Gui[,PvDriversNetwork]:
 It also, before msiexec runs:
   * trusts the six ITL QWT signing certificates and our throwaway test-signing
     certificate in LocalMachine\Root and LocalMachine\TrustedPublisher;
+  * REMOVES an already-installed Qubes Windows Tools (see UPGRADING) and
+    deletes the gui-agent.exe / gui-watchdog.exe it leaves behind;
   * pre-seeds HKLM\Software\Invisible Things Lab\Qubes Tools with
     SeamlessMode=1, DisableCursor=0, LogDir=C:\Program Files\Qubes Tools\log
     (the MSI only writes these when they are absent, so ours win);
@@ -76,24 +79,65 @@ From the ISO (recommended -- no networking needed):
   4. It reboots once more. About a minute after it comes back, qrexec answers
      and the seamless desktop appears in dom0.
 
+  If the guest already had QWT, removing it can itself require a reboot. The
+  script then stops with exit code 10 after the removal and tells you to reboot
+  and run install.cmd once more; that run continues with the install. So on an
+  upgrade you may see one more reboot / one more run than the three steps above.
+
 Unattended (no second logon needed):
 
      D:\install.cmd /auto
 
   This arms a SYSTEM scheduled task that resumes the install after the reboot,
-  and reboots again when done. Total: two reboots, no interaction.
+  and reboots again when done. Total: two reboots, no interaction -- three if
+  removing a pre-existing QWT demands its own reboot, which is also resumed
+  automatically by the same task.
 
 Options:
      /auto    reboot and resume automatically
      /idd     also stage the experimental IddCx driver (see below)
      /nonet   omit PvDriversNetwork
 
-Everything is logged to  C:\qwt-improved-install.log , and the MSI's own
-verbose log to  C:\qwt-install.log . Each stage ends with a machine-readable
-line:  === RESULT === {json}
+Everything is logged to  C:\qwt-improved-install.log , the MSI's own verbose
+log to  C:\qwt-install.log , and the removal of a pre-existing QWT to
+C:\qwt-uninstall.log . Each stage ends with a machine-readable line:
+=== RESULT === {json}
 
 Exit codes:  0 = stage done, 10 = stage done and a reboot is required,
 anything else = failure (the log says why).
+
+UPGRADING OVER AN EXISTING QWT
+------------------------------
+Installing over a guest that already has Qubes Windows Tools does NOT simply
+run the new MSI. It cannot: Windows Installer will not overwrite a file whose
+version is greater than or equal to the incoming one, and these binaries carry
+no increasing FILEVERSION. Measured on a real guest: msiexec returned 3010
+"success", every component updated, and gui-agent.exe stayed at the OLD build
+(still old after a reboot, so it was not deferred replacement either).
+
+So stage 2 first:
+
+  1. signals Global\QGA_SHUTDOWN for a graceful GUI-agent exit, stops the
+     QubesGuiWatchdog service, then force-terminates gui-agent.exe /
+     gui-watchdog.exe if they are still up;
+  2. finds the installed product in the Uninstall registry keys (not
+     Win32_Product -- querying that reconfigures every installed product) and
+     runs  msiexec /x <ProductCode> /qn /norestart REBOOT=ReallySuppress
+     /l*v+ C:\qwt-uninstall.log ;
+  3. deletes the binaries the package is about to deliver that the uninstall
+     leaves behind in C:\Program Files\Qubes Tools\bin (measured: it does leave
+     gui-agent.exe there). A file still locked is renamed aside instead;
+  4. re-seeds the gui-agent registry defaults, which the uninstall removed;
+  5. installs, with REINSTALLMODE=amus on the command line as a second,
+     independent defence against the same versioning rule.
+
+If step 2 reports 3010, the removal needs a reboot before the install; the
+script reboots (with /auto) or asks you to (without) and continues afterwards.
+
+Whether any of this worked is not assumed: after msiexec the script hashes
+C:\Program Files\Qubes Tools\bin\gui-agent.exe and fails if it does not equal
+MANIFEST.json -> reference_binaries -> "gui-agent.exe". That check is what
+caught the defect in the first place.
 
 THE EXPERIMENTAL IddCx DRIVER (/idd)
 ------------------------------------
