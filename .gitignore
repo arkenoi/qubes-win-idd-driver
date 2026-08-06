@@ -1,8 +1,11 @@
-artifacts/
-shots*.tar
-*.pfx
-tools/*/x64/
 *.obj
 *.pdb
-upstream/ro/
+*.pfx
+artifacts-rel/
+artifacts-t2/
+artifacts/
+evidence/wedge-auto/
 scratchpad/bench-results/
+shots*.tar
+tools/*/x64/
+upstream/ro/
