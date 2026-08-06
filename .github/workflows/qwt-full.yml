@@ -11,6 +11,9 @@ name: qwt-full
 
 on:
   workflow_dispatch:
+  # Reusable: release-package.yml calls this to get installer.msi + our signed binaries,
+  # rather than duplicating 250 lines of toolchain setup that is already proven green.
+  workflow_call:
   push:
     branches: [main]
     paths:
