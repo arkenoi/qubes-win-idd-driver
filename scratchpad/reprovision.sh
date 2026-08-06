@@ -47,6 +47,24 @@ qvm-features "$VM" os Windows
 qvm-tags "$VM" add win-idd-testbed
 log "created and tagged"
 
+# ANSWER_LOOP=loopN selects the CLEAN-ROOM two-disc route (user, 2026-08-07: "if we can
+# run unattended install with stock images, why rebuild ISOs at all? it breaks our clean
+# room approach"). CD 1 is then the VENDOR ISO, byte-for-byte untouched, and CD 2 is a
+# ~29 MB answer disc carrying autounattend.xml + diskprep.cmd + \payload. It must be
+# attached PERSISTENTLY: a guest reboot destroys the Qubes domain and the --cdrom
+# assignment does not survive it, but the payload has to still be readable at first logon.
+if [ -n "${ANSWER_LOOP:-}" ]; then
+    log "clean-room route: CD1 = stock ISO ($LOOP), CD2 = answer disc ($ANSWER_LOOP, persistent)"
+    if ! qvm-device block assign --option devtype=cdrom --ro "$VM" "$HOLDER:$ANSWER_LOOP" 2>/dev/null; then
+        qvm-device block attach --persistent --option devtype=cdrom --ro "$VM" "$HOLDER:$ANSWER_LOOP" \
+            || { log "FAIL: could not attach the answer disc persistently"; exit 1; }
+    fi
+    # Prove it stuck rather than assuming: a silently-absent answer disc looks exactly
+    # like "the answer file was ignored" an hour later.
+    qvm-device block list "$VM" 2>/dev/null | grep -q "$ANSWER_LOOP" \
+        || { log "FAIL: answer disc $ANSWER_LOOP is not listed on $VM after assign"; exit 1; }
+fi
+
 log "booting from $HOLDER:$LOOP (unattended Windows install)"
 qvm-start "$VM" --cdrom="$HOLDER:$LOOP" || exit 1
 
