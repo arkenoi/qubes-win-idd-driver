@@ -3724,3 +3724,20 @@ run, Windows Update/networked-qube and Office checks are all BLOCKED until the b
 works. No sudo in this qube, so I cannot restart the service; the cheapest fix is very
 likely a restart of win-idd-mgmt itself (which also ends the agent session) or a dom0-side
 look at qubesd's error.
+
+# 2026-08-06 (networking) — RESOLVED and re-attributed: the blocker was mirage-firewall
+
+Measured on win-idd-test with netvm `core-net` (the real netvm; `fw-net` is a Mirage
+unikernel, `sys-firewall` does not exist here):
+- hot-attach to a RUNNING guest: no NIC appears, but the guest stays perfectly healthy
+  (qrexec alive, no CPU burn) — Windows simply does not enumerate the hot-plugged vif;
+- after a COLD BOOT with the netvm attached: `Ethernet adapter Ethernet: 10.137.0.64`,
+  `Test-NetConnection 8.8.8.8` True, DNS resolves, `https://www.microsoft.com` -> 200;
+- **Windows Update: search OK (1 update), download rc=2 (orcSucceeded), install rc=2,
+  RebootRequired=False**;
+- CPU over 90 s post-attach: brief 1.3-1.8 vcpu-s/s of network-stack/WU activity, settling
+  to ~0.3 — nothing like the historical "2 cores burning, qrexec dead".
+Per the user: this was diagnosed sessions ago; the fault is **mirage-firewall as the
+netvm**, not this fork and not the PV drivers. GOAL-STATUS.md's stale blocker section is
+now marked RETRACTED in place. Practical rule for this project: test qubes install
+OFFLINE (netvm ''), and use `core-net` when networking is needed.
