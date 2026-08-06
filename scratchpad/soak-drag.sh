@@ -63,7 +63,10 @@ for i in $(seq 1 "$CYCLES"); do
     # invariant here is guest == CURRENT dom0 window, never guest == pre-restart
     # size (measured 2026-08-06: the WM restored a tile size; asserting the old
     # size reported a false REVERT).
-    gu=$(guestres); dw=$(domwin)
+    # poll for the recreated dom0 window to settle (an empty/partial read right
+    # after the restart is the harness racing the daemon, not a failure)
+    dw=""; for _ in 1 2 3 4 5 6; do dw=$(domwin); [ -n "$dw" ] && break; sleep 3; done
+    gu=""; for _ in 1 2 3 4 5 6; do gu=$(guestres); [ "$gu" = "$dw" ] && break; sleep 3; done
     [ "$gu" = "$dw" ] || { log "cycle $i: FAIL after agent restart: guest=$gu dom0-window=$dw"; exit 1; }
     expected="$dw"
     wc=$(./tools/qtest shot "$S/sd.tar" >/dev/null 2>&1; tar tf "$S/sd.tar" 2>/dev/null | grep -c png)
