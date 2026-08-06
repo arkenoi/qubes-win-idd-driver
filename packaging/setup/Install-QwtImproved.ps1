@@ -178,7 +178,11 @@ function Set-BootResume {
     }
     $argline = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $ExtraArgs
     $cmd = 'powershell.exe ' + ($argline -join ' ')
-    & schtasks.exe /Create /TN $script:TaskName /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR $cmd | Out-Null
+    # /DELAY: ONSTART fires very early. msiexec needs the Windows Installer service, and
+    # the PV driver install needs PnP settled; a minute of slack costs nothing and avoids
+    # a class of "worked when I ran it by hand" failures.
+    & schtasks.exe /Create /TN $script:TaskName /SC ONSTART /DELAY 0001:00 `
+                   /RU SYSTEM /RL HIGHEST /F /TR $cmd | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail "schtasks /Create failed ($LASTEXITCODE) - cannot arm the post-reboot resume" }
     Write-Log "boot resume armed as SYSTEM task '$script:TaskName': $cmd"
 }
