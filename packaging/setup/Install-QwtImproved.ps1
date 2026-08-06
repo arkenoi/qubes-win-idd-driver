@@ -385,9 +385,12 @@ function Uninstall-ExistingQwt {
         }
         $log = 'C:\qwt-uninstall.log'
         Write-Log "uninstalling '$($p.DisplayName)' $($p.Version) $($p.ProductCode) (verbose log: $log)"
+        # /l*v+ appends: with more than one registered product the second msiexec would
+        # otherwise truncate the log of the first, which is the one that usually explains
+        # a failure.
         $proc = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
             '/x', $p.ProductCode, '/qn', '/norestart',
-            'REBOOT=ReallySuppress', '/l*v', "`"$log`""
+            'REBOOT=ReallySuppress', '/l*v+', "`"$log`""
         )
         $rc = $proc.ExitCode
         $rcs[$p.ProductCode] = $rc
@@ -514,7 +517,10 @@ function Invoke-Stage2 {
             }
             Stop-QwtRuntime
             $needReboot = Uninstall-ExistingQwt -Products $existing
-            $still = @(Get-InstalledQwt)
+            # Only products we actually tried to remove count here: a non-MSI Uninstall key
+            # is logged and skipped above, and must not turn into a hard failure.
+            $tried = @($existing | Where-Object { $_.IsMsi } | ForEach-Object { $_.ProductCode })
+            $still = @(Get-InstalledQwt | Where-Object { $tried -contains $_.ProductCode })
             if ($still.Count -gt 0 -and -not $needReboot) {
                 Fail ("msiexec /x reported success but these products are still registered: " +
                       (($still | ForEach-Object { $_.ProductCode }) -join ' '))
