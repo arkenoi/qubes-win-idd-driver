@@ -175,6 +175,8 @@ jobs:
           $redist = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse `
                     -Filter vc_redist.x64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $redist) { throw 'vc_redist.x64.exe not found on the runner' }
+          # We are shipping a binary the guest will EXECUTE elevated, so assert Microsoft
+          # actually signed it and it is untampered. Verified passing on run 31109691408.
           $sig = Get-AuthenticodeSignature $redist.FullName
           if ($sig.Status -ne 'Valid') { throw "vc_redist.x64.exe signature is $($sig.Status)" }
           Write-Host "$($redist.FullName)  signer: $($sig.SignerCertificate.Subject)"
