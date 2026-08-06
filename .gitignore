@@ -5,3 +5,4 @@ tools/*/x64/
 *.obj
 *.pdb
 upstream/ro/
+scratchpad/bench-results/
