@@ -4094,3 +4094,31 @@ runs as root while `11-wedge-forensics.sh` writes to the dom0 user's home - so t
 back with only the log. The script's own qvm-copy had already delivered the real tarball.
 Fixed to search both `/home/*/wedge-*` and `/root/wedge-*`; re-pull the file into dom0 to
 pick this up.
+
+## 2026-08-07 — GATE B PASSED: seamless works on the IDD config after a COLD BOOT; merged to main
+
+The seamless host-mode fix (`agent cb1fa4b`, "seamless mode needs the host size in the IDD
+mode set") is now demonstrated on the path that matters — a cold boot, not a service restart,
+on win-idd-test with the IDD primary and `SeamlessMode=1` set in both registry keys:
+
+| criterion | measured |
+|---|---|
+| mode entered | `SetSeamlessMode: Seamless mode changed to 1`; QGAPERF frames stream with `mode=s` (seq 715+ and growing) |
+| the fix's code path | `BuildIddModeSet: M6SEAMLESS host 5120x1440 added to set` (repeatedly, incl. before the switch) |
+| BADMODE | **0** occurrences in the whole log (the pre-fix signature was `ChangeDisplaySettings failed: 0xfffffffe`) |
+| resolution followed | `Win32_VideoController`: IddSampleDriver Device **5120x1440** — the host size, actually applied |
+| visual | dom0 fullshot: Notepad rendered as its own red-bordered `[win-idd-test]` window (seamless per-window mapping working) |
+| process stability | ONE agent instance across the boot (one log file this boot, PID matches log name) |
+
+Non-fatal wrinkles recorded, not gate failures: 8 transient `0x887a0026` (keyed mutex
+abandoned) at startup incl. one `StartFrameProcessing: CaptureInitialize failed` — survived
+in place (A7 retry class), no respawn; and `WorkAreaApply: SPI_SETWORKAREA failed 0x57`
+twice early in the boot. Both are open items, neither blocks seamless function.
+
+Merged: driver repo `t2/seamless-build` → main (9436282), agent submodule bumped to cb1fa4b.
+
+ALSO: the intended-state device topology, measured for the health gate's allowlist:
+IDD `ROOT\DISPLAY\0000` err=0; VGA `PCI\VEN_1234&DEV_1111` err=22 (ours, deliberate);
+`XENBUS\VEN_XP0001&DEV_CONS` and `…DEV_VBD` err=28; `XENVIF\VEN_XP0001&DEV_NET\0` err=28
+**with the adapter Up and functional** — the last one is unexplained and deliberately kept
+OFF the health-check allowlist so the sweep surfaces it.
