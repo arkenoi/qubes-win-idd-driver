@@ -57,16 +57,22 @@ Check 'agent_binary_hash' ($haveHash -and $wantHash -and ($haveHash -ieq $wantHa
 
 # --- 2. agent + services running --------------------------------------------------
 $agentProc = Get-Process gui-agent -ErrorAction SilentlyContinue
-$svcs = Get-Service | Where-Object { $_.DisplayName -match 'Qubes' } |
-        Select-Object -Property Name, Status
-$badSvc = @($svcs | Where-Object { $_.Status -ne 'Running' })
+# Only Automatic-start services must be Running: a Manual-start Qubes service that is
+# legitimately idle must not fail every healthy guest.
+$svcs = Get-CimInstance Win32_Service -Filter "DisplayName LIKE '%Qubes%'" |
+        Select-Object Name, State, StartMode
+$badSvc = @($svcs | Where-Object { $_.StartMode -eq 'Auto' -and $_.State -ne 'Running' })
 Check 'agent_process' ([bool]$agentProc) @{ pid = if ($agentProc) { $agentProc.Id } else { $null } }
-Check 'qubes_services_running' ($svcs.Count -gt 0 -and $badSvc.Count -eq 0) $svcs
+Check 'qubes_services_running' (@($svcs).Count -gt 0 -and $badSvc.Count -eq 0) $svcs
 
 # --- 3. IDD device present + started + primary ------------------------------------
-$idd = Get-PnpDevice -ErrorAction SilentlyContinue |
-       Where-Object { $_.InstanceId -match '^ROOT\\DISPLAY' -or ($_.HardwareID -match 'iddsampledriver|qubesidd') } |
-       Select-Object -First 1
+# Prefer a bound (Status OK) candidate: devcon install cycles leave phantom
+# ROOT\DISPLAY\000N devnodes behind, and an unordered First-1 can pick one of those
+# on a guest whose real IDD is fine.
+$iddAll = @(Get-PnpDevice -ErrorAction SilentlyContinue |
+       Where-Object { $_.InstanceId -match '^ROOT\\DISPLAY' -or ($_.HardwareID -match 'iddsampledriver|qubesidd') })
+$idd = ($iddAll | Where-Object { $_.Status -eq 'OK' } | Select-Object -First 1)
+if (-not $idd) { $idd = $iddAll | Select-Object -First 1 }
 $iddCim = $null
 if ($idd) {
     $iddCim = Get-CimInstance Win32_PnPEntity -Filter "PNPDeviceID='$($idd.InstanceId -replace '\\','\\')'"
@@ -79,16 +85,25 @@ if ($NoIddExpected) {
            status = if ($idd) { "$($idd.Status)" } else { $null }
            cm_error = if ($iddCim) { $iddCim.ConfigManagerErrorCode } else { $null } }
 
-    # The desktop's video controller must be the IDD, not the emulated VGA and not the
-    # BASICDISPLAY fallback. Win32_VideoController.Availability 3 = powered on/active.
+    # The desktop's video controller must be the IDD AND nothing else may be active:
+    # "IDD among the active controllers" alone would pass a guest whose VGA disable
+    # failed (extended desktop, broken seamless coordinates). ROOT\BASICDISPLAY with a
+    # resolution would equally be a regression - the agent captures adapter 0 and an
+    # active second output means the topology is not the shipped one.
     $ctrls = Get-CimInstance Win32_VideoController |
              Select-Object Name, PNPDeviceID, CurrentHorizontalResolution, CurrentVerticalResolution, Availability
     $active = @($ctrls | Where-Object { $_.CurrentHorizontalResolution -gt 0 })
     $iddActive = @($active | Where-Object { $_.PNPDeviceID -match '^ROOT\\DISPLAY' })
-    Check 'desktop_on_idd' ($active.Count -ge 1 -and $iddActive.Count -ge 1) $ctrls
+    $otherActive = @($active | Where-Object { $_.PNPDeviceID -notmatch '^ROOT\\DISPLAY' })
+    Check 'desktop_on_idd' ($iddActive.Count -ge 1 -and $otherActive.Count -eq 0) `
+        @{ controllers = $ctrls; non_idd_active = $otherActive.Count }
 }
 
 # --- 4. agent<->driver mode loop -------------------------------------------------
+# SCOPE: sound on a freshly provisioned guest (no prior state can have written the
+# key, so a non-empty value proves THIS install's agent published). On a long-lived
+# guest the value persists across boots and this becomes a staleness-prone check -
+# do not reuse it outside clean-path acceptance without adding a liveness signal.
 $modes = (Get-ItemProperty 'HKLM:\SOFTWARE\QubesIDD' -ErrorAction SilentlyContinue).Modes
 if ($NoIddExpected) {
     Check 'idd_modes_published' $true @{ skipped = 'NoIddExpected' }
@@ -97,7 +112,13 @@ if ($NoIddExpected) {
 }
 
 # --- 5. PnP error sweep (allowlist must NAME each accepted defect) -----------------
-$bad = Get-CimInstance Win32_PnPEntity -Filter 'ConfigManagerErrorCode <> 0' |
+# The sweep must FAIL, not vacuously pass, when WMI itself is broken: sanity-assert the
+# device universe is plausibly complete before trusting an empty error list.
+$universe = @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue)
+if ($universe.Count -lt 20) {
+    Check 'pnp_no_unexpected_errors' $false @{ error = "Win32_PnPEntity returned only $($universe.Count) devices - WMI unusable, sweep is not evidence" }
+}
+$bad = $universe | Where-Object { $_.ConfigManagerErrorCode -ne 0 } |
        Select-Object Name, PNPDeviceID, ConfigManagerErrorCode
 $unexpected = @()
 foreach ($d in @($bad)) {
@@ -114,8 +135,10 @@ foreach ($d in @($bad)) {
     }
     if (-not $allowed) { $unexpected += $d }
 }
-Check 'pnp_no_unexpected_errors' ($unexpected.Count -eq 0) `
-    @{ all = @($bad); unexpected = $unexpected; allowlist = $AllowPnpErrors }
+if ($universe.Count -ge 20) {
+    Check 'pnp_no_unexpected_errors' ($unexpected.Count -eq 0) `
+        @{ all = @($bad); unexpected = $unexpected; allowlist = $AllowPnpErrors }
+}
 
 # --- 6. agent log: ONE instance this boot, actively writing, zero BADMODE ----------
 # Deliberately NOT "no error strings anywhere": a healthy cold boot shows a burst of
@@ -124,8 +147,13 @@ Check 'pnp_no_unexpected_errors' ($unexpected.Count -eq 0) `
 # (exactly one log file this boot), it is still writing NOW, and BADMODE - which is
 # never benign - does not appear at all.
 $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+if (-not $boot) {
+    # Without a boot timestamp "written this boot" is vacuously true against $null -
+    # fail the check rather than evaluate it against no data.
+    Check 'agent_log_healthy' $false @{ error = 'Win32_OperatingSystem.LastBootUpTime unavailable - freshness cannot be judged' }
+}
 $logsThisBoot = @(Get-ChildItem 'C:\Program Files\Qubes Tools\log' -Filter 'gui-agent-*.log' -ErrorAction SilentlyContinue |
-                  Where-Object { $_.LastWriteTime -gt $boot })
+                  Where-Object { $boot -and $_.LastWriteTime -gt $boot })
 $log = $logsThisBoot | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 $logOk = $false; $badmode = -1; $grew = $false
 if ($log) {
@@ -140,11 +168,13 @@ if ($log) {
     $fresh = $grew -or ($log.LastWriteTime -gt (Get-Date).AddMinutes(-5))
     $logOk = ($logsThisBoot.Count -eq 1) -and $fresh -and ($badmode -eq 0)
 }
-Check 'agent_log_healthy' $logOk `
-    @{ logs_this_boot = $logsThisBoot.Count
-       newest = if ($log) { $log.Name } else { 'NONE' }
-       still_writing = $grew
-       badmode_lines = $badmode }
+if ($boot) {
+    Check 'agent_log_healthy' $logOk `
+        @{ logs_this_boot = $logsThisBoot.Count
+           newest = if ($log) { $log.Name } else { 'NONE' }
+           still_writing = $grew
+           badmode_lines = $badmode }
+}
 
 # --- 7. current resolution (informational, always recorded) ------------------------
 # Win32_VideoController, not SystemInformation.VirtualScreen: the latter is DPI-scaled

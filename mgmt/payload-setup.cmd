@@ -9,6 +9,17 @@ rem on_reboot=destroy) - the orchestrator restarts it.
 set SRC=%~dp0
 echo === stage1 start %DATE% %TIME% === > C:\qubes-win-idd-setup.log
 
+rem ANSWER-DISC route support: on the repack route $OEM$ already staged us at
+rem C:\payload, but when this script runs straight off the second CD the QWTStage2
+rem task below would point at a C:\payload that never exists (the disc's letter is
+rem also not stable across boots). COPY, don't retarget: the task must survive the
+rem disc being unassigned. Found 2026-08-07 - stage 2 silently never fired on the
+rem answer-disc route.
+if /i not "%SRC%"=="C:\payload\" (
+    echo staging payload %SRC% to C:\payload >> C:\qubes-win-idd-setup.log
+    xcopy /e /i /y "%SRC%*" C:\payload\ >> C:\qubes-win-idd-setup.log 2>&1
+)
+
 rem firstboot-setup.ps1 finds the cert under USERPROFILE - put it there first
 if exist "%SRC%qubesidd-test.cer" copy /y "%SRC%qubesidd-test.cer" "%USERPROFILE%\" >> C:\qubes-win-idd-setup.log 2>&1
 
