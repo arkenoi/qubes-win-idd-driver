@@ -93,6 +93,12 @@ if [ "${NO_QWT:-0}" = "1" ]; then
         cat > "$WORK/payload/setup2.cmd" <<'RELEOF'
 @echo off
 rem Clean-path acceptance: install OUR release package on a guest with no prior QWT.
+rem MUST be the first action: QWTStage2 is an ONSTART task, and our installer reboots up
+rem to three times. Without this delete the task re-fires on every one of those boots and
+rem launches a SECOND concurrent install.cmd - which is exactly what happened on
+rem win10-clean (two stacked Qubes Windows Tools setup dialogs, guest wedged, 2026-08-06).
+rem The stock payload-setup2.cmd has always done this; the release variant omitted it.
+schtasks /delete /tn QWTStage2 /f >nul 2>&1
 echo === release install (clean path) === >> C:\qubes-win-idd-setup.log
 call C:\payload\release\install.cmd /auto >> C:\qubes-win-idd-setup.log 2>&1
 echo release install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
