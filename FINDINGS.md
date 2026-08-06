@@ -3406,3 +3406,15 @@ configures (g_ScreenWinX/Y) and echo it back - the daemon resizes in place, neve
 repositions. Verified: snap 2544x1374 → 2550x1379 with client at x=5 (frame flush to the
 screen edge, border visible). Also: resize service v4 (user-installed) nudges frames fully
 on-screen after scripted resizes (windowsize never moves; stale positions clipped borders).
+
+# 2026-08-06 (cont 2) — M1 DELIVERED: stable EDID, identity churn eliminated
+
+Driver t2/m1-stable-edid (dll 70C64039, on top of D4v3): monitor 0 carries a fixed
+128-byte EDID (vendor QBS, product 0x0001, serial 1, preferred 1920x1080@60);
+EvtIddCxParseMonitorDescription now serves our EDID with the same base+registry mode list
+as the EDID-less path — the v2 failure was exactly the predicted parse-path rejection of
+an unknown EDID. ACCEPTANCE, measured live: `Enum\DISPLAY\QBS0001` = exactly ONE instance,
+unchanged across two real replug cycles (novel-size snaps applied, guest followed); even
+the session GDI name held (\\.\DISPLAY3 both times — stable identity makes Windows reuse
+the display source, so the DISPLAY2→30 session churn is gone too). The 7 pre-M1
+Default_Monitor phantoms stopped accumulating; one-shot sweeper in progress.
