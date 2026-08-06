@@ -3611,3 +3611,58 @@ on a guest with a real GPU; a PASS here must not be ported to GPU passthrough.
 Track B's gating question is now closed with evidence at the standard CLAUDE.md demands.
 Guest left at IDD-primary 1920x1080, BDA disabled, marker disarmed (the intended steady
 config); restore a preferred size with a dom0 resize.
+
+---
+
+## 2026-08-06 — release packaging: clean-guest QWT installer + ISO (branch `t2/release-package`)
+
+**Deliverable.** `.github/workflows/release-package.yml` produces two artifacts:
+`qwt-improved-setup` (directory) and `qwt-improved-iso`. Both install QWT on a **clean**
+guest — this is not the overlay. First green run: **31109691408** (all 4 jobs), 2 fix
+rounds.
+
+**Chosen path: the MSI, not a scripted overlay.** `PLAN-full-source-build.md` step 3 already
+shipped `qwt-full.yml`, which rebuilds the genuine `installer.msi` from the pinned upstream
+WiX v4 sources with our gui-agent; it has been green for weeks and its MSI was installed on
+a wiped guest. `release-package.yml` therefore *calls* it (`workflow_call`, added to
+`qwt-full.yml`) rather than duplicating the toolchain, and stages the result into an
+installable tree. `build.yml` was not touched.
+
+**Verified on the downloaded artifacts, each against a control that could fail:**
+
+| claim | evidence |
+|---|---|
+| our gui-agent.exe/gui-watchdog.exe are physically inside `installer.msi` | 7z-extracted both MSIs: `6558c4cf…` and `df172b68…` present in ours; **absent from the stock 4.2.2 MSI** (control), 72 payload files each |
+| the cert the installer tells the guest to trust is the cert that signed our binaries | shipped `qwt-improved-testsign.cer` DER appears verbatim in gui-agent.exe, gui-watchdog.exe, iddsampledriver.cat and IddSampleDriver.dll; **absent from Microsoft-signed vc_redist.x64.exe** (control) |
+| the ISO is intact under the names Windows actually reads | extracted the **Joliet** tree (not just Rock Ridge) and re-checked every file against `SHA256SUMS.txt` — 19/19 |
+| the ISO check can fail | deliberately corrupted a payload → `sha256sum -c` FAILED, exit 1; deliberately named a missing entry point → Joliet name check FAILED, exit 1 |
+
+**Two rounds of CI failure, both instructive.**
+1. `idd` job: I "improved" driver collection to prefer the WDK package folder. It found
+   `driver\IddSampleDriver\x64\Release` (stamped INF, **no binary** — the WDK writes the DLL
+   to `driver\x64\Release`), so the dll assertion fired. The check worked; my refinement did
+   not. Reverted to build.yml's proven flat glob. Also stopped copying the WDK's pre-built
+   `.cat` so that a skipped `Inf2Cat` cannot pass the "no .cat produced" check.
+2. `workflow_dispatch` is only offered for workflow files that exist on the **default
+   branch**, so a new workflow cannot be dispatched from its own development branch. Added
+   the branch to the push trigger.
+
+**Honest scope of the deliverable — recorded in the shipping README.txt, not just here:**
+- Installs `ADDLOCAL=PvDriversCore,Core,Gui[,PvDriversNetwork]`. Does **not** install
+  PvDriversDisk, MoveUsers, Autologon, any video driver (4.2.2 has none), or the dom0-side
+  resize service.
+- Test-signing is **mandatory and permanent** for the guest; the installer enables it.
+- The IddCx driver ships but is only staged into the driver store with `/idd`, and is
+  **never activated** — an active second monitor enlarges the desktop bounding box the agent
+  maps as the screen and breaks seamless coordinates.
+- **The netvm blocker is unchanged and is stated in the artifact README**: attaching a netvm
+  still starves the guest, and it is still NOT attributed to us vs the upstream PV drivers.
+  Byte identity with stock is not behavioural proof; the stock-QWT control install remains
+  the outstanding experiment. This package is for an offline qube.
+
+**Not done / not proven here:** nobody has installed *this* artifact on a guest. The
+verification above is of the artifact's contents, its provenance and its self-checks — not
+of an end-to-end install. The install path itself is the same `msiexec` invocation that was
+executed successfully on a wiped guest on 2026-08-01, plus a two-stage script whose only
+unexercised parts are the certificate/testsigning/reboot sequencing and the `-Auto` SYSTEM
+resume task. Record that as unproven until a guest install runs.
