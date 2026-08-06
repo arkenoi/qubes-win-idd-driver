@@ -186,7 +186,10 @@ install_side() {  # install_side <SrcName>:<HASH16>
 
 # --- one repetition ----------------------------------------------------------
 run_rep() {
-    local side="$1" rep="$2" repdir="$OUTDIR/$side-r$rep"
+    # NB: bash under `set -u` cannot reference a variable being declared in the SAME
+    # `local` statement - `local a="$1" b="$a"` errors "a: unbound variable". Split.
+    local side="$1" rep="$2"
+    local repdir="$OUTDIR/$side-r$rep"
     rm -rf "$repdir"; mkdir -p "$repdir"
     local t_start; t_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     log "=== $side rep $rep -> $repdir ==="
@@ -280,7 +283,8 @@ run_rep() {
 # sides. Sampling-limited by qtest shot's round-trip, which is measured and reported so a
 # saturated result cannot be read as "the two builds are equal".
 dragshot() {
-    local repdir="$1" out="$repdir/shots.txt" tmp="$repdir/shot.tar" i=0 started=none
+    local repdir="$1"
+    local out="$repdir/shots.txt" tmp="$repdir/shot.tar" i=0 started=none
     local hf="$repdir/dragshot-harness.txt"
     : > "$out"; : > "$hf"
     log "  dragshot (drag ${DRAG_SHOT_SECONDS}s)..."
@@ -318,7 +322,8 @@ dragshot() {
 }
 
 resize_probe() {
-    local side="$1" repdir="$2" out="$repdir/resize.txt"
+    local side="$1" repdir="$2"
+    local out="$repdir/resize.txt"
     : > "$out"
     if [ "$side" = "stock" ]; then
         echo 'RESIZE na=stock cannot resize (Basic Display Adapter fixed mode list - arbitrary sizes are never offered)' > "$out"
