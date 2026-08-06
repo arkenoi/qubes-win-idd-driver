@@ -92,6 +92,24 @@ if [ "\$REQ" != "query" ]; then
     X xdotool windowstate --remove FULLSCREEN "\$best" 2>/dev/null
     X xdotool windowsize "\$best" "\$W" "\$H"
     sleep 0.5   # let the WM apply/clamp before reading back
+    # v4: windowsize never moves the window, so a stale position can leave the
+    # FRAME (client minus extents) clipped off-screen - measured: client at x=0
+    # put the 5px left border at x=-5. Nudge the frame fully on-screen using
+    # _NET_FRAME_EXTENTS and the work area.
+    fx=\$(X xprop -id "\$best" -notype _NET_FRAME_EXTENTS 2>/dev/null | sed 's/.*= //; s/,//g')
+    read -r efl efr eft efb <<< "\${fx:-0 0 0 0}"
+    wa=\$(X xprop -root -notype _NET_WORKAREA 2>/dev/null | sed 's/.*= //; s/,//g')
+    read -r wax way _ _ <<< "\${wa:-0 0 0 0}"
+    geom() { X xwininfo -id "\$best" 2>/dev/null | awk '/Absolute upper-left X:/{x=\$4} /Absolute upper-left Y:/{y=\$4} END{print x, y}'; }
+    read -r cx cy <<< "\$(geom)"
+    nx=\$cx; ny=\$cy
+    [ "\$((cx - efl))" -lt "\$wax" ] && nx=\$((wax + efl))
+    [ "\$((cy - eft))" -lt "\$way" ] && ny=\$((way + eft))
+    if [ "\$nx" != "\$cx" ] || [ "\$ny" != "\$cy" ]; then
+        # xdotool windowmove positions the CLIENT for most WMs
+        X xdotool windowmove "\$best" "\$nx" "\$ny"
+        sleep 0.3
+    fi
 fi
 
 gx=""; gy=""; gw=""; gh=""; geom "\$best"
