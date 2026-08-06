@@ -4122,3 +4122,41 @@ IDD `ROOT\DISPLAY\0000` err=0; VGA `PCI\VEN_1234&DEV_1111` err=22 (ours, deliber
 `XENBUS\VEN_XP0001&DEV_CONS` and `…DEV_VBD` err=28; `XENVIF\VEN_XP0001&DEV_NET\0` err=28
 **with the adapter Up and functional** — the last one is unexplained and deliberately kept
 OFF the health-check allowlist so the sweep surfaces it.
+
+## 2026-08-07 — health gate VALIDATED both ways; it immediately caught two real things
+
+`guest/health-check.ps1` (replaces the hash-only clean-path gate) now demonstrated per the
+instrument rule — seen to FAIL on a defective build and PASS on the intended state:
+
+- **win10-clean (degraded, no IDD)**: ok=false, failed = idd_device_bound (device ABSENT),
+  desktop_on_idd, idd_modes_published — exactly the missing function the hash gate scored
+  green on 2026-08-06. agent_binary_hash still passes there, proving the two gates measure
+  different things.
+- **win-idd-test (intended state)**: every check passes except the deliberate XENVIF
+  surface (below). PnP allowlist works in both directions.
+
+Instrument bug found while validating (would have made the sweep never-allowlist anything):
+once `Get-PnpDevice` has loaded the PnpDevice CDXML module, `Win32_PnPEntity
+.ConfigManagerErrorCode` STRINGIFIES as the enum label (`CM_PROB_FAILED_INSTALL`), not the
+number, so a string compare against '28' silently fails. Fixed with `[int]` on both sides.
+Debugged by instrumenting the real script - an isolated replica of the same loop PASSED,
+because the replica never called Get-PnpDevice first.
+
+**Catch #1 — PV NETWORK IS NOT ACTUALLY BOUND on win-idd-test.** The gate refused to
+allowlist `XENVIF\VEN_XP0001&DEV_NET\0` err=28, and following it up:
+`Get-NetAdapter` shows the active NIC is **Realtek RTL8139C+ (emulated)**, while xenvif
+(the PV bus) runs and enumerates the vif child that xennet never binds — despite
+ADDLOCAL=...,PvDriversNetwork and xenvif.inf+xennet.inf present in the driver store.
+So the 2026-08-06 "networking + Windows Update zero issues" result was real but ran over
+the EMULATED NIC, not PV. Re-scoped accordingly: function works, PV path does not.
+Whether stock QWT 4.2.2 behaves identically on this platform needs a control before this
+counts as our defect. Open item for the release notes either way.
+
+**Catch #2 — the IDD's declared EDID physical size changes the guest's DPI per mode**
+(user observed it visually). At host-size 5120x1440 Windows computed the PPI from our
+EDID's 60x34 cm and silently switched recommended scaling to 150 % (LOGPIXELSX=144, no
+user override present). Previous lower-res runs sat at 100 % — so apparent DPI changed
+between runs. Fix in driver/IddSampleDriver/Driver.cpp: image size declared UNDEFINED
+(bytes 21-22 and DTD 66-68 zeroed, checksum 0x53→0x78) which pins the recommendation at
+96 DPI for every mode; per-monitor user overrides persist via the M1 stable identity.
+Needs the next driver build to take effect.
