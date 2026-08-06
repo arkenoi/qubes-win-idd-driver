@@ -4267,3 +4267,35 @@ an attempt to re-fire one for capture did not render (unregistered app id). Next
 naturally occurring toast with the winenum probe, then decide between "unowned windows are
 never override-redirect" (principled: synthesis already assumes popups are owned) and a
 narrower shell-notification class rule.
+
+## 2026-08-07 — RETRACTION: my work-area maximize clamp was WRONG and is reverted
+
+Claimed earlier today as a verified fix ("maximized Notepad reported exactly the applied work
+area"). It was verified against the wrong criterion. The user saw the truth within the hour:
+**"notepad window has no menus and content"**.
+
+Mechanism, from our own source: `entry->X/Y/Width/Height` is NOT merely the geometry reported
+to dom0 - `perwindow.c:305` derives the per-window CAPTURE CROP from it
+(`cropX = entry->X - wr.left; cropY = entry->Y - wr.top`). Raising `entry->Y` from the raw
+-8 to the work-area top 56 therefore cropped **64 px off the top of the window's own content**
+- precisely the title bar and menu bar. The geometry number I checked looked perfect exactly
+because the window had been shrunk to match it.
+
+Why the screen clamp was right all along: against screen bounds the clamp only trims the
+invisible resize border (cropY = 0 - (-8) = 8), which is the margin the per-window crop is
+designed to skip. The original comment said so; I did not take it seriously enough.
+
+Reverted (agent a68d244). `WorkAreaGetApplied()` stays - correct and harmless.
+
+Restated correctly: **"maximized window overflows the dom0 workspace" is a WORK-AREA problem,
+not a geometry-reporting problem.** Windows had maximized Notepad against the full screen
+(raw rect -8,-8 1936x1056) even though the agent had applied (5,56)-(1915,1040) - i.e. the
+SPI_SETWORKAREA did not stick for that window, or arrived after it maximized. The fix belongs
+in the work-area path (make it stick, re-fit maximized windows afterwards), never in what we
+tell dom0 the window is.
+
+Process note: this is the "judge output, not logs" rule failing in its exact documented form.
+I verified a NUMBER (reported geometry == work area) and called it a pass without looking at
+the resulting pixels; a `qtest shot` of that window would have shown the missing menu bar
+immediately, and in fact the per-window PNG I captured for an unrelated toast question DID
+show a menu-less Notepad - I looked straight past it.
