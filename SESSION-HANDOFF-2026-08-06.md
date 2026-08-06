@@ -46,10 +46,16 @@ VM under you. `git status` is clean on `main`; everything below is committed and
 
 ## Guest states, left deliberately as-is
 
-- `win-idd-test` — **WEDGED and UNTOUCHED on purpose.** Domain Running, cputime advancing,
-  qrexec dead, desktop frozen (screenshot shows the clock stuck at 23:07 while guest time
-  had moved on ~18 min). Triggered by my forcing `Stop-Process gui-agent`. Kept alive so the
-  dom0 capture can still be taken. Kill it whenever you no longer want the evidence.
+- `win-idd-test` — **WEDGED, and now CAPTURED** (user installed the dom0 service; forensics
+  archived in `evidence/wedge-2026-08-06/`). Measured at the moment of the wedge, domid 846:
+  **3 of 4 vCPUs spinning** (vcpu0 +10.0 s and vcpu2 +10.1 s over a 10 s sample, i.e. pinned
+  ~100 %; vcpu1 +5.9 s; vcpu3 idle) with **zero active grant entries** — so the guest is
+  burning CPU in a loop while the framebuffer grant is gone, which is exactly why the pixels
+  froze at 23:07 while the domain stayed Running. Signature of the revoke-spin class in
+  `docs/upstream-xen-pv-grant-revoke-spin.md`, now with live evidence instead of inference.
+  Triggered by my forcing `Stop-Process gui-agent`. **The evidence is saved — the guest can
+  be killed freely now.** An `--nmi` capture would name the spinning code, but that
+  bugchecks the guest and is deliberately a human decision.
 - `win10-clean` — clean install, agent `77607793`, degraded as in (1).
 - `win10-e2e` — upgrade-path guest, agent `77607793`.
 - `win11-fresh`, `win11-idd-test` — Halted, untouched.
