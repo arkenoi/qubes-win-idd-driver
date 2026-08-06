@@ -1,4 +1,13 @@
 #!/bin/bash
+# RETIRED 2026-08-06 - DO NOT USE. This harness drives resizes through
+# resize-sync.ps1 -SyncNow, which writes the driver's mode registry directly and
+# issues RAW devcon PnP restarts: it bypasses the agent's exact-follow, the M6
+# published set, and M7's replug limiter, so it manufactures exactly the churn
+# that wedges the guest (measured: cycle-1 wedge on a build that passes the real
+# storm soak 6/6). Two writers on the modes key also race the agent.
+# USE INSTEAD: scratchpad/soak-drag.sh (real dom0 MSG_CONFIGURE path via
+# local.WinResize) + scratchpad/storm-soak.sh (churn stress) + snap-regress.sh.
+exit 2
 # Full acceptance soak (user directive 2026-08-05: "test until you make sure it does not
 # die, misbehave, or revert to 2560x1440").
 # Per cycle: exact resize (agent-faithful: cache updated like a real agent apply), verify
