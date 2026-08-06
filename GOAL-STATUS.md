@@ -23,6 +23,19 @@ the first exposed a third — a 12 Hz re-assert ping-pong with Explorer — whic
 found by measurement, not review, and fixed after the first attempt was rejected in
 adversarial review for a starvation bug.
 
+## RESOLVED (2026-08-06): networking was never ours — it was mirage-firewall
+
+**RETRACTED.** The "netvm attached ⇒ guest unusable" text below is STALE and is kept only
+so the correction is legible. Measured 2026-08-06 on the current stack with the real netvm
+(`core-net`, not `fw-net`): PV NIC enumerates after a cold boot, IP 10.137.0.64, DNS
+resolves, HTTPS 200, Windows Update searched/downloaded/installed successfully
+(orcSucceeded, no reboot), guest responsive throughout with no CPU burn. The historical
+unusability was caused by **mirage-firewall (`fw-net`)** as the netvm — an environmental
+choice, not this fork, not the PV drivers. Note `fw-net` also breaks qube CREATION when
+inherited as the default netvm (its vif backend never comes up, the stubdom times out).
+
+### stale text below (do not act on it)
+
 ## BLOCKER unchanged: networking
 
 With a netvm attached the guest is still unusable (xenvif installs but never starts,
