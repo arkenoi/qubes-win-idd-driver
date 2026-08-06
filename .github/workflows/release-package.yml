@@ -83,24 +83,17 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force idd-package | Out-Null
-          # Prefer the WDK's driver-package output folder ($(OutDir)$(ProjectName)\), which
-          # holds the STAMPED inf next to the binary it describes. The flat $(OutDir) can
-          # also contain an unstamped copy of the same-named inf; picking between them by
-          # glob order would be a coin flip.
-          $pkgDir = Get-ChildItem driver -Recurse -Directory -ErrorAction SilentlyContinue |
-              Where-Object { $_.FullName -match 'x64\\Release' -and
-                             (Get-ChildItem $_.FullName -Filter *.inf -ErrorAction SilentlyContinue) } |
-              Select-Object -First 1
-          if ($pkgDir) {
-            Write-Host "driver package folder: $($pkgDir.FullName)"
-            Get-ChildItem $pkgDir.FullName -File -Include *.dll,*.inf,*.cat -Recurse |
-                Copy-Item -Destination idd-package -Force
-          } else {
-            Write-Host 'no driver package folder found; falling back to the flat x64\Release glob'
-            Get-ChildItem driver -Recurse -Include *.dll,*.inf |
-                Where-Object FullName -match 'x64.*Release' |
-                Copy-Item -Destination idd-package -Force
-          }
+          # The same recursive glob build.yml's idd-driver job uses, which is proven to
+          # yield exactly one .inf and one .dll: the WDK scatters them across two
+          # x64\Release trees (the stamped INF under driver\IddSampleDriver\x64\Release,
+          # the binary under driver\x64\Release), so narrowing to a single "package
+          # folder" finds one and misses the other.
+          #
+          # The pre-built .cat is deliberately NOT copied: Inf2Cat regenerates it below,
+          # and shipping the stale one would mean a skipped Inf2Cat could go unnoticed.
+          Get-ChildItem driver -Recurse -Include *.dll,*.inf |
+              Where-Object FullName -match 'x64.*Release' |
+              Copy-Item -Destination idd-package -Force
           $inf = @(Get-ChildItem idd-package -Filter *.inf)
           $dll = @(Get-ChildItem idd-package -Filter *.dll)
           if ($inf.Count -ne 1) { throw "expected 1 .inf in the driver package, got $($inf.Count)" }
