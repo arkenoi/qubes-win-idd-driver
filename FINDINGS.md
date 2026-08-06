@@ -3836,3 +3836,38 @@ the guest desktop IS the host-sized surface.
 Consequence for the release qualification: the Office compound-window (2A-chrome) check
 cannot be run on an IDD-primary guest until this is fixed; it needs either the fix above or
 a BDA-primary guest for the seamless test.
+
+# 2026-08-06 (E2E acceptance, clean guest) — REAL DEFECT: the MSI does not replace gui-agent.exe on upgrade
+
+Clean Windows 10 22H2 (win10-e2e, unattended ISO, 18 min) + release package (setup2, the
+build with the schtasks fix). Sequence: payload verified 19/19, certs trusted, testsigning
+already active, vc_redist rc=0, **msiexec rc=3010 (success, reboot required)**, then the
+installer's own post-check FAILED:
+```
+installed gui-agent.exe 4b4ce2b1... but the package was built with 5f15dfdd... - the MSI did
+not deliver our agent
+```
+**Verified across a reboot: still 4B4CE2B1** - so this is NOT the deferred-file-replacement
+theory. The MSI genuinely does not overwrite an existing gui-agent.exe.
+
+Mechanism (almost certainly): Windows Installer file-versioning rules. The guest already had
+gui-agent.exe from the 2026-08-01 build via the unattended ISO; MSI skips overwriting a file
+whose version is >= the incoming one, and our binaries do not carry an increasing
+FILEVERSION. So a fresh-install-over-existing-QWT (the realistic user path) silently keeps
+the OLD agent while every other component updates.
+
+**The installer's hash check is what caught it** - it fails loudly instead of reporting
+success, exactly as designed. That check is now proven by a real failure, not just by
+construction.
+
+Fix directions (not applied - user's freeze; both are packaging, not agent behaviour):
+1. give the agent binaries a monotonically increasing FILEVERSION in the CI build, or
+2. mark the component with `REINSTALLMODE=amus` / `msiexec /fa`-style force-overwrite for
+   our own files, or
+3. have the installer stop the agent, delete the file, then repair-install.
+Until then: the package is only proven to deliver our agent onto a guest with NO prior QWT.
+
+E2E status: clean-install + package-install pipeline works end to end (ISO -> Windows ->
+payload -> certs -> MSI -> reboot) and is now reproducible via scratchpad/reprovision.sh;
+the ACCEPTANCE fails at this one check, which is a genuine product defect worth the whole
+exercise.
