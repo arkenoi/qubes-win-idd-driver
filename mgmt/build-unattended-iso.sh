@@ -48,12 +48,20 @@ fi
 #                                 so the CD is GONE by first logon.
 mkdir -p "$WORK/payload" "$WORK/sources/\$OEM\$/\$1"
 cp "$HERE/payload-setup.cmd" "$WORK/payload/setup.cmd"
-cp "$HERE/payload-setup2.cmd" "$WORK/payload/setup2.cmd"
+# NO_QWT=1 builds a TRULY CLEAN image: Windows + qrexec only, no Qubes Tools at all.
+# Required for the release acceptance - "clean install" must mean no prior QWT, not
+# "our package over the QWT this ISO installed" (user, 2026-08-06). setup2.cmd is what
+# invokes install-qwt.cmd, so omitting it is enough; firstboot still runs.
+if [ "${NO_QWT:-0}" = "1" ]; then
+    echo "NO_QWT=1: payload will NOT install Qubes Tools"
+else
+    cp "$HERE/payload-setup2.cmd" "$WORK/payload/setup2.cmd"
+fi
 cp "$HERE/../guest/firstboot-setup.ps1" "$WORK/payload/"
 # install-qwt.cmd is version-controlled in guest/; the rest are large/derived binaries
 # extracted from the QWT rpm into ~/win-iso (see PROVISION-LOG.md for how to regenerate).
 cp "$HERE/../guest/install-qwt.cmd" "$WORK/payload/" && echo "payload += install-qwt.cmd (from guest/)"
-for f in ~/win-iso/qubesidd-test.cer ~/win-iso/qwt-installer.exe ~/win-iso/qwt-installer.msi \
+for f in ~/win-iso/qubesidd-test.cer ${NO_QWT:+} $( [ "${NO_QWT:-0}" = "1" ] || echo ~/win-iso/qwt-installer.exe ~/win-iso/qwt-installer.msi ) \
          ~/win-iso/qwt-payload/installer.msi ~/win-iso/qwt-payload/vc_redist.x64.exe \
          ~/win-iso/qwt-certs/SigningCert*.cer; do
     [ -f "$f" ] && cp "$f" "$WORK/payload/" && echo "payload += $(basename "$f")"
