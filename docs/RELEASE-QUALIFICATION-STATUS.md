@@ -28,30 +28,50 @@ run, but the comparison is NOT valid yet (stock has no QGAPERF by construction; 
 pixel fallback saturates). Genuine stock agent for future controls:
 sha256[0:16] `3D2E6BCEC9F5BD89` from `vendor/qwt-4.2.2/installer.msi`.
 
-## BLOCKED ON THE USER (small, specific)
+## RESOLVED SINCE (both former blockers are gone)
 
-1. **Clean-install acceptance cannot proceed**: attaching the install ISO now breaks domain
-   creation (`libxenlight failed to create new domain`) for ANY new qube, while the same
-   qube starts fine without the CD. Loop device recreated (allowed, worked) — no change.
-   Need one line: `sudo tail -20 /var/log/libvirt/libxl/libxl-driver.log`.
-2. **Networking / Windows Update**: my policy exposes only the testbed qubes, so I cannot
-   see or start a netvm. Start one (`qvm-start sys-firewall`) and I can attach it myself
-   (`qvm-prefs <vm> netvm …` is permitted) and run the WU test.
-3. **Office evaluation** depends on (2): install rig is written and committed
-   (`guest/install-office-eval.ps1`, `guest/office-window-check.ps1`).
+1. **The ISO-attach failure was never an attach bug.** Root cause: the xenstore node quota in
+   `win-idd-mgmt` was exhausted (994/1024), so blkback could not write the feature nodes for a
+   fourth device — visible only as `-28` (ENOSPC) in the backend's dmesg and as
+   `libxenlight failed to create new domain` at the top. Raising the quota fixed CD boot.
+   A second, independent cause had already bitten earlier: a new qube inherits `fw-net`
+   (mirage-firewall), whose vif backend never comes up, so the stubdom times out and the
+   domain fails to create. `scratchpad/reprovision.sh` now sets `netvm ''` explicitly.
+2. **Networking and Windows Update: verified, zero issues** on `core-net`.
+
+## UPGRADE PATH — VERIFIED ON A GUEST (2026-08-06)
+
+The defect that made the first E2E worthless — the MSI reporting success while leaving stock
+`gui-agent.exe` in place, because Windows Installer will not overwrite a same-version file — is
+fixed and the fix is demonstrated, not assumed. On `win10-e2e` (stock QWT 4.2.2.0 registered):
+payload 19/19 verified → existing QWT detected → runtime stopped → uninstall rc=3010 → reboot →
+resumed run → install rc=3010 → **manifest hash gate PASS**, agent `4B4CE2B1` → `77607793`, and
+the guest came back from its own reboot with that binary running. Full log in
+`C:\qwt-improved-install.log`; detail in FINDINGS.md.
+
+Caveat carried forward: the package under test was the previous CI artifact with the fixed
+`Install-QwtImproved.ps1` swapped in (CI copies it verbatim), because GitHub's Windows runners
+kept the build queued for hours. The gate must be re-run against a real CI artifact before this
+counts as release evidence.
 
 ## NOT DONE / KNOWN GAPS
 
-- **Benchmark vs stock: not run.** `scratchpad/benchmark.sh` has an argument-passing bug
-  (`side: unbound variable`) — it was authored without the ability to execute it. Needs a
-  debug pass; the metric design and the isolation precondition (refuses to run while
-  another Windows qube is up) are sound.
-- **Win11 E2E: not started.** Blocked by the same ISO-attach failure; the Win11 ISO also
-  still needs a loop device.
-- **Regression suite on a clean system: not run** (same blocker). The suites themselves are
-  in place: `snap-regress.sh`, `soak-drag.sh`, `storm-soak.sh`.
-- **Nobody has yet installed the release package successfully end to end.** The one attempt
-  found the installer bug; the fixed build is unverified on a guest.
+- **Clean path: in progress.** A `NO_QWT=1 RELEASE_SETUP=…` image is building — Windows plus our
+  package only, no stock QWT anywhere on the media, so "qrexec answers at all" is itself the
+  pass condition. Not yet run.
+- **Benchmark vs stock: not valid yet.** The harness bug is fixed and both sides run, but idle
+  CPU is identical (0.05 %) and the loaded metric needs an interactive-session scene generator —
+  a load driven from session 0 does not exercise the display path.
+- **Win11 E2E: not started.**
+- **Regression suite on a clean system: not run.** The suites are in place: `snap-regress.sh`,
+  `soak-drag.sh`, `storm-soak.sh`.
+- **Office window behaviour: blocked** on the seamless host-mode fix (`t2/seamless-hostmode`,
+  cb1fa4b, unbuilt) — the M6 mode set does not contain the host size, so seamless mode fails
+  `ChangeDisplaySettings` with BADMODE on an IDD-equipped guest.
+- **Visual confirmation is unavailable**: `qtest shot` returns an empty tar for both the test
+  guest and the control, so the dom0 screenshot service — not the guest — is what is broken.
+  Every visual acceptance in this phase is therefore unproven, including the ones that would
+  otherwise have passed.
 
 ## Feature freeze
 
