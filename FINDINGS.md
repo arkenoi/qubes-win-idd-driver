@@ -4012,3 +4012,22 @@ before rebuilding: the substituted output's locale lines are identical to the pr
 since it cannot inspect the media on CD 1.
 
 Cost: one wasted install cycle. The doomed guest was killed rather than left running.
+
+## 2026-08-06 — the shipped installer IS the one tested (caveat closed)
+
+The upgrade-path guest test ran against a locally assembled package (CI's Windows runners were
+queued for hours). Comparison against the first CI artifact that completed
+(run 31126324112, `qwt-improved-setup`):
+
+    ci   Install-QwtImproved.ps1  933fffcd…  (CRLF, as git checks out on Windows)
+    repo Install-QwtImproved.ps1  a6c130a8…  (LF)
+    normalised (strip \r): a6c130a8… == a6c130a8…  -> IDENTICAL
+
+So the installer logic proven on `win10-e2e` is the shipped logic; the only difference is line
+endings introduced by the Windows checkout. The remaining honest gap is that the MSI and agent
+binaries in that artifact are from the seamless-fix branch, not from `main`.
+
+CI note: repeated runs showed `cancelled` jobs. `release-package.yml` has **no** `concurrency`
+block, and the canceller was our own token - a background verification job from an earlier
+agent that cancelled runs it treated as duplicates. It has since exited; the next dispatch on
+`main` should complete. Not a workflow defect.
