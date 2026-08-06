@@ -29,6 +29,12 @@ qvm-prefs "$VM" memory 8192
 qvm-prefs "$VM" maxmem 8192
 qvm-prefs "$VM" vcpus 4
 qvm-prefs "$VM" qrexec_timeout 300
+# netvm MUST be set explicitly: the inherited default (fw-net, a Mirage unikernel)
+# never brings its vif backend up, so the stubdom times out and the DOMAIN FAILS TO
+# CREATE - "libxenlight failed to create new domain" with no other clue (measured
+# 2026-08-06; cost several hours). Install offline; attach core-net later for the
+# networking/Windows Update tests.
+qvm-prefs "$VM" netvm ''
 qvm-volume extend "$VM:root" 80GiB
 qvm-features "$VM" os Windows
 qvm-tags "$VM" add win-idd-testbed
