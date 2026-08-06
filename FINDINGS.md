@@ -3697,3 +3697,30 @@ packaging and transport are sound; only the stage logic was wrong.
 Release artifacts verified independently of the guest: setup dir 19/19 sha256 OK, ISO
 sha256 OK (997cc27d…), MSI carries our agent (bd6e8b81) per the build job's own
 extraction check.
+
+# 2026-08-06 (blocker) — ISO/CD attach fails: the BLOCK BACKEND in win-idd-mgmt is broken
+
+Symptom: any new qube started with a CD from this qube dies at domain creation,
+`libxenlight failed to create new domain`. dom0 log (user-supplied) names the real cause:
+`Stubdom NNN startup: startup timed out` + `device model did not start: -9`, with the
+stubdom waiting on `vbd .../51760` whose backend lives in domain 121 = win-idd-mgmt.
+
+Isolation performed (each step a separate control):
+- brand-new qube, NO cd, NO netvm -> starts fine  => not memory, not dom0, not the VM
+- same qube + CD                                   => fails                => the CD path
+- ISO on a freshly created loop device (loop1)      => fails                => not stale loop0
+- an 8 MB dummy image on loop2 instead of the ISO   => fails                => not the ISO file
+- hot `qvm-device block attach` to a RUNNING qube   => "empty response from qubesd"
+=> the block backend export from win-idd-mgmt itself is failing for ANY device. It worked
+   earlier the same day (win10-fresh installed from loop0), so it broke during this session.
+
+Also found and fixed on the way (my bug): reprovision.sh did not set netvm, so every new
+qube inherited the default `fw-net` - a Mirage unikernel whose vif backend never comes up,
+which ALSO causes the stubdom timeout. Installs must be offline; use `core-net` (not
+fw-net, not sys-firewall - that name does not exist here) for the networking tests.
+
+CONSEQUENCE: the clean-system E2E acceptance (Win10 + Win11), the clean-system regression
+run, Windows Update/networked-qube and Office checks are all BLOCKED until the backend
+works. No sudo in this qube, so I cannot restart the service; the cheapest fix is very
+likely a restart of win-idd-mgmt itself (which also ends the agent session) or a dom0-side
+look at qubesd's error.
