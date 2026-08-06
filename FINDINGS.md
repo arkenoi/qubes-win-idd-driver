@@ -4063,3 +4063,34 @@ it ran `install.cmd` directly over qrexec on `win10-e2e` and never touched this 
 payload; its gate passed (4B4CE2B1 -> 77607793) and survived a reboot. The wedged guest is not
 being repaired - a system that survived two concurrent installers cannot serve as clean-install
 evidence no matter what state it is coaxed into. Rebuild and reinstall from scratch.
+
+## 2026-08-06 — win-idd-test wedge: CAPTURED. 3 vCPUs spinning, ZERO active grants
+
+First forensics taken at the moment of a wedge, before any kill (dom0 service installed by
+the user). Archived: `evidence/wedge-2026-08-06/` (dom0 tarball + the frozen-desktop shot).
+
+Trigger: I forced `Stop-Process gui-agent` on win-idd-test to make it re-read SeamlessMode.
+
+Measured, domid 846:
+
+| instrument | result |
+|---|---|
+| `xl vcpu-list`, two samples 10 s apart | vcpu0 `r--` +10.0 s, vcpu2 `r--` +10.1 s (both pinned ~100 %), vcpu1 `r--` +5.9 s, vcpu3 idle 48.0 s unchanged |
+| grant entries, this domain, active | **0** |
+| domain state | Running throughout; qrexec dead; desktop frozen (screenshot clock stuck at 23:07 while guest time advanced ~18 min) |
+
+Reading: the guest is NOT hung - three vCPUs are burning CPU in a tight loop - while the
+framebuffer grant is **gone**, so dom0 has nothing to read and the pixels freeze. Spin plus
+zero outstanding grants is the signature of the revoke-spin class already written up in
+`docs/upstream-xen-pv-grant-revoke-spin.md`, now with a live capture behind it rather than
+inference.
+
+What this does NOT establish: which code revoked the grant, and whether the spin is cause or
+consequence. An `--nmi` capture (deliberately not reachable from the qrexec service) would
+name the spinning code via a kernel dump; that is a human decision.
+
+Service bug found by this capture: the wrapper collected `~/wedge-*`, but under qrexec it
+runs as root while `11-wedge-forensics.sh` writes to the dom0 user's home - so the tar came
+back with only the log. The script's own qvm-copy had already delivered the real tarball.
+Fixed to search both `/home/*/wedge-*` and `/root/wedge-*`; re-pull the file into dom0 to
+pick this up.
