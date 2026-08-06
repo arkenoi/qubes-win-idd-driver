@@ -3807,3 +3807,32 @@ SendWindowMap lines (qtest shot cannot be used in seamless mode: `import -window
 layered windows, documented earlier).
 Note for the next session: to return to the T2 resize configuration set SeamlessMode=0 in
 both `…\Qubes Tools` and `…\Qubes Tools\gui-agent` and reboot.
+
+# 2026-08-06 (defect found by the Office test) — SEAMLESS MODE IS BROKEN ON THE IDD CONFIG
+
+Switching the T2 guest (IDD primary, M6 published mode set) to SeamlessMode=1 produces:
+```
+SetVideoModeInternal: ChangeDisplaySettings failed: 0xfffffffe   (DISP_CHANGE_BADMODE)
+WorkAreaApply: SPI_SETWORKAREA failed with error 0x57
+GetFrame: AcquireNextFrame failed 0x887a0026
+```
+and only ONE window is ever mapped (0x2003c) with Word running - so the Office
+compound-window count cannot be taken, and seamless is effectively non-functional here.
+
+Mechanism (from our own code, no guessing needed): `SetSeamlessMode` forces the HOST
+resolution on every StartFrameProcessing (main.c ~1888-1897). The host is 5120x1440. The
+IDD publishes only the M6 set - target + work-area maximize/half + LRU + 1024x768 - which
+does NOT contain 5120x1440, so ChangeDisplaySettings returns BADMODE, the work area cannot
+be applied, and capture churns.
+
+This is an INTERACTION between the T2 driver work and seamless mode, not a regression in
+either alone: on the stock Basic Display Adapter the host size is always in the 29-mode
+list, so seamless always worked. Fix direction (small): when seamless is active the mode
+set must include the host size - i.e. `BuildIddModeSet` should add `g_HostScreenWidth x
+g_HostScreenHeight` while `g_SeamlessMode` is TRUE. That is consistent with the user's rule
+2 ("host-size modes only when the window is actually fullscreen") because in SEAMLESS mode
+the guest desktop IS the host-sized surface.
+
+Consequence for the release qualification: the Office compound-window (2A-chrome) check
+cannot be run on an IDD-primary guest until this is fixed; it needs either the fix above or
+a BDA-primary guest for the seamless test.
