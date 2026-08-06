@@ -66,6 +66,21 @@ for i in $(seq 1 "$CYCLES"); do
     # poll for the recreated dom0 window to settle (an empty/partial read right
     # after the restart is the harness racing the daemon, not a failure)
     dw=""; for _ in 1 2 3 4 5 6; do dw=$(domwin); [ -n "$dw" ] && break; sleep 3; done
+    if [ -z "$dw" ]; then
+        # No dom0 window at all = gui-daemon died on the agent restart: the KNOWN
+        # dom0 EOF bug (DESIGN-gui-daemon-restart-survival.md SS3), not a guest
+        # defect. Count it, recover by reboot, continue - same handling the old
+        # soak used, which this harness dropped by mistake.
+        log "cycle $i: daemon died on restart (KNOWN dom0 EOF bug) - rebooting to recover"
+        timeout 200 ./tools/qtest shutdown >/dev/null 2>&1
+        for _ in $(seq 1 60); do st=$(qvm-ls --fields NAME,STATE 2>/dev/null | awk '/win-idd-test/{print $2}'); [ "$st" = Halted ] && break; sleep 5; done
+        [ "$st" != Halted ] && { log "cycle $i: FAIL shutdown-wedge"; exit 1; }
+        timeout 200 ./tools/qtest start >/dev/null 2>&1
+        for _ in $(seq 1 30); do alive && break; sleep 10; done
+        alive || { log "cycle $i: FAIL boot after daemon death"; exit 1; }
+        for _ in 1 2 3 4 5 6; do dw=$(domwin); [ -n "$dw" ] && break; sleep 5; done
+        [ -n "$dw" ] || { log "cycle $i: FAIL no dom0 window even after reboot"; exit 1; }
+    fi
     gu=""; for _ in 1 2 3 4 5 6; do gu=$(guestres); [ "$gu" = "$dw" ] && break; sleep 3; done
     [ "$gu" = "$dw" ] || { log "cycle $i: FAIL after agent restart: guest=$gu dom0-window=$dw"; exit 1; }
     expected="$dw"
