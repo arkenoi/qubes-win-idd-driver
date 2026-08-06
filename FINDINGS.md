@@ -3986,3 +3986,29 @@ Honest limits of this run:
   broken, not the guest. Functional evidence instead: the agent log shows seamless mode
   (`mode=s`), `SendWindowMap` of the Notepad HWND, and a continuous QGAPERF frame stream with
   `win=1`. Recorded as "not visually confirmed", not as a visual pass.
+
+## 2026-08-06 — clean-path install stalled: the answer file was ignored (my regression, twice-recorded)
+
+User observation ("does not seem that answer file was picked up") was correct. `win10-clean`
+booted the clean-path ISO and sat there; Setup had discarded the whole `autounattend.xml`.
+
+Cause: **the answer file's language must match the media language**, or Windows Setup silently
+ignores the entire file and stops on the locale picker. The media is
+`Win10_22H2_EnglishInternational` (en-GB); the answer file I built with was en-US.
+
+This is not a new discovery — it is recorded in this file from 2026-08-01 ("the answer file must
+match the media language ... switched to en-GB (0809:00000809)"). The reason it recurred is the
+process failure worth recording: **that fix was only ever applied to the mgmt qube's working
+copy** (`~/qubes-win-idd/mgmt/autounattend.xml`), never to the committed
+`mgmt/autounattend.xml`, which `build-unattended-iso.sh` uses by default. A finding written down
+but not landed in the tree is not a fix.
+
+Fixed as a class, not an instance (7439c31): the answer file carries `@UILANG@`/`@INPUTLOCALE@`
+placeholders, the builder DERIVES the locale from the source ISO name (`*EnglishInternational*`
+-> en-GB, else en-US), honours `LOCALE=`/`KEYBOARD=` overrides, and **hard-fails on any
+unsubstituted placeholder** rather than producing media that stalls an hour later. Verified
+before rebuilding: the substituted output's locale lines are identical to the proven en-GB file.
+`build-answer-disc.sh` got the same guard, defaulting to en-US but printing the locale it used,
+since it cannot inspect the media on CD 1.
+
+Cost: one wasted install cycle. The doomed guest was killed rather than left running.
