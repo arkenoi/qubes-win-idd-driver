@@ -53,7 +53,25 @@ cp "$HERE/payload-setup.cmd" "$WORK/payload/setup.cmd"
 # "our package over the QWT this ISO installed" (user, 2026-08-06). setup2.cmd is what
 # invokes install-qwt.cmd, so omitting it is enough; firstboot still runs.
 if [ "${NO_QWT:-0}" = "1" ]; then
-    echo "NO_QWT=1: payload will NOT install Qubes Tools"
+    echo "NO_QWT=1: payload will NOT install stock Qubes Tools"
+    # RELEASE_SETUP=<dir>: stage OUR release package on the media and have firstboot run
+    # it. This is the honest clean-path acceptance: a guest that has never seen QWT, where
+    # qrexec only appears BECAUSE our package delivered it - so "qrexec answers" is itself
+    # the pass condition. Without this the guest would be unreachable (qrexec ships with
+    # QWT), which is why NO_QWT alone is not a usable test image.
+    if [ -n "${RELEASE_SETUP:-}" ]; then
+        [ -d "$RELEASE_SETUP" ] || { echo "RELEASE_SETUP not a directory: $RELEASE_SETUP" >&2; exit 1; }
+        mkdir -p "$WORK/payload/release"
+        cp -r "$RELEASE_SETUP"/. "$WORK/payload/release/"
+        cat > "$WORK/payload/setup2.cmd" <<'RELEOF'
+@echo off
+rem Clean-path acceptance: install OUR release package on a guest with no prior QWT.
+echo === release install (clean path) === >> C:\qubes-win-idd-setup.log
+call C:\payload\release\install.cmd /auto >> C:\qubes-win-idd-setup.log 2>&1
+echo release install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
+RELEOF
+        echo "payload += release/ (our package, installed at firstboot)"
+    fi
 else
     cp "$HERE/payload-setup2.cmd" "$WORK/payload/setup2.cmd"
 fi

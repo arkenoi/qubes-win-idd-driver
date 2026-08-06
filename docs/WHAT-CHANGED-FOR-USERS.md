@@ -273,27 +273,41 @@ works by not presenting chrome fragments as windows; it never lets the guest opt
 
 ## 4. How to try it
 
-1. **Build.** Push to the repo; GitHub Actions produces `qwt-improved-package` (agent + optional
-   IDD driver + `MANIFEST.json` + `SHA256SUMS.txt`) and `idd-driver-package`. Download with
-   `gh run download`.
-2. **Prepare the guest** (once): run `guest/firstboot-setup.ps1` — enables test signing, trusts
-   the build certificate — then reboot.
-3. **Install the agent overlay**: copy the package into the guest and run
-   `install-qwt-improved.ps1` from it. It plans, backs up, hashes and verifies each replaced
-   binary; `-Restore` puts stock back. **Reboot the qube afterwards** rather than restarting the
-   agent in place (see 2.1).
-4. **Install the display driver** (only for resolution following): run
+The supported route is now the **release package** (`qwt-improved-setup`, built by GitHub
+Actions), not the older binary-overlay script. Copy the package folder into the guest and run
+`install.cmd` — everything below happens inside it.
+
+1. **Build.** Push to the repo; GitHub Actions produces `qwt-improved-setup` (the installer,
+   the MSI, the signing certificates, the IDD driver, `MANIFEST.json`, `SHA256SUMS.txt`) and an
+   ISO of the same tree. Download with `gh run download`.
+2. **Run `install.cmd`** in the guest, as Administrator. Add `/auto` to let it reboot and resume
+   by itself; without it, the script stops at each reboot point and tells you to run it again.
+   It verifies every payload file against `SHA256SUMS.txt` before touching the system and
+   refuses to install anything it cannot verify.
+3. **What it does on a guest that already has Qubes Windows Tools.** Windows Installer will not
+   replace a file whose version is not newer, so installing over an existing QWT used to leave
+   the *old* `gui-agent.exe` in place — the install reported success and none of the changes in
+   this document were actually running. The installer now stops the agent and its watchdog,
+   uninstalls the existing QWT first, removes any binaries it left behind, and only then
+   installs. Because that uninstall asks for a reboot, an upgrade takes **one reboot more** than
+   a clean install; with `/auto` this is automatic, otherwise the script exits and asks you to
+   re-run it after rebooting.
+4. **The gate that decides success.** After installing, the script hashes the `gui-agent.exe` it
+   finds on disk and compares it to `MANIFEST.json`. If they differ the install FAILS loudly
+   rather than reporting success — so "it said OK" now means the binary in this package is the
+   one that will run.
+5. **Install the display driver** (only for resolution following): run
    `guest/deploy-and-test.ps1` from the driver package; it emits a `=== RESULT ===` JSON block.
    Then `tools/modeprobe --solo <W>x<H>` to make the IDD the only active output, and reboot to
    confirm the topology persists.
-5. **Install the dom0 work-area watcher**: `dom0/09-install-workarea-watcher.sh` (dom0, once).
+6. **Install the dom0 work-area watcher**: `dom0/09-install-workarea-watcher.sh` (dom0, once).
    Removal instructions are in the script header.
-6. **Verify.** Confirm the binary actually running matches the manifest hash — a deploy that
+7. **Verify.** Confirm the binary actually running matches the manifest hash — a deploy that
    silently failed reports results for a build that was never running. Then: open two
    overlapping windows and drag one (no debris, no wobble); open an Office document (one bordered
    window, no shadow band); drag the qube window's edge (guest resolution follows on settle);
    maximize and half-tile it (instant, no blink).
-7. If the qube goes deaf (no qrexec, no window updates), that is 2.2: kill and restart the qube.
+8. If the qube goes deaf (no qrexec, no window updates), that is 2.2: kill and restart the qube.
    If every window vanishes right after an agent restart, that is 2.1: restart the qube.
 
 ---
