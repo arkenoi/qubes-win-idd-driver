@@ -3871,3 +3871,47 @@ E2E status: clean-install + package-install pipeline works end to end (ISO -> Wi
 payload -> certs -> MSI -> reboot) and is now reproducible via scratchpad/reprovision.sh;
 the ACCEPTANCE fails at this one check, which is a genuine product defect worth the whole
 exercise.
+
+# 2026-08-06 (branch t2/installer-upgrade-fix) — FIX for the upgrade path: uninstall first
+
+Applied to `packaging/setup/Install-QwtImproved.ps1` (commits f32f100, 7b2f84d). Addresses
+the defect measured earlier today: on a guest that already had QWT, msiexec rc=3010 and
+every component updated except gui-agent.exe (still old across a reboot) — Windows
+Installer's file-versioning rule, our binaries carrying no increasing FILEVERSION.
+
+Stage 2 now, before the install:
+1. `Stop-QwtRuntime` — signal `Global\QGA_SHUTDOWN` (graceful, releases grants), stop the
+   `QubesGuiWatchdog` service (it respawns the agent, so it goes first), then force-kill
+   `gui-agent.exe` / `gui-watchdog.exe`.
+2. `Get-InstalledQwt` — the Uninstall registry hives (HKLM + WOW6432Node), DisplayName
+   `^Qubes\s+(Windows\s+)?Tools`. Deliberately NOT Win32_Product: enumerating that class
+   reconfigures every registered product.
+3. `msiexec /x <ProductCode> /qn /norestart REBOOT=ReallySuppress /l*v+ "C:\qwt-uninstall.log"`
+   per product; 0 / 3010 / 1605 accepted, anything else is fatal.
+4. `Remove-QwtLeftovers` — delete the files the package delivers (from MANIFEST.json
+   `reference_binaries`: gui-agent.exe, gui-watchdog.exe) out of the QWT bin dir, because
+   `msiexec /x` measurably leaves them there. Locked files are renamed aside. This sweep
+   runs on EVERY path into the install, including "nothing registered" — a hand-uninstalled
+   guest has no registration but does keep the binaries.
+5. Re-seed the gui-agent registry defaults: the uninstall takes
+   `HKLM\Software\Invisible Things Lab\Qubes Tools` with it, so the stage-1 seeding would
+   otherwise be gone before the MSI's AppSearch runs.
+
+Cross-reboot: if the uninstall returns 3010 the run arms the EXISTING `-Auto` resume task
+(`schtasks /SC ONSTART /RU SYSTEM`, name `QwtImprovedSetup`) with the new internal
+`-ResumeAfterUninstall` switch and reboots; the resumed run re-enters stage 2 (testsigning
+is active) and skips detection/uninstall. Nothing re-arms the task in the resumed run, so at
+most one uninstall reboot is possible. Without `-Auto` the run exits 10 and the manual re-run
+finds nothing registered and takes the clean path.
+
+Belt and braces: `REINSTALLMODE=amus` added to the install command line ('a' = copy all files
+regardless of version). Both mechanisms are intentional — the uninstall can be defeated by a
+file we cannot delete; REINSTALLMODE only applies where Windows Installer consults it.
+
+The post-install gui-agent.exe hash check is UNCHANGED. It is the acceptance gate and it is
+the thing that caught the defect.
+
+NOT VERIFIED HERE (needs a guest, orchestrator-side): that the upgrade path now ends with the
+hash check passing; that `msiexec /x` on this MSI returns 3010 and thus that the resume path
+is ever exercised; the graceful `Global\QGA_SHUTDOWN` open from a SYSTEM context. CI only
+proves the script parses and is staged into the artifact.
