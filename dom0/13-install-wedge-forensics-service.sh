@@ -33,7 +33,25 @@ POLICY=/etc/qubes/policy.d/29-win-idd-testbed.policy
 
 # The forensics script itself is copied to a fixed dom0 path so the service does not depend
 # on a working copy in a user's home that may move or change under it.
-install -m 0755 "$KIT_DIR/11-wedge-forensics.sh" /usr/local/sbin/win-wedge-forensics.sh
+# NOTE: dom0 cannot be pushed to - the files must be PULLED, and BOTH of them. Fetching only
+# this installer leaves 11-wedge-forensics.sh missing and the install half-done, so check.
+SRC_FORENSICS="${FORENSICS:-$KIT_DIR/11-wedge-forensics.sh}"
+if [ ! -f "$SRC_FORENSICS" ]; then
+    cat >&2 <<EOM
+FATAL: 11-wedge-forensics.sh not found next to this script ($KIT_DIR).
+dom0 must pull BOTH files. In dom0:
+
+  mkdir -p ~/win-idd-dom0 && cd ~/win-idd-dom0
+  for f in 11-wedge-forensics.sh 13-install-wedge-forensics-service.sh; do
+      qvm-run --pass-io $DEV "cat /home/user/qubes-win-idd-driver/dom0/\$f" > "\$f"
+  done
+  sudo bash 13-install-wedge-forensics-service.sh $DEV win-idd-test win10-clean win10-e2e
+
+(or point this script at the file with FORENSICS=/path/to/11-wedge-forensics.sh)
+EOM
+    exit 1
+fi
+install -m 0755 "$SRC_FORENSICS" /usr/local/sbin/win-wedge-forensics.sh
 
 cat > "$SVC" <<EOF
 #!/bin/bash
