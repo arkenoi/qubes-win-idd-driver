@@ -3447,3 +3447,34 @@ current stack.
 string reaches check_persist despite a validating/retrying mp_json); the guest and topology
 were healthy each time. Debt, not a defect in the product; script is committed for a later
 debugging pass.
+
+# 2026-08-06 (cont 4) — M0-tail: blink 609 → 484 ms; two instrument lessons; one more wedge
+
+**M0-tail delivered** (agent 12fd58c, deployed 22D148B4). Three source-justified changes:
+mode-availability poll checks immediately then 15/50/250 ms (was: a flat 250 ms sleep
+BEFORE the first check — the old `polls=1` line was hiding ~240 ms of not looking);
+RecreateDuplication retries 8×25 ms then 250 ms within the same 5 s deadline (was flat 250);
+the pending re-dump no longer waits for a dirty frame (an idle post-mode-change desktop
+could stall it indefinitely). Deliberately NOT done: an apply→capture-thread wake hint —
+`AcquireNextFrame` is a blocking DXGI call with no cancellation, so a flag would only be
+seen after ACCESS_LOST already returned; and lowering FRAME_TIMEOUT blind.
+
+**Measured, same 5-size protocol, before → after (medians):** mode-offered 266 → 109 ms,
+applied 312 → 187 ms, **time-to-pixels 609 → 484 ms**. No `apply-failed` appeared (the
+flagged risk of the tighter poll did not materialize). New markers also settled a
+measurement error: `repaint-sent` fires on the daemon's ACK, one round trip AFTER pixels
+were sent — `repaint-first` is the honest time-to-pixels, and the earlier "470 ms tail"
+was partly ack latency. Remaining tail (applied→pixels ≈ 300 ms) is dominated by repeated
+ACCESS_LOST/recreate cycles during the replug transit, now visible per-cycle in the log.
+
+**Instrument lesson (again): the snap battery's first FAIL was the battery.** T2 read the
+guest ONCE, 7 s after the request, landing inside a replug transit and reading the PREVIOUS
+mode — while the agent log showed the correct `RESEXACT 2530x1359` with no snap. Converted
+to a convergence poll (same fix the stress harness needed). Snap behaviour itself: verified
+correct on this build (near-half snaps, position preserved, arbitrary exact).
+
+**One more wedge** during the re-run (qrexec dead, slope 1, daemon window alive, agent log
+ends mid-QGAPERF with a 29.7 s frame delta = the freeze caught mid-stream). Same family as
+the xenbus livelock; recovered by kill+start. It followed a long uninterrupted resize storm
+(11 replugs in ~4 min) — heavier than any real use. Not root-caused further this session:
+guest-side observability is exhausted and dom0 forensics need the user.
