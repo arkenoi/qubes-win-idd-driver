@@ -122,7 +122,8 @@ So stage 2 first:
      gui-watchdog.exe if they are still up;
   2. finds the installed product in the Uninstall registry keys (not
      Win32_Product -- querying that reconfigures every installed product) and
-     runs  msiexec /x <ProductCode> /qn /norestart REBOOT=ReallySuppress ;
+     runs  msiexec /x <ProductCode> /qn /norestart REBOOT=ReallySuppress
+     /l*v+ C:\qwt-uninstall.log ;
   3. deletes the binaries the package is about to deliver that the uninstall
      leaves behind in C:\Program Files\Qubes Tools\bin (measured: it does leave
      gui-agent.exe there). A file still locked is renamed aside instead;
