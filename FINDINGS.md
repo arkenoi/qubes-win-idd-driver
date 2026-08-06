@@ -3395,3 +3395,14 @@ anything close-but-not-equal is by definition a normal bordered window. Verified
 → RESSNAP15 → 2550x1379, frame fits (border-visible-after.png shows the red qube border
 below the taskbar). Both variants stay PUBLISHED (exact maximize remains replug=0); only
 the snap targeting changed.
+
+# 2026-08-06 (cont) — side borders: our own w0 configure carried (0,0) and MOVED the window
+
+User pinpointed it: side borders vanished after the AGENT's snap following their resize.
+Cause: the post-resize w0 MSG_CONFIGURE sent x=0,y=0 (upstream fullscreen semantics) and
+the daemon obligingly moved the client to origin - left frame border at x=-5, off-screen.
+Fix (agent bd6e8b8, deployed 110A4D46): remember dom0's window position from its own w0
+configures (g_ScreenWinX/Y) and echo it back - the daemon resizes in place, never
+repositions. Verified: snap 2544x1374 → 2550x1379 with client at x=5 (frame flush to the
+screen edge, border visible). Also: resize service v4 (user-installed) nudges frames fully
+on-screen after scripted resizes (windowsize never moves; stale positions clipped borders).
