@@ -185,12 +185,15 @@ poll_pixels() { # $1=expected width; the follow pipeline has real latency - poll
 
 # ---- topology persistence assert (dev-side, on a plain modeprobe read) ------
 check_persist() { # $1=side  $2=json-line ; prints "PERSIST OK gdi=..." on stdout
-    printf '%s' "$2" | python3 - "$1" "$W" "$H" <<'PYEOF'
+    # NB: `python3 - ... <<EOF` reads the SCRIPT from stdin, so a piped JSON would
+    # be swallowed as source and json.load(sys.stdin) would see EOF (that is the
+    # 'json-unparseable' stop that killed two runs). Pass the JSON as argv.
+    python3 - "$1" "$W" "$H" "$2" <<'PYEOF'
 import sys, json
-side, W, H = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+side, W, H, raw = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
 pat = 'IddSampleDriver Device' if side == 'idd' else 'Microsoft Basic Display Adapter'
 try:
-    d = json.load(sys.stdin)
+    d = json.loads(raw)
 except Exception as e:
     print(f'PERSIST FAIL json-unparseable: {e}'); sys.exit(1)
 devs = d.get('devices') or []
