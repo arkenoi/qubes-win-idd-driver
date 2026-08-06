@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Install Qubes Windows Tools 4.2.2 (rebuilt from source with the improved GUI agent)
-    onto a CLEAN Windows guest.
+    onto a clean Windows guest, or over a guest that already has QWT installed.
 
 .DESCRIPTION
     This is a FULL install, not an overlay: it runs the real QWT installer.msi produced by
@@ -13,11 +13,21 @@
 
       stage 1  copy payload to disk, verify hashes, trust the signing certificates,
                seed the gui-agent registry defaults, enable testsigning, reboot
-      stage 2  verify testsigning is active, install vc_redist, run msiexec, optionally
-               stage the (experimental) IddCx driver, reboot
+      stage 2  verify testsigning is active, REMOVE any previously installed QWT,
+               install vc_redist, run msiexec, optionally stage the (experimental)
+               IddCx driver, reboot
 
     The stage is DETECTED, not remembered: if testsigning is not active in the current
     boot we are in stage 1, otherwise stage 2. Re-running the script is safe.
+
+    WHY STAGE 2 UNINSTALLS FIRST (measured 2026-08-06, FINDINGS.md): on a guest that
+    already had QWT, msiexec returned 3010 "success" and every component updated EXCEPT
+    gui-agent.exe, which kept the pre-existing build - verified across a reboot, so it is
+    not deferred file replacement. It is the Windows Installer file-versioning rule: an
+    existing file whose version is >= the incoming one is not overwritten, and our
+    binaries carry no increasing FILEVERSION. Removing the old product and deleting the
+    leftover binaries makes the versioning rule inapplicable; REINSTALLMODE=amus on the
+    install command line is the second, independent belt.
 
 .PARAMETER Auto
     Reboot automatically at the end of each stage and resume via RunOnce. Without it the
@@ -29,6 +39,11 @@
 
 .PARAMETER NoPvNetwork
     Drop PvDriversNetwork from ADDLOCAL. See the NETWORKING caveat in README.txt.
+
+.PARAMETER ResumeAfterUninstall
+    INTERNAL. Set only by the boot-resume task this script arms for itself when removing
+    the previously installed QWT demanded a reboot. It makes the resumed run skip the
+    detect/uninstall phase and go straight to the install phase.
 
 .PARAMETER WorkDir
     Where the payload is copied to before installing. Default C:\qwt-improved-setup.
@@ -44,6 +59,7 @@ param(
     [switch]$Auto,
     [switch]$InstallIddDriver,
     [switch]$NoPvNetwork,
+    [switch]$ResumeAfterUninstall,
     [string]$WorkDir = 'C:\qwt-improved-setup'
 )
 
@@ -201,6 +217,196 @@ function Clear-BootResume {
     $global:LASTEXITCODE = 0
 }
 
+# --------------------------------------------------------------- gui-agent registry seed
+function Set-GuiAgentRegistryDefaults {
+    # The MSI only seeds these when its AppSearch does NOT already find them (conditions
+    # NOT GUI_SEAMLESS_SET / NOT GUI_CURSOR_SET / NOT LOG_DIR_SET), so writing them first
+    # makes ours win. /reg:64 because the MSI's RegLocator is 64-bit; a WOW-redirected
+    # write would simply be invisible to it.
+    # Called twice: in stage 1, and again in stage 2 AFTER a previous QWT is uninstalled -
+    # that uninstall takes this key with it, which would otherwise hand the decision back
+    # to the MSI's own defaults.
+    $regPath = 'HKLM\Software\Invisible Things Lab\Qubes Tools'
+    $seed = @(
+        @('SeamlessMode',  'REG_DWORD', '1'),
+        @('DisableCursor', 'REG_DWORD', '0'),
+        # LogDir MUST be pre-seeded: two MSI components race to write it ([INSTALL_DIR]log
+        # vs "Q:\Qubes Logs") under an identical condition. If Q:\ wins and does not exist,
+        # every gui-agent log silently vanishes.
+        @('LogDir', 'REG_SZ', 'C:\Program Files\Qubes Tools\log')
+    )
+    foreach ($s in $seed) {
+        & reg.exe add $regPath /v $s[0] /t $s[1] /d $s[2] /f /reg:64 | Out-Null
+        if ($LASTEXITCODE -ne 0) { Fail "reg add failed for $($s[0])" }
+    }
+    Write-Log 'seeded gui-agent registry defaults (SeamlessMode=1, DisableCursor=0, LogDir)'
+}
+
+# ------------------------------------------------------- pre-existing QWT: detect/remove
+# Files this package delivers into the QWT bin directory and that Windows Installer will
+# refuse to overwrite if a same-or-newer-versioned copy is already there. Kept in sync
+# with MANIFEST.json -> reference_binaries at run time; this is the fallback list.
+$script:OurBinaries    = @('gui-agent.exe', 'gui-watchdog.exe')
+$script:DefaultBinDir  = 'C:\Program Files\Qubes Tools\bin'
+$script:GuiWatchdogSvc = 'QubesGuiWatchdog'
+
+function Get-QwtBinDir {
+    foreach ($k in 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools',
+                   'HKLM:\SOFTWARE\WOW6432Node\Invisible Things Lab\Qubes Tools') {
+        $p = Get-ItemProperty -LiteralPath $k -ErrorAction SilentlyContinue
+        if (-not $p) { continue }
+        if ($p.PSObject.Properties.Name -contains 'GuiAgentPath' -and $p.GuiAgentPath) {
+            return (Split-Path -Parent $p.GuiAgentPath)
+        }
+        if ($p.PSObject.Properties.Name -contains 'InstallDir' -and $p.InstallDir) {
+            return (Join-Path $p.InstallDir 'bin')
+        }
+    }
+    return $script:DefaultBinDir
+}
+
+function Get-InstalledQwt {
+    # The Uninstall hive, deliberately NOT Win32_Product: enumerating that WMI class makes
+    # Windows Installer reconfigure every registered product - minutes of work and it can
+    # itself rewrite the very files this function exists to get rid of.
+    $roots = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    )
+    $found = @()
+    $seen  = @{}
+    foreach ($root in $roots) {
+        foreach ($k in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue)) {
+            $p = Get-ItemProperty -LiteralPath $k.PSPath -ErrorAction SilentlyContinue
+            if (-not $p) { continue }
+            if ($p.PSObject.Properties.Name -notcontains 'DisplayName') { continue }
+            $name = [string]$p.DisplayName
+            # "Qubes Windows Tools" is the shipped ProductName. Match loosely enough to
+            # catch a renamed rebuild, tightly enough not to hit "Qubes Tools Driver..."
+            # style third-party entries - there are none on a Windows guest.
+            if ($name -notmatch '^Qubes\s+(Windows\s+)?Tools') { continue }
+            $code = [string]$k.PSChildName
+            if ($seen.ContainsKey($code)) { continue }
+            $seen[$code] = $true
+            $ver = ''
+            if ($p.PSObject.Properties.Name -contains 'DisplayVersion') { $ver = [string]$p.DisplayVersion }
+            $found += [pscustomobject]@{
+                DisplayName = $name
+                Version     = $ver
+                ProductCode = $code
+                IsMsi       = ($code -match '^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$')
+                RegKey      = [string]$k.PSPath
+            }
+        }
+    }
+    return $found
+}
+
+function Stop-QwtRuntime {
+    # Graceful first: the agent owns Global\QGA_SHUTDOWN and exits cleanly on it, which
+    # lets it drop the framebuffer grants instead of leaving them held by a killed process.
+    # Then the service (the watchdog respawns gui-agent.exe, so it has to go before the
+    # process), then the hammer.
+    try {
+        $ev = [System.Threading.EventWaitHandle]::OpenExisting('Global\QGA_SHUTDOWN')
+        [void]$ev.Set()
+        $ev.Close()
+        Write-Log 'signalled Global\QGA_SHUTDOWN - waiting 5 s for a graceful agent exit'
+        Start-Sleep -Seconds 5
+    } catch {
+        Write-Log 'Global\QGA_SHUTDOWN not open (no running agent, or no access) - continuing'
+    }
+
+    $s = Get-Service -Name $script:GuiWatchdogSvc -ErrorAction SilentlyContinue
+    if ($s) {
+        try { Stop-Service -Name $script:GuiWatchdogSvc -Force -ErrorAction SilentlyContinue } catch { }
+        for ($i = 0; $i -lt 20; $i++) {
+            $s = Get-Service -Name $script:GuiWatchdogSvc -ErrorAction SilentlyContinue
+            if (-not $s -or $s.Status -eq 'Stopped') { break }
+            Start-Sleep -Seconds 1
+        }
+        $state = 'absent'
+        if ($s) { $state = [string]$s.Status }
+        Write-Log "service $script:GuiWatchdogSvc is $state"
+    } else {
+        Write-Log "service $script:GuiWatchdogSvc not installed"
+    }
+
+    foreach ($proc in 'gui-agent', 'gui-watchdog') {
+        $ps = @(Get-Process -Name $proc -ErrorAction SilentlyContinue)
+        if ($ps.Count -gt 0) {
+            Write-Log "force-terminating $($ps.Count) x $proc.exe"
+            $ps | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Start-Sleep -Seconds 2
+}
+
+function Remove-QwtLeftovers {
+    param([Parameter(Mandatory)][string]$BinDir, [Parameter(Mandatory)][string[]]$Files)
+    # MEASURED 2026-08-06: `msiexec /x` of the old QWT leaves gui-agent.exe on disk. A file
+    # left behind is exactly what the installer's file-versioning rule then refuses to
+    # overwrite, so removal here is what makes the reinstall deliver our binary.
+    $deleted = @(); $stuck = @(); $absent = @()
+    foreach ($f in $Files) {
+        $p = Join-Path $BinDir $f
+        if (-not (Test-Path -LiteralPath $p)) { $absent += $f; continue }
+        for ($i = 1; $i -le 5; $i++) {
+            try { Remove-Item -LiteralPath $p -Force -ErrorAction Stop; break }
+            catch { Start-Sleep -Seconds 2 }
+        }
+        if (Test-Path -LiteralPath $p) {
+            # Still locked (a process we could not kill holds the image). Renaming an open
+            # image file IS allowed on Windows and gets the name out of the installer's way.
+            $side = "$p.replaced-{0}" -f (Get-Date -Format 'yyyyMMddHHmmss')
+            try { Rename-Item -LiteralPath $p -NewName (Split-Path -Leaf $side) -Force -ErrorAction Stop
+                  Write-Log "could not delete $f - renamed it to $(Split-Path -Leaf $side)" 'WARN'
+                  $deleted += "$f (renamed)" }
+            catch { Write-Log "could not delete OR rename $f - the install may not replace it" 'WARN'
+                    $stuck += $f }
+        } else {
+            $deleted += $f
+        }
+    }
+    Write-Log ("leftover sweep in {0}: removed [{1}] absent [{2}] stuck [{3}]" -f `
+        $BinDir, ($deleted -join ' '), ($absent -join ' '), ($stuck -join ' '))
+    return [ordered]@{ removed = $deleted; absent = $absent; stuck = $stuck }
+}
+
+function Uninstall-ExistingQwt {
+    param([Parameter(Mandatory)][object[]]$Products)
+    # Returns $true if any uninstall demanded a reboot (rc 3010).
+    $rebootNeeded = $false
+    $rcs = [ordered]@{}
+    foreach ($p in $Products) {
+        if (-not $p.IsMsi) {
+            Write-Log "'$($p.DisplayName)' key $($p.ProductCode) is not an MSI product code - not removing it" 'WARN'
+            continue
+        }
+        $log = 'C:\qwt-uninstall.log'
+        Write-Log "uninstalling '$($p.DisplayName)' $($p.Version) $($p.ProductCode) (verbose log: $log)"
+        # /l*v+ appends: with more than one registered product the second msiexec would
+        # otherwise truncate the log of the first, which is the one that usually explains
+        # a failure.
+        $proc = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            '/x', $p.ProductCode, '/qn', '/norestart',
+            'REBOOT=ReallySuppress', '/l*v+', "`"$log`""
+        )
+        $rc = $proc.ExitCode
+        $rcs[$p.ProductCode] = $rc
+        # 0    removed
+        # 3010 removed, reboot required to finish deleting in-use files
+        # 1605 not actually installed (a stale Uninstall key) - the state we wanted anyway
+        if ($rc -notin 0, 3010, 1605) {
+            Fail "msiexec /x $($p.ProductCode) failed with $rc - see $log"
+        }
+        Write-Log "uninstall rc=$rc"
+        if ($rc -eq 3010) { $rebootNeeded = $true }
+    }
+    $script:Result.detail.uninstall_rc = $rcs
+    return $rebootNeeded
+}
+
 # ------------------------------------------------------------------------------- stage 1
 function Invoke-Stage1 {
     param([Parameter(Mandatory)][string]$Root)
@@ -223,25 +429,7 @@ function Invoke-Stage1 {
     }
     $script:Result.detail.certs_installed = $certs.Count
 
-    # --- gui-agent registry defaults ----------------------------------------------
-    # The MSI only seeds these when its AppSearch does NOT already find them (conditions
-    # NOT GUI_SEAMLESS_SET / NOT GUI_CURSOR_SET / NOT LOG_DIR_SET), so writing them first
-    # makes ours win. /reg:64 because the MSI's RegLocator is 64-bit; a WOW-redirected
-    # write would simply be invisible to it.
-    $regPath = 'HKLM\Software\Invisible Things Lab\Qubes Tools'
-    $seed = @(
-        @('SeamlessMode',  'REG_DWORD', '1'),
-        @('DisableCursor', 'REG_DWORD', '0'),
-        # LogDir MUST be pre-seeded: two MSI components race to write it ([INSTALL_DIR]log
-        # vs "Q:\Qubes Logs") under an identical condition. If Q:\ wins and does not exist,
-        # every gui-agent log silently vanishes.
-        @('LogDir', 'REG_SZ', 'C:\Program Files\Qubes Tools\log')
-    )
-    foreach ($s in $seed) {
-        & reg.exe add $regPath /v $s[0] /t $s[1] /d $s[2] /f /reg:64 | Out-Null
-        if ($LASTEXITCODE -ne 0) { Fail "reg add failed for $($s[0])" }
-    }
-    Write-Log 'seeded gui-agent registry defaults (SeamlessMode=1, DisableCursor=0, LogDir)'
+    Set-GuiAgentRegistryDefaults
 
     # --- testsigning ----------------------------------------------------------------
     & bcdedit.exe /set testsigning on | Out-Null
@@ -296,6 +484,90 @@ function Invoke-Stage2 {
         }
     }
 
+    # --- remove any previously installed QWT ----------------------------------------
+    # Rationale in the file header. Without this the MSI reports success while silently
+    # keeping the old gui-agent.exe (measured 2026-08-06).
+    $binDir = Get-QwtBinDir
+    $deliver = @($script:OurBinaries)
+    $mfPath = Join-Path $Root 'MANIFEST.json'
+    if (Test-Path -LiteralPath $mfPath) {
+        $mfj = Get-Content -LiteralPath $mfPath -Raw | ConvertFrom-Json
+        if ($mfj.PSObject.Properties.Name -contains 'reference_binaries' -and $mfj.reference_binaries) {
+            $names = @($mfj.reference_binaries.PSObject.Properties.Name)
+            if ($names.Count -gt 0) { $deliver = $names }
+        }
+    }
+    $script:Result.detail.bin_dir = $binDir
+    $script:Result.detail.leftovers_targeted = $deliver
+
+    if ($ResumeAfterUninstall) {
+        # Resumed by the boot task armed below: the previous QWT is already gone, so the
+        # detect/uninstall phase is skipped and this run goes straight to the install.
+        Write-Log 'resumed after the uninstall reboot - skipping detection, proceeding to install'
+        $script:Result.detail.existing_qwt = 'removed before the reboot this run resumed from'
+    } else {
+        $existing = @(Get-InstalledQwt)
+        $script:Result.detail.existing_qwt = @($existing | ForEach-Object {
+            '{0} {1} {2}' -f $_.DisplayName, $_.Version, $_.ProductCode })
+        if ($existing.Count -eq 0) {
+            Write-Log 'no previously installed Qubes Windows Tools found - clean install path'
+        } else {
+            foreach ($e in $existing) {
+                Write-Log "found existing QWT: '$($e.DisplayName)' $($e.Version) $($e.ProductCode)"
+            }
+            Stop-QwtRuntime
+            $needReboot = Uninstall-ExistingQwt -Products $existing
+            # Only products we actually tried to remove count here: a non-MSI Uninstall key
+            # is logged and skipped above, and must not turn into a hard failure.
+            $tried = @($existing | Where-Object { $_.IsMsi } | ForEach-Object { $_.ProductCode })
+            $still = @(Get-InstalledQwt | Where-Object { $tried -contains $_.ProductCode })
+            if ($still.Count -gt 0 -and -not $needReboot) {
+                Fail ("msiexec /x reported success but these products are still registered: " +
+                      (($still | ForEach-Object { $_.ProductCode }) -join ' '))
+            }
+
+            if ($needReboot) {
+                # Cross-reboot continuation, reusing the SAME -Auto boot-resume task as
+                # stage 1 (Set-BootResume/Clear-BootResume) with -ResumeAfterUninstall
+                # added, so the resumed run re-enters stage 2 and skips straight to the
+                # install. Nothing re-arms the task in the resumed run, so at most one
+                # uninstall reboot can ever happen. Without -Auto the exit code is 10,
+                # which install.cmd already reports as "reboot, then run me again"; that
+                # re-run finds nothing registered and takes the clean path.
+                # The leftover sweep is deliberately left for AFTER the reboot: the reboot
+                # is exactly when a file that was locked stops being locked.
+                $script:Result.stage = 'stage2-uninstall-reboot'
+                $script:Result.ok = $true
+                $script:Result.reboot_needed = $true
+                $script:Result.detail.next = 'reboot, then the install phase runs'
+                $self = Join-Path $Root 'Install-QwtImproved.ps1'
+                if ($Auto) {
+                    $extra = @()
+                    if ($InstallIddDriver) { $extra += '-InstallIddDriver' }
+                    if ($NoPvNetwork)      { $extra += '-NoPvNetwork' }
+                    $extra += '-Auto'
+                    $extra += '-ResumeAfterUninstall'
+                    Set-BootResume -ScriptPath $self -ExtraArgs $extra
+                    Write-Log 'removing the previous QWT requires a reboot - rebooting in 15 s, the install resumes automatically'
+                    Emit-ResultThenReboot 10
+                }
+                Write-Log 'removing the previous QWT requires a reboot'
+                Write-Log "REBOOT NOW, then run again elevated:  $self"
+                Emit-Result 10
+            }
+        }
+    }
+
+    # Always, on every path that reaches the install: nothing of ours may be running and
+    # none of the files we are about to deliver may still be on disk. A guest where QWT
+    # was uninstalled by hand has no registration left but DOES keep the old binaries
+    # (measured), and that alone is enough to make Windows Installer skip them.
+    Stop-QwtRuntime
+    $script:Result.detail.leftover_sweep = Remove-QwtLeftovers -BinDir $binDir -Files $deliver
+    # The uninstall takes HKLM\Software\Invisible Things Lab\Qubes Tools with it, so the
+    # seeded gui-agent defaults have to be rewritten before the MSI's AppSearch runs.
+    Set-GuiAgentRegistryDefaults
+
     # --- VC++ runtime (the Burn bundle's prerequisite package) ----------------------
     $vc = Join-Path $Root 'msi\vc_redist.x64.exe'
     Write-Log 'installing vc_redist.x64.exe'
@@ -318,10 +590,18 @@ function Invoke-Stage2 {
 
     $msi = Join-Path $Root 'msi\installer.msi'
     $msiLog = 'C:\qwt-install.log'
+    # REINSTALLMODE=amus is a SECOND, independent guard against the same defect the
+    # uninstall-first phase above addresses: 'a' means "copy all files regardless of
+    # version", i.e. it disables exactly the file-versioning rule that kept the old
+    # gui-agent.exe. Both are present on purpose - the uninstall can be defeated by a
+    # product that refuses to remove itself or by a file we could not delete, and
+    # REINSTALLMODE only takes effect on paths where Windows Installer consults it. If
+    # either mechanism works, our agent lands; the hash check below decides.
     Write-Log "running msiexec ADDLOCAL=$addlocal (verbose log: $msiLog)"
     $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
         '/i', "`"$msi`"", '/qn', '/norestart',
-        "ADDLOCAL=$addlocal", 'REBOOT=ReallySuppress', 'MSIFASTINSTALL=7',
+        "ADDLOCAL=$addlocal", 'REBOOT=ReallySuppress', 'REINSTALLMODE=amus',
+        'MSIFASTINSTALL=7',
         '/l*v', "`"$msiLog`""
     )
     if ($p.ExitCode -notin 0, 3010) { Fail "msiexec failed with $($p.ExitCode) - see $msiLog" }
