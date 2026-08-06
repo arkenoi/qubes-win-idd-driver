@@ -3794,3 +3794,16 @@ Visual capture with Word open (instrumentation not needed - the screenshot is th
 - Tooling note: `dump-windows.exe` is INTERACTIVE ("Press ESC to exit"), so it produces no
   output when run from a scheduled task - it needs a non-interactive/oneshot flag before it
   can serve as an automated probe. The session-0 limitation is real but secondary to this.
+
+# 2026-08-06 (guest state at session end)
+
+win-idd-test: agent **8468926D** (our M7 build), **SeamlessMode=1** (switched from the T2
+fullscreen config to attempt the Office compound-window check), netvm **core-net** attached,
+Office 365 evaluation installed, Windows Update current. The seamless Office check did NOT
+complete: after the mode switch + reboot the guest was still at "Please wait" (logon) when
+Word was launched, so only one window (0x2003c) had been mapped - the count is meaningless.
+Re-run needs: boot -> wait for the desktop to settle -> launch Word -> count via the agent's
+SendWindowMap lines (qtest shot cannot be used in seamless mode: `import -window` fails on
+layered windows, documented earlier).
+Note for the next session: to return to the T2 resize configuration set SeamlessMode=0 in
+both `…\Qubes Tools` and `…\Qubes Tools\gui-agent` and reboot.
