@@ -3871,3 +3871,118 @@ E2E status: clean-install + package-install pipeline works end to end (ISO -> Wi
 payload -> certs -> MSI -> reboot) and is now reproducible via scratchpad/reprovision.sh;
 the ACCEPTANCE fails at this one check, which is a genuine product defect worth the whole
 exercise.
+
+# 2026-08-06 (branch t2/installer-upgrade-fix) — FIX for the upgrade path: uninstall first
+
+Applied to `packaging/setup/Install-QwtImproved.ps1` (commits f32f100, 7b2f84d). Addresses
+the defect measured earlier today: on a guest that already had QWT, msiexec rc=3010 and
+every component updated except gui-agent.exe (still old across a reboot) — Windows
+Installer's file-versioning rule, our binaries carrying no increasing FILEVERSION.
+
+Stage 2 now, before the install:
+1. `Stop-QwtRuntime` — signal `Global\QGA_SHUTDOWN` (graceful, releases grants), stop the
+   `QubesGuiWatchdog` service (it respawns the agent, so it goes first), then force-kill
+   `gui-agent.exe` / `gui-watchdog.exe`.
+2. `Get-InstalledQwt` — the Uninstall registry hives (HKLM + WOW6432Node), DisplayName
+   `^Qubes\s+(Windows\s+)?Tools`. Deliberately NOT Win32_Product: enumerating that class
+   reconfigures every registered product.
+3. `msiexec /x <ProductCode> /qn /norestart REBOOT=ReallySuppress /l*v+ "C:\qwt-uninstall.log"`
+   per product; 0 / 3010 / 1605 accepted, anything else is fatal.
+4. `Remove-QwtLeftovers` — delete the files the package delivers (from MANIFEST.json
+   `reference_binaries`: gui-agent.exe, gui-watchdog.exe) out of the QWT bin dir, because
+   `msiexec /x` measurably leaves them there. Locked files are renamed aside. This sweep
+   runs on EVERY path into the install, including "nothing registered" — a hand-uninstalled
+   guest has no registration but does keep the binaries.
+5. Re-seed the gui-agent registry defaults: the uninstall takes
+   `HKLM\Software\Invisible Things Lab\Qubes Tools` with it, so the stage-1 seeding would
+   otherwise be gone before the MSI's AppSearch runs.
+
+Cross-reboot: if the uninstall returns 3010 the run arms the EXISTING `-Auto` resume task
+(`schtasks /SC ONSTART /RU SYSTEM`, name `QwtImprovedSetup`) with the new internal
+`-ResumeAfterUninstall` switch and reboots; the resumed run re-enters stage 2 (testsigning
+is active) and skips detection/uninstall. Nothing re-arms the task in the resumed run, so at
+most one uninstall reboot is possible. Without `-Auto` the run exits 10 and the manual re-run
+finds nothing registered and takes the clean path.
+
+Belt and braces: `REINSTALLMODE=amus` added to the install command line ('a' = copy all files
+regardless of version). Both mechanisms are intentional — the uninstall can be defeated by a
+file we cannot delete; REINSTALLMODE only applies where Windows Installer consults it.
+
+The post-install gui-agent.exe hash check is UNCHANGED. It is the acceptance gate and it is
+the thing that caught the defect.
+
+NOT VERIFIED HERE (needs a guest, orchestrator-side): that the upgrade path now ends with the
+hash check passing; that `msiexec /x` on this MSI returns 3010 and thus that the resume path
+is ever exercised; the graceful `Global\QGA_SHUTDOWN` open from a SYSTEM context. CI only
+proves the script parses and is staged into the artifact.
+
+## 2026-08-06 — stock ISO + separate answer disc (answering "can it be a virtual removable drive?")
+
+Windows Setup scans the root of every *removable* drive for `autounattend.xml`. Qubes
+presents attached block devices as fixed disks by default, but `--option devtype=cdrom`
+makes the frontend a CD-ROM. **Measured today:** `qvm-device block assign --option
+devtype=cdrom --ro win11-fresh win-idd-mgmt:loop2` is accepted (rc=0; a second assign
+errors with "already assigned", proving it stuck). So a second virtual CD is available.
+
+That gives a two-disc install: CD 1 = the vendor ISO, byte-for-byte untouched, booted;
+CD 2 = a ~1 MB image (`mgmt/build-answer-disc.sh`, added today) with `autounattend.xml`
+at its root plus `\payload`.
+
+The one non-obvious requirement: `qvm-start --cdrom` assignment does NOT survive the
+guest reboot that ends the image-apply phase (the domain is destroyed), and a stock ISO
+cannot carry `sources\$OEM$\$1\payload`, which is how the repacked image gets the payload
+onto C:. So the answer disc must be attached **persistently** (`qvm-device block assign`),
+which keeps it present at first logon; the drive-letter scan already in our
+`autounattend.xml` FirstLogonCommands then finds `%d:\payload\setup.cmd` unchanged.
+
+Status: **designed and the attach mechanism is verified; the end-to-end install on this
+route is NOT yet proven.** Whether Setup actually reads the answer file off the second
+CD needs one full install cycle to demonstrate, and every result produced so far came
+from the repack route (`build-unattended-iso.sh`), which stays the supported path. Do not
+report the two-disc route as working until an install has completed on it.
+
+## 2026-08-06 — UPGRADE PATH: fixed and verified on a guest (was: MSI silently kept the old agent)
+
+**Defect** (found 2026-08-06 on the clean-guest E2E): installing the release package over an
+existing QWT reported success while leaving stock `gui-agent.exe` in place. Windows Installer
+will not overwrite a file whose version is not newer, and our agent carries the same version
+resource as ITL's. Every behaviour claim would have been made about a binary that was not
+running.
+
+**Fix** (`t2/installer-upgrade-fix`, f32f100 + 7b2f84d): the installer now detects a registered
+QWT, stops the watchdog and agent (`Global\QGA_SHUTDOWN`, then service stop, then force-kill),
+uninstalls the product, sweeps leftover delivered binaries, re-seeds the gui-agent registry
+defaults the uninstall removes, and only then installs - plus `REINSTALLMODE=amus` as an
+independent guard. The uninstall returns 3010, so the run arms a SYSTEM boot task and resumes
+after the reboot.
+
+**Measured on win10-e2e** (a guest carrying stock QWT 4.2.2.0 `{AA91BD3B-...}` and agent
+`4B4CE2B1`), full log in the guest at `C:\qwt-improved-install.log`:
+
+| step | result |
+|---|---|
+| payload verification | 19/19 files match SHA256SUMS.txt (twice: source, then staged copy) |
+| existing QWT detected | `Qubes Windows Tools v4.2.2.0 {AA91BD3B-D8C5-420C-AB85-D73C328ADE6F}` |
+| runtime stopped | QGA_SHUTDOWN signalled, watchdog Stopped, 1 x gui-agent.exe force-terminated |
+| uninstall | rc=3010, resume task armed, rebooted |
+| resumed run | detection skipped, leftover sweep: removed [] absent [gui-agent.exe gui-watchdog.exe] stuck [] |
+| install | vc_redist rc=0, msiexec rc=3010 |
+| **acceptance gate** | **installed gui-agent.exe == manifest 77607793a82d… — PASS** |
+| boot path | guest rebooted itself; back up with agent running, hash still 77607793, resume task retired |
+
+Agent hash went **4B4CE2B1 (stock) → 77607793 (ours)**. Before the fix the same guest stayed on
+4B4CE2B1 after a reported-successful install.
+
+Honest limits of this run:
+- The package used was the previously built artifact with the fixed `Install-QwtImproved.ps1`
+  and `README.txt` dropped in and SHA256SUMS regenerated for those two entries, because GitHub's
+  Windows runners left CI queued for over an hour. CI copies both files verbatim
+  (`packaging/make-setup.ps1`), so the logic tested is the shipped logic, but the *artifact*
+  gate still has to be re-run against a real CI build.
+- The leftover sweep reported the binaries ABSENT - the uninstall had already removed them. The
+  delete and rename-aside branches are therefore still unexercised.
+- Visual confirmation could not be obtained: `qtest shot` returned an empty tar for win10-e2e
+  **and for the win-idd-test control**, so the dom0 screenshot service is the thing that is
+  broken, not the guest. Functional evidence instead: the agent log shows seamless mode
+  (`mode=s`), `SendWindowMap` of the Notepad HWND, and a continuous QGAPERF frame stream with
+  `win=1`. Recorded as "not visually confirmed", not as a visual pass.
