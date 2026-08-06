@@ -148,9 +148,19 @@ rm -rf "$WORK/[BOOT]"   # 7z-extracted El Torito images; not needed in the rebui
 # already has a bootable OS - on unattended media that prompt times out and the VM
 # silently boots the OLD install from disk instead of Setup (bitten 2026-08-01: reinstall
 # over an existing guest ran the previous Windows; qrexec answering during "Setup" was
-# the tell). Remove it so CD boot is promptless. UEFI equivalent would be swapping
-# efisys.bin for efisys_noprompt.bin, but Qubes HVMs boot BIOS here.
-rm -f "$WORK/boot/bootfix.bin" && echo "removed boot/bootfix.bin (promptless CD boot)"
+# the tell).
+#
+# KEPT BY DEFAULT since 2026-08-07. Every vendor byte we leave alone is one less
+# difference between this media and what a user installs from, and the prompt cannot
+# actually bite the acceptance flow: reprovision.sh always destroys and recreates the
+# qube, so the disk is BLANK on the CD boot (no prompt is shown at all), and every
+# later restart happens WITHOUT the CD attached. Set REMOVE_BOOTFIX=1 to drop it for
+# a hand-run reinstall over an existing Windows.
+if [ "${REMOVE_BOOTFIX:-0}" = "1" ]; then
+    rm -f "$WORK/boot/bootfix.bin" && echo "removed boot/bootfix.bin (promptless CD boot)"
+else
+    echo "kept boot/bootfix.bin (vendor file; safe because acceptance always boots a blank disk)"
+fi
 
 # ISO9660-without-UDF cannot carry a >4GiB file (see xorriso NOTE below). Win11 24H2
 # install.wim exceeds that -> split into .swm chunks, which Windows Setup consumes
@@ -187,6 +197,39 @@ xorriso -as mkisofs -iso-level 3 -J -joliet-long -D -N -d \
     -b boot/etfsboot.com -no-emul-boot -boot-load-size 8 \
     -eltorito-alt-boot -e efi/microsoft/boot/efisys.bin -no-emul-boot \
     -o "$OUT" "$WORK"
+# Auditable delta: state exactly how this media differs from the vendor ISO, next to the
+# ISO itself. A repack is only defensible if what it changed is enumerable - and on Qubes
+# HVM a repack is UNAVOIDABLE: an assigned second CD is a PV device that WinPE (no Xen PV
+# drivers) cannot see, and SeaBIOS will not boot it either, so the answer file has to be
+# on the one emulated CD (measured 2026-08-07, see FINDINGS).
+DELTA="${OUT%.iso}.vendor-delta.txt"
+{
+    echo "media: $(basename "$OUT")"
+    echo "built from vendor ISO: $(basename "$SRC")"
+    echo "vendor ISO sha256: $(sha256sum "$SRC" | cut -d' ' -f1)"
+    echo
+    echo "ADDED (ours, none of it replaces a vendor file):"
+    echo "  /autounattend.xml        unattended answer file"
+    echo "  /diskprep.cmd            WinPE disk selection by size"
+    echo "  /payload/**              firstboot scripts + our release package"
+    echo "  /sources/\$OEM\$/\$1/payload/**   same payload, copied to C:\\payload by Setup"
+    echo
+    echo "CHANGED (vendor content):"
+    if [ -f "$WORK/sources/install.swm" ] || ls "$WORK"/sources/install*.swm >/dev/null 2>&1; then
+        echo "  /sources/install.wim -> install*.swm   SPLIT, losslessly."
+        echo "    Required because Windows cannot read a >4GiB file from ISO9660 without UDF,"
+        echo "    and this xorriso has no UDF writer. Verified with 'wimlib-imagex verify'"
+        echo "    against the split set; image contents are unchanged."
+    else
+        echo "  (none - install.wim fit and was copied verbatim)"
+    fi
+    [ "${REMOVE_BOOTFIX:-0}" = "1" ] && echo "  /boot/bootfix.bin REMOVED (REMOVE_BOOTFIX=1)" \
+                                     || echo "  /boot/bootfix.bin kept (vendor file untouched)"
+    echo "  ISO structure itself is rebuilt (ISO9660+Joliet, El Torito BIOS+UEFI)."
+    echo
+    echo "NOT changed: every other vendor file is copied byte-for-byte."
+} > "$DELTA"
 [ "${REUSE_EXTRACT:-0}" = "1" ] || rm -rf "$WORK"
 ls -sh "$OUT"
+echo "vendor delta written to $DELTA"
 echo "Attach with:  qvm-start win-idd-test --cdrom=win-idd-mgmt:${OUT/#$HOME/\/home\/user}"
