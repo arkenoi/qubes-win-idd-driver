@@ -86,4 +86,22 @@ h1=$(sha256sum "$OUT/shot1.tar" | cut -d' ' -f1); h2=$(sha256sum "$OUT/shot2.tar
 [ "$h1" != "$h2" ] || fail "shots identical - guest pixels are not reaching dom0"
 log "pixels change confirmed (tars differ)"
 
+# --- 6. the window still contains its own chrome -----------------------------------
+# "Pixels changed" does not mean "the window is intact": a geometry bug cropped the
+# title bar and menu bar out of every maximized window on 2026-08-07 while every
+# numeric check passed. This assertion has been seen to FAIL on that build.
+mkdir -p "$OUT/perwin" && tar -xf "$OUT/shot2.tar" -C "$OUT/perwin" 2>/dev/null
+shopt -s nullglob
+pngs=("$OUT/perwin"/*.png)
+shopt -u nullglob
+[ ${#pngs[@]} -gt 0 ] || fail "per-window shot contained no PNGs - cannot judge window content"
+chrome_ok=0
+for p in "${pngs[@]}"; do
+    out=$("$HERE/tools/check-chrome.py" "$p" 2>&1); rc=$?
+    log "chrome check $(basename "$p"): $out"
+    [ $rc -eq 0 ] && chrome_ok=1
+done
+[ $chrome_ok -eq 1 ] || fail "no captured window contains its chrome (title/menu bar cropped)"
+log "window chrome present"
+
 log "ACCEPT=PASS evidence=$OUT"
