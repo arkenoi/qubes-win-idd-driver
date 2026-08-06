@@ -61,6 +61,14 @@ if grep -q '@[A-Z_]*@' "$WORK/autounattend.xml"; then
     grep -o '@[A-Z_]*@' "$WORK/autounattend.xml" | sort -u >&2
     exit 1
 fi
+# diskprep.cmd sits at the MEDIA ROOT: the answer file's windowsPE RunSynchronous scans
+# drive letters for it (the CD's letter is not fixed in WinPE). Without it the answer file
+# has no DiskConfiguration at all and Setup would stop with nowhere to install - so a
+# missing file is fatal here, not a warning.
+[ -f "$HERE/diskprep.cmd" ] || { echo "mgmt/diskprep.cmd missing - the answer file requires it" >&2; exit 1; }
+cp "$HERE/diskprep.cmd" "$WORK/diskprep.cmd"
+echo "media += diskprep.cmd (size-based disk selection)"
+
 if [ "${3:-}" = "--with-key" ]; then
     sed -i 's#<!--PRODUCTKEY-->#<ProductKey><Key>VK7JG-NPHTM-C97JM-9MPGT-3V66T</Key><WillShowUI>OnError</WillShowUI></ProductKey>#' \
         "$WORK/autounattend.xml"

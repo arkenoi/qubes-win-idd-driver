@@ -42,24 +42,16 @@
           <Order>5</Order>
           <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
         </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Description>partition the largest disk (size-based, not DiskID-based)</Description>
+          <Path>cmd /c for %d in (C D E F G H I J K L M N O P Q R S T U V) do @if exist %d:\diskprep.cmd call %d:\diskprep.cmd</Path>
+        </RunSynchronousCommand>
       </RunSynchronous>
-      <DiskConfiguration>
-        <Disk wcm:action="add">
-          <DiskID>0</DiskID>
-          <WillWipeDisk>true</WillWipeDisk>
-          <CreatePartitions>
-            <CreatePartition wcm:action="add">
-              <Order>1</Order><Type>Primary</Type><Extend>true</Extend>
-            </CreatePartition>
-          </CreatePartitions>
-          <ModifyPartitions>
-            <ModifyPartition wcm:action="add">
-              <Order>1</Order><PartitionID>1</PartitionID>
-              <Format>NTFS</Format><Active>true</Active><Letter>C</Letter>
-            </ModifyPartition>
-          </ModifyPartitions>
-        </Disk>
-      </DiskConfiguration>
+      <!-- NO static DiskConfiguration: WinPE disk order is not guaranteed to match the
+           installed OS's, and a Qubes HVM shows three disks. diskprep.cmd (RunSynchronous
+           order 6) partitions the LARGEST by size and leaves the rest RAW. See the Win10
+           answer file for the incident this prevents. -->
       <ImageInstall>
         <OSImage>
           <InstallFrom>
@@ -67,7 +59,8 @@
               <Key>/IMAGE/NAME</Key><Value>@IMAGE_NAME@</Value>
             </MetaData>
           </InstallFrom>
-          <InstallTo><DiskID>0</DiskID><PartitionID>1</PartitionID></InstallTo>
+          <!-- diskprep.cmd leaves exactly one installable NTFS partition (C:) -->
+          <InstallToAvailablePartition>true</InstallToAvailablePartition>
         </OSImage>
       </ImageInstall>
       <!-- No RunSynchronous payload copy here: windowsPE answer-file settings execute
