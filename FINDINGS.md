@@ -3940,3 +3940,49 @@ route is NOT yet proven.** Whether Setup actually reads the answer file off the 
 CD needs one full install cycle to demonstrate, and every result produced so far came
 from the repack route (`build-unattended-iso.sh`), which stays the supported path. Do not
 report the two-disc route as working until an install has completed on it.
+
+## 2026-08-06 — UPGRADE PATH: fixed and verified on a guest (was: MSI silently kept the old agent)
+
+**Defect** (found 2026-08-06 on the clean-guest E2E): installing the release package over an
+existing QWT reported success while leaving stock `gui-agent.exe` in place. Windows Installer
+will not overwrite a file whose version is not newer, and our agent carries the same version
+resource as ITL's. Every behaviour claim would have been made about a binary that was not
+running.
+
+**Fix** (`t2/installer-upgrade-fix`, f32f100 + 7b2f84d): the installer now detects a registered
+QWT, stops the watchdog and agent (`Global\QGA_SHUTDOWN`, then service stop, then force-kill),
+uninstalls the product, sweeps leftover delivered binaries, re-seeds the gui-agent registry
+defaults the uninstall removes, and only then installs - plus `REINSTALLMODE=amus` as an
+independent guard. The uninstall returns 3010, so the run arms a SYSTEM boot task and resumes
+after the reboot.
+
+**Measured on win10-e2e** (a guest carrying stock QWT 4.2.2.0 `{AA91BD3B-...}` and agent
+`4B4CE2B1`), full log in the guest at `C:\qwt-improved-install.log`:
+
+| step | result |
+|---|---|
+| payload verification | 19/19 files match SHA256SUMS.txt (twice: source, then staged copy) |
+| existing QWT detected | `Qubes Windows Tools v4.2.2.0 {AA91BD3B-D8C5-420C-AB85-D73C328ADE6F}` |
+| runtime stopped | QGA_SHUTDOWN signalled, watchdog Stopped, 1 x gui-agent.exe force-terminated |
+| uninstall | rc=3010, resume task armed, rebooted |
+| resumed run | detection skipped, leftover sweep: removed [] absent [gui-agent.exe gui-watchdog.exe] stuck [] |
+| install | vc_redist rc=0, msiexec rc=3010 |
+| **acceptance gate** | **installed gui-agent.exe == manifest 77607793a82d… — PASS** |
+| boot path | guest rebooted itself; back up with agent running, hash still 77607793, resume task retired |
+
+Agent hash went **4B4CE2B1 (stock) → 77607793 (ours)**. Before the fix the same guest stayed on
+4B4CE2B1 after a reported-successful install.
+
+Honest limits of this run:
+- The package used was the previously built artifact with the fixed `Install-QwtImproved.ps1`
+  and `README.txt` dropped in and SHA256SUMS regenerated for those two entries, because GitHub's
+  Windows runners left CI queued for over an hour. CI copies both files verbatim
+  (`packaging/make-setup.ps1`), so the logic tested is the shipped logic, but the *artifact*
+  gate still has to be re-run against a real CI build.
+- The leftover sweep reported the binaries ABSENT - the uninstall had already removed them. The
+  delete and rename-aside branches are therefore still unexercised.
+- Visual confirmation could not be obtained: `qtest shot` returned an empty tar for win10-e2e
+  **and for the win-idd-test control**, so the dom0 screenshot service is the thing that is
+  broken, not the guest. Functional evidence instead: the agent log shows seamless mode
+  (`mode=s`), `SendWindowMap` of the Notepad HWND, and a continuous QGAPERF frame stream with
+  `win=1`. Recorded as "not visually confirmed", not as a visual pass.
