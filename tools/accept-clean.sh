@@ -23,8 +23,11 @@ qq() { QTEST_VM="$VM" timeout "${QT:-60}" "$HERE/tools/qtest" "$@"; }
 
 # --- 1. clean-slate reinstall (reprovision has its own flock + qrexec wait) ---------
 log "reprovisioning from $LOOP (this destroys $VM)"
-"$HERE/scratchpad/reprovision.sh" "$VM" "$LOOP" 2>&1 | tee -a "$OUT/accept.log" \
-    || fail "reprovision did not reach qrexec"
+# PIPESTATUS, not $?: with `cmd | tee`, $? is TEE's status, so a failing reprovision was
+# reported as success and the harness went on to poll a guest that had never started
+# (measured 2026-08-07 - the run continued for minutes after reprovision exited 1).
+"$HERE/scratchpad/reprovision.sh" "$VM" "$LOOP" 2>&1 | tee -a "$OUT/accept.log"
+[ "${PIPESTATUS[0]}" -eq 0 ] || fail "reprovision failed (see $OUT/accept.log)"
 
 # --- 2. wait for OUR installer to finish (it reboots the guest up to 3 times) -------
 # The finished marker is a RESULT trailer with ok:true in C:\qwt-improved-install.log
