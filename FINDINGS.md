@@ -4299,3 +4299,40 @@ I verified a NUMBER (reported geometry == work area) and called it a pass withou
 the resulting pixels; a `qtest shot` of that window would have shown the missing menu bar
 immediately, and in fact the per-window PNG I captured for an unrelated toast question DID
 show a menu-less Notepad - I looked straight past it.
+
+## 2026-08-07 — CLEAN-ROOM INSTALL ROUTE adopted for Win10 AND Win11 (user directive)
+
+User: *"if we can run unattended install with stock images, why rebuild ISOs at all? it
+breaks our clean room approach"* — and then *"use the answer disc route for win11 too"*.
+
+Both correct, and the first is a CORRECTNESS argument before an efficiency one. Every
+clean-path result before today was produced on media I had repacked: `bootfix.bin` removed,
+`install.wim` split into `.swm`, `$OEM$` injected, boot layout rebuilt. An install passing on
+that proves the package installs on *my reconstruction* of Windows media, not on the vendor's.
+That is precisely the property the clean-path acceptance exists to establish, and repacking
+spends it.
+
+New route, now used for both guests:
+- **CD 1 = the vendor ISO, byte-for-byte untouched**, booted via `qvm-start --cdrom`.
+- **CD 2 = a 29 MB answer disc** (`mgmt/build-answer-disc.sh`): `autounattend.xml` +
+  `diskprep.cmd` + `\payload` (incl. the release package, installed with `/auto /idd`),
+  assigned PERSISTENTLY (`qvm-device block assign --option devtype=cdrom --ro`) so it
+  survives the installer's reboots — a `--cdrom` assignment does not.
+- `scratchpad/reprovision.sh` gains `ANSWER_LOOP=loopN` and ASSERTS the assignment stuck;
+  a silently-absent answer disc is indistinguishable from "the answer file was ignored"
+  an hour later, which already cost one cycle today.
+
+Cost per iteration: **1 second / 29 MB**, against ~15 min / 5.8 GB / ~12 GB of transient
+disk for a repack. The repack route filled `/home` to 100 % and killed its own build today.
+
+Win11 disc verified before use: 6 LabConfig bypass entries (TPM/SecureBoot/RAM/CPU/Storage),
+image name "Windows 11 Enterprise Evaluation" (confirmed by `wiminfo` against the eval ISO,
+single-image WIM), `InstallToAvailablePartition`, `diskprep.cmd` staged at the disc root,
+en-US locale matching the en-US media, payload calling `install.cmd /auto /idd`.
+
+Sequencing note: the Win11 run is CHAINED behind proof that the two-disc route boots on
+Win10 (its install reaching qrexec), not started blindly in parallel — if the route were
+broken, two 45-minute cycles would discover the same defect instead of one.
+
+Status: both runs in flight. The repack route (`build-unattended-iso.sh`) stays in the tree
+as a fallback but is NO LONGER the default for acceptance.
