@@ -500,11 +500,15 @@ switch ($Action) {
         $out = Join-Path $qdir "exp9-$Tag.json"
         Remove-Item $out -Force -ErrorAction SilentlyContinue
         if (Test-Path $out) { KV measure FAIL; KV measure_reason stale-json-undeletable; exit 1 }
-        # Concurrent desktop activity (SS2.4): 45 s outlasts the 30 s probe window.
+        # Concurrent desktop activity (SS2.4): 90 s outlasts the 75 s probe window.
+        # Window widened from 30 s after a measured 15-acquired run tripped the
+        # activity-effectiveness gate (>=20): the damage rate on this guest is
+        # ~0.5 frames/s, so 30 s could not reach 20 even with activity running.
+        # The gate stays at 20 - the probe gets long enough to earn it.
         Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass',
-            '-File', "`"$actgen`"", '-Seconds', '45' -WindowStyle Minimized
+            '-File', "`"$actgen`"", '-Seconds', '90' -WindowStyle Minimized
         Start-Sleep 2
-        & $probe 100 30 --json $out 2>&1 | ForEach-Object { $_ }
+        & $probe 200 75 --json $out 2>&1 | ForEach-Object { $_ }
         # NOT a verdict: ddaprobe exits 0 whenever duplication succeeds, flag or no flag
         # (FINDINGS 2026-08-04 cont 3). Recorded for the log only; the JSON decides.
         KV probe_exit $LASTEXITCODE
