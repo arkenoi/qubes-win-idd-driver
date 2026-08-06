@@ -181,14 +181,23 @@ function Set-BootResume {
     # /DELAY: ONSTART fires very early. msiexec needs the Windows Installer service, and
     # the PV driver install needs PnP settled; a minute of slack costs nothing and avoids
     # a class of "worked when I ran it by hand" failures.
-    & schtasks.exe /Create /TN $script:TaskName /SC ONSTART /DELAY 0001:00 `
-                   /RU SYSTEM /RL HIGHEST /F /TR $cmd | Out-Null
+    # Same native-stderr trap as Clear-BootResume: schtasks can warn on stderr (e.g.
+    # overwriting an existing task with /F) and that would terminate under
+    # ErrorActionPreference='Stop'. Judge the EXIT CODE, never the stream.
+    try { & schtasks.exe /Create /TN $script:TaskName /SC ONSTART /DELAY 0001:00 `
+                   /RU SYSTEM /RL HIGHEST /F /TR $cmd *>&1 | Out-Null } catch { }
     if ($LASTEXITCODE -ne 0) { Fail "schtasks /Create failed ($LASTEXITCODE) - cannot arm the post-reboot resume" }
     Write-Log "boot resume armed as SYSTEM task '$script:TaskName': $cmd"
 }
 
 function Clear-BootResume {
-    & schtasks.exe /Delete /TN $script:TaskName /F 2>&1 | Out-Null
+    # schtasks writes "ERROR: The system cannot find the file specified." to STDERR when
+    # the task does not exist - and under $ErrorActionPreference='Stop' PowerShell turns
+    # a native command's stderr into a TERMINATING error. So this no-op aborted the whole
+    # install whenever stage 2 ran without a prior -Auto stage 1 (measured 2026-08-06 on a
+    # fresh guest whose boot ISO had already enabled testsigning). Same trap as the
+    # pnp-revert setup script hit earlier; swallow it explicitly.
+    try { & schtasks.exe /Delete /TN $script:TaskName /F *>&1 | Out-Null } catch { }
     $global:LASTEXITCODE = 0
 }
 
