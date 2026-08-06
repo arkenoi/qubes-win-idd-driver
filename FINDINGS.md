@@ -4160,3 +4160,35 @@ between runs. Fix in driver/IddSampleDriver/Driver.cpp: image size declared UNDE
 (bytes 21-22 and DTD 66-68 zeroed, checksum 0x53→0x78) which pins the recommendation at
 96 DPI for every mode; per-monitor user overrides persist via the M1 stable identity.
 Needs the next driver build to take effect.
+
+## 2026-08-07 — seamless maximize overflows the dom0 workspace (user-reported); mechanism measured
+
+User: "why is the window maximized beyond workspace area (same as the snapping bug we fixed
+in non-seamless mode)?" All numbers below measured on win-idd-test (live guest + agent log).
+
+Three separate mechanisms, two real defects:
+
+1. **First ~3.5 min after boot the work area is INFERRED and under-margined.** Until dom0's
+   real work area + frame extents arrived (23:54:52), WaCompute fell back to origin
+   inference: `(0,31)-(5120,1440)` — zero bottom/right margin. Windows maximized during
+   that window overflow the dom0 workspace bottom. Self-corrects only when the next apply
+   fires WaRefitProc; windows launched later use the good value.
+2. **Maximized windows carry Windows' invisible resize borders (~7 px at 96 dpi, ~10 px at
+   150 %) that overhang ALL screen edges** - measured: work area `(5,56)-(5115,1435)`,
+   Word zoomed rect `(-6,45)-(5126,1446)` (DPI-descaled). The agent maps the RAW rect
+   into dom0, so even a correctly maximized window paints past the dom0 screen/workspace
+   edges. The Linux agent clamps zoomed windows to the work area; ours does not yet.
+   **Fix class: clamp IsZoomed windows' reported geometry to the applied work area.**
+3. **Permanent Explorer-vs-agent work-area battle**: Explorer recomputes
+   `(0,0)-(5120,1380)` from its own taskbar and overwrites the agent's value; the drift
+   check re-asserts every 2 s. Converges but churns; the log shows the fight continuing
+   for minutes. Also transient `SPI_SETWORKAREA` 0x57 during resolution changes (rect
+   validated against the old screen) - benign, self-healing, but noisy.
+
+Also answered: Word comes up maximized because Office persists its window state - normal.
+The DPI part of the report is already fixed in source (EDID image size undefined, pending
+driver rebuild in the queued release build).
+
+Disposition: recorded as KNOWN ISSUE for this release cycle; the clamp fix (2) reopens the
+agent binary during release qualification, so it goes in the next agent build together with
+a re-run of the seamless gate. (1) is mitigated by the same clamp; (3) tracked.
