@@ -1,0 +1,51 @@
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\exp9-guest.ps1 -Action measure -Tag round-3-bda
+ddaprobe 1.0 - Desktop Duplication scoping probe
+  host=WIN-IDD-TEST user=user session=1 elevated=yes
+  winsta=WinSta0 desktop=Default os_build=19045.6466
+  frames=200 max_seconds=75.0 timeout_ms=100 map=yes
+
+--- output #0  (adapter 0, output 0) ------------------------------
+  adapter               : Microsoft Basic Render Driver
+  output device name    : \\.\DISPLAY1
+  attached to desktop   : YES
+  desktop coordinates   : (0,0)-(1920,1080)  1920x1080
+  output rotation       : identity
+  D3D11 feature level   : 11_1
+  duplication mode      : 1920x1080 @ 1.00 Hz, format B8G8R8A8_UNORM, scanline 1, rot identity
+  *** DesktopImageInSystemMemory : TRUE ***   (capture.c:176-183 OK)
+  MapDesktopSurface     : OK, pitch=7680, pBits=non-null
+
+  capture loop: 776 iterations in 75055.8 ms
+    acquired frames     : 118  (presented 118, mouse-only 0, accumulated 119)
+    timeouts            : 658  (blocked mean 109.40 ms, max 124.94 ms)
+    errors              : 0  (ACCESS_LOST 0, re-duplications 0, failed 0)
+    pointer shape updates: 0
+
+  AcquireNextFrame latency over 118 successful calls (ms):
+    min 7.640   mean 25.589   median 30.911   p95 31.942   max 94.845
+
+  frame metadata (1888 bytes total reported by DXGI):
+    dirty rects  : total 118 over 118 frames (max 1/frame), area 2407954 px
+    MOVE  rects  : total 0 over 0 frames (max 0/frame), area 0 px  <== empty this run (matches capture.c:441 note)
+    per acquired frame: 1.00 dirty, 0.00 move, 20406 px dirty area
+
+=== SUMMARY ===
+  outputs reported             : 1
+  any output attached          : yes
+  any output duplicated        : yes
+  primary output (0,0)         : 0
+  agent's chosen output        : 0 (adapter 0, first attached)
+  DesktopImageInSystemMemory   : all=TRUE any=TRUE
+  -> capture.c:176-183 verdict : PASS (agent capture path survives on its chosen output)
+  move rects ever non-empty    : no
+
+=== DDAPROBE JSON ===
+{"tool":"ddaprobe","version":"1.0","host":"WIN-IDD-TEST","user":"user","session_id":1,"elevated":true,"window_station":"WinSta0","desktop":"Default","os_build":"19045.6466","desktop_attach_note":"","options":{"frames":200,"max_seconds":75.0000,"timeout_ms":100,"only_output":-1,"map_probe":true},"factory_hr":"0x00000000","factory_error":"","outputs":[{"global_index":0,"adapter_index":0,"output_index":0,"adapter":"Microsoft Basic Render Driver","device_name":"\\\\.\\DISPLAY1","attached_to_desktop":true,"desktop_coordinates":{"left":0,"top":0,"right":1920,"bottom":1080},"rotation":"identity","output1_ok":true,"output1_hr":"0x00000000","device_ok":true,"device_hr":"0x00000000","device_hr_name":"S_OK","feature_level":"11_1","duplication_ok":true,"duplication_hr":"0x00000000","duplication_hr_name":"S_OK","duplication_hr_text":"The operation completed successfully.","desktop_image_in_system_memory":true,"desktop_image_in_system_memory_ever_false":false,"mode_changes":0,"mode":{"width":1920,"height":1080,"refresh_numerator":4294967294,"refresh_denominator":4294967294,"format":87,"format_name":"B8G8R8A8_UNORM","scanline_ordering":1,"rotation":"identity"},"map_desktop_surface":{"attempted":true,"ok":true,"hr":"0x00000000","hr_name":"S_OK","pitch":7680,"pbits_non_null":true},"loop":{"iterations":776,"acquired":118,"timeouts":658,"errors":0,"access_lost":0,"reduplications":0,"reduplication_failures":0,"presented_frames":118,"mouse_only_frames":0,"pointer_shape_updates":0,"accumulated_frames":119,"elapsed_ms":75055.7967},"acquire_latency":{"n":118,"min_ms":7.6403,"mean_ms":25.5893,"median_ms":30.9105,"p95_ms":31.9421,"max_ms":94.8446},"timeout_block":{"n":658,"min_ms":104.5803,"mean_ms":109.3992,"median_ms":109.3618,"p95_ms":109.5459,"max_ms":124.9393},"metadata":{"bytes_total":1888,"dirty_rects_total":118,"dirty_frames":118,"dirty_max_per_frame":1,"dirty_area_total_px":2407954,"move_rects_total":0,"move_frames":0,"move_max_per_frame":0,"move_area_total_px":0,"move_rects_ever_nonempty":false,"errors":0,"last_error_hr":"0x8000000A","last_error_hr_name":"UNKNOWN"},"errors_seen":[]}],"summary":{"output_count":1,"any_attached":true,"any_duplicated":true,"primary_output_index":0,"agent_output_index":0,"desktop_image_in_system_memory_all":true,"desktop_image_in_system_memory_any":true,"agent_capture_would_work":true,"move_rects_ever_nonempty":false}}
+EXP9 probe_exit=0
+EXP9 json_present=True
+EXP9 measure=OK
+
+C:\Windows\system32>
