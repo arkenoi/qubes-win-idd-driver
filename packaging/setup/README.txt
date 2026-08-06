@@ -63,9 +63,12 @@ HOW TO INSTALL
 --------------
 From the ISO (recommended -- no networking needed):
 
-  1. Attach the ISO to the Windows qube as a CD, e.g. from dom0:
-         qvm-start <vm> --cdrom=<some-vm>:/path/to/qwt-improved-setup.iso
-     or attach the loop device with qvm-block.
+  1. Attach the ISO to the Windows qube as a CD. In the qube holding the file:
+         udisksctl loop-setup --read-only --file qwt-improved-setup.iso
+     (note the loopN it reports), then from dom0, with the guest HALTED:
+         qvm-start <win-vm> --cdrom=<holder-vm>:loopN
+     A running guest can instead take it via `qvm-block attach`. If dom0 says
+     the device is "already assigned", unassign it first.
   2. In the guest, open the CD drive, right-click install.cmd -> Run as
      administrator.  (Or from an elevated cmd:  D:\install.cmd )
   3. The machine reboots. Log back in, run install.cmd again -- from the CD or
