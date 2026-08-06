@@ -355,13 +355,15 @@ declares the image size as undefined, which pins the recommendation at 96 DPI fo
 resolution; a manual scaling override still works and persists. *Verified in source +
 checksum; live verification pending the next driver install.*
 
-### 4.4 Maximized windows respect the dom0 workspace
+### 4.4 Maximized windows and the dom0 workspace — NOT FIXED (attempt withdrawn)
 
-Maximized windows were clamped to the guest screen, not to the work area dom0 can actually
-display — measured ~11 px overflow (plus a wasteful configure/grant round-trip), and a
-genuine full-workspace overflow in the first minutes of a boot before dom0's work-area feed
-arrives. The clamp now targets the applied work area, with screen bounds only as the
-pre-feed fallback. *Live verification in progress.*
+A maximized window can still overflow the dom0 workspace, most visibly in the first minutes
+of a boot before dom0's work-area feed reaches the guest. An attempt to fix this by clamping
+the reported window geometry to the work area was **made and withdrawn the same day**: the
+window rectangle is also what the per-window capture crops against, so clamping it cut the
+title bar and menu bar off the window's own content. The real fix belongs in the work-area
+path — making the guest work area stick so Windows maximizes into the right rectangle — and
+is not in this release.
 
 ### 4.5 Honest open items (this round)
 
