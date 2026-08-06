@@ -61,8 +61,15 @@ if [ -n "${ANSWER_LOOP:-}" ]; then
     fi
     # Prove it stuck rather than assuming: a silently-absent answer disc looks exactly
     # like "the answer file was ignored" an hour later.
-    qvm-device block list "$VM" 2>/dev/null | grep -q "$ANSWER_LOOP" \
-        || { log "FAIL: answer disc $ANSWER_LOOP is not listed on $VM after assign"; exit 1; }
+    # NOT via `qvm-device block list` - this qube has no permission for it, so that check
+    # could never pass (written that way 2026-08-07 and it failed on a run where the
+    # assignment had in fact worked). A SECOND assign is the permitted positive proof:
+    # it errors with "already assigned" exactly when the first one took effect.
+    proof=$(qvm-device block assign --option devtype=cdrom --ro "$VM" "$HOLDER:$ANSWER_LOOP" 2>&1)
+    case "$proof" in
+        *"already assigned"*) log "answer disc assignment verified (re-assign reports already assigned)" ;;
+        *) log "FAIL: answer disc $ANSWER_LOOP did not stick on $VM - re-assign said: $proof"; exit 1 ;;
+    esac
 fi
 
 log "booting from $HOLDER:$LOOP (unattended Windows install)"
