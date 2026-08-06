@@ -131,8 +131,20 @@ vmstate() {
     qvm-ls --fields NAME,STATE 2>/dev/null | awk -v vm="$VMNAME" '$1==vm{print $2}'
 }
 
-mp_json() { # plain modeprobe read -> single-line JSON on stdout (empty on failure)
-    qrun "cd $INC && modeprobe.exe" 120 | grep -E '^\{' | head -1
+mp_json() { # plain modeprobe read -> single VALIDATED JSON line on stdout (empty on failure)
+    # Retry-on-garbage: the first read after a cold boot can yield an empty or
+    # truncated line while the session warms (measured: round-1-bda stopped on a
+    # non-JSON first read while the topology was actually fine). Up to 4 tries.
+    local line try
+    for try in 1 2 3 4; do
+        line=$(qrun "cd $INC && modeprobe.exe" 120 | grep -E '^\{' | head -1)
+        if [ -n "$line" ] && printf '%s' "$line" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+            printf '%s\n' "$line"
+            return 0
+        fi
+        sleep 15
+    done
+    return 1
 }
 
 # ---- cold boot (soak-full.sh reboot_vm, hardened to STOP not return) --------
