@@ -110,6 +110,18 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 QT="$HERE/tools/qtest"
 VM="${QTEST_VM:-win-idd-test}"
+
+# PRECONDITION (user directive 2026-08-06): no OTHER Windows qube may be running -
+# a second Windows guest contends for host CPU and silently corrupts every timing
+# here. Refuse rather than measure noise.
+_others=$(qvm-ls --fields NAME,STATE 2>/dev/null | awk '$2=="Running"||$2=="Transient"{print $1}' \
+          | grep -E '^win' | grep -v -x "$VM" | grep -v -x win-idd-mgmt || true)
+if [ -n "$_others" ]; then
+    echo "REFUSING: other Windows qube(s) running, would contaminate timings:" >&2
+    echo "$_others" >&2
+    echo "shut them down first (qvm-shutdown <vm>)" >&2
+    exit 2
+fi
 INC="${BENCH_INC:-C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt}"
 OUTDIR="${BENCH_OUT:-$HERE/scratchpad/bench-results}"
 GUESTDIR='C:\qbench'
