@@ -4192,3 +4192,27 @@ driver rebuild in the queued release build).
 Disposition: recorded as KNOWN ISSUE for this release cycle; the clamp fix (2) reopens the
 agent binary during release qualification, so it goes in the next agent build together with
 a re-run of the seamless gate. (1) is mitigated by the same clamp; (3) tracked.
+
+## 2026-08-07 — CORRECTION to the seamless-maximize entry above: two claims RETRACTED, one confirmed
+
+An in-source + live investigation (scratchpad/seamless-office-defects.md) refuted the two
+loudest claims in the previous entry and in my report to the user:
+
+- **RETRACTED: "the desktop window is mapped in seamless mode".** It is NOT - window 0 is
+  unmapped by SetSeamlessMode at boot (main.c:1942 path; boot log confirms). The claim came
+  from an instrument bug: the fullshot geometry list enumerates X windows via
+  `xwininfo -root -tree` WITHOUT reading Map State, so a withdrawn window is
+  indistinguishable from a mapped one. Harness fixed (dom0/07, new `mapped` column) -
+  dom0 needs a one-time re-install of that script.
+- **RETRACTED: "Word's main frame is never mapped".** All Word frames were mapped with
+  per-window buffers; the hwnd I chased (0x2032C) is a 5 px MSO_BORDEREFFECT shadow strip,
+  CORRECTLY rejected - silently, because that rejection logs at Verbose while the deployed
+  level is Info. (Also noteworthy: these strips were UNOWNED on this build, so the
+  style-based rule would not catch them; the class rule is load-bearing.)
+- **CONFIRMED (the real defect): the WS_MAXIMIZE clamp used screen bounds, not the applied
+  work area** - maximized Word reported 5120x1395 against dom0's 5120x1384 work area
+  (~11 px overflow + CONFIGURE ping-pong + grant rebuild), and before the dom0 work-area
+  feed lands (~3 min into a boot) maximized windows genuinely ignore the dom0 workspace.
+  This is the mechanism behind the user's "maximized beyond workspace" report. Fixed:
+  agent branch workarea-clamp-maximize (WorkAreaGetApplied + clamp), needs build + gate
+  re-run before it ships.
