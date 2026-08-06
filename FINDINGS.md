@@ -3741,3 +3741,40 @@ Per the user: this was diagnosed sessions ago; the fault is **mirage-firewall as
 netvm**, not this fork and not the PV drivers. GOAL-STATUS.md's stale blocker section is
 now marked RETRACTED in place. Practical rule for this project: test qubes install
 OFFLINE (netvm ''), and use `core-net` when networking is needed.
+
+# 2026-08-06 (release qualification, session close) — what is verified, what is not
+
+**VERIFIED THIS SESSION**
+- **Networking + Windows Update: zero issues** (win-idd-test, netvm `core-net`, cold boot):
+  NIC enumerates (10.137.0.64), DNS + HTTPS OK, WU search/download/install all
+  orcSucceeded, no reboot needed, no CPU burn, qrexec stable. Historical "netvm ⇒
+  unusable" was **mirage-firewall**, re-attributed; stale GOAL-STATUS text retracted.
+- **Office 365 (evaluation) installs unattended on the networked guest** via ODT
+  (`guest/install-office-eval.ps1`), WINWORD.EXE present and launches.
+- **Release package + ISO** built, checksum-verified, MSI proven to carry our agent.
+- **User-facing write-up** `docs/WHAT-CHANGED-FOR-USERS.md`.
+- **Installer bug found by the fresh-guest test and fixed** (schtasks stderr abort).
+- **Benchmark harness bug fixed** (`local a="$1" b="$a"` is rejected under `set -u`), both
+  sides now execute.
+
+**NOT VERIFIED - stated plainly**
+- **Clean-system E2E (Win10 and Win11): BLOCKED.** Any qube started with a CD from this
+  qube fails domain creation: libxl `Stubdom startup timed out / device model did not
+  start`, while the same qube starts fine without the CD, and an 8 MB dummy image fails
+  identically. dom0 qubesd log shows no exception; `/local/domain/121/backend/vbd` does not
+  exist, i.e. the backend node is never created. Next diagnostic: dom0
+  `/var/log/xen/console/guest-*-dm.log` for the stubdom, and `xl info free_memory`.
+- **Office WINDOW BEHAVIOUR: not measured.** Word launches, but enumeration from qrexec
+  runs in session 0 and cannot see session-1 windows (documented trap); the native
+  dump-windows run timed out. Automated + visual Office checks remain OPEN.
+- **Performance vs stock: NOT a valid comparison yet.** Ours: 2614 QGAPERF records
+  collected. Stock: 0 by construction (no instrumentation in ITL's binary, confirmed by
+  string scan), and the dom0 pixel-sampling fallback SATURATED (~0.4 Hz sampling cannot
+  discriminate). A modal dialog was also on screen during part of the run. The harness
+  correctly refused to imply a result. A meaningful comparison needs a metric that exists
+  on both sides (e.g. guest-side gui-agent CPU + a native in-guest frame counter).
+- Clean-system regression run: blocked with the E2E item.
+
+Stock agent for future control runs: extracted from vendor/qwt-4.2.2/installer.msi,
+sha256[0:16] **3D2E6BCEC9F5BD89**, 80,968 bytes (ITL build server pdb path, zero QGAPERF).
+Guest left on our build 8468926D with netvm core-net attached.
