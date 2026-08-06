@@ -4359,3 +4359,36 @@ Both fixed and relaunched. Worth stating plainly: the assertion in (1) was writt
 a silently-missing answer disc is indistinguishable from "the answer file was ignored" an
 hour later - and it was written in a form that could not work. Permission-dependent commands
 must be exercised once by hand before they are used as gates.
+
+## 2026-08-07 — the two-disc "clean room" route is IMPOSSIBLE on Qubes HVM (measured, decisive)
+
+Attempted per the user's directive ("if we can run unattended install with stock images, why
+rebuild ISOs at all?"). It does not work, and the reason is at the platform level, not ours.
+
+Run 1 - `qvm-start --cdrom=<stock ISO>` + answer disc assigned persistently
+(`qvm-device block assign --option devtype=cdrom --ro`, assignment VERIFIED by a second
+assign reporting "already assigned"): Windows Setup stopped at the **locale picker**, i.e.
+`autounattend.xml` was never found. (Screenshot evidence.)
+
+Run 2 - the decisive one. BOTH discs assigned as cdrom, VM started with NO `--cdrom`:
+
+    SeaBIOS (version 1.16.2-1.fc41)
+    Booting from Hard Disk...  Boot failed: not a bootable disk
+    Booting from Floppy...     Boot failed: could not read the boot disk
+    No bootable device.
+
+The firmware sees **no CD-ROM whatsoever**. So `qvm-device block assign --option
+devtype=cdrom` does NOT create an emulated IDE CD-ROM; it creates a Xen PV (xvd*) device.
+Only `qvm-start --cdrom=` produces the QEMU-emulated, bootable CD. WinPE carries no Xen PV
+drivers, so any assigned device is invisible to Windows Setup - which is exactly why run 1
+found no answer file.
+
+**RETRACTION of the 2026-08-06 entry** "stock ISO + separate answer disc ... a second virtual
+CD is available". That conclusion rested solely on the assign COMMAND being accepted (rc=0,
+"already assigned" on a repeat). Command accepted != device present in the guest - the same
+"a check that cannot fail" pattern this file keeps recording. The route was recorded as
+designed-and-verified when only its dom0 half had ever been exercised.
+
+CONSEQUENCE: on Qubes HVM the answer file must live on the ONE booted CD, so unattended
+install requires a repacked ISO. What can still be protected is how MUCH is changed - see
+the minimal-repack note below.
