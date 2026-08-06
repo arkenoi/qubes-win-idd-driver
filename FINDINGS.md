@@ -3915,3 +3915,28 @@ NOT VERIFIED HERE (needs a guest, orchestrator-side): that the upgrade path now 
 hash check passing; that `msiexec /x` on this MSI returns 3010 and thus that the resume path
 is ever exercised; the graceful `Global\QGA_SHUTDOWN` open from a SYSTEM context. CI only
 proves the script parses and is staged into the artifact.
+
+## 2026-08-06 — stock ISO + separate answer disc (answering "can it be a virtual removable drive?")
+
+Windows Setup scans the root of every *removable* drive for `autounattend.xml`. Qubes
+presents attached block devices as fixed disks by default, but `--option devtype=cdrom`
+makes the frontend a CD-ROM. **Measured today:** `qvm-device block assign --option
+devtype=cdrom --ro win11-fresh win-idd-mgmt:loop2` is accepted (rc=0; a second assign
+errors with "already assigned", proving it stuck). So a second virtual CD is available.
+
+That gives a two-disc install: CD 1 = the vendor ISO, byte-for-byte untouched, booted;
+CD 2 = a ~1 MB image (`mgmt/build-answer-disc.sh`, added today) with `autounattend.xml`
+at its root plus `\payload`.
+
+The one non-obvious requirement: `qvm-start --cdrom` assignment does NOT survive the
+guest reboot that ends the image-apply phase (the domain is destroyed), and a stock ISO
+cannot carry `sources\$OEM$\$1\payload`, which is how the repacked image gets the payload
+onto C:. So the answer disc must be attached **persistently** (`qvm-device block assign`),
+which keeps it present at first logon; the drive-letter scan already in our
+`autounattend.xml` FirstLogonCommands then finds `%d:\payload\setup.cmd` unchanged.
+
+Status: **designed and the attach mechanism is verified; the end-to-end install on this
+route is NOT yet proven.** Whether Setup actually reads the answer file off the second
+CD needs one full install cycle to demonstrate, and every result produced so far came
+from the repack route (`build-unattended-iso.sh`), which stays the supported path. Do not
+report the two-disc route as working until an install has completed on it.
