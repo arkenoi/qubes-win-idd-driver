@@ -3508,3 +3508,19 @@ never notices, so nothing logs.
 Guest-side mitigation is therefore exactly right and now has an acceptance test with a
 CONTROL THAT FAILS: the storm soak wedges the current build on storm 1. M7 (recent-size
 LRU so repeats need no replug + a 2.5 s minimum interval between replugs) must survive it.
+
+# 2026-08-06 (cont 6) — M7 ACCEPTED: the storm that reliably wedged the guest now passes 6/6
+
+Agent 8468926D (t2/m7-churn-guard: recent-size LRU of the last 4 applied sizes published in
+the mode set + MIN_REPLUG_INTERVAL_MS=2500 before any IDD reload, applied only on the
+obtain path so replug=0 sizes stay instant).
+
+**Acceptance with a control that failed hours earlier:** scratchpad/storm-soak.sh (8 resizes
+1.2 s apart, repeats in the pool) wedged the PREVIOUS build on storm 1. On M7: **6/6 storms
+PASS, no wedge.** The mechanism is visible in the numbers: storm 1 = 4 replugs for 8
+requests, **storms 2-6 = ZERO replugs for 8 requests each** — the LRU serves every repeat
+from the published set, so the churn that triggers the idle/deaf failure simply stops
+happening after the first pass over a size pool. Real usage (a handful of habitual sizes)
+should approach zero replugs in steady state.
+Snap regression battery: PASS 4/4 on this build (near-half snaps, 20px-off and arbitrary
+exact, position preserved).
