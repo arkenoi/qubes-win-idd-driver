@@ -3778,3 +3778,19 @@ OFFLINE (netvm ''), and use `core-net` when networking is needed.
 Stock agent for future control runs: extracted from vendor/qwt-4.2.2/installer.msi,
 sha256[0:16] **3D2E6BCEC9F5BD89**, 80,968 bytes (ITL build server pdb path, zero QGAPERF).
 Guest left on our build 8468926D with netvm core-net attached.
+
+# 2026-08-06 (Office, visual) — Word runs; window-behaviour check needs SEAMLESS mode
+
+Visual capture with Word open (instrumentation not needed - the screenshot is the evidence):
+- Word 365 (evaluation) renders correctly through the agent: ribbon, styles gallery, the
+  document surface and Office's own sign-in modal all paint cleanly, no tearing, no stale
+  bands. **That modal is Office's activation prompt** - it is what blocked the unattended
+  flow the user observed, not an installer defect.
+- **The compound-window (shadow-strip) question cannot be answered in this configuration**:
+  the guest is in FULLSCREEN mode (SeamlessMode=0, the T2 configuration), so dom0 receives
+  ONE window containing the whole desktop - there are no per-window frames to count. The
+  2A-chrome acceptance (Office shadows dropped, toasts kept) is a SEAMLESS-mode test and
+  must be run with SeamlessMode=1.
+- Tooling note: `dump-windows.exe` is INTERACTIVE ("Press ESC to exit"), so it produces no
+  output when run from a scheduled task - it needs a non-interactive/oneshot flag before it
+  can serve as an automated probe. The session-0 limitation is real but secondary to this.
