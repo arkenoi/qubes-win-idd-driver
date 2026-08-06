@@ -14,8 +14,8 @@
       stage 1  copy payload to disk, verify hashes, trust the signing certificates,
                seed the gui-agent registry defaults, enable testsigning, reboot
       stage 2  verify testsigning is active, REMOVE any previously installed QWT,
-               install vc_redist, run msiexec, optionally stage the (experimental)
-               IddCx driver, reboot
+               install vc_redist, run msiexec, optionally install AND ACTIVATE the
+               IddCx display driver, reboot
 
     The stage is DETECTED, not remembered: if testsigning is not active in the current
     boot we are in stage 1, otherwise stage 2. Re-running the script is safe.
@@ -34,8 +34,13 @@
     script stops and tells you to reboot and re-run.
 
 .PARAMETER InstallIddDriver
-    Also stage the experimental Qubes IddCx display driver into the driver store. It is
-    NOT activated (no monitor is created) - see README.txt. Default: off.
+    Also install and ACTIVATE the Qubes IddCx display driver: the package is staged with
+    pnputil, the root-enumerated device (root\iddsampledriver) is created with devcon,
+    and once it binds the emulated VGA adapter (PCI display class CC_0300) is DISABLED,
+    so the desktop comes up on the IDD after the final reboot. The gui-agent installed
+    by this same stage publishes the mode list to HKLM\SOFTWARE\QubesIDD\Modes at
+    runtime. Recovery: re-enable the VGA adapter (its InstanceId is in the result JSON)
+    and reboot - see README.txt. Default: off.
 
 .PARAMETER NoPvNetwork
     Drop PvDriversNetwork from ADDLOCAL. See the NETWORKING caveat in README.txt.
@@ -465,6 +470,16 @@ function Emit-ResultThenReboot {
     exit $ExitCode
 }
 
+# --------------------------------------------------------------------- IDD device lookup
+function Get-IddPnpDevice {
+    param([Parameter(Mandatory)][string]$HardwareId)
+    # Win32_PnPEntity rather than Get-PnpDevice: ConfigManagerErrorCode is a first-class
+    # property there, and the bind poll below is exactly a wait for it to reach 0.
+    return (Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
+        Where-Object { $_.HardwareID -and (@($_.HardwareID) -contains $HardwareId) } |
+        Select-Object -First 1)
+}
+
 # ------------------------------------------------------------------------------- stage 2
 function Invoke-Stage2 {
     param([Parameter(Mandatory)][string]$Root)
@@ -637,22 +652,156 @@ function Invoke-Stage2 {
         $script:Result.detail.agent_hash_verified = $false
     }
 
-    # --- optional: stage the experimental IddCx driver ------------------------------
+    # --- optional: install and ACTIVATE the IddCx driver ----------------------------
+    # Proven shipping configuration (win-idd-test, 2026-08): IDD device ROOT\DISPLAY\0000
+    # (hardware id root\iddsampledriver) bound with ConfigManagerErrorCode 0, and the
+    # emulated VGA adapter (Microsoft Basic Display Adapter on PCI, class CC_0300, on
+    # Qubes PCI\VEN_1234&DEV_1111) DISABLED (code 22). Windows then spins up
+    # ROOT\BASICDISPLAY - the Basic Display DRIVER fallback - on another adapter; that is
+    # harmless, the gui-agent captures adapter 0 = the IDD. The gui-agent installed by
+    # the MSI above publishes the mode list to HKLM\SOFTWARE\QubesIDD\Modes at runtime
+    # and the driver reads it at monitor arrival. Activation happens HERE, right before
+    # the stage-2 reboot, so the next boot comes up IDD-primary.
     $script:Result.detail.idd_driver = 'not requested'
     if ($InstallIddDriver) {
-        $iddDir = Join-Path $Root 'idd-driver'
+        # detail.idd_driver tracks PROGRESS, not just the end state: a Fail anywhere in
+        # this block must emit a trailer that says how far activation got and what now
+        # exists on the guest - 'not requested' on a failed /idd run is the one value
+        # guaranteed to be false.
+        $script:Result.detail.idd_driver = 'requested'
+        $iddDir  = Join-Path $Root 'idd-driver'
+        $iddHwId = 'root\iddsampledriver'
+        $devcon  = Join-Path $iddDir 'devcon.exe'
         $inf = @(Get-ChildItem -LiteralPath $iddDir -Filter *.inf -ErrorAction SilentlyContinue)
         if ($inf.Count -ne 1) {
             Fail "-InstallIddDriver requested but $iddDir holds $($inf.Count) .inf files (expected exactly 1)"
         }
+        if (-not (Test-Path -LiteralPath $devcon)) {
+            Fail ("devcon.exe is missing from $iddDir - the release-package workflow's 'idd' job " +
+                  'must copy it out of the WDK into idd-package/ and packaging/make-setup.ps1 must ' +
+                  'stage it into idd-driver/; without it the IDD device cannot be created or removed')
+        }
+        # Native calls in this block: capture output in try/catch and judge ONLY
+        # $LASTEXITCODE - under $ErrorActionPreference='Stop' PS 5.1 turns native stderr
+        # into a terminating error (the schtasks lesson in Clear-BootResume, measured
+        # 2026-08-06), which would skip the tailored diagnostics below.
         Write-Log "staging driver package $($inf[0].Name) into the driver store"
-        $out = & pnputil.exe /add-driver $inf[0].FullName /install 2>&1
+        try { $out = & pnputil.exe /add-driver $inf[0].FullName /install 2>&1 } catch { $out = "$_" }
         $out | ForEach-Object { Write-Log "  pnputil: $_" }
-        if ($LASTEXITCODE -ne 0) { Fail "pnputil /add-driver failed ($LASTEXITCODE)" }
-        # Deliberately NOT activated: creating the software device would add a SECOND
-        # monitor and enlarge the desktop bounding box the GUI agent maps as the screen,
-        # which breaks seamless coordinates. See README.txt.
-        $script:Result.detail.idd_driver = 'staged in driver store, NOT activated'
+        # 3010 = success, reboot required: LIKELY here on upgrade, because replacing the
+        # driver package of the live IDD display is exactly the in-use case. Stage 2
+        # unconditionally ends in a reboot, so 3010 == 0 for our purposes.
+        if ($LASTEXITCODE -notin 0, 3010) { Fail "pnputil /add-driver failed ($LASTEXITCODE)" }
+        $script:Result.detail.idd_driver = 'driver staged'
+
+        # Create the root-enumerated software device - the same pnputil+devcon two-step
+        # guest/deploy-and-test.ps1 uses. devcon install creates a NEW device every time
+        # it runs, so a healthy existing device is reused; a BROKEN existing device is
+        # removed and recreated (otherwise every re-run polls a permanently dead node).
+        $createdByThisRun = $false
+        $dev = Get-IddPnpDevice -HardwareId $iddHwId
+        if ($dev -and $dev.ConfigManagerErrorCode -eq 0) {
+            Write-Log "IDD device already exists and is healthy ($($dev.PNPDeviceID)) - reusing it"
+        } else {
+            if ($dev) {
+                Write-Log "IDD device exists but is broken (ConfigManagerErrorCode $($dev.ConfigManagerErrorCode)) - removing and recreating" 'WARN'
+                try { $out = & $devcon remove $iddHwId 2>&1 } catch { $out = "$_" }
+                $out | ForEach-Object { Write-Log "  devcon remove: $_" }
+            }
+            Write-Log "creating the IDD device: devcon install $($inf[0].Name) $iddHwId"
+            try { $out = & $devcon install $inf[0].FullName $iddHwId 2>&1 } catch { $out = "$_" }
+            $out | ForEach-Object { Write-Log "  devcon: $_" }
+            # devcon: 0 = done, 1 = done but a reboot is required - and stage 2 always
+            # ends in a reboot anyway.
+            if ($LASTEXITCODE -notin 0, 1) { Fail "devcon install $iddHwId failed ($LASTEXITCODE)" }
+            $createdByThisRun = $true
+            $script:Result.detail.idd_driver = 'device created, waiting for bind'
+        }
+
+        # Never disable the VGA adapter until the replacement display is demonstrably up.
+        # Two gates, because ConfigManagerErrorCode 0 only proves the UMDF devnode
+        # STARTED: IddCx adapter/monitor init completes asynchronously afterwards and can
+        # fail while the devnode stays at code 0. The second gate requires an actual
+        # VIDEO CONTROLLER attributable to the IDD devnode - the same evidence the
+        # FINDINGS topology snapshots use ('IddSampleDriver Device' controller).
+        Write-Log 'waiting up to 30 s for the IDD device to bind (ConfigManagerErrorCode 0)'
+        $deadline = (Get-Date).AddSeconds(30)
+        while ($true) {
+            $dev = Get-IddPnpDevice -HardwareId $iddHwId
+            if ($dev -and $dev.ConfigManagerErrorCode -eq 0) { break }
+            if ((Get-Date) -ge $deadline) { break }
+            Start-Sleep -Seconds 2
+        }
+        $iddCtrl = $null
+        if ($dev -and $dev.ConfigManagerErrorCode -eq 0) {
+            Write-Log "IDD devnode up: $($dev.PNPDeviceID); waiting up to 30 s for its display adapter"
+            $deadline = (Get-Date).AddSeconds(30)
+            while ($true) {
+                $iddCtrl = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue |
+                           Where-Object { $_.PNPDeviceID -eq $dev.PNPDeviceID } | Select-Object -First 1
+                if ($iddCtrl) { break }
+                if ((Get-Date) -ge $deadline) { break }
+                Start-Sleep -Seconds 2
+            }
+        }
+        if (-not ($dev -and $dev.ConfigManagerErrorCode -eq 0 -and $iddCtrl)) {
+            # Leaving a half-created device behind is NOT 'unchanged': it can bind on the
+            # next boot and come up as an ACTIVE SECOND monitor beside the VGA - the
+            # seamless-coordinate breakage this script exists to avoid. Tear down what
+            # this run created before failing.
+            $state = if (-not $dev) { 'device never appeared' }
+                     elseif ($dev.ConfigManagerErrorCode -ne 0) { "devnode error $($dev.ConfigManagerErrorCode)" }
+                     else { 'devnode up but no display adapter materialized' }
+            if ($createdByThisRun) {
+                Write-Log "activation failed ($state) - removing the device this run created" 'WARN'
+                try { $out = & $devcon remove $iddHwId 2>&1 } catch { $out = "$_" }
+                $out | ForEach-Object { Write-Log "  devcon remove: $_" }
+                $script:Result.detail.idd_driver = "activation failed ($state); device removed, VGA untouched"
+            } else {
+                $script:Result.detail.idd_driver = "activation failed ($state); pre-existing device LEFT IN PLACE, VGA untouched"
+            }
+            Fail "IDD activation failed: $state - NOT disabling the VGA adapter"
+        }
+        Write-Log "IDD display adapter present: $($iddCtrl.Name)"
+
+        # Disable the emulated VGA adapter so the next boot comes up on the IDD. Match by
+        # the PCI display class code (CC_0300 in the hardware ids), PREFERRING the
+        # Qubes/QEMU stdvga identity VEN_1234&DEV_1111 when present - but not hardcoding
+        # it as the only acceptable match.
+        $vga = @(Get-PnpDevice -Class Display -ErrorAction SilentlyContinue |
+                 Where-Object { $_.InstanceId -like 'PCI\*' -and ($_.HardwareID -match 'CC_0300') })
+        if ($vga.Count -eq 0) {
+            Fail 'IDD device is up but no PCI display adapter (hardware id matching CC_0300) was found to disable - refusing to guess at the display topology'
+        }
+        $preferred = @($vga | Where-Object { $_.HardwareID -match 'VEN_1234&DEV_1111' })
+        if ($preferred.Count -gt 0) { $vga = $preferred }
+        if ($vga.Count -gt 1) {
+            Write-Log ('multiple PCI display adapters match CC_0300 [' +
+                (($vga | ForEach-Object { $_.InstanceId }) -join '; ') + '] - disabling the first') 'WARN'
+        }
+        $vgaDev = $vga[0]
+        # Re-run/upgrade path: a previous activation already disabled it. Disabling an
+        # already-disabled device is an unverified operation - skip it, keep the result
+        # fields populated either way.
+        $vgaCim = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
+                  Where-Object { $_.PNPDeviceID -eq $vgaDev.InstanceId } | Select-Object -First 1
+        if ($vgaCim -and $vgaCim.ConfigManagerErrorCode -eq 22) {
+            Write-Log "VGA adapter $($vgaDev.InstanceId) is already disabled (previous activation) - nothing to do"
+        } else {
+            # The live console may switch to the IDD the moment this executes - warn
+            # BEFORE it happens so an interactive user is not left staring at a frozen
+            # window with no explanation.
+            Write-Log "disabling emulated VGA adapter: $($vgaDev.InstanceId) ($($vgaDev.FriendlyName)) - the display may switch or blank until the reboot"
+            Disable-PnpDevice -InstanceId $vgaDev.InstanceId -Confirm:$false -ErrorAction Stop | Out-Null
+        }
+        # ROOT\BASICDISPLAY appearing after the reboot is EXPECTED (Basic Display DRIVER
+        # fallback on another adapter) and harmless - see the block comment above.
+        $script:Result.detail.idd_driver = "activated: device up ($($dev.PNPDeviceID)), VGA adapter disabled ($($vgaDev.InstanceId))"
+        $script:Result.detail.idd_vga_instance_id = $vgaDev.InstanceId
+        $script:Result.detail.idd_recovery = ('if the guest has no usable display after the reboot, run over qrexec: ' +
+            "Enable-PnpDevice -InstanceId '$($vgaDev.InstanceId)' -Confirm:" + '$false' +
+            ' (or devcon enable on that instance id), then reboot - that restores the pre-IDD display')
+        Write-Log 'IDD ACTIVATED - after the reboot the Qubes IDD drives the desktop (modes from HKLM\SOFTWARE\QubesIDD\Modes)'
     }
 
     $script:Result.ok = $true

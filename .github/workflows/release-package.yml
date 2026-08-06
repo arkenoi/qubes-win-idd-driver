@@ -29,6 +29,16 @@ on:
       - 'packaging/make-setup.ps1'
       - 'packaging/make-iso.sh'
       - '.github/workflows/release-package.yml'
+      # The artifact EMBEDS the driver and the agent (via qwt-full) - a change to either
+      # must rebuild it, or the next download quietly ships stale binaries.
+      - 'driver/**'
+      - 'agent'
+
+# One release build at a time, newest wins. Without this, a 2026-08-06 background job
+# cancelled runs it took for duplicates and the cancellations looked like CI flakiness.
+concurrency:
+  group: release-package-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # ------------------------------------------------------------------ the MSI (reused)
@@ -40,8 +50,10 @@ jobs:
 
   # --------------------------------------------------------------- the IddCx driver
   # Deliberately a slimmed copy of build.yml's idd-driver job: the release payload needs
-  # the driver package (inf/cat/dll) and nothing else. The console probes that job also
-  # builds are development tools and have no place in an installable payload.
+  # the driver package (inf/cat/dll) plus devcon.exe - the /idd install path ACTIVATES
+  # the driver by creating the root-enumerated device with it - and nothing else. The
+  # console probes that job also builds are development tools and have no place in an
+  # installable payload.
   idd:
     runs-on: windows-2022
     steps:
@@ -124,6 +136,26 @@ jobs:
           # A missing catalog means an INF that PnP will reject; fail here, not on the guest.
           if (-not (Get-ChildItem idd-package -Filter *.cat)) { throw 'no .cat produced' }
           Get-ChildItem idd-package | Format-Table Name, Length
+
+      - name: Add devcon.exe from the WDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # AFTER Inf2Cat/signing on purpose: devcon.exe is unreferenced by the INF, and
+          # dropping it in earlier would put an unrelated binary in the directory the
+          # catalog is generated from. Same WDK lookup as build.yml's idd-driver job,
+          # preferring the x64 copy.
+          $devcon = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Tools" -Recurse -Filter devcon.exe |
+              Where-Object FullName -match 'x64' | Select-Object -First 1
+          if (-not $devcon) {
+            $devcon = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Tools" -Recurse -Filter devcon.exe |
+                Select-Object -First 1
+          }
+          # install.cmd /idd now ACTIVATES the driver via `devcon install`; a release
+          # package without devcon.exe would fail on every guest, so fail the job instead.
+          if (-not $devcon) { throw 'devcon.exe not found under the WDK Tools directory - the /idd activation path depends on it' }
+          Copy-Item $devcon.FullName idd-package\
+          Write-Host "devcon.exe: $($devcon.FullName)"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -223,6 +255,9 @@ jobs:
           }
           if (-not (Get-ChildItem "$root\idd-driver" -Filter *.cat)) {
             throw 'idd-driver\ has no catalog - the driver payload would not install'
+          }
+          if (-not (Test-Path -LiteralPath "$root\idd-driver\devcon.exe")) {
+            throw 'idd-driver\ has no devcon.exe - install.cmd /idd could not create the IDD device'
           }
           Write-Host "self-check OK: $($lines.Count) files verified"
 
