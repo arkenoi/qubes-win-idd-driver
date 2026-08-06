@@ -20,7 +20,10 @@ on:
         required: false
         default: 'QWT_IMPROVED'
   push:
-    branches: [main]
+    # t2/release-package is where this workflow is developed and validated. GitHub only
+    # offers workflow_dispatch for files that exist on the DEFAULT branch, so until this
+    # merges, a push trigger is the only way to exercise it.
+    branches: [main, t2/release-package]
     paths:
       - 'packaging/setup/**'
       - 'packaging/make-setup.ps1'
