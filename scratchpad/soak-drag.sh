@@ -57,8 +57,15 @@ for i in $(seq 1 "$CYCLES"); do
   if [ $((i % 4)) -eq 0 ]; then
     timeout 90 ./tools/qtest ps "& '$INC\\graceful-stop.ps1'" >/dev/null 2>&1
     sleep 10
-    gu=$(guestres)
-    [ "$gu" = "$expected" ] || { log "cycle $i: FAIL REVERT after agent restart ($gu != $expected)"; exit 1; }
+    # After an agent restart the daemon RECREATES its window and the WM may place
+    # it at a remembered geometry - dom0 then legitimately requests that size and
+    # the agent must follow it (user rule: dom0 is the source of truth). So the
+    # invariant here is guest == CURRENT dom0 window, never guest == pre-restart
+    # size (measured 2026-08-06: the WM restored a tile size; asserting the old
+    # size reported a false REVERT).
+    gu=$(guestres); dw=$(domwin)
+    [ "$gu" = "$dw" ] || { log "cycle $i: FAIL after agent restart: guest=$gu dom0-window=$dw"; exit 1; }
+    expected="$dw"
     wc=$(./tools/qtest shot "$S/sd.tar" >/dev/null 2>&1; tar tf "$S/sd.tar" 2>/dev/null | grep -c png)
     if [ "$wc" -lt 1 ]; then
       log "cycle $i: daemon died on restart (KNOWN dom0 bug) - rebooting"
