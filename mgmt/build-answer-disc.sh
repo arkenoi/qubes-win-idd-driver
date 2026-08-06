@@ -76,9 +76,15 @@ if [ -n "${RELEASE_SETUP:-}" ]; then
     # installed, so qrexec answering at all proves OUR package delivered it.
     cat > "$WORK/payload/setup2.cmd" <<'RELEOF'
 @echo off
+rem MUST be first: QWTStage2 is ONSTART and our installer reboots up to three times;
+rem without this delete a second concurrent install.cmd fires on every boot (the exact
+rem defect that wedged win10-clean on the repack route, 2026-08-06).
+schtasks /delete /tn QWTStage2 /f >nul 2>&1
 echo === release install (clean path, answer disc) === >> C:\qubes-win-idd-setup.log
 rem The disc's letter is not fixed; %~dp0 is this script's own location.
-call "%~dp0release\install.cmd" /auto >> C:\qubes-win-idd-setup.log 2>&1
+rem /idd: the Qubes IDD driver is part of the product; without it the guest ships on the
+rem Basic Display Adapter with no arbitrary-resolution support.
+call "%~dp0release\install.cmd" /auto /idd >> C:\qubes-win-idd-setup.log 2>&1
 echo release install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
 RELEOF
     echo "payload += release/ (our package, installed at firstboot)"
