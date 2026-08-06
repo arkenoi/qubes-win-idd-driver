@@ -3418,3 +3418,32 @@ unchanged across two real replug cycles (novel-size snaps applied, guest followe
 the session GDI name held (\\.\DISPLAY3 both times — stable identity makes Windows reuse
 the display source, so the DISPLAY2→30 session churn is gone too). The 7 pre-M1
 Default_Monitor phantoms stopped accumulating; one-shot sweeper in progress.
+
+# 2026-08-06 (cont 3) — M1 + M0 delivered; registry swept; exp-9 harness parked
+
+**M1 stable EDID: ACCEPTED** (driver 70C64039). `Enum\DISPLAY\QBS0001` = ONE instance,
+stable across replugs AND across a cold boot; session GDI name stable too. Identity churn
+is structurally over.
+**Registry hygiene: swept.** guest/registry-hygiene.ps1 (conservative: Default_Monitor
+phantoms only, diffed against Get-PnpDevice -PresentOnly; QBS0001 never touched). Admin run
+reported 6 phantoms LOCKED (Enum keys are SYSTEM-ACLed); re-run as SYSTEM via a one-shot
+scheduled task removed all 6 → Default_Monitor down to 1 instance. Record that: the sweeper
+must run as SYSTEM, not admin.
+**M0 blink instrumentation: DELIVERED and measured** (agent 0A105F60). First real
+decomposition of a novel-size blink: obtain-start → reload-returned **16 ms** →
+mode-offered **281 ms** (1 poll) → applied **344 ms** → repaint-sent **813 ms**. So the
+IOCTL reload is nearly free, the driver's mode-offer latency (~265 ms) dominates the
+pre-apply half, and **the post-apply repaint path costs ~470 ms** — the single biggest
+remaining lever, and it is agent-side (capture recreate → re-grant → re-dump → ack →
+repaint), not driver-side. Habitual sizes remain 0 ms (replug=0, no blink at all).
+**One more livelock, one more gate:** the single-pass exit revoke still wedged a shutdown
+(slope 3). Exit revokes are now attempted ONLY when the daemon is gone (dead vchan); with a
+live daemon the grants are leaked BY DESIGN and loudly — the daemon still maps them, so the
+revoke cannot succeed and can only lose the xenbus race. Deployed, boot verified.
+**Snap regression battery** (scratchpad/snap-regress.sh, user directive): near-half snaps,
+20px-off and arbitrary sizes do NOT snap, window position preserved — **PASS 4/4** on the
+current stack.
+**exp-9 formal record: PARKED.** The harness stops on its own persistence check (empty
+string reaches check_persist despite a validating/retrying mp_json); the guest and topology
+were healthy each time. Debt, not a defect in the product; script is committed for a later
+debugging pass.
