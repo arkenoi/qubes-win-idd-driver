@@ -1,0 +1,2 @@
+*** buffer overflow detected ***: terminated
+timeout: the monitored command dumped core

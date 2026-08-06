@@ -3478,3 +3478,33 @@ ends mid-QGAPERF with a 29.7 s frame delta = the freeze caught mid-stream). Same
 the xenbus livelock; recovered by kill+start. It followed a long uninterrupted resize storm
 (11 replugs in ~4 min) — heavier than any real use. Not root-caused further this session:
 guest-side observability is exhausted and dom0 forensics need the user.
+
+# 2026-08-06 (cont 5) — MAJOR CORRECTION: the remaining wedge is NOT a spin. Guest is IDLE and deaf.
+
+Storm soak (scratchpad/storm-soak.sh: 8 rapid resizes, 1.2 s apart) is a DETERMINISTIC
+reproduction — wedged on storm 1. User ran the new dom0 kit (dom0/11-wedge-forensics.sh)
+with --nmi on that fresh wedge. Evidence in instrumentation/wedge-2026-08-06/:
+
+- **NMI kernel dump (376 MB): ALL FOUR vCPUs in `nt!HalProcessorIdle`.** No spinning code
+  anywhere. The guest kernel is healthy and IDLE — it is simply not being asked to do
+  anything. This is NOT the xenbus grant-revoke livelock (2026-08-05, NMI-proven, all
+  stacks in xenbus/xeniface) — that one is FIXED and did not recur.
+- Grant table: 9 frames of 2048, our domain's table not even large enough to appear
+  prominently; the 22k-pinned-entry condition is GONE (staging grant working as designed).
+- Event channels for the domain: 11, all present and bound (ports to dom0 d0 and to the
+  stubdomain d695) — the channels exist; nothing is torn down.
+- vCPU time deltas across 10 s: ~3 s total over 4 vCPUs (~0.3 vcpu-s/s) = idle, confirming
+  the dump. **The earlier `slope` heuristic reported "1-3 vcpu-s/s" and I called it a spin;
+  for this wedge that reading was noise. Retracted.**
+- gui-daemon alive; its window intact.
+
+**Revised model: two distinct failure modes existed.** (1) xenbus revoke spin — fixed.
+(2) THIS one: after heavy replug churn the guest stops SERVICING the PV rings — Windows
+idle, event channels intact, qrexec deaf. Matches FINDINGS cont 10 (qrexec-agent log
+ending mid-eventloop with no error). Suspect: the PV drivers' interrupt/DPC path or the
+xeniface/xenvchan servicing stalling after repeated display-device PnP churn; the guest
+never notices, so nothing logs.
+
+Guest-side mitigation is therefore exactly right and now has an acceptance test with a
+CONTROL THAT FAILS: the storm soak wedges the current build on storm 1. M7 (recent-size
+LRU so repeats need no replug + a 2.5 s minimum interval between replugs) must survive it.

@@ -1,0 +1,216 @@
+Microsoft Windows [Version 10.0.19045.6466]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>type C:\qubes-idd\kd-storm1.txt
+
+************* Preparing the environment for Debugger Extensions Gallery repositories **************
+   ExtensionRepository : Implicit
+   UseExperimentalFeatureForNugetShare : true
+   AllowNugetExeUpdate : true
+   NonInteractiveNuget : true
+   AllowNugetMSCredentialProviderInstall : true
+   AllowParallelInitializationOfLocalRepositories : true
+
+   EnableRedirectToV8JsProvider : false
+
+   -- Configuring repositories
+      ----> Repository : LocalInstalled, Enabled: true
+      ----> Repository : UserExtensions, Enabled: true
+
+>>>>>>>>>>>>> Preparing the environment for Debugger Extensions Gallery repositories completed, duration 0.000 seconds
+
+************* Waiting for Debugger Extensions Gallery to Initialize **************
+
+>>>>>>>>>>>>> Waiting for Debugger Extensions Gallery to Initialize completed, duration 0.016 seconds
+   ----> Repository : UserExtensions, Enabled: true, Packages count: 0
+   ----> Repository : LocalInstalled, Enabled: true, Packages count: 0
+
+Microsoft (R) Windows Debugger Version 10.0.26100.4202 AMD64
+Copyright (c) Microsoft Corporation. All rights reserved.
+
+
+Loading Dump File [C:\qubes-idd\wedge-storm1.dmp]
+Kernel Bitmap Dump File: Kernel address space is available, User address space may not be available.
+
+Symbol search path is: srv*
+Executable search path is: 
+*************************************************************************
+***                                                                   ***
+***                                                                   ***
+***    Either you specified an unqualified symbol, or your debugger   ***
+***    doesn't have full symbol information.  Unqualified symbol      ***
+***    resolution is turned off by default. Please either specify a   ***
+***    fully qualified symbol module!symbolname, or enable resolution ***
+***    of unqualified symbols by typing ".symopt- 100". Note that     ***
+***    enabling unqualified symbol resolution with network symbol     ***
+***    server shares in the symbol path may cause the debugger to     ***
+***    appear to hang for long periods of time when an incorrect      ***
+***    symbol name is typed or the network symbol server is down.     ***
+***                                                                   ***
+***    For some commands to work properly, your symbol path           ***
+***    must point to .pdb files that have full type information.      ***
+***                                                                   ***
+***    Certain .pdb files (such as the public OS symbols) do not      ***
+***    contain the required information.  Contact the group that      ***
+***    provided you with these symbols if you need this command to    ***
+***    work.                                                          ***
+***                                                                   ***
+***    Type referenced: nt!_EPROCESS                                  ***
+***                                                                   ***
+*************************************************************************
+Windows 10 Kernel Version 19041 MP (4 procs) Free x64
+Product: WinNt, suite: TerminalServer SingleUserTS
+Edition build lab: 19041.1.amd64fre.vb_release.191206-1406
+Kernel base = 0xfffff805`75000000 PsLoadedModuleList = 0xfffff805`75c2a420
+Debug session time: Thu Aug  6 15:09:23.287 2026 (UTC + 0:00)
+System Uptime: 0 days 0:07:25.387
+*************************************************************************
+***                                                                   ***
+***                                                                   ***
+***    Either you specified an unqualified symbol, or your debugger   ***
+***    doesn't have full symbol information.  Unqualified symbol      ***
+***    resolution is turned off by default. Please either specify a   ***
+***    fully qualified symbol module!symbolname, or enable resolution ***
+***    of unqualified symbols by typing ".symopt- 100". Note that     ***
+***    enabling unqualified symbol resolution with network symbol     ***
+***    server shares in the symbol path may cause the debugger to     ***
+***    appear to hang for long periods of time when an incorrect      ***
+***    symbol name is typed or the network symbol server is down.     ***
+***                                                                   ***
+***    For some commands to work properly, your symbol path           ***
+***    must point to .pdb files that have full type information.      ***
+***                                                                   ***
+***    Certain .pdb files (such as the public OS symbols) do not      ***
+***    contain the required information.  Contact the group that      ***
+***    provided you with these symbols if you need this command to    ***
+***    work.                                                          ***
+***                                                                   ***
+***    Type referenced: nt!_EPROCESS                                  ***
+***                                                                   ***
+*************************************************************************
+Loading Kernel Symbols
+...............................................................
+.............................................Page 1253 not present in the dump file. Type ".hh dbgerr004" for details
+...................
+.....................................
+Loading User Symbols
+
+Loading unloaded module list
+........
+
+************* Symbol Loading Error Summary **************
+Module name            Error
+ntkrnlmp               The system cannot find the file specified
+
+You can troubleshoot most symbol related issues by turning on symbol loading diagnostics (!sym noisy) and repeating the command that caused symbols to be loaded.
+You should also verify that your symbol search path (.sympath) is correct.
+Unable to add extension DLL: kdexts
+Unable to add extension DLL: kext
+Unable to add extension DLL: exts
+For analysis of this file, run !analyze -v
+0: kd> .exepath C:\Users\user\Documents\QubesIncoming\win-idd-mgmt;C:\Windows\System32;C:\Windows\System32\drivers
+Executable image search path is: C:\Users\user\Documents\QubesIncoming\win-idd-mgmt;C:\Windows\System32;C:\Windows\System32\drivers
+Expanded Executable image search path is: c:\users\user\documents\qubesincoming\win-idd-mgmt;c:\windows\system32;c:\windows\system32\drivers
+
+************* Path validation summary **************
+Response                         Time (ms)     Location
+OK                                             C:\Users\user\Documents\QubesIncoming\win-idd-mgmt
+OK                                             C:\Windows\System32
+OK                                             C:\Windows\System32\drivers
+0: kd> .symopt+ 0x40
+Symbol options are 0xB0367:
+  0x00000001 - SYMOPT_CASE_INSENSITIVE
+  0x00000002 - SYMOPT_UNDNAME
+  0x00000004 - SYMOPT_DEFERRED_LOADS
+  0x00000020 - SYMOPT_OMAP_FIND_NEAREST
+  0x00000040 - SYMOPT_LOAD_ANYTHING
+  0x00000100 - SYMOPT_NO_UNQUALIFIED_LOADS
+  0x00000200 - SYMOPT_FAIL_CRITICAL_ERRORS
+  0x00010000 - SYMOPT_AUTO_PUBLICS
+  0x00020000 - SYMOPT_NO_IMAGE_SEARCH
+  0x00080000 - SYMOPT_NO_PROMPTS
+0: kd> .reload
+*************************************************************************
+***                                                                   ***
+***                                                                   ***
+***    Either you specified an unqualified symbol, or your debugger   ***
+***    doesn't have full symbol information.  Unqualified symbol      ***
+***    resolution is turned off by default. Please either specify a   ***
+***    fully qualified symbol module!symbolname, or enable resolution ***
+***    of unqualified symbols by typing ".symopt- 100". Note that     ***
+***    enabling unqualified symbol resolution with network symbol     ***
+***    server shares in the symbol path may cause the debugger to     ***
+***    appear to hang for long periods of time when an incorrect      ***
+***    symbol name is typed or the network symbol server is down.     ***
+***                                                                   ***
+***    For some commands to work properly, your symbol path           ***
+***    must point to .pdb files that have full type information.      ***
+***                                                                   ***
+***    Certain .pdb files (such as the public OS symbols) do not      ***
+***    contain the required information.  Contact the group that      ***
+***    provided you with these symbols if you need this command to    ***
+***    work.                                                          ***
+***                                                                   ***
+***    Type referenced: nt!_EPROCESS                                  ***
+***                                                                   ***
+*************************************************************************
+Loading Kernel Symbols
+...............................................................
+.............................................Page 1253 not present in the dump file. Type ".hh dbgerr004" for details
+...................
+.....................................
+Loading User Symbols
+
+Loading unloaded module list
+........
+
+************* Symbol Loading Error Summary **************
+Module name            Error
+ntkrnlmp               The system cannot find the file specified
+
+You can troubleshoot most symbol related issues by turning on symbol loading diagnostics (!sym noisy) and repeating the command that caused symbols to be loaded.
+You should also verify that your symbol search path (.sympath) is correct.
+0: kd> ~0s
+0: kd> k 25
+Child-SP          RetAddr               Call Site
+fffff805`7acbbb68 fffff805`754b911a     nt!KeBugCheckEx
+fffff805`7acbbb70 fffff805`73a315b0     nt!HalBugCheckSystem+0x7a
+fffff805`7acbbbb0 fffff805`755bb44d     PSHED!PshedBugCheckSystem+0x10
+fffff805`7acbbbe0 fffff805`754bd7d2     nt!WheaReportHwError+0x3dd
+fffff805`7acbbcb0 fffff805`75512ae4     nt!HalHandleNMI+0x142
+fffff805`7acbbce0 fffff805`7540a8c2     nt!KdPollBreakIn+0x1084
+fffff805`7acbbd30 fffff805`7540a652     nt!setjmpex+0x1932
+fffff805`7acbbe70 fffff805`753f937f     nt!setjmpex+0x16c2
+fffff805`7ac986b8 fffff805`753bc92b     nt!HalProcessorIdle+0xf
+fffff805`7ac986c0 fffff805`75223530     nt!WheaLogInternalEvent+0x223b
+fffff805`7ac986f0 fffff805`7522241a     nt!KeClockInterruptNotify+0x1f30
+fffff805`7ac98af0 fffff805`75402074     nt!KeClockInterruptNotify+0xe1a
+fffff805`7ac98c60 00000000`00000000     nt!KeSynchronizeExecution+0x3464
+0: kd> ~1s
+1: kd> k 25
+Child-SP          RetAddr               Call Site
+ffffb508`fc6296b8 fffff805`753bc92b     nt!HalProcessorIdle+0xf
+ffffb508`fc6296c0 fffff805`75223530     nt!WheaLogInternalEvent+0x223b
+ffffb508`fc6296f0 fffff805`7522241a     nt!KeClockInterruptNotify+0x1f30
+ffffb508`fc629af0 fffff805`75402074     nt!KeClockInterruptNotify+0xe1a
+ffffb508`fc629c60 00000000`00000000     nt!KeSynchronizeExecution+0x3464
+1: kd> ~2s
+2: kd> k 25
+Child-SP          RetAddr               Call Site
+ffffb508`fc6376b8 fffff805`753bc92b     nt!HalProcessorIdle+0xf
+ffffb508`fc6376c0 fffff805`75223530     nt!WheaLogInternalEvent+0x223b
+ffffb508`fc6376f0 fffff805`7522241a     nt!KeClockInterruptNotify+0x1f30
+ffffb508`fc637af0 fffff805`75402074     nt!KeClockInterruptNotify+0xe1a
+ffffb508`fc637c60 00000000`00000000     nt!KeSynchronizeExecution+0x3464
+2: kd> ~3s
+3: kd> k 25
+Child-SP          RetAddr               Call Site
+ffffb508`fc6456b8 fffff805`753bc92b     nt!HalProcessorIdle+0xf
+ffffb508`fc6456c0 fffff805`75223530     nt!WheaLogInternalEvent+0x223b
+ffffb508`fc6456f0 fffff805`7522241a     nt!KeClockInterruptNotify+0x1f30
+ffffb508`fc645af0 fffff805`75402074     nt!KeClockInterruptNotify+0xe1a
+ffffb508`fc645c60 00000000`00000000     nt!KeSynchronizeExecution+0x3464
+3: kd> q
+quit:
+
+C:\Windows\system32>
