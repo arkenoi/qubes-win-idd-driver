@@ -64,6 +64,12 @@ if [ "${WITH_KEY:-0}" = "1" ]; then
         "$WORK/autounattend.xml"
 fi
 
+# diskprep.cmd must sit at this disc's ROOT too: the answer file's windowsPE
+# RunSynchronous scans drive letters for it, and on this route the answer disc is the
+# only medium the scan can find it on (CD 1 is the untouched vendor ISO).
+[ -f "$HERE/diskprep.cmd" ] || { echo "mgmt/diskprep.cmd missing - the answer file requires it" >&2; exit 1; }
+cp "$HERE/diskprep.cmd" "$WORK/diskprep.cmd"
+
 mkdir -p "$WORK/payload"
 cp "$HERE/payload-setup.cmd" "$WORK/payload/setup.cmd"
 cp "$HERE/../guest/firstboot-setup.ps1" "$WORK/payload/"
