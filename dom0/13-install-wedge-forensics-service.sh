@@ -73,7 +73,11 @@ OUT=\$(mktemp -d /var/tmp/wedge-XXXXXX)
 # --nmi is deliberately NOT reachable from the caller: it bugchecks the guest.
 VM="\$VM" /usr/local/sbin/win-wedge-forensics.sh > "\$OUT/capture.log" 2>&1 || true
 # 11-wedge-forensics.sh writes to ~/wedge-<ts>/; collect the newest one.
-NEWEST=\$(ls -1dt ~/wedge-* 2>/dev/null | head -1)
+# 11-wedge-forensics.sh writes to the INVOKING USER's home. Under qrexec the service runs
+# as root, so ~ is /root while a hand-run capture lands in /home/<dom0-user>. Looking only
+# at ~ returned an empty tar on the first real capture (2026-08-06) even though the run
+# succeeded - search both.
+NEWEST=\$(ls -1dt /home/*/wedge-* /root/wedge-* 2>/dev/null | head -1)
 [ -n "\$NEWEST" ] && cp -r "\$NEWEST"/. "\$OUT/" 2>/dev/null
 tar -C "\$OUT" -cf - . 2>/dev/null
 rm -rf "\$OUT"
