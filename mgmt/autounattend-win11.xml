@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Zero-click WINDOWS 11 install for win11-idd-test (BIOS/MBR boot — Qubes HVM SeaBIOS
+     default). Derived from autounattend.xml (Win10); the only functional additions are the
+     windowsPE RunSynchronous LabConfig registry keys, which disable Win11 Setup's
+     TPM 2.0 / Secure Boot / RAM / CPU-family compliance checks — a Qubes HVM presents
+     neither a TPM nor UEFI Secure Boot. RunSynchronous in the windowsPE pass runs before
+     the compliance appraisal AND before disk configuration, so this is the right slot.
+     @IMAGE_NAME@ is replaced by build-unattended-iso.sh: e.g. "Windows 10 Pro" (retail ISO)
+     or "Windows 10 Enterprise Evaluation" (eval ISO). Retail Pro may additionally need the
+     generic install key (activates nothing) - see PRODUCTKEY marker below.
+     Local account user/qubes, autologon, OOBE skipped, payload\setup.cmd on first logon. -->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+        xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
+      <InputLocale>en-US</InputLocale><SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+        xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+      <DiskConfiguration>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <CreatePartition wcm:action="add">
+              <Order>1</Order><Type>Primary</Type><Extend>true</Extend>
+            </CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add">
+              <Order>1</Order><PartitionID>1</PartitionID>
+              <Format>NTFS</Format><Active>true</Active><Letter>C</Letter>
+            </ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add">
+              <Key>/IMAGE/NAME</Key><Value>@IMAGE_NAME@</Value>
+            </MetaData>
+          </InstallFrom>
+          <InstallTo><DiskID>0</DiskID><PartitionID>1</PartitionID></InstallTo>
+        </OSImage>
+      </ImageInstall>
+      <!-- No RunSynchronous payload copy here: windowsPE answer-file settings execute
+           BEFORE disk configuration and image apply, so no target volume exists yet and
+           the copy could only ever no-op. The payload reaches C:\payload via
+           sources\$OEM$\$1\payload, which Setup copies while applying the image. -->
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <!--PRODUCTKEY-->
+      </UserData>
+    </component>
+  </settings>
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <ComputerName>win11-idd-test</ComputerName>
+      <TimeZone>UTC</TimeZone>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <!-- Without this component OOBE stalls on the region/keyboard pages (Win10 1803+);
+         the -WinPE variant above only covers Setup's own UI. -->
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <InputLocale>0409:00000409</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+        xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <!-- Child ORDER here is cosmetic, not semantic: component children are validated
+           by the Component Platform Interface against each component's WinSxS manifest,
+           not by an XSD (the ADK autounattend.xsd declares component contents as
+           <xsd:any processContents="lax">). Known-good Microsoft and community answer
+           files use mutually incompatible orders.
+           What DID matter: an earlier revision added HideLocalAccountScreen (and
+           NetworkLocation) here and Setup rejected the whole file with "could not parse
+           or process unattend answer file". Removing them fixed it. Both were redundant
+           anyway - the VM has no NIC, and UserAccounts + AutoLogon already suppress
+           account creation. Do NOT re-add them without a full install test. -->
+      <AutoLogon>
+        <Enabled>true</Enabled><Username>user</Username><LogonCount>999</LogonCount>
+        <Password><Value>qubes</Value><PlainText>true</PlainText></Password>
+      </AutoLogon>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c powercfg /h off</CommandLine>
+          <Description>disable hibernation and fast startup</Description>
+          <Order>1</Order>
+        </SynchronousCommand>
+        <!-- The CD is gone by first logon (guest reboot destroys the Qubes domain and
+             the cdrom assignment), so prefer C:\payload staged by $OEM$; scan other
+             letters only as a fallback. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c if exist C:\payload\setup.cmd (call C:\payload\setup.cmd) else (for %d in (D E F G H I J K L M N O P Q R S T U V) do @if exist %d:\payload\setup.cmd call %d:\payload\setup.cmd)</CommandLine>
+          <Description>qubes-win-idd payload</Description>
+          <Order>2</Order>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+      <UserAccounts>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Name>user</Name><Group>Administrators</Group>
+            <Password><Value>qubes</Value><PlainText>true</PlainText></Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+    </component>
+  </settings>
+</unattend>
