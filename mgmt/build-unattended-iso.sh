@@ -32,8 +32,35 @@ else
     7z x -o"$WORK" "$SRC" >/dev/null
 fi
 
+# Answer-file LANGUAGE must match the media, or Windows Setup silently ignores the whole
+# unattend file and sits on the locale picker - a failure that looks exactly like "the
+# answer file was not picked up" and costs a full install cycle to notice. This bit us
+# twice: once on the retail English-International media (fixed by hand, in a working copy
+# that was never committed) and again today, from the committed en-US file.
+# So the locale is DERIVED from the media rather than hardcoded, and can be overridden.
+case "${LOCALE:-}" in
+    "") case "$(basename "$SRC")" in
+            *EnglishInternational*|*english-international*|*en-gb*|*en_GB*) LOCALE=en-GB ;;
+            *) LOCALE=en-US ;;
+        esac ;;
+esac
+case "$LOCALE" in
+    en-GB) KBD="${KEYBOARD:-0809:00000809}" ;;
+    en-US) KBD="${KEYBOARD:-0409:00000409}" ;;
+    *)     KBD="${KEYBOARD:?set KEYBOARD=<id> for LOCALE=$LOCALE}" ;;
+esac
+echo "media locale: $LOCALE (input $KBD) - from $(basename "$SRC")"
+
 # answer file (+ optional generic install key)
-sed "s/@IMAGE_NAME@/$IMG_NAME/" "$UNATTEND" > "$WORK/autounattend.xml"
+sed -e "s/@IMAGE_NAME@/$IMG_NAME/" -e "s/@UILANG@/$LOCALE/g" -e "s/@INPUTLOCALE@/$KBD/g" \
+    "$UNATTEND" > "$WORK/autounattend.xml"
+# A leftover placeholder means the answer file is not the parameterised one; an unsubstituted
+# @UILANG@ would be rejected by Setup with the same silent ignore. Fail here instead.
+if grep -q '@[A-Z_]*@' "$WORK/autounattend.xml"; then
+    echo "unsubstituted placeholder left in the answer file:" >&2
+    grep -o '@[A-Z_]*@' "$WORK/autounattend.xml" | sort -u >&2
+    exit 1
+fi
 if [ "${3:-}" = "--with-key" ]; then
     sed -i 's#<!--PRODUCTKEY-->#<ProductKey><Key>VK7JG-NPHTM-C97JM-9MPGT-3V66T</Key><WillShowUI>OnError</WillShowUI></ProductKey>#' \
         "$WORK/autounattend.xml"

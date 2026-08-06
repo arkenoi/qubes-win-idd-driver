@@ -41,7 +41,24 @@ trap 'rm -rf "$WORK"' EXIT
 
 command -v xorriso >/dev/null || { echo "need xorriso" >&2; exit 1; }
 
-sed "s/@IMAGE_NAME@/$IMG_NAME/" "$UNATTEND" > "$WORK/autounattend.xml"
+# Same media-language rule as build-unattended-iso.sh: an answer file whose language does
+# not match the media is silently ignored by Setup. Here the media is not ours to inspect,
+# so LOCALE must be given (defaulting to en-US would silently reproduce the bug on
+# English-International media).
+LOCALE="${LOCALE:-en-US}"
+case "$LOCALE" in
+    en-GB) KBD="${KEYBOARD:-0809:00000809}" ;;
+    en-US) KBD="${KEYBOARD:-0409:00000409}" ;;
+    *)     KBD="${KEYBOARD:?set KEYBOARD=<id> for LOCALE=$LOCALE}" ;;
+esac
+echo "answer-file locale: $LOCALE (input $KBD) - MUST match the Windows media on CD 1"
+sed -e "s/@IMAGE_NAME@/$IMG_NAME/" -e "s/@UILANG@/$LOCALE/g" -e "s/@INPUTLOCALE@/$KBD/g" \
+    "$UNATTEND" > "$WORK/autounattend.xml"
+if grep -q '@[A-Z_]*@' "$WORK/autounattend.xml"; then
+    echo "unsubstituted placeholder left in the answer file:" >&2
+    grep -o '@[A-Z_]*@' "$WORK/autounattend.xml" | sort -u >&2
+    exit 1
+fi
 if [ "${WITH_KEY:-0}" = "1" ]; then
     sed -i 's#<!--PRODUCTKEY-->#<ProductKey><Key>VK7JG-NPHTM-C97JM-9MPGT-3V66T</Key><WillShowUI>OnError</WillShowUI></ProductKey>#' \
         "$WORK/autounattend.xml"
