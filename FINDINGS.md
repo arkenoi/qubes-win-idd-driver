@@ -4216,3 +4216,54 @@ loudest claims in the previous entry and in my report to the user:
   This is the mechanism behind the user's "maximized beyond workspace" report. Fixed:
   agent branch workarea-clamp-maximize (WorkAreaGetApplied + clamp), needs build + gate
   re-run before it ships.
+
+## 2026-08-07 — clean-path install FAILED on disk selection; answer file no longer trusts DiskID
+
+Symptom (caught by a routine screenshot, not by any check): `win10-clean` Setup stopped with
+"Windows cannot be installed to the selected partition. Installation requires at least
+20000 MB of free space", then "The installation was cancelled". Root volume usage stayed at
+**0.0 GiB** - Setup never wrote a byte.
+
+Cause: the answer file hardcoded `<DiskID>0</DiskID>`. A Qubes HVM presents THREE disks and
+the guest-side numbering is only stable AFTER install - measured on the working guest
+win-idd-test: `DISK 0 80GB boot=True / DISK 1 2GB / DISK 2 10GB` (root / private / volatile).
+WinPE's enumeration is not guaranteed to match, and on this run Disk 0 was one of the small
+volumes; 2 GiB and 10 GiB are both below Windows' 20 GB minimum, hence the message. This is a
+LATENT race that had silently worked on every previous install, not a new regression.
+
+Fix (both answer files, both media routes): the static `DiskConfiguration` is gone. A new
+`mgmt/diskprep.cmd` runs in windowsPE (RunSynchronous, before image apply), picks the
+LARGEST disk via `wmic diskdrive get Index,Size`, refuses anything under 25 GB with a
+logged reason, partitions it MBR+active+NTFS as C:, and leaves the other disks RAW.
+`<InstallTo>` is replaced by `<InstallToAvailablePartition>true</InstallToAvailablePartition>`,
+so Setup can only land on the one installable partition that exists. Both ISO builders stage
+diskprep.cmd at the media root and hard-fail if it is missing.
+
+Note on the failure mode this REPLACES: the old bug always failed loudly (both small disks
+are under Windows' minimum), so no past install can have silently landed on the wrong disk.
+
+## 2026-08-07 — toast notification: mapped borderless over a maximized window (user-reported)
+
+User: "a toast popped up in notepad window on win-idd-test, it certainly should not happen."
+
+Measured, not inferred:
+- dom0 geometry at that moment: `0x740018e 1524 667 396 373 ovr=1 "New notification"` -
+  its OWN X window, override-redirect (borderless), at the bottom-right of the work area
+  (work area (5,56)+1915x984 ends at 1920,1040; the toast ends at exactly 1920,1040).
+- **Notepad's per-window buffer is CLEAN** (`qtest shot` -> win-0.png shows no toast pixels),
+  so this is NOT capture contamination - per-window capture behaved correctly.
+- Classification path: `IsPopup` (main.c:812) marks any visible window without WS_CAPTION
+  (and without SYSMENU+APPWINDOW) as override-redirect. A toast has no caption -> borderless.
+
+So the toast is drawn exactly where Windows draws toasts, but WITHOUT a Qubes border, which
+makes it visually indistinguishable from the content of the window it covers.
+
+**Open question the spec does not settle.** CLAUDE.md 2A-chrome 3c says toasts "must be KEPT,
+mapped override_redirect" - what the code does today. But the same section's NOTE says that on
+Linux qubes a notification arrives "as a normal bordered window". The user's report sides with
+the NOTE. Not changed unilaterally: making toasts bordered is a one-line predicate change, but
+the safe discriminator needs the toast's live in-guest attributes (owner, class, styles), and
+an attempt to re-fire one for capture did not render (unregistered app id). Next step: catch a
+naturally occurring toast with the winenum probe, then decide between "unowned windows are
+never override-redirect" (principled: synthesis already assumes popups are owned) and a
+narrower shell-notification class rule.
