@@ -1,0 +1,68 @@
+#!/bin/bash
+# Watch a Windows guest and capture dom0 forensics AUTOMATICALLY the moment it wedges.
+#
+# A wedge here means: the domain is Running (so it did not crash or shut down) but qrexec
+# has stopped answering for N consecutive probes. That is the state whose evidence is
+# destroyed by the kill that inevitably follows - and which, twice in this project, was
+# lost because the capture depended on a human noticing and typing a sudo command.
+# Run this alongside any long test and the capture happens with nobody watching.
+#
+# Usage: tools/wedge-guard <vm> [--strikes N] [--interval S] [--outdir DIR] [--once]
+#   --once   exit after the first capture (default: keep guarding after recovery)
+#
+# Requires dom0/13-install-wedge-forensics-service.sh installed once in dom0.
+set -u
+HERE="$(cd "$(dirname "$0")" && pwd)"
+VM="${1:?usage: $0 <vm> [--strikes N] [--interval S] [--outdir DIR] [--once]}"; shift
+STRIKES=3; INTERVAL=45; OUTDIR="."; ONCE=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --strikes)  STRIKES="$2"; shift 2 ;;
+        --interval) INTERVAL="$2"; shift 2 ;;
+        --outdir)   OUTDIR="$2"; shift 2 ;;
+        --once)     ONCE=1; shift ;;
+        *) echo "unknown option: $1" >&2; exit 2 ;;
+    esac
+done
+mkdir -p "$OUTDIR"
+
+log()   { echo "$(date -u +%H:%M:%S) wedge-guard[$VM]: $*"; }
+state() { qvm-ls --fields NAME,STATE 2>/dev/null | awk -v v="$VM" '$1==v{print $2}'; }
+alive() { QTEST_VM="$VM" timeout 40 "$HERE/qtest" run 'echo WGOK' 2>/dev/null | tr -d '\r\0' | grep -qc WGOK; }
+
+miss=0
+log "guarding (wedge = Running + $STRIKES missed qrexec probes ${INTERVAL}s apart)"
+while :; do
+    s="$(state)"
+    if [ "$s" != Running ]; then
+        # Halted/Transient is a reboot or shutdown, NOT a wedge - do not capture, and do not
+        # count it as a miss, or every legitimate reboot would trip the guard.
+        [ "$miss" -gt 0 ] && log "state=$s - resetting strike count"
+        miss=0; sleep "$INTERVAL"; continue
+    fi
+    if alive; then
+        [ "$miss" -gt 0 ] && log "qrexec recovered after $miss miss(es)"
+        miss=0
+    else
+        miss=$((miss + 1))
+        log "qrexec silent while Running ($miss/$STRIKES)"
+        if [ "$miss" -ge "$STRIKES" ]; then
+            dir="$OUTDIR/wedge-$VM-$(date +%Y%m%d-%H%M%S)"
+            log "WEDGE CONFIRMED -> capturing to $dir"
+            # Pixels first: a screenshot proves whether the desktop is frozen, and unlike
+            # the dom0 capture it costs nothing and cannot fail on a missing service.
+            QTEST_VM="$VM" timeout 60 "$HERE/qtest" shot "$dir.shot.tar" >/dev/null 2>&1 \
+                && log "screenshot saved to $dir.shot.tar" \
+                || log "screenshot unavailable (guest may have no mapped windows)"
+            if QTEST_VM="$VM" "$HERE/qtest" wedge "$dir"; then
+                log "dom0 forensics captured"
+            else
+                log "dom0 forensics FAILED - is dom0/13-install-wedge-forensics-service.sh installed?"
+            fi
+            log "capture complete - guest left UNTOUCHED for inspection"
+            [ "$ONCE" = 1 ] && exit 0
+            miss=0
+        fi
+    fi
+    sleep "$INTERVAL"
+done
