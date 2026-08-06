@@ -128,7 +128,21 @@ foreach ($f in 'gui-agent.exe', 'gui-watchdog.exe') {
     $src = Join-Path $MsiArtifact $f
     if (-not (Test-Path -LiteralPath $src)) { throw "$f missing from the qwt-full artifact" }
     Copy-Item $src (Join-Path $OutDir 'reference') -Force
-    $refHashes[$f] = (Get-FileHash -LiteralPath $src -Algorithm SHA256).Hash.ToLowerInvariant()
+    $h = (Get-FileHash -LiteralPath $src -Algorithm SHA256).Hash.ToLowerInvariant()
+    # qwt-full recorded the hash of the binary it staged INTO the MSI. If the loose copy
+    # beside it disagrees, the reference hash we publish - and that the guest installer
+    # checks the installed agent against - would be for a different binary than the MSI
+    # actually carries. That must fail here.
+    $key = "agent-bins/$f"
+    if ($um.files.PSObject.Properties.Name -contains $key) {
+        $claimedBin = ([string]$um.files.$key).ToLowerInvariant()
+        if ($claimedBin -ne $h) {
+            throw "$f sha256 $h disagrees with the qwt-full manifest ($claimedBin)"
+        }
+    } else {
+        throw "qwt-full MANIFEST.json does not record $key - cannot corroborate the agent binary"
+    }
+    $refHashes[$f] = $h
 }
 Set-Content -LiteralPath (Join-Path $OutDir 'reference\README.txt') -Encoding ASCII -Value @(
     'These are the exact gui-agent.exe / gui-watchdog.exe bytes embedded in ..\msi\installer.msi.',
