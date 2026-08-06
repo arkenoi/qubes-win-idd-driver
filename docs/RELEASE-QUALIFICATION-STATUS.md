@@ -17,6 +17,17 @@ on GitHub, then feature freeze.
 | Installer bug (ours) | **fixed + rebuilt** | `Clear-BootResume`: `schtasks /Delete` on a missing task writes to stderr; `ErrorActionPreference=Stop` turned that no-op into a FATAL, aborting the install before the MSI. Both schtasks sites now judge the exit code (0859dbb). Fix present in the new artifact. |
 | Track B gating record (exp-9) | **PASS 6/6** | 3 interleaved rounds, cold boot per side; flag TRUE, pitch tight, dup clean on the IDD |
 
+## UPDATE (session close)
+
+Since the table above: **networking + Windows Update verified with zero issues** on
+`core-net` (NIC/DNS/HTTPS, WU search+download+install all orcSucceeded, no CPU burn) and the
+historical netvm blocker re-attributed to mirage-firewall (stale claim purged from
+GOAL-STATUS.md). **Office 365 evaluation installs unattended** and Word launches.
+**Benchmark harness bug fixed** (bash `set -u` rejects `local a="$1" b="$a"`); both sides now
+run, but the comparison is NOT valid yet (stock has no QGAPERF by construction; the dom0
+pixel fallback saturates). Genuine stock agent for future controls:
+sha256[0:16] `3D2E6BCEC9F5BD89` from `vendor/qwt-4.2.2/installer.msi`.
+
 ## BLOCKED ON THE USER (small, specific)
 
 1. **Clean-install acceptance cannot proceed**: attaching the install ISO now breaks domain
