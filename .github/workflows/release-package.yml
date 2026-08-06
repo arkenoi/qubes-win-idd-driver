@@ -1,0 +1,320 @@
+# release-package: produce the two artifacts a user actually installs.
+#
+#   qwt-improved-setup   a directory: the real QWT 4.2.2 MSI rebuilt from upstream WiX
+#                        sources with OUR gui-agent, plus certs, VC++ runtime, the IddCx
+#                        driver payload, a two-stage install script, README and MANIFEST.
+#                        Installs on a CLEAN Windows guest. NOT an overlay.
+#   qwt-improved-iso     the same tree wrapped in an ISO 9660 image, so it can be attached
+#                        to a qube with no networking.
+#
+# This is the counterpart to build.yml's `package` job, which produces the OVERLAY updater
+# (agent binaries only, requires QWT already installed). Both are kept: the overlay is the
+# fast path for iterating on the agent, this is the thing you hand someone.
+name: release-package
+
+on:
+  workflow_dispatch:
+    inputs:
+      volume_id:
+        description: 'ISO volume label'
+        required: false
+        default: 'QWT_IMPROVED'
+  push:
+    # t2/release-package is where this workflow is developed and validated. GitHub only
+    # offers workflow_dispatch for files that exist on the DEFAULT branch, so until this
+    # merges, a push trigger is the only way to exercise it.
+    branches: [main, t2/release-package]
+    paths:
+      - 'packaging/setup/**'
+      - 'packaging/make-setup.ps1'
+      - 'packaging/make-iso.sh'
+      - '.github/workflows/release-package.yml'
+
+jobs:
+  # ------------------------------------------------------------------ the MSI (reused)
+  # qwt-full.yml builds installer.msi from the pinned upstream WiX sources with our agent
+  # and uploads `qwt-full-package`. Calling it keeps ONE definition of that build.
+  msi:
+    uses: ./.github/workflows/qwt-full.yml
+    secrets: inherit
+
+  # --------------------------------------------------------------- the IddCx driver
+  # Deliberately a slimmed copy of build.yml's idd-driver job: the release payload needs
+  # the driver package (inf/cat/dll) and nothing else. The console probes that job also
+  # builds are development tools and have no place in an installable payload.
+  idd:
+    runs-on: windows-2022
+    steps:
+      - name: Require signing config
+        shell: pwsh
+        env:
+          HAVE_PFX: ${{ secrets.SIGNING_PFX_B64 != '' }}
+        run: |
+          # An unsigned test driver cannot load even with testsigning on, so shipping one
+          # would produce a package whose /idd path is guaranteed to fail on the guest.
+          if ('${{ vars.SIGNING_ENABLED }}' -ne 'true' -or $env:HAVE_PFX -ne 'true') {
+            throw 'release-package requires SIGNING_ENABLED=true and SIGNING_PFX_B64/PASS'
+          }
+
+      - uses: actions/checkout@v4
+
+      - name: Install WDK + VS driver targets
+        shell: pwsh
+        run: |
+          choco install windowsdriverkit11 --no-progress -y
+          $vsix = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix" -Recurse -Filter '*.vsix' |
+                  Select-Object -First 1
+          if (-not $vsix) { throw "WDK.vsix not found after choco install" }
+          $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse -Filter VSIXInstaller.exe |
+                  Select-Object -First 1
+          Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -Wait
+
+      - name: Build driver
+        shell: pwsh
+        run: |
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              Select-Object -First 1
+          & $msbuild driver\ /m /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed" }
+
+      - name: Collect driver package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force idd-package | Out-Null
+          # The same recursive glob build.yml's idd-driver job uses, which is proven to
+          # yield exactly one .inf and one .dll: the WDK scatters them across two
+          # x64\Release trees (the stamped INF under driver\IddSampleDriver\x64\Release,
+          # the binary under driver\x64\Release), so narrowing to a single "package
+          # folder" finds one and misses the other.
+          #
+          # The pre-built .cat is deliberately NOT copied: Inf2Cat regenerates it below,
+          # and shipping the stale one would mean a skipped Inf2Cat could go unnoticed.
+          Get-ChildItem driver -Recurse -Include *.dll,*.inf |
+              Where-Object FullName -match 'x64.*Release' |
+              Copy-Item -Destination idd-package -Force
+          $inf = @(Get-ChildItem idd-package -Filter *.inf)
+          $dll = @(Get-ChildItem idd-package -Filter *.dll)
+          if ($inf.Count -ne 1) { throw "expected 1 .inf in the driver package, got $($inf.Count)" }
+          if ($dll.Count -lt 1) { throw 'no driver .dll produced' }
+          Get-ChildItem idd-package | Format-Table Name, Length
+
+      - name: Catalog + test-sign
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.SIGNING_PFX_B64 }}
+          PFX_PASS: ${{ secrets.SIGNING_PFX_PASS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [IO.File]::WriteAllBytes('cert.pfx', [Convert]::FromBase64String($env:PFX_B64))
+          $kits = "${env:ProgramFiles(x86)}\Windows Kits\10\bin"
+          $signtool = Get-ChildItem $kits -Recurse -Filter signtool.exe |
+              Where-Object FullName -match 'x64' | Select-Object -First 1
+          $inf2cat = Get-ChildItem $kits -Recurse -Filter Inf2Cat.exe | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          if (-not $inf2cat)  { throw 'Inf2Cat.exe not found' }
+          & $inf2cat.FullName /driver:idd-package /os:10_x64
+          if ($LASTEXITCODE -ne 0) { throw "Inf2Cat failed ($LASTEXITCODE)" }
+          Get-ChildItem idd-package -Include *.dll,*.cat -Recurse | ForEach-Object {
+              & $signtool.FullName sign /fd sha256 /f cert.pfx /p $env:PFX_PASS $_.FullName
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($_.Name)" }
+          }
+          Remove-Item cert.pfx
+          # A missing catalog means an INF that PnP will reject; fail here, not on the guest.
+          if (-not (Get-ChildItem idd-package -Filter *.cat)) { throw 'no .cat produced' }
+          Get-ChildItem idd-package | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-idd-driver
+          path: idd-package/
+          retention-days: 14
+
+  # ------------------------------------------------------------------ the setup tree
+  setup:
+    needs: [msi, idd]
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Download qwt-full artifact (installer.msi + our signed binaries + sign.crt)
+        uses: actions/download-artifact@v4
+        with:
+          name: qwt-full-package
+          path: dl/qwt-full
+
+      - name: Download IddCx driver artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-idd-driver
+          path: dl/idd
+
+      # actions/checkout marks the workspace safe inside a TEMPORARY HOME and then restores
+      # HOME, so by this point git reports "detected dubious ownership" and provenance
+      # lookups silently degrade to 'unknown'. Resolve it here and hand it over explicitly.
+      - name: Mark workspace safe for git
+        shell: pwsh
+        run: |
+          git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$env:GITHUB_WORKSPACE/agent"
+          $repoSha = (git -C "$env:GITHUB_WORKSPACE" rev-parse HEAD).Trim()
+          if (-not $repoSha) { throw 'could not resolve the repo SHA' }
+          "QWT_REPO_SHA=$repoSha" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Locate vc_redist.x64.exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The stock QWT Burn bundle installs the VC++ runtime as its prerequisite package;
+          # we drive the MSI directly, so we must ship the runtime ourselves. The runner's
+          # VS2022 redist copy is the same Microsoft-signed binary.
+          $redist = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse `
+                    -Filter vc_redist.x64.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $redist) { throw 'vc_redist.x64.exe not found on the runner' }
+          # We are shipping a binary the guest will EXECUTE elevated, so assert Microsoft
+          # actually signed it and it is untampered. Verified passing on run 31109691408.
+          $sig = Get-AuthenticodeSignature $redist.FullName
+          if ($sig.Status -ne 'Valid') { throw "vc_redist.x64.exe signature is $($sig.Status)" }
+          Write-Host "$($redist.FullName)  signer: $($sig.SignerCertificate.Subject)"
+          "VC_REDIST=$($redist.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Assemble qwt-improved-setup
+        shell: pwsh
+        run: |
+          & .\packaging\make-setup.ps1 `
+              -MsiArtifact dl\qwt-full `
+              -IddArtifact dl\idd `
+              -VcRedist    "$env:VC_REDIST" `
+              -OutDir      qwt-improved-setup
+
+      - name: Show manifest
+        shell: pwsh
+        run: Get-Content qwt-improved-setup\MANIFEST.json
+
+      - name: Self-check the staged tree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Re-verify SHA256SUMS.txt the same way the guest installer will, and assert the
+          # payload really is present. A packaging job whose only check is "msbuild exited 0"
+          # cannot fail on a dropped file.
+          $root = (Resolve-Path qwt-improved-setup).Path
+          $lines = @(Get-Content "$root\SHA256SUMS.txt" | Where-Object { $_.Trim() })
+          $bad = @()
+          foreach ($l in $lines) {
+            if (-not ($l -match '^([0-9a-f]{64})\s+(.+)$')) { throw "malformed sums line: $l" }
+            $p = Join-Path $root ($Matches[2] -replace '/', '\')
+            if (-not (Test-Path -LiteralPath $p)) { $bad += "MISSING $($Matches[2])"; continue }
+            $h = (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($h -ne $Matches[1]) { $bad += "MISMATCH $($Matches[2])" }
+          }
+          if ($bad.Count) { throw ($bad -join "`n") }
+          foreach ($req in 'install.cmd','Install-QwtImproved.ps1','README.txt','MANIFEST.json',
+                           'msi\installer.msi','msi\vc_redist.x64.exe',
+                           'certs\qwt-improved-testsign.cer') {
+            if (-not (Test-Path -LiteralPath "$root\$req")) { throw "staged tree is missing $req" }
+          }
+          if (@(Get-ChildItem "$root\certs" -Filter *.cer).Count -ne 7) {
+            throw 'expected 7 certificates (6 ITL + ours) in certs\'
+          }
+          if (-not (Get-ChildItem "$root\idd-driver" -Filter *.cat)) {
+            throw 'idd-driver\ has no catalog - the driver payload would not install'
+          }
+          Write-Host "self-check OK: $($lines.Count) files verified"
+
+      - name: Syntax-check the installer script
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Parse (do not run) the script that will execute on the guest. A syntax error
+          # here is otherwise discovered only after someone boots a VM.
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path 'qwt-improved-setup\Install-QwtImproved.ps1').Path, [ref]$null, [ref]$errors)
+          if ($errors -and $errors.Count) {
+            $errors | ForEach-Object { Write-Host "  $_" }
+            throw "Install-QwtImproved.ps1 has $($errors.Count) parse error(s)"
+          }
+          Write-Host 'Install-QwtImproved.ps1 parses clean'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwt-improved-setup
+          path: qwt-improved-setup/
+          retention-days: 14
+
+  # ------------------------------------------------------------------------- the ISO
+  iso:
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the staged setup tree
+        uses: actions/download-artifact@v4
+        with:
+          name: qwt-improved-setup
+          path: qwt-improved-setup
+
+      - name: Install xorriso
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xorriso
+
+      - name: Build + verify the ISO
+        env:
+          VOLID: ${{ github.event.inputs.volume_id || 'QWT_IMPROVED' }}
+        run: |
+          set -euo pipefail
+          # upload-artifact does not preserve the executable bit for .sh files it never saw;
+          # this one comes from the checkout, but be explicit anyway.
+          chmod +x packaging/make-iso.sh
+          mkdir -p iso-out
+          ./packaging/make-iso.sh qwt-improved-setup iso-out/qwt-improved-setup.iso "$VOLID"
+
+      - name: MANIFEST for the ISO artifact
+        env:
+          VOLID: ${{ github.event.inputs.volume_id || 'QWT_IMPROVED' }}
+        run: |
+          set -euo pipefail
+          python3 - "$VOLID" <<'PY'
+          import hashlib, json, os, sys
+          volid = sys.argv[1]
+          iso = 'iso-out/qwt-improved-setup.iso'
+          with open('qwt-improved-setup/MANIFEST.json', encoding='utf-8-sig') as f:
+              m = json.load(f)
+          h = hashlib.sha256()
+          with open(iso, 'rb') as f:
+              for chunk in iter(lambda: f.read(1 << 20), b''):
+                  h.update(chunk)
+          # Same manifest as the setup artifact (commit, run id, per-file sha256) plus the
+          # image's own identity, so the ISO artifact is self-describing on its own.
+          m['package'] = 'qwt-improved-iso'
+          m['iso'] = {
+              'name': os.path.basename(iso),
+              'size': os.path.getsize(iso),
+              'sha256': h.hexdigest(),
+              'volume_id': volid,
+              'contents_root': '/',
+              'note': 'ISO 9660 + Joliet + Rock Ridge, not bootable. Attach as a CD and run install.cmd elevated.',
+          }
+          with open('iso-out/MANIFEST.json', 'w', encoding='utf-8') as f:
+              json.dump(m, f, indent=2)
+          with open('iso-out/SHA256SUMS.txt', 'w', encoding='ascii') as f:
+              f.write('%s  %s\n' % (h.hexdigest(), os.path.basename(iso)))
+          print(json.dumps(m['iso'], indent=2))
+          PY
+
+      - name: Copy the README next to the ISO
+        run: cp qwt-improved-setup/README.txt iso-out/README.txt
+
+      - name: Artifact contents
+        run: ls -l iso-out && cat iso-out/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwt-improved-iso
+          path: iso-out/
+          retention-days: 14
