@@ -94,7 +94,12 @@ echo "capture method: $captured" >&2
 # Geometry is best effort and must never abort the capture: the PNG is the point. It also
 # requires xwininfo, which dom0 may not have - absence is not an error.
 {
-    echo "# id x y w h override_redirect name"
+    # The 'mapped' column exists because this list comes from xwininfo -root -tree,
+    # which enumerates EXISTING X windows - a withdrawn (unmapped) window still
+    # appears. Reading geometry without map state misled a whole investigation
+    # (2026-08-07: the seamless desktop window was reported as "mapped full-screen"
+    # when it was actually withdrawn).
+    echo "# id x y w h override_redirect mapped name"
     command -v xwininfo >/dev/null || echo "# xwininfo not installed in dom0 - geometry omitted"
     "${X[@]}" xwininfo -root -tree 2>/dev/null |
       grep -oE '0x[0-9a-f]+' | sort -u | while read -r id; do
@@ -109,7 +114,8 @@ echo "capture method: $captured" >&2
         ovr=$(printf '%s' "$info" | grep -c 'Override Redirect State: yes')
         name=$("${X[@]}" xprop -id "$id" WM_NAME 2>/dev/null |
                sed -n 's/^WM_NAME(\(STRING\|UTF8_STRING\)) = "\(.*\)"$/\2/p' | head -1)
-        echo "$id ${x:-?} ${y:-?} ${w:-?} ${h:-?} $ovr ${name:-?}"
+        ms=$(printf '%s' "$info" | grep -c 'Map State: IsViewable')
+        echo "$id ${x:-?} ${y:-?} ${w:-?} ${h:-?} $ovr $ms ${name:-?}"
     done
 } > "$TMP/geometry.txt" 2>/dev/null || true
 
