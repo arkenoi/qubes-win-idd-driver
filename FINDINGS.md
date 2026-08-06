@@ -4392,3 +4392,16 @@ designed-and-verified when only its dom0 half had ever been exercised.
 CONSEQUENCE: on Qubes HVM the answer file must live on the ONE booted CD, so unattended
 install requires a repacked ISO. What can still be protected is how MUCH is changed - see
 the minimal-repack note below.
+
+## 2026-08-07 — the self-matching pgrep guard, again (process note)
+
+Wrote `until ! pgrep -f "build-unattended-iso.sh"; do sleep 20; done` to wait for the ISO
+build. `pgrep -f` matches full command lines, and the waiter's OWN shell command line
+contains that string - so the guard matched itself and would have waited forever while the
+build had in fact finished (log showed the ISO written and the vendor delta emitted).
+
+This is verbatim the defect called out in the 2026-08-06 handoff's process note ("a pgrep
+guard that matched its own monitor, so a watcher 'ran' while nothing ran"). Recording it
+because knowing about a trap did not stop me walking into it: the fix is to not identify
+work by a string that the waiter itself contains - wait on the PID, on a sentinel file, or
+grep the log for the completion line.
