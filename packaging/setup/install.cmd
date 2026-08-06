@@ -7,7 +7,9 @@ REM
 REM  Usage:
 REM     install.cmd              two stages, you reboot between them
 REM     install.cmd /auto        reboots and resumes by itself (unattended)
-REM     install.cmd /idd         also stage the experimental IddCx driver
+REM     install.cmd /idd         install AND ACTIVATE the Qubes IddCx driver
+REM                              (it becomes the display; the emulated VGA
+REM                              adapter is disabled - see README.txt)
 REM     install.cmd /nonet       omit the PV network drivers (see README.txt)
 REM  Flags combine:  install.cmd /auto /idd
 REM
