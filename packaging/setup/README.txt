@@ -49,8 +49,9 @@ WHAT IT DOES *NOT* INSTALL
     the Basic Display Adapter.
   * The dom0-side pieces of this project (the window-resize service in `dom0/`).
     Those are installed in dom0 by hand and are out of scope for a guest ISO.
-  * The Qubes IddCx display driver, unless you pass /idd -- and even then it is
-    only STAGED into the driver store, never activated. See below.
+  * The Qubes IddCx display driver, unless you pass /idd. With /idd it is
+    installed AND ACTIVATED: the IDD becomes the guest's display and the
+    emulated VGA adapter is disabled. See below.
 
 TEST-SIGNING IS MANDATORY AND PERMANENT
 ---------------------------------------
@@ -95,7 +96,7 @@ Unattended (no second logon needed):
 
 Options:
      /auto    reboot and resume automatically
-     /idd     also stage the experimental IddCx driver (see below)
+     /idd     install and ACTIVATE the Qubes IddCx display driver (see below)
      /nonet   omit PvDriversNetwork
 
 Everything is logged to  C:\qwt-improved-install.log , the MSI's own verbose
@@ -139,17 +140,36 @@ C:\Program Files\Qubes Tools\bin\gui-agent.exe and fails if it does not equal
 MANIFEST.json -> reference_binaries -> "gui-agent.exe". That check is what
 caught the defect in the first place.
 
-THE EXPERIMENTAL IddCx DRIVER (/idd)
-------------------------------------
+THE QUBES IddCx DRIVER (/idd)
+-----------------------------
 `idd-driver\` holds the Qubes IddCx indirect display driver, test-signed by the
-same CI certificate. With /idd it is added to the driver store with pnputil.
+same CI certificate, plus Microsoft's devcon.exe from the WDK. With /idd,
+stage 2 installs it and ACTIVATES it as the guest's display, right before the
+final reboot:
 
-It is NOT activated: no software device is created, so no second monitor
-appears. That is deliberate. An ACTIVE second monitor enlarges the desktop
-bounding box the GUI agent maps as the screen, letting Windows place windows in
-a region dom0 never sees, which breaks seamless coordinates. Activation is a
-development step, done by hand with the tooling in the repo -- not something
-this installer should do to a user's guest.
+  1. pnputil /add-driver stages the package into the driver store;
+  2. devcon install creates the root-enumerated IDD device (hardware id
+     root\iddsampledriver, typically instance ROOT\DISPLAY\0000) and the
+     script waits up to 30 s for it to bind (ConfigManagerErrorCode 0);
+  3. only once the IDD is demonstrably up is the emulated VGA adapter -- the
+     PCI display device whose hardware ids match CC_0300; on Qubes that is
+     PCI\VEN_1234&DEV_1111 -- DISABLED. Its InstanceId is recorded in the
+     === RESULT === JSON (detail.idd_vga_instance_id). If the IDD never
+     binds, the VGA adapter is left alone and the install fails instead.
+
+After the reboot the desktop runs on the IDD. Windows also starts
+ROOT\BASICDISPLAY (the Basic Display DRIVER fallback) on another adapter;
+that is expected and harmless -- the GUI agent captures adapter 0, which is
+the IDD. The gui-agent publishes the resolution list to
+HKLM\SOFTWARE\QubesIDD\Modes at runtime and the driver picks it up when the
+monitor arrives, which is what makes arbitrary dom0-window-sized modes work.
+
+RECOVERY: if the guest comes up without a usable display, re-enable the VGA
+adapter over qrexec and reboot:
+
+    Enable-PnpDevice -InstanceId '<detail.idd_vga_instance_id>' -Confirm:$false
+
+(or `devcon enable` on that instance id). That restores the pre-IDD display.
 
 If you do not pass /idd, the driver files still ship in the package but nothing
 touches the driver store.

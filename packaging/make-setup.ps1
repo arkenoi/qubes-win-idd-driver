@@ -11,7 +11,8 @@
                             OUR gui-agent, produced by the `qwt-full` workflow
         vc_redist.x64.exe   the Burn bundle's prerequisite package
         certs/              the six ITL component certs + our CI test-signing cert
-        idd-driver/         the IddCx driver (optional payload, never auto-activated)
+        idd-driver/         the IddCx driver + devcon.exe (optional payload;
+                            install.cmd /idd installs AND ACTIVATES it)
         install.cmd         entry point
         Install-QwtImproved.ps1
         README.txt
@@ -155,12 +156,18 @@ $iddIncluded = $false
 $iddFiles = @()
 if ($IddArtifact -and (Test-Path -LiteralPath $IddArtifact)) {
     $IddArtifact = (Resolve-Path -LiteralPath $IddArtifact).Path
-    # Only driver-package members. Console probes from the build job are not part of an
-    # installable payload and must not end up in the directory pnputil is pointed at.
+    # Driver-package members plus devcon.exe, which the /idd activation path uses to
+    # create the root-enumerated device (devcon install root\iddsampledriver). Console
+    # probes from the build job are not part of an installable payload and must not end
+    # up in the directory pnputil is pointed at.
     $wanted = @(Get-ChildItem -LiteralPath $IddArtifact -File |
-                Where-Object { @('.inf', '.cat', '.dll') -contains $_.Extension.ToLowerInvariant() })
+                Where-Object { (@('.inf', '.cat', '.dll') -contains $_.Extension.ToLowerInvariant()) -or
+                               ($_.Name -ieq 'devcon.exe') })
     $inf = @($wanted | Where-Object { $_.Extension.ToLowerInvariant() -eq '.inf' })
     if ($inf.Count -ne 1) { throw "expected exactly 1 .inf in the driver artifact, found $($inf.Count)" }
+    if (-not @($wanted | Where-Object { $_.Name -ieq 'devcon.exe' })) {
+        throw 'devcon.exe missing from the driver artifact - install.cmd /idd ACTIVATES the driver with it and would fail on the guest'
+    }
     $wanted | ForEach-Object { Copy-Item $_.FullName (Join-Path $OutDir 'idd-driver') -Force }
     $iddFiles = @($wanted | ForEach-Object { $_.Name })
     $iddIncluded = $true
@@ -220,7 +227,7 @@ $manifest = [ordered]@{
     never_installs = @('reference/', 'PvDriversDisk', 'MoveUsers', 'Autologon',
                        'any WDDM/video driver (QWT 4.2.2 has none)',
                        'the dom0-side resize service',
-                       'idd-driver/ unless install.cmd /idd is passed - and even then it is staged, never activated')
+                       'idd-driver/ unless install.cmd /idd is passed; with /idd the driver is installed AND ACTIVATED (the IDD becomes the display, the emulated VGA adapter is disabled)')
     known_issues = @('Attaching a netvm makes the guest unusable on Qubes 4.3: xenvif installs but never starts, ~2 vCPUs burn, qrexec stops answering. Not yet attributed to this package vs the upstream PV drivers. Use this build on an offline qube.')
     idd_driver_included = $iddIncluded
     idd_driver_files    = $iddFiles
