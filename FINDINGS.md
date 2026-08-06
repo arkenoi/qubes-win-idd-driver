@@ -3666,3 +3666,34 @@ of an end-to-end install. The install path itself is the same `msiexec` invocati
 executed successfully on a wiped guest on 2026-08-01, plus a two-stage script whose only
 unexercised parts are the certificate/testsigning/reboot sequencing and the `-Auto` SYSTEM
 resume task. Record that as unproven until a guest install runs.
+
+# 2026-08-06 (release qualification) — fresh-guest install found a REAL installer bug
+
+Fresh qube `win10-fresh` created from the unattended ISO (clean Windows 10 22H2 19045),
+tagged into the new tag-based testbed policy (dom0/12-install-policy-tagged.sh — the old
+per-NAME rules gave new qubes NO qrexec access at all; found immediately by qvm-tags
+returning "Request refused").
+
+**Bug found by the fresh install, ours, fixed (0859dbb):** the release installer aborted
+with `FATAL ERROR: The system cannot find the file specified.` at
+`Install-QwtImproved.ps1:279` = `Clear-BootResume`. Cause: `schtasks /Delete` on a
+non-existent task writes its ERROR line to STDERR, and under
+`$ErrorActionPreference='Stop'` PowerShell converts a native command's stderr into a
+TERMINATING error — so a successful no-op killed the install. It only triggered because
+the boot ISO had ALREADY enabled testsigning, so stage 2 ran without a prior `-Auto`
+stage 1 — precisely the state a fresh-system test produces and an upgrade test never
+would. Both schtasks call sites now judge the EXIT CODE, never the stream. (Same trap as
+the earlier pnp-revert-setup NativeCommandError; third occurrence of this class in the
+project — worth a lint rule.)
+
+Evidence captured before recovery (guest went qrexec-dead right after, ~2 vcpu-s/s, no
+dom0 window — the familiar PV-servicing signature, on a machine that had just had its PV
+drivers touched): installer RESULT json
+`{"stage":"stage2-install","ok":false,...,"payload_files_verified":19,
+"package_version":"4.2.2+agent.bd6e8b81a560"}`, cpu-slope and window-count probes,
+full-desktop screenshot. Note the payload itself verified 19/19 files in the guest, so
+packaging and transport are sound; only the stage logic was wrong.
+
+Release artifacts verified independently of the guest: setup dir 19/19 sha256 OK, ISO
+sha256 OK (997cc27d…), MSI carries our agent (bd6e8b81) per the build job's own
+extraction check.
