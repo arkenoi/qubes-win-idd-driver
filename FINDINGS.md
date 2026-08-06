@@ -4336,3 +4336,26 @@ broken, two 45-minute cycles would discover the same defect instead of one.
 
 Status: both runs in flight. The repack route (`build-unattended-iso.sh`) stays in the tree
 as a fallback but is NO LONGER the default for acceptance.
+
+## 2026-08-07 — the clean-room route's FIRST run exposed two harness defects (both mine)
+
+The run failed within seconds, and both causes were checks that could not do their job -
+the same class this file keeps recording:
+
+1. **A check that could never PASS.** The answer-disc assertion I had just written used
+   `qvm-device block list "$VM"`, and this qube has NO PERMISSION for that call (it answers
+   "Failed to list 'block' devices ... you do not have access"). So the assertion failed on a
+   run where the assignment had in fact succeeded. Verified afterwards the permitted way: a
+   SECOND `qvm-device block assign` answers *"block device win-idd-mgmt:loop1::1 already
+   assigned to win10-clean"* - which is positive proof the first one stuck. That is now the
+   check.
+2. **A check that could never FAIL.** `reprovision.sh ... | tee -a log || fail "..."` judges
+   TEE's exit status, not reprovision's. reprovision exited 1 and the harness sailed past it,
+   printing "waiting for the release install to complete in-guest" about a guest that had
+   never been started. Now judged via `${PIPESTATUS[0]}`, and the guard was demonstrated to
+   catch a deliberately failing command before being trusted.
+
+Both fixed and relaunched. Worth stating plainly: the assertion in (1) was written *because*
+a silently-missing answer disc is indistinguishable from "the answer file was ignored" an
+hour later - and it was written in a form that could not work. Permission-dependent commands
+must be exercised once by hand before they are used as gates.
