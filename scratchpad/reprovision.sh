@@ -12,6 +12,13 @@ LOOP="${2:?usage: $0 <vm> <loopN>}"
 HOLDER=win-idd-mgmt
 
 log() { echo "$(date -u +%H:%M:%S) reprovision: $*"; }
+
+# One instance per VM. Two concurrent runs interleave their output in the same log and,
+# worse, both restart the guest - one can qvm-start a VM the other just killed, or start it
+# WITHOUT the CD mid-install. Hit 2026-08-06: a killed run kept polling and restarting the
+# VM a second run had recreated, producing spliced log lines and an unattributable result.
+exec 9>"/tmp/reprovision-$VM.lock"
+flock -n 9 || { log "another reprovision is already running for $VM - refusing"; exit 1; }
 state() { qvm-ls --fields NAME,STATE 2>/dev/null | awk -v v="$VM" '$1==v{print $2}'; }
 
 if [ -n "$(state)" ]; then
