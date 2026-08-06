@@ -34,8 +34,25 @@ $gen = 'C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\activity-gen.ps1'
 if (-not (Test-Path $gen)) { Write-Output 'BENCH error=no_activity_gen'; exit 1 }
 $t0 = Get-Date
 $a0 = AgentCpu
-Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$gen`"",'-Seconds',"$LoadSec" -WindowStyle Minimized
+# The load MUST run in the interactive session. Invoked over qrexec this script runs in
+# session 0, where Start-Process creates windows no one composites and no display work
+# happens - which is exactly why the earlier "loaded" numbers were indistinguishable from
+# idle. A scheduled task with /RU user /IT lands the scene in session 1 instead.
+$taskCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$gen`" -Seconds $LoadSec"
+& schtasks /create /tn QwtBenchLoad /tr $taskCmd /sc once /st 00:00 /ru user /it /f *>&1 | Out-Null
+& schtasks /run /tn QwtBenchLoad *>&1 | Out-Null
+Start-Sleep -Seconds 3
+# Fail loudly rather than silently measuring an idle desktop: a missing-data check that
+# cannot fail is worthless (CLAUDE.md).
+$running = @(Get-Process powershell -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -ne 0 }).Count
+if ($running -lt 1) {
+    Write-Output 'BENCH error=load_not_in_interactive_session'
+    & schtasks /delete /tn QwtBenchLoad /f *>&1 | Out-Null
+    exit 1
+}
+Write-Output "BENCH load_session=interactive procs=$running"
 Start-Sleep -Seconds ($LoadSec + 3)
+& schtasks /delete /tn QwtBenchLoad /f *>&1 | Out-Null
 $a1 = AgentCpu
 $loadWall = ((Get-Date) - $t0).TotalSeconds
 $loadCpu  = $a1 - $a0
