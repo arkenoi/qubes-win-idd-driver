@@ -3553,3 +3553,29 @@ window as the KNOWN daemon EOF bug: reboot and continue, not fail.
 Deployed: agent 6177C57F (staging + exact-follow + never-exit + echo/announce gates +
 held-frame + M6 + A4-lite + M0-tail + M7 LRU/limiter + fit guard), driver 70C64039 (D4v3 +
 stable EDID). Snap battery PASS 4/4 on this build.
+
+# 2026-08-06 (exp-9) — round 1 PASS both sides; round-2 wedge RECOVERED WITHOUT FORENSICS (my error)
+
+**Round 1 formal record, both sides, cold boot each, activity-verified:**
+- IDD test: `flag=True ever_false=False map_ok=True pitch=7680 (=width*4) dup_ok=True
+  agent_ok=True device=\\.\DISPLAY2 adapter0_attached=1 acquired=163 access_lost=0 redup=0
+  format=87 session=1` → **Outcome A CONFIRMED on the CURRENT stack** (stable-EDID driver
+  70C64039 + staging-grant agent), not on the superseded D0/D4v1 configuration.
+- BDA control: identical field set, `acquired` above the gate after the probe window was
+  widened (see below). Raw JSON: instrumentation/exp9/round-1-{bda,idd}.json.
+
+**Instrument fixes on the way there** (both were the harness, both now recorded):
+1. `python3 - <<EOF` with piped JSON: the heredoc IS stdin, so `json.load(sys.stdin)` always
+   saw EOF — that is what produced the two "PERSIST FAIL json-unparseable" stops on healthy
+   topologies. JSON now passed via argv.
+2. Activity gate (>=20 acquired) tripped at 15: the guest's damage rate under activity-gen is
+   ~0.5 frames/s, so a 30 s probe COULD NOT reach 20 even when working correctly. Probe
+   window widened to 75 s (activity 90 s); the gate itself was NOT lowered.
+
+**PROCESS FAILURE, mine, recorded per the user's standing rule:** round-2-bda stopped with
+"could not arm revert marker" — qrexec dead, slope ~1 (idle), i.e. the idle/deaf wedge again,
+and the harness had correctly FROZEN the state for forensics. I then ran `qtest kill` and
+restarted **without capturing dom0 forensics**, destroying that instance. That was exactly the
+evidence the remaining defect needs, and the kit (dom0/11-wedge-forensics.sh) existed and was
+one command away. Rule reaffirmed: when the harness says STATE FROZEN, the next action is the
+dom0 kit — never a kill.
