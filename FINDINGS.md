@@ -3524,3 +3524,32 @@ happening after the first pass over a size pool. Real usage (a handful of habitu
 should approach zero replugs in steady state.
 Snap regression battery: PASS 4/4 on this build (near-half snaps, 20px-off and arbitrary
 exact, position preserved).
+
+# 2026-08-06 (close) — M7 + fit guard landed; the idle/deaf wedge still reachable via drag soak
+
+**Fit guard** (agent on t2/fit-guard, deployed 6177C57F; user rule "if remembered geometry
+does not make sense, snap to the nearest that does"): a dom0 request whose FRAME cannot fit
+the work area snaps to the largest published habitual size that does; when none is known the
+current resolution is kept. Verified live: `RESFIT 5120x1440 does not fit work area
+5110x1379 - snapping to 5110x1379`. This is what stops a WM-remembered oversized geometry
+(seen when the daemon window is recreated after an agent restart) from pushing borders
+off-screen.
+
+**Status of the wedge, stated honestly.** M7 defeats the *storm* reproduction decisively
+(6/6, replugs 4→0 after the first pass). It does NOT eliminate the idle/deaf failure: the
+real-path drag soak reached cycle 10 (9 gestures, 2 agent restarts, 1 reboot, all
+converged exactly) and then qrexec died again. So the remaining trigger is not raw replug
+RATE alone — the drag soak's replugs are already spaced by M7 — and the PV-servicing defect
+is still reachable under sustained mixed load. Guest-side mitigation has taken it from
+"first storm" to "~10 mixed cycles"; the rest is the dom0/PV side.
+
+**Two harness corrections this session** (both mine, both the same class as before):
+soak-full.sh RETIRED — it drove raw devcon PnP restarts through the obsolete SyncNow path,
+manufacturing the very churn it then reported; soak-drag.sh now (a) asserts guest==CURRENT
+dom0 window after a restart rather than the pre-restart size (the WM legitimately re-places
+a recreated window — the earlier "REVERT" was a false alarm) and (b) treats a missing dom0
+window as the KNOWN daemon EOF bug: reboot and continue, not fail.
+
+Deployed: agent 6177C57F (staging + exact-follow + never-exit + echo/announce gates +
+held-frame + M6 + A4-lite + M0-tail + M7 LRU/limiter + fit guard), driver 70C64039 (D4v3 +
+stable EDID). Snap battery PASS 4/4 on this build.
