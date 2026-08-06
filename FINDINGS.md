@@ -4031,3 +4031,30 @@ CI note: repeated runs showed `cancelled` jobs. `release-package.yml` has **no**
 block, and the canceller was our own token - a background verification job from an earlier
 agent that cancelled runs it treated as duplicates. It has since exited; the next dispatch on
 `main` should complete. Not a workflow defect.
+
+## 2026-08-06 — clean-path attempt 2 wedged: my release stage-2 script never retired its ONSTART task
+
+User observed: "Qubes Windows Tools setup on screen and thats it", then "two close buttons".
+
+**Cause, in code I added today (29328c8).** `payload/setup.cmd` creates `QWTStage2` with
+`/sc onstart`. The stock `payload/setup2.cmd` deletes that task as its FIRST action, which is
+what makes it one-shot. The `RELEASE_SETUP` variant of `setup2.cmd` that the builder generates
+omitted the delete. Our installer reboots up to three times (stage 1 -> testsigning, install ->
+drivers bind), so on every one of those boots the task re-fired and started ANOTHER concurrent
+`install.cmd /auto`. Two installers contending for the Windows Installer mutex = two stacked
+setup dialogs and a guest whose qrexec stopped answering (gate log: `state=Running` with an
+empty hash from 19:33 onward, after having answered at 19:19).
+
+Evidence available: the user's direct observation; the gate log transition from answering to
+timing out; and the diff itself. NOT available: `C:\qubes-win-idd-setup.log`, because qrexec is
+wedged and the dom0 screenshot service is currently broken for every VM. Recorded as a gap
+rather than reconstructed.
+
+Fixed: the generated stage 2 now starts with `schtasks /delete /tn QWTStage2 /f`, with the
+incident in the comment.
+
+**Scope of the damage.** The clean-path run is void. The UPGRADE-path result is NOT affected:
+it ran `install.cmd` directly over qrexec on `win10-e2e` and never touched this firstboot
+payload; its gate passed (4B4CE2B1 -> 77607793) and survived a reboot. The wedged guest is not
+being repaired - a system that survived two concurrent installers cannot serve as clean-install
+evidence no matter what state it is coaxed into. Rebuild and reinstall from scratch.
