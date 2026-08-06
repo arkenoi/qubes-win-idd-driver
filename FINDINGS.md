@@ -3981,9 +3981,13 @@ Honest limits of this run:
   gate still has to be re-run against a real CI build.
 - The leftover sweep reported the binaries ABSENT - the uninstall had already removed them. The
   delete and rename-aside branches are therefore still unexercised.
-- Visual confirmation could not be obtained: `qtest shot` returned an empty tar for win10-e2e
-  **and for the win-idd-test control**, so the dom0 screenshot service is the thing that is
-  broken, not the guest. Functional evidence instead: the agent log shows seamless mode
+- Visual confirmation was not obtained at the time. **RETRACTED 2026-08-06:** I claimed the
+  dom0 screenshot service was broken. It is not, and I did not break it - verified immediately
+  after the claim: `fullshot` returned 1,269,760 bytes and a per-VM shot of win-idd-test
+  890,880 bytes. The empty tars were CORRECT: win10-e2e had just had its QWT uninstalled and
+  reinstalled so its agent was down and it had no mapped windows, and win-idd-test had none
+  open. An empty tar means "no windows", not "service broken" - I never checked which.
+  Functional evidence for the run instead: the agent log shows seamless mode
   (`mode=s`), `SendWindowMap` of the Notepad HWND, and a continuous QGAPERF frame stream with
   `win=1`. Recorded as "not visually confirmed", not as a visual pass.
 
@@ -4046,9 +4050,10 @@ setup dialogs and a guest whose qrexec stopped answering (gate log: `state=Runni
 empty hash from 19:33 onward, after having answered at 19:19).
 
 Evidence available: the user's direct observation; the gate log transition from answering to
-timing out; and the diff itself. NOT available: `C:\qubes-win-idd-setup.log`, because qrexec is
-wedged and the dom0 screenshot service is currently broken for every VM. Recorded as a gap
-rather than reconstructed.
+timing out; and the diff itself. NOT available: `C:\qubes-win-idd-setup.log`, because qrexec was
+wedged on that guest. (An earlier claim here that the dom0 screenshot service was broken is
+RETRACTED - it works; see the retraction above. A screenshot of the wedged guest WAS obtainable
+and I failed to take one.)
 
 Fixed: the generated stage 2 now starts with `schtasks /delete /tn QWTStage2 /f`, with the
 incident in the comment.
