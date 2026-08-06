@@ -320,3 +320,56 @@ use" is a human check, and several claims here (shadow cursor persistence, the h
 resize visual, real Office in a real Office qube) rest on exactly one or two user confirmations.
 Nothing here has run for weeks on a working desktop, and the two known stability defects (2.1,
 2.2) are the ones most likely to be what you actually hit first.
+
+---
+
+## 4. Added 2026-08-07 (release-qualification round)
+
+### 4.1 A clean install now ships the display driver — arbitrary resolutions out of the box
+
+`install.cmd /auto /idd` (what the unattended media runs) now **installs and activates** the
+Qubes IddCx display driver: the device is created, the installer waits until a display
+adapter is demonstrably up, and only then disables the emulated VGA adapter, so the first
+boot after install comes up with the IDD driving the desktop and the agent publishing its
+mode list. Previously the driver was only copied to the driver store ("staged, never
+activated") and a clean guest silently shipped on the Basic Display Adapter with a fixed
+mode list — no arbitrary-resolution support at all, and the old acceptance gate (a file
+hash) could not see the difference. The new gate (`guest/health-check.ps1`) fails a guest
+whose desktop is not on the IDD; it was validated by running it against exactly such a
+degraded guest. *Full clean-path acceptance on this build: in progress.*
+
+### 4.2 Seamless mode works on the IDD configuration
+
+The mode set the driver publishes now always contains the host screen size while seamless is
+active, so `SeamlessMode=1` actually enters seamless instead of failing with
+`DISP_CHANGE_BADMODE`. Verified on a cold boot: mode entered, host 5120x1440 applied, each
+guest window rendered as its own bordered dom0 window. (This is what makes the Office
+window-behaviour checks runnable at all on an IDD guest.)
+
+### 4.3 Stable DPI across resolution changes
+
+The IDD's EDID used to declare a fixed physical monitor size, so Windows recomputed its
+*recommended display scale* per applied mode — entering seamless at 5120x1440 silently
+flipped the guest to 150 % and text changed size between runs (user-reported). The EDID now
+declares the image size as undefined, which pins the recommendation at 96 DPI for every
+resolution; a manual scaling override still works and persists. *Verified in source +
+checksum; live verification pending the next driver install.*
+
+### 4.4 Maximized windows respect the dom0 workspace
+
+Maximized windows were clamped to the guest screen, not to the work area dom0 can actually
+display — measured ~11 px overflow (plus a wasteful configure/grant round-trip), and a
+genuine full-workspace overflow in the first minutes of a boot before dom0's work-area feed
+arrives. The clamp now targets the applied work area, with screen bounds only as the
+pre-feed fallback. *Live verification in progress.*
+
+### 4.5 Honest open items (this round)
+
+- **PV network is not bound on the reference guest**: networking works, but over the
+  emulated Realtek NIC — xenvif runs, yet xennet never binds its child device (code 28)
+  despite being installed. Whether stock QWT behaves identically here is not yet
+  established. Functional impact: throughput/latency, not availability.
+- `XENBUS\VBD` and `XENBUS\CONS` sit driverless by design (PV disk driver deliberately
+  omitted for its documented BSOD risk; QWT ships no console driver).
+- The Explorer-vs-agent work-area tug (Explorer recomputes from its taskbar, the agent
+  re-asserts every 2 s) converges but is noisy; tracked.
