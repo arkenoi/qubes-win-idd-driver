@@ -43,7 +43,14 @@ cat > "$SVC" <<'EOF'
 # Full-desktop screenshot. Returns a tar with screen.png and geometry.txt (every win-idd-test
 # window INCLUDING override-redirect ones and frames, so the caller can crop without guessing).
 set -uo pipefail
-VM=win-idd-test
+# Target selection is TAG-based: any qube carrying win-idd-testbed is served, which is the
+# same gate the qrexec policy uses. A hardcoded name meant every qube created later got an
+# EMPTY tar with no error - win11-fresh's visual acceptance was lost to exactly that
+# (2026-08-07), and an empty tar is indistinguishable from "the guest has no windows".
+VM="${QREXEC_SERVICE_ARGUMENT:-win-idd-test}"
+if ! qvm-tags "$VM" list 2>/dev/null | grep -qx win-idd-testbed; then
+    echo "refused: '$VM' lacks the win-idd-testbed tag" >&2; exit 1
+fi
 
 DOMUSER=$(getent passwd 1000 | cut -d: -f1)
 DISP="${DISPLAY:-:0}"

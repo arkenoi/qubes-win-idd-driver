@@ -10,8 +10,12 @@
 # instant its own watchers detect the wedge, with no human in the loop.
 #
 # SECURITY POSTURE. The service is dom0-side and takes exactly one argument: the target VM
-# name, which must be in the allowlist below (tag membership is NOT used - a compromised
-# dev qube can set tags via admin.vm.tag.Set). It runs a fixed script with no caller-supplied
+# name, which must carry the `win-idd-testbed` TAG. Tag membership is the same gate the
+# qrexec policy already uses (dom0/12-install-policy-tagged.sh), so a name allowlist here
+# added no real restriction - the policy had already admitted the call - while silently
+# returning nothing for any qube created later (win11-fresh got an empty screenshot for
+# exactly this reason, 2026-08-07). If you want the stricter posture, pass explicit names
+# and they are enforced IN ADDITION to the tag. It runs a fixed script with no caller-supplied
 # arguments, and NEVER honours --nmi from the caller: bugchecking a guest is destructive, so
 # it stays a deliberate human action. Output is streamed back as a tar on stdout; nothing
 # from the caller is executed or interpolated into a shell command.
@@ -59,11 +63,18 @@ cat > "$SVC" <<EOF
 # Installed by dom0/13-install-wedge-forensics-service.sh. Argument = VM name.
 set -u
 ALLOWED="${VMS[*]}"
+# Tag gate first: any qube tagged win-idd-testbed is admissible, matching the qrexec policy.
 VM="\${QREXEC_SERVICE_ARGUMENT:-}"
+if qvm-tags "\$VM" list 2>/dev/null | grep -qx win-idd-testbed; then
+    :   # tagged testbed qube - admissible
+elif [ -z "\$ALLOWED" ]; then
+    echo "refused: '\$VM' lacks the win-idd-testbed tag" >&2; exit 1
+else
 case " \$ALLOWED " in
     *" \$VM "*) ;;
-    *) echo "refused: '\$VM' is not in the allowlist" >&2; exit 1 ;;
+    *) echo "refused: '\$VM' lacks the win-idd-testbed tag and is not in the explicit allowlist" >&2; exit 1 ;;
 esac
+fi
 # Refuse anything that is not a plain VM name, belt and braces.
 case "\$VM" in
     *[!A-Za-z0-9._-]*|"") echo "refused: bad VM name" >&2; exit 1 ;;
