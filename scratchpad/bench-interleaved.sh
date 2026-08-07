@@ -68,6 +68,10 @@ import json;print(json.load(open('artifacts-all3/MANIFEST.json'))['files']['gui-
     log "--- rep $r side=$side ---"
     solo_up "$vm" "$other" || { log "rep $r/$side SKIPPED (guest down)"; continue; }
     verify_hash "$vm" "$want" || { log "rep $r/$side SKIPPED (hash)"; continue; }
+    # Generic FPS test first: no dependency on our instrumentation, so it is the one
+    # frame-rate figure that is genuinely comparable against stock.
+    ./scratchpad/fps-crossside.sh "$vm" "${side}-r${r}-move" 10 move 2>&1 | tail -1
+    ./scratchpad/fps-crossside.sh "$vm" "${side}-r${r}-full" 10 full 2>&1 | tail -1
     if BENCH_SIDE=$side BENCH_VM=$vm BENCH_REP=$r ./scratchpad/benchmark.sh run "$side" 2>&1 | tail -5; then
       [ "$side" = stock ] && ok_stock=$((ok_stock+1)) || ok_ours=$((ok_ours+1))
     else
