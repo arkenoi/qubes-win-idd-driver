@@ -142,12 +142,32 @@ fi
 cp "$HERE/../guest/firstboot-setup.ps1" "$WORK/payload/"
 # install-qwt.cmd is version-controlled in guest/; the rest are large/derived binaries
 # extracted from the QWT rpm into ~/win-iso (see PROVISION-LOG.md for how to regenerate).
-cp "$HERE/../guest/install-qwt.cmd" "$WORK/payload/" && echo "payload += install-qwt.cmd (from guest/)"
-for f in ~/win-iso/qubesidd-test.cer ${NO_QWT:+} $( [ "${NO_QWT:-0}" = "1" ] || echo ~/win-iso/qwt-installer.exe ~/win-iso/qwt-installer.msi ) \
-         ~/win-iso/qwt-payload/installer.msi ~/win-iso/qwt-payload/vc_redist.x64.exe \
+# NO_QWT=1 means NO STOCK QWT ANYWHERE ON THE MEDIA - and that has to include the stock
+# MSI itself, not just the script that invokes it. Until 2026-08-07 this loop copied
+# ~/win-iso/qwt-payload/installer.msi into \payload even under NO_QWT (the exclusion only
+# covered qwt-installer.exe/.msi), leaving a STOCK "Qubes Windows Tools" MSI at a fixed path
+# on a guest where our package installs the SAME ProductCode. Windows Installer resiliency
+# resolves a repair against exactly such a stray source and shows the product's setup UI -
+# which is what blocked the shipped-build acceptance: an interactive "Qubes Windows Tools
+# setup" dialog, install never completing, qrexec appearing and then dying.
+# install-qwt.cmd goes too: it exists only to run that MSI.
+if [ "${NO_QWT:-0}" != "1" ]; then
+    cp "$HERE/../guest/install-qwt.cmd" "$WORK/payload/" && echo "payload += install-qwt.cmd (from guest/)"
+fi
+for f in ~/win-iso/qubesidd-test.cer \
+         $( [ "${NO_QWT:-0}" = "1" ] || echo ~/win-iso/qwt-installer.exe ~/win-iso/qwt-installer.msi \
+                                            ~/win-iso/qwt-payload/installer.msi ~/win-iso/qwt-payload/vc_redist.x64.exe ) \
          ~/win-iso/qwt-certs/SigningCert*.cer; do
     [ -f "$f" ] && cp "$f" "$WORK/payload/" && echo "payload += $(basename "$f")"
 done
+if [ "${NO_QWT:-0}" = "1" ]; then
+    # Assert it, do not assume it: a stock MSI slipping back into a "clean" image is
+    # invisible until an install mysteriously stops on a dialog 40 minutes later.
+    for stray in installer.msi install-qwt.cmd vc_redist.x64.exe qwt-installer.exe qwt-installer.msi; do
+        [ -e "$WORK/payload/$stray" ] && { echo "NO_QWT=1 but $stray is still staged in the payload" >&2; exit 1; }
+    done
+    echo "NO_QWT=1 verified: no stock QWT artefacts in \\payload"
+fi
 # QWT_MSI: stage OUR CI-built installer.msi instead of the stock one (full-source-build
 # plan step 4; artifact qwt-full-package). QWT_MSI_SHA256 (from the CI MANIFEST.json) is
 # verified here at stage time and written alongside for install-qwt.cmd to re-verify.
