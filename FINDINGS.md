@@ -5224,3 +5224,25 @@ and `network_carries_traffic` reporting `na` ("no physical network adapter attac
 because reprovision installs OFFLINE by design. `na` currently counts as a failure. It must
 block a release CLAIM without failing the run - otherwise acceptance can never pass on the
 offline install path it itself creates.
+
+## 2026-08-07 — NETVM HOTPLUG: partial. Device re-plugs at runtime, connectivity does not
+
+`win10-clean` running, PV networking healthy (baseline `NIC=Xen PV Network Device #0
+IP=10.137.0.70`):
+
+    DETACH  qvm-prefs netvm ''         rc=0, guest RESPONSIVE, NIC gone      <- clean
+    ATTACH  qvm-prefs netvm core-net   rc=0, NIC BACK without a reboot       <- device layer OK
+                                       but IP=169.254.234.144 (APIPA), gw empty, GWOK=False
+
+So the frontend genuinely hot-plugs now - which it could not do before, when there was no
+working PV netfront at all - but the guest never regains its Qubes-assigned static IP.
+Qubes drives guest addressing from qubesdb via QWT's network setup, and nothing re-runs that
+when a vif appears at runtime; Windows falls back to APIPA. **Verdict: hotplug works at the
+device level, NOT at the connectivity level. A reboot is still required.**
+
+That is a real improvement over the historical state and a well-defined next task (have the
+QWT network setup re-apply on vif arrival), but it is NOT "hotplug works".
+
+Instrument bug found in my own probe, fixed: the success matcher was `*IP=1*`, which happily
+accepts `169.254.*`. Only the gateway-reachability check caught the truth. A pattern that
+matches the failure it is meant to exclude is worthless.
