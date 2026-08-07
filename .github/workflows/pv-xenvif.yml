@@ -68,20 +68,22 @@ jobs:
           }
           Write-Host "confirmed: xenvif $env:XENVIF_SHA defines 0x09000005"
 
-      - name: Build xenvif (x64, Windows 10)
+      - name: Build xenvif via its own build.ps1
         shell: pwsh
+        working-directory: xenvif
         run: |
-          $ErrorActionPreference = 'Stop'
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild `
-                       -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
-          if (-not $msbuild) { throw "MSBuild.exe not found" }
-          # The solution's configuration is "Windows 10 Release" WITH SPACES (read from
-          # xenvif.sln; build.ps1 composes it as ConfigurationBase "Windows 10" + " Release").
-          # "Windows10Release" is rejected with MSB4126.
-          & $msbuild xenvif\vs2022\xenvif.sln "/p:Configuration=Windows 10 Release" /p:Platform=x64 /m
-          if ($LASTEXITCODE -ne 0) { throw "xenvif build failed" }
-          Get-ChildItem xenvif -Recurse -Include xenvif.sys,xenvif.inf | ForEach-Object { Write-Host "built: $($_.FullName)" }
+          # Use UPSTREAM'S OWN build script, not a bare msbuild call. msbuild alone fails
+          # with C2065 on MAJOR_VERSION/MINOR_VERSION/MICRO_VERSION/BUILD_NUMBER/
+          # VENDOR_NAME_STR: build.ps1 -> msbuild.ps1 derives those from the repo's
+          # `version` file and passes them as preprocessor defines. Reproducing that by
+          # hand would be another guess; the project already does it correctly.
+          # -Type free = release build. SignMode TestSign is the default and matches our
+          # test-signed guest.
+          $env:VisualStudioVersion = '17.0'
+          .\build.ps1 -Type free -Arch x64
+          if ($LASTEXITCODE -ne 0) { throw "xenvif build.ps1 failed" }
+          Get-ChildItem . -Recurse -Include xenvif.sys,xenvif.inf,xenvif.cat |
+            ForEach-Object { Write-Host "built: $($_.FullName)" }
 
       - name: Test-sign and package
         shell: pwsh
