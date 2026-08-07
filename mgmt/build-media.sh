@@ -28,7 +28,11 @@ IMG_NAME="${2:-Windows 10 Pro}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${OUT:-$HOME/win-iso/win-media.iso}"
 UNATTEND="${UNATTEND:-$HERE/autounattend.xml}"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/media.XXXXXX")"
+mkdir -p "$(dirname "$OUT")"
+# WORK lives beside the OUTPUT, not in /tmp: /tmp here is a small tmpfs and the
+# install.wim split (~5 GiB, only needed without a UDF writer) fills it instantly
+# ("Failed to write WIM header: No space left on device").
+WORK="$(mktemp -d "$(dirname "${OUT:-$HOME/win-iso/x}")/.media-work.XXXXXX")"
 MNT=""
 LOOPDEV=""
 
@@ -60,7 +64,9 @@ echo "disk check ok: $(( free_kb / 1048576 )) GiB free, need ~$(( need_kb / 1048
 # --- mount the vendor ISO read-only (NOT extracted) ---------------------------------
 LOOPDEV=$(udisksctl loop-setup -r -f "$SRC" 2>&1 | grep -o '/dev/loop[0-9]*' | head -1)
 [ -n "$LOOPDEV" ] || { echo "could not loop-setup $SRC" >&2; exit 1; }
-MNT=$(udisksctl mount --block-device "$LOOPDEV" 2>&1 | sed -n 's/.* at \(.*\)\.$/\1/p')
+# "Mounted /dev/loopN at /run/media/user/LABEL" - no trailing period on this udisks2.
+MNT=$(udisksctl mount --block-device "$LOOPDEV" 2>&1 | sed -n 's/^Mounted .* at //p' | sed 's/\.$//')
+[ -n "$MNT" ] || MNT=$(findmnt -n -o TARGET "$LOOPDEV" 2>/dev/null | head -1)
 [ -n "$MNT" ] && [ -d "$MNT" ] || { echo "could not mount $LOOPDEV" >&2; exit 1; }
 echo "vendor ISO mounted read-only at $MNT"
 
