@@ -5341,3 +5341,38 @@ vchan for playback; a capture path for the microphone. Before committing to a pr
 read what `qubes-audio-daemon` expects on the dom0 side.
 
 POST-FREEZE. This is a feature, not a fix, and needs a dom0-side counterpart to be useful.
+
+## 2026-08-07 — THE OTHER DROPPED FEATURES, especially DISK. All I/O is emulated IDE.
+
+User asked what else is dropped. Measured on the released guest:
+
+    XENBUS\VEN_XP0001&DEV_VBD\_   err=28   (no driver bound - xenvbd not installed)
+    DISK 0  80GB  bus=ATA
+    DISK 1   2GB  bus=ATA         <- ALL disks emulated IDE, none PV
+    DISK 2  10GB  bus=ATA
+
+**`PvDriversDisk` (xenvbd/xencrsh) is omitted, so every byte of guest disk I/O goes through
+QEMU-emulated IDE.** This is structurally the SAME situation networking was in before today:
+the PV path unbound at code 28 while the emulated device carries the traffic. The difference
+is that networking was broken by an upstream version mismatch, whereas disk is switched off
+BY US on purpose.
+
+The stated reason - "documented BSOD risk" - traces to `packaging/setup/README.txt:45` and
+`docs/WHAT-CHANGED-FOR-USERS.md:375`, both of which are OUR OWN text. I have not found the
+primary source. Given that today's "PV networking is fine in stock" belief turned out to be
+wrong, and the 2026-08-06 "netvm makes the guest unusable" claim turned out to be
+mirage-firewall rather than PV drivers, **this claim deserves the same treatment before it is
+repeated again**: find the upstream advisory or the measurement it came from, or retest it.
+
+Performance consequence worth stating: emulated IDE is far slower than PV block, so the disk
+path caps absolute guest performance. It does NOT distort the stock-vs-ours benchmark - both
+sides are equally on emulated IDE - but it does mean any absolute I/O number from this
+release is a floor, not the platform's ceiling.
+
+The other two omissions are minor and stand:
+  MoveUsers  - relocates C:\Users via BootExecute; invasive, no benefit for a test guest.
+  Autologon  - randomises the local password; would break our unattended qrexec access.
+
+POST-FREEZE: verify the xenvbd BSOD claim (source or measurement), and if it does not hold,
+enabling PvDriversDisk is likely the single largest remaining performance win - the disk
+equivalent of today's xenvif fix.
