@@ -4665,3 +4665,35 @@ application rather than on `tools/chromerepro`.
 Note this could ONLY be shown in seamless mode - in fullscreen the whole desktop is one dom0
 window and there are no per-window frames to count, which is why every earlier attempt at
 this check was inconclusive.
+
+## 2026-08-07 — SNAP REGRESSION: PASS in the fullscreen config (and why the first run "failed")
+
+Ran `scratchpad/snap-regress.sh` against `win-idd-test` while it was still in SEAMLESS mode
+(SeamlessMode=1, left over from Gate B) and got **FAIL on all three resize tests** - every
+requested size came back 1920x1080.
+
+That was NOT a regression, it was the wrong configuration: in seamless mode `SetSeamlessMode`
+forces the HOST resolution on every StartFrameProcessing, so the guest cannot follow
+per-window resize requests at all. The battery targets the T2 FULLSCREEN configuration where
+the guest resolution follows the dom0 window. The tell was that T4 (position preservation)
+PASSED while the three size tests failed identically - the agent working, simply not honouring
+resize in that mode.
+
+Switched to `SeamlessMode=0` in both registry keys, rebooted (back in 18 s), re-ran:
+
+    feed: 0 31 5120 1409 5 5 25 5 -> bordered half = 2550x1379
+    T1 near-half snap : PASS (2544x1375 -> 2550x1379)
+    T2 20px-off no-snap: PASS (2530x1359 exact)
+    T3 arbitrary no-snap: PASS (1803x957 exact)
+    SNAP-REGRESS PASS
+
+One item flagged, NOT swept up: **T4 position CHANGED** (x=3195,y=355 -> x=2565,y=56) on this
+run, where it was preserved on the seamless run. The harness itself annotates it "WM may
+legitimately clamp" - a dom0-window move to the snapped half can legitimately reposition it.
+Recorded as unexplained rather than as a pass: it needs one run where the requested position
+is inside the work area to distinguish "we moved it" from "the WM clamped it".
+
+Process point, third time today: a check run in the wrong configuration produces numbers that
+look exactly like a product failure. Same shape as the session-0 traps (benchmark load, toast
+probe, Office check). Before reporting any FAIL, establish that the configuration under test
+is the one the check was written for.
