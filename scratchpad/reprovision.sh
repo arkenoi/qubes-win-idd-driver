@@ -67,6 +67,30 @@ log "created and tagged"
 # assignment does not survive it, but the payload has to still be readable at first logon.
 if [ -n "${ANSWER_LOOP:-}" ]; then
     log "clean-room route: CD1 = stock ISO ($LOOP), CD2 = answer disc ($ANSWER_LOOP, persistent)"
+
+    # A loop device caches its capacity at setup time. Rebuilding the answer disc in place
+    # (same path, new size) leaves the loop exposing the OLD size, so the guest reads a
+    # TRUNCATED ISO - Windows Setup then finds no autounattend.xml and drops to the
+    # interactive language prompt, which looks exactly like "the answer file was ignored".
+    # Measured 2026-08-07: file 30115840 bytes, loop still serving 29868032, install lost.
+    # Refresh, then VERIFY - a refresh that silently failed must not pass this gate.
+    lb="/sys/block/$ANSWER_LOOP/size"
+    if [ -r "$lb" ]; then
+        af=$(losetup -l 2>/dev/null | awk -v d="/dev/$ANSWER_LOOP" '$1==d{print $6}')
+        if [ -n "$af" ] && [ -r "$af" ]; then
+            sudo losetup -c "/dev/$ANSWER_LOOP" 2>/dev/null || true
+            exposed=$(( $(cat "$lb") * 512 )); actual=$(stat -c%s "$af")
+            if [ "$exposed" != "$actual" ]; then
+                log "FAIL: /dev/$ANSWER_LOOP exposes $exposed bytes but $af is $actual."
+                log "      The guest would read a truncated answer disc. Fix with:"
+                log "        sudo losetup -c /dev/$ANSWER_LOOP"
+                exit 1
+            fi
+            log "answer disc capacity verified: $exposed bytes == $af"
+        else
+            log "WARNING: could not resolve the backing file for /dev/$ANSWER_LOOP - capacity UNVERIFIED"
+        fi
+    fi
     if ! qvm-device block assign --option devtype=cdrom --ro "$VM" "$HOLDER:$ANSWER_LOOP" 2>/dev/null; then
         qvm-device block attach --persistent --option devtype=cdrom --ro "$VM" "$HOLDER:$ANSWER_LOOP" \
             || { log "FAIL: could not attach the answer disc persistently"; exit 1; }
