@@ -5277,3 +5277,28 @@ network service watching qubesdb.
 This is the first time the gate has passed with `asserted_all=true`, i.e. no check skipped
 and none excused. It is passing on the SHIPPED package (`agent_binary_hash` == manifest),
 on a guest whose only driver source was our installer.
+
+## 2026-08-07 — NETVM HOTPLUG NOW FULLY AUTOMATIC (trigger verified end to end)
+
+`network-setup.exe` repairs a hot-plugged NIC, but nothing invoked it. Registered a SYSTEM
+scheduled task, `QubesNetworkReapply`, triggered by **Microsoft-Windows-NetworkProfile/
+Operational event 10000** ("network connected", +3 s delay), running network-setup.exe at
+highest privilege.
+
+VERIFIED with a real cycle, no manual step:
+
+    baseline        IP=10.137.0.70
+    netvm ''        IP=            (detached, guest responsive)
+    netvm core-net  -> TRIGGER FIRED -> IP=10.137.0.70 after 15 s
+
+So `qvm-prefs <vm> netvm <net>` on a RUNNING Windows guest now restores networking by
+itself. Revised twice today and this is the final state: first recorded as "does not work at
+runtime" (true, but only because addressing was never re-applied), then "works with one
+guest-side step", now **works with none**.
+
+Registration is wired into `Install-QwtImproved.ps1` so every install gets it; failure is a
+WARN, not fatal (the guest still works, hotplug just needs the manual step). Standalone
+copy kept at `guest/network-reapply-task.ps1` for existing guests.
+
+Note the task is registered only when network-setup.exe exists, so it is a no-op on a
+guest without QWT's network component rather than a broken task.
