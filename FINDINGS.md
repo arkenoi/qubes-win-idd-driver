@@ -5084,3 +5084,38 @@ failing to bind or the guest falling back to the emulated Realtek. Related but d
 So the defect appears unreported. That strengthens the case for filing it, with the three
 commit SHAs and dates above as the body - subject to the user approving the text
 (CLAUDE.md upstream policy).
+
+## 2026-08-07 — PV NETWORKING FIXED AND PROVEN: upgraded xenvif binds xennet, Realtek unplugged
+
+Built xenvif from xenbits **master** (unpinned per the user; resolved 94853a0), test-signed,
+exported the signer, trusted it on the guest, installed via a scheduled task, rebooted:
+
+    INSTALL_RESULT  RC=0
+    NICS_BEFORE     Realtek RTL8139C+ Fast Ethernet NIC
+    NICS_AFTER      Xen PV Network Device #0          <-- emulated NIC GONE
+    XVDATE          07/08/2026                        <-- our build (QWT's: 04 July 2025)
+
+**The emulated Realtek is unplugged and replaced by the PV NIC.** That is the strong signal
+chosen in advance precisely because it cannot be faked by a device merely reporting status
+OK: rev 5 shipped with `4608bc1` "Use UNPLUG v3", and a working unplug removes the QEMU NIC
+outright. The diagnosis is therefore confirmed end to end:
+
+    QWT 4.2.2 / Qubes 4.3 pins:  xenvif REV_09000004 max  vs  xennet requires REV_09000005
+    -> no hardware ID intersects -> NET child stuck at code 28 -> emulated Realtek
+    upgrade xenvif to master (has 0x09000005) -> xennet binds -> Realtek unplugged
+
+Loose end, NOT glossed: the post-reboot probe reported
+`NETCHILD=Unknown XENVIF\VEN_XP0001&DEV_NET&REV_09000004` - i.e. it matched a devnode still
+advertising rev 4 with status Unknown, while a working PV NIC exists. Almost certainly the
+stale child from the old xenvif left behind beside the newly created rev-5 one, and the probe
+takes `Select-Object -First 1`. Needs one enumeration of ALL XENVIF NET children to confirm
+that reading before the health gate asserts on it - a gate that matches the stale node would
+fail a working guest.
+
+Two install lessons, both now encoded in the tooling:
+1. pnputil on a bus driver re-enumerates the Xen bus and kills qrexec mid-call. The result
+   must be written to a file by a scheduled task, never returned over the connection the
+   install itself tears down. (First attempt returned no RC and silently changed nothing.)
+2. The signer must be trusted BEFORE install. Testsigning permits self-signed drivers, but an
+   untrusted publisher fails with 0xE0000247. The workflow now exports `xenvif-signer.cer`
+   and the installer imports it into Root + TrustedPublisher.
