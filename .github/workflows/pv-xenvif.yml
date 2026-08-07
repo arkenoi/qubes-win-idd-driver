@@ -130,6 +130,12 @@ jobs:
             "        rev 5 was added by xenvif commit 4608bc1 (Use UNPLUG v3).",
             "signing: throwaway test cert (guest runs with testsigning enabled by our installer)"
           )
+          # EXPORT THE SIGNING CERT. Without it the guest cannot trust this driver: the
+          # workflow mints a FRESH self-signed cert each run, so the guest has never seen
+          # it, and pnputil fails with 0xE0000247 (driver store add failed) even with
+          # testsigning on - testsigning allows self-signed drivers but the publisher must
+          # still be in Root/TrustedPublisher. Measured 2026-08-07.
+          Export-Certificate -Cert $cert -FilePath pv-out\xenvif-signer.cer -Type CERT | Out-Null
           Set-Content pv-out\PROVENANCE.txt -Value $prov
           Get-ChildItem pv-out | Format-Table Name, Length
 
