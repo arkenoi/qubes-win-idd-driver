@@ -4537,3 +4537,24 @@ Carried caution for whoever changes the predicate: on this build the Office shad
 **unowned**, so a rule like "unowned windows are never override-redirect" would drop toasts
 and Office shadows together. `MSO_BORDEREFFECT_WINDOW_CLASS` is the load-bearing rule for the
 shadows; any new discriminator must keep BOTH outcomes (shadows dropped, toasts kept/bordered).
+
+## 2026-08-07 — DRAFT release cut, deliberately NOT published
+
+`gh release create --draft` with the package tarball (27 MB) and ISO (29 MB) from CI run
+31129344581, package `4.2.2+agent.a68d24492b25`.
+
+Draft, not published, for one specific reason found while cutting it: **the clean-path
+acceptances ran the PREVIOUS build.** `artifacts-rel/setup3` (used to build both test ISOs)
+carries `agent.018ec54` - the build that contains the maximize-clamp regression. The release
+package carries `agent.a68d244`, where that is reverted. So Win11's 8/8 health pass and
+Win10's install pass are evidence for a DIFFERENT binary than the one being shipped.
+
+This is the project's own rule ("verify the artefact under test is actually installed -
+compare the running binary's hash to the manifest") applied one level up: the artefact
+under test and the artefact being released are not the same build. The release notes state
+this in a table rather than burying it, and the release stays a draft until acceptance is
+re-run against `a68d244`.
+
+Also noted in the notes: `/idd` works on Win11 24H2 and is broken on Win10 19045 (with the
+recovery command), PV networking is not bound, toasts map borderless, and maximized windows
+can still overflow the dom0 workspace early in a boot.
