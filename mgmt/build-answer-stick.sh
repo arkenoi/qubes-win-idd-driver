@@ -144,41 +144,33 @@ cp "$HERE/../guest/firstboot-setup.ps1" "$WORK/payload/" 2>/dev/null || true
 # changed: truncate to 0 and back to the fixed size preserves it, and because the size is
 # CONSTANT the cached loop capacity stays correct too. Both hazards disappear, no sudo.
 # (Measured 2026-08-07: a rebuilt stick was served stale to a guest for a full install.)
-# IMAGE FORMAT. The FAT path needed one `sudo mount` (mtools is not installed here), and
-# that is the single fragile step: run unattended it BLOCKS forever on a password prompt,
-# and sudo is not reliably available in this qube. xorriso needs no privileges at all, and
-# QEMU's usb-storage can present the result as a USB CD-ROM, which Windows reads via CDFS -
-# Setup scans removable media roots either way. So build an ISO instead and drop the
-# privileged step entirely. Set STICK_FAT=1 to force the old FAT path.
-if [ "${STICK_FAT:-0}" = 1 ]; then
-    if [ -e "$OUT" ]; then truncate -s 0 "$OUT"; else : > "$OUT"; fi
-    truncate -s "${SIZE_MB}M" "$OUT"
-    mkfs.vfat -F 32 -n ANSWER "$OUT" >/dev/null
-    sudo mount -o loop,uid="$(id -u)" "$OUT" "$MNT"
-    cp -r "$WORK"/. "$MNT"/
-    sync
-    ls "$MNT" | sed 's/^/  /'
-    sudo umount "$MNT"
-else
-    command -v xorriso >/dev/null || { echo "need xorriso" >&2; exit 1; }
-    # -R -J: long names both ways. No boot image: this is never booted from, only read.
-    xorriso -as mkisofs -iso-level 3 -R -J -joliet-long -V ANSWER -o "$OUT" "$WORK" 2>/dev/null \
-        || { echo "ERROR: xorriso failed" >&2; exit 1; }
-    # PAD to the FIXED size, exactly as the FAT path did. A loop device caches its capacity
-    # at setup: if the image shrinks the loop keeps advertising the old size and reads run
-    # past EOF; if it grows the guest sees a truncated image. Re-pointing the loop needs
-    # root, which is the dependency this whole path exists to avoid - so the size is held
-    # CONSTANT instead. Trailing zeros sit outside the ISO9660 volume and readers ignore them.
-    iso_bytes=$(stat -c%s "$OUT")
-    pad_to=$((SIZE_MB * 1024 * 1024))
-    if [ "$iso_bytes" -gt "$pad_to" ]; then
-        echo "ERROR: ISO is $iso_bytes bytes, exceeds the fixed ${pad_to}-byte slot" >&2
-        exit 1
-    fi
-    truncate -s "$pad_to" "$OUT"
-    echo "iso $iso_bytes bytes, padded to $pad_to (loop capacity stays constant)"
-    ls "$WORK" | sed 's/^/  /'
-fi
+# IMAGE FORMAT: FAT32, written with mtools (mcopy) - no mount, no root.
+# History: the first version needed `sudo mount` because mtools was absent, and unattended
+# that BLOCKS forever on a password prompt; it hung the control build twice. An ISO built
+# with xorriso avoided root but Windows Setup did not pick the answer file off it. mtools
+# gives the format Setup actually reads AND needs no privileges - the right answer to both.
+command -v mcopy >/dev/null || { echo "need mtools (mcopy)" >&2; exit 1; }
+
+# Rewrite IN PLACE: rm+create would give the file a new inode while losetup keeps the old
+# one ("(deleted)" in losetup -l) and the guest silently reads a STALE stick. Truncating to
+# 0 and back to the FIXED size preserves the inode and keeps the cached loop capacity
+# correct, so no losetup -c (i.e. no root) is ever needed.
+if [ -e "$OUT" ]; then truncate -s 0 "$OUT"; else : > "$OUT"; fi
+truncate -s "${SIZE_MB}M" "$OUT"
+mkfs.vfat -F 32 -n ANSWER "$OUT" >/dev/null
+
+# mcopy -s copies directories recursively; ::/ is the image root. -Q makes it stop on the
+# first failure instead of silently shipping a partial stick.
+( cd "$WORK" && for entry in *; do
+      MTOOLS_SKIP_CHECK=1 mcopy -Q -i "$OUT" -s "$entry" ::/ \
+        || { echo "ERROR: mcopy failed on $entry" >&2; exit 1; }
+  done ) || exit 1
+
+# Prove the answer file is actually on the image; a stick without it looks exactly like
+# "Setup ignored the answer file" an hour later.
+MTOOLS_SKIP_CHECK=1 mdir -i "$OUT" ::/ 2>/dev/null | sed 's/^/  /'
+MTOOLS_SKIP_CHECK=1 mdir -i "$OUT" ::/ 2>/dev/null | grep -qi "AUTOUNA" \
+    || { echo "ERROR: Autounattend.xml is not on the image" >&2; exit 1; }
 
 echo "built $OUT ($(du -h "$OUT" | cut -f1))"
 echo
