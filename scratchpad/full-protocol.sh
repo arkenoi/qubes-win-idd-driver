@@ -43,16 +43,21 @@ run_side(){
   UNATTEND=$tmpl RELEASE_SETUP=$PWD/artifacts-final LOCALE=$loc INSTALL_FLAGS=/idd \
     OUT=$out ./mgmt/build-answer-stick.sh "$img" > $S/stick-$vm.log 2>&1 \
     || { log "ABORT: stick build failed for $vm"; tail -5 $S/stick-$vm.log; return 1; }
-  # rebuilding gives the image a NEW INODE; re-point the loop or the guest reads a stale stick
-  local dev=/dev/$stick
-  sudo -n losetup -d $dev >/dev/null 2>&1 || true
-  sudo -n losetup $dev $out >/dev/null 2>&1 || log "NOTE: could not re-point $dev (needs sudo) - verifying"
-  local backing; backing=$(losetup -l 2>/dev/null | awk -v d=$dev '$1==d{print $6}')
-  case "$backing" in
-    *"(deleted)"*|"") log "ABORT: $dev is stale/detached (backing='$backing') - the guest would read an old stick"; return 1 ;;
-    "$out") log "$dev -> $backing OK" ;;
-    *) log "ABORT: $dev backs '$backing', expected '$out'"; return 1 ;;
+  # The builder now rewrites the image IN PLACE, so the inode and the size never change and
+  # the loop stays valid. VERIFY that rather than assume it. Match on the WHOLE losetup line:
+  # "(deleted)" is a SEPARATE FIELD, so awk '{print $6}' returns the clean path and a stale
+  # loop sails through - that exact bug let a full install run against a stale stick today.
+  local dev=/dev/$stick lline
+  lline=$(losetup -l 2>/dev/null | grep -F "$dev ")
+  case "$lline" in
+    *"(deleted)"*) log "ABORT: $dev backing file is DELETED - guest would read a stale stick: $lline"; return 1 ;;
+    "") log "ABORT: $dev is not attached"; return 1 ;;
   esac
+  echo "$lline" | grep -qF "$out" || { log "ABORT: $dev does not back $out: $lline"; return 1; }
+  local exposed actual
+  exposed=$(( $(cat /sys/block/$stick/size) * 512 )); actual=$(stat -c%s "$out")
+  [ "$exposed" = "$actual" ] || { log "ABORT: $dev exposes $exposed but $out is $actual"; return 1; }
+  log "$dev -> $out verified (live inode, $exposed bytes)"
   ./scratchpad/usb-provision.sh $vm $iso $stick core-net 2>&1 | tail -4 || return 1
   ./scratchpad/usb-acceptance.sh $vm 2>&1 | tail -22
 }

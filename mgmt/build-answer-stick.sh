@@ -118,7 +118,18 @@ fi
 
 cp "$HERE/../guest/firstboot-setup.ps1" "$WORK/payload/" 2>/dev/null || true
 
-rm -f "$OUT"
+# Rewrite the image IN PLACE. `rm -f` + truncate would give the file a NEW INODE while any
+# losetup attached to it keeps the OLD one - `losetup -l` then shows the backing file as
+# "(deleted)" and the guest silently reads a STALE stick. Re-pointing the loop needs root,
+# which this script does not have when it runs unattended, so instead the inode is never
+# changed: truncate to 0 and back to the fixed size preserves it, and because the size is
+# CONSTANT the cached loop capacity stays correct too. Both hazards disappear, no sudo.
+# (Measured 2026-08-07: a rebuilt stick was served stale to a guest for a full install.)
+if [ -e "$OUT" ]; then
+    truncate -s 0 "$OUT"
+else
+    : > "$OUT"
+fi
 truncate -s "${SIZE_MB}M" "$OUT"
 mkfs.vfat -F 32 -n ANSWER "$OUT" >/dev/null
 # One mount is needed because mtools is not installed here; it is the only privileged step
