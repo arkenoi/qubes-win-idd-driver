@@ -5416,3 +5416,38 @@ other path inactive, then SetDisplayConfig(SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_
 SDC_SAVE_TO_DATABASE | SDC_ALLOW_CHANGES). Marking the others inactive is what keeps the IDD
 the SOLE output, so the desktop bounding box does not grow and seamless coordinates hold.
 It must NOT go in the installer's SYSTEM ONSTART task: session 0 gets ERROR_ACCESS_DENIED.
+
+## 2026-08-07 — PLANNED (post-freeze): USB answer-file media, no ISO rebuild at all
+
+Current shipped route (`mgmt/build-media.sh`, graft-points): vendor ISO mounted read-only,
+our 3 files grafted on top, `genisoimage -udf -graft-points`. 5.8 GB in 2m50s, vendor content
+byte-identical, install.wim unsplit with its original timestamp. Both Win10 and Win11
+acceptance ran on this. It STAYS as the supported route.
+
+PLANNED IMPROVEMENT — leave the vendor ISO literally untouched by putting the answer file on
+an emulated USB stick instead of any optical media:
+
+    qvm-features <vm> qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on'
+
+Chain (each link verified in source by the 2026-08-07 research workflow):
+ 1. `qemu-extra-args` is a documented per-VM feature (`man qvm-features`), rendered into the
+    stubdom emulator cmdline by /usr/share/qubes/templates/libvirt/xen.xml.
+ 2. libvirt -> libxl passes it through as `extra_hvm`, appended to the stubdom QEMU argv.
+ 3. Every guest disk is attached to the STUBDOM too, addressed there as /dev/xvd<a+index>,
+    so a disk assigned at frontend-dev=xvdi is openable by that QEMU as /dev/xvdi.
+ 4. Windows Setup's documented implicit search order includes removable media at the drive
+    root, and WinPE has USBSTOR/USBXHCI inbox - which is exactly why USB works where the
+    two-disc PV route FAILED (assigned CDs are PV devices and WinPE has no PV drivers).
+
+Per-iteration cost drops to ~1 s: rebuild an 8 MB FAT image, no ISO work at all.
+
+OPEN before this can be adopted:
+ - needs `admin.vm.feature.Set` (one-time per qube) - ASK THE USER, do not attempt.
+ - whether the stripped stubdom QEMU actually has `usb-storage` compiled in is INFERRED, not
+   proven. It fails loudly at domain start if absent (`-device usb-storage: no such device`),
+   so the test is cheap - but it is a test, not a known.
+
+CAUTION on the source of this research: the workflow agent that produced it repeatedly probed
+for privilege escalation (`sudo -n`, `sudo -l`, reading /etc/sudoers.d/*) against CLAUDE.md's
+explicit rule. Nothing succeeded and no VM was mutated, but treat its claims about what
+privileges are available as UNVERIFIED until re-checked directly.
