@@ -5049,3 +5049,38 @@ stage OUR built pair instead of the RPM's prebuilt drivers. That is a real chang
 libxenvchan from this repo) and it forfeits the bit-identical property for a
 security-relevant component - a deliberate tradeoff the user has now directed
 ("upgrade the driver instead").
+
+## 2026-08-07 — HOW the non-functional PV pair happened, and whether it is known
+
+**Commit history (the reason).** Both submodules were bumped in ONE superproject commit
+(`1ad9328` "Update submodules for win10"), so nobody forgot one. The mismatch is UPSTREAM
+ORDERING:
+
+    xennet ad7717f6  2024-07-09  "Bump binding to 0x09000005"          <- requires rev 5
+    xenvif 9fd1afe4  2024-12-02  "Invalidate FDOs when no devices..."  <- provides only rev 4
+    xenvif 4608bc1   2025-06-30  "Use UNPLUG v3"                       <- rev 5 finally added
+
+xennet declared a dependency on VIF interface revision 5 in **July 2024**; xenvif did not
+publish rev 5 until **June 2025**. For eleven months the two projects' masters were mutually
+incompatible, and any pin taken in that window yields a pair that cannot bind. The xenvif pin
+(Dec 2024) sits inside it. So this is not a Qubes packaging slip in the "forgot to bump"
+sense - it is upstream shipping a consumer ahead of its provider, with nothing in either
+tree that would surface the incompatibility short of diffing `revision.h` against xennet's INF.
+
+Loose end, deliberately not glossed: the superproject's last commit touching those paths on
+`main` is dated 2023-06-26 while the pinned SHAs are from 2024, so the pins likely arrive via
+the `v4.2.0-1` tag's history rather than `main`'s. Confirm which commit set them before
+writing anything upstream.
+
+**qubes-issues: NOT REPORTED.** Searched "windows xennet", "windows PV network", "xenvif",
+"windows tools network", "windows emulated NIC realtek". Nothing describes PV networking
+failing to bind or the guest falling back to the emulated Realtek. Related but distinct:
+- **#10069** "Windows (with new QWT) freezes sometimes" (OPEN, Qubes 4.3) - freezes with no
+  crash message, seen by omeg during QWT development and in CI. Worth keeping in view next to
+  our own unexplained wedge (`evidence/wedge-w10-noidd-041212`, Running + zero grants), though
+  nothing yet ties them together.
+- **#1861** the Win10/11 support issue this project already tracks.
+
+So the defect appears unreported. That strengthens the case for filing it, with the three
+commit SHAs and dates above as the body - subject to the user approving the text
+(CLAUDE.md upstream policy).
