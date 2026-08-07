@@ -87,13 +87,25 @@ rem without this delete a second concurrent install.cmd fires on every boot (the
 rem defect that wedged win10-clean on the repack route, 2026-08-06).
 schtasks /delete /tn QWTStage2 /f >nul 2>&1
 echo === release install (clean path, answer disc) === >> C:\qubes-win-idd-setup.log
+if not defined QWT_INSTALL_FLAGS set "QWT_INSTALL_FLAGS=__FLAGS__"
 rem The disc's letter is not fixed; %~dp0 is this script's own location.
-rem /idd is DELIBERATELY NOT passed (2026-08-07): activation succeeds but after the reboot
-rem the IDD stays OFFLINE while the ROOT\BASICDISPLAY fallback drives the desktop - see
-rem mgmt/build-unattended-iso.sh and FINDINGS. It stays an opt-in flag for manual use.
-call "%~dp0release\install.cmd" /auto >> C:\qubes-win-idd-setup.log 2>&1
+rem /idd IS passed as of 2026-08-07. It was withheld while the IDD came up offline after
+rem the reboot; the cause was that nothing ever performed a display-topology apply (an
+rem IddCx monitor arrives connected but INACTIVE), not a Win10 driver limitation. The
+rem agent now does the apply at startup in the interactive session (EnsureQubesIddSolo),
+rem so the IDD is the sole active output from first boot. QWT_INSTALL_FLAGS overrides.
+call "%~dp0release\install.cmd" /auto %QWT_INSTALL_FLAGS% >> C:\qubes-win-idd-setup.log 2>&1
 echo release install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
 RELEOF
+    # INSTALL_FLAGS is substituted at BUILD time so the disc is self-describing: reading
+    # setup2.cmd on the image tells you exactly which flags that media installs with.
+    # Default /idd - the IDD is the point of the driver work and the agent now activates it.
+    sed -i "s|__FLAGS__|${INSTALL_FLAGS:-/idd}|" "$WORK/payload/setup2.cmd"
+    if grep -q '__FLAGS__' "$WORK/payload/setup2.cmd"; then
+        echo "flag substitution failed - disc would install with a literal __FLAGS__" >&2
+        exit 1
+    fi
+    echo "firstboot install flags: ${INSTALL_FLAGS:-/idd}"
     echo "payload += release/ (our package, installed at firstboot)"
 else
     cp "$HERE/payload-setup2.cmd" "$WORK/payload/setup2.cmd"
