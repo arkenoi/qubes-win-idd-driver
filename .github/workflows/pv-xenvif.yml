@@ -38,15 +38,18 @@ jobs:
   xenvif:
     runs-on: windows-2022
     steps:
+      # Copied VERBATIM from build.yml's proven idd-driver step. My paraphrase failed:
+      # it looked for VSIXInstaller.exe under ProgramFiles(x86)\...\Installer (it lives
+      # under ProgramFiles\Microsoft Visual Studio\2022) and set ErrorActionPreference=Stop,
+      # which turns choco's non-fatal output into a failure.
       - name: Install WDK + VS driver targets
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
           choco install windowsdriverkit11 --no-progress -y
           $vsix = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix" -Recurse -Filter '*.vsix' |
-                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+                  Select-Object -First 1
           if (-not $vsix) { throw "WDK.vsix not found after choco install" }
-          $inst = Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer" -Filter 'VSIXInstaller.exe' |
+          $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse -Filter VSIXInstaller.exe |
                   Select-Object -First 1
           Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -Wait
 
