@@ -4731,3 +4731,36 @@ reachable by `firstboot-setup.ps1`. Worth auditing before the next media build.
 is for `agent.018ec54` and not for the shipped `a68d244`; this attempt to close that gap
 failed for an installer-flow reason, so the gap is still open. Publishing now would ship a
 package whose install has never been observed to complete unattended end to end.
+
+## 2026-08-07 — the blocking dialog: a STOCK QWT MSI left on a "no stock QWT" image
+
+Diagnosis of the shipped-build acceptance failure, from what could be established without
+guest access (qrexec was dead, which is itself a clue):
+
+- Our installer runs BOTH msiexec calls with `/qn` (install at line ~617, uninstall at ~397),
+  and vc_redist with `/quiet /norestart`. **None of our invocations can show UI.**
+- `firstboot-setup.ps1` invokes no installer at all; `install-qwt.cmd` is only ever called by
+  the STOCK `payload-setup2.cmd`, which NO_QWT=1 replaces. So nothing in our flow runs it.
+- Yet `\payload\installer.msi` (3.3 MB, the STOCK QWT MSI), `install-qwt.cmd` and
+  `vc_redist.x64.exe` WERE on the media - the NO_QWT exclusion in the staging loop only
+  covered `qwt-installer.exe/.msi`, never `qwt-payload/installer.msi`.
+- Timeline fits: qrexec came UP at 1252 s (our package installed) and then DIED, with an
+  interactive "Qubes Windows Tools setup" dialog left on the desktop.
+
+Mechanism: our package registers the SAME ProductCode as stock QWT. Windows Installer
+resiliency resolves a repair/reinstall against a cached or discoverable source - and a stock
+MSI for that product sitting at a fixed path is exactly such a source. A resiliency repair
+runs in the USER session with UI, which is precisely the dialog observed, and it explains
+qrexec disappearing (the repair tearing components down) with no corresponding line in our
+own installer log.
+
+**Honesty about confidence:** the ProductCode identity and the resiliency path are inferred
+from our own documented behaviour ("our binaries carry the same version resource as ITL's",
+2026-08-06) plus the observed sequence, NOT from the guest's MSI log - the guest was
+unreachable and rebuilding destroys the evidence. So this is a well-supported hypothesis with
+a fix that is correct regardless: **a "no stock QWT" image must not carry a stock QWT MSI.**
+
+Fixed in `mgmt/build-unattended-iso.sh`: the stock MSI, `install-qwt.cmd` and vc_redist are
+excluded under NO_QWT=1, and the build now ASSERTS afterwards that none of them is staged,
+failing loudly if one reappears. Re-running the shipped-build acceptance on the corrected
+media; the assertion is checked before the run is allowed to start.
