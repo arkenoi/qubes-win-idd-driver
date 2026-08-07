@@ -5609,3 +5609,38 @@ Stock QWT ships production-signed binaries. Ours are TEST-SIGNED, so the install
 `bcdedit /set testsigning on`. That weakens driver-signature enforcement for the whole guest
 and is not something a user should discover from a log line. It is inherent to an unofficial
 build, not a defect, but it belongs at the top of the release notes.
+
+## 2026-08-07 — qrexec dies with the interactive session (locked desktop = no RPC)
+
+Symptom: `win10-clean` sat at the LOCK SCREEN at 5120x1440 with the IDD driving it, agent
+running, guest perfectly healthy - and every `qtest` call timed out. It read exactly like a
+wedged guest. A reboot (AutoLogon LogonCount=999 re-establishes a session) restored qrexec
+immediately, which confirms the session, not the guest, was the fault.
+
+MECHANISM (read in upstream/ro/qubes-core-agent-windows/src):
+  * `qrexec-agent` runs as SYSTEM (a service) and spawns `qrexec-wrapper.exe` as SYSTEM.
+  * The wrapper takes a flags bitmask; `qrexec-agent.c:704` documents
+      0x04 run the child process in the interactive session (REQUIRES THAT A USER IS LOGGED ON)
+  * `qubes.VMShell` targeting user `user` sets that flag, so every dom0->guest RPC that runs
+    as a user structurally depends on a live interactive session.
+  * The separate `qubes.WaitForSession` service (`wait-for-logon.c:73`) only accepts sessions
+    whose WTS state is `WTSActive`, i.e. it too is session-scoped.
+
+SCOPE - this is NOT just a test-harness problem. Clipboard and file-copy to a Windows qube
+travel the same path, so a user who locks their Windows guest loses them too.
+
+NOT "fixable" by running the child as SYSTEM: that would let dom0 trigger SYSTEM-level
+execution in the guest, which is a security regression and out of scope per CLAUDE.md.
+The legitimate mitigations are (a) keep a session alive, and (b) make the failure legible
+instead of looking like a hang.
+
+DONE: both answer files now disable monitor/standby timeouts, the lock screen, the machine
+inactivity limit and the screensaver, so test guests never idle-lock. This also protects the
+benchmark, where an idle-lock mid-run would silently produce numbers for a blanked desktop.
+
+STILL OPEN (needs a guest experiment, do NOT claim it settled): whether a merely LOCKED
+session - as opposed to a logged-off one - actually kills the RPC. A locked session normally
+remains WTSActive, so the observed failure may have been a logoff rather than a lock. The
+decisive test is: confirm qrexec works, run `rundll32 user32.dll,LockWorkStation` over
+qrexec, then retry qrexec. Until that is run, the mechanism above explains "no session = no
+RPC" but the lock-specific claim is UNPROVEN.
