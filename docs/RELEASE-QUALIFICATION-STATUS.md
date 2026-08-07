@@ -1,5 +1,12 @@
 # Release qualification status — 2026-08-07
 
+> **STATUS: NOT PUBLISHED — release deliberately held.** Two regressions against stock QWT
+> were found after the draft was cut and both are fixed but not yet re-qualified:
+> PV **disk** drivers were dropped on an unsourced claim (every guest ran on emulated IDE),
+> and `/idd` never performed a display-topology apply (the IDD never drove the desktop on
+> Win10). A combined clean E2E run asserting **disks + network + display together** is in
+> flight; the release is published only when that passes. See "HELD" below.
+
 Goal (user): E2E install test Win10+Win11, regression, networked qube / Windows Update,
 Office behaviour, benchmark vs stock QWT, user-facing write-up, installable package (+ISO)
 on GitHub, then feature freeze.
@@ -20,19 +27,42 @@ Every line below is measured. Where something is unproven or was retracted it sa
 | **Win10 22H2 default-config clean E2E: health gate PASS 7/7** | `-NoIddExpected` (media has no `/idd`): agent hash == manifest, agent running, services, PnP sweep clean, log healthy, ONE agent instance this boot, `MAPS=5`, QGAPERF `mode=s` at 3440x1440. VISUAL half unproven by tooling (empty per-VM tar; gui-daemon not re-attached after a kill/start cycle). Guest runs `agent.018ec54`, NOT the shipped `a68d244`. |
 | **Networking + Windows Update** | verified earlier on `core-net`, zero issues — but see the PV caveat below. |
 
-## FOUND, NOT SHIPPING
+## HELD — two regressions against stock, both fixed, re-qualification in flight
 
-**`/idd` is OUT of the default payload — opt-in only.** On **Win10 19045** the installer's
-activation leaves the IDD bound but NOT driving the desktop: after reboot Windows runs the
-`ROOT\BASICDISPLAY` fallback at 3440x1440 while `ROOT\DISPLAY\0000` is offline
-(`Availability=8`). That guest then wedged (zero active grants; **causation unproven** — the
-wedge class predates the IDD). Shipping it on by default would make every Win10 clean install
-worse than the plain BDA build.
+**1. PV DISK DRIVERS WERE DROPPED (regression against stock).** `PvDriversDisk` was omitted
+from `ADDLOCAL` citing a "documented BSOD risk". **No such document exists.** Upstream's own
+feature description is "Xen PV disk drivers for increased performance"
+(`Package.en-us.wxl:32`), and no feature in `Package.wxs` sets a `Level` attribute — WiX
+defaults them all to `Level=1`, so **stock QWT 4.2.2 installs this by default**. The omission
+left every guest doing all disk I/O over emulated IDE. Worse, `guest/health-check.ps1`
+allowlisted `XENBUS\…&DEV_VBD:28`, so the gate actively certified the regression as healthy.
+Measured fix on `win10-clean`: `msiexec ADDLOCAL=PvDriversDisk` → 3010, VBD binds
+(`err=0 svc=xenvbd`), guest reboots to the desktop with **no bugcheck**, all disks move
+`BusType=ATA` → `SCSI`. Now installed by default; `/nodisk` is a diagnostic opt-out; the
+allowlist entry is gone and `pv_disk_bound` asserts both halves.
 
-Correction worth stating: I first called this platform-independent. **It is not** — the same
-installer passes fully on Win11. And `win-idd-test` (also Win10 19045) DOES run IDD-primary,
-but reached that state through the 2026-08-05 manual sequence, not the installer. So Win10
-can do it and the installer omits the activating step (topology apply). Tracked as task #11.
+**2. `/idd` NEVER PERFORMED A TOPOLOGY APPLY.** An IddCx monitor arrives CONNECTED but
+INACTIVE and is not attached to the desktop until a topology apply names its path. Nothing in
+the package ever did one — the whole `/idd` sequence was pnputil → devcon → wait → disable the
+VGA → reboot. Fixed in the agent (`EnsureQubesIddSolo`, agent `03b1674`): detach every other
+display, set the IDD primary, commit, then decide success by READBACK. It runs in the agent
+because the apply needs the interactive session — the installer's boot-resume task is SYSTEM
+in session 0 and gets `ERROR_ACCESS_DENIED`. It is idempotent (a no-op when the IDD is already
+sole-primary, so the working Win11 path is untouched) and has a `NoTopologyApply` kill switch
+so `desktop_on_idd` can be seen to FAIL on a deliberately-broken build.
+
+**RETRACTED:** the claim that Win10 "falls back to `ROOT\BASICDISPLAY`". It does not. The
+desktop stays on the emulated VGA `PCI\VEN_1234&DEV_1111`, which keeps driving video at
+3440x1440 while its devnode reports `ConfigManagerErrorCode 22`; `ROOT\BASICDISPLAY` is absent
+from the controller list entirely. Both devices share the friendly name "Microsoft Basic
+Display Adapter" and the PNPDeviceID was never checked. The error was copied into four files.
+This was never a Win10 capability gap — `win-idd-test` is the same 19045 build and runs
+IDD-solo via `modeprobe --solo`, which performs exactly the missing step.
+
+**Acceptance was also too weak to catch this.** It gated on `"ok":true`, which tolerates
+checks marked `na` — so an entire subsystem could drop out of a "passing" run unnoticed. It
+now requires `asserted_all:true`: disks, network and display must all be measured in the SAME
+run, with `ALLOW_NA=1` as an explicit, logged escape for partial configurations.
 
 ## NOT PROVEN
 
