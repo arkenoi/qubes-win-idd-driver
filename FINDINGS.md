@@ -5186,3 +5186,41 @@ does not boot is a failure mode this project has already hit (`CDBOOT: Couldn't 
 BOOTMGR` after a layout change). The acceptance queued on it was refused by reprovision's
 per-VM flock because the older-builder run still holds win10-clean - the lock working as
 intended.
+
+## 2026-08-07 — ACCEPTANCE: the SHIPPED package repairs PV networking on a clean install
+
+`win10-clean`, installed from release media containing `pv-drivers/`, then `core-net`
+attached and rebooted. Health gate (`-NoIddExpected`):
+
+    agent_binary_hash        PASS   (installed == manifest, the shipped binary)
+    agent_process            PASS
+    qubes_services_running   PASS
+    idd_device_bound         PASS
+    idd_modes_published      PASS
+    pnp_no_unexpected_errors PASS
+    clipboard_works          PASS   windows clipboard round-trip + Qubes handler running
+    pv_drivers_bound         PASS   XENNET/XENVIF/XENBUS/XENIFACE started
+                                    pv_nics = ["Xen PV Network Device #0"]
+                                    emulated_nics_still_present = []   <-- Realtek UNPLUGGED
+    network_carries_traffic  PASS   ip 10.137.0.70 -> gateway 10.138.25.43 REACHABLE
+    agent_log_healthy        FAIL   logs_this_boot=2 (see below)
+
+So the xenvif rev-5 fix works END TO END FROM THE PACKAGE, not just by hand: a guest whose
+only driver source was our installer ends up on the PV NIC with the emulated adapter gone
+and real connectivity. That closes the defect QWT 4.2.2 ships (its xenvif caps at
+REV_09000004 while its own xennet needs REV_09000005).
+
+The ONE remaining failure is `agent_log_healthy`: `logs_this_boot=2`, i.e. the agent
+respawned once. Diagnosed earlier the same day on a different guest: the first instance dies
+seconds after start with `WatchForEvents: vchan disconnected` / `A6EXIT` and the watchdog
+restarts it; the second instance runs healthily. That is a dom0 gui-daemon connect race
+(DESIGN-gui-daemon-restart-survival.md), not a fault in the shipped binary. The CHECK is too
+strict - `logs_this_boot == 1` fails a benign single respawn on a first boot. It must
+distinguish a respawn LOOP from one restart with a healthy current instance before it can
+gate a release.
+
+Harness flaw also exposed: the FIRST run of this acceptance failed with `pv_drivers_bound`
+and `network_carries_traffic` reporting `na` ("no physical network adapter attached"),
+because reprovision installs OFFLINE by design. `na` currently counts as a failure. It must
+block a release CLAIM without failing the run - otherwise acceptance can never pass on the
+offline install path it itself creates.
