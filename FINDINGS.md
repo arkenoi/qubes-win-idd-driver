@@ -4873,3 +4873,24 @@ BEFORE acting on the driver swap, two things must land:
    attestation-signed by Xen Project, our guests run testsigning, but a real release would
    need the signing question answered. That is a USER DECISION, not mine - it changes what
    the product ships beyond the agent.
+
+## 2026-08-07 — the fresh-guest PV run was a NULL RESULT: my check fails on an OFFLINE guest
+
+`win10-clean` health gate: `pv_drivers_bound` FAILED with `active_nic: NONE`,
+`XENVIF: false`, `XENNET: false`, and **no XENVIF NET child in the device list at all**.
+
+That is not evidence about the driver mismatch. `scratchpad/reprovision.sh` deliberately
+installs with `netvm ''` (offline install is a project rule), so the guest has NO vif -
+nothing for xenvif to enumerate a NET child from, and no emulated NIC either. The check
+asserts "the NIC carrying traffic must be the PV one" on a guest with no NIC by
+construction, so it can only fail. Another check failing for the wrong reason.
+
+Fix required (not yet applied): when no network device is attached at all, the PV-NIC half
+must report `na` with the reason, NOT fail - while a NETWORKED acceptance must still assert
+it. `na` must never read as a pass; the harness has to distinguish "not applicable here"
+from "verified".
+
+Re-running properly: `qvm-prefs win10-clean netvm core-net`, reboot, then read the XENVIF
+NET child's hardware IDs on a guest that has never had a QWT uninstall/reinstall. THAT is
+the reading that decides whether the QWT xenvif/xennet revision mismatch bites a clean
+install - and it is the one the release stance depends on.
