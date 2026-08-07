@@ -73,8 +73,14 @@ for r in $(seq 1 "$REPS"); do
   for side in stock ours; do
     if [ "$side" = stock ]; then vm=$STOCK_VM other=$OURS_VM want=$STOCK_AGENT_HASH
     else vm=$OURS_VM other=$STOCK_VM
+         # artifacts-final, key reference_binaries. The earlier lookup used artifacts-all3
+         # and a ['files'][...]['sha256'] path that does not exist in this manifest, so it
+         # silently yielded UNKNOWN and discarded every ours-side rep as a HASH MISMATCH
+         # against a guest that was in fact correct. An unresolvable expected hash must be a
+         # hard error, not a value that quietly fails every comparison.
          want=$(python3 -c "
-import json;print(json.load(open('artifacts-all3/MANIFEST.json'))['files']['gui-agent.exe']['sha256'][:16].upper())" 2>/dev/null || echo UNKNOWN)
+import json;print(json.load(open('artifacts-final/MANIFEST.json'))['reference_binaries']['gui-agent.exe'][:16].upper())" 2>/dev/null)
+         [ -n "$want" ] || { log "ABORT: cannot resolve OUR expected agent hash from artifacts-final/MANIFEST.json"; exit 4; }
     fi
     log "--- rep $r side=$side vm=$vm ---"
     # Belt: refuse to run against any guest other than the two under test.
