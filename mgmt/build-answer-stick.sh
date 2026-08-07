@@ -93,6 +93,29 @@ echo install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
 EOF
     echo "payload: release package staged, install flags ${INSTALL_FLAGS:-/idd}"
 fi
+# STOCK_MSI: build the CONTROL stick for the benchmark - installs vendor QWT instead of
+# ours, so both benchmark sides come from an identical clean-room path and differ only in
+# the package under test. Its gui-agent is the control build (hash 3D2E6BCEC9F5BD89).
+if [ -n "${STOCK_MSI:-}" ]; then
+    [ -f "$STOCK_MSI" ] || { echo "STOCK_MSI not found: $STOCK_MSI" >&2; exit 1; }
+    [ -n "${RELEASE_SETUP:-}" ] && { echo "ERROR: STOCK_MSI and RELEASE_SETUP are mutually exclusive" >&2; exit 1; }
+    mkdir -p "$WORK/payload/stock"
+    cp "$STOCK_MSI" "$WORK/payload/stock/installer.msi"
+    for extra in "$HERE/../vendor/qwt-4.2.2/vc_redist.x64.exe" "$HOME/win-iso/qwt-payload/vc_redist.x64.exe"; do
+        [ -f "$extra" ] && cp "$extra" "$WORK/payload/stock/" && break
+    done
+    cat > "$WORK/payload/setup.cmd" <<'STOCKEOF'
+@echo off
+echo === answer-stick payload (STOCK QWT control) === >> C:\qubes-win-idd-setup.log
+if exist "%~dp0stock\vc_redist.x64.exe" "%~dp0stock\vc_redist.x64.exe" /install /quiet /norestart >> C:\qubes-win-idd-setup.log 2>&1
+rem Same ADDLOCAL set stock installs by default (every feature is Level=1 in Package.wxs).
+msiexec /i "%~dp0stock\installer.msi" /qn /norestart /L*v C:\qwt-stock-msi.log
+echo stock msiexec rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
+shutdown /r /t 20 /f
+STOCKEOF
+    echo "payload: STOCK QWT control ($(basename "$STOCK_MSI"))"
+fi
+
 cp "$HERE/../guest/firstboot-setup.ps1" "$WORK/payload/" 2>/dev/null || true
 
 rm -f "$OUT"
