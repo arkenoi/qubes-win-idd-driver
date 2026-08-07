@@ -4600,3 +4600,39 @@ and each build output another 5-6 GB, so two stale files is the whole budget).
 Related: this is why the answer-disc route mattered - 29 MB and one second per iteration
 instead of 5.8 GB and ~12 minutes. It remains impossible on Qubes HVM for the reasons
 measured earlier, so the disk discipline has to compensate.
+
+## 2026-08-07 — RETRACTION: the Win10 "second boot also wedged" claim was MY HOST, not the guest
+
+I reported the Win10 clean guest as failing to come back on a second boot and, on the user's
+criterion, called that a hard blocker. **Wrong, and retracted within the hour.**
+
+With `win11-fresh` shut down (three Windows guests = 24 GB committed on this host was the
+confound) `win10-clean` booted and answered qrexec in **22 seconds**. The domain had been
+stuck in `Transient` - a start-time state, not the Running+zero-grants signature of the real
+wedge class - which was the tell I should have read before asserting severity.
+
+**This also puts the FIRST wedge back in question.** It happened while the same three guests
+were running (win11-fresh was mid-install), so host resource pressure is a live alternative
+explanation there too, and "Win10 clean installs wedge on first reboot after install" is
+NOT established. It is recorded as: one unexplained wedge under known memory pressure, with
+forensics archived (`evidence/wedge-w10-noidd-041212`). The project has been bitten by
+exactly this before - the ISO-attach "blocker" that turned out to be an exhausted xenstore
+quota, and the mirage-firewall netvm that never brought up its vif.
+
+Lesson for the harness, not just for me: **acceptance runs must not share a host with another
+install.** Two 8 GB guests plus the 8 GB reference guest is over budget here, and the failure
+mode it produces (silent guest, stuck domain) is indistinguishable at a glance from the real
+wedge class it is supposed to detect.
+
+### With the confound removed, Win10 DEFAULT-CONFIG acceptance PASSES
+
+Re-run on the recovered guest, `-NoIddExpected` (media has no `/idd`): **health gate 7/7**
+- agent_binary_hash, agent_process, qubes_services_running, idd_device_bound,
+idd_modes_published, pnp_no_unexpected_errors, agent_log_healthy - at 3440x1440. Agent-side:
+`MAPS=5`, ONE agent log this boot (no respawn), QGAPERF streaming in `mode=s`.
+
+Caveats kept: the dom0 per-VM screenshot returned an empty tar for this guest (as it did for
+win11-fresh), so the VISUAL/chrome half is again unproven-by-tooling rather than passed - the
+gui-daemon was very likely not re-attached after the kill/start cycle
+(`DESIGN-gui-daemon-restart-survival.md`). And this guest runs `agent.018ec54`, not the
+shipped `a68d244`.
