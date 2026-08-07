@@ -4894,3 +4894,37 @@ Re-running properly: `qvm-prefs win10-clean netvm core-net`, reboot, then read t
 NET child's hardware IDs on a guest that has never had a QWT uninstall/reinstall. THAT is
 the reading that decides whether the QWT xenvif/xennet revision mismatch bites a clean
 install - and it is the one the release stance depends on.
+
+## 2026-08-07 — CONFIRMED ON A CLEAN GUEST: QWT 4.2.2's PV network can never bind. Not our build, not guest history
+
+`win10-clean`, freshly installed from our media, **never** had a QWT uninstall/reinstall,
+then `netvm core-net` attached and rebooted:
+
+    CHILD = XENVIF\VEN_XP0001&DEV_NET\0     status=Error
+    HWIDS = ...&DEV_NET&REV_09000004, 09000003, 09000002, 09000001, 09000000, XENDEVICE
+    NICS  = Realtek RTL8139C+ Fast Ethernet NIC [PCI\VEN_10EC]   (emulated - the ONLY adapter)
+
+Identical to win-idd-test. So every alternative explanation is now dead:
+- NOT our build - our MSI's PV binaries are byte-identical to stock's (3-file diff, all ours);
+- NOT our uninstall/reinstall cycle - this guest never had one;
+- NOT stale cached hardware IDs - this devnode was created once, by this xenvif;
+- NOT guest history - there is none.
+
+**The defect is in the QWT 4.2.2 payload itself**: its `xennet` declares only
+`XENVIF\VEN_XP0001&DEV_NET&REV_09000005`, while its own `xenvif` enumerates the NET child at
+`REV_09000004` and below. No hardware ID intersects, PnP leaves the child at code 28
+(`CM_PROB_FAILED_INSTALL`), and Windows uses the emulated Realtek NIC. Because the binaries
+are byte-identical, **stock QWT 4.2.2 behaves the same on this platform** - so any belief
+that "PV works in stock" does not hold here and needs re-checking against an actual adapter
+name, which is exactly what was never recorded on 2026-08-06 (that entry logged an IP and
+working DNS/HTTPS, never which NIC carried it).
+
+**The fix the user proposed is supported by the evidence**: upstream Xen Project
+`xennet 9.1.0.3` requires `REV_09000003`, which IS in the child's hardware-ID list, so the
+upstream pair (xenvif 9.1.0.2 / xennet 9.1.0.3, xenbits.xen.org/pvdrivers/win/) should bind.
+
+Open decision for the user before implementing: replacing PV drivers inside the QWT MSI
+changes what the product ships beyond our agent, and those binaries are attestation-signed by
+Xen Project. Our guests run testsigning so they will load, but a release needs the signing
+story answered. Also worth reporting upstream (qubes-windows-tools) under the "bugs OUTSIDE
+QWT scope" exception - with the user approving the text first.
