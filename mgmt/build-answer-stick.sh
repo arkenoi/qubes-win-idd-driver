@@ -142,8 +142,13 @@ for %%c in ("%~dp0stock\SigningCert*.cer") do (
   certutil -addstore -f TrustedPublisher "%%c" >> C:\qubes-win-idd-setup.log 2>&1
 )
 if exist "%~dp0stock\vc_redist.x64.exe" "%~dp0stock\vc_redist.x64.exe" /install /quiet /norestart >> C:\qubes-win-idd-setup.log 2>&1
-rem Same ADDLOCAL set stock installs by default (every feature is Level=1 in Package.wxs).
-msiexec /i "%~dp0stock\installer.msi" /qn /norestart /L*v C:\qwt-stock-msi.log
+rem IDENTICAL msiexec invocation and feature set to our side, so the ONLY difference between
+rem the benchmark's two guests is the binaries under test. A control installed by a different
+rem route is not a control. Bare `msiexec /qn /norestart` left the guest with NO qrexec.
+rem Autologon is EXCLUDED deliberately, exactly as our side excludes it: it randomises the
+rem local password, which breaks the answer file's autologon - and qrexec runs in the USER
+rem session, so the guest becomes unreachable. It has no bearing on rendering performance.
+msiexec /i "%~dp0stock\installer.msi" /qn ADDLOCAL=PvDriversCore,Core,Gui,PvDriversNetwork,PvDriversDisk,MoveUsers REBOOT=ReallySuppress REINSTALLMODE=amus /l*v+ C:\qwt-stock-msi.log
 echo stock msiexec rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
 shutdown /r /t 20 /f
 STOCKEOF
