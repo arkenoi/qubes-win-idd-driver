@@ -241,6 +241,27 @@ if ($nics.Count -eq 0) {
            devices = $pvDetail }
 }
 
+# --- 6a. CURSOR: the guest must NOT paint its own cursor ----------------------------
+# dom0 always draws the X cursor over the guest window. If the guest ALSO composites a
+# cursor into the framebuffer we capture, the user sees TWO - reported on Win11 2026-08-07.
+# gui-agent's HideCursors() blanks the system cursors, but returns early unless
+# DisableCursor is set (util.c:213), so 1 = hide the guest cursor = correct. That is the
+# agent's built-in default AND the stock MSI's default; our installer seeded 0 in 24a1ded
+# with no stated reason, which is what produced the double cursor.
+# This matters more now that /idd is on by default: the IddCx driver implements NO hardware
+# cursor path (zero cursor code in Driver.cpp), so a guest cursor can only arrive as pixels
+# baked into the frame. Nothing in this gate checked the cursor before, which is why the
+# defect reached the user instead of the harness.
+$curVal = $null
+try {
+    $curVal = (Get-ItemProperty 'HKLM:\Software\Invisible Things Lab\Qubes Tools' -Name 'DisableCursor' -ErrorAction Stop).DisableCursor
+} catch { $curVal = $null }
+# Absent is a PASS: gui-agent defaults g_DisableCursor to TRUE when the read fails
+# (main.c:4313), so an absent value yields the correct behaviour. Only an explicit 0 is wrong.
+Check 'guest_cursor_hidden' ($curVal -eq 1 -or $null -eq $curVal) `
+    @{ DisableCursor = $(if ($null -eq $curVal) { 'absent (agent defaults to hide)' } else { $curVal })
+       note = 'DisableCursor=0 makes the guest paint its own cursor on top of dom0''s -> double cursor' }
+
 # --- 6b1. PV DISK: the boot disk must be off emulated IDE ---------------------------
 # Added 2026-08-07 after discovering we shipped a package that dropped PvDriversDisk (which
 # STOCK QWT installs by default) on an unsourced "BSOD risk" claim, leaving every guest on
