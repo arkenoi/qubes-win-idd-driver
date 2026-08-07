@@ -4487,3 +4487,24 @@ Release stance UNCHANGED for now (`/idd` stays opt-in, out of the default payloa
 user would still get the degraded, wedge-prone state, and Win10 is the more common target.
 But the write-up must say what is true - verified working on Win11 24H2, broken on Win10
 19045 via the installer path - rather than "broken".
+
+### Win11 visual step: dom0 SERVICE limitation, not a product failure (do not misread this)
+
+The Win11 run ended `ACCEPT=FAIL reason=screenshot service returned empty tar`. That is NOT
+a guest defect. Guest-side evidence, which does not depend on dom0 policy:
+
+    MAPS=4                              (SendWindowMap x4)
+    QGAPERF,v=2,seq=7032,...,mode=s,...,win=2      seamless, 2 windows mapped, streaming
+    QGAPROTO,msg=SYNTHPAINT,hwnd=0x10284,owner=0x201a6   popup synthesis working
+    vchan connected (blocking read on an idle channel)
+
+So the Win11 guest is in seamless mode with windows mapped and frames flowing. The per-VM
+`local.WinScreenshot+win11-fresh` returns 0 bytes because the dom0 screenshot service does
+not serve `win11-fresh` (its allowlist names win-idd-test / win10-clean / win10-e2e, as seen
+when the wedge service was installed). `fullshot` confirms it: the geometry it returns lists
+win-idd-test's windows, not win11's.
+
+**Needs one dom0 action from the user** to close the visual acceptance on Win11: add
+`win11-fresh` to the screenshot service's allowlist (or reinstall it with the tag-based
+policy so any `win-idd-testbed`-tagged qube is served). Until then Win11 visual acceptance is
+UNPROVEN-BY-TOOLING, and is recorded as such rather than as a pass or a failure.
