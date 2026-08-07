@@ -40,6 +40,18 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${OUT:-$HOME/win-iso/answer-usb.img}"
 UNATTEND="${UNATTEND:-$HERE/autounattend.xml}"
 SIZE_MB="${SIZE_MB:-96}"
+# /tmp here is a 1 GiB tmpfs and the staged payload is ~30 MB; a session that has been
+# running a while fills it and `cp` dies with "No space left on device" mid-build, leaving a
+# half-written stick (measured 2026-08-07). Prefer a disk-backed scratch dir, and CHECK the
+# space before doing any work rather than discovering it halfway through.
+: "${TMPDIR:=/home/user/tmp}"
+mkdir -p "$TMPDIR" 2>/dev/null || true
+export TMPDIR
+avail_kb=$(df -Pk "$TMPDIR" | awk 'NR==2{print $4}')
+if [ "${avail_kb:-0}" -lt 262144 ]; then
+    echo "ERROR: only ${avail_kb}KB free in TMPDIR=$TMPDIR - need >=256MB to stage the payload" >&2
+    exit 1
+fi
 MNT=$(mktemp -d)
 cleanup(){ mountpoint -q "$MNT" && sudo umount "$MNT" 2>/dev/null || true; rmdir "$MNT" 2>/dev/null || true; }
 trap cleanup EXIT
