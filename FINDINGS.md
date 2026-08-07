@@ -4405,3 +4405,55 @@ guard that matched its own monitor, so a watcher 'ran' while nothing ran"). Reco
 because knowing about a trap did not stop me walking into it: the fix is to not identify
 work by a string that the waiter itself contains - wait on the PID, on a sentinel file, or
 grep the log for the completion line.
+
+## 2026-08-07 — CLEAN-PATH ACCEPTANCE: install PASSED, health gate FAILED. /idd is not release-ready
+
+First clean-path run on minimal-repack media (vendor ISO `edc53c5c…`, delta manifest beside
+the image). Reported honestly, because the install half genuinely worked:
+
+**PASSED** - the install itself, on a guest that had never seen QWT (`existing_qwt: []`):
+qrexec answered after 1314 s (proving OUR package delivered it), `ok:true`,
+`payload_files_verified: 20/20`, agent hash == manifest (`b758dd92…`), and the IDD
+activation sequence ran exactly as designed:
+
+    devcon: Drivers installed successfully.
+    IDD devnode up: ROOT\DISPLAY\0000; waiting up to 30 s for its display adapter
+    IDD display adapter present: IddSampleDriver Device
+    disabling emulated VGA adapter: PCI\VEN_1234&DEV_1111...
+    IDD ACTIVATED
+
+Also confirmed: the answer file WAS read off the repacked media (Setup went straight to
+"Installing Windows", no locale picker) and `diskprep.cmd` selected the 80 GiB disk by size.
+
+**FAILED - `desktop_on_idd`.** After the reboot the desktop runs on **Microsoft Basic
+Display Adapter at 3440x1440** while the IDD sits **offline** (`Availability=8`, no
+resolution). Re-measured after settling: identical, so it is not a sampling race.
+
+The confusing part, measured directly: the VGA disable DID persist -
+`PCI\VEN_1234&DEV_1111... err=22`, `ConfigFlags=1` (CONFIGFLAG_DISABLED) - and
+`ROOT\BASICDISPLAY\0000` is present at err=0. So Windows disabled the PCI adapter as asked
+and then drove the desktop through the Basic Display **driver** fallback instead of
+attaching the IDD. Disabling the VGA is therefore NOT sufficient to make the IDD the
+desktop: an IddCx monitor arrives INACTIVE and something must still activate it
+(SetDisplayConfig / topology apply). Our installer never does that step - it assumed the
+VGA disable was enough. On win-idd-test the IDD-primary state was reached through the
+2026-08-05 experiment sequence, not through this installer path, which is why it was never
+caught before.
+
+**Then the guest WEDGED.** Shortly after the health probes, win10-clean stopped answering
+qrexec. Forensics captured automatically before any kill (`evidence/wedge-win10-clean-031334`,
+domid 884): **zero active grant entries** - the revoke-spin signature in
+`docs/upstream-xen-pv-grant-revoke-spin.md`. **Causation NOT established**: this wedge class
+has been seen without the IDD, so "the IDD activation caused it" is a hypothesis, not a
+finding. What IS established is that this configuration (IDD bound but offline, desktop on
+the fallback) reached a wedge within minutes of first boot.
+
+### Release decision (mine, evidence-backed)
+
+`/idd` comes OUT of the default unattended payload and stays an explicitly opt-in,
+documented flag. Justification: on a clean install it currently produces a guest whose IDD
+is installed and bound but NOT driving the desktop - i.e. no arbitrary-resolution support in
+practice, the very defect the flag was added to fix - and that guest wedged. Shipping it on
+by default would make every clean install worse than the plain Basic Display Adapter build,
+which at least is stable. The activation gap (topology apply after reboot) is now a named,
+reproducible bug with a clear fix direction rather than an unknown.
