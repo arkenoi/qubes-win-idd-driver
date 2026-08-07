@@ -5559,3 +5559,53 @@ accept-win10-clean-20260807-023437). That is a real control, one rep.
 TODO before the release write-up claims this check is validated: reproduce the pre-fix state
 properly - arm the kill switch AND reset the persisted CCD topology (re-enable the VGA and
 make it primary), each step VERIFIED to have executed - then cold boot and require FAIL.
+
+## 2026-08-07 — AUDIT of every default 24a1ded changed vs stock QWT
+
+Prompted by finding three defects in that one commit (PvDriversDisk dropped, the unsourced
+BSOD claim, DisableCursor=0). Stock installs ALL SEVEN MSI features: no feature in
+Package.wxs sets a Level attribute and WiX defaults them to Level=1.
+
+| default | stock | ours | verdict |
+|---|---|---|---|
+| PvDriversDisk | installed | was DROPPED | **REGRESSION - FIXED** (now in ADDLOCAL) |
+| DisableCursor | 1 (MSI) | was 0 | **REGRESSION - FIXED** (double cursor) |
+| MoveUsers | installed | OMITTED | **REGRESSION - OPEN, see below** |
+| Autologon | installed | OMITTED | **KEEP OMITTED - deliberate, safer than stock** |
+| SeamlessMode | 0 | 1 | deliberate; upstream's own comment is "TODO enable after polishing" |
+| LogDir | Q:\Qubes Logs | C:\Program Files\Qubes Tools\log | deliberate; see interaction below |
+| testsigning | not needed | ENABLED | unavoidable for test-signed binaries; security-relevant |
+
+### MoveUsers - the one real outstanding regression
+
+Upstream: *"Move C:\users to Q:\Users on the Qubes Private Image disk."* Stock installs it.
+We omit it, so **all user data lives on the ROOT volume**, which breaks the Qubes root/private
+split: private is the volume Qubes treats as user data (backups, `qvm-volume revert` of root).
+A user who reverts root would lose their profile.
+
+NOT enabling it blind, because it is BOOT-CRITICAL: it registers `relocate-dir.exe` under
+`HKLM\SYSTEM\...\Session Manager!BootExecute`, so a failure lands in early boot where there is
+no qrexec to diagnose it. It must be tested on a throwaway clean guest first, with the
+recovery path (clearing BootExecute offline) known before arming it.
+
+Interaction to resolve at the same time: we pre-seed `LogDir=C:\Program Files\Qubes Tools\log`
+to dodge the documented race between two MSI components (`[INSTALL_DIR]log` vs
+`Q:\Qubes Logs`, where a Q: that does not exist silently swallows every log). With MoveUsers
+OFF that choice is right and self-consistent - Q: has no Users on it. If MoveUsers is turned
+on, revisit whether logs should follow to the private volume.
+
+### Autologon - stays omitted, and this is BETTER than stock
+
+Upstream's own description is a warning: *"Enable user autologon with randomized password.
+NOTE: Don't enable if you use NTFS-encrypted files (EFS), access to them WILL BE LOST! All
+existing stored credentials (e.g. for network shares) will be invalidated."* Randomising the
+account password on a user's existing Windows is destructive and silent. Our test guests get
+autologon from the ANSWER FILE instead, which is scoped to disposable test VMs. Keep omitted,
+and say so in the release notes rather than leaving it as an undocumented divergence.
+
+### testsigning - the divergence to state loudest
+
+Stock QWT ships production-signed binaries. Ours are TEST-SIGNED, so the installer runs
+`bcdedit /set testsigning on`. That weakens driver-signature enforcement for the whole guest
+and is not something a user should discover from a log line. It is inherent to an unofficial
+build, not a defect, but it belongs at the top of the release notes.
