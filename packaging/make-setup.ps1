@@ -175,6 +175,11 @@ if ($IddArtifact -and (Test-Path -LiteralPath $IddArtifact)) {
     Write-Host "idd-driver: $($iddFiles -join ', ')"
 } else {
 
+    Write-Warning 'no IddCx driver artifact supplied; idd-driver/ will carry a placeholder and /idd will refuse'
+    Set-Content -LiteralPath (Join-Path $OutDir 'idd-driver\NOT-INCLUDED.txt') -Encoding ASCII `
+        -Value 'The IddCx driver was not built for this package. install.cmd /idd will fail loudly.'
+}
+
 # --- PV network fix (xenvif) ---------------------------------------------------------
 # SHIPPED BY DEFAULT. QWT 4.2.2's xenvif tops out at VIF REV_09000004 while its own
 # xennet requires REV_09000005, so the NET child never binds and the guest runs on the
@@ -190,10 +195,6 @@ if ($PvArtifact -and (Test-Path $PvArtifact)) {
     Write-Host "pv-drivers: $($pvWanted.Name -join ', ')"
 } else {
     Write-Warning 'no PV artifact supplied; pv-drivers/ empty and PV networking will stay on the emulated NIC'
-}
-    Write-Warning 'no IddCx driver artifact supplied; idd-driver/ will carry a placeholder and /idd will refuse'
-    Set-Content -LiteralPath (Join-Path $OutDir 'idd-driver\NOT-INCLUDED.txt') -Encoding ASCII `
-        -Value 'The IddCx driver was not built for this package. install.cmd /idd will fail loudly.'
 }
 
 # ------------------------------------------------------------------------------ manifest
