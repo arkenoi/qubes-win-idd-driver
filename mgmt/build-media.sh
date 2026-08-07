@@ -107,10 +107,21 @@ if [ "${NO_QWT:-0}" = "1" ]; then
 rem MUST be first: QWTStage2 is ONSTART and our installer reboots up to three times.
 schtasks /delete /tn QWTStage2 /f >nul 2>&1
 echo === release install (clean path) === >> C:\qubes-win-idd-setup.log
-rem /idd is opt-in: its post-reboot topology apply is unfixed on Win10 (see FINDINGS).
-call C:\payload\release\install.cmd /auto >> C:\qubes-win-idd-setup.log 2>&1
+rem /idd IS passed as of 2026-08-07. It was opt-in while the IDD came up offline after the
+rem reboot; the cause was that nothing performed a display-topology apply (an IddCx monitor
+rem arrives connected but INACTIVE), not a Win10 limitation. The agent now does the apply at
+rem startup in the interactive session (EnsureQubesIddSolo).
+call C:\payload\release\install.cmd /auto __FLAGS__ >> C:\qubes-win-idd-setup.log 2>&1
 echo release install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
 RELEOF
+    # Substituted at BUILD time so the media is self-describing: reading setup2.cmd on the
+    # image tells you exactly which flags that ISO installs with. A failed substitution is a
+    # hard error rather than shipping a literal __FLAGS__ to the guest.
+    sed -i "s|__FLAGS__|${INSTALL_FLAGS:-/idd}|" "$WORK/payload/setup2.cmd"
+    if grep -q '__FLAGS__' "$WORK/payload/setup2.cmd"; then
+        echo "ERROR: install-flag substitution failed" >&2; exit 1
+    fi
+    echo "firstboot install flags: ${INSTALL_FLAGS:-/idd}"
     for stray in installer.msi install-qwt.cmd vc_redist.x64.exe; do
         [ -e "$WORK/payload/$stray" ] && { echo "NO_QWT=1 but $stray staged" >&2; exit 1; }
     done
