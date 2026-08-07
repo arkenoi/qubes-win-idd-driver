@@ -120,6 +120,24 @@ mkdir -p "$(dirname "$OUT")"
 # No boot image: this disc is never booted from, only read. Joliet keeps long names.
 xorriso -as mkisofs -iso-level 3 -J -joliet-long -D -N -d \
     -V ANSWER_DISC -o "$OUT" "$WORK"
+
+# PAD TO A FIXED SIZE. A loop device caches its capacity when it is set up, so rebuilding
+# this image in place at a DIFFERENT size leaves the loop serving the old size and the guest
+# reads a TRUNCATED ISO - Windows Setup then finds no autounattend.xml and falls back to the
+# interactive prompt, which is indistinguishable from "the answer file was ignored" (lost an
+# entire acceptance run on 2026-08-07). Refreshing with `losetup -c` needs root, which this
+# script does not have when it runs unattended. Padding to a CONSTANT size removes the need:
+# the capacity never changes, so the loop is never stale and no privileged step is required.
+# Trailing zeros are outside the ISO9660 volume and are simply ignored by any reader.
+PAD_TO=${PAD_TO:-$((64 * 1024 * 1024))}
+actual=$(stat -c%s "$OUT")
+if [ "$actual" -gt "$PAD_TO" ]; then
+    echo "ERROR: answer disc is $actual bytes, exceeds the fixed $PAD_TO-byte slot." >&2
+    echo "       Raise PAD_TO *and* re-create the loop device, or shrink the payload." >&2
+    exit 1
+fi
+truncate -s "$PAD_TO" "$OUT"
+echo "padded to fixed size: $PAD_TO bytes (was $actual) - loop capacity stays constant"
 ls -sh "$OUT"
 cat <<EOF
 
