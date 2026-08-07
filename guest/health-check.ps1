@@ -21,9 +21,11 @@ param(
     # Allowlist entries as 'HWID_SUBSTRING:CODE', case-insensitive. Defaults name the
     # two states that are BY DESIGN on a Qubes guest with our package:
     #  - the emulated VGA adapter we deliberately disable (code 22 = disabled)
-    #  - XENBUS\VBD code 28: PvDriversDisk is deliberately omitted from ADDLOCAL
-    #    (documented BSOD risk), so the PV disk device stays driverless
-    #  - XENBUS\CONS code 28: QWT ships no xencons driver at all
+    #  - XENBUS\CONS code 28: QWT ships no xencons driver at all. Verified 2026-08-07:
+    #    the Qubes PV-drivers repo vendors only xenbus/xeniface/xennet/xenvbd/xenvif and
+    #    the MSI ships exactly those five, so nothing can bind CONS. It is the PV console
+    #    (xl console), a debugging convenience - no GUI/disk/network/display path uses it.
+    #    NOT a stand-in for VBD: PvDriversDisk is installed now and pv_disk_bound asserts it.
     # Instance-ID substrings measured on the intended-state guest (win-idd-test
     # 2026-08-06): the emulated VGA is PCI\VEN_1234&DEV_1111, the Xen vendor string
     # is XP0001. XENVIF\...DEV_NET err=28 was ALSO observed there with a working Up
@@ -157,7 +159,23 @@ if (-not $boot) {
     # fail the check rather than evaluate it against no data.
     Check 'agent_log_healthy' $false @{ error = 'Win32_OperatingSystem.LastBootUpTime unavailable - freshness cannot be judged' }
 }
-$logsThisBoot = @(Get-ChildItem 'C:\Program Files\Qubes Tools\log' -Filter 'gui-agent-*.log' -ErrorAction SilentlyContinue |
+# Read the CONFIGURED log directory rather than assuming one. LogDir moved to the private
+# volume (Q:\Qubes Logs) on 2026-08-07 when MoveUsers landed, and this check - which had a
+# hardcoded C:\Program Files\Qubes Tools\log - then reported logs_this_boot=0 / newest=NONE
+# on a perfectly healthy guest. A check that silently looks in the wrong place is worse than
+# no check: it fails clean guests and would pass a guest whose logging is genuinely broken if
+# the stale path happened to hold an old file.
+$logDirs = @()
+try {
+    $cfgLogDir = (Get-ItemProperty 'HKLM:\Software\Invisible Things Lab\Qubes Tools' -Name 'LogDir' -ErrorAction Stop).LogDir
+    if ($cfgLogDir) { $logDirs += $cfgLogDir }
+} catch { }
+# Fallbacks cover a guest installed before the move, and the MSI's other candidate.
+$logDirs += 'Q:\Qubes Logs'
+$logDirs += 'C:\Program Files\Qubes Tools\log'
+$logDirs = @($logDirs | Where-Object { $_ } | Select-Object -Unique)
+$logsThisBoot = @($logDirs | ForEach-Object {
+                      Get-ChildItem $_ -Filter 'gui-agent-*.log' -ErrorAction SilentlyContinue } |
                   Where-Object { $boot -and $_.LastWriteTime -gt $boot })
 $log = $logsThisBoot | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 $logOk = $false; $badmode = -1; $grew = $false
@@ -191,7 +209,8 @@ if ($log) {
 }
 if ($boot) {
     Check 'agent_log_healthy' $logOk `
-        @{ logs_this_boot = $logsThisBoot.Count
+        @{ log_dirs_searched = $logDirs
+           logs_this_boot = $logsThisBoot.Count
            newest = if ($log) { $log.Name } else { 'NONE' }
            still_writing = $grew
            badmode_lines = $badmode
