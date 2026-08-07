@@ -41,7 +41,19 @@ qvm-prefs "$VM" qrexec_timeout 300
 # CREATE - "libxenlight failed to create new domain" with no other clue (measured
 # 2026-08-06; cost several hours). Install offline; attach core-net later for the
 # networking/Windows Update tests.
-qvm-prefs "$VM" netvm ''
+# fw-net (mirage-firewall) HANGS domain creation for a Windows HVM: qvm-start blocks
+# indefinitely and the domain sits in Transient, because the stubdom waits on a vif backend
+# mirage never brings up. Measured 2026-08-07 (300 s timeout, still Transient) and again
+# earlier as "libxenlight failed to create new domain". Not fixable here - it is dom0/
+# mirage side, reported upstream. Guard so a mis-set netvm fails INSTANTLY and loudly
+# rather than looking like a slow install.
+case "${NETVM:-}" in
+    *fw-net*|*mirage*)
+        log "REFUSING netvm '$NETVM': mirage-firewall hangs Windows HVM domain creation."
+        log "  use core-net for networked tests, or '' (the default here) to install offline."
+        exit 1 ;;
+esac
+qvm-prefs "$VM" netvm "${NETVM:-}"
 qvm-volume extend "$VM:root" 80GiB
 qvm-features "$VM" os Windows
 qvm-tags "$VM" add win-idd-testbed
