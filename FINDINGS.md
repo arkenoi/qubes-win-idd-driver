@@ -4585,3 +4585,18 @@ clean install did NOT wedge on the same step, so it is Win10-specific like the I
 Testing now whether a SECOND boot recovers it. That distinction decides severity: a
 first-boot-only wedge is a bad but survivable install experience with a workaround; a
 permanent one is a hard blocker for Win10 clean installs and must stop the release.
+
+## 2026-08-07 — disk exhaustion has now broken TWO ISO builds; it is a real process defect
+
+`build-unattended-iso.sh` needs roughly **12 GB transient** (6 GB extracted tree + ~5 GB .swm
+split + 5.8 GB output) on top of whatever is already there. Started it twice with less
+(8.1 GB, then 8.6 GB free) and both died mid-write with `xorriso: No space left on device`,
+each costing ~10 minutes and, the second time, silently leaving a truncated ISO.
+
+The script should REFUSE to start rather than fail 10 minutes in. Recorded as a defect to
+fix; the immediate mitigation is deleting superseded ISOs first (each vendor image is 5-6 GB
+and each build output another 5-6 GB, so two stale files is the whole budget).
+
+Related: this is why the answer-disc route mattered - 29 MB and one second per iteration
+instead of 5.8 GB and ~12 minutes. It remains impossible on Qubes HVM for the reasons
+measured earlier, so the disk discipline has to compensate.
