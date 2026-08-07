@@ -78,7 +78,12 @@ if [ -n "${ANSWER_LOOP:-}" ]; then
     if [ -r "$lb" ]; then
         af=$(losetup -l 2>/dev/null | awk -v d="/dev/$ANSWER_LOOP" '$1==d{print $6}')
         if [ -n "$af" ] && [ -r "$af" ]; then
-            sudo losetup -c "/dev/$ANSWER_LOOP" 2>/dev/null || true
+            # sudo -n: this script runs unattended (nohup, no tty). A plain `sudo` here
+            # BLOCKS FOREVER on the password prompt - measured 2026-08-07, it hung the
+            # whole acceptance run silently. Never add an interactive sudo to this path.
+            # A refresh we cannot perform is not fatal by itself; a MISMATCH is.
+            sudo -n losetup -c "/dev/$ANSWER_LOOP" </dev/null >/dev/null 2>&1 \
+                || log "note: could not refresh /dev/$ANSWER_LOOP capacity (no passwordless sudo) - verifying as-is"
             exposed=$(( $(cat "$lb") * 512 )); actual=$(stat -c%s "$af")
             if [ "$exposed" != "$actual" ]; then
                 log "FAIL: /dev/$ANSWER_LOOP exposes $exposed bytes but $af is $actual."
