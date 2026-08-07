@@ -42,6 +42,9 @@
     runtime. Recovery: re-enable the VGA adapter (its InstanceId is in the result JSON)
     and reboot - see README.txt. Default: off.
 
+.PARAMETER NoMoveUsers
+Omit MoveUsers, leaving C:\Users on the root volume. Recovery use only.
+
 .PARAMETER NoPvDisk
 Omit the Xen PV disk drivers (xenvbd). Leaves the guest on emulated IDE. Diagnostic use only.
 
@@ -71,6 +74,10 @@ param(
     # Escape hatch only. PV disk is ON by default because stock QWT installs it by default
     # and emulated IDE is markedly slower; use this only to isolate a suspected xenvbd fault.
     [switch]$NoPvDisk,
+
+    # Escape hatch. MoveUsers is ON by default (stock does it, and the private volume is where
+    # user data belongs); this exists only to recover a guest that fails to boot after it.
+    [switch]$NoMoveUsers,
     [switch]$ResumeAfterUninstall,
     [string]$WorkDir = 'C:\qwt-improved-setup'
 )
@@ -253,9 +260,13 @@ function Set-GuiAgentRegistryDefaults {
         # can only ever arrive as pixels baked into the frame.
         @('DisableCursor', 'REG_DWORD', '1'),
         # LogDir MUST be pre-seeded: two MSI components race to write it ([INSTALL_DIR]log
-        # vs "Q:\Qubes Logs") under an identical condition. If Q:\ wins and does not exist,
-        # every gui-agent log silently vanishes.
-        @('LogDir', 'REG_SZ', 'C:\Program Files\Qubes Tools\log')
+        # vs "Q:\Qubes Logs") under an identical condition, so without a deterministic seed
+        # the winner is arbitrary - and if Q:\ wins while Q: does not exist, every gui-agent
+        # log silently vanishes. So the seed is about DETERMINISM, not about which path.
+        # The private image is the correct destination (user data belongs on the private
+        # volume, not root - same reason MoveUsers exists), and PvDriversDisk + MoveUsers
+        # now guarantee Q: is present, so seed the stock value rather than a root-volume one.
+        @('LogDir', 'REG_SZ', 'Q:\Qubes Logs')
     )
     foreach ($s in $seed) {
         & reg.exe add $regPath /v $s[0] /t $s[1] /d $s[2] /f /reg:64 | Out-Null
@@ -468,6 +479,7 @@ function Invoke-Stage1 {
         if ($InstallIddDriver) { $extra += '-InstallIddDriver' }
         if ($NoPvNetwork)      { $extra += '-NoPvNetwork' }
         if ($NoPvDisk)         { $extra += '-NoPvDisk' }
+        if ($NoMoveUsers)      { $extra += '-NoMoveUsers' }
         $extra += '-Auto'
         Set-BootResume -ScriptPath $self -ExtraArgs $extra
         Write-Log 'STAGE 1 COMPLETE - rebooting in 15 s, installation resumes automatically'
@@ -579,6 +591,7 @@ function Invoke-Stage2 {
                     if ($InstallIddDriver) { $extra += '-InstallIddDriver' }
                     if ($NoPvNetwork)      { $extra += '-NoPvNetwork' }
                     if ($NoPvDisk)         { $extra += '-NoPvDisk' }
+                    if ($NoMoveUsers)      { $extra += '-NoMoveUsers' }
                     $extra += '-Auto'
                     $extra += '-ResumeAfterUninstall'
                     Set-BootResume -ScriptPath $self -ExtraArgs $extra
@@ -627,9 +640,17 @@ function Invoke-Stage2 {
     # (XENBUS\...&DEV_VBD err=0 svc=xenvbd), the guest reboots cleanly, and all disks move
     # from BusType=ATA to BusType=SCSI. No bugcheck.
     # Keep this list identical to stock's default set except where we have a MEASURED reason.
+    #   MoveUsers         relocates C:\Users to Q:\Users on the Qubes PRIVATE image.
+    # MoveUsers was omitted until 2026-08-07. Stock installs it, and omitting it put ALL user
+    # data on the ROOT volume, which breaks the Qubes root/private split: private is the
+    # volume Qubes treats as user data (backups, and `qvm-volume revert` of root would
+    # otherwise destroy the profile). It is BOOT-CRITICAL - it registers relocate-dir.exe
+    # under Session Manager!BootExecute - so it was tested on a throwaway guest before being
+    # enabled here. /nousers is the escape hatch if a guest ever fails to boot after it.
     $features = @('PvDriversCore', 'Core', 'Gui')
     if (-not $NoPvNetwork) { $features += 'PvDriversNetwork' }
     if (-not $NoPvDisk)    { $features += 'PvDriversDisk' }
+    if (-not $NoMoveUsers) { $features += 'MoveUsers' }
     $addlocal = $features -join ','
 
     $msi = Join-Path $Root 'msi\installer.msi'
