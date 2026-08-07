@@ -5119,3 +5119,29 @@ Two install lessons, both now encoded in the tooling:
 2. The signer must be trusted BEFORE install. Testsigning permits self-signed drivers, but an
    untrusted publisher fails with 0xE0000247. The workflow now exports `xenvif-signer.cer`
    and the installer imports it into Root + TrustedPublisher.
+
+## 2026-08-07 — MIRAGE-FIREWALL PROBE: NOT a clean failure. My script's own verdict is WRONG
+
+Ran with PV networking now working (xenvif upgraded, xennet bound, emulated NIC unplugged),
+to see whether `netvm=fw-net` fails cleanly or leaves an unresponsive qube.
+
+    qvm-start rc=124        <- 124 is TIMEOUT: MY `timeout 300` killed it, qvm-start HUNG
+    domain state            Transient
+    script verdict          "CLEAN-FAIL-AT-CREATE"   <- WRONG
+
+**Correcting my own instrument:** the classifier treated any non-zero rc as a clean failure.
+rc=124 is not an error return from qvm-start, it is my timeout firing after 300 s. So the
+real result is: **`qvm-start` hangs for at least five minutes and the domain sits in
+`Transient`** - i.e. exactly the "unresponsive qube" outcome the user asked to rule out, not
+the clean failure the log claims. Anyone reading only the VERDICT line would draw the
+opposite conclusion.
+
+So PV networking working does NOT fix the mirage-firewall interaction. The failure is at
+DOMAIN CREATION, before the guest runs at all, which is consistent with the earlier
+diagnosis: mirage's netback never brings the vif up, the stubdom waits on it, and domain
+creation stalls. The guest's netfront is irrelevant because the guest never starts.
+
+Not left dirty: the probe restored `netvm=core-net` and the domain settled to `Halted`.
+
+Fix needed in the probe before it is cited anywhere: distinguish rc=124 (hang) from a real
+non-zero exit, and treat `Transient` as a FAILURE state rather than evidence of a clean stop.
