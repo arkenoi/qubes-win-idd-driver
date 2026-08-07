@@ -108,10 +108,16 @@ rem win10-clean (two stacked Qubes Windows Tools setup dialogs, guest wedged, 20
 rem The stock payload-setup2.cmd has always done this; the release variant omitted it.
 schtasks /delete /tn QWTStage2 /f >nul 2>&1
 echo === release install (clean path) === >> C:\qubes-win-idd-setup.log
-rem /idd is NOT optional here: without it a clean guest ships on the Basic Display
-rem Adapter with no Qubes IDD driver - no arbitrary-resolution support - and the
-rem 2026-08-06 hash-only acceptance gate passed anyway. The IDD is part of the product.
-call C:\payload\release\install.cmd /auto /idd >> C:\qubes-win-idd-setup.log 2>&1
+rem /idd is DELIBERATELY NOT passed (2026-08-07). It was added here that morning, and the
+rem first clean-path acceptance that could actually see display health showed why it must
+rem not be a default yet: the installer's activation sequence runs correctly (device
+rem created, adapter present, VGA disabled and the disable PERSISTS at ConfigFlags=1), but
+rem after the reboot Windows drives the desktop through the ROOT\BASICDISPLAY fallback and
+rem the IDD stays OFFLINE (Availability=8). Disabling the VGA is not sufficient - an IddCx
+rem monitor arrives inactive and still needs a topology apply that we do not perform. The
+rem guest also wedged minutes later (zero active grants; causation unproven).
+rem /idd remains supported and documented as an opt-in flag for manual use.
+call C:\payload\release\install.cmd /auto >> C:\qubes-win-idd-setup.log 2>&1
 echo release install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
 RELEOF
         echo "payload += release/ (our package, installed at firstboot)"
