@@ -37,12 +37,14 @@ env:
 jobs:
   xenvif:
     runs-on: windows-2022
+    timeout-minutes: 45
     steps:
       # Copied VERBATIM from build.yml's proven idd-driver step. My paraphrase failed:
       # it looked for VSIXInstaller.exe under ProgramFiles(x86)\...\Installer (it lives
       # under ProgramFiles\Microsoft Visual Studio\2022) and set ErrorActionPreference=Stop,
       # which turns choco's non-fatal output into a failure.
       - name: Install WDK + VS driver targets
+        timeout-minutes: 15
         shell: pwsh
         run: |
           choco install windowsdriverkit11 --no-progress -y
