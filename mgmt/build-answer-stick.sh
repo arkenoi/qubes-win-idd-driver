@@ -105,54 +105,34 @@ echo install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
 EOF
     echo "payload: release package staged, install flags ${INSTALL_FLAGS:-/idd}"
 fi
-# STOCK_MSI: build the CONTROL stick for the benchmark - installs vendor QWT instead of
-# ours, so both benchmark sides come from an identical clean-room path and differ only in
-# the package under test. Its gui-agent is the control build (hash 3D2E6BCEC9F5BD89).
-if [ -n "${STOCK_MSI:-}" ]; then
-    [ -f "$STOCK_MSI" ] || { echo "STOCK_MSI not found: $STOCK_MSI" >&2; exit 1; }
-    [ -n "${RELEASE_SETUP:-}" ] && { echo "ERROR: STOCK_MSI and RELEASE_SETUP are mutually exclusive" >&2; exit 1; }
-    mkdir -p "$WORK/payload/stock"
-    cp "$STOCK_MSI" "$WORK/payload/stock/installer.msi"
-    # The ITL SIGNING CERTS are mandatory. Stock QWT installs boot-critical PV drivers
-    # (xenvbd et al.) signed by ITL; without those certs in Root/TrustedPublisher the driver
-    # installs fail signature validation and the guest can hang mid-install with a black
-    # screen and no qrexec - measured 2026-08-07, where the omission LOOKED like "stock QWT
-    # is broken" but was purely a defect in this control payload. Our own package installs
-    # them (certs_installed:7), so the control must too or it is not a fair control.
-    # Deliberately NOT copying qwt-improved-testsign.cer: that is OUR test-signing cert and
-    # has no business on a stock control guest.
-    certsrc="${STOCK_CERTS:-$HERE/../artifacts-final/certs}"
-    n=0
-    for c in "$certsrc"/SigningCert*.cer; do
-        [ -f "$c" ] || continue
-        cp "$c" "$WORK/payload/stock/" && n=$((n+1))
-    done
-    [ "$n" -ge 6 ] || { echo "ERROR: expected >=6 ITL signing certs in $certsrc, found $n" >&2; exit 1; }
-    echo "payload: staged $n ITL signing certs"
-    for extra in "$HERE/../vendor/qwt-4.2.2/vc_redist.x64.exe" "$HOME/win-iso/qwt-payload/vc_redist.x64.exe"; do
-        [ -f "$extra" ] && cp "$extra" "$WORK/payload/stock/" && break
-    done
+# STOCK_SETUP: stage a full package directory and install it with OUR OWN installer, the
+# same way the ours-side is installed. This replaced a hand-rolled `msiexec /qn` control
+# payload that left the guest with NO qrexec: our installer is the only path proven to
+# install this MSI, and using it for both sides means the ONLY difference between the two
+# benchmark guests is the MSI itself. A control installed by a different route is not a
+# control. The package's MANIFEST.json must have reference_binaries REMOVED - the installer
+# fails when the installed gui-agent does not match it, and on the control it is stock's.
+if [ -n "${STOCK_SETUP:-}" ]; then
+    [ -d "$STOCK_SETUP" ] || { echo "STOCK_SETUP not a directory: $STOCK_SETUP" >&2; exit 1; }
+    [ -n "${RELEASE_SETUP:-}" ] && { echo "ERROR: STOCK_SETUP and RELEASE_SETUP are mutually exclusive" >&2; exit 1; }
+    if python3 -c "
+import json,sys
+m=json.load(open('$STOCK_SETUP/MANIFEST.json'))
+sys.exit(0 if 'reference_binaries' in m else 1)" 2>/dev/null; then
+        echo "ERROR: $STOCK_SETUP/MANIFEST.json still has reference_binaries - the installer will reject the stock agent" >&2
+        exit 1
+    fi
+    mkdir -p "$WORK/payload/release"
+    cp -r "$STOCK_SETUP"/. "$WORK/payload/release/"
+    [ -f "$WORK/payload/release/install.cmd" ] || { echo "ERROR: no install.cmd in $STOCK_SETUP" >&2; exit 1; }
     cat > "$WORK/payload/setup.cmd" <<'STOCKEOF'
 @echo off
-echo === answer-stick payload (STOCK QWT control) === >> C:\qubes-win-idd-setup.log
-rem Trust the ITL signing certs BEFORE the MSI: its PV drivers are ITL-signed and a
-rem boot-critical driver that fails validation can hang the install with a black screen.
-for %%c in ("%~dp0stock\SigningCert*.cer") do (
-  certutil -addstore -f Root "%%c" >> C:\qubes-win-idd-setup.log 2>&1
-  certutil -addstore -f TrustedPublisher "%%c" >> C:\qubes-win-idd-setup.log 2>&1
-)
-if exist "%~dp0stock\vc_redist.x64.exe" "%~dp0stock\vc_redist.x64.exe" /install /quiet /norestart >> C:\qubes-win-idd-setup.log 2>&1
-rem IDENTICAL msiexec invocation and feature set to our side, so the ONLY difference between
-rem the benchmark's two guests is the binaries under test. A control installed by a different
-rem route is not a control. Bare `msiexec /qn /norestart` left the guest with NO qrexec.
-rem Autologon is EXCLUDED deliberately, exactly as our side excludes it: it randomises the
-rem local password, which breaks the answer file's autologon - and qrexec runs in the USER
-rem session, so the guest becomes unreachable. It has no bearing on rendering performance.
-msiexec /i "%~dp0stock\installer.msi" /qn ADDLOCAL=PvDriversCore,Core,Gui,PvDriversNetwork,PvDriversDisk,MoveUsers REBOOT=ReallySuppress REINSTALLMODE=amus /l*v+ C:\qwt-stock-msi.log
-echo stock msiexec rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
-shutdown /r /t 20 /f
+echo === answer-stick payload (STOCK QWT control, our installer) === >> C:\qubes-win-idd-setup.log
+rem No /idd: stock QWT has no indirect display driver.
+call "%~dp0release\install.cmd" /auto >> C:\qubes-win-idd-setup.log 2>&1
+echo install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
 STOCKEOF
-    echo "payload: STOCK QWT control ($(basename "$STOCK_MSI"))"
+    echo "payload: STOCK control staged, installed via our own installer (no /idd)"
 fi
 
 cp "$HERE/../guest/firstboot-setup.ps1" "$WORK/payload/" 2>/dev/null || true
