@@ -62,7 +62,14 @@ log "back from reboot; settling 45s"; sleep 45
 # --- 4. activity + health assertion -------------------------------------------------
 qq ps 'Start-Process notepad' >/dev/null 2>&1; sleep 5
 log "running health-check.ps1"
-QT=180 qq pushrun "$HERE/guest/health-check.ps1" 2>&1 | tr -d '\r' | grep -a '=== HEALTH ===' | tail -1 > "$OUT/health.json"
+# HEALTH_ARGS: pass -NoIddExpected when the media under test does NOT install the IDD
+# (the default payload since 2026-08-07 - /idd is opt-in while its post-reboot topology
+# apply is unfixed). Without it desktop_on_idd/idd_device_bound fail by construction on a
+# guest that was never meant to have an IDD, which would turn the gate into noise.
+# DELIBERATELY NOT the default: a release run of the /idd configuration must still be held
+# to the full assertion.
+log "health-check args: ${HEALTH_ARGS:-<none, full IDD assertion>}"
+QT=180 qq pushrun "$HERE/guest/health-check.ps1" ${HEALTH_ARGS:+$HEALTH_ARGS} 2>&1 | tr -d '\r' | grep -a '=== HEALTH ===' | tail -1 > "$OUT/health.json"
 [ -s "$OUT/health.json" ] || fail "health-check produced no output"
 grep -q '"ok":true' "$OUT/health.json" || fail "health-check ok:false ($(cat "$OUT/health.json" | head -c 300))"
 log "health-check PASS"

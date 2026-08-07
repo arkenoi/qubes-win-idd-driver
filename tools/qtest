@@ -33,10 +33,13 @@ case "${1:-}" in
            done
            qvm-copy-to-vm "$VM" "$@" ;;
   pushrun) shift
-           f="$1"; base="$(basename "$f")"
+           # Extra args after the script are FORWARDED to it. They used to be dropped
+           # silently, so a caller passing e.g. -NoIddExpected got the default behaviour
+           # and no warning (found 2026-08-07 while wiring the health gate's non-IDD mode).
+           f="$1"; shift; base="$(basename "$f")"
            vmshell "cmd /c del /q /f \"$INCOMING\\$base\" 2>nul" >/dev/null 2>&1 || true
            qvm-copy-to-vm "$VM" "$f"
-           vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"$INCOMING\\$base\"" ;;
+           vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"$INCOMING\\$base\" $*" ;;
   start)    adm admin.vm.Start ;;
   shutdown) adm admin.vm.Shutdown ;;
   kill)     adm admin.vm.Kill ;;
