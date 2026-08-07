@@ -4764,3 +4764,42 @@ Fixed in `mgmt/build-unattended-iso.sh`: the stock MSI, `install-qwt.cmd` and vc
 excluded under NO_QWT=1, and the build now ASSERTS afterwards that none of them is staged,
 failing loudly if one reappears. Re-running the shipped-build acceptance on the corrected
 media; the assertion is checked before the run is allowed to start.
+
+## 2026-08-07 — PV NETWORKING ROOT CAUSE FOUND: xenvif/xennet revision mismatch
+
+User raised the bar: "check not only if it installs but also if everything works (PV, IDD,
+clipboard)". Added those assertions, `pv_drivers_bound` failed immediately, and following it
+down produced an exact root cause rather than another "not established".
+
+Measured on win-idd-test:
+
+    device XENVIF\VEN_XP0001&DEV_NET\0   err=28 (no driver), service = <empty>
+    device HardwareIDs:  ...&DEV_NET&REV_09000004   (highest offered)
+                         ...&REV_09000003 / 02 / 01 / 00, then XENDEVICE
+    xennet INF (oem5.inf) declares ONLY:
+                         XENVIF\VEN_XP0001&DEV_NET&REV_09000005
+                         XENVIF\VEN_XP0002&DEV_NET&REV_09000005
+
+**xenvif publishes a child at REV_09000004 and below; xennet claims REV_09000005 only.**
+No hardware ID intersects, so PnP finds no driver for the device and leaves it at code 28 -
+`CM_PROB_FAILED_INSTALL`. That is the whole mechanism. Nothing is "broken" at runtime: the
+two PV components in this QWT package are simply built against different interface revisions,
+so the network child can never bind, and Windows falls back to the emulated Realtek NIC -
+which works, which is exactly why every previous check passed.
+
+Both INFs are in the driver store (`xenvif.inf`, `xennet.inf`, provider "Xen Project"), so
+this is not a missing-driver or signing problem.
+
+**Scope: NOT ours to fix in this repo.** These are the upstream Xen PV drivers as shipped
+inside QWT 4.2.2's MSI; we neither build nor patch them. Options, in order of honesty:
+1. Report upstream (qubes-windows-tools / the Xen Project win-pv-drivers) with this evidence -
+   it qualifies under the "bugs OUTSIDE QWT scope get reported" exception in CLAUDE.md, and
+   the exact revision numbers make it actionable. **Needs the user to approve the text first.**
+2. Verify whether STOCK QWT 4.2.2 shows the same mismatch on this platform (it almost
+   certainly does, since the MSI payload is the same) - that determines whether this is a
+   regression we introduced (it is not, but that must be shown, not asserted).
+3. Until then the release notes must say PV networking runs over the emulated NIC.
+
+The health gate now FAILS on this, which means the release cannot pass the user's bar until
+it is resolved or explicitly waived. That is the correct behaviour, not an obstacle to route
+around.
