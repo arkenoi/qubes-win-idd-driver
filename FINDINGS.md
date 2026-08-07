@@ -4803,3 +4803,38 @@ inside QWT 4.2.2's MSI; we neither build nor patch them. Options, in order of ho
 The health gate now FAILS on this, which means the release cannot pass the user's bar until
 it is resolved or explicitly waived. That is the correct behaviour, not an obstacle to route
 around.
+
+## 2026-08-07 — RETRACTION: the PV mismatch is NOT our build. Our MSI's PV drivers are byte-identical to stock
+
+User pushed back: "we know for sure it works in stock qwt and our previous builds, so if it
+does not you are building from wrong code base". Checked it properly instead of arguing.
+
+Extracted BOTH MSIs (`vendor/qwt-4.2.2/installer.msi` = stock, and our CI-built
+`artifacts-final/setup/msi/installer.msi`) and diffed every stream:
+
+    files differing between stock and ours: 3
+      gui-agent.exe      (ours, expected)
+      gui-watchdog.exe   (ours, expected)
+      one ASCII text file
+    EVERY OTHER FILE, including every Xen PV driver, is BYTE-IDENTICAL.
+
+    xennet hardware IDs: identical in both  (REV_09000005 only)
+    xenvif DriverVer:    identical in both  (04/07/2025, 9.1.0.0)
+
+So the "we are building from the wrong codebase" hypothesis is REFUTED, and so is my
+"upstream packaging bug" framing from an hour earlier - **both retracted**. Our package
+ships stock's PV drivers unmodified.
+
+What is still true and unexplained: on **win-idd-test** the `XENVIF\...&DEV_NET` child
+advertises at most `REV_09000004` while the installed xennet claims `REV_09000005`, so it
+sits at code 28 and the guest runs on the emulated Realtek NIC. Installed xenvif reports
+9.1.0.0 - matching the MSI - yet a SECOND xenvif entry appears with an EMPTY version, i.e.
+that guest has leftover/duplicate PV driver state.
+
+win-idd-test is the wrong guest to conclude anything from: it has been through the original
+stock-QWT provisioning, an overlay install, a full uninstall+reinstall, and repeated agent
+swaps. **The decisive test is win10-clean** - a fresh Windows where ONLY our package ever
+installed PV drivers - which is installing right now, and whose gate now includes
+`pv_drivers_bound`. Conclusion deferred to that result rather than generalised again from a
+much-abused reference guest. I have now been wrong on this twice in one hour by doing exactly
+that.
