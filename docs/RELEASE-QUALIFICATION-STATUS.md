@@ -35,8 +35,13 @@ can do it and the installer omits the activating step (topology apply). Tracked 
 
 ## NOT PROVEN
 
-- **Win10 default-config clean E2E** — running now on `win10-noidd.iso` with
-  `HEALTH_ARGS=-NoIddExpected`. The earlier Win10 run failed on `desktop_on_idd` only.
+- **Win10 default-config clean E2E — health gate PASSES 7/7** (`-NoIddExpected`, media has
+  no `/idd`): agent hash == manifest, agent running, services, PnP sweep clean, log healthy,
+  one agent instance this boot, `MAPS=5`, QGAPERF streaming `mode=s` at 3440x1440. The
+  VISUAL/chrome half is **unproven by tooling** — the dom0 per-VM screenshot returns an empty
+  tar for this guest (gui-daemon almost certainly not re-attached after a kill/start cycle,
+  see `DESIGN-gui-daemon-restart-survival.md`). Guest runs `agent.018ec54`, NOT the shipped
+  `a68d244`.
 - **Win11 visual acceptance — UNPROVEN BY TOOLING, not a failure.** `local.WinScreenshot+win11-fresh`
   returns 0 bytes because the dom0 screenshot service's allowlist does not include
   `win11-fresh` (`fullshot` gives it away by returning win-idd-test's windows).
@@ -62,6 +67,14 @@ can do it and the installer omits the activating step (topology apply). Tracked 
    assign --option devtype=cdrom` creates a PV device: SeaBIOS reports `No bootable device`
    and WinPE cannot see it. The original claim rested only on the dom0 command being accepted.
 3. **"The IDD activation gap is platform-independent"** — Win11 passes; it is Win10-specific.
+4. **"Win10 clean installs wedge on the first reboot / second boot also wedged, hard blocker"**
+   — the second-boot failure was **host memory pressure** (three 8 GB guests on this host);
+   with one shut down the guest booted in 22 s. The domain had been `Transient` (a start-time
+   state), not Running+zero-grants (the real wedge signature). That also reopens the FIRST
+   wedge, which occurred under the same pressure: recorded as ONE UNEXPLAINED WEDGE UNDER
+   KNOWN MEMORY PRESSURE, forensics archived, **not** as an established product defect.
+   Harness rule added: acceptance runs must not share a host with another install — the
+   failure it produces is indistinguishable at a glance from the wedge class being hunted.
 
 ## INSTALL MEDIA POLICY
 
