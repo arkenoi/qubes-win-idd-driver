@@ -79,6 +79,15 @@ jobs:
           # hand would be another guess; the project already does it correctly.
           # -Type free = release build. SignMode TestSign is the default and matches our
           # test-signed guest.
+          # msbuild.ps1 invokes bare `msbuild.exe`, which is NOT on PATH on the runner
+          # (the previous failure: "The term 'msbuild.exe' is not recognized"). Put the VS
+          # MSBuild directory on PATH rather than editing upstream's script.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $mb = & $vswhere -latest -requires Microsoft.Component.MSBuild `
+                  -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          if (-not $mb) { throw "MSBuild.exe not found" }
+          $env:PATH = (Split-Path $mb) + ';' + $env:PATH
+          Write-Host "msbuild on PATH: $mb"
           $env:VisualStudioVersion = '17.0'
           .\build.ps1 -Type free -Arch x64
           if ($LASTEXITCODE -ne 0) { throw "xenvif build.ps1 failed" }
