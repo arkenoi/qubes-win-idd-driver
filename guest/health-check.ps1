@@ -294,11 +294,30 @@ try {
                 -Name 'ProfilesDirectory' -ErrorAction Stop).ProfilesDirectory
 } catch { $profDir = $null }
 $qUsers = Test-Path 'Q:\Users' -ErrorAction SilentlyContinue
-Check 'user_data_on_private' ($qVol.Count -ge 1 -and $qUsers) `
+# Assert the MECHANISM, not just the symptom. Q:\Users existing could equally mean 'a copy
+# was made and profiles still live on root'. The redirection is what matters, so require
+# C:\Users to be a reparse point whose target is on Q:. ProfilesDirectory deliberately stays
+# C:\Users - relocate-dir.exe leaves a link, and rewriting that registry value post-install
+# is Microsoft's unsupported path and a known source of servicing failures.
+$cu = Get-Item 'C:\Users' -Force -ErrorAction SilentlyContinue
+$isLink = $false; $linkTarget = 'NONE'
+if ($cu) {
+    $isLink = [bool]($cu.Attributes -band [IO.FileAttributes]::ReparsePoint)
+    if ($cu.Target) { $linkTarget = ($cu.Target -join ';') }
+}
+$targetOnQ = ($linkTarget -match '^[Qq]:')
+# Free space matters here: MoveUsers sends ALL user data to the private image, whose Qubes
+# default is 2 GiB - a bare profile already uses ~546 MB. Warn loudly below 2 GiB free.
+$qFreeGB = if ($qVol.Count -ge 1) { [math]::Round($qVol[0].SizeRemaining / 1GB, 1) } else { 0 }
+Check 'user_data_on_private' ($qVol.Count -ge 1 -and $qUsers -and $isLink -and $targetOnQ) `
     @{ private_volume_present = ($qVol.Count -ge 1)
        q_users_exists         = $qUsers
+       c_users_is_reparse     = $isLink
+       c_users_target         = $linkTarget
+       private_free_gb        = $qFreeGB
+       low_space_warning      = ($qFreeGB -lt 2)
        profiles_directory     = $(if ($profDir) { $profDir } else { '<unset>' })
-       note = 'MoveUsers must place profiles on Q: (private image); root-volume profiles are lost on a root revert' }
+       note = 'MoveUsers must REDIRECT C:\Users to the private image; a mere copy would leave profiles on root' }
 
 # --- 6b1. PV DISK: the boot disk must be off emulated IDE ---------------------------
 # Added 2026-08-07 after discovering we shipped a package that dropped PvDriversDisk (which
