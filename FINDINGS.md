@@ -5246,3 +5246,34 @@ QWT network setup re-apply on vif arrival), but it is NOT "hotplug works".
 Instrument bug found in my own probe, fixed: the success matcher was `*IP=1*`, which happily
 accepts `169.254.*`. Only the gateway-reachability check caught the truth. A pattern that
 matches the failure it is meant to exclude is worthless.
+
+## 2026-08-07 — HOTPLUG REPAIRED, and the health gate now passes 10/10 with NOTHING skipped
+
+**Repair found.** QWT ships `C:\Program Files\Qubes Tools\bin\network-setup.exe` - the
+component that applies the qubesdb-driven static IP. Nothing re-runs it when a vif arrives
+at runtime, which is why a hotplugged NIC landed on APIPA. Running it by hand:
+
+    BEFORE = 169.254.234.144      (APIPA, hotplugged NIC, no gateway)
+    network-setup.exe  RC=0
+    AFTER  = 10.137.0.70          (correct Qubes IP)
+
+So netvm hotplug on Windows is: `qvm-prefs <vm> netvm <net>` then run `network-setup.exe`
+in the guest. No reboot. Revised verdict: **hotplug WORKS, with one guest-side step** -
+previously recorded as "does not work at runtime", which was true only because nothing
+re-applies the addressing.
+
+Follow-up worth doing (not done): have QWT re-run network-setup on vif arrival so no manual
+step is needed - a PnP/WMI notification on a new Xen network adapter, or the existing
+network service watching qubesdb.
+
+**Health gate after both check fixes, full re-assert:**
+
+    ok = true   failed = []   not_applicable = []   asserted_all = true
+    agent_binary_hash, agent_process, qubes_services_running, idd_device_bound,
+    idd_modes_published, pnp_no_unexpected_errors, agent_log_healthy,
+    pv_drivers_bound, network_carries_traffic, clipboard_works  -- ALL PASS
+    network: ip 10.137.0.70 -> gateway 10.138.25.43 reachable
+
+This is the first time the gate has passed with `asserted_all=true`, i.e. no check skipped
+and none excused. It is passing on the SHIPPED package (`agent_binary_hash` == manifest),
+on a guest whose only driver source was our installer.
