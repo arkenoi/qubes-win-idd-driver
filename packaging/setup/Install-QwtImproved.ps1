@@ -652,6 +652,48 @@ function Invoke-Stage2 {
         $script:Result.detail.agent_hash_verified = $false
     }
 
+    # --- PV network fix: xenvif that can actually bind xennet -----------------------
+    # SHIPPED BY DEFAULT (not optional): QWT 4.2.2's own xenvif tops out at VIF interface
+    # REV_09000004 while its xennet requires REV_09000005, so the XENVIF NET child can
+    # never bind and Windows falls back to the QEMU-emulated Realtek NIC. Measured on a
+    # clean Qubes 4.3 guest 2026-08-07; stock QWT is affected identically (our PV binaries
+    # are byte-identical to stock's). Upstream added rev 5 in xenvif 4608bc1 "Use UNPLUG
+    # v3"; we build xenvif from xenbits master and install it here, AFTER the MSI, so it
+    # upgrades the one the MSI just laid down.
+    # Proven on win10-clean: Realtek RTL8139C+ -> Xen PV Network Device #0, gateway
+    # reachable.
+    $pvDir = Join-Path $Root 'pv-drivers'
+    $pvInf = Join-Path $pvDir 'xenvif.inf'
+    if (Test-Path -LiteralPath $pvInf) {
+        # Trust the signer FIRST: testsigning permits self-signed drivers, but an untrusted
+        # publisher fails the driver-store add with 0xE0000247 (measured, same day).
+        $pvCer = Join-Path $pvDir 'xenvif-signer.cer'
+        if (Test-Path -LiteralPath $pvCer) {
+            foreach ($store in 'Root', 'TrustedPublisher') {
+                try { $out = & certutil.exe -addstore -f $store $pvCer 2>&1 } catch { $out = "$_" }
+                Write-Log "  certutil ${store}: rc=$LASTEXITCODE"
+            }
+        } else {
+            Write-Log 'pv-drivers/xenvif-signer.cer missing - the driver store add will likely fail' 'WARN'
+        }
+        Write-Log 'installing xenvif (PV network interface fix)'
+        try { $out = & pnputil.exe /add-driver $pvInf /install 2>&1 } catch { $out = "$_" }
+        $out | ForEach-Object { Write-Log "  pnputil(xenvif): $_" }
+        # 259 = no more items (nothing to do); 3010 = success, reboot required - stage 2
+        # always reboots. Anything else is a real failure, but NOT fatal to the install:
+        # the guest still works on the emulated NIC, which is the pre-fix status quo.
+        if ($LASTEXITCODE -notin 0, 259, 3010) {
+            Write-Log "xenvif install returned $LASTEXITCODE - PV networking may stay on the emulated NIC" 'WARN'
+            $script:Result.detail.pv_xenvif = "failed rc=$LASTEXITCODE"
+        } else {
+            Write-Log 'xenvif installed - the emulated NIC should be unplugged after the reboot'
+            $script:Result.detail.pv_xenvif = 'installed'
+        }
+    } else {
+        Write-Log 'pv-drivers/xenvif.inf not in the payload - PV networking will use the emulated NIC' 'WARN'
+        $script:Result.detail.pv_xenvif = 'not shipped'
+    }
+
     # --- optional: install and ACTIVATE the IddCx driver ----------------------------
     # Proven shipping configuration (win-idd-test, 2026-08): IDD device ROOT\DISPLAY\0000
     # (hardware id root\iddsampledriver) bound with ConfigManagerErrorCode 0, and the
