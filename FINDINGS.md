@@ -5010,3 +5010,42 @@ Next concrete steps, in order:
    whether the pinned pair is internally consistent.
 2. Establish whether a Qubes 4.3-targeted QWT / PV driver set exists. If it does, everything
    above may be moot and the answer is simply "use the 4.3 build".
+
+## 2026-08-07 — There is NO newer Qubes PV driver set; we are already on 4.3 sources
+
+Checked instead of assuming, per the user's "check if there is a 4.3 qwt build first":
+
+- **QWT installer: we already build R4.3.0.** `INSTALLER_SHA=14c189e4...` is exactly what
+  `refs/tags/R4.3.0^{}` and `refs/heads/release4.3` point at in
+  `qubes-installer-qubes-os-windows-tools`. The "4.2.2" string is QWT's product version, not
+  its Qubes target. So the installer is NOT stale.
+- **PV drivers: `release4.3` IS our pin.** `refs/heads/release4.3` = `388c821c` =
+  `v4.2.0-1^{}`, i.e. the tag we already pin. And `main` (8cffcc09) pins the SAME driver
+  submodules: xenbus `e76d03e3`, xennet `ad7717f6`, xenvif `9fd1afe4`. There is nothing newer
+  to pull - main, release4.3 and our pin are identical for drivers.
+
+So the "we are on 4.2 software on a 4.3 host" worry does not hold for the sources: they are
+the current 4.3 ones.
+
+**Where the inconsistency actually sits.** Fetched the pinned submodules from xenbits:
+`xennet@ad7717f6` source declares `DEV_NET&REV_09000005` - matching the SHIPPED xennet binary.
+So the shipped xennet is faithful to the pinned source. `xenvif@9fd1afe4` carries no literal
+`0900000x` in its `src` tree (its published revision is constructed elsewhere - INF template
+or version macro), so source alone did NOT settle what it publishes.
+
+The one hard fact remains the runtime measurement: the SHIPPED xenvif binary enumerates the
+NET child at `REV_09000004`. Two possibilities remain, and they are distinguishable by ONE
+experiment:
+  A. The pinned xenvif source publishes rev 5, and the PREBUILT binary in the QWT 4.2.2 RPM
+     was built from an older tree -> **building xenvif from the pinned SHA fixes PV**, and
+     the bug is that the RPM ships a stale xenvif.
+  B. The pinned xenvif source publishes rev 4 -> the pinned PAIR itself is inconsistent and
+     the bug is upstream in what Qubes pins.
+
+**Next step (not done - needs an EWDK build):** build xenvif and xennet from
+`9fd1afe4`/`ad7717f6` in CI, read the built xenvif's published NET revision, and if it is 5,
+stage OUR built pair instead of the RPM's prebuilt drivers. That is a real change to
+`qwt-full.yml` (it currently stages PV drivers bit-identical from the RPM and builds only
+libxenvchan from this repo) and it forfeits the bit-identical property for a
+security-relevant component - a deliberate tradeoff the user has now directed
+("upgrade the driver instead").
