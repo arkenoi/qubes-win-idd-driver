@@ -5376,3 +5376,43 @@ The other two omissions are minor and stand:
 POST-FREEZE: verify the xenvbd BSOD claim (source or measurement), and if it does not hold,
 enabling PvDriversDisk is likely the single largest remaining performance win - the disk
 equivalent of today's xenvif fix.
+
+## 2026-08-07 — RETRACTION: the Win10 /idd symptom is NOT "falls back to ROOT\BASICDISPLAY"
+
+I wrote that four times (FINDINGS, RELEASE-QUALIFICATION-STATUS, two mgmt scripts, the
+release notes) and it is wrong. The archived post-reboot measurement of the failing Win10
+guest actually says:
+
+    PCI\VEN_1234&DEV_1111   ConfigManagerErrorCode = 22 (CM_PROB_DISABLED)   <- disable DID persist
+    PCI\VEN_1234&DEV_1111   Availability = 3 (Running), 3440x1440            <- SAME device drives the desktop
+    ROOT\BASICDISPLAY       absent from the controller list entirely
+
+Both the emulated VGA and the ROOT fallback carry the friendly name "Microsoft Basic Display
+Adapter"; I read the name and never checked the PNPDeviceID. The desktop stays on the
+EMULATED VGA, which keeps driving video while its devnode is marked disabled. Windows did not
+"fall back" to anything.
+
+ROOT CAUSE (this part of the hypothesis survives, with a different mechanism):
+**nothing in the package ever performs a display-topology apply.** The /idd sequence is
+pnputil -> devcon create root devnode -> wait for a Win32_VideoController -> Disable-PnpDevice
+on the PCI VGA -> reboot. An IddCx monitor arrives CONNECTED but INACTIVE (Availability=8,
+null resolution) and is not attached to the desktop until a CCD topology apply names its path.
+No such call exists anywhere in the package - not before the reboot, not after. The persisted
+topology therefore still names only the VGA path at next boot, so Windows drives that rather
+than leaving the box headless. The installer's comment at Install-QwtImproved.ps1:740 -
+"Activation happens HERE, right before the stage-2 reboot" - encodes the false assumption.
+
+Decisive corroboration: `win-idd-test` is the SAME Win10 19045 build and DOES run IDD-solo,
+but it got there via `tools/modeprobe --solo`, which performs exactly the missing step
+(detach every other display, CDS_SET_PRIMARY|CDS_UPDATEREGISTRY on the IDD, commit). Win11
+24H2 reaches the same end state from the identical installer, so Win11 performs or persists
+the apply on its own. The Win10/Win11 difference is NOT driver-side: the IddCx driver has zero
+OS-build branches and no version mismatch (verified in driver/IddSampleDriver/Driver.cpp).
+
+FIX (not yet implemented): do the topology apply in the GUI AGENT at startup, before it maps
+the screen - QueryDisplayConfig(QDC_ALL_PATHS), find the target whose
+DISPLAYCONFIG_TARGET_DEVICE_NAME matches the Qubes IDD, mark ONLY that path active and every
+other path inactive, then SetDisplayConfig(SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG |
+SDC_SAVE_TO_DATABASE | SDC_ALLOW_CHANGES). Marking the others inactive is what keeps the IDD
+the SOLE output, so the desktop bounding box does not grow and seamless coordinates hold.
+It must NOT go in the installer's SYSTEM ONSTART task: session 0 gets ERROR_ACCESS_DENIED.
