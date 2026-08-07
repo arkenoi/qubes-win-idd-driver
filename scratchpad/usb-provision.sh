@@ -34,6 +34,12 @@ qvm-prefs "$VM" vcpus 4
 qvm-prefs "$VM" qrexec_timeout 300
 qvm-prefs "$VM" netvm "$NETVM"
 qvm-volume extend "$VM:root" 80GiB
+# PRIVATE must be extended too, not just root. MoveUsers redirects C:\Users to Q:\Users on
+# the private image, so ALL user data lands here. The Qubes default private volume is 2 GiB,
+# and a bare Windows profile already occupies ~546 MB of it (measured 2026-08-07) - a guest
+# would run out almost immediately. Extending root alone was correct only while user data
+# still lived on root, i.e. before MoveUsers was enabled.
+qvm-volume extend "$VM:private" 40GiB
 qvm-features "$VM" os Windows
 qvm-tags "$VM" add win-idd-testbed
 
