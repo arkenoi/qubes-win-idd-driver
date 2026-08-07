@@ -65,14 +65,23 @@ for r in $(seq 1 "$REPS"); do
          want=$(python3 -c "
 import json;print(json.load(open('artifacts-all3/MANIFEST.json'))['files']['gui-agent.exe']['sha256'][:16].upper())" 2>/dev/null || echo UNKNOWN)
     fi
-    log "--- rep $r side=$side ---"
+    log "--- rep $r side=$side vm=$vm ---"
+    # Belt: refuse to run against any guest other than the two under test.
+    case "$vm" in
+        "$STOCK_VM"|"$OURS_VM") ;;
+        *) log "ABORT: refusing to benchmark '$vm' - not one of the two guests under test"; exit 3 ;;
+    esac
     solo_up "$vm" "$other" || { log "rep $r/$side SKIPPED (guest down)"; continue; }
     verify_hash "$vm" "$want" || { log "rep $r/$side SKIPPED (hash)"; continue; }
     # Generic FPS test first: no dependency on our instrumentation, so it is the one
     # frame-rate figure that is genuinely comparable against stock.
     ./scratchpad/fps-crossside.sh "$vm" "${side}-r${r}-move" 10 move 2>&1 | tail -1
     ./scratchpad/fps-crossside.sh "$vm" "${side}-r${r}-full" 10 full 2>&1 | tail -1
-    if BENCH_SIDE=$side BENCH_VM=$vm BENCH_REP=$r ./scratchpad/benchmark.sh run "$side" 2>&1 | tail -5; then
+    # QTEST_VM, not BENCH_VM: benchmark.sh reads QTEST_VM and DEFAULTS TO win-idd-test
+    # (benchmark.sh:112). Passing the wrong variable silently benchmarked a stale third
+    # guest for BOTH sides - near-identical numbers from a VM under test in neither case,
+    # with nothing in the output to reveal it. Caught before the first rep ran.
+    if QTEST_VM=$vm BENCH_SIDE=$side BENCH_VM=$vm BENCH_REP=$r ./scratchpad/benchmark.sh run "$side" 2>&1 | tail -5; then
       [ "$side" = stock ] && ok_stock=$((ok_stock+1)) || ok_ours=$((ok_ours+1))
     else
       log "rep $r/$side FAILED in benchmark.sh"
