@@ -164,8 +164,15 @@ jobs:
           retention-days: 14
 
   # ------------------------------------------------------------------ the setup tree
+  pv:
+    # The PV network fix. QWT 4.2.2's xenvif tops out at VIF REV_09000004 while its own
+    # xennet requires REV_09000005, so the NET child never binds and the guest falls back
+    # to the emulated Realtek. Built from xenbits master, which has rev 5 (4608bc1
+    # "Use UNPLUG v3"). Proven on a clean guest: Realtek -> Xen PV Network Device #0.
+    uses: ./.github/workflows/pv-xenvif.yml
+
   setup:
-    needs: [msi, idd]
+    needs: [msi, idd, pv]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -184,6 +191,11 @@ jobs:
         with:
           name: release-idd-driver
           path: dl/idd
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pv-xenvif
+          path: dl/pv
 
       # actions/checkout marks the workspace safe inside a TEMPORARY HOME and then restores
       # HOME, so by this point git reports "detected dubious ownership" and provenance
@@ -220,6 +232,7 @@ jobs:
           & .\packaging\make-setup.ps1 `
               -MsiArtifact dl\qwt-full `
               -IddArtifact dl\idd `
+              -PvArtifact dl\pv `
               -VcRedist    "$env:VC_REDIST" `
               -OutDir      qwt-improved-setup
 
