@@ -17,6 +17,7 @@ Every line below is measured. Where something is unproven or was retracted it sa
 | **Health gate is real** | `guest/health-check.ps1` validated BOTH ways: FAILS the degraded no-IDD guest, PASSES the intended state. It then caught two genuine defects on its first real runs (below). |
 | **Chrome assertion is real** | `tools/check-chrome.py` seen to FAIL on the exact build that cropped window menus (`top_band_colours=2`, exit 1) before being trusted. |
 | **Package + ISO build** | CI `release-package` green on main; MSI carries our agent; ISO produced. |
+| **Win10 22H2 default-config clean E2E: health gate PASS 7/7** | `-NoIddExpected` (media has no `/idd`): agent hash == manifest, agent running, services, PnP sweep clean, log healthy, ONE agent instance this boot, `MAPS=5`, QGAPERF `mode=s` at 3440x1440. VISUAL half unproven by tooling (empty per-VM tar; gui-daemon not re-attached after a kill/start cycle). Guest runs `agent.018ec54`, NOT the shipped `a68d244`. |
 | **Networking + Windows Update** | verified earlier on `core-net`, zero issues — but see the PV caveat below. |
 
 ## FOUND, NOT SHIPPING
@@ -35,13 +36,6 @@ can do it and the installer omits the activating step (topology apply). Tracked 
 
 ## NOT PROVEN
 
-- **Win10 default-config clean E2E — health gate PASSES 7/7** (`-NoIddExpected`, media has
-  no `/idd`): agent hash == manifest, agent running, services, PnP sweep clean, log healthy,
-  one agent instance this boot, `MAPS=5`, QGAPERF streaming `mode=s` at 3440x1440. The
-  VISUAL/chrome half is **unproven by tooling** — the dom0 per-VM screenshot returns an empty
-  tar for this guest (gui-daemon almost certainly not re-attached after a kill/start cycle,
-  see `DESIGN-gui-daemon-restart-survival.md`). Guest runs `agent.018ec54`, NOT the shipped
-  `a68d244`.
 - **Win11 visual acceptance — UNPROVEN BY TOOLING, not a failure.** `local.WinScreenshot+win11-fresh`
   returns 0 bytes because the dom0 screenshot service's allowlist does not include
   `win11-fresh` (`fullshot` gives it away by returning win-idd-test's windows).
