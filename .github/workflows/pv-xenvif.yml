@@ -76,7 +76,10 @@ jobs:
           $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild `
                        -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
           if (-not $msbuild) { throw "MSBuild.exe not found" }
-          & $msbuild xenvif\vs2022\xenvif.sln /p:Configuration=Windows10Release /p:Platform=x64 /m
+          # The solution's configuration is "Windows 10 Release" WITH SPACES (read from
+          # xenvif.sln; build.ps1 composes it as ConfigurationBase "Windows 10" + " Release").
+          # "Windows10Release" is rejected with MSB4126.
+          & $msbuild xenvif\vs2022\xenvif.sln "/p:Configuration=Windows 10 Release" /p:Platform=x64 /m
           if ($LASTEXITCODE -ne 0) { throw "xenvif build failed" }
           Get-ChildItem xenvif -Recurse -Include xenvif.sys,xenvif.inf | ForEach-Object { Write-Host "built: $($_.FullName)" }
 
