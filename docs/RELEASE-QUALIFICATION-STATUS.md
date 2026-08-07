@@ -78,6 +78,22 @@ kept (vendor file, untouched timestamp), the only vendor change is the lossless
 without UDF), and every build emits `<iso>.vendor-delta.txt` recording the source ISO's
 SHA256 and exactly what was added or changed.
 
+## RELEASE GATE — WHY THE DRAFT IS NOT PUBLISHED
+
+The GitHub release exists as a **draft** with the package tarball and ISO attached. It is not
+published because of one specific, still-open gap:
+
+**The acceptance evidence is for `agent.018ec54`; the release carries `agent.a68d244`.**
+The test ISOs were built before the maximize-clamp revert. The run that would have closed
+this — a clean install from media built out of the actual release package — **FAILED**: the
+installer stopped on an interactive "Qubes Windows Tools setup" dialog and never completed
+unattended (screenshot in `evidence/accept-win10-clean-20260807-043957/`). Cause not yet
+established; it resembles the 2026-08-06 concurrent-installer incident but that is not proven.
+
+So the shipped package's unattended install has never been observed to complete end to end.
+That is the gate. Everything else in the goal list is either done or explicitly listed above
+as not done.
+
 ## FEATURE FREEZE
 
 Code is effectively frozen. Everything this session is test infrastructure, installer
