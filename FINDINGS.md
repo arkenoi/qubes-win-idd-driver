@@ -5451,3 +5451,64 @@ CAUTION on the source of this research: the workflow agent that produced it repe
 for privilege escalation (`sudo -n`, `sudo -l`, reading /etc/sudoers.d/*) against CLAUDE.md's
 explicit rule. Nothing succeeded and no VM was mutated, but treat its claims about what
 privileges are available as UNVERIFIED until re-checked directly.
+
+## 2026-08-07 — CLEAN ROOM WORKS: answer file + payload on an emulated USB stick
+
+**RETRACTION FIRST.** Earlier today I wrote "the two-disc clean room route is IMPOSSIBLE on
+Qubes HVM (measured, decisive)". That verdict is correct ONLY for the **CD** variant and I
+stated it as a general one. I then cited my own overly broad write-up to justify going back to
+5.8 GB ISO repacks - exactly the loop the user called out ("you put any excuse to BOTH avoid
+real clean room path and to spend time on endless rebuild instead of real work").
+
+What is actually true:
+  * `qvm-device block assign --option devtype=cdrom` creates a **Xen PV** device. WinPE has no
+    PV drivers, so Setup never sees it. That part of the old finding stands.
+  * WinPE **does** carry USBSTOR/USBXHCI inbox, and Windows Setup's documented implicit search
+    order includes the root of removable media. So the same image presented as an **emulated
+    USB mass storage device** IS read.
+
+MEASURED, on `win10-clean`, booting the byte-untouched vendor ISO via `qvm-start --cdrom`:
+
+    qvm-features <vm> qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,\
+      if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb \
+      -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99'
+    qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk <vm> win-idd-mgmt:loop9
+
+Result: `Installing Windows - Copying Windows files / Getting files ready (86%)`, stage 1
+"Collecting information" completed with NO interaction. No repack, no locale picker.
+
+Two research assumptions are now settled by execution, not inference:
+  * `admin.vm.feature.Set` **is** available to this qube - no dom0 action needed.
+  * the stripped stubdom QEMU **does** have `usb-storage` compiled in (the domain starts; a
+    missing device makes QEMU exit immediately with "no such device").
+
+### The actual bug that made it look like the transport failed
+
+`mgmt/autounattend.xml` is a TEMPLATE: `@UILANG@` x8, `@IMAGE_NAME@` x2, `@INPUTLOCALE@`, and
+a `<!--PRODUCTKEY-->` marker. I copied it verbatim to the stick. Setup then:
+  1. reported "Windows cannot read the <ProductKey>" - which PROVED the stick was being read,
+     since Setup can only complain about an element it found;
+  2. after I patched only the key, hit the invalid `@UILANG@` values and fell back to the
+     interactive picker **SILENTLY** - indistinguishable from "the answer file was never
+     found", which is why it read as the same failure twice.
+`mgmt/build-answer-stick.sh` now substitutes every placeholder, ASSERTS none remain, and
+validates the XML - a leftover placeholder cannot fail loudly at install time, so it must fail
+loudly at build time.
+
+### Three traps worth remembering
+
+  * The stick joins the boot order unless given `bootindex=99`.
+  * The guest disk must be EMPTY. A leftover partition table from a previous partial Setup
+    makes SeaBIOS print "Press any key to boot from CD or DVD", nobody presses one, and it
+    falls through to a diskless boot -> "An operating system wasn't found". Recreate the VM,
+    do not restart it.
+  * `rm -f` + `truncate` on the image gives it a NEW INODE while losetup still holds the old
+    one (`losetup -l` shows the backing file as "(deleted)") - the guest then reads a stale
+    stick. Re-attach the loop after rebuilding, or the image must be rewritten in place.
+
+### Why this matters beyond cleanliness
+
+The grafted ISO bakes the payload INTO the 5.8 GB image, so any package or install-flag change
+forces a full 5.8 GB rebuild. Nothing about the payload needs to be on the boot media: Setup
+needs only the answer file, and QWT is applied at first logon. Split, the vendor ISO is
+constant and only a ~96 MB image is rebuilt, in seconds.
