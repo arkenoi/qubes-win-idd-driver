@@ -4558,3 +4558,30 @@ re-run against `a68d244`.
 Also noted in the notes: `/idd` works on Win11 24H2 and is broken on Win10 19045 (with the
 recovery command), PV networking is not bound, toasts map borderless, and maximized windows
 can still overflow the dom0 workspace early in a boot.
+
+## 2026-08-07 — Win10 clean install WEDGES on the first reboot after install — and it is NOT the IDD
+
+`win10-clean`, default configuration, **no `/idd`** (media verified: `install.cmd /auto`):
+install completed (`ok:true`), harness rebooted the guest for boot-path acceptance, and the
+guest never answered qrexec again. `ACCEPT=FAIL reason=guest did not answer qrexec after
+reboot`. Forensics captured automatically before any kill
+(`evidence/wedge-w10-noidd-041212`): domain **Running**, **zero active grant entries** - the
+same revoke-spin signature as every other wedge in this project.
+
+**This clears the IDD of the earlier wedge.** Two hours ago `win10-clean` wedged after an
+`/idd` install and I recorded causation as unproven; it now wedges identically WITHOUT the
+IDD, so `/idd` is not the trigger. The two facts are independent:
+- `/idd` on Win10 leaves the IDD offline (real, reproducible, task #11);
+- Win10 clean installs wedge on the first reboot after install (real, and the more serious
+  of the two, because it hits the DEFAULT configuration we intend to ship).
+
+Contrast that isolates it: `win10-e2e` (UPGRADE over an existing QWT) survived its own reboot
+on 2026-08-06, and `win-idd-test` reboots repeatedly today without wedging. What is unique to
+this path is a FRESH Windows install where our package has just installed the Xen PV drivers
+(`ADDLOCAL=PvDriversCore,Core,Gui,PvDriversNetwork`) - the first boot after PV-driver
+installation is exactly the "PV-servicing signature" already noted in this file. Win11's
+clean install did NOT wedge on the same step, so it is Win10-specific like the IDD issue.
+
+Testing now whether a SECOND boot recovers it. That distinction decides severity: a
+first-boot-only wedge is a bad but survivable install experience with a workaround; a
+permanent one is a hard blocker for Win10 clean installs and must stop the release.
