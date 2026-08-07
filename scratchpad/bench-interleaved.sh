@@ -44,14 +44,25 @@ solo_up(){
 
 # The running agent must be the build we think it is - else the rep is discarded, not fudged.
 verify_hash(){
-  local vm=$1 want=$2
-  local got
-  got=$(QTEST_VM=$vm timeout 90 ./tools/qtest run \
-    'powershell -NoProfile -Command "(Get-FileHash -Algorithm SHA256 ((Get-Process gui-agent -EA 0).Path | Select -First 1)).Hash.Substring(0,16)"' \
-    2>/dev/null | tr -d '\r' | grep -oE '^[0-9A-F]{16}$' | head -1)
-  if [ -z "$got" ]; then log "HASH UNREADABLE on $vm - rep DISCARDED (missing data fails)"; return 1; fi
+  # Uses a PUSHED SCRIPT, not a quoted one-liner: qtest wraps commands in
+  # powershell -Command "..." through cmd, so the inner double quotes needed for
+  # "C:\Program Files\..." get mangled and the command returns NOTHING. That made every rep
+  # abort as "HASH UNREADABLE" on perfectly good guests.
+  # Reads the hash off the FIXED PATH rather than (Get-Process gui-agent).Path, which is null
+  # in the seconds after a boot before the agent starts, and checks liveness separately -
+  # "not started yet" and "wrong build" are completely different failures.
+  local vm=$1 want=$2 out="" got="" alive="" tries=0
+  while [ $tries -lt 12 ]; do
+    out=$(QTEST_VM=$vm timeout 120 ./tools/qtest pushrun ./scratchpad/agent-hash.ps1 2>/dev/null | tr -d '\r')
+    got=$(echo "$out"  | grep -oE '^AGENTHASH=[0-9A-F]{16}' | head -1 | cut -d= -f2)
+    alive=$(echo "$out"| grep -oE '^AGENTPROC=(ALIVE|DEAD)'  | head -1 | cut -d= -f2)
+    [ -n "$got" ] && [ "$alive" = ALIVE ] && break
+    tries=$((tries+1)); sleep 10
+  done
+  if [ -z "$got" ]; then log "HASH UNREADABLE on $vm after $tries tries - rep DISCARDED"; return 1; fi
+  if [ "$alive" != "ALIVE" ]; then log "gui-agent NOT RUNNING on $vm - rep DISCARDED"; return 1; fi
   if [ "$got" != "$want" ]; then log "HASH MISMATCH on $vm: running=$got want=$want - rep DISCARDED"; return 1; fi
-  log "$vm agent hash OK ($got)"; return 0
+  log "$vm agent verified ($got, process alive)"; return 0
 }
 
 [ "$(state $STOCK_VM)" ] || { log "ABORT: $STOCK_VM does not exist - build the stock side first (loop8 = answer-stock.iso)"; exit 1; }
