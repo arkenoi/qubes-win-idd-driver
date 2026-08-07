@@ -5302,3 +5302,42 @@ copy kept at `guest/network-reapply-task.ps1` for existing guests.
 
 Note the task is registered only when network-setup.exe exists, so it is a no-op on a
 guest without QWT's network component rather than a broken task.
+
+## 2026-08-07 — AUDIO: not shipped by QWT 4.2.2 at all, and Xen has no Windows audio path
+
+User asked whether audio and clipboard are in the release, then whether Xen offers a better
+audio path. Pinned down rather than assumed.
+
+**Clipboard: IN, and asserted.** `clipboard_works` passes in the acceptance gate - the Qubes
+handler runs (part of QrexecAgent/gui-agent, not a separate MSI feature) and the Windows
+clipboard round-trips a marker. Scope limit kept in the check's own output: the dom0<->guest
+transfer needs Ctrl+Shift+C/V, a human keystroke pair, so that last hop is NOT asserted.
+
+**Audio: NOT SHIPPED, and it is not our ADDLOCAL dropping it.** Scanned the release MSI for
+feature identifiers in BOTH ascii and utf-16:
+
+    PvDriversCore   ascii      <- our selected features are present as plain strings,
+    Autologon       ascii         so the scan can see feature names
+    Audio           ABSENT (both encodings)
+    Sound           ABSENT
+    Wave / Mixer / Endpoint / pacat   ABSENT
+
+So QWT 4.2.2 contains no audio component to select. On the guest this shows as the
+QEMU-emulated `High Definition Audio Device` present and OK, with only QdbDaemon /
+QrexecAgent / QubesGuiWatchdog running - nothing bridges that device to dom0.
+
+**Xen's PV sound is not the route.** The complete Windows PV driver family on xenbits is
+xenbus, xencons, xenhid, xeniface, xennet, xenvbd, xenvif, xenvkbd - **no audio driver**.
+Xen's `sndif` (vsnd) protocol exists with Linux frontends (embedded/automotive), but no
+Windows frontend, and Qubes does not use sndif anyway: Linux guests run pulseaudio over
+**vchan** (`pacat-simple-vchan` <-> the dom0 audio daemon). dom0 expects a vchan stream, not
+a Xen sound ring.
+
+**Therefore a Windows audio agent is a vchan user-mode program, not a driver** - a sibling of
+gui-agent, not a PV driver port. Encouragingly the hard parts already exist here: vchan from
+Windows is proven (every frame ships over it) and `libxenvchan` is already built by our CI
+for the agent. Shape: WASAPI loopback capture of the default render endpoint -> PCM over
+vchan for playback; a capture path for the microphone. Before committing to a protocol,
+read what `qubes-audio-daemon` expects on the dom0 side.
+
+POST-FREEZE. This is a feature, not a fix, and needs a dom0-side counterpart to be useful.
