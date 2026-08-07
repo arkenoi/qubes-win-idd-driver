@@ -21,7 +21,7 @@ S=/tmp/claude-1000/-home-user-qubes-win-idd-driver/596ce65c-62cf-4820-af62-c943d
 REPS="${REPS:-3}"
 STOCK_VM=win10-stock
 OURS_VM=win10-clean          # already carries our build from the all-three acceptance
-STOCK_AGENT_HASH=3D2E6BCEC9F5BD89
+STOCK_AGENT_HASH=${STOCK_AGENT_HASH:-3D2E6BCEC9F5BD89}
 log(){ echo "$(date -u +%H:%M:%S) bench: $*" | tee -a "$S/bench-interleaved.log"; }
 
 state(){ qvm-ls --fields NAME,STATE 2>/dev/null | awk -v v="$1" '$1==v{print $2}'; }
