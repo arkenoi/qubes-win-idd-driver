@@ -5512,3 +5512,50 @@ The grafted ISO bakes the payload INTO the 5.8 GB image, so any package or insta
 forces a full 5.8 GB rebuild. Nothing about the payload needs to be on the boot media: Setup
 needs only the answer file, and QWT is applied at first logon. Split, the vendor ISO is
 constant and only a ~96 MB image is rebuilt, in seconds.
+
+## 2026-08-07 — Win10: IDD is the SOLE active output after cold boot; all three assert together
+
+Clean-room install (untouched vendor ISO + USB answer stick), then a VERIFIED cold boot
+(guest confirmed Halted before start; guest uptime 3 min at check time).
+
+Install trailer, stage2-install ok:true:
+    addlocal   PvDriversCore,Core,Gui,PvDriversNetwork,PvDriversDisk
+    pv_xenvif  installed
+    idd_driver activated (ROOT\DISPLAY\0000), VGA disabled
+    installed_gui_agent_sha256 == expected_gui_agent_sha256
+
+Health gate: **12/12, ok=True, asserted_all=True, not_applicable=<empty>** - disks, network
+and display all measured in the SAME run:
+    agent_binary_hash, agent_process, qubes_services_running, idd_device_bound,
+    desktop_on_idd, idd_modes_published, pnp_no_unexpected_errors, agent_log_healthy,
+    pv_drivers_bound, pv_disk_bound, network_carries_traffic, clipboard_works
+
+Measured end state (pushed script, not a quoted one-liner):
+    DEV OK     ROOT\DISPLAY\0000                        <- IDD
+    DEV Error  PCI\VEN_1234&DEV_1111...                 <- VGA disabled
+    SCREEN \\.\DISPLAY2 primary=True 1920x1080          <- exactly ONE active screen
+    VC IddSampleDriver Device          avail=3 1920x1080
+    VC Microsoft Basic Display Adapter avail=8
+Exactly the inverse of the pre-fix state (VGA avail=3 at 3440x1440, IDD avail=8).
+
+### HONEST LIMIT: the deliberate-reintroduction test is still INCONCLUSIVE
+
+CLAUDE.md requires a check to be SEEN TO FAIL on a build carrying the defect before its PASS
+counts. Two attempts did not achieve that, so `desktop_on_idd`'s PASS is recorded as
+**supported by a before/after control, but NOT yet validated by falsification**:
+
+ 1. NoTopologyApply=1 + cold boot -> STILL PASSED. Cause is my own design:
+    EnsureQubesIddSolo applies with CDS_UPDATEREGISTRY, which PERSISTS the topology, so a
+    previously-applied solo survives reboots even when the apply no longer runs. Disabling
+    the apply cannot revert an already-persisted topology.
+ 2. Attempt 2 also re-enabled the VGA to tear the persisted topology down, but neither the
+    reg add nor the Enable-PnpDevice echoed a success line, so the ARM step is UNCONFIRMED,
+    and the run then aborted on the second cold boot. Nothing can be concluded from it.
+
+What DOES support the fix: the same installer on the same Win10 19045 build, WITHOUT the
+agent change, left desktop_on_idd FAILING with the VGA driving the desktop (evidence dirs
+accept-win10-clean-20260807-023437). That is a real control, one rep.
+
+TODO before the release write-up claims this check is validated: reproduce the pre-fix state
+properly - arm the kill switch AND reset the persisted CCD topology (re-enable the VGA and
+make it primary), each step VERIFIED to have executed - then cold boot and require FAIL.
