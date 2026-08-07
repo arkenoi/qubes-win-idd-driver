@@ -21,6 +21,20 @@ WORK=~/win-iso/.unattend-work
 command -v 7z >/dev/null      || { echo "need p7zip(-plugins): 7z" >&2; exit 1; }
 command -v xorriso >/dev/null || { echo "need xorriso" >&2; exit 1; }
 
+# Refuse to start without room, instead of dying ~10 minutes in with
+# "xorriso: No space left on device" and leaving a TRUNCATED ISO behind (happened twice on
+# 2026-08-07). Budget: extracted tree (~= source size) + the .swm split (~= source size)
+# + the output image (~= source size). 2.6x the source is measured-with-headroom.
+_src_bytes=$(stat -c%s "$SRC")
+_need_kb=$(( _src_bytes / 1024 * 26 / 10 ))
+_free_kb=$(df -Pk "$(dirname "$OUT")" | awk 'NR==2{print $4}')
+if [ "$_free_kb" -lt "$_need_kb" ]; then
+    echo "NOT ENOUGH DISK: need ~$(( _need_kb / 1048576 )) GiB free for a $(( _src_bytes / 1073741824 )) GiB source, have $(( _free_kb / 1048576 )) GiB" >&2
+    echo "delete superseded ISOs first - each vendor image and each build output is 5-6 GiB" >&2
+    exit 1
+fi
+echo "disk check ok: $(( _free_kb / 1048576 )) GiB free, need ~$(( _need_kb / 1048576 )) GiB"
+
 # REUSE_EXTRACT=1 keeps the previously extracted source tree (saves ~2 min of 7z per
 # answer-file iteration). The payload and autounattend.xml are re-staged either way.
 if [ "${REUSE_EXTRACT:-0}" = "1" ] && [ -d "$WORK/sources" ]; then
