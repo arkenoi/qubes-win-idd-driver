@@ -241,7 +241,17 @@ function Set-GuiAgentRegistryDefaults {
     $regPath = 'HKLM\Software\Invisible Things Lab\Qubes Tools'
     $seed = @(
         @('SeamlessMode',  'REG_DWORD', '1'),
-        @('DisableCursor', 'REG_DWORD', '0'),
+        # DisableCursor=1, i.e. DO blank the guest's software cursor. 24a1ded seeded 0 with
+        # no stated reason and that produces a DOUBLE CURSOR: dom0 always draws the X cursor
+        # over the guest window, and with 0 the guest ALSO composites its own cursor into the
+        # framebuffer we capture, so the user sees two. Reported on Win11 2026-08-07.
+        # The name reads backwards: gui-agent's HideCursors() returns early unless
+        # g_DisableCursor is set (util.c:213), so 1 = hide the guest cursor = correct. This is
+        # also the agent's own built-in default (util.c:36) and the stock MSI's default.
+        # It matters more now that /idd is on by default: the IddCx driver implements NO
+        # hardware cursor path at all (zero cursor code in Driver.cpp), so the guest cursor
+        # can only ever arrive as pixels baked into the frame.
+        @('DisableCursor', 'REG_DWORD', '1'),
         # LogDir MUST be pre-seeded: two MSI components race to write it ([INSTALL_DIR]log
         # vs "Q:\Qubes Logs") under an identical condition. If Q:\ wins and does not exist,
         # every gui-agent log silently vanishes.
