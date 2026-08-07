@@ -4697,3 +4697,37 @@ Process point, third time today: a check run in the wrong configuration produces
 look exactly like a product failure. Same shape as the session-0 traps (benchmark load, toast
 probe, Office check). Before reporting any FAIL, establish that the configuration under test
 is the one the check was written for.
+
+## 2026-08-07 — SHIPPED-BUILD acceptance FAILED: an interactive MSI dialog blocks the install
+
+The run whose whole point was to make the evidence match the RELEASED binary
+(`agent.a68d244`) did not get there. `ACCEPT=FAIL reason=install never reported stage2
+ok:true + running agent` after the full 2400 s budget - where every previous run reached
+"install reported complete" in about 3 minutes.
+
+Cause, from the screenshot (`evidence/accept-win10-clean-20260807-043957/stuck-installer-dialog.png`):
+a **"Qubes Windows Tools setup" dialog is open on the guest desktop with a Close button**,
+i.e. the installer is sitting in INTERACTIVE UI waiting for a human that will never come.
+The guest is otherwise healthy - desktop up, taskbar, "Test Mode Build 19041.vb_release..."
+watermark - so this is not a wedge and not a crash.
+
+Note the resemblance to the 2026-08-06 incident the user reported as "two close buttons":
+that was two CONCURRENT installers (the QWTStage2 ONSTART task re-firing), fixed by having
+stage 2 delete its own task. This dialog again appears to show a second, greyed Close
+beneath the active one. Whether the same concurrency is back on this media, or the MSI
+simply fell out of silent mode, is NOT established - and the difference matters, so it is
+recorded as unexplained rather than assumed.
+
+Suspicious detail found while looking, not yet proven to be the cause: with `NO_QWT=1` the
+ISO builder still copies **stock** `~/win-iso/qwt-payload/installer.msi`, `vc_redist` and the
+QWT certs into `\payload` (the `for f in ...` loop only excludes `qwt-installer.exe/.msi`,
+not `qwt-payload/installer.msi`). The release `setup2.cmd` does not invoke it, but a stock
+QWT MSI sitting in the payload of a "no stock QWT" image is at best confusing and at worst
+reachable by `firstboot-setup.ps1`. Worth auditing before the next media build.
+
+### Consequence for the release
+
+**The draft release stays UNPUBLISHED.** Its notes already state that the acceptance evidence
+is for `agent.018ec54` and not for the shipped `a68d244`; this attempt to close that gap
+failed for an installer-flow reason, so the gap is still open. Publishing now would ship a
+package whose install has never been observed to complete unattended end to end.
