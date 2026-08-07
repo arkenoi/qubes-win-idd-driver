@@ -132,8 +132,12 @@ cp -a "$WORK/payload" "$WORK/oem/\$OEM\$/\$1/payload"
 # geteltorito is what qvm-create-windows-qube uses; xorriso can do the same extraction, so
 # we do not depend on an extra package.
 xorriso -indev "$SRC" -osirrox on -extract_boot_images "$WORK/boot" >/dev/null 2>&1 || true
-BOOTIMG="$(find "$WORK/boot" -type f -name '*.img' -o -type f -name '*eltorito*' 2>/dev/null | head -1)"
-if [ -z "$BOOTIMG" ] && [ -f "$MNT/boot/etfsboot.com" ]; then BOOTIMG="$MNT/boot/etfsboot.com"; fi
+# BIOS boot image, NOT the UEFI one: Qubes HVMs boot SeaBIOS, which needs
+# boot/etfsboot.com. A `find *.img | head -1` picked eltorito_img2_uefi.img and would
+# have produced media that does not boot here (caught 2026-08-07 before use).
+BOOTIMG=""
+[ -f "$MNT/boot/etfsboot.com" ] && BOOTIMG="$MNT/boot/etfsboot.com"
+[ -n "$BOOTIMG" ] || BOOTIMG="$(find "$WORK/boot" -type f -name '*img1*' 2>/dev/null | head -1)"
 [ -n "$BOOTIMG" ] || { echo "could not obtain a boot image from $SRC" >&2; exit 1; }
 echo "boot image: $BOOTIMG"
 
@@ -167,17 +171,21 @@ GRAFT_ARGS=(
 
 echo "building $OUT ..."
 if [ "$UDF" = 1 ]; then
+    # Graft the mount AT ROOT (/=$MNT), do not also pass it as a plain path: doing both
+    # made genisoimage emit the tree twice (12 GiB from a 5.8 GiB source, 2026-08-07).
+    # The boot image is referenced by its path INSIDE the mounted tree, so it is not
+    # grafted separately either.
     genisoimage -udf -allow-limited-size -graft-points -quiet \
-        -b "$(basename "$BOOTIMG")" -no-emul-boot -boot-load-size 8 \
+        -b boot/etfsboot.com -no-emul-boot -boot-load-size 8 \
         -V WIN_IDD_MEDIA -o "$OUT" \
-        "$MNT" "$(basename "$BOOTIMG")=$BOOTIMG" "${GRAFT_ARGS[@]}"
+        "/=$MNT" "${GRAFT_ARGS[@]}"
 else
     # Strict ISO9660 + Joliet, the layout CDBOOT needs without UDF (see the old builder).
     xorriso -as mkisofs -iso-level 3 -J -joliet-long -D -N -d -graft-points \
         -V WIN_IDD_MEDIA \
         -b boot/etfsboot.com -no-emul-boot -boot-load-size 8 \
         -o "$OUT" \
-        "$MNT" "${GRAFT_ARGS[@]}"
+        "/=$MNT" "${GRAFT_ARGS[@]}"
 fi
 
 {
