@@ -4967,3 +4967,46 @@ Guest state: `win10-clean` has since had upstream xennet 9.1.0.3 pushed and offe
 pnputil by hand, which raised "Windows can't verify the publisher of this driver software"
 and is sitting on that modal. That guest is now a driver-experiment guest, not a clean
 acceptance guest, and must be reprovisioned before it is used for acceptance again.
+
+## 2026-08-07 — where the PV drivers actually come from, and the 4.2-vs-4.3 question
+
+Traced properly instead of inferring from version strings.
+
+**We do not build the PV drivers.** `.github/workflows/qwt-full.yml:8` states the design:
+PV drivers, qrexec agent and qubesdb are staged **bit-identical** from the GPG-verified QWT
+4.2.2 RPM. That is why our `xenvif.sys`/`xennet.sys` are byte-identical to stock and why we
+inherit stock's mismatch. `PVDRIVERS_REF: v4.2.0-1` clones
+`QubesOS/qubes-vmm-xen-windows-pvdrivers` only to build **libxenvchan** (headers + static lib
+our agent links against) - no driver binaries come from it.
+
+**That repo is a thin superproject**: `xenvif`, `xennet`, `xenbus`, `xeniface`, `xenvbd` are
+git SUBMODULES pointing straight at `xenbits.xen.org/git-http/pvdrivers/win/*.git`, pinned at:
+
+    xenbus  e76d03e37550a0889c08be8e2a2caaf299d588c8
+    xennet  ad7717f6390b320255680ef3d4c86d4c6833e009
+    xenvif  9fd1afe4382b15ed8e063a816a328c0a580f038e
+
+So the "commit after the interface bump" I speculated about earlier is one of these - the
+sources are upstream xenbits, and Qubes pins the pair. Whether these two specific commits
+disagree about the VIF NET interface revision (xennet requiring rev 5 while xenvif publishes
+rev 4) is now a checkable question against those exact SHAs, not guesswork. NOT yet checked -
+the shallow clone did not fetch submodule contents.
+
+**The user's point, which reframes all of it: `v4.2.0-1` and QWT 4.2.2 are built for Qubes
+4.2, and this host is Qubes 4.3.** Every PV result recorded here was produced by 4.2-targeted
+guest drivers running against a 4.3 host's netback. That is a plausible reason the pairing
+misbehaves here and not on the platform it was built for, and it means "stock QWT works" and
+"stock QWT is broken" can BOTH be true depending on host version. Nothing in this file has
+tested a 4.3-targeted QWT because none has been identified yet.
+
+Direction agreed with the user: **upgrade xenvif to match xennet, do not downgrade xennet.**
+Downgrading to the 2023 xenbits tarball loses ~2 years of xennet changes, and those binaries
+are not signed in a way Windows accepts anyway ("Windows can't verify the publisher of this
+driver software", observed on win10-clean). Upgrading means building xenvif from the pinned
+submodule SHA (or a newer one that publishes rev 5) and signing it with our CI cert.
+
+Next concrete steps, in order:
+1. Fetch the three submodule SHAs and read the VIF interface revision each declares - settles
+   whether the pinned pair is internally consistent.
+2. Establish whether a Qubes 4.3-targeted QWT / PV driver set exists. If it does, everything
+   above may be moot and the answer is simply "use the 4.3 build".
