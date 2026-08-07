@@ -42,6 +42,9 @@
     runtime. Recovery: re-enable the VGA adapter (its InstanceId is in the result JSON)
     and reboot - see README.txt. Default: off.
 
+.PARAMETER NoPvDisk
+Omit the Xen PV disk drivers (xenvbd). Leaves the guest on emulated IDE. Diagnostic use only.
+
 .PARAMETER NoPvNetwork
     Drop PvDriversNetwork from ADDLOCAL. See the NETWORKING caveat in README.txt.
 
@@ -64,6 +67,10 @@ param(
     [switch]$Auto,
     [switch]$InstallIddDriver,
     [switch]$NoPvNetwork,
+
+    # Escape hatch only. PV disk is ON by default because stock QWT installs it by default
+    # and emulated IDE is markedly slower; use this only to isolate a suspected xenvbd fault.
+    [switch]$NoPvDisk,
     [switch]$ResumeAfterUninstall,
     [string]$WorkDir = 'C:\qwt-improved-setup'
 )
@@ -450,6 +457,7 @@ function Invoke-Stage1 {
         $extra = @()
         if ($InstallIddDriver) { $extra += '-InstallIddDriver' }
         if ($NoPvNetwork)      { $extra += '-NoPvNetwork' }
+        if ($NoPvDisk)         { $extra += '-NoPvDisk' }
         $extra += '-Auto'
         Set-BootResume -ScriptPath $self -ExtraArgs $extra
         Write-Log 'STAGE 1 COMPLETE - rebooting in 15 s, installation resumes automatically'
@@ -560,6 +568,7 @@ function Invoke-Stage2 {
                     $extra = @()
                     if ($InstallIddDriver) { $extra += '-InstallIddDriver' }
                     if ($NoPvNetwork)      { $extra += '-NoPvNetwork' }
+                    if ($NoPvDisk)         { $extra += '-NoPvDisk' }
                     $extra += '-Auto'
                     $extra += '-ResumeAfterUninstall'
                     Set-BootResume -ScriptPath $self -ExtraArgs $extra
@@ -597,10 +606,20 @@ function Invoke-Stage2 {
     #   Core              qubesdb, qrexec agent, file/clipboard handlers.
     #   Gui               gui-agent.exe + QubesGuiWatchdog service (OUR build).
     #   PvDriversNetwork  xenvif/xennet. Included by default; see README NETWORKING.
-    # Deliberately OMITTED: PvDriversDisk (documented BSOD risk), MoveUsers (BootExecute
-    # relocation of C:\Users), Autologon (randomises the local password).
+    #   PvDriversDisk     xenvbd/xendisk/xencrsh. Moves the boot disk off emulated IDE.
+    #
+    # PvDriversDisk was omitted in 24a1ded for a "documented BSOD risk". That claim had NO
+    # source: upstream's own feature description is "Xen PV disk drivers for increased
+    # performance" (Package.en-us.wxl:32), no Level attribute is set on any feature in
+    # Package.wxs, and WiX defaults Level=1 - so STOCK QWT 4.2.2 INSTALLS THIS BY DEFAULT.
+    # Omitting it left every guest on emulated IDE, i.e. a performance regression against
+    # stock that we shipped. Measured 2026-08-07 on win10-clean: the feature-add binds
+    # (XENBUS\...&DEV_VBD err=0 svc=xenvbd), the guest reboots cleanly, and all disks move
+    # from BusType=ATA to BusType=SCSI. No bugcheck.
+    # Keep this list identical to stock's default set except where we have a MEASURED reason.
     $features = @('PvDriversCore', 'Core', 'Gui')
     if (-not $NoPvNetwork) { $features += 'PvDriversNetwork' }
+    if (-not $NoPvDisk)    { $features += 'PvDriversDisk' }
     $addlocal = $features -join ','
 
     $msi = Join-Path $Root 'msi\installer.msi'
