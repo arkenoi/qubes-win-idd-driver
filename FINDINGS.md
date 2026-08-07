@@ -4508,3 +4508,32 @@ win-idd-test's windows, not win11's.
 `win11-fresh` to the screenshot service's allowlist (or reinstall it with the tag-based
 policy so any `win-idd-testbed`-tagged qube is served). Until then Win11 visual acceptance is
 UNPROVEN-BY-TOOLING, and is recorded as such rather than as a pass or a failure.
+
+## 2026-08-07 — toast attribute capture: TWO approaches, both NEGATIVE (recorded, not glossed)
+
+Needed to settle the user's toast report (borderless toast painted over a maximized window)
+by capturing a live toast's real window attributes, per CLAUDE.md 2A-chrome 3c.
+
+1. **Fired via qtest directly** - nothing rendered. Diagnosed: qrexec runs in **session 0**,
+   which does not composite. Same limitation already recorded for `cpu-bench.ps1` (its load
+   ran in session 0 and both benchmark sides read 0.05 %) and `dump-windows.exe`.
+2. **Fired from an INTERACTIVE scheduled task** (`/ru user /it`, the cpu-bench pattern;
+   probe committed as `guest/toast-probe.ps1`) - still nothing. The probe enumerated for 6 s
+   and caught only `Windows.UI.Core.CoreWindow` (TextInputHost) and `ApplicationFrameWindow`,
+   both `cloak=2` i.e. not actually on screen.
+3. A 4-minute watch for a NATURAL toast (`scratchpad/toastwatch.ps1`) also caught none.
+
+So a toast can be *observed* on this guest (the user saw a OneDrive one, and dom0 geometry
+captured it as `0x740018e … ovr=1 "New notification"`), but not *summoned* on demand by any
+route tried. Likely remaining causes: the notifier app-id is not registered in Action Center
+on this image, or notifications are suppressed for the autologon account.
+
+**The classification question therefore stays OPEN and the predicate is UNCHANGED.** What is
+already established without the capture: the toast is its own X window, override-redirect via
+`IsPopup` (main.c:812, no WS_CAPTION -> borderless), and Notepad's per-window buffer was
+CLEAN, so this is purely about classification, not capture contamination.
+
+Carried caution for whoever changes the predicate: on this build the Office shadow strips are
+**unowned**, so a rule like "unowned windows are never override-redirect" would drop toasts
+and Office shadows together. `MSO_BORDEREFFECT_WINDOW_CLASS` is the load-bearing rule for the
+shadows; any new discriminator must keep BOTH outcomes (shadows dropped, toasts kept/bordered).
