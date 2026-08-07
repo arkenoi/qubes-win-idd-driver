@@ -101,12 +101,34 @@ if [ -n "${STOCK_MSI:-}" ]; then
     [ -n "${RELEASE_SETUP:-}" ] && { echo "ERROR: STOCK_MSI and RELEASE_SETUP are mutually exclusive" >&2; exit 1; }
     mkdir -p "$WORK/payload/stock"
     cp "$STOCK_MSI" "$WORK/payload/stock/installer.msi"
+    # The ITL SIGNING CERTS are mandatory. Stock QWT installs boot-critical PV drivers
+    # (xenvbd et al.) signed by ITL; without those certs in Root/TrustedPublisher the driver
+    # installs fail signature validation and the guest can hang mid-install with a black
+    # screen and no qrexec - measured 2026-08-07, where the omission LOOKED like "stock QWT
+    # is broken" but was purely a defect in this control payload. Our own package installs
+    # them (certs_installed:7), so the control must too or it is not a fair control.
+    # Deliberately NOT copying qwt-improved-testsign.cer: that is OUR test-signing cert and
+    # has no business on a stock control guest.
+    certsrc="${STOCK_CERTS:-$HERE/../artifacts-final/certs}"
+    n=0
+    for c in "$certsrc"/SigningCert*.cer; do
+        [ -f "$c" ] || continue
+        cp "$c" "$WORK/payload/stock/" && n=$((n+1))
+    done
+    [ "$n" -ge 6 ] || { echo "ERROR: expected >=6 ITL signing certs in $certsrc, found $n" >&2; exit 1; }
+    echo "payload: staged $n ITL signing certs"
     for extra in "$HERE/../vendor/qwt-4.2.2/vc_redist.x64.exe" "$HOME/win-iso/qwt-payload/vc_redist.x64.exe"; do
         [ -f "$extra" ] && cp "$extra" "$WORK/payload/stock/" && break
     done
     cat > "$WORK/payload/setup.cmd" <<'STOCKEOF'
 @echo off
 echo === answer-stick payload (STOCK QWT control) === >> C:\qubes-win-idd-setup.log
+rem Trust the ITL signing certs BEFORE the MSI: its PV drivers are ITL-signed and a
+rem boot-critical driver that fails validation can hang the install with a black screen.
+for %%c in ("%~dp0stock\SigningCert*.cer") do (
+  certutil -addstore -f Root "%%c" >> C:\qubes-win-idd-setup.log 2>&1
+  certutil -addstore -f TrustedPublisher "%%c" >> C:\qubes-win-idd-setup.log 2>&1
+)
 if exist "%~dp0stock\vc_redist.x64.exe" "%~dp0stock\vc_redist.x64.exe" /install /quiet /norestart >> C:\qubes-win-idd-setup.log 2>&1
 rem Same ADDLOCAL set stock installs by default (every feature is Level=1 in Package.wxs).
 msiexec /i "%~dp0stock\installer.msi" /qn /norestart /L*v C:\qwt-stock-msi.log
