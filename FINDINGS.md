@@ -4636,3 +4636,32 @@ win11-fresh), so the VISUAL/chrome half is again unproven-by-tooling rather than
 gui-daemon was very likely not re-attached after the kill/start cycle
 (`DESIGN-gui-daemon-restart-survival.md`). And this guest runs `agent.018ec54`, not the
 shipped `a68d244`.
+
+## 2026-08-07 — OFFICE COMPOUND-WINDOW CHECK: PASSES in seamless mode (2A-chrome acceptance)
+
+Blocked all session by an instrument bug, not by the product. `guest/office-window-check.ps1`
+launches Word over qrexec, i.e. in **session 0**, which has no interactive desktop - WINWORD
+starts and exits in ~2 s (`WORD_EXITED after 2s exitcode=0`), so the enumeration reported
+`n=0` every time and the check silently proved nothing. Third instance of this trap today
+(cpu-bench's load generator, the toast probe, this).
+
+Fixed with `guest/office-window-check-interactive.ps1`: the enumeration is handed to a
+scheduled task with `/ru user /it` so it runs in the interactive session.
+
+**Measured, seamless mode, win-idd-test:**
+
+    guest: OFFICE_HWNDS n=8   office_main_frames=3  office_shadow_candidates=4
+    dom0 : Document3 - AutoRecovered - Word
+           Document1 - AutoRecovered - Word
+           Document3 - Word
+           Sign in to set up Office          (a REAL Office dialog, correctly mapped)
+
+Eight visible Word windows in the guest; **four** in dom0 - the three real document frames
+plus the genuine sign-in dialog. **All four shadow-strip windows were dropped**, and no
+document frame was lost. That is exactly the 2A-chrome criterion (Office chrome fragments
+must not be presented as separate bordered qube windows), demonstrated on the real
+application rather than on `tools/chromerepro`.
+
+Note this could ONLY be shown in seamless mode - in fullscreen the whole desktop is one dom0
+window and there are no per-window frames to count, which is why every earlier attempt at
+this check was inconclusive.
