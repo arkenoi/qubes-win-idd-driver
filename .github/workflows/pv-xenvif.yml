@@ -99,13 +99,14 @@ jobs:
               & $st.FullName sign /fd SHA256 /a /s My /n 'QubesIDD Test Signing' $_.FullName
               if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($_.Name)" }
           }
-          Set-Content pv-out\PROVENANCE.txt @"
-xenvif built from xenbits master @ $env:XENVIF_SHA
-reason: the xenvif/xennet pair pinned by qubes-vmm-xen-windows-pvdrivers cannot bind -
-        pinned xenvif tops out at REV_09000004, pinned xennet requires REV_09000005.
-        rev 5 was added by xenvif commit 4608bc1 "Use UNPLUG v3".
-signing: throwaway test cert (guest runs with testsigning enabled by our installer)
-"@
+          $prov = @(
+            "xenvif built from xenbits master @ $env:XENVIF_SHA",
+            "reason: the xenvif/xennet pair pinned by qubes-vmm-xen-windows-pvdrivers cannot bind -",
+            "        pinned xenvif tops out at REV_09000004, pinned xennet requires REV_09000005.",
+            "        rev 5 was added by xenvif commit 4608bc1 (Use UNPLUG v3).",
+            "signing: throwaway test cert (guest runs with testsigning enabled by our installer)"
+          )
+          Set-Content pv-out\PROVENANCE.txt -Value $prov
           Get-ChildItem pv-out | Format-Table Name, Length
 
       - uses: actions/upload-artifact@v4
