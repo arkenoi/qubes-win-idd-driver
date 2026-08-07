@@ -11,6 +11,7 @@ REM     install.cmd /idd         install AND ACTIVATE the Qubes IddCx driver
 REM                              (it becomes the display; the emulated VGA
 REM                              adapter is disabled - see README.txt)
 REM     install.cmd /nonet       omit the PV network drivers (see README.txt)
+REM     install.cmd /nodisk      omit the PV disk drivers (diagnostic only)
 REM  Flags combine:  install.cmd /auto /idd
 REM
 REM  Read README.txt first - in particular the NETWORKING and TEST-SIGNING
@@ -30,8 +31,9 @@ if "%~1"=="" goto parsed
 if /i "%~1"=="/auto"   ( set "PSARGS=!PSARGS! -Auto"            & set "AUTO=1" & shift & goto parse )
 if /i "%~1"=="/idd"    ( set "PSARGS=!PSARGS! -InstallIddDriver" & shift & goto parse )
 if /i "%~1"=="/nonet"  ( set "PSARGS=!PSARGS! -NoPvNetwork"      & shift & goto parse )
+if /i "%~1"=="/nodisk" ( set "PSARGS=!PSARGS! -NoPvDisk"         & shift & goto parse )
 echo Unknown option: %~1
-echo Valid options: /auto /idd /nonet
+echo Valid options: /auto /idd /nonet /nodisk
 exit /b 87
 :parsed
 

@@ -42,7 +42,9 @@ It also, before msiexec runs:
 
 WHAT IT DOES *NOT* INSTALL
 --------------------------
-  * PvDriversDisk (xenvbd/xencrsh) -- omitted, documented BSOD risk.
+  * PvDriversDisk (xenvbd/xendisk/xencrsh) -- INSTALLED (as stock QWT does).
+    Moves the boot disk off emulated IDE; disks report BusType SCSI afterwards.
+    Use /nodisk to omit it for diagnosis only.
   * MoveUsers -- omitted, it relocates C:\Users via BootExecute.
   * Autologon -- omitted, it randomises the local account password.
   * Any WDDM/video driver. QWT 4.2.2 contains none; the guest desktop stays on
