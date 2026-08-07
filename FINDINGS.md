@@ -4457,3 +4457,33 @@ practice, the very defect the flag was added to fix - and that guest wedged. Shi
 by default would make every clean install worse than the plain Basic Display Adapter build,
 which at least is stable. The activation gap (topology apply after reboot) is now a named,
 reproducible bug with a clear fix direction rather than an unknown.
+
+## 2026-08-07 — WIN11 CLEAN-PATH ACCEPTANCE: health gate PASSED 8/8 with the FULL IDD assertion
+
+`win11-fresh`, Windows 11 24H2 build **26100**, installed unattended from the UNTOUCHED
+vendor eval ISO (`755a90d4…`) via minimal-repack media, guest never had QWT:
+
+- install: `ok:true`, agent hash == manifest (`b758dd92…`), package
+  `4.2.2+agent.018ec54d1584`, qrexec answered after 2009 s (so OUR package delivered it),
+  LabConfig TPM/SecureBoot/RAM/CPU/Storage bypasses worked, `diskprep.cmd` picked the disk.
+- health gate, run WITHOUT `-NoIddExpected` (the full assertion): **8/8 pass**, and
+  decisively `desktop_on_idd` PASSED - `IddSampleDriver Device` is the ONLY active
+  controller (1920x1080, Availability 3) while `Microsoft Basic Display Adapter` is
+  Availability 8 (offline). `non_idd_active = 0`. Modes published: 5120x1440, 1024x768.
+
+**This inverts the conclusion I drew two hours ago.** I predicted the activation gap would
+reproduce on Win11 and treated it as platform-independent. It does not: **`/idd` activation
+works end to end on Win11 24H2 and fails on Win10 19045.** Same installer, same package,
+same activation sequence, opposite outcome - so the defect is in how Win10 19045 responds to
+"PCI VGA disabled + IddCx monitor present": it spins up the ROOT\BASICDISPLAY fallback and
+leaves the IDD offline, where Win11 attaches the IDD.
+
+Corroborating datum that this is not "Win10 cannot do it": win-idd-test IS Win10 19045 and
+runs IDD-primary at 5120x1440 (Gate B, same day). It reached that state through the
+2026-08-05 manual experiment sequence, not through the installer - so on Win10 something in
+that sequence performs the activation the installer omits. That is the fix's target.
+
+Release stance UNCHANGED for now (`/idd` stays opt-in, out of the default payload): a Win10
+user would still get the degraded, wedge-prone state, and Win10 is the more common target.
+But the write-up must say what is true - verified working on Win11 24H2, broken on Win10
+19045 via the installer path - rather than "broken".
