@@ -262,6 +262,25 @@ Check 'guest_cursor_hidden' ($curVal -eq 1 -or $null -eq $curVal) `
     @{ DisableCursor = $(if ($null -eq $curVal) { 'absent (agent defaults to hide)' } else { $curVal })
        note = 'DisableCursor=0 makes the guest paint its own cursor on top of dom0''s -> double cursor' }
 
+# --- 6a2. USER DATA must live on the PRIVATE volume --------------------------------
+# MoveUsers relocates C:\Users to Q:\Users on the Qubes private image. It was omitted until
+# 2026-08-07, which left ALL user data on the ROOT volume and broke the Qubes root/private
+# split: private is the volume Qubes treats as user data, so a `qvm-volume revert` of root
+# would have destroyed the profile. Stock QWT installs MoveUsers by default.
+# Assert the OUTCOME (where profiles actually live), not merely that the feature was selected.
+$qVol = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter -eq 'Q' })
+$profDir = $null
+try {
+    $profDir = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' `
+                -Name 'ProfilesDirectory' -ErrorAction Stop).ProfilesDirectory
+} catch { $profDir = $null }
+$qUsers = Test-Path 'Q:\Users' -ErrorAction SilentlyContinue
+Check 'user_data_on_private' ($qVol.Count -ge 1 -and $qUsers) `
+    @{ private_volume_present = ($qVol.Count -ge 1)
+       q_users_exists         = $qUsers
+       profiles_directory     = $(if ($profDir) { $profDir } else { '<unset>' })
+       note = 'MoveUsers must place profiles on Q: (private image); root-volume profiles are lost on a root revert' }
+
 # --- 6b1. PV DISK: the boot disk must be off emulated IDE ---------------------------
 # Added 2026-08-07 after discovering we shipped a package that dropped PvDriversDisk (which
 # STOCK QWT installs by default) on an unsourced "BSOD risk" claim, leaving every guest on
