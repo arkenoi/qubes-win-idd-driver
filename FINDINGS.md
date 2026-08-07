@@ -5644,3 +5644,18 @@ remains WTSActive, so the observed failure may have been a logoff rather than a 
 decisive test is: confirm qrexec works, run `rundll32 user32.dll,LockWorkStation` over
 qrexec, then retry qrexec. Until that is run, the mechanism above explains "no session = no
 RPC" but the lock-specific claim is UNPROVEN.
+
+## 2026-08-08 — benchmark orchestrator targeted the wrong VM (caught pre-run)
+
+`bench-interleaved.sh` passed `BENCH_VM=$vm`, but `benchmark.sh` reads **`QTEST_VM`** and
+defaults to `win-idd-test` (benchmark.sh:112). Both sides would therefore have been pointed at
+a third, stale guest.
+
+HONEST SCOPE OF THE CONSEQUENCE: `win-idd-test` was Halted, and `benchmark.sh run` checks
+`guest_alive` first, so the actual outcome would have been REP FAILURES, not silently false
+numbers. I initially wrote that it would have produced "plausible nonsense" - that was
+overstated. It becomes exactly that only if the stale guest happens to be running, which is a
+coin flip, not a safeguard.
+
+Fixed by passing `QTEST_VM`, plus a guard that refuses to benchmark any VM other than the two
+under test, so a future mis-wiring aborts loudly instead of depending on which guests are up.
