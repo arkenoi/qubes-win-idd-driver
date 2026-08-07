@@ -194,17 +194,49 @@ foreach ($d in @($universe)) {
 }
 $pvMissing = @($pvWanted.Keys | Where-Object { -not $pvWanted[$_] })
 # The decisive one: which driver is behind the NIC actually carrying traffic?
-$nic = Get-CimInstance Win32_NetworkAdapter -ErrorAction SilentlyContinue |
-       Where-Object { $_.NetEnabled -eq $true -and $_.PhysicalAdapter -eq $true } |
-       Select-Object -First 1
-$nicPv = $false
-if ($nic) { $nicPv = ($nic.PNPDeviceID -match '^XEN') -or ($nic.Name -match 'Xen|Qubes') }
-Check 'pv_drivers_bound' ($pvMissing.Count -eq 0 -and $nicPv) `
-    @{ started = $pvWanted; not_started = $pvMissing
-       active_nic = if ($nic) { $nic.Name } else { 'NONE' }
-       active_nic_id = if ($nic) { $nic.PNPDeviceID } else { $null }
-       active_nic_is_pv = $nicPv
-       devices = $pvDetail }
+$nics = @(Get-CimInstance Win32_NetworkAdapter -ErrorAction SilentlyContinue |
+          Where-Object { $_.PhysicalAdapter -eq $true })
+$nicUp = @($nics | Where-Object { $_.NetEnabled -eq $true })
+# ALL physical adapters, not First-1: after the xenvif upgrade a STALE rev-4 devnode can
+# linger beside the working rev-5 one (measured 2026-08-07), and a First-1 match on the
+# stale node would fail a guest whose PV networking is fine.
+$pvNics  = @($nicUp | Where-Object { $_.PNPDeviceID -match '^XEN' -or $_.Name -match 'Xen|Qubes' })
+$emuNics = @($nicUp | Where-Object { $_.PNPDeviceID -notmatch '^XEN' -and $_.Name -notmatch 'Xen|Qubes' })
+# NO NETWORK ATTACHED is 'not applicable', never a pass: an offline install (netvm '') has
+# no vif at all, so asserting "the NIC must be PV" there can only fail for the wrong reason
+# (measured 2026-08-07 - it failed a healthy guest that simply had no network).
+if ($nics.Count -eq 0) {
+    Check 'pv_drivers_bound' $false @{ na = 'no physical network adapter attached - PV NIC not assertable here'; started = $pvWanted; not_started = $pvMissing }
+    $r.checks['pv_drivers_bound'].na = $true
+} else {
+    # The emulated NIC must be GONE, not merely coexisting: rev 5 ships with UNPLUG v3, so a
+    # working PV path unplugs the QEMU adapter outright.
+    Check 'pv_drivers_bound' ($pvMissing.Count -eq 0 -and $pvNics.Count -ge 1 -and $emuNics.Count -eq 0) `
+        @{ started = $pvWanted; not_started = $pvMissing
+           pv_nics = @($pvNics | ForEach-Object { $_.Name })
+           emulated_nics_still_present = @($emuNics | ForEach-Object { $_.Name })
+           all_physical = @($nics | ForEach-Object { $_.Name + '[' + $_.PNPDeviceID + ']' })
+           devices = $pvDetail }
+}
+
+# --- 6b2. the network must actually CARRY TRAFFIC, not merely be bound -------------
+# "PV NIC present" is not "networking works". Assert an IP and a working gateway.
+$ipOk = $false; $gw = $null; $addr = $null
+try {
+    $cfg = Get-CimInstance Win32_NetworkAdapterConfiguration -ErrorAction Stop |
+           Where-Object { $_.IPEnabled -eq $true } | Select-Object -First 1
+    if ($cfg) {
+        $addr = ($cfg.IPAddress | Where-Object { $_ -match '^\d+\.' } | Select-Object -First 1)
+        $gw   = ($cfg.DefaultIPGateway | Select-Object -First 1)
+        if ($addr -and $gw) { $ipOk = Test-Connection -ComputerName $gw -Count 2 -Quiet -ErrorAction SilentlyContinue }
+    }
+} catch { }
+if ($nics.Count -eq 0) {
+    Check 'network_carries_traffic' $false @{ na = 'no network attached' }
+    $r.checks['network_carries_traffic'].na = $true
+} else {
+    Check 'network_carries_traffic' $ipOk @{ ip = $addr; gateway = $gw; gateway_reachable = $ipOk }
+}
 
 # --- 6c. CLIPBOARD path alive ------------------------------------------------------
 # The Qubes clipboard is a guest service (QubesClipboard / the vchan clipboard handler in
