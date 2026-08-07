@@ -4838,3 +4838,38 @@ installed PV drivers - which is installing right now, and whose gate now include
 `pv_drivers_bound`. Conclusion deferred to that result rather than generalised again from a
 much-abused reference guest. I have now been wrong on this twice in one hour by doing exactly
 that.
+
+## 2026-08-07 — PV mismatch is REAL and lives inside the QWT 4.2.2 payload; upstream drivers would bind
+
+Chased the user's question ("if they are byte identical, how come they announce different
+hw?") to a concrete answer by fetching the Xen Project's own Windows PV drivers
+(https://xenbits.xen.org/pvdrivers/win/, index reachable, tarballs dated 2023-07-13).
+
+    QWT 4.2.2 xennet (stock AND ours - byte-identical):  requires REV_09000005
+    QWT 4.2.2 xenvif child, as enumerated on the guest:  offers  REV_09000004 ... 09000000
+    UPSTREAM Xen Project xennet 9.1.0.3:                 requires REV_09000003
+    UPSTREAM Xen Project xenvif 9.1.0.2
+
+So the QWT 4.2.2 payload is INTERNALLY INCONSISTENT: its xennet demands an interface
+revision one higher than its own xenvif publishes, so the NET child can never bind and
+Windows falls back to the emulated Realtek NIC. Since our MSI's PV binaries are byte-identical
+to stock's, **stock QWT 4.2.2 has the same defect** - this is not something we introduced,
+and it is not "wrong codebase" on our side.
+
+Upstream's xennet 9.1.0.3 asks for REV_09000003, which IS in the device's hardware-ID list
+(04/03/02/01/00). So swapping in the upstream pair is a plausible fix, exactly as the user
+suggested.
+
+RETRACTED along the way, in order: "wrong codebase" (refuted by the byte diff);
+"upstream packaging bug" (premature - it is a QWT PACKAGING inconsistency, upstream's own
+pairs look self-consistent); "the 2026-08-06 networking result ran over the emulated NIC"
+(I back-projected today's observation onto an entry that never recorded the adapter);
+"stale cached devnode" (cannot apply to a freshly installed system, as the user pointed out).
+
+BEFORE acting on the driver swap, two things must land:
+1. The fresh-guest reading from `win10-clean` (health gate now includes `pv_drivers_bound`) -
+   it says whether a never-upgraded guest binds PV. Everything above predicts it will NOT.
+2. Whether replacing PV drivers inside the QWT MSI is acceptable at all: they are
+   attestation-signed by Xen Project, our guests run testsigning, but a real release would
+   need the signing question answered. That is a USER DECISION, not mine - it changes what
+   the product ships beyond the agent.
