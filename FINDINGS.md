@@ -4928,3 +4928,42 @@ changes what the product ships beyond our agent, and those binaries are attestat
 Xen Project. Our guests run testsigning so they will load, but a release needs the signing
 story answered. Also worth reporting upstream (qubes-windows-tools) under the "bugs OUTSIDE
 QWT scope" exception - with the user approving the text first.
+
+## 2026-08-07 — SHIPPED-BUILD ACCEPTANCE: FAIL. Release NOT published. Verdict and reasons
+
+The re-run on stock-MSI-free media got all the way through install and reboot, then the gate
+failed on two checks. Recording precisely because one is real, one is my instrument, and
+neither is the interactive-dialog problem that killed the previous attempt (that IS fixed -
+the install completed unattended this time, `install reported complete` at 07:10:42).
+
+    agent_binary_hash        PASS  installed 5BF33DE6... == manifest 5bf33de6...  (the SHIPPED a68d244 binary)
+    agent_process            PASS
+    qubes_services_running   PASS
+    idd_device_bound         PASS
+    idd_modes_published      PASS
+    pnp_no_unexpected_errors PASS
+    clipboard_works          PASS
+    agent_log_healthy        FAIL  logs_this_boot=2, still_writing=false, badmode=0
+    pv_drivers_bound         FAIL  (see below)
+
+**pv_drivers_bound - REAL, and now fully explained.** On this fresh guest with `core-net`
+attached: child `XENVIF\VEN_XP0001&DEV_NET\0` status=Error, hardware IDs
+`REV_09000004,03,02,01,00`, only adapter = emulated Realtek. QWT 4.2.2's own xennet requires
+`REV_09000005`. The branch "if PV binds on the fresh guest, our uninstall/reinstall cycle is
+to blame" is therefore CLOSED: it does not bind, so the upgrade path is exonerated and no
+uninstall-cycle experiment is needed.
+
+**agent_log_healthy - needs follow-up.** `logs_this_boot=2` means the agent RESPAWNED once
+this boot, and `still_writing=false` at sample time. Zero BADMODE. Not diagnosed; it may be
+the ordinary startup retry (a first instance dying on a transient capture error and the
+watchdog restarting it, which A7 was written for) or something new. It must not be waved
+through - it is the one unexplained failure on the shipped binary.
+
+**Release: NOT published.** The gate is PV + clipboard + chrome + health all green; two are
+not. The draft stays as it is. Note the chrome assertion never even ran - the harness fails
+at the health step before reaching it.
+
+Guest state: `win10-clean` has since had upstream xennet 9.1.0.3 pushed and offered to
+pnputil by hand, which raised "Windows can't verify the publisher of this driver software"
+and is sitting on that modal. That guest is now a driver-experiment guest, not a clean
+acceptance guest, and must be reprovisioned before it is used for acceptance again.
