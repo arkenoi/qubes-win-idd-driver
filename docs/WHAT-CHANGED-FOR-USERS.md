@@ -372,6 +372,6 @@ is not in this release.
   despite being installed. Whether stock QWT behaves identically here is not yet
   established. Functional impact: throughput/latency, not availability.
 - `XENBUS\VBD` and `XENBUS\CONS` sit driverless by design (PV disk driver deliberately
-  omitted for its documented BSOD risk; QWT ships no console driver).
+  now INSTALLED, as stock QWT does; QWT ships no console driver).
 - The Explorer-vs-agent work-area tug (Explorer recomputes from its taskbar, the agent
   re-asserts every 2 s) converges but is noisy; tracked.

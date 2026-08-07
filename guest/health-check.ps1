@@ -29,8 +29,13 @@ param(
     # is XP0001. XENVIF\...DEV_NET err=28 was ALSO observed there with a working Up
     # adapter - deliberately NOT allowlisted until explained; the sweep must surface it.
     [string[]]$AllowPnpErrors = @('PCI\VEN_1234&DEV_1111:22',
-                                  'XENBUS\VEN_XP0001&DEV_CONS:28',
-                                  'XENBUS\VEN_XP0001&DEV_VBD:28'),
+                                  # NOTE: XENBUS\...&DEV_VBD:28 was allowlisted here until
+                                  # 2026-08-07. That was wrong: it certified as healthy a
+                                  # guest running entirely on emulated IDE because we had
+                                  # dropped PvDriversDisk from ADDLOCAL on an unsourced
+                                  # claim. The disk device must BIND now, and pv_disk_bound
+                                  # below asserts it.
+                                  'XENBUS\VEN_XP0001&DEV_CONS:28'),
     [string]$ManifestPath = 'C:\qwt-improved-setup\MANIFEST.json',
     [switch]$NoIddExpected   # for BDA-configuration guests (control runs only)
 )
@@ -235,6 +240,25 @@ if ($nics.Count -eq 0) {
            all_physical = @($nics | ForEach-Object { $_.Name + '[' + $_.PNPDeviceID + ']' })
            devices = $pvDetail }
 }
+
+# --- 6b1. PV DISK: the boot disk must be off emulated IDE ---------------------------
+# Added 2026-08-07 after discovering we shipped a package that dropped PvDriversDisk (which
+# STOCK QWT installs by default) on an unsourced "BSOD risk" claim, leaving every guest on
+# emulated IDE. The old allowlist entry for DEV_VBD:28 actively certified that as healthy.
+# Assert BOTH halves, because either alone is satisfiable while the regression is present:
+#   - the xenvbd devnode binds (err 0), and
+#   - no disk is still reporting BusType=ATA, i.e. the disks really moved to the PV path.
+# Measured on a good guest: BusType goes ATA -> SCSI (Xen VBD presents via StorPort).
+$vbd = @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
+         Where-Object { $_.PNPDeviceID -like 'XENBUS\VEN_XP0001&DEV_VBD*' })
+$vbdOk = ($vbd.Count -ge 1 -and @($vbd | Where-Object { $_.ConfigManagerErrorCode -ne 0 }).Count -eq 0)
+$disks = @(Get-CimInstance -Namespace root\Microsoft\Windows\Storage -ClassName MSFT_Disk -ErrorAction SilentlyContinue)
+# BusType 3 = ATA, 11 = SATA, 8 = RAID, 10 = SAS, 0 = Unknown; Xen VBD reports 1 (SCSI).
+$ideDisks = @($disks | Where-Object { $_.BusType -eq 3 -or $_.BusType -eq 11 })
+Check 'pv_disk_bound' ($vbdOk -and $disks.Count -ge 1 -and $ideDisks.Count -eq 0) `
+    @{ vbd_devices = @($vbd | ForEach-Object { $_.PNPDeviceID + ' err=' + $_.ConfigManagerErrorCode + ' svc=' + $_.Service })
+       disks = @($disks | ForEach-Object { 'disk' + $_.Number + ' bustype=' + $_.BusType })
+       still_on_emulated_ide = @($ideDisks | ForEach-Object { 'disk' + $_.Number }) }
 
 # --- 6b2. the network must actually CARRY TRAFFIC, not merely be bound -------------
 # "PV NIC present" is not "networking works". Assert an IP and a working gateway.
