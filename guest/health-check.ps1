@@ -176,6 +176,62 @@ if ($boot) {
            badmode_lines = $badmode }
 }
 
+# --- 6b. PV DRIVERS actually bound and CARRYING traffic ----------------------------
+# "Installed" is not "working": ADDLOCAL=...,PvDriversNetwork succeeds while xennet never
+# binds its XENVIF child, leaving the guest on the EMULATED Realtek NIC (measured
+# 2026-08-07). Networking still functions, which is exactly why a service-level check
+# misses it. So: every PV devnode must be started, AND the active NIC must be the PV one.
+$pvWanted = @{ 'XENBUS' = $false; 'XENIFACE' = $false; 'XENVIF' = $false; 'XENNET' = $false }
+$pvDetail = @()
+foreach ($d in @($universe)) {
+    foreach ($k in @($pvWanted.Keys)) {
+        if ($d.PNPDeviceID -like "$k\*" -or $d.Service -eq $k.ToLower()) {
+            $ok = ($d.ConfigManagerErrorCode -eq 0)
+            if ($ok) { $pvWanted[$k] = $true }
+            $pvDetail += [ordered]@{ id = $d.PNPDeviceID; err = $d.ConfigManagerErrorCode; name = $d.Name }
+        }
+    }
+}
+$pvMissing = @($pvWanted.Keys | Where-Object { -not $pvWanted[$_] })
+# The decisive one: which driver is behind the NIC actually carrying traffic?
+$nic = Get-CimInstance Win32_NetworkAdapter -ErrorAction SilentlyContinue |
+       Where-Object { $_.NetEnabled -eq $true -and $_.PhysicalAdapter -eq $true } |
+       Select-Object -First 1
+$nicPv = $false
+if ($nic) { $nicPv = ($nic.PNPDeviceID -match '^XEN') -or ($nic.Name -match 'Xen|Qubes') }
+Check 'pv_drivers_bound' ($pvMissing.Count -eq 0 -and $nicPv) `
+    @{ started = $pvWanted; not_started = $pvMissing
+       active_nic = if ($nic) { $nic.Name } else { 'NONE' }
+       active_nic_id = if ($nic) { $nic.PNPDeviceID } else { $null }
+       active_nic_is_pv = $nicPv
+       devices = $pvDetail }
+
+# --- 6c. CLIPBOARD path alive ------------------------------------------------------
+# The Qubes clipboard is a guest service (QubesClipboard / the vchan clipboard handler in
+# qrexec-agent) plus a working Windows clipboard. dom0<->guest transfer needs a human
+# Ctrl+Shift+C/V, so what is asserted here is everything up to that: the handler process
+# is running AND the Windows clipboard round-trips a value.
+$clipSvc = @($svcs | Where-Object { $_.Name -match 'Qubes' -and $_.State -eq 'Running' })
+$clipRound = $false
+$clipErr = $null
+try {
+    $marker = 'QUBES_CLIP_' + (Get-Date -Format 'HHmmssfff')
+    $sta = [System.Threading.ApartmentState]::STA
+    # Set + read must happen on an STA thread; PowerShell's default is MTA here.
+    $ps = [PowerShell]::Create()
+    $ps.Runspace = [RunspaceFactory]::CreateRunspace()
+    $ps.Runspace.ApartmentState = $sta
+    $ps.Runspace.Open()
+    $null = $ps.AddScript("Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Clipboard]::SetText('$marker'); [System.Windows.Forms.Clipboard]::GetText()")
+    $res = $ps.Invoke()
+    $ps.Runspace.Close(); $ps.Dispose()
+    $clipRound = (@($res) -contains $marker)
+} catch { $clipErr = "$_" }
+Check 'clipboard_works' ($clipSvc.Count -gt 0 -and $clipRound) `
+    @{ qubes_services_running = $clipSvc.Count; windows_clipboard_roundtrip = $clipRound
+       error = $clipErr
+       note = 'dom0<->guest transfer needs Ctrl+Shift+C/V and is NOT asserted here' }
+
 # --- 7. current resolution (informational, always recorded) ------------------------
 # Win32_VideoController, not SystemInformation.VirtualScreen: the latter is DPI-scaled
 # in a non-DPI-aware host process (5120x1440 at 150 % read back as 3413x960).
