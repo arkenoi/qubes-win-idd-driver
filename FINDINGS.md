@@ -5145,3 +5145,44 @@ Not left dirty: the probe restored `netvm=core-net` and the domain settled to `H
 
 Fix needed in the probe before it is cited anywhere: distinguish rc=124 (hang) from a real
 non-zero exit, and treat `Transient` as a FAILURE state rather than evidence of a clean stop.
+
+## 2026-08-07 — media build: extract-and-repack replaced by graft-onto-mount (qvm-create-windows-qube's method)
+
+User asked how `qvm-create-windows-qube` automates answer files. It repacks too - there is no
+second-media trick - but its method is far better (windows/create-media.sh):
+
+    genisoimage -udf -b boot.bin -no-emul-boot -allow-limited-size -graft-points \
+        -o out.iso "$iso_mntpoint" "boot.bin=$boot_img" "Autounattend.xml=$answer_file"
+
+i.e. loop-MOUNT the vendor ISO read-only and overlay files with `-graft-points`. Two wins:
+no extraction, and `-udf` removes the >4 GiB file limit so `install.wim` is never split.
+Our entire splitting apparatus existed ONLY because this box's xorriso has no UDF writer.
+
+`mgmt/build-media.sh` implements it (genisoimage installed by the user). Measured:
+
+    old builder: ~14 GiB transient, ~15 min, install.wim SPLIT to .swm
+    new builder:  5.8 GiB output, 2m50s, install.wim UNSPLIT
+
+Verified on the produced ISO, not assumed:
+    autounattend.xml / diskprep.cmd / payload/release/install.cmd / sources/$OEM$/$1  present
+    sources/install.wim  5,166,935,814 bytes, ORIGINAL 2023-05-05 timestamp (byte-identical)
+    El Torito boot img   platform BIOS, bootable=y   (SeaBIOS-compatible)
+
+**The vendor delta is now purely ADDITIVE** - previously the .swm split was a real change to
+vendor content, and it is gone. This is as close to the untouched vendor media as the
+platform allows.
+
+TWO DEFECTS OF MINE, caught before use (both invisible to "the build succeeded"):
+1. Passing `$MNT` as a plain path AND using -graft-points emitted the tree TWICE: 12 GiB
+    output from a 5.8 GiB source. Fixed by grafting as `/=$MNT`.
+2. The boot image was chosen with `find *.img | head -1`, which picked
+    `eltorito_img2_uefi.img`. Qubes HVMs boot SeaBIOS and need `boot/etfsboot.com`, so that
+    media would very likely not have booted. Fixed to take the BIOS image explicitly.
+Neither was visible in the exit code or the log; the SIZE was the only tell, and the timing
+alone looked like a success.
+
+Still to prove: that this media boots and installs end to end. A correct-looking ISO that
+does not boot is a failure mode this project has already hit (`CDBOOT: Couldn't find
+BOOTMGR` after a layout change). The acceptance queued on it was refused by reprovision's
+per-VM flock because the older-builder run still holds win10-clean - the lock working as
+intended.
