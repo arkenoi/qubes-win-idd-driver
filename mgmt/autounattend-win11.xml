@@ -113,13 +113,33 @@
           <Description>disable hibernation and fast startup</Description>
           <Order>1</Order>
         </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c powercfg /change monitor-timeout-ac 0 &amp; powercfg /change monitor-timeout-dc 0 &amp; powercfg /change standby-timeout-ac 0 &amp; powercfg /change standby-timeout-dc 0</CommandLine>
+          <Description>never blank the display or sleep</Description>
+          <Order>2</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f</CommandLine>
+          <Description>no lock screen</Description>
+          <Order>3</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v InactivityTimeoutSecs /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>no machine inactivity limit</Description>
+          <Order>4</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>reg add "HKCU\Control Panel\Desktop" /v ScreenSaveActive /t REG_SZ /d 0 /f</CommandLine>
+          <Description>no screensaver</Description>
+          <Order>5</Order>
+        </SynchronousCommand>
         <!-- The CD is gone by first logon (guest reboot destroys the Qubes domain and
              the cdrom assignment), so prefer C:\payload staged by $OEM$; scan other
              letters only as a fallback. -->
         <SynchronousCommand wcm:action="add">
           <CommandLine>cmd /c if exist C:\payload\setup.cmd (call C:\payload\setup.cmd) else (for %d in (D E F G H I J K L M N O P Q R S T U V) do @if exist %d:\payload\setup.cmd call %d:\payload\setup.cmd)</CommandLine>
           <Description>qubes-win-idd payload</Description>
-          <Order>2</Order>
+          <Order>6</Order>
         </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>
