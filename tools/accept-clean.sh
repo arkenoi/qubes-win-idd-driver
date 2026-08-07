@@ -62,17 +62,35 @@ log "back from reboot; settling 45s"; sleep 45
 # --- 4. activity + health assertion -------------------------------------------------
 qq ps 'Start-Process notepad' >/dev/null 2>&1; sleep 5
 log "running health-check.ps1"
-# HEALTH_ARGS: pass -NoIddExpected when the media under test does NOT install the IDD
-# (the default payload since 2026-08-07 - /idd is opt-in while its post-reboot topology
-# apply is unfixed). Without it desktop_on_idd/idd_device_bound fail by construction on a
-# guest that was never meant to have an IDD, which would turn the gate into noise.
-# DELIBERATELY NOT the default: a release run of the /idd configuration must still be held
-# to the full assertion.
+# HEALTH_ARGS: pass -NoIddExpected ONLY for a deliberate Basic-Display-Adapter control run.
+# It is not the default and must not become one: the IDD topology apply landed in the agent
+# on 2026-08-07 (EnsureQubesIddSolo), so a release run asserts the IDD for real.
 log "health-check args: ${HEALTH_ARGS:-<none, full IDD assertion>}"
 QT=180 qq pushrun "$HERE/guest/health-check.ps1" ${HEALTH_ARGS:+$HEALTH_ARGS} 2>&1 | tr -d '\r' | grep -a '=== HEALTH ===' | tail -1 > "$OUT/health.json"
 [ -s "$OUT/health.json" ] || fail "health-check produced no output"
+
+# GATE ON asserted_all, NOT ok. `ok` is true when no HARD check failed, but it deliberately
+# tolerates checks marked na (not applicable) - which is how a whole subsystem can drop out
+# of a "passing" run without anyone noticing. A release run must have measured every one:
+# disks (pv_disk_bound), network (pv_drivers_bound + network_carries_traffic) and display
+# (idd_device_bound + desktop_on_idd + idd_modes_published) all asserted in the SAME run.
+# ALLOW_NA=1 relaxes this to the old ok:true for deliberately partial configurations
+# (e.g. an offline install, where the network checks cannot apply) - and says so loudly.
 grep -q '"ok":true' "$OUT/health.json" || fail "health-check ok:false ($(cat "$OUT/health.json" | head -c 300))"
-log "health-check PASS"
+if [ "${ALLOW_NA:-0}" = 1 ]; then
+    nas=$(python3 -c "
+import json
+d=json.loads(open('$OUT/health.json').read().split('=== HEALTH ===',1)[1])
+print(','.join(d.get('not_applicable') or []) or 'none')" 2>/dev/null || echo '?')
+    log "WARNING: ALLOW_NA=1 - not_applicable checks tolerated: ${nas:-none}"
+else
+    grep -q '"asserted_all":true' "$OUT/health.json" ||         fail "not every check was asserted (na present). $(python3 -c "
+import json,sys
+d=json.loads(open('$OUT/health.json').read().split('=== HEALTH ===',1)[1])
+print('not_applicable=' + ','.join(d.get('not_applicable') or []) + ' failed=' + ','.join(d.get('failed') or []))
+" 2>/dev/null || head -c 300 "$OUT/health.json")"
+fi
+log "health-check PASS (every check asserted)"
 
 # --- 5. pixels change in dom0 (the judge is output, not logs) -----------------------
 log "visual: two shots around a visible change"
