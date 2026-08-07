@@ -30,9 +30,12 @@ on:
       - '.github/workflows/pv-xenvif.yml'
 
 env:
-  # xenbits master tip as of 2026-07-29. PINNED deliberately: bump this line, never track
-  # a branch, so any two builds of the same SHA are comparable.
-  XENVIF_SHA: 94853a036fb318fb1eec481ac3fb9d01d0a90cdf
+  # UNPINNED (user, 2026-08-07: "unpin and upgrade xenvif"). Track master so we always get
+  # the newest interface revisions; the resolved SHA is echoed and written into
+  # PROVENANCE.txt so a given artifact is still traceable to an exact commit.
+  # The rev-5 assertion below is what actually protects us - a master that ever lost
+  # 0x09000005 fails the build instead of shipping a driver that cannot bind.
+  XENVIF_REF: master
 
 jobs:
   xenvif:
@@ -59,16 +62,18 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          git clone --quiet https://xenbits.xen.org/git-http/pvdrivers/win/xenvif.git xenvif
-          git -C xenvif checkout --quiet $env:XENVIF_SHA
-          if ($LASTEXITCODE -ne 0) { throw "checkout $env:XENVIF_SHA failed" }
+          git clone --quiet --branch $env:XENVIF_REF https://xenbits.xen.org/git-http/pvdrivers/win/xenvif.git xenvif
+          if ($LASTEXITCODE -ne 0) { throw "clone of $env:XENVIF_REF failed" }
+          $sha = (git -C xenvif rev-parse HEAD).Trim()
+          Write-Host "xenvif $env:XENVIF_REF resolved to $sha"
+          "XENVIF_RESOLVED=$sha" | Out-File -Append $env:GITHUB_ENV
           # ASSERT the reason this build exists. If a future SHA bump loses rev 5 the job
           # must fail here, not ship a driver that still cannot bind.
           $rev = Get-Content xenvif\include\revision.h -Raw
           if ($rev -notmatch '0x09000005') {
-              throw "xenvif @ $env:XENVIF_SHA does NOT define revision 0x09000005 - it cannot satisfy xennet"
+              throw "xenvif @ $sha does NOT define revision 0x09000005 - it cannot satisfy xennet"
           }
-          Write-Host "confirmed: xenvif $env:XENVIF_SHA defines 0x09000005"
+          Write-Host "confirmed: xenvif $sha defines 0x09000005"
 
       - name: Build xenvif via its own build.ps1
         shell: pwsh
@@ -119,7 +124,7 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($_.Name)" }
           }
           $prov = @(
-            "xenvif built from xenbits master @ $env:XENVIF_SHA",
+            "xenvif built from xenbits $env:XENVIF_REF @ $env:XENVIF_RESOLVED",
             "reason: the xenvif/xennet pair pinned by qubes-vmm-xen-windows-pvdrivers cannot bind -",
             "        pinned xenvif tops out at REV_09000004, pinned xennet requires REV_09000005.",
             "        rev 5 was added by xenvif commit 4608bc1 (Use UNPLUG v3).",
