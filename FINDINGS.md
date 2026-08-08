@@ -5791,3 +5791,78 @@ Rules that follow:
   finishes, rather than appending to the file it is reading;
 - committing the script first makes `git checkout --` an exact byte-level undo, which is what
   made this recoverable at all.
+
+---
+
+## 2026-08-08 (late) — the Windows 11 overhead is mostly AMBIENT
+
+### The number that reframes the whole chase
+
+Windows 11 presents **18.75 fps with no input at all** (30 s idle, 3 reps: 563/603/460
+frames), each carrying ~350k real dirty pixels, `empty=0` — genuine repaints, not cursor-only
+frames the agent already drops for free.
+
+That is **77% of Windows 11's own 24.4 fps workload rate**, and more than Windows 10's *entire*
+workload rate of 12.9 fps. So the 488-vs-259 controlled comparison that started this
+investigation was largely measuring background repaint, not input handling. The surplus is
+ambient: it happens whether or not anyone is touching the machine.
+
+It also explains the idle CPU row that had looked anomalous — ours 0.343 vs stock 0.000. Stock
+captures one composited screen and shrugs at ambient repaint; our per-window `PrintWindow` pays
+for every one, at idle, indefinitely.
+
+The load-bearing comparison is *within* Windows 11, so no Windows 10 idle number is needed. An
+earlier note calling the finding "one-sided" because `win10-clean` never answered was
+overstated and is withdrawn.
+
+### Desktop effects are ruled out
+
+Frame counts with effects off moved +2% to +9% — inside 9–25% run-to-run noise, and in the
+*wrong* direction. Transparency/Mica/animations do not cause the surplus.
+`guest/disable-visual-effects.ps1` stays in the tree (it is harmless and arguably correct on a
+GPU-less guest) but it is not the lever, and must not be presented as a performance fix.
+
+### The mechanism, now separable
+
+    our CPU  ~  (presents Windows generates)  x  (our per-present, per-window cost)
+                 ~19/s ambient + workload         PrintWindow, 15-18 ms on WARP
+
+Stock is cheap in the second term, so the first barely hurts it. We are expensive in the
+second, so the first dominates us. Both are worth attacking; neither substitutes for the other.
+
+### The coalescing fix was never actually tested
+
+`PwScreenUnchanged` opened with `if (!fb || pitch == 0 || !g_ZOrderValid) return FALSE`.
+`CollectZOrder` (`main.c:2754`) deliberately skips its `EnumWindows` pass unless an
+override-redirect popup is visible — "a second or two at a time" — because paying it per frame
+cost roughly 4x the Phase 2A drag figure, and sets `g_ZOrderValid = FALSE` when it skips.
+
+So in any ordinary workload the check refused **every single call**: 0 skips in 5557 decisions.
+The null CPU result (all three deltas inside their own run-to-run spread) was measuring
+nothing, not measuring a small effect. The premise is untested, **not** falsified — an earlier
+reading that it might be falsified is withdrawn.
+
+Replaced with an order-free test: if no other visible window's rectangle intersects this one,
+nothing can cover it whatever the order is; paired with "is the foreground window" so a
+full-screen window *below* (the shell desktop) cannot veto everything.
+
+### Instrument defects found the same evening
+
+1. **A `0.0%` that meant "the code never ran".** Fixed by counting refusals per cause
+   (`pwnofb/pwnoz/pwoff/pwocc/pwnofg/pwovl/pwfirst/pwchg`), so an undifferentiated zero cannot
+   recur. Only `pwchg` supports "the present was real"; everything else is the check declining
+   to look.
+2. **All four analyzers mis-parsed the phase markers.** The real format is
+   `### PHASE-START <name> <ts>` — with a `###` prefix. Every one assumed field 0 was the
+   keyword and field 1 the name, so phase lookups silently found nothing and reported "No usable
+   data" for the win11 idle run whose data was perfect. The shell side used `awk '{print $NF}'`
+   and was correct throughout, which is why the harnesses ran happily while analysis came back
+   empty. Re-running the fixed parser over already-collected data cost no guest time and
+   produced the 18.75 fps result above.
+3. **A PASS criterion that could not fail.** `validate-coalesce.sh` compared single medians
+   against a historical, non-interleaved baseline with no noise test, and printed
+   "typing improved AND drag not regressed: True" for deltas of −1.8%, −9.9% and −3.6% against
+   spreads of 9.7%, 15.6% and 29.2%. That verdict was retracted.
+4. **An A/B that produced zero valid points**, because qrexec runs unelevated on clean-room
+   guests — a wall documented in `win11-idd-vs-bda.ps1` months earlier and walked into anyway.
+   The harness refused to fabricate numbers, which is the one thing that went right.
