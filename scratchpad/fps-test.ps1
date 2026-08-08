@@ -38,6 +38,10 @@ $form.BackColor    = [System.Drawing.Color]::Black
 $form.TopMost      = $true
 
 $script:frames = 0
+# Per-frame intervals are the DELAY half of this measurement. Throughput alone hides
+# stutter: 300 fps average with a 90 ms hitch every second feels worse than a steady
+# 120 fps, and it is the p95/p99 tail a user actually perceives.
+$script:ivals = New-Object System.Collections.Generic.List[double]
 $script:x      = 0
 $script:dir    = 7
 $brush         = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(0, 200, 255))
@@ -63,22 +67,38 @@ $form.Activate()
 [System.Windows.Forms.Application]::DoEvents()
 
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
+$last = $sw.Elapsed.TotalMilliseconds
 while ($sw.Elapsed.TotalSeconds -lt $Seconds) {
     $script:x += $script:dir
     if ($script:x -lt 0 -or $script:x -gt ($Width - 160)) { $script:dir = -$script:dir }
     $form.Invalidate()
     $form.Update()                                   # force a synchronous paint
     [System.Windows.Forms.Application]::DoEvents()
+    $now = $sw.Elapsed.TotalMilliseconds
+    $script:ivals.Add($now - $last)
+    $last = $now
 }
 $sw.Stop()
 $form.Close()
 
 $fps = [math]::Round($script:frames / $sw.Elapsed.TotalSeconds, 2)
+function Pct([double[]]$a, [double]$p) {
+    if ($a.Count -eq 0) { return $null }
+    $srt = $a | Sort-Object
+    $i = [int][math]::Floor(($a.Count - 1) * $p)
+    return [math]::Round($srt[$i], 3)
+}
+$iv = $script:ivals.ToArray()
 $obj = [ordered]@{
     mode         = $Mode
     seconds      = [math]::Round($sw.Elapsed.TotalSeconds, 3)
     frames       = $script:frames
     rendered_fps = $fps
+    frame_ms_p50 = Pct $iv 0.50
+    frame_ms_p95 = Pct $iv 0.95
+    frame_ms_p99 = Pct $iv 0.99
+    frame_ms_max = $(if ($iv.Count) { [math]::Round(($iv | Measure-Object -Maximum).Maximum, 3) } else { $null })
+    intervals    = $iv.Count
     width        = $Width
     height       = $Height
     session_id   = $sid

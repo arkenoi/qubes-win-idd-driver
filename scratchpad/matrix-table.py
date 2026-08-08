@@ -59,8 +59,8 @@ def load(outdir, side):
         reps.append(d)
     return reps
 
-def med_fps(outdir, side, mode):
-    """Median rendered_fps across reps. In-guest measurement: no dom0 round-trip."""
+def med_fps(outdir, side, mode, field="rendered_fps"):
+    """Median of an in-guest renderer field across reps. No dom0 round-trip."""
     vals = []
     if not os.path.isdir(outdir):
         return "no data"
@@ -76,7 +76,7 @@ def med_fps(outdir, side, mode):
             continue
         if "error" in d:
             return d["error"]
-        v = d.get("rendered_fps")
+        v = d.get(field)
         if isinstance(v, (int, float)):
             vals.append(float(v))
     return statistics.median(vals) if vals else "no data"
@@ -146,6 +146,13 @@ print("-" * 96)
 for mode, title in (("move", "rendered fps (moving rect)"), ("full", "rendered fps (full repaint)")):
     cells = [med_fps(outdir, side, mode) for _, outdir, side in ROWS]
     print(f"{title:<30}{'fps':<10}" + "".join(f"{fmt(c, 1):>16}" for c in cells))
+# DELAY is the half that throughput hides: a high average with a long tail is stutter.
+for mode in ("move", "full"):
+    for field, label in (("frame_ms_p50", "p50"), ("frame_ms_p95", "p95"),
+                         ("frame_ms_p99", "p99"), ("frame_ms_max", "max")):
+        cells = [med_fps(outdir, side, mode, field) for _, outdir, side in ROWS]
+        print(f"{('frame delay ' + label + ' (' + mode + ')'):<30}{'ms':<10}"
+              + "".join(f"{fmt(c, 2):>16}" for c in cells))
 
 print()
 print("[OURS-ONLY — stock QWT emits no QGAPERF, so these are not comparisons]")
