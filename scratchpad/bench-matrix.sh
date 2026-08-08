@@ -87,6 +87,21 @@ for r in $(seq 1 "$REPS"); do
     # refused a verdict: "it is NOT proven that the build under test was installed".
     if QTEST_VM=$vm BENCH_OUT=$outdir ./scratchpad/benchmark.sh run "$side" --rep "$r" --expect-hash "$want" 2>&1 | tail -4; then
       OK[$label]=$(( ${OK[$label]} + 1 ))
+      # Generic in-guest FPS: a plain GDI+ animation with no dependency on our
+      # instrumentation, so unlike every QGAPERF figure it IS comparable against stock.
+      # Measured entirely inside the guest - dom0 screenshot sampling is the slowest element
+      # in the path (~5 s per capture) and cannot resolve frame rate at all.
+      repdir="$outdir/$side-r$r"
+      for mode in move full; do
+        fps=$(qq "$vm" pushrun ./scratchpad/fps-test.ps1 -Seconds 10 -Mode "$mode" 2>/dev/null \
+              | tr -d '\r' | grep -a '^FPSRESULT ' | tail -1 | sed 's/^FPSRESULT //')
+        if [ -n "$fps" ]; then
+          echo "$fps" > "$repdir/fps-$mode.json"
+          log "  fps($mode): $(echo "$fps" | python3 -c "import json,sys;print(json.load(sys.stdin).get('rendered_fps','?'))" 2>/dev/null)"
+        else
+          log "  fps($mode): NO RESULT - recorded as missing, not as zero"
+        fi
+      done
       log "  $label rep $r OK (${OK[$label]} valid so far)"
     else
       log "  $label rep $r FAILED in benchmark.sh"

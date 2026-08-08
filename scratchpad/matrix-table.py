@@ -59,6 +59,28 @@ def load(outdir, side):
         reps.append(d)
     return reps
 
+def med_fps(outdir, side, mode):
+    """Median rendered_fps across reps. In-guest measurement: no dom0 round-trip."""
+    vals = []
+    if not os.path.isdir(outdir):
+        return "no data"
+    for name in sorted(os.listdir(outdir)):
+        if not name.startswith(side + "-r"):
+            continue
+        f = os.path.join(outdir, name, f"fps-{mode}.json")
+        if not os.path.isfile(f):
+            continue
+        try:
+            d = json.load(open(f))
+        except Exception:
+            continue
+        if "error" in d:
+            return d["error"]
+        v = d.get("rendered_fps")
+        if isinstance(v, (int, float)):
+            vals.append(float(v))
+    return statistics.median(vals) if vals else "no data"
+
 def med(reps, key):
     """Median of a metric, or a reason string. Never silently zero."""
     vals, na = [], None
@@ -115,6 +137,15 @@ for key, title, unit, digits in CROSS:
     for (l, _, _), c in zip(ROWS, cells):
         if isinstance(c, str):
             print(f"{'':<40}{l}: n/a — {c[:70]}")
+
+# In-guest FPS: cross-side by construction (no QGAPERF, no dom0 sampling).
+print()
+print("[CROSS-SIDE — generic in-guest renderer, no instrumentation dependency]")
+print(f"{'metric':<30}{'unit':<10}" + "".join(f"{l:>16}" for l, _, _ in ROWS))
+print("-" * 96)
+for mode, title in (("move", "rendered fps (moving rect)"), ("full", "rendered fps (full repaint)")):
+    cells = [med_fps(outdir, side, mode) for _, outdir, side in ROWS]
+    print(f"{title:<30}{'fps':<10}" + "".join(f"{fmt(c, 1):>16}" for c in cells))
 
 print()
 print("[OURS-ONLY — stock QWT emits no QGAPERF, so these are not comparisons]")
