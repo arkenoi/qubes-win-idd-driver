@@ -27,12 +27,34 @@ param(
     [ValidateSet('widgets', 'search', 'copilot', 'spotlight', 'all')]
     [string]$Group = 'all',
     [switch]$Restore,
-    [switch]$WhatIfOnly
+    [switch]$WhatIfOnly,
+    # Apply ONLY the per-user (HKCU) values and skip the machine-wide policies.
+    #
+    # This exists because of a real constraint, not convenience: qrexec runs UNELEVATED on
+    # clean-room guests, so HKLM policy writes are refused there. That already produced an
+    # entire A/B with zero valid points once today. The taskbar surfaces under suspicion -
+    # Widgets, search box, feeds - are driven by per-user values anyway, so measurement can
+    # proceed unelevated with -UserOnly, while SHIPPING uses the machine-wide policies applied
+    # by the installer, which runs as SYSTEM.
+    [switch]$UserOnly
 )
 $ErrorActionPreference = 'Continue'
 $script:changed = 0
 $script:failed  = 0
 $on  = -not $Restore     # $on = quiet the surface
+
+$pr = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+$elevated = $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $elevated -and -not $UserOnly -and -not $WhatIfOnly) {
+    # Refuse rather than silently applying half of what was asked for. A partial apply that
+    # still printed a success line is precisely how a measurement gets attributed to a change
+    # that never landed.
+    Write-Output "RESULT=FAIL not elevated - HKLM policies cannot be written."
+    Write-Output "       Re-run with -UserOnly to apply just the per-user values (enough for"
+    Write-Output "       the taskbar surfaces), or apply the policies from the installer."
+    exit 2
+}
+Write-Output ("ELEVATED=" + $elevated + " USERONLY=" + [bool]$UserOnly)
 
 function Set-Reg {
     param([string]$Path, [string]$Name, $Value, [string]$Type = 'DWord', [string]$Why)
@@ -89,8 +111,12 @@ Write-Output ("=== groups: " + ($groups -join ', ') + "  mode: " + $(if($on){'QU
 
 foreach ($g in $groups) {
     Write-Output ""
-    Write-Output "--- $g (machine-wide policy) ---"
-    foreach ($e in $machine[$g]) { Set-Reg $e.p $e.n $e.v 'DWord' $e.why }
+    if ($UserOnly) {
+        Write-Output "--- $g (machine-wide policy SKIPPED: -UserOnly) ---"
+    } else {
+        Write-Output "--- $g (machine-wide policy) ---"
+        foreach ($e in $machine[$g]) { Set-Reg $e.p $e.n $e.v 'DWord' $e.why }
+    }
 
     if ($peruser[$g].Count -gt 0) {
         Write-Output "--- $g (per-user + default hive) ---"
@@ -101,7 +127,15 @@ foreach ($g in $groups) {
 # default hive, once, for every per-user value in the selected groups
 $allPerUser = @(); foreach ($g in $groups) { $allPerUser += $peruser[$g] }
 $defaultHive = 'C:\Users\Default\NTUSER.DAT'
-if ($allPerUser.Count -gt 0 -and (Test-Path $defaultHive) -and -not $WhatIfOnly) {
+# Loading a hive under HKEY_USERS needs elevation too, so in the unelevated -UserOnly case
+# this is skipped EXPLICITLY rather than attempted-and-warned. Stated in the output, because
+# "new accounts will not inherit this" is a real limitation of a measurement-mode run and must
+# not be silent.
+if (-not $elevated -and $allPerUser.Count -gt 0) {
+    Write-Output "SKIP   default user hive (needs elevation) - current user only;"
+    Write-Output "       accounts created later will NOT inherit these values in this mode"
+}
+if ($elevated -and $allPerUser.Count -gt 0 -and (Test-Path $defaultHive) -and -not $WhatIfOnly) {
     $loaded = $false
     try { & reg.exe load 'HKU\QwtNgShell' $defaultHive 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { $loaded = $true } } catch { }
     if ($loaded) {
