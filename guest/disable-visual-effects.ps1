@@ -51,6 +51,13 @@ $fast = -not $Restore
 # VisualFXSetting 2 = "adjust for best performance" (3 = let Windows choose, the default).
 # MinAnimate 0 kills minimize/maximize animation. EnableTransparency 0 removes Mica/acrylic,
 # which is the Windows 11 specific one and the most likely source of continuous repaint.
+# DELIBERATELY NOT INCLUDED - DragFullWindows.
+# Setting it to 0 makes a drag show only an outline. That would cut the drag phase's repaint
+# volume dramatically, but for the wrong reason: the workload itself changes, so a lower
+# present count would say nothing about effects. It is also a UX regression a user would
+# notice immediately. Excluded from the set rather than measured and later backed out.
+#
+# FontSmoothing is likewise absent: it changes which pixels are drawn, not how often.
 $perUser = @(
     @{ sub='Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'; name='VisualFXSetting';
        val=$(if($fast){2}else{3}); type='DWord'; why='best performance vs let Windows choose' },
@@ -58,10 +65,12 @@ $perUser = @(
        val=$(if($fast){0}else{1}); type='DWord'; why='Mica/acrylic transparency' },
     @{ sub='Control Panel\Desktop\WindowMetrics'; name='MinAnimate';
        val=$(if($fast){'0'}else{'1'}); type='String'; why='minimize/maximize animation' },
-    @{ sub='Control Panel\Desktop'; name='DragFullWindows';
-       val=$(if($fast){'0'}else{'1'}); type='String'; why='show window contents while dragging' },
-    @{ sub='Control Panel\Desktop'; name='FontSmoothing';
-       val='2'; type='String'; why='left at default - changing it alters pixels, not repaint rate' }
+    # Animation/fade bitmask. HKCU by design - there is no machine-wide equivalent - so it
+    # rides the same default-hive treatment as the rest rather than being written separately.
+    @{ sub='Control Panel\Desktop'; name='UserPreferencesMask';
+       val=$(if($fast){([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00))}
+             else      {([byte[]](0x9E,0x1E,0x07,0x80,0x12,0x00,0x00,0x00))});
+       type='Binary'; why='animation/fade bitmask' }
 )
 
 Write-Output ("=== per-user visual effects (" + $(if($fast){'PERFORMANCE'}else{'WINDOWS DEFAULTS'}) + ") ===")
@@ -91,16 +100,11 @@ if ((Test-Path $defaultHive) -and -not $WhatIfOnly) {
     }
 }
 
-# --- machine-wide, where one exists --------------------------------------------------------
-# DWM composition itself is NOT disabled: it cannot be turned off on Windows 8+, and attempting
-# it via the old DisallowFlip/Composition keys does nothing on 10/11. Only animation policy has
-# a real machine-wide switch.
-Write-Output ""
-Write-Output "=== machine-wide ==="
-Set-Reg 'HKCU:\Control Panel\Desktop' 'UserPreferencesMask' `
-    $(if($fast){([byte[]](0x90,0x12,0x03,0x80,0x10,0x00,0x00,0x00))}else{([byte[]](0x9E,0x1E,0x07,0x80,0x12,0x00,0x00,0x00))}) `
-    'Binary' 'animation/fade bitmask'
-
+# --- what is deliberately NOT attempted ----------------------------------------------------
+# DWM composition itself is not disabled: it cannot be turned off on Windows 8+, and the old
+# DisallowFlip / Composition keys do nothing on 10/11. Writing them would produce a script that
+# looks like it did something while changing nothing - the failure mode this project keeps
+# hitting. Every setting above is one that a supported Windows mechanism actually reads.
 Write-Output ""
 Write-Output "NOTE  a sign-out or explorer restart is needed for some of these to take effect;"
 Write-Output "      the A/B harness restarts explorer rather than assuming."
