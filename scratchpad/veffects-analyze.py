@@ -65,6 +65,11 @@ def phase_stats(perf, bounds, phase):
         "fps": (n / dur) if dur > 0 else None,
         "tot_us": sum(r.get("tot", 0) for r in recs) / n,
         "area": sum(r.get("area", 0) for r in recs) / n,
+        # skip = frames that arrived with NO dirty rects and were dropped (g_SkippedFrames).
+        # This separates two causes of a high present count that would otherwise look alike:
+        # cursor-only/empty presents show up here, real content repaints do not.
+        "skip": sum(r.get("skip", 0) for r in recs),
+        "dr": sum(r.get("dr", 0) for r in recs) / n,
         "dur": dur,
     }
 
@@ -130,18 +135,23 @@ for phase in PHASES:
             continue
         rows.append((c, len(ss), med([s["frames"] for s in ss]), med([s["fps"] for s in ss]),
                      med([s["tot_us"] for s in ss]), med([s["area"] for s in ss]),
-                     spread([s["frames"] for s in ss])))
+                     spread([s["frames"] for s in ss]),
+                     med([s["skip"] for s in ss]), med([s["dr"] for s in ss])))
     if not rows:
         continue
     print(f"\n-- {phase} --")
-    print(f"{'effects':<12}{'reps':>6}{'frames':>9}{'fps':>8}{'tot us':>9}{'area px':>11}{'spread':>9}")
+    print(f"{'effects':<12}{'reps':>6}{'frames':>9}{'fps':>8}{'empty':>8}{'dr/frame':>10}"
+          f"{'tot us':>9}{'area px':>11}{'spread':>8}")
     print("-" * 84)
-    for c, n, fr, fps, tot, area, sp in rows:
+    for c, n, fr, fps, tot, area, sp, sk, dr in rows:
         f_fr = f"{fr:.0f}" if isinstance(fr, (int, float)) else "-"
         f_fps = f"{fps:.1f}" if isinstance(fps, (int, float)) else "-"
         f_tot = f"{tot:.0f}" if isinstance(tot, (int, float)) else "-"
         f_area = f"{area:.0f}" if isinstance(area, (int, float)) else "-"
-        print(f"{c:<12}{n:>6}{f_fr:>9}{f_fps:>8}{f_tot:>9}{f_area:>11}{sp*100:>8.0f}%")
+        f_sk = f"{sk:.0f}" if isinstance(sk, (int, float)) else "-"
+        f_dr = f"{dr:.2f}" if isinstance(dr, (int, float)) else "-"
+        print(f"{c:<12}{n:>6}{f_fr:>9}{f_fps:>8}{f_sk:>8}{f_dr:>10}"
+              f"{f_tot:>9}{f_area:>11}{sp*100:>7.0f}%")
 
     areas = [r[5] for r in rows if r[5]]
     if len(areas) >= 2 and min(areas) > 0 and max(areas) / min(areas) > 1.5:
@@ -177,3 +187,10 @@ print("   Windows 11 count a meaningful way toward the Windows 10 one.")
 print()
 print("   A nil result is a result: it rules out the cheapest explanation and points the")
 print("   chase at DWM's composition cadence itself rather than at user-visible effects.")
+print()
+print("   READ 'empty' BEFORE CONCLUDING. It counts frames that arrived with no dirty rects")
+print("   and were dropped. If the surplus presents were cursor-only they would land there")
+print("   and already cost almost nothing - so a HIGH empty count means the frame total")
+print("   overstates the real work and effects are not the story. The controlled run showed")
+print("   dr=1 on the extra frames, i.e. real content repaints, which is what makes the")
+print("   effects hypothesis worth testing at all.")
