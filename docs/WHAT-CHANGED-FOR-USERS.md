@@ -59,8 +59,8 @@ earlier build of this package omitted that, which left profiles on the **root** 
 where a `qvm-volume revert` of root would have destroyed them.
 
 **If you install this on an existing qube, check your private volume size.** All user data
-now lands there, the Qubes default is 2 GiB, and a bare Windows profile already uses about
-550 MB. Extend it before you fill it:
+lands there — as it always has under stock Windows Tools — the Qubes default private volume
+is 2 GiB, and a bare Windows profile already uses about 550 MB. Extend it before you fill it:
 
     qvm-volume extend <vm>:private 40GiB
 

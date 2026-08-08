@@ -366,3 +366,101 @@ jobs:
           name: qwt-improved-iso
           path: iso-out/
           retention-days: 14
+
+  # ---------------------------------------------------------------------------------------
+  # dom0 RPM: drops the ISO at /usr/lib/qubes/qubes-windows-tools.iso, the path Qubes'
+  # provisioning tooling already looks for. qvm-create-windows-qube checks that exact path
+  # and, on Qubes 4.3, tells the user to build Windows Tools themselves and put it there -
+  # so this package is a drop-in for a gap upstream explicitly leaves open.
+  #
+  # noarch and contentless-by-build: the ISO is produced by the `iso` job and passed in as a
+  # source, so this job never rebuilds Windows binaries. It only packages them.
+  rpm:
+    needs: iso
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the ISO artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: qwt-improved-iso
+          path: dl/iso
+
+      - name: Install rpm tooling
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq rpm
+
+      - name: Verify the ISO before packaging it
+        run: |
+          set -euo pipefail
+          iso=dl/iso/qwt-improved-setup.iso
+          [ -f "$iso" ] || { echo "::error::no ISO in the artifact"; ls -R dl/iso; exit 1; }
+          # The ISO ships its own SHA256SUMS; re-check it here rather than trusting the
+          # artifact round-trip. A silently truncated download would otherwise be packaged
+          # into an RPM and shipped.
+          ( cd dl/iso && sha256sum -c SHA256SUMS.txt )
+          # And prove the thing we are shipping actually contains the installer entry point,
+          # because an ISO that mounts but has no install.cmd fails SILENTLY in
+          # qvm-create-windows-qube (its glob matches nothing, no error is raised).
+          sudo mkdir -p /mnt/qwtiso
+          sudo mount -o loop,ro "$iso" /mnt/qwtiso
+          for f in install.cmd Install-QwtImproved.ps1 msi/installer.msi MANIFEST.json; do
+            [ -e "/mnt/qwtiso/$f" ] || { echo "::error::ISO is missing $f"; sudo umount /mnt/qwtiso; exit 1; }
+          done
+          echo "ISO contents verified:"; ls /mnt/qwtiso
+          cp /mnt/qwtiso/MANIFEST.json dl/MANIFEST.json
+          sudo umount /mnt/qwtiso
+
+      - name: Derive the package version from the manifest
+        id: ver
+        run: |
+          set -euo pipefail
+          # RPM versions may not contain '-'; the manifest carries e.g. 4.2.2+agent.<sha>.
+          # Encode the agent commit in the Release field so the RPM is traceable to the exact
+          # build without smuggling an illegal character into Version.
+          agent=$(python3 -c "import json;print(json.load(open('dl/MANIFEST.json'))['source']['agent_commit'][:12])")
+          echo "version=4.3.0" >> "$GITHUB_OUTPUT"
+          echo "release=1.agent$agent" >> "$GITHUB_OUTPUT"
+          echo "agent=$agent" >> "$GITHUB_OUTPUT"
+          echo "QWT-NG 4.3.0-1.agent$agent"
+
+      - name: Build the RPM
+        run: |
+          set -euo pipefail
+          mkdir -p ~/rpmbuild/{SOURCES,SPECS}
+          cp dl/iso/qwt-improved-setup.iso            ~/rpmbuild/SOURCES/
+          cp contrib/auto-qwt/install-qwt.bat         ~/rpmbuild/SOURCES/
+          cp contrib/README-qvm-create-windows-qube.md ~/rpmbuild/SOURCES/
+          cp dl/MANIFEST.json                          ~/rpmbuild/SOURCES/
+          cp packaging/rpm/qubes-windows-tools-ng.spec ~/rpmbuild/SPECS/
+          rpmbuild -bb ~/rpmbuild/SPECS/qubes-windows-tools-ng.spec \
+            --define "_qwtng_version ${{ steps.ver.outputs.version }}" \
+            --define "_qwtng_release ${{ steps.ver.outputs.release }}" \
+            --define "dist %{nil}" \
+            --define "_rpmfilename %%{NAME}-%%{VERSION}-%%{RELEASE}.%%{ARCH}.rpm"
+          mkdir -p rpm-out
+          find ~/rpmbuild/RPMS -name '*.rpm' -exec cp {} rpm-out/ \;
+          ls -l rpm-out
+
+      - name: Verify the RPM lands the ISO where the tooling looks for it
+        run: |
+          set -euo pipefail
+          rpm=$(ls rpm-out/*.rpm | head -1)
+          echo "== payload =="; rpm -qlp "$rpm"
+          # The whole point of this package is one path. Assert it rather than eyeballing it.
+          rpm -qlp "$rpm" | grep -qx '/usr/lib/qubes/qubes-windows-tools.iso' \
+            || { echo "::error::RPM does not install the ISO at the path qvm-create-windows-qube reads"; exit 1; }
+          rpm -qlp "$rpm" | grep -q 'auto-qwt/install-qwt.bat' \
+            || { echo "::error::RPM is missing the qvm-create-windows-qube installer stub"; exit 1; }
+          # Conflicts must be declared, or installing this would silently replace a signed
+          # vendor ISO with a test-signed one.
+          rpm -qp --conflicts "$rpm" | grep -q 'qubes-windows-tools' \
+            || { echo "::error::RPM does not declare Conflicts: qubes-windows-tools"; exit 1; }
+          echo "== metadata =="; rpm -qip "$rpm"
+          sha256sum rpm-out/*.rpm | tee rpm-out/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qwt-ng-dom0-rpm
+          path: rpm-out/
+          retention-days: 14
