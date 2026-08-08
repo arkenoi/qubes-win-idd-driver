@@ -167,6 +167,102 @@ settles the allocation question either way. But treat tiling as the *fallback*, 
 per-window WGC capture at the front of the queue - it is the design that actually matches what
 RDP does, and it is testable without touching the protocol at all.
 
+## "Plug in where RDP does" - where that actually is
+
+Asked as the alternative to building a tiled desktop. Answering it precisely is worth more
+than the tiling design was, because it turns out we are already standing in two of RDP's three
+plug points, and the third is not what it looks like.
+
+**1. Pixels - already there.** On modern Windows the display path for a remote session is an
+*indirect display driver*: the same IddCx framework Track B already builds. Remote display is
+the scenario IddCx was introduced for. If that is right there is no new place to plug in for
+pixels - Track B put us at RDP's plug point already. **To verify rather than assert:** inside
+an active RDP session, enumerate display adapters; a remote session should show an indirect /
+remote display adapter rather than the machine's real GPU. Cheap to check, and it should be
+checked before this paragraph is relied on.
+
+**2. Window metadata - already there.** RemoteApp/RAIL (MS-RDPERP) sends per-window orders -
+create, move, z-order, icon, destroy - over a virtual channel, and the client builds local
+proxy windows from them. That is structurally what our agent already does with its window
+messages over vchan. Same plug point, different wire format.
+
+**3. The correction to the premise.** RemoteApp does not eliminate occlusion. It
+**synchronizes z-order**: the client reports the stacking it is showing, and the server orders
+its session windows to match. Remote windows look non-occluding because a RemoteApp session
+normally contains *only* the remoted apps - there is nothing else in it to cover them - not
+because of any capture trick. The well-known artifact is the proof: interleave a **local**
+window between two remote ones and RemoteApp cannot represent it, because the server holds a
+single z-order.
+
+That correction is not pedantry. It hands us a design much cheaper than tiling.
+
+## Z-order synchronization - the cheap version of the same idea
+
+If dom0 pushed its stacking order to the guest and the agent applied it (`SetWindowPos`), the
+guest's composition would agree with what the user is actually looking at. Then:
+
+- the window the user is interacting with is top-most in **both**, so the screen framebuffer is
+  a valid source for its content;
+- the occlusion guard in `PwScreenUnchanged` - which is precisely the ceiling on the fix now
+  under validation - starts succeeding for the window that matters most;
+- and none of it needs an IDD, a tiled layout, coordinate translation, or a larger desktop, so
+  **the entire allocation-scaling objection does not apply**.
+
+It does not remove occlusion. It makes guest occlusion agree with dom0 occlusion - which is
+what RDP actually does, as opposed to what the tiling sketch imagined it does.
+
+### Does this need new bidirectional messaging? No - checked in source, 2026-08-08
+
+**The transport is already bidirectional.** `agent/gui-agent/vchan-handlers.c:783-810`
+dispatches daemon -> agent messages today: `MSG_KEYPRESS`, `MSG_BUTTON`, `MSG_MOTION`,
+`MSG_CONFIGURE`, `MSG_FOCUS`, `MSG_CLOSE`, `MSG_KEYMAP_NOTIFY`, `MSG_WINDOW_FLAGS`,
+`MSG_DESTROY`, `MSG_WINDOW_DUMP_ACK`. Nothing needs to be built to carry dom0's intent into
+the guest; that channel is load-bearing already, since it is how input arrives.
+
+**There is no stacking message.** The protocol enum
+(`upstream/ro/qubes-gui-common/include/qubes-gui-protocol.h:136-166`) has no `MSG_RESTACK` or
+`MSG_RAISE`. Full z-order synchronization - all N windows, not just one - would be a new
+message, hence Phase 3.
+
+**But partial synchronization already exists and is already acted on.** `MSG_FOCUS` reaches
+`HandleFocus` (`vchan-handlers.c:689`), which calls `SetForegroundWindow(window)` at line 712 -
+and line 713 is a commented-out `BringWindowToTop(window)`. Since dom0 focuses the window it
+raised, the guest is already being told, once per interaction, which window belongs on top.
+
+Three consequences, in decreasing confidence:
+
+1. The window the user is actually working in is *probably already* top-most in the guest,
+   because `SetForegroundWindow` normally raises. So the fast path's hit rate for the window
+   that matters may already be good - which makes this a **measurement**, not an argument:
+   `g_PwSkippedCaptures` against the number of eligible frames answers it directly.
+2. The commented-out `BringWindowToTop` is a hint, not a free win. It was presumably commented
+   out for a reason that is not recorded, and re-enabling it is a behaviour change that needs
+   the same before/after treatment as any other.
+3. What focus does NOT give is the stacking of windows 2..N. That is the part a real restack
+   message would add, and the part worth a protocol proposal only if measurement shows the
+   focused-window case is not already carrying most of the benefit.
+
+`SetWindowPos`-driven restacking can also fight the guest's own focus and activation logic, so
+any move beyond what already happens needs measurement rather than implementation-first.
+
+## Actually running RDP - rejected, and why
+
+The literal reading - guest runs an RDP server, dom0 runs a client - is out of scope. It would
+replace a small vchan message protocol with a large protocol parser in dom0, and throw away the
+zero-copy grant transport that already exists (established fact 1). That is a security-model
+change, which this project does not make.
+
+## Where that leaves the three candidates
+
+| | occlusion handling | desktop size | protocol change |
+|---|---|---|---|
+| tiled desktop | removed by construction | **sum of window areas** | large |
+| per-window WGC capture | content despite occlusion | unchanged | none |
+| z-order sync | guest matches dom0 | unchanged | small, maybe none |
+
+The two that do not enlarge the desktop are the two worth pursuing, and they compose: z-order
+sync raises the fast path's hit rate now, WGC removes the dependency on the screen later.
+
 ## Experiments, in kill-first order
 
 **1. Desktop-size sweep - does cost scale with desktop area at constant workload?**
