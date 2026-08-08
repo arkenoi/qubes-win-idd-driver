@@ -152,6 +152,20 @@
           <Description>qubes-win-idd payload</Description>
           <Order>9</Order>
         </SynchronousCommand>
+        <!-- AUTOLOGON MUST SURVIVE EVERY REBOOT, and <LogonCount> is why it did not.
+             Observed: after a reboot - and again after a clean kill+start - the guest sat at
+             "Windows sign-in" with a password box. LogonCount makes Windows write
+             AutoLogonCount, and while that value is present Windows CONSUMES DefaultPassword,
+             deleting it after use. Autologon is then left with a username and no password and
+             falls back to the sign-in screen. Deleting AutoLogonCount and re-writing
+             DefaultPassword makes autologon unlimited.
+             This is TEST PROVISIONING ONLY: it stores a plaintext password in the registry,
+             which must never be done by the shipped installer. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoLogonCount /f &amp; reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 1 /f &amp; reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultUserName /t REG_SZ /d user /f &amp; reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /t REG_SZ /d qubes /f</CommandLine>
+          <Description>autologon unlimited (test rig only - plaintext password)</Description>
+          <Order>10</Order>
+        </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
