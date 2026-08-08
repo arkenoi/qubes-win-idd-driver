@@ -5659,3 +5659,33 @@ coin flip, not a safeguard.
 
 Fixed by passing `QTEST_VM`, plus a guard that refuses to benchmark any VM other than the two
 under test, so a future mis-wiring aborts loudly instead of depending on which guests are up.
+
+## 2026-08-08 — RETRACTION: "QWT 4.2.2 has no audio" was wrong
+
+I concluded on 2026-08-07 that audio is "absent from QWT 4.2.2 entirely" after scanning the
+MSI for audio-related strings in both ASCII and UTF-16 and finding none. The scan was correct;
+the CONCLUSION did not follow. Absence of an audio component in Windows Tools says nothing
+about whether the guest has audio, because the audio path is not QWT's at all.
+
+Measured on win10-clean (Get-CimInstance Win32_SoundDevice / Win32_PnPEntity):
+
+    SND   High Definition Audio Device    OK  err=0
+          HDAUDIO\FUNC_01&VEN_1AF4&DEV_0022&SUBSYS_1AF40022
+    MEDIA High Definition Audio Controller    err=0
+          PCI\VEN_8086&DEV_2668&SUBSYS_11001AF4
+    MEDIA Speakers (High Definition Audio Device)   err=0
+    MEDIA Line In (High Definition Audio Device)    err=0
+
+VEN_1AF4 is Red Hat/QEMU: this is QEMU's emulated Intel HDA, bound by an inbox Windows driver,
+with working endpoints. `qvm-prefs <vm> audiovm` is set (dom0), and the stubdom QEMU carries
+`-qubes-audio:audiovm_xid=` to route it.
+
+So: audio EXISTS and is emulated. QWT ships no audio component because it does not need one.
+The earlier "post-freeze: build an audio agent" note was premised on a non-existent gap; what
+would actually be on the table is PV audio to replace an emulated path that already works,
+which is a performance/latency question, not a missing-feature one.
+
+Also corrected in the same pass, per the user: the DOUBLE CURSOR is a genuine stock QWT
+defect in all modes, not merely a regression this package introduced. Seeding DisableCursor=0
+made it unconditional here, but stock exhibits it too, so the fix belongs in the user-facing
+list as an improvement over stock rather than only in the self-inflicted-regressions list.
