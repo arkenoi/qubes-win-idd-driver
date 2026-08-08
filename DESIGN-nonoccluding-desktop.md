@@ -121,6 +121,52 @@ is a redesign of the window model and should be judged on its own evidence, star
 prototype that tiles two windows and measures whether screen-fed capture actually beats
 `PrintWindow` on a WARP guest before any of the coordinate work is attempted.
 
+## What I actually think (recorded for the later revisit)
+
+Asked directly, rather than laid out as an option space.
+
+**Tiling has a bad shape.** Its benefit is largest with many windows open - and so is its
+cost, because that is exactly when the summed area diverges most from the screen area. A
+design whose payoff and whose penalty both peak in the same case is one to be suspicious of.
+The tactical `PwScreenUnchanged` fix also pays off most with many windows, but its cost is
+O(window area), not O(desktop area). That asymmetry alone may be decisive.
+
+**My prediction for the sweep**, written down now so it can be wrong in public: steady-state
+CPU stays roughly flat with desktop area, because DWM composition is dirty-region driven and
+most per-frame work tracks damaged area rather than total area. What I expect to scale is
+memory, mode-change/transition cost, and any path that degrades to a full-target pass. So I
+expect **memory and grants to be the hard wall before CPU is** - which, if right, points at
+the multi-monitor variant rather than one giant desktop.
+
+**The reframing I think is actually correct.** RDP does not enlarge the desktop either. It
+does not tile. It gets non-occluded window content because **that content already exists**:
+DWM composites the desktop *from* per-window redirection surfaces, so unoccluded pixels for
+every window are already sitting in the guest, by construction, at no extra allocation. The
+right analogue to "remote windows do not have occlusions" is therefore per-window capture from
+DWM - `Windows.Graphics.Capture` via `IGraphicsCaptureItemInterop::CreateForWindow`, which
+captures a window even while it is covered - and **not** a tiled desktop.
+
+That would deliver the same properties the tiling design was invented for:
+
+- window content independent of occlusion, so the guard in `PwScreenUnchanged` becomes moot;
+- no `PrintWindow` in the hot path;
+- damage attributable per window;
+
+while costing **none** of the desktop enlargement: no summed-area framebuffer, no grant
+explosion, no 16384 texture bound, no coordinate translation, no slot packing, no input
+re-routing. CLAUDE.md already anticipates this ("Per-window WGC capture, Phase 2/#6, kills this
+class structurally") - the connection to the user's RDP question is what is new here.
+
+Its own risks, which are real and unmeasured: WGC wants a D3D device and these guests run
+WARP, so per-window capture may be *slower* than the screen read it replaces; there is a
+capture-border indicator on some Windows builds (suppressible via `IsBorderRequired` only on
+newer ones); and it needs Windows 10 1803+/1903+ depending on the API surface used.
+
+**So my recommendation for the revisit:** run the sweep as agreed, because it is cheap and it
+settles the allocation question either way. But treat tiling as the *fallback*, and put
+per-window WGC capture at the front of the queue - it is the design that actually matches what
+RDP does, and it is testable without touching the protocol at all.
+
 ## Experiments, in kill-first order
 
 **1. Desktop-size sweep - does cost scale with desktop area at constant workload?**
