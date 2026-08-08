@@ -211,6 +211,47 @@ guest's composition would agree with what the user is actually looking at. Then:
 It does not remove occlusion. It makes guest occlusion agree with dom0 occlusion - which is
 what RDP actually does, as opposed to what the tiling sketch imagined it does.
 
+### The dom0 side: transport exists, mechanics do not - checked in gui-daemon, 2026-08-08
+
+The transport being bidirectional does not mean dom0 has anything to send. It does not. The
+mechanics are absent in three separate senses:
+
+1. **No message.** The daemon's complete outbound set, enumerated from every `hdr.type =`
+   assignment in `xside.c`: `MSG_CLIPBOARD_REQ`, `MSG_CLIPBOARD_DATA`, `MSG_KEYPRESS`,
+   `MSG_BUTTON`, `MSG_CLOSE`, `MSG_CONFIGURE`, `MSG_KEYMAP_NOTIFY`, `MSG_CROSSING`,
+   `MSG_MOTION`, `MSG_FOCUS`, `MSG_MAP`, `MSG_WINDOW_FLAGS`, `MSG_DESTROY`,
+   `MSG_WINDOW_DUMP_ACK`. None carries stacking.
+2. **No tracking.** `ConfigureNotify` does arrive - `StructureNotifyMask` is selected on each
+   window (`xside.c:394`) - and X delivers the stacking sibling in `xconfigure.above`. But
+   `.above` is **never read anywhere in `xside.c`**: `process_xevent_configure` uses only
+   x/y/width/height. The daemon maintains no z-order model at all.
+3. **Its one stacking touch is local and write-only.** `restack_windows()` (`xside.c:3449`)
+   calls `XQueryTree` on demand purely to push a newly-mapped override-redirect window *below*
+   the keep-on-top windows, then `XFree`s the list. Nothing stored, nothing sent.
+
+**But the raw material already arrives and is thrown away**, which is the useful part:
+
+- `xconfigure.above` comes in on every stacking change and is dropped on the floor;
+- `vm_window->local_frame_winid` is already tracked (`process_xevent_reparent`,
+  `xside.c:1725-1727`) - which matters, because under a **reparenting** window manager the
+  daemon's own window is an only-child of the WM frame, so its `above` is `None` and useless,
+  and the meaningful ordering is among *frames*;
+- the `XQueryTree(root)` pattern already exists in `restack_windows`.
+
+So the dom0 work is: read a field already delivered, order it with a frame id already tracked,
+and add a message. One real gap - `xside.c:716` selects `StructureNotifyMask` on the **root**
+window, which reports events about root *itself*, not its children, so the daemon is **not**
+currently notified when frames restack. That needs `SubstructureNotifyMask` on root, or
+polling `XQueryTree`.
+
+**Security constraint on that addition, to settle before proposing it.**
+`SubstructureNotifyMask` on root would hand a per-VM gui-daemon configure events for *every*
+top-level window in dom0, including other qubes' windows. That stays inside dom0's trust
+boundary, so it is not a leak by itself - but the daemon must then forward strictly the
+relative order of **its own** VM's windows and nothing else. An implementation that shipped the
+raw sibling list would tell one guest about the existence and stacking of another guest's
+windows: a cross-qube information leak, and an immediate rejection upstream.
+
 ### Does this need new bidirectional messaging? No - checked in source, 2026-08-08
 
 **The transport is already bidirectional.** `agent/gui-agent/vchan-handlers.c:783-810`
