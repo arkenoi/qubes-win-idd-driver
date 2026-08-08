@@ -80,17 +80,35 @@ double cursor, and user profiles left on the root volume — are fixed. Stock QW
 any of them, so they are not improvements over stock and are not listed here as such; see
 "Three regressions this package had introduced against stock" below.
 
-### The IddCx display driver works on both platforms
+### A real display driver, which stock does not have at all
 
-With `/idd`, an IddCx monitor becomes the guest's sole active output and the emulated VGA is
-disabled. This is what makes arbitrary guest resolutions reachable at all — the Basic Display
-Adapter offers a fixed mode list, so a size like 2566x1022 is simply never available.
+Stock Windows Tools ships **no display driver**. The guest runs on the emulated Basic Display
+Adapter, whose mode list is fixed — so an arbitrary size like 2566x1022 is simply never
+offered, and matching the guest resolution to a dom0 window is unreachable by construction.
+
+With `/idd`, an IddCx monitor becomes the guest's **sole active output** and the emulated VGA
+is disabled. This is new capability, not a repair of something stock got wrong.
+
+Two things are worth knowing about how it behaves, because they are not obvious:
+
+- An IddCx monitor arrives **connected but INACTIVE**. It is not attached to the desktop
+  until something performs a display-topology apply naming its path. The agent does this at
+  startup, in the interactive session — the installer cannot, because its boot-resume task
+  runs as SYSTEM in session 0 where the apply returns `ERROR_ACCESS_DENIED`. (Windows 11
+  happens to perform an apply on its own; Windows 10 does not. The driver itself has no
+  OS-build branch. An earlier build of this package shipped without that apply, so `/idd`
+  worked on 11 and silently did nothing on 10.)
+- Every other display is **detached**, not merely deprioritised. An additional active display
+  enlarges the desktop bounding box the agent maps as the screen, which lets Windows place
+  windows in a region dom0 never sees and breaks seamless coordinates.
 
 ---
 
-## What was actually wrong
+## Upstream defect: PV networking could never bind
 
-### PV networking could never bind
+This is the one genuine defect in stock Windows Tools that this build fixes. Everything else
+below is either a capability stock does not have at all, or a regression this package had
+introduced against stock and has since corrected.
 
 QWT 4.2.2 ships a Xen PV network stack that **cannot bind**. Its `xenvif` publishes VIF
 interface revision `0x09000004` at most, while its own `xennet` requires `0x09000005`. No
@@ -108,22 +126,7 @@ after:   Xen PV Network Device #0              (emulated NIC UNPLUGGED)
          10.137.0.70 -> gateway reachable
 ```
 
-### The IddCx monitor was never attached to the desktop
-
-An IddCx monitor arrives **connected but INACTIVE**. It is not attached to the desktop until
-something performs a display-topology apply naming its path. Nothing in the package ever did.
-On Windows 10 the driver bound, the VGA was disabled, and the desktop stayed on the emulated
-VGA anyway — which keeps driving video at full resolution even while its devnode reports
-`CM_PROB_DISABLED`. Windows 11 performs the apply itself, which is the entire Win10/Win11
-difference; the driver has no OS-build branch at all.
-
-The agent now performs the apply at startup, in the interactive session (the installer's
-boot-resume task runs as SYSTEM in session 0, where the apply returns `ERROR_ACCESS_DENIED`).
-Every other display is *detached* rather than deprioritised, because an extra active display
-enlarges the desktop bounding box the agent maps as the screen and breaks seamless
-coordinates.
-
-### Three regressions this package had introduced against stock
+## Three regressions this package had introduced against stock
 
 Found by auditing every default the packaging commit changed:
 
