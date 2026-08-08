@@ -65,6 +65,50 @@ None of these are fatal, but together they are a protocol-level change, not a pa
   magnifier tools, and full-screen exclusive apps see a desktop that does not look like a
   screen.
 
+## The sharpest objection: allocation scales with desktop size
+
+Raised by the user, and it is the strongest one so far because it attacks the *mechanism* (a
+large desktop) rather than the goal (no occlusion). It deserves to be stated at full strength
+rather than filed under "framebuffer size" above.
+
+The asymmetry that makes it bite: on a normal desktop, overlapping windows **share** screen
+area, so the composited surface is bounded by the screen no matter how many windows exist. A
+tiled desktop's area is the **sum** of window areas. Tiling therefore systematically inflates
+exactly the quantity that several allocations are proportional to - and it inflates it most in
+the case the design is meant to help, many windows open at once.
+
+What is proportional to desktop area on a guest with no GPU:
+
+- the IddCx swapchain surface, times however many buffers are in flight;
+- DWM's composition target - and DWM composites through WARP here, on the CPU;
+- the Desktop Duplication desktop image and its staging surface;
+- the agent's granted framebuffer, and with it the **grant reference count**, which is linear
+  in pages: 3440x1440x4 B is ~18.9 MiB ~ 4.8k pages today, while a 16384x16384 desktop (the
+  D3D11 maximum texture dimension, and therefore a hard cap on any single-desktop scheme)
+  would be 1 GiB ~ 262k pages. Whether that collides with the domain's grant table limit is a
+  dom0-side question that must be **measured, not assumed** - I have not verified it.
+
+And a second-order effect that does not show up in any allocation count: a composition pass
+streams the whole target through a CPU cache that does not grow with it. Cost per frame can
+degrade non-linearly once the target stops fitting, which is precisely the "weird performance
+impact" shape.
+
+So the design as sketched trades redundant per-window captures for a permanently larger
+software composition surface. On a guest with no GPU that trade could be net-negative, and
+nothing measured so far says which way it goes.
+
+**This reorders the experiments.** The desktop-size sweep below is now first, because it is a
+pure measurement on unchanged, already-shipped code and it can kill the design before any of
+the hard work starts.
+
+**If the sweep says cost scales with area**, the single-giant-desktop form is dead, but the
+idea is not. The fallback is **multiple IddCx monitors** - the driver can expose several, each
+with its own swapchain sized to its own mode, so allocation tracks actual need instead of a
+worst-case bounding box, and the 16384 texture bound stops applying to the aggregate. What it
+buys in allocation it pays for in monitor hotplug churn on every window create/destroy, and
+dom0's screen model would have to cope with many monitors. Worth designing only if the sweep
+justifies it.
+
 ## Relationship to the fix landing now
 
 The `PwScreenUnchanged` change (agent `0e8df01`) is the tactical version of the same insight:
@@ -77,9 +121,29 @@ is a redesign of the window model and should be judged on its own evidence, star
 prototype that tiles two windows and measures whether screen-fed capture actually beats
 `PrintWindow` on a WARP guest before any of the coordinate work is attempted.
 
-## First experiment, if this is pursued
+## Experiments, in kill-first order
 
-Cheapest question that could kill it: **is a strided read from the granted framebuffer
-actually much cheaper than `PrintWindow` for the same window?** Measure both on the same
-window, same size, same guest. If the gap is small the whole rationale weakens, and that costs
-an afternoon rather than a protocol change.
+**1. Desktop-size sweep - does cost scale with desktop area at constant workload?**
+Requires no new code at all: the IddCx driver already reports arbitrary modes, and the typing
+and drag harnesses plus the QGAPERF instrumentation already exist. Hold the window set,
+window sizes and input script identical; sweep the desktop through 1920x1080, 3440x1440,
+5760x2160, 7680x4320. Read agent CPU, present rate and per-frame `tot`.
+
+  - flat vs. area -> the allocation objection is bounded, continue to experiment 2;
+  - scales with area -> single-giant-desktop tiling is dead; re-scope to multiple IddCx
+    monitors, or drop the proposal and keep the tactical fix.
+
+Note the interaction with the Windows 11 finding: Win11 already presents 1.88x more than
+Win10 for identical input. If present rate *also* scales with desktop area, the two multiply,
+and Win11 on a tiled desktop is the worst cell in the matrix. The sweep must therefore run on
+both guests, not just one.
+
+**2. Is a strided read from the granted framebuffer actually much cheaper than `PrintWindow`
+for the same window?** Same window, same size, same guest. If the gap is small the whole
+rationale weakens - and that costs an afternoon rather than a protocol change.
+
+**3. Grant accounting at a large desktop.** Confirm what the domain's grant table actually
+tolerates before assuming a large framebuffer can be granted at all. dom0-side, so it needs
+the user.
+
+Only after all three: coordinate translation, slot packing, input routing.
