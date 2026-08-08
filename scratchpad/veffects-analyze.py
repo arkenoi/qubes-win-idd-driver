@@ -34,14 +34,21 @@ def phase_bounds(path):
     if not os.path.isfile(path):
         return out
     for line in open(path, encoding="utf-8", errors="replace"):
+        # Real format is "### PHASE-START <name> <ts>" - note the "###" prefix and the extra
+        # padding in "PHASE-END  ". Four separate analyzers here assumed field 1 was the name
+        # and silently found no bounds, reporting "no usable data" for runs whose data was
+        # fine. Locate the keyword instead of indexing a guessed position.
         f = line.split()
-        if len(f) < 3:
+        if "PHASE-START" in f:
+            i, which = f.index("PHASE-START"), 0
+        elif "PHASE-END" in f:
+            i, which = f.index("PHASE-END"), 1
+        else:
             continue
-        kind, name, ts = f[0], f[1], f[-1]
-        if kind == "PHASE-START":
-            out.setdefault(name, [None, None])[0] = ts
-        elif kind == "PHASE-END":
-            out.setdefault(name, [None, None])[1] = ts
+        if i + 1 >= len(f):
+            continue
+        name, ts = f[i + 1], f[-1]
+        out.setdefault(name, [None, None])[which] = ts
     return {k: tuple(v) for k, v in out.items() if v[0] and v[1]}
 
 
