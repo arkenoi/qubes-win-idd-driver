@@ -53,6 +53,46 @@ throttled by the move-settle logic) stays at parity.
 **This is a hypothesis with a decisive test**, not a conclusion: if it is right, the per-window
 fast path's hit rate is low and raising it moves typing/scroll toward stock.
 
+## RESULTS (2026-08-08 evening) — the hypothesis above is half wrong
+
+The working hypothesis said the surplus was workload-driven: Windows 11 repainting more *per
+unit of input*. Measurement says otherwise, and the correction matters more than the original
+guess.
+
+**D4 — the surplus is AMBIENT.** Windows 11 presents **18.75 fps with no input at all**
+(30 s idle, 3 reps: 563/603/460 frames), carrying ~350k real dirty pixels per frame with
+`empty=0` — so these are genuine repaints, not cursor-only frames the agent already drops.
+
+That is **77% of Windows 11's own 24.4 fps workload rate**, and it exceeds Windows 10's entire
+workload rate of 12.9 fps. So most of what the 488-vs-259 comparison attributed to "workload"
+was background repaint that happens whether or not anyone is using the machine. The
+within-Win11 comparison is the load-bearing one and needs no Win10 side.
+
+It also explains the idle CPU row that looked anomalous: ours 0.343 vs stock 0.000. Stock's
+single composited screen capture shrugs at ambient repaint; our per-window `PrintWindow` pays
+for every one of them, at idle, forever.
+
+**D5 — desktop effects are NOT the cause.** Frame counts moved +2% to +9% with effects off,
+inside 9–25% run-to-run noise and in the *wrong direction*. Transparency/Mica/animations are
+ruled out. `disable-visual-effects.ps1` stays in the tree but is not the lever.
+
+**D2 — the 0% hit rate was our own defect, not a falsification.** `PwScreenUnchanged` required
+`g_ZOrderValid`, and `CollectZOrder` (`main.c:2754`) deliberately skips its `EnumWindows` pass
+unless an override-redirect popup is on screen. So the check refused 100% of the time: 0 skips
+in 5557 decisions. Replaced with an order-free test (foreground window + no other visible
+window overlaps); re-measuring now. **The coalescing premise remains untested**, not disproven.
+
+### What this does to the mechanism
+
+The two terms are now clearly separable, and they multiply:
+
+    our CPU  ~  (presents Windows generates)  x  (our per-present, per-window cost)
+                 ~19/s ambient + workload         PrintWindow, 15-18 ms on WARP
+
+Stock is cheap in the second term, so the first term barely hurts it. We are expensive in the
+second term, so the first term dominates us. **Both are worth attacking, and neither
+substitutes for the other.**
+
 ## Diagnostics in flight, and what each one decides
 
 | # | measurement | decides |
@@ -71,6 +111,20 @@ end and the work is all in the capture path.
 
 Ordered so the cheapest decisive things happen first. Each is gated on the diagnostic that
 justifies it; nothing here is implemented before its gate says so.
+
+**RE-RANKED 2026-08-08 after D4/D5.** Shell quieting moves from 3 to 1: it attacks the term
+now known to dominate (~77% of presents happen with no input), and effects — the other
+candidate for that term — are ruled out. The former 1 and 2 are capture-path work and stay,
+because they attack the *other* factor in the product above.
+
+0. **Identify and quiet whatever repaints 19x/sec on an idle desktop.**
+   Step one is `locate-idle-repaint.sh`, which diffs consecutive whole-desktop fullshots during
+   idle and attributes the changed bounding box against enumerated window rects — no agent
+   change, no build, and it names the surface instead of testing suspects at ~45 min per guess.
+   Step two is machine-wide policy on the `disable-hw-accel.ps1` delivery path (candidates:
+   `AllowNewsAndInterests`, `EnableDynamicContentInWSB`, `TurnOffWindowsCopilot`), which
+   survives later software installs and applies to accounts created afterwards.
+   Expected value: largest of anything here, and it is registry-only.
 
 1. **Raise the coalescing hit rate** (gate: D2 shows it firing but low).
    The screen-hash compare already skips byte-identical recaptures. If the hit rate is capped
