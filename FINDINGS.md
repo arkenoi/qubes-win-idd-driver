@@ -5689,3 +5689,84 @@ Also corrected in the same pass, per the user: the DOUBLE CURSOR is a genuine st
 defect in all modes, not merely a regression this package introduced. Seeding DisableCursor=0
 made it unconditional here, but stock exhibits it too, so the fix belongs in the user-facing
 list as an improvement over stock rather than only in the self-inflicted-regressions list.
+
+---
+
+## 2026-08-08 — the coalescing fix was unmeasurable; RDP's plug points; z-order
+
+### The counter that could never pass its own acceptance criterion
+
+`g_PwSkippedCaptures` — added with the screen-content coalescing fix — was incremented in the
+frame loop (`main.c:3344`) and **read by nothing**, under a comment claiming it was "exposed so
+the effect is measurable". It was not. QGAPERF's existing `skip` field is a *different*,
+pre-existing counter (`g_SkippedFrames`: capture-thread frames that arrived with no dirty
+rects), so nothing in the record ever reflected the fix.
+
+Worse, `validate-coalesce.sh` listed "1. `g_PwSkippedCaptures` > 0 — the new path actually
+fired" in its header as a PASS requirement and **never implemented it as a check**. The run
+could only ever compare CPU. This is the exact failure mode CLAUDE.md warns about: a check that
+cannot fail is worthless, and one that was never written is worse, because the header made it
+look covered.
+
+Fixed with `PerfNotePwDecision(BOOL skipped)` recording BOTH outcomes as `pwskip`/`pwcap`
+(`PERF_RECORD_VERSION` 2 → 3). Both halves are required: the claim is a RATE — captures avoided
+over captures considered — and a skip-only counter cannot express one, since it only grows with
+how long the workload ran.
+
+### Where RDP actually plugs in (design question from the user)
+
+The premise "remote windows do not have occlusions" needs one correction, and the correction is
+the useful part: **RemoteApp does not eliminate occlusion, it synchronizes z-order.** The client
+reports the stacking it shows; the server orders its session windows to match. Remote windows
+look non-occluding because a RemoteApp session normally contains *only* the remoted apps. The
+known artifact proves it — interleave a LOCAL window between two remote ones and RemoteApp
+cannot represent it, because the server holds a single z-order.
+
+We already stand in two of RDP's three plug points: pixels (a remote session's display path is
+an indirect display driver — the IddCx framework Track B builds; TO VERIFY by enumerating
+adapters inside a live RDP session) and window metadata (RAIL sends per-window orders over a
+virtual channel; our agent does the same over vchan).
+
+### Z-order: the transport exists, the information does not
+
+Checked in source rather than assumed:
+
+- **Bidirectional messaging already exists.** `vchan-handlers.c:783-810` dispatches daemon →
+  agent `MSG_KEYPRESS`, `MSG_BUTTON`, `MSG_MOTION`, `MSG_CONFIGURE`, `MSG_FOCUS`, `MSG_CLOSE`,
+  `MSG_KEYMAP_NOTIFY`, `MSG_WINDOW_FLAGS`, `MSG_DESTROY`, `MSG_WINDOW_DUMP_ACK`.
+- **No stacking message exists** in the protocol enum (`qubes-gui-protocol.h:136-166`).
+- **dom0 manages stacking only among its own X windows**: `restack_windows()`
+  (`xside.c:3449`) does `XQueryTree` + `XRestackWindows` locally, for override-redirect windows
+  on map, and sends nothing to the guest. The guest never reports its z-order either. The two
+  orders are independent and coincide only because both follow the user's clicks.
+- **The one exception is `MSG_FOCUS`**, handled at `vchan-handlers.c:689` with
+  `SetForegroundWindow(window)` — and a commented-out `BringWindowToTop(window)` on the next
+  line.
+
+So full N-window sync is a protocol addition (Phase 3), but partial sync already exists. Since
+`PwScreenUnchanged` refuses the fast path for any covered window, occlusion IS the fix's
+ceiling — making this measurable rather than arguable. Put the raise behind registry DWORD
+`FocusRaise` (default 0 = historic) so both conditions measure on ONE binary, and logged
+`QGAFOCUSRAISE on|off` so every captured log states its own condition. A nil result is expected
+and is a result: `SetForegroundWindow` usually raises already.
+
+Design written up in `DESIGN-nonoccluding-desktop.md`, including the user's strongest objection
+— allocation that scales with desktop size — which reordered the experiment list so the
+desktop-size sweep is kill-first. Of the three candidates, the two that do NOT enlarge the
+desktop (per-window WGC capture, z-order sync) are the ones worth pursuing.
+
+### Harness defects found and fixed the same day
+
+1. `validate-coalesce.sh` asserted the agent hash ~4 minutes after first qrexec contact —
+   racing the firstboot QWT install and its reboots. Logged `up after 2006s`, then an empty
+   hash and a vchan timeout, and reported it as "running agent != fixed". The build was fine.
+   Replaced with a deadline poll that tolerates qrexec dropouts (the expected signature of the
+   reboot), without weakening the gate.
+2. CI failed with `upload-pack: not our ref` — the `agent/` submodule commit was never pushed.
+   Not a compile error, which the first read of the log had assumed.
+3. `win11-fresh` then wedged: Running, qrexec dead ~30 min, `qtest shot` returning an EMPTY tar
+   (no mapped windows, so no gui-agent). Recovered by kill + restart. Judge output, not logs.
+4. A binary-content probe reported `pwskip`/`pwcap`/`QGAFOCUSRAISE` ABSENT from a green build.
+   False alarm: the literals are UTF-16 in the PE and `strings` was reading ASCII. Retained the
+   check in `run-fix-validation.sh` with `strings -e l`, because a green build whose binary
+   lacked the counters would yield an empty hit rate that reads like "the path never fired".
