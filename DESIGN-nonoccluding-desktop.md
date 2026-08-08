@@ -1,7 +1,13 @@
 # Design note: a never-occluding guest desktop
 
-**Status: proposal, not started.** Per CLAUDE.md Phase 3 this touches the GUI protocol and
-window model, so it needs review before any code.
+**Status: PARKED (user, 2026-08-08).** Anything here that touches the vchan protocol is on
+hold; the performance chase takes priority. Kept as a research record to revisit later.
+
+What is NOT parked, because neither touches the protocol: the `FocusRaise` switch (it only
+acts on an existing `MSG_FOCUS`, adding no message and changing no wire format) and the
+per-window fast-path hit rate it is used to measure. Both are performance instrumentation.
+
+Per CLAUDE.md Phase 3 the protocol parts would need review before any code in any case.
 
 ## The idea
 
