@@ -31,6 +31,9 @@ on:
       - '.github/workflows/pv-xenvif.yml'
 
 env:
+  # /Brepro: content-hash PE TimeDateStamp so the same commit yields the same binary.
+  # Without it gui-agent.exe differed across runs at one commit (CBBD0206.. vs BDA4615A..).
+  LINK: /Brepro
   # UNPINNED (user, 2026-08-07: "unpin and upgrade xenvif"). Track master so we always get
   # the newest interface revisions; the resolved SHA is echoed and written into
   # PROVENANCE.txt so a given artifact is still traceable to an exact commit.

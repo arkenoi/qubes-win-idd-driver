@@ -40,6 +40,22 @@ concurrency:
   group: release-package-${{ github.ref }}
   cancel-in-progress: true
 
+# REPRODUCIBLE BUILDS: /Brepro makes link.exe write a CONTENT HASH into the PE header's
+# TimeDateStamp instead of the wall-clock time of the build. Without it the same source
+# commit produces a different binary on every run - measured on 2026-08-08, agent commit
+# 03b1674c731f built gui-agent.exe as CBBD02069A01E047 once and BDA4615A891BFF3C later.
+# That is not cosmetic: it means "same commit" does not imply "same artifact", so a release
+# cannot be checked against the build that was actually tested, and a swapped binary would
+# be indistinguishable from a rebuild.
+# link.exe reads the LINK environment variable and prepends its contents to the command
+# line, so setting it here covers every MSBuild/WDK invocation in this workflow without
+# editing individual .vcxproj files.
+# NOTE: this fixes the dominant cause, not every source of nondeterminism (absolute paths,
+# PDB signatures and __DATE__/__TIME__ in sources can still vary). Treat reproducibility as
+# verified only once two independent runs of the same commit are compared and match.
+env:
+  LINK: /Brepro
+
 jobs:
   # ------------------------------------------------------------------ the MSI (reused)
   # qwt-full.yml builds installer.msi from the pinned upstream WiX sources with our agent
