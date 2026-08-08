@@ -36,7 +36,22 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $binPath = 'C:\Program Files\Qubes Tools\bin\gui-agent.exe'
-$logDir  = 'C:\Program Files\Qubes Tools\log'
+# Read the CONFIGURED LogDir, do not assume one. LogDir moved to Q:\Qubes Logs when
+# MoveUsers landed (2026-08-07), and this hardcoded path then found no agent log at all, so
+# qgaperf_recent came back 0 and benchmark.sh aborted EVERY ours-side rep with
+# "instrumented build not running" - on a guest whose instrumentation was working perfectly.
+# Three reps were thrown away before the cause was found.
+$logDir = $null
+try {
+    $cfg = (Get-ItemProperty 'HKLM:\Software\Invisible Things Lab\Qubes Tools' -Name 'LogDir' -ErrorAction Stop).LogDir
+    if ($cfg -and (Test-Path $cfg)) { $logDir = $cfg }
+} catch { }
+if (-not $logDir) {
+    foreach ($cand in @('Q:\Qubes Logs', 'C:\Program Files\Qubes Tools\log')) {
+        if (Test-Path $cand) { $logDir = $cand; break }
+    }
+}
+if (-not $logDir) { $logDir = 'C:\Program Files\Qubes Tools\log' }
 
 function Stamp { (Get-Date).ToString('yyyyMMdd.HHmmss.fff') }
 function AgentProc { Get-Process gui-agent -ErrorAction SilentlyContinue | Select-Object -First 1 }
@@ -73,6 +88,7 @@ if ($Mode -eq 'info') {
     $log = Get-ChildItem $logDir -Filter 'gui-agent-*.log' -ErrorAction SilentlyContinue |
            Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($log) {
+        Write-Output ("INFO logdir=" + $logDir)
         Write-Output ("INFO log=" + $log.Name)
         Write-Output ("INFO log_bytes=" + $log.Length)
         # The build discriminator. A stock 4.2.2 agent emits NO QGAPERF at all; ours emits
