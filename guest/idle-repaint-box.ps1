@@ -16,8 +16,13 @@
 # parsed rather than rendered.
 [CmdletBinding()]
 param(
-    [int]$Samples = 6,
-    [int]$GapMs = 1500,
+    [int]$Samples = 40,
+    # UNIFORM SAMPLING ALIASES. At a fixed 1500 ms this probe reported "zero changed cells"
+    # on a desktop that had a BLINKING Windows Update notification on it: every sample landed
+    # at the same phase of the blink, so the change was invisible. A periodic signal needs a
+    # sampling interval that is short relative to its period AND jittered so it cannot lock on.
+    [int]$GapMs = 250,
+    [int]$JitterMs = 150,
     # Coarse grid: comparing every pixel of a 3440x1440 desktop in PowerShell would itself load
     # the guest enough to change what we are measuring. A 16 px cell is far finer than any
     # surface we are trying to tell apart (taskbar strip vs widget flyout vs window).
@@ -145,6 +150,7 @@ for ($s = 1; $s -le $Samples; $s++) {
         }
     }
     $prev = $cur
-    Start-Sleep -Milliseconds $GapMs
+    # jittered so a periodic repaint cannot alias to "nothing changed"
+    Start-Sleep -Milliseconds ($GapMs + (Get-Random -Minimum 0 -Maximum ([Math]::Max(1,$JitterMs))))
 }
-Write-Output "=== RESULT === samples=$Samples cell=$Cell"
+Write-Output ("=== RESULT === samples={0} cell={1} gap={2}+jitter{3}ms" -f $Samples, $Cell, $GapMs, $JitterMs)
