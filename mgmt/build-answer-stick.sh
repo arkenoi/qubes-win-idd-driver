@@ -100,10 +100,10 @@ if [ -n "${RELEASE_SETUP:-}" ]; then
 @echo off
 rem Found by the FirstLogonCommands drive-letter scan: <drive>:\payload\setup.cmd
 echo === answer-stick payload === >> C:\qubes-win-idd-setup.log
-call "%~dp0release\install.cmd" /auto ${INSTALL_FLAGS:-/idd} >> C:\qubes-win-idd-setup.log 2>&1
+call "%~dp0release\install.cmd" /auto ${INSTALL_FLAGS-/idd} >> C:\qubes-win-idd-setup.log 2>&1
 echo install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
 EOF
-    echo "payload: release package staged, install flags ${INSTALL_FLAGS:-/idd}"
+    echo "payload: release package staged, install flags ${INSTALL_FLAGS-/idd}"
 fi
 # STOCK_SETUP: stage a full package directory and install it with OUR OWN installer, the
 # same way the ours-side is installed. This replaced a hand-rolled `msiexec /qn` control
