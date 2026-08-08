@@ -105,7 +105,7 @@ sleep 30
 log "pushing harness, collector and modeprobe"
 qq push instrumentation/drag-harness.ps1 >/dev/null 2>&1
 qq push instrumentation/collect-perf.ps1 >/dev/null 2>&1
-MP=$(ls -1 artifacts*/modeprobe.exe artifacts/*/modeprobe.exe 2>/dev/null | head -1)
+MP=$(find artifacts artifacts-t2 artifacts-rel artifacts-all3 -name modeprobe.exe -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
 if [ -n "$MP" ]; then qq push "$MP" >/dev/null 2>&1; log "modeprobe pushed from $MP"
 else log "NOTE: no local modeprobe.exe - relying on the one already installed in the guest"; fi
 
@@ -122,10 +122,27 @@ measure(){  # measure <mode> <rep>
     local d="$OUT/$tag"; mkdir -p "$d"
     echo "{\"mode\":\"$mode\",\"rep\":$rep,\"pixels\":$px,\"valid\":false}" > "$d/point.json"
 
-    # apply + READ BACK. modeprobe exits non-zero if readback != request.
+    # apply + READ BACK. modeprobe emits JSON carrying "readback" (what Windows actually made
+    # current, never the request) and "match". The gate is that field, parsed as data - not a
+    # grep for a hopeful substring, and not the qrexec exit status, which does not survive the
+    # transport reliably.
     local ap; ap=$(qq run "$INC\\modeprobe.exe --apply $mode" 2>&1 | clean)
     echo "$ap" > "$d/apply.txt"
-    if ! echo "$ap" | grep -qiE "current.*${mode%x*}[^0-9].*${mode#*x}|APPLIED|OK"; then
+    if ! python3 - "$d/apply.txt" "${mode%x*}" "${mode#*x}" <<'PY'
+import json, re, sys
+txt = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+w, h = int(sys.argv[2]), int(sys.argv[3])
+for m in re.finditer(r'\{.*\}', txt, re.S):
+    try:
+        j = json.loads(m.group(0))
+    except Exception:
+        continue
+    rb = j.get("readback") or {}
+    if j.get("match") is True and rb.get("w") == w and rb.get("h") == h:
+        sys.exit(0)
+sys.exit(1)
+PY
+    then
         log "  $tag: mode did NOT apply - recorded as a failed point"
         echo "{\"mode\":\"$mode\",\"rep\":$rep,\"pixels\":$px,\"valid\":false,\"na\":\"mode did not apply\"}" > "$d/point.json"
         return
