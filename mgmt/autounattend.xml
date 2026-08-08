@@ -121,13 +121,36 @@
           <Description>no screensaver</Description>
           <Order>5</Order>
         </SynchronousCommand>
+        <!-- A Windows qube must not lock its own session. In Qubes the isolation boundary is
+             the VM, enforced by dom0; a guest lock screen adds no isolation and invites typing
+             a password INTO an untrusted VM. Linux qubes have no lock screen for this reason.
+             It also breaks things concretely: a locked session makes qrexec unusable, unmaps
+             the guest's windows, and composites the lock screen - whose clock and Spotlight
+             image repaint on their own and silently corrupt capture measurements.
+             NoLockScreen (Order 3) only hides the lock-screen UI; DisableLockWorkstation is
+             what actually prevents locking. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v DisableLockWorkstation /t REG_DWORD /d 1 /f &amp; reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop" /v ScreenSaveActive /t REG_SZ /d 0 /f &amp; reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop" /v ScreenSaverIsSecure /t REG_SZ /d 0 /f</CommandLine>
+          <Description>never lock the workstation (Qubes model: dom0 locks, guests do not)</Description>
+          <Order>6</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c powercfg /setacvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK 0 &amp; powercfg /setdcvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK 0 &amp; powercfg /setactive SCHEME_CURRENT &amp; reg add "HKCU\Control Panel\Desktop" /v ScreenSaverIsSecure /t REG_SZ /d 0 /f &amp; reg add "HKCU\Control Panel\Desktop" /v ScreenSaveTimeOut /t REG_SZ /d 0 /f</CommandLine>
+          <Description>no password on wake, no screensaver timeout</Description>
+          <Order>7</Order>
+        </SynchronousCommand>
         <!-- The CD is gone by first logon (guest reboot destroys the Qubes domain and
              the cdrom assignment), so prefer C:\payload staged by $OEM$; scan other
              letters only as a fallback. -->
         <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c for %%d in (C D E F G H I J K L M N O P Q R S T U V) do @if exist %%d:\payload\disable-hw-accel.ps1 powershell -NoProfile -ExecutionPolicy Bypass -File %%d:\payload\disable-hw-accel.ps1</CommandLine>
+          <Description>disable GPU/hardware acceleration for known software (no GPU in this guest)</Description>
+          <Order>8</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
           <CommandLine>cmd /c if exist C:\payload\setup.cmd (call C:\payload\setup.cmd) else (for %d in (D E F G H I J K L M N O P Q R S T U V) do @if exist %d:\payload\setup.cmd call %d:\payload\setup.cmd)</CommandLine>
           <Description>qubes-win-idd payload</Description>
-          <Order>6</Order>
+          <Order>9</Order>
         </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>
