@@ -35,6 +35,19 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
+
+# gui-agent runs as SYSTEM. Queried from an unelevated qrexec session,
+# [Diagnostics.Process].TotalProcessorTime silently returns 0 - it does not throw - so every
+# CPU figure in this benchmark read 0.000 on BOTH sides and the whole comparison was empty.
+# Win32_Process exposes KernelModeTime/UserModeTime (100-ns units) and IS readable without
+# elevation: measured on the control guest, 422 ms where TotalProcessorTime said 0.
+function Get-AgentCpuMs {
+    $w = Get-CimInstance Win32_Process -Filter "Name='gui-agent.exe'" -ErrorAction SilentlyContinue |
+         Select-Object -First 1
+    if (-not $w) { return $null }
+    return [int](([uint64]$w.KernelModeTime + [uint64]$w.UserModeTime) / 10000)
+}
+
 $binPath = 'C:\Program Files\Qubes Tools\bin\gui-agent.exe'
 # Read the CONFIGURED LogDir, do not assume one. LogDir moved to Q:\Qubes Logs when
 # MoveUsers landed (2026-08-07), and this hardcoded path then found no agent log at all, so
@@ -67,7 +80,8 @@ if ($Mode -eq 'info') {
             $up = ((Get-Date) - $p.StartTime).TotalSeconds
             Write-Output ("INFO agent_uptime_s=" + [int]$up)
         } catch { Write-Output "INFO agent_uptime_s=NA" }
-        Write-Output ("INFO agent_cpu_ms=" + [int]$p.TotalProcessorTime.TotalMilliseconds)
+        $cpums = Get-AgentCpuMs
+        Write-Output ("INFO agent_cpu_ms=" + $(if ($null -ne $cpums) { $cpums } else { 'UNREADABLE' }))
         Write-Output ("INFO agent_ws_bytes=" + $p.WorkingSet64)
         Write-Output ("INFO agent_handles=" + $p.HandleCount)
         Write-Output ("INFO agent_threads=" + $p.Threads.Count)
@@ -168,7 +182,8 @@ try {
         $p = AgentProc
         $ts = Stamp
         if ($p) {
-            $cpu = [int]$p.TotalProcessorTime.TotalMilliseconds
+            $cpu = Get-AgentCpuMs
+            if ($null -eq $cpu) { $cpu = -1 }   # -1, never 0: unreadable must not look like idle
             $writer.WriteLine("SAMP $ts cpu_ms=$cpu ws=$($p.WorkingSet64) handles=$($p.HandleCount) pid=$($p.Id)")
             if ($null -eq $first) { $first = @{ t = $sw.Elapsed.TotalMilliseconds; cpu = $cpu } }
             $last = @{ t = $sw.Elapsed.TotalMilliseconds; cpu = $cpu }
