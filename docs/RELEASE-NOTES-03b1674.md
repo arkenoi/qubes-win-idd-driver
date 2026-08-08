@@ -19,9 +19,10 @@ Binaries are **TEST-SIGNED**: the installer runs `bcdedit /set testsigning on`, 
 driver-signature enforcement guest-wide. Stock QWT ships production-signed binaries and does
 not do this. Inherent to an unofficial build, but a real change to your guest's posture.
 
-**If you install onto an existing qube, extend the private volume first.** User data now
-moves to `Q:\Users`, the Qubes default private volume is 2 GiB, and a bare Windows profile
-already uses ~550 MB:
+**If you install onto an existing qube, check the private volume size first.** Windows Tools
+has always placed user data on `Q:\Users` (stock behaviour, restored here after this package
+had wrongly omitted MoveUsers). The Qubes default private volume is 2 GiB and a bare Windows
+profile already uses ~550 MB, so extend it before it fills:
 
     qvm-volume extend <vm>:private 40GiB
 
