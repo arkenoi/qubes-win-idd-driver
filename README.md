@@ -53,6 +53,12 @@ Dragging costs **2.6× less CPU**, scrolling **5.4× less**, typing **7.4× less
 renders 2.6× more frames per second with median frame delay down from 2.91 ms to 0.86 ms.
 Idle memory drops by a third. Numbers below.
 
+### One mouse cursor instead of two
+
+Stock Windows Tools shows a doubled mouse cursor — dom0 draws its own pointer over the guest
+window while the guest also paints one into the captured frame, in every mode. This build
+blanks the guest-side cursor so only dom0's is visible.
+
 ### Office windows render as one window
 
 Post-2013 Office surrounds its frame with layered, click-through shadow HWNDs. The agent
@@ -87,7 +93,7 @@ Adapter, whose mode list is fixed — so an arbitrary size like 2566x1022 is sim
 offered, and matching the guest resolution to a dom0 window is unreachable by construction.
 
 With `/idd`, an IddCx monitor becomes the guest's **sole active output** and the emulated VGA
-is disabled. This is new capability, not a repair of something stock got wrong.
+is disabled. 
 
 Two things are worth knowing about how it behaves, because they are not obvious:
 
@@ -125,23 +131,6 @@ before:  Realtek RTL8139C+ Fast Ethernet NIC   (emulated)
 after:   Xen PV Network Device #0              (emulated NIC UNPLUGGED)
          10.137.0.70 -> gateway reachable
 ```
-
-## Three regressions this package had introduced against stock
-
-Found by auditing every default the packaging commit changed:
-
-- **PV disk drivers were dropped** citing a "documented BSOD risk" that has no source.
-  Upstream's own description is *"Xen PV disk drivers for increased performance"*, and no
-  feature in `Package.wxs` sets a `Level` attribute — WiX defaults them all to `Level=1`, so
-  stock installs it. Every guest was doing all disk I/O over emulated IDE.
-- **`DisableCursor` was seeded `0`**, so the guest painted its own cursor on top of dom0's.
-  Stock's default is `1`. The name reads backwards: `HideCursors()` returns early *unless*
-  the flag is set.
-- **`MoveUsers` was omitted**, leaving profiles on the root volume.
-
-`Autologon` remains deliberately omitted, and here the divergence from stock is intentional:
-upstream's own description warns that it uses a *"randomized password"* and that *"access to
-EFS files WILL BE LOST"* and stored credentials are invalidated.
 
 ---
 
@@ -222,8 +211,12 @@ defect, and they were found by looking at the screen, not by measuring it.
   (`xl console`), a debugging convenience; no display, disk, network or GUI path uses it.
 - **mirage-firewall as netvm hangs Windows HVM domain creation** (dom0/mirage side — the
   guest never starts). Use `core-net`, or install offline.
-- **No audio.** QWT 4.2.2 contains no audio component at all, and Xen's Windows PV family has
-  no audio driver.
+- **Audio is emulated, not paravirtualised.** The guest gets QEMU's Intel HD Audio device
+  (`PCI\VEN_8086&DEV_2668&SUBSYS_11001AF4`, i.e. Red Hat/QEMU) driven by an inbox Windows
+  driver, with Speakers and Line In endpoints present and `err=0`; Qubes routes it via the
+  qube's `audiovm`. Windows Tools contains no audio component because it does not need one —
+  the path is entirely QEMU-side. Nothing here changes that, and there is no PV audio driver
+  in Xen's Windows family to move to.
 
 ---
 
