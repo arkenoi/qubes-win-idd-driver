@@ -18,6 +18,31 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ---
 
+## Download
+
+Release **[v4.3.0-agent03b1674](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.0-agent03b1674)** — agent `03b1674`, package `4.2.2+agent.03b1674c731f`.
+
+| file | use it for |
+|---|---|
+| [`qubes-windows-tools-ng-4.3.0-1.agent03b1674c731f.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent03b1674/qubes-windows-tools-ng-4.3.0-1.agent03b1674c731f.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, where `qvm-create-windows-qube` looks for it |
+| [`qwt-ng-4.3.0-agent03b1674.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent03b1674/qwt-ng-4.3.0-agent03b1674.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qwt-ng-4.3.0-agent03b1674-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent03b1674/qwt-ng-4.3.0-agent03b1674-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent03b1674/SHA256SUMS.txt) | checksums for all three |
+
+The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
+
+```
+sudo rpm -i qubes-windows-tools-ng-4.3.0-1.agent03b1674c731f.noarch.rpm
+```
+
+**Provenance.** These assets are the build that was actually measured — the same binaries
+that produced the 14/14 acceptance runs and every number in the benchmark below
+(`gui-agent.exe` sha256 prefix `CBBD02069A01E047`). A later CI run at the *same* agent commit
+produces a *different* `gui-agent.exe` hash, because the Windows build is not reproducible
+(the PE header carries a build timestamp). Rather than ship an untested-but-newer binary, the
+release carries the tested one. The ISO and RPM were built from that exact setup tree.
+
+---
 ## Read this first
 
 **The binaries are TEST-SIGNED.** The installer runs `bcdedit /set testsigning on`, which
