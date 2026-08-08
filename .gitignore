@@ -1,11 +1,28 @@
+# Build outputs and machine state. None of this is source: it is produced by CI, by the
+# media builders, or by a benchmark run, and tracking it made the repo carry megabytes of
+# binaries and per-run evidence that go stale the moment anything is rebuilt.
 *.obj
 *.pdb
 *.pfx
-artifacts-rel/
-artifacts-t2/
+*.swp
+
+# CI artifacts downloaded for local use / release assembly
 artifacts/
-evidence/wedge-auto/
+artifacts-*/
+rel-out/
+release-assets/
+dl/
+
+# Per-run evidence and measurements
+evidence/
 scratchpad/bench-results/
+scratchpad/bm-win10/
+scratchpad/bm-win11/
+scratchpad/bm-win11-bda/
 shots*.tar
-tools/*/x64/
+*.iso
+*.img
+
+# Vendored read-only upstream checkouts
 upstream/ro/
+tools/*/x64/
