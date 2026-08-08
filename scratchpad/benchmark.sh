@@ -584,7 +584,16 @@ if len(shots) >= 4:
                    start_detected=shotmeta.get('start_detected'))
     dom0_frac = val(round(frac, 3), 'fraction', saturated=(frac >= 0.999))
     dom0_moving = val(changes > 0, 'bool', changes=changes)
-    if fails:
+    # If (almost) every capture failed there is NO measurement here. Reporting the resulting
+    # "0 distinct frames" as 0.000 fps reads as "this build delivered no pixels", which is a
+    # false accusation against whichever guest happens to be unservable: dom0's per-window
+    # screenshot service is gated to a NAME LIST, and for a guest outside it the call returns
+    # rc=3 / 0 bytes every single time. Missing data must be n/a, never a number.
+    if fails >= len(sha) - 1:
+        r = ('dom0 screenshot service returned no usable capture (%d/%d failed) - pixel rate '
+             'NOT measured on this guest' % (fails, len(sha)))
+        dom0_fps = dom0_frac = dom0_moving = na(r)
+    elif fails:
         warnings.append('%d dom0 screenshots failed or were empty during the drag' % fails)
     if frac >= 0.999:
         warnings.append('dom0 pixel sampling SATURATED (every sample differed): the metric is '

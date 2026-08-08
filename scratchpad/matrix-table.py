@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Assemble the four-row benchmark table from per-rep rep.json files.
 
+NO dom0 SCREENSHOT METRICS. Sampling dom0 is the slowest element in the whole path
+(~5 s per full-desktop capture, and the per-window service is gated to a name list that
+does not cover these guests), so it cannot resolve frame rate at all. Worse, a full-desktop
+sampler reports ~100% changed frames on every side because the dom0 desktop itself changes
+- two consecutive STATIC captures already produced different hashes. Frame rate is measured
+IN-GUEST instead, where it needs no round-trip.
+
 Reports MEDIANS across valid reps, and ONLY the metrics that both stock and our build can
 actually produce. Every QGAPERF-derived figure is ours-only by construction - stock QWT 4.2.2
 emits no per-frame instrumentation - so those are shown in a separate section and never as a
@@ -22,8 +29,6 @@ CROSS = [
     ("type_cpu_pct",       "CPU during typing",          "%of1core", 3),
     ("idle_ws_mb",         "idle working set",           "MB",       1),
     ("drag_ws_mb",         "peak working set (drag)",    "MB",       1),
-    ("dom0_distinct_fps",  "dom0 distinct frames/s",     "fps",      2),
-    ("dom0_distinct_frac", "dom0 changed-sample frac",   "fraction", 3),
     ("vm_cpu_idle",        "whole-VM CPU (idle)",        "vcpu-s/s", 3),
     ("vm_cpu_work",        "whole-VM CPU (workload)",    "vcpu-s/s", 3),
 ]
