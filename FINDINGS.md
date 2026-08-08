@@ -5770,3 +5770,24 @@ desktop (per-window WGC capture, z-order sync) are the ones worth pursuing.
    False alarm: the literals are UTF-16 in the PE and `strings` was reading ASCII. Retained the
    check in `run-fix-validation.sh` with `strings -e l`, because a green build whose binary
    lacked the counters would yield an empty hit rate that reads like "the path never fired".
+
+### Operational hazard: never edit a bash script that is currently running
+
+Caught before it caused damage, recorded because this project runs multi-hour harnesses while
+their scripts are still being iterated on, so it will recur.
+
+`scratchpad/run-fix-validation.sh` was executing (pid 1268334, 26 minutes in, inside step 1)
+when it was edited to add a fourth step. Bash does **not** read a script into memory up front:
+it reads lazily and remembers a byte offset. Inserting lines shifts every later offset, so when
+the interpreter next reads, it resumes mid-token and executes whatever now sits at that
+position - silently, and with the shell's full privileges.
+
+The file was restored to its committed bytes (`git checkout --`) while the run continued
+unharmed. The follow-on step was then run as a SEPARATE invocation instead.
+
+Rules that follow:
+- an edit to a script is safe only when nothing is executing it - check with `ps` first;
+- to extend a running pipeline, launch the new stage as its own process when the current one
+  finishes, rather than appending to the file it is reading;
+- committing the script first makes `git checkout --` an exact byte-level undo, which is what
+  made this recoverable at all.
