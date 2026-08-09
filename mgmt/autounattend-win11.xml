@@ -206,6 +206,19 @@
           <Description>test rig: no Store app-update notices (Notepad banner confounds the benchmark)</Description>
           <Order>13</Order>
         </SynchronousCommand>
+        <!-- The benchmark types into Notepad. On Windows 11 that is a STORE app which
+             displays "A new version of Notepad is available" - an in-app banner inside the
+             exact window being measured, on the exact metric (typing) under test. Disabling
+             the Store update machinery does NOT stop it: the banner is the app's own UI.
+             Removing the package leaves the classic Win32 notepad.exe, which still launches
+             and is a better benchmark target anyway - deterministic, no XAML, no updates.
+             TEST RIG ONLY. Note this changes absolute numbers vs any baseline measured
+             against the Store app; attribution across conditions is unaffected. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-AppxPackage -Name '*WindowsNotepad*' -EA SilentlyContinue | Remove-AppxPackage -EA SilentlyContinue"</CommandLine>
+          <Description>test rig: remove Store Notepad (its update banner confounds the typing benchmark)</Description>
+          <Order>14</Order>
+        </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
