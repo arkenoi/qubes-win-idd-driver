@@ -112,6 +112,11 @@ The published mode set now always contains the host size while seamless is activ
 - **No audio.** QWT 4.2.2 contains no audio component at all (verified by scanning the MSI in
   both ASCII and UTF-16), and Xen's Windows PV family has no audio driver. Not a regression;
   simply absent.
+- **Known upgrade issue: stock QWT with an active PV boot disk.** Upgrading over stock QWT
+  removes it first, which can revert the boot disk toward emulated IDE and bugcheck 0x7B
+  INACCESSIBLE BOOT DEVICE at the intermediate reboot (reported in the field). The installer
+  detects this and aborts unless `/acceptpvdiskupgrade` is passed; the recovery recipe is in
+  the installer's README.txt, section "UPGRADING FROM STOCK QWT".
 
 ## Test status
 

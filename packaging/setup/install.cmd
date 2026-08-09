@@ -12,6 +12,11 @@ REM                              (it becomes the display; the emulated VGA
 REM                              adapter is disabled - see README.txt)
 REM     install.cmd /nonet       omit the PV network drivers (see README.txt)
 REM     install.cmd /nodisk      omit the PV disk drivers (diagnostic only)
+REM     install.cmd /acceptpvdiskupgrade
+REM                              remove an existing QWT even when the boot disk
+REM                              is on the PV disk path - can bugcheck 0x7B at
+REM                              the intermediate reboot; read the UPGRADING
+REM                              FROM STOCK QWT section of README.txt FIRST
 REM  Flags combine:  install.cmd /auto /idd
 REM
 REM  Read README.txt first - in particular the NETWORKING and TEST-SIGNING
@@ -32,8 +37,9 @@ if /i "%~1"=="/auto"   ( set "PSARGS=!PSARGS! -Auto"            & set "AUTO=1" &
 if /i "%~1"=="/idd"    ( set "PSARGS=!PSARGS! -InstallIddDriver" & shift & goto parse )
 if /i "%~1"=="/nonet"  ( set "PSARGS=!PSARGS! -NoPvNetwork"      & shift & goto parse )
 if /i "%~1"=="/nodisk" ( set "PSARGS=!PSARGS! -NoPvDisk"         & shift & goto parse )
+if /i "%~1"=="/acceptpvdiskupgrade" ( set "PSARGS=!PSARGS! -AcceptPvDiskUpgrade" & shift & goto parse )
 echo Unknown option: %~1
-echo Valid options: /auto /idd /nonet /nodisk
+echo Valid options: /auto /idd /nonet /nodisk /acceptpvdiskupgrade
 exit /b 87
 :parsed
 

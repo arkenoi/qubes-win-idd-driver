@@ -34,6 +34,14 @@
     Reboot automatically at the end of each stage and resume via RunOnce. Without it the
     script stops and tells you to reboot and re-run.
 
+.PARAMETER AcceptPvDiskUpgrade
+    Proceed with removing an existing QWT even though the C: boot disk is on the Xen PV
+    disk path (xenvbd, boot-start). Without it the script refuses: uninstalling stock QWT
+    reverts the boot disk toward emulated IDE, which Windows has by then demoted from
+    boot-start, so the intermediate reboot the removal needs can bugcheck 0x7B
+    INACCESSIBLE BOOT DEVICE. Read the UPGRADING FROM STOCK QWT section of README.txt
+    (including the recovery recipe) before passing this.
+
 .PARAMETER InstallIddDriver
     Also install and ACTIVATE the Qubes IddCx display driver: the package is staged with
     pnputil, the root-enumerated device (root\iddsampledriver) is created with devcon,
@@ -71,6 +79,10 @@ param(
     [switch]$Auto,
     [switch]$InstallIddDriver,
     [switch]$NoPvNetwork,
+
+    # Override for the PV-boot-disk upgrade gate in stage 2 - see Test-BootDiskOnPvPath
+    # and the UPGRADING FROM STOCK QWT section of README.txt before using it.
+    [switch]$AcceptPvDiskUpgrade,
 
     # Escape hatch only. PV disk is ON by default because stock QWT installs it by default
     # and emulated IDE is markedly slower; use this only to isolate a suspected xenvbd fault.
@@ -407,6 +419,32 @@ function Remove-QwtLeftovers {
     return [ordered]@{ removed = $deleted; absent = $absent; stuck = $stuck }
 }
 
+function Test-BootDiskOnPvPath {
+    # TRUE when the C: boot disk is already served by the Xen PV disk path: the disk
+    # reports BusType SCSI (xenvbd is a StorPort miniport; emulated IDE reports ATA) AND
+    # the xenvbd service is registered boot-start (Start=0). That is the state in which
+    # removing the installed QWT is dangerous - the uninstall reverts the boot disk toward
+    # emulated IDE, which Windows has by then demoted from boot-start, and the intermediate
+    # reboot can bugcheck 0x7B INACCESSIBLE BOOT DEVICE (reported in the field by a user
+    # upgrading over stock QWT).
+    #
+    # HONESTY: this detection has NOT been validated against a live reproduction - that
+    # needs stock QWT with the PV disk active on a test guest, which has not been run yet.
+    # It is a conservative gate on a plausible-and-reported failure mode, not a proven
+    # check. Defensive on purpose: any probe error returns $false with a warning, because
+    # a broken probe must never block an install.
+    try {
+        $disk = Get-Partition -DriveLetter C -ErrorAction Stop | Get-Disk -ErrorAction Stop
+        if (-not $disk -or [string]$disk.BusType -ne 'SCSI') { return $false }
+        $svc = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\xenvbd' `
+                                -ErrorAction Stop
+        return ($svc.PSObject.Properties.Name -contains 'Start' -and $svc.Start -eq 0)
+    } catch {
+        Write-Log "PV boot-disk probe failed ($($_.Exception.Message)) - assuming NOT on the PV path" 'WARN'
+        return $false
+    }
+}
+
 function Uninstall-ExistingQwt {
     param([Parameter(Mandatory)][object[]]$Products)
     # Returns $true if any uninstall demanded a reboot (rc 3010).
@@ -481,6 +519,7 @@ function Invoke-Stage1 {
         if ($NoPvNetwork)      { $extra += '-NoPvNetwork' }
         if ($NoPvDisk)         { $extra += '-NoPvDisk' }
         if ($NoMoveUsers)      { $extra += '-NoMoveUsers' }
+        if ($AcceptPvDiskUpgrade) { $extra += '-AcceptPvDiskUpgrade' }
         $extra += '-Auto'
         Set-BootResume -ScriptPath $self -ExtraArgs $extra
         Write-Log 'STAGE 1 COMPLETE - rebooting in 15 s, installation resumes automatically'
@@ -546,6 +585,12 @@ function Invoke-Stage2 {
     $script:Result.detail.bin_dir = $binDir
     $script:Result.detail.leftovers_targeted = $deliver
 
+    # Probe once per stage-2 run and always record it, so the trailer says which disk
+    # path the upgrade decision below was made on.
+    $pvBoot = Test-BootDiskOnPvPath
+    $script:Result.detail.pv_boot_disk = $pvBoot
+    Write-Log "PV boot-disk probe: C: on the PV path = $pvBoot"
+
     if ($ResumeAfterUninstall) {
         # Resumed by the boot task armed below: the previous QWT is already gone, so the
         # detect/uninstall phase is skipped and this run goes straight to the install.
@@ -560,6 +605,16 @@ function Invoke-Stage2 {
         } else {
             foreach ($e in $existing) {
                 Write-Log "found existing QWT: '$($e.DisplayName)' $($e.Version) $($e.ProductCode)"
+            }
+            if ($pvBoot -and -not $AcceptPvDiskUpgrade) {
+                # Gate BEFORE anything is uninstalled. See Test-BootDiskOnPvPath for why -
+                # and for the admission that this check is conservative, not validated.
+                Fail ('the C: boot disk is on the Xen PV disk path (BusType SCSI, xenvbd boot-start). ' +
+                      'Removing the installed QWT reverts the boot disk toward emulated IDE, which ' +
+                      'Windows has demoted from boot-start, so the intermediate reboot the removal ' +
+                      'needs can bugcheck 0x7B INACCESSIBLE BOOT DEVICE. If you accept that risk, ' +
+                      're-run with /AcceptPvDiskUpgrade - and read the UPGRADING FROM STOCK QWT ' +
+                      'recovery section in README.txt FIRST')
             }
             Stop-QwtRuntime
             $needReboot = Uninstall-ExistingQwt -Products $existing
@@ -586,6 +641,18 @@ function Invoke-Stage2 {
                 $script:Result.ok = $true
                 $script:Result.reboot_needed = $true
                 $script:Result.detail.next = 'reboot, then the install phase runs'
+                if ($pvBoot) {
+                    # /AcceptPvDiskUpgrade was passed (the gate above stops here otherwise).
+                    # Put the recovery recipe on screen AND in C:\qwt-improved-install.log
+                    # NOW - if the coming reboot bugchecks 0x7B, this is the last chance.
+                    foreach ($l in @(
+                        'PV BOOT DISK: the coming reboot may bugcheck 0x7B INACCESSIBLE BOOT DEVICE. If it does:',
+                        '  1. let the guest crash-loop ~3 times - Windows then offers advanced startup by itself',
+                        '  2. Startup Settings -> Restart -> pick Safe Mode (option number varies by locale; 4 on many)',
+                        '  3. one Safe Mode boot is enough - then reboot normally',
+                        '  4. run install.cmd again to finish the install'
+                    )) { Write-Log $l 'WARN' }
+                }
                 $self = Join-Path $Root 'Install-QwtImproved.ps1'
                 if ($Auto) {
                     $extra = @()
@@ -593,6 +660,7 @@ function Invoke-Stage2 {
                     if ($NoPvNetwork)      { $extra += '-NoPvNetwork' }
                     if ($NoPvDisk)         { $extra += '-NoPvDisk' }
                     if ($NoMoveUsers)      { $extra += '-NoMoveUsers' }
+                    if ($AcceptPvDiskUpgrade) { $extra += '-AcceptPvDiskUpgrade' }
                     $extra += '-Auto'
                     $extra += '-ResumeAfterUninstall'
                     Set-BootResume -ScriptPath $self -ExtraArgs $extra

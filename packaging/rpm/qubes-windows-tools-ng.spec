@@ -89,6 +89,10 @@ qubes-windows-tools-ng installed.
 The Windows binaries in this ISO are TEST-SIGNED: the in-guest installer enables testsigning
 and trusts an unofficial certificate INSIDE THE WINDOWS GUEST. dom0 is unaffected.
 
+The next paragraph applies ONLY to qvm-create-windows-qube users. Installing manually --
+attaching the ISO to the qube and running install.cmd inside Windows -- needs none of it;
+if that is you, ignore it.
+
 qvm-create-windows-qube users: one more step is required. Its auto-qwt helper globs for
 `qubes-tools-*.exe|msi`, which matches nothing in this ISO, and it fails SILENTLY - the qube
 finishes with no tools installed. Replace its installer stub with the shipped one:

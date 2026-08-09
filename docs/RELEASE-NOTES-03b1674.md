@@ -70,6 +70,10 @@ private volume, PV disk bound, network carrying traffic, clipboard.
   `core-net`, or install offline.
 - **No audio.** QWT 4.2.2 contains no audio component at all, and Xen's Windows PV family has
   no audio driver.
+- **Known upgrade issue: installing over stock QWT with an active PV boot disk** can bugcheck
+  0x7B INACCESSIBLE BOOT DEVICE at the intermediate reboot the removal needs (reported in the
+  field). Newer installers detect this and abort unless `/acceptpvdiskupgrade` is passed; the
+  recovery recipe is in the installer's README.txt, section "UPGRADING FROM STOCK QWT".
 - **Benchmark vs stock is not included.** It is running at time of writing; numbers will be
   added only once the control is confirmed genuinely stock and installed by an identical
   route. An unvalidated performance claim is worse than none.

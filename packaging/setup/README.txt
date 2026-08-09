@@ -101,6 +101,9 @@ Options:
      /auto    reboot and resume automatically
      /idd     install and ACTIVATE the Qubes IddCx display driver (see below)
      /nonet   omit PvDriversNetwork
+     /acceptpvdiskupgrade
+              remove an existing QWT even when the boot disk is on the PV disk
+              path -- READ "UPGRADING FROM STOCK QWT" BELOW FIRST
 
 Everything is logged to  C:\qwt-improved-install.log , the MSI's own verbose
 log to  C:\qwt-install.log , and the removal of a pre-existing QWT to
@@ -142,6 +145,36 @@ Whether any of this worked is not assumed: after msiexec the script hashes
 C:\Program Files\Qubes Tools\bin\gui-agent.exe and fails if it does not equal
 MANIFEST.json -> reference_binaries -> "gui-agent.exe". That check is what
 caught the defect in the first place.
+
+UPGRADING FROM STOCK QWT
+------------------------
+If the guest currently runs stock QWT with the PV disk drivers active -- the
+boot disk reports BusType SCSI and the xenvbd service is boot-start -- there
+is a real risk in the removal step above. Uninstalling stock QWT reverts the
+boot disk toward emulated IDE, and Windows has by then demoted the IDE storage
+stack from boot-start, so the intermediate reboot the removal needs can
+bugcheck before the new tools ever install. This was hit by a real user
+upgrading over stock QWT.
+
+The exact failure signature: at the reboot between the uninstall and the
+install, the guest blue-screens with INACCESSIBLE BOOT DEVICE (stop code
+0x7B) and keeps doing so on every boot.
+
+The installer probes for this state (boot disk BusType SCSI + xenvbd
+boot-start) and ABORTS before removing anything, unless you pass
+/acceptpvdiskupgrade. Honesty note: the probe has not been validated against
+a live reproduction of the crash -- it is a conservative gate, not a proven
+check -- so passing the switch means accepting that the recovery below may be
+needed.
+
+Recovery, if the intermediate reboot bugchecks 0x7B:
+
+  1. Let the guest crash-loop. After about three failed boots Windows offers
+     the advanced startup menu by itself.
+  2. Pick Startup Settings -> Restart, then choose Safe Mode (the option
+     number varies by locale; it is 4 on many systems).
+  3. One Safe Mode boot is enough. Then reboot normally.
+  4. Run install.cmd again; it continues with the install.
 
 THE QUBES IddCx DRIVER (/idd)
 -----------------------------
