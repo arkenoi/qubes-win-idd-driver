@@ -1,5 +1,9 @@
 # Using QWT-NG with `qvm-create-windows-qube`
 
+**Scope: this document applies ONLY to `qvm-create-windows-qube` users.** Installing
+manually — attaching the ISO to the qube and running `install.cmd` inside Windows — needs
+none of it; if that is you, stop reading here.
+
 Read against the real upstream source (`QubesOS/qvm-create-windows-qube`, branch `master`),
 not from memory. Line references are to that branch.
 
