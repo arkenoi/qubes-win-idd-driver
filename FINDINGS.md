@@ -6170,3 +6170,42 @@ qga-sweepdda-off present = the pre-fix behaviour deliberately re-introduced.
   separation needs no such caveat.
 - Not yet in any released artifact: released builds still carry the burn until the next
   release (prepare-but-hold per the owner, 2026-08-09).
+
+## 2026-08-10 — PV-DISK UPGRADE GATE VALIDATED; THE CRASH IS REAL AND WORSE THAN REPORTED
+
+The gate shipped yesterday marked "unvalidated". Tonight's three-phase run removes that
+caveat and hardens the fix:
+
+1. **Probe positive, three real guests.** win11-idd-test, win10-e2e, and a clean-room
+   freshly provisioned win11-fresh all read PVBOOT=True with raw evidence BusType=SCSI,
+   disk model "XENSRC PVDISK", xenvbd Start=0. (win10-e2e was picked as the NEGATIVE
+   control on the assumption it predated PV restoration - wrong: it is PV-booted too.
+   A genuine False-case guest is still owed; candidates win10-clean/win10-stock, else a
+   /nodisk provision.)
+2. **Gate fires.** On the fresh stock guest, the gated installer (payload re-hashed so
+   Test-Payload accepts the swapped-in script) verified 24 files, entered stage 2, probed
+   pv_boot_disk=true, found the stock MSI - and Failed with the exact message BEFORE
+   uninstalling anything. Post-gate probe still True; QWT still registered.
+3. **The crash reproduces - and Qubes makes it worse than the field report.** With
+   /AcceptPvDiskUpgrade the uninstall ran (rc=3010), the recipe printed, the reboot was
+   taken - and the guest NEVER CAME BACK. Seven consecutive boot attempts died within
+   ~12-24 s each: under Qubes the domain is DESTROYED at the instant of the bugcheck
+   (on_crash=destroy), so Windows never counts failed boots and the "crash-loop ~3 times
+   -> recovery menu"路 path the field user reported NEVER ENGAGES here. A 0x7B-bricked
+   qube on Qubes has no in-guest recovery at all without console interaction; offline
+   hive repair or reinstall are the real options. Docs updated accordingly.
+4. **Fix upgraded from gate to mitigation.** The installer now RE-ARMS the emulated
+   storage stack (atapi/intelide/pciide/storahci -> Start=0, the exact state Safe Mode
+   restores) right before the risky reboot when proceeding on a PV boot disk. Validation
+   cycle for the mitigation is queued: fresh provision, switch path again, intermediate
+   reboot expected to SURVIVE. Until that run passes, the re-arm is implemented-but-
+   unproven (the README says "expected").
+
+Operational refindings, same night: (a) the queued-qrexec trap struck again - win11-fresh
+sat "Transient" through two qvm-kills because the 3b wait-loop's probe calls were queued
+with qrexec_timeout=6000 (a FRESH VM does not inherit the 15 s the roster doc assumes -
+set it at provision time); (b) /tmp is a 1 GiB tmpfs and a ~100 MB payload zip filled it
+mid-write, producing a silently EMPTY guest-side payload and a void first "gate did not
+fire" result - caught by judging output (empty C:\pvtest), now guarded by an explicit
+expanded-file-count gate in pv-validate.sh; (c) dom0 fullshot cannot photograph a guest
+that dies in <14 s - behavioural evidence (boot-死-loop) plus in-log sequence stands in.
