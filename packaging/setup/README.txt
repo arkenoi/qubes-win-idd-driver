@@ -126,14 +126,22 @@ anything else = failure (the log says why).
 
 UPGRADING OVER AN EXISTING QWT
 ------------------------------
-Installing over a guest that already has Qubes Windows Tools does NOT simply
-run the new MSI. It cannot: Windows Installer will not overwrite a file whose
-version is greater than or equal to the incoming one, and these binaries carry
-no increasing FILEVERSION. Measured on a real guest: msiexec returned 3010
-"success", every component updated, and gui-agent.exe stayed at the OLD build
-(still old after a reboot, so it was not deferred replacement either).
+Since this package became QWT-NG 4.3.0, upgrading over an OLDER QWT (stock
+4.2.2, or an earlier build of this package) is a plain MSI major upgrade: the
+rebuilt MSI shares stock's UpgradeCode and carries a higher ProductVersion,
+so stage 2 just stops the agent and runs the new MSI, and Windows Installer
+replaces the old product inside one transaction - no separate uninstall, no
+intermediate reboot, and the PV disk driver is upgraded in place rather than
+removed (which is what makes the 0x7B risk below a non-issue on this path).
 
-So stage 2 first:
+The uninstall-first flow below remains ONLY for what a major upgrade cannot
+handle: an installed QWT version equal to or newer than this package (a
+reinstall or downgrade). Historical context for why it exists: before the
+4.3.0 bump these binaries carried no increasing FILEVERSION, so Windows
+Installer would keep the old files - measured: msiexec returned 3010
+"success" with gui-agent.exe still the OLD build.
+
+For the uninstall-first case, stage 2 first:
 
   1. signals Global\QGA_SHUTDOWN for a graceful GUI-agent exit, stops the
      QubesGuiWatchdog service, then force-terminates gui-agent.exe /
@@ -159,6 +167,10 @@ caught the defect in the first place.
 
 UPGRADING FROM STOCK QWT
 ------------------------
+NOTE: everything in this section concerns the uninstall-first flow only. The
+normal upgrade from stock is the in-place MSI major upgrade above, which
+never removes the PV disk driver and does not have this failure mode.
+
 If the guest currently runs stock QWT with the PV disk drivers active -- the
 boot disk reports BusType SCSI and the xenvbd service is boot-start -- there
 is a real risk in the removal step above. Uninstalling stock QWT reverts the

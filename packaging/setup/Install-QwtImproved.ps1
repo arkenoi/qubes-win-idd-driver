@@ -614,9 +614,41 @@ function Invoke-Stage2 {
             foreach ($e in $existing) {
                 Write-Log "found existing QWT: '$($e.DisplayName)' $($e.Version) $($e.ProductCode)"
             }
+
+            # IN-PLACE MSI MAJOR UPGRADE - the normal path since the 4.3.0 version bump.
+            # The rebuilt MSI shares stock's UpgradeCode ({14BCB82F-...}) and carries a
+            # HIGHER ProductVersion, and the WiX package declares <MajorUpgrade>, so
+            # installing it over any OLDER QWT lets Windows Installer replace the old
+            # product inside one transaction: no separate uninstall, no intermediate
+            # reboot, and the PV disk driver is upgraded rather than ripped out - which
+            # removes the 0x7B INACCESSIBLE BOOT DEVICE window entirely (reproduced
+            # 2026-08-10: the uninstall-first flow bricked a PV-booted guest; under Qubes
+            # the bugcheck destroys the domain, so there is no in-guest recovery).
+            # The uninstall-first flow below survives ONLY for the cases a major upgrade
+            # cannot handle: an installed version equal to or newer than ours.
+            $inPlace = $false
+            try {
+                $oursStr = "$($script:Result.detail.package_version)" -split '\+' | Select-Object -First 1
+                $ours = [version]$oursStr
+                $olds = @($existing | ForEach-Object { [version]$_.Version })
+                if ($olds.Count -gt 0 -and @($olds | Where-Object { $_ -ge $ours }).Count -eq 0) {
+                    $inPlace = $true
+                }
+            } catch {
+                Write-Log "version comparison failed ($($_.Exception.Message)) - falling back to the uninstall-first flow" 'WARN'
+            }
+            $script:Result.detail.upgrade_mode = if ($inPlace) { 'in-place-msi-major-upgrade' } else { 'uninstall-first' }
+
+            if ($inPlace) {
+                Write-Log ("installed QWT (" + (($existing | ForEach-Object { $_.Version }) -join ', ') +
+                           ") is older than this package ($oursStr) - IN-PLACE MSI major upgrade, no uninstall, no intermediate reboot")
+                Stop-QwtRuntime   # the agent holds files the MSI is about to replace
+                # Fall through to the install phase below - msiexec /i does the rest.
+            } else {
+
             if ($pvBoot -and -not $AcceptPvDiskUpgrade) {
-                # Gate BEFORE anything is uninstalled. See Test-BootDiskOnPvPath for why -
-                # and for the admission that this check is conservative, not validated.
+                # Gate BEFORE anything is uninstalled. Probe and crash both validated
+                # live 2026-08-10 (see README.txt, UPGRADING FROM STOCK QWT).
                 Fail ('the C: boot disk is on the Xen PV disk path (BusType SCSI, xenvbd boot-start). ' +
                       'Removing the installed QWT reverts the boot disk toward emulated IDE, which ' +
                       'Windows has demoted from boot-start, so the intermediate reboot the removal ' +
@@ -710,6 +742,7 @@ function Invoke-Stage2 {
                 Write-Log "REBOOT NOW, then run again elevated:  $self"
                 Emit-Result 10
             }
+            } # end uninstall-first branch; the in-place upgrade path falls through to install
         }
     }
 
