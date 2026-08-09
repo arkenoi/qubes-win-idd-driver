@@ -84,7 +84,10 @@ $shortAgent = if ($agentSha -ne 'unknown') { $agentSha.Substring(0, 12) } else {
 # QWT release this overlay targets. Bump deliberately if the agent is ever rebased onto a
 # different upstream QWT version - it is what install-qwt-improved.ps1's README promises.
 $baseQwt = '4.2.2'
-$version = "$baseQwt+agent.$shortAgent"
+# Our deliverable's own version (QWT-NG). Distinct from $baseQwt, which records the stock
+# QWT release the overlay requires (targets_qwt_version in the manifest).
+$ngVersion = '4.3.0'
+$version = "$ngVersion+agent.$shortAgent"
 
 # ---------------------------------------------------------------- dependency refs, parsed
 # from the workflow rather than duplicated. Read the gui-agent job's env: block.

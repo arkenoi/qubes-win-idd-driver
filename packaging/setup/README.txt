@@ -1,5 +1,6 @@
 ===========================================================================
- Qubes Windows Tools 4.2.2 -- rebuilt from source with the improved GUI agent
+ QWT-NG 4.3 -- Qubes Windows Tools rebuilt from upstream 4.2.2 sources
+ with the improved GUI agent
  Self-contained installer for a Windows 10 x64 guest, clean or with QWT
  already installed (an existing QWT is REMOVED first -- see UPGRADING).
 ===========================================================================

@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS
-    Install Qubes Windows Tools 4.2.2 (rebuilt from source with the improved GUI agent)
-    onto a clean Windows guest, or over a guest that already has QWT installed.
+    Install QWT-NG 4.3 (Qubes Windows Tools rebuilt from upstream 4.2.2 sources with the
+    improved GUI agent) onto a clean Windows guest, or over a guest that already has QWT
+    installed.
 
 .DESCRIPTION
     This is a FULL install, not an overlay: it runs the real QWT installer.msi produced by

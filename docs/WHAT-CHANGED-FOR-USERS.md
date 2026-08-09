@@ -1,6 +1,6 @@
 # What changed, from a user's point of view
 
-Qubes Windows Tools 4.2.2, rebuilt from upstream sources with an improved GUI agent.
+QWT-NG 4.3 — Qubes Windows Tools built from upstream QWT 4.2.2 sources with an improved GUI agent.
 Everything below is measured on clean end-to-end installs of Windows 10 22H2 and
 Windows 11 24H2, not inferred.
 
