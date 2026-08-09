@@ -106,7 +106,9 @@ then overlay:
 
 `gui-watchdog.exe` is included in this package but is **not installed by default**, because
 this project changed no watchdog source: the only diff against upstream `v4.2.2` in that
-component is its `.vcxproj` build plumbing. Installing it would swap a binary that upstream
+component is its `.vcxproj` build plumbing (plus the version resource, which now reports
+this package's own version — 4.3.0, see `package_version` in MANIFEST.json — instead of
+4.2.2). Installing it would swap a binary that upstream
 signed for a functionally identical local rebuild, gaining nothing and putting the service
 that keeps your GUI alive on a less-tested binary. It ships here so the package is a
 complete set of what CI built, and for developers who want to test a watchdog change.

@@ -431,14 +431,16 @@ jobs:
         id: ver
         run: |
           set -euo pipefail
-          # RPM versions may not contain '-'; the manifest carries e.g. 4.2.2+agent.<sha>.
-          # Encode the agent commit in the Release field so the RPM is traceable to the exact
-          # build without smuggling an illegal character into Version.
+          # RPM versions may not contain '-' or '+'; the manifest carries e.g.
+          # 4.3.0+agent.<sha> (package_version from make-setup.ps1). Use the part before
+          # '+' as Version and encode the agent commit in the Release field so the RPM is
+          # traceable to the exact build without smuggling an illegal character into Version.
           agent=$(python3 -c "import json;print(json.load(open('dl/MANIFEST.json'))['source']['agent_commit'][:12])")
-          echo "version=4.3.0" >> "$GITHUB_OUTPUT"
+          ver=$(python3 -c "import json;print(json.load(open('dl/MANIFEST.json'))['package_version'].split('+')[0])")
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
           echo "release=1.agent$agent" >> "$GITHUB_OUTPUT"
           echo "agent=$agent" >> "$GITHUB_OUTPUT"
-          echo "QWT-NG 4.3.0-1.agent$agent"
+          echo "QWT-NG $ver-1.agent$agent"
 
       - name: Build the RPM
         run: |

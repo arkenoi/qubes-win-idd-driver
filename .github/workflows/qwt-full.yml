@@ -299,6 +299,20 @@ jobs:
           Copy-Item $redist.FullName "$dir\vc_redist.x64.exe"
           "EWDK_PATH=$fake" | Out-File -Append $env:GITHUB_ENV
 
+      - name: Stamp our deliverable version into the installer sources
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = "${{ github.workspace }}"
+          # The CreateVersionWxi CodeTask reads installer-src\version to stamp the MSI
+          # ProductVersion. Upstream's file says 4.2.2; overwrite it with OUR deliverable
+          # version (single source of truth: agent/version) so the rebuilt MSI/bundle
+          # report 4.3.0 and Windows treats it as an upgrade over a stock 4.2.2 install.
+          $ngVersion = (Get-Content "$ws\agent\version" -Raw).Trim()
+          if ($ngVersion -notmatch '^\d+\.\d+\.\d+$') { throw "bad agent/version: '$ngVersion'" }
+          Set-Content -LiteralPath "$ws\installer-src\version" -Value $ngVersion -NoNewline
+          Write-Host "installer-src\version stamped: $ngVersion"
+
       - name: Build installer.msi + Burn bundle
         shell: pwsh
         run: |

@@ -1,4 +1,4 @@
-# Qubes Windows Tools 4.2.2 — improved GUI agent
+# QWT-NG 4.3 — Qubes Windows Tools rebuilt from upstream 4.2.2 sources, improved GUI agent
 
 A **full QWT install**, not an overlay: the upstream WiX MSI rebuilt from source with our
 `gui-agent.exe`, plus certs, the VC++ runtime, an IddCx display driver payload, a fixed Xen

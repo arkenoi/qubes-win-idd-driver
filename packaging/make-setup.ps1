@@ -76,9 +76,10 @@ function EnvOr {
 $repoSha   = EnvOr 'QWT_REPO_SHA'  $um.repo_sha
 $agentSha  = $um.agent_sha
 $agentDesc = if ($um.PSObject.Properties.Name -contains 'agent_describe') { $um.agent_describe } else { $agentSha }
-$baseQwt   = '4.2.2'
+$baseQwt   = '4.2.2'   # upstream QWT release these sources were rebuilt from (compat field)
+$ngVersion = '4.3.0'   # our deliverable's own version (QWT-NG)
 $shortAgent = if ($agentSha -and $agentSha -ne 'unknown') { $agentSha.Substring(0, 12) } else { 'unknown' }
-$version    = "$baseQwt+agent.$shortAgent"
+$version    = "$ngVersion+agent.$shortAgent"
 
 # --------------------------------------------------------------------------------- stage
 if (Test-Path -LiteralPath $OutDir) { Remove-Item -LiteralPath $OutDir -Recurse -Force }
@@ -215,7 +216,7 @@ $manifest = [ordered]@{
     package         = 'qwt-improved-setup'
     package_kind    = 'full-installer'
     package_version = $version
-    description     = 'Full Qubes Windows Tools 4.2.2 install for a clean Windows guest: the upstream WiX MSI rebuilt from source with our gui-agent, plus certs, VC++ runtime and a two-stage install script. Not an overlay.'
+    description     = 'QWT-NG 4.3 full install for a clean Windows guest: the upstream QWT 4.2.2 WiX MSI rebuilt from source with our gui-agent, plus certs, VC++ runtime and a two-stage install script. Not an overlay.'
     targets_qwt_version = $baseQwt
     built_utc       = (Get-Date).ToUniversalTime().ToString('o')
     source = [ordered]@{
