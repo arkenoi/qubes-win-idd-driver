@@ -26,3 +26,14 @@ shots*.tar
 # Vendored read-only upstream checkouts
 upstream/ro/
 tools/*/x64/
+
+# --- dom0 desktop captures: NEVER commit these ---------------------------------------
+# `qtest fullshot` captures the WHOLE dom0 screen, other qubes included - the service's own
+# installer says so. 41 such files reached this PUBLIC repo and were purged from history on
+# 2026-08-09. Per-window `qtest shot` output (guest windows only) is a different risk class
+# and is allowed, but anything full-desktop is not.
+*fullshot*
+*-full/screen.png
+**/fullshot/
+screen.png
+evidence/
