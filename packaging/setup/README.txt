@@ -173,19 +173,37 @@ install, the guest blue-screens with INACCESSIBLE BOOT DEVICE (stop code
 
 The installer probes for this state (boot disk BusType SCSI + xenvbd
 boot-start) and ABORTS before removing anything, unless you pass
-/acceptpvdiskupgrade. Honesty note: the probe has not been validated against
-a live reproduction of the crash -- it is a conservative gate, not a proven
-check -- so passing the switch means accepting that the recovery below may be
-needed.
+/acceptpvdiskupgrade. The probe and the crash are both VALIDATED against live
+guests (2026-08-10): the probe read True on three PV-booted guests (and the
+raw evidence -- BusType SCSI, disk model "XENSRC PVDISK", xenvbd Start=0 --
+matches reality), and on a clean stock guest driven through the removal
+WITHOUT the mitigation below, the intermediate reboot did bugcheck and the
+guest was left UNBOOTABLE.
 
-Recovery, if the intermediate reboot bugchecks 0x7B:
+When you pass /acceptpvdiskupgrade, the installer now also RE-ARMS the
+emulated storage stack (Services\atapi, intelide, pciide, storahci back to
+boot-start -- the exact state a Safe Mode boot would restore) right before
+the risky reboot, so the intermediate boot is expected to come up on emulated
+IDE directly.
 
-  1. Let the guest crash-loop. After about three failed boots Windows offers
-     the advanced startup menu by itself.
+Recovery, if the intermediate reboot still bugchecks 0x7B:
+
+  1. Start the qube again after each crash. Under Qubes each bugcheck HALTS
+     the qube (the domain is destroyed at the moment of the blue screen, so
+     it will NOT crash-loop by itself, and you may not even see the blue
+     screen). After about three failed boots Windows may offer the advanced
+     startup menu.
   2. Pick Startup Settings -> Restart, then choose Safe Mode (the option
      number varies by locale; it is 4 on many systems).
   3. One Safe Mode boot is enough. Then reboot normally.
   4. Run install.cmd again; it continues with the install.
+
+  If the recovery menu never appears -- the qube dies within seconds of
+  every start; this is what the validation run observed -- the guest needs
+  offline repair: attach its root volume to another qube, load the SYSTEM
+  registry hive, set Start=0 (DWORD) on ControlSet001\Services\atapi,
+  intelide, pciide and storahci, unload, reattach, boot. Failing that,
+  reinstall the guest.
 
 THE QUBES IddCx DRIVER (/idd)
 -----------------------------

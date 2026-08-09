@@ -651,14 +651,44 @@ function Invoke-Stage2 {
                 $script:Result.detail.next = 'reboot, then the install phase runs'
                 if ($pvBoot) {
                     # /AcceptPvDiskUpgrade was passed (the gate above stops here otherwise).
-                    # Put the recovery recipe on screen AND in C:\qwt-improved-install.log
-                    # NOW - if the coming reboot bugchecks 0x7B, this is the last chance.
+                    #
+                    # RE-ARM THE EMULATED STORAGE STACK before the risky reboot. Removing
+                    # QWT reverts the boot disk toward emulated IDE, but Windows demoted
+                    # those drivers from boot-start when xenvbd took over, so the next boot
+                    # bugchecks 0x7B. Reproduced 2026-08-10 on a clean stock guest: without
+                    # this, the guest became UNBOOTABLE, and under Qubes the domain is
+                    # DESTROYED at the instant of the bugcheck (on_crash=destroy) - Windows
+                    # never gets to count failed boots, so the advertised auto-recovery
+                    # menu may never appear at all. Setting Start=0 (boot) on the emulated
+                    # controller drivers is exactly the state a Safe Mode boot restores;
+                    # doing it NOW makes the intermediate boot succeed on IDE directly.
+                    # Boot-start drivers whose hardware is absent are simply not started,
+                    # so the extra entries are harmless on any disk layout.
+                    foreach ($svc in 'atapi', 'intelide', 'pciide', 'storahci') {
+                        $k = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc"
+                        if (Test-Path -LiteralPath $k) {
+                            try {
+                                $old = (Get-ItemProperty -LiteralPath $k -ErrorAction Stop).Start
+                                Set-ItemProperty -LiteralPath $k -Name Start -Value 0 -Type DWord -ErrorAction Stop
+                                Write-Log "re-armed emulated storage driver ${svc}: Start $old -> 0 (boot)"
+                            } catch {
+                                Write-Log "could not re-arm ${svc}: $($_.Exception.Message)" 'WARN'
+                            }
+                        }
+                    }
+                    $script:Result.detail.emulated_storage_rearmed = $true
+                    # Recovery recipe on screen AND in C:\qwt-improved-install.log NOW - if
+                    # the coming reboot still bugchecks 0x7B, this is the last chance.
                     foreach ($l in @(
                         'PV BOOT DISK: the coming reboot may bugcheck 0x7B INACCESSIBLE BOOT DEVICE. If it does:',
-                        '  1. let the guest crash-loop ~3 times - Windows then offers advanced startup by itself',
+                        '  1. start the qube again after each crash (under Qubes each bugcheck HALTS the qube;',
+                        '     it will not loop by itself) - after ~3 failed boots Windows may offer advanced startup',
                         '  2. Startup Settings -> Restart -> pick Safe Mode (option number varies by locale; 4 on many)',
                         '  3. one Safe Mode boot is enough - then reboot normally',
-                        '  4. run install.cmd again to finish the install'
+                        '  4. run install.cmd again to finish the install',
+                        '  If the recovery menu never appears (the qube dies instantly on every start), the guest',
+                        '  needs offline repair (attach the disk to another qube, load the SYSTEM hive, set',
+                        '  Services\atapi, intelide, pciide, storahci Start=0) - or a reinstall.'
                     )) { Write-Log $l 'WARN' }
                 }
                 $self = Join-Path $Root 'Install-QwtImproved.ps1'
