@@ -188,13 +188,19 @@ rounds, 2026-08-09) — gui-agent CPU, % of one core, median:
 | scroll | 4.369 | 5.158 | inside noise — no verdict |
 | idle   | 0.57 | 3.04 | **the actual defect: a standing idle burn** |
 
-Root cause (found the same day): the gap is not in the typing path — the typing increment
-over each side's own idle is equal. It is a standing idle burn: the per-window capture
-engine's 250 ms sweep kept re-rendering the served window 4×/s. A fix is committed
-(`SweepDdaExempt`, default on) and is awaiting a measured A/B; until that verifies, **do
-not install this build expecting lower CPU cost** — install it for the correctness fixes
-and capabilities above, which stand on their own. One confirmed point in this build's
-favour: its working set stays flat over a workload where stock's grows ~87 MB.
+Root cause (found the same day): the gap was not in the typing path — the typing
+increment over each side's own idle is equal. It was a standing idle burn: the
+per-window capture engine's 250 ms sweep kept re-rendering the served window 4×/s.
+
+**Fixed and verified the same night** (`SweepDdaExempt`, default on; one binary,
+marker-toggled A/B, the re-enabled sweep reproducing the defect as control): idle
+3.04 → **0.83** (stock reference 0.57), typing 4.38 → **1.71** (stock 2.02–2.19), drag
+**8.67** (stock 12.31), scroll **3.51** (stock 4.37). With the fix, the agent no longer
+costs more than stock on any measured phase; the stock figures are the prior run's
+reference on the same guest and harness, so a fresh interleaved stock run is the one
+formality left. **No released build carries the fix yet** — until the next release, the
+table above describes what is shipped. One more confirmed point in this build's favour:
+its working set stays flat over a workload where stock's grows ~87 MB.
 
 **Windows 10 numbers favour this build heavily.** From the four-install comparison
 (clean installs of both builds on both platforms) — gui-agent CPU, % of one core,
