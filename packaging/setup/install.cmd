@@ -12,6 +12,9 @@ REM                              (it becomes the display; the emulated VGA
 REM                              adapter is disabled - see README.txt)
 REM     install.cmd /nonet       omit the PV network drivers (see README.txt)
 REM     install.cmd /nodisk      omit the PV disk drivers (diagnostic only)
+REM     install.cmd /noapptweaks skip the app HW-accel pre-tweak (registry
+REM                              policies making Office/browsers/Slack render
+REM                              in software - see README.txt)
 REM     install.cmd /acceptpvdiskupgrade
 REM                              remove an existing QWT even when the boot disk
 REM                              is on the PV disk path - can bugcheck 0x7B at
@@ -38,8 +41,9 @@ if /i "%~1"=="/idd"    ( set "PSARGS=!PSARGS! -InstallIddDriver" & shift & goto 
 if /i "%~1"=="/nonet"  ( set "PSARGS=!PSARGS! -NoPvNetwork"      & shift & goto parse )
 if /i "%~1"=="/nodisk" ( set "PSARGS=!PSARGS! -NoPvDisk"         & shift & goto parse )
 if /i "%~1"=="/acceptpvdiskupgrade" ( set "PSARGS=!PSARGS! -AcceptPvDiskUpgrade" & shift & goto parse )
+if /i "%~1"=="/noapptweaks" ( set "PSARGS=!PSARGS! -NoAppTweaks" & shift & goto parse )
 echo Unknown option: %~1
-echo Valid options: /auto /idd /nonet /nodisk /acceptpvdiskupgrade
+echo Valid options: /auto /idd /nonet /nodisk /acceptpvdiskupgrade /noapptweaks
 exit /b 87
 :parsed
 
