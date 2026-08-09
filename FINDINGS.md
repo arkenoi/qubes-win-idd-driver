@@ -6191,7 +6191,7 @@ caveat and hardens the fix:
    taken - and the guest NEVER CAME BACK. Seven consecutive boot attempts died within
    ~12-24 s each: under Qubes the domain is DESTROYED at the instant of the bugcheck
    (on_crash=destroy), so Windows never counts failed boots and the "crash-loop ~3 times
-   -> recovery menu"路 path the field user reported NEVER ENGAGES here. A 0x7B-bricked
+   -> recovery menu" path the field user reported NEVER ENGAGES here. A 0x7B-bricked
    qube on Qubes has no in-guest recovery at all without console interaction; offline
    hive repair or reinstall are the real options. Docs updated accordingly.
 4. **Fix upgraded from gate to mitigation.** The installer now RE-ARMS the emulated
@@ -6208,4 +6208,4 @@ set it at provision time); (b) /tmp is a 1 GiB tmpfs and a ~100 MB payload zip f
 mid-write, producing a silently EMPTY guest-side payload and a void first "gate did not
 fire" result - caught by judging output (empty C:\pvtest), now guarded by an explicit
 expanded-file-count gate in pv-validate.sh; (c) dom0 fullshot cannot photograph a guest
-that dies in <14 s - behavioural evidence (boot-死-loop) plus in-log sequence stands in.
+that dies in <14 s - behavioural evidence (boot-die loop) plus in-log sequence stands in.
