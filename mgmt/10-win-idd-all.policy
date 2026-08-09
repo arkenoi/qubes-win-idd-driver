@@ -1,0 +1,248 @@
+# qubes-win-idd — SINGLE authoritative policy for the Windows test rig.
+#
+# Numbered 10- ON PURPOSE: qrexec stops at the FIRST match, and the rig already has
+# 29-win-idd-testbed, 30-win-idd-dev, 30-win-idd-fullscreen, 31-win-idd-clone,
+# 31-win-idd-mgmt and 31-win-idd-resize. Evaluating this file first makes every grant
+# below authoritative regardless of what those contain, so no archaeology is needed and
+# no later deny/ask can shadow it.
+#
+# It is a SUPERSET of what those six grant to win-idd-mgmt (admin API + qubes.VMShell/
+# VMExec/Filecopy + the local.Win* dom0 helpers), so once this is verified the older files
+# can be deleted. Deleting them is optional — leaving them costs nothing but clutter.
+#
+# Service names were enumerated from the installed qubesadmin client, which found the two
+# real defects in the current setup:
+#   * admin.vm.Create.standalone  is not a service. The real name is
+#     admin.vm.Create.StandaloneVM  -> VM creation/cloning could never have worked.
+#   * admin.Events was left commented out in 06-install-mgmt-policy.sh. Its absence does
+#     not error, it makes qvm-* HANG (measured: qvm-ls blocking >120 s).
+#
+# Scope: source is always win-idd-mgmt. Destinations are only the test guests (by either
+# tag they carry), win-idd-mgmt itself (to enumerate the loop devices it exports), and dom0
+# (calls with no target VM). Nothing else on the system is touched.
+#
+# NOT granted, deliberately: admin.property.Set (global defaults), admin.pool.Add/.Remove
+# (storage pools), admin.backup.* .
+
+## ===== admin API on the test guests (both tags; new/cloned VMs get created-by-* automatically) =====
+admin.vm.CurrentState                *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.CurrentState                *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.CurrentState                *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.Stats                       *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.Stats                       *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.Stats                       *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.Start                       *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.Start                       *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.Start                       *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.Shutdown                    *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.Shutdown                    *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.Shutdown                    *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.Kill                        *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.Kill                        *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.Kill                        *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.Pause                       *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.Pause                       *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.Pause                       *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.Unpause                     *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.Unpause                     *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.Unpause                     *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.Suspend                     *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.Suspend                     *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.Suspend                     *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.Resume                      *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.Resume                      *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.Resume                      *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.Remove                      *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.Remove                      *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.Remove                      *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.List                        *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.List                        *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.List                        *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.property.Get                *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.property.Get                *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.property.Get                *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.property.GetAll             *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.property.GetAll             *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.property.GetAll             *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.property.GetDefault         *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.property.GetDefault         *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.property.GetDefault         *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.property.List               *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.property.List               *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.property.List               *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.property.Set                *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.property.Set                *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.property.Set                *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.property.Reset              *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.property.Reset              *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.property.Reset              *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.feature.Get                 *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.feature.Get                 *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.feature.Get                 *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.feature.Set                 *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.feature.Set                 *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.feature.Set                 *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.feature.List                *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.feature.List                *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.feature.List                *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.feature.Remove              *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.feature.Remove              *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.feature.Remove              *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.feature.CheckWithTemplate   *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.feature.CheckWithTemplate   *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.feature.CheckWithTemplate   *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.tag.Get                     *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.tag.Get                     *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.tag.Get                     *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.tag.List                    *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.tag.List                    *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.tag.List                    *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.tag.Set                     *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.tag.Set                     *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.tag.Set                     *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.tag.Remove                  *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.tag.Remove                  *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.tag.Remove                  *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.volume.List                 *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.volume.List                 *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.volume.List                 *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.volume.Info                 *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.volume.Info                 *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.volume.Info                 *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.volume.Resize               *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.volume.Resize               *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.volume.Resize               *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.volume.Clear                *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.volume.Clear                *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.volume.Clear                *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.volume.CloneFrom            *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.volume.CloneFrom            *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.volume.CloneFrom            *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.volume.CloneTo              *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.volume.CloneTo              *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.volume.CloneTo              *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.volume.Import               *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.volume.Import               *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.volume.Import               *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.volume.ImportWithSize       *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.volume.ImportWithSize       *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.volume.ImportWithSize       *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.volume.ListSnapshots        *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.volume.ListSnapshots        *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.volume.ListSnapshots        *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.volume.Revert               *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.volume.Revert               *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.volume.Revert               *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.volume.Set.ephemeral        *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.volume.Set.ephemeral        *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.volume.Set.ephemeral        *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.volume.Set.rw               *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.volume.Set.rw               *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.volume.Set.rw               *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.device.block.Assign         *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.block.Assign         *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.block.Assign         *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.device.block.Unassign       *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.block.Unassign       *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.block.Unassign       *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.device.block.Attach         *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.block.Attach         *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.block.Attach         *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.device.block.Detach         *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.block.Detach         *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.block.Detach         *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.device.block.Assigned       *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.block.Assigned       *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.block.Assigned       *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.device.block.Attached       *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.block.Attached       *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.block.Attached       *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.device.block.Available      *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.block.Available      *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.block.Available      *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.device.block.Set.assignment *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.block.Set.assignment *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.block.Set.assignment *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.device.block.List           *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.block.List           *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.block.List           *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.device.block.Set            *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.block.Set            *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.block.Set            *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.device.denied.Add           *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.denied.Add           *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.denied.Add           *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.device.denied.Remove        *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.denied.Remove        *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.denied.Remove        *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.notes.Get                   *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.notes.Get                   *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.notes.Get                   *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.notes.Set                   *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.notes.Set                   *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.notes.Set                   *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.firewall.Get                *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.firewall.Get                *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.firewall.Get                *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.firewall.Set                *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.firewall.Set                *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.firewall.Set                *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.firewall.Reload             *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.firewall.Reload             *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.firewall.Reload             *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.Events                         *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.Events                         *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.Events                         *  win-idd-mgmt  @tag:qwt-bench                 allow target=dom0
+admin.vm.tag.Set                     *  win-idd-mgmt  @anyvm                        allow target=dom0
+admin.vm.tag.Remove                  *  win-idd-mgmt  @anyvm                        allow target=dom0
+admin.vm.tag.List                    *  win-idd-mgmt  @anyvm                        allow target=dom0
+admin.vm.tag.Get                     *  win-idd-mgmt  @anyvm                        allow target=dom0
+
+## ===== the loop devices this qube exports (answer stick / install ISO) =====
+admin.vm.device.block.Available      *  win-idd-mgmt  win-idd-mgmt  allow target=dom0
+admin.vm.device.block.Attached       *  win-idd-mgmt  win-idd-mgmt  allow target=dom0
+admin.vm.device.block.Assigned       *  win-idd-mgmt  win-idd-mgmt  allow target=dom0
+admin.vm.device.block.List           *  win-idd-mgmt  win-idd-mgmt  allow target=dom0
+admin.vm.List                        *  win-idd-mgmt  win-idd-mgmt  allow target=dom0
+
+## ===== calls with no target VM (creation, lookups, event stream) =====
+admin.Events                         *  win-idd-mgmt  dom0  allow target=dom0
+admin.vm.List                        *  win-idd-mgmt  dom0  allow target=dom0
+admin.vm.property.Get                *  win-idd-mgmt  dom0  allow target=dom0
+admin.vm.property.List               *  win-idd-mgmt  dom0  allow target=dom0
+admin.vm.property.GetAll             *  win-idd-mgmt  dom0  allow target=dom0
+admin.vmclass.List                   *  win-idd-mgmt  dom0  allow target=dom0
+admin.deviceclass.List               *  win-idd-mgmt  dom0  allow target=dom0
+admin.label.List                     *  win-idd-mgmt  dom0  allow target=dom0
+admin.label.Get                      *  win-idd-mgmt  dom0  allow target=dom0
+admin.label.Index                    *  win-idd-mgmt  dom0  allow target=dom0
+admin.property.Get                   *  win-idd-mgmt  dom0  allow target=dom0
+admin.property.GetAll                *  win-idd-mgmt  dom0  allow target=dom0
+admin.property.List                  *  win-idd-mgmt  dom0  allow target=dom0
+admin.pool.List                      *  win-idd-mgmt  dom0  allow target=dom0
+admin.pool.Info                      *  win-idd-mgmt  dom0  allow target=dom0
+admin.pool.ListDrivers               *  win-idd-mgmt  dom0  allow target=dom0
+admin.pool.UsageDetails              *  win-idd-mgmt  dom0  allow target=dom0
+admin.pool.volume.List               *  win-idd-mgmt  dom0  allow target=dom0
+admin.pool.volume.Info               *  win-idd-mgmt  dom0  allow target=dom0
+admin.vm.Create.StandaloneVM         *  win-idd-mgmt  dom0  allow target=dom0
+admin.vm.Create.AppVM                *  win-idd-mgmt  dom0  allow target=dom0
+admin.vm.Create.TemplateVM           *  win-idd-mgmt  dom0  allow target=dom0
+admin.vm.Create.DispVM               *  win-idd-mgmt  dom0  allow target=dom0
+admin.vm.CreateInPool.StandaloneVM   *  win-idd-mgmt  dom0  allow target=dom0
+admin.vm.CreateInPool.AppVM          *  win-idd-mgmt  dom0  allow target=dom0
+admin.vm.CreateDisposable            *  win-idd-mgmt  dom0  allow target=dom0
+
+## ===== driving the guests + dom0 helper services =====
+qubes.VMShell                        *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow
+qubes.VMShell                        *  win-idd-mgmt  @tag:win-idd-testbed          allow
+qubes.VMShell                        *  win-idd-mgmt  @tag:qwt-bench                 allow
+qubes.VMExec                         *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow
+qubes.VMExec                         *  win-idd-mgmt  @tag:win-idd-testbed          allow
+qubes.VMExec                         *  win-idd-mgmt  @tag:qwt-bench                 allow
+qubes.Filecopy                       *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow
+qubes.Filecopy                       *  win-idd-mgmt  @tag:win-idd-testbed          allow
+qubes.Filecopy                       *  win-idd-mgmt  @tag:qwt-bench                 allow
+local.WinScreenshot                  *  win-idd-mgmt  dom0  allow
+local.WinFullScreen                  *  win-idd-mgmt  dom0  allow
+local.WinResize                      *  win-idd-mgmt  dom0  allow

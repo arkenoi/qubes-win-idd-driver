@@ -219,6 +219,34 @@
           <Description>test rig: remove Store Notepad (its update banner confounds the typing benchmark)</Description>
           <Order>14</Order>
         </SynchronousCommand>
+        <!-- Launch the restart-prompt dismisser BEFORE the payload, in the background.
+             Stock QWT's PV driver install raises a MODAL "needs to restart the system to
+             complete installation" dialog. It blocks the rest of firstboot, and qrexec does
+             not answer while it is up - the guest becomes unreachable, so it cannot be clicked
+             from outside. A run simply stops, and the only way out is destroying the domain
+             from dom0. Observed on the stock re-measure, which wedged the guest in Transient.
+             It answers NO (defer), not Yes: rebooting mid-payload would cut the remaining
+             install steps short. The harness reboots deliberately afterwards, as it already
+             does. Bounded to 45 minutes so it cannot linger. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c start "" /min powershell -NoProfile -ExecutionPolicy Bypass -File C:\payload\dismiss-restart-prompts.ps1 -Minutes 45</CommandLine>
+          <Description>background: auto-defer driver restart prompts during the payload install</Description>
+          <Order>15</Order>
+        </SynchronousCommand>
+        <!-- TEST RIG ONLY - never ship. Disable UAC so the 'user' account (a member of
+             Administrators) gets an UNFILTERED token at logon. Without this, Win11 hands
+             qrexec a filtered Medium-integrity token: 'schtasks /create /rl HIGHEST' is
+             denied, so guest/run-elevated.ps1's scheduled-task elevation trick fails and the
+             in-place agent swap (swap-agent.ps1: stop service, overwrite Program Files,
+             restart) cannot run. The swap was only ever verified on Win10, whose default UAC
+             posture let it through; Win11 needs this. Takes effect on the reboot the
+             provisioner already performs after install. Retracts the false 2026-08-09
+             HANDOVER claim that win11-idd-test was swappable. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>test rig: disable UAC so the elevated agent swap works (never ship)</Description>
+          <Order>16</Order>
+        </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>

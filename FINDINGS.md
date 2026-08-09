@@ -5931,3 +5931,140 @@ it", not "there is nothing there":
 Each looked like a finding. The defence that worked was counting *causes* rather than outcomes
 (`pwnofb/pwnoz/pwoff/pwocc/pwnofg/pwovl/pwfirst/pwchg`), and the defence that would have worked
 soonest was looking at the screen.
+
+---
+
+## 2026-08-09 (later) — RETRACTION: the elevated swap does NOT work on win11-idd-test
+
+HANDOVER.md claims "win11-idd-test has stock 4.2.2 with a `.orig` backup, so swap ours in,
+measure, restore" and "Elevation is available: guest/run-elevated.ps1". Both are FALSE for
+this guest, measured today:
+
+- `run-elevated.ps1` fails at `schtasks /create ... /rl HIGHEST` with **Access is denied**.
+  Directly confirmed: an unelevated LIMITED task creates fine (RC=0), a HIGHEST task is
+  denied. The `user` token is fully UAC-filtered here: `whoami /groups` shows
+  **Medium Mandatory Level** with `BUILTIN\Administrators` as **deny-only**;
+  `EnableLUA=1`, `ConsentPromptBehaviorAdmin=0x5`, `FilterAdministratorToken`/
+  `LocalAccountTokenFilterPolicy` unset.
+- There is **no `.orig` backup** on win11-idd-test (`gui-agent.exe.orig` absent) — swap-agent
+  never ran there, because it can never elevate there.
+
+Root cause of the bad handover claim: the swap was only ever *verified* on **win10-clean**
+(`verify-elevated-swap.sh` runs there), and Win10's default UAC posture let the HIGHEST-task
+trick through. It was extrapolated to Win11 without testing. Win11 built from
+`autounattend-win11.xml` keeps UAC fully on, so the trick does not work on ANY Win11 guest
+from that answer file — not just this one.
+
+Consequence: `ours-vs-stock-one-guest.sh` / `stock-remeasure-1guest.sh` cannot run on
+win11-idd-test as written — the swap silently no-ops and the harness would (correctly) refuse
+the ours reps on the hash check. The single-variable Win11 stock-vs-DDA comparison is BLOCKED
+on elevation, pending a decision (bake `EnableLUA=0`, test-rig-only, into the answer file and
+reprovision one reusable stock guest; or credentialed schtasks, which the dev-qube safety
+classifier blocks). Roadmap item N1 (the swap loop) inherits this: it must be fixed at the
+answer-file level for Win11, not assumed working.
+
+---
+
+## 2026-08-09 (later) — the "guest restarts itself" mystery: QUEUED QREXEC + a 6000 s timeout
+
+**Mechanism, reproduced and then fixed.** `win11-fresh` came back ~3 s after every `qvm-kill`,
+looking exactly like a wedged/zombie domain. It was neither.
+
+A qrexec call to a **Halted** qube **auto-starts it**. `win11-fresh`'s Windows install has no
+working guest qrexec agent, so each call then hangs for the full `qrexec_timeout` — which is
+**6000 s** on these guests — pinning 8 GB up for up to 100 minutes. Calls had QUEUED from this
+qube (win-idd-mgmt) in earlier sessions. The queue outlives the shell that made it: killing the
+script does NOT cancel the pending calls, which is why every process hunt came back empty
+(100 `/proc` samples over 30 s matched nothing but the sampler itself).
+
+**Fix that drained it, with native tools only:**
+```
+qvm-prefs win11-fresh qrexec_timeout 15    # was 6000
+qvm-kill win11-fresh
+```
+Each queued call then failed in ~15 s instead of 6000 s. Observed draining: Transient at
+t+10-20, t+35-45, t+55-65 (three queued calls), then **Halted continuously from t+70 s**.
+8 GB recovered. `win-idd-test` came up by the same route minutes later — it is `tools/qtest`'s
+DEFAULT target when `QTEST_VM` is unset, so any bare `./tools/qtest ...` starts it.
+
+**Retractions.** Two wrong claims made and corrected within the hour:
+1. "Nothing is restarting it, it never died" — WRONG. The user watched it shut down and restart;
+   a kill+poll test then reproduced it (Halted t+3 s, Transient t+6 s). Built on one bad
+   `qvm-shutdown --wait` reading that showed Halted.
+2. HANDOVER.md trap #1 blames "a background script fighting a deliberate qvm-kill". The script is
+   not the agent of the restart — the QUEUED CALL is, and it survives the script's death.
+
+**Rules that follow:**
+- Never leave a harness pointed at a guest whose qrexec agent is dead: with `qrexec_timeout=6000`
+  every retry pins the guest for 100 minutes and resurrects it after a kill.
+- Before diagnosing a "wedged" guest, check `qrexec_timeout` and drain by lowering it. Do NOT
+  reach for `xl destroy`; the native tools are sufficient and were never the problem.
+- Always set `QTEST_VM` explicitly. A bare `tools/qtest` silently starts `win-idd-test`.
+- Memory pressure is the real cost: three 8 GB guests up at once starved the host and made
+  qubesd admin calls fail/hang ("Service call error", `qvm-ls` blocking >120 s).
+
+**Same session, provisioning bug found and fixed:** `usb-provision.sh:12` used
+`NETVM="${4:-core-net}"`. The colon form treats an EXPLICITLY EMPTY argument as unset, so
+`usb-provision.sh <vm> loop3 loop10 ''` — the documented way to ask for an OFFLINE guest —
+silently produced `netvm=core-net`. The swappable-stock reprovision therefore came up
+NETWORKED, against CLAUDE.md's hard rule and against measurement hygiene (a networked Win11
+guest pulls updates during OOBE, the documented source of the bimodal benchmark clusters).
+Caught ~2 min into the install from the provisioner's own log line "creating win11-idd-test
+(netvm=core-net)"; `qvm-prefs win11-idd-test netvm ''` applied immediately, well before first
+logon. Fixed to `${4-core-net}`: omitting the argument still defaults to core-net, passing ''
+now means offline. Lesson: read the provisioner's echoed configuration, do not assume the
+argument you passed is the value it used.
+
+---
+
+## 2026-08-09 (evening) — THE STOCK COMPARISON, AT LAST. It does not say what we hoped.
+
+First single-variable ours-vs-stock measurement in the project's history: ONE guest
+(`win11-idd-test`, rebuilt today with genuine stock QWT 4.2.2 + `EnableLUA=0`), our agent
+swapped in and out IN PLACE via the elevated scheduled-task path, hash-verified every rep,
+5 rounds interleaved, classic Notepad both sides.
+
+**GATE: ddacap=2293, pwcap=13 -> the DDA fast path served 99.4% of captures, zero refusals.**
+This is a clean read of the feature working as designed, not a fallback measurement.
+
+| metric | stock 4.2.2 | ours (DDA, cond C) | delta | worst spread | verdict |
+|---|---|---|---|---|---|
+| typing | 2.188 | 4.381 | **+100.3%** | 62.8% | **REAL — distributions do not overlap** |
+| drag   | 12.314 | 11.727 | −4.8% | 34.6% | inside noise — NO verdict |
+| scroll | 4.369 | 5.158 | +18.0% | 42.5% | inside noise — NO verdict |
+
+    typing stock [1.400 1.867 2.188 2.333 2.651]   ours [3.042 3.756 5.007 5.795]
+    drag   stock [11.396 12.174 12.314 12.331 12.952] ours [9.359 10.784 12.669 13.421]
+    scroll stock [3.426 4.070 4.369 4.383 4.843]   ours [4.688 5.152 5.163 6.879]
+
+Typing is the one robust result: **every** ours rep is worse than **every** stock rep
+(ours min 3.042 > stock max 2.651). Our agent costs 2x stock on typing CPU. Drag and scroll
+differences are smaller than the run-to-run spread and prove nothing in either direction —
+the harness's own "BEATS STOCK" tag on drag (0.95x) is NOT supported and must not be quoted.
+
+n=4 on the ours side: `ours-ro3`'s CPU sampler produced no samples, correctly emitted as
+`{"na": ...}` rather than 0.
+
+### RETRACTION — what the −67% actually meant
+
+HANDOVER.md's headline ("DDA-sourced capture is a large, measured win: typing −67%") compared
+**our binary against ITSELF** with DDA disabled (condition D, typing 12.427). It never compared
+against stock. Stock is 2.188. So the honest statement is:
+
+  our build without DDA   12.427   (5.7x WORSE than stock)
+  our build with DDA       4.381   (2.0x worse than stock)
+  stock 4.2.2              2.188
+
+DDA removes most of an overhead THE FORK ITSELF INTRODUCED. It does not make the fork faster
+than what it forked. The ship gate's "publish as a performance bugfix" framing is withdrawn:
+on typing, this build is a regression against stock and must not ship as-is.
+
+### The one confound still open, and it is testable
+
+Our build writes a QGAPERF record per frame (`g_PerfEnabled`, gated by the `PerfLog` registry
+DWORD, perf.c:89); stock emits none BY CONSTRUCTION (benchmark.sh's own header says so). So
+this compares an instrumented build against an uninstrumented one, and an unknown share of
+the +100% typing cost is logging, not the feature. Next experiment: same binary, `PerfLog=0`,
+third interleaved side — verified by HASH (the binary is ours) plus the ABSENCE of QGAPERF
+records (logging really is off). That splits "our code is slower" from "our logging is slower",
+which is the difference between a redesign and a build flag.

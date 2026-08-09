@@ -136,6 +136,16 @@ STOCKEOF
 fi
 
 cp "$HERE/../guest/firstboot-setup.ps1" "$WORK/payload/" 2>/dev/null || true
+# Stage every helper the answer file launches from C:\payload. Missing scripts do not error
+# at build time - the `for %%d ... if exist` guards in the answer file silently skip them -
+# so an unstaged script is invisible until the guest wedges on the modal it was meant to
+# dismiss. Copy them explicitly and FAIL if a referenced one is absent.
+for _p in dismiss-restart-prompts.ps1 disable-hw-accel.ps1; do
+    if grep -q "payload\\\\$_p" "$UNATTEND" 2>/dev/null; then
+        cp "$HERE/../guest/$_p" "$WORK/payload/" \
+            || { echo "ERROR: answer file references payload\\$_p but guest/$_p is missing" >&2; exit 1; }
+    fi
+done
 
 # Rewrite the image IN PLACE. `rm -f` + truncate would give the file a NEW INODE while any
 # losetup attached to it keeps the OLD one - `losetup -l` then shows the backing file as
