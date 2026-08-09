@@ -30,7 +30,7 @@ BANNER = re.compile(r'QGAPERF(?:-HEADER)? (?:on|off|v=|fields)')
 TIME_FIELDS = ['dt', 'acq', 'wak', 'mrq', 'drq', 'upd', 'enu', 'rem', 'dmg', 'snd', 'tot', 'log']
 # iwn = windows actually interrogated (the Phase 2A headline: was ~67/frame, should
 # approach 0). wev = window events drained. Both are per-record counts.
-COUNT_FIELDS = ['dr', 'mr', 'area', 'sends', 'skip', 'pwskip', 'pwcap', 'pwnofb', 'pwnoz', 'pwoff', 'pwocc', 'pwnofg', 'pwovl', 'pwfirst', 'pwchg', 'frdrop', 'iwn', 'wev']
+COUNT_FIELDS = ['dr', 'mr', 'area', 'sends', 'skip', 'pwskip', 'pwcap', 'pwnofb', 'pwnoz', 'pwoff', 'pwocc', 'pwnofg', 'pwovl', 'pwfirst', 'pwchg', 'frdrop', 'ddacap', 'iwn', 'wev']
 LAST_FIELDS = ['win', 'mrmax']
 
 PHASE_GROUPS = OrderedDict([
