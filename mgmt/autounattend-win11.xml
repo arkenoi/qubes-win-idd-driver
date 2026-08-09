@@ -192,9 +192,19 @@
           <Order>11</Order>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
-          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\WindowsStore" /v AutoDownload /t REG_DWORD /d 2 /f &amp; schtasks /Change /TN "\Microsoft\Windows\WindowsUpdate\Scheduled Start" /Disable &amp; schtasks /Change /TN "\Microsoft\Windows\TaskScheduler\Idle Maintenance" /Disable &amp; schtasks /Change /TN "\Microsoft\Windows\TaskScheduler\Regular Maintenance" /Disable</CommandLine>
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\WindowsStore" /v AutoDownload /t REG_DWORD /d 2 /f &amp; reg add "HKLM\SOFTWARE\Policies\Microsoft\WindowsStore" /v DisableOSUpgrade /t REG_DWORD /d 1 /f &amp; sc config InstallService start= disabled &amp; sc stop InstallService &amp; schtasks /Change /TN "\Microsoft\Windows\WindowsUpdate\Scheduled Start" /Disable &amp; schtasks /Change /TN "\Microsoft\Windows\TaskScheduler\Idle Maintenance" /Disable &amp; schtasks /Change /TN "\Microsoft\Windows\TaskScheduler\Regular Maintenance" /Disable</CommandLine>
           <Description>test rig: no Store auto-update, no idle maintenance</Description>
           <Order>12</Order>
+        </SynchronousCommand>
+        <!-- The benchmark types into Notepad, and Notepad is a STORE app on Windows 11. It
+             showed "A new version of Notepad is available" during a measurement run - an
+             in-app banner that repaints and changes the damage pattern of the very window
+             being measured. AutoDownload=2 stops the download; this also stops the Store
+             install machinery that surfaces the notice at all. TEST RIG ONLY. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c schtasks /Change /TN "\Microsoft\Windows\WindowsUpdate\Automatic App Update" /Disable &amp; schtasks /Change /TN "\Microsoft\Windows\Shell\UpdateUserPictureTask" /Disable &amp; reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SilentInstalledAppsEnabled /t REG_DWORD /d 0 /f &amp; reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v PreInstalledAppsEnabled /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>test rig: no Store app-update notices (Notepad banner confounds the benchmark)</Description>
+          <Order>13</Order>
         </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>
