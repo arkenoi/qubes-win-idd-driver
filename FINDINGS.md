@@ -5866,3 +5866,68 @@ full-screen window *below* (the shell desktop) cannot veto everything.
 4. **An A/B that produced zero valid points**, because qrexec runs unelevated on clean-room
    guests — a wall documented in `win11-idd-vs-bda.ps1` months earlier and walked into anyway.
    The harness refused to fabricate numbers, which is the one thing that went right.
+
+---
+
+## 2026-08-09 — the session was never locked; autologon was broken. Three retractions.
+
+### What actually happened
+
+The guest sat at **"Windows sign-in"** — verified by capturing the dom0 desktop and *looking at
+it*, after the user pointed out the screenshot tool had been available the whole time. It was
+still there after a clean kill + cold start, so this was never an idle lock:
+**AutoLogon does not resume the session after any reboot.**
+
+Cause: `<LogonCount>999</LogonCount>` makes Windows write `AutoLogonCount`, and while that
+value is present Windows **consumes `DefaultPassword`, deleting it after use**. Autologon is
+then left with a username and no password and falls through to the sign-in screen. Deleting
+`AutoLogonCount` and re-writing the credentials gives unlimited autologon. Fixed in both answer
+files and gated by an acceptance step that **reboots and requires the session back** — the one
+thing that could not be tested without rebooting. It passed: 46 s, versus never.
+
+Marked TEST-RIG ONLY: it stores a plaintext password in the registry, which the shipped
+installer must never do.
+
+### Retractions
+
+1. **"The idle Windows 11 desktop presents 18.75 fps ambient."** Wrong. That guest was at the
+   sign-in screen with a pending update. On a settled guest with a *verified* session the idle
+   rate is **5.20 fps** (4.96 / 5.73 / 5.20) — 3.6x lower.
+2. **"The idle screen is byte-static."** Wrong, and wrong for an instructive reason: the probe
+   sampled at a uniform 1500 ms and **aliased** with a blinking notification, so every sample
+   landed at the same phase and saw nothing. Uniform sampling cannot see a periodic signal.
+   Now 250 ms with 150 ms jitter, which finds change in 6 of 39 intervals.
+3. **"A locked session unmaps the guest's windows, so the earlier wedge was probably this."**
+   Wrong: the sign-in window *is* mapped and visible. Both the unmapping claim and the wedge
+   attribution built on it are withdrawn.
+
+### What survives, and is now on solid ground
+
+On a settled guest with a verified session, idle:
+
+- **5.20 presents/s**, every one carrying real dirty rects (`empty=0`, ~350k px);
+- actual pixel change in **6 of 39** sampled intervals (~0.38/s);
+- and **every changed region lay inside the single open application window** — Notepad's caret
+  and text (window 1332,445–2118,1038; changed boxes 32x32, 560x48, 784x560).
+
+Nothing outside that window changed: no taskbar, no wallpaper, no widget, no shell surface. So
+~90% of idle presents carry no pixel change — DWM reports composition damage for regions whose
+contents are identical.
+
+**This kills the shell-quieting direction.** `guest/quiet-shell-surfaces.ps1` was built to
+disable widgets/search/Copilot on the theory that some surface repaints unprompted. There is no
+such surface. It must not ship on that basis.
+
+### The pattern worth naming
+
+Three times in two days an instrument returned a confident **zero** that meant "I could not see
+it", not "there is nothing there":
+
+- the coalescing fast path: 0 skips in 5557 decisions, because it required `g_ZOrderValid` and
+  `CollectZOrder` deliberately leaves that FALSE unless a popup is on screen;
+- the idle probe: 0 changed cells, because uniform sampling aliased with the blink;
+- and before both, a counter that was incremented and never read.
+
+Each looked like a finding. The defence that worked was counting *causes* rather than outcomes
+(`pwnofb/pwnoz/pwoff/pwocc/pwnofg/pwovl/pwfirst/pwchg`), and the defence that would have worked
+soonest was looking at the screen.
