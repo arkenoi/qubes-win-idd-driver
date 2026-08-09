@@ -6068,3 +6068,74 @@ the +100% typing cost is logging, not the feature. Next experiment: same binary,
 third interleaved side — verified by HASH (the binary is ours) plus the ABSENCE of QGAPERF
 records (logging really is off). That splits "our code is slower" from "our logging is slower",
 which is the difference between a redesign and a build flag.
+
+## 2026-08-09 (late) — TYPING GAP ROOT-CAUSED: it is an IDLE floor, and the idle floor is the sweep
+
+### The reframe: there is no typing regression. There is a standing burn.
+
+Per-phase process-CPU recomputed from the raw 4 Hz SAMP traces of the same 2026-08-09
+stock comparison (script `phase-cpu.py`, session scratchpad; ours n=4 — ro3 has no
+samples — stock n=5, boundaries interpolated from rep.json):
+
+    phase        ours     stock     delta
+    idle (all)   3.04%    0.57%     +2.47   <- the defect
+    type         4.38     2.02      +2.36
+    type - idle  1.34     1.45      -0.11   <- typing itself is AT PARITY
+    drag        11.49    12.17      -0.68   <- fork slightly cheaper
+    scroll       5.44     4.13      +1.31 (idle-adjusted increment 2.40 vs 3.56 - cheaper)
+
+Every phase's gap is the idle floor wearing that phase's name. The instrumented main loop
+accounts for ~1.0-1.2 points during typing (677 µs/frame at ~15 fps; typing-phase upd=32,
+enu=38 — the SetWinEventHook rework WORKS; HANDOVER's scary upd=1157 was the whole-rep mean,
+drag-dominated). The other ~3 points never appear in any QGAPERF column.
+
+Bonus finding, direction reversed: stock's working set GROWS ~87 MB per 110 s rep
+(34 -> 120 MB); ours is flat at ~63 MB (+14 KiB).
+
+### The named cost: wincapture's 250 ms sweep has no DDA exemption
+
+`wincapture.cpp:38,241-253`: every 250 ms the engine thread marks one live channel dirty —
+unconditionally. During the whole benchmark the one channel is the DDA-active Notepad
+window (ddacap=1 every frame). Each sweep then runs CaptureAndDiff (:96-224): fresh
+CreateDIBSection (3.84 MB, kernel zero-fill), PrintWindow(PW_RENDERFULLCONTENT) — a
+synchronous cross-process render, 15-18 ms class on this WARP guest per main.c's own
+comment — GdiFlush, a full-buffer row memcmp (7.7 MB reads), teardown. 4x/s, forever,
+for a window whose every real change the DDA path already serves. ~25 ms/s of in-process
+CPU ≈ the entire 2.5-point idle delta. Invisible to QGAPERF by construction: it is on the
+engine thread and pwcap counts only frame-loop PerfNotePwDecision calls.
+
+It is also a CORRECTNESS bug: main.c:3712-3719 closes the buffer-ownership race "by
+construction" on the claim that "while DDA-active nothing ever marks the window dirty -
+the engine never touches the buffer at all". The sweep falsifies that claim 4 times a
+second: it can overwrite DDA-established content with PrintWindow-sourced pixels (the
+alpha-byte difference the ESTABLISH-ONCE comment itself names) and fire capture-thread
+damage — a 4 Hz version of the content swap that rework existed to remove.
+
+Ruled out by the same evidence pass: window tracking (typing-phase upd+enu = 70 µs),
+send amplification ("sends=2x dirty rects" is header+body counting in VchanSendTimed —
+messaging is 1:1 with stock), dirty-area inflation (area is the raw pre-intersection DXGI
+number; stock sees the same rects), StagingCopyFrame (per-frame Map/Unmap + dirty-region
+copy ~0.2-0.7 pt during typing, near zero at idle — real but secondary; note the fork
+copies every dirty pixel twice where stock copies zero), engine idle polling (Sleep(8),
+~0.05-0.25 pt), FrameSignature hashing (verified gated off), PerfLog (168 µs/frame = 0.25
+pt at 15 fps — closes the "one confound still open" above: logging is NOT the gap).
+
+Also found and noted: wincapture.cpp/`.h` and perwindow.h headers still describe a WGC
+engine; there is NO Windows.Graphics.Capture in this build (activation fails under
+SYSTEM/session-1, wincapture.cpp:1-21) — the engine is PrintWindow polling. Stale docs.
+
+### The fix (this commit)
+
+Per-channel `ddaOwned` flag + `WcSetDdaOwned()`: while the frame loop owns a window's
+buffer (DDA-active), the engine neither sweeps it nor consumes its dirty flag (pending
+marks are served when ownership drops; WcPrefill as a direct call still works — it is how
+ownership is established). Set on DDA entry before the prefill, re-asserted per
+steady-state frame, cleared on every DDA exit; PwDetachWindow now also clears PwDdaActive
+(was stale across detach/re-attach). Attribution switch in the house style: registry
+DWORD `SweepDdaExempt` (default 1), marker file `C:\Users\Public\qga-sweepdda-off`
+disables at runtime — so the A/B runs on ONE binary.
+
+Prediction to falsify: with the exemption ON, idle CPU drops from ~3.0 to <=1.0 and typing
+from ~4.4 to ~2.3-2.7 (stock parity); with the marker present, both return to current
+values. If idle does NOT drop, the sweep attribution is wrong and the remaining suspects
+are StagingCopyFrame and the 8 ms poll loop, in that order.
