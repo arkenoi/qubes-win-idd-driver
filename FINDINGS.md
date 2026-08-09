@@ -6209,3 +6209,20 @@ mid-write, producing a silently EMPTY guest-side payload and a void first "gate 
 fire" result - caught by judging output (empty C:\pvtest), now guarded by an explicit
 expanded-file-count gate in pv-validate.sh; (c) dom0 fullshot cannot photograph a guest
 that dies in <14 s - behavioural evidence (boot-die loop) plus in-log sequence stands in.
+
+### Operational lessons from the e2e chain (2026-08-10, early)
+
+- **Never qvm-kill a Windows guest that is wedged on a driver-restart dialog.** win11-fresh
+  sat with "Xen PV Storage Host Adapter needs to restart" (modal) + "You're about to be
+  signed out" (QWT setup) and qrexec down; a hard qvm-kill mid-transition left the boot
+  path half-switched and the guest insta-bugchecked on every subsequent boot - the same
+  die-in-seconds signature as the 0x7B repro, self-inflicted. `qvm-shutdown` (ACPI) lets
+  Windows complete the pending driver work and sign-out; that was the right move.
+- **The provision babysitter must never be orphaned.** usb-provision returns once the
+  installer boots; the caller owns restart-on-Halted for the install's several reboots.
+  Killing the calling script orphans the sequence and the guest wedges on whatever
+  interactive step the dismisser misses (observed: the PV storage restart prompt).
+  scratchpad/provision-then-e2e.sh now chains provision -> babysit -> verify -> e2e in
+  one process so an interrupt cannot split them.
+- A recreated VM does NOT inherit qrexec_timeout: usb-provision removes and re-creates,
+  so the 15 s guard must be re-applied after EVERY provision (now done inside the chain).
