@@ -6139,3 +6139,34 @@ Prediction to falsify: with the exemption ON, idle CPU drops from ~3.0 to <=1.0 
 from ~4.4 to ~2.3-2.7 (stock parity); with the marker present, both return to current
 values. If idle does NOT drop, the sweep attribution is wrong and the remaining suspects
 are StagingCopyFrame and the 8 ms poll loop, in that order.
+
+## 2026-08-09 (night) — SWEEP FIX VERIFIED: idle floor gone, typing at/below stock reference
+
+One binary (agent 92C48AC55CF96D4B = submodule e0cd9c4 sweep fix + 09b643e version bump),
+marker-toggled A/B on win11-idd-test, 3 rounds interleaved E,N; cold boot included (the
+guest started Halted); hash gate passed on all 6 reps; DDA served throughout (ddacap sums
+363-2528 per rep vs pwcap 2-27). E = SweepDdaExempt active (default), N = marker
+qga-sweepdda-off present = the pre-fix behaviour deliberately re-introduced.
+
+    phase        E (fix)   N (defect)   stock ref   before-fix ref
+    idle pooled    0.83       2.86        0.57         3.04
+    typing         1.71       3.93        2.02-2.19    4.38
+    drag           8.67      13.15       12.31        11.49-11.73
+    scroll         3.51       5.51        4.37         5.16-5.44
+
+- The defect-reintroduced control REPRODUCES the pre-fix numbers (idle 2.86 vs 3.04,
+  typing 3.93 vs 4.38): the check has been seen to fail on the defective configuration,
+  so its pass is proven meaningful (autonomy rule 5 satisfied).
+- Typing separates COMPLETELY per-rep: every E rep (max 2.35) is below every N rep
+  (min 3.33). Idle separates on phase means in all four idle windows (pooled 0.83 vs
+  2.86); individual 2-5 s idle windows overlap once (1.60 vs 1.25) - short-window
+  sampler quantisation, the pooled picture is unambiguous.
+- Against the stock REFERENCE (previous run, same guest/harness/phases, not interleaved
+  today - claim accordingly): idle 0.83 vs 0.57 (parity within the sampler's floor),
+  typing 1.71 vs 2.02-2.19 (at or below stock), drag 8.67 vs 12.31 (~30% below), scroll
+  3.51 vs 4.37 (below). The honest headline: THE FORK NO LONGER COSTS MORE THAN STOCK ON
+  ANY MEASURED PHASE, and the 2x-typing verdict is repaired at its root cause. A fresh
+  interleaved ours-vs-stock run would make the stock comparison ironclad; the E-vs-N
+  separation needs no such caveat.
+- Not yet in any released artifact: released builds still carry the burn until the next
+  release (prepare-but-hold per the owner, 2026-08-09).
