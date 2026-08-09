@@ -14,7 +14,15 @@ POLICY=/etc/qubes/policy.d/31-win-idd-mgmt.policy
 cat > "$POLICY" <<EOF
 # win-idd-mgmt orchestrator grants. Installed by qubes-win-idd 06-install-mgmt-policy.sh
 # --- VM creation (global right — the one line to think hard about) ---
-admin.vm.Create.standalone      *  $MGMT  dom0          allow target=dom0
+# StandaloneVM, NOT "standalone": the service name is the VM CLASS, verified against the
+# installed qubesadmin client. The lowercase form matches NOTHING, so VM creation was
+# silently never granted - measured 2026-08-09, when qvm-create/qvm-remove came back
+# "Request refused" while property.Get/Set worked. Superseded in practice by
+# mgmt/10-win-idd-all.policy, which is numbered to win first-match.
+admin.vm.Create.StandaloneVM    *  $MGMT  dom0          allow target=dom0
+admin.vm.Remove                 *  $MGMT  @tag:$TAG     allow target=dom0
+admin.Events                    *  $MGMT  dom0          allow target=dom0
+admin.Events                    *  $MGMT  @tag:$TAG     allow target=dom0
 
 # --- management of VMs it created (auto-tag $TAG) + the test VM by name ---
 EOF
