@@ -178,6 +178,24 @@
           <Description>autologon unlimited (test rig only - plaintext password)</Description>
           <Order>10</Order>
         </SynchronousCommand>
+        <!-- MEASUREMENT HYGIENE, TEST RIG ONLY - never ship this.
+             Benchmark reps came back BIMODAL: five reps in two clusters, type {5.2,5.3,6.2}
+             and {20.4,20.5}, every metric jumping ~4x together. Per-rep counters showed the
+             DDA share steady across both clusters (62% vs 77%), so the episodes were NOT the
+             agent thrashing - they were the guest doing background work underneath the
+             measurement. Windows Update, Store auto-update and the maintenance scheduler are
+             the obvious sources on a freshly installed Win11.
+             A qube that never updates is wrong for a USER and right for a measurement rig. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f &amp; reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v DoNotConnectToWindowsUpdateInternetLocations /t REG_DWORD /d 1 /f &amp; sc config wuauserv start= disabled &amp; sc config UsoSvc start= disabled</CommandLine>
+          <Description>test rig: no Windows Update during measurements</Description>
+          <Order>11</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\WindowsStore" /v AutoDownload /t REG_DWORD /d 2 /f &amp; schtasks /Change /TN "\Microsoft\Windows\WindowsUpdate\Scheduled Start" /Disable &amp; schtasks /Change /TN "\Microsoft\Windows\TaskScheduler\Idle Maintenance" /Disable &amp; schtasks /Change /TN "\Microsoft\Windows\TaskScheduler\Regular Maintenance" /Disable</CommandLine>
+          <Description>test rig: no Store auto-update, no idle maintenance</Description>
+          <Order>12</Order>
+        </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
