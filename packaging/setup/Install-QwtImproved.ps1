@@ -84,6 +84,13 @@ param(
     # and the UPGRADING FROM STOCK QWT section of README.txt before using it.
     [switch]$AcceptPvDiskUpgrade,
 
+    # Skip the app hardware-acceleration pre-tweak (disable-hw-accel.ps1): HKLM policies
+    # that make Chrome/Edge/Brave/Firefox/Slack and (per-user) Office render in software.
+    # On a GPU-less guest the GPU path is emulation at best and a common source of
+    # rendering artifacts and capture-hostile repaint storms, so the tweak is ON by
+    # default; this exists for guests where the admin manages those policies themselves.
+    [switch]$NoAppTweaks,
+
     # Escape hatch only. PV disk is ON by default because stock QWT installs it by default
     # and emulated IDE is markedly slower; use this only to isolate a suspected xenvbd fault.
     [switch]$NoPvDisk,
@@ -520,6 +527,7 @@ function Invoke-Stage1 {
         if ($NoPvDisk)         { $extra += '-NoPvDisk' }
         if ($NoMoveUsers)      { $extra += '-NoMoveUsers' }
         if ($AcceptPvDiskUpgrade) { $extra += '-AcceptPvDiskUpgrade' }
+        if ($NoAppTweaks)      { $extra += '-NoAppTweaks' }
         $extra += '-Auto'
         Set-BootResume -ScriptPath $self -ExtraArgs $extra
         Write-Log 'STAGE 1 COMPLETE - rebooting in 15 s, installation resumes automatically'
@@ -661,6 +669,7 @@ function Invoke-Stage2 {
                     if ($NoPvDisk)         { $extra += '-NoPvDisk' }
                     if ($NoMoveUsers)      { $extra += '-NoMoveUsers' }
                     if ($AcceptPvDiskUpgrade) { $extra += '-AcceptPvDiskUpgrade' }
+                    if ($NoAppTweaks)      { $extra += '-NoAppTweaks' }
                     $extra += '-Auto'
                     $extra += '-ResumeAfterUninstall'
                     Set-BootResume -ScriptPath $self -ExtraArgs $extra
@@ -998,6 +1007,37 @@ function Invoke-Stage2 {
             "Enable-PnpDevice -InstanceId '$($vgaDev.InstanceId)' -Confirm:" + '$false' +
             ' (or devcon enable on that instance id), then reboot - that restores the pre-IDD display')
         Write-Log 'IDD ACTIVATED - after the reboot the Qubes IDD drives the desktop (modes from HKLM\SOFTWARE\QubesIDD\Modes)'
+    }
+
+    # --- app hardware-acceleration pre-tweak (default ON, /noapptweaks skips) -----------
+    # After the QWT install proper, before declaring the stage done: the policies are
+    # order-independent (they apply to software installed later), and a failure here must
+    # never fail the QWT install - it is an optimization, not a dependency.
+    if ($NoAppTweaks) {
+        Write-Log 'app HW-accel pre-tweak SKIPPED (/noapptweaks)'
+        $script:Result.detail.app_hwaccel = 'skipped'
+    } else {
+        $tweak = Join-Path $Root 'disable-hw-accel.ps1'
+        if (Test-Path -LiteralPath $tweak) {
+            Write-Log 'applying app HW-accel pre-tweak (disable-hw-accel.ps1; /noapptweaks to skip)'
+            try {
+                $tw = & $tweak 2>&1
+                foreach ($l in @($tw | Select-Object -Last 3)) { Write-Log "  $l" }
+                $trailer = @($tw) | Where-Object { $_ -match '=== RESULT === changed=(\d+) failed=(\d+)' } | Select-Object -Last 1
+                if ($trailer -match 'changed=(\d+) failed=(\d+)') {
+                    $script:Result.detail.app_hwaccel = "changed=$($Matches[1]) failed=$($Matches[2])"
+                    if ([int]$Matches[2] -gt 0) { Write-Log "app HW-accel pre-tweak: $($Matches[2]) writes failed (non-fatal)" 'WARN' }
+                } else {
+                    $script:Result.detail.app_hwaccel = 'ran, no result trailer'
+                }
+            } catch {
+                Write-Log "app HW-accel pre-tweak failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+                $script:Result.detail.app_hwaccel = "error: $($_.Exception.Message)"
+            }
+        } else {
+            Write-Log 'disable-hw-accel.ps1 not in payload - pre-tweak unavailable' 'WARN'
+            $script:Result.detail.app_hwaccel = 'not in payload'
+        }
     }
 
     $script:Result.ok = $true

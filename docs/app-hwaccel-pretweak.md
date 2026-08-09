@@ -119,13 +119,24 @@ per-app/per-framework keys above *are* the mechanism.
    delivery is untested against a Win11 profile set (no reason to expect differences,
    but per project rules that's not evidence).
 
-## Proposed installer integration (NOT wired up — owner approval needed)
+## Installer integration (WIRED 2026-08-09 — owner approved: default ON, `/noapptweaks` opts out)
 
-The script is already hooked in the *provisioning* flow: `mgmt/autounattend.xml` runs it
+The full installer now runs the script in stage 2, after the QWT install proper and
+before the stage is declared complete (`packaging/setup/Install-QwtImproved.ps1`):
+default ON, `-NoAppTweaks` / `install.cmd /noapptweaks` skips it, the switch survives
+`-Auto` boot-resume, the child's `=== RESULT === changed=N failed=N` trailer is parsed
+into the RESULT JSON (`detail.app_hwaccel`), and any failure is a WARN, never a failed
+install. `packaging/make-setup.ps1` stages `guest/disable-hw-accel.ps1` (single source
+of truth) into the payload where `Test-Payload`/SHA256SUMS cover it. The owner's earlier
+concern about running it unconditionally was resolved by making it a documented default
+with a first-class opt-out rather than a silent side effect.
+
+The script is also hooked in the *provisioning* flow: `mgmt/autounattend.xml` runs it
 at FirstLogonCommands Order 8, and `mgmt/build-answer-stick.sh` stages it. That placement
 stays authoritative for fresh installs.
 
-For **existing** guests updated via the pkg8 package, the proposal is:
+The overlay-package (pkg8-style) path is NOT wired and keeps the original opt-in
+proposal below, for reference:
 
 1. Ship the script in the package (precedent: `pkg8/optional/` for
    shipped-but-not-auto-installed content), listed under `installs_optional` in

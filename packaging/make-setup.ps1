@@ -91,6 +91,9 @@ foreach ($d in 'msi', 'certs', 'idd-driver', 'pv-drivers', 'reference') {
 foreach ($f in 'install.cmd', 'Install-QwtImproved.ps1', 'README.txt') {
     Copy-Item (Join-Path $setupSrc $f) $OutDir -Force
 }
+# App HW-accel pre-tweak, run by stage 2 unless /noapptweaks. Single source of truth is
+# guest/ (the same script the dev harness uses); staged here so Test-Payload covers it.
+Copy-Item (Need (Join-Path $RepoRoot 'guest\disable-hw-accel.ps1') 'app hw-accel pre-tweak script') $OutDir -Force
 
 # --- the MSI ---------------------------------------------------------------------------
 $msiSrc = Join-Path $MsiArtifact 'installer.msi'

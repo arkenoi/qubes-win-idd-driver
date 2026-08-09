@@ -101,6 +101,17 @@ Options:
      /auto    reboot and resume automatically
      /idd     install and ACTIVATE the Qubes IddCx display driver (see below)
      /nonet   omit PvDriversNetwork
+     /noapptweaks
+              skip the app hardware-acceleration pre-tweak. By default stage 2
+              runs disable-hw-accel.ps1: machine-wide registry policies that
+              make Chrome/Edge/Brave/Firefox/Slack render in software, the WPF
+              software-rendering fallback, and the per-user Office keys
+              (DisableHardwareAcceleration/DisableAnimations) delivered to all
+              existing profiles and the Default profile. On a GPU-less guest
+              the GPU path is emulated at best and causes rendering artifacts
+              and repaint storms that the seamless capture path pays for twice.
+              The keys are plain policy values an admin can change or delete
+              later; nothing is enforced beyond standard policy precedence.
      /acceptpvdiskupgrade
               remove an existing QWT even when the boot disk is on the PV disk
               path -- READ "UPGRADING FROM STOCK QWT" BELOW FIRST
