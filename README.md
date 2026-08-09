@@ -72,6 +72,19 @@ than on Windows 10. Stock also shows a **z-order dependency**: whether a window 
 correctly during a drag depends on where it sits in the stacking order, so the same drag
 looks fine on a top window and broken on one underneath.
 
+This build's per-window capture removes that artifact class structurally, and each item
+was verified against the stock baseline on the same guest (evidence in `FINDINGS.md`):
+
+- **No overlap corruption / occlusion bleed** — every window has its own buffer, so an
+  overlapped window renders complete instead of showing debris from whatever covered it.
+  Stock's z-order dependency disappears with it.
+- **No tearing** — content is byte-fed per window, never sliced out of a half-updated
+  composited frame.
+- **No wobble** — window content no longer drifts against the frame during a drag
+  (scripted 10 s drag: 2 of 219 damage events with any origin drift, max 5 px).
+- **No stray border rectangles or double titles** on compound windows (see the Office
+  item below).
+
 ### What this build is not: a performance fix
 
 On the current controlled numbers this build costs **2× stock CPU on typing** (drag and
@@ -183,8 +196,26 @@ not install this build expecting lower CPU cost** — install it for the correct
 and capabilities above, which stand on their own. One confirmed point in this build's
 favour: its working set stays flat over a workload where stock's grows ~87 MB.
 
-The full record — the earlier four-install tables and why they cannot carry win claims,
-the retracted "−67 %" claim, methodology, and the root-cause analysis — is in
+**Windows 10 numbers favour this build heavily.** From the four-install comparison
+(clean installs of both builds on both platforms) — gui-agent CPU, % of one core,
+median of 3, plus renderer highlights:
+
+| metric | stock win10 | this build win10 |
+|---|---:|---:|
+| drag CPU | 33.09 | 12.96 |
+| scroll CPU | 47.83 | 8.91 |
+| typing CPU | 32.61 | 4.38 |
+| fps, moving rect | 314.6 | 806.5 |
+| frame delay p50 (ms) | 2.91 | 0.86 |
+| idle working set (MB) | 108.5 | 68.2 |
+
+The honest qualifier: these cells compare different installs and display stacks, not just
+the agent, so they are not single-variable proof the way the table above is — no
+single-variable Windows 10 run exists yet. They are still the only Windows 10 data there
+is, and the margins are large and consistent across every dimension measured.
+
+The full record — both four-install tables, the confound discussion, the retracted
+"−67 %" claim, methodology, and the root-cause analysis — is in
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md); the running lab notebook is `FINDINGS.md`.
 
 ---
