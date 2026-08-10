@@ -6598,3 +6598,56 @@ HONEST BOTTOM LINE: the updates-proxy feature is FEASIBLE and PROVEN at the tran
 scale is DONE. A clean download+install proof needs a FRESH guest (this one's WU is corrupted)
 run ONCE uninterrupted with the improved relay - no service resets, no timeout-killing the COM
 call. That is the remaining validation; it is not blocked by our code.
+
+## 2026-08-10 — GWeck installer failure: ROOT-CAUSED (investigation workflow wf_c83674fb) — a DOUBLE version-collision, both times the version was not bumped
+
+The instrument: a 6-investigator + synthesis workflow over the installer/version source (read-only,
+source-cited). One investigator hit the StructuredOutput retry cap (its area returned a placeholder
+"test/a/b" in the journal); the other five + synthesis returned source-grounded results. Verified the
+key MSI-identity claim myself against the vendored WiX (upstream/ro/qubes-installer-.../vs2022/
+installer/Package.wxs) rather than trust the synthesis, because its confidence_gap #1 wrongly said no
+WiX was in-repo.
+
+GWeck did nothing wrong. Both failures are the SAME disease — a release shipped WITHOUT bumping the
+MSI ProductVersion — colliding with two different things:
+
+1. FROM STOCK 4.2.2 (his original 0x7B brick). The earlier release pinned the agent submodule to
+   03b1674, whose `agent/version` was still **4.2.2** (`git show 03b1674:version` = 4.2.2; the bump to
+   4.3.0 only landed in 09b643e "Bump deliverable version to 4.3.0"). qwt-full.yml:311-313 stamps the
+   MSI ProductVersion FROM agent/version, so that build stamped **4.2.2 == stock 4.2.2**. Equal
+   ProductVersion => WiX MajorUpgrade cannot replace stock in place => installer falls to uninstall-first
+   => msiexec /x stock (incl. its PV disk driver) => intermediate reboot bugchecks 0x7B on a PV-booted
+   guest. Corroborated: GWeck saw "4.2.2.0" on that fresh install. **Already FIXED** in the shipped
+   09b643e build (agent/version=4.3.0 => MSI 4.3.0 => out-versions stock => in-place, no reboot);
+   field-confirmed closed. The PV gate is a RED HERRING for the stock case now (4.2.2 < 4.3.0 is in-place).
+
+2. SAME-VERSION (what he hits now). His guest runs 4.3.0 (v4.3.0-agent09b643e). The "v4.3.1" IDD-default
+   release is the SAME submodule 09b643e => agent/version STILL 4.3.0 => MSI ProductVersion 4.3.0 again
+   => installed == ours. Shipped/committed HEAD Install-QwtImproved.ps1:648 used `-ge`, so 4.3.0 >= 4.3.0
+   => $inPlace=FALSE => uninstall-first => PV gate Fail() on his PV-booted guest. /idd does NOT bypass it
+   (it's a deprecated no-op); only /acceptpvdiskupgrade suppresses the gate. So a plain re-run hard-fails.
+
+MSI identity (verified in Package.wxs): ProductCode="*" (new GUID per build), UpgradeCode shared
+{14BCB82F-...}, `<MajorUpgrade/>` with NO AllowSameVersionUpgrades (defaults off). Consequence: two
+DIFFERENT builds stamped the same ProductVersion are neither an upgrade (equal version) nor a reinstall
+(different ProductCode). Therefore REINSTALL=ALL is INERT across builds — it only repairs an IDENTICAL
+build (matching ProductCode). The real fix is the version bump, not a msiexec flag.
+
+TWO version sources had drifted (the deeper bug): (A) MSI ProductVersion <- agent/version (qwt-full.yml).
+(B) installer's own $ours upgrade decision <- make-setup.ps1 hardcoded '4.3.0' -> package_version ->
+MANIFEST. Fix landed in working tree: make-setup now READS agent/version (single source of truth), with
+the same 3-field validation, so package_version and MSI ProductVersion can never diverge again.
+
+FIX PLAN (ordered): (1) bump agent/version third field per release, 4.3.0 -> 4.3.1, so the MSI
+out-versions both stock and the prior 4.3.0 => clean in-place MajorUpgrade, no gate; (2) single-source
+make-setup (DONE, uncommitted); (3) CI/build guard that FAILS if agent/version wasn't bumped past the
+last release AND != the release tag's version — the "never again"; (4) keep the installer same-version
+in-place branch (-gt + REINSTALL=ALL) only as an identical-build-re-run safety, comment corrected to say
+so; (5) standalone IDD-only activation entry point so an already-installed guest can add IDD without a
+full MSI reinstall (would have let GWeck add IDD without any of this). Outward-facing, needs owner nod:
+the misleading v4.3.1-agent09b643e release (advertises 4.3.1, ships MSI 4.3.0) should be superseded by a
+real 4.3.1 build or deleted.
+
+Why CI never caught it: the E2E harness always destroys+recreates the qube and installs FRESH — it never
+runs a release-over-release upgrade of our own package, so a same-version collision (which only bites on
+the SECOND install) is structurally invisible. The guard in (3) closes that blind spot for good.

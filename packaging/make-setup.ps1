@@ -77,7 +77,16 @@ $repoSha   = EnvOr 'QWT_REPO_SHA'  $um.repo_sha
 $agentSha  = $um.agent_sha
 $agentDesc = if ($um.PSObject.Properties.Name -contains 'agent_describe') { $um.agent_describe } else { $agentSha }
 $baseQwt   = '4.2.2'   # upstream QWT release these sources were rebuilt from (compat field)
-$ngVersion = '4.3.0'   # our deliverable's own version (QWT-NG)
+# SINGLE SOURCE OF TRUTH for the deliverable version: agent/version - the SAME file qwt-full.yml
+# reads (line ~311) to stamp the MSI ProductVersion. Reading it here instead of a second hardcoded
+# literal is what stops package_version and the MSI's ProductVersion from drifting apart - the very
+# split that let a "v4.3.1" release ship a payload still stamped 4.3.0, so it could never upgrade a
+# 4.3.0 guest. One file drives both; bump it every release. Windows Installer only compares the
+# first THREE fields, so the release counter is the THIRD field: 4.3.0 -> 4.3.1 -> 4.3.2 ...
+$ngVersionFile = Join-Path $RepoRoot 'agent/version'
+if (-not (Test-Path -LiteralPath $ngVersionFile)) { throw "agent/version not found at $ngVersionFile - cannot determine the deliverable version" }
+$ngVersion = (Get-Content -LiteralPath $ngVersionFile -Raw).Trim()
+if ($ngVersion -notmatch '^\d+\.\d+\.\d+$') { throw "agent/version must be MAJOR.MINOR.PATCH (3 fields, MSI-comparable); got '$ngVersion'" }
 $shortAgent = if ($agentSha -and $agentSha -ne 'unknown') { $agentSha.Substring(0, 12) } else { 'unknown' }
 $version    = "$ngVersion+agent.$shortAgent"
 
