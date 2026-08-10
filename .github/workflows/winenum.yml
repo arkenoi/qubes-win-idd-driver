@@ -1,0 +1,52 @@
+# Build tools/winenum.cs into a prebuilt winenum.exe and publish it as a release asset,
+# so it can be downloaded directly (no compiler assumed on the target guest). Built by the
+# CI Windows toolchain, NOT by any test guest.
+name: winenum
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/winenum.cs'
+      - '.github/workflows/winenum.yml'
+
+permissions:
+  contents: write   # to upload the release asset
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile winenum.exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # In-box .NET Framework C# compiler (matches the C# 5 source; present on the runner).
+          $csc = (Get-ChildItem 'C:\Windows\Microsoft.NET\Framework64\v4.0.*\csc.exe' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $csc) { throw 'Framework csc.exe not found on the runner' }
+          & $csc /nologo /o /target:exe /out:winenum.exe tools\winenum.cs
+          if (-not (Test-Path winenum.exe)) { throw 'compile produced no winenum.exe' }
+          # smoke: it must run and print its header (no window open, but it must not crash)
+          $head = (& .\winenum.exe | Select-Object -First 1)
+          if ($head -notmatch 'winenum') { throw "winenum.exe did not run as expected: $head" }
+          "$((Get-FileHash winenum.exe -Algorithm SHA256).Hash)  winenum.exe" | Out-File -Encoding ASCII winenum.exe.sha256
+          Write-Host "built winenum.exe: $((Get-Item winenum.exe).Length) bytes"
+
+      - name: Upload as build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: winenum
+          path: |
+            winenum.exe
+            winenum.exe.sha256
+
+      - name: Attach to the v4.3.0-agent09b643e release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Idempotent: --clobber replaces an existing asset of the same name.
+          gh release upload v4.3.0-agent09b643e winenum.exe winenum.exe.sha256 --clobber --repo ${{ github.repository }}
+          Write-Host "asset URL: https://github.com/${{ github.repository }}/releases/download/v4.3.0-agent09b643e/winenum.exe"
