@@ -6257,3 +6257,14 @@ Findings the e2e earned:
 
 Both e2e defects were in the TEST, one was in the payload script; the upgrade path itself
 passed on the first genuine attempt.
+
+## 2026-08-10 — RELEASED: v4.3.0-agent09b643e (tagged Latest)
+
+Published from CI run 31364772166: dom0 RPM (now auto-patches qvm-create-windows-qube's
+auto-qwt stub via qwt-ng-fix-qwcq in %post - the confusing notice is gone), ISO, setup
+tarball, SHA256SUMS. gui-agent.exe in the assets is 91F40ECE29286063 - the exact binary
+the upgrade e2e verified; the perf A/B ran on a sibling build of the same agent commit
+(09b643e). Ships: the sweep fix (typing 1.71 vs stock 2.02-2.19), the in-place MSI
+upgrade over stock, the PV gate + storage re-arm fallback, the app HW-accel pre-tweak
+(with the ${v}: fix), and 4.3.0 versioning throughout. README rewritten to the post-fix
+story; RELEASE-NOTES-09b643e.md is the release document; 03b1674 notes marked superseded.
