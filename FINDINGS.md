@@ -6380,3 +6380,27 @@ TWO PROBE BUGS FOUND (both shape the shipped forwarder):
 Next: Stage 3/4 - swap the one-shot handler for the connect-back relay (qubes-updates-relay.cs,
 full-path fix folded in) so ARBITRARY TCP (not a canned request) tunnels through, then Stage 5/6
 real WU scan+download with the loopback-adapter NLM mitigation.
+
+## 2026-08-10 — updates-proxy Stage 3+4 PASS: the connect-back relay tunnels arbitrary TCP
+
+The C# connect-back relay (guest/qubes-updates-relay.cs) compiled ON-GUEST with the in-box
+csc and ran end to end. Compile gotcha retired: the in-box Framework csc (v4.0.30319) is the
+PRE-ROSLYN C# 5 compiler - no string interpolation, no `using var`, no out-vars. The relay is
+now written in strict C# 5 (async APIs are fine, they are .NET 4.5, present on 4.8), so the
+"compile on-guest, no build infra" design holds.
+
+Stage 4 (guest/relay-e2e.ps1): relay --listen 8082, then `curl.exe -x http://127.0.0.1:8082`
+of a plain-HTTP WU CDN object - ARBITRARY forward-proxy TCP, not a canned request.
+RESULT: {"ok":true,"listener_bound":true,"http_code":"200","body_bytes":78028,
+"sha16":"B85A829F88A78BDB","magic":"MSCF"}. A real 78 KB signed cabinet (MSCF magic) came
+back through: curl -> relay(--listen) -> qrexec-client-vm(full path) -> qubes.UpdatesProxy ->
+core-update -> Tor -> ctldl.windowsupdate.com, and the mirror. Retires:
+- **R2** fully: 78 KB of arbitrary BINARY traffic crossed the vchan 8-bit clean (MSCF intact).
+- **R3**: per-connection qrexec spawn + connect-back token handshake works under a real fetch.
+The relay design (caller triggers qrexec with itself as the --relay handler, handler connects
+back token-checked, both processes on the guest, handler stdio == vchan) is proven.
+
+State of the risk register: R1 (NLM/no-NIC) retired via the loopback adapter; R2, R3, R5
+(TemplateVM policy match) retired here/Stage 2. Remaining: R4 (which WU sub-plane leaks) -
+Stage 5/6, real WU scan+download+install through the relay with the loopback-adapter NLM
+mitigation and the 3 proxy planes. The relay must run as a persistent service for that (Stage 7).
