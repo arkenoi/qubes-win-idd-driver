@@ -136,7 +136,7 @@ Set-Reg 'HKLM:\SOFTWARE\Policies\Slack' 'HardwareAcceleration' 0 'DWord' 'Slack:
 # 16.0 covers 2016/2019/2021/2024/365; 15.0 = 2013; 14.0 = 2010 (partial HW accel, anecdotal).
 foreach ($v in @('16.0', '15.0', '14.0')) {
     Set-Reg "HKLM:\SOFTWARE\Policies\Microsoft\office\$v\common\graphics" 'disablehardwareacceleration' 1 'DWord' "Office $v (unverified HKLM path)"
-    Set-Reg "HKLM:\SOFTWARE\Policies\Microsoft\office\$v\common\graphics" 'disableanimations'          1 'DWord' "Office $v: no animation (unverified HKLM path)"
+    Set-Reg "HKLM:\SOFTWARE\Policies\Microsoft\office\$v\common\graphics" 'disableanimations'          1 'DWord' "Office ${v}: no animation (unverified HKLM path)"
 }
 
 # --- Internet Explorer / legacy WebBrowser control ---------------------------------------
@@ -164,11 +164,11 @@ $perUser = @(
     @{ sub = 'Software\Microsoft\Avalon.Graphics'; name = 'DisableHWAcceleration'; val = 1; type = 'DWord'; why = 'WPF software rasteriser' }
 )
 foreach ($v in @('16.0', '15.0')) {
-    $perUser += @{ sub = "Software\Microsoft\Office\$v\Common\Graphics";          name = 'DisableHardwareAcceleration'; val = 1; type = 'DWord'; why = "Office $v: HW accel off (measured)" }
-    $perUser += @{ sub = "Software\Microsoft\Office\$v\Common\Graphics";          name = 'DisableAnimations';           val = 1; type = 'DWord'; why = "Office $v: no animations (measured)" }
-    $perUser += @{ sub = "Software\Microsoft\Office\$v\Common";                   name = 'UseAnimations';               val = 0; type = 'DWord'; why = "Office $v: no typing animation (measured, sparsely documented)" }
-    $perUser += @{ sub = "Software\Policies\Microsoft\office\$v\common\graphics"; name = 'disablehardwareacceleration'; val = 1; type = 'DWord'; why = "Office $v: policy variant, locks the UI checkbox" }
-    $perUser += @{ sub = "Software\Policies\Microsoft\office\$v\common\graphics"; name = 'disableanimations';           val = 1; type = 'DWord'; why = "Office $v: policy variant" }
+    $perUser += @{ sub = "Software\Microsoft\Office\$v\Common\Graphics";          name = 'DisableHardwareAcceleration'; val = 1; type = 'DWord'; why = "Office ${v}: HW accel off (measured)" }
+    $perUser += @{ sub = "Software\Microsoft\Office\$v\Common\Graphics";          name = 'DisableAnimations';           val = 1; type = 'DWord'; why = "Office ${v}: no animations (measured)" }
+    $perUser += @{ sub = "Software\Microsoft\Office\$v\Common";                   name = 'UseAnimations';               val = 0; type = 'DWord'; why = "Office ${v}: no typing animation (measured, sparsely documented)" }
+    $perUser += @{ sub = "Software\Policies\Microsoft\office\$v\common\graphics"; name = 'disablehardwareacceleration'; val = 1; type = 'DWord'; why = "Office ${v}: policy variant, locks the UI checkbox" }
+    $perUser += @{ sub = "Software\Policies\Microsoft\office\$v\common\graphics"; name = 'disableanimations';           val = 1; type = 'DWord'; why = "Office ${v}: policy variant" }
 }
 
 function Set-PerUserValues {

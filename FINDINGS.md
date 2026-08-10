@@ -6226,3 +6226,34 @@ that dies in <14 s - behavioural evidence (boot-die loop) plus in-log sequence s
   one process so an interrupt cannot split them.
 - A recreated VM does NOT inherit qrexec_timeout: usb-provision removes and re-creates,
   so the 15 s guard must be re-applied after EVERY provision (now done inside the chain).
+
+## 2026-08-10 — IN-PLACE MSI UPGRADE OVER STOCK: END-TO-END PASS (the user's cheap solution, proven)
+
+The 4.3.0 bump made the uninstall-first flow obsolete for upgrades: the rebuilt MSI shares
+stock's UpgradeCode ({14BCB82F-3C4B-4C77-8E00-20BAEBC61354}), declares <MajorUpgrade>, and
+outversions stock, so stage 2 now takes an IN-PLACE MSI major upgrade whenever everything
+installed is older (upgrade_mode in the RESULT JSON; uninstall-first survives only for
+same/newer versions, still behind the validated PV gate + storage re-arm).
+
+E2E on a clean-room stock 4.2.2 guest (win11-fresh, PV boot disk active - the exact
+configuration that BRICKED under the old flow hours earlier): 12/12 meaningful checks.
+Stock registered -> installer took the in-place path -> NO intermediate reboot -> guest
+BOOTS -> exactly one product, 4.3.0.0 -> agent hash matches the artifact reference
+(91F40ECE29286063), running, FileVersion 4.3.0.0 -> PV disk re-bound -> app HW-accel
+policies applied -> guest window mapped in dom0.
+
+Findings the e2e earned:
+1. **The upgraded guest's FIRST boot runs on the emulated disk; xenvbd re-binds on the
+   SECOND boot.** That transitional state is precisely why the in-place path cannot 0x7B
+   (the emulated stack stays boot-ready throughout), and it doubled as the genuine
+   NEGATIVE probe case: BUSTYPE=ATA/"QEMU HARDDISK" mid-transition -> PVBOOT=False from a
+   real guest state. The probe now has live True (3 guests) AND False evidence.
+2. **A real parse bug in disable-hw-accel.ps1** ("Office $v:" - PowerShell reads $v: as a
+   scoped variable; needs ${v}:) - the script had never run on a guest since its rewrite;
+   the installer's non-fatal wiring caught and reported it exactly as designed. Fixed and
+   re-validated live: 36 writes, 0 failures, Chrome policy readable afterwards.
+3. local.WinScreenshot is policy-scoped to win-idd-test; e2e liveness for other guests
+   must use the fullshot's geometry (check fixed).
+
+Both e2e defects were in the TEST, one was in the payload script; the upgrade path itself
+passed on the first genuine attempt.
