@@ -71,6 +71,19 @@ made. Follow them.
    Acceptance includes a real cold boot (`shutdown`/`kill` then `start`), not a live-session restart —
    a restart clears exactly the faults a cold boot exposes.
 
+8. **Baseline accumulating state — a stale log lies.**
+   Logs, RESULT lines, on-screen windows all PERSIST across runs. A "did it fail?" check that greps
+   an accumulating log will fire on the PREVIOUS run's error. Real miss: `wait_install` "detected
+   FAILED" one second after launch — it read a prior run's `boot disk is on the Xen PV` line, so the
+   real install never got a chance and its stale RESULT got reported as this run's. Before each run:
+   DELETE the install log (or record a baseline marker/offset) so every check sees only THIS run's
+   output. Same for windows — close leftovers, or capture what is genuinely current.
+
+9. **Start every run from a KNOWN baseline.**
+   A test that starts on a guest a prior run left half-broken (IDD torn down, agent stopped, autologon
+   wiped) measures the mess, not your change. Assert or restore the baseline first (or clone a golden),
+   and record what it was. "It failed" on an unknown starting state proves nothing.
+
 ## Harness
 
 `e2e-lib.sh` (in this skill dir) provides the bounded, stuck-aware helpers: `qstate qrun qpr alive
