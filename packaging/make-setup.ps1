@@ -83,9 +83,12 @@ $version    = "$ngVersion+agent.$shortAgent"
 
 # --------------------------------------------------------------------------------- stage
 if (Test-Path -LiteralPath $OutDir) { Remove-Item -LiteralPath $OutDir -Recurse -Force }
-foreach ($d in 'msi', 'certs', 'idd-driver', 'pv-drivers', 'reference') {
+foreach ($d in 'msi', 'certs', 'idd-driver', 'pv-drivers', 'reference', 'tools') {
     New-Item -ItemType Directory -Force -Path (Join-Path $OutDir $d) | Out-Null
 }
+# Diagnostic tools shipped as C# source (compile on-guest with the in-box csc - no binary to
+# trust, no build step). winenum: top-level HWND dumper for the Win11 companion-window bugs.
+Copy-Item (Need (Join-Path $RepoRoot 'tools\winenum.cs') 'winenum diagnostic source') (Join-Path $OutDir 'tools') -Force
 
 # --- scripts + doc ---------------------------------------------------------------------
 foreach ($f in 'install.cmd', 'Install-QwtImproved.ps1', 'README.txt') {

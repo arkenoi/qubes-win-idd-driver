@@ -1,0 +1,16 @@
+winenum — top-level window dumper for diagnosing the Win11 seamless companion-window bugs
+(Start menu partial render, "double windows", non-clickable shell dialogs).
+
+Your Windows qube already has the C# compiler in-box; no binary to trust, nothing to install.
+In an ADMINISTRATOR PowerShell in this folder:
+
+    $csc=(gci "$env:windir\Microsoft.NET\Framework64\v4.0.*\csc.exe")[0].FullName
+    & $csc /nologo /out:$env:PUBLIC\winenum.exe winenum.cs
+
+Then reproduce the broken window (e.g. open the Start menu) and, from the same prompt:
+
+    & $env:PUBLIC\winenum.exe > $env:PUBLIC\winenum.txt
+
+Paste C:\Users\Public\winenum.txt. Each line is one top-level window with its class, styles,
+extended styles, DWM cloaked state, owner, rect, and layered alpha — the attributes that tell
+which surfaces the seamless agent should map, drop, or treat as override-redirect.
