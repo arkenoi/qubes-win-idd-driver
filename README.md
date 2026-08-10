@@ -20,30 +20,31 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.1-agent09b643e](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.1-agent09b643e)** — agent `09b643e`, package `4.3.0+agent.09b643e5d278`.
+Release **[v4.3.1-agentc7ccb45](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.1-agentc7ccb45)** — agent `c7ccb45`, package `4.3.1+agent.c7ccb459aec9`.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.0-1.agent09b643e5d278.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agent09b643e/qubes-windows-tools-ng-4.3.0-1.agent09b643e5d278.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso` and auto-patches `qvm-create-windows-qube` to use it |
-| [`qwt-ng-4.3.1-agent09b643e.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agent09b643e/qwt-ng-4.3.1-agent09b643e.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qwt-ng-4.3.1-agent09b643e-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agent09b643e/qwt-ng-4.3.1-agent09b643e-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agent09b643e/SHA256SUMS.txt) | checksums for all three |
+| [`qubes-windows-tools-ng-4.3.1-1.agentc7ccb459aec9.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agentc7ccb45/qubes-windows-tools-ng-4.3.1-1.agentc7ccb459aec9.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso` and auto-patches `qvm-create-windows-qube` to use it |
+| [`qwt-ng-4.3.1-agentc7ccb45.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agentc7ccb45/qwt-ng-4.3.1-agentc7ccb45.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qwt-ng-4.3.1-agentc7ccb45-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agentc7ccb45/qwt-ng-4.3.1-agentc7ccb45-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agentc7ccb45/SHA256SUMS.txt) | checksums for all three |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.0-1.agent09b643e5d278.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.1-1.agentc7ccb459aec9.noarch.rpm
 ```
 
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction (validated end to end; see the release notes).
 
-**Provenance.** `gui-agent.exe` in these assets (sha256 prefix `91F40ECE29286063`) is the
-exact binary the upgrade end-to-end test verified installed, running and hash-matched;
-the performance A/B ran on a sibling CI build of the same agent commit, toggling the fix
-at runtime on one binary (the Windows build is not timestamp-reproducible, so hashes
-differ across rebuilds of identical source).
+**Provenance.** The agent here (`c7ccb45`) is commit `09b643e` with only the version string
+bumped to 4.3.1 (no code change), so it is functionally the binary the end-to-end upgrade
+test verified installed, running and hash-matched, and the one the performance A/B ran on, both
+on `09b643e`. The version-resource bump changes the bytes, so `gui-agent.exe` in these assets
+carries a new hash (sha256 prefix `99480D876377E41B`); the Windows build is not
+timestamp-reproducible, so hashes differ across rebuilds of identical source regardless.
 
 ---
 ## Read this first
