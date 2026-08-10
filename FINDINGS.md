@@ -6651,3 +6651,51 @@ real 4.3.1 build or deleted.
 Why CI never caught it: the E2E harness always destroys+recreates the qube and installs FRESH — it never
 runs a release-over-release upgrade of our own package, so a same-version collision (which only bites on
 the SECOND install) is structurally invisible. The guard in (3) closes that blind spot for good.
+
+## 2026-08-10 — WU-through-proxy payload stall ROOT-CAUSED: BITS/DO connectivity gate, not transport
+
+Layered diagnostic on win11-fresh (guest/wu-diagnose.ps1, guest/wu-fix-probe.ps1), backend =
+tinyproxy on win-idd-mgmt (proven: curl -x 127.0.0.1:8082 <WU CDN> -> 200/80KB).
+- LAYER A (relay): guest Invoke-WebRequest via 127.0.0.1:8082 -> HTTP 200, 50395 B. Transport
+  from the guest WORKS end to end (guest -> relay -> qrexec -> win-idd-mgmt tinyproxy -> CDN).
+- LAYER B (Windows verdict): both NICs Get-NetConnectionProfile IPv4Connectivity=NoTraffic,
+  category Public.
+- LAYER C (DIRECT bitsadmin, no WU COM): TRANSIENT_ERROR, BYTES 0/UNKNOWN, ERROR CODE
+  **0x80200010 BG_E_NETWORK_DISCONNECTED** - "no active network connections."
+CONCLUSION: the payload engine (BITS, and DO on top) gates on IsNetworkAlive and refuses BEFORE
+any byte because Windows sees the interfaces as NoTraffic (offline guest, no routed traffic; the
+loopback->qrexec proxy is not an IP-routed network Windows counts). The scan/metadata succeed only
+because they ride WinHTTP/WinINET, which honor the proxy and do NOT gate on connectivity. Transport
+was never the problem.
+RULED OUT: NCSI is NOT the lever. wu-fix-probe tried NlaSvc re-probe, EnableActiveProbing=0, and a
+custom ActiveWebProbeHost - ALL left IPv4Connectivity=NoTraffic and BITS at 0x80200010. The verdict
+is interface-level (no route), not the web probe.
+INDICATED REMEDY (untested): install the in-box KM-TEST loopback adapter (netloop.inf via
+devcon/pnputil) with a static IP + dummy default gateway so IsNetworkAlive returns true; BITS still
+routes the actual bytes through the OVERRIDE proxy (127.0.0.1:8082). Verify BITS uses the proxy, not
+the loopback's fake gateway. Same gate blocks Delivery Optimization, so this is prerequisite for the
+north-star in-VM updater agent too.
+
+## 2026-08-10 — Path B (catalog + direct fetch, bypass BITS/DO) PROVEN end-to-end except offline install
+
+After ruling out the BITS/DO connectivity gate (0x80200010) and the loopback-adapter remedy (a
+loopback with an unreachable gateway still reports NoTraffic, so IsNetworkAlive stays false), the
+chosen path is B: fetch the FULL standalone package over the proxy-aware WinHTTP path and install
+offline, sidestepping the connectivity gate that only exists in the DO->BITS online path. Confirmed:
+- WU COM search over the proxy returns the pending update (KB5101650) but its DownloadContents is
+  the EXPRESS payload: 13421 DISTINCT files (8856 delta + 4565 full COMPONENT files), ~92GB nominal.
+  Not fetchable without reimplementing express range selection - so B does NOT use it.
+- Microsoft Update Catalog IS reachable through the proxy (HTTPS CONNECT via tinyproxy; Search.aspx
+  200/60KB). Parser note: the catalog uses SINGLE quotes (id='<guid>_link', goToDetails("<guid>")).
+- Catalog resolve works: KB5101650 -> picked "2026-07 Cumulative Update for Windows 11, version 24H2
+  for x64-based Systems (KB5101650) (26100.8875)" (matches guest build), DownloadDialog.aspx POST ->
+  standalone .msu URLs on catalog.sf.dl.delivery.mp.microsoft.com, ~4970 MB.
+- SUSTAINED FETCH PROVEN: streaming the real .msu via HttpWebRequest through 127.0.0.1:8082 pulled
+  393 MB in 40.1 s at a steady 9.8 MB/s, no stall (full 5GB ~= 8.5 min). This is the exact link that
+  died under BITS (0 bytes at the gate); direct HTTP has no such gate.
+REMAINING: the offline install (DISM /Online /Add-Package or wusa) of the standalone .msu(s). Note
+KB5101650 catalog entry exposes TWO .msu files - 24H2 uses CHECKPOINT cumulative updates, so install
+ORDER/prereqs matter (SSU/checkpoint before LCU). This fetch+install core is exactly the north-star
+in-VM updater agent's download engine; progress (bytes/rate) is self-reported, no BITS/DO needed.
+tools built: guest/wu-diagnose.ps1, wu-fix-probe.ps1, wu-loopback-test.ps1, wu-enumerate.ps1,
+wu-distinct.ps1, wu-fullfiles.ps1, wu-catalog-probe.ps1, wu-catalog-get.ps1, wu-fetch-probe.ps1.
