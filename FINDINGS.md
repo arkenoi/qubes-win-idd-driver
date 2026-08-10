@@ -6431,3 +6431,31 @@ Stage 6 (download+install a real update - large/slow over Tor, but the path is i
 137 KB catalog fetch that already worked), Stage 7 (persistent relay service + installer wiring;
 Start-Process children do NOT survive here so the service must be a scheduled task or Windows
 service), Stage 8 side-scope, upgrade the template to QWT-NG for the packaged feature.
+
+## 2026-08-10 — GWeck field feedback (forum posts 33-36): v4.3.0 fixes CONFIRMED; 3 new items
+
+Ultracode forum diagnosis (wf_cc409d04). GWeck tested v4.3.0-agent09b643e on Win11 25H2:
+- **CONFIRMED FIXED (his original 0x7B report):** PV-disk upgrade now detects the dangerous
+  case and aborts (post 34); /acceptpvdiskupgrade present; control.exe + installer report
+  4.3.0; clean fresh-install works (post 33); dom0 rpm auto-qwt fix in place. The
+  INACCESSIBLE BOOT DEVICE hazard from posts 27/30 is field-confirmed closed.
+- **NOT our bug (post 35 /idd "file not found"):** GWeck hand-built `Start-Process -FilePath
+  'D:\idd'` treating /idd as a program. Our install.cmd relaunches via `%~f0` (=D:\install.cmd)
+  and cannot emit D:\idd - verified (install.cmd:55). Real GAP though: no documented elevated
+  /idd command, and no "add IDD to an existing install" path (install.cmd /idd on a
+  same-version guest correctly stops at the upgrade gate). ACTION: reply with the command +
+  add a standalone IDD-only activation switch (skips MSI + PV gate). Reply drafted:
+  scratchpad/forum-reply-gweck-v3.md.
+- **REAL remaining in-scope bug (posts 33-34):** Win11 25H2 Start menu renders partially,
+  shutdown button unreachable - the layered/cloaked companion-HWND class (CLAUDE.md 2A-chrome
+  / "double windows"). NOT touched by 09b643e (DDA/idle-burn only). ACTION: built tools/winenum
+  (below); need a dump from GWeck while the broken menu is open to find the discriminator.
+- Version-lag (4.2.2.0 on post 33) = yesterday's build, already fixed. PV-driver non-clickable
+  dialog = same window class as the Start menu, low severity. Qube Manager warning = upstream
+  qubes-issues #8090, out of scope.
+
+Built **tools/winenum** (CLAUDE.md 2A-chrome 3b): C# 5 top-level-HWND dumper - handle, pid,
+class, WS_*/WS_EX_* of interest, DWMWA_CLOAKED, owner, rect, layered alpha, title. Compiles
+on-guest with in-box csc; validated on win11-clonetest (surfaces ForegroundStaging, Shell_TrayWnd,
+layered tooltips_class32, WindowsDashboard with full attributes). This is the diagnostic that
+pins the Start-menu window predicate once run on a 25H2 guest with the menu open.
