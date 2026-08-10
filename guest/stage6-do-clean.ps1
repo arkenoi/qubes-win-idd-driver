@@ -11,7 +11,11 @@ function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-
 
 # planes + SYSTEM proxy; DODownloadMode=0 (HTTP only, no peering) but DO stays in charge
 & netsh winhttp set proxy '127.0.0.1:8082' '<local>' | Out-Null
-SetV $POL 'ProxySettingsPerUser' 0 'DWord'; SetV $IS 'ProxyEnable' 1 'DWord'; SetV $IS 'ProxyServer' '127.0.0.1:8082' 'String'; SetV $IS 'ProxyOverride' '<local>' 'String'; SetV $DO 'DODownloadMode' 0 'DWord'
+SetV $POL 'ProxySettingsPerUser' 0 'DWord'; SetV $IS 'ProxyEnable' 1 'DWord'; SetV $IS 'ProxyServer' '127.0.0.1:8082' 'String'; SetV $IS 'ProxyOverride' '<local>' 'String'
+# DODownloadMode=99 = DO BYPASS/simplified: dumb sequential HTTP, no peer coordination service
+# (cp*.do.dsp.mp.microsoft.com, which fails through the proxy), no connection storm. The most
+# proxy-friendly DO path. DoSvc stays ENABLED (disabling it broke Win11 24H2 orchestration).
+SetV $DO 'DODownloadMode' 0 'DWord'
 & bitsadmin /util /setieproxy LOCALSYSTEM MANUAL_PROXY '127.0.0.1:8082' '<local>' 2>&1 | Out-Null
 
 # reset the confused WU state
@@ -20,7 +24,10 @@ Remove-Item 'C:\Windows\SoftwareDistribution\Download\*' -Recurse -Force -EA Sil
 & net start bits 2>&1 | Out-Null; & net start dosvc 2>&1 | Out-Null; & net start wuauserv 2>&1 | Out-Null
 Start-Sleep -Seconds 6
 
-# fresh relay (the improved build) + fresh log
+# fresh relay (the improved build) + fresh log. HIGH concurrency: read-first already drops
+# DO's abandoned speculative connections for free, so let the REAL parallel download streams
+# run (DO wants parallelism - throttling it to 32 starved the download).
+$env:QUBES_UPDATES_MAXCONN = '256'
 Get-NetTCPConnection -LocalPort 8082 -State Listen -EA SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -EA SilentlyContinue }
 Get-Process qubes-updates-relay -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
 Remove-Item $log -EA SilentlyContinue
