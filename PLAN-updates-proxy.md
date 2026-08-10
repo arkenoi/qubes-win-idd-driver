@@ -218,3 +218,27 @@ No new build; one scripted pass, each row a can-fail check cross-checked against
 ## Standing rules applied throughout
 
 One Windows guest at a time; VM-mutating stages serial. Every gate has a demonstrated-fail path (Stage 0 signature, policy-line removal, service-flag off, listener kill). Measurements read from the relay byte log — never WU's own success claims alone. Metrics follow the 3-runs-before-verdict rule. Dated findings to FINDINGS.md per stage. dom0 steps are flagged to the owner and never attempted from the dev qube.
+---
+
+## North-star compatibility (owner note 2026-08-10): don't wall off the reporter
+
+The proxy is stage one of a full **updater agent** that also reports update AVAILABILITY
+and PROGRESS to dom0's updater tool (Linux analogue: `qubes.NotifyUpdates` for the count +
+the newer per-VM progress streaming the Qubes updater consumes). The architecture here must
+not create obstacles:
+
+- **Separate qrexec services, composable.** Proxy = guest→`qubes.UpdatesProxy` (OUT).
+  Availability = guest→dom0 `qubes.NotifyUpdates` after a scan (guest/wu-scan.ps1 already
+  produces the count — reuse it). Progress/trigger = dom0→guest `qubes.WindowsUpdate`-style
+  service that runs scan/download/install and streams progress back on the same 8-bit-clean
+  qrexec stdout. The connect-back relay proven here is the SAME bidirectional mechanism that
+  service will reuse.
+- **Keep the COM logic reusable.** wu-scan.ps1 / the Stage 6 wu-cycle.ps1 must stay callable
+  by a future reporter, not welded to the proxy path.
+- **Services as drop-in files** under `<InstallDir>\qubes-rpc\` (Q:\qubes-rpc\ override), so
+  `qubes.WindowsUpdate` / a NotifyUpdates caller can be added with no rebuild.
+- **Policy:** the reporter needs a dom0 line (guest→dom0 `qubes.NotifyUpdates`) added to
+  mgmt/10-win-idd-all.policy when built — flagged, not built now.
+
+This is recorded so Stage 7's service/installer design leaves these seams open; the reporter
+itself is a later deliverable.
