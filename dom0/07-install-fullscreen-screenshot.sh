@@ -47,7 +47,8 @@ set -uo pipefail
 # same gate the qrexec policy uses. A hardcoded name meant every qube created later got an
 # EMPTY tar with no error - win11-fresh's visual acceptance was lost to exactly that
 # (2026-08-07), and an empty tar is indistinguishable from "the guest has no windows".
-VM="${QREXEC_SERVICE_ARGUMENT:-win-idd-test}"
+VM="${QREXEC_SERVICE_ARGUMENT:-${1##*+}}"
+[ -n "$VM" ] || { echo "no target: call as local.WinFullScreen+<vm>" >&2; exit 1; }
 if ! qvm-tags "$VM" list 2>/dev/null | grep -qx win-idd-testbed; then
     echo "refused: '$VM' lacks the win-idd-testbed tag" >&2; exit 1
 fi

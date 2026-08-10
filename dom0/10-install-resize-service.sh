@@ -24,8 +24,7 @@
 # Remove: rm /etc/qubes-rpc/local.WinResize /etc/qubes/policy.d/31-win-idd-resize.policy
 set -euo pipefail
 
-DEV="${1:?usage: $0 <dev-qube> [test-qube]}"
-VM="${2:-win-idd-test}"
+DEV="${1:?usage: $0 <dev-qube>}"
 SVC=/etc/qubes-rpc/local.WinResize
 POLICY=/etc/qubes/policy.d/31-win-idd-resize.policy
 
@@ -41,8 +40,17 @@ cat > "$SVC" <<EOF
 # Resize the dom0 window of $VM. qubes-win-idd kit (10-install-resize-service.sh v2).
 # Arg: WxH (client area) or "query". Output: one GEOM line. Selects by _QUBES_VMNAME.
 set -u
-VM="$VM"
-REQ="\${1#*+}"
+REQ="\${QREXEC_SERVICE_ARGUMENT:-\${1#*+}}"
+# Resolve the target at RUNTIME to the single RUNNING qube tagged win-idd-testbed, so a
+# deleted/renamed guest never silently breaks this (the old build baked win-idd-test in). The
+# arg here carries the GEOMETRY, not a VM, so the target cannot come from it.
+VM=""
+for c in \$(qvm-ls --running --raw-list 2>/dev/null); do
+    qvm-tags "\$c" list 2>/dev/null | grep -qx win-idd-testbed && VM="\${VM:+\$VM }\$c"
+done
+n=0; for x in \$VM; do n=\$((n+1)); done
+if [ "\$n" -eq 0 ]; then echo "GEOM ok=0 err=no_running_testbed_guest"; exit 0; fi
+if [ "\$n" -gt 1 ]; then echo "GEOM ok=0 err=multiple_testbed_guests:\$VM"; exit 0; fi
 
 # Locate the live graphical session (same bootstrap as local.WinScreenshot).
 DOMUSER=\$(getent passwd 1000 | cut -d: -f1)
@@ -118,9 +126,9 @@ EOF
 chmod 755 "$SVC"
 
 cat > "$POLICY" <<EOF
-# IDD driver dev: $DEV may resize $VM's dom0 window. 10-install-resize-service.sh
+# IDD driver dev: $DEV may resize the running win-idd-testbed guest's dom0 window. 10-install-resize-service.sh
 local.WinResize  *  $DEV  dom0  allow
 EOF
 
-echo "Installed $SVC and $POLICY (dev qube: $DEV, target: $VM)."
+echo "Installed $SVC and $POLICY (dev qube: $DEV, target: the running win-idd-testbed guest)."
 echo "Test from $DEV:  qrexec-client-vm dom0 local.WinResize+query"
