@@ -42,7 +42,14 @@
     INACCESSIBLE BOOT DEVICE. Read the UPGRADING FROM STOCK QWT section of README.txt
     (including the recovery recipe) before passing this.
 
+.PARAMETER NoIddDriver
+    Do NOT activate the Qubes IddCx display driver; leave the guest on the emulated Basic
+    Display Adapter. IDD activation is ON BY DEFAULT (it is the point of this package -
+    arbitrary resolutions that follow the dom0 window, no oversized BDA snapping) and is
+    non-fatal: if it fails the install still succeeds on the BDA.
+
 .PARAMETER InstallIddDriver
+    Deprecated no-op (IDD is default-on). Kept so old command lines and /idd still parse.
     Also install and ACTIVATE the Qubes IddCx display driver: the package is staged with
     pnputil, the root-enumerated device (root\iddsampledriver) is created with devcon,
     and once it binds the emulated VGA adapter (PCI display class CC_0300) is DISABLED,
@@ -77,6 +84,13 @@ Omit the Xen PV disk drivers (xenvbd). Leaves the guest on emulated IDE. Diagnos
 [CmdletBinding()]
 param(
     [switch]$Auto,
+    # IDD activation is DEFAULT and MANDATORY for a real install - the IddCx driver is the
+    # entire display point of this package (arbitrary resolutions following the dom0 window,
+    # no Basic-Display-Adapter snapping). -NoIddDriver is TESTING ONLY: it leaves the guest on
+    # the emulated BDA, which is a DEGRADED/FAILURE state and must NEVER be used for a real
+    # install. There is deliberately no /noidd user switch. -InstallIddDriver is a harmless
+    # no-op kept so old command lines and the /idd switch still parse.
+    [switch]$NoIddDriver,
     [switch]$InstallIddDriver,
     [switch]$NoPvNetwork,
 
@@ -522,7 +536,7 @@ function Invoke-Stage1 {
     $self = Join-Path $Root 'Install-QwtImproved.ps1'
     if ($Auto) {
         $extra = @()
-        if ($InstallIddDriver) { $extra += '-InstallIddDriver' }
+        if ($NoIddDriver)      { $extra += '-NoIddDriver' }
         if ($NoPvNetwork)      { $extra += '-NoPvNetwork' }
         if ($NoPvDisk)         { $extra += '-NoPvDisk' }
         if ($NoMoveUsers)      { $extra += '-NoMoveUsers' }
@@ -726,7 +740,7 @@ function Invoke-Stage2 {
                 $self = Join-Path $Root 'Install-QwtImproved.ps1'
                 if ($Auto) {
                     $extra = @()
-                    if ($InstallIddDriver) { $extra += '-InstallIddDriver' }
+                    if ($NoIddDriver)      { $extra += '-NoIddDriver' }
                     if ($NoPvNetwork)      { $extra += '-NoPvNetwork' }
                     if ($NoPvDisk)         { $extra += '-NoPvDisk' }
                     if ($NoMoveUsers)      { $extra += '-NoMoveUsers' }
@@ -930,24 +944,28 @@ function Invoke-Stage2 {
     # the MSI above publishes the mode list to HKLM\SOFTWARE\QubesIDD\Modes at runtime
     # and the driver reads it at monitor arrival. Activation happens HERE, right before
     # the stage-2 reboot, so the next boot comes up IDD-primary.
-    $script:Result.detail.idd_driver = 'not requested'
-    if ($InstallIddDriver) {
-        # detail.idd_driver tracks PROGRESS, not just the end state: a Fail anywhere in
-        # this block must emit a trailer that says how far activation got and what now
-        # exists on the guest - 'not requested' on a failed /idd run is the one value
-        # guaranteed to be false.
+    # IDD is DEFAULT-ON: the IddCx driver is the headline display capability (arbitrary
+    # resolutions that follow the dom0 window, no oversized Basic-Display-Adapter snapping).
+    # Shipping it opt-in meant the default install ran the emulated BDA - i.e. stock display -
+    # so it is activated by default now; /noidd (-NoIddDriver) opts out. NON-FATAL by design:
+    # the whole block is wrapped so ANY activation failure WARNs and continues on the BDA - a
+    # display feature must never fail the QWT install. Internal failures throw; the catch below
+    # degrades gracefully. detail.idd_driver records how far it got either way.
+    $script:Result.detail.idd_driver = 'skipped (/noidd)'
+    if (-not $NoIddDriver) {
+      try {
         $script:Result.detail.idd_driver = 'requested'
         $iddDir  = Join-Path $Root 'idd-driver'
         $iddHwId = 'root\iddsampledriver'
         $devcon  = Join-Path $iddDir 'devcon.exe'
         $inf = @(Get-ChildItem -LiteralPath $iddDir -Filter *.inf -ErrorAction SilentlyContinue)
         if ($inf.Count -ne 1) {
-            Fail "-InstallIddDriver requested but $iddDir holds $($inf.Count) .inf files (expected exactly 1)"
+            throw "$iddDir holds $($inf.Count) .inf files (expected exactly 1)"
         }
         if (-not (Test-Path -LiteralPath $devcon)) {
-            Fail ("devcon.exe is missing from $iddDir - the release-package workflow's 'idd' job " +
-                  'must copy it out of the WDK into idd-package/ and packaging/make-setup.ps1 must ' +
-                  'stage it into idd-driver/; without it the IDD device cannot be created or removed')
+            throw ("devcon.exe is missing from $iddDir - the release-package workflow's 'idd' job " +
+                   'must copy it out of the WDK into idd-package/ and packaging/make-setup.ps1 must ' +
+                   'stage it into idd-driver/; without it the IDD device cannot be created or removed')
         }
         # Native calls in this block: capture output in try/catch and judge ONLY
         # $LASTEXITCODE - under $ErrorActionPreference='Stop' PS 5.1 turns native stderr
@@ -959,7 +977,7 @@ function Invoke-Stage2 {
         # 3010 = success, reboot required: LIKELY here on upgrade, because replacing the
         # driver package of the live IDD display is exactly the in-use case. Stage 2
         # unconditionally ends in a reboot, so 3010 == 0 for our purposes.
-        if ($LASTEXITCODE -notin 0, 3010) { Fail "pnputil /add-driver failed ($LASTEXITCODE)" }
+        if ($LASTEXITCODE -notin 0, 3010) { throw "pnputil /add-driver failed ($LASTEXITCODE)" }
         $script:Result.detail.idd_driver = 'driver staged'
 
         # Create the root-enumerated software device - the same pnputil+devcon two-step
@@ -981,7 +999,7 @@ function Invoke-Stage2 {
             $out | ForEach-Object { Write-Log "  devcon: $_" }
             # devcon: 0 = done, 1 = done but a reboot is required - and stage 2 always
             # ends in a reboot anyway.
-            if ($LASTEXITCODE -notin 0, 1) { Fail "devcon install $iddHwId failed ($LASTEXITCODE)" }
+            if ($LASTEXITCODE -notin 0, 1) { throw "devcon install $iddHwId failed ($LASTEXITCODE)" }
             $createdByThisRun = $true
             $script:Result.detail.idd_driver = 'device created, waiting for bind'
         }
@@ -1028,7 +1046,7 @@ function Invoke-Stage2 {
             } else {
                 $script:Result.detail.idd_driver = "activation failed ($state); pre-existing device LEFT IN PLACE, VGA untouched"
             }
-            Fail "IDD activation failed: $state - NOT disabling the VGA adapter"
+            throw "IDD activation failed: $state - NOT disabling the VGA adapter"
         }
         Write-Log "IDD display adapter present: $($iddCtrl.Name)"
 
@@ -1039,7 +1057,7 @@ function Invoke-Stage2 {
         $vga = @(Get-PnpDevice -Class Display -ErrorAction SilentlyContinue |
                  Where-Object { $_.InstanceId -like 'PCI\*' -and ($_.HardwareID -match 'CC_0300') })
         if ($vga.Count -eq 0) {
-            Fail 'IDD device is up but no PCI display adapter (hardware id matching CC_0300) was found to disable - refusing to guess at the display topology'
+            throw 'IDD device is up but no PCI display adapter (hardware id matching CC_0300) was found to disable - refusing to guess at the display topology'
         }
         $preferred = @($vga | Where-Object { $_.HardwareID -match 'VEN_1234&DEV_1111' })
         if ($preferred.Count -gt 0) { $vga = $preferred }
@@ -1070,6 +1088,18 @@ function Invoke-Stage2 {
             "Enable-PnpDevice -InstanceId '$($vgaDev.InstanceId)' -Confirm:" + '$false' +
             ' (or devcon enable on that instance id), then reboot - that restores the pre-IDD display')
         Write-Log 'IDD ACTIVATED - after the reboot the Qubes IDD drives the desktop (modes from HKLM\SOFTWARE\QubesIDD\Modes)'
+      } catch {
+        # IDD activation is REQUIRED - it is the whole display point of this package. Running
+        # on the emulated Basic Display Adapter is a FAILURE STATE, not a supported fallback:
+        # arbitrary resolutions and dom0-window-following do not work on the BDA. We do NOT
+        # brick the install (the guest is still usable, so the user can retry), but this is
+        # logged as an ERROR and flagged loudly in the result so a BDA guest never passes as OK.
+        Write-Log ("IDD ACTIVATION FAILED: $($_.Exception.Message). The guest will boot on the emulated Basic Display Adapter - a DEGRADED/FAILURE state (no arbitrary resolutions). Retry elevated once up.") 'ERROR'
+        if ("$($script:Result.detail.idd_driver)" -notlike 'activated*') {
+            $script:Result.detail.idd_driver = "FAILED (on Basic Display Adapter): $($_.Exception.Message)"
+            $script:Result.detail.idd_failed = $true
+        }
+      }
     }
 
     # --- app hardware-acceleration pre-tweak (default ON, /noapptweaks skips) -----------
