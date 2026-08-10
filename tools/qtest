@@ -48,7 +48,7 @@ case "${1:-}" in
            # Whole dom0 desktop + geometry (dom0/07-install-fullscreen-screenshot.sh):
            # the only way to see override-redirect windows and dom0-side rendering
            # defects - per-window shots cannot show either.
-           qrexec-client-vm dom0 local.WinFullScreen </dev/null > "$out" && echo "saved $out" ;;
+           qrexec-client-vm dom0 "local.WinFullScreen+$VM" </dev/null > "$out" && echo "saved $out" ;;
   wedge)   # wedge [out-dir] — dom0-side capture at the moment of a wedge, no human needed.
            # Needs dom0/13-install-wedge-forensics-service.sh installed once. Never fires
            # the NMI: bugchecking a guest stays a deliberate human action.
@@ -63,8 +63,8 @@ case "${1:-}" in
                exit 1
            fi ;;
   shot)    out="${2:-shots.tar}"
-           # +$VM argument selects the target among the service's allowlisted test qubes;
-           # a pre-argument service build simply ignores it (captures its baked-in VM).
+           # +$VM selects the target; the service gates it by the win-idd-testbed tag, so the
+           # target must carry that tag (04-install-screenshot-service.sh). No baked-in VM.
            qrexec-client-vm dom0 "local.WinScreenshot+$VM" </dev/null > "$out" && echo "saved $out" ;;
   resize)  # resize <WxH|query> — resize the qube's dom0 window (client area) or read its
            # geometry. Needs dom0/10-install-resize-service.sh installed by the user first.
