@@ -6323,3 +6323,30 @@ NOT optional. Also found: the stock offline provisioning left
 DoNotConnectToWindowsUpdateInternetLocations=1 set (WU internet blocked) - the shipped feature's
 -Enable must clear it (wu-proxy-config.ps1 currently GUARDS on it; the productized version
 should manage it). Instruments left reverted (planes Disabled).
+
+## 2026-08-10 — updates-proxy Stage 1b: LOOPBACK ADAPTER UNBLOCKS wuauserv (R1 fully retired)
+
+Rung 2 of the NLM ladder, on win11-fresh: installed the in-box Microsoft KM-TEST Loopback
+Adapter via the QWT-shipped devcon (`devcon install %windir%\inf\netloop.inf *MSLOOP`),
+gave it a static IP 10.137.99.99/24 with NO gateway and NO DNS. nic-state then reports
+nlm_connected=true, nlm_internet=false - a network NLM can see, but no route anywhere.
+
+Re-ran the kill-test (planes re-enabled, wuauserv restarted). RESULT flips decisively:
+- wu_endpoint_hits=2: **wuauserv dialed the loopback proxy** - captured
+  `CONNECT slscr.update.microsoft.com:443` (the WU service-locator). Its HRESULT changed
+  from 0x8024402C (NAME_NOT_RESOLVED, never dialed) to 0x80072EF3 (dialed, got the mock's
+  502) - the exact "WU now uses the proxy" signature.
+- sysproxy_routes=true: control B (default-system-proxy client) now also reaches the mock.
+- selftest_seen=true: control A still valid.
+
+CONCLUSION: the whole approach is viable. wuauserv's ~2 s precheck gates on NLM
+CONNECTIVITY (IsConnected), NOT internet reachability - so a routeless loopback adapter
+satisfies it while the guest stays structurally offline (no gateway => the routing table
+reaches nothing but the loopback proxy, whose only egress is the qrexec updates-proxy
+stream). ISOLATION-STORY TRADEOFF: the shipped feature needs this loopback adapter, so the
+claim becomes "a NIC with no route, egress only via qubes.UpdatesProxy" rather than
+"literally zero NICs" - a design point for the owner (flagged per plan Stage 1b). Rung 1
+(NCSI-only registry override, no adapter) was not needed and left untried.
+
+Guest state: planes reverted (Disabled); loopback adapter LEFT INSTALLED (it is the
+mitigation; harmless - no route). DoNotConnectToWindowsUpdateInternetLocations cleared.
