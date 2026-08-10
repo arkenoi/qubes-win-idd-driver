@@ -1,5 +1,7 @@
 # QWT-NG 4.3.0 (agent 09b643e) — idle-burn fix, in-place upgrades, app render tweaks
 
+> **SUPERSEDED by v4.3.1-agent09b643e** (IDD display driver now ON BY DEFAULT — the default install no longer runs the Basic Display Adapter). This 4.3.0 build shipped IDD opt-in behind /idd.
+
 **Published as `v4.3.0-agent09b643e`** from CI run `31364772166` (release-package on
 `main`, all checks green). Package `4.3.0+agent.09b643e5d278`. Supersedes
 `v4.3.0-agent03b1674`.

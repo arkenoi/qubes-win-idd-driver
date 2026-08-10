@@ -20,14 +20,14 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.0-agent09b643e](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.0-agent09b643e)** — agent `09b643e`, package `4.3.0+agent.09b643e5d278`.
+Release **[v4.3.1-agent09b643e](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.1-agent09b643e)** — agent `09b643e`, package `4.3.0+agent.09b643e5d278`.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.0-1.agent09b643e5d278.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent09b643e/qubes-windows-tools-ng-4.3.0-1.agent09b643e5d278.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso` and auto-patches `qvm-create-windows-qube` to use it |
-| [`qwt-ng-4.3.0-agent09b643e.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent09b643e/qwt-ng-4.3.0-agent09b643e.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qwt-ng-4.3.0-agent09b643e-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent09b643e/qwt-ng-4.3.0-agent09b643e-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent09b643e/SHA256SUMS.txt) | checksums for all three |
+| [`qubes-windows-tools-ng-4.3.0-1.agent09b643e5d278.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agent09b643e/qubes-windows-tools-ng-4.3.0-1.agent09b643e5d278.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso` and auto-patches `qvm-create-windows-qube` to use it |
+| [`qwt-ng-4.3.1-agent09b643e.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agent09b643e/qwt-ng-4.3.1-agent09b643e.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qwt-ng-4.3.1-agent09b643e-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agent09b643e/qwt-ng-4.3.1-agent09b643e-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agent09b643e/SHA256SUMS.txt) | checksums for all three |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
