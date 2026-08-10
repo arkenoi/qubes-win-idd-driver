@@ -547,7 +547,7 @@ function Invoke-Stage1 {
         if ($NoAppTweaks)      { $extra += '-NoAppTweaks' }
         $extra += '-Auto'
         Set-BootResume -ScriptPath $self -ExtraArgs $extra
-        Write-Log 'STAGE 1 COMPLETE - rebooting in 15 s, installation resumes automatically'
+        Write-Log 'STAGE 1 COMPLETE - rebooting in 2 s, installation resumes automatically'
         Emit-ResultThenReboot 10
     }
     Write-Log 'STAGE 1 COMPLETE'
@@ -561,7 +561,11 @@ function Emit-ResultThenReboot {
     Write-Host '=== RESULT ==='
     Write-Host $json
     try { Add-Content -LiteralPath $script:LogFile -Value "=== RESULT === $json" -Encoding UTF8 } catch { }
-    & shutdown.exe /r /t 15 /c 'Qubes Windows Tools setup' | Out-Null
+    # This helper is reached ONLY on the -Auto (unattended) path - every caller is inside
+    # `if ($Auto)`. Nobody is watching a countdown, so a 15 s dialog was pure dead wait between
+    # stages. The RESULT is already flushed to the log above, so reboot near-immediately; a 2 s
+    # margin just lets this process exit cleanly before the machine goes down.
+    & shutdown.exe /r /t 2 /c 'Qubes Windows Tools setup' | Out-Null
     exit $ExitCode
 }
 
@@ -770,7 +774,7 @@ function Invoke-Stage2 {
                     $extra += '-Auto'
                     $extra += '-ResumeAfterUninstall'
                     Set-BootResume -ScriptPath $self -ExtraArgs $extra
-                    Write-Log 'removing the previous QWT requires a reboot - rebooting in 15 s, the install resumes automatically'
+                    Write-Log 'removing the previous QWT requires a reboot - rebooting in 2 s, the install resumes automatically'
                     Emit-ResultThenReboot 10
                 }
                 Write-Log 'removing the previous QWT requires a reboot'
@@ -1167,7 +1171,7 @@ function Invoke-Stage2 {
     Write-Log 'STAGE 2 COMPLETE - QWT installed. A reboot is required for the drivers to bind.'
 
     if ($Auto) {
-        Write-Log 'rebooting in 15 s'
+        Write-Log 'rebooting in 2 s'
         Emit-ResultThenReboot 0
     }
     Write-Log 'Reboot now; qrexec should answer roughly a minute after the guest comes back.'
