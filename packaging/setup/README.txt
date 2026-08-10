@@ -133,6 +133,10 @@ so stage 2 just stops the agent and runs the new MSI, and Windows Installer
 replaces the old product inside one transaction - no separate uninstall, no
 intermediate reboot, and the PV disk driver is upgraded in place rather than
 removed (which is what makes the 0x7B risk below a non-issue on this path).
+Validated end to end 2026-08-10 on a PV-booted stock guest. One expected
+behaviour: the first boot after the upgrade runs the disk on the emulated
+path (that safety net is exactly why this cannot 0x7B); the PV disk path
+re-binds by itself on the NEXT reboot.
 
 The uninstall-first flow below remains ONLY for what a major upgrade cannot
 handle: an installed QWT version equal to or newer than this package (a
