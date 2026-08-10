@@ -10,6 +10,10 @@ REM     install.cmd /auto        reboots and resumes by itself (unattended)
 REM     (the Qubes IddCx display driver is installed AND ACTIVATED BY DEFAULT -
 REM      it becomes the display, the emulated VGA adapter is disabled; there is
 REM      no switch to skip it. /idd is accepted but redundant.)
+REM     install.cmd /iddonly     add/activate the IddCx driver on a guest that ALREADY has
+REM                              QWT installed, WITHOUT re-running the MSI - no version gate,
+REM                              no PV-disk 0x7B gate. Use this to add IDD to an install that
+REM                              predates IDD-by-default. Reboots when done.
 REM     install.cmd /nonet       omit the PV network drivers (see README.txt)
 REM     install.cmd /nodisk      omit the PV disk drivers (diagnostic only)
 REM     install.cmd /noapptweaks skip the app HW-accel pre-tweak (registry
@@ -33,6 +37,7 @@ REM below has to hand the same flags to the elevated copy of this script.
 set "RAWARGS=%*"
 set "PSARGS="
 set "AUTO="
+set "IDDONLY="
 
 :parse
 if "%~1"=="" goto parsed
@@ -42,8 +47,9 @@ if /i "%~1"=="/nonet"  ( set "PSARGS=!PSARGS! -NoPvNetwork"      & shift & goto 
 if /i "%~1"=="/nodisk" ( set "PSARGS=!PSARGS! -NoPvDisk"         & shift & goto parse )
 if /i "%~1"=="/acceptpvdiskupgrade" ( set "PSARGS=!PSARGS! -AcceptPvDiskUpgrade" & shift & goto parse )
 if /i "%~1"=="/noapptweaks" ( set "PSARGS=!PSARGS! -NoAppTweaks" & shift & goto parse )
+if /i "%~1"=="/iddonly" ( set "IDDONLY=1" & shift & goto parse )
 echo Unknown option: %~1
-echo Valid options: /auto /idd /nonet /nodisk /acceptpvdiskupgrade /noapptweaks
+echo Valid options: /auto /idd /iddonly /nonet /nodisk /acceptpvdiskupgrade /noapptweaks
 exit /b 87
 :parsed
 
@@ -59,7 +65,13 @@ if defined RAWARGS (
 exit /b 0
 
 :elevated
-powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%Install-QwtImproved.ps1"%PSARGS%
+if defined IDDONLY (
+  REM Add/activate the IddCx driver on a guest that ALREADY has QWT - no MSI, no version gate,
+  REM no PV-disk 0x7B gate. For an existing install that predates IDD-by-default (GWeck's case).
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%activate-idd.ps1" -Root "%HERE%"
+) else (
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%Install-QwtImproved.ps1"%PSARGS%
+)
 set RC=%errorlevel%
 echo.
 if %RC%==0  echo Done. Reboot if the script asked you to.
