@@ -6350,3 +6350,33 @@ claim becomes "a NIC with no route, egress only via qubes.UpdatesProxy" rather t
 
 Guest state: planes reverted (Disabled); loopback adapter LEFT INSTALLED (it is the
 mitigation; harmless - no route). DoNotConnectToWindowsUpdateInternetLocations cleared.
+
+## 2026-08-10 — updates-proxy Stage 2 PASS: real WU content through qubes.UpdatesProxy (R2+R5 retired)
+
+On the fresh Windows TemplateVM (win11-clonetest, class TemplateVM, stock QWT 4.2.2, netvm
+none, tags created-by-win-idd-mgmt + win-idd-testbed). Owner installed the debug policy lines
+(mgmt/10-win-idd-all.policy) routing @tag:win-idd-testbed qubes.UpdatesProxy @default ->
+target=core-update (the torified proxy; this rig has NO sys-net so the stock default doesn't
+apply). One-shot handler guest/up-oneshot.ps1 fired via qrexec-client-vm.
+
+RESULT: **REPLY-BYTES=7493, "HTTP/1.1 200 OK"** from ctldl.windowsupdate.com fetched through
+the tunnel. A Windows template with no general networking pulled real Windows Update CDN
+content via qubes.UpdatesProxy -> core-update -> Tor. Retires:
+- **R5** (policy match): the Windows TemplateVM's qubes.UpdatesProxy call is ALLOWED and the
+  handler spawns (MARKER-YES) - stock-style @tag/@type routing works for a Windows template.
+- **R2** (qrexec byte path): 7493 bytes of HTTP response traversed the vchan back to the guest
+  8-bit clean via the handler's stdin - the "caller never becomes the stream, handler stdio ==
+  vchan" model works.
+
+TWO PROBE BUGS FOUND (both shape the shipped forwarder):
+1. **qrexec-client-vm.exe is NOT on PATH** in the qrexec session - bare invocation hits
+   "command not recognized" and a trailing `& echo OK` masks it (RC=0 footgun compounded).
+   The forwarder MUST call it by full path: "C:\Program Files\Qubes Tools\bin\qrexec-client-vm.exe".
+   Cost ~4 confounded runs before `where qrexec-client-vm.exe` (empty) exposed it.
+2. **Tor latency**: the first fetch returned 0 bytes in a 20 s handler window; 50 s got the
+   full 200 OK. The forwarder/relay must NOT impose short read timeouts - WU/BITS set their
+   own, and a torified proxy adds seconds. core-update works; it is just slow.
+
+Next: Stage 3/4 - swap the one-shot handler for the connect-back relay (qubes-updates-relay.cs,
+full-path fix folded in) so ARBITRARY TCP (not a canned request) tunnels through, then Stage 5/6
+real WU scan+download with the loopback-adapter NLM mitigation.
