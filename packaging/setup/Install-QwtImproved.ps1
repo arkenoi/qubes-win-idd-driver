@@ -657,9 +657,19 @@ function Invoke-Stage2 {
             $inPlace = $false
             $script:SameVersionReinstall = $false
             try {
+                # Normalize to MAJOR.MINOR.BUILD before comparing. The MSI registers a 4-field
+                # DisplayVersion (e.g. 4.3.1.0) while package_version is 3-field (4.3.1), and .NET
+                # ranks [version]'4.3.1.0' ABOVE [version]'4.3.1' (unspecified Revision -1 < 0). So
+                # an EQUAL build read as "installed is NEWER than ours" and fell to uninstall-first
+                # -> the PV gate -> hard fail. Windows Installer itself compares only the first
+                # three fields, so we must too. (Caught by the E2E same-version reinstall test,
+                # 2026-08-11 - the 4.3.0->4.3.1 upgrade passed only because that is a real diff.)
                 $oursStr = "$($script:Result.detail.package_version)" -split '\+' | Select-Object -First 1
-                $ours = [version]$oursStr
-                $olds = @($existing | ForEach-Object { [version]$_.Version })
+                $ov = [version]$oursStr
+                $ours = [version]::new($ov.Major, $ov.Minor, [math]::Max([int]$ov.Build, 0))
+                $olds = @($existing | ForEach-Object {
+                    $iv = [version]$_.Version
+                    [version]::new($iv.Major, $iv.Minor, [math]::Max([int]$iv.Build, 0)) })
                 if ($olds.Count -gt 0 -and @($olds | Where-Object { $_ -gt $ours }).Count -eq 0) {
                     $inPlace = $true
                     $script:SameVersionReinstall = @($olds | Where-Object { $_ -eq $ours }).Count -gt 0
