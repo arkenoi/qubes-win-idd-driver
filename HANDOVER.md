@@ -1,6 +1,14 @@
-# Handover — 2026-08-09 (evening). Read this before touching anything.
+# Handover — 2026-08-09 (evening). SUPERSEDED — kept as the historical record.
 
-## The result: the fork is SLOWER than what it forked
+> **Everything below was true when written and was resolved the same night.** The 2×
+> typing cost was root-caused (a standing idle burn: the per-window engine's 250 ms
+> sweep), fixed (`SweepDdaExempt`), and verified by a one-binary A/B with the defect
+> re-introduced as control — the agent now costs LESS than stock on typing (1.71 vs
+> 2.02–2.19), drag and scroll, with idle marginally above (0.83 vs 0.57). The "next
+> task" this handover assigns is DONE. Current numbers: README "Performance — current
+> state"; full analysis: docs/BENCHMARKS.md; evidence trail: FINDINGS.md 2026-08-09/10.
+
+## The result at the time of writing: the fork looked SLOWER than what it forked
 
 First single-variable ours-vs-stock measurement in this project's history. ONE guest
 (`win11-idd-test`), our agent swapped in and out IN PLACE, hash-verified every rep,

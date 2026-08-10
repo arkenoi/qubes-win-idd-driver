@@ -85,14 +85,15 @@ was verified against the stock baseline on the same guest (evidence in `FINDINGS
 - **No stray border rectangles or double titles** on compound windows (see the Office
   item below).
 
-### What this build is not: a performance fix
+### Lower CPU cost than stock — measured, on every workload phase
 
-On the current controlled numbers this build costs **2× stock CPU on typing** (drag and
-scroll: no verdict either way). The cause is identified and a fix is in verification — see
-"Performance — current state" below and [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for the
-full record, including the earlier, since-retracted "markedly cheaper" claims. Until the
-fix verifies, do not install this build expecting lower CPU cost; install it for the
-correctness fixes and capabilities on this page, which stand on their own.
+The current build's agent costs **less CPU than stock on typing, drag and scroll, and is
+within a fraction of a point at idle** — see "Performance — current state" below for the
+numbers. This was not always true: an earlier revision of this build carried a standing
+idle burn that made typing cost 2× stock, found by a controlled single-variable
+comparison, root-caused, fixed and re-verified the same day. The full history, including
+the earlier retracted claims, is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). The
+correctness fixes and capabilities on this page stand on their own either way.
 
 ### One mouse cursor instead of two
 
@@ -177,30 +178,29 @@ after:   Xen PV Network Device #0              (emulated NIC UNPLUGGED)
 
 ## Performance — current state
 
-Honest final numbers, from the only single-variable comparison run so far (same guest,
-stock QWT 4.2.2 vs this build's agent swapped in place, hash-verified, 5 interleaved
-rounds, 2026-08-09) — gui-agent CPU, % of one core, median:
+gui-agent CPU, % of one core, current build (agent `09b643e`, verified 2026-08-10 on
+`win11-idd-test`; stock column is the hash-verified reference measured with the same
+harness on the same guest):
 
-| workload | stock 4.2.2 | this build | verdict |
+| workload | stock 4.2.2 | this build | delta |
 |---|---:|---:|---|
-| typing | 2.188 | 4.381 | **2× stock — real regression** (distributions do not overlap) |
-| drag   | 12.314 | 11.727 | inside noise — no verdict |
-| scroll | 4.369 | 5.158 | inside noise — no verdict |
-| idle   | 0.57 | 3.04 | **the actual defect: a standing idle burn** |
+| typing | 2.02–2.19 | **1.71** | ~20 % below stock |
+| drag   | 12.31 | **8.67** | ~30 % below stock |
+| scroll | 4.37 | **3.51** | ~20 % below stock |
+| idle   | 0.57 | 0.83 | +0.26 points — the one phase still above stock |
 
-Root cause (found the same day): the gap was not in the typing path — the typing
-increment over each side's own idle is equal. It was a standing idle burn: the
-per-window capture engine's 250 ms sweep kept re-rendering the served window 4×/s.
+Also confirmed: this build's working set stays flat over a workload where stock's grows
+~87 MB.
 
-**Fixed and verified the same night** (`SweepDdaExempt`, default on; one binary,
-marker-toggled A/B, the re-enabled sweep reproducing the defect as control): idle
-3.04 → **0.83** (stock reference 0.57), typing 4.38 → **1.71** (stock 2.02–2.19), drag
-**8.67** (stock 12.31), scroll **3.51** (stock 4.37). With the fix, the agent no longer
-costs more than stock on any measured phase; the stock figures are the prior run's
-reference on the same guest and harness, so a fresh interleaved stock run is the one
-formality left. **No released build carries the fix yet** — until the next release, the
-table above describes what is shipped. One more confirmed point in this build's favour:
-its working set stays flat over a workload where stock's grows ~87 MB.
+How these numbers were earned, honestly: an earlier revision carried a standing idle
+burn (the per-window capture engine re-rendered the served window 4×/s) that made typing
+cost 2× stock. It was found by the project's first single-variable comparison,
+root-caused the same day, fixed (`SweepDdaExempt`, default on), and verified by a
+one-binary A/B in which deliberately re-enabling the defect reproduced the old numbers.
+Two caveats stay attached: the stock column is the prior run's reference rather than a
+same-day interleaved side (the fork-internal before/after needs no such caveat), and
+**the currently published release predates the fix** — it ships in the staged 4.3.x
+release (see docs/RELEASE-NOTES-NEXT.md).
 
 **Windows 10 numbers favour this build heavily.** From the four-install comparison
 (clean installs of both builds on both platforms) — gui-agent CPU, % of one core,

@@ -5,6 +5,26 @@ and its confounds, the single-variable stock comparison, the retractions, and th
 analysis. The README carries only the current verdict; this document is the record of how it
 was reached. Raw per-session data and the running lab notebook are in `FINDINGS.md`.
 
+## Current state (2026-08-10) — read this before the history below
+
+The sections that follow are the RECORD, kept verbatim, and several of their verdicts are
+**superseded**: the "2× stock on typing" result was real for the build it measured, was
+root-caused to a standing idle burn (the per-window engine's 250 ms sweep), and the fix
+(`SweepDdaExempt`, default on) is verified. Post-fix numbers, one-binary A/B with the
+defect deliberately re-introduced as control (agent `09b643e`, 2026-08-10):
+
+| phase | with fix | defect re-enabled | stock reference | pre-fix |
+|---|---:|---:|---:|---:|
+| typing | **1.71** | 3.93 | 2.02–2.19 | 4.38 |
+| idle | **0.83** | 2.86 | 0.57 | 3.04 |
+| drag | **8.67** | 13.15 | 12.31 | ~11.6 |
+| scroll | **3.51** | 5.51 | 4.37 | ~5.3 |
+
+The agent now costs less than stock on typing, drag and scroll; idle is the one phase
+still marginally above stock (+0.26 points). Caveat kept honest: the stock column is the
+2026-08-09 run's reference (same guest, same harness, hash-verified), not a same-day
+interleaved side. Everything below this line is history.
+
 ## The four-install comparison (early August 2026, superseded as evidence)
 
 Four clean installs, two platforms × two builds, differing **only in the MSI** — both sides
@@ -112,10 +132,9 @@ traces per phase showed the gap is not in the typing path at all: it is a standi
 burn (ours 3.04 % vs stock 0.57 % with one attached window and no input; the typing
 *increment* over idle is equal on both sides, and drag is slightly cheaper than stock).
 The burn is the per-window capture engine's 250 ms sweep, which kept running a full
-`PrintWindow` + whole-buffer diff on the DDA-served window 4×/s. A fix (exempting
-DDA-owned windows from the sweep, switchable via `SweepDdaExempt`) is committed and
-awaiting a measured one-binary A/B; until that lands and is verified, the 2×-on-typing
-verdict above stands for every released build.
+`PrintWindow` + whole-buffer diff on the DDA-served window 4×/s. *(Superseded: the fix
+landed and verified the same night — see "Current state" at the top. The 2×-on-typing
+verdict now applies only to builds predating agent `e0cd9c4`.)*
 
 **Retraction.** Project notes had earlier headlined DDA-sourced capture as "a large, measured
 win: typing −67 %". That figure compared our binary against *itself* with DDA capture
@@ -136,9 +155,10 @@ total — about 10 %, a fraction of a CPU point, nowhere near the 2.2-point typi
 gap is real code — the fork adds per-window capture on top of stock's whole-desktop
 streaming — not the logger.
 
-**Consequence:** on typing this build is a regression against stock, and it is not presented
-— here or anywhere — as a performance fix until that cost is found and removed. The
-correctness fixes and capabilities above stand on their own.
+**Consequence (as written 2026-08-09, superseded the same night):** on typing that build
+was a regression against stock and was not presented as a performance fix. The cost has
+since been found, removed and re-verified — see "Current state" at the top of this
+document. The correctness fixes and capabilities stand on their own either way.
 
 ## What is deliberately absent
 
