@@ -6459,3 +6459,31 @@ class, WS_*/WS_EX_* of interest, DWMWA_CLOAKED, owner, rect, layered alpha, titl
 on-guest with in-box csc; validated on win11-clonetest (surfaces ForegroundStaging, Shell_TrayWnd,
 layered tooltips_class32, WindowsDashboard with full attributes). This is the diagnostic that
 pins the Start-menu window predicate once run on a 25H2 guest with the menu open.
+
+## 2026-08-10 — Stage 6 download PROVEN via a reliable (non-Tor) proxy; rig disk cleanup
+
+Stage 6 (WU download+install). core-update (torified) proved UNRELIABLE for large WU
+downloads: repeated fresh scans returned different transient WU errors (0x80240439,
+0x8024402F) even though the tunnel carried bytes each time (relay_conns>0) - the known
+Tor-vs-Microsoft-CDN problem, NOT our forwarder. Pivoted to the owner-preauthorized fallback:
+**win-idd-mgmt as the proxy backend** - it has direct (non-Tor) internet and a userspace
+tinyproxy on 127.0.0.1:8082 (config /home/user/updates-tinyproxy.conf; the qubes.UpdatesProxy
+rpc endpoint already ships in qubes-core-agent-networking). Self-test from the dev qube:
+`curl -x 127.0.0.1:8082 <WU CDN>` -> HTTP 200, 80043 B, MSCF. Policy line added
+(mgmt/10-win-idd-all.policy) routing @tag:win-idd-testbed -> win-idd-mgmt ahead of the
+core-update fallback (owner installed).
+
+Re-run: WU DOWNLOAD works through the reliable proxy - tinyproxy logged real update payload
+GETs from tlu.dl.delivery.mp.microsoft.com (Delivery Optimization CDN, plain HTTP:80), 500+
+requests, ~8 min of steady streaming. The update is a large cumulative that exceeds a single
+560 s script window, so download+install is now run as a guest SCHEDULED TASK (QwtStage6 ->
+stage6-async.cmd) that survives to completion and writes C:\Users\Public\stage6-result.txt;
+polled from the dev qube. Download path CONFIRMED end to end; install result pending the task.
+
+RIG DISK: dom0 thin-pool hit 87%. Deleted 4 redundant/superseded Windows VMs (owner request,
+keep a win10 for compat): win-idd-test (47 GB, original primary, superseded by win11-*),
+win10-e2e, win10-stock (comparison done), win11-idd-test (sweep benchmark released; stock
+reference redundant with the win11-clonetest template which is also stock QWT). Freed ~98 GB;
+pool 87% -> 74.9% (219 GB free). KEPT: win11-clonetest (active updates-proxy TemplateVM),
+win10-clean (compat), win11-fresh (Win11 on QWT-NG 4.3.0). All deletions were policy-covered
+(admin.vm.Remove via the created-by/testbed/qwt-bench tags).
