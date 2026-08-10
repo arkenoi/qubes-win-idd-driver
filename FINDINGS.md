@@ -6291,3 +6291,35 @@ Gate: PASS. Next: Stage 1 - guest-local mock proxy on 127.0.0.1:8082 + wu-proxy-
 (three planes), ask whether wuauserv/DO dials the loopback proxy with zero NICs. Needs no
 dom0 gate (guest-only); the mock-proxy also becomes the plumbing-vs-Tor-path discriminator
 for the later core-update debug target.
+
+## 2026-08-10 — updates-proxy Stage 1: R1 SPLITS (proxy works offline; wuauserv is NLM-gated)
+
+win11-fresh, netvm=none, EnableLUA=0 (direct HKLM writes work). Three proxy planes set via
+guest/wu-proxy-config.ps1 (WinHTTP + device-wide WinINET ProxySettingsPerUser=0 +
+DODownloadMode=0), verified. Kill-test guest/stage1-killtest.ps1 runs a loopback listener on
+a background runspace IN-PROCESS with the WU COM scan (no detached child - start /b children
+survive the qrexec session and squat 8082, a trap that cost two confounded runs; and
+file-logging was unreliable - the in-memory runspace queue is the fix). Two baked-in controls.
+
+DECISIVE RESULT (controls both meaningful):
+- Control A (explicit-proxy client) => selftest_seen=true: the listener provably captures.
+- **Defender cloud protection DIALED THE LOOPBACK PROXY**: captured
+  `CONNECT wdcp.microsoft.com:443` and `CONNECT wdcpalt.microsoft.com:443` to 127.0.0.1:8082,
+  with ZERO network adapters and NLM reporting not-connected. => the proxy planes work and NLM
+  does NOT universally hard-gate loopback-proxy use. R1 (the fatal "nothing dials with no NIC")
+  is RETIRED for WinHTTP components generally.
+- **wuauserv did NOT dial**: the WU COM scan fast-failed 0x8024402C (WU_E_PT_WINHTTP_NAME_NOT_
+  RESOLVED) in ~2 s, making NO connection to the mock (wu_endpoint_hits=0). NAME_NOT_RESOLVED
+  = it attempted DIRECT resolution, never the proxy; the ~2 s fast-fail is a connectivity
+  PRECHECK that Defender skips but WU performs. wuauserv restart did not change it.
+- Control B (default-system-proxy client to a fake WU host) => sysproxy_routes=false: a .NET
+  GetSystemWebProxy() request did not reach the mock either - the WinINET default-proxy
+  resolution has its own quirk (ProxyOverride <local> / pre-connect DNS), noted for Stage 5.
+
+VERDICT: the approach is ALIVE (offline proxying demonstrably works), but Windows Update
+specifically is gated by an NLM/connectivity precheck -> Stage 1b (make NLM report
+connectivity: NCSI registry override, then KM-TEST loopback adapter) is now the critical path,
+NOT optional. Also found: the stock offline provisioning left
+DoNotConnectToWindowsUpdateInternetLocations=1 set (WU internet blocked) - the shipped feature's
+-Enable must clear it (wu-proxy-config.ps1 currently GUARDS on it; the productized version
+should manage it). Instruments left reverted (planes Disabled).
