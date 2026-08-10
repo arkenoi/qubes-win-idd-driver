@@ -1,6 +1,8 @@
 # QWT 4.2.2 + improved GUI agent (03b1674) — disks, cursor, user data, Win10 display
 
-**PUBLISHED 2026-08-08 as `v4.3.0-agent03b1674` (tagged Latest).** Supersedes
+**PUBLISHED 2026-08-08 as `v4.3.0-agent03b1674`; superseded 2026-08-10 by
+`v4.3.0-agent09b643e` (idle-burn fix, in-place upgrades — that one is Latest now).**
+Supersedes
 `v4.2.2-agent.a68d244-pvfix`, which **carries known regressions** (listed below). An
 earlier revision of this file said "not yet published" and gave a
 `gh release create v4.2.2-agent.03b1674` command; both were superseded by the 4.3.0

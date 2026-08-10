@@ -20,27 +20,30 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.0-agent03b1674](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.0-agent03b1674)** — agent `03b1674`, package `4.2.2+agent.03b1674c731f`.
+Release **[v4.3.0-agent09b643e](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.0-agent09b643e)** — agent `09b643e`, package `4.3.0+agent.09b643e5d278`.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.0-1.agent03b1674c731f.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent03b1674/qubes-windows-tools-ng-4.3.0-1.agent03b1674c731f.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, where `qvm-create-windows-qube` looks for it |
-| [`qwt-ng-4.3.0-agent03b1674.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent03b1674/qwt-ng-4.3.0-agent03b1674.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qwt-ng-4.3.0-agent03b1674-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent03b1674/qwt-ng-4.3.0-agent03b1674-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent03b1674/SHA256SUMS.txt) | checksums for all three |
+| [`qubes-windows-tools-ng-4.3.0-1.agent09b643e5d278.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent09b643e/qubes-windows-tools-ng-4.3.0-1.agent09b643e5d278.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso` and auto-patches `qvm-create-windows-qube` to use it |
+| [`qwt-ng-4.3.0-agent09b643e.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent09b643e/qwt-ng-4.3.0-agent09b643e.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qwt-ng-4.3.0-agent09b643e-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent09b643e/qwt-ng-4.3.0-agent09b643e-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.0-agent09b643e/SHA256SUMS.txt) | checksums for all three |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.0-1.agent03b1674c731f.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.0-1.agent09b643e5d278.noarch.rpm
 ```
 
-**Provenance.** These assets are the build that was actually measured — the same binaries
-that produced the 14/14 acceptance runs and every number in the four-install benchmark below
-(`gui-agent.exe` sha256 prefix `CBBD02069A01E047`). A later CI run at the *same* agent commit
-produces a *different* `gui-agent.exe` hash, because the Windows build is not reproducible
-(the PE header carries a build timestamp). Rather than ship an untested-but-newer binary, the
-release carries the tested one. The ISO and RPM were built from that exact setup tree.
+Upgrading a guest that already runs stock QWT or an older build of this package is a
+plain in-place upgrade — run the installer, it detects the older version and lets the
+MSI replace it in one transaction (validated end to end; see the release notes).
+
+**Provenance.** `gui-agent.exe` in these assets (sha256 prefix `91F40ECE29286063`) is the
+exact binary the upgrade end-to-end test verified installed, running and hash-matched;
+the performance A/B ran on a sibling CI build of the same agent commit, toggling the fix
+at runtime on one binary (the Windows build is not timestamp-reproducible, so hashes
+differ across rebuilds of identical source).
 
 ---
 ## Read this first
@@ -85,15 +88,11 @@ was verified against the stock baseline on the same guest (evidence in `FINDINGS
 - **No stray border rectangles or double titles** on compound windows (see the Office
   item below).
 
-### Lower CPU cost than stock — measured, on every workload phase
+### Lower CPU cost than stock — measured
 
-The current build's agent costs **less CPU than stock on typing, drag and scroll, and is
-within a fraction of a point at idle** — see "Performance — current state" below for the
-numbers. This was not always true: an earlier revision of this build carried a standing
-idle burn that made typing cost 2× stock, found by a controlled single-variable
-comparison, root-caused, fixed and re-verified the same day. The full history, including
-the earlier retracted claims, is in [docs/BENCHMARKS.md](docs/BENCHMARKS.md). The
-correctness fixes and capabilities on this page stand on their own either way.
+The agent costs less CPU than stock on typing (~20 % below), drag (~30 %) and scroll
+(~20 %), and its working set stays flat where stock's grows ~87 MB per workload. Numbers
+and caveats: "Performance" below.
 
 ### One mouse cursor instead of two
 
@@ -176,53 +175,26 @@ after:   Xen PV Network Device #0              (emulated NIC UNPLUGGED)
 
 ---
 
-## Performance — current state
+## Performance
 
-gui-agent CPU, % of one core, current build (agent `09b643e`, verified 2026-08-10 on
-`win11-idd-test`; stock column is the hash-verified reference measured with the same
-harness on the same guest):
+gui-agent CPU, % of one core (agent `09b643e`, 2026-08-10; stock = hash-verified
+reference, same guest and harness):
 
-| workload | stock 4.2.2 | this build | delta |
-|---|---:|---:|---|
-| typing | 2.02–2.19 | **1.71** | ~20 % below stock |
-| drag   | 12.31 | **8.67** | ~30 % below stock |
-| scroll | 4.37 | **3.51** | ~20 % below stock |
-| idle   | 0.57 | 0.83 | +0.26 points — the one phase still above stock |
-
-Also confirmed: this build's working set stays flat over a workload where stock's grows
-~87 MB.
-
-How these numbers were earned, honestly: an earlier revision carried a standing idle
-burn (the per-window capture engine re-rendered the served window 4×/s) that made typing
-cost 2× stock. It was found by the project's first single-variable comparison,
-root-caused the same day, fixed (`SweepDdaExempt`, default on), and verified by a
-one-binary A/B in which deliberately re-enabling the defect reproduced the old numbers.
-Two caveats stay attached: the stock column is the prior run's reference rather than a
-same-day interleaved side (the fork-internal before/after needs no such caveat), and
-**the currently published release predates the fix** — it ships in the staged 4.3.x
-release (see docs/RELEASE-NOTES-NEXT.md).
-
-**Windows 10 numbers favour this build heavily.** From the four-install comparison
-(clean installs of both builds on both platforms) — gui-agent CPU, % of one core,
-median of 3, plus renderer highlights:
-
-| metric | stock win10 | this build win10 |
+| workload | stock 4.2.2 | this build |
 |---|---:|---:|
-| drag CPU | 33.09 | 12.96 |
-| scroll CPU | 47.83 | 8.91 |
-| typing CPU | 32.61 | 4.38 |
-| fps, moving rect | 314.6 | 806.5 |
-| frame delay p50 (ms) | 2.91 | 0.86 |
-| idle working set (MB) | 108.5 | 68.2 |
+| typing | 2.02–2.19 | **1.71** |
+| drag   | 12.31 | **8.67** |
+| scroll | 4.37 | **3.51** |
+| idle   | 0.57 | 0.83 |
 
-The honest qualifier: these cells compare different installs and display stacks, not just
-the agent, so they are not single-variable proof the way the table above is — no
-single-variable Windows 10 run exists yet. They are still the only Windows 10 data there
-is, and the margins are large and consistent across every dimension measured.
+Working set stays flat over a workload where stock's grows ~87 MB. Idle is the one phase
+still marginally above stock.
 
-The full record — both four-install tables, the confound discussion, the retracted
-"−67 %" claim, methodology, and the root-cause analysis — is in
-[docs/BENCHMARKS.md](docs/BENCHMARKS.md); the running lab notebook is `FINDINGS.md`.
+An earlier build carried an idle burn that made typing cost 2× stock; it was found by a
+single-variable comparison, fixed, and verified by an A/B with the defect deliberately
+re-introduced as control. Windows 10 cross-install numbers (large margins, but not
+single-variable), methodology, caveats and every retraction:
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ---
 
