@@ -54,15 +54,24 @@ finishes provisioning with no tools installed, which reads as "QWT silently fail
 than "the installer was never invoked". That silent-failure mode is the whole reason this
 document exists.
 
-Apply the shipped replacement:
+**This is applied automatically.** The RPM's `%post` runs `qwt-ng-fix-qwcq`, which finds
+`qvm-create-windows-qube` installations (the resolved entry point on `PATH`, plus
+`/opt`, `/usr/local/share`, `/root` and `/home/*` clones), backs the upstream stub up
+once as `install-qwt.bat.stock`, and swaps in the shipped replacement. It reports what it
+patched, is idempotent, and never fails the package transaction. If you install
+`qvm-create-windows-qube` *after* this package — or keep it somewhere the search does not
+look — run it once by hand:
 
 ```
-cp /usr/share/qubes-windows-tools-ng/auto-qwt/install-qwt.bat \
-   <qvm-create-windows-qube>/tools/auto-qwt/install-qwt.bat
+qwt-ng-fix-qwcq
 ```
 
-It runs `install.cmd /auto` when it sees a QWT-NG tree, and falls back to the upstream glob
-otherwise, so the same file still works with a stock QWT ISO.
+(The manual equivalent remains a plain copy of
+`/usr/share/qubes-windows-tools-ng/auto-qwt/install-qwt.bat` over
+`<qvm-create-windows-qube>/tools/auto-qwt/install-qwt.bat`.)
+
+The replacement stub runs `install.cmd /auto` when it sees a QWT-NG tree, and falls back
+to the upstream glob otherwise, so the same file still works with a stock QWT ISO.
 
 ## What is NOT verified
 

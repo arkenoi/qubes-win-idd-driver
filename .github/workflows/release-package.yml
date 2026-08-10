@@ -448,6 +448,7 @@ jobs:
           mkdir -p ~/rpmbuild/{SOURCES,SPECS}
           cp dl/iso/qwt-improved-setup.iso            ~/rpmbuild/SOURCES/
           cp contrib/auto-qwt/install-qwt.bat         ~/rpmbuild/SOURCES/
+          cp contrib/auto-qwt/qwt-ng-fix-qwcq         ~/rpmbuild/SOURCES/
           cp contrib/README-qvm-create-windows-qube.md ~/rpmbuild/SOURCES/
           cp dl/MANIFEST.json                          ~/rpmbuild/SOURCES/
           cp packaging/rpm/qubes-windows-tools-ng.spec ~/rpmbuild/SPECS/

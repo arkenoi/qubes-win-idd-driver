@@ -31,6 +31,7 @@ Source0:        qwt-improved-setup.iso
 Source1:        install-qwt.bat
 Source2:        README-qvm-create-windows-qube.md
 Source3:        MANIFEST.json
+Source4:        qwt-ng-fix-qwcq
 
 # The stock package owns the same path. Conflict LOUDLY rather than silently replacing a
 # signed vendor ISO with a test-signed one - a silent overwrite is exactly the kind of
@@ -66,6 +67,8 @@ install -m 0644 %{SOURCE0} %{buildroot}%{qwt_iso_dir}/qubes-windows-tools.iso
 
 install -d -m 0755 %{buildroot}%{qwtng_share}/auto-qwt
 install -m 0644 %{SOURCE1} %{buildroot}%{qwtng_share}/auto-qwt/install-qwt.bat
+install -d -m 0755 %{buildroot}%{_bindir}
+install -m 0755 %{SOURCE4} %{buildroot}%{_bindir}/qwt-ng-fix-qwcq
 install -m 0644 %{SOURCE3} %{buildroot}%{qwtng_share}/MANIFEST.json
 
 install -d -m 0755 %{buildroot}%{_docdir}/%{name}
@@ -77,6 +80,7 @@ install -m 0644 %{SOURCE2} %{buildroot}%{_docdir}/%{name}/README-qvm-create-wind
 %dir %{qwtng_share}/auto-qwt
 %{qwtng_share}/auto-qwt/install-qwt.bat
 %{qwtng_share}/MANIFEST.json
+%{_bindir}/qwt-ng-fix-qwcq
 %doc %{_docdir}/%{name}/README-qvm-create-windows-qube.md
 
 %post
@@ -89,20 +93,13 @@ qubes-windows-tools-ng installed.
 The Windows binaries in this ISO are TEST-SIGNED: the in-guest installer enables testsigning
 and trusts an unofficial certificate INSIDE THE WINDOWS GUEST. dom0 is unaffected.
 
-The next paragraph applies ONLY to qvm-create-windows-qube users. Installing manually --
-attaching the ISO to the qube and running install.cmd inside Windows -- needs none of it;
-if that is you, ignore it.
-
-qvm-create-windows-qube users: one more step is required. Its auto-qwt helper globs for
-`qubes-tools-*.exe|msi`, which matches nothing in this ISO, and it fails SILENTLY - the qube
-finishes with no tools installed. Replace its installer stub with the shipped one:
-
-  cp /usr/share/qubes-windows-tools-ng/auto-qwt/install-qwt.bat \
-     <qvm-create-windows-qube>/tools/auto-qwt/install-qwt.bat
-
-See /usr/share/doc/qubes-windows-tools-ng/README-qvm-create-windows-qube.md
-
 EOF
+# qvm-create-windows-qube's auto-qwt stub globs for qubes-tools-*.exe|msi, which matches
+# nothing in this ISO and fails SILENTLY. Instead of telling the user to fix it, fix it:
+# find QWCQ installations and swap in the QWT-NG-aware stub (original backed up once).
+# Idempotent, reports what it did, never fails the transaction. Re-runnable any time as
+# qwt-ng-fix-qwcq (e.g. after installing qvm-create-windows-qube later than this package).
+%{_bindir}/qwt-ng-fix-qwcq || :
 
 %changelog
 * Sat Aug 08 2026 QWT-NG <noreply@example.com> - 4.3.0-1
