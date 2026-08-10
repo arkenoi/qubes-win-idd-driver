@@ -1,0 +1,56 @@
+#!/bin/bash
+# Make qvm-create-windows-qube's auto-qwt work with the QWT-NG ISO, automatically.
+#
+# Upstream's tools/auto-qwt/install-qwt.bat globs for a single qubes-tools-*.exe|msi at
+# the ISO root. QWT-NG ships an installer TREE (install.cmd + staged testsigning flow),
+# so the glob matches nothing and the qube finishes provisioning with no tools installed,
+# silently. This helper finds qvm-create-windows-qube installations in dom0 and replaces
+# that stub with the QWT-NG-aware one shipped by this package, keeping a one-time backup
+# of the original as install-qwt.bat.stock.
+#
+# Run by the qubes-windows-tools-ng RPM %post; safe and idempotent to run by hand any
+# time (e.g. after installing qvm-create-windows-qube later than this package).
+# Never exits nonzero: a missing QWCQ is a report, not an error, and an RPM scriptlet
+# must not fail the transaction over it.
+set -u
+STUB=/usr/share/qubes-windows-tools-ng/auto-qwt/install-qwt.bat
+
+if [ ! -f "$STUB" ]; then
+    echo "qwt-ng-fix-qwcq: shipped stub missing ($STUB) - is qubes-windows-tools-ng installed?"
+    exit 0
+fi
+
+# Candidate roots: wherever the qvm-create-windows-qube entry point resolves to, plus the
+# places people conventionally clone it in dom0. Shallow on purpose.
+candidates=""
+if entry=$(command -v qvm-create-windows-qube 2>/dev/null); then
+    real=$(readlink -f "$entry" 2>/dev/null) && candidates="$candidates $(dirname "$real")"
+fi
+for d in /opt/qvm-create-windows-qube /usr/local/share/qvm-create-windows-qube \
+         /root/qvm-create-windows-qube /home/*/qvm-create-windows-qube; do
+    [ -d "$d" ] && candidates="$candidates $d"
+done
+
+patched=0 seen=0
+for root in $candidates; do
+    bat="$root/tools/auto-qwt/install-qwt.bat"
+    [ -f "$bat" ] || continue
+    seen=$((seen+1))
+    if cmp -s "$bat" "$STUB"; then
+        echo "qwt-ng-fix-qwcq: $bat already QWT-NG-aware"
+        continue
+    fi
+    [ -f "$bat.stock" ] || cp -p "$bat" "$bat.stock"
+    if cp "$STUB" "$bat"; then
+        echo "qwt-ng-fix-qwcq: PATCHED $bat (original kept as install-qwt.bat.stock)"
+        patched=$((patched+1))
+    else
+        echo "qwt-ng-fix-qwcq: could not write $bat - fix by hand: cp $STUB $bat"
+    fi
+done
+
+if [ "$seen" = 0 ]; then
+    echo "qwt-ng-fix-qwcq: no qvm-create-windows-qube installation found - nothing to do."
+    echo "  (If you install it later, run qwt-ng-fix-qwcq once afterwards.)"
+fi
+exit 0
