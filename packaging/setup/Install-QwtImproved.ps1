@@ -316,6 +316,9 @@ function Set-GuiAgentRegistryDefaults {
 $script:OurBinaries    = @('gui-agent.exe', 'gui-watchdog.exe')
 $script:DefaultBinDir  = 'C:\Program Files\Qubes Tools\bin'
 $script:GuiWatchdogSvc = 'QubesGuiWatchdog'
+# Set true only on the same-ProductVersion in-place reinstall path (see the upgrade block); a
+# fresh install never enters that block, so default it here rather than rely on StrictMode 1.0.
+$script:SameVersionReinstall = $false
 
 function Get-QwtBinDir {
     foreach ($k in 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools',
@@ -640,22 +643,40 @@ function Invoke-Stage2 {
             # the bugcheck destroys the domain, so there is no in-guest recovery).
             # The uninstall-first flow below survives ONLY for the cases a major upgrade
             # cannot handle: an installed version equal to or newer than ours.
+            # In-place is safe for installed <= ours: a strictly-older version is a MajorUpgrade,
+            # and an EQUAL version is a same-version reinstall/repair (msiexec /i REINSTALL=ALL).
+            # Neither uninstalls anything, so neither can revert the boot disk toward emulated IDE
+            # - the 0x7B hazard the PV gate below guards. ONLY a genuine downgrade (installed
+            # STRICTLY newer than ours) needs the uninstall-first flow, because MajorUpgrade will
+            # not remove a newer product. Treating same-version as uninstall-first is what made a
+            # plain re-run (e.g. to pick up the now-default IDD driver) hit the PV gate and hard-fail.
             $inPlace = $false
+            $script:SameVersionReinstall = $false
             try {
                 $oursStr = "$($script:Result.detail.package_version)" -split '\+' | Select-Object -First 1
                 $ours = [version]$oursStr
                 $olds = @($existing | ForEach-Object { [version]$_.Version })
-                if ($olds.Count -gt 0 -and @($olds | Where-Object { $_ -ge $ours }).Count -eq 0) {
+                if ($olds.Count -gt 0 -and @($olds | Where-Object { $_ -gt $ours }).Count -eq 0) {
                     $inPlace = $true
+                    $script:SameVersionReinstall = @($olds | Where-Object { $_ -eq $ours }).Count -gt 0
                 }
             } catch {
                 Write-Log "version comparison failed ($($_.Exception.Message)) - falling back to the uninstall-first flow" 'WARN'
             }
-            $script:Result.detail.upgrade_mode = if ($inPlace) { 'in-place-msi-major-upgrade' } else { 'uninstall-first' }
+            $script:Result.detail.upgrade_mode =
+                if ($inPlace -and $script:SameVersionReinstall) { 'in-place-same-version-reinstall' }
+                elseif ($inPlace) { 'in-place-msi-major-upgrade' }
+                else { 'uninstall-first' }
 
             if ($inPlace) {
-                Write-Log ("installed QWT (" + (($existing | ForEach-Object { $_.Version }) -join ', ') +
-                           ") is older than this package ($oursStr) - IN-PLACE MSI major upgrade, no uninstall, no intermediate reboot")
+                if ($script:SameVersionReinstall) {
+                    Write-Log ("installed QWT (" + (($existing | ForEach-Object { $_.Version }) -join ', ') +
+                               ") is the SAME version as this package ($oursStr) - IN-PLACE reinstall/repair " +
+                               "(REINSTALL=ALL), no uninstall, no intermediate reboot")
+                } else {
+                    Write-Log ("installed QWT (" + (($existing | ForEach-Object { $_.Version }) -join ', ') +
+                               ") is older than this package ($oursStr) - IN-PLACE MSI major upgrade, no uninstall, no intermediate reboot")
+                }
                 Stop-QwtRuntime   # the agent holds files the MSI is about to replace
                 # Fall through to the install phase below - msiexec /i does the rest.
             } else {
@@ -817,13 +838,21 @@ function Invoke-Stage2 {
     # product that refuses to remove itself or by a file we could not delete, and
     # REINSTALLMODE only takes effect on paths where Windows Installer consults it. If
     # either mechanism works, our agent lands; the hash check below decides.
-    Write-Log "running msiexec ADDLOCAL=$addlocal (verbose log: $msiLog)"
-    $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-        '/i', "`"$msi`"", '/qn', '/norestart',
-        "ADDLOCAL=$addlocal", 'REBOOT=ReallySuppress', 'REINSTALLMODE=amus',
-        'MSIFASTINSTALL=7',
-        '/l*v', "`"$msiLog`""
-    )
+    # REINSTALL=ALL matters ONLY for re-running the IDENTICAL build already installed: the WiX
+    # package uses ProductCode="*" (a fresh GUID every build, Package.wxs:12), so REINSTALL - which
+    # keys on a MATCHING installed ProductCode - can only repair the very same build. It does
+    # NOTHING for a DIFFERENT build stamped the same ProductVersion: that build's ProductCode
+    # differs (no product to reinstall), and MajorUpgrade (AllowSameVersionUpgrades defaults off,
+    # Package.wxs:15) will not remove an equal-version product either. The SUPPORTED way to land a
+    # new release over an existing one is a real version bump (agent/version, third field), which
+    # makes it an honest MajorUpgrade. This branch only stops an identical-build re-run from
+    # hard-failing at the PV gate; shipping two releases at one version is prevented upstream, at
+    # build time, not patched over here.
+    $msiArgs = @('/i', "`"$msi`"", '/qn', '/norestart', "ADDLOCAL=$addlocal")
+    if ($script:SameVersionReinstall) { $msiArgs += 'REINSTALL=ALL' }
+    $msiArgs += @('REBOOT=ReallySuppress', 'REINSTALLMODE=amus', 'MSIFASTINSTALL=7', '/l*v', "`"$msiLog`"")
+    Write-Log "running msiexec ADDLOCAL=$addlocal REINSTALL=$(if($script:SameVersionReinstall){'ALL'}else{'(none)'}) (verbose log: $msiLog)"
+    $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $msiArgs
     if ($p.ExitCode -notin 0, 3010) { Fail "msiexec failed with $($p.ExitCode) - see $msiLog" }
     Write-Log "QWT_INSTALL_OK rc=$($p.ExitCode)"
     $script:Result.detail.msiexec_rc = $p.ExitCode
