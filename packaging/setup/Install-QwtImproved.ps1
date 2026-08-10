@@ -872,6 +872,19 @@ function Invoke-Stage2 {
     $script:Result.detail.msiexec_rc = $p.ExitCode
     $script:Result.detail.addlocal = $addlocal
 
+    # Suppress the xenbus_monitor's interactive "PV driver needs a restart" dialog. That service
+    # (xenbus/src/monitor/monitor.c PromptForReboot) pops a modal Yes/No - "Xen PV Storage Host
+    # Adapter needs to restart the system to complete installation" - whenever a PV driver install
+    # wants a reboot, and it HANGS an unattended install (hit on a same-version REINSTALL=ALL, which
+    # reinstalls the PV disk drivers). The monitor's own TryAutoReboot reads REG_DWORD AutoReboot
+    # under its Parameters key: non-zero => reboot SILENTLY, prompt never shown. Set it. The value
+    # persists across reinstalls (the INF's AddService for xenbus_monitor does not write Parameters).
+    # Silent auto-reboot on PV-driver change is the right behaviour for a Qubes qube anyway - same
+    # no-interactive-dialog philosophy as autologon/no-lock-screen.
+    & reg.exe add 'HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' /v AutoReboot /t REG_DWORD /d 1 /f /reg:64 | Out-Null
+    Write-Log "xenbus_monitor AutoReboot=1 set (silent PV-driver reboot, no modal dialog) rc=$LASTEXITCODE"
+    $script:Result.detail.xenbus_autoreboot = ($LASTEXITCODE -eq 0)
+
     # --- prove the install put OUR agent on disk ------------------------------------
     # Without this the script would report success for an install that silently kept a
     # previously present stock binary.
