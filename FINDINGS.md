@@ -6519,3 +6519,41 @@ reliability/tuning.
 
 OPERATIONAL NOTE: a proxy qube serving WU downloads needs adequate /tmp (or move tinyproxy
 temp/logging off tmpfs). This session filled /tmp with old-session scratch; cleaned to 68%.
+
+## 2026-08-10 — Stage 6 download orchestration: DO connection-storm diagnosed; full install blocked on Win11 WU internals
+
+Tinyproxy introspection (owner's steer) gave the real diagnosis of the stall:
+- **Delivery Optimization opens a CONNECTION STORM**: 2624 connections to
+  tlu.dl.delivery.mp.microsoft.com in one download attempt, 223 errors dominated by
+  "Client closed socket before read" (DO opens connections speculatively then abandons them)
+  plus upstream "Connection reset by peer". DO's massively-parallel model is a bad fit for
+  the relay, which spawns a qrexec-client-vm PER connection (R3): thousands of spawns thrash
+  the tunnel AND consume proxy-qube RAM/tmpfs (this is what filled /tmp - thousands of
+  tinyproxy forks + qrexec spawns). The 753 MB that landed came through before the churn
+  overwhelmed it.
+- **Force-BITS test** (DODownloadMode=99 + DoSvc disabled + clean SoftwareDistribution): the
+  storm collapsed to **65 connections in 2 min, 5 abandoned-socket errors** - confirming DO
+  was the churn source. BUT the download still did not progress: BITS jobs went to
+  Error/TransientError with a garbage BytesTotal (17592186044416 = 2^44), folder stayed 0.
+  Disabling DoSvc appears to break Win11 24H2's WU download orchestration rather than cleanly
+  falling back to a working BITS transfer.
+
+HONEST STATE OF STAGE 6:
+- PROVEN: the updates-proxy TRANSPORT is sound - WU scan finds real updates, 753 MB of genuine
+  cumulative payload flowed through the tunnel, Defender signature update ran, all with the
+  guest having zero general networking. The feature is FEASIBLE and our forwarder works.
+- NOT ACHIEVED: a complete download+install of a large cumulative. Both paths fail on Win11
+  24H2 (26100) - DO storms the relay, forced-BITS errors. This is Windows' own download
+  orchestration (DO/BITS) misbehaving through a forward proxy, a known-hard and
+  version-specific problem, NOT a defect in the relay/planes/policy.
+
+WHAT A REAL FIX LIKELY NEEDS (future work, beyond this session):
+1. Make the relay handle DO's connection fan-out cheaply - a pre-spawned qrexec handler POOL
+   or a single persistent multiplexed qrexec channel instead of spawn-per-connection (kills
+   R3 properly). This alone might let DO work.
+2. Or a clean force-BITS that Win11 24H2 actually honors (DoSvc left enabled but DO set to a
+   mode that yields to BITS; needs experimentation per Windows build).
+3. Test on a smaller update first (servicing-stack / Defender-platform), and keep proxy-qube
+   /tmp off tmpfs or generously sized.
+Guest WU state restored (DoSvc re-enabled, DODownloadMode policy removed). Left in place for
+future tuning: the loopback adapter, proxy planes, relay exe, and win-idd-mgmt tinyproxy.
