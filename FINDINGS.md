@@ -6557,3 +6557,14 @@ WHAT A REAL FIX LIKELY NEEDS (future work, beyond this session):
    /tmp off tmpfs or generously sized.
 Guest WU state restored (DoSvc re-enabled, DODownloadMode policy removed). Left in place for
 future tuning: the loopback adapter, proxy planes, relay exe, and win-idd-mgmt tinyproxy.
+
+### /tmp confound RULED OUT for the force-BITS failure (owner asked)
+
+Verified: during the force-BITS run tinyproxy peaked at ~65 connections (40x fewer than DO's
+2624) and /tmp held 331 MB free with zero growth - no pressure - yet BITS still errored and
+the folder stayed 0. So /tmp overflow was NOT the cause of the force-BITS failure; that is a
+genuine Win11 24H2 WU-orchestration problem (disabling DoSvc does not cleanly fall back to a
+working BITS transfer). For the DO path the /tmp fill was real but is a SYMPTOM of the
+2624-connection storm (thousands of tinyproxy forks + per-connection qrexec spawns on a 1 GB
+tmpfs), not an independent root cause. Clean separation: transport proven; blocker is Windows'
+own download orchestration through a forward proxy.
