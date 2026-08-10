@@ -30,11 +30,23 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 static class Relay
 {
     const string Service = "qubes.UpdatesProxy";
+    // Delivery Optimization opens a STORM of speculative connections (thousands, many closed
+    // before sending a byte). A qrexec spawn per connection fork-bombs the proxy qube (R3).
+    // Two defenses: (1) read the first request bytes BEFORE spawning, so abandoned connections
+    // cost nothing; (2) cap concurrent qrexec handlers so the storm cannot exhaust RAM/tmpfs.
+    static readonly SemaphoreSlim _gate = new SemaphoreSlim(MaxConn());
+    static int MaxConn()
+    {
+        int mc;
+        if (int.TryParse(Environment.GetEnvironmentVariable("QUBES_UPDATES_MAXCONN"), out mc) && mc > 0) return mc;
+        return 32;
+    }
 
     static int Main(string[] args)
     {
@@ -89,12 +101,28 @@ static class Relay
 
     static async Task HandleInbound(TcpClient inbound, string self, string target, string user, string logPath)
     {
+        NetworkStream a = inbound.GetStream();
+
+        // READ-FIRST: buffer the client's initial request before spending a qrexec spawn.
+        // DO's speculative connections close without sending anything - drop them for free.
+        byte[] head = new byte[65536];
+        int hlen = 0;
+        try
+        {
+            a.ReadTimeout = 10000;
+            hlen = await a.ReadAsync(head, 0, head.Length);
+        }
+        catch { hlen = 0; }
+        if (hlen <= 0) { inbound.Close(); return; }   // abandoned/empty: NO spawn, NO log spam
+
+        // Cap concurrency so a burst of real requests cannot fork-bomb the proxy qube.
+        await _gate.WaitAsync();
         string token = Guid.NewGuid().ToString("N");
         TcpListener control = new TcpListener(IPAddress.Loopback, 0);   // ephemeral
         control.Start();
         int cport = ((IPEndPoint)control.LocalEndpoint).Port;
         Stopwatch sw = Stopwatch.StartNew();
-        long up = 0, down = 0;
+        long up = hlen, down = 0;
         try
         {
             string handler = "\"" + self + "\" --relay " + cport + " " + token;
@@ -118,7 +146,9 @@ static class Relay
             using (inbound)
             using (relay)
             {
-                NetworkStream a = inbound.GetStream();
+                // Replay the buffered request head into the tunnel first, then pump both ways.
+                await rs.WriteAsync(head, 0, hlen); await rs.FlushAsync();
+                a.ReadTimeout = Timeout.Infinite;
                 Task t1 = Pump(a, rs, delegate(int n) { up += n; });        // WU -> vchan
                 Task t2 = Pump(rs, a, delegate(int n) { down += n; });      // vchan -> WU
                 await Task.WhenAny(t1, t2);
@@ -126,7 +156,7 @@ static class Relay
             }
         }
         catch (Exception e) { Log(logPath, "CONN token=" + token + " error " + e.Message); }
-        finally { control.Stop(); Log(logPath, "CONN token=" + token + " up=" + up + " down=" + down + " ms=" + sw.ElapsedMilliseconds); }
+        finally { control.Stop(); _gate.Release(); Log(logPath, "CONN token=" + token + " up=" + up + " down=" + down + " ms=" + sw.ElapsedMilliseconds); }
     }
 
     // ---- relay side (qrexec handler; stdio == vchan) -------------------------------------
