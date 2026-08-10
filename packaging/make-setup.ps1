@@ -106,6 +106,9 @@ foreach ($f in 'install.cmd', 'Install-QwtImproved.ps1', 'README.txt') {
 # App HW-accel pre-tweak, run by stage 2 unless /noapptweaks. Single source of truth is
 # guest/ (the same script the dev harness uses); staged here so Test-Payload covers it.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\disable-hw-accel.ps1') 'app hw-accel pre-tweak script') $OutDir -Force
+# IDD-only activator, run by `install.cmd /iddonly` to add/activate the IddCx driver on a guest
+# that already has QWT (no MSI, no version/PV gate). Uses idd-driver/ staged below.
+Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activator') $OutDir -Force
 
 # --- the MSI ---------------------------------------------------------------------------
 $msiSrc = Join-Path $MsiArtifact 'installer.msi'

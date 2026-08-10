@@ -1010,7 +1010,11 @@ function Invoke-Stage2 {
         # 3010 = success, reboot required: LIKELY here on upgrade, because replacing the
         # driver package of the live IDD display is exactly the in-use case. Stage 2
         # unconditionally ends in a reboot, so 3010 == 0 for our purposes.
-        if ($LASTEXITCODE -notin 0, 3010) { throw "pnputil /add-driver failed ($LASTEXITCODE)" }
+        # 259 = ERROR_NO_MORE_ITEMS: the package is already in the store and up-to-date
+        # ("Added driver packages: 0"). This is the SAME-VERSION reinstall / re-activation case
+        # (the REINSTALL=ALL path, or an /iddonly run) - a success, not a failure. Only the
+        # first install returns 0/3010; a re-run of an identical driver returns 259.
+        if ($LASTEXITCODE -notin 0, 3010, 259) { throw "pnputil /add-driver failed ($LASTEXITCODE)" }
         $script:Result.detail.idd_driver = 'driver staged'
 
         # Create the root-enumerated software device - the same pnputil+devcon two-step
