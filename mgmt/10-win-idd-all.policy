@@ -255,5 +255,13 @@ local.WinResize                      *  win-idd-mgmt  dom0  allow
 # core-update only, so this grants nothing beyond updates traffic for our own qubes.
 # For a real deployment on a normal Qubes (sys-net running the proxy) the stock default
 # already covers @type:TemplateVM and NONE of this is needed - this block is rig-specific.
+#
+# DEBUG (2026-08-10): core-update is torified and unreliable for large WU downloads (WU/DO to
+# Microsoft CDNs over Tor throttles/errors). For the download+install proof, route to
+# win-idd-mgmt instead - it has direct (non-Tor) internet and runs a userspace tinyproxy on
+# 127.0.0.1:8082 (the qubes.UpdatesProxy rpc endpoint is present). First-match wins, so these
+# two lines take precedence over the core-update fallback below. Remove them to go back to Tor.
+qubes.UpdatesProxy                   *  @tag:win-idd-testbed          @default  allow target=win-idd-mgmt
+qubes.UpdatesProxy                   *  @tag:created-by-win-idd-mgmt  @default  allow target=win-idd-mgmt
 qubes.UpdatesProxy                   *  @tag:win-idd-testbed          @default  allow target=core-update
 qubes.UpdatesProxy                   *  @tag:created-by-win-idd-mgmt  @default  allow target=core-update
