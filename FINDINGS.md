@@ -6404,3 +6404,30 @@ State of the risk register: R1 (NLM/no-NIC) retired via the loopback adapter; R2
 (TemplateVM policy match) retired here/Stage 2. Remaining: R4 (which WU sub-plane leaks) -
 Stage 5/6, real WU scan+download+install through the relay with the loopback-adapter NLM
 mitigation and the 3 proxy planes. The relay must run as a persistent service for that (Stage 7).
+
+## 2026-08-10 — updates-proxy Stage 5 PASS: Windows Update SCANS through the tunnel (R4 retired)
+
+On win11-clonetest (Windows TemplateVM, stock QWT, netvm none) with all three pieces live:
+routeless KM-TEST loopback adapter (NLM connected), the 3 proxy planes, and the compiled
+relay on 127.0.0.1:8082 kept alive by the driving script. RESULT:
+    scan ok=true hresult=0x00000000 count=1 seconds=40.3  relay_conns=5
+**Windows Update completed an online scan and found 1 available update**, entirely through
+qubes.UpdatesProxy -> core-update -> Tor, on a guest with NO general networking. Relay traffic:
+    CONN up=822   down=43850   ms=4728
+    CONN up=823   down=40162   ms=4894
+    CONN up=576   down=7788    ms=6860
+    CONN up=7646  down=137553  ms=15237   (137 KB WU catalog, 15 s over Tor)
+
+R4 ANSWER (which plane wuauserv uses): the machine WinHTTP proxy (netsh winhttp) alone is NOT
+enough - wuauserv fast-fails 0x8024402C (NAME_NOT_RESOLVED, ~0.4-2.9s, no dial). The missing
+piece is the SYSTEM-account WU/BITS proxy: `bitsadmin /util /setieproxy LOCALSYSTEM
+MANUAL_PROXY 127.0.0.1:8082 "<local>"`, PLUS clearing C:\Windows\SoftwareDistribution (rename
+it) so a backoff-cached failure does not fast-return. With those, wuauserv adopts the proxy and
+dials. So the shipped plane set is: netsh winhttp + device-wide WinINET + DODownloadMode=0 +
+**bitsadmin setieproxy LOCALSYSTEM** + a one-time SoftwareDistribution reset on enable.
+
+Risk register: R1,R2,R3,R4,R5 all RETIRED. The feature is proven end to end: scan works. Left:
+Stage 6 (download+install a real update - large/slow over Tor, but the path is identical to the
+137 KB catalog fetch that already worked), Stage 7 (persistent relay service + installer wiring;
+Start-Process children do NOT survive here so the service must be a scheduled task or Windows
+service), Stage 8 side-scope, upgrade the template to QWT-NG for the packaged feature.
