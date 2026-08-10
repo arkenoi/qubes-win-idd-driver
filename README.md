@@ -133,8 +133,12 @@ Stock Windows Tools ships **no display driver**. The guest runs on the emulated 
 Adapter, whose mode list is fixed — so an arbitrary size like 2566x1022 is simply never
 offered, and matching the guest resolution to a dom0 window is unreachable by construction.
 
-With `/idd`, an IddCx monitor becomes the guest's **sole active output** and the emulated VGA
-is disabled. 
+This package installs and **activates the Qubes IddCx display driver by default** — an IddCx
+monitor becomes the guest's **sole active output** and the emulated VGA is disabled, so the
+guest resolution follows the dom0 window with no fixed-mode snapping. There is no switch to
+turn it off; the Basic Display Adapter is a failure state, not an option. (If activation ever
+fails the install still completes so the guest is usable, and the failure is flagged loudly in
+the install log for retry.)
 
 Two things are worth knowing about how it behaves, because they are not obvious:
 
