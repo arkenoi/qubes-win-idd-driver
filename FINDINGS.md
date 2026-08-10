@@ -6487,3 +6487,35 @@ reference redundant with the win11-clonetest template which is also stock QWT). 
 pool 87% -> 74.9% (219 GB free). KEPT: win11-clonetest (active updates-proxy TemplateVM),
 win10-clean (compat), win11-fresh (Win11 on QWT-NG 4.3.0). All deletions were policy-covered
 (admin.vm.Remove via the created-by/testbed/qwt-bench tags).
+
+## 2026-08-10 — Stage 6 CORRECTION: download PATH works, full install NOT yet demonstrated
+
+RETRACTION of the earlier "Stage 6 download PROVEN" framing - it overclaimed. Ground truth:
+- The pending update is KB5101650 (2026-07 security update, 26100.8875). After ~8 min of
+  streaming through the win-idd-mgmt proxy it reached 753 MB in SoftwareDistribution\Download
+  then STALLED. IsDownloaded=**False** - the download is INCOMPLETE, not done.
+- What IS proven: the download PATH carries real update bytes at scale - 753 MB of genuine WU
+  payload (delivery.mp.microsoft.com) flowed guest->relay->qrexec->tinyproxy->internet with the
+  guest having no general networking. Plus WU scan works (Stage 5) and a Defender signature
+  update ran through the proxy. So the feature is FEASIBLE and the transport is sound.
+- What is NOT proven: a complete download+install of a large cumulative. It stalled at 753 MB.
+
+Likely contributing causes, none cleanly isolated (a clean single retry is needed):
+1. **/tmp exhaustion on the PROXY qube** (owner's catch): win-idd-mgmt's /tmp is tmpfs (RAM),
+   it hit 100% DURING the download, and a starved tmpfs chokes tinyproxy (forks per
+   connection). Timing correlates: steady growth -> /tmp full -> flatline at 753 MB. Freeing
+   /tmp did NOT auto-resume (WU/DO does not restart a stalled transfer; usoclient StartDownload
+   did not kick it). So /tmp was plausibly the trigger but the retry needs a fresh WU state.
+2. Delivery Optimization through a forward proxy: DO reported dl=0MB/0MB (never got the file
+   size via the proxy) and looped range requests - a known DO-proxy quirk; forcing classic
+   BITS is the documented mitigation.
+3. Repeated interrupted script runs left WU in a confused/backoff state.
+
+HONEST NEXT STEP (Stage 6 completion, not done here): one clean run with /tmp headroom on the
+proxy qube + DO bypassed (force BITS) + a fresh SoftwareDistribution, ideally on a smaller
+update first (a servicing-stack or the Defender channel, both smaller than a full cumulative),
+and let it run uninterrupted as a guest scheduled task. The feasibility is settled; this is
+reliability/tuning.
+
+OPERATIONAL NOTE: a proxy qube serving WU downloads needs adequate /tmp (or move tinyproxy
+temp/logging off tmpfs). This session filled /tmp with old-session scratch; cleaned to 68%.
