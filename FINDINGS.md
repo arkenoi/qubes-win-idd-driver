@@ -6268,3 +6268,26 @@ the upgrade e2e verified; the perf A/B ran on a sibling build of the same agent 
 upgrade over stock, the PV gate + storage re-arm fallback, the app HW-accel pre-tweak
 (with the ${v}: fix), and 4.3.0 versioning throughout. README rewritten to the post-fix
 story; RELEASE-NOTES-09b643e.md is the release document; 03b1674 notes marked superseded.
+
+## 2026-08-10 — updates-proxy Stage 0 PASS (baseline + instrument validation)
+
+Plan: PLAN-updates-proxy.md. win11-fresh already has netvm=none (G1 satisfied without a
+dom0 change), so Stage 0 ran in full. Both instruments emit clean === RESULT === JSON.
+
+- guest/nic-state.ps1: {"adapters_up":0,"adapters_all":0,"nlm_connected":false,
+  "nlm_internet":false,"ncsi_state":"probe=1"} - structurally no networking, NLM reports
+  disconnected/no-internet. This is the state Stage 1 interrogates.
+- guest/wu-scan.ps1 (COM IUpdateSearcher, forced ssWindowsUpdate+Online): FAIL
+  hresult 0x8024402C (WU_E_PT_WINHTTP_NAME_NOT_RESOLVED) in 3.5 s. This is the
+  DEFECT-PRESENT CONTROL SIGNATURE for every later stage - a fast connectivity-class
+  fail, exactly the family the plan predicted, not a hang.
+- qrexec policy-evaluated check: a bogus-service qrexec-client-vm call returned RC=0 with
+  the handler NOT run (no HANDLER_RAN echoed). Confirms firsthand the documented Windows
+  footgun: qrexec-client-vm ALWAYS exits RC=0 on trigger, success or denial; only the
+  bytes the handler receives are evidence. Directly shapes Stage 2's gate (RC is worthless;
+  the received response body is the datum).
+
+Gate: PASS. Next: Stage 1 - guest-local mock proxy on 127.0.0.1:8082 + wu-proxy-config.ps1
+(three planes), ask whether wuauserv/DO dials the loopback proxy with zero NICs. Needs no
+dom0 gate (guest-only); the mock-proxy also becomes the plumbing-vs-Tor-path discriminator
+for the later core-update debug target.
