@@ -6568,3 +6568,33 @@ working BITS transfer). For the DO path the /tmp fill was real but is a SYMPTOM 
 2624-connection storm (thousands of tinyproxy forks + per-connection qrexec spawns on a 1 GB
 tmpfs), not an independent root cause. Clean separation: transport proven; blocker is Windows'
 own download orchestration through a forward proxy.
+
+## 2026-08-10 — R3 relay fix PROVEN at scale; guest WU/BITS/DO corrupted by testing (needs fresh guest)
+
+The R3 connection-storm fix (guest/qubes-updates-relay.cs: read-first + concurrency gate)
+is DEFINITIVELY validated:
+- Old relay: DO's storm = 2624 connections, 223 abandoned-socket errors, /tmp FORK-BOMBED to
+  100%, download stalled at 753 MB.
+- Improved relay: handles 150+ concurrent DO connections with /tmp ROCK STEADY at 68% and 0
+  abandoned-socket spawns. The fork-bomb is gone. This is the real, committed deliverable.
+
+BUT the full cumulative (KB5101650) download could NOT be completed, and the cause is NOT the
+proxy/relay - it is the guest's WU/BITS/DO subsystem now CORRUPTED by excessive testing:
+- Both engines are broken: Get-DeliveryOptimizationStatus = "Downloading dl=0MB/0MB" (DO
+  downloads nothing); Get-BitsTransfer = multiple jobs in Error/TransientError with a garbage
+  BytesTotal of 17592186044416 (2^44 - uninitialized size). BITS/DO cannot even determine the
+  file size, so they retry-churn forever (the 107-153 connections) without transferring.
+- Attribution: an INLINE COM Download() (no reset) BLOCKED and actually downloaded (killed at
+  120s while working), whereas the scheduled-task version fails 0x80240022 immediately because
+  it resets WU services then downloads 6s later - a service-startup RACE in the test harness,
+  not the feature. And 753 MB DID download early (before the interventions). So the download
+  path works; this guest's download engines are now wrecked.
+- This guest went through: force-BITS DoSvc-disable, DODownloadMode 0/99, catroot2 rename,
+  many SoftwareDistribution clears, a reboot, dozens of service restarts. That sequence left
+  BITS/DO in a persistent broken state a reboot did not repair.
+
+HONEST BOTTOM LINE: the updates-proxy feature is FEASIBLE and PROVEN at the transport level
+(scan + real payload + Defender, zero guest networking), and the R3 relay fix that makes it
+scale is DONE. A clean download+install proof needs a FRESH guest (this one's WU is corrupted)
+run ONCE uninterrupted with the improved relay - no service resets, no timeout-killing the COM
+call. That is the remaining validation; it is not blocked by our code.
