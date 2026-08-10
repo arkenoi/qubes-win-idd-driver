@@ -7,9 +7,9 @@ REM
 REM  Usage:
 REM     install.cmd              two stages, you reboot between them
 REM     install.cmd /auto        reboots and resumes by itself (unattended)
-REM     install.cmd /idd         install AND ACTIVATE the Qubes IddCx driver
-REM                              (it becomes the display; the emulated VGA
-REM                              adapter is disabled - see README.txt)
+REM     (the Qubes IddCx display driver is installed AND ACTIVATED BY DEFAULT -
+REM      it becomes the display, the emulated VGA adapter is disabled; there is
+REM      no switch to skip it. /idd is accepted but redundant.)
 REM     install.cmd /nonet       omit the PV network drivers (see README.txt)
 REM     install.cmd /nodisk      omit the PV disk drivers (diagnostic only)
 REM     install.cmd /noapptweaks skip the app HW-accel pre-tweak (registry
@@ -20,7 +20,7 @@ REM                              remove an existing QWT even when the boot disk
 REM                              is on the PV disk path - can bugcheck 0x7B at
 REM                              the intermediate reboot; read the UPGRADING
 REM                              FROM STOCK QWT section of README.txt FIRST
-REM  Flags combine:  install.cmd /auto /idd
+REM  Flags combine:  install.cmd /auto /nonet
 REM
 REM  Read README.txt first - in particular the NETWORKING and TEST-SIGNING
 REM  sections. Everything is logged to C:\qwt-improved-install.log.
