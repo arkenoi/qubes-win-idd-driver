@@ -1,10 +1,15 @@
-# QWT-NG 4.3.x (agent <SHA>) — idle-burn fix, upgrade-path hardening, app render tweaks
+# QWT-NG 4.3.x (agent 09b643e) — idle-burn fix, in-place upgrades, app render tweaks
 
-**DRAFT — prepare-but-hold (owner decision 2026-08-09). Do not publish until: (1) the
-sweep A/B verdict is pasted in and PASSES, (2) the PV-gate validation outcome is pasted
-in, (3) the owner approves. Placeholders are marked <LIKE-THIS>.**
+**STAGED — prepare-but-hold (owner decision 2026-08-09). All validation gates PASSED
+(sweep A/B, PV gate, in-place upgrade e2e). Publishing is the owner's action.**
 
-Package `4.3.0+agent.<SHA12>`, from CI run `<RUN-ID>`. Supersedes `v4.3.0-agent03b1674`.
+Release candidate: CI run `31345000260` (release-package on `main`, all checks green;
+artifacts: qwt-improved-setup, qwt-improved-iso, qwt-ng-dom0-rpm, release-idd-driver).
+Package `4.3.0+agent.09b643e5d278`. Supersedes `v4.3.0-agent03b1674`.
+
+To publish (owner): download the run's artifacts, then
+`gh release create v4.3.1-agent09b643e --title "QWT-NG 4.3.1 (agent 09b643e)" --notes-file docs/RELEASE-NOTES-NEXT.md <files>`
+(pick the final tag/number at publish time; this file's draft header comes off then).
 
 ## The headline: the standing idle burn is gone (verified 2026-08-09)
 
