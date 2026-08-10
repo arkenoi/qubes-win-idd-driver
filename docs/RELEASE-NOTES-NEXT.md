@@ -34,19 +34,22 @@ rework had claimed closed by construction: while DDA serves a window, the engine
 longer writes its buffer at all — removing a 4 Hz content-swap hazard on windows whose
 PrintWindow pixels differ from the composited screen.
 
-## Upgrading over stock QWT no longer risks bricking the guest silently
+## Upgrading over stock QWT is now a plain MSI major upgrade (validated end to end)
 
-Field report (thanks, GWeck): if the existing QWT has the PV disk driver active,
-removing it mid-upgrade reverts the boot disk toward emulated IDE and the intermediate
-reboot can bugcheck 0x7B INACCESSIBLE BOOT DEVICE. The installer now:
+The 4.3.0 version bump lets the rebuilt MSI (same UpgradeCode as stock, higher
+ProductVersion, `<MajorUpgrade>`) replace an older QWT inside one Windows Installer
+transaction: no separate uninstall, no intermediate reboot, PV disk driver upgraded in
+place. Validated 2026-08-10 on a clean-room PV-booted stock guest: in-place path taken,
+guest boots, single 4.3.0.0 product, agent hash-verified, PV disk re-bound (first boot
+runs on the emulated safety net; PV re-binds on the next reboot).
 
-- probes whether the C: boot disk is on the PV path and **refuses to uninstall** the
-  existing QWT unless `/acceptpvdiskupgrade` is passed;
-- prints the safe-mode recovery recipe on screen and into the install log before any
-  risky reboot; README.txt carries it under "UPGRADING FROM STOCK QWT".
-
-Validation status: <PV-VALIDATION OUTCOME: probe verified positive/negative on real
-guests; crash repro result on the expendable guest>.
+For the one case a major upgrade cannot handle (reinstalling the same or a newer
+version), the field-reported 0x7B INACCESSIBLE BOOT DEVICE hazard (thanks, GWeck) is
+now fenced: the installer probes the PV boot path (probe validated live — True on three
+PV guests, False on an emulated-path state; the crash itself was deliberately reproduced
+and it bricks the qube with NO in-guest recovery under Qubes) and refuses to uninstall
+without `/acceptpvdiskupgrade`; when overridden it re-arms the emulated storage stack
+before the risky reboot and prints the recovery recipe into the log and console.
 
 ## Apps stop fighting the GPU-less guest (default on, `/noapptweaks` to skip)
 
