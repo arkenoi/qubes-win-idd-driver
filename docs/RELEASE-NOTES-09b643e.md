@@ -1,15 +1,13 @@
-# QWT-NG 4.3.x (agent 09b643e) — idle-burn fix, in-place upgrades, app render tweaks
+# QWT-NG 4.3.0 (agent 09b643e) — idle-burn fix, in-place upgrades, app render tweaks
 
-**STAGED — prepare-but-hold (owner decision 2026-08-09). All validation gates PASSED
-(sweep A/B, PV gate, in-place upgrade e2e). Publishing is the owner's action.**
+**Published as `v4.3.0-agent09b643e`** from CI run `31364772166` (release-package on
+`main`, all checks green). Package `4.3.0+agent.09b643e5d278`. Supersedes
+`v4.3.0-agent03b1674`.
 
-Release candidate: CI run `31345000260` (release-package on `main`, all checks green;
-artifacts: qwt-improved-setup, qwt-improved-iso, qwt-ng-dom0-rpm, release-idd-driver).
-Package `4.3.0+agent.09b643e5d278`. Supersedes `v4.3.0-agent03b1674`.
-
-To publish (owner): download the run's artifacts, then
-`gh release create v4.3.1-agent09b643e --title "QWT-NG 4.3.1 (agent 09b643e)" --notes-file docs/RELEASE-NOTES-NEXT.md <files>`
-(pick the final tag/number at publish time; this file's draft header comes off then).
+Provenance: `gui-agent.exe` in these assets is sha256-prefix `91F40ECE29286063` — the
+exact binary the upgrade end-to-end test verified installed, running and hash-matched.
+The performance A/B ran on a sibling CI build of the same agent commit (`09b643e`; the
+Windows build is not timestamp-reproducible), toggling the fix at runtime on one binary.
 
 ## The headline: the standing idle burn is gone (verified 2026-08-09)
 
@@ -66,6 +64,15 @@ all existing profiles and the Default profile. Measured motivation: Word with HW
 presented a frame every 257 ms and dirtied ~237k px per keystroke; without, 31 ms and
 ~3.4k px. Electron apps without a policy surface (VS Code, Discord, Teams, Signal) are
 deliberately untouched — the doc lists the per-user knobs.
+
+## qvm-create-windows-qube works out of the box now
+
+Its auto-qwt helper globs for `qubes-tools-*.exe|msi`, which matches nothing in this ISO
+and fails silently. Instead of a %post notice telling you to fix it, the dom0 RPM now
+fixes it: `%post` runs the shipped `qwt-ng-fix-qwcq`, which finds qvm-create-windows-qube
+installations, backs up the upstream `install-qwt.bat` once, and swaps in the
+QWT-NG-aware stub (it still falls back to the upstream glob for a stock ISO). Idempotent,
+reports what it patched, re-runnable by hand if you install qvm-create-windows-qube later.
 
 ## Versioning
 
