@@ -15,10 +15,9 @@ dl/
 
 # Per-run evidence and measurements
 evidence/
-scratchpad/bench-results/
-scratchpad/bm-win10/
-scratchpad/bm-win11/
-scratchpad/bm-win11-bda/
+# The whole scratchpad is LOCAL-ONLY (owner decision 2026-08-10): working scripts,
+# drafts and run outputs stay on this machine and are never pushed.
+scratchpad/
 shots*.tar
 *.iso
 *.img
