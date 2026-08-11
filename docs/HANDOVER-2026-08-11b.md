@@ -98,6 +98,37 @@ a guest.
 5. Ranks 4-7 of `docs/PLAN-stability-overhaul.md`, and fire the FI flags so ranks 2-3 stop being
    unproven.
 
+## LIVE DEFECTS observed by the user on build `d342e93a` — RECORDED, NOT DIAGNOSED
+
+Seen on win11-fresh (25H2) immediately after the crop build went in. The agent is NOT crash-looping
+(PID stable 75 s, log count static at 157), so these are behavioural, not the earlier crash.
+
+A. **ALL windows react weirdly to drag** (user's words), Feedback Hub especially. Highest priority
+   next session - it is a regression against the user's explicit no-degradation requirement.
+   Leads, in order of suspicion:
+   - **Performance.** QGAPERF in this period shows `dt~520000 us`, `acq~515000 us` per frame (~2
+     fps). Much of that is idle AcquireNextFrame waiting, so it proves nothing on its own - measure
+     under an ACTIVE DRAG. Rank 2 added ONE `VchanGetWriteBufferSize` per message and the
+     compile/perf reviewer flagged exactly that as the one real cost ("not a free read -
+     libvchan_buffer_space does request_notify(), an interlocked OR"). **The plan's performance
+     gate has never been run.** Run it: p50/p95/p99 of `tot`/`snd`/`dmg` + frame interval, 3 runs
+     per side interleaved with the shipped binary, same scene, hash-verified each run.
+   - **HandleConfigure suppression.** The crop ignores dom0-initiated SetWindowPos for any window
+     with non-zero Crop* insets (vchan-handlers.c:627). RULED OUT by inspection for uncropped
+     windows - WINDOW_DATA is zeroed at allocation (main.c:913-922) - but verify at runtime.
+   - **HandleButton/HandleMotion locking change** (rank 3 review fix) altered both input paths, and
+     a drag is exactly motion+button. Re-read that diff with drag in mind.
+B. **Overlap bug**: windows overlapping wrongly. No capture obtained - by the time the fullshot
+   ran, every dom0 window had been destroyed and re-announced (IDs 0x1c0018f... -> 0x1c001a1) and
+   only the unmapped VMapp entry was listed. Reproduce and `qtest fullshot` BEFORE touching the VM.
+C. Toast defects (not clickable / mispositioned / not draggable / no stacking) are requirements
+   4-7 below and were all seen on this build.
+
+REVERT IF NEEDED: `qtest ps "& '<incoming>\swap-agent.ps1' -Restore"` puts the shipped binary back
+(verified today - it restored the display within seconds after the crash loop). The guest is
+deliberately LEFT ON the new build with the crop enabled, because the user confirmed Start and the
+toast now render correctly and asked for the defects to be recorded rather than reverted.
+
 ## Open user requirements — RECORDED ONLY, user said do NOT implement yet
 
 All stated by the user on 2026-08-11 after seeing the fixed rendering. None are designed.
