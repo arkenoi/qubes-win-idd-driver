@@ -6920,3 +6920,33 @@ off-desktop announce (parked 16384,6119 -> card at ~18515,6621) should be clampe
 capture-thread recovery must actually fire on the vchan-full/timeout path (RecreateDuplication or
 restart), not silently die. NOT YET IMPLEMENTED. Guest left wedged by the repro; recovering via agent
 restart next (also validates the recovery path).
+
+## 2026-08-11 (cont.) — GWeck investigation workflow landed; correlation with the LIVE repro
+
+Full synthesis saved to docs/GWECK-post44-investigation.md (root causes S1-S4, serial repro plan,
+DRAFT forum reply, open questions). Key points and how they line up with the live win11-fresh repro:
+- S1a garbled Start (25H2): Wnd_StartFeed full-screen popup demoted to NORMAL by IsPopup (main.c:826,
+  '>=' fires on screen-size equality) -> PrintWindow-fed XAML host -> garble; all g_StartWindow
+  special-casing is DEAD on 25H2 (no CoreWindow). MATCHES my repro's sibling-path note; my 24H2 repro
+  hit the CoreWindow path instead (same symptom, both bad).
+- S1b dom0 dialog: PROVEN by elimination it is MSG_CREATE with (int)width/height<0 (xside.c:2937); the
+  SOURCE of the negative value is UNEXPLAINED (g_StartWindow inversion REFUTED - NULL on 25H2). My live
+  24H2 repro FALSIFIED the EnumDisplaySettings-div0 candidate here (clean scale=1) -> the dialog is
+  genuinely 25H2-only; needs a 25H2 target + GWeck's guid log to name the failed VERIFY.
+- NEW from the live repro (the static workflow under-weighted this): the ACTUAL freeze mechanism on
+  24H2 is the Start map/unmap FLIP STORM -> VchanSendBuffer full -> CaptureThread error/timeout ->
+  capture thread DIES and does not recover (RecreateDuplication never fires; the watchdog only restarts
+  a DEAD process, not a stuck-capture live one). Recovered by killing gui-agent.exe (watchdog relaunched
+  it, frames resumed). This is a reproducible guest-display DoS independent of 25H2.
+- S2 mouse ~1cm-low + S3 caret: agent stores the REQUESTED (not read-back APPLIED) resolution on
+  RESAPPLIED-MISMATCH (resolution.c:1207) + missing SDC_FORCE_MODE_ENUMERATION poke -> injects pointer
+  against a wrong believed height -> vertical-only skew. Per the workflow this is REPRODUCIBLE ON 24H2
+  via a forced A4CLAMP request (next reproduce-first target, no 25H2 needed).
+- S4 /idd: user error (Start-Process 'D:\idd') on top of OUR gaps - /iddonly + activate-idd.ps1 were
+  committed (80f8d97) ~4h AFTER the v4.3.1 assets were uploaded, so they never shipped; README is stale.
+
+QUEUED (reproduce-first discipline, per user): (1) provision a 25H2 test target - user/dom0 decision,
+gates S1a/S1b validation; (2) reproduce S2 on 24H2 via A4CLAMP + measure skew 3x interleaved before any
+fix; (3) the S1b structural guard (SendWindowCreate (int)w/h>0, mirroring send.c:600) validated by
+INJECTING an inverted rect and seeing the dialog with guard off / suppressed with guard on; (4) re-release
+containing 80f8d97 + README fix. No fixes committed yet - all gated on their own repro.
