@@ -7474,3 +7474,33 @@ rectangle") is FIXED on win11-24h2, and win11-fresh alongside it is the untouche
 Still open: the crop keys on the undocumented class names FlexibleToastView/ToastView. A
 name-independent rule (largest descendant strictly inside the window, or the union of descendant
 rects) would pick the same element here and survive a rename - worth doing before this ships.
+
+## 2026-08-11 (cont.) — 25H2 START MENU = GWeck S1a, MEASURED; and a crash-loop I caused
+
+**S1a IS REPRODUCED.** From the 18:17 fullshot of win11-fresh (25H2) with Start open, measured:
+    announced / bordered by dom0 : 531,142  **858 x 890**
+    visible Start card           : 544,145  **832 x 874**
+    dead margin inside the border: L=13  T=3  R=13  B=13
+On **24H2 the same menu has NO margin** (announced 858x890, card fills it - measured earlier today).
+So 25H2's Start gained a shadow inside its window rect, dom0 borders the whole rect and fills the
+margin with composited desktop. That is the user's "thin border with extra stuff within rectangle",
+and it is the same defect class as the toast - which is why the earlier class-name crop
+(FlexibleToastView/ToastView) could never have fixed it.
+
+FIX PUSHED: the card is now found GEOMETRICALLY - the largest descendant fully inside the window
+and strictly smaller in BOTH dimensions. The strictness matters: the toast's ScrollViewer is 396
+wide inside a 396-wide window and would otherwise win. Classifier widened to
+StartMenuExperienceHost.exe and SearchHost.exe; the fixed 1000x600 ceiling removed (it would have
+excluded Start at 858x890), oversize surfaces still handled by IsPopup's 90% rule.
+
+**CRASH-LOOP I CAUSED, and the lesson.** The first geometric build crash-looped on win11-fresh:
+unhandled c0000005 at address 0, a new agent log every ~6 s, the qube's windows gone from dom0.
+Cause: the rewrite left the old `IUIAutomationElement_get_CurrentBoundingRectangle(card, ...)` call
+in place while `card` is never assigned any more - a NULL COM pointer deref on the first shell
+popup after startup. Reverted with `swap-agent.ps1 -Restore`; the shipped binary brought the
+display straight back. Fixed and pushed; NOT yet rebuilt or redeployed.
+The build was CI-green and both static reviews passed it. **Compiling is not working.** Any deploy
+must now be followed by: same PID after 60 s AND the agent log not rotating, before any measurement
+is taken - a crash-loop check, added to the deploy routine.
+(The user's "a lot of sounds and zero toasts" was this: Windows kept firing notifications while the
+agent was dead, so nothing reached dom0.)
