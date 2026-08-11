@@ -7655,3 +7655,33 @@ Build e179e46f (agent fcafe61) deployed, guest COLD-BOOTED, hash-verified:
  - Toastcrop measured a sibling StartMenuExperienceHost window 858x874 (card insets
    13/69/13/69) and correctly gave up (6 attempts) on a card-less 858x890 sibling - the new
    'no card measured' Info line works.
+
+## 2026-08-12 (cont.) — Release e2e results (task 5)
+
+**win11-24h2** (build 83b69f62 swap-deployed, ToastCropDisable removed): crash-loop check
+PASS (PID stable, log static, hash verified), COLD BOOT PASS (agent auto-started on the
+fixed build). Toast: cropped AND positioned correctly (4740,1222 364x157 = card at dom0
+bottom-right). Drag QGAPERF window was empty - the guest CLOCK JUMPED backwards ~4 min
+mid-phase (cold-boot RTC re-derivation), so the [t0,t1] extraction matched nothing:
+instrument artifact, noted, dom0-side evidence (IDs, census) unaffected.
+**RESIDUAL (24H2 only): Start announces UNCROPPED 0,56 5120x1384.** corewin-scan.ps1 (new)
+shows StartMenuExperienceHost hwnd 0x10190 MORPHS between roles: parked cloaked at
+5120x1384, measured earlier at 858x874 (card found, insets 13/69/13/69). The crop cache is
+keyed (hwnd,w,h) and no measurement ever completed for the workarea-size key. On 25H2 the
+mapped Start surface is the 858x874 sibling -> works there (the goal platform). Follow-up:
+instrument why the 5120x1384 key never measures (queue? classifier at that instant? worker
+race), likely needs a lookup-attempt debug line at Info.
+
+**win10-clean: DEPLOYMENT BLOCKED on elevation.** user is in Administrators but the qrexec
+token is now FULLY filtered: schtasks /rl highest AND Register-ScheduledTask -RunLevel
+Highest both return Access denied (EnableLUA=1, the historical "HIGHEST-task trick" that
+verify-elevated-swap.sh once used no longer works on 19045.6456 - a Windows update closed
+it). No unattended elevated path exists on this guest. NEEDS ONE USER ACTION in the guest
+(elevated console): either EnableLUA=0 (like the win11 rigs) or install the new agent once
+by hand; then the whole win10 e2e phase runs unattended (scratchpad/e2e-win10-retry.sh).
+
+**Benchmark (win11-fresh, 25H2, 5120x1440 desktop, build 83b69f62, 3 runs, hash-verified
+each):** idle 3.64/4.79/4.94 %core (median 4.79), synthetic drag+repaint load
+5.85/5.90/6.00 (median 5.90). NO same-resolution baseline exists (historical numbers were
+1920x1080, 4x fewer pixels), so these are recorded as THE 5120x1440 reference for this
+build, not compared. Idle ~4.8% at 4x pixels is the watch item for future optimization.
