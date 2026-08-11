@@ -7612,3 +7612,27 @@ review, NOT yet run on a guest:
     tracking path cache-only, PokeWindowTracking on resolve, 2 s whole-walk deadline.
  6. resolution.c: adopt-applied on mismatch (fix A2), ResolutionAdoptCurrent on
     WM_DISPLAYCHANGE + 2 s drift tick (RESDRIFT), known-unappliable memo (60 s TTL).
+
+## 2026-08-12 (cont.) — FIX BUNDLE VALIDATED ON win11-fresh (build 7db23513, agent 31ffaaf)
+
+Deployed via swap-agent, hash-verified, crash-loop check PASSED (PID 6888 stable 105 s, log
+count static). Verified against the same instruments that measured the defects:
+ - **Defect B dead**: 3 interleaved drag runs, window IDs stable throughout, cap_timeout=0
+   (was 6/25 min pre-fix, ~1 per drag). No 'main loop slow' lines even.
+ - **Defect A dead**: drag dt p50 17.9 ms / p95 39.6 ms / max 154 ms over 1443 frames -
+   AT 5120x1440, 4x the framebuffer area of the original collapse scene.
+ - **Workarea fixed**: SPI_SETWORKAREA failures 0 (was 51); 'guest work area set to
+   (16,64)-(5104,1424)' applied cleanly.
+ - **RESDRIFT works**: 4 adoptions tracked the boot transit 5120->1024->1920->5120; A3CHECK
+   converged to g=5120x1440 ctx=5120x1440 (pages 7200==7200). The 5120x1440 mode STUCK this
+   session - the guest desktop now matches dom0, and the toast appears at 4724,891 = the real
+   dom0 bottom-right. Toast POSITIONING largely resolves itself in this config; keep watching
+   RESDRIFT counts for the unexplained reversion.
+ - **Toastcrop worker bug found by its own logging gap**: worker alive, UIA ready, but zero
+   measurements completed - the async lookups spent all 3 attempts in ~450 ms (pre-XAML).
+   Fixed (attempts counted on completed measurements, 6x250 ms), CI round 3 in flight.
+ - **Movability feasibility PROVEN**: SetWindowPos on a shell-band CoreWindow (by handle,
+   from qrexec) moves it and the move sticks (guest/move-toast-probe.ps1). WM-managed shell
+   surfaces are implementable; design pending (focus semantics, decorations).
+Still needing the user's hand: dom0-side click on a toast (ButtonAbsolute path), dom0-side
+window drag feel. Automated proxies all green.
