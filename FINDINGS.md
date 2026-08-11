@@ -7443,3 +7443,34 @@ This is very likely what the user saw earlier and described as "old one is there
 diagnosed: whether the daemon fails to trigger a repaint of the exposed area, or the WM/compositor
 does. Worth a dom0-side look before assuming it is ours - and if it is the daemon's, it falls under
 the CLAUDE.md exception for defects outside QWT scope (report upstream, user approves the text).
+
+## 2026-08-11 (cont.) — TOAST CROP IS CORRECT (two retractions closed)
+
+UIA tree dump of the live banner, taken by handle (0x50086, read from the agent log - our
+EnumWindows still cannot see shell surfaces, but UIA ElementFromHandle on a KNOWN handle works):
+    window            1524,700 396x332
+    ScrollViewer      1524,718 396x314
+    FlexibleToastView 1540,730 364x289   <- insets 16/30/16/13
+      OneDrive text   1580,742      |  Settings button 40x40 @1817,733
+      X button 40x40  @1857,733     |  ... body, combo, action buttons
+The header row and BOTH 40x40 header buttons are INSIDE FlexibleToastView. Overlaying that rect on
+the guest's own framebuffer shows it hugging the drawn card exactly - rounded corners on the line,
+header included, bottom edge just under the buttons.
+
+**RETRACTION 1:** "the crop overcrops and clips the header/close button" - WRONG. The crop rect was
+right; the render I judged was taken seconds after an agent restart, mid-recomposition.
+**RETRACTION 2:** "the outer rectangle is a stale unrepainted border" - WRONG. It survived a forced
+repaint (Notepad dragged over the area and back). It is **win11-fresh's toast**: the other test VM
+is running the OLD agent, both guests are 1920x1080, and Windows places toasts at the same
+bottom-right offset, so its uncropped 1524,700 396x332 window sits exactly around win11-24h2's
+cropped 1540,730 364x289 one. geometry.txt filters by _QUBES_VMNAME, so each VM's list showed only
+its own window and the overlap looked like a ghost.
+METHOD NOTE: with two guests running, ALWAYS check the other VM's window list before calling
+anything on the dom0 screen a ghost.
+
+VERIFIED RESULT: with the CI build and the crop enabled, dom0 borders the toast at exactly
+1540,730 364x289 = the visible card. The defect the user reported ("thin border, extra stuff within
+rectangle") is FIXED on win11-24h2, and win11-fresh alongside it is the untouched control.
+Still open: the crop keys on the undocumented class names FlexibleToastView/ToastView. A
+name-independent rule (largest descendant strictly inside the window, or the union of descendant
+rects) would pick the same element here and survive a rename - worth doing before this ships.
