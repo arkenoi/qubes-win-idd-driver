@@ -7636,3 +7636,22 @@ count static). Verified against the same instruments that measured the defects:
    surfaces are implementable; design pending (focus semantics, decorations).
 Still needing the user's hand: dom0-side click on a toast (ButtonAbsolute path), dom0-side
 window drag feel. Automated proxies all green.
+
+## 2026-08-12 (cont.) — Round-4 build (ShellManaged) cold-boot validation on win11-fresh
+
+Build e179e46f (agent fcafe61) deployed, guest COLD-BOOTED, hash-verified:
+ - Toastcrop async worker WORKS after the pacing fix: first live toast measured insets
+   16/30/16/13, announced 4735,1247 364x157 = the cropped card at the TRUE dom0 bottom-right
+   of the 5120x1440 desktop. Positioning requirement: met in this config.
+ - Toast is now WM-MANAGED (or=0): dom0 frames it; movable by the dom0 WM. Guest focus is
+   NOT stolen when a toast fires (Notepad stayed foreground through fire-toast; the
+   HandleFocus quarantine works).
+ - 5120x1440 survived the cold boot; drag after cold boot: dt p50 19.5 ms over 436 frames.
+ - **NEW DEFECT found by pixels: 25H2 Start at 5120x1440 maps a WORKAREA-SIZED (5120x1384)
+   StartMenuExperienceHost window** - opaque white, WM-framed, covering the whole dom0
+   screen, card content drawn top-left. The 90% exclusions (classifier + ratio guard) kept
+   the crop away from it by design. Fixed in agent 4dc559b: no classifier ceiling, absolute
+   card floor for oversize hosts. The geometric search already finds the 858x874 card.
+ - Toastcrop measured a sibling StartMenuExperienceHost window 858x874 (card insets
+   13/69/13/69) and correctly gave up (6 attempts) on a card-less 858x890 sibling - the new
+   'no card measured' Info line works.
