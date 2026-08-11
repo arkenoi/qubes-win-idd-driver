@@ -6884,3 +6884,39 @@ outside the desktop bounds (left>=screenW or top>=screenH or right<=0 or bottom<
 MAP - an off-screen announce is never useful and is the shared failure. Plus: don't thrash - coalesce
 the region-blink size flapping. NOT YET IMPLEMENTED (instrument-first; needs the coalescing designed so
 it does not regress legit fast resizes). The dom0 dialog (25H2) remains unreproduced - needs a 25H2 target.
+
+## 2026-08-11 (cont.) — REPRODUCED, and it is SEVERE: Start-menu flip storm KILLS the capture thread (frozen display)
+
+Followed the user's "reproduce before fixing". The negative-width MSG_CREATE (dom0 "suspicious GUI
+request" dialog) did NOT reproduce on win11-fresh/24H2 (8202 tight-loop samples of the agent's exact
+GetRealWindowRect math while hammering Start: only cloaked DummyDWMListenerWindow 0x0 noise, zero
+strictly-negative, zero huge, zero off-screen-with-real-size). That dialog stays 25H2-specific
+(user: update the test guest to 25H2 later to confirm nothing else broke).
+
+What DID reproduce, in the REAL gui-agent, repeatedly, and it is worse than a cosmetic flip:
+1. Start-open -> the agent thrashes the Start CoreWindow 0x1018a: reported size FLIPS between full
+   desktop (5120x1392/1384) and the region-clipped card (858x890/858x874) across UpdateWindowData
+   passes, each flip a PwResizeWindow grant rebuild (detach+reattach) + a SendWindowUnmap+SendWindowMap
+   pair. Root: GetWindowRgn on the animating Start window returns COMPLEXREGION vs none frame-to-frame,
+   so the clip is applied then dropped. Captured live at 16:20:45 and 16:23:49.
+2. Under rapid Start toggling (16:51) the storm FLOODS the vchan:
+     16:51:50 HandleServerData: got unknown msg type 127, ignoring  (x5)
+     16:51:51 VchanSendBuffer: vchan buffer full, blocking write
+     16:51:51 CaptureThread: error/timeout waiting for frame processing
+3. THE CAPTURE THREAD DID NOT RECOVER. Liveness check at 16:58 (7 min later): opened notepad -> the
+   agent emitted ZERO new frames (log last-modified frozen at 16:51:51, no PerfEmitFrame, no window
+   event). The guest desktop in dom0 is FROZEN. qrexec still works; only the display pipeline is dead.
+   RecreateDuplication (the intended capture-death recovery) never fired - a SECOND defect.
+
+So the Start-menu-under-IDD failure GWeck reports is, on our side, a self-inflicted map/unmap STORM
+that can back up the vchan and permanently wedge the capture thread = frozen/garbled guest. This is a
+DoS of the guest display triggerable by normal Start-menu use. Distinct from (but same family as) the
+2A-chrome window-classification issue.
+
+Fix direction (now EVIDENCE-BACKED, not blind): (a) stop the flip - do not oscillate a window's
+reported size when its clip region blinks; treat a transient no-region frame as "keep previous
+geometry" (debounce/coalesce), and/or don't grant-rebuild + remap on every size wobble; (b) the
+off-desktop announce (parked 16384,6119 -> card at ~18515,6621) should be clamped/rejected; (c)
+capture-thread recovery must actually fire on the vchan-full/timeout path (RecreateDuplication or
+restart), not silently die. NOT YET IMPLEMENTED. Guest left wedged by the repro; recovering via agent
+restart next (also validates the recovery path).
