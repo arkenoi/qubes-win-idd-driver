@@ -7529,3 +7529,32 @@ NEW DEFECTS the user reports on this build, recorded not diagnosed (leads in the
    toasts should stack.
  - Start should be a NORMAL (WM-managed) window rather than override_redirect, and reachable as a
    regular app-menu item; the Win key should not work from seamless apps at all.
+
+## 2026-08-12 — Defects A+B root-caused ON THE LIVE GUEST (scripted drag reproduces both)
+
+Instrumented reproduction on win11-fresh, build d342e93a (agent PID 1136, hash-verified):
+`guest/drag-harness.ps1` (new: SendInput circle-drag of Notepad, 60 Hz, precise t0/t1) +
+`guest/perf-window.ps1` + `guest/log-window.ps1` + `guest/reset-census.ps1` (all new).
+
+**Defect B is deterministic from a drag.** One 16 s scripted drag: every dom0 window ID changed
+(0x1c001b1..b7 -> 0x1c001b9..bf) and Notepad+Feedback Hub came back mapped=0. Log shows the chain
+at 23:56:46: `CaptureThread: error/timeout waiting for frame processing` (capture.c:1330 waits
+1000 ms for ready_event, comment says "XXX arbitrary timeout") -> error_event -> main loop FULL
+RESET: destroy screen window, AttachToInputDesktop, XcOpen (new handle), SendScreenGrants,
+DESTROY+CREATE+MAP of every window (~2 s outage). Census: **6 such resets in 25 min**, four in
+23:39-23:43 = exactly the user's "weird drag/overlap" period. RecreateDuplication count = 0 - this
+is NOT the DDA recovery path, it is the frame-processing timeout.
+
+**Defect A measured under active drag** (45 QGAPERF frames in 16 s):
+    dt  p50 113 ms   p95 1.01 s   max 4.5 s      (idle-active before: 14-43 ms)
+    dmg p50  77 ms   p95 972 ms   (the dominant phase; suspiciously clipped at the 1 s timeout)
+    snd p50 0.3 ms   max 7.7 ms   (raw vchan send is NOT the cost)
+    enu p95 171 ms  max 218 ms;  wak p95 187 ms  max 223 ms;  upd max 115 ms (spikes)
+Dragged window's MSG_CONFIGURE goes out at ~1 Hz during a 60 Hz drag = the "weird" feel.
+
+Also caught, standing defects on this guest:
+ - `WorkAreaApply: SPI_SETWORKAREA failed 0x57` EVERY 30 s (51 times) - retry loop never succeeds.
+ - Agent log is 145 MB after 25 min at LogLevel 3 (DAMAGE per-rect lines dominate).
+ - A3CHECK grant geometry g=5120x1440 vs ctx=1920x1080 on every reset (fullscreen-size grant while
+   the guest desktop is 1920x1080 - check intended).
+ - Boot-time 0x887a0026 keyed-mutex AcquireNextFrame failure recovered by A7RETRY (known).
