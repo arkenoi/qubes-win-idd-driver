@@ -7,6 +7,7 @@
 #   pushrun <script.ps1>  push a PowerShell script and execute it from QubesIncoming
 #   start|shutdown|kill   VM lifecycle via Admin API (policy-gated to this VM only)
 #   state                 admin.vm.CurrentState (raw response; leading "0\x30" = OK)
+#   synctime              push this qube's clock into the guest (call after every start)
 #   shot [out.tar]        tar of PNGs of the VM's windows (local.WinScreenshot+<vm>)
 #   fullshot [out.tar]    whole dom0 desktop + geometry (local.WinFullScreen)
 #   wedge [dir]          dom0 wedge forensics for $QTEST_VM (needs dom0/13-install-...)
@@ -40,6 +41,24 @@ case "${1:-}" in
            vmshell "cmd /c del /q /f \"$INCOMING\\$base\" 2>nul" >/dev/null 2>&1 || true
            qvm-copy-to-vm "$VM" "$f"
            vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"$INCOMING\\$base\" $*" ;;
+  synctime) # Push this qube's clock into the guest (accurate to ~0.3 s).
+           # WHY this exists: the guest's virtual RTC is re-derived from dom0's LOCAL wall
+           # clock at every domain start and guest RTC writes are DISCARDED when the domain
+           # is destroyed, so no in-guest setting (RealTimeIsUniversal, timezone) survives a
+           # reboot - measured 2026-08-11, guest landed +2h58m off after each of two boots.
+           # The permanent fix is dom0-side (qvm-sync-clock / qubes.SetDateTime, which only
+           # dom0 can initiate). Until then call this after every VM start, or cross-log
+           # timing analysis against dom0 is meaningless.
+           # The probe MUST be the same shape as the setter (powershell startup dominates the
+           # one-way latency): probing with `cmd /c echo` under-estimated it and left the guest
+           # 0.7 s slow - measured 2026-08-11.
+           t0=$(date +%s.%N)
+           vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"1\"" >/dev/null 2>&1
+           t1=$(date +%s.%N)
+           ow=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.3f",(b-a)/2}')
+           iso=$(date -u -d "+$ow seconds" +%Y-%m-%dT%H:%M:%S.%3N+0000)
+           vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"Set-Date '$iso' | Out-Null; (Get-Date).ToUniversalTime().ToString('o')\"" \
+             | tr -d '\0' | grep -E '^2[0-9]{3}-' || true ;;
   start)    adm admin.vm.Start ;;
   shutdown) adm admin.vm.Shutdown ;;
   kill)     adm admin.vm.Kill ;;
