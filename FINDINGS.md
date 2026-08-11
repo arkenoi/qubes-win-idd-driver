@@ -7040,11 +7040,13 @@ FACTS this settles:
    flood-only path — both exist; the dialog path is faster and worse.
    => ANY single suspicious message = guest display DoS. Bounded/non-blocking vchan writes are
    therefore not a nice-to-have; they are the containment for a whole failure class.
-3. `msg 0x90 without CREATE for 0x1018a` — 0x90 = 144 = MSG_MAP (enum in qubes-gui-protocol.h:148
-   with MSG_KEYPRESS=124... MSG_CREATE=131, MSG_DESTROY=132? — decode via header, MSG_UNMAP is
-   annotated 133). Same HWND 0x1018a as the storm. The rejected CREATE means the daemon has NO
-   window object, so the agent's subsequent MAP is orphaned: agent and daemon state DIVERGE
-   after a rejected CREATE. Any fix MUST keep them consistent (drop dependent messages too).
+3. `msg 0x90 without CREATE for 0x1018a` — CORRECTED DECODE: with MSG_MIN=123 the enum gives
+   MSG_CREATE=130 (0x82), MSG_MAP=132 (0x84), and **0x90 = 144 = MSG_WINDOW_HINTS** (verified
+   against qubes-gui-common/include/qubes-gui-protocol.h:134-160, cross-checked by the two
+   in-header annotations MSG_UNMAP=133 and MSG_DOCK=143). Same HWND 0x1018a as the storm.
+   The rejected CREATE means the daemon holds NO window object, so every later message for that
+   HWND is orphaned: agent and daemon state DIVERGE after a rejected CREATE. Any fix MUST keep
+   them consistent (suppress dependent messages, not just the bad CREATE).
 4. Agent send path has NO sanity guard: SendWindowCreate (agent/gui-agent/send.c:287) computes
    width = rcWindow.right - rcWindow.left from WINDOW_DATA X/Y/Width/Height and sends it
    unvalidated; the daemon's own clamp (min/max to MAX_WINDOW_*) happens only AFTER the VERIFY,
