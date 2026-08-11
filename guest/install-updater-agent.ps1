@@ -72,4 +72,19 @@ $f = Join-Path $env:TEMP 'qubes-wu-scan.xml'
 $o = & schtasks /create /tn QubesWindowsUpdateScan /xml "$f" /f 2>&1
 Log ("REGISTER QubesWindowsUpdateScan rc=$LASTEXITCODE : " + ($o -join ' '))
 if ($LASTEXITCODE -ne 0) { throw "schtasks register failed (rc=$LASTEXITCODE)" }
+
+# 4. register the qubes.WindowsUpdateStatus rpc service so dom0 can POLL live status (availability +
+#    download/install progress). The handler emits update-status.json on stdout (the vchan to the
+#    dom0 caller); read-only, so safe to allow at will. dom0-initiated, so no VM->dom0 policy needed.
+$qt = $env:QUBES_TOOLS; if (-not $qt) { $qt = 'C:\Program Files\Qubes Tools' }
+$handlerDir = Join-Path $qt 'qubes-rpc-services'
+$svcDir     = Join-Path $qt 'qubes-rpc'
+if ((Test-Path $handlerDir) -and (Test-Path $svcDir)) {
+    Copy-Item (Join-Path $SetupRoot 'wu-status.ps1') (Join-Path $handlerDir 'wu-status.ps1') -Force
+    $map = 'c:\windows\system32\cmd.exe /c powershell.exe -executionpolicy bypass -noninteractive -inputformat none -file "%QUBES_TOOLS%\qubes-rpc-services\wu-status.ps1"'
+    [IO.File]::WriteAllText((Join-Path $svcDir 'qubes.WindowsUpdateStatus'), $map, [Text.Encoding]::ASCII)
+    Log 'registered qubes.WindowsUpdateStatus rpc service (dom0 polls live status)'
+} else {
+    Log 'qubes-rpc dirs missing - skipped status service (is QWT installed?)'
+}
 Log 'updater agent deployed'
