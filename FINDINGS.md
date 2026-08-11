@@ -6759,3 +6759,31 @@ NOT yet validated: the download+install path end-to-end against a REAL pending u
 on this guest now). That exercises Resolve-Catalog -> Fetch-Msu -> DISM, whose pieces were proven
 separately (1742->8875) but not through the single agent script in one run. Needs a guest behind on
 patches (or a pinned older base image) to close.
+
+## 2026-08-11 (cont.) — the underscore was the leaked quote; progress via a poll service
+
+Two things resolved.
+
+1. The `_dom0`/`_@default` the user kept seeing in the dom0 policy log = the SAME quoting bug,
+   sanitized. qrexec replaces the illegal `"` char in a target name with `_`, so wrapping the
+   pipe-arg in quotes (`"@default|...`) makes the target parse as `"@default` -> logged as
+   `_@default`. The updates-proxy relay still had this (`psi.Arguments = "\"" + target + ...`), so
+   every UpdatesProxy spawn logged `target '_@default' does not exist, using @default instead` and
+   only worked because @default falls back. FIXED: relay now builds `psi.Arguments` WITHOUT the
+   outer quotes (handler keeps its own). Verified: guest agent log now shows `domain '@default'`
+   clean, no leading quote -> no more `_@default` in dom0's log. (notify4/5.ps1's literal `_dom0`
+   was a separate red herring, since deleted.)
+
+2. update PROGRESS to dom0. qubesdb was the first candidate but qubesdb-cmd.exe's WRITE is broken
+   on this QWT build: `client/qubesdb-cmd.c` does `#ifdef _WIN32 optind -= 2` to compensate for its
+   getopt port, and combined with `-c write` that double-counts the command word, so cmd_write
+   always gets an ODD argv and rejects it ("Invalid number of parameters"). READS work (the stray
+   command token reads a harmless empty key); `/qubes-tools/version` -> `1`. There is no qubesdb.dll
+   on the guest to P/Invoke either. (Candidate upstream report - core-qubesdb, outside QWT scope -
+   pending user approval of exact text.)
+   So progress rides the STATUS FILE + a poll service instead: qubes-windows-update.ps1 already
+   rewrites C:\ProgramData\Qubes\update-status.json at each phase (downloading pct, installing
+   state, reboot_needed). New guest rpc service `qubes.WindowsUpdateStatus` (guest/wu-status.ps1,
+   registered by install-updater-agent.ps1 into %QUBES_TOOLS%\qubes-rpc) emits that JSON on stdout
+   = the vchan to the dom0 caller. dom0-INITIATED, read-only, so no VM->dom0 policy is needed; dom0
+   polls it for live availability + progress. Handler verified emitting the JSON on the guest.

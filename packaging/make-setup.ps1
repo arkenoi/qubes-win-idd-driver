@@ -112,7 +112,7 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activat
 # Windows Update agent, deployed by `install.cmd /updatesonly`: the deploy script compiles the
 # relay (in-box csc, like winenum.cs), places the agent, and registers the scheduled scan that
 # reports update availability to dom0. All three staged from guest/ (single source of truth).
-foreach ($u in 'install-updater-agent.ps1', 'qubes-windows-update.ps1', 'qubes-updates-relay.cs') {
+foreach ($u in 'install-updater-agent.ps1', 'qubes-windows-update.ps1', 'qubes-updates-relay.cs', 'wu-status.ps1') {
     Copy-Item (Need (Join-Path $RepoRoot "guest\$u") "updater agent payload ($u)") $OutDir -Force
 }
 

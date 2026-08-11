@@ -128,7 +128,13 @@ static class Relay
             string handler = "\"" + self + "\" --relay " + cport + " " + token;
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = QrexecClientVm();
-            psi.Arguments = "\"" + target + "|" + Service + "|" + user + "|" + handler + "\"";
+            // Do NOT wrap the whole pipe-string in quotes. qrexec-client-vm's GetArgument() splits
+            // the RAW command line on '|' and does not strip quotes, so an outer quote leaks into
+            // field 1 -> target parses as "@default, whose illegal '"' qrexec sanitizes to '_' ->
+            // dom0 logs `target '_@default' does not exist, using @default instead` on every spawn.
+            // It only "works" because @default falls back; a literal target would be REFUSED. The
+            // handler keeps its own quotes (its exe path can contain spaces, e.g. Program Files).
+            psi.Arguments = target + "|" + Service + "|" + user + "|" + handler;
             psi.UseShellExecute = false;
             psi.CreateNoWindow = true;
             Process.Start(psi);
