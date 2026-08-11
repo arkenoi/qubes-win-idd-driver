@@ -1,0 +1,30 @@
+# /etc/qubes/policy.d/11-win-idd-all-addendum.policy
+# ADDENDUM to mgmt/10-win-idd-all.policy — gaps measured live 2026-08-11. Numbered 11 so it
+# evaluates right after 10-all (first-match); everything here is a grant 10-all simply lacks,
+# so ordering vs 10-all does not matter in practice.
+#
+# Install from dom0:
+#   qvm-run --pass-io win-idd-mgmt 'cat /home/user/qubes-win-idd-driver/dom0/11-win-idd-all-addendum.policy' \
+#     | sudo tee /etc/qubes/policy.d/11-win-idd-all-addendum.policy
+# No daemon restart needed.
+
+## ===== 1. policy introspection (READ-ONLY) =====
+# Lets win-idd-mgmt read the installed policy.d contents via the qrexec policy admin API,
+# ending the per-session "what is actually installed in dom0" archaeology (the 2026-08-11
+# handover had a stale deny-matrix precisely because this was unreadable).
+# Deliberately NOT granted: policy.Replace / policy.Remove / policy.include.Replace /
+# policy.include.Remove — read access only, this qube must never edit dom0 policy.
+policy.List                          *  win-idd-mgmt  @adminvm  allow
+policy.Get                           *  win-idd-mgmt  @adminvm  allow
+policy.include.List                  *  win-idd-mgmt  @adminvm  allow
+policy.include.Get                   *  win-idd-mgmt  @adminvm  allow
+
+## ===== 2. device.denied.List (READ-ONLY; suspected qvm-block fix) =====
+# 10-all grants device.denied.Add/Remove but not .List. `qvm-block list <vm>` currently
+# fails "Request refused" even though block.Available/Attached/Assigned/List are all
+# granted — the denied-list read is the remaining candidate. Harmless read-only either
+# way; if qvm-block still fails after this, policy.Get (above) will show the real gap.
+admin.vm.device.denied.List          *  win-idd-mgmt  @tag:created-by-win-idd-mgmt  allow target=dom0
+admin.vm.device.denied.List          *  win-idd-mgmt  @tag:win-idd-testbed          allow target=dom0
+admin.vm.device.denied.List          *  win-idd-mgmt  @tag:qwt-bench                allow target=dom0
+admin.vm.device.denied.List          *  win-idd-mgmt  win-idd-mgmt                  allow target=dom0
