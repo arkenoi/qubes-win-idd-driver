@@ -6973,3 +6973,23 @@ as ground truth (as the handover warned).
 
 Clone feasibility (data side): vm-pool 875.2 GB size / 654.5 GB used ⇒ ~220 GB free;
 win11-fresh root usage ≈ 17.4 GB of 80 GB. Space is a non-issue.
+
+## 2026-08-11 (cont.) — 25H2 TARGET LIVE: clone insurance + eKB flip both done
+
+- Clone: `win11-24h2` created from halted win11-fresh (root usage 17.2 GB copied; tags
+  `created-by-win-idd-mgmt` + `win-idd-testbed` both present). First `qvm-clone` attempt
+  FAILED with "Request refused" AFTER both volumes cloned: qubesadmin `clone_vm` copies
+  device ASSIGNMENTS last, calling `admin.vm.device.<class>.Assigned` for every device
+  class — 10-win-idd-all only grants class `block`, so `pci` (or first non-block class)
+  was refused and the error path deleted the fully-cloned VM. Workaround (no policy
+  change): python `app.clone_vm(..., ignore_devices=True)` — the CLI has no flag for it.
+- eKB: DISM Add-Package of kb5054156-25h2-ekb.msu on win11-fresh rc=0 → reboot →
+  `ver` = **10.0.26200.8875 (25H2)**. gui-agent alive post-flip: qtest shot of a fresh
+  Notepad renders correctly (pixel-judged). NOTE: `qtest shot` rc=1/empty tar when the
+  guest has no mapped window — open one first; not a failure of the agent.
+- policy.Get addendum works: installed 10-all read + diffed. Deviations from repo copy:
+  installed LACKS all `@tag:qwt-bench` lines AND the four `admin.vm.tag.* @anyvm` lines
+  (tag ops still granted per-tag); UpdatesProxy block present sans comments. Live grants
+  now fully known — no more policy archaeology.
+- NEXT: S1a/S1b repro on 25H2 (Win-key Start storm; `qtest fullshot` is the dom0-dialog
+  detector).
