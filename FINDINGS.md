@@ -7181,3 +7181,31 @@ once; the menu had already closed both times).
 Also visible in the dom0 terminal during this session (relevant to the clock work): `qvm-sync-clock`
 fails with "ClockVM sys-whonix is not running, aborting!" - so the permanent dom0-side clock fix
 needs sys-whonix running (or a different clockvm). `tools/qtest synctime` remains the workaround.
+
+## 2026-08-11 (cont.) — START-MENU ARTIFACT CAPTURE: BLOCKED, guest-side Start is now dead
+
+Attempted the concurrent capture the user asked for (keypress/click held open in one qrexec
+session while a dom0 fullshot + a guest render-truth capture run from another). Six attempts,
+three input methods (keybd_event VK_LWIN, held-open 45-55 s; mouse click on the Start button at
+716,1056; win-start-probe). Result every time: **the Start menu does not open IN THE GUEST at
+all** - the guest's own desktop capture shows no Start surface, and EnumWindows lists only
+Shell_TrayWnd / Notepad / EdgeUiInputTopWndClass / Progman. dom0 correspondingly has no window
+for it. So this is NOT a dom0 rendering failure and the user's "extra stuff within rectangle"
+artifact could not be reproduced.
+
+IMPORTANT: Start DID work on this guest at 16:00-16:01 UTC (guest capture at 16:01 clearly shows
+it open, post-25H2). It stopped some time after. Two candidate causes, NOT yet separated:
+ (a) **My own clock manipulation** (most likely): the fix experiments moved the guest clock
+     backward 3 h twice. Evidence: shell processes were later found with StartTime 9:52 PM while
+     the clock read 7:16 PM - i.e. started ~2.5 h in the "future". Large backward jumps are a
+     known way to wedge WinRT/shell activation.
+ (b) The 4x40-toggle storm rounds wedging StartMenuExperienceHost persistently.
+Against (a)-only: the breakage SURVIVED two full reboots plus a shell restart with consistent
+timestamps, and survived re-registering the Appx package
+(Microsoft.Windows.StartMenuExperienceHost_10.0.26100.4768, status Ok, re-registered + restarted).
+So whatever it is, it is persistent profile/state damage, not a live-session glitch.
+
+RECOVERY OPTIONS for next session (none attempted): new user profile; DISM /RestoreHealth + sfc;
+or restore from the `win11-24h2` clone and redo the eKB (loses nothing - the clone is intact).
+DISCIPLINE NOTE: run destructive-ish environment experiments (clock jumps) on the CLONE, not on
+the qube currently holding the only reproduction of a bug under investigation.
