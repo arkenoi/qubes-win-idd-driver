@@ -6950,3 +6950,26 @@ gates S1a/S1b validation; (2) reproduce S2 on 24H2 via A4CLAMP + measure skew 3x
 fix; (3) the S1b structural guard (SendWindowCreate (int)w/h>0, mirroring send.c:600) validated by
 INJECTING an inverted rect and seeing the dialog with guard off / suppressed with guard on; (4) re-release
 containing 80f8d97 + README fix. No fixes committed yet - all gated on their own repro.
+
+## 2026-08-11 (later session) — LIVE dom0 policy re-measured; handover's deny-matrix is STALE
+
+Empirical probe from win-idd-mgmt (read-only Admin API calls only; nothing mutated):
+- ALLOW (measured now): vm.List, CurrentState, property.Get/GetAll (incl. target dom0),
+  global admin.property.Get (qubes-prefs), pool.List/Info, label.List, tag.List,
+  feature.List, firewall.Get, notes.Get, **volume.List / volume.Info / ListSnapshots**
+  (revisions printed), qubes.VMShell to win11-fresh (qtest run OK, state OK).
+- DENY (measured now): admin.vm.device.block.List — "Request refused" — on BOTH
+  win11-fresh and win-idd-mgmt.
+- UNPROBEABLE read-only (still unknown): volume.CloneFrom/CloneTo, vm.Create.*,
+  vm.Remove, Start/Shutdown/Kill, tag.Set, property.Set, feature.Set. (A no-side-effect
+  probe of Create/CloneFrom was attempted and blocked by the local permission layer.)
+
+CONTRADICTION with the 2026-08-11 handover: it recorded "all admin.vm.volume.* DENIED".
+volume read-ops are now allowed ⇒ dom0 policy was changed after the handover was written.
+The live rule set matches NO file in this repo: dom0/30-win-idd-mgmt-admin.policy and
+mgmt/10-win-idd-all.policy BOTH grant device.block.* on the tag, which is denied live.
+So whatever is installed is a partial/hand-edited variant. Repo dom0/* remains untrustworthy
+as ground truth (as the handover warned).
+
+Clone feasibility (data side): vm-pool 875.2 GB size / 654.5 GB used ⇒ ~220 GB free;
+win11-fresh root usage ≈ 17.4 GB of 80 GB. Space is a non-issue.
