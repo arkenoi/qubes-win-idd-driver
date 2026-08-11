@@ -7126,3 +7126,28 @@ RECOMMENDATION (not applied — user asked to check, not change): before any fur
 timing work, either have dom0 run `qvm-sync-clock` / trigger `qubes.SetDateTime` for win11-fresh,
 or set the guest clock to true UTC in-guest. Then re-measure. Also worth setting
 `RealTimeIsUniversal=1` so the guest reads the Xen RTC as UTC across reboots.
+
+## 2026-08-11 (cont.) — CLOCK FIXED (harness-side); in-guest settings CANNOT hold it
+
+Attempted, in order, each verified by 4-5 sample offset measurement + a COLD REBOOT:
+1. `RealTimeIsUniversal=1` + Set-Date to true UTC -> offset went +10801.8 s -> -0.216 s. **Reboot
+   re-broke it: +10686 s.**
+2. `RealTimeIsUniversal=0` + TZ `FLE Standard Time` (+03, matching dom0) + Set-Date -> -0.173 s.
+   **Reboot re-broke it again: +10684.7 s** (guest UTC 18:52 vs true 15:54).
+CONCLUSION (measured, not assumed): the guest's virtual RTC is re-derived from dom0's LOCAL wall
+clock at every domain start, and guest RTC writes are DISCARDED when the domain is destroyed. No
+in-guest setting (RealTimeIsUniversal either way, timezone either way) survives a reboot. The
+residual is not a constant 3 h either - both boots landed ~115 s short of exactly +3 h, so the
+error is not even predictable enough to subtract.
+
+FIX SHIPPED: `tools/qtest synctime` — pushes this qube's clock into the guest, accurate to
+**median -0.009 s** (5 samples, verified on a FRESHLY BOOTED guest, i.e. the boot path is the
+tested path). Gotcha found and fixed while building it: the one-way-latency probe must be the
+same SHAPE as the setter — probing with `cmd /c echo` while setting via powershell under-estimated
+latency by ~0.7 s and left the guest that slow.
+USAGE RULE: call `qtest synctime` after EVERY `qtest start`, before any measurement whose
+timestamps will be compared to dom0 logs. Harnesses should do it unconditionally.
+PERMANENT FIX (dom0, user-only): `qvm-sync-clock` / letting dom0 drive `qubes.SetDateTime`
+(the handler `set-time.ps1` IS installed in the guest and would be correct), or changing the
+domain's RTC basis to UTC. Not attempted - dom0 is out of scope for this qube.
+Guest now left at TZ=FLE Standard Time (+03) so its wall clock reads the same face as dom0 logs.
