@@ -7089,3 +7089,40 @@ libvchan_is_open check — upstream/ro/qubes-windows-utils/src/vchan-common.c:96
 caller holds g_VchanCriticalSection (send.c:73 et al). Write buffer is 65536 bytes (logged at
 agent start). Hence: daemon stops reading => pump blocks forever under the lock => capture dies.
 main.c:4675 already carries a comment acknowledging "VchanSendBuffer blocks FOREVER on a full ring".
+
+## 2026-08-11 (cont.) — GUEST CLOCK AUDIT (asked: is the guest synced with dom0?)
+
+ANSWER: **No — two distinct errors.** Measured 8 round-trip samples in two batches (~2.5 min
+apart), guest `(Get-Date).ToString('o')` vs this qube's clock, offset = guest - midpoint(t0,t1):
+
+| batch | median offset | spread |
+|---|---|---|
+| 18:43:05-09 | +10801.768 s | 0.21 s |
+| 18:45:2x    | +10801.878 s | 0.14 s |
+
+1. **+10800 s = exactly 3 h, absolute/UTC error.** Guest TZ is `UTC` (bias 00:00:00) but its wall
+   clock holds LOCAL (EEST, +0300) time: guest claims 18:45 UTC while true UTC is 15:45. Anything
+   the guest computes in UTC (TLS validity, WU metadata, Event Log UTC fields, servicing stamps)
+   is 3 h in the future. `RealTimeIsUniversal` is NOT set, W32Time Stopped/Manual with
+   time.windows.com (unreachable — VM is offline), autotimesvc + vmictimesync Stopped. QWT's
+   `qubes.SetDateTime` handler IS installed (`qubes-rpc-services\set-time.ps1`, does `Set-Date $in`
+   on a dom0-supplied `...+0000` string, which WOULD be correct given TZ=UTC) — so it has simply
+   not been invoked since the TZ was set to UTC. It is dom0-initiated (qvm-sync-clock); the mgmt
+   qube cannot trigger it.
+2. **+1.8 s residual skew** on top of the 3 h, stable to ~0.1 s across 2.5 min (no measurable
+   drift; guest booted 18:34:37, measured 18:43-18:45).
+
+IMPACT ON THE H2 CAUSALITY CLAIM (checked, claim SURVIVES): dom0 guid `zenity` stamped 18:19:35.734
+(dom0 local wall) vs guest agent `vchan buffer full` 18:19:42.246 (guest wall). Both faces read the
+same local wall clock, so they ARE comparable; correcting the guest by -1.8 s gives ~18:19:40.4 in
+dom0 time, still **~4.7 s AFTER** the dialog. The dialog-precedes-wedge conclusion holds with margin
+(would need >6 s of skew to invert, and measured skew is 1.8 s).
+CAVEATS: (a) the comparison reference was win-idd-mgmt, not dom0 itself (mgmt reports "System clock
+synchronized: no", NTP inactive — it inherits dom0's clock at boot; assumed within ~1 s, unverified
+because this qube cannot read dom0's clock); (b) the guest REBOOTED at 18:34:37, after the 18:19
+incident, so today's 1.8 s skew is not proof of the skew at incident time.
+
+RECOMMENDATION (not applied — user asked to check, not change): before any further cross-log
+timing work, either have dom0 run `qvm-sync-clock` / trigger `qubes.SetDateTime` for win11-fresh,
+or set the guest clock to true UTC in-guest. Then re-measure. Also worth setting
+`RealTimeIsUniversal=1` so the guest reads the Xen RTC as UTC across reboots.
