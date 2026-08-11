@@ -7504,3 +7504,28 @@ must now be followed by: same PID after 60 s AND the agent log not rotating, bef
 is taken - a crash-loop check, added to the deploy routine.
 (The user's "a lot of sounds and zero toasts" was this: Windows kept firing notifications while the
 agent was dead, so nothing reached dom0.)
+
+## 2026-08-11 (cont.) — S1a FIXED on 25H2; new live defects recorded for handover
+
+Build d342e93a (geometric crop + the NULL-deref crash fix) deployed to win11-fresh, hash-verified,
+crash-loop check PASSED (PID 1136 unchanged over 75 s, log count static at 157 - no rotation).
+dom0 now announces:
+    Start            544,219  832x736   (was 531,142 858x890; measured card left/width = 544/832)
+    New notification 1540,730 364x289   (was 1524,700 396x332)
+Both equal the drawn card; the user confirms the menu "looks fine". **GWeck's S1a is fixed on the
+surface he reported it on.** Remaining for S1a: cold-boot repeat, and a 24H2 non-regression check
+(24H2's Start has no margin, so its announce must STAY 858x890).
+
+NEW DEFECTS the user reports on this build, recorded not diagnosed (leads in the handover):
+ - ALL windows react weirdly to DRAG (Feedback Hub especially). Suspicion order: the never-run
+   performance gate (rank 2 added a ring query per message; QGAPERF shows dt~520 ms / acq~515 ms in
+   this period, though much of that is idle wait), then the HandleConfigure crop-suppression branch
+   (ruled out by inspection for uncropped windows - WINDOW_DATA is zeroed at main.c:913-922 - but
+   unverified at runtime), then the HandleButton/HandleMotion locking change.
+ - An overlap bug, no capture obtained: by the time the fullshot ran every dom0 window had been
+   destroyed and re-announced (IDs 0x1c0018f... -> 0x1c001a1), leaving only the unmapped VMapp entry.
+ - Toasts: geometry now correct but still NOT CLICKABLE, wrongly positioned (guest 1920x1080 inside
+   a 5120x1440 dom0 screen puts a guest-corner toast mid-dom0-screen), not draggable, and multiple
+   toasts should stack.
+ - Start should be a NORMAL (WM-managed) window rather than override_redirect, and reachable as a
+   regular app-menu item; the Win key should not work from seamless apps at all.
