@@ -7558,3 +7558,29 @@ Also caught, standing defects on this guest:
  - A3CHECK grant geometry g=5120x1440 vs ctx=1920x1080 on every reset (fullscreen-size grant while
    the guest desktop is 1920x1080 - check intended).
  - Boot-time 0x887a0026 keyed-mutex AcquireNextFrame failure recovered by A7RETRY (known).
+
+## 2026-08-12 (cont.) — ProtoTrace A/B gate + reproduction attempts + S1a cold-boot PASS
+
+Interleaved gate (3 runs/side, same binary d342e93a, agent restarted identically each run,
+fresh boot, no toast): ProtoTrace=1 vs 0 both HEALTHY under drag (dt p50 ~17.5 ms both; tot max
+580 ms vs 66 ms - ProtoTrace has a real tail cost but is NOT the collapse). The pre-reboot
+collapse (dt p50 113 ms) did NOT reproduce after reboot under: toast visible, Feedback Hub
+running, ProtoTrace=1, Start opened, drag - separately or combined. The catastrophic state is
+SESSION-STATE dependent (suspect: earlier fullscreen RESAPPLIED 5120x1440 poisoning believed
+geometry; grant IS g=5120x1440 vs ctx=1920x1080 per A3CHECK). Mechanisms to fix regardless:
+ 1. capture.c:1330 1000 ms wait treated as FATAL -> full reset = defect B (proven live).
+ 2. ProtoTrace DAMAGE trace does GetRealWindowRect + g_csWatchedWindows lock PER RECT (send.c
+    ~905, commit 8f9c004) - measured tail contributor.
+ 3. toastcrop sync UIA on the single WatchForEvents thread (verifier: bounded transient per
+    (hwnd,w,h) slot, 3 attempts x 500 ms; Start ANIMATES size -> fresh slots).
+ 4. CODE-PROVEN (adversarially verified): DESTROY send failing in degraded mode leaves hwnd in
+    created-set AND destroyed-ring; CREATEDUP branch returns before ClearWindowDestroyedLocked
+    (send.c:527-556) -> window permanently drops damage. Fix: clear the ring in that branch.
+
+**Win-key CAN open Start on 25H2** when sent from an interactive-session scheduled task
+(guest/open-start.ps1) - direct qrexec keybd_event fails, the session was the difference.
+Automated S1a testing is now possible.
+**S1a COLD-BOOT CHECK PASSED**: after kill+start (guest wedged during a drag run - qrexec dead,
+display live; killed+restarted), Start announces 544,219 832x736 = the drawn card.
+**Persistent toast trigger**: guest/fire-toast.ps1 (reminder-scenario toast stays until
+dismissed) - gives a stable shell surface for measurements.
