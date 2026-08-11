@@ -218,6 +218,20 @@ def main():
         missing.append({"window": w["title"] or w["class"], "class": w["class"],
                         "hwnd": w["hwnd"], "size": [w["w"], w["h"]], "cloaked": w["cloaked"]})
 
+    # GHOSTS: windows dom0 still has MAPPED that no longer exist in the guest. Found live on
+    # 2026-08-11 - a closed Start menu and a dismissed toast stayed painted in dom0 because the
+    # agent mapped them and never sent UNMAP (agent log: SendWindowMap for 0x60058/0x50086/
+    # 0x10184 with no matching SendWindowUnmap). This is the user-visible "old one is there too"
+    # artifact, and it is invisible to a per-window pixel diff, so it needs its own check.
+    guest_sizes = [(w["w"], w["h"]) for w in gwins]
+    ghosts = []
+    for w in (dom0_geom or []):
+        if not w["mapped"] or w["name"] == "VMapp command":
+            continue
+        if (w["w"], w["h"]) not in guest_sizes:
+            ghosts.append({"id": w["id"], "name": w["name"], "size": [w["w"], w["h"]],
+                           "pos": [w["x"], w["y"]], "override_redirect": w["override_redirect"]})
+
     bad = [r for r in results if r.get("pct_differing", 0) > args.tolerance]
     report = {
         "label": args.label,
@@ -229,6 +243,7 @@ def main():
         "missing_in_dom0": missing,
         "extra_in_dom0": unmatched_dom0,
         "dom0_windows": dom0_geom,
+        "ghosts_in_dom0": ghosts,
         # Full enumeration, always: a window that is neither compared nor missing (filtered as
         # cloaked/tiny/benign) is invisible to the verdict, and that is exactly how a shell
         # surface disappearing from dom0 goes unnoticed. Keep the raw list in every report.
@@ -237,7 +252,7 @@ def main():
              "cloaked": w["cloaked"], "exstyle": w["exstyle"]} for w in gwins
         ],
         "captures": str(tmp),
-        "verdict": "PASS" if not bad and not unmatched_dom0 else "FAIL",
+        "verdict": "PASS" if not bad and not unmatched_dom0 and not ghosts else "FAIL",
     }
     print(json.dumps(report, indent=2))
     return 0 if report["verdict"] == "PASS" else 1

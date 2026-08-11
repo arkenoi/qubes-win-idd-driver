@@ -7274,3 +7274,52 @@ Any Start-related test therefore needs either a human keystroke or an input path
 yet; the storm probe measures the agent under Start CHURN, but cannot be trusted to have opened
 Start at all unless a guest-side capture confirms it. Also confirmed: a qrexec call taken while
 Start is open STEALS FOCUS and closes it — capture dom0 FIRST, ask the guest questions after.
+
+## 2026-08-11 (cont.) — **GHOST WINDOWS: dom0 keeps painting shell surfaces the guest has closed**
+
+The user opened Start by hand and reported "on screen, but old one is there too" and "announced
+geometry does not match REAL geometry either". Both are one defect, now captured with evidence.
+
+STATE AT CAPTURE (win11-24h2, 24H2):
+  dom0 (qtest fullshot geometry.txt)        |  guest (render-truth.ps1 EnumWindows)
+  0x1c0018b 123,129  1426x746 or=0 mapped=1 |  Notepad        (123,129) 1426x746   <- real
+  0x1c0018e 1524,700  396x332 or=1 mapped=1 |  ** ABSENT **                        <- GHOST (toast)
+  0x1c00190  531,142  858x890 or=1 mapped=1 |  ** ABSENT **                        <- GHOST (Start)
+The guest has ONLY Notepad + a cloaked 1905x4 strip + Progman. The Start menu and the toast were
+closed/dismissed minutes earlier, yet dom0 still has them MAPPED and is still painting them.
+
+MECHANISM (agent log, same guest): three windows were mapped and NEVER unmapped -
+  20:22:43/45 SendWindowMap 0x60058   (twice)
+  20:27:28    SendWindowMap 0x50086
+  20:30:05    SendWindowMap 0x10184
+with the last SendWindowUnmap at 20:22:12 (for a different hwnd, 0x2002a). So the agent announces
+MAP for these override-redirect shell surfaces and never announces UNMAP when they go away. The
+likely cause: Start/toast surfaces are not DESTROYED when dismissed - Start's CoreWindow goes back
+to 1x1 + DWM-cloaked (measured: cloak=2 when closed). If the tracker drops a window that stops
+being enumerable/visible WITHOUT sending UNMAP first, dom0 is left holding a mapped ghost forever.
+That is the "double windows" artifact class in the QWT docs, and it is a strong candidate for
+GWeck's S1a "garbled Start" (a stale Start ghost overlapping a freshly opened one).
+
+CONSEQUENCE FOR EARLIER CONCLUSIONS: the 24H2 "Start renders correctly, geometry exact 858x890"
+measurement stands as a measurement of the LIVE menu, but it must NOT be read as "Start is fine on
+24H2" - the very window I measured is now a ghost. Correct rendering includes disappearing when
+the guest's window disappears.
+
+INSTRUMENT: `tools/rendercheck` now detects this automatically - any dom0 MAPPED window with no
+guest counterpart is reported under `ghosts_in_dom0` and FAILS the run. Verified it catches both
+ghosts above. This is the regression test the fix must flip to PASS, and it is exactly the kind of
+defect a per-window pixel diff can never see.
+
+FIX DIRECTION (fits the overhaul as a new rank, agent-side): the window-acceptance predicate must
+treat "was mapped, is now cloaked / 1x1 / not enumerable" as an UNMAP event rather than a silent
+drop; unmap-before-forget must be structural, the same way rank 3 made CREATE-once structural.
+Note this interacts with the toast requirement (toasts must be KEPT while visible) and with the
+user's two new requirements recorded below.
+
+## User requirements added 2026-08-11 (not yet implemented)
+1. **The Win key must NOT work from a seamless app.** The user confirmed the agent does not
+   currently suppress it. In seamless mode a guest Start menu opened by a stray Win press is
+   unmanaged UI in the middle of the dom0 desktop.
+2. **The Start menu should instead be reachable as a regular app-menu item** (a normal launcher
+   entry for the qube), which is the Qubes-native way to expose it.
+Both are Track A / 2A-chrome scope and must wait until the menu is proven to render correctly.
