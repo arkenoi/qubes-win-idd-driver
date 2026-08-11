@@ -7392,3 +7392,54 @@ RULES GOING FORWARD:
  3. dom0's `qtest fullshot` geometry.txt remains the authoritative list of what dom0 shows.
  4. To make the list trustworthy the sampler would have to run with the agent's privileges/desktop
     (a service, or launched via the agent) - deferred, not needed for pixel comparison.
+
+## 2026-08-11 (cont.) — TOAST CROP: BUILT, DEPLOYED, MEASURED — WORKS MECHANICALLY, **OVERCROPS**
+
+CI: run 31526572625, all three jobs green (gui-agent, idd-driver, package) - first proof the
+toastcrop/UIA/COM code compiles at all (it cannot be built locally; both reviewers could only
+inspect it). Artifact gui-agent.exe sha256 5b80f2e100aae67eb158bff04a924049aebec918c97af3dda264cbd50f22f79d.
+
+DEPLOYED to win11-24h2 via guest/swap-agent.ps1 (elevated, .orig backup kept). **Installed binary
+hash verified equal to the CI artifact before any measurement was taken.**
+
+A/B ON THE SAME LIVE WINDOW (the persistent OneDrive "Turn On Windows Backup" toast - it outlives
+an agent restart, so this is a real before/after on one window, not two similar ones):
+    before (shipped agent): 1524,700  396x332
+    after  (CI build)     : 1540,730  364x289
+    => insets applied 16 / 30 / 16 / 13 - EXACTLY the values the plan's original guest probe
+       measured on a collapsed banner. The mechanism works end to end: classifier, UIA query,
+       cache, GetWindowData crop, and every downstream consumer followed it.
+
+**BUT THE RESULT IS WRONG (defect, do not ship).** Judged by pixels, inside the new announced rect:
+ - the toast's HEADER ROW is gone - the "OneDrive ... X" bar, including the CLOSE BUTTON;
+ - a strip of desktop wallpaper + the Windows build watermark appears along the BOTTOM.
+So the announced rect is offset down relative to the real card: FlexibleToastView is the CONTENT
+element, not the visible card. This is exactly the "silent overcrop clipping the 40x40 action
+buttons" failure the plan named as the DANGEROUS one, realised on the header instead. The
+plausibility guard did not catch it (364/396 = 92%, 289/332 = 87%, both far above the 40% floor)
+and it cannot: an offset crop of the right SIZE is invisible to a size-ratio test.
+Corroborating measurement from the earlier uncropped capture: the visible card's left edge is at
+1526 (inset ~2), not 1540 (inset 16) - so the horizontal insets are wrong too, in the same way.
+
+FAIL-SOFT CHECK PASSED (the plan's acceptance check, run for real): setting
+HKLM\...\Qubes Tools\gui-agent\ToastCropDisable=1 and restarting the agent returned the toast to
+1524,700 396x332 - today's uncropped-but-visible behaviour. **The escape hatch works, and the
+guest has been left in that state**, so it is not sitting on the overcrop.
+
+NEXT (measured, not guessed): the crop target must be the outermost visible XAML element (the card
+including its header), not FlexibleToastView. Choosing it needs a UIA tree dump WITH bounding
+rects from the live banner - and `guest/toast-uia-tree.ps1` (written today) CANNOT get it, because
+a qrexec-launched process cannot see shell surfaces at all (the same input-desktop blindness
+documented above: it printed NO-TOAST-WINDOW while dom0 had the toast mapped). The dump therefore
+has to come from inside the agent, which is already on the input desktop - i.e. add a one-shot
+"log every descendant + rect" debug flag to toastcrop.c and read it from the agent log.
+
+## 2026-08-11 (cont.) — SEPARATE DEFECT: stale window border left on the dom0 screen
+After the agent restart, the dom0 screen showed TWO red borders around the toast area: the live
+one at the new 1540,730 rect AND a stale rectangle at the OLD 1524,700-1919,1031 coordinates,
+persisting across captures ~1 min apart. dom0's geometry.txt lists ONLY the live window, so this
+is not a mapped ghost - it is unrepainted pixels left behind when the old X window was destroyed.
+This is very likely what the user saw earlier and described as "old one is there too". Not yet
+diagnosed: whether the daemon fails to trigger a repaint of the exposed area, or the WM/compositor
+does. Worth a dom0-side look before assuming it is ours - and if it is the daemon's, it falls under
+the CLAUDE.md exception for defects outside QWT scope (report upstream, user approves the text).
