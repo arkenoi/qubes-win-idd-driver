@@ -7,7 +7,7 @@ contains several same-day RETRACTIONS) over any prose summary, including this on
 
 | VM | build | agent | state |
 |---|---|---|---|
-| **win11-fresh** | Win11 **25H2** 26200.8875 | **SHIPPED binary restored** (`.orig`) after the new one crash-looped | Running, display healthy, a persistent OneDrive toast is on screen |
+| **win11-fresh** | Win11 **25H2** 26200.8875 | **CI build `d342e93a`** (geometric crop + crash fix) — deployed, hash-verified, crash-loop check PASSED (PID stable 75 s, log count static) | Running, display healthy, Start + a persistent OneDrive toast on screen |
 | **win11-24h2** | Win11 24H2 26100.8875 (clone, pre-eKB) | CI build `5b80f2e1` with `ToastCropDisable=1` (= behaves like shipped) | **Halted** (shut down so two guests' windows stop overlapping) |
 
 - Clone gotcha: `qvm-clone` copies `qemu-extra-args` pointing at `/dev/xvdi`; the clone will not
@@ -27,6 +27,15 @@ contains several same-day RETRACTIONS) over any prose summary, including this on
 2. **Shell-popup crop** (`agent` HEAD): finds the visible card GEOMETRICALLY (largest descendant
    fully inside the window and strictly smaller in both dimensions) instead of by XAML class name,
    and covers ShellExperienceHost / StartMenuExperienceHost / SearchHost.
+
+## S1a IS FIXED AND CONFIRMED (2026-08-11 late)
+
+With `d342e93a` on win11-fresh, dom0 announces:
+    Start           544,219  **832x736**   (was 531,142 858x890; measured card left/width 544/832)
+    New notification 1540,730 **364x289**  (was 1524,700 396x332)
+Both now equal the drawn card. **The user confirms "menu looks fine".** This is GWeck's S1a
+resolved on the surface he reported it on. Not yet done: a cold-boot repeat, and the same check on
+24H2 to prove no regression there (24H2's Start has no margin, so its announce must stay 858x890).
 
 ## The bug that matters most tomorrow
 
@@ -89,12 +98,30 @@ a guest.
 5. Ranks 4-7 of `docs/PLAN-stability-overhaul.md`, and fire the FI flags so ranks 2-3 stop being
    unproven.
 
-## Open user requirements not yet designed
+## Open user requirements — RECORDED ONLY, user said do NOT implement yet
 
-- The Win key must NOT work from a seamless app (the agent does not suppress it today); Start
-  should instead be reachable as a normal app-menu item.
-- Notification placement: with the guest at 1920x1080 inside a 5120x1440 dom0 screen, guest-
-  authoritative placement puts toasts mid-dom0-screen. The user wants them positioned correctly and
-  stacked when there are several. Note the agent drives the guest to the dom0 viewport in fullscreen
-  mode (log shows `RESAPPLIED 5120x1440`), so part of this may be a mode/config question rather
-  than an agent change — measure before designing.
+All stated by the user on 2026-08-11 after seeing the fixed rendering. None are designed.
+
+1. **Start menu should be a NORMAL window, not override_redirect.** It is currently announced
+   `or=1` (a popup: no WM frame, guest-positioned, no focus). The user wants it WM-managed.
+   Consequences to think through before touching: `IsPopup` decides this (main.c ~826); the daemon
+   re-latches override_redirect at each MSG_MAP and MSG_CONFIGURE can never turn it back on
+   (xside.c:2104); Linux-parity says menus ARE override-redirect, so this deviates from the Linux
+   agent deliberately and needs a reasoned justification before it goes upstream.
+2. **Start should also be reachable as a regular app-menu item** (a launcher entry for the qube),
+   which is the Qubes-native way to expose it.
+3. **The Win key must NOT work from a seamless app.** Confirmed by the user that the agent does not
+   suppress it today. In seamless mode a stray Win press opens unmanaged guest UI mid-desktop.
+4. **Toasts: still not clickable.** The crop fixed the geometry, not the interaction. Note the
+   already-verified fact in docs/TOAST-fix-plan.md: HandleButton's dx/dy are ignored because
+   dwFlags never includes MOUSEEVENTF_ABSOLUTE|MOUSEEVENTF_MOVE, so clicks land wherever
+   HandleMotion last put the cursor — that is the first thing to check, not the crop.
+5. **Toasts: wrongly positioned.** The guest runs 1920x1080 inside a 5120x1440 dom0 screen, so a
+   guest-bottom-right toast lands mid-dom0-screen. The agent DOES drive the guest to the dom0
+   viewport in fullscreen mode (log: `RESAPPLIED 5120x1440`), so measure which mode the guest is in
+   before designing anything - this may be mode/config, not an agent change. Beware the standing
+   rule: the dom0 window is the source of truth and the guest must never be resized on its behalf.
+6. **Multiple toasts must stack relatively**, not overlap.
+7. **Toasts should be draggable.** Today they are override_redirect, so the dom0 WM does not move
+   them; making them draggable interacts directly with requirement 1 (same OR question) and with
+   the HandleConfigure suppression the crop added for cropped windows.
