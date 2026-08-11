@@ -7021,3 +7021,37 @@ CAUSALITY still two-way (guid-log timestamps will disambiguate):
 New fact vs 24H2 findings: the flip storm + wedge is NOT 24H2-CoreWindow-specific — 25H2's
 Wnd_StartFeed path drives the identical storm. Single Win-press on 25H2 is CLEAN (Start renders
 fine in dom0, no dialog) — severity needs the rapid-toggle storm.
+
+## 2026-08-11 (cont.) — S1b ROOT CAUSE CONFIRMED FROM dom0 guid LOG; causality RESOLVED (H2)
+
+dom0 guid log tail (user-supplied, same storm run):
+    Verify failed: (int) untrusted_crt.width >= 0 && (int) untrusted_crt.height >= 0
+    (zenity:336840) ... 18:19:35.734   <- the Ignore/Terminate dialog process
+    msg 0x90 without CREATE for 0x1018a
+
+FACTS this settles:
+1. The failing check is EXACTLY xside.c:2937-2938 in handle_create (MSG_CREATE) — the predicted
+   line, now PROVEN not inferred. A negative-as-int width or height was sent for a window.
+2. **Causality is H2, not H1.** zenity (the dialog) is stamped 18:19:35.734; the vchan flood is
+   18:19:42.246 and the capture death 18:19:43.258 — the dialog came ~6.5 s BEFORE the wedge.
+   So: bad MSG_CREATE -> daemon VERIFY fails -> modal dialog -> daemon stops draining the vchan ->
+   agent pump blocks in VchanSendBuffer -> CaptureThread times out and dies -> display frozen.
+   H1 (flood-first) is REJECTED for this run. The 24H2 wedge (no dialog) remains a separate,
+   flood-only path — both exist; the dialog path is faster and worse.
+   => ANY single suspicious message = guest display DoS. Bounded/non-blocking vchan writes are
+   therefore not a nice-to-have; they are the containment for a whole failure class.
+3. `msg 0x90 without CREATE for 0x1018a` — 0x90 = 144 = MSG_MAP (enum in qubes-gui-protocol.h:148
+   with MSG_KEYPRESS=124... MSG_CREATE=131, MSG_DESTROY=132? — decode via header, MSG_UNMAP is
+   annotated 133). Same HWND 0x1018a as the storm. The rejected CREATE means the daemon has NO
+   window object, so the agent's subsequent MAP is orphaned: agent and daemon state DIVERGE
+   after a rejected CREATE. Any fix MUST keep them consistent (drop dependent messages too).
+4. Agent send path has NO sanity guard: SendWindowCreate (agent/gui-agent/send.c:287) computes
+   width = rcWindow.right - rcWindow.left from WINDOW_DATA X/Y/Width/Height and sends it
+   unvalidated; the daemon's own clamp (min/max to MAX_WINDOW_*) happens only AFTER the VERIFY,
+   so a negative value is fatal rather than clamped. Note the guard is NOT at send.c:600 as the
+   earlier handover claimed — that reference should not be reused without re-checking.
+
+STILL UNKNOWN: which WINDOW_DATA field went negative and why (25H2 StartFeed geometry). The dom0
+log prints the failing values only at log_level>0 for successful creates, not for rejects. Next
+diagnostic: agent-side QGAPROTO trace already logs w/h per CREATE (send.c:~336) — re-run the storm
+with g_ProtoTrace on and find the CREATE whose w or h is huge-unsigned (= negative as int).
