@@ -6787,3 +6787,37 @@ Two things resolved.
    registered by install-updater-agent.ps1 into %QUBES_TOOLS%\qubes-rpc) emits that JSON on stdout
    = the vchan to the dom0 caller. dom0-INITIATED, read-only, so no VM->dom0 policy is needed; dom0
    polls it for live availability + progress. Handler verified emitting the JSON on the guest.
+
+## 2026-08-11 (cont.) — updates rearchitected to the LINUX MODEL: dom0-driven, guest never auto-installs
+
+User direction: behave like Linux qubes - availability notify + dom0 updater drives the install.
+Researched the real contract from source (cloned qubes-core-admin-linux; the vmupdate tool lives
+THERE, not in a qubes-vm-update repo):
+- Linux availability = a timer calling `qrexec-client-vm dom0 qubes.NotifyUpdates /bin/sh -c 'echo 0|1'`
+  (upgrades-status-notify). Our scheduled scan-only task echoing the count is the exact equivalent.
+- dom0 `qubes-vm-update` runs its agent in the VM via qubes.VMExec and parses PROGRESS AS BARE FLOAT
+  LINES 0..100 ON STDERR (qube_connection.py: float(line), 100.0 ends progress, later stderr lines
+  shown as messages). Exit 0 = success, EXIT 100 = NO UPDATES, else error. stdout = logs.
+- Stock qubes-vm-update cannot drive Windows (it injects a tar of its Python agent and runs
+  python3), so the guest speaks the SAME protocol behind its own service + a thin dom0 wrapper;
+  future upstream integration is then mechanical.
+
+Implemented (replaces the short-lived qubes.WindowsUpdateStatus poll service - REMOVED, wrong model):
+- guest/wu-update.ps1 -> rpc `qubes.WindowsUpdate`: kicks the on-demand SYSTEM task
+  QubesWindowsUpdateRun (`-Action full`; rpc handlers are unelevated, DISM needs admin - the
+  SYSTEM-task path is proven), tails update-status.json, emits the float protocol, exit 0/100/1.
+  2h hard bound; attaches to an in-flight run instead of clobbering it; baselines the status file.
+- install-updater-agent.ps1 registers both tasks + the service. GOTCHA: schtasks warns on stderr
+  for /st-in-the-past ("Task may not run..."), and under ErrorActionPreference=Stop that WARNING
+  became a terminating NativeCommandError killing the deploy mid-script (first deploy silently
+  lost step 4). Fixed by registering the run task from XML with an EMPTY <Triggers/> (purely
+  on-demand, no warning). Scan task unchanged: scan-only, never installs - "not auto" holds.
+- dom0/14-install-qvm-windows-update.sh -> `qvm-windows-update <qube>|--all` (user installs in
+  dom0): qvm-run --service --pass-io qubes.WindowsUpdate, renders floats as a progress line,
+  maps exit 100 -> "no updates". dom0-initiated => no policy needed.
+
+VALIDATED on win11-fresh (handler invoked exactly as the rpc would):
+  stderr: 0.0 / 3.0 / 100.0   stdout: "no updates available"   EXIT=100        (success contract)
+  with QubesWindowsUpdateRun deliberately deleted: EXIT=1 + "cannot start..."  (check CAN fail)
+NOT yet validated: a real install pass through this path (guest fully patched, count=0) - needs an
+out-of-date guest; and the dom0-side wrapper end-to-end (user runs 14-install + qvm-windows-update).

@@ -73,18 +73,49 @@ $o = & schtasks /create /tn QubesWindowsUpdateScan /xml "$f" /f 2>&1
 Log ("REGISTER QubesWindowsUpdateScan rc=$LASTEXITCODE : " + ($o -join ' '))
 if ($LASTEXITCODE -ne 0) { throw "schtasks register failed (rc=$LASTEXITCODE)" }
 
-# 4. register the qubes.WindowsUpdateStatus rpc service so dom0 can POLL live status (availability +
-#    download/install progress). The handler emits update-status.json on stdout (the vchan to the
-#    dom0 caller); read-only, so safe to allow at will. dom0-initiated, so no VM->dom0 policy needed.
+# 4. the dom0-DRIVEN update path, Linux-updater style (update runs only when dom0 asks):
+#    - QubesWindowsUpdateRun: on-demand SYSTEM task running `-Action full` (rpc handlers are
+#      unelevated and DISM needs admin; the SYSTEM-task path is proven). No triggers - fires
+#      only via schtasks /run.
+#    - qubes.WindowsUpdate rpc service: dom0 calls it to start the run; the handler
+#      (wu-update.ps1) kicks the task, tails update-status.json, and speaks the qubes-vm-update
+#      protocol (float progress on stderr, exit 100 = no updates). dom0-initiated, no policy.
+# XML with an EMPTY Triggers block: purely on-demand, and no schtasks /st-in-the-past warning
+# (which, on stderr under ErrorActionPreference=Stop, would kill this script mid-deploy).
+$runXml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>QWT-NG: perform a full Windows update pass (dom0-driven via qubes.WindowsUpdate; never fires on its own)</Description></RegistrationInfo>
+  <Triggers />
+  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>powershell.exe</Command><Arguments>-NoProfile -ExecutionPolicy Bypass -File "$agent" -Action full -RelayExe "$exe"</Arguments></Exec></Actions>
+</Task>
+"@
+$fr = Join-Path $env:TEMP 'qubes-wu-run.xml'
+[IO.File]::WriteAllText($fr, $runXml, [Text.Encoding]::Unicode)
+$o = & schtasks /create /tn QubesWindowsUpdateRun /xml "$fr" /f 2>&1
+Log ("REGISTER QubesWindowsUpdateRun rc=$LASTEXITCODE : " + ($o -join ' '))
+if ($LASTEXITCODE -ne 0) { throw "schtasks register (run task) failed (rc=$LASTEXITCODE)" }
+
 $qt = $env:QUBES_TOOLS; if (-not $qt) { $qt = 'C:\Program Files\Qubes Tools' }
 $handlerDir = Join-Path $qt 'qubes-rpc-services'
 $svcDir     = Join-Path $qt 'qubes-rpc'
 if ((Test-Path $handlerDir) -and (Test-Path $svcDir)) {
-    Copy-Item (Join-Path $SetupRoot 'wu-status.ps1') (Join-Path $handlerDir 'wu-status.ps1') -Force
-    $map = 'c:\windows\system32\cmd.exe /c powershell.exe -executionpolicy bypass -noninteractive -inputformat none -file "%QUBES_TOOLS%\qubes-rpc-services\wu-status.ps1"'
-    [IO.File]::WriteAllText((Join-Path $svcDir 'qubes.WindowsUpdateStatus'), $map, [Text.Encoding]::ASCII)
-    Log 'registered qubes.WindowsUpdateStatus rpc service (dom0 polls live status)'
+    Copy-Item (Join-Path $SetupRoot 'wu-update.ps1') (Join-Path $handlerDir 'wu-update.ps1') -Force
+    $map = 'c:\windows\system32\cmd.exe /c powershell.exe -executionpolicy bypass -noninteractive -inputformat none -file "%QUBES_TOOLS%\qubes-rpc-services\wu-update.ps1"'
+    [IO.File]::WriteAllText((Join-Path $svcDir 'qubes.WindowsUpdate'), $map, [Text.Encoding]::ASCII)
+    # retire the short-lived poll service - progress now streams over the update call itself
+    Remove-Item (Join-Path $svcDir 'qubes.WindowsUpdateStatus'), (Join-Path $handlerDir 'wu-status.ps1') -Force -EA SilentlyContinue
+    Log 'registered qubes.WindowsUpdate rpc service (dom0-driven update)'
 } else {
-    Log 'qubes-rpc dirs missing - skipped status service (is QWT installed?)'
+    Log 'qubes-rpc dirs missing - skipped rpc service (is QWT installed?)'
 }
 Log 'updater agent deployed'
