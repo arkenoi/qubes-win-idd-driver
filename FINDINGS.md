@@ -7584,3 +7584,31 @@ Automated S1a testing is now possible.
 display live; killed+restarted), Start announces 544,219 832x736 = the drawn card.
 **Persistent toast trigger**: guest/fire-toast.ps1 (reminder-scenario toast stays until
 dismissed) - gives a stable shell surface for measurements.
+
+## 2026-08-12 (cont.) — THE POISONED STATE FOUND: believed 5120x1440 vs actual 1920x1080
+
+guest/geometry-truth.ps1 on the live guest: actual mode 1920x1080 (IddSampleDriver active),
+but the agent's log shows RESREQ 5120x1440 src=lastapplied -> **RESAPPLIED 5120x1440 (readback
+CONFIRMED it applied)** at 00:32:03 - and the mode later REVERTED to 1920x1080 with no agent
+request and no agent notice. g_ScreenWidth/Height stayed 5120x1440. Consumers skewed:
+ - HandleMotion/HandleButton normalize by believed size, Windows denormalizes over the actual
+   primary -> injected pointer scaled by (1920/5120, 1080/1440) = dom0 clicks land wrong.
+   This is the S2 class error AND (with HandleButton's dead dx/dy) the unclickable toasts.
+ - WaCompute clamps to believed screen -> rect exceeds the real 1920x1080 -> SPI_SETWORKAREA
+   0x57 every 30 s, forever (observed 51x).
+ - SendScreenGrants grants pages for 5120x1440 (7200) while the capture context is 1920x1080
+   (2025) = the standing A3CHECK mismatch. NOTE: granting 7200 pages of a 2025-page surface
+   needs a look on its own (what memory backs the excess?).
+WHAT REVERTS THE MODE IS STILL UNIDENTIFIED - watch for RESDRIFT lines on the fixed build.
+
+## Fix bundle (agent b92506c..8be83b8, submodule bump cca7d4e), verified in code + adversarial
+review, NOT yet run on a guest:
+ 1. capture.c: slow main loop tolerated up to 15 s (was: 1 s timeout = fatal full reset =
+    defect B). FI proof: FI_PUMP_STALL.
+ 2. HandleButton: clicks carry their own absolute position (ButtonAbsolute=1 default).
+ 3. CREATEDUP clears the destroyed ring (failed-DESTROY damage-drop, code-proven).
+ 4. Wobble probe (per-rect GetRealWindowRect+lock) opt-in via ProtoTraceWobble.
+ 5. toastcrop: UIA on a dedicated worker (own IUIAutomation, no shared lock during RPC),
+    tracking path cache-only, PokeWindowTracking on resolve, 2 s whole-walk deadline.
+ 6. resolution.c: adopt-applied on mismatch (fix A2), ResolutionAdoptCurrent on
+    WM_DISPLAYCHANGE + 2 s drift tick (RESDRIFT), known-unappliable memo (60 s TTL).
