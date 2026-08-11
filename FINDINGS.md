@@ -6993,3 +6993,31 @@ win11-fresh root usage ≈ 17.4 GB of 80 GB. Space is a non-issue.
   now fully known — no more policy archaeology.
 - NEXT: S1a/S1b repro on 25H2 (Win-key Start storm; `qtest fullshot` is the dom0-dialog
   detector).
+
+## 2026-08-11 (cont.) — S1b DIALOG REPRODUCED ON 25H2 (win11-fresh, 26200.8875)
+
+Repro: guest/win-start-probe.ps1 -Count 30 -DelayMs 400 (Win-key toggle storm) with Notepad open.
+Observed, in order (agent log = instrumentation/gweck-post44/25h2-s1b-repro-gui-agent-tail.log):
+1. Same flip storm as 24H2, now via PER-WINDOW slice-fed buffers: Start window 0x1018a cycles
+   PwAttach 1920x1032 (1935 pages) -> PwDetach -> PwAttach 858x890 (746 pages) -> Unmap/Map,
+   ~1 full cycle/sec under the storm (each = grant rebuild + MSG churn).
+2. 18:19:42.246 `VchanSendBuffer: vchan buffer full, blocking write` (thread 4164 = main pump).
+3. 18:19:43.258 `CaptureThread: error/timeout waiting for frame processing` x2 (thread 4884).
+4. Agent log SILENT thereafter (main pump still blocked in vchan write) — no recovery fired.
+5. dom0 showed the GWeck S1b dialog (user-observed + captured in fullshot, scratchpad-local):
+   "The domain win11-fresh attempted to perform an invalid or suspicious GUI request ...
+   Ignore / Terminate". EXACT trigger message unknown — needs dom0 guid log (user asked).
+6. Display partially frozen: calc launched post-wedge never appeared in dom0; but a OneDrive
+   popup DID render — either mapped pre-wedge or the slice-fed per-window path outlives the
+   dead capture thread. Notepad content static.
+
+CAUSALITY still two-way (guid-log timestamps will disambiguate):
+  H1 storm floods vchan -> wedge -> some post-wedge/garbage announce trips the daemon VERIFY;
+  H2 a bad announce trips the dialog FIRST -> modal dialog stops the daemon reading the vchan
+     -> vchan fills -> agent pump blocks -> capture dies. H2 would make the dialog itself the
+     wedge MECHANISM (any suspicious message = display DoS), raising fix priority for bounded
+     vchan writes. On 24H2 the same wedge occurred WITHOUT a dialog, so H1 exists standalone.
+
+New fact vs 24H2 findings: the flip storm + wedge is NOT 24H2-CoreWindow-specific — 25H2's
+Wnd_StartFeed path drives the identical storm. Single Win-press on 25H2 is CLEAN (Start renders
+fine in dom0, no dialog) — severity needs the rapid-toggle storm.
