@@ -6839,3 +6839,48 @@ main, so even an error path restores the routeless baseline. Verified live: scan
 "proxy removed, relay stopped (offline baseline restored)" -> netsh shows Direct access, no relay
 process. Expected residual: a bounded burst of UpdatesProxy lines DURING a scan/update pass only.
 Immediate cleanup also applied on win11-fresh (2 lingering relays killed, proxy reset).
+
+## 2026-08-11 (cont.) — REPRODUCED a Start-menu-breaks-under-IDD bug on win11-fresh (24H2); it is a SIBLING of GWeck's, not identical
+
+Goal: reproduce GWeck's S1 (Win key -> garbled/no menu + dom0 "suspicious GUI request" dialog) on
+win11-fresh with IDD active. Result: reproduced the USER-FACING breakage (no usable Start menu) via a
+concrete, different-from-hypothesized mechanism; did NOT reproduce the dom0 dialog; and FALSIFIED the
+workflow's leading S1 theory on this guest.
+
+Setup confirmed: IddSampleDriver Device = OK/active, Basic Display Adapter = Error/disabled; desktop
+\\.\DISPLAY2 = 0,0,5120,1440.
+
+FALSIFIED here: the "EnumDisplaySettings fails on IDD -> divide by dmPelsWidth -> INT_MIN -> MSG_CREATE
+negative width -> daemon VERIFY dialog" chain. On win11-fresh the agent math (main.c:750-760) runs CLEAN:
+EnumDisplaySettings OK, pels=5120x1440, dmPosition=0,0, scale=1.0, all rects positive. No INT_MIN, no
+negative dims, no dialog. So GWeck's dom0 dialog is 25H2-specific and needs a different trigger (still open).
+
+REPRODUCED (live gui-agent log + fullscreen dom0 shot, evidence in scratchpad (local only, dom0 shot leaks other qubes - not committed)
+scratchpad local shot): press Win ->
+- The Start CoreWindow (0x1018a, cls Windows.UI.Core.CoreWindow title "Start") is PARKED OFF-SCREEN at
+  16384,6119 (=0x4000, the classic Windows park coord); DWMWA_EXTENDED_FRAME_BOUNDS agrees. Size ~5120x1384.
+- It carries a COMPLEXREGION clip (GetWindowRgn type 2), box (window-relative) 2131,502,2989,1392.
+- GetRealWindowRect adds the parked origin to the region: 2131+16384=18515 -> announces the Start card at
+  ~18515,6621 (858x874), ENTIRELY OUTSIDE the 5120x1440 desktop. The g_StartWindow border fixup
+  (main.c:792-801) operates on the already-off-screen rect.
+- The reported size then FLIP-FLOPS 5120x1384/1392 <-> 858x890 <-> 858x874 several times in ~2s (region
+  present vs momentarily absent as the open animation plays). Each flip = PwResizeWindow grant rebuild
+  (detach+reattach) + a SendWindowUnmap+SendWindowMap pair. A MAP/UNMAP/grant STORM.
+- Interleaved: "GetRealWindowRect failed 0x80070006 The handle is invalid" every ~1.5s, and finally
+  "HandleConfigure: window 0x1018a not tracked" - dom0's configure echo races in after the agent already
+  unmapped it. Net: Start ends UNMAPPED; dom0 renders NO Start menu (fullscreen shot shows the guest
+  console but no menu). = GWeck's "Windows key -> no usable menu."
+
+Root cause (24H2 path): the agent tracks the Win11 Start CoreWindow which is parked off-screen, then
+double-counts the parked origin into its window-relative clip region, announcing an off-desktop window,
+and thrashes its size as the region blinks. Distinct from GWeck's 25H2 path where there is NO
+CoreWindow (winenum: Wnd_StartFeed instead), so g_StartWindow=FindWindow("Windows.UI.Core.CoreWindow",
+"Start")=NULL and all Start special-casing is DEAD - his full-screen Wnd_StartFeed is instead accepted
+as a plain window (IsPopup full-screen demotion, main.c:826) and PrintWindow-garbled. Same symptom
+class ("no usable Start under IDD"), two different code paths.
+
+Candidate fix (general, safe, helps both): reject/clamp any window whose computed rect lies ENTIRELY
+outside the desktop bounds (left>=screenW or top>=screenH or right<=0 or bottom<=0) before MSG_CREATE/
+MAP - an off-screen announce is never useful and is the shared failure. Plus: don't thrash - coalesce
+the region-blink size flapping. NOT YET IMPLEMENTED (instrument-first; needs the coalescing designed so
+it does not regress legit fast resizes). The dom0 dialog (25H2) remains unreproduced - needs a 25H2 target.
