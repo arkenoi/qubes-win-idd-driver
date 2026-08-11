@@ -1,6 +1,8 @@
 #!/bin/bash
-# Win10 phase retry: identical to e2e-run.sh phase but the swap goes through run-elevated.ps1
-# (win10-clean has UAC token filtering; the Win11 guests have EnableLUA=0 baked).
+# Win10 phase retry. PRECONDITION: the user has set EnableLUA=0 in win10-clean and rebooted
+# (its original HIGHEST-task elevation was closed by a Windows update; run-elevated.ps1 also
+# fails on this build - its own schtasks is denied). With EnableLUA=0 the qrexec token is
+# unfiltered like the Win11 rigs, so plain swap-agent deploys. Aborts fast if still filtered.
 cd /home/user/qubes-win-idd-driver || exit 1
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 S=/home/user/qubes-win-idd-driver/scratchpad/e2e
@@ -9,12 +11,24 @@ log(){ echo "[$(date +%H:%M:%S)] $*" >>"$R"; }
 INC='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 WANT_SHA='83B69F62E532944A548F46C3B3D5DC17738A774FEACBE86E798B1A5A83C99619'
 export QTEST_VM=win10-clean
-log "=== PHASE win10-clean RETRY (elevated swap) ==="
+log "=== PHASE win10-clean RETRY (direct swap; assumes EnableLUA=0 applied by user) ==="
 bootwait 15 log || { log "win10 BOOT FAIL"; exit 1; }
 ./tools/qtest synctime >/dev/null 2>&1; log "win10 up + clock synced"
-timeout -k 8 120 ./tools/qtest push artifacts-fix5/gui-agent.exe guest/swap-agent.ps1 guest/run-elevated.ps1 guest/defect-evidence.ps1 guest/fire-toast.ps1 guest/open-start.ps1 guest/toastcrop-debug.ps1 guest/drag-measure.ps1 guest/reset-census.ps1 >/dev/null 2>&1 || { log "win10 push FAIL"; exit 1; }
-timeout -k 8 300 ./tools/qtest ps "& '$INC\\run-elevated.ps1' -Script '$INC\\swap-agent.ps1' -Arguments '-NewAgent \"$INC\\gui-agent.exe\"'" > "$S/win10-swap2.txt" 2>&1
-grep -q '"ok":  true' "$S/win10-swap2.txt" && log "win10 swap OK (elevated)" || { log "win10 swap STILL FAIL (see win10-swap2.txt)"; exit 1; }
+# PRE-FLIGHT: is the qrexec token now UNFILTERED? EnableLUA=0 + reboot removes UAC token
+# filtering, so the qtest shell lands as full admin (like the Win11 rigs). If this still
+# shows Medium/filtered, the user's change did not take (not applied, or not rebooted) -
+# fail fast with a clear message instead of running swap-agent and getting "not elevated".
+elev=$(timeout -k 8 40 ./tools/qtest run 'whoami /groups | findstr /I "S-1-16-12288 High Mandatory"' 2>/dev/null | tr -d '\r' | grep -iE 'High|12288' | head -1)
+if [ -z "$elev" ]; then
+  log "win10 STILL FILTERED - EnableLUA=0 not in effect (apply it + REBOOT the guest, then re-run). Aborting."
+  exit 3
+fi
+log "win10 token is now elevated: $elev"
+# Deploy exactly like the Win11 rigs: plain swap-agent, no run-elevated shim (that path's own
+# schtasks is denied on this build - it was the earlier failure).
+timeout -k 8 120 ./tools/qtest push artifacts-fix5/gui-agent.exe guest/swap-agent.ps1 guest/defect-evidence.ps1 guest/fire-toast.ps1 guest/open-start.ps1 guest/toastcrop-debug.ps1 guest/drag-measure.ps1 guest/reset-census.ps1 >/dev/null 2>&1 || { log "win10 push FAIL"; exit 1; }
+timeout -k 8 200 ./tools/qtest ps "& '$INC\\swap-agent.ps1' -NewAgent '$INC\\gui-agent.exe'" > "$S/win10-swap2.txt" 2>&1
+grep -q '"ok":  true' "$S/win10-swap2.txt" && log "win10 swap OK" || { log "win10 swap STILL FAIL (see win10-swap2.txt)"; exit 1; }
 timeout -k 8 150 ./tools/qtest ps "& '$INC\\defect-evidence.ps1'" > "$S/win10-h1.txt" 2>&1
 sleep 80
 timeout -k 8 150 ./tools/qtest ps "& '$INC\\defect-evidence.ps1'" > "$S/win10-h2.txt" 2>&1
