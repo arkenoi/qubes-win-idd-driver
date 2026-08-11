@@ -6738,3 +6738,24 @@ available for win11-fresh after the unquoted call. Wired into guest/qubes-window
 Report-Availability (split-token form). Policy is the stock default (@anyvm -> dom0 allow); no dom0
 change was needed or made. The dom0 target is literal `dom0`, never `_dom0` (that underscore came
 only from throwaway test scripts notify4/5.ps1, since deleted from the guest).
+
+## 2026-08-11 (cont.) — updater agent: scheduled scan reporting to dom0, deployed + validated
+
+Built guest/install-updater-agent.ps1: compiles the relay with the in-box csc (v4.0.30319, like
+winenum.cs), places qubes-windows-update.ps1, and registers scheduled task QubesWindowsUpdateScan
+(SYSTEM/HighestAvailable, BootTrigger + every PT6H) that runs `-Action scan` ONLY - scan reports
+availability; download/install stay on-demand so the task never blocks or reboots on its own.
+Mirrors the QubesNetworkReapply schtasks-XML convention.
+
+VALIDATED on win11-fresh (as SYSTEM, no user needed): deploy -> compiled+placed+registered rc=0;
+`schtasks /run` -> LastTaskResult=0x0; fresh update-status.json (phase=done, count=0, error=null);
+agent log shows the SYSTEM-run report crossing clean: `domain 'dom0' ... 'cmd /c echo 0'`, request
+accepted (no HandleServiceRefused). Guest is fully patched so the true count is 0 - correctly
+CLEARS the flag (N>0 delivery was proven separately via the quoting fix). Shipped as opt-in
+`install.cmd /updatesonly` (staged in make-setup.ps1 alongside activate-idd), parallel to /iddonly:
+add the updater to a guest that already has QWT, no MSI, no version/PV gate.
+
+NOT yet validated: the download+install path end-to-end against a REAL pending update (none exists
+on this guest now). That exercises Resolve-Catalog -> Fetch-Msu -> DISM, whose pieces were proven
+separately (1742->8875) but not through the single agent script in one run. Needs a guest behind on
+patches (or a pinned older base image) to close.

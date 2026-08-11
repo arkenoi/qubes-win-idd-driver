@@ -109,6 +109,12 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\disable-hw-accel.ps1') 'app hw-accel
 # IDD-only activator, run by `install.cmd /iddonly` to add/activate the IddCx driver on a guest
 # that already has QWT (no MSI, no version/PV gate). Uses idd-driver/ staged below.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activator') $OutDir -Force
+# Windows Update agent, deployed by `install.cmd /updatesonly`: the deploy script compiles the
+# relay (in-box csc, like winenum.cs), places the agent, and registers the scheduled scan that
+# reports update availability to dom0. All three staged from guest/ (single source of truth).
+foreach ($u in 'install-updater-agent.ps1', 'qubes-windows-update.ps1', 'qubes-updates-relay.cs') {
+    Copy-Item (Need (Join-Path $RepoRoot "guest\$u") "updater agent payload ($u)") $OutDir -Force
+}
 
 # --- the MSI ---------------------------------------------------------------------------
 $msiSrc = Join-Path $MsiArtifact 'installer.msi'
