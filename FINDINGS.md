@@ -7323,3 +7323,40 @@ user's two new requirements recorded below.
 2. **The Start menu should instead be reachable as a regular app-menu item** (a normal launcher
    entry for the qube), which is the Qubes-native way to expose it.
 Both are Track A / 2A-chrome scope and must wait until the menu is proven to render correctly.
+
+## 2026-08-11 (cont.) — RETRACTION + the REAL artifact, measured: announced rect > visible card
+
+**RETRACTION of the "ghost windows" entry above.** Two flaws, both mine:
+1. My guest enumeration is taken via qrexec, and a qrexec call STEALS FOCUS AND CLOSES THE START
+   MENU (established earlier the same session). So "dom0 has Start, guest does not" can be produced
+   by the instrument itself. The user also corrected me: nothing had been closed on their side.
+2. That same enumeration returned only Notepad/EdgeUi/Progman - it had also LOST Shell_TrayWnd,
+   which earlier runs did list. An enumeration missing the taskbar is not a trustworthy basis for
+   declaring anything absent.
+The Start menu subsequently vanished from dom0 on its own (user: "it vanished now"), which is what
+a correctly-unmapped window looks like. **The ghost claim is withdrawn as unproven.** The three
+unmatched SendWindowMap lines remain interesting but prove nothing on their own - a mapped window
+that is still legitimately open produces exactly the same log.
+`tools/rendercheck`'s ghost detector must therefore NOT be trusted while guest truth comes from a
+focus-stealing qrexec call; treat `ghosts_in_dom0` as a hint, not a verdict, until guest truth is
+collected without touching focus.
+
+**WHAT IS REAL, and it is the artifact the user described.** The "New notification" window is the
+OneDrive "Turn On Windows Backup" toast - a PERSISTENT ACTIONABLE notification ("Remind me again
+in: 1 Week", "Let's get started" / "No thanks"), so it legitimately stays until dismissed. Measured
+from the dom0 capture:
+    announced / bordered by dom0 : 1524,700  **396 x 332**   (border rect measured: exactly that)
+    actually visible toast card  : 1526,731  **377 x 287**
+    => dead margin INSIDE the announced rectangle: **19 px horizontally, 45 px vertically**
+The margin is not empty: it shows whatever was composited beneath (guest wallpaper here), and dom0
+draws its qube border around the FULL announced rect. That is precisely the user's "thin border,
+with some extra stuff within rectangle" and their "announced geometry does not match REAL geometry
+either". The cause is the usual Win11 convention gap - the window rect includes the drop-shadow /
+invisible margin, while the visible card is smaller (the same 7px-class discrepancy that made
+render-truth.ps1 need DWMWA_EXTENDED_FRAME_BOUNDS: 1440x753 vs 1426x746 for Notepad).
+
+This is exactly what `docs/TOAST-fix-plan.md` proposes (CropL/T/R/B in WINDOW_DATA applied inside
+GetWindowData) - now CONFIRMED LIVE with numbers instead of being a design guess, and it applies to
+any shadowed popup, not just toasts. Note the Start menu measured EXACTLY 858x890 border vs card
+earlier, i.e. Start does NOT show this margin - so the crop must be derived per window (from the
+DWM frame bounds vs window rect), never a constant.
