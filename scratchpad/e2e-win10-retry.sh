@@ -15,15 +15,17 @@ log "=== PHASE win10-clean RETRY (direct swap; assumes EnableLUA=0 applied by us
 bootwait 15 log || { log "win10 BOOT FAIL"; exit 1; }
 ./tools/qtest synctime >/dev/null 2>&1; log "win10 up + clock synced"
 # PRE-FLIGHT: is the qrexec token now UNFILTERED? EnableLUA=0 + reboot removes UAC token
-# filtering, so the qtest shell lands as full admin (like the Win11 rigs). If this still
-# shows Medium/filtered, the user's change did not take (not applied, or not rebooted) -
-# fail fast with a clear message instead of running swap-agent and getting "not elevated".
-elev=$(timeout -k 8 40 ./tools/qtest run 'whoami /groups | findstr /I "S-1-16-12288 High Mandatory"' 2>/dev/null | tr -d '\r' | grep -iE 'High|12288' | head -1)
-if [ -z "$elev" ]; then
-  log "win10 STILL FILTERED - EnableLUA=0 not in effect (apply it + REBOOT the guest, then re-run). Aborting."
+# filtering, so the qtest shell lands as full admin (like the Win11 rigs). Uses a marker-
+# delimited probe (elev-check.ps1) parsed ONLY after "=== RESULT ===" - a plain grep is
+# fooled by the qrexec command echo, which contains any literal we search for (verified
+# 2026-08-12: the earlier whoami|findstr gate false-matched its own echoed command line).
+timeout -k 8 120 ./tools/qtest push guest/elev-check.ps1 >/dev/null 2>&1
+tok=$(timeout -k 8 60 ./tools/qtest ps "& '$INC\\elev-check.ps1'" 2>/dev/null | tr -d '\r' | sed -n '/=== RESULT ===/,$p' | grep -oE 'TOKEN=(ELEVATED|FILTERED)' | head -1)
+if [ "$tok" != "TOKEN=ELEVATED" ]; then
+  log "win10 STILL FILTERED ($tok) - EnableLUA=0 not in effect (apply it + REBOOT the guest, then re-run). Aborting."
   exit 3
 fi
-log "win10 token is now elevated: $elev"
+log "win10 token is now elevated ($tok)"
 # Deploy exactly like the Win11 rigs: plain swap-agent, no run-elevated shim (that path's own
 # schtasks is denied on this build - it was the earlier failure).
 timeout -k 8 120 ./tools/qtest push artifacts-fix5/gui-agent.exe guest/swap-agent.ps1 guest/defect-evidence.ps1 guest/fire-toast.ps1 guest/open-start.ps1 guest/toastcrop-debug.ps1 guest/drag-measure.ps1 guest/reset-census.ps1 >/dev/null 2>&1 || { log "win10 push FAIL"; exit 1; }
