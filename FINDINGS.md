@@ -6699,3 +6699,42 @@ ORDER/prereqs matter (SSU/checkpoint before LCU). This fetch+install core is exa
 in-VM updater agent's download engine; progress (bytes/rate) is self-reported, no BITS/DO needed.
 tools built: guest/wu-diagnose.ps1, wu-fix-probe.ps1, wu-loopback-test.ps1, wu-enumerate.ps1,
 wu-distinct.ps1, wu-fullfiles.ps1, wu-catalog-probe.ps1, wu-catalog-get.ps1, wu-fetch-probe.ps1.
+
+## 2026-08-11 — qubes.NotifyUpdates from Windows: the payload crosses; the bug was ARGUMENT QUOTING
+
+The in-VM updater's `Report-Availability` (report the available-update count to dom0 so Qube Manager
+lights up "updates available") appeared unfixable across a long thrash — every attempt returned
+qrexec exit 0 but the flag never set. VERDICT: not a payload/stdio problem, not `_dom0`, not policy.
+It was that `qrexec-client-vm.exe`'s argument was being wrapped in double quotes.
+
+Mechanism, from source (upstream/ro/qubes-core-agent-windows + qubes-windows-utils):
+- `qrexec-client-vm.c` parses FOUR fields via `GetArgument()`: domain|service|user|localprogram.
+  It does NOT bridge its own stdin; it hands a trigger to the local qrexec-agent over the named pipe
+  `\\.\pipe\qrexec_trigger` and returns ERROR_SUCCESS(0) immediately. So **exit 0 means "told the
+  agent", NOT delivered/allowed** - it is worthless as a success signal. The agent then does policy +
+  vchan asynchronously and spawns the localprogram, whose STDOUT is the vchan to the dom0 service.
+- `exec.c:GetArgument()` reads the RAW `GetCommandLineW()`, skips the exe path, then splits the REST
+  on `QUBES_ARGUMENT_SEPARATOR` = `L'|'`. **It never strips quotes from fields.**
+
+The bug: passing `qrexec-client-vm.exe "dom0|qubes.NotifyUpdates|user|cmd /c echo N"` (whole string
+quoted, the natural instinct + what the relay does with @default) makes GetArgument split
+`"dom0|...|cmd /c echo N"` INCLUDING the wrapping quotes -> field1 = `"dom0` (literal leading quote),
+field4 = `cmd /c echo N"`. The daemon gets target `"dom0`, which is not a VM, and REFUSES it.
+Proven in the guest agent log (Q:\Qubes Logs\qrexec-agent-*.log):
+  req: domain '"dom0'  ... local command 'cmd /c echo 4242"'  -> HandleServiceRefused   (BROKEN)
+  req: domain 'dom0'   ... local command 'cmd /c echo 4343'   -> (accepted, flag set)   (FIXED)
+(The updates-proxy relay has the same latent artifact - it sends `"@default` - and only works because
+@default tolerates the junk prefix; a literal `dom0` does not.)
+
+FIX - pass the fields UNQUOTED so the command line reaches qrexec-client-vm clean:
+- cmd/batch: escape the pipes, no wrapping quotes:  `qrexec-client-vm.exe dom0^|qubes.NotifyUpdates^|user^|cmd /c echo N`
+- PowerShell (re-quotes any single arg with spaces, which would re-leak the quote): pass SPLIT tokens
+  so the pipe-bearing token has no spaces and is emitted verbatim:
+    & $qr 'dom0|qubes.NotifyUpdates|user|cmd' '/c' 'echo' "$count"
+  -> command line `...\qrexec-client-vm.exe dom0|qubes.NotifyUpdates|user|cmd /c echo N`, fields clean.
+The localprogram writes the count to STDOUT (cmd `echo N`); dom0's qubes-notify-updates `.strip()`s the
+line, so CRLF is harmless. VERIFIED end to end 2026-08-11: user confirms Qube Manager shows updates
+available for win11-fresh after the unquoted call. Wired into guest/qubes-windows-update.ps1
+Report-Availability (split-token form). Policy is the stock default (@anyvm -> dom0 allow); no dom0
+change was needed or made. The dom0 target is literal `dom0`, never `_dom0` (that underscore came
+only from throwaway test scripts notify4/5.ps1, since deleted from the guest).

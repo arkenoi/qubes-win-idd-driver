@@ -54,14 +54,24 @@ function Ensure-Proxy {
   }
 }
 
-# Report the available-update count to dom0. qubes.NotifyUpdates is allowed by DEFAULT for
-# TemplateVMs (no custom policy needed), so a Windows TEMPLATE qube lights up the update flag in
-# Qube Manager exactly like a Linux template. Same protocol: pipe the integer count to the service.
+# Report the available-update count to dom0's qubes.NotifyUpdates (target: bare dom0).
+# THIS build of qrexec-client-vm.exe takes ONE pipe-delimited command line "domain|service|user|
+# local program [args]" and TRIGGERS the service, running the local program whose STDOUT is the
+# vchan to the service - so the count is EMITTED by the local program (cmd /c echo N), NOT piped
+# to stdin (stdin never crosses). dom0's qubes-notify-updates .strip()s the line so CRLF is fine.
+#
+# CRITICAL quoting: qrexec-client-vm's GetArgument() splits the RAW command line on '|' and does
+# NOT strip quotes. Wrapping the whole "domain|...|prog" in double quotes therefore leaks a literal
+# quote into the target field -> domain parses as "dom0, a VM that does not exist, and the daemon
+# REFUSES it (proven: quoted -> HandleServiceRefused; unquoted -> accepted, flag set). PowerShell
+# re-quotes any single arg containing spaces, so pass SPLIT tokens: the first (no spaces) is emitted
+# verbatim with literal pipes; '/c' 'echo' $count append space-separated -> field4 = "cmd /c echo N".
 function Report-Availability($count){
   $qr='C:\Program Files\Qubes Tools\bin\qrexec-client-vm.exe'
   if(-not(Test-Path $qr)){ Log 'qrexec-client-vm.exe not found - cannot report to dom0'; return }
-  try { "$count" | & $qr dom0 'qubes.NotifyUpdates' 2>&1 | Out-Null; Log "reported $count update(s) to dom0 (qubes.NotifyUpdates)" }
-  catch { Log "qubes.NotifyUpdates failed (is this qube a TemplateVM?): $($_.Exception.Message)" }
+  try { & $qr 'dom0|qubes.NotifyUpdates|user|cmd' '/c' 'echo' "$count" 2>&1 | Out-Null
+        Log "reported $count update(s) to dom0 qubes.NotifyUpdates (exit $LASTEXITCODE)" }
+  catch { Log "qubes.NotifyUpdates report failed: $($_.Exception.Message)" }
 }
 
 function Get-Available {
