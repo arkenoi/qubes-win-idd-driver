@@ -7209,3 +7209,41 @@ RECOVERY OPTIONS for next session (none attempted): new user profile; DISM /Rest
 or restore from the `win11-24h2` clone and redo the eKB (loses nothing - the clone is intact).
 DISCIPLINE NOTE: run destructive-ish environment experiments (clock jumps) on the CLONE, not on
 the qube currently holding the only reproduction of a bug under investigation.
+
+## 2026-08-11 (cont.) — CLONE CONTROL: Start does NOT open on the CLEAN 24H2 clone either
+
+Brought up `win11-24h2` (the clone, made BEFORE the eKB and BEFORE any clock manipulation) to get a
+control for "did I break win11-fresh with clock jumps?".
+
+Startup gotcha, fixed: the clone would not boot - `qvm-start` hung and the VM stayed Halted. Cause:
+`qvm-clone` copied the `qemu-extra-args` FEATURE, which references `/dev/xvdi` (the answer-stick
+block device attached to win11-fresh). The clone has no such device, so libvirt could not build the
+domain. Fix: `qvm-features --unset win11-24h2 qemu-extra-args`. **Add this to any clone recipe.**
+SELF-INFLICTED INCIDENT while diagnosing that: two `until qtest run ...; sleep` wait-loops kept
+polling the halted VM, and qrexec AUTO-STARTS a halted target - so they hammered the system with
+repeated failing domain starts until the user noticed. **Never poll a halted VM with qrexec; poll
+`qtest state` instead.**
+
+CONTROL RESULT (this is the important part): on the clean 24H2 clone, **the Start menu does not open
+either**, under three different input methods, all injected from a qrexec session:
+  1. keybd_event VK_LWIN (down/up, held 50 s)          -> no Start
+  2. mouse_event click on the Start button (716,1056)  -> no Start
+  3. PostMessage(Shell_TrayWnd, WM_COMMAND, 305) + Ctrl+Esc -> no Start
+In every case the guest enumerates `Windows.UI.Core.CoreWindow 1x1 cloaked=2` — the Start surface
+EXISTS but is 1x1 and shell-cloaked, i.e. parked/closed, never laid out.
+
+CONSEQUENCE — RETRACTION OF A THEORY: "my clock jumps broke Start on win11-fresh" is now the WEAKER
+explanation, because a VM that never saw those jumps behaves identically. Do not carry that claim
+forward as established. What IS established: **synthetic input from a qrexec session does not open
+Start on either guest right now**, though the same probe demonstrably DID open it at 16:00-16:01 and
+again at ~18:17 UTC today (guest capture and dom0 fullshot both show it open). The difference between
+those working runs and now is NOT yet identified — candidate: session/input-desktop state, or the
+IDD-solo display configuration interacting with Start's layout (the 24H2 finding already showed the
+Start CoreWindow being parked off-screen at 16384,6119).
+
+So the S1a artifact ("thin border, extra stuff within rectangle" the user sees) remains UNCAPTURED,
+and the blocker is now "cannot open Start via automation at all", not "dom0 does not render it".
+Next diagnostic (cheapest first): (a) have the USER open Start by hand while a fullshot runs - one
+human keystroke settles both the artifact and whether the input path is the blocker; (b) check
+whether the interactive session is on a different window station/desktop from the qrexec service
+session; (c) test with the IDD inactive (Basic Display Adapter only) to see if Start lays out then.
