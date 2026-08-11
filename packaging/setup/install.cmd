@@ -14,6 +14,9 @@ REM     install.cmd /iddonly     add/activate the IddCx driver on a guest that A
 REM                              QWT installed, WITHOUT re-running the MSI - no version gate,
 REM                              no PV-disk 0x7B gate. Use this to add IDD to an install that
 REM                              predates IDD-by-default. Reboots when done.
+REM     install.cmd /updatesonly deploy the Windows Update agent on a guest that ALREADY has
+REM                              QWT: compiles the relay, places the agent, and registers the
+REM                              scheduled scan that reports update availability to dom0. No MSI.
 REM     install.cmd /nonet       omit the PV network drivers (see README.txt)
 REM     install.cmd /nodisk      omit the PV disk drivers (diagnostic only)
 REM     install.cmd /noapptweaks skip the app HW-accel pre-tweak (registry
@@ -48,8 +51,9 @@ if /i "%~1"=="/nodisk" ( set "PSARGS=!PSARGS! -NoPvDisk"         & shift & goto 
 if /i "%~1"=="/acceptpvdiskupgrade" ( set "PSARGS=!PSARGS! -AcceptPvDiskUpgrade" & shift & goto parse )
 if /i "%~1"=="/noapptweaks" ( set "PSARGS=!PSARGS! -NoAppTweaks" & shift & goto parse )
 if /i "%~1"=="/iddonly" ( set "IDDONLY=1" & shift & goto parse )
+if /i "%~1"=="/updatesonly" ( set "UPDATESONLY=1" & shift & goto parse )
 echo Unknown option: %~1
-echo Valid options: /auto /idd /iddonly /nonet /nodisk /acceptpvdiskupgrade /noapptweaks
+echo Valid options: /auto /idd /iddonly /updatesonly /nonet /nodisk /acceptpvdiskupgrade /noapptweaks
 exit /b 87
 :parsed
 
@@ -70,7 +74,13 @@ if defined IDDONLY (
   REM no PV-disk 0x7B gate. For an existing install that predates IDD-by-default (GWeck's case).
   powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%activate-idd.ps1" -Root "%HERE%"
 ) else (
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%Install-QwtImproved.ps1"%PSARGS%
+  if defined UPDATESONLY (
+    REM Deploy the Windows Update agent on a guest that ALREADY has QWT: compile the relay, place
+    REM the agent, register the scheduled scan that reports update availability to dom0. No MSI.
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%install-updater-agent.ps1" -SetupRoot "%HERE%" -BinDir "C:\Program Files\Qubes Tools\bin"
+  ) else (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%Install-QwtImproved.ps1"%PSARGS%
+  )
 )
 set RC=%errorlevel%
 echo.
