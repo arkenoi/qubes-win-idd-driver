@@ -7247,3 +7247,30 @@ Next diagnostic (cheapest first): (a) have the USER open Start by hand while a f
 human keystroke settles both the artifact and whether the input path is the blocker; (b) check
 whether the interactive session is on a different window station/desktop from the qrexec service
 session; (c) test with the IDD inactive (Basic Display Adapter only) to see if Start lays out then.
+
+## 2026-08-11 (cont.) — START MENU CAPTURED (user opened it by hand) — 24H2 renders it CORRECTLY
+
+The user opened Start manually on win11-24h2 and I took an immediate `qtest fullshot`. dom0's window
+list (the authoritative one, with the override_redirect column):
+    0x1c00190  531 142  858x890  or=1 mapped=1  Start
+    0x1c0018e 1524 700  396x332  or=1 mapped=1  New notification      <- a TOAST, mapped, override-redirect
+    0x1c0018b  123 129 1426x746  or=0 mapped=1  Untitled - Notepad
+
+Pixel measurement of the capture (numbers, not impressions):
+- the red qube border around the popup runs x 531..1388 (**858 px**) and y 142..1031 (**890 px**);
+- the announced geometry is **858x890** — an EXACT match, and the visible Start card fills it
+  (854 px wide inside the 2 px border on each side).
+VERDICT: on 24H2 the Start menu is announced with correct geometry and dom0 renders it correctly.
+The "thin border" the user sees is dom0's own border around an override-redirect popup, which is
+CORRECT Qubes behaviour (Linux qubes border menus the same way) — not a defect. No oversized
+rectangle, no stale-pixel band, no garbling on this build.
+
+So the S1a "garbled Start" remains a 25H2-side claim, unreproduced by us; 24H2 is now a clean
+CONTROL for it. Toasts are confirmed mapped as override-redirect windows on this build too.
+
+METHOD NOTE that unblocked this: **manual input works where every injected input path failed.**
+Automated keybd_event / mouse_event / WM_COMMAND all leave the Start CoreWindow at 1x1 cloaked=2.
+Any Start-related test therefore needs either a human keystroke or an input path we have not found
+yet; the storm probe measures the agent under Start CHURN, but cannot be trusted to have opened
+Start at all unless a guest-side capture confirms it. Also confirmed: a qrexec call taken while
+Start is open STEALS FOCUS and closes it — capture dom0 FIRST, ask the guest questions after.
