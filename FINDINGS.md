@@ -7151,3 +7151,33 @@ PERMANENT FIX (dom0, user-only): `qvm-sync-clock` / letting dom0 drive `qubes.Se
 (the handler `set-time.ps1` IS installed in the guest and would be correct), or changing the
 domain's RTC basis to UTC. Not attempted - dom0 is out of scope for this qube.
 Guest now left at TZ=FLE Standard Time (+03) so its wall clock reads the same face as dom0 logs.
+
+## 2026-08-11 (cont.) — RENDERING-CORRECTNESS INSTRUMENT + a retraction
+
+Built `tools/rendercheck` + `guest/render-truth.ps1`: compares GUEST truth (full-desktop capture
++ every visible top-level window) against what dom0 actually renders, per window, in pixels.
+Verified working: Notepad 0.0% differing on a clean run, 0.41% with a caret blinking.
+
+**RETRACTION (same-day, loud, per CLAUDE.md):** I claimed "with the Start menu open, dom0 has NO
+window for it — the S1a defect, caught automatically." That was WRONG. It came from `qtest shot`,
+which is per-window and CANNOT show override-redirect windows — and Start is override-redirect.
+`tools/qtest`'s own comment (line ~48) says exactly this, and I used the wrong capture anyway.
+The user confirmed dom0 DOES draw it: "thin border, with some extra stuff within rectangle".
+STANDING RULE going forward: **any claim about what dom0 displays must come from `qtest fullshot`**
+(its geometry.txt carries the override_redirect + mapped columns); per-window `shot` may only be
+used for pixel comparison of ordinary windows. rendercheck now runs fullshot and treats its
+geometry list as authoritative; the raw list is printed in every report.
+
+Two real defects the instrument found in its own first runs (both fixed in it):
+1. Guest truth must use DWMWA_EXTENDED_FRAME_BOUNDS, not GetWindowRect: Win11's ~7 px invisible
+   border made Notepad read 1440x753 while the agent announces (and dom0 renders) 1426x746.
+2. P/Invoke needs CharSet=Unicode or every window title marshals to its first character only.
+
+STILL OPEN (the real S1a work): characterise the "extra stuff within the rectangle" the user sees
+in the Start popup. Requires a fullshot taken WHILE Start is held open - ordinary qrexec calls
+steal focus and dismiss it, so the keypress and the capture must run concurrently (attempted
+once; the menu had already closed both times).
+
+Also visible in the dom0 terminal during this session (relevant to the clock work): `qvm-sync-clock`
+fails with "ClockVM sys-whonix is not running, aborting!" - so the permanent dom0-side clock fix
+needs sys-whonix running (or a different clockvm). `tools/qtest synctime` remains the workaround.
