@@ -42,6 +42,12 @@ function Save { $script:St.ts=(Get-Date).ToString('s'); ($script:St | ConvertTo-
 function Log($m){ Write-Host ((Get-Date -Format 'HH:mm:ss')+' '+$m) }
 function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-Null}; New-ItemProperty -Path $p -Name $n -Value $v -PropertyType $t -Force|Out-Null }
 
+# The proxy is up ONLY for the duration of a pass. Leaving the system-wide WinHTTP proxy set
+# turns the relay into an always-on escape hatch: every Windows background HTTP client (telemetry,
+# Edge/Defender update checks, NCSI, DO) discovers it and phones home, each connection spawning a
+# qrexec qubes.UpdatesProxy call - measured 147 dom0 policy hits in one afternoon on an "offline"
+# guest, still dripping hours after the last scan. Remove-Proxy in the finally below restores the
+# routeless baseline; update traffic is the only traffic that ever gets a path out.
 function Ensure-Proxy {
   & netsh winhttp set proxy '127.0.0.1:8082' '<local>' | Out-Null
   SetV $POL 'ProxySettingsPerUser' 0 'DWord'; SetV $IS 'ProxyEnable' 1 'DWord'
@@ -52,6 +58,14 @@ function Ensure-Proxy {
     Start-Process -FilePath $RelayExe -ArgumentList '--listen','8082','--target','@default','--log',$WorkDir -WindowStyle Hidden
     Start-Sleep -Seconds 2
   }
+}
+
+function Remove-Proxy {
+  & netsh winhttp reset proxy | Out-Null
+  SetV $IS 'ProxyEnable' 0 'DWord'
+  Remove-ItemProperty -Path $IS -Name 'ProxyServer' -EA SilentlyContinue
+  Get-Process qubes-updates-relay -EA SilentlyContinue | ForEach-Object { $_.Kill() }
+  Log 'proxy removed, relay stopped (offline baseline restored)'
 }
 
 # Report the available-update count to dom0's qubes.NotifyUpdates (target: bare dom0).
@@ -162,4 +176,6 @@ try {
 } catch {
   $script:St.phase='error'; $script:St.error="$($_.Exception.Message)"; Save
   Log "ERROR: $($script:St.error)"
+} finally {
+  Remove-Proxy   # ALWAYS restore the routeless baseline - see the Ensure-Proxy comment
 }

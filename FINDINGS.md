@@ -6821,3 +6821,21 @@ VALIDATED on win11-fresh (handler invoked exactly as the rpc would):
   with QubesWindowsUpdateRun deliberately deleted: EXIT=1 + "cannot start..."  (check CAN fail)
 NOT yet validated: a real install pass through this path (guest fully patched, count=0) - needs an
 out-of-date guest; and the dom0-side wrapper end-to-end (user runs 14-install + qvm-windows-update).
+
+## 2026-08-11 (cont.) — the dom0 request flood: the relay was left as an always-on system proxy
+
+User spotted a flood of qrexec requests in dom0. Guest qrexec-agent log quantified it: 147
+qubes.UpdatesProxy triggers in one afternoon (53@12h, 16@13h, 38@14h, 38@15h), still dripping at
+15:57/16:01/16:06 with NO scan running. Root cause: Ensure-Proxy set the SYSTEM-WIDE WinHTTP proxy
+(netsh winhttp set proxy 127.0.0.1:8082 + Internet Settings ProxyEnable) and never unset it, and the
+relay kept listening. Every Windows background HTTP client (telemetry, Edge/Defender update checks,
+NCSI, DO) discovered a "working" proxy and phoned home; the relay spawns ONE qrexec call per TCP
+connection -> one dom0 policy line each. Beyond the noise this is a SCOPE VIOLATION: an "offline"
+guest had standing HTTPS egress through the updates proxy for anything, not just update traffic.
+
+FIX (deployed + verified): proxy is up ONLY during a pass. Remove-Proxy (netsh winhttp reset proxy,
+ProxyEnable=0, ProxyServer removed, relay processes killed) runs in a finally around the agent's
+main, so even an error path restores the routeless baseline. Verified live: scan completes ->
+"proxy removed, relay stopped (offline baseline restored)" -> netsh shows Direct access, no relay
+process. Expected residual: a bounded burst of UpdatesProxy lines DURING a scan/update pass only.
+Immediate cleanup also applied on win11-fresh (2 lingering relays killed, proxy reset).
