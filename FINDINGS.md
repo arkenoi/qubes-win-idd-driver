@@ -7057,3 +7057,35 @@ STILL UNKNOWN: which WINDOW_DATA field went negative and why (25H2 StartFeed geo
 log prints the failing values only at log_level>0 for successful creates, not for rejects. Next
 diagnostic: agent-side QGAPROTO trace already logs w/h per CREATE (send.c:~336) — re-run the storm
 with g_ProtoTrace on and find the CREATE whose w or h is huge-unsigned (= negative as int).
+
+## 2026-08-11 (cont.) — ProtoTrace instrumented; wedge NOT reproducible after reboot (honest status)
+
+Enabled `ProtoTrace=1` (HKLM\...\Qubes Tools\gui-agent, per perf.h:58) and re-ran the storm 4x
+(1x 25@400ms, 3x 40@220ms) on the SAME 25H2 guest. Results:
+- **No wedge, no dialog, no negative geometry in ANY of 4 runs** (FAULTS=0: zero "buffer full",
+  zero "error/timeout"). Every traced CREATE was sane: hwnd 0x101a8 x=0,y=0,w=1920,h=1032,ovr=1.
+- So the S1b dialog + wedge, though PROVEN to have happened (dom0 guid log: VERIFY failed at
+  xside.c:2937), is currently NOT reliably reproducible. It fired on the FIRST boot after the
+  25H2 in-place upgrade, with first-logon shell surfaces present (OneDrive "Turn On Windows
+  Backup" popup visible in the fullshot) — plausibly a first-logon/post-servicing shell window,
+  not the steady-state Start surface. Per the instrument-validation rule, the storm probe alone
+  is NOT yet a validated reproducer for S1b; it IS one for the 24H2-style flip churn.
+- Restarting gui-agent alone did NOT restore the display: the agent came up and sat at
+  "Awaiting for a vchan client" — dom0's guid never reconnected (exactly the restart-survival
+  gap in DESIGN-gui-daemon-restart-survival.md §3). A VM reboot restored it. Operational note:
+  after a wedge, reboot the VM, don't just restart the agent.
+
+NEW DEFECT (unrelated to negative geometry, seen in every clean run): the agent sends a FULL
+`MSG_CREATE` for the SAME already-created HWND on every Start flip — 13 identical CREATEs for
+hwnd 0x101a8 in one 25-toggle run. The daemon's handle_create unconditionally calloc's a new
+windowdata and list_inserts it (xside.c:2919-2952), so repeated CREATE for a live window is
+state-corrupting/leaky by construction. This is a strong candidate for the ACTUAL trigger of the
+"msg 0x90 (MSG_WINDOW_HINTS) without CREATE" line and for daemon-side state divergence.
+Fix direction: send CREATE once per HWND lifetime; use CONFIGURE for geometry changes.
+
+Vchan blocking mechanism now pinned by source (workflow reader): `VchanSendBuffer` spins
+`while (VchanGetWriteBufferSize(vchan) < size) Sleep(1);` with NO timeout and NO
+libvchan_is_open check — upstream/ro/qubes-windows-utils/src/vchan-common.c:96-102 — while the
+caller holds g_VchanCriticalSection (send.c:73 et al). Write buffer is 65536 bytes (logged at
+agent start). Hence: daemon stops reading => pump blocks forever under the lock => capture dies.
+main.c:4675 already carries a comment acknowledging "VchanSendBuffer blocks FOREVER on a full ring".
