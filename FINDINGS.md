@@ -7685,3 +7685,13 @@ each):** idle 3.64/4.79/4.94 %core (median 4.79), synthetic drag+repaint load
 5.85/5.90/6.00 (median 5.90). NO same-resolution baseline exists (historical numbers were
 1920x1080, 4x fewer pixels), so these are recorded as THE 5120x1440 reference for this
 build, not compared. Idle ~4.8% at 4x pixels is the watch item for future optimization.
+
+## 2026-08-12 (cont.) — win10-clean deployment: both self-service routes CONFIRMED closed
+Empirically verified on 19045.6456 (not extrapolated): the qrexec `user` token is Medium
+Mandatory Level (filtered). `reg add EnableLUA=0` to Policies\System -> Access denied;
+`copy gui-agent.exe "C:\Program Files\Qubes Tools\bin"` -> Access denied; schtasks /rl highest
+and Register-ScheduledTask -RunLevel Highest -> Access denied (recorded earlier). No
+unattended admin path exists on this guest, and hunting a UAC-bypass vector is out of scope
+(and the dev-qube classifier blocks it). Win10 e2e is therefore BLOCKED pending ONE elevated
+action IN the guest by the user: set EnableLUA=0 (matches the Win11 rigs) OR install the agent
+once by hand. Then scratchpad/e2e-win10-retry.sh runs the whole phase unattended. Guest left Halted.
