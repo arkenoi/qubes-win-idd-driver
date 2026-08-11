@@ -7360,3 +7360,35 @@ GetWindowData) - now CONFIRMED LIVE with numbers instead of being a design guess
 any shadowed popup, not just toasts. Note the Start menu measured EXACTLY 858x890 border vs card
 earlier, i.e. Start does NOT show this margin - so the crop must be derived per window (from the
 DWM frame bounds vs window rect), never a constant.
+
+## 2026-08-11 (cont.) — INSTRUMENT: guest PIXELS are trustworthy, guest WINDOW LISTS are not
+
+Built `guest/render-watch.ps1`: a resident sampler that decouples SAMPLING from RETRIEVAL. It runs
+hidden and detached, writing a timestamped JSON sample (and optionally a PNG) every N seconds into
+C:\ProgramData\Qubes\rendertruth; a later qrexec fetch cannot retroactively disturb a sample already
+on disk. This removes the flaw that produced today's retracted "ghost window" claim (the on-demand
+probe stole focus and closed the very menu it was measuring). Verified: samples every 2 s, Notepad
+stays foreground across them, and both rects are recorded per window (Notepad dwm 1426x746 vs raw
+1440x753 - the Win11 invisible border).
+
+DEFINITIVE TEST of the ghost question, using the sampler's own PNG (no focus theft):
+- dom0 geometry.txt: `New notification` 396x332 override_redirect=1 mapped=1  -> present
+- guest EnumWindows sample at the same time                                   -> ABSENT
+- guest FRAMEBUFFER at the same time                                          -> **the OneDrive
+  toast is right there, fully drawn**
+So dom0 is CORRECT and the toast is real. **The ghost claim is dead for good** (it was already
+retracted; this closes it with positive evidence rather than doubt).
+
+WHAT IS ACTUALLY BROKEN IS THE INSTRUMENT: our guest-side EnumWindows cannot see shell popup
+surfaces. `SetThreadDesktop` fails for us even from a fresh windowless thread (tried: unloading
+System.Windows.Forms, then running the whole enumeration on a dedicated STA thread inside the C#
+helper - both still fail), so we never attach to the input desktop the way the agent does
+(AttachToInputDesktop, main.c). Notably GDI CopyFromScreen DOES return the real composited desktop
+including the toast, which is why the pixel evidence above is sound.
+RULES GOING FORWARD:
+ 1. Guest truth for "is it displayed" = PIXELS (sampler PNG). Proven.
+ 2. Guest window LISTS are incomplete for shell surfaces (toasts, Start) - never conclude "the guest
+    does not have it" from an empty list. `tools/rendercheck`'s ghosts_in_dom0 stays a hint only.
+ 3. dom0's `qtest fullshot` geometry.txt remains the authoritative list of what dom0 shows.
+ 4. To make the list trustworthy the sampler would have to run with the agent's privileges/desktop
+    (a service, or launched via the agent) - deferred, not needed for pixel comparison.
