@@ -7790,3 +7790,40 @@ user: predating the session does not matter, chase it and fix it. This collapse 
 the amplifier that made the drag replay visible at all.
 Next experiment (serial): redeploy 7db23513 interleaved with E3D6810A, 3 runs each - build
 regression vs environment/scene drift.
+
+## 2026-08-12 (cont.) — Review-pass hardening + frame-collapse post-mortem + final build
+
+**Frame-delivery "collapse" closed as NOT-A-BUILD-BUG**: interleaved deploy proved 7db23513
+measures the same 4-5 fps today (dt_p50 166-217 ms) as the afternoon builds, and a FRESH
+Notepad restored dt_p50 19.7 ms on the same environment/build. Every afternoon benchmark ran
+against ONE wedged window instance (white body, title strip delivered, typing registered but
+invisible, survived agent restarts AND build swaps -> the state lives guest/window-side).
+Its process was killed during diagnosis, so etiology is capped at "window rendering state,
+inflicted sometime midday". RECURRENCE PROTOCOL: if a window goes empty again, capture a
+GUEST-side screenshot first, run winenum + corewin-scan on it, and do not benchmark drags
+against any window whose content is not verified rendering. The analysis workflow flagged a
+plausible related hazard worth keeping in mind: a stuck g_InputDragWindow latch (press whose
+release never arrived) permanently suppresses one window's recapture within an agent
+instance - worth a defensive timeout someday, but it cannot explain cross-restart persistence.
+
+**Adversarial review (15 agents, 23 raw findings) -> 4 fixes landed in agent 700d22b:**
+ 1. DaemonDriveTick stamped only by geometry-carrying configures (iconic/maximized/unchanged
+    configures no longer arm holds or trigger settle repaints);
+ 2. drive-end settle no longer frame-gated: pump bounds its wait to 100 ms while settle work
+    is pending, WAIT_TIMEOUT sweep flushes/applies/releases (static-desktop starvation gone);
+ 3. frame-loop settle repaint clipped to rgnVisible (no occlusion bleed);
+ 4. size-only configure can no longer overwrite an in-flight-gated dictated position
+    (stash merge preserves the pending move).
+ Deferred, documented: crop branch still applies per-message SetWindowPos - reachable only
+ under ShellManaged=1 (not the shipped default); not worth touching the won shell UX now.
+ Rejected as pre-existing/theoretical: lock-order inversion (all protocol sends are
+ pump-thread-only, CS reentrancy makes vchan->windows order safe), optimistic-commit
+ misregistration (pre-existing pattern, self-heals via tracking), DPI!=100% delta rounding.
+
+**FINAL BUILD 2409BD22 (agent 700d22b), deployed hash-verified after a COLD BOOT of the
+drag-fix line (E3D6810A boot: agent auto-start, RESDRIFT 1920x1080->5120x1440, A3CHECK
+converged):** bench dt_p50 20.3/23.5/20.5 ms (n=379-428/run - full frame delivery, best
+numbers of the day), dmg_p50 11-12 us, toast card cropped+positioned (pixels verified),
+probe settle 65 ms with zero post-release configures, cap_timeout=0, workarea=0.
+Awaiting the user's real-drag re-confirmation on 2409BD22 (settle-path code changed since
+their "all good" on E3D6810A).
