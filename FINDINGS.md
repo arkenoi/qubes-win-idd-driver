@@ -7885,3 +7885,33 @@ configure pair arms a stream on a fresh window (agent 857965a code); (b) the pre
 per-window prefill painting a fresh window's buffer before its first full content copy.
 Recurrence protocol: fullshot immediately, then guest-eyes.ps1 (guest-side pixels decide
 whether the black exists in the guest or only in dom0's copy).
+
+## 2026-08-12 (cont.) — Guest-drag wobble: measured, root-caused, four fixes landed (agent 43de7d4)
+
+MEASURED on a real user drag (ProtoTrace, build D27E826B): 10 announce stalls of 76-472 ms
+in a 5.7 s drag, catch-up jumps to 337 px, 43 direction reversals >3 px - vs a clean 26 ms
+cadence with zero stalls on a scripted drag minutes apart. Frame correlation split it into
+two species: (A) big-area frames delivered at 150-195 ms (acq-bound), (B) the pump busy
+BETWEEN frames (476 ms with acq=19 ms).
+
+Investigation (wf_c4ca99e0, 5 agents) ranked the mechanisms; all four GO fixes landed:
+ 1. **The dominant, most drag-shaped artifact**: the throttled 150 ms mid-drag PrintWindow
+    refresh was the ONE recapture the drag latch did not suppress - a 15-50 ms synchronous
+    stall injected into the dragged app's own modal move loop at ~6.7 Hz (freeze-then-snap).
+    Latched windows now skip it; the settle recapture on release repaints once.
+ 2. Announce-cadence aliasing: the 16 ms limiter beat against the ~20 ms frame cadence and
+    withheld positions only flushed at frame boundaries (the tracking-pass flush the
+    comment claimed had NO call site). The latched window is now limiter-exempt.
+ 3. Inbound MSG_MOTION coalescing (the w9r3irkhc design, finally landed): latest-wins
+    pending slot, flushed before any non-motion dispatch and at both drain ends - a
+    post-stall backlog no longer replays the stale trajectory through SendInput.
+ 4. Mid-guest-drag daemon configures are ignored while the latch holds (ACK still echoes):
+    the user's hand is the geometry authority; a WM bounce can no longer yank the window
+    backward or arm the drive suppression mid-drag. Inert on clean drags (0 inbound
+    configures in both traced episodes).
+Deferred with instrumentation-first verdicts: HandleMotion origin reconstruction (magnitude
+unmeasured), the 25H2 platform 1.6-1.8x cost multiplier (no designed fix; re-evaluate after
+fix 1 lowers the floor).
+ACCEPTANCE (user-felt + traced): a hand drag with no >60 ms announce stalls, no catch-up
+jumps, and no rhythmic hitch; dom0-drag replay harness re-run (fix 2 touches the limiter
+that fixed the replay).
