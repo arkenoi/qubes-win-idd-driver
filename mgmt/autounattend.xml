@@ -166,6 +166,13 @@
           <Description>autologon unlimited (test rig only - plaintext password)</Description>
           <Order>10</Order>
         </SynchronousCommand>
+        <!-- DELIBERATELY NO EnableLUA=0 here (unlike autounattend-win11.xml). Win10 is the
+             INSTALLER-BASED e2e platform, not a hot-swap dev loop: QWT (with the patched
+             agent) is installed by the payload during firstboot, which already runs elevated,
+             so there is no filtered-token problem and no reason to weaken UAC. Keeping UAC ON
+             also tests closer to a real user's posture. (A brief 2026-08-12 experiment added
+             EnableLUA=0 here to enable hot-swaps; reverted per the decision that Win10 does
+             installer-based e2e only - no hotswaps, UAC stays on.) -->
       </FirstLogonCommands>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
