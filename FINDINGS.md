@@ -7827,3 +7827,45 @@ numbers of the day), dmg_p50 11-12 us, toast card cropped+positioned (pixels ver
 probe settle 65 ms with zero post-release configures, cap_timeout=0, workarea=0.
 Awaiting the user's real-drag re-confirmation on 2409BD22 (settle-path code changed since
 their "all good" on E3D6810A).
+
+## 2026-08-12 (cont.) — Canonical-baseline comparison (user directive): NO agent regression;
+## the delta vs the README table is the GUEST platform
+
+The user's standard: the baseline is the recorded canonical benchmark (README table, agent
+09b643e, 2026-08-10, win11-idd-test) - guest-side drag cost counts even where dom0-side
+corrections mask it. Method: instrumentation/drag-harness.ps1 phases + 250 ms sampling of
+gui-agent cumulative CPU (guest/phase-cpu-bench.ps1), win11-fresh @1920x1080, 3 runs/side,
+hash-verified.
+
+| phase | README 09b643e | 2409BD22 (current) | 92C48AC5 (README-era binary, SAME guest) |
+|---|---:|---:|---:|
+| drag   | 8.67 | 13.0-15.6 (med 13.9) | 15.3-16.2 (med 15.7) |
+| scroll | 3.51 | 5.2-7.1 | 3.9-4.9 |
+| type   | 1.71 | 4.2-6.2 | 4.6-5.3 |
+| idle   | 0.83 | 0.3-1.0 | 0.3-1.0 |
+
+**Single-variable verdicts:**
+1. NO agent-code regression: the exact binary behind the README numbers costs the SAME
+   (slightly more) on today's guest/scene as the current build. The current agent is the
+   cheaper of the two at drag on identical scenes.
+2. Toast hypothesis (user): FALSIFIED - same binary, toast dismissed vs present: drag
+   14.0-18.7 vs 15.3-16.2 = noise. An on-screen toast does not tax the occlusion path.
+3. The 1.6-1.8x gap vs the README table is the GUEST PLATFORM (win11-fresh/25H2 vs the
+   08-10 win11-idd-test guest): same binary, same harness, same resolution, different
+   guest. Flagged as its own future investigation for guest-side drag UX (candidates:
+   25H2 DWM/compositor changes, IDD driver version/config differences).
+
+**New canonical references, final build D27E826B (agent 857965a), win11-fresh 25H2:**
+ @1920x1080: drag 11.6/15.9 scroll 3.8/4.4 type 4.0/5.8 idle 0.7-2.9 (2 runs)
+ @5120x1440: drag 11.4-16.5 scroll 4.2-6.4 type 2.7-4.5 idle 0.0-2.1 (3 runs)
+ Run-to-run spread on this guest is high (~±25%); compare medians of >=3 runs only.
+
+**Incident during the resolution flips (user-reported "rendering bug"):** restoring
+5120x1440 via ChangeDisplaySettings switched the active display DEVICE (DISPLAY1->DISPLAY2,
+IDD monitor); the guest shell lost every visible window (bare wallpaper, no taskbar;
+processes alive; explorer never crashed) and the agent correctly announced nothing -
+GetRealWindowRect handle-invalid spam while it chased the dying handles, prev agent
+instance died in the transition. RECOVERY: explorer restart + fresh window = fully healed,
+no reboot needed. LESSON: in-guest ChangeDisplaySettings mode flips can hop display
+devices and collapse the shell's window set on this IDD-equipped guest - use them only
+with a recovery plan; dom0-driven resize remains the proper path (unavailable in seamless).
