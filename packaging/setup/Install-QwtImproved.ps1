@@ -936,6 +936,7 @@ $ErrorActionPreference = 'SilentlyContinue'
 $work = Join-Path $env:TEMP 'qwt-open-start'
 New-Item -ItemType Directory -Force $work | Out-Null
 $inner = Join-Path $work 'winkey.ps1'
+$vbs = Join-Path $work 'winkey.vbs'
 @"
 Start-Sleep -Milliseconds 2500
 Add-Type -Namespace W -Name K -MemberDefinition '[DllImport(`"user32.dll`")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);'
@@ -943,9 +944,13 @@ Add-Type -Namespace W -Name K -MemberDefinition '[DllImport(`"user32.dll`")] pub
 Start-Sleep -Milliseconds 80
 [W.K]::keybd_event(0x5B, 0, 2, [UIntPtr]::Zero)
 "@ | Set-Content $inner -Encoding ASCII
+# wscript is windowless and Run(...,0) hides the powershell console: a scheduled
+# powershell, even -WindowStyle Hidden, flashes a conhost window that itself steals
+# focus and dismisses Start (measured 2026-08-12).
+"CreateObject(""WScript.Shell"").Run ""powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File """"$inner"""" "", 0, False" | Set-Content $vbs -Encoding ASCII
 $user = (Get-CimInstance Win32_ComputerSystem).UserName
 if (-not $user) { $user = "$env:USERDOMAIN\$env:USERNAME" }
-& schtasks /create /tn QwtOpenStart /tr "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$inner`"" /sc once /st 00:00 /ru $user /it /f | Out-Null
+& schtasks /create /tn QwtOpenStart /tr "wscript.exe //B //Nologo `"$vbs`"" /sc once /st 00:00 /ru $user /it /f | Out-Null
 & schtasks /run /tn QwtOpenStart | Out-Null
 '@ | Set-Content -LiteralPath $openStart -Encoding ASCII
     $lnkDir = 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs'
