@@ -7915,3 +7915,24 @@ fix 1 lowers the floor).
 ACCEPTANCE (user-felt + traced): a hand drag with no >60 ms announce stalls, no catch-up
 jumps, and no rhythmic hitch; dom0-drag replay harness re-run (fix 2 touches the limiter
 that fixed the replay).
+
+## 2026-08-12 (cont.) — GWeck goal batch + wobble fixes DEPLOYED (build C55DCDA7, agent 43de7d4)
+
+Automated validation green on win11-fresh 25H2, hash-verified:
+ - QGASHELLMANAGED policy=2 (start-only), QGABLOCKWIN on, A3CHECK converged 5120x1440.
+ - **Start menu IS a WM-managed dom0 window**: fullshot geometry or=0, mapped, 832x736 =
+   exactly the cropped card; dom0 gives it a frame and the title "[win11-fresh] Start".
+   Size-lock hint fired: QGAPROTO,msg=HINTS,sizelock=832x736.
+ - Toasts UNCHANGED: or=1 corner popup at 4740,1222, card renders (policy separation works).
+ - Occlusion choreography (armed-task, dom0-only captures): a console window stacked ABOVE
+   the open Start in dom0 shows its own content (agreeing z-order: no bleed); Notepad moved
+   UNDER the Start region and inspected after: fully intact, no Start-pixel debris, no
+   stale regions. Census cap_timeout=0, workarea=0. Scripted drag settles in 4 ms.
+ - Instrument facts re-learned: EnumWindows CANNOT see shell surfaces (the programmatic
+   Start-move stickiness test silently no-oped - the real test is a dom0 WM drag, user
+   checklist); any guest process activity while Start is open DISMISSES it, including the
+   opener's own cleanup - both opener scripts now use exit-before-fire + hidden console
+   (the shipped installer helper had BOTH defects; fixed before first ship).
+Pending user-hand checks: Start frame drag (move-stickiness - the one unproven design
+assumption), resize refusal (size-lock end-to-end), Start clickability, dom0-restack-above
+bleed severity (documented Phase 3 limitation), Win-key block feel, wobble verdict.
