@@ -1,8 +1,15 @@
 # Handover 2026-08-12b — PRIMARY GOAL: fix the window-drag replay regression
 
-This handover exists so the regression below gets FIXED. It is the job, not context.
-Do not report it as "pre-existing" or "introduced earlier" — it is ours, it is open, fix it.
-Everything else in this file is reference material subordinate to that goal.
+> **SUPERSEDED 2026-08-12 (same day, later session): THE DRAG REPLAY IS FIXED and
+> user-confirmed ("all good") — build E3D6810A, then hardened to 2409BD22 (agent 700d22b).**
+> Root cause was NOT the outbound-backlog theory below: the daemon streams MSG_CONFIGURE at
+> input rate during a dom0 title-bar drag (fact 1 below is WRONG — its verification was
+> void), the agent applied each as its own unconverted async SetWindowPos, the guest window
+> played the queue back at frame cadence, and the frame path re-announced every lagging
+> step +7 px off. Fix: latest-wins apply + cached coord conversion + stream-gated
+> announce/damage hold + timer-backed settle. See FINDINGS.md 2026-08-12 (multiple
+> sections) for the full evidence chain, the review-pass hardening, and the wedged-window
+> benchmark trap that faked a "frame-delivery collapse". Everything below is HISTORY.
 
 ---
 
