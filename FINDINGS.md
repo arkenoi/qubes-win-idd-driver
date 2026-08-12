@@ -7742,3 +7742,27 @@ input rate. (F1 was probably verified against a guest-native drag - different pa
    the true resting position ONLY if it differs from what the daemon dictated, then one
    full-window settle repaint. CfgFlushPendingMove now flushes current canonical X/Y (a
    withheld stale intermediate must never be announced late) and skips byte-identical echoes.
+
+## 2026-08-12 (cont.) — Workflow audit of the evidence corpus (5 agents, wf_e1ebbf98)
+
+Corrections to the handover's "established facts", from re-reading the RAW pulled logs:
+ - **F2's "guest window static while agent announces motion" is VOID**: both pos-sampler
+   runs backing it recorded ZERO movement for the entire session INCLUDING the commanded
+   drag - the instrument never observed the event. No evidence the guest window was static;
+   the async-SetWindowPos-queue mechanism requires it to MOVE, and nothing contradicts that.
+ - **F1's "zero inbound configures at VERBOSE" is unverifiable**: not one Debug/Verbose
+   line exists in any preserved pull, and HandleConfigure only logs at those levels. It was
+   also scoped to DURING-drag at best; the replay lives after release.
+ - The 12:22/12:28 (pre-c9481cb) traces show the second pass with re-generated values
+   (429/234 for 431/236, one value dropped) - not a byte-replay of a queue; on c9481cb the
+   second pass is exactly +7 px in x. Both fit re-generation through the winrect-vs-DWM
+   coordinate seam, not ring drainage.
+ - Daemon side (xside.c): NO animation/deferred moves - the ring is the only replay tape it
+   drains (in order, one XMoveResizeWindow each); handle_configure_from_vm BOUNCES any
+   non-matching agent configure back with its own geometry (sequence-number-free protocol,
+   known to spin); ACK byte-echoes are indistinguishable from announces in ProtoTrace
+   (fixed: QGAPROTO,msg=CONFIGURE-ACK tag, agent 0057c7a).
+ - c9481cb's rate limiter also had 3 latent bugs (stale pending never invalidated; pending
+   surviving HandleConfigure's dictated position; flush unreachable for Pw-attached windows
+   which are the DEFAULT) - all three are structurally fixed by the 9f6ac17 flush rewrite
+   (flush current canonical X/Y, skip byte-identical, Pw-branch call site added).
