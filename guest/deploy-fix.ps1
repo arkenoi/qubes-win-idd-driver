@@ -1,12 +1,14 @@
-# Deploy a new gui-agent, keep ShellManaged=0 (the shipped default), restart via watchdog.
+# Deploy a new gui-agent with ShellManaged=2 (start-only managed - the shipped default
+# since the GWeck goal batch), restart via watchdog.
 # For win11-fresh (EnableLUA=0, qtest runs elevated). Prints === RESULT === with hash + pid.
-param([string]$NewAgent = 'C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\gui-agent.exe')
+param([string]$NewAgent = 'C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\gui-agent.exe',
+      [int]$ShellManaged = 2)
 $ErrorActionPreference = 'Continue'
 $bin = 'C:\Program Files\Qubes Tools\bin\gui-agent.exe'
 $svc = 'QubesGuiWatchdog'
 $k = 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent'
 if (-not (Test-Path $k)) { New-Item $k -Force | Out-Null }
-Set-ItemProperty $k -Name ShellManaged -Value 0 -Type DWord
+Set-ItemProperty $k -Name ShellManaged -Value $ShellManaged -Type DWord
 
 Stop-Service $svc -Force -ErrorAction SilentlyContinue
 Start-Sleep 2
