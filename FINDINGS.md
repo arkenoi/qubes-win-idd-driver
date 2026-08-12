@@ -7869,3 +7869,19 @@ instance died in the transition. RECOVERY: explorer restart + fresh window = ful
 no reboot needed. LESSON: in-guest ChangeDisplaySettings mode flips can hop display
 devices and collapse the shell's window set on this IDD-equipped guest - use them only
 with a recovery plan; dom0-driven resize remains the proper path (unavailable in seamless).
+
+## 2026-08-12 (cont.) — FINAL: clean cold boot on D27E826B, all green
+
+Post-boot on the final build (agent 857965a): agent auto-start PID 5044, hash-verified,
+RESDRIFT->A3CHECK converged g=ctx=5120x1440, fresh Notepad renders full chrome (no black
+regions), toast card cropped+positioned at the corner, scripted drag settles 12 ms after
+release with zero post-release configures. Shell fully healthy after the earlier
+explorer-restart recovery + reboot.
+
+WATCH ITEM (user-reported, transient, pre-reboot damaged session): "top half of the
+Notepad window was black" on the freshly-opened window. Two suspects if it recurs on a
+clean session: (a) the clipped drive-settle repaint missing a region when a placement
+configure pair arms a stream on a fresh window (agent 857965a code); (b) the pre-existing
+per-window prefill painting a fresh window's buffer before its first full content copy.
+Recurrence protocol: fullshot immediately, then guest-eyes.ps1 (guest-side pixels decide
+whether the black exists in the guest or only in dom0's copy).
