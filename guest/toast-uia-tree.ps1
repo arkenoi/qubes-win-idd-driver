@@ -8,6 +8,7 @@
 # strip of desktop wallpaper along the bottom. So FlexibleToastView is the CONTENT element,
 # not the visible card. This dumps every descendant with its rect so the right element (the
 # one whose bounds equal the drawn card) can be identified by number.
+param([string]$Hwnd = '')
 $ErrorActionPreference = 'Continue'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 
@@ -42,7 +43,17 @@ $cb = [TT+EnumProc]{
     $script:target = $h; $script:targetRect = $r
     return $true
 }
-[void][TT]::EnumWindows($cb, [IntPtr]::Zero)
+if ($Hwnd) {
+    # Handle supplied (read from the agent log): skip discovery entirely. EnumWindows from a
+    # qrexec-launched process cannot see shell surfaces at all - measured 2026-08-11 - but UIA
+    # may still resolve a handle we already know.
+    $script:target = [IntPtr]([Convert]::ToInt64($Hwnd, 16))
+    $r0 = New-Object TT+RECT
+    if ([TT]::GetWindowRect($script:target, [ref]$r0)) { $script:targetRect = $r0 }
+    else { Write-Output "GETWINDOWRECT-FAILED for $Hwnd"; exit 0 }
+} else {
+    [void][TT]::EnumWindows($cb, [IntPtr]::Zero)
+}
 
 if (-not $target) { Write-Output 'NO-TOAST-WINDOW'; exit 0 }
 

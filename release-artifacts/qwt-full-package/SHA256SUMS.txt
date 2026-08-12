@@ -1,0 +1,3 @@
+0c60dc545f9d06abac810da5234b206567db9d35ac8d91f88ffdb5a5a39cb49a  installer.msi
+28bc066442b32c3be13c0e466eb9ea086ea123f59a839351b83fad04af71e5d2  MANIFEST.json
+814de46af40d7c1b8df0c0d6ed25141dd061d9a5dd4251e98d7daa7c23fdf211  qubes-windows-tools-4.3.1.exe

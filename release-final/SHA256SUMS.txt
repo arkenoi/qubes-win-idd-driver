@@ -1,0 +1,3 @@
+fa2a6110e188615ce3203794456042eeae555d71efca7c90c2b58553fc3f9698  qubes-windows-tools-ng-4.3.1-1.agentc7ccb459aec9.noarch.rpm
+080b6bcee152077d62d49ee1fb122836db3403c2521b46695796c73084aa8870  qwt-ng-4.3.1-agentc7ccb45.iso
+e523b5bc29123fa43f4a03b03595fcb023b63f459b793ec17d95b0bdc00ec8f9  qwt-ng-4.3.1-agentc7ccb45-setup.tar.gz

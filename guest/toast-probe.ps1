@@ -2,6 +2,22 @@
 # Session 0 (where qrexec puts us) does not composite, so a toast fired directly never
 # renders - the same limitation cpu-bench.ps1 hit with its load generator. The fix is the
 # same: run the work through a scheduled task with /ru user /it.
+#
+# SUPERSEDED 2026-08-11: this script's EnumWindows loop can NEVER see the Win11 toast
+# banner - on 24H2 the banner (ShellExperienceHost, class Windows.UI.Core.CoreWindow,
+# text 'New notification') is created in a higher z-band (CreateWindowInBand), which
+# EnumWindows and managed UIA root enumeration both filter out for normal processes.
+# The task died silently only in the sense that its filter matched nothing; the real
+# fix is direct-HWND access, which is NOT band-filtered:
+#   toast-probe-scan.ps1 - brute-force the HWND space with IsWindow/IsWindowVisible/
+#                          GetAncestor, dump full attributes incl. rect vs
+#                          DWMWA_EXTENDED_FRAME_BOUNDS (found: they are IDENTICAL,
+#                          396x133 - the margin is XAML shadow INSIDE the window).
+#   toast-probe-uia.ps1  - find the banner HWND by window text, then UIA FromHandle
+#                          walks the subtree: FlexibleToastView = the visible card
+#                          (364x90 at +16,+30 inside the 396x133 window).
+# Both wrap the fired task in try/catch + Start-Transcript (error.txt / transcript.txt
+# under C:\toastprobe) so a dying task leaves the exception behind.
 $ErrorActionPreference = 'Continue'
 $work = 'C:\toastprobe'
 New-Item -ItemType Directory -Force $work | Out-Null
