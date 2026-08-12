@@ -7695,3 +7695,50 @@ unattended admin path exists on this guest, and hunting a UAC-bypass vector is o
 (and the dev-qube classifier blocks it). Win10 e2e is therefore BLOCKED pending ONE elevated
 action IN the guest by the user: set EnableLUA=0 (matches the Win11 rigs) OR install the agent
 once by hand. Then scratchpad/e2e-win10-retry.sh runs the whole phase unattended. Guest left Halted.
+
+## 2026-08-12 (cont.) — DRAG REPLAY ROOT CAUSE FOUND (user live drag + ProtoTrace, build 172A72B1)
+
+**RETRACTION: handover fact F1 ("the daemon sends NO MSG_CONFIGURE during the drag") is
+WRONG for a dom0 WM title-bar drag and is hereby retracted.** Proof: the deployed agent's
+trace contains SendWindowConfigure calls at input rate (70-100/s) with byte-identical
+duplicates 3-8 ms apart. The ONLY code path that can emit those is HandleConfigure's ACK
+(vchan-handlers.c:777) - it bypasses both the dedupe and the c9481cb rate limiter - and it
+only runs when MSG_CONFIGURE arrives. During a title-bar drag the pointer is grabbed by the
+dom0 WM: motion is NOT forwarded; the daemon relays ConfigureNotify as MSG_CONFIGURE at
+input rate. (F1 was probably verified against a guest-native drag - different path.)
+
+**Mechanism (1:1 trace, user drag 14:36:50-56 local, scratchpad drag-evidence-1.txt):**
+1. Daemon streams MSG_CONFIGURE (the drag path: ~22 distinct positions per stroke).
+2. HandleConfigure applied EACH as its own SWP_ASYNCWINDOWPOS at daemon coords, unconverted.
+   Two defects: (a) the flood queues in the window's thread, which applies moves at frame
+   cadence (~10 Hz at 5120x1440) - the GUEST window physically replays the path for ~2 s
+   after release; (b) daemon coords are announce-space (DWM extended frame bounds), SetWindowPos
+   is GetWindowRect-space -> every applied move lands +7 px off (invisible border).
+3. The frame path (main.c "writer #2") honestly re-announces each lagging step: the trace
+   shows the ENTIRE walk re-sent 1:1, offset exactly +7, at ~10 Hz, ~2 s behind - each value
+   != LastCfg (dictated value) because of the +7, so the "don't echo the daemon" guard never
+   matched. The daemon applies each announce as a real move -> dom0 window replays the path.
+4. At 10 Hz the echo stream sails UNDER the c9481cb 16 ms rate limit -> that fix cannot help.
+   Scripted in-guest drags produce no inbound configures at all -> F3 explained (they never
+   reproduced it).
+5. "What changed vs older QWT": nothing in the protocol - the session-start bisect already
+   showed pre-existing. At 1920x1080 the apply/frame cadence was fast enough that the queue
+   and the +7 bounce settled within 1-2 frames; at 5120x1440 (~10 fps frame path) the same
+   loop smears into a visible 2 s replay. Drag cost = the amplifier, as the user suspected.
+
+**Fix (agent, this commit):** three coordinated changes, all measured-cost-conscious:
+ - LATEST-WINS APPLY: HandleConfigure stashes the newest daemon geometry; ApplyPendingDaemonMove
+   posts at most ONE async SetWindowPos in flight per window (in-flight = GetWindowRect vs
+   posted target, 200 ms timeout); applied at drain end + per frame. The guest-side replay
+   queue can no longer form.
+ - COORD CONVERSION: announce-space -> SetWindowPos-space delta cached per window (refresh
+   >= 500 ms apart; the reverted 95492ed recomputed per configure and made things worse).
+   Applied position now lands exactly where dom0 dictated -> the frame path's fresh rect ==
+   LastCfg -> no echo at all; also kills the permanent +7 settle offset.
+ - DAEMON-DRIVE SUPPRESSION + DAMAGE HOLD: while MSG_CONFIGUREs for a window are <300 ms old,
+   position-only announces are withheld (dom0 knows where its own window is) and the window's
+   damage is held (announced origin = daemon's framebuffer read origin; sending damage against
+   a frozen origin would paint the window's OLD screen region). On drive end: flush announces
+   the true resting position ONLY if it differs from what the daemon dictated, then one
+   full-window settle repaint. CfgFlushPendingMove now flushes current canonical X/Y (a
+   withheld stale intermediate must never be announced late) and skips byte-identical echoes.
