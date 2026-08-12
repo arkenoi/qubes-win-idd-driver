@@ -7974,3 +7974,59 @@ PROCESS NOTE: went too fast in the live loop here (3 user-visible failed attempt
 25H2 Start capture is a real investigation, not a one-shot fix. Stopped guessing; running
 wf_82456c4a with the guest-pixel evidence to decide movable-managed-with-fixes vs
 correct-corner-drop-movable.
+
+## 2026-08-12 (cont.) — WOBBLE ROOT CAUSE: input translated against the LIVE origin instead
+## of the ANNOUNCED one (agent b93d259)
+
+The forth-and-back oscillation during a GUEST-NATIVE drag (user-reproduced; distinct from
+the dom0-frame drag replay, which stays fixed) is a positive feedback loop on the input path:
+ - gui-daemon sends window-RELATIVE input coords, computed against the rect it was last
+   TOLD about (xside.c process_xevent_motion: k.x = ev->x).
+ - The agent added them back to the LIVE tracked origin (data->X/Y) in BOTH input paths
+   (InjectMotion and HandleButton), so injected cursor = true cursor + (live - announced).
+ - The app's own modal move loop moves the window by that error -> the live origin changes
+   -> the next error changes. While announces are starved (ProcessNewFrame holds
+   g_csWatchedWindows for the whole per-window pass; the daemon also defers while
+   have_queued_configure is set) the error ACCUMULATES and the window runs AHEAD of the hand;
+   when the backlog flushes and dom0 adopts the newest position, the next injected sample is
+   short by the whole accumulated gap and the window is yanked BACKWARD.
+ - Predicts amplitude = drag velocity x announce dead time (~1300 px/s x ~160 ms = ~80 px,
+   the observed max) and predicts HORIZONTAL-ONLY error on a horizontal drag (y stayed
+   260-263 while x swung 80 px) - which no jitter/DWM-lag/two-writer story predicts.
+ - The code comment at vchan-handlers.c:427 ALREADY stated the correct rule ("dom0's
+   coordinates are relative to the rect the agent ANNOUNCED"); only the field was wrong.
+FIX: both paths use LastCfgX/Y when CfgSentValid, falling back to X/Y before the first
+announce. Every WINDOW_DATA writer runs on the pump thread under the lock, so this is not a
+two-writer race - the window really moved back, because we told it to.
+
+**INSTRUMENT CORRECTION (retraction):** the first oscillation measurement was ACK-POLLUTED -
+every configure ACK byte-echo is ALSO traced by send.c as a plain msg=CONFIGURE, so 155 of
+245 "outbound" lines in that trace carried dom0's coordinates, not ours. Re-measured on a
+clean trace (1 ACK): the oscillation is REAL - 23 direction reversals in 143 genuine
+announces. Also retracted earlier the same session: "the drag latch never armed" was an
+artifact of LogLevel=3 hiding LogDebug lines; the latch does arm (guest LogLevel is now 4).
+
+## 2026-08-12 (cont.) — Start on 25H2: the phantom is the remaining defect (agent, card gate)
+
+The user watched four failed managed-Start attempts ("maximized window, then dead";
+"console popped, then window at random position, then dead"; wallpaper contents). Causes,
+now separated:
+ 1. PHANTOM MAPPING (the big one): StartMenuExperienceHost keeps a top-level surface alive
+    while Start is CLOSED. Mapping it announces a window with no menu inside, so dom0 shows
+    a slice of bare desktop at whatever rect that surface reports - measured 1201x919, and
+    once x=6063 on a 5120-wide screen ("random position"), vanishing when the phantom does
+    ("then dead"). FIX: ShellSurfaceCardless() + a genuine-open gate in ShouldAcceptWindow -
+    a classified shell surface whose card measurement FINISHED with no card and no sticky
+    last-good is not a window. In-flight measurements are never rejected.
+ 2. CONSOLE FLASH: the Start opener's launcher (powershell, even -WindowStyle Hidden)
+    flashes a conhost window that steals focus and dismisses the menu it just opened - the
+    user's "console popped". FIX: the whole chain is windowless (.lnk -> wscript //B ->
+    Run(...,0) hidden powershell -> keybd_event(VK_LWIN)). SendKeys "^{ESC}" from that
+    context does NOT open Start at all (guest screenshot: no menu, all shell hosts
+    main=0x0) - the VK_LWIN chain is the proven one.
+ 3. Instrument note: `qtest fullshot` takes ~50 s and every qrexec retrieval flashes a
+    console, so a transient menu cannot be observed that way. Added
+    capture-start-render.ps1 / read-start-render.ps1: the guest samples its OWN screen while
+    Start is open and the PNG is retrieved later.
+Rig is back on ShellManaged=0 (headerless corner Start), the only configuration ever
+confirmed to render correctly. Frozen-anchor (=2) exists but is unproven and NOT recommended.
