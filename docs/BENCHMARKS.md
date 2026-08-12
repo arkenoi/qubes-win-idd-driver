@@ -1,3 +1,16 @@
+# Benchmarks
+
+## Addendum 2026-08-12 — the table below is guest-relative; agent verified regression-free
+
+Re-validated on win11-fresh (25H2) at 1920x1080 with the identical phase harness after the
+drag-replay fix (agent 857965a): the CURRENT agent and the EXACT binary behind the 09b643e
+table cost the same on the same guest/scene (current slightly cheaper at drag, med 13.9%
+vs 15.7%) — no agent-side regression. The absolute numbers differ from the table by
+1.6-1.8x because the GUEST differs (win11-fresh/25H2 vs the 2026-08-10 win11-idd-test):
+same binary, same harness, same resolution. Treat every CPU table here as guest-relative;
+cross-guest deltas are platform, not agent. An on-screen toast was tested as a confound and
+has no measurable effect. Raw data + method: FINDINGS.md 2026-08-12, guest/phase-cpu-bench.ps1.
+
 # Benchmark history and analysis
 
 Everything measured about this build's performance, in full: the four-install comparison
