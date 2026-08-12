@@ -7766,3 +7766,27 @@ Corrections to the handover's "established facts", from re-reading the RAW pulle
    surviving HandleConfigure's dictated position; flush unreachable for Pw-attached windows
    which are the DEFAULT) - all three are structurally fixed by the 9f6ac17 flush rewrite
    (flush current canonical X/Y, skip byte-identical, Pw-branch call site added).
+
+## 2026-08-12 (cont.) — DRAG REPLAY FIXED, USER-CONFIRMED ("all good")
+
+Build E3D6810A (agent 336ccc7) on win11-fresh, hash-verified, ProtoTrace on during the test:
+user dragged real windows by the dom0 title bar and confirmed the acceptance criteria - no
+jump-back, no replay, no settle wander. Automated gates all green on the same build:
+ - toast: fired, cropped card at dom0 bottom-right, two toasts stacked correctly (fullshot
+   pixels inspected, not just geometry);
+ - census: cap_timeout=0, workarea_fail=0; scripted drag settles in 60 ms, ZERO post-release
+   configures after the one settle announce (144 ms after release, exactly winrect+7);
+ - A3CHECK g=ctx=5120x1440 pages 7200==7200, RESDRIFT adopted correctly on start;
+ - benchmark within noise of 172A72B1 baseline (3 runs/side, hash-verified): dmg_p50 12-13us
+   both, tot_p50 1.2-1.8ms (fix) vs 1.5-2.2ms (base), dt_p50 216-280ms vs 280-319ms.
+
+## NEW PRIMARY (user 2026-08-12): frame-delivery collapse during drags
+
+Both today's builds (172A72B1 AND E3D6810A) capture only 4-5 frames/s during a scripted
+drag (dt_p50 216-319 ms, acq~=dt so the time is spent WAITING for frames), while the
+morning fix-bundle validation on 7db23513 (agent 31ffaaf) measured dt p50 17.9 ms over
+1443 frames - same VM, same 5120x1440, same harness. ~12x fewer delivered frames. The
+user: predating the session does not matter, chase it and fix it. This collapse is also
+the amplifier that made the drag replay visible at all.
+Next experiment (serial): redeploy 7db23513 interleaved with E3D6810A, 3 runs each - build
+regression vs environment/scene drift.
