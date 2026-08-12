@@ -7936,3 +7936,41 @@ Automated validation green on win11-fresh 25H2, hash-verified:
 Pending user-hand checks: Start frame drag (move-stickiness - the one unproven design
 assumption), resize refusal (size-lock end-to-end), Start clickability, dom0-restack-above
 bleed severity (documented Phase 3 limitation), Win-key block feel, wobble verdict.
+
+## 2026-08-12 (cont.) — Movable Start on 25H2: WALLPAPER PHANTOM, root identified, investigating
+
+USER-VISIBLE: movable Start moves+stays (NOACTIVATE fix works) but renders "a peek into the
+underlying desktop" - pure wallpaper, no menu. Also "responds to resize", and the opener
+flashed "two terminal windows".
+
+DECISIVE EVIDENCE (win11-fresh 25H2, build CEBD5650):
+ - A GUEST-SIDE screenshot shows NO Start menu rendered in the guest at all (only Notepad +
+   toast) while dom0 shows a framed or=0 "[win11-fresh] Start" at 2352,56 1201x919 full of
+   wallpaper. So the agent maps a StartMenuExperienceHost window that the guest is NOT
+   presenting as an open menu = a PHANTOM (the persistent Wnd_StartFeed window that exists
+   while Start is CLOSED - GWeck-investigation class).
+ - Agent: PwAttach 0x10184 1201x919 SLICE-FED, then "no card measured for
+   4294966630x4294966546" = GetRealWindowRect returned an INVERTED rect (-666 x -750).
+ - EnumWindows from a guest script sees ZERO StartMenuExperienceHost top-levels (shell
+   surfaces evade it; only the agent's hook tracking sees 0x10184).
+ - ~2h earlier (C55DCDA7) a fullshot showed a CORRECT 832x736 cropped card - so the agent
+   CAN render Start right when it is genuinely open; the failure is state-dependent.
+
+Multiple root threads (investigation wf_82456c4a running): (a) the closed-Start phantom
+passes ShouldAcceptWindow+IsShellToastWindow and is mapped showing wallpaper; (b) slice-feed
+of a moved shell surface reads a screen region with no menu pixels; (c) GetRealWindowRect
+returns negative for the managed Start, poisoning crop + slice geometry.
+
+FIXES LANDED THIS ROUND (necessary, not sufficient alone):
+ - Sticky crop (agent, toastcrop.c): last-good insets per hwnd, never revert a managed shell
+   surface to uncropped. Fixes the garble+resize WHEN a card was ever measured; does not help
+   a phantom that never had a card.
+ - SWP_NOACTIVATE on daemon moves (main.c): a frame drag no longer dismisses Start. CONFIRMED
+   working (moved+stayed).
+ - Windowless wscript/VBS Start opener (installer + guest scripts): no more conhost flash
+   that dismissed Start ("two terminal windows").
+
+PROCESS NOTE: went too fast in the live loop here (3 user-visible failed attempts) - the
+25H2 Start capture is a real investigation, not a one-shot fix. Stopped guessing; running
+wf_82456c4a with the guest-pixel evidence to decide movable-managed-with-fixes vs
+correct-corner-drop-movable.
