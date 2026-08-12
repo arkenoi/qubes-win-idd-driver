@@ -928,26 +928,25 @@ function Invoke-Stage2 {
     $openStart = Join-Path $qtBin 'open-start-menu.ps1'
     @'
 # Open the guest Start menu (dom0 appmenu entry target). Relays VK_LWIN from an
-# interactive scheduled task; direct injection from service context does not open Start.
+# interactive scheduled task that fires AFTER this launcher exits: any process activity
+# while Start is open steals focus and dismisses it (measured 2026-08-12 - the first
+# version of this helper closed the menu with its own cleanup), so the task is armed,
+# the launcher exits, and the stale task is retired on the NEXT invocation (/f).
 $ErrorActionPreference = 'SilentlyContinue'
 $work = Join-Path $env:TEMP 'qwt-open-start'
 New-Item -ItemType Directory -Force $work | Out-Null
-$marker = Join-Path $work 'sent.txt'
 $inner = Join-Path $work 'winkey.ps1'
 @"
+Start-Sleep -Milliseconds 2500
 Add-Type -Namespace W -Name K -MemberDefinition '[DllImport(`"user32.dll`")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);'
 [W.K]::keybd_event(0x5B, 0, 0, [UIntPtr]::Zero)
 Start-Sleep -Milliseconds 80
 [W.K]::keybd_event(0x5B, 0, 2, [UIntPtr]::Zero)
-Set-Content '$marker' 'sent'
 "@ | Set-Content $inner -Encoding ASCII
-Remove-Item $marker -ErrorAction SilentlyContinue
 $user = (Get-CimInstance Win32_ComputerSystem).UserName
 if (-not $user) { $user = "$env:USERDOMAIN\$env:USERNAME" }
-& schtasks /create /tn QwtOpenStart /tr "powershell -NoProfile -ExecutionPolicy Bypass -File `"$inner`"" /sc once /st 00:00 /ru $user /it /f | Out-Null
+& schtasks /create /tn QwtOpenStart /tr "powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$inner`"" /sc once /st 00:00 /ru $user /it /f | Out-Null
 & schtasks /run /tn QwtOpenStart | Out-Null
-for ($i = 0; $i -lt 12; $i++) { Start-Sleep -Milliseconds 500; if (Test-Path $marker) { break } }
-& schtasks /delete /tn QwtOpenStart /f | Out-Null
 '@ | Set-Content -LiteralPath $openStart -Encoding ASCII
     $lnkDir = 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs'
     $lnkPath = Join-Path $lnkDir 'Start Menu.lnk'
