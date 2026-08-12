@@ -11,7 +11,10 @@ Remove-Item "$work\start-render.png","$work\start-render.txt" -ErrorAction Silen
 $ErrorActionPreference = 'Continue'
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Start-Sleep -Milliseconds 1500
-[System.Windows.Forms.SendKeys]::SendWait("^{ESC}")      # open Start
+Add-Type -Namespace W -Name K -MemberDefinition @"
+[DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+"@
+[W.K]::keybd_event(0x5B,0,0,[UIntPtr]::Zero); Start-Sleep -Milliseconds 80; [W.K]::keybd_event(0x5B,0,2,[UIntPtr]::Zero)   # VK_LWIN: the proven opener
 Start-Sleep -Milliseconds 2500                            # let it animate in
 $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height)
