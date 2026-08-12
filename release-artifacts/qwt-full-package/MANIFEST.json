@@ -1,0 +1,15 @@
+{
+  "package": "qwt-full",
+  "built": "2026-08-10T16:58:21.3839399Z",
+  "repo_sha": "1aa7006478b6fa6798588ba7f30e870f634bb8c8",
+  "agent_sha": "c7ccb459aec9d91446bbe34e2cfe180772dd0366",
+  "agent_describe": "c7ccb45",
+  "installer_sha": "14c189e44fea99c0b42b029e96f172c7eecec5e0",
+  "stock_msi_sha256": "7049322128d1cf7d9dc2a48f69ef91a5893a8f779d3b2ad7d25fdfc8eee3baf4",
+  "files": {
+    "qubes-windows-tools-4.3.1.exe": "814de46af40d7c1b8df0c0d6ed25141dd061d9a5dd4251e98d7daa7c23fdf211",
+    "installer.msi": "0c60dc545f9d06abac810da5234b206567db9d35ac8d91f88ffdb5a5a39cb49a",
+    "agent-bins/gui-watchdog.exe": "e54adfbe55b989ee4bcfd7c53175eb21d69a8fe09c5fb7d67093cb435d166d03",
+    "agent-bins/gui-agent.exe": "99480d876377e41b7440ca7624305debe22f3c0790ee5a69724fde093a6e6a0d"
+  }
+}
