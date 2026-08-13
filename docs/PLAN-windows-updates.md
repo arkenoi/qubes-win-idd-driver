@@ -142,19 +142,42 @@ every boot from `advertise-tools.c` (`/qubes-tools/os` → `qubes.NotifyTools`).
 | `qubesdb-cmd` write from the guest | fails in all five documented forms (read/list work) |
 | VMShell `exit` after a failing command | 0 — while an explicit `exit 100` returns 100 and a refused service returns 126 |
 | step 2, agent tarball | 1 MB payload **byte-exact** (size + SHA256 read back from the guest) |
-| step 4, real update pass | see below |
+| step 4, real update pass | count=2, KB5121003 installed (DISM rc=3010) |
+| the guest actually changed | **UBR 8875 → 9168** after reboot, matching KB5121003 "(26200.9168)"; `Get-HotFix` lists it; CBS reboot flag cleared |
+| cold boot (dom0 starts a stopped qube) | `qubes.VMShell` answers at t+259 s, `qubes.VMExec` at t+265 s — with a cumulative update being applied at boot |
+| workdir survives a reboot and a dom0 `rm` | present after both |
+| PowerShell parse check | all guest scripts ok, and proven able to FAIL on a deliberately broken file |
 
 Re-run any of it with `tools/replay-dom0-update.py <vm> [--with-entrypoint]`, which replays
 dom0's sequence using the same services and the same `encode_for_vmexec` encoding, and
 `tools/verify-vmupdate-copy.py <vm>` for the byte-exactness check.
 
+## Reporting the outcome, not the phase
+
+The first real pass also exposed two defects in *our* updater, both the same family as the QWT
+`VMExec` bug — success reported regardless of outcome:
+
+- `qubes-windows-update.ps1` **assigned** the install rows inside the per-KB loop, so each KB
+  erased the previous one and only the last survived. Now appended and grouped per KB.
+- A single catalog KB legitimately yields several `.msu` (build/architecture variants,
+  prerequisites) and the inapplicable ones fail by design — a 24H2 cumulative returns `rc=552`
+  on a 25H2 guest. So a KB counts as installed when **at least one** of its files returns DISM
+  0, 3010 or 0x240006 (already installed).
+- `wu-update.ps1` exited 0 whenever the phase reached `done`, so a KB whose every file failed
+  still reported success to dom0. It now names failed KBs on stderr and exits 1.
+
 ## Acceptance still open
 
 1. **The user's click** — the Qubes Update GUI against a Windows qube. Cannot be run from this
-   dev qube (dom0 tool); it is the one step that needs the user.
-2. **Cold-boot path** — start a stopped guest and update immediately, as dom0 does to a template.
-3. **TemplateVM proper** — everything above was exercised on a StandaloneVM. The dom0-side logic
-   has no OS filter and the guest side is identical, but "no regression" is not "demonstrated".
+   dev qube (it is a dom0 tool); the one step that needs the user.
+2. **TemplateVM proper** — everything above was exercised on a StandaloneVM. dom0-side selection
+   has no OS filter and the guest side is identical, so templates are in scope by construction —
+   but that is an argument, not a demonstration.
+3. **The offered .NET update** (KB5120708) appeared in `available` but was not installed in the
+   first pass; it needed the pending reboot. Re-run after the reboot to confirm it lands.
+
+The cold-boot path (item 2 in earlier drafts) is now **closed**: after a cold start with a
+cumulative update applying at boot, `qubes.VMExec` answered 6 s after qrexec came up.
 
 ## Do not repeat
 
