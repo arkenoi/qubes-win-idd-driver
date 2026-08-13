@@ -60,3 +60,8 @@ if (-not $pass) {
 
 Write-Output ''
 Write-Output ("=== RESULT === changed=$changed warnings=$warn")
+# EXIT CODE IS A CONTRACT: 0 = autologon will happen on the next boot, 2 = it will NOT and the
+# qube would come back unreachable. The updater refuses to reboot on 2 rather than knowingly
+# stranding the qube - see wu-update.ps1.
+if ($warn -gt 0) { exit 2 }
+exit 0
