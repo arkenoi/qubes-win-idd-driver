@@ -71,8 +71,11 @@ while ((Get-Date) -lt $deadline) {
             if ($st.downloading) { Msg ("downloading " + $st.downloading.kb + " (" + $st.downloading.total_mb + " MB)") }
         }
         'install'      {
+            # stderr ONLY. dom0 renders stderr lines as live messages AND displays collected
+            # stdout, so writing the same text to both makes every line appear twice in the
+            # updater output - which is exactly what it did.
             Prog 75
-            if ($st.installing) { Msg ("installing " + $st.installing.file); Write-Output ("installing " + $st.installing.file) }
+            if ($st.installing) { Msg ("installing " + $st.installing.file) }
         }
         'done'         { break }
         'error'        { break }
@@ -106,10 +109,7 @@ switch ($st.phase) {
         # After 100.0 every stderr line is shown as a message, so the outcome goes THERE - on
         # stdout it would only reach the log view, and the operator asked to see which updates
         # were installed. Ends with a KB id, never a bare number (see Msg).
-        if ($okKbs.Count) {
-            $Err.WriteLine("installed: " + ($okKbs -join ', '))
-            Write-Output ("installed: " + ($okKbs -join ', '))
-        }
+        if ($okKbs.Count) { $Err.WriteLine("installed: " + ($okKbs -join ', ')) }
         if ($st.reboot_needed) { $Err.WriteLine('updates installed - RESTART REQUIRED to finish') }
         if ($failed.Count) {
             foreach ($f in @($perKb | Where-Object { -not $_.ok })) {
