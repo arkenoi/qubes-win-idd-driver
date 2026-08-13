@@ -8086,3 +8086,32 @@ PROCESS FAILURES THIS ROUND, recorded so they are not repeated:
  - MonInfoCache measured 3x interleaved: upd p95 3457->1631 us, upd max 40.2->14.6 ms.
    tot_max did NOT improve in the same runs (89.6->168.2 ms median) and is unexplained -
    NOT claimed as a win, still open.
+
+## 2026-08-13 — DRAG WOBBLE PARKED by the user; the measured wins ship, the servo does not
+
+User verdict after side-by-side testing of servo-on vs servo-off: "the difference is
+marginal, both suck in a way, lets record experiment results and put improvement on long
+term plan, not now." Full write-up, including how to resume it: docs/PLAN-drag-quality.md.
+
+SHIPPED, default on (each measured independently of the parked work):
+ - InputDragFreezeContent: content frozen during a guest drag, one full repaint on release,
+   and the freeze OWNS the capture channel so the engine's sweep cannot fire a PrintWindow
+   into the dragged app's thread. Startup 193/211 ms -> 0 ms on four of seven drags.
+ - DragEventPriority: input drained (then announced) ahead of the frame wait while dragging.
+   Fixes the guest window only advancing every 54-70 ms in 12-68 px hops.
+ - MonInfoCache: upd p95 3457->1631 us, upd max 40.2->14.6 ms, 3x interleaved.
+SHIPPED, default OFF (experiments, knob-revivable): InputDragServo (Smith predictor),
+InputDragServoClamp, InputDragFreeze (frozen dom0 window), gain scheduling (neutral).
+
+WHY THE SERVO DID NOT SHIP: theory and simulation were sound (delay cancels out of the loop;
+1.6% residual reversals vs 43%), but on the guest the ESTIMATE was unreliable in both
+directions - full gain on a bad reconstruction gave "crazy extrapolated jumps", and a
+reconstruction running ahead collapsed the deviation so the window "just sits there". The
+control law was never the problem; the origin estimate was, and it was never measured
+against ground truth. That is the first thing to do if this is revived.
+
+RESIDUAL, unfixed and recorded: cold first drag 156-259 ms (vs ~0 warm); the ~46 ms guest
+composite quantum at 5120x1440 (vs ~18 ms at 1080p) which announces are slaved to and which
+is NOT agent code - the authorised resolution A/B was never run; tot_max unexplained under
+MonInfoCache; and the twice-seen wedged-window corruption (proven guest-side, fresh windows
+always clean).
