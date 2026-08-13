@@ -8419,3 +8419,41 @@ each message exactly once, and `shutdown /a` afterwards returned 1116 "no shutdo
 progress" - proving the template branch did NOT fire on a standalone.
 UNPROVEN: the TemplateVM branch itself. There is no Windows TemplateVM rig in the roster, so the
 reboot path is code-complete but has never executed. Do not describe it as verified.
+
+## 2026-08-13 (cont.) — reboot committed at the end of a pass, flag cleared, and what Qubes does to a guest reboot
+
+User direction, superseding the template/standalone split recorded above: "we commit reboot if
+needed at the end of update and it is fine. both on template and standalone. it is user guided
+action anyway, so no safeguard needed." Plus: "if we applied everything, we can just clear the
+flag right?" - yes.
+
+PLATFORM FACT worth knowing before designing anything around this: qubes-core-admin's
+templates/libvirt/xen.xml sets <on_reboot>destroy</on_reboot>. A guest-initiated reboot DESTROYS
+the domain; a qube can never restart itself, only end up halted. Measured: after our shutdown
+call the qube sat Halted for 4+ minutes and did not come back. The OUTCOME is still correct -
+Windows completes pending servicing at its next boot, which for a template is exactly the boot
+that commits the change to the template root - but the message had to stop claiming "rebooting".
+
+TWO OF MY OWN BUGS, both of the "silently did nothing" family:
+1. The first reboot implementation used `Start-Process shutdown.exe ... -EA SilentlyContinue`.
+   It scheduled NOTHING and reported nothing: the qube never rebooted while the run announced it
+   would (`shutdown /a` afterwards returned 1116 "no shutdown was in progress"). Now shutdown.exe
+   is called directly and $LASTEXITCODE checked, with an honest message when scheduling fails.
+   Positive control on the rig: `shutdown /r /t 300` -> rc 0, then `shutdown /a` -> rc 0.
+2. MEASUREMENT BUG: `powershell ... & echo EXIT=%errorlevel%` reports the PREVIOUS command's code,
+   because cmd expands %errorlevel% when it parses the line, before powershell runs. It made a
+   "no updates" pass look like exit 0. The replay harness reads the real qrexec status and shows
+   rc=100. Same family as the earlier `| head` pipeline trap: measure with an instrument that
+   cannot report the wrong thing.
+
+FLAG CLEARING: the pass now re-reports availability at the END of an install run. With a reboot
+pending it reports the number of KBs that did NOT install (0 when everything applied) rather than
+leaving the pre-install count standing - Windows keeps listing an installed KB as available until
+it boots, which would otherwise leave the qube marked for minutes. The boot scan re-reports the
+truth regardless, so a wrong guess self-corrects.
+
+VERIFIED END TO END on win11-fresh:
+  pass -> "installed: KB5120708" -> flag cleared (admin.vm.feature.Get+updates-available returns
+  empty, i.e. False) -> qube shuts down -> next start completes servicing ->
+  Get-HotFix lists KB5120708, pending_reboot cbs=false wu=false -> next pass rc=100
+  "no updates available", flag still clear.
