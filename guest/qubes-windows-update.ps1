@@ -190,8 +190,15 @@ function Test-Msu($path, $expect) {
     $null = $fs.Read($magic, 0, 4)
     $fs.Close()
   } catch { return $false }
-  if (-not ($magic[0] -eq 0x4D -and $magic[1] -eq 0x53 -and $magic[2] -eq 0x43 -and $magic[3] -eq 0x46)) {
-    Log "  VERIFY: $([IO.Path]::GetFileName($path)) does not start with the CAB magic MSCF - discarding"
+  # An .msu is NOT always a cabinet. Classic packages start with 'MSCF', but recent Windows 11
+  # cumulative updates ship as WIM containers starting with 'MSWIM' - measured 2026-08-13:
+  # KB5121003's .msu begins 4D 53 57 49 4D. A CAB-only check rejected a perfectly good 4.8 GB
+  # download and looped forever, which is worse than the problem it was added for. Accept both,
+  # and keep the check only for what it is actually good at: catching an HTML error page.
+  $isCab = ($magic[0] -eq 0x4D -and $magic[1] -eq 0x53 -and $magic[2] -eq 0x43 -and $magic[3] -eq 0x46)
+  $isWim = ($magic[0] -eq 0x4D -and $magic[1] -eq 0x53 -and $magic[2] -eq 0x57 -and $magic[3] -eq 0x49)
+  if (-not ($isCab -or $isWim)) {
+    Log "  VERIFY: $([IO.Path]::GetFileName($path)) is neither MSCF nor MSWIM - discarding"
     return 'bad'          # an HTML error page or garbage: resuming it can only make it worse
   }
   if ($expect -gt 0 -and $len -lt $expect) { return 'short' }   # incomplete: RESUME, do not delete
