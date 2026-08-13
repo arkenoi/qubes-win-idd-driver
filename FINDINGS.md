@@ -8030,3 +8030,59 @@ now separated:
     Start is open and the PNG is retrieved later.
 Rig is back on ShellManaged=0 (headerless corner Start), the only configuration ever
 confirmed to render correctly. Frozen-anchor (=2) exists but is unproven and NOT recommended.
+
+## 2026-08-13 — DRAG: the accepted configuration, and what each part actually fixed
+
+Shipped defaults (agent, verified by CLEARING every registry override and reading the
+agent's own PerfInit lines back - build 69E59CE6):
+  QGADRAGSERVO on gain=85% tau=25ms deadband=3px fast>=24px@85% clamp=on
+  QGADRAGFREEZECONTENT on   QGADRAGEVTPRIO on   QGAMONCACHE on   QGADRAGFREEZE off
+
+The user's drag complaints were FOUR separate defects, each with its own cause and fix.
+Everything below is measured, mostly with guest/sample-window-motion.ps1 (in-guest 10 ms
+sampling of the guest's OWN GetCursorPos + GetWindowRect, retrieved after the fact so the
+observation cannot perturb the drag):
+
+1. WOBBLE (forth-and-back). Structural, pre-existing (16% of announces reversed on the
+   user-confirmed-good build, 19% on a regressed one). gui-daemon sends WINDOW-RELATIVE
+   motion (xside.c: k.x = ev->x) and the agent reconstructed an absolute against a GUEST
+   origin; that is exact only when it equals dom0's APPLIED origin, which lags our
+   announces and is unobservable during a guest drag (zero inbound configures measured in
+   a 5.85 s latch). Gain-1 servo + transport lag = oscillator. FIX: Smith predictor -
+   timestamped ring of our own announces, reconstruct dom0's applied origin, damp at 85%.
+   Servo the CURSOR not the window, so Windows re-anchoring the modal loop's grab
+   mid-drag (drag-to-restore of a maximized window) cannot poison it.
+2. STARTUP DELAY. Measured 193 ms and 211 ms between the INJECTED cursor moving and the
+   window moving (221 px of cursor travel banked in one case); warm 30-40 ms. Cause:
+   PrintWindow(PW_RENDERFULLCONTENT) is a synchronous cross-process render that executes
+   in the DRAGGED APP'S UI THREAD, so the app cannot process the mouse messages that move
+   its own window. FIX: freeze content during the drag (dom0 keeps the last good bitmap,
+   one authoritative full repaint on release). Result: 0 ms on four of seven drags.
+   Residual: cold first-drag still 156-259 ms - OPEN.
+3. JUMPINESS. The guest's own window rect advanced only every 54-70 ms in 12-68 px hops
+   (~16 Hz). Announcing faster cannot smooth motion that is not happening: the mouse
+   events driving the app's move loop arrived in clumps at frame cadence, because the pump
+   drains the vchan only on its own event or at the top of a frame, and g_WindowEventSignal
+   is LAST in the wait array by design. FIX (DragEventPriority): while the drag latch is
+   armed, drain input FIRST and then announce, both ahead of the frame wait.
+4. FAST-DRAG TRAILING. The 85% damping is only needed near the settling point; applied to a
+   fast hand it just lags. The user proposed 'first jump immediately, then adapt' = gain
+   scheduling. Implemented at 100% for deviations >=24 px and it produced CRAZY
+   EXTRAPOLATED JUMPS: at full gain a mis-reconstructed origin is applied whole, and the
+   damping had been silently absorbing those errors. Reverted to neutral (fast gain ==
+   base gain) and added the CLAMP that makes the idea safe: an injected step may never
+   exceed 2x the hand's own relative movement for that event + 32 px, so a wrong estimate
+   can only make the window LAG, never overshoot. Raising InputDragServoFastGainPct is now
+   a field experiment rather than a risk.
+
+PROCESS FAILURES THIS ROUND, recorded so they are not repeated:
+ - A knob's registry READ silently failed to land in perf.c (the edit did not match), so
+   the value was hardcoded and could not be flipped when it misbehaved - the binary had to
+   be rolled back instead. EVERY generated edit is now verified by grepping the file, not
+   by trusting the script's own success message.
+ - Latency was judged for hours with ProtoTrace=1 and LogLevel=4 live on the guest, which
+   multiply the frame-walk tail (tot max 580 ms vs 66 ms off). Diagnostics are now OFF by
+   default on the rig and must be re-enabled per measurement.
+ - MonInfoCache measured 3x interleaved: upd p95 3457->1631 us, upd max 40.2->14.6 ms.
+   tot_max did NOT improve in the same runs (89.6->168.2 ms median) and is unexplained -
+   NOT claimed as a win, still open.
