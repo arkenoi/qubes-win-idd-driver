@@ -72,6 +72,10 @@ INC='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 ./tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -File \"$INC\\install-updater-agent.ps1\" -SetupRoot \"$INC\"" 2>&1 |
     grep -E 'deployed|prepared|NoAutoUpdate' | sed 's/^/  /'
 
+el; echo "applying the shipped desktop tweaks (stage 2 does this on a real install)"
+./tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -File \"$INC\\quiet-desktop.ps1\"" 2>&1 |
+    grep -E 'RESULT|FAIL' | sed 's/^/  /'
+
 el; echo "build BEFORE the update:"
 BEFORE=$(./tools/qtest pushrun guest/wu-verify-installed.ps1 2>&1 | sed -n '/=== RESULT ===/,$p' | tail -1)
 echo "  $BEFORE"

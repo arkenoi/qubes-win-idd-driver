@@ -89,6 +89,58 @@ Set-Reg "$POL\Windows\GameDVR" 'AllowGameDVR' 0 'DWord' 'Game Bar / Game DVR off
 # app updates only generate failed connection attempts.
 Set-Reg "$POL\WindowsStore" 'AutoDownload' 2 'DWord' 'Store auto app-updates off'
 
+# --- per-user settings (no machine-wide equivalent) -------------------------------------------
+# The File Explorer "sync provider notifications" ARE the OneDrive / Microsoft 365 adverts -
+# "Back up your folders", "Finish setting up OneDrive" - and there is no HKLM policy for them:
+# the value lives in each user hive. So write it to the invoking user, to every EXISTING profile
+# (loaded hives in place, offline ones via reg load/unload), and to the DEFAULT profile so
+# accounts created later inherit it. Same machinery disable-hw-accel.ps1 uses for the Office keys,
+# and for the same reason: under qrexec this runs as SYSTEM, where a plain HKCU write lands in
+# the wrong hive and silently does nothing.
+$perUser = @(
+    @{ sub = 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+       name = 'ShowSyncProviderNotifications'; val = 0; why = 'no OneDrive/365 adverts in File Explorer' },
+    @{ sub = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+       name = 'SubscribedContent-338388Enabled'; val = 0; why = 'no suggested content on Start' },
+    @{ sub = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+       name = 'SubscribedContent-338389Enabled'; val = 0; why = 'no tips/suggestions in Settings' },
+    @{ sub = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+       name = 'SilentInstalledAppsEnabled';      val = 0; why = 'no silently installed suggested apps' }
+)
+
+function Set-PerUserValues([string]$HiveRoot, [string]$Label) {
+    foreach ($e in $perUser) { Set-Reg "$HiveRoot\$($e.sub)" $e.name $e.val 'DWord' "${Label}: $($e.why)" }
+}
+
+Set-PerUserValues 'HKCU:' 'current user'
+
+$profileList = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+foreach ($prof in (Get-ChildItem $profileList -ErrorAction SilentlyContinue |
+                   Where-Object { $_.PSChildName -match '^S-1-5-21-' })) {
+    $sid  = $prof.PSChildName
+    $path = (Get-ItemProperty $prof.PSPath -ErrorAction SilentlyContinue).ProfileImagePath
+    if (Test-Path "Registry::HKEY_USERS\$sid") {
+        Set-PerUserValues "Registry::HKEY_USERS\$sid" "profile $sid (loaded)"
+    } elseif ($path -and (Test-Path "$path\NTUSER.DAT")) {
+        $mount = 'QWTNG_' + $sid.Substring($sid.Length - 6)
+        & reg load "HKU\$mount" "$path\NTUSER.DAT" *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Set-PerUserValues "Registry::HKEY_USERS\$mount" "profile $sid (offline)"
+            [gc]::Collect()
+            & reg unload "HKU\$mount" *> $null
+        }
+    }
+}
+
+if (Test-Path 'C:\Users\Default\NTUSER.DAT') {
+    & reg load 'HKU\QWTNG_DEF' 'C:\Users\Default\NTUSER.DAT' *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Set-PerUserValues 'Registry::HKEY_USERS\QWTNG_DEF' 'default profile'
+        [gc]::Collect()
+        & reg unload 'HKU\QWTNG_DEF' *> $null
+    }
+}
+
 Write-Output ""
 Write-Output ("=== RESULT === changed=$script:changed failed=$script:failed")
 if ($script:failed -gt 0) { exit 1 }
