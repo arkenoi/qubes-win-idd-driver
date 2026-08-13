@@ -90,10 +90,13 @@ rather than assumed.
 | setting | why | consequence if missing |
 |---|---|---|
 | `qvm-features <vm> vmexec 1` | routes dom0's prep commands over `qubes.VMExec`, the only interceptable transport | the update aborts at `mkdir -p` before reaching the agent |
-| `qvm-prefs <vm> qrexec_timeout 300`+ | a Windows boot that is APPLYING an update took **259 s** to answer qrexec (measured); the Qubes default is **60 s** (`app.py: default_qrexec_timeout=60`) | dom0's start of a stopped qube times out — precisely when the qube is finishing an update |
+| `qvm-prefs <vm> qrexec_timeout 1800` | a Windows boot that is APPLYING an update took **259 s** to answer qrexec (measured); the Qubes default is **60 s** (`app.py: default_qrexec_timeout=60`) | dom0's start of a stopped qube times out — precisely when the qube is finishing an update |
 
-`qvm-create-windows-qube` already raises the timeout (this rig reads 6000 s); a hand-built Windows
-qube may not. Both belong in the dom0 RPM or, failing that, in the install instructions.
+Both are applied by **`qwt-ng-prepare-qube <qube>`** (or `--all`), shipped in the dom0 RPM and run
+from its `%post` against every qube whose `os` feature reads Windows. It is idempotent and never
+lowers an existing higher timeout. 1800 s covers the measured 259 s with wide margin and the much
+longer boot a Windows *feature* update takes; `qvm-create-windows-qube` sets 6000 s, which is left
+alone.
 
 ### The self-closing cycle
 

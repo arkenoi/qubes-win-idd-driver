@@ -451,6 +451,7 @@ jobs:
           cp contrib/auto-qwt/qwt-ng-fix-qwcq         ~/rpmbuild/SOURCES/
           cp contrib/README-qvm-create-windows-qube.md ~/rpmbuild/SOURCES/
           cp packaging/rpm/qvm-windows-update          ~/rpmbuild/SOURCES/
+          cp packaging/rpm/qwt-ng-prepare-qube        ~/rpmbuild/SOURCES/
           cp dl/MANIFEST.json                          ~/rpmbuild/SOURCES/
           cp packaging/rpm/qubes-windows-tools-ng.spec ~/rpmbuild/SPECS/
           rpmbuild -bb ~/rpmbuild/SPECS/qubes-windows-tools-ng.spec \

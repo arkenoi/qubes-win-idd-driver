@@ -124,6 +124,15 @@ preinstalled, and why Windows never could be. The guest now answers dom0's own c
 sequence and runs the Windows updater where dom0 expects its injected agent. Details and the
 replay harness: `docs/PLAN-windows-updates.md`.
 
+Two things to know. **Two settings live in dom0** and cannot come from the guest — the dom0
+package applies them on install, and `qwt-ng-prepare-qube <qube>` applies them to a qube created
+later: the `vmexec` feature (or dom0's update commands arrive as shell text at `cmd.exe` and the
+run aborts) and a raised `qrexec_timeout` (a Windows boot *applying* an update took 259 s to
+answer qrexec, against a 60 s default). And **the qube shuts down after installing an update** —
+that is not a failure: Qubes destroys a domain on a guest-initiated reboot, and Windows finishes
+the update during its next boot, which happens by itself the next time the qube is started or
+updated. For a template, that boot is exactly what commits the update to the template root.
+
 ### Networking runs over the PV path
 
 Stock QWT 4.2.2 silently falls back to an emulated Realtek NIC (see below). This build binds
