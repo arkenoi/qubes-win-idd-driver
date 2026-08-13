@@ -25,6 +25,18 @@ function Prog([double]$p) {
 }
 $script:LastP = -1
 
+# dom0 shows any stderr line that is NOT a number as a message, interleaved with the progress
+# bar (qube_connection.py::_collect_stderr), so the operator can see WHICH update is running
+# rather than a bare percentage.
+#
+# CAREFUL: dom0 tries float(line) and then float(line.split()[-1]), so a message ENDING in a
+# number is silently swallowed as a progress value - "downloading KB5120708 184.5" would be
+# read as 184.5 %. Every message here must therefore end in a non-numeric word.
+$script:LastMsg = ''
+function Msg([string]$m) {
+    if ($m -and $m -ne $script:LastMsg) { $script:LastMsg = $m; $Err.WriteLine($m) }
+}
+
 # If an update run is already in flight, attach to it instead of clobbering its status file.
 $running = (Get-ScheduledTask -TaskName $Task -EA SilentlyContinue).State -eq 'Running'
 if (-not $running) {
@@ -43,13 +55,25 @@ while ((Get-Date) -lt $deadline) {
     $raw = Get-Content -LiteralPath $Status -Raw -EA SilentlyContinue
     if (-not $raw) { continue }                       # not written yet, or mid-rewrite
     try { $st = $raw | ConvertFrom-Json } catch { continue }
+    # Announce WHICH updates as soon as the scan knows, independent of phase: the tail polls
+    # every 3 s and a short-lived phase can pass between two polls unseen. Msg de-duplicates.
+    if ([int]$st.count -gt 0 -and $st.available) {
+        Msg ("found " + $st.count + " update(s): " + (@($st.available | ForEach-Object { $_.kb }) -join ', '))
+    }
+
     switch ($st.phase) {
         'init'         { Prog 1 }
-        'ensure-proxy' { Prog 1 }
-        'scan'         { Prog 3 }
+        'ensure-proxy' { Prog 1; Msg 'opening the Qubes updates proxy' }
+        'scan'         { Prog 3; Msg 'scanning Windows Update' }
         'resolve'      { Prog 6 }
-        'download'     { $p = 10; if ($st.downloading -and $st.downloading.pct) { $p = 10 + 0.6 * [double]$st.downloading.pct }; Prog $p }
-        'install'      { Prog 75; if ($st.installing) { Write-Output ("installing " + $st.installing.file) } }
+        'download'     {
+            $p = 10; if ($st.downloading -and $st.downloading.pct) { $p = 10 + 0.6 * [double]$st.downloading.pct }; Prog $p
+            if ($st.downloading) { Msg ("downloading " + $st.downloading.kb + " (" + $st.downloading.total_mb + " MB)") }
+        }
+        'install'      {
+            Prog 75
+            if ($st.installing) { Msg ("installing " + $st.installing.file); Write-Output ("installing " + $st.installing.file) }
+        }
         'done'         { break }
         'error'        { break }
     }
@@ -79,8 +103,14 @@ switch ($st.phase) {
         $failed = @($perKb | Where-Object { -not $_.ok } | ForEach-Object { $_.kb })
         $okKbs  = @($perKb | Where-Object { $_.ok }      | ForEach-Object { $_.kb })
 
+        # After 100.0 every stderr line is shown as a message, so the outcome goes THERE - on
+        # stdout it would only reach the log view, and the operator asked to see which updates
+        # were installed. Ends with a KB id, never a bare number (see Msg).
+        if ($okKbs.Count) {
+            $Err.WriteLine("installed: " + ($okKbs -join ', '))
+            Write-Output ("installed: " + ($okKbs -join ', '))
+        }
         if ($st.reboot_needed) { $Err.WriteLine('updates installed - RESTART REQUIRED to finish') }
-        if ($okKbs.Count)  { Write-Output ("installed: " + ($okKbs -join ', ')) }
         if ($failed.Count) {
             foreach ($f in @($perKb | Where-Object { -not $_.ok })) {
                 $why = if ($f.reason) { $f.reason } else { "DISM rejected every package file" }

@@ -8275,3 +8275,53 @@ reboot and dom0's `rm`.
 
 STILL OPEN: the user's own click in the Qubes Update GUI (a dom0 tool - cannot be driven from
 this dev qube), and a TemplateVM proper rather than the StandaloneVM used here.
+
+## 2026-08-13 (cont.) — RETRACTION: the `vmexec` feature is REQUIRED, not optional
+
+Earlier today I wrote that the update path works with or without the `vmexec` feature, on the
+grounds that dom0's VMShell line ends in `& exit` and `exit` returns 0 even after a failing
+command (measured with two controls). That generalised one measurement into a claim about a
+path I had not actually replayed. Replaying it end to end (tools/replay-dom0-update.py
+--no-vmexec) disproves it:
+
+  [mkdir] rc=1   <- "a subdirectory or file already exists"; transfer_agent ABORTS on the first
+                    nonzero result, so the agent step is never reached.
+  [rm]    rc=49
+
+and when the workdir does NOT exist, `mkdir -p /run/qubes-update/` fails on the forward slashes
+instead, creating nothing, so step 2's redirection fails and dom0 writes its tarball into a
+closed pipe. BOTH ways the fallback fails. The earlier "harmless no-op" reading was wrong.
+
+WHAT THIS MEANS FOR SHIPPING: `qvm-features <vm> vmexec 1` must be set for every Windows qube,
+from dom0, because the guest cannot set it (the Windows qubesdb-cmd cannot write - upstream
+`optind -= 2` bug recorded above). Either the install instructions say so, or the dom0 RPM does
+it the way qwt-ng-fix-qwcq already patches qvm-create-windows-qube. Without it the Qubes Update
+GUI cannot update the qube at all - it fails before reaching our shim.
+
+Set on win11-fresh via admin.vm.feature.Set+vmexec (this testbed's policy allows it from the dev
+qube) and re-verified: every dom0 step returns 0 through the shim, and the workdir survives.
+
+## 2026-08-13 (cont.) — catalog resolution fixed, and progress now names the updates
+
+RESOLVER: KB5120708 was unresolvable because Resolve-Catalog required the entry title to match
+`24H2|26100`. Fetched the real catalog page: the applicable entry is "2026-08 Cumulative Update
+for .NET Framework 3.5 and 4.8.1 for Windows 11, version 25H2 for x64 (KB5120708)" - the other
+three are arm64 and "Microsoft server operating system". The version/arch tokens now come from
+the running guest (DisplayVersion, CurrentBuild, PROCESSOR_ARCHITECTURE), Server/Dynamic stay
+excluded, the chosen title is logged, and a MISS logs every candidate - a miss was previously
+indistinguishable from "no updates". Verified with the new `-Action resolve` dry run (scan +
+resolve, no download, no install): picks the 25H2 x64 entry, 1 package, proxy torn down after.
+
+PROGRESS DETAIL: dom0 shows any stderr line that is not a number as a MESSAGE, interleaved with
+the progress bar (qube_connection.py::_collect_stderr tries float(line), then
+float(line.split()[-1]), else emits FormatedLine). So wu-update.ps1 now streams which update is
+running, not just a percentage. Measured against a scan-only run:
+  0.0 / 1.0 / "opening the Qubes updates proxy" / 3.0 / "scanning Windows Update" /
+  "found 1 update(s): KB5120708" / 100.0        exit 0
+TRAP encoded in the code: because dom0 falls back to float(line.split()[-1]), a message ENDING
+in a number is swallowed as a progress value - "downloading KB5120708 184.5" would register as
+184.5 %. Every message must end in a non-numeric word.
+
+QUBE LEFT UPDATE-READY for the user's dom0 run: win11-fresh running, updater agent current,
+vmexec=1, updates-available=1, exactly one update pending (KB5120708, 184.5 MB) which now
+resolves. Deliberately NOT installed here so the dom0 updater has real work to do.
