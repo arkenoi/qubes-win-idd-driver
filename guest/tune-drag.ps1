@@ -9,7 +9,8 @@ param(
     [int]$Servo = -1,        # InputDragServo master switch
     [int]$Freeze = -1,       # InputDragFreeze fallback tier
     [int]$FreezeContent = -1,# InputDragFreezeContent: send no content updates while dragging
-    [int]$Slice = -1         # InputDragSlice: feed the dragged window from the desktop framebuffer
+    [int]$Slice = -1,        # InputDragSlice: feed the dragged window from the desktop framebuffer
+    [int]$EvtPrio = -1       # DragEventPriority: announce at input rate during a drag (smoothness)
 )
 $ErrorActionPreference = 'Continue'
 $k = 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent'
@@ -23,6 +24,7 @@ SetIf 'InputDragServo'           $Servo
 SetIf 'InputDragFreeze'          $Freeze
 SetIf 'InputDragFreezeContent'   $FreezeContent
 SetIf 'InputDragSlice'           $Slice
+SetIf 'DragEventPriority'        $EvtPrio
 Get-Process gui-agent -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep 8
 $p = Get-Process gui-agent -ErrorAction SilentlyContinue
@@ -31,4 +33,4 @@ Write-Output '=== RESULT ==='
 @{ agent_pid = if ($p) { $p.Id } else { $null }
    gain = $c.InputDragServoGainPct; tau = $c.InputDragServoTauMs; deadband = $c.InputDragServoDeadbandPx
    moncache = $c.MonInfoCache; servo = $c.InputDragServo; freeze = $c.InputDragFreeze
-   freezecontent = $c.InputDragFreezeContent; slice = $c.InputDragSlice } | ConvertTo-Json -Compress
+   freezecontent = $c.InputDragFreezeContent; slice = $c.InputDragSlice; evtprio = $c.DragEventPriority } | ConvertTo-Json -Compress
