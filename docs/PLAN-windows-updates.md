@@ -85,6 +85,49 @@ dom0 *starts a stopped template* to update it. The residual risk is therefore a 
 cold start, not a missing session — which is why the cold-boot path is part of acceptance below
 rather than assumed.
 
+## Transport: it works with or without the `vmexec` feature (and we cannot set it)
+
+dom0 picks the transport per qube. `qubesadmin.run_with_args()` uses `qubes.VMExec` only for
+qubes advertising the **`vmexec`** feature, and otherwise falls back to `qubes.VMShell` with a
+shell-quoted line. The obvious move — have the guest advertise it via `qubes.FeaturesRequest`,
+which dom0 accepts from any VM — **does not work, and cannot**:
+
+> The Windows build of `qubesdb-cmd` cannot write to QubesDB at all. `client/qubesdb-cmd.c`
+> does `optind -= 2` under `_WIN32` after an option loop that also tests `getopt(...) != 0`
+> instead of `!= -1`; the net effect is that exactly ONE trailing argument reaches the command
+> handler. `read`/`list` take one argument and work; `write` needs a path/value pair and dies
+> with "Invalid number of parameters" for every documented form (measured: `-c write p v`,
+> `-c write -- p v`, `write p v`, `-c write p`, and two pairs at once).
+
+This is an upstream defect in `qubes-core-qubesdb` — not ours — and qualifies for reporting
+under the upstream policy in CLAUDE.md. **Do not re-add an advertisement step to the installer.**
+
+So the design has to survive without the feature, and it does:
+
+| step | with `vmexec` | without it (today's reality) |
+|---|---|---|
+| 1 `mkdir -p` | shim creates the dir | fails in cmd — but harmless, see below |
+| 2 `cat > …tar.gz` | VMShell → `cat.exe` | identical (always VMShell) |
+| 3 `tar -xzf` | shim accepts + discards | bsdtar extracts, or fails; either is fine |
+| 4 **entrypoint** | shim runs the updater | **identical** — the progress path calls `qubes.VMExec` directly, with no feature check and no fallback |
+| 5 `rm -r` | shim empties the workdir | `rm` not found; workdir persists |
+| 6 `cat <log>` | shim emits our status | `cat.exe` emits nothing, exit 0 |
+
+The reason the failures are harmless: over VMShell dom0's line ends in `& exit`, and **`exit`
+with no argument returns 0 regardless of what preceded it** (measured: a bogus command still
+yields exit 0, while an explicit `exit 100` correctly returns 100). dom0 therefore sees success
+for the preparation steps and proceeds to the only one that matters.
+
+**One thing must not fail**, and it is why the installer pre-creates `C:\run\qubes-update\` and
+why the shim's `rm` empties that directory instead of removing it: if the workdir is missing,
+cmd's redirection in step 2 fails, cmd exits immediately, and dom0 is left writing a megabyte
+into a closed pipe — a broken-pipe error rather than a silent no-op.
+
+Also relied on, and already true: **`os=Windows`**. `qubesadmin.prepare_input_for_vmshell()`
+terminates the VMShell command with `& exit` rather than `; exit` only when the qube's `os`
+feature reads `Windows` — upstream already special-cases Windows here — and QWT advertises it at
+every boot from `advertise-tools.c` (`/qubes-tools/os` → `qubes.NotifyTools`).
+
 ## Evidence
 
 | check | result |
@@ -95,6 +138,9 @@ rather than assumed.
 | `tar` on the guest | present, bsdtar 3.8.4 |
 | `/usr/bin/python3` resolution | resolves to `C:\usr\bin\python3.*`, args + exit code survive |
 | dom0 step sequence 1,3,5,6 after the shim | rc=0 each, shim log lines confirm the handler ran |
+| `vmexec` feature actually set in dom0 | **no** — `admin.vm.feature.Get+vmexec` → "Feature not set" |
+| `qubesdb-cmd` write from the guest | fails in all five documented forms (read/list work) |
+| VMShell `exit` after a failing command | 0 — while an explicit `exit 100` returns 100 and a refused service returns 126 |
 | step 2, agent tarball | 1 MB payload **byte-exact** (size + SHA256 read back from the guest) |
 | step 4, real update pass | see below |
 

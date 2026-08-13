@@ -25,6 +25,17 @@ ARCH = WORKDIR + "agent.tar.gz"
 
 
 def vmexec(argv, timeout=120):
+    """Step transport for a qube advertising `vmexec`.
+
+    With --no-vmexec, route the same command the way qubesadmin's run_with_args() falls back
+    for a qube WITHOUT that feature: shell-quoted over qubes.VMShell. That is what a real
+    Windows qube gets today, because the Windows qubesdb-cmd cannot write the feature request.
+    Note the agent run itself is NOT affected - dom0's progress path calls qubes.VMExec
+    directly, with no feature check and no fallback.
+    """
+    if "--no-vmexec" in sys.argv and "entrypoint.py" not in " ".join(argv):
+        import shlex
+        return vmshell(" ".join(shlex.quote(a) for a in argv), b"", timeout) + (b"",)
     svc = "qubes.VMExec+" + encode_for_vmexec(argv)
     p = subprocess.run(["qrexec-client-vm", VM, svc], stdin=subprocess.DEVNULL,
                        capture_output=True, timeout=timeout)
@@ -33,13 +44,14 @@ def vmexec(argv, timeout=120):
 
 def vmshell(command, payload=b"", timeout=120):
     # exactly what qubesadmin prepare_input_for_vmshell() builds for a Windows qube
+    # (the `& exit` suffix is chosen on the `os` feature reading "Windows")
     data = command.encode() + b"& exit\n" + payload
     p = subprocess.run(["qrexec-client-vm", VM, "qubes.VMShell"], input=data,
                        capture_output=True, timeout=timeout)
-    return p.returncode, p.stdout, p.stderr
+    return p.returncode, p.stdout
 
 
-def show(step, rc, out, err, expect=None):
+def show(step, rc, out, err=b"", expect=None):
     verdict = "" if expect is None else ("  <-- OK" if rc in expect else "  <-- UNEXPECTED")
     print(f"[{step}] rc={rc}{verdict}")
     for label, blob in (("out", out), ("err", err)):

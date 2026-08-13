@@ -159,30 +159,28 @@ $o = & schtasks /create /tn QubesWindowsUpdateDownload /xml "$fd" /f 2>&1
 Log ("REGISTER QubesWindowsUpdateDownload rc=$LASTEXITCODE : " + ($o -join ' '))
 if ($LASTEXITCODE -ne 0) { throw "schtasks register (download task) failed (rc=$LASTEXITCODE)" }
 
-# 8. Advertise the `vmexec` feature to dom0. qubesadmin's run_with_args() uses qubes.VMExec only
-#    when the qube advertises it, and otherwise falls back to qubes.VMShell with a shell-quoted
-#    line - which lands in cmd.exe with no interception point and fails on `mkdir -p`. QWT has
-#    implemented qubes.VMExec all along, so this advertises a capability we genuinely have.
-#    dom0 accepts it from any VM via qubes.FeaturesRequest (qubes/ext/core_features.py).
-$qdb = Join-Path $qt 'bin\qubesdb-cmd.exe'
-$qr  = Join-Path $qt 'bin\qrexec-client-vm.exe'
-if ((Test-Path $qdb) -and (Test-Path $qr)) {
-    # ErrorActionPreference=Stop turns ANY native stderr line into a terminating
-    # NativeCommandError - the same trap that silently truncated this script once already
-    # (schtasks' /st-in-the-past warning). Neither call below is worth failing the deploy for.
-    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    try {
-        & $qdb write /features-request/vmexec 1 2>&1 | Out-Null
-        # Pipe-delimited single argument, unquoted - qrexec-client-vm splits the RAW command
-        # line on '|' and a wrapping quote leaks into the target, so dom0 refuses the call.
-        & $qr 'dom0|qubes.FeaturesRequest|(null)|(null)' 2>&1 | Out-Null
-        Log "advertised vmexec=1 to dom0 (exit $LASTEXITCODE)"
-    } catch {
-        Log "vmexec advertisement failed: $($_.Exception.Message) (non-fatal)"
-    } finally { $ErrorActionPreference = $prev }
-} else {
-    Log 'qubesdb-cmd/qrexec-client-vm not found - vmexec feature NOT advertised'
-}
+# 8. The updater workdir, pre-created ON PURPOSE - do not delete it.
+#
+#    dom0 chooses its transport per qube: qubesadmin's run_with_args() uses qubes.VMExec only
+#    for qubes advertising the `vmexec` feature, and otherwise falls back to qubes.VMShell with
+#    a shell-quoted line. We CANNOT advertise that feature from the guest: the Windows build of
+#    qubesdb-cmd cannot write at all (`optind -= 2` in client/qubesdb-cmd.c leaves exactly one
+#    trailing argument, so `write path value` always dies with "Invalid number of parameters" -
+#    measured, every documented form). Do not re-add an advertisement step; it cannot work until
+#    that upstream bug is fixed or dom0 sets the feature itself (`qvm-features <vm> vmexec 1`).
+#
+#    So the fallback path must work, and it does - with this one preparation. Over VMShell each
+#    of dom0's POSIX commands fails on cmd.exe, but `& exit` returns 0 regardless (measured: a
+#    bogus command still yields exit 0), so dom0 sees success and proceeds. The only step that
+#    then matters is the agent run itself, and that ALWAYS travels over qubes.VMExec - the
+#    progress path calls the service directly, with no feature check and no fallback - so our
+#    shim still handles it. The one thing that must not fail is dom0 piping its agent tarball in
+#    with `cat > <workdir>/agent.tar.gz`: if the directory is missing, cmd's redirection fails,
+#    cmd exits immediately and dom0 is left writing a megabyte into a closed pipe. Hence the
+#    directory exists from install time, and the shim's `rm` empties it rather than removing it.
+$workdir = Join-Path $env:SystemDrive 'run\qubes-update'
+New-Item -ItemType Directory -Force -Path $workdir | Out-Null
+Log "prepared updater workdir $workdir (kept even when dom0 asks to remove it - see comment)"
 
 # 9. Guest-side auto-update OFF: dom0 owns every install decision from now on. This is not
 #    cosmetic - the updates proxy is raised only for the duration of a dom0-driven pass, which
