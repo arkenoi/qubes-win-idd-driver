@@ -23,15 +23,28 @@ try {
 
 $cmd = $decoded -join " "
 
+# Audit every VMExec call and the code we hand back. dom0 keeps code = max(all step codes), so a
+# single prep step returning nonzero turns a successful update into an ERROR verdict, and dom0's
+# output does not say which step it was. This log does.
+function VMExecAudit([string]$what) {
+    try {
+        $who = try { [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch { '?' }
+        Add-Content -LiteralPath 'C:\ProgramData\Qubes\vmexec.log' -Encoding ASCII -ErrorAction SilentlyContinue `
+            -Value ("{0} [{1}] {2}" -f (Get-Date -Format 'HH:mm:ss'), $who, $what)
+    } catch { }
+}
+
 $shim = Join-Path $env:QUBES_TOOLS 'qubes-rpc-services\vmupdate-shim.ps1'
 if ((Test-Path $shim) -and ($cmd -match '/run/qubes-update|\\run\\qubes-update|entrypoint\.py')) {
     & $shim @decoded
     $rc = $LASTEXITCODE
     if ($null -eq $rc) { $rc = 0 }
+    VMExecAudit "shim   rc=$rc  cmd: $cmd"
     exit $rc
 }
 
 & cmd.exe /c $cmd
 $rc = $LASTEXITCODE
 if ($null -eq $rc) { $rc = 0 }
+VMExecAudit "cmd    rc=$rc  cmd: $cmd"
 exit $rc
