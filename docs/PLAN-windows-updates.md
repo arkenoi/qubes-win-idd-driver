@@ -85,7 +85,28 @@ dom0 *starts a stopped template* to update it. The residual risk is therefore a 
 cold start, not a missing session — which is why the cold-boot path is part of acceptance below
 rather than assumed.
 
-## Transport: it works with or without the `vmexec` feature (and we cannot set it)
+## Transport: the `vmexec` feature is REQUIRED, and the guest cannot set it
+
+> **CORRECTION 2026-08-13 (later the same day).** An earlier version of this file claimed the
+> path also works *without* the `vmexec` feature, because dom0's `& exit` makes failing VMShell
+> commands return 0. That was generalised from one measurement and is **wrong**. Replaying the
+> fallback transport end to end:
+> `mkdir -p /run/qubes-update/` returns **rc=1** when the directory already exists ("a
+> subdirectory or file already exists"), and `transfer_agent` aborts on the first nonzero result
+> — so the update never reaches the agent. When the directory does *not* exist the command fails
+> differently (syntax error, rc=0) but creates nothing, so step 2's redirection then fails and
+> dom0 is left writing its tarball into a closed pipe. **Both ways the fallback fails.**
+> The rest of this section describes the transport choice; the table below is kept because the
+> per-step behaviour is still accurate, but the "without it" column is a failure mode, not a
+> supported path.
+
+**Consequence for shipping:** something must set `vmexec=1` on each Windows qube. It is a
+dom0-side action (`qvm-features <vm> vmexec 1`) because of the qubesdb bug below. Options are a
+one-line note in the install instructions, or the dom0 RPM doing it the way `qwt-ng-fix-qwcq`
+already patches `qvm-create-windows-qube`. **This is not optional polish — without it the Update
+GUI cannot update the qube at all.**
+
+
 
 dom0 picks the transport per qube. `qubesadmin.run_with_args()` uses `qubes.VMExec` only for
 qubes advertising the **`vmexec`** feature, and otherwise falls back to `qubes.VMShell` with a
