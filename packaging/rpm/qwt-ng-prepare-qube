@@ -1,0 +1,76 @@
+#!/bin/bash
+# Apply the per-qube dom0 settings a QWT-NG Windows qube needs for dom0-driven updates.
+#
+#   qwt-ng-prepare-qube <qube> [qube...]     apply to the named qubes
+#   qwt-ng-prepare-qube --all                apply to every qube whose `os` feature is Windows
+#
+# Both settings are dom0-side and CANNOT be set by the guest:
+#
+#  * feature `vmexec=1`
+#      qubesadmin's run_with_args() sends commands over qubes.VMExec only for qubes advertising
+#      this, and otherwise falls back to qubes.VMShell with a shell-quoted line. dom0's updater
+#      prepares its work with POSIX commands (`mkdir -p /run/qubes-update/`, `chmod`, ...); via
+#      VMShell those reach cmd.exe, which fails them, and the run aborts before the update agent
+#      is ever invoked. QWT has implemented qubes.VMExec all along, so this advertises a real
+#      capability - the guest simply cannot announce it, because the Windows build of qubesdb-cmd
+#      cannot write to QubesDB at all (upstream `optind -= 2` bug in client/qubesdb-cmd.c).
+#
+#  * pref `qrexec_timeout`
+#      A Windows guest APPLYING an update during boot took 259 s to answer qrexec (measured on
+#      25H2). The Qubes default is 60 s, so dom0 would give up starting the qube at exactly the
+#      moment it is finishing an update. qvm-create-windows-qube already raises this; a
+#      hand-built Windows qube does not.
+#
+# Idempotent, never lowers an existing higher timeout, and never exits nonzero for a missing
+# qube - it is also run from the RPM's %post, where failing the transaction would be wrong.
+set -u
+
+MIN_TIMEOUT=1800   # 30 min: covers the measured 259 s with wide margin, and the much longer
+                   # boots a Windows FEATURE update takes to apply. qvm-create-windows-qube
+                   # uses 6000; anything already higher is left alone.
+
+usage() {
+    echo "usage: qwt-ng-prepare-qube <qube> [qube...] | --all" >&2
+    exit 2
+}
+[ $# -ge 1 ] || usage
+
+if [ "$1" = "--all" ]; then
+    mapfile -t QUBES < <(qvm-ls --raw-list | while read -r vm; do
+        [ "$(qvm-features "$vm" os 2>/dev/null)" = "Windows" ] && echo "$vm"
+    done)
+    if [ ${#QUBES[@]} -eq 0 ]; then
+        echo "no qubes report feature os=Windows (a qube must have run QWT at least once)"
+        exit 0
+    fi
+else
+    QUBES=("$@")
+fi
+
+rc=0
+for vm in "${QUBES[@]}"; do
+    if ! qvm-check --quiet "$vm" 2>/dev/null; then
+        echo "$vm: no such qube - skipped"
+        continue
+    fi
+
+    if [ "$(qvm-features "$vm" vmexec 2>/dev/null)" = "1" ]; then
+        echo "$vm: vmexec already set"
+    elif qvm-features "$vm" vmexec 1 2>/dev/null; then
+        echo "$vm: vmexec=1 set"
+    else
+        echo "$vm: FAILED to set feature vmexec" >&2
+        rc=1
+    fi
+
+    cur=$(qvm-prefs "$vm" qrexec_timeout 2>/dev/null) || cur=""
+    if [ -n "$cur" ] && [ "$cur" -ge "$MIN_TIMEOUT" ] 2>/dev/null; then
+        echo "$vm: qrexec_timeout already ${cur}s"
+    elif qvm-prefs "$vm" qrexec_timeout "$MIN_TIMEOUT" 2>/dev/null; then
+        echo "$vm: qrexec_timeout ${cur:-default} -> ${MIN_TIMEOUT}s"
+    else
+        echo "$vm: FAILED to set qrexec_timeout" >&2
+        rc=1
+    fi
+done
+exit $rc

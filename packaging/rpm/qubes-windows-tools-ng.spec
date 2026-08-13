@@ -37,6 +37,10 @@ Source4:        qwt-ng-fix-qwcq
 # Update GUI drives it. This wrapper calls the guest service directly, which is useful when
 # that path misbehaves and as the explicit CLI some admins prefer.
 Source5:        qvm-windows-update
+# Per-qube dom0 settings a Windows qube needs before dom0 can drive its updates: the
+# `vmexec` feature and a qrexec_timeout long enough for a Windows boot that is applying an
+# update. Neither can be set from inside the guest.
+Source6:        qwt-ng-prepare-qube
 
 # The stock package owns the same path. Conflict LOUDLY rather than silently replacing a
 # signed vendor ISO with a test-signed one - a silent overwrite is exactly the kind of
@@ -75,6 +79,7 @@ install -m 0644 %{SOURCE1} %{buildroot}%{qwtng_share}/auto-qwt/install-qwt.bat
 install -d -m 0755 %{buildroot}%{_bindir}
 install -m 0755 %{SOURCE4} %{buildroot}%{_bindir}/qwt-ng-fix-qwcq
 install -m 0755 %{SOURCE5} %{buildroot}%{_bindir}/qvm-windows-update
+install -m 0755 %{SOURCE6} %{buildroot}%{_bindir}/qwt-ng-prepare-qube
 install -m 0644 %{SOURCE3} %{buildroot}%{qwtng_share}/MANIFEST.json
 
 install -d -m 0755 %{buildroot}%{_docdir}/%{name}
@@ -88,9 +93,15 @@ install -m 0644 %{SOURCE2} %{buildroot}%{_docdir}/%{name}/README-qvm-create-wind
 %{qwtng_share}/MANIFEST.json
 %{_bindir}/qwt-ng-fix-qwcq
 %{_bindir}/qvm-windows-update
+%{_bindir}/qwt-ng-prepare-qube
 %doc %{_docdir}/%{name}/README-qvm-create-windows-qube.md
 
 %post
+# Apply the per-qube settings dom0-driven updates need, to Windows qubes that already exist.
+# Only touches qubes whose `os` feature reads Windows - i.e. qubes that have run QWT - and is
+# idempotent. Never fails the transaction: a report is enough.
+%{_bindir}/qwt-ng-prepare-qube --all || :
+
 cat <<'EOF'
 
 qubes-windows-tools-ng installed.
@@ -99,6 +110,22 @@ qubes-windows-tools-ng installed.
 
 The Windows binaries in this ISO are TEST-SIGNED: the in-guest installer enables testsigning
 and trusts an unofficial certificate INSIDE THE WINDOWS GUEST. dom0 is unaffected.
+
+UPDATES: a Windows qube installed from this ISO reports available updates to dom0 and is
+updated from the Qubes Update tool like any other qube - no separate command. Two per-qube
+settings make that work, and they were just applied to every existing Windows qube:
+
+  qvm-features <qube> vmexec 1        dom0 sends its update commands over qubes.VMExec
+  qvm-prefs <qube> qrexec_timeout N   a Windows boot APPLYING an update needs minutes to
+                                      answer qrexec (measured 259 s); the Qubes default of
+                                      60 s would abort the run at exactly that moment
+
+For a qube created LATER, run:  qwt-ng-prepare-qube <qube>   (or --all)
+
+Installing an update leaves the qube shut down: Qubes destroys a domain on a guest-initiated
+reboot, and Windows finishes the update during its next boot. That boot happens by itself the
+next time the qube is started or updated - for a template it is the boot that commits the
+update to the template root.
 
 EOF
 # qvm-create-windows-qube's auto-qwt stub globs for qubes-tools-*.exe|msi, which matches

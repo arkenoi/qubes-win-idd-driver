@@ -1229,6 +1229,12 @@ function Invoke-Stage2 {
                 $ud = & $deployUpd -SetupRoot $Root 2>&1
                 foreach ($l in @($ud | Select-Object -Last 6)) { Write-Log "  $l" }
                 $script:Result.detail.updater_agent = 'deployed'
+                # Two settings live in dom0 and cannot be applied from in here. The RPM's
+                # qwt-ng-prepare-qube does them; say so, because a qube missing them fails to
+                # update in a way that looks like a bug in the guest.
+                Write-Log 'NOTE: dom0-side, this qube also needs:  qwt-ng-prepare-qube <qube>'
+                Write-Log '      (sets feature vmexec=1 and raises qrexec_timeout; without them'
+                Write-Log '       the Qubes Update tool cannot drive this qube)'
             } catch {
                 Write-Log "Windows Update agent deploy failed: $($_.Exception.Message) (non-fatal)" 'WARN'
                 $script:Result.detail.updater_agent = "error: $($_.Exception.Message)"

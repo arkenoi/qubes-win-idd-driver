@@ -234,6 +234,32 @@ Recovery, if the intermediate reboot still bugchecks 0x7B:
   intelide, pciide and storahci, unload, reattach, boot. Failing that,
   reinstall the guest.
 
+WINDOWS UPDATES (dom0-driven)
+
+By default the qube reports available updates to dom0 and installs them only when dom0
+asks, exactly like a Linux template: it shows up in the Qubes Update tool with the usual
+marker and updating it is the same click. Update traffic goes over qubes.UpdatesProxy and
+the proxy is raised only for the duration of a pass, so the guest never gets networking of
+its own. Windows' automatic updates are turned OFF, because dom0 owns that decision here.
+
+TWO SETTINGS LIVE IN DOM0 and cannot be applied from inside the guest. The dom0 package
+(qubes-windows-tools-ng) applies them to existing Windows qubes when it is installed; for a
+qube created later, run in dom0:
+
+    qwt-ng-prepare-qube <qube>          # or --all
+
+It sets:
+  * feature vmexec=1 - dom0 sends its update commands over qubes.VMExec. Without it they
+    arrive as shell text at cmd.exe, fail, and the run aborts before the update agent runs.
+  * qrexec_timeout 1800 - a Windows boot that is APPLYING an update takes minutes to answer
+    qrexec (measured 259 s). The Qubes default is 60 s, so dom0 would give up starting the
+    qube at exactly the moment it is finishing an update.
+
+AFTER AN UPDATE THE QUBE SHUTS DOWN. That is not a failure: Qubes destroys a domain on a
+guest-initiated reboot (on_reboot=destroy), and Windows completes a pending update during
+its next boot. That boot happens by itself the next time the qube is started or updated -
+and for a template it is exactly the boot that commits the update to the template root.
+
 THE QUBES IddCx DRIVER (/idd)
 -----------------------------
 `idd-driver\` holds the Qubes IddCx indirect display driver, test-signed by the
