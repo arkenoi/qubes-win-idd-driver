@@ -67,7 +67,13 @@ $POL='HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; count=0; available=@();
                          downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null }
 function Save { $script:St.ts=(Get-Date).ToString('s'); ($script:St | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile -Encoding UTF8 }
-function Log($m){ Write-Host ((Get-Date -Format 'HH:mm:ss')+' '+$m) }
+# Write-Host alone is lost under the scheduled task, which is why every download failure so far
+# had to be reconstructed from DISM's log instead of ours. Tee to a file.
+function Log($m){
+  $line = (Get-Date -Format 'HH:mm:ss')+' '+$m
+  Write-Host $line
+  try { Add-Content -LiteralPath (Join-Path $WorkDir 'agent.log') -Value $line -EA SilentlyContinue } catch {}
+}
 function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-Null}; New-ItemProperty -Path $p -Name $n -Value $v -PropertyType $t -Force|Out-Null }
 
 # The proxy is up ONLY for the duration of a pass. Leaving the system-wide WinHTTP proxy set
@@ -170,13 +176,14 @@ function Resolve-Catalog($kb){
 # is verified for BOTH size and the CAB magic (an .msu is a cabinet - "MSCF"), which is what
 # catches an HTML error page or a truncated download. A file that fails verification is DELETED,
 # never resumed - resuming corrupt bytes can only produce more corrupt bytes.
+# Returns 'ok' | 'short' | 'bad'. The distinction matters more than it looks: treating a SHORT
+# file as corrupt turns every dropped connection into a restart from zero, and a 4.8 GB package
+# over a relay that drops around 3 GB then never completes - measured 2026-08-13, the download
+# looped 3.18 GB -> deleted -> 0 bytes -> repeat.
 function Test-Msu($path, $expect) {
-  if (-not (Test-Path -LiteralPath $path)) { return $false }
+  if (-not (Test-Path -LiteralPath $path)) { return 'bad' }
   $len = (Get-Item -LiteralPath $path).Length
-  if ($expect -gt 0 -and $len -ne $expect) {
-    Log "  VERIFY fail: $([IO.Path]::GetFileName($path)) is $len bytes, expected $expect"
-    return $false
-  }
+  if ($len -eq 0) { return 'bad' }
   try {
     $fs = [IO.File]::OpenRead($path)
     $magic = New-Object byte[] 4
@@ -184,10 +191,15 @@ function Test-Msu($path, $expect) {
     $fs.Close()
   } catch { return $false }
   if (-not ($magic[0] -eq 0x4D -and $magic[1] -eq 0x53 -and $magic[2] -eq 0x43 -and $magic[3] -eq 0x46)) {
-    Log "  VERIFY fail: $([IO.Path]::GetFileName($path)) does not start with the CAB magic MSCF"
-    return $false
+    Log "  VERIFY: $([IO.Path]::GetFileName($path)) does not start with the CAB magic MSCF - discarding"
+    return 'bad'          # an HTML error page or garbage: resuming it can only make it worse
   }
-  return $true
+  if ($expect -gt 0 -and $len -lt $expect) { return 'short' }   # incomplete: RESUME, do not delete
+  if ($expect -gt 0 -and $len -gt $expect) {
+    Log "  VERIFY: $([IO.Path]::GetFileName($path)) is $len bytes, expected $expect - discarding"
+    return 'bad'          # longer than advertised = a body appended onto a partial
+  }
+  return 'ok'
 }
 
 function Fetch-Msu($url,$dst,$kb){
@@ -218,11 +230,17 @@ function Fetch-Msu($url,$dst,$kb){
         if(((Get-Date)-$last).TotalSeconds -ge 3){ $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($expect/1MB,1);pct=[math]::Round(100*$have/[math]::Max($expect,1),1)}; Save; $last=Get-Date } }
       $o.Close();$in.Close();$resp.Close()
 
-      if(-not (Test-Msu $dst $expect)){
+      $verdict = Test-Msu $dst $expect
+      if($verdict -eq 'bad'){
         Remove-Item -LiteralPath $dst -Force -EA SilentlyContinue   # never resume corrupt bytes
-        Log "  attempt ${a}: download did not verify - discarded, retrying"
+        Log "  attempt ${a}: file is not a package - discarded, restarting"
         Start-Sleep 5
         continue
+      }
+      if($verdict -eq 'short'){
+        Log "  attempt ${a}: stream ended early at $([math]::Round($have/1MB,1)) of $([math]::Round($expect/1MB,1)) MB - resuming"
+        Start-Sleep 5
+        continue                                                    # keep the bytes, resume them
       }
       $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($have/1MB,1);pct=100}; Save
       return $true
@@ -240,7 +258,7 @@ function Fetch-Msu($url,$dst,$kb){
       if(-not $code -and $_.Exception.Message -match '\(416\)'){ $code=416 }
       if($code -eq 416 -and $have -gt 0){
         # Complete by the server's reckoning - but still prove it is a package before using it.
-        if(Test-Msu $dst 0){
+        if((Test-Msu $dst 0) -eq 'ok'){
           Log "  $([IO.Path]::GetFileName($dst)) already complete ($([math]::Round($have/1MB,1)) MB; server refused resume with 416)"
           $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($have/1MB,1);pct=100}; Save
           return $true
