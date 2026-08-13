@@ -57,7 +57,19 @@ switch -Regex ($verb) {
     }
 
     '^rm$' {
-        foreach ($o in (Operands $a)) { Remove-Item -LiteralPath (ToWin $o) -Recurse -Force -EA SilentlyContinue }
+        # The workdir itself is EMPTIED, not removed. When dom0 has no `vmexec` feature for this
+        # qube it sends the tarball over VMShell as `cat > <workdir>/agent.tar.gz`, and cmd's
+        # redirection needs the directory to already exist - otherwise cmd exits at once and
+        # dom0 is left writing a megabyte into a closed pipe. See install-updater-agent.ps1 §8.
+        foreach ($o in (Operands $a)) {
+            $p = ToWin $o
+            if ($p -match '\\run\\qubes-update\\?$') {
+                Get-ChildItem -LiteralPath $p -Force -EA SilentlyContinue |
+                    Remove-Item -Recurse -Force -EA SilentlyContinue
+            } else {
+                Remove-Item -LiteralPath $p -Recurse -Force -EA SilentlyContinue
+            }
+        }
         Log "rm ok"
         exit 0
     }
