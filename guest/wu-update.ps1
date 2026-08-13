@@ -18,6 +18,7 @@
 param([string]$Task = 'QubesWindowsUpdateRun')
 $ErrorActionPreference = 'SilentlyContinue'
 $Status = 'C:\ProgramData\Qubes\update-status.json'
+$qtRootForAl = $env:QUBES_TOOLS; if (-not $qtRootForAl) { $qtRootForAl = 'C:\Program Files\Qubes Tools' }
 $Err    = [Console]::Error
 
 function Prog([double]$p) {
@@ -165,6 +166,14 @@ switch ($st.phase) {
             # Halted for 4+ minutes after this call. Windows completes the pending servicing at
             # its NEXT boot, which is exactly what a template needs, so the outcome is right -
             # but the message must say "shutting down", not "rebooting", or it is a lie.
+            # A qube that comes back to a sign-in screen is unreachable: with no interactive
+            # session, qrexec service calls have nobody to run as, so dom0 cannot update it, run
+            # apps in it, or read it. Windows servicing rewrites Winlogon values, so autologon
+            # must be re-asserted HERE, before the reboot we are about to cause.
+            $al = Join-Path $qtRootForAl 'qubes-rpc-services\ensure-autologon.ps1'
+            if (Test-Path $al) {
+                foreach ($l in @(& $al 2>&1)) { if ($l -match '^(SET|WARN)') { $Err.WriteLine("autologon: $l") } }
+            }
             & shutdown.exe /r /t 60 /c "Qubes: completing Windows update servicing"
             if ($LASTEXITCODE -eq 0) {
                 $Err.WriteLine('updates installed - this qube shuts down in 60 seconds; start it again and the update finishes during boot')

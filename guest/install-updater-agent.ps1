@@ -121,6 +121,11 @@ if ((Test-Path $handlerDir) -and (Test-Path $svcDir)) {
     #    and needs no dom0-side command. dom0 injects a Python agent and runs it; we answer the
     #    same command shapes and run ours instead. See guest/vmupdate-shim.ps1 for the sequence.
     Copy-Item (Join-Path $SetupRoot 'vmupdate-shim.ps1') (Join-Path $handlerDir 'vmupdate-shim.ps1') -Force
+    # Re-asserted before every reboot the updater triggers: Windows servicing rewrites Winlogon,
+    # and a qube that returns to a sign-in screen is unreachable over qrexec.
+    if (Test-Path (Join-Path $SetupRoot 'ensure-autologon.ps1')) {
+        Copy-Item (Join-Path $SetupRoot 'ensure-autologon.ps1') (Join-Path $handlerDir 'ensure-autologon.ps1') -Force
+    }
     $vmexec = Join-Path $handlerDir 'VMExec.ps1'
     $backup = Join-Path $handlerDir 'VMExec.ps1.qwt-orig'
     if ((Test-Path $vmexec) -and -not (Test-Path $backup)) { Copy-Item $vmexec $backup -Force }

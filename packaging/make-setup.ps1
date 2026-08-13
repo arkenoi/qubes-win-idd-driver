@@ -119,7 +119,7 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activat
 # (and therefore the Qubes Update GUI) able to drive this guest: dom0 injects a Python agent and
 # runs it, which Windows cannot do, so we answer the same command shapes and run our updater.
 foreach ($u in 'install-updater-agent.ps1', 'qubes-windows-update.ps1', 'qubes-updates-relay.cs', 'wu-update.ps1',
-               'vmupdate-shim.ps1', 'VMExec.ps1', 'qubes-posix-cat.cs') {
+               'vmupdate-shim.ps1', 'VMExec.ps1', 'qubes-posix-cat.cs', 'ensure-autologon.ps1') {
     Copy-Item (Need (Join-Path $RepoRoot "guest\$u") "updater agent payload ($u)") $OutDir -Force
 }
 
