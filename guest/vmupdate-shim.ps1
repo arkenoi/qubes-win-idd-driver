@@ -33,6 +33,20 @@ if (-not $qt) { $qt = 'C:\Program Files\Qubes Tools' }
 
 function Log($m) { Write-Output "vmupdate-shim: $m" }
 
+# Audit trail. dom0 accumulates code = max(step codes) across the whole run, so ONE prep step
+# returning nonzero makes a successful update report as an error - with nothing in dom0's output
+# saying which step it was. Record every invocation and its exit code here instead of guessing.
+$script:AuditPath = 'C:\ProgramData\Qubes\vmupdate-shim.log'
+function Audit([string]$what) {
+    try {
+        $who = try { [Security.Principal.WindowsIdentity]::GetCurrent().Name } catch { '?' }
+        Add-Content -LiteralPath $script:AuditPath -Encoding ASCII -ErrorAction SilentlyContinue `
+            -Value ("{0} [{1}] {2}" -f (Get-Date -Format 'HH:mm:ss'), $who, $what)
+    } catch { }
+}
+function Done([int]$rc, [string]$note) { Audit ("rc=$rc  $note  argv: " + ($a -join ' ')); exit $rc }
+Audit ("ENTER argv: " + ($a -join ' '))
+
 # dom0 speaks POSIX paths; a leading / means the root of the system drive here.
 function ToWin([string]$p) {
     if ([string]::IsNullOrEmpty($p)) { return $p }
@@ -59,7 +73,7 @@ switch -Regex ($verb) {
     '^(mkdir|md)$' {
         foreach ($o in (Operands $a)) { New-Item -ItemType Directory -Force -Path (ToWin $o) -EA SilentlyContinue | Out-Null }
         Log "mkdir ok"
-        exit 0
+        Done 0 "mkdir"
     }
 
     '^rm$' {
@@ -77,14 +91,14 @@ switch -Regex ($verb) {
             }
         }
         Log "rm ok"
-        exit 0
+        Done 0 "rm"
     }
 
     '^tar$' {
         # The archive holds dom0's Python agent, which cannot run here. Accept and discard:
         # reporting success is honest, because nothing downstream ever reads the extracted tree.
         Log 'accepted dom0 update agent archive (not used on Windows)'
-        exit 0
+        Done 0 "tar"
     }
 
     '^cat$' {
@@ -95,7 +109,7 @@ switch -Regex ($verb) {
         }
         $ours = 'C:\ProgramData\Qubes\update-status.json'
         if (Test-Path $ours) { Write-Output '--- qubes-windows-update status ---'; Get-Content $ours }
-        exit 0
+        Done 0 "cat"
     }
 
     '^python3?(\.exe)?$' {
@@ -104,12 +118,12 @@ switch -Regex ($verb) {
         $downloadOnly = ($a -contains '--download-only')
         $task = if ($downloadOnly) { 'QubesWindowsUpdateDownload' } else { 'QubesWindowsUpdateRun' }
         $wu = Join-Path $qt 'qubes-rpc-services\wu-update.ps1'
-        if (-not (Test-Path $wu)) { $Err.WriteLine('vmupdate-shim: wu-update.ps1 missing - updater agent not installed'); exit 1 }
+        if (-not (Test-Path $wu)) { $Err.WriteLine('vmupdate-shim: wu-update.ps1 missing - updater agent not installed'); Done 1 "entrypoint(missing handler)" }
         Log "running the Windows updater (task=$task)"
         & $wu -Task $task
         $rc = $LASTEXITCODE
         if ($null -eq $rc) { $rc = 0 }
-        exit $rc
+        Done $rc "entrypoint"
     }
 
     default {
@@ -117,6 +131,6 @@ switch -Regex ($verb) {
         & cmd.exe /c ($a -join ' ')
         $rc = $LASTEXITCODE
         if ($null -eq $rc) { $rc = 0 }
-        exit $rc
+        Done $rc "passthrough-to-cmd"
     }
 }
