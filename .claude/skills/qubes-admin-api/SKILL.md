@@ -90,6 +90,28 @@ A fresh TemplateVM's defaults are Linux-shaped, so a Windows guest needs at mini
 `admin.vm.volume.Export` is REFUSED, so streaming a volume out of a qube is not an option —
 server-side `CloneFrom`/`CloneTo` (what the above uses) is.
 
+## Recovering a guest you can no longer run code in
+
+A Windows qube that boots to the SIGN-IN SCREEN is unreachable: qrexec service calls have nobody
+to run as, so `qubes.VMShell` and `qubes.VMExec` both fail (measured rc=117, which is NOT the 126
+of a policy refusal). No agent, no script, no update can be run inside it. Measured 2026-08-13
+after a cumulative update rewrote Winlogon on win11-tpl.
+
+The way back in does not need a session, because it operates on the VOLUME:
+
+    qrexec-client-vm <vm> admin.vm.volume.ListSnapshots+root </dev/null | tr -d '\0'
+    # -> e.g. 1786643600-back  1786643731-back      (revisions_to_keep, default 2)
+    printf '<revision>' | qrexec-client-vm <vm> admin.vm.volume.Revert+root      # qube must be HALTED
+
+Both are permitted here. Revert rolls the root volume back to that revision, which undoes whatever
+made the guest unreachable - at the cost of everything written since it. On a TEMPLATE that means
+losing the updates installed after the snapshot; on a StandaloneVM it means losing user data too.
+It is a recovery of last resort, not a routine step - but it beats a qube nobody can log into.
+
+Prevention is better and is now in the product: `guest/ensure-autologon.ps1` runs before any
+reboot the updater triggers, because while `AutoLogonCount` exists Windows CONSUMES
+`DefaultPassword` and then falls back to the sign-in screen.
+
 ## Recipes
 
     # what exists, right now - trust this over any remembered roster (mine was stale)
