@@ -41,7 +41,13 @@ function ToWin([string]$p) {
     if ($q.Length -gt 3) { $q = $q.TrimEnd('\') }
     return $q
 }
-function Operands([string[]]$argv) { @($argv[1..($argv.Count-1)] | Where-Object { $_ -notmatch '^-' }) }
+function Operands([string[]]$argv) {
+    # NOTE the guard: in PowerShell `1..0` counts DOWNWARDS, so a single-element argv would
+    # return $argv[1] (null) and $argv[0] - handing the command name back as an operand, i.e.
+    # `rm` with no arguments would try to delete a file called "rm".
+    if ($argv.Count -lt 2) { return @() }
+    @($argv[1..($argv.Count - 1)] | Where-Object { $_ -notmatch '^-' })
+}
 
 # `fakeroot <cmd>` is how dom0 runs download-only passes; there is no such thing here.
 if ([IO.Path]::GetFileName($a[0]) -eq 'fakeroot' -and $a.Count -gt 1) { $a = @($a[1..($a.Count-1)]) }

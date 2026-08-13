@@ -112,6 +112,19 @@ Options:
               and repaint storms that the seamless capture path pays for twice.
               The keys are plain policy values an admin can change or delete
               later; nothing is enforced beyond standard policy precedence.
+     /noupdates
+              skip the Windows Update agent. By default stage 2 deploys it, and
+              from then on the qube behaves like any other Qubes qube: it reports
+              available updates to dom0 (so it shows up in the Qubes Update tool
+              with the usual marker) and installs them only when dom0 asks -
+              through dom0's own qubes-vm-update path, so updating it is the
+              same click as updating a Fedora or Debian template. Update traffic
+              goes over qubes.UpdatesProxy and the proxy is raised only for the
+              duration of a pass; the guest gets no networking of its own.
+              Windows' automatic updates are turned OFF at the same time, because
+              dom0 owns that decision here. Use /noupdates only if you manage
+              updates some other way - without the agent the qube reports nothing
+              and the Update tool cannot drive it.
      /acceptpvdiskupgrade
               remove an existing QWT even when the boot disk is on the PV disk
               path -- READ "UPGRADING FROM STOCK QWT" BELOW FIRST
