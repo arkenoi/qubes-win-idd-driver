@@ -8230,3 +8230,48 @@ starts a stopped template before updating it - a reboot test was started right a
 and a TemplateVM proper. dom0-side selection has no OS filter (targets are chosen by class plus
 updates-available/skip-update/prohibit-start) and the Update GUI lists anything `updateable`, so
 templates are in scope by construction - but that is an argument, not a demonstration.
+
+## 2026-08-13 (cont.) — second pass: the exit-code fix PROVEN with a nonzero code, and a silent failure caught
+
+After the reboot (UBR 8875 -> 9168, KB5121003 applied), the sequence was replayed twice more.
+
+PASS 2 (before the reporting fix): scan offered count=1 (KB5120708, .NET Framework Security
+Update). `result` came back EMPTY - nothing downloaded, nothing installed - and the run reported
+`updates processed: count=1` on stdout with EXIT 0. dom0 would have been told the qube updated.
+Cause: Resolve-Catalog scrapes the Update Catalog around the x64/24H2/26100 client build and
+resolved no installable .msu for that KB on a 25H2/26200 guest, so $got was empty, so no result
+row was ever written, so nothing could look wrong downstream.
+
+FIX: a KB that resolves to no installable package now records {kb, ok=false, reason=...} and
+wu-update.ps1 names each failed KB on stderr and exits 1.
+
+PASS 3 (after the fix), captured through the full dom0 sequence:
+  [entrypoint] rc=1
+    stderr: 0.0 / 1.0 / 3.0 / 100.0
+    stderr: FAILED KB5120708: no installable package resolved from the Update Catalog
+    stderr: see C:\ProgramData\Qubes\update-status.json on the qube for details
+  [mkdir]/[tar]/[rm]/[cat log] rc=0 each, with the shim's own log lines.
+
+TWO THINGS PROVEN AT ONCE:
+1. EXIT CODE PROPAGATION through qubes.VMExec, with a NONZERO code, end to end. Stock QWT's
+   VMExec.ps1 would have delivered 0 here (measured earlier today: `exit 100` -> 0). This is the
+   fix working against a real failure rather than a synthetic one.
+2. The reporting check is EVIDENCE, not decoration - it was seen to FAIL on a genuine defect.
+   Same for the new PowerShell parse check (guest/ps-syntax-check.ps1): all guest scripts pass,
+   and a deliberately broken file was pushed to confirm it reports FAIL.
+
+PROTOCOL, captured in full at last (pass 2, which succeeded): stdout "updates processed: count=1",
+stderr floats 0.0 / 1.0 / 3.0 / 6.0 / 100.0, exit 0. That is the qubes-vm-update agent contract.
+
+KNOWN LIMITATION, now visible instead of silent: not every offered update can be fetched.
+Resolve-Catalog needs to handle package shapes and builds beyond 26100 before .NET Framework
+updates install. The transport, protocol and dom0 integration are unaffected - this is package
+resolution, and it is the next piece of updater work.
+
+COLD BOOT (dom0 starts a stopped qube, as it does to a TemplateVM): with a cumulative update
+applying at boot, qubes.VMShell answered at t+259 s and qubes.VMExec at t+265 s - 6 s later. The
+autologon/interactive-session concern is not a blocker. The pre-created workdir survived both the
+reboot and dom0's `rm`.
+
+STILL OPEN: the user's own click in the Qubes Update GUI (a dom0 tool - cannot be driven from
+this dev qube), and a TemplateVM proper rather than the StandaloneVM used here.
