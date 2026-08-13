@@ -46,6 +46,13 @@ function Msg([string]$m) {
 }
 
 # If an update run is already in flight, attach to it instead of clobbering its status file.
+# FRESHNESS GUARD. Deleting the status file is not enough on its own: other tasks write the same
+# file, and one of them finishing can hand us a `done` that belongs to a different operation.
+# Measured 2026-08-13 on a template: the scheduled scan fired 6 minutes into a dom0-driven
+# install, wrote its own `done` with an empty result, and this handler reported the update
+# complete while DISM was still running. So ignore any status stamped before we started.
+$script:StartedAt = (Get-Date).AddSeconds(-2)   # 2 s of slack for clock granularity
+
 $running = (Get-ScheduledTask -TaskName $Task -EA SilentlyContinue).State -eq 'Running'
 if (-not $running) {
     Remove-Item -LiteralPath $Status -Force -EA SilentlyContinue   # baseline: never read a stale run
@@ -63,6 +70,11 @@ while ((Get-Date) -lt $deadline) {
     $raw = Get-Content -LiteralPath $Status -Raw -EA SilentlyContinue
     if (-not $raw) { continue }                       # not written yet, or mid-rewrite
     try { $st = $raw | ConvertFrom-Json } catch { continue }
+    # belongs to an older operation - keep waiting for ours
+    if ($st.ts) {
+        $stamp = $null
+        if ([datetime]::TryParse($st.ts, [ref]$stamp) -and $stamp -lt $script:StartedAt) { continue }
+    }
     # Announce WHICH updates as soon as the scan knows, independent of phase: the tail polls
     # every 3 s and a short-lived phase can pass between two polls unseen. Msg de-duplicates.
     if ([int]$st.count -gt 0 -and $st.available) {

@@ -32,6 +32,21 @@ param(
 )
 $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force (Split-Path $StatusFile) | Out-Null
+
+# ONE update operation at a time. The scheduled scan, the dom0-driven run and the download task
+# are separate tasks writing ONE status file and sharing ONE proxy, and they collided for real
+# (2026-08-13): the 6-hourly scan fired 6 minutes into a dom0-driven install, rewrote the status
+# file with its own `done`, and the rpc handler tailing that file reported the update finished -
+# with an empty result - while DISM was still installing. The scan's Remove-Proxy also tears down
+# the proxy the other pass is downloading through.
+$script:Mutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
+$waitMs = if ($Action -eq 'scan') { 0 } else { 900000 }   # a scan yields; real work waits 15 min
+$script:HaveMutex = $false
+try { $script:HaveMutex = $script:Mutex.WaitOne($waitMs) } catch [System.Threading.AbandonedMutexException] { $script:HaveMutex = $true }
+if (-not $script:HaveMutex) {
+    Write-Host "another Qubes update operation is in progress - skipping this $Action"
+    exit 0
+}
 New-Item -ItemType Directory -Force $WorkDir | Out-Null
 # WHICH catalog package applies is a property of THIS guest, not a constant. Hardcoding
 # "x64 + 24H2|26100" made KB5120708 unresolvable on 25H2, where the applicable entry is titled
@@ -275,4 +290,5 @@ try {
   Log "ERROR: $($script:St.error)"
 } finally {
   Remove-Proxy   # ALWAYS restore the routeless baseline - see the Ensure-Proxy comment
+  if ($script:HaveMutex) { try { $script:Mutex.ReleaseMutex() } catch {} }
 }
