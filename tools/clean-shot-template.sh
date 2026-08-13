@@ -67,7 +67,7 @@ el; echo "deploying the updater agent (current build)"
 ./tools/qtest push guest/install-updater-agent.ps1 guest/qubes-windows-update.ps1 \
     guest/qubes-updates-relay.cs guest/wu-update.ps1 guest/vmupdate-shim.ps1 guest/VMExec.ps1 \
     guest/qubes-posix-cat.cs guest/ps-syntax-check.ps1 guest/wu-verify-installed.ps1 \
-    guest/quiet-desktop.ps1 >/dev/null 2>&1
+    guest/quiet-desktop.ps1 guest/ensure-autologon.ps1 >/dev/null 2>&1
 INC='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 ./tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -File \"$INC\\install-updater-agent.ps1\" -SetupRoot \"$INC\"" 2>&1 |
     grep -E 'deployed|prepared|NoAutoUpdate' | sed 's/^/  /'
