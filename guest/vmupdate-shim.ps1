@@ -127,10 +127,18 @@ switch -Regex ($verb) {
     }
 
     default {
-        # Not one of dom0's shapes after all - behave like stock VMExec.
-        & cmd.exe /c ($a -join ' ')
-        $rc = $LASTEXITCODE
-        if ($null -eq $rc) { $rc = 0 }
-        Done $rc "passthrough-to-cmd"
+        # Anything else dom0 does to its injected agent is scaffolding that means nothing on
+        # Windows, and must NOT be passed to cmd.exe: cmd fails on it, and dom0 keeps
+        # code = max(all step codes), so one failing prep step makes a SUCCESSFUL update report
+        # as an error. Measured 2026-08-13: `chmod u+x .../entrypoint.py` (a step not present in
+        # the upstream master we read - the injection sequence differs between dom0 versions)
+        # returned 1 through cmd and turned a completed update into an ERROR verdict.
+        #
+        # Only commands naming the updater workdir or entrypoint.py reach this script at all
+        # (VMExec.ps1 scopes it), so a no-op is the correct answer for every unrecognised verb -
+        # and it is future-proof against dom0 adding more of them. The audit log records each
+        # one, so a step that turns out to MATTER is diagnosable rather than silent.
+        Log "ignoring '$verb' (no-op on Windows; dom0's injected agent is never run here)"
+        Done 0 "no-op:$verb"
     }
 }
