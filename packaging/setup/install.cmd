@@ -17,6 +17,11 @@ REM                              predates IDD-by-default. Reboots when done.
 REM     install.cmd /updatesonly deploy the Windows Update agent on a guest that ALREADY has
 REM                              QWT: compiles the relay, places the agent, and registers the
 REM                              scheduled scan that reports update availability to dom0. No MSI.
+REM                              (A NORMAL install already does this - /updatesonly is for
+REM                               retrofitting a guest installed before it was default.)
+REM     install.cmd /noupdates   skip the Windows Update agent. Updates are dom0-owned in this
+REM                              model - without the agent the qube reports no updates and the
+REM                              Qubes Update GUI cannot update it. See README.txt.
 REM     install.cmd /nonet       omit the PV network drivers (see README.txt)
 REM     install.cmd /nodisk      omit the PV disk drivers (diagnostic only)
 REM     install.cmd /noapptweaks skip the app HW-accel pre-tweak (registry
@@ -50,10 +55,11 @@ if /i "%~1"=="/nonet"  ( set "PSARGS=!PSARGS! -NoPvNetwork"      & shift & goto 
 if /i "%~1"=="/nodisk" ( set "PSARGS=!PSARGS! -NoPvDisk"         & shift & goto parse )
 if /i "%~1"=="/acceptpvdiskupgrade" ( set "PSARGS=!PSARGS! -AcceptPvDiskUpgrade" & shift & goto parse )
 if /i "%~1"=="/noapptweaks" ( set "PSARGS=!PSARGS! -NoAppTweaks" & shift & goto parse )
+if /i "%~1"=="/noupdates" ( set "PSARGS=!PSARGS! -NoUpdaterAgent" & shift & goto parse )
 if /i "%~1"=="/iddonly" ( set "IDDONLY=1" & shift & goto parse )
 if /i "%~1"=="/updatesonly" ( set "UPDATESONLY=1" & shift & goto parse )
 echo Unknown option: %~1
-echo Valid options: /auto /idd /iddonly /updatesonly /nonet /nodisk /acceptpvdiskupgrade /noapptweaks
+echo Valid options: /auto /idd /iddonly /updatesonly /noupdates /nonet /nodisk /acceptpvdiskupgrade /noapptweaks
 exit /b 87
 :parsed
 

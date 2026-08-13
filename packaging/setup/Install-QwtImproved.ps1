@@ -105,6 +105,12 @@ param(
     # default; this exists for guests where the admin manages those policies themselves.
     [switch]$NoAppTweaks,
 
+    # Skip the Windows Update agent (install-updater-agent.ps1). It is ON by default because
+    # dom0 owns updates in this model: the guest reports availability, dom0 installs, and
+    # Windows' own auto-update is turned off. Use this only where updates are managed some
+    # other way - a guest without it will neither report updates nor answer the Update GUI.
+    [switch]$NoUpdaterAgent,
+
     # Escape hatch only. PV disk is ON by default because stock QWT installs it by default
     # and emulated IDE is markedly slower; use this only to isolate a suspected xenvbd fault.
     [switch]$NoPvDisk,
@@ -545,6 +551,7 @@ function Invoke-Stage1 {
         if ($NoMoveUsers)      { $extra += '-NoMoveUsers' }
         if ($AcceptPvDiskUpgrade) { $extra += '-AcceptPvDiskUpgrade' }
         if ($NoAppTweaks)      { $extra += '-NoAppTweaks' }
+        if ($NoUpdaterAgent)   { $extra += '-NoUpdaterAgent' }
         $extra += '-Auto'
         Set-BootResume -ScriptPath $self -ExtraArgs $extra
         Write-Log 'STAGE 1 COMPLETE - rebooting in 2 s, installation resumes automatically'
@@ -781,6 +788,7 @@ function Invoke-Stage2 {
                     if ($NoMoveUsers)      { $extra += '-NoMoveUsers' }
                     if ($AcceptPvDiskUpgrade) { $extra += '-AcceptPvDiskUpgrade' }
                     if ($NoAppTweaks)      { $extra += '-NoAppTweaks' }
+                    if ($NoUpdaterAgent)   { $extra += '-NoUpdaterAgent' }
                     $extra += '-Auto'
                     $extra += '-ResumeAfterUninstall'
                     Set-BootResume -ScriptPath $self -ExtraArgs $extra
@@ -1201,6 +1209,33 @@ function Invoke-Stage2 {
         } else {
             Write-Log 'disable-hw-accel.ps1 not in payload - pre-tweak unavailable' 'WARN'
             $script:Result.detail.app_hwaccel = 'not in payload'
+        }
+    }
+
+    # --- Windows Update agent (default ON, /noupdates skips) ----------------------------
+    # Updates are dom0-owned: the guest reports availability via qubes.NotifyUpdates and
+    # installs ONLY when dom0 asks, exactly like a Linux qube. install-updater-agent.ps1 also
+    # makes dom0's stock `qubes-vm-update` (and the Qubes Update GUI) able to drive this qube,
+    # and turns Windows' own auto-update OFF. Deployed by DEFAULT: behind a switch it would
+    # never be there when the user clicks Update. Non-fatal, like the tweak above.
+    if ($NoUpdaterAgent) {
+        Write-Log 'Windows Update agent SKIPPED (/noupdates)'
+        $script:Result.detail.updater_agent = 'skipped'
+    } else {
+        $deployUpd = Join-Path $Root 'install-updater-agent.ps1'
+        if (Test-Path -LiteralPath $deployUpd) {
+            Write-Log 'deploying the Windows Update agent (dom0-driven; /noupdates to skip)'
+            try {
+                $ud = & $deployUpd -SetupRoot $Root 2>&1
+                foreach ($l in @($ud | Select-Object -Last 6)) { Write-Log "  $l" }
+                $script:Result.detail.updater_agent = 'deployed'
+            } catch {
+                Write-Log "Windows Update agent deploy failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+                $script:Result.detail.updater_agent = "error: $($_.Exception.Message)"
+            }
+        } else {
+            Write-Log 'install-updater-agent.ps1 not in payload - updater agent unavailable' 'WARN'
+            $script:Result.detail.updater_agent = 'not in payload'
         }
     }
 

@@ -11,9 +11,13 @@
 # SYSTEM-task path is proven. This handler is just the protocol shim: baseline the status file,
 # kick the task, tail update-status.json (rewritten at every phase by qubes-windows-update.ps1),
 # and translate phases into the float protocol. Bounded: never blocks dom0 forever.
+#
+# -Task selects which on-demand task to drive. The rpc service passes nothing (full pass);
+# vmupdate-shim.ps1 passes QubesWindowsUpdateDownload when dom0 asked for --download-only, so a
+# download-only request can never install - that decision stays with dom0.
+param([string]$Task = 'QubesWindowsUpdateRun')
 $ErrorActionPreference = 'SilentlyContinue'
 $Status = 'C:\ProgramData\Qubes\update-status.json'
-$Task   = 'QubesWindowsUpdateRun'
 $Err    = [Console]::Error
 
 function Prog([double]$p) {

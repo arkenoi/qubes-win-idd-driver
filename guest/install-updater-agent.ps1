@@ -115,7 +115,83 @@ if ((Test-Path $handlerDir) -and (Test-Path $svcDir)) {
     # retire the short-lived poll service - progress now streams over the update call itself
     Remove-Item (Join-Path $svcDir 'qubes.WindowsUpdateStatus'), (Join-Path $handlerDir 'wu-status.ps1') -Force -EA SilentlyContinue
     Log 'registered qubes.WindowsUpdate rpc service (dom0-driven update)'
+
+    # 5. STOCK-TOOL COMPATIBILITY: make dom0's own `qubes-vm-update` - and therefore the Qubes
+    #    Update GUI - drive this qube, so updating a Windows qube is the same click as any other
+    #    and needs no dom0-side command. dom0 injects a Python agent and runs it; we answer the
+    #    same command shapes and run ours instead. See guest/vmupdate-shim.ps1 for the sequence.
+    Copy-Item (Join-Path $SetupRoot 'vmupdate-shim.ps1') (Join-Path $handlerDir 'vmupdate-shim.ps1') -Force
+    $vmexec = Join-Path $handlerDir 'VMExec.ps1'
+    $backup = Join-Path $handlerDir 'VMExec.ps1.qwt-orig'
+    if ((Test-Path $vmexec) -and -not (Test-Path $backup)) { Copy-Item $vmexec $backup -Force }
+    Copy-Item (Join-Path $SetupRoot 'VMExec.ps1') $vmexec -Force
+    Log 'installed vmupdate-shim + VMExec.ps1 (exit-code propagation + updater dispatch)'
 } else {
     Log 'qubes-rpc dirs missing - skipped rpc service (is QWT installed?)'
 }
+
+# 6. `cat` for the one step PATH can satisfy: dom0 ships its agent tarball in with
+#    `cat > <file>` over qubes.VMShell, which goes straight to cmd.exe with no interception
+#    point. (mkdir/rm/tar/python3 all arrive via qubes.VMExec and are handled by the shim.)
+$shimDir = Join-Path $qt 'vmupdate-shim'
+New-Item -ItemType Directory -Force $shimDir | Out-Null
+$catSrc = Join-Path $SetupRoot 'qubes-posix-cat.cs'
+$catExe = Join-Path $shimDir 'cat.exe'
+if (Test-Path $catSrc) {
+    & $csc /nologo /optimize /target:exe /out:"$catExe" "$catSrc" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "cat.exe compile failed (csc rc=$LASTEXITCODE)" }
+    # Appended, never prepended: if a real POSIX toolset is installed later, it wins.
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    if ($machinePath -notlike "*$shimDir*") {
+        [Environment]::SetEnvironmentVariable('Path', ($machinePath.TrimEnd(';') + ';' + $shimDir), 'Machine')
+        Log "added $shimDir to the machine PATH"
+    }
+    Log "compiled cat -> $catExe"
+}
+
+# 7. download-only pass, kept separate so `--download-only` can never install.
+$dlXml = $runXml -replace 'QubesWindowsUpdateRun', 'QubesWindowsUpdateDownload' `
+                 -replace '-Action full', '-Action download' `
+                 -replace 'perform a full Windows update pass', 'download Windows updates only'
+$fd = Join-Path $env:TEMP 'qubes-wu-dl.xml'
+[IO.File]::WriteAllText($fd, $dlXml, [Text.Encoding]::Unicode)
+$o = & schtasks /create /tn QubesWindowsUpdateDownload /xml "$fd" /f 2>&1
+Log ("REGISTER QubesWindowsUpdateDownload rc=$LASTEXITCODE : " + ($o -join ' '))
+if ($LASTEXITCODE -ne 0) { throw "schtasks register (download task) failed (rc=$LASTEXITCODE)" }
+
+# 8. Advertise the `vmexec` feature to dom0. qubesadmin's run_with_args() uses qubes.VMExec only
+#    when the qube advertises it, and otherwise falls back to qubes.VMShell with a shell-quoted
+#    line - which lands in cmd.exe with no interception point and fails on `mkdir -p`. QWT has
+#    implemented qubes.VMExec all along, so this advertises a capability we genuinely have.
+#    dom0 accepts it from any VM via qubes.FeaturesRequest (qubes/ext/core_features.py).
+$qdb = Join-Path $qt 'bin\qubesdb-cmd.exe'
+$qr  = Join-Path $qt 'bin\qrexec-client-vm.exe'
+if ((Test-Path $qdb) -and (Test-Path $qr)) {
+    # ErrorActionPreference=Stop turns ANY native stderr line into a terminating
+    # NativeCommandError - the same trap that silently truncated this script once already
+    # (schtasks' /st-in-the-past warning). Neither call below is worth failing the deploy for.
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+        & $qdb write /features-request/vmexec 1 2>&1 | Out-Null
+        # Pipe-delimited single argument, unquoted - qrexec-client-vm splits the RAW command
+        # line on '|' and a wrapping quote leaks into the target, so dom0 refuses the call.
+        & $qr 'dom0|qubes.FeaturesRequest|(null)|(null)' 2>&1 | Out-Null
+        Log "advertised vmexec=1 to dom0 (exit $LASTEXITCODE)"
+    } catch {
+        Log "vmexec advertisement failed: $($_.Exception.Message) (non-fatal)"
+    } finally { $ErrorActionPreference = $prev }
+} else {
+    Log 'qubesdb-cmd/qrexec-client-vm not found - vmexec feature NOT advertised'
+}
+
+# 9. Guest-side auto-update OFF: dom0 owns every install decision from now on. This is not
+#    cosmetic - the updates proxy is raised only for the duration of a dom0-driven pass, which
+#    is precisely the window in which a live Windows AU would find connectivity and start
+#    installing behind dom0's back. The wuauserv/USO services stay ENABLED: the on-demand path
+#    needs them; only the automatic behaviour is disabled.
+$au = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+New-Item -Path $au -Force | Out-Null
+Set-ItemProperty -Path $au -Name NoAutoUpdate -Value 1 -Type DWord
+Log 'set NoAutoUpdate=1 (dom0 owns updates; guest never installs on its own)'
+
 Log 'updater agent deployed'
