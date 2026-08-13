@@ -129,7 +129,16 @@ switch ($st.phase) {
         # After 100.0 every stderr line is shown as a message, so the outcome goes THERE - on
         # stdout it would only reach the log view, and the operator asked to see which updates
         # were installed. Ends with a KB id, never a bare number (see Msg).
-        if ($okKbs.Count) { $Err.WriteLine("installed: " + ($okKbs -join ', ')) }
+        # WORD IT HONESTLY. DISM 3010 means the package is STAGED and applies during the next
+        # boot - it is not proof that it landed. Measured 2026-08-13 on the 24H2 template:
+        # kb5121003.msu returned 3010, the qube rebooted, and the build did NOT move because the
+        # boot-time servicing failed with 0x80070490 (its checkpoint prerequisite had failed).
+        # The scan after the boot re-offers such an update, so the truth arrives either way -
+        # but this line must not claim more than it knows.
+        if ($okKbs.Count) {
+            $verb = if ($st.reboot_needed) { 'staged (completes at restart): ' } else { 'installed: ' }
+            $Err.WriteLine($verb + ($okKbs -join ', '))
+        }
         if ($st.reboot_needed) {
             # An update that needs a reboot is not finished until it gets one, so the pass
             # commits it - for templates AND standalones alike (user direction 2026-08-13:
