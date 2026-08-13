@@ -1212,6 +1212,24 @@ function Invoke-Stage2 {
         }
     }
 
+    # --- consumer-nag silencer (same switch as the HW-accel tweak) ----------------------
+    if (-not $NoAppTweaks) {
+        $quiet = Join-Path $Root 'quiet-desktop.ps1'
+        if (Test-Path -LiteralPath $quiet) {
+            Write-Log 'silencing consumer nags (OneDrive reminder, Spotlight, OOBE prompts)'
+            try {
+                $qo = & $quiet 2>&1
+                $trailer = @($qo) | Where-Object { $_ -match '=== RESULT === changed=(\d+) failed=(\d+)' } | Select-Object -Last 1
+                if ($trailer -match 'changed=(\d+) failed=(\d+)') {
+                    $script:Result.detail.quiet_desktop = "changed=$($Matches[1]) failed=$($Matches[2])"
+                } else { $script:Result.detail.quiet_desktop = 'ran, no result trailer' }
+            } catch {
+                Write-Log "consumer-nag silencer failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+                $script:Result.detail.quiet_desktop = "error: $($_.Exception.Message)"
+            }
+        }
+    } else { $script:Result.detail.quiet_desktop = 'skipped' }
+
     # --- Windows Update agent (default ON, /noupdates skips) ----------------------------
     # Updates are dom0-owned: the guest reports availability via qubes.NotifyUpdates and
     # installs ONLY when dom0 asks, exactly like a Linux qube. install-updater-agent.ps1 also
