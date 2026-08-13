@@ -135,6 +135,42 @@ if ((Test-Path $handlerDir) -and (Test-Path $svcDir)) {
     Log 'qubes-rpc dirs missing - skipped rpc service (is QWT installed?)'
 }
 
+# 5b. AUTOLOGON GUARD AT EVERY BOOT. Asserting autologon before our own reboot is not enough:
+#     Windows applies the update DURING the next boot and rewrites Winlogon there, after our
+#     check has run. A SYSTEM task at boot repairs it for the boot after that, so a qube can
+#     lose autologon at most once instead of permanently. SYSTEM/HighestAvailable, so it does
+#     not itself need a logged-on user - which is the whole point.
+$alPath = Join-Path $handlerDir 'ensure-autologon.ps1'
+$alXml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>QWT-NG: keep Windows autologon configured, so the qube stays reachable over qrexec after updates</Description></RegistrationInfo>
+  <Triggers><BootTrigger><Enabled>true</Enabled><Delay>PT30S</Delay></BootTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>powershell.exe</Command><Arguments>-NoProfile -ExecutionPolicy Bypass -File "$alPath"</Arguments></Exec></Actions>
+</Task>
+"@
+$fa = Join-Path $env:TEMP 'qubes-autologon-guard.xml'
+[IO.File]::WriteAllText($fa, $alXml, [Text.Encoding]::Unicode)
+$o = & schtasks /create /tn QubesAutologonGuard /xml "$fa" /f 2>&1
+Log ("REGISTER QubesAutologonGuard rc=$LASTEXITCODE : " + ($o -join ' '))
+
+# Assert it once now, so a guest that is ALREADY one update away from losing autologon is fixed
+# before that update rather than after it.
+if (Test-Path $alPath) {
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { foreach ($l in @(& $alPath 2>&1)) { if ($l -match '^(SET|WARN)') { Log "autologon: $l" } } }
+    finally { $ErrorActionPreference = $prev }
+}
+
 # 6. `cat` for the one step PATH can satisfy: dom0 ships its agent tarball in with
 #    `cat > <file>` over qubes.VMShell, which goes straight to cmd.exe with no interception
 #    point. (mkdir/rm/tar/python3 all arrive via qubes.VMExec and are handled by the shim.)

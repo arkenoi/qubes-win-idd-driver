@@ -171,8 +171,20 @@ switch ($st.phase) {
             # apps in it, or read it. Windows servicing rewrites Winlogon values, so autologon
             # must be re-asserted HERE, before the reboot we are about to cause.
             $al = Join-Path $qtRootForAl 'qubes-rpc-services\ensure-autologon.ps1'
+            $autologonOk = $true
             if (Test-Path $al) {
                 foreach ($l in @(& $al 2>&1)) { if ($l -match '^(SET|WARN)') { $Err.WriteLine("autologon: $l") } }
+                if ($LASTEXITCODE -eq 2) { $autologonOk = $false }
+            }
+            if (-not $autologonOk) {
+                # Rebooting now would leave the qube at a sign-in screen, where qrexec has nobody
+                # to run as: no updates, no apps, no diagnostics until somebody logs in by hand.
+                # A staged update is a smaller problem than an unreachable qube, so we stop here
+                # and say so. The update completes at the next boot the operator chooses.
+                $Err.WriteLine('NOT rebooting: autologon is not configured, so this qube would come back at a sign-in screen and be unreachable over qrexec')
+                $Err.WriteLine('restart it yourself when convenient - the update completes during that boot')
+                Write-Output 'reboot withheld: autologon not guaranteed'
+                exit 0
             }
             & shutdown.exe /r /t 60 /c "Qubes: completing Windows update servicing"
             if ($LASTEXITCODE -eq 0) {

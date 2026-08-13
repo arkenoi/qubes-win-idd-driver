@@ -8546,3 +8546,43 @@ with 552 and the cumulative then fails at boot with 0x80070490. The same path in
 deprioritised 24H2 ("a first auto update gets it obsolete"), so this is documented, not chased.
 What it means in practice: a 24H2 guest will keep being offered that cumulative, honestly, rather
 than silently believing it is up to date.
+
+## 2026-08-13 (cont.) — autologon: a Windows update can make a qube UNMANAGEABLE, and the fix was one-shot
+
+User hit it: the template came back from an update-triggered reboot at the SIGN-IN SCREEN.
+
+WHY IT MATTERS MORE THAN IT LOOKS. With no interactive session, qrexec service calls have nobody
+to run as: qubes.VMShell AND qubes.VMExec both fail with rc=117 (note: NOT the 126 of a policy
+refusal). dom0 then cannot update the qube, cannot run apps in it, cannot read anything out of it.
+An update that costs autologon does not annoy the user, it makes the qube unmanageable - that is
+release-blocking for the update feature, not cosmetic.
+
+ROOT CAUSE, already documented in mgmt/autounattend*.xml since provisioning: while AutoLogonCount
+is present Windows CONSUMES DefaultPassword, and when it runs out it deletes the password and
+falls back to the sign-in screen. Provisioning deletes AutoLogonCount ONCE via FirstLogonCommands.
+Nothing re-asserted it afterwards, and Windows servicing rewrites Winlogon - so the fix did not
+survive the first cumulative update. A one-shot fix at image build is not a fix.
+
+PREVENTION, baked into the update machinery in three places (user: "can we fix it with our
+machinery? ... baking prevention into update machinery"):
+ 1. BEFORE every reboot the updater triggers - guest/ensure-autologon.ps1 removes AutoLogonCount
+    and sets AutoAdminLogon=1, so the password is never consumed in the first place.
+ 2. AT EVERY BOOT - scheduled task QubesAutologonGuard (SYSTEM, BootTrigger+30s). Necessary
+    because Windows applies the update DURING the next boot and rewrites Winlogon there, AFTER
+    the pre-reboot check has run. With it, a qube can lose autologon at most once instead of
+    permanently.
+ 3. AT INSTALL - install-updater-agent.ps1 asserts it once while deploying, so a guest that is
+    already one update away from losing autologon is fixed before that update, not after.
+Plus a REFUSAL: if the guard reports autologon cannot be guaranteed (DefaultPassword already
+consumed - unrecoverable, we will not invent a password), wu-update.ps1 does NOT reboot. It says
+so on stderr and leaves the update staged. A staged update is a smaller problem than a qube nobody
+can reach.
+
+THE GUARD IS PROVEN TO FAIL, not just to pass (guest/wu-autologon-selftest.ps1): healthy state
+-> exit 0; with DefaultPassword removed to simulate consumption -> the two WARN lines and exit 2;
+value restored in a finally. healthy_exit=0 broken_exit=2 verdict=GUARD WORKS.
+
+RECOVERY, if it ever does happen (recorded in .claude/skills/qubes-admin-api): the guest cannot be
+repaired from inside because nothing can run inside. admin.vm.volume.ListSnapshots and
+admin.vm.volume.Revert are permitted from the dev qube and work on the VOLUME, not a session, so
+a locked-out guest can be rolled back to its pre-update root without dom0 shell access.
