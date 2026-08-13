@@ -32,6 +32,11 @@ Source1:        install-qwt.bat
 Source2:        README-qvm-create-windows-qube.md
 Source3:        MANIFEST.json
 Source4:        qwt-ng-fix-qwcq
+# Fallback/diagnostic updater command. The NORMAL way to update a Windows qube is the same
+# click as any other qube: the guest answers dom0's stock qubes-vm-update, so the Qubes
+# Update GUI drives it. This wrapper calls the guest service directly, which is useful when
+# that path misbehaves and as the explicit CLI some admins prefer.
+Source5:        qvm-windows-update
 
 # The stock package owns the same path. Conflict LOUDLY rather than silently replacing a
 # signed vendor ISO with a test-signed one - a silent overwrite is exactly the kind of
@@ -69,6 +74,7 @@ install -d -m 0755 %{buildroot}%{qwtng_share}/auto-qwt
 install -m 0644 %{SOURCE1} %{buildroot}%{qwtng_share}/auto-qwt/install-qwt.bat
 install -d -m 0755 %{buildroot}%{_bindir}
 install -m 0755 %{SOURCE4} %{buildroot}%{_bindir}/qwt-ng-fix-qwcq
+install -m 0755 %{SOURCE5} %{buildroot}%{_bindir}/qvm-windows-update
 install -m 0644 %{SOURCE3} %{buildroot}%{qwtng_share}/MANIFEST.json
 
 install -d -m 0755 %{buildroot}%{_docdir}/%{name}
@@ -81,6 +87,7 @@ install -m 0644 %{SOURCE2} %{buildroot}%{_docdir}/%{name}/README-qvm-create-wind
 %{qwtng_share}/auto-qwt/install-qwt.bat
 %{qwtng_share}/MANIFEST.json
 %{_bindir}/qwt-ng-fix-qwcq
+%{_bindir}/qvm-windows-update
 %doc %{_docdir}/%{name}/README-qvm-create-windows-qube.md
 
 %post

@@ -112,7 +112,11 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activat
 # Windows Update agent, deployed by `install.cmd /updatesonly`: the deploy script compiles the
 # relay (in-box csc, like winenum.cs), places the agent, and registers the scheduled scan that
 # reports update availability to dom0. All three staged from guest/ (single source of truth).
-foreach ($u in 'install-updater-agent.ps1', 'qubes-windows-update.ps1', 'qubes-updates-relay.cs', 'wu-update.ps1') {
+# vmupdate-shim.ps1 + VMExec.ps1 + qubes-posix-cat.cs are what make dom0's STOCK qubes-vm-update
+# (and therefore the Qubes Update GUI) able to drive this guest: dom0 injects a Python agent and
+# runs it, which Windows cannot do, so we answer the same command shapes and run our updater.
+foreach ($u in 'install-updater-agent.ps1', 'qubes-windows-update.ps1', 'qubes-updates-relay.cs', 'wu-update.ps1',
+               'vmupdate-shim.ps1', 'VMExec.ps1', 'qubes-posix-cat.cs') {
     Copy-Item (Need (Join-Path $RepoRoot "guest\$u") "updater agent payload ($u)") $OutDir -Force
 }
 
