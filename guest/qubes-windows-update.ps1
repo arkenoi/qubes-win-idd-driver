@@ -200,7 +200,11 @@ function Install-Msus($files){
     $rows += [ordered]@{ file=[IO.Path]::GetFileName($f); rc=$rc }
     Log "  DISM $([IO.Path]::GetFileName($f)) rc=$rc"
   }
-  $script:St.reboot_needed=$reboot
+  # STICKY, never assigned: Install-Msus runs once per KB, so assigning would let a later KB
+  # that needs no reboot erase an earlier one that does. Measured 2026-08-13 on the template:
+  # KB5120710 returned 3010 (reboot required), KB5121003 then returned 0, and the pass ended
+  # claiming reboot_needed=false while Windows had CBS RebootPending set.
+  if ($reboot) { $script:St.reboot_needed = $true }
   return $rows
 }
 
@@ -276,10 +280,18 @@ try {
       Log "reboot pending; reporting $($failedKbs.Count) remaining to dom0 (boot scan will confirm)"
       Report-Availability $failedKbs.Count
     } else {
-      $after = Get-Available
-      $script:St.remaining = $after.Count; Save
-      Log "post-install rescan: $($after.Count) update(s) remain"
-      Report-Availability $after.Count
+      # Best-effort: this is a REPORT, not the work. It needs the proxy, and if anything has
+      # taken the proxy away (measured: a concurrent scan's Remove-Proxy) Get-Available throws
+      # 0x80240438 - which used to propagate and mark a pass that had installed everything
+      # successfully as phase=error.
+      try {
+        $after = Get-Available
+        $script:St.remaining = $after.Count; Save
+        Log "post-install rescan: $($after.Count) update(s) remain"
+        Report-Availability $after.Count
+      } catch {
+        Log "post-install rescan failed (updates are installed; availability will be re-reported by the next scan): $($_.Exception.Message)"
+      }
     }
   }
 
