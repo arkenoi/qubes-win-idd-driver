@@ -119,38 +119,30 @@ switch ($st.phase) {
         # were installed. Ends with a KB id, never a bare number (see Msg).
         if ($okKbs.Count) { $Err.WriteLine("installed: " + ($okKbs -join ', ')) }
         if ($st.reboot_needed) {
-            $Err.WriteLine('updates installed - RESTART REQUIRED to finish')
-
-            # WHO restarts depends on the qube class, and dom0 cannot help with either case:
-            # its restart machinery is entirely template -> AppVM ("restart ServiceVMs / shut down
-            # AppVMs whose TEMPLATE has been updated"), driven by volume staleness. There is no
-            # restart-required marker for a StandaloneVM, and a guest cannot invent one -
-            # qubes.FeaturesRequest only accepts qrexec/gui/gui-emulated/qubes-firewall/vmexec.
+            # An update that needs a reboot is not finished until it gets one, so the pass
+            # commits it - for templates AND standalones alike (user direction 2026-08-13:
+            # "we commit reboot if needed at the end of update ... it is user guided action
+            # anyway, so no safeguard needed"). dom0 cannot do it for us: its restart machinery
+            # is entirely template -> AppVM, and there is no restart-required marker a
+            # StandaloneVM could carry.
             #
-            # For a TEMPLATE we must finish it ourselves, and a plain shutdown is NOT enough:
-            # Windows completes a pending servicing operation during BOOT. Shut the template down
-            # with the operation pending and it would instead run inside each AppVM's
-            # copy-on-write layer at every start, and be discarded at every shutdown - forever.
-            # So the template reboots itself, which commits the servicing to the template root.
-            # Delayed, so this rpc returns to dom0 first.
-            # /qubes-vm-type is written by dom0's r3compatibility extension and is "TemplateVM"
-            # for templates, "AppVM"/"NetVM"/"ProxyVM" otherwise. (Reading QubesDB works; only
-            # WRITING is broken in the Windows qubesdb-cmd build.)
-            $qtRoot = $env:QUBES_TOOLS
-            if (-not $qtRoot) { $qtRoot = 'C:\Program Files\Qubes Tools' }
-            $qdb = Join-Path $qtRoot 'bin\qubesdb-cmd.exe'
-            $class = 'unknown'
-            if (Test-Path $qdb) {
-                try { $class = (& $qdb -c read /qubes-vm-type 2>$null | Select-Object -First 1) } catch { }
-            }
-
-            if ($class -eq 'TemplateVM') {
-                $Err.WriteLine('template qube: rebooting now so the servicing completes in the TEMPLATE')
-                Start-Process -FilePath 'shutdown.exe' `
-                    -ArgumentList '/r', '/t', '60', '/c', 'Qubes: completing Windows update servicing' `
-                    -WindowStyle Hidden -EA SilentlyContinue
+            # It also has to be a REBOOT, not a shutdown: Windows completes pending servicing
+            # during BOOT. On a template, that boot is what commits the change to the template
+            # root - shut down with the operation pending and it would instead replay inside
+            # each AppVM's copy-on-write layer at every start and be discarded at every
+            # shutdown, so the update would never land at all.
+            #
+            # Delayed 60 s so this rpc returns its result to dom0 first.
+            # Call shutdown.exe DIRECTLY and check it worked. The first version used
+            # Start-Process ... -EA SilentlyContinue, which scheduled nothing and said nothing:
+            # the qube simply never rebooted, and the silenced error made it look like it had.
+            # shutdown.exe schedules with the OS and returns at once, so there is nothing to
+            # detach from.
+            & shutdown.exe /r /t 60 /c "Qubes: completing Windows update servicing"
+            if ($LASTEXITCODE -eq 0) {
+                $Err.WriteLine('updates installed - rebooting this qube in 60 seconds to finish')
             } else {
-                $Err.WriteLine('restart this qube to finish - Qubes has no restart-required flag for standalone qubes')
+                $Err.WriteLine("updates installed - RESTART REQUIRED, but scheduling it failed (shutdown.exe rc=$LASTEXITCODE) - restart this qube yourself")
             }
         }
         if ($failed.Count) {

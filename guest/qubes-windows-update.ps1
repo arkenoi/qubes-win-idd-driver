@@ -241,6 +241,33 @@ try {
       }
     }
   }
+  # Re-report availability at the END of an install pass, so dom0's "updates available" marker
+  # reflects reality instead of the pre-install scan. Two cases:
+  #  - a reboot is pending: Windows keeps offering the KB until it boots, so any count now would
+  #    be a lie. We are rebooting anyway, and the boot scan task (BootTrigger + 2 min) reports
+  #    the truth - the same shape as Linux's upgrades-status-notify after an update.
+  #  - nothing pending: rescan now and report, or the flag stays set until the next 6-hourly scan.
+  if ($Action -in 'install','full') {
+    if ($script:St.reboot_needed) {
+      # Everything offered was applied; the reboot is ours to perform and happens immediately
+      # after this pass. Windows keeps listing the KB as "available" until it boots, but that is
+      # a Windows artefact - from dom0's point of view the update IS applied, so clear the flag
+      # now rather than leaving the qube marked for minutes. Anything that did NOT install is
+      # still reported, and the boot scan re-reports the truth either way, so a wrong guess here
+      # self-corrects within ~2 minutes of the restart.
+      $failedKbs = @($script:St.result |
+                     Where-Object { $_.PSObject.Properties.Name -contains 'kb' -and -not $_.ok })
+      $script:St.remaining = $failedKbs.Count; Save
+      Log "reboot pending; reporting $($failedKbs.Count) remaining to dom0 (boot scan will confirm)"
+      Report-Availability $failedKbs.Count
+    } else {
+      $after = Get-Available
+      $script:St.remaining = $after.Count; Save
+      Log "post-install rescan: $($after.Count) update(s) remain"
+      Report-Availability $after.Count
+    }
+  }
+
   $script:St.phase='done'; Save
   Log 'done'
 } catch {
