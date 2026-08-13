@@ -57,8 +57,14 @@ def show(step, rc, out, err=b"", expect=None):
     for label, blob in (("out", out), ("err", err)):
         text = blob.decode("utf-8", "replace").strip()
         if text:
-            for line in text.splitlines()[:12]:
+            lines = text.splitlines()
+            # No silent truncation: a 12-line cap here once hid the final "installed: …" and
+            # "RESTART REQUIRED" lines and made a correct run look like it reported nothing.
+            shown = lines[:60]
+            for line in shown:
                 print(f"    {label}: {line}")
+            if len(lines) > len(shown):
+                print(f"    {label}: ... {len(lines) - len(shown)} more line(s) not shown")
     return rc
 
 
