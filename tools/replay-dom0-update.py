@@ -86,7 +86,9 @@ if "--with-entrypoint" in sys.argv:
     print("[entrypoint] running - this drives a REAL update pass, may take minutes")
     rc, out, err = vmexec(["/usr/bin/python3", WORKDIR + "agent/entrypoint.py",
                            "--log", "INFO"], timeout=3600)
-    show("entrypoint", rc, out, err, expect=(0, 100))
+    # 0 = updated, 100 = nothing to do, 1 = a KB failed. All three are correct protocol
+    # outcomes; only something outside this set means the contract is broken.
+    show("entrypoint", rc, out, err, expect=(0, 1, 100))
     floats = [l for l in err.decode("utf-8", "replace").splitlines()
               if l.strip().replace(".", "", 1).isdigit()]
     print(f"    progress floats seen on stderr: {floats}")
