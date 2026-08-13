@@ -24,7 +24,7 @@
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('scan','download','install','full')][string]$Action = 'scan',
+  [ValidateSet('scan','resolve','download','install','full')][string]$Action = 'scan',
   [string]$Proxy      = 'http://127.0.0.1:8082',
   [string]$RelayExe   = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe',
   [string]$WorkDir    = 'C:\ProgramData\Qubes\wu',
@@ -33,6 +33,14 @@ param(
 $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force (Split-Path $StatusFile) | Out-Null
 New-Item -ItemType Directory -Force $WorkDir | Out-Null
+# WHICH catalog package applies is a property of THIS guest, not a constant. Hardcoding
+# "x64 + 24H2|26100" made KB5120708 unresolvable on 25H2, where the applicable entry is titled
+# "... for Windows 11, version 25H2 for x64" - the scan offered it and nothing could install it.
+$__cv    = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -EA SilentlyContinue
+$OsVer   = $__cv.DisplayVersion          # e.g. 25H2
+$OsBuild = $__cv.CurrentBuild            # e.g. 26200
+$OsArch  = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+
 $IS='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
 $POL='HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
 
@@ -100,13 +108,28 @@ function Get-Available {
   return ,$out
 }
 
-# KB -> standalone .msu URLs from the Update Catalog (over the proxy). x64/24H2/26100 client build.
+# KB -> standalone .msu URLs from the Update Catalog (over the proxy), for THIS guest's
+# architecture and Windows version. Titles look like:
+#   "2026-08 Cumulative Update for .NET Framework 3.5 and 4.8.1 for Windows 11, version 25H2 for x64"
+#   "... for Microsoft server operating system version 24H2 for x64"   <- excluded (Server)
+# Client entries are preferred over server ones and the version token comes from the running OS.
 function Resolve-Catalog($kb){
   $r=Invoke-WebRequest "https://www.catalog.update.microsoft.com/Search.aspx?q=$kb" -Proxy $Proxy -UseBasicParsing -TimeoutSec 60
   $rx=[regex]"(?is)id='([0-9a-fA-F\-]{36})_link'[^>]*>(.*?)</a>"; $guid=$null
+  $cands=@()
   foreach($m in $rx.Matches($r.Content)){ $t=($m.Groups[2].Value -replace '<[^>]+>','' -replace '\s+',' ')
-    if($t -match 'x64' -and $t -match '24H2|26100' -and $t -notmatch 'ARM64|Dynamic|Server'){ $guid=$m.Groups[1].Value; break } }
-  if(-not $guid){ return @() }
+    $cands += $t
+    if($t -notmatch [regex]::Escape($OsArch)){ continue }
+    if($t -match 'Dynamic|Server|server operating system'){ continue }
+    if($OsVer   -and $t -match [regex]::Escape($OsVer))  { $guid=$m.Groups[1].Value; Log "  catalog pick: $t"; break }
+    if($OsBuild -and $t -match [regex]::Escape($OsBuild)){ $guid=$m.Groups[1].Value; Log "  catalog pick: $t"; break }
+  }
+  if(-not $guid){
+    # Log every candidate: a resolution miss is otherwise invisible and looks like "no updates".
+    Log "  no catalog entry matches arch=$OsArch ver=$OsVer build=$OsBuild; candidates:"
+    foreach($c in $cands){ Log "    - $c" }
+    return @()
+  }
   $json='[{"size":0,"languages":"","uidInfo":"'+$guid+'","updateID":"'+$guid+'"}]'
   $dl=Invoke-WebRequest 'https://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Method POST -Body @{updateIDs=$json} -Proxy $Proxy -UseBasicParsing -TimeoutSec 60
   return @([regex]::Matches($dl.Content,"url\s*=\s*'(http[^']+)'")|ForEach-Object{$_.Groups[1].Value}|Where-Object{$_ -match '\.msu(\?|$)'}|Sort-Object -Unique)
@@ -158,13 +181,14 @@ try {
   Log "scan: $($avail.Count) update(s) available"
   Report-Availability $avail.Count    # -> dom0 Qube Manager (default-allowed for TemplateVMs)
 
-  if ($Action -in 'download','full','install') {
+  if ($Action -in 'resolve','download','full','install') {
     foreach($u in $avail){
       if($u.kb -notmatch '^KB\d+'){ Log "skip (no KB): $($u.title)"; continue }
       $script:St.phase='resolve'; Save
       $urls = Resolve-Catalog $u.kb
       Log "$($u.kb): $($urls.Count) catalog .msu"
       $got=@()
+      if ($Action -eq 'resolve') { Log "$($u.kb): resolve-only, $($urls.Count) package(s)"; continue }
       if ($Action -in 'download','full') {
         $script:St.phase='download'; Save
         $i=0; foreach($url in $urls){ $i++; $name="$($u.kb)_$i.msu"; if($url -match '/([^/?]+\.msu)'){$name=$Matches[1]}
