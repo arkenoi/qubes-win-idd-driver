@@ -8514,3 +8514,35 @@ Interests, Chat icon, Cortana + web results + search highlights (local search un
 Recall, Spotlight/tips/consumer apps, the OOBE nag, telemetry at the SKU minimum, advertising ID,
 feedback prompts, Game Bar/Game DVR, Store background updates. All HKLM policy values; nothing
 uninstalled, no service disabled. Verified on the template: changed=15 failed=0, idempotent.
+
+## 2026-08-13 (cont.) — the template commit boot: the backstop works, and DISM 3010 is not proof
+
+Sequence measured on win11-tpl (24H2, 26100.8875) after the clean pass:
+  t+45 s   the template shut ITSELF down, as the pass said it would
+  t+45 s   dom0 updates-available: cleared (empty = False)
+  t+130 s  started again, qrexec answered; pending_reboot cbs=false wu=false - servicing ran
+  build:   STILL 26100.8875. KB5120710 (.NET) landed; KB5121003 (the cumulative) did NOT.
+
+WHY: DISM had returned rc=3010 for kb5121003.msu - "success, restart required" - but the
+boot-time servicing failed with **0x80070490 (ERROR_NOT_FOUND)**, because the CHECKPOINT package
+the 24H2 cumulative depends on (kb5043080, installed smallest-first as the prerequisite) had
+failed with rc=552. So the cumulative was staged and then rolled back at boot.
+
+TWO CONCLUSIONS, one good and one to fix:
+- THE BACKSTOP WORKS. A fresh scan after the commit boot found KB5121003 still available and
+  re-reported count=1 to dom0, so the optimistically cleared updates-available flag came back by
+  itself. The "clear the flag when everything applied" shortcut is therefore safe: a wrong guess
+  is corrected within one scan, exactly as designed.
+- WE OVERCLAIMED. The pass told dom0 "installed: KB5120710, KB5121003" on the strength of an
+  install-time return code. DISM 3010 means STAGED, not applied - nothing at install time can
+  know whether boot-time servicing will succeed. The summary now says
+  "staged (completes at restart): ..." whenever a restart is pending, and only says "installed"
+  for updates that applied without one.
+
+KNOWN LIMITATION, recorded rather than fixed: our offline path (catalog .msu + DISM /Add-Package)
+cannot complete a 24H2 cumulative that requires the checkpoint chain - the checkpoint itself fails
+with 552 and the cumulative then fails at boot with 0x80070490. The same path installs cleanly on
+25H2 (win11-fresh: KB5121003 applied, build moved 26200.8875 -> 26200.9168). The user has
+deprioritised 24H2 ("a first auto update gets it obsolete"), so this is documented, not chased.
+What it means in practice: a 24H2 guest will keep being offered that cumulative, honestly, rather
+than silently believing it is up to date.
