@@ -109,6 +109,21 @@ on real Office in seamless mode: **8 visible Word windows in the guest, 4 in dom
 three real document frames plus a genuine dialog. All four shadow strips dropped, no real
 window lost.
 
+### Windows updates work from the Qubes Update GUI, like any other qube
+
+The qube reports available updates through `qubes.NotifyUpdates`, so it appears in the Qubes
+Update tool with the same "updates available" marker as a Fedora or Debian template, and
+updating it is the same click. No separate command, and no networking for the guest: update
+traffic goes over `qubes.UpdatesProxy`, and the proxy is raised only for the duration of a
+pass. Windows' own automatic updates are turned **off** — dom0 decides when the qube updates,
+exactly as it does for Linux qubes.
+
+This needed work on our side because dom0's updater does not call an agent in the guest, it
+*injects* a Python one per run — which is why every Linux qube is updatable with nothing
+preinstalled, and why Windows never could be. The guest now answers dom0's own command
+sequence and runs the Windows updater where dom0 expects its injected agent. Details and the
+replay harness: `docs/PLAN-windows-updates.md`.
+
 ### Networking runs over the PV path
 
 Stock QWT 4.2.2 silently falls back to an emulated Realtek NIC (see below). This build binds

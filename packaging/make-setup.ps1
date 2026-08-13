@@ -270,7 +270,8 @@ $manifest = [ordered]@{
         also           = @('6 ITL signing certs + our test cert into Root and TrustedPublisher',
                            'VC++ 2015-2022 x64 runtime',
                            'bcdedit /set testsigning on',
-                           'gui-agent registry defaults: SeamlessMode=1, DisableCursor=0, LogDir')
+                           'gui-agent registry defaults: SeamlessMode=1, DisableCursor=0, LogDir',
+                           'Windows Update agent (unless /noupdates): reports availability via qubes.NotifyUpdates, answers dom0 qubes-vm-update so the Qubes Update GUI can drive the qube, and sets NoAutoUpdate=1 - dom0 owns installs')
     }
     never_installs = @('reference/', 'PvDriversDisk', 'MoveUsers', 'Autologon',
                        'any WDDM/video driver (QWT 4.2.2 has none)',
