@@ -279,6 +279,15 @@ function Fetch-Msu($url,$dst,$kb){
   return $false
 }
 
+# DISM outcomes that mean "this package is now on the system": success, success-pending-reboot,
+# and already-installed (0x240006). Anything else is a real failure for that FILE - though not
+# necessarily for the KB, see the per-KB rule at the call site.
+#
+# NOTE: this definition was once deleted by a careless region replacement (the Fetch-Msu rewrite
+# above), leaving $OK_RC undefined - so `$_.rc -in $OK_RC` was always false and EVERY install
+# reported failure, including one that had returned 3010. Keep it adjacent to its only consumers.
+$OK_RC = @(0, 3010, 2359302)
+
 function Install-Msus($files){
   $reboot=$false; $rows=@()
   foreach($f in ($files | Sort-Object { (Get-Item $_).Length })){   # smallest-first: SSU/checkpoint before LCU
