@@ -102,16 +102,31 @@ Options:
      /idd     install and ACTIVATE the Qubes IddCx display driver (see below)
      /nonet   omit PvDriversNetwork
      /noapptweaks
-              skip the app hardware-acceleration pre-tweak. By default stage 2
-              runs disable-hw-accel.ps1: machine-wide registry policies that
-              make Chrome/Edge/Brave/Firefox/Slack render in software, the WPF
+              skip BOTH desktop tweak scripts stage 2 runs by default.
+
+              disable-hw-accel.ps1 -- machine-wide registry policies that make
+              Chrome/Edge/Brave/Firefox/Slack render in software, the WPF
               software-rendering fallback, and the per-user Office keys
               (DisableHardwareAcceleration/DisableAnimations) delivered to all
               existing profiles and the Default profile. On a GPU-less guest
               the GPU path is emulated at best and causes rendering artifacts
               and repaint storms that the seamless capture path pays for twice.
-              The keys are plain policy values an admin can change or delete
-              later; nothing is enforced beyond standard policy precedence.
+
+              quiet-desktop.ps1 -- removes the consumer/cloud surface a qube
+              does not need: OneDrive (client prevented from starting, and a
+              running one stopped), Widgets / News and Interests, the Chat
+              icon, Cortana and web results in Start search (local search is
+              untouched), Copilot and Recall, Spotlight/suggestions/tips and
+              auto-installed consumer apps, the "finish setting up your
+              device" nag, telemetry at the SKU minimum, the advertising ID,
+              feedback prompts, Game Bar/Game DVR, and Store background app
+              updates. Each is a popup that steals focus over the seamless
+              desktop, a background repaint, or something that cannot work on
+              a qube with no networking.
+
+              Nothing is uninstalled and no service is disabled: every entry
+              is a plain policy value an admin can change or delete later, and
+              nothing is enforced beyond standard policy precedence.
      /noupdates
               skip the Windows Update agent. By default stage 2 deploys it, and
               from then on the qube behaves like any other Qubes qube: it reports
