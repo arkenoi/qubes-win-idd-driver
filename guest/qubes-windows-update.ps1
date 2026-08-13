@@ -149,7 +149,19 @@ function Fetch-Msu($url,$dst,$kb){
       $o.Close();$in.Close();$resp.Close()
       $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($have/1MB,1);pct=100}; Save
       return $true
-    }catch{ Log "  fetch attempt ${a}: $($_.Exception.Message)"; if($o){try{$o.Close()}catch{}}; Start-Sleep 5 }
+    }catch{
+      if($o){try{$o.Close()}catch{}}
+      # A complete local copy makes the server refuse the resume range with 416. That is
+      # "already downloaded", not a failure - measured 2026-08-13: a re-run after a successful
+      # pass burned all 8 attempts on 416 and reported the update as unresolvable.
+      $code=$null; $we=$_.Exception
+      if($we -is [System.Net.WebException] -and $we.Response){ $code=[int]$we.Response.StatusCode }
+      if($code -eq 416 -and $have -gt 0){
+        Log "  $([IO.Path]::GetFileName($dst)) already complete ($([math]::Round($have/1MB,1)) MB; server refused resume with 416)"
+        $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($have/1MB,1);pct=100}; Save
+        return $true
+      }
+      Log "  fetch attempt ${a}: $($we.Message)"; Start-Sleep 5 }
   }
   return $false
 }
@@ -200,8 +212,9 @@ try {
       # nothing was downloaded there was no result row, so the pass reported "count=1" and exit 0
       # while installing nothing. dom0 must hear about that.
       if ($Action -in 'install','full' -and $got.Count -eq 0) {
-        $script:St.result += [ordered]@{ kb=$u.kb; ok=$false; files=@()
-                                         reason='no installable package resolved from the Update Catalog' }
+        $why = if ($urls.Count -eq 0) { 'no catalog entry matches this Windows version/architecture' }
+               else { "resolved $($urls.Count) package(s) from the catalog but none could be downloaded" }
+        $script:St.result += [ordered]@{ kb=$u.kb; ok=$false; files=@(); reason=$why }
         Save
         Log "$($u.kb): NO installable package resolved - reporting as failed"
       }
@@ -216,6 +229,9 @@ try {
         $ok = @($rows | Where-Object { $_.rc -in $OK_RC }).Count -gt 0
         $script:St.result += [ordered]@{ kb=$u.kb; ok=$ok; files=$rows }
         Save
+        # Reclaim the download: a cumulative update is GIGABYTES (5.1 GB was sitting in this
+        # work dir from one pass) and keeping it buys nothing once it is installed.
+        foreach($r in $rows){ if($r.rc -in $OK_RC){ Remove-Item -LiteralPath (Join-Path $WorkDir $r.file) -Force -EA SilentlyContinue } }
         Log "$($u.kb): installed=$ok"
       }
     }
