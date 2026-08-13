@@ -30,6 +30,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -41,6 +42,36 @@ static class Relay
     // Two defenses: (1) read the first request bytes BEFORE spawning, so abandoned connections
     // cost nothing; (2) cap concurrent qrexec handlers so the storm cannot exhaust RAM/tmpfs.
     static readonly SemaphoreSlim _gate = new SemaphoreSlim(MaxConn());
+
+    // WARM POOL. Measured 2026-08-13: Windows Update's own downloader issues MANY short ranged
+    // connections (~230 KB each), and each one paid the FULL setup cost on the critical path -
+    // spawn qrexec-client-vm, dom0 policy evaluation, service start in the proxy qube, connect
+    // back, token handshake. That is 5-6 s per connection even when almost no bytes move
+    // (measured: up=958 down=958 ms=6481), which collapsed throughput to ~200 KB/s against the
+    // ~13 MB/s a single long-lived connection achieves through the same relay.
+    //
+    // The setup cannot be made cheaper, but it CAN be paid in advance: keep a few channels
+    // spawned and connected back, so an inbound connection takes a ready one immediately while
+    // a background filler starts its replacement. A channel is used ONCE (an HTTP proxy session
+    // ends with its client), so this trades a small number of speculative spawns for latency -
+    // the same bargain the read-first check already makes in the other direction.
+    class Ready
+    {
+        public TcpClient Relay;
+        public NetworkStream Stream;
+        public string Token;
+        public DateTime Born;
+    }
+    static readonly ConcurrentQueue<Ready> _pool = new ConcurrentQueue<Ready>();
+    static int PoolTarget()
+    {
+        int pt;
+        if (int.TryParse(Environment.GetEnvironmentVariable("QUBES_UPDATES_POOL"), out pt) && pt >= 0) return pt;
+        return 8;
+    }
+    // A pooled channel holds a proxy session open; tinyproxy will eventually drop an idle one,
+    // so treat anything older than this as stale rather than handing out a dead socket.
+    const int PoolMaxAgeSeconds = 25;
     static int MaxConn()
     {
         int mc;
@@ -91,6 +122,10 @@ static class Relay
 
         TcpListener listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
+
+        // Start warming channels immediately, so the first request does not pay setup either.
+        Task filler = Task.Run(delegate { return PoolFiller(self, target, user, logPath); });
+        GC.KeepAlive(filler);
         while (true)
         {
             TcpClient inbound = listener.AcceptTcpClient();
@@ -117,37 +152,19 @@ static class Relay
 
         // Cap concurrency so a burst of real requests cannot fork-bomb the proxy qube.
         await _gate.WaitAsync();
-        string token = Guid.NewGuid().ToString("N");
-        TcpListener control = new TcpListener(IPAddress.Loopback, 0);   // ephemeral
-        control.Start();
-        int cport = ((IPEndPoint)control.LocalEndpoint).Port;
         Stopwatch sw = Stopwatch.StartNew();
         long up = hlen, down = 0;
+        string token = "-";
+        bool warm = false;
         try
         {
-            string handler = "\"" + self + "\" --relay " + cport + " " + token;
-            ProcessStartInfo psi = new ProcessStartInfo();
-            psi.FileName = QrexecClientVm();
-            // Do NOT wrap the whole pipe-string in quotes. qrexec-client-vm's GetArgument() splits
-            // the RAW command line on '|' and does not strip quotes, so an outer quote leaks into
-            // field 1 -> target parses as "@default, whose illegal '"' qrexec sanitizes to '_' ->
-            // dom0 logs `target '_@default' does not exist, using @default instead` on every spawn.
-            // It only "works" because @default falls back; a literal target would be REFUSED. The
-            // handler keeps its own quotes (its exe path can contain spaces, e.g. Program Files).
-            psi.Arguments = target + "|" + Service + "|" + user + "|" + handler;
-            psi.UseShellExecute = false;
-            psi.CreateNoWindow = true;
-            Process.Start(psi);
-
-            Task<TcpClient> accept = control.AcceptTcpClientAsync();
-            if (await Task.WhenAny(accept, Task.Delay(20000)) != accept)
-            { Log(logPath, "CONN token=" + token + " relay never connected back"); return; }
-            TcpClient relay = accept.Result;
-            NetworkStream rs = relay.GetStream();
-            byte[] tk = Encoding.ASCII.GetBytes(token + "\n");
-            byte[] got = new byte[tk.Length];
-            if (!await ReadExact(rs, got, got.Length) || Encoding.ASCII.GetString(got) != token + "\n")
-            { Log(logPath, "CONN token=" + token + " bad token from relay"); relay.Close(); return; }
+            Ready ch = TakeWarm();
+            if (ch != null) { warm = true; }
+            else { ch = await OpenChannel(self, target, user, logPath); }
+            if (ch == null) { inbound.Close(); return; }
+            token = ch.Token;
+            TcpClient relay = ch.Relay;
+            NetworkStream rs = ch.Stream;
 
             using (inbound)
             using (relay)
@@ -162,7 +179,97 @@ static class Relay
             }
         }
         catch (Exception e) { Log(logPath, "CONN token=" + token + " error " + e.Message); }
-        finally { control.Stop(); _gate.Release(); Log(logPath, "CONN token=" + token + " up=" + up + " down=" + down + " ms=" + sw.ElapsedMilliseconds); }
+        finally { _gate.Release(); Log(logPath, "CONN token=" + token + " warm=" + (warm ? 1 : 0) + " up=" + up + " down=" + down + " ms=" + sw.ElapsedMilliseconds); }
+    }
+
+    // Spawn one qrexec handler and complete its connect-back handshake. This is the expensive
+    // part (dom0 policy + service start in the proxy qube), and the whole point of the pool is
+    // to run it OFF the critical path.
+    static async Task<Ready> OpenChannel(string self, string target, string user, string logPath)
+    {
+        string token = Guid.NewGuid().ToString("N");
+        TcpListener control = new TcpListener(IPAddress.Loopback, 0);   // ephemeral
+        control.Start();
+        int cport = ((IPEndPoint)control.LocalEndpoint).Port;
+        try
+        {
+            string handler = "\"" + self + "\" --relay " + cport + " " + token;
+            ProcessStartInfo psi = new ProcessStartInfo();
+            psi.FileName = QrexecClientVm();
+            // Do NOT wrap the whole pipe-string in quotes. qrexec-client-vm's GetArgument() splits
+            // the RAW command line on '|' and does not strip quotes, so an outer quote leaks into
+            // field 1 -> target parses as "@default, whose illegal '"' qrexec sanitizes to '_' ->
+            // dom0 logs `target '_@default' does not exist, using @default instead` on every spawn.
+            psi.Arguments = target + "|" + Service + "|" + user + "|" + handler;
+            psi.UseShellExecute = false;
+            psi.CreateNoWindow = true;
+            Process.Start(psi);
+
+            Task<TcpClient> accept = control.AcceptTcpClientAsync();
+            if (await Task.WhenAny(accept, Task.Delay(20000)) != accept)
+            { Log(logPath, "CHAN token=" + token + " relay never connected back"); return null; }
+            TcpClient relay = accept.Result;
+            NetworkStream rs = relay.GetStream();
+            byte[] tk = Encoding.ASCII.GetBytes(token + "\n");
+            byte[] got = new byte[tk.Length];
+            if (!await ReadExact(rs, got, got.Length) || Encoding.ASCII.GetString(got) != token + "\n")
+            { Log(logPath, "CHAN token=" + token + " bad token from relay"); relay.Close(); return null; }
+
+            Ready r = new Ready();
+            r.Relay = relay; r.Stream = rs; r.Token = token; r.Born = DateTime.UtcNow;
+            return r;
+        }
+        catch (Exception e) { Log(logPath, "CHAN token=" + token + " error " + e.Message); return null; }
+        finally { control.Stop(); }
+    }
+
+    // Take a channel that is still fresh AND still connected; drop the rest.
+    static Ready TakeWarm()
+    {
+        Ready r;
+        while (_pool.TryDequeue(out r))
+        {
+            bool stale = (DateTime.UtcNow - r.Born).TotalSeconds > PoolMaxAgeSeconds;
+            bool dead = false;
+            try { dead = !r.Relay.Connected; } catch { dead = true; }
+            if (!stale && !dead) return r;
+            try { r.Relay.Close(); } catch { }
+        }
+        return null;
+    }
+
+    // Keep the pool topped up. Spawns run concurrently, so the refill rate is not capped by the
+    // 5-6 s each one takes.
+    static async Task PoolFiller(string self, string target, string user, string logPath)
+    {
+        int target_n = PoolTarget();
+        if (target_n <= 0) return;
+        Log(logPath, "POOL warm channels target=" + target_n);
+        while (true)
+        {
+            int pause = 0;
+            // NOTE: no await inside catch - C# 5 forbids it, and the in-box csc is C# 5.
+            try
+            {
+                int deficit = target_n - _pool.Count;
+                if (deficit <= 0) { pause = 250; }
+                else
+                {
+                    Task[] batch = new Task[Math.Min(deficit, 4)];
+                    for (int i = 0; i < batch.Length; i++)
+                    {
+                        batch[i] = Task.Run(async delegate
+                        {
+                            Ready r = await OpenChannel(self, target, user, logPath);
+                            if (r != null) _pool.Enqueue(r);
+                        });
+                    }
+                    await Task.WhenAll(batch);
+                }
+            }
+            catch { pause = 500; }
+            if (pause > 0) await Task.Delay(pause);
+        }
     }
 
     // ---- relay side (qrexec handler; stdio == vchan) -------------------------------------
