@@ -5,9 +5,10 @@ An exit code of 0 from cmd.exe only means `exit` ran; it says nothing about the 
 This re-sends a known tarball and reads the landed file's size + SHA256 back out of the guest.
 """
 import subprocess, sys, io, tarfile, hashlib, os
-# qubesadmin lives in dom0; on a dev qube point QUBESADMIN_SRC at a checkout of
-# qubes-core-admin-client (only utils.encode_for_vmexec is used).
-sys.path.insert(0, os.environ.get("QUBESADMIN_SRC", "/usr/lib/python3.13/site-packages"))
+# qubesadmin is installed on this dev qube; QUBESADMIN_SRC only matters if it is not
+# (point it at a qubes-core-admin-client checkout - only utils.encode_for_vmexec is used).
+if os.environ.get("QUBESADMIN_SRC"):
+    sys.path.insert(0, os.environ["QUBESADMIN_SRC"])
 from qubesadmin.utils import encode_for_vmexec  # noqa: E402
 
 VM = sys.argv[1] if len(sys.argv) > 1 else "win11-fresh"
