@@ -72,6 +72,16 @@ static class Relay
     // A pooled channel holds a proxy session open; tinyproxy will eventually drop an idle one,
     // so treat anything older than this as stale rather than handing out a dead socket.
     const int PoolMaxAgeSeconds = 25;
+
+    // Grace period for the second direction to finish once the first has ended. Override with
+    // QUBES_UPDATES_DRAINMS if a slow link ever needs longer; 3000 was the original value and it
+    // cost ~6 s of pure latency per connection (two drains in series).
+    static int DrainMs()
+    {
+        int d;
+        if (int.TryParse(Environment.GetEnvironmentVariable("QUBES_UPDATES_DRAINMS"), out d) && d >= 0) return d;
+        return 250;
+    }
     static int MaxConn()
     {
         int mc;
@@ -153,8 +163,9 @@ static class Relay
         // Cap concurrency so a burst of real requests cannot fork-bomb the proxy qube.
         await _gate.WaitAsync();
         Stopwatch sw = Stopwatch.StartNew();
-        long up = hlen, down = 0;
+        long up = hlen, down = 0, ttfb = -1;
         string token = "-";
+        string reqLine = "";
         bool warm = false;
         try
         {
@@ -170,16 +181,29 @@ static class Relay
             using (relay)
             {
                 // Replay the buffered request head into the tunnel first, then pump both ways.
+                // Record the request LINE and the time to first byte back: without splitting
+                // those out, a slow connection cannot be told apart from a slow START, and the
+                // warm pool proved that guessing which one it is wastes hours.
+                int nl = Array.IndexOf(head, (byte)'\n', 0, Math.Min(hlen, 200));
+                if (nl < 0) nl = Math.Min(hlen, 60);
+                reqLine = Encoding.ASCII.GetString(head, 0, Math.Max(0, Math.Min(nl, 120))).Trim();
                 await rs.WriteAsync(head, 0, hlen); await rs.FlushAsync();
                 a.ReadTimeout = Timeout.Infinite;
                 Task t1 = Pump(a, rs, delegate(int n) { up += n; });        // WU -> vchan
-                Task t2 = Pump(rs, a, delegate(int n) { down += n; });      // vchan -> WU
+                Task t2 = Pump(rs, a, delegate(int n) { if (down == 0) ttfb = sw.ElapsedMilliseconds; down += n; });
                 await Task.WhenAny(t1, t2);
-                await Task.WhenAny(Task.WhenAll(t1, t2), Task.Delay(3000)); // half-close drain
+                // HALF-CLOSE DRAIN. This was 3000 ms here and another 3000 ms in the handler, so
+                // EVERY connection lived ~6 s after its data had arrived - measured: down=14524
+                // ttfb=70 ms=6090, and down=0 ttfb=-1 ms=6138. A fixed tail is invisible on one
+                // huge transfer (our own downloader pays it once for 4.8 GB and still sees
+                // 13 MB/s) and crippling for Windows Update, which issues hundreds of small
+                // ranged GETs and pays it on every one. The drain only needs to let an
+                // already-finished direction flush, not to wait out a timeout.
+                await Task.WhenAny(Task.WhenAll(t1, t2), Task.Delay(DrainMs()));
             }
         }
         catch (Exception e) { Log(logPath, "CONN token=" + token + " error " + e.Message); }
-        finally { _gate.Release(); Log(logPath, "CONN token=" + token + " warm=" + (warm ? 1 : 0) + " up=" + up + " down=" + down + " ms=" + sw.ElapsedMilliseconds); }
+        finally { _gate.Release(); Log(logPath, "CONN warm=" + (warm ? 1 : 0) + " up=" + up + " down=" + down + " ttfb=" + ttfb + " ms=" + sw.ElapsedMilliseconds + " req=[" + reqLine + "]"); }
     }
 
     // Spawn one qrexec handler and complete its connect-back handshake. This is the expensive
@@ -287,7 +311,7 @@ static class Relay
             Task t1 = Pump(ns, vout, delegate(int n) { });   // socket (from WU) -> vchan out
             Task t2 = Pump(vin, ns, delegate(int n) { });    // vchan in -> socket (to WU)
             Task.WhenAny(t1, t2).Wait();
-            Task.WhenAny(Task.WhenAll(t1, t2), Task.Delay(3000)).Wait();
+            Task.WhenAny(Task.WhenAll(t1, t2), Task.Delay(DrainMs())).Wait();
         }
         return 0;
     }
