@@ -24,7 +24,7 @@
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('scan','resolve','download','install','full')][string]$Action = 'scan',
+  [ValidateSet('scan','resolve','download','install','full','wuinstall')][string]$Action = 'scan',
   [string]$Proxy      = 'http://127.0.0.1:8082',
   [string]$RelayExe   = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe',
   [string]$WorkDir    = 'C:\ProgramData\Qubes\wu',
@@ -132,6 +132,67 @@ function Get-Available {
     $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($u.MaxDownloadSize/1MB,1); downloaded=[bool]$u.IsDownloaded }
   }
   return ,$out
+}
+
+# WU-NATIVE INSTALL. The catalog+DISM path cannot service every image: measured 2026-08-13 on a
+# VIRGIN 24H2 template (isolated per-KB directory, verified downloads, no stale packages), the
+# cumulative KB5121003 was staged with DISM rc=3010 and then ROLLED BACK at boot with 0x80070490 /
+# CBS_E_INVALID_PACKAGE, because its checkpoint prerequisite kb5043080 is "not applicable" to the
+# image (DISM rc=552). Deciding WHICH packages an image needs, and in what order, is exactly what
+# the Windows Update agent does and what we were reimplementing badly by scraping the catalog.
+#
+# The searcher already runs online through our proxy (Get-Available), so the same session's
+# downloader and installer can too. Delivery Optimization is forced into simple mode first,
+# because DO does its own peer/CDN transport and does not reliably honour the WinHTTP proxy that
+# Ensure-Proxy sets - and a qube has no other way out.
+function Install-ViaWU {
+  SetV 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' 'DODownloadMode' 99 'DWord'
+  Log 'Delivery Optimization set to simple mode (no peering; plain HTTP through the Qubes proxy)'
+
+  $session = New-Object -ComObject Microsoft.Update.Session
+  $searcher = $session.CreateUpdateSearcher(); $searcher.ServerSelection = 2; $searcher.Online = $true
+  $script:St.phase='scan'; Save
+  $found = $searcher.Search("IsInstalled=0 and IsHidden=0")
+  if ($found.Updates.Count -eq 0) { Log 'WU: nothing to install'; return @() }
+
+  $coll = New-Object -ComObject Microsoft.Update.UpdateColl
+  foreach ($u in $found.Updates) {
+    if (-not $u.EulaAccepted) { try { $u.AcceptEula() } catch {} }
+    [void]$coll.Add($u)
+    Log ("WU: selected " + $u.Title)
+  }
+  $script:St.count = $coll.Count; Save
+
+  $script:St.phase='download'; Save
+  $downloader = $session.CreateUpdateDownloader(); $downloader.Updates = $coll
+  Log "WU: downloading $($coll.Count) update(s) through the proxy"
+  $dres = $downloader.Download()
+  Log "WU: download ResultCode=$($dres.ResultCode) HResult=$($dres.HResult)"
+
+  # Install only what actually downloaded; asking WU to install a missing payload just fails.
+  $ready = New-Object -ComObject Microsoft.Update.UpdateColl
+  foreach ($u in $coll) { if ($u.IsDownloaded) { [void]$ready.Add($u) } }
+  if ($ready.Count -eq 0) { Log 'WU: nothing downloaded - not installing'; return @() }
+
+  $script:St.phase='install'; Save
+  $installer = $session.CreateUpdateInstaller(); $installer.Updates = $ready
+  Log "WU: installing $($ready.Count) update(s)"
+  $ires = $installer.Install()
+  Log "WU: install ResultCode=$($ires.ResultCode) RebootRequired=$($ires.RebootRequired)"
+  if ($ires.RebootRequired) { $script:St.reboot_needed = $true }
+
+  # ResultCode: 2 = succeeded, 3 = succeeded with errors, 4 = failed, 5 = aborted.
+  $rows = @()
+  for ($i = 0; $i -lt $ready.Count; $i++) {
+    $u = $ready.Item($i)
+    $r = $ires.GetUpdateResult($i)
+    $kb = @($u.KBArticleIDs) | Select-Object -First 1
+    $rows += [ordered]@{ kb = $(if ($kb) { "KB$kb" } else { '(no KB)' })
+                         ok = ($r.ResultCode -in @(2, 3))
+                         files = @([ordered]@{ file = "$($u.Title)"; rc = $r.ResultCode; hr = $r.HResult }) }
+    Log ("WU:   $($u.Title) -> ResultCode=$($r.ResultCode) HResult=$($r.HResult)")
+  }
+  return ,$rows
 }
 
 # KB -> standalone .msu URLs from the Update Catalog (over the proxy), for THIS guest's
@@ -313,6 +374,13 @@ try {
   $script:St.available=$avail; $script:St.count=$avail.Count; Save
   Log "scan: $($avail.Count) update(s) available"
   Report-Availability $avail.Count    # -> dom0 Qube Manager (default-allowed for TemplateVMs)
+
+  if ($Action -eq 'wuinstall') {
+    $script:St.result = Install-ViaWU
+    $script:St.phase='done'; Save
+    Log 'done (WU-native)'
+    return
+  }
 
   if ($Action -in 'resolve','download','full','install') {
     foreach($u in $avail){
