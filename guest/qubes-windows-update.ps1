@@ -154,8 +154,13 @@ function Fetch-Msu($url,$dst,$kb){
       # A complete local copy makes the server refuse the resume range with 416. That is
       # "already downloaded", not a failure - measured 2026-08-13: a re-run after a successful
       # pass burned all 8 attempts on 416 and reported the update as unresolvable.
+      # PowerShell wraps a failing method call in a MethodInvocationException, so $_.Exception is
+      # NOT the WebException - it is the wrapper. Unwrap it, and keep a text fallback: this check
+      # silently did nothing the first time precisely because of that wrapping.
       $code=$null; $we=$_.Exception
+      if($we -isnot [System.Net.WebException] -and $we.InnerException){ $we=$we.InnerException }
       if($we -is [System.Net.WebException] -and $we.Response){ $code=[int]$we.Response.StatusCode }
+      if(-not $code -and $_.Exception.Message -match '\(416\)'){ $code=416 }
       if($code -eq 416 -and $have -gt 0){
         Log "  $([IO.Path]::GetFileName($dst)) already complete ($([math]::Round($have/1MB,1)) MB; server refused resume with 416)"
         $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($have/1MB,1);pct=100}; Save
