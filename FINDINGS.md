@@ -8457,3 +8457,60 @@ VERIFIED END TO END on win11-fresh:
   empty, i.e. False) -> qube shuts down -> next start completes servicing ->
   Get-HotFix lists KB5120708, pending_reboot cbs=false wu=false -> next pass rc=100
   "no updates available", flag still clear.
+
+## 2026-08-13 (cont.) — the TemplateVM test found three defects the StandaloneVM runs never could
+
+User: "none of our test window qubes are templateVMs, we need to test it properly." Correct, and
+it paid immediately.
+
+BUILDING THE TEMPLATE (and a correction to my own claim). I told the user TemplateVM creation was
+dom0-only and I could not do it. FALSE: this qube is policied for admin.vm.Create.TemplateVM and
+much more - only a genuinely unpermitted service returns 126 "Request refused"; an allowed call
+returns 0 even when the API answers with an exception. Recorded in .claude/skills/qubes-admin-api.
+The user also asked why I was cloning volume-level: because I was reimplementing something that
+exists. `qvm-clone --class` / clone_vm(new_cls=...) changes class AND carries properties, features
+and tags. On lvm_thin the copy is CoW: 80 GiB root + 40 GiB private in 2.7 s.
+One-shot qvm-clone still FAILS here ("Request refused" after "Cloning root volume") because policy
+is tag-based and it clones volumes before copying tags. Order that works: create -> tag -> clone
+volumes + copy prefs. A fresh TemplateVM's defaults are Linux-shaped: virt_mode=hvm and an EMPTY
+kernel are mandatory or Windows will not boot.
+Result: win11-tpl, Windows 11 24H2 build 26100.8875, seeded from win11-24h2. The guest reports
+/qubes-vm-type = TemplateVM, which is the discriminator our code reads.
+
+DEFECT 1 - CONCURRENT OPERATIONS, A FALSE SUCCESS. The 6-hourly scan task fired SIX MINUTES into
+the dom0-driven install (LastRunTime 19:09:14; install still running at 19:10:35). Both write ONE
+status file, so the rpc handler tailing it read the SCAN's `done` - count=2, result EMPTY - and
+reported the update complete with exit 0 while DISM was still installing. The scan's finally also
+runs Remove-Proxy, which tore the proxy out from under the download: the pass then died with
+`Exception from HRESULT: 0x80240438` (WU: no route to the endpoint) at 56.9 % of 4.8 GB.
+FIX, two layers because either alone leaves a hole: a global mutex (a scan yields immediately when
+real work holds it; real work waits up to 15 min) and a freshness guard in the handler (ignore any
+status stamped before we kicked the task).
+
+DEFECT 2 - reboot_needed WAS ASSIGNED, NOT OR-ed. Install-Msus runs once per KB and assigned
+$St.reboot_needed each time, so a later KB needing no reboot ERASED an earlier one that did.
+Measured: KB5120710 -> rc 3010 (reboot required), KB5121003 -> rc 0, and the pass finished claiming
+reboot_needed=false while Windows had CBS RebootPending set. On a template that means the qube is
+never rebooted and THE UPDATE NEVER COMMITS TO THE TEMPLATE ROOT. Now sticky.
+
+DEFECT 3 - A FAILED REPORT FAILED THE PASS. The post-install availability rescan needs the proxy;
+when the concurrent scan removed it, the exception propagated and marked a pass that had installed
+everything successfully as phase=error. It is a report, not the work: now best-effort.
+
+AFTER THE FIXES, the same pass on the same template:
+  installed: KB5120710, KB5121003
+  updates installed - this qube shuts down in 60 seconds; start it again and the update finishes
+  during boot
+each message once, floats monotonic 0/1/3/10/56.1/75/100, rc=0, and all three .msu visible
+(ndp481, the kb5043080 prerequisite, and kb5121003).
+
+ALSO VALIDATED HERE: the catalog resolver picked the 24H2/26100 variants on this guest where it
+picked 25H2 ones on win11-fresh - the OS-derived matching works on a second build, not just the
+one it was written against.
+
+DESKTOP TWEAKS (user request, same /noapptweaks switch): guest/quiet-desktop.ps1 removes the
+consumer/cloud surface - OneDrive (client stopped and prevented from starting), Widgets / News and
+Interests, Chat icon, Cortana + web results + search highlights (local search untouched), Copilot,
+Recall, Spotlight/tips/consumer apps, the OOBE nag, telemetry at the SKU minimum, advertising ID,
+feedback prompts, Game Bar/Game DVR, Store background updates. All HKLM policy values; nothing
+uninstalled, no service disabled. Verified on the template: changed=15 failed=0, idempotent.
