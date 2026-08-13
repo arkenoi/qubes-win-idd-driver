@@ -32,9 +32,17 @@ $script:LastP = -1
 # CAREFUL: dom0 tries float(line) and then float(line.split()[-1]), so a message ENDING in a
 # number is silently swallowed as a progress value - "downloading KB5120708 184.5" would be
 # read as 184.5 %. Every message here must therefore end in a non-numeric word.
-$script:LastMsg = ''
+# De-duplicate against EVERY message already sent, not just the previous one. The status file is
+# polled every 3 s and two different messages can be live at once ("found N update(s)" is
+# re-derived on every poll while "installing <file>" comes from the phase), so a last-value-only
+# check let them alternate forever: found / installing / found / installing ... - which is
+# exactly the repetition seen in the first GUI run.
+$script:SentMsgs = @{}
 function Msg([string]$m) {
-    if ($m -and $m -ne $script:LastMsg) { $script:LastMsg = $m; $Err.WriteLine($m) }
+    if ($m -and -not $script:SentMsgs.ContainsKey($m)) {
+        $script:SentMsgs[$m] = $true
+        $Err.WriteLine($m)
+    }
 }
 
 # If an update run is already in flight, attach to it instead of clobbering its status file.

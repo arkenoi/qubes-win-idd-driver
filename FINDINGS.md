@@ -8325,3 +8325,56 @@ in a number is swallowed as a progress value - "downloading KB5120708 184.5" wou
 QUBE LEFT UPDATE-READY for the user's dom0 run: win11-fresh running, updater agent current,
 vmexec=1, updates-available=1, exactly one update pending (KB5120708, 184.5 MB) which now
 resolves. Deliberately NOT installed here so the dom0 updater has real work to do.
+
+## 2026-08-13 (cont.) — the first GUI run: why a SUCCESSFUL update reported ERROR
+
+The user ran the dom0 updater against win11-fresh. KB5120708 installed (rc=3010, ok=true), and
+the updater reported **error**. Also: progress lines repeated.
+
+MECHANISM (read from dom0 source, not guessed): update_manager.update_qube() does
+  result  = self._transfer_agent(...)      # mkdir, cat > tarball, tar, and whatever else
+  result += self._run_entrypoint(...)
+with ProcessResult.code = max(codes) and __bool__ = bool(code); _run_entrypoint sets
+FinalStatus.SUCCESS only when the ACCUMULATED result is falsy. So ONE nonzero prep step turns a
+completed update into an ERROR verdict, and dom0 prints nothing identifying the step. Ruled out
+first, from source: error_from_messages() is dnf/apt-only; exit 100 is mapped to NO_UPDATES with
+code reset to 0; truthiness is the exit code alone - so our stderr text cannot cause it.
+
+CULPRIT, from the audit logging added for exactly this:
+  17:24:26 [NT AUTHORITY\SYSTEM] rc=1  passthrough-to-cmd  argv: chmod u+x .../entrypoint.py
+`chmod` does not exist on Windows, so it fell through to cmd.exe and returned 1. NOTE: that step
+is NOT in the qubes-core-admin-linux master we read - the injection sequence differs between dom0
+versions, which is the fragility flagged when the shim was proposed. Enumerating commands is
+therefore the wrong fix: only commands naming the updater workdir reach the shim at all, so every
+unrecognised verb is now a logged NO-OP returning 0. Verified chmod -> 0, with a negative control
+(an unrelated failing command still returns 7, so real failures are not swallowed).
+
+MY PREDICTION WAS WRONG and is recorded as such: I predicted the failure would be `cat >` over
+VMShell, on PATH-resolution grounds. The audit log showed cat fine and chmod failing.
+
+THREE MORE DEFECTS FOUND IN THE SAME EXCHANGE:
+1. REPETITION had two causes. (a) The same text went to stdout AND stderr - dom0 renders stderr
+   as live messages and also displays collected stdout. (b) Msg() de-duplicated against only the
+   PREVIOUS message, so "found N update(s)" (re-derived every 3 s poll) and "installing <file>"
+   (from the phase) alternated forever. Now de-duplicated against every message already sent.
+2. RESUME/416. A .msu left complete by the previous pass made the server refuse the resume Range
+   with 416; all 8 attempts burned; the KB was reported as unresolvable. 416 with bytes on disk
+   now means "already downloaded". THE FIRST VERSION OF THIS FIX WAS INERT: PowerShell wraps a
+   failing method call in a MethodInvocationException, so $_.Exception is the wrapper and the
+   `-is [System.Net.WebException]` test never matched. Found by reproducing interactively.
+   Lesson repeated: a fix is not a fix until its effect is observed.
+3. DISK. 5.1 GB of installed .msu files were sitting in the work dir. Installed packages are now
+   deleted after a successful install.
+Also corrected the failure wording: "no catalog entry matches this Windows version/architecture"
+vs "resolved N package(s) but none could be downloaded" - the old text blamed resolution for a
+download failure.
+
+AND MY OWN HARNESS LIED: tools/replay-dom0-update.py truncated each stream to 12 lines with no
+notice, which hid the final "installed: …" and "RESTART REQUIRED" lines and made a correct run
+look like it reported nothing. Cap raised and truncation is now announced.
+
+FINAL STREAM, verified end to end (exit 0):
+  0.0 / 1.0 / "opening the Qubes updates proxy" / 3.0 / "scanning Windows Update" /
+  "found 1 update(s): KB5120708" / 10.0 / 75.0 / "installing windows11.0-kb5120708-…msu" /
+  100.0 / "installed: KB5120708" / "updates installed - RESTART REQUIRED to finish"
+Each message once, progress monotonic, summary present.
