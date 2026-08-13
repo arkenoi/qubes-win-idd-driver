@@ -138,9 +138,15 @@ switch ($st.phase) {
             # the qube simply never rebooted, and the silenced error made it look like it had.
             # shutdown.exe schedules with the OS and returns at once, so there is nothing to
             # detach from.
+            # NOTE what actually happens on Qubes: templates/libvirt/xen.xml sets
+            # <on_reboot>destroy</on_reboot>, so a guest-initiated reboot DESTROYS the domain -
+            # a qube can never restart itself, it can only end up halted. Measured: the qube sat
+            # Halted for 4+ minutes after this call. Windows completes the pending servicing at
+            # its NEXT boot, which is exactly what a template needs, so the outcome is right -
+            # but the message must say "shutting down", not "rebooting", or it is a lie.
             & shutdown.exe /r /t 60 /c "Qubes: completing Windows update servicing"
             if ($LASTEXITCODE -eq 0) {
-                $Err.WriteLine('updates installed - rebooting this qube in 60 seconds to finish')
+                $Err.WriteLine('updates installed - this qube shuts down in 60 seconds; start it again and the update finishes during boot')
             } else {
                 $Err.WriteLine("updates installed - RESTART REQUIRED, but scheduling it failed (shutdown.exe rc=$LASTEXITCODE) - restart this qube yourself")
             }
