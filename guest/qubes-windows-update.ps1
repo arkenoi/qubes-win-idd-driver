@@ -146,8 +146,16 @@ function Get-Available {
 # because DO does its own peer/CDN transport and does not reliably honour the WinHTTP proxy that
 # Ensure-Proxy sets - and a qube has no other way out.
 function Install-ViaWU {
-  SetV 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' 'DODownloadMode' 99 'DWord'
-  Log 'Delivery Optimization set to simple mode (no peering; plain HTTP through the Qubes proxy)'
+  # Delivery Optimization: no peering (99 = simple), and no background throttling. A qube's only
+  # path out is the updates proxy, which is up ONLY during this pass, so there is nothing to be
+  # polite to - the usual reason WU downloads slowly in the background does not apply here.
+  $DO = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'
+  SetV $DO 'DODownloadMode'                      99 'DWord'
+  SetV $DO 'DOPercentageMaxBackgroundBandwidth' 100 'DWord'
+  SetV $DO 'DOPercentageMaxForegroundBandwidth' 100 'DWord'
+  SetV $DO 'DOMaxBackgroundDownloadBandwidth'     0 'DWord'   # 0 = unlimited
+  SetV 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\BITS' 'EnableBITSMaxBandwidth' 0 'DWord'
+  Log 'Delivery Optimization: simple mode, no background throttle (proxy is up only for this pass)'
 
   $session = New-Object -ComObject Microsoft.Update.Session
   $searcher = $session.CreateUpdateSearcher(); $searcher.ServerSelection = 2; $searcher.Online = $true
@@ -165,6 +173,9 @@ function Install-ViaWU {
 
   $script:St.phase='download'; Save
   $downloader = $session.CreateUpdateDownloader(); $downloader.Updates = $coll
+  # dpHigh: WU downloads at background priority by default and paces itself accordingly -
+  # measured bursts every ~3.5 s with idle gaps, while each connection sustained ~840 KB/s.
+  try { $downloader.Priority = 3 } catch { Log '  (downloader does not accept Priority)' }
   Log "WU: downloading $($coll.Count) update(s) through the proxy"
   $dres = $downloader.Download()
   Log "WU: download ResultCode=$($dres.ResultCode) HResult=$($dres.HResult)"
