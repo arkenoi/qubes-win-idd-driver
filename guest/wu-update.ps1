@@ -82,7 +82,11 @@ switch ($st.phase) {
         if ($st.reboot_needed) { $Err.WriteLine('updates installed - RESTART REQUIRED to finish') }
         if ($okKbs.Count)  { Write-Output ("installed: " + ($okKbs -join ', ')) }
         if ($failed.Count) {
-            $Err.WriteLine("FAILED to install: " + ($failed -join ', ') + " (see C:\ProgramData\Qubes\update-status.json)")
+            foreach ($f in @($perKb | Where-Object { -not $_.ok })) {
+                $why = if ($f.reason) { $f.reason } else { "DISM rejected every package file" }
+                $Err.WriteLine("FAILED $($f.kb): $why")
+            }
+            $Err.WriteLine("see C:\ProgramData\Qubes\update-status.json on the qube for details")
             exit 1
         }
         Write-Output ("updates processed: count=" + $st.count)
