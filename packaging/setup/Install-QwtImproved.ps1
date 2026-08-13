@@ -913,62 +913,16 @@ function Invoke-Stage2 {
         $script:Result.detail.agent_hash_verified = $false
     }
 
-    # --- Start Menu qube-app shortcut -------------------------------------------------
-    # The agent blocks the forwarded Super/Windows key in seamless mode (BlockMenuKey,
-    # GWeck goal state 2026-08-12: dom0 owns that key; stray forwards popped the guest
-    # Start over the seamless desktop). The sanctioned way to open Start is this dom0
-    # appmenu entry: a .lnk in the all-users Start Menu folder is picked up verbatim by
-    # qubes.GetAppMenus on the next appmenus sync, and qubes.StartApp launches its target.
-    # The target relays a Win-key press from an INTERACTIVE scheduled task - direct
-    # injection from qrexec-launched processes does not open Start on 25H2 (measured
-    # 2026-08-11, session issue), while this relay is the mechanism guest/open-start.ps1
-    # proved. The key is generated guest-locally, so it never crosses the agent's
-    # BlockMenuKey filter.
-    $qtBin = 'C:\Program Files\Qubes Tools\bin'
-    $openStart = Join-Path $qtBin 'open-start-menu.ps1'
-    @'
-# Open the guest Start menu (dom0 appmenu entry target). Relays VK_LWIN from an
-# interactive scheduled task that fires AFTER this launcher exits: any process activity
-# while Start is open steals focus and dismisses it (measured 2026-08-12 - the first
-# version of this helper closed the menu with its own cleanup), so the task is armed,
-# the launcher exits, and the stale task is retired on the NEXT invocation (/f).
-$ErrorActionPreference = 'SilentlyContinue'
-$work = Join-Path $env:TEMP 'qwt-open-start'
-New-Item -ItemType Directory -Force $work | Out-Null
-$inner = Join-Path $work 'winkey.ps1'
-$vbs = Join-Path $work 'winkey.vbs'
-@"
-Start-Sleep -Milliseconds 2500
-Add-Type -Namespace W -Name K -MemberDefinition '[DllImport(`"user32.dll`")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);'
-[W.K]::keybd_event(0x5B, 0, 0, [UIntPtr]::Zero)
-Start-Sleep -Milliseconds 80
-[W.K]::keybd_event(0x5B, 0, 2, [UIntPtr]::Zero)
-"@ | Set-Content $inner -Encoding ASCII
-# wscript is windowless and Run(...,0) hides the powershell console: a scheduled
-# powershell, even -WindowStyle Hidden, flashes a conhost window that itself steals
-# focus and dismisses Start (measured 2026-08-12).
-"CreateObject(""WScript.Shell"").Run ""powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File """"$inner"""" "", 0, False" | Set-Content $vbs -Encoding ASCII
-$user = (Get-CimInstance Win32_ComputerSystem).UserName
-if (-not $user) { $user = "$env:USERDOMAIN\$env:USERNAME" }
-& schtasks /create /tn QwtOpenStart /tr "wscript.exe //B //Nologo `"$vbs`"" /sc once /st 00:00 /ru $user /it /f | Out-Null
-& schtasks /run /tn QwtOpenStart | Out-Null
-'@ | Set-Content -LiteralPath $openStart -Encoding ASCII
-    $lnkDir = 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs'
-    $lnkPath = Join-Path $lnkDir 'Start Menu.lnk'
-    try {
-        $wsh = New-Object -ComObject WScript.Shell
-        $lnk = $wsh.CreateShortcut($lnkPath)
-        $lnk.TargetPath = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
-        $lnk.Arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$openStart`""
-        $lnk.WorkingDirectory = $qtBin
-        $lnk.Description = 'Open the Windows Start menu (the agent blocks the forwarded Windows key in seamless mode)'
-        $lnk.Save()
-        Write-Log "Start Menu appmenu shortcut installed: $lnkPath -> $openStart"
-        $script:Result.detail.start_menu_shortcut = $true
-    } catch {
-        Write-Log "Start Menu shortcut creation failed: $_" 'WARN'
-        $script:Result.detail.start_menu_shortcut = $false
-    }
+    # --- Start Menu qube-app shortcut: NOT INSTALLED (see docs/PLAN-start-menu.md) ------
+    # The agent does not present the Start menu in seamless mode (user decision
+    # 2026-08-13): on 25H2 it never rendered acceptably through the seamless path. A
+    # 'Start Menu' entry in the qube's application menu would therefore appear to do
+    # nothing, which is worse than no entry at all. Remove any entry an earlier build
+    # published; the opener script itself is left in place under guest/ for whoever
+    # restores the capability (agent knob SeamlessStart=1).
+    Remove-Item -LiteralPath 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Start Menu.lnk' -Force -ErrorAction SilentlyContinue
+    Write-Log 'Start Menu appmenu shortcut intentionally NOT installed (Start is hidden in seamless mode)'
+    $script:Result.detail.start_menu_shortcut = 'not-installed-by-design'
 
     # --- netvm hotplug: re-apply Qubes addressing when an interface appears ----------
     # QWT applies the qubesdb-driven static IP with network-setup.exe at BOOT, and nothing
