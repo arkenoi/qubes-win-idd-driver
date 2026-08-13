@@ -8115,3 +8115,118 @@ composite quantum at 5120x1440 (vs ~18 ms at 1080p) which announces are slaved t
 is NOT agent code - the authorised resolution A/B was never run; tot_max unexplained under
 MonInfoCache; and the twice-seen wedged-window corruption (proven guest-side, fresh windows
 always clean).
+
+## 2026-08-13 — qubes-vm-update's agent is INJECTED per run (re-verified from source), and guest AU must be off
+
+Re-cloned QubesOS/qubes-core-admin-linux to answer precisely how the Linux updater reaches a VM.
+The agent is NOT part of any guest package - dom0 ships it in on every single run and deletes it
+afterwards (`vmupdate/qube_connection.py`, `vmupdate/update_manager.py`):
+1. dom0 tars its own `vmupdate/agent/` tree (`shutil.make_archive`, gztar) - `transfer_agent():132`.
+2. `mkdir -p /run/qubes-update/` in the VM (`UpdateAgentManager.WORKDIR`, update_manager.py:421).
+3. Copies the tarball via `qubes.VMExec` running `cat > /run/qubes-update/<name>.tar.gz` AS ROOT
+   with the archive on stdin (`_copy_file_from_dom0`).
+4. `tar -xzf ... -C /run/qubes-update/` in the VM.
+5. Runs `/usr/bin/python3 /run/qubes-update/agent/entrypoint.py <args>` (PYTHON_PATH line 55,
+   `run_entrypoint():187`).
+6. entrypoint picks a backend from `get_os_data()` (dnf/dnf5/apt/pacman), refreshes, upgrades,
+   prints float progress on stderr, then runs `/usr/lib/qubes/upgrades-status-notify`.
+7. dom0 `rm -r /run/qubes-update/` unless `--no-cleanup`.
+Exit codes re-confirmed against `agent/source/common/exit_codes.py`: OK=0, OK_NO_UPDATES=100,
+ERR=1 - exactly what guest/wu-update.ps1 emits, so our contract implementation is source-correct.
+
+CONSEQUENCE FOR US, stated plainly: the guest side of the Linux design is STATELESS (any VM with
+python3 + a supported package manager is updatable, nothing preinstalled). Windows can never be
+driven that way - no /usr/bin/python3, no dnf/apt, no Windows branch in get_os_data/AgentType - so
+our `qubes.WindowsUpdate` service IS the Windows equivalent of that injected agent, and it must be
+PREINSTALLED (shipped in QWT) precisely because dom0 cannot inject a runnable agent into Windows.
+
+USEFUL FOR FUTURE UPSTREAMING: `run_entrypoint(entrypoint_path: str | List, ...)` already accepts a
+ready-made command LIST and uses it verbatim. A Windows backend upstream would therefore be small:
+skip `transfer_agent`, pass a command list that invokes the guest service. Not to be submitted now
+(standing policy: nothing upstream until the whole thing is complete).
+
+USER POLICY (2026-08-13): "updates are handled from dom0 side from now on, so guest-side auto
+update should be off". Audited: NO NoAutoUpdate/AUOptions/AU-policy handling exists anywhere in
+guest/ or packaging/ today - the shipped guest currently keeps stock Windows auto-update. This
+matters because the proxy is now raised only during a dom0-driven pass, which is exactly when a
+live AU would find connectivity and install behind dom0's back. To implement in the packaging
+change: HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU\NoAutoUpdate=1. Do NOT disable
+the wuauserv/USO services - the on-demand install path uses them.
+
+## 2026-08-13 — Windows updates from the Qubes Update GUI: shim shipped, and a REAL install pass ran
+
+GOAL (user): "do the wrapper and cook it into rpm for flawless install ... NO SEPARATE COMMANDS,
+it should just update from gui with regular click". That rules out our own dom0 command as the
+primary path: the Qubes Update GUI shells out to `qubes-vm-update`, so the GUEST must answer it.
+
+WHAT DOM0 ACTUALLY DOES (re-read from source, qubes-core-admin-linux vmupdate/qube_connection.py):
+it never calls an agent living in the guest - it INJECTS one per run and deletes it afterwards:
+mkdir -p /run/qubes-update/ ; cat > .../agent.tar.gz (tarball on stdin, over qubes.VMShell) ;
+tar -xzf ; /usr/bin/python3 .../entrypoint.py <flags> ; rm -r ; cat <agent log>. Steps 1/3/5/6 go
+over qubes.VMExec IF the qube advertises `vmexec`, else qubes.VMShell. Step 4 ALWAYS goes over
+qubes.VMExec - the progress path calls run_service() directly, no feature check, no fallback.
+
+SHIPPED (guest/vmupdate-shim.ps1 + guest/VMExec.ps1 + guest/qubes-posix-cat.cs, deployed by
+DEFAULT from installer stage 2, /noupdates opts out; qvm-windows-update folded into the dom0 RPM
+as a fallback, not the required path; NoAutoUpdate=1 set - dom0 owns installs).
+
+TWO DEFECTS FOUND, NEITHER OURS BY ORIGIN:
+1. QWT's stock VMExec.ps1 ends on `& cmd.exe /c $cmd` and never exits with the child's status, so
+   EVERY qubes.VMExec call returns 0 to dom0. Measured with controls: `exit 100` over VMExec -> 0;
+   the identical command over VMShell -> 100; a refused service -> 126 (so the check can fail).
+   dom0 decides success from that status, so on Windows every failure has read as success. Fixed
+   in our copy of the file (we ship the tools stack).
+2. The Windows build of qubesdb-cmd CANNOT WRITE to QubesDB at all. client/qubesdb-cmd.c does
+   `optind -= 2` under _WIN32 after a loop testing `getopt(...) != 0` instead of `!= -1`; exactly
+   ONE trailing argument reaches the handler. read/list take one arg and work; write needs a pair
+   and dies with "Invalid number of parameters" in all five documented forms. Upstream
+   qubes-core-qubesdb, not ours -> qualifies for reporting under the CLAUDE.md exception.
+
+CONSEQUENCE OF (2): the guest cannot advertise `vmexec` (qubes.FeaturesRequest reads QubesDB).
+CAUGHT ONLY BY ASKING DOM0: admin.vm.feature.Get+vmexec -> "Feature not set for domain
+win11-fresh", while our installer had happily logged "advertised vmexec=1 (exit 0)" - qubesdb-cmd
+prints usage and returns 0. A log line is not evidence; the check that could fail was the dom0 one.
+
+WHY IT STILL WORKS WITHOUT THE FEATURE (measured): over VMShell dom0's line ends in `& exit`, and
+`exit` with no argument returns 0 no matter what preceded it (control: a bogus command -> exit 0,
+while an explicit `exit 100` -> 100). So dom0 sees the prep steps succeed and proceeds to step 4,
+which is on VMExec regardless and lands in our shim. The ONE step that must not fail is step 2:
+if the workdir is missing, cmd's redirection fails, cmd exits at once, and dom0 is left writing a
+megabyte into a closed pipe. Hence the installer pre-creates C:\run\qubes-update and the shim's
+`rm` EMPTIES that directory instead of deleting it. Both look like bugs; both carry comments.
+
+VERIFIED (tools/replay-dom0-update.py replays dom0's sequence over the same services with the same
+encode_for_vmexec encoding; tools/verify-vmupdate-copy.py checks the copy):
+- steps 1/3/5/6 -> rc=0 each, with the shim's own log lines proving the handler ran;
+- step 2 -> a 1 MB tarball arrives BYTE-EXACT (size + SHA256 read back out of the guest). An exit
+  code proves nothing here: cmd's `exit` returns 0 whether or not the payload landed.
+
+REAL INSTALL PASS - the north-star gap that had never been closed. Driven entirely through the
+shim on win11-fresh (25H2, build 26200.8875): scan found count=2 (KB5120708 .NET 184 MB,
+KB5121003 2026-08 Security Update, 4867 MB actually downloaded), download reached 100 %, install
+ran, phase=done, reboot_needed=true. Result array: kb5121003 rc=3010 (SUCCESS, reboot required).
+JUDGED ON THE GUEST, NOT THE LOG: Get-HotFix lists KB5121003 installed dated today, CBS
+RebootPending=true, NoAutoUpdate=1 present. Updates now install on a Windows qube through dom0's
+own protocol path.
+
+OPEN FROM THAT PASS (do not gloss): the result array also contains a STALE kb5043080 .msu (a 24H2
+cumulative left in the cache from an earlier session) with rc=552, and KB5120708 (.NET) appears in
+`available` but in neither `result` nor Get-HotFix - it likely needs the pending reboot first. So
+the pass reported success while one offered update was not installed. That is our updater's
+install logic (guest/qubes-windows-update.ps1), not the shim, and it needs a look: stale files in
+the cache must not be re-attempted, and "done" should distinguish "all installed" from "some
+deferred".
+
+HARNESS LESSONS (both cost real time today):
+- Never pipe a long background job through `tail`: nothing is written until the pipeline ends, so
+  a killed job yields an EMPTY output file. The 30-min outer `timeout` then killed the client
+  ~1 min after the guest-side pass finished, losing the exit code and the float stream entirely.
+  The pass itself had completed - the guest state proved it - but the protocol half went unseen.
+- qubesdb-cmd, schtasks and qrexec-client-vm all return 0 on failure paths. Verify the EFFECT
+  (read it back, or ask dom0), never the exit code.
+
+STILL OPEN: the user's actual GUI click (dom0 tool, needs the user); the cold-boot path (dom0
+starts a stopped template before updating it - a reboot test was started right after this entry);
+and a TemplateVM proper. dom0-side selection has no OS filter (targets are chosen by class plus
+updates-available/skip-update/prohibit-start) and the Update GUI lists anything `updateable`, so
+templates are in scope by construction - but that is an argument, not a demonstration.
