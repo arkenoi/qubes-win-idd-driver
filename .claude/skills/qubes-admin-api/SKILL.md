@@ -61,6 +61,35 @@ So the policy is a curated allowlist, not blanket admin: check, don't assume, in
 4. `qrexec-client-vm` argument quoting: pass `domain|service|user|prog` UNQUOTED (see
    [[qrexec-client-vm-arg-quoting]] in memory) — a wrapping quote leaks into the target.
 
+## Cloning a qube (including into a DIFFERENT class)
+
+`qubesadmin` and the CLIs (`qvm-clone`, `qvm-create`, `qvm-prefs`, `qvm-ls`, `qvm-tags`) are
+installed here and work over the same policy. `clone_vm(src, name, new_cls=...)` /
+`qvm-clone --class` change the class, which is how a StandaloneVM becomes a TemplateVM without
+reinstalling anything. On `lvm_thin` the copy is CoW: an 80 GiB root + 40 GiB private cloned in
+**2.7 s**.
+
+**But `qvm-clone` in one shot FAILS here**, with `Service call error: Request refused` after
+"Cloning root volume". Policy on this testbed is **tag-based** (`win-idd-testbed`), and
+`qvm-clone` creates the qube, then clones volumes into it *before* the tags are copied — so the
+volume call hits a qube policy does not yet cover. Do it in the order that satisfies policy:
+
+    qvm-create --class TemplateVM --label red <new>
+    qvm-tags <new> add win-idd-testbed          # policy now applies to it
+    python3 - <<'EOF'                            # volumes + prefs + features
+    import qubesadmin
+    app = qubesadmin.Qubes(); src = app.domains['<src>']; dst = app.domains['<new>']
+    for v in ('root', 'private'):
+        dst.volumes[v].clone(src.volumes[v])
+    for p in ('virt_mode','kernel','memory','maxmem','vcpus','qrexec_timeout','netvm'):
+        setattr(dst, p, getattr(src, p))
+    EOF
+
+A fresh TemplateVM's defaults are Linux-shaped, so a Windows guest needs at minimum
+`virt_mode=hvm` and an EMPTY `kernel`, or it will not boot its own bootloader.
+`admin.vm.volume.Export` is REFUSED, so streaming a volume out of a qube is not an option —
+server-side `CloneFrom`/`CloneTo` (what the above uses) is.
+
 ## Recipes
 
     # what exists, right now - trust this over any remembered roster (mine was stale)
