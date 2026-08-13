@@ -173,8 +173,19 @@ The first real pass also exposed two defects in *our* updater, both the same fam
 2. **TemplateVM proper** — everything above was exercised on a StandaloneVM. dom0-side selection
    has no OS filter and the guest side is identical, so templates are in scope by construction —
    but that is an argument, not a demonstration.
-3. **The offered .NET update** (KB5120708) appeared in `available` but was not installed in the
-   first pass; it needed the pending reboot. Re-run after the reboot to confirm it lands.
+## Known limitation: not every offered update can be fetched yet
+
+`Resolve-Catalog` in `guest/qubes-windows-update.ps1` scrapes the Microsoft Update Catalog and
+is written around the **x64 / 24H2 / 26100** client build. On the 25H2 (26200) rig it returned
+nothing installable for **KB5120708** (.NET Framework Security Update), so that update is offered
+by the scan and then not installed. Until the resolver handles more package shapes and builds:
+
+- the pass now **reports this as a failure** (`ok=false` with a reason, `wu-update.ps1` exits 1
+  naming the KB) rather than the silent "count=1, exit 0" it produced before — measured;
+- so a user sees "failed to install KB…" in the updater instead of a false success.
+
+Making it actually install is the next piece of work on the updater, and is independent of the
+shim: the transport, protocol and dom0 integration all work, this is package resolution.
 
 The cold-boot path (item 2 in earlier drafts) is now **closed**: after a cold start with a
 cumulative update applying at boot, `qubes.VMExec` answered 6 s after qrexec came up.
