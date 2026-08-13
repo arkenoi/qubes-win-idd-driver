@@ -37,7 +37,7 @@ $IS='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
 $POL='HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
 
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; count=0; available=@();
-                         downloading=$null; installing=$null; result=$null; reboot_needed=$false; error=$null }
+                         downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null }
 function Save { $script:St.ts=(Get-Date).ToString('s'); ($script:St | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile -Encoding UTF8 }
 function Log($m){ Write-Host ((Get-Date -Format 'HH:mm:ss')+' '+$m) }
 function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-Null}; New-ItemProperty -Path $p -Name $n -Value $v -PropertyType $t -Force|Out-Null }
@@ -131,6 +131,11 @@ function Fetch-Msu($url,$dst,$kb){
   return $false
 }
 
+# DISM outcomes that mean "this package is now on the system": success, success-pending-reboot,
+# and already-installed (0x240006). Anything else is a real failure for that FILE - though not
+# necessarily for the KB, see the per-KB rule at the call site.
+$OK_RC = @(0, 3010, 2359302)
+
 function Install-Msus($files){
   $reboot=$false; $rows=@()
   foreach($f in ($files | Sort-Object { (Get-Item $_).Length })){   # smallest-first: SSU/checkpoint before LCU
@@ -167,7 +172,16 @@ try {
       } else { $got = @(Get-ChildItem "$WorkDir\$($u.kb)_*.msu","$WorkDir\windows*.msu" -EA SilentlyContinue | ForEach-Object FullName) }
       if ($Action -in 'install','full' -and $got.Count -gt 0) {
         $script:St.phase='install'; Save
-        $script:St.result=Install-Msus $got; Save
+        # One catalog KB can yield SEVERAL .msu (build/architecture variants, prerequisites), and
+        # the ones that do not apply to this image fail by design - a 24H2 cumulative returns
+        # rc=552 on a 25H2 guest. So a KB counts as installed when AT LEAST ONE of its files
+        # succeeds, and results are grouped PER KB and APPENDED. This used to be a plain
+        # assignment of a flat row list, so each KB silently erased the previous KB's outcome.
+        $rows = Install-Msus $got
+        $ok = @($rows | Where-Object { $_.rc -in $OK_RC }).Count -gt 0
+        $script:St.result += [ordered]@{ kb=$u.kb; ok=$ok; files=$rows }
+        Save
+        Log "$($u.kb): installed=$ok"
       }
     }
   }

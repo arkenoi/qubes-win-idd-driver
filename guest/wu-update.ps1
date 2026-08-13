@@ -69,7 +69,22 @@ switch ($st.phase) {
     'done' {
         Prog 100
         if ([int]$st.count -eq 0 -and -not $st.result) { Write-Output 'no updates available'; exit 100 }
+
+        # Judge the OUTCOME, not the phase. `done` only means the pass ran to the end; a KB whose
+        # every .msu failed in DISM is a failed update and dom0 must hear about it, otherwise this
+        # repeats the defect found in QWT's VMExec handler - reporting success regardless.
+        # Results are grouped per KB ({kb, ok, files}); tolerate the older flat shape too.
+        $rows   = @($st.result)
+        $perKb  = @($rows | Where-Object { $_.PSObject.Properties.Name -contains 'kb' })
+        $failed = @($perKb | Where-Object { -not $_.ok } | ForEach-Object { $_.kb })
+        $okKbs  = @($perKb | Where-Object { $_.ok }      | ForEach-Object { $_.kb })
+
         if ($st.reboot_needed) { $Err.WriteLine('updates installed - RESTART REQUIRED to finish') }
+        if ($okKbs.Count)  { Write-Output ("installed: " + ($okKbs -join ', ')) }
+        if ($failed.Count) {
+            $Err.WriteLine("FAILED to install: " + ($failed -join ', ') + " (see C:\ProgramData\Qubes\update-status.json)")
+            exit 1
+        }
         Write-Output ("updates processed: count=" + $st.count)
         exit 0
     }
