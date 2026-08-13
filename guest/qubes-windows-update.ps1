@@ -170,6 +170,17 @@ try {
         $i=0; foreach($url in $urls){ $i++; $name="$($u.kb)_$i.msu"; if($url -match '/([^/?]+\.msu)'){$name=$Matches[1]}
           $dst="$WorkDir\$name"; if(Fetch-Msu $url $dst $u.kb){ $got+=$dst } }
       } else { $got = @(Get-ChildItem "$WorkDir\$($u.kb)_*.msu","$WorkDir\windows*.msu" -EA SilentlyContinue | ForEach-Object FullName) }
+      # An offered KB that yields NO installable file is a FAILED update, not a quiet success.
+      # Measured 2026-08-13: KB5120708 (.NET Framework) resolved to zero catalog .msu on a 25H2
+      # guest - Resolve-Catalog is written around the x64/24H2/26100 client build - and because
+      # nothing was downloaded there was no result row, so the pass reported "count=1" and exit 0
+      # while installing nothing. dom0 must hear about that.
+      if ($Action -in 'install','full' -and $got.Count -eq 0) {
+        $script:St.result += [ordered]@{ kb=$u.kb; ok=$false; files=@()
+                                         reason='no installable package resolved from the Update Catalog' }
+        Save
+        Log "$($u.kb): NO installable package resolved - reporting as failed"
+      }
       if ($Action -in 'install','full' -and $got.Count -gt 0) {
         $script:St.phase='install'; Save
         # One catalog KB can yield SEVERAL .msu (build/architecture variants, prerequisites), and
