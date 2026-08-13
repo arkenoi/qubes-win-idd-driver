@@ -85,6 +85,29 @@ dom0 *starts a stopped template* to update it. The residual risk is therefore a 
 cold start, not a missing session — which is why the cold-boot path is part of acceptance below
 rather than assumed.
 
+## Per-qube dom0 settings this needs (neither can be set from the guest)
+
+| setting | why | consequence if missing |
+|---|---|---|
+| `qvm-features <vm> vmexec 1` | routes dom0's prep commands over `qubes.VMExec`, the only interceptable transport | the update aborts at `mkdir -p` before reaching the agent |
+| `qvm-prefs <vm> qrexec_timeout 300`+ | a Windows boot that is APPLYING an update took **259 s** to answer qrexec (measured); the Qubes default is **60 s** (`app.py: default_qrexec_timeout=60`) | dom0's start of a stopped qube times out — precisely when the qube is finishing an update |
+
+`qvm-create-windows-qube` already raises the timeout (this rig reads 6000 s); a hand-built Windows
+qube may not. Both belong in the dom0 RPM or, failing that, in the install instructions.
+
+### The self-closing cycle
+
+Because a qube cannot restart itself (see below), a pass that installs something leaves the qube
+halted — and that is fine, because the cycle closes on the next run:
+
+1. pass installs, reports 0 remaining (flag cleared), qube shuts down;
+2. next update run — GUI click or `qubes-vm-update` — has dom0's qrexec call **start** the halted
+   qube (`vmupdate.py` calls `vm.start()`; `QubeConnection.__exit__` shuts it down again if dom0
+   started it);
+3. Windows completes the pending servicing during that boot, *before* qrexec answers, so the scan
+   that follows sees the true state;
+4. the agent reports the real count, and dom0 stops the qube again.
+
 ## Transport: the `vmexec` feature is REQUIRED, and the guest cannot set it
 
 > **CORRECTION 2026-08-13 (later the same day).** An earlier version of this file claimed the
