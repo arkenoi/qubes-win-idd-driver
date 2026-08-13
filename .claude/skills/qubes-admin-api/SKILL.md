@@ -112,6 +112,18 @@ Prevention is better and is now in the product: `guest/ensure-autologon.ps1` run
 reboot the updater triggers, because while `AutoLogonCount` exists Windows CONSUMES
 `DefaultPassword` and then falls back to the sign-in screen.
 
+## Never edit a script while it is running
+
+bash reads a script incrementally, by BYTE OFFSET. Editing the file in place while it executes
+shifts every offset after the edit, and the running shell resumes mid-token:
+
+    ./tools/clean-shot-template.sh: line 81: syntax error near unexpected token `)'
+    ./tools/clean-shot-template.sh: line 81: `test pushrun guest/wu-verify-installed.ps1 ...'
+
+That is `./tools/q` + `test pushrun ...` - one command sliced in half. It cost a 40-minute run
+whose actual work had already SUCCEEDED; only the harness died. Edit a copy, or wait for the run
+to finish. The same applies to any long-running interpreter reading from the file as it goes.
+
 ## Recipes
 
     # what exists, right now - trust this over any remembered roster (mine was stale)
