@@ -48,6 +48,11 @@ if (-not $script:HaveMutex) {
     exit 0
 }
 New-Item -ItemType Directory -Force $WorkDir | Out-Null
+# Legacy flat layout: .msu directly in the work dir. They are what DISM dragged into an unrelated
+# servicing session, and they belong to no known KB now, so drop them once.
+foreach($stale in @(Get-ChildItem (Join-Path $WorkDir '*.msu') -EA SilentlyContinue)) {
+    Remove-Item -LiteralPath $stale.FullName -Force -EA SilentlyContinue
+}
 # WHICH catalog package applies is a property of THIS guest, not a constant. Hardcoding
 # "x64 + 24H2|26100" made KB5120708 unresolvable on 25H2, where the applicable entry is titled
 # "... for Windows 11, version 25H2 for x64" - the scan offered it and nothing could install it.
@@ -150,18 +155,75 @@ function Resolve-Catalog($kb){
   return @([regex]::Matches($dl.Content,"url\s*=\s*'(http[^']+)'")|ForEach-Object{$_.Groups[1].Value}|Where-Object{$_ -match '\.msu(\?|$)'}|Sort-Object -Unique)
 }
 
-# resumable fetch with progress into the status file
+# Resumable fetch with progress into the status file, and with the two checks whose absence
+# produced an unusable 5 GB file (2026-08-13, template): CBS rejected both packages with
+# CBS_E_INVALID_PACKAGE, DISM logged "Failed to open ESD ... 0x8007000d" and a DPX range error
+# 0xca00a005 - i.e. the bytes on disk were not a package at all.
+#
+# WHY IT COULD HAPPEN: the old version sent a Range header and then ALWAYS appended the response.
+# A server (or the relay) that ignores the range and answers 200 with the WHOLE body appends a
+# full copy onto the partial one, producing a file of plausible size and corrupt content. Nothing
+# checked afterwards, so it went to DISM, "succeeded" with 3010, and was rolled back at boot.
+#
+# Now: a ranged request that comes back 200 restarts the file instead of appending; the expected
+# total is taken from Content-Range when the server does honour the range; and the finished file
+# is verified for BOTH size and the CAB magic (an .msu is a cabinet - "MSCF"), which is what
+# catches an HTML error page or a truncated download. A file that fails verification is DELETED,
+# never resumed - resuming corrupt bytes can only produce more corrupt bytes.
+function Test-Msu($path, $expect) {
+  if (-not (Test-Path -LiteralPath $path)) { return $false }
+  $len = (Get-Item -LiteralPath $path).Length
+  if ($expect -gt 0 -and $len -ne $expect) {
+    Log "  VERIFY fail: $([IO.Path]::GetFileName($path)) is $len bytes, expected $expect"
+    return $false
+  }
+  try {
+    $fs = [IO.File]::OpenRead($path)
+    $magic = New-Object byte[] 4
+    $null = $fs.Read($magic, 0, 4)
+    $fs.Close()
+  } catch { return $false }
+  if (-not ($magic[0] -eq 0x4D -and $magic[1] -eq 0x53 -and $magic[2] -eq 0x43 -and $magic[3] -eq 0x46)) {
+    Log "  VERIFY fail: $([IO.Path]::GetFileName($path)) does not start with the CAB magic MSCF"
+    return $false
+  }
+  return $true
+}
+
 function Fetch-Msu($url,$dst,$kb){
   for($a=1;$a -le 8;$a++){
-    $have=0; if(Test-Path $dst){$have=(Get-Item $dst).Length}; $o=$null
+    $have=0; if(Test-Path $dst){$have=(Get-Item $dst).Length}; $o=$null; $expect=0
     try{
       $req=[System.Net.HttpWebRequest]::Create($url); $req.Proxy=New-Object System.Net.WebProxy($Proxy)
-      $req.Timeout=60000; $req.ReadWriteTimeout=120000; if($have -gt 0){$req.AddRange($have)}
-      $resp=$req.GetResponse(); $tot=$have+$resp.ContentLength; $in=$resp.GetResponseStream()
-      $o=[System.IO.File]::Open($dst,[System.IO.FileMode]::Append); $buf=New-Object byte[] (1048576); $last=Get-Date
+      $req.Timeout=60000; $req.ReadWriteTimeout=120000
+      $asked=$false; if($have -gt 0){ $req.AddRange($have); $asked=$true }
+      $resp=$req.GetResponse()
+
+      # Did the server honour the range? 206 = yes, resume. Anything else = start over.
+      $status=[int]$resp.StatusCode
+      $append=$false
+      if($asked -and $status -eq 206){
+        $append=$true
+        $cr=$resp.Headers['Content-Range']
+        if($cr -and $cr -match '/(\d+)\s*$'){ $expect=[int64]$Matches[1] } else { $expect=$have+$resp.ContentLength }
+      } else {
+        if($asked){ Log "  server ignored the resume range (HTTP $status) - restarting the download" }
+        $have=0; $expect=$resp.ContentLength
+      }
+
+      $mode = if($append){[System.IO.FileMode]::Append}else{[System.IO.FileMode]::Create}
+      $in=$resp.GetResponseStream()
+      $o=[System.IO.File]::Open($dst,$mode); $buf=New-Object byte[] (1048576); $last=Get-Date
       while(($n=$in.Read($buf,0,$buf.Length)) -gt 0){ $o.Write($buf,0,$n); $have+=$n
-        if(((Get-Date)-$last).TotalSeconds -ge 3){ $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($tot/1MB,1);pct=[math]::Round(100*$have/$tot,1)}; Save; $last=Get-Date } }
+        if(((Get-Date)-$last).TotalSeconds -ge 3){ $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($expect/1MB,1);pct=[math]::Round(100*$have/[math]::Max($expect,1),1)}; Save; $last=Get-Date } }
       $o.Close();$in.Close();$resp.Close()
+
+      if(-not (Test-Msu $dst $expect)){
+        Remove-Item -LiteralPath $dst -Force -EA SilentlyContinue   # never resume corrupt bytes
+        Log "  attempt ${a}: download did not verify - discarded, retrying"
+        Start-Sleep 5
+        continue
+      }
       $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($have/1MB,1);pct=100}; Save
       return $true
     }catch{
@@ -177,19 +239,20 @@ function Fetch-Msu($url,$dst,$kb){
       if($we -is [System.Net.WebException] -and $we.Response){ $code=[int]$we.Response.StatusCode }
       if(-not $code -and $_.Exception.Message -match '\(416\)'){ $code=416 }
       if($code -eq 416 -and $have -gt 0){
-        Log "  $([IO.Path]::GetFileName($dst)) already complete ($([math]::Round($have/1MB,1)) MB; server refused resume with 416)"
-        $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($have/1MB,1);pct=100}; Save
-        return $true
+        # Complete by the server's reckoning - but still prove it is a package before using it.
+        if(Test-Msu $dst 0){
+          Log "  $([IO.Path]::GetFileName($dst)) already complete ($([math]::Round($have/1MB,1)) MB; server refused resume with 416)"
+          $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($have/1MB,1);pct=100}; Save
+          return $true
+        }
+        Log "  local copy failed verification despite 416 - discarding and refetching"
+        Remove-Item -LiteralPath $dst -Force -EA SilentlyContinue
+        continue
       }
       Log "  fetch attempt ${a}: $($we.Message)"; Start-Sleep 5 }
   }
   return $false
 }
-
-# DISM outcomes that mean "this package is now on the system": success, success-pending-reboot,
-# and already-installed (0x240006). Anything else is a real failure for that FILE - though not
-# necessarily for the KB, see the per-KB rule at the call site.
-$OK_RC = @(0, 3010, 2359302)
 
 function Install-Msus($files){
   $reboot=$false; $rows=@()
@@ -227,9 +290,15 @@ try {
       if ($Action -eq 'resolve') { Log "$($u.kb): resolve-only, $($urls.Count) package(s)"; continue }
       if ($Action -in 'download','full') {
         $script:St.phase='download'; Save
+        # ONE DIRECTORY PER KB. DISM treats the folder holding a package as a source set: with a
+        # flat work dir it pulled kb5054156-25h2-ekb.msu - a 25H2 enablement package left by an
+        # earlier session - into a 24H2 servicing session (dism.log "LocalSources"). Isolating
+        # each KB makes that impossible and keeps resume/reuse working.
+        $kbDir = Join-Path $WorkDir $u.kb
+        New-Item -ItemType Directory -Force $kbDir | Out-Null
         $i=0; foreach($url in $urls){ $i++; $name="$($u.kb)_$i.msu"; if($url -match '/([^/?]+\.msu)'){$name=$Matches[1]}
-          $dst="$WorkDir\$name"; if(Fetch-Msu $url $dst $u.kb){ $got+=$dst } }
-      } else { $got = @(Get-ChildItem "$WorkDir\$($u.kb)_*.msu","$WorkDir\windows*.msu" -EA SilentlyContinue | ForEach-Object FullName) }
+          $dst=Join-Path $kbDir $name; if(Fetch-Msu $url $dst $u.kb){ $got+=$dst } }
+      } else { $got = @(Get-ChildItem (Join-Path (Join-Path $WorkDir $u.kb) '*.msu') -EA SilentlyContinue | ForEach-Object FullName) }
       # An offered KB that yields NO installable file is a FAILED update, not a quiet success.
       # Measured 2026-08-13: KB5120708 (.NET Framework) resolved to zero catalog .msu on a 25H2
       # guest - Resolve-Catalog is written around the x64/24H2/26100 client build - and because
@@ -255,7 +324,7 @@ try {
         Save
         # Reclaim the download: a cumulative update is GIGABYTES (5.1 GB was sitting in this
         # work dir from one pass) and keeping it buys nothing once it is installed.
-        foreach($r in $rows){ if($r.rc -in $OK_RC){ Remove-Item -LiteralPath (Join-Path $WorkDir $r.file) -Force -EA SilentlyContinue } }
+        foreach($r in $rows){ if($r.rc -in $OK_RC){ Remove-Item -LiteralPath (Join-Path (Join-Path $WorkDir $u.kb) $r.file) -Force -EA SilentlyContinue } }
         Log "$($u.kb): installed=$ok"
       }
     }
