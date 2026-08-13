@@ -118,7 +118,41 @@ switch ($st.phase) {
         # stdout it would only reach the log view, and the operator asked to see which updates
         # were installed. Ends with a KB id, never a bare number (see Msg).
         if ($okKbs.Count) { $Err.WriteLine("installed: " + ($okKbs -join ', ')) }
-        if ($st.reboot_needed) { $Err.WriteLine('updates installed - RESTART REQUIRED to finish') }
+        if ($st.reboot_needed) {
+            $Err.WriteLine('updates installed - RESTART REQUIRED to finish')
+
+            # WHO restarts depends on the qube class, and dom0 cannot help with either case:
+            # its restart machinery is entirely template -> AppVM ("restart ServiceVMs / shut down
+            # AppVMs whose TEMPLATE has been updated"), driven by volume staleness. There is no
+            # restart-required marker for a StandaloneVM, and a guest cannot invent one -
+            # qubes.FeaturesRequest only accepts qrexec/gui/gui-emulated/qubes-firewall/vmexec.
+            #
+            # For a TEMPLATE we must finish it ourselves, and a plain shutdown is NOT enough:
+            # Windows completes a pending servicing operation during BOOT. Shut the template down
+            # with the operation pending and it would instead run inside each AppVM's
+            # copy-on-write layer at every start, and be discarded at every shutdown - forever.
+            # So the template reboots itself, which commits the servicing to the template root.
+            # Delayed, so this rpc returns to dom0 first.
+            # /qubes-vm-type is written by dom0's r3compatibility extension and is "TemplateVM"
+            # for templates, "AppVM"/"NetVM"/"ProxyVM" otherwise. (Reading QubesDB works; only
+            # WRITING is broken in the Windows qubesdb-cmd build.)
+            $qtRoot = $env:QUBES_TOOLS
+            if (-not $qtRoot) { $qtRoot = 'C:\Program Files\Qubes Tools' }
+            $qdb = Join-Path $qtRoot 'bin\qubesdb-cmd.exe'
+            $class = 'unknown'
+            if (Test-Path $qdb) {
+                try { $class = (& $qdb -c read /qubes-vm-type 2>$null | Select-Object -First 1) } catch { }
+            }
+
+            if ($class -eq 'TemplateVM') {
+                $Err.WriteLine('template qube: rebooting now so the servicing completes in the TEMPLATE')
+                Start-Process -FilePath 'shutdown.exe' `
+                    -ArgumentList '/r', '/t', '60', '/c', 'Qubes: completing Windows update servicing' `
+                    -WindowStyle Hidden -EA SilentlyContinue
+            } else {
+                $Err.WriteLine('restart this qube to finish - Qubes has no restart-required flag for standalone qubes')
+            }
+        }
         if ($failed.Count) {
             foreach ($f in @($perKb | Where-Object { -not $_.ok })) {
                 $why = if ($f.reason) { $f.reason } else { "DISM rejected every package file" }

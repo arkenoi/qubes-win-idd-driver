@@ -8378,3 +8378,44 @@ FINAL STREAM, verified end to end (exit 0):
   "found 1 update(s): KB5120708" / 10.0 / 75.0 / "installing windows11.0-kb5120708-…msu" /
   100.0 / "installed: KB5120708" / "updates installed - RESTART REQUIRED to finish"
 Each message once, progress monotonic, summary present.
+
+## 2026-08-13 (cont.) — restart after update: template vs standalone, and what dom0 will NOT do
+
+User: the pass reported success but the qube was neither restarted nor marked as needing it.
+"if it is a template qube, we just should do it ourselves. if it is standaloneVM, it should be
+marked for restart (if it is doable within current dom0 logic)".
+
+WHAT DOM0 ACTUALLY OFFERS (read from qubes-core-admin-linux vmupdate/vmupdate.py + utils.py):
+the entire restart machinery is TEMPLATE -> APPVM. `--apply-to-sys/--restart` restarts not-updated
+ServiceVMs, `--apply-to-all` also shuts down not-updated AppVMs - in both cases "whose TEMPLATE has
+been updated", decided from volume staleness. There is NO restart-required marker for a
+StandaloneVM, and a guest cannot invent one: qubes.FeaturesRequest accepts only qrexec, gui,
+gui-emulated, qubes-firewall and vmexec (qubes/ext/core_features.py). So "mark the standalone for
+restart" is NOT doable within current dom0 logic - reported as such rather than faked.
+
+THE GUEST CAN TELL ITS OWN CLASS (reading QubesDB works; only WRITING is broken on Windows):
+- /qubes-vm-type       = "TemplateVM" for templates, else AppVM/NetVM/ProxyVM
+                         (written by qubes/ext/r3compatibility.py)
+- /qubes-vm-persistence = "full" for template AND standalone, "rw-only" for AppVMs
+Verified live on win11-fresh (a StandaloneVM): type=AppVM, persistence=full - consistent.
+
+TEMPLATE HANDLING, and why a plain shutdown would be WRONG: Windows completes a pending servicing
+operation during BOOT. Shutting a template down with the operation pending would make it run
+inside each AppVM's copy-on-write layer at every start and be discarded at every shutdown -
+forever, so the update would never actually land in the template root. The template therefore
+REBOOTS itself (delayed 60 s so the rpc returns to dom0 first), which commits the servicing.
+If dom0 shuts the template down before that fires - it does shut down qubes it started itself -
+the pending operation simply completes at the template's next boot, which is self-correcting.
+
+STANDALONE HANDLING: no auto-reboot. A running standalone is somebody's desktop; the run says
+"restart this qube to finish - Qubes has no restart-required flag for standalone qubes" and
+leaves the decision to the user. Note the qube does keep showing in the Update tool until the
+reboot, because Windows keeps offering the KB until then - honest, if differently labelled.
+
+VERIFIED on win11-fresh (standalone), stderr of a full dom0-driven pass:
+  ... installed: KB5120708 / updates installed - RESTART REQUIRED to finish /
+  restart this qube to finish - Qubes has no restart-required flag for standalone qubes
+each message exactly once, and `shutdown /a` afterwards returned 1116 "no shutdown was in
+progress" - proving the template branch did NOT fire on a standalone.
+UNPROVEN: the TemplateVM branch itself. There is no Windows TemplateVM rig in the roster, so the
+reboot path is code-complete but has never executed. Do not describe it as verified.
