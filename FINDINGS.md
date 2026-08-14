@@ -9182,3 +9182,35 @@ feature that works on one boot and fails on the next for no visible reason.
 
 The allowlist is NOT the cause: ctldl is ALLOWED (logs CONN, not DENY). Only 3 DENYs exist in the
 whole log - wdcpalt, self.events.data (telemetry, correct) and windowsupdate.microsoft.com.
+
+### A/B: the truncation is pre-existing, and the drain timeout is NOT the cause
+
+RETRACTION first: the entry above said "the relay was not modified today". That is FALSE - the
+allowlist commit 61f0bcc touched it at 09:43 today. The conclusion (pre-existing) still stands, but
+it now rests on measurement rather than on a wrong claim.
+
+Interleaved A/B, pre-allowlist build vs shipped, same guest, same URLs (`guest/wu-relay-ab.ps1`):
+
+    PRE  disallowedcertstl  ok=6 fail=2  sizes=4987                                  constant
+    PRE  authrootstl        ok=8 fail=0  sizes=30632,57892,69060,71512,80043         VARYING
+    CUR  disallowedcertstl  ok=8 fail=0  sizes=4987                                  constant
+    CUR  authrootstl        ok=8 fail=0  sizes=32476,46024,64952,78984,80043         VARYING
+
+Both builds truncate identically, so the allowlist did not cause it. CUR dropped FEWER requests than
+PRE here, which is within noise.
+
+Drain-timeout hypothesis REFUTED (`guest/wu-drain-ab.ps1`), interleaved at three values:
+
+    DRAINMS=250   full-length 6/10   sizes 56183,78687,78844,79238,80043
+    DRAINMS=3000  full-length 4/10   sizes 54050,64952,67564,72097,75000,78844,80043
+    DRAINMS=8000  full-length 5/10   sizes 16513,32039,68960,73064,78775,80043
+
+No correlation - if anything the longest drain was worst. QUBES_UPDATES_DRAINMS is not the
+mechanism, and raising it would have been a change made on a plausible story rather than evidence.
+
+Still open (task #14). Next suspect, from reading the source rather than guessing: the relay reads
+the request head with a SINGLE ReadAsync and then treats the connection as a tunnel. That is right
+for CONNECT but wrong for plain HTTP, which is a SEQUENCE of request/response pairs with keep-alive
+framing (Content-Length or chunked). Nothing in the relay parses that framing, so it cannot know
+where a response ends - consistent with truncation at arbitrary offsets and with responses lost on a
+reused channel.
