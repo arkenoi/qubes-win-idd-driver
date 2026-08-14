@@ -8626,3 +8626,56 @@ making it a true dry run. On win11-tpl @ 26100.8875:
     KB5120710: 1 catalog .msu -> KEEP ...-ndp481_7f3b...msu
 
 That is exactly the pairing that preceded the rollback, rejected before a byte is spent.
+
+## 2026-08-14 — SOLVED: the 24H2 cumulative installs via the DISM path (26100.8875 -> 26100.9168)
+
+Verified end to end on a rebuilt-from-pristine TemplateVM `win11-tpl`:
+
+    build before  26100.8875
+    build after   26100.9168      (UBR 0x22ab -> 0x23d0)
+    KB5121003 installed_according_to_image = True
+    KB5043080 installed_according_to_image = False   <- never downloaded, never fed to CBS
+    CBS after reboot: incomplete_sessions=0  RebootPending=False
+
+The fix is the pre-download KB filter alone. Same image, same package, same DISM path that rolled
+back at boot with 0x80070490 / CBS_E_INVALID_PACKAGE last time; the only difference is that the
+catalog's superseded sibling never reached CBS. Root cause confirmed: Microsoft Update Catalog's
+DownloadDialog returns every file bundled with an update, and for KB5121003 that includes the
+2024-09 cumulative KB5043080, which is not applicable to a 26100.8875 image. Feeding it first
+poisoned the transaction that the real cumulative then rode into.
+
+Timings (win11-tpl, 4 vCPU, 8 GB):
+    download   4,867 MB in 389 s = 12.8 MB/s, ONE attempt, no resumes
+    DISM       ~24 min (staging, rc=3010)
+    shutdown   6.3 min (applying)
+    boot       2.5 min to qrexec
+    total      ~45 min wall clock
+
+### RETRACTED: the "tunnel throughput" problem
+
+Previously recorded at 120-150 KB/s and blamed on the relay destroying HTTP keep-alive. Measured on
+the clean allowlisted baseline: **75.4 MB in 5 s (14.4 MB/s)** for the .NET package and **12.8 MB/s
+sustained over 4.8 GB**. The tunnel was never the problem; those figures came from the WU-native
+(DoSvc/BITS) path, not from our catalog download. Any conclusion that rested on them is void.
+
+### Where servicing time actually goes (guest/wu-cbs-analyze.ps1 over the 266 MB CbsPersist log)
+
+    lines 1,090,992 over 49.6 min      CBS 87.2% of lines, CSI 4.0%
+    distinct packages evaluated 9,025
+    LRU Cache Manifest: 43,014 finds, 24,323 hits, 18,691 misses, 489 MB commit, max 1024 MB,
+                        Evictions: 0        <- cache is NOT undersized
+    LRU Cache FileData: 16,196 finds, 0 hits, 16,196 misses
+
+Optimisation read, and what the data REJECTS:
+* NOT CPU-bound, so more vCPUs will not help. TiWorker burned 489 CPU-s across ~1,140 s of wall
+  clock = ~43% of ONE core, on a 4-vCPU guest. Do not spend a dom0 change on this.
+* The biggest log gaps (468 s, 281 s) follow "Ending TrustedInstaller finalization" and sit in the
+  download/reboot windows - they are IDLE, not stalls. Do not optimise them.
+* Genuine candidates, in order, all still UNMEASURED and stated as such:
+  1. CBS's own logging: 266 MB / 1.09M lines written to the same disk the servicing is reading.
+     A LogLevel knob is believed to exist but is NOT verified - verify before claiming it works.
+  2. Defender: MsMpEng took 294 CPU-s during the run, scanning servicing I/O. Excluding WinSxS /
+     CBS temp / the wu dir is the standard server recommendation; it is a security tradeoff and
+     therefore the user's call.
+  3. Unused language packs: the plan phase walks language variants of every package (sv-SE et al.
+     observed). Trimming them shrinks planning, but mutates the template image.
