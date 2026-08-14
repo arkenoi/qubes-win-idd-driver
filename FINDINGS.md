@@ -8679,3 +8679,42 @@ Optimisation read, and what the data REJECTS:
      therefore the user's call.
   3. Unused language packs: the plan phase walks language variants of every package (sv-SE et al.
      observed). Trimming them shrinks planning, but mutates the template image.
+
+## 2026-08-14 — consumer-nag policies now re-assert at boot (and a correction)
+
+Correction to what I said earlier today: `quiet-desktop.ps1` was NOT missing from the package.
+`Install-QwtImproved.ps1` has always run it by default (`/noapptweaks` skips it). The OneDrive
+popup seen in every experiment came from the pristine `win11-24h2` SOURCE IMAGE, which predates
+that step - every clone inherits it. Not a packaging defect.
+
+The real gap: the installer ran the script out of the setup payload, kept no persistent copy and
+never re-asserted it. A feature update rewrites consumer surface (the reason the autologon guard
+exists), and a TEMPLATE's AppVMs get fresh user profiles whose per-user half of these settings was
+never written. Nothing existed to put any of it back.
+
+Fix: persist `quiet-desktop.ps1` to `C:\Program Files\Qubes Tools\bin` and register
+`QubesQuietDesktopGuard`, a SYSTEM boot task (PT1M) that re-asserts it.
+`guest/apply-quiet-desktop.ps1` mirrors the installer block so tests exercise the shipped path.
+
+    before           policy_key_exists=False  onedrive_running=1  adverts=unset
+    after + reboot   DisableFileSyncNGSC=1    onedrive_running=0  adverts=0    (29 changed, 0 failed)
+    guard validated  deleted the policy key + set adverts=1 -> rebooted -> both restored,
+                     QubesQuietDesktopGuard Last Result 0
+
+The probe was seen in BOTH states before being trusted, per the "no result counts until the
+instrument is validated" rule.
+
+## Download volume: what the KB filter does and does not buy
+
+Precise position, because "no overhead" would be an overclaim:
+
+* **No wasted FILES.** Exactly one .msu per KB is fetched. Verified at zero bytes with
+  `-Action resolve`: KB5121003 offered 2 files, 1 kept, 1 dropped.
+* **No permanent disk cost.** `qubes-windows-update.ps1:546` deletes each .msu whose install
+  returned an OK code. Measured after the pass: the per-KB dirs exist and are EMPTY, `wu` total
+  0.02 GB. The flip side is that a re-run re-downloads - there is no package cache.
+* **But the FILE ITSELF is a full cumulative.** The catalog serves full combined SSU+LCU packages
+  (KB5121003 = 4,867 MB, MSWIM, all editions/languages); it does not serve the differential
+  packages Windows Update can deliver. So the catalog path trades transfer volume for
+  determinism and for a closed egress surface. NOT MEASURED here: what WU-native would have
+  transferred for the same KB - do not quote a number for it without measuring.
