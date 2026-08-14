@@ -499,6 +499,10 @@ function Fetch-Msu($url,$dst,$kb){
 # above), leaving $OK_RC undefined - so `$_.rc -in $OK_RC` was always false and EVERY install
 # reported failure, including one that had returned 3010. Keep it adjacent to its only consumers.
 $OK_RC = @(0, 3010, 2359302)
+# Set the moment any package is STAGED (rc=3010). CBS applies exactly one staged session per
+# boot; a second package staged behind the first is silently discarded, so the pass stops
+# staging once this is true and the next pass picks up the rest after the reboot.
+$script:StagedThisSession = $false
 
 # ASK DISM WHETHER A PACKAGE APPLIES, BEFORE INSTALLING IT.
 # Measured 2026-08-13/14 on a 24H2 image: the catalog returns SEVERAL .msu per KB, and we ran all
@@ -554,9 +558,29 @@ function Install-Msus($files){
       $rows += [ordered]@{ file=$name; rc='skipped'; why="already installed" }
       continue
     }
+    # ONE REBOOT-REQUIRING PACKAGE PER SERVICING SESSION.
+    #
+    # Measured 2026-08-14 on a pristine 26100.8875 clone: the pass staged KB5120710 (rc=3010) and
+    # then KB5121003 (rc=3010) without a reboot in between. After the reboot KB5120710 was
+    # state=112 Installed and KB5121003 had ZERO CBS package entries - never registered, no
+    # rollback logged, shutdown 77 s instead of the 6.3 min a real apply takes. CBS applied the
+    # first staged package and silently discarded the second, while DISM returned 3010 for both.
+    # The 11:47 success is the control: it installed the cumulative ALONE on an image where the
+    # .NET update was already installed AND rebooted.
+    #
+    # So once something is staged, stop. The remaining packages stay on disk and the next pass -
+    # after the reboot this one forces - picks them up. Slower, and the only way the second package
+    # actually lands.
+    if ($script:StagedThisSession) {
+      $rows += [ordered]@{ file=$name; rc='deferred'
+                           why='another package is already staged; installing it needs a reboot first' }
+      Log "  DEFER $name - a reboot-requiring package is already staged this session"
+      continue
+    }
     $script:St.installing=[ordered]@{ file=$name; state='running' }; Save
     & DISM /Online /Add-Package /PackagePath:"$f" /NoRestart /Quiet /LogPath:"$WorkDir\dism.log" | Out-Null
-    $rc=$LASTEXITCODE; if($rc -eq 3010){$reboot=$true}
+    $rc=$LASTEXITCODE
+    if($rc -eq 3010){ $reboot=$true; $script:StagedThisSession = $true }
     # Re-ask DISM what the package's state is NOW. rc=3010 only means "staged"; the state tells us
     # whether CBS actually took it, which is the thing that was silently false before.
     $after = Get-MsuInfo $f
@@ -686,12 +710,24 @@ try {
         # assignment of a flat row list, so each KB silently erased the previous KB's outcome.
         $rows = Install-Msus $got
         $ok = @($rows | Where-Object { $_.rc -in $OK_RC }).Count -gt 0
-        $script:St.result += [ordered]@{ kb=$u.kb; ok=$ok; files=$rows }
+        # STAGED IS NOT INSTALLED. rc=3010 means CBS accepted the package and will apply it during
+        # the next boot - it is not proof that it landed, and on 2026-08-14 a package that returned
+        # 3010 ended up with ZERO CBS entries after the reboot while this code reported
+        # "installed=True". Say which it is, so a discarded package can never read as a success.
+        $staged = @($rows | Where-Object { $_.rc -eq 3010 }).Count -gt 0
+        $applied = @($rows | Where-Object { $_.rc -eq 0 }).Count -gt 0
+        $deferred = @($rows | Where-Object { $_.rc -eq 'deferred' }).Count -gt 0
+        $state = if ($staged) { 'staged' } elseif ($applied) { 'installed' }
+                 elseif ($deferred) { 'deferred' } else { 'failed' }
+        $script:St.result += [ordered]@{ kb=$u.kb; ok=$ok; state=$state; files=$rows }
         Save
-        # Reclaim the download: a cumulative update is GIGABYTES (5.1 GB was sitting in this
-        # work dir from one pass) and keeping it buys nothing once it is installed.
-        foreach($r in $rows){ if($r.rc -in $OK_RC){ Remove-Item -LiteralPath (Join-Path (Join-Path $WorkDir $u.kb) $r.file) -Force -EA SilentlyContinue } }
-        Log "$($u.kb): installed=$ok"
+        # Reclaim the download ONLY once the package is truly applied. A STAGED package still has
+        # to survive a reboot, and if it does not, the next pass must be able to retry it without
+        # re-fetching gigabytes - deleting it here is what made a failed apply expensive.
+        if (-not $staged) {
+          foreach($r in $rows){ if($r.rc -in $OK_RC){ Remove-Item -LiteralPath (Join-Path (Join-Path $WorkDir $u.kb) $r.file) -Force -EA SilentlyContinue } }
+        }
+        Log "$($u.kb): $state (ok=$ok)"
       }
     }
   }
