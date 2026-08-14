@@ -9957,3 +9957,51 @@ been seen to fire.
 
 Next run that would settle it: clone a template from a standalone that has NOT been through
 the display experiments, and separately clone one that has, and start a fresh AppVM from each.
+
+## 2026-08-14 (night) — 4.3.1 REPRODUCED on his exact build: two attached displays during the
+## pre-logon window, which is exactly when he sees the pointer offset and the dead dialog
+
+Rig rebuilt with `4.3.1+agent.c7ccb459aec9` - the identical package GWeck downloaded. The only
+rig-side change is pre-setting xenbus_monitor AutoReboot from the answer-stick payload, without
+which 4.3.1 cannot finish installing here at all.
+
+FIRST RESULT, and it settles post 33 on his build: with the modal suppressed the same 4.3.1
+package installed in **1008 s (~17 min)**, against a 70+ minute hang that never completed when
+the modal was allowed to appear. Same package, same media, same rig, one variable. The dialog
+was the blocker, not a symptom of something else.
+
+SECOND RESULT, measured on 4.3.1 while the guest was still at the Welcome screen:
+
+    ATTACHED=2
+    SCREEN \\.\DISPLAY2 primary=True  {X=0,   Y=0,    W=5120, H=1440}   <- the IDD
+    SCREEN \\.\DISPLAY3 primary=False {X=1920,Y=-768, W=1024, H=768}    <- the emulated VGA
+    VIRTUAL 5120x2208
+
+Two attached displays, the second at NEGATIVE Y, and a virtual desktop 768 px taller than the
+screen the agent maps. Windows is free to place windows in that region, and dom0 never sees it -
+which is precisely the stray 1024x40 override window (the guest's taskbar at x=1920) observed on
+the dom0 desktop earlier today, and a mechanism for a pointer that does not land where it is
+aimed.
+
+After the user session starts, 4.3.1 converges to ATTACHED=1 on its own: the agent restarts into
+the new session and its one-shot solo apply runs there. So on 4.3.1 the two-display state is
+confined to the PRE-LOGON window - during the install and the boot that follows it.
+
+WHY THAT MATTERS: that window is exactly when GWeck reports trouble. Post 54 says the pointer is
+wrong on Windows 10 "only before the reboot after activation of the IDD driver", and post 33 is
+a modal raised during the install that he could not click. One cause - a second display attached
+while the agent maps only the first - accounts for both.
+
+BEFORE/AFTER, same rig, same media:
+
+    4.3.1   ATTACHED=2, second display at (1920,-768), persists through pre-logon
+    4.3.2   the same arrival is detached within ~1.5 s, from the install itself:
+              19:10:12  IDD solo: detach '\\.\DISPLAY3' -> 0
+              19:10:12  IDD solo: OK - '\\.\DISPLAY2' is the sole active display
+            post-install: ATTACHED=1, virtual 5120x1440
+
+The WM_DISPLAYCHANGE re-assert is therefore doing the job it was written for, demonstrated
+against the build that lacks it rather than only against itself.
+
+STILL NOT REPRODUCED on 4.3.1: the black inactive window of post 54. This guest, on his exact
+build, comes up at the Welcome screen and then to a working seamless desktop.
