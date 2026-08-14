@@ -23,6 +23,10 @@
 param(
   [string]$Kb = 'KB5121003',
   [int]$Repeats = 4,
+  # Also POST DownloadDialog per row and print the .msu filenames. Needed to answer whether a
+  # "Dynamic Cumulative Update" row - which carries the SAME KB number as the real cumulative -
+  # can be told apart by FILENAME, or only by asking DISM whether the package is applicable.
+  [switch]$WithFiles,
   [string]$RelayExe = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe',
   [string]$Proxy = 'http://127.0.0.1:8082',
   [string]$WorkDir = 'C:\ProgramData\Qubes\wu'
@@ -66,6 +70,19 @@ for (`$i = 1; `$i -le $Repeats; `$i++) {
     foreach (`$row in `$rows) {
         `$n++
         W ("  [" + `$n + "] " + `$row.guid + "  " + `$row.title)
+        if (`$$WithFiles -and `$i -eq 1) {
+            `$json = '[{"size":0,"languages":"","uidInfo":"' + `$row.guid + '","updateID":"' + `$row.guid + '"}]'
+            try {
+                `$dl = Invoke-WebRequest 'https://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Method POST -Body @{updateIDs=`$json} -Proxy '$Proxy' -UseBasicParsing -TimeoutSec 60
+                `$fs = @([regex]::Matches(`$dl.Content,"url\s*=\s*'(http[^']+)'") | ForEach-Object { `$_.Groups[1].Value } | Sort-Object -Unique)
+                if (-not `$fs.Count) { W ("        (no files)") }
+                foreach (`$u in `$fs) {
+                    `$nm = if (`$u -match '/([^/?]+)`$') { `$Matches[1] } else { `$u }
+                    W ("        file: " + `$nm)
+                }
+            } catch { W ("        (download dialog failed: " + `$_.Exception.Message + ")") }
+            Start-Sleep -Seconds 2
+        }
     }
     `$runs += ,@(`$rows)
     Start-Sleep -Seconds 4
