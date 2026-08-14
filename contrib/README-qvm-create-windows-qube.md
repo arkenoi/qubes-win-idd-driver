@@ -54,6 +54,17 @@ finishes provisioning with no tools installed, which reads as "QWT silently fail
 than "the installer was never invoked". That silent-failure mode is the whole reason this
 document exists.
 
+## Since 4.3.2 this usually needs NO patch at all
+
+The package now ships a `qubes-tools-<version>.exe` at its root whose only job is to start
+`install.cmd` (`/passive` and friends map to `/auto`). That is the exact shape upstream's glob
+looks for, so an UNPATCHED `qvm-create-windows-qube` finds it and runs it. The install also
+costs only ONE guest shutdown now, which is what upstream's "restart the qube once, then wait
+for os=Windows" sequence can survive - a second shutdown left it waiting on a halted qube.
+
+The rest of this section describes the older patching route. It remains valid, and is still
+what you want if you are running a build that predates the bootstrap executable.
+
 **This is applied automatically.** The RPM's `%post` runs `qwt-ng-fix-qwcq`, which finds
 `qvm-create-windows-qube` installations (the resolved entry point on `PATH`, plus
 `/opt`, `/usr/local/share`, `/root` and `/home/*` clones), backs the upstream stub up
