@@ -8942,3 +8942,53 @@ them ASCII-only.
 
 Re-verified after all edits: syntax clean, and KB5121003 resolves to the identical file across
 en-US/de-DE/fr-FR/ja-JP.
+
+## 2026-08-14 — locale hazard map, measured (guest/wu-locale-primitives.ps1)
+
+Rather than reason about which APIs are culture-sensitive, the primitives this codebase relies on
+were MEASURED under en-US, de-DE, th-TH (Buddhist era), ar-SA (UmAlQura/Hijri), ja-JP, zh-CN,
+tr-TR (dotless i) and he-IL, by forcing the culture in-process on the English guest.
+9 of 23 primitives are locale-dependent. The stable list matters as much as the hazard list,
+because it says what needs no defensive code.
+
+HAZARDS
+
+    ToString('yyyy-MM-dd')        en-US 2026-08-14   th-TH 2569-08-14   ar-SA 1448-03-01
+    ToString('yyyy-MM-dd HH:mm:ss')  same shift - custom patterns take the CULTURE'S CALENDAR
+    ToString() default            differs in all 7 non-en-US cultures
+    "{0:0.0}" -f 75.5             de-DE/tr-TR '75,5'      (the dom0 progress bug, fixed)
+    (75.5).ToString()             de-DE/tr-TR '75,5'
+    [math]::Round(x,1).ToString() de-DE/tr-TR '4867,4'
+    "{0:N1}" -f 4867.4            de-DE/tr-TR '4.867,4'
+    'file'.ToUpper()              tr-TR differs (dotted capital I) - the console flattens it, the
+    'I'.ToLower()                 tr-TR differs (dotless i)         STRING COMPARISON caught it
+
+LOCALE-STABLE - safe to rely on, measured identical in all 8 cultures
+
+    ToString('s') and ToString('o')      standard round-trip specifiers force Gregorian
+    [datetime]::TryParse(ISO)            parses correctly even under Buddhist/Hijri defaults
+    Get-Date -Format 'HH:mm:ss'          no date component, no calendar
+    [double]'75.5' and [int]'42'         PowerShell casts are invariant
+    ConvertTo-Json numbers               emits 75.5, never 75,5
+    -match / -eq case-insensitive        ORDINAL: "KB5121003" -match "kb" holds even in tr-TR
+    regex \d                             matches Arabic-Indic digits (in every culture, so stable)
+
+RULE: standard specifiers 's'/'o' are calendar-invariant; CUSTOM patterns containing a year are
+not. That distinction is the whole calendar story.
+
+### The status-file timestamp is safe - verified cross-culture, not assumed
+
+`qubes-windows-update.ps1:81` stamps the status file with `(Get-Date).ToString('s')`, and
+`wu-update.ps1:90` parses it back and compares against `StartedAt` to drop stale lines. Those run
+in DIFFERENT PROCESSES - the agent as a SYSTEM scheduled task, the handler as the logged-on user -
+so their cultures can differ. All 9 write-culture x read-culture combinations across
+en-US/th-TH/ar-SA round-trip to 2026-08-14 correctly (`guest/wu-sortable-check.ps1`). No change
+needed; had this used 'yyyy-MM-dd' instead of 's', a Thai or Saudi guest would have seen dom0 lose
+every progress line and message.
+
+### Calendar exposure in the SHIPPED path: none
+
+The shipped update path formats dates only as 's', 'o' or 'HH:mm:ss'. Custom `yyyy` patterns exist
+only in dev harnesses and diagnostics (drag-measure, drag-harness, phase-cpu-bench, wu-recon-extra,
+wu-relay-tail, wu-verify-installed, wu-cbs-analyze), whose output is read by humans on our English
+guest. Not worth changing; worth knowing.
