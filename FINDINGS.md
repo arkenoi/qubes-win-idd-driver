@@ -8829,3 +8829,54 @@ RESIDUAL RISK, not covered by this pass: the row EXCLUSIONS are English words
 excluded, so a Dynamic Update could be picked when it happens to sort first. The cumulative sorted
 first here, so the test never exercised it. Fix belongs on the exclusion side, and the anchor should
 be the filename pattern rather than the title.
+
+## 2026-08-14 — catalog row selection now decides on the FILENAME (and the flip is nondeterministic)
+
+### The flip: researched, and it is not ours to control
+
+Two identical runs of the same test, same guest, ~12 minutes apart:
+
+    header    run 1      run 2
+    de-DE     English    German
+    fr-FR     Italian    English
+    ja-JP     English    English
+    en-US     English    English
+
+Plus 8 header-less requests (4 for KB5121003, 4 for KB5120710) that were stable, English, with
+stable GUIDs, stable row order and stable row membership.
+
+So: the response language is NOT a function of our request. The Accept-Language header takes effect
+only sometimes, and an fr-FR request has returned an ITALIAN page. This is what an edge cache
+serving a rendering populated by another locale's request looks like. No client-side change can
+make the title language deterministic - which settles the design question rather than leaving it
+open: the decision must not depend on title text at all.
+
+What is NOT flipping: row GUIDs, row order and row membership were identical across every run. The
+rows are one per version x arch (KB5121003 returned 4: 24H2/25H2 x x64/arm64), with NO edition
+dimension - cumulative packages are edition-neutral, so "any edition" needs no handling.
+
+### Resolve-Catalog rewritten
+
+The title is now used only to NARROW and RANK candidates on untranslated tokens; the accept/reject
+test runs against the .msu FILENAME, which is language-invariant by construction:
+
+  * arch (`x64`/`arm64`) is mandatory, from PROCESSOR_ARCHITECTURE
+  * CurrentBuild outranks DisplayVersion (+4 vs +2). DisplayVersion alone cannot identify a
+    product - Windows 10 AND Windows 11 both shipped a "22H2"; builds 19045 vs 22621 do.
+  * the English `Dynamic|Server` keywords survive only as a -3 tie-breaker nudge and can no longer
+    REJECT anything
+  * each candidate is then resolved and accepted only if it yields a file matching
+    <kb digits> + <arch> + the expected filename family
+  * family is DERIVED, never assumed: `InstallationType` ('Client'/'Server', not localized) plus
+    the 22000 build boundary -> windows11.0 vs windows10.0. This is the locale-invariant separator
+    the `Server` keyword used to provide, and it is needed because Windows Server 2025 and
+    Windows 11 24H2 are BOTH build 26100.
+  * family is a PREFERENCE: a candidate with the right KB and arch but an unknown family is kept
+    as a fallback, so an unforeseen future product family degrades instead of failing.
+
+Verified after the rewrite - KB5121003 across en-US/de-DE/fr-FR/ja-JP, with de-DE returning a
+genuinely German title ("Kumulatives Update fur Windows 11, version 24H2 fur x64-basierte
+Systeme"): PASS, every language resolved to the identical file.
+
+Nothing is pinned to a Windows version: arch, build, version and product family are all read from
+the running guest.
