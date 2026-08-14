@@ -29,7 +29,8 @@ log "reprovisioning from $LOOP (this destroys $VM)"
 "$HERE/scratchpad/reprovision.sh" "$VM" "$LOOP" 2>&1 | tee -a "$OUT/accept.log"
 [ "${PIPESTATUS[0]}" -eq 0 ] || fail "reprovision failed (see $OUT/accept.log)"
 
-# --- 2. wait for OUR installer to finish (it reboots the guest up to 3 times) -------
+# --- 2. wait for OUR installer to finish (it reboots ONCE; twice if it had to remove
+#        a previous QWT first) -------------------------------------------------------
 # The finished marker is a RESULT trailer with ok:true in C:\qwt-improved-install.log
 # AND the gui-agent process running. Missing log after the budget = fail (never skip).
 log "waiting for the release install to complete in-guest"

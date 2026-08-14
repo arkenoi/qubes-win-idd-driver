@@ -32,13 +32,18 @@ bootwait(){ local m=${1:-15} logfn=${2:-:} i dead=0
     if [ $dead -ge 15 ]; then $logfn "  STUCK (Running+VMShell dead ~5m) -> kill+restart"; timeout -k 8 40 ./tools/qtest kill >/dev/null 2>&1; sleep 6; timeout -k 8 90 ./tools/qtest start >/dev/null 2>&1; sleep 45; dead=0; fi
     sleep 20
   done; return 1; }
-# wait for a reboot OR a completed-but-failed install (fresh FATAL/Fail in the log, no reboot),
-# so a failed install is caught in minutes not after a 30m halt timeout. $1=minutes $2=logfn
+# wait for the install to END - by a reboot, by finishing in place, or by failing.
+# $1=minutes $2=logfn.  0 = ended (reboot or completed), 2 = failed, 1 = timed out.
 # PRECONDITION: call clearlog BEFORE launching the install, or this fires on a PRIOR run's error.
+#
+# "Completed in place" is not an edge case any more: since the single-reboot change the
+# installer does NOT reboot at the end, so waiting only for Halted would sit here until the
+# timeout on every successful install and report it as a hang.
 wait_install(){ local m=${1:-20} logfn=${2:-:} i
   for i in $(seq 1 $((m*3))); do
     echo "$(qstate)"|grep -qi Halted && { $logfn "  halted (reboot)"; return 0; }
-    local tail; tail=$(qrun 'cmd /c "type C:\qwt-improved-install.log 2>nul | findstr /C:\"FATAL\" /C:\"FAILED with\" /C:\"the C: boot disk is on the Xen PV\""')
+    local tail; tail=$(qrun 'cmd /c "type C:\qwt-improved-install.log 2>nul | findstr /C:\"FATAL\" /C:\"FAILED with\" /C:\"the C: boot disk is on the Xen PV\" /C:\"INSTALL COMPLETE\" /C:\"STAGE 2 COMPLETE\""')
     if echo "$tail" | grep -qiE 'FATAL|FAILED with|boot disk is on the Xen PV'; then $logfn "  install FAILED (no reboot) - detected fast"; return 2; fi
+    if echo "$tail" | grep -qiE 'INSTALL COMPLETE|STAGE 2 COMPLETE'; then $logfn "  install completed in place (no final reboot)"; return 0; fi
     sleep 20
   done; return 1; }
