@@ -9844,3 +9844,50 @@ WHAT REMAINS UNEXPLAINED: GWeck's Win10 black screen. We now have his platform, 
 path and his install flow on a rig that behaves correctly, so the difference is something in
 his environment - most likely his actual display hardware (a disabled laptop panel plus an
 external monitor, per post 54) which our emulated single-head guest cannot reproduce.
+
+## 2026-08-14 (night) — post 56 REPRODUCED, and it is ours: an AppVM's first boot has no GUI
+
+Built the configuration nobody here had ever run - `mgmt/clone-to-template.sh win10-clean
+win10-tpl win10-app`, i.e. a Windows 10 AppVM on a Windows 10 template carrying 4.3.2.
+
+MEASURED, three fresh AppVMs (create -> start -> open Notepad -> screenshot):
+
+    first boot   qrexec answers in ~40 s, session up, explorer.exe and notepad.exe running,
+                 gui-agent.exe running in session 1 - and dom0 maps ZERO windows.
+                 Agent log ends at: "WatchForEvents: Awaiting for a vchan client"
+    second boot  windows map normally, Notepad renders (screenshot)
+
+So the qube is alive and completely invisible. That is GWeck's post 56 shape ("starts
+normally, but just after finishing the startup it shuts down silently") seen from our side:
+a qube that appears to do nothing.
+
+### Whose fault - answered by experiment, not by reading
+
+On the failing first boot, with the qube otherwise untouched:
+
+    net stop QubesGuiWatchdog & taskkill /IM gui-agent.exe /F & net start QubesGuiWatchdog
+    -> windows appear immediately (screenshot, 20 KB tar vs 0 bytes before)
+
+The dom0 gui-daemon is therefore present and willing the whole time. What is dead is the
+vchan SERVER this agent opened on that first boot. Plausible mechanism, not yet proven: the
+Xen devices are re-enumerated while Windows specialises itself into a new qube identity
+(new SMBIOS/UUID, fresh private volume) AFTER the agent opened the server, leaving it
+waiting on something the backend no longer knows about.
+
+FIX (agent): after 90 s with no client that has ever connected, log why and exit so the
+watchdog respawns the agent - the exact recovery the experiment performed, rather than a
+narrower guess at re-initialising the vchan alone. A persisted counter
+(`VchanFirstClientRestarts`) bounds it to three attempts so a guest that legitimately has no
+daemon is not restarted forever; it is cleared when a daemon attaches.
+
+NOT yet done: confirming the fix on a fresh AppVM built from a template carrying the FIXED
+agent. Until that runs, this is a fix with a proven mechanism and an unproven end state.
+
+### Also measured, same run
+
+  * A Win10 AppVM's private volume is a FRESH empty disk: `dir Q:\` fails while
+    `wmic logicaldisk` lists Q:, i.e. the volume exists but is unformatted, and MoveUsers'
+    relocation therefore does not carry the template's profile over. The guest still logs
+    in and works, so this is not the GUI defect, but it is worth its own look.
+  * `GetWindowData: GetRealWindowRect failed with error 0x80070006` appears on the AppVM's
+    working boot - windows disappearing between enumeration and query. Noise, but recorded.
