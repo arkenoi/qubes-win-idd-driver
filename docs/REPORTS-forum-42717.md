@@ -113,3 +113,66 @@ switch to turn it off; the Basic Display Adapter is a failure state, not an opti
    scales with window position or is constant. winenum.log answers a different question.
 3. PV disk upgrade crash (post 27.2) - the only report that leaves a user with a broken qube.
 4. Only then retest Start/`/idd` items on current; they may already be closed.
+
+## Reply DRAFT for posts 54/55/56 (arkenoi approves the exact text before it is posted)
+
+**The switch you asked for exists now, and there is also a way back on a qube that is already
+broken.**
+
+    install.cmd /noidd    fresh install: the IddCx driver is not activated, the guest stays on
+                          the Basic Display Adapter
+    install.cmd /iddoff   a qube that ALREADY has it: re-enables the VGA adapter, stops the
+                          agent re-applying the IDD topology, removes the IDD device, reboots
+    install.cmd /iddonly  turn it back on later
+
+`/iddoff` deliberately touches no display API, so it works from dom0 on a qube whose window is
+black:
+
+    qvm-run -u SYSTEM <vm> "powershell -ExecutionPolicy Bypass -File C:\qwt-improved-setup\deactivate-idd.ps1"
+
+then start the qube again. (Stage 1 copies the payload to `C:\qwt-improved-setup`, so that path
+is there even with no CD attached.)
+
+What you lose with the IDD off is the thing it exists for: resolutions that follow the size of
+the qube's window in dom0. The Basic Display Adapter has a fixed mode list, so the desktop snaps
+to one of its sizes. Nothing else depends on it. Our README claimed running without it was "a
+failure state, not an option" - that was wrong, and it is corrected.
+
+**About `/idd`: two separate things were going on.** `/idd` is an OPTION to install.cmd, not a
+program - `Start-Process D:\idd` asks Windows to launch a file named `idd`, which is not on any
+of our media, so that error will repeat forever. But you were also right that something of ours
+was broken: `/iddonly` could not have worked in 4.3.1 either. `%~dp0` ends with a backslash, so
+we passed PowerShell `-Root "C:\path\"`, where `\"` is an escaped quote; the script received
+`C:\path"` and died on "illegal characters in path". Our own test guest had been logging it for
+three days and we had not read it. Fixed, and the installer now says which file is missing
+instead of surfacing a raw PowerShell error.
+
+**Most of what you reported on 4.3.1 is already fixed - in commits that came after it.** 4.3.1
+was cut on 10 August; the pointer-offset fix landed on the 12th and the Windows 11 25H2
+Start-menu work across the 11th-13th. That is 53 agent commits you cannot get by staying on
+4.3.1, which is the main reason the newer build felt worse than 09b643e:
+
+* the ~1 cm pointer offset: the agent stored the resolution it ASKED for rather than the one
+  Windows APPLIED, and mouse injection is scaled against that number - so any divergence became
+  exactly a proportional vertical error. It now uses the applied size and notices later changes.
+* the 25H2 Start menu: 25H2 makes Start a work-area-sized host window around a small card; we
+  now measure and crop to the card. The dom0 "invalid or suspicious GUI request" dialog came
+  from the agent announcing an impossible window size, and that is now blocked at the source.
+* the Windows key with Open-Shell: there is a per-qube `enableWinKey` feature for exactly that.
+
+**What we have NOT reproduced, and what would help.** The black window after the activation
+reboot on Windows 10, and AppVMs from a Windows 10 template shutting down right after startup,
+are both unreproduced here - our Windows 10 test qube cannot run an elevated install, so we
+cannot even get into your configuration. If you are willing, three cheap things would move this
+a long way:
+
+1. `C:\qwt-improved-install.log` from the Win10 guest (its last block records whether the IDD
+   activated and which VGA adapter was disabled);
+2. when the window is black: does `qvm-ls` show the qube as **Running** or **Transient**, and
+   does `qvm-run <vm> "cmd /c echo hi"` answer? That separates "the display is gone" from "the
+   guest is wedged", and they need completely different fixes;
+3. for the AppVM: does it die on its own, or does dom0 report a failure - and does an AppVM from
+   the SAME template survive if you start it with the display driver off (`/iddoff` on the
+   template first)?
+
+No dates promised. The build with `/noidd`, `/iddoff` and the fixes above is being prepared now.
