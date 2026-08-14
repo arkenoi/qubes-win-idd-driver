@@ -88,8 +88,15 @@ switch to turn it off; the Basic Display Adapter is a failure state, not an opti
 ### Other posts
 
 * **44, 45** - W11 25H2, 4.3.1: mouse position offset ~1 cm, text windows lose position, Windows key
-  produces artifacts plus an error. **He attached winenum.log** - exactly the artifact `tools/winenum`
-  was built to produce. Get it before asking him for anything else.
+  produces artifacts plus an error.
+  **SCREENSHOTS ARE ATTACHED AND THEY ARE THE USEFUL ARTIFACT** (user, 2026-08-14). For a visual
+  defect they beat any log we could ask him for: they show WHAT is misplaced and BY HOW MUCH,
+  against surrounding window geometry, with no instrumentation to install and no round trip. Fetch
+  the images from posts 44/45 FIRST and read the offset off them - direction, magnitude, and whether
+  it is constant across the screen or grows with distance from the origin. That last property is
+  what separates an origin/offset error from a scaling or DPI error, and it may be readable straight
+  off the pictures.
+  (A winenum.log is also attached, but it answers the Start-surface question, not this one.)
 * **46, 47** - arkenoi: reproduced; "some stuff is 25h2 specific"; suspected "artifacts of non-idd
   legacy driver".
 * **48, 49** - where Open-Shell entered: disabling the stock Start in seamless was considered, GWeck
