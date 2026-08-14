@@ -37,6 +37,8 @@ on:
       # the desktop tweaks) into the package. Without this filter a fix to one of those
       # scripts is committed, CI stays green, and the next download still ships the old copy.
       - 'guest/**'
+      # The stock-shape entry point is compiled here and staged into the package.
+      - 'tools/qwt-bootstrap/**'
 
 # One release build at a time, newest wins. Without this, a 2026-08-06 background job
 # cancelled runs it took for duplicates and the cancellations looked like CI flakiness.
@@ -246,6 +248,23 @@ jobs:
           Write-Host "$($redist.FullName)  signer: $($sig.SignerCertificate.Subject)"
           "VC_REDIST=$($redist.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
+      # The stock-shape entry point: a qubes-tools-<version>.exe at the package root, so the
+      # tools are FOUND by anything that globs for the shape the vendor always shipped -
+      # qvm-create-windows-qube's auto-qwt stub in particular, which otherwise matches nothing
+      # against our installer tree and provisions a qube with no tools and no error.
+      - name: Build the stock-shape entry point (qwt-bootstrap)
+        shell: pwsh
+        run: |
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              Select-Object -First 1
+          & $msbuild tools\qwt-bootstrap\qwt-bootstrap.vcxproj /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "qwt-bootstrap msbuild failed" }
+          $exe = Get-ChildItem tools\qwt-bootstrap -Recurse -Filter qwt-bootstrap.exe | Select-Object -First 1
+          if (-not $exe) { throw 'qwt-bootstrap.exe not produced' }
+          Write-Host $exe.FullName
+          "BOOTSTRAP_EXE=$($exe.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
       - name: Assemble qwt-improved-setup
         shell: pwsh
         run: |
@@ -253,6 +272,7 @@ jobs:
               -MsiArtifact dl\qwt-full `
               -IddArtifact dl\idd `
               -PvArtifact dl\pv `
+              -BootstrapExe "$env:BOOTSTRAP_EXE" `
               -VcRedist    "$env:VC_REDIST" `
               -OutDir      qwt-improved-setup
 
