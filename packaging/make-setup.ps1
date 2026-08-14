@@ -33,6 +33,9 @@ param(
     [string]$PvArtifact,          # xenvif build (PV network fix) + its signer cert
     [Parameter(Mandatory = $true)][string]$MsiArtifact,
     [string]$IddArtifact,
+    # Compiled tools\qwt-bootstrap\qwt-bootstrap.exe, staged at the package root as
+    # qubes-tools-<version>.exe - see the STOCK-SHAPE COMPATIBILITY block below.
+    [string]$BootstrapExe,
     [Parameter(Mandatory = $true)][string]$VcRedist,
     [string]$RepoRoot = '.',
     [string]$OutDir = 'qwt-improved-setup'
@@ -117,6 +120,23 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activat
 # normal install never calls it - a user who needs it cannot download a newer package from a
 # qube with no display.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\deactivate-idd.ps1') 'IDD deactivator/recovery') $OutDir -Force
+# --- STOCK-SHAPE COMPATIBILITY -----------------------------------------------------------
+# Everything that installs Qubes Windows Tools automatically looks for the shape the vendor
+# has always shipped: ONE installer at the root of the ISO matching `qubes-tools-*.exe`, run
+# with /passive. qvm-create-windows-qube's tools/auto-qwt/install-qwt.bat is exactly that
+# glob. Against our installer TREE it matches nothing, raises no error, and the qube finishes
+# provisioning with no tools installed at all (forum 42717 post 27).
+# So ship a file with that name whose only job is to start install.cmd. Patching anybody
+# else's checkout then stops being necessary for the common case.
+if ($BootstrapExe -and (Test-Path -LiteralPath $BootstrapExe)) {
+    Copy-Item (Resolve-Path -LiteralPath $BootstrapExe).Path (Join-Path $OutDir "qubes-tools-$ngVersion.exe") -Force
+    Write-Host "stock-shape entry point: qubes-tools-$ngVersion.exe"
+} else {
+    # Not fatal - the package installs fine by hand without it - but it silently removes the
+    # compatibility this block exists for, so say so at build time rather than in a bug report.
+    Write-Warning 'no qwt-bootstrap.exe supplied: this package will NOT be found by qvm-create-windows-qube (its glob wants qubes-tools-*.exe at the root)'
+}
+
 # Windows Update agent, deployed by `install.cmd /updatesonly`: the deploy script compiles the
 # relay (in-box csc, like winenum.cs), places the agent, and registers the scheduled scan that
 # reports update availability to dom0. All three staged from guest/ (single source of truth).
