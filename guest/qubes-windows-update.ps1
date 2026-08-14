@@ -226,32 +226,92 @@ function Install-ViaWU {
 }
 
 # KB -> standalone .msu URLs from the Update Catalog (over the proxy), for THIS guest's
-# architecture and Windows version. Titles look like:
-#   "2026-08 Cumulative Update for .NET Framework 3.5 and 4.8.1 for Windows 11, version 25H2 for x64"
-#   "... for Microsoft server operating system version 24H2 for x64"   <- excluded (Server)
-# Client entries are preferred over server ones and the version token comes from the running OS.
+# architecture and Windows version.
+#
+# THE DECISION IS MADE ON THE FILENAME, NOT ON THE TITLE. Rewritten 2026-08-14 because the old
+# version chose a row by matching ENGLISH words in its title, and the catalog's response language
+# is not ours to choose: asking for fr-FR returned an ITALIAN title, and the same KB on the same
+# guest came back German at 09:54 and English at 10:21. A real user runs a German edition. So the
+# title is now used only to NARROW and RANK candidates by tokens nobody translates - the arch
+# ("x64"/"arm64") and the build/version number - while the actual accept/reject test is run against
+# the .msu filename the catalog hands back, which is language-invariant by construction.
+#
+# Two ambiguities the old title matching could not survive, both real:
+#   * DisplayVersion alone does not identify a product: Windows 10 AND Windows 11 both shipped a
+#     "22H2". CurrentBuild does (19045 vs 22621), so the BUILD is ranked above the version now.
+#   * Build alone does not separate client from server: Windows Server 2025 and Windows 11 24H2
+#     are BOTH build 26100. That is what the old `Server` keyword was for - and it is an English
+#     word. The locale-invariant separator is the filename: client Windows 11 packages are named
+#     windows11.0-*, while Server 2025 packages are windows10.0-*.
+#
+# Nothing here is pinned to a Windows version: arch, build, version and product family are all read
+# from the running guest. Hardcoding "x64 + 24H2|26100" once made KB5120708 unresolvable on 25H2.
 function Resolve-Catalog($kb){
   $hdr = @{}
   if ($AcceptLanguage) { $hdr['Accept-Language'] = $AcceptLanguage }
   $r=Invoke-WebRequest "https://www.catalog.update.microsoft.com/Search.aspx?q=$kb" -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr
-  $rx=[regex]"(?is)id='([0-9a-fA-F\-]{36})_link'[^>]*>(.*?)</a>"; $guid=$null
-  $cands=@()
-  foreach($m in $rx.Matches($r.Content)){ $t=($m.Groups[2].Value -replace '<[^>]+>','' -replace '\s+',' ')
-    $cands += $t
+  $rx=[regex]"(?is)id='([0-9a-fA-F\-]{36})_link'[^>]*>(.*?)</a>"
+  $digits = $kb -replace '\D',''
+
+  # Expected filename family for THIS guest, derived - never assumed. InstallationType is 'Client'
+  # or 'Server'/'Server Core' and is not localized; 22000 is the Windows 11 build boundary, a
+  # number rather than a name. Used as a PREFERENCE, not a hard requirement, so an unforeseen
+  # future family degrades to "still picks a correctly-named package for this arch and KB".
+  $instType = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -EA SilentlyContinue).InstallationType
+  $wantFamily = if ($instType -like 'Client*' -and [int]$OsBuild -ge 22000) { 'windows11.0' } else { 'windows10.0' }
+
+  # Rank candidates on untranslated tokens only. Arch is mandatory; build outranks version; the
+  # old English keywords survive ONLY as a tie-breaker nudge and can no longer reject anything.
+  $ranked = @()
+  $all = @()
+  foreach($m in $rx.Matches($r.Content)){
+    $t=($m.Groups[2].Value -replace '<[^>]+>','' -replace '\s+',' ').Trim()
+    $all += $t
     if($t -notmatch [regex]::Escape($OsArch)){ continue }
-    if($t -match 'Dynamic|Server|server operating system'){ continue }
-    if($OsVer   -and $t -match [regex]::Escape($OsVer))  { $guid=$m.Groups[1].Value; Log "  catalog pick: $t"; break }
-    if($OsBuild -and $t -match [regex]::Escape($OsBuild)){ $guid=$m.Groups[1].Value; Log "  catalog pick: $t"; break }
+    $score = 0
+    if($OsBuild -and $t -match [regex]::Escape($OsBuild)){ $score += 4 }
+    if($OsVer   -and $t -match [regex]::Escape($OsVer))  { $score += 2 }
+    if($score -eq 0){ continue }
+    if($t -match 'Dynamic|Server|server operating system'){ $score -= 3 }   # hint only, English
+    $ranked += [pscustomobject]@{ guid=$m.Groups[1].Value; title=$t; score=$score }
   }
-  if(-not $guid){
-    # Log every candidate: a resolution miss is otherwise invisible and looks like "no updates".
-    Log "  no catalog entry matches arch=$OsArch ver=$OsVer build=$OsBuild; candidates:"
-    foreach($c in $cands){ Log "    - $c" }
-    return @()
+  $ranked = @($ranked | Sort-Object -Property @{Expression='score';Descending=$true})
+
+  $fallback = $null
+  foreach($c in $ranked){
+    $json='[{"size":0,"languages":"","uidInfo":"'+$c.guid+'","updateID":"'+$c.guid+'"}]'
+    try{
+      $dl=Invoke-WebRequest 'https://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Method POST -Body @{updateIDs=$json} -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr
+    }catch{ Log ("  candidate rejected (download dialog failed): " + $c.title); continue }
+    $files=@([regex]::Matches($dl.Content,"url\s*=\s*'(http[^']+)'")|ForEach-Object{$_.Groups[1].Value}|Where-Object{$_ -match '\.msu(\?|$)'}|Sort-Object -Unique)
+    if(-not $files.Count){ Log ("  candidate rejected (no .msu): " + $c.title); continue }
+
+    # THE test: does this candidate actually carry a package named for this KB and this arch?
+    $named = @($files | Where-Object { $_ -match $digits -and $_ -match [regex]::Escape($OsArch) })
+    if(-not $named.Count){
+      Log ("  candidate rejected (no file named for $kb/$OsArch): " + $c.title)
+      foreach($f in $files){ Log ("      had: " + (& { if($f -match '/([^/?]+\.msu)'){$Matches[1]} else {$f} })) }
+      continue
+    }
+    $family = @($named | Where-Object { $_ -match [regex]::Escape($wantFamily) })
+    if($family.Count){
+      Log ("  catalog pick: " + $c.title)
+      Log ("    matched on filename family $wantFamily + $kb + $OsArch (title language is irrelevant)")
+      return $files
+    }
+    # Right KB and arch, wrong/unknown product family - keep as a fallback and look for better.
+    if(-not $fallback){ $fallback = [pscustomobject]@{ files=$files; title=$c.title } }
+    Log ("  candidate deferred (no $wantFamily file): " + $c.title)
   }
-  $json='[{"size":0,"languages":"","uidInfo":"'+$guid+'","updateID":"'+$guid+'"}]'
-  $dl=Invoke-WebRequest 'https://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Method POST -Body @{updateIDs=$json} -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr
-  return @([regex]::Matches($dl.Content,"url\s*=\s*'(http[^']+)'")|ForEach-Object{$_.Groups[1].Value}|Where-Object{$_ -match '\.msu(\?|$)'}|Sort-Object -Unique)
+
+  if($fallback){
+    Log ("  catalog pick (FALLBACK - no $wantFamily package found for this KB): " + $fallback.title)
+    return $fallback.files
+  }
+  # Log every candidate: a resolution miss is otherwise invisible and looks like "no updates".
+  Log "  no catalog entry matches arch=$OsArch ver=$OsVer build=$OsBuild family=$wantFamily; candidates:"
+  foreach($c in $all){ Log "    - $c" }
+  return @()
 }
 
 # Resumable fetch with progress into the status file, and with the two checks whose absence
