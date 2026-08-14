@@ -81,8 +81,11 @@ From the ISO (recommended -- no networking needed):
      administrator.  (Or from an elevated cmd:  D:\install.cmd )
   3. The machine reboots. Log back in, run install.cmd again -- from the CD or
      from C:\qwt-improved-setup\, either works.
-  4. It reboots once more. About a minute after it comes back, qrexec answers
-     and the seamless desktop appears in dom0.
+  4. That run finishes WITHOUT rebooting: qrexec answers and the seamless desktop
+     appears in dom0 within about a minute. The Xen PV disk and network drivers
+     take over from the emulated ones the next time the qube starts, which is how
+     stock Qubes Windows Tools leaves a qube too. Pass /reboot if you would rather
+     have that end state immediately.
 
   If the guest already had QWT, removing it can itself require a reboot. The
   script then stops with exit code 10 after the removal and tells you to reboot
@@ -93,10 +96,13 @@ Unattended (no second logon needed):
 
      D:\install.cmd /auto
 
-  This arms a SYSTEM scheduled task that resumes the install after the reboot,
-  and reboots again when done. Total: two reboots, no interaction -- three if
-  removing a pre-existing QWT demands its own reboot, which is also resumed
-  automatically by the same task.
+  This arms a SYSTEM scheduled task that resumes the install after the reboot.
+  Total: ONE reboot, no interaction -- two if removing a pre-existing QWT demands
+  its own, which is also resumed automatically by the same task.
+
+  One reboot is deliberate. qvm-create-windows-qube restarts a qube exactly once
+  after running the tools installer and then waits for the tools to report in, so
+  an installer that shuts the guest down a second time hangs it.
 
 Options:
      /auto    reboot and resume automatically
@@ -109,6 +115,8 @@ Options:
               the switches on the SAME command line.)
      /noidd   do NOT activate the IddCx driver; stay on the Basic Display
               Adapter (see below)
+     /reboot  reboot when the install finishes too, instead of leaving the PV
+              driver handover to the qube's next start
      /iddoff  RECOVERY, on a guest that already has the IDD: put it back on the
               Basic Display Adapter and reboot (see below)
      /iddonly add/activate the IddCx driver on a guest that already has QWT,
