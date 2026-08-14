@@ -132,3 +132,59 @@ proves the flow works when the packages install).
    CAB-only check rejected a valid 4.8 GB download and looped forever.
 7. DISM `rc=3010` means **staged**, not installed. Only the build number (`CurrentBuild.UBR`)
    proves an update landed.
+
+## RECOVERED FROM THE FABLE ANALYSIS (2026-08-14) - read this before designing anything
+
+Four independent lenses were run over the data above. Two converged on the same mechanism, and
+one produced the arithmetic that makes it the leading candidate:
+
+### The number that matters
+The modal connection carries **down=524800 = 524288 body + ~512 B of headers** - one 512 KiB
+Delivery Optimization piece. One piece per ~4.1 s tick is
+
+    524288 B / 4.1 s = 125 KB/s
+
+which IS the measured 120-150 KB/s, independently of link speed. A bandwidth ceiling stretches
+transfers; it does not create fixed idle gaps. The limiter is therefore the client's REQUEST
+CADENCE, not the pipe.
+
+### Leading hypothesis: our tunnel destroys HTTP keep-alive
+DoSvc/BITS issue HTTP/1.1 ranged GETs through WinHTTP expecting a persistent connection: against a
+real CDN, one connection streams many pieces back to back with ~0 ms between requests. Here:
+tinyproxy (the qubes.UpdatesProxy backend) serves ONE request per connection and closes, and our
+relay maps ONE qrexec channel to ONE TCP connection and tears it down after the response. So the
+completion-driven refill path dies with every piece, and the only surviving refill is DO's
+periodic job-scheduler callback (~4 s). Hence: burst of ~3 connections, one piece each, then
+silence until the next tick.
+
+This also explains why EVERY transport lever moved nothing: they all sit ABOVE the stall.
+
+### Correction to the dead list
+`DODownloadMode=100` (bypass to BITS) is **deprecated/ignored on Windows 11 24H2**. Both sides of
+that A/B ran DoSvc, so "DO bypass: dead (144 vs 126 KB/s)" tested nothing. Do not cite it.
+
+### The storage hypothesis is NOT refuted by path A
+Our 4.8 GB download wrote with large BUFFERED writes absorbed by the page cache. DO commits pieces
+with write-through/flush semantics (integrity requirement for resumable downloads), which defeats
+the cache and serialises on blkfront -> blkback -> thin-LVM -> physical flush. ~380 small
+synchronous IOs at 10-15 ms = 3.8-4.2 s, which fits the gap exactly as well. The two hypotheses
+are distinguishable only by measurement, not by argument.
+
+### Cheapest experiments, in order
+1. **Ceiling calibration THROUGH THE RELAY** (not from the dev qube - that leg is already known
+   healthy at 13.4 MB/s and does not exercise the vchan or tinyproxy). One ~32 MB ranged GET to
+   127.0.0.1:8082 using a URL copied verbatim from a recent `req=[GET ...]` line. If it sustains
+   multi-MB/s, the path is fine and the client cadence is the cause. If it is <= ~300 KB/s, every
+   WU comparison from today is invalid and the investigation moves to the path.
+2. **Keep-alive evidence** - the relay already buffers the request head, so log (a) the client's
+   `Connection:` header and (b) WHICH SIDE hits EOF first. Dead if the client says
+   `Connection: close` (it never wanted reuse) or if the client closes first.
+3. **I/O probe with the witness** during an active download - separates the write-through stall
+   from the timer. Already scripted and still unrun.
+
+### If keep-alive is confirmed, the fix is ours and is not exotic
+Terminate keep-alive LOCALLY in the relay: hold the client socket open, read the next request on
+it, and pair each request with a fresh pooled qrexec channel. The warm pool already makes a
+channel available in ~0 ms (warm=1 on 126 of 126 connections), so DO's completion-driven refill
+would work even though tinyproxy still closes upstream per request. That is a normal proxy-chain
+behaviour, entirely guest-side, and touches nothing in dom0 or the proxy qube.

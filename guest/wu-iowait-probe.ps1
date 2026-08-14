@@ -13,8 +13,36 @@ $paths = @(
     '\Processor(_Total)\% Processor Time',
     '\Processor(_Total)\% Idle Time'
 )
+# WITNESS. Without this the probe cannot fail: sampling an IDLE guest yields "disk idle AND CPU
+# idle", which reads exactly like the timer/scheduler verdict while actually meaning "no download
+# was running". Record proof that bytes moved DURING the sampling window, or refuse to conclude.
+$relayLog = 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log'
+$dlDir    = 'C:\Windows\SoftwareDistribution\Download'
+function Witness {
+  $rl = 0; if (Test-Path -LiteralPath $relayLog) { $rl = (Get-Item -LiteralPath $relayLog).Length }
+  $dl = 0
+  try { $dl = (Get-ChildItem -LiteralPath $dlDir -Recurse -File -ErrorAction SilentlyContinue |
+               Measure-Object -Property Length -Sum).Sum } catch { $dl = -1 }
+  if (-not $dl) { $dl = 0 }
+  return @{ relay = [long]$rl; down = [long]$dl }
+}
+$w0 = Witness
+
 $samples = Get-Counter -Counter $paths -SampleInterval 1 -MaxSamples 12 -ErrorAction SilentlyContinue
 if (-not $samples) { Write-Output 'counters unavailable'; exit 1 }
+
+$w1 = Witness
+$relayGrew = $w1.relay - $w0.relay
+$downGrew  = $w1.down  - $w0.down
+Write-Output '=== WITNESS (was a download actually in flight while we sampled?) ==='
+Write-Output ("relay_log_growth_bytes = {0}" -f $relayGrew)
+Write-Output ("download_dir_growth_bytes = {0}   (before={1} after={2})" -f $downGrew, $w0.down, $w1.down)
+$active = ($relayGrew -gt 0) -or ($downGrew -gt 0)
+Write-Output ("download_active_during_sample = {0}" -f $active)
+if (-not $active) {
+  Write-Output 'VERDICT UNAVAILABLE: nothing was downloading during the 12 s window.'
+  Write-Output 'Idle counters here mean IDLE GUEST, not "BITS/DO timer". Re-run during an active pass.'
+}
 
 $agg = @{}
 foreach ($s in $samples) {
