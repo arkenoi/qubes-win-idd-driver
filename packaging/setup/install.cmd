@@ -10,6 +10,10 @@ REM     install.cmd /auto        reboots and resumes by itself (unattended)
 REM     (the Qubes IddCx display driver is installed AND ACTIVATED BY DEFAULT -
 REM      it becomes the display, the emulated VGA adapter is disabled.
 REM      /idd is accepted but redundant; /noidd opts out.)
+REM     install.cmd /reboot      reboot when the install finishes as well. The install costs
+REM                              ONE reboot on its own; the PV drivers take over from the
+REM                              emulated disk/NIC at the qube's next start either way. Use
+REM                              this if you want that end state immediately.
 REM     install.cmd /noidd       do NOT activate the IddCx driver: leave the guest on the
 REM                              emulated Basic Display Adapter. The driver files still ship,
 REM                              nothing touches the driver store, the VGA adapter is left
@@ -68,6 +72,7 @@ if "%~1"=="" goto parsed
 if /i "%~1"=="/auto"   ( set "PSARGS=!PSARGS! -Auto"            & set "AUTO=1" & shift & goto parse )
 if /i "%~1"=="/idd"    ( set "PSARGS=!PSARGS! -InstallIddDriver" & shift & goto parse )
 if /i "%~1"=="/noidd"  ( set "PSARGS=!PSARGS! -NoIddDriver"      & shift & goto parse )
+if /i "%~1"=="/reboot" ( set "PSARGS=!PSARGS! -RebootAtEnd"     & shift & goto parse )
 if /i "%~1"=="/nonet"  ( set "PSARGS=!PSARGS! -NoPvNetwork"      & shift & goto parse )
 if /i "%~1"=="/nodisk" ( set "PSARGS=!PSARGS! -NoPvDisk"         & shift & goto parse )
 if /i "%~1"=="/acceptpvdiskupgrade" ( set "PSARGS=!PSARGS! -AcceptPvDiskUpgrade" & shift & goto parse )
@@ -77,7 +82,7 @@ if /i "%~1"=="/iddonly" ( set "IDDONLY=1" & shift & goto parse )
 if /i "%~1"=="/iddoff" ( set "IDDOFF=1" & shift & goto parse )
 if /i "%~1"=="/updatesonly" ( set "UPDATESONLY=1" & shift & goto parse )
 echo Unknown option: %~1
-echo Valid options: /auto /idd /noidd /iddonly /iddoff /updatesonly /noupdates /nonet /nodisk /acceptpvdiskupgrade /noapptweaks
+echo Valid options: /auto /idd /noidd /reboot /iddonly /iddoff /updatesonly /noupdates /nonet /nodisk /acceptpvdiskupgrade /noapptweaks
 exit /b 87
 :parsed
 
