@@ -3,8 +3,44 @@
 # a powershell launcher, even -WindowStyle Hidden, flashes a conhost window and kills Start).
 # The keypress is VK_LWIN injected GUEST-side, so it is unaffected by the agent's
 # BlockMenuKey filter (which drops the dom0-forwarded Super key).
+#
+# -Remove deletes the shortcut (and the opener), which is how the "Start Menu" entry disappears
+# from the qube's application shortcuts in dom0. A guest running a THIRD-PARTY SHELL - OpenShell
+# and friends - should not advertise an opener for the stock Windows Start menu it does not use.
+# That case is detected automatically from the same dom0 knob that frees the Super key:
+#
+#     qvm-features <vm> service.enableWinKey 1
+#
+# so a qube configured for OpenShell installs no stock-Start entry, and an existing one is removed
+# on the next run. Pass -Force to install it regardless.
+#
+# NOTE for the operator: dom0 caches the app list. After this runs, the entry only disappears once
+# dom0 re-reads it - `qvm-sync-appmenus <vm>` (or the Qube Settings "Applications" refresh).
+param([switch]$Remove, [switch]$Force)
 $ErrorActionPreference = 'Continue'
 $qtBin = 'C:\Program Files\Qubes Tools\bin'
+
+# Is this guest running its own shell? The dom0 feature is exported to the guest's qubesdb as
+# /qubes-service/enableWinKey (qubesdb-cmd READ works on Windows; only write is broken upstream).
+$thirdPartyShell = $false
+try {
+    $qdb = Join-Path $qtBin 'qubesdb-cmd.exe'
+    if (Test-Path $qdb) {
+        $v = (& $qdb read /qubes-service/enableWinKey 2>$null | Select-Object -First 1)
+        if ($v -and "$v".Trim() -ne '0') { $thirdPartyShell = $true }
+    }
+} catch { }
+
+$lnkDirEarly = 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs'
+$lnkPathEarly = Join-Path $lnkDirEarly 'Start Menu.lnk'
+if ($Remove -or ($thirdPartyShell -and -not $Force)) {
+    $had = Test-Path $lnkPathEarly
+    Remove-Item -LiteralPath $lnkPathEarly -Force -EA SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $qtBin 'open-start-menu.vbs') -Force -EA SilentlyContinue
+    $why = if ($Remove) { 'requested' } else { 'enableWinKey set - guest runs its own shell' }
+    @{ removed = $had; reason = $why; lnk = (Test-Path $lnkPathEarly) } | ConvertTo-Json -Compress
+    return
+}
 $vbsPath = Join-Path $qtBin 'open-start-menu.vbs'
 @'
 ' Open the Windows Start menu (dom0 qube-app shortcut target).
