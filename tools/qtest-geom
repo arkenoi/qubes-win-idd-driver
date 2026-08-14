@@ -1,0 +1,16 @@
+#!/bin/bash
+# Window list for a VM, WITHOUT looking at the desktop.
+#
+# local.WinFullScreen returns a tar of screen.png + geometry.txt. The PNG is a capture of the
+# WHOLE dom0 desktop - every other qube's windows, the user's mail, everything - and the
+# window list is the only part any of our diagnostics need. So extract geometry.txt and
+# DELETE the image without reading it. Owner's rule, 2026-08-14: whole-desktop captures stay
+# out of the repo and out of the transcript.
+set -uo pipefail
+VM="${QTEST_VM:-win-idd-test}"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+qrexec-client-vm dom0 "local.WinFullScreen+$VM" </dev/null > "$tmp/f.tar" 2>/dev/null || true
+[ -s "$tmp/f.tar" ] || { echo "no geometry returned for $VM (service refused or no windows)"; exit 1; }
+tar xf "$tmp/f.tar" -C "$tmp" ./geometry.txt 2>/dev/null || tar xf "$tmp/f.tar" -C "$tmp" geometry.txt 2>/dev/null
+rm -f "$tmp"/*.png "$tmp"/./*.png 2>/dev/null
+[ -f "$tmp/geometry.txt" ] && cat "$tmp/geometry.txt" || { echo "no geometry.txt in the response"; exit 1; }
