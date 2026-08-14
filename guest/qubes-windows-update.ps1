@@ -360,14 +360,68 @@ function Fetch-Msu($url,$dst,$kb){
 # reported failure, including one that had returned 3010. Keep it adjacent to its only consumers.
 $OK_RC = @(0, 3010, 2359302)
 
+# ASK DISM WHETHER A PACKAGE APPLIES, BEFORE INSTALLING IT.
+# Measured 2026-08-13/14 on a 24H2 image: the catalog returns SEVERAL .msu per KB, and we ran all
+# of them. kb5043080 came back rc=552 and DISM's own log said "Not applicable ... Feature:
+# CumulativeUpdate_KB5043080"; the real cumulative then staged (3010) and was ROLLED BACK at boot
+# with 0x80070490 / CBS_E_INVALID_PACKAGE. Running an inapplicable package is not free - it can
+# leave the servicing session in a state the applicable one cannot complete from.
+#
+# /Get-PackageInfo answers the question directly and changes nothing. Returns a hashtable:
+#   applicable : Yes | No | unknown        state : Installed | Not Present | Install Pending | ...
+#   identity   : the CBS package identity, which also tells us what KIND of package it is
+function Get-MsuInfo($path){
+  $out = & DISM /Online /Get-PackageInfo /PackagePath:"$path" /English 2>&1
+  $info = @{ applicable='unknown'; state='unknown'; identity=''; rc=$LASTEXITCODE }
+  foreach($l in $out){
+    if($l -match '^\s*Applicable\s*:\s*(\S+)')       { $info.applicable = $Matches[1] }
+    elseif($l -match '^\s*State\s*:\s*(.+?)\s*$')     { $info.state      = $Matches[1] }
+    elseif($l -match '^\s*Package Identity\s*:\s*(\S+)'){ $info.identity  = $Matches[1] }
+  }
+  return $info
+}
+
+# Servicing order matters: a servicing-stack update must be installed BEFORE the cumulative that
+# requires it, and the file size we used to sort by is only a proxy for that. The CBS identity
+# names the kind, so order by it and fall back to size.
+function Order-Msus($files){
+  $ranked = @()
+  foreach($f in $files){
+    $id = ''
+    try { $id = (Get-MsuInfo $f).identity } catch { $id = '' }
+    $rank = 2                                             # default: everything else
+    if($id -match 'ServicingStack|SSU')   { $rank = 0 }   # servicing stack first
+    elseif($id -match 'Checkpoint')       { $rank = 1 }   # then any checkpoint package
+    elseif($id -match 'RollupFix|LCU')    { $rank = 3 }   # cumulative last
+    $ranked += [pscustomobject]@{ path=$f; rank=$rank; size=(Get-Item $f).Length; id=$id }
+  }
+  return ,@($ranked | Sort-Object rank, size | ForEach-Object { $_.path })
+}
+
 function Install-Msus($files){
   $reboot=$false; $rows=@()
-  foreach($f in ($files | Sort-Object { (Get-Item $_).Length })){   # smallest-first: SSU/checkpoint before LCU
-    $script:St.installing=[ordered]@{ file=[IO.Path]::GetFileName($f); state='running' }; Save
+  foreach($f in (Order-Msus $files)){
+    $name = [IO.Path]::GetFileName($f)
+    $pi = Get-MsuInfo $f
+    Log "  $name applicable=$($pi.applicable) state=$($pi.state) id=$($pi.identity)"
+    if($pi.applicable -eq 'No'){
+      # SKIPPED, not failed: this package was never meant for this image. Recording it as a
+      # failure is what made a whole KB look broken when only a catalog sibling was irrelevant.
+      $rows += [ordered]@{ file=$name; rc='skipped'; why="not applicable to this image" }
+      continue
+    }
+    if($pi.state -eq 'Installed'){
+      $rows += [ordered]@{ file=$name; rc='skipped'; why="already installed" }
+      continue
+    }
+    $script:St.installing=[ordered]@{ file=$name; state='running' }; Save
     & DISM /Online /Add-Package /PackagePath:"$f" /NoRestart /Quiet /LogPath:"$WorkDir\dism.log" | Out-Null
     $rc=$LASTEXITCODE; if($rc -eq 3010){$reboot=$true}
-    $rows += [ordered]@{ file=[IO.Path]::GetFileName($f); rc=$rc }
-    Log "  DISM $([IO.Path]::GetFileName($f)) rc=$rc"
+    # Re-ask DISM what the package's state is NOW. rc=3010 only means "staged"; the state tells us
+    # whether CBS actually took it, which is the thing that was silently false before.
+    $after = Get-MsuInfo $f
+    $rows += [ordered]@{ file=$name; rc=$rc; state_after=$after.state }
+    Log "  DISM $name rc=$rc state_after=$($after.state)"
   }
   # STICKY, never assigned: Install-Msus runs once per KB, so assigning would let a later KB
   # that needs no reboot erase an earlier one that does. Measured 2026-08-13 on the template:
@@ -409,6 +463,22 @@ try {
         # each KB makes that impossible and keeps resume/reuse working.
         $kbDir = Join-Path $WorkDir $u.kb
         New-Item -ItemType Directory -Force $kbDir | Out-Null
+        # ASK BEFORE DOWNLOADING. The catalog's DownloadDialog returns every file bundled with an
+        # update, including SUPERSEDED cumulatives: for KB5121003 it returns kb5043080 (2024-09)
+        # alongside the one we want. On a 26100.8875 image the older one is not applicable, DISM
+        # rejects it with rc=552, and feeding it to CBS first preceded the cumulative being rolled
+        # back at boot with 0x80070490. The KB is in the URL, so this costs no bytes to decide.
+        # /Get-PackageInfo cannot help here - measured: it reports the superseded package as
+        # "Applicable: Yes, State: Installed, identity OnePackage~~~~0.0.0.0", i.e. nothing usable.
+        $digits = ($u.kb -replace '\D', '')
+        $matching = @($urls | Where-Object { $_ -match $digits })
+        if ($matching.Count -gt 0 -and $matching.Count -lt $urls.Count) {
+          Log ("  " + $u.kb + ": " + ($urls.Count - $matching.Count) + " of " + $urls.Count +
+               " catalog file(s) are for other KBs - not downloading them")
+          $urls = $matching
+        } elseif ($matching.Count -eq 0) {
+          Log ("  " + $u.kb + ": no catalog file names mention the KB - keeping all " + $urls.Count)
+        }
         $i=0; foreach($url in $urls){ $i++; $name="$($u.kb)_$i.msu"; if($url -match '/([^/?]+\.msu)'){$name=$Matches[1]}
           $dst=Join-Path $kbDir $name; if(Fetch-Msu $url $dst $u.kb){ $got+=$dst } }
       } else { $got = @(Get-ChildItem (Join-Path (Join-Path $WorkDir $u.kb) '*.msu') -EA SilentlyContinue | ForEach-Object FullName) }
