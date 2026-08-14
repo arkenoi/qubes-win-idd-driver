@@ -22,44 +22,26 @@ if [ ! -f "$STUB" ]; then
     exit 0
 fi
 
-# WHERE IS IT? Do not assume. qvm-create-windows-qube is a git clone, so it lives wherever
-# its owner put it, and a hardcoded list of paths is a guess dressed up as a check: measured
-# 2026-08-14, a clone at ~/git/qvm-create-windows-qube made this script report "nothing to
-# do" - the same silent nothing-happened the script exists to prevent (a Windows qube
-# provisioned with no tools installed and no error anywhere, forum 42717 post 27).
-#
-# Three sources, in order of certainty, all of them evidence rather than assumption:
-#   1. an explicit path given on the command line - always wins, needs no discovery;
-#   2. wherever the qvm-create-windows-qube entry point actually resolves to;
-#   3. a bounded search of the real home directories (read from the passwd database, not
-#      globbed from /home) plus the usual system prefixes.
+# WHERE IS IT? Two sources, both evidence, NEITHER of them a search:
+#   1. an explicit path on the command line - always wins;
+#   2. wherever the qvm-create-windows-qube entry point on PATH resolves to.
+# Deliberately no filesystem crawl. This runs from an RPM %post in dom0; walking somebody's
+# home directories to guess where they cloned a git repo is not something a package scriptlet
+# gets to do, and a hardcoded list of paths is the same guess with worse coverage. If it is
+# somewhere else, the user says so - see the message at the end.
 candidates=""
 for arg in "$@"; do
-    [ -d "$arg" ] && candidates="$candidates $arg"
-    [ -d "$arg" ] || echo "qwt-ng-fix-qwcq: '$arg' is not a directory - ignored"
+    if [ -d "$arg" ]; then
+        candidates="$candidates $arg"
+    else
+        echo "qwt-ng-fix-qwcq: '$arg' is not a directory - ignored"
+    fi
 done
 
 if entry=$(command -v qvm-create-windows-qube 2>/dev/null); then
     real=$(readlink -f "$entry" 2>/dev/null) && candidates="$candidates $(dirname "$real")"
 fi
-
-if [ -z "${candidates# }" ]; then
-    roots="/root /opt /usr/local /usr/share"
-    # Real home directories, whatever they are - /home is a convention, not a guarantee.
-    while IFS=: read -r _u _p _uid _gid _gecos home _shell; do
-        case "$home" in /|/nonexistent|/dev/null|"") continue ;; esac
-        [ -d "$home" ] && roots="$roots $home"
-    done < /etc/passwd
-    roots=$(printf '%s\n' $roots | sort -u)
-    for base in $roots; do
-        while IFS= read -r hit; do
-            [ -n "$hit" ] && candidates="$candidates $(dirname "$(dirname "$(dirname "$hit")")")"
-        done <<EOF
-$(find "$base" -maxdepth 6 -type f -path '*/tools/auto-qwt/install-qwt.bat' 2>/dev/null)
-EOF
-    done
-fi
-# De-duplicate: the argument, the entry point and the search can all name the same tree.
+# De-duplicate: the argument and the entry point can name the same tree.
 candidates=$(printf '%s\n' $candidates | sort -u)
 
 patched=0 seen=0
@@ -81,12 +63,10 @@ for root in $candidates; do
 done
 
 if [ "$seen" = 0 ]; then
-    echo "qwt-ng-fix-qwcq: no qvm-create-windows-qube installation found - nothing to do."
-    echo "  Searched: an explicit path (none given), \$(command -v qvm-create-windows-qube),"
-    echo "  and every home directory in /etc/passwd plus /root /opt /usr/local /usr/share."
-    echo "  If your clone is somewhere else, point this at it - it takes a path:"
+    echo "qwt-ng-fix-qwcq: qvm-create-windows-qube not found on PATH - nothing patched."
+    echo "  If you have it, give this its directory (it will not go looking for it):"
     echo "      qwt-ng-fix-qwcq /path/to/qvm-create-windows-qube"
-    echo "  Without it, qvm-create-windows-qube provisions a Windows qube whose tools install"
-    echo "  silently does nothing at all."
+    echo "  Until then qvm-create-windows-qube provisions a Windows qube whose tools install"
+    echo "  silently does nothing: its stub globs for qubes-tools-*.exe, which is not on this ISO."
 fi
 exit 0
