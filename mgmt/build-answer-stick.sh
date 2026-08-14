@@ -26,6 +26,8 @@
 #
 # Usage: ./build-answer-stick.sh [image-name]
 #   env: RELEASE_SETUP=<dir>  QWT package to stage under \payload\release (installed at logon)
+#        REAL_STOCK_EXE=<exe> install GENUINE upstream QWT instead (qubes-tools-*.exe from the
+#                             vendor ISO) - the starting point for the upgrade-path tests
 #        OUT=<img>            output image (default ~/win-iso/answer-usb.img)
 #        LOCALE=              en-GB | en-US ... MUST match the media or Setup ignores the file
 #        KEYBOARD=            input locale id, defaulted per LOCALE
@@ -133,6 +135,30 @@ call "%~dp0release\install.cmd" /auto >> C:\qubes-win-idd-setup.log 2>&1
 echo install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
 STOCKEOF
     echo "payload: STOCK control staged, installed via our own installer (no /idd)"
+fi
+
+# REAL_STOCK_EXE: install GENUINE upstream Qubes Windows Tools, by running the vendor's own
+# qubes-tools-<ver>.exe from its ISO. Not the same thing as STOCK_SETUP above, which installs
+# the stock MSI through OUR installer to keep a benchmark control single-variable. This one
+# exists for the UPGRADE path: forum 42717 post 27 reports that upgrading a working stock-QWT
+# qube with a newer build drops the boot disk back to emulated IDE and the next boot crashes
+# (0x7B), leaving the qube broken until the user knows the safe-mode trick. Reproducing that
+# needs a guest carrying real stock QWT first, installed exactly as a user would have it.
+if [ -n "${REAL_STOCK_EXE:-}" ]; then
+    [ -f "$REAL_STOCK_EXE" ] || { echo "REAL_STOCK_EXE not a file: $REAL_STOCK_EXE" >&2; exit 1; }
+    [ -n "${RELEASE_SETUP:-}${STOCK_SETUP:-}" ] && { echo "ERROR: REAL_STOCK_EXE is mutually exclusive with RELEASE_SETUP/STOCK_SETUP" >&2; exit 1; }
+    mkdir -p "$WORK/payload/stock"
+    cp "$REAL_STOCK_EXE" "$WORK/payload/stock/"
+    _exe=$(basename "$REAL_STOCK_EXE")
+    cat > "$WORK/payload/setup.cmd" <<EOF
+@echo off
+rem Found by the FirstLogonCommands drive-letter scan: <drive>:\payload\setup.cmd
+echo === answer-stick payload (GENUINE upstream QWT) === >> C:\qubes-win-idd-setup.log
+rem /passive is what qvm-create-windows-qube uses; the bundle reboots by itself when done.
+start /wait "" "%~dp0stock\\$_exe" /passive >> C:\qubes-win-idd-setup.log 2>&1
+echo stock installer rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
+EOF
+    echo "payload: GENUINE stock QWT staged ($_exe), installed with /passive"
 fi
 
 cp "$HERE/../guest/firstboot-setup.ps1" "$WORK/payload/" 2>/dev/null || true
