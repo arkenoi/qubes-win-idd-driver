@@ -9589,3 +9589,31 @@ screens arrive as override-redirect surfaces that cannot be managed. Make the be
   * present it SMALL and NOT override-redirect, so dom0 can place and decorate it like any window,
   * and RESTORE the previous mode when the pass finishes (including on failure and on the reboot
     path, which is where a naive implementation would leave the guest stuck in the update mode).
+
+## 2026-08-14 — THE SERIALISED PATH LANDS: 26100.8875 -> 26100.9168
+
+Second pass, shipping default (multistage override cleared), single package, cached .msu reused
+(416 "already complete" - no 4.8 GB re-fetch, which is what preserving a staged package bought):
+
+    build = 26100.9168 (24H2)
+    KB5121003 installed = True        KB5120710 installed = True
+    RebootPending absent   winsxs pending.xml absent   DISM: no component store corruption
+
+The acceptance criterion that stood unproven all day is met. One reboot-requiring package per pass,
+dom0 driving a second pass for the deferred one, is a WORKING model - not just the right diagnosis.
+
+### The teardown hang, and why the kill was safe
+
+The apply took far longer than the 6.3 min known-good run and the guest sat on "Restarting" burning
+exactly ONE core. That is consistent with the offline commit (poqexec is single-threaded by design;
+the multi-core phase is TiWorker staging, which had already finished at 842 CPU-s). But the real
+story was visible in dom0: `qvm-ls` showed **Transient**, not Running, for 8+ minutes - Windows had
+finished and issued its restart, and it was the DOMAIN TEARDOWN that hung (`on_reboot=destroy`).
+
+So the kill destroyed an already-committed Windows, not a live transaction - confirmed by the clean
+CBS state and the successful build above. Worth knowing for next time: on this rig a stuck
+"Restarting" should be diagnosed from dom0 state FIRST. Running = still working; Transient = Windows
+is done and the domain is failing to go away, where a kill is safe and correct.
+
+Unresolved: WHY the teardown hangs. Not investigated - it cost ~20 minutes here and would strand a
+user who does not know to kill the qube.
