@@ -28,7 +28,12 @@ param(
   [string]$Proxy      = 'http://127.0.0.1:8082',
   [string]$RelayExe   = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe',
   [string]$WorkDir    = 'C:\ProgramData\Qubes\wu',
-  [string]$StatusFile = 'C:\ProgramData\Qubes\update-status.json'
+  [string]$StatusFile = 'C:\ProgramData\Qubes\update-status.json',
+  # Restrict a pass to specific KBs (e.g. -OnlyKb KB5120710). Diagnostic control, not a policy
+  # knob: a normal dom0-driven pass passes nothing and takes everything offered. It exists so a
+  # multi-gigabyte cumulative and a small package can be tested one at a time rather than as an
+  # all-or-nothing batch - the batch is precisely what made the 24H2 failure unattributable.
+  [string[]]$OnlyKb   = @()
 )
 $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force (Split-Path $StatusFile) | Out-Null
@@ -282,6 +287,14 @@ function Test-Msu($path, $expect) {
 }
 
 function Fetch-Msu($url,$dst,$kb){
+  # Throughput is a first-class output here, not a nicety: every rate figure recorded for this
+  # tunnel so far was taken while the guest was also talking to telemetry endpoints the proxy
+  # allowlist now blocks, so none of them describe the shipping configuration. Log bytes and
+  # wall time per attempt and let the numbers come from the real workload.
+  # Measured against what was on disk when this call began, so a resumed download reports the
+  # bytes IT moved rather than crediting itself with an earlier attempt's progress.
+  $tStart = Get-Date
+  $startLen = if (Test-Path $dst) { (Get-Item $dst).Length } else { 0 }
   for($a=1;$a -le 8;$a++){
     $have=0; if(Test-Path $dst){$have=(Get-Item $dst).Length}; $o=$null; $expect=0
     try{
@@ -322,6 +335,10 @@ function Fetch-Msu($url,$dst,$kb){
         continue                                                    # keep the bytes, resume them
       }
       $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($have/1MB,1);pct=100}; Save
+      $bytesThisRun = $have - $startLen
+      $secs = [math]::Max(((Get-Date) - $tStart).TotalSeconds, 0.001)
+      Log ("  THROUGHPUT {0}: {1:N1} MB fetched in {2:N0}s = {3:N0} KB/s (file now {4:N1} MB, {5} attempt(s))" -f `
+           [IO.Path]::GetFileName($dst), ($bytesThisRun/1MB), $secs, ($bytesThisRun/1KB/$secs), ($have/1MB), $a)
       return $true
     }catch{
       if($o){try{$o.Close()}catch{}}
@@ -439,6 +456,14 @@ try {
   $script:St.available=$avail; $script:St.count=$avail.Count; Save
   Log "scan: $($avail.Count) update(s) available"
   Report-Availability $avail.Count    # -> dom0 Qube Manager (default-allowed for TemplateVMs)
+
+  # Applied AFTER reporting: dom0 must always hear the true number of available updates. -OnlyKb
+  # narrows what THIS pass acts on, it does not narrow what the guest admits to.
+  if ($OnlyKb.Count -gt 0) {
+    $before = $avail.Count
+    $avail = @($avail | Where-Object { $k = $_.kb; @($OnlyKb | Where-Object { $k -match $_ }).Count -gt 0 })
+    Log ("-OnlyKb " + ($OnlyKb -join ',') + ": acting on $($avail.Count) of $before offered update(s)")
+  }
 
   if ($Action -eq 'wuinstall') {
     $script:St.result = Install-ViaWU
