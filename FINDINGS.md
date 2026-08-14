@@ -9784,3 +9784,63 @@ next boot, and accepting that the qube is handed back on emulated IDE/NIC and th
 Adapter until it is started again. That is what stock does, and it is what makes an UNPATCHED
 qvm-create-windows-qube work: its flow restarts the qube exactly once and then waits forever
 for os=Windows, which hangs on any installer that needs a second reboot.
+
+## 2026-08-14 (night) — Win10 rig rebuilt: post 33 FIXED and measured, post 54 does NOT reproduce,
+## and my own headless hypothesis is REFUTED on both platforms
+
+Rig: win10-clean rebuilt from the untouched vendor ISO via the USB answer stick, now with
+EnableLUA=0 so it can actually be driven (the old answer file kept UAC on, which is why nothing
+elevated could ever run there). Two runs, same ISO, same route, ONLY the package differs.
+
+### The Xen restart prompt blocks the install - reproduced, then fixed
+
+Run 1, shipped **4.3.1**: the modal "Xen PV Storage Host Adapter needs to restart the system to
+complete installation" appeared on the dom0 desktop and the install NEVER completed - 70+ minutes,
+one core spinning, qrexec never came up, and the user confirmed the dialog was NOT clickable.
+That is forum 42717 post 33 reproduced, and it is FATAL, not cosmetic.
+
+Run 2, **4.3.2** with the fix (xenbus_monitor AutoReboot=1 written at the start of stage 1 and
+again before msiexec, instead of after the install that raises the prompt):
+
+    qrexec alive after 945 s (~16 min), install RESULT ok:true, xenbus_autoreboot: true
+
+No dialog, no hang. Same rig, same media, same route - a defect-present/defect-absent pair.
+
+### The solo re-assert works, seen live on a real install
+
+    19:10:08  IDD solo: found IDD adapter '\\.\DISPLAY2', attached=1 primary=0
+    19:10:08  IDD solo: detach '\\.\DISPLAY1' -> 0 ... OK - sole active display
+    19:10:12  IDD solo: detach '\\.\DISPLAY3' -> 0 ... OK - sole active display
+
+DISPLAY3 arrived AFTER agent startup and was detached automatically. Before today nothing
+re-asserted the topology, so that display would have stayed attached until the next reboot -
+which is what put the guest's taskbar at x=1920, outside the region dom0 sees.
+
+### Post 54 (Win10 black screen after the activation reboot) does NOT reproduce
+
+On the boot after IDD activation: ATTACHED=1, the IDD sole+primary at 5120x1440, the BDA
+offline, qrexec answering, and Notepad rendering in dom0 (screenshot). The guest is healthy.
+
+### RETRACTION: "the agent can leave the desktop with no display" is refuted
+
+I proposed that mechanism this morning for GWeck's black screen and built two guards for it.
+With the failure injected deliberately (SoloFaultInject=2, rollback suppressed), on the very
+platform he reports:
+
+    Win10 19045: detach '\\.\DISPLAY3' -> 0     <- the last display CAN be detached...
+                 set-primary <bogus> -> -5
+                 readback: '\\.\DISPLAY2' is the sole active display
+                 ...and Windows then attached the IDD BY ITSELF. Never headless.
+
+    Win11 26200: detach -> -2 (DISP_CHANGE_BADMODE)  <- refuses to detach the last display
+
+Two different mechanisms, same conclusion: neither build lets the desktop end up with no
+attached output by this path. The rollback added in 6ea0822 is therefore DEAD CODE on both
+tested builds. It stays as cheap defence in depth, but it is NOT the explanation for post 54
+and must not be presented as one. The readiness gate stands on its own (do not attempt an
+apply the IDD cannot accept yet).
+
+WHAT REMAINS UNEXPLAINED: GWeck's Win10 black screen. We now have his platform, his package
+path and his install flow on a rig that behaves correctly, so the difference is something in
+his environment - most likely his actual display hardware (a disabled laptop panel plus an
+external monitor, per post 54) which our emulated single-head guest cannot reproduce.
