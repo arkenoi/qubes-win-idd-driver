@@ -502,6 +502,9 @@ $OK_RC = @(0, 3010, 2359302)
 # Set the moment any package is STAGED (rc=3010). CBS applies exactly one staged session per
 # boot; a second package staged behind the first is silently discarded, so the pass stops
 # staging once this is true and the next pass picks up the rest after the reboot.
+# Set QUBES_UPDATES_ALLOW_MULTISTAGE=1 to stage several packages anyway - Windows DOES aggregate
+# packages per reboot normally, so the one-per-session rule rests on a single observation and must
+# stay falsifiable. That variable is how the aggregation question gets re-tested.
 $script:StagedThisSession = $false
 
 # ASK DISM WHETHER A PACKAGE APPLIES, BEFORE INSTALLING IT.
@@ -571,7 +574,7 @@ function Install-Msus($files){
     # So once something is staged, stop. The remaining packages stay on disk and the next pass -
     # after the reboot this one forces - picks them up. Slower, and the only way the second package
     # actually lands.
-    if ($script:StagedThisSession) {
+    if ($script:StagedThisSession -and -not $env:QUBES_UPDATES_ALLOW_MULTISTAGE) {
       $rows += [ordered]@{ file=$name; rc='deferred'
                            why='another package is already staged; installing it needs a reboot first' }
       Log "  DEFER $name - a reboot-requiring package is already staged this session"
@@ -592,6 +595,37 @@ function Install-Msus($files){
   # KB5120710 returned 3010 (reboot required), KB5121003 then returned 0, and the pass ended
   # claiming reboot_needed=false while Windows had CBS RebootPending set.
   if ($reboot) { $script:St.reboot_needed = $true }
+
+  # SETTLE BEFORE DECLARING ANYTHING. DISM returning 3010 does NOT mean CBS has finished
+  # registering the package: TiWorker keeps working after the exit code. Measured 2026-08-14 - the
+  # pass reported done, the qube shut down 22 s later, the shutdown took 77 s where a real apply
+  # takes 6.3 min, and the cumulative ended with ZERO CBS entries. A staged package that has not
+  # reached "reboot pending" is not staged yet, and rebooting there loses it.
+  #
+  # NOTE this is also the test that decides WHY it was lost. Windows aggregates many packages per
+  # reboot routinely, so "CBS only applies one staged package" is a weak claim on one observation.
+  # If RebootPending appears here and the package is still discarded at boot, the aggregation story
+  # is real; if RebootPending never appears, the loss was this race and serialising was treating a
+  # symptom.
+  if ($reboot) {
+    $rp = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+    $deadline = (Get-Date).AddMinutes(10)
+    $seen = $false
+    while ((Get-Date) -lt $deadline) {
+      if (Test-Path $rp) { $seen = $true; break }
+      Start-Sleep -Seconds 5
+    }
+    $ti = @(Get-Process TiWorker, TrustedInstaller -EA SilentlyContinue).Count
+    Log ("  settle: CBS RebootPending={0} after staging, servicing processes still up={1}" -f $seen, $ti)
+    $script:St.reboot_pending_confirmed = $seen
+    if (-not $seen) {
+      Log '  WARNING: staged but CBS never reported RebootPending - a reboot now would lose it'
+    }
+    # Let TiWorker finish its post-DISM work; rebooting mid-registration is what loses a package.
+    $q = (Get-Date).AddMinutes(10)
+    while ((Get-Date) -lt $q -and @(Get-Process TiWorker -EA SilentlyContinue).Count -gt 0) { Start-Sleep -Seconds 10 }
+    Log ("  settle: TiWorker idle={0}" -f (@(Get-Process TiWorker -EA SilentlyContinue).Count -eq 0))
+  }
   return $rows
 }
 
