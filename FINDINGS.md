@@ -9753,3 +9753,34 @@ Win11 26100 carrying only the updater stack, not a Win10 template that has had t
 installed. The remaining candidates are Win10-specific behaviour, or template state (a pending
 servicing operation, or a profile that MoveUsers relocated onto the template's private volume,
 which an AppVM does not inherit). The Win10 rig now provisioning is what can test those.
+
+## 2026-08-14 (evening) — stock QWT is NOT Microsoft-signed either, so signing is not what costs us the extra reboot
+
+Question raised by the user: do we need proper signing to collapse our two-reboot install to
+one, and does stock QWT have it? Measured on the shipped stock artifact rather than assumed
+(`/usr/lib/qubes/qubes-windows-tools.iso` from `qubes-windows-tools-4.2.2-1.fc41.noarch.rpm`):
+
+  * the ISO contains exactly one file plus a README: `qubes-tools-4.2.2.exe` - which is why
+    qvm-create-windows-qube globs for `qubes-tools-*.exe`;
+  * that bundle has **no Authenticode signature at all** (PE certificate table size 0);
+  * carving its Burn attached container out and extracting `installer.msi` gives 40 PE files,
+    **all 40 signed**, and the signer of a native (kernel-mode) one is
+    **CN="Qubes Windows Tools"** - a private certificate. DigiCert appears only as the
+    TIMESTAMP authority, not as the issuer.
+
+A kernel-mode driver signed by a private CA does not load on Windows 10/11 without testsigning,
+exactly like ours. So stock QWT is in the same position we are, and an EV certificate or
+Microsoft attestation signing is NOT what would buy a single reboot.
+
+CONSEQUENCE. Our second reboot is a design choice, not a signing consequence. Stage 1 already
+imports our cert into Root and TrustedPublisher, which is what makes driver INSTALLATION
+succeed; only LOADING needs testsigning, and any single reboot that enables it satisfies that.
+What actually forces our split is that the installer VERIFIES its own work inline - `devcon
+install` then wait for the IDD to bind with ConfigManagerErrorCode 0 before disabling the VGA,
+plus the PV-drivers-bound assertions - and none of that can pass before the drivers can load.
+
+So collapsing to one reboot means moving activation and verification to a one-shot task on the
+next boot, and accepting that the qube is handed back on emulated IDE/NIC and the Basic Display
+Adapter until it is started again. That is what stock does, and it is what makes an UNPATCHED
+qvm-create-windows-qube work: its flow restarts the qube exactly once and then waits forever
+for os=Windows, which hangs on any installer that needs a second reboot.
