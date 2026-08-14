@@ -139,12 +139,19 @@ function Get-Available {
   return ,$out
 }
 
-# WU-NATIVE INSTALL. The catalog+DISM path cannot service every image: measured 2026-08-13 on a
-# VIRGIN 24H2 template (isolated per-KB directory, verified downloads, no stale packages), the
-# cumulative KB5121003 was staged with DISM rc=3010 and then ROLLED BACK at boot with 0x80070490 /
-# CBS_E_INVALID_PACKAGE, because its checkpoint prerequisite kb5043080 is "not applicable" to the
-# image (DISM rc=552). Deciding WHICH packages an image needs, and in what order, is exactly what
-# the Windows Update agent does and what we were reimplementing badly by scraping the catalog.
+# WU-NATIVE INSTALL - RETAINED AS A FALLBACK ONLY. Do not restore it as the default.
+#
+# CORRECTED 2026-08-14. This block used to say the catalog+DISM path "cannot service every image",
+# citing KB5121003 being staged (rc=3010) and then ROLLED BACK at boot with 0x80070490 /
+# CBS_E_INVALID_PACKAGE, and calling kb5043080 its "checkpoint prerequisite". That diagnosis was
+# WRONG and the conclusion drawn from it was backwards. kb5043080 is not a prerequisite: it is a
+# SUPERSEDED 2024-09 cumulative that the catalog bundles with the download, DISM rejects as not
+# applicable (rc=552), and whose rejection poisons the CBS transaction the real cumulative then
+# rides into. Dropping it BEFORE download makes the same image, the same package and the same DISM
+# path install cleanly: verified 26100.8875 -> 26100.9168 with KB5043080 never present.
+#
+# So the catalog path does decide correctly which package an image needs - it just must not hand
+# CBS the ones it does not.
 #
 # The searcher already runs online through our proxy (Get-Available), so the same session's
 # downloader and installer can too. Delivery Optimization is forced into simple mode first,
