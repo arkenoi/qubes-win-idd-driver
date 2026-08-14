@@ -160,10 +160,19 @@ offered, and matching the guest resolution to a dom0 window is unreachable by co
 
 This package installs and **activates the Qubes IddCx display driver by default** — an IddCx
 monitor becomes the guest's **sole active output** and the emulated VGA is disabled, so the
-guest resolution follows the dom0 window with no fixed-mode snapping. There is no switch to
-turn it off; the Basic Display Adapter is a failure state, not an option. (If activation ever
+guest resolution follows the dom0 window with no fixed-mode snapping. (If activation ever
 fails the install still completes so the guest is usable, and the failure is flagged loudly in
 the install log for retry.)
+
+It can be turned off. Arbitrary resolutions are the only thing that depends on it, so a guest
+on the Basic Display Adapter is a reduced configuration, not a broken one — and on hardware or
+a Windows build where the IDD misbehaves, being able to say so beats a guest with no display:
+
+- `install.cmd /noidd` — fresh install, never activate it;
+- `install.cmd /iddoff` — a guest that already has it: back to the Basic Display Adapter and
+  reboot. This is also the **recovery** path when a guest comes up with a black, unresponsive
+  window, and it works over qrexec with no usable display in the guest;
+- `install.cmd /iddonly` — (re)activate it later.
 
 Two things are worth knowing about how it behaves, because they are not obvious:
 

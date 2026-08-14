@@ -45,6 +45,15 @@ try {
         throw 'testsigning is NOT active in this boot - the test-signed IDD driver cannot load. Run the full installer once (it enables testsigning) before /iddonly.'
     }
 
+    # deactivate-idd.ps1 (/iddoff) sets NoTopologyApply=1 to stop the agent detaching displays.
+    # Re-activating must clear it, or the IDD would be created and then never attached - the
+    # exact "connected but inactive, black screen" state /iddoff exists to escape.
+    $qkey = 'HKLM:\SOFTWARE\QubesIDD'
+    if ((Get-ItemProperty -LiteralPath $qkey -Name 'NoTopologyApply' -ErrorAction SilentlyContinue).NoTopologyApply) {
+        Remove-ItemProperty -LiteralPath $qkey -Name 'NoTopologyApply' -Force -ErrorAction SilentlyContinue
+        Log 'cleared HKLM\SOFTWARE\QubesIDD!NoTopologyApply (set by a previous /iddoff)'
+    }
+
     $iddDir  = Join-Path $Root 'idd-driver'
     $iddHwId = 'root\iddsampledriver'
     $devcon  = Join-Path $iddDir 'devcon.exe'

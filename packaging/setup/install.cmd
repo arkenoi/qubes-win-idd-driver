@@ -8,12 +8,21 @@ REM  Usage:
 REM     install.cmd              two stages, you reboot between them
 REM     install.cmd /auto        reboots and resumes by itself (unattended)
 REM     (the Qubes IddCx display driver is installed AND ACTIVATED BY DEFAULT -
-REM      it becomes the display, the emulated VGA adapter is disabled; there is
-REM      no switch to skip it. /idd is accepted but redundant.)
+REM      it becomes the display, the emulated VGA adapter is disabled.
+REM      /idd is accepted but redundant; /noidd opts out.)
+REM     install.cmd /noidd       do NOT activate the IddCx driver: leave the guest on the
+REM                              emulated Basic Display Adapter. The driver files still ship,
+REM                              nothing touches the driver store, the VGA adapter is left
+REM                              enabled. Use this if the IDD misbehaves on your hardware -
+REM                              you lose arbitrary/dom0-following resolutions, everything
+REM                              else works. See the IddCx section of README.txt.
 REM     install.cmd /iddonly     add/activate the IddCx driver on a guest that ALREADY has
 REM                              QWT installed, WITHOUT re-running the MSI - no version gate,
 REM                              no PV-disk 0x7B gate. Use this to add IDD to an install that
 REM                              predates IDD-by-default. Reboots when done.
+REM     install.cmd /iddoff      the reverse of /iddonly, and the RECOVERY path: re-enable the
+REM                              emulated VGA adapter and remove the IDD device on a guest that
+REM                              already has it, without touching QWT. Reboots when done.
 REM     install.cmd /updatesonly deploy the Windows Update agent on a guest that ALREADY has
 REM                              QWT: compiles the relay, places the agent, and registers the
 REM                              scheduled scan that reports update availability to dom0. No MSI.
@@ -51,15 +60,17 @@ set "IDDONLY="
 if "%~1"=="" goto parsed
 if /i "%~1"=="/auto"   ( set "PSARGS=!PSARGS! -Auto"            & set "AUTO=1" & shift & goto parse )
 if /i "%~1"=="/idd"    ( set "PSARGS=!PSARGS! -InstallIddDriver" & shift & goto parse )
+if /i "%~1"=="/noidd"  ( set "PSARGS=!PSARGS! -NoIddDriver"      & shift & goto parse )
 if /i "%~1"=="/nonet"  ( set "PSARGS=!PSARGS! -NoPvNetwork"      & shift & goto parse )
 if /i "%~1"=="/nodisk" ( set "PSARGS=!PSARGS! -NoPvDisk"         & shift & goto parse )
 if /i "%~1"=="/acceptpvdiskupgrade" ( set "PSARGS=!PSARGS! -AcceptPvDiskUpgrade" & shift & goto parse )
 if /i "%~1"=="/noapptweaks" ( set "PSARGS=!PSARGS! -NoAppTweaks" & shift & goto parse )
 if /i "%~1"=="/noupdates" ( set "PSARGS=!PSARGS! -NoUpdaterAgent" & shift & goto parse )
 if /i "%~1"=="/iddonly" ( set "IDDONLY=1" & shift & goto parse )
+if /i "%~1"=="/iddoff" ( set "IDDOFF=1" & shift & goto parse )
 if /i "%~1"=="/updatesonly" ( set "UPDATESONLY=1" & shift & goto parse )
 echo Unknown option: %~1
-echo Valid options: /auto /idd /iddonly /updatesonly /noupdates /nonet /nodisk /acceptpvdiskupgrade /noapptweaks
+echo Valid options: /auto /idd /noidd /iddonly /iddoff /updatesonly /noupdates /nonet /nodisk /acceptpvdiskupgrade /noapptweaks
 exit /b 87
 :parsed
 
@@ -75,18 +86,28 @@ if defined RAWARGS (
 exit /b 0
 
 :elevated
+REM Every branch below runs a script that must be PRESENT on this medium. A missing one used
+REM to surface as a raw PowerShell "file not found" / InvalidOperationException with no hint
+REM about which file or why (field report, forum 42717 post 35) - so each is checked here and
+REM named. An OLD medium genuinely does not carry activate-idd.ps1; say so.
 if defined IDDONLY (
   REM Add/activate the IddCx driver on a guest that ALREADY has QWT - no MSI, no version gate,
   REM no PV-disk 0x7B gate. For an existing install that predates IDD-by-default (GWeck's case).
+  call :needfile "%HERE%activate-idd.ps1" /iddonly || exit /b 66
   powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%activate-idd.ps1" -Root "%HERE%"
+) else if defined IDDOFF (
+  REM Recovery: put the guest back on the emulated VGA and remove the IDD device. Runs on a
+  REM guest whose display is already unusable, so it must not depend on the IDD working.
+  call :needfile "%HERE%deactivate-idd.ps1" /iddoff || exit /b 66
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%deactivate-idd.ps1" -Root "%HERE%"
+) else if defined UPDATESONLY (
+  REM Deploy the Windows Update agent on a guest that ALREADY has QWT: compile the relay, place
+  REM the agent, register the scheduled scan that reports update availability to dom0. No MSI.
+  call :needfile "%HERE%install-updater-agent.ps1" /updatesonly || exit /b 66
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%install-updater-agent.ps1" -SetupRoot "%HERE%" -BinDir "C:\Program Files\Qubes Tools\bin"
 ) else (
-  if defined UPDATESONLY (
-    REM Deploy the Windows Update agent on a guest that ALREADY has QWT: compile the relay, place
-    REM the agent, register the scheduled scan that reports update availability to dom0. No MSI.
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%install-updater-agent.ps1" -SetupRoot "%HERE%" -BinDir "C:\Program Files\Qubes Tools\bin"
-  ) else (
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%Install-QwtImproved.ps1"%PSARGS%
-  )
+  call :needfile "%HERE%Install-QwtImproved.ps1" "the installer" || exit /b 66
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%Install-QwtImproved.ps1"%PSARGS%
 )
 set RC=%errorlevel%
 echo.
@@ -97,3 +118,16 @@ REM Keep the window open so a double-click user can read the outcome. With /auto
 REM machine is rebooting on a timer, so pausing there would be actively unhelpful.
 if not defined AUTO pause
 exit /b %RC%
+
+REM --- helpers ---------------------------------------------------------------
+REM :needfile <path> <what-needs-it>  -> 0 if present, 1 (after an explanation) if not.
+:needfile
+if exist "%~1" exit /b 0
+echo.
+echo ERROR: %~nx1 is not on this medium, so %~2 cannot run.
+echo   looked in: %HERE%
+echo   This usually means the download predates the option you asked for. Get a newer
+echo   release, or run install.cmd with no options for a normal install.
+echo.
+if not defined AUTO pause
+exit /b 1

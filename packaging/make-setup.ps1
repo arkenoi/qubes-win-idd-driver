@@ -112,6 +112,11 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\quiet-desktop.ps1') 'consumer-nag si
 # IDD-only activator, run by `install.cmd /iddonly` to add/activate the IddCx driver on a guest
 # that already has QWT (no MSI, no version/PV gate). Uses idd-driver/ staged below.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activator') $OutDir -Force
+# The reverse, run by `install.cmd /iddoff`: back to the emulated VGA. This is the RECOVERY path
+# for a guest whose display broke after activation, so it must be on the medium even though a
+# normal install never calls it - a user who needs it cannot download a newer package from a
+# qube with no display.
+Copy-Item (Need (Join-Path $RepoRoot 'guest\deactivate-idd.ps1') 'IDD deactivator/recovery') $OutDir -Force
 # Windows Update agent, deployed by `install.cmd /updatesonly`: the deploy script compiles the
 # relay (in-box csc, like winenum.cs), places the agent, and registers the scheduled scan that
 # reports update availability to dom0. All three staged from guest/ (single source of truth).

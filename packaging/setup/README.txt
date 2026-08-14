@@ -52,9 +52,10 @@ WHAT IT DOES *NOT* INSTALL
     the Basic Display Adapter.
   * The dom0-side pieces of this project (the window-resize service in `dom0/`).
     Those are installed in dom0 by hand and are out of scope for a guest ISO.
-  * The Qubes IddCx display driver, unless you pass /idd. With /idd it is
-    installed AND ACTIVATED: the IDD becomes the guest's display and the
-    emulated VGA adapter is disabled. See below.
+  (The Qubes IddCx display driver is NOT in this list: since 4.3.1 it is
+  installed AND ACTIVATED BY DEFAULT -- the IDD becomes the guest's display and
+  the emulated VGA adapter is disabled. /noidd opts out, /iddoff undoes it on a
+  guest that already has it. See THE QUBES IddCx DRIVER below.)
 
 TEST-SIGNING IS MANDATORY AND PERMANENT
 ---------------------------------------
@@ -99,7 +100,19 @@ Unattended (no second logon needed):
 
 Options:
      /auto    reboot and resume automatically
-     /idd     install and ACTIVATE the Qubes IddCx display driver (see below)
+     /idd     accepted and does NOTHING -- the IddCx driver is activated by
+              default since 4.3.1. Kept so older command lines still parse.
+              (It is an OPTION TO install.cmd, not a program: running
+              `Start-Process D:\idd` asks Windows to launch a file called
+              "idd", which is not on any of our media, and reports
+              file-not-found. The only invocation is  D:\install.cmd  -- with
+              the switches on the SAME command line.)
+     /noidd   do NOT activate the IddCx driver; stay on the Basic Display
+              Adapter (see below)
+     /iddoff  RECOVERY, on a guest that already has the IDD: put it back on the
+              Basic Display Adapter and reboot (see below)
+     /iddonly add/activate the IddCx driver on a guest that already has QWT,
+              without re-running the MSI, and reboot
      /nonet   omit PvDriversNetwork
      /noapptweaks
               skip BOTH desktop tweak scripts stage 2 runs by default.
@@ -275,12 +288,11 @@ guest-initiated reboot (on_reboot=destroy), and Windows completes a pending upda
 its next boot. That boot happens by itself the next time the qube is started or updated -
 and for a template it is exactly the boot that commits the update to the template root.
 
-THE QUBES IddCx DRIVER (/idd)
------------------------------
+THE QUBES IddCx DRIVER (default ON; /noidd and /iddoff opt out)
+--------------------------------------------------------------
 `idd-driver\` holds the Qubes IddCx indirect display driver, test-signed by the
-same CI certificate, plus Microsoft's devcon.exe from the WDK. With /idd,
-stage 2 installs it and ACTIVATES it as the guest's display, right before the
-final reboot:
+same CI certificate, plus Microsoft's devcon.exe from the WDK. Stage 2 installs
+it and ACTIVATES it as the guest's display, right before the final reboot:
 
   1. pnputil /add-driver stages the package into the driver store;
   2. devcon install creates the root-enumerated IDD device (hardware id
@@ -299,15 +311,39 @@ the IDD. The gui-agent publishes the resolution list to
 HKLM\SOFTWARE\QubesIDD\Modes at runtime and the driver picks it up when the
 monitor arrives, which is what makes arbitrary dom0-window-sized modes work.
 
-RECOVERY: if the guest comes up without a usable display, re-enable the VGA
-adapter over qrexec and reboot:
+WHY IT IS ON BY DEFAULT: the IDD is what makes arbitrary resolutions work, so
+the guest desktop can follow the size of the qube's window in dom0. The Basic
+Display Adapter offers a fixed mode list and cannot do that. It is, however, a
+DISPLAY feature: everything else about the guest works either way, which is why
+turning it off is a supported escape hatch rather than a broken configuration.
+
+TURNING IT OFF
+
+    D:\install.cmd /noidd     fresh install: never activate it. The driver files
+                              still ship, nothing touches the driver store, the
+                              VGA adapter is left enabled.
+    D:\install.cmd /iddoff    a guest that ALREADY has it: re-enable the VGA
+                              adapter, stop the agent from re-applying the IDD
+                              topology (HKLM\SOFTWARE\QubesIDD!NoTopologyApply),
+                              remove the IDD device, reboot.
+    D:\install.cmd /iddonly   the reverse: (re)activate it later.
+
+RECOVERY: if the guest comes up without a usable display -- a black, unresponsive
+window in dom0 -- the IDD is connected but nothing attached it to the desktop.
+/iddoff is the fix and it does not need a working display: run it over qrexec
+from dom0, then reboot the qube.
+
+    qvm-run -u SYSTEM <vm> "powershell -ExecutionPolicy Bypass -File C:\qwt-improved-setup\deactivate-idd.ps1"
+
+(Stage 1 copies the whole payload to C:\qwt-improved-setup, so that path exists
+even with no CD attached.) The single-step manual equivalent is to re-enable the
+VGA adapter and reboot:
 
     Enable-PnpDevice -InstanceId '<detail.idd_vga_instance_id>' -Confirm:$false
 
-(or `devcon enable` on that instance id). That restores the pre-IDD display.
-
-If you do not pass /idd, the driver files still ship in the package but nothing
-touches the driver store.
+That instance id is recorded in the === RESULT === JSON and in
+C:\qwt-improved-install.log. Doing only this leaves the IDD device in place, so
+prefer /iddoff, which also disarms the topology apply that caused the state.
 
 KNOWN BLOCKER: NETWORKING
 -------------------------
