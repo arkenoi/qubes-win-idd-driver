@@ -227,6 +227,28 @@ single-variable), methodology, caveats and every retraction:
 
 ---
 
+## Windows updates
+
+dom0 drives every pass (Qube Manager, or `qubes-vm-update`); the guest never installs on its
+own (`NoAutoUpdate=1`). A shim answers dom0's injected agent, and packages come from the
+Microsoft Update Catalog over a qrexec relay with a 4-host allowlist — no netvm, no general
+egress. Windows Update's own stack was dropped: it needs egress for DoSvc/telemetry/the
+Orchestrator, cannot be told which package to install, and crawled at 120–150 KB/s (never
+root-caused).
+
+The catalog returns every file bundled with an update. For KB5121003 that included the
+superseded KB5043080 — DISM rejects it (rc=552), and that rejection poisoned the CBS
+transaction so the cumulative rolled back at boot (`0x80070490`). Filtering by KB **before**
+download is what fixes it; the saved bandwidth is secondary.
+
+Measured, KB5121003 on 24H2 (26100.8875 → 9168): catalog offers 5,376 MB, we transfer
+4,867 MB — 509 MB (9.5%) avoided — at 12.8 MB/s; ~24 min in DISM, ~45 min end to end.
+The catalog ships full cumulatives, not deltas: 5,029 of 9,036 packages in the payload are
+inapplicable (86.7% language variants of server Features-on-Demand) ≈ 24% of bytes. That is
+the price of a closed egress surface. `.msu` files are deleted after a successful install.
+
+---
+
 ## Known limitations
 
 - **qrexec runs in the interactive user session.** A logged-off guest loses clipboard and
