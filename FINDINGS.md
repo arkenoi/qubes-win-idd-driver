@@ -9554,3 +9554,38 @@ appearing in CBS with state=112 after the reboot.
 ACCEPTANCE when implemented: pristine rebuild -> full dom0 pass -> reboot -> UBR 26100.8875 ->
 26100.9168 AND KB5121003 present in the CBS package list. Anything less is a staged package being
 reported as an installed one, which is the defect itself.
+
+## 2026-08-14 — MULTISTAGE VERDICT: CBS really does discard the second staged package
+
+Run with `QUBES_UPDATES_ALLOW_MULTISTAGE=1` (Windows' normal behaviour, both packages staged in one
+session) on a pristine cold-cache clone, WITH the settle step active:
+
+    18:08:33  KB5120710: staged      settle: CBS RebootPending=True, TiWorker idle=True
+    18:27:24  KB5121003: rc=3010     settle: CBS RebootPending=True
+    reboot -> UBR 26100.8875 (unchanged)
+              KB5120710 installed = True
+              KB5121003 installed = False
+
+So the shutdown-race hypothesis is REFUTED: RebootPending was confirmed for BOTH packages and
+TiWorker was idle before the reboot, and the cumulative was still discarded. n=2, with the race
+controlled for.
+
+CONCLUSION: staging a second reboot-requiring package into a session that already has one loses it,
+on this image, silently - DISM returns 3010 for both. The one-package-per-session rule is therefore
+the CORRECT fix, not a workaround, and `QUBES_UPDATES_ALLOW_MULTISTAGE` should stay OFF. It remains
+available so this can be re-tested on other builds, because Windows aggregates packages per reboot
+in general and this may be specific to a cumulative landing behind a .NET update.
+
+NOT yet proven: that the serialised path completes. The next pass must run with multistage OFF and
+show UBR 26100.8875 -> 26100.9168 with KB5121003 in CBS - and, because only one package installs per
+pass, dom0 must drive a SECOND pass afterwards to pick up the deferred one.
+
+## Future plan — video modes during a Windows update (not started)
+
+During servicing the guest desktop is useless and ugly to look at, and in seamless mode the update
+screens arrive as override-redirect surfaces that cannot be managed. Make the behaviour configurable:
+
+  * either HIDE the guest desktop entirely for the duration of the update, or
+  * present it SMALL and NOT override-redirect, so dom0 can place and decorate it like any window,
+  * and RESTORE the previous mode when the pass finishes (including on failure and on the reboot
+    path, which is where a naive implementation would leave the guest stuck in the update mode).
