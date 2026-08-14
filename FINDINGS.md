@@ -9214,3 +9214,56 @@ for CONNECT but wrong for plain HTTP, which is a SEQUENCE of request/response pa
 framing (Content-Length or chunked). Nothing in the relay parses that framing, so it cannot know
 where a response ends - consistent with truncation at arbitrary offsets and with responses lost on a
 reused channel.
+
+## 2026-08-14 — plain-HTTP truncation: three hypotheses refuted, loss localized
+
+Task #14. The relay's plain-HTTP path returns an 80043-byte file as anything from 0 to 79389 bytes,
+about half the time, reported as success. Progress is by ELIMINATION, and each elimination was a
+measurement rather than an argument:
+
+    ALLOWLIST   refuted. Interleaved A/B of the pre-allowlist build vs shipped: both truncate
+                identically (PRE 30632..80043, CUR 32476..80043).
+    DRAIN       refuted. DRAINMS 250/3000/8000 -> 6/10, 4/10, 5/10 full-length. No correlation;
+                the longest drain was not the best.
+    WARM POOL   refuted, AND it nearly fooled me. First run: POOL=0 8/10 vs POOL=8 3/10, a strong
+                effect. Replication with more rounds INVERTED it: POOL=0 7/15 vs POOL=8 9/15. This
+                is the bimodal-metric trap this project already has a rule about - a verdict from
+                one interleaved run is not a verdict.
+
+### The decisive instrument: why did each direction stop?
+
+`Pump` swallowed every exception with a bare `catch {}` commented "normal teardown", making an
+orderly finish and a mid-body reset indistinguishable - which is why three theories could be chased
+with nothing to falsify them. It now reports its termination reason, and the CONN line carries it:
+
+    down=79389  eof=tunnel  upEnd=-  downEnd=eof
+    down=20041  eof=tunnel  upEnd=-  downEnd=eof
+    down=0      eof=tunnel  upEnd=ObjectDisposedException  downEnd=eof
+
+EVERY truncated response ends `downEnd=eof` - a CLEAN end-of-stream. So the listen-side relay is
+faithful: it copies everything it is given and sees an orderly close. The short body is arriving
+from further up.
+
+### Where it must be, and the next probe
+
+Two candidates remain, both beyond the listen side:
+ 1. our own `--relay` HANDLER process (it pumps the qrexec vchan <-> socket), or
+ 2. the qrexec `qubes.UpdatesProxy` transport / tinyproxy in the netvm - NOT our code.
+
+The handler is the prime suspect because it has the SAME teardown shape as the listen side:
+
+    Task.WhenAny(t1, t2).Wait();
+    Task.WhenAny(Task.WhenAll(t1, t2), Task.Delay(DrainMs())).Wait();
+    // `using (sock)` then DISPOSES the socket
+
+If the request-direction pump ends for any reason while the response is still streaming, the socket
+is disposed 250 ms later and the response is cut - and the listen side would observe precisely the
+clean EOF we see. The `upEnd=ObjectDisposedException` lines are that teardown ordering showing
+through on the listen side.
+
+NEXT: instrument the handler's two pumps to a file (they currently pass a null callback), and
+record which direction ends first and why. If the response pump is cut by its partner's teardown,
+the fix is ours and is a teardown-ordering fix, not a timeout. If the vchan simply EOFs early, the
+defect is in the updates-proxy transport and qualifies for the CLAUDE.md upstream-report exception.
+
+Do NOT "fix" this by raising DRAINMS - that was measured not to help.
