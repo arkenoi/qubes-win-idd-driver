@@ -34,5 +34,7 @@ Section 'pending servicing state right now'
 Write-Output ("  CBS RebootPending : " + (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'))
 Write-Output ("  WU RebootRequired : " + (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'))
 $sess = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\SessionsPending'
-Write-Output ("  SessionsPending   : " + (Test-Path $sess))
+$incomplete = @(Get-ChildItem $sess -EA SilentlyContinue |
+                Where-Object { (Get-ItemProperty $_.PSPath -EA SilentlyContinue).Complete -ne 1 })
+Write-Output ("  CBS incomplete sessions : " + $incomplete.Count + "   (key existence proves nothing)")
 Write-Output '=== RESULT === done'

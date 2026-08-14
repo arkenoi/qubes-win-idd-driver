@@ -27,8 +27,11 @@ Write-Output ("dism_rc      = {0}   (3010 = staged/reboot required, 0 = applied)
 # CBS's own opinion AFTER the attempt - rc alone has lied before.
 $pending = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
 Write-Output ("cbs_reboot_pending = {0}" -f $pending)
+# Key existence means nothing (see guest/wu-cbs-subkeys.ps1) - count sessions that never completed.
 $sess = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\SessionsPending'
-Write-Output ("sessions_pending   = {0}" -f (Test-Path $sess))
+$incomplete = @(Get-ChildItem $sess -EA SilentlyContinue |
+                Where-Object { (Get-ItemProperty $_.PSPath -EA SilentlyContinue).Complete -ne 1 })
+Write-Output ("cbs_incomplete_sessions = {0}" -f $incomplete.Count)
 
 # Did CBS register the package at all?
 $pkgRoot = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Packages'
