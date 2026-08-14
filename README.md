@@ -231,9 +231,9 @@ single-variable), methodology, caveats and every retraction:
 
 dom0 drives every pass (Qube Manager); the guest never installs on its own (`NoAutoUpdate=1`).
 Packages come from the Microsoft Update Catalog over a qrexec relay with a 4-host allowlist —
-no netvm, no general egress. WU's own stack was dropped: it needs egress for DoSvc and
-telemetry, can't be told which package to install, and crawled at 120–150 KB/s (never
-root-caused).
+no netvm, no general egress. WU still DISCOVERS updates (its COM searcher, online through the
+proxy); only its download/install path was dropped — that path needs egress for DoSvc, can't be
+told which package to install, and crawled at 120–150 KB/s (never root-caused).
 
 The catalog returns every file bundled with an update. For KB5121003 it also returned superseded
 KB5043080 — DISM rejects it (rc=552), poisoning CBS so the cumulative rolled back at boot

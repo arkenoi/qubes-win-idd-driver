@@ -244,3 +244,77 @@ cumulative update applying at boot, `qubes.VMExec` answered 6 s after qrexec cam
 - `$ErrorActionPreference='Stop'` turns any native stderr line into a terminating error. It
   silently truncated `install-updater-agent.ps1` mid-deploy twice — once on a `schtasks` warning,
   once on `qubesdb-cmd`. Wrap native calls.
+
+---
+
+# Failure modes: what can break this later
+
+Written 2026-08-14, after the catalog+DISM path was proven end to end. The original design review
+rejected this path partly on FRAGILITY, and that concern was not wrong — it was traded for a closed
+egress surface and for deterministic package selection. This section names what we bought the
+fragility on, so a future failure is diagnosed in minutes instead of re-derived.
+
+Ranked by likelihood x cost.
+
+### 1. Catalog HTML scraping (HIGH likelihood, breaks everything downstream)
+
+`Resolve-Catalog` scrapes Microsoft's **web UI**, not an API — two regexes over two pages:
+
+    Search.aspx?q=<KB>      regex: id='<guid>_link' ...>(title)</a>
+    DownloadDialog.aspx     regex: url = '<href>'   (POST with a hand-built updateIDs JSON)
+
+Any markup change breaks resolution. **Fails loud, by design**: a miss logs every candidate title
+and the pass reports the KB as failed rather than reporting success with nothing installed. Do not
+"fix" that by treating zero resolutions as no-op.
+
+### 2. The pick heuristic runs on non-deterministic input (HIGH, silent-wrong-package risk)
+
+The chosen row must contain `$OsArch` and either `$OsVer` or `$OsBuild`, and is rejected on
+`Dynamic|Server|server operating system` — ENGLISH keywords. **Measured: the catalog returns
+different languages for the same query.** Same guest, same KB, ~30 min apart:
+
+    09:54  "2026-08 Kumulatives Update fur .NET Framework 3.5 und 4.8.1 ... (KB5120710)"
+    10:21  "2026-08 Cumulative Update for .NET Framework 3.5 and 4.8.1 ... (KB5120710)"
+
+So the exclusion keywords are not reliable across responses, and first-match-wins picks whatever
+came back first. The .msu FILENAME is the safety net (arch and KB are in it), not the title.
+If a wrong-edition package ever installs, look here first.
+
+### 3. The KB filter is a new risk, created by the fix (MEDIUM, would look like a CBS bug)
+
+We drop every catalog file whose name lacks the requested KB digits. That is correct for a
+superseded sibling. It would be WRONG if Microsoft ever un-bundles a genuinely required package
+with a different KB - a standalone SSU shipped alongside an LCU. Today's combined SSU+LCU makes
+that moot; it is not guaranteed to stay that way.
+
+Guardrails in place: if NO file matches the KB, all files are kept; and every dropped file is
+logged by name. **Detection signal:** an install that fails on a missing prerequisite in the same
+pass where a `DROP` line was logged. Do not debug CBS before checking that line.
+
+### 4. Container-format check (MEDIUM, already burned us once)
+
+`Test-Msu` accepts `MSCF` (cabinet) or `MSWIM` (WIM) only. A CAB-only check already rejected a
+valid 4.8 GB WIM download and looped forever. A third container format would do it again — 8
+attempts, then a reported failure.
+
+### 5. Egress allowlist vs CDN churn (MEDIUM, fails loud with a confusing message)
+
+Four host suffixes are permitted; everything else gets 403 before it costs a channel. A CDN move
+by Microsoft looks like a download failure, not a policy failure. `QUBES_UPDATES_ALLOW` overrides
+without a rebuild. Widening it is a SECURITY decision, not a fix — the whole point is that a
+non-networked qube reaches Windows Update and nothing else.
+
+### 6. We still depend on WU for DISCOVERY (LOW likelihood, total loss of function)
+
+`Get-Available` uses the WU COM searcher (`ServerSelection=2`, `Online=$true`) through the proxy.
+Only download/install were replaced. If that searcher is disabled by policy or broken by servicing,
+the guest finds nothing and honestly reports zero updates — indistinguishable from being current.
+`NoAutoUpdate=1` does not disable it; a future policy tightening could.
+
+### 7. Not covered at all
+
+* **Feature updates** (24H2 -> 25H2) are a different mechanism; the enablement package cached on
+  these images is not a general answer. Tracked as task #11.
+* **Driver updates** from the catalog are `.cab`, and nothing handles them.
+* **No package cache**: every qube, and every re-run, re-transfers the full cumulative. If N
+  Windows qubes ever make that hurt, the fix is a dom0-side shared cache — NOT restoring WU-native.
