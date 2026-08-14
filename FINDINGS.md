@@ -9408,3 +9408,51 @@ client closes first, and is absent for CONNECT. All are testable.
   the thing you started is the thing you are measuring.
 * I reported "nothing in the guest's window" from a grep that silently found nothing because the
   log contains NUL bytes and grep treated it as binary. Use `grep -a` on proxy logs.
+
+## 2026-08-14 — stack identity VERIFIED, and the earlier verdict corrected
+
+The user challenged whether the "known-working configuration" re-run really used the same stack.
+It did not, quite - and verifying properly changed the conclusion.
+
+WHAT WAS ACTUALLY LIVE AT 09:53 (reconstructed from commit times, not memory): the deploy ran at
+09:53:13 and the working scan at 09:53:59. Commit 92bc1a6 (09:55:07) changed
+`qubes-windows-update.ps1`, so at 09:53 that file was 92bc1a6's version, still uncommitted, while
+every other deployed file was 61f0bcc's. My first re-run used 61f0bcc's agent - a real deviation.
+`git diff 61f0bcc 92bc1a6` touches no scan or proxy construct, but that is judgement, not proof.
+
+SO IT WAS REDONE, hash-verified end to end:
+
+    qubes-windows-update.ps1  14acc9da87b226a1  (92bc1a6 - the file live at 09:53)   MATCH
+    wu-update.ps1             d4046f129c3c8af4                                       MATCH
+    vmupdate-shim.ps1         bffd531745f23eef                                       MATCH
+    ensure-autologon.ps1      04404b543505a6ba                                       MATCH
+    VMExec.ps1                1a425f306ad88445                                       MATCH
+    qubes-updates-relay.cs    04feb1cd45e9cf91  (compiler input; .exe is built on-guest)  MATCH
+    harness wu-resolve-dryrun.ps1: one commit (92bc1a6), working tree clean -> identical
+    guest image: pristine clone of win11-24h2 both times
+
+RESULT ON THE VERIFIED STACK: `scan: 2 update(s) available` at 16:46 - it WORKS.
+
+### Correction
+
+The earlier entry said the known-working configuration "fails too". That was a snapshot, not a
+property. On a hash-verified identical stack the scan FAILED at 16:23 and SUCCEEDED at 16:46. The
+variable is environmental and intermittent, not configurational. The only intervening change was
+stopping and restarting the tinyproxy on 8082.
+
+DO NOT read this as "fixed". Truncation was still measured at 16:38-16:40, AFTER that restart: the
+byte-counting shim sent full bodies (80454/80453/80457) while the guest received 29044 and 65644.
+The likelier reason the scan recovered is that several complete `authrootstl.cab` fetches did get
+through, so Windows now holds a CACHED certificate trust list and no longer depends on the flaky
+path each time. The underlying loss persists; it merely stopped being fatal.
+
+That also explains the whole shape of this investigation: an intermittent transport fault that only
+bites when Windows actually needs a fresh CTL, which is periodic - hence "works on one boot, fails
+on the next", and hence a morning that worked and an afternoon that did not, with nothing in the
+stack differing.
+
+### Method note
+
+Reconstructing "what was live" from commit TIMES against action times - rather than from the tidy
+story of which commit came next - is what exposed the deviation. Working-tree state at the moment of
+a deploy is not the same thing as a commit, and on a day with 20 commits the difference is routine.
