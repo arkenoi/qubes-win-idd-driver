@@ -9023,3 +9023,31 @@ the de-dup to an ordinal comparer would be a behaviour change made to satisfy a 
 
 Worth knowing for the future: this also means `-eq` on strings is NOT ordinal even though the
 case-insensitive regex operators are. Do not assume the two behave alike.
+
+## 2026-08-14 — END-TO-END proof on the shipped handler under a German culture
+
+`guest/wu-handler-locale-e2e.ps1` drives the REAL `wu-update.ps1` with CurrentCulture forced to
+de-DE, against a synthetic status file, and captures what dom0 would parse:
+
+    control old-style    = '35,5'      <- culture genuinely applied, so the test can fail
+    handler wrote        : 0.0
+                           100.0
+    numeric progress lines = 2, comma-formatted = 0
+    PASS
+
+Under the old code those lines were "0,0" and "100,0" and `float()` raised on both, so this does
+exercise the decimal separator rather than an integer path.
+
+Made safe by construction: a dummy scheduled task stands in for the updater (no update runs), the
+synthetic status carries `reboot_needed=false` - and the handler only calls `shutdown.exe` when
+that is true, verified in source before running - and the real update-status.json is backed up and
+restored.
+
+### A trap worth keeping: `2>&1` cannot capture this handler
+
+The first version of this test reported "handler emitted no progress lines" while the numbers were
+plainly visible on the console. `wu-update.ps1` writes progress with `[Console]::Error.WriteLine()`,
+which goes straight to the process's stderr HANDLE and bypasses PowerShell's redirection operators.
+Capturing requires a separate process with `2>` at the cmd level - which is also the faithful
+simulation, because that handle is exactly what dom0 reads. Any future test of this channel that
+uses `2>&1` will silently measure nothing.
