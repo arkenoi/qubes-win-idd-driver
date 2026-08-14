@@ -13,7 +13,9 @@
 # Never exits nonzero: a missing QWCQ is a report, not an error, and an RPM scriptlet
 # must not fail the transaction over it.
 set -u
-STUB=/usr/share/qubes-windows-tools-ng/auto-qwt/install-qwt.bat
+# Overridable so the logic can be exercised outside dom0 (a scriptlet whose only test is
+# "it ran during rpm -i" is a scriptlet nobody has ever seen work).
+STUB="${QWTNG_STUB:-/usr/share/qubes-windows-tools-ng/auto-qwt/install-qwt.bat}"
 
 if [ ! -f "$STUB" ]; then
     echo "qwt-ng-fix-qwcq: shipped stub missing ($STUB) - is qubes-windows-tools-ng installed?"
@@ -21,7 +23,7 @@ if [ ! -f "$STUB" ]; then
 fi
 
 # Candidate roots: wherever the qvm-create-windows-qube entry point resolves to, plus the
-# places people conventionally clone it in dom0. Shallow on purpose.
+# places people conventionally clone it in dom0.
 candidates=""
 if entry=$(command -v qvm-create-windows-qube 2>/dev/null); then
     real=$(readlink -f "$entry" 2>/dev/null) && candidates="$candidates $(dirname "$real")"
@@ -30,6 +32,21 @@ for d in /opt/qvm-create-windows-qube /usr/local/share/qvm-create-windows-qube \
          /root/qvm-create-windows-qube /home/*/qvm-create-windows-qube; do
     [ -d "$d" ] && candidates="$candidates $d"
 done
+# ...and then actually LOOK, because that fixed list is a guess about where somebody cloned
+# a git repo. Measured 2026-08-14: a clone in ~/git/qvm-create-windows-qube - an entirely
+# ordinary place - was not found, so this script reported "nothing to do" and the user got
+# the silent failure it exists to prevent (a Windows qube provisioned with no tools at all,
+# no error anywhere - forum 42717 post 27). Bounded depth so this stays a scriptlet.
+for base in /root /home/* /opt /usr/local; do
+    [ -d "$base" ] || continue
+    while IFS= read -r hit; do
+        [ -n "$hit" ] && candidates="$candidates $(dirname "$(dirname "$(dirname "$hit")")")"
+    done <<EOF
+$(find "$base" -maxdepth 5 -type f -path '*/tools/auto-qwt/install-qwt.bat' 2>/dev/null)
+EOF
+done
+# De-duplicate: the entry point, the fixed list and the search can all name the same tree.
+candidates=$(printf '%s\n' $candidates | sort -u)
 
 patched=0 seen=0
 for root in $candidates; do
