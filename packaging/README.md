@@ -22,7 +22,8 @@ SHA256SUMS.txt             verified by the installer BEFORE it touches the machi
 msi/installer.msi          our rebuilt MSI (QWT-NG 4.3, from upstream QWT 4.2.2 sources)
 msi/vc_redist.x64.exe      the Burn bundle's prerequisite package
 certs/                     6 ITL component certs + our CI test-signing cert
-idd-driver/                the IddCx driver (staged only with /idd, never activated)
+idd-driver/                the IddCx driver + devcon.exe (staged and ACTIVATED by default;
+                           /noidd skips it, /iddoff undoes it on an installed guest)
 reference/                 the gui-agent binaries embedded in the MSI, for hash checks
 ```
 

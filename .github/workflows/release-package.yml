@@ -33,6 +33,10 @@ on:
       # must rebuild it, or the next download quietly ships stale binaries.
       - 'driver/**'
       - 'agent'
+      # make-setup.ps1 stages guest/*.ps1 (activate-idd, deactivate-idd, the updater agent,
+      # the desktop tweaks) into the package. Without this filter a fix to one of those
+      # scripts is committed, CI stays green, and the next download still ships the old copy.
+      - 'guest/**'
 
 # One release build at a time, newest wins. Without this, a 2026-08-06 background job
 # cancelled runs it took for duplicates and the cancellations looked like CI flakiness.
