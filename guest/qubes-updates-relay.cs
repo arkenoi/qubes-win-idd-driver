@@ -76,6 +76,54 @@ static class Relay
     // Grace period for the second direction to finish once the first has ended. Override with
     // QUBES_UPDATES_DRAINMS if a slow link ever needs longer; 3000 was the original value and it
     // cost ~6 s of pure latency per connection (two drains in series).
+    // ALLOWLIST. The relay carries whatever the guest aims at it, and the proxy is only up during
+    // an update pass - which is exactly when every Windows background client discovers a working
+    // route. Measured 2026-08-14 during ONE pass: Office telemetry (ecs.office.com) held a channel
+    // 125 s, Defender (wdcpalt.microsoft.com) 133 s, OneDrive (g.live.com, oneclient.sfx.ms) 128 s,
+    // plus 20 NCSI probes - against a warm pool of 8 and MAXCONN 32. That starves the update
+    // traffic we raised the proxy for, and it is egress we never intended to grant: a qube with
+    // no netvm should not be phoning home to Office because an update is running.
+    // Suffix match, case-insensitive. Override with QUBES_UPDATES_ALLOW (comma-separated).
+    static string[] AllowList()
+    {
+        string env = Environment.GetEnvironmentVariable("QUBES_UPDATES_ALLOW");
+        if (!string.IsNullOrEmpty(env)) return env.Split(',');
+        return new string[] {
+            "windowsupdate.com",            // au.download..., ctldl... (cert trust lists)
+            "update.microsoft.com",         // fe2cr/fe3cr, sls, catalog
+            "delivery.mp.microsoft.com",    // tlu.dl... - the actual payload CDN
+            "download.microsoft.com",
+            "microsoftupdate.com",
+        };
+    }
+    static bool Allowed(string target)
+    {
+        if (string.IsNullOrEmpty(target)) return false;
+        int colon = target.IndexOf(':');
+        string h = (colon > 0 ? target.Substring(0, colon) : target).Trim().ToLowerInvariant();
+        foreach (string suffix in AllowList())
+        {
+            string sfx = suffix.Trim().ToLowerInvariant();
+            if (sfx.Length == 0) continue;
+            if (h == sfx || h.EndsWith("." + sfx)) return true;
+        }
+        return false;
+    }
+
+    // Pull the destination out of an HTTP proxy request: "GET http://host/path" or "CONNECT host:443".
+    static string TargetOf(string requestLine)
+    {
+        if (string.IsNullOrEmpty(requestLine)) return "";
+        string[] parts = requestLine.Split(' ');
+        if (parts.Length < 2) return "";
+        string u = parts[1];
+        if (u.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) u = u.Substring(7);
+        else if (u.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) u = u.Substring(8);
+        int slash = u.IndexOf('/');
+        if (slash >= 0) u = u.Substring(0, slash);
+        return u;
+    }
+
     static int DrainMs()
     {
         int d;
@@ -160,12 +208,34 @@ static class Relay
         catch { hlen = 0; }
         if (hlen <= 0) { inbound.Close(); return; }   // abandoned/empty: NO spawn, NO log spam
 
+        // Enforce the allowlist BEFORE spending a channel or a gate slot: a denied request must
+        // cost nothing but a 403 and a log line.
+        {
+            string headPeek = Encoding.ASCII.GetString(head, 0, Math.Min(hlen, 512));
+            int e0 = headPeek.IndexOf('\n');
+            string line0 = (e0 > 0 ? headPeek.Substring(0, e0) : headPeek).Trim();
+            string dest = TargetOf(line0);
+            if (!Allowed(dest))
+            {
+                try
+                {
+                    byte[] deny = Encoding.ASCII.GetBytes(
+                        "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    await a.WriteAsync(deny, 0, deny.Length);
+                }
+                catch { }
+                Log(logPath, "DENY host=" + (dest.Length > 0 ? dest : "(unparsed)") + " req=[" + line0 + "]");
+                inbound.Close();
+                return;
+            }
+        }
+
         // Cap concurrency so a burst of real requests cannot fork-bomb the proxy qube.
         await _gate.WaitAsync();
         Stopwatch sw = Stopwatch.StartNew();
         long up = hlen, down = 0, ttfb = -1;
         string token = "-";
-        string reqLine = "";
+        string reqLine = "", connHdr = "(none)", eofSide = "-";
         bool warm = false;
         try
         {
@@ -184,6 +254,16 @@ static class Relay
                 // Record the request LINE and the time to first byte back: without splitting
                 // those out, a slow connection cannot be told apart from a slow START, and the
                 // warm pool proved that guessing which one it is wastes hours.
+                // Keep-alive evidence: what the CLIENT asked for, and which side ends first.
+                // If the client says "close", it never wanted reuse and the keep-alive hypothesis
+                // dies. If it asks for keep-alive and the TUNNEL side EOFs first, the close is
+                // imposed on it - which is the mechanism under test.
+                string headTxt = Encoding.ASCII.GetString(head, 0, Math.Min(hlen, 2048));
+                int ci = headTxt.IndexOf("Connection:", StringComparison.OrdinalIgnoreCase);
+                if (ci >= 0) {
+                    int ce = headTxt.IndexOf('\n', ci);
+                    connHdr = headTxt.Substring(ci, (ce < 0 ? Math.Min(headTxt.Length, ci + 40) : ce) - ci).Trim();
+                }
                 int nl = Array.IndexOf(head, (byte)'\n', 0, Math.Min(hlen, 200));
                 if (nl < 0) nl = Math.Min(hlen, 60);
                 reqLine = Encoding.ASCII.GetString(head, 0, Math.Max(0, Math.Min(nl, 120))).Trim();
@@ -191,7 +271,8 @@ static class Relay
                 a.ReadTimeout = Timeout.Infinite;
                 Task t1 = Pump(a, rs, delegate(int n) { up += n; });        // WU -> vchan
                 Task t2 = Pump(rs, a, delegate(int n) { if (down == 0) ttfb = sw.ElapsedMilliseconds; down += n; });
-                await Task.WhenAny(t1, t2);
+                Task first = await Task.WhenAny(t1, t2);
+                eofSide = (first == t1) ? "client" : "tunnel";
                 // HALF-CLOSE DRAIN. This was 3000 ms here and another 3000 ms in the handler, so
                 // EVERY connection lived ~6 s after its data had arrived - measured: down=14524
                 // ttfb=70 ms=6090, and down=0 ttfb=-1 ms=6138. A fixed tail is invisible on one
@@ -203,7 +284,7 @@ static class Relay
             }
         }
         catch (Exception e) { Log(logPath, "CONN token=" + token + " error " + e.Message); }
-        finally { _gate.Release(); Log(logPath, "CONN warm=" + (warm ? 1 : 0) + " up=" + up + " down=" + down + " ttfb=" + ttfb + " ms=" + sw.ElapsedMilliseconds + " req=[" + reqLine + "]"); }
+        finally { _gate.Release(); Log(logPath, "CONN warm=" + (warm ? 1 : 0) + " up=" + up + " down=" + down + " ttfb=" + ttfb + " ms=" + sw.ElapsedMilliseconds + " eof=" + eofSide + " [" + connHdr + "] req=[" + reqLine + "]"); }
     }
 
     // Spawn one qrexec handler and complete its connect-back handshake. This is the expensive
