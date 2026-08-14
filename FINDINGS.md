@@ -8755,3 +8755,46 @@ mean re-downloading and expanding the ESD. Quote the package ratio, never a byte
 Measured on disk after the pass, for reference (no pristine control taken, so this is a level,
 not a delta): WinSxS 20.95 GB apparent across 130,853 files (hardlinked - apparent overstates
 real), C: used 24.26 GB of 79.37 GB.
+
+## 2026-08-14 — what was rejected, by category, and why "2x" is the wrong reading
+
+`guest/wu-lang-share.ps1` over the same install log.
+
+    packages WALKED PAST (Absent)  total 5,029   language-tagged 4,358 (86.7%)   neutral   671
+    packages APPLIED  (Installed)  total 4,007   language-tagged 1,458 (36.4%)   neutral 2,549
+
+    REJECTED by category
+      Package wrapper (metadata shell)                2,454   48.8%
+      Feature on Demand (tools/roles)                 1,898   37.7%
+      LanguageFeatures FoD (handwriting/OCR/speech)     303    6.0%
+      Other Windows edition                             209    4.2%
+      Language pack (UI translation)                     86    1.7%
+      Other component / Fonts / virt / printing          79    1.6%
+
+Raw families confirm the shape: `Microsoft-Windows-DNS-Tools-FoD`, `ServerManager-Tools-FoD`,
+`ActiveDirectory-DS-LDS-Tools-FoD`, `MSPaint-FoD`, `Notepad-FoD`, `NanoServer-*` - each appearing
+**45 times**, i.e. once per language. So the rejects are overwhelmingly language VARIANTS of
+server/admin Feature-on-Demand packages, not UI language packs (those are only 1.7%).
+
+### Byte weight: the package ratio badly overstates it
+
+Measured proxy from the component store (expanded, installed-only - stated as a proxy, not a
+substitute for expanding the ESD):
+
+    language components   7,770 dirs   0.28 GB   mean    38 KB
+    neutral components   18,949 dirs  19.64 GB   mean 1,087 KB
+    mean size ratio language:neutral = 1 : 28.9
+
+Weighting the log's package counts by those means:
+
+    rejected  4,358 x 38 KB + 671 x 1,087 KB   ~=   874 MB
+    applied   1,458 x 38 KB + 2,549 x 1,087 KB ~= 2,760 MB
+    rejected share of payload bytes            ~=   24%
+
+So the honest figure is **roughly a quarter of the bytes wasted, not the 55.7% package count and
+not "2x"**. And that is still an OVERestimate: 48.8% of the rejects are package WRAPPERS, metadata
+shells with essentially no payload. Anyone quoting the package ratio as a byte ratio is wrong by
+at least a factor of two in the safe direction.
+
+Still not exact. The exact byte split needs the ESD expanded and its members attributed, which
+means re-downloading 4.8 GB. Recorded as: measured proxy ~24%, true value lower, unmeasured.
