@@ -1,72 +1,84 @@
 #!/bin/bash
-# Make qvm-create-windows-qube's auto-qwt work with the QWT-NG ISO, automatically.
+# Make qvm-create-windows-qube's auto-qwt work with the QWT-NG ISO.
 #
-# Upstream's tools/auto-qwt/install-qwt.bat globs for a single qubes-tools-*.exe|msi at
-# the ISO root. QWT-NG ships an installer TREE (install.cmd + staged testsigning flow),
-# so the glob matches nothing and the qube finishes provisioning with no tools installed,
-# silently. This helper finds qvm-create-windows-qube installations in dom0 and replaces
-# that stub with the QWT-NG-aware one shipped by this package, keeping a one-time backup
-# of the original as install-qwt.bat.stock.
+# THE PROBLEM. Upstream's tools/auto-qwt/install-qwt.bat globs for a single
+# qubes-tools-*.exe|msi at the root of the mounted QWT ISO. QWT-NG ships an installer TREE
+# (install.cmd + a staged two-reboot testsigning flow), so the glob matches nothing and the
+# new qube finishes provisioning with no tools installed - silently, no error, no dialog.
+# Reported from the field: forum 42717 post 27.
 #
-# Run by the qubes-windows-tools-ng RPM %post; safe and idempotent to run by hand any
-# time (e.g. after installing qvm-create-windows-qube later than this package).
-# Never exits nonzero: a missing QWCQ is a report, not an error, and an RPM scriptlet
-# must not fail the transaction over it.
+# WHERE THAT FILE LIVES, and why the first version of this script could never work: it is
+# NOT in dom0. qvm-create-windows-qube's own install.sh clones the repository into a
+# RESOURCES QUBE (default `windows-mgmt`, overridable with RESOURCES_QUBE) at
+# /home/user/qvm-create-windows-qube, and copies ONLY the main program into dom0 as
+# /usr/bin/qvm-create-windows-qube. So tools/auto-qwt/install-qwt.bat exists inside that
+# qube, and this script has to reach into it - looking around dom0 for the file, however
+# thoroughly, finds nothing because there is nothing there.
+# Both values below are taken from install.sh and honour the same environment variable.
+#
+# Run by the qubes-windows-tools-ng RPM %post; safe and idempotent to run by hand any time
+# (e.g. after installing qvm-create-windows-qube later than this package).
+# Never exits nonzero: a missing qube is a report, not an error, and an RPM scriptlet must
+# not fail the transaction over it.
 set -u
-# Overridable so the logic can be exercised outside dom0 (a scriptlet whose only test is
-# "it ran during rpm -i" is a scriptlet nobody has ever seen work).
+
 STUB="${QWTNG_STUB:-/usr/share/qubes-windows-tools-ng/auto-qwt/install-qwt.bat}"
+QUBE="${RESOURCES_QUBE:-windows-mgmt}"
+DIR="${RESOURCES_DIR:-/home/user/qvm-create-windows-qube}"
+BAT="$DIR/tools/auto-qwt/install-qwt.bat"
+START=0
+[ "${1:-}" = "--start" ] && START=1
+
+say() { echo "qwt-ng-fix-qwcq: $*"; }
 
 if [ ! -f "$STUB" ]; then
-    echo "qwt-ng-fix-qwcq: shipped stub missing ($STUB) - is qubes-windows-tools-ng installed?"
+    say "shipped stub missing ($STUB) - is qubes-windows-tools-ng installed?"
     exit 0
 fi
 
-# WHERE IS IT? Two sources, both evidence, NEITHER of them a search:
-#   1. an explicit path on the command line - always wins;
-#   2. wherever the qvm-create-windows-qube entry point on PATH resolves to.
-# Deliberately no filesystem crawl. This runs from an RPM %post in dom0; walking somebody's
-# home directories to guess where they cloned a git repo is not something a package scriptlet
-# gets to do, and a hardcoded list of paths is the same guess with worse coverage. If it is
-# somewhere else, the user says so - see the message at the end.
-candidates=""
-for arg in "$@"; do
-    if [ -d "$arg" ]; then
-        candidates="$candidates $arg"
-    else
-        echo "qwt-ng-fix-qwcq: '$arg' is not a directory - ignored"
-    fi
-done
-
-if entry=$(command -v qvm-create-windows-qube 2>/dev/null); then
-    real=$(readlink -f "$entry" 2>/dev/null) && candidates="$candidates $(dirname "$real")"
+if ! qvm-check "$QUBE" >/dev/null 2>&1; then
+    say "resources qube '$QUBE' does not exist - nothing to patch."
+    say "  qvm-create-windows-qube keeps its repository there (see its install.sh);"
+    say "  if yours is elsewhere:  RESOURCES_QUBE=<qube> qwt-ng-fix-qwcq"
+    exit 0
 fi
-# De-duplicate: the argument and the entry point can name the same tree.
-candidates=$(printf '%s\n' $candidates | sort -u)
 
-patched=0 seen=0
-for root in $candidates; do
-    bat="$root/tools/auto-qwt/install-qwt.bat"
-    [ -f "$bat" ] || continue
-    seen=$((seen+1))
-    if cmp -s "$bat" "$STUB"; then
-        echo "qwt-ng-fix-qwcq: $bat already QWT-NG-aware"
-        continue
-    fi
-    [ -f "$bat.stock" ] || cp -p "$bat" "$bat.stock"
-    if cp "$STUB" "$bat"; then
-        echo "qwt-ng-fix-qwcq: PATCHED $bat (original kept as install-qwt.bat.stock)"
-        patched=$((patched+1))
-    else
-        echo "qwt-ng-fix-qwcq: could not write $bat - fix by hand: cp $STUB $bat"
-    fi
-done
+# Do NOT start a qube from an RPM scriptlet. A package install that boots a VM is a
+# surprise, and on a machine with little free memory it is a failure.
+if ! qvm-check --running "$QUBE" >/dev/null 2>&1 && [ "$START" = 0 ]; then
+    say "resources qube '$QUBE' is not running - not starting it from here."
+    say "  Run this once when convenient:  qwt-ng-fix-qwcq --start"
+    exit 0
+fi
 
-if [ "$seen" = 0 ]; then
-    echo "qwt-ng-fix-qwcq: qvm-create-windows-qube not found on PATH - nothing patched."
-    echo "  If you have it, give this its directory (it will not go looking for it):"
-    echo "      qwt-ng-fix-qwcq /path/to/qvm-create-windows-qube"
-    echo "  Until then qvm-create-windows-qube provisions a Windows qube whose tools install"
-    echo "  silently does nothing: its stub globs for qubes-tools-*.exe, which is not on this ISO."
+if ! qvm-run -q "$QUBE" "test -f '$BAT'" 2>/dev/null; then
+    say "'$QUBE' has no $BAT - qvm-create-windows-qube not cloned there?"
+    say "  If your clone is elsewhere:  RESOURCES_DIR=<path> qwt-ng-fix-qwcq"
+    exit 0
+fi
+
+# Already ours? Compare content rather than trusting a marker file.
+current=$(qvm-run -p --no-color-output "$QUBE" "cat '$BAT'" 2>/dev/null)
+if [ "$current" = "$(cat "$STUB")" ]; then
+    say "$QUBE:$BAT already QWT-NG-aware"
+    exit 0
+fi
+
+# One-time backup of whatever is there now, then write ours and READ IT BACK. A copy that
+# reported success and did not land is exactly the silent nothing-happened this whole script
+# exists to prevent.
+qvm-run -q "$QUBE" "test -f '$BAT.stock' || cp -p '$BAT' '$BAT.stock'" 2>/dev/null \
+    || say "warning: could not create $BAT.stock in $QUBE"
+
+if ! qvm-run -q --pass-io "$QUBE" "cat > '$BAT'" < "$STUB" 2>/dev/null; then
+    say "could not write $BAT in $QUBE - fix by hand: copy $STUB there"
+    exit 0
+fi
+
+verify=$(qvm-run -p --no-color-output "$QUBE" "cat '$BAT'" 2>/dev/null)
+if [ "$verify" = "$(cat "$STUB")" ]; then
+    say "PATCHED $QUBE:$BAT (original kept as install-qwt.bat.stock)"
+else
+    say "WROTE $BAT in $QUBE but the read-back does not match - patch it by hand"
 fi
 exit 0
