@@ -98,10 +98,24 @@ if [ -n "${RELEASE_SETUP:-}" ]; then
     mkdir -p "$WORK/payload/release"
     cp -r "$RELEASE_SETUP"/. "$WORK/payload/release/"
     [ -f "$WORK/payload/release/install.cmd" ] || { echo "ERROR: no install.cmd in $RELEASE_SETUP" >&2; exit 1; }
+    # SUPPRESS_XEN_REBOOT_PROMPT=1: set xenbus_monitor's AutoReboot BEFORE the installer runs.
+    # Needed to test an OLD build on this rig: releases up to 4.3.1 set that key only AFTER
+    # msiexec, so the "Xen PV Storage Host Adapter needs to restart the system" modal appears
+    # during the install and BLOCKS it - measured 2026-08-14, 70+ minutes, qrexec never came
+    # up, and the dialog was not clickable from dom0. That defect is fixed in the package
+    # itself from 4.3.2 on; this switch exists so an older package can still be installed here
+    # and its POST-INSTALL behaviour observed, which is the only way to reproduce a field
+    # report against the exact build the reporter ran. It changes nothing inside the package.
+    _prereg=""
+    if [ "${SUPPRESS_XEN_REBOOT_PROMPT:-0}" = 1 ]; then
+        _prereg='reg add "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters" /v AutoReboot /t REG_DWORD /d 1 /f /reg:64 >> C:\qubes-win-idd-setup.log 2>&1'
+        echo "payload: xenbus_monitor AutoReboot pre-set (rig affordance for pre-4.3.2 packages)"
+    fi
     cat > "$WORK/payload/setup.cmd" <<EOF
 @echo off
 rem Found by the FirstLogonCommands drive-letter scan: <drive>:\payload\setup.cmd
 echo === answer-stick payload === >> C:\qubes-win-idd-setup.log
+$_prereg
 call "%~dp0release\install.cmd" /auto ${INSTALL_FLAGS-/idd} >> C:\qubes-win-idd-setup.log 2>&1
 echo install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
 EOF
