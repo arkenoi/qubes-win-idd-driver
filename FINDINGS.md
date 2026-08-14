@@ -9927,3 +9927,33 @@ that would otherwise wait forever - the manual version of exactly that recovery 
 work, 20 KB of window vs 0 bytes. But it has NOT been seen to fire on its own, so its PASS is
 UNPROVEN and it must not be reported as fixing anything yet. Proving it needs a never-booted
 template plus the fixed agent, which is the run to do next.
+
+### SECOND CORRECTION: the never-booted-template explanation is dead too, and the trigger is unidentified
+
+A never-booted template was rebuilt from the same standalone (this time carrying the fixed
+agent) and two fresh AppVMs were started from it. Both connected instantly:
+
+    [20260814.224329.489] Awaiting for a vchan client
+    [20260814.224329.489] A vchan client has connected     VchanFirstClientRestarts = 0
+
+So "the template had never been booted" does not explain it either, and the self-heal again
+did not fire. Scoreboard for a fresh AppVM's FIRST boot:
+
+    template cloned 19:15 (from a standalone that had just been through the
+      SoloFaultInject runs and restore-rig's VGA devnode cycling)   3/3 NO GUI
+    template cloned 19:42 (from the same standalone after a clean boot,
+      an agent swap and a clean shutdown)                           2/2 GUI, instantly
+
+The failure is real - it was observed three times, with the agent log stopping at "Awaiting
+for a vchan client" and a manual agent restart curing it on the spot - but its TRIGGER is not
+identified, and the most likely remaining suspect is the state my own display experiments left
+in the source image before the first clone (devnode cycling, a disabled/re-enabled VGA, a
+topology apply history), not anything about templates or AppVMs as such.
+
+RECORDED AS: an unexplained, currently non-reproducible first-boot GUI failure with a known
+recovery. Not offered as an explanation of post 56. The self-heal stays in as a guard against
+an agent that would otherwise wait forever, with its PASS explicitly unproven - it has never
+been seen to fire.
+
+Next run that would settle it: clone a template from a standalone that has NOT been through
+the display experiments, and separately clone one that has, and start a fresh AppVM from each.
