@@ -1227,6 +1227,49 @@ function Invoke-Stage2 {
                 Write-Log "consumer-nag silencer failed: $($_.Exception.Message) (non-fatal)" 'WARN'
                 $script:Result.detail.quiet_desktop = "error: $($_.Exception.Message)"
             }
+
+            # RE-ASSERT AT EVERY BOOT, and keep a persistent copy to re-assert FROM.
+            #
+            # Running this once at install time is not enough, for two reasons that both bite in
+            # normal use:
+            #   * a feature update rewrites consumer surface - the same reason the autologon guard
+            #     exists - so a qube that was quiet before 24H2 -> 25H2 is chatty after it;
+            #   * this is a TEMPLATE. Its AppVMs get fresh user profiles, and the per-user half of
+            #     these settings (File Explorer sync-provider adverts, ContentDeliveryManager) is
+            #     written per profile. quiet-desktop.ps1 covers existing profiles and the Default
+            #     hive, but only for profiles that exist WHEN IT RUNS.
+            # The installer runs the script straight out of the setup payload, which does not
+            # survive, so a persistent copy is a prerequisite rather than a nicety.
+            try {
+                $qBin = Join-Path $script:DefaultBinDir 'quiet-desktop.ps1'
+                New-Item -ItemType Directory -Force (Split-Path $qBin) | Out-Null
+                Copy-Item -LiteralPath $quiet -Destination $qBin -Force
+                $qXml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>QWT-NG: re-assert the consumer-nag policies at boot (feature updates and new user profiles undo them)</Description></RegistrationInfo>
+  <Triggers><BootTrigger><Enabled>true</Enabled><Delay>PT1M</Delay></BootTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>powershell.exe</Command><Arguments>-NoProfile -ExecutionPolicy Bypass -File "$qBin"</Arguments></Exec></Actions>
+</Task>
+"@
+                $qf = Join-Path $env:TEMP 'qubes-quiet-desktop.xml'
+                [IO.File]::WriteAllText($qf, $qXml, [Text.Encoding]::Unicode)
+                $qr = & schtasks /create /tn QubesQuietDesktopGuard /xml "$qf" /f 2>&1
+                Write-Log ("quiet-desktop boot guard rc=$LASTEXITCODE : " + ($qr -join ' '))
+                $script:Result.detail.quiet_desktop_guard = "rc=$LASTEXITCODE"
+            } catch {
+                Write-Log "quiet-desktop boot guard failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+                $script:Result.detail.quiet_desktop_guard = "error: $($_.Exception.Message)"
+            }
         }
     } else { $script:Result.detail.quiet_desktop = 'skipped' }
 
