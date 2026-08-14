@@ -241,6 +241,25 @@ function Test-TestSigningActive {
     return ($v -and $v -match 'TESTSIGNING')
 }
 
+function Set-XenbusAutoReboot {
+    # The xenbus_monitor service (xenbus/src/monitor/monitor.c PromptForReboot) pops a modal
+    # Yes/No - "Xen PV Storage Host Adapter needs to restart the system to complete
+    # installation" - whenever a PV driver install wants a reboot. It hangs an unattended
+    # install, and on a seamless guest the user may not even be able to act on it. The
+    # monitor's own TryAutoReboot reads REG_DWORD AutoReboot under its Parameters key:
+    # non-zero => reboot SILENTLY, prompt never shown.
+    # Writing the key when the SERVICE does not exist yet is fine and is the point: the value
+    # is read at prompt time, so it must be in place before the install that would prompt.
+    # Silent auto-reboot on a PV-driver change is the right behaviour for a qube anyway - the
+    # same no-interactive-dialog philosophy as autologon and the disabled lock screen.
+    & reg.exe add 'HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' `
+        /v AutoReboot /t REG_DWORD /d 1 /f /reg:64 | Out-Null
+    $ok = ($LASTEXITCODE -eq 0)
+    Write-Log "xenbus_monitor AutoReboot=1 set (silent PV-driver reboot, no modal dialog) rc=$LASTEXITCODE"
+    $script:Result.detail.xenbus_autoreboot = $ok
+    return $ok
+}
+
 $script:TaskName = 'QwtImprovedSetup'
 
 function Set-BootResume {
@@ -514,6 +533,12 @@ function Invoke-Stage1 {
     param([Parameter(Mandatory)][string]$Root)
 
     $script:Result.stage = 'stage1-prepare'
+
+    # Earliest possible point: a guest that ALREADY has PV drivers can raise the
+    # xenbus_monitor reboot prompt during stage 1's uninstall of a previous QWT, long before
+    # stage 2 runs. The key is read at prompt time and costs nothing when no PV driver is
+    # ever installed.
+    Set-XenbusAutoReboot | Out-Null
 
     # --- certificates -------------------------------------------------------------
     # Root  : makes the self-signed publisher chain valid.
@@ -874,24 +899,21 @@ function Invoke-Stage2 {
     if ($script:SameVersionReinstall) { $msiArgs += 'REINSTALL=ALL' }
     $msiArgs += @('REBOOT=ReallySuppress', 'REINSTALLMODE=amus', 'MSIFASTINSTALL=7', '/l*v', "`"$msiLog`"")
     Write-Log "running msiexec ADDLOCAL=$addlocal REINSTALL=$(if($script:SameVersionReinstall){'ALL'}else{'(none)'}) (verbose log: $msiLog)"
+    # BEFORE msiexec, not after. The xenbus_monitor service pops its modal Yes/No the moment a
+    # PV driver install asks for a reboot - i.e. DURING this msiexec - so setting AutoReboot
+    # afterwards is too late for the very install that raises it. Observed live on 2026-08-14:
+    # the dialog was sitting on the dom0 desktop mid-install, which is the field report in
+    # forum 42717 post 33 ("the PV disk driver installer prompt is not clickable").
+    Set-XenbusAutoReboot
     $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $msiArgs
     if ($p.ExitCode -notin 0, 3010) { Fail "msiexec failed with $($p.ExitCode) - see $msiLog" }
     Write-Log "QWT_INSTALL_OK rc=$($p.ExitCode)"
     $script:Result.detail.msiexec_rc = $p.ExitCode
     $script:Result.detail.addlocal = $addlocal
 
-    # Suppress the xenbus_monitor's interactive "PV driver needs a restart" dialog. That service
-    # (xenbus/src/monitor/monitor.c PromptForReboot) pops a modal Yes/No - "Xen PV Storage Host
-    # Adapter needs to restart the system to complete installation" - whenever a PV driver install
-    # wants a reboot, and it HANGS an unattended install (hit on a same-version REINSTALL=ALL, which
-    # reinstalls the PV disk drivers). The monitor's own TryAutoReboot reads REG_DWORD AutoReboot
-    # under its Parameters key: non-zero => reboot SILENTLY, prompt never shown. Set it. The value
-    # persists across reinstalls (the INF's AddService for xenbus_monitor does not write Parameters).
-    # Silent auto-reboot on PV-driver change is the right behaviour for a Qubes qube anyway - same
-    # no-interactive-dialog philosophy as autologon/no-lock-screen.
-    & reg.exe add 'HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' /v AutoReboot /t REG_DWORD /d 1 /f /reg:64 | Out-Null
-    Write-Log "xenbus_monitor AutoReboot=1 set (silent PV-driver reboot, no modal dialog) rc=$LASTEXITCODE"
-    $script:Result.detail.xenbus_autoreboot = ($LASTEXITCODE -eq 0)
+    # Re-assert AFTER the install too: the MSI can lay the service down fresh, and a value
+    # written before it existed would be lost with the old service key.
+    Set-XenbusAutoReboot
 
     # --- prove the install put OUR agent on disk ------------------------------------
     # Without this the script would report success for an install that silently kept a
