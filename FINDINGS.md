@@ -9891,3 +9891,39 @@ agent. Until that runs, this is a fix with a proven mechanism and an unproven en
     in and works, so this is not the GUI defect, but it is worth its own look.
   * `GetWindowData: GetRealWindowRect failed with error 0x80070006` appears on the AppVM's
     working boot - windows disappearing between enumeration and query. Noise, but recorded.
+
+### CORRECTION, same night: the variable was the TEMPLATE never having been booted
+
+The acceptance run for the self-heal passed - and passed for the wrong reason, which the log
+says plainly:
+
+    [20260814.223900.252] WatchForEvents: Awaiting for a vchan client
+    [20260814.223900.252] WatchForEvents: A vchan client has connected
+    VchanFirstClientRestarts = 0
+
+Same millisecond, and the restart counter never moved. The self-heal DID NOT FIRE, so it is
+not what made this first boot work.
+
+What actually changed between the 3/3 failures and this success: to install the fixed agent I
+had to START win10-tpl, i.e. the template was booted for the first time. Every failing AppVM
+had been created from a template that had NEVER been booted - it was built by cloning volumes
+straight out of a standalone qube. And it fits the one case that always worked: win11-app came
+from win11-tpl, a template that had been booted many times as the updater rig.
+
+So the defect I reproduced is: **an AppVM created from a never-booted Windows template comes up
+with no GUI on its first boot** - the guest still has to complete the specialisation its
+template never did, and the agent's vchan server does not survive it. Booting the template once
+removes it.
+
+CONSEQUENCE FOR POST 56: this is probably NOT GWeck's bug. His template was certainly booted -
+he installed QWT inside it. My reproduction shares the SHAPE of his report (a qube that starts
+and then does nothing visible) but not necessarily its cause, and I am not going to present it
+as his. What it is: a real defect in a path this project had never exercised, found by building
+the configuration he described.
+
+STATUS OF THE FIX: the self-heal in the agent (exit for a watchdog respawn after 90 s with no
+client that ever connected, bounded to three attempts) is a defensible guard against an agent
+that would otherwise wait forever - the manual version of exactly that recovery was measured to
+work, 20 KB of window vs 0 bytes. But it has NOT been seen to fire on its own, so its PASS is
+UNPROVEN and it must not be reported as fixing anything yet. Proving it needs a never-booted
+template plus the fixed agent, which is the run to do next.
