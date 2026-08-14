@@ -453,8 +453,35 @@ try {
       $script:St.phase='resolve'; Save
       $urls = Resolve-Catalog $u.kb
       Log "$($u.kb): $($urls.Count) catalog .msu"
+      # ASK BEFORE DOWNLOADING. The catalog's DownloadDialog returns every file bundled with an
+      # update, including SUPERSEDED cumulatives: for KB5121003 it returns kb5043080 (2024-09)
+      # alongside the one we want. On a 26100.8875 image the older one is not applicable, DISM
+      # rejects it with rc=552, and feeding it to CBS first preceded the cumulative being rolled
+      # back at boot with 0x80070490. The KB is in the URL, so this costs no bytes to decide.
+      # /Get-PackageInfo cannot help here - measured: it reports the superseded package as
+      # "Applicable: Yes, State: Installed, identity OnePackage~~~~0.0.0.0", i.e. nothing usable.
+      # Deliberately ABOVE the resolve-only branch: the decision is pure string work on URLs, so
+      # `-Action resolve` is a genuine zero-byte dry run of exactly what a download would fetch.
+      $digits = ($u.kb -replace '\D', '')
+      $matching = @($urls | Where-Object { $_ -match $digits })
+      if ($matching.Count -gt 0 -and $matching.Count -lt $urls.Count) {
+        Log ("  " + $u.kb + ": " + ($urls.Count - $matching.Count) + " of " + $urls.Count +
+             " catalog file(s) are for other KBs - not downloading them")
+        foreach ($drop in ($urls | Where-Object { $_ -notmatch $digits })) {
+          Log ("    DROP " + (& { if ($drop -match '/([^/?]+\.msu)') { $Matches[1] } else { $drop } }))
+        }
+        $urls = $matching
+      } elseif ($matching.Count -eq 0) {
+        Log ("  " + $u.kb + ": no catalog file names mention the KB - keeping all " + $urls.Count)
+      }
       $got=@()
-      if ($Action -eq 'resolve') { Log "$($u.kb): resolve-only, $($urls.Count) package(s)"; continue }
+      if ($Action -eq 'resolve') {
+        Log "$($u.kb): resolve-only, would fetch $($urls.Count) package(s)"
+        foreach ($url in $urls) {
+          Log ("    KEEP " + (& { if ($url -match '/([^/?]+\.msu)') { $Matches[1] } else { $url } }))
+        }
+        continue
+      }
       if ($Action -in 'download','full') {
         $script:St.phase='download'; Save
         # ONE DIRECTORY PER KB. DISM treats the folder holding a package as a source set: with a
@@ -463,22 +490,6 @@ try {
         # each KB makes that impossible and keeps resume/reuse working.
         $kbDir = Join-Path $WorkDir $u.kb
         New-Item -ItemType Directory -Force $kbDir | Out-Null
-        # ASK BEFORE DOWNLOADING. The catalog's DownloadDialog returns every file bundled with an
-        # update, including SUPERSEDED cumulatives: for KB5121003 it returns kb5043080 (2024-09)
-        # alongside the one we want. On a 26100.8875 image the older one is not applicable, DISM
-        # rejects it with rc=552, and feeding it to CBS first preceded the cumulative being rolled
-        # back at boot with 0x80070490. The KB is in the URL, so this costs no bytes to decide.
-        # /Get-PackageInfo cannot help here - measured: it reports the superseded package as
-        # "Applicable: Yes, State: Installed, identity OnePackage~~~~0.0.0.0", i.e. nothing usable.
-        $digits = ($u.kb -replace '\D', '')
-        $matching = @($urls | Where-Object { $_ -match $digits })
-        if ($matching.Count -gt 0 -and $matching.Count -lt $urls.Count) {
-          Log ("  " + $u.kb + ": " + ($urls.Count - $matching.Count) + " of " + $urls.Count +
-               " catalog file(s) are for other KBs - not downloading them")
-          $urls = $matching
-        } elseif ($matching.Count -eq 0) {
-          Log ("  " + $u.kb + ": no catalog file names mention the KB - keeping all " + $urls.Count)
-        }
         $i=0; foreach($url in $urls){ $i++; $name="$($u.kb)_$i.msu"; if($url -match '/([^/?]+\.msu)'){$name=$Matches[1]}
           $dst=Join-Path $kbDir $name; if(Fetch-Msu $url $dst $u.kb){ $got+=$dst } }
       } else { $got = @(Get-ChildItem (Join-Path (Join-Path $WorkDir $u.kb) '*.msu') -EA SilentlyContinue | ForEach-Object FullName) }

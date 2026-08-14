@@ -8586,3 +8586,43 @@ RECOVERY, if it ever does happen (recorded in .claude/skills/qubes-admin-api): t
 repaired from inside because nothing can run inside. admin.vm.volume.ListSnapshots and
 admin.vm.volume.Revert are permitted from the dev qube and work on the VOLUME, not a session, so
 a locked-out guest can be rolled back to its pre-update root without dom0 shell access.
+
+## 2026-08-14 — RETRACTION: the CBS "dirty servicing state" verdict was a false positive
+
+Claim retracted: that a killed/timed-out run left CBS mid-transaction, and that the pristine
+`win11-24h2` image might carry an inherited pending transaction explaining the 24H2 rollback.
+
+The guard behind that claim tested `Test-Path ...\Component Based Servicing\SessionsPending`.
+That key exists on **every healthy Windows image** and holds COMPLETED session history, so the
+guard reported "DIRTY" unconditionally. Measured on a freshly rebuilt, never-updated clone of the
+pristine source (`guest/wu-cbs-state.ps1`, `guest/wu-cbs-subkeys.ps1`), before anything of ours ran:
+
+    SessionsPending  exists=True  values=4 subkeys=5   Exclusive=0
+      all 5 subkeys carry Complete=1  (finished sessions, dated 2026-08-10/11)
+    RebootPending = absent    PackagesPending = absent    winsxs\pending.xml = absent
+    PendingFileRenameOperations = 0    WU RebootRequired = False
+    DISM /Online /Cleanup-Image /CheckHealth -> "No component store corruption detected."
+    build = 26100.8875
+
+So: the pristine image is CLEAN, inherited-dirty-CBS is ruled out as a cause of the 24H2
+cumulative rollback (0x80070490 / CBS_E_INVALID_PACKAGE), and the earlier "DIRTY" reading is
+evidence of nothing but a broken check.
+
+Corrected rule, now in `wu-lcu-alone-detached.ps1` / `wu-install-lcu-alone.ps1` /
+`wu-dism-forensics.ps1` — an interrupted transaction is:
+  * a SessionsPending subkey with `Complete != 1`, or
+  * `SessionsPending\Exclusive != 0`, or
+  * `C:\Windows\WinSxS\pending.xml` present.
+`RebootPending` present is **staged-awaiting-reboot**, the normal state after staging - not damage.
+
+### Pre-download KB filter verified at zero bytes
+
+`-Action resolve` now applies the filter before returning (it is pure string work on catalog URLs),
+making it a true dry run. On win11-tpl @ 26100.8875:
+
+    KB5121003: 2 catalog .msu
+      DROP windows11.0-kb5043080-x64_9534...msu     <- superseded 2024-09 cumulative
+      KEEP windows11.0-kb5121003-x64_dc58...msu
+    KB5120710: 1 catalog .msu -> KEEP ...-ndp481_7f3b...msu
+
+That is exactly the pairing that preceded the rollback, rejected before a byte is spent.
