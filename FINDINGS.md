@@ -9617,3 +9617,114 @@ is done and the domain is failing to go away, where a kill is safe and correct.
 
 Unresolved: WHY the teardown hangs. Not investigated - it cost ~20 minutes here and would strand a
 user who does not know to kill the qube.
+
+## 2026-08-14 (evening) — GWeck's 4.3.1 reports: the escape hatch, and one root cause found by running it
+
+Trigger: forum 42717 posts 54/55/56, the last of which (16:15 today) is new since the handover.
+Post 54 is the severe one - Windows 10 22H2 with 4.3.1 comes up after the IDD-activation reboot
+as "only a black inactive window", the Windows key does nothing, applications will not start,
+shutdown from the Qube Manager does not work, and killing the qube brings the same black window
+back. Post 56 adds that AppVMs based on that Win10 template start and then shut down silently.
+Post 55: the SAME machine on 09b643e with Open-Shell is completely fine on both Win10 22H2 and
+Win11 25H2. He asks for /noidd.
+
+### Shipped today (proven on win11-fresh, by pixels, not by logs)
+
+* `install.cmd /noidd` - fresh install, never activate the IddCx driver (-NoIddDriver existed
+  but was reachable only by hand-editing a command line).
+* `install.cmd /iddoff` + `guest/deactivate-idd.ps1` - the RECOVERY path: NoTopologyApply=1
+  first so the agent cannot re-detach the VGA, then re-enable the VGA, then remove the IDD
+  device, then reboot. It deliberately avoids ChangeDisplaySettingsEx so it runs over qrexec
+  from dom0 on a guest with no usable display, which is the only situation it exists for.
+* `install.cmd /iddonly` now clears NoTopologyApply, or re-activating after /iddoff would
+  create the device and never attach it.
+* install.cmd names the file a switch needs when it is not on the medium.
+
+MEASURED round trip on win11-fresh (Win11 26200, IDD active at 5120x1440):
+
+    install.cmd /bogus       -> "Unknown option", the new options listed          PASS
+    install.cmd /updatesonly -> names the missing file and where it looked        PASS
+    install.cmd /iddoff      -> VGA enabled, ROOT\DISPLAY\0000 removed, reboot    PASS
+      after reboot: ATTACHED=1 Microsoft Basic Display Adapter 3440x1440,
+      agent logs "IDD solo: DISABLED by NoTopologyApply=1", Notepad renders
+      in dom0 (screenshot, not a log line)                                        PASS
+    install.cmd /iddonly     -> IDD device recreated, VGA disabled, reboot        PASS
+
+### ROOT CAUSE FOUND: /iddonly could never have worked, and it is a quoting bug
+
+The first /iddoff run failed with `IDD DEACTIVATION FAILED: Illegal characters in path`.
+Cause: `%~dp0` ends with a backslash, so `-Root "%HERE%"` reaches PowerShell as `-Root
+"C:\path\"` - and PowerShell's argument parser reads `\"` as an ESCAPED QUOTE. The script
+receives `C:\path"`, with a trailing quote character, and every path built from it is invalid.
+
+This is not a new defect: win11-fresh's own `C:\qwt-idd-activate.log` from 2026-08-11 records
+
+    IDD ACTIVATION FAILED: C:\qwtc"\idd-driver holds 0 .inf files (expected exactly 1)
+
+- the same stray quote, sitting in the log for three days. So the earlier triage of GWeck's
+post-35 `/idd` report (user error + the script not shipping) was incomplete: there is a THIRD,
+independent cause, and it would have broken /iddonly even on a medium that carried the script.
+Fixed by passing `%HEREQ%` (the directory without its trailing backslash) into every script.
+
+Process note: this was found by RUNNING the switch on a guest, not by reading it. The same code
+had been read several times today.
+
+### The agent fix, and what could NOT be proven
+
+`EnsureQubesIddSolo` detached every other display first and only then tried to make the IDD
+primary, both with CDS_UPDATEREGISTRY. If the second step failed, the guest would be left with
+no attached display AND that state persisted for the next boot - which matches post 54 exactly,
+including surviving a kill. The failure is reachable in principle: an IddCx adapter enumerates
+as soon as its devnode starts but has no mode list until its monitor arrives, and the agent is
+started very early by the watchdog service.
+
+Added: (1) a readiness gate - refuse to touch the topology until the IDD publishes a mode,
+returning ERROR_NOT_READY, retried for 20 s at startup; (2) a rollback that re-attaches exactly
+what was detached, with its previous mode and primary flag; (3) SoloFaultInject, a registry hook
+that makes the apply fail on purpose, so the guard can be seen to fail (=2 suppresses the
+rollback, i.e. the pre-fix behaviour).
+
+FALSIFICATION ATTEMPT, and it did not succeed. On win11-fresh, with the precondition built and
+ASSERTED (IDD detached, VGA attached and primary) and SoloFaultInject=2:
+
+    IDD solo: found IDD adapter '\\.\DISPLAY2', attached=0 primary=0
+    IDD solo: detach '\\.\DISPLAY5' -> -2            <- DISP_CHANGE_BADMODE
+    IDD solo: set-primary '\\.\DISPLAY_QUBES_FAULT_INJECT' -> -5, commit -> 0
+    IDD solo: '\\.\DISPLAY5' is STILL attached
+    IDD solo: FAILED - idd attached=0 primary=0, others still attached=1
+
+**Windows refused to detach the last attached display.** So on Win11 26200 the headless state
+is structurally unreachable by this path, the rollback never ran, and its PASS is therefore
+UNPROVEN - recorded as such. Whether Win10 19045 enforces the same rule is not known here and
+is exactly what a Win10 rig would settle. The readiness gate stands on its own reasoning (never
+attempt an apply the IDD cannot accept) and is cheap; the rollback stays as defence in depth.
+
+An earlier run of the same experiment was VOID: modeprobe's JSON field is `device_name`, my
+harness read `.name`, so `--solo` never ran and the precondition was never established. The
+assertion added afterwards caught the next attempt and aborted it instead of producing a
+confident wrong answer.
+
+### GWeck is 53 agent commits behind, including the fixes for what he reports
+
+`git log c7ccb459..HEAD` in agent/ is 53 commits. Among them: 8be83b8 (2026-08-12) makes the
+agent adopt the size Windows APPLIED instead of the size it requested - that is the diagnosed
+cause of his S2 "mouse pointer ~1 cm below where the system thinks it is", and it landed two
+days after the release he is running. Also the whole 25H2 shell-surface series (toastcrop,
+shell-managed Start, the geometry sanitizer) and the drag work. His 4.3.1 predates all of it.
+
+CONSEQUENCE: the highest-value action for him is a new release, not more diagnosis of 4.3.1.
+
+### Win10 diagnosis is BLOCKED on a rig, and the reason is recorded
+
+win10-clean cannot run anything elevated - measured, not assumed:
+
+    schtasks /Create /RL HIGHEST (guest/run-elevated.ps1)  -> ERROR: Access is denied
+    qrexec qubes.VMRootShell                               -> Request refused (no such service)
+    qrexec qubes.VMShell+SYSTEM                             -> runs as win-idd-test\user,
+                                                              Medium Mandatory Level
+    EnableLUA=1, ConsentPromptBehaviorAdmin=5, no consent UI reachable
+
+So the IDD cannot be installed or activated there, and GWeck's platform cannot be reproduced on
+the rig we have. A fresh Win10 with EnableLUA=0 is needed (the USB answer-stick route works and
+is cheap - FINDINGS 2026-08-07), but it requires creating/removing a qube, which the harness
+refuses without the user's approval. Flagged to the user rather than worked around.

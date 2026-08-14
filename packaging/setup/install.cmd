@@ -49,6 +49,13 @@ REM ===========================================================================
 setlocal EnableDelayedExpansion
 
 set "HERE=%~dp0"
+REM %~dp0 ends with a backslash, and PowerShell's argument parser reads the resulting
+REM  -Root "C:\path\"  as an ESCAPED QUOTE: the script receives  C:\path"  and dies with
+REM "Illegal characters in path". That is why /iddonly failed in the field with a raw
+REM PowerShell error (forum 42717 post 35: the guest log shows -Root as  C:\qwtc" ).
+REM HEREQ is the same directory WITHOUT the trailing backslash - use it for every value
+REM passed INTO a script; -File "%HERE%name.ps1" is unaffected because a name follows.
+set "HEREQ=%HERE:~0,-1%"
 REM Capture the ORIGINAL argument line before parsing consumes it: the UAC relaunch
 REM below has to hand the same flags to the elevated copy of this script.
 set "RAWARGS=%*"
@@ -94,17 +101,17 @@ if defined IDDONLY (
   REM Add/activate the IddCx driver on a guest that ALREADY has QWT - no MSI, no version gate,
   REM no PV-disk 0x7B gate. For an existing install that predates IDD-by-default (GWeck's case).
   call :needfile "%HERE%activate-idd.ps1" /iddonly || exit /b 66
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%activate-idd.ps1" -Root "%HERE%"
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%activate-idd.ps1" -Root "%HEREQ%"
 ) else if defined IDDOFF (
   REM Recovery: put the guest back on the emulated VGA and remove the IDD device. Runs on a
   REM guest whose display is already unusable, so it must not depend on the IDD working.
   call :needfile "%HERE%deactivate-idd.ps1" /iddoff || exit /b 66
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%deactivate-idd.ps1" -Root "%HERE%"
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%deactivate-idd.ps1" -Root "%HEREQ%"
 ) else if defined UPDATESONLY (
   REM Deploy the Windows Update agent on a guest that ALREADY has QWT: compile the relay, place
   REM the agent, register the scheduled scan that reports update availability to dom0. No MSI.
   call :needfile "%HERE%install-updater-agent.ps1" /updatesonly || exit /b 66
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%install-updater-agent.ps1" -SetupRoot "%HERE%" -BinDir "C:\Program Files\Qubes Tools\bin"
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%install-updater-agent.ps1" -SetupRoot "%HEREQ%" -BinDir "C:\Program Files\Qubes Tools\bin"
 ) else (
   call :needfile "%HERE%Install-QwtImproved.ps1" "the installer" || exit /b 66
   powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%Install-QwtImproved.ps1"%PSARGS%
