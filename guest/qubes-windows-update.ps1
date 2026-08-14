@@ -286,6 +286,28 @@ function Test-Msu($path, $expect) {
   return 'ok'
 }
 
+function Get-UrlSize($url){
+  # Size WITHOUT fetching a body, so "what would this cost" is answerable before committing to it.
+  # Two ways, because CDNs are inconsistent: HEAD first, then a one-byte ranged GET whose
+  # Content-Range trailer carries the full length. Returns -1 when neither works - callers must
+  # print that as unknown rather than silently reporting 0, which would read as "free".
+  foreach($method in 'HEAD','GET'){
+    try{
+      $r=[System.Net.HttpWebRequest]::Create($url); $r.Proxy=New-Object System.Net.WebProxy($Proxy)
+      $r.Timeout=30000; $r.Method=$method
+      if($method -eq 'GET'){ $r.AddRange(0,0) }
+      $resp=$r.GetResponse()
+      $len=-1
+      $cr=$resp.Headers['Content-Range']
+      if($cr -and $cr -match '/(\d+)\s*$'){ $len=[int64]$Matches[1] }
+      elseif($resp.ContentLength -gt 0){ $len=[int64]$resp.ContentLength }
+      $resp.Close()
+      if($len -ge 0){ return $len }
+    }catch{ }
+  }
+  return -1
+}
+
 function Fetch-Msu($url,$dst,$kb){
   # Throughput is a first-class output here, not a nicety: every rate figure recorded for this
   # tunnel so far was taken while the guest was also talking to telemetry endpoints the proxy
@@ -463,6 +485,18 @@ try {
     $before = $avail.Count
     $avail = @($avail | Where-Object { $k = $_.kb; @($OnlyKb | Where-Object { $k -match $_ }).Count -gt 0 })
     Log ("-OnlyKb " + ($OnlyKb -join ',') + ": acting on $($avail.Count) of $before offered update(s)")
+    # A KB that is no longer OFFERED (because it is already installed) can still be interrogated -
+    # that is how you price a package after the fact. Allowed for `resolve` ONLY: resolve reads
+    # catalog metadata and sizes, it downloads and installs nothing, so this can never push an
+    # update onto a guest that Windows did not offer.
+    if ($avail.Count -eq 0 -and $Action -eq 'resolve') {
+      foreach ($k in $OnlyKb) {
+        if ($k -match '^(KB\d+)$') {
+          $avail += [pscustomobject]@{ kb = $Matches[1]; title = '(forced resolve - not currently offered)' }
+        }
+      }
+      Log ("forced resolve of " + ($avail | ForEach-Object { $_.kb }) -join ',')
+    }
   }
 
   if ($Action -eq 'wuinstall') {
@@ -492,8 +526,15 @@ try {
       if ($matching.Count -gt 0 -and $matching.Count -lt $urls.Count) {
         Log ("  " + $u.kb + ": " + ($urls.Count - $matching.Count) + " of " + $urls.Count +
              " catalog file(s) are for other KBs - not downloading them")
+        # Size the dropped files on a resolve pass. This is the ONLY exact figure for what the
+        # filter saves - the payload's internal waste is not knowable from a URL - and it costs
+        # one HEAD each, no body.
         foreach ($drop in ($urls | Where-Object { $_ -notmatch $digits })) {
-          Log ("    DROP " + (& { if ($drop -match '/([^/?]+\.msu)') { $Matches[1] } else { $drop } }))
+          $nm = if ($drop -match '/([^/?]+\.msu)') { $Matches[1] } else { $drop }
+          if ($Action -eq 'resolve') {
+            $sz = Get-UrlSize $drop
+            Log ("    DROP " + $nm + "  " + $(if($sz -ge 0){ "{0:N1} MB avoided" -f ($sz/1MB) } else { 'size unknown' }))
+          } else { Log ("    DROP " + $nm) }
         }
         $urls = $matching
       } elseif ($matching.Count -eq 0) {
@@ -502,9 +543,14 @@ try {
       $got=@()
       if ($Action -eq 'resolve') {
         Log "$($u.kb): resolve-only, would fetch $($urls.Count) package(s)"
+        $keepTotal = 0
         foreach ($url in $urls) {
-          Log ("    KEEP " + (& { if ($url -match '/([^/?]+\.msu)') { $Matches[1] } else { $url } }))
+          $nm = if ($url -match '/([^/?]+\.msu)') { $Matches[1] } else { $url }
+          $sz = Get-UrlSize $url
+          if ($sz -ge 0) { $keepTotal += $sz }
+          Log ("    KEEP " + $nm + "  " + $(if($sz -ge 0){ "{0:N1} MB" -f ($sz/1MB) } else { 'size unknown' }))
         }
+        Log ("  " + $u.kb + ": would transfer {0:N1} MB" -f ($keepTotal/1MB))
         continue
       }
       if ($Action -in 'download','full') {

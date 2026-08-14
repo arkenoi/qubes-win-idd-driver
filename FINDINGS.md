@@ -8718,3 +8718,40 @@ Precise position, because "no overhead" would be an overclaim:
   packages Windows Update can deliver. So the catalog path trades transfer volume for
   determinism and for a closed egress surface. NOT MEASURED here: what WU-native would have
   transferred for the same KB - do not quote a number for it without measuring.
+
+## 2026-08-14 — EXACT download overhead, measured
+
+Priced with HEAD / one-byte ranged GET through the proxy, no payload transferred
+(`guest/wu-price-kb.ps1`, `-Action resolve` now reports sizes):
+
+    KB5121003, catalog offers 2 files
+      KEEP  windows11.0-kb5121003-x64_dc58...msu   4,867.4 MB
+      DROP  windows11.0-kb5043080-x64_9534...msu     509.0 MB   <- avoided by the KB filter
+      total the catalog would have handed us        5,376.4 MB
+      transferred                                   4,867.4 MB
+      wasted-file overhead eliminated                 509.0 MB = 9.5% of the naive transfer
+
+So on the wire the filter is now exactly lossless: 0 bytes fetched that are not the requested KB.
+The 509 MB is not merely wasted bandwidth - it is the package whose rejection poisoned the CBS
+transaction and rolled the cumulative back, so the filter's value is correctness first, 9.5% second.
+
+### Overhead INSIDE the package (package-level, exact; byte-level, not knowable from the log)
+
+`guest/wu-payload-overhead.ps1` over the 266.5 MB CbsPersist install log:
+
+    packages evaluated          9,036
+      applicable / installed    4,007
+      absent (walked past)      5,029   = 55.7% of evaluated packages
+    distinct language tags carried  42  (image needs en-US)
+
+That is the price of the catalog path: it serves the full combined SSU+LCU for every edition and
+all 42 languages, and this image used 44.3% of the packages in it.
+
+**Not derivable from the log, and deliberately not estimated:** the BYTE split of the 4,867 MB
+between applied and skipped payload. CBS does not log a compressed size per payload member, and
+the .msu is deleted after a successful install (`qubes-windows-update.ps1:546`). Getting it would
+mean re-downloading and expanding the ESD. Quote the package ratio, never a byte ratio.
+
+Measured on disk after the pass, for reference (no pristine control taken, so this is a level,
+not a delta): WinSxS 20.95 GB apparent across 130,853 files (hardlinked - apparent overstates
+real), C: used 24.26 GB of 79.37 GB.
