@@ -26,13 +26,32 @@ $rebootPending = Test-Path (Join-Path $cbs 'RebootPending')
 $pendingXml    = Test-Path 'C:\Windows\WinSxS\pending.xml'
 Write-Output ("cbs_incomplete_sessions = {0}" -f $incomplete.Count)
 Write-Output ("cbs_exclusive           = {0}" -f $exclusive)
-Write-Output ("cbs_reboot_pending      = {0}   (staged-awaiting-reboot, NOT corruption)" -f $rebootPending)
+Write-Output ("cbs_reboot_pending      = {0}" -f $rebootPending)
 Write-Output ("winsxs_pending_xml      = {0}" -f $pendingXml)
-if ($incomplete.Count -gt 0 -or $exclusive -ne 0 -or $pendingXml) {
-    foreach ($s in $incomplete) { Write-Output ("   incomplete: " + $s.PSChildName) }
-    Write-Output 'DIRTY: a servicing transaction is genuinely mid-flight. REBUILD the template'
-    Write-Output 'instead of testing on this image - the result would not be attributable.'
+
+# REFINED 2026-08-14, after watching a perfectly healthy staged install produce
+# incomplete_sessions=1 + RebootPending=True. An incomplete session is only evidence of damage
+# when nothing is scheduled to finish it: staging a package legitimately leaves its session open
+# until the reboot that completes it. So the states separate as
+#     incomplete + RebootPending  -> STAGED, normal: reboot, then re-check
+#     incomplete + no RebootPending -> genuinely interrupted
+#     Exclusive != 0 or pending.xml -> a transaction is mid-flight right now
+# and the gate before a NEW experiment is stricter than either: start from a booted, settled
+# image, because testing an install on top of another update's staged payload is unattributable.
+if ($exclusive -ne 0 -or $pendingXml) {
+    Write-Output 'DIRTY: a servicing transaction is mid-flight. REBUILD the template.'
     exit 2
+}
+if ($incomplete.Count -gt 0 -and -not $rebootPending) {
+    foreach ($s in $incomplete) { Write-Output ("   incomplete: " + $s.PSChildName) }
+    Write-Output 'DIRTY: a servicing session was interrupted with no reboot pending to finish it.'
+    Write-Output 'REBUILD the template - a result measured on this image is not attributable.'
+    exit 2
+}
+if ($rebootPending) {
+    Write-Output 'STAGED: an update is already waiting for a reboot. REBOOT FIRST, then re-run -'
+    Write-Output 'installing on top of another package''s staged payload confounds the result.'
+    exit 3
 }
 
 $lcu = Get-ChildItem 'C:\ProgramData\Qubes\wu' -Recurse -Filter '*kb5121003*.msu' -EA SilentlyContinue |
