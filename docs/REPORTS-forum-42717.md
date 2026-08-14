@@ -58,3 +58,42 @@ plain-HTTP truncation that made Windows Update fail on one boot and succeed on t
 **Suggested order:** ask him to retest 3, 4 and the `/idd` flag on the current release first - those
 are cheap to confirm and may already be closed. Then attack the PV disk upgrade crash (post 27.2),
 which is the only one that leaves a user with a broken qube.
+
+## Posts 41-55 (fetched separately, page 3) — the important half
+
+### THE REGRESSION: agent 7ccb459 is worse than 09b643e (posts 54, 55)
+
+GWeck, on **W10 22H2 AND W11 25H2**: `09b643e` "works well" with Open-Shell; **`7ccb459` brings
+back serious mouse/window problems**. He asks for a `/noidd` switch.
+
+`7ccb459` is what we SHIP (`v4.3.1-agentc7ccb45`). So the current release is a regression against the
+previous one, on two different Windows versions, on his hardware. This outranks everything else here.
+
+**INDEPENDENT OF THE START MENU** (user, 2026-08-14): he reproduces it with Open-Shell running, so
+the Start-surface classification is NOT implicated. That rules out the whole toastcrop/shell-managed
+class and points at coordinate/window tracking - the mouse offset (task #8) and windows losing their
+position. Do not spend time on Start rendering for this.
+
+It also reframes his "what is the IDD for in seamless?" question: he is not asking academically, he
+suspects the IDD and wants it switchable. Our README currently says the opposite is policy - "no
+switch to turn it off; the Basic Display Adapter is a failure state, not an option".
+
+### Other posts
+
+* **44, 45** - W11 25H2, 4.3.1: mouse position offset ~1 cm, text windows lose position, Windows key
+  produces artifacts plus an error. **He attached winenum.log** - exactly the artifact `tools/winenum`
+  was built to produce. Get it before asking him for anything else.
+* **46, 47** - arkenoi: reproduced; "some stuff is 25h2 specific"; suspected "artifacts of non-idd
+  legacy driver".
+* **48, 49** - where Open-Shell entered: disabling the stock Start in seamless was considered, GWeck
+  proposed Open-Shell and confirmed it works correctly on `09b643e`. That is the origin of the
+  `enableWinKey` feature added 2026-08-14 - note it is built on the REGRESSED agent.
+* **41** - corporateblush, W11, STOCK QWT: resize differs between seamless and non-seamless. Not ours.
+
+### Order of attack
+
+1. **Bisect 09b643e -> 7ccb459.** A known-good/known-bad pair on the reporter's hardware is the
+   cheapest possible lead and we have both hashes.
+2. Pull his winenum.log from post 44 - it may identify the 25H2 surfaces without needing his machine.
+3. PV disk upgrade crash (post 27.2) - the only report that leaves a user with a broken qube.
+4. Only then retest Start/`/idd` items on current; they may already be closed.
