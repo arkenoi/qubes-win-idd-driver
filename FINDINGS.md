@@ -9728,3 +9728,28 @@ So the IDD cannot be installed or activated there, and GWeck's platform cannot b
 the rig we have. A fresh Win10 with EnableLUA=0 is needed (the USB answer-stick route works and
 is cheap - FINDINGS 2026-08-07), but it requires creating/removing a qube, which the harness
 refuses without the user's approval. Flagged to the user rather than worked around.
+
+## 2026-08-14 (evening) — post 56 does NOT reproduce: an AppVM on a Windows template works
+
+GWeck: "Starting an AppVM based on the Windows 10 template seems to start normally, but just
+after finishing the startup, it shuts down silently." That path had never been exercised here -
+every test in this project uses standalone qubes - so it was worth running before theorising.
+
+    qvm-create --class AppVM --template win11-tpl --label red win11-app
+    qvm-tags win11-app add win-idd-testbed
+    virt_mode=hvm, kernel='', memory 8192, vcpus 4, qrexec_timeout 6000, netvm ''
+
+RESULT: started at 17:52:55, Running and stable through five state polls over 2 minutes and for
+the rest of the session; `qubes.VMShell` answered (`APPVM_OK`, hostname win11-idd-test); the IDD
+was the sole active display at 1920x1080; Notepad opened and rendered in dom0 (screenshot).
+Nothing about being an AppVM broke the guest.
+
+Features are NOT copied to an AppVM and do not need to be: `qvm-features win11-app` is empty
+while os/gui/qrexec/stubdom-qrexec/vmexec all resolve through the template.
+
+WHAT THIS DOES AND DOES NOT SETTLE. It rules out "an AppVM on a Windows template is structurally
+broken", which was the cheapest explanation. It does NOT clear his case: this template is
+Win11 26100 carrying only the updater stack, not a Win10 template that has had the 4.3.1 package
+installed. The remaining candidates are Win10-specific behaviour, or template state (a pending
+servicing operation, or a profile that MoveUsers relocated onto the template's private volume,
+which an AppVM does not inherit). The Win10 rig now provisioning is what can test those.
