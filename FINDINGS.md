@@ -9325,3 +9325,35 @@ full 4.8 GB download at 10:41. Something changed between then and 15:26 that is 
 and "not our code" is not the same claim as "upstream defect worth reporting". The next step is a
 precise re-run of the KNOWN-WORKING configuration - same pristine rebuild, same guest files as
 09:47 - before any upstream conclusion is drawn.
+
+### KNOWN-WORKING CONFIGURATION RE-RUN: it fails too. Not a regression in our code.
+
+Reproduced precisely, no substitutions:
+  * win11-tpl rebuilt from the pristine `win11-24h2` image (same source as the 09:47 rebuild)
+  * guest files extracted BYTE-IDENTICAL from commit 61f0bcc, the last deploy known to work -
+    qubes-updates-relay.cs, qubes-windows-update.ps1, wu-update.ps1, vmupdate-shim.ps1,
+    ensure-autologon.ps1, VMExec.ps1, qubes-posix-cat.cs, install-updater-agent.ps1
+  * deployed with that commit's own install-updater-agent.ps1
+  * same harness, same `-Action resolve` scan
+
+    09:53 today   scan: 2 update(s) available        <- worked
+    16:23 today   ERROR: Exception from HRESULT: 0x80072F8F
+
+VERDICT: the failure is NOT a regression in anything we changed. The configuration that worked this
+morning fails this afternoon with zero differences in the guest image, the agent, the relay or the
+deploy. Today's edits (Resolve-Catalog, the freshness guard, the VMExec decoder, invariant progress
+formatting) are all exonerated by construction - none of them is present in this build.
+
+The variable therefore lies OUTSIDE the guest: the qubes.UpdatesProxy path - the proxy qube, its
+tinyproxy, or the network beyond it. Consistent with the rest of the evidence: plain-HTTP bodies
+truncate at random lengths with HTTP 200 and orderly EOFs, while CONNECT traffic through the SAME
+transport moved 4.8 GB flawlessly at 12.8 MB/s earlier today.
+
+CONSEQUENCE FOR THE UPSTREAM QUESTION: nothing should be reported upstream on this evidence. A
+degraded local proxy qube is not an upstream defect, and "not our code" was never the same claim as
+"a bug in Qubes". Checking or restarting the proxy qube is a dom0/other-qube action outside this
+agent's remit (CLAUDE.md: only win-idd-test* qubes, only via qtest) - it needs the user.
+
+WHAT WOULD MAKE IT REPORTABLE: the same truncation reproduced after the proxy qube has been
+restarted, or reproduced from a Linux qube against the same service. This dev qube cannot do the
+latter - `qrexec-client-vm @default qubes.UpdatesProxy` is refused by policy here (rc=126).
