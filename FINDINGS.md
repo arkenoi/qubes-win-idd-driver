@@ -8798,3 +8798,34 @@ at least a factor of two in the safe direction.
 
 Still not exact. The exact byte split needs the ESD expanded and its members attributed, which
 means re-downloading 4.8 GB. Recorded as: measured proxy ~24%, true value lower, unmeasured.
+
+## 2026-08-14 — catalog resolution is language-invariant (measured), with one residual risk
+
+GWeck runs a GERMAN edition, so this is a correctness requirement, not a hypothetical. No German
+image exists, and none is needed: the catalog picks its response language from Accept-Language, so
+an English guest can demand German titles. `-AcceptLanguage` was added to the agent so the test
+drives the SHIPPING `Resolve-Catalog` rather than a copy that could drift.
+
+`guest/wu-locale-invariant.ps1`, KB5121003, four languages:
+
+    en-US  "2026-08 Cumulative Update for Windows 11, version 24H2 for x64-based Systems ..."
+    de-DE  "2026-08 Cumulative Update for Windows 11, version 24H2 for x64-based Systems ..."
+    fr-FR  "2026-08 Aggiornamento cumulativo per Windows 11, version 24H2 per sistemi basati su x64 ..."
+    ja-JP  "2026-08 Cumulative Update for Windows 11, version 24H2 for x64-based Systems ..."
+
+    PASS: every response language resolved to the identical package file(s)
+          KEEP windows11.0-kb5121003-x64_dc58...msu   DROP windows11.0-kb5043080-x64_9534...msu
+
+Two things this establishes:
+
+1. **The response language is arbitrary.** Asking for `fr-FR` returned an ITALIAN title. It does not
+   track the request, and it has already been seen changing on its own between two runs 30 minutes
+   apart. Any logic keyed on title TEXT is therefore keyed on a non-deterministic input.
+2. **Resolution survives it** because the match anchors on `x64` and `24H2` - tokens that are not
+   translated - and the final decision is made on the .msu FILENAME.
+
+RESIDUAL RISK, not covered by this pass: the row EXCLUSIONS are English words
+(`Dynamic|Server|server operating system`). An Italian "Aggiornamento dinamico" row would not be
+excluded, so a Dynamic Update could be picked when it happens to sort first. The cumulative sorted
+first here, so the test never exercised it. Fix belongs on the exclusion side, and the anchor should
+be the filename pattern rather than the title.
