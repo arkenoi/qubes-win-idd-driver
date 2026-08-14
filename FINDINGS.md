@@ -9051,3 +9051,87 @@ which goes straight to the process's stderr HANDLE and bypasses PowerShell's red
 Capturing requires a separate process with `2>` at the cmd level - which is also the faithful
 simulation, because that handle is exactly what dom0 reads. Any future test of this channel that
 uses `2>&1` will silently measure nothing.
+
+## 2026-08-14 — locale-class research: 6 confirmed, and 2 of them were MY errors
+
+A 13-agent research pass over non-Gregorian calendars, digit shapes, code pages, RTL/bidi and
+Turkish casing. Two findings were real bugs in shipped code, two were defects in work I did earlier
+today, one was low severity, and one was a false alarm. All verified independently before acting.
+
+### 1. The freshness guard in wu-update.ps1 NEVER FIRED (culture-independent)
+
+    $stamp = $null
+    if ([datetime]::TryParse($st.ts, [ref]$stamp) -and $stamp -lt $script:StartedAt) { continue }
+
+PowerShell converts a `[ref]` variable's CURRENT value to the ByRef parameter type during overload
+resolution, and `$null` has no conversion to the non-nullable value type DateTime. The call raised
+MethodException "Cannot find an overload for TryParse and the argument count: 2", which
+`$ErrorActionPreference='SilentlyContinue'` (line 19) swallowed - so the whole `if` was abandoned,
+`continue` never ran, and ~2400 exceptions per 2 h tail piled into $Error unseen.
+
+Reproduced independently (`guest/wu-guard-check.ps1`), initializer sweep:
+
+    init=null     TryParse threw            errors=1
+    init=zero     True                      errors=0
+    init=mindate  True                      errors=0
+    CURRENT code, STALE(2020) status : accepted=True   <- guard never fired
+    FIXED   code, STALE(2020) status : accepted=False
+    FIXED   code, FRESH status       : accepted=True   <- normal path unchanged
+
+This is the SAME trap that broke `wu-cbs-analyze.ps1` this morning. Fixed with
+`$stamp = [datetime]::MinValue` + `TryParseExact` against the invariant Gregorian shape the writer
+emits, so the guard cannot silently become calendar-sensitive later.
+
+TWO CORRECTIONS to the guard's own comment, both verified: the 2026-08-13 scan-clobbers-install
+collision is now prevented at the WRITER by the `Global\QubesWindowsUpdate` mutex, and a timestamp
+test could never have caught it anyway - a scan running mid-install stamps a FRESH ts and passes.
+What this guard actually protects is the ATTACH path, which skips the Remove-Item baseline. The
+fresh-but-foreign case is closed separately by a new `if ($st.action -eq 'scan') { continue }`.
+
+### 2. Non-ASCII arguments were destroyed in the dom0 -> guest command path
+
+Stock `VMExec-Decode.ps1` resolves each `-HH` escape with `[System.Text.Encoding]::ASCII`, which
+maps every byte above 0x7F to '?'. dom0 percent-encodes the UTF-8 BYTES, so one umlaut arrives as
+two escapes and comes back as '??'. Per-escape decoding cannot be repaired by swapping the encoding
+either - a UTF-8 character spans several bytes, so they must be accumulated and decoded once.
+
+Measured (`guest/wu-vmexec-decode-check.ps1`), with the stock decoder as control:
+
+    ascii path     stock=ok       fixed=ok
+    german umlaut  stock=MANGLED  fixed=ok
+    cyrillic       stock=MANGLED  fixed=ok
+    cjk            stock=MANGLED  fixed=ok
+    arabic         stock=MANGLED  fixed=ok
+
+A German user with an umlaut in a folder name hits this on an ordinary `qvm-run`. Fixed in
+`guest/VMExec.ps1` with a byte-accumulating UTF-8 decoder, byte-identical to stock for ASCII.
+This is a defect in stock QWT, not something we introduced.
+
+### 3. health-check.ps1 reported the Xen PV drivers MISSING on Turkish
+
+`$d.Service -eq $k.ToLower()` - `.ToLower()` is culture-sensitive, and `'XENIFACE'.ToLower()` under
+tr-TR returns x-e-n-**U+0131**-f-a-c-e (dotless i), so the comparison fails. Measured by code point;
+the console renders both spellings identically, which is why this class hides. Fixed with
+`ToLowerInvariant()`.
+
+### 4 and 5. MY OWN errors, corrected
+
+`docs/LOCALE-TESTING.md` claimed `-match`/`-eq` are **Ordinal**. They are not - they are
+INVARIANT-CULTURE, which happens to explain both of my earlier observations at once:
+
+    tr-TR  'i' -eq 'I'                  : True     (invariant casing, so Turkish does not bite)
+    tr-TR  'XENIFACE' -match 'xeniface' : True
+           'Update' -eq 'Update<U+200E>': True     (linguistic: zero-width marks have no weight)
+           Ordinal comparison of same   : False
+
+The practical conclusion in the guide was right, the stated reason was wrong, and the wrong reason
+would have misled anyone extending it. The guide now also warns that the casing METHODS are
+culture-sensitive even though the operators are not - which is exactly finding 3.
+
+### 6. Rejected
+
+A claim that `& cmd.exe /c $cmd` in VMExec.ps1 mangles child stdout by code page was disproved by
+the verifier both in engine source and by measurement on the real path.
+
+Re-verified after every edit: syntax clean, and the handler still passes the German end-to-end
+progress test with the new guard and the scan check in place.

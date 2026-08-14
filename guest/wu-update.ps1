@@ -62,9 +62,16 @@ function Msg([string]$m) {
 # If an update run is already in flight, attach to it instead of clobbering its status file.
 # FRESHNESS GUARD. Deleting the status file is not enough on its own: other tasks write the same
 # file, and one of them finishing can hand us a `done` that belongs to a different operation.
-# Measured 2026-08-13 on a template: the scheduled scan fired 6 minutes into a dom0-driven
-# install, wrote its own `done` with an empty result, and this handler reported the update
-# complete while DISM was still running. So ignore any status stamped before we started.
+#
+# SCOPE CORRECTED 2026-08-14. This guard does NOT prevent the 2026-08-13 collision it was written
+# for (the 6-hourly scan firing mid-install and reporting a `done` with an empty result). Two
+# reasons: that collision is now prevented at the WRITER, by the Global\QubesWindowsUpdate mutex a
+# scan takes with waitMs=0 before any Save (qubes-windows-update.ps1); and a timestamp test could
+# never have caught it anyway, because a scan running mid-install stamps a FRESH ts and passes.
+# What this guard genuinely protects is the ATTACH path below, which deliberately skips the
+# Remove-Item baseline when the task is already Running - there, a status left on disk by an
+# EARLIER operation (e.g. the 03:00 scheduled scan) is still readable on the first poll.
+# The `action -eq 'scan'` test further down is what covers the fresh-but-foreign case.
 $script:StartedAt = (Get-Date).AddSeconds(-2)   # 2 s of slack for clock granularity
 
 $running = (Get-ScheduledTask -TaskName $Task -EA SilentlyContinue).State -eq 'Running'
@@ -85,10 +92,32 @@ while ((Get-Date) -lt $deadline) {
     if (-not $raw) { continue }                       # not written yet, or mid-rewrite
     try { $st = $raw | ConvertFrom-Json } catch { continue }
     # belongs to an older operation - keep waiting for ours
+    #
+    # $stamp MUST start as a real DateTime. It used to be $null, and that guard NEVER FIRED once:
+    # PowerShell converts a [ref] variable's CURRENT value to the ByRef parameter type during
+    # overload resolution, and $null has no conversion to the non-nullable value type DateTime, so
+    # the call raised MethodException "Cannot find an overload for TryParse and the argument
+    # count: 2". $ErrorActionPreference='SilentlyContinue' (line 19) made that a SILENT
+    # statement-terminating error: the whole `if` was abandoned, `continue` never ran, and one
+    # exception per poll (~2400 over a 2 h tail) piled into $Error unseen.
+    # Measured 2026-08-14 (guest/wu-guard-check.ps1): init=$null -> throws, errors=1, a status
+    # stamped 2020 is ACCEPTED; init=[datetime]::MinValue -> the same status is correctly dropped
+    # and a fresh one still accepted. Culture-independent - it fails identically on en-US.
+    #
+    # TryParseExact against the invariant Gregorian shape the writer emits
+    # (qubes-windows-update.ps1:81 uses ToString('s'), measured calendar-invariant), so this guard
+    # cannot silently become calendar-sensitive if that format is ever changed.
     if ($st.ts) {
-        $stamp = $null
-        if ([datetime]::TryParse($st.ts, [ref]$stamp) -and $stamp -lt $script:StartedAt) { continue }
+        $stamp = [datetime]::MinValue
+        if ([datetime]::TryParseExact($st.ts, 'yyyy-MM-ddTHH:mm:ss',
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::None, [ref]$stamp) -and $stamp -lt $script:StartedAt) { continue }
     }
+    # A SCAN's status never belongs to a dom0-driven run. This is what actually closes the
+    # wrong-operation class: the timestamp test cannot, because any foreign writer stamps a FRESH
+    # ts by construction and so passes it. A scan reports availability and never a result, so its
+    # `done` would be read below as "finished, nothing to do" -> Prog 100 -> exit 100.
+    if ($st.action -eq 'scan') { continue }
     # Announce WHICH updates as soon as the scan knows, independent of phase: the tail polls
     # every 3 s and a short-lived phase can pass between two polls unseen. Msg de-duplicates.
     if ([int]$st.count -gt 0 -and $st.available) {

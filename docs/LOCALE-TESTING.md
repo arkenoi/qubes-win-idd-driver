@@ -19,7 +19,8 @@ era), ar-SA (UmAlQura/Hijri), ja-JP, zh-CN, tr-TR (dotless i) and he-IL
 | `ToString('s')` / `ToString('o')` | Calendar-invariant. Identical in all 8 cultures. |
 | Status-file timestamp round trip | Safe in all 9 write-culture x read-culture combinations, which matters because the agent writes it as SYSTEM and the handler reads it as the user. |
 | `[datetime]::TryParse(<ISO>)` | Parses correctly even under Hijri/Buddhist defaults. |
-| `-match` / `-eq`, case-insensitive | **Ordinal**, so the Turkish dotless-i trap does not reach our matching: `"KB5121003" -match "kb"` holds in tr-TR. |
+| `-match` / `-like` / `-eq`, case-insensitive | **Invariant-culture, NOT ordinal.** The Turkish dotless-i trap does not reach them - `'i' -eq 'I'` and `'XENIFACE' -match 'xeniface'` hold in tr-TR exactly as in en-US - because invariant casing is used rather than the thread culture. Being linguistic rather than ordinal has one consequence: zero-width marks carry no weight, so `'Update' -eq "Update$LRM"` is True while an ordinal comparison is False. |
+| `.ToLower()` / `.ToUpper()` | **Culture-sensitive - do NOT use to normalise identifiers.** `'XENIFACE'.ToLower()` returns a dotless U+0131 under tr-TR. Use `ToLowerInvariant()`. This broke the Xen PV driver check in `health-check.ps1`. |
 | `[double]"75.5"`, `[int]"42"` | Invariant. PowerShell casts do not use the culture. |
 | `ConvertTo-Json` numbers | Emits `75.5`, never `75,5`. |
 | Catalog package selection | Resolves to the **identical .msu** under en-US/de-DE/fr-FR/ja-JP, including when the catalog answers in German. Decided on the filename, not the title. |
@@ -80,8 +81,13 @@ are not. Report it only if a Buddhist year appears somewhere that a *program* re
 ### 5. Turkish (tr-TR) — decimal comma and dotless i
 
 Turkish is the one locale that hits BOTH classes at once: it uses a decimal comma (so it exercises
-the progress-bar bug class) and the dotless-i casing rule. Our matching is ordinal so it should be
-unaffected - a failure here would be genuinely new information.
+the progress-bar bug class) and the dotless-i casing rule.
+
+The comparison OPERATORS are invariant-culture and were measured unaffected. The casing METHODS are
+not: `.ToLower()` on an identifier yields a dotless U+0131, which already broke the Xen PV driver
+check in `health-check.ps1` (fixed). If you run Turkish, the useful check is `health-check.ps1` -
+it should report the XENBUS/XENIFACE/XENVIF/XENNET drivers present, not missing. Beware that the
+console renders the dotted and dotless i identically; compare code points, not glyphs.
 
 ## How to capture evidence
 

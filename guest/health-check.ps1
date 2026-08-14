@@ -226,7 +226,12 @@ $pvWanted = @{ 'XENBUS' = $false; 'XENIFACE' = $false; 'XENVIF' = $false; 'XENNE
 $pvDetail = @()
 foreach ($d in @($universe)) {
     foreach ($k in @($pvWanted.Keys)) {
-        if ($d.PNPDeviceID -like "$k\*" -or $d.Service -eq $k.ToLower()) {
+        # ToLowerInvariant, not ToLower: these are DEVICE identifiers, not human text, and
+        # .ToLower() is culture-sensitive. Measured on tr-TR - 'XENIFACE'.ToLower() returns
+        # x-e-n-U+0131-f-a-c-e (the dotless i), so the comparison against 'xeniface' is False and
+        # the Xen PV driver check reports the interface missing on a Turkish guest. The console
+        # renders the two strings identically; only the code points give it away.
+        if ($d.PNPDeviceID -like "$k\*" -or $d.Service -eq $k.ToLowerInvariant()) {
             $ok = ($d.ConfigManagerErrorCode -eq 0)
             if ($ok) { $pvWanted[$k] = $true }
             $pvDetail += [ordered]@{ id = $d.PNPDeviceID; err = $d.ConfigManagerErrorCode; name = $d.Name }
