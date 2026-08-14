@@ -142,7 +142,13 @@ static class Relay
         try
         {
             if (args.Length >= 3 && args[0] == "--relay")
-                return RunRelay(int.Parse(args[1]), args[2]);
+            {
+                // Optional --log so the HANDLER can record why its pumps stopped. It is spawned by
+                // qrexec with no console anyone reads, so without a file it can only fail silently.
+                string ld = null;
+                for (int i = 3; i + 1 < args.Length; i++) if (args[i] == "--log") ld = args[i + 1];
+                return RunRelay(int.Parse(args[1]), args[2], ld);
+            }
             if (args.Length >= 1 && args[0] == "--listen")
                 return RunListen(args);
             Console.Error.WriteLine("usage: qubes-updates-relay --listen [port] [--target VM] [--user U] [--log DIR]");
@@ -301,7 +307,10 @@ static class Relay
         int cport = ((IPEndPoint)control.LocalEndpoint).Port;
         try
         {
-            string handler = "\"" + self + "\" --relay " + cport + " " + token;
+            string handlerLogDir = "";
+            try { handlerLogDir = Path.GetDirectoryName(logPath); } catch { handlerLogDir = ""; }
+            string handler = "\"" + self + "\" --relay " + cport + " " + token
+                           + (string.IsNullOrEmpty(handlerLogDir) ? "" : " --log \"" + handlerLogDir + "\"");
             ProcessStartInfo psi = new ProcessStartInfo();
             psi.FileName = QrexecClientVm();
             // Do NOT wrap the whole pipe-string in quotes. qrexec-client-vm's GetArgument() splits
@@ -381,8 +390,10 @@ static class Relay
     }
 
     // ---- relay side (qrexec handler; stdio == vchan) -------------------------------------
-    static int RunRelay(int controlPort, string token)
+    static int RunRelay(int controlPort, string token, string logDir)
     {
+        string hlog = null;
+        try { if (!string.IsNullOrEmpty(logDir)) hlog = Path.Combine(logDir, "relay-handler.log"); } catch { hlog = null; }
         using (TcpClient sock = new TcpClient())
         {
             sock.Connect(IPAddress.Loopback, controlPort);
@@ -392,10 +403,30 @@ static class Relay
 
             Stream vin = Console.OpenStandardInput();
             Stream vout = Console.OpenStandardOutput();
-            Task t1 = Pump(ns, vout, delegate(int n) { }, null);   // socket (from WU) -> vchan out
-            Task t2 = Pump(vin, ns, delegate(int n) { }, null);    // vchan in -> socket (to WU)
-            Task.WhenAny(t1, t2).Wait();
+            long outBytes = 0, inBytes = 0;
+            string outEnd = "-", inEnd = "-";
+            Stopwatch hsw = Stopwatch.StartNew();
+            Task t1 = Pump(ns, vout, delegate(int n) { outBytes += n; }, delegate(string w) { outEnd = w; });  // request:  socket -> vchan
+            Task t2 = Pump(vin, ns, delegate(int n) { inBytes += n; }, delegate(string w) { inEnd = w; });     // response: vchan -> socket
+            Task firstDone = Task.WhenAny(t1, t2).Result;
+            string firstName = (firstDone == t1) ? "request(sock->vchan)" : "response(vchan->sock)";
             Task.WhenAny(Task.WhenAll(t1, t2), Task.Delay(DrainMs())).Wait();
+
+            // THE SMOKING-GUN FIELDS. Leaving this block disposes `sock`, so if the RESPONSE pump
+            // is still running at this point we are about to cut a transfer mid-body - and the
+            // listen side would then observe a perfectly clean EOF with a short body, which is
+            // exactly the symptom under investigation. Record it as a fact rather than inferring
+            // it later: cut_response=True means the truncation is OURS and the fix is teardown
+            // ORDERING; cut_response=False with a short `in` count means the vchan delivered a
+            // short body and the defect is upstream of this process.
+            if (hlog != null)
+            {
+                Log(hlog, "HANDLER token=" + token + " ms=" + hsw.ElapsedMilliseconds
+                        + " request_bytes=" + outBytes + " response_bytes=" + inBytes
+                        + " first_to_finish=" + firstName
+                        + " requestEnd=" + outEnd + " responseEnd=" + inEnd
+                        + " cut_response=" + (!t2.IsCompleted) + " cut_request=" + (!t1.IsCompleted));
+            }
         }
         return 0;
     }
