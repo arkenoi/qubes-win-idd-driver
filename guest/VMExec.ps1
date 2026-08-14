@@ -13,10 +13,48 @@
 #     EVERYTHING ELSE is passed to cmd.exe exactly as before, so generic qvm-run is untouched.
 . $env:QUBES_TOOLS\qubes-rpc-services\VMExec-Decode.ps1
 
+# 3. NON-ASCII ARGUMENTS. The stock decoder resolves each -HH escape with
+#    [System.Text.Encoding]::ASCII.GetString(), and ASCII maps every byte above 0x7F to '?'. dom0's
+#    encode_for_vmexec percent-encodes the UTF-8 BYTES of the argument, so a single 'a-umlaut'
+#    arrives as two escapes and comes out as '??' - any path, filename or argument containing an
+#    umlaut, Cyrillic, Arabic or CJK character is destroyed before cmd.exe ever sees it. A German
+#    user with an umlaut in a folder name hits this on an ordinary qvm-run.
+#
+#    Decoding per-escape cannot be repaired by swapping the encoding either: a UTF-8 character
+#    spans several bytes, so the bytes must be ACCUMULATED across escapes and decoded once at the
+#    end. That is what this does. Defined AFTER the dot-source so it wins over the stock function,
+#    and byte-identical to it for pure-ASCII input (UTF-8 of ASCII is ASCII), which is every
+#    command the updater path sends.
+function VMExec-DecodeUtf8([string]$part) {
+    $bytes = New-Object System.Collections.Generic.List[byte]
+    $i = 0
+    while ($i -lt $part.Length) {
+        if ($part[$i] -eq '-') {
+            if ($i + 1 -lt $part.Length -and $part[$i + 1] -eq '-') { $bytes.Add([byte][char]'-'); $i += 2; continue }
+            if ($i + 2 -lt $part.Length) {
+                $hex = [string]$part[$i + 1] + [string]$part[$i + 2]
+                $val = 0
+                if ([int]::TryParse($hex, [Globalization.NumberStyles]::HexNumber,
+                        [Globalization.CultureInfo]::InvariantCulture, [ref]$val)) {
+                    $bytes.Add([byte]$val); $i += 3; continue
+                }
+            }
+            throw (New-Object DecodeError("invalid escape in VMExec argument"))
+        }
+        # Literal characters are ASCII by construction of the encoding; take their byte directly.
+        $bytes.AddRange([System.Text.Encoding]::UTF8.GetBytes([string]$part[$i]))
+        $i++
+    }
+    return [System.Text.Encoding]::UTF8.GetString($bytes.ToArray())
+}
+
 try {
     $parts = ($args[0]).split("+")
-    $decoded = @($parts.foreach({VMExec-Decode $_}))
+    $decoded = @($parts.foreach({VMExec-DecodeUtf8 $_}))
 } catch [DecodeError] {
+    Write-Error $_.Exception.Message
+    exit 1
+} catch {
     Write-Error $_.Exception.Message
     exit 1
 }
