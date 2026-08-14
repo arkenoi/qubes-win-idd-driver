@@ -236,6 +236,31 @@ static class Relay
             }
         }
 
+        // PLAIN HTTP GETS VERIFIED AND RETRIED; CONNECT IS LEFT ALONE.
+        //
+        // Measured 2026-08-14 with both ends instrumented: this qube hands the FULL body to the
+        // transport every time (30/30 sends of 80321/80454 bytes, verified by a byte-counting shim
+        // in the proxy qube) while the Windows guest receives a short body on about a THIRD of
+        // them - 20/30 full, the rest anywhere from 20883 to 77135. Every send ends in a clean EOF,
+        // so nothing here or in tinyproxy truncates it; the bytes are lost inside the qrexec/vchan
+        // hop. It survives with our relay removed entirely (guest/proxy-probe.cs), so it is not the
+        // pool, the drain or the teardown.
+        //
+        // Why it matters far more than a third of a file: this is how Windows refreshes its
+        // certificate trust list on a FRESH image. A short authrootstl.cab means TLS validation of
+        // the update endpoints fails, the WU searcher dies with 0x80072F8F, and the whole update
+        // feature is dead before the agent logs a line. Once ONE complete CTL lands, Windows caches
+        // it and the failure vanishes - which is exactly why the same build worked at 09:53 and
+        // failed all afternoon on rebuilt clones. Luck, not configuration.
+        //
+        // CONNECT is untouched: it carries our .msu downloads, moved 4.8 GB byte-perfect through
+        // this same transport, and is opaque to us by construction.
+        if (!IsConnect(head, hlen))
+        {
+            await HandlePlainHttp(inbound, head, hlen, self, target, user, logPath);
+            return;
+        }
+
         // Cap concurrency so a burst of real requests cannot fork-bomb the proxy qube.
         await _gate.WaitAsync();
         Stopwatch sw = Stopwatch.StartNew();
@@ -294,6 +319,140 @@ static class Relay
         }
         catch (Exception e) { Log(logPath, "CONN token=" + token + " error " + e.Message); }
         finally { _gate.Release(); Log(logPath, "CONN warm=" + (warm ? 1 : 0) + " up=" + up + " down=" + down + " ttfb=" + ttfb + " ms=" + sw.ElapsedMilliseconds + " eof=" + eofSide + " " + (endReasons != null ? endReasons() : "upEnd=- downEnd=-") + " [" + connHdr + "] req=[" + reqLine + "]"); }
+    }
+
+    static bool IsConnect(byte[] head, int hlen)
+    {
+        if (hlen < 7) return false;
+        string s = Encoding.ASCII.GetString(head, 0, Math.Min(hlen, 8));
+        return s.StartsWith("CONNECT", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static int PlainRetries()
+    {
+        int r;
+        if (int.TryParse(Environment.GetEnvironmentVariable("QUBES_UPDATES_RETRIES"), out r) && r >= 0) return r;
+        return 4;
+    }
+    // Only bodies up to this are buffered for verification; anything larger streams unverified, so
+    // a huge plain-HTTP download cannot be turned into a memory problem. The files this exists for
+    // (trust lists, catalogs) are tens of KB.
+    const int MaxVerifyBytes = 16 * 1024 * 1024;
+
+    // Read one HTTP response off the tunnel, and say whether it arrived COMPLETE.
+    // Completeness is judged only where the framing makes it knowable: an explicit Content-Length.
+    // Chunked and close-delimited responses are returned as-is with complete=false-but-unknown,
+    // because retrying on a guess would be worse than passing them through.
+    class HttpResponse
+    {
+        public byte[] Bytes;
+        public bool LengthKnown;
+        public bool Complete;
+        public long Expected;
+        public long GotBody;
+    }
+
+    static async Task<HttpResponse> ReadResponse(Stream rs)
+    {
+        MemoryStream buf = new MemoryStream();
+        byte[] tmp = new byte[65536];
+        int headerEnd = -1;
+        long expected = -1;
+        int n;
+        while ((n = await rs.ReadAsync(tmp, 0, tmp.Length)) > 0)
+        {
+            buf.Write(tmp, 0, n);
+            if (headerEnd < 0)
+            {
+                byte[] cur = buf.GetBuffer();
+                int len = (int)buf.Length;
+                for (int i = 3; i < len; i++)
+                {
+                    if (cur[i - 3] == 13 && cur[i - 2] == 10 && cur[i - 1] == 13 && cur[i] == 10) { headerEnd = i + 1; break; }
+                }
+                if (headerEnd > 0)
+                {
+                    string hdrs = Encoding.ASCII.GetString(cur, 0, headerEnd);
+                    foreach (string line in hdrs.Split('\n'))
+                    {
+                        string t = line.Trim();
+                        if (t.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            long v;
+                            if (long.TryParse(t.Substring(15).Trim(), out v)) expected = v;
+                        }
+                    }
+                }
+            }
+            if (headerEnd > 0 && expected >= 0 && buf.Length - headerEnd >= expected) break;
+            if (buf.Length > MaxVerifyBytes) break;
+        }
+        HttpResponse r = new HttpResponse();
+        r.Bytes = buf.ToArray();
+        r.Expected = expected;
+        r.LengthKnown = (headerEnd > 0 && expected >= 0);
+        r.GotBody = (headerEnd > 0) ? (r.Bytes.Length - headerEnd) : 0;
+        r.Complete = r.LengthKnown && r.GotBody >= expected;
+        return r;
+    }
+
+    // Plain-HTTP path: send the request, verify the response is whole, and re-issue on a FRESH
+    // channel if the transport lost part of it. Nothing is written to the client until a complete
+    // response is in hand, so a short body is never handed to Windows as if it were the file.
+    static async Task HandlePlainHttp(TcpClient inbound, byte[] head, int hlen,
+                                      string self, string target, string user, string logPath)
+    {
+        await _gate.WaitAsync();
+        Stopwatch sw = Stopwatch.StartNew();
+        string reqLine = "";
+        int nl0 = Array.IndexOf(head, (byte)'\n', 0, Math.Min(hlen, 200));
+        if (nl0 < 0) nl0 = Math.Min(hlen, 60);
+        reqLine = Encoding.ASCII.GetString(head, 0, Math.Max(0, Math.Min(nl0, 120))).Trim();
+        HttpResponse best = null;
+        int attempts = 0;
+        try
+        {
+            using (inbound)
+            {
+                NetworkStream a = inbound.GetStream();
+                int maxTries = PlainRetries() + 1;
+                for (attempts = 1; attempts <= maxTries; attempts++)
+                {
+                    Ready ch = TakeWarm();
+                    if (ch == null) ch = await OpenChannel(self, target, user, logPath);
+                    if (ch == null) break;
+                    HttpResponse r = null;
+                    using (ch.Relay)
+                    {
+                        try
+                        {
+                            await ch.Stream.WriteAsync(head, 0, hlen);
+                            await ch.Stream.FlushAsync();
+                            r = await ReadResponse(ch.Stream);
+                        }
+                        catch (Exception e) { Log(logPath, "PLAIN read error " + e.GetType().Name + ": " + e.Message); }
+                    }
+                    if (r != null && (best == null || r.Bytes.Length > best.Bytes.Length)) best = r;
+                    if (r != null && (r.Complete || !r.LengthKnown)) break;
+                    Log(logPath, "PLAIN short attempt=" + attempts + " got=" + (r == null ? -1 : r.GotBody)
+                                 + " expected=" + (r == null ? -1 : r.Expected) + " - retrying on a fresh channel");
+                }
+                if (best != null && best.Bytes.Length > 0)
+                {
+                    await a.WriteAsync(best.Bytes, 0, best.Bytes.Length);
+                    await a.FlushAsync();
+                }
+            }
+        }
+        catch (Exception e) { Log(logPath, "PLAIN error " + e.Message); }
+        finally
+        {
+            _gate.Release();
+            Log(logPath, "PLAIN tries=" + attempts + " bytes=" + (best == null ? 0 : best.Bytes.Length)
+                       + " body=" + (best == null ? 0 : best.GotBody) + "/" + (best == null ? -1 : best.Expected)
+                       + " complete=" + (best != null && best.Complete)
+                       + " ms=" + sw.ElapsedMilliseconds + " req=[" + reqLine + "]");
+        }
     }
 
     // Spawn one qrexec handler and complete its connect-back handshake. This is the expensive
