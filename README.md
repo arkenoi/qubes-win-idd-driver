@@ -121,8 +121,8 @@ exactly as it does for Linux qubes.
 This needed work on our side because dom0's updater does not call an agent in the guest, it
 *injects* a Python one per run — which is why every Linux qube is updatable with nothing
 preinstalled, and why Windows never could be. The guest now answers dom0's own command
-sequence and runs the Windows updater where dom0 expects its injected agent. Details and the
-replay harness: `docs/PLAN-windows-updates.md`.
+sequence and runs the Windows updater where dom0 expects its injected agent. Details, the
+replay harness and every measurement behind it are in `FINDINGS.md`.
 
 Two things to know. **Two settings live in dom0** and cannot come from the guest — the dom0
 package applies them on install, and `qwt-ng-prepare-qube <qube>` applies them to a qube created
