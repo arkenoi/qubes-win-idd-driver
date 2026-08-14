@@ -185,3 +185,23 @@ tracks the release. `control.exe` itself is the UPSTREAM QWT 4.2.2 binary, rebui
 sources and not modified by us, so its file-version resource says 4.2.2.0 and should. Only the
 gui-agent, the watchdog and the IddCx driver are ours. Saying so is better than renumbering an
 upstream binary to look like something it is not.
+
+## Test-against-the-reported-build rule (user, 2026-08-14)
+
+Every remaining case is reproduced against the EXACT build the reporter ran -
+`v4.3.1-agentc7ccb45` - not against current HEAD. "It does not happen on a newer build" is
+not an answer to "it happens on mine"; it only tells us the symptom is absent from a build he
+does not have.
+
+That needed a rig change, because 4.3.1 cannot finish installing here at all: it sets
+xenbus_monitor's AutoReboot only AFTER msiexec, so the Xen restart modal appears mid-install
+and blocks it (measured: 70+ min, qrexec never came up, dialog not clickable from dom0).
+`SUPPRESS_XEN_REBOOT_PROMPT=1` on mgmt/build-answer-stick.sh sets that key from the
+answer-stick payload BEFORE the installer starts. Nothing inside the package changes, so the
+post-install behaviour under test is still 4.3.1's.
+
+Status of the 25H2-only reports (44, 45, 33.3, 33.4): no 25H2 target exists here. Microsoft's
+download connector refuses headless sessions (tools/get-win-iso.sh documents it), so an ISO
+needs a browser step. Cheaper route to try first: 25H2 is an ENABLEMENT PACKAGE over 24H2
+(26100 -> 26200) and this project has a working Windows Update path plus 24H2 guests at
+26100.9168 - so the upgrade can be driven with the updater instead of downloading media.
