@@ -9511,3 +9511,46 @@ reduce truncation (4/5 vs 5/5 at n=5, and the rate is far too noisy at that samp
 `disallowedcertstl.cab` still fails outright ~3 in 15. That is NOT a regression from this change: it
 failed at the same rate before it (5/6, 4/6, 3/6 in earlier runs) and its body, when it arrives, is
 always exactly 4987 bytes. Separate issue, not truncation.
+
+## 2026-08-14 — cold-cache full pass: scan FIXED, install FAILS on a second defect
+
+Pristine rebuild (26100.8875, no cached trust list), current stack, production @default routing.
+
+WHAT NOW WORKS - the scan, which is the thing that failed all afternoon:
+
+    scan succeeded on a COLD cache (previously 0x80072F8F, six attempts in a row)
+    catalog resolved on the filename anchor; superseded kb5043080 dropped
+    KB5120710 installed
+    cumulative: 4,867.4 MB in 328 s = 15.2 MB/s, ONE attempt, zero resumes
+
+The corrected retry is what fixed it. The FIRST version of the retry did not: it accepted
+`!LengthKnown` as "unverifiable, pass through", and an EMPTY response has no headers, so a zero-byte
+trust-list reply went to Windows unretried (`PLAIN tries=1 bytes=0 body=0/-1`) and the pass died at
+0x80072F8F anyway. Only a cold-cache run could expose that - both earlier "successes" were on warm
+caches and would have shipped a broken first-update experience for every fresh template.
+
+WHAT STILL FAILS - UBR did NOT move.
+
+    before/after reboot: 26100.8875 (unchanged)
+    KB5120710  -> 7 CBS entries, state=112 (Installed)
+    KB5121003  -> ZERO CBS package entries; never registered
+    RebootPending cleared, no pending.xml, no rollback in CBS.log at boot
+    shutdown took 77 s and boot 75 s - servicing plainly never ran (it took 6.3 min when it worked)
+
+DIAGNOSIS: the pass staged TWO reboot-requiring packages in ONE servicing session - KB5120710
+(rc=3010) and then KB5121003 (rc=3010) - with no reboot between them. At boot CBS applied the first
+and silently discarded the second. DISM reported 3010 for the cumulative regardless, and the agent
+took that as success, so the pass reported "installed" for a package CBS never registered.
+
+This also explains the 11:47 success: that run installed the cumulative ALONE (`-OnlyKb KB5121003`)
+on an image where KB5120710 had already been installed AND rebooted. One reboot-requiring package
+per session. The variable was never the KB filter - it is how many packages a session stages.
+
+FIX REQUIRED (not yet implemented): once a package returns a reboot-required code, the pass must
+stop installing further packages and demand the reboot, resuming afterwards. Reporting
+`installed=True` on rc=3010 also overstates: 3010 means STAGED, and the only proof is the package
+appearing in CBS with state=112 after the reboot.
+
+ACCEPTANCE when implemented: pristine rebuild -> full dom0 pass -> reboot -> UBR 26100.8875 ->
+26100.9168 AND KB5121003 present in the CBS package list. Anything less is a staged package being
+reported as an installed one, which is the defect itself.
