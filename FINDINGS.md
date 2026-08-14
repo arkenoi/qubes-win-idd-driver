@@ -9357,3 +9357,54 @@ agent's remit (CLAUDE.md: only win-idd-test* qubes, only via qtest) - it needs t
 WHAT WOULD MAKE IT REPORTABLE: the same truncation reproduced after the proxy qube has been
 restarted, or reproduced from a Linux qube against the same service. This dev qube cannot do the
 latter - `qrexec-client-vm @default qubes.UpdatesProxy` is refused by policy here (rc=126).
+
+## 2026-08-14 — LOCALIZED: bytes are lost in the qrexec/vchan hop to the Windows guest
+
+Done the way it should have been from the start: instrument BOTH ends here rather than speculate
+about qubes that do not exist. (For the record: the netvm is `core-net`; there is no `sys-net` and
+no `sys-firewall`, and naming them wasted the user's time. See the `updates-proxy-bisect` skill.)
+
+Setup: `/etc/qubes-rpc/qubes.UpdatesProxy` in this qube is a symlink to `/dev/tcp/127.0.0.1/8082`,
+where a USER-owned tinyproxy already runs (`tinyproxy -c /home/user/updates-tinyproxy.conf`). Moved
+it to 8083 and put `tools/proxy-bytecount-shim.py` on 8082, counting bytes both directions per
+connection. tinyproxy does not log response sizes, which is why the shim was necessary.
+
+CONTROL - this qube, through the same shim+tinyproxy: 80043 every time (3/3, then 6/6 earlier).
+
+THE MEASUREMENT - guest with OUR RELAY REMOVED (guest/proxy-probe.cs: synchronous, no pool, no
+drain, no teardown), fetching through the same instrumented path:
+
+    this qube SENT    80454  80453  80457  80454  80454  80454     (all full, endU2C=eof)
+    guest RECEIVED    80454  29044  80457  80454  80454  65644     (two truncated)
+
+We sent 80453, the guest received 29044. We sent 80454, it received 65644. Every send completed
+with a clean EOF in both directions. So the bytes leave this qube intact and arrive short: the loss
+is INSIDE the qrexec/vchan hop, with no QWT updater code, no relay, no pool and no drain in the path.
+
+ELIMINATED, all by measurement: tinyproxy (same instance serves a Linux client perfectly), the
+network (control is 100% clean), dom0 policy (traffic flows), our relay and its pool/drain/teardown
+(removed entirely), and any of today's edits (the known-working 61f0bcc build fails identically).
+
+### Important correction to "NOT our code"
+
+The transport here is the WINDOWS side of qrexec - `qrexec-client-vm.exe` and the vchan handling in
+Qubes Windows Tools, which is precisely the component this project forks. So this is not a Linux
+Qubes defect to report upstream; it is plausibly OURS in the QWT sense.
+
+MECHANISM HYPOTHESIS, fitting all the evidence and not yet tested: a close-race that discards
+in-flight bytes. A plain-HTTP response with `Connection: close` ends with the SERVER closing
+immediately after the body, so any bytes still buffered in the vchan when that close propagates are
+dropped. CONNECT/TLS never shows it because the client closes first and the stream is long-lived -
+which is exactly why our own 4.8 GB .msu download was byte-perfect with zero resumes through this
+same transport, while an 80 KB plain-HTTP fetch loses a random tail.
+
+Predictions if true: loss grows with response size and with upstream speed, is absent when the
+client closes first, and is absent for CONNECT. All are testable.
+
+### Two process corrections from this episode
+
+* I claimed "both ends instrumented" while my tinyproxy had never started - it could not bind 8082
+  because the user's instance already held it, and `ss` showed THAT process, not mine. Check that
+  the thing you started is the thing you are measuring.
+* I reported "nothing in the guest's window" from a grep that silently found nothing because the
+  log contains NUL bytes and grep treated it as binary. Use `grep -a` on proxy logs.
