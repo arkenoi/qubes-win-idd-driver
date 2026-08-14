@@ -8992,3 +8992,34 @@ The shipped update path formats dates only as 's', 'o' or 'HH:mm:ss'. Custom `yy
 only in dev harnesses and diagnostics (drag-measure, drag-harness, phase-cpu-bench, wu-recon-extra,
 wu-relay-tail, wu-verify-installed, wu-cbs-analyze), whose output is read by humans on our English
 guest. Not worth changing; worth knowing.
+
+## 2026-08-14 — RTL/CJK titles as DATA (guest/wu-bidi-check.ps1)
+
+This class needs no foreign-language Windows: bidi marks and CJK text arrive as DATA in update
+titles, which we send to dom0, use as de-duplication keys and round-trip through JSON. Tested with
+Arabic/Hebrew/CJK titles and LRM/RLM marks built from code points (the file stays ASCII).
+
+SAFE, measured:
+
+    KB extraction   -match '(KB\d{6,7})' found KB5121003 in ALL titles - arabic+RLM, hebrew+LRM,
+                    cjk, and ascii-with-an-embedded-LRM
+    JSON round trip 5 of 5 titles byte-identical (-ceq) through ConvertTo-Json/Set-Content UTF8/
+                    ConvertFrom-Json - so a non-ASCII title survives the agent -> handler hop
+    dom0 protocol   the last token of every title is non-numeric, so no title can be swallowed as
+                    a progress value
+
+QUIRK, low severity, recorded rather than fixed:
+
+    '...Update (KB5121003)' -eq '...Update<U+200E> (KB5121003)'  ->  True
+    5 such titles produce only 4 distinct hashtable keys
+
+PowerShell's `-eq` and the default hashtable comparer use LINGUISTIC comparison, in which
+zero-width formatting characters (LRM/RLM) carry no weight - so two strings differing only by an
+invisible mark are equal and collide as keys. This reaches `wu-update.ps1`'s Msg() de-dup, whose
+keys are message strings. The only way it bites is two genuinely DIFFERENT updates whose titles
+differ solely by an invisible mark, which is not a realistic catalog state; and the failure mode is
+suppressing a duplicate-looking message, not a wrong install. Left alone deliberately - switching
+the de-dup to an ordinal comparer would be a behaviour change made to satisfy a hypothetical.
+
+Worth knowing for the future: this also means `-eq` on strings is NOT ordinal even though the
+case-insensitive regex operators are. Do not assume the two behave alike.
