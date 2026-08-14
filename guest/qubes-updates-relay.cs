@@ -237,6 +237,7 @@ static class Relay
         string token = "-";
         string reqLine = "", connHdr = "(none)", eofSide = "-";
         bool warm = false;
+        Func<string> endReasons = null;   // set once the pumps exist; reports WHY each direction stopped
         try
         {
             Ready ch = TakeWarm();
@@ -269,8 +270,10 @@ static class Relay
                 reqLine = Encoding.ASCII.GetString(head, 0, Math.Max(0, Math.Min(nl, 120))).Trim();
                 await rs.WriteAsync(head, 0, hlen); await rs.FlushAsync();
                 a.ReadTimeout = Timeout.Infinite;
-                Task t1 = Pump(a, rs, delegate(int n) { up += n; });        // WU -> vchan
-                Task t2 = Pump(rs, a, delegate(int n) { if (down == 0) ttfb = sw.ElapsedMilliseconds; down += n; });
+                string upEnd = "-", downEnd = "-";
+                Task t1 = Pump(a, rs, delegate(int n) { up += n; }, delegate(string w) { upEnd = w; });        // WU -> vchan
+                Task t2 = Pump(rs, a, delegate(int n) { if (down == 0) ttfb = sw.ElapsedMilliseconds; down += n; }, delegate(string w) { downEnd = w; });
+                endReasons = delegate() { return "upEnd=" + upEnd + " downEnd=" + downEnd; };
                 Task first = await Task.WhenAny(t1, t2);
                 eofSide = (first == t1) ? "client" : "tunnel";
                 // HALF-CLOSE DRAIN. This was 3000 ms here and another 3000 ms in the handler, so
@@ -284,7 +287,7 @@ static class Relay
             }
         }
         catch (Exception e) { Log(logPath, "CONN token=" + token + " error " + e.Message); }
-        finally { _gate.Release(); Log(logPath, "CONN warm=" + (warm ? 1 : 0) + " up=" + up + " down=" + down + " ttfb=" + ttfb + " ms=" + sw.ElapsedMilliseconds + " eof=" + eofSide + " [" + connHdr + "] req=[" + reqLine + "]"); }
+        finally { _gate.Release(); Log(logPath, "CONN warm=" + (warm ? 1 : 0) + " up=" + up + " down=" + down + " ttfb=" + ttfb + " ms=" + sw.ElapsedMilliseconds + " eof=" + eofSide + " " + (endReasons != null ? endReasons() : "upEnd=- downEnd=-") + " [" + connHdr + "] req=[" + reqLine + "]"); }
     }
 
     // Spawn one qrexec handler and complete its connect-back handshake. This is the expensive
@@ -389,8 +392,8 @@ static class Relay
 
             Stream vin = Console.OpenStandardInput();
             Stream vout = Console.OpenStandardOutput();
-            Task t1 = Pump(ns, vout, delegate(int n) { });   // socket (from WU) -> vchan out
-            Task t2 = Pump(vin, ns, delegate(int n) { });    // vchan in -> socket (to WU)
+            Task t1 = Pump(ns, vout, delegate(int n) { }, null);   // socket (from WU) -> vchan out
+            Task t2 = Pump(vin, ns, delegate(int n) { }, null);    // vchan in -> socket (to WU)
             Task.WhenAny(t1, t2).Wait();
             Task.WhenAny(Task.WhenAll(t1, t2), Task.Delay(DrainMs())).Wait();
         }
@@ -398,7 +401,15 @@ static class Relay
     }
 
     // ---- byte pump -----------------------------------------------------------------------
-    static async Task Pump(Stream from, Stream to, Action<int> count)
+    // WHY A PUMP ENDED IS EVIDENCE, NOT NOISE. This used to swallow every exception with a bare
+    // `catch {}` commented "normal teardown", which is true for a tunnel that has finished and
+    // indistinguishable from a mid-body reset. Plain-HTTP responses are being TRUNCATED about half
+    // the time - the same 80043-byte file arrives as anything from 17 KB up - and with the
+    // exception discarded there was nothing in the log to say whether the copy stopped because the
+    // peer was done or because it broke. Three hypotheses (the allowlist, the drain timeout, the
+    // warm pool) were each refuted by measurement, so the next step is to stop guessing and record
+    // the actual termination reason.
+    static async Task Pump(Stream from, Stream to, Action<int> count, Action<string> ended)
     {
         byte[] buf = new byte[65536];
         try
@@ -410,8 +421,12 @@ static class Relay
                 await to.FlushAsync();
                 count(n);
             }
+            if (ended != null) ended("eof");
         }
-        catch { /* peer closed / reset: normal teardown */ }
+        catch (Exception e)
+        {
+            if (ended != null) ended(e.GetType().Name + ":" + (e.Message ?? "").Replace('\n', ' ').Replace('\r', ' '));
+        }
     }
 
     static async Task<bool> ReadExact(Stream s, byte[] buf, int len)
