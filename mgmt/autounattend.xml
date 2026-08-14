@@ -166,13 +166,21 @@
           <Description>autologon unlimited (test rig only - plaintext password)</Description>
           <Order>10</Order>
         </SynchronousCommand>
-        <!-- DELIBERATELY NO EnableLUA=0 here (unlike autounattend-win11.xml). Win10 is the
-             INSTALLER-BASED e2e platform, not a hot-swap dev loop: QWT (with the patched
-             agent) is installed by the payload during firstboot, which already runs elevated,
-             so there is no filtered-token problem and no reason to weaken UAC. Keeping UAC ON
-             also tests closer to a real user's posture. (A brief 2026-08-12 experiment added
-             EnableLUA=0 here to enable hot-swaps; reverted per the decision that Win10 does
-             installer-based e2e only - no hotswaps, UAC stays on.) -->
+        <!-- EnableLUA=0, and the reason changed on 2026-08-14. The earlier decision (Win10 is
+             installer-based e2e only, so keep UAC on and stay close to a real user's posture)
+             cost us the ability to DIAGNOSE anything on Win10: with UAC on, qrexec lands as a
+             filtered token, `schtasks /RL HIGHEST` is refused, there is no qubes.VMRootShell,
+             and `qubes.VMShell+SYSTEM` is ignored by the Windows qrexec-agent - so nothing
+             elevated can be run at all. A field report we could not reproduce (forum 42717
+             post 54, Win10 22H2 black screen after IDD activation) is what made that
+             unacceptable: a rig you cannot drive is not a test platform.
+             This is TEST PROVISIONING ONLY and does not affect what the installer does on a
+             user's guest. It changes how WE reach the guest, not how the display behaves. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>UAC off (test rig only - the dev qube must be able to run elevated work over qrexec)</Description>
+          <Order>11</Order>
+        </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
