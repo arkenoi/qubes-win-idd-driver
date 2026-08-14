@@ -9267,3 +9267,37 @@ the fix is ours and is a teardown-ordering fix, not a timeout. If the vchan simp
 defect is in the updates-proxy transport and qualifies for the CLAUDE.md upstream-report exception.
 
 Do NOT "fix" this by raising DRAINMS - that was measured not to help.
+
+### OWNERSHIP SETTLED: the truncation is upstream of the guest, not in our relay
+
+The handler side is now instrumented too (`--log` is passed through to the `--relay` process, which
+qrexec spawns with no console anyone reads). Every connection in a 12-request run:
+
+    request_bytes=229  response_bytes=80455  responseEnd=eof  cut_response=False   <- full, x5
+    request_bytes=229  response_bytes=79248  responseEnd=eof  cut_response=False   <- SHORT
+    request_bytes=235  response_bytes=0      responseEnd=eof  cut_response=False   <- nothing
+    (client saw 80043 for the full ones and 78836 for the short one; 80455 = 80043 body + headers)
+
+`cut_response=False` on EVERY line means our handler never tears down a response in flight - the
+response pump had already finished, cleanly, before the socket was disposed. And when the client
+sees a short body, the HANDLER ALSO RECEIVED A SHORT STREAM, terminated by an orderly EOF.
+
+So both halves of our relay are faithful: they copy what they are given and observe a clean close.
+The bytes are lost BEFORE they reach the guest - in the `qubes.UpdatesProxy` service in the proxy
+qube, or in tinyproxy behind it. That is outcome (b) of task #14: NOT our code.
+
+`cut_request=True` appears on every line and is expected, not a defect: the request has been sent in
+full and its pump is simply still blocked reading a socket that will never send more.
+
+Caveat on rates: this run truncated 1 of 6 where earlier runs truncated about half. Nothing changed
+but instrumentation, so the rate is variable and any future comparison needs interleaved runs -
+"it got better" is not claimable from a single run.
+
+CONSEQUENCE. We cannot fix the transport from the guest, and we cannot retry on Windows' behalf -
+the CTL fetch is WinHTTP's, not ours. Two honest options, both needing a decision:
+  1. Report upstream (qubes-core-agent updates proxy / qrexec transport). This QUALIFIES under the
+     CLAUDE.md exception for defects outside QWT scope, and needs the user to approve exact text.
+  2. Mitigate in the relay: parse the response's Content-Length and, on a short body, transparently
+     re-issue the request on a fresh channel. This is within our power but means the relay stops
+     being a byte tunnel and starts parsing HTTP - a real increase in its responsibility, and it
+     cannot help CONNECT traffic at all (which does not need it).
