@@ -33,7 +33,14 @@ param(
   # knob: a normal dom0-driven pass passes nothing and takes everything offered. It exists so a
   # multi-gigabyte cumulative and a small package can be tested one at a time rather than as an
   # all-or-nothing batch - the batch is precisely what made the 24H2 failure unattributable.
-  [string[]]$OnlyKb   = @()
+  [string[]]$OnlyKb   = @(),
+  # Force the catalog to answer in a given language, e.g. -AcceptLanguage de-DE. Diagnostic.
+  # Exists because the catalog's response language is NOT under our control and has been measured
+  # varying by itself (same KB, same guest, German at 09:54 and English at 10:21 on 2026-08-14),
+  # while the row-picking logic matches on title text. A real user runs a German edition, so
+  # "does resolution still pick the same FILE when the titles are German" has to be answerable on
+  # an English guest - this is what makes it answerable.
+  [string]$AcceptLanguage = ''
 )
 $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force (Split-Path $StatusFile) | Out-Null
@@ -224,7 +231,9 @@ function Install-ViaWU {
 #   "... for Microsoft server operating system version 24H2 for x64"   <- excluded (Server)
 # Client entries are preferred over server ones and the version token comes from the running OS.
 function Resolve-Catalog($kb){
-  $r=Invoke-WebRequest "https://www.catalog.update.microsoft.com/Search.aspx?q=$kb" -Proxy $Proxy -UseBasicParsing -TimeoutSec 60
+  $hdr = @{}
+  if ($AcceptLanguage) { $hdr['Accept-Language'] = $AcceptLanguage }
+  $r=Invoke-WebRequest "https://www.catalog.update.microsoft.com/Search.aspx?q=$kb" -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr
   $rx=[regex]"(?is)id='([0-9a-fA-F\-]{36})_link'[^>]*>(.*?)</a>"; $guid=$null
   $cands=@()
   foreach($m in $rx.Matches($r.Content)){ $t=($m.Groups[2].Value -replace '<[^>]+>','' -replace '\s+',' ')
@@ -241,7 +250,7 @@ function Resolve-Catalog($kb){
     return @()
   }
   $json='[{"size":0,"languages":"","uidInfo":"'+$guid+'","updateID":"'+$guid+'"}]'
-  $dl=Invoke-WebRequest 'https://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Method POST -Body @{updateIDs=$json} -Proxy $Proxy -UseBasicParsing -TimeoutSec 60
+  $dl=Invoke-WebRequest 'https://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Method POST -Body @{updateIDs=$json} -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr
   return @([regex]::Matches($dl.Content,"url\s*=\s*'(http[^']+)'")|ForEach-Object{$_.Groups[1].Value}|Where-Object{$_ -match '\.msu(\?|$)'}|Sort-Object -Unique)
 }
 
