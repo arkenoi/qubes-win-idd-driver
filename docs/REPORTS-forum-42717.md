@@ -69,10 +69,17 @@ back serious mouse/window problems**. He asks for a `/noidd` switch.
 `7ccb459` is what we SHIP (`v4.3.1-agentc7ccb45`). So the current release is a regression against the
 previous one, on two different Windows versions, on his hardware. This outranks everything else here.
 
-**INDEPENDENT OF THE START MENU** (user, 2026-08-14): he reproduces it with Open-Shell running, so
-the Start-surface classification is NOT implicated. That rules out the whole toastcrop/shell-managed
-class and points at coordinate/window tracking - the mouse offset (task #8) and windows losing their
-position. Do not spend time on Start rendering for this.
+**INDEPENDENT OF THE START MENU** (user, 2026-08-14): he reproduces it with Open-Shell running.
+
+CORRECTED 2026-08-14 - what that does and does not mean. It does NOT exonerate toastcrop or the
+shell-managed policy: that code classifies and crops EVERY top-level window, whatever shell is
+running, so Open-Shell only means the stock Start is not the surface being mangled. Those files stay
+suspects.
+
+What it DOES invalidate is **winenum as the diagnostic here**. winenum dumps top-level HWNDs and
+their attributes to identify SHELL SURFACES; for a mouse-offset / window-position bug reproducing
+without the stock Start in play, that dump does not describe the failure. His attached winenum.log
+is evidence about the Start-menu case, not about this regression - do not lead with it.
 
 It also reframes his "what is the IDD for in seamless?" question: he is not asking academically, he
 suspects the IDD and wants it switchable. Our README currently says the opposite is policy - "no
@@ -94,6 +101,8 @@ switch to turn it off; the Basic Display Adapter is a failure state, not an opti
 
 1. **Bisect 09b643e -> 7ccb459.** A known-good/known-bad pair on the reporter's hardware is the
    cheapest possible lead and we have both hashes.
-2. Pull his winenum.log from post 44 - it may identify the 25H2 surfaces without needing his machine.
+2. Ask him for a MOUSE/WINDOW-COORDINATE artifact, not winenum: the agent log around a mis-click
+   (protocol trace of the announced rect vs where the click lands), and whether the ~1 cm offset
+   scales with window position or is constant. winenum.log answers a different question.
 3. PV disk upgrade crash (post 27.2) - the only report that leaves a user with a broken qube.
 4. Only then retest Start/`/idd` items on current; they may already be closed.
