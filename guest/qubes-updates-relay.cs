@@ -346,7 +346,8 @@ static class Relay
     class HttpResponse
     {
         public byte[] Bytes;
-        public bool LengthKnown;
+        public bool HeadersFound;   // did a complete header block arrive at all?
+        public bool LengthKnown;    // ...and did it carry a Content-Length?
         public bool Complete;
         public long Expected;
         public long GotBody;
@@ -390,6 +391,7 @@ static class Relay
         HttpResponse r = new HttpResponse();
         r.Bytes = buf.ToArray();
         r.Expected = expected;
+        r.HeadersFound = (headerEnd > 0);
         r.LengthKnown = (headerEnd > 0 && expected >= 0);
         r.GotBody = (headerEnd > 0) ? (r.Bytes.Length - headerEnd) : 0;
         r.Complete = r.LengthKnown && r.GotBody >= expected;
@@ -433,8 +435,21 @@ static class Relay
                         catch (Exception e) { Log(logPath, "PLAIN read error " + e.GetType().Name + ": " + e.Message); }
                     }
                     if (r != null && (best == null || r.Bytes.Length > best.Bytes.Length)) best = r;
-                    if (r != null && (r.Complete || !r.LengthKnown)) break;
-                    Log(logPath, "PLAIN short attempt=" + attempts + " got=" + (r == null ? -1 : r.GotBody)
+                    // ACCEPT only a response that actually ARRIVED. The first version of this
+                    // accepted `!LengthKnown` as "unverifiable, pass it through", which silently
+                    // exempted the worst case: an EMPTY response has no headers, so LengthKnown is
+                    // false and a zero-byte reply was handed straight to Windows without a retry.
+                    // That is exactly how the first cold-cache pass still failed - the trust-list
+                    // fetch came back with 0 bytes, tries=1, and the searcher died on 0x80072F8F.
+                    // Headers must be present; then either the body is complete, or there was no
+                    // Content-Length to check it against (chunked / close-delimited), which stays
+                    // pass-through rather than being retried on a guess.
+                    bool usable = r != null && r.HeadersFound && (r.Complete || !r.LengthKnown);
+                    if (usable) break;
+                    Log(logPath, "PLAIN incomplete attempt=" + attempts
+                                 + " bytes=" + (r == null ? -1 : r.Bytes.Length)
+                                 + " headers=" + (r != null && r.HeadersFound)
+                                 + " got=" + (r == null ? -1 : r.GotBody)
                                  + " expected=" + (r == null ? -1 : r.Expected) + " - retrying on a fresh channel");
                 }
                 if (best != null && best.Bytes.Length > 0)
