@@ -9135,3 +9135,50 @@ the verifier both in engine source and by measurement on the real path.
 
 Re-verified after every edit: syntax clean, and the handler still passes the German end-to-end
 progress test with the new guard and the scan check in place.
+
+## 2026-08-14 — regression run: today's changes are CLEAN; a pre-existing relay defect surfaced
+
+Asked to confirm nothing regressed after the day's edits (Resolve-Catalog rewrite, freshness guard,
+VMExec UTF-8 decoder, invariant progress formatting).
+
+### Pass 1 - dom0 sequence against the up-to-date guest: CLEAN
+
+`tools/replay-dom0-update.py win11-tpl --with-entrypoint` on the 26100.9168 guest:
+
+    [mkdir] rc=0   [cat>tarball] rc=0   [tar] rc=0   [entrypoint] rc=100   [rm] rc=0
+    progress floats on stderr: ['0.0', '1.0', '3.0', '100.0']   <- dot-formatted, parseable
+    stdout: no updates available
+
+Every step green, exit 100 correct for an up-to-date guest, and the new freshness guard and
+`action -eq 'scan'` check did not break the normal path.
+
+### Pass 2 - full download+install from a pristine 26100.8875 rebuild: BLOCKED, not by us
+
+The pass failed before its first log line with `0x80072F8F` (ERROR_INTERNET_SECURE_FAILURE), and on
+retry with `0x8024402C`. Isolated (`guest/wu-egress-isolate.ps1`):
+
+    .NET / HttpWebRequest -> catalog Search.aspx      HTTP 200      <- our downloader is fine
+    WU COM searcher (Get-Available)                   FAILED        <- code NOT touched today
+    relay log: ctldl.windowsupdate.com  ok x2, zero-bytes x5
+               tas02.sls.update.microsoft.com  down=3974 eof=client
+
+That signature is a client that received a certificate chain (~4 KB) and aborted it: WU could not
+refresh its certificate trust list, so TLS validation of the update endpoints failed.
+
+ROOT CAUSE, measured (`guest/wu-plainhttp-repeat.ps1`) - the relay's PLAIN-HTTP path is unreliable:
+
+    disallowedcertstl.cab   ok=3/6  failed=3        same URL, both outcomes
+    authrootstl.cab         ok=6/6  bytes=26531, 69943, 80043
+
+So it drops requests intermittently AND truncates responses while reporting success (80043 is the
+true length - `download.windowsupdate.com` returns exactly that). Both are in the non-CONNECT path.
+Our .msu downloads are HTTPS and tunnelled end-to-end via CONNECT, which is why 4.8 GB transferred
+flawlessly at 12.8 MB/s while this is broken - the plain-HTTP path was effectively never exercised.
+
+NOT a regression from today: the failing call is the WU COM searcher, and the relay was not modified
+today. It explains why the scan worked at 09:53 and fails now - the CTL refresh is periodic, so the
+guest only needs this path some of the time, which is the worst possible failure profile: an update
+feature that works on one boot and fails on the next for no visible reason.
+
+The allowlist is NOT the cause: ctldl is ALLOWED (logs CONN, not DENY). Only 3 DENYs exist in the
+whole log - wdcpalt, self.events.data (telemetry, correct) and windowsupdate.microsoft.com.
