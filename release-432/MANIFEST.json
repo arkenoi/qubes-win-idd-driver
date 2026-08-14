@@ -1,0 +1,246 @@
+{
+  "package": "qwt-improved-setup",
+  "package_kind": "full-installer",
+  "package_version": "4.3.2+agent.ec07ac863db3",
+  "description": "QWT-NG 4.3 full install for a clean Windows guest: the upstream QWT 4.2.2 WiX MSI rebuilt from source with our gui-agent, plus certs, VC++ runtime and a two-stage install script. Not an overlay.",
+  "targets_qwt_version": "4.2.2",
+  "built_utc": "2026-08-14T17:50:08.7561005Z",
+  "source": {
+    "driver_repo_commit": "0f9df57a54e14ba973b327d703d5dc99db3d45c8",
+    "agent_commit": "ec07ac863db3a9fba008173325f6ea0bf324b156",
+    "agent_describe": "ec07ac8",
+    "agent_upstream": "https://github.com/QubesOS/qubes-gui-agent-windows",
+    "installer_upstream_commit": "14c189e44fea99c0b42b029e96f172c7eecec5e0",
+    "installer_upstream": "https://github.com/QubesOS/qubes-installer-qubes-os-windows-tools",
+    "stock_msi_sha256": "7049322128d1cf7d9dc2a48f69ef91a5893a8f779d3b2ad7d25fdfc8eee3baf4"
+  },
+  "ci": {
+    "workflow": "release-package",
+    "run_id": "31825472243",
+    "run_number": "125",
+    "run_attempt": "1",
+    "repository": "arkenoi/qubes-win-idd-driver",
+    "ref": "refs/heads/main",
+    "sha": "0f9df57a54e14ba973b327d703d5dc99db3d45c8"
+  },
+  "installs": {
+    "msi_features": [
+      "PvDriversCore",
+      "Core",
+      "Gui",
+      "PvDriversNetwork (unless /nonet)"
+    ],
+    "also": [
+      "6 ITL signing certs + our test cert into Root and TrustedPublisher",
+      "VC++ 2015-2022 x64 runtime",
+      "bcdedit /set testsigning on",
+      "gui-agent registry defaults: SeamlessMode=1, DisableCursor=0, LogDir",
+      "Windows Update agent (unless /noupdates): reports availability via qubes.NotifyUpdates, answers dom0 qubes-vm-update so the Qubes Update GUI can drive the qube, and sets NoAutoUpdate=1 - dom0 owns installs"
+    ]
+  },
+  "never_installs": [
+    "reference/",
+    "PvDriversDisk",
+    "MoveUsers",
+    "Autologon",
+    "any WDDM/video driver (QWT 4.2.2 has none)",
+    "the dom0-side resize service",
+    "idd-driver/ unless install.cmd /idd is passed; with /idd the driver is installed AND ACTIVATED (the IDD becomes the display, the emulated VGA adapter is disabled)"
+  ],
+  "known_issues": [
+    "Attaching a netvm makes the guest unusable on Qubes 4.3: xenvif installs but never starts, ~2 vCPUs burn, qrexec stops answering. Not yet attributed to this package vs the upstream PV drivers. Use this build on an offline qube."
+  ],
+  "idd_driver_included": true,
+  "idd_driver_files": [
+    "devcon.exe",
+    "iddsampledriver.cat",
+    "IddSampleDriver.dll",
+    "IddSampleDriver.inf"
+  ],
+  "reference_binaries": {
+    "gui-agent.exe": "20ec3ec4cad3c36b15d9bdca11d6315c6814f67a335ac6d1d5184c38e2629b67",
+    "gui-watchdog.exe": "85a758a31cb17842ef58debf0e12c8365a7e2275bc2ee6042d46822716703320"
+  },
+  "files": {
+    "activate-idd.ps1": {
+      "size": 7822,
+      "sha256": "6ba03edb66d6b4c390287f13b3af1b190166545f215368b8dc24d55a27b7484f",
+      "version": null
+    },
+    "certs/qwt-improved-testsign.cer": {
+      "size": 1015,
+      "sha256": "b5371fb62d9590dfa19534e7fc74d8a1bf82c10f2a20b012e61f708332aa9367",
+      "version": null
+    },
+    "certs/SigningCertAgent.cer": {
+      "size": 1856,
+      "sha256": "835298dab25fc46aeb0b579b22caa55291cf859d9c24fb95d4877f07744c24a9",
+      "version": null
+    },
+    "certs/SigningCertDb.cer": {
+      "size": 1856,
+      "sha256": "ed8b2accb33b49dda302b575d98108a7edb093d8c7604bb6dcb428e233a3760b",
+      "version": null
+    },
+    "certs/SigningCertDrivers.cer": {
+      "size": 1856,
+      "sha256": "11296e8e453b8e111a76aef8db109a6af84aba2675764b6b1a9ea5ff7eecbec4",
+      "version": null
+    },
+    "certs/SigningCertGui.cer": {
+      "size": 1856,
+      "sha256": "472af2911e9b4a0a2910329d855dac4edbfeeda06beac2b231be60a5d1b9d3eb",
+      "version": null
+    },
+    "certs/SigningCertUtils.cer": {
+      "size": 1856,
+      "sha256": "b4f8cfbf276d2482d4e27adb2693c4031fceffb83d5305aa75267a77cc6e51ad",
+      "version": null
+    },
+    "certs/SigningCertVchan.cer": {
+      "size": 1856,
+      "sha256": "f002c90da999a7e1a69f12d28baea03060800bdf7c51debf142066ae29bc69f7",
+      "version": null
+    },
+    "deactivate-idd.ps1": {
+      "size": 7186,
+      "sha256": "1eb538f46992ed7407e812a3cd640cb6e8062157cbff32e583b0ceb6eca93dae",
+      "version": null
+    },
+    "disable-hw-accel.ps1": {
+      "size": 15578,
+      "sha256": "b803674b382f8a70bd903491d4e54b426a7d4ee32d7893ee7da46efa87b9c3b6",
+      "version": null
+    },
+    "ensure-autologon.ps1": {
+      "size": 3558,
+      "sha256": "a2b35b4ca2063365afd1a67b2307226f07f7920e3d6608aecb6d545a600f827a",
+      "version": null
+    },
+    "idd-driver/devcon.exe": {
+      "size": 120360,
+      "sha256": "28f7dcee19644491e5f8020f82d835976cbb27af6eff6f24c6486230ec2f336d",
+      "version": "10.0.26100.4202 (WinBuild.160101.0800)"
+    },
+    "idd-driver/iddsampledriver.cat": {
+      "size": 2814,
+      "sha256": "fde0ee1bcf3267a1944dc39dc166c3f19a71c090a46da5947a0a1280bfd176c7",
+      "version": null
+    },
+    "idd-driver/IddSampleDriver.dll": {
+      "size": 55032,
+      "sha256": "6ca01f07cc91402c4a956c3d739700897220e6727925fe8f3149bb1e146b88d8",
+      "version": null
+    },
+    "idd-driver/IddSampleDriver.inf": {
+      "size": 5140,
+      "sha256": "0ca3e859469fe5503b86e6819d46bfd319d6d11bdc2a2645185cd6004e5bda82",
+      "version": null
+    },
+    "Install-QwtImproved.ps1": {
+      "size": 82289,
+      "sha256": "8029d00b7da1f0435bac26c8db2135c9cc1f88dd3598a5bbff15c009909926a5",
+      "version": null
+    },
+    "install-updater-agent.ps1": {
+      "size": 14886,
+      "sha256": "5dd6161818241dff490d470c9c4f838cb088c4cd5a2910d2aa50046f2bda7827",
+      "version": null
+    },
+    "install.cmd": {
+      "size": 8776,
+      "sha256": "4aade49b9c8d2324cdabd545f3d40b99c398961409d5a37a02f4e49fff9655b8",
+      "version": null
+    },
+    "msi/installer.msi": {
+      "size": 3391488,
+      "sha256": "3cd73c16c2d7812594e71ae7bdc60856fd0a35b33582a02cd931162e560b8635",
+      "version": null
+    },
+    "msi/vc_redist.x64.exe": {
+      "size": 25635768,
+      "sha256": "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b",
+      "version": "14.44.35211.0"
+    },
+    "pv-drivers/xenvif-signer.cer": {
+      "size": 788,
+      "sha256": "087edc066bf71aa22aec0914071c9bc90ca65ca353541234ac2c99468bdde0f2",
+      "version": null
+    },
+    "pv-drivers/xenvif.cat": {
+      "size": 2536,
+      "sha256": "c2c2b727c02a3c773fdf2a635a35d80a8ccf0d700353d4919d6289837cbaa781",
+      "version": null
+    },
+    "pv-drivers/xenvif.inf": {
+      "size": 3755,
+      "sha256": "a3172368fa115f771add7e0fe22db18f81566435802f6345a59a3f5f25fb8b92",
+      "version": null
+    },
+    "pv-drivers/xenvif.sys": {
+      "size": 215952,
+      "sha256": "e3db57516e0407f64f536e06873d2b22eee20631a15103677bfc4969760a0d04",
+      "version": "9.1.0.0"
+    },
+    "qubes-posix-cat.cs": {
+      "size": 2159,
+      "sha256": "d4f08ccc9d9f46309b475084cb46543f84bc44ed94f2164ddce3059fe30ade63",
+      "version": null
+    },
+    "qubes-updates-relay.cs": {
+      "size": 34186,
+      "sha256": "166ddfff9596da10ac3e3f60b7c486ae1d151f52f99320918ac0b98057614396",
+      "version": null
+    },
+    "qubes-windows-update.ps1": {
+      "size": 50325,
+      "sha256": "5eba327f29ddf9555f188dfe3ec0748e486abdea1f642da52c0f6bd085c97806",
+      "version": null
+    },
+    "quiet-desktop.ps1": {
+      "size": 9030,
+      "sha256": "931dd383f243a1144e8bc6183c1115476b4b873a5279f5f07875fb4f997a1907",
+      "version": null
+    },
+    "README.txt": {
+      "size": 22150,
+      "sha256": "a825476e7f5d9e63903d97980d709ec4d8ad2a0e4d69677db6fe964ad0858863",
+      "version": null
+    },
+    "reference/gui-agent.exe": {
+      "size": 217848,
+      "sha256": "20ec3ec4cad3c36b15d9bdca11d6315c6814f67a335ac6d1d5184c38e2629b67",
+      "version": "4.3.2.0"
+    },
+    "reference/gui-watchdog.exe": {
+      "size": 18680,
+      "sha256": "85a758a31cb17842ef58debf0e12c8365a7e2275bc2ee6042d46822716703320",
+      "version": "4.3.2.0"
+    },
+    "reference/README.txt": {
+      "size": 275,
+      "sha256": "6e517d597f78eb915dcc569dcd9d1db97e404d221de0966c6b65e463306abed8",
+      "version": null
+    },
+    "tools/winenum.cs": {
+      "size": 5116,
+      "sha256": "a3b7cb529808b07ba223f786c042ea6ae0db00695ef306930618091966620d48",
+      "version": null
+    },
+    "VMExec.ps1": {
+      "size": 4488,
+      "sha256": "aa90734de900f741038036f0ab146ea6688556e1237f6384658ecb4057c97c26",
+      "version": null
+    },
+    "vmupdate-shim.ps1": {
+      "size": 7375,
+      "sha256": "81cb8e6f362ed39fd601eb55a27658a963e6c2bfd4a5dee6e282c5a1031d3618",
+      "version": null
+    },
+    "wu-update.ps1": {
+      "size": 16181,
+      "sha256": "de860d2552d1029ecee1efaebb28e8cedd1f5ba0cbb30037c34953d1100676a0",
+      "version": null
+    }
+  }
+}

@@ -176,3 +176,12 @@ a long way:
    template first)?
 
 No dates promised. The build with `/noidd`, `/iddoff` and the fixes above is being prepared now.
+
+### One correction to add to the reply (post 33, `control.exe` reports 4.2.2.0)
+
+This is not a packaging slip to fix - it is accurate. The MSI ProductVersion IS stamped from our
+version (`agent/version` -> `installer-src\version`, qwt-full.yml), so the installed-apps entry
+tracks the release. `control.exe` itself is the UPSTREAM QWT 4.2.2 binary, rebuilt from upstream
+sources and not modified by us, so its file-version resource says 4.2.2.0 and should. Only the
+gui-agent, the watchdog and the IddCx driver are ours. Saying so is better than renumbering an
+upstream binary to look like something it is not.
