@@ -84,12 +84,17 @@ Omit the Xen PV disk drivers (xenvbd). Leaves the guest on emulated IDE. Diagnos
 [CmdletBinding()]
 param(
     [switch]$Auto,
-    # IDD activation is DEFAULT and MANDATORY for a real install - the IddCx driver is the
-    # entire display point of this package (arbitrary resolutions following the dom0 window,
-    # no Basic-Display-Adapter snapping). -NoIddDriver is TESTING ONLY: it leaves the guest on
-    # the emulated BDA, which is a DEGRADED/FAILURE state and must NEVER be used for a real
-    # install. There is deliberately no /noidd user switch. -InstallIddDriver is a harmless
-    # no-op kept so old command lines and the /idd switch still parse.
+    # Reboot at the END of the install as well. OFF by default: the install costs ONE guest
+    # shutdown (the testsigning reboot between the two stages) and the PV drivers hand over
+    # from their emulated counterparts at the qube's next start, exactly as stock QWT leaves
+    # it. A second shutdown hangs qvm-create-windows-qube, which restarts the qube once and
+    # then waits forever for os=Windows.
+    [switch]$RebootAtEnd,
+    # IDD activation is default-on: the IddCx driver is the display point of this package
+    # (arbitrary resolutions following the dom0 window, no Basic-Display-Adapter snapping).
+    # -NoIddDriver (/noidd) leaves the guest on the emulated BDA - a reduced configuration,
+    # not a broken one, and the supported escape hatch when the IDD misbehaves on a given
+    # host. -InstallIddDriver is a harmless no-op kept so /idd still parses.
     [switch]$NoIddDriver,
     [switch]$InstallIddDriver,
     [switch]$NoPvNetwork,
@@ -577,6 +582,7 @@ function Invoke-Stage1 {
         if ($AcceptPvDiskUpgrade) { $extra += '-AcceptPvDiskUpgrade' }
         if ($NoAppTweaks)      { $extra += '-NoAppTweaks' }
         if ($NoUpdaterAgent)   { $extra += '-NoUpdaterAgent' }
+        if ($RebootAtEnd)      { $extra += '-RebootAtEnd' }
         $extra += '-Auto'
         Set-BootResume -ScriptPath $self -ExtraArgs $extra
         Write-Log 'STAGE 1 COMPLETE - rebooting in 2 s, installation resumes automatically'
@@ -814,6 +820,7 @@ function Invoke-Stage2 {
                     if ($AcceptPvDiskUpgrade) { $extra += '-AcceptPvDiskUpgrade' }
                     if ($NoAppTweaks)      { $extra += '-NoAppTweaks' }
                     if ($NoUpdaterAgent)   { $extra += '-NoUpdaterAgent' }
+                    if ($RebootAtEnd)      { $extra += '-RebootAtEnd' }
                     $extra += '-Auto'
                     $extra += '-ResumeAfterUninstall'
                     Set-BootResume -ScriptPath $self -ExtraArgs $extra
@@ -1330,13 +1337,30 @@ function Invoke-Stage2 {
 
     $script:Result.ok = $true
     $script:Result.reboot_needed = $true
-    Write-Log 'STAGE 2 COMPLETE - QWT installed. A reboot is required for the drivers to bind.'
+    Write-Log 'INSTALL COMPLETE - QWT installed. The PV drivers bind at the guest''s NEXT start.'
 
-    if ($Auto) {
-        Write-Log 'rebooting in 2 s'
+    # ONE guest shutdown for the whole install, not two.
+    #
+    # Everything that needed testsigning ACTIVE has already happened in this boot - the MSI,
+    # the PV driver packages, and the IDD activation, which waits for the IddCx device to bind
+    # before it disables the emulated VGA. What the old final reboot bought was the PV disk and
+    # network drivers taking over from their emulated counterparts, and that is exactly the
+    # kind of thing a guest picks up on its next start anyway. Stock QWT hands a qube back the
+    # same way.
+    #
+    # Why it matters beyond tidiness: qvm-create-windows-qube restarts the qube EXACTLY ONCE
+    # after running the tools installer and then waits forever for os=Windows. A second
+    # shutdown leaves it waiting on a halted qube with nobody to start it - the provisioning
+    # run hangs. With one shutdown, an unpatched upstream works.
+    #
+    # -RebootAtEnd restores the old behaviour for a caller that wants the finished state
+    # immediately (our own acceptance harness reboots by itself and does not need it).
+    if ($Auto -and $RebootAtEnd) {
+        Write-Log 'rebooting in 2 s (-RebootAtEnd)'
         Emit-ResultThenReboot 0
     }
-    Write-Log 'Reboot now; qrexec should answer roughly a minute after the guest comes back.'
+    Write-Log 'No reboot from here. qrexec answers in this boot; PV drivers and their'
+    Write-Log 'emulated-device handover complete the next time the qube starts.'
     Emit-Result 0
 }
 
