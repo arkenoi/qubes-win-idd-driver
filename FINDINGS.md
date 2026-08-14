@@ -9456,3 +9456,58 @@ stack differing.
 Reconstructing "what was live" from commit TIMES against action times - rather than from the tidy
 story of which commit came next - is what exposed the deviation. Working-tree state at the moment of
 a deploy is not the same thing as a commit, and on a day with 20 commits the difference is routine.
+
+## 2026-08-14 — the difference, explained and FIXED at the relay
+
+### What the difference actually was
+
+Measured rate, 30 relay-free fetches with the sender verified by a byte-counting shim in this qube:
+
+    this qube sent   30/30 full (80321 or 80454 bytes, zero short sends)
+    guest received   20/30 full; the rest 20883, 24979, 27943, 32729, 42063, 71487, 76413, 77135
+
+So the qrexec/vchan hop loses part of a plain-HTTP response about a THIRD of the time, constantly -
+morning and afternoon alike. Nothing about the environment changed between the run that worked and
+the runs that failed.
+
+What changes is whether Windows NEEDS that path. A fresh image has no certificate trust list, so it
+must fetch authrootstl.cab over plain HTTP before it can validate the update endpoints; at a 1-in-3
+loss rate that fetch is a coin toss. Once ONE complete CTL lands, Windows caches it and the whole
+class of failure disappears until the cache expires.
+
+    09:53   fresh clone, got a complete CTL early                  -> scan worked
+    15:26   fresh clone, kept drawing short ones                   -> 0x80072F8F, repeatedly
+    16:46   same guest, cache populated by my probe fetches        -> scans succeed regardless
+
+That is the entire "it worked this morning" mystery: luck on a lossy path, not configuration. It
+also explains the field symptom - updates work on one boot and fail on the next, for no visible
+reason - and it is why a rebuild-from-pristine re-exposes it every time.
+
+Single-variable A/B confirmed the agent file is NOT involved: 61f0bcc's agent and 92bc1a6's agent
+each scanned successfully 2/2, interleaved, on the same guest.
+
+### The fix (guest/qubes-updates-relay.cs)
+
+Plain-HTTP requests are now VERIFIED and RETRIED; CONNECT is untouched.
+
+  * a non-CONNECT request goes down a separate path that buffers the response instead of streaming
+  * completeness is judged only where it is knowable - an explicit Content-Length. Chunked and
+    close-delimited responses pass through unverified rather than being retried on a guess
+  * a short body is re-issued on a FRESH channel, up to QUBES_UPDATES_RETRIES (default 4)
+  * nothing is written to the client until a complete response is in hand, so Windows is never
+    handed a truncated file that looks like the real one
+  * bodies over 16 MB stream unverified, so this cannot become a memory problem; the files it
+    exists for are tens of KB
+
+RESULT, through the relay: authrootstl.cab 15/15 complete, ONE distinct size (80043), against
+20/30 before. The relay log shows the mechanism working - "short attempt=1 got=23707 expected=80043
+- retrying on a fresh channel" then "tries=2 ... complete=True".
+
+Not claimed: this does not repair the transport. It makes the loss non-fatal for everything routed
+through the relay, which is what Windows Update uses. The underlying qrexec/vchan defect (task #14)
+is still open, and the close-race hypothesis was REFUTED - a 750 ms sender-side linger did not
+reduce truncation (4/5 vs 5/5 at n=5, and the rate is far too noisy at that sample size to compare).
+
+`disallowedcertstl.cab` still fails outright ~3 in 15. That is NOT a regression from this change: it
+failed at the same rate before it (5/6, 4/6, 3/6 in earlier runs) and its body, when it arrives, is
+always exactly 4987 bytes. Separate issue, not truncation.

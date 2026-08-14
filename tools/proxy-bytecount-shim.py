@@ -24,6 +24,14 @@ import time
 LISTEN = int(sys.argv[1]) if len(sys.argv) > 1 else 8082
 UPSTREAM = int(sys.argv[2]) if len(sys.argv) > 2 else 8083
 LOGFILE = sys.argv[3] if len(sys.argv) > 3 else "/tmp/proxy-shim.log"
+# LINGER_MS: hold the client connection open for this long AFTER the upstream body has been fully
+# written, before closing. This is the close-race test. The hypothesis is that a plain-HTTP
+# response ends with the server closing immediately after the last byte, and that bytes still in
+# flight in the vchan are discarded when that close propagates to the Windows guest. If a linger
+# eliminates the truncation, the race is real and the fix is a drain-before-close in whichever
+# component owns that close. If truncation survives a generous linger, the hypothesis is dead and
+# the loss is a plain data-path bug rather than a teardown ordering one.
+LINGER_MS = int(sys.argv[4]) if len(sys.argv) > 4 else 0
 _lock = threading.Lock()
 _n = [0]
 
@@ -74,8 +82,12 @@ class Handler(socketserver.BaseRequestHandler):
             up.close()
         except Exception:
             pass
-        log("conn=%d req=%r to_upstream=%d to_client=%d endC2U=%s endU2C=%s"
-            % (cid, first_line[0].decode("ascii", "replace"), counts["c2u"], counts["u2c"],
+        # The close-race test: the body is already written; hold the socket open before letting it
+        # close, so any bytes still travelling through the vchan have time to land.
+        if LINGER_MS:
+            time.sleep(LINGER_MS / 1000.0)
+        log("conn=%d linger=%dms req=%r to_upstream=%d to_client=%d endC2U=%s endU2C=%s"
+            % (cid, LINGER_MS, first_line[0].decode("ascii", "replace"), counts["c2u"], counts["u2c"],
                ends.get("c2u", "-"), ends.get("u2c", "-")))
 
 
