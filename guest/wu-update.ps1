@@ -21,8 +21,21 @@ $Status = 'C:\ProgramData\Qubes\update-status.json'
 $qtRootForAl = $env:QUBES_TOOLS; if (-not $qtRootForAl) { $qtRootForAl = 'C:\Program Files\Qubes Tools' }
 $Err    = [Console]::Error
 
+# INVARIANT CULTURE IS LOAD-BEARING, do not simplify this back to `"{0:0.0}" -f $p`.
+#
+# PowerShell's -f operator formats with CurrentCulture, and in a custom numeric format string the
+# "." is not a literal - it is the decimal-separator PLACEHOLDER, substituted with
+# NumberFormatInfo.NumberDecimalSeparator. On a German guest that is a comma, so this emitted
+# "0,0" / "75,0". dom0 parses progress with float(line) (qube_connection.py::_collect_stderr), and
+# float("75,0") raises - so EVERY progress line, starting with the very first, was unparseable and
+# fell through to being displayed as a message instead. A real user runs a German edition.
+#
+# Only formatting that crosses the dom0 protocol needs this; log text does not.
 function Prog([double]$p) {
-    if ($p -gt $script:LastP) { $script:LastP = $p; $Err.WriteLine(("{0:0.0}" -f $p)) }
+    if ($p -gt $script:LastP) {
+        $script:LastP = $p
+        $Err.WriteLine([string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:0.0}', $p))
+    }
 }
 $script:LastP = -1
 

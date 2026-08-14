@@ -8880,3 +8880,65 @@ Systeme"): PASS, every language resolved to the identical file.
 
 Nothing is pinned to a Windows version: arch, build, version and product family are all read from
 the running guest.
+
+## 2026-08-14 — locale audit: one real protocol bug, and a retraction of my own fix rationale
+
+A 14-agent audit of every locale-dependent assumption confirmed 2 findings and rejected 8. The
+rejections were correct and worth recording: Start Menu paths have not been localized since Vista,
+and the `~xx-XX~` tags in CBS package identities are identifiers, not localized text.
+
+### CONFIRMED and FIXED: every progress line was unparseable on a German guest
+
+`guest/wu-update.ps1:25` formatted dom0 progress with `"{0:0.0}" -f $p`. PowerShell's `-f` uses
+CurrentCulture, and in a CUSTOM numeric format string the "." is the decimal-separator PLACEHOLDER,
+not a literal. dom0 parses progress with `float(line)`, and `float("75,0")` raises.
+
+Measured on the English guest by forcing the culture in-process, with the defect as a control:
+
+    culture   culture-bound      invariant (shipped)
+    en-US     '75.0'  ok         '75.0'  ok
+    de-DE     '75,0'  BREAKS     '75.0'  ok
+    fr-FR     '75,0'  BREAKS     '75.0'  ok
+    ru-RU     '75,0'  BREAKS     '75.0'  ok
+    control (defect re-introduced under de-DE) produced a comma = True
+
+So on GWeck's German edition EVERY progress line, starting with the first, was unparseable and fell
+through to being displayed as a message. Fixed with an explicit InvariantCulture format. `Prog` is
+the only number crossing the protocol; the other stderr writes are text.
+
+### RETRACTED: "windows11.0 vs windows10.0 separates client from server"
+
+I wrote that into the resolver comment and the commit message without checking it. Measured, it is
+false - SERVER packages are also named windows11.0-*:
+
+    "2026-08 Cumulative Update for Microsoft server operating system version 24H2 for x64-based
+     Systems (KB5120233)"  ->  windows11.0-kb5120233-x64_9344a2fc....msu
+
+What the family check actually buys is separating Windows 10 packages from Windows 11 ones. The
+real client/server separator is the KB NUMBER, which is product-specific: 24H2 cumulative is
+KB5121003 client / KB5120233 server, .NET is KB5120710 client / KB5120708 server. Measured:
+KB5121003 returns four rows, all client (24H2/25H2 x x64/arm64), no server row at all.
+
+### The audit's own central claim was also wrong, and measurement settled it
+
+It argued a "Dynamic Cumulative Update" row carries the SAME KB as the LCU with a near-identical
+filename, so only a DISM applicability check could separate them. Measured - both halves are false:
+
+    Safe OS Dynamic Update ... (KB5121002)  ->  windows11.0-kb5121002-x64_....CAB
+    Setup Dynamic Update   ... (KB5106084)  ->  windows11.0-kb5106084-x64_....CAB
+
+Dynamic Updates ship .cab, not .msu, so the existing `\.msu` filter drops them outright; and they
+carry their own KB numbers, so a KB search never returns them beside the cumulative. No
+applicability-fallback machinery is needed. The English `Dynamic` keyword was never load-bearing.
+
+Also seen: the server cumulative KB5120233 bundles the SAME superseded kb5043080 that broke us, so
+that bundling is a catalog-wide pattern rather than something specific to KB5121003.
+
+### Incidental, and a rule for this repo
+
+A CJK stem added to the ranking hint was mangled to '?a??a?' in transit and broke the parse -
+caught by `ps-syntax-check.ps1` before deploy. Files under `guest/` cross qrexec as ASCII: keep
+them ASCII-only.
+
+Re-verified after all edits: syntax clean, and KB5121003 resolves to the identical file across
+en-US/de-DE/fr-FR/ja-JP.

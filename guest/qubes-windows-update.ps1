@@ -240,9 +240,23 @@ function Install-ViaWU {
 #   * DisplayVersion alone does not identify a product: Windows 10 AND Windows 11 both shipped a
 #     "22H2". CurrentBuild does (19045 vs 22621), so the BUILD is ranked above the version now.
 #   * Build alone does not separate client from server: Windows Server 2025 and Windows 11 24H2
-#     are BOTH build 26100. That is what the old `Server` keyword was for - and it is an English
-#     word. The locale-invariant separator is the filename: client Windows 11 packages are named
-#     windows11.0-*, while Server 2025 packages are windows10.0-*.
+#     are BOTH build 26100.
+#
+# CORRECTED 2026-08-14, measured: the filename family does NOT separate client from server.
+# Server packages are ALSO named windows11.0-* - "Cumulative Update for Microsoft server operating
+# system version 24H2 ... (KB5120233)" ships windows11.0-kb5120233-x64_9344....msu. An earlier
+# version of this comment claimed Server 2025 used windows10.0-*; that was an assumption and it was
+# wrong. What the family check DOES buy is separating Windows 10 packages from Windows 11 ones.
+#
+# The real client/server separator is the KB NUMBER, which is product-specific: the 24H2 cumulative
+# is KB5121003 for client and KB5120233 for server; the .NET one is KB5120710 client, KB5120708
+# server. So a KB-specific search returns product-specific rows - measured, KB5121003 returns four
+# rows, all client (24H2/25H2 x x64/arm64), no server row at all. The English `Server` keyword was
+# never what kept server packages out.
+#
+# Dynamic Updates cannot reach us either, for two measured reasons: they ship .cab, not .msu (the
+# `\.msu` filter below drops them outright), and they carry their OWN KB numbers - Safe OS Dynamic
+# Update is KB5121002 and Setup Dynamic Update is KB5106084, neither of which is KB5121003.
 #
 # Nothing here is pinned to a Windows version: arch, build, version and product family are all read
 # from the running guest. Hardcoding "x64 + 24H2|26100" once made KB5120708 unresolvable on 25H2.
@@ -272,7 +286,18 @@ function Resolve-Catalog($kb){
     if($OsBuild -and $t -match [regex]::Escape($OsBuild)){ $score += 4 }
     if($OsVer   -and $t -match [regex]::Escape($OsVer))  { $score += 2 }
     if($score -eq 0){ continue }
-    if($t -match 'Dynamic|Server|server operating system'){ $score -= 3 }   # hint only, English
+    # Ranking hint ONLY - this can no longer reject anything, so a locale it fails to cover costs
+    # ordering, not correctness. Stems, because the shared prefix is what survives translation:
+    # 'Dynami' covers Dynamic/Dynamisch/dinamico/dynamique, and -match is case-insensitive so
+    # 'Server' already catches German "Serverbetriebssystem" and Italian "sistema operativo
+    # server" - but NOT French "serveur" or Spanish "servidor", hence those spelled out.
+    # 'server operating system' is dropped as dead weight: 'Server' already matches it.
+    #
+    # ASCII ONLY, deliberately. A CJK stem here was mangled to '?a??a?' in transit and broke the
+    # parse (ps-syntax-check caught it) - this file crosses qrexec/qtest and is written as ASCII,
+    # so a non-ASCII literal is a syntax error waiting to happen. Since this is only a ranking
+    # nudge, losing a script we cannot spell costs ordering, never correctness.
+    if($t -match 'Dynami|Server|Serveur|Servidor|servidore'){ $score -= 3 }
     $ranked += [pscustomobject]@{ guid=$m.Groups[1].Value; title=$t; score=$score }
   }
   $ranked = @($ranked | Sort-Object -Property @{Expression='score';Descending=$true})
