@@ -9301,3 +9301,27 @@ the CTL fetch is WinHTTP's, not ours. Two honest options, both needing a decisio
      re-issue the request on a fresh channel. This is within our power but means the relay stops
      being a byte tunnel and starts parsing HTTP - a real increase in its responsibility, and it
      cannot help CONNECT traffic at all (which does not need it).
+
+### Reproduced with our relay REMOVED from the path
+
+`guest/proxy-probe.cs` is a primitive qrexec local program - synchronous, no pool, no drain, no
+teardown race - driven straight by qrexec-client-vm against qubes.UpdatesProxy, so nothing we wrote
+is between the request and the reply. Same URL, HTTP/1.1, `Connection: close`:
+
+    run 1  http=200  body=76995
+    run 2  http=200  body=77976
+    run 3  http=200  body=32336
+    run 4  http=200  body=53656
+    run 5  http=200  body=80043
+    run 6  http=200  body=80043
+    full-length bodies = 2/6   (reference 80043)
+
+Every response is HTTP 200 with a short body. The relay is therefore not implicated, and neither is
+its pool, drain or teardown.
+
+CAVEAT, and it is the important one: this shows the loss is not OURS, but it does NOT establish that
+the environment is healthy. The same guest image ran a successful WU scan at 09:53 today and the
+full 4.8 GB download at 10:41. Something changed between then and 15:26 that is not in the guest,
+and "not our code" is not the same claim as "upstream defect worth reporting". The next step is a
+precise re-run of the KNOWN-WORKING configuration - same pristine rebuild, same guest files as
+09:47 - before any upstream conclusion is drawn.
