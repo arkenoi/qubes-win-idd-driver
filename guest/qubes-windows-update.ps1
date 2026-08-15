@@ -106,6 +106,12 @@ function Ensure-Proxy {
   }
 }
 
+# TEMPORAL GATE - still required, and not superseded by the relay's positional one.
+# The relay now refuses any caller that is not the update process, which closes the leak this
+# comment block describes. That check lives in our code and depends on our own process-identity
+# logic being right; this teardown does not. Keeping both means a mistake in either one is
+# bounded by the other: a wrong allowlist is still limited to the minutes a pass runs, and a
+# pass left open still serves nobody but the update. Do not remove this because the other exists.
 function Remove-Proxy {
   & netsh winhttp reset proxy | Out-Null
   SetV $IS 'ProxyEnable' 0 'DWord'

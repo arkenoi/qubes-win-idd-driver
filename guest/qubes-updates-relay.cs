@@ -175,6 +175,16 @@ static class Relay
     // system proxy and phones home - measured on an "offline" guest as 147 dom0
     // qubes.UpdatesProxy policy hits in one afternoon, still dripping hours after the last scan.
     //
+    // BOTH GATES ARE KEPT, deliberately (user, 2026-08-15). This positional gate does NOT
+    // replace the temporal one - the pass still brings the proxy up only for its own duration and
+    // tears it down afterwards (Ensure-Proxy / Remove-Proxy, "proxy removed, relay stopped").
+    // They fail differently, which is the point: the positional gate depends on our own
+    // process-identity logic being right, and if it is ever wrong - a new svchost split, a
+    // service we did not anticipate, a bug in the TCP-table lookup - the temporal gate still
+    // bounds the exposure to the minutes a pass takes. And if a pass is somehow left open, the
+    // positional gate still refuses everything that is not the update. Neither is sufficient
+    // alone; removing either because the other exists is the mistake to avoid.
+    //
     // The relay is the only place that can tell WHO is calling, so it decides. Each accepted
     // connection is mapped back to the owning process through the TCP table, and only processes
     // that ARE the update are served: the service host running Windows Update / Delivery
