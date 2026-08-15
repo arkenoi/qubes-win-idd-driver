@@ -70,23 +70,39 @@ if (-not $UserOnly) {
     Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop' 'ScreenSaverIsSecure' `
         '0' 'String' 'screensaver does not demand a password'
 
-    # THE SECURE DESKTOP. Every UAC elevation prompt switches the INPUT DESKTOP to Winlogon,
+    # THE SECURE DESKTOP - and it depends on the GUI mode, so read it rather than assume.
+    # Every UAC elevation prompt switches the INPUT DESKTOP to Winlogon,
     # which invalidates the desktop duplication - DXGI_ERROR_ACCESS_LOST - and forces the agent
     # to rebuild capture and follow the switch. That is one of the few remaining triggers of a
     # fault class that can, in its bad tail, cost the qube its GUI.
     #
-    # It buys nothing HERE. A secure desktop defends against another program in the same Windows
-    # session painting a convincing fake elevation prompt - a defence that only works if the user
-    # can trust what they are looking at. In the Qubes model dom0 renders whatever the guest
-    # sends, so any program in this guest can paint a lookalike prompt on the ordinary desktop
-    # regardless. Real elevation gating would have to be a trusted DOM0 prompt (the shape of
-    # gui-gated sudo), not an in-guest desktop switch. So the switch costs display stability and
-    # returns a property this architecture cannot provide.
+    # IN SEAMLESS MODE it buys nothing. A secure desktop defends against another program in the
+    # same session painting a convincing fake elevation prompt - a defence that only works if the
+    # user can trust what they are looking at. Seamless composites individual guest windows into
+    # dom0's desktop, so a lookalike prompt is paintable as an ordinary window and the user has no
+    # trusted full-screen surface to compare it against. There the switch costs display stability
+    # and returns a property this architecture cannot provide.
     #
-    # UAC itself is UNCHANGED: prompts still appear and still require consent. Only the desktop
-    # they appear on changes.
-    Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'PromptOnSecureDesktop' `
-        $(if($off){0}else{1}) 'DWord' 'UAC prompts on the normal desktop (no Winlogon switch)'
+    # IN FULLSCREEN MODE it is real, and is kept. The qube owns the whole viewport, and dom0 can
+    # deliver a genuine secure attention sequence: MSG_KEYPRESS-driven SignalSASEvent (agent
+    # gui-agent/vchan-handlers.c) sets Global\QGA_SAS_TRIGGER and the watchdog SERVICE calls
+    # SendSAS. In-guest code cannot synthesise that, so what appears after it is genuinely
+    # Winlogon and the secure desktop means what it claims.
+    #
+    # UAC itself is UNCHANGED either way: prompts still appear and still require consent. Only
+    # the desktop they appear on changes, and only in seamless.
+    $seamless = 0
+    foreach ($qk in 'HKLM:\Software\Invisible Things Lab\Qubes Tools\gui-agent',
+                    'HKLM:\Software\Invisible Things Lab\Qubes Tools') {
+        $v = (Get-ItemProperty $qk -EA SilentlyContinue).SeamlessMode
+        if ($null -ne $v) { $seamless = [int]$v; break }
+    }
+    if ($seamless -eq 1) {
+        Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'PromptOnSecureDesktop' `
+            $(if($off){0}else{1}) 'DWord' 'seamless: UAC prompts on the normal desktop (no Winlogon switch)'
+    } else {
+        Write-Output "  PromptOnSecureDesktop: LEFT ALONE - fullscreen mode, where dom0's emulated Ctrl-Alt-Del makes the secure desktop a real guarantee"
+    }
 
     if (-not $WhatIfOnly) {
         # Power: never blank or sleep, and never require a password on wake. CONSOLELOCK is the
