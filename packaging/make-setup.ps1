@@ -120,6 +120,10 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activat
 # normal install never calls it - a user who needs it cannot download a newer package from a
 # qube with no display.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\deactivate-idd.ps1') 'IDD deactivator/recovery') $OutDir -Force
+# Re-arms the inbox ATA/AHCI drivers as boot-start before the MSI swaps the PV disk driver.
+# The upgrade moves the boot disk off the PV path for one boot; without a boot-start inbox
+# driver that boot is 0x7B (forum 42717 post 27).
+Copy-Item (Need (Join-Path $RepoRoot 'guest\rearm-inbox-disk-controllers.ps1') 'inbox storage re-arm') $OutDir -Force
 # --- STOCK-SHAPE COMPATIBILITY -----------------------------------------------------------
 # Everything that installs Qubes Windows Tools automatically looks for the shape the vendor
 # has always shipped: ONE installer at the root of the ISO matching `qubes-tools-*.exe`, run

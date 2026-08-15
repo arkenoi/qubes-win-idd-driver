@@ -912,6 +912,38 @@ function Invoke-Stage2 {
     # the dialog was sitting on the dom0 desktop mid-install, which is the field report in
     # forum 42717 post 33 ("the PV disk driver installer prompt is not clickable").
     Set-XenbusAutoReboot
+
+    # RE-ARM THE INBOX STORAGE DRIVERS before the MSI touches the PV disk driver.
+    # MEASURED 2026-08-15, upgrading a genuine stock QWT 4.2.2 guest to this package: the boot
+    # disk moves OFF the PV path during the upgrade - bus=SCSI model=PVDISK before, bus=ATA
+    # model="QEMU HARDDISK" on the boot straight after - and only returns to PV on the boot
+    # after that. Whether that intermediate boot survives depends entirely on whether Windows
+    # still has a boot-start inbox ATA driver. On our test image atapi/intelide/pciide were all
+    # still Start=0 and it booted fine; on a guest where Windows has demoted them (they are
+    # unused once the PV path takes over) the same transition is bugcheck 0x7B
+    # INACCESSIBLE_BOOT_DEVICE, recoverable only through safe mode - which is exactly the field
+    # report in forum 42717 post 27.
+    # Setting them boot-start costs nothing when the hardware is absent, so this makes the
+    # outcome independent of the guest's servicing history instead of a coin toss.
+    # NOTE: the uninstall path re-arms the same drivers inline (search
+    # emulated_storage_rearmed) - that one covers the remove-then-install upgrade, this one
+    # covers the IN-PLACE major upgrade, which is the path a version-bumped MSI actually takes
+    # and where the disk was measured leaving the PV path. Both are cheap and idempotent.
+    $rearm = Join-Path $Root 'rearm-inbox-disk-controllers.ps1'
+    if (Test-Path -LiteralPath $rearm) {
+        try {
+            $out = & $rearm 2>&1
+            foreach ($l in @($out | Select-Object -Last 2)) { Write-Log "  rearm: $l" }
+            $script:Result.detail.inbox_disk_rearm = 'done'
+        } catch {
+            Write-Log "inbox storage re-arm failed: $($_.Exception.Message) (continuing)" 'WARN'
+            $script:Result.detail.inbox_disk_rearm = "failed: $($_.Exception.Message)"
+        }
+    } else {
+        Write-Log 'rearm-inbox-disk-controllers.ps1 not in payload - the intermediate boot relies on whatever Windows left boot-start' 'WARN'
+        $script:Result.detail.inbox_disk_rearm = 'not shipped'
+    }
+
     $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $msiArgs
     if ($p.ExitCode -notin 0, 3010) { Fail "msiexec failed with $($p.ExitCode) - see $msiLog" }
     Write-Log "QWT_INSTALL_OK rc=$($p.ExitCode)"
