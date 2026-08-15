@@ -234,6 +234,14 @@ no longer overrides it. The reason, measured on 2026-08-15:
     stack from the boot path) reaches Windows Automatic Repair but not a normal boot. Safe mode
     "works" only because it loads none of those drivers.
 
+THE PV DISK DRIVER ONLY GOES UP, OR STAYS THE SAME. The installer reads the version of
+xenvbd.sys inside this package's MSI and compares it with the one already running, and REFUSES
+before touching anything if the package carries an older one. An older disk driver cannot be
+installed in place - Windows Installer would have to remove the newer one first, which is the
+operation that leaves the guest with no boot disk at all. If you deliberately need to go back
+to an older build, uninstall Qubes Windows Tools first on a guest that can still boot without
+it, then install the older package.
+
 WHY REMOVING IT WAS NEVER NECESSARY: this package's MSI is rebuilt from the same upstream WiX
 sources as stock, so it carries the same UpgradeCode and the SAME Xen PV drivers - the disk
 driver an upgrade would remove is the one it would immediately reinstall. Windows Installer
