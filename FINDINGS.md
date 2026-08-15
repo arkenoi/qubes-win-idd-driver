@@ -10598,3 +10598,34 @@ code one is patching.
 Also: the capture-restart gate logged BOTH its edges below the default log level, so a shipped
 guest recorded nothing when capture stopped or came back - the one question a "my qube is frozen"
 report needs answered. Now CAPTUREGATE at warning/info.
+
+## 2026-08-15 (night) — 4.3.2 SHIPPED, and a new candidate for the "black window"
+
+Published `v4.3.2-agentbacfd2c` (setup tarball + ISO + dom0 RPM + SHA256SUMS), superseding the stale
+`v4.3.2-agentec07ac8` draft whose assets predated every fix of the last two days.
+
+Verified on win10-tpl against the ACTUAL release package, not the build tree:
+
+    upgrade 4.3.1 -> 4.3.2:  in-place-msi-major-upgrade, pv_boot_disk true, pvdisk 9.1.0.0 -> 9.1.0.0
+    idd_driver:              "skipped (/noidd)"        <- the switch GWeck says is not accepted
+    updater_agent:           "deployed"
+    installed_gui_agent_sha256 == expected_gui_agent_sha256
+    /iddoff:                 IDD device removed, NoTopologyApply=1, VGA re-enabled and primary
+    /noidd on a guest with NO IDD: boots on the emulated adapter, windows map, notepad renders
+
+**NEW FINDING, not yet fixed - a full-screen CLOAKED window is mapped to dom0.** On that same guest
+dom0 showed a mapped, untitled, full-screen window (`0x1c0018b  0 56 3440 1440 ... "?"`). In the
+guest it is:
+
+    cls=ApplicationFrameWindow  pid=explorer  vis=1  cloaked=2  rect=0,0,3440,1400  title=(empty)
+
+`cloaked=2` is DWM_CLOAKED_SHELL - the shell has hidden it, so the user cannot see it. We map it
+anyway, and dom0 paints a blank full-screen rectangle over the whole qube. That is an extremely good
+match for "the qube shows only a black inactive window while everything else still works": apps run,
+qrexec answers, and the desktop is covered by an empty window. It appears on the NON-IDD path too,
+so it is independent of the IDD.
+
+Do not fix this with a blanket cloak filter: CLAUDE.md 2A-chrome 3c is explicit that toasts are
+topmost+layered+frequently CLOAKED and must be KEPT. The discriminator has to separate
+"shell-cloaked full-screen frame with no title" from "cloaked toast", and the toast acceptance test
+gates any change.
