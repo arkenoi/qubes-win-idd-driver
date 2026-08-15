@@ -10406,3 +10406,42 @@ state that `6ea0822` guards against could not be produced. Consequences, stated 
 
 Rig note: win10-tpl's previous agent (3D2E6BCE, version string 4.2.2.0) was overwritten by 4.3.2 -
 `useagent.ps1` keeps no backup, unlike the win11-fresh swap which kept `.devbuild`.
+
+## 2026-08-15 (evening) — GWeck's Win10 path reproduced end to end; the black window did NOT follow
+
+Not simulated - walked. win10-tpl (Windows 10 Pro 22H2, 19045.2965), starting from stock QWT 4.2.2,
+then his two builds in his order, each the release tarball verified against the release SHA256SUMS:
+
+1. `qwt-ng-4.3.0-agent09b643e-setup.tar.gz` -> `in-place-msi-major-upgrade`, `idd_driver: "not
+   requested"` (4.3.0 does NOT touch the IDD - matching his "the previous version was fine"), reboot,
+   agent 4.3.0.0 (91F40ECE) running. The hand-installed IDD from an earlier experiment was REMOVED
+   first (devcon remove + pnputil /delete-driver) so the baseline matched his: VGA only.
+2. `qwt-ng-4.3.1-agentc7ccb45-setup.tar.gz`, `install.cmd` with NO flags, exactly as reported ->
+   `package_version 4.3.1+agent.c7ccb459aec9`, agent sha 99480d87 (the shipped 4.3.1 binary), and:
+
+       idd_driver: "activated: device up (ROOT\DISPLAY\0000), VGA adapter disabled (PCI\VEN_1234...)"
+
+   **That is the mechanism behind the severity of his report**: activating the IDD DISABLES the
+   emulated VGA, so if the IDD then fails to present, the guest has no display at all and no
+   fallback. The installer records its own recovery hint (`Enable-PnpDevice -InstanceId ...`).
+
+3. Reboot (the one he says goes black). Result here: IDD solo at 5120x1440, desktop alive, apps map
+   and render correctly (Notepad captured and read back clean). ONE keyed-mutex abandonment fired -
+   `GetFrame: AcquireNextFrame() failed with error 0x887a0026` (the CLAUDE.md "prerequisite bug") -
+   but `RecreateDuplication` recovered it twice and frames kept flowing (QGAPERF seq 388+).
+
+So **his black window did not reproduce on his exact build, his exact upgrade path and his Windows
+version**. It is environment-specific, and the outstanding difference is his host display config: a
+disabled laptop panel plus an external **1920x1200** monitor. Relevant measured fact: our IDD's mode
+list is 1024x768 / 1600x900 / 1920x1080@60,90,144 / (host size) - **no 1920x1200** - and a request
+for it is SNAPPED, not added:
+
+    SetVideoMode: RESREQ 1920x1200 src=lastapplied
+    SetVideoMode: RESSNAP 1920x1080 SNAPPED
+
+A dom0 window of 1920x1200 over a guest desktop of 1920x1080 is exactly the shape that puts the
+pointer BELOW where Windows thinks it is (dom0 y in 0..1200 mapped onto 0..1080) and leaves a dead
+band - his symptom #1, and it would appear on Win10 and Win11 alike, as he reports.
+
+What would settle the black window: his `Q:\Qubes Logs\gui-agent-*.log` from a BLACK boot (it is
+retrievable over qrexec with no display at all). Ask for that specifically.
