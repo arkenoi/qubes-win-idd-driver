@@ -10052,3 +10052,36 @@ Download automation was also retested and is closed from here - see tools/get-wi
 mido/Fido's endpoint is retired (404), the page geo-redirects, and the surviving JSON connector
 answers SentinelReject even from headless Chromium driving the real page with a fingerprinted
 session.
+
+## 2026-08-15 — the vendor's own bundle cannot install unattended; the proven route is the MSI
+
+Building the stock-QWT baseline for post 27.2, I ran the vendor artifact the way
+qvm-create-windows-qube runs it - `qubes-tools-4.2.2.exe /passive` - and it stopped dead on a
+modal (screenshot):
+
+    Qubes Windows Tools v4.2.2.0 Setup
+    Test signing must be enabled, run the following as an administrator:
+    bcdedit /set testsigning on                                    [ OK ]
+
+/passive does not suppress it. Stock's own drivers are signed by a private
+CN="Qubes Windows Tools" certificate (see the signing entry above), so stock needs testsigning
+exactly like we do - and its installer refuses to proceed until it is ALREADY active in the
+current boot. Consequence beyond our rig: upstream's own automated path runs that same command,
+so a qvm-create-windows-qube provisioning run stalls there on any guest whose answer file did
+not enable testsigning first. Same silent-stall class as the Xen restart modal, one layer down.
+
+Working around it with a testsigning-then-reboot payload got the guest to a Test Mode desktop,
+where the bundle then ran invisibly as SYSTEM in session 0, burned one core for a few minutes,
+went idle, and never produced qrexec.
+
+CORRECTION, from the user: this project HAS installed stock QWT unattended, several times. It
+never used the vendor bundle. `artifacts-stock/` is a package tree carrying the stock
+`installer.msi` - byte-identical to the one inside today's bundle (sha256
+7049322128d1cf7d9dc2a48f69ef91a5893a8f779d3b2ad7d25fdfc8eee3baf4) - installed with OUR
+installer, which enables testsigning in stage 1 and drives msiexec directly. That is the route
+mgmt/build-answer-stick.sh's STOCK_SETUP implements, and its comment already said why: "our
+installer is the only path proven to install this MSI".
+
+Method note: the failure was mine for reaching for the vendor .exe when a proven route existed
+in the repo, with a comment explaining itself. Reading the tooling before rebuilding it would
+have cost five minutes and saved two provisioning cycles.
