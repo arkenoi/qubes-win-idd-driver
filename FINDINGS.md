@@ -10085,3 +10085,45 @@ installer is the only path proven to install this MSI".
 Method note: the failure was mine for reaching for the vendor .exe when a proven route existed
 in the repo, with a comment explaining itself. Reading the tooling before rebuilding it would
 have cost five minutes and saved two provisioning cycles.
+
+## 2026-08-15 — post 27.2 RESOLVED on a real stock guest, and the 0x7B mechanism is now pinned
+
+The first stock-QWT baseline this project has ever built: Win10 19045, genuine Qubes Windows
+Tools v4.2.2.0 from the vendor MSI, with the boot disk on the PV path -
+
+    QWT      Qubes Windows Tools v4.2.2.0
+    BOOTDISK bus=SCSI model=PVDISK
+    SVC xenvbd Start=0
+
+i.e. exactly the precondition Test-BootDiskOnPvPath exists to detect, which its own comment
+admitted had never been seen live.
+
+UPGRADE WITH THIS PACKAGE (4.3.2), single run, nothing hand-held:
+
+    pv_boot_disk: true
+    upgrade_mode: "in-place-msi-major-upgrade"   <- stock is NOT uninstalled at all
+    INSTALL COMPLETE (no reboot from the installer - the single-shutdown change)
+    reboot 1 -> guest boots. BOOTDISK bus=ATA  model="QEMU HARDDISK"
+    reboot 2 -> BOOTDISK bus=SCSI model=PVDISK, QWT v4.3.2.0
+
+So the upgrade DOES drop the boot disk back to emulated IDE for one boot - which is precisely
+what the reporter described - and it returns to the PV path on the next boot. No 0x7B here.
+
+WHY IT SURVIVED, and why his did not: on this image atapi, intelide, pciide and storahci were
+all still Start=0, so a boot-start inbox driver was available the moment the PV path went away.
+Windows demotes those drivers once xenvbd owns the disk; on a guest where that has happened,
+the same intermediate boot has NO boot-capable storage driver and bugchecks 0x7B
+INACCESSIBLE_BOOT_DEVICE - recoverable only through safe mode, exactly as reported.
+
+FIX: the installer now re-arms the inbox ATA/AHCI drivers before msiexec on the IN-PLACE path.
+An inline re-arm already existed, but only in the remove-then-install branch - which is not the
+branch a version-bumped MSI takes, so it never ran here.
+
+AND THE SECOND HALF OF WHY HE HIT IT: 4.3.0 and 4.3.1 shipped at the SAME MSI ProductVersion
+(4.3.0), so Windows Installer could not treat the newer build as a major upgrade and the
+installer had to REMOVE stock first - the dangerous path, with the PV disk driver going away
+while nothing had re-armed the fallback. tools/cut-release.sh already enforces the version bump
+that makes the in-place path possible; this run is what shows why that invariant matters.
+
+Also observed, unchanged from 2026-08-14: the domain hung in Transient for ~3 minutes at the
+post-upgrade reboot. Kill-and-start was safe and the guest came back correctly.
