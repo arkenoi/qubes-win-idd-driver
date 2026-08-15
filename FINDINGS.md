@@ -10629,3 +10629,58 @@ Do not fix this with a blanket cloak filter: CLAUDE.md 2A-chrome 3c is explicit 
 topmost+layered+frequently CLOAKED and must be KEPT. The discriminator has to separate
 "shell-cloaked full-screen frame with no title" from "cloaked toast", and the toast acceptance test
 gates any change.
+
+## 2026-08-15 (night) — the "black window" mechanism: window tracking is SUSPENDED, not filtered
+
+The cloaked full-screen window was the symptom of something much larger, found by workflow
+wf_90491655 and confirmed against source. My own patch for it (`419e1b3`) was REVERTED: its premise
+was refuted by its own file, and by my own probe.
+
+**What is actually wrong.** main.c:6196-6199:
+
+    if (g_VchanClientConnected && g_SeamlessMode && !g_LocalScreenDestroyed)
+        ProcessWindowEvents();
+    else
+        DiscardWindowEvents();
+
+`g_LocalScreenDestroyed` is set by StopFrameProcessing (main.c:5506) from the capture-error case
+(main.c:6153, the one I made visible today as `CAPTUREGATE capture error`), and is cleared ONLY in
+StartFrameProcessing (main.c:5425), which is reached only after the gui-daemon's MSG_DESTROY(0)
+confirm (vchan-handlers.c:1231-1236). While that state lasts:
+
+  - every window event is DISCARDED,
+  - the frame-path TrackWindows (main.c:4541) is dead because capture is stopped,
+  - so NO tracking pass runs at all.
+
+Consequences, in the exact words users keep reporting: every already-mapped window stays mapped in
+dom0 for ever (a stale rectangle over the qube), and - the part that matters most - **no NEW window
+can ever appear**. GWeck, post 54: "the Windows key does nothing at all. Trying to start an
+application from the Qubes menu does not work either." Applications DO start; they simply can never
+be announced. qrexec keeps working throughout, which is why the qube looks alive and useless at the
+same time.
+
+CLAUDE.md's own recorded prerequisite bug - `AcquireNextFrame` failing 0x887a0026 on a
+seamless/resolution change - lands exactly in that capture-error case. And there is precedent
+already in this file at 7286-7300: dom0 kept a dismissed Start menu and a toast mapped for ever,
+with `SendWindowMap` and no matching `SendWindowUnmap`. Same signature, same class, never explained.
+
+**The one observation that separates it** (guest-side, no new code): take the HWND of the stuck
+window from winenum and grep the agent log.
+  - `Mapping window 0x<hwnd>` with no later `Unmapping window 0x<hwnd>`, plus `CAPTUREGATE capture
+    error` with NO following `CAPTUREGATE gui daemon confirms screen destruction`  => the freeze.
+  - repeated `DWM-cloaked (0x2)` for that hwnd while dom0 still shows it  => the tracker IS running
+    and removal fails downstream instead.
+That grep is now possible only because both CAPTUREGATE edges were moved above the default log
+level earlier today; before that a guest in this state recorded nothing at all.
+
+**What I got wrong, recorded because it was nearly shipped as a fix.** I patched the
+measurement-failure path in UpdateWindowData on the theory that it left a stale entry accepted.
+It cannot: UpdateWindowData returns the failure status and BOTH callers (main.c:3493-3497 and
+3513-3517) already set DeletePending on any non-success return - a line that predates 4.3.2. My own
+synthetic probe agreed, removing the window correctly on the pre-fix binary. Reverted in 52ee8f8.
+The corroborating "dom0 announced a taller rect than GetWindowRect" argument was also unsound:
+GetRealWindowRect multiplies both axes by a DPI scale that can exceed 1.
+
+**Next, not done:** bound the wait for the daemon's confirm (a capture gate that never opens is
+indistinguishable from a dead qube), and sweep windows that disappeared while the screen window was
+down. Both need their own defect-present/defect-absent pair; neither is shipped.
