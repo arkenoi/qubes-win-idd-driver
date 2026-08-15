@@ -180,6 +180,20 @@ function Install-ViaWU {
   # several times a day - and would leave every guest's Delivery Optimization and BITS policy
   # rewritten as a side effect of routine definition updates. The fallback passes $false: a few
   # megabytes of definitions do not need the transport tuned.
+  # $TunePolicies=$false was a blunt answer to "do not leave machine policy rewritten": it also
+  # gave up DODownloadMode=99, and Delivery Optimization does NOT reliably honour the WinHTTP
+  # proxy in its default mode - which is the whole reason this block exists. A qube has no other
+  # way out, so an unset DO can simply fail to download. Set the policy for the duration of the
+  # pass and PUT IT BACK afterwards: reliability without a permanent change.
+  $script:DoRestore = $null
+  if (-not $TunePolicies) {
+    $DO = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'
+    $prev = $null
+    try { $prev = (Get-ItemProperty -LiteralPath $DO -Name DODownloadMode -EA Stop).DODownloadMode } catch { }
+    $script:DoRestore = @{ Key = $DO; Had = ($null -ne $prev); Value = $prev }
+    SetV $DO 'DODownloadMode' 99 'DWord'
+    Log 'Delivery Optimization: DODownloadMode=99 for THIS pass only (restored at the end)'
+  }
   if ($TunePolicies) {
     $DO = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'
     SetV $DO 'DODownloadMode'                      99 'DWord'
@@ -229,6 +243,16 @@ function Install-ViaWU {
   $ires = $installer.Install()
   Log "WU: install ResultCode=$($ires.ResultCode) RebootRequired=$($ires.RebootRequired)"
   if ($ires.RebootRequired) { $script:St.reboot_needed = $true }
+
+  # Put Delivery Optimization back exactly as it was, if this pass changed it for itself.
+  if ($script:DoRestore) {
+    try {
+      if ($script:DoRestore.Had) { SetV $script:DoRestore.Key 'DODownloadMode' $script:DoRestore.Value 'DWord' }
+      else { Remove-ItemProperty -LiteralPath $script:DoRestore.Key -Name 'DODownloadMode' -Force -EA SilentlyContinue }
+      Log 'Delivery Optimization: restored'
+    } catch { Log "could not restore DODownloadMode: $($_.Exception.Message)" }
+    $script:DoRestore = $null
+  }
 
   # ResultCode: 2 = succeeded, 3 = succeeded with errors, 4 = failed, 5 = aborted.
   $rows = @()
@@ -799,14 +823,19 @@ try {
       if ($Action -in 'install','full' -and $got.Count -eq 0) {
         $why = if ($urls.Count -eq 0) { 'no catalog entry matches this Windows version/architecture' }
                else { "resolved $($urls.Count) package(s) from the catalog but none could be downloaded" }
-        # Before calling it failed: some updates are NOT catalog packages at all. Defender
-        # definitions (KB2267602) and the Malicious Software Removal Tool (KB890830) are
-        # delivered only through Windows Update, so Resolve-Catalog can never find them and
-        # every pass would report them failed - leaving dom0 showing updates that never clear.
+        # Before calling it failed: some updates have no .msu for the DISM path to install.
+        # CHECKED against the Update Catalog on 2026-08-15 rather than assumed:
+        #   KB890830  (Malicious Software Removal Tool) IS in the catalog - 26 rows - but ships
+        #             as an .exe, and Resolve-Catalog accepts only .msu because DISM does.
+        #   KB2267602 (Defender definitions) is NOT in the catalog at all ("We did not find any
+        #             results"); it is delivered through Windows Update / the security
+        #             intelligence mpam-fe.exe.
+        # Neither is a defect - it is how those products are packaged - but both would be
+        # reported failed on every pass, leaving dom0 showing updates that never clear.
         # Hand exactly those to WU's own installer after this loop.
         if ($urls.Count -eq 0) {
           $script:WuFallbackKbs += $u.kb
-          Log "$($u.kb): no catalog package exists for this update - deferring it to the Windows Update installer"
+          Log "$($u.kb): no .msu in the catalog for the DISM path (this KB ships as .exe or only through Windows Update) - deferring it to the Windows Update installer"
           continue
         }
         $script:St.result += [ordered]@{ kb=$u.kb; ok=$false; files=@(); reason=$why }
@@ -864,7 +893,7 @@ try {
   }
   if ($Action -in 'install','full' -and $script:WuFallbackKbs.Count -gt 0) {
     $script:WuFallbackKbs = @($script:WuFallbackKbs | Sort-Object -Unique)
-    Log ("Windows Update fallback for " + ($script:WuFallbackKbs -join ',') + " (no catalog package exists for these)")
+    Log ("Windows Update fallback for " + ($script:WuFallbackKbs -join ',') + " (no .msu for the DISM path)")
     try {
       $wuRows = Install-ViaWU -OnlyKbs $script:WuFallbackKbs -TunePolicies $false
       foreach ($row in $wuRows) { $script:St.result += $row }
@@ -878,7 +907,7 @@ try {
       foreach ($kb in $script:WuFallbackKbs) {
         if (-not (@($wuRows | Where-Object { $_.kb -eq $kb }).Count -gt 0)) {
           $script:St.result += [ordered]@{ kb=$kb; ok=$false; files=@()
-                                           reason='no catalog package, and the Windows Update installer did not offer it either' }
+                                           reason='no .msu for the DISM path, and the Windows Update installer did not offer it either' }
         }
       }
       Save
