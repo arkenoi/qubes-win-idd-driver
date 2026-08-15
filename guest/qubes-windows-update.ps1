@@ -170,6 +170,20 @@ function Get-Available {
 # downloader and installer can too. Delivery Optimization is forced into simple mode first,
 # because DO does its own peer/CDN transport and does not reliably honour the WinHTTP proxy that
 # Ensure-Proxy sets - and a qube has no other way out.
+# Put Delivery Optimization back exactly as it was. MUST be reachable from every exit of
+# Install-ViaWU: the first version restored it just before building the result rows, and the
+# "WU: nothing to install" early return skipped it - measured, DODownloadMode=99 was still set
+# on the guest afterwards. A policy this code sets for its own convenience must not outlive it.
+function Restore-DoPolicy {
+  if (-not $script:DoRestore) { return }
+  try {
+    if ($script:DoRestore.Had) { SetV $script:DoRestore.Key 'DODownloadMode' $script:DoRestore.Value 'DWord' }
+    else { Remove-ItemProperty -LiteralPath $script:DoRestore.Key -Name 'DODownloadMode' -Force -EA SilentlyContinue }
+    Log 'Delivery Optimization: restored'
+  } catch { Log "could not restore DODownloadMode: $($_.Exception.Message)" }
+  $script:DoRestore = $null
+}
+
 function Install-ViaWU {
   # $OnlyKbs limits the pass to specific KBs. Used as the FALLBACK for updates the Update
   # Catalog cannot serve: Defender definitions and the Malicious Software Removal Tool are not
@@ -210,68 +224,61 @@ function Install-ViaWU {
     Log 'Delivery Optimization: simple mode, no background throttle (proxy is up only for this pass)'
   }
 
-  $session = New-Object -ComObject Microsoft.Update.Session
-  $searcher = $session.CreateUpdateSearcher(); $searcher.ServerSelection = 2; $searcher.Online = $true
-  $script:St.phase='scan'; Save
-  $found = $searcher.Search("IsInstalled=0 and IsHidden=0")
-  if ($found.Updates.Count -eq 0) { Log 'WU: nothing to install'; return @() }
+  try {
+    $session = New-Object -ComObject Microsoft.Update.Session
+    $searcher = $session.CreateUpdateSearcher(); $searcher.ServerSelection = 2; $searcher.Online = $true
+    $script:St.phase='scan'; Save
+    $found = $searcher.Search("IsInstalled=0 and IsHidden=0")
+    if ($found.Updates.Count -eq 0) { Log 'WU: nothing to install'; return @() }
 
-  $coll = New-Object -ComObject Microsoft.Update.UpdateColl
-  foreach ($u in $found.Updates) {
-    if ($OnlyKbs.Count -gt 0) {
-      $kbs = @($u.KBArticleIDs) | ForEach-Object { "KB$_" }
-      if (-not (@($kbs | Where-Object { $OnlyKbs -contains $_ }).Count -gt 0)) { continue }
+    $coll = New-Object -ComObject Microsoft.Update.UpdateColl
+    foreach ($u in $found.Updates) {
+      if ($OnlyKbs.Count -gt 0) {
+        $kbs = @($u.KBArticleIDs) | ForEach-Object { "KB$_" }
+        if (-not (@($kbs | Where-Object { $OnlyKbs -contains $_ }).Count -gt 0)) { continue }
+      }
+      if (-not $u.EulaAccepted) { try { $u.AcceptEula() } catch {} }
+      [void]$coll.Add($u)
+      Log ("WU: selected " + $u.Title)
     }
-    if (-not $u.EulaAccepted) { try { $u.AcceptEula() } catch {} }
-    [void]$coll.Add($u)
-    Log ("WU: selected " + $u.Title)
-  }
-  if ($coll.Count -eq 0) { Log 'WU: nothing matched the requested KBs'; return @() }
-  $script:St.count = $coll.Count; Save
+    if ($coll.Count -eq 0) { Log 'WU: nothing matched the requested KBs'; return @() }
+    $script:St.count = $coll.Count; Save
 
-  $script:St.phase='download'; Save
-  $downloader = $session.CreateUpdateDownloader(); $downloader.Updates = $coll
-  # dpHigh: WU downloads at background priority by default and paces itself accordingly -
-  # measured bursts every ~3.5 s with idle gaps, while each connection sustained ~840 KB/s.
-  try { $downloader.Priority = 3 } catch { Log '  (downloader does not accept Priority)' }
-  Log "WU: downloading $($coll.Count) update(s) through the proxy"
-  $dres = $downloader.Download()
-  Log "WU: download ResultCode=$($dres.ResultCode) HResult=$($dres.HResult)"
+    $script:St.phase='download'; Save
+    $downloader = $session.CreateUpdateDownloader(); $downloader.Updates = $coll
+    # dpHigh: WU downloads at background priority by default and paces itself accordingly -
+    # measured bursts every ~3.5 s with idle gaps, while each connection sustained ~840 KB/s.
+    try { $downloader.Priority = 3 } catch { Log '  (downloader does not accept Priority)' }
+    Log "WU: downloading $($coll.Count) update(s) through the proxy"
+    $dres = $downloader.Download()
+    Log "WU: download ResultCode=$($dres.ResultCode) HResult=$($dres.HResult)"
 
-  # Install only what actually downloaded; asking WU to install a missing payload just fails.
-  $ready = New-Object -ComObject Microsoft.Update.UpdateColl
-  foreach ($u in $coll) { if ($u.IsDownloaded) { [void]$ready.Add($u) } }
-  if ($ready.Count -eq 0) { Log 'WU: nothing downloaded - not installing'; return @() }
+    # Install only what actually downloaded; asking WU to install a missing payload just fails.
+    $ready = New-Object -ComObject Microsoft.Update.UpdateColl
+    foreach ($u in $coll) { if ($u.IsDownloaded) { [void]$ready.Add($u) } }
+    if ($ready.Count -eq 0) { Log 'WU: nothing downloaded - not installing'; return @() }
 
-  $script:St.phase='install'; Save
-  $installer = $session.CreateUpdateInstaller(); $installer.Updates = $ready
-  Log "WU: installing $($ready.Count) update(s)"
-  $ires = $installer.Install()
-  Log "WU: install ResultCode=$($ires.ResultCode) RebootRequired=$($ires.RebootRequired)"
-  if ($ires.RebootRequired) { $script:St.reboot_needed = $true }
+    $script:St.phase='install'; Save
+    $installer = $session.CreateUpdateInstaller(); $installer.Updates = $ready
+    Log "WU: installing $($ready.Count) update(s)"
+    $ires = $installer.Install()
+    Log "WU: install ResultCode=$($ires.ResultCode) RebootRequired=$($ires.RebootRequired)"
+    if ($ires.RebootRequired) { $script:St.reboot_needed = $true }
 
-  # Put Delivery Optimization back exactly as it was, if this pass changed it for itself.
-  if ($script:DoRestore) {
-    try {
-      if ($script:DoRestore.Had) { SetV $script:DoRestore.Key 'DODownloadMode' $script:DoRestore.Value 'DWord' }
-      else { Remove-ItemProperty -LiteralPath $script:DoRestore.Key -Name 'DODownloadMode' -Force -EA SilentlyContinue }
-      Log 'Delivery Optimization: restored'
-    } catch { Log "could not restore DODownloadMode: $($_.Exception.Message)" }
-    $script:DoRestore = $null
-  }
+    # ResultCode: 2 = succeeded, 3 = succeeded with errors, 4 = failed, 5 = aborted.
+    $rows = @()
+    for ($i = 0; $i -lt $ready.Count; $i++) {
+      $u = $ready.Item($i)
+      $r = $ires.GetUpdateResult($i)
+      $kb = @($u.KBArticleIDs) | Select-Object -First 1
+      $rows += [ordered]@{ kb = $(if ($kb) { "KB$kb" } else { '(no KB)' })
+                           ok = ($r.ResultCode -in @(2, 3))
+                           files = @([ordered]@{ file = "$($u.Title)"; rc = $r.ResultCode; hr = $r.HResult }) }
+      Log ("WU:   $($u.Title) -> ResultCode=$($r.ResultCode) HResult=$($r.HResult)")
+    }
+    return ,$rows
+  } finally { Restore-DoPolicy }
 
-  # ResultCode: 2 = succeeded, 3 = succeeded with errors, 4 = failed, 5 = aborted.
-  $rows = @()
-  for ($i = 0; $i -lt $ready.Count; $i++) {
-    $u = $ready.Item($i)
-    $r = $ires.GetUpdateResult($i)
-    $kb = @($u.KBArticleIDs) | Select-Object -First 1
-    $rows += [ordered]@{ kb = $(if ($kb) { "KB$kb" } else { '(no KB)' })
-                         ok = ($r.ResultCode -in @(2, 3))
-                         files = @([ordered]@{ file = "$($u.Title)"; rc = $r.ResultCode; hr = $r.HResult }) }
-    Log ("WU:   $($u.Title) -> ResultCode=$($r.ResultCode) HResult=$($r.HResult)")
-  }
-  return ,$rows
 }
 
 # KB -> standalone .msu URLs from the Update Catalog (over the proxy), for THIS guest's
@@ -554,7 +561,14 @@ $OK_RC = @(0, 3010, 2359302)
 # Set QUBES_UPDATES_ALLOW_MULTISTAGE=1 to stage several packages anyway - Windows DOES aggregate
 # packages per reboot normally, so the one-per-session rule rests on a single observation and must
 # stay falsifiable. That variable is how the aggregation question gets re-tested.
-$script:StagedThisSession = $false
+# TEST HOOKS, same convention as the agent's SoloFaultInject: the multistage-defer guard only
+# fires when a session has already staged a reboot-requiring package AND a non-catalog KB is
+# still pending, and that combination cannot be summoned on a guest that is already up to date.
+#   QUBES_UPDATES_FAKE_STAGED=1        pretend this session staged something
+#   QUBES_UPDATES_FAKE_FALLBACK_KB=KB. pretend that KB needs the Windows Update fallback
+# Both are dead code when unset.
+$script:StagedThisSession = ($env:QUBES_UPDATES_FAKE_STAGED -eq '1')
+if ($script:StagedThisSession) { Log 'QUBES_UPDATES_FAKE_STAGED=1 - pretending a reboot-requiring package is already staged' }
 
 # ASK DISM WHETHER A PACKAGE APPLIES, BEFORE INSTALLING IT.
 # Measured 2026-08-13/14 on a 24H2 image: the catalog returns SEVERAL .msu per KB, and we ran all
@@ -763,6 +777,10 @@ try {
 
   # KBs the catalog cannot serve; handed to the Windows Update installer after the loop.
   $script:WuFallbackKbs = @()
+  if ($env:QUBES_UPDATES_FAKE_FALLBACK_KB) {
+    $script:WuFallbackKbs += $env:QUBES_UPDATES_FAKE_FALLBACK_KB
+    Log ("QUBES_UPDATES_FAKE_FALLBACK_KB=" + $env:QUBES_UPDATES_FAKE_FALLBACK_KB + " - pretending that KB needs the Windows Update fallback")
+  }
   if ($Action -in 'resolve','download','full','install') {
     foreach($u in $avail){
       if($u.kb -notmatch '^KB\d+'){ Log "skip (no KB): $($u.title)"; continue }
