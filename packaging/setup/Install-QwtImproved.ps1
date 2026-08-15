@@ -475,6 +475,51 @@ function Remove-QwtLeftovers {
     return [ordered]@{ removed = $deleted; absent = $absent; stuck = $stuck }
 }
 
+function Get-InstalledPvDiskDriverVersion {
+    # File version of the RUNNING PV disk driver, which is what an upgrade would replace.
+    # TEST HOOK: QUBES_FAKE_INSTALLED_PVDISK_VERSION overrides it, so the downgrade refusal can
+    # be SEEN to fire - our package and stock carry the SAME xenvbd, so a real downgrade cannot
+    # be produced from the artifacts we have. Dead code unless the variable is set.
+    $fake = [Environment]::GetEnvironmentVariable('QUBES_FAKE_INSTALLED_PVDISK_VERSION')
+    if ($fake) {
+        Write-Log "QUBES_FAKE_INSTALLED_PVDISK_VERSION=$fake - pretending that is the installed PV disk driver" 'WARN'
+        return $fake
+    }
+    foreach ($p in "$env:WINDIR\System32\drivers\xenvbd.sys", "$env:WINDIR\System32\drivers\xen\xenvbd.sys") {
+        if (Test-Path -LiteralPath $p) {
+            try { return (Get-Item -LiteralPath $p).VersionInfo.FileVersion } catch { }
+        }
+    }
+    return $null
+}
+
+function Get-PackagePvDiskDriverVersion {
+    # The version of xenvbd.sys INSIDE our MSI, read from the MSI's own File table - no
+    # extraction, no guessing, and it stays correct when the payload changes.
+    param([Parameter(Mandatory)][string]$MsiPath)
+    try {
+        $wi = New-Object -ComObject WindowsInstaller.Installer
+        $db = $wi.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $wi, @($MsiPath, 0))
+        $view = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db,
+                    @("SELECT FileName, Version FROM File"))
+        # [void]: InvokeMember returns a value, and an unassigned return goes straight to the
+        # pipeline - which made this function emit @($null, '9.1.0.0') instead of a version
+        # string, and the [version] cast then failed. Caught on the guest, 2026-08-15.
+        [void]$view.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $view, $null)
+        while ($true) {
+            $rec = $view.GetType().InvokeMember('Fetch', 'InvokeMethod', $null, $view, $null)
+            if (-not $rec) { break }
+            $name = $rec.GetType().InvokeMember('StringData', 'GetProperty', $null, $rec, 1)
+            $ver  = $rec.GetType().InvokeMember('StringData', 'GetProperty', $null, $rec, 2)
+            # FileName is "SHORTNAME|longname" when a short name exists.
+            if ($name -match 'xenvbd\.sys') { return $ver }
+        }
+    } catch {
+        Write-Log "could not read the PV disk driver version from the MSI: $($_.Exception.Message)" 'WARN'
+    }
+    return $null
+}
+
 function Test-BootDiskOnPvPath {
     # TRUE when the C: boot disk is already served by the Xen PV disk path: the disk
     # reports BusType SCSI (xenvbd is a StorPort miniport; emulated IDE reports ATA) AND
@@ -717,6 +762,43 @@ function Invoke-Stage2 {
             } catch {
                 Write-Log "version comparison failed ($($_.Exception.Message)) - falling back to the uninstall-first flow" 'WARN'
             }
+            # THE PV DISK DRIVER ONLY GOES UP, OR STAYS THE SAME.
+            # An in-place upgrade is safe precisely because it does not disturb the disk driver
+            # serving C: - our MSI is rebuilt from the same upstream sources, so it carries the
+            # same xenvbd. If a package ever carried an OLDER disk driver, Windows Installer
+            # would have to remove the newer one to put the older one back, and that is the
+            # operation measured on 2026-08-15 to leave the guest with no boot disk at all
+            # (0x7B, unrecoverable from inside: the PV drivers unplug the emulated disk).
+            # So a disk-driver DOWNGRADE is refused here, before anything is touched. Downgrading
+            # deliberately means uninstalling QWT properly first, from a guest that can still
+            # boot without it - not something this installer can do safely in one pass.
+            $pkgVbd = Get-PackagePvDiskDriverVersion -MsiPath (Join-Path $Root 'msi\installer.msi')
+            $insVbd = Get-InstalledPvDiskDriverVersion
+            $script:Result.detail.pvdisk_driver_installed = $insVbd
+            $script:Result.detail.pvdisk_driver_package   = $pkgVbd
+            if ($insVbd -and $pkgVbd) {
+                try {
+                    $iv = [version]($insVbd -replace '[^0-9.].*$', '')
+                    $pv = [version]($pkgVbd -replace '[^0-9.].*$', '')
+                    Write-Log "PV disk driver: installed $iv, package $pv"
+                    if ($pv -lt $iv) {
+                        Fail ("REFUSING: this package carries an OLDER Xen PV disk driver " +
+                              "($pv) than the one already running ($iv). Installing it would have to " +
+                              'remove the newer disk driver to put the older one back, and on a guest ' +
+                              'whose boot disk is on the PV path that leaves NO boot disk at all - ' +
+                              'measured 0x7B INACCESSIBLE BOOT DEVICE, not recoverable from inside the ' +
+                              'guest, because the PV drivers unplug the emulated disk. The PV disk ' +
+                              'driver only goes UP or stays the SAME. To go back deliberately, ' +
+                              'uninstall Qubes Windows Tools first on a guest that can still boot ' +
+                              'without it, then install the older package.')
+                    }
+                } catch {
+                    Write-Log "PV disk driver version comparison failed ($($_.Exception.Message)) - continuing" 'WARN'
+                }
+            } else {
+                Write-Log "PV disk driver version unknown (installed='$insVbd' package='$pkgVbd') - no downgrade check possible" 'WARN'
+            }
+
             $script:Result.detail.upgrade_mode =
                 if ($inPlace -and $script:SameVersionReinstall) { 'in-place-same-version-reinstall' }
                 elseif ($inPlace) { 'in-place-msi-major-upgrade' }

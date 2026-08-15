@@ -10226,3 +10226,29 @@ uninstall would have removed a driver the very next step reinstalls, unchanged.
 The uninstall path is therefore reachable only when an in-place upgrade is impossible - the
 installed product being NEWER than the package. There the correct answer is "install a newer
 package", which is what the refusal says.
+
+### The rule made explicit in code: the PV disk driver only goes UP or stays the SAME
+
+User's framing, and it is the right invariant: an in-place upgrade never touches the PV disk
+drivers because they ARE the same drivers. The only way a package can force them to change
+downwards is a downgrade, and that is a real uninstall - the operation measured to leave the
+guest with no boot disk.
+
+So the installer now reads the version of xenvbd.sys FROM THE MSI'S OWN File table (no
+extraction, stays correct when the payload changes), compares it with the running driver, and
+refuses before touching anything if the package is older. Both halves tested on the guest:
+
+    positive  PV disk driver: installed 9.1.0.0, package 9.1.0.0   -> INSTALL COMPLETE
+    negative  PV disk driver: installed 9.9.9.9, package 9.1.0.0
+              REFUSING: this package carries an OLDER Xen PV disk driver (9.1.0.0) than the
+              one already running (9.9.9.9) ...
+              guest untouched afterwards: QWT still installed, BOOTDISK still bus=SCSI
+
+The negative case needs a hook (QUBES_FAKE_INSTALLED_PVDISK_VERSION) because our package and
+stock carry the SAME xenvbd 9.1.0.0 - a real downgrade cannot be produced from the artifacts
+that exist. Dead code when the variable is unset.
+
+Bug found and fixed while testing, exactly the kind a dry read would have missed: the MSI File
+table query emitted InvokeMember's return value into the pipeline, so the function returned
+@($null,'9.1.0.0') and the [version] cast failed - the check degraded to a warning and let the
+install continue. Visible only because the result JSON printed the array.
