@@ -10005,3 +10005,50 @@ against the build that lacks it rather than only against itself.
 
 STILL NOT REPRODUCED on 4.3.1: the black inactive window of post 54. This guest, on his exact
 build, comes up at the Welcome screen and then to a working seamless desktop.
+
+## 2026-08-15 — the updater was lying about "no updates", and the cause is ours
+
+Chasing a 25H2 target, the natural first step was to ask our own updater what Windows Update
+offers a 24H2 guest. It said "0 update(s) available" five times running, each in about a
+second. The user's instruction was the right instinct: use OUR updater, and if it fails,
+something is wrong with it.
+
+WHAT WAS ACTUALLY HAPPENING. The scan reached Windows Update every time - the relay log shows
+CONNECT to fe2cr.update.microsoft.com moving 114 KB. What failed were the small plain-HTTP
+metadata fetches:
+
+    PLAIN incomplete attempt=1 bytes=0 headers=False got=0 expected=-1 - retrying
+    ... five attempts, ~400 ms apart ...
+    PLAIN tries=6 bytes=0 body=0/-1 complete=False req=[GET .../45815198_...]
+
+Zero bytes, no headers, at pool-hand-out speed: a channel taken from the warm pool that the
+far end had already closed. Each dead channel spent one of the five retries, so a request
+could exhaust its budget without ever reaching the server. Windows Update cannot describe an
+offer whose metadata it could not download, so it answered "no updates" - and the guest then
+told dom0 it was current.
+
+FIX 1, relay: a warm channel that returns nothing at all is not a failed fetch. Dead channels
+now have their own bounded allowance (at most the pool size) and the request stops drawing
+from the pool afterwards. MEASURED on the same guest, same minute: **0 updates -> 3 updates**,
+scan time 1 s -> 145 s (it is now actually talking to Windows Update).
+
+FIX 2, agent: the silent-zero class itself. The scan watches the relay log across its own
+window; if the relay gave up on any fetch AND the scan found nothing, the answer is UNKNOWN -
+rescan once, then refuse to report a number and exit 75. SEEN TO FIRE, with a test hook for
+the half that cannot be summoned once WU has cached its metadata:
+
+    scan returned 0 but the relay gave up on 1 fetch(es) - the result is UNKNOWN, rescanning
+    scan: 3 update(s) available
+
+### 25H2 is still not on offer
+
+With TargetReleaseVersion=25H2 and the seeker opt-in set, the (now trustworthy) scan offers
+three updates: MSRT and Defender definitions, no enablement package. The Update Catalog has no
+result for "Windows 11 version 25H2 enablement" or KB5054156 either. So this Enterprise
+Evaluation 24H2 guest is not being offered 25H2 by any route we control, and the 25H2-only
+reports (44, 45, 33.3, 33.4) still have no target.
+
+Download automation was also retested and is closed from here - see tools/get-win-iso.sh:
+mido/Fido's endpoint is retired (404), the page geo-redirects, and the surviving JSON connector
+answers SentinelReject even from headless Chromium driving the real page with a fingerprinted
+session.
