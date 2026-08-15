@@ -10445,3 +10445,43 @@ band - his symptom #1, and it would appear on Win10 and Win11 alike, as he repor
 
 What would settle the black window: his `Q:\Qubes Logs\gui-agent-*.log` from a BLACK boot (it is
 retrievable over qrexec with no display at all). Ask for that specifically.
+
+## 2026-08-15 (night) — the arbitrary-resolution feature was a TRAP for any size not already offered
+
+Root cause (workflow wf_b0e24422, 9 agents, plus hand verification). `SetVideoMode` routed by the
+request's SOURCE STRING, and only two strings reached the path that can EXTEND the IDD mode list:
+`dom0` (resolution.c:1561) and `seamless-force`+QIDD (resolution.c:1575). Every other source - in
+particular the boot restore `lastapplied` (vchan-handlers.c:174) and the fresh-guest `xconf` - fell
+through to `SelectSupportedMode`, which picks the nearest entry from a cache enumerated ONCE at
+startup, i.e. the driver's hardcoded base list. 1920x1200 exists nowhere in `driver/`.
+
+It is a trap rather than a downgrade because of the ORDERING: the only publish on that path runs
+AFTER the pick and carries the SNAPPED size, and the legacy tail then PERSISTS the snapped size
+(resolution.c:1673 CfgWriteDword FULLSCREEN_WIDTH). So the wanted mode is never offered and never
+re-requested - a 1920x1200 monitor is pinned to 1920x1080 for the life of the guest, and dom0 keeps
+a 1920x1200 window over a 1920x1080 desktop. That is GWeck's "pointer about 1 cm below where the
+system believes it to be" plus a dead band (post 54), on Win10 and Win11 alike, as he reports.
+The driver would have accepted it: bounds are 640..16384 x 480..6144 (Driver.cpp:151) - it was
+never asked. A4CLAMP is excluded: it runs BEFORE SetVideoMode, and RESREQ read 1920x1200.
+
+FIX (agent 5e752d6): when the Qubes IDD is present, EVERY source takes the publish-and-obtain path;
+the legacy snap survives only for a guest with no IDD, where a fixed-mode adapter genuinely cannot
+be taught modes. `allowSnap` stays TRUE, matching dom0.
+
+PROVEN, interleaved, on win10-tpl (Win10 22H2) with the precondition re-established before every
+run (mode set cleared + IDD restarted, `pre_offered=0` asserted each time):
+
+    shipped 4.3.1 (his binary)     RESSNAP 1920x1080 SNAPPED   desktop=1920x1080  offered_after=0
+    fixed bin, ModeSnapFaultInject=1   SNAPPED x3              desktop=1920x1080  offered_after=0
+    fixed bin, knob off                NO SNAPPED line x3      desktop=1920x1200  offered_after=2
+
+The knob (`HKLM\SOFTWARE\QubesIDD!ModeSnapFaultInject`, dead code when unset) re-introduces the
+defect on the SAME binary, so this check has been SEEN TO FAIL - it is evidence, not a PASS.
+
+METHOD NOTE, and the reason the first re-runs were void: after ONE fixed run the driver offers
+1920x1200, so the legacy path then finds an exact match and prints `RESSNAP 1920x1200` with no
+SNAPPED suffix - both sides "pass". The defect exists only while the mode is absent, so the mode
+set must be reset between runs or the A/B measures nothing.
+
+Also surfaced (not yet acted on): `guest/resize-sync.ps1:40` is a SECOND writer of
+`HKLM\SOFTWARE\QubesIDD!Modes` and can race the agent's own publication.
