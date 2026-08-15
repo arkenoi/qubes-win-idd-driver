@@ -10199,3 +10199,30 @@ exactly what the in-place major upgrade does, and what the ProductVersion bump m
 The re-arm stays (it is idempotent and costs nothing, and it is a precondition for any recovery
 that does restore the emulated disk) but it is NOT the fix and must not be described as one.
 The claim "the installer now prevents the 0x7B" is WITHDRAWN.
+
+### RUN E closes it: nothing from inside the guest recovers a removed PV disk driver
+
+RUN D reached Windows Automatic Repair, which left open whether a normal boot would have
+worked if Windows had not been diverting to recovery after repeated failures. RUN E removed
+that confound (bootstatuspolicy ignoreallfailures + recoveryenabled No, so Windows attempts
+the real boot) with the same arming - inbox ATA boot-start, whole Xen bus stack out of the
+boot path. Result, seen on screen: "Your device ran into a problem and needs to restart".
+Still 0x7B.
+
+So the answer is not "re-arm ATA", not "un-mask the emulated IDE channel", and not "keep the
+Xen bus stack out of the way". Once the PV disk driver is gone from a guest whose emulated
+disk has been unplugged, nothing available from inside the guest brings it back.
+
+### THE FIX: never remove the PV disk driver, and refuse the path that would
+
+/acceptpvdiskupgrade is now inert; the gate is a hard refusal naming the reason and the
+remedy. The design justification, which the user put more directly than I had: on an in-place
+upgrade we do not touch the PV disk drivers at all - they are the same drivers. Our MSI is
+rebuilt from the same upstream WiX sources as stock, so it carries the same UpgradeCode and
+the same PV drivers, which is exactly why Windows Installer accepted it as a MAJOR UPGRADE
+over genuine stock 4.2.2 today and the boot disk stayed on the PV path throughout. The
+uninstall would have removed a driver the very next step reinstalls, unchanged.
+
+The uninstall path is therefore reachable only when an in-place upgrade is impossible - the
+installed product being NEWER than the package. There the correct answer is "install a newer
+package", which is what the refusal says.

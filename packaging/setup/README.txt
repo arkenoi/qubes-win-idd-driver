@@ -234,6 +234,13 @@ no longer overrides it. The reason, measured on 2026-08-15:
     stack from the boot path) reaches Windows Automatic Repair but not a normal boot. Safe mode
     "works" only because it loads none of those drivers.
 
+WHY REMOVING IT WAS NEVER NECESSARY: this package's MSI is rebuilt from the same upstream WiX
+sources as stock, so it carries the same UpgradeCode and the SAME Xen PV drivers - the disk
+driver an upgrade would remove is the one it would immediately reinstall. Windows Installer
+therefore treats a version-bumped package as a major upgrade and replaces the files in place,
+with the boot disk on the PV path the whole time. Uninstalling first gains nothing and puts
+the guest's only disk at risk.
+
 The supported upgrade is therefore the IN-PLACE one: install a package whose version is HIGHER
 than the installed one. Windows Installer then performs a major upgrade, the PV disk driver is
 never removed, and no intermediate reboot is needed. Verified end to end on a genuine stock
