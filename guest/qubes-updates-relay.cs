@@ -264,6 +264,21 @@ static class Relay
         }
     }
 
+    // A denied client retries, and a log line per retry buries everything else. One line per
+    // distinct caller per minute keeps the signal ("who was refused") without the noise.
+    static readonly Dictionary<string, DateTime> _denyLogged = new Dictionary<string, DateTime>();
+    static void DenyLog(string logPath, string who)
+    {
+        lock (_denyLogged)
+        {
+            DateTime last;
+            if (_denyLogged.TryGetValue(who, out last) && (DateTime.UtcNow - last).TotalSeconds < 60) return;
+            _denyLogged[who] = DateTime.UtcNow;
+        }
+        Log(logPath, "DENY " + who + " - not part of the update. The proxy serves the update process only; "
+                     + "this caller sees an unreachable proxy, exactly as it would on an offline guest.");
+    }
+
     static bool PeerIsUpdate(int pid, out string why)
     {
         why = "pid " + pid;
@@ -376,8 +391,17 @@ static class Relay
                 string who;
                 if (!PeerIsUpdate(peerPid, out who))
                 {
-                    Log(logPath, "DENY " + who + " - not part of the update; the proxy serves the update process, not everything running while it is up");
+                    // LOOK UNREACHABLE, NOT BROKEN. A denied caller must see what it would see on
+                    // a guest with no network at all - a connection that does not come up - and
+                    // NOT a proxy that accepts and then breaks mid-protocol. So: abort with RST
+                    // (SO_LINGER 0) rather than a graceful close, and do it before reading a byte.
+                    // The client gets a connection reset at connect time, backs off the way it
+                    // does when a proxy is unreachable, and Windows reports no internet - the
+                    // correct state for an offline qube - instead of retrying against something
+                    // that half-answers. It also fails FAST: never a hang waiting for a timeout.
+                    try { inbound.Client.LingerState = new LingerOption(true, 0); } catch { }
                     try { inbound.Close(); } catch { }
+                    DenyLog(logPath, who);
                     continue;
                 }
             }

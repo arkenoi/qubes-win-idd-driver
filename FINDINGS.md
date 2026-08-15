@@ -10288,3 +10288,43 @@ built-in sets, re-read every few seconds. Proven both ways on the guest:
     AllowedImages = curl                curl exit=0 http=200
 
 QUBES_UPDATES_PEER_ALLOWLIST=off restores the old purely-temporal behaviour, for diagnostics.
+
+### And a denied caller must see "no network", not "network failing"
+
+The first version of the gate accepted the connection and closed it, which is the wrong signal:
+a client that gets accepted and then dropped mid-protocol concludes the proxy is BROKEN, retries
+and logs errors. The right signal for an offline qube is a connection that never comes up.
+
+The denial now aborts with SO_LINGER 0 before a byte is read, so the caller gets a reset at
+connect time - what an unreachable proxy looks like. Measured on the guest with a pass in
+flight:
+
+    curl       exit=7 "couldn't connect" after 2.1 s   (not 56 reset-mid-stream, not 28 timeout)
+    WebClient  WebException "Unable to connect to the remote server" after 2.3 s
+    the update pass itself: unaffected
+
+Fast-fail matters as much as the wording: nothing hangs waiting for a timeout, and Windows
+reports no internet, which is the correct state for a qube whose proxy is not for it.
+
+Denial logging is throttled to one line per distinct caller per minute - a refused client
+retries, and a line per retry would bury everything else in the relay log.
+
+### And a denied caller must see "no network", not "network failing"
+
+The first version of the gate accepted the connection and closed it, which is the wrong signal:
+a client that gets accepted and then dropped mid-protocol concludes the proxy is BROKEN, retries
+and logs errors. The right signal for an offline qube is a connection that never comes up.
+
+The denial now aborts with SO_LINGER 0 before a byte is read, so the caller gets a reset at
+connect time - what an unreachable proxy looks like. Measured on the guest with a pass in
+flight:
+
+    curl       exit=7 "couldn't connect" after 2.1 s   (not 56 reset-mid-stream, not 28 timeout)
+    WebClient  WebException "Unable to connect to the remote server" after 2.3 s
+    the update pass itself: unaffected
+
+Fast-fail matters as much as the wording: nothing hangs waiting for a timeout, and Windows
+reports no internet, which is the correct state for a qube whose proxy is not for it.
+
+Denial logging is throttled to one line per distinct caller per minute - a refused client
+retries, and a line per retry would bury everything else in the relay log.
