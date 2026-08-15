@@ -8,10 +8,22 @@
 # not the IP, because a headless client never executes the vlscppe fingerprint
 # JavaScript. quickget and Fido fail the same way for the same reason.
 #
-# To finish the automation, the fingerprint has to run in a real browser engine once and
-# its cookies reused here (e.g. a headless-Firefox/Playwright step that loads the page,
-# then hand off the cookie jar). Until then: open the page in a browser, copy the
-# generated link (valid ~24h), and curl it - which is what was done for the current ISO.
+# RETESTED 2026-08-15 for Windows 11 25H2, and the "use a real browser engine" idea above
+# was TRIED and does not work either:
+#   * the contentinclude/html controls API that mido.sh and Fido use now returns 404 - it is
+#     retired, so those tools are broken for this page regardless of session handling;
+#   * https://www.microsoft.com/software-download/windows11 GEO-REDIRECTS (302) to the exit
+#     IP's locale, and mido does not follow redirects, so it never finds a product edition id;
+#   * the JSON connector's getskuinformationbyproductedition WORKS headlessly and reports the
+#     current media as "Windows 11 25H2__V2" (product edition id 3321);
+#   * GetProductDownloadLinksBySku answers SentinelReject even from headless Chromium driving
+#     the real page, and even after registering that same session id with vlscppe from inside
+#     the page. Driving the page's own UI gets as far as clicking "Download Now"; the language
+#     dropdown never populates headless, so the flow dead-ends before any link.
+# CONCLUSION: getting an ISO link is a human step (open the page, copy the link, valid ~24h).
+# The alternatives that need no link at all are UUP dump (builds official media from Microsoft
+# packages) and, for 25H2 specifically, the ENABLEMENT PACKAGE over an existing 24H2 guest -
+# 25H2 is 26200 on top of 24H2's 26100, and this project already drives Windows Update.
 set -uo pipefail
 LANG_NAME="${1:-English}"
 UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
