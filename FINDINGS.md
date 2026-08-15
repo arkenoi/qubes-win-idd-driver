@@ -10252,3 +10252,39 @@ Bug found and fixed while testing, exactly the kind a dry read would have missed
 table query emitted InvokeMember's return value into the pipeline, so the function returned
 @($null,'9.1.0.0') and the [version] cast failed - the check degraded to a warning and let the
 install continue. Visible only because the result JSON printed the array.
+
+## 2026-08-15 — the updates proxy is now POSITIONAL, not temporal
+
+User's framing, and it is the correct one: "the WU surface should be positional, not temporal -
+not 'we open it for some update period' but 'it is open for the update process and that is it'."
+
+Until now the relay listened on 127.0.0.1:8082 and the pass set a machine-wide WinHTTP proxy, so
+every background HTTP client in the guest could use it for as long as the pass ran. That is not
+access control, and this project had already measured the consequence: 147 dom0
+qubes.UpdatesProxy policy hits in one afternoon on an "offline" guest, still dripping hours
+after the last scan.
+
+The relay is the only component that can see WHO is calling, so it now decides. Each accepted
+connection is mapped back to its owning process (GetExtendedTcpTable), and only processes that
+ARE the update are served: the service host running wuauserv / DoSvc / BITS / WinDefend /
+cryptsvc / TrustedInstaller (resolved through the SCM with QueryServiceStatusEx - no WMI, no
+System.ServiceProcess, so the file still compiles on-guest with the in-box csc and no
+references), the servicing-stack images, and our own agent. Everything else is refused and
+LOGGED BY NAME.
+
+MEASURED, with a pass in flight:
+
+    curl.exe through the proxy      -> exit=7 http=000        (refused)
+    DENY svchost (pid 1800) - not part of the update          (the background phone-home, blocked)
+    CONNECT fe2cr.update.microsoft.com:443 ... served         (the update itself, unaffected)
+    scan: 0 update(s) available                               (pass unaffected)
+
+GRANULAR POLICY, which is what identity-based control buys - the user's point: access can be
+granted to one more updater without opening the proxy to everything. Two additive REG_MULTI_SZ
+values under HKLM\SOFTWARE\Qubes\UpdatesProxy - AllowedImages and AllowedServices - extend the
+built-in sets, re-read every few seconds. Proven both ways on the guest:
+
+    default (curl not in policy)        curl exit=7 http=000
+    AllowedImages = curl                curl exit=0 http=200
+
+QUBES_UPDATES_PEER_ALLOWLIST=off restores the old purely-temporal behaviour, for diagnostics.
