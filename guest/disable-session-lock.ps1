@@ -70,6 +70,24 @@ if (-not $UserOnly) {
     Set-Reg 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop' 'ScreenSaverIsSecure' `
         '0' 'String' 'screensaver does not demand a password'
 
+    # THE SECURE DESKTOP. Every UAC elevation prompt switches the INPUT DESKTOP to Winlogon,
+    # which invalidates the desktop duplication - DXGI_ERROR_ACCESS_LOST - and forces the agent
+    # to rebuild capture and follow the switch. That is one of the few remaining triggers of a
+    # fault class that can, in its bad tail, cost the qube its GUI.
+    #
+    # It buys nothing HERE. A secure desktop defends against another program in the same Windows
+    # session painting a convincing fake elevation prompt - a defence that only works if the user
+    # can trust what they are looking at. In the Qubes model dom0 renders whatever the guest
+    # sends, so any program in this guest can paint a lookalike prompt on the ordinary desktop
+    # regardless. Real elevation gating would have to be a trusted DOM0 prompt (the shape of
+    # gui-gated sudo), not an in-guest desktop switch. So the switch costs display stability and
+    # returns a property this architecture cannot provide.
+    #
+    # UAC itself is UNCHANGED: prompts still appear and still require consent. Only the desktop
+    # they appear on changes.
+    Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' 'PromptOnSecureDesktop' `
+        $(if($off){0}else{1}) 'DWord' 'UAC prompts on the normal desktop (no Winlogon switch)'
+
     if (-not $WhatIfOnly) {
         # Power: never blank or sleep, and never require a password on wake. CONSOLELOCK is the
         # "require sign-in on wakeup" knob and is invisible in the registry paths above.
