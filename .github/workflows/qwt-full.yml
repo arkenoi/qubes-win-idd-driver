@@ -11,6 +11,15 @@ name: qwt-full
 
 on:
   workflow_dispatch:
+    inputs:
+      fault_injection:
+        description: >-
+          Build gui-agent with the rank-1 fault injector compiled in (QGA_FAULT_INJECTION=1).
+          TEST BUILDS ONLY - the resulting binary can be made to break itself on purpose from
+          the registry, so it must never be shipped. Release runs leave this false and the
+          code is not compiled at all.
+        type: boolean
+        default: false
   # Reusable: release-package.yml calls this to get installer.msi + our signed binaries,
   # rather than duplicating 250 lines of toolchain setup that is already proven green.
   workflow_call:
@@ -210,9 +219,15 @@ jobs:
           $ws  = "${{ github.workspace }}"
           $env:QB_SCRIPTS = "$ws\deps-src\builderv2\qubesbuilder\plugins\build_windows\scripts"
           $env:QUBES_INCLUDES = "$ws\deps-src\gui-common\include;" + $env:QUBES_INCLUDES
+          # OFF unless a workflow_dispatch run asks for it: a release artifact must not
+          # contain the injector. The value is echoed so the run log states which kind of
+          # binary this is, and the built .exe carries g_FaultInjectionMarker for the guest
+          # to confirm the same thing without trusting the log.
+          $fi = if ('${{ inputs.fault_injection }}' -eq 'true') { '1' } else { '0' }
+          Write-Host "QGA_FAULT_INJECTION=$fi"
           & "${{ steps.vs.outputs.msbuild }}" "$ws\agent\vs2022\gui-agent-windows.sln" `
               -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
-              "-p:TreatWarningAsError=false"
+              "-p:TreatWarningAsError=false" "-p:QgaFaultInjection=$fi"
           if ($LASTEXITCODE -ne 0) { throw "gui-agent build failed" }
 
       - name: Sign our agent binaries, export sign.crt
