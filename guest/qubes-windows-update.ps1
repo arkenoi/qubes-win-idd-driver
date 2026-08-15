@@ -633,7 +633,54 @@ function Install-Msus($files){
 try {
   $script:St.phase='ensure-proxy'; Save; Ensure-Proxy
   $script:St.phase='scan'; Save
+  # A LOSSY PASS MUST NEVER BE REPORTED AS "NOTHING TO UPDATE".
+  # Measured 2026-08-15: five consecutive scans reported 0 updates on a guest that had three.
+  # Windows Update was reachable the whole time - what failed were small plain-HTTP metadata
+  # fetches through the relay, which returned nothing at all. WU cannot describe an offer it
+  # could not download, so it answers "no updates", and the guest then tells dom0 it is current.
+  # That is the worst possible failure: silent, and it looks like success.
+  # So: watch the relay's own log across the scan. If it gave up on any fetch (complete=False)
+  # AND the scan found nothing, the result is UNKNOWN, not zero - retry once, then refuse to
+  # report a number nobody can stand behind.
+  $relayLog = 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log'
+  function Get-RelayGiveUps([long]$fromOffset) {
+    if (-not (Test-Path $relayLog)) { return 0 }
+    try {
+      $fs = [IO.File]::Open($relayLog, 'Open', 'Read', 'ReadWrite')
+      try {
+        if ($fromOffset -gt $fs.Length) { $fromOffset = 0 }
+        [void]$fs.Seek($fromOffset, 'Begin')
+        $sr = New-Object IO.StreamReader($fs)
+        $text = $sr.ReadToEnd()
+      } finally { $fs.Dispose() }
+      return ([regex]::Matches($text, 'complete=False')).Count
+    } catch { return 0 }
+  }
+  $relayOffset = if (Test-Path $relayLog) { (Get-Item $relayLog).Length } else { 0 }
+
   $avail = Get-Available
+  # TEST HOOK, same reasoning as the agent's SoloFaultInject: this guard only fires when a scan
+  # finds nothing WHILE the transport was dropping fetches, and once Windows Update has cached
+  # its metadata that state cannot be summoned on demand. QUBES_UPDATES_FAKE_EMPTY_SCAN=1 makes
+  # the scan look empty so the guard can be SEEN to fire. Absent, this is dead code.
+  if ($env:QUBES_UPDATES_FAKE_EMPTY_SCAN -eq '1') {
+    Log 'QUBES_UPDATES_FAKE_EMPTY_SCAN=1 - pretending the scan found nothing' 'WARN'
+    $avail = @()
+  }
+  $giveUps = Get-RelayGiveUps $relayOffset
+  if ($avail.Count -eq 0 -and $giveUps -gt 0) {
+    Log "scan returned 0 but the relay gave up on $giveUps fetch(es) - the result is UNKNOWN, rescanning" 'WARN'
+    $relayOffset = if (Test-Path $relayLog) { (Get-Item $relayLog).Length } else { 0 }
+    Start-Sleep -Seconds 5
+    $avail = Get-Available
+    $giveUps = Get-RelayGiveUps $relayOffset
+  }
+  if ($avail.Count -eq 0 -and $giveUps -gt 0) {
+    $script:St.phase='scan-failed'; $script:St.error = "transport lost $giveUps fetch(es); update availability unknown"; Save
+    Log "SCAN FAILED: the relay gave up on $giveUps fetch(es) and Windows Update found nothing. Not reporting 0 to dom0 - a scan that could not fetch its metadata is not the same as a guest with no updates." 'ERROR'
+    exit 75
+  }
+
   $script:St.available=$avail; $script:St.count=$avail.Count; Save
   Log "scan: $($avail.Count) update(s) available"
   Report-Availability $avail.Count    # -> dom0 Qube Manager (default-allowed for TemplateVMs)
