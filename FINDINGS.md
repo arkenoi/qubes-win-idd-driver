@@ -10526,3 +10526,33 @@ rectangle and the desktop, and the applied rect is recorded only after Windows a
 win10-tpl - in fullscreen with no dom0 work-area feed `WorkAreaApply` never runs, and forcing a
 smaller desktop behind the agent's back did not take. It is correct by construction (recording an
 apply that was refused is plainly wrong) but it ships without a defect-present/defect-absent pair.
+
+## 2026-08-15 (night) — agent restarts LEAK GRANTS until the guest can no longer have a GUI
+
+Found by accident while A/B-ing binaries on win10-tpl: after many stop/swap/start cycles the agent
+began dying immediately at startup, watchdog respawning it into the same wall, 0-byte logs one second
+apart:
+
+    XcGnttabPermitForeignAccess2: IOCTL_XENIFACE_GNTTAB_PERMIT_FOREIGN_ACCESS_V2 failed: 0x5aa
+    init_gnt_srv: Granting ring to domain 0 failed
+    libvchan_server_init failed
+    WinMain: WatchForEvents failed with error 0x5aa: Insufficient system resources exist ...
+
+0x5aa is ERROR_NO_SYSTEM_RESOURCES: the grant table is full. Each agent start grants the framebuffer
+to dom0; a killed agent never revokes, and xeniface evidently does not reclaim everything when the
+owning process dies. The end state is a guest that answers qrexec perfectly while having NO GUI at
+all, and it does not recover on its own - only a reboot clears it.
+
+Why it matters beyond the test harness: the watchdog restarts the agent on every failure, so a guest
+in a crash-restart loop walks itself into this state, and the symptom it produces - "the qube is
+running, I can do nothing with it, there are no windows" - is the same shape users report.
+
+METHOD DAMAGE, recorded because it nearly became a false result: two of four log-noise measurements
+were taken against this DEAD agent and reported 0 errors, which reads exactly like a clean PASS. The
+harness had no liveness assertion. Only `log_growth=1` (an empty log delta) gave it away. Any
+measurement that can be satisfied by "nothing ran" is not a measurement - assert the agent is alive
+and the log is growing BEFORE trusting a count.
+
+Not yet fixed. Options, none tested: revoke on graceful exit (does not help a kill), have the agent
+detect 0x5aa at startup and reclaim its own previous grants, or bound the watchdog's restart rate so
+a crash loop cannot exhaust the table. Related: docs/upstream-xen-pv-grant-revoke-spin.md.
