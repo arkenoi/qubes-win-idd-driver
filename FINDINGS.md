@@ -10159,3 +10159,43 @@ and it must not be described as one.
 Still true and independently measured: the upgrade takes the in-place major-upgrade path and
 never uninstalls stock, which is what removes the whole class of risk. The reporter's build
 could not take that path, because 4.3.0 and 4.3.1 shipped at the same MSI ProductVersion.
+
+### PROOF ATTEMPT, and the fix is REFUTED as written: there is no emulated disk to fall back to
+
+Deterministic harness instead of waiting for the intermittent excursion: put the guest in the
+state an uninstall of the PV disk driver leaves - inbox ATA drivers demoted, xenvbd disabled -
+and see whether the shipped re-arm saves the boot. Baseline restored from a snapshot between
+every run (win10-tpl root cloned back over win10-clean), so each run starts from identical
+stock 4.2.2.
+
+    RUN A  demoted inbox + xenvbd disabled, NO re-arm
+           -> domain starts and is DESTROYED within ~50 s, twice in a row. 0x7B reproduced.
+    RUN B  same + the shipped re-arm (atapi/intelide/pciide/storahci back to Start=0)
+           -> ALSO fails. Domain up, executing (~4% of a core), qrexec never appears.
+
+Why B failed is the part I had wrong. The disk inventory on a healthy stock guest:
+
+    DISK \\.\PHYSICALDRIVE0 | XENSRC PVDISK SCSI Disk Device | SCSI | 80GB
+    CTRL Intel(R) 82371SB PCI Bus Master IDE Controller | OK      <- controller present...
+                                                                  ...with NO disk behind it
+
+The Xen PV drivers UNPLUG the emulated disk: XENFILT masks the IDE channel
+(XENFILT\Parameters!Internal_IDE_Channel = IDE). So when xenvbd does not load there is no disk
+at all, and re-arming ATA drivers cannot help - there is nothing for them to bind to. The fix
+as written addresses the wrong half of the problem.
+
+    RUN C  re-arm + remove XENFILT's Internal_IDE_Channel (un-mask the emulated disk)
+           + xenvbd disabled
+           -> reaches WINDOWS AUTOMATIC REPAIR (user observed it on screen). Strictly further
+              than A or B: WinRE loads, so a disk is visible again - but Windows still does not
+              boot normally.
+
+CONCLUSION. On this platform the 0x7B is not "no boot-start ATA driver"; it is "the PV disk
+driver is gone AND the emulated disk it replaced has been unplugged". Nothing we can set from
+inside the guest turned that back into a normal boot in these runs. The robust remedy is the
+one already measured to work: DO NOT REMOVE THE PV DISK DRIVER during an upgrade - which is
+exactly what the in-place major upgrade does, and what the ProductVersion bump makes possible.
+
+The re-arm stays (it is idempotent and costs nothing, and it is a precondition for any recovery
+that does restore the emulated disk) but it is NOT the fix and must not be described as one.
+The claim "the installer now prevents the 0x7B" is WITHDRAWN.
