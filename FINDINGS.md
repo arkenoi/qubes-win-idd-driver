@@ -10776,10 +10776,17 @@ offered by definition, and the reload only pre-arms LATER switches - which perfo
 The neighbouring `ResolutionRecomputeIddModeSet` already states the discipline ("registry rewrite
 ONLY ... a dom0 panel move must not blink the screen"); it now applies to boot too.
 
-MEASURED, cold boot, one change, same rig:
+MEASURED, three interleaved pairs, a COLD BOOT for every run, one change between the binaries, and
+each run asserting the agent is alive with a daemon connected before it counts anything:
 
-    boot replug (A9F0897F):  access_lost=4  capture_init_failed=1  a7retry=2  log lines=839
-    no boot replug (363AE675): access_lost=1  capture_init_failed=0  a7retry=0  log lines=443
+    round   boot replug (A9F0897F)      no boot replug (363AE675)
+      1     4 / 1 / 2                   1 / 0 / 0
+      2     4 / 1 / 2                   1 / 0 / 0
+      3     4 / 1 / 2                   1 / 0 / 0
+            (access_lost / capture_init_failed / a7retry)
+
+Identical in every round: the boot cluster is four events with a failed CaptureInitialize and two A7
+retries, and removing the boot reload leaves exactly one event and no retries at all.
 
 **#2 is the only trigger proven at millisecond resolution** and it is not ours: the Winlogon ->
 Default input-desktop flip, from GWeck's own log (ACCESS_LOST and "input desktop changed" in the
