@@ -164,13 +164,27 @@ if [ -n "${REAL_STOCK_EXE:-}" ]; then
     mkdir -p "$WORK/payload/stock"
     cp "$REAL_STOCK_EXE" "$WORK/payload/stock/"
     _exe=$(basename "$REAL_STOCK_EXE")
+    # STOCK NEEDS TESTSIGNING FIRST, and it will not tell you politely: measured 2026-08-15,
+    # qubes-tools-4.2.2.exe /passive still puts up its wizard with a modal - "Test signing must
+    # be enabled, run the following as an administrator: bcdedit /set testsigning on" - and
+    # waits forever. Its own drivers are signed by a private "Qubes Windows Tools" CA, so this
+    # is inherent to stock, not something we introduced. Enable testsigning, stage the installer
+    # on C:, reboot, and run it from a SYSTEM onstart task on the next boot.
     cat > "$WORK/payload/setup.cmd" <<EOF
 @echo off
 rem Found by the FirstLogonCommands drive-letter scan: <drive>:\payload\setup.cmd
 echo === answer-stick payload (GENUINE upstream QWT) === >> C:\qubes-win-idd-setup.log
-rem /passive is what qvm-create-windows-qube uses; the bundle reboots by itself when done.
-start /wait "" "%~dp0stock\\$_exe" /passive >> C:\qubes-win-idd-setup.log 2>&1
-echo stock installer rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
+mkdir C:\stockqwt 2>nul
+copy /y "%~dp0stock\\$_exe" C:\stockqwt\ >> C:\qubes-win-idd-setup.log 2>&1
+> C:\stockqwt\run-stock.cmd echo @echo off
+>> C:\stockqwt\run-stock.cmd echo echo === stock QWT install (post-testsigning boot) ^>^> C:\qubes-win-idd-setup.log
+>> C:\stockqwt\run-stock.cmd echo start /wait "" "C:\stockqwt\\$_exe" /passive ^>^> C:\qubes-win-idd-setup.log 2^>^&1
+>> C:\stockqwt\run-stock.cmd echo echo stock installer rc=%%ERRORLEVEL%% ^>^> C:\qubes-win-idd-setup.log
+>> C:\stockqwt\run-stock.cmd echo schtasks /delete /tn QwtStockInstall /f ^>nul 2^>^&1
+bcdedit /set testsigning on >> C:\qubes-win-idd-setup.log 2>&1
+schtasks /create /tn QwtStockInstall /sc onstart /delay 0000:30 /ru SYSTEM /rl highest /f /tr "cmd /c C:\stockqwt\run-stock.cmd" >> C:\qubes-win-idd-setup.log 2>&1
+echo rebooting for testsigning >> C:\qubes-win-idd-setup.log
+shutdown /r /t 5
 EOF
     echo "payload: GENUINE stock QWT staged ($_exe), installed with /passive"
 fi
