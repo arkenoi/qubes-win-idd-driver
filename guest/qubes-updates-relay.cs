@@ -26,11 +26,13 @@
 // Target VM: --target (or QUBES_UPDATES_TARGET env), default "@default" so dom0 policy routes it.
 using System;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -165,6 +167,179 @@ static class Relay
         return Environment.ExpandEnvironmentVariables(v);
     }
 
+    // ---- POSITIONAL access control ------------------------------------------------------
+    //
+    // The proxy must be reachable BY THE UPDATE PROCESS, not BY ANYTHING THAT HAPPENS TO RUN
+    // WHILE AN UPDATE IS IN FLIGHT. Time-scoping ("the proxy is only up during a pass") is not
+    // access control: while it is up, every background HTTP client in the guest discovers the
+    // system proxy and phones home - measured on an "offline" guest as 147 dom0
+    // qubes.UpdatesProxy policy hits in one afternoon, still dripping hours after the last scan.
+    //
+    // The relay is the only place that can tell WHO is calling, so it decides. Each accepted
+    // connection is mapped back to the owning process through the TCP table, and only processes
+    // that ARE the update are served: the service host running Windows Update / Delivery
+    // Optimization / BITS / Defender, the servicing stack, and our own agent. Everything else is
+    // refused and logged by name, so a denial is diagnosable rather than mysterious.
+    //
+    // QUBES_UPDATES_PEER_ALLOWLIST=off disables the check (diagnostics only - it restores the
+    // old, purely temporal behaviour).
+    [DllImport("iphlpapi.dll", SetLastError = true)]
+    static extern uint GetExtendedTcpTable(IntPtr table, ref int size, bool order, int af,
+                                           int tableClass, int reserved);
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct MIB_TCPROW_OWNER_PID
+    {
+        public uint state; public uint localAddr; public uint localPort;
+        public uint remoteAddr; public uint remotePort; public uint owningPid;
+    }
+
+    static int PidForLocalPort(int port)
+    {
+        // AF_INET=2, TCP_TABLE_OWNER_PID_ALL=5. Ports in the table are big-endian in the low word.
+        int size = 0;
+        GetExtendedTcpTable(IntPtr.Zero, ref size, true, 2, 5, 0);
+        IntPtr buf = Marshal.AllocHGlobal(size);
+        try
+        {
+            if (GetExtendedTcpTable(buf, ref size, true, 2, 5, 0) != 0) return -1;
+            int rows = Marshal.ReadInt32(buf);
+            IntPtr row = (IntPtr)((long)buf + 4);
+            int rowSize = Marshal.SizeOf(typeof(MIB_TCPROW_OWNER_PID));
+            for (int i = 0; i < rows; i++)
+            {
+                MIB_TCPROW_OWNER_PID r = (MIB_TCPROW_OWNER_PID)Marshal.PtrToStructure(row, typeof(MIB_TCPROW_OWNER_PID));
+                int p = (int)(((r.localPort & 0xFF) << 8) | ((r.localPort & 0xFF00) >> 8));
+                if (p == port) return (int)r.owningPid;
+                row = (IntPtr)((long)row + rowSize);
+            }
+        }
+        finally { Marshal.FreeHGlobal(buf); }
+        return -1;
+    }
+
+    // PIDs that ARE the update: the hosts of the update-related services, plus this process and
+    // whatever launched it (our agent drives catalog downloads through this same relay).
+    static readonly string[] BuiltinServices = { "wuauserv", "DoSvc", "BITS", "WinDefend", "cryptsvc", "TrustedInstaller" };
+    static readonly string[] BuiltinImages   = { "MpCmdRun", "TiWorker", "TrustedInstaller", "dism", "DismHost", "MsMpEng" };
+
+    // GRANULAR POLICY. Because the decision is made by identity rather than by time, access can
+    // be granted to one more updater without opening the proxy to everything else. Two
+    // REG_MULTI_SZ values under HKLM\SOFTWARE\Qubes\UpdatesProxy extend the built-in sets:
+    //     AllowedImages    process names, without .exe   (e.g. "MyVendorUpdater")
+    //     AllowedServices  service names                 (e.g. "MyVendorUpdateSvc")
+    // They are ADDITIVE and re-read every few seconds, so a qube can be granted a third-party
+    // updater by policy - per qube, per updater - instead of by leaving a hole open in time.
+    static string[] PolicyList(string valueName)
+    {
+        try
+        {
+            using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                       @"SOFTWARE\Qubes\UpdatesProxy"))
+            {
+                if (k == null) return new string[0];
+                string[] v = k.GetValue(valueName) as string[];
+                return v ?? new string[0];
+            }
+        }
+        catch { return new string[0]; }
+    }
+
+    static string[] UpdateServices
+    {
+        get
+        {
+            List<string> l = new List<string>(BuiltinServices);
+            l.AddRange(PolicyList("AllowedServices"));
+            return l.ToArray();
+        }
+    }
+    static string[] UpdateImages
+    {
+        get
+        {
+            List<string> l = new List<string>(BuiltinImages);
+            l.AddRange(PolicyList("AllowedImages"));
+            return l.ToArray();
+        }
+    }
+
+    static bool PeerIsUpdate(int pid, out string why)
+    {
+        why = "pid " + pid;
+        if (pid <= 0) { why = "unknown pid"; return false; }
+        try
+        {
+            Process p = Process.GetProcessById(pid);
+            why = p.ProcessName + " (pid " + pid + ")";
+            if (pid == Process.GetCurrentProcess().Id) return true;
+            foreach (string img in UpdateImages)
+                if (string.Equals(p.ProcessName, img, StringComparison.OrdinalIgnoreCase)) return true;
+            // svchost hosts many services, and the socket cannot say which one - so ask the SCM
+            // which PIDs host the update services and compare. Cached: this runs per connection.
+            string svcName = ServiceHostedBy(pid);
+            if (svcName != null) { why = p.ProcessName + " hosting " + svcName + " (pid " + pid + ")"; return true; }
+            // Our own agent: PowerShell running the updater, and whatever it spawns.
+            if (string.Equals(p.ProcessName, "powershell", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(p.ProcessName, "qubes-updates-relay", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        catch (Exception e) { why = "pid " + pid + " (" + e.GetType().Name + ")"; }
+        return false;
+    }
+
+    // SCM directly, not WMI and not System.ServiceProcess: this file is compiled on the guest by
+    // the in-box csc with no references, and it must stay that way.
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern IntPtr OpenSCManagerW(string machine, string database, uint access);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern IntPtr OpenServiceW(IntPtr scm, string service, uint access);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool QueryServiceStatusEx(IntPtr svc, int level, IntPtr buf, int bufSize, out int needed);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool CloseServiceHandle(IntPtr h);
+
+    static readonly object _svcLock = new object();
+    static Dictionary<int, string> _svcPids = new Dictionary<int, string>();
+    static DateTime _svcPidsAt = DateTime.MinValue;
+
+    static string ServiceHostedBy(int pid)
+    {
+        lock (_svcLock)
+        {
+            if ((DateTime.UtcNow - _svcPidsAt).TotalSeconds > 5)
+            {
+                Dictionary<int, string> fresh = new Dictionary<int, string>();
+                IntPtr scm = OpenSCManagerW(null, null, 0x0004 /*SC_MANAGER_ENUMERATE_SERVICE*/);
+                if (scm != IntPtr.Zero)
+                {
+                    foreach (string svc in UpdateServices)
+                    {
+                        IntPtr h = OpenServiceW(scm, svc, 0x0004 /*SERVICE_QUERY_STATUS*/);
+                        if (h == IntPtr.Zero) continue;
+                        int needed = 0;
+                        int size = 64;   // SERVICE_STATUS_PROCESS
+                        IntPtr buf = Marshal.AllocHGlobal(size);
+                        try
+                        {
+                            if (QueryServiceStatusEx(h, 0 /*SC_STATUS_PROCESS_INFO*/, buf, size, out needed))
+                            {
+                                int servicePid = Marshal.ReadInt32(buf, 28);   // dwProcessId
+                                if (servicePid > 0) fresh[servicePid] = svc;
+                            }
+                        }
+                        finally { Marshal.FreeHGlobal(buf); CloseServiceHandle(h); }
+                    }
+                    CloseServiceHandle(scm);
+                }
+                _svcPids = fresh;
+                _svcPidsAt = DateTime.UtcNow;
+            }
+            string name;
+            return _svcPids.TryGetValue(pid, out name) ? name : null;
+        }
+    }
+
     // ---- listener side (long-running service) --------------------------------------------
     static int RunListen(string[] args)
     {
@@ -193,6 +368,19 @@ static class Relay
         while (true)
         {
             TcpClient inbound = listener.AcceptTcpClient();
+            if (!"off".Equals(Environment.GetEnvironmentVariable("QUBES_UPDATES_PEER_ALLOWLIST"),
+                              StringComparison.OrdinalIgnoreCase))
+            {
+                int peerPort = ((IPEndPoint)inbound.Client.RemoteEndPoint).Port;
+                int peerPid = PidForLocalPort(peerPort);
+                string who;
+                if (!PeerIsUpdate(peerPid, out who))
+                {
+                    Log(logPath, "DENY " + who + " - not part of the update; the proxy serves the update process, not everything running while it is up");
+                    try { inbound.Close(); } catch { }
+                    continue;
+                }
+            }
             TcpClient captured = inbound;
             Task.Run(delegate { HandleInbound(captured, self, target, user, logPath).Wait(); });
         }
