@@ -10127,3 +10127,35 @@ that makes the in-place path possible; this run is what shows why that invariant
 
 Also observed, unchanged from 2026-08-14: the domain hung in Transient for ~3 minutes at the
 post-upgrade reboot. Kill-and-start was safe and the guest came back correctly.
+
+### VERIFICATION OF THE 0x7B FIX: the defect does NOT reproduce, so the fix is UNPROVEN
+
+The user asked for the fix to be verified before moving on. It is not verified, and the
+attempt is worth recording because it corrects my own claim from an hour earlier.
+
+First attempt was VOID by construction: I ran it on win10-app, an AppVM, whose root volume is
+discarded at every shutdown. The upgrade and the demotion were both wiped before the boot that
+was supposed to crash, and the guest "booted fine" because it had reverted to stock
+(QWT 4.2.2.0, atapi Start=0, marker file gone). An AppVM cannot test anything that spans a
+reboot. Redone on the standalone guest, restoring the stock baseline by cloning win10-tpl's
+root volume back over it.
+
+    run 1  inbox drivers Start=0 (armed)    upgrade -> reboot -> BOOTDISK bus=ATA
+                                            second reboot      -> bus=SCSI (PV), QWT 4.3.2
+    run 2  inbox drivers Start=3 (demoted)  upgrade -> reboot -> BOOTDISK bus=SCSI, BOOTED,
+                                            QWT 4.3.2.0, atapi still Start=3
+
+So the boot disk's excursion to emulated ATA happened ONCE OUT OF TWO, and in the run where a
+demoted fallback would have mattered it did not happen at all - the PV driver bound
+immediately and the demotion was irrelevant.
+
+WHAT THAT MEANS. My earlier statement - "the upgrade moves the boot disk off the PV path for
+one boot" - was drawn from a single observation and is not reliable: it is intermittent. A
+0x7B needs BOTH halves at once (the excursion AND a demoted inbox driver) and I have now seen
+each separately, never together. The re-arm therefore stays in as cheap, idempotent insurance
+against a transition that is real but not reproducible on demand - NOT as a demonstrated fix,
+and it must not be described as one.
+
+Still true and independently measured: the upgrade takes the in-place major-upgrade path and
+never uninstalls stock, which is what removes the whole class of risk. The reporter's build
+could not take that path, because 4.3.0 and 4.3.1 shipped at the same MSI ProductVersion.
