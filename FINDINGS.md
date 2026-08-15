@@ -10556,3 +10556,45 @@ and the log is growing BEFORE trusting a count.
 Not yet fixed. Options, none tested: revoke on graceful exit (does not help a kill), have the agent
 detect 0x5aa at startup and reclaim its own previous grants, or bound the watchdog's restart rate so
 a crash loop cannot exhaust the table. Related: docs/upstream-xen-pv-grant-revoke-spin.md.
+
+## 2026-08-15 (night) — the agent announced UNINITIALIZED STACK MEMORY as window geometry
+
+The most serious defect found today, and the first mechanism that actually explains the dom0
+"invalid or suspicious GUI request" dialog GWeck photographed (post 45) - unexplained through two
+prior investigations.
+
+`GetRealWindowRect` returns a WIN32 status, not an HRESULT, and two of its failure returns are
+POSITIVE numbers: `ERROR_INVALID_DATA` (0xd) and `win_perror`'s return. `GetWindowData` tested
+`if (!SUCCEEDED(status))`, and `SUCCEEDED(0xd)` is TRUE - so for those two failures it skipped the
+error path entirely, fell through with its `RECT rect;` still UNINITIALIZED, and returned
+ERROR_SUCCESS. Whatever was on the stack became the window's geometry and was announced to dom0.
+
+The `ERROR_INVALID_DATA` path is not exotic - it is every zero-sized top-level window (degenerate
+DWM bounds AND degenerate GetWindowRect), which ordinary shell surfaces produce constantly.
+
+PROVEN, identical 40 s workloads on win10-tpl with a deliberately created 0x0 top-level window
+(`scratchpad/zerowin.cs`), agent liveness asserted before each run:
+
+    pre-fix  (4.3.2, 20EC3EC4):  65 GetRealWindowRect rejections ->  1 reached GetWindowData
+                                 => 64 swallowed, each returning success with a junk rect
+    fixed    (D05BC3A2):         65 GetRealWindowRect rejections -> 65 reached GetWindowData
+
+Fix: test `status != ERROR_SUCCESS`. Companions, both required: `UpdateWindowData` and
+`GetWindowData` demote E_HANDLE and ERROR_INVALID_DATA to debug, because propagating them correctly
+turned 64 silent garbage announcements into 65 ERROR lines per 40 s - measured on the proving run
+itself - which would have moved the noise rather than removed it.
+
+TWO HAZARDS THIS BRANCH INTRODUCED YESTERDAY, caught by adversarial review and not by me:
+  - `|| !found` in SelectSupportedMode pinned index 0 for a zero-dimension request - reinstating
+    the arbitrary pick the change existed to remove, for the one input that produces it. A zero
+    request now returns the "no opinion" sentinel explicitly.
+  - the MAXDWORD sentinel made SetVideoMode return ERROR_SUCCESS WITHOUT applying a mode, while the
+    adopt-current rescue sat INSIDE the failure branch - so g_ScreenWidth/Height could stay 0 and
+    `x * 65535 / g_ScreenWidth` in HandleMotion divides by zero on the first pointer event. The
+    rescue is hoisted out; its own zero test was always the real guard.
+Both are the direct argument for running the adversary over one's own patches, not just over the
+code one is patching.
+
+Also: the capture-restart gate logged BOTH its edges below the default log level, so a shipped
+guest recorded nothing when capture stopped or came back - the one question a "my qube is frozen"
+report needs answered. Now CAPTUREGATE at warning/info.
