@@ -99,8 +99,10 @@ param(
     [switch]$InstallIddDriver,
     [switch]$NoPvNetwork,
 
-    # Override for the PV-boot-disk upgrade gate in stage 2 - see Test-BootDiskOnPvPath
-    # and the UPGRADING FROM STOCK QWT section of README.txt before using it.
+    # INERT since 2026-08-15. It used to override the PV-boot-disk gate; that gate is now a
+    # hard refusal because the failure was reproduced and could not be recovered from inside
+    # the guest (see the refusal message in stage 2). Still accepted so existing command lines
+    # and scripts do not break - it just warns and changes nothing.
     [switch]$AcceptPvDiskUpgrade,
 
     # Skip the app hardware-acceleration pre-tweak (disable-hw-accel.ps1): HKLM policies
@@ -733,15 +735,39 @@ function Invoke-Stage2 {
                 # Fall through to the install phase below - msiexec /i does the rest.
             } else {
 
-            if ($pvBoot -and -not $AcceptPvDiskUpgrade) {
-                # Gate BEFORE anything is uninstalled. Probe and crash both validated
-                # live 2026-08-10 (see README.txt, UPGRADING FROM STOCK QWT).
-                Fail ('the C: boot disk is on the Xen PV disk path (BusType SCSI, xenvbd boot-start). ' +
-                      'Removing the installed QWT reverts the boot disk toward emulated IDE, which ' +
-                      'Windows has demoted from boot-start, so the intermediate reboot the removal ' +
-                      'needs can bugcheck 0x7B INACCESSIBLE BOOT DEVICE. If you accept that risk, ' +
-                      're-run with /AcceptPvDiskUpgrade - and read the UPGRADING FROM STOCK QWT ' +
-                      'recovery section in README.txt FIRST')
+            if ($pvBoot) {
+                # HARD REFUSAL. This used to be an overridable warning, and /AcceptPvDiskUpgrade
+                # let a user proceed. It is not overridable any more, because the failure it
+                # guards against was reproduced on 2026-08-15 and NO recovery performed from
+                # inside the guest could undo it:
+                #
+                #   The Xen PV drivers UNPLUG the emulated disk. A healthy guest in this state
+                #   has exactly ONE disk (XENSRC PVDISK) - the IDE controller is still there
+                #   with nothing behind it. Remove the PV disk driver and the next boot has no
+                #   disk AT ALL, which is 0x7B, and under Qubes the qube is destroyed at the
+                #   bugcheck. Measured: domain destroyed within ~50 s, twice. Re-arming the
+                #   inbox ATA drivers does not help (nothing to bind to). Un-masking XENFILT's
+                #   IDE channel, or taking the whole Xen bus stack out of the boot path, gets
+                #   as far as Windows Automatic Repair - a disk is visible again - but not to a
+                #   normal boot. Safe mode is why the field recovery works: it loads none of
+                #   these drivers, so nothing unplugs the emulated disk.
+                #
+                # An installer must not offer a switch whose failure mode it cannot undo. The
+                # supported path is the IN-PLACE major upgrade taken above, which never removes
+                # the PV disk driver - and that needs a package whose version is HIGHER than the
+                # installed one. That is exactly the invariant tools/cut-release.sh enforces,
+                # and the reason 4.3.0/4.3.1 (both stamped MSI ProductVersion 4.3.0) could not
+                # take it and had to remove first.
+                Fail ('REFUSING to remove the installed QWT: the C: boot disk is served by the Xen ' +
+                      'PV disk driver (BusType SCSI, xenvbd boot-start), and the PV drivers have ' +
+                      'unplugged the emulated disk - so removing them leaves this guest with NO ' +
+                      'boot disk and it will bugcheck 0x7B INACCESSIBLE BOOT DEVICE. Measured, and ' +
+                      'not recoverable from inside the guest. ' +
+                      "Install a package whose version is HIGHER than the installed $($existing[0].Version) " +
+                      'instead: a version-bumped package upgrades in place, never removes the PV disk ' +
+                      'driver, and is the supported upgrade path. ' +
+                      '(/acceptpvdiskupgrade no longer overrides this - see UPGRADING FROM STOCK QWT ' +
+                      'in README.txt.)')
             }
             Stop-QwtRuntime
             $needReboot = Uninstall-ExistingQwt -Products $existing
@@ -1406,6 +1432,12 @@ try {
     if (-not $src) { Fail 'cannot determine script directory' }
     Write-Log "payload source: $src"
 
+    if ($AcceptPvDiskUpgrade) {
+        Write-Log ('/acceptpvdiskupgrade is INERT since 4.3.2 and is being ignored: the path it ' +
+                   'used to unlock (removing QWT while the boot disk is on the PV path) leaves the ' +
+                   'guest with no boot disk at all, which was reproduced and could not be recovered ' +
+                   'from inside. Use a version-bumped package, which upgrades in place.') 'WARN'
+    }
     $n = Test-Payload -Root $src
     $script:Result.detail.payload_files_verified = $n
 

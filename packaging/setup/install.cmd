@@ -41,10 +41,13 @@ REM     install.cmd /noapptweaks skip the app HW-accel pre-tweak (registry
 REM                              policies making Office/browsers/Slack render
 REM                              in software - see README.txt)
 REM     install.cmd /acceptpvdiskupgrade
-REM                              remove an existing QWT even when the boot disk
-REM                              is on the PV disk path - can bugcheck 0x7B at
-REM                              the intermediate reboot; read the UPGRADING
-REM                              FROM STOCK QWT section of README.txt FIRST
+REM                              ACCEPTED BUT IGNORED since 4.3.2. It used to force the
+REM                              removal of an installed QWT when the boot disk is on the
+REM                              PV disk path. That leaves the guest with NO boot disk -
+REM                              the PV drivers unplug the emulated one - and it bugchecks
+REM                              0x7B with no recovery available from inside the guest.
+REM                              Install a version-bumped package instead: it upgrades in
+REM                              place and never removes the PV disk driver.
 REM  Flags combine:  install.cmd /auto /nonet
 REM
 REM  Read README.txt first - in particular the NETWORKING and TEST-SIGNING
