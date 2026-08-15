@@ -10328,3 +10328,45 @@ reports no internet, which is the correct state for a qube whose proxy is not fo
 
 Denial logging is throttled to one line per distinct caller per minute - a refused client
 retries, and a line per retry would bury everything else in the relay log.
+
+## 2026-08-15 (afternoon) — GWeck's build re-run on 25H2, and one artifact attributed to the guest
+
+**The updater leak is closed and proven.** `Install-ViaWU` set `DODownloadMode=99` for its own pass
+and restored it just before building the result rows, so the "WU: nothing to install" early return
+walked past the restore - measured on win11-tpl, the policy was still set afterwards. The restore is
+now a function called from a `finally` around the whole body:
+
+    before: DODownloadMode=(unset) -> "DODownloadMode=99 for THIS pass only" -> "WU: nothing to
+    install" -> "Delivery Optimization: restored" -> after: DODownloadMode=(unset)
+
+The multistage-defer guard has now been SEEN TO FIRE both ways (`QUBES_UPDATES_FAKE_STAGED=1` ->
+"DEFERRED ... CBS would discard a second one", staged=NO -> the fallback runs). win11-tpl also had
+no `NoAutoUpdate` value at all (it predates the code that sets it); set to 1 and re-checked.
+
+**win11-fresh is Windows 11 25H2 (26200.9168).** The earlier "no 25H2 target" note is stale - S1-class
+work is reproducible locally. Its installed agent was NOT any shipped build: sha256 7463399F... matches
+neither 4.3.1 (99480D87) nor 4.3.2 (20EC3EC4). Everything measured before that check was measured on an
+unknown intermediate binary. Verify the hash BEFORE the experiment, not after.
+
+**The Start-menu surface is not a stable target across 25H2 UBRs.** On 26200.9168 it is a
+`Windows.UI.Core.CoreWindow` titled "Start" (`FindWindow` finds it, so the agent's special-casing runs);
+on GWeck's earlier 25H2 it is `Wnd_StartFeed`, untitled, exactly 1920x1080, TOPMOST|TOOLWIN, no owner -
+`FindWindow(CoreWindow,"Start")` returns NULL there and every Start special-case is dead code. When it
+maps, dom0 does not raise the suspicious-request dialog for it: his screenshot shows the OTHER
+protection - the daemon unsetting `override_redirect` on a "very large window" - which is what leaves
+Start bordered and mis-drawn. Per owner direction (2026-08-15) the stock Start path is NOT being chased;
+Open-Shell is the answer, and his last posts (54-56) contain no Start complaint at all.
+
+**The rendering error visible today is the GUEST's, not ours.** Notepad's content sat 394 px below its
+own frame. Same number on 4.3.1 and on 4.3.2, so "the newer build fixes it" was false - and the reason
+is that it was never ours: capturing the window IN THE GUEST with `CopyFromScreen` gives
+`banner_y = 394` too, identical to what dom0 renders. The app never re-laid-out after a resolution
+change; the transport is faithful. Attribution needs the in-guest capture - the dom0 picture alone
+cannot tell "we sliced it wrong" from "Windows drew it that way".
+
+**Three fixes postdate the build he ran, one per symptom - all still UNPROVEN.** `c7ccb45` (his
+4.3.1) contains none of: `6ea0822` "never leave the desktop with no attached display" (his black
+inactive window after the IDD reboot), `4643931` "re-assert IDD-solo when a display is attached under
+us" (his ~1 cm pointer offset), `fbf9368` "self-heal the AppVM first boot" (his post-56 AppVM that
+starts and silently shuts down). Each needs a defect-present/defect-absent pair on one rig before it
+counts, per the standing rule that a newer build is not an answer to a bug report.
