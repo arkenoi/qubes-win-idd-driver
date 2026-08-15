@@ -41,7 +41,7 @@ His posts: 3, 24, 26, 27, 30, 33, 34, 35, 38, 44, 45, 49, 52, 54, 55, 56, 58. Co
 
 | Issue | Status | Note |
 |---|---|---|
-| Agent restarts **leak grant-table entries** until no vchan can be created (0x5aa) | **OPEN** (damage bounded) | The guest then answers qrexec and has **no GUI at all** until reboot — the same shape as #16/#19. The watchdog respawned once per second forever, making it worse; it now backs off. The leak itself (grants outlive the process) is unfixed |
+| Agent restarts **leak grant-table entries** until no vchan can be created (0x5aa) | **RETRACTED** | Refuted 2026-08-16: 14 consecutive agent kills with a live daemon and grants asserted produced zero failures, so grants ARE reclaimed on process death. The original 0x5aa occurred while the daemon was already gone and was on the VCHAN RING, not the framebuffer - cause unknown, not a guest-side leak. The watchdog backoff stands on its own merits |
 | Zero host ceiling → `SelectSupportedMode` returned an arbitrary index-0 mode and persisted it | **PROVEN** | Injector knocked an available 5120×1440 down to 1920×1080; off, selection stays inside the real ceiling |
 | `resize-sync.ps1` was a second writer of the agent's mode set, wiping target/LRU/host entries | **FIXED** | Deleted; the agent is the sole writer |
 | Work-area rect refused by Windows was recorded as applied and never retried | **FIXED (unproven)** | Could not reproduce the 30 s refusal loop on the Win10 rig; ships without a pair |

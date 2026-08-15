@@ -10527,7 +10527,7 @@ win10-tpl - in fullscreen with no dom0 work-area feed `WorkAreaApply` never runs
 smaller desktop behind the agent's back did not take. It is correct by construction (recording an
 apply that was refused is plainly wrong) but it ships without a defect-present/defect-absent pair.
 
-## 2026-08-15 (night) — agent restarts LEAK GRANTS until the guest can no longer have a GUI
+## 2026-08-15 (night) — agent restarts LEAK GRANTS until the guest can no longer have a GUI  [RETRACTED 2026-08-16 - see below, 14-kill test with the precondition asserted found zero failures]
 
 Found by accident while A/B-ing binaries on win10-tpl: after many stop/swap/start cycles the agent
 began dying immediately at startup, watchdog respawning it into the same wall, 0-byte logs one second
@@ -10814,3 +10814,27 @@ the defect. Reverted in full (22fad26, d2b56c6).
 
 The lesson is the one this project keeps relearning: an instrument that cannot fail is worthless,
 and a fix whose own numbers get worse is not "noisy", it is wrong.
+
+## 2026-08-16 — RETRACTED: agent restarts do NOT leak grants
+
+Yesterday I recorded "agent restarts LEAK GRANTS until the guest can no longer have a GUI" and
+reported it as the one hard failure we had reproduced ourselves. **It is wrong.**
+
+Test: 14 consecutive kills of gui-agent on win10-tpl, each iteration ASSERTING the precondition
+before killing - a gui-daemon client attached AND grants actually issued (`A3CHECK`/
+`SendScreenGrants` present in the log) - because a kill with nothing granted strands nothing and
+proves nothing. Result: every instance reconnected, **zero** occurrences of 0x5aa or "Granting ring
+to domain 0 failed". A first attempt at this test was itself void (no daemon was attached, so no
+grant was ever created) - the same precondition trap that has now caught me three times in one day.
+
+So the staging grant is evidently reclaimed when the process dies, and the "capacity-sized grant
+stranded per kill" mechanism I described does not happen.
+
+What actually produced the original 0x5aa: it appeared while the agent was in a restart loop AND
+the gui-daemon was gone or dying, and the failing call was granting the VCHAN RING
+(`init_gnt_srv: Granting ring to domain 0 failed`), not the framebuffer. That points at the
+daemon-side half of the vchan rather than a per-restart guest leak. Unproven either way, and it
+must not be described as a known guest-side leak.
+
+The watchdog backoff added for it stands on its own merits - respawning a fast-failing agent once a
+second helps nothing - but its stated justification was wrong and is corrected here.
