@@ -10370,3 +10370,39 @@ inactive window after the IDD reboot), `4643931` "re-assert IDD-solo when a disp
 us" (his ~1 cm pointer offset), `fbf9368` "self-heal the AppVM first boot" (his post-56 AppVM that
 starts and silently shuts down). Each needs a defect-present/defect-absent pair on one rig before it
 counts, per the standing rule that a newer build is not an answer to a bug report.
+
+## 2026-08-15 (evening) — the never-headless guard CANNOT be seen to fail here, so it stays unproven
+
+Setup: win10-tpl = **Windows 10 Pro 22H2 (19045.2965)**, GWeck's exact platform; the 4.3.1 IDD
+(`root\iddsampledriver`, from the shipped v4.3.1 package) installed on it; agents swapped by hash
+(4.3.1 = 99480D87, 4.3.2 = 20EC3EC4).
+
+The injection itself works. With `HKLM\SOFTWARE\QubesIDD!SoloFaultInject=2` the agent logs
+`the apply will be made to FAIL on purpose and the rollback is SUPPRESSED`, aims set-primary at
+`\\.\DISPLAY_QUBES_FAULT_INJECT` and gets -5 (DISP_CHANGE_BADPARAM) - exactly the pre-fix sequence.
+
+**But the state it exists to prevent is unreachable on this platform.** Three attempts:
+
+1. IDD already attached+primary, VGA attached: pass detaches the VGA, apply fails -> IDD still
+   attached, one display. Nothing lost.
+2. VGA attached+primary, IDD DETACHED (the shape of GWeck's post-reboot guest): pass detaches the
+   VGA, apply fails -> readback shows BOTH attached again. Windows re-attached them.
+3. Agent held out entirely (`NoTopologyApply=1`) and both displays detached by hand with
+   CDS_UPDATEREGISTRY: Windows refused the last detach and re-attached the IDD (attached=1).
+
+So Windows 10 22H2 will not leave this guest with zero attached displays, and the persisted-headless
+state that `6ea0822` guards against could not be produced. Consequences, stated plainly:
+
+- `6ea0822` ("never leave the desktop with no attached display") is a plausible defensive guard whose
+  PASS is **UNPROVEN**. It has never been seen to fail, so it must not be reported as the fix for
+  post 54's black window.
+- GWeck's "black inactive window" is therefore **NOT explained** by the zero-display mechanism on a
+  stock Win10 22H2 + our IDD. Something else on his box produces it (his display config: laptop panel
+  disabled, external 1920x1200 on Intel). The one artifact that would settle it is the gui-agent log
+  from a BLACK boot - `Q:\Qubes Logs\gui-agent-*.log`, retrievable over qrexec with no display at all.
+- Repeated `devcon disable/enable` cycling of the IDD wedged the guest (qrexec stopped answering) and
+  left the device in Error state; recovered with kill/start + `devcon remove` + `devcon install`. Do
+  not cycle the IDD device as a test trigger.
+
+Rig note: win10-tpl's previous agent (3D2E6BCE, version string 4.2.2.0) was overwritten by 4.3.2 -
+`useagent.ps1` keeps no backup, unlike the win11-fresh swap which kept `.devbuild`.
