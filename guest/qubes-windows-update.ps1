@@ -165,6 +165,11 @@ function Get-Available {
 # because DO does its own peer/CDN transport and does not reliably honour the WinHTTP proxy that
 # Ensure-Proxy sets - and a qube has no other way out.
 function Install-ViaWU {
+  # $OnlyKbs limits the pass to specific KBs. Used as the FALLBACK for updates the Update
+  # Catalog cannot serve: Defender definitions and the Malicious Software Removal Tool are not
+  # .msu packages at all, so Resolve-Catalog will never find them, and without this they are
+  # reported failed on every pass forever - dom0 keeps showing updates that can never clear.
+  param([string[]]$OnlyKbs = @())
   # Delivery Optimization: no peering (99 = simple), and no background throttling. A qube's only
   # path out is the updates proxy, which is up ONLY during this pass, so there is nothing to be
   # polite to - the usual reason WU downloads slowly in the background does not apply here.
@@ -184,10 +189,15 @@ function Install-ViaWU {
 
   $coll = New-Object -ComObject Microsoft.Update.UpdateColl
   foreach ($u in $found.Updates) {
+    if ($OnlyKbs.Count -gt 0) {
+      $kbs = @($u.KBArticleIDs) | ForEach-Object { "KB$_" }
+      if (-not (@($kbs | Where-Object { $OnlyKbs -contains $_ }).Count -gt 0)) { continue }
+    }
     if (-not $u.EulaAccepted) { try { $u.AcceptEula() } catch {} }
     [void]$coll.Add($u)
     Log ("WU: selected " + $u.Title)
   }
+  if ($coll.Count -eq 0) { Log 'WU: nothing matched the requested KBs'; return @() }
   $script:St.count = $coll.Count; Save
 
   $script:St.phase='download'; Save
@@ -712,6 +722,8 @@ try {
     return
   }
 
+  # KBs the catalog cannot serve; handed to the Windows Update installer after the loop.
+  $script:WuFallbackKbs = @()
   if ($Action -in 'resolve','download','full','install') {
     foreach($u in $avail){
       if($u.kb -notmatch '^KB\d+'){ Log "skip (no KB): $($u.title)"; continue }
@@ -778,6 +790,16 @@ try {
       if ($Action -in 'install','full' -and $got.Count -eq 0) {
         $why = if ($urls.Count -eq 0) { 'no catalog entry matches this Windows version/architecture' }
                else { "resolved $($urls.Count) package(s) from the catalog but none could be downloaded" }
+        # Before calling it failed: some updates are NOT catalog packages at all. Defender
+        # definitions (KB2267602) and the Malicious Software Removal Tool (KB890830) are
+        # delivered only through Windows Update, so Resolve-Catalog can never find them and
+        # every pass would report them failed - leaving dom0 showing updates that never clear.
+        # Hand exactly those to WU's own installer after this loop.
+        if ($urls.Count -eq 0) {
+          $script:WuFallbackKbs += $u.kb
+          Log "$($u.kb): no catalog package exists for this update - deferring it to the Windows Update installer"
+          continue
+        }
         $script:St.result += [ordered]@{ kb=$u.kb; ok=$false; files=@(); reason=$why }
         Save
         Log "$($u.kb): NO installable package resolved - reporting as failed"
@@ -812,6 +834,32 @@ try {
       }
     }
   }
+  # Updates that are not catalog packages: install them the only way they CAN be installed.
+  if ($Action -in 'install','full' -and $script:WuFallbackKbs.Count -gt 0) {
+    $script:WuFallbackKbs = @($script:WuFallbackKbs | Sort-Object -Unique)
+    Log ("Windows Update fallback for " + ($script:WuFallbackKbs -join ',') + " (no catalog package exists for these)")
+    try {
+      $wuRows = Install-ViaWU -OnlyKbs $script:WuFallbackKbs
+      foreach ($row in $wuRows) { $script:St.result += $row }
+      $done = @($wuRows | Where-Object { $_.ok }).Count
+      Log "Windows Update fallback: $done of $($script:WuFallbackKbs.Count) installed"
+      # Anything the fallback did not cover is still a failure, and dom0 must hear it.
+      foreach ($kb in $script:WuFallbackKbs) {
+        if (-not (@($wuRows | Where-Object { $_.kb -eq $kb }).Count -gt 0)) {
+          $script:St.result += [ordered]@{ kb=$kb; ok=$false; files=@()
+                                           reason='no catalog package, and the Windows Update installer did not offer it either' }
+        }
+      }
+      Save
+    } catch {
+      Log "Windows Update fallback failed: $($_.Exception.Message)" 'ERROR'
+      foreach ($kb in $script:WuFallbackKbs) {
+        $script:St.result += [ordered]@{ kb=$kb; ok=$false; files=@(); reason="Windows Update fallback failed: $($_.Exception.Message)" }
+      }
+      Save
+    }
+  }
+
   # Re-report availability at the END of an install pass, so dom0's "updates available" marker
   # reflects reality instead of the pre-install scan. Two cases:
   #  - a reboot is pending: Windows keeps offering the KB until it boots, so any count now would
