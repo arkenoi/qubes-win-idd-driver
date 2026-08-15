@@ -418,9 +418,22 @@ static class Relay
             {
                 NetworkStream a = inbound.GetStream();
                 int maxTries = PlainRetries() + 1;
-                for (attempts = 1; attempts <= maxTries; attempts++)
+                // A DEAD WARM CHANNEL IS NOT A FAILED REQUEST. Measured 2026-08-15 during a
+                // Windows Update metadata sync: attempts failed at ~400 ms intervals with
+                // bytes=0 headers=False, then a later attempt on a fresh channel returned the
+                // file intact - the pooled channel had already been closed at the far end, so
+                // the write went nowhere and the read saw EOF. Counting those against the retry
+                // budget burned all five attempts on dead channels and handed Windows Update an
+                // empty metadata file, which is how a scan can report "0 updates available"
+                // while the guest is in fact behind. Give dead channels their own bounded
+                // allowance and stop drawing from the pool for the rest of this request.
+                int deadChannels = 0;
+                const int MaxDeadChannels = 8;   // the pool target; cannot outlive the pool
+                bool avoidWarm = false;
+                for (attempts = 1; attempts <= maxTries; )
                 {
-                    Ready ch = TakeWarm();
+                    Ready ch = avoidWarm ? null : TakeWarm();
+                    bool wasWarm = ch != null;
                     if (ch == null) ch = await OpenChannel(self, target, user, logPath);
                     if (ch == null) break;
                     HttpResponse r = null;
@@ -446,7 +459,18 @@ static class Relay
                     // pass-through rather than being retried on a guess.
                     bool usable = r != null && r.HeadersFound && (r.Complete || !r.LengthKnown);
                     if (usable) break;
-                    Log(logPath, "PLAIN incomplete attempt=" + attempts
+                    // Nothing at all came back on a channel we took from the pool: that is the
+                    // channel, not the server. Retry on a fresh one without spending an attempt.
+                    if (wasWarm && (r == null || (!r.HeadersFound && r.Bytes.Length == 0)) &&
+                        deadChannels < MaxDeadChannels)
+                    {
+                        deadChannels++;
+                        avoidWarm = true;
+                        Log(logPath, "PLAIN dead warm channel (" + deadChannels + ") - fresh channel, attempt " + attempts + " not spent");
+                        continue;
+                    }
+                    attempts++;
+                    Log(logPath, "PLAIN incomplete attempt=" + (attempts - 1)
                                  + " bytes=" + (r == null ? -1 : r.Bytes.Length)
                                  + " headers=" + (r != null && r.HeadersFound)
                                  + " got=" + (r == null ? -1 : r.GotBody)
