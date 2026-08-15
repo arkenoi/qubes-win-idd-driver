@@ -10684,3 +10684,37 @@ GetRealWindowRect multiplies both axes by a DPI scale that can exceed 1.
 **Next, not done:** bound the wait for the daemon's confirm (a capture gate that never opens is
 indistinguishable from a dead qube), and sweep windows that disappeared while the screen window was
 down. Both need their own defect-present/defect-absent pair; neither is shipped.
+
+## 2026-08-15 (late) — RETRACTION: the capture gate does NOT stop windows being announced
+
+I wrote earlier today that while `g_LocalScreenDestroyed` is set "NO NEW WINDOW CAN EVER APPEAR" and
+that this "explains GWeck's #16 and #17 exactly". **That is overstated and I withdraw it.** The
+injector built to prove it disproved it instead.
+
+With `CaptureGateFaultInject=7` (confirm suppressed, deadline disabled, capture error raised on
+purpose), the gate opened and a brand-new window was announced anyway:
+
+    CAPTUREGATE CaptureGateFaultInject: raising a capture error on purpose to open the gate
+    CAPTUREGATE capture error - screen window destroyed, waiting for the gui-daemon confirm
+    SendWindowUnmap: Unmapping window 0x0
+    SendWindowMap: Mapping window 0x1201c6      <- a window mapped AFTER the gate opened
+
+So `ProcessWindowEvents` being skipped is not the whole story: some other path still announces
+windows in that state. The code-level reading (main.c:6196-6199 discards window events) is correct;
+the CONSEQUENCE I drew from it is not.
+
+What the defect run DID show, which is a real fault worth fixing: with the confirm suppressed the
+daemon eventually dropped the connection, and the agent then sat in "Awaiting for a vchan client"
+until the first-boot self-heal fired at 90 s and respawned it. So the user-visible cost of a gate
+that never opens is a session outage of at least 90 s, not a permanent freeze.
+
+The deadline fix (15 s, two re-sends, then respawn) shortens that and makes it explicit in the log,
+and it is committed - but it is **NOT PROVEN**: the fix-side run never reached the gate, because by
+then the rig had been churned into a state where no daemon client attached, so the injector's own
+precondition (g_VchanClientConnected) never held. Rig rebooted clean; injectors disarmed.
+
+To finish this properly: run the pair on a freshly booted guest, fault=7 then fault=5, each with a
+confirmed vchan client before the injected error, and compare the time from the injected capture
+error to a working session. Until that exists, the gate fix is defensive code with a plausible
+rationale and no demonstration - the same status as the work-area fix, and it must be described
+that way.
