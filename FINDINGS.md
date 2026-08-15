@@ -10718,3 +10718,42 @@ confirmed vchan client before the injected error, and compare the time from the 
 error to a working session. Until that exists, the gate fix is defensive code with a plausible
 rationale and no demonstration - the same status as the work-area fix, and it must be described
 that way.
+
+## 2026-08-16 — the capture gate fix is PROVEN, and the other half of the fault is upstream
+
+Same binary (A9F0897F), one registry flag apart, freshly booted guest each time, precondition
+asserted before every run (a gui-daemon client MUST be connected before the injected capture error,
+or the run aborts as VOID - the earlier attempts that "passed" had silently skipped this):
+
+    CaptureGateFaultInject=7  (confirm ignored, deadline DISABLED = pre-fix)
+        capture error injected -> agent did NOT respawn within 120 s, no recovery within 300 s.
+        It simply sits with the gate shut, doing nothing, for as long as anyone waits.
+
+    CaptureGateFaultInject=5  (confirm ignored, deadline ENABLED = the fix)
+        capture error injected -> "no confirm from the gui daemon in 15000 ms - re-sending the
+        screen destroy (attempt 1 of 2)" -> agent respawned 19 s after the error.
+
+**The full chain, now evidenced rather than modelled.** The gate opens (capture error). The confirm
+does not come. The agent's re-send finds the vchan already dead (`A6EXIT ... open=0`). It exits, the
+watchdog respawns it - and dom0's gui-daemon for that qube never comes back, so every later instance
+waits for a client that will never arrive. The qube keeps answering qrexec and shows nothing, and
+only restarting the qube fixes it. That matches the field reports far better than the "no window can
+ever appear" story I retracted yesterday, and this time each step has a log line behind it.
+
+The daemon half is NOT ours to fix and is already on the reportable list (CLAUDE.md upstream
+exception): `handle_vchan_error` never consults `vchan_at_eof`, so a disconnect noticed on the WRITE
+path skips the restart the daemon otherwise implements. Our agent cannot restore a daemon that has
+exited; what it can do is stop hanging silently, act within 19 s, and say what happened.
+
+Which is the second half of this change: a one-DWORD marker written the first time a client
+connects. Without it every respawned agent reported "no gui-daemon client ... and NONE EVER
+CONNECTED", which is false after a lost session and sends the reader to check the qube's gui feature
+instead of the daemon. Seen firing in the fix run:
+
+    no gui-daemon client in 90000 ms - exiting so the watchdog respawns the agent (attempt 1 of 3).
+    This guest HAS had a daemon before, so this is a LOST session, not a first boot: dom0's
+    gui-daemon for this qube most likely exited.
+
+Also fixed here: my own injector was gated on `captureGateFault != 2` after the knob became bit
+flags, so the "defect-present" value 7 kept the deadline ON and the first run measured the fix
+against itself. A knob that cannot express the defect is worse than no knob.
