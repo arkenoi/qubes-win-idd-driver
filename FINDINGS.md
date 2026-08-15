@@ -10485,3 +10485,44 @@ set must be reset between runs or the A/B measures nothing.
 
 Also surfaced (not yet acted on): `guest/resize-sync.ps1:40` is a SECOND writer of
 `HKLM\SOFTWARE\QubesIDD!Modes` and can race the agent's own publication.
+
+## 2026-08-15 (night) — the rest of the list: three more fixes, one honest "unproven"
+
+Driven by workflow wf_cdf94a84 (4 defects, each diagnosed then attacked by an adversary).
+
+**1. A second writer of the agent's mode set - REMOVED.** `guest/resize-sync.ps1` wrote
+`HKLM\SOFTWARE\QubesIDD!Modes` as a SINGLE-entry list (`-Value @($size)`) and replugged the device.
+That does not merely race the agent's publication, it destroys the set: the target slot, the LRU of
+recent dom0 sizes, the habitual work-area sizes, and the host entry that seamless REQUIRES (without
+it the seamless force fails DISP_CHANGE_BADMODE). It was the v0 prototype of a loop whose production
+home is the agent - its own header says so - nothing called it and it never shipped in a package, so
+it is deleted rather than defanged. (The reviewing agent preferred making it read-only; deleting a
+destructive stray that git history still holds is the smaller surface.)
+
+**2. A ceiling we do not have is not a ceiling of zero - FIXED.** `SelectSupportedMode` filtered
+every candidate against `g_HostScreenWidth/Height`, which are 0 until HandleXconf assigns them and
+stay 0 if msg_xconf carried zero (nothing validates it). At zero the filter rejects EVERY mode and
+the tail returned index 0 - an arbitrary adapter mode, unrelated to the request and not even inside
+the ceiling just enforced - which SetVideoMode then PERSISTS as FullscreenWidth/Height, so the next
+boot asks for it again. Unset bounds now mean no ceiling; a genuine no-fit returns MAXDWORD ("no
+opinion") and the guest keeps its current resolution. Reachability, not oversold: with the IDD
+present the exact-follow path bypasses this function, so it matters mainly for a non-IDD guest and
+for anything reaching the snapper before xconf. `ModeCeilingFaultInject` re-introduces it - and on
+an IDD guest it MUST be paired with `ModeSnapFaultInject=1` or the run proves nothing, which is
+exactly the trap this project keeps falling into.
+
+**3. Two guest-log defects - FIXED.** `GetWindowData` logged every dead-window race at ERROR
+(E_HANDLE from DwmGetWindowAttribute when a window closes between enumeration and measurement) -
+dozens of lines a minute on an idle guest, which is how a real failure gets missed; only that one
+status is demoted. `WorkAreaApply` had the worse one: it stored `g_WaLastApplied` BEFORE attempting
+the apply, so a REFUSED apply was remembered as applied - the next pass saw "unchanged", returned
+early, and the guest kept a work area Windows never accepted with nothing retrying it. The rect is
+now clipped to the desktop that actually exists (dom0's feed describes dom0's window; the guest
+desktop can legitimately be smaller, briefly so during a mode change), the refusal names the
+rectangle and the desktop, and the applied rect is recorded only after Windows accepts.
+
+**UNPROVEN, and said so rather than proxied:** the work-area fix. The failing condition
+(SPI_SETWORKAREA refused every 30 s) was observed on win11-fresh but could NOT be reproduced on
+win10-tpl - in fullscreen with no dom0 work-area feed `WorkAreaApply` never runs, and forcing a
+smaller desktop behind the agent's back did not take. It is correct by construction (recording an
+apply that was refused is plainly wrong) but it ships without a defect-present/defect-absent pair.
