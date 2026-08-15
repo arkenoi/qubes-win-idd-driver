@@ -10757,3 +10757,53 @@ instead of the daemon. Seen firing in the fix run:
 Also fixed here: my own injector was gated on `captureGateFault != 2` after the knob became bit
 flags, so the "defect-present" value 7 kept the deadline ON and the first run measured the fix
 against itself. A knob that cannot express the defect is worse than no knob.
+
+## 2026-08-16 — the ACCESS_LOST root cause is OURS, and it is at boot
+
+Workflow wf_426983cc ranked the triggers by recorded evidence rather than by mechanism, and the
+answer is not the one the mechanism suggests.
+
+**#1, and 17 of 24 recorded natural events: we hot-unplug the monitor two statements before we
+create the duplication.** `ResolutionPublishBootModeSet` wrote the boot mode set and then made it
+live with an IOCTL reload; the driver answers a reload by departing and re-arriving the monitor -
+unconditionally, without comparing the sets - which is a hot unplug. `StartFrameProcessing` then
+built the desktop duplication into a topology still settling from that replug. FINDINGS 4113 has a
+single cold boot with 8 transient 0x887a0026 including a CaptureInitialize that failed outright, and
+`StartFrameProcessingWithRetry`'s retry loop exists to survive exactly this.
+
+Nothing needed that reload: the desktop is already running at the current size, so its mode is
+offered by definition, and the reload only pre-arms LATER switches - which perform their own obtain.
+The neighbouring `ResolutionRecomputeIddModeSet` already states the discipline ("registry rewrite
+ONLY ... a dom0 panel move must not blink the screen"); it now applies to boot too.
+
+MEASURED, cold boot, one change, same rig:
+
+    boot replug (A9F0897F):  access_lost=4  capture_init_failed=1  a7retry=2  log lines=839
+    no boot replug (363AE675): access_lost=1  capture_init_failed=0  a7retry=0  log lines=443
+
+**#2 is the only trigger proven at millisecond resolution** and it is not ours: the Winlogon ->
+Default input-desktop flip, from GWeck's own log (ACCESS_LOST and "input desktop changed" in the
+same millisecond), once per boot. That is very likely the one event still left above.
+
+**Zero recorded occurrences**, and therefore not ranked: the UAC secure desktop. I disabled
+`PromptOnSecureDesktop` earlier today on reasoning alone, and item #2 is the LOGON flip, not a UAC
+prompt - so that change does not address the proven trigger. It stays (it is sound for seamless, and
+correctly mode-gated after the owner pointed out that fullscreen has a real SAS path), but it must
+not be described as fixing anything measured.
+
+**Strong negative control**: drag, steady-state capture, DWM restart, RDP and host suspend produce
+zero - 16 ddaprobe runs with ACCESS_LOST 0 and re-duplications 0. Novel-size replugs are a blink,
+not a fault: obtain -> reload 16 ms -> offered 281 ms -> applied 344 ms, and habitual sizes cost 0.
+
+### RETRACTED, and it would have been severe
+
+I wrote a "quiesce capture across the mode change" bracket and shipped it to a test build. It could
+never have worked: `CaptureStop` clears `g_CaptureThreadEnable`, and `RecreateDuplication` bails on
+that flag (capture.c:465 "asked to stop while recovering") AFTER releasing the duplication - so
+`CaptureReplugEnd` could only return FALSE, every call site discarded the result, and every mode
+change with live capture would have frozen the qube's pixels permanently and silently. My own
+measurement showed access_lost going UP (3 vs 1) and I read it as noise; the adversary read it as
+the defect. Reverted in full (22fad26, d2b56c6).
+
+The lesson is the one this project keeps relearning: an instrument that cannot fail is worthless,
+and a fix whose own numbers get worse is not "noisy", it is wrong.
