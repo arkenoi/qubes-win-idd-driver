@@ -169,17 +169,26 @@ function Install-ViaWU {
   # Catalog cannot serve: Defender definitions and the Malicious Software Removal Tool are not
   # .msu packages at all, so Resolve-Catalog will never find them, and without this they are
   # reported failed on every pass forever - dom0 keeps showing updates that can never clear.
-  param([string[]]$OnlyKbs = @())
+  param([string[]]$OnlyKbs = @(), [bool]$TunePolicies = $true)
   # Delivery Optimization: no peering (99 = simple), and no background throttling. A qube's only
   # path out is the updates proxy, which is up ONLY during this pass, so there is nothing to be
   # polite to - the usual reason WU downloads slowly in the background does not apply here.
-  $DO = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'
-  SetV $DO 'DODownloadMode'                      99 'DWord'
-  SetV $DO 'DOPercentageMaxBackgroundBandwidth' 100 'DWord'
-  SetV $DO 'DOPercentageMaxForegroundBandwidth' 100 'DWord'
-  SetV $DO 'DOMaxBackgroundDownloadBandwidth'     0 'DWord'   # 0 = unlimited
-  SetV 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\BITS' 'EnableBITSMaxBandwidth' 0 'DWord'
-  Log 'Delivery Optimization: simple mode, no background throttle (proxy is up only for this pass)'
+  #
+  # These are MACHINE-WIDE POLICY writes and they persist. That was an acceptable price when
+  # this function was an opt-in path for multi-gigabyte cumulatives. It is NOT acceptable on the
+  # non-catalog fallback, which fires on almost every pass - Defender definitions are published
+  # several times a day - and would leave every guest's Delivery Optimization and BITS policy
+  # rewritten as a side effect of routine definition updates. The fallback passes $false: a few
+  # megabytes of definitions do not need the transport tuned.
+  if ($TunePolicies) {
+    $DO = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'
+    SetV $DO 'DODownloadMode'                      99 'DWord'
+    SetV $DO 'DOPercentageMaxBackgroundBandwidth' 100 'DWord'
+    SetV $DO 'DOPercentageMaxForegroundBandwidth' 100 'DWord'
+    SetV $DO 'DOMaxBackgroundDownloadBandwidth'     0 'DWord'   # 0 = unlimited
+    SetV 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\BITS' 'EnableBITSMaxBandwidth' 0 'DWord'
+    Log 'Delivery Optimization: simple mode, no background throttle (proxy is up only for this pass)'
+  }
 
   $session = New-Object -ComObject Microsoft.Update.Session
   $searcher = $session.CreateUpdateSearcher(); $searcher.ServerSelection = 2; $searcher.Online = $true
@@ -835,14 +844,36 @@ try {
     }
   }
   # Updates that are not catalog packages: install them the only way they CAN be installed.
+  #
+  # NOT if this session already staged something. CBS applies exactly ONE staged session per
+  # boot and silently discards anything staged behind it (measured twice, 2026-08-14, with
+  # RebootPending confirmed and TiWorker idle - it is not a shutdown race). The catalog path
+  # already stops for that reason; letting Windows Update install into the same session
+  # afterwards would walk straight back into it, and the discarded package would be reported
+  # as installed. dom0 drives a second pass, which is where these belong.
+  if ($Action -in 'install','full' -and $script:WuFallbackKbs.Count -gt 0 -and
+      ($script:StagedThisSession -or $script:St.reboot_needed) -and -not $env:QUBES_UPDATES_ALLOW_MULTISTAGE) {
+    foreach ($kb in $script:WuFallbackKbs) {
+      $script:St.result += [ordered]@{ kb=$kb; ok=$false; files=@()
+                                       reason='deferred: a reboot-requiring package is already staged this session; the next pass installs this' }
+    }
+    Save
+    Log ("Windows Update fallback DEFERRED for " + ($script:WuFallbackKbs -join ',') +
+         " - something is already staged this session and CBS would discard a second one")
+    $script:WuFallbackKbs = @()
+  }
   if ($Action -in 'install','full' -and $script:WuFallbackKbs.Count -gt 0) {
     $script:WuFallbackKbs = @($script:WuFallbackKbs | Sort-Object -Unique)
     Log ("Windows Update fallback for " + ($script:WuFallbackKbs -join ',') + " (no catalog package exists for these)")
     try {
-      $wuRows = Install-ViaWU -OnlyKbs $script:WuFallbackKbs
+      $wuRows = Install-ViaWU -OnlyKbs $script:WuFallbackKbs -TunePolicies $false
       foreach ($row in $wuRows) { $script:St.result += $row }
       $done = @($wuRows | Where-Object { $_.ok }).Count
       Log "Windows Update fallback: $done of $($script:WuFallbackKbs.Count) installed"
+      # Install-ViaWU sets St.reboot_needed when Windows asks for one. Say so here too: a
+      # definition update normally needs no reboot, and if one of these ever does, that is
+      # exactly the fact the next pass has to know about.
+      if ($script:St.reboot_needed) { Log 'Windows Update fallback: a reboot is required to finish' }
       # Anything the fallback did not cover is still a failure, and dom0 must hear it.
       foreach ($kb in $script:WuFallbackKbs) {
         if (-not (@($wuRows | Where-Object { $_.kb -eq $kb }).Count -gt 0)) {
