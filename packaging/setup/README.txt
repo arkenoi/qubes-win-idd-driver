@@ -220,6 +220,25 @@ caught the defect in the first place.
 
 UPGRADING FROM STOCK QWT
 ------------------------
+
+READ THIS FIRST (changed in 4.3.2). If the guest's C: disk is already served by the Xen PV
+disk driver, this installer will REFUSE to remove an installed QWT, and /acceptpvdiskupgrade
+no longer overrides it. The reason, measured on 2026-08-15:
+
+  * the PV drivers UNPLUG the emulated disk. A healthy guest in that state has exactly ONE
+    disk (XENSRC PVDISK); the IDE controller is still listed, with nothing behind it;
+  * remove the PV disk driver and the next boot has no disk at all -> 0x7B INACCESSIBLE BOOT
+    DEVICE, and under Qubes the qube is destroyed at the bugcheck;
+  * nothing done from inside the guest brought it back: re-arming the inbox ATA drivers has
+    nothing to bind to, and un-masking the emulated IDE channel (or removing the whole Xen bus
+    stack from the boot path) reaches Windows Automatic Repair but not a normal boot. Safe mode
+    "works" only because it loads none of those drivers.
+
+The supported upgrade is therefore the IN-PLACE one: install a package whose version is HIGHER
+than the installed one. Windows Installer then performs a major upgrade, the PV disk driver is
+never removed, and no intermediate reboot is needed. Verified end to end on a genuine stock
+4.2.2 guest: it upgraded in place and came back with the boot disk still on the PV path.
+
 NOTE: everything in this section concerns the uninstall-first flow only. The
 normal upgrade from stock is the in-place MSI major upgrade above, which
 never removes the PV disk driver and does not have this failure mode.
