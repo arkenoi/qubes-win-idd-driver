@@ -10932,3 +10932,50 @@ The test therefore moved to win10-clean, where the numbers are exact rather than
 
 so a 200-restart run crosses the threshold inside itself. At 103 restarts: zero grant failures, a
 daemon client connected on every iteration.
+
+## 2026-08-16 — the per-window grant leak, end to end, all four steps measured
+
+Chain, with nothing inferred:
+
+1. **The shipped driver never returns a reference.** xeniface's only RevokeForeignAccess call is the
+   argument of an ASSERT, which release builds compile out - established by disassembling the
+   xeniface.sys inside our own vendored MSI, with two same-binary controls ruling out an optimiser
+   artefact.
+2. **Per-window capture spends ~3819 refs per window APPEARANCE, permanently.** Defect-present run
+   on 363AE675, fresh domain, window open/close churn:
+
+       cycle 250 : attaches=251 grant_failures=0
+       cycle 275 : attaches=272 grant_failures=8   -> EXHAUSTED
+
+   The arithmetic predicted ~274 (1,048,576 refs / 3819). It broke at 272. Nothing anywhere was
+   reclaiming them - the question "was this already mitigated somewhere?" is answered: no.
+3. **The degraded state is INVISIBLE, which is what makes it dangerous.** With the pool exhausted
+   the agent stays alive, PwAttachWindow fails, and the window is mapped on the legacy screen-slice
+   path instead: frames keep flowing (QGAPERF seq 1643 -> 1708) and a window opened AFTER exhaustion
+   renders perfectly - captured and read back, title bar, menu, caret and status bar all correct.
+   The guest has silently reverted to stock-style capture and looks fine.
+4. **The next agent restart kills the GUI outright.** Killing the agent in that state:
+
+       agent_alive=False   client connected: 0
+       XcGnttabPermitForeignAccess2 ... failed: 0x5aa
+       init_gnt_srv: Granting ring to domain 0 failed
+       WinMain: WatchForEvents failed with error 0x5aa
+       dom0 window list: EMPTY
+
+   qrexec still answers. Only restarting the qube recovers it.
+
+So the user-visible shape is: use applications normally for an afternoon, notice nothing, and then
+the first crash/watchdog respawn/mode toggle leaves a running qube with no GUI. That is the class of
+report we have been chasing all week, arrived at from the other end.
+
+**Fixed by the slab pool** (agent 100a9bb), measured on the same rig:
+
+    123 window attaches -> 5 slabs granted; the last 80 attaches granted NOTHING
+
+References now scale with peak concurrent windows instead of window history. The 5-rather-than-1 is
+the 2 s quarantine overlapping a 1.5 s churn cycle - a slab is not handed to a new window while dom0
+may still be compositing the previous one from it.
+
+STILL OPEN: the staging grant is 7200 pages per AGENT START (~144 restarts to exhaustion, measured
+separately). That one needs an owner that outlives the agent process - a holder service, or the IddCx
+driver granting its own framebuffer (CLAUDE.md Phase 1B Outcome B).
