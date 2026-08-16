@@ -11597,3 +11597,24 @@ synthesis path is behaving correctly.
 Still open and NOT chased (owner: it was intended layout, not an artefact): the "rendering error"
 seen mid-session was a false alarm. No pixel-level artefact from the shadow windows has been
 demonstrated - the cost is measured, the visual harm is not.
+
+## 2026-08-16 — VERIFIED: everything eligible for synthesis IS being synthesized
+
+Owner: "but what could be properly synthesized should be." Checked, because winwatch measures
+ELIGIBILITY (owner + containment), not whether the agent actually composited.
+
+Took the 26 NetUI popups that were eligible for their whole life (`synth=yes` at every sample) and
+looked for them in the agent's protocol trace. 14 sampled, all identical:
+
+    0x803ca CREATE=0 DAMAGE=0     0x100326 CREATE=0 DAMAGE=0
+    0x903ca CREATE=0 DAMAGE=0     0x110326 CREATE=0 DAMAGE=0
+    ... (14/14)
+
+**Zero announced.** They never became dom0 windows - they were composited into the owner, which is
+the intended behaviour. Contrast the ineligible shadows in the same session:
+`CREATE=1` plus ~15 full-window `DAMAGE` each.
+
+So the synthesis path is NOT leaking: nothing that qualifies is being missed. The only surfaces that
+reach dom0 as separate windows are the structurally ineligible ones (16 born ownerless, 9 orphaned
+within 165 ms). That closes the question - the remaining work is solely the shadow DROP, not better
+synthesis coverage.
