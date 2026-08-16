@@ -10838,3 +10838,58 @@ must not be described as a known guest-side leak.
 
 The watchdog backoff added for it stands on its own merits - respawning a fast-failing agent once a
 second helps nothing - but its stated justification was wrong and is corrected here.
+
+## 2026-08-16 — the grant leak is REAL after all, and the cause is in the shipped xeniface binary
+
+I retracted the grant-leak finding earlier today on a 14-kill test. **That retraction was wrong, and
+the test was incapable of failing.** Workflow wf_8d8cb19b did not stop at the source: it extracted
+`xeniface.sys` from our own `vendor/qwt-4.2.2/installer.msi` (sha256 a5f666e3c7b4...) and
+disassembled it.
+
+**Release builds of xeniface never revoke a grant.** The only `RevokeForeignAccess` call in the
+driver is the ARGUMENT OF AN ASSERT (`xeniface/src/xeniface/ioctl_gnttab.c:151-157`), and in a
+non-DBG build `ASSERT(_EXP)` expands to `__analysis_assume(_EXP)` (`assert.h:128-136`) - the
+expression is compiled out. Confirmed in the shipped binary, not inferred: `strings` finds no
+"ASSERTION FAILED" (DBG=0), and `GnttabStopSharing` (0x14000b1c0) does `memset` +
+`ExFreePoolWithTag` and makes NO calls through the CFG dispatch slot every xenbus interface call
+uses. Two functions in the same binary whose interface calls sit OUTSIDE an ASSERT
+(`GnttabPermitForeignAccess`, `GnttabFreeMap`) do emit that call - so this is the ASSERT being
+elided, not an optimiser artefact.
+
+Consequences, all mechanical:
+  - `GnttabStopSharing` is the sole teardown path, reached from BOTH the revoke IOCTL and IRP
+    cancellation on process death, so a graceful exit and `taskkill /f` are bit-identical: neither
+    revokes anything.
+  - The IOCTL returns STATUS_SUCCESS regardless, so our own `STAGING revoked on exit` line is a
+    FALSE SUCCESS and the "dom0 still maps, leaking" warning is unreachable for the stated reason.
+  - A reference returns to the pool only via the `Put` inside `GnttabRevokeForeignAccess`, which is
+    never called. Every ref the guest allocates is gone until the domain is destroyed.
+
+**Why my 14-kill test could not fail.** The host gives 2048 max grant frames = ~1,048,576 refs;
+14 kills x ~4000 staging pages = 56,000 refs, 5% of the pool. It measured that the pool is big.
+
+**What is NOT reachable on this system**: the dominant consumer the analysis identifies -
+per-window grants at attach and every resize (~2025 refs per 1080p window, ~518 events to exhaust) -
+because per-window capture never attaches here. `PwInit: per-window capture ENABLED (daemon version
+gate applies at attach)` is logged, and no attach ever follows: this dom0's gui-daemon does not meet
+the version gate. Measured twice, including on a clean boot: 700 resizes, `pw_attaches=0`. So on
+THIS host the leak rate is bounded by staging grants (~7200 pages per agent start at 5120x1440) and
+vchan rings (33 pages each, per agent start and per qrexec invocation) - predicting exhaustion at
+roughly 145 restarts rather than 14. That prediction is now under test.
+
+**The fix is not a patch to xeniface.** It is XenProject's, pinned at 9cd9a604 and fetched at build
+time; we take headers only and stage the signed .sys bit-identical from the vendored MSI. Fixing it
+would mean building and test-signing a PV driver, and it would still be insufficient - with dom0
+mapping the pages, the revoke's 100-attempt CAS cannot match and loses the reference anyway. It is
+reportable upstream under the CLAUDE.md exception, with the owner's approval of the text.
+
+**The elimination that works with the driver exactly as shipped**: one grant arena per boot, owned
+by something that never dies, sub-allocated to every consumer, never revoked. Total refs per boot
+becomes a constant - independent of restarts, resizes and window count - so exhaustion is impossible
+by construction. The kernel-owned version (our IddCx driver grants its own framebuffer at load) is
+CLAUDE.md Phase 1B Outcome B and is a project; a user-mode holder service that does nothing but hold
+the section is a strict prerequisite of it and ships far sooner.
+
+METHOD NOTE, the fourth this session: this test was void three times before it was valid - no daemon
+attached, then no grants issued, then per-window capture not attaching. Every one of those runs
+printed a clean "zero failures". A precondition that is not asserted is a result that is not real.
