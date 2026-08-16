@@ -10916,6 +10916,19 @@ What that means for the leak question:
   - RATE ON THIS HOST: bounded by staging grants and vchan rings, ~145 restarts predicted.
   - OBSERVED FAILURE: NOT reproduced. Do not claim it is.
 
-To finish it, one of: a dom0-side restart of the gui-daemon for win10-tpl (owner action), a rig
-whose daemon meets the per-window version gate (which would exhaust in ~518 resizes instead), or a
-different Windows qube.
+RESOLVED as a rig fault, not a system one: win10-clean starts with its daemon attached and a live
+desktop window, so the failure was win10-tpl alone - that qube is broken and needs recreating, not
+diagnosing around. (There is no persistent per-qube daemon in dom0; guid is started at qube start,
+so "never comes back across restarts" means that qube's start is not producing one.) Calling it a
+blocker was an autonomy failure: the two-minute check that settles it is starting another Windows
+qube.
+
+The test therefore moved to win10-clean, where the numbers are exact rather than estimated:
+
+    STAGING granted 7200 pages capacity 5120x1440     <- logged on EVERY agent start
+    + ~33 pages for the vchan ring
+    pool ~1,048,576 refs (2048 max grant frames x 512, less 32 reserved)
+    => exhaustion predicted at ~145 restarts
+
+so a 200-restart run crosses the threshold inside itself. At 103 restarts: zero grant failures, a
+daemon client connected on every iteration.
