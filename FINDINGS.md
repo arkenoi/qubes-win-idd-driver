@@ -11038,3 +11038,80 @@ as a precision instrument.
 event forces a full-window recapture at input rate. A move now only sets `PwCropStale`; the settle
 handler applies it, where a recapture is already scheduled - the correction is free and lands before
 the repaint, so the first post-drag frame is already correct.
+
+## 2026-08-16 — where the frame rate actually goes, and why drag is not smoother
+
+### The agent is not the bottleneck: 0.7 % of the frame budget
+
+win10-clean on the IddSampleDriver (5120x1440@60, BDA disabled), full-rate damage load, 900 frames,
+`PerfLog=1 PerfEveryN=1`:
+
+| metric | p50 (us) |
+|---|---|
+| frame interval `dt` | 16868 -> **59.3 fps** |
+| `AcquireNextFrame` blocked (`acq`) | 15091 |
+| **agent total (`tot`)** | **114** |
+| damage `dmg` / wake `wak` / enum `enu` / send `snd` | 53 / 75 / 5 / 0 |
+
+The agent spends 114 us per 16.9 ms frame. The other 99.3 % is the capture thread BLOCKED waiting
+for DWM to present. Optimising the agent's frame path buys nothing - that work is not what we wait
+on. p10 fps was 30.4 (`dt` p95 = 34490 = exactly two vblanks), but the load generator is a PowerShell
+WinForms painter, so missed vblanks are plausibly the generator's, not the pipeline's - unproven.
+
+What caps the rate is OUR driver: every published mode was hardcoded 60 Hz and DWM presents at the
+mode rate. Now configurable via `HKLM\SOFTWARE\QubesIDD\ModeVSync` (default 60 = unchanged),
+applied to monitor modes, registry modes AND the target list, since the OS offers the intersection.
+Owner decision 2026-08-16: 60 Hz is fine; the knob ships default-off and unexercised - **not tested
+at any value other than 60**, so raising it is unproven and would need a guest-CPU measurement first
+(no GPU: DWM composites through WARP on the CPU).
+
+### Drag smoothness is capped by the announce rate, not the frame rate
+
+The window only MOVES in dom0 when we send `MSG_CONFIGURE`, and those are paced at
+`InputDragAnnounceMs` = 140 ms: **~7 position updates/s against a 60 fps content stream**. That is
+the stepping, and the two rates are independent.
+
+The pacing is not arbitrary. dom0 sends motion in WINDOW-RELATIVE coordinates and withholds
+`x_root`, so reconstructing an absolute position needs to know which window origin dom0 used for
+that event. We know every origin (we chose them); we do not know WHEN dom0 applied one, so we wait
+`InputDragAdoptMs` = 70 ms to be sure. Announce faster than the apply lag and events become
+ambiguous - each announce moves the origin the next event is measured against, closing the gain-1
+loop that produced the 85.7 %-reversal build.
+
+**dom0 does not tell us either.** Measured on the baseline drag: **541 announces for the drag
+window, 26 inbound configures - 4.8 %.** There is no per-move confirmation to lock onto; the 70 ms
+is a guess because the protocol offers nothing better.
+
+Two ways up, in order of availability:
+1. **Shrink the guess.** 70/140 was chosen conservatively and never measured against dom0's real
+   apply lag. If the true lag is ~30 ms, pacing could roughly halve. In-guest, no protocol change.
+   Requires a SCRIPTED identical mouse path - hand drags are not comparable (see the baseline note).
+2. **Close the gap.** Daemon sends `x_root`, or echoes applied geometry. Deletes the problem, but it
+   is an ENHANCEMENT, not a bug, so it does not qualify for the CLAUDE.md upstream exception and
+   waits for the completed work.
+
+### Hiding guest-native window controls: technically yes, but it costs WM management
+
+Tested on Notepad: stripping `WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_MAXIMIZEBOX` +
+`SWP_FRAMECHANGED` works - `caption_gone: true`, app survives, outer rect unchanged, and seamless
+keeps streaming normally (agent announced the window with `ovr=0` and damage kept flowing).
+
+But the window drops out of dom0's WM-managed window list. dom0's screenshot service selects from
+`_NET_CLIENT_LIST` filtered by `_QUBES_VMNAME` and exits 1 when it captures nothing:
+
+| state | captured |
+|---|---|
+| caption stripped | 0 bytes (2/2 attempts, plus 3 earlier) |
+| caption restored | 20480 bytes (2/2) |
+
+Notepad was the VM's only mapped window, so "nothing captured" means that window specifically left
+the managed list. The consequence is the opposite of the goal: you do not get "dom0 decoration
+only", you get NO decoration from either side - and with it, no dom0 titlebar to move or close by.
+Strictly, what is proven is the service's before/after, not the X property directly.
+
+It would not be uniform anyway: apps that custom-draw their caption (Chrome, Edge, Office, Win11
+Explorer) paint those buttons into the CLIENT area, where no style change reaches them. The result
+would be some windows losing the caption and others keeping it.
+
+Conclusion: not worth doing by style-stripping. If the goal is the double-titlebar look, the layer
+that owns it is dom0's WM decoration policy (off-limits) or the daemon (upstream, later).
