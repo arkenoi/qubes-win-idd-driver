@@ -10979,3 +10979,31 @@ may still be compositing the previous one from it.
 STILL OPEN: the staging grant is 7200 pages per AGENT START (~144 restarts to exhaustion, measured
 separately). That one needs an owner that outlives the agent process - a holder service, or the IddCx
 driver granting its own framebuffer (CLAUDE.md Phase 1B Outcome B).
+
+## 2026-08-16 — drag wobble is still there, and it is the PARKED structural one
+
+Owner dragged a window on win10-clean (pre-pool build 363AE675, 5120x1440) and reported crazy jumps
+plus rendering errors. Both captured with ProtoTrace on:
+
+  - WOBBLE: 2 direction reversals in the last 25 CONFIGURE announces (~8%), against the 16-19%
+    recorded in docs/PLAN-drag-quality.md. This is the PARKED defect, not a regression: gui-daemon
+    sends WINDOW-RELATIVE motion (`k.x = ev->x`) and withholds `ev->x_root`, so the agent adds back
+    an origin that lags and is unobservable mid-drag. Gain-1 correction plus transport lag is an
+    oscillator. The one-line exact fix is in dom0 (forbidden), freeze was rejected, the servo is
+    default-off and judged marginal.
+  - RENDERING: the window came back with its right-hand side BLACK and real content on the left -
+    a per-window buffer filled only where damage covered it.
+
+Announce cadence measured on the same rig, which is the thing PLAN-drag-quality names as "likely the
+largest single remaining factor" and had never been run:
+
+    desktop=5120x1440   announces=295   gap p50=26.0 ms  p95=62.0  mean=122.3
+
+The plan predicted p50 66 ms at this resolution; the measured p50 is 26 ms, so the announce clock is
+better than assumed - but the p95 of 62 ms and a mean dragged to 122 ms by outliers say the TAIL is
+what a user feels, consistent with the earlier bench (tot p50 442 us, p99 40 ms, enu max 600 ms).
+
+**A defect the slab pool introduced, found by that screenshot and fixed immediately**: with buffers
+reused, the unpainted region would have shown the PREVIOUS WINDOW'S pixels rather than black - one
+application's content inside another's frame. Slabs are now zeroed on acquire (agent 2addd20),
+restoring the pre-pool appearance exactly.
