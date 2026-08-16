@@ -11738,3 +11738,44 @@ attach to the input desktop. Running it as the user would break that.
    route and it is a real piece of work, not a tweak.
 
 The knob and the inset discriminator stay wired so route 3 (or a different identity) can reuse them.
+
+## 2026-08-16 — guest title-bar hiding WORKS: helper runs as the window's owner
+
+Retraction first: I concluded this was blocked and recommended the crop route. **Wrong.** The owner
+pointed at an Explorer window (`0x102CA`) that had been sitting caption-less AND dom0-managed for
+hours since a hand experiment - proof the end state was fine and only the caller's identity was
+wrong. I had read past my own evidence.
+
+**Three mechanisms tried, measured, in order:**
+
+| attempt | result |
+|---|---|
+| in-process as SYSTEM | `ERROR_ACCESS_DENIED`, every window |
+| impersonate the owner's token around the call | **also err 5** - USER32 validates window access per-PROCESS, not per-thread |
+| one-shot copy of the agent launched under the owner's token | **works** |
+
+So `HideGuestCaption` duplicates the target window's own process token as a primary token and
+`CreateProcessAsUser`s the agent itself with `--restyle-caption <hwnd>` on `winsta0\default`.
+Handled at the top of `WinMain` before any init: same signed binary, no new component to build,
+sign or install. Fire and forget - the restyle keeps the outer rect (`SWP_NOMOVE|SWP_NOSIZE`), so
+the geometry announced immediately after is correct either way.
+
+**Verified end state**, all three app classes at once:
+
+| window | inset | agent decision | outcome |
+|---|---|---|---|
+| Notepad `0x210320` | 51 | restyle helper launched | `cap=False app=True UNMANAGED=False`; menu row is now the top line |
+| Edge `0x2E02B6` | 0 | own-frame app, keeping its caption | untouched, **8 processes alive**, tabs + its own controls intact |
+| Explorer `0x20244` | 0 | own-frame app, keeping its caption | untouched |
+
+Edge surviving is not luck: the inset discriminator never touches it, which makes the earlier
+unreproduced "strip kills Edge" observation structurally moot rather than merely unrepeated.
+
+**Keep-managed invariant, enforced in the helper too**: add `WS_EX_APPWINDOW` and VERIFY it before
+removing `WS_CAPTION`, because `IsPopup()` calls a window an override-redirect popup unless it has
+`WS_CAPTION` *or* `WS_SYSMENU|WS_EX_APPWINDOW` - so a partial failure would strand it outside dom0's
+managed set with no decoration to move or close by. That state was produced accidentally today by a
+TEST SCRIPT of mine that copied the style half and omitted the exstyle half (Notepad cap=0 sys=1
+app=0, restored by hand). The invariant makes it unreachable.
+
+Default ON; `qvm-features <vm> service.guestTitleBar 1` keeps the guest's own caption.
