@@ -10893,3 +10893,29 @@ the section is a strict prerequisite of it and ships far sooner.
 METHOD NOTE, the fourth this session: this test was void three times before it was valid - no daemon
 attached, then no grants issued, then per-window capture not attaching. Every one of those runs
 printed a clean "zero failures". A precondition that is not asserted is a result that is not real.
+
+## 2026-08-16 — the grant-exhaustion test is BLOCKED on the rig, not answered
+
+The disassembly finding above stands on its own. The live confirmation does not exist, and this
+records exactly why rather than leaving a half-run experiment looking like a result.
+
+Attempted: ~160 agent restarts on win10-tpl, each asserting a connected gui-daemon before the kill,
+watching for 0x5aa. Predicted exhaustion near 145 restarts on this host (staging ~7200 pages per
+agent start; the per-window consumer that would exhaust it in ~518 events is unreachable here - the
+daemon version gate is never met, measured as pw_attaches=0 across 700 resizes on a clean boot).
+
+Blocked by the rig: win10-tpl now has NO gui-daemon in dom0. The guest agent sits at "Awaiting for a
+vchan client" and dom0's window list for the qube is empty - not even the screen window - across
+several full qube restarts. The qube's own config is correct (`gui 1`, `guivm dom0`), so this is
+dom0-side and outside what this environment may touch. Earlier in the same session the daemon
+survived agent kills perfectly (14 in a row, and a single-kill test that reconnected in 3 s), so
+this is a state the rig fell into, not a property of the build.
+
+What that means for the leak question:
+  - MECHANISM: established by disassembly of the shipped binary, independent of any rig state.
+  - RATE ON THIS HOST: bounded by staging grants and vchan rings, ~145 restarts predicted.
+  - OBSERVED FAILURE: NOT reproduced. Do not claim it is.
+
+To finish it, one of: a dom0-side restart of the gui-daemon for win10-tpl (owner action), a rig
+whose daemon meets the per-window version gate (which would exhaust in ~518 resizes instead), or a
+different Windows qube.
