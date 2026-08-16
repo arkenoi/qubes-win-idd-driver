@@ -11819,3 +11819,42 @@ NEXT STEP when this is picked up: get the exact modal (which app, which dialog),
 `tools/winwatch.cs` during the drag - it enumerates override-redirect windows that the screenshot
 service cannot see, and its `ovr`/`synth`/`DEMOTED` columns would show what the agent decided about
 that dialog at the moment of the distortion.
+
+## 2026-08-16 — CONFIRMED BY PIXELS: a synthesized menu is orphaned when its owner is dragged
+
+Owner reproduced it in Explorer and asked for a full-desktop capture (per-window shots are
+structurally blind here - a materialized popup is `ovr=1`, so dom0 never lists it in
+`_NET_CLIENT_LIST` and the screenshot service cannot see it).
+
+**What the capture shows**: Explorer's **Home ribbon panel** (Clipboard / Organise / New / Open /
+Select groups, fully rendered) sitting as its OWN dom0 window, with the qube's red border, on top of
+an unrelated dom0 terminal - far outside the Explorer window it belongs to. (Capture deleted after
+analysis; it was a whole-desktop shot.)
+
+**Mechanism, and it is exactly as predicted from the code** (`main.c:3578-3595`):
+
+    if (!SynthQualifies(c, &stillOwner))
+    {
+        LogInfo("0x%x: owner geometry changed, materializing child", c->Handle);
+        SynthDeactivate(c);
+        c->DeletePending = TRUE;
+    }
+
+A menu is a SEPARATE top-level window and does not move when its owner is dragged. So:
+1. menu opens inside the owner -> synthesized, painted into the owner's buffer;
+2. owner is dragged; the menu stays at its screen position while the owner leaves;
+3. containment fails -> `SynthDeactivate` -> announced as its own dom0 window, bordered, at the
+   position the owner has now left.
+
+It reproduces in Notepad and Explorer because those are the surfaces that measure `synth=yes`
+(contained in the owner). Menus that open OUTSIDE the owner - Edge's 3-dot menu, most context menus
+- are never synthesized and so cannot fall off. "Not always, but in Notepad" is precisely this.
+
+**Proposed fix, still NOT implemented**: materialize a dragged window's synthesized children at DRAG
+START, from the input-drag latch, before the owner moves - so they are announced at their true
+screen position and never travel inside a frozen owner bitmap. Same machinery (`SynthDeactivate` +
+`DeletePending`), trigger moved earlier from "containment already broke" to "the owner is about to
+move". Alternative worth weighing: dismiss the menu instead, which is what a real WM drag does.
+
+Cannot be tested from here - it needs a dom0-driven drag with a menu held open, and guest-side
+SendInput bypasses the dom0 motion path entirely. Needs a hand test on the rig.
