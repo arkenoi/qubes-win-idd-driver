@@ -11364,3 +11364,56 @@ verified here and needs eyes on the display.
 - Interpolation is deliberately NOT an exact model: dom0's origin genuinely steps (it applies each
   configure at one instant). Ramping is a hedge against L's variance (tail at 82, 398 ms). Guessing
   each step edge exactly is what 20/40 tried, and mis-timing one is what reopened the loop.
+
+## 2026-08-16 — window header experiments: what can be removed, and what it costs
+
+Owner asked whether guest window controls can be removed without the window going unmanaged.
+
+**Mechanism (why the first attempt unmanaged the window).** `IsPopup()` (`main.c:1181`):
+
+    BOOL isPopup = !( HasFlags(entry->Style, WS_CAPTION) ||
+                      (HasFlags(entry->Style, WS_SYSMENU) && HasFlags(entry->ExStyle, WS_EX_APPWINDOW)) );
+
+A window becomes a popup -> `override_redirect` -> dom0 does not manage or decorate it, and it leaves
+`_NET_CLIENT_LIST`. The earlier experiment stripped `WS_CAPTION` **and** `WS_SYSMENU`, i.e. BOTH
+branches at once. **The earlier conclusion "removing the caption unmanages the window" is therefore
+too strong and is corrected here**: either branch alone is enough to stay managed.
+
+**Results on Notepad (standard Win32):**
+
+| variant | styles | outcome |
+|---|---|---|
+| no controls, no icon | caption, **no** sysmenu | clean title bar, text only; **managed** (dom0 captured 20480 B) |
+| no controls, **with icon** | caption + sysmenu, no min/max | icon kept, min/max gone, **close ✕ REMAINS** |
+| **no title bar at all** | **no caption** + sysmenu + `WS_EX_APPWINDOW` | no guest header; menu bar becomes the top row; **managed** (888x594 captured) |
+
+Icon-without-close is NOT achievable with styles: the icon IS the system menu, so it needs
+`WS_SYSMENU`, and Windows always renders the close button when that bit is set. Only
+`EnableMenuItem(SC_CLOSE, MF_GRAYED)` exists, which greys the ✕ rather than hiding it.
+
+**dom0-initiated close still works** with `WS_SYSMENU` stripped - tested, because `HandleClose`
+posts `WM_SYSCOMMAND/SC_CLOSE` and removing the system menu could plausibly have broken it:
+
+| trial | closed |
+|---|---|
+| normal window, SC_CLOSE (control) | yes |
+| sysmenu stripped, SC_CLOSE | yes |
+| sysmenu stripped, plain WM_CLOSE | yes |
+
+**Per-app behaviour - this CANNOT be a global default:**
+- **Notepad** (standard caption): works as above.
+- **Explorer** (`CabinetWClass`, standard caption + ribbon): caption strip removes the OS buttons
+  cleanly; its Quick Access strip remains as the top client row. Acceptable result.
+- **Edge** (`Chrome_WidgetWin_1`): **the minimise/maximise/close buttons are drawn INTO the tab strip
+  as client content** (captured and confirmed visually). No style change can remove them, so a
+  global rule yields a mixed look: Notepad/Explorer lose their header while Edge keeps a full one.
+
+**UNPROVEN, flagged not asserted**: in the first Edge attempt the process count went 8 -> 0 right
+after the style change, suggesting the strip kills Chromium. I could NOT reproduce it cleanly - a
+control/strip pair was inconclusive because Edge would not reliably present a window with a fresh
+`--user-data-dir` (control: 8 procs alive, window never found in 30 s of polling). So "stripping the
+caption kills Edge" is a single observation, not a result. Do not repeat it as fact.
+
+Harness note: an early enumeration returned one-character class names because `GetClassNameW` was
+declared without `CharSet=CharSet.Unicode` and marshalled as ANSI. That is what made the Explorer
+window look absent when it was present the whole time.
