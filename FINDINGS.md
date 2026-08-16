@@ -11275,3 +11275,46 @@ continue . . ."). `packaging/setup/README.txt` documents `/iddoff` as a recovery
 over qrexec on a guest with no display - and a `pause` with no console is a plausible hang there.
 This is a live candidate for the unexplained qrexec half of GWECK-STATUS #25. Harnesses at
 `tools/tests/e2e-iddoff.ps1` and `tools/tests/e2e-iddonly.ps1`.
+
+## 2026-08-16 — dom0's apply lag MEASURED: it is under one motion event, not 70 ms
+
+Recovered from a real 10 s dom0-driven drag (window `0x20030`, 543 motion events, 37 announces)
+captured by the new `QGAPROTO,msg=MOTION` trace. No new drag was needed - the trace had already
+recorded one.
+
+**Method.** When dom0 applies announce k, its window origin O jumps by `A_k - A_(k-1)`, so the
+window-relative coordinate `r = P - O` jumps by exactly the NEGATIVE of that, in one event. Search
+the motion stream for that signature after each announce; the delay is `L`.
+
+**Result: 20 of 36 announces produce an identifiable jump, median L = 0 ms, p75 = 17 ms.**
+
+**Instrument validated before believing it** (the estimator could match by coincidence: 36 deltas, a
+610 ms window, +/-3 px tolerance):
+
+| variant | matched /36 |
+|---|---|
+| real announces | **20** |
+| announce times shifted +1.5 s | 2 |
+| announce times shifted +3.0 s | 0 |
+| announce times shifted -2.0 s | 2 |
+| real times, scrambled delta VALUES | ~6 (chance floor) |
+
+So the match is time-locked to the announce and value-specific: 20 vs a ~6 chance floor, collapsing
+to 0-2 when the times move. The 16 unmatched announces are expected - small deltas and fast hand
+motion mask the signature.
+
+**Sampling resolution.** Motion arrives at **54.3 events/s, p50 gap 9.0 ms** (p90 18 ms). So `L` is
+at or below one-to-two events, i.e. under ~18 ms. It cannot be resolved finer than that from this
+data, and the honest statement is `L < 18 ms`, not `L = 0`.
+
+**Consequence.** `InputDragAdoptMs = 70` waits 4-8x longer than dom0 needs, and
+`InputDragAnnounceMs = 140` is bounded below by that wait - which is what caps the window's
+dom0-visible motion at ~7 updates/s while content streams at 59.3 fps. The 70/140 pair was chosen
+conservatively against a lag nobody had measured; now it is measured.
+
+Next rung to test: **adopt 35 / pacing 70** (2x margin over the p75, and pacing = 2x adopt, the
+ratio the shipped pair uses - `pacing == adopt` is known-bad at 67.1% reversals). That should double
+the dom0-visible update rate to ~14/s.
+
+Also note this answers the sampling question directly: we do NOT need to sample the cursor faster.
+54 Hz already localises dom0's apply to ~9 ms; the 70 ms wait was never a sampling limit.
