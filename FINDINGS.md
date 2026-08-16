@@ -11647,3 +11647,49 @@ structurally unsynthesizable (born ownerless or orphaned within 165 ms).
 **This upgrades the shadow-drop from a cost optimisation to a visible-defect fix.** Previously the
 cost was measured but the visual harm was explicitly recorded as NOT demonstrated. It is now
 demonstrated, by the user, with the mechanism and timing attached.
+
+## 2026-08-16 — NetUI drop shadows DROPPED: proven pair, red frames gone at source
+
+Owner: "can we just get rid of it so it wont bother us?" Shipped as rule 4 in `ShouldAcceptWindow()`
+(`main.c`, beside rule 3), an EXACT class match on `SCENIC_DROPSHADOW_WINDOW_CLASS`.
+
+**PROVEN PAIR** - identical scripted input both sides (`scratchpad/ribbon-drive.ps1`: 30 fixed-point
+ribbon hovers, 3 rounds x 10 points, 900 ms dwell):
+
+| | control (no rule) | test (rule 4) |
+|---|---|---|
+| shadow `CREATE`s | **5** | **0** |
+| `rejecting NetUI drop shadow` log lines | 0 | **18** |
+| `SYNTH` events (content still composites) | 14 | 7 |
+
+The reject count required raising `LogLevel` to 5, because the rule logs at `LogVerbose` following
+rule 2/3's hot-path convention. Without that, `reject_lines=0` was ambiguous between "rule fired" and
+"no shadow appeared" - the pair was not complete until the positive evidence existed. LogLevel
+restored afterwards. Explorer re-captured after the change: full ribbon, Share tab expanded, all
+content intact - nothing lost.
+
+**Two corrections to my earlier analysis, from the adversarial review:**
+
+1. I wrote that the 2A-chrome predicate's `Owner != NULL` clause was why rule 2 misses these. That is
+   incomplete: measured `ex=0x08180028` has **no `WS_EX_TOOLWINDOW`** either, so rule 2 misses on
+   TWO clauses and deleting the Owner clause alone would have fixed nothing. The ownership finding
+   still stands on its own (16/25 born ownerless, 9 orphaned within 165 ms) - it just was not the
+   whole cause.
+2. I had proposed the pixel criterion as "the region hanging outside the owner". Wrong: the shadow
+   rect is **byte-identical** to the content popup's (1766,395 1123x93 and 1997,452 1123x93 each
+   appear as both SCENIC and Net UI Tool Window). There is no overhanging region. The real
+   observable is the 1 px qube border flashing at the dropdown rect for ~317 ms.
+
+**Deliberately NOT shipped: the style-shape backstop**
+(`LAYERED|TRANSPARENT|NOACTIVATE` + `WS_DISABLED` + `WS_POPUP`), which fits all 59 measured samples
+equally well. It buys zero measured coverage over the class rule and carries all the false-positive
+risk: a click-through, non-activating, per-pixel-alpha window that EXISTS TO BE SEEN - an OLE drag
+image, a splash screen, a HUD overlay - is byte-identical in style to a shadow, and `main.c` already
+states a false positive (real UI vanishing) is much worse than a spurious border. It also could not
+be validated: with the class rule present, removing the style clause changes nothing observable, so
+that check could never be seen to fail.
+
+Ship the style form only if a second shadow class is observed that the class rule misses, AND these
+are measured first and none matches: Open-Shell menu, an OLE drag image during a file drag, a CJK IME
+candidate window, an app splash screen. The drag-image case is the most likely real collision and is
+completely unmeasured.
