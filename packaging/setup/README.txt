@@ -408,6 +408,37 @@ Practical consequence: treat this build as suitable for an OFFLINE Windows qube
 (netvm = none). If you need networking, `/nonet` will not help either -- it
 merely omits the PV network drivers, leaving the guest on the emulated NIC.
 
+THE WINDOWS KEY AND YOUR START MENU
+-----------------------------------
+In SEAMLESS mode the Windows/Super key is blocked by default and does not reach
+the guest. dom0 owns that key: a forwarded press pops the guest Start menu over
+your seamless desktop, and on Windows 11 25H2 it renders as garbage.
+
+The cost is that it also blocks any REPLACEMENT shell. In seamless mode the
+Windows taskbar is never shown, so that key is the only way to open a menu --
+including Open-Shell, which is what we recommend instead of the stock Start menu.
+If you have installed Open-Shell and the key does nothing, this is why.
+
+Re-enable it per qube, from dom0:
+
+    qvm-features <vm> service.enableWinKey 1
+
+Then RESTART the qube (or just the gui-agent service inside it) -- the setting is
+read when the agent starts, so it does not take effect on a running agent.
+
+To confirm it took, look in the guest's Q:\Qubes Logs\gui-agent-*.log for:
+
+    QGABLOCKWIN qubesdb enableWinKey=1 -> block off
+
+and to turn it off again:
+
+    qvm-features --unset <vm> service.enableWinKey
+
+This is a dom0-side setting on purpose, and it overrides the guest's own registry
+value: the admin decides what a qube may take from the window manager, not the
+guest. FULLSCREEN mode is unaffected -- there the guest owns the whole screen and
+the key always reaches Windows, whatever this is set to.
+
 UNINSTALL
 ---------
 Add/Remove Programs -> "Qubes Windows Tools" (or `msiexec /x` with the product
