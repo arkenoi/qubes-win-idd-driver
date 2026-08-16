@@ -85,3 +85,44 @@ Three exact fixes exist. Two are unavailable:
 - A remote grep echoes the command text back: grepping the OUTPUT for the pattern yields a
   false positive of 1. Count real log lines only.
 - Screenshot BEFORE rolling back. Evidence of a visual defect is destroyed by the fix.
+
+---
+
+## 2026-08-16: the wobble is FIXED, and the fix needed no estimator
+
+Status change: the parked item above is resolved. The insight is the owner's - dom0's applied
+origin was never an unknown quantity. It is a value WE chose and sent; the only unknown was WHEN it
+took effect. So do not predict it (the servo) and do not freeze it (rejected): translate against the
+newest announce dom0 has CERTAINLY applied, and pace announces so that such an announce always
+exists.
+
+    InputDragQuantise=1   translate against the last announce older than InputDragAdoptMs
+    InputDragAdoptMs=70   how long an announce is assumed to take to land
+    InputDragAnnounceMs=140  pace announces during the drag - MUST exceed AdoptMs
+
+Measured by hand on win10-clean at 5120x1440 (the only instrument that works: a scripted drag never
+arms the latch and never consumes dom0 motion, so it cannot show this defect at all). Reversal rate
+is the fraction of announce-to-announce moves that change direction:
+
+| adopt / pacing | margin | reversals | max run | verdict |
+|---|---|---|---|---|
+| stock (live origin)  | -      | ~16%  | 40-163 px | the parked baseline |
+| 120 / 0 (no pacing)  | none   | 85.7% | 5109 px   | MUCH WORSE - user |
+| 120 / 120            | 0 ms   | 67.1% | 1412 px   | clearly fails - user |
+| 120 / 200            | 80 ms  | 11.6% | 2105 px   | better than stock |
+| 70 / 140             | 70 ms  | -     | -         | "way better than stock", shipped default |
+
+The two failures are the instructive part. With no pacing the origin is stale while dom0 keeps
+moving, so every event is wrong by the window's travel in AdoptMs - strictly worse than the live
+origin it replaced. With pacing EQUAL to adopt the newest announce is never old enough to use, so
+the translation is permanently one step behind an origin dom0 has already applied. **The margin
+between the two numbers is the whole mechanism**; cadence must be bought by lowering AdoptMs toward
+dom0's real apply lag, never by closing the gap.
+
+Consequently the servo is superseded - it damped a translation that was structurally wrong instead
+of correcting it. It stays in the tree, unused while Quantise is on, and should be deleted in a
+separate careful change (two mechanical attempts at that deletion broke the build).
+
+Still open, seen in the same session: a small rendering offset that persists after the drag settles.
+The per-window buffer dom0 receives is clean (edge black-fraction 0.00, crop verified at the exact
+7 px DWM border), so it is placement/compositing rather than the pixels we send.
