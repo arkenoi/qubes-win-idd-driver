@@ -11235,3 +11235,43 @@ Further gaps worth their own work, found during the audit and NOT yet fixed:
   verification of the medium.
 - `:needfile` checks only the FIRST script of each branch; the rest of the payload fails as raw
   PowerShell exceptions — the very class `:needfile` was added to eliminate.
+
+## 2026-08-16 — `/iddoff` and `/iddonly` finally run END TO END, in the reporter's layout
+
+Prompted by the owner: his install went wrong because nothing was ever run end to end. Both switches
+had a status of SHIPPED/VERIFIED without either ever being executed as a user executes them.
+
+Setup: real 4.3.2 payload staged at **`C:\QWT-NG`** (a copied directory, his layout - not our ISO),
+`install.cmd` replaced with the fixed one, run as `C:\QWT-NG\install.cmd /iddoff`.
+
+**Gate 0 proved itself on first contact.** The run printed:
+
+    QWT-NG installer: 4.3.2+agent.bacfd2c09b18 agent bacfd2c09b18
+    Running from:     C:\QWT-NG
+
+That is precisely the line whose absence made post 64 unattributable and cost him a wrong verdict of
+user error on post 35.
+
+**Results, judged on outcomes rather than log lines:**
+
+| step | outcome |
+|---|---|
+| `/iddoff` | `NoTopologyApply=1`, VGA enabled, IDD removed, `ok:true`, auto-reboot |
+| after reboot | **VGA the only adapter, 3440x1440, OK**; IDD absent; agent running |
+| dom0 view | `qtest shot` returned a live, correctly rendered Notepad; edge black-fraction 0 on all four sides |
+| `/iddonly` | IDD activated, VGA disabled, `ok:true`, auto-reboot |
+| after reboot | **IddSampleDriver primary at 5120x1440**, agent running, window mapped |
+
+So **his recovery path works**; the `%~f0` elevation defect was the only thing standing in front of
+it. Both switches are now genuinely verified for: copied-dir medium, elevated, Win10 22H2, en-US -
+and that cell list is the claim, not a bare "VERIFIED".
+
+**Incidental positive**: a deliberately partial medium (idd-driver/ holding only devcon.exe) made
+`/iddonly` fail with `C:\QWT-NG\idd-driver holds 0 .inf files (expected exactly 1)` - named the
+directory and the missing thing. That is the `:needfile` class working as intended.
+
+**New risk, not yet investigated**: a non-`/auto` run ends at `pause` ("Press any key to
+continue . . ."). `packaging/setup/README.txt` documents `/iddoff` as a recovery path to be driven
+over qrexec on a guest with no display - and a `pause` with no console is a plausible hang there.
+This is a live candidate for the unexplained qrexec half of GWECK-STATUS #25. Harnesses at
+`tools/tests/e2e-iddoff.ps1` and `tools/tests/e2e-iddonly.ps1`.
