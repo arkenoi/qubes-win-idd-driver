@@ -11571,3 +11571,29 @@ are orphaned inside 165 ms. The reliable signal is the style shape:
 
 Note `#32768` context menus can ALSO be ownerless (2 seen), so "ownerless popup" alone must not mean
 "drop" - that would delete real menus. The discriminator has to be narrower than ownership.
+
+## 2026-08-16 — OWNER DECISION: popups rendering outside the parent are CORRECT, leave them
+
+Owner, after driving Explorer: "right-click menu renders outside the window border so we can leave
+it be."
+
+So a popup that falls outside its owner is NOT a defect. It is announced as its own
+override-redirect (borderless) window, which is exactly how the Linux agent and X11 menus behave.
+This **retracts direction 1 from the Edge-menu entry earlier today** ("relax containment - synthesize
+with clipping, or grant the owner a buffer big enough for overhang"). Do not pursue it:
+`SYNTH_OVERHANG_MAX` stays at 12, containment stays strict, and the Edge 3-dot menu being
+unsynthesizable is working as intended.
+
+Synthesis is for popups that sit INSIDE the owner (Notepad's File menu: measured `synth=yes`), where
+compositing avoids a separate window for something that is visually part of the parent. Outside that,
+a separate window is the right answer.
+
+**What remains actionable from the whole popup investigation is therefore ONE thing**: the 25
+`SCENIC_DROPSHADOW_WINDOW_CLASS` decoration windows per session, which are pure `UpdateLayeredWindow`
+per-pixel-alpha shadow with no alpha channel available in dom0, and which cost CREATE + MAP +
+repeated full-window DAMAGE each. Those should be DROPPED, not synthesized. Everything else in the
+synthesis path is behaving correctly.
+
+Still open and NOT chased (owner: it was intended layout, not an artefact): the "rendering error"
+seen mid-session was a false alarm. No pixel-level artefact from the shadow windows has been
+demonstrated - the cost is measured, the visual harm is not.
