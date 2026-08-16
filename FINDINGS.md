@@ -11417,3 +11417,34 @@ caption kills Edge" is a single observation, not a result. Do not repeat it as f
 Harness note: an early enumeration returned one-character class names because `GetClassNameW` was
 declared without `CharSet=CharSet.Unicode` and marshalled as ANSI. That is what made the Explorer
 window look absent when it was present the whole time.
+
+## 2026-08-16 — discriminator for "this app draws its own header" (no app list needed)
+
+Requirement (owner): windows with their own tabs and client-drawn controls must be LEFT ALONE; Edge's
+appearance is fine as it is. So the header-stripping predicate needs to detect custom-frame windows
+rather than carry a class allowlist.
+
+**Behavioural test.** An app that paints its own header removes the standard non-client area
+(`WM_NCCALCSIZE`), so its client rect reaches the top of the window. Measure
+`ClientToScreen(0,0).Y - GetWindowRect().top`:
+
+| window | top inset | WS_CAPTION | own header |
+|---|---|---|---|
+| Edge `Chrome_WidgetWin_1` | **0** | set | yes |
+| Notepad | **51** | set | no (OS draws it) |
+| Explorer `CabinetWClass` | **0** | set | yes (ribbon extends into the caption) |
+| Store `ApplicationFrameWindow` | 0 | set | yes |
+| UWP `Windows.UI.Core.CoreWindow` | 0 | clear | yes |
+
+**`WS_CAPTION` is NOT a discriminator** - every window above has it set, Edge included. Only the
+inset separates them.
+
+Rule: strip the header only when the inset is substantial (OS-drawn caption, e.g. >= 20 px); skip
+anything at ~0. Under it, no Chromium window is ever touched, which also makes the unreproduced
+"strip kills Edge" observation moot rather than load-bearing. Explorer measures 0 and would be
+skipped too - it survived stripping in the test, so skipping is the conservative side of the same
+rule at no cost.
+
+NOT YET IMPLEMENTED in the agent: all header experiments so far were applied externally to one
+window at a time. Building it in means mutating other processes' styles at map time, where apps that
+re-apply their own styles will fight back, and it must be opt-in per the blast-radius gate.
