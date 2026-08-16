@@ -11488,3 +11488,50 @@ Directions, none implemented or verified:
 2. attach per-window capture to override_redirect popups so damage is real instead of whole-surface;
 3. find out why redundant-frame suppression does not fire here - if it worked, the 46/s would cost
    almost nothing regardless of the rect size.
+
+## 2026-08-16 — winwatch on Explorer's ribbon: two synthesis races, and a hole in the 2A-chrome filter
+
+Ran `tools/winwatch.cs` (new) while the owner drove Explorer. Explorer's Win10 ribbon is built on
+**NetUI - the same framework Office uses** (`Net UI Tool Window`, `Net UI Tool Window Layered`,
+`SCENIC_DROPSHADOW_WINDOW_CLASS`, all pid=explorer), so this is a genuine proxy for Office chrome
+without an Office install.
+
+**Churn**: 36 window creations in 92.8 s (~23/min) - 18 `Net UI Tool Window`, 17
+`SCENIC_DROPSHADOW_WINDOW_CLASS`, 1 layered. Each is CREATE + MAP + repeated full-window DAMAGE.
+
+**RACE 1 - shadows are orphaned ~117 ms after birth.** Six drop-shadow windows were created WITH an
+owner (`synth=yes`, compositable into the parent) and lost it shortly after:
+
+    0x000A0326  after 133 ms      0x000F0326  after 112 ms
+    0x000B0326  after 131 ms      0x001403CA  after 117 ms
+    0x000C0326  after 117 ms      0x001803CA  after 117 ms
+
+Consistent to ~20 ms, so this is deliberate NetUI behaviour, not jitter. **This is the owner's
+observed "synthesized with a lag, not right away"**: for the first ~117 ms the shadow is a child that
+CAN be composited; after that it is an orphan that cannot. Whether the agent synthesizes it is
+therefore a race against when it samples.
+
+**RACE 2 - containment changes during life.** `0x00120326` (`Net UI Tool Window`) flipped
+`synth yes -> NO` at +4650 ms when its owner moved, so a popup that was compositable stopped being so
+mid-life. Synthesis eligibility is not a property of a window; it is a property of a MOMENT.
+
+**They reach dom0.** Confirmed in the agent log - every orphaned shadow is announced:
+
+    CREATE hwnd=0xc0326 ovr=1 style=0x8e000000 ex=0x08180028
+    MAP    hwnd=0xc0326 ovr=1 transient=0x0
+    DAMAGE hwnd=0xc0326 w=1123 h=93   (x15 more, ~17 log lines per shadow)
+
+`ovr=1` so at least they are borderless, and `transient=0x0` confirms dom0 sees them as OWNERLESS.
+
+**HOLE IN THE PLANNED 2A-CHROME FILTER (design finding).** The predicate documented at
+`main.c:3055-3070` requires **`Owner != NULL`** to drop chrome, on the reasoning that "an unowned
+top-level window is somebody's real UI (splash screens, HUD overlays) and is left alone". But these
+shadow strips are orphaned ~117 ms in, so by the time they are long-lived they have **no owner** -
+and the filter as designed would KEEP exactly the windows it exists to drop. The ownership test must
+either be evaluated at CREATE time (before orphaning) or dropped in favour of the style/class shape,
+which is unambiguous here: `WS_POPUP|LAYERED|TRANSPARENT|NOACTIVATE` with `alpha=ulw`.
+
+**Likely visible artefact**: these are `UpdateLayeredWindow` surfaces (`alpha=ulw`), i.e. per-pixel
+alpha drop shadows. Captured without alpha they render as opaque rectangles - which matches the
+"weird override window on screen" the owner reported earlier in this session. NOT yet confirmed by
+pixels; do not state it as established.
