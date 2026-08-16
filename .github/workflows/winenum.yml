@@ -8,6 +8,7 @@ on:
   push:
     paths:
       - 'tools/winenum.cs'
+      - 'tools/winwatch.cs'
       - '.github/workflows/winenum.yml'
 
 permissions:
@@ -34,6 +35,24 @@ jobs:
           "$((Get-FileHash winenum.exe -Algorithm SHA256).Hash)  winenum.exe" | Out-File -Encoding ASCII winenum.exe.sha256
           Write-Host "built winenum.exe: $((Get-Item winenum.exe).Length) bytes"
 
+      - name: Compile winwatch.exe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Continuous companion to winenum: watches popup/override-redirect surfaces and
+          # evaluates the agent's own predicates, so complex apps (Office, Explorer) can be
+          # driven by hand on a qube this repo does not control.
+          $csc = (Get-ChildItem 'C:\Windows\Microsoft.NET\Framework64\v4.0.*\csc.exe' -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $csc) { throw 'Framework csc.exe not found on the runner' }
+          & $csc /nologo /o /target:exe /out:winwatch.exe tools\winwatch.cs
+          if (-not (Test-Path winwatch.exe)) { throw 'compile produced no winwatch.exe' }
+          # smoke: run for 1 s to a temp log; it must start, write its header and exit cleanly
+          & .\winwatch.exe 1 "$env:RUNNER_TEMP\ww.log" | Out-Null
+          $head = (Get-Content "$env:RUNNER_TEMP\ww.log" -ErrorAction SilentlyContinue | Select-Object -First 1)
+          if ($head -notmatch 'winwatch start') { throw "winwatch.exe did not run as expected: $head" }
+          "$((Get-FileHash winwatch.exe -Algorithm SHA256).Hash)  winwatch.exe" | Out-File -Encoding ASCII winwatch.exe.sha256
+          Write-Host "built winwatch.exe: $((Get-Item winwatch.exe).Length) bytes"
+
       - name: Upload as build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -41,6 +60,8 @@ jobs:
           path: |
             winenum.exe
             winenum.exe.sha256
+            winwatch.exe
+            winwatch.exe.sha256
 
       - name: Attach to the v4.3.0-agent09b643e release
         shell: pwsh
@@ -48,5 +69,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Idempotent: --clobber replaces an existing asset of the same name.
-          gh release upload v4.3.0-agent09b643e winenum.exe winenum.exe.sha256 --clobber --repo ${{ github.repository }}
+          gh release upload v4.3.0-agent09b643e winenum.exe winenum.exe.sha256 winwatch.exe winwatch.exe.sha256 --clobber --repo ${{ github.repository }}
           Write-Host "asset URL: https://github.com/${{ github.repository }}/releases/download/v4.3.0-agent09b643e/winenum.exe"
