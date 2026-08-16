@@ -11007,3 +11007,34 @@ what a user feels, consistent with the earlier bench (tot p50 442 us, p99 40 ms,
 reused, the unpainted region would have shown the PREVIOUS WINDOW'S pixels rather than black - one
 application's content inside another's frame. Slabs are now zeroed on acquire (agent 2addd20),
 restoring the pre-pool appearance exactly.
+
+## 2026-08-16 — drag baseline locked (agent `3811e98`, package build 31942731976)
+
+User-confirmed good on win10-clean. This is the reference point for any future drag change; per the
+canonical-benchmark rule, compare against these numbers, never against an intra-day build.
+
+Binary under test verified installed: running `gui-agent.exe` SHA256 prefix `DA3E37CD274F8454`,
+equal to the pushed artifact. Preconditions asserted in-run, not assumed:
+`QGADRAGQUANT on (adopt=70 ms, announce pacing=140 ms)` from the log banner, and **no** registry
+overrides present — so this measures the shipped defaults, not a ladder rung.
+
+| metric | value | note |
+|---|---|---|
+| announces | 225 | 10 s hand drag with deliberate reversals |
+| moves | 162 | non-zero deltas |
+| reversals | 23 (14.2 %) | includes genuine hand direction changes - see caveat |
+| max run | 1520 px | long straight runs are clean |
+| announce gap | p50 134 ms, p95 802 ms | p50 tracks the 140 ms pacing as designed |
+| edge black-fraction | left=0 right=0 top=0 bottom=0 | **was left=7** before the crop fix |
+
+**Caveat on the reversal metric**: it counts every sign change in announced x, so a reversal the
+user's hand actually performed is indistinguishable from a wobble the agent invented. 14.2 % here vs
+11.6 % at the 200 ms rung is therefore NOT evidence that 140 ms is worse - the hand paths differed.
+The metric is only comparable across runs driven by a scripted, identical mouse path. Treat the
+hand-drag number as a sanity bound (it is nowhere near the 85.7 % of the broken pacing=0 build), not
+as a precision instrument.
+
+**Crop refresh is settle-only.** `WcSetCrop` marks the WGC channel dirty, so refreshing it per move
+event forces a full-window recapture at input rate. A move now only sets `PwCropStale`; the settle
+handler applies it, where a recapture is already scheduled - the correction is free and lands before
+the repaint, so the first post-drag frame is already correct.
