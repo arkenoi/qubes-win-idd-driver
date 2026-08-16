@@ -85,7 +85,10 @@ static const BYTE s_QubesMonitorEdid[IndirectSampleMonitor::szEdidBlock] =
 static constexpr WCHAR QUBES_IDD_MODES_KEY[] = L"SOFTWARE\\QubesIDD";
 static constexpr WCHAR QUBES_IDD_MODES_VALUE[] = L"Modes";
 static constexpr size_t QUBES_IDD_MAX_REG_MODES = 32; // cap on extra modes read from the registry
-static constexpr DWORD QUBES_IDD_MODE_VSYNC = 60;
+static constexpr DWORD QUBES_IDD_MODE_VSYNC = 60;   // default; see QubesReadModeVSync
+static constexpr WCHAR QUBES_IDD_VSYNC_VALUE[] = L"ModeVSync";
+static constexpr DWORD QUBES_IDD_MIN_VSYNC = 24;
+static constexpr DWORD QUBES_IDD_MAX_VSYNC = 240;
 static constexpr DWORD QUBES_IDD_MIN_WIDTH = 640;
 static constexpr DWORD QUBES_IDD_MAX_WIDTH = 16384;
 static constexpr DWORD QUBES_IDD_MIN_HEIGHT = 480;
@@ -105,6 +108,26 @@ struct QubesRegistryMode
 // mode-list callbacks that run as part of monitor arrival, so after the session side
 // rewrites the value it restarts the device (devcon restart / disable+enable), which
 // re-runs arrival and re-reads this list.
+// Qubes: the refresh rate every reported mode carries, from HKLM\SOFTWARE\QubesIDD\ModeVSync
+// (DWORD, clamped to [24,240], default 60). This is the rate DWM presents at, and measurement
+// on 2026-08-16 showed it is the ONLY thing capping guest frame rate: at 60 Hz the agent's whole
+// per-frame cost was 114 us against a 16.9 ms frame - 0.7% of the budget, with AcquireNextFrame
+// blocking for the other 99%. Read on the same monitor-arrival callbacks as the mode list, so it
+// takes effect on the same device restart.
+static DWORD QubesReadModeVSync()
+{
+    DWORD Value = 0;
+    DWORD cbData = sizeof(Value);
+    LSTATUS Err = RegGetValueW(HKEY_LOCAL_MACHINE, QUBES_IDD_MODES_KEY, QUBES_IDD_VSYNC_VALUE,
+        RRF_RT_REG_DWORD | RRF_SUBKEY_WOW6464KEY, nullptr, &Value, &cbData);
+    if (Err != ERROR_SUCCESS || Value == 0)
+    {
+        return QUBES_IDD_MODE_VSYNC; // no key/value -> unchanged 60 Hz behaviour
+    }
+
+    return min(max(Value, QUBES_IDD_MIN_VSYNC), QUBES_IDD_MAX_VSYNC);
+}
+
 static vector<QubesRegistryMode> QubesReadRegistryModes()
 {
     vector<QubesRegistryMode> Modes;
@@ -226,12 +249,14 @@ static std::vector<IDDCX_MONITOR_MODE> BuildQubesMonitorModes(IDDCX_MONITOR_MODE
 {
     std::vector<IDDCX_MONITOR_MODE> MonitorModes;
 
+    const DWORD VSync = QubesReadModeVSync();
+
     for (DWORD ModeIndex = 0; ModeIndex < ARRAYSIZE(s_SampleDefaultModes); ModeIndex++)
     {
         MonitorModes.push_back(CreateIddCxMonitorMode(
             s_SampleDefaultModes[ModeIndex].Width,
             s_SampleDefaultModes[ModeIndex].Height,
-            s_SampleDefaultModes[ModeIndex].VSync,
+            VSync,
             Origin
         ));
     }
@@ -241,9 +266,11 @@ static std::vector<IDDCX_MONITOR_MODE> BuildQubesMonitorModes(IDDCX_MONITOR_MODE
         bool bDuplicate = false;
         for (DWORD ModeIndex = 0; ModeIndex < ARRAYSIZE(s_SampleDefaultModes); ModeIndex++)
         {
+            // Base and registry modes now carry the SAME rate (VSync above), so the rate can
+            // no longer distinguish them and dedup is on dimensions alone. The old rate test
+            // compared the base mode's own VSync against the fixed 60 the registry modes used.
             if (s_SampleDefaultModes[ModeIndex].Width == RegMode.Width &&
-                s_SampleDefaultModes[ModeIndex].Height == RegMode.Height &&
-                s_SampleDefaultModes[ModeIndex].VSync == QUBES_IDD_MODE_VSYNC)
+                s_SampleDefaultModes[ModeIndex].Height == RegMode.Height)
             {
                 bDuplicate = true;
                 break;
@@ -252,7 +279,7 @@ static std::vector<IDDCX_MONITOR_MODE> BuildQubesMonitorModes(IDDCX_MONITOR_MODE
         if (!bDuplicate)
         {
             MonitorModes.push_back(CreateIddCxMonitorMode(
-                RegMode.Width, RegMode.Height, QUBES_IDD_MODE_VSYNC, Origin));
+                RegMode.Width, RegMode.Height, VSync, Origin));
         }
     }
 
@@ -1004,6 +1031,20 @@ NTSTATUS IddSampleMonitorQueryModes(IDDCX_MONITOR MonitorObject, const IDARG_IN_
     // monitor's descriptor and instead are based on the static processing capability of the device. The OS will
     // report the available set of modes for a given output as the intersection of monitor modes with target modes.
 
+    const DWORD VSync = QubesReadModeVSync();
+
+    // A monitor mode is only reachable if a target mode matches it, rate included: publish the
+    // configured rate for every built-in size, else raising ModeVSync would empty the intersection
+    // and leave the guest with no modes at all.
+    if (VSync != QUBES_IDD_MODE_VSYNC)
+    {
+        for (DWORD ModeIndex = 0; ModeIndex < ARRAYSIZE(s_SampleDefaultModes); ModeIndex++)
+        {
+            TargetModes.push_back(CreateIddCxTargetMode(
+                s_SampleDefaultModes[ModeIndex].Width, s_SampleDefaultModes[ModeIndex].Height, VSync));
+        }
+    }
+
     TargetModes.push_back(CreateIddCxTargetMode(3840, 2160, 60));
     TargetModes.push_back(CreateIddCxTargetMode(2560, 1440, 144));
     TargetModes.push_back(CreateIddCxTargetMode(2560, 1440, 90));
@@ -1027,7 +1068,7 @@ NTSTATUS IddSampleMonitorQueryModes(IDDCX_MONITOR MonitorObject, const IDARG_IN_
             const auto& Existing = TargetModes[ModeIndex].TargetVideoSignalInfo.targetVideoSignalInfo;
             if (Existing.activeSize.cx == RegMode.Width &&
                 Existing.activeSize.cy == RegMode.Height &&
-                Existing.vSyncFreq.Numerator == QUBES_IDD_MODE_VSYNC)
+                Existing.vSyncFreq.Numerator == VSync)
             {
                 bDuplicate = true;
                 break;
@@ -1035,7 +1076,7 @@ NTSTATUS IddSampleMonitorQueryModes(IDDCX_MONITOR MonitorObject, const IDARG_IN_
         }
         if (!bDuplicate)
         {
-            TargetModes.push_back(CreateIddCxTargetMode(RegMode.Width, RegMode.Height, QUBES_IDD_MODE_VSYNC));
+            TargetModes.push_back(CreateIddCxTargetMode(RegMode.Width, RegMode.Height, VSync));
         }
     }
 
