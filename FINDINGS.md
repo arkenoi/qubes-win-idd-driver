@@ -11144,3 +11144,94 @@ moves, not feedback.
 
 Rig is left armed for the first option: trace build `058B4A02E45A677A` installed and verified,
 ProtoTrace on, shipped drag defaults, Notepad open. One caption drag produces the data.
+
+## 2026-08-16 — RETRACTION: the `/idd` "file not found" was OUR bug, and we blamed the reporter
+
+Two entries in this file are **wrong and are retracted**:
+
+- FINDINGS.md ~6442: *"NOT our bug (post 35 /idd 'file not found'): GWeck hand-built Start-Process
+  -FilePath 'D:\idd' ... Our install.cmd relaunches via %~f0 (=D:\install.cmd) and cannot emit
+  D:\idd"*
+- FINDINGS.md ~6945: *"S4 /idd: user error (Start-Process 'D:\idd')"*
+
+Also retracted: my own reading earlier today that GWeck's post-64 `C:\iddoff` meant he was running a
+stale `install.cmd` left in `C:\QWT-NG`. He was running 4.3.2. The bug is ours.
+
+**Mechanism (proven experimentally on win10-clean, not argued from source).** `install.cmd`'s option
+parser uses bare `shift`. Bare `shift` starts at argument **ZERO**, so it overwrites `%0` with `%1`.
+The parse loop runs BEFORE the elevation check, so by the time the UAC relaunch expands `%~f0`, `%0`
+is the switch. `%~f` then runs it through the Win32 path normaliser, where `/` is a separator and a
+LEADING separator means "root of the current drive":
+
+    BEFORE arg0=[C:\...\shifttest.cmd]  tildef0=[C:\...\shifttest.cmd]
+    AFTER  arg0=[/iddoff]               tildef0=[C:\iddoff]
+    WOULDRUN: Start-Process -FilePath 'C:\iddoff' -ArgumentList '/iddoff' -Verb RunAs
+
+Byte-identical to his post-64 transcript, ArgumentList included. `/idd` yields `C:\idd`; from a
+substituted X: drive, `X:\idd` — which is his post-35 `D:\idd` from the ISO. **One bug produced both
+field reports, a year apart in our triage, and we closed the first as user error.**
+
+`RAWARGS` is captured before the loop, which is why the arguments looked right while the path was
+destroyed — the asymmetry that made it look hand-built.
+
+**Scope.** Fires iff (non-elevated OR UAC-filtered token) AND >=1 recognised switch. Elevated
+console: unaffected. Bare `install.cmd` non-elevated: unaffected (no shift ran) — which is why
+double-click installs never showed it. Unrecognised switch: exits 87 first.
+
+**Why no test could ever have caught it.** Every rig sets `EnableLUA=0`
+(`mgmt/autounattend.xml:180`, `mgmt/autounattend-win11.xml:246`, `guest/firstboot-setup.ps1:29`), so
+`net session` succeeds and the relaunch block is **unreachable on our hardware**. The non-elevated
+row — the default posture of every real user — is not merely untested, it is structurally
+untestable on the current rigs. Recorded `/iddoff` PASSes all went through qrexec, which holds a
+High-integrity token.
+
+**Second defect, same 8 lines.** `exit /b 0` was unconditional and `Start-Process` had no
+`-Wait`/`-PassThru`, so a failed elevation was reported to the caller as SUCCESS.
+`tools/qwt-bootstrap` waits on it and returns its code, so `qubes-tools-<ver>.exe /passive` run
+non-elevated printed an error and exited 0.
+
+**Fixed** by capturing `set "SELF=%~f0"` before the parse loop and reading `%SELF%` thereafter
+(preferred over `shift /1` because a future switch cannot reintroduce it), plus `-Wait -PassThru`
+with exit-code propagation. **Not yet released, and the regression check has NOT yet been seen to
+fail** with the defect reintroduced — that needs a UAC-on rig or a `-ForceUnelevated` hook, so it is
+recorded as unproven per the CLAUDE.md rule.
+
+## 2026-08-16 — the Windows key: we killed the menu we recommended
+
+`g_BlockMenuKey` shipped **ON** in 4.3.2 (`perf.c`, compiled default AND registry fallback). In
+`HandleKeypress` it drops Super key presses and every key carrying the Mod4 bit, in seamless, before
+`SendInput`. In seamless the taskbar HWND is never mapped, so that key is the ONLY entry point to a
+Start menu — stock or Open-Shell.
+
+We had already dropped the stock Start menu as unsupported (GWECK-STATUS #6/#7) and told the
+reporter Open-Shell was the answer; he confirmed it working in post 55. Then we shipped a flag that
+suppressed the menu we do not support by removing the one we recommend. Post 64: *"Neither the
+Windows nor the Open-Shell menu can be used at all."*
+
+Now opt-in. The mechanism is retained and is still correct for anyone who wants stock Start
+suppressed. This is exactly the blast-radius gate: a change that DISABLES something must enumerate
+what must still work, and everything we have ever recommended as a workaround is a permanent test
+case.
+
+## 2026-08-16 — what is actually machine-verified before a release (honest inventory)
+
+CI (`.github/workflows/`) has **no test or e2e job at all**. What is asserted before publishing:
+file presence, SHA256 re-verification, ISO/RPM plumbing, version arithmetic, and a PowerShell parse
+of `Install-QwtImproved.ps1` **only** (`activate-idd.ps1`, `deactivate-idd.ps1`,
+`install-updater-agent.ps1` are never even parsed; `install.cmd` is never linted).
+
+**Zero user-facing switches are executed by any automated gate.** One combination — `/auto /idd`,
+copied-dir, elevated, fresh guest, en-US — is exercised by `tools/accept-clean.sh`, which someone
+has to remember to run. Never executed in any form, by anything: `/nonet`, `/nodisk`,
+`/noapptweaks`, `/reboot`, `/acceptpvdiskupgrade`, `/noupdates`, and the SUCCESS path of
+`/updatesonly`. Nothing in the repo ever runs `activate-idd.ps1` or `deactivate-idd.ps1`.
+
+Further gaps worth their own work, found during the audit and NOT yet fixed:
+- Flags are persisted across the inter-stage reboot only under `-Auto`
+  (`Install-QwtImproved.ps1:634`), but the manual path tells the user to "run install.cmd again"
+  without saying "with the same flags" — so a manual two-stage `install.cmd /noidd` **activates the
+  IDD in stage 2**.
+- `/iddonly`, `/iddoff` and `/updatesonly` bypass `Test-Payload`, so those paths do no SHA
+  verification of the medium.
+- `:needfile` checks only the FIRST script of each branch; the rest of the payload fails as raw
+  PowerShell exceptions — the very class `:needfile` was added to eliminate.

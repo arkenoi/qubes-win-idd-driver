@@ -63,9 +63,39 @@ REM PowerShell error (forum 42717 post 35: the guest log shows -Root as  C:\qwtc
 REM HEREQ is the same directory WITHOUT the trailing backslash - use it for every value
 REM passed INTO a script; -File "%HERE%name.ps1" is unaffected because a name follows.
 set "HEREQ=%HERE:~0,-1%"
+REM --- Gate 0, docs/RELEASE-TESTING-PROTOCOL.md: SAY WHO WE ARE, first line, always ------
+REM Forum 42717 post 64 showed `-FilePath 'C:\iddoff'`. That IS a shipped-4.3.2 defect (see the
+REM SELF capture below) - my first reading, that he must be running a stale copy, was wrong and is
+REM retracted. It took an experiment to settle, because this script never printed its own identity:
+REM a report we cannot attribute costs a round trip with the reporter every time, and last time it
+REM cost him a wrong verdict of user error. The medium path is printed for the same reason.
+set "QWTVER=unknown"
+if exist "%HERE%MANIFEST.json" (
+  for /f "usebackq delims=" %%v in (`powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "try{$m=Get-Content -Raw -LiteralPath '%HEREQ%\MANIFEST.json'|ConvertFrom-Json;'{0} agent {1}' -f $m.package_version,$m.source.agent_commit.Substring(0,12)}catch{'MANIFEST unreadable'}"`) do set "QWTVER=%%v"
+)
+echo QWT-NG installer: %QWTVER%
+echo Running from:     %HEREQ%
+if "%QWTVER%"=="unknown" (
+  echo.
+  echo WARNING: no MANIFEST.json beside this script. This directory is not a complete
+  echo          install medium - it may be a partial or STALE copy from an older release,
+  echo          in which case the switches below may not behave as this version documents.
+  echo          Extract the release archive to an EMPTY directory, or run from the ISO.
+  echo.
+)
+
 REM Capture the ORIGINAL argument line before parsing consumes it: the UAC relaunch
 REM below has to hand the same flags to the elevated copy of this script.
 set "RAWARGS=%*"
+REM ...and the script's OWN path, for the same reason and a sharper one. Bare `shift` in the parse
+REM loop below starts at argument ZERO, so it overwrites %0 with %1: after `/iddoff` is consumed,
+REM %0 IS "/iddoff", and %~f0 hands it to the Win32 path normaliser, where a leading separator
+REM means "root of the current drive" -> C:\iddoff. That is forum 42717 post 64 verbatim, and post
+REM 35's D:\idd from the ISO. Reproduced on a guest: with a switch, %~f0 = C:\iddoff; with none it
+REM is correct - which is why double-click installs never showed it, and why RAWARGS looked right
+REM while FilePath was destroyed. Read %SELF%, never %~f0, after this point.
+set "SELF=%~f0"
 set "PSARGS="
 set "AUTO="
 set "IDDONLY="
@@ -93,12 +123,16 @@ REM --- elevation check; relaunch through UAC if needed -----------------------
 net session >nul 2>&1
 if not errorlevel 1 goto elevated
 echo Not elevated - requesting administrator rights...
+REM -Wait -PassThru and propagate the child's code: this used to `exit /b 0` unconditionally, so a
+REM failed elevation - and any failure of the elevated run - was reported to the caller as SUCCESS.
+REM tools/qwt-bootstrap waits on this and returns its code, so qubes-tools-<ver>.exe /passive run
+REM non-elevated printed an error and still exited 0.
 if defined RAWARGS (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%RAWARGS%' -Verb RunAs"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Start-Process -FilePath '%SELF%' -ArgumentList '%RAWARGS%' -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
 ) else (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Start-Process -FilePath '%SELF%' -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
 )
-exit /b 0
+exit /b %errorlevel%
 
 :elevated
 REM Every branch below runs a script that must be PRESENT on this medium. A missing one used
