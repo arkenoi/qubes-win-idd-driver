@@ -11448,3 +11448,43 @@ rule at no cost.
 NOT YET IMPLEMENTED in the agent: all header experiments so far were applied externally to one
 window at a time. Building it in means mutating other processes' styles at map time, where apps that
 re-apply their own styles will fight back, and it must be opt-in per the blast-radius gate.
+
+## 2026-08-16 — Edge's 3-dot menu: not synthesized, and it costs 46 full repaints/s
+
+Owner's observation, confirmed and quantified. Captured live with the menu open (Alt+F):
+
+    Edge main  hwnd=0x8039C   300,200  900x600
+    menu       hwnd=0x120222  855,275  329x695   class Chrome_WidgetWin_2
+               style=0x96000000 (WS_POPUP|VISIBLE|CLIPSIBLINGS|CLIPCHILDREN)
+               ex=0x8000088    (NOACTIVATE|TOOLWINDOW|TOPMOST)   owner=0x8039C
+
+**Why it is not synthesized.** `SynthOwnerQualifies` requires the popup to sit inside the owner's
+GRANTED geometry within `SYNTH_OVERHANG_MAX` (12 px). The menu is **695 px tall against a 600 px
+owner** and its bottom edge overflows by **170 px**, so containment fails and it can never be
+composited into the parent buffer. It is announced as its own window instead. `IsPopup` then
+correctly makes it override_redirect (no caption, no sysmenu, and far under the 90% screen guard), so
+it should render borderless - the classification is right, the COST is the problem.
+
+**The cost, measured from the agent log for that hwnd:**
+
+| metric | value |
+|---|---|
+| damage events | 2889 |
+| full-window (329x695) | 2889 - **100%** |
+| span | 62.75 s |
+| **rate** | **46 events/s** |
+
+A static menu is therefore re-reporting its entire surface ~46 times a second, ~228k px per event.
+Nothing in the menu is changing. Two mechanisms should have prevented this and did not: per-window
+capture (the window appears not to be WGC-attached, so damage falls back to whole-surface) and the
+redundant-frame detector (`g_RedundantFrames`, "damage reported, pixels identical").
+
+**Design consequence for the header work**: any popup larger than, or hanging outside, its owner is
+structurally excluded from synthesis. Menus that exceed the parent are normal in Chromium, so this is
+not an edge case - it is the common path for browser menus on small windows.
+
+Directions, none implemented or verified:
+1. relax containment (synthesize with clipping, or grant the owner a buffer big enough for overhang);
+2. attach per-window capture to override_redirect popups so damage is real instead of whole-surface;
+3. find out why redundant-frame suppression does not fire here - if it worked, the 46/s would cost
+   almost nothing regardless of the rect size.
