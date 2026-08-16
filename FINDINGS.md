@@ -11779,3 +11779,43 @@ TEST SCRIPT of mine that copied the style half and omitted the exstyle half (Not
 app=0, restored by hand). The invariant makes it unreachable.
 
 Default ON; `qvm-features <vm> service.guestTitleBar 1` keeps the guest's own caption.
+
+## 2026-08-16 — OPEN: distortion when dragging over another window, ONLY with an override modal
+
+Owner: "when i drag over another window i see moments of distortion, it self-heals but still there"
+- then narrowed it: **"it happens only if modal dialog in override window kicks in"**.
+
+**Plain overlap during motion is EXONERATED, measured.** Swept a white Notepad back and forth across
+a green-on-black console (800x500) for ~60 s, 40 px steps at 45 ms, capturing 4 times mid-motion.
+Cross-window bleed in every capture:
+
+| capture | green pixels inside Notepad |
+|---|---|
+| mid-motion x4 | **0.0%** |
+
+The console kept its own content (2.1-4.5% green) and Notepad stayed white. So the per-window
+capture path isolates correctly while windows move over each other - this is NOT a generic occlusion
+or slice-feed bug, and that whole family can be set aside.
+
+**The trigger is an override-redirect modal appearing during the drag.** Not reproduced here yet;
+recorded with the leads that fit it, none verified:
+
+1. `CollectZOrder` runs ONLY while an override-redirect popup is on screen (`main.c:4047-4049`,
+   noted during the chrome-predicate review). The owner's trigger is precisely "an override popup
+   appears", so the drag would suddenly start doing z-order collection mid-motion. Timing-wise this
+   is the closest fit and is where I would look first.
+2. Occlusion accounting (`rgnCovered`) is accumulated only over WATCHED windows (`main.c:4656`,
+   `5167`). A modal that is override-redirect is watched, but one dropped by a chrome rule is not -
+   worth re-checking now that rule 4 drops NetUI shadows, since a dropped occluder stops clipping
+   damage of the windows beneath it.
+3. dom0 does not manage override-redirect windows at all, so they are absent from
+   `_NET_CLIENT_LIST` - which also means **`qtest shot` cannot see them**. Any capture-based
+   investigation of this bug is blind to the very window that triggers it; that is why the sweep
+   above could only exonerate the plain path, not reproduce the reported one.
+
+Self-heals, per the owner, which is consistent with the settle-time full recapture.
+
+NEXT STEP when this is picked up: get the exact modal (which app, which dialog), then run
+`tools/winwatch.cs` during the drag - it enumerates override-redirect windows that the screenshot
+service cannot see, and its `ovr`/`synth`/`DEMOTED` columns would show what the agent decided about
+that dialog at the moment of the distortion.
