@@ -120,13 +120,25 @@ exit /b 87
 :parsed
 
 REM --- elevation check; relaunch through UAC if needed -----------------------
+REM TEST HOOK (docs/RELEASE-TESTING-PROTOCOL.md Gate 2, mandatory non-elevated row). Every rig sets
+REM EnableLUA=0 so that `net session` below always succeeds and this whole block is UNREACHABLE on
+REM our hardware - which is exactly how the %~f0 defect shipped in three releases and was reported
+REM twice from the field. With QWT_ELEVATE_DRYRUN=1 the probe is skipped and the relaunch is PRINTED
+REM instead of run, so the row can be asserted on a UAC-off guest. Inert unless that variable is set.
+if defined QWT_ELEVATE_DRYRUN goto notelevated
 net session >nul 2>&1
 if not errorlevel 1 goto elevated
+:notelevated
 echo Not elevated - requesting administrator rights...
 REM -Wait -PassThru and propagate the child's code: this used to `exit /b 0` unconditionally, so a
 REM failed elevation - and any failure of the elevated run - was reported to the caller as SUCCESS.
 REM tools/qwt-bootstrap waits on this and returns its code, so qubes-tools-<ver>.exe /passive run
 REM non-elevated printed an error and still exited 0.
+if defined QWT_ELEVATE_DRYRUN (
+  echo ELEVATE-FILEPATH=[%SELF%]
+  echo ELEVATE-ARGS=[%RAWARGS%]
+  exit /b 0
+)
 if defined RAWARGS (
   powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Start-Process -FilePath '%SELF%' -ArgumentList '%RAWARGS%' -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
 ) else (
