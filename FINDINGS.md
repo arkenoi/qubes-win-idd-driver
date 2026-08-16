@@ -11535,3 +11535,39 @@ which is unambiguous here: `WS_POPUP|LAYERED|TRANSPARENT|NOACTIVATE` with `alpha
 alpha drop shadows. Captured without alpha they render as opaque rectangles - which matches the
 "weird override window on screen" the owner reported earlier in this session. NOT yet confirmed by
 pixels; do not state it as established.
+
+## 2026-08-16 — full winwatch session on Explorer/NetUI: synthesis coverage measured
+
+627 s, 57 popup creations (~5/min sustained while driving the ribbon). Popup lifetimes: p50 1050 ms,
+p90 2467 ms, shortest ~227 ms (shadows).
+
+**Ownership, which is what decides synthesizability:**
+
+| | count |
+|---|---|
+| created ALREADY ownerless | **18/57** (16 shadows, 2 `#32768` context menus) |
+| orphaned after birth | **9**, at 112/117/117/117/117/131/133/150/165 ms |
+| **never synthesizable in total** | **27/57 = 47%** |
+
+**By class:**
+
+| class | verdict | n |
+|---|---|---|
+| `Net UI Tool Window` (ribbon dropdowns, galleries) | always-yes | 24 |
+| `SCENIC_DROPSHADOW_WINDOW_CLASS` | 16 never-owner + 9 FLIPS = **never reliable** | 25 |
+| `#32768` (context menu) | never-owner | 2 |
+| `Net UI Tool Window Layered` | always-yes | 2 |
+| CoreWindow / ApplicationFrameWindow / Progman / EdgeUiInputTopWndClass | never-owner (real top-levels) | 5 |
+
+**Conclusion: synthesis is working for the CONTENT popups and missing ALL the decoration.** Every
+ribbon dropdown composites correctly; every drop shadow becomes its own announced dom0 window
+(CREATE + MAP `transient=0x0` + repeated full-window DAMAGE, ~17 log lines each, 25 of them here).
+
+The right treatment for shadows is therefore NOT better synthesis - it is to DROP them: they are
+pure `UpdateLayeredWindow` decoration with per-pixel alpha, and dom0 has no alpha channel for them
+anyway. And the drop predicate **cannot be ownership-based**, since 16 are born ownerless and 9 more
+are orphaned inside 165 ms. The reliable signal is the style shape:
+`WS_POPUP|WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOACTIVATE` with `alpha=ulw`.
+
+Note `#32768` context menus can ALSO be ownerless (2 seen), so "ownerless popup" alone must not mean
+"drop" - that would delete real menus. The discriminator has to be narrower than ownership.
