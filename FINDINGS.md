@@ -11618,3 +11618,32 @@ So the synthesis path is NOT leaking: nothing that qualifies is being missed. Th
 reach dom0 as separate windows are the structurally ineligible ones (16 born ownerless, 9 orphaned
 within 165 ms). That closes the question - the remaining work is solely the shadow DROP, not better
 synthesis coverage.
+
+## 2026-08-16 — the red flashing frames IDENTIFIED: announced drop-shadow windows, ~317 ms each
+
+Owner: "i see red frames flashing before they get synthesized." Now characterised end to end.
+
+**It is NOT announce-then-synthesize.** Checked first, because that was the obvious hypothesis: in
+the agent's protocol trace, `CREATE` and `SYNTH` never occur for the same hwnd - 84 windows announced,
+69 synthesized, **zero overlap**. A window is either announced or composited, never announced and
+then withdrawn into its owner. So the flash is not a transition.
+
+**It is the shadow windows themselves.** Filtering `CREATE` by the shadow signature
+`ex=0x08180028` (LAYERED|TRANSPARENT|NOACTIVATE|TOPMOST):
+
+    41 shadow windows announced, mapped lifetimes:
+    333 317 333 333 316 116 350 317 317 333 317 317 334 300 316 355 317 317 334 317 ... ms
+
+**~317 ms each, tightly clustered** - a NetUI fade duration. dom0 draws its 1 px qube-coloured
+border around every window it maps, override-redirect included (CLAUDE.md 2A-chrome expects
+"+1px-bordered popup when open"), so each of these is a red frame that appears and disappears in a
+third of a second. With 41 in a session of ribbon use, that is the flashing.
+
+Correction to the owner's reading, which was otherwise right: the red frame is not the content popup
+awaiting synthesis. The content popup (`Net UI Tool Window`) composites silently and is never
+announced (verified: 26/26 eligible, CREATE=0). The flashing object is the DECORATION, which is
+structurally unsynthesizable (born ownerless or orphaned within 165 ms).
+
+**This upgrades the shadow-drop from a cost optimisation to a visible-defect fix.** Previously the
+cost was measured but the visual harm was explicitly recorded as NOT demonstrated. It is now
+demonstrated, by the user, with the mechanism and timing attached.
