@@ -11115,3 +11115,32 @@ would be some windows losing the caption and others keeping it.
 
 Conclusion: not worth doing by style-stripping. If the goal is the double-titlebar look, the layer
 that owns it is dom0's WM decoration policy (off-limits) or the daemon (upstream, later).
+
+## 2026-08-16 — attempt to measure dom0's apply lag offline: FAILED, hypothesis disproved
+
+Tried to recover dom0's apply lag `L` from the baseline drag log with no new drag, on the hypothesis
+that some of the 26 inbound configures were echoes of positions we announced.
+
+**They are not.** Correlating all 541 outbound announces against the 26 inbound configures for the
+drag window matched all 26 at exactly 0 ms - because the match found our own ACK REPLY, emitted in
+the same millisecond as the inbound request:
+
+    20260816.144113.230 IN  199 271     <- dom0's configure request
+    20260816.144113.230 OUT 199 271     <- our ACK, same ms, same coords
+
+So the inbound stream during a drag is dom0-INITIATED (the WM adjusting), not confirmation of
+anything we sent. dom0 emits no per-move acknowledgement, which is exactly why `InputDragAdoptMs` is
+a fixed guess. The 4.8 % inbound/outbound ratio measured earlier stands but means dom0-initiated
+moves, not feedback.
+
+**Consequence for measuring `L`.** It needs real dom0-driven pointer motion over the window:
+- a guest-side `SendInput` drag does NOT work - it never generates dom0 motion events, so the
+  reconstruction path under test is bypassed entirely;
+- polling dom0 window geometry is not an option: geometry polling captures the whole dom0 desktop
+  (privacy), and the qrexec round trip is far too coarse to resolve a ~30 ms lag anyway;
+- so it is either one ordinary hand drag with the trace build installed, or a dom0-side pointer
+  injection service (xdotool mousemove/mousedown is present in dom0, but adding a service is a dom0
+  change and needs the owner).
+
+Rig is left armed for the first option: trace build `058B4A02E45A677A` installed and verified,
+ProtoTrace on, shipped drag defaults, Notepad open. One caption drag produces the data.
