@@ -78,6 +78,28 @@ done
 # THE TEMPLATE STILL NEVER REACHES A NETWORK: the netvm is attached with a drop-everything firewall,
 # so the device is enumerated and the driver install completes while no traffic can leave, then it
 # is detached again.
+# MEASURED 2026-08-17 on win10-tpl: reaching a STARTED PV NIC takes THREE clean boots, and the
+# intermediate states are what makes an AppVM unusable rather than merely slow:
+#
+#   boot 1  vif appears, PnP stages the package (xennet.sys + oemN.inf on disk)  problem 19
+#   boot 2  the service key is created, device demands a restart                 problem 14
+#   boot 3  device starts, adapter Up, emulated RTL8139 unplugged                problem 0
+#
+# An AppVM can never get past boot 2: problem 14 means "restart to finish", the guest restarts,
+# and its VOLATILE root discards the half-finished install - that is the reset loop, in full.
+# The template's persistent root keeps it, so the AppVM inherits a device that is already done.
+#
+# Waiting a fixed two minutes (what this did before) is NOT equivalent: it happened to survive
+# on an already-primed template and silently produced a template stuck at problem 14 otherwise.
+# So boot until the guest itself reports problem 0, and FAIL LOUDLY if it never does - a template
+# that ships half-installed breaks every app qube built on it, which is exactly how this shipped.
+pvnic_problem() {
+    # Guest-reported CM_PROB_* for the PV NIC devnode, or empty if unreachable. Guest output is
+    # untrusted data: only ever compared against a literal, never executed.
+    printf '%s\n' "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"(Get-PnpDeviceProperty -InstanceId 'XENVIF\\VEN_XP&DEV_NET\\0' -KeyName 'DEVPKEY_Device_ProblemCode' -EA SilentlyContinue).Data\"" \
+        | timeout 120 qrexec-client-vm "$1" qubes.VMShell 2>/dev/null | tr -cd '0-9'
+}
+
 prime_pv_nic() {
     local vm="$1" net="$2"
     [ -n "$net" ] || { log "no netvm given, skipping PV NIC priming (app qubes will loop when networked)"; return 0; }
@@ -87,26 +109,38 @@ prime_pv_nic() {
     qvm-firewall "$vm" reset >/dev/null 2>&1
     qvm-firewall "$vm" add action=drop >/dev/null 2>&1
 
-    qvm-start "$vm" >/dev/null 2>&1
-    # The guest resets itself once to complete the install; wait for it to settle rather than
-    # racing it. Two minutes is generous - the install happens seconds after the vif appears.
-    local i
-    for i in $(seq 1 24); do
-        sleep 5
-        [ "$(qvm-check --running "$vm" >/dev/null 2>&1; echo $?)" = "0" ] || qvm-start "$vm" >/dev/null 2>&1
+    local boot prob=''
+    for boot in 1 2 3 4 5; do
+        qvm-start "$vm" >/dev/null 2>&1
+        # Settle: qrexec has to come up before the probe means anything.
+        local i
+        for i in $(seq 1 30); do
+            sleep 6
+            prob="$(pvnic_problem "$vm")"
+            [ -n "$prob" ] && break
+        done
+        log "  boot $boot: PV NIC problem code = ${prob:-<unreachable>}"
+        [ "$prob" = 0 ] && break
+        timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1 || qvm-kill "$vm" >/dev/null 2>&1
     done
 
-    qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
     qvm-prefs "$vm" netvm '' || true
     qvm-firewall "$vm" reset >/dev/null 2>&1
-    log "PV NIC primed; $vm is offline again"
+
+    if [ "$prob" != 0 ]; then
+        log "FAIL: $vm still reports PV NIC problem ${prob:-<unreachable>} (0 required)."
+        log "      App qubes on this template WILL restart-loop when networked. Not shipping it."
+        return 1
+    fi
+    log "PV NIC primed (problem 0, started); $vm is offline again"
 }
 
 # Priming is opt-out: PRIME_NETVM= to skip it, otherwise the app qube's netvm is used.
 if [ "${PRIME_NETVM-unset}" = "unset" ]; then
     PRIME_NETVM="$(qvm-prefs "$APP" netvm 2>/dev/null)"
 fi
-prime_pv_nic "$TPL" "$PRIME_NETVM"
+prime_pv_nic "$TPL" "$PRIME_NETVM" || { log "FAIL: PV NIC priming did not complete"; exit 1; }
 
 log "done: template=$TPL appvm=$APP"
 qvm-ls --fields NAME,STATE,KLASS,TEMPLATE "$TPL" "$APP" 2>/dev/null | tail -3
