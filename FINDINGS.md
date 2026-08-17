@@ -12085,3 +12085,34 @@ ribbon panel in the first place. Thread closed; no further work on menu behaviou
 **Scoreboard for this bug, worth remembering**: three attempts, two of them wrong in the same way -
 asserting which conditions a code path runs under instead of measuring. Every correction came from
 the owner's observation, not from my analysis.
+
+## 2026-08-17 — menu-on-drag PARKED, all four mechanisms measured and reverted
+
+Owner: *"it fails. ok let it be for a while. it was okayish when i assumed it auto dismisses, and
+seemingly it does not at all."*
+
+Everything added today for this is reverted; the tree is back to the containment behaviour it had
+this morning. What was tried, all measured on the rig, none of it working:
+
+| mechanism | result |
+|---|---|
+| materialize at drag freeze | **never fired** on the owner's path (0 hits) - dead code for a dom0-driven move |
+| materialize by membership | fired, but detaching sooner only performed the artefact sooner ("drops out even more aggressively") |
+| `PostMessage(WM_CANCELMODE)` cross-process | fired **9x**, ignored; child re-synthesized next pass |
+| `SetForegroundWindow(owner)` | returned **TRUE**, changed nothing - the menu's OWNER IS that window, so activation never leaves it |
+| `SendInput(ESC)` | fired, ignored |
+
+**The premise was wrong too.** "Okayish" rested on the menu auto-dismissing after a moment; the
+owner then established it does not auto-dismiss at all. What dismisses it when you click away is the
+CLICK, not the focus change - so the whole focus-based family is dead, not merely misapplied.
+
+**Process failure worth recording.** Five attempts, and the first four shared one fault: asserting
+which conditions a code path runs under, or what an API does cross-process, instead of measuring
+first. Every correction came from the owner's observation. The reverting commit itself then broke
+brace balance on the first try (-2) because I replaced ranges by index without checking; caught by
+comparing `{`/`}` counts against HEAD before committing, which is now the minimum bar for any
+bulk edit of this kind.
+
+**Do not resume this** without first measuring what actually reaches an open menu owned by another
+process from a SYSTEM service. Trying a sixth mechanism blind is not warranted - the underlying
+behaviour is cosmetic, and the released fixes have not reached the reporter yet.
