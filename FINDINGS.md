@@ -12247,3 +12247,53 @@ properly in the template: still dies, so xenbus_monitor is genuinely ruled out.
 **Separate real problem, unrelated**: every Windows qube here is `memory=8192` with `maxmem=0`
 (ballooning off), so each pins a hard 8 GB and a fourth qube fails with
 `Error: Not enough memory to start domain`.
+
+## 2026-08-17 — ROOT CAUSE CONFIRMED: xennet's first install needs a reboot an app qube can never keep
+
+The device says it itself:
+
+    XENVIF\VEN_XP&DEV_NET\0   err=14   service=xennet
+    setupapi: Device 'XENVIF\VEN_XP&DEV_NET\0' pending start:
+              Device has problem: 0x38 (CM_PROB_NEED_CLASS_CONFIG)
+
+**Problem 14 = `CM_PROB_NEED_RESTART`.** The first time a vif appears, Windows installs `xennet` on
+the XENVIF NET child, creates the service, and the device CANNOT START until a reboot. That reboot
+is the `guest-reset` seen in the qemu log. A template's persistent root completes it once; an app
+qube's volatile root discards it every boot -> reinstall, restart demand, reset, halt. Forever.
+
+The emulated Realtek install is the SECOND half of the same story: while the PV NIC is stuck
+pending-restart, the emulated card is the only working NIC, so it stays and takes DHCP. It is a
+symptom, not the cause - my earlier "pre-install the Realtek driver" fix direction is superseded.
+
+**The PV stack itself is FINE** (owner was right to push back): `XENVIF\VEN_XP&DEV_NET\0` and
+`XENBUS\VEN_XP0001&DEV_VIF\_` both exist and `xenvif` reports err=0. Our newer xenvif (08/15/2026 vs
+stock 04/07/2025) did fix the REV_09000004/5 mismatch. Nothing here supports "xenvif never binds".
+
+**WHY IT SLIPPED - three filters, each sufficient on its own:**
+1. The rig is offline by policy (CLAUDE.md), so no vif ever appears and the restart requirement
+   cannot arise.
+2. `guest/health-check.ps1` marks `pv_drivers_bound` **N/A** when no adapter is attached - so the one
+   check written for this has been N/A on EVERY run this project has made.
+3. The single networking test on record (`Install-QwtImproved.ps1`: "Proven on win10-clean") ran on a
+   **StandaloneVM with a persistent root**, where the reboot completes and everything works. The
+   defect is structurally invisible on a standalone; only a volatile-root app qube can show it.
+
+We tested the one configuration where it cannot appear, with a check that could not fire, on a rig
+that could not reach it.
+
+**AN OFFLINE FIX IS IMPOSSIBLE** - measured on a pristine template (`win11-tpl`, never networked):
+no VIF class device, no NET child, no `xennet` service. The devnodes exist only after a vif has
+appeared, so the installer has nothing to install against.
+
+**FIX SHIPPED** in `mgmt/clone-to-template.sh`: prime the template once at creation. It is given a
+netvm with a **drop-everything firewall**, so the vif is enumerated and the driver install completes
+while no traffic can leave, then the netvm is detached. The template still never reaches a network.
+Opt out with `PRIME_NETVM=`.
+
+**NOT YET VERIFIED END TO END**: `win10-tpl` is contaminated (I primed it by hand while
+diagnosing) and `win11-app` + netvm worked from the start, so this may be Win10-specific. The
+acceptance test - build a fresh template through the modified script, then start a networked app
+qube - has NOT been run.
+
+**Likely GWeck #19** ("AppVM on the Win10 template starts, then silently shuts down"): same
+signature, and it would reproduce on any networked app qube he makes.
