@@ -58,5 +58,50 @@ for p in virt_mode kernel memory maxmem vcpus qrexec_timeout netvm; do
     qvm-prefs "$APP" "$p" "$v" >/dev/null 2>&1
 done
 
+# --- prime the PV network device (see FINDINGS 2026-08-17) --------------------------------
+# WHY THIS EXISTS. The first time a vif appears, Windows installs xennet on the XENVIF NET
+# child and the device lands in CM_PROB_NEED_RESTART (problem 14) - it cannot start until a
+# reboot. A TEMPLATE has a persistent root, so that reboot completes the install once and for
+# all. An APP QUBE does not: its system volume is discarded every boot, so it reinstalls,
+# demands a restart, resets, and Qubes halts it. Measured: an app qube from an unprimed
+# template dies ~4 s after DHCP forever; from a primed one it runs indefinitely.
+#
+# This cannot be done offline. On a pristine template there is NO VIF class device, NO NET
+# child and NO xennet service at all - the devnodes only exist once a vif has appeared - so
+# there is nothing for the installer to install against. The device has to arrive once.
+#
+# THE TEMPLATE STILL NEVER REACHES A NETWORK. It is given a netvm with a drop-everything
+# firewall, so the vif device is enumerated and the driver install completes, while no traffic
+# can leave. The netvm is detached again immediately afterwards.
+prime_pv_nic() {
+    local vm="$1" net="$2"
+    [ -n "$net" ] || { log "no netvm given, skipping PV NIC priming (app qubes will loop when networked)"; return 0; }
+
+    log "priming PV network device on $vm via $net (traffic blocked)"
+    qvm-prefs "$vm" netvm "$net" || return 1
+    qvm-firewall "$vm" reset >/dev/null 2>&1
+    qvm-firewall "$vm" add action=drop >/dev/null 2>&1
+
+    qvm-start "$vm" >/dev/null 2>&1
+    # The guest resets itself once to complete the install; wait for it to settle rather than
+    # racing it. Two minutes is generous - the install happens seconds after the vif appears.
+    local i
+    for i in $(seq 1 24); do
+        sleep 5
+        [ "$(qvm-check --running "$vm" >/dev/null 2>&1; echo $?)" = "0" ] || qvm-start "$vm" >/dev/null 2>&1
+    done
+
+    qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    qvm-prefs "$vm" netvm '' || true
+    qvm-firewall "$vm" reset >/dev/null 2>&1
+    log "PV NIC primed; $vm is offline again"
+}
+
+# Priming is opt-out: PRIME_NETVM= to skip it, otherwise the app qube's netvm is used.
+if [ "${PRIME_NETVM-unset}" = "unset" ]; then
+    PRIME_NETVM="$(qvm-prefs "$APP" netvm 2>/dev/null)"
+fi
+prime_pv_nic "$TPL" "$PRIME_NETVM"
+
 log "done: template=$TPL appvm=$APP"
 qvm-ls --fields NAME,STATE,KLASS,TEMPLATE "$TPL" "$APP" 2>/dev/null | tail -3
