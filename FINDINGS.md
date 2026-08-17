@@ -12503,3 +12503,45 @@ vif attachment with a drop-everything firewall, takes ~3 minutes, and is verifie
 latch is recorded here as a real mechanism with a real limit, not as a workaround to adopt.
 
 NOT retracting anything from the priming work; this is an additional negative result.
+
+### Template-side install with NO vif: tested at the API level, refused by SetupAPI
+
+Follow-up question: can the install be done on the TEMPLATE side (persistent root, stable adapter
+identity) without ever attaching a netvm? Tested the one mechanism that could do it - synthesise the
+devnode with SetupAPI and let Windows' own Net class installer author everything.
+
+Ran read-only first (`-ProbeOnly`, which makes no persistent change). It failed at the earliest step
+that matters, before anything was registered:
+
+    create_device_info  ok    XENVIF\VEN_XP&DEV_NET\0 accepted (in-memory element)
+    set_hardware_ids    FAIL  0xE0000209 ERROR_INVALID_REG_PROPERTY   persistent: false
+
+SetupAPI will not accept an SPDRP_HARDWAREID write on a synthesised devnode whose instance ID names a
+FOREIGN BUS ENUMERATOR (XENVIF). devcon's usual "install a driver for an absent device" flow works
+because it creates ROOT-enumerated devnodes; we cannot use that here without creating a second,
+phantom adapter. So the class installer never runs, and no NetCfg state is authored.
+
+This is a clean negative: the run aborted before `DIF_REGISTERDEVICE`, so it did NOT create the
+one-way-door devnode that both reviewers (and our own retracted seed) identified as the real hazard -
+once `Enum\...\0` carries ClassGUID + a Driver reference, PnP treats the device as installed and
+never re-runs driver selection, and the NIC is dead forever.
+
+**RETRACTION of a claim I made earlier the same day.** I wrote that a pristine template already has
+`xennet.sys` in `System32\drivers` and therefore "this is a registry-state problem, not a driver
+delivery problem". Wrong - that reading came from a template that had ALREADY had a vif attached.
+Measured on a genuinely pristine template:
+
+    DriverStore\FileRepository\xennet.inf_amd64_1127700ae757566f   present   (package staged)
+    C:\Windows\INF\oem6.inf                                        present   (INF staged)
+    System32\drivers\xennet.sys                                    ABSENT
+    System32\drivers\xenvif.sys                                    ABSENT
+    Services\xennet                                                ABSENT
+
+The package is staged; the BINARY IS COPIED AND THE SERVICE CREATED BY THE DEVICE INSTALL ITSELF.
+There is no state to seed short of doing the install, and the install needs the device, and the
+device needs a vif.
+
+**Three mechanisms now tested, all negative:** copy the device registry state (unshippable and
+actively harmful), arm the unplug latch (starts the device but the adapter is reinstalled every boot
+so the Qubes IP cannot persist), synthesise the devnode (refused by SetupAPI). Priming the template
+with one vif, firewalled off, stays the answer.
