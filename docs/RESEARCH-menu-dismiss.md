@@ -41,7 +41,7 @@ release of the fixes that are already verified.
 | materialize by membership (child did not move while owner did) | fired correctly, but detaching sooner only performs the artefact sooner |
 | `PostMessage(WM_CANCELMODE)` to owner and to menu | fired **9x** in one drag, ignored; child re-synthesized on the next pass |
 | `SetForegroundWindow(owner)` | returned **TRUE** and changed nothing — the menu's OWNER IS that window, so activation never leaves it |
-| `SendInput(VK_ESCAPE)` | fired, ignored |
+| `SendInput(VK_ESCAPE)` | fired, ignored — but see E1b: this delivers to the FOCUSED window, and a menu holds capture, not focus, so the key may never have reached the owner's modal loop |
 
 All of it was reverted; the tree is back to containment-only behaviour.
 
@@ -72,6 +72,26 @@ Add a `--dismiss-menu <hwnd>` mode that, running as the user, tries in order: `E
   helper, and E2–E4 are unnecessary.
 - **None works** → identity is NOT the explanation, and the mechanism itself is wrong for a reason
   yet to be found. Continue.
+
+### E1b — Deliver ESC to the OWNER's queue, not to the menu
+
+Owner's observation, 2026-08-17, and it explains why the `SendInput(ESC)` attempt failed rather than
+merely recording that it did: **a menu holds mouse capture but not keyboard focus**. It runs a modal
+message loop on the OWNER's thread, so the key has to arrive in the owner's queue to be seen by that
+loop. `SendInput` delivers to whatever has focus at the time — during a dom0-driven drag that is not
+guaranteed to be the owner, so the key may simply never have reached the loop.
+
+    PostMessage(owner, WM_KEYDOWN, VK_ESCAPE, lParam);
+    PostMessage(owner, WM_KEYUP,   VK_ESCAPE, lParam);
+
+Note this is NOT the `WM_CANCELMODE` case that failed: that asked the window to cancel a mode, which
+a cross-process post from SYSTEM was refused/ignored for. This is ordinary keyboard input into the
+queue the modal loop is already pumping.
+
+- **Works** → done, and it is the cheapest possible fix.
+- **Fails** → check whether posted input is being filtered cross-process (UIPI applies to posted
+  messages in a way it does not to `SendInput`), which points at running it from the user-context
+  helper of E1, then at E2.
 
 ### E2 — AttachThreadInput + EndMenu
 
