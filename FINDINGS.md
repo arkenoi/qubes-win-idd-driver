@@ -11997,3 +11997,49 @@ keep-managed invariant. What is unsolved: doing it WITHOUT provoking a re-map.
 That is also an argument for the crop route in `docs/PLAN-composition-layer.md` stage 3 - announced
 geometry independent of the OS window rect changes no window styles at all, so there is no re-map to
 provoke.
+
+## 2026-08-17 — guest shadows off in seamless (kept), and the synth fix that never fired (retracted)
+
+**Shadows: shipped and verified.** `ApplyGuestShadows` runs a one-shot helper under the interactive
+user's token (the agent is SYSTEM and cannot write HKCU) to clear the DropShadow bit in
+`UserPreferencesMask`, mirror it in `VisualEffects\DropShadow`, and broadcast `WM_SETTINGCHANGE`.
+Applied from `SetSeamlessMode`, which `StartFrameProcessing` calls with `forceUpdate` on every
+capture start, so it covers agent startup as well as mode switches; the fullscreen direction
+restores rather than leaving the guest altered. Measured on the rig:
+
+    agent log: "guest window shadows disabled (seamless)"
+    UserPreferencesMask byte1 = 0x1A   (DropShadow bit clear)
+
+Worth it on its own: shadow pixels were crossing the capture path and being drawn under a window
+dom0 already decorates. Owner: *"the shadow tweak was worth it separately."*
+
+**The bonus I predicted did NOT materialise.** I expected the extended frame bounds to collapse
+toward the window rect, simplifying the invisible-border crop. Measured after the change:
+
+    win=(400,300)-(1200,900)  efb=(407,300)-(1193,893)   inset L7 T0 R7 B7
+
+The 7 px inset survives - DWM's invisible resize border is a separate thing from the drop shadow, so
+the crop math and the black-band class are untouched. Claim retracted.
+
+Also unchanged, as expected: NetUI's `SCENIC_DROPSHADOW_WINDOW_CLASS` surfaces are the APP's own
+shadow windows, not DWM's, so this preference does not reach them - the class-drop rule shipped
+2026-08-16 is still what handles those.
+
+**RETRACTED: the drag-freeze synthesis fix never ran.** Instrumented after a real drag with a menu
+open:
+
+    materialize_before_freeze = 0     <- the new code
+    freeze_deferred           = 0
+    dom0_hold_deferred        = 0
+    containment_materialize   = 1     <- the OLD path did the work
+
+Both hooks sit on freeze transitions (`PwDragFrozen`, `DaemonDamageHeld`) and a dom0-driven move
+reaches NEITHER, so the fix was dead code for the case the owner actually exercises. The improvement
+he reported ("damage significantly reduced and self-healed fast") came from other changes, NOT from
+this - do not attribute it here.
+
+Replaced with a MEMBERSHIP test in the owner-geometry-changed block of `UpdateWindowData`, which is
+the path that does run: we only reach it because the owner moved, so a child whose absolute position
+is unchanged did not travel with the owner and was never part of the compound window. Containment
+stays as the fallback. Not yet verified - the acceptance is a NON-ZERO count of
+"owner moved and this child did not" on the next hand drag.
