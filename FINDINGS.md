@@ -12208,12 +12208,27 @@ the identical install on the persistent template did NOT reset. The template ins
 18:38:42 and kept running for 90+ s. The fix does not depend on knowing this, but the mechanism is
 incomplete without it.
 
-**Fix direction** (production templates must never be networked, so this has to be done offline):
-pre-install the RTL8139 driver during setup - `pnputil /add-driver netrtl64.inf /install` or an
-equivalent pre-bind of `PCI\VEN_10EC&DEV_8139` - in `Install-QwtImproved.ps1` beside the existing PV
-driver staging. `netrtl64.inf` is already in the in-box DriverStore; it is simply not BOUND until the
-device appears. Acceptance: install into a template that has NEVER seen a netvm, then start an AppVM
-with one.
+**CORRECTED FIX DIRECTION.** Pre-installing the Realtek driver treats the SYMPTOM. The emulated NIC
+should never reach DHCP at all: the design is that `xenvif` binds and UNPLUG v3 removes the QEMU
+adapter. Our own health check asserts it - `pv_drivers_bound` requires `emuNics.Count -eq 0`,
+"The emulated NIC must be GONE, not merely coexisting" (`guest/health-check.ps1:258`). Evidence says
+it never happens: `xenvif.inf` is staged in the template FOUR times and there is no `xenvif` service
+at all, so the emulated NIC lives, does DHCP, and gets a first-time PnP install that a volatile root
+cannot keep.
+
+So the real fix is the README's existing known blocker - **make xenvif actually bind** - and the
+Realtek pre-install is at most a belt-and-braces mitigation for guests where it does not.
+
+**HOW WE MISSED IT.** `guest/health-check.ps1:252-256` marks `pv_drivers_bound` **N/A when no network
+adapter is attached**, which is correct in itself (asserting "the NIC must be PV" on an offline guest
+fails for the wrong reason). But the rig is offline BY POLICY (CLAUDE.md: "Do not enable networking
+on the test VM"), so that check has been N/A on **every run this project has ever done**. The one
+test written to catch this has never once been evaluated, and nothing reported that it was
+permanently inapplicable.
+
+Protocol consequence (see `docs/RELEASE-TESTING-PROTOCOL.md`): a check that is N/A in the only
+configuration we ever test is not a check. Either the matrix must include one networked AppVM, or
+permanently-N/A checks must be reported as an explicit coverage gap rather than silently skipped.
 
 **Likely explains GWeck #19** ("AppVM on the Win10 template starts, then silently shuts down") -
 same signature, and it would reproduce on any networked AppVM he creates.
