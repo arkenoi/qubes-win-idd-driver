@@ -12043,3 +12043,45 @@ the path that does run: we only reach it because the owner moved, so a child who
 is unchanged did not travel with the owner and was never part of the compound window. Containment
 stays as the fallback. Not yet verified - the acceptance is a NON-ZERO count of
 "owner moved and this child did not" on the next hand drag.
+
+## 2026-08-17 — the "two Explorer windows" resolved: Explorer's ribbon modes, plus one real bug
+
+Owner reported two Explorer windows behaving differently - one with a menu that "stays in and moves
+with the window" (ideal), one rendering over the work area and dismissing on the slightest mouse
+move. Three separate things were tangled here; only one was ours.
+
+**1. Explorer's own ribbon mode (not a bug).** The chevron at the top-right pins or collapses the
+ribbon:
+- pinned -> the ribbon is part of the window's CLIENT AREA. Always visible, above the work area,
+  moves with the window because it IS the window.
+- collapsed -> clicking a tab drops the ribbon as a transient overlay OVER the work area, which
+  auto-dismisses when focus moves. Native behaviour.
+
+These map exactly onto the membership distinction: a pinned ribbon is part of the compound window,
+an overlay ribbon is a transient popup. Window 1's behaviour cannot be given to window 2 - they are
+different objects. Owner confirmed: *"so yes, they are the same"* once the confound below was gone.
+
+**2. My confound.** Window 2 had no title because I stripped its caption BY HAND during the caption
+experiments (`0x102CA`); the feature itself is default-off and shipped nothing. Restored. A
+caption-stripped window's client area also grows by the caption height, which is the likely cause of
+the misplaced menu geometry he saw. Lesson: leftover manual experiment state on the rig produced a
+false A/B that cost real debugging time.
+
+**3. A real bug, ours, now fixed.** The menu dismissal I added fired on EVERY quiet tracking pass.
+The synth-children block is entered whenever an owner has synthesized children, NOT only when the
+owner moved - my comment asserted the opposite and the code relied on it. Measured before/after with
+a menu held open and idle 15 s:
+
+| build | dismissals while idle |
+|---|---|
+| previous | **18** |
+| gated on `coordsChanged` | **0** |
+
+**Outcome accepted by the owner**: the overlay menu now stays out ~1 s after moving away and then
+vanishes (the settle-time recapture), *"okayish ... it is fine as is"*. Pinning a transient popup
+into the owner's buffer to avoid that is explicitly NOT wanted - it is what produced the orphaned
+ribbon panel in the first place. Thread closed; no further work on menu behaviour.
+
+**Scoreboard for this bug, worth remembering**: three attempts, two of them wrong in the same way -
+asserting which conditions a code path runs under instead of measuring. Every correction came from
+the owner's observation, not from my analysis.
