@@ -12116,3 +12116,58 @@ bulk edit of this kind.
 **Do not resume this** without first measuring what actually reaches an open menu owned by another
 process from a SYSTEM service. Trying a sixth mechanism blind is not warranted - the underlying
 behaviour is cosmetic, and the released fixes have not reached the reporter yet.
+
+## 2026-08-17 — OPEN: an AppVM with a netvm dies ~28 s after activation
+
+Owner: *"templates we have so far are unusable to create actual VMs"* — and, correcting my framing
+twice: templates being offline is BY DESIGN; the defect is exactly **an AppVM with a netvm dies**.
+An AppVM that cannot be networked is not a usable qube, so this blocks real use of the templates.
+
+**Reproduced cleanly, same qube, only the netvm changed** (`win10-app`, template `win10-tpl`):
+
+| netvm | result |
+|---|---|
+| unset | reaches Running, stable, answers qrexec |
+| `core-net` | dies ~10-30 s after activation, never usable |
+
+**Eliminated, each measured:**
+
+| hypothesis | verdict |
+|---|---|
+| host memory exhaustion | NO - still died after freeing 8 GB (though `Not enough memory to start` IS a separate real problem, see below) |
+| `xenbus_monitor` AutoReboot=1 (ours) | NO - set to 0, died anyway |
+| qrexec startup timeout | NO - `qrexec_timeout=6000`, death at ~10-30 s |
+| qubesd requesting shutdown | NO - start logged through "Activating qube", no shutdown call anywhere in the journal |
+| a Qubes feature (`shutdown-idle` etc.) | NO - features clean; AppVM inherits from template as expected |
+
+**MY MISATTRIBUTION, corrected.** I read `xenagent: The tools requested that the local VM shut itself
+down` (event 1074) as the mechanism for today's failures. It is not: that event is dated **08/16**,
+and today's deaths left NO guest-side record at all. Today the domain is destroyed abruptly - which
+is consistent with dom0's `xen-backend console-2003-0 / console-2004-0: device forcefully removed
+from xenstore` and with nothing being flushed to the Windows event log. The graceful-shutdown
+evidence belongs to a DIFFERENT, earlier failure mode.
+
+**dom0 timeline of one death** (17:55): start -> `Setting Qubes DB info` -> `Starting Qubes DB` ->
+`Activating qube` at 17:55:33 -> nothing -> consoles forcefully removed at 17:56:01. **28 seconds,
+with no shutdown request from any dom0 component.** Also visible in the window, not yet ruled in or
+out: `qmemman` reclaiming from doms 25/110 ("still holds more memory than assigned"), and
+`Thin pool qubes_dom0-vm--pool-tpool data is now 80.13% full`.
+
+**The README's "KNOWN BLOCKER: NETWORKING" does not describe this.** That entry says the guest HANGS
+(xenvif never starts, ~2 vCPUs burn, qrexec stops answering, detaching recovers it). What happens now
+is an abrupt domain death in under 30 s. Either the failure changed shape or these are two different
+bugs sharing a trigger; the entry should not be treated as the explanation.
+
+**Separate, real, and independently worth fixing**: every Windows qube here is `memory=8192` with
+`maxmem=0`, i.e. ballooning OFF, so each pins a hard 8 GB. Three running = 24 GB committed and the
+fourth fails outright with `Error: Not enough memory to start domain`. That alone makes a multi-qube
+Windows setup impractical and is unrelated to the netvm bug.
+
+**Next steps for whoever picks this up** (needs dom0, which this repo's qube does not have):
+1. A LINUX AppVM on the same `core-net`. If it also dies, this is not a Windows/QWT bug at all and
+   the whole investigation moves to dom0. This is the cheapest decisive control and was not runnable
+   from here - `core-net` is not even visible to this qube's admin scope ("no such domain").
+2. `xl dmesg` and `/var/log/xen/` for the domain id at the moment of death; a domain going
+   Running -> Dying in seconds with NO dom0 log entry points at the hypervisor/toolstack layer.
+3. `/var/log/qubes/vm-win10-app.log` and the stubdom log - the HVM has a stubdomain (domain ids 2003
+   and 2004 appear as a pair), and a stubdom failure would kill the guest without a guest-side trace.
