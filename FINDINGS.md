@@ -12285,7 +12285,17 @@ that could not reach it.
 no VIF class device, no NET child, no `xennet` service. The devnodes exist only after a vif has
 appeared, so the installer has nothing to install against.
 
-**FIX SHIPPED** in `mgmt/clone-to-template.sh`: prime the template once at creation. It is given a
+**WHY STOCK IS FINE, and it is our own doing** (owner: *"stock qwt did it so can we"*):
+`qvm-create-windows-qube` creates the qube with its DEFAULT NETVM, so a vif is present throughout
+Windows and QWT installation - `xennet` installs then and the installer's own reboot completes it.
+Stock has no clever mechanism; `difxapp:Driver` in the MSI is an ordinary DIFxApp pre-install and our
+template already carries the stock `xennet` (04/07/2025) it produced. What stock never does is
+install BLIND. Our provisioning explicitly strips the netvm first
+(`mgmt/reprovision-usb.sh:50: qvm-prefs "$VM" netvm ''`) per the offline-rig rule, so the PV NIC is
+never installed at all and the debt passes to the first app qube that gets a network - where it can
+never be paid.
+
+**FIX SHIPPED** in `mgmt/clone-to-template.sh`: complete that install at template creation. It is given a
 netvm with a **drop-everything firewall**, so the vif is enumerated and the driver install completes
 while no traffic can leave, then the netvm is detached. The template still never reaches a network.
 Opt out with `PRIME_NETVM=`.
