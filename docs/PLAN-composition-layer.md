@@ -92,6 +92,28 @@ occlusion coupling.
 **Stage 5 - retire desktop-slice feeding entirely**, once nothing depends on it. This is the point
 where "the guest never presents a desktop bitmap" becomes true rather than aspirational.
 
+## Constraint: cropping and occlusion must live in the SAME coordinate space
+
+Raised by the owner while reviewing this: does the crop break occlusion?
+
+It does, if done carelessly, and this is the trap to design against. Cropping makes a window's
+ANNOUNCED rect smaller than its OS window rect. Occlusion today (`rgnCovered`, accumulated over
+watched windows, `main.c:4656`/`5167`) reasons about the desktop in OS-rect terms - and its safety
+argument is that it knows every occluder. Under a crop:
+
+- if occlusion keeps using OS RECTS, a cropped window claims to cover a strip that dom0 no longer
+  draws, so the window beneath it is skipped exactly where it is actually visible -> stale pixels;
+- if it uses ANNOUNCED rects, the claim matches what dom0 renders and stays correct.
+
+Rule: **everything visible to dom0 is computed in announced coordinates** - occlusion claims, damage
+rects, and input translation - while capture SOURCE rects stay in OS coordinates, with the crop
+offset applied at exactly one boundary. Any place that mixes the two is a bug of this class.
+
+The same rule already has a precedent and a scar: `WcSetCrop` exists for per-window capture, and the
+2026-08-16 black-band bug was precisely a stale crop offset (the window's invisible border ending up
+inside the buffer, drawn by dom0 at the visible-rect position). One offset, one owner, recomputed on
+every geometry change.
+
 ## What this does NOT buy
 
 Fullscreen mode is already "bitmaps and a pointer", and it is simple precisely because dom0 does not
