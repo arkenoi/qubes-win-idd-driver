@@ -12448,3 +12448,58 @@ every time. Liveness is now its own probe (`echo QALIVE_OK`). The problem-code r
 
 The script does NOT attach a netvm to the app qube it creates; it prints the exact `qvm-prefs` line
 instead. Creating someone a qube and silently putting it on a network is not its call.
+
+## 2026-08-18 — can we skip the netvm entirely? Measured: no, but the reason moved
+
+Question from the owner: must we prime with SOME netvm, or can the primed state be copied onto a
+pristine template? Tested both candidate mechanisms against a control established the same hour
+(pristine unprimed template -> app qube dies 6 s after start, reproduced at 20:53:23).
+
+**Candidate 1 - copy the device state (the seed I retracted yesterday).** Still dead. The dumps show
+why it can never be a shipped static file: `Services\xennet` carries `Owners="oem6.inf"` and
+`DisplayName="@oem6.inf,..."`, the devnode's `Driver` points at a class ordinal (`0002` here) that
+depends on which NICs the machine already has, and the class instance carries a per-install
+`NetCfgInstanceId` GUID that other hives reference. Any such seed must be GENERATED on the target,
+and a wrong one is worse than none because a forged devnode makes PnP consider the device configured
+and suppresses the repair install.
+
+**Candidate 2 - arm the unplug latch instead of forging the device.** This came out of a multi-agent
+analysis of the dumps and is a genuinely different mechanism, so I tested it. Pre-flight on the
+pristine template matched its prediction exactly, including a control the theory did not have to get
+right:
+
+    Enum\XENBUS subkeys : ...&DEV_CONS, ...&DEV_IFACE, ...&DEV_VBD     <- no VIF
+    Services\XEN\Unplug : DISKS = 1        NICS = (absent)
+
+DISKS is armed and a VBD key exists; NICS is absent and no VIF key exists. The disk side is the
+same mechanism already working. Seeded `NICS=1` plus an empty `Enum\XENBUS\VEN_XP0001&DEV_VIF` key
+(SYSTEM, via scheduled task), clean shutdown, then started the app qube networked:
+
+| | control (pristine) | latch-seeded |
+|---|---|---|
+| app qube | dies at 6 s | **SURVIVES** (2 min+, two boots) |
+| PV device | never starts | **problem 0, xennet Running, adapter Up** |
+| emulated RTL8139 | present, takes DHCP | **GONE** (unplugged) |
+| usable network | Realtek fallback | **NO - APIPA only, no gateway** |
+
+So the latch removes the reset loop and starts the PV NIC WITHOUT ever attaching a netvm to the
+template - which my "you must prime" framing said was impossible. But it does not give a working
+network, and the reason is structural, not a tuning problem:
+
+    boot A: ordinal 0001  NetCfgInstanceId {CC92DD7C-015B-41E0-A390-A46B6624AD8B}  ip 169.254.138.178
+    boot B: ordinal 0001  NetCfgInstanceId {4962F775-7CD1-4A5F-9151-4DC7216D6235}  ip 169.254.126.228
+
+The adapter is INSTALLED FRESH EVERY BOOT on the volatile root, so its identity is new every boot.
+The Qubes address lives in `Tcpip\Parameters\Interfaces\{NetCfgInstanceId}`, which is keyed to that
+GUID, so it cannot persist. A primed template hands the app qube an adapter that already exists, with
+a stable GUID and its configuration intact - that is why priming works and this does not.
+
+**Both adversarial reviewers called this outcome before the test** ("survives with no network at all,
+strictly worse than the Realtek fallback, and silent"). They were right on the direction; the test
+adds that the device itself does reach problem 0, which neither the plan nor the refutations knew.
+
+**CONCLUSION: priming with a netvm once, on the template, stays the shipped answer.** It costs one
+vif attachment with a drop-everything firewall, takes ~3 minutes, and is verified end to end. The
+latch is recorded here as a real mechanism with a real limit, not as a workaround to adopt.
+
+NOT retracting anything from the priming work; this is an additional negative result.
