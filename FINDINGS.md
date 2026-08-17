@@ -12171,3 +12171,57 @@ Windows setup impractical and is unrelated to the netvm bug.
    Running -> Dying in seconds with NO dom0 log entry points at the hypervisor/toolstack layer.
 3. `/var/log/qubes/vm-win10-app.log` and the stubdom log - the HVM has a stubdomain (domain ids 2003
    and 2004 appear as a pair), and a stubdom failure would kill the guest without a guest-side trace.
+
+## 2026-08-17 — SOLVED (mechanism + fix): networked AppVM dies because the emulated NIC is not pre-installed
+
+Owner's insight cracked it: *"this all looks like template wants to finish updates, but with
+non-persistent system volume it is just an endless loop"* — right shape, wrong subject. It is not
+Windows Update (`NoAutoUpdate=1`, no pending-reboot flags anywhere). It is a **first-time PnP install
+of the EMULATED NIC**.
+
+**The decisive experiment**: attach the netvm to the TEMPLATE (persistent root) instead of the AppVM.
+
+| base image | AppVM + netvm |
+|---|---|
+| fresh template, NIC never installed | **resets ~4 s after DHCP, never usable** |
+| template that saw a netvm once | **runs indefinitely** |
+
+**What the template installed**, from `C:\Windows\INF\setupapi.dev.log` at the exact moment:
+
+    Device Install (Hardware initiated) - PCI\VEN_10EC&DEV_8139   <- emulated Realtek RTL8139
+    Driver INF - netrtl64.inf
+    {Add Service: RTL8023x64}  Image Path \SystemRoot\System32\drivers\Rtnic64.sys
+    Created new service 'RTL8023x64'.
+
+**Why an emulated Realtek at all**: Qubes gives every HVM one alongside the PV vif
+(`-device rtl8139,... -netdev type=tap,ifname=vif<domid>.0-emu`) so a guest without PV drivers can
+still network. `xenvif` is supposed to take over and the emulated NIC be unplugged; our README
+already records that it is not. Confirmed in the template: `xenvif.inf` and `xennet.inf` ARE staged
+in the DriverStore (xenvif four times over), but no `xenvif`/`xennet` service exists - only
+`xenagent` and `xenbus_monitor` run.
+
+**The AppVM angle**: an AppVM's system volume is volatile, so the install is discarded every boot -
+install, reset, revert, repeat. Endless loop, exactly as the owner described.
+
+**NOT ESTABLISHED, do not repeat as fact**: WHY a fresh install resets on a volatile-root AppVM when
+the identical install on the persistent template did NOT reset. The template installed the driver at
+18:38:42 and kept running for 90+ s. The fix does not depend on knowing this, but the mechanism is
+incomplete without it.
+
+**Fix direction** (production templates must never be networked, so this has to be done offline):
+pre-install the RTL8139 driver during setup - `pnputil /add-driver netrtl64.inf /install` or an
+equivalent pre-bind of `PCI\VEN_10EC&DEV_8139` - in `Install-QwtImproved.ps1` beside the existing PV
+driver staging. `netrtl64.inf` is already in the in-box DriverStore; it is simply not BOUND until the
+device appears. Acceptance: install into a template that has NEVER seen a netvm, then start an AppVM
+with one.
+
+**Likely explains GWeck #19** ("AppVM on the Win10 template starts, then silently shuts down") -
+same signature, and it would reproduce on any networked AppVM he creates.
+
+**Retraction**: my earlier `xenbus_monitor AutoReboot=0` test was run INSIDE THE APPVM, whose
+volatile root discarded it before the boot it was meant to affect. That result was void. Re-tested
+properly in the template: still dies, so xenbus_monitor is genuinely ruled out.
+
+**Separate real problem, unrelated**: every Windows qube here is `memory=8192` with `maxmem=0`
+(ballooning off), so each pins a hard 8 GB and a fourth qube fails with
+`Error: Not enough memory to start domain`.
