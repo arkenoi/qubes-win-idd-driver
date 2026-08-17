@@ -19,7 +19,9 @@ state() { qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 
 [ "$(state "$SRC")" = Halted ] || { log "FAIL: $SRC must be Halted (a running source gives an inconsistent copy)"; exit 1; }
 
-for v in "$TPL" "$APP"; do
+# APP first: a TemplateVM cannot be removed while a qube is still based on it, so removing $TPL
+# ahead of $APP fails outright on any re-run over an existing pair.
+for v in "$APP" "$TPL"; do
     if qvm-check "$v" >/dev/null 2>&1; then
         log "removing existing $v"
         timeout 120 qvm-shutdown --wait "$v" >/dev/null 2>&1
@@ -137,8 +139,14 @@ prime_pv_nic() {
 }
 
 # Priming is opt-out: PRIME_NETVM= to skip it, otherwise the app qube's netvm is used.
+#
+# The app qube inherits its netvm from the offline source, i.e. NONE - so taking that value alone
+# made the script skip priming and rebuild the very configuration this exists to prevent. Fall back
+# to the system default netvm: which netvm is irrelevant here (the firewall drops everything), all
+# that matters is that A vif exists so Windows enumerates the device.
 if [ "${PRIME_NETVM-unset}" = "unset" ]; then
     PRIME_NETVM="$(qvm-prefs "$APP" netvm 2>/dev/null)"
+    [ -n "$PRIME_NETVM" ] || PRIME_NETVM="$(qubes-prefs default_netvm 2>/dev/null)"
 fi
 prime_pv_nic "$TPL" "$PRIME_NETVM" || { log "FAIL: PV NIC priming did not complete"; exit 1; }
 
