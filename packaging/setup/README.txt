@@ -387,26 +387,20 @@ That instance id is recorded in the === RESULT === JSON and in
 C:\qwt-improved-install.log. Doing only this leaves the IDD device in place, so
 prefer /iddoff, which also disarms the topology apply that caused the state.
 
-KNOWN BLOCKER: NETWORKING
--------------------------
-This is the honest caveat and it is not small.
+NETWORKED APP QUBES
+------------------
+A template stays offline, as templates should. An app qube made from it can be
+online or offline like any other qube.
 
-On our Qubes 4.3 test guest, attaching a netvm makes the guest unusable:
-xenvif installs correctly (its INF is selected, its service is created) but
-never starts, the emulated NIC is never unplugged, roughly two vCPUs burn
-indefinitely and qrexec stops answering. Detaching the netvm recovers the guest
-immediately.
+One caveat, being fixed: the FIRST time an app qube is given a netvm, Windows
+performs a one-off PnP install of the emulated Realtek NIC that Qubes gives every
+HVM (netrtl64.inf, service RTL8023x64). An app qube's system volume is discarded
+at every boot, so on a template that has never seen that device the install can
+never stick, and the qube restarts instead of coming up. Measured 2026-08-17.
 
-What is NOT yet established: whether this is caused by anything in this package
-or by the QWT 4.2.2 PV drivers on this Xen/Qubes combination generally. Every
-PV driver here is byte-identical to the shipped ITL MSI, which is suggestive but
-is NOT proof -- the control experiment (same ISO, stock MSI, same netvm) has not
-been completed. Do not read "our PV drivers are identical" as "this is not our
-fault".
-
-Practical consequence: treat this build as suitable for an OFFLINE Windows qube
-(netvm = none). If you need networking, `/nonet` will not help either -- it
-merely omits the PV network drivers, leaving the guest on the emulated NIC.
+A template that has completed that install once produces app qubes that run
+networked indefinitely, which is what the fix automates during setup -- offline,
+without ever attaching a netvm to a template.
 
 THE WINDOWS KEY AND YOUR START MENU
 -----------------------------------

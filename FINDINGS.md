@@ -12216,8 +12216,15 @@ it never happens: `xenvif.inf` is staged in the template FOUR times and there is
 at all, so the emulated NIC lives, does DHCP, and gets a first-time PnP install that a volatile root
 cannot keep.
 
-So the real fix is the README's existing known blocker - **make xenvif actually bind** - and the
-Realtek pre-install is at most a belt-and-braces mitigation for guests where it does not.
+**RETRACTED IMMEDIATELY (owner): "xenvif never binds" is stale.** That claim came from the README's
+old KNOWN BLOCKER text, which describes a failure fixed long ago (rev 5 / UNPLUG v3), and I read
+"no xenvif service in the template" as confirming it. That evidence is worthless: the template is
+OFFLINE, so there is no vif device for xenvif to bind to and no service is expected. I resurrected a
+stale claim and then misread current evidence to support it. The stale README section has been
+replaced.
+
+The supported fix remains the measured one: ensure the emulated-NIC install is completed in the
+template during setup, offline, so app qubes inherit it.
 
 **HOW WE MISSED IT.** `guest/health-check.ps1:252-256` marks `pv_drivers_bound` **N/A when no network
 adapter is attached**, which is correct in itself (asserting "the NIC must be PV" on an offline guest
