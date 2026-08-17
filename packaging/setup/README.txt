@@ -392,15 +392,24 @@ NETWORKED APP QUBES
 A template stays offline, as templates should. An app qube made from it can be
 online or offline like any other qube.
 
-One caveat, being fixed: the FIRST time an app qube is given a netvm, Windows
-performs a one-off PnP install of the emulated Realtek NIC that Qubes gives every
-HVM (netrtl64.inf, service RTL8023x64). An app qube's system volume is discarded
-at every boot, so on a template that has never seen that device the install can
-never stick, and the qube restarts instead of coming up. Measured 2026-08-17.
+One caveat, now fixed in setup: the FIRST time a Windows guest sees a virtual
+network interface, it installs the Xen PV network driver (xennet), and that
+install needs THREE boots to finish -- stage the driver, register the service,
+then a restart before the device will start. Windows asks for that restart
+itself (device problem code 14, "needs restart").
 
-A template that has completed that install once produces app qubes that run
-networked indefinitely, which is what the fix automates during setup -- offline,
-without ever attaching a netvm to a template.
+An app qube's system volume is discarded at every boot, so it can never get past
+the middle step: it restarts, loses the half-finished install, and restarts
+again. That is why an app qube on a never-networked template appears to start
+and shut down immediately. Measured 2026-08-17.
+
+The template is where that install has to happen, because a template's system
+volume persists. Setup does it there once -- the interface is attached with a
+firewall that drops everything, so the template enumerates the device without
+ever reaching a network, and is detached again afterwards. App qubes then
+inherit a driver that is already installed and running, and they run networked
+indefinitely on the PV interface (the emulated Realtek is unplugged, as it
+should be).
 
 THE WINDOWS KEY AND YOUR START MENU
 -----------------------------------
