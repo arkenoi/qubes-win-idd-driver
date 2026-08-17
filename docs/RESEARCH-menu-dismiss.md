@@ -1,6 +1,6 @@
 # Research plan: dismissing a guest menu whose owner is being dragged
 
-Handoff document. Written 2026-08-17 after five failed implementation attempts in one session. The
+Handoff document. Written 2026-08-17 after SIX failed implementation attempts in one session. The
 point of this plan is that **the next person measures before implementing** — every failure below
 came from assuming what a code path runs under, or what an API does cross-process, instead of
 checking. Do not add a sixth mechanism until Experiment 1 has an answer.
@@ -42,6 +42,7 @@ release of the fixes that are already verified.
 | `PostMessage(WM_CANCELMODE)` to owner and to menu | fired **9x** in one drag, ignored; child re-synthesized on the next pass |
 | `SetForegroundWindow(owner)` | returned **TRUE** and changed nothing — the menu's OWNER IS that window, so activation never leaves it |
 | `SendInput(VK_ESCAPE)` | fired, ignored — but see E1b: this delivers to the FOCUSED window, and a menu holds capture, not focus, so the key may never have reached the owner's modal loop |
+| `PostMessage(owner, WM_KEYDOWN/UP, VK_ESCAPE)` (E1b) | fired **once**, ignored; menu then materialized as usual. n=1 — see the caveat in E1b |
 
 All of it was reverted; the tree is back to containment-only behaviour.
 
@@ -73,7 +74,21 @@ Add a `--dismiss-menu <hwnd>` mode that, running as the user, tries in order: `E
 - **None works** → identity is NOT the explanation, and the mechanism itself is wrong for a reason
   yet to be found. Continue.
 
-### E1b — Deliver ESC to the OWNER's queue, not to the menu
+### E1b — Deliver ESC to the OWNER's queue — **TRIED 2026-08-17, FAILED**
+
+Implemented and measured before this plan was handed over. `posted ESC to owner 0x102ca` appears in
+the log, the menu stayed open, and the containment path materialized it as usual. Reverted.
+
+CAVEAT ON THE STRENGTH OF THIS RESULT: the post fired **once** across six synthesized popups in that
+session, because the gate (`coordsChanged && !childMoved`) is narrow. So this is n=1 - consistent
+with the five other failures, but not by itself conclusive. If E1 shows the user-context helper CAN
+dismiss a menu, re-run this variant from the helper before concluding that posted key input is the
+wrong idea; it may have been the identity, not the message.
+
+The reasoning below is retained because it still explains why the earlier `SendInput` attempt was
+aimed wrongly, and it remains the right thing to re-test from the helper.
+
+#### original rationale
 
 Owner's observation, 2026-08-17, and it explains why the `SendInput(ESC)` attempt failed rather than
 merely recording that it did: **a menu holds mouse capture but not keyboard focus**. It runs a modal
