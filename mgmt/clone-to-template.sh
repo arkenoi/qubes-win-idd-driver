@@ -10,6 +10,7 @@
 # the qube and copies volumes into it BEFORE the tags are applied, so the volume call hits
 # a qube policy does not yet cover. Create, tag, then copy - that order satisfies policy.
 set -u
+HINT_NETVM=""
 SRC="${1:?usage: $0 <src-standalone> <new-template> <new-appvm>}"
 TPL="${2:?}"
 APP="${3:?}"
@@ -190,10 +191,18 @@ prime_pv_nic() {
 if [ "${PRIME_NETVM-unset}" = "unset" ]; then
     PRIME_NETVM="$(qvm-prefs "$APP" netvm 2>/dev/null)"
 fi
-if [ -z "$PRIME_NETVM" ]; then
+# PRIME_NETVM=none is the explicit opt-out: build the pair and skip priming entirely. For an
+# offline-only template that is a legitimate choice; for anything networked it is a loaded gun, so
+# it says so. Empty/unset is NOT the opt-out - that is the accident this guards against.
+if [ "$PRIME_NETVM" = none ]; then
+    log "WARNING: PRIME_NETVM=none - skipping PV NIC priming."
+    log "         Any app qube on $TPL that is given a netvm WILL restart-loop. Offline use only."
+    PRIME_NETVM=''
+    HINT_NETVM='<netvm>'
+elif [ -z "$PRIME_NETVM" ]; then
     log "FAIL: no netvm to prime with. $APP has none, and this script will not pick one for you."
-    log "      Re-run as: PRIME_NETVM=<netvm> $0 $SRC $TPL $APP"
-    log "      (traffic is dropped by firewall throughout; the vif only has to exist)"
+    log "      Re-run as: PRIME_NETVM=<netvm> $0 $SRC $TPL $APP   (traffic is firewalled off;"
+    log "      the vif only has to exist), or PRIME_NETVM=none to deliberately skip priming."
     exit 1
 fi
 prime_pv_nic "$TPL" "$PRIME_NETVM" || { log "FAIL: PV NIC priming did not complete"; exit 1; }
@@ -203,5 +212,5 @@ log "done: template=$TPL appvm=$APP"
 # new qube on their behalf - but say it plainly, because "it starts and does nothing" is the exact
 # confusion this script exists to end.
 [ -n "$(qvm-prefs "$APP" netvm 2>/dev/null)" ] || \
-    log "note: $APP has no netvm. To use it networked: qvm-prefs $APP netvm $PRIME_NETVM"
+    log "note: $APP has no netvm. To use it networked: qvm-prefs $APP netvm ${HINT_NETVM:-$PRIME_NETVM}"
 qvm-ls --fields NAME,STATE,KLASS,TEMPLATE "$TPL" "$APP" 2>/dev/null | tail -3
