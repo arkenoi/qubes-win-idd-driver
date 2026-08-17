@@ -12307,3 +12307,52 @@ qube - has NOT been run.
 
 **Likely GWeck #19** ("AppVM on the Win10 template starts, then silently shuts down"): same
 signature, and it would reproduce on any networked app qube he makes.
+
+## 2026-08-17 — networked AppVMs: RESOLVED, and it takes three boots (not a registry seed)
+
+Closes the thread above; the acceptance test that entry says had not been run is now run and green.
+
+**Root cause, measured end to end on `win10-tpl` with a vif attached (drop-all firewall, no traffic):**
+
+| boot | state of `XENVIF\VEN_XP&DEV_NET\0` | what happened |
+|---|---|---|
+| 1 | `problem 19` (CM_PROB_REGISTRY) | PnP stages the package: `xennet.sys` in `System32\drivers`, `oem6.inf` in the store. No service key yet. |
+| 2 | `problem 14` (CM_PROB_NEED_RESTART), `xennet` = Stopped | service key created; device demands a restart to start |
+| 3 | `problem 0`, `dev_status OK`, `xennet` Running, adapter **Up** | done; emulated RTL8139 goes `Unknown` (xenfilt unplug) |
+
+An AppVM cannot pass boot 2. `problem 14` means "restart to finish", the guest restarts, and its
+**volatile root discards the half-finished install** — that is the reset loop in full, and it repeats
+forever. A template's persistent root keeps the result, so app qubes built on a primed template
+inherit a device that is already started and never enter the loop.
+
+**Acceptance (matched pair, same template, priming the only variable):**
+
+- unprimed template -> `win10-app` `Running -> Transient -> Halted` at 22:11, 22:34 (two runs)
+- primed template   -> `win10-app` 16/16 samples Running; guest reports `problem 0`, `xennet` Running,
+  sole adapter `Xen PV Network Device #0` **Up** holding `10.137.0.72`, Realtek unplugged
+
+**RETRACTED — the registry seed (option E) does not work, and I asserted twice that it did.**
+
+1. "Option E proven, AppVM survives 18/18" — the surviving run had the class instance `\0002` still
+   present from priming; it was never the pristine case it was recorded as.
+2. "The service key is not even needed" — flatly wrong. On a pristine template `Services\xennet` does
+   not exist, and seeding a devnode that points at an uninstalled driver yields `problem 19`.
+3. A later run that looked like a clean failure was also void: I had `qvm-kill`ed the template, so the
+   imported hive never flushed. Readback afterwards showed `enum_present:false` — that test measured
+   nothing. Registry changes only count after a **clean shutdown**.
+4. Worse than useless: the seeded devnode makes PnP consider the device configured, so it stops
+   attempting the install that would have repaired it. Removing the seed + `pnputil /scan-devices`
+   was required before priming could work at all.
+
+`packaging/setup/pvnic-seed.reg` is deleted (it was never wired into anything).
+
+**Fix shipped:** `mgmt/clone-to-template.sh` `prime_pv_nic()` now boots until the guest itself reports
+problem code 0 (up to 5 attempts, clean shutdown between), and **fails the whole script** if it never
+does. The previous fixed two-minute wait was not equivalent — it passed on an already-primed template
+and would silently emit a template stuck at problem 14 otherwise, which is precisely how this shipped.
+
+**Why it slipped, unchanged from the earlier entry and worth repeating:** the rig is offline by
+policy, `pv_drivers_bound` marks itself N/A when there is no adapter (N/A on every run ever), and the
+single networking test ran on a StandaloneVM, where the volatile-root defect cannot exist.
+
+**Likely GWeck #19.** Any networked app qube on his Win10 template reproduces this.
