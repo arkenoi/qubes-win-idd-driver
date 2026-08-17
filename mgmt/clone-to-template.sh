@@ -58,26 +58,31 @@ for p in virt_mode kernel memory maxmem vcpus qrexec_timeout netvm; do
     qvm-prefs "$APP" "$p" "$v" >/dev/null 2>&1
 done
 
-# --- prime the PV network device (see FINDINGS 2026-08-17) --------------------------------
-# WHY THIS EXISTS. The first time a vif appears, Windows installs xennet on the XENVIF NET
-# child and the device lands in CM_PROB_NEED_RESTART (problem 14) - it cannot start until a
-# reboot. A TEMPLATE has a persistent root, so that reboot completes the install once and for
-# all. An APP QUBE does not: its system volume is discarded every boot, so it reinstalls,
-# demands a restart, resets, and Qubes halts it. Measured: an app qube from an unprimed
-# template dies ~4 s after DHCP forever; from a primed one it runs indefinitely.
+# --- install the PV network device, which our offline install skipped --------------------
+# THIS IS NOT A NEW STEP - it restores what a STOCK install gets for free. qvm-create-windows-qube
+# creates the qube with its default netvm, so a vif is present throughout Windows and QWT setup:
+# xennet installs THEN, and the installer's own reboot completes it. Our provisioning strips the
+# netvm first (mgmt/reprovision-usb.sh, per the offline-rig rule), so the PV NIC is never installed
+# at all and the debt is passed to the first app qube that gets a network.
 #
-# This cannot be done offline. On a pristine template there is NO VIF class device, NO NET
-# child and NO xennet service at all - the devnodes only exist once a vif has appeared - so
-# there is nothing for the installer to install against. The device has to arrive once.
+# The debt is unpayable there. The first time a vif appears, Windows installs xennet on the XENVIF
+# NET child and the device lands in CM_PROB_NEED_RESTART (problem 14) - it cannot start until a
+# reboot. A template's persistent root completes that once. An app qube's volatile root discards it
+# every boot, so it reinstalls, demands a restart, resets, and Qubes halts it. Measured: an app qube
+# from a template installed offline dies ~4 s after DHCP forever; from one where the install
+# completed, it runs indefinitely.
 #
-# THE TEMPLATE STILL NEVER REACHES A NETWORK. It is given a netvm with a drop-everything
-# firewall, so the vif device is enumerated and the driver install completes, while no traffic
-# can leave. The netvm is detached again immediately afterwards.
+# It cannot be done without a vif: on a template that has never been networked there is NO VIF class
+# device, NO NET child and NO xennet service - the devnodes exist only once a vif has appeared.
+#
+# THE TEMPLATE STILL NEVER REACHES A NETWORK: the netvm is attached with a drop-everything firewall,
+# so the device is enumerated and the driver install completes while no traffic can leave, then it
+# is detached again.
 prime_pv_nic() {
     local vm="$1" net="$2"
     [ -n "$net" ] || { log "no netvm given, skipping PV NIC priming (app qubes will loop when networked)"; return 0; }
 
-    log "priming PV network device on $vm via $net (traffic blocked)"
+    log "installing PV network device on $vm via $net (all traffic blocked)"
     qvm-prefs "$vm" netvm "$net" || return 1
     qvm-firewall "$vm" reset >/dev/null 2>&1
     qvm-firewall "$vm" add action=drop >/dev/null 2>&1
