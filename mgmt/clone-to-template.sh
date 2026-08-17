@@ -98,13 +98,42 @@ done
 pvnic_problem() {
     # Guest-reported CM_PROB_* for the PV NIC devnode, or empty if unreachable. Guest output is
     # untrusted data: only ever compared against a literal, never executed.
-    printf '%s\n' "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"(Get-PnpDeviceProperty -InstanceId 'XENVIF\\VEN_XP&DEV_NET\\0' -KeyName 'DEVPKEY_Device_ProblemCode' -EA SilentlyContinue).Data\"" \
-        | timeout 120 qrexec-client-vm "$1" qubes.VMShell 2>/dev/null | tr -cd '0-9'
+    #
+    # The value MUST be delimited. Scraping digits out of the raw console (an early version did
+    # `tr -cd 0-9`) also scrapes the Windows banner and the `system32` prompt, so every reading
+    # came back as a meaningless 19-digit run - a probe that cannot report a wrong answer because
+    # it never reports a usable one.
+    printf '%s\n' "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"Write-Output ('QPROB=' + (Get-PnpDeviceProperty -InstanceId 'XENVIF\\VEN_XP&DEV_NET\\0' -KeyName 'DEVPKEY_Device_ProblemCode' -EA SilentlyContinue).Data + '=END')\"" \
+        | timeout 30 qrexec-client-vm "$1" qubes.VMShell 2>/dev/null \
+        | sed -n 's/.*QPROB=\([0-9]*\)=END.*/\1/p' | head -1
+}
+
+wait_alive() {
+    # Bounded by WALL CLOCK, not by iteration count: with a per-probe timeout an iteration budget
+    # silently becomes hours when the guest stops answering, which is exactly when you need it to
+    # give up. Returns 0 as soon as the guest answers.
+    local vm="$1" deadline=$(( SECONDS + ${2:-300} ))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        [ -n "$(pvnic_problem "$vm")" ] && return 0
+        sleep 10
+    done
+    return 1
 }
 
 prime_pv_nic() {
     local vm="$1" net="$2"
     [ -n "$net" ] || { log "no netvm given, skipping PV NIC priming (app qubes will loop when networked)"; return 0; }
+
+    # SETTLE BOOT FIRST, OFFLINE. Measured 2026-08-17: attaching a vif to the FIRST boot of a
+    # freshly cloned template wedges it - black screen, no qrexec, still dead after 12 minutes.
+    # The same clone booted with no netvm answered qrexec in 8 seconds. Windows has post-clone
+    # work to do (it is a new machine to it) and a brand-new network device on top of that is
+    # what breaks it, so let it complete one quiet boot before the vif ever appears.
+    log "settle boot (offline) before attaching a vif"
+    qvm-prefs "$vm" netvm '' >/dev/null 2>&1
+    qvm-start "$vm" >/dev/null 2>&1
+    wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec on its offline settle boot"; return 1; }
+    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
 
     log "installing PV network device on $vm via $net (all traffic blocked)"
     qvm-prefs "$vm" netvm "$net" || return 1
@@ -114,16 +143,12 @@ prime_pv_nic() {
     local boot prob=''
     for boot in 1 2 3 4 5; do
         qvm-start "$vm" >/dev/null 2>&1
-        # Settle: qrexec has to come up before the probe means anything.
-        local i
-        for i in $(seq 1 30); do
-            sleep 6
-            prob="$(pvnic_problem "$vm")"
-            [ -n "$prob" ] && break
-        done
+        wait_alive "$vm" 420 || log "  boot $boot: guest never answered qrexec"
+        prob="$(pvnic_problem "$vm")"
         log "  boot $boot: PV NIC problem code = ${prob:-<unreachable>}"
         [ "$prob" = 0 ] && break
         timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1 || qvm-kill "$vm" >/dev/null 2>&1
+        until [ "$(state "$vm")" = Halted ]; do sleep 5; done
     done
 
     timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
@@ -141,12 +166,19 @@ prime_pv_nic() {
 # Priming is opt-out: PRIME_NETVM= to skip it, otherwise the app qube's netvm is used.
 #
 # The app qube inherits its netvm from the offline source, i.e. NONE - so taking that value alone
-# made the script skip priming and rebuild the very configuration this exists to prevent. Fall back
-# to the system default netvm: which netvm is irrelevant here (the firewall drops everything), all
-# that matters is that A vif exists so Windows enumerates the device.
+# made the script skip priming and rebuild the very configuration this exists to prevent.
+#
+# It must NOT fall back to `qubes-prefs default_netvm`. This script runs on somebody else's system:
+# reaching for whatever netvm happens to be the default attaches a Windows template to production
+# network infrastructure that was never offered to it. Name the netvm or get an error.
 if [ "${PRIME_NETVM-unset}" = "unset" ]; then
     PRIME_NETVM="$(qvm-prefs "$APP" netvm 2>/dev/null)"
-    [ -n "$PRIME_NETVM" ] || PRIME_NETVM="$(qubes-prefs default_netvm 2>/dev/null)"
+fi
+if [ -z "$PRIME_NETVM" ]; then
+    log "FAIL: no netvm to prime with. $APP has none, and this script will not pick one for you."
+    log "      Re-run as: PRIME_NETVM=<netvm> $0 $SRC $TPL $APP"
+    log "      (traffic is dropped by firewall throughout; the vif only has to exist)"
+    exit 1
 fi
 prime_pv_nic "$TPL" "$PRIME_NETVM" || { log "FAIL: PV NIC priming did not complete"; exit 1; }
 

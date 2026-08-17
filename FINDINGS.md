@@ -12356,3 +12356,61 @@ policy, `pv_drivers_bound` marks itself N/A when there is no adapter (N/A on eve
 single networking test ran on a StandaloneVM, where the volatile-root defect cannot exist.
 
 **Likely GWeck #19.** Any networked app qube on his Win10 template reproduces this.
+
+## 2026-08-17 (later) — end-to-end validation from a PRISTINE template, and two things it broke
+
+The previous entry validated an app qube against a template that had already been primed by hand.
+Rebuilding both from the pristine never-networked standalone through `mgmt/clone-to-template.sh`
+found defects that hand-priming could not, which is the whole argument for running the script.
+
+**NEW BUG - a vif on the FIRST boot of a freshly cloned template wedges Windows.** Same clone,
+one variable:
+
+| first boot after clone | result |
+|---|---|
+| netvm attached | BLACK screen (1024x768, 2 colours, uniform), no qrexec, still dead after 12 min |
+| no netvm | qrexec answers in ~8 s (`Microsoft Windows [Version 10.0.19045.2965]`) |
+
+The gui-agent was connected throughout (dom0 had window 0), so Windows had booted far enough to
+publish a screen and then stopped. Windows treats a clone as new hardware and has post-clone work to
+do; a brand-new network device on top of that is what breaks it. Fix: `prime_pv_nic()` now takes one
+OFFLINE settle boot before the vif is ever attached, then primes. Verified: after the settle boot the
+template primed to problem 0 (`MARK|problem=0|xennet=Running|adapter=Up|`).
+
+POSSIBLE LEAD ON GWeck #24 ("first boot black window"): same signature - black window, first boot.
+Not claimed, not reproduced on his setup; recorded because it is the first time we have produced that
+artefact deliberately.
+
+**Three more script defects, all found by running it rather than reasoning about it:**
+
+1. Removal order - a TemplateVM cannot be removed while a qube is based on it, so removing `$TPL`
+   before `$APP` failed outright on any re-run over an existing pair.
+2. `PRIME_NETVM` defaulted to the app qube's netvm, which is inherited from the offline source and
+   therefore EMPTY, so priming skipped itself and rebuilt the configuration it exists to prevent.
+3. My first fix for (2) fell back to `qubes-prefs default_netvm`, which attached a Windows template
+   to the system default netvm on the owner's live system. Wrong by default and called out as such.
+   The script now FAILS with `PRIME_NETVM=<netvm> ...` instructions rather than picking one. It runs
+   on other people's machines; it does not get to choose their network infrastructure.
+
+**Instrument defect (my own, worth the entry): a probe that could not report a wrong answer because
+it never reported a usable one.** `pvnic_problem()` scraped digits with `tr -cd '0-9'` from the whole
+`qubes.VMShell` console, which includes the Windows banner and the `system32` prompt - every reading
+came back as a 19-digit run like `1001904529653201432`. I decoded one by hand and nearly reported it.
+Values are now delimited (`QPROB=<n>=END`) and extracted with sed. The per-boot codes from that run
+are NOT recoverable and are not claimed anywhere; only the clean final reading is.
+Related: the settle loop was bounded by ITERATION count with a 120 s per-probe timeout, so "30 tries"
+became hours exactly when the guest stopped answering. Now bounded by wall clock.
+
+**End-to-end acceptance, pristine -> healthy app qube:**
+
+- `win10-clean` (never-networked standalone, Halted) -> clone -> `win10-tpl` + `win10-app`
+- settle boot offline, then prime on `core-net` with a drop-all firewall -> template problem 0
+- template detached and halted; app qube started networked:
+  - boot 1: Running 20/20 samples (2 min)
+  - boot 2 (volatile root discarded again): Running, healthy - the check that matters, since an
+    app qube re-derives its root every boot
+  - both boots: `pv_problem 0`, `xennet Running`, sole adapter `Xen PV Network Device #0` **Up**,
+    IP `10.137.0.72`, Realtek `Unknown` (unplugged), `QdbDaemon`/`QrexecAgent`/`QubesGuiWatchdog`
+    all Running
+  - GUI verified with real pixels, not a log line: Notepad launched, dom0 capture 3802x998,
+    247 unique colours dominated by Notepad white - not the black screen above
