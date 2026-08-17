@@ -108,13 +108,21 @@ pvnic_problem() {
         | sed -n 's/.*QPROB=\([0-9]*\)=END.*/\1/p' | head -1
 }
 
+guest_alive() {
+    # LIVENESS ONLY, and deliberately NOT pvnic_problem(). On the offline settle boot there is no
+    # XENVIF device, so the problem-code probe returns empty on a perfectly healthy guest - using it
+    # for liveness makes the settle boot time out and abort the run every time.
+    printf '%s\n' "echo QALIVE_OK" \
+        | timeout 30 qrexec-client-vm "$1" qubes.VMShell 2>/dev/null | grep -q QALIVE_OK
+}
+
 wait_alive() {
     # Bounded by WALL CLOCK, not by iteration count: with a per-probe timeout an iteration budget
     # silently becomes hours when the guest stops answering, which is exactly when you need it to
     # give up. Returns 0 as soon as the guest answers.
     local vm="$1" deadline=$(( SECONDS + ${2:-300} ))
     while [ "$SECONDS" -lt "$deadline" ]; do
-        [ -n "$(pvnic_problem "$vm")" ] && return 0
+        guest_alive "$vm" && return 0
         sleep 10
     done
     return 1
@@ -144,7 +152,15 @@ prime_pv_nic() {
     for boot in 1 2 3 4 5; do
         qvm-start "$vm" >/dev/null 2>&1
         wait_alive "$vm" 420 || log "  boot $boot: guest never answered qrexec"
-        prob="$(pvnic_problem "$vm")"
+        # qrexec answering does not mean PnP has enumerated the device yet; give it a little while
+        # before treating an empty reading as absent, or a slow enumeration burns a whole boot.
+        local pdl=$(( SECONDS + 120 ))
+        while :; do
+            prob="$(pvnic_problem "$vm")"
+            [ -n "$prob" ] && break
+            [ "$SECONDS" -ge "$pdl" ] && break
+            sleep 10
+        done
         log "  boot $boot: PV NIC problem code = ${prob:-<unreachable>}"
         [ "$prob" = 0 ] && break
         timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1 || qvm-kill "$vm" >/dev/null 2>&1
@@ -183,4 +199,9 @@ fi
 prime_pv_nic "$TPL" "$PRIME_NETVM" || { log "FAIL: PV NIC priming did not complete"; exit 1; }
 
 log "done: template=$TPL appvm=$APP"
+# $APP inherits the template's netvm, i.e. none. Say so rather than attaching a network to somebody's
+# new qube on their behalf - but say it plainly, because "it starts and does nothing" is the exact
+# confusion this script exists to end.
+[ -n "$(qvm-prefs "$APP" netvm 2>/dev/null)" ] || \
+    log "note: $APP has no netvm. To use it networked: qvm-prefs $APP netvm $PRIME_NETVM"
 qvm-ls --fields NAME,STATE,KLASS,TEMPLATE "$TPL" "$APP" 2>/dev/null | tail -3

@@ -12414,3 +12414,37 @@ became hours exactly when the guest stopped answering. Now bounded by wall clock
     all Running
   - GUI verified with real pixels, not a log line: Notepad launched, dom0 capture 3802x998,
     247 unique colours dominated by Notepad white - not the black screen above
+
+### Unattended run of the fixed script (the deliverable, not a hand-driven equivalent)
+
+`PRIME_NETVM=core-net mgmt/clone-to-template.sh win10-clean win10-tpl win10-app`, from the pristine
+never-networked standalone, no intervention:
+
+```
+20:34:52  settle boot (offline) before attaching a vif
+20:35:28  installing PV network device on win10-tpl via core-net (all traffic blocked)
+20:35:59    boot 1: PV NIC problem code = 14
+20:37:26    boot 2: PV NIC problem code = 0
+20:37:35  PV NIC primed (problem 0, started); win10-tpl is offline again
+20:37:35  done
+```
+
+Three minutes end to end. Note it goes 14 -> 0 rather than 19 -> 14 -> 0: the offline settle boot
+absorbs the staging step, so priming is two boots once the clone has had one quiet boot.
+
+App qube built entirely by that run, started networked, checked on TWO boots (the second matters -
+an app qube re-derives its root every time):
+
+```
+boot 1: SURVIVED  problem=0 xennet=Running adapter=Up ip=10.137.0.72 realtek=Unknown svcs=3
+boot 2: SURVIVED  problem=0 xennet=Running adapter=Up ip=10.137.0.72 realtek=Unknown svcs=3
+```
+
+ONE MORE INSTRUMENT DEFECT, found by reading the edit rather than by watching it fail: `wait_alive()`
+used `pvnic_problem()` for liveness, but on the offline settle boot there IS no XENVIF device, so a
+perfectly healthy guest reads as empty and the settle boot would have aborted the run after 420 s
+every time. Liveness is now its own probe (`echo QALIVE_OK`). The problem-code read also retries for
+120 s after qrexec answers, because qrexec being up does not mean PnP has enumerated the device.
+
+The script does NOT attach a netvm to the app qube it creates; it prints the exact `qvm-prefs` line
+instead. Creating someone a qube and silently putting it on a network is not its call.
