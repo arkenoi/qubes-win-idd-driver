@@ -362,6 +362,37 @@ if ($nics.Count -eq 0) {
     Check 'network_carries_traffic' $ipOk @{ ip = $addr; gateway = $gw; gateway_reachable = $ipOk }
 }
 
+# --- 6b3. netvm-free PV NIC applier (M1 latch path) --------------------------------
+# On a latch-seeded template the PV adapter is INSTALLED FRESH EVERY BOOT and the QubesPvNic
+# task must land the qubesdb IP each time. Latched-without-applier is the forbidden SILENT
+# state (survives with APIPA only, measured 2026-08-18) - pv_drivers_bound PASSES it, so this
+# check exists to fail it. NA on guests without the M1 deployment (task not registered).
+schtasks /query /tn QubesPvNic 2>$null | Out-Null
+$pvnicTask = ($LASTEXITCODE -eq 0)
+$pvnicMarker = Test-Path 'C:\ProgramData\QubesPvNic-FAILED.txt'
+if (-not $pvnicTask) {
+    Check 'pvnic_applier' $false @{ na = 'QubesPvNic task not registered - M1 latch deployment absent' }
+    $r.checks['pvnic_applier'].na = $true
+} elseif ($nics.Count -eq 0) {
+    # Offline guest: the applier must have stayed quiet (no marker); nothing else assertable.
+    Check 'pvnic_applier' (-not $pvnicMarker) @{ offline = $true; failure_marker_present = $pvnicMarker }
+} else {
+    # qubesdb-cmd is unusable on this build (arg parsing broken), so the assertion is
+    # outcome-shaped: a real (non-APIPA) IPv4 on the XENVIF adapter plus a default route on
+    # its ifIndex. The exact-IP-vs-dom0 comparison belongs to dom0-side harnesses.
+    $pvAd = Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.PnPDeviceID -like 'XENVIF\*' } | Select-Object -First 1
+    $pvIps = @(); $pvRoute = $null
+    if ($pvAd) {
+        $pvIps = @(Get-NetIPAddress -InterfaceIndex $pvAd.ifIndex -AddressFamily IPv4 -EA SilentlyContinue | ForEach-Object { $_.IPAddress })
+        $pvRoute = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -EA SilentlyContinue | Where-Object { $_.ifIndex -eq $pvAd.ifIndex } | Select-Object -First 1
+    }
+    $apipa = @($pvIps | Where-Object { $_ -like '169.254.*' })
+    $realIp = @($pvIps | Where-Object { $_ -notlike '169.254.*' -and $_ -ne '0.0.0.0' })
+    Check 'pvnic_applier' ($realIp.Count -ge 1 -and $null -ne $pvRoute -and -not $pvnicMarker -and $apipa.Count -eq 0) `
+        @{ pv_adapter_ips = $pvIps; apipa_present = $apipa; default_route_on_pv = ($null -ne $pvRoute)
+           failure_marker_present = $pvnicMarker }
+}
+
 # --- 6c. CLIPBOARD path alive ------------------------------------------------------
 # The Qubes clipboard is a guest service (QubesClipboard / the vchan clipboard handler in
 # qrexec-agent) plus a working Windows clipboard. dom0<->guest transfer needs a human
