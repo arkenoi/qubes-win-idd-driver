@@ -67,6 +67,9 @@ if ((Get-Item $log -EA SilentlyContinue).Length -gt 262144) { Remove-Item $log -
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /t REG_DWORD /d 1 /f | Out-Null
 reg add "HKLM\SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001&DEV_VIF" /f | Out-Null
 if ($RearmOnly) { L 'rearm-only trigger: latch re-armed'; exit 0 }
+# LogDir is global to all QWT modules; keep it bounded (template root is persistent).
+Get-ChildItem 'C:\ProgramData\QubesLogs' -Filter '*.log' -EA SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -Skip 30 | Remove-Item -Force -EA SilentlyContinue
 L "--- run start (boot=$((Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')))"
 L "latch re-armed NICS=$((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug').NICS)"
 
@@ -81,15 +84,19 @@ function Loud($why) {
     exit 1
 }
 
-# 2. APPLY + VERIFY, bounded by wall clock. network-setup.exe is both the applier and the
-#    qubesdb oracle (see installer header): rc 21 = qubesdb down (retry, loud at deadline);
-#    rc 1287 = qubesdb up, /qubes-ip ABSENT = no netvm (quiet exit - but only with no
-#    XENVIF/XENBUS-VIF device present; 1287 WITH a vif device is an anomaly and stays loud);
-#    rc 0 = keys read, config attempted - proves nothing by itself, so success is judged on
-#    OUTCOME state only: XENVIF adapter carries a non-APIPA IPv4, the default route rides its
-#    ifIndex, and the route's gateway answers ping. The exact-IP-vs-dom0 comparison is the
-#    HARNESS's job (independent probe); in-guest exact-IP is unavailable (broken CLI).
+# 2. APPLY + VERIFY, bounded by wall clock. network-setup.exe serves as the qubesdb oracle
+#    AND the value source (see installer header for why the CLI and P/Invoke are out):
+#    rc 21 = qubesdb down (retry, loud at deadline); rc 1287 = qubesdb up, /qubes-ip ABSENT
+#    = no netvm (quiet exit - only with no XENVIF/XENBUS-VIF device present; 1287 WITH a vif
+#    device is an anomaly and stays loud); rc 0 = keys read - but MEASURED 2026-08-18: on the
+#    per-boot fresh install GetAdaptersInfo reports the adapter as 'Xen PV Network Device'
+#    WITHOUT the ' #0' suffix stock strcmp expects (the suffix only exists in netcfg state a
+#    PRIMED template persisted), so stock can NEVER configure on this path and instead we
+#    parse the values it logs (SetupNetwork: ip/netmask/gateway, needs QWT LogDir set - the
+#    installer seeds it) and apply them DIRECTLY to the XENVIF adapter by ifIndex.
+#    DNS: Qubes DNS is constant by design (net.py: always 10.139.1.1/10.139.1.2).
 $ns = 'C:\Program Files\Qubes Tools\bin\network-setup.exe'
+$nslogdir = 'C:\ProgramData\QubesLogs'
 $deadline = (Get-Date).AddSeconds(300)
 
 function PvAdapter { Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.PnPDeviceID -like 'XENVIF\*' } | Select-Object -First 1 }
@@ -99,15 +106,31 @@ function VifDevicePresent {
     $d = Get-PnpDevice -EA SilentlyContinue | Where-Object { $_.InstanceId -like 'XENBUS\VEN_XP0001&DEV_VIF*' -or $_.InstanceId -like 'XENVIF\*' }
     return (@($d).Count -gt 0)
 }
+function NsValues {
+    # Latest 'SetupNetwork: ip: A, netmask: B, gateway: C' line from the newest ns log.
+    $f = Get-ChildItem $nslogdir -Filter 'network-setup-*' -EA SilentlyContinue |
+         Sort-Object LastWriteTime | Select-Object -Last 1
+    if (-not $f) { return $null }
+    $m = Select-String -Path $f.FullName -Pattern 'SetupNetwork: ip: ([0-9.]+), netmask: ([0-9.]+), gateway: ([0-9.]+)' |
+         Select-Object -Last 1
+    if (-not $m) { return $null }
+    $mask = $m.Matches[0].Groups[2].Value
+    $prefix = 0
+    foreach ($o in $mask.Split('.')) { $b = [convert]::ToString([int]$o, 2); $prefix += ($b.ToCharArray() | Where-Object { $_ -eq '1' }).Count }
+    @{ ip = $m.Matches[0].Groups[1].Value; prefix = $prefix; gw = $m.Matches[0].Groups[3].Value }
+}
+$script:want = $null
 function Applied {
     $ad = PvAdapter
     if (-not $ad) { return $false }
     $good = @(Get-NetIPAddress -InterfaceIndex $ad.ifIndex -AddressFamily IPv4 -EA SilentlyContinue |
-              Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -ne '0.0.0.0' })
+              Where-Object { $_.IPAddress -notlike '169.254.*' -and $_.IPAddress -ne '0.0.0.0' } | ForEach-Object IPAddress)
     if ($good.Count -eq 0) { return $false }
+    if ($script:want -and ($good -notcontains $script:want.ip)) { return $false }
     $rt = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -EA SilentlyContinue |
           Where-Object { $_.ifIndex -eq $ad.ifIndex -and $_.NextHop -ne '0.0.0.0' } | Select-Object -First 1
     if (-not $rt) { return $false }
+    if ($script:want -and $rt.NextHop -ne $script:want.gw) { return $false }
     return (Test-Connection -ComputerName $rt.NextHop -Count 2 -Quiet -EA SilentlyContinue)
 }
 
@@ -129,6 +152,26 @@ while ((Get-Date) -lt $deadline) {
         L 'qubesdb up, /qubes-ip absent, no vif device: no netvm, nothing to apply'
         Remove-Item $mark -Force -EA SilentlyContinue
         exit 0
+    }
+    $script:want = NsValues
+    if ($script:want -and $ad) {
+        L ("direct apply " + $script:want.ip + "/" + $script:want.prefix + " gw " + $script:want.gw + " on ifIndex " + $ad.ifIndex)
+        Get-NetIPAddress -InterfaceIndex $ad.ifIndex -AddressFamily IPv4 -EA SilentlyContinue |
+            Where-Object { $_.IPAddress -ne $script:want.ip } |
+            Remove-NetIPAddress -Confirm:$false -EA SilentlyContinue
+        if (-not (Get-NetIPAddress -InterfaceIndex $ad.ifIndex -AddressFamily IPv4 -EA SilentlyContinue |
+                  Where-Object { $_.IPAddress -eq $script:want.ip })) {
+            New-NetIPAddress -InterfaceIndex $ad.ifIndex -IPAddress $script:want.ip -PrefixLength $script:want.prefix -PolicyStore ActiveStore -EA SilentlyContinue | Out-Null
+        }
+        Get-NetRoute -DestinationPrefix '0.0.0.0/0' -EA SilentlyContinue |
+            Where-Object { $_.ifIndex -ne $ad.ifIndex -or $_.NextHop -ne $script:want.gw } |
+            Remove-NetRoute -Confirm:$false -EA SilentlyContinue
+        if (-not (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -EA SilentlyContinue |
+                  Where-Object { $_.ifIndex -eq $ad.ifIndex -and $_.NextHop -eq $script:want.gw })) {
+            New-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceIndex $ad.ifIndex -NextHop $script:want.gw -PolicyStore ActiveStore -EA SilentlyContinue | Out-Null
+        }
+        # Qubes DNS is invariant (net.py dns property): 10.139.1.1 / 10.139.1.2.
+        Set-DnsClientServerAddress -InterfaceIndex $ad.ifIndex -ServerAddresses @('10.139.1.1','10.139.1.2') -EA SilentlyContinue
     }
     Start-Sleep -Seconds 3
     if (Applied) {
@@ -241,6 +284,11 @@ if ($fail.Count -gt 0) {
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Network\NewNetworkWindowOff" /f | Out-Null
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\DriverSearching" /v SearchOrderConfig /t REG_DWORD /d 0 /f | Out-Null
 powercfg /h off 2>$null | Out-Null
+# QWT logging on (Info): the payload PARSES network-setup's log for the qubesdb values
+# (SetupNetwork: ip/netmask/gateway) because both the CLI and in-process reads are broken.
+New-Item -ItemType Directory -Path 'C:\ProgramData\QubesLogs' -Force | Out-Null
+reg add "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogDir /t REG_SZ /d "C:\ProgramData\QubesLogs" /f | Out-Null
+reg add "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogLevel /t REG_DWORD /d 3 /f | Out-Null
 
 # ---------------- arm now, via the task itself, and verify ----------------
 & schtasks /run /tn QubesPvNic | Out-Null

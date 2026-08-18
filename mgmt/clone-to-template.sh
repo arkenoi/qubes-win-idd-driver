@@ -129,6 +129,62 @@ wait_alive() {
     return 1
 }
 
+latch_readback() {
+    # Guest-reported latch state, delimited (see FINDINGS on why raw console scraping lies).
+    printf '%s\n' "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"\$u=Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\XEN\\Unplug' -EA SilentlyContinue; \$k=Test-Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\XENBUS\\VEN_XP0001&DEV_VIF'; schtasks /query /tn QubesPvNic 2>\$null | Out-Null; \$t=(\$LASTEXITCODE -eq 0); Write-Output ('QLATCH=' + \$u.NICS + ',' + \$k + ',' + \$t + '=END')\"" \
+        | timeout 60 qrexec-client-vm "$1" qubes.VMShell 2>/dev/null \
+        | sed -n 's/.*QLATCH=\(.*\)=END.*/\1/p' | head -1
+}
+
+prime_latch() {
+    # NETVM-FREE priming (measured + source-verified 2026-08-18, adversarially reviewed):
+    # seed the PV drivers' emulated-NIC unplug latch (Services\XEN\Unplug\NICS=1 + the
+    # Enum\XENBUS VIF veto key) plus two SYSTEM tasks that (a) re-arm it every boot - xen.sys
+    # DELETES the value on every read, so an unattended template boot would otherwise strip
+    # the seed - and (b) apply the qubesdb network config to the per-boot freshly installed
+    # PV adapter, loudly failing into a marker + user-visible alert if it cannot.
+    # With this seed an AppVM's first vif install completes in ONE boot at problem 0 (both
+    # xenvif reboot triggers are cleared: the RTL8139 is unplugged pre-NDIS and the in-memory
+    # unplug request is latched), and the applier lands the per-VM IP each boot.
+    # The template NEVER gets a netvm. Trade-off vs vif priming: every AppVM boot performs a
+    # fresh driver install (~40 s to network vs near-instant on a vif-primed template).
+    local vm="$1" repo; repo="$(cd "$(dirname "$0")/.." && pwd)"
+
+    log "settle boot (offline) before seeding the latch"
+    qvm-prefs "$vm" netvm '' >/dev/null 2>&1
+    qvm-start "$vm" >/dev/null 2>&1
+    wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec on its settle boot"; return 1; }
+
+    log "installing latch seed + tasks (guest/pvnic-selfprime.ps1)"
+    local out
+    out="$(QTEST_VM=$vm "$repo/tools/qtest" pushrun "$repo/guest/pvnic-selfprime.ps1" 2>/dev/null | tr -d '\r' | grep -A1 '^MARKJSON' | tail -1)"
+    case "$out" in
+        *'"ok":true'*) log "  installer: ok ($(printf '%s' "$out" | sed -n 's/.*"payload_sha256":"\([a-f0-9]\{12\}\).*/payload \1.../p'))" ;;
+        *) log "FAIL: latch installer did not report ok - guest said: ${out:-<nothing>}"; return 1 ;;
+    esac
+    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1 || { log "FAIL: clean shutdown after seeding"; return 1; }
+
+    # The consume->re-arm cycle must be PROVEN on this template, not assumed: boot once more,
+    # confirm the boot task re-wrote NICS=1 (xen.sys consumed it seconds into the boot), then
+    # clean-shut. Registry state only counts after a clean shutdown.
+    log "verification boot (latch must re-arm itself)"
+    qvm-start "$vm" >/dev/null 2>&1
+    wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec on the verification boot"; return 1; }
+    local rb='' deadline=$(( SECONDS + 180 ))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        rb="$(latch_readback "$vm")"
+        [ "$rb" = "1,True,True" ] && break
+        sleep 10
+    done
+    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    if [ "$rb" != "1,True,True" ]; then
+        log "FAIL: latch readback after a full boot cycle = '${rb:-<unreachable>}' (want 1,True,True)."
+        log "      Template would ship latched-broken. Not shipping it."
+        return 1
+    fi
+    log "latch primed and self-healing (NICS=1, veto key, tasks verified across a boot cycle); $vm never had a netvm"
+}
+
 prime_pv_nic() {
     local vm="$1" net="$2"
     [ -n "$net" ] || { log "no netvm given, skipping PV NIC priming (app qubes will loop when networked)"; return 0; }
@@ -194,18 +250,25 @@ fi
 # PRIME_NETVM=none is the explicit opt-out: build the pair and skip priming entirely. For an
 # offline-only template that is a legitimate choice; for anything networked it is a loaded gun, so
 # it says so. Empty/unset is NOT the opt-out - that is the accident this guards against.
+# PRIME_NETVM=latch is the NETVM-FREE mode: seed the unplug latch + self-healing tasks instead of
+# attaching any netvm (see prime_latch above for the mechanism and the per-boot cost).
 if [ "$PRIME_NETVM" = none ]; then
     log "WARNING: PRIME_NETVM=none - skipping PV NIC priming."
     log "         Any app qube on $TPL that is given a netvm WILL restart-loop. Offline use only."
     PRIME_NETVM=''
     HINT_NETVM='<netvm>'
+elif [ "$PRIME_NETVM" = latch ]; then
+    prime_latch "$TPL" || { log "FAIL: latch priming did not complete"; exit 1; }
+    PRIME_NETVM=''
+    HINT_NETVM='<netvm>'
 elif [ -z "$PRIME_NETVM" ]; then
     log "FAIL: no netvm to prime with. $APP has none, and this script will not pick one for you."
-    log "      Re-run as: PRIME_NETVM=<netvm> $0 $SRC $TPL $APP   (traffic is firewalled off;"
-    log "      the vif only has to exist), or PRIME_NETVM=none to deliberately skip priming."
+    log "      Re-run as: PRIME_NETVM=<netvm> $0 $SRC $TPL $APP   (traffic is firewalled off; the"
+    log "      vif only has to exist), PRIME_NETVM=latch (netvm-free latch priming), or"
+    log "      PRIME_NETVM=none to deliberately skip priming."
     exit 1
 fi
-prime_pv_nic "$TPL" "$PRIME_NETVM" || { log "FAIL: PV NIC priming did not complete"; exit 1; }
+[ -n "$PRIME_NETVM" ] && { prime_pv_nic "$TPL" "$PRIME_NETVM" || { log "FAIL: PV NIC priming did not complete"; exit 1; }; }
 
 log "done: template=$TPL appvm=$APP"
 # $APP inherits the template's netvm, i.e. none. Say so rather than attaching a network to somebody's
