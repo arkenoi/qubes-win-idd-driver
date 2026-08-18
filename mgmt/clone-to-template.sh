@@ -130,11 +130,16 @@ wait_alive() {
 }
 
 latch_readback() {
-    # Guest-reported latch state, delimited (see FINDINGS on why raw console scraping lies).
-    printf '%s\n' "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"\$u=Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\XEN\\Unplug' -EA SilentlyContinue; \$k=Test-Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Enum\\XENBUS\\VEN_XP0001&DEV_VIF'; schtasks /query /tn QubesPvNic 2>\$null | Out-Null; \$t=(\$LASTEXITCODE -eq 0); Write-Output ('QLATCH=' + \$u.NICS + ',' + \$k + ',' + \$t + '=END')\"" \
-        | timeout 60 qrexec-client-vm "$1" qubes.VMShell 2>/dev/null \
-        | sed -n 's/.*QLATCH=\(.*\)=END.*/\1/p' | head -1
+    # Guest-reported latch state via a PUSHED SCRIPT FILE. An inline powershell -Command
+    # version of this probe shipped first and returned the concatenation operators as
+    # LITERAL TEXT (quoting mangled across qrexec->cmd->powershell), i.e. a probe that could
+    # not report a usable answer - the exact instrument sin FINDINGS documents. File probes
+    # have no quoting layer to lie in.
+    local vm="$1" repo; repo="$(cd "$(dirname "$0")/.." && pwd)"
+    QTEST_VM=$vm "$repo/tools/qtest" pushrun "$repo/guest/pvnic-latch-readback.ps1" 2>/dev/null \
+        | tr -d '\r' | grep -A1 '^MARKJSON' | tail -1
 }
+latch_ok() { case "$1" in *'"nics":1'*'"vif_enum_key":true'*'"task_main":true'*) return 0;; *) return 1;; esac; }
 
 prime_latch() {
     # NETVM-FREE priming (measured + source-verified 2026-08-18, adversarially reviewed):
@@ -173,13 +178,31 @@ prime_latch() {
     local rb='' deadline=$(( SECONDS + 180 ))
     while [ "$SECONDS" -lt "$deadline" ]; do
         rb="$(latch_readback "$vm")"
-        [ "$rb" = "1,True,True" ] && break
+        latch_ok "$rb" && break
         sleep 10
     done
+
+    # Scan-only updater check: the seed sets NoAutoUpdate=1 (updates are dom0-owned), and the
+    # dom0-driven updater must still be able to SCAN through the qubes updates proxy - the
+    # proxy path rides qrexec, so it works on this netvm-less template by design. Soft by
+    # default because on third-party systems a missing qubes.UpdatesProxy policy line is an
+    # infrastructure gap, not a template defect; UPDATE_SCAN=hard makes it gate the build,
+    # UPDATE_SCAN=off skips it.
+    if latch_ok "$rb" && [ "${UPDATE_SCAN:-soft}" != off ]; then
+        log "scan-only updater check (WU COM scan must survive NoAutoUpdate=1)"
+        local scanout
+        scanout="$(QTEST_VM=$vm timeout 600 "$repo/tools/qtest" pushrun "$repo/guest/qubes-windows-update.ps1" -Action scan 2>/dev/null | tr -d '\r' | grep -E 'scan: [0-9]+ update|SCAN FAILED' | tail -1)"
+        case "$scanout" in
+            *'scan: '*update*) log "  updater scan ok: ${scanout#*] }" ;;
+            *)  log "WARNING: updater scan did not complete (${scanout:-no scan output})."
+                log "         Dom0-driven updates may not work on this deployment (proxy policy?)."
+                [ "${UPDATE_SCAN:-soft}" = hard ] && { timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1; return 1; } ;;
+        esac
+    fi
     timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
-    if [ "$rb" != "1,True,True" ]; then
-        log "FAIL: latch readback after a full boot cycle = '${rb:-<unreachable>}' (want 1,True,True)."
-        log "      Template would ship latched-broken. Not shipping it."
+    if ! latch_ok "$rb"; then
+        log "FAIL: latch readback after a full boot cycle: ${rb:-<unreachable>}"
+        log "      (need nics:1 + vif_enum_key:true + task_main:true) Template would ship latched-broken. Not shipping it."
         return 1
     fi
     log "latch primed and self-healing (NICS=1, veto key, tasks verified across a boot cycle); $vm never had a netvm"

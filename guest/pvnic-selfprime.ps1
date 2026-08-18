@@ -79,8 +79,10 @@ function Loud($why) {
     New-EventLog -LogName Application -Source QubesPvNic -EA SilentlyContinue
     Write-EventLog -LogName Application -Source QubesPvNic -EntryType Error -EventId 1000 -Message "PV NIC: $why" -EA SilentlyContinue
     # Interactive alert (amendment A4): dom0 sees no guest network state, an in-guest file is
-    # a marker nobody reads - put pixels in front of the human. msg.exe works offline.
-    & msg.exe * "Qubes PV network configuration FAILED: $why (see C:\ProgramData\QubesPvNic-FAILED.txt)" 2>$null
+    # a marker nobody reads - put pixels in front of the human. Console session ONLY (msg *
+    # also targets session 0; suspected - unproven - of wedging qrexec on the D2 test boot),
+    # and persistent (default msg timeout is ~60 s, which made the D2 pixel capture miss it).
+    & msg.exe console /time:86400 "Qubes PV network configuration FAILED: $why (see C:\ProgramData\QubesPvNic-FAILED.txt)" 2>$null
     exit 1
 }
 
@@ -173,7 +175,7 @@ while ((Get-Date) -lt $deadline) {
         # Qubes DNS is invariant (net.py dns property): 10.139.1.1 / 10.139.1.2.
         Set-DnsClientServerAddress -InterfaceIndex $ad.ifIndex -ServerAddresses @('10.139.1.1','10.139.1.2') -EA SilentlyContinue
     }
-    Start-Sleep -Seconds 3
+    Start-Sleep -Seconds 1
     if (Applied) {
         # Settle re-verify (amendment A2): a first-install adapter re-bind can wipe the
         # non-persistent runtime config AFTER a one-shot verify. Two stable confirmations
@@ -186,7 +188,7 @@ while ((Get-Date) -lt $deadline) {
         }
         if ($stable) { $ok = $true; break }
     }
-    Start-Sleep -Seconds 5
+    Start-Sleep -Seconds 2
 }
 
 if ($ok) {
@@ -289,6 +291,14 @@ powercfg /h off 2>$null | Out-Null
 New-Item -ItemType Directory -Path 'C:\ProgramData\QubesLogs' -Force | Out-Null
 reg add "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogDir /t REG_SZ /d "C:\ProgramData\QubesLogs" /f | Out-Null
 reg add "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogLevel /t REG_DWORD /d 3 /f | Out-Null
+# Updates are dom0-owned (standing project rule): guest auto-update OFF. This matters more
+# with the latch, because AppVMs now have working network every boot and WU would pull
+# updates into a volatile root each time. NoAutoUpdate does NOT affect the dom0-driven
+# template updater (it uses explicit WU COM calls, which stay functional). The driver
+# exclusion also guards against WU-delivered Xen PV packages whose INF AddReg would rewrite
+# Unplug\NICS=0 (the re-arm tasks are the second line of defense).
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f | Out-Null
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v ExcludeWUDriversInQualityUpdate /t REG_DWORD /d 1 /f | Out-Null
 
 # ---------------- arm now, via the task itself, and verify ----------------
 & schtasks /run /tn QubesPvNic | Out-Null
