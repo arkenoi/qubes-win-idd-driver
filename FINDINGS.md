@@ -12545,3 +12545,29 @@ device needs a vif.
 actively harmful), arm the unplug latch (starts the device but the adapter is reinstalled every boot
 so the Qubes IP cannot persist), synthesise the devnode (refused by SetupAPI). Priming the template
 with one vif, firewalled off, stays the answer.
+
+### What the device install creates OUTSIDE the registry: two .sys files, nothing else
+
+Owner asked whether non-registry state is what makes an offline seed impossible. Measured delta,
+pristine `win10-clean` (never networked, source of every clone) vs the primed template:
+
+| location | pristine | primed | delta |
+|---|---|---|---|
+| `System32\drivers\` | xen, xenbus, xencrsh, xendisk, xenfilt, xeniface, xenvbd | + xennet.sys, xenvif.sys | 2 files |
+| `INF\*.PNF` | oem2,3,4,9,10 | + oem6.PNF, oem8.PNF | 2 caches (regenerable) |
+| `INF\oem*.inf` | oem2..oem8 | identical | none |
+| `DriverStore\FileRepository` | xennet, xenvif x3, xenbus, xeniface, xenvbd | identical | none |
+| `System32\xen*` | xenagent, xenbus_monitor, xencontrol | identical | none |
+
+So the answer is: yes, but only `xennet.sys` and `xenvif.sys`, and both are copied FROM the
+DriverStore, which is already fully staged on a pristine machine. Files are NOT the obstacle - they
+could be copied trivially.
+
+What cannot be reproduced offline is the per-adapter state that only the Net class installer
+(netcfgx) authors: the class instance with its `NetCfgInstanceId`, `Ndi`, `Linkage`, and the
+`Tcpip\Parameters\Interfaces\{NetCfgInstanceId}` entry holding the Qubes address. SetupAPI refuses to
+let us create the devnode that would make that installer run (0xE0000209), and the latch path makes
+it run per boot with a NEW GUID, which is why the address cannot persist there.
+
+This also corrects the shape of the earlier retraction: `xennet.sys` being absent on a pristine
+template is real, but it is not what blocks a seed - it is one file copy. The blocker is netcfgx.
