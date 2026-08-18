@@ -12571,3 +12571,38 @@ it run per boot with a NEW GUID, which is why the address cannot persist there.
 
 This also corrects the shape of the earlier retraction: `xennet.sys` being absent on a pristine
 template is real, but it is not what blocks a seed - it is one file copy. The blocker is netcfgx.
+
+### "Would it work with copy?" - tested twice, both times NO (and the failure is silent)
+
+Copying the primed state onto a pristine template, tested properly rather than argued about. Control
+the same session: pristine template -> app qube dies 6 s after start.
+
+**Attempt 1 - xennet layer.** Copied `xennet.sys` + `xenvif.sys` out of the target's OWN DriverStore
+(they are staged there already, so no file transfer is needed), plus 5 registry pieces exported from
+a primed template: `Services\xennet`, `Enum\XENVIF` (subtree), the Net class instance, its
+`Control\Network\...\{guid}` connection key, and `Tcpip\Parameters\Interfaces\{guid}`. All imported
+clean as SYSTEM, hive committed by a clean shutdown.
+
+**Attempt 2 - both layers.** Same again plus the bus underneath: `Services\xenvif`, `Enum\XENBUS`
+(subtree, incl. `VEN_XP0001&DEV_VIF`), and the System-class instances for xenvif. 9/9 imports, no
+errors, both binaries present, both service keys present, devnode present.
+
+| | control | attempt 1 | attempt 2 |
+|---|---|---|---|
+| app qube | dies at 6 s | SURVIVES | SURVIVES |
+| PV NIC | never installs | **problem 31** FAILED_INSTALL | **problem 31** FAILED_INSTALL |
+| xennet | absent | Stopped | Stopped |
+| network | Realtek fallback | Realtek, 10.137.0.72 | Realtek, 10.137.0.72 |
+
+Identical outcome both times. The seeded devnode DOES stop the restart loop - nothing is installed so
+nothing demands a reboot - but the PV NIC ends permanently dead, and because the devnode exists PnP
+never re-runs driver selection, so it cannot self-repair. The qube looks healthy and has working
+networking; it is just silently on the emulated RTL8139 forever. That is a WORSE failure than the
+crash, which at least announces itself.
+
+This is the one-way door both reviewers named, now measured twice rather than predicted.
+
+**Not chasing a third layer.** Each attempt costs ~10 min and the remaining candidates (catalog /
+signature binding, `DriverDatabase` package ranking, further class instances) are an unbounded list
+whose success condition is "reproduce, by hand, everything a device install does". Priming with one
+firewalled vif does exactly that, in 3 minutes, correctly, and is validated end to end.
