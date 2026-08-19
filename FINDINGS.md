@@ -13273,3 +13273,95 @@ Deterministic fixes selected (churn removal, same playbook that fixed the displa
 - **Upstream (qualifies under the reporting exception, user approves text):** the xenbus/xeniface
   unbounded revoke spin now has a second independent trigger; report with the 08-05 dump plus the
   new one once captured.
+
+## 2026-08-20 — Fable workflow verdict: decisive updater reliability diagnosis + resolution
+
+(11 fable agents, 1.05M tokens, 5 dimensions diagnosed + adversarially challenged + synthesized. The full verdict follows; the ordered RESOLUTION drives implementation. Key re-attributions: the 4h wedge is a whole-guest KERNEL freeze from relay vchan churn - NOT WU (scan finished exit 0x0), NOT Defender; WU needs no adapter; several 'fixed'/'proven' records were overstated.)
+
+# Qubes Windows Updater — Decisive Diagnosis and Resolution (2026-08-20)
+
+## 1. VERDICT MATRIX
+
+Legend: cells are judged under the current shipped code. "Scan-as-answer" (honesty of the reported number) vs "scan-as-pass" (the guest survives and completes) are judged separately where they diverge.
+
+### Win10 22H2
+
+| Cell | Template (netvm-free) | StandaloneVM | AppVM |
+|---|---|---|---|
+| **scan** | **UNRELIABLE** — answer honesty is deterministic (proxy scan proven: 8 updates, exit 0x0, zero adapters; give-up guard prevents false zeros), but the *pass itself* is the proven trigger context of a whole-guest kernel freeze (2026-08-19 wedge fired mid-Sync-Revocation of a back-to-back pass; relay vchan churn implicated). Also: task-#14 truncation can still cost a pass (honest exit 75), and a dead relay squatting :8082 is an unfixed proven-once path. | n/a — must skip. Offline skip **RELIABLE** under current classifier (skipped-standalone, zero relay bytes). Direct-internet branch **UNPROVEN** (only exercised under the retired discriminators; re-run Test-DirectInternet/NoAutoUpdate-undo under the live-qubesdb classifier). | n/a — must skip. **UNPROVEN** — the live-qubesdb `/type=='AppVM'` branch has never run on a real AppVM (the full-witness proof used the retired RootIdentity stamp). Test: boot a real Win10 AppVM, assert skipped-appvm + zero relay bytes/processes. |
+| **download** | **RELIABLE** — 729.7 MB one attempt, zero resumes, verified size+magic; rides CONNECT (byte-perfect, immune to the plain-HTTP truncation). Residual: shares the guest with the churn-freeze exposure until the relay fix lands. | n/a | n/a |
+| **install** | **UNPROVEN on the template proper** — full drain 19045.2965→.6456 proven on win10-clean (same image, Standalone rig) incl. the msu→cab rc=50 workaround; no install has ever run on win10-tpl itself. Test: one dom0-driven drain on win10-tpl with UBR + CBS state=112 acceptance. Deterministic known gap (not flakiness): non-catalog KBs (Defender defs, MSRT, UHT, KB5066747, KB5001716) fail honestly every pass. | n/a | n/a |
+| **boot** | **UNRELIABLE** — (1) the 4h kernel-freeze wedge (attributed to relay-churn-triggered PV-driver spin class, final stack pending NMI dump); (2) ~1-in-5 fresh-build first-boot-with-vif reset, resetter unknown (probe armed: catch-firstboot.sh). | **RELIABLE** — autologon incident fixed (unlimited autologon + re-arm), reboot-survival proven. | **UNRELIABLE** — first-boot no-GUI ("Awaiting for a vchan client", 3/3 on one lineage), trigger unidentified; self-heal guard never seen to fire. Probe on record: A/B clone from display-experimented vs clean source. |
+
+### Win11 (24H2 lineage)
+
+| Cell | Template (netvm-free) | StandaloneVM | AppVM |
+|---|---|---|---|
+| **scan** | **UNRELIABLE by shared exposure** — scan mechanics proven (win11-tpl, win11-clonetest; Sync-Revocation self-heal 3/3 second-lineage), but the relay/pass structure is identical to the one that froze win10-tpl and the churn fix is not implemented; no wedge probing has ever run on Win11. One honest scan-failed already occurred (2026-08-19). | n/a — **UNPROVEN**: skip has never been tested on Win11 (win11-fresh historically ran the FULL pipeline as the stamped rig — that proves the pipeline, not the skip). | n/a — **UNPROVEN**: never run on win11-app. |
+| **download** | **RELIABLE** — 4867 MB @ 12.8–15.2 MB/s, single attempt, verified. | n/a | n/a |
+| **install** | **RELIABLE** — 26100.8875→.9168 (KB5121003) CBS-clean with superseded-sibling filter + applicability check + one-package-per-session serialization; 25H2 .NET KB5120708 rc=3010. Caveats: the one-package rule rests on n=2 on one image (ALLOW_MULTISTAGE hook kept for re-falsification); 25H2 as a *template* and any feature update never driven. | n/a | n/a |
+| **boot** | **UNPROVEN** — no wedge recorded, but the win10-style wedge/Defender-idle probing has never run on Win11. Test: register wedge-telemetry boot task + TaskScheduler Operational log, soak template boots. | **RELIABLE** — healthy long-lived (win11-fresh). | **UNPROVEN (n=1)** — one good boot (win11-app, IDD active). |
+
+**DispVM (both platforms): UNTESTED** — falls through to the AppVM skip branch by code read; never executed. Test alongside the AppVM cell.
+
+## 2. ROOT CAUSES
+
+- **Kernel-freeze wedge (Win10 Template scan+boot)** — the pass's relay opens one qrexec data vchan per fetch (guest is vchan server/granter), closes them with the far end still active (`cut_request=True`) plus dead-warm-channel churn; this revokes grants the far side may still map, matching the NMI-proven 2026-08-05 xeniface/xenbus unbounded-revoke-spin class. Freeze bracketed to seconds (after CTL cab 2, 20:21:05.183; all three event logs + all file mtimes silent 229 min). **Missing evidence:** an NMI dump on a reproduction naming the spinning stack, and a provenanced CPU figure (the ~1.6-core number has no recorded source) — the only data discriminating spin-class from the 2026-08-06 idle/PV-ring-deaf class. Note: zero on-disk writes proves the *persistence plane* died, not that user-mode execution stopped — the dump is the sole discriminator.
+- **Dead-relay port squat (0x80072EFD)** — Ensure-Proxy equates `Get-Process qubes-updates-relay` with a live relay; no port-8082 serviceability probe; the FINDINGS claim of an "in-script retry" corresponds to no commit (false record). Proven once, unhandled.
+- **Task #14 plain-HTTP byte loss** — ~1/3 of Content-Length-framed bodies arrive short inside the Windows-side qrexec/vchan hop (proven relay-free with proxy-probe.cs; sender 30/30 full, guest 20/30). Ownership UNSETTLED between libvchan and QWT's own Windows qrexec/vchan code — the "report upstream" framing contradicts the recorded correction. The mitigation's fresh-channel retries *multiply* the churn implicated in the wedge. Close-race hypothesis is untested-at-power (n=5), not refuted.
+- **Relay verification holes** — after 5 exhausted attempts HandlePlainHttp forwards the longest *incomplete* body as a 200; bodies over MaxVerifyBytes=16 MB are cut and shipped truncated (no streaming path exists); chunked/close-delimited responses pass unverified and are logged `complete=False`, which the agent's give-up regex counts — a genuine 0-update scan concurrent with any chunked response would spuriously exit 75.
+- **Give-up guard blind spots** — fires only on count==0 (an N>0 undercount escapes); Get-RelayGiveUps swallows all exceptions and returns 0 (a check that cannot fail); log path hardcoded, disarmed by any nondefault `-WorkDir`.
+- **Protect-Autologon placement** — invoked only on success paths inside the try; a pass that stages a package then throws (e.g. Resolve-Catalog's unwrapped Invoke-WebRequest) ends staged+reboot-pending with no autologon protection — exactly the original lockout shape (qrexec rc=117, unmanageable qube).
+- **416/verify holes** — the 416 branch calls Test-Msu with expect=0, skipping the size check (an over-long corrupt-append file with valid leading magic is accepted); Test-Msu's catch returns `$false`, which matches neither 'bad' nor 'short' in the completion check, so an *unreadable* file reports success.
+- **Sync-Revocation pristine edge** — both fetch attempts of a needed cab failing on a guest with no prior copy logs "keeping existing copy" (none exists) and points RootDirURL at an incomplete mirror → 0x80072F8F with a misleading trail.
+- **Exit-code contract** — the script exits 0 with phase='error'; the build gate greps output (safe), any exit-code reader misreads failure as clean; the gate itself only WARNs on miss.
+- **First-boot vif reset (Win10)** — resetter unknown, predates this work; forensics blocked by volatile root; live-capture probe validated and armed.
+- **AppVM no-GUI first boot (Win10)** — trigger unidentified; never-booted-template theory killed; leading suspect is display-experiment state in the clone source; A/B probe defined, not run.
+- **PidForLocalPort race** — ERROR_INSUFFICIENT_BUFFER on the second GetExtendedTcpTable call treated as not-found → legit WU connection RST-denied; fail-safe, not deterministic.
+- **Xen domain-teardown hang at commit reboot** — dom0-side, WHY never investigated; deterministic operator rule exists (Running=wait, Transient=qvm-kill safe) but strands the uninformed.
+
+## 3. RESOLUTION (ordered)
+
+1. **Relay churn removal** (the actual wedge fix): one long-lived vchan pool per pass; close channels only after far-end EOF — never `cut_request=True` closes; min-interval throttle (the display path's M7 analog). *Acceptance:* soak harness hammering back-to-back scan passes must wedge the **pre-fix** build within bounded cycles (control seen to FAIL), then zero wedges post-fix over ≥3× that count.
+2. **NMI dump on a reproduction** (deterministic closure of the class attribution): arm NMICrashDump + wedge-telemetry boot task on win10-tpl, reproduce via the same hammer, dom0 wedge-kit `--nmi` (user/dom0 action), kd per-CPU module+offset stacks. Also re-derive the CPU figure from dom0 cputime. *Acceptance:* the dump names the spinning driver or shows idle vCPUs — either way the differential in §4 collapses to one entry. Only after this does any upstream report get drafted — and only if the stack lands in libvchan/xen drivers, not QWT's own qrexec (ownership per the recorded correction; user approves text first).
+3. **Cross-path pass debounce** (not a mutex — every observed double-fire was *sequential*, 18 s apart; boot+repetition triggers are already the same task under IgnoreNew): skip a pass if one completed <N minutes ago, across scan task / Run task / dom0 RPC. *Acceptance:* pre-fix boot shows two passes (proven pattern); post-fix same boot shows one, with the skip logged.
+4. **Ensure-Proxy serviceability probe**: loopback HTTP round-trip to 127.0.0.1:8082; on failure kill any relay-named process and respawn. *Acceptance:* plant a dead/wedged squatter on 8082 → pre-fix pass must FAIL 0x80072EFD (reintroduced defect seen red); post-fix pass recovers and completes.
+5. **Protect-Autologon into the finally**, guarded by `$StagedThisSession`. *Acceptance:* test hook throws after staging → pre-fix leaves autologon un-armed (seen to fail); post-fix registry shows re-armed autologon despite the throw.
+6. **Relay honesty hardening**: (a) return 502 on exhausted retries — never forward an incomplete best body; (b) fix the 16 MB cap (verify full Content-Length bodies or chunk-verify — no silent truncation); (c) log `complete=unknown` for !LengthKnown responses. *Acceptance:* dom0-side fault-injection shim truncates responses → client must see an error, never a short 200 (pre-fix short-200 observed); force a chunked plain-HTTP response on an up-to-date guest → exit 0, not 75.
+7. **Give-up guard hardening**: fire on *any* give-up during the scan window (undercount case reported as scan-degraded/exit 75); Get-RelayGiveUps fails loud when the log is unreadable; derive the log path from `-WorkDir`. *Acceptance:* new FAKE hook simulating N>0-with-giveups → exit 75; delete the relay log mid-scan → pass errors instead of reporting.
+8. **Fetch/verify closure**: 416 branch verifies size against server total (probe request/Content-Range), not magic-only; Test-Msu catch returns 'bad'. *Acceptance:* plant an over-long valid-magic file → pre-fix accepted (seen), post-fix discarded+refetched; plant an unreadable file → pre-fix "success" (seen), post-fix discarded.
+9. **Sync-Revocation pristine edge**: when a needed cab has no local copy and both fetches fail, fail the pass with a named error and do NOT repoint RootDirURL. *Acceptance:* block cab fetches on a pristine clone → explicit missing-cab error, not 0x80072F8F.
+10. **Exit-code contract**: exit nonzero when phase='error' (audit all callers), and make the build gate hard-fail on scan-gate miss. *Acceptance:* induced error → nonzero exit + gate failure.
+11. **VM-class matrix completion**: run the shipped classifier on a real Win10 AppVM, a real Win11 Standalone+AppVM, a DispVM, and re-exercise the Standalone direct-internet branch. *Acceptance per cell:* skipped-\* status + zero relay bytes + zero relay processes witnesses.
+12. **PidForLocalPort**: loop GetExtendedTcpTable on ERROR_INSUFFICIENT_BUFFER. *Acceptance:* unit-style repro growing the table between calls → pre-fix RST, post-fix identified.
+13. **Enable TaskScheduler Operational log** on templates (attributes future pass triggers) and keep wedge-telemetry as a boot task — understood as a *user-mode discriminator only*; it cannot capture a kernel freeze (the NMI path is the closer).
+14. **Non-catalog KB targeted handling** (backlog, owner-acknowledged): Defender via standalone mpam-fe.exe through the relay, MSRT as .exe, etc. Explicitly NOT a loopback adapter. Until built, current honest per-pass failure stands. *Acceptance:* Defender definitions version advances on a netvm-free template.
+15. **Remaining named probes (no fix yet, none excused):** first-boot vif reset — catch-firstboot.sh armed, next reproduction names the resetter; AppVM no-GUI — run the A/B clone-source probe; Xen teardown hang — dom0-side investigation (escalate), operator rule documented meanwhile.
+
+## 4. THE CPU-WEDGE
+
+Ranked differential for the 2026-08-19 4-hour freeze:
+
+1. **xeniface/xenbus unbounded grant-revoke spin** (NMI-proven 2026-08-05 class) — best fit: freeze instant coincides with relay#2's vchan churn incl. closes-while-mapped; instantaneous, invisible to user-mode, burn starts at the freeze. Requires the CPU-burn figure to be real.
+2. **PV-ring-servicing death** (2026-08-06 class: guest stops servicing rings, vCPUs *idle* in that dump, never root-caused) — discriminated from #1 **only** by the ~1.6-core figure, which has no recorded provenance and descends from an instrument family previously retracted as noise.
+3. **User-mode burner atop a dead persistence plane** — not excluded: zero on-disk writes proves disk/vchan/log persistence died, not that execution stopped; unflushed writes vanish at force-kill, producing identical silence.
+
+Ruled out deterministically: the WU COM scan (exit 0x0 at 20:20:42), CBS/TiWorker servicing (CBS.log untouched; live servicing writes ~1M lines), Defender-as-cause and every user-mode candidate *as freezer of the plane*, and the 4-vCPU seamless-glitch class (mechanism mismatch).
+
+**The single probe that makes it deterministic:** an NMI crash dump on a reproduction — NMICrashDump armed on win10-tpl, hammer back-to-back scan passes until the wedge (bounded expectation per the 08-05 history), dom0 wedge-kit `--nmi`, kd per-CPU stacks with module+offset. One dump distinguishes all three: spinning xeniface/xenbus stack (#1), idle vCPUs with stuck rings (#2), or a named user-mode process (#3). Secondary datum, same session: dom0 cputime for the window, replacing the unprovenanced 1.6-core figure.
+
+## 5. WHAT TO STOP BELIEVING
+
+- **"WU needs a network adapter / the loopback adapter unblocks wuauserv."** FALSE — mock kill-test artifact (0x8024402C was direct-DNS to a fake host). The real scan works netvm-free with zero adapters through the WinHTTP proxy. Only DO/BITS gates on IsNetworkAlive, and Path B never touches them.
+- **"The 4h wedge was Defender / an unattributed user-mode burner, bounded by task ExecutionTimeLimits."** FALSE — it was a whole-guest kernel-plane freeze mid-updater-pass; no task limit, mutex, or guard can bound it because the scheduler froze too. Conversely, **"the WU scan hung"** is also false — the COM search finished exit 0x0; it is the *pass's relay churn*, not the search, that is implicated.
+- **"Overlapping passes caused it; the mutex fixes it."** FALSE — every observed double-fire was sequential (18 s apart); the mutex only blocks concurrency. The fix is churn removal + debounce.
+- **"An in-script retry fixed 0x80072EFD."** FALSE RECORD — no such commit exists; Ensure-Proxy still equates process-exists with relay-healthy.
+- **"0x80072F8F is CDP CRLs."** FALSE — auto-update CTL revocation; Sync-Revocation is the proven fix.
+- **"The 24H2 rollback was a checkpoint-chain limitation."** RETRACTED — superseded catalog sibling; the filter alone fixed it.
+- **"The RootIdentity stamp guard protects AppVMs."** STALE — retired 2026-08-19; the live-qubesdb classifier is the only discriminator, and its AppVM branch is unproven.
+- **"Task #14 is not our code — report it upstream."** UNSETTLED — the loss sits in the *Windows-side* qrexec/vchan hop, plausibly QWT's own; localize before reporting.
+- **"Close-race refuted; retry fix measured 15/15 and 8/8."** OVERSTATED — linger test was n=5 (no power); the 8/8 is a misattributed pre-fix number. 15/15 stands.
+- **"win11-fresh runs a stale relay."** STALE — redeployed 2026-08-19 with second-lineage Sync-Revocation proof.
+- **"Protect-Autologon runs at EVERY pass end that staged."** FALSE until fix 5 lands — success paths only.
+- **"User-mode was provably frozen."** OVERREACH — the persistence plane was provably dead; execution state awaits the NMI dump.
+- **Anything "intermittent."** There is no such category. Every once-failed path above ends in a fix with a fail-first acceptance test or a named armed probe: relay churn (fix 1 + soak), wedge class (probe: NMI dump), port squat (fix 4), vif reset (catch-firstboot.sh), AppVM no-GUI (A/B clone probe), teardown hang (dom0 escalation). None is excused.
