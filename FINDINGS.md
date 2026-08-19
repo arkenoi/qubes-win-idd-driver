@@ -13216,3 +13216,60 @@ panic narrative on it; read the actual log (WindowsUpdate.log / the ETL) before 
 Confirmed-good side effects this session: win10-tpl healthy (fresh 20s boot, scan completes, 8
 updates), and its gui-agent swapped to 882e2b5c (fullscreen fix) - flash user-confirmed gone on both
 win10-clean ('clean') and win10-tpl (old agent 'flash', control).
+
+## 2026-08-20 (workflow: cpu-wedge-anomaly) — the ~4h 1.6-core wedge ATTRIBUTED: whole-guest kernel freeze at 20:21:05, mid-vchan-churn of a SECOND back-to-back updater pass; every user-mode candidate RULED OUT by forensics
+
+Retro-forensics run live on win10-tpl (the wedged boot's logs were still on disk). Evidence:
+
+1. **The guest FROZE wholesale at ~20:21:05, it was not "busy".** System, Application AND Security
+   event logs each show one giant gap of 229.3-229.4 min starting 20:20:03-07, resuming exactly at
+   the 00:09:25 force-kill boot (Kernel-Power 41 + 6008 "previous shutdown unexpected" confirm the
+   hard kill). Security auditing (478 events that evening) silent for 3h49m; ZERO files touched in
+   the window under CBS, Windows\Temp, SoftwareDistribution, Defender Support; WU ETL last write
+   20:20:41; relay/handler logs last write 20:21:05.183. A machine that cannot append one log line
+   or file byte for 4 hours has frozen user-mode — the 1.6 cores were burned BELOW user-mode.
+2. **Therefore every user-mode differential candidate is RULED OUT, deterministically:** Defender
+   (its own Operational log shows only boot-time 2001 "can't update security intelligence" noise at
+   20:18:14, nothing in-window; no Support-dir writes), SysMain, CompatTelRunner, MoUsoCoreWorker,
+   automatic maintenance, and a servicing transaction (CBS untouched; TiWorker writes CBS.log
+   copiously when alive). The 4-vCPU seamless glitch is a rendering artifact class, mechanism
+   mismatch, not in play. MsMpEng's measured 40-50% idle burn is REAL but is a separate perf item —
+   it demonstrably coexists with a fully reachable guest and cannot freeze the logging plane.
+3. **The freeze instant coincides with qrexec data-vchan churn from overlapping updater passes.**
+   agent.log, wedged boot: pass 1 = Sync-Revocation 20:20:06 → scan 8 updates 20:20:43 → reported →
+   done → "proxy removed, relay stopped" 20:20:43 (relay#1 teardown = close of its 8-warm-channel
+   pool + two CONNECTs that ended with downEnd=- / far side still active). relay log: **relay#2
+   starts 20:21:01.818** (a second scan pass, 18 s after the first), fetches CTL cab 1
+   (disallowedcertstl, complete 20:21:04.031) and cab 2 (authrootstl, complete after retry
+   20:21:05.168) — and the world stops before cab 3 (pinrulesstl) / before agent.log could write the
+   pass-2 "Sync-Revocation 3/3" line. Every relay fetch is its own qrexec data vchan (open =
+   guest-side grant, close = xeniface grant revoke); the log shows dozens of open/close cycles per
+   minute plus repeated "dead warm channel — fresh channel" churn, and closes with the far end
+   still active (cut_request=True, downEnd=-) — i.e. revoking grants the far side may still map.
+4. **This matches the NMI-PROVEN defect class of 2026-08-05 exactly** (FINDINGS cont 8/9: xeniface→
+   xenbus grant revoke of a still-mapped entry spins unboundedly at raised IRQL with locks held;
+   freeze instantaneous and invisible to guest user-mode; vCPU burn starts AT the freeze). The
+   staging-grant fix removed the DISPLAY-path trigger only; the PV-driver defect itself was never
+   fixed, and the updater relay's vchan churn is a second, independent trigger of it. ~1.6 cores avg
+   is compatible with spinner+lock-waiter (the xenvif analysis showed spinner+waiter = 2.0 cores;
+   the 08-05 single spinner = ~1.0).
+5. **Back-to-back double passes are structural, not exceptional:** the healthy 00:09 boot shows the
+   same pattern (passes at 00:11:37, 00:12:36, 00:23:28) and survived — the wedge is a race the
+   churn usually loses. TaskScheduler Operational log is DISABLED (verified: enabled=false), so
+   which trigger fired pass 2 is unattributed; enable that log to attribute it.
+
+PROVEN vs INFERRED: (1)(2)(3)(5) proven from on-disk logs this session. (4) — that THIS freeze's
+spinning stack is again xenbus/xeniface — is inferred from the identical syndrome + trigger class;
+the deterministic closer is one NMI dump on a reproduction (arm NMICrashDump + wedge-telemetry.ps1
+boot task on win10-tpl, reproduce by hammering back-to-back scan passes / relay open-teardown
+cycles, then dom0 wedge kit --nmi; kd module+offset stacks name the driver).
+
+Deterministic fixes selected (churn removal, same playbook that fixed the display path):
+- **Serialize updater passes globally** (cross-launch-path mutex in qubes-windows-update.ps1 —
+  MultipleInstancesPolicy=IgnoreNew covers only the same task; boot trigger, repetition trigger and
+  the dom0-driven RPC are distinct launch paths and double-fire is proven in the logs).
+- **Relay: stop churning vchans** — one long-lived pool per pass, close only after far-end EOF
+  (never cut_request=True closes), min-interval/LRU analog of the display path's M7.
+- **Upstream (qualifies under the reporting exception, user approves text):** the xenbus/xeniface
+  unbounded revoke spin now has a second independent trigger; report with the 08-05 dump plus the
+  new one once captured.
