@@ -12749,3 +12749,57 @@ revocation fix; the D2 wedge cause unproven; per-boot Public firewall profile on
 adapter (outbound unaffected) accepted and documented; alert-box pixels never captured on a
 real failure (only the marker + health-red channels are seen-to-fire; the persistent-alert
 variant is unexercised).
+
+## 2026-08-19 — WU REVOCATION BLOCKER FIXED: it was auto-update CTL revocation, not CDP CRLs
+
+Corrects the previous entry's framing ("CRL caches expired"). Root-caused and fixed the
+fleet-wide 0x80072F8F; dom0-driven updates work again, proven end to end on a pristine build.
+
+**Root cause, measured:** certutil's chain dump shows `CERT_TRUST_AUTO_UPDATE_END_REVOCATION`
+/ `CERT_TRUST_AUTO_UPDATE_CA_REVOCATION` on the WU chain elements - Microsoft-rooted chains
+use Microsoft's AUTO-UPDATE (trust-list/CTL) revocation mechanism, fed from
+ctldl.windowsupdate.com, NOT the CDP CRLs. That is why store-importing time-valid,
+KeyID-matched CRLs changed nothing (measured again this session with a REAL cache flush -
+the first `certutil -setreg chain\ChainCacheResyncFiletime @now` attempt silently dropped
+its argument: bare `@now` is PowerShell SPLATTING; quote it). The images carry trust-list
+state from the Aug-8-15 updater era (clones inherit it with its wall-clock expiry), the
+freshness window crossed ~Aug 16-18 on every guest at once, and cryptnet cannot re-sync on a
+proxy-only guest (fetches go direct, no DNS; after a failure it backs off, which is why the
+failing scans show ZERO ctldl attempts in the relay log). The load-bearing expired object is
+most likely the authroot CTL (root metadata that drives the revocation policy); the
+adversarial review of the interim CRL design independently predicted the negative-cache
+hypothesis would fail and that store CRLs were not the mechanism - confirmed on the rig.
+
+**The fix (shipped, commit 9216667): `Sync-Revocation` in guest/qubes-windows-update.ps1.**
+At every pass start (after Ensure-Proxy): fetch disallowedcertstl.cab + authrootstl.cab +
+pinrulesstl.cab THROUGH the relay (ctldl is on the relay's built-in domain allowlist; plain
+HTTP rides the verified/retried path built 2026-08-14 for exactly these files; 2 attempts
+per file), mirror them in C:\ProgramData\QubesCTL, point
+`AuthRoot\AutoUpdate!RootDirURL = file://C:\ProgramData\QubesCTL` (the documented air-gap
+mechanism), drop the LastSyncTime markers, flush the chain cache. The cabs are
+Microsoft-SIGNED CTL containers validated at use - a hostile/corrupt body is inert.
+Side effect, accepted and documented: OS root auto-update now sources from the mirror,
+i.e. new Microsoft roots arrive when a pass refreshes it (previously: never).
+
+**Proof chain (rig, serial):** schannel revoke-ON probe FAILED on the cold guest ->
+CTL mirror seeded by hand -> probe OK -> scan green ("2 update(s), reported to dom0").
+Defect reintroduced (mirror + AutoUpdate cache values + CryptnetUrlCache cleared, flush) ->
+probe FAILED again -> the SHIPPED script self-healed from that state: Sync-Revocation 3/3
+via relay -> scan green. Full integration: `UPDATE_SCAN=hard PRIME_NETVM=latch` rebuild from
+pristine win10-clean passed the HARD scan gate inside the build's verification boot (a
+pristine never-networked template cold-healed itself), fresh AppVM first boot green (41 s to
+network, 10-min watch). Catalog chain proven post-fix: `-Action resolve` resolved the real
+KB5066791 .msu. One transient during testing: a scan failed 0x80072EFD when my probe games
+left a dead relay claiming the port - in-script retry added; not seen since.
+
+**Open, stated honestly:** the delivery-CDN download leg is unproven post-fix (Aug-15 full
+passes worked on the same trust-state mechanism, so it should follow; the next real
+dom0-driven install proves it). If a future pass fails 0x80072F8F at DOWNLOAD, the panel's
+DigiCert finding is the first suspect: delivery/catalog hosts also exist as DigiCert-crossed
+chains whose CDPs live on crl3/crl4.digicert.com - not on the relay's domain allowlist. The
+fix would be an ADDITIVE relay allowlist var; NOTE the trap found in review:
+`QUBES_UPDATES_ALLOW` REPLACES the built-in list (qubes-updates-relay.cs AllowList()), so
+env-extending it means hand-copying the builtins (drift hazard) - prefer a three-line
+QUBES_UPDATES_ALLOW_EXTRA in the relay. Also: relay domain DENYs are rate-limited in the
+log; when hunting a missing fetch, grep for DENY explicitly. win11-fresh still runs the
+pre-retry-fix relay vintage; it heals when its updater deployment is next refreshed.
