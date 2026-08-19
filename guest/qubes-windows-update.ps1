@@ -94,15 +94,38 @@ function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-
 # qrexec qubes.UpdatesProxy call - measured 147 dom0 policy hits in one afternoon on an "offline"
 # guest, still dripping hours after the last scan. Remove-Proxy in the finally below restores the
 # routeless baseline; update traffic is the only traffic that ever gets a path out.
+function Test-RelayListening {
+  # Does something ACCEPT a TCP connection on 127.0.0.1:8082 within 3 s? A relay PROCESS existing
+  # does not prove the port is being serviced (a hung/dead relay, or a squatter, yields
+  # 0x80072EFD ERROR_INTERNET_CANNOT_CONNECT). This catches the proven-once failure the old
+  # process-exists check missed.
+  try {
+    $c = New-Object System.Net.Sockets.TcpClient
+    $iar = $c.BeginConnect('127.0.0.1', 8082, $null, $null)
+    $ok = $iar.AsyncWaitHandle.WaitOne(3000)
+    $res = ($ok -and $c.Connected)
+    $c.Close(); return $res
+  } catch { return $false }
+}
+function Start-Relay {
+  if (-not (Test-Path -LiteralPath $RelayExe)) { throw "relay not found at $RelayExe" }
+  $env:QUBES_UPDATES_MAXCONN='256'
+  Start-Process -FilePath $RelayExe -ArgumentList '--listen','8082','--target','@default','--log',$WorkDir -WindowStyle Hidden
+  Start-Sleep -Seconds 2
+}
 function Ensure-Proxy {
   & netsh winhttp set proxy '127.0.0.1:8082' '<local>' | Out-Null
   SetV $POL 'ProxySettingsPerUser' 0 'DWord'; SetV $IS 'ProxyEnable' 1 'DWord'
   SetV $IS 'ProxyServer' '127.0.0.1:8082' 'String'; SetV $IS 'ProxyOverride' '<local>' 'String'
-  if (-not (Get-Process qubes-updates-relay -EA SilentlyContinue)) {
-    if (-not (Test-Path -LiteralPath $RelayExe)) { throw "relay not found at $RelayExe" }
-    $env:QUBES_UPDATES_MAXCONN='256'
-    Start-Process -FilePath $RelayExe -ArgumentList '--listen','8082','--target','@default','--log',$WorkDir -WindowStyle Hidden
-    Start-Sleep -Seconds 2
+  if (-not (Get-Process qubes-updates-relay -EA SilentlyContinue)) { Start-Relay }
+  # Serviceability probe: if nothing is accepting connections on 8082, kill any relay-named process
+  # and respawn - a relay that exists but is not listening would otherwise fail the pass 0x80072EFD.
+  if (-not (Test-RelayListening)) {
+    Log 'relay not accepting connections on 127.0.0.1:8082 - killing any relay process and respawning' 'WARN'
+    Get-Process qubes-updates-relay -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+    Start-Sleep -Seconds 1
+    Start-Relay
+    if (-not (Test-RelayListening)) { throw 'relay still not accepting connections on 127.0.0.1:8082 after respawn' }
   }
 }
 
@@ -468,7 +491,7 @@ function Test-Msu($path, $expect) {
     $magic = New-Object byte[] 4
     $null = $fs.Read($magic, 0, 4)
     $fs.Close()
-  } catch { return $false }
+  } catch { return 'bad' }   # an UNREADABLE file is corrupt, not success: 'bad' (was $false, which matched no case)
   # An .msu is NOT always a cabinet. Classic packages start with 'MSCF', but recent Windows 11
   # cumulative updates ship as WIM containers starting with 'MSWIM' - measured 2026-08-13:
   # KB5121003's .msu begins 4D 53 57 49 4D. A CAB-only check rejected a perfectly good 4.8 GB
@@ -577,13 +600,16 @@ function Fetch-Msu($url,$dst,$kb){
       if($we -is [System.Net.WebException] -and $we.Response){ $code=[int]$we.Response.StatusCode }
       if(-not $code -and $_.Exception.Message -match '\(416\)'){ $code=416 }
       if($code -eq 416 -and $have -gt 0){
-        # Complete by the server's reckoning - but still prove it is a package before using it.
-        if((Test-Msu $dst 0) -eq 'ok'){
+        # Complete by the server's reckoning - but PROVE it. expect=0 skipped the SIZE check, so an
+        # over-long corrupt-append file with valid leading magic slipped through. Verify magic AND
+        # size against the server's true total (Get-UrlSize; -1 => magic-only, best effort).
+        $srvTotal = Get-UrlSize $url
+        if((Test-Msu $dst $srvTotal) -eq 'ok'){
           Log "  $([IO.Path]::GetFileName($dst)) already complete ($([math]::Round($have/1MB,1)) MB; server refused resume with 416)"
           $script:St.downloading=[ordered]@{kb=$kb;file=[IO.Path]::GetFileName($dst);mb=[math]::Round($have/1MB,1);total_mb=[math]::Round($have/1MB,1);pct=100}; Save
           return $true
         }
-        Log "  local copy failed verification despite 416 - discarding and refetching"
+        Log "  local copy failed verification despite 416 (magic/size) - discarding and refetching"
         Remove-Item -LiteralPath $dst -Force -EA SilentlyContinue
         continue
       }
@@ -781,7 +807,9 @@ function Install-Msus($files){
 # work removes the dependency on who reboots afterwards. Prevention only: if the password is
 # already consumed there is nothing this can restore (see ensure-autologon.ps1's header).
 function Protect-Autologon {
-  if (-not $script:St.reboot_needed) { return }
+  # Fire whenever a reboot is pending OR a package was staged this session (a stage can precede the
+  # reboot_needed flag, and a throw between the two must not skip re-arming autologon).
+  if (-not ($script:St.reboot_needed -or $script:StagedThisSession)) { return }
   $ea = 'C:\Program Files\Qubes Tools\vmupdate-shim\ensure-autologon.ps1'
   if (-not (Test-Path $ea)) { Log 'reboot staged but ensure-autologon.ps1 is not deployed - autologon may be consumed by the coming reboots' 'WARN'; return }
   try {
@@ -1184,6 +1212,14 @@ try {
   $script:St.phase='error'; $script:St.error="$($_.Exception.Message)"; Save
   Log "ERROR: $($script:St.error)"
 } finally {
+  # Re-arm autologon on ANY exit path that staged a reboot - INCLUDING a throw AFTER staging (e.g.
+  # Resolve-Catalog/Fetch failing once a package was already applied rc=3010). Previously this ran
+  # only on the success paths, so a staged-then-threw pass left the guest reboot-pending with
+  # autologon unarmed = the sign-in lockout (qrexec rc=117, unmanageable qube). Idempotent + guarded.
+  Protect-Autologon
   Remove-Proxy   # ALWAYS restore the routeless baseline - see the Ensure-Proxy comment
   if ($script:HaveMutex) { try { $script:Mutex.ReleaseMutex() } catch {} }
 }
+# Exit-code contract: a pass that errored must NOT exit 0. A dom0 wrapper or a scheduled task's
+# LastTaskResult that trusts the exit code would otherwise misread failure as clean success.
+if ($script:St.phase -eq 'error') { exit 1 }
