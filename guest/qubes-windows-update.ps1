@@ -827,15 +827,17 @@ try {
   }
 } catch { }
 
-# STANDALONE / NETWORKED-VM GUARD. The qubes.UpdatesProxy updater is a TEMPLATE-ONLY mechanism:
-# dom0-driven updates for a VM that is otherwise offline. A StandaloneVM is a full independent
-# VM with its own netvm - it updates ITSELF through normal Windows Update, and must NOT run this
-# proxy updater. vm-type is unreadable in a Windows guest (qubesdb-cmd empty, no xenstore key,
-# qdb_open fails - measured 2026-08-19), so the discriminator is DIRECT INTERNET: if the guest
-# can reach the internet WITHOUT the proxy, it is networked (a StandaloneVM in practice) - so
-# silently disable this updater and hand updating back to Windows (undo the template
-# NoAutoUpdate=1). An offline VM (a template, or an offline standalone used as a test rig) keeps
-# the proxy updater. Detection uses NO proxy and a short timeout.
+# TEMPLATE-ONLY GUARD. The qubes.UpdatesProxy updater is a TEMPLATE mechanism: dom0-driven
+# updates for a VM that is otherwise offline. A StandaloneVM - networked OR offline - is a full
+# independent VM that updates ITSELF via normal Windows Update, and must NEVER run this proxy
+# updater. vm-type is unreadable inside a Windows guest (qubesdb-cmd empty, no xenstore key,
+# qdb_open fails - measured 2026-08-19), and "offline" does NOT mean "template" (an offline
+# standalone is still a standalone), so network reachability cannot decide it. The ONLY reliable
+# signal is a DEPLOY-TIME STAMP the deployer (which knows the qube class) writes:
+# HKLM\SOFTWARE\Qubes!VmClass. The proxy updater runs IFF VmClass == 'TemplateVM'; anything else
+# (StandaloneVM, or unstamped) NEVER proxies. A networked non-template self-updates (undo the
+# template NoAutoUpdate=1); an offline non-template simply does nothing (it must update itself).
+# clone-to-template.sh stamps VmClass=TemplateVM on the templates it builds.
 function Test-DirectInternet {
   foreach ($u in 'http://www.msftconnecttest.com/connecttest.txt','http://www.msn.com/') {
     try {
@@ -851,11 +853,14 @@ function Test-DirectInternet {
   return $false
 }
 try {
-  if (Test-DirectInternet) {
-    Log 'direct internet present - this VM updates ITSELF (StandaloneVM/networked). The qubes.UpdatesProxy updater is template-only: silently disabled. Handing updating back to Windows.'
-    # A standalone self-updates via normal Windows Update - undo the template NoAutoUpdate=1
-    # (harmless if it was never set). Leave WU services alone; do not touch anything else.
-    Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -EA SilentlyContinue
+  $vmClass = (Get-ItemProperty 'HKLM:\SOFTWARE\Qubes' -EA SilentlyContinue).VmClass
+  if ($vmClass -ne 'TemplateVM') {
+    if (Test-DirectInternet) {
+      Log "not a TemplateVM (VmClass='$vmClass') and has direct internet - it updates ITSELF via Windows Update. The qubes proxy updater is template-only: disabled. Undoing NoAutoUpdate=1."
+      Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -EA SilentlyContinue
+    } else {
+      Log "not a TemplateVM (VmClass='$vmClass') and offline - the qubes proxy updater is template-only and never runs here; this VM must update itself. Doing nothing."
+    }
     $script:St.phase='skipped-standalone'; Save
     exit 0
   }
