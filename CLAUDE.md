@@ -212,12 +212,14 @@ through it. Enforced in `ShouldAcceptWindow` (gui-agent main.c): a fullscreen-si
 class contains "LogonUI" (or any override-redirect fullscreen) is rejected outright, regardless
 of the feature. (It is NOT the whole-screen window-0 path — that was an early wrong theory.)
 
-**Mode 2 — a fullscreen-sized normal APP window: CONDITIONALLY allowed.** A real application
-window that happens to span the whole guest screen is mapped only when the guest is opted in
-via `qvm-features <vm> service.gui-fullscreen 1` (guest-local override: registry
-`ShowFullscreenScreen` DWORD under the gui-agent config key). Enforced in `ShouldAcceptWindow`
-by SIZE (>= ~99% of the guest screen), not class. Override-redirect + fullscreen is rejected
-**unconditionally** (never mapped, even with the feature on).
+**Mode 2 — a BORDERLESS true-fullscreen window: CONDITIONALLY allowed.** Only a fullscreen-sized
+window with NO title bar (no `WS_CAPTION` — a game/video/presentation taking over the screen) is
+gated, mapped only when opted in via `qvm-features <vm> service.gui-fullscreen 1` (guest-local
+override: registry `ShowFullscreenScreen` DWORD under the gui-agent config key). A **windowed**
+fullscreen — a maximized normal app that has a title bar (`WS_CAPTION`) — is ALWAYS allowed,
+regardless of the feature (owner refinement 2026-08-19): it is just a large normal window.
+Enforced in `ShouldAcceptWindow` by SIZE (>= ~99% of the guest screen) + the caption test.
+Override-redirect + fullscreen is rejected **unconditionally** (never mapped, even feature on).
 
 The feature is read once at agent Init from qubesdb `/qubes-service/gui-fullscreen` (dom0 wins)
 over the registry base, and governs ONLY Mode 2. Do NOT let it affect Mode 1.
