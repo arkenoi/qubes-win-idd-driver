@@ -13029,3 +13029,26 @@ The golden image win10-clean now carries this agent (hot-deployed; also in the c
 and future QWT builds). FUTURE (parked, owner "will see"): distinguish a genuine lock/UAC LogonUI
 (persists, awaits input) to log/report it as the bug it is; convert UAC to an in-desktop dialog
 or dom0-gate. Also parked earlier: the residual small normal boot window (owner: "probably not now").
+
+## 2026-08-19 — StandaloneVM: proxy updater silently disabled; it self-updates (owner directive)
+
+Owner: the qubes.UpdatesProxy updater is a TEMPLATE-ONLY mechanism; a non-templated StandaloneVM
+must silently disable it and never try proxy updates - it updates itself via normal Windows
+Update. Requirement: a StandaloneVM CAN get updates AND does not get proxied.
+
+vm-type is UNREADABLE in a Windows guest - measured on win10-clean (a StandaloneVM): qubesdb-cmd
+read /qubes-vm-type returns empty, there is no xenstore key for it (the xeniface WMI reads
+xenstore, not qubesdb), and qdb_open via P/Invoke fails. So type-based branching is impossible;
+the discriminator is DIRECT INTERNET reachability instead (Test-DirectInternet: HttpWebRequest
+with Proxy=$null to msftconnecttest/msn, short timeout). This is also the RIGHT semantic: the
+proxy exists for otherwise-offline (template) VMs; a networked standalone has its own route.
+
+Fix (commit 02407e2, guest/qubes-windows-update.ps1, before Ensure-Proxy): if direct internet is
+reachable -> log, set phase 'skipped-standalone', REMOVE the template NoAutoUpdate=1 (so Windows
+self-updates), and exit before any proxy activity. Else -> the proxy updater runs as before.
+Verified BOTH on win10-clean: offline -> Test-DirectInternet false -> proxy path -> "scan: 6
+update(s)"; core-net attached (direct internet) -> "direct internet present ... silently
+disabled" -> phase skipped-standalone, NoAutoUpdate removed. win10-clean restored to its offline
+default afterwards. NOTE: an OFFLINE standalone (none in production; only our test rig) is treated
+as template-mode (uses the proxy) since it has no direct route - acceptable, and it is exactly how
+the win10-clean rig is used to exercise the template updater.
