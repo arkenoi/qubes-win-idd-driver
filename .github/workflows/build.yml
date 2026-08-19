@@ -98,6 +98,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "wgcprobe msbuild failed" }
           Get-ChildItem tools\wgcprobe\x64\Release\wgcprobe.exe
 
+      - name: Build qubesdb-read
+        shell: pwsh
+        run: |
+          # tools/qubesdb-read: guest-side reliable qubesdb reader (stock qubesdb-cmd mis-parses
+          # '/'-prefixed keys). Plain v143 console exe, LoadLibrary's qubesdb-client.dll at runtime.
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              Select-Object -First 1
+          & $msbuild tools\qubesdb-read\qubesdb-read.vcxproj /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "qubesdb-read msbuild failed" }
+          Get-ChildItem tools\qubesdb-read\x64\Release\qubesdb-read.exe
+
       - name: Collect package + tools
         shell: pwsh
         run: |
@@ -156,6 +168,9 @@ jobs:
           $wgc = Get-ChildItem tools\wgcprobe -Recurse -Filter wgcprobe.exe -ErrorAction SilentlyContinue |
               Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
           if ($wgc) { Copy-Item $wgc.FullName package\ -Force } else { Write-Warning 'wgcprobe.exe missing from package' }
+          $qdbr = Get-ChildItem tools\qubesdb-read -Recurse -Filter qubesdb-read.exe -ErrorAction SilentlyContinue |
+              Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
+          if ($qdbr) { Copy-Item $qdbr.FullName package\ -Force } else { Write-Warning 'qubesdb-read.exe missing from package' }
           Get-ChildItem package
 
       - uses: actions/upload-artifact@v4
