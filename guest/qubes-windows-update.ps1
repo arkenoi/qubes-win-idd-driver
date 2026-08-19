@@ -738,6 +738,41 @@ function Install-Msus($files){
 }
 
 # ---------------------------------------------------------------------- main
+# APPVM GUARD, guest-side - updates are the TEMPLATE's business; an AppVM must not raise the
+# proxy at all (its root is volatile: scan results die at shutdown, an install would be
+# discarded whole). This mirrors what the Linux agent does by reading /qubes-vm-persistence;
+# that exact read is unavailable here (the Windows qubesdb value-read paths are measured
+# broken, FINDINGS 2026-08-19), so the discriminator is IDENTITY: at deploy time the
+# installer stamps this root with the machine's xenstore '/vm/<uuid>' path
+# (HKLM\SOFTWARE\Qubes!RootIdentity), and clone-to-template re-stamps templates it builds.
+# At run time the live identity comes from xenstore via the xeniface WMI interface. Stamp
+# present and != live identity => this root is running inside a DIFFERENT qube than it was
+# deployed to = a derived AppVM => exit before Ensure-Proxy (no relay, no qrexec, nothing
+# leaves the VM). UUID, not name, so template renames stay harmless. No stamp (older
+# deployments) => guard inactive, behavior unchanged. WMI unavailable => guard inactive
+# with a WARN (fail-open keeps templates updatable; dom0 drives passes deliberately).
+function Get-XenVmIdentity {
+  try {
+    $base = Get-WmiObject -Namespace root\wmi -Class XenProjectXenStoreBase -EA Stop
+    $sid  = $base.AddSession('qwu-guard')
+    $sess = Get-WmiObject -Namespace root\wmi -Query "select * from XenProjectXenStoreSession where SessionId=$($sid.SessionId)"
+    $vm   = ($sess.GetValue('vm')).value
+    [void]$sess.EndSession()
+    return $vm
+  } catch { return $null }
+}
+try {
+  $rootStamp = (Get-ItemProperty 'HKLM:\SOFTWARE\Qubes' -EA SilentlyContinue).RootIdentity
+  if ($rootStamp) {
+    $liveId = Get-XenVmIdentity
+    if (-not $liveId) { Log 'AppVM guard: xenstore WMI unavailable - guard inactive' 'WARN' }
+    elseif ($liveId -ne $rootStamp) {
+      Log "root deployed in '$rootStamp' but running as '$liveId' - a derived AppVM. Updates are the template's business; exiting before any proxy activity."
+      $script:St.phase='skipped-appvm'; Save
+      exit 0
+    }
+  }
+} catch { }
 try {
   $script:St.phase='ensure-proxy'; Save; Ensure-Proxy
   $script:St.phase='sync-revocation'; Save; Sync-Revocation
