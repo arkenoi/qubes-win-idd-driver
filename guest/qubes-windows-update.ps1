@@ -653,6 +653,43 @@ function Order-Msus($files){
   return ,@($ranked | Sort-Object rank, size | ForEach-Object { $_.path })
 }
 
+# DISM cannot ingest .msu on Win10 (measured 2026-08-19: rc=50 'request is not supported' on
+# 19045 for both the LCU and the .NET package; the same call works on Win11 26100, where the
+# whole catalog+DISM path was built and proven). And the WU-native path cannot replace it on
+# a netvm-less guest: BITS/DO refuse jobs outright with no network interface present
+# (0x80200010 BG_E_NETWORK_DISCONNECTED / 0x80D03805 - NLM sees no NIC; the loopback proxy
+# does not count). So on rc=50 the .msu is EXPANDED (an .msu is a cab archive) and the inner
+# .cab payloads go to DISM directly - the classic Win10 servicing shape. WSUSSCAN.cab is
+# metadata, not a package; SSU-named cabs rank first (combined LCUs usually carry the SSU
+# inside the main cab, where CBS orders it itself). rc reduction across cabs: any real
+# failure wins, else 3010 if anything staged, else 0.
+function Add-PackageCompat($f){
+  & DISM /Online /Add-Package /PackagePath:"$f" /NoRestart /Quiet /LogPath:"$WorkDir\dism.log" | Out-Null
+  $rc=$LASTEXITCODE
+  if($rc -ne 50){ return $rc }
+  $name=[IO.Path]::GetFileName($f)
+  Log "  $name : DISM rc=50 (.msu unsupported on this OS) - expanding to cabs"
+  $tmp = Join-Path $WorkDir ('msux-' + [IO.Path]::GetFileNameWithoutExtension($f).Substring(0, [Math]::Min(40, [IO.Path]::GetFileNameWithoutExtension($f).Length)))
+  Remove-Item $tmp -Recurse -Force -EA SilentlyContinue
+  New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+  & expand.exe -F:* "$f" "$tmp" | Out-Null
+  $cabs = @(Get-ChildItem $tmp -Filter '*.cab' | Where-Object { $_.Name -ine 'WSUSSCAN.cab' } |
+            Sort-Object @{e={ if($_.Name -match 'SSU'){0}else{1} }}, Length)
+  if($cabs.Count -eq 0){ Log "  $name : expand produced no cabs"; Remove-Item $tmp -Recurse -Force -EA SilentlyContinue; return 50 }
+  $worst=0; $staged=$false
+  foreach($c in $cabs){
+    & DISM /Online /Add-Package /PackagePath:"$($c.FullName)" /NoRestart /Quiet /LogPath:"$WorkDir\dism.log" | Out-Null
+    $crc=$LASTEXITCODE
+    Log ("  cab " + $c.Name + " rc=" + $crc)
+    if($crc -eq 3010 -or $crc -eq 2359302){ $staged=$true }
+    elseif($crc -ne 0){ $worst=$crc }
+  }
+  Remove-Item $tmp -Recurse -Force -EA SilentlyContinue
+  if($worst -ne 0){ return $worst }
+  if($staged){ return 3010 }
+  return 0
+}
+
 function Install-Msus($files){
   $reboot=$false; $rows=@()
   foreach($f in (Order-Msus $files)){
@@ -689,8 +726,7 @@ function Install-Msus($files){
       continue
     }
     $script:St.installing=[ordered]@{ file=$name; state='running' }; Save
-    & DISM /Online /Add-Package /PackagePath:"$f" /NoRestart /Quiet /LogPath:"$WorkDir\dism.log" | Out-Null
-    $rc=$LASTEXITCODE
+    $rc = Add-PackageCompat $f
     if($rc -eq 3010){ $reboot=$true; $script:StagedThisSession = $true }
     # Re-ask DISM what the package's state is NOW. rc=3010 only means "staged"; the state tells us
     # whether CBS actually took it, which is the thing that was silently false before.
