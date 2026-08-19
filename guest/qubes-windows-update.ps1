@@ -826,6 +826,40 @@ try {
     }
   }
 } catch { }
+
+# STANDALONE / NETWORKED-VM GUARD. The qubes.UpdatesProxy updater is a TEMPLATE-ONLY mechanism:
+# dom0-driven updates for a VM that is otherwise offline. A StandaloneVM is a full independent
+# VM with its own netvm - it updates ITSELF through normal Windows Update, and must NOT run this
+# proxy updater. vm-type is unreadable in a Windows guest (qubesdb-cmd empty, no xenstore key,
+# qdb_open fails - measured 2026-08-19), so the discriminator is DIRECT INTERNET: if the guest
+# can reach the internet WITHOUT the proxy, it is networked (a StandaloneVM in practice) - so
+# silently disable this updater and hand updating back to Windows (undo the template
+# NoAutoUpdate=1). An offline VM (a template, or an offline standalone used as a test rig) keeps
+# the proxy updater. Detection uses NO proxy and a short timeout.
+function Test-DirectInternet {
+  foreach ($u in 'http://www.msftconnecttest.com/connecttest.txt','http://www.msn.com/') {
+    try {
+      $req = [System.Net.HttpWebRequest]::Create($u)
+      $req.Proxy = $null                 # explicitly DIRECT - ignore any system/WinHTTP proxy
+      $req.Timeout = 8000
+      $resp = $req.GetResponse()
+      $ok = ([int]$resp.StatusCode -lt 400)
+      $resp.Close()
+      if ($ok) { return $true }
+    } catch { }
+  }
+  return $false
+}
+try {
+  if (Test-DirectInternet) {
+    Log 'direct internet present - this VM updates ITSELF (StandaloneVM/networked). The qubes.UpdatesProxy updater is template-only: silently disabled. Handing updating back to Windows.'
+    # A standalone self-updates via normal Windows Update - undo the template NoAutoUpdate=1
+    # (harmless if it was never set). Leave WU services alone; do not touch anything else.
+    Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -EA SilentlyContinue
+    $script:St.phase='skipped-standalone'; Save
+    exit 0
+  }
+} catch { }
 try {
   $script:St.phase='ensure-proxy'; Save; Ensure-Proxy
   $script:St.phase='sync-revocation'; Save; Sync-Revocation
