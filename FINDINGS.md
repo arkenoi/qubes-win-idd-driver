@@ -12920,3 +12920,41 @@ already in place: unlimited autologon means the sign-in screen should never appe
 **Rule reinforced:** any tooling that reboots a Windows guest MUST run the autologon
 prevention first, OR rely on the account being at unlimited autologon. dom0-side reboots
 (qvm-shutdown/kill) bypass in-guest reboot hooks by definition.
+
+## 2026-08-19 — fullscreen boot/shutdown "flash": characterized, three theories killed, real cause found
+
+Owner reports a full-desktop (5120x1440) flash at guest startup AND shutdown, wants it hidden
+unless a qvm-feature opts in. Investigated properly (design workflow + adversarial review +
+on-guest ProtoTrace). THREE plausible causes were disproven, in order:
+
+1. NOT `gui-emulated`. Owner set gui-emulated=0 by hand and the flash remained (their eyes).
+   So it is not the emulated-VGA/stubdom window shown before the agent connects.
+2. NOT the agent's boot-fullscreen default. Source said g_SeamlessMode defaults FALSE when the
+   registry value is absent (main.c:6835) -> boot fullscreen -> SendWindowMap(NULL). BUT: an
+   adversarial review flagged, and measurement CONFIRMED, that firstboot seeds SeamlessMode=1
+   in the ROOT config key and CfgOpenKey falls back module->root (config.c line ~35), so the
+   agent reads 1 and boots SEAMLESS. ProtoTrace on a real boot proves it: at capture start the
+   agent does CREATE(hwnd=0x0) then immediately UNMAP(0x0) then maps the real per-window
+   0x2003c, "Seamless mode changed to 1". The agent NEVER maps window 0. The whole first
+   design (force g_SeamlessMode=TRUE) was a no-op on the shipped guest - killed before coding.
+   (That design also carried a real heap-corruption bug the review caught: free() vs qdb_free()
+   on the Windows qubesdb client - do not free qdb_read results with the CRT free().)
+3. NOT the daemon mapping window 0. gui-daemon handle_create sets is_mapped=0 (xside.c:2931);
+   it does not show the screen window on CREATE either.
+
+REAL CAUSE: a legitimate FULLSCREEN GUEST WINDOW mapped transiently during the seamless
+transition. At steady state EnumWindows shows two host-sized windows the agent correctly
+FILTERS in seamless: `Program Manager`/class Progman (the Windows desktop, 5120x1440) and a
+5120x1400 ApplicationFrameWindow (UWP frame). The boot/shutdown flash is one of these (the
+0x2003c mapped at transition is the prime suspect = the desktop) being briefly MAPPED before
+the window-acceptance predicate settles (boot) or as tracking tears down (shutdown). This is
+the window-FILTER / transition-timing class (CLAUDE.md 2A-chrome territory), NOT a mode toggle.
+
+CONSEQUENCE FOR THE FIX: the real fix is agent-side, feature-gated, in the window-acceptance
+path - suppress mapping the desktop/Progman (and transitional fullscreen shell frames) during
+the seamless transition, opt-in via a qvm-feature to restore. It is a proper piece of work
+(like the chrome predicate), not a one-line toggle, and it needs the exact transitional window
+(0x2003c) confirmed at the flash instant before coding - which requires catching a sub-second
+transient (a few targeted captures) or accepting the Progman hypothesis and testing a filter.
+Not implemented this session; characterized and de-risked. gui-emulated restored to 1;
+ProtoTrace disabled; win10-clean left Halted.
