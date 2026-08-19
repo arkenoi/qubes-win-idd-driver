@@ -13073,3 +13073,101 @@ nothing" (phase skipped-standalone, ZERO proxy activity); VmClass=TemplateVM + o
 Sync-Revocation + "scan: 6 update(s)" (proxy path). win10-clean left unstamped (it is a
 StandaloneVM). To exercise the proxy/template path on this StandaloneVM rig, temporarily stamp
 VmClass=TemplateVM.
+
+## 2026-08-19 — RETRACTION: qubesdb IS readable in a Windows guest; it was a P/Invoke bug
+
+**Retracting, loudly, a claim this project repeated for weeks and built workarounds around:
+"qubesdb value reads are unavailable / unreadable inside a Windows guest" is WRONG.** It was a
+glue bug, not a platform limit. The C gui-agent has always read qubesdb natively
+(`qdb_open(NULL)`/`qdb_read` against `qubesdb-client.dll`, which ships in `C:\Windows\System32`);
+PowerShell reads it identically once the P/Invoke uses `CallingConvention=Cdecl` + `CharSet=Ansi`
+and passes the NULL vmname as `IntPtr.Zero`. Every earlier "qdb_open fails / reads return empty"
+probe was broken by MY marshaling (wrong signature; one probe's C# never even compiled because a
+nested `@"..."` verbatim string used `\"` escaping). Measured working in plain user context
+(`WIN-IDD-TEST\user`) 2026-08-19 on both a StandaloneVM and a TemplateVM.
+
+What IS still broken and stays retracted-to only for the CLI: the `qubesdb-cmd.exe` **CLI** read
+returns empty (`/type`,`/name` -> `[]`), and CLI **writes** are broken (the `_WIN32 optind -= 2`
+hack in `client/qubesdb-cmd.c`). We do NOT rebuild that stock binary (qwt-full stages it from the
+GPG-verified MSI and only rebuilds gui-agent); every consumer of ours is routed onto the reliable
+DLL read instead, which is strictly better. Recorded as a known stock bug; not reported upstream
+(QWT-scope, held per the standing policy).
+
+Canonical reader: **`guest/qubesdb-read.ps1`** (`Get-QubesDbValue`, `Get-QubesVmClass`,
+`Test-QubesService`; self-tests when run directly). The updater and the installer carry inline
+mirrors for self-containment.
+
+Key facts (core-admin source, verified live):
+- `/type` = the exact Python class name (`StandaloneVM`/`TemplateVM`/`AppVM`/`DispVM`) - the ONLY
+  key that separates StandaloneVM from AppVM. `/qubes-vm-type` collapses both to `AppVM`
+  (r3compatibility.py maps StandaloneVM -> "AppVM"); `/qubes-vm-updateable` (True for
+  Template/Standalone) is the fallback splitter.
+- Network L3 keys populate when a netvm is attached and are readable directly: measured on a
+  networked StandaloneVM `/qubes-ip=10.137.0.70 /qubes-netmask=255.255.255.255(/32)
+  /qubes-gateway=10.138.25.43 /qubes-primary-dns=10.139.1.1 /qubes-secondary-dns=10.139.1.2`.
+- The proxy feature exports to `/qubes-service/yum-proxy-setup` (Linux checks `qsvc
+  yum-proxy-setup || qsvc updates-proxy-setup`); we key template-only off `/type` instead.
+
+Improvements harvested from the reliable read (all implemented + tested):
+1. **Updater** (`guest/qubes-windows-update.ps1`): classifies LIVE from qubesdb - TemplateVM ->
+   proxy pass; StandaloneVM -> skipped-standalone (never proxies, networked or offline);
+   AppVM/DispVM -> skipped-appvm. Replaces the deploy-time VmClass/RootIdentity stamp discriminator
+   (stamps demoted to a fallback for the impossible unreadable case). Tested on win10-clean
+   (StandaloneVM -> skipped-standalone, zero proxy) and win10-tpl (TemplateVM -> proxy path).
+2. **Installer** (`Install-QwtImproved.ps1`): netvm-free PV NIC priming is now DEFAULT-ON for
+   TEMPLATES, gated on `/type=='TemplateVM'` read live at install (owner: default-on, not opt-in).
+3. **install-start-shortcut.ps1**: was reading `enableWinKey` via the broken CLI -> ALWAYS saw
+   "unset" -> never suppressed the Start shortcut for a third-party-shell guest. Now DLL read.
+   Proven: CLI `/type`,`/name` -> `[]`; DLL -> `StandaloneVM`,`win10-clean`.
+4. **pvnic-selfprime.ps1 applier**: reads `/qubes-ip //qubes-netmask //qubes-gateway` directly
+   from qubesdb (QdbValues), with the network-setup.exe log parse kept as a fallback. Tested:
+   QdbValues on the networked guest returned `ip=10.137.0.70 prefix=32 gw=10.138.25.43`; the
+   nested here-string (double-quoted Add-Type inside the single-quoted per-boot payload) PARSES
+   clean on the guest.
+
+netvm test policy (owner, corrected here): **core-net is a normal healthy netvm - fine to attach
+for TESTING** anything that is not a netvm-free template; **fw-net is the Mirage one, do not touch
+unless debugging mirage itself** (ci-notes/mirage-netback-incompat.md). Attaching a netvm as a
+FIX/dependency is forbidden (templates must live without one); attaching to TEST is encouraged.
+Test rig here: win10-clean (StandaloneVM) + core-net, restored to offline (netvm='') after.
+
+Baked into CI (release-package.yml -> make-setup.ps1): pvnic-selfprime.ps1 + qubesdb-read.ps1 +
+health-check.ps1 now staged; pvnic-selfprime.ps1 + qubesdb-read.ps1 added to the required-files
+self-check; the syntax-check now parses EVERY staged .ps1 (was: only Install-QwtImproved.ps1), so
+the nested-here-string class of bug fails the build, not a booted VM.
+
+NOTE for the flash-boot seen on win10-tpl this session: the agent submodule (4cf7588) HAS the
+fullscreen fix and the repo pointer is on it, so CI builds it - win10-tpl flashed only because it
+runs an OLDER deployed agent. Re-deploy it from a fresh release artifact to clear the flash.
+
+## 2026-08-19 (addendum) — fallbacks REMOVED; commit fully to the reliable read
+
+Owner: "why do you even want a fallback from qubesdb" + "what does network-setup.exe do we don't
+already have" (nothing). So the hedges the earlier entry kept are gone:
+
+- **pvnic applier is now PURE qubesdb** - network-setup.exe is dropped entirely (both its exit-code
+  netvm-presence oracle AND its log-parse value source). Detection: `QdbUp` (qdb_open succeeds) +
+  `QdbValues` (/qubes-ip //qubes-netmask //qubes-gateway) + `VifDevicePresent`. `up + /qubes-ip
+  absent + no PRESENT vif device` = no netvm -> quiet exit; `+ vif present` = keys not published ->
+  retry. Tested on win10-clean: OFFLINE -> `QUIET-EXIT: no netvm`; core-net -> `APPLY:
+  ip=10.137.0.70/32 gw=10.138.25.43`. The apply code (New-NetIPAddress/Route by ifIndex) and the
+  unplug-latch mechanism are UNCHANGED - only the detect+value source moved to qubesdb.
+- **VifDevicePresent must be -PresentOnly**: a netvm attached-then-removed leaves a GHOST devnode
+  (Status=Unknown, Present=False); counting it hangs the no-netvm quiet-exit to the deadline on any
+  guest that was ever networked. Fixed (the original network-setup.exe-based code had the same
+  latent trap, masked because priming targeted never-networked guests).
+- **updater stamp fallback RETIRED**: no more VmClass/RootIdentity. `Get-QubesVmClass` is the sole
+  source; if it returns null (qubesdb genuinely unreadable, an anomaly) the updater REFUSES to proxy
+  (phase skipped-unknown) rather than trust a stale stamp. Removed Get-XenVmIdentity (updater), the
+  RootIdentity stamp (install-updater-agent.ps1), and both stamps in clone-to-template.sh.
+- **qubesdb-cmd**: owner chose to FIX it (option 2) - build our own from source (we already build
+  core-qubesdb's qubesdb-client target; adding the qubesdb-cmd target + the optind patch + signing
+  + a staging override is the bounded change). PENDING as a separate CI commit. Note: even a working
+  guest CLI cannot advertise a service feature TO dom0 (features are dom0->guest; the guest's own
+  qubesdb is not what dom0 reads), so vmexec still must be set dom0-side regardless.
+
+Provenance clarified (owner asked): our pipeline rebuilds ONLY gui-agent + gui-watchdog (fork) and
+the IddCx driver from source; PV drivers come from the separate pv-xenvif pipeline; EVERYTHING else
+in the MSI (qubesdb incl. qubesdb-cmd + the shipped qubesdb-client.dll, qrexec agent,
+network-setup.exe, services) is staged bit-for-bit from the GPG-verified stock QWT 4.2.2 MSI
+(stage-qwt-repo.ps1: only component gui-agent-windows is ours). Option 2 moves qubesdb-cmd to ours.

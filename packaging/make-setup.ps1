@@ -152,6 +152,14 @@ foreach ($u in 'install-updater-agent.ps1', 'qubes-windows-update.ps1', 'qubes-u
     Copy-Item (Need (Join-Path $RepoRoot "guest\$u") "updater agent payload ($u)") $OutDir -Force
 }
 
+# Netvm-free PV NIC priming: the installer (Install-QwtImproved.ps1) seeds this on TEMPLATES only
+# (default ON), reading the qube class LIVE from qubesdb. So pvnic-selfprime.ps1 must be on the
+# medium. qubesdb-read.ps1 is the canonical reliable-read helper (a guest diagnostic; the
+# installer and updater carry inline mirrors of it). health-check.ps1 is the guest self-check.
+foreach ($g in 'pvnic-selfprime.ps1', 'qubesdb-read.ps1', 'health-check.ps1') {
+    Copy-Item (Need (Join-Path $RepoRoot "guest\$g") "guest payload ($g)") $OutDir -Force
+}
+
 # --- the MSI ---------------------------------------------------------------------------
 $msiSrc = Join-Path $MsiArtifact 'installer.msi'
 if (-not (Test-Path -LiteralPath $msiSrc)) { throw "installer.msi missing from the qwt-full artifact ($MsiArtifact)" }

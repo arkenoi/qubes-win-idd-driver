@@ -21,13 +21,34 @@ $ErrorActionPreference = 'Continue'
 $qtBin = 'C:\Program Files\Qubes Tools\bin'
 
 # Is this guest running its own shell? The dom0 feature is exported to the guest's qubesdb as
-# /qubes-service/enableWinKey (qubesdb-cmd READ works on Windows; only write is broken upstream).
+# /qubes-service/enableWinKey. Read it via the qubesdb client DLL (qdb_open/qdb_read) - the
+# qubesdb-cmd CLI returns EMPTY for reads on this build (the optind bug), so the previous CLI
+# read here ALWAYS saw "unset" and never suppressed the shortcut for a third-party-shell guest.
+# Mirrors the canonical guest/qubesdb-read.ps1.
 $thirdPartyShell = $false
 try {
-    $qdb = Join-Path $qtBin 'qubesdb-cmd.exe'
-    if (Test-Path $qdb) {
-        $v = (& $qdb read /qubes-service/enableWinKey 2>$null | Select-Object -First 1)
-        if ($v -and "$v".Trim() -ne '0') { $thirdPartyShell = $true }
+    if (-not ('QdbShell' -as [type])) {
+        Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class QdbShell {
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern IntPtr qdb_open(IntPtr vmname);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl, CharSet=CharSet.Ansi)]
+    public static extern IntPtr qdb_read(IntPtr h, string path, out uint value_len);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern void qdb_close(IntPtr h);
+}
+'@
+    }
+    $h = [QdbShell]::qdb_open([IntPtr]::Zero)
+    if ($h -ne [IntPtr]::Zero) {
+        $len = [uint32]0
+        $p = [QdbShell]::qdb_read($h, '/qubes-service/enableWinKey', [ref]$len)
+        if ($p -ne [IntPtr]::Zero) {
+            $v = [Runtime.InteropServices.Marshal]::PtrToStringAnsi($p, [int]$len)
+            if ($v -and "$v".Trim() -ne '0') { $thirdPartyShell = $true }
+        }
+        [QdbShell]::qdb_close($h)
     }
 } catch { }
 

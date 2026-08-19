@@ -1475,6 +1475,60 @@ function Invoke-Stage2 {
         }
     }
 
+    # --- Netvm-free PV NIC priming (TEMPLATES only, default ON) --------------------------
+    # A template built from this medium is self-primed so its AppVMs get working PV networking
+    # in ONE boot with no netvm ever attached (guest/pvnic-selfprime.ps1). This ONLY makes sense
+    # on a persistent-root TemplateVM: an AppVM discards the latch state every boot, and a
+    # StandaloneVM has a persistent root that completes the vif install on its own first netvm
+    # boot (and has no derived AppVMs to prime). The class is read LIVE from qubesdb via the
+    # client DLL in SYSTEM32 (qdb_open/qdb_read) - the earlier "qubesdb is unreadable in a
+    # Windows guest" belief was a P/Invoke marshaling bug, now retired. /type is the exact class
+    # name. Non-template, or class unreadable -> skip harmlessly. (If a qube is converted to a
+    # template AFTER install, re-run priming or let clone-to-template seed it.)
+    $primeClass = $null
+    try {
+        if (-not ('QdbPrime' -as [type])) {
+            Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class QdbPrime {
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern IntPtr qdb_open(IntPtr vmname);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl, CharSet=CharSet.Ansi)]
+    public static extern IntPtr qdb_read(IntPtr h, string path, out uint value_len);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern void qdb_close(IntPtr h);
+}
+'@
+        }
+        $qh = [QdbPrime]::qdb_open([IntPtr]::Zero)
+        if ($qh -ne [IntPtr]::Zero) {
+            $ql = [uint32]0
+            $qp = [QdbPrime]::qdb_read($qh, '/type', [ref]$ql)
+            if ($qp -ne [IntPtr]::Zero) { $primeClass = [Runtime.InteropServices.Marshal]::PtrToStringAnsi($qp, [int]$ql) }
+            [QdbPrime]::qdb_close($qh)
+        }
+    } catch { }
+    if ($primeClass -eq 'TemplateVM') {
+        $deployPrime = Join-Path $Root 'pvnic-selfprime.ps1'
+        if (Test-Path -LiteralPath $deployPrime) {
+            Write-Log 'TemplateVM: seeding netvm-free PV NIC priming latch (pvnic-selfprime.ps1)'
+            try {
+                $pp = & $deployPrime 2>&1
+                foreach ($l in @($pp | Select-Object -Last 4)) { Write-Log "  $l" }
+                $script:Result.detail.pvnic_prime = 'seeded'
+            } catch {
+                Write-Log "pvnic priming failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+                $script:Result.detail.pvnic_prime = "error: $($_.Exception.Message)"
+            }
+        } else {
+            Write-Log 'pvnic-selfprime.ps1 not in payload - PV NIC priming unavailable' 'WARN'
+            $script:Result.detail.pvnic_prime = 'not in payload'
+        }
+    } else {
+        Write-Log "not a TemplateVM (class='$primeClass') - skipping netvm-free PV NIC priming (template-only)"
+        $script:Result.detail.pvnic_prime = 'skipped-non-template'
+    }
+
     $script:Result.ok = $true
     $script:Result.reboot_needed = $true
     Write-Log 'INSTALL COMPLETE - QWT installed. The PV drivers bind at the guest''s NEXT start.'
