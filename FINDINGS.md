@@ -12996,3 +12996,36 @@ worked). The lesson repeats one already in CLAUDE.md: a source-only theory is no
 until measured; ProtoTrace (the agent's own log) and the owner's eyes were the instruments
 that actually settled it, not screenshots. Parked: suppressing the residual normal-size boot
 window (owner: "probably not now").
+
+## 2026-08-19 (final) — fullscreen flash: CORRECT design, owner-verified across the full matrix
+
+Consolidates and CORRECTS the earlier "FIXED end to end" entry (whose mechanism was wrong -
+it blamed window 0 / SetSeamlessMode; the real culprit was per-window LogonUI). Took several
+wrong turns (recorded honestly above); the thing that finally settled it was the filter's OWN
+debug log naming the window class, not any source-only theory.
+
+FINAL DESIGN (agent commits through 4cf7588; CLAUDE.md "TWO INDEPENDENT FULLSCREEN MODES"):
+in ShouldAcceptWindow, for a fullscreen-sized guest window (>= ~99% of the guest screen):
+1. class contains "LogonUI"  OR  override-redirect  -> DENIED UNCONDITIONALLY. This is the
+   boot/shutdown/logon SCREEN (login, lock, "shutting down", initial desktop all render through
+   LogonUI, class "LogonUI Logon Window"). The secure desktop is never granted, in any config
+   (owner decision, CLAUDE.md). A lock/UAC LogonUI is a bug to log/report, not to show; recovery
+   is a working autologon, not a visible guest login.
+2. has WS_CAPTION (a maximized normal app - "windowed fullscreen") -> ALWAYS allowed, feature or
+   not. It is just a large normal window.
+3. borderless (no WS_CAPTION - a game/video/presentation "true fullscreen") -> feature-gated by
+   service.gui-fullscreen (guest qubesdb /qubes-service/gui-fullscreen; registry base
+   ShowFullscreenScreen). Default off = hidden.
+Plus: an already-announced window that becomes ineligible (an app animating INTO borderless
+fullscreen with the feature off) is UNMAPPED immediately (main.c ~3455) instead of on the next
+RemoveWindow pass, so there is no map-then-unmap flash. Windows born fullscreen (LogonUI) are
+rejected before the first MAP and were always clean.
+
+VERIFIED by the owner's eyes (win10-clean, agent 766942f), full matrix:
+- feature OFF: boot clean, shutdown clean (LogonUI); maximized app SHOWS (windowed); borderless
+  true-fullscreen denied cleanly (no flash).
+- feature ON: boot/shutdown STILL clean (LogonUI unconditional); borderless true-fullscreen SHOWS.
+The golden image win10-clean now carries this agent (hot-deployed; also in the committed source
+and future QWT builds). FUTURE (parked, owner "will see"): distinguish a genuine lock/UAC LogonUI
+(persists, awaits input) to log/report it as the bug it is; convert UAC to an in-desktop dialog
+or dom0-gate. Also parked earlier: the residual small normal boot window (owner: "probably not now").
