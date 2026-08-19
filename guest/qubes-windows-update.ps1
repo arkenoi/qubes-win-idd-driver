@@ -773,6 +773,23 @@ function Install-Msus($files){
   return $rows
 }
 
+# AUTOLOGON PROTECTION AT EVERY PASS END (measured 2026-08-19: three HARNESS-driven reboots
+# around staged servicing consumed DefaultPassword and left win10-clean at the sign-in screen
+# - unreachable for qrexec, needing a manual login. ensure-autologon.ps1 was wired only to
+# the vmupdate/dom0-driven REBOOT path, so any other rebooter - a harness, a human, CBS
+# itself - bypassed it). Running the prevention whenever THIS pass staged reboot-requiring
+# work removes the dependency on who reboots afterwards. Prevention only: if the password is
+# already consumed there is nothing this can restore (see ensure-autologon.ps1's header).
+function Protect-Autologon {
+  if (-not $script:St.reboot_needed) { return }
+  $ea = 'C:\Program Files\Qubes Tools\vmupdate-shim\ensure-autologon.ps1'
+  if (-not (Test-Path $ea)) { Log 'reboot staged but ensure-autologon.ps1 is not deployed - autologon may be consumed by the coming reboots' 'WARN'; return }
+  try {
+    & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ea 2>&1 |
+      ForEach-Object { Log "  autologon: $_" }
+  } catch { Log "ensure-autologon failed: $($_.Exception.Message)" 'WARN' }
+}
+
 # ---------------------------------------------------------------------- main
 # APPVM GUARD, guest-side - updates are the TEMPLATE's business; an AppVM must not raise the
 # proxy at all (its root is volatile: scan results die at shutdown, an install would be
@@ -887,6 +904,7 @@ try {
 
   if ($Action -eq 'wuinstall') {
     $script:St.result = Install-ViaWU
+    Protect-Autologon
     $script:St.phase='done'; Save
     Log 'done (WU-native)'
     return
@@ -1096,6 +1114,7 @@ try {
     }
   }
 
+  Protect-Autologon
   $script:St.phase='done'; Save
   Log 'done'
 } catch {
