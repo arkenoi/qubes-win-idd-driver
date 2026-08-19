@@ -12874,3 +12874,49 @@ WinHTTP proxy 'Direct access'. Nothing left the AppVM.
 The win10 golden image now deliberately carries the updater agent (relay, agent, scan task,
 NoAutoUpdate=1, RootIdentity stamp). The PV-pristine signature FINDINGS relies on for latch
 work (no xennet service/devnodes, NICS absent, DISKS=1) is untouched by these additions.
+
+## 2026-08-19 — Win10 updates DO install (UBR moved); an autologon self-inflict, root-caused and fixed
+
+**win10-clean drained 19045.2965 -> 19045.6456** through the netvm-less updates proxy: the
+October cumulative (KB5066791, ~730 MB), the .NET 4.8.1 package (KB5011048), and KB5072653
+all applied via the new msu->cab DISM path (commit caac8b8). The drain then converges on 5
+catalog-UNSERVABLE offers and correctly stops: KB890830 (MSRT), KB2267602 (Defender defs),
+KB4023057 (Update Health Tools) are WU-native-only by nature; KB5066747 (.NET cumulative) and
+KB5001716 (2025-06 servicing/orchestrator update) also resolve to no catalog .msu here. These
+are the "targeted handling" backlog (Defender via its standalone package through the relay,
+etc.) - NOT loopback, per the owner. So "install the 8 pending updates" landed everything the
+catalog can serve; the remainder needs the targeted-delivery work.
+
+**THE INCIDENT (self-inflicted, owned): harness reboots consumed autologon and locked the
+guest at the sign-in screen.** ensure-autologon.ps1 is prevention-only and was wired ONLY to
+the vmupdate/dom0-driven reboot path. My drain rebooted via qvm-shutdown from dom0 - a
+DIFFERENT rebooter - three times around staged servicing, so the protection never ran, and
+Windows consumed DefaultPassword. The guest came up needing a login; the agent could not
+inject into the SECURE (Winlogon) desktop and qemu-monitor sendkey from dom0 did not reach
+the stubdom qemu, so no input path worked.
+
+**Recovery, and why revert was correctly REJECTED:** both stored root snapshots were stamped
+11:17 and 11:20 - AFTER the LCU servicing that rewrote Winlogon and caused the lock - so a
+revert would have re-locked AND discarded the LCU (checked the timestamps before acting,
+instead of gambling). The credential itself (user/qubes) was never lost - consumption only
+deletes the auto-login, not the password. A plain qvm-kill + cold boot came up AUTO-LOGGED-IN
+(the lock was transient servicing thrash on that one post-update boot, not a permanent inj- 
+ection failure), and a watcher restored autologon to UNLIMITED (AutoLogonCount absent) the
+instant the session appeared. Reboot-survival then PROVEN: clean shutdown+start returns an
+active console session, autologon intact, UBR .6456 preserved.
+
+**Fix shipped (commit 6084c12): autologon protection at EVERY pass end that staged a reboot,**
+not just the vmupdate path - the updater now runs the prevention itself whenever
+reboot_needed is set, so it no longer matters who reboots afterwards. Combined with the
+account now at unlimited autologon, consumption cannot recur. drain-safe.sh additionally
+asserts an active console session after every reboot as a belt (all cycles green).
+
+**Agent bug recorded (not ours to fix here, but real):** the gui-agent cannot inject keyboard
+or mouse into the Windows secure/Winlogon desktop - a guest that reaches the sign-in screen
+is uncontrollable from dom0 via the agent path. QWT normally logs in fine, so this may be a
+regression or a secure-desktop attach gap; flagged for the agent track. Practical mitigation
+already in place: unlimited autologon means the sign-in screen should never appear unattended.
+
+**Rule reinforced:** any tooling that reboots a Windows guest MUST run the autologon
+prevention first, OR rely on the account being at unlimited autologon. dom0-side reboots
+(qvm-shutdown/kill) bypass in-guest reboot hooks by definition.
