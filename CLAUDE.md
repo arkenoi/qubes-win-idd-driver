@@ -222,6 +222,20 @@ by SIZE (>= ~99% of the guest screen), not class. Override-redirect + fullscreen
 The feature is read once at agent Init from qubesdb `/qubes-service/gui-fullscreen` (dom0 wins)
 over the registry base, and governs ONLY Mode 2. Do NOT let it affect Mode 1.
 
+**The "secure desktop" is NEVER granted, under any condition** (owner, 2026-08-19; this
+supersedes any "safety" argument for showing the login screen):
+- The Windows **lock screen** is never wanted. If a lock LogonUI ever appears, that is a BUG in
+  our configuration — log and report it, do NOT paper over it by showing it. Recovery from a
+  failed autologon is to FIX autologon (hardened 2026-08-19: the updater re-arms it at every
+  pass that stages a reboot, and the account is at unlimited autologon), never to fall back to
+  a visible guest login.
+- **UAC**: future work — convert the elevation prompt to a normal in-desktop dialog, or gate it
+  from dom0; until then it is denied like any other secure-desktop surface. ("will see.")
+- Practical consequence: hiding LogonUI unconditionally is correct and intended, not a lockout
+  hazard. FUTURE: distinguish a genuine lock/UAC LogonUI (persists, awaits input) from the
+  benign boot/shutdown autologon LogonUI (transient) so only the former is logged/reported as
+  the bug it represents — the current filter cannot tell them apart and denies both silently.
+
 ## Upstream policy (set by the user 2026-08-04) — SUPERSEDES the earlier guidance
 
 **Submit NOTHING upstream until this work is finished in full and there is a new, complete QWT
