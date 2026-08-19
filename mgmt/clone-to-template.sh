@@ -181,25 +181,11 @@ prime_latch() {
         *) log "FAIL: latch installer did not report ok - guest said: ${out:-<nothing>}"; return 1 ;;
     esac
 
-    # Re-stamp the updater's root-identity for THIS template. The root was cloned from a
-    # source whose deploy-time stamp names the SOURCE qube; without a re-stamp the template
-    # itself would skip its own update scans (the guard fails safe, but safe here = wrong).
-    # A cloned root with NO stamp is left alone - nothing to correct.
-    local uuid
-    uuid="$(qvm-prefs "$vm" uuid 2>/dev/null)"
-    if [ -n "$uuid" ]; then
-        printf 'reg query HKLM\\SOFTWARE\\Qubes /v RootIdentity >nul 2>&1 && reg add HKLM\\SOFTWARE\\Qubes /v RootIdentity /t REG_SZ /d /vm/%s /f\n' "$uuid" \
-            | timeout 60 qrexec-client-vm "$vm" qubes.VMShell >/dev/null 2>&1
-        log "  root-identity re-stamped for $vm (/vm/$uuid) where a stamp existed"
-    fi
-    # Stamp the qube CLASS so the updater knows this is a TEMPLATE - the qubes.UpdatesProxy
-    # updater is template-only and runs ONLY when VmClass=TemplateVM (a StandaloneVM never
-    # proxies, networked or not; the guest cannot read its own vm-type). This output IS a
-    # template, so stamp it unconditionally. App qubes on it inherit the stamp but the updater's
-    # AppVM identity guard catches them first, so they still never proxy.
-    printf 'reg add HKLM\\SOFTWARE\\Qubes /v VmClass /t REG_SZ /d TemplateVM /f\n' \
-        | timeout 60 qrexec-client-vm "$vm" qubes.VMShell >/dev/null 2>&1
-    log "  stamped VmClass=TemplateVM for $vm (updater proxy path enabled for the template only)"
+    # NOTE: the updater's VmClass/RootIdentity deploy-time stamps are RETIRED. The updater now
+    # classifies the qube LIVE from qubesdb (/type) - the guest reads its own vm-type fine (the old
+    # "unreadable" belief was a P/Invoke marshaling bug; see guest/qubesdb-read.ps1). This template
+    # therefore needs no class/identity stamp: it, and any AppVM derived from it, are classified
+    # correctly at every updater run. Nothing to seed here anymore.
     timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1 || { log "FAIL: clean shutdown after seeding"; return 1; }
 
     # The consume->re-arm cycle must be PROVEN on this template, not assumed: boot once more,

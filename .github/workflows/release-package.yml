@@ -300,7 +300,8 @@ jobs:
           if ($bad.Count) { throw ($bad -join "`n") }
           foreach ($req in 'install.cmd','Install-QwtImproved.ps1','README.txt','MANIFEST.json',
                            'msi\installer.msi','msi\vc_redist.x64.exe',
-                           'certs\qwt-improved-testsign.cer') {
+                           'certs\qwt-improved-testsign.cer',
+                           'pvnic-selfprime.ps1','qubesdb-read.ps1') {
             if (-not (Test-Path -LiteralPath "$root\$req")) { throw "staged tree is missing $req" }
           }
           if (@(Get-ChildItem "$root\certs" -Filter *.cer).Count -ne 7) {
@@ -314,20 +315,29 @@ jobs:
           }
           Write-Host "self-check OK: $($lines.Count) files verified"
 
-      - name: Syntax-check the installer script
+      - name: Syntax-check every staged PowerShell script
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          # Parse (do not run) the script that will execute on the guest. A syntax error
-          # here is otherwise discovered only after someone boots a VM.
-          $errors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile(
-              (Resolve-Path 'qwt-improved-setup\Install-QwtImproved.ps1').Path, [ref]$null, [ref]$errors)
-          if ($errors -and $errors.Count) {
-            $errors | ForEach-Object { Write-Host "  $_" }
-            throw "Install-QwtImproved.ps1 has $($errors.Count) parse error(s)"
+          # Parse (do not run) every .ps1 that will execute on the guest. A syntax error here is
+          # otherwise discovered only after someone boots a VM. Covers pvnic-selfprime.ps1 whose
+          # nested here-string (a double-quoted Add-Type block inside the single-quoted per-boot
+          # payload) is exactly the kind of thing that parses on one host and breaks on another.
+          $root = (Resolve-Path 'qwt-improved-setup').Path
+          $fail = 0
+          foreach ($f in Get-ChildItem -Path $root -Recurse -Filter *.ps1) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
+            if ($errors -and $errors.Count) {
+              Write-Host "PARSE ERRORS in $($f.Name):"
+              $errors | ForEach-Object { Write-Host "  $_" }
+              $fail += $errors.Count
+            } else {
+              Write-Host "  ok: $($f.Name)"
+            }
           }
-          Write-Host 'Install-QwtImproved.ps1 parses clean'
+          if ($fail) { throw "$fail parse error(s) across staged .ps1 scripts" }
+          Write-Host 'all staged .ps1 scripts parse clean'
 
       - uses: actions/upload-artifact@v4
         with:

@@ -791,53 +791,63 @@ function Protect-Autologon {
 }
 
 # ---------------------------------------------------------------------- main
-# APPVM GUARD, guest-side - updates are the TEMPLATE's business; an AppVM must not raise the
-# proxy at all (its root is volatile: scan results die at shutdown, an install would be
-# discarded whole). This mirrors what the Linux agent does by reading /qubes-vm-persistence;
-# that exact read is unavailable here (the Windows qubesdb value-read paths are measured
-# broken, FINDINGS 2026-08-19), so the discriminator is IDENTITY: at deploy time the
-# installer stamps this root with the machine's xenstore '/vm/<uuid>' path
-# (HKLM\SOFTWARE\Qubes!RootIdentity), and clone-to-template re-stamps templates it builds.
-# At run time the live identity comes from xenstore via the xeniface WMI interface. Stamp
-# present and != live identity => this root is running inside a DIFFERENT qube than it was
-# deployed to = a derived AppVM => exit before Ensure-Proxy (no relay, no qrexec, nothing
-# leaves the VM). UUID, not name, so template renames stay harmless. No stamp (older
-# deployments) => guard inactive, behavior unchanged. WMI unavailable => guard inactive
-# with a WARN (fail-open keeps templates updatable; dom0 drives passes deliberately).
-function Get-XenVmIdentity {
+# VM-CLASS CLASSIFICATION, guest-side. The qubes.UpdatesProxy updater is a TEMPLATE-ONLY
+# mechanism: dom0-driven updates for a VM that is otherwise offline. It must run ONLY on a
+# TemplateVM. A StandaloneVM - networked OR offline - updates ITSELF via normal Windows Update and
+# must NEVER raise the proxy ("offline" does not make a standalone a template). An AppVM/DispVM has
+# a volatile root and must do nothing (updates are its template's business).
+#
+# The class is read LIVE from qubesdb, exactly as the Linux agent does. The earlier "vm-type is
+# unreadable in a Windows guest" claim was a BUG in the PowerShell glue, NOT a real limit: the C
+# agent reads qubesdb fine, qubesdb-client.dll is in SYSTEM32, and the P/Invoke merely needed the
+# correct Cdecl/Ansi marshaling (measured 2026-08-19). Keys are written by core-admin:
+#   /type                 - the exact Python class name (StandaloneVM/TemplateVM/AppVM/DispVM).
+#                           The ONLY key that separates StandaloneVM from AppVM; /qubes-vm-type
+#                           collapses both to 'AppVM'.
+#   /qubes-vm-type        - TemplateVM | AppVM | NetVM | ProxyVM (fallback template test).
+#   /qubes-vm-updateable  - True (Template/Standalone) | False (AppVM/DispVM) (fallback splitter).
+# No deploy-time stamp is needed and this works on ANY template however it was built. The old
+# VmClass/RootIdentity stamp fallback is RETIRED - the read is proven reliable, so if we cannot
+# classify we refuse to proxy (skipped-unknown) rather than trust a stale stamp. NOTE:
+# /qubes-service/yum-proxy-setup carries dom0's updates-proxy-setup feature if
+# an operator ever wants to opt a specific standalone in; we deliberately do not honour it here
+# (the requirement is template-ONLY).
+function Get-QubesDbValue([string]$path) {
   try {
-    $base = Get-WmiObject -Namespace root\wmi -Class XenProjectXenStoreBase -EA Stop
-    $sid  = $base.AddSession('qwu-guard')
-    $sess = Get-WmiObject -Namespace root\wmi -Query "select * from XenProjectXenStoreSession where SessionId=$($sid.SessionId)"
-    $vm   = ($sess.GetValue('vm')).value
-    [void]$sess.EndSession()
-    return $vm
+    if (-not ('QubesDb' -as [type])) {
+      Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class QubesDb {
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern IntPtr qdb_open(IntPtr vmname);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl, CharSet=CharSet.Ansi)]
+    public static extern IntPtr qdb_read(IntPtr h, string path, out uint value_len);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern void qdb_close(IntPtr h);
+}
+'@
+    }
+    $h = [QubesDb]::qdb_open([IntPtr]::Zero)
+    if ($h -eq [IntPtr]::Zero) { return $null }
+    try {
+      $len = [uint32]0
+      $p = [QubesDb]::qdb_read($h, $path, [ref]$len)
+      if ($p -eq [IntPtr]::Zero) { return $null }
+      # value is heap-allocated by qubesdb-client; a few bytes leak per read (no qdb_free
+      # exported and calling the CRT free from PS is unsafe) - fine for a short-lived pass.
+      return [Runtime.InteropServices.Marshal]::PtrToStringAnsi($p, [int]$len)
+    } finally { [QubesDb]::qdb_close($h) }
   } catch { return $null }
 }
-try {
-  $rootStamp = (Get-ItemProperty 'HKLM:\SOFTWARE\Qubes' -EA SilentlyContinue).RootIdentity
-  if ($rootStamp) {
-    $liveId = Get-XenVmIdentity
-    if (-not $liveId) { Log 'AppVM guard: xenstore WMI unavailable - guard inactive' 'WARN' }
-    elseif ($liveId -ne $rootStamp) {
-      Log "root deployed in '$rootStamp' but running as '$liveId' - a derived AppVM. Updates are the template's business; exiting before any proxy activity."
-      $script:St.phase='skipped-appvm'; Save
-      exit 0
-    }
-  }
-} catch { }
-
-# TEMPLATE-ONLY GUARD. The qubes.UpdatesProxy updater is a TEMPLATE mechanism: dom0-driven
-# updates for a VM that is otherwise offline. A StandaloneVM - networked OR offline - is a full
-# independent VM that updates ITSELF via normal Windows Update, and must NEVER run this proxy
-# updater. vm-type is unreadable inside a Windows guest (qubesdb-cmd empty, no xenstore key,
-# qdb_open fails - measured 2026-08-19), and "offline" does NOT mean "template" (an offline
-# standalone is still a standalone), so network reachability cannot decide it. The ONLY reliable
-# signal is a DEPLOY-TIME STAMP the deployer (which knows the qube class) writes:
-# HKLM\SOFTWARE\Qubes!VmClass. The proxy updater runs IFF VmClass == 'TemplateVM'; anything else
-# (StandaloneVM, or unstamped) NEVER proxies. A networked non-template self-updates (undo the
-# template NoAutoUpdate=1); an offline non-template simply does nothing (it must update itself).
-# clone-to-template.sh stamps VmClass=TemplateVM on the templates it builds.
+function Get-QubesVmClass {
+  $t = Get-QubesDbValue '/type'
+  if ($t) { return $t }                              # exact class name - best signal
+  $vt = Get-QubesDbValue '/qubes-vm-type'
+  if (-not $vt) { return $null }                     # qubesdb unreadable -> caller uses fallback
+  if ($vt -eq 'TemplateVM') { return 'TemplateVM' }
+  if ((Get-QubesDbValue '/qubes-vm-updateable') -eq 'True') { return 'StandaloneVM' }
+  return 'AppVM'
+}
 function Test-DirectInternet {
   foreach ($u in 'http://www.msftconnecttest.com/connecttest.txt','http://www.msn.com/') {
     try {
@@ -852,19 +862,33 @@ function Test-DirectInternet {
   }
   return $false
 }
-try {
-  $vmClass = (Get-ItemProperty 'HKLM:\SOFTWARE\Qubes' -EA SilentlyContinue).VmClass
-  if ($vmClass -ne 'TemplateVM') {
-    if (Test-DirectInternet) {
-      Log "not a TemplateVM (VmClass='$vmClass') and has direct internet - it updates ITSELF via Windows Update. The qubes proxy updater is template-only: disabled. Undoing NoAutoUpdate=1."
-      Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -EA SilentlyContinue
-    } else {
-      Log "not a TemplateVM (VmClass='$vmClass') and offline - the qubes proxy updater is template-only and never runs here; this VM must update itself. Doing nothing."
-    }
-    $script:St.phase='skipped-standalone'; Save
-    exit 0
+$vmClassLive = Get-QubesVmClass
+if (-not $vmClassLive) {
+  # qubesdb is the authority and is reliably readable (qubesdb-client.dll is in SYSTEM32). If we
+  # genuinely cannot classify, REFUSE to proxy rather than guess - never proxy a VM we cannot
+  # confirm is a template. This is an anomaly to investigate, NOT a case to paper over with a
+  # deploy-time stamp (the old VmClass/RootIdentity stamp fallback is retired: the read is proven).
+  Log 'CANNOT classify VM from qubesdb - refusing to proxy; nothing done. Investigate qubesdb.' 'WARN'
+  $script:St.phase='skipped-unknown'; Save
+  exit 0
+}
+Log "VM class (live from qubesdb): $vmClassLive"
+if ($vmClassLive -eq 'TemplateVM') {
+  # the proxy updater's home - fall through to Ensure-Proxy below
+} elseif ($vmClassLive -eq 'StandaloneVM') {
+  if (Test-DirectInternet) {
+    Log 'StandaloneVM with direct internet - it updates ITSELF via Windows Update. The qubes proxy updater is template-only: disabled. Undoing NoAutoUpdate=1.'
+    Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -EA SilentlyContinue
+  } else {
+    Log 'StandaloneVM, offline - the qubes proxy updater is template-only and never runs here; this VM must update itself. Doing nothing.'
   }
-} catch { }
+  $script:St.phase='skipped-standalone'; Save
+  exit 0
+} else {
+  Log "$vmClassLive - not a template; updates are the template's business. Exiting before any proxy activity."
+  $script:St.phase='skipped-appvm'; Save
+  exit 0
+}
 try {
   $script:St.phase='ensure-proxy'; Save; Ensure-Proxy
   $script:St.phase='sync-revocation'; Save; Sync-Revocation

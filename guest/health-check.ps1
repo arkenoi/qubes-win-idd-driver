@@ -377,9 +377,11 @@ if (-not $pvnicTask) {
     # Offline guest: the applier must have stayed quiet (no marker); nothing else assertable.
     Check 'pvnic_applier' (-not $pvnicMarker) @{ offline = $true; failure_marker_present = $pvnicMarker }
 } else {
-    # qubesdb-cmd is unusable on this build (arg parsing broken), so the assertion is
-    # outcome-shaped: a real (non-APIPA) IPv4 on the XENVIF adapter plus a default route on
-    # its ifIndex. The exact-IP-vs-dom0 comparison belongs to dom0-side harnesses.
+    # The assertion is outcome-shaped: a real (non-APIPA) IPv4 on the XENVIF adapter plus a
+    # default route on its ifIndex. (qubesdb reads work fine in-guest now - see qubesdb-read.ps1,
+    # the "qubesdb-cmd unusable" note was about the CLI only - so this could also assert the PV IP
+    # equals /qubes-ip; kept outcome-shaped because it is netvm-backend-agnostic and needs no
+    # dom0-side comparison.)
     $pvAd = Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.PnPDeviceID -like 'XENVIF\*' } | Select-Object -First 1
     $pvIps = @(); $pvRoute = $null
     if ($pvAd) {

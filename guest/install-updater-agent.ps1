@@ -244,24 +244,10 @@ New-Item -Path $au -Force | Out-Null
 Set-ItemProperty -Path $au -Name NoAutoUpdate -Value 1 -Type DWord
 Log 'set NoAutoUpdate=1 (dom0 owns updates; guest never installs on its own)'
 
-# 10. Root-identity stamp for the guest-side AppVM guard (mirrors Linux: AppVMs never touch
-#     the updates proxy). The agent compares this stamp against the live xenstore '/vm/<uuid>'
-#     at every run and exits BEFORE any proxy activity when they differ - i.e. when this root
-#     is running as a derived AppVM. Deploying the agent = declaring "this machine owns this
-#     root", so the stamp is written here; clone-to-template re-stamps templates it builds.
-#     UUID, not name: renames stay harmless. If xenstore WMI is unavailable the stamp is
-#     skipped with a warning and the guard stays inactive (fail-open; dom0 drives passes).
-try {
-  $base = Get-WmiObject -Namespace root\wmi -Class XenProjectXenStoreBase -ErrorAction Stop
-  $sid  = $base.AddSession('qwu-install')
-  $sess = Get-WmiObject -Namespace root\wmi -Query "select * from XenProjectXenStoreSession where SessionId=$($sid.SessionId)"
-  $liveId = ($sess.GetValue('vm')).value
-  [void]$sess.EndSession()
-  New-Item -Path 'HKLM:\SOFTWARE\Qubes' -Force | Out-Null
-  Set-ItemProperty -Path 'HKLM:\SOFTWARE\Qubes' -Name RootIdentity -Value $liveId -Type String
-  Log "stamped RootIdentity=$liveId (AppVM guard armed)"
-} catch {
-  Log "could not stamp RootIdentity (xenstore WMI: $($_.Exception.Message)) - AppVM guard inactive"
-}
+# 10. (Retired) The guest-side AppVM guard no longer needs a deploy-time RootIdentity stamp. The
+#     updater classifies the qube LIVE from qubesdb (/type) at every run - a derived AppVM reads
+#     back as 'AppVM' and exits before any proxy activity, a StandaloneVM as 'StandaloneVM', a
+#     template as 'TemplateVM'. The guest reads its own vm-type fine (the old "unreadable" belief
+#     was a P/Invoke marshaling bug; see guest/qubesdb-read.ps1). Nothing is stamped here anymore.
 
 Log 'updater agent deployed'

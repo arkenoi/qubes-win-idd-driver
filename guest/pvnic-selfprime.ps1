@@ -43,15 +43,18 @@ if (-not (Test-Path (Join-Path $bindir 'network-setup.exe'))) {
 }
 
 # ---------------- per-boot payload (persistent path on the template root) ----------------
-# NOTE on qubesdb: the CLI (qubesdb-cmd) is UNUSABLE on this build (arg parsing broken - the
-# known optind bug; measured 2026-08-18: usage text on every read form, meaningless rc), and
-# in-process qdb_open via P/Invoke fails where network-setup.exe's succeeds (unexplained;
-# 15x retry measured failing). The oracle used instead is network-setup.exe's OWN exit code,
-# read from its source: 21 ERROR_NOT_READY = qubesdb unreachable for 60 s; 1287
-# ERROR_UNIDENTIFIED_ERROR = qubesdb answered but /qubes-ip is absent = NO NETVM (network
-# keys are written pre-unpause on every netvm boot, so 1287 cannot occur on one); 0 = keys
-# read and config attempted (INCLUDING the silent no-matching-adapter case, so rc 0 proves
-# nothing - the outcome state is what is verified).
+# NOTE on qubesdb: qubesdb VALUE READS work in-process via the client DLL (qdb_open/qdb_read; see
+# guest/qubesdb-read.ps1). The earlier "in-process P/Invoke fails / reads are broken" belief was a
+# marshaling bug in the probe, now retired; what is genuinely broken is the qubesdb-cmd CLI (the
+# optind bug) and qubesdb WRITES. This applier reads everything it needs STRAIGHT FROM QUBESDB and
+# no longer runs network-setup.exe at all:
+#   - netvm presence: qdb_open succeeds (up) + /qubes-ip present. /qubes-ip is written pre-unpause
+#     on every netvm boot, so 'up + /qubes-ip absent + no XENBUS/XENVIF vif device' = NO NETVM
+#     (quiet exit); 'up + absent + vif device present' = keys not published yet (retry).
+#   - L3 values: /qubes-ip //qubes-netmask //qubes-gateway, applied by ifIndex (below).
+# This replaces network-setup.exe, whose exit-code oracle and log-parse we used ONLY because the
+# reads were (wrongly) believed unavailable. Verified 2026-08-19 on a core-net-attached guest:
+# /qubes-ip=10.137.0.70 /qubes-netmask=255.255.255.255 /qubes-gateway=10.138.25.43.
 $body = @'
 param([switch]$RearmOnly)
 # QubesPvNic per-boot payload. Runs as SYSTEM. See pvnic-selfprime.ps1 for the full why.
@@ -86,40 +89,66 @@ function Loud($why) {
     exit 1
 }
 
-# 2. APPLY + VERIFY, bounded by wall clock. network-setup.exe serves as the qubesdb oracle
-#    AND the value source (see installer header for why the CLI and P/Invoke are out):
-#    rc 21 = qubesdb down (retry, loud at deadline); rc 1287 = qubesdb up, /qubes-ip ABSENT
-#    = no netvm (quiet exit - only with no XENVIF/XENBUS-VIF device present; 1287 WITH a vif
-#    device is an anomaly and stays loud); rc 0 = keys read - but MEASURED 2026-08-18: on the
-#    per-boot fresh install GetAdaptersInfo reports the adapter as 'Xen PV Network Device'
-#    WITHOUT the ' #0' suffix stock strcmp expects (the suffix only exists in netcfg state a
-#    PRIMED template persisted), so stock can NEVER configure on this path and instead we
-#    parse the values it logs (SetupNetwork: ip/netmask/gateway, needs QWT LogDir set - the
-#    installer seeds it) and apply them DIRECTLY to the XENVIF adapter by ifIndex.
+# 2. APPLY + VERIFY, bounded by wall clock. Source is qubesdb directly (see the NOTE above):
+#    QdbUp gates readiness; QdbValues gives ip/netmask/gateway; VifDevicePresent distinguishes
+#    'no netvm' (quiet exit) from 'keys not published yet' (retry). Applied by ifIndex because the
+#    fresh-install adapter is named 'Xen PV Network Device' WITHOUT the ' #0' suffix stock strcmp
+#    expects (that suffix only exists in netcfg state a PRIMED template persisted).
 #    DNS: Qubes DNS is constant by design (net.py: always 10.139.1.1/10.139.1.2).
-$ns = 'C:\Program Files\Qubes Tools\bin\network-setup.exe'
-$nslogdir = 'C:\ProgramData\QubesLogs'
 $deadline = (Get-Date).AddSeconds(300)
 
 function PvAdapter { Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.PnPDeviceID -like 'XENVIF\*' } | Select-Object -First 1 }
 function VifDevicePresent {
-    # Bus-level view: the XENBUS VIF PDO (pre-driver) or any XENVIF devnode. Present iff a
-    # vif exists in xenstore, i.e. iff a netvm is attached - independent of driver state.
-    $d = Get-PnpDevice -EA SilentlyContinue | Where-Object { $_.InstanceId -like 'XENBUS\VEN_XP0001&DEV_VIF*' -or $_.InstanceId -like 'XENVIF\*' }
+    # Bus-level view: a PRESENT XENBUS VIF PDO (pre-driver) or XENVIF devnode. Present iff a vif
+    # exists in xenstore, i.e. iff a netvm is attached - independent of driver state. MUST filter to
+    # present devices (-PresentOnly): a netvm that was once attached then removed leaves a GHOST
+    # devnode (Status=Unknown, Present=False) that must NOT count as a live vif, or the no-netvm
+    # quiet-exit would hang until the deadline on any guest that was ever networked.
+    $d = Get-PnpDevice -PresentOnly -EA SilentlyContinue | Where-Object { $_.InstanceId -like 'XENBUS\VEN_XP0001&DEV_VIF*' -or $_.InstanceId -like 'XENVIF\*' }
     return (@($d).Count -gt 0)
 }
-function NsValues {
-    # Latest 'SetupNetwork: ip: A, netmask: B, gateway: C' line from the newest ns log.
-    $f = Get-ChildItem $nslogdir -Filter 'network-setup-*' -EA SilentlyContinue |
-         Sort-Object LastWriteTime | Select-Object -Last 1
-    if (-not $f) { return $null }
-    $m = Select-String -Path $f.FullName -Pattern 'SetupNetwork: ip: ([0-9.]+), netmask: ([0-9.]+), gateway: ([0-9.]+)' |
-         Select-Object -Last 1
-    if (-not $m) { return $null }
-    $mask = $m.Matches[0].Groups[2].Value
+function QdbType {
+    if (-not ('QdbP' -as [type])) {
+        Add-Type @"
+using System; using System.Runtime.InteropServices;
+public static class QdbP {
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)] public static extern IntPtr qdb_open(IntPtr v);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl, CharSet=CharSet.Ansi)] public static extern IntPtr qdb_read(IntPtr h, string p, out uint l);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)] public static extern void qdb_close(IntPtr h);
+}
+"@
+    }
+}
+function QdbGet([string]$path) {
+    # Reliable qubesdb value read via the client DLL (mirror of guest/qubesdb-read.ps1). The old
+    # "in-process reads are broken" belief was a P/Invoke marshaling bug; this is measured working.
+    try {
+        QdbType
+        $h = [QdbP]::qdb_open([IntPtr]::Zero)
+        if ($h -eq [IntPtr]::Zero) { return $null }
+        try {
+            $l = [uint32]0
+            $p = [QdbP]::qdb_read($h, $path, [ref]$l)
+            if ($p -eq [IntPtr]::Zero) { return $null }
+            return [Runtime.InteropServices.Marshal]::PtrToStringAnsi($p, [int]$l)
+        } finally { [QdbP]::qdb_close($h) }
+    } catch { return $null }
+}
+function QdbUp {
+    # qubesdb daemon reachable? (qdb_open succeeds) - replaces network-setup.exe's rc 21 oracle.
+    try { QdbType; $h = [QdbP]::qdb_open([IntPtr]::Zero); if ($h -eq [IntPtr]::Zero) { return $false }; [QdbP]::qdb_close($h); return $true } catch { return $false }
+}
+function QdbValues {
+    # L3 config straight from qubesdb - the ONLY source now. network-setup.exe matched the adapter
+    # by NAME and failed on the fresh-install adapter (the ' #0'-suffix problem), which is exactly
+    # why we apply by ifIndex ourselves; it gave us nothing the direct read does not. All three
+    # keys must be present and dotted-decimal, else $null (qubesdb not ready / no netvm yet).
+    $ip = QdbGet '/qubes-ip'; $mask = QdbGet '/qubes-netmask'; $gw = QdbGet '/qubes-gateway'
+    if (-not ($ip -and $mask -and $gw)) { return $null }
+    if ($ip -notmatch '^[0-9.]+$' -or $mask -notmatch '^[0-9.]+$' -or $gw -notmatch '^[0-9.]+$') { return $null }
     $prefix = 0
     foreach ($o in $mask.Split('.')) { $b = [convert]::ToString([int]$o, 2); $prefix += ($b.ToCharArray() | Where-Object { $_ -eq '1' }).Count }
-    @{ ip = $m.Matches[0].Groups[1].Value; prefix = $prefix; gw = $m.Matches[0].Groups[3].Value }
+    @{ ip = $ip; prefix = $prefix; gw = $gw }
 }
 $script:want = $null
 function Applied {
@@ -139,25 +168,28 @@ function Applied {
 # Event-triggered run on an already-correct state: converge fast (self-retrigger guard).
 if (Applied) { L 'already applied on entry'; Remove-Item $mark -Force -EA SilentlyContinue; exit 0 }
 
-$rcHist = @()
+$qdbEverUp = $false
 $sawAdapter = $false
 $ok = $false
 while ((Get-Date) -lt $deadline) {
     $ad = PvAdapter
     if ($ad) { $sawAdapter = $true }
     L ("apply pass (adapter=" + $(if ($ad) { "ifIndex $($ad.ifIndex) $($ad.Status)" } else { 'none' }) + ")")
-    $p = Start-Process -FilePath $ns -PassThru -WindowStyle Hidden
-    if (-not $p.WaitForExit(90000)) { $p.Kill(); $rc = -1; L 'network-setup.exe timed out - killed' }
-    else { $rc = $p.ExitCode; L "network-setup.exe rc=$rc" }
-    $rcHist += $rc
-    if ($rc -eq 1287 -and -not (VifDevicePresent)) {
-        L 'qubesdb up, /qubes-ip absent, no vif device: no netvm, nothing to apply'
-        Remove-Item $mark -Force -EA SilentlyContinue
-        exit 0
+    if (-not (QdbUp)) { L 'qubesdb not reachable yet - waiting'; Start-Sleep -Seconds 2; continue }
+    $qdbEverUp = $true
+    $script:want = QdbValues            # L3 config straight from qubesdb - the ONLY source
+    if (-not $script:want) {
+        # qubesdb up but /qubes-ip not published. No vif device => no netvm => nothing to apply.
+        if (-not (VifDevicePresent)) {
+            L 'qubesdb up, /qubes-ip absent, no vif device: no netvm, nothing to apply'
+            Remove-Item $mark -Force -EA SilentlyContinue
+            exit 0
+        }
+        L 'qubesdb up, vif present, /qubes-ip not yet published - waiting'
+        Start-Sleep -Seconds 2; continue
     }
-    $script:want = NsValues
-    if ($script:want -and $ad) {
-        L ("direct apply " + $script:want.ip + "/" + $script:want.prefix + " gw " + $script:want.gw + " on ifIndex " + $ad.ifIndex)
+    if ($ad) {
+        L ("direct apply " + $script:want.ip + "/" + $script:want.prefix + " gw " + $script:want.gw + " on ifIndex " + $ad.ifIndex + " (src=qubesdb)")
         Get-NetIPAddress -InterfaceIndex $ad.ifIndex -AddressFamily IPv4 -EA SilentlyContinue |
             Where-Object { $_.IPAddress -ne $script:want.ip } |
             Remove-NetIPAddress -Confirm:$false -EA SilentlyContinue
@@ -196,10 +228,9 @@ if ($ok) {
     Remove-Item $mark -Force -EA SilentlyContinue
     exit 0
 }
-$hist = ($rcHist | Select-Object -Last 8) -join ','
-if ($rcHist -and (@($rcHist | Where-Object { $_ -ne 21 }).Count -eq 0)) { Loud "qubesdb unreachable throughout (network-setup rc history: $hist)" }
-elseif ($sawAdapter) { Loud "network config never stably applied (rc history: $hist)" }
-else { Loud "PV adapter never appeared (rc history: $hist)" }
+if (-not $qdbEverUp) { Loud 'qubesdb never became reachable within the deadline' }
+elseif ($sawAdapter) { Loud ("network config never stably applied (last qubesdb ip: " + $(if ($script:want) { $script:want.ip } else { 'none' }) + ")") }
+else { Loud 'PV adapter never appeared within the deadline' }
 '@
 Set-Content -Path $payload -Value $body -Encoding ASCII
 if (-not (Test-Path $payload)) { $fail.payload = 'could not write payload' }
@@ -286,8 +317,9 @@ if ($fail.Count -gt 0) {
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Network\NewNetworkWindowOff" /f | Out-Null
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\DriverSearching" /v SearchOrderConfig /t REG_DWORD /d 0 /f | Out-Null
 powercfg /h off 2>$null | Out-Null
-# QWT logging on (Info): the payload PARSES network-setup's log for the qubesdb values
-# (SetupNetwork: ip/netmask/gateway) because both the CLI and in-process reads are broken.
+# QWT logging on (Info): the applier reads qubesdb directly and no longer parses this log, but
+# LogDir/LogLevel are still seeded so stock network-setup.exe (which QrexecAgent runs at startup,
+# independent of us) leaves a readable trace for debugging the network path.
 New-Item -ItemType Directory -Path 'C:\ProgramData\QubesLogs' -Force | Out-Null
 reg add "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogDir /t REG_SZ /d "C:\ProgramData\QubesLogs" /f | Out-Null
 reg add "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogLevel /t REG_DWORD /d 3 /f | Out-Null
