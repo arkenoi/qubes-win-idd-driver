@@ -12803,3 +12803,16 @@ env-extending it means hand-copying the builtins (drift hazard) - prefer a three
 QUBES_UPDATES_ALLOW_EXTRA in the relay. Also: relay domain DENYs are rate-limited in the
 log; when hunting a missing fetch, grep for DENY explicitly. win11-fresh still runs the
 pre-retry-fix relay vintage; it heals when its updater deployment is next refreshed.
+
+### 2026-08-19 addendum — delivery-CDN leg proven; the fix is complete on all three planes
+
+`-Action download` on the pristine latch template: Sync-Revocation 3/3, scan 2 updates,
+catalog picked KB5066791, and the full 729.7 MB .msu came through the relay/proxy chain in
+ONE attempt, zero resumes, zero TLS errors. All three planes of the WU path are now proven
+post-fix on this rig: scan (slscr), catalog resolve (KB5066791 .msu named), delivery download
+(729.7 MB fetched). The panel's DigiCert-cross-chain contingency did not fire; it stays
+recorded in the previous entry as the first suspect if a future pass regresses. The payload
+was deleted from the template afterwards (729 MB does not belong in a golden image).
+Observation, not a claim: throughput was 836 KB/s vs the 12.8-15.2 MB/s recorded 2026-08-15
+on the win11 lineage - different guest, different relay vintage, different day; nobody has
+interleaved those, so treat any comparison as unmeasured.
