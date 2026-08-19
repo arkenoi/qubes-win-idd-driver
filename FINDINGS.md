@@ -13188,3 +13188,31 @@ exit 0 all read, 1 some absent, >=2 setup error. Built in build.yml (idd-driver-
 release-package's setup job (staged to the setup tree's tools\ via make-setup -QubesdbReadExe,
 required by the self-check). VALIDATED on win10-clean: /name->win10-clean, /type->StandaloneVM,
 /qubes-vm-type->AppVM, absent key->stderr+rc1. This is the CLI counterpart to guest/qubesdb-read.ps1.
+
+## 2026-08-20 — RETRACTED: the WU scan does NOT wedge the guest; it completes fine (my panic, corrected)
+
+RETRACTING the entry that claimed "the updater's unbounded online WU scan wedges the guest for hours."
+That was WRONG - a panic built on inference, not evidence. The decoded WindowsUpdate.log for the very
+"wedge" boot (2026-08-19 20:17) PROVES the WU scan COMPLETED SUCCESSFULLY: at 20:20:42 -
+"SyncUpdates round trips: 2" (through proxy 127.0.0.1:8082), "Agent Found N updates", "Agent * END *
+Finding updates ... Exit code = 0x00000000". WU was DONE ~3 min into boot; its ETL then stopped. So:
+- The WU scan did NOT hang. It WORKS on a netvm-free guest (0 adapters Up, NLM not-connected, no
+  loopback) through the qrexec proxy - proven on Win10, and it also worked on Win11 (first-tested there).
+- The "WU needs a network adapter / loopback" record (2026-08-10) is likewise WRONG for the scan: it
+  was a MOCK KILL-TEST artifact (fake WU host -> 0x8024402C direct-DNS fast-fail, never dialed the real
+  proxy). The only real IsNetworkAlive gate is the DO->BITS DOWNLOAD engine, which the updater avoids
+  (DISM offline install).
+- The ~4h high-CPU unreachable state (20:20->00:09, ~1.6 cores avg) was NOT the WU scan (WU finished at
+  20:20:42). Its true cause is UNATTRIBUTED (event log empty for the window; Defender/MsMpEng runs
+  ~45% continuously even at idle - a candidate, NOT proven). A fresh cold boot came up healthy in ~20s.
+- The panic-driven "bounded Get-Available" change was REVERTED; Get-Available is unchanged.
+
+A Fable multi-agent workflow (wu-updater-reliability-diagnosis) is producing the DECISIVE cross-
+platform (Win10/Win11) x class (Template/Standalone/AppVM) x operation (scan/download/install/boot)
+diagnosis + resolution; its verdict is recorded below and then implemented. Lesson (memory
+[[raise-the-quality-bar]]): rigor cuts BOTH ways - do not settle for inference AND do not build a
+panic narrative on it; read the actual log (WindowsUpdate.log / the ETL) before attributing a cause.
+
+Confirmed-good side effects this session: win10-tpl healthy (fresh 20s boot, scan completes, 8
+updates), and its gui-agent swapped to 882e2b5c (fullscreen fix) - flash user-confirmed gone on both
+win10-clean ('clean') and win10-tpl (old agent 'flash', control).
