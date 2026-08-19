@@ -180,6 +180,18 @@ prime_latch() {
         *'"ok":true'*) log "  installer: ok ($(printf '%s' "$out" | sed -n 's/.*"payload_sha256":"\([a-f0-9]\{12\}\).*/payload \1.../p'))" ;;
         *) log "FAIL: latch installer did not report ok - guest said: ${out:-<nothing>}"; return 1 ;;
     esac
+
+    # Re-stamp the updater's root-identity for THIS template. The root was cloned from a
+    # source whose deploy-time stamp names the SOURCE qube; without a re-stamp the template
+    # itself would skip its own update scans (the guard fails safe, but safe here = wrong).
+    # A cloned root with NO stamp is left alone - nothing to correct.
+    local uuid
+    uuid="$(qvm-prefs "$vm" uuid 2>/dev/null)"
+    if [ -n "$uuid" ]; then
+        printf 'reg query HKLM\\SOFTWARE\\Qubes /v RootIdentity >nul 2>&1 && reg add HKLM\\SOFTWARE\\Qubes /v RootIdentity /t REG_SZ /d /vm/%s /f\n' "$uuid" \
+            | timeout 60 qrexec-client-vm "$vm" qubes.VMShell >/dev/null 2>&1
+        log "  root-identity re-stamped for $vm (/vm/$uuid) where a stamp existed"
+    fi
     timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1 || { log "FAIL: clean shutdown after seeding"; return 1; }
 
     # The consume->re-arm cycle must be PROVEN on this template, not assumed: boot once more,

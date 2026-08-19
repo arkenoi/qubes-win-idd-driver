@@ -26,6 +26,17 @@ param(
 $ErrorActionPreference = 'Stop'
 function Log($m){ Write-Output ((Get-Date -Format 'HH:mm:ss') + ' ' + $m) }
 
+# $PSScriptRoot arrives EMPTY in some invocation contexts (measured 2026-08-19 via the
+# qrexec->cmd->powershell -File chain on win11-fresh: the param default bound '', and the
+# first Join-Path then died on 'Cannot bind argument to parameter Path' - which, under
+# ErrorActionPreference=Stop, killed the installer BEFORE ITS FIRST LOG LINE, i.e. silently
+# for any harness grepping for progress). Recover the script directory the long way.
+if (-not $SetupRoot) {
+    $SetupRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+    if (-not $SetupRoot) { throw 'cannot determine SetupRoot; pass -SetupRoot explicitly' }
+    Log "SetupRoot recovered from invocation path: $SetupRoot"
+}
+
 New-Item -ItemType Directory -Force $BinDir | Out-Null
 
 # 1. compile the relay with the in-box csc
@@ -232,5 +243,25 @@ $au = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
 New-Item -Path $au -Force | Out-Null
 Set-ItemProperty -Path $au -Name NoAutoUpdate -Value 1 -Type DWord
 Log 'set NoAutoUpdate=1 (dom0 owns updates; guest never installs on its own)'
+
+# 10. Root-identity stamp for the guest-side AppVM guard (mirrors Linux: AppVMs never touch
+#     the updates proxy). The agent compares this stamp against the live xenstore '/vm/<uuid>'
+#     at every run and exits BEFORE any proxy activity when they differ - i.e. when this root
+#     is running as a derived AppVM. Deploying the agent = declaring "this machine owns this
+#     root", so the stamp is written here; clone-to-template re-stamps templates it builds.
+#     UUID, not name: renames stay harmless. If xenstore WMI is unavailable the stamp is
+#     skipped with a warning and the guard stays inactive (fail-open; dom0 drives passes).
+try {
+  $base = Get-WmiObject -Namespace root\wmi -Class XenProjectXenStoreBase -ErrorAction Stop
+  $sid  = $base.AddSession('qwu-install')
+  $sess = Get-WmiObject -Namespace root\wmi -Query "select * from XenProjectXenStoreSession where SessionId=$($sid.SessionId)"
+  $liveId = ($sess.GetValue('vm')).value
+  [void]$sess.EndSession()
+  New-Item -Path 'HKLM:\SOFTWARE\Qubes' -Force | Out-Null
+  Set-ItemProperty -Path 'HKLM:\SOFTWARE\Qubes' -Name RootIdentity -Value $liveId -Type String
+  Log "stamped RootIdentity=$liveId (AppVM guard armed)"
+} catch {
+  Log "could not stamp RootIdentity (xenstore WMI: $($_.Exception.Message)) - AppVM guard inactive"
+}
 
 Log 'updater agent deployed'

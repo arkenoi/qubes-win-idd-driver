@@ -12816,3 +12816,36 @@ was deleted from the template afterwards (729 MB does not belong in a golden ima
 Observation, not a claim: throughput was 836 KB/s vs the 12.8-15.2 MB/s recorded 2026-08-15
 on the win11 lineage - different guest, different relay vintage, different day; nobody has
 interleaved those, so treat any comparison as unmeasured.
+
+## 2026-08-19 — updater redeployed to win11-fresh; guest-side AppVM guard shipped (and a silent installer failure caught)
+
+**AppVM guard (owner requirement: the AppVM disables updates on ITS side, like the Linux
+agent).** The Linux discriminator (/qubes-vm-persistence from qubesdb) is unreadable on this
+Windows build, so the guard uses IDENTITY: install-updater-agent.ps1 stamps
+`HKLM\SOFTWARE\Qubes!RootIdentity` with the machine's xenstore `/vm/<uuid>` at deploy time
+(read via the xeniface WMI xenstore interface - verified working: XenProjectXenStoreBase
+session GetValue), clone-to-template re-stamps templates it builds (a cloned root otherwise
+carries the SOURCE's identity and the template would skip its own scans), and
+qubes-windows-update.ps1 compares stamp vs live identity at every entry - mismatch = this
+root is running as a derived AppVM = exit BEFORE Ensure-Proxy (status phase 'skipped-appvm';
+no relay, no qrexec, nothing leaves the VM). UUID not name, so renames stay harmless; no
+stamp or no WMI = guard inactive (fail-open, dom0 drives passes deliberately).
+Proven on the INSTALLED agent, both directions with an independent witness: bogus stamp ->
+task-driven scan ends 'skipped-appvm' with relay-log byte delta = 0; correct stamp -> 'done'.
+
+**Deployment to win11-fresh - and the reason the first attempt silently did nothing.** The
+first pipeline "completed" while the guest still ran the 2026-08-13 relay/agent: the
+installer dies BEFORE ITS FIRST LOG LINE when `$PSScriptRoot` arrives empty (measured under
+the qrexec->cmd->powershell -File chain), because the param default binds SetupRoot='' and
+the first Join-Path throws under ErrorActionPreference=Stop. A harness grepping for progress
+lines sees nothing and sails on - the artefact-verification rule (compare installed
+binaries, not installer exit) is what caught it. Fixed: SetupRoot recovered from
+$MyInvocation when empty, loudly. After the fix: relay compiled fresh (10:26), agent with
+Sync-Revocation + guard installed, NoAutoUpdate=1, RootIdentity stamped. Scan on win11:
+Sync-Revocation healed 3/3 CTLs through the relay (second lineage self-heal proof);
+verified-zero updates reported to dom0. One task-driven scan returned 'scan-failed' (the
+lossy-vchan honesty guard refusing an unverifiable 0) before a clean 'done' - known
+transport behavior, working as designed.
+
+Note: the win10 lineage has NO updater agent deployed (its scans this week were harness
+pushruns); the guard ships inside the installer, so any future deployment there carries it.
