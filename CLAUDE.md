@@ -205,13 +205,12 @@ user review, upstream design issue (referencing #1861) before code. Do not start
 These are SEPARATE and must never be conflated (conflating them was a real bug: enabling
 fullscreen apps wrongly brought the boot/shutdown screen back):
 
-**Mode 1 — the boot/shutdown SCREEN (whole-screen / window 0): UNCONDITIONALLY OFF, always.**
-Not gated by any feature. The desktop/wallpaper, the Windows logon or "secure" desktop, the
-shutdown screen, and boot splashes are the guest trying to own the entire screen during the
-seamless transition — never trusted, never wanted, in ANY configuration. Enforced in
-`SetSeamlessMode` (gui-agent main.c): a switch OUT of seamless is ALWAYS refused (coerced back
-to seamless — per-window mapping stays alive so no black screen, and the whole-screen window 0
-is never mapped).
+**Mode 1 — the boot/shutdown/logon SCREEN: UNCONDITIONALLY OFF, always.** Not gated by any
+feature. Measured 2026-08-19: this is a per-window **LogonUI** window (class "LogonUI Logon
+Window"), fullscreen — Windows renders login, lock, "shutting down", and the initial desktop
+through it. Enforced in `ShouldAcceptWindow` (gui-agent main.c): a fullscreen-sized window whose
+class contains "LogonUI" (or any override-redirect fullscreen) is rejected outright, regardless
+of the feature. (It is NOT the whole-screen window-0 path — that was an early wrong theory.)
 
 **Mode 2 — a fullscreen-sized normal APP window: CONDITIONALLY allowed.** A real application
 window that happens to span the whole guest screen is mapped only when the guest is opted in
