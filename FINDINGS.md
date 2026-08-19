@@ -12849,3 +12849,28 @@ transport behavior, working as designed.
 
 Note: the win10 lineage has NO updater agent deployed (its scans this week were harness
 pushruns); the guard ships inside the installer, so any future deployment there carries it.
+
+### 2026-08-19 addendum — updater agent deployed to the win10 lineage, end to end
+
+Golden image (win10-clean): installer deployed clean (the SetupRoot recovery fired - the
+silent-death fix earning its keep on its first real run), artifacts verified by date+content,
+RootIdentity self-stamped. Task-driven scan: Sync-Revocation healed the CTLs and reported a
+verified **8 update(s)** to dom0 (the 22H2 image's current backlog; earlier ad-hoc scans on
+the tpl-era image said 2 - the offer set moved, not our tooling). Guard proofs repeated on
+this lineage: bogus stamp -> 'skipped-appvm' with relay-log delta 0; restored -> 'done'/8.
+
+Rebuild (UPDATE_SCAN=hard PRIME_NETVM=latch): clone-to-template's re-stamp step fired on its
+first real exercise ("re-stamped for win10-tpl ... where a stamp existed") and the HARD scan
+gate then passed ON THE RE-STAMPED TEMPLATE (scan: 8) - without the re-stamp the template
+would have inherited win10-clean's identity and guard-skipped its own gate; the ordering
+(re-stamp during installer boot, scan check next boot) is what makes that impossible.
+
+Rebuilt AppVM, first boot, networked: PV acceptance green (problem 0, dom0 IP, gateway ping,
+49 s to network), and the INHERITED 6-hourly scan task fired at boot+2min and was
+guard-skipped with the full witness set: status phase 'skipped-appvm', task exit 0, stamp
+(template uuid) != live (appvm uuid), ZERO relay processes, relay log untouched this boot,
+WinHTTP proxy 'Direct access'. Nothing left the AppVM.
+
+The win10 golden image now deliberately carries the updater agent (relay, agent, scan task,
+NoAutoUpdate=1, RootIdentity stamp). The PV-pristine signature FINDINGS relies on for latch
+work (no xennet service/devnodes, NICS absent, DISKS=1) is untouched by these additions.
