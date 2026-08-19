@@ -200,6 +200,24 @@ Track B (the IddCx display driver). Do not add Track C code or docs here.
 Anything touching the GUI protocol, gui-daemon, or grant lifecycle: design writeup first,
 user review, upstream design issue (referencing #1861) before code. Do not start unilaterally.
 
+## Architecture decision (owner, 2026-08-19) — NO UNSOLICITED FULLSCREEN FROM THE GUEST
+
+In seamless mode the guest is **never** granted a fullscreen presentation unless explicitly
+opted in via `qvm-features <vm> service.gui-fullscreen 1` (guest-local override: registry
+`ShowFullscreenScreen` DWORD under the gui-agent config key). Rationale, in the owner's frame:
+nothing the guest tries to show fullscreen is trusted or needed by the seamless model — the
+desktop/wallpaper, the Windows logon or "secure" desktop, the shutdown screen, boot splashes,
+and override-redirect overlays are all just the guest trying to own the whole screen. Deny it
+**outright, every time**, on both paths:
+- per-window fullscreen-sized windows: rejected in `ShouldAcceptWindow` (gui-agent main.c) by
+  SIZE (>= ~99% of the guest screen), not class. Override-redirect + fullscreen is rejected
+  **unconditionally** (never mapped, even with the feature on).
+- the whole-screen "window 0" fullscreen: `SetSeamlessMode` refuses any switch out of seamless
+  when the feature is off (coerces back to seamless — keeps per-window mapping alive, so no
+  black screen, and window 0 is never mapped). This is what covers the shutdown/teardown edge.
+The feature is read once at agent Init from qubesdb `/qubes-service/gui-fullscreen` (dom0 wins)
+over the registry base. Do NOT reintroduce an always-on fullscreen path; fullscreen is opt-in.
+
 ## Upstream policy (set by the user 2026-08-04) — SUPERSEDES the earlier guidance
 
 **Submit NOTHING upstream until this work is finished in full and there is a new, complete QWT
