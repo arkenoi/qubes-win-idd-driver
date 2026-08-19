@@ -12958,3 +12958,41 @@ the seamless transition, opt-in via a qvm-feature to restore. It is a proper pie
 transient (a few targeted captures) or accepting the Progman hypothesis and testing a filter.
 Not implemented this session; characterized and de-risked. gui-emulated restored to 1;
 ProtoTrace disabled; win10-clean left Halted.
+
+## 2026-08-19 (later) — boot/shutdown fullscreen flash FIXED end to end (feature-gated)
+
+Supersedes the "characterized, not fixed" entry above. Owner-directed design, verified on
+win10-clean by the owner's own eyes (the reliable instrument for a transient visual).
+
+ROOT CAUSE was TWO paths, not one (the class-based first attempt failed because it only
+imagined one):
+1. per-window fullscreen-sized window mapped transiently during the seamless transition at
+   BOOT (a full-screen guest window slipping through ShouldAcceptWindow before the shell/
+   filter settles);
+2. the whole-screen "window 0" mapped via a seamless->fullscreen switch during teardown at
+   SHUTDOWN (SendWindowMap(NULL) in SetSeamlessMode's !seamless branch) - which the per-window
+   filter cannot reach because window 0 is not a per-window.
+
+FIX (agent commits 742b7bd + 515c4e3; ARCHITECTURE DECISION recorded in CLAUDE.md): the guest
+is never granted a fullscreen presentation unless opted in via service.gui-fullscreen.
+- ShouldAcceptWindow rejects fullscreen-sized windows (>= ~99% of guest screen) by SIZE, not
+  class; override-redirect + fullscreen is rejected UNCONDITIONALLY.
+- SetSeamlessMode refuses any switch OUT of seamless when the feature is off (coerces back to
+  seamless: per-window mapping stays alive = no black screen, window 0 never maps).
+- Feature read once at Init from qubesdb /qubes-service/gui-fullscreen (dom0 wins) over the
+  guest-local registry ShowFullscreenScreen base.
+
+VERIFIED (owner eyes, win10-clean, agent af70658):
+- feature OFF: boot = normal small window, NO fullscreen flash; shutdown = clean, NO fullscreen.
+- feature ON: fullscreen startup screen returns (bidirectional causality proof).
+- normal app windows (notepad) unaffected either way.
+Accepted tradeoff: a maximized (fullscreen-sized) app is also suppressed with the feature off -
+intended per the deny-outright decision.
+
+Process note, recorded honestly: this took FIVE attempts (resolution guess, gui-emulated,
+force-g_SeamlessMode [no-op, killed by adversarial review before shipping], Progman class
+filter [failed live], then the owner's size-based + SetSeamlessMode-refusal design which
+worked). The lesson repeats one already in CLAUDE.md: a source-only theory is not a mechanism
+until measured; ProtoTrace (the agent's own log) and the owner's eyes were the instruments
+that actually settled it, not screenshots. Parked: suppressing the residual normal-size boot
+window (owner: "probably not now").
