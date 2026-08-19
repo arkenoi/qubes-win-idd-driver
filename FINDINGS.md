@@ -13171,3 +13171,20 @@ the IddCx driver from source; PV drivers come from the separate pv-xenvif pipeli
 in the MSI (qubesdb incl. qubesdb-cmd + the shipped qubesdb-client.dll, qrexec agent,
 network-setup.exe, services) is staged bit-for-bit from the GPG-verified stock QWT 4.2.2 MSI
 (stage-qwt-repo.ps1: only component gui-agent-windows is ours). Option 2 moves qubesdb-cmd to ours.
+
+## 2026-08-19 — qubesdb-cmd CLI bug pinned; shipped qubesdb-read.exe instead
+
+The stock qubesdb-cmd.exe read is NOT uniformly broken - it mis-parses '/'-prefixed keys. Measured
+on win10-clean: `qubesdb-cmd -c read /qubes-vm-type` -> `AppVM` (works), but `-c read /name` ->
+"-n valid only for watch command" - the Windows getopt reads the leading '/' of the key as a
+slash-option, so `/name` becomes `/n`. Flaky per key (whatever letter follows '/'), plus the
+`optind -= 2` hack. A bare `qubesdb-cmd read` (no -c) never sets the command either.
+
+Owner chose (over patching that getopt, which only validates via the ~2h qwt-full build) to ship a
+tiny purpose-built reader: **tools/qubesdb-read/qubesdb-read.{c,vcxproj}**. It LoadLibrary's
+qubesdb-client.dll (System32) and calls qdb_open/qdb_read at runtime - no getopt, no build-time
+core-qubesdb dependency, plain v143 console exe. `qubesdb-read <key> [key...]` prints each value;
+exit 0 all read, 1 some absent, >=2 setup error. Built in build.yml (idd-driver-package) AND
+release-package's setup job (staged to the setup tree's tools\ via make-setup -QubesdbReadExe,
+required by the self-check). VALIDATED on win10-clean: /name->win10-clean, /type->StandaloneVM,
+/qubes-vm-type->AppVM, absent key->stderr+rc1. This is the CLI counterpart to guest/qubesdb-read.ps1.
