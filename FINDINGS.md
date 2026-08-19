@@ -12606,3 +12606,146 @@ This is the one-way door both reviewers named, now measured twice rather than pr
 signature binding, `DriverDatabase` package ranking, further class instances) are an unbounded list
 whose success condition is "reproduce, by hand, everything a device install does". Priming with one
 firewalled vif does exactly that, in 3 minutes, correctly, and is validated end to end.
+
+## 2026-08-19 — NETVM-FREE PRIMING SHIPPED: the latch + self-healing re-arm + verified applier
+
+The owner's "one final attempt" at what the 2026-08-18 entries closed as impossible: pre-seed the
+PV NIC on a template so AppVMs never reboot-loop, with NO netvm attached at any stage. It ships as
+`PRIME_NETVM=latch mgmt/clone-to-template.sh` (guest side: `guest/pvnic-selfprime.ps1`). The
+"impossible" verdict was wrong because it treated the two halves of the problem as one: the REBOOT
+DEMAND was already solved by the unplug latch (measured 2026-08-18, mechanism unexplained then);
+only per-boot IP configuration was unsolved, and that is an agent problem, not a PnP problem.
+
+### Mechanism, verified in pvdrivers source (research workflow, 4 agents; then a 9-refuter panel)
+
+* xen.sys reads `Services\XEN\Unplug\NICS` at every boot, VETOES it unless some `Enum\XENBUS`
+  subkey name contains "VIF" (xen/unplug.c, veto added 2024-07), then DELETES the value
+  (delete-on-read). The in-memory result gates xenfilt's boot-time unplug of the emulated RTL8139.
+* xenvif's NET-child START handler demands a reboot (STATUS_PNP_REBOOT_REQUIRED -> problem 14) iff
+  an Up emulated NIC shares the vif's MAC OR the unplug did not happen this boot (pdo.c
+  PdoStartDevice). An armed latch clears BOTH -> first install completes in ONE boot at problem 0.
+  This is the 2026-08-18 latch measurement, now explained, not just observed.
+* Delete-on-read means ANY template boot consumes the seed (nothing re-arms it offline - xenvif
+  only re-arms when a vif device starts). Hence the self-healing design: a boot task re-arms every
+  boot, a shutdown-event (1074) task re-arms against the 'boot -> PV package reinstall writes
+  NICS=0 (INF AddReg has no NOCLOBBER) -> shutdown' clobber.
+* AppVMs re-install xenvif/xennet fresh from the (already staged) DriverStore EVERY boot on the
+  volatile root; a new NetCfgInstanceId is minted each time, so no GUID-keyed config can ship.
+  The applier task retries stock network-setup.exe and verifies OUTCOME state, loud on failure.
+
+Panel verdicts (all 9 refuters returned): M1 latch+applier ADOPTED with amendments (all applied);
+M1-lite (DHCP on the vif) structurally dead - the DHCP server is udhcpd INSIDE the stubdom, only
+the emulated NIC path can reach it, qvm-firewall is FORWARD-only so drop-all never mattered;
+M3 (SuggestedInstanceId GUID pinning, wintun-proven) REFUTED - zero consumers, everything is
+ifIndex/description-keyed; M8 (finish the copy-seed) REFUTED - dominated in every outcome branch;
+M4 (SupportedClasses VIF removal + Realtek) survives as fallback-only, strictly behind M1;
+M7 (dummy netvm) mechanically sound but IS a netvm attachment - constraint says no.
+
+### Two guest defects found while making the applier work (both matter beyond this feature)
+
+1. **RETRACTION: "qubesdb-cmd READ works on Windows; only write is broken" is WRONG** (it is in a
+   guest/install-start-shortcut.ps1 comment and was recorded in an earlier session). Measured: every
+   read form emits usage text / meaningless rc (same optind bug as write); the one prior "working"
+   use never actually consumed a value. In-process qdb_open via P/Invoke also fails (err=2 on the
+   pipe that network-setup.exe connects to fine - unexplained, 15x retry measured). The payload
+   therefore uses network-setup.exe's OWN exit code as the qubesdb oracle - from source: 21 =
+   qubesdb down; 1287 = qubesdb up but /qubes-ip ABSENT = no netvm (keys are written pre-unpause,
+   so 1287 cannot happen on a netvm boot); 0 = keys read (proves nothing - see defect 2).
+2. **Stock network-setup.exe can NEVER configure the per-boot fresh adapter.** GetAdaptersInfo
+   returns Description "Xen PV Network Device" - no " #0" - on a fresh install (measured at 187 s
+   uptime; the suffix only exists in netcfg state that a PRIMED template persisted), and the stock
+   match is exact-strcmp against "Xen PV Network Device #0", with no-match remapped to silent
+   rc 0. This is why the 2026-08-18 latch test ended on APIPA, and why it always would have. The
+   payload parses the values stock logs (SetupNetwork: ip/netmask/gateway; QWT LogDir now seeded)
+   and applies them DIRECTLY on the XENVIF ifIndex; DNS is the Qubes constant 10.139.1.1/.2.
+
+### Acceptance (all measured guest state vs same-session controls, serial, cold boots)
+
+* Controls: pristine-template AppVM died at 10-21 s, twice. Death instrument live.
+* 5/5 cold boots green on the first fresh AppVM (incl. its FIRST-EVER boot): problem 0, xennet
+  Running, adapter carries the exact dom0-known IP, 0.0.0.0/0 via gateway on the right ifIndex,
+  DNS constants, RTL8139 GONE, gateway ping OK, no failure marker; watches 10 min each, boot 5
+  soaked 31 min; desktop pixels verified (Notepad via fullshot). NetCfgInstanceId DIFFERED on
+  every boot - the fresh-install fingerprint that proves the latch path (not a primed leftover)
+  was exercised, all 5 boots + every later green boot.
+* Template lifecycle: 2 offline template boots (consume -> re-arm verified by readback each),
+  then AppVM still green.
+* Defect-reintroduction, each seen to FAIL: applier task disabled -> AppVM survives on APIPA, no
+  route, and the new health-check `pvnic_applier` goes RED (the latched-without-applier silent
+  state is now detectable); BOTH tasks disabled + one template boot -> NICS consumed -> AppVM
+  DIED at 20 s (re-arm is load-bearing; delete-on-read consequence now measured, not inferred);
+  re-enable + re-arm -> green again; payload adapter-match corrupted -> latch still fine
+  (problem 0), config absent, LOUD failure marker written. IP changed to 10.137.0.99 in dom0 ->
+  adapter carries .99 next boot (config read from qubesdb per boot, nothing baked). Offline
+  AppVM -> healthy, applier quiet (rc-1287 gate), health passes as offline. Hotplug
+  detach/attach on a running guest -> repaired in 16 s (event-10000 trigger).
+* Timing A/B, same guest, same instrument, minutes apart: latch 31/36/37 s from qvm-start to
+  working network; vif-primed 28/30/31 s (template primed through core-net for the control -
+  ONE boot to problem 0, because the latch was armed; even the old priming flow gets faster
+  with the seed). qrexec itself answers at 21-28 s, so the latch costs ~3-7 s of network delay
+  over primed. First-cut "40-46 s" numbers were 10 s-granularity poll artifacts.
+* End-to-end through the SHIPPED script: `PRIME_NETVM=latch` build from pristine win10-clean,
+  ~8 min, no netvm ever attached to the template; fresh-pair first boots green (see caveat).
+
+### What went wrong on the way, stated plainly
+
+* **D2's AppVM wedged** (qrexec dead ~15 min into the corrupted-payload boot, shutdown refused,
+  qvm-kill needed). Suspected `msg * ` alert targeting session 0; UNPROVEN. Alert is now
+  `msg console /time:86400` (also fixes the 60 s default timeout that made the alert miss its
+  pixel capture). The wedge cascaded: the driver booted the template while the AppVM still ran
+  and the P6/P7 legs aborted (re-run clean afterwards).
+* **Build cadence matters**: the first scripted rebuild installed the seed ~25 s into the clone's
+  FIRST boot and "shut down" 7 s later (almost certainly a guest reset dressed as a halt by
+  on_reboot=destroy); its AppVM's first boot died at 28 s while the template state verified
+  intact and the retry was green. prime_latch now gives the clone a QUIET settle boot with 90 s
+  grace and installs on boot 2, verifies on boot 3.
+* **A sporadic first-boot-with-vif reset remains, and it is NOT ours**: after the cadence fix one
+  rebuild's first AppVM boot still reset at 203 s (fully healthy until then: IP, route, ping);
+  the recreate-loop then went 5/5 green first-ever boots, the boot-loop 6/6, and every death
+  recovers on plain restart. Session totals: ~2 deaths + 1 wedge across ~40 latch boots,
+  concentrated in fresh-build first boots. The same instability class predates this work on this
+  rig (first-boot black-screen wedge, GWeck #24). The resetter's identity is STILL unknown -
+  qemu-log access (port-0x12 mirror) is policied to win-idd-test only, and the volatile root
+  discards all in-guest forensics of a dead boot. A live event-poll method (validated: 1074
+  snapshots ≤8 s stale) is in scratchpad/catch-firstboot.sh for when it reproduces.
+* **Instrument defect**: tpl-task.sh's first latch readback was an inline powershell -Command
+  probe whose quoting mangled across qrexec->cmd->powershell into LITERAL concatenation text -
+  a probe that could not report a usable answer. All readbacks now use a pushed FILE
+  (guest/pvnic-latch-readback.ps1); clone-to-template's gate had the same bug and would have
+  false-failed every build.
+
+### Updates: AU policy seeded; scan check added; and a FLEET-WIDE WU blocker found (pre-existing)
+
+Per the standing dom0-owned-updates rule (now actually implemented): the template seeds
+`NoAutoUpdate=1` and `ExcludeWUDriversInQualityUpdate=1` - urgent now that AppVMs have working
+network every boot, and the driver exclusion also guards against WU-delivered Xen PV packages
+whose INF AddReg rewrites the latch (Citrix has shipped PV drivers via WU historically; their
+current targeting is XenServer's C000 platform device which Qubes lacks; Xen Project WHQL 9.x
+would match our IDs if ever published). NoAutoUpdate does NOT affect the dom0-driven updater
+(explicit WU COM calls) - but that could not be proven green, because:
+
+**The scan-only updater check (prime_latch runs `qubes-windows-update.ps1 -Action scan`; soft by
+default, UPDATE_SCAN=hard|off) is currently RED on the WHOLE testbed - and it is not ours.**
+Evidence chain: 0x80072F8F on win10-tpl AND on win11-fresh (which has none of this session's
+changes); genuine Microsoft chain served (ECC Update Secure Server CA 2.1, no interception;
+verified by cert dump through the same proxy); guest HAS the ECC 2018 root; schannel TLS 1.2
+handshake to slscr SUCCEEDS with revocation OFF and FAILS with it ON (SslStream probe);
+CRL+intermediate imported into stores (KeyID==SKI verified, CRL valid to 2026-09-16) did NOT
+satisfy it; CryptoAPI URL retrieval goes DIRECT (name-resolution fails - no DNS on a proxy-only
+guest) and never appears in the relay log, cryptsvc restart + relay domain allowlist extension
+(QUBES_UPDATES_ALLOW+microsoft.com) changed nothing. The 2026-08-15 successes rode CRL caches
+that have since expired - same shape as the authrootstl story of 2026-08-14, one layer up.
+NOT pursued further this session (stop-rule); the fix belongs to the updater track: satisfy
+revocation on proxy-only guests (inject CRLs into the CryptoAPI cache the way Windows expects,
+or make CryptoAPI's fetch path traverse the relay), then flip the check hard.
+
+### Ship state
+
+Commits fc8b836, ed28338, ef79088 + this entry's commit. `PRIME_NETVM=latch|<netvm>|none`;
+latch and vif-priming coexist (a latch template primed through core-net came out primed AND
+still self-healing). Residuals, honestly: the sporadic first-boot reset above (recovery =
+restart, rate ~1-in-5 fresh-build first boots, 0-in-30+ after); scan check red pending the
+revocation fix; the D2 wedge cause unproven; per-boot Public firewall profile on the fresh
+adapter (outbound unaffected) accepted and documented; alert-box pixels never captured on a
+real failure (only the marker + health-red channels are seen-to-fire; the persistent-alert
+variant is unexercised).
