@@ -265,6 +265,21 @@ jobs:
           Write-Host $exe.FullName
           "BOOTSTRAP_EXE=$($exe.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
+      - name: Build qubesdb-read (guest-side reliable qubesdb CLI reader)
+        shell: pwsh
+        run: |
+          # The stock qubesdb-cmd CLI mis-parses '/'-prefixed keys on Windows; this tiny tool reads
+          # qubesdb correctly via the client DLL. Plain console exe, no core-qubesdb build dep.
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              Select-Object -First 1
+          & $msbuild tools\qubesdb-read\qubesdb-read.vcxproj /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "qubesdb-read msbuild failed" }
+          $exe = Get-ChildItem tools\qubesdb-read -Recurse -Filter qubesdb-read.exe | Select-Object -First 1
+          if (-not $exe) { throw 'qubesdb-read.exe not produced' }
+          Write-Host $exe.FullName
+          "QUBESDB_READ_EXE=$($exe.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
       - name: Assemble qwt-improved-setup
         shell: pwsh
         run: |
@@ -274,6 +289,7 @@ jobs:
               -PvArtifact dl\pv `
               -BootstrapExe "$env:BOOTSTRAP_EXE" `
               -VcRedist    "$env:VC_REDIST" `
+              -QubesdbReadExe "$env:QUBESDB_READ_EXE" `
               -OutDir      qwt-improved-setup
 
       - name: Show manifest
@@ -301,7 +317,7 @@ jobs:
           foreach ($req in 'install.cmd','Install-QwtImproved.ps1','README.txt','MANIFEST.json',
                            'msi\installer.msi','msi\vc_redist.x64.exe',
                            'certs\qwt-improved-testsign.cer',
-                           'pvnic-selfprime.ps1','qubesdb-read.ps1') {
+                           'pvnic-selfprime.ps1','qubesdb-read.ps1','tools\qubesdb-read.exe') {
             if (-not (Test-Path -LiteralPath "$root\$req")) { throw "staged tree is missing $req" }
           }
           if (@(Get-ChildItem "$root\certs" -Filter *.cer).Count -ne 7) {

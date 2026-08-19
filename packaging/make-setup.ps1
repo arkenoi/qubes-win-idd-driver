@@ -36,6 +36,7 @@ param(
     # Compiled tools\qwt-bootstrap\qwt-bootstrap.exe, staged at the package root as
     # qubes-tools-<version>.exe - see the STOCK-SHAPE COMPATIBILITY block below.
     [string]$BootstrapExe,
+    [string]$QubesdbReadExe,       # tools\qubesdb-read.exe (guest-side reliable qubesdb CLI reader)
     [Parameter(Mandatory = $true)][string]$VcRedist,
     [string]$RepoRoot = '.',
     [string]$OutDir = 'qwt-improved-setup'
@@ -101,6 +102,14 @@ foreach ($d in 'msi', 'certs', 'idd-driver', 'pv-drivers', 'reference', 'tools')
 # Diagnostic tools shipped as C# source (compile on-guest with the in-box csc - no binary to
 # trust, no build step). winenum: top-level HWND dumper for the Win11 companion-window bugs.
 Copy-Item (Need (Join-Path $RepoRoot 'tools\winenum.cs') 'winenum diagnostic source') (Join-Path $OutDir 'tools') -Force
+# qubesdb-read.exe: the reliable guest-side qubesdb value reader (stock qubesdb-cmd mis-parses
+# '/'-prefixed keys). Built by the workflow and passed in via -QubesdbReadExe; staged into tools\.
+if ($QubesdbReadExe -and (Test-Path -LiteralPath $QubesdbReadExe)) {
+    Copy-Item (Resolve-Path -LiteralPath $QubesdbReadExe).Path (Join-Path $OutDir 'tools\qubesdb-read.exe') -Force
+    Write-Host 'staged tools\qubesdb-read.exe'
+} else {
+    Write-Warning 'qubesdb-read.exe not provided (-QubesdbReadExe) - guest CLI qubesdb reader will be absent'
+}
 
 # --- scripts + doc ---------------------------------------------------------------------
 foreach ($f in 'install.cmd', 'Install-QwtImproved.ps1', 'README.txt') {
