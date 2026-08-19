@@ -155,11 +155,24 @@ prime_latch() {
     # fresh driver install (~40 s to network vs near-instant on a vif-primed template).
     local vm="$1" repo; repo="$(cd "$(dirname "$0")/.." && pwd)"
 
-    log "settle boot (offline) before seeding the latch"
+    # SETTLE BOOT: quiet, with GRACE, nothing else running in it. Measured 2026-08-19: a build
+    # that installed the seed ~25 s into the clone's FIRST boot and shut down 9 s later (the
+    # "clean shutdown" returned in 7 s - almost certainly a guest reset dressed up as a halt
+    # by on_reboot=destroy) produced a template whose first networked AppVM boot DIED at 28 s;
+    # the same AppVM's retry was green and the template state was verified intact, so the
+    # fragility is the clone's unfinished first-boot work, not the seed. Give the clone the
+    # same quiet first boot the vif-priming path learned to give it, and keep the installer
+    # off it entirely.
+    log "settle boot (offline, quiet) before seeding the latch"
     qvm-prefs "$vm" netvm '' >/dev/null 2>&1
     qvm-start "$vm" >/dev/null 2>&1
     wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec on its settle boot"; return 1; }
+    sleep 90
+    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1 || { log "FAIL: settle boot did not shut down cleanly"; return 1; }
 
+    log "installer boot"
+    qvm-start "$vm" >/dev/null 2>&1
+    wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec on the installer boot"; return 1; }
     log "installing latch seed + tasks (guest/pvnic-selfprime.ps1)"
     local out
     out="$(QTEST_VM=$vm "$repo/tools/qtest" pushrun "$repo/guest/pvnic-selfprime.ps1" 2>/dev/null | tr -d '\r' | grep -A1 '^MARKJSON' | tail -1)"
