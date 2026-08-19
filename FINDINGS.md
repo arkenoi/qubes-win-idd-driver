@@ -13052,3 +13052,24 @@ disabled" -> phase skipped-standalone, NoAutoUpdate removed. win10-clean restore
 default afterwards. NOTE: an OFFLINE standalone (none in production; only our test rig) is treated
 as template-mode (uses the proxy) since it has no direct route - acceptable, and it is exactly how
 the win10-clean rig is used to exercise the template updater.
+
+## 2026-08-19 (corrected) — proxy is TEMPLATE-ONLY via a VmClass stamp; an OFFLINE standalone never proxies
+
+Corrects the entry just above (direct-internet-only discriminator): owner - "if a StandaloneVM is
+not networked, that does not mean it may use the proxy." Offline != template. Since vm-type is
+unreadable in-guest, network reachability cannot tell an offline standalone from an offline
+template, so it is the WRONG discriminator. The reliable signal is a DEPLOY-TIME STAMP the deployer
+(which knows the class) writes: HKLM\SOFTWARE\Qubes!VmClass.
+
+Final rule (commit 3d74db7): the qubes.UpdatesProxy updater runs IFF VmClass == 'TemplateVM'.
+Anything else - StandaloneVM, or unstamped - NEVER proxies: if it has direct internet it
+self-updates via Windows Update (undo NoAutoUpdate=1); if offline it does nothing (it must update
+itself). Phase 'skipped-standalone'. clone-to-template.sh now stamps VmClass=TemplateVM on the
+templates it builds (unconditionally - the output is a template; app qubes inherit the stamp but
+the AppVM identity guard catches them first so they still never proxy).
+
+Verified on win10-clean: unstamped + offline -> "not a TemplateVM ... never runs here. Doing
+nothing" (phase skipped-standalone, ZERO proxy activity); VmClass=TemplateVM + offline ->
+Sync-Revocation + "scan: 6 update(s)" (proxy path). win10-clean left unstamped (it is a
+StandaloneVM). To exercise the proxy/template path on this StandaloneVM rig, temporarily stamp
+VmClass=TemplateVM.
