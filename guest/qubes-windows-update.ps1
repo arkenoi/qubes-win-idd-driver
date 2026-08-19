@@ -106,6 +106,51 @@ function Ensure-Proxy {
   }
 }
 
+# REVOCATION SYNC - without this, every pass on a guest whose CTL cache has expired dies at
+# 0x80072F8F before its first byte of update metadata. Measured + root-caused 2026-08-19:
+# schannel REQUIRES revocation on the WU endpoints, and Microsoft-rooted chains use
+# AUTO-UPDATE (CTL) revocation - the chain elements carry CERT_TRUST_AUTO_UPDATE_*_REVOCATION
+# and the engine wants a FRESH disallowedcertstl from ctldl.windowsupdate.com, NOT the CDP
+# CRLs (store-imported, KeyID-matched, time-valid CRLs were measured to change nothing).
+# CryptoAPI's own fetches go DIRECT (never through the relay; no DNS on a proxy-only guest),
+# so the CTLs can only arrive if WE carry them: fetch through the relay (ctldl is on its
+# domain allowlist; plain-HTTP rides the verified/retried path built for exactly these files
+# on 2026-08-14), mirror them locally, point AuthRoot\AutoUpdate!RootDirURL at the mirror,
+# and flush the chain cache. The cabs are Microsoft-SIGNED CTL containers - Windows validates
+# them at use, so a corrupted/hostile body is inert, not a poisoning vector.
+# Side effect, accepted: OS root-store auto-update now sources from the mirror, i.e. new
+# Microsoft roots arrive when a pass refreshes the mirror (before this, they never arrived).
+function Sync-Revocation {
+  $dir = 'C:\ProgramData\QubesCTL'
+  New-Item -ItemType Directory -Path $dir -Force | Out-Null
+  $proxy = 'http://127.0.0.1:8082'
+  $got = 0
+  foreach ($f in 'disallowedcertstl.cab','authrootstl.cab','pinrulesstl.cab') {
+    # 2 attempts, 3 s apart: the relay's accept loop can lag its Start-Process by a few
+    # seconds (warm-channel pool), and one connect-refused was measured to cost a whole pass.
+    foreach ($try in 1..2) {
+      try {
+        Invoke-WebRequest -Uri "http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/$f" `
+          -Proxy $proxy -OutFile "$dir\$f.new" -UseBasicParsing -TimeoutSec 60
+        Move-Item "$dir\$f.new" "$dir\$f" -Force
+        $got++
+        break
+      } catch {
+        Remove-Item "$dir\$f.new" -Force -EA SilentlyContinue
+        if ($try -eq 2) { Log "Sync-Revocation: $f fetch failed ($($_.Exception.Message)) - keeping existing copy" 'WARN' }
+        else { Start-Sleep -Seconds 3 }
+      }
+    }
+  }
+  SetV 'HKLM:\SOFTWARE\Microsoft\SystemCertificates\AuthRoot\AutoUpdate' 'RootDirURL' "file://$dir" 'String'
+  foreach ($v in 'DisallowedCertLastSyncTime','LastSyncTime','PinRulesLastSyncTime') {
+    Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\SystemCertificates\AuthRoot\AutoUpdate' -Name $v -EA SilentlyContinue
+  }
+  # quoted deliberately: bare @now is PowerShell splatting and silently drops the argument
+  & certutil -setreg 'chain\ChainCacheResyncFiletime' '@now' | Out-Null
+  Log "Sync-Revocation: $got/3 CTLs refreshed through the relay, chain cache flushed"
+}
+
 # TEMPORAL GATE - still required, and not superseded by the relay's positional one.
 # The relay now refuses any caller that is not the update process, which closes the leak this
 # comment block describes. That check lives in our code and depends on our own process-identity
@@ -695,6 +740,7 @@ function Install-Msus($files){
 # ---------------------------------------------------------------------- main
 try {
   $script:St.phase='ensure-proxy'; Save; Ensure-Proxy
+  $script:St.phase='sync-revocation'; Save; Sync-Revocation
   $script:St.phase='scan'; Save
   # A LOSSY PASS MUST NEVER BE REPORTED AS "NOTHING TO UPDATE".
   # Measured 2026-08-15: five consecutive scans reported 0 updates on a guest that had three.
