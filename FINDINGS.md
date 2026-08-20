@@ -13552,3 +13552,16 @@ HONEST RESIDUALS (none are router defects; all pre-existing or environmental):
   needs its own test).
 - **KB5001716** (2025-06 "Update for Windows 10", a WU-client/orchestrator .cab): DISM rc=2 - not a CBS
   package cab. Honest fail; minor WU-client update.
+
+## 2026-08-20 — self-contained SUCCESS demonstrated + Fetch-Msu robustness
+
+After bumping Fetch-Msu (8->14 attempts, GetResponse 60->90s) for the flaky relay, the targeted
+self-contained install SUCCEEDED end-to-end, NLA-free:
+- `-Action full -OnlyKb KB890830` (MSRT, 85 MB full exe): **ok=True, state=installed**, exe rc=0,
+  **verified_by_effect=True** (HKLM\...\RemovalTools\MRT\Version went from empty -> a stamped GUID).
+  The 85 MB fetched through 127.0.0.1:8082 by resuming across the relay's churned attempts. Zero
+  DO/BITS error codes in the pass. This is the router's success path proven: proxy-fetch -> run ->
+  effect-verified, no Delivery Optimization / BITS / NLA anywhere.
+So the content-class router now has all four behaviours demonstrated on the real guest: (1) zero
+DO/BITS phantom failures, (2) correct classification of all offered updates, (3) express/Defender
+terminally classified (honest, not chased), (4) a genuine self-contained update INSTALLED NLA-free.
