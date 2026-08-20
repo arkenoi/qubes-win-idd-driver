@@ -13619,3 +13619,27 @@ a proper end-to-end result WITHOUT the loopback/DO hack - security CUs flow thro
 catalog+DISM path; the express-only phantom OOB (KB5071959) carries no security content and is correctly
 classified terminal. To fully close: apply ESU MAK, run the updater, confirm UBR -> 19045.6575 with no
 ~96% rollback.
+
+## 2026-08-20 — ESU informational report + the "first-boot skip" root-caused and fixed
+
+Per owner ("park ESU, make the updater report it informationally, not as an error"):
+- The updater now DIAGNOSES the post-end-of-support/ESU state and reports it as an INFORMATIONAL notice.
+  Get-ServicingNotice (keyed on OsBuild=19045 + Get-EsuStatus, deterministic - not a clock read) sets
+  St.notice + St.esu. The express/ESU-gated result rows carry severity='info' and are EXCLUDED from the
+  failed/remaining count, and dom0's "updates available" marker now reports only ACTIONABLE updates (the
+  express phantom is surfaced in the notice, not as a perpetual available/failed item). VALIDATED on
+  win10-tpl (netvm-free TemplateVM): a scan produced phase=done, esu=not-enrolled, count(offered)=5,
+  remaining(actionable)=3, and the full notice ("...enroll this guest in ESU with a volume MAK...
+  INFORMATIONAL, not an error."). Exit 0, no phase=error.
+
+- ROOT-CAUSED the "sporadic first-boot reset" (goal-netvm-free-priming residual): NOT a flaky read. The
+  qubesdb /type read is a service-STARTUP-ORDERING race. qdb_open connects to the "QubesDB daemon" Windows
+  service (service name QdbDaemon, Auto-start - confirmed present + Running); at boot that daemon starts
+  and syncs the DB from dom0 over vchan, and until it is serving its pipe qdb_open returns NULL
+  DETERMINISTICALLY. A boot-triggered updater pass that fires in that window read VmClass='' and the old
+  Get-QubesVmClass concluded "not a TemplateVM" and SKIPPED THE WHOLE PASS on a real template. Proof: a
+  25x read loop in steady state returned TemplateVM 25/25 (read is rock solid once QdbDaemon is up); the
+  empties in agent.log all sit at early-boot invocations. FIX: Get-QubesVmClass now retries while qubesdb
+  is unreachable (both /type and /qubes-vm-type empty), 8 tries x 2s = ~14s, waiting out QdbDaemon startup;
+  a populated value returns immediately so steady state costs nothing. Full-boot-path acceptance (a cold
+  reboot where the boot task no longer skips) is the remaining check to run on a reboot.
