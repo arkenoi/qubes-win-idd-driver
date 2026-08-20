@@ -198,11 +198,77 @@ static class Relay
             }
             if (args.Length >= 1 && args[0] == "--listen")
                 return RunListen(args);
+            if (args.Length >= 1 && args[0] == "--selftest")
+                return SelfTest();
             Console.Error.WriteLine("usage: qubes-updates-relay --listen [port] [--target VM] [--user U] [--log DIR]");
+            Console.Error.WriteLine("       qubes-updates-relay --selftest                      (response-framing contract)");
             Console.Error.WriteLine("       qubes-updates-relay --relay <controlPort> <token>   (internal; spawned via qrexec)");
             return 2;
         }
         catch (Exception e) { Console.Error.WriteLine("FATAL " + e); return 1; }
+    }
+
+    // ---- SELFTEST: the response-framing contract ----------------------------------------
+    // Runs ReadResponse against canned streams. No network, no qrexec, no PowerShell interop -
+    // deterministic and fast, so it can gate a build. Every case here corresponds to a defect that
+    // actually shipped (see the comments on MaxVerifyBytes and the honesty gate in HandlePlainHttp).
+    // Re-introduce any of those defects and the matching case fails; that is the point of it.
+    static int SelfTest()
+    {
+        int failed = 0;
+        Func<byte[], byte[], byte[]> cat = delegate(byte[] x, byte[] y)
+        {
+            byte[] o = new byte[x.Length + y.Length];
+            Buffer.BlockCopy(x, 0, o, 0, x.Length);
+            Buffer.BlockCopy(y, 0, o, x.Length, y.Length);
+            return o;
+        };
+        Action<string, bool> check = delegate(string name, bool ok)
+        {
+            Console.WriteLine((ok ? "PASS " : "FAIL ") + name);
+            if (!ok) failed++;
+        };
+
+        // 1. A body past MaxVerifyBytes must arrive WHOLE (spill), not be cut at the mark.
+        int big = 20 * 1024 * 1024;
+        byte[] r1in = cat(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: " + big + "\r\n\r\n"), new byte[big]);
+        MemoryStream c1 = new MemoryStream();
+        HttpResponse r1 = ReadResponse(new MemoryStream(r1in), c1).Result;
+        check("large: body delivered whole (" + r1.GotBody + "/" + big + ")", r1.GotBody >= big);
+        // NOT "> 16MB": the truncating build still read one 64KB chunk past the mark before breaking,
+        // so that comparison passed on a broken binary and proved nothing. Demand the client got the
+        // ENTIRE response - headers plus every body byte - which only the spill path can deliver.
+        check("large: client received the whole response (" + c1.Length + "/" + r1in.Length + ")", c1.Length == r1in.Length);
+        check("large: spilled to client", r1.Streamed && c1.Length > 16 * 1024 * 1024);
+        check("large: reported complete", r1.Complete);
+
+        // 2. A short Content-Length body must read INCOMPLETE so the caller can refuse it.
+        HttpResponse r2 = ReadResponse(
+            new MemoryStream(cat(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 5000\r\n\r\n"), new byte[1000])),
+            new MemoryStream()).Result;
+        check("short: reported incomplete", !r2.Complete);
+
+        // 3. A terminated chunked body is COMPLETE. It used to report False, and the updater's
+        //    give-up regex counted that false negative as a lost fetch.
+        HttpResponse r3 = ReadResponse(
+            new MemoryStream(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n")),
+            new MemoryStream()).Result;
+        check("chunked: terminated reads complete", r3.Complete && r3.Chunked);
+
+        // 4. A chunked body cut before its terminator is INCOMPLETE.
+        HttpResponse r4 = ReadResponse(
+            new MemoryStream(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n")),
+            new MemoryStream()).Result;
+        check("chunked: truncated reads incomplete", !r4.Complete);
+
+        // 5. Close-delimited: the clean close IS the framing, so it is complete.
+        HttpResponse r5 = ReadResponse(
+            new MemoryStream(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nsome body bytes")),
+            new MemoryStream()).Result;
+        check("close-delimited: complete on EOF", r5.Complete);
+
+        Console.WriteLine(failed == 0 ? "=== SELFTEST OK ===" : ("=== SELFTEST FAILED (" + failed + ") ==="));
+        return failed == 0 ? 0 : 1;
     }
 
     static string QrexecClientVm()
@@ -603,67 +669,160 @@ static class Relay
         if (int.TryParse(Environment.GetEnvironmentVariable("QUBES_UPDATES_RETRIES"), out r) && r >= 0) return r;
         return 4;
     }
-    // Only bodies up to this are buffered for verification; anything larger streams unverified, so
-    // a huge plain-HTTP download cannot be turned into a memory problem. The files this exists for
-    // (trust lists, catalogs) are tens of KB.
+    // Only bodies up to this are BUFFERED for verification. Larger ones are not truncated: once the
+    // buffer would pass this mark the response SPILLS to the client and the rest is pumped straight
+    // through (see ReadResponse). Buffering exists to make a retry possible, and a retry is only
+    // possible while nothing has been written to the client yet.
+    //
+    // It used to `break` here instead, which silently CUT every large response at exactly 16 MB and
+    // handed it over as a 200. Measured 2026-08-20 from the updater log - the resume ladder is the
+    // fingerprint, at exact 16 MB multiples:
+    //     stream ended early at 16 / 32.1 / 48.1 of 75.6 MB
+    //     stream ended early at 16.1 / 32.1 / 48.1 / 64.2 / 80.2 of 85.2 MB
+    // Fetch-Msu's 14-attempt resume loop was compensating for OUR OWN cap, and its comment blaming
+    // "the relay intermittently churns its warm channel" was wrong. A file needs ceil(size/16MB)
+    // attempts that way, so anything past ~224 MB could never complete inside the attempt budget -
+    // the 776 MB November CU could not have downloaded through here at all.
     const int MaxVerifyBytes = 16 * 1024 * 1024;
 
     // Read one HTTP response off the tunnel, and say whether it arrived COMPLETE.
-    // Completeness is judged only where the framing makes it knowable: an explicit Content-Length.
-    // Chunked and close-delimited responses are returned as-is with complete=false-but-unknown,
-    // because retrying on a guess would be worse than passing them through.
+    //
+    // Completeness is judged per FRAMING, so the answer is honest for all three shapes rather than
+    // only for Content-Length (which used to log every chunked reply as complete=False, and that
+    // false negative is counted by the updater's give-up regex - a genuine 0-update scan that
+    // happened to overlap a chunked response could be read as a relay failure):
+    //     Content-Length   -> complete when that many body bytes arrived
+    //     chunked          -> complete when the terminating zero-length chunk arrived
+    //     close-delimited  -> complete when the peer closed cleanly; EOF *is* the framing
+    //
+    // SPILL: a response past MaxVerifyBytes is neither truncated nor held in memory. At the mark,
+    // everything buffered is written to `client` and the remainder is pumped straight through. From
+    // that point the response is COMMITTED (Streamed=true) - the bytes are already on the client's
+    // wire, so the caller must neither retry it nor write it a second time.
     class HttpResponse
     {
         public byte[] Bytes;
         public bool HeadersFound;   // did a complete header block arrive at all?
         public bool LengthKnown;    // ...and did it carry a Content-Length?
+        public bool Chunked;
         public bool Complete;
+        public bool Streamed;       // spilled to the client: committed, unretryable
         public long Expected;
         public long GotBody;
     }
 
-    static async Task<HttpResponse> ReadResponse(Stream rs)
+    // Keep the last few bytes seen, so the chunked terminator can still be spotted after a spill
+    // has emptied the buffer.
+    static void TailPush(byte[] tail, ref int tailLen, byte[] src, int srcLen)
+    {
+        for (int i = Math.Max(0, srcLen - tail.Length); i < srcLen; i++)
+        {
+            if (tailLen < tail.Length) { tail[tailLen++] = src[i]; }
+            else { Array.Copy(tail, 1, tail, 0, tail.Length - 1); tail[tail.Length - 1] = src[i]; }
+        }
+    }
+
+    static bool IsChunkTerminator(byte[] b, int len)
+    {
+        // "0\r\n\r\n"
+        if (len < 5) return false;
+        return b[len - 5] == (byte)'0' && b[len - 4] == 13 && b[len - 3] == 10
+            && b[len - 2] == 13 && b[len - 1] == 10;
+    }
+
+    static async Task<HttpResponse> ReadResponse(Stream rs, Stream client)
     {
         MemoryStream buf = new MemoryStream();
         byte[] tmp = new byte[65536];
         int headerEnd = -1;
         long expected = -1;
-        int n;
-        while ((n = await rs.ReadAsync(tmp, 0, tmp.Length)) > 0)
+        bool chunked = false;
+        bool chunkDone = false;
+        bool spilled = false;
+        bool sawEof = false;
+        long got = 0;                  // body bytes seen, buffered or streamed
+        byte[] tail = new byte[5];
+        int tailLen = 0;
+
+        while (true)
         {
-            buf.Write(tmp, 0, n);
-            if (headerEnd < 0)
+            int n = await rs.ReadAsync(tmp, 0, tmp.Length);
+            if (n <= 0) { sawEof = true; break; }
+
+            if (spilled)
             {
-                byte[] cur = buf.GetBuffer();
-                int len = (int)buf.Length;
-                for (int i = 3; i < len; i++)
+                await client.WriteAsync(tmp, 0, n);
+                got += n;
+                TailPush(tail, ref tailLen, tmp, n);
+                if (chunked && IsChunkTerminator(tail, tailLen)) { chunkDone = true; break; }
+            }
+            else
+            {
+                buf.Write(tmp, 0, n);
+                if (headerEnd < 0)
                 {
-                    if (cur[i - 3] == 13 && cur[i - 2] == 10 && cur[i - 1] == 13 && cur[i] == 10) { headerEnd = i + 1; break; }
-                }
-                if (headerEnd > 0)
-                {
-                    string hdrs = Encoding.ASCII.GetString(cur, 0, headerEnd);
-                    foreach (string line in hdrs.Split('\n'))
+                    byte[] cur = buf.GetBuffer();
+                    int len = (int)buf.Length;
+                    for (int i = 3; i < len; i++)
                     {
-                        string t = line.Trim();
-                        if (t.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                        if (cur[i - 3] == 13 && cur[i - 2] == 10 && cur[i - 1] == 13 && cur[i] == 10) { headerEnd = i + 1; break; }
+                    }
+                    if (headerEnd > 0)
+                    {
+                        string hdrs = Encoding.ASCII.GetString(cur, 0, headerEnd);
+                        foreach (string line in hdrs.Split('\n'))
                         {
-                            long v;
-                            if (long.TryParse(t.Substring(15).Trim(), out v)) expected = v;
+                            string t = line.Trim();
+                            if (t.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                            {
+                                long v;
+                                if (long.TryParse(t.Substring(15).Trim(), out v)) expected = v;
+                            }
+                            else if (t.StartsWith("Transfer-Encoding:", StringComparison.OrdinalIgnoreCase)
+                                     && t.IndexOf("chunked", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                chunked = true;
+                            }
                         }
                     }
                 }
+                if (headerEnd > 0)
+                {
+                    got = buf.Length - headerEnd;
+                    if (chunked)
+                    {
+                        byte[] cur = buf.GetBuffer();
+                        if (IsChunkTerminator(cur, (int)buf.Length)) { chunkDone = true; break; }
+                    }
+                }
             }
-            if (headerEnd > 0 && expected >= 0 && buf.Length - headerEnd >= expected) break;
-            if (buf.Length > MaxVerifyBytes) break;
+
+            if (headerEnd > 0 && expected >= 0 && got >= expected) break;
+
+            // Spill point: hand over what we have and pump the rest, rather than cutting the body.
+            if (!spilled && headerEnd > 0 && buf.Length > MaxVerifyBytes)
+            {
+                if (client == null) break;   // nowhere to spill: stop rather than grow unbounded
+                byte[] all = buf.ToArray();
+                await client.WriteAsync(all, 0, all.Length);
+                await client.FlushAsync();
+                TailPush(tail, ref tailLen, all, all.Length);
+                buf.SetLength(0);
+                spilled = true;
+            }
         }
+
         HttpResponse r = new HttpResponse();
-        r.Bytes = buf.ToArray();
+        r.Bytes = spilled ? new byte[0] : buf.ToArray();
+        r.Streamed = spilled;
         r.Expected = expected;
         r.HeadersFound = (headerEnd > 0);
         r.LengthKnown = (headerEnd > 0 && expected >= 0);
-        r.GotBody = (headerEnd > 0) ? (r.Bytes.Length - headerEnd) : 0;
-        r.Complete = r.LengthKnown && r.GotBody >= expected;
+        r.Chunked = chunked;
+        r.GotBody = got;
+        if (r.LengthKnown) r.Complete = (got >= expected);
+        else if (chunked) r.Complete = chunkDone;
+        else r.Complete = (headerEnd > 0 && sawEof);   // close-delimited: the close is the framing
         return r;
     }
 
@@ -713,10 +872,14 @@ static class Relay
                         {
                             await ch.Stream.WriteAsync(head, 0, hlen);
                             await ch.Stream.FlushAsync();
-                            r = await ReadResponse(ch.Stream);
+                            r = await ReadResponse(ch.Stream, a);
                         }
                         catch (Exception e) { Log(logPath, "PLAIN read error " + e.GetType().Name + ": " + e.Message); }
                     }
+                    // A spilled response is already on the client's wire. It cannot be retried and it
+                    // must not be written again - it IS the answer, complete or not, and the log below
+                    // says which.
+                    if (r != null && r.Streamed) { best = r; break; }
                     if (r != null && (best == null || r.Bytes.Length > best.Bytes.Length)) best = r;
                     // ACCEPT only a response that actually ARRIVED. The first version of this
                     // accepted `!LengthKnown` as "unverifiable, pass it through", which silently
@@ -727,7 +890,10 @@ static class Relay
                     // Headers must be present; then either the body is complete, or there was no
                     // Content-Length to check it against (chunked / close-delimited), which stays
                     // pass-through rather than being retried on a guess.
-                    bool usable = r != null && r.HeadersFound && (r.Complete || !r.LengthKnown);
+                    // Complete is now framing-aware (Content-Length / chunked terminator / clean EOF),
+                    // so this no longer has to exempt "unknown length" wholesale - a truncated chunked
+                    // body is caught instead of being waved through as unverifiable.
+                    bool usable = r != null && r.HeadersFound && r.Complete;
                     if (usable) break;
                     // Nothing at all came back on a channel we took from the pool: that is the
                     // channel, not the server. Retry on a fresh one without spending an attempt.
@@ -746,10 +912,33 @@ static class Relay
                                  + " got=" + (r == null ? -1 : r.GotBody)
                                  + " expected=" + (r == null ? -1 : r.Expected) + " - retrying on a fresh channel");
                 }
-                if (best != null && best.Bytes.Length > 0)
+                // THE HONESTY GATE. This used to write `best` whenever it held any bytes at all, which
+                // contradicted this function's own contract ("nothing is written to the client until a
+                // complete response is in hand") and handed Windows a SHORT body under a 200 - the
+                // failure mode the retry loop above exists to prevent. A response leaves here only if
+                // it is complete; otherwise the client is told plainly that the fetch failed.
+                if (best != null && best.Streamed)
+                {
+                    // Already delivered by the spill path; nothing left to write.
+                }
+                else if (best != null && best.HeadersFound && best.Complete && best.Bytes.Length > 0)
                 {
                     await a.WriteAsync(best.Bytes, 0, best.Bytes.Length);
                     await a.FlushAsync();
+                }
+                else
+                {
+                    byte[] err = Encoding.ASCII.GetBytes(
+                        "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                    await a.WriteAsync(err, 0, err.Length);
+                    await a.FlushAsync();
+                    Log(logPath, "PLAIN REFUSED after " + attempts + " attempt(s) - 502 to client"
+                               + " bytes=" + (best == null ? 0 : best.Bytes.Length)
+                               + " body=" + (best == null ? 0 : best.GotBody)
+                               + "/" + (best == null ? -1 : best.Expected)
+                               + " headers=" + (best != null && best.HeadersFound)
+                               + " chunked=" + (best != null && best.Chunked)
+                               + " req=[" + reqLine + "]");
                 }
             }
         }
@@ -760,6 +949,8 @@ static class Relay
             Log(logPath, "PLAIN tries=" + attempts + " bytes=" + (best == null ? 0 : best.Bytes.Length)
                        + " body=" + (best == null ? 0 : best.GotBody) + "/" + (best == null ? -1 : best.Expected)
                        + " complete=" + (best != null && best.Complete)
+                       + " streamed=" + (best != null && best.Streamed)
+                       + " chunked=" + (best != null && best.Chunked)
                        + " ms=" + sw.ElapsedMilliseconds + " req=[" + reqLine + "]");
         }
     }

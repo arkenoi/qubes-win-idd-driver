@@ -1109,9 +1109,16 @@ try {
   # So: watch the relay's own log across the scan. If it gave up on any fetch (complete=False)
   # AND the scan found nothing, the result is UNKNOWN, not zero - retry once, then refuse to
   # report a number nobody can stand behind.
-  $relayLog = 'C:\ProgramData\Qubes\wu\qubes-updates-relay.log'
+  # The relay writes its log under the SAME WorkDir it is started with (see Ensure-Proxy: --log
+  # $WorkDir). This was hardcoded to the default path, so any run with a non-default -WorkDir read a
+  # file that never grew, counted zero give-ups, and disarmed the guard silently.
+  $relayLog = Join-Path $WorkDir 'qubes-updates-relay.log'
+  # Number of fetches the relay gave up on since $fromOffset, or -1 for UNKNOWN.
+  # UNKNOWN IS NOT ZERO. This used to answer 0 when the log was missing and 0 again when reading it
+  # threw - a check that could not fail, and therefore was not a check. The caller now treats an
+  # unknown answer as suspect instead of as a clean bill of health.
   function Get-RelayGiveUps([long]$fromOffset) {
-    if (-not (Test-Path $relayLog)) { return 0 }
+    if (-not (Test-Path $relayLog)) { return -1 }
     try {
       $fs = [IO.File]::Open($relayLog, 'Open', 'Read', 'ReadWrite')
       try {
@@ -1120,8 +1127,12 @@ try {
         $sr = New-Object IO.StreamReader($fs)
         $text = $sr.ReadToEnd()
       } finally { $fs.Dispose() }
-      return ([regex]::Matches($text, 'complete=False')).Count
-    } catch { return 0 }
+      # 'PLAIN REFUSED' is the unambiguous marker: the relay declined to hand over a short body.
+      # A complete=False summary still counts, because a SPILLED (already-committed) response can
+      # end short after the bytes are on the client's wire and cannot be refused retroactively.
+      # Chunked replies no longer produce a spurious complete=False, so this no longer over-counts.
+      return ([regex]::Matches($text, 'PLAIN REFUSED|complete=False')).Count
+    } catch { return -1 }
   }
   $relayOffset = if (Test-Path $relayLog) { (Get-Item $relayLog).Length } else { 0 }
 
@@ -1135,17 +1146,33 @@ try {
     $avail = @()
   }
   $giveUps = Get-RelayGiveUps $relayOffset
-  if ($avail.Count -eq 0 -and $giveUps -gt 0) {
-    Log "scan returned 0 but the relay gave up on $giveUps fetch(es) - the result is UNKNOWN, rescanning" 'WARN'
+  # A lost fetch makes the scan suspect whatever the COUNT is: a partial list is indistinguishable
+  # from a complete one, so gating this on "found nothing" only caught the most obvious half.
+  # An UNKNOWN answer (-1) is suspect too, but only when the scan also came back empty - an empty
+  # scan with no evidence that the transport was working is exactly the dangerous case, while a
+  # non-empty scan has already demonstrated it fetched something.
+  $suspect = ($giveUps -gt 0) -or ($giveUps -lt 0 -and $avail.Count -eq 0)
+  if ($suspect) {
+    $gu = if ($giveUps -lt 0) { 'UNKNOWN (relay log unreadable)' } else { $giveUps }
+    Log "scan is suspect - relay give-ups: $gu, found $($avail.Count) update(s) - rescanning" 'WARN'
     $relayOffset = if (Test-Path $relayLog) { (Get-Item $relayLog).Length } else { 0 }
     Start-Sleep -Seconds 5
     $avail = Get-Available
     $giveUps = Get-RelayGiveUps $relayOffset
+    $suspect = ($giveUps -gt 0) -or ($giveUps -lt 0 -and $avail.Count -eq 0)
   }
-  if ($avail.Count -eq 0 -and $giveUps -gt 0) {
-    $script:St.phase='scan-failed'; $script:St.error = "transport lost $giveUps fetch(es); update availability unknown"; Save
-    Log "SCAN FAILED: the relay gave up on $giveUps fetch(es) and Windows Update found nothing. Not reporting 0 to dom0 - a scan that could not fetch its metadata is not the same as a guest with no updates." 'ERROR'
+  if ($suspect -and $avail.Count -eq 0) {
+    $gu = if ($giveUps -lt 0) { 'an unknown number of' } else { "$giveUps" }
+    $script:St.phase='scan-failed'; $script:St.error = "transport lost $gu fetch(es); update availability unknown"; Save
+    Log "SCAN FAILED: the relay gave up on $gu fetch(es) and Windows Update found nothing. Not reporting 0 to dom0 - a scan that could not fetch its metadata is not the same as a guest with no updates." 'ERROR'
     exit 75
+  }
+  if ($suspect) {
+    # Non-empty, but the transport dropped something: the list may be SHORT. Say so instead of
+    # letting a partial result be read as authoritative. Not a failure - the updates that were
+    # found are real and worth installing - but dom0 must not treat this count as complete.
+    $script:St.scan_partial = $giveUps; Save
+    Log "SCAN PARTIAL: found $($avail.Count) update(s) but the relay gave up on $giveUps fetch(es) - the list may be incomplete; treat the count as a lower bound, not the whole truth." 'WARN'
   }
 
   $script:St.available=$avail; $script:St.count=$avail.Count; Save
