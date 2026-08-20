@@ -904,6 +904,44 @@ function Get-ServicingNotice($avail, $esu) {
     'in ESU with a volume Multiple Activation Key (MAK, offline-activatable). INFORMATIONAL, not an error.')
 }
 
+# Defender SIGNATURE updates: resolve the current full package URL.
+#
+# Measured 2026-08-21, correcting a claim recorded here earlier: the FULL signature package is NOT
+# Delivery-Optimization-only. It is an ordinary HTTPS GET of ~203 MB:
+#     https://go.microsoft.com/fwlink/?linkid=121721&arch=x64
+#       -> 302 -> https://definitionupdates.microsoft.com/packages/content/mpam-fe.exe
+#                   ?packageType=Signatures&packageVersion=...&arch=amd64&engineVersion=...
+# The version parameters are MANDATORY - the bare URL 404s - so the redirect has to be followed
+# rather than a URL constructed. HTTPS only (plain http answers 503), so it rides the relay's
+# CONNECT tunnel. Both hosts are in the relay allowlist for exactly this.
+#
+# Returns the resolved URL, or $null if it could not be resolved - in which case the caller keeps
+# the old INFORMATIONAL behaviour rather than inventing a URL.
+function Get-DefenderFullPackageUrl {
+  $fwlink = 'https://go.microsoft.com/fwlink/?linkid=121721&arch=x64'
+  foreach ($try in 1..2) {
+    try {
+      # -MaximumRedirection 0 makes the 302 itself the answer; PowerShell raises on the redirect,
+      # so the Location header is read from the exception's response as well as the happy path.
+      $r = Invoke-WebRequest -Uri $fwlink -Proxy $Proxy -UseBasicParsing -MaximumRedirection 0 `
+                             -TimeoutSec 60 -EA Stop
+      $loc = $r.Headers['Location']
+      if ($loc) { return $loc }
+    } catch {
+      $resp = $null; try { $resp = $_.Exception.Response } catch {}
+      if ($resp) {
+        $loc = $null
+        try { $loc = $resp.Headers['Location'] } catch {}
+        if (-not $loc) { try { $loc = $resp.GetResponseHeader('Location') } catch {} }
+        if ($loc) { return $loc }
+      }
+      if ($try -eq 2) { Log "Defender: could not resolve the full-package fwlink ($($_.Exception.Message))" 'WARN' }
+      else { Start-Sleep -Seconds 3 }
+    }
+  }
+  return $null
+}
+
 # Install a KB that Windows Update offers as a self-contained STATIC file (Defender defs and MSRT ship
 # as .exe; some updates as .msu), fetched through the proxy and installed with NO Delivery Optimization
 # / BITS / NLA. This is the routeless-clean replacement for handing these KBs to the DO-gated
@@ -1488,10 +1526,30 @@ try {
   if ($Action -in 'install','full' -and $script:WuFallbackKbs.Count -gt 0 -and -not $canWuNative) {
     $script:WuFallbackKbs = @($script:WuFallbackKbs | Sort-Object -Unique)
     foreach ($kb in $script:WuFallbackKbs) {
+      # DEFENDER SIGNATURES ARE NO LONGER A DEAD END. The full package turned out to be a plain
+      # HTTPS download (see Get-DefenderFullPackageUrl), so a netvm-free guest CAN take it. Try that
+      # before declaring the KB informational; Install-SelfContained already verifies Defender by
+      # EFFECT (AntivirusSignatureVersion moving), not by exit code.
+      $isDefender = ($kb -eq 'KB2267602') -or
+                    (@($avail | Where-Object { $_.kb -eq $kb -and $_.title -match 'Defender|Antivirus|Security Intelligence' }).Count -gt 0)
+      if ($isDefender) {
+        $defUrl = Get-DefenderFullPackageUrl
+        if ($defUrl) {
+          Log "Defender $kb : resolved the full signature package, installing it directly (netvm-free)"
+          $defRows = Install-SelfContained $kb @($defUrl)
+          $defOk = (@($defRows | Where-Object { $_.ok }).Count -gt 0)
+          $script:St.result += [ordered]@{ kb=$kb; ok=$defOk; severity=$(if($defOk){'ok'}else{'info'})
+            files=@($defRows)
+            reason=$(if($defOk){'full signature package installed directly (verified by effect)'}
+                     else{'full signature package resolved but did not apply - INFORMATIONAL, not a failure'}) }
+          Save
+          continue
+        }
+        # fall through to the informational record below when the fwlink could not be resolved
+      }
       # severity='info': on a netvm-free guest there is NO route by which these could install (no catalog
       # .msu, no static file, and DO/BITS refuse routeless), so this is a deterministic INFORMATIONAL
-      # ceiling - e.g. Defender definitions (KB2267602: only a delta patch that needs a base + a DO-only
-      # full package). Not a failure, and excluded from the actionable/remaining count reported to dom0.
+      # ceiling. Not a failure, and excluded from the actionable/remaining count reported to dom0.
       $script:St.result += [ordered]@{ kb=$kb; ok=$false; severity='info'; files=@()
         reason='not installable on a netvm-free guest: no catalog .msu and no self-contained static installer (delivered only via Delivery Optimization / a delta patch). INFORMATIONAL - not a failure' }
     }
