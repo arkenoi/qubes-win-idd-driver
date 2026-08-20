@@ -230,8 +230,13 @@ function Get-WuContentClass($u){
       if($url){
         if($url -match 'filestreamingservice|tlu\.dl\.delivery\.mp\.microsoft\.com'){ $expressSeen=$true }
         else{
+          # A DELTA patch (Defender am_delta_patch_*.exe) is NOT self-contained: it needs the current
+          # engine as its base and cannot self-apply offline (measured 0x80070002 for bare run AND /q;
+          # the FULL mpam-fe is DO-only, MpCmdRun -SignatureUpdate uses DO). Exclude it so Defender is
+          # classified terminally (honest) rather than fail-attempting an unapplicable patch. WU's
+          # IsDeltaCompressedContent is FALSE for these, so filter on the name too.
           $isDelta=$false; try{ $isDelta=[bool]$dc.IsDeltaCompressedContent }catch{}
-          if((-not $isDelta) -and $url -match '^https?://[^/]*download\.windowsupdate\.com/' -and $url -notmatch '\?'){ $static += $url }
+          if((-not $isDelta) -and $url -notmatch 'delta' -and $url -match '^https?://[^/]*download\.windowsupdate\.com/' -and $url -notmatch '\?'){ $static += $url }
         }
       }
       if($n -ge 64){ break }
@@ -805,15 +810,18 @@ function Install-SelfContained($kb,$urls){
       $ok = ($p.ExitCode -eq 0) -or $eff
       Log ("  $name : exe rc=$($p.ExitCode) verified_by_effect=$eff")
       $rows += [ordered]@{ kb=$kb; file=$name; rc=$p.ExitCode; ok=$ok; verified_by_effect=$eff }
-    } elseif($ext -eq '.msu'){
+    } elseif($ext -eq '.msu' -or $ext -eq '.cab'){
+      # DISM decides: a self-contained CBS package (.msu wrapper, or a .cab WITH update.mum at root
+      # like KB5001716) installs; a payload-only .cab (e.g. the .NET ndp481 cab, WinSxS components with
+      # no update.mum) is cleanly REJECTED with DISM Error 13 (0xD) before applying anything - so this
+      # is honest, not a poison: rc=13 -> ok=false, loud. No blanket refusal, no false success.
       $rc = Add-PackageCompat $dst
-      Log ("  $name : msu DISM rc=$rc")
+      Log ("  $name : DISM rc=$rc")
       $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=($rc -in $OK_RC) }
       if($rc -eq 3010){ $script:St.reboot_needed=$true; $script:StagedThisSession=$true }
     } else {
-      # A payload .cab lacking update.mum is the Error-13 class (measured KB5066747 ndp481) - never DISM it.
-      Log ("  $name : payload .cab (no update.mum) - not DISM-installable; failing loudly")
-      $rows += [ordered]@{ kb=$kb; file=$name; rc='payload-cab-not-installable'; ok=$false }
+      Log ("  $name : unrecognised self-contained artifact type - failing loudly")
+      $rows += [ordered]@{ kb=$kb; file=$name; rc='unknown-artifact'; ok=$false }
     }
   }
   return ,$rows
@@ -1330,7 +1338,7 @@ try {
     $script:WuOnlyExpressKbs = @($script:WuOnlyExpressKbs | Sort-Object -Unique)
     foreach ($kb in $script:WuOnlyExpressKbs) {
       $script:St.result += [ordered]@{ kb=$kb; ok=$false
-        reason='wu-only-express: Windows Update publishes this KB only as Delivery-Optimization delta streams; not installable on a netvm-free guest, and it carries no security content the catalog cumulative does not' }
+        reason='wu-only-express: Windows Update offers this KB only through Delivery Optimization (express streams and/or a delta patch that needs a base); no catalog .msu and no self-contained static installer, so it is not installable on a netvm-free guest' }
     }
     if ("$OsBuild" -eq '19045') { $script:St.esu = Get-EsuStatus }
     Save
