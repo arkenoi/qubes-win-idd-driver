@@ -14487,3 +14487,58 @@ After refreshing win11-tpl's agent to 4cf7588 and rebooting the AppVM (which inh
 i.e. the fixed agent suppresses the logon screen even in exactly the state that produced the report.
 Caveat stated honestly: the "before" side is the owner's observation, not a count I measured; a
 strict A/B would re-run with the kept `.orig` binary.
+
+---
+
+## 2026-08-21 — I3 (AppVM never reaches a user session): narrowed hard, NOT fixed. One wrong root cause retracted.
+
+### RETRACTED, loudly: "the AppVM's private volume has no user profile"
+
+I announced that as the root cause. It was WRONG, and the error was mine: `dir Q:\Users` was
+truncated by my own `head -20`, so I read a partial listing as a complete one. `Q:\Users\user` is a
+FULL profile (3D Objects, AppData, Desktop, Documents, ...). The private volume is fine.
+
+### What IS established (each measured on win10-app)
+
+    C:\Users              -> SYMLINKD -> Q:\Users        (QWT redirects the user tree to the
+                                                          private volume; template and AppVM share
+                                                          this symlink, it is on the ROOT volume)
+    Q:\ label             "Qubes Private Image", 1.5 GB free, written today (Qubes Logs)
+    Q:\Users\user         full profile, ACLs resolve to WIN-IDD-TEST\user
+    ProfileList SID       S-1-5-21-...-1000, matches Winlogon AutoLogonSID
+    credential test       net use \\127.0.0.1\IPC$ /user:user qubes  -> SUCCESS, rc=0
+    account state         active, never expires, password valid to 26/09/2026, not locked
+    Winlogon              AutoAdminLogon=1, DefaultUserName=user,
+                          DefaultDomainName=WIN-IDD-TEST (== COMPUTERNAME),
+                          Userinit/Shell stock
+    QubesAutologonGuard   present, BootTrigger PT30S, SYSTEM/HighestAvailable, script present
+
+So RULED OUT: missing profile, profile-not-on-private-volume, stale SID / ACL mismatch, bad
+credentials, disabled/locked/expired account, autologon misconfiguration, missing guard task.
+
+### The two facts that remain, and the leading hypothesis
+
+1. **`DefaultPassword` is ABSENT on win10-app** (it is present on win11-app). Windows CONSUMES that
+   value; once gone, autologon cannot proceed and the guest falls back to the sign-in screen. This
+   is the exact mechanism recorded on 2026-08-13.
+2. **The guard did not run this boot.** `Last Run Time = 20/08 23:09`, which predates the AppVM's
+   boot - so nothing re-armed the password, even though the task is boot-triggered.
+
+Leading hypothesis: **DefaultPassword was consumed and the boot guard failed to re-arm it on the
+AppVM.** NOT yet proven - the decisive test (restore the value, reboot, observe the session) was
+started and could not complete: win10-app stopped answering qrexec mid-test and is now Running but
+unreachable.
+
+### A complication worth recording
+
+PowerShell run over qrexec on win10-app exits with **RC=1073807364 = 0x40010004
+DBG_TERMINATE_PROCESS** - it is TERMINATED, not failing to start, which smells like a console/pipe
+artifact of the qrexec wrapper rather than a broken PowerShell. It matters because the autologon
+guard IS a PowerShell script: if PowerShell cannot run in that context, the guard cannot re-arm
+autologon, and that would make the two facts above one single root cause. Unproven.
+
+### Method notes (cost me real time today)
+
+- `cmd /c A & echo %errorlevel%` expands errorlevel at PARSE time - it reports the PREVIOUS command's
+  code. Every "exit 0" I read that way was meaningless. Use `cmd /v:on` and `!errorlevel!`.
+- Never conclude from a `head`-truncated listing. That is what produced the retracted root cause.
