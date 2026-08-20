@@ -14542,3 +14542,64 @@ autologon, and that would make the two facts above one single root cause. Unprov
 - `cmd /c A & echo %errorlevel%` expands errorlevel at PARSE time - it reports the PREVIOUS command's
   code. Every "exit 0" I read that way was meaningless. Use `cmd /v:on` and `!errorlevel!`.
 - Never conclude from a `head`-truncated listing. That is what produced the retracted root cause.
+
+---
+
+## 2026-08-21 — U15 / Task #14 byte loss LOCALIZED IN SOURCE: a 1-second wait in QWT's own qrexec-wrapper. Ownership settled: OURS, not libvchan.
+
+Task #14 has sat open with "ownership UNSETTLED between libvchan and QWT's own Windows qrexec/vchan
+code" and a "close-race hypothesis untested-at-power". It is not untestable - it is readable. From
+the vendored `upstream/ro/qubes-core-agent-windows`:
+
+`src/qrexec-wrapper/qrexec-wrapper.c`, EventLoop, the child-process-terminated branch:
+
+    // wait for the threads to finish before sending exit code
+    waitObjects[0] = child->StdoutThread;
+    waitObjects[1] = child->StderrThread;
+    status = WaitForMultipleObjects(2, waitObjects, TRUE, 1000);   // <-- 1 SECOND timeout
+    if (status == WAIT_FAILED || status == WAIT_TIMEOUT)
+        win_perror2(status, "wait for i/o threads");               // <-- only LOGS it
+    if (!VchanSendExitCode(child, exitCode))                       // <-- sends the exit code ANYWAY
+
+and `VchanSendExitCode` carries the decisive comment (line ~374):
+
+    // EOF should be sent before exit code because peer closes vchan after receiving exit code
+
+So: **the peer closes the vchan when it receives the exit code.** If the stdout pump has not finished
+draining the child's output within ONE SECOND of the child exiting, the exit code goes out regardless,
+the peer closes, and whatever the pump had not yet written is DISCARDED.
+
+The pump itself is correct - `handle_child_output` loops until true EOF (`nread == 0` or
+ERROR_BROKEN_PIPE) and sends every chunk - so the loss cannot originate there. The timeout is the
+only lossy edge in the path.
+
+### Why this is the recorded signature
+
+    ~1/3 of bodies short            -> timing-dependent, exactly what a 1 s race produces
+    80,043-byte file returned as
+    "anything from 0 to 79,389"     -> variable truncation point, not a fixed cut
+    sender 30/30 full, guest 20/30  -> loss is on the GUEST side of the hop, which is where this code runs
+    "close-race hypothesis"         -> this IS the close race, now located to a specific line
+
+A 64 KB vchan buffer and a slow reader make >1 s drains ordinary for an 80 KB body, which is why a
+small file already reproduces it.
+
+### Ownership: SETTLED
+
+This is `qubes-core-agent-windows`, i.e. QWT's own code - NOT libvchan, and NOT a Xen defect. The
+"report upstream as a vchan bug" framing recorded earlier is therefore wrong and is retracted. Note
+the scope consequence: we do NOT currently fork qubes-core-agent-windows (it is vendored read-only
+under upstream/ro/), so fixing it means either forking that repo or an upstream submission - a
+decision for the owner under the standing upstream policy.
+
+### The fix, specified
+
+Do not abandon the drain. The child has already exited and the wrapper closed its own copies of the
+write ends, so EOF is guaranteed unless a surviving grandchild still holds one - which is the only
+reason a timeout was there at all. So:
+  1. wait for both I/O threads with a MUCH larger bound (tens of seconds), not 1 s;
+  2. on timeout, do NOT silently proceed - log the number of bytes still unsent and report the
+     response as truncated, so the loss can never again look like a complete transfer;
+  3. better still, make the peer's close conditional on having seen both EOF markers, so the exit
+     code cannot race ahead of the data.
+Not implemented here: it is a change to a repo we do not fork.
