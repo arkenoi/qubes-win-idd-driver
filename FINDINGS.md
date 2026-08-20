@@ -13514,3 +13514,41 @@ Deferred (separate, UNPROVEN without a test image): the Win11-only latent siblin
 the msu filter (~line 1026-1043) the checkpoint vector exposed - to be fixed + defect-reintroduced-tested
 only when a pre-checkpoint 26100 image exists. Not touched now (changing the WORKING Win11 path untested
 is the greater risk).
+
+## 2026-08-20 — content-class router: acceptance run on win10-tpl (netvm-free, 6 updates offered)
+
+Ran the new updater -Action full (SYSTEM) on win10-tpl@6456. Results (update-status.json + agent.log):
+
+CORE ACCEPTANCE MET:
+- **ZERO DO/BITS error codes** across the whole pass: 0x80240022 / 0x80200010 / 0x80D03805 each 0
+  occurrences (grep of agent.log). The DO/BITS engines are NEVER invoked on a netvm-free guest now -
+  the phantom routeless failures are gone. This is the primary win.
+- **Express CUs terminally classified**: KB4023057 + KB5071959 -> class=express -> 'wu-only-express',
+  ok=false, NO install attempt, St.esu='not-enrolled' set. Correct and honest.
+- Classifier validated on all 6 live updates (dc-probe-confirmed shapes): 4 self-contained + 2 express;
+  after the delta-exclusion fix, KB2267602 (Defender) correctly drops to class=none.
+
+REAL BUG FOUND + FIXED in the router this session: the Defender update (KB2267602) exposes ONLY a
+`am_delta_patch_<base>_*.exe` as a static download.windowsupdate.com URL (the full mpam-fe is DO-only).
+That delta is NOT a self-contained installer - it cannot self-apply offline: measured 0x80070002 for a
+BARE run AND for `/q`, and MpCmdRun -SignatureUpdate rc=2 (it uses DO). So Defender definitions are
+genuinely NOT installable netvm-free. Fix: Get-WuContentClass now excludes delta-patch files from the
+static set, so Defender classifies terminally (class=none -> honest 'no static installer' report) instead
+of fetching + fail-running an unapplicable patch. mpam-fe FULL is DO-only; there is no routeless path.
+
+HONEST RESIDUALS (none are router defects; all pre-existing or environmental):
+- **MSRT (KB890830), 85 MB full exe**: self-contained + correct, but the fetch TIMED OUT mid-transfer
+  (attempts stalled/resumed at 16 -> 32 MB across the 8-attempt budget). This is the pre-existing RELAY
+  large-file reliability issue (FINDINGS #1, per-fetch vchan churn; a 729 MB CU HAS succeeded before in
+  one attempt, so it is intermittent relay behaviour, not the router). Retesting MSRT alone to confirm.
+- **.NET CU (KB5066747)**: Resolve-Catalog REJECTS its catalog .msu on a filename/KB mismatch - the .NET
+  rollup KB (5066747) maps to component-KB-named files (windows10.0-kb5066130-ndp481, kb5066135-ndp48),
+  and the filter requires the OFFERED KB digits in the filename (a guard that exists to drop superseded
+  OS-CU siblings like kb5043080). So .NET falls to the router, whose self-contained URL is the ndp481
+  PAYLOAD cab (WinSxS components, no update.mum) -> DISM Error 13. Same fail outcome as before (no
+  regression). REAL pre-existing Resolve-Catalog bug, SEPARATE from routeless: the .NET catalog .msu IS
+  the installable wrapper; a scoped fix (skip the KB-digit filename filter when the title matches
+  '.NET Framework') would install it NLA-free. Recorded; not fixed this session (risk to the catalog path,
+  needs its own test).
+- **KB5001716** (2025-06 "Update for Windows 10", a WU-client/orchestrator .cab): DISM rc=2 - not a CBS
+  package cab. Honest fail; minor WU-client update.
