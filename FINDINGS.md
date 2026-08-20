@@ -13775,3 +13775,24 @@ dramatic elimination the premise implied. The wedge trigger is ACTIVE per-reques
 high-request phase (a real download / long pass), which the opened= instrument now makes measurable - the
 DECISIVE next test is opened= across a real cold download/install pass, plus the armed NMI dump if the
 wedge recurs under real load.
+
+## 2026-08-20 — download-pass churn measured: routine churn is LOW; the churn->wedge premise is WEAK
+
+Full -Action full pass on the new relay (soak-free, log cleared first): CONN=2 (fe2cr/fe3cr scan SOAP),
+PLAIN=3 (ctldl revocation CTLs), DENY=0 - FIVE relay requests for the whole pass; no POOL stat (relay
+activity < 60 s) and no drain. Caveat: most updates were already staged/cached, so few new downloads; but
+the bound holds - a cold scan is ~10-30 SOAP round-trips and a .msu download rides ONE tunnel (the 159 MB
+file did), so a real pass is tens of channel opens, not hundreds/thousands.
+
+PIVOTAL, HONEST REFRAME: the 'reduce relay churn to fix the wedge' premise (mine and the workflow's) rested
+on churn being HIGH. It is not - routine operation is low-churn; the 317 opens/min that motivated the panic
+was ENTIRELY my leftover soak. So:
+ - The relay redesign is GOOD CODE and stays (drain-during-idle, Poll-accurate dead detection, leak fixes,
+   client keep-alive, and - most valuable - the opened= instrument). But its churn-reduction is MARGINAL in
+   normal operation because there is little churn to reduce.
+ - The wedge's 'mid relay vchan churn' correlation is now SUSPECT: with only ~tens of channel cycles per
+   pass, a grant-revoke spin from sheer churn volume is a weak explanation. The wedge is either a rare
+   high-churn scenario not yet reproduced, or NOT churn-caused (the freeze merely coincided with a pass).
+ - THE decisive diagnostic is therefore the ARMED NMI DUMP (see the guest-dump entry): capture the actual
+   spinning stack during a real wedge, rather than reducing a churn that is already low. Do NOT keep
+   attributing the wedge to churn without the stack.
