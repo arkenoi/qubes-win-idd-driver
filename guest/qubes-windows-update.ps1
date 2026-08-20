@@ -171,12 +171,35 @@ function Sync-Revocation {
         break
       } catch {
         Remove-Item "$dir\$f.new" -Force -EA SilentlyContinue
-        if ($try -eq 2) { Log "Sync-Revocation: $f fetch failed ($($_.Exception.Message)) - keeping existing copy" 'WARN' }
+        if ($try -eq 2) {
+          # "keeping existing copy" was said even when there was NOTHING to keep. On a pristine
+          # guest that is simply false, and it hid the state that matters.
+          $had = Test-Path "$dir\$f"
+          $tail = if ($had) { 'keeping the existing copy' } else { 'and there is NO existing copy' }
+          Log "Sync-Revocation: $f fetch failed ($($_.Exception.Message)) - $tail" 'WARN'
+        }
         else { Start-Sleep -Seconds 3 }
       }
     }
   }
-  SetV 'HKLM:\SOFTWARE\Microsoft\SystemCertificates\AuthRoot\AutoUpdate' 'RootDirURL' "file://$dir" 'String'
+  # Only point the OS root-store updater at the mirror if the mirror can actually serve it.
+  # Repointing it at an EMPTY directory is worse than leaving it alone: chain building then finds
+  # no CTL at all and fails with 0x80072F8F, while this function's log line claimed success. The
+  # two that matter are the root list and the disallowed list; pinrules missing is survivable.
+  $have = @('disallowedcertstl.cab','authrootstl.cab','pinrulesstl.cab') | Where-Object { Test-Path "$dir\$_" }
+  $core = @('authrootstl.cab','disallowedcertstl.cab') | Where-Object { Test-Path "$dir\$_" }
+  if ($core.Count -eq 2) {
+    SetV 'HKLM:\SOFTWARE\Microsoft\SystemCertificates\AuthRoot\AutoUpdate' 'RootDirURL' "file://$dir" 'String'
+    if ($have.Count -lt 3) { Log "Sync-Revocation: mirror is missing $(3 - $have.Count) of 3 CTLs but has both core lists - repointed anyway" 'WARN' }
+  } else {
+    # Leave the OS on whatever it was using; do not hand it a mirror that cannot answer. Take OUR
+    # pointer away if a previous pass set one, so a half-built mirror from an earlier run cannot
+    # keep poisoning chain validation.
+    Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\SystemCertificates\AuthRoot\AutoUpdate' -Name 'RootDirURL' -EA SilentlyContinue
+    Log "Sync-Revocation: FAILED - the CTL mirror has no usable root list (have: $($have -join ',' )). RootDirURL left unset, so certificate chain building may fail with 0x80072F8F until a pass succeeds." 'ERROR'
+    $script:St.ctl_mirror = 'unusable'
+    return
+  }
   foreach ($v in 'DisallowedCertLastSyncTime','LastSyncTime','PinRulesLastSyncTime') {
     Remove-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\SystemCertificates\AuthRoot\AutoUpdate' -Name $v -EA SilentlyContinue
   }
