@@ -376,6 +376,36 @@ jobs:
               "-p:TreatWarningAsError=false"
           if ($LASTEXITCODE -ne 0) { throw "gui-agent build failed" }
 
+      # core-agent-windows (our fork) carries the qrexec-wrapper drain-race fix (U15). It needs the
+      # SAME dependency set the gui-agent build just staged - libvchan, xencontrol, windows-utils,
+      # qubesdb-client - so it is built here rather than in a job that would have to stage them all
+      # again. Non-fatal on purpose: a break in this build must not take down the gui-agent
+      # deliverable, but it MUST be visible, so the failure is annotated rather than swallowed.
+      - name: Build core-agent (qrexec) fork
+        id: coreagent
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws  = "${{ github.workspace }}"
+          $env:QB_SCRIPTS = "$ws\deps-src\builderv2\qubesbuilder\plugins\build_windows\scripts"
+          $sln = "$ws\core-agent\vs2022\core-agent-windows.sln"
+          if (-not (Test-Path $sln)) { throw "core-agent solution not found at $sln" }
+          & "${{ steps.vs.outputs.msbuild }}" $sln `
+              -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
+              "-p:TreatWarningAsError=false"
+          if ($LASTEXITCODE -ne 0) { throw "core-agent build failed ($LASTEXITCODE)" }
+
+      - name: Flag core-agent build result
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          if ('${{ steps.coreagent.outcome }}' -eq 'success') {
+            Write-Host '::notice title=core-agent::fork built OK'
+          } else {
+            Write-Host '::warning title=core-agent::fork FAILED to build - the U15 qrexec-wrapper fix is NOT in this package'
+          }
+
       - name: Collect package
         shell: pwsh
         run: |
@@ -383,6 +413,14 @@ jobs:
           $cfg = $env:CONFIG
           $out = "agent\vs2022\x64\$cfg"
           New-Item -ItemType Directory -Force package-agent | Out-Null
+          # the fork's qrexec binaries, when it built
+          $caOut = "core-agent\vs2022\x64\$cfg"
+          foreach ($p in 'qrexec-agent','qrexec-wrapper','qrexec-client-vm') {
+            if (Test-Path "$caOut\$p\$p.exe") {
+              Copy-Item "$caOut\$p\$p.exe" package-agent\ -Force
+              if (Test-Path "$caOut\$p\$p.pdb") { Copy-Item "$caOut\$p\$p.pdb" package-agent\ -Force }
+            } else { Write-Warning "core-agent: $p.exe not produced" }
+          }
           foreach ($p in 'gui-agent','gui-watchdog','dump-windows') {
             if (Test-Path "$out\$p\$p.exe") { Copy-Item "$out\$p\$p.exe" package-agent\ -Force }
             if (Test-Path "$out\$p\$p.pdb") { Copy-Item "$out\$p\$p.pdb" package-agent\ -Force }
