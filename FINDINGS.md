@@ -14603,3 +14603,29 @@ reason a timeout was there at all. So:
   3. better still, make the peer's close conditional on having seen both EOF markers, so the exit
      code cannot race ahead of the data.
 Not implemented here: it is a change to a repo we do not fork.
+
+### I3 update: the DefaultPassword hypothesis is REFUTED by experiment
+
+Restored `DefaultPassword=qubes` and re-asserted `AutoAdminLogon=1` on win10-app (verified present in
+the registry afterwards), then cold-rebooted:
+
+    AFTER session: >console  1  ConnQ        <- still no user, 90 s after boot
+    VERDICT: DefaultPassword alone is NOT the cause
+
+So the consumed-password mechanism, which fit the 2026-08-13 precedent so well, is not what keeps an
+AppVM off its desktop. Everything in the credential/config plane is now eliminated by measurement:
+profile, ACLs, SID, password validity, account state, autologon values, guard presence, and now the
+password value itself.
+
+What that leaves is the interactive-session plane rather than the credential plane: Winlogon either
+never attempts the autologon, or the session creation itself stalls (the console session sits in
+ConnectQuery, which is a TRANSIENT state persisting indefinitely). The old note "leading suspect is
+display-experiment state in the clone source" now looks more plausible than anything credential
+related, since a console session that cannot complete its connect is a display/session-stack symptom.
+
+PARKED here per the owner's "if something blocks, postpone and fix other issues". Next probes when
+resumed, in order of cost: (1) whether Winlogon logs ANY autologon attempt this boot (needs the
+Security/Winlogon channels read without PowerShell, which is terminated over qrexec with
+0x40010004); (2) the display stack state (IDD active? VGA disabled?) compared against the template
+that logs on fine; (3) an A/B against a freshly created AppVM from a template that never had the
+display experiments.
