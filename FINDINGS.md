@@ -14048,3 +14048,52 @@ Two open consequences to keep visible:
    is INERT there until `wu-task-add-scheduled.ps1` is run on them (or the agent is reinstalled).
 2. Still no live large-download acceptance run for the truncation fix - the check that the resume
    ladder disappears (one attempt, no "stream ended early") has not been done.
+
+---
+
+## 2026-08-20 (cont) — large-download acceptance: PASSED, but only on the second attempt; the first was a null result
+
+### Take 1 — DISCARDED, and recorded as discarded
+
+Ran a `-Action download` pass with the fixed relay and got `stream ended early` occurrences: 0,
+16MB-boundary cuts: 0. That looked like a pass and is NOT one. The pass lasted 90 s, every PLAIN
+line in it was a ~7 KB metadata fetch, and the "fetched file now" line never printed: MSRT is
+already installed, so the pass had nothing large left to fetch. Zero truncations out of zero large
+transfers is a check that could not fail. Reported as void rather than as a green light.
+
+### Take 2 — a real transfer, single request, decisive
+
+Reconstructed a genuine large plain-HTTP URL: the relay log truncates its request line at 120
+chars, but that was enough to recover the path prefix
+(`/c/msdownload/update/software/secu/2025/09/...`) and the full filename came from the payload
+still on disk. Fetched it with ONE `HttpWebRequest` through 127.0.0.1:8082 and no resume loop, so
+the relay alone decides how many bytes arrive:
+
+    URL             http://download.windowsupdate.com/c/msdownload/update/software/secu/2025/09/
+                    windows10.0-kb5066130-x64-ndp481_06046fee...cab
+    HTTP status     200
+    Content-Length  79,240,605  (75.57 MB)
+    received        79,240,605  (75.57 MB)   shortfall 0
+    time            22.4 s, ONE request
+    relay log       PLAIN tries=1 bytes=0 body=79240605/79240605 complete=True streamed=True
+
+75.57 MB is 4.7x MaxVerifyBytes. `streamed=True` is the spill path doing exactly what it was built
+to do. Against the recorded control the old build stops at ~16.8 MB (16 MB + one 64 KB read +
+headers) and hands that over under the original 200 - the behaviour the resume ladder was papering
+over. Binary under test verified in the same run: 43520 bytes / 978240E3C7D509DA, --selftest 8/8.
+
+So the truncation fix is now demonstrated end to end through qrexec/vchan, not only in the
+unit-level selftest.
+
+### Two deviations, both deliberate, both reverted
+
+1. **TWO Windows guests ran at once** (win10-tpl for this test while win11-fresh stayed up). That
+   breaks the standing one-guest-at-a-time rule and was an explicit owner exception for this run
+   only - NOT a new pattern, and not to be repeated. Contention was noted as a risk to timing
+   numbers; the acceptance criterion used (bytes received vs Content-Length) is immune to it.
+2. **The relay's peer allowlist was disabled for the test run** (`QUBES_UPDATES_PEER_ALLOWLIST=off`)
+   because the test process is not the update process. That gate decides WHO may use the proxy and
+   has nothing to do with response framing, so it does not weaken the result - but it must never be
+   left off. The relay was killed afterwards and verified stopped; the updater restarts it on
+   demand with a clean environment, gate on. Both test scheduled tasks were removed and verified
+   gone.
