@@ -13384,13 +13384,66 @@ surfaced two REAL gaps unrelated to the wedge:
    NOTE: the 2025-10 CU (KB5066791) DID install via catalog+DISM at 2965 this session (rc=3010), so
    the catalog path works for CUs that ARE published; the gap is specifically the unpublished 2025-11.
 
-2. **Download throughput is ~805 KB/s** (KB5011048 67.8MB/86s; the 729MB KB5066791 held the same
-   rate) vs the workflow's 12.8-15.2 MB/s on win11 - ~15x slower. Hypothesis (not yet isolated):
-   Defender real-time scanning the incoming bytes (MsMpEng sat at 40-95% CPU across the whole
-   download) is CPU-bound on the 4-vCPU guest. Test: re-measure with Defender real-time paused.
+2. ~~**Download throughput is ~805 KB/s**~~ **RETRACTED 2026-08-20 by direct measurement; Defender is
+   NOT the cause and no fix is warranted.** Three isolated tests, all through the live relay on win10-tpl:
+   - dl-perf.ps1 (raw HttpWebRequest, 256KB reads, bytes DISCARDED, 40 MB ranged): **9.57 MB/s** -
+     transport is fast.
+   - spd-test.ps1 (Invoke-WebRequest -OutFile, 16 MB .cab): 0.34 MB/s scanning, 0.54 MB/s excluded -
+     SLOW, but this is the wrong method: PowerShell 5.1's Invoke-WebRequest progress bar cripples it.
+   - spd2-test.ps1 (the updater's REAL method: raw HttpWebRequest + 1 MB buffer -> FileStream on disk,
+     16 MB .cab): **1.53 / 2.38 MB/s Defender-scanning vs 1.61 / 1.66 MB/s with an ExclusionPath** -
+     the exclusion makes NO meaningful difference (scanning was if anything faster). So Defender's
+     on-access scan is NOT the bottleneck on the shipping path, and adding an ExclusionPath is not
+     worth doing. The updater's Fetch-Msu (line 536+) already uses the fast HttpWebRequest+1MB method,
+     not Invoke-WebRequest. The historical ~805 KB/s was contention/telemetry-era, not representative.
+   Download performance is acceptable; the concern is closed. (Tamper protection blocked
+   `Set-MpPreference -DisableRealtimeMonitoring`, but the ExclusionPath A/B already answers it.)
 
 Finalize (a)/(b) status: NOT settled zero-residue - the healthy clone is at 6456 (2025-10 already in)
 and the only available CU (2025-11) is uninstallable per #1, so no cumulative could be staged on it.
 Strong prior evidence LEANS (a): win10-clean drained 2965->6456 with its cumulative finalizes
 SUCCEEDING and was NEVER force-killed. The definitive zero-residue test remains a fresh 2965 install
 -> KB5066791 (catalog-installable there) -> finalize.
+
+## 2026-08-20 — DECISIVE: the routeless problem dissected empirically (on win10-tpl@6456)
+
+While Fable workflow `routeless-wu-fix` ran, I settled the crux empirically on the live guest rather
+than reasoning about it. The proxy-aware WU COM scan (Online=$true, ServerSelection=2, WinHTTP->relay)
+returns 6 updates; I dumped each IUpdate's DownloadContents. Ground truth (scratchpad/dc-probe.ps1):
+
+**Two distinct update classes, and the scan tells them apart:**
+1. **SELF-CONTAINED (static CDN file).** KB5001716 (SSU-ish), KB5066747 (.NET CU), KB890830 (MSRT),
+   KB4023057: top-level `DownloadContents.Count=0` but `BundledUpdates[].DownloadContents[].DownloadUrl`
+   carries ONE real fetchable URL on `http://download.windowsupdate.com/...` (plain path, NO query, NO
+   signature). These are directly proxy-fetchable.
+2. **EXPRESS / PSF (Delivery-Optimization streams).** KB5071959 (the 2025-11 monthly OS CU, the one
+   ABSENT from the catalog): `DownloadContents.Count=8496` URLs on
+   `http://tlu.dl.delivery.mp.microsoft.com/filestreamingservice/files/<guid>?P1=<expiry>&P4=<sig>` -
+   time-signed forward-differential PSF blobs. `maxDownloadSize=113318429698` (~105 GB) is the SUM of
+   all delta variants, not a real single download. This IS the checkpoint-cumulative/express model:
+   the monthly Win10 LCU is delivered as thousands of hash-matched per-file deltas the servicing stack
+   assembles - there is NO single static .msu for it (hence 0 catalog candidates).
+
+**Vector A (harvest scan URLs -> proxy-fetch -> DISM) PROVEN, but with a hard limit:**
+- Harvest+fetch WORKS: pulled KB5066747's bundled URL, fetched via Invoke-WebRequest through the proxy,
+  got a VALID complete cabinet (sig=MSCF, 16,833,494 bytes). (scratchpad/harvest-proof.ps1)
+- BUT `DISM /online /add-package` on that .cab -> **Error 13 (ERROR_INVALID_DATA)**. Extracting it
+  (`expand -F:*`) shows WinSxS COMPONENT payloads only (amd64_netfx-mscorwks_dll_..., x86_mscorlib_...)
+  and **NO `update.mum`/manifest at root**. It is the WU PAYLOAD cab, not a self-contained CBS package.
+  The DISM-installable unit is the `.MSU` WRAPPER (payload cab + .mum + .cat) - which is exactly what
+  the CATALOG serves and what the existing Resolve-Catalog already fetches (KB5066791 proved that path
+  end-to-end this session). So: harvest-from-scan is NOT a universal installer; for catalog-published
+  updates the existing .msu-via-catalog path is strictly better (gives the installable wrapper).
+
+**Net verdict on "fail routeless":**
+- Everything catalog-published (SSU, .NET, drivers, MSRT, older/full CUs) already installs routeless
+  via Resolve-Catalog+Install-Msus (fetch .msu through proxy, DISM). No gap there.
+- The GENUINE gap is exactly ONE thing: the **express-only monthly OS CU** (KB5071959-class). It has
+  neither a catalog .msu (absent) nor a static bundled URL (only 8496 DO PSF streams). You cannot
+  assemble it without reimplementing Delivery Optimization's hash-matched delta apply - infeasible in
+  script. The ONLY routeless install paths for it are: (A) make WU/DO itself download through the proxy
+  by satisfying the NLA/connectivity gate it refuses on (the Fable workflow's Vectors B/C/F), or
+  (B) force WU to fetch the FULL (non-express) LCU as a single file if such a knob exists (Vector C/F),
+  or (C) for non-template guests only, a temporary netvm. Awaiting the workflow synthesis to pick.
+- Correction to the prior entry's framing: the fix is NOT "a checkpoint-aware catalog match" (there is
+  no catalog entry to match) and NOT "harvest scan URLs" (they're DO streams). It is the DO/NLA path.
