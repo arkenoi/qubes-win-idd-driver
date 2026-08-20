@@ -57,7 +57,11 @@ Log "placed agent -> $agent"
 # 3. register the scheduled scan task. Past StartBoundary is fine - the repetition schedules the
 #    next occurrence. Runs as SYSTEM/HighestAvailable so it works with no user logged on.
 $cmd  = 'powershell.exe'
-$args = "-NoProfile -ExecutionPolicy Bypass -File `"$agent`" -Action scan -RelayExe `"$exe`""
+# -Scheduled marks this as the AUTOMATIC background refresh: the only pass allowed to be skipped
+# when another has just completed (the debounce in the agent). It belongs to this task alone -
+# QubesWindowsUpdateRun/Download and the rpc handlers must never carry it, or a pass dom0 asked
+# for could be silently dropped.
+$args = "-NoProfile -ExecutionPolicy Bypass -File `"$agent`" -Action scan -Scheduled -RelayExe `"$exe`""
 $xml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
