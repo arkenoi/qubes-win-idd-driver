@@ -40,7 +40,12 @@ param(
   # while the row-picking logic matches on title text. A real user runs a German edition, so
   # "does resolution still pick the same FILE when the titles are German" has to be answerable on
   # an English guest - this is what makes it answerable.
-  [string]$AcceptLanguage = ''
+  [string]$AcceptLanguage = '',
+  # Set ONLY by the scheduled scan task. It marks this pass as the automatic background refresh,
+  # which is the one pass that may be skipped when another has just finished (see the debounce
+  # below). A pass dom0 asked for is never skipped, whatever it costs - so this switch must never
+  # be added to the Run/Download tasks or to the rpc handlers.
+  [switch]$Scheduled
 )
 $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force (Split-Path $StatusFile) | Out-Null
@@ -62,6 +67,39 @@ try {
 # file with its own `done`, and the rpc handler tailing that file reported the update finished -
 # with an empty result - while DISM was still installing. The scan's Remove-Proxy also tears down
 # the proxy the other pass is downloading through.
+# DEBOUNCE, and only for the automatic scan. The mutex below stops two passes running AT ONCE; it
+# does nothing about one starting the moment another finished. That happens routinely - dom0 drives
+# an install, it completes, and the 6-hourly scan fires minutes later - and each pass costs a full
+# Windows Update scan plus a proxy/relay teardown and rebuild. The relay churn is not free: the
+# 2026-08-20 dump attributes the guest-wide freeze to the TLB shootdowns that qrexec bridge
+# processes generate as they exit, so a pass nobody needs is a wedge risk, not just wasted minutes.
+#
+# Rules, deliberately narrow:
+#   - ONLY -Scheduled passes are ever skipped. Anything dom0 asked for runs, always.
+#   - the window counts from the last COMPLETED pass of ANY kind (that is the point of it being
+#     cross-path); a pass that failed or is mid-flight does not start the clock.
+#   - QUBES_UPDATES_DEBOUNCE_MIN=0 disables it; the default is 30 minutes against a 6-hourly scan.
+if ($Scheduled -and $Action -eq 'scan') {
+    $debounceMin = 30
+    $envMin = $env:QUBES_UPDATES_DEBOUNCE_MIN
+    if ($envMin -and ($envMin -as [int]) -ne $null) { $debounceMin = [int]$envMin }
+    if ($debounceMin -gt 0 -and (Test-Path $StatusFile)) {
+        try {
+            $prev = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json
+            if ($prev.done_ts) {
+                $age = ((Get-Date) - [datetime]$prev.done_ts).TotalMinutes
+                # A negative age means the stamp is in the future (clock moved) - do not trust it
+                # to skip work; run the pass.
+                if ($age -ge 0 -and $age -lt $debounceMin) {
+                    Write-Host ("skipping this scheduled scan: a {0} pass completed {1:N0} min ago (debounce {2} min)" -f `
+                                $prev.action, $age, $debounceMin)
+                    exit 0
+                }
+            }
+        } catch { }   # unreadable/absent status = no reason to skip; fall through and scan
+    }
+}
+
 $script:Mutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
 $waitMs = if ($Action -eq 'scan') { 0 } else { 900000 }   # a scan yields; real work waits 15 min
 $script:HaveMutex = $false
@@ -90,6 +128,16 @@ $POL='HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; count=0; available=@();
                          downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null }
 function Save { $script:St.ts=(Get-Date).ToString('s'); ($script:St | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile -Encoding UTF8 }
+
+# A pass FINISHED. Distinct from Save, which also runs on every progress tick - `ts` therefore
+# means "last activity" and cannot answer "when did a pass last complete". The scheduled-scan
+# debounce needs exactly that, and reading `ts` instead would let a long download suppress the
+# scan that should follow it. Records WHICH action completed too, so the skip message can say so.
+function Complete-Pass {
+    $script:St.done_ts = (Get-Date).ToString('s')
+    $script:St.action  = $Action
+    Save
+}
 # Write-Host alone is lost under the scheduled task, which is why every download failure so far
 # had to be reconstructed from DISM's log instead of ours. Tee to a file.
 function Log($m){
@@ -1240,7 +1288,7 @@ try {
   if ($Action -eq 'wuinstall') {
     $script:St.result = Install-ViaWU
     Protect-Autologon
-    $script:St.phase='done'; Save
+    $script:St.phase='done'; Complete-Pass
     Log 'done (WU-native)'
     return
   }
@@ -1540,7 +1588,7 @@ try {
   }
 
   Protect-Autologon
-  $script:St.phase='done'; Save
+  $script:St.phase='done'; Complete-Pass
   Log 'done'
 } catch {
   $script:St.phase='error'; $script:St.error="$($_.Exception.Message)"; Save
