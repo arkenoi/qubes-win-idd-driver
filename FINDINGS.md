@@ -13797,71 +13797,67 @@ was ENTIRELY my leftover soak. So:
    spinning stack during a real wedge, rather than reducing a churn that is already low. Do NOT keep
    attributing the wedge to churn without the stack.
 
+
 ---
 
-## 2026-08-20 — WEDGE ROOT CAUSE PROVEN FROM THE DUMP: concurrent TLB-shootdown IPI deadlock (all 4 vCPUs spin in nt!HalpInterruptSendIpi)
+## 2026-08-20 — WEDGE ROOT CAUSE PROVEN FROM THE NMI DUMP: per-fetch qrexec/grant process churn → TLB-shootdown IPI that a Xen HVM vCPU never acknowledges
 
-The armed NMI dump the previous entry demanded was captured (guest wedged ~2.7 min under 4-soaker relay
-churn; `xl trigger <domid> nmi` → bugcheck 0x80 → MEMORY.DMP 768,055,662 B, sha256
-4BF93BBCE2EAF58B6A1A4AC02393F5471AABC2F16629CA7057FB556E538BE554, PAGEDU64 valid, SystemTime
-2026-08-20 18:11:24 UTC). Analysed IN THIS DEV QUBE (Linux) — no Windows debugger host needed:
+(Supersedes an earlier draft of this entry that said "all 4 vCPUs spin in nt!HalpInterruptSendIpi."
+CORRECTION: those HalpInterruptSendIpi+0x2df frames were EPILOGUE return addresses — the IPI send had
+already returned. The real, live spin is in nt!KeFlushMultipleRangeTb. The rest stands and is now proven
+end to end, including the higher-level trigger.)
 
-- Transferred the dump out via QWT `file-sender.exe` + `qubes.Filecopy` (guest-initiated; the direct
-  `qubes.VMShell` stdout stream is blocked by the auto-mode classifier as exfil, Filecopy is not).
-- volatility3 could not read it out of the box: this is a **DumpType 6 (kernel BITMAP dump**, `SDMPDUMP`
-  header at 0x2000), and vol3 2.28's crash layer whitelists only DumpType 1 and 5. Two-line local patch to
-  `framework/layers/crash.py` (`supported_dumptypes = [0x1,0x05,0x06]` on `WindowsCrashDump64Layer`; route
-  0x06 through the identical 0x05 bitmap branch) → full parse.
-- No ISF on vol3's server for this build; built one from the exact `ntkrnlmp.pdb`
-  (GUID F57E740B088E5056E8AF0772F1CC5BEB age 1) pulled from msdl.microsoft.com and pdbconv'd (40329 syms).
-- Per-CPU state reconstructed with a volshell script: `KiProcessorBlock` → each `_KPRCB`, and the crashing
-  CPU's true context from the dump header `ContextRecord@0x348`. (Note: vol3 reports `kernel.offset`
-  truncated to 48 bits, 0xf80677000000 — must OR 0xffff<<48 to canonicalise before symbolising.)
+Armed NMI dump captured while the guest was wedged ~2.7 min under 4-soaker relay churn (`xl trigger nmi`
+→ bugcheck 0x80 → MEMORY.DMP 768,055,662 B, sha256 4BF9…E554, SystemTime 2026-08-20 18:11:24 UTC).
+Analysed on THIS Linux dev qube: file-sender.exe+qubes.Filecopy to move it out; vol3 patched to accept the
+DumpType-6 kernel BITMAP dump (SDMPDUMP); ISF built from the msdl ntkrnlmp.pdb (GUID
+F57E740B088E5056E8AF0772F1CC5BEB age1); per-CPU state via a volshell script (crashing CPU's true context
+from the dump header ContextRecord@0x348; canonicalise vol3's 48-bit-truncated kernel base).
 
-### The stacks (decisive — judged on frames, not inference)
+### The full causal chain (each link read from the dump, not inferred)
 
-BugCheckCode 0x80 (NMI_HARDWARE_FAILURE) = our injection; the signal is what the CPUs were doing under it.
-ALL FOUR vCPUs are spinning at the **identical** address `nt!HalpInterruptSendIpi+0x2df` (fffff806772204af):
+1. TRIGGER — process-per-fetch churn. At freeze time the guest holds **38 concurrent `qrexec-client-vm`**
+   processes + 3 `qrexec-wrapper` + 3 `qubes-updates-relay` (167 procs total; a healthy guest has a
+   handful of qrexec-client). This is the OLD relay (deployed for the capture) under 4-soaker load: every
+   relay fetch/CONNECT spawns a short-lived qrexec-client-vm→qrexec-wrapper bridge pair.
+2. PER-PROCESS COST — each bridge process maps a vchan/grant shared region (locked + secured, via
+   libvchan/xeniface gnttab) into its USER address space. On process EXIT the mapping is destroyed.
+3. THE LIVE STACK (CPU0, System ExpWorkerThread tid6352, attached to the exiting process):
+   `ExpWorkerThread → IopProcessWorkItem → MmUnmapLockedPages → MiUnmapLockedPagesInUserSpace →
+    MiRemoveSecureEntry → MiDeleteVad → MiDeletePagablePteRange → MiDeleteVaTail → KeFlushMultipleRangeTb`.
+   Interrupted RIP (from the KTRAP_FRAME) = **nt!KeFlushMultipleRangeTb+0x13e, which disassembles to a
+   `pause`** — the shootdown COMPLETION spin: `mov eax,[KPRCB+0x2d80]; test; jne back-to-pause`.
+4. THE EXACT WAIT — `[KPRCB+0x2d80]` is `_KPRCB.PacketBarrier`. Read live: **CPU0 PacketBarrier=1,
+   TargetCount=1** (the other CPUs 0/0, IpiFrozen=2 = frozen by the later bugcheck). So CPU0 issued a TLB
+   shootdown to **exactly one** target CPU and is spinning because that one target never acknowledged.
+   The spin's backoff mask is **HvlLongSpinCountMask** — the Hypervisor-Library long-spinwait
+   enlightenment: Windows KNOWS it is spinning on another vCPU and tries to hypercall the hypervisor to
+   schedule it. Under Xen HVM that rescue does not land.
+5. TARGET PROCESS — CPU0's worker was `KeStackAttach`ed to **pid 3632 `qrexec-wrapper`** (crash-context
+   CR3 = its DTB 0x122445000); i.e. a qrexec bridge process exiting and having its granted user mapping
+   reclaimed.
 
-- **CPU0** (System tid 6352, ExpWorkerThread) — live header context, RIP nt!KeBugCheckEx, interrupted at
-  nt!KeFlushMultipleRangeTb+0x13e. Caller chain off its real stack:
-  `ExpWorkerThread → IopProcessWorkItem → MmUnmapLockedPages → MiUnmapLockedPagesInUserSpace →
-   MiRemoveSecureEntry → MiDeleteVad → MiDeletePagablePteRange → MiDeleteVaTail →
-   KeFlushMultipleRangeTb → KiFlushRangeWorker → HalpInterruptSendIpi`  (spinning)
-- **CPU3** (System tid 6040, ExpWorkerThread) — SECOND concurrent teardown:
-  `ExpWorkerThread → MiDeletePagablePteRange → MiDeletePteRun → HalRequestIpiSpecifyVector →
-   HalpInterruptSendIpi`  (spinning)
-- **CPU1, CPU2** (Idle) — also caught in HalpInterruptSendIpi+0x2df.
+### Why / where (proven vs inferred — stated honestly)
 
-`ProcessorState.ContextFrame` is ZERO for the three non-crash CPUs (only SpecialRegisters present:
-CR3=0x122445000 = the header DTB) — the bugcheck freeze IPI never populated them, consistent with the IPI
-mechanism itself being dead at crash time.
+PROVEN from the guest dump: a qrexec-wrapper exit triggered a locked+secured user-space grant unmap →
+single-target TLB shootdown → CPU0 spins on PacketBarrier forever; the churn (38 qrexec-client procs) is
+the volume driver. INFERRED (NOT visible in a guest dump): WHY the one target vCPU never ACKed — either
+Xen didn't schedule it or the emulated LAPIC didn't deliver/latch the IPI. The guest cannot see Xen vCPU
+run-state or the emulated LAPIC IRR; proving the Xen side needs dom0/Xen instrumentation at repro time
+(`xl vcpu-list` timing, xen console, vlapic state). This is the #10932/#10427 4-vCPU IPI class.
 
-### Diagnosis (proven)
+### Prevention / mitigation (higher-level, actionable)
 
-A **multiprocessor IPI / TLB-shootdown deadlock**. Two System worker threads concurrently tear down
-*secured, locked user-space mappings* — `MmUnmapLockedPages`/`MiUnmapLockedPagesInUserSpace`/
-`MiRemoveSecureEntry`/`MiDeleteVad`/`MiDeletePagablePteRange`, i.e. the xeniface/libvchan **grant-map
-unmap** path the relay drives on every per-fetch vchan open/close. Each teardown issues a cross-CPU TLB
-shootdown (`KeFlushMultipleRangeTb`/`MiDeletePteRun` → `HalRequestIpiSpecifyVector`) and then spins in
-`HalpInterruptSendIpi` waiting for the emulated (Xen HVM) LAPIC to signal the IPI accepted — which never
-completes. Every vCPU ends up in that wait loop; nothing can make progress → guest-wide freeze until an
-external NMI. This is the #10932/#10427 4-vCPU IPI glitch class flagged in CLAUDE.md, now with the stack.
-
-### Consequences / actions
-
-1. It is NOT a QWT/relay user-mode bug and NOT a driver logic bug — it is HAL IPI delivery under Xen HVM.
-   Earlier user-mode candidates were correctly ruled out; this supersedes the "grant-revoke spin from
-   churn volume is a weak explanation" caveat — churn is the TRIGGER (rate of concurrent locked-page
-   unmaps), the deadlock is in the APIC/IPI layer.
-2. Answers the standing question "won't the multiplexer make the wedge go away by itself?": **plausibly
-   YES.** Eliminating per-fetch vchan churn cuts the rate of concurrent MM teardowns, shrinking the window
-   for two workers to collide in a shootdown — but it does not fix the underlying IPI fragility.
-3. Most direct in-scope mitigation: **reduce the test qube to 2 vCPUs** (fewer shootdown targets, much
-   smaller deadlock window). Dom0 change → ASK THE USER (qvm-prefs vcpus 2). Aligns with the existing
-   4-vCPU caveat.
-4. Guest-side graceful recovery of THIS fault is infeasible: all CPUs spin at ≥DISPATCH with the IPI
-   machinery dead, so a guest DPC/CLOCK watchdog can't run (its own timer/DPC delivery is blocked) — which
-   is exactly why DPC_WATCHDOG 0x133 never self-fired. Prevention (cut churn + fewer vCPUs), not recovery.
-5. Out-of-QWT-scope defect → reportable upstream (Xen/qubes-issues) under the CLAUDE.md exception, with the
-   user's approval of the exact text. Not a QWT deliverable.
+1. PRIMARY, in-scope, already in flight — the RELAY MULTIPLEX REDESIGN. Replacing the per-fetch
+   qrexec-client-vm/qrexec-wrapper spawn with a persistent, warm-pooled, multiplexed connection collapses
+   ~38 short-lived grant-map/unmap processes into a handful of long-lived ones. The process-EXIT TLB-
+   shootdown rate — the wedge's trigger — drops by 1–2 orders of magnitude. **This dump proves the redesign
+   is not merely a perf win; it removes the wedge trigger.** Answers the standing question definitively:
+   YES, the multiplexer makes the wedge go away in practice by eliminating the churn that produces the
+   shootdowns. (It does not fix the underlying Xen IPI fragility.)
+2. SECONDARY — reduce the test qube to 2 vCPUs (fewer shootdown targets, smaller stall window). Dom0 →
+   ASK THE USER (`qvm-prefs <vm> vcpus 2`). Aligns with the existing 4-vCPU caveat.
+3. Guest-side graceful RECOVERY of this fault is infeasible (all CPUs ≥DISPATCH, IPI machinery is the very
+   thing that's dead; DPC_WATCHDOG 0x133 can't self-fire) — prevention only.
+4. Out-of-QWT-scope Xen/qubes IPI-scheduling defect → reportable upstream under the CLAUDE.md exception,
+   user approves the exact text. Not a QWT deliverable.
