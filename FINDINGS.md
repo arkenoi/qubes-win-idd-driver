@@ -13643,3 +13643,35 @@ Per owner ("park ESU, make the updater report it informationally, not as an erro
   is unreachable (both /type and /qubes-vm-type empty), 8 tries x 2s = ~14s, waiting out QdbDaemon startup;
   a populated value returns immediately so steady state costs nothing. Full-boot-path acceptance (a cold
   reboot where the boot task no longer skips) is the remaining check to run on a reboot.
+
+## 2026-08-20 — remaining problematic updates resolved: every offered update now deterministic
+
+Owner: "after ESU exclusion, do we have any problematic updates left?" Audited the full offer set on
+netvm-free win10-tpl and made each one deterministic (installs, or informational - never a failure that
+reads as broken, never intermittent). Validated by a full -Action full pass (remaining actionable=0):
+
+| KB | was | now |
+|----|-----|-----|
+| KB890830 MSRT | fetch-timeout intermittent | INSTALLS (retry bump; effect-verified) |
+| KB5066747 .NET CU | FAILED (catalog rejected) | INSTALLS (staged rc=3010) - Fix 1 |
+| KB5001716 WU-client | FAILED (DISM rc=2) | informational (proven no update.mum -> not a CBS package) |
+| KB2267602 Defender | FAILED / deferred | informational (delta unapplicable, full is DO-only) |
+| KB4023057, KB5071959 | express/ESU-gated | informational |
+
+Four code fixes (all in guest/qubes-windows-update.ps1, committed):
+1. Resolve-Catalog: for .NET Framework candidates, match filenames on ARCH only - the rollup KB (5066747)
+   is delivered as component-KB-named .msu (kb5066130-ndp481, kb5066135-ndp48), which the digit filter
+   (meant to drop superseded OS-CU siblings) wrongly rejected. .NET CU now resolves 2 .msu and installs.
+2. Install-SelfContained: a self-contained artifact DISM rejects as NOT-A-PACKAGE (rc 2 / 13 / 0x800f0805
+   = no update.mum, a WU-client/orchestrator blob Windows installs itself) -> severity='info', not a
+   failure. Distinguished from a genuine install failure (any other rc).
+3. Route-gated 'none' KBs on a netvm-free guest (Defender: delta needs a base, full is DO-only) ->
+   severity='info' informational, excluded from the actionable/remaining count.
+4. Reordered the fallback tail: DEFER ("next pass installs this") only when the guest CAN install
+   (canWuNative); on a netvm-free guest, WuFallback KBs go straight to informational even when a reboot is
+   already staged - so a KB that never installs never reads as a deferred failure.
+
+NET: no offered update reads as a failure or behaves intermittently. The ONE remaining non-determinism in
+the stack is the relay warm-channel churn (FINDINGS #1) - it makes large fetches intermittently time out;
+the Fetch-Msu 14-attempt+resume bound makes downloads eventually complete, but the underlying churn needs
+the dom0 NMI dump to nail (ESCALATED, unchanged).
