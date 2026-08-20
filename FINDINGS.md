@@ -13730,3 +13730,21 @@ FRESH C:\Windows\MEMORY.DMP), THEN the real capture: agent drives the wedge repr
 relay soak), owner injects the NMI when it wedges. Analysis: kd.exe in-guest (scriptable via qtest, symbols
 through the proxy + PV-driver PDBs) or owner's WinDbg -> !analyze -v / !running / k for the spinning frame.
 If a hard freeze won't take the NMI, fall back to xenctx (Path C).
+
+## 2026-08-20 — relay multiplex: DECISIVE data + full-redesign kicked off (Fable workflow)
+
+Owner steer: stop churning connections, multiplex like the Linux guest. Relay CONN-log evidence
+(scratchpad/conn-read.ps1, 342 conns): eof=client 340, eof=tunnel 0 -> qubes.UpdatesProxy/tinyproxy
+NEVER imposes a per-session close; keep-alive/reuse IS supported on the proxy side. The churn is
+CLIENT-driven + WARM-POOL-driven, not tunnel-imposed:
+ (a) the client (WinHTTP/WU scan, our Fetch-Msu) opens a NEW CONNECT tunnel per request instead of
+     reusing one keep-alive tunnel;
+ (b) the warm pool spawns+ages ~8 channels every 25s (PoolTarget=8, PoolMaxAgeSeconds=25) EVEN WHEN
+     IDLE -> ~4600 grant permit/revoke cycles over a 4h pass with zero traffic = prime accumulator for
+     the grant-revoke spin.
+CONSTRAINT the redesign must honor: traffic is ~all HTTPS CONNECT tunnels; a CONNECT tunnel is a raw
+TLS passthrough bound to one client TLS session, so a backend CONNECT channel CANNOT be reused across
+different client sessions. Relay-side reuse works for PLAIN HTTP (tinyproxy keep-alive) but CONNECT
+churn must fall via (a) on-demand/low-churn warm pool and (b) client-side keep-alive. Also a ~60x perf
+lever: 13 MB/s single long-lived vs ~200 KB/s per-connection (likely the real cause of the earlier
+"slow download"). Full-redesign handed to Fable workflow relay-multiplex-redesign.
