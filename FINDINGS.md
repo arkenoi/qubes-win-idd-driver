@@ -13748,3 +13748,30 @@ different client sessions. Relay-side reuse works for PLAIN HTTP (tinyproxy keep
 churn must fall via (a) on-demand/low-churn warm pool and (b) client-side keep-alive. Also a ~60x perf
 lever: 13 MB/s single long-lived vs ~200 KB/s per-connection (likely the real cause of the earlier
 "slow download"). Full-redesign handed to Fable workflow relay-multiplex-redesign.
+
+## 2026-08-20 — relay redesign integrated + tested; churn instrument corrected a false premise
+
+Integrated the Fable-workflow redesign into guest/qubes-updates-relay.cs (+ updater client keep-alive),
+with the verify-phase must-fixes folded in (POOL stat in both branches, OpenChannel late-accept close,
+TakeWarm stale-closes deferred to the filler's paced _toClose drain). VALIDATED on-guest:
+ - Compiles clean with in-box csc (CS4014 on the fire-and-forget late-accept close suppressed by pragma).
+ - relay-build-smoke.ps1: ok=true (compile + listener bind + connect-back/token handshake). (Fixed the
+   smoke's stale connect_back check: it grepped 'CONN token=' which only fires on a CONNECT *error*; now
+   checks relay-handler.log for HANDLER lines.)
+ - Functional: a live -Action scan works through the new relay.
+ - Demand-gated DRAIN mechanism proven: new relay warms 8, then at ~16 s idle logs "POOL drain n=8 idle"
+   and holds ZERO channels/grants - the old relay never drained.
+
+HONEST CORRECTION from the new opened= instrument (this is why we measure): the first churn numbers
+(opened=317 in 60 s) were CONTAMINATED by 3 leftover relay-soak.ps1 processes (pids 6916/6092/2520) that
+survived an earlier `schtasks /delete` and hammered the relay ~5/s for ~1.5 h (450 PLAIN 4-byte GETs to
+my soak URLs). Killed. A CLEAN scan then showed CONN=0 PLAIN=0 - a warm-cache scan makes ~ZERO relay
+requests. So routine operation is LOW-churn; the "~4600 idle cycles" premise is overstated (the relay is
+also torn down between passes by Remove-Proxy, and the old filler never refills a full pool, so an idle
+old relay holds channels rather than churning them). NET: the redesign is a sound improvement
+(drain-during-in-pass-gaps + Poll-accurate dead detection avoiding failed-channel retries + client
+keep-alive + leak fixes + the opened= instrument), but it is a churn REDUCTION at the margins, NOT the
+dramatic elimination the premise implied. The wedge trigger is ACTIVE per-request churn during a genuine
+high-request phase (a real download / long pass), which the opened= instrument now makes measurable - the
+DECISIVE next test is opened= across a real cold download/install pass, plus the armed NMI dump if the
+wedge recurs under real load.
