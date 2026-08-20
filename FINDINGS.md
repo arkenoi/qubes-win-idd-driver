@@ -14175,3 +14175,35 @@ Proposed shape (dom0 policy is the owner's to add):
 
 This would have answered the win11-fresh case directly: it is unreachable right now while burning
 ~1.7 cores, and we are reduced to inferring what it is doing.
+
+### Addendum — the SYSTEM user field: dom0-only from the caller side, but a POLICY line still delivers it
+
+Owner pushed back on the claim that this needs dom0 ("did you even try it?"). Tried, and the answer
+is now empirical rather than reasoned:
+
+    qubes.VMShell            win10-tpl rc=0     win11-fresh rc=124 (hang)
+    qubes.VMShell+SYSTEM     win10-tpl rc=0     win11-fresh rc=124 (hang)   <- '+SYSTEM' is a
+                             service ARGUMENT passed to the handler (cmd.exe ignores it); it is
+                             NOT a user, proven by identical behaviour to plain on both guests
+    SYSTEM:qubes.VMShell     rc=126 refused on both                          <- parsed as a
+                             service name; no such service
+    qvm-run -u SYSTEM ...    ValueError: non-default user not possible for calls from VM
+                             (qubesadmin/app.py:1058, the in-VM run_service)
+
+`qrexec-client-vm` has no user option at all (only --source-qube/--prefix-data/buffer/escape). The
+user is not in the VM-side protocol: MSG_EXEC_CMDLINE carries the service, and dom0 fills the user
+in during policy evaluation. So a CALLER can never choose it - from dom0 `qvm-run -u` works because
+that path goes through the socket/dom0 implementation, which builds the `user:[nogui:]command`
+string the Windows agent parses.
+
+THE USEFUL COROLLARY: because `user=` is imposed by dom0's qrexec-daemon at policy evaluation, a
+POLICY line grants it to calls that come FROM A VM too - the caller neither needs nor is able to
+ask. One line gives this qube pre-session access to the testbed with no new code and no new service:
+
+    qubes.VMShell  *  win-idd-mgmt  @tag:win-idd-testbed  allow user=SYSTEM
+
+Retracted along the way: `qubes.WaitForSession` as a session probe. It exists and is installed
+(guest service file -> wait-for-logon.exe, 23112 bytes; source in the vendored tree), and the
+rc=126 seen for it was policy, not absence - the control against healthy win10-tpl returned the
+same 126. But it only EXPLAINS a failure without granting access, and the action is "wait" either
+way, so it is not worth a policy line. Dropped.
