@@ -13469,3 +13469,48 @@ proxy to the DO edge - the host is reachable; only DO-itself-live can satisfy th
 Vector B is viable at the network layer with NO dom0/allowlist change; the whole problem reduces to making
 Windows' own DO run (NLA green) and use the WinHTTP proxy. (Corollary: harvesting express URLs to fetch
 them ourselves is doubly dead - not only 8496 hash-matched deltas to assemble, but the URLs expire.)
+
+## 2026-08-20 — RETRACTIONS + the verified fix (Fable workflow routeless-wu-fix, 13 agents, survivors: NONE)
+
+The workflow adversarially refuted EVERY gate-defeating vector and, crucially, corrected two framings I
+recorded earlier today. Retracting them loudly:
+
+- **RETRACT "almost certainly the checkpoint-cumulative transition."** WRONG. Checkpoint cumulatives
+  exist ONLY on Win11 24H2+/Server 2025; **Win10 22H2 LCUs are monolithic** - there is no checkpoint
+  baseline to fetch. KB5071959's catalog absence is not a checkpoint artifact.
+- **RETRACT "the fix is the DO/NLA path" / "Vector B is viable, flip NLA."** WRONG as the fix. NLA/NCSI
+  flipping is non-deterministic ("usually works" - forbidden by the no-intermittent rule), NLM credits
+  the wrong interface for a loopback adapter (measured IPv4Connectivity=NoTraffic, IsNetworkAlive=false),
+  and the loopback-adapter approach is a security-weakening deception the reviewer flagged and CLAUDE.md
+  forbids. The DO CDN being reachable through the proxy (still true) does NOT make DO runnable routeless.
+  Two workflow subagents were flagged for proposing forbidden approaches (a reverse-engineered MSA auth
+  ticket; the fake loopback adapter) - NEITHER is acted on.
+
+**What KB5071959 actually is (verified in the catalog, scratchpad/kb-check.ps1):** a 2025-11-11 WU-ONLY
+targeted out-of-band = 19045.6466 (the October CU content, ALREADY on this guest as KB5066791 rc=3010)
+plus the consumer-ESU enrollment-wizard fix, offered by WU delivery ONLY to non-ESU-enrolled consumer
+devices, and published ONLY as express/PSF DO streams (0 catalog candidates). It carries no new security
+content. **The real 2025-11 security CU is KB5068781 (19045.6575): CONFIRMED catalog-published as a
+monolithic windows10.0-kb5068781-x64_*.msu (9 candidates) - the EXISTING Resolve-Catalog path fetches it
+today.** Its only gate is CBS **ESU entitlement** at install time (a licensing/owner decision, offline
+MAK), NOT transport. So the "routeless gap" decomposes into (a) a phantom WU-only OOB → classify
+terminally, never chase; (b) an ESU entitlement ceiling → owner licensing decision, after which the
+existing catalog+DISM path serves the CU.
+
+**The verified, constraint-clean fix (implemented in guest/qubes-windows-update.ps1, this session):**
+a scan-time **content-class router**. Get-WuContentClass($u) classifies each offered update by its
+DownloadContents shape (proven separable by dc-probe.ps1): SELF-CONTAINED (one static
+download.windowsupdate.com URL, no query) → Install-SelfContained fetches via the existing Fetch-Msu
+through 127.0.0.1:8082 and installs NLA-free (.exe run + verified BY EFFECT for Defender defs/MSRT;
+Add-PackageCompat for .msu; a payload .cab without update.mum FAILS LOUDLY, never DISM'd - the Error-13
+class). EXPRESS/UUP (tlu.dl.delivery.mp.microsoft.com filestreamingservice, KB5071959-class) → terminal
+status 'wu-only-express' + a stable St.esu field on 19045, NEVER the DO/BITS path. The NLA-gated
+Install-ViaWU (DO/BITS) rung is now gated behind an actual default route (Test-HasDefaultRoute) or
+QUBES_UPDATES_ALLOW_WU_NATIVE=1 - netvm-free guests never enter it, so the phantom 0x80240022 failures
+stop. Self-contained install (Defender defs/MSRT) is the class that failed EVERY pass before - the router
+is what fixes the real, recurring failure. Test-Msu extended to accept MZ (exe). Parses clean (PARSE-OK).
+
+Deferred (separate, UNPROVEN without a test image): the Win11-only latent sibling-checkpoint-drop bug at
+the msu filter (~line 1026-1043) the checkpoint vector exposed - to be fixed + defect-reintroduced-tested
+only when a pre-checkpoint 26100 image exists. Not touched now (changing the WORKING Win11 path untested
+is the greater risk).

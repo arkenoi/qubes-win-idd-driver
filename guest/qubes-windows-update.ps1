@@ -208,6 +208,41 @@ function Report-Availability($count){
   catch { Log "qubes.NotifyUpdates report failed: $($_.Exception.Message)" }
 }
 
+# Classify an offered IUpdate by the SHAPE of its published download content, WITHOUT a network
+# round-trip, so the router can decide whether it is installable NLA-free. Proven separable on live
+# scan data (scratchpad/dc-probe.ps1, 2026-08-20): self-contained updates carry a static
+# download.windowsupdate.com URL with no query string (Defender mpam-fe.exe, MSRT, SSU, .NET .cab);
+# express/UUP cumulatives (KB5071959) carry thousands of time-signed
+# tlu.dl.delivery.mp.microsoft.com/filestreamingservice delta streams that ONLY Delivery Optimization
+# can assemble - and DO refuses routeless (measured 0x80D03805), so those are terminally classified,
+# not chased. Static WINS if any static URL exists; the walk is bounded (a self-contained payload
+# appears in the first handful) so an express update's 8496 streams are never enumerated.
+function Get-WuContentClass($u){
+  $static=@(); $expressSeen=$false; $total=0
+  $items=@($u); try{ $items += @($u.BundledUpdates) }catch{}
+  foreach($b in $items){
+    $dcc=$null; try{ $dcc=$b.DownloadContents }catch{}
+    if(-not $dcc){ continue }
+    $n=0
+    foreach($dc in $dcc){
+      $n++; $total++
+      $url=$null; try{ $url=$dc.DownloadUrl }catch{}
+      if($url){
+        if($url -match 'filestreamingservice|tlu\.dl\.delivery\.mp\.microsoft\.com'){ $expressSeen=$true }
+        else{
+          $isDelta=$false; try{ $isDelta=[bool]$dc.IsDeltaCompressedContent }catch{}
+          if((-not $isDelta) -and $url -match '^https?://[^/]*download\.windowsupdate\.com/' -and $url -notmatch '\?'){ $static += $url }
+        }
+      }
+      if($n -ge 64){ break }
+    }
+    if($static.Count -gt 0 -and $expressSeen){ break }
+  }
+  if($static.Count -gt 0){ return @{ class='self-contained'; urls=@($static | Sort-Object -Unique) } }
+  if($expressSeen -or $total -gt 50){ return @{ class='express'; urls=@() } }
+  return @{ class='none'; urls=@() }
+}
+
 function Get-Available {
   $s=New-Object -ComObject Microsoft.Update.Session
   $se=$s.CreateUpdateSearcher(); $se.ServerSelection=2; $se.Online=$true
@@ -215,7 +250,8 @@ function Get-Available {
   $out=@()
   foreach($u in $r.Updates){
     $kb=@($u.KBArticleIDs)|Select-Object -First 1; $kb= if($kb){"KB$kb"}else{'(no KB)'}
-    $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($u.MaxDownloadSize/1MB,1); downloaded=[bool]$u.IsDownloaded }
+    $cls = Get-WuContentClass $u    # content class + any static URLs, computed while the IUpdate is live
+    $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($u.MaxDownloadSize/1MB,1); downloaded=[bool]$u.IsDownloaded; content_class=$cls.class; direct_urls=@($cls.urls) }
   }
   return ,$out
 }
@@ -499,8 +535,12 @@ function Test-Msu($path, $expect) {
   # and keep the check only for what it is actually good at: catching an HTML error page.
   $isCab = ($magic[0] -eq 0x4D -and $magic[1] -eq 0x53 -and $magic[2] -eq 0x43 -and $magic[3] -eq 0x46)
   $isWim = ($magic[0] -eq 0x4D -and $magic[1] -eq 0x53 -and $magic[2] -eq 0x57 -and $magic[3] -eq 0x49)
-  if (-not ($isCab -or $isWim)) {
-    Log "  VERIFY: $([IO.Path]::GetFileName($path)) is neither MSCF nor MSWIM - discarding"
+  # A self-contained WU update can also be an executable (Defender mpam-fe.exe, MSRT
+  # windows-kb890830-*.exe) - a valid PE starts 'MZ' (4D 5A). Accept it: an HTML error page still
+  # begins '<' (0x3C), so this keeps catching garbage while letting Install-SelfContained fetch exes.
+  $isExe = ($magic[0] -eq 0x4D -and $magic[1] -eq 0x5A)
+  if (-not ($isCab -or $isWim -or $isExe)) {
+    Log "  VERIFY: $([IO.Path]::GetFileName($path)) is not MSCF/MSWIM/MZ - discarding"
     return 'bad'          # an HTML error page or garbage: resuming it can only make it worse
   }
   if ($expect -gt 0 -and $len -lt $expect) { return 'short' }   # incomplete: RESUME, do not delete
@@ -714,6 +754,69 @@ function Add-PackageCompat($f){
   if($worst -ne 0){ return $worst }
   if($staged){ return 3010 }
   return 0
+}
+
+# Does this guest have a REAL default route (i.e. a netvm)? Loopback/blackhole adapters do not count.
+# Templates have none by design; only netvm-attached standalones do. Used to gate the DO/BITS-based
+# Install-ViaWU rung, which fails routeless (measured DO 0x80D03805 / BITS 0x80200010) and must never
+# run on a netvm-free guest where it only produces phantom failures.
+function Test-HasDefaultRoute {
+  try {
+    return @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -EA SilentlyContinue |
+             Where-Object { $_.InterfaceAlias -notmatch 'Loopback' }).Count -gt 0
+  } catch { return $false }
+}
+
+# Best-effort ESU (Extended Security Updates) entitlement status, for the honesty gate on post-EOS
+# Win10 (19045). Not load-bearing - purely informational for dom0 - so it never throws.
+function Get-EsuStatus {
+  try {
+    $esu = @(Get-CimInstance -ClassName SoftwareLicensingProduct -EA SilentlyContinue |
+             Where-Object { $_.Name -match 'ESU|Extended Security' -and $_.LicenseStatus -eq 1 })
+    if ($esu.Count -gt 0) { return 'entitled' }
+    return 'not-enrolled'
+  } catch { return 'unknown' }
+}
+
+# Install a KB that Windows Update offers as a self-contained STATIC file (Defender defs and MSRT ship
+# as .exe; some updates as .msu), fetched through the proxy and installed with NO Delivery Optimization
+# / BITS / NLA. This is the routeless-clean replacement for handing these KBs to the DO-gated
+# Install-ViaWU, the class that actually failed every pass on a netvm-free guest. Proven mechanism:
+# scan carries the static URL (dc-probe.ps1), Fetch-Msu pulls it through 127.0.0.1:8082 (harvest-proof.ps1).
+function Install-SelfContained($kb,$urls){
+  $dir = Join-Path $WorkDir ("wu-direct\" + $kb)
+  New-Item -ItemType Directory -Force $dir | Out-Null
+  $rows=@()
+  foreach($url in @($urls)){
+    $name = if($url -match '/([^/?]+\.(?:msu|exe|cab))(\?|$)'){ $Matches[1] } else { "$kb.bin" }
+    $dst = Join-Path $dir $name
+    if(-not (Fetch-Msu $url $dst $kb)){ $rows += [ordered]@{ kb=$kb; file=$name; rc='fetch-failed'; ok=$false }; continue }
+    $ext = [IO.Path]::GetExtension($name).ToLower()
+    if($ext -eq '.exe'){
+      # Verify BY EFFECT, not by exit code: Defender mpam-fe advances AntivirusSignatureVersion; MSRT
+      # advances HKLM\...\RemovalTools\MRT\Version. rc=0 alone has read as success on a no-op before.
+      $sigBefore=''; $mrtBefore=''
+      try{ $sigBefore=(Get-MpComputerStatus).AntivirusSignatureVersion }catch{}
+      try{ $mrtBefore=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\RemovalTools\MRT' -Name Version -EA SilentlyContinue).Version }catch{}
+      $p = Start-Process $dst -ArgumentList '/q' -Wait -PassThru -WindowStyle Hidden
+      $eff=$false
+      try{ if($sigBefore){ $eff = $eff -or ((Get-MpComputerStatus).AntivirusSignatureVersion -ne $sigBefore) } }catch{}
+      try{ if($name -match 'kb890830'){ $eff = $eff -or ((Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\RemovalTools\MRT' -Name Version -EA SilentlyContinue).Version -ne $mrtBefore) } }catch{}
+      $ok = ($p.ExitCode -eq 0) -or $eff
+      Log ("  $name : exe rc=$($p.ExitCode) verified_by_effect=$eff")
+      $rows += [ordered]@{ kb=$kb; file=$name; rc=$p.ExitCode; ok=$ok; verified_by_effect=$eff }
+    } elseif($ext -eq '.msu'){
+      $rc = Add-PackageCompat $dst
+      Log ("  $name : msu DISM rc=$rc")
+      $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=($rc -in $OK_RC) }
+      if($rc -eq 3010){ $script:St.reboot_needed=$true; $script:StagedThisSession=$true }
+    } else {
+      # A payload .cab lacking update.mum is the Error-13 class (measured KB5066747 ndp481) - never DISM it.
+      Log ("  $name : payload .cab (no update.mum) - not DISM-installable; failing loudly")
+      $rows += [ordered]@{ kb=$kb; file=$name; rc='payload-cab-not-installable'; ok=$false }
+    }
+  }
+  return ,$rows
 }
 
 function Install-Msus($files){
@@ -1003,6 +1106,9 @@ try {
 
   # KBs the catalog cannot serve; handed to the Windows Update installer after the loop.
   $script:WuFallbackKbs = @()
+  # KBs Windows Update publishes ONLY as Delivery-Optimization express streams (KB5071959-class):
+  # not installable on a netvm-free guest, terminally classified, reported honestly after the loop.
+  $script:WuOnlyExpressKbs = @()
   if ($env:QUBES_UPDATES_FAKE_FALLBACK_KB) {
     $script:WuFallbackKbs += $env:QUBES_UPDATES_FAKE_FALLBACK_KB
     Log ("QUBES_UPDATES_FAKE_FALLBACK_KB=" + $env:QUBES_UPDATES_FAKE_FALLBACK_KB + " - pretending that KB needs the Windows Update fallback")
@@ -1084,8 +1190,35 @@ try {
         # reported failed on every pass, leaving dom0 showing updates that never clear.
         # Hand exactly those to WU's own installer after this loop.
         if ($urls.Count -eq 0) {
+          # The catalog has no .msu for this KB. Route by the content class computed at scan time
+          # (Get-WuContentClass) instead of blindly handing it to the DO-gated Install-ViaWU, which
+          # fails routeless. Three outcomes:
+          $cls = $u.content_class
+          $directUrls = @($u.direct_urls)
+          if ($cls -eq 'self-contained' -and $directUrls.Count -gt 0) {
+            # Defender defs / MSRT / SSU published as a static file: fetch through the proxy and
+            # install natively, NLA-free. This is the class that failed EVERY pass before.
+            Log "$($u.kb): not in the catalog, but Windows Update offers it as a self-contained static file - installing directly through the proxy (no DO/BITS/NLA)"
+            $script:St.phase='install'; Save
+            $rows = Install-SelfContained $u.kb $directUrls
+            $ok = @($rows | Where-Object { $_.ok }).Count -gt 0
+            $staged = @($rows | Where-Object { $_.rc -eq 3010 }).Count -gt 0
+            $script:St.result += [ordered]@{ kb=$u.kb; ok=$ok; state=$(if($staged){'staged'}elseif($ok){'installed'}else{'failed'}); files=$rows }
+            Save
+            Log "$($u.kb): self-contained install ok=$ok"
+            continue
+          }
+          if ($cls -eq 'express') {
+            # KB5071959-class: published ONLY as Delivery-Optimization delta streams. Not installable
+            # on a netvm-free guest and it carries no content the catalog CU does not. Classify it
+            # terminally - never chase it into the DO/BITS path that would fail forever.
+            $script:WuOnlyExpressKbs += $u.kb
+            Log "$($u.kb): published only as Delivery-Optimization express/UUP streams - terminally classified (not installable netvm-free, not chased)"
+            continue
+          }
+          # class 'none'/unknown: only a guest that actually has a route may try the WU installer.
           $script:WuFallbackKbs += $u.kb
-          Log "$($u.kb): no .msu in the catalog for the DISM path (this KB ships as .exe or only through Windows Update) - deferring it to the Windows Update installer"
+          Log "$($u.kb): no catalog .msu and no static WU URL - deferring to the Windows Update installer (route permitting)"
           continue
         }
         $script:St.result += [ordered]@{ kb=$u.kb; ok=$false; files=@(); reason=$why }
@@ -1141,6 +1274,23 @@ try {
          " - something is already staged this session and CBS would discard a second one")
     $script:WuFallbackKbs = @()
   }
+  # The Windows Update installer (Install-ViaWU) downloads through Delivery Optimization / BITS, which
+  # REFUSE on a guest with no route (measured DO 0x80D03805 / BITS 0x80200010) - so on a netvm-free
+  # guest this rung only manufactures phantom 0x80240022 failures. Run it ONLY when a real default
+  # route exists (a netvm-attached standalone) or when explicitly forced for diagnosis. On a
+  # netvm-free guest, report these KBs honestly instead of failing into DO/BITS.
+  $canWuNative = (Test-HasDefaultRoute) -or ($env:QUBES_UPDATES_ALLOW_WU_NATIVE -eq '1')
+  if ($Action -in 'install','full' -and $script:WuFallbackKbs.Count -gt 0 -and -not $canWuNative) {
+    $script:WuFallbackKbs = @($script:WuFallbackKbs | Sort-Object -Unique)
+    foreach ($kb in $script:WuFallbackKbs) {
+      $script:St.result += [ordered]@{ kb=$kb; ok=$false; files=@()
+        reason='no catalog .msu and no static Windows Update file; the WU-native (DO/BITS) installer is disabled on a netvm-free guest because it fails routeless' }
+    }
+    Save
+    Log ("Windows Update native installer SKIPPED for " + ($script:WuFallbackKbs -join ',') +
+         " - no default route; DO/BITS would fail routeless (set QUBES_UPDATES_ALLOW_WU_NATIVE=1 to force)")
+    $script:WuFallbackKbs = @()
+  }
   if ($Action -in 'install','full' -and $script:WuFallbackKbs.Count -gt 0) {
     $script:WuFallbackKbs = @($script:WuFallbackKbs | Sort-Object -Unique)
     Log ("Windows Update fallback for " + ($script:WuFallbackKbs -join ',') + " (no .msu for the DISM path)")
@@ -1168,6 +1318,24 @@ try {
       }
       Save
     }
+  }
+
+  # Terminal honesty gate for express-only KBs (KB5071959-class). These are published only as
+  # Delivery-Optimization delta streams and are not installable on a netvm-free guest by ANY path -
+  # so report them once, deterministically, as a fixed ceiling, instead of failing them forever. On
+  # post-EOS Win10 (19045) the underlying reason is the ESU entitlement gate at CBS install time
+  # (the real Nov CU, KB5068781, IS in the catalog and installs via the existing path ONCE entitled);
+  # surface that as a stable status so dom0 sees the ceiling rather than a phantom transport failure.
+  if ($Action -in 'install','full' -and $script:WuOnlyExpressKbs.Count -gt 0) {
+    $script:WuOnlyExpressKbs = @($script:WuOnlyExpressKbs | Sort-Object -Unique)
+    foreach ($kb in $script:WuOnlyExpressKbs) {
+      $script:St.result += [ordered]@{ kb=$kb; ok=$false
+        reason='wu-only-express: Windows Update publishes this KB only as Delivery-Optimization delta streams; not installable on a netvm-free guest, and it carries no security content the catalog cumulative does not' }
+    }
+    if ("$OsBuild" -eq '19045') { $script:St.esu = Get-EsuStatus }
+    Save
+    Log ("wu-only-express (terminally classified, not chased): " + ($script:WuOnlyExpressKbs -join ',') +
+         $(if($script:St.esu){ " ; ESU=$($script:St.esu)" }else{ '' }))
   }
 
   # Re-report availability at the END of an install pass, so dom0's "updates available" marker
