@@ -13675,3 +13675,45 @@ NET: no offered update reads as a failure or behaves intermittently. The ONE rem
 the stack is the relay warm-channel churn (FINDINGS #1) - it makes large fetches intermittently time out;
 the Fetch-Msu 14-attempt+resume bound makes downloads eventually complete, but the underlying churn needs
 the dom0 NMI dump to nail (ESCALATED, unchanged).
+
+## 2026-08-20 — ESCALATION to owner: capture the relay-churn wedge (dom0 NMI / xenctx)
+
+WHAT: intermittent whole-guest wedge (qrexec dies, dom0 windows freeze) during a pass, correlated with
+the relay's per-fetch vchan churn. Suspected class (NMI-era note): a grant-revoke SPIN in the Windows Xen
+PV drivers (xenbus.sys / xeniface.sys) - the relay opens+closes a qrexec/vchan per fetch (warm-channel-
+used-once), each carrying grant permit/revoke on the ring buffers; under churn a revoke can spin waiting
+for dom0's backend to unmap the grant. Fetch-Msu's 14-attempt+resume bounds the download impact but does
+NOT fix the underlying race. NEEDS DOM0: I cannot inject an NMI, read the guest's kernel stack, or dump the
+grant table from the dev qube.
+
+REPRO: run the updater's large-fetch path (-Action full with a big .msu, or a relay soak that churns the
+warm channel) until the guest goes unresponsive - qrexec dead; check `xl vcpu-list <domid>` (a spinning
+vcpu shows state r/running and pegged; a hard block shows b).
+
+CAPTURE (dom0), best -> coarsest:
+
+A. LIVE KERNEL DEBUGGER (definitive, symbolized stack). Before repro, in the guest:
+     bcdedit /debug on
+     bcdedit /dbgsettings serial debugport:1 baudrate:115200   (or a named-pipe/Xen console transport)
+   Expose the guest's debug serial to a pipe (qvm-prefs/xl serial), attach WinDbg from dom0/another qube,
+   reproduce the wedge, break in -> `k` / `!stacks 2` / `!running` -> the exact spinning stack. Load the
+   Xen PV driver PDBs (xenbus/xeniface/xenvbd/xennet from the QWT PV build) to symbolize.
+
+B. NMI CRASH DUMP. In the guest first: CrashControl configured for a KERNEL (or COMPLETE) dump - HKLM\
+   SYSTEM\CurrentControlSet\Control\CrashControl CrashDumpEnabled=1 (2=kernel/1=complete), a page file /
+   DedicatedDumpFile large enough; on Win10 a hardware NMI bugchecks automatically (0x80 NMI_HARDWARE_
+   FAILURE) - legacy NMICrashDump=1 only matters pre-Win8. Reproduce the wedge, then from dom0:
+     xl trigger <domid> nmi          # inject NMI into the guest -> bugcheck -> memory.dmp
+   Analyze the dmp in WinDbg: `!analyze -v`, `k`, look for the gnttab revoke / XcGnttab* frame spinning.
+
+C. XENCTX (works on a HARD freeze that won't take the NMI - reads guest CPU context from the hypervisor,
+   no guest cooperation):
+     xl vcpu-list <domid>
+     xenctx -a <domid>               # all vcpus' registers + IP; sample twice - a fixed RIP = the spin
+     xl debug-keys g ; xl dmesg      # grant-table state: is the guest revoking a grant dom0 still maps?
+   Correlate the pegged RIP to the loaded driver (module base list from a healthy boot) to name the driver.
+   Also capture dom0 `dmesg` during the churn (xen-gntdev / backend unmap errors).
+
+GOAL: a stack (A/B) or a fixed RIP + grant-table state (C) proving the spinning function, so the fix can be
+targeted (e.g. serialize/reuse the vchan instead of per-fetch churn, or fix the revoke-wait). This is the
+last remaining non-determinism in the stack.
