@@ -13885,3 +13885,81 @@ at 4 vCPUs, with the mechanism-level metric the dump handed us:
 State restored 2026-08-20: redesigned relay deployed (37888 / 075B2EEA37D32A1C, mtime 19:55:25); the 4
 `Cap*` relay-soak tasks + WuDefTest/WuFullX test tasks deleted; canonical QubesWindowsUpdate*/autologon/
 network/quiet-desktop tasks kept; guest at 4 vCPUs, baseline churn 0 qrexec-client-vm.
+
+---
+
+## 2026-08-20 — the relay was CUTTING every large response at 16 MB and calling it a 200 (fixed, with a test that fails on the old build)
+
+Started the "relay honesty holes" item and the first one turned out to be considerably worse than the
+audit called it. Not a theoretical hole: measured, from our own logs.
+
+### What was wrong
+
+1. **Truncation sold as success.** `ReadResponse` did `if (buf.Length > MaxVerifyBytes) break;` — it
+   stopped reading at 16 MB and returned what it had; `HandlePlainHttp` then wrote that buffer to the
+   client. Every plain-HTTP body over 16 MB was cut and delivered under the original `200`.
+   The fingerprint was sitting in `agent.log` the whole time, at exact 16 MB multiples:
+       stream ended early at 16   / 32.1 / 48.1 of 75.6 MB
+       stream ended early at 16.1 / 32.1 / 48.1 / 64.2 / 80.2 of 85.2 MB
+   `Fetch-Msu`'s 14-attempt resume ladder has been compensating for OUR OWN CAP. Its comment blaming
+   "the relay intermittently churns its warm channel" is WRONG and is now corrected in place — the
+   churn theory was never the mechanism for these.
+   **Consequence we had not seen:** a file needs ceil(size/16MB) attempts, against a 14-attempt
+   budget — so anything past ~224 MB could never finish. The 776 MB November CU (KB5068781) could
+   not have downloaded through this relay even with ESU entitlement in hand. The ESU question was
+   never the only thing standing between us and that CU.
+2. **The function contradicted its own contract.** Its header comment reads "Nothing is written to
+   the client until a complete response is in hand, so a short body is never handed to Windows as if
+   it were the file" — and then the code wrote `best` whenever it held any bytes at all.
+3. **Chunked replies were logged `complete=False`.** Completeness was judged only from
+   Content-Length, so every chunked response was a false negative — and the updater's give-up regex
+   counts `complete=False`, meaning a genuine 0-update scan overlapping a chunked reply could be
+   read as a transport failure (spurious exit 75).
+4. **The give-up guard could not fail.** `Get-RelayGiveUps` returned 0 when the relay log was missing
+   AND 0 when reading it threw; its path was hardcoded to the default while the relay is started with
+   `--log $WorkDir`, so any non-default WorkDir disarmed it silently. It also only fired when the
+   scan found NOTHING, so a partial list — indistinguishable from a complete one — passed as
+   authoritative.
+
+### Fixed
+
+- **Spill instead of truncate.** Past the mark the buffered bytes are written to the client and the
+  rest is pumped straight through. Large bodies arrive whole, memory stays bounded, and a spilled
+  response is marked `Streamed` = COMMITTED: it is never retried and never written twice.
+- **Framing-aware completeness**: Content-Length, chunked terminator (`0\r\n\r\n`), or clean EOF for
+  close-delimited responses (the close IS the framing).
+- **The honesty gate**: a response leaves `HandlePlainHttp` only if complete; otherwise the client
+  receives `502 Bad Gateway` and `PLAIN REFUSED` is logged. Windows is told the fetch failed instead
+  of being handed a short file.
+- **Guard repaired**: `-1` for UNKNOWN (never 0), path derived from `-WorkDir`, counts
+  `PLAIN REFUSED` too, and ANY give-up now makes the scan suspect and forces a rescan. Empty+suspect
+  still exits 75; non-empty+suspect is reported as `SCAN PARTIAL` — the count is a lower bound, not
+  the whole truth.
+
+### The instrument, and proof it can fail
+
+`qubes-updates-relay.exe --selftest` runs 8 assertions over the framing contract against canned
+streams (no network, no qrexec, seconds to run). Per the CLAUDE.md rule that a check counts as
+evidence only once it has been SEEN to fail, both defects were deliberately re-introduced and the
+same suite run against that build:
+
+    fixed build : 8/8 PASS,  exit 0
+    defect build: 6 FAIL,    exit 1
+        FAIL large: body delivered whole (16842707/20971520)   <- the 16MB cut, reproduced exactly
+        FAIL large: client received the whole response (0/20971565)
+        FAIL large: spilled to client / reported complete
+        FAIL chunked: terminated reads complete
+        FAIL close-delimited: complete on EOF
+
+One assertion was thrown away for being useless: "body > 16MB" PASSED on the truncating build, which
+reads one 64 KB chunk past the mark before breaking. It is now an exact whole-response comparison.
+
+Deployed on win10-tpl: 43008 bytes, sha256 prefix 2BD44709563F753C; compile+smoke green
+(listener_bound, connect_back). NOT yet rolled out to win10-clean / win11-tpl / win11-fresh — that
+fleet half-deployment is still open, and now matters more than it did.
+
+### Not done here
+
+The truncation is fixed, but nothing has yet re-run a real large download end to end through the new
+build to watch the resume ladder disappear (expected: one attempt, no "stream ended early"). That is
+the acceptance check for this fix and it needs a live fetch.
