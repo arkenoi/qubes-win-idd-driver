@@ -13565,3 +13565,19 @@ self-contained install SUCCEEDED end-to-end, NLA-free:
 So the content-class router now has all four behaviours demonstrated on the real guest: (1) zero
 DO/BITS phantom failures, (2) correct classification of all offered updates, (3) express/Defender
 terminally classified (honest, not chased), (4) a genuine self-contained update INSTALLED NLA-free.
+
+## 2026-08-20 — defect reproduced (old WU-native path) + honest note on the code check
+
+Ran `-Action wuinstall` (pure Install-ViaWU on all offered updates, bypassing the new router - the OLD
+behaviour) on netvm-free win10-tpl: it selected 5 updates, logged "downloading 5 update(s) through the
+proxy", then **download ResultCode=4 (orcFailed), HResult 0x8028xxxx, "nothing downloaded - not
+installing"**. So the WU-native/DO path installs NOTHING routeless - the defect is real and reproduced.
+HONEST CORRECTION: my earlier acceptance grep keyed on the SPECIFIC codes 0x80240022/0x80200010/0x80D03805
+and found 0 in the router runs - but this reproduction shows the WU-native failure can surface a DIFFERENT
+DO code (0x8028xxxx here), so "zero of those three codes" is an imperfect proxy for "no routeless-download
+failure". The load-bearing evidence is the POSITIVE/NEGATIVE PAIR, not the code grep:
+  - DEFECT PATH (-Action wuinstall): installs NOTHING (ResultCode=4).
+  - FIX PATH (router, -Action full): MSRT INSTALLED NLA-free (rc=0, MRT stamp advanced, effect-verified);
+    express CUs + Defender terminally classified (honest); no DO/BITS engine invoked for them.
+Net: the router demonstrably installs what is installable routeless and honestly reports what is not,
+where the old path failed everything. Acceptance met on substance.
