@@ -14335,3 +14335,35 @@ upstream report than one churn-provoked instance. Out of QWT scope -> reportable
 CLAUDE.md exception, owner approves the exact text. Still NOT provable from inside the guest WHY
 the IPI is not delivered (the guest cannot see Xen vCPU state or the emulated LAPIC); that last
 mile needs dom0/Xen-side instrumentation at repro time.
+
+### A1 audit on win10-tpl — the revoke path is effectively DEAD CODE, but per-boot leakage is only ~9% of exhaustion
+
+Measured from the agent's own logs (`STAGING granted` / `STAGING revoked on exit` /
+`STAGING revoke failed on exit`), `guest/gui-staging-grant-audit.ps1` + `gui-staging-perboot.ps1`:
+
+    gui-agent log files (agent starts) since 08-15 : 3445
+    starts that reached StagingEnsure and granted  :  360   (2,592,000 pages)
+    clean returns  ("STAGING revoked on exit")     :    2      <-- TWO. out of 360.
+    loud leaks     ("revoke failed on exit")       :    0
+    silent leaks   (died before the exit path)     :  358
+
+So `CaptureStagingRevokeOnExit` runs on **0.6%** of agent starts. Its single call site is the tail
+of `WatchForEvents` (main.c), i.e. the graceful return; a kill, a crash or a watchdog respawn never
+reaches it. The revoke code is nearly dead code in practice - the leak is not an edge case, it is
+the normal path.
+
+BUT the honest calibration, because grants die with the domain and only accumulate WITHIN a boot:
+
+    worst single boot : 13 staging grants = 93,600 pages =  9% of the ~144-grant exhaustion estimate
+    typical boot      : 3-6 grants
+
+So on this rig A1 is NOT currently killing guests: it needs ~144 agent restarts inside ONE boot.
+The danger remains a restart STORM (the crash/watchdog-respawn spiral described at FINDINGS 10965),
+not steady-state use. Priority stands, but "imminent qube death" would be an overstatement.
+
+Two side observations worth keeping:
+1. 3445 agent starts but only 360 grants -> ~3085 starts died BEFORE StagingEnsure. That is a lot of
+   very-early agent exits and is not explained; worth its own look.
+2. A1 did NOT cause the win11-fresh hang - no gui-agent ran at all on that boot. The two are
+   unrelated, and the earlier "grant exhaustion -> vchan failure" hypothesis for win11-fresh is
+   withdrawn in favour of the IPI deadlock the dump actually shows.
