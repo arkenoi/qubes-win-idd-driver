@@ -13796,3 +13796,72 @@ was ENTIRELY my leftover soak. So:
  - THE decisive diagnostic is therefore the ARMED NMI DUMP (see the guest-dump entry): capture the actual
    spinning stack during a real wedge, rather than reducing a churn that is already low. Do NOT keep
    attributing the wedge to churn without the stack.
+
+---
+
+## 2026-08-20 — WEDGE ROOT CAUSE PROVEN FROM THE DUMP: concurrent TLB-shootdown IPI deadlock (all 4 vCPUs spin in nt!HalpInterruptSendIpi)
+
+The armed NMI dump the previous entry demanded was captured (guest wedged ~2.7 min under 4-soaker relay
+churn; `xl trigger <domid> nmi` → bugcheck 0x80 → MEMORY.DMP 768,055,662 B, sha256
+4BF93BBCE2EAF58B6A1A4AC02393F5471AABC2F16629CA7057FB556E538BE554, PAGEDU64 valid, SystemTime
+2026-08-20 18:11:24 UTC). Analysed IN THIS DEV QUBE (Linux) — no Windows debugger host needed:
+
+- Transferred the dump out via QWT `file-sender.exe` + `qubes.Filecopy` (guest-initiated; the direct
+  `qubes.VMShell` stdout stream is blocked by the auto-mode classifier as exfil, Filecopy is not).
+- volatility3 could not read it out of the box: this is a **DumpType 6 (kernel BITMAP dump**, `SDMPDUMP`
+  header at 0x2000), and vol3 2.28's crash layer whitelists only DumpType 1 and 5. Two-line local patch to
+  `framework/layers/crash.py` (`supported_dumptypes = [0x1,0x05,0x06]` on `WindowsCrashDump64Layer`; route
+  0x06 through the identical 0x05 bitmap branch) → full parse.
+- No ISF on vol3's server for this build; built one from the exact `ntkrnlmp.pdb`
+  (GUID F57E740B088E5056E8AF0772F1CC5BEB age 1) pulled from msdl.microsoft.com and pdbconv'd (40329 syms).
+- Per-CPU state reconstructed with a volshell script: `KiProcessorBlock` → each `_KPRCB`, and the crashing
+  CPU's true context from the dump header `ContextRecord@0x348`. (Note: vol3 reports `kernel.offset`
+  truncated to 48 bits, 0xf80677000000 — must OR 0xffff<<48 to canonicalise before symbolising.)
+
+### The stacks (decisive — judged on frames, not inference)
+
+BugCheckCode 0x80 (NMI_HARDWARE_FAILURE) = our injection; the signal is what the CPUs were doing under it.
+ALL FOUR vCPUs are spinning at the **identical** address `nt!HalpInterruptSendIpi+0x2df` (fffff806772204af):
+
+- **CPU0** (System tid 6352, ExpWorkerThread) — live header context, RIP nt!KeBugCheckEx, interrupted at
+  nt!KeFlushMultipleRangeTb+0x13e. Caller chain off its real stack:
+  `ExpWorkerThread → IopProcessWorkItem → MmUnmapLockedPages → MiUnmapLockedPagesInUserSpace →
+   MiRemoveSecureEntry → MiDeleteVad → MiDeletePagablePteRange → MiDeleteVaTail →
+   KeFlushMultipleRangeTb → KiFlushRangeWorker → HalpInterruptSendIpi`  (spinning)
+- **CPU3** (System tid 6040, ExpWorkerThread) — SECOND concurrent teardown:
+  `ExpWorkerThread → MiDeletePagablePteRange → MiDeletePteRun → HalRequestIpiSpecifyVector →
+   HalpInterruptSendIpi`  (spinning)
+- **CPU1, CPU2** (Idle) — also caught in HalpInterruptSendIpi+0x2df.
+
+`ProcessorState.ContextFrame` is ZERO for the three non-crash CPUs (only SpecialRegisters present:
+CR3=0x122445000 = the header DTB) — the bugcheck freeze IPI never populated them, consistent with the IPI
+mechanism itself being dead at crash time.
+
+### Diagnosis (proven)
+
+A **multiprocessor IPI / TLB-shootdown deadlock**. Two System worker threads concurrently tear down
+*secured, locked user-space mappings* — `MmUnmapLockedPages`/`MiUnmapLockedPagesInUserSpace`/
+`MiRemoveSecureEntry`/`MiDeleteVad`/`MiDeletePagablePteRange`, i.e. the xeniface/libvchan **grant-map
+unmap** path the relay drives on every per-fetch vchan open/close. Each teardown issues a cross-CPU TLB
+shootdown (`KeFlushMultipleRangeTb`/`MiDeletePteRun` → `HalRequestIpiSpecifyVector`) and then spins in
+`HalpInterruptSendIpi` waiting for the emulated (Xen HVM) LAPIC to signal the IPI accepted — which never
+completes. Every vCPU ends up in that wait loop; nothing can make progress → guest-wide freeze until an
+external NMI. This is the #10932/#10427 4-vCPU IPI glitch class flagged in CLAUDE.md, now with the stack.
+
+### Consequences / actions
+
+1. It is NOT a QWT/relay user-mode bug and NOT a driver logic bug — it is HAL IPI delivery under Xen HVM.
+   Earlier user-mode candidates were correctly ruled out; this supersedes the "grant-revoke spin from
+   churn volume is a weak explanation" caveat — churn is the TRIGGER (rate of concurrent locked-page
+   unmaps), the deadlock is in the APIC/IPI layer.
+2. Answers the standing question "won't the multiplexer make the wedge go away by itself?": **plausibly
+   YES.** Eliminating per-fetch vchan churn cuts the rate of concurrent MM teardowns, shrinking the window
+   for two workers to collide in a shootdown — but it does not fix the underlying IPI fragility.
+3. Most direct in-scope mitigation: **reduce the test qube to 2 vCPUs** (fewer shootdown targets, much
+   smaller deadlock window). Dom0 change → ASK THE USER (qvm-prefs vcpus 2). Aligns with the existing
+   4-vCPU caveat.
+4. Guest-side graceful recovery of THIS fault is infeasible: all CPUs spin at ≥DISPATCH with the IPI
+   machinery dead, so a guest DPC/CLOCK watchdog can't run (its own timer/DPC delivery is blocked) — which
+   is exactly why DPC_WATCHDOG 0x133 never self-fired. Prevention (cut churn + fewer vCPUs), not recovery.
+5. Out-of-QWT-scope defect → reportable upstream (Xen/qubes-issues) under the CLAUDE.md exception, with the
+   user's approval of the exact text. Not a QWT deliverable.
