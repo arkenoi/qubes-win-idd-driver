@@ -389,12 +389,19 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $ws  = "${{ github.workspace }}"
           $env:QB_SCRIPTS = "$ws\deps-src\builderv2\qubesbuilder\plugins\build_windows\scripts"
-          $sln = "$ws\core-agent\vs2022\core-agent-windows.sln"
-          if (-not (Test-Path $sln)) { throw "core-agent solution not found at $sln" }
-          & "${{ steps.vs.outputs.msbuild }}" $sln `
-              -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
-              "-p:TreatWarningAsError=false"
-          if ($LASTEXITCODE -ne 0) { throw "core-agent build failed ($LASTEXITCODE)" }
+          # Build the qrexec projects ONLY, not the whole solution. `relocate-dir` in that solution
+          # includes ntifs.h, a WDK header this runner does not have, and it failed the whole
+          # solution build while every qrexec binary we actually want had already compiled. Nothing
+          # here needs the WDK, so target the projects directly and keep the WDK out of this job.
+          $projects = @('qrexec-wrapper','qrexec-agent','qrexec-client-vm')
+          foreach ($p in $projects) {
+            $proj = "$ws\core-agent\vs2022\$p\$p.vcxproj"
+            if (-not (Test-Path $proj)) { throw "core-agent project not found: $proj" }
+            & "${{ steps.vs.outputs.msbuild }}" $proj `
+                -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
+                "-p:TreatWarningAsError=false"
+            if ($LASTEXITCODE -ne 0) { throw "core-agent: $p build failed ($LASTEXITCODE)" }
+          }
 
       - name: Flag core-agent build result
         if: ${{ always() }}
