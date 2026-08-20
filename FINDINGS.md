@@ -13604,3 +13604,18 @@ signing certs payload). ESCALATION: to run the definitive test, the user (in dom
 hvm, kernel '', netvm None, 80 GiB root) then `mgmt/win-install-babysitter.sh win10-tpl`; after QWT is up,
 stage KB5066791 (catalog-installable at 2965) via the updater, reboot UNPERTURBED, and confirm UBR advances.
 win10-tpl is currently Halted at 19045.6456 (the routeless testbed, clean) after being freed for the install.
+
+## 2026-08-20 — ESU premise: acquisition side of the real Nov CU CONFIRMED (no loopback needed)
+
+`-Action resolve -OnlyKb KB5068781` (dry-run, no install) on netvm-free win10-tpl, through the proxy:
+  catalog pick: 2025-11 Cumulative Update for Windows 10 22H2 x64 (KB5068781)
+  matched on filename family windows10.0 + KB5068781 + x64
+  KB5068781: 1 catalog .msu ; would fetch windows10.0-kb5068781-x64_*.msu = 776.2 MB
+So the EXISTING catalog path FINDS and would fetch the real monolithic Nov security CU (776 MB .msu)
+NLA-free - no Delivery Optimization, no loopback. Combined with the proven fetch+DISM of a 729 MB
+monolithic CU this session (KB5066791 rc=3010), the ONLY unproven step is the CBS ESU-entitlement gate
+at install time (owner MAK decision). CONCLUSION: assuming ESU correction, the routeless updater achieves
+a proper end-to-end result WITHOUT the loopback/DO hack - security CUs flow through the existing
+catalog+DISM path; the express-only phantom OOB (KB5071959) carries no security content and is correctly
+classified terminal. To fully close: apply ESU MAK, run the updater, confirm UBR -> 19045.6575 with no
+~96% rollback.
