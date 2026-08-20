@@ -14668,3 +14668,56 @@ NOT changed unilaterally. Options for the owner:
 
 The delta-patch half of the original finding stands unchanged: `am_delta_patch` needs a base and is
 not applicable offline, which was measured (0x80070002 bare and /q).
+
+---
+
+## 2026-08-21 — U15 fix landed in a FORK, and the Linux counterpart is the proof it is a bug
+
+Owner's decision: allowlist both Defender hosts, and fork core-agent-windows.
+
+### How Linux handles the same situation (this is the reference, and the proof)
+
+`qubes-core-qrexec`, `libqrexec/process_io.c` - the loop that owns the child:
+
+    /* React to SIGCHLD */
+    if (*sigchld) {
+        if (local_pid > 0 && waitpid(local_pid, &status, WNOHANG) > 0) {
+            local_status = ...;
+            close_stdin();                       // child exit closes STDIN ONLY
+        }
+    }
+    /* if all done, exit the loop */
+    if (stdin_fd == -1 && stdout_fd == -1 && stderr_fd == -1) {   // ALL streams at EOF
+        if (is_service) {
+            if (!local_pid || local_status >= 0) {
+                send_exit_code(...);             // exit code ONLY here
+                break;
+
+So on Linux the child exiting NEVER triggers the exit code. SIGCHLD records the status and closes
+stdin; `send_exit_code()` runs only once stdin, stdout AND stderr have reached EOF. The gate is
+DATA-driven and carries NO timeout - the exit code is always the last thing on the wire. The file is
+explicit about the priority elsewhere too: "Even if sending fails, still try to read remaining data."
+
+The Windows port kept the ordering COMMENT but replaced the invariant with
+`WaitForMultipleObjects(..., 1000)` that proceeds anyway on timeout. That is the whole defect: an
+invariant downgraded to a one-second hope. Linux accepts the same "a grandchild still holds the write
+end" exposure that the timeout was presumably guarding against.
+
+### What was done
+
+- `core-agent/` added as a submodule of arkenoi/qubes-core-agent-windows (upstream remote = QubesOS),
+  matching the `agent/` layout.
+- Branch `fix/qrexec-wrapper-drain-race`, pushed: the drain wait now has no practical deadline
+  (120 s cap kept purely as a hang backstop), and hitting that cap logs an ERROR that names the
+  transfer as TRUNCATED instead of letting a short body pass as a clean one.
+- Relay allowlist gains `definitionupdates.microsoft.com` (the 203 MB signature package) and
+  `go.microsoft.com` (ONLY to resolve the fwlink redirect that carries the mandatory
+  packageVersion/engineVersion). The comment in the source records that go.microsoft.com is a general
+  REDIRECTOR and therefore the widest entry, and names the two gates that keep it bounded - the
+  positional peer allowlist and the temporal teardown - so a later reader cannot remove them without
+  seeing what they are load-bearing for.
+
+NOT yet done, and not claimed: the fix is not built or run. core-agent-windows needs the QWT build
+toolchain, and no test has exercised it. The next step is to build the fork in CI and re-run the
+byte-loss probe (proxy-probe.cs, sender 30/30 vs guest 20/30) against a wrapper carrying the fix -
+that probe is the control, and it must be seen to go 30/30 before this is called fixed.
