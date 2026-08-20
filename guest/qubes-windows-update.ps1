@@ -587,11 +587,16 @@ function Fetch-Msu($url,$dst,$kb){
   # bytes IT moved rather than crediting itself with an earlier attempt's progress.
   $tStart = Get-Date
   $startLen = if (Test-Path $dst) { (Get-Item $dst).Length } else { 0 }
-  for($a=1;$a -le 8;$a++){
+  # 14 attempts, not 8: the relay intermittently churns its warm channel and a fresh GetResponse can
+  # time out with zero bytes (measured on the 85 MB MSRT self-contained fetch - attempts stalled, then
+  # resumed 16 -> 32 MB). Since each attempt RESUMES from bytes-on-disk, a large file completes across
+  # more attempts even when individual ones abort. GetResponse timeout raised 60->90s to give a slow
+  # relay response more room before aborting an otherwise-good attempt.
+  for($a=1;$a -le 14;$a++){
     $have=0; if(Test-Path $dst){$have=(Get-Item $dst).Length}; $o=$null; $expect=0
     try{
       $req=[System.Net.HttpWebRequest]::Create($url); $req.Proxy=New-Object System.Net.WebProxy($Proxy)
-      $req.Timeout=60000; $req.ReadWriteTimeout=120000
+      $req.Timeout=90000; $req.ReadWriteTimeout=180000
       $asked=$false; if($have -gt 0){ $req.AddRange($have); $asked=$true }
       $resp=$req.GetResponse()
 
