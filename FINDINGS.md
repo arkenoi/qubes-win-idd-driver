@@ -13963,3 +13963,88 @@ fleet half-deployment is still open, and now matters more than it did.
 The truncation is fixed, but nothing has yet re-run a real large download end to end through the new
 build to watch the resume ladder disappear (expected: one attempt, no "stream ended early"). That is
 the acceptance check for this fix and it needs a live fetch.
+
+---
+
+## 2026-08-20 (cont) — three more shipped update/installer defects closed, plus the scan debounce
+
+Continuing the "honesty holes" work. Each of these was code-verified before being touched, and each
+carries a check that has been SEEN to fail with the defect re-introduced.
+
+### U5 — a benign kernel race was RST-denying real Windows Update connections
+
+`PidForLocalPort` SIZES the TCP table with one `GetExtendedTcpTable` call and FETCHES it with a
+second. Any process opening a socket in between makes the table grow, the fetch fails with
+ERROR_INSUFFICIENT_BUFFER, and the function returned -1. The caller reads -1 as "not an update
+process" and answers with an RST (SO_LINGER 0) - so a LEGITIMATE update connection was denied at
+random and Windows concluded the qube had no internet. Nondeterminism of exactly the kind the owner
+ruled unacceptable, and invisible: the deny log said the same thing it says for a real policy
+refusal. Now: size+fetch in a retry loop with 16 KB of slack; still FAIL-CLOSED, but a lookup that
+never completes returns a distinct value and logs `pid-lookup-failed(port N)` instead of
+masquerading as a verdict about a known process.
+
+### U4 — Sync-Revocation pointed the OS root store at an EMPTY mirror
+
+On a pristine guest both CTL fetches fail. The code logged "keeping existing copy" - when there was
+nothing to keep - and then unconditionally set `RootDirURL` to the local mirror. Repointing the OS
+root-store updater at an empty directory is WORSE than leaving it alone: chain building then finds
+no CTL at all and fails 0x80072F8F, which is the very error this function exists to prevent, while
+its own log line claimed success. Now the message distinguishes "keeping the existing copy" from
+"and there is NO existing copy"; `RootDirURL` is set only when BOTH core lists (authroot,
+disallowedcert) are present; otherwise our pointer is REMOVED - so a half-built mirror from an
+earlier run cannot keep poisoning validation - and the failure is logged as an ERROR that names the
+0x80072F8F consequence. Partial-but-usable (pinrules missing) still repoints, with a WARN.
+
+### B2 — a manual `install.cmd /noidd` activated the IDD anyway
+
+The install is two stages with a reboot between. Under `-Auto` the resume task carries the chosen
+switches on its command line; a MANUAL install carried NOTHING. Stage 2 therefore started from
+defaults - and the IddCx driver is activated BY DEFAULT - so `/noidd` was accepted, acknowledged,
+and then silently discarded across the reboot, giving the user the exact opposite of the request.
+Stage 1's own closing message even told them to re-run the script bare.
+Fixed by recording stage 1's switches to `C:\qwt-improved-stage1.json` and restoring in stage 2 any
+the caller did not pass explicitly (an explicit argument still wins, so changing your mind works).
+The file is removed when the install completes, so it cannot leak into a later run. The stage-1
+message now states that the switches are remembered.
+
+### U3 — debouncing the automatic scan (and ONLY the automatic scan)
+
+The global mutex prevents two passes running AT ONCE and does nothing about one starting the moment
+another finished - which happens routinely (dom0 drives an install; the 6-hourly scan fires minutes
+later). Each pass costs a full WU scan plus a proxy/relay teardown and rebuild, and after the NMI
+dump that churn is understood to be the wedge TRIGGER, so a redundant pass is a stability risk and
+not just wasted minutes.
+Kept deliberately narrow, because dropping a pass dom0 asked for would be a worse bug than the one
+being fixed: only `-Scheduled` passes may be skipped (that switch belongs to the scan task alone);
+the window runs from the last COMPLETED pass of any kind; a completion stamp in the FUTURE is not
+trusted; `QUBES_UPDATES_DEBOUNCE_MIN=0` disables it (default 30 min).
+`Complete-Pass` now replaces `phase=done; Save` at both completion sites - `Save` also runs on every
+progress tick, so its `ts` means "last activity" and reading THAT would let a long download suppress
+the scan that should follow it.
+
+### Instruments (all validated by deliberate defect re-introduction)
+
+- `qubes-updates-relay.exe --selftest` - 8/8 on the fixed build; 6 FAIL with the truncation and
+  Content-Length-only completeness restored.
+- `guest/wu-debounce-tests.ps1` - 5 cases, no network and no real pass: the test HOLDS the global
+  mutex so a non-debounced run exits with a recognisably different message. All 5 pass; with the
+  debounce block removed case A flips to false while the four "must not skip" cases stay true.
+- PowerShell parse check on both scripts: 0 errors.
+
+### Fleet state after this work — one FAILURE, recorded as a failure
+
+Rollout of the relay+updater (`guest/deploy-relay-fix.ps1`, which installs BOTH files and then runs
+the relay's own selftest as its acceptance gate):
+
+    win10-tpl    ok=true   selftest 8/8   scan task retrofitted with -Scheduled
+    win10-clean  ok=true   selftest 8/8
+    win11-tpl    ok=true   selftest 8/8   (its updater was an older build; now converged)
+    win11-fresh  EMPTY RESULT - the deploy produced no output at all. NOT deployed, NOT verified.
+                 Not recorded as a pass. Cause unknown; it took ~10 min just to push the files,
+                 which is itself unlike the others. To investigate.
+
+Two open consequences to keep visible:
+1. The scan tasks on win10-clean / win11-tpl / win11-fresh still lack `-Scheduled`, so the debounce
+   is INERT there until `wu-task-add-scheduled.ps1` is run on them (or the agent is reinstalled).
+2. Still no live large-download acceptance run for the truncation fix - the check that the resume
+   ladder disappears (one attempt, no "stream ended early") has not been done.
