@@ -13447,3 +13447,14 @@ returns 6 updates; I dumped each IUpdate's DownloadContents. Ground truth (scrat
   or (C) for non-template guests only, a temporary netvm. Awaiting the workflow synthesis to pick.
 - Correction to the prior entry's framing: the fix is NOT "a checkpoint-aware catalog match" (there is
   no catalog entry to match) and NOT "harvest scan URLs" (they're DO streams). It is the DO/NLA path.
+
+**Hard proof the gate is Delivery Optimization + NLA (scratchpad/nla-probe.ps1):** called WU-native
+`IUpdateDownloader.Download()` routeless on the TINY 838KB KB5001716 (a static update, not express) -
+it FAILED: session `HResult=0x80240022` (WU_E_ALL_UPDATES_FAILED), per-update `HResult=0x80D03805`
+(a Delivery-Optimization error, 0x80D0xxxx range). So WU-native download ALWAYS goes through DO, and DO
+refuses routeless irrespective of size/express-ness - proving the gate is connectivity, not the package.
+NCSI registry (HKLM\...\NetworkConnectivityStatusIndicator) is all DEFAULT/unset -> active probing of
+www.msftconnecttest.com is ON, fails routeless -> NLA reports no-internet -> DO won't start. Therefore
+the express-CU fix must flip NLA to "connected" (NCSI active/passive probe satisfiable through the proxy,
+or a synthetic profile) AND make DO honor the WinHTTP proxy - the exact design the Fable workflow is
+verifying. Any such fix MUST NOT open real egress bypassing dom0's qubes.UpdatesProxy (guest is hostile).
