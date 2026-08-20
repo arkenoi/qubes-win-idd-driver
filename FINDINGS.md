@@ -14448,3 +14448,42 @@ next reader chasing a failure that never happened. It now POLLS for up to 90 s a
 Incidental but important: win11-tpl's console session is `user ... Active`, i.e. **autologon works
 on the TEMPLATE**. The failure is specific to the AppVM (win11-app), which strengthens the case that
 I3 is an AppVM-specific defect rather than anything about the Win11 image.
+
+### U6 (AppVM branch) is BLOCKED BY I3, and I3 is worse than recorded: it is not Win11-specific
+
+Attempted the AppVM cell of the VM-class matrix on both AppVMs. It cannot be run, and the reason is
+itself the finding:
+
+    win11-app  boot 1  console session ConnQ, NO USER  (autologon configured correctly)
+    win11-app  boot 2  console session ConnQ, NO USER  (after the agent refresh)
+    win10-app  boot 1  console session ConnQ, NO USER
+    -> 3/3 across BOTH lineages. I3 was recorded as one lineage and "trigger unidentified";
+       it is not Win11-specific and it is reproducible.
+
+Consequences measured, not assumed:
+  - `qubes.Filecopy` runs as the default USER, so with no session every push into these guests
+    reports `sent 0/3 KBEOF` with rc=0 and delivers NOTHING. Trust the destination, never the code.
+  - On win10-app even `powershell -Command "Write-Output PSOK"` returns nothing over the SYSTEM
+    shell, so the updater never ran: no WorkDir, no status file, no agent.log. The `exit 0` I first
+    reported was meaningless anyway - in cmd, `A & echo %errorlevel%` expands BEFORE A runs.
+  - win11-app additionally lacks `qubesdb-read.exe` (shipped 2026-08-19 to win10-tpl only), and
+    returned "The remote procedure call failed" for tasklist - a degraded guest.
+
+So the honest status of U6 is BLOCKED, not failed: the AppVM branch cannot be exercised on an AppVM
+that never reaches a user session. **I3 must be fixed first**; U6 is downstream of it.
+
+What is NOT the cause (ruled out this session): profiles moved to the private volume
+(ProfilesDirectory is `%SystemDrive%\Users` and C:\Users\user exists), a missing autologon config
+(AutoAdminLogon=1, DefaultUserName=user, DefaultPassword present, AutoLogonCount correctly ABSENT),
+and the template itself (win11-tpl's console session is `user ... Active` - autologon works there).
+
+### The splash question, answered with a measurement
+
+After refreshing win11-tpl's agent to 4cf7588 and rebooting the AppVM (which inherited it - template
+-> AppVM propagation verified, 235,256 bytes):
+
+    win11-app sitting at LogonUI with the CURRENT agent -> windows mapped to dom0: 0
+
+i.e. the fixed agent suppresses the logon screen even in exactly the state that produced the report.
+Caveat stated honestly: the "before" side is the owner's observation, not a count I measured; a
+strict A/B would re-run with the kept `.orig` binary.
