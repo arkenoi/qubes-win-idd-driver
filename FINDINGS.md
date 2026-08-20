@@ -14384,3 +14384,44 @@ win11-fresh got the relay for the first time (its rollout attempt failed earlier
 result; root cause now known - qrexec-wrapper was deadlocked in the IPI wait, so the live pushrun
 had nothing to report through). The deploy now writes its RESULT to a file precisely so a dropped
 connection cannot lose it again.
+
+---
+
+## 2026-08-20 (cont) — the "fullscreen splash is back" report: NOT a regression, plus a stuck AppVM autologon
+
+Owner saw the boot/logon fullscreen splash that was supposed to be gone for good (2026-08-19,
+Mode 1 "unconditionally OFF"). It is not a regression of that fix. Two separate facts, both measured
+on win11-app:
+
+1. **The fix is not deployed there.** `gui-agent.exe` on win11-app is dated **2026-08-11**, 195,072
+   bytes. The LogonUI denial shipped in the AGENT BINARY on 2026-08-19 (agent e2d7356/225058d/
+   4cf7588) and was only ever deployed to win11-fresh. win11-app is an AppVM of win11-tpl and
+   inherits that template's QWT, which predates the fix by eight days. Nothing in that binary can
+   reject LogonUI.
+2. **There is genuinely no user session, so LogonUI is really on screen.**
+       query session -> console, ID 1, state ConnQ, NO USERNAME  (steady 90+ s)
+       zero Winlogon events for THIS boot (the Winlogon lines in the log belong to the TEMPLATE's
+       last run at 23:08 - an AppVM inherits the template's event log along with its root volume)
+   Autologon is configured CORRECTLY: AutoAdminLogon=1, DefaultUserName=user, DefaultPassword
+   present, and AutoLogonCount correctly ABSENT (that key is the one that consumes the password and
+   drops the guest to the sign-in screen). It simply does not complete.
+   Ruled out: the profile-moved-to-private-disk theory - ProfilesDirectory is `%SystemDrive%\Users`
+   and C:\Users\user exists, so profiles were never moved on this guest.
+
+So the splash = a real logon screen, shown by an agent too old to hide it. On a guest with the
+current agent, this same condition would be invisible.
+
+Per CLAUDE.md the stuck logon is itself a BUG to report rather than paper over. It matches the open
+I3 "AppVM first-boot no-GUI" item, which until now had "trigger unidentified"; it can now be stated
+as: **the AppVM's autologon does not complete, the console session stays in ConnQ with no user, and
+Winlogon logs nothing for that boot.**
+
+### Two operational consequences discovered here
+
+- **Pushes into a pre-session guest FAIL SILENTLY.** `qubes.Filecopy` still runs as the default USER
+  (the new policy line covers qubes.VMShell only), so with no session a push reports
+  `sent 0/3 KBEOF` and rc=0 while delivering nothing. Every script I pushed to win11-app vanished.
+  Check the destination, never trust the exit code.
+- **Workaround that DOES work pre-session:** `powershell -NoProfile -EncodedCommand <base64 utf-16le>`
+  over the SYSTEM shell. No file needed, and it sidesteps the inline-quote mangling that has broken
+  so many one-liners in this project. This is now the way to introspect a guest with no session.
