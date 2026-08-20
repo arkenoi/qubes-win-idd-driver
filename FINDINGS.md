@@ -13365,3 +13365,32 @@ Ruled out deterministically: the WU COM scan (exit 0x0 at 20:20:42), CBS/TiWorke
 - **"Protect-Autologon runs at EVERY pass end that staged."** FALSE until fix 5 lands — success paths only.
 - **"User-mode was provably frozen."** OVERREACH — the persistence plane was provably dead; execution state awaits the NMI dump.
 - **Anything "intermittent."** There is no such category. Every once-failed path above ends in a fix with a fail-first acceptance test or a named armed probe: relay churn (fix 1 + soak), wedge class (probe: NMI dump), port squat (fix 4), vif reset (catch-firstboot.sh), AppVM no-GUI (A/B clone probe), teardown hang (dom0 escalation). None is excused.
+
+## 2026-08-20 — updater gaps found while chasing the finalize: catalog CU absence + slow download
+
+Investigating why win10-tpl "wouldn't boot" after a cumulative finalize (see prior entries), on a
+FRESHLY-CLONED win10-clean root (healthy, never force-killed, UBR 6456), the updater's -Action full
+surfaced two REAL gaps unrelated to the wedge:
+
+1. **The 2025-11 cumulative (KB5071959) is NOT in the Microsoft Update Catalog.** Proven: catalog
+   Search.aspx?q=KB5066791 (2025-10) -> 12 candidates with real windows10.0-kb5066791-x64_*.cab/.msu
+   files; Search.aspx?q=KB5071959 -> 0 candidates (87858 vs 42048 html bytes; same regex, so not a
+   parser miss). So Resolve-Catalog correctly finds "0 catalog .msu" and DEFERS it to Install-ViaWU,
+   which then FAILS routeless (WU download HResult 0x80240022, "0 of 6 installed") - DO/BITS gate on
+   IsNetworkAlive. NET RESULT: the CURRENT (2025-11) Win10 22H2 cumulative CANNOT be installed on a
+   netvm-free guest by either path. Almost certainly the checkpoint-cumulative transition (Win10 CUs
+   went WU-delivery-only / not standalone catalog .msu). This is a genuine end-to-end FAIL for the
+   latest CU and needs a fix (a checkpoint-aware catalog match, or a WU path that works netvm-free).
+   NOTE: the 2025-10 CU (KB5066791) DID install via catalog+DISM at 2965 this session (rc=3010), so
+   the catalog path works for CUs that ARE published; the gap is specifically the unpublished 2025-11.
+
+2. **Download throughput is ~805 KB/s** (KB5011048 67.8MB/86s; the 729MB KB5066791 held the same
+   rate) vs the workflow's 12.8-15.2 MB/s on win11 - ~15x slower. Hypothesis (not yet isolated):
+   Defender real-time scanning the incoming bytes (MsMpEng sat at 40-95% CPU across the whole
+   download) is CPU-bound on the 4-vCPU guest. Test: re-measure with Defender real-time paused.
+
+Finalize (a)/(b) status: NOT settled zero-residue - the healthy clone is at 6456 (2025-10 already in)
+and the only available CU (2025-11) is uninstallable per #1, so no cumulative could be staged on it.
+Strong prior evidence LEANS (a): win10-clean drained 2965->6456 with its cumulative finalizes
+SUCCEEDING and was NEVER force-killed. The definitive zero-residue test remains a fresh 2965 install
+-> KB5066791 (catalog-installable there) -> finalize.
