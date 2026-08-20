@@ -798,10 +798,12 @@ static class Relay
                 Log(logPath, "CHAN token=" + token + " relay never connected back");
                 // A connect-back that lands AFTER the timeout would orphan the accepted socket (and
                 // its handler) - 'return null' is not an exception, so the catch below never runs.
-                // Close it whenever it eventually arrives.
+                // Close it whenever it eventually arrives. Fire-and-forget by design (CS4014 suppressed).
+#pragma warning disable 4014
                 accept.ContinueWith(delegate(Task<TcpClient> t) {
                     if (t.Status == TaskStatus.RanToCompletion) { try { t.Result.Close(); } catch { } }
                 });
+#pragma warning restore 4014
                 return null;
             }
             relay = accept.Result;
