@@ -14258,3 +14258,80 @@ Capture proposed to the owner (needs dom0 `xl trigger <domid> nmi`). The analysi
 ready and proven: vol3 + the DumpType-6 crash-layer patch + msdl ISF build + the per-CPU walker.
 Caveat recorded: win11-fresh's dump settings were never configured by us and cannot be read while
 it is unreachable, so the capture may come up empty.
+
+---
+
+## 2026-08-20 (cont) — SECOND capture, different guest, different workload: the wedge is NOT relay churn. RETRACTING the churn attribution.
+
+win11-fresh hung for ~2 h (unreachable, ~2.8 cores). Owner injected the NMI; dump pulled and
+analysed here (536.7 MB, sha256 430B9F11…C449 verified against the guest, DumpType 6, bugcheck
+0x80, Win11 26100.1). Symbols built from the matching msdl ntkrnlmp.pdb (GUID
+72C69E726C648BC18257AF38FA78A2F2, 48912 syms).
+
+### What the first (long-timeout) probe already told us
+
+Short 40-60 s probes only ever said "timeout". A 300 s budget produced the REAL error:
+
+    vchan_timeout.c:46: qubes_wait_for_vchan_connection_with_timeout: vchan connection timeout
+    qrexec-agent-data.c:371: handle_data_client: Data vchan connection failed
+
+Control path fine, DATA vchan never came up. The dump explains it exactly (below).
+
+### The stacks
+
+    CPU  PacketBarrier TargetCount IpiFrozen   current thread
+     0        1            1           0       qrexec-wrapper (pid 8960) tid 8964
+     1        0            0           2       System tid 156
+     2        0            0           2       Idle
+     3        0            0           2       System tid 592
+
+  CPU0 interrupted RIP = nt!KiIpiWaitForRequestBarrier+0x2a
+       MiFlushTbList+0x81f <- MiFlushTbAsNeeded+0x246 <- MiCommitPoolMemory / RtlpHpAllocVA /
+       ExAllocatePool2      (an ORDINARY POOL ALLOCATION)
+  CPU1 HalpInterruptSendIpi <- KiIpiSendRequest <- KiFlushRangeWorker <- MiFlushTbList <-
+       MiDeleteVaTail <- MiDeleteVaDirect <- MiDeletePagablePteRange <- MiUnmapContiguousMemory <-
+       MmUnmapIoSpace       (a DRIVER unmapping I/O space - i.e. the Xen PV drivers)
+  CPU3 HalpInterruptSendIpi <- KiIpiSendRequest <- KiFlushRangeWorker <- MiFlushTbList <-
+       MiDeleteVaTail <- MiDeleteVaDirect  (reached via KiDpcInterrupt)
+  CPU2 KiIpiInterrupt
+
+Three CPUs concurrently in TLB-shootdown IPI paths, all waiting; CPU0's barrier never clears
+(PacketBarrier=1, TargetCount=1) - the same signature as the win10-tpl capture.
+
+### Why this matters more than the first capture
+
+**RETRACTED: "per-fetch qrexec/grant process churn is the trigger."** That was inferred from a
+single capture taken under a deliberate 4-soaker relay soak, and it does not survive this one:
+
+  - win11-fresh was NOT running the relay soak, and the relay was not even deployed on it.
+  - CBS.log's last write was 2026-08-19 10:29 - NO servicing during the hung boot. ("Pre-session
+    servicing", my own earlier theory, is dead too.)
+  - No gui-agent log exists for that boot at all -> gui-agent never started, so the A1 staging-grant
+    respawn-loop hypothesis is NOT what happened either (one `STAGING granted 7200 pages` per boot
+    is the normal, expected single grant).
+  - Different Windows build entirely (26100 vs 19045).
+
+The triggers visible here are ORDINARY kernel activity: a pool allocation, VA teardown, and a driver
+unmapping I/O space. Relay churn was simply the fastest way we knew to provoke it - a provocation,
+not the mechanism. The mechanism is Xen HVM IPI / TLB-shootdown delivery under concurrent MM
+operations on a 4-vCPU guest.
+
+Also retracted from the live triage: my "flat CPU = spin" claim. The owner called it correctly -
+sampled deltas were 2.78/2.81/2.87/2.88/2.90/2.87/2.88/2.58/2.68 cores, ~11% variation, which is
+not a flat spin. (The dump shows waiting-with-work, which fits.)
+
+### Now-explained symptom chain for win11-fresh
+
+qrexec-wrapper is spawned -> it deadlocks in the kernel on an IPI barrier during a pool allocation
+-> it never creates the data vchan -> every service call fails with "Data vchan connection failed"
+while the control path keeps answering -> the guest looks half-alive, burns CPU on the waiting
+CPUs, and cannot be entered even as SYSTEM.
+
+### Upstream weight
+
+This is now TWO independent captures, on TWO Windows versions (19045 and 26100), with unrelated
+workloads, showing the same Xen HVM IPI/TLB-shootdown deadlock. That is a materially stronger
+upstream report than one churn-provoked instance. Out of QWT scope -> reportable under the
+CLAUDE.md exception, owner approves the exact text. Still NOT provable from inside the guest WHY
+the IPI is not delivered (the guest cannot see Xen vCPU state or the emulated LAPIC); that last
+mile needs dom0/Xen-side instrumentation at repro time.
