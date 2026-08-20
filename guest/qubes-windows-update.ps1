@@ -86,7 +86,14 @@ if ($Scheduled -and $Action -eq 'scan') {
     if ($debounceMin -gt 0 -and (Test-Path $StatusFile)) {
         try {
             $prev = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json
-            if ($prev.done_ts) {
+            # Only a pass that actually LEFT AN ANSWER may suppress the next scan. Measured on a
+            # real cold boot 2026-08-20: the boot-triggered scan was skipped 9 minutes after a
+            # download pass, finishing in 3 s having written nothing. That is right when the
+            # previous pass reported availability - and wrong when it did not, because the boot
+            # scan is exactly the recovery for a pass whose own rescan failed. Without this the
+            # guest could sit up to a full scan interval with no availability answer for dom0.
+            $prevAnswered = ($prev.PSObject.Properties.Name -contains 'available') -and ($prev.phase -eq 'done')
+            if ($prev.done_ts -and $prevAnswered) {
                 $age = ((Get-Date) - [datetime]$prev.done_ts).TotalMinutes
                 # A negative age means the stamp is in the future (clock moved) - do not trust it
                 # to skip work; run the pass.
