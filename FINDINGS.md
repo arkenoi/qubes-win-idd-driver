@@ -14721,3 +14721,35 @@ NOT yet done, and not claimed: the fix is not built or run. core-agent-windows n
 toolchain, and no test has exercised it. The next step is to build the fork in CI and re-run the
 byte-loss probe (proxy-probe.cs, sender 30/30 vs guest 20/30) against a wrapper carrying the fix -
 that probe is the control, and it must be seen to go 30/30 before this is called fixed.
+
+---
+
+## 2026-08-21 — the fork is wired into CI and BUILDS; two build defects found and fixed on the way
+
+`core-agent/` (arkenoi/qubes-core-agent-windows) now builds in the gui-agent job, which already
+stages the exact dependency set it needs (libvchan, xencontrol, windows-utils, qubesdb-client).
+Artifact `gui-agent-package` from run 32422134646 contains:
+
+    qrexec-wrapper.exe    27,136 bytes   <- carries the U15 drain fix
+    qrexec-agent.exe      33,792 bytes
+    qrexec-client-vm.exe  14,848 bytes   (+ .pdb for each)
+
+Two real defects surfaced, both of the "green build that is not actually building the thing" family:
+
+1. **`relocate-dir` needs the WDK.** Building the whole solution failed on
+   `nt.h: cannot open include file 'ntifs.h'` - AFTER every qrexec binary had already compiled. The
+   qrexec projects need no WDK, so CI now targets the three projects directly and the WDK never
+   enters this job.
+2. **`qwt_version.h` is GENERATED, by exactly one project's PreBuild event** (qrexec-agent's
+   `set-version.ps1`). Building qrexec-wrapper first therefore died on RC1015 for a header that
+   would have existed had the order differed. A build whose success depends on project order is not
+   a build: CI now generates the header up front and asserts it exists.
+
+The `continue-on-error` + explicit annotation added when the step was written paid for itself twice:
+both failures were loud and said in plain words that the U15 fix was NOT in the package, instead of
+disappearing into an otherwise-green run.
+
+STILL NOT CLAIMED AS FIXED: built is not tested. The acceptance for U15 remains the byte-loss probe
+(proxy-probe.cs; control = sender 30/30, guest 20/30) re-run against a wrapper carrying this build,
+and it must reach 30/30. Deploying a replacement qrexec-wrapper.exe also has to be done carefully -
+it is the binary every qrexec call runs through, so a bad swap costs the guest's manageability.
