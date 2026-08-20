@@ -7,8 +7,15 @@
 # Trigger: Microsoft-Windows-NetworkProfile/Operational event 10000 = "network connected",
 # which fires when an interface comes up - including a hot-plugged Xen vif.
 $ErrorActionPreference = 'Stop'
-$exe = 'C:\Program Files\Qubes Tools\bin\network-setup.exe'
-if (-not (Test-Path $exe)) { Write-Output 'ABORT: network-setup.exe not found'; exit 1 }
+# RETIRED: network-setup.exe. The netvm-free priming work (2026-08-19) replaced it with our own
+# applier, which reads /qubes-ip //qubes-netmask //qubes-gateway straight out of qubesdb and applies
+# them by ifIndex - see guest/pvnic-selfprime.ps1, which writes pvnic-boot.ps1 into the bin dir. The
+# stock binary was only ever used because qubesdb reads were (wrongly) believed unavailable, and
+# leaving this task pointed at it means a hot-plugged vif is repaired by the OLD path while every
+# other path uses the new one - two mechanisms writing the same config, which is exactly the kind of
+# split that makes a flow non-deterministic.
+$exe = 'C:\Program Files\Qubes Tools\bin\pvnic-boot.ps1'
+if (-not (Test-Path $exe)) { Write-Output 'ABORT: pvnic-boot.ps1 not found - run pvnic-selfprime.ps1 first'; exit 1 }
 
 $xml = @"
 <?xml version="1.0" encoding="UTF-16"?>
@@ -28,7 +35,7 @@ $xml = @"
     <ExecutionTimeLimit>PT2M</ExecutionTimeLimit>
     <AllowHardTerminate>true</AllowHardTerminate>
   </Settings>
-  <Actions Context="Author"><Exec><Command>"$exe"</Command></Exec></Actions>
+  <Actions Context="Author"><Exec><Command>powershell.exe</Command><Arguments>-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$exe"</Arguments></Exec></Actions>
 </Task>
 "@
 $f = "$env:TEMP\qubes-netauto.xml"

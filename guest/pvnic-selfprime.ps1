@@ -36,11 +36,32 @@ $bindir   = 'C:\Program Files\Qubes Tools\bin'
 $payload  = Join-Path $bindir 'pvnic-boot.ps1'
 $fail = @{}
 
-if (-not (Test-Path (Join-Path $bindir 'network-setup.exe'))) {
+# "Is QWT installed here?" - do NOT sentinel on network-setup.exe. That binary is RETIRED (this
+# applier replaced it), so once it stops shipping, keying off it would abort on a perfectly good
+# install. qrexec-agent.exe is the right sentinel: it is the core of QWT, always present, and
+# nothing we do removes it.
+if (-not (Test-Path (Join-Path $bindir 'qrexec-agent.exe'))) {
     Write-Output 'MARKJSON'
-    [pscustomobject]@{ ok=$false; error='network-setup.exe not found - QWT not installed?' } | ConvertTo-Json -Compress
+    [pscustomobject]@{ ok=$false; error='qrexec-agent.exe not found in the QWT bin dir - QWT not installed?' } | ConvertTo-Json -Compress
     exit 1
 }
+
+# RETIRE the stock network applier. QWT's own "Autostart" value makes QrexecAgent run
+# network-setup.exe at every agent start - which, now that this applier owns the same job, means TWO
+# mechanisms writing the same L3 config at different moments. That is precisely the sort of split
+# that makes a boot non-deterministic, and the stock one runs at the worst possible time (usually
+# before the install has finished). Clear it here, where the replacement is installed, so the
+# hand-over happens in one step rather than leaving both live.
+$qwtKey = 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools'
+try {
+    $auto = (Get-ItemProperty -Path $qwtKey -Name Autostart -EA SilentlyContinue).Autostart
+    if ($auto -and $auto -match 'network-setup\.exe') {
+        Remove-ItemProperty -Path $qwtKey -Name Autostart -EA Stop
+        Write-Output "retired stock autostart: $auto"
+    } elseif ($auto) {
+        Write-Output "left Autostart alone (not network-setup.exe): $auto"
+    }
+} catch { Write-Output "WARNING: could not clear the stock Autostart value: $($_.Exception.Message)" }
 
 # ---------------- per-boot payload (persistent path on the template root) ----------------
 # NOTE on qubesdb: qubesdb VALUE READS work in-process via the client DLL (qdb_open/qdb_read; see
