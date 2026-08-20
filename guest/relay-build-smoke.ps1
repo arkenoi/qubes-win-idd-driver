@@ -47,8 +47,11 @@ try {
 } catch {}
 Start-Sleep -Milliseconds 500
 Stop-Process -Id $listen.Id -Force -EA SilentlyContinue
-$log = Join-Path $work 'qubes-updates-relay.log'
-$connback = $false
-if (Test-Path $log) { $connback = (Select-String -Path $log -Pattern 'CONN token=' -Quiet) }
+# Connect-back proof: the handler log records every channel that completed the connect-back + token
+# handshake (a HANDLER line). The warm pool opens these at startup regardless of the inbound client,
+# so this is the accurate signal. (The old check grepped the relay log for 'CONN token=', which only
+# appears on a CONNECT *error* and never fires when the smoke client sends no request - a false negative.)
+$hlog = Join-Path $work 'relay-handler.log'
+$connback = (Test-Path $hlog) -and (Select-String -Path $hlog -Pattern 'HANDLER token=' -Quiet)
 $out = [ordered]@{ ok = ($bound -and $connback); compiled = (Test-Path $exe); listener_bound = $bound; connect_back = $connback }
 Write-Output ("=== RESULT === " + ($out | ConvertTo-Json -Compress))

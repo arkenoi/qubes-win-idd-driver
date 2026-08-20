@@ -65,15 +65,60 @@ static class Relay
         public DateTime Born;
     }
     static readonly ConcurrentQueue<Ready> _pool = new ConcurrentQueue<Ready>();
+    // Channels TakeWarm found stale/dead go here, NOT closed inline: the filler closes them PACED
+    // (100 ms apart), off the request path. Without this, a sparse-active regime (every request finds
+    // the whole pool aged past PoolAgeSeconds) would fire an up-to-8-wide grant-revoke BURST on a
+    // client's critical path - the very burst the paced idle-drain exists to avoid.
+    static readonly ConcurrentQueue<Ready> _toClose = new ConcurrentQueue<Ready>();
+
+    // DEMAND LATCH + CHURN COUNTERS (2026-08-20). Per-channel churn is the suspected trigger of the
+    // grant-revoke spin that intermittently wedges the guest, so the filler now warms the pool only
+    // while there is DEMAND: an allowed, non-abandoned inbound within PoolIdleSeconds(). The latch
+    // starts at "now" - this relay is only started for an update pass, so startup counts as demand and
+    // the first-request prewarm (the filler start in RunListen) survives. NoteDemand() is called in
+    // exactly two places, both strictly AFTER read-first and the allowlist, so abandoned sockets and
+    // denied telemetry can never keep the pool warm.
+    static long _lastDemandTicks = DateTime.UtcNow.Ticks;
+    static void NoteDemand() { Interlocked.Exchange(ref _lastDemandTicks, DateTime.UtcNow.Ticks); }
+    // _opened counts EVERY OpenChannel success - one open is one vchan channel whose grants are
+    // permitted and later revoked (one open implies exactly one eventual close), so its growth RATE is
+    // the churn this redesign reduces, counted at the single choke point every channel passes through.
+    // All longs go through Interlocked: this can run as a 32-bit process, where long loads are not atomic.
+    static long _opened = 0;
+    static long _drained = 0;
+    static long _deadAtTake = 0, _staleAtTake = 0;
+    static long _warmHits = 0, _warmMisses = 0;
+
     static int PoolTarget()
     {
         int pt;
         if (int.TryParse(Environment.GetEnvironmentVariable("QUBES_UPDATES_POOL"), out pt) && pt >= 0) return pt;
         return 8;
     }
-    // A pooled channel holds a proxy session open; tinyproxy will eventually drop an idle one,
-    // so treat anything older than this as stale rather than handing out a dead socket.
-    const int PoolMaxAgeSeconds = 25;
+    // A pooled channel holds a proxy session open; the far end will eventually drop an idle one, so
+    // treat anything older than this as stale. 25 was a GUESS. The CONN log says the tunnel side never
+    // closes an active session first (eof=tunnel 0/342) and tinyproxy's request-read timeout defaults
+    // to 600 s - but the compiled default does not move on inference: it stays 25 until
+    // guest/wu-idle-tolerance.ps1 has MEASURED the real idle drop on this deployment, then it gets
+    // bumped to just under the measured value. Override with QUBES_UPDATES_POOLAGE (the probe does).
+    static int PoolAgeSeconds()
+    {
+        int s;
+        if (int.TryParse(Environment.GetEnvironmentVariable("QUBES_UPDATES_POOLAGE"), out s) && s > 0) return s;
+        return 25;
+    }
+    // How long with no demand before the filler stops warming and DRAINS the pool to zero. Measured
+    // 2026-08-19: the always-on filler cycled ~8 channels per 25 s age-out with no traffic at all
+    // (~4600 spawn/close cycles in 4 idle hours) - grant permit/revoke churn with zero benefit, in
+    // exactly the regime suspected of wedging the guest. Override with QUBES_UPDATES_IDLESECS.
+    // Keep IDLESECS >= POOLAGE: if POOLAGE is later raised above this, every think-gap in a pass would
+    // trip a full drain+refill; raise IDLESECS alongside any POOLAGE bump.
+    static int PoolIdleSeconds()
+    {
+        int s;
+        if (int.TryParse(Environment.GetEnvironmentVariable("QUBES_UPDATES_IDLESECS"), out s) && s > 0) return s;
+        return 60;
+    }
 
     // Grace period for the second direction to finish once the first has ended. Override with
     // QUBES_UPDATES_DRAINMS if a slow link ever needs longer; 3000 was the original value and it
@@ -483,6 +528,8 @@ static class Relay
             return;
         }
 
+        // Past read-first AND the allowlist: this is real, allowed demand - keep the pool warm.
+        NoteDemand();
         // Cap concurrency so a burst of real requests cannot fork-bomb the proxy qube.
         await _gate.WaitAsync();
         Stopwatch sw = Stopwatch.StartNew();
@@ -493,7 +540,7 @@ static class Relay
         Func<string> endReasons = null;   // set once the pumps exist; reports WHY each direction stopped
         try
         {
-            Ready ch = TakeWarm();
+            Ready ch = TakeWarm(logPath);
             if (ch != null) { warm = true; }
             else { ch = await OpenChannel(self, target, user, logPath); }
             if (ch == null) { inbound.Close(); return; }
@@ -626,6 +673,7 @@ static class Relay
     static async Task HandlePlainHttp(TcpClient inbound, byte[] head, int hlen,
                                       string self, string target, string user, string logPath)
     {
+        NoteDemand();   // allowed plain-HTTP demand (read-first + allowlist already passed in HandleInbound)
         await _gate.WaitAsync();
         Stopwatch sw = Stopwatch.StartNew();
         string reqLine = "";
@@ -654,7 +702,7 @@ static class Relay
                 bool avoidWarm = false;
                 for (attempts = 1; attempts <= maxTries; )
                 {
-                    Ready ch = avoidWarm ? null : TakeWarm();
+                    Ready ch = avoidWarm ? null : TakeWarm(logPath);
                     bool wasWarm = ch != null;
                     if (ch == null) ch = await OpenChannel(self, target, user, logPath);
                     if (ch == null) break;
@@ -718,13 +766,15 @@ static class Relay
 
     // Spawn one qrexec handler and complete its connect-back handshake. This is the expensive
     // part (dom0 policy + service start in the proxy qube), and the whole point of the pool is
-    // to run it OFF the critical path.
+    // to run it OFF the critical path. Every success is counted in _opened - one open is one vchan
+    // channel that will eventually be torn down, so _opened's growth rate is the grant churn.
     static async Task<Ready> OpenChannel(string self, string target, string user, string logPath)
     {
         string token = Guid.NewGuid().ToString("N");
         TcpListener control = new TcpListener(IPAddress.Loopback, 0);   // ephemeral
         control.Start();
         int cport = ((IPEndPoint)control.LocalEndpoint).Port;
+        TcpClient relay = null;   // hoisted: the catch must close an accepted-but-failed socket
         try
         {
             string handlerLogDir = "";
@@ -744,8 +794,17 @@ static class Relay
 
             Task<TcpClient> accept = control.AcceptTcpClientAsync();
             if (await Task.WhenAny(accept, Task.Delay(20000)) != accept)
-            { Log(logPath, "CHAN token=" + token + " relay never connected back"); return null; }
-            TcpClient relay = accept.Result;
+            {
+                Log(logPath, "CHAN token=" + token + " relay never connected back");
+                // A connect-back that lands AFTER the timeout would orphan the accepted socket (and
+                // its handler) - 'return null' is not an exception, so the catch below never runs.
+                // Close it whenever it eventually arrives.
+                accept.ContinueWith(delegate(Task<TcpClient> t) {
+                    if (t.Status == TaskStatus.RanToCompletion) { try { t.Result.Close(); } catch { } }
+                });
+                return null;
+            }
+            relay = accept.Result;
             NetworkStream rs = relay.GetStream();
             byte[] tk = Encoding.ASCII.GetBytes(token + "\n");
             byte[] got = new byte[tk.Length];
@@ -754,54 +813,126 @@ static class Relay
 
             Ready r = new Ready();
             r.Relay = relay; r.Stream = rs; r.Token = token; r.Born = DateTime.UtcNow;
+            Interlocked.Increment(ref _opened);
             return r;
         }
-        catch (Exception e) { Log(logPath, "CHAN token=" + token + " error " + e.Message); return null; }
+        catch (Exception e)
+        {
+            Log(logPath, "CHAN token=" + token + " error " + e.Message);
+            // An exception between accept and return used to LEAK the accepted connect-back socket:
+            // nothing owned it, so it - and the handler pumping into it - lingered. Close is
+            // synchronous, so this is legal in a C# 5 catch (no await here).
+            if (relay != null) { try { relay.Close(); } catch { } }
+            return null;
+        }
         finally { control.Stop(); }
     }
 
-    // Take a channel that is still fresh AND still connected; drop the rest.
-    static Ready TakeWarm()
+    // Take a channel that is still fresh AND still connected; defer the rest to the filler's PACED
+    // close (via _toClose), so a sparse-active request never fires an 8-wide revoke burst inline.
+    //
+    // "Connected" is a CACHED snapshot of the last socket op, so it lies about a peer that closed
+    // while the channel sat pooled - and a longer pool age makes far-end drops MORE likely, not less.
+    // So ask the socket: Poll(0, SelectRead) is non-blocking and fires on a DELIVERED FIN or on
+    // unsolicited queued bytes, either of which disqualifies a virgin channel (tinyproxy never speaks
+    // before a request). A far-end drop propagates all the way here (tinyproxy close -> vchan EOF ->
+    // handler exits -> FIN on the connect-back socket) - exactly the death this must catch before
+    // handing the channel to a CONNECT client that has no dead-warm retry. Poll cannot see an
+    // UNdelivered FIN; the plain-HTTP dead-warm allowance stays behind this as the backstop. Discards
+    // are logged WITH AGE: the dead-age distribution is the in-band data that refines POOLAGE.
+    static Ready TakeWarm(string logPath)
     {
         Ready r;
         while (_pool.TryDequeue(out r))
         {
-            bool stale = (DateTime.UtcNow - r.Born).TotalSeconds > PoolMaxAgeSeconds;
+            double age = (DateTime.UtcNow - r.Born).TotalSeconds;
+            bool stale = age > PoolAgeSeconds();
             bool dead = false;
-            try { dead = !r.Relay.Connected; } catch { dead = true; }
-            if (!stale && !dead) return r;
-            try { r.Relay.Close(); } catch { }
+            try
+            {
+                Socket s = r.Relay.Client;
+                dead = (s == null) || !r.Relay.Connected || s.Poll(0, SelectMode.SelectRead);
+            }
+            catch { dead = true; }
+            if (!stale && !dead) { Interlocked.Increment(ref _warmHits); return r; }
+            if (dead) Interlocked.Increment(ref _deadAtTake); else Interlocked.Increment(ref _staleAtTake);
+            Log(logPath, "POOL discard reason=" + (dead ? "dead" : "stale") + " age=" + (int)age + "s");
+            _toClose.Enqueue(r);   // filler closes it PACED, off this request's critical path
         }
+        Interlocked.Increment(ref _warmMisses);
         return null;
     }
 
-    // Keep the pool topped up. Spawns run concurrently, so the refill rate is not capped by the
-    // 5-6 s each one takes.
+    // Keep the pool topped up WHILE THERE IS DEMAND; drain it to nothing when there is none, and close
+    // TakeWarm's deferred victims PACED. Spawns run concurrently, so the refill rate is not capped by
+    // the 5-6 s each one takes.
+    //
+    // Idle = no allowed inbound for PoolIdleSeconds(). While idle the relay holds ZERO pooled channels,
+    // handlers, vchans, or grants, and spends zero permit/revoke cycles. Every close (the idle drain AND
+    // TakeWarm's _toClose victims) is PACED 100 ms apart on this background task, never on a connection's
+    // critical path - insurance in case the wedge is triggered by revoke BURSTS rather than sustained
+    // churn. The drain is also the ONLY eviction (staleness lives solely in TakeWarm, which runs only on
+    // a request), so without it an idle pool would sit on 8 aging channels forever. Demand resumption is
+    // noticed within <=1 s; the first post-idle request pays a cold open (it cannot wait for the filler)
+    // and the pool is warm for the burst that follows. While there IS demand, the 2026-08-13
+    // deficit/batch-of-4 refill is unchanged, so burst throughput is protected.
     static async Task PoolFiller(string self, string target, string user, string logPath)
     {
         int target_n = PoolTarget();
         if (target_n <= 0) return;
         Log(logPath, "POOL warm channels target=" + target_n);
+        Log(logPath, "POOL policy age=" + PoolAgeSeconds() + "s idle=" + PoolIdleSeconds() + "s");
+        DateTime lastStat = DateTime.UtcNow;
         while (true)
         {
             int pause = 0;
             // NOTE: no await inside catch - C# 5 forbids it, and the in-box csc is C# 5.
             try
             {
-                int deficit = target_n - _pool.Count;
-                if (deficit <= 0) { pause = 250; }
+                // Close a few of TakeWarm's deferred victims, PACED, off any request path.
+                Ready v; int vc = 0;
+                while (vc < 4 && _toClose.TryDequeue(out v))
+                { try { v.Relay.Close(); } catch { } Interlocked.Increment(ref _drained); vc++; await Task.Delay(100); }
+
+                bool idle = (DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastDemandTicks))
+                            > (long)PoolIdleSeconds() * TimeSpan.TicksPerSecond;
+                if (idle)
+                {
+                    Ready victim; int d = 0;
+                    while (_pool.TryDequeue(out victim))
+                    { try { victim.Relay.Close(); } catch { } d++; Interlocked.Increment(ref _drained); await Task.Delay(100); }
+                    if (d > 0) Log(logPath, "POOL drain n=" + d + " idle");
+                    pause = 1000;
+                }
                 else
                 {
-                    Task[] batch = new Task[Math.Min(deficit, 4)];
-                    for (int i = 0; i < batch.Length; i++)
+                    int deficit = target_n - _pool.Count;
+                    if (deficit <= 0) { pause = 250; }
+                    else
                     {
-                        batch[i] = Task.Run(async delegate
+                        Task[] batch = new Task[Math.Min(deficit, 4)];
+                        for (int i = 0; i < batch.Length; i++)
                         {
-                            Ready r = await OpenChannel(self, target, user, logPath);
-                            if (r != null) _pool.Enqueue(r);
-                        });
+                            batch[i] = Task.Run(async delegate
+                            {
+                                Ready r = await OpenChannel(self, target, user, logPath);
+                                if (r != null) _pool.Enqueue(r);
+                            });
+                        }
+                        await Task.WhenAll(batch);
                     }
-                    await Task.WhenAll(batch);
+                }
+                // Stat in BOTH branches (every 60 s) so an idle soak's 'opened= flat' is observable.
+                if ((DateTime.UtcNow - lastStat).TotalSeconds >= 60)
+                {
+                    lastStat = DateTime.UtcNow;
+                    Log(logPath, "POOL stat target=" + target_n + " pool=" + _pool.Count
+                               + " opened=" + Interlocked.Read(ref _opened)
+                               + " drained=" + Interlocked.Read(ref _drained)
+                               + " hit=" + Interlocked.Read(ref _warmHits)
+                               + " miss=" + Interlocked.Read(ref _warmMisses)
+                               + " dead=" + Interlocked.Read(ref _deadAtTake)
+                               + " stale=" + Interlocked.Read(ref _staleAtTake));
                 }
             }
             catch { pause = 500; }
