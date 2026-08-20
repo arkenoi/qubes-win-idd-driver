@@ -393,6 +393,14 @@ jobs:
           # includes ntifs.h, a WDK header this runner does not have, and it failed the whole
           # solution build while every qrexec binary we actually want had already compiled. Nothing
           # here needs the WDK, so target the projects directly and keep the WDK out of this job.
+          # qwt_version.h is GENERATED, and only qrexec-agent.vcxproj's PreBuild event generates it
+          # (`set-version.ps1 <version> <qwt_version.h>`). Building a single project therefore fails
+          # with RC1015 "cannot open include file '..\qwt_version.h'" whenever that project is not
+          # qrexec-agent. Generate it up front so build ORDER cannot decide whether the build works.
+          & powershell "$env:QB_SCRIPTS\set-version.ps1" "$ws\core-agent\version" "$ws\core-agent\qwt_version.h"
+          if (-not (Test-Path "$ws\core-agent\qwt_version.h")) { throw "failed to generate qwt_version.h" }
+          Write-Host "generated qwt_version.h: $(Get-Content "$ws\core-agent\qwt_version.h" | Select-Object -First 3)"
+
           $projects = @('qrexec-wrapper','qrexec-agent','qrexec-client-vm')
           foreach ($p in $projects) {
             $proj = "$ws\core-agent\vs2022\$p\$p.vcxproj"
