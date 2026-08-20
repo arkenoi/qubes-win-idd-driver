@@ -14367,3 +14367,20 @@ Two side observations worth keeping:
 2. A1 did NOT cause the win11-fresh hang - no gui-agent ran at all on that boot. The two are
    unrelated, and the earlier "grant exhaustion -> vchan failure" hypothesis for win11-fresh is
    withdrawn in favour of the IPI deadlock the dump actually shows.
+
+### Fleet converged 2026-08-20 (serial, one guest at a time - back to the normal rule)
+
+    win11-fresh  DEPLOY ok=true  selftest 8/8  exe 2584D252…  ps1 5E6A902F…   RETROFIT ok=true
+    win10-clean  (already had the relay)                                       RETROFIT ok=true
+    win11-tpl    (already had the relay)                                       RETROFIT ok=true
+    win10-tpl    deployed + retrofitted earlier; restarted as the active guest
+
+RETROFIT = `-Scheduled` added to QubesWindowsUpdateScan so the debounce is armed on guests whose
+task predates the switch. Every guest verified to have it on the SCAN task only:
+`QubesWindowsUpdateRun_has_scheduled=false`, `QubesWindowsUpdateDownload_has_scheduled=false` -
+a pass dom0 asks for can never be skipped.
+
+win11-fresh got the relay for the first time (its rollout attempt failed earlier with an empty
+result; root cause now known - qrexec-wrapper was deadlocked in the IPI wait, so the live pushrun
+had nothing to report through). The deploy now writes its RESULT to a file precisely so a dropped
+connection cannot lose it again.
