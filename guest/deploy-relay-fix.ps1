@@ -59,4 +59,13 @@ $res['selftest_pass'] = @($selftest | Select-String -Pattern '^PASS ' -EA Silent
 $res['selftest_fail'] = @($selftest | Select-String -Pattern '^FAIL ' -EA SilentlyContinue).Count
 
 $res['ok'] = ($res['exe_exists'] -and $res['selftest_exit'] -eq 0 -and $res['selftest_fail'] -eq 0)
-Write-Output ("=== RESULT === " + ($res | ConvertTo-Json -Compress))
+$line = "=== RESULT === " + ($res | ConvertTo-Json -Compress)
+Write-Output $line
+# ALSO to a file. On a guest busy with servicing, qrexec gets starved and a live pushrun dies
+# mid-run taking its output with it - which is exactly how win11-fresh reported an EMPTY result
+# on 2026-08-20 while the deploy may or may not have happened. A file survives the connection, so
+# the deploy can be run detached (scheduled task) and the outcome collected afterwards.
+try {
+    New-Item -ItemType Directory -Force -Path 'C:\ProgramData\Qubes' | Out-Null
+    $line | Set-Content -LiteralPath 'C:\ProgramData\Qubes\deploy-relay-fix.txt' -Encoding ASCII
+} catch { }
