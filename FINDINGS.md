@@ -14097,3 +14097,81 @@ unit-level selftest.
    left off. The relay was killed afterwards and verified stopped; the updater restarts it on
    demand with a clean environment, gate on. Both test scheduled tasks were removed and verified
    gone.
+
+---
+
+## 2026-08-20 (cont) — U12 closed on a real cold boot, U8 on, and the debounce taught us something on its first boot
+
+### U8 — TaskScheduler Operational log enabled (and immediately useful)
+
+`Microsoft-Windows-TaskScheduler/Operational` was OFF (enabled: false -> true), which is why no pass
+trigger could ever be attributed. First boot with it on already named the task, the instance GUID
+and the return code - and that is what let the next item be diagnosed instead of guessed.
+
+### The debounce skipped the BOOT scan - caught on the first real boot
+
+First cold reboot after shipping the debounce:
+
+    22:11:09 started   \QubesWindowsUpdateScan  (SYSTEM)
+    22:11:12 completed return code 0            <- 3 seconds
+    new_log_bytes = 0                           <- wrote nothing at all
+
+A download pass had completed at 22:02, so the boot scan fell inside the 30-minute window and was
+suppressed. Two conclusions, and the second is a defect:
+1. The debounce WORKS on the real boot path, in real SYSTEM context - better evidence than the
+   synthetic suite, and unplanned.
+2. Suppressing the BOOT scan is only correct when the previous pass actually left an availability
+   answer. The boot scan is the recovery for a pass whose own post-install rescan failed (the
+   updater logs exactly that case: "availability will be re-reported by the next scan"). As
+   written, a guest could sit up to a full scan interval with nothing to tell dom0.
+FIXED: the debounce now also requires the previous pass to have left an `available` list with
+phase=done. Everything else unchanged - only `-Scheduled` passes are skippable, explicit passes
+always run.
+
+### U12 — QdbDaemon startup-race fix VALIDATED on a cold boot
+
+The fix (wait the daemon out instead of believing the first empty read) had never been exercised on
+a real boot; restarting the agent in a live session clears the very state that produces the fault.
+Second cold reboot, with the completion stamp cleared so the pass would actually run:
+
+    rebooted=true  new_log_bytes=1101  class_lines=1  classes_seen=TemplateVM
+    class_correct=true  saw_empty_class=false  refused_to_classify=false  ok=true
+    boot scan 22:15:39 -> 22:16:45 (66 s of real work, not a 3 s skip)
+
+The boot pass classifies the template CORRECTLY instead of reading an empty class and skipping it
+as a standalone. U12 is closed. Harness kept: `guest/wu-boot-acceptance-arm.ps1` +
+`guest/wu-boot-acceptance-check.ps1`.
+
+### PRE-SESSION QREXEC ALREADY EXISTS - no code required (answers the standing "no session = no RPC" problem)
+
+Read from the vendored source rather than inferred:
+
+  `src/qrexec-agent/qrexec-agent.c:336`
+      if (!wcscmp(*userName, L"SYSTEM") || !wcscmp(*userName, L"root"))
+          { free(*userName); *userName = NULL; }
+  `src/qrexec-wrapper/qrexec-wrapper.c:145`
+      @param userName  If NULL, this process' user token will be used (normally SYSTEM).
+      @param interactive  Run the child in the interactive session (a user must be logged in).
+
+The service call format is `user:[nogui:]command`. Requesting user **SYSTEM** (or root) nulls the
+user name, so the child runs on QrexecAgent's OWN LocalSystem token - no WTSQueryUserToken, no
+logon, no session. `QrexecAgent` is confirmed `StartName=LocalSystem, State=Running` on the guest,
+and `qubes.WaitForSession` exists precisely because ordinary calls DO wait for a session (that is
+the rc=117 path measured 2026-08-13).
+
+Consequence: the "a Windows qube at the sign-in screen is unmanageable" problem is a POLICY gap,
+not a missing capability. One dom0 line enables it:
+
+    qubes.VMShell  *  dom0  <vm>  allow user=SYSTEM
+
+Proposed shape (dom0 policy is the owner's to add):
+  - a dedicated `qubes.WinEarlyDiag` service so normal calls keep the safer user context;
+  - its guest handler reads `/qubes-service/win-early-diag` from qubesdb and exits unless set, so
+    `qvm-features <vm> win-early-diag 1` arms it - policy AND feature must agree;
+  - off by default. It does not weaken Qubes isolation (dom0 is already fully trusted toward the
+    guest) but it does bypass the guest's INTERNAL user boundary and works while the secure desktop
+    is up, so it stays debug-gated. Execution, not display - consistent with "the secure desktop is
+    never granted".
+
+This would have answered the win11-fresh case directly: it is unreachable right now while burning
+~1.7 cores, and we are reduced to inferring what it is doing.
