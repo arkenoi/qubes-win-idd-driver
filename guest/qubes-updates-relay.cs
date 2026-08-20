@@ -315,28 +315,49 @@ static class Relay
         public uint remoteAddr; public uint remotePort; public uint owningPid;
     }
 
+    const uint ERROR_INSUFFICIENT_BUFFER = 122;
+    internal const int PidLookupFailed = -2;   // distinct from -1 "scanned, no such port"
+
+    // Returns the owning PID of a local port, -1 if the port is genuinely not in the table, or
+    // PidLookupFailed if the table could not be read at all.
+    //
+    // THE RACE THIS EXISTS TO SURVIVE: the table is sized by one call and fetched by a second, and
+    // ANY process opening a socket in between makes it grow - the fetch then fails with
+    // ERROR_INSUFFICIENT_BUFFER. That used to `return -1`, which the caller reads as "not an update
+    // process" and answers with an RST. A LEGITIMATE Windows Update connection was therefore denied
+    // at random, and Windows concluded it had no internet. Re-size and retry, with slack on top so
+    // the common case does not even need a second pass. Still fail-CLOSED: a lookup that never
+    // succeeds denies, it just says so distinctly instead of masquerading as a verdict.
     static int PidForLocalPort(int port)
     {
         // AF_INET=2, TCP_TABLE_OWNER_PID_ALL=5. Ports in the table are big-endian in the low word.
-        int size = 0;
-        GetExtendedTcpTable(IntPtr.Zero, ref size, true, 2, 5, 0);
-        IntPtr buf = Marshal.AllocHGlobal(size);
-        try
+        for (int attempt = 0; attempt < 5; attempt++)
         {
-            if (GetExtendedTcpTable(buf, ref size, true, 2, 5, 0) != 0) return -1;
-            int rows = Marshal.ReadInt32(buf);
-            IntPtr row = (IntPtr)((long)buf + 4);
-            int rowSize = Marshal.SizeOf(typeof(MIB_TCPROW_OWNER_PID));
-            for (int i = 0; i < rows; i++)
+            int size = 0;
+            GetExtendedTcpTable(IntPtr.Zero, ref size, true, 2, 5, 0);
+            if (size <= 0) continue;
+            size += 16 * 1024;   // room for rows added between the sizing call and the fetch
+            IntPtr buf = Marshal.AllocHGlobal(size);
+            try
             {
-                MIB_TCPROW_OWNER_PID r = (MIB_TCPROW_OWNER_PID)Marshal.PtrToStructure(row, typeof(MIB_TCPROW_OWNER_PID));
-                int p = (int)(((r.localPort & 0xFF) << 8) | ((r.localPort & 0xFF00) >> 8));
-                if (p == port) return (int)r.owningPid;
-                row = (IntPtr)((long)row + rowSize);
+                uint rc = GetExtendedTcpTable(buf, ref size, true, 2, 5, 0);
+                if (rc == ERROR_INSUFFICIENT_BUFFER) continue;   // grew again - size it afresh
+                if (rc != 0) return PidLookupFailed;
+                int rows = Marshal.ReadInt32(buf);
+                IntPtr row = (IntPtr)((long)buf + 4);
+                int rowSize = Marshal.SizeOf(typeof(MIB_TCPROW_OWNER_PID));
+                for (int i = 0; i < rows; i++)
+                {
+                    MIB_TCPROW_OWNER_PID r = (MIB_TCPROW_OWNER_PID)Marshal.PtrToStructure(row, typeof(MIB_TCPROW_OWNER_PID));
+                    int p = (int)(((r.localPort & 0xFF) << 8) | ((r.localPort & 0xFF00) >> 8));
+                    if (p == port) return (int)r.owningPid;
+                    row = (IntPtr)((long)row + rowSize);
+                }
+                return -1;   // the table WAS read; this port simply is not in it
             }
+            finally { Marshal.FreeHGlobal(buf); }
         }
-        finally { Marshal.FreeHGlobal(buf); }
-        return -1;
+        return PidLookupFailed;
     }
 
     // PIDs that ARE the update: the hosts of the update-related services, plus this process and
@@ -512,6 +533,10 @@ static class Relay
                 string who;
                 if (!PeerIsUpdate(peerPid, out who))
                 {
+                    // Say WHICH kind of denial this is. A lookup that never completed is an
+                    // infrastructure failure denying a possibly-legitimate caller, not a policy
+                    // decision about a known process, and it must not read like one in the log.
+                    if (peerPid == PidLookupFailed) who = "pid-lookup-failed(port " + peerPort + ")";
                     // LOOK UNREACHABLE, NOT BROKEN. A denied caller must see what it would see on
                     // a guest with no network at all - a connection that does not come up - and
                     // NOT a proxy that accepts and then breaks mid-protocol. So: abort with RST

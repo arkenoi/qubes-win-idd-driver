@@ -580,6 +580,51 @@ function Uninstall-ExistingQwt {
     return $rebootNeeded
 }
 
+# --------------------------------------------------- carrying the switches across the reboot
+# The install is two stages with a reboot between them. Under -Auto the resume task carries the
+# chosen switches on its own command line, but a MANUAL install carried NOTHING: stage 2 started
+# from defaults, and since the IddCx driver is activated BY DEFAULT, `install.cmd /noidd` followed
+# by a manual reboot installed and activated the IDD anyway - the exact opposite of the request,
+# with no warning. (Stage 1's own closing message even tells the user to re-run the script bare.)
+#
+# So stage 1 records its switches and stage 2 restores any the caller did not pass explicitly.
+# An explicit argument always wins, so changing your mind at stage 2 still works. The file lives
+# beside the install log on C: - never in the payload directory, which may be a CD or an ISO.
+$script:StageFlagFile = 'C:\qwt-improved-stage1.json'
+$script:CarriedFlags  = @('NoIddDriver','NoPvNetwork','NoPvDisk','NoMoveUsers',
+                          'AcceptPvDiskUpgrade','NoAppTweaks','NoUpdaterAgent','RebootAtEnd')
+
+function Save-StageFlags {
+    $set = @{}
+    foreach ($n in $script:CarriedFlags) {
+        $v = Get-Variable -Name $n -Scope Script -ValueOnly -EA SilentlyContinue
+        if ($v) { $set[$n] = $true }
+    }
+    try {
+        ($set | ConvertTo-Json -Compress) | Set-Content -LiteralPath $script:StageFlagFile -Encoding ASCII
+        $names = if ($set.Keys.Count) { ($set.Keys | Sort-Object) -join ' ' } else { '(none)' }
+        Write-Log "stage-2 switches recorded in $($script:StageFlagFile): $names"
+    } catch {
+        Write-Log "WARNING: could not record stage-2 switches ($($_.Exception.Message)) - a manual stage 2 will use defaults"
+    }
+}
+
+function Restore-StageFlags {
+    param([hashtable]$Bound)
+    if (-not (Test-Path -LiteralPath $script:StageFlagFile)) { return }
+    try { $saved = Get-Content -LiteralPath $script:StageFlagFile -Raw | ConvertFrom-Json }
+    catch { Write-Log 'stage-1 switch file is unreadable - stage 2 continues with what was passed'; return }
+    $restored = @()
+    foreach ($n in $script:CarriedFlags) {
+        if ($Bound.ContainsKey($n)) { continue }        # explicit argument wins over the record
+        if (($saved.PSObject.Properties.Name -contains $n) -and $saved.$n) {
+            Set-Variable -Name $n -Value ([switch]$true) -Scope Script
+            $restored += $n
+        }
+    }
+    if ($restored.Count) { Write-Log ('stage-1 switches restored for stage 2: ' + ($restored -join ' ')) }
+}
+
 # ------------------------------------------------------------------------------- stage 1
 function Invoke-Stage1 {
     param([Parameter(Mandatory)][string]$Root)
@@ -619,6 +664,11 @@ function Invoke-Stage1 {
     $script:Result.reboot_needed = $true
     $script:Result.detail.next = 'reboot, then stage 2 installs QWT'
 
+    # Record the switches for stage 2 on BOTH paths. -Auto also passes them on the resume task's
+    # command line (belt and braces, and those win because they arrive as explicit arguments);
+    # the manual path has nothing else, and used to silently lose them.
+    Save-StageFlags
+
     $self = Join-Path $Root 'Install-QwtImproved.ps1'
     if ($Auto) {
         $extra = @()
@@ -637,6 +687,7 @@ function Invoke-Stage1 {
     }
     Write-Log 'STAGE 1 COMPLETE'
     Write-Log "Now REBOOT, then run again elevated:  $self"
+    Write-Log 'The switches you gave stage 1 are remembered - running it bare above is correct. Passing a switch again overrides the remembered one.'
     Emit-Result 10
 }
 
@@ -1531,6 +1582,9 @@ public static class QdbPrime {
 
     $script:Result.ok = $true
     $script:Result.reboot_needed = $true
+    # The install cycle is over - the carried switches have done their job. Leaving the file would
+    # silently re-apply them to any later re-run of this script on this guest.
+    Remove-Item -LiteralPath $script:StageFlagFile -Force -EA SilentlyContinue
     Write-Log 'INSTALL COMPLETE - QWT installed. The PV drivers bind at the guest''s NEXT start.'
 
     # ONE guest shutdown for the whole install, not two.
@@ -1592,6 +1646,10 @@ try {
 
     if (Test-TestSigningActive) {
         Write-Log 'testsigning is ACTIVE in this boot -> stage 2'
+        # Re-apply what stage 1 was asked for, for anything not passed explicitly on THIS command
+        # line. Without this a manual `install.cmd /noidd` reached here with $NoIddDriver unset and
+        # activated the IDD - the switch was accepted, then quietly discarded across the reboot.
+        Restore-StageFlags -Bound $PSBoundParameters
         Invoke-Stage2 -Root $WorkDir
     } else {
         Write-Log 'testsigning is NOT active in this boot -> stage 1'
