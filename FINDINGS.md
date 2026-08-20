@@ -13458,3 +13458,14 @@ www.msftconnecttest.com is ON, fails routeless -> NLA reports no-internet -> DO 
 the express-CU fix must flip NLA to "connected" (NCSI active/passive probe satisfiable through the proxy,
 or a synthetic profile) AND make DO honor the WinHTTP proxy - the exact design the Fable workflow is
 verifying. Any such fix MUST NOT open real egress bypassing dom0's qubes.UpdatesProxy (guest is hostile).
+
+**And the DO CDN is NOT blocked by dom0's allowlist (scratchpad/do-reach2.ps1) - no policy change needed.**
+Fetched through the SAME proxy: control `download.windowsupdate.com/...ndp481.cab` ranged GET -> HTTP 206,
+64KB received (works); a fresh `tlu.dl.delivery.mp.microsoft.com/filestreamingservice/...` express URL ->
+HTTP 403 whose body is a plain **nginx** `403 Forbidden` page. That is the DO CDN ORIGIN rejecting a
+*manually-replayed* signed URL (DO signs at download time; the harvested URL's `P1` expiry epoch sits ~now),
+NOT a tinyproxy allowlist denial (which returns a tinyproxy page, not nginx). So the request TRAVERSED the
+proxy to the DO edge - the host is reachable; only DO-itself-live can satisfy the signature. Conclusion:
+Vector B is viable at the network layer with NO dom0/allowlist change; the whole problem reduces to making
+Windows' own DO run (NLA green) and use the WinHTTP proxy. (Corollary: harvesting express URLs to fetch
+them ourselves is doubly dead - not only 8496 hash-matched deltas to assemble, but the URLs expire.)
