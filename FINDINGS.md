@@ -14629,3 +14629,42 @@ Security/Winlogon channels read without PowerShell, which is terminated over qre
 0x40010004); (2) the display stack state (IDD active? VGA disabled?) compared against the template
 that logs on fine; (3) an A/B against a freshly created AppVM from a template that never had the
 display experiments.
+
+---
+
+## 2026-08-21 — U9 CORRECTED: Defender full definitions are NOT Delivery-Optimization-only. A netvm-free path exists.
+
+Recorded as a backlog item: "Defender definitions genuinely not installable netvm-free (delta needs a
+base; full `mpam-fe` is DO-only)". The second half is WRONG. Verified from this dev qube:
+
+    https://go.microsoft.com/fwlink/?linkid=121721&arch=x64
+      -> 302 -> https://definitionupdates.microsoft.com/packages/content/mpam-fe.exe
+                  ?packageType=Signatures&packageVersion=1.457.263.0&arch=amd64&engineVersion=1.1.26070.7
+      HTTP 200, Content-Length 213,293,472 (203 MB)
+
+So the FULL signature package is an ordinary HTTPS GET. Two constraints, both measured, not assumed:
+  - the version parameters are REQUIRED - the bare URL (`?packageType=Signatures&arch=amd64`) 404s,
+    so the fwlink redirect must be followed to learn the current packageVersion/engineVersion;
+  - it is HTTPS-ONLY - plain http:// answers 503. It therefore rides the relay's CONNECT tunnel,
+    NOT the plain-HTTP path, so the MaxVerifyBytes/spill work does not apply to it either way.
+
+### What it would take, and the decision that is not mine
+
+Neither host is in the relay's default allowlist (windowsupdate.com, update.microsoft.com,
+delivery.mp.microsoft.com, download.microsoft.com, microsoftupdate.com). Making this work needs:
+
+    definitionupdates.microsoft.com   the actual download - narrow, single-purpose host
+    go.microsoft.com                  ONLY to resolve the fwlink redirect
+
+The second one deserves an explicit decision rather than a quiet commit: `go.microsoft.com` is a
+general REDIRECTOR, so allowlisting it lets the update process be pointed at many Microsoft
+properties rather than one file server. The exposure is bounded by the two gates that already exist
+(the positional peer allowlist - only the update process may use the proxy at all - and the temporal
+gate that tears the proxy down at pass end), but it is still a widening and it is security-relevant.
+NOT changed unilaterally. Options for the owner:
+  (a) allowlist both, simplest, widest;
+  (b) allowlist only definitionupdates.microsoft.com and resolve the fwlink some other way;
+  (c) leave it and keep reporting Defender definitions as informational, as today.
+
+The delta-patch half of the original finding stands unchanged: `am_delta_patch` needs a base and is
+not applicable offline, which was measured (0x80070002 bare and /q).
