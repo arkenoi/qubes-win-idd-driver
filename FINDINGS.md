@@ -13717,3 +13717,16 @@ C. XENCTX (works on a HARD freeze that won't take the NMI - reads guest CPU cont
 GOAL: a stack (A/B) or a fixed RIP + grant-table state (C) proving the spinning function, so the fix can be
 targeted (e.g. serialize/reuse the vchan instead of per-fetch churn, or fix the revoke-wait). This is the
 last remaining non-determinism in the stack.
+
+## 2026-08-20 — relay-churn escalation: guest NMI dump CONFIGURED (Path B)
+
+Applied + verified on win10-tpl (via scratchpad/dump-setup2.ps1): CrashDumpEnabled=2 (KERNEL dump,
+captures all CPU stacks), NMICrashDump=1, AutoReboot=1, AlwaysKeepMemoryDump=1, DumpFile=%SystemRoot%\
+MEMORY.DMP; system-managed pagefile auto-resized to 8192 MB on reboot (ample for a kernel dump; the
+DedicatedDumpFile route was dropped - it is only created at crash time, unreliable for a 9.7 GB complete
+dump). Guest already produced dumps this way (a stale 370 MB MEMORY.DMP from 08/16 predates this).
+OWNER STEP: `xl domid win10-tpl` -> `xl trigger <domid> nmi`. Validate ONCE on the healthy guest (confirm a
+FRESH C:\Windows\MEMORY.DMP), THEN the real capture: agent drives the wedge repro (large -Action full /
+relay soak), owner injects the NMI when it wedges. Analysis: kd.exe in-guest (scriptable via qtest, symbols
+through the proxy + PV-driver PDBs) or owner's WinDbg -> !analyze -v / !running / k for the spinning frame.
+If a hard freeze won't take the NMI, fall back to xenctx (Path C).
