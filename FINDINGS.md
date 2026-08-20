@@ -13855,9 +13855,33 @@ run-state or the emulated LAPIC IRR; proving the Xen side needs dom0/Xen instrum
    is not merely a perf win; it removes the wedge trigger.** Answers the standing question definitively:
    YES, the multiplexer makes the wedge go away in practice by eliminating the churn that produces the
    shootdowns. (It does not fix the underlying Xen IPI fragility.)
-2. SECONDARY — reduce the test qube to 2 vCPUs (fewer shootdown targets, smaller stall window). Dom0 →
-   ASK THE USER (`qvm-prefs <vm> vcpus 2`). Aligns with the existing 4-vCPU caveat.
+2. RETRACTED (owner, 2026-08-20): "reduce the test qube to 2 vCPUs". This was WRONG and is withdrawn.
+   Fewer vCPUs would only make our own rig stop reproducing the wedge — it MASKS the bug and destroys the
+   single reproducer we have. Real guests run 4+ vCPUs, so a fix validated at 2 proves nothing. The test
+   qube STAYS AT 4 vCPUs, under churn pressure, precisely so the fix can be shown sufficient under
+   worst-case real-world conditions. (Not applied — the guest was never reconfigured.)
 3. Guest-side graceful RECOVERY of this fault is infeasible (all CPUs ≥DISPATCH, IPI machinery is the very
    thing that's dead; DPC_WATCHDOG 0x133 can't self-fire) — prevention only.
 4. Out-of-QWT-scope Xen/qubes IPI-scheduling defect → reportable upstream under the CLAUDE.md exception,
    user approves the exact text. Not a QWT deliverable.
+
+### Acceptance for the fix (set 2026-08-20 after the owner corrected the vCPU misstep)
+
+The wedge fix is NOT proven by "we have not seen a wedge lately" (CLAUDE.md: absence of a regression is
+not evidence of intended behaviour). It is proven by an INTERLEAVED A/B under the SAME aggressive soak,
+at 4 vCPUs, with the mechanism-level metric the dump handed us:
+
+- CONTROL (already captured): OLD relay + 4-soaker churn → 38 concurrent qrexec-client-vm → WEDGE, dump
+  taken. This is the reproducer; keep it usable (hence 4 vCPUs stays).
+- TEST: NEW multiplexed relay under the identical soak. Acceptance = no wedge across repeated runs AND a
+  1-2 order-of-magnitude drop in the trigger metric.
+- METRIC (from the dump, not a proxy): peak concurrent `qrexec-client-vm`/`qrexec-wrapper` processes and
+  their EXIT rate — process exit is what unmaps the granted user pages and issues the TLB shootdown.
+  Wedge conditions = 38 concurrent. Instrument by sampling process counts during the soak.
+- Per CLAUDE.md: >=3 runs per side, interleaved; verify the running binary's hash matches the intended
+  build before each run (deployed new relay = size 37888, sha256 prefix 075B2EEA37D32A1C); a check counts
+  as evidence only once it has been seen to FAIL on the old build (it has — that is the control).
+
+State restored 2026-08-20: redesigned relay deployed (37888 / 075B2EEA37D32A1C, mtime 19:55:25); the 4
+`Cap*` relay-soak tasks + WuDefTest/WuFullX test tasks deleted; canonical QubesWindowsUpdate*/autologon/
+network/quiet-desktop tasks kept; guest at 4 vCPUs, baseline churn 0 qrexec-client-vm.
