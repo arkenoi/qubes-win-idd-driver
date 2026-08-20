@@ -14207,3 +14207,54 @@ Retracted along the way: `qubes.WaitForSession` as a session probe. It exists an
 rc=126 seen for it was policy, not absence - the control against healthy win10-tpl returned the
 same 126. But it only EXPLAINS a failure without granting access, and the action is "wait" either
 way, so it is not worth a policy line. Dropped.
+
+---
+
+## 2026-08-20 (cont) — user=SYSTEM policy line is LIVE, and it REFUTES the "win11-fresh is user-bound" theory
+
+Owner added the policy line (placed FIRST - qrexec policy is first-match-wins, and an earlier
+`qubes.VMShell ... allow` would have made a later line dead; the first attempt measured exactly that
+and returned the default user).
+
+VERIFIED LIVE, one command:
+
+    printf 'whoami\r\nexit\r\n' | qrexec-client-vm win10-tpl qubes.VMShell
+    -> nt authority\system          (before the line: win-idd-test\user)
+
+So pre-session qrexec now works on the testbed. This closes the 2026-08-13 "a Windows qube at the
+sign-in screen is UNMANAGEABLE" hole: with `user=SYSTEM` the child runs on QrexecAgent's own
+LocalSystem token, no logon required. Autologon stops being the only lifeline.
+
+### The refutation
+
+With that capability in hand, win11-fresh STILL does not answer:
+
+    win10-tpl   qubes.VMShell (SYSTEM)   rc=0, whoami = nt authority\system
+    win11-fresh qubes.VMShell (SYSTEM)   rc=124 hang (60 s)
+    win11-fresh qubes.VMExec  (SYSTEM)   rc=124 hang (40 s)
+
+The SYSTEM path needs no session, no logon and no user token, and it is proven working on the
+control in the same minute. Therefore win11-fresh was NEVER a no-session problem. Both the owner's
+"user-bound" hypothesis and my "starved by servicing" framing are wrong as stated: the qrexec agent
+is not being serviced AT ALL.
+
+### What the CPU says
+
+    cputime deltas over 20 s samples: 2.80, 2.88 cores of 4
+    ~70-73% sustained, flat, for ~2 hours
+
+Steady-state burn with zero responsiveness is SPIN, not work. Servicing fluctuates and is I/O
+bound; a `pause` loop pegs cores flat. That is the signature of the wedge diagnosed from the
+2026-08-20 NMI dump (CPUs spinning in nt!KeFlushMultipleRangeTb on _KPRCB.PacketBarrier waiting for
+a TLB-shootdown IPI that never lands).
+
+IF CONFIRMED, THIS CORRECTS OUR OWN ROOT-CAUSE ENTRY: win11-fresh was NOT running the relay soak -
+it was booting and servicing. The current entry names per-fetch relay churn as the trigger. A wedge
+here would mean the trigger is ANY heavy concurrent MM teardown (servicing generates plenty), and
+relay churn was only the fastest provocation we knew. Not claimed until a dump says so - flagged
+here so the churn attribution is not treated as settled.
+
+Capture proposed to the owner (needs dom0 `xl trigger <domid> nmi`). The analysis toolchain is
+ready and proven: vol3 + the DumpType-6 crash-layer patch + msdl ISF build + the per-CPU walker.
+Caveat recorded: win11-fresh's dump settings were never configured by us and cannot be read while
+it is unreachable, so the capture may come up empty.
