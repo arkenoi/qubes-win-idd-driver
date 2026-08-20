@@ -477,7 +477,13 @@ function Resolve-Catalog($kb){
     if(-not $files.Count){ Log ("  candidate rejected (no .msu): " + $c.title); continue }
 
     # THE test: does this candidate actually carry a package named for this KB and this arch?
-    $named = @($files | Where-Object { $_ -match $digits -and $_ -match [regex]::Escape($OsArch) })
+    # EXCEPTION for .NET Framework CUs: the offered ROLLUP KB (e.g. KB5066747) is delivered as
+    # COMPONENT packages named for a DIFFERENT KB (windows10.0-kb5066130-ndp481, kb5066135-ndp48), so the
+    # rollup digits never appear in the filenames and the digit test wrongly rejected a real, installable
+    # .NET security CU (measured 2026-08-20). For .NET candidates, match on arch only and take every .msu
+    # (all are correct .NET component packages; Install-Msus skips the ones this image does not apply).
+    $isDotNet = $c.title -match '\.NET Framework'
+    $named = @($files | Where-Object { ($isDotNet -or $_ -match $digits) -and $_ -match [regex]::Escape($OsArch) })
     if(-not $named.Count){
       Log ("  candidate rejected (no file named for $kb/$OsArch): " + $c.title)
       foreach($f in $files){ Log ("      had: " + (& { if($f -match '/([^/?]+\.msu)'){$Matches[1]} else {$f} })) }
@@ -837,14 +843,25 @@ function Install-SelfContained($kb,$urls){
       Log ("  $name : exe rc=$($p.ExitCode) verified_by_effect=$eff")
       $rows += [ordered]@{ kb=$kb; file=$name; rc=$p.ExitCode; ok=$ok; verified_by_effect=$eff }
     } elseif($ext -eq '.msu' -or $ext -eq '.cab'){
-      # DISM decides: a self-contained CBS package (.msu wrapper, or a .cab WITH update.mum at root
-      # like KB5001716) installs; a payload-only .cab (e.g. the .NET ndp481 cab, WinSxS components with
-      # no update.mum) is cleanly REJECTED with DISM Error 13 (0xD) before applying anything - so this
-      # is honest, not a poison: rc=13 -> ok=false, loud. No blanket refusal, no false success.
+      # DISM decides. Three DETERMINISTIC outcomes, each classified honestly:
+      #  - OK_RC (0/3010/2359302): installed/staged.
+      #  - NOT-A-PACKAGE (rc 2 ERROR_FILE_NOT_FOUND, 13 ERROR_INVALID_DATA, 0x800f0805 CBS_E_INVALID_PACKAGE):
+      #    the artifact is not a DISM-installable CBS package - a WU-CLIENT blob with no update.mum
+      #    (measured: KB5001716's cab, and the .NET ndp481 PAYLOAD cab). Windows installs these itself;
+      #    they are NOT applicable to offline servicing, so this is INFORMATIONAL, not a failure.
+      #  - anything else: a genuine install failure.
       $rc = Add-PackageCompat $dst
       Log ("  $name : DISM rc=$rc")
-      $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=($rc -in $OK_RC) }
-      if($rc -eq 3010){ $script:St.reboot_needed=$true; $script:StagedThisSession=$true }
+      $notPackage = ($rc -eq 2 -or $rc -eq 13 -or $rc -eq -2146498555)   # -2146498555 = 0x800f0805
+      if ($rc -in $OK_RC) {
+        $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=$true }
+        if($rc -eq 3010){ $script:St.reboot_needed=$true; $script:StagedThisSession=$true }
+      } elseif ($notPackage) {
+        $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=$false; severity='info'
+          reason='not a DISM-installable CBS package (no update.mum) - a Windows Update client/orchestrator blob that Windows installs itself; not applicable to offline servicing. INFORMATIONAL - not a failure' }
+      } else {
+        $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=$false }
+      }
     } else {
       Log ("  $name : unrecognised self-contained artifact type - failing loudly")
       $rows += [ordered]@{ kb=$kb; file=$name; rc='unknown-artifact'; ok=$false }
@@ -1131,7 +1148,9 @@ try {
   # express/ESU-gated offers are informational (in St.notice), not installable - do not count them, or
   # dom0 would show a permanent "updates available" for a phantom the guest can never apply.
   $reportCount = $avail.Count
-  if ($script:St.notice) { $reportCount = @($avail | Where-Object { $_.content_class -ne 'express' }).Count }
+  # Under the ESU notice (netvm-free, post-EOS): only SELF-CONTAINED updates are actionable - express
+  # (ESU-gated phantom) and 'none' (Defender delta / DO-only) cannot install routeless and are informational.
+  if ($script:St.notice) { $reportCount = @($avail | Where-Object { $_.content_class -eq 'self-contained' }).Count }
   $script:St.remaining = $reportCount; Save
   Log ("scan: $($avail.Count) update(s) offered" + $(if($script:St.notice){ "; $reportCount actionable (" + ($avail.Count - $reportCount) + " ESU-gated/express informational - see notice)" }else{ '' }))
   if ($script:St.notice) { Log ("SERVICING NOTICE: " + $script:St.notice) }
@@ -1264,9 +1283,15 @@ try {
             $rows = Install-SelfContained $u.kb $directUrls
             $ok = @($rows | Where-Object { $_.ok }).Count -gt 0
             $staged = @($rows | Where-Object { $_.rc -eq 3010 }).Count -gt 0
-            $script:St.result += [ordered]@{ kb=$u.kb; ok=$ok; state=$(if($staged){'staged'}elseif($ok){'installed'}else{'failed'}); files=$rows }
+            # If nothing installed AND every file was a not-a-package informational (WU-client blob,
+            # e.g. KB5001716), the KB is INFORMATIONAL, not a failure - so it is excluded from the
+            # failed/remaining count and does not read as broken forever.
+            $allInfo = (-not $ok) -and (@($rows).Count -gt 0) -and (@($rows | Where-Object { $_.severity -ne 'info' }).Count -eq 0)
+            $row = [ordered]@{ kb=$u.kb; ok=$ok; state=$(if($staged){'staged'}elseif($ok){'installed'}elseif($allInfo){'informational'}else{'failed'}); files=$rows }
+            if ($allInfo) { $row.severity = 'info' }
+            $script:St.result += $row
             Save
-            Log "$($u.kb): self-contained install ok=$ok"
+            Log "$($u.kb): self-contained $(if($allInfo){'informational (not a DISM-installable package)'}else{"install ok=$ok"})"
             continue
           }
           if ($cls -eq 'express') {
@@ -1324,7 +1349,16 @@ try {
   # already stops for that reason; letting Windows Update install into the same session
   # afterwards would walk straight back into it, and the discarded package would be reported
   # as installed. dom0 drives a second pass, which is where these belong.
-  if ($Action -in 'install','full' -and $script:WuFallbackKbs.Count -gt 0 -and
+  # The Windows Update installer (Install-ViaWU) downloads through Delivery Optimization / BITS, which
+  # REFUSE on a guest with no route (measured DO 0x80D03805 / BITS 0x80200010) - so on a netvm-free
+  # guest this rung only manufactures phantom 0x80240022 failures. canWuNative is the guest's ability to
+  # ever install these: a real default route (netvm-attached standalone) or the explicit override.
+  $canWuNative = (Test-HasDefaultRoute) -or ($env:QUBES_UPDATES_ALLOW_WU_NATIVE -eq '1')
+  # DEFER only makes sense when the guest CAN install them next pass (canWuNative): CBS applies exactly
+  # ONE staged session per boot, so a second WU-native install this pass would be silently discarded.
+  # On a netvm-free guest (no route) they are never installable, so skip the deferral and let the
+  # informational block below classify them honestly instead of promising a "next pass" that never installs.
+  if ($Action -in 'install','full' -and $script:WuFallbackKbs.Count -gt 0 -and $canWuNative -and
       ($script:StagedThisSession -or $script:St.reboot_needed) -and -not $env:QUBES_UPDATES_ALLOW_MULTISTAGE) {
     foreach ($kb in $script:WuFallbackKbs) {
       $script:St.result += [ordered]@{ kb=$kb; ok=$false; files=@()
@@ -1335,20 +1369,18 @@ try {
          " - something is already staged this session and CBS would discard a second one")
     $script:WuFallbackKbs = @()
   }
-  # The Windows Update installer (Install-ViaWU) downloads through Delivery Optimization / BITS, which
-  # REFUSE on a guest with no route (measured DO 0x80D03805 / BITS 0x80200010) - so on a netvm-free
-  # guest this rung only manufactures phantom 0x80240022 failures. Run it ONLY when a real default
-  # route exists (a netvm-attached standalone) or when explicitly forced for diagnosis. On a
-  # netvm-free guest, report these KBs honestly instead of failing into DO/BITS.
-  $canWuNative = (Test-HasDefaultRoute) -or ($env:QUBES_UPDATES_ALLOW_WU_NATIVE -eq '1')
   if ($Action -in 'install','full' -and $script:WuFallbackKbs.Count -gt 0 -and -not $canWuNative) {
     $script:WuFallbackKbs = @($script:WuFallbackKbs | Sort-Object -Unique)
     foreach ($kb in $script:WuFallbackKbs) {
-      $script:St.result += [ordered]@{ kb=$kb; ok=$false; files=@()
-        reason='no catalog .msu and no static Windows Update file; the WU-native (DO/BITS) installer is disabled on a netvm-free guest because it fails routeless' }
+      # severity='info': on a netvm-free guest there is NO route by which these could install (no catalog
+      # .msu, no static file, and DO/BITS refuse routeless), so this is a deterministic INFORMATIONAL
+      # ceiling - e.g. Defender definitions (KB2267602: only a delta patch that needs a base + a DO-only
+      # full package). Not a failure, and excluded from the actionable/remaining count reported to dom0.
+      $script:St.result += [ordered]@{ kb=$kb; ok=$false; severity='info'; files=@()
+        reason='not installable on a netvm-free guest: no catalog .msu and no self-contained static installer (delivered only via Delivery Optimization / a delta patch). INFORMATIONAL - not a failure' }
     }
     Save
-    Log ("Windows Update native installer SKIPPED for " + ($script:WuFallbackKbs -join ',') +
+    Log ("Windows Update native installer SKIPPED (informational) for " + ($script:WuFallbackKbs -join ',') +
          " - no default route; DO/BITS would fail routeless (set QUBES_UPDATES_ALLOW_WU_NATIVE=1 to force)")
     $script:WuFallbackKbs = @()
   }
@@ -1431,7 +1463,11 @@ try {
         # Refresh the ESU diagnosis from the post-install scan, and report only ACTIONABLE updates so an
         # ESU-gated/express phantom does not leave dom0 permanently marked "updates available".
         if ("$OsBuild" -eq '19045') { $script:St.esu = Get-EsuStatus; $script:St.notice = Get-ServicingNotice $after $script:St.esu }
-        $reportCount = if ($script:St.notice) { @($after | Where-Object { $_.content_class -ne 'express' }).Count } else { $after.Count }
+        # Exclude KBs this pass proved informational (a self-contained artifact DISM rejected as
+        # not-a-package, e.g. KB5001716) - they are self-contained by shape but never installable, so
+        # they must not leave dom0 marked "updates available" forever.
+        $infoKbs = @($script:St.result | Where-Object { $_.severity -eq 'info' } | ForEach-Object { $_.kb })
+        $reportCount = if ($script:St.notice) { @($after | Where-Object { $_.content_class -eq 'self-contained' -and $infoKbs -notcontains $_.kb }).Count } else { $after.Count }
         $script:St.remaining = $reportCount; Save
         Log ("post-install rescan: $($after.Count) offered; $reportCount actionable to dom0" + $(if($script:St.notice){ ' (ESU-gated informational - see notice)' }else{ '' }))
         if ($script:St.notice) { Log ("SERVICING NOTICE: " + $script:St.notice) }
