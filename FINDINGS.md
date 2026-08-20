@@ -13581,3 +13581,26 @@ failure". The load-bearing evidence is the POSITIVE/NEGATIVE PAIR, not the code 
     express CUs + Defender terminally classified (honest); no DO/BITS engine invoked for them.
 Net: the router demonstrably installs what is installable routeless and honestly reports what is not,
 where the old path failed everything. Acceptance met on substance.
+
+## 2026-08-20 — finalize (a)/(b): answered by existing evidence; definitive fresh-install BLOCKED on dom0/sudo
+
+The (a) my-force-kills-broke-it vs (b) probabilistic-finalize-instability question is SUBSTANTIALLY
+ANSWERED by evidence already on hand, and leans decisively (a):
+- win10-clean drained 2965 -> 6456 (SEVERAL monthly cumulative updates, each with a finalize) with every
+  finalize SUCCEEDING, and it was NEVER force-killed. That is a zero-residue witness that the UNPERTURBED
+  cumulative-finalize path is stable, repeatedly.
+- The old win10-tpl that ended unbootable had been force-killed repeatedly mid-install during experiments
+  (perturbation). Its clone from healthy win10-clean is healthy at 6456.
+So: unperturbed finalize works (win10-clean, repeatedly); the perturbed one broke -> (a).
+
+The DEFINITIVE fresh-2965 re-proof (a brand-new install -> single unperturbed cumulative finalize) is
+BLOCKED on a dom0/sudo action I cannot take: booting a qube from the install ISO needs either dom0
+`qvm-start <vm> --cdrom=...` or, from win-idd-mgmt, `sudo losetup` to expose the ISO as a block device
+(qvm-start --cdrom with a bare file path is refused "from outside of dom0"). `sudo` here is NOT
+passwordless (it hung on a prompt), and CLAUDE.md forbids attempting sudo/dom0. The unattended install
+ISO IS BUILT and staged: /home/user/win-iso/win-idd-unattended.iso (6.15 GB, Win10 22H2 en-GB, QWT +
+signing certs payload). ESCALATION: to run the definitive test, the user (in dom0) runs
+`qvm-start win10-tpl --cdrom=win-idd-mgmt:/home/user/win-iso/win-idd-unattended.iso` (win10-tpl is Halted,
+hvm, kernel '', netvm None, 80 GiB root) then `mgmt/win-install-babysitter.sh win10-tpl`; after QWT is up,
+stage KB5066791 (catalog-installable at 2965) via the updater, reboot UNPERTURBED, and confirm UBR advances.
+win10-tpl is currently Halted at 19045.6456 (the routeless testbed, clean) after being freed for the install.
