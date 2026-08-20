@@ -45,6 +45,17 @@ param(
 $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force (Split-Path $StatusFile) | Out-Null
 
+# CONNECT-tunnel keep-alive (2026-08-20): one tunnel through the relay = one backend qrexec channel, so
+# every tunnel .NET drops early is a vchan channel churned (each open/close = a grant permit/revoke, the
+# suspected relay-wedge trigger). .NET already reuses one tunnel per host within this process (Fetch-Msu
+# drains + Close()s each response, KeepAlive default true); the only thing forcing a fresh tunnel across
+# catalog think-gaps is the 100 s default idle drop - raise it so sequential catalog/CDN requests ride one
+# tunnel. (WU's own fe2cr/fe3cr SOAP churn is not ours; it falls only via the relay-side pool changes.)
+try {
+  [System.Net.ServicePointManager]::MaxServicePointIdleTime = 300000
+  [System.Net.ServicePointManager]::SetTcpKeepAlive($true, 30000, 5000)
+} catch {}
+
 # ONE update operation at a time. The scheduled scan, the dom0-driven run and the download task
 # are separate tasks writing ONE status file and sharing ONE proxy, and they collided for real
 # (2026-08-13): the 6-hourly scan fired 6 minutes into a dom0-driven install, rewrote the status
