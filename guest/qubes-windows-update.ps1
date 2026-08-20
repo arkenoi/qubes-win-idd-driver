@@ -788,6 +788,27 @@ function Get-EsuStatus {
   } catch { return 'unknown' }
 }
 
+# Build a human-readable INFORMATIONAL diagnosis for the post-end-of-support / ESU-gated state, so dom0
+# sees WHY the newest security cumulative is not being installed - a licensing ceiling, not a transport
+# failure. Returns $null when there is nothing to report (ESU-entitled, or not the post-EOS Win10 case).
+# Keyed off the OS build + entitlement, NOT a live-clock comparison, so it is deterministic. $avail rows
+# carry content_class/title from Get-Available; used only to name the phantom OOB if one is offered.
+function Get-ServicingNotice($avail, $esu) {
+  if ("$OsBuild" -ne '19045') { return $null }   # only Windows 10 22H2 is post-end-of-support in this fleet
+  if ($esu -eq 'entitled')    { return $null }   # entitled -> the catalog CU installs; nothing to report
+  $exprCU = @($avail | Where-Object { $_.content_class -eq 'express' -and "$($_.title)" -match 'Cumulative Update' })
+  $offer = if ($exprCU.Count -gt 0) {
+    ' Windows Update currently offers only the ESU-enrollment out-of-band (' +
+    (($exprCU | ForEach-Object { $_.kb }) -join ',') + '), which carries no new security content.'
+  } else { '' }
+  return ('Windows 10 22H2 (build 19045) reached end-of-support on 2025-10-14 and this guest is NOT ' +
+    'enrolled in Extended Security Updates (ESU=' + $esu + '). Post-end-of-support security updates ' +
+    'therefore cannot be INSTALLED: the current monthly security cumulative update IS published in the ' +
+    'Microsoft Update Catalog and the updater can fetch it through the proxy, but Windows (CBS) refuses ' +
+    'to apply it without ESU entitlement.' + $offer + ' To resume security servicing, enroll this guest ' +
+    'in ESU with a volume Multiple Activation Key (MAK, offline-activatable). INFORMATIONAL, not an error.')
+}
+
 # Install a KB that Windows Update offers as a self-contained STATIC file (Defender defs and MSRT ship
 # as .exe; some updates as .msu), fetched through the proxy and installed with NO Delivery Optimization
 # / BITS / NLA. This is the routeless-clean replacement for handing these KBs to the DO-gated
@@ -984,13 +1005,27 @@ public static class QubesDb {
   } catch { return $null }
 }
 function Get-QubesVmClass {
-  $t = Get-QubesDbValue '/type'
-  if ($t) { return $t }                              # exact class name - best signal
-  $vt = Get-QubesDbValue '/qubes-vm-type'
-  if (-not $vt) { return $null }                     # qubesdb unreadable -> caller uses fallback
-  if ($vt -eq 'TemplateVM') { return 'TemplateVM' }
-  if ((Get-QubesDbValue '/qubes-vm-updateable') -eq 'True') { return 'StandaloneVM' }
-  return 'AppVM'
+  # WAIT for the qubesdb daemon to finish starting. This is a service-startup ORDERING race, not a random
+  # flake: qdb_open connects to the qubesdb-daemon service (which, at boot, syncs the database from dom0
+  # over vchan). A boot-triggered pass can run before that daemon is serving its pipe, so qdb_open returns
+  # NULL *deterministically* in that window and BOTH /type and /qubes-vm-type read empty. Measured
+  # 2026-08-20: in steady state the read is rock solid (25/25 returned the class); only the early-boot run
+  # read empty. The old code concluded "not a TemplateVM (VmClass='')" on that first empty read and SKIPPED
+  # the whole pass on a real template (doing nothing for a full boot). Retry ONLY while qubesdb is
+  # unreachable (both keys empty) so we wait out the daemon's startup; a populated value returns
+  # immediately, so a steady-state read costs nothing.
+  for ($try = 1; $try -le 8; $try++) {
+    $t = Get-QubesDbValue '/type'
+    if ($t) { return $t }                            # exact class name - best signal
+    $vt = Get-QubesDbValue '/qubes-vm-type'
+    if ($vt) {
+      if ($vt -eq 'TemplateVM') { return 'TemplateVM' }
+      if ((Get-QubesDbValue '/qubes-vm-updateable') -eq 'True') { return 'StandaloneVM' }
+      return 'AppVM'
+    }
+    if ($try -lt 8) { Start-Sleep -Seconds 2 }       # qubesdb not reachable yet - wait out the boot race
+  }
+  return $null                                       # still unreadable after ~14s -> caller uses fallback
 }
 function Test-DirectInternet {
   foreach ($u in 'http://www.msftconnecttest.com/connecttest.txt','http://www.msn.com/') {
@@ -1086,8 +1121,21 @@ try {
   }
 
   $script:St.available=$avail; $script:St.count=$avail.Count; Save
-  Log "scan: $($avail.Count) update(s) available"
-  Report-Availability $avail.Count    # -> dom0 Qube Manager (default-allowed for TemplateVMs)
+  # Post-end-of-support / ESU diagnosis: INFORMATIONAL, computed on every pass from the fresh scan so a
+  # bare `scan` surfaces it too. Explains WHY the newest security cumulative is not installable here.
+  if ("$OsBuild" -eq '19045') {
+    $script:St.esu = Get-EsuStatus
+    $script:St.notice = Get-ServicingNotice $avail $script:St.esu
+  }
+  # dom0's "updates available" marker should reflect ACTIONABLE updates. Under the ESU notice, the
+  # express/ESU-gated offers are informational (in St.notice), not installable - do not count them, or
+  # dom0 would show a permanent "updates available" for a phantom the guest can never apply.
+  $reportCount = $avail.Count
+  if ($script:St.notice) { $reportCount = @($avail | Where-Object { $_.content_class -ne 'express' }).Count }
+  $script:St.remaining = $reportCount; Save
+  Log ("scan: $($avail.Count) update(s) offered" + $(if($script:St.notice){ "; $reportCount actionable (" + ($avail.Count - $reportCount) + " ESU-gated/express informational - see notice)" }else{ '' }))
+  if ($script:St.notice) { Log ("SERVICING NOTICE: " + $script:St.notice) }
+  Report-Availability $reportCount    # -> dom0 Qube Manager (default-allowed for TemplateVMs)
 
   # Applied AFTER reporting: dom0 must always hear the true number of available updates. -OnlyKb
   # narrows what THIS pass acts on, it does not narrow what the guest admits to.
@@ -1342,12 +1390,15 @@ try {
   if ($Action -in 'install','full' -and $script:WuOnlyExpressKbs.Count -gt 0) {
     $script:WuOnlyExpressKbs = @($script:WuOnlyExpressKbs | Sort-Object -Unique)
     foreach ($kb in $script:WuOnlyExpressKbs) {
-      $script:St.result += [ordered]@{ kb=$kb; ok=$false
-        reason='wu-only-express: Windows Update offers this KB only through Delivery Optimization (express streams and/or a delta patch that needs a base); no catalog .msu and no self-contained static installer, so it is not installable on a netvm-free guest' }
+      # severity='info' marks this as INFORMATIONAL, not a failure: it is excluded from the failed/
+      # remaining count reported to dom0 (see below), so a KB the guest can never apply routeless does
+      # not read as a broken update forever. The St.notice (set at scan time) carries the ESU diagnosis.
+      $script:St.result += [ordered]@{ kb=$kb; ok=$false; severity='info'
+        reason='wu-only-express: Windows Update offers this KB only through Delivery Optimization (express streams and/or a delta patch that needs a base); no catalog .msu and no self-contained static installer, so it is not installable on a netvm-free guest. INFORMATIONAL - not a failure.' }
     }
-    if ("$OsBuild" -eq '19045') { $script:St.esu = Get-EsuStatus }
+    if ("$OsBuild" -eq '19045' -and -not $script:St.esu) { $script:St.esu = Get-EsuStatus }
     Save
-    Log ("wu-only-express (terminally classified, not chased): " + ($script:WuOnlyExpressKbs -join ',') +
+    Log ("wu-only-express (informational, terminally classified): " + ($script:WuOnlyExpressKbs -join ',') +
          $(if($script:St.esu){ " ; ESU=$($script:St.esu)" }else{ '' }))
   }
 
@@ -1366,7 +1417,7 @@ try {
       # still reported, and the boot scan re-reports the truth either way, so a wrong guess here
       # self-corrects within ~2 minutes of the restart.
       $failedKbs = @($script:St.result |
-                     Where-Object { $_.PSObject.Properties.Name -contains 'kb' -and -not $_.ok })
+                     Where-Object { $_.PSObject.Properties.Name -contains 'kb' -and -not $_.ok -and $_.severity -ne 'info' })
       $script:St.remaining = $failedKbs.Count; Save
       Log "reboot pending; reporting $($failedKbs.Count) remaining to dom0 (boot scan will confirm)"
       Report-Availability $failedKbs.Count
@@ -1377,9 +1428,14 @@ try {
       # successfully as phase=error.
       try {
         $after = Get-Available
-        $script:St.remaining = $after.Count; Save
-        Log "post-install rescan: $($after.Count) update(s) remain"
-        Report-Availability $after.Count
+        # Refresh the ESU diagnosis from the post-install scan, and report only ACTIONABLE updates so an
+        # ESU-gated/express phantom does not leave dom0 permanently marked "updates available".
+        if ("$OsBuild" -eq '19045') { $script:St.esu = Get-EsuStatus; $script:St.notice = Get-ServicingNotice $after $script:St.esu }
+        $reportCount = if ($script:St.notice) { @($after | Where-Object { $_.content_class -ne 'express' }).Count } else { $after.Count }
+        $script:St.remaining = $reportCount; Save
+        Log ("post-install rescan: $($after.Count) offered; $reportCount actionable to dom0" + $(if($script:St.notice){ ' (ESU-gated informational - see notice)' }else{ '' }))
+        if ($script:St.notice) { Log ("SERVICING NOTICE: " + $script:St.notice) }
+        Report-Availability $reportCount
       } catch {
         Log "post-install rescan failed (updates are installed; availability will be re-reported by the next scan): $($_.Exception.Message)"
       }
