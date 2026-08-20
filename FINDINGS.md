@@ -14425,3 +14425,26 @@ Winlogon logs nothing for that boot.**
 - **Workaround that DOES work pre-session:** `powershell -NoProfile -EncodedCommand <base64 utf-16le>`
   over the SYSTEM shell. No file needed, and it sidesteps the inline-quote mangling that has broken
   so many one-liners in this project. This is now the way to introspect a guest with no session.
+
+### win11-tpl agent refreshed 2026-08-20 — the stale-agent root of the "splash is back" report
+
+win11-tpl carried gui-agent.exe **195,072 bytes, dated 2026-08-11** - the same binary win11-app
+inherits, and eight days older than the LogonUI-denial fix. Replaced with the CI build of the
+current submodule pointer:
+
+    package 4.3.2+agent.4cf7588186f3   agent 4cf7588
+    old 195,072 (83B69F62E532944A)  ->  new 235,256 (EB03126568FAE68B)
+    running image verified as the NEW binary (pid 8656, same size+hash), .orig backup kept
+
+Managed by the `QubesGuiWatchdog` SERVICE (gui-watchdog.exe spawns gui-agent.exe into session 1), so
+the swap order is: stop the service, kill the agent, swap, start the service.
+
+HARNESS DEFECT FIXED IN THE SAME BREATH: the deploy script waited a fixed 8 s and then reported
+`agent_running=false` on a deploy that had actually SUCCEEDED - the watchdog restarts the agent on
+its own polling interval and the process appeared ~30 s in. A false negative like that sends the
+next reader chasing a failure that never happened. It now POLLS for up to 90 s and records
+`agent_wait_secs`.
+
+Incidental but important: win11-tpl's console session is `user ... Active`, i.e. **autologon works
+on the TEMPLATE**. The failure is specific to the AppVM (win11-app), which strengthens the case that
+I3 is an AppVM-specific defect rather than anything about the Win11 image.
