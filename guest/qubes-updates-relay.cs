@@ -141,6 +141,18 @@ static class Relay
             "delivery.mp.microsoft.com",    // tlu.dl... - the actual payload CDN
             "download.microsoft.com",
             "microsoftupdate.com",
+            // Defender signature updates. Measured 2026-08-21: the FULL package is an ordinary
+            // HTTPS GET (203 MB), NOT Delivery-Optimization-only as previously recorded - but the
+            // version parameters are mandatory (the bare URL 404s), so the fwlink redirect has to be
+            // followed to learn the current packageVersion/engineVersion.
+            "definitionupdates.microsoft.com",  // the signature package itself - single purpose
+            // NOTE, deliberately: go.microsoft.com is a general REDIRECTOR, so this is the widest
+            // entry in the list - it can point the caller at many Microsoft properties, not one file
+            // server. Added on the owner's explicit instruction (2026-08-21). The exposure stays
+            // bounded by the two gates that already exist and must NOT be removed: the positional
+            // peer allowlist (only the update process may use the proxy at all) and the temporal
+            // gate (the proxy is torn down when the pass ends).
+            "go.microsoft.com",             // ONLY to resolve the Defender fwlink redirect
         };
     }
     static bool Allowed(string target)
