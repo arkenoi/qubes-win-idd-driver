@@ -41,6 +41,7 @@ on:
   push:
     paths:
       - '.github/workflows/pv-xenvif.yml'
+      - 'patches/xenvif-ctrl-ring-fix.patch'
       - 'patches/xenvif-enable-diag.patch'
 
 env:
