@@ -15540,3 +15540,41 @@ patch, so a release build would have shipped without it and looked like the fix 
 
 Builds: unikernel FIX4 `7628aa65...`; xenvif `543A8A79D71B13F3` (DriverVer 9.1.0.31, diagnostic).
 A release xenvif build carries the fix without the instrumentation.
+
+---
+
+## 2026-08-22 — CORRECTION: it attaches, but throughput is unusable (0.05 MB/s)
+
+**Retracting the framing of the previous entry.** "PV networking works" was premature: I verified
+correctness (link up, cmErr=0, ENABLED-ok, Connected/Connected, HTTP 200) and never measured
+throughput. The owner asked for a large-file benchmark and it is bad.
+
+10 MB (`speedtest.tele2.net/10MB.zip`), same guest, same patched xenvif, same NIC, streamed to
+memory so storage is not in the path:
+
+    core-net (Linux netback)   0.77 s / 0.37 s / 0.16 s   ->  13 - 64 MB/s   (104-509 Mbit/s)
+    fw-net   (mirage)          188 s  / 156 s             ->  0.05 MB/s      (0.4 Mbit/s)
+
+~250-1000x. The transfers COMPLETE and the bytes are correct (10485760 B every time), so this is
+not corruption - it is a rate collapse, roughly 45 packets/s. For reference this dev qube pulls
+the same file at ~16 MB/s, so the network is not the limit.
+
+This also retro-explains the small transfers I had accepted: 48 KB from msn.com in 1.8 s is
+~27 KB/s - the same crawl. I read HTTP 200 as healthy. **Returning the right bytes is not the same
+as working**; a rate check belongs in the acceptance, not as a follow-up.
+
+Candidate mechanisms, NOT yet measured, listed so they are not mistaken for findings:
+- mirage's backend advertises `feature-gso-tcpv4 = false` (netif.ml:730, deliberate in the GSO
+  work: "do not invite the peer to send what we could not pass on"), so every frame to the guest
+  is <= MTU where Linux netback sends large segments;
+- no `feature-split-event-channels`, so one shared event channel does both directions;
+- 45 pkt/s smells like a per-packet stall or a lost-notification/timeout loop rather than a
+  copy-cost ceiling - a copy path would still manage megabytes/s;
+- RX-ring exhaustion causing drops and a collapsed TCP window would produce exactly "completes,
+  very slowly".
+Distinguishing these needs measurement (packet rate, retransmits, ring occupancy), not reasoning.
+
+Also observed: the guest's own `QubesPvNic` applier alerted "network configuration FAILED" on the
+fw-net boot even though the NIC came up - its settle window is exceeded by the slower/later
+attach. Cosmetic relative to the above, but it will keep firing until either the throughput or the
+applier's window changes.
