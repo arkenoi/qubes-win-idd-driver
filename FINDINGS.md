@@ -14860,3 +14860,62 @@ hop and nothing of ours.
 2. The dead-man rollback worked exactly as intended and cost a round: it fired at its 8-minute
    deadline and restored the backup before my `-Confirm` arrived, because my own command latency
    exceeded the window. Widen the window or confirm in the same command block - but keep the net.
+
+---
+
+## 2026-08-21 — I3 ROOT CAUSE IDENTIFIED: xenagent reboots every AppVM boot, forever (a PV-driver boot loop)
+
+I3 was recorded as "AppVM first-boot no-GUI, trigger unidentified". The trigger is now named, from
+the guest's own System log rather than inference:
+
+    05:08:15  6005  Event log started                      <- boot N
+    05:08:19  7045  A service was installed  (x3)          <- PV drivers install AGAIN
+    04:44:35  1074  C:\WINDOWS\System32\xenagent_9_1_0_0.exe has initiated the shutdown ...
+    04:44:01  6005  Event log started                      <- boot N-1
+    04:35:37  1074  xenagent ... has initiated the shutdown
+    04:33:48  6005  Event log started                      <- boot N-2
+    23:44:12  1074  xenagent ... has initiated the shutdown
+    23:08:36  1074  xenagent ... has initiated the shutdown
+
+**The Xen PV driver agent reboots the guest on EVERY boot.** Each cycle it re-installs its services
+(three 7045s) and asks for the reboot that a driver install requires - and the next boot does it all
+again. Nothing else in the guest is broken.
+
+### Why it hits AppVMs and never templates
+
+An AppVM's ROOT volume is a discarded copy-on-write overlay: whatever xenagent writes to record
+"drivers installed, reboot completed" is thrown away at shutdown, so the next boot is, from its point
+of view, the first one. A TEMPLATE's root is persistent, so there the reboot happens once and the
+state sticks - which is exactly why this is 3/3 on AppVMs (win11-app twice, win10-app once, both
+lineages) and never on the templates that log on fine.
+
+### Everything else was a consequence, including things I chased
+
+  - console session stuck at ConnQ, no user   -> the machine restarts before Winlogon finishes
+  - Winlogon/ProfSvc operational channels EMPTY (and verified ENABLED, so that was real evidence)
+  - boot-triggered tasks never run: QubesAutologonGuard could not re-arm autologon, and my own
+    QwtI3Probe (BootTrigger, 45 s delay) showed "Last Run Time 11/30/1999, has not yet run" because
+    the guest reboots before the delay elapses
+  - qrexec answers for about a minute after each boot, then goes silent - that is the cycle, not a
+    wedge
+  - "0.00 cores while unreachable" - I was sampling ACROSS restarts; cputime DECREASING between
+    samples (53.5 -> 50.4 -> 57.5 s) is what finally gave it away, since CPU time only resets when
+    the domain restarts
+
+### Hypotheses this kills (all mine, all measured away)
+
+  missing user profile ....... profile is full and intact on Q:
+  private-volume/profile path  C:\Users -> Q:\Users symlink is fine, ACLs and SID match
+  bad credentials ............ net use with user/qubes succeeds, rc=0
+  consumed DefaultPassword ... restored it, rebooted, no change
+  display configuration ...... the TEMPLATE has the identical IDD-started/VGA-disabled config and
+                               logs on fine - the control refuted it
+  the IPI wedge .............. wedged guests burn ~2.8 cores; this one does not spin at all
+
+### Consequence for U6
+
+U6 (the AppVM branch of the VM-class router) is untestable on an AppVM that reboots every ~90
+seconds. It is blocked on I3 as a matter of fact, not of scheduling. The fix direction is to make
+xenagent's completion state survive - it must live somewhere persistent for an AppVM (the private
+volume) or be satisfied by the template having already done the install - and that is a change to
+the PV driver agent, i.e. qubes-vmm-xen-windows-pvdrivers, not to anything in this repo.
