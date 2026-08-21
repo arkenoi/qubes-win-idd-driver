@@ -1,46 +1,16 @@
 diff --git a/src/xenvif/frontend.c b/src/xenvif/frontend.c
-index 086d0df..341192e 100644
+index 44b6584..0cf7d1c 100644
 --- a/src/xenvif/frontend.c
 +++ b/src/xenvif/frontend.c
-@@ -2088,8 +2088,27 @@ __FrontendUpdateHash(
- 
-     status = ControllerSetHashAlgorithm(Controller,
-                                         NetifAlgorithm);
--    if (!NT_SUCCESS(status))
-+    if (!NT_SUCCESS(status)) {
-+        /* A backend that offers no control ring cannot be told anything about
-+           hashing. When we are not asking for hashing there is no configuration
-+           left to apply, so that is nothing to report - do not fail the device
-+           over it.
-+
-+           Without this, ANY backend without feature-ctrl-ring makes the NIC
-+           unusable: ControllerConnect skips creating the ring (goto done),
-+           ControllerEnable sets Enabled anyway, and ControllerPutRequest then
-+           finds a zeroed ring, where RING_FULL is trivially true (0 - 0 == 0),
-+           and returns STATUS_INSUFFICIENT_RESOURCES. That propagates out of
-+           FrontendEnable, so xennet's MiniportRestart fails and the adapter
-+           ends at CM_PROB_FAILED_POST_START - purely because we could not say
-+           "no hashing" to a peer that never offered hashing.
-+           Measured against a MirageOS netback: qwt-enable-diag recorded
-+           "UpdateHash-FAILED status=c000009a". */
-+        if (NetifAlgorithm == XEN_NETIF_CTRL_HASH_ALGORITHM_NONE)
-+            goto done;
-+
-         goto fail1;
-+    }
- 
-     if (NetifAlgorithm == XEN_NETIF_CTRL_HASH_ALGORITHM_NONE)
-         goto done;
-@@ -2618,6 +2637,30 @@ FrontendDisconnect(
+@@ -2636,6 +2636,29 @@ FrontendDisconnect(
      Trace("<====\n");
  }
  
-+/* QWT DIAGNOSTIC (not for upstream).
-+ * FrontendEnable's failure is invisible on Qubes: Error() goes to DbgPrint -> xen.sys ->
-+ * __outbytestring to port 0xE9/0x12, and neither port reaches anything readable on a Qubes
-+ * host (xl dmesg and the stubdom log are both empty). Publish the outcome of each enable
-+ * step into the FRONTEND's own xenstore directory instead, where the guest reads it back
-+ * through the xeniface XenStore WMI interface - no dom0, no kernel debugger. */
++/* QWT DIAGNOSTIC (not for upstream). On a Qubes host xenvif's Error() output is
++ * unreachable - DbgPrint -> xen.sys -> __outbytestring to port 0xE9 or 0x12, and neither
++ * reaches anything readable (xl dmesg AND the stubdom log are empty). Publish each enable
++ * step into the FRONTEND's own xenstore directory, read back in-guest through the xeniface
++ * XenStore WMI interface. */
 +_IRQL_requires_(DISPATCH_LEVEL)
 +static VOID
 +FrontendEnableDiag(
@@ -62,7 +32,7 @@ index 086d0df..341192e 100644
  _IRQL_requires_(DISPATCH_LEVEL)
  static NTSTATUS
  FrontendEnable(
-@@ -2628,21 +2671,35 @@ FrontendEnable(
+@@ -2646,21 +2669,35 @@ FrontendEnable(
  
      Trace("====>\n");
  
@@ -103,19 +73,16 @@ index 086d0df..341192e 100644
      (VOID) FrontendNotifyMulticastAddresses(Frontend, TRUE);
  
 diff --git a/src/xenvif/receiver.c b/src/xenvif/receiver.c
-index fcd91ab..ac0ad9e 100644
+index fcd91ab..4a6a226 100644
 --- a/src/xenvif/receiver.c
 +++ b/src/xenvif/receiver.c
-@@ -2868,8 +2868,25 @@ __ReceiverRingEnable(
+@@ -2868,8 +2868,22 @@ __ReceiverRingEnable(
      ReceiverRingFill(Ring);
  
      status = STATUS_INSUFFICIENT_RESOURCES;
 -    if (!RING_FULL(&Ring->Front))
 +    if (!RING_FULL(&Ring->Front)) {
-+        /* QWT DIAGNOSTIC (not for upstream): this is the ONLY checked failure in the whole
-+         * FrontendEnable path, and it is silent on Qubes. Publish how far the fill actually
-+         * got - if posted < size the RX buffer/grant supply ran out; the exact shortfall
-+         * says which. Written to the FRONTEND's own directory so the guest can read it. */
++        /* QWT DIAGNOSTIC (not for upstream): publish how far the RX fill got. */
 +        (VOID) XENBUS_STORE(Printf,
 +                            &Receiver->StoreInterface,
 +                            NULL,
