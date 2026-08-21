@@ -99,6 +99,28 @@ jobs:
           }
           Write-Host "confirmed: xenvif $sha defines 0x09000005"
 
+      # THE FIX, always applied. xenvif fails the whole NIC when the backend offers no
+      # feature-ctrl-ring: ControllerConnect skips creating the control ring, ControllerEnable
+      # sets Enabled anyway, and ControllerPutRequest then hits a zeroed ring where RING_FULL is
+      # trivially true (0 - 0 == 0) and returns STATUS_INSUFFICIENT_RESOURCES. That propagates
+      # out of FrontendEnable, so xennet's MiniportRestart fails and the adapter ends at
+      # CM_PROB_FAILED_POST_START - purely because we could not say "no hashing" to a peer that
+      # never offered hashing. Measured against qubes-mirage-firewall; Linux xen-netback
+      # advertises feature-ctrl-ring, which is why it is not seen there.
+      # This MUST NOT be gated on `diagnostic`: without it a release build cannot bring up a
+      # Windows PV NIC on any ctrl-ring-less netback.
+      - name: Apply the control-ring fix (always)
+        shell: pwsh
+        working-directory: xenvif
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git apply --verbose ..\repo\patches\xenvif-ctrl-ring-fix.patch
+          if ($LASTEXITCODE -ne 0) { throw "ctrl-ring fix did not apply" }
+          if (-not (Select-String -Path src\xenvif\frontend.c -Pattern 'no hashing' -Quiet)) {
+            throw "ctrl-ring fix marker missing after patch"
+          }
+          Write-Host "::notice title=xenvif::control-ring fix applied"
+
       # DIAGNOSTIC BUILD, opt-in. On a Qubes host xenvif's Error() output is unreachable:
       # it goes to DbgPrint -> xen.sys -> __outbytestring to port 0xE9 or 0x12, and neither
       # is wired to anything readable (xl dmesg AND the stubdom log are both empty - measured
