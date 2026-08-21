@@ -1,8 +1,37 @@
 diff --git a/src/xenvif/frontend.c b/src/xenvif/frontend.c
-index 086d0df..2aaff24 100644
+index 086d0df..341192e 100644
 --- a/src/xenvif/frontend.c
 +++ b/src/xenvif/frontend.c
-@@ -2618,6 +2618,30 @@ FrontendDisconnect(
+@@ -2088,8 +2088,27 @@ __FrontendUpdateHash(
+ 
+     status = ControllerSetHashAlgorithm(Controller,
+                                         NetifAlgorithm);
+-    if (!NT_SUCCESS(status))
++    if (!NT_SUCCESS(status)) {
++        /* A backend that offers no control ring cannot be told anything about
++           hashing. When we are not asking for hashing there is no configuration
++           left to apply, so that is nothing to report - do not fail the device
++           over it.
++
++           Without this, ANY backend without feature-ctrl-ring makes the NIC
++           unusable: ControllerConnect skips creating the ring (goto done),
++           ControllerEnable sets Enabled anyway, and ControllerPutRequest then
++           finds a zeroed ring, where RING_FULL is trivially true (0 - 0 == 0),
++           and returns STATUS_INSUFFICIENT_RESOURCES. That propagates out of
++           FrontendEnable, so xennet's MiniportRestart fails and the adapter
++           ends at CM_PROB_FAILED_POST_START - purely because we could not say
++           "no hashing" to a peer that never offered hashing.
++           Measured against a MirageOS netback: qwt-enable-diag recorded
++           "UpdateHash-FAILED status=c000009a". */
++        if (NetifAlgorithm == XEN_NETIF_CTRL_HASH_ALGORITHM_NONE)
++            goto done;
++
+         goto fail1;
++    }
+ 
+     if (NetifAlgorithm == XEN_NETIF_CTRL_HASH_ALGORITHM_NONE)
+         goto done;
+@@ -2618,6 +2637,30 @@ FrontendDisconnect(
      Trace("<====\n");
  }
  
@@ -33,7 +62,7 @@ index 086d0df..2aaff24 100644
  _IRQL_requires_(DISPATCH_LEVEL)
  static NTSTATUS
  FrontendEnable(
-@@ -2628,21 +2652,35 @@ FrontendEnable(
+@@ -2628,21 +2671,35 @@ FrontendEnable(
  
      Trace("====>\n");
  
