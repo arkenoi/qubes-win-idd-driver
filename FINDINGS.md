@@ -15372,3 +15372,62 @@ an algorithm - a live candidate, not yet the proven cause.
 
 Do not guess between those two: they point at opposite fixes (a xenvif tolerance issue vs a
 mirage connect/GSO bug).
+
+---
+
+## 2026-08-22 — the PV NIC failure is OURS: mirage turned a routine close into a destroyed device
+
+Second Fable workflow (4 lenses -> 14 candidates -> 2 adversarial refuters each -> 10 survived,
+4 refuted -> synthesis; confidence "strong"). It confirms the hypothesis the rig data pointed at
+and adds the half I had missed.
+
+**The instrument worked and killed my own leading theory.** The instrumented xenvif (master
+94853a0 + patches/xenvif-enable-diag.patch) was confirmed running BY HASH in the guest
+(081BA15DA7AEE0E3, byte-identical to the artifact, marker strings present in the .sys). Its patch
+writes `qwt-enable-diag = "begin"` as the FIRST statement of FrontendEnable, unconditionally.
+Enumerating `device/vif/0` found **no such key** -> **FrontendEnable was never entered**, and the
+NET PDO was absent entirely. So the failure is NOT in ReceiverEnable's RING_FULL check, which is
+where I had narrowed it. Retracted.
+
+**Root cause, in OUR code, both halves proven from source:**
+`disconnect_backend` (mirage-net-xen) did two fatal things on a runtime close:
+1. **Wrote Closed while skipping Closing.** xenvif drives its close from the BACKEND's state:
+   seeing Closing it writes frontend Closed; seeing Closed it exits its loop writing nothing
+   (frontend.c:1644-1668). Jumping straight to Closed leaves the frontend parked at Closing(5)
+   for ever - the exact measured state, ring refs still present.
+2. **Removed the backend directory.** That directory is the toolstack's; Linux xen-netback never
+   deletes it while the domain lives. xenvif reads a vanished backend as HOT-UNPLUG, not a closed
+   device: every later state read returns Unknown (frontend.c:1573-1577) -> FrontendSetOffline ->
+   PdoRequestEject -> FdoScan issues IoRequestDeviceEject -> PdoEject marks Deleted+Missing, and
+   thereafter every re-created PDO self-destructs inside PdoCreate, because FdoScan still lists
+   the device from the intact FRONTEND directory. One ordinary close = permanently missing NIC.
+That is what discriminator (d) was isolating all along: the guest's close cycles are ordinary and
+Linux absorbs them invisibly; only mirage made them terminal.
+
+**Not established, and not guessed:** what initiates the FIRST close on each boot (boot #1 an
+enable-stage unwind that reached MiniportRestart, boot #2 a bare PnP teardown before enable).
+Neither is provably mirage-conditional. It stops mattering once closes are recoverable - and if an
+enable-stage failure does persist, the shipped qwt-enable-diag will finally capture it, because
+retries now reach FrontendEnable.
+
+**Fix (three parts, all ours, none in xenvif):**
+1. `mirage-net-xen/lib/xenstore.ml` `disconnect_backend`: Closing -> wait for the frontend ->
+   Closed -> park. Never rm. (`0003-vif-backend-runtime-close.patch`)
+2. `mirage-net-xen/lib/netif.ml|.mli`: `make_backend ?on_closed` - the closure signal that the
+   vanishing directory used to provide, fired after rings are unmapped and the close is answered.
+3. `qubes-mirage-firewall/dispatcher.ml`: serve a vif across MANY connections. Per-connection
+   Cleanup.t released on closure (so the IP frees immediately), then re-serve; the outer
+   cleanup_tasks still ends the loop when the directory really goes.
+
+Earlier fixes STAY: mirage-net-xen 05c69ef (pre-connect close/reconnect state machine) is
+load-bearing for the reconnect, and qmf eac93cf (identity-safe remove_client + cancellable
+admission) is load-bearing for re-admission.
+
+Built: `a4b4f60b...` (control `951b4aff...`; previous `8071def9...`). Differential check: the
+"serving the vif again" string appears 2x in the new binary and 0x in the previous one.
+NOT YET RUN ON THE RIG - installing the unikernel needs dom0.
+
+**Warning for the next run, so nobody declares victory at "connected":** mirage omits
+`feature-no-csum-offload` yet discards TX checksum flags, so once the NIC attaches TCP/UDP egress
+may still fail until mirage either advertises `feature-no-csum-offload=0` or honours
+NETTXF_csum_blank.
