@@ -86,7 +86,13 @@ $shortAgent = if ($agentSha -ne 'unknown') { $agentSha.Substring(0, 12) } else {
 $baseQwt = '4.2.2'
 # Our deliverable's own version (QWT-NG). Distinct from $baseQwt, which records the stock
 # QWT release the overlay requires (targets_qwt_version in the manifest).
-$ngVersion = '4.3.0'
+# READ, never hardcoded: agent/version is the single source of truth that make-setup.ps1 and
+# qwt-full.yml (MSI ProductVersion) already use. This literal had been left at 4.3.0 through the
+# 4.3.1 and 4.3.2 releases, so every overlay package since announced a version it was not.
+$ngVersionFile = Join-Path $RepoRoot 'agent/version'
+if (-not (Test-Path -LiteralPath $ngVersionFile)) { throw "agent/version not found at $ngVersionFile - cannot determine the deliverable version" }
+$ngVersion = (Get-Content -LiteralPath $ngVersionFile -Raw).Trim()
+if ($ngVersion -notmatch '^\d+\.\d+\.\d+$') { throw "agent/version must be MAJOR.MINOR.PATCH; got '$ngVersion'" }
 $version = "$ngVersion+agent.$shortAgent"
 
 # ---------------------------------------------------------------- dependency refs, parsed
