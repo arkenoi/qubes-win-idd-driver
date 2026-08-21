@@ -76,6 +76,9 @@ jobs:
             }
           }
           if ($bad) { throw "$bad switch(es) resolve the wrong relaunch target" }
+          # The GH pwsh wrapper exits with the trailing $LASTEXITCODE, which here is still the exit
+          # code of the last `cmd /c` - so a step that PASSED can fail on a non-zero install.cmd rc.
+          exit 0
 
       - name: install.cmd - an unknown switch must be refused, not ignored
         shell: pwsh
@@ -83,8 +86,10 @@ jobs:
           $script = (Resolve-Path 'packaging\setup\install.cmd').Path
           $env:QWT_ELEVATE_DRYRUN = '1'
           & cmd /c "`"$script`" /definitely-not-a-switch" | Out-Null
-          if ($LASTEXITCODE -eq 0) { throw "unknown switch was accepted (exit 0) - it must fail" }
-          Write-Host "  OK  unknown switch rejected with exit $LASTEXITCODE"
+          $rc = $LASTEXITCODE
+          if ($rc -eq 0) { throw "unknown switch was accepted (exit 0) - it must fail" }
+          Write-Host "  OK  unknown switch rejected with exit $rc"
+          exit 0   # the non-zero rc above is the PASS condition; do not leak it as the step's status
 
       # ---------------------------------------------------------------- 3. PowerShell parse
       - name: PowerShell - parse every shipped script
