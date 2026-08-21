@@ -15228,3 +15228,57 @@ decision for the maintainer, not something to patch blind.
 **Not submitted.** Per CLAUDE.md the exact diff/text needs the owner's approval first; the patch
 is `/home/user/mirage-gso/0001-stop-waiting-on-closing-frontend.patch`. Live testing needs dom0
 (copying the unikernel to `/var/lib/qubes/vm-kernels/`), which is the owner's action.
+
+---
+
+## 2026-08-21 (later) — RETRACTION + real root cause: the Windows frontend closes BEFORE it connects
+
+**RETRACTED, loudly: the fix recorded in the entry above is the wrong shape and is withdrawn.**
+Making `read_frontend_configuration` FAIL on Closing/Closed stops the wedge but **forecloses the
+attach** - the failure unwinds into `disconnect_backend`, which parks the backend at Closed and
+removes the backend directory, and neither is a state the frontend can reconnect from; the
+dispatcher admits each (domid,devid) exactly once (dispatcher.ml:503/518) so `make_backend` never
+re-runs. It turns a wedged guest into a guest with permanently no PV networking. The owner's call
+- "until we get guest PV-attached it is pointless" - was correct. Do not ship it.
+
+**Real root cause** (Fable workflow, 5 lenses -> 14 candidates -> 2 adversarial refuters each -> 7
+refuted -> synthesis; confidence "strong", traced but not yet run on the rig):
+
+mirage-net-xen implements only the FORWARD half of the vif xenbus handshake. **xenvif begins every
+device bring-up with a close cycle**, which the backend never answers:
+
+- At PDO creation, before any attempt to connect, `__FrontendResume` calls
+  `FrontendSetState(FRONTEND_CLOSED)` (frontend.c:2659-2668). There is no direct UNKNOWN->CLOSED
+  edge, so the walk runs FrontendPrepare (instant - backend already at InitWait, frontend.c:1537)
+  then FrontendClose.
+- FrontendClose writes frontend **Closing(5)** and loops until the backend answers Closed
+  (frontend.c:1471-1501). Against a backend parked at InitWait none of its exits can fire.
+- Both sides therefore stop for ever at **backend=2 / frontend=5** - exactly the measured snapshot.
+- That loop polls at DISPATCH_LEVEL under `Frontend->Lock` **inside PdoCreate**, so PnP never
+  completes: 2 cores burnt, no qrexec, no ACPI. The wedge is a symptom of the same deadlock.
+
+This is the first explanation that survives both discriminators: the STUBDOM vif connects on the
+same unikernel because its frontend is a Linux netfront that only does the forward handshake; a
+Linux netvm works because xen-netback's `frontend_changed`/`set_backend_state` implements the full
+machine including the Closed->InitWait reconnect edge.
+
+**Refuted, do not re-propose:** missing/extra backend keys (every key xenvif reads pre-connect is
+optional with a safe default; it never reads hotplug-status, mac or handle); late or misordered
+InitWait (all six feature keys were present on the measured boot, proving init_backend completed
+early; and xenvif has no timeout-to-Closing transition - Closing is only ever written
+deliberately); FrontendConnect failing early (unreachable - the wedge holds the lock inside
+PdoCreate before any start IRP); the same-IP collision as the wedge (the guest client never
+reached Client_eth - no "Waiting for old client" line in the log).
+
+**Fix applied and built**: answer the cycle - Closing->Closing, Closed->Closed, then re-arm at
+InitWait once the frontend leaves Closed (mirroring xen-netback). No Windows-side change needed.
+Upstream head builds reproducibly (951b4aff... == qubes-firewall.sha256); with the fix
+be71a900..., new runtime string present 2x vs 0x in the control.
+
+**Held back deliberately**: the qubes-mirage-firewall traffic-layer patch (vif_type discriminator,
+identity-safe remove_client, PV-takeover of the shared IP). An HVM's two vifs share one IP and
+ownership is supposed to resolve serially via the emulated-NIC unplug; whether that handover
+completes on this testbed is unknown, and a takeover rule firing wrongly would hijack an IP from a
+live interface. Ready, not applied on a guess - the rig discriminator decides.
+
+Full write-up + patch + test plan (incl. the control that must fail): `/home/user/mirage-gso/`.
