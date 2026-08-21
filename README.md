@@ -20,31 +20,35 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.1-agentc7ccb45](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.1-agentc7ccb45)** — agent `c7ccb45`, package `4.3.1+agent.c7ccb459aec9`.
+Release **[v4.3.3-agent1b39652](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.3-agent1b39652)** — agent `1b39652`, package `4.3.3+agent.1b39652a280f`.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.1-1.agentc7ccb459aec9.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agentc7ccb45/qubes-windows-tools-ng-4.3.1-1.agentc7ccb459aec9.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso` and auto-patches `qvm-create-windows-qube` to use it |
-| [`qwt-ng-4.3.1-agentc7ccb45.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agentc7ccb45/qwt-ng-4.3.1-agentc7ccb45.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qwt-ng-4.3.1-agentc7ccb45-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agentc7ccb45/qwt-ng-4.3.1-agentc7ccb45-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.1-agentc7ccb45/SHA256SUMS.txt) | checksums for all three |
+| [`qubes-windows-tools-ng-4.3.3-1.agent1b39652a280f.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.3-agent1b39652/qubes-windows-tools-ng-4.3.3-1.agent1b39652a280f.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
+| [`qwt-ng-4.3.3-agent1b39652.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.3-agent1b39652/qwt-ng-4.3.3-agent1b39652.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qwt-ng-4.3.3-agent1b39652-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.3-agent1b39652/qwt-ng-4.3.3-agent1b39652-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.3-agent1b39652/SHA256SUMS.txt) | checksums for all three |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.1-1.agentc7ccb459aec9.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.3-1.agent1b39652a280f.noarch.rpm
 ```
 
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction (validated end to end; see the release notes).
 
-**Provenance.** The agent here (`c7ccb45`) is commit `09b643e` with only the version string
-bumped to 4.3.1 (no code change), so it is functionally the binary the end-to-end upgrade
-test verified installed, running and hash-matched, and the one the performance A/B ran on, both
-on `09b643e`. The version-resource bump changes the bytes, so `gui-agent.exe` in these assets
-carries a new hash (sha256 prefix `99480D876377E41B`); the Windows build is not
-timestamp-reproducible, so hashes differ across rebuilds of identical source regardless.
+**What changed in 4.3.3:** three defects reported from real installs (`install.cmd /iddoff`
+failing with `C:\iddoff`, a dead Windows key, and a black window on the first boot after
+install), the Windows-update path closed end to end, and the boot/shutdown flash removed.
+Full list: [docs/RELEASE-NOTES-4.3.3.md](docs/RELEASE-NOTES-4.3.3.md).
+
+**Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
+commit; the agent is `1b39652` on
+[arkenoi/qubes-gui-agent-windows](https://github.com/arkenoi/qubes-gui-agent-windows). The
+Windows build is not timestamp-reproducible, so binary hashes differ across rebuilds of identical
+source; `MANIFEST.json` inside each asset records the exact source commits the build came from.
 
 ---
 ## Read this first
@@ -100,6 +104,30 @@ and caveats: "Performance" below.
 Stock Windows Tools shows a doubled mouse cursor — dom0 draws its own pointer over the guest
 window while the guest also paints one into the captured frame, in every mode. This build
 blanks the guest-side cursor so only dom0's is visible.
+
+### No black flash while Windows boots, shuts down or switches sessions
+
+Windows renders its login, lock, "shutting down" and initial-desktop screens through a single
+full-screen `LogonUI` window. Mapping it produced a black or blue frame that took over the qube's
+window at every boot and shutdown. It is now denied outright — and permanently: the Windows
+**secure desktop is never presented to dom0**, which is a deliberate security decision, not a
+cosmetic one. A guest that reaches a *visible* Windows login screen is a misconfiguration to fix
+(autologon), not something this build will render for you.
+
+### The Start menu works again
+
+Earlier builds blocked the Windows key in seamless mode. In seamless the taskbar window is never
+mapped, so that key is the only way into any Start menu — including third-party shells. The block
+is now **opt-in**; nothing to do unless you want it back.
+
+### A qube built from a Windows template boots the first time
+
+Attaching a netvm to a Windows guest used to make its first boot install the PV network drivers and
+then reboot itself. Where the root volume persists that is one surprising restart with a black
+window for ~30 s; where the root volume is a **discarded CoW overlay — every app qube** — the same
+work is redone on every boot, so the qube never finishes starting. Priming now happens once, in the
+template, with no network attached at any point. App qubes built from a primed template reach a
+logged-in desktop with a netvm attached and no restarts.
 
 ### Office windows render as one window
 
@@ -239,10 +267,22 @@ single-variable), methodology, caveats and every retraction:
 ## Windows updates
 
 dom0 drives every pass (Qube Manager); the guest never installs on its own (`NoAutoUpdate=1`).
-Packages come from the Microsoft Update Catalog over a qrexec relay with a 4-host allowlist —
+Packages come from the Microsoft Update Catalog over a qrexec relay with a host allowlist —
 no netvm, no general egress. WU still DISCOVERS updates (its COM searcher, online through the
 proxy); only its download/install path was dropped — that path needs egress for DoSvc, can't be
 told which package to install, and crawled at 120–150 KB/s (never root-caused).
+
+The proxy is **template-only**: an app qube, a disposable or a standalone never acquires a proxy
+and never starts the relay. A standalone with real internet turns the proxy updater off *and*
+lifts `NoAutoUpdate`, so it is not left with updates disabled and nobody driving them.
+
+Three failure modes that made this unreliable are fixed in 4.3.3: `0x80072F8F` (schannel could not
+fetch Microsoft's certificate trust lists on a guest with no direct route — the CTLs are now
+mirrored through the relay); a truncated response being served to Windows as a success (the relay
+now answers `502` rather than hand over a short body); and the tail of a long command's output
+being lost when the qrexec channel closed. Updates that genuinely cannot be installed — post-EOS
+packages, express-only packages with no route, WU-client blobs DISM will not take — are now
+reported as informational rather than counted as failures.
 
 The catalog returns every file bundled with an update. For KB5121003 it also returned superseded
 KB5043080 — DISM rejects it (rc=552), poisoning CBS so the cumulative rolled back at boot
@@ -254,6 +294,27 @@ avoided — at 12.8 MB/s, ~45 min end to end. The catalog ships full cumulatives
 ≈ 24% of bytes, the price of a closed egress surface.
 
 ---
+
+## Configuration
+
+Everything optional is a Qubes feature, set from dom0 and read by the guest — nothing to edit
+inside Windows. The full reference, including precedence, defaults and the guest-local registry
+overrides, is [docs/QVM-FEATURES.md](docs/QVM-FEATURES.md). The short version:
+
+| set in dom0 | what it does |
+|---|---|
+| `qvm-features <vm> service.enableWinKey 1` | let the Windows key through, so Start (or a third-party shell) opens. Default: blocked in seamless mode |
+| `qvm-features <vm> service.gui-fullscreen 1` | allow a **borderless** true-fullscreen window (game, video, presentation). A maximized app with a title bar is always allowed; the boot/shutdown screen is never allowed, feature or not |
+
+Both are ordinary Qubes service features — any non-empty value enables, `qvm-features --unset`
+turns them off — and both are read **once, when the agent starts**, so restart the qube after
+changing one.
+
+Two settings are required rather than optional, and the dom0 RPM applies them for you
+(`qwt-ng-prepare-qube <vm>` applies them to a qube created later): the `vmexec` feature, without
+which dom0's update commands arrive at `cmd.exe` as shell text and the run aborts, and a raised
+`qrexec_timeout`, because a Windows boot that is *applying* an update can take minutes to answer
+qrexec against a 60 s default.
 
 ## Known limitations
 
