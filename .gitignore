@@ -36,3 +36,8 @@ tools/*/x64/
 **/fullshot/
 screen.png
 evidence/
+
+# Build OUTPUT, produced by CI (release-package.yml). Never commit it: a committed copy silently
+# drifted from source and shipped a pre-fix installer for three releases. See the README there.
+release-artifacts/*
+!release-artifacts/README.md

@@ -1,5 +1,0 @@
-xenvif built from xenbits master @ 94853a036fb318fb1eec481ac3fb9d01d0a90cdf
-reason: the xenvif/xennet pair pinned by qubes-vmm-xen-windows-pvdrivers cannot bind -
-        pinned xenvif tops out at REV_09000004, pinned xennet requires REV_09000005.
-        rev 5 was added by xenvif commit 4608bc1 (Use UNPLUG v3).
-signing: throwaway test cert (guest runs with testsigning enabled by our installer)
