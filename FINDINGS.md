@@ -14919,3 +14919,63 @@ seconds. It is blocked on I3 as a matter of fact, not of scheduling. The fix dir
 xenagent's completion state survive - it must live somewhere persistent for an AppVM (the private
 volume) or be satisfied by the template having already done the install - and that is a change to
 the PV driver agent, i.e. qubes-vmm-xen-windows-pvdrivers, not to anything in this repo.
+
+---
+
+## 2026-08-21 — the AppVM-with-netvm defect RESOLVED by priming, and a correction to what I claimed
+
+### Correction first: I presented known prior art as a discovery, and mislabelled it
+
+I reported "I3 ROOT CAUSE IDENTIFIED: xenagent reboots every AppVM boot". Two things wrong with that:
+
+1. **It is not I3.** I3 is "AppVM first-boot no-GUI". What I diagnosed is the defect already recorded
+   on 2026-08-17 at FINDINGS 12126, "OPEN: an AppVM with a netvm dies ~28 s after activation", with
+   the identical discriminator already measured there: netvm unset -> stable, netvm=core-net -> dies.
+   I should have read the record before claiming a root cause; the owner had to point it out.
+2. **Removing the netvm is not a fix**, it is avoiding the case. The owner's correction: the fix is
+   PRE-SEEDING - and it already existed. I had briefly cleared netvm on both AppVMs; that is undone,
+   both are back on core-net and were verified WITH the netvm attached.
+
+### Why priming was missing here (not "lost")
+
+Priming IS wired into the product: `Install-QwtImproved.ps1` seeds it and `make-setup.ps1` stages
+`pvnic-selfprime.ps1` into the package. But it is gated on the qube being detected as a TemplateVM,
+read LIVE from qubesdb - and that read is exactly what the QdbDaemon startup race (U12) broke: an
+empty class reads as "not a template", so priming is skipped silently. win11-tpl's QWT dates from
+2026-08-11; U12 was only fixed on 2026-08-20. So this template predates the fix and never got primed:
+
+    win11-tpl before: XEN\Unplug\NICS absent, QubesPvNic absent, pvnic-boot.ps1 absent
+    win10-tpl before: same
+
+That also means U12's fix has a second consequence nobody had connected: it stops future installs
+from silently skipping the PV NIC priming.
+
+### Applied and VERIFIED, with the netvm attached
+
+    prime win11-tpl -> ok:true armed:true nics:1 vif_enum_key:true
+                       QubesPvNic Running, QubesPvNicRearm Ready, latch NICS=1
+    win11-app (netvm=core-net): cputime rising across 5 samples - NO reboots
+                                session: >console user 1 Active
+
+    prime win10-tpl -> ok:true armed:true nics:1
+    win10-app (netvm=core-net): reboot loop detected: 0
+                                session: >console user 1 Active
+
+Both AppVMs now reach a logged-on user session with their netvm attached. That is the first time an
+app qube in this project has done so, and it closes the 2026-08-17 "templates are unusable to create
+actual VMs" report.
+
+### What the boot loop actually was (the mechanism, which IS new)
+
+With a netvm attached, the guest gets a vif plus an emulated Realtek NIC. On an UNPRIMED template's
+app qube, xenagent installs the network drivers on every boot - three 7045 "service was installed"
+events for xennet.sys, xenvif.sys and Rtnic64.sys - and then issues a 1074 shutdown, because a driver
+install wants a reboot. An AppVM's root volume is a discarded CoW overlay, so that work never
+persists and the next boot repeats it, forever. Priming puts the drivers and the unplug latch in the
+TEMPLATE's persistent root, so the app qube has nothing left to install.
+
+Consequences that had me chasing ghosts: the console session never leaves ConnQ (the machine
+restarts before Winlogon finishes), Winlogon/ProfSvc channels stay empty although enabled,
+boot-triggered tasks never reach their delay (QubesAutologonGuard could not re-arm autologon, and my
+own probe task read "has not yet run"), qrexec answers for about a minute per cycle, and CPU looks
+idle because samples straddle restarts. `cputime` DECREASING between samples is the tell.
