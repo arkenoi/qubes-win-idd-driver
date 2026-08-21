@@ -146,6 +146,11 @@ Every `qvm-features` flag and qubesdb key this release reads is documented in
     qvm-features <vm> service.enableWinKey 1     # let the Windows key through (Start / Open-Shell)
     qvm-features <vm> service.gui-fullscreen 1   # allow borderless true-fullscreen windows
 
+`service.guestTitleBar` is renamed to **`service.hideGuestTitleBar`** and now follows the same
+convention as every other feature: a non-empty value enables it. Its old opt-in was spelled `0`,
+which dom0 cannot express for a service feature, so the knob could not actually be turned on. It
+stays experimental and default-off.
+
 ---
 
 ## Known limitations
