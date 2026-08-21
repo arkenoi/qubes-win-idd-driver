@@ -279,6 +279,27 @@ static class Relay
             new MemoryStream()).Result;
         check("close-delimited: complete on EOF", r5.Complete);
 
+        // 6. A reply to HEAD advertises Content-Length and sends NO body. This shipped broken for a
+        //    few hours: the honesty gate refused a real `HEAD ...windows-kb5001716...` with 502 after
+        //    six attempts (body=0/858972). Headers ARE the whole answer here.
+        HttpResponse r6 = ReadResponse(
+            new MemoryStream(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 858972\r\n\r\n")),
+            new MemoryStream(), true).Result;
+        check("HEAD: headers-only reads complete", r6.Complete);
+
+        // 7. Same shape, but a GET - here a missing body IS a truncation and must still be caught,
+        //    otherwise case 6 would have been "fixed" by blinding the check.
+        HttpResponse r7 = ReadResponse(
+            new MemoryStream(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 858972\r\n\r\n")),
+            new MemoryStream(), false).Result;
+        check("GET: headers-only still reads INCOMPLETE", !r7.Complete);
+
+        // 8. 204 No Content carries no body regardless of method.
+        HttpResponse r8 = ReadResponse(
+            new MemoryStream(Encoding.ASCII.GetBytes("HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")),
+            new MemoryStream(), false).Result;
+        check("204: reads complete", r8.Complete);
+
         Console.WriteLine(failed == 0 ? "=== SELFTEST OK ===" : ("=== SELFTEST FAILED (" + failed + ") ==="));
         return failed == 0 ? 0 : 1;
     }
@@ -767,7 +788,33 @@ static class Relay
             && b[len - 2] == 13 && b[len - 1] == 10;
     }
 
+    // A response with NO BODY BY DEFINITION is complete as soon as its headers arrive, even though
+    // it may advertise a Content-Length describing the body a GET would have returned.
+    //   - a reply to HEAD  (Content-Length present, body deliberately absent)
+    //   - 204 No Content, 304 Not Modified, and 1xx
+    // Getting this wrong is not academic: the honesty gate refused a legitimate
+    // `HEAD ...windows-kb5001716...` with 502 after six attempts, logging body=0/858972 - the server
+    // was behaving correctly and the relay called it a truncated transfer.
+    static bool BodylessResponse(bool requestWasHead, byte[] buf, int headerEnd)
+    {
+        if (requestWasHead) return true;
+        if (headerEnd <= 0 || buf.Length < 12) return false;
+        // "HTTP/1.1 204 ..." - the status code starts at offset 9 of the status line
+        int code = 0;
+        for (int i = 9; i < 12 && i < buf.Length; i++)
+        {
+            if (buf[i] < (byte)'0' || buf[i] > (byte)'9') return false;
+            code = code * 10 + (buf[i] - (byte)'0');
+        }
+        return code == 204 || code == 304 || (code >= 100 && code < 200);
+    }
+
     static async Task<HttpResponse> ReadResponse(Stream rs, Stream client)
+    {
+        return await ReadResponse(rs, client, false);
+    }
+
+    static async Task<HttpResponse> ReadResponse(Stream rs, Stream client, bool requestWasHead)
     {
         MemoryStream buf = new MemoryStream();
         byte[] tmp = new byte[65536];
@@ -775,6 +822,7 @@ static class Relay
         long expected = -1;
         bool chunked = false;
         bool chunkDone = false;
+        bool bodyless = false;
         bool spilled = false;
         bool sawEof = false;
         long got = 0;                  // body bytes seen, buffered or streamed
@@ -834,6 +882,10 @@ static class Relay
                 }
             }
 
+            // No-body responses (HEAD reply, 204/304/1xx) are finished at the header block; waiting
+            // for `expected` bytes that will never come would stall until EOF and then be judged
+            // incomplete.
+            if (headerEnd > 0 && BodylessResponse(requestWasHead, buf.GetBuffer(), headerEnd)) { bodyless = true; break; }
             if (headerEnd > 0 && expected >= 0 && got >= expected) break;
 
             // Spill point: hand over what we have and pump the rest, rather than cutting the body.
@@ -857,7 +909,8 @@ static class Relay
         r.LengthKnown = (headerEnd > 0 && expected >= 0);
         r.Chunked = chunked;
         r.GotBody = got;
-        if (r.LengthKnown) r.Complete = (got >= expected);
+        if (bodyless) r.Complete = (headerEnd > 0);     // HEAD / 204 / 304 / 1xx: headers ARE the answer
+        else if (r.LengthKnown) r.Complete = (got >= expected);
         else if (chunked) r.Complete = chunkDone;
         else r.Complete = (headerEnd > 0 && sawEof);   // close-delimited: the close is the framing
         return r;
@@ -876,6 +929,9 @@ static class Relay
         int nl0 = Array.IndexOf(head, (byte)'\n', 0, Math.Min(hlen, 200));
         if (nl0 < 0) nl0 = Math.Min(hlen, 60);
         reqLine = Encoding.ASCII.GetString(head, 0, Math.Max(0, Math.Min(nl0, 120))).Trim();
+        // A reply to HEAD carries Content-Length but no body; the completeness check must know that
+        // or it will judge a perfectly good response truncated and refuse it.
+        bool isHead = reqLine.StartsWith("HEAD ", StringComparison.OrdinalIgnoreCase);
         HttpResponse best = null;
         int attempts = 0;
         try
@@ -909,7 +965,7 @@ static class Relay
                         {
                             await ch.Stream.WriteAsync(head, 0, hlen);
                             await ch.Stream.FlushAsync();
-                            r = await ReadResponse(ch.Stream, a);
+                            r = await ReadResponse(ch.Stream, a, isHead);
                         }
                         catch (Exception e) { Log(logPath, "PLAIN read error " + e.GetType().Name + ": " + e.Message); }
                     }
