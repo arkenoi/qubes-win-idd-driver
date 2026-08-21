@@ -1,0 +1,106 @@
+diff --git a/src/xenvif/frontend.c b/src/xenvif/frontend.c
+index 086d0df..2aaff24 100644
+--- a/src/xenvif/frontend.c
++++ b/src/xenvif/frontend.c
+@@ -2618,6 +2618,30 @@ FrontendDisconnect(
+     Trace("<====\n");
+ }
+ 
++/* QWT DIAGNOSTIC (not for upstream).
++ * FrontendEnable's failure is invisible on Qubes: Error() goes to DbgPrint -> xen.sys ->
++ * __outbytestring to port 0xE9/0x12, and neither port reaches anything readable on a Qubes
++ * host (xl dmesg and the stubdom log are both empty). Publish the outcome of each enable
++ * step into the FRONTEND's own xenstore directory instead, where the guest reads it back
++ * through the xeniface XenStore WMI interface - no dom0, no kernel debugger. */
++_IRQL_requires_(DISPATCH_LEVEL)
++static VOID
++FrontendEnableDiag(
++    IN  PXENVIF_FRONTEND    Frontend,
++    IN  const CHAR          *Stage,
++    IN  NTSTATUS            status
++    )
++{
++    (VOID) XENBUS_STORE(Printf,
++                        &Frontend->StoreInterface,
++                        NULL,
++                        __FrontendGetPath(Frontend),
++                        "qwt-enable-diag",
++                        "%s status=%08x",
++                        Stage,
++                        status);
++}
++
+ _IRQL_requires_(DISPATCH_LEVEL)
+ static NTSTATUS
+ FrontendEnable(
+@@ -2628,21 +2652,35 @@ FrontendEnable(
+ 
+     Trace("====>\n");
+ 
++    FrontendEnableDiag(Frontend, "begin", 0);
++
+     status = MacEnable(__FrontendGetMac(Frontend));
+-    if (!NT_SUCCESS(status))
++    if (!NT_SUCCESS(status)) {
++        FrontendEnableDiag(Frontend, "MacEnable-FAILED", status);
+         goto fail1;
++    }
++    FrontendEnableDiag(Frontend, "MacEnable-ok", 0);
+ 
+     status = ReceiverEnable(__FrontendGetReceiver(Frontend));
+-    if (!NT_SUCCESS(status))
++    if (!NT_SUCCESS(status)) {
++        FrontendEnableDiag(Frontend, "ReceiverEnable-FAILED", status);
+         goto fail2;
++    }
++    FrontendEnableDiag(Frontend, "ReceiverEnable-ok", 0);
+ 
+     status = TransmitterEnable(__FrontendGetTransmitter(Frontend));
+-    if (!NT_SUCCESS(status))
++    if (!NT_SUCCESS(status)) {
++        FrontendEnableDiag(Frontend, "TransmitterEnable-FAILED", status);
+         goto fail3;
++    }
++    FrontendEnableDiag(Frontend, "TransmitterEnable-ok", 0);
+ 
+     status = __FrontendUpdateHash(Frontend, &Frontend->Hash);
+-    if (!NT_SUCCESS(status))
++    if (!NT_SUCCESS(status)) {
++        FrontendEnableDiag(Frontend, "UpdateHash-FAILED", status);
+         goto fail4;
++    }
++    FrontendEnableDiag(Frontend, "ENABLED-ok", 0);
+ 
+     (VOID) FrontendNotifyMulticastAddresses(Frontend, TRUE);
+ 
+diff --git a/src/xenvif/receiver.c b/src/xenvif/receiver.c
+index fcd91ab..ac0ad9e 100644
+--- a/src/xenvif/receiver.c
++++ b/src/xenvif/receiver.c
+@@ -2868,8 +2868,25 @@ __ReceiverRingEnable(
+     ReceiverRingFill(Ring);
+ 
+     status = STATUS_INSUFFICIENT_RESOURCES;
+-    if (!RING_FULL(&Ring->Front))
++    if (!RING_FULL(&Ring->Front)) {
++        /* QWT DIAGNOSTIC (not for upstream): this is the ONLY checked failure in the whole
++         * FrontendEnable path, and it is silent on Qubes. Publish how far the fill actually
++         * got - if posted < size the RX buffer/grant supply ran out; the exact shortfall
++         * says which. Written to the FRONTEND's own directory so the guest can read it. */
++        (VOID) XENBUS_STORE(Printf,
++                            &Receiver->StoreInterface,
++                            NULL,
++                            FrontendGetPath(Frontend),
++                            "qwt-rx-fill",
++                            "ring=%u size=%u req_prod=%u rsp_cons=%u posted=%u pushed=%u",
++                            Ring->Index,
++                            RING_SIZE(&Ring->Front),
++                            Ring->Front.req_prod_pvt,
++                            Ring->Front.rsp_cons,
++                            Ring->RequestsPosted,
++                            Ring->RequestsPushed);
+         goto fail1;
++    }
+ 
+     Ring->Enabled = TRUE;
+ 
