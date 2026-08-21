@@ -25,10 +25,23 @@ name: pv-xenvif
 
 on:
   workflow_call:
+    inputs:
+      diagnostic:
+        description: 'Build with the enable-path xenstore diagnostic (never for release)'
+        type: boolean
+        required: false
+        default: false
   workflow_dispatch:
+    inputs:
+      diagnostic:
+        description: 'Build with the enable-path xenstore diagnostic (never for release)'
+        type: boolean
+        required: false
+        default: false
   push:
     paths:
       - '.github/workflows/pv-xenvif.yml'
+      - 'patches/xenvif-enable-diag.patch'
 
 env:
   # /Brepro: content-hash PE TimeDateStamp so the same commit yields the same binary.
@@ -78,6 +91,32 @@ jobs:
               throw "xenvif @ $sha does NOT define revision 0x09000005 - it cannot satisfy xennet"
           }
           Write-Host "confirmed: xenvif $sha defines 0x09000005"
+
+      # DIAGNOSTIC BUILD, opt-in. On a Qubes host xenvif's Error() output is unreachable:
+      # it goes to DbgPrint -> xen.sys -> __outbytestring to port 0xE9 or 0x12, and neither
+      # is wired to anything readable (xl dmesg AND the stubdom log are both empty - measured
+      # 2026-08-21). This patch republishes the outcome of every FrontendEnable step, plus the
+      # RX-ring fill shortfall, into the FRONTEND's own xenstore directory, which the guest
+      # reads back through the xeniface XenStore WMI interface. That is the only instrument
+      # that can attribute the MiniportRestart failure seen against a mirage netback.
+      #
+      # OFF by default and never part of a release: run this workflow with
+      # `-f diagnostic=true` to get it.
+      - name: Apply the enable-path diagnostic patch (opt-in)
+        if: inputs.diagnostic == true || inputs.diagnostic == 'true'
+        shell: pwsh
+        working-directory: xenvif
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git apply --verbose ..\patches\xenvif-enable-diag.patch
+          if ($LASTEXITCODE -ne 0) { throw "diagnostic patch did not apply" }
+          # A patch that silently no-ops would produce a driver that looks instrumented and
+          # is not - assert the markers are actually in the source before building.
+          foreach ($m in @('qwt-enable-diag','qwt-rx-fill','FrontendEnableDiag')) {
+            $hit = Select-String -Path src\xenvif\frontend.c, src\xenvif\receiver.c -Pattern $m -Quiet
+            if (-not $hit) { throw "diagnostic marker '$m' missing after patch" }
+          }
+          Write-Host "::notice title=xenvif::DIAGNOSTIC build - publishes qwt-enable-diag / qwt-rx-fill to xenstore"
 
       - name: Build xenvif via its own build.ps1
         shell: pwsh
