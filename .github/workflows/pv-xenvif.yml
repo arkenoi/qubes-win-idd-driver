@@ -63,6 +63,13 @@ jobs:
       # it looked for VSIXInstaller.exe under ProgramFiles(x86)\...\Installer (it lives
       # under ProgramFiles\Microsoft Visual Studio\2022) and set ErrorActionPreference=Stop,
       # which turns choco's non-fatal output into a failure.
+      # This job builds an UPSTREAM tree, so it never needed our repo before. The opt-in
+      # diagnostic patch lives here, so it does now - and the checkout must land in a
+      # subdirectory, or it would collide with the xenvif clone in the workspace root.
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+
       - name: Install WDK + VS driver targets
         timeout-minutes: 15
         shell: pwsh
@@ -108,7 +115,7 @@ jobs:
         working-directory: xenvif
         run: |
           $ErrorActionPreference = 'Stop'
-          git apply --verbose ..\patches\xenvif-enable-diag.patch
+          git apply --verbose ..\repo\patches\xenvif-enable-diag.patch
           if ($LASTEXITCODE -ne 0) { throw "diagnostic patch did not apply" }
           # A patch that silently no-ops would produce a driver that looks instrumented and
           # is not - assert the markers are actually in the source before building.
