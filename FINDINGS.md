@@ -15304,3 +15304,71 @@ from cleanup (handlers run last-registered-first, so the cancel precedes the rem
 
 Built with all three changes: 8071def9... vs upstream 951b4aff... (reproducible). Ready for the
 rig: `/home/user/mirage-gso/qubes-firewall-FIX.xen`.
+
+---
+
+## 2026-08-21 (rig) — patched mirage on fw-net: the WEDGE IS GONE, handshake completes, new failure downstream
+
+First live test of the close/reconnect state machine, on `win10-app` (AppVM on win10-tpl, PV NIC
+primed, 4 vCPUs, netvm switched between `core-net` and `fw-net`).
+
+**Control first (core-net), to validate the instrument**: `Xen PV Network Device #0` Up @100Gbps,
+no Realtek (unplug already done), ip 10.137.0.72, gateway ping OK, HTTP 200. So the guest
+PV-attaches on this rig and the probe can see it.
+
+**With the patched mirage (fw-net): the wedge is gone.** Historical failure = qrexec never
+connects, ~2.00 cores burnt indefinitely, ACPI ignored, domain must be destroyed. Measured now:
+**qrexec up 15 s after start, ~1.0 core, guest fully responsive throughout.** That is the fix
+working: xenvif's close cycle at PdoCreate is being answered, so `PdoCreate` completes instead of
+spinning at DISPATCH_LEVEL under `Frontend->Lock`.
+
+**The xenbus handshake COMPLETES.** Read from inside the guest via xeniface's XenStore WMI
+interface (`XenProjectXenStoreBase`/`Session` under `root\wmi` - no dom0 needed, new instrument):
+
+    frontend/tx-ring-ref   = 1015
+    frontend/rx-ring-ref   = 1014
+    frontend/event-channel = 15          <- flat layout: mirage advertises no split event channels
+    frontend/request-rx-copy = 1
+
+`FrontendConnect` wrote the ring transaction, which it only reaches after `FrontendPrepare`
+succeeds. It then waits up to **120 s** for the backend to reach Connected, and the NDIS failure
+came at **4.5 s** - so it never timed out: the backend DID reach Connected. The old deadlock is
+genuinely gone; `Enum\XENVIF` used to be empty because PdoCreate never returned, and now the PDO
+exists.
+
+**New failure, downstream of the handshake:** `XENVIF\VEN_XP&DEV_NET\0` ends at
+`cmErr=43 CM_PROB_FAILED_POST_START`, from NDIS 10317 at boot+4.5 s: *"Miniport Xen PV Network
+Device #0 ... failed to start by returning an error code from MiniportRestart"*. xennet's
+MiniportRestart takes exactly one path into xenvif - `FrontendEnable` - which is
+MacEnable -> ReceiverEnable -> TransmitterEnable -> __FrontendUpdateHash. **Which of those failed
+is NOT yet established** and cannot be read from the guest: those `Error("failN")` lines go to the
+Xen console.
+
+Afterwards mirage tears down: the backend directory is **removed** (`state` empty, every key
+unreadable) by `disconnect_backend`'s `rm`, leaving the frontend parked at Closing(5) with nothing
+to reconnect to - and the dispatcher is one-shot, so there is no way back without a VM restart.
+That is the "no rm on runtime close + dispatcher supervisor" residual the synthesis flagged as
+out of scope; it is now on the critical path.
+
+**Feature diff, working Linux netback vs mirage** (both `type=vif_ioemu`, same guest, same vif).
+Linux backend advertises and mirage does not: `feature-ctrl-ring`, `feature-split-event-channels`,
+`multi-queue-max-queues`, `feature-multicast-control`, `feature-dynamic-multicast-control`,
+`feature-gso-tcpv6`, `feature-ipv6-csum-offload`, `feature-xdp-headroom`, `hotplug-status=connected`.
+`online=1`, `mac`, `handle`, `ip`, `type` come from libxl in BOTH cases (mirage neither writes nor
+needs them - this corrects the worry that mirage must write `online` for the reconnect edge).
+On Linux the frontend answers with `ctrl-ring-ref`/`event-channel-ctrl` and SPLIT
+`event-channel-rx`/`event-channel-tx`; against mirage it correctly falls back to the flat single
+`event-channel` and no control ring. So the reduced feature set is handled gracefully by the
+handshake - but note `controller.c:194-195`: with no `feature-ctrl-ring`, **every**
+`ControllerPutRequest` returns `STATUS_NOT_SUPPORTED`. `__FrontendUpdateHash` ignores that while
+`Hash.Algorithm` is UNSPECIFIED (its initial value, `frontend.c:2887`) and CHECKS it once NDIS sets
+an algorithm - a live candidate, not yet the proven cause.
+
+**Not yet attributable, needs one dom0 read each** (the only two places the answer exists):
+1. the guest's Xen console (`xl dmesg`) right after a failing boot - xenvif's `failN (%08x)` names
+   which FrontendEnable step failed and with what NTSTATUS;
+2. fw-net's console/log - whether mirage logged "Connected to frontend" and then threw, i.e.
+   whether the backend went away first and the frontend's Enable merely tripped over it.
+
+Do not guess between those two: they point at opposite fixes (a xenvif tolerance issue vs a
+mirage connect/GSO bug).
