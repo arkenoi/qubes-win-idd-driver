@@ -15101,3 +15101,73 @@ leaves the old unbootable win10-tpl explained by the perturbation it alone recei
   question because the finalize is the same CBS transaction whoever staged it, but if a second
   attempt is ever needed, attaching a netvm and letting Windows Update install the CU is the
   faithful route.
+
+---
+
+## 2026-08-21 — 4.3.3 released; a documented feature that could never be turned on
+
+**Released `v4.3.3-agentaa28fc7`** (package `4.3.3+agent.aa28fc78538f`, MSI ProductVersion 4.3.3).
+Assets: dom0 RPM, ISO, setup tarball, SHA256SUMS — cut with `tools/cut-release.sh`, so the four
+version invariants were enforced rather than eyeballed.
+
+### The CI test gate (I1) — and it failed on itself first
+
+`.github/workflows/test.yml` now runs on every push: the relay's own `--selftest` compiled with the
+in-box `csc` (the same compiler the guest uses), `install.cmd` switch parsing via the
+`QWT_ELEVATE_DRYRUN` hook, a PowerShell parse of every shipped script, and four cheap invariants.
+
+Its first run FAILED, and not on the code under test: the unknown-switch check printed
+`OK unknown switch rejected with exit 87` and then failed the job, because GitHub's pwsh wrapper
+exits with the trailing `$LASTEXITCODE` — so the 87 that IS the pass condition became the step's
+own status. The switch-loop step had the same hole and passed only because its last `cmd /c`
+happened to return 0. Both now end with an explicit `exit 0`. Worth recording as its own class:
+**a harness that reports a PASS and then fails is still a broken harness**, and the failure mode is
+invisible if you only read the conclusion.
+
+### `service.guestTitleBar` could not be turned on, in any release that shipped it
+
+Found while writing `docs/QVM-FEATURES.md` — i.e. by documenting the surface, not by testing it.
+The knob's opt-in was spelled `qvm-features <vm> service.guestTitleBar 0` (the feature is named for
+what the guest SHOWS, so `0` = hide it), and `perf.c` enabled hiding on `tb[0] == '0'`.
+
+Measured on a live guest (`win10-u10`, released 4.3.3 agent, feature set from dom0 and read back in
+the guest with `guest/qubesdb-read.ps1`):
+
+| set in dom0 | guest reads |
+|---|---|
+| `service.X 1` | `1` |
+| `service.X 0` | **`1`** |
+| `service.X ''` | `0` |
+
+Qubes exports a service feature as `1` whenever the stored value is non-empty, and a non-empty
+`"0"` is truthy — so the documented opt-in arrived as `1` and did the opposite of what it said. The
+only string that reached the guest as `0` was the EMPTY value, which reads as "disable" under the
+convention every other feature follows.
+
+Fixed by renaming to `service.hideGuestTitleBar` with the ordinary polarity (any non-empty value
+enables). Verified on the guest against the released binary, with the case that must fail included:
+
+    A  (unset)                      -> QGAHIDETITLE off                              (control)
+    B  hideGuestTitleBar 1          -> QGAHIDETITLE hideGuestTitleBar=1 -> hide on   (INTENDED EFFECT)
+    C  guestTitleBar 1 (old name)   -> QGAHIDETITLE off                              (old name dead)
+    D  hideGuestTitleBar ''         -> QGAHIDETITLE hideGuestTitleBar=0 -> hide off
+
+B is the acceptance: that path had never executed on any shipped build. The knob remains
+default-off and experimental for the unrelated reason recorded at `perf.c:121-127` (the restyle
+provokes a re-map and dom0 answers it by minimizing the window).
+
+Note the older FINDINGS entries at 11699/11781/11864 describing this feature as "default ON" with
+`service.guestTitleBar 1` keeping the caption are STALE — superseded by the default-OFF flip and
+now by this rename.
+
+### Two more version-drift defects closed
+
+- `packaging/make-package.ps1` carried its own `$ngVersion` literal frozen at `4.3.0`, so every
+  OVERLAY package built for 4.3.1 and 4.3.2 announced 4.3.0. It now reads `agent/version`, the
+  same single source `make-setup.ps1` and the MSI ProductVersion already used.
+- `release-artifacts/` (86 MB of build output) was committed and STALE — it held a pre-fix
+  `install.cmd`, so anyone reading the repo got a broken installer CI had never produced. Now
+  untracked and ignored, with a README pointing at the real artifacts.
+
+Documentation: `docs/QVM-FEATURES.md` (every feature and qubesdb key with the file:line that reads
+it), `docs/RELEASE-NOTES-4.3.3.md`, and README updated to 4.3.3.
