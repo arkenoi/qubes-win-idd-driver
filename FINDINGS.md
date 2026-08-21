@@ -15171,3 +15171,60 @@ now by this rename.
 
 Documentation: `docs/QVM-FEATURES.md` (every feature and qubesdb key with the file:line that reads
 it), `docs/RELEASE-NOTES-4.3.3.md`, and README updated to 4.3.3.
+
+---
+
+## 2026-08-21 — mirage-firewall: GSO prototype pulled, built reproducibly, Windows fix applied
+
+Work lives OUTSIDE this repo (`/home/user/mirage-gso/`), because it is a different upstream
+project — same rule that keeps Track C out. `FIX-NOTES.md` there is the full write-up.
+
+**Pulled.** `qubes-mirage-firewall` `89ae5da` = "Update ecosystem with GSO :) (#231)", merged
+2026-08-20; it pins `mirage-net-xen` v2.1.8 (`050aed3`), which carries GSO (#119) and the merged
+backend/frontend (#118).
+
+**Built, and the build is bit-for-bit reproducible** — the strongest confirmation available:
+
+    SHA2 of build:      951b4aff0007912ccbc8c8f215fa2cd25d195659b7e4f50290a5391d7ca1aae3
+    SHA2 upstream head: 951b4aff0007912ccbc8c8f215fa2cd25d195659b7e4f50290a5391d7ca1aae3  <- match
+    SHA2 last release:  2bfb49696e59a8ffbb660399e52bd82ffadbd02437d282eb8daab568b3261999
+
+That last line is the exact 0.9.5 binary #230 was reported against, so the baseline is confirmed
+too. Built with ROOTLESS docker (`dockerd-rootless.sh`) — no sudo, no dom0.
+
+**The fix** (palainp's proposal in #230, now implemented). `mirage-net-xen/lib/xenstore.ml`,
+`read_frontend_configuration`: `Closing` and `Closed` moved out of the `Eagain` group and made to
+`fail (Xs_protocol.Error ...)`. Those two states carried upstream's own `(* XXX: stop waiting? *)`
+marker. It is a deadlock, not a wait: a frontend cannot finish closing until the backend leaves
+InitWait, and the backend never leaves it because it is waiting for that frontend.
+
+`Xs_protocol.Error` specifically because **the receiver already exists and is currently
+unreachable** — `dispatcher.ml:512` catches exactly that and logs "Client %a has not terminated
+its vif initialisation". Nothing in the backend path ever raised it. So qubes-mirage-firewall
+itself needs NO change; the fix connects two halves that were already written.
+
+Verified in the artefact, with a control that fails:
+
+    UNPATCHED binary: 0 occurrences of the new error string
+    PATCHED   binary: 1 occurrence
+    hashes 951b4aff... vs 8684de58... (must differ, and do)
+
+**What it fixes / what it does not.** It stops the WEDGE: today a Windows HVM on mirage-firewall
+burns ~2 cores for ever, never answers qrexec and will not take an ACPI shutdown, because xenvif
+polls for the backend transition at DISPATCH_LEVEL under `Frontend->Lock` (120 s timeout in
+`FrontendWaitForBackendXenbusStateChange`). With the fix the backend writes Closed, the frontend
+finishes, and the qube is usable over the emulated NIC. It does NOT bring up the guest's PV
+network path — that is item 1 of #230 and is still unresolved; palainp predicted as much
+("that will probably fails later"). Do not report this as "Windows works on mirage now".
+
+**Second obstacle found while reading, worth telling upstream.** An HVM's two vifs carry the SAME
+IP (our own #230 log: domid 442 and 443 both `10.137.0.64`), and `Client_eth.add_client` keeps one
+interface per IP, waiting on a condition when it collides. So whichever registers first owns the
+IP and the other waits for ever — in the measured boot the winner is the STUBDOMAIN's vif, i.e.
+the emulated path, which is exactly why the guest has working networking once the PV driver is out
+of the way. Even a fixed handshake leaves the guest's own vif with nowhere to go. That is a policy
+decision for the maintainer, not something to patch blind.
+
+**Not submitted.** Per CLAUDE.md the exact diff/text needs the owner's approval first; the patch
+is `/home/user/mirage-gso/0001-stop-waiting-on-closing-frontend.patch`. Live testing needs dom0
+(copying the unikernel to `/var/lib/qubes/vm-kernels/`), which is the owner's action.
