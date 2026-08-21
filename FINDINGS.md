@@ -15485,3 +15485,58 @@ escaping exception is part of that change, not a follow-up.
 Builds: FIX4 `7628aa65...` (differentially verified: the three new guard strings appear in FIX4
 and 0x in FIX3). Fallbacks: `8071def9...` (no reconnect path, structurally cannot hit any of
 this), stock `951b4aff...`.
+
+---
+
+## 2026-08-22 — ACHIEVED: a Windows HVM has PV networking through qubes-mirage-firewall
+
+The goal behind mirage/qubes-mirage-firewall#230 is met. Measured on `win10-app` (AppVM on
+win10-tpl, 4 vCPUs), netvm `fw-net` running our patched unikernel, guest running our patched
+xenvif.
+
+**3/3 cold boots, all green** (project rule-of-3, cold boots, not live restarts):
+
+    Xen PV Network Device #0   Up, 100 Gbps, PnP status OK, cmErr=0   (was cmErr=43)
+    Realtek                    absent - PV only
+    IP / DNS                   10.137.0.72, DNS resolves
+    traffic                    HTTP 200 x3 hosts, incl. ~48 KB from msn.com in 1.1-2.3 s
+    mechanism                  qwt-enable-diag = "ENABLED-ok status=00000000"
+                               frontend Connected(4) / backend Connected(4)
+
+The predicted checksum/GSO hazard did NOT materialise: 48 KB multi-packet bidirectional TCP is
+clean, so mirage's missing `feature-no-csum-offload` is not biting in practice. Recorded as
+observed-good, not as proven-safe.
+
+**`cdn.kernel.org` fails, and it is NOT ours** (owner asked for the control): it resolves
+IPv6-first (2a04:4e42:70::432, Fastly), this network has no global IPv6 route (only fe80::/64),
+and forcing `-4` also times out - identically from a LINUX qube. Single-host reachability.
+
+**No regression on the Linux netback** (owner asked): same guest, same patched xenvif, flipped to
+`core-net` - NIC OK, cmErr=0, ENABLED-ok, Connected/Connected, 48590 B in 0.4 s. And the frontend
+there carries `ctrl-ring-ref=305` + `event-channel-ctrl=17` against `feature-ctrl-ring=1`, i.e.
+the control ring IS in use, so `ControllerSetHashAlgorithm` succeeds and the branch our patch adds
+is never taken. The fix is provably inert on the path that already worked.
+
+**What it took, end to end** - four defects, three of them ours:
+1. mirage-net-xen: no close/reconnect half of the xenbus state machine -> the guest WEDGED
+   (2 cores, no qrexec, no ACPI). Fixed: answer Closing/Closed, re-arm InitWait. (05c69ef)
+2. mirage-net-xen: `disconnect_backend` skipped Closing and DELETED the backend directory ->
+   xenvif read that as hot-unplug and permanently ejected the NIC. Fixed: answer the close and
+   park; never rm. (154eb8a)
+3. mirage-net-xen: announcing InitWait to a still-closing frontend -> livelock -> OOM shutdown of
+   the firewall. Fixed: gate init_backend on the frontend being ready. (a1242d5)
+   qubes-mirage-firewall: exceptions escaping Lwt.async killed the whole firewall on every guest
+   reboot. Fixed: contain them per client. (d673db9)
+4. **xenvif (UPSTREAM, not ours)**: with no `feature-ctrl-ring` the control ring is never created,
+   yet ControllerEnable sets Enabled, so ControllerPutRequest hits a zeroed ring where RING_FULL
+   is trivially true -> STATUS_INSUFFICIENT_RESOURCES -> FrontendEnable fails -> MiniportRestart
+   fails -> cmErr 43. xenvif failed the whole NIC because it could not say "no hashing" to a peer
+   that never offered hashing. Fixed in our fork; worth reporting upstream.
+
+**A trap caught before it bit:** the ctrl-ring fix had been bundled into the OPT-IN diagnostic
+patch, so a release build would have shipped without it and looked like the fix regressing. Split:
+`patches/xenvif-ctrl-ring-fix.patch` is applied unconditionally (verified on a release build:
+"control-ring fix applied", diagnostic step skipped); the diagnostic is a delta on top.
+
+Builds: unikernel FIX4 `7628aa65...`; xenvif `543A8A79D71B13F3` (DriverVer 9.1.0.31, diagnostic).
+A release xenvif build carries the fix without the instrumentation.
