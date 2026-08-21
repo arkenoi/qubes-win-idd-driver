@@ -918,25 +918,69 @@ function Get-ServicingNotice($avail, $esu) {
 # Returns the resolved URL, or $null if it could not be resolved - in which case the caller keeps
 # the old INFORMATIONAL behaviour rather than inventing a URL.
 function Get-DefenderFullPackageUrl {
-  $fwlink = 'https://go.microsoft.com/fwlink/?linkid=121721&arch=x64'
+  # The fwlink is a CHAIN, not one hop. Measured 2026-08-21:
+  #   go.microsoft.com/fwlink/?linkid=121721  -302->  definitionupdates.microsoft.com/packages?arch=x64
+  #                                           -302->  .../packages/content/mpam-fe.exe?packageType=...
+  # Only the LAST url names the file. Stopping at the first hop would hand Install-SelfContained a
+  # URL with no .exe in it, which it correctly refuses as an unrecognised artifact - so follow the
+  # chain until the target names a file, and cap the hops so a redirect loop cannot spin.
+  $url = 'https://go.microsoft.com/fwlink/?linkid=121721&arch=x64'
+  for ($hop = 0; $hop -lt 5; $hop++) {
+    $next = Get-RedirectTarget $url
+    if (-not $next) { break }
+    # A Location header may be RELATIVE, and the second hop of this chain is: it answers
+    # "/packages/content/mpam-fe.exe?packageType=..." with no scheme or host. Handing that to
+    # Fetch-Msu produced 14 identical failures reading
+    #   "Invalid URI: The format of the URI could not be determined."
+    # Resolve every hop against the URL it came from, which is a no-op for absolute targets.
+    try { $url = ([Uri]::new([Uri]$url, $next)).AbsoluteUri }
+    catch { Log "Defender: unusable redirect target '$next' from $url" 'WARN'; return $null }
+    if ($url -match '/[^/?]+\.(exe|msu|cab)(\?|$)') { return $url }
+  }
+  if ($url -match '/[^/?]+\.(exe|msu|cab)(\?|$)') { return $url }
+  Log "Defender: the fwlink chain did not end at a downloadable file (last: $url)" 'WARN'
+  return $null
+}
+
+# One redirect hop: return the Location of $Url, or $null when it is not a redirect.
+function Get-RedirectTarget($Url) {
   foreach ($try in 1..2) {
+    $resp = $null
     try {
-      # -MaximumRedirection 0 makes the 302 itself the answer; PowerShell raises on the redirect,
-      # so the Location header is read from the exception's response as well as the happy path.
-      $r = Invoke-WebRequest -Uri $fwlink -Proxy $Proxy -UseBasicParsing -MaximumRedirection 0 `
-                             -TimeoutSec 60 -EA Stop
-      $loc = $r.Headers['Location']
+      # HttpWebRequest with AllowAutoRedirect=$false, NOT Invoke-WebRequest -MaximumRedirection 0.
+      # Measured: the Invoke-WebRequest form throws
+      #   InvalidOperationException: Operation is not valid due to the current state of the object
+      # in Windows PowerShell 5.1 when the reply IS a redirect, and exposes no response object to
+      # read Location from - the request never even reaches the relay (its log stayed empty). This
+      # is also the class Fetch-Msu already uses, so the whole updater speaks HTTP one way.
+      $req = [System.Net.HttpWebRequest]::Create($Url)
+      $req.Proxy = New-Object System.Net.WebProxy($Proxy)
+      $req.AllowAutoRedirect = $false
+      $req.Timeout = 60000
+      $req.ReadWriteTimeout = 60000
+      $resp = $req.GetResponse()
+      $code = [int]$resp.StatusCode
+      $loc  = $resp.GetResponseHeader('Location')
+      $resp.Close(); $resp = $null
       if ($loc) { return $loc }
-    } catch {
-      $resp = $null; try { $resp = $_.Exception.Response } catch {}
-      if ($resp) {
-        $loc = $null
-        try { $loc = $resp.Headers['Location'] } catch {}
-        if (-not $loc) { try { $loc = $resp.GetResponseHeader('Location') } catch {} }
+      if ($code -ge 300 -and $code -lt 400) { Log "Defender: $code with no Location header for $Url" 'WARN' }
+      return $null
+    } catch [System.Net.WebException] {
+      # A 3xx with AllowAutoRedirect=$false is NOT an exception, but a 4xx/5xx is - and its response
+      # still carries the headers, so try to read Location even here before giving up.
+      $wr = $null; try { $wr = $_.Exception.Response } catch {}
+      if ($wr) {
+        $loc = $null; try { $loc = $wr.GetResponseHeader('Location') } catch {}
+        try { $wr.Close() } catch {}
         if ($loc) { return $loc }
       }
-      if ($try -eq 2) { Log "Defender: could not resolve the full-package fwlink ($($_.Exception.Message))" 'WARN' }
+      if ($try -eq 2) { Log "Defender: redirect hop failed for $Url ($($_.Exception.Message))" 'WARN' }
       else { Start-Sleep -Seconds 3 }
+    } catch {
+      if ($try -eq 2) { Log "Defender: redirect hop error for $Url ($($_.Exception.Message))" 'WARN' }
+      else { Start-Sleep -Seconds 3 }
+    } finally {
+      if ($resp) { try { $resp.Close() } catch {} }
     }
   }
   return $null
