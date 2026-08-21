@@ -14801,3 +14801,62 @@ Twice I nearly reported a stale result: once reading an acceptance file the prev
 behind, once running against an updater that was pushed to QubesIncoming but never DEPLOYED into
 Program Files. The hash printed at the top of the acceptance output is what caught both. Delete the
 output and PROVE it is gone before re-running, and always assert the hash of the binary under test.
+
+---
+
+## 2026-08-21 — U15 / Task #14 CLOSED AT ROOT CAUSE: the receive path left the vchan without draining it
+
+### The root cause, and it is NOT the one I first fixed
+
+`qrexec-wrapper.c` EventLoop, the vchan branch:
+
+    if (!libvchan_is_open(child->Vchan)) { LogDebug("vchan closed"); run = FALSE; break; }
+    while (VchanGetReadBufferSize(child->Vchan) > 0) { HandleDataMessage(child); }
+
+A closed vchan is not an empty one. The peer finishes sending and closes; whatever is still in the
+ring is data we simply have not read yet, and this exits and discards it. Whether that happens
+depends purely on whether the close is noticed before or after the last read - which is why the loss
+is intermittent and why the amount lost varies.
+
+Linux does not have this bug and names the invariant, in libqrexec/process_io.c:
+
+    if (!libvchan_is_open(vchan) && !libvchan_data_ready(vchan) && !buffer_len(stdin_buf)) { ... break; }
+    /* Exit the loop if vchan is disconnected (and we processed all incoming data).
+       Check libvchan_is_open() before libvchan_data_ready() to avoid a race condition. */
+
+closed AND nothing to read AND nothing buffered. The comment even names the race the Windows port
+has. The fix drains the ring through HandleDataMessage before leaving, and logs how many messages
+that took.
+
+HONEST CORRECTION: the first commit on this branch (the 1-second wait before sending the exit code)
+is a real defect, but it sits on the OTHER direction - a service child's stdout heading OUT to the
+vchan - and cannot explain a client-side receive arriving short. I had assumed it was the Task #14
+cause. It was not. Both are fixed; only the drain-on-close one matches the measurement.
+
+### Acceptance, against a control on the same guest, same probe, same URL
+
+    CONTROL, unfixed wrapper D59AB52B2C8F2E09 (34,376 bytes)
+        run A  26/30 full   short: 73056 26688 23147 27803
+        run B  25/30 full   short: 79992 31064 74608 35160 24004
+        -> 9 short bodies in 60 fetches
+
+    TEST, fixed wrapper 6C7068095A952FF1 (27,136 bytes), hash asserted inside each run
+        run 1  30/30 full   0 short
+        run 2  30/30 full   0 short
+        run 3  30/30 full   0 short
+        -> 0 short bodies in 90 fetches
+
+The probe is `guest/proxy-probe.cs` driven by `guest/wu-proxy-direct.ps1` - deliberately primitive,
+synchronous, no pool, no drain, our relay entirely out of the path - so this measures the qrexec
+hop and nothing of ours.
+
+### Two traps worth recording
+
+1. **You cannot overwrite qrexec-wrapper.exe from a qrexec call.** Every `qtest run` IS a qrexec
+   call, which spawns that very binary, so Windows holds its image locked and Copy-Item fails. It
+   failed SILENTLY because of `-EA SilentlyContinue`, and my own `swapped` check compared two nulls
+   and reported success - a check that could not fail, again. `move` the running image aside first
+   (Windows allows renaming a running exe), then copy the new one in.
+2. The dead-man rollback worked exactly as intended and cost a round: it fired at its 8-minute
+   deadline and restored the backup before my `-Confirm` arrived, because my own command latency
+   exceeded the window. Widen the window or confirm in the same command block - but keep the net.
