@@ -15047,3 +15047,57 @@ AppVM. It reached `console user Active` on its own afterwards.
 
 U6 matrix is now 5/5: AppVM (Win10), AppVM (Win11), DispVM, StandaloneVM offline, StandaloneVM with
 direct internet - plus TemplateVM, exercised by every ordinary pass.
+
+---
+
+## 2026-08-21 — U10 ANSWERED: the unperturbed cumulative finalize WORKS on a brand-new install. Verdict (a).
+
+### It was never blocked on dom0 - three wrong claims in my own record
+
+The owner asked why I could not do it with the existing loopback, and every part of the recorded
+blocker turned out to be wrong:
+
+1. "needs sudo losetup" - NO. The loop devices already existed from an earlier session
+   (loop0 = Win10 22H2 vendor ISO, loop9 = answer stick). sudo does require a password here, but it
+   was never needed.
+2. "qvm-start --cdrom is dom0-only" - that applied to a BARE FILE PATH. The `vm:loopN` form works
+   from this qube, and `mgmt/reprovision-usb.sh` has been doing exactly that since 2026-08-07.
+3. The recipe was already in the repo. I hand-built a qube instead of reading it, which is why
+   libxl refused to create the domain (no boot device, wrong resource shape). The script also
+   records WHY the answer file must arrive as USB storage rather than a CD: WinPE has no Xen PV
+   drivers, so an assigned cdrom is invisible to Setup.
+
+### The run
+
+    mgmt/reprovision-usb.sh win10-u10 loop0 loop9   -> qrexec alive after 1007s (~17 min)
+    fresh guest:  19045.2965, Windows 10 Pro, autologon working, stock QWT from the stick
+
+    staging: DISM /Online /Add-Package -> rc=50 ERROR_NOT_SUPPORTED in 2 s. This .msu is a COMBINED
+             SSU+LCU package (SSU-19041.6449-x64.cab ships beside the CU) and DISM will not service
+             that online. wusa.exe is the native .msu handler and applies SSU then LCU in order:
+             wusa rc=3010 after 1360 s  (3010 = STAGED, NOT installed)
+             CBS RebootPending=True, pending.xml=True
+
+    UNPERTURBED graceful reboot, nothing touching the guest:
+             halted cleanly at ~150 s, qrexec back at ~20 s
+
+    RESULT:  build 19045.2965 -> 19045.6456      <- UBR ADVANCED
+             RebootPending=False, pending.xml=False, KB5066791 installed=True
+             session: console user Active
+
+### Verdict
+
+**(a) confirmed: the force-kills broke the old template; the finalize path is not inherently
+unstable.** A guest installed minutes earlier, touched by nothing else, took a full cumulative and
+finalized it in one uninterrupted reboot. That matches win10-clean's repeated 2965 -> 6456 drain and
+leaves the old unbootable win10-tpl explained by the perturbation it alone received.
+
+### Owner corrections taken during this work
+
+- An OFFLINE standalone being non-updateable is INTENDED, not a gap. I called it "a real gap"; that
+  was wrong. The only proper update path for a standalone is a netvm, and Windows Update doing it
+  itself - which is exactly what the direct-internet branch enables (validated earlier today).
+- Consequently the hand-staging here is test scaffolding, not a product path. It is valid for THIS
+  question because the finalize is the same CBS transaction whoever staged it, but if a second
+  attempt is ever needed, attaching a netvm and letting Windows Update install the CU is the
+  faithful route.
