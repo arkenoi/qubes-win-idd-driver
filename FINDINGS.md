@@ -15431,3 +15431,57 @@ NOT YET RUN ON THE RIG - installing the unikernel needs dom0.
 `feature-no-csum-offload` yet discards TX checksum flags, so once the NIC attaches TCP/UDP egress
 may still fail until mirage either advertises `feature-no-csum-offload=0` or honours
 NETTXF_csum_blank.
+
+---
+
+## 2026-08-22 — the attach bug is an UPSTREAM xenvif defect; and two crashes of my own
+
+**The instrumentation paid off: `qwt-enable-diag = "UpdateHash-FAILED status=c000009a"`**
+(STATUS_INSUFFICIENT_RESOURCES), with frontend AND backend parked cleanly at Closed(6) and the
+device present (cmErr=43) rather than ejected. So the runtime-close fix worked - that is what let
+retries reach FrontendEnable at all and record the real error.
+
+**Root cause of the attach failure (upstream xenvif, not mirage):**
+- `ControllerConnect` reads the backend's `feature-ctrl-ring`; absent -> `goto done`, so the
+  control ring is **never created** and `Controller->Front` stays zeroed.
+- `ControllerEnable` sets `Controller->Enabled = TRUE` **unconditionally**.
+- `ControllerPutRequest` therefore passes its `!Enabled` guard and reaches
+  `if (RING_FULL(&Controller->Front))` - on a zeroed ring `req_prod_pvt - rsp_cons == RING_SIZE`
+  is `0 == 0`, trivially TRUE -> STATUS_INSUFFICIENT_RESOURCES.
+- master's `__FrontendUpdateHash` groups UNSPECIFIED **with** NONE in the CHECKED path (the older
+  pinned tree gave UNSPECIFIED its own error-ignoring case - which is why my earlier refutation,
+  read from the pinned copy, did not apply to the running driver). So the status propagates:
+  FrontendEnable -> VifEnable -> AdapterEnable -> MiniportRestart fails -> NDIS 10317 -> cmErr 43.
+xenvif fails the whole NIC because it could not tell the backend "no hashing" - to a backend that
+never offered hashing. **Any ctrl-ring-less netback cannot bring up a Windows PV NIC.** Linux
+xen-netback advertises feature-ctrl-ring, which is the only reason this is invisible there.
+Patched in our fork (`patches/xenvif-enable-diag.patch`): treat a controller failure as done when
+the requested algorithm is NONE/UNSPECIFIED. Worth reporting upstream.
+
+**A false negative I nearly shipped:** `pnputil` returned rc=0 with "Driver package added
+successfully (Already exists in the system)" and SILENTLY KEPT THE OLD .sys - because build.ps1
+defaults BUILD_NUMBER to 0 on a fresh clone, so every CI build produced DriverVer 9.1.0.0 and a
+byte-identical INF. Caught only by hashing the DriverStore copy. Diagnostic builds now take the
+run number as BUILD_NUMBER (release builds keep 0, so reproducibility is intact).
+
+**TWO CRASHES OF MY OWN, on the owner's LIVE firewall (~28 client IPs). Both mine, both fixed:**
+1. *Livelock/OOM.* My reconnect called init_backend, which writes InitWait unconditionally. A
+   frontend still closing answers InitWait by writing Closing again -> Closing/Closed/InitWait
+   forever, allocating each round; on a 32 MB unikernel that ends as an out-of-memory shutdown.
+   Fixed by gating init_backend on the frontend being ready (Initialising or later), exactly as
+   xen-netback leaves the backend at Closed until the frontend writes Initialising.
+2. *Uncaught async exception.* The recursive re-serve ran inside `Lwt.async` with no handler. When
+   a guest shuts down its frontend directory vanishes and the next handshake raises
+   Xs_protocol.Error - so every ordinary guest reboot crashed the firewall. Two further
+   pre-existing paths became reachable for the same reason: conf_vif's listener re-raises anything
+   that is not Lwt.Canceled (including the Netif error `or_raise` throws when the ring goes away),
+   and wait_clients' fallback arm re-raised by construction. All three now log and stop serving
+   that client.
+
+LESSON, recorded because it cost the owner real downtime: adding a RECONNECT path makes every
+latent per-connection fault reachable on a routine schedule. Auditing every `Lwt.async` for an
+escaping exception is part of that change, not a follow-up.
+
+Builds: FIX4 `7628aa65...` (differentially verified: the three new guard strings appear in FIX4
+and 0x in FIX3). Fallbacks: `8071def9...` (no reconnect path, structurally cannot hit any of
+this), stock `951b4aff...`.
