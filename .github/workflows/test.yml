@@ -1,0 +1,139 @@
+# test: the gate that did not exist.
+#
+# Until now NOTHING executed a user-facing switch or a guest script in CI, which is how a fixed
+# install.cmd shipped broken through three releases (GWeck forum 35 and 64: `C:\idd`, `D:\idd`),
+# how a relay change silently started refusing HEAD replies, and how a PowerShell syntax error could
+# only be found by pushing to a guest.
+#
+# Everything here runs on a plain Windows runner with no Qubes, no guest and no network:
+#   1. the relay's own --selftest (response framing + the pid-lookup race)
+#   2. install.cmd switch parsing, via the QWT_ELEVATE_DRYRUN hook the script already carries
+#   3. a PowerShell PARSE of every shipped script
+#   4. invariants that are cheap to assert and expensive to get wrong
+name: test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'guest/**'
+      - 'packaging/**'
+      - '.github/workflows/test.yml'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------- 1. relay selftest
+      # The relay compiles with the in-box C# compiler exactly as it does on a guest, so CI builds
+      # it the same way rather than a different way that might pass for the wrong reason.
+      - name: Relay - compile with in-box csc and run --selftest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $csc = Get-ChildItem 'C:\Windows\Microsoft.NET\Framework64\v4.0.*\csc.exe' -EA SilentlyContinue | Select-Object -First 1
+          if (-not $csc) { throw 'no in-box csc.exe on the runner' }
+          New-Item -ItemType Directory -Force out | Out-Null
+          & $csc.FullName /nologo /o /target:exe /out:out\relay.exe guest\qubes-updates-relay.cs
+          if ($LASTEXITCODE -ne 0) { throw "relay compile failed ($LASTEXITCODE)" }
+          $output = & .\out\relay.exe --selftest 2>&1
+          $output | ForEach-Object { Write-Host $_ }
+          $pass = @($output | Select-String '^PASS ').Count
+          $fail = @($output | Select-String '^FAIL ').Count
+          Write-Host "::notice title=relay selftest::$pass passed, $fail failed"
+          if ($LASTEXITCODE -ne 0 -or $fail -gt 0) { throw "relay selftest FAILED ($fail)" }
+          if ($pass -lt 10) { throw "selftest reported only $pass assertions - it has been gutted, not passed" }
+
+      # ---------------------------------------------------------------- 2. install.cmd switches
+      # THE regression that shipped three times: bare `shift` in the parse loop overwrites %0, so
+      # %~f0 later resolves to `C:\<switch>` and the elevated relaunch is handed a path that does not
+      # exist. QWT_ELEVATE_DRYRUN makes install.cmd PRINT what it would relaunch instead of doing it,
+      # which is testable without UAC, without elevation and without a guest.
+      - name: install.cmd - the elevated relaunch must target the SCRIPT, not a switch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $script = (Resolve-Path 'packaging\setup\install.cmd').Path
+          $env:QWT_ELEVATE_DRYRUN = '1'
+          $bad = 0
+          foreach ($sw in @('', '/idd', '/noidd', '/auto', '/iddonly', '/iddoff', '/updatesonly', '/nonet', '/reboot')) {
+            $out = & cmd /c "`"$script`" $sw" 2>&1 | Out-String
+            if ($out -notmatch 'ELEVATE-FILEPATH=\[(.+?)\]') { Write-Host "::error::no ELEVATE-FILEPATH for '$sw'"; $bad++; continue }
+            $target = $Matches[1]
+            if ($target -ne $script) {
+              Write-Host "::error title=install.cmd::switch '$sw' would relaunch [$target] instead of the script"
+              $bad++
+            } else {
+              Write-Host ("  OK  '{0,-12}' -> {1}" -f $sw, $target)
+            }
+          }
+          if ($bad) { throw "$bad switch(es) resolve the wrong relaunch target" }
+
+      - name: install.cmd - an unknown switch must be refused, not ignored
+        shell: pwsh
+        run: |
+          $script = (Resolve-Path 'packaging\setup\install.cmd').Path
+          $env:QWT_ELEVATE_DRYRUN = '1'
+          & cmd /c "`"$script`" /definitely-not-a-switch" | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw "unknown switch was accepted (exit 0) - it must fail" }
+          Write-Host "  OK  unknown switch rejected with exit $LASTEXITCODE"
+
+      # ---------------------------------------------------------------- 3. PowerShell parse
+      - name: PowerShell - parse every shipped script
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = Get-ChildItem guest, packaging -Recurse -Filter *.ps1 -EA SilentlyContinue
+          $bad = 0
+          foreach ($f in $files) {
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
+            if (@($errors).Count) {
+              $bad++
+              Write-Host "::error file=$($f.FullName)::$(@($errors).Count) parse error(s): $($errors[0].Message)"
+            }
+          }
+          Write-Host "::notice title=powershell parse::$($files.Count) scripts, $bad with errors"
+          if ($bad) { throw "$bad script(s) do not parse" }
+
+      # ---------------------------------------------------------------- 4. cheap invariants
+      - name: Invariants that are expensive to get wrong
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bad = 0
+          function Check($name, $cond, $why) {
+            if ($cond) { Write-Host "  OK  $name" } else { Write-Host "::error title=$name::$why"; $script:bad++ }
+          }
+
+          # -Scheduled marks the AUTOMATIC pass, the only one the debounce may skip. If it ever
+          # appears on the Run or Download task, a pass dom0 asked for could be silently dropped.
+          $agent = Get-Content guest\install-updater-agent.ps1 -Raw
+          Check 'scan task carries -Scheduled' ($agent -match '-Action scan -Scheduled') `
+                'the scheduled scan must be marked -Scheduled or the debounce is inert'
+          Check 'Run/Download tasks do NOT carry -Scheduled' `
+                (-not ($agent -match '-Action (full|download)[^\r\n]*-Scheduled')) `
+                'a dom0-driven pass must never be skippable by the debounce'
+
+          # The updater must never hand Windows a body it knows is short.
+          $relay = Get-Content guest\qubes-updates-relay.cs -Raw
+          Check 'relay refuses incomplete responses' ($relay -match 'PLAIN REFUSED') `
+                'the honesty gate is missing - a short body could be served as a 200'
+          Check 'relay spills instead of truncating' ($relay -match 'Spill point') `
+                'MaxVerifyBytes must spill to the client, never cut the body'
+
+          # Priming must be staged into the package, or app qubes built from a template inherit an
+          # unprimed root and loop on the PV NIC driver install.
+          $mk = Get-Content packaging\make-setup.ps1 -Raw
+          Check 'pvnic-selfprime.ps1 is staged' ($mk -match 'pvnic-selfprime\.ps1') `
+                'without it the installer cannot seed PV NIC priming'
+
+          if ($bad) { throw "$bad invariant(s) violated" }
