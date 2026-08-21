@@ -146,6 +146,20 @@ jobs:
           $env:PATH = (Split-Path $mb) + ';' + $env:PATH
           Write-Host "msbuild on PATH: $mb"
           $env:VisualStudioVersion = '17.0'
+          # build.ps1 derives DriverVer from BUILD_NUMBER, which defaults to 0 on a fresh
+          # clone - so every build produced DriverVer 9.1.0.0 and a byte-identical INF.
+          # pnputil dedupes on that: it reports "Driver package added successfully (Already
+          # exists in the system)" with rc=0 and SILENTLY KEEPS THE OLD .sys. Measured - the
+          # driver store still held the previous build and the fix under test never ran.
+          # A release build keeps 0, so the same commit still yields the same binary; a
+          # DIAGNOSTIC build takes the run number, so each one is a distinct, higher version
+          # that Windows will actually install over its predecessor.
+          if ('${{ inputs.diagnostic }}' -eq 'true') {
+            $env:BUILD_NUMBER = '${{ github.run_number }}'
+            Write-Host "::notice title=xenvif::diagnostic build - DriverVer 9.1.0.$env:BUILD_NUMBER"
+          } else {
+            $env:BUILD_NUMBER = '0'
+          }
           .\build.ps1 -Type free -Arch x64
           if ($LASTEXITCODE -ne 0) { throw "xenvif build.ps1 failed" }
           Get-ChildItem . -Recurse -Include xenvif.sys,xenvif.inf,xenvif.cat |
