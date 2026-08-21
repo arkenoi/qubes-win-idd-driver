@@ -14979,3 +14979,44 @@ restarts before Winlogon finishes), Winlogon/ProfSvc channels stay empty althoug
 boot-triggered tasks never reach their delay (QubesAutologonGuard could not re-arm autologon, and my
 own probe task read "has not yet run"), qrexec answers for about a minute per cycle, and CPU looks
 idle because samples straddle restarts. `cputime` DECREASING between samples is the tell.
+
+---
+
+## 2026-08-21 — U6 VM-class matrix: the unproven cells are now EXECUTED (4 of 5)
+
+U6 was never a defect, it was a set of code-read assumptions nobody had run. With the AppVM boot
+loop fixed by priming, they can be. Every run asserts the binary under test by hash first, and the
+security-relevant half is class-independent: exit 0, NO proxy acquired, NO relay started.
+
+    win10-app   AppVM         class=AppVM        phase=skipped-appvm       ok=true
+    win11-app   AppVM         class=AppVM        phase=skipped-appvm       ok=true
+    win11-disp  DispVM        class=DispVM       phase=skipped-appvm       ok=true
+    win11-fresh StandaloneVM  class=StandaloneVM phase=skipped-standalone  ok=true
+    (TemplateVM is exercised by every ordinary pass, including the U7 drain)
+
+Each read its class LIVE from qubesdb and took the right branch, with the agent logging why:
+"AppVM/DispVM - not a template; updates are the template's business. Exiting before any proxy
+activity."
+
+**DispVM was the one recorded as "falls through to the AppVM skip branch by code read; never
+executed".** It is now executed, and the code read was right - qubesdb reports `DispVM`, which is
+not TemplateVM and not StandaloneVM, so it takes the default branch. This is also the first Windows
+DispVM ever booted in this project (created from win11-app as a dvm template, tagged into the
+testbed policy).
+
+The acceptance instrument was generalised rather than copied: it derives the expected phase from the
+class the guest reports, so one script covers all classes and cannot be "passed" by asserting the
+wrong branch.
+
+### The one cell NOT covered, and why I did not just do it
+
+"StandaloneVM with DIRECT INTERNET" - the branch that disables the proxy updater and undoes
+NoAutoUpdate=1 - needs a Windows guest actually connected to the internet. CLAUDE.md says plainly:
+"Do not enable networking on the test VM. Everything ships via qtest push." Giving a guest we treat
+as hostile a real route is exactly what that rule exists to prevent, so it is an owner decision, not
+mine to take silently. Everything else about that branch is already proven: the classifier returns
+StandaloneVM correctly (measured above), and the offline half of the branch runs.
+
+Fleet currency note: win11-tpl was still carrying the 4CFE3C5D updater from the earlier rollout, which
+predates the -Scheduled switch, so the first win11-app run failed on parameter binding rather than on
+anything about AppVMs. Refreshed to B16D89F221D6C954 (relay selftest 13/13); win11-fresh likewise.
