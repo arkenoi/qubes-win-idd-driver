@@ -15020,3 +15020,30 @@ StandaloneVM correctly (measured above), and the offline half of the branch runs
 Fleet currency note: win11-tpl was still carrying the 4CFE3C5D updater from the earlier rollout, which
 predates the -Scheduled switch, so the first win11-app run failed on parameter binding rather than on
 anything about AppVMs. Refreshed to B16D89F221D6C954 (relay selftest 13/13); win11-fresh likewise.
+
+### U6 COMPLETE — the direct-internet StandaloneVM cell, run with the owner's authorisation
+
+    direct_internet_reachable  true            <- asserted FIRST, see below
+    NoAutoUpdate  1 -> (absent)                <- removed, as the branch requires
+    took_direct_internet_branch  true
+    phase  skipped-standalone   exit 0   proxy_unchanged   no_relay_started
+    log: "StandaloneVM with direct internet - it updates ITSELF via Windows Update.
+          The qubes proxy updater is template-only: disabled. Undoing NoAutoUpdate=1."
+    NoAutoUpdate restored to 1 afterwards; netvm removed again (offline posture per CLAUDE.md)
+
+The `direct_internet_reachable` assertion is the point of the test, not decoration: without it a
+guest that failed to get a route would silently have measured the OFFLINE branch and reported a
+pass - the cell would look covered while the branch under test never ran. It probes the same two
+URLs the updater's own Test-DirectInternet uses.
+
+Why this branch matters: a standalone with a route updates itself through Windows Update, so the
+proxy updater must both stand down AND undo the NoAutoUpdate=1 policy it otherwise leaves behind.
+Getting only the first half right would leave the guest with Windows Update switched off and nobody
+driving it - never updated by anyone, silently.
+
+Incidental confirmation: attaching a NIC to a STANDALONE causes exactly ONE driver-install reboot
+and then settles (root is persistent), which is the same mechanism that loops forever on an unprimed
+AppVM. It reached `console user Active` on its own afterwards.
+
+U6 matrix is now 5/5: AppVM (Win10), AppVM (Win11), DispVM, StandaloneVM offline, StandaloneVM with
+direct internet - plus TemplateVM, exercised by every ordinary pass.
