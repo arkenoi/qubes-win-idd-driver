@@ -15578,3 +15578,43 @@ Also observed: the guest's own `QubesPvNic` applier alerted "network configurati
 fw-net boot even though the NIC came up - its settle window is exceeded by the slower/later
 attach. Cosmetic relative to the above, but it will keep firing until either the throughput or the
 applier's window changes.
+
+---
+
+## 2026-08-22 — throughput collapse is WINDOWS-FRONTEND-vs-MIRAGE-BACKEND specific; five candidates eliminated
+
+**Corrected control, from the owner:** `win-idd-mgmt` (this Linux dev qube) is ALSO on fw-net. I
+had assumed otherwise because `admin.vm.property.Get+netvm` on it is policy-refused, and I did not
+follow up - a control I asserted without checking. Verified directly: its default route is
+`10.138.21.72`, the SAME gateway the Windows guest gets on fw-net, and it pulls the same 10 MB
+file in 0.59 s = **17.7 MB/s**.
+
+    Linux   frontend <-> mirage  backend    17.7 MB/s
+    Windows frontend <-> Linux   backend    13-64 MB/s
+    Windows frontend <-> mirage  backend    0.05 MB/s      <-- only this pair
+
+Both halves run at full speed with the other partner, so this is a PAIR interaction, not "mirage
+is slow" and not "the Windows PV path is slow".
+
+**Cheap discriminators, all run on the rig (owner: "do cheap discriminators first"):**
+
+| measurement | result | eliminates |
+|---|---|---|
+| TCP retransmits / IP discards over a 26 s transfer | **0 / 0** | loss; window collapse from drops |
+| 1 flow vs 4 concurrent flows | 31 -> **206 pkt/s** (~6.5x) | a per-interface or notification ceiling |
+| ICMP RTT to 8.8.8.8 | **10 ms**, vs 10.9 ms from Linux on the same netvm | latency, the wire, the uplink |
+| `netsh int tcp show global` | autotuning normal, RSS enabled | guest TCP stack misconfiguration |
+| LSO + TCP/IP checksum offload + LRO all disabled | 51.2 -> 58.3 KB/s (noise) | the csum/GSO hazard the earlier synthesis predicted |
+
+Also measured: average RX packet 1358 B (no GSO, as expected - mirage sets gso_tcpv4=false), but
+the Linux frontend gets the same gso_tcpv4=0 from mirage and still does 17.7 MB/s, so absent GSO
+cannot be sufficient either. Same for split event channels: mirage advertises none, so the Linux
+frontend uses the same flat single channel.
+
+**What survives:** a per-flow limit, with zero loss and normal RTT, that is offload-independent -
+i.e. connections that never open their window. At 10 ms RTT and 20-50 KB/s a flow is averaging
+well under one segment in flight, which points at ACK-driven congestion-window growth being
+starved rather than at the receive path. NOT yet measured, so not a finding.
+
+My earlier hypothesis that 70 pkt/s ~ one packet per Windows 15.6 ms timer tick was REFUTED by the
+concurrency test - the ceiling scales with flows, so it is not a poll-rate artefact.
