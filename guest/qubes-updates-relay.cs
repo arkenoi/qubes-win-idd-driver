@@ -300,6 +300,49 @@ static class Relay
             new MemoryStream(), false).Result;
         check("204: reads complete", r8.Complete);
 
+        // 9. U5: PidForLocalPort under TABLE CHURN. The defect was that the TCP table can grow
+        //    between the sizing call and the fetch, the fetch then returns ERROR_INSUFFICIENT_BUFFER,
+        //    and the old code answered -1 - which the accept loop reads as "not the update process"
+        //    and RST-denies a legitimate Windows Update connection. Exercise the real function on a
+        //    real socket while deliberately churning the table, and demand it resolve EVERY time.
+        //    A wrong answer here is a denied update, so "mostly right" is not a pass.
+        {
+            int me = Process.GetCurrentProcess().Id;
+            int wrong = 0, failedLookup = 0, iterations = 300;
+            TcpListener probe = new TcpListener(IPAddress.Loopback, 0);
+            probe.Start();
+            int listenPort = ((IPEndPoint)probe.LocalEndpoint).Port;
+            // Sequential connects are not enough: the race needs the table to grow BETWEEN the
+            // sizing call and the fetch, so churn it from other threads WHILE the lookup runs.
+            bool churning = true;
+            List<Thread> churners = new List<Thread>();
+            for (int t = 0; t < 4; t++)
+            {
+                Thread th = new Thread(delegate()
+                {
+                    List<TcpClient> mine = new List<TcpClient>();
+                    while (churning)
+                    {
+                        try { TcpClient c = new TcpClient(); c.Connect(IPAddress.Loopback, listenPort); mine.Add(c); } catch { }
+                        if (mine.Count > 40) { foreach (TcpClient c in mine) { try { c.Close(); } catch { } } mine.Clear(); }
+                    }
+                    foreach (TcpClient c in mine) { try { c.Close(); } catch { } }
+                });
+                th.IsBackground = true; th.Start(); churners.Add(th);
+            }
+            for (int i = 0; i < iterations; i++)
+            {
+                int got = PidForLocalPort(listenPort);
+                if (got == PidLookupFailed) failedLookup++;
+                else if (got != me) wrong++;
+            }
+            churning = false;
+            foreach (Thread th in churners) { try { th.Join(2000); } catch { } }
+            probe.Stop();
+            check("U5: pid lookup never failed under churn (" + failedLookup + "/" + iterations + " failures)", failedLookup == 0);
+            check("U5: pid lookup always identified this process (" + wrong + "/" + iterations + " wrong)", wrong == 0);
+        }
+
         Console.WriteLine(failed == 0 ? "=== SELFTEST OK ===" : ("=== SELFTEST FAILED (" + failed + ") ==="));
         return failed == 0 ? 0 : 1;
     }
