@@ -15282,3 +15282,25 @@ completes on this testbed is unknown, and a takeover rule firing wrongly would h
 live interface. Ready, not applied on a guess - the rig discriminator decides.
 
 Full write-up + patch + test plan (incl. the control that must fail): `/home/user/mirage-gso/`.
+
+**Layer 3 closed by the owner (2026-08-21):** "only pv vif remains, emulated realtek gets
+disconnected". The serial-handover contract holds, so the proposed vif_type discriminator and
+PV-takeover arm are DROPPED, not deferred - there is no case needing one, and a takeover firing
+wrongly would hijack an IP from a live interface. It also explains the measured snapshot: on the
+wedge boot the PV NIC never started, so the unplug was never armed, so both vifs were still there.
+
+That fact makes two OTHER defects routine, because the unplug is armed by a boot that then demands
+a reboot (pdo.c:1440-1454, STATUS_PNP_REBOOT_REQUIRED), and every successful attach passes through
+"stubdom vif holds the IP, guest vif still parked in add_client, both torn down at once":
+1. `remove_client` removed by IP WITHOUT checking identity, so cleanup for the never-admitted guest
+   vif evicted the LIVE stubdom client; the assert then fired on the next removal, and
+   `Cleanup.cleanup` is a bare `List.iter` with no containment, so that exception aborted every
+   remaining cleanup handler. `Dao.VifMap.iter` walks in key order -> the guest (lower domid) is
+   cleaned first, i.e. exactly the bad order.
+2. A parked admission outlived its vif: when the IP was freed it registered an interface whose
+   device was gone, and the next client for that IP then waited behind a dead one for ever.
+Both fixed (0002-qmf-client-handover-safety.patch): remove only our own entry; cancel the admission
+from cleanup (handlers run last-registered-first, so the cancel precedes the removal).
+
+Built with all three changes: 8071def9... vs upstream 951b4aff... (reproducible). Ready for the
+rig: `/home/user/mirage-gso/qubes-firewall-FIX.xen`.
