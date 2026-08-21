@@ -14753,3 +14753,51 @@ STILL NOT CLAIMED AS FIXED: built is not tested. The acceptance for U15 remains 
 (proxy-probe.cs; control = sender 30/30, guest 20/30) re-run against a wrapper carrying this build,
 and it must reach 30/30. Deploying a replacement qrexec-wrapper.exe also has to be done carefully -
 it is the binary every qrexec call runs through, so a bad swap costs the guest's manageability.
+
+---
+
+## 2026-08-21 — U9 CLOSED: Defender signatures install on a netvm-free guest, verified by effect
+
+    updater hash16 B16D89F221D6C954 (running binary verified before the run)
+    relay   hash16 8F832C94ECA96EBC, --selftest 11/11
+    BEFORE AntivirusSignatureVersion 1.457.244.0
+    AFTER  AntivirusSignatureVersion 1.457.265.0        <- MOVED
+    KB2267602 ok=True severity=ok "full signature package installed directly (verified by effect)"
+
+203 MB fetched through the relay's CONNECT tunnel and applied. The check is the signature version
+moving, not an exit code - a no-op mpam-fe returns 0 happily, which is exactly why this class of
+verification exists in Install-SelfContained already.
+
+### Three defects between "it should work" and "it works", all found by RUNNING it
+
+1. `Invoke-WebRequest -MaximumRedirection 0` throws "Operation is not valid due to the current state
+   of the object" on Windows PowerShell 5.1 when the reply IS a redirect, and exposes no response
+   object to read Location from. The relay log stayed EMPTY - the request never left the client, so
+   this was never a transport or allowlist problem. Replaced with HttpWebRequest +
+   AllowAutoRedirect=$false, the class Fetch-Msu already uses.
+2. The fwlink is a CHAIN: go.microsoft.com -> definitionupdates.../packages?arch=x64 ->
+   .../packages/content/mpam-fe.exe?packageVersion=... Only the last URL names a file, and
+   Install-SelfContained correctly refuses a URL with no recognisable artifact. Now followed, capped
+   at 5 hops.
+3. The second hop's Location is RELATIVE. Passed through verbatim it produced 14 identical
+   "Invalid URI: The format of the URI could not be determined" failures. Every hop is now resolved
+   against the URL it came from.
+
+### And a regression of MY OWN, caught on a real pass
+
+The honesty gate shipped this morning refused a legitimate HEAD reply:
+
+    PLAIN REFUSED after 6 attempt(s) - 502 to client bytes=417 body=0/858972 headers=True
+      req=[HEAD http://download.windowsupdate.com/.../windows-kb5001716-x64_...]
+
+A reply to HEAD advertises Content-Length and sends no body; `got >= expected` therefore called a
+correct server truncated. Fixed for HEAD and for 204/304/1xx, with three selftest cases that are
+DISCRIMINATING rather than permissive - "GET with headers only" must still read INCOMPLETE, so the
+fix cannot be blinding the check. Selftest 8/8 -> 11/11.
+
+### Method note that cost two rounds
+
+Twice I nearly reported a stale result: once reading an acceptance file the previous run had left
+behind, once running against an updater that was pushed to QubesIncoming but never DEPLOYED into
+Program Files. The hash printed at the top of the acceptance output is what caught both. Delete the
+output and PROVE it is gone before re-running, and always assert the hash of the binary under test.
