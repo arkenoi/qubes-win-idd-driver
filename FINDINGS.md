@@ -15618,3 +15618,67 @@ starved rather than at the receive path. NOT yet measured, so not a finding.
 
 My earlier hypothesis that 70 pkt/s ~ one packet per Windows 15.6 ms timer tick was REFUTED by the
 concurrency test - the ceiling scales with flows, so it is not a poll-rate artefact.
+
+---
+
+## 2026-08-22 — ROOT CAUSE of the throughput collapse: mirage never sets NETRXF_data_validated
+
+Opus workflow (4 lenses -> 12 candidates -> 2 adversarial refuters each -> 2 survived, 10 refuted;
+confidence "strong"). It took its own live measurements rather than reasoning only from source,
+and I reproduced the decisive one independently before acting on it.
+
+**Mechanism, every link read in source:**
+1. mirage aggregates toward the guest whenever the peer advertises `feature-gso-tcpv4` - which
+   BOTH frontends do - producing super-frames far above MTU.
+2. mirage sets **no RX checksum flag, ever**. `rx_data_validated` and `rx_checksum_blank` exist in
+   `flags.ml:28-29`, correctly matched to `io/netif.h`, and appear nowhere on any write path.
+3. **Linux netfront papers over it.** `checksum_setup()` carries an explicit workaround for
+   "buggy peers [that] fail to set NETRXF_csum_blank when sending a GSO frame": it forces
+   CHECKSUM_PARTIAL and recalculates, counting `rx_gso_checksum_fixup`.
+4. **Windows xenvif has no workaround.** It re-segments the aggregate itself
+   (`ReceiverRingProcessLargePacket`), copies the parent's TCP header - checksum included - into
+   every manufactured segment (`__ReceiverRingBuildSegment`: `RtlCopyMemory` of the header, then
+   only IP length/IP checksum/Seq are fixed; `TcpHeader->Checksum` is never written), and the one
+   place it would write a correct per-segment checksum is gated on `flags & NETRXF_data_validated`
+   (receiver.c:584-592). Flag absent -> the verify branch instead sets `TcpChecksumFailed` and
+   tcpip.sys discards every segment.
+
+**Independently verified by me on this dev qube (Linux frontend on the same fw-net):**
+
+    rx_gso_checksum_fixup   5358 -> 6216   = 858 fixups
+    rx_packets delta 994, rx_bytes 10,525,956  ->  AVERAGE FRAME 10,589 B (MTU is 1500)
+
+86% of frames from this backend need netfront's repair. Aggregation is continuous and the missing
+flag is real. (The workflow measured 779/891 = 87.4% independently; two measurements agree.)
+
+**Why the window never opens:** aggregation only happens when the uplink hands mirage a >MTU
+frame, i.e. when the netvm's GRO coalesced 2+ same-flow segments, i.e. when the sender has 2+
+segments in flight. So the moment cwnd opens, the burst is coalesced upstream, aggregated by
+mirage and annihilated by xenvif; the retransmit arrives isolated, is not coalesced, and survives.
+Equilibrium sits at the largest window that does not provoke coalescing. Per-flow because GRO is
+per-flow; scales with concurrency because interleaving flows breaks up same-flow runs at the GRO
+layer; ICMP is a single sub-MTU frame, never aggregated - hence the clean 10 ms RTT.
+
+**Why my counters showed nothing - I had the fingerprint and did not compute it:**
+`TcpChecksumFailed` is an internal xenvif statistic xennet does not export; a TCP checksum failure
+lands in `tcpInErrs`, not `ipInDiscards`; and "Segments Retransmitted" is a SENDER-side counter,
+so on a receive-only flow it was never going to move. Meanwhile my own capture already said it:
+rxBytes 2,519,869 - ~54 B/pkt headers = 2,419,699 payload received, against 1,826,704 delivered to
+the application = **592,995 bytes (24.5%) counted by the NIC and never reaching the app.**
+
+**Fix (mirage-net-xen, one line + comment, `12fc0d4`)**: set `rx_data_validated` on aggregated
+frames, gated on `use_gso` so only the already-broken frame class changes and every non-aggregated
+response stays bit-identical.
+
+**Explicitly NOT done, and it matters:** do not also set `csum_blank`. netfront acts on it
+directly - `if (flags & XEN_NETRXF_csum_blank) ip_summed = CHECKSUM_PARTIAL` - which SKIPS the
+fixup and treats our COMPLETE checksum as a pseudo-header partial, then drops the frame. That
+would break all ~28 Linux qubes on this firewall in exchange for nothing; xenvif needs only
+data_validated.
+
+Regression analysis for the two working pairs: Windows<->Linux-netback cannot be affected (mirage
+is not in that path). Linux<->mirage takes the identical netfront branch either way, because
+CHECKSUM_UNNECESSARY is still `!= CHECKSUM_PARTIAL`, so the same fixup runs - and that counter is
+the live falsifier if it is wrong.
+
+Build FIX5 `701c7f5a...` (previous FIX4 `7628aa65...`). NOT YET RUN ON THE RIG.
