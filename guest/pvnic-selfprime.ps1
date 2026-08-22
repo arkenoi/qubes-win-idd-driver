@@ -223,6 +223,12 @@ while ((Get-Date) -lt $deadline) {
     }
     if ($ad) {
         L ("direct apply " + $script:want.ip + "/" + $script:want.prefix + " gw " + $script:want.gw + " on ifIndex " + $ad.ifIndex + " (src=qubesdb)")
+        # Turn DHCP off FIRST. Qubes configures guests statically from qubesdb, so the DHCP
+        # client has no job here - but it keeps a cached lease, and an AppVM's volatile root
+        # restores the template's stale one on every boot. Measured on win10-app 2026-08-23:
+        # lease 10.137.0.70 surfaced alongside the correct 10.137.0.72 and traffic stopped for
+        # ~13 s mid-boot while a later applier pass tore the addresses down and rebuilt them.
+        Set-NetIPInterface -InterfaceIndex $ad.ifIndex -AddressFamily IPv4 -Dhcp Disabled -EA SilentlyContinue
         Get-NetIPAddress -InterfaceIndex $ad.ifIndex -AddressFamily IPv4 -EA SilentlyContinue |
             Where-Object { $_.IPAddress -ne $script:want.ip } |
             Remove-NetIPAddress -Confirm:$false -EA SilentlyContinue

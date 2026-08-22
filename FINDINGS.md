@@ -15961,3 +15961,54 @@ deployed to fw-net (FIX6/HOTFIX era per this file; fw-net is outside this qube's
 its properties returns `rc=126 Request refused` - so the running build cannot be confirmed from
 here). They validate the DRIVER and show the deployed pairing is healthy. They do NOT validate the
 submitted unikernel `192d53ab`, which still has never run - see the unmeasured-delta list above.
+
+## 2026-08-23 — ACCEPTANCE: the submitted unikernel `192d53ab` runs. Plus a guest-side defect it exposed
+
+The owner deployed `192d53ab` to fw-net and confirmed it was already in place for yesterday's
+measurements, so the 12.21 MB/s (Windows, release xenvif) and 15.08 MB/s (Linux) recorded above were
+against the SUBMITTED build, not the previous one. The unmeasured-delta warning is retired.
+
+**Four Windows cold boots, `win10-app` (AppVM, netvm=fw-net), release xenvif 9.1.0.100:**
+
+    boot 1   PV NIC Up at 38 s uptime    12.23 MB/s   10485760 B
+    boot 2   PV NIC Up at 24 s uptime    12.98 MB/s   10485760 B   (first attempt failed - see below)
+    boot 3   first HTTP 200 at 27 s      (bench hit the window; connectivity proven at 27 s)
+    boot 4   PV NIC Up                   14.29 MB/s   10485760 B
+
+Every boot attached the PV NIC and carried a full 10485760 B. The attach path - `handshake`'s
+Closing arm, the RX `check_open` raise sites, the dispatcher retry loop, none of which had ever run -
+is exercised four times over. **Linux pair on the same firewall, from this qube: 16.43 / 17.07 /
+16.54 MB/s** (recorded 15.5, pre-fix 17.7) - no regression for the ~28 production qubes.
+
+**The intermittent bench failures were NOT the firewall.** Two of the four benches failed every
+transfer while the NIC read Up. Rather than retry, a 3-second-resolution boot timeline was taken:
+
+    22s  http=ERR  ips=169.254.121.222        (APIPA - nothing applied yet)
+    25s  http=200  ips=10.137.0.72            <- working
+    33s  http=200  ips=10.137.0.72
+    37s  http=ERR  ips=10.137.0.70            <- WRONG address surfaces
+    40s  http=ERR  ips=(none)
+    43s  http=ERR  ips=10.137.0.72
+    51s  http=200  ips=10.137.0.72            <- stable from here to 119 s
+
+One adapter throughout, so this is not the emulated-NIC handover. Root cause, from the registry:
+
+    HKLM\...\Tcpip\Parameters\Interfaces\{26771a3...}  EnableDHCP=1  DhcpIPAddress=10.137.0.70
+    live address: 10.137.0.72  PrefixOrigin=Manual  SuffixOrigin=Manual
+
+**DHCP is still enabled on the PV adapter and holds a stale lease for 10.137.0.70** (the qube's
+Qubes-assigned IP is 10.137.0.72 - confirmed via `admin.vm.property.Get+ip`). `pvnic-selfprime.ps1`
+applies the static address but never disables the DHCP client, and its own log shows it runs ~3x per
+boot (boot trigger + NetworkProfile events); the later pass tears the addresses down and rebuilds
+them, and the stale lease surfaces in the gap. A Windows AppVM's root is volatile, so the lease is
+restored from win10-tpl on every boot - which is why this recurs.
+
+This is almost certainly the mechanism behind the recurring "network configuration FAILED" reports:
+`Applied()` samples a moving target. Fixed in `guest/pvnic-selfprime.ps1` by disabling DHCP on the
+interface before applying the static config. **NOT yet validated** - the applier lives in the
+TEMPLATE (win10-tpl), so proving it needs a template update plus a cold boot, which also touches
+win10-clean and the other AppVMs on that template. Not done unilaterally.
+
+Note for future benchmarking: the bench must wait for a stable non-APIPA address, or it samples this
+window and reports a firewall failure that is not one. Both failing runs did exactly that.
+(The 4th URL in `pv-bench.ps1`, thinkbroadband, errors on every run - a dead alt URL, not a defect.)
