@@ -183,7 +183,19 @@ function Applied {
           Where-Object { $_.ifIndex -eq $ad.ifIndex -and $_.NextHop -ne '0.0.0.0' } | Select-Object -First 1
     if (-not $rt) { return $false }
     if ($script:want -and $rt.NextHop -ne $script:want.gw) { return $false }
-    return (Test-Connection -ComputerName $rt.NextHop -Count 2 -Quiet -EA SilentlyContinue)
+    # REACHABILITY IS DELIBERATELY NOT PART OF THE VERDICT.
+    # This used to end with `Test-Connection $rt.NextHop`, i.e. it required the gateway to
+    # answer ICMP echo. A mirage-firewall netvm does not: measured on the rig, ping to the
+    # gateway 10.138.21.72 fails while ping to 8.8.8.8 THROUGH that same gateway succeeds and
+    # the link carries 12 MB/s. Qubes also uses point-to-point /32 routing with the well-known
+    # fe:ff:ff:ff:ff:ff peer MAC, so there is no ARP entry to fall back on either.
+    # The result was a false alarm on every boot behind such a netvm: the applier re-applied a
+    # perfectly correct configuration every 12 s until it gave up and popped
+    # "network configuration FAILED" at the user, while the network worked the whole time.
+    # What this function exists to catch - APIPA, a missing or wrong address, a missing or
+    # wrong default route, a dead adapter - is fully covered by the checks above. Whether a
+    # given netvm chooses to answer pings is not a property of our configuration.
+    return $true
 }
 
 # Event-triggered run on an already-correct state: converge fast (self-retrigger guard).
@@ -245,7 +257,9 @@ while ((Get-Date) -lt $deadline) {
 }
 
 if ($ok) {
-    L 'SUCCESS: non-APIPA IP + default route + reachable gateway, stable on XENVIF adapter'
+    $echo = [bool](Test-Connection -ComputerName $script:want.gw -Count 1 -Quiet -EA SilentlyContinue)
+    L ("SUCCESS: non-APIPA IP + default route, stable on XENVIF adapter (gateway echo: " +
+       $(if ($echo) { 'yes' } else { 'no - normal for a mirage-firewall netvm' }) + ")")
     Remove-Item $mark -Force -EA SilentlyContinue
     exit 0
 }
