@@ -15886,6 +15886,31 @@ MD5 digests. Comment edits change a unit's source digest and nothing else. Ident
 retires the other worry: had the duniverse re-vendor pulled different package versions, the code
 section could not have matched.
 
+**What is unmeasured, exactly.** Recovered the FIX5-era source states from the reflog (qmf
+`0f238f2`, mirage-net-xen `12fc0d4`), stripped comments from both sides, and diffed. The delta is
+functional, not cosmetic, and it lands on the two paths Windows attach depends on:
+
+    mirage-net-xen  lib/xenstore.ml   handshake's Closing arm now WAITS for the frontend again
+                                      (Closed|Initialising|Initialised|Connected) and re-arms via
+                                      Closed->InitWait, instead of writing Closing and recursing.
+                                      This IS the close-cycle answer that makes xenvif attach.
+                    lib/xenstore.ml   disconnect_backend's Lwt.catch moved to cover the whole body;
+                                      Enoent now returns quietly instead of warning
+                    lib/netif.ml      5 new `check_open nf.t` call sites in RX ops - NEW RAISE
+                                      SITES (Netback_shutdown) in the receive path
+                    lib/netif.ml      RX callback re-raises Netback_shutdown instead of swallowing
+                                      it; close-watch body wrapped in Lwt.catch
+    qmf             dispatcher.ml     the reconnect is now a `reserve attempt` retry loop (10
+                                      attempts, 1 s apart, terminal only on Xs_protocol.Error|Enoent)
+                                      where FIX5 called serve () directly - the exact path a Windows
+                                      guest takes on every device close
+                    dao.ml/.mli       new vif_type xenstore read, called during client admission
+                    config.ml         pin 2.1.8 -> 2.2.0
+
+Every one of these post-dates the last build the owner deployed. FIX6/HOTFIX were deployed and
+log-checked (11:30-13:08); HOTFIX2 (17:13) and HOTFIX3 (18:32) came out of the code review and there
+is no record of either running.
+
 **Required before either PR is sent:** deploy `qubes-firewall-TRIMMED.xen` (`192d53ab`) to fw-net
 and re-run the acceptance — a Windows cold boot plus the 10 MB transfer, and a Linux-client transfer
 for the ~28 production qubes. Until that runs, the drafts' numbers belong to FIX5 and the submitted
