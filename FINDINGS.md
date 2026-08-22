@@ -16057,3 +16057,43 @@ so the firewall path is healthy either side. `192d53ab` is not implicated in any
 Fix status: `Set-NetIPInterface -Dhcp Disabled` added to the apply path in
 `guest/pvnic-selfprime.ps1`. Still NOT validated - it must reach win10-tpl to take effect, which
 also touches win10-clean and the other AppVMs on that template.
+
+## 2026-08-23 — the netvm-free template HAS seen a real netvm. The procedure is clean; the artefact is not
+
+Owner's question, on being told a template carried a DHCP lease: "the template that should had never
+seen real netvm?" Correct - and it did. Read directly out of `win10-tpl` (booted offline, netvm=None,
+via qrexec), not inferred from the AppVM:
+
+    HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces
+      {26771a3...}  EnableDHCP=1  DhcpIPAddress=10.137.0.70  DhcpServer=10.138.25.43  Lease=1787174388
+      {4f01521...}  EnableDHCP=1  DhcpIPAddress=10.137.0.70  DhcpServer=10.138.25.43  Lease=1787172830
+
+    Lease B = 2026-08-19 23:53 EEST      Lease A = 2026-08-20 00:19 EEST      26 minutes apart
+
+TWO different interface GUIDs, same server, half an hour apart: the signature of a priming run in
+which the emulated NIC and then the PV NIC each took an address from a live DHCP server.
+`10.138.25.43` is in the DispVM range (compare `win11-disp` at 10.138.28.225), so the server was a
+disposable netvm - and it is the same address written in this repo's own applier comment at
+`guest/pvnic-selfprime.ps1:78`, i.e. the netvm this lineage was primed against. A netvm answered
+DHCP; mirage-firewall does not run one, so nothing since could have produced these.
+
+**What is NOT wrong: the netvm-free machinery.** The template's own applier log
+(`C:\ProgramData\QubesPvNic.log`) begins 2026-08-21 10:37 and every run in it, including the boot
+taken for this investigation, ends `qubesdb up, /qubes-ip absent, no vif device: no netvm, nothing
+to apply`. The latch path does what the 2026-08-19 entry says it does.
+
+**What is wrong: the claim as applied to this artefact.** "No netvm ever" describes the shipped
+PROCEDURE. The win10-tpl image in use predates it - the leases are older than the applier's own log -
+so it was built or re-primed with a netvm attached, and it still carries that session's residue.
+Every AppVM cloned from it inherits the stale lease, which is what stomps the applier's static .72
+mid-boot (see the entry above). The memory note "no netvm ever" should be read as a property of
+`PRIME_NETVM=latch`, not of any template currently on disk.
+
+**Not fixed, deliberately.** Clearing the leases + `EnableDHCP=0` in the template was attempted and
+REFUSED by the permission layer (a mutating registry write to a shared template). The template is
+untouched and Halted; win10-app was restored to Running. Two ways forward, owner's call:
+  1. allow the registry clean on win10-tpl - narrow, fixes the measured stomp for every AppVM;
+  2. rebuild the template with `PRIME_NETVM=latch` - slower but removes whatever ELSE that netvm
+     session left behind, which nobody has enumerated.
+The applier-side fix (`Set-NetIPInterface -Dhcp Disabled` before applying) is committed and would
+make any future image immune regardless of which is chosen.
