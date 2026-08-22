@@ -15765,3 +15765,62 @@ indistinguishable in the log - same IP, differing only by domid - which is what 
 collision look like a plausible cause of the hang. Reported verbatim, not translated: the GUEST's
 vif is the one marked `vif_ioemu`, the device model's is a plain `vif`, and a PV-only guest's
 would also be plain - so a friendlier label would be inference in a log line.
+
+---
+
+## 2026-08-22 — code review of the mirage series (Fable, 6 lenses): sound, but not finished
+
+Two passes, 24 findings, 20 confirmed. Verdict: the design is right - the state machine genuinely
+mirrors xen-netback's frontend_changed, and both headline mechanisms were re-verified against the
+QUBES-VENDORED xenvif (not just the xenserver fork), where the wedge is if anything stronger (no
+120 s fail-out). What the review caught were unfinished edges, and every runtime must-fix was in
+the LIBRARY, none in the firewall.
+
+**Five defects fixed as a result, four of them mine:**
+1. `disconnect_backend` performed its `frontend id` xenstore read ABOVE its `Lwt.catch`. Enoent on
+   an unclean client death (qvm-kill, panic, forced detach) escaped through `Cleanup.perform` and
+   `Lwt_switch.turn_off` - neither catches - into an unguarded `Lwt.async`, and the default
+   async_exception_hook exits the unikernel. **The base had that read inside the guard; moving the
+   close handshake in front of it removed the protection.** I added a guard and silently deleted
+   another.
+2. That `Lwt.async` in `netif.ml` had no handler at all - the same class I had "fixed" in the
+   dispatcher. I audited every `Lwt.async` in the firewall after the crash and never looked in the
+   library.
+3. The `Closing` branch recursed into a wanted-list still containing `Closing`. `Xs.wait` runs its
+   predicate BEFORE registering a watch, so that is an unblocked read/write/recurse spin - and
+   `device/vif/N/state` is GUEST-WRITABLE, so any client qube could pin it and flood dom0's
+   xenstored from a 32 MB unikernel. A client-triggerable DoS reaching dom0, introduced by my
+   close handling. Now edge-triggered.
+4. RX ring ops did not re-check `closed` after awaiting the forwarding callback, so teardown could
+   unmap the rings underneath them.
+5. The re-serve handler treated every unrecognised exception as terminal, and `wait_clients` only
+   re-adds a vif whose directory is ABSENT - so a transient failure (revoked grant, stale evtchn
+   port, half-torn-down ring keys, none of which are `Xs_protocol.Error`) **abandoned a live vif
+   permanently**. It also misclassified the benign case: a backend directory removed first raises
+   `Xs_protocol.Enoent`, a DIFFERENT constructor from `Error`.
+
+**Answers to the two questions the owner asked:**
+- *Is a9aa83d (the serve loop) necessary?* YES, and in this shape. All three alternatives fail:
+  blocking inside make_backend holds the IP across the gap and deadlocks the same-IP sibling that
+  eac93cf exists for, and the transport is per-connection by construction so "the loop merely
+  moves, it does not disappear"; watching the state key is level-sampling an edge (a coalesced
+  Closing->Closed->Initialising misses the Closed epoch); re-admitting from the existing cleanup
+  path fires only on directory removal, which is exactly when re-admission is wrong.
+- *Is the series surgically minimal?* The four core commits are each required - dropping any one
+  reintroduces a measured defect. My own guesses were half right: 0007 (logging) is indeed
+  non-essential, but 0002 and 0005 turned out load-bearing, not bundled extras.
+
+**One review claim REJECTED after checking it myself.** It said 12fc0d4's commit message and
+source comment state the mechanism wrongly - that xenvif's fresh per-segment checksum write is
+gated on `csum_blank`, not `data_validated`. `receiver.c:584-586` gates it on
+`NETRXF_data_validated`, exactly as written; the `csum_blank` references at :568/:613 are ASSERTs
+inside the verify branch, inert in free builds. Record stands; a correct comment was not edited on
+an agent's say-so.
+
+**Series now submission-ready:** repair commits squashed into the commits that introduced the bugs
+(verified: no mid-series commit is worse than its base), `qubes-firewall.sha256` refreshed (it held
+the UNPATCHED hash, which the repo's own CI compares verbatim and exits 42 on), and the
+mirage-net-xen pin bumped from 2.1.8 - whose released signature cannot compile the firewall, so the
+tree only built here via an untracked duniverse copy. Bundles: 5 patches (mirage-net-xen, base
+050aed3) and 6 (qubes-mirage-firewall, base 89ae5da), both verified by scratch `git am`.
+Latest build: `8674fd83...`.
