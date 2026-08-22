@@ -15997,11 +15997,27 @@ One adapter throughout, so this is not the emulated-NIC handover. Root cause, fr
     live address: 10.137.0.72  PrefixOrigin=Manual  SuffixOrigin=Manual
 
 **DHCP is still enabled on the PV adapter and holds a stale lease for 10.137.0.70** (the qube's
-Qubes-assigned IP is 10.137.0.72 - confirmed via `admin.vm.property.Get+ip`). `pvnic-selfprime.ps1`
-applies the static address but never disables the DHCP client, and its own log shows it runs ~3x per
-boot (boot trigger + NetworkProfile events); the later pass tears the addresses down and rebuilds
-them, and the stale lease surfaces in the gap. A Windows AppVM's root is volatile, so the lease is
-restored from win10-tpl on every boot - which is why this recurs.
+Qubes-assigned IP is 10.137.0.72 - confirmed via `admin.vm.property.Get+ip`).
+
+**CORRECTION to the first version of this entry: I had the causality backwards.** I wrote that the
+applier tears the addresses down and the stale lease "surfaces in the gap". The order is the
+opposite, and it matters because it is what makes the fix the right one:
+
+    1. DHCP client is live on the PV NIC and STOMPS the applier's static .72 with the leased .70
+    2. traffic dies immediately - .70 is not this qube's address
+    3. the applier's next pass removes the foreign address (the interface briefly has NO address)
+    4. it re-adds .72; connectivity returns ~5-10 s later, after route/DNS/ARP re-establish
+
+Step 4's lag is measured, not assumed: in the stamped run below the address was already back to .72
+at 44 s and 47 s while transfers still failed, recovering at 50 s.
+
+**The lease is baked into the image, now verified rather than inferred.** It reappeared on a fresh
+cold boot, and it points at an obsolete server: `DhcpServer=10.138.25.43`, `LeaseObtained`
+= 2026-08-19 21:19 UTC. Today's gateway for this guest is 10.138.21.72. 10.138.25.43 is the netvm
+this image was primed against - it is the very address in this file's own applier comment at
+`guest/pvnic-selfprime.ps1:78`. A Linux netvm runs a DHCP server; mirage-firewall does not, which is
+why the client falls back to APIPA (169.254.121.222 at 22 s above) or re-uses the cached lease. A
+Windows AppVM's root comes from the template, so win10-tpl carries this and every AppVM inherits it.
 
 This is almost certainly the mechanism behind the recurring "network configuration FAILED" reports:
 `Applied()` samples a moving target. Fixed in `guest/pvnic-selfprime.ps1` by disabling DHCP on the
@@ -16012,3 +16028,32 @@ win10-clean and the other AppVMs on that template. Not done unilaterally.
 Note for future benchmarking: the bench must wait for a stable non-APIPA address, or it samples this
 window and reports a firewall failure that is not one. Both failing runs did exactly that.
 (The 4th URL in `pv-bench.ps1`, thinkbroadband, errors on every run - a dead alt URL, not a defect.)
+
+**"HTTP 200 proven at 27 s, then the benchmark failed" - resolved by measurement, not reasoning.**
+That pair looked self-contradictory and the first explanation for it was reconstruction (two qrexec
+calls landing either side of a window). Re-run properly: one continuous in-guest script, REAL 10 MB
+transfers, every attempt stamped with guest uptime, on a fresh cold boot:
+
+    17s  ips=10.137.0.72   FAILED
+    23s  ips=10.137.0.72   10485760 B   0.83s   12.01 MB/s
+    30s  ips=10.137.0.72   10485760 B   0.58s   17.17 MB/s
+    33s  ips=10.137.0.72   10485760 B   0.15s   64.84 MB/s
+    37s  ips=10.137.0.72   10485760 B   0.19s   52.48 MB/s
+    40s  ips=(none)        FAILED          <- address gone
+    44s  ips=10.137.0.72   FAILED          <- address back, path not yet
+    47s  ips=10.137.0.72   FAILED
+    50s  ips=10.137.0.72   10485760 B   0.62s   16.15 MB/s
+    ... 56-97s all succeed, 20-70 MB/s
+
+So the guest genuinely goes WORKING -> BROKEN -> WORKING with no intervention, and the two earlier
+measurements simply fell on opposite sides of the outage. Nothing about the 200 was wrong; the
+inference that stitched them together was.
+
+Two things this run also settles: the outage happens on a boot where **.70 never appears at all**
+(so the visible wrong address is one symptom of the live DHCP client, not the whole mechanism), and
+the working transfers bracket the window at full rate - 12.01 MB/s at 23 s and 16.15 MB/s at 50 s -
+so the firewall path is healthy either side. `192d53ab` is not implicated in any of it.
+
+Fix status: `Set-NetIPInterface -Dhcp Disabled` added to the apply path in
+`guest/pvnic-selfprime.ps1`. Still NOT validated - it must reach win10-tpl to take effect, which
+also touches win10-clean and the other AppVMs on that template.
