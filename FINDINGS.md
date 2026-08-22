@@ -15853,9 +15853,26 @@ exists; draft offers to drop the pin commit and let a maintainer do it.
 and nothing was rewritten. Only `rc=2` contradicted it. Same class as the failures this file already
 records: the data needed to fail the check was absent, so the check passed.
 
-**Gap closed analytically: the PR-series binary is code-identical to the benchmarked one.** The
-binary proven on the rig is `qubes-firewall-HOTFIX3.xen` `8674fd83`; the series builds
-`qubes-firewall-TRIMMED.xen` `192d53ab`; 27846 bytes differ. Localised per ELF section:
+**RETRACTED, same day, before it was acted on: "the throughput figures apply to the shipped
+series".** They do not. I wrote that on the assumption that `qubes-firewall-HOTFIX3.xen` was the
+benchmarked build. It is not — this file records 12.65/13.12/13.42 MB/s against **FIX5** (§ "ACHIEVED,
+WITH THROUGHPUT"), and `.text` digests show FIX5 and the shipped code are different code:
+
+    UNPATCHED 50a86c9fc4ec   FIX  ebc890cb704f   FIX2 45f395b45d60   FIX3 9338427b7f0d
+    FIX4      a1d69c717f11   FIX5 ebaacd29166b  <-- the benchmarked build
+    FIX6      38c606c494e2   HOTFIX 4d675b5a1e2a  HOTFIX2 8eab61f97171
+    HOTFIX3   af43528914ff   TRIMMED af43528914ff  <-- the shipped series, identical to each other
+
+Four distinct code states separate the benchmarked binary from the shipped one (vif-type logging,
+the review's retry fix, and the two hotfixes), and this file contains NO record of HOTFIX2 or
+HOTFIX3 ever being deployed or measured. **The code being submitted has never run on hardware.**
+The throughput and `rx_gso_checksum_fixup` figures in the upstream drafts describe FIX5.
+
+What the section comparison DOES establish is narrower and still worth having: the comment trim and
+the `duniverse/` re-vendor changed no executable byte, so TRIMMED and HOTFIX3 are the same program.
+
+`qubes-firewall-HOTFIX3.xen` `8674fd83` vs `qubes-firewall-TRIMMED.xen` `192d53ab`, 27846 bytes
+differ, localised per ELF section:
 
     .text                   IDENTICAL      (no instruction changed)
     .rodata                 IDENTICAL      (no constant, literal or jump table changed)
@@ -15867,8 +15884,12 @@ That span is the marshalled `caml_globals_map` — it interleaves module names (
 `0Shared_page_pool`, `/Vchan__Xenstore`, 2291 such tokens) with each unit's interface/implementation
 MD5 digests. Comment edits change a unit's source digest and nothing else. Identical `.text` also
 retires the other worry: had the duniverse re-vendor pulled different package versions, the code
-section could not have matched. So the comment trim and the re-vendor changed no executable byte,
-and the 12.65/13.12/13.42 MB/s figures apply to the shipped series.
+section could not have matched.
+
+**Required before either PR is sent:** deploy `qubes-firewall-TRIMMED.xen` (`192d53ab`) to fw-net
+and re-run the acceptance — a Windows cold boot plus the 10 MB transfer, and a Linux-client transfer
+for the ~28 production qubes. Until that runs, the drafts' numbers belong to FIX5 and the submitted
+code is unmeasured. This is a dom0 action; it needs the owner.
 
 **Also fixed:** neither series touched CHANGES.md, which both projects keep and a maintainer would
 have asked for. Added to both, the library's marked BREAKING (`make_backend` gains `?on_closed` and
