@@ -15682,3 +15682,42 @@ CHECKSUM_UNNECESSARY is still `!= CHECKSUM_PARTIAL`, so the same fixup runs - an
 the live falsifier if it is wrong.
 
 Build FIX5 `701c7f5a...` (previous FIX4 `7628aa65...`). NOT YET RUN ON THE RIG.
+
+---
+
+## 2026-08-22 — ACHIEVED, WITH THROUGHPUT: Windows PV networking on mirage-firewall at line rate
+
+The one-line `NETRXF_data_validated` fix (mirage-net-xen `12fc0d4`, unikernel `701c7f5a...`) closes
+the gap completely. Measured on the rig, 10 MB streamed to memory:
+
+    BEFORE (FIX4):  188 s / 156 s                    = 0.05 MB/s
+    AFTER  (FIX5):  0.79 / 0.43 / 0.17 s  (boot 1)   = 12.65 / 23.15 / 59.76 MB/s
+                    0.76 / 0.36 / 0.25 s  (boot 2)   = 13.12 / 27.60 / 39.48 MB/s
+                    0.75 / 0.36 / 0.14 s  (boot 3)   = 13.42 / 27.51 / 69.25 MB/s
+    Windows on core-net (Linux netback), for reference = 13 - 64 MB/s
+
+Three COLD boots, first-transfer figures tightly clustered (12.65 / 13.12 / 13.42 MB/s); the
+faster later figures are CDN/edge caching, which is why the first transfer of each boot is the
+honest number. Windows <-> mirage is now indistinguishable from Windows <-> Linux netback.
+
+**No regression on the Linux pair** (the one that matters - this is the owner's production
+firewall for ~28 qubes): 15.5 MB/s after the fix vs 17.7 MB/s before, i.e. unchanged within
+variance. And `rx_gso_checksum_fixup` still increments (868 over 1044 frames, 83%), exactly as the
+regression analysis predicted: with `data_validated` set, netfront's `ip_summed` becomes
+CHECKSUM_UNNECESSARY, which is STILL `!= CHECKSUM_PARTIAL`, so the same fixup branch runs and the
+same recalculation happens. That counter was named in advance as the live falsifier; it did not
+falsify.
+
+**Full arc of this investigation, for the record.** Four defects, three ours:
+1. mirage-net-xen `05c69ef` - no close/reconnect half of the xenbus state machine -> guest WEDGED.
+2. mirage-net-xen `154eb8a` - `disconnect_backend` skipped Closing and DELETED the backend dir ->
+   xenvif read it as hot-unplug and permanently ejected the NIC.
+3. mirage-net-xen `a1242d5` + qubes-mirage-firewall `d673db9` - InitWait announced to a closing
+   frontend (livelock -> OOM) and exceptions escaping `Lwt.async` (crash on every guest reboot).
+   Both crashed the owner's live firewall; both mine.
+4. xenvif (UPSTREAM) - no `feature-ctrl-ring` -> zeroed control ring -> RING_FULL trivially true ->
+   the whole NIC failed because it could not say "no hashing" to a peer that never offered it.
+5. mirage-net-xen `12fc0d4` - the throughput collapse above.
+
+Artefacts: unikernel `701c7f5a...`; xenvif release build carries the ctrl-ring fix unconditionally
+(diagnostic instrumentation stays opt-in). Patches 0001-0006 in /home/user/mirage-gso/.
