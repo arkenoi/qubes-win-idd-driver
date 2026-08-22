@@ -16234,3 +16234,27 @@ client does when nothing answers", and used its predicted absence as part of the
 to an interface that has no address yet, DHCP client or not. So APIPA was never evidence of DHCP,
 and the prediction that it would disappear was wrong. The outage removal is real; that particular
 piece of reasoning for it was not.
+
+### Why DHCP at all? It isn't needed - measured against a Linux qube on the same firewall
+
+Owner: "why do we need to run dhcp instead of assigning ip's from qubesdb (which we do anyway)?"
+We don't. Checked on this qube (win-idd-mgmt, a Linux AppVM on the same fw-net):
+
+    dhclient / dhcpcd / systemd-networkd / NetworkManager / wickedd   ALL ABSENT
+    qubes-network-uplink                                             enabled
+    eth0 = 10.137.0.63/32, default via 10.138.21.72 onlink
+    qubesdb: /qubes-ip 10.137.0.63  /qubes-gateway 10.138.21.72  /qubes-primary-dns 10.139.1.1
+    resolv.conf: nameserver 10.139.1.1 / 10.139.1.2
+
+A Linux Qubes guest runs NO DHCP client of any kind; it reads qubesdb and configures statically -
+exactly what `pvnic-selfprime.ps1` does for Windows. DHCP was never part of the Qubes design for
+guests that can read qubesdb; a netvm answers it only as a fallback for guests that cannot. Windows
+had a client running purely because that is the default for a fresh NIC, and a Linux netvm answered
+it. With EnableDHCP=0 the Windows guest now matches the Linux one.
+
+Deliberately NOT done: disabling the Windows DHCP Client SERVICE globally. It would also cover a
+brand-new interface GUID (which defaults to DHCP-enabled), but that case is already fail-closed -
+a new GUID can only appear during a netvm-attached priming run, and `scrub_net_identity` runs after
+priming and fails the build on any residue. The service also handles DNS registration and some
+diagnostics, so disabling it trades a covered risk for an uncovered one. Per-interface + fail-closed
+scrub + the applier turning DHCP off on the adapter it configures is the lower-risk cover.
