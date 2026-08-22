@@ -16097,3 +16097,64 @@ untouched and Halted; win10-app was restored to Running. Two ways forward, owner
      session left behind, which nobody has enumerated.
 The applier-side fix (`Set-NetIPInterface -Dhcp Disabled` before applying) is committed and would
 make any future image immune regardless of which is chosen.
+
+## 2026-08-23 — leftover inventory + the procedure fix, so priming cannot contaminate an image again
+
+Owner: "we need not to clean up, we need to make sure our priming procedure wont do this again and
+nothing will break" + "need to make sure there are no other leftovers". Read out of a booted,
+offline `win10-tpl` (netvm=None) - read-only, the template was not modified.
+
+**Complete leftover inventory (win10-tpl):**
+
+    Tcpip\Parameters\Interfaces  {26771a3}  EnableDHCP=1  lease=10.137.0.70  srv/gw=10.138.25.43
+                                            DhcpNameServer=10.139.1.1 10.139.1.2
+                                 {4f01521}  same, second interface
+    NetworkList\Profiles         "Network"  category=0  created 2026-08-19 19:42
+    NetworkList\Signatures       gwmac=fe:ff:ff:ff:ff:ff   (the Qubes point-to-point peer MAC)
+    Tcpip6                       Dhcpv6State=1 on both interfaces + a DHCPv6 DUID embedding a MAC
+    SoftwareDistribution\Download  7 files, 0.9 MB, newest 2026-08-20 10:06
+
+Only ControlSet001 exists, so nothing is hiding in an alternate control set. Clean: no WinHTTP or
+WinINET proxy, no persistent routes, empty DNS cache, `LastOnlineScanTime` unset, `NoAutoUpdate=1`,
+all three firewall profiles enabled. NOT leftovers: the `XENVIF\VEN_XP&DEV_NET` enum entry (that IS
+the primed PV NIC, the deliverable) and the RTL8139 PCI enum entry (every Qubes HVM has one).
+
+Note the profile timestamp - 19:42 - is EARLIER than either lease (23:53 and 00:19). So there was
+more than one netvm session that evening, not a single slip.
+
+**The procedure defect.** `prime_pv_nic` attaches a real netvm, and `qvm-firewall add action=drop`
+does not stop traffic to the gateway ITSELF, so the Windows DHCP client leases from it. The lease
+lands in the registry and survives into the shipped template; detaching the netvm afterwards does
+not undo it. The netvm-free latch path never leases - but it inherits whatever the SOURCE image
+already carried, so neither path was safe on its own.
+
+**Fix: `scrub_net_identity`, unconditional, in BOTH paths** (mgmt/clone-to-template.sh). It runs on
+its OWN offline boot - scrubbing while a netvm is attached just lets the client re-lease behind us -
+clears every Dhcp*/Lease*/T1/T2/DUID value across all control sets and both IP stacks, sets
+`EnableDHCP=0` on every interface, drops NetworkList profiles and signatures, then RE-READS and
+FAILS the build if anything survived. A scrub that reports success without a readback is exactly the
+class of check this file already records being burned by.
+
+**Validated, and one iteration was needed.** Run against `win10-app` (AppVM root is volatile, so the
+change evaporates and the template stays untouched), using the payload extracted from the committed
+script rather than a retyped copy:
+
+    first attempt   QSCRUB=24  QRESIDUE=0   ip/route intact, 12.27 MB/s  ... but DNS was EMPTY
+    corrected       QSCRUB=21  QRESIDUE=0   ip/route intact, DNS 10.139.1.1,10.139.1.2,
+                                            Dhcp=Disabled, 12.53 MB/s AFTER Clear-DnsClientCache
+
+The first version deleted the static `NameServer` too. Qubes DNS is invariant (10.139.1.1/.2 in
+every qube), so it identifies nothing, and removing it deletes the only resolver fallback if the
+applier ever fails to run - it left a live guest with no resolver at all. Only the DHCP-supplied
+copy is removed now. The second run's transfer was taken after flushing the DNS cache, so name
+resolution is genuinely working rather than served from cache.
+
+**Also committed and now corrected:** `guest/pvnic-selfprime.ps1` carried
+"Verified 2026-08-19 on a core-net-attached guest: /qubes-ip=... /qubes-gateway=10.138.25.43" - our
+own source recording the netvm-attached verification that caused this, with the owner's addressing
+pasted in. Replaced with what actually happened and a do-not-repeat, addresses not restated.
+
+**Not done:** the existing win10-tpl is still contaminated - it was left untouched deliberately (and
+a write to it was refused by the permission layer anyway). The fix prevents recurrence; making THIS
+image clean is a separate decision, and a rebuild through the fixed script is the honest route since
+it also re-primes rather than patching around the residue.

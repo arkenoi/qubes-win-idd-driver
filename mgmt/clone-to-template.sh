@@ -227,6 +227,108 @@ prime_latch() {
     log "latch primed and self-healing (NICS=1, veto key, tasks verified across a boot cycle); $vm never had a netvm"
 }
 
+scrub_net_identity() {
+    # A template must ship with NO network identity of its own. Runs unconditionally, in BOTH
+    # priming modes, because both can carry one: prime_pv_nic attaches a real netvm and Windows
+    # takes a DHCP lease from it (Qubes netvms answer DHCP; the drop-all firewall does not stop
+    # traffic to the gateway itself), and the netvm-free latch path inherits whatever the SOURCE
+    # image already had.
+    #
+    # Measured on win10-tpl 2026-08-23 (FINDINGS): two interface keys holding a lease + the
+    # serving netvm's address, static DNS, a NetworkList profile, and a DHCPv6 DUID - inherited by
+    # every AppVM cloned from it. Not cosmetic: the stale lease races the applier at every AppVM
+    # boot, replaces the correct address with one from a netvm that is no longer there, and costs
+    # ~13 s of dead network before the applier repairs it.
+    #
+    # Deliberately on its OWN offline boot: scrubbing while a netvm is attached lets the DHCP
+    # client re-lease behind us.
+    local vm="$1"
+    log "scrubbing network identity from $vm (offline)"
+    qvm-prefs "$vm" netvm '' >/dev/null 2>&1
+    [ "$(state "$vm")" = Halted ] || timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    until [ "$(state "$vm")" = Halted ]; do sleep 5; done
+    qvm-start "$vm" >/dev/null 2>&1
+    wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec for the scrub boot"; return 1; }
+
+    # EncodedCommand, not -Command: this is multi-statement and quoting it through cmd.exe is how
+    # probes end up silently doing nothing. Guest output stays data - only matched against literals.
+    local scrub verify n residue
+    scrub=$(cat <<'PS'
+$n = 0
+foreach ($cs in (Get-ChildItem 'HKLM:\SYSTEM' | Where-Object { $_.PSChildName -like 'ControlSet*' })) {
+  foreach ($proto in @('Tcpip','Tcpip6')) {
+    $ifp = "HKLM:\SYSTEM\$($cs.PSChildName)\Services\$proto\Parameters\Interfaces"
+    if (Test-Path $ifp) {
+      Get-ChildItem $ifp | ForEach-Object {
+        # NameServer is deliberately NOT in this list. Qubes DNS is invariant (10.139.1.1/.2 in
+        # every qube), so it identifies nothing - and deleting it removes the only fallback if the
+        # applier ever fails to run. Measured 2026-08-23: scrubbing it left a live guest with no
+        # resolver at all. Only the DHCP-SUPPLIED copy goes.
+        foreach ($v in @('DhcpIPAddress','DhcpServer','DhcpSubnetMask','DhcpDefaultGateway',
+                         'DhcpNameServer','DhcpDomain','LeaseObtainedTime','LeaseTerminatesTime',
+                         'T1','T2','Dhcpv6DUID','Dhcpv6Iaid')) {
+          if ($null -ne (Get-ItemProperty $_.PSPath -Name $v -EA SilentlyContinue)) {
+            Remove-ItemProperty $_.PSPath -Name $v -Force -EA SilentlyContinue; $n++
+          }
+        }
+        if ($proto -eq 'Tcpip') {
+          Set-ItemProperty $_.PSPath -Name EnableDHCP -Value 0 -Type DWord -Force -EA SilentlyContinue
+        }
+      }
+    }
+    $pp = "HKLM:\SYSTEM\$($cs.PSChildName)\Services\$proto\Parameters"
+    if ($null -ne (Get-ItemProperty $pp -Name 'Dhcpv6DUID' -EA SilentlyContinue)) {
+      Remove-ItemProperty $pp -Name 'Dhcpv6DUID' -Force -EA SilentlyContinue; $n++
+    }
+  }
+}
+foreach ($sub in @('Profiles','Signatures\Managed','Signatures\Unmanaged')) {
+  $p = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\$sub"
+  if (Test-Path $p) {
+    Get-ChildItem $p -EA SilentlyContinue | ForEach-Object {
+      Remove-Item $_.PSPath -Recurse -Force -EA SilentlyContinue; $n++
+    }
+  }
+}
+Write-Output ("QSCRUB=" + $n + "=END")
+PS
+)
+    n=$(printf 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand %s\r\nexit\r\n' \
+            "$(printf '%s' "$scrub" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)" \
+        | timeout 180 qrexec-client-vm "$vm" qubes.VMShell 2>/dev/null \
+        | sed -n 's/.*QSCRUB=\([0-9]*\)=END.*/\1/p' | head -1)
+    [ -n "$n" ] || { log "FAIL: scrub produced no reading from $vm"; return 1; }
+    log "  scrub removed $n network-identity item(s)"
+
+    # VERIFY, and let it fail. A scrub that reports success without a readback is the class of
+    # check this project has been bitten by: it cannot fail, so its PASS means nothing.
+    verify=$(cat <<'PS'
+$r = 0
+foreach ($cs in (Get-ChildItem 'HKLM:\SYSTEM' | Where-Object { $_.PSChildName -like 'ControlSet*' })) {
+  $ifp = "HKLM:\SYSTEM\$($cs.PSChildName)\Services\Tcpip\Parameters\Interfaces"
+  if (Test-Path $ifp) {
+    Get-ChildItem $ifp | ForEach-Object {
+      $k = Get-ItemProperty $_.PSPath -EA SilentlyContinue
+      if ($k.DhcpIPAddress -or $k.DhcpServer -or $k.DhcpNameServer -or $k.LeaseObtainedTime) { $r++ }
+      if ($k.EnableDHCP -ne 0) { $r++ }
+    }
+  }
+}
+$p = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles"
+if (Test-Path $p) { $r += (Get-ChildItem $p -EA SilentlyContinue | Measure-Object).Count }
+Write-Output ("QRESIDUE=" + $r + "=END")
+PS
+)
+    residue=$(printf 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand %s\r\nexit\r\n' \
+                  "$(printf '%s' "$verify" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)" \
+              | timeout 180 qrexec-client-vm "$vm" qubes.VMShell 2>/dev/null \
+              | sed -n 's/.*QRESIDUE=\([0-9]*\)=END.*/\1/p' | head -1)
+    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    [ -n "$residue" ] || { log "FAIL: scrub verification produced no reading from $vm"; return 1; }
+    [ "$residue" = 0 ] || { log "FAIL: $residue network-identity item(s) survived the scrub"; return 1; }
+    log "  verified: no lease, no static DNS, no NetworkList profile, DHCP off on every interface"
+}
+
 prime_pv_nic() {
     local vm="$1" net="$2"
     [ -n "$net" ] || { log "no netvm given, skipping PV NIC priming (app qubes will loop when networked)"; return 0; }
@@ -311,6 +413,8 @@ elif [ -z "$PRIME_NETVM" ]; then
     exit 1
 fi
 [ -n "$PRIME_NETVM" ] && { prime_pv_nic "$TPL" "$PRIME_NETVM" || { log "FAIL: PV NIC priming did not complete"; exit 1; }; }
+
+scrub_net_identity "$TPL" || { log "FAIL: network-identity scrub did not complete"; exit 1; }
 
 log "done: template=$TPL appvm=$APP"
 # $APP inherits the template's netvm, i.e. none. Say so rather than attaching a network to somebody's

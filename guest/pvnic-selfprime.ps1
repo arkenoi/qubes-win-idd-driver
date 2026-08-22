@@ -74,8 +74,13 @@ try {
 #     (quiet exit); 'up + absent + vif device present' = keys not published yet (retry).
 #   - L3 values: /qubes-ip //qubes-netmask //qubes-gateway, applied by ifIndex (below).
 # This replaces network-setup.exe, whose exit-code oracle and log-parse we used ONLY because the
-# reads were (wrongly) believed unavailable. Verified 2026-08-19 on a core-net-attached guest:
-# /qubes-ip=10.137.0.70 /qubes-netmask=255.255.255.255 /qubes-gateway=10.138.25.43.
+# reads were (wrongly) believed unavailable.
+#
+# The 2026-08-19 verification of this read path was done on a guest attached to a REAL netvm, and
+# that session is what left a DHCP lease, a NetworkList profile and a DHCPv6 DUID inside the
+# template image - inherited by every AppVM, and racing this applier at every boot. Do not verify
+# this way again: mgmt/clone-to-template.sh now scrubs network identity on its own offline boot,
+# and the addresses that run recorded are deliberately not repeated here.
 $body = @'
 param([switch]$RearmOnly)
 # QubesPvNic per-boot payload. Runs as SYSTEM. See pvnic-selfprime.ps1 for the full why.
