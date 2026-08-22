@@ -174,7 +174,15 @@ function QdbValues {
     if ($ip -notmatch '^[0-9.]+$' -or $mask -notmatch '^[0-9.]+$' -or $gw -notmatch '^[0-9.]+$') { return $null }
     $prefix = 0
     foreach ($o in $mask.Split('.')) { $b = [convert]::ToString([int]$o, 2); $prefix += ($b.ToCharArray() | Where-Object { $_ -eq '1' }).Count }
-    @{ ip = $ip; prefix = $prefix; gw = $gw }
+    # DNS comes from the same place as everything else. It used to be hardcoded here because the
+    # Qubes dns property is invariant, but qubesdb publishes it per-VM (verified 2026-08-23:
+    # /qubes-primary-dns, /qubes-secondary-dns present alongside /qubes-ip), so reading it removes
+    # the one value this applier was still assuming. The well-known pair stays as a fallback: a
+    # missing key must not leave the guest with no resolver.
+    $dns = @($(QdbGet '/qubes-primary-dns'), $(QdbGet '/qubes-secondary-dns')) |
+           Where-Object { $_ -match '^[0-9.]+$' }
+    if (-not $dns) { $dns = @('10.139.1.1', '10.139.1.2') }
+    @{ ip = $ip; prefix = $prefix; gw = $gw; dns = $dns }
 }
 $script:want = $null
 function Applied {
@@ -248,8 +256,7 @@ while ((Get-Date) -lt $deadline) {
                   Where-Object { $_.ifIndex -eq $ad.ifIndex -and $_.NextHop -eq $script:want.gw })) {
             New-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceIndex $ad.ifIndex -NextHop $script:want.gw -PolicyStore ActiveStore -EA SilentlyContinue | Out-Null
         }
-        # Qubes DNS is invariant (net.py dns property): 10.139.1.1 / 10.139.1.2.
-        Set-DnsClientServerAddress -InterfaceIndex $ad.ifIndex -ServerAddresses @('10.139.1.1','10.139.1.2') -EA SilentlyContinue
+        Set-DnsClientServerAddress -InterfaceIndex $ad.ifIndex -ServerAddresses $script:want.dns -EA SilentlyContinue
     }
     Start-Sleep -Seconds 1
     if (Applied) {

@@ -16158,3 +16158,41 @@ pasted in. Replaced with what actually happened and a do-not-repeat, addresses n
 a write to it was refused by the permission layer anyway). The fix prevents recurrence; making THIS
 image clean is a separate decision, and a rebuild through the fixed script is the honest route since
 it also re-primes rather than patching around the residue.
+
+### Addendum, same day — DNS: read it from qubesdb, and seed the default rather than preserve residue
+
+Owner: "we may write qubes-default ns, since it is the same in every qubes install?" Yes - and the
+check that answers it also removes an assumption the applier was still making. Read from the running
+guest via the qubesdb client DLL:
+
+    /qubes-primary-dns   = 10.139.1.1
+    /qubes-secondary-dns = 10.139.1.2
+    /qubes-ip = 10.137.0.72   /qubes-gateway = 10.138.21.72   /qubes-netmask = 255.255.255.255
+
+So Qubes publishes DNS per-VM, in the same place as the L3 config the applier already reads. Two
+changes follow:
+
+1. `guest/pvnic-selfprime.ps1` now reads DNS from qubesdb like everything else, instead of the
+   hardcoded pair with a "Qubes DNS is invariant (net.py)" comment. The well-known pair remains as a
+   FALLBACK only - a missing key must not leave a guest with no resolver. This was the last value
+   the applier was assuming rather than reading.
+2. `scrub_net_identity` no longer merely spares `NameServer`, it WRITES `10.139.1.1,10.139.1.2`.
+   Preserving it kept whatever a netvm left; writing it makes the shipped image deterministic. The
+   verify now fails if any interface carries anything else.
+
+Re-validated on win10-app (volatile root, template untouched), payload extracted from the committed
+script: `QSCRUB=21`, `QRESIDUE=0`, all four interface keys at `EnableDHCP=0` with the default
+NameServer and no lease, live resolver `10.139.1.1,10.139.1.2` on the adapter, and 10485760 B at
+11.69 MB/s after `Clear-DnsClientCache` - name resolution genuinely working, not cached.
+Cosmetic and accepted: the scrub also writes NameServer onto the loopback interface key, which
+Windows ignores for routed traffic.
+
+**Does this speed up time-to-network on an AppVM? Partly - and this part is PREDICTED, not measured.**
+From the measured boot timeline: 22 s APIPA, 25 s working, 37-50 s dead, 51 s stable. APIPA at 22 s
+is what a DHCP client does when nothing answers, and the 37 s break is that client applying its
+cached lease over the applier's address. With `EnableDHCP=0` in the image neither event can occur, so
+time-to-STABLE should fall from ~51 s to ~25 s. Time-to-FIRST-packet should NOT improve measurably: that
+is set by when qubesdb publishes and the applier applies (~23-25 s), which this does not touch.
+It cannot be measured yet - the scrub has to be IN the template to survive a boot, and an AppVM's
+volatile root discards it. The measurement is one cold boot with the stamped harness once the
+template is rebuilt through the fixed script.

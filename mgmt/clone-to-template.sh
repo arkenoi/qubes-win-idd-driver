@@ -260,10 +260,10 @@ foreach ($cs in (Get-ChildItem 'HKLM:\SYSTEM' | Where-Object { $_.PSChildName -l
     $ifp = "HKLM:\SYSTEM\$($cs.PSChildName)\Services\$proto\Parameters\Interfaces"
     if (Test-Path $ifp) {
       Get-ChildItem $ifp | ForEach-Object {
-        # NameServer is deliberately NOT in this list. Qubes DNS is invariant (10.139.1.1/.2 in
-        # every qube), so it identifies nothing - and deleting it removes the only fallback if the
-        # applier ever fails to run. Measured 2026-08-23: scrubbing it left a live guest with no
-        # resolver at all. Only the DHCP-SUPPLIED copy goes.
+        # NameServer is not removed but REWRITTEN below, to the Qubes default. Deleting it left a
+        # live guest with no resolver at all (measured 2026-08-23); preserving whatever was there
+        # would keep a netvm's value. Writing the invariant pair is deterministic and identifies
+        # nothing - it is the same in every Qubes install. Only the DHCP-SUPPLIED copy goes.
         foreach ($v in @('DhcpIPAddress','DhcpServer','DhcpSubnetMask','DhcpDefaultGateway',
                          'DhcpNameServer','DhcpDomain','LeaseObtainedTime','LeaseTerminatesTime',
                          'T1','T2','Dhcpv6DUID','Dhcpv6Iaid')) {
@@ -273,6 +273,7 @@ foreach ($cs in (Get-ChildItem 'HKLM:\SYSTEM' | Where-Object { $_.PSChildName -l
         }
         if ($proto -eq 'Tcpip') {
           Set-ItemProperty $_.PSPath -Name EnableDHCP -Value 0 -Type DWord -Force -EA SilentlyContinue
+          Set-ItemProperty $_.PSPath -Name NameServer -Value '10.139.1.1,10.139.1.2' -Type String -Force -EA SilentlyContinue
         }
       }
     }
@@ -311,6 +312,7 @@ foreach ($cs in (Get-ChildItem 'HKLM:\SYSTEM' | Where-Object { $_.PSChildName -l
       $k = Get-ItemProperty $_.PSPath -EA SilentlyContinue
       if ($k.DhcpIPAddress -or $k.DhcpServer -or $k.DhcpNameServer -or $k.LeaseObtainedTime) { $r++ }
       if ($k.EnableDHCP -ne 0) { $r++ }
+      if ($k.NameServer -ne '10.139.1.1,10.139.1.2') { $r++ }
     }
   }
 }
