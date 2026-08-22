@@ -16196,3 +16196,41 @@ is set by when qubesdb publishes and the applier applies (~23-25 s), which this 
 It cannot be measured yet - the scrub has to be IN the template to survive a boot, and an AppVM's
 volatile root discards it. The measurement is one cold boot with the stamped harness once the
 template is rebuilt through the fixed script.
+
+## 2026-08-23 — MEASURED: the scrub removes the mid-boot outage. It does NOT speed up time-to-first-packet
+
+The scrub was run against the real `win10-tpl` (booted offline, netvm=None) using the payload
+extracted from the committed `scrub_net_identity`: `QSCRUB=23`, `QRESIDUE=0`, and a readback showing
+every interface at `EnableDHCP=0`, no lease, `NameServer=10.139.1.1,10.139.1.2`, zero NetworkList
+profiles, DUID gone. **The template is no longer pristine-as-found - this is a deliberate mutation,
+the first end-to-end exercise of the fix.**
+
+It survives into the AppVM, confirmed on a booted `win10-app`: `Ethernet 2 Dhcp=Disabled`, address
+`10.137.0.72 Manual/Manual`, no lease on any interface key. (One NetworkList profile exists again -
+Windows creates one when it sees a network. Freshly made, not inherited; harmless.)
+
+**Three cold boots, stamped harness, REAL 10 MB transfers every ~3 s:**
+
+    BEFORE (contaminated template, recorded above)
+      17s FAILED | 23s OK | 30-37s OK | 40s FAILED (no address) | 44s FAILED | 47s FAILED | 50s OK
+      -> 4 failures, ~13 s of dead network, a wrong address (.70) and a no-address moment
+
+    AFTER (scrubbed template)
+      boot 1   first OK 29s   0 failures / 21 samples
+      boot 2   first OK 16s   1 failure  / 22 samples (single sample at 29s)
+      boot 3   first OK 25s   0 failures / 14+ samples
+
+**Answering the owner's question directly: no, it is not faster to first packet.** First success
+landed at 16 / 25 / 29 s against a baseline first success at 23 s - that spread is harness sampling,
+not a speed-up, and nothing in this change touches when qubesdb publishes or when the applier runs.
+What it removes is the outage: the multi-sample dead window is gone in 3/3 runs, as are the wrong
+address and the no-address moment. One isolated single-sample blip still occurred in 1 of 3, so
+"eliminated" would overstate it - the honest claim is ~13 s of dead network per boot removed, and
+the failure mode changed from a reproducible 13 s hole to an occasional 3 s blip.
+
+**Correcting my own reasoning from the addendum above.** I argued that APIPA at 22 s "is what a DHCP
+client does when nothing answers", and used its predicted absence as part of the case. Boot 2 shows
+`169.254.231.220` present at 16 s WITH `EnableDHCP=0` everywhere - Windows self-assigns a link-local
+to an interface that has no address yet, DHCP client or not. So APIPA was never evidence of DHCP,
+and the prediction that it would disappear was wrong. The outage removal is real; that particular
+piece of reasoning for it was not.
