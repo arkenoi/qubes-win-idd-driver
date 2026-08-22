@@ -16336,3 +16336,43 @@ what is missing is the ADAPTER itself, a device/dom0-level object. But no contro
 unmodified template (win10-tpl is already scrubbed), so that is reasoning, not proof. This file
 already records a related known edge: an in-guest NIC disable/enable does not reconnect until VM
 restart. Worth a dedicated investigation; not one to fold into the mirage series.
+
+## 2026-08-23 — RETRACTION: "netvm hotplug is broken" was my broken TEST, not a defect. Diagnosed to certainty
+
+Yesterday's entry above reported that re-attaching a netvm to a running guest "did not restore its
+NIC". That claim is WITHDRAWN. What it measured was a malformed API call of mine, and the guest and
+mirage are both exonerated.
+
+**The decisive reading, from the guest's own xenstore via xeniface WMI:**
+
+    device/vif children = <none>
+
+There was no vif frontend device in the domain AT ALL. So the `CM_PROB_PHANTOM` NET child I chased -
+surviving `pnputil /scan-devices` and a `pnputil /restart-device` of the parent XENBUS VIF node - was
+a SYMPTOM, not the cause. No amount of guest-side PnP work can enumerate a device that is not there.
+This also clears both candidate owners: not xenvif (it cannot create a NET child without a vif) and
+not the mirage backend (there was no frontend for it to talk to).
+
+**What actually happened.** `admin.vm.property.Set+netvm` with an EMPTY payload removed the vif from
+the running domain, but left the property reading `fw-net` (`default=False`) and qubesdb still
+publishing `/qubes-ip`. Because the property never recorded a transition, the subsequent
+`Set+netvm fw-net` was a no-op - Qubes saw no change, so nothing ever re-attached. Device gone,
+property says attached, nothing to reconcile them. Reproduced 2/2.
+
+**Why I could not run the supported test.** `qvm-prefs win10-app netvm ''` fails client-side here -
+qubesadmin cannot resolve `fw-net`, which is outside this qube's visible roster - so I reached for
+the raw Admin API and drove it into that asymmetric state. `admin.vm.property.Reset+netvm` is
+permitted and clean, but it is not a detach: this AppVM's DEFAULT netvm is itself fw-net, so Reset
+only flipped `default=False` -> `default=True` and left the guest untouched (verified: adapter still
+Up, ip still 10.137.0.72). The property was set explicitly back to fw-net afterwards.
+
+**So netvm hotplug is UNTESTED, not broken.** A valid test needs either the owner running
+`qvm-prefs win10-app netvm ''` and then back, or a second resolvable netvm in this qube's roster.
+I am not going to claim a verdict on it from here.
+
+Method note, since this is the second time today: the earlier report went out because I inferred a
+mechanism ("re-attach did not restore it") from an end state without ever asking the guest what it
+could see. One xenstore read - `device/vif children` - collapsed the whole thing. The tool was
+available the entire time; a WMI session-id bug (`AddSession(...)` returns an object, and I compared
+the OBJECT against `SessionId`) made the first attempt print "NO session", and I moved on instead of
+fixing the instrument.
