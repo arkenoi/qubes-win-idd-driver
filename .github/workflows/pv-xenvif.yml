@@ -31,6 +31,11 @@ on:
         type: boolean
         required: false
         default: false
+      build_number:
+        description: 'Override DriverVer build field (default 0).'
+        type: string
+        required: false
+        default: ''
   workflow_dispatch:
     inputs:
       diagnostic:
@@ -38,6 +43,11 @@ on:
         type: boolean
         required: false
         default: false
+      build_number:
+        description: 'Override DriverVer build field (default 0). Needed only to supersede a driver already installed on a test rig.'
+        type: string
+        required: false
+        default: ''
   push:
     paths:
       - '.github/workflows/pv-xenvif.yml'
@@ -177,7 +187,15 @@ jobs:
           # A release build keeps 0, so the same commit still yields the same binary; a
           # DIAGNOSTIC build takes the run number, so each one is a distinct, higher version
           # that Windows will actually install over its predecessor.
-          if ('${{ inputs.diagnostic }}' -eq 'true') {
+          # An explicit override wins: a release build is 9.1.0.0 by design (same commit ->
+          # same binary), but 9.1.0.0 can never supersede a higher-versioned driver already
+          # installed on a test rig, and deleting that one falls back to an OLDER DriverStore
+          # entry. The override exists solely to make a clean build installable over a
+          # diagnostic one.
+          if ('${{ inputs.build_number }}' -ne '') {
+            $env:BUILD_NUMBER = '${{ inputs.build_number }}'
+            Write-Host "::notice title=xenvif::DriverVer 9.1.0.$env:BUILD_NUMBER (explicit override)"
+          } elseif ('${{ inputs.diagnostic }}' -eq 'true') {
             $env:BUILD_NUMBER = '${{ github.run_number }}'
             Write-Host "::notice title=xenvif::diagnostic build - DriverVer 9.1.0.$env:BUILD_NUMBER"
           } else {
