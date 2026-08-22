@@ -15927,3 +15927,37 @@ each series; both bundles re-exported and re-verified by scratch `git am` (5/5 o
 one that goes first. No new module references in any added line, so its `.opam` dep list is still
 accurate. mirage-net-xen carries no in-repo CI; upstream builds it through ocaml-ci against opam,
 which is what that run reproduced.
+
+## 2026-08-23 — closed the second "which artefact was measured" gap: the RELEASE driver carries line rate
+
+The same class of error as the FIX5 retraction, found by asking the same question of the other
+artefact: **the 12.65/13.12/13.42 MB/s figures were taken with the DIAGNOSTIC xenvif build**
+(DriverVer 9.1.0.31, `543A8A79D71B13F3`). The owner asked for the release build to be swapped in
+AFTER the benchmark, and nothing in this file validates that swap. Draft 04 nevertheless claims
+"with the change above the NIC starts ... and carries ~13 MB/s".
+
+Measured directly on `win10-app` (the PV test guest, netvm=fw-net, running right now):
+
+    installed:  Xen PV Network Class (xenvif)  DriverVersion 9.1.0.100   <- RELEASE build
+                Xen PV Network Device (xennet) 9.1.0.0, Xen Interface 9.1.0.0
+    NIC:        Ethernet 2  Up  100 Gbps
+    10 MB over the canonical harness (tmp/pv-bench.ps1, streams to memory):
+                0.82s  12.21 MB/s   10485760 B   <- first transfer
+                0.93s  10.79 MB/s   10485760 B
+                0.21s  47.94 MB/s   10485760 B   (CDN-warm, as before)
+
+Full 10485760 B every time - the 24.5%-short signature of the pre-`data_validated` bug is absent.
+12.21 MB/s against a recorded 12.65/13.12/13.42 (which were cold-boot first transfers; this guest
+was already up, so its first figure is not strictly a cold-cache number). **The instrumentation was
+not carrying the throughput** - draft 04's claim now holds on the build that would actually ship.
+
+**Linux pair re-checked from this qube** (win-idd-mgmt is itself on fw-net): 10485760 B in 0.66s =
+**15.08 MB/s**, against 15.5 recorded and 17.7 pre-fix. No regression on the ~28 production qubes.
+(`rx_gso_checksum_fixup` could not be re-read here - `ethtool` is not installed in this qube and
+installing it needs sudo; the 868/1044 figure stands as recorded, and is a FIX5-era measurement.)
+
+**Scope of these two measurements:** they were taken against whatever unikernel the owner last
+deployed to fw-net (FIX6/HOTFIX era per this file; fw-net is outside this qube's policy - reading
+its properties returns `rc=126 Request refused` - so the running build cannot be confirmed from
+here). They validate the DRIVER and show the deployed pairing is healthy. They do NOT validate the
+submitted unikernel `192d53ab`, which still has never run - see the unmeasured-delta list above.
