@@ -15824,3 +15824,60 @@ mirage-net-xen pin bumped from 2.1.8 - whose released signature cannot compile t
 tree only built here via an untracked duniverse copy. Bundles: 5 patches (mirage-net-xen, base
 050aed3) and 6 (qubes-mirage-firewall, base 89ae5da), both verified by scratch `git am`.
 Latest build: `8674fd83...`.
+
+## 2026-08-22 — PR-readiness audit: two defects found by running the gate, one gap closed at the machine level
+
+Asked "are you absolutely sure we can issue PRs and it will build exactly to our targets". Ran the
+gates instead of reasoning about them. Two things were wrong.
+
+**1. The firewall PR cannot build, and this is now proven, not inferred.** Ran the repo's own CI
+command (`./build-with.sh docker`, per `.github/workflows/docker.yml`) against the committed tree:
+
+    - mirage-net-xen -> (problem)
+        qubes-firewall-xen requires >= 2.2.0
+        Rejected: mirage-net-xen.2.1.8 ... 2.1.5: Incompatible with restriction: >= 2.2.0
+    make: *** [Makefile:52: depend] Error 2
+
+It dies at dependency resolution, before the build and before the hash check. This is the intended
+library-first ordering, but it means the firewall PR must not be OPENED until mirage-net-xen 2.2.0
+is released. Stated up front in the PR draft so a maintainer does not discover it via a red run.
+
+**2. `qubes-firewall.sha256` is a placeholder that cannot reproduce.** The recorded `192d53ab` came
+from a tree whose `config.ml` still said `~min:"2.1.8"`, with the patched library hand-overlaid in
+`duniverse/`. The committed tree says `2.2.0` and does not build at all, so the hash is not
+reproducible from the committed source by anyone, us included. Must be regenerated once the release
+exists; draft offers to drop the pin commit and let a maintainer do it.
+
+**A check of mine that could not fail, and duly passed.** The first rebuild printed
+`SHA256 MATCHES` — against a `dist/` written 11 minutes earlier, because `make depend` had failed
+and nothing was rewritten. Only `rc=2` contradicted it. Same class as the failures this file already
+records: the data needed to fail the check was absent, so the check passed.
+
+**Gap closed analytically: the PR-series binary is code-identical to the benchmarked one.** The
+binary proven on the rig is `qubes-firewall-HOTFIX3.xen` `8674fd83`; the series builds
+`qubes-firewall-TRIMMED.xen` `192d53ab`; 27846 bytes differ. Localised per ELF section:
+
+    .text                   IDENTICAL      (no instruction changed)
+    .rodata                 IDENTICAL      (no constant, literal or jump table changed)
+    .bss                    IDENTICAL
+    .note.solo5.manifest    IDENTICAL
+    .data                   differs, 27846 bytes, ALL within offsets 29533-314922
+
+That span is the marshalled `caml_globals_map` — it interleaves module names (`(Xenstore`,
+`0Shared_page_pool`, `/Vchan__Xenstore`, 2291 such tokens) with each unit's interface/implementation
+MD5 digests. Comment edits change a unit's source digest and nothing else. Identical `.text` also
+retires the other worry: had the duniverse re-vendor pulled different package versions, the code
+section could not have matched. So the comment trim and the re-vendor changed no executable byte,
+and the 12.65/13.12/13.42 MB/s figures apply to the shipped series.
+
+**Also fixed:** neither series touched CHANGES.md, which both projects keep and a maintainer would
+have asked for. Added to both, the library's marked BREAKING (`make_backend` gains `?on_closed` and
+a trailing `unit`; `S.CONFIGURATION` gains `wait_frontend_ready`). Amended into the last commit of
+each series; both bundles re-exported and re-verified by scratch `git am` (5/5 on 050aed3, 6/6 on
+89ae5da).
+
+**Verified holding:** mirage-net-xen builds STANDALONE from a clean opam resolve
+(`opam install -y --deps-only . && dune build`, no errors) — that PR is self-contained and is the
+one that goes first. No new module references in any added line, so its `.opam` dep list is still
+accurate. mirage-net-xen carries no in-repo CI; upstream builds it through ocaml-ci against opam,
+which is what that run reproduced.
