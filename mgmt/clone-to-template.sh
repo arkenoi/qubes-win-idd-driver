@@ -227,6 +227,24 @@ prime_latch() {
     log "latch primed and self-healing (NICS=1, veto key, tasks verified across a boot cycle); $vm never had a netvm"
 }
 
+ps_encode() {
+    # cmd.exe caps a command line at 8191 characters, and an over-long -EncodedCommand does NOT
+    # error usefully: cmd truncates it, runs the tail as a command, and says "The input line is too
+    # long" - which a `grep` for the expected marker swallows, leaving a scrub that silently did
+    # nothing while looking like it produced no output. Hit for real 2026-08-23, caused purely by
+    # adding COMMENTS to the payload.
+    # So: strip comment and blank lines (they belong in this file, not in the guest), and refuse to
+    # send anything still near the limit rather than let it be truncated.
+    local ps enc
+    ps=$(printf '%s\n' "$1" | grep -vE '^[[:space:]]*(#|$)')
+    enc=$(printf '%s' "$ps" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+    if [ "${#enc}" -ge 7000 ]; then
+        log "FAIL: PowerShell payload encodes to ${#enc} chars, too long for cmd.exe (limit 8191)"
+        return 1
+    fi
+    printf '%s' "$enc"
+}
+
 scrub_net_identity() {
     # A template must ship with NO network identity of its own. Runs unconditionally, in BOTH
     # priming modes, because both can carry one: prime_pv_nic attaches a real netvm and Windows
@@ -282,6 +300,19 @@ foreach ($cs in (Get-ChildItem 'HKLM:\SYSTEM' | Where-Object { $_.PSChildName -l
       Remove-ItemProperty $pp -Name 'Dhcpv6DUID' -Force -EA SilentlyContinue; $n++
     }
   }
+  # DO NOT disable the DHCP Client SERVICE here. It looks like the obvious completion of this
+  # scrub - per-interface EnableDHCP=0 cannot reach an interface GUID that does not exist yet -
+  # and it was tried and MEASURED WORSE (2026-08-23, 2/2 cold boots): time to first working
+  # transfer went 25s -> 51s/58s, with the guest parked on APIPA throughout. The applier's own log
+  # shows why: its run START slipped from ~28s to ~44s. The service drives Network Location
+  # Awareness, and NLA is what raises the NetworkProfile event the applier is triggered on, so
+  # disabling it delays the very thing that configures the address. The uncovered case (a brand
+  # new GUID) is already fail-closed: it can only appear during a netvm-attached priming run, and
+  # this scrub runs after priming and fails the build on residue.
+  $dh = "HKLM:\SYSTEM\$($cs.PSChildName)\Services\Dhcp"
+  if ((Test-Path $dh) -and (Get-ItemProperty $dh -Name Start -EA SilentlyContinue).Start -ne 2) {
+    Set-ItemProperty $dh -Name Start -Value 2 -Type DWord -Force -EA SilentlyContinue; $n++
+  }
 }
 foreach ($sub in @('Profiles','Signatures\Managed','Signatures\Unmanaged')) {
   $p = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\$sub"
@@ -294,8 +325,8 @@ foreach ($sub in @('Profiles','Signatures\Managed','Signatures\Unmanaged')) {
 Write-Output ("QSCRUB=" + $n + "=END")
 PS
 )
-    n=$(printf 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand %s\r\nexit\r\n' \
-            "$(printf '%s' "$scrub" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)" \
+    local senc; senc=$(ps_encode "$scrub") || return 1
+    n=$(printf 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand %s\r\nexit\r\n' "$senc" \
         | timeout 180 qrexec-client-vm "$vm" qubes.VMShell 2>/dev/null \
         | sed -n 's/.*QSCRUB=\([0-9]*\)=END.*/\1/p' | head -1)
     [ -n "$n" ] || { log "FAIL: scrub produced no reading from $vm"; return 1; }
@@ -316,13 +347,17 @@ foreach ($cs in (Get-ChildItem 'HKLM:\SYSTEM' | Where-Object { $_.PSChildName -l
     }
   }
 }
+foreach ($cs in (Get-ChildItem 'HKLM:\SYSTEM' | Where-Object { $_.PSChildName -like 'ControlSet*' })) {
+  $dh = "HKLM:\SYSTEM\$($cs.PSChildName)\Services\Dhcp"
+  if ((Test-Path $dh) -and (Get-ItemProperty $dh -Name Start -EA SilentlyContinue).Start -ne 2) { $r++ }
+}
 $p = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles"
 if (Test-Path $p) { $r += (Get-ChildItem $p -EA SilentlyContinue | Measure-Object).Count }
 Write-Output ("QRESIDUE=" + $r + "=END")
 PS
 )
-    residue=$(printf 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand %s\r\nexit\r\n' \
-                  "$(printf '%s' "$verify" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)" \
+    local venc; venc=$(ps_encode "$verify") || return 1
+    residue=$(printf 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand %s\r\nexit\r\n' "$venc" \
               | timeout 180 qrexec-client-vm "$vm" qubes.VMShell 2>/dev/null \
               | sed -n 's/.*QRESIDUE=\([0-9]*\)=END.*/\1/p' | head -1)
     timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1

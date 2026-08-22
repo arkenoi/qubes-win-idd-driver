@@ -16258,3 +16258,81 @@ a new GUID can only appear during a netvm-attached priming run, and `scrub_net_i
 priming and fails the build on any residue. The service also handles DNS registration and some
 diagnostics, so disabling it trades a covered risk for an uncovered one. Per-interface + fail-closed
 scrub + the applier turning DHCP off on the adapter it configures is the lower-risk cover.
+
+## 2026-08-23 — disabling the DHCP SERVICE is a regression (reverted); and a silent-no-op bug in my own scrub
+
+**Asked for, tried, MEASURED WORSE, reverted.** Setting `Services\Dhcp\Start=4` in the template:
+
+    with service disabled   boot A first working transfer 51s   boot B 58s   (2/2, parked on APIPA)
+    control (Start=2)       first working transfer 33s          earlier runs 25s / 29s
+
+The applier's own log names the mechanism: its run START slipped from ~28 s to ~44 s. The DHCP
+Client service drives Network Location Awareness, and NLA raises the NetworkProfile event the
+applier is triggered on - so disabling it delays the very thing that configures the address.
+`scrub_net_identity` now ENFORCES `Start=2` and carries the measurement in a comment, so the next
+person does not re-try it. Reverted on win10-tpl and the control boot recovered.
+
+**A silent-no-op bug in the scrub I shipped this morning.** cmd.exe caps a command line at 8191
+characters. Adding the explanatory comment above to the embedded PowerShell pushed the base64
+`-EncodedCommand` past it; cmd TRUNCATED the line, tried to run the tail as a command, and printed
+"The input line is too long" - which the `grep -oE 'QSCRUB=...'` wrapper swallowed whole. The scrub
+did nothing and produced no output, and only the verify (`QRESIDUE=1`) caught it. Exactly the class
+of instrument failure this file keeps recording: a check whose failure mode is silence.
+Fixed with `ps_encode()`: it strips comment/blank lines from the payload (they belong in the shell
+script, not in the guest) and REFUSES to send anything >= 7000 encoded chars rather than let cmd
+truncate it. Payloads are now 5080 (scrub) and 2696 (verify).
+
+## 2026-08-23 — where the time-to-network actually goes. NLA is NOT the bottleneck
+
+Owner: "this network location awareness, can we prime it as well to reduce time to network?" and
+"would be nice to have all static and preconfigured and just instantly up once driver is on".
+Measured per-second on a cold boot, separating the three things that can be missing - L3 config, a
+raw TCP connect to a literal IP (no DNS), and name resolution (no transfer):
+
+    21s  ip=169.254.77.52  route=-            dns=10.139.1.1,.2  tcp=no   resolve=no
+    23s  ip=10.137.0.72    route=10.138.21.72 dns=10.139.1.1     tcp=no   resolve=no
+    25s  ip=10.137.0.72    route=10.138.21.72 dns=10.139.1.1     tcp=YES  resolve=YES   <- UP
+    29s  ip=10.137.0.72    route=10.138.21.72 dns=10.139.1.1,.2  tcp=no   resolve=no    <- DOWN
+    30s  ip=10.137.0.72    route=10.138.21.72 dns=10.139.1.1     tcp=no   resolve=no
+    34s  ip=10.137.0.72    route=10.138.21.72 dns=10.139.1.1,.2  tcp=YES  resolve=YES   <- stable
+
+And from the event log on the same boot: NDIS adapter event at **+3 s**, NetworkProfile event 10000
+(network connected) at **+13 s**, further 10000s at +19 s and +22 s.
+
+**So NLA is not the bottleneck and priming it would buy nothing** - it fires at +13 s, ten seconds
+before the address exists. The L3 config lands at ~23 s and traffic flows at ~25 s; "instantly up
+once the driver is on" is most of the way true already.
+
+**What is left is not slowness, it is a RE-configuration.** The network is up at 25 s, goes down at
+29-30 s, and returns at 34 s, with the DNS list flickering between one and two servers across the
+dip - the signature of something rewriting a configuration that was already correct. It is NOT the
+applier: every one of its passes this boot logged `already applied on entry` and exited without
+touching anything. The remaining candidate is stock QWT `network-setup.exe`, which QrexecAgent runs
+at startup (the applier's own header notes it still runs). Single ownership of the network
+configuration is the lever worth pulling next - not NLA priming, and not more static seeding.
+
+Static seeding is anyway bounded: the ADDRESS cannot be preconfigured in the template, because it is
+per-VM (qubesdb `/qubes-ip`) while the template is shared and an AppVM's root is volatile. What CAN
+be static is already static after today: DNS and DHCP-off, both baked in and verified.
+
+## 2026-08-23 — netvm hotplug: detach works, re-attach does NOT restore the NIC while running
+
+Owner asked to confirm hotplug still works. Tested on `win10-app` via the raw Admin API (`qvm-prefs`
+cannot do it here - it fails client-side resolving `fw-net`, which is outside this qube's visible
+roster, while `admin.vm.property.Set+netvm` is permitted).
+
+    before detach       adapter Xen PV Network Device #0 = Up, ip 10.137.0.72, tcp YES
+    after detach        NO adapter at all, no ip, tcp no          <- clean hot-unplug
+    after re-attach     NO adapter, no ip, tcp no, for 61 s       <- did NOT come back
+    after VM restart    adapter Up, ip 10.137.0.72, tcp YES       <- fully recovered
+
+Reported plainly rather than smoothed: **re-attaching a netvm to a RUNNING Windows guest did not
+restore its NIC**; a restart was required. Note also that `admin.vm.property.Get+netvm` read `fw-net`
+throughout, before and after the detach that demonstrably removed the device, so the property and
+the device state disagreed - the mechanism is not established and I am not guessing at it here.
+
+Attribution: implausible that today's changes caused it - they are IP-configuration-level, whereas
+what is missing is the ADAPTER itself, a device/dom0-level object. But no control was run on an
+unmodified template (win10-tpl is already scrubbed), so that is reasoning, not proof. This file
+already records a related known edge: an in-guest NIC disable/enable does not reconnect until VM
+restart. Worth a dedicated investigation; not one to fold into the mirage series.
