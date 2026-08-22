@@ -15721,3 +15721,47 @@ falsify.
 
 Artefacts: unikernel `701c7f5a...`; xenvif release build carries the ctrl-ring fix unconditionally
 (diagnostic instrumentation stays opt-in). Patches 0001-0006 in /home/user/mirage-gso/.
+
+---
+
+## 2026-08-22 — the "network configuration FAILED" popup was OURS: an ICMP-based health check
+
+The alert kept firing on fw-net boots even after the PV NIC attached and ran at 12 MB/s. Cause,
+found by reading the applier's own log rather than reasoning:
+
+`pvnic-selfprime.ps1`'s `Applied()` ended with `Test-Connection` against the default route's next
+hop - it required the GATEWAY to answer ICMP echo. qubes-mirage-firewall does not echo on its
+client-facing gateway address. Measured live, on a link carrying 12 MB/s at that moment:
+
+    gateway 10.138.21.72    ping gateway = False
+                            ping 8.8.8.8 = True     <- through that same gateway
+    ARP neighbour           (empty - Qubes uses point-to-point /32 routing with the well-known
+                            fe:ff:ff:ff:ff:ff peer MAC, so a neighbour-table check is no
+                            fallback either)
+
+So address correct, route correct, traffic flowing - and our own check called it dead. The
+applier re-applied an already-correct configuration every 12 s, never reached its settle phase,
+and finally popped the alert. Its log shows the loop plainly: `apply pass` / `direct apply`
+repeating, never `verified`.
+
+Fixed (`9f57031`): reachability is no longer part of the verdict. APIPA, a wrong/missing address,
+a wrong/missing default route and a dead adapter are all still caught by the checks above it;
+whether a netvm answers pings is not a property of our configuration, and a firewall declining to
+echo is reasonable. The echo result is still probed and recorded in the SUCCESS line as
+information, so a genuinely dead link stays visible.
+
+Verified on a cold boot past the +60 s settle window: no FAILED marker, no popup, applier reports
+`already applied on entry`.
+
+**Process note, third time in this investigation.** `ping_gw: false` was in the FIRST probe output
+I ever took of this guest, next to `http: 200`. I read past it. The same pattern produced the
+`rx_gso_checksum_fixup` arithmetic (24.5% of received bytes never reaching the app, computable
+from data I already had) and the "no retransmits" conclusion (a sender-side counter on a
+receive-only flow). In each case the evidence was in hand and the error was not looking at it.
+
+Also this session: `dispatcher.ml` now logs the backend `type` for each client vif
+(qubes-mirage-firewall `e195226`, unikernel `a5883b90`), because an HVM's two vifs are otherwise
+indistinguishable in the log - same IP, differing only by domid - which is what made the same-IP
+collision look like a plausible cause of the hang. Reported verbatim, not translated: the GUEST's
+vif is the one marked `vif_ioemu`, the device model's is a plain `vif`, and a PV-only guest's
+would also be plain - so a friendlier label would be inference in a log line.
