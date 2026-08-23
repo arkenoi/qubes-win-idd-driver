@@ -16684,3 +16684,54 @@ one real defect but did not fix this.
 **State:** win10-tpl and win10-app are the freshly built pair, halted. The pipeline changes are
 committed and each one is justified by a measured failure. The acceptance is not met and I am not
 calling it done.
+
+## 2026-08-23 — GOAL MET: netvm-free priming, end to end, no legacy tool, hotplug working
+
+Rebuilt from the pristine standalone with `PRIME_NETVM=latch` and the patched xenvif package. The
+template NEVER had a netvm attached at any point (`NETVM=-` throughout; the pipeline says so itself).
+
+    14:41:06  patched xenvif installed          (before priming - a PV INF has no NOCLOBBER on NICS)
+    14:48:00  latch primed and self-healing; win10-tpl never had a netvm
+    14:48:23  scrub removed 23 network-identity item(s)
+    14:48:28  latch re-armed after the scrub boot (NICS=1)      <- THE FIX
+    14:48:37  verified: no lease, no static DNS, no NetworkList profile, DHCP off on every interface
+    14:48:37  done
+
+**The defect that made every previous end-to-end fail.** `xen.sys` CONSUMES
+`Services\XEN\Unplug\NICS` at each boot (delete-on-read) and the QubesPvNic boot task re-arms it -
+but that task does not run until ~25-29 s, and the scrub boot is over well before then. So the
+template shipped UN-LATCHED, the AppVM could not finish its PV NIC install in one volatile boot, and
+it reset-looped: Running, qrexec, then Dying, every time. Found by noticing that re-running the
+installer BY HAND (which re-arms) turned a reset-looping AppVM into one that configured at up=15 s.
+`scrub_net_identity` now re-arms and FAILS THE BUILD if the value does not read back.
+
+**Acceptance, all on the freshly built pair:**
+
+    cold boot 1   first working 10 MB transfer 15s   0 failures / 21
+    cold boot 2                               22s    0 failures / 21
+    cold boot 3                               17s    0 failures / 21
+    cold boot 4 (after the hotplug test)      15s    0 failures / 21
+    baseline WITH the stock tool           19-25s    2-3 failures, one AFTER first success
+
+    legacy binary:  LEGACY_GONE   (network-setup.exe absent, nothing falls back to it)
+
+**Hotplug, live, no reboot:**
+
+    before      ip=10.137.0.72  adapter Up
+    detach      qvm-prefs win10-app netvm ''         -> no ip, no adapters (vif removed cleanly)
+    re-attach   qvm-prefs win10-app netvm core-net   -> ip=10.137.0.72, adapter Up
+    guest       Running throughout
+
+and the service reconfigured correctly for the DIFFERENT netvm on the next boot - it reads qubesdb
+each time, so it applied `gw 10.138.25.43` on core-net and `gw 10.138.21.72` on fw-net without any
+change on our side.
+
+**Correction to the earlier "netvm hotplug is broken" entry:** it is not. `qvm-prefs` drives it
+correctly whenever the CURRENT netvm value is resolvable by qubesadmin. What fails is the raw
+`admin.vm.property.Set+netvm` against a RUNNING guest, which returns an empty reply and tears the vif
+down without changing the property - and that path is only needed here because `fw-net` is absent
+from this qube's `admin.vm.List`, so qubesadmin cannot read it. With `core-net` (resolvable) the
+supported CLI works live, both directions.
+
+No regression and no new delay: first traffic is 15-22 s against 19-25 s before, with zero failed
+transfers across four boots where the stock tool produced two or three every time.
