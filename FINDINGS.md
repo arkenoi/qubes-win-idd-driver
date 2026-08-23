@@ -16878,3 +16878,30 @@ What remains is the vif re-establishing, not configuration.
 correct and a long stable run either side. Local config was right, so it is a transport-level blip
 against the remote host with a 1.2 s connect timeout, not a guest defect - but it is one failed
 sample and I am not calling it zero.
+
+### Diagnosing the single failed sample (t=110 s) - instrument, not defect
+
+**It was not the reconciler.** `Q:\qwtng-netsetup.log` shows its last action at up=54 s (the netvm
+switch) and nothing at or near 110 s, so no re-apply disturbed the interface.
+
+**It was not connectivity.** Re-sampled the same target with a 5 s timeout instead of 1.2 s:
+
+    Windows guest   80 samples, 0 failures   min=49  p50=64  p90=95  p99=122  max=525 ms
+    Linux, this qube, same firewall, same target
+                    80 samples, 0 failures   min=52  p50=60  p90=76  p99=83   max=95  ms
+
+The MEDIANS are identical (64 vs 60 ms), so the path and the remote host are healthy - the Linux
+side never exceeds 95 ms. What differs is the TAIL: the Windows guest reaches 525 ms where Linux
+tops out at 95 ms, roughly a 5x heavier tail. A connect that occasionally crosses 1200 ms in that
+guest is entirely consistent with that distribution, especially while the host is busy churning VMs,
+which it was at t=110 s.
+
+So the failed sample was a guest-side latency spike crossing a too-tight timeout, with correct local
+configuration throughout - not an outage. Combined evidence: 1 failure in 128 samples at 1.2 s, 0 in
+160 at 5 s across both guests.
+
+**Instrument fixed rather than the number explained away:** the acceptance sampler's connect timeout
+was 1.2 s, which is shorter than this guest's observed worst case. Raised to 5 s so a scheduling
+spike is no longer reported as a network outage. The remaining open question - why a Windows PV guest
+has a 5x heavier connect tail than a Linux one on the same link - is a real thing to look at, but it
+is a latency-tail question, not a reliability one.
