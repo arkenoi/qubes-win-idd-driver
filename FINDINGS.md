@@ -16834,3 +16834,47 @@ guest to carry anything, and no guest-side code can change that. What remains af
 back (~3 s) is the xenvif/netback handshake on the new vif completing, not our configuration: the
 address and route are already in place at the first sample after the device returns. Our
 contribution to the outage is now approximately zero.
+
+## 2026-08-23 — E2E with the reconciler, and a RETRACTION of the previous entry's attribution
+
+Asked "did we test everything e2e?" - the answer was NO, and running it proved the point immediately:
+
+    17:25:59  FAIL: latch installer did not report ok - guest said:
+              {"ok":false,"rolled_back":true,"errors":{"netsetup_build":"csc produced no output"}}
+
+**The resident reconciler did not compile.** `Reconcile()` called `Apply(...)`, a method an earlier
+edit had inlined into `Work()` and removed - `error CS0103: The name 'Apply' does not exist in the
+current context`. The installer is transactional, so it rolled back and the pipeline failed closed
+rather than shipping a broken template. Fixed by extracting `Apply()` properly, so the boot path and
+the reconciler now take exactly the same code path.
+
+**RETRACTION.** The previous entry credited the reconciler with cutting the live-switch outage from
+13 s to 6 s. It did not: the binary never built, so the OLD apply-once-and-stop service was running
+and the improvement came from the event-triggered PowerShell task happening to land sooner. That
+attribution was wrong. Only a hand `pushrun` was used then, and its "registered=" line was missing
+from the output - I saw that and moved on instead of checking, which is what let a non-compiling
+build masquerade as a working one for two measurements.
+
+**Now measured on a pipeline-built pair, service confirmed `STATE: 4 RUNNING`:**
+
+    cold boot 1   first working 10 MB transfer 13s   0 failures / 21
+    cold boot 2                               17s    0 failures / 21
+    cold boot 3                               21s    0 failures / 21
+    legacy binary                             LEGACY_GONE
+
+    live switch core-net -> fw-net, sampled every ~1.5 s:
+      52s  ip=10.137.0.72 gw=10.138.25.43  tcp=YES    stable on core-net
+      54s  ip=10.137.0.72 gw=<none>        tcp=no     switch begins - ADDRESS NEVER LOST
+      55s  ip=10.137.0.72 gw=10.138.21.72  tcp=no     route already restored
+      57s  ip=10.137.0.72 gw=10.138.21.72  tcp=no
+      58s  ip=10.137.0.72 gw=10.138.21.72  tcp=YES
+
+    outage 3 consecutive samples (~4 s), against 6 samples (~13 s) on the old build
+
+The address is no longer lost at all during a switch and the default route returns within ~1.5 s.
+What remains is the vif re-establishing, not configuration.
+
+**One honest loose end:** sample 48 of 48 (t=110 s) is a single `tcp=no` with `ip` and `gw` both
+correct and a long stable run either side. Local config was right, so it is a transport-level blip
+against the remote host with a 1.2 s connect timeout, not a guest defect - but it is one failed
+sample and I am not calling it zero.
