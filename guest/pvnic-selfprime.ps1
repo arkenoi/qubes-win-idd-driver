@@ -63,6 +63,22 @@ try {
     }
 } catch { Write-Output "WARNING: could not clear the stock Autostart value: $($_.Exception.Message)" }
 
+# Clearing Autostart is NOT sufficient, measured 2026-08-23. With no Autostart value present at all,
+# QrexecAgent 4.2.2 still ran network-setup.exe TWICE in one boot (its own log: uptime 15.9 s and
+# 25.4 s), and the second run did
+#     SetNetworkParameters: Deleting IP 10.137.0.72 / Adding IP 0x4800890a
+# i.e. it tore down an address this applier had already put there correctly. That is the single
+# remaining per-boot network outage: one failed transfer at 24-31 s on 3/3 cold boots, address and
+# route otherwise correct the whole time. So retire the BINARY, not just the registry pointer.
+# Renamed rather than deleted - reversible, and a QWT upgrade that reinstalls it just works.
+$stockNs = Join-Path $bindir 'network-setup.exe'
+if (Test-Path $stockNs) {
+    try {
+        Move-Item $stockNs "$stockNs.retired-by-qwtng" -Force -EA Stop
+        Write-Output "retired stock network-setup.exe (this applier owns L3 config)"
+    } catch { $fail['retire_network_setup'] = $_.Exception.Message }
+}
+
 # ---------------- per-boot payload (persistent path on the template root) ----------------
 # NOTE on qubesdb: qubesdb VALUE READS work in-process via the client DLL (qdb_open/qdb_read; see
 # guest/qubesdb-read.ps1). The earlier "in-process P/Invoke fails / reads are broken" belief was a
