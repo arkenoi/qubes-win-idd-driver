@@ -223,13 +223,28 @@ public class QwtngNetSetup : ServiceBase {
         }
         if (ifname == null) { Log("PV NIC never came up - not applying"); return; }
         Log("adapter up as '" + ifname + "'");
+        Apply(ifname, ip, mask, gw, d1, d2, tag);
+    }
 
+    // The one place that writes L3 config. Called from the boot path and from the reconciler, so a
+    // live netvm change takes exactly the same code path as a cold boot.
+    static void Apply(string ifname, string ip, string mask, string gw, string d1, string d2, string tag) {
         Netsh("interface ipv4 set address name=\"" + ifname + "\" static " + ip + " " + mask);
         Netsh("interface ipv4 add route prefix=0.0.0.0/0 interface=\"" + ifname + "\" nexthop=" + gw + " store=active");
         if (d1 != null) Netsh("interface ipv4 set dnsservers name=\"" + ifname + "\" static " + d1 + " primary validate=no");
         if (d2 != null) Netsh("interface ipv4 add dnsservers name=\"" + ifname + "\" " + d2 + " index=2 validate=no");
         try { System.IO.File.WriteAllText(STAMP, tag); } catch { }
         Log("applied " + ip + "/" + mask + " gw " + gw + " on '" + ifname + "'");
+    }
+
+    // Name of the target adapter if it is currently Up, else null.
+    static string UpIfName(string guid) {
+        try {
+            foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                if (string.Equals(ni.Id, guid, StringComparison.OrdinalIgnoreCase) &&
+                    ni.OperationalStatus == OperationalStatus.Up) return ni.Name;
+        } catch { }
+        return null;
     }
 
     // Is the target adapter Up AND already carrying our address and default route?
@@ -275,9 +290,10 @@ public class QwtngNetSetup : ServiceBase {
                 if (guid == null) continue;
                 if (ConfigIsRight(guid, ip, gw)) { lastTag = ip + "|" + mask + "|" + gw; continue; }
                 string tag = ip + "|" + mask + "|" + gw;
+                string ifn = UpIfName(guid);
+                if (ifn == null) continue;
                 Log("reconcile: config missing (" + (tag == lastTag ? "same netvm" : "netvm changed") + ") - reapplying");
-                try { System.IO.File.Delete(STAMP); } catch { }
-                Apply(guid, ip, mask, gw, d1, d2);
+                Apply(ifn, ip, mask, gw, d1, d2, tag);
                 lastTag = tag;
             } catch { }
         }
