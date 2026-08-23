@@ -266,11 +266,22 @@ install_patched_xenvif() {
     qvm-start "$vm" >/dev/null 2>&1
     wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec for the xenvif install"; return 1; }
     local repo; repo="$(cd "$(dirname "$0")/.." && pwd)"
-    local f
-    for f in xenvif.inf xenvif.sys xenvif.cat xenvif-signer.cer; do
-        [ -f "$pkg/$f" ] && QTEST_VM=$vm "$repo/tools/qtest" push "$pkg/$f" >/dev/null 2>&1
-    done
     local inc='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
+    # qubes.Filecopy is NOT ready just because qubes.VMShell answered - measured 2026-08-23, the
+    # first run of this step pushed four files, all silently failed to arrive, and pnputil then
+    # reported "Missing or invalid driver package". Push, VERIFY in-guest, retry.
+    local f try landed
+    for try in 1 2 3 4 5; do
+        for f in xenvif.inf xenvif.sys xenvif.cat xenvif-signer.cer; do
+            [ -f "$pkg/$f" ] && QTEST_VM=$vm "$repo/tools/qtest" push "$pkg/$f" >/dev/null 2>&1
+        done
+        landed=$(printf 'dir "%s\\xenvif.*" /b\r\nexit\r\n' "$inc" \
+                 | timeout 60 qrexec-client-vm "$vm" qubes.VMShell 2>/dev/null | tr -d '\0\r' | grep -ci '^xenvif')
+        [ "${landed:-0}" -ge 3 ] && break
+        log "  push attempt $try delivered ${landed:-0}/4 files; retrying"
+        sleep 10
+    done
+    [ "${landed:-0}" -ge 3 ] || { log "FAIL: xenvif package never reached $vm"; return 1; }
     local out
     out=$(printf 'certutil -addstore -f Root "%s\\xenvif-signer.cer"\r\ncertutil -addstore -f TrustedPublisher "%s\\xenvif-signer.cer"\r\npnputil /add-driver "%s\\xenvif.inf" /install\r\nexit\r\n' \
               "$inc" "$inc" "$inc" \
@@ -462,6 +473,12 @@ prime_pv_nic() {
 # It must NOT fall back to `qubes-prefs default_netvm`. This script runs on somebody else's system:
 # reaching for whatever netvm happens to be the default attaches a Windows template to production
 # network infrastructure that was never offered to it. Name the netvm or get an error.
+# BEFORE priming, not after. A PV driver INF has no NOCLOBBER on Services\XEN\Unplug\NICS, so
+# installing xenvif REWRITES the latch to 0 - and the latch is what lets an AppVM finish the PV NIC
+# install in one boot. Installing the driver after prime_latch clobbered it and the fresh AppVM
+# reset-looped (measured 2026-08-23: died within ~20 s of every boot). Driver first, latch last.
+install_patched_xenvif "$TPL" || { log "FAIL: patched xenvif install did not complete"; exit 1; }
+
 if [ "${PRIME_NETVM-unset}" = "unset" ]; then
     PRIME_NETVM="$(qvm-prefs "$APP" netvm 2>/dev/null)"
 fi
@@ -488,7 +505,6 @@ elif [ -z "$PRIME_NETVM" ]; then
 fi
 [ -n "$PRIME_NETVM" ] && { prime_pv_nic "$TPL" "$PRIME_NETVM" || { log "FAIL: PV NIC priming did not complete"; exit 1; }; }
 
-install_patched_xenvif "$TPL" || { log "FAIL: patched xenvif install did not complete"; exit 1; }
 scrub_net_identity "$TPL" || { log "FAIL: network-identity scrub did not complete"; exit 1; }
 
 log "done: template=$TPL appvm=$APP"

@@ -16640,3 +16640,47 @@ than silently shipping a template whose AppVMs cannot network.
 
 So: template rebuilt from pristine, QWT applied, AppVM created, networked, stock network-setup.exe
 gone, and first traffic at 16 s with no failures.
+
+## 2026-08-23 — END-TO-END: pipeline builds green, ACCEPTANCE FAILS. Not done
+
+Ran the full rebuild three times with the driver step in place. The BUILD completes and every step
+self-verifies:
+
+    13:55:40  installing patched xenvif from <pkg>
+    13:56:04    push attempt 1 delivered 0/4 files; retrying     <- the retry earned its place
+    13:56:17    patched xenvif installed
+    14:02:32  latch primed (NICS=1, veto key, tasks verified across a boot cycle); never had a netvm
+    14:02:57    scrub removed 23 network-identity item(s)
+    14:03:09    verified: no lease, no static DNS, no NetworkList profile, DHCP off everywhere
+    14:03:09  done: template=win10-tpl appvm=win10-app
+
+**But the AppVM reset-loops on every networked boot.** It reaches Running, answers qrexec, then goes
+Dying within ~20-40 s, repeatedly. So the deliverable is NOT met.
+
+**What the evidence says.** Moving the service log to the PRIVATE volume (`Q:\qwtng-netsetup.log`,
+which survives the volatile root - the AppVM's C: takes its own evidence down with it) gives the same
+picture on three consecutive boots:
+
+    17:03:53 up=12s qubesdb ip=10.137.0.72 gw=10.138.21.72
+    17:04:36 up=11s qubesdb ip=10.137.0.72 gw=10.138.21.72
+    17:05:24 up=13s qubesdb ip=10.137.0.72 gw=10.138.21.72
+
+qubesdb is read correctly every time, and then NOTHING - no "adapter up", no "applied". The service
+is doing exactly what it should (waiting for `OperationalStatus.Up` rather than touching a device
+mid-install); the PV NIC simply never starts. On the pre-driver-step build the same guest reported
+`CM_PROB_FAILED_POST_START`. So the failure is the NIC, not the applier and not the scrub.
+
+**Working vs failing differs in one thing: template history.** Everything measured earlier today at
+13-16 s with 0/21 failures ran on the LONG-LIVED win10-tpl - a template that had been booted many
+times, had the patched xenvif installed by hand, and had already carried a vif. A template freshly
+built from the never-networked standalone has never had a vif at all, so the AppVM installs the PV
+NIC from scratch on every volatile boot. Leading suspicion, NOT yet proven: with two xenvif packages
+now in the DriverStore, that per-boot install goes down a path that demands a restart (problem 14),
+which is the reset loop the latch exists to prevent - and adding our package to a never-networked
+template is new today. Reordering so the driver installs BEFORE prime_latch (a PV INF has no
+NOCLOBBER on `Services\XEN\Unplug\NICS`, so installing it after priming clobbered the latch) fixed
+one real defect but did not fix this.
+
+**State:** win10-tpl and win10-app are the freshly built pair, halted. The pipeline changes are
+committed and each one is justified by a measured failure. The acceptance is not met and I am not
+calling it done.

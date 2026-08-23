@@ -108,10 +108,13 @@ public class QwtngNetSetup : ServiceBase {
     const string CACHE = @"Q:\qwtng-netcfg.txt";
 
     static void Log(string m) {
-        try {
-            System.IO.File.AppendAllText(LOG, DateTime.Now.ToString("HH:mm:ss") + " up=" +
-                ((int)TimeSpan.FromMilliseconds(Environment.TickCount).TotalSeconds) + "s " + m + "\r\n");
-        } catch { }
+        // PREFER the private volume: an AppVM's C: is volatile, so a guest that dies mid-boot takes
+        // its own evidence with it. Q: persists across reboots, which is the only way to see what
+        // the previous boot did.
+        string line = DateTime.Now.ToString("HH:mm:ss") + " up=" +
+                      ((int)TimeSpan.FromMilliseconds(Environment.TickCount).TotalSeconds) + "s " + m + "\r\n";
+        try { if (System.IO.Directory.Exists(@"Q:\")) System.IO.File.AppendAllText(@"Q:\qwtng-netsetup.log", line); } catch { }
+        try { System.IO.File.AppendAllText(LOG, line); } catch { }
     }
     static string Rd(IntPtr h, string k) {
         uint len; IntPtr p = qdb_read(h, k, out len);
