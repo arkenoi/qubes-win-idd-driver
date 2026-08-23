@@ -16767,3 +16767,32 @@ it, or run the scrub step which now does so and fails the build if it cannot.
 
 Running total on the freshly built pair: five cold boots at 15 / 22 / 17 / 15 / 20 s to first
 working 10 MB transfer, zero failed transfers in 105 samples.
+
+### Live netvm attach with fw-net, sampled continuously (asked 2026-08-23)
+
+`qvm-prefs win10-app netvm fw-net` on a RUNNING guest: rc=0, guest stays Running, and it
+reconfigures to fw-net's gateway on its own. Sampled every ~1.5 s with a TCP connect to a literal IP
+(no DNS, so a resolver blip cannot be mistaken for a routing outage):
+
+    58-74s   ip=10.137.0.72  gw=10.138.25.43 (core-net)   tcp=YES    stable before
+    76s      ip=<none>       gw=<none>                    tcp=no     vif removed
+    78-88s   ip=10.137.0.72  gw=<none>                    tcp=no     address back, route not yet
+    89s      ip=10.137.0.72  gw=10.138.21.72 (fw-net)     tcp=YES    reconfigured
+    89-140s  all YES                                                  stable after
+
+**One contiguous ~13 s outage spanning the switch, and nothing else** - 6 failed samples out of 47,
+all consecutive, none before and none after. No flapping, no residual glitch. Of those 13 s, ~2 s is
+the device genuinely absent and ~11 s is the window where the address is restored but the default
+route has not been re-added yet.
+
+That 11 s is the event-triggered PowerShell applier doing the work: the QwtngNetSetup SERVICE has
+already exited by then (it is an auto-start service that applies once at boot and stops), so a LIVE
+netvm change is handled by the scheduled task, not the service. Worth knowing, and an obvious place
+to shave time later by having the service also react to device arrival.
+
+**Correction to an earlier claim in this file.** I wrote that a failed `qvm-prefs` (rc=1, "Failed to
+access 'netvm' property") has no side effects. It does: a sampled run shows the vif torn down at the
+sample immediately after such a call, and the guest left with no address. So on this qube ANY netvm
+manipulation of a guest whose current netvm is unresolvable to qubesadmin can strand it - the write
+succeeds when the CURRENT value is resolvable (core-net -> fw-net works), and both directions fail
+once the current value is fw-net, which this qube's `admin.vm.List` does not contain.
