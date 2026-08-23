@@ -16393,14 +16393,31 @@ are known: `fw-net` and `core-net`.
              no adapter, no ip. Recovery requires a VM restart; PnP rescan and a parent-device
              restart both fail, because there is no device to enumerate.
 
-Reproduced 3/3 on the running guest - twice with an empty payload, once with `core-net` - so it is
-not a payload problem. The call partially executes: the detach side-effect lands, the value
-assignment does not, and the empty response says the API never completed normally. The guest is left
+Reproduced 4/4 on the running guest - twice with an empty payload, twice with `core-net`. Two of my
+explanations for it were wrong and are dropped: it is not the payload, and it is not my 25 s client
+timeout (retried with 300 s, it still returned in 10 s). The RAW BYTES settle it:
+
+    Set+netvm core-net           ->  (0 bytes - no reply at all)
+    Get+netvm                    ->  0\0default=False type=vm fw-net          proper success
+    Set+netvm no-such-netvm-xyz  ->  2\0QubesPropertyValueError\0\0Can't set   proper error
+                                     netvm to non-existing qube ...
+
+The API returns a correct success reply and a correct error reply, but for a VALID netvm on a running
+guest it returns NOTHING - the qubesd handler aborted without replying, after the detach had already
+landed. Why it aborts is not determinable from here (dom0 logs are out of reach) and I am not
+guessing at it. The guest is left
 detached while dom0's property still claims it is attached, so nothing will ever reconcile them.
 
 **Consequences that matter here:**
 - Changing a netvm on this testbed must be done with the qube HALTED. Doing it live strands the
   guest until restart. That is a dom0/Admin-API behaviour, not a QWT or mirage defect.
+- **This is not a capability we ever had and lost.** `prime_pv_nic` in mgmt/clone-to-template.sh
+  sets netvm only after `qvm-shutdown --wait`, then starts the qube - halted by construction, with
+  a comment explaining that a vif appearing on a fresh boot wedges the guest. Live switching was
+  never on the working path.
+- `qvm-prefs` cannot drive netvm on this qube at all - it resolves the CURRENT value into a VM
+  object first, and `fw-net` is absent from this qube's `admin.vm.List`. It fails cleanly (rc=1,
+  no side effects), so the raw Admin API is the only path here, halted.
 - The guest side is fine: given a vif, it configures correctly against a DIFFERENT netvm with no
   intervention - it picked up core-net's gateway 10.138.25.43 from qubesdb and carried traffic.
 - Corroboration of the contamination story: core-net's gateway IS 10.138.25.43, the exact
