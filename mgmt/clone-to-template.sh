@@ -245,6 +245,43 @@ ps_encode() {
     printf '%s' "$enc"
 }
 
+install_patched_xenvif() {
+    # The pristine source standalone carries the STOCK xenvif. Against a netback without
+    # feature-ctrl-ring (mirage-firewall) that driver fails the whole adapter:
+    # CM_PROB_FAILED_POST_START / cmErr 43, no network at all. Found by the end-to-end rebuild on
+    # 2026-08-23 - the pipeline produced a template whose AppVM had no network, and the cause was
+    # not the applier or the scrub but this missing driver.
+    # Package comes from the pv-xenvif CI workflow:
+    #   gh run download <id> -D <dir>     (gives xenvif.inf/.sys/.cat + xenvif-signer.cer)
+    local vm="$1" pkg="${XENVIF_PKG:-}"
+    if [ -z "$pkg" ] || [ ! -f "$pkg/xenvif.inf" ]; then
+        log "WARNING: no patched xenvif package (set XENVIF_PKG=<dir> with xenvif.inf/.sys/.cat)."
+        log "         The stock driver ships instead. An AppVM on a netvm WITHOUT feature-ctrl-ring"
+        log "         (mirage-firewall) will fail its NIC with cmErr 43 and have NO network."
+        return 0
+    fi
+    log "installing patched xenvif from $pkg"
+    [ "$(state "$vm")" = Halted ] || timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    until [ "$(state "$vm")" = Halted ]; do sleep 5; done
+    qvm-start "$vm" >/dev/null 2>&1
+    wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec for the xenvif install"; return 1; }
+    local repo; repo="$(cd "$(dirname "$0")/.." && pwd)"
+    local f
+    for f in xenvif.inf xenvif.sys xenvif.cat xenvif-signer.cer; do
+        [ -f "$pkg/$f" ] && QTEST_VM=$vm "$repo/tools/qtest" push "$pkg/$f" >/dev/null 2>&1
+    done
+    local inc='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
+    local out
+    out=$(printf 'certutil -addstore -f Root "%s\\xenvif-signer.cer"\r\ncertutil -addstore -f TrustedPublisher "%s\\xenvif-signer.cer"\r\npnputil /add-driver "%s\\xenvif.inf" /install\r\nexit\r\n' \
+              "$inc" "$inc" "$inc" \
+          | timeout 400 qrexec-client-vm "$vm" qubes.VMShell 2>/dev/null | tr -d '\0')
+    case "$out" in
+        *"Driver package added successfully"*) log "  patched xenvif installed" ;;
+        *) log "FAIL: pnputil did not report success for xenvif"; return 1 ;;
+    esac
+    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
+}
+
 scrub_net_identity() {
     # A template must ship with NO network identity of its own. Runs unconditionally, in BOTH
     # priming modes, because both can carry one: prime_pv_nic attaches a real netvm and Windows
@@ -451,6 +488,7 @@ elif [ -z "$PRIME_NETVM" ]; then
 fi
 [ -n "$PRIME_NETVM" ] && { prime_pv_nic "$TPL" "$PRIME_NETVM" || { log "FAIL: PV NIC priming did not complete"; exit 1; }; }
 
+install_patched_xenvif "$TPL" || { log "FAIL: patched xenvif install did not complete"; exit 1; }
 scrub_net_identity "$TPL" || { log "FAIL: network-identity scrub did not complete"; exit 1; }
 
 log "done: template=$TPL appvm=$APP"

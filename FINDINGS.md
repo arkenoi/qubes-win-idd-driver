@@ -16595,3 +16595,48 @@ measured, not a preference:
 
 Both defects that made the stock tool harmful are gone: no second run tearing down a good address,
 and no APIPA window. First traffic is now EARLIER than with the stock tool, not later.
+
+## 2026-08-23 — END-TO-END from pristine: pipeline green, and it found a real gap (missing patched xenvif)
+
+Full rebuild run as asked: `PRIME_NETVM=latch mgmt/clone-to-template.sh win10-clean win10-tpl win10-app`,
+i.e. template destroyed and recreated from the pristine never-networked standalone, AppVM recreated
+on it, then verified.
+
+    12:58:05  removing existing win10-tpl / creating template / cloning volumes
+    12:58:14  creating AppVM win10-app
+    12:58:19  settle boot (offline)          13:00:34  installing latch seed + tasks -> installer ok
+    13:00:56  verification boot (latch re-armed itself)
+    13:04:14  updater scan ok (7 offered, 4 actionable)
+    13:04:22  latch primed; win10-tpl NEVER had a netvm
+    13:04:53  scrub removed 23 network-identity items
+    13:05:04  verified: no lease, no static DNS, no NetworkList profile, DHCP off on every interface
+    13:05:04  done
+
+**The gap the test found.** The AppVM booted with a netvm and had NO network at all - and went into
+a reset loop. Cause, from the guest: `XENVIF\VEN_XP&DEV_NET\0 = Error / CM_PROB_FAILED_POST_START`,
+i.e. **cmErr 43 - the very xenvif control-ring regression we patched and reported upstream**. The
+pristine source standalone carries the STOCK xenvif, so a freshly built template ships it, and
+against mirage-firewall (no `feature-ctrl-ring`) the adapter never starts. Our patched driver had
+only ever been installed by hand on the previous win10-tpl, never by the pipeline.
+
+Discriminated properly rather than blamed on the newest change: with `QwtngNetSetup` DISABLED the
+guest was stable for 3+ minutes but still had zero network (21/21 transfers failed), which rules the
+service out as the cause of the no-network state and points squarely at the driver.
+
+**Closed:** `install_patched_xenvif()` added to mgmt/clone-to-template.sh - pushes the CI package
+(`XENVIF_PKG=<dir>` holding xenvif.inf/.sys/.cat + xenvif-signer.cer from the pv-xenvif workflow),
+trusts the signer in Root and TrustedPublisher, runs `pnputil /add-driver /install`, and FAILS the
+build unless pnputil reports success. With no package it logs a loud warning naming cmErr 43 rather
+than silently shipping a template whose AppVMs cannot network.
+
+**Verified end to end after installing it into the fresh template:**
+
+    PnP:                XENVIF NET = OK / CM_PROB_NONE
+    network-setup.exe:  ABSENT
+    service log:        up=12s qubesdb ip=10.137.0.72 gw=10.138.21.72
+                        up=13s adapter up as 'Ethernet 2'
+                        up=14s applied 10.137.0.72/255.255.255.255 gw 10.138.21.72
+    harness:            first working 10 MB transfer at 16s, 0 failures / 21 samples
+
+So: template rebuilt from pristine, QWT applied, AppVM created, networked, stock network-setup.exe
+gone, and first traffic at 16 s with no failures.
