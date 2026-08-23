@@ -16515,3 +16515,43 @@ shape is known (own the early call with a native, idempotent, non-blocking appli
 is applying the address without netsh's gateway ping; the IP Helper API (CreateUnicastIpAddressEntry
 + CreateIpForwardEntry2) does that with no validation and no child process, which is where this
 should go next rather than another netsh permutation.
+
+## 2026-08-23 (later) — removing network-setup.exe: three MORE attempts, three hard constraints found, all reverted
+
+Owner's instruction was unambiguous - the stock binary must be gone and not shipped. It is NOT gone.
+What the attempts bought is three constraints that were not known before, each measured:
+
+**1. WMI cannot configure a Qubes address at all.** `Win32_NetworkAdapterConfiguration.EnableStatic`
+returns **66 (invalid subnet mask)** for `255.255.255.255`. Qubes uses point-to-point /32, so the
+whole WMI route is closed - `SetGateways` and `SetDNSServerSearchOrder` both returned 0 next to it,
+which is what made the failure look like success until the log was read. netsh accepts /32.
+
+**2. qubesdb is NOT up when an auto-start service first runs.** Service log: `up=12s qdb_open
+FAILED`. Any early applier must retry rather than exit - exiting is what leaves the guest on APIPA.
+
+**3. Configuring the NIC too early KILLS the AppVM.** This is the important one. With an auto-start
+service applying at ~14-18 s, `win10-app` booted, answered qrexec briefly, then **halted itself** -
+the reset behaviour the unplug latch exists to prevent, because the PV NIC install is still in
+flight at that moment. Reproduced across three boots (harness returned 0 samples each time; state
+went Running -> Dying). Disabling the service was NOT sufficient to stop it either, which points at
+the missing binary as well, not only the timing.
+
+So the legacy tool's ~16 s call is not simply "early" - it is early AND safe because it looks for an
+adapter and does nothing when the install has not finished. Anything we put in that slot has to be
+at least as careful, and "apply as soon as possible" is actively harmful.
+
+**Damage and recovery, stated plainly.** I deleted the stock binary from win10-tpl with no backup in
+the image, then could not put it back from the template. Recovered by booting `win10-clean` (the
+pristine never-networked standalone this lineage was cloned from), reading
+`C:\Program Files\Qubes Tools\bin\network-setup.exe` out as base64 (25672 B, FileVersion 4.2.2.0),
+and pushing it back into win10-tpl - byte count verified on both sides. The `QwtngNetSetup` service
+is deleted, its binary and logs removed, `guest/pvnic-selfprime.ps1` is back to its committed state,
+the latch is re-armed (`ok:true armed:true nics:1`), and a cold boot measures **first traffic 25 s,
+2 failures in 21 samples** - baseline behaviour.
+
+**Owner's standing idea, not yet built:** cache the L3 settings on the PRIVATE volume. It survives
+an AppVM reboot where the root does not, so an applier could read its own cache instead of racing
+qubesdb (constraint 2 above disappears). It does nothing about constraint 3 - the apply still has to
+wait for the PV NIC install to finish - so the cache is necessary but not sufficient, and the
+sequencing (wait for adapter problem-code 0, THEN apply from cache) is the design that has to be
+right before another attempt touches the template.
