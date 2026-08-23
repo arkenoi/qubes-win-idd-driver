@@ -16376,3 +16376,36 @@ could see. One xenstore read - `device/vif children` - collapsed the whole thing
 available the entire time; a WMI session-id bug (`AddSession(...)` returns an object, and I compared
 the OBJECT against `SessionId`) made the first attempt print "NO session", and I moved on instead of
 fixing the instrument.
+
+## 2026-08-23 — netvm switching: DIAGNOSED. Halted is clean; LIVE `Set+netvm` strands the guest
+
+Ran the test myself (the earlier "needs the owner" framing was wrong - a netvm does not need to be
+visible to qubesadmin, only NAMED, and the raw Admin API takes the name). Both netvms on this host
+are known: `fw-net` and `core-net`.
+
+    HALTED:  Set+netvm core-net  -> rc=0  response '0'   property becomes core-net   CLEAN
+             boot -> adapter Up, ip 10.137.0.72, gateway 10.138.25.43, tcp YES
+             Set+netvm fw-net back -> '0', boots, gateway 10.138.21.72, adapter Up
+
+    RUNNING: Set+netvm <anything> -> rc=0  response EMPTY (not the '0' a success returns)
+             property does NOT change (still reads fw-net)
+             but the vif IS torn down: device/vif has NO children, NET child -> CM_PROB_PHANTOM,
+             no adapter, no ip. Recovery requires a VM restart; PnP rescan and a parent-device
+             restart both fail, because there is no device to enumerate.
+
+Reproduced 3/3 on the running guest - twice with an empty payload, once with `core-net` - so it is
+not a payload problem. The call partially executes: the detach side-effect lands, the value
+assignment does not, and the empty response says the API never completed normally. The guest is left
+detached while dom0's property still claims it is attached, so nothing will ever reconcile them.
+
+**Consequences that matter here:**
+- Changing a netvm on this testbed must be done with the qube HALTED. Doing it live strands the
+  guest until restart. That is a dom0/Admin-API behaviour, not a QWT or mirage defect.
+- The guest side is fine: given a vif, it configures correctly against a DIFFERENT netvm with no
+  intervention - it picked up core-net's gateway 10.138.25.43 from qubesdb and carried traffic.
+- Corroboration of the contamination story: core-net's gateway IS 10.138.25.43, the exact
+  `DhcpServer` in the stale lease found baked into win10-tpl. core-net is the netvm that primed it.
+
+Earlier claims about this, now settled: "re-attach did not restore the NIC" (retracted above - there
+was nothing to re-attach) and "hotplug is untested, needs the owner" (wrong - it was testable here
+all along).
