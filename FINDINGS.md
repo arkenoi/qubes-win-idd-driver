@@ -16469,3 +16469,49 @@ Measurement note: one post-retirement boot produced `first_ok=369s` and 0 failur
 result - qrexec took ~6 minutes to answer that boot, so the harness only started at +369 s and never
 saw the early window. Discarded, not reported as a pass. A boot-time in-guest logger writing to a
 file would decouple this measurement from qrexec readiness and should replace the current harness.
+
+## 2026-08-23 — replacing network-setup.exe: THREE attempts, all measured, all reverted. Legacy stays
+
+Goal: wipe the legacy tool and own L3 config ourselves, end to end. It did not land. Recorded in
+full because every attempt was measured and every number argues against the next obvious idea.
+
+    baseline (legacy tool present)     first traffic 19-21s   2-3 failures, ONE after first success
+    (A) delete the binary              first traffic 39s      6 failures, APIPA 17->36s
+    (B) stub -> launches our PS applier first traffic 37s     6 failures
+    (C) native C# stub, registry only  first traffic 32s      6 failures
+    (D) native stub + live netsh apply first traffic 29-30s   3 failures, ALL before first success
+    (E) (D) + route split, no gw ping  guest wedged, then halted itself mid-boot
+    restored to baseline               first traffic 21s      1 failure
+
+**What each attempt proved.**
+- (A) The legacy tool's FIRST run is load-bearing: QrexecAgent is a service and calls it at ~16 s,
+  while Task Scheduler does not reach our boot task until ~25-29 s. Removing it just leaves APIPA.
+- (B) Keeping the early CALL and replacing the CALLEE is right in shape, but routing it through
+  PowerShell costs ~18 s: process start plus `Add-Type` compiling the qubesdb P/Invoke at runtime.
+- (C) A native stub reads qubesdb in milliseconds (log: `up=14s ... wrote persistent config`), but
+  writing the PERSISTENT per-interface registry config does nothing for an adapter that has already
+  started - and NDIS brings it up at ~3 s. The owner's "write it early, before the adapter is up"
+  idea is sound in principle and simply loses the race in practice.
+- (D) Adding a live `netsh` apply, once per boot (stamp file), DID remove the defect: 3/3 cold boots
+  with every failure BEFORE first success and no post-success blip. But first traffic slipped to
+  29-30 s, because `netsh interface ipv4 set address ... <gateway>` VALIDATES the gateway by pinging
+  it, and a mirage netvm never answers ICMP - the stub applied at 19 s and traffic started at 29 s.
+- (E) Splitting the route out to skip that ping wedged qrexec and then the guest halted itself
+  mid-boot. Not diagnosed - reverted instead.
+
+**Two self-inflicted wedges, both mine.** The first version of (D) waited on three netsh calls; the
+stub is invoked SYNCHRONOUSLY by QrexecAgent, so it blocked the agent and qrexec went unreachable
+for minutes. Fixed by spawning a detached `cmd /c` chain - and the original design comment had
+already said "return 0 immediately, never block the agent", which I then violated.
+
+**State restored and verified**: legacy `network-setup.exe` (4.2.2.0, 25672 B) back in place, stub
+and its logs removed, `guest/pvnic-selfprime.ps1` reverted to its committed state, latch re-armed
+(`ok:true armed:true nics:1`), and a cold boot measured at first traffic 21 s with 1 failure in 21
+samples. The network-identity scrub from earlier today is untouched and still in force.
+
+**What survives from this:** the cause of the residual per-boot blip is no longer in doubt - it is
+network-setup.exe's second invocation deleting an address that is already correct - and the fix
+shape is known (own the early call with a native, idempotent, non-blocking applier). What is missing
+is applying the address without netsh's gateway ping; the IP Helper API (CreateUnicastIpAddressEntry
++ CreateIpForwardEntry2) does that with no validation and no child process, which is where this
+should go next rather than another netsh permutation.
