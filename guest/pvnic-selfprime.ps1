@@ -208,6 +208,17 @@ public class QwtngNetSetup : ServiceBase {
                 }
             } catch { }
             if (ifname != null) break;
+            // Inventory every 10 s while waiting. An AppVM that resets takes its C: logs with it,
+            // so this is the only way to see whether the adapter ever appeared at all.
+            if (i % 20 == 0) {
+                string inv = "";
+                try {
+                    foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                        if (ni.NetworkInterfaceType != NetworkInterfaceType.Loopback)
+                            inv += ni.Name + "[" + ni.Id + "]=" + ni.OperationalStatus + " ";
+                } catch (Exception e) { inv = "enum failed: " + e.Message; }
+                Log("waiting for " + guid + "; interfaces: " + (inv.Length > 0 ? inv : "<none>"));
+            }
             System.Threading.Thread.Sleep(500);
         }
         if (ifname == null) { Log("PV NIC never came up - not applying"); return; }

@@ -408,6 +408,16 @@ PS
     residue=$(printf 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand %s\r\nexit\r\n' "$venc" \
               | timeout 180 qrexec-client-vm "$vm" qubes.VMShell 2>/dev/null \
               | sed -n 's/.*QRESIDUE=\([0-9]*\)=END.*/\1/p' | head -1)
+    # RE-ARM THE LATCH before shutting down. xen.sys CONSUMES Services\XEN\Unplug\NICS at every
+    # boot (delete-on-read) and the QubesPvNic boot task re-arms it - but that task does not run
+    # until ~25-29 s, and this scrub boot is over in well under that. The template therefore shipped
+    # with NICS unset, the AppVM could not complete its PV NIC install in one boot, and it
+    # reset-looped. Measured 2026-08-23: re-running the installer by hand (which re-arms) turned a
+    # reset-looping AppVM into one that configures at up=15 s.
+    printf 'reg add "HKLM\\SYSTEM\\CurrentControlSet\\Services\\XEN\\Unplug" /v NICS /t REG_DWORD /d 1 /f\r\nreg add "HKLM\\SYSTEM\\CurrentControlSet\\Enum\\XENBUS\\VEN_XP0001&DEV_VIF" /f\r\nreg query "HKLM\\SYSTEM\\CurrentControlSet\\Services\\XEN\\Unplug" /v NICS\r\nexit\r\n' \
+        | timeout 120 qrexec-client-vm "$vm" qubes.VMShell 2>/dev/null | tr -d '\0' | grep -qE 'NICS.*0x1' \
+        && log "  latch re-armed after the scrub boot (NICS=1)" \
+        || { log "FAIL: could not re-arm the unplug latch after the scrub"; return 1; }
     timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
     [ -n "$residue" ] || { log "FAIL: scrub verification produced no reading from $vm"; return 1; }
     [ "$residue" = 0 ] || { log "FAIL: $residue network-identity item(s) survived the scrub"; return 1; }
