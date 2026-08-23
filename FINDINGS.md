@@ -16735,3 +16735,35 @@ supported CLI works live, both directions.
 
 No regression and no new delay: first traffic is 15-22 s against 19-25 s before, with zero failed
 transfers across four boots where the stock tool produced two or three every time.
+
+### DHCP residue check on the shipped pair (asked 2026-08-23)
+
+**Template (what ships), booted offline:**
+
+    {0671de9} {26771a3} {4f01521} {821072c}   EnableDHCP=0  lease=<empty>  srv=<empty>  gw=<empty>
+                                              NameServer=10.139.1.1,10.139.1.2
+    NetworkList profiles = 0     signatures = 0     Dhcpv6DUID = <empty>
+    network-setup.exe present = False
+
+**AppVM, after it had been attached to core-net** - a LINUX netvm, which does run a DHCP server, so
+this is the case that would have taken a lease before today:
+
+    all four interface keys   EnableDHCP=0  lease=<empty>  srv=<empty>  ns=10.139.1.1,10.139.1.2
+    live adapter              Ethernet 2 : Dhcp=Disabled
+    NetworkList profiles = 1, Dhcpv6DUID present
+
+The profile and the DUID there are generated fresh by Windows during that boot, not inherited: the
+DUID differs from the one that was scrubbed out of the image, and an AppVM's root is volatile, so
+neither survives a reboot or reaches the template. No lease was taken at any point despite sitting
+on a DHCP-serving netvm - which is exactly what `EnableDHCP=0` is for.
+
+**Operational gotcha found while doing this check.** Booting the template AT ALL consumes the unplug
+latch (`NICS`, delete-on-read) and the QubesPvNic task does not re-arm it until ~25-29 s. My
+inspection boot read `NICS=<empty>` on the way out - i.e. an innocent look at the template would have
+shipped it un-latched and reset-looped every AppVM built on it, the same defect the pipeline now
+guards. Re-armed explicitly (`NICS=0x1` read back) before shutdown, and the AppVM then booted at
+first traffic 20 s, 0 failures / 21. Anyone inspecting a primed template must re-arm before halting
+it, or run the scrub step which now does so and fails the build if it cannot.
+
+Running total on the freshly built pair: five cold boots at 15 / 22 / 17 / 15 / 20 s to first
+working 10 MB transfer, zero failed transfers in 105 samples.
