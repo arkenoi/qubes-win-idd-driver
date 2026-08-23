@@ -232,11 +232,55 @@ public class QwtngNetSetup : ServiceBase {
         Log("applied " + ip + "/" + mask + " gw " + gw + " on '" + ifname + "'");
     }
 
+    // Is the target adapter Up AND already carrying our address and default route?
+    static bool ConfigIsRight(string guid, string ip, string gw) {
+        try {
+            foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces()) {
+                if (!string.Equals(ni.Id, guid, StringComparison.OrdinalIgnoreCase)) continue;
+                if (ni.OperationalStatus != OperationalStatus.Up) return true;   // not our moment
+                var p = ni.GetIPProperties();
+                bool hasIp = false, hasGw = false;
+                foreach (var ua in p.UnicastAddresses) if (ua.Address.ToString() == ip) hasIp = true;
+                foreach (var ga in p.GatewayAddresses) if (ga.Address.ToString() == gw) hasGw = true;
+                return hasIp && hasGw;
+            }
+        } catch { }
+        return true;
+    }
+
     protected override void OnStart(string[] args) {
         System.Threading.ThreadPool.QueueUserWorkItem(delegate {
             try { Work(); } catch (Exception e) { Log("FATAL " + e.Message); }
-            try { Stop(); } catch { }
+            // STAY RESIDENT and reconcile. A LIVE netvm change removes the vif and brings a new one
+            // back with a DIFFERENT gateway; the boot-time apply cannot cover that, and leaving it
+            // to the event-triggered PowerShell task cost ~11 s of "address present, no default
+            // route" on every switch (measured 2026-08-23). Re-apply ONLY when the config is
+            // actually wrong - never on a correct one, which is exactly the churn that made the
+            // stock tool harmful.
+            try { Reconcile(); } catch (Exception e) { Log("reconciler died: " + e.Message); }
         });
+    }
+
+    static void Reconcile() {
+        string lastTag = null;
+        while (true) {
+            System.Threading.Thread.Sleep(2000);
+            try {
+                IntPtr h = qdb_open(IntPtr.Zero);
+                if (h == IntPtr.Zero) continue;
+                string ip = Rd(h, "/qubes-ip"), mask = Rd(h, "/qubes-netmask"), gw = Rd(h, "/qubes-gateway");
+                string d1 = Rd(h, "/qubes-primary-dns"), d2 = Rd(h, "/qubes-secondary-dns");
+                if (ip == null || mask == null || gw == null) continue;
+                string guid = XenGuid();
+                if (guid == null) continue;
+                if (ConfigIsRight(guid, ip, gw)) { lastTag = ip + "|" + mask + "|" + gw; continue; }
+                string tag = ip + "|" + mask + "|" + gw;
+                Log("reconcile: config missing (" + (tag == lastTag ? "same netvm" : "netvm changed") + ") - reapplying");
+                try { System.IO.File.Delete(STAMP); } catch { }
+                Apply(guid, ip, mask, gw, d1, d2);
+                lastTag = tag;
+            } catch { }
+        }
     }
     public static void Main(string[] argv) {
         if (argv.Length > 0 && argv[0] == "--console") { Work(); return; }

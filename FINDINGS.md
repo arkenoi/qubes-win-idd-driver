@@ -16796,3 +16796,41 @@ sample immediately after such a call, and the guest left with no address. So on 
 manipulation of a guest whose current netvm is unresolvable to qubesadmin can strand it - the write
 succeeds when the CURRENT value is resolvable (core-net -> fw-net works), and both directions fail
 once the current value is fw-net, which this qube's `admin.vm.List` does not contain.
+
+### Closing the live-switch gap: resident reconciler (asked 2026-08-23, "we need 100% reliability")
+
+The 6 failed samples during a live netvm switch were not one thing. Split by cause:
+
+    ~2 s   the vif is REMOVED - no network device exists at all      (physical, dom0 side)
+    ~11 s  address restored but NO DEFAULT ROUTE                     (ours: the boot service had
+                                                                      exited, so only the
+                                                                      event-triggered PowerShell
+                                                                      task was left to re-add it)
+
+Only the second part was ours, and it is now gone. `QwtngNetSetup` no longer applies once and stop:
+it stays resident and reconciles every 2 s, re-applying ONLY when the interface is Up and is missing
+our address or our default route. It re-reads qubesdb each pass, so a switch to a netvm with a
+DIFFERENT gateway is handled without any special case. It never touches a configuration that is
+already correct - that restraint is the whole reason the stock tool was harmful.
+
+**Measured, same sampler, same switch (core-net -> fw-net, live):**
+
+    before   179s ip=<none>   gw=<none>          tcp=no
+             180s ip=<none>   gw=<none>          tcp=no
+             182s ip=10.137.0.72 gw=10.138.21.72 tcp=no    <- config already fully restored
+             184s ip=10.137.0.72 gw=10.138.21.72 tcp=no
+             185s ip=10.137.0.72 gw=10.138.21.72 tcp=YES
+
+    outage   13 s / 6 samples  ->  6 s / 4 samples, and the route now returns WITH the address
+             instead of 11 s later
+
+**No boot regression from making it resident:** three cold boots at 23 / 17 / 16 s, 0 failures / 21
+each, against 15-22 s before.
+
+**On "100% reliability", precisely.** Steady state and cold boots are already 100%: zero failed
+transfers in 168 samples across eight cold boots. A LIVE netvm switch cannot reach 100% of samples,
+because dom0 removes the network device and adds a different one - for ~2 s there is no NIC in the
+guest to carry anything, and no guest-side code can change that. What remains after the device is
+back (~3 s) is the xenvif/netback handshake on the new vif completing, not our configuration: the
+address and route are already in place at the first sample after the device returns. Our
+contribution to the outage is now approximately zero.
