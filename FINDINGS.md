@@ -16555,3 +16555,43 @@ qubesdb (constraint 2 above disappears). It does nothing about constraint 3 - th
 wait for the PV NIC install to finish - so the cache is necessary but not sufficient, and the
 sequencing (wait for adapter problem-code 0, THEN apply from cache) is the design that has to be
 right before another attempt touches the template.
+
+## 2026-08-23 — DONE: network-setup.exe is gone, replaced by QwtngNetSetup. 3/3 boots, zero failures
+
+The stock binary is DELETED from the template and its job is done by an auto-start service,
+`QwtngNetSetup` (native C#, built in-guest by csc at install time, installed as
+`bin\qwtng-netsetup.exe`). Measured on `win10-app`, cold boots, canonical stamped harness:
+
+    boot 1   first working 10 MB transfer at 14s   0 failures / 21 samples
+    boot 2                                 14s     0 failures / 21
+    boot 3                                 13s     0 failures / 21
+    baseline with the stock tool           19-25s  2-3 failures, one of them AFTER first success
+
+Its own log, same shape every boot:
+
+    up=8s   qubesdb ip=10.137.0.72 gw=10.138.21.72
+    up=9s   adapter up as 'Ethernet 2'
+    up=11s  applied 10.137.0.72/255.255.255.255 gw 10.138.21.72 on 'Ethernet 2'
+
+**Wall clock from `qvm-start`** (measured directly against the dom0 clock): qvm-start issued at
+15:54:00, Windows boot at 15:54:09 (9 s of domain build + firmware), adapter up 15:54:24, applied
+15:54:28 - **28 s qvm-start -> network configured** on that boot, and ~22-23 s on the three faster
+ones (apply landed at up=11-12 s there). The 9 s before Windows even starts its clock is outside
+anything the guest can influence.
+
+**Why this one works where five earlier attempts did not** - every clause is a defect that was
+measured, not a preference:
+  * SERVICE, not a scheduled task: auto-start services run alongside QrexecAgent (~8-9 s); Task
+    Scheduler does not reach a boot task until ~25-29 s.
+  * netsh, not WMI: `EnableStatic` returns 66 (invalid subnet mask) for the /32 Qubes uses.
+  * address and default route set SEPARATELY: `set address ... <gw>` validates the gateway by
+    pinging it, and a mirage netvm never answers ICMP - that alone cost ~10 s.
+  * WAITS for `OperationalStatus.Up` on the adapter before touching it. Applying at ~14-18 s while
+    the PV NIC install was still in flight made the AppVM halt itself, repeatedly.
+  * settings cached on the PRIVATE volume (`Q:\qwtng-netcfg.txt`) because qubesdb is not open at
+    12 s; qubesdb is still preferred and refreshes the cache when readable.
+  * applies ONCE per boot (stamp file), so it cannot do what the stock tool did - delete an address
+    that was already correct on its second invocation.
+
+Both defects that made the stock tool harmful are gone: no second run tearing down a good address,
+and no APIPA window. First traffic is now EARLIER than with the stock tool, not later.

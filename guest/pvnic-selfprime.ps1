@@ -63,6 +63,192 @@ try {
     }
 } catch { Write-Output "WARNING: could not clear the stock Autostart value: $($_.Exception.Message)" }
 
+# ============ REPLACE network-setup.exe FOR GOOD ============================================
+# The stock binary is DELETED and its job taken over by an auto-start service. Everything below is
+# shaped by what was measured on 2026-08-23; none of it is preference:
+#
+#   * Clearing QWT's Autostart value does NOT stop it. With no Autostart present it still ran twice
+#     per boot, and the second run did "Deleting IP <addr> / Adding IP" - tearing down an address
+#     that was already correct. That was the last per-boot outage.
+#   * Just deleting it is worse (first traffic 20s -> 39s): QrexecAgent is a SERVICE and its call is
+#     the earliest thing that configures the guest; our scheduled task does not run until ~25-29 s.
+#     Hence a SERVICE here, not a task.
+#   * WMI cannot do the job: EnableStatic returns 66 (invalid subnet mask) for the 255.255.255.255
+#     that Qubes point-to-point routing uses. netsh accepts it.
+#   * `netsh set address ... <gateway>` VALIDATES the gateway by PINGING it; a mirage netvm never
+#     answers ICMP, which cost ~10 s. Address and default route are therefore set separately.
+#   * qubesdb is NOT up at 12 s, so the settings are cached on the PRIVATE volume (Q:), which
+#     survives an AppVM reboot where the root does not. qubesdb is still preferred when readable.
+#   * APPLYING TOO EARLY KILLS THE APPVM. With an applier that configured at ~14-18 s the guest
+#     booted, answered qrexec, then HALTED ITSELF - the PV NIC install is still in flight and the
+#     reset behaviour the latch exists to prevent takes over. So the service WAITS for the adapter
+#     to report OperationalStatus.Up before touching it, and applies exactly once per boot.
+$nsPath  = Join-Path $bindir 'network-setup.exe'
+$svcExe  = Join-Path $bindir 'qwtng-netsetup.exe'
+$svcSrc  = Join-Path $env:TEMP 'qwtng-netsetup.cs'
+$svcOut  = Join-Path $env:TEMP 'qwtng-netsetup.exe'
+$csc = @(Get-ChildItem 'C:\Windows\Microsoft.NET\Framework64' -Filter csc.exe -Recurse -EA SilentlyContinue |
+         Sort-Object FullName -Descending | Select-Object -First 1).FullName
+if (-not $csc) { $fail['netsetup_no_csc'] = 'csc.exe not found' }
+else {
+    @'
+using System; using System.Diagnostics; using System.Runtime.InteropServices;
+using System.ServiceProcess; using System.Net.NetworkInformation; using Microsoft.Win32;
+
+public class QwtngNetSetup : ServiceBase {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern bool SetDllDirectory(string path);
+    [DllImport("qubesdb-client.dll", CallingConvention = CallingConvention.Cdecl)]
+    static extern IntPtr qdb_open(IntPtr path);
+    [DllImport("qubesdb-client.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    static extern IntPtr qdb_read(IntPtr h, string path, out uint len);
+
+    const string LOG   = @"C:\ProgramData\QubesNetSetup.log";
+    const string STAMP = @"C:\ProgramData\QubesNetSetup.applied";
+    const string CACHE = @"Q:\qwtng-netcfg.txt";
+
+    static void Log(string m) {
+        try {
+            System.IO.File.AppendAllText(LOG, DateTime.Now.ToString("HH:mm:ss") + " up=" +
+                ((int)TimeSpan.FromMilliseconds(Environment.TickCount).TotalSeconds) + "s " + m + "\r\n");
+        } catch { }
+    }
+    static string Rd(IntPtr h, string k) {
+        uint len; IntPtr p = qdb_read(h, k, out len);
+        if (p == IntPtr.Zero || len == 0) return null;
+        return Marshal.PtrToStringAnsi(p, (int)len);
+    }
+    static string XenGuid() {
+        const string cls = @"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}";
+        using (RegistryKey k = Registry.LocalMachine.OpenSubKey(cls)) {
+            if (k == null) return null;
+            foreach (string sub in k.GetSubKeyNames())
+                using (RegistryKey x = k.OpenSubKey(sub)) {
+                    if (x == null) continue;
+                    string d = x.GetValue("DriverDesc") as string;
+                    string i = x.GetValue("NetCfgInstanceId") as string;
+                    if (d != null && i != null &&
+                        d.IndexOf("Xen", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                        d.IndexOf("Net", StringComparison.OrdinalIgnoreCase) >= 0) return i;
+                }
+        }
+        return null;
+    }
+    static void Netsh(string args) {
+        try {
+            var psi = new ProcessStartInfo("netsh.exe", args);
+            psi.UseShellExecute = false; psi.CreateNoWindow = true;
+            psi.RedirectStandardOutput = true; psi.RedirectStandardError = true;
+            var pr = Process.Start(psi); pr.WaitForExit(20000);
+        } catch (Exception e) { Log("netsh failed: " + e.Message); }
+    }
+    static bool AppliedThisBoot(string tag) {
+        try {
+            if (!System.IO.File.Exists(STAMP)) return false;
+            DateTime boot = DateTime.Now.AddMilliseconds(-Environment.TickCount);
+            return System.IO.File.GetLastWriteTime(STAMP) > boot &&
+                   System.IO.File.ReadAllText(STAMP).Trim() == tag;
+        } catch { return false; }
+    }
+
+    static void Work() {
+        string ip = null, mask = null, gw = null, d1 = null, d2 = null;
+        // qubesdb is authoritative but not up early; retry briefly, then fall back to the cache
+        // on the PRIVATE volume, which survives an AppVM reboot.
+        try {
+            SetDllDirectory(@"C:\Program Files\Qubes Tools\bin");
+            IntPtr h = IntPtr.Zero;
+            for (int i = 0; i < 60 && h == IntPtr.Zero; i++) {
+                h = qdb_open(IntPtr.Zero);
+                if (h == IntPtr.Zero) System.Threading.Thread.Sleep(500);
+            }
+            if (h != IntPtr.Zero) {
+                ip = Rd(h, "/qubes-ip"); mask = Rd(h, "/qubes-netmask"); gw = Rd(h, "/qubes-gateway");
+                d1 = Rd(h, "/qubes-primary-dns"); d2 = Rd(h, "/qubes-secondary-dns");
+                Log("qubesdb ip=" + ip + " gw=" + gw);
+            } else Log("qubesdb never opened; using cache");
+        } catch (Exception e) { Log("qdb EXCEPTION " + e.Message); }
+
+        if (ip == null || mask == null || gw == null) {
+            try {
+                if (System.IO.File.Exists(CACHE)) {
+                    string[] c = System.IO.File.ReadAllLines(CACHE);
+                    if (c.Length >= 3) {
+                        ip = c[0].Trim(); mask = c[1].Trim(); gw = c[2].Trim();
+                        if (c.Length > 3 && c[3].Trim().Length > 0) d1 = c[3].Trim();
+                        if (c.Length > 4 && c[4].Trim().Length > 0) d2 = c[4].Trim();
+                        Log("loaded cache " + ip + " gw=" + gw);
+                    }
+                }
+            } catch (Exception e) { Log("cache read EXCEPTION " + e.Message); }
+        } else {
+            try {
+                System.IO.File.WriteAllText(CACHE, ip + "\r\n" + mask + "\r\n" + gw + "\r\n" +
+                                                   (d1 ?? "") + "\r\n" + (d2 ?? "") + "\r\n");
+            } catch { }
+        }
+        if (ip == null || mask == null || gw == null) { Log("no settings from qubesdb or cache"); return; }
+
+        string guid = XenGuid();
+        if (guid == null) { Log("no Xen adapter class entry"); return; }
+        string tag = ip + "|" + mask + "|" + gw;
+        if (AppliedThisBoot(tag)) { Log("already applied this boot"); return; }
+
+        // WAIT for the PV NIC to be genuinely up. Applying while its install is still in flight
+        // makes the AppVM halt itself (measured). Bounded so a guest with no vif just exits.
+        string ifname = null;
+        for (int i = 0; i < 360; i++) {
+            try {
+                foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces()) {
+                    if (string.Equals(ni.Id, guid, StringComparison.OrdinalIgnoreCase) &&
+                        ni.OperationalStatus == OperationalStatus.Up) { ifname = ni.Name; break; }
+                }
+            } catch { }
+            if (ifname != null) break;
+            System.Threading.Thread.Sleep(500);
+        }
+        if (ifname == null) { Log("PV NIC never came up - not applying"); return; }
+        Log("adapter up as '" + ifname + "'");
+
+        Netsh("interface ipv4 set address name=\"" + ifname + "\" static " + ip + " " + mask);
+        Netsh("interface ipv4 add route prefix=0.0.0.0/0 interface=\"" + ifname + "\" nexthop=" + gw + " store=active");
+        if (d1 != null) Netsh("interface ipv4 set dnsservers name=\"" + ifname + "\" static " + d1 + " primary validate=no");
+        if (d2 != null) Netsh("interface ipv4 add dnsservers name=\"" + ifname + "\" " + d2 + " index=2 validate=no");
+        try { System.IO.File.WriteAllText(STAMP, tag); } catch { }
+        Log("applied " + ip + "/" + mask + " gw " + gw + " on '" + ifname + "'");
+    }
+
+    protected override void OnStart(string[] args) {
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate {
+            try { Work(); } catch (Exception e) { Log("FATAL " + e.Message); }
+            try { Stop(); } catch { }
+        });
+    }
+    public static void Main(string[] argv) {
+        if (argv.Length > 0 && argv[0] == "--console") { Work(); return; }
+        ServiceBase.Run(new QwtngNetSetup());
+    }
+}
+'@ | Set-Content -Path $svcSrc -Encoding ASCII
+    & $csc /nologo /target:exe /out:$svcOut /reference:System.ServiceProcess.dll $svcSrc 2>&1 | Out-Null
+    if (-not (Test-Path $svcOut)) { $fail['netsetup_build'] = 'csc produced no output' }
+    else {
+        try {
+            & sc.exe stop QwtngNetSetup 2>&1 | Out-Null
+            & sc.exe delete QwtngNetSetup 2>&1 | Out-Null
+            Start-Sleep -Milliseconds 700
+            Copy-Item $svcOut $svcExe -Force -EA Stop
+            & sc.exe create QwtngNetSetup binPath= "`"$svcExe`"" start= auto DisplayName= "Qubes PV NIC address applier" 2>&1 | Out-Null
+            Remove-Item $nsPath -Force -EA SilentlyContinue
+            Remove-Item (Join-Path $bindir 'network-setup.exe.legacy') -Force -EA SilentlyContinue
+            $q = (& sc.exe qc QwtngNetSetup 2>&1 | Out-String)
+            Write-Output ("QwtngNetSetup registered=" + ($q -notmatch 'does not exist') +
+                          "; stock network-setup.exe present=" + (Test-Path $nsPath))
+            if (Test-Path $nsPath) { $fail['netsetup_delete'] = 'stock binary still present' }
+        } catch { $fail['netsetup_install'] = $_.Exception.Message }
+    }
+}
+
 # ---------------- per-boot payload (persistent path on the template root) ----------------
 # NOTE on qubesdb: qubesdb VALUE READS work in-process via the client DLL (qdb_open/qdb_read; see
 # guest/qubesdb-read.ps1). The earlier "in-process P/Invoke fails / reads are broken" belief was a
