@@ -16426,3 +16426,46 @@ detached while dom0's property still claims it is attached, so nothing will ever
 Earlier claims about this, now settled: "re-attach did not restore the NIC" (retracted above - there
 was nothing to re-attach) and "hotplug is untested, needs the owner" (wrong - it was testable here
 all along).
+
+## 2026-08-23 — the residual per-boot outage: CAUSE FOUND (network-setup.exe), fix ATTEMPTED and REVERTED
+
+**Cause, from the stock tool's own log** - not inferred:
+
+    [11:59:36] network-setup.exe   System uptime: 25.390 seconds   (module 4.2.2.0, SYSTEM)
+      SetupNetwork: ip 10.137.0.72, netmask 255.255.255.255, gateway 10.138.21.72
+      SetNetworkParameters: Adapter 5: {4F01521E-...} Xen PV Network Device #0
+      SetNetworkParameters: Deleting IP 10.137.0.72        <-- tears down a CORRECT address
+      SetNetworkParameters: Adding IP 0x4800890a (0xffffffff)
+
+QrexecAgent runs `network-setup.exe` twice per boot (measured this boot at uptime 15.9 s and
+25.4 s). The FIRST run is what actually configures the guest early. The SECOND deletes the
+already-correct address and re-adds it - that is the single residual outage, one failed transfer at
+24-31 s on 3/3 cold boots with address and route otherwise correct throughout.
+
+**Our "retirement" of it never took effect.** `pvnic-selfprime.ps1` retires it by clearing QWT's
+`Autostart` registry value. That value is ABSENT from the Qubes Tools key on this guest - and
+network-setup still ran twice. So QrexecAgent launches it by some other means and the registry lever
+does nothing. The comment in our source claiming the binary is RETIRED has been wrong since
+2026-08-19.
+
+**Attempted fix: retire the BINARY (rename). MEASURED WORSE, REVERTED.**
+
+    before (stock present)   first working transfer 19s / 21s / 27s   2-3 failures per boot
+    binary retired           first working transfer 39s               6 failures, APIPA 17s->36s
+    after revert             first working transfer 20s               2 failures
+
+Removing it trades a ~3 s blip for ~15 s of no network, because our applier is NOT an early
+configurator: its first pass lands around +25-29 s, while network-setup's first run lands at ~16 s.
+Both the repo change (`git revert`) and the template binary are restored, and the revert is
+confirmed by measurement, not assumed.
+
+**So the honest state:** the stock tool is load-bearing for EARLY configuration and harmful on its
+second run. The real fix is to make our applier configure by ~15 s and only then remove the stock
+one - i.e. the owner's "write it early, before the adapter is up" idea, which needs the applier (or
+a smaller pre-seed step) to run much earlier than the current task triggers deliver. Not attempted
+yet; recorded as the next piece of work rather than half-done.
+
+Measurement note: one post-retirement boot produced `first_ok=369s` and 0 failures. That is not a
+result - qrexec took ~6 minutes to answer that boot, so the harness only started at +369 s and never
+saw the early window. Discarded, not reported as a pass. A boot-time in-guest logger writing to a
+file would decouple this measurement from qrexec readiness and should replace the current harness.
