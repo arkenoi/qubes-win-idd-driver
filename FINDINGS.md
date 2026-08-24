@@ -16945,3 +16945,30 @@ re-bound; throughput measured 16.5 MB/s unbound and 16.3 MB/s rebound, so nothin
   - a 9332-char `-EncodedCommand`, past cmd.exe's 8191 limit, which silently ran nothing.
 Every one of these looked like a guest defect first. Push scripts as files and compare against a
 Linux control on the same link before believing any of it.
+
+## 2026-08-24 — upstream: both mirage PRs published, #230 answered
+
+Owner reviewed both PR texts, kept commit 4 (the vif-type logging), and sent them.
+
+    mirage/mirage-net-xen#121          OPEN  base=main  5 commits  +193/-42
+    mirage/qubes-mirage-firewall#232   OPEN  base=main  6 commits  +169/-38
+    branches: arkenoi/mirage-net-xen:windows-frontend-close-cycle
+              arkenoi/qubes-mirage-firewall:vif-reconnect
+
+Both PR bodies declare, up front, the two things a maintainer would otherwise discover the hard way:
+the strict library-first ordering (the firewall does not compile against 2.1.8, so #232 cannot go
+green until #121 lands AND is released), and that `qubes-firewall.sha256` in the last commit is a
+PLACEHOLDER that will not reproduce until it is regenerated against the real 2.2.0 tarball - with an
+offer to drop that commit entirely.
+
+A follow-up comment on #230 was posted summarising the three defects, the measurements, and the
+xenvif control-ring regression (50957a5) as explicitly NOT a mirage bug, being handled with the Xen
+Windows PV maintainers separately.
+
+Testing cited in both PRs is today's, not the original three cold boots: 20+ Windows cold boots,
+live vif removal and re-attach, 15-16 MB/s Windows and 15.5-17 MB/s Linux on the same backend, ICMP
+identical to the Linux peer with 0/40 loss, a 264-chunk stream with no stalls, and 8 parallel
+connects showing no serialisation. Everything measured today ran through fw-net carrying the
+submitted build, including this qube's own traffic.
+
+Texts kept at /home/user/mirage-gso/upstream/ (PR-BODY-*.md, 05-issue-230-followup.md).
