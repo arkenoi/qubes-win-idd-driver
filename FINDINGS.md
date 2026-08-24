@@ -16905,3 +16905,43 @@ was 1.2 s, which is shorter than this guest's observed worst case. Raised to 5 s
 spike is no longer reported as a network outage. The remaining open question - why a Windows PV guest
 has a 5x heavier connect tail than a Linux one on the same link - is a real thing to look at, but it
 is a latency-tail question, not a reliability one.
+
+## 2026-08-24 — diverse connectivity benchmarks, guest vs Linux on the same link
+
+Matched methodology (native `curl` on BOTH sides, `Connection: close`, fresh connection per request)
+so a difference cannot be an artifact of .NET connection pooling. Same target, same firewall.
+
+    metric                 Windows guest                 Linux (this qube)        delta
+    icmp_rtt_ms            p50 48  max 49  loss 0/40     p50 48 max 49 loss 0%   identical
+    curl_connect_ms        p50 49  p90 53  p99 65        p50 48 p90 49 p99 49    +16 ms tail only
+    curl_dns_ms            p50 10  p90 15  max 28        p50 1  p90 3  max 6     ~10x
+    curl_100KB_total_ms    p50 265 p90 279 max 288       p50 249 p90 254         +6%
+    curl_1MB_MBps          2                             2                       equal
+    curl_10MB_MBps         15-16                         17                      -8%
+    parallel-8 connects    67 ms total (single = 49 ms)  -                        no serialisation
+    chunk_gap_ms (10 MB)   n=264 p50 0 p90 1 p99 3 max 49                        no stalls
+
+**Verdict: no substantive networking anomaly.** ICMP is bit-identical to the Linux baseline with
+zero loss, so the path is clean; the guest sits within single-digit percent of Linux on throughput
+and request time, does not serialise concurrent connections, and shows no mid-transfer stalls across
+264 chunks. What is real is a modestly heavier LATENCY TAIL (p99 65 vs 49 ms, and up to 525 vs 95 ms
+when the host is busy) and ~8 ms extra DNS.
+
+**A hypothesis I formed and then DISPROVED rather than shipped.** IPv6 is bound on the PV NIC while
+the qube has only IPv4 resolvers, and an isolated `Resolve-DnsName` showed AAAA at p50 60 ms against
+A at p50 8 ms - a tidy story for the DNS gap. Tested it by unbinding `ms_tcpip6` and re-measuring:
+
+    dns with ipv6 bound     p50 8 ms      dns with ipv6 unbound   p50 9 ms
+
+No effect. The AAAA cost does not appear on curl's resolver path (resolved in parallel and/or
+negatively cached), so the ~8 ms is plain Windows DNS-client overhead, not an IPv6 penalty. IPv6 was
+re-bound; throughput measured 16.5 MB/s unbound and 16.3 MB/s rebound, so nothing was disturbed.
+
+**Four instrument bugs found in my own harness, all of which produced fake anomalies:**
+  - `$HOST` collides with PowerShell's automatic `$Host`, so every URL built from it was malformed -
+    this is what made "all HTTP downloads failed" while ICMP and TCP were perfect.
+  - a `speed_download` parse returning 0 while the transfer actually completed (10485760 B, http 200).
+  - the 1.2 s connect timeout, shorter than the guest's own worst case, reported as an outage.
+  - a 9332-char `-EncodedCommand`, past cmd.exe's 8191 limit, which silently ran nothing.
+Every one of these looked like a guest defect first. Push scripts as files and compare against a
+Linux control on the same link before believing any of it.
