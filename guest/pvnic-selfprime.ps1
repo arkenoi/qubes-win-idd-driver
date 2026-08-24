@@ -630,11 +630,21 @@ if ($fail.Count -gt 0) {
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Network\NewNetworkWindowOff" /f | Out-Null
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\DriverSearching" /v SearchOrderConfig /t REG_DWORD /d 0 /f | Out-Null
 powercfg /h off 2>$null | Out-Null
-# QWT logging on (Info): the applier reads qubesdb directly and no longer parses this log, but
-# LogDir/LogLevel are still seeded so stock network-setup.exe (which QrexecAgent runs at startup,
-# independent of us) leaves a readable trace for debugging the network path.
-New-Item -ItemType Directory -Path 'C:\ProgramData\QubesLogs' -Force | Out-Null
-reg add "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogDir /t REG_SZ /d "C:\ProgramData\QubesLogs" /f | Out-Null
+# QWT logging on (Info), and LogDir on the PRIVATE volume.
+#
+# An AppVM's C: is VOLATILE, so anything written to C:\ProgramData\QubesLogs is gone at the next
+# boot - which makes a boot-time failure impossible to post-mortem, the exact class of bug being
+# reported from the field. Worse, it LOOKS persistent: the files still there after a reboot are the
+# template's, inherited through the image. Measured 2026-08-24 on win11-app: 38 files in
+# C:\ProgramData\QubesLogs, 24 written by the current boot and 14 inherited.
+#
+# QWT's own location Q:\Qubes Logs is on the private volume and survives; it already holds 1140
+# files, the newest 2026-08-21 - the day this seed moved logging off it. Seeding C: here was
+# incidental to seeding LogDir at all, and it cost the ability to debug any AppVM boot.
+$logDir = if (Test-Path 'Q:\') { 'Q:\Qubes Logs' } else { 'C:\ProgramData\QubesLogs' }
+New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+reg add "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogDir /t REG_SZ /d "$logDir" /f | Out-Null
+Write-Output "LogDir -> $logDir" 
 reg add "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogLevel /t REG_DWORD /d 3 /f | Out-Null
 # Updates are dom0-owned (standing project rule): guest auto-update OFF. This matters more
 # with the latch, because AppVMs now have working network every boot and WU would pull

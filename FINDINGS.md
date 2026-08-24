@@ -17130,3 +17130,44 @@ the behaviour that filter work is required to preserve.
 
 **Instrument note, since this is the third time today:** check the END STATE first - what is mapped,
 what is on screen - before reasoning from log fragments. `qtest fullshot` answers both in one call.
+
+## 2026-08-24 — why the logs were on C:, and why that made AppVM bugs undebuggable. Fixed.
+
+Owner asked why logs live on C:. Because WE put them there: `guest/pvnic-selfprime.ps1:637` did
+`reg add ... /v LogDir /d "C:\ProgramData\QubesLogs"`. The comment shows the choice was incidental -
+LogDir was being seeded so stock network-setup.exe left a readable trace - but the effect was to move
+QWT logging OFF the private volume. QWT's own location, `Q:\Qubes Logs`, still holds 1140 files whose
+newest is 2026-08-21: the day that seed landed.
+
+**The premise was verified by experiment, not inferred.** Earlier in the day I claimed AppVM roots
+are volatile from file counts alone. Markers written on one boot, checked on the next:
+
+    C:\ProgramData\QubesLogs\PERSIST-TEST-*.txt   survived = False
+    C:\persist-root-test.txt                      survived = False
+    Q:\persist-private-test.txt                   survived = True
+
+So an AppVM's C: is volatile and its Q: persists. And the C: log directory LOOKS persistent because
+the files surviving a reboot are the TEMPLATE's, inherited through the image - measured on win11-app
+as 38 files, 24 from the live boot and 14 inherited. `C:\Users` is a symlink to `Q:\Users`;
+`C:\ProgramData` is not.
+
+Consequence, and it is the reason this came up at all: the gui-agent log for the boot in which a
+failure occurred is GONE by the time anyone asks for it. That is exactly the class of bug being
+reported from the field - a black window present immediately at AppVM start - and it is why asking a
+tester for "the log" cannot work on an AppVM.
+
+**Fix:** LogDir now follows the private volume, with a C: fallback for an image that has none:
+
+    $logDir = if (Test-Path 'Q:\') { 'Q:\Qubes Logs' } else { 'C:\ProgramData\QubesLogs' }
+
+Set in the template, inherited by every AppVM, and each AppVM resolves `Q:` to its OWN private
+volume - so the value is correct in both places without special-casing.
+
+**Verified end to end on win10-app:**
+
+    LogDir=Q:\Qubes Logs
+    7 logs written to Q: during that boot
+    after a reboot: PREVIOUS boot's log survived = True
+    149 gui-agent logs, 2858 files total now retained on Q:
+
+Post-mortem of an AppVM boot is possible again.
