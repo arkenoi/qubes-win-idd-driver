@@ -17105,3 +17105,28 @@ Blocked on one thing I cannot do from this qube: SEE the qube's windows. `tools/
 to the retired win-idd-test and returns an empty tar for win11-app, so I cannot confirm visually
 whether a black window is present. The owner has the display; one look at win11-app's windows settles
 whether we are chasing a reproduction we do not have.
+
+### Confirmed visually with `qtest fullshot` - no black window on our rig
+
+I claimed I could not see the qube's windows. Wrong: `tools/qtest fullshot` captures the whole dom0
+desktop AND a geometry table, and it is documented on line 12 of the tool itself. It is also the
+right instrument for this entire bug class, because the geometry table has a `mapped` column - the
+ground truth for what dom0 actually shows, which is what both retracted theories were guessing at.
+
+win11-app, Notepad open:
+
+    id         x    y    w    h    override mapped name
+    0x4e00188  0    0    5120 1440 0        0      VMapp command        <- screen window, NOT mapped
+    0x4e00189  4740 1090 364  289  1        1      New notification     <- toast, correctly kept
+    0x4e0018d  350  363  3826 1016 0        1      Untitled - Notepad
+
+The screenshot agrees: Notepad renders normally, the toast renders bottom-right, nothing black. The
+full-screen window IS present but `mapped=0`, i.e. the agent is correctly not showing it - which is
+precisely the surface a black window would have to be.
+
+So GWeck's symptom is definitively NOT reproduced here, and the two mechanisms I proposed are both
+dead. Also worth noting for 2A-chrome 3c: the toast is mapped `override_redirect=1` and renders -
+the behaviour that filter work is required to preserve.
+
+**Instrument note, since this is the third time today:** check the END STATE first - what is mapped,
+what is on screen - before reasoning from log fragments. `qtest fullshot` answers both in one call.
