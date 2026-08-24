@@ -17073,3 +17073,35 @@ the one that fixes the class, since any future desktop bounce has the same effec
 
 Ask GWeck for `C:\ProgramData\QubesLogs\gui-agent-*.log` rather than another winenum - winenum cannot
 show this, and the log names it outright.
+
+### Same day, immediately after — RETRACT the Winlogon theory too. We have NOT reproduced GWeck's bug
+
+Opening Notepad in the same session:
+
+    win=0 -> win=2
+    AddAllWindows: foreground -> 0x301a6, re-mapping to raise it in dom0
+    SendWindowMap: Mapping window 0x301a6
+
+The agent enumerates and maps correctly. `win=0` before that meant only that NO USER WINDOW WAS
+OPEN - Progman and the taskbar are correctly not mapped. So "it never re-enumerates, win=0 forever"
+is wrong, and so was the Progman-filter theory before it. Two wrong mechanisms in a row on this bug,
+both from reading log fragments instead of checking the end state: is a window mapped, and is
+anything actually black.
+
+What was actually established on win11-app, and no more than this:
+  - Progman exists with attributes byte-identical to GWeck's log, and is NOT mapped here;
+  - the Winlogon/`EnumWindows` 0x12A race at startup is real and logged - but the agent RECOVERED
+    from it (`from=Winlogon,to=Default` at line 484) and window mapping works afterwards;
+  - `0x887a0026` keyed-mutex abandon fired twice this boot with 4 duplication recreates - the
+    prerequisite bug CLAUDE.md already names, worth fixing on its own merits;
+  - no evidence of a black window on our rig.
+
+So: the INGREDIENTS reproduce, the SYMPTOM does not. The Winlogon enumeration race is still worth
+hardening (re-enumerate on desktop transition, treat 0x12A as retryable) because on a slower or
+differently-timed boot it plausibly does not recover - but that is a hypothesis, not this bug's
+proven cause, and it must not be presented to GWeck as the answer.
+
+Blocked on one thing I cannot do from this qube: SEE the qube's windows. `tools/qtest shot` is bound
+to the retired win-idd-test and returns an empty tar for win11-app, so I cannot confirm visually
+whether a black window is present. The owner has the display; one look at win11-app's windows settles
+whether we are chasing a reproduction we do not have.
