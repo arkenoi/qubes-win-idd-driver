@@ -17022,3 +17022,54 @@ DummyDWMListenerWindow/EdgeUiInputTopWndClass stubs, and does NOT match
 NOT YET IMPLEMENTED - the (a)/(b) question above should be settled first, because if it is (b) then
 the same screen-size arithmetic is mis-gating every fullscreen decision on an IDD guest, which is a
 bigger fish than Progman.
+
+## 2026-08-24 — GWeck's black window REPRODUCED locally, and it is NOT the Progman filter. RETRACTION + real mechanism
+
+Reproduced on our own `win11-app` (AppVM on win11-tpl). Progman is present with byte-identical
+attributes to GWeck's log - same class, `style=0x96000000`, `ex=0x00200080`, not cloaked, no owner,
+exactly screen-sized (5120x1440 here against his 1920x1200):
+
+    0x000100F8|cls=Progman|vis=1|cloaked=0|owner=0x00000000|flags=POPUP TOOLWIN|rect=0,0,5120,1440
+
+**RETRACTION of the entry above.** I attributed the black window to the shell-overlay filter letting
+Progman through because it lacks `WS_EX_TRANSPARENT`. That is wrong. The agent log settles it:
+`ShouldAcceptWindow` logged **zero** decisions this boot, and Progman's handle appears nowhere -
+neither accepted nor rejected. The predicate never ran on it. The filter gap I described is real as
+a reading of the code, but it is not what produces this bug.
+
+**The real mechanism, from the agent's own log, in order:**
+
+    line 184  AttachToInputDesktop: tid=4328, from=Default, to=Winlogon
+    line 188  AddAllWindows: EnumWindows failed with error 0x12a (ERROR_TOO_MANY_POSTS)
+    line 189  AddAllWindows: event=enumfail, threadDesktop=Winlogon, inputDesktop=Winlogon
+    line 484  AttachToInputDesktop: tid=4328, from=Winlogon, to=Default
+    (no AddAllWindows after line 484 - AddAllWindows ran exactly twice, both before the switch back)
+
+`EnumWindows` enumerates the CALLING THREAD'S desktop. The agent's only full sweep ran while it was
+parked on the **Winlogon** desktop, where no user window exists, so it failed - and after returning
+to Default it never re-enumerated. Every subsequent frame reports `win=0`: no application window is
+mapped for the rest of the session.
+
+That accounts for every symptom GWeck lists, which the Progman theory only half covered:
+  - black, and appears immediately after AppVM start (the race is during startup, before any
+    interaction) - there are simply no windows mapped, so nothing is painted;
+  - minimizable but NOT closable - it is not an application window at all;
+  - normal windows lose Windows-key response while the black one keeps it - input is going to the
+    real desktop while the mapped surface is stale;
+  - AppVM-only in his testing - a template and an AppVM reach the login/desktop transition on
+    different timings, and this is a race against that transition.
+
+**Trigger chain.** Immediately before the desktop switch: `GetFrame: initial GetFrameDirtyRects
+failed with error 0x887a0026: The keyed mutex was abandoned` followed by `RecreateDuplication`.
+That is the PREREQUISITE BUG already named in CLAUDE.md Phase 2B-resize - the same keyed-mutex
+abandon on a seamless/resolution transition. It occurred twice this boot, with 4 duplication
+recreates.
+
+**Fix direction (not yet implemented):** re-run `AddAllWindows` after any successful
+`AttachToInputDesktop` transition rather than only at startup, and treat `EnumWindows` returning
+0x12A as retryable rather than terminal - 0x12A after EnumWindows is a well-known spurious
+GetLastError. Either alone would have recovered this session; the desktop-change re-enumeration is
+the one that fixes the class, since any future desktop bounce has the same effect.
+
+Ask GWeck for `C:\ProgramData\QubesLogs\gui-agent-*.log` rather than another winenum - winenum cannot
+show this, and the log names it outright.
