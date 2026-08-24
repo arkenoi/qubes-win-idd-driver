@@ -16972,3 +16972,53 @@ connects showing no serialisation. Everything measured today ran through fw-net 
 submitted build, including this qube's own traffic.
 
 Texts kept at /home/user/mirage-gso/upstream/ (PR-BODY-*.md, 05-issue-230-followup.md).
+
+## 2026-08-24 — GWeck's open bug (forum post 85): the black window is Progman, identified from his winenum log
+
+Thread state as of post 85 (2026-08-23). 4.3.3 is largely good in the field: upgrade 4.3.2 -> 4.3.3
+on Win10 22H2, fresh installs on Win10 22H2 and Win11 25H2, native menu working, AppVMs working,
+network working. ONE open defect: a "black window" in an AppVM, minimizable but NOT closable,
+present immediately after AppVM start before any interaction, and - the useful detail - normal
+windows lose their Windows-key response while the black window keeps it.
+
+**It is `Progman`.** From the winenum.txt.gz he attached to post 85 (75 windows, 12 visible), exactly
+one visible window matches every symptom:
+
+    0x00010102|cls=Progman|vis=1|cloaked=0|owner=0x00000000|
+      flags=POPUP TOOLWIN|style=0x96000000|ex=0x00200080|rect=0,0,1920,1200|title=Program Manager
+
+Progman IS the desktop window, which explains the whole symptom set at once: it exists from shell
+start (so it appears before any interaction), it ignores WM_CLOSE (minimizable but not closable), and
+it holds the shell's Windows-key handling (so the black window responds to it and normal windows do
+not). `Shell_TrayWnd` in the same log sits at 0,1152,1920,1200, so the guest screen is 1920x1200 and
+Progman covers it exactly.
+
+**Why it renders black:** `ex=0x00200080` = `WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW`. With no
+redirection surface `PrintWindow` cannot capture it, so whatever the agent sends dom0 is empty.
+
+**Why our filter lets it through:** the shell-overlay reject in `ShouldAcceptWindow`
+(gui-agent/main.c ~3243) requires ALL THREE of `WS_EX_TRANSPARENT + WS_EX_NOREDIRECTIONBITMAP +
+WS_EX_TOOLWINDOW`. Progman has the last two but NOT `WS_EX_TRANSPARENT`, so it fails the test and is
+accepted. The comment there says the narrowness is deliberate - it was written for the Win11
+drag/snap overlay, which is click-through - so this is a gap in coverage, not a regression.
+
+**Open question, one datum away.** The borderless-fullscreen gate (~3165) should also have caught it:
+Progman has no `WS_CAPTION` and is exactly screen-sized. It fires only when
+`data->Width/Height >= 99% of g_ScreenWidth/Height`, so either (a) `service.gui-fullscreen` is on for
+that qube, or (b) `g_ScreenWidth/Height` is LARGER than 1920x1200 - which is exactly what an ACTIVE
+second IDD monitor does to the desktop bounding box (the hazard CLAUDE.md's Phase 1B already names).
+GWeck runs the IDD build, so (b) is the live suspicion. His agent debug log would say outright, since
+both branches log their rejection; winenum alone cannot distinguish them.
+
+**Proposed predicate, and the trap it must avoid.** "Reject NOREDIRECTIONBITMAP" is WRONG: toasts are
+`Windows.UI.Core.CoreWindow` with `TOPMOST|NOREDIRECTIONBITMAP` (gui-agent/toastcrop.h:43,
+toastcrop.c:859 gates on exactly that pair), and CLAUDE.md 2A-chrome 3c requires toasts be KEPT. The
+discriminator that separates them is TOPMOST: Progman is `POPUP TOOLWIN` with no TOPMOST, a toast is
+TOPMOST. So `NOREDIRECTIONBITMAP && TOOLWINDOW && !TOPMOST` catches Progman and cannot touch a toast.
+Checked against all 12 visible windows in his log: it matches Progman and the (already cloaked)
+DummyDWMListenerWindow/EdgeUiInputTopWndClass stubs, and does NOT match
+`XamlExplorerHostIslandWindow_WASDK` (TOPMOST) or any normal app window.
+
+NOT YET IMPLEMENTED - the (a)/(b) question above should be settled first, because if it is (b) then
+the same screen-size arithmetic is mis-gating every fullscreen decision on an IDD guest, which is a
+bigger fish than Progman.
