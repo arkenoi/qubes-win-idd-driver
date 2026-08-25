@@ -17209,3 +17209,42 @@ stock network-setup.exe.
 
 Verified on the shipping build: AppVM Running, first working 10 MB transfer at 17 s, 0 failures in
 21 samples.
+
+## 2026-08-25 — DO NOT ANNOUNCE 4.3.4: end-to-end test says it does NOT fix the AppVM shutdown
+
+Tested the SHIPPED artifact the way a user installs it, not through our pipeline:
+win10-tpl destroyed and rebuilt as a clean TemplateVM cloned from the pristine never-networked
+win10-clean (stock QWT 4.2.2, `NICS` empty, no QubesPvNic task, stock network-setup.exe present),
+then the released `qwt-ng-4.3.4-agente3177a5-setup.tar.gz` extracted and installed in-guest.
+
+**The installer's own fix worked:**
+
+    11:07:50 QwtngNetSetup registered=True; stock network-setup.exe present=False
+    11:07:50 LogDir -> Q:\Qubes Logs
+    11:07:51 PV NIC unplug latch armed for shutdown (NICS=1)
+    "package_version":"4.3.4+agent.e3177a5b6da2","pvnic_prime":"seeded","pvnic_latch":"armed"
+
+**And the AppVM still dies.** Fresh AppVM created on that template: Running for 75 s, then Transient
+-> Halted at ~90 s. It is not a first-boot-only effect - it repeats, with a NEW gui-agent log every
+~60 s (11:17, 11:18, 11:19, 11:21, 11:22, 11:23, 11:24), i.e. a reboot loop that Qubes eventually
+halts.
+
+**The initiator, from the guest's own System log:**
+
+    11:25:36 id=1074  C:\Windows\System32\xenbus_monitor_9_1_0_0.exe has initiated the RESTART
+    11:17:50 id=1074  C:\Windows\System32\xenagent_9_1_0_0.exe   has initiated the SHUTDOWN
+
+So the reboot is demanded by the PV drivers' own xenbus_monitor - the AutoReboot path - not by
+anything in the gui agent, and our installer explicitly records `"xenbus_autoreboot":true`.
+
+**And the latch value is wrong:** the AppVM reads `NICS=2`, not 1. Our service and task both write 1,
+so something overwrites it during the PV NIC install. If 2 does not mean "unplug the emulated NIC",
+the emulated NIC survives, xenvif's NET child demands a restart on every boot, xenbus_monitor
+performs it, and the qube is halted - which is exactly the observed loop and exactly the field report.
+
+Difference from every AppVM we tested successfully all week: those templates were built by our
+pipeline, which never activates the IDD driver. This one went through the SHIPPED installer, which
+records `"idd_driver":"activated"`. That is the untested combination, and it is what users get.
+
+4.3.4 fixes a real defect (templates shipped un-latched) but it is NOT the defect behind
+"AppVM shuts down seconds after starting". The release must not be announced as fixing that.
