@@ -42,7 +42,11 @@ bootwait(){ local m=${1:-15} logfn=${2:-:} i dead=0
 wait_install(){ local m=${1:-20} logfn=${2:-:} i
   for i in $(seq 1 $((m*3))); do
     echo "$(qstate)"|grep -qi Halted && { $logfn "  halted (reboot)"; return 0; }
-    local tail; tail=$(qrun 'cmd /c "type C:\qwt-improved-install.log 2>nul | findstr /C:\"FATAL\" /C:\"FAILED with\" /C:\"the C: boot disk is on the Xen PV\" /C:\"INSTALL COMPLETE\" /C:\"STAGE 2 COMPLETE\""')
+    # VMShell ECHOES the command line into the transcript, and the findstr arguments contain
+    # every marker being searched for - so the raw output ALWAYS matches its own echo (found
+    # 2026-08-25: a run with NO install log at all reported "install FAILED"). Strip the echoed
+    # command (the only line containing 'findstr') before judging.
+    local tail; tail=$(qrun 'cmd /c "type C:\qwt-improved-install.log 2>nul | findstr /C:\"FATAL\" /C:\"FAILED with\" /C:\"the C: boot disk is on the Xen PV\" /C:\"INSTALL COMPLETE\" /C:\"STAGE 2 COMPLETE\""' | grep -av findstr)
     if echo "$tail" | grep -qiE 'FATAL|FAILED with|boot disk is on the Xen PV'; then $logfn "  install FAILED (no reboot) - detected fast"; return 2; fi
     if echo "$tail" | grep -qiE 'INSTALL COMPLETE|STAGE 2 COMPLETE'; then $logfn "  install completed in place (no final reboot)"; return 0; fi
     sleep 20

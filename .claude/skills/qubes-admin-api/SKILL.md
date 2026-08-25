@@ -41,7 +41,7 @@ I once told the user "TemplateVM creation is dom0-only" — it is not, and the c
 | `admin.vm.Start` / `.Shutdown` / `.Kill` / `.CurrentState` / `.Stats` | allowed (this is what `tools/qtest` uses) |
 | `admin.vm.volume.Clone` | **refused** |
 | `admin.vm.device.pci.List` | **refused** |
-| `admin.vm.Remove` | **unknown — never probed against a real qube.** Assume allowed; treat as destructive |
+| `admin.vm.Remove` | allowed (2026-08-25: `qvm-remove -f win10-app` succeeded). Destructive — halted, disposable qubes only |
 
 So the policy is a curated allowlist, not blanket admin: check, don't assume, in either direction.
 
