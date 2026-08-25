@@ -39,6 +39,11 @@ Upgrading a guest that already runs stock QWT or an older build of this package 
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction (validated end to end; see the release notes).
 
+**Created your Windows qube by hand** (without `qvm-create-windows-qube` or the dom0 RPM)? Run
+`qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800` in dom0 on the
+template/standalone (AppVMs inherit both), or the Qubes Update tool fails against the qube
+(`mkdir -p /run/qubes-update/& exit` in cmd.exe). Details in the package README.
+
 **What changed in 4.3.3:** three defects reported from real installs (`install.cmd /iddoff`
 failing with `C:\iddoff`, a dead Windows key, and a black window on the first boot after
 install), the Windows-update path closed end to end, and the boot/shutdown flash removed.
