@@ -17482,3 +17482,9 @@ pattern, which blinded a monitor and a watchdog.
 Residual for next release: retry-clean updater relay deploy on upgrades; clear the orphaned
 csrss dialog wedge class entirely remains impossible by design (csrss owns it; prevention is
 the fix and is what shipped).
+
+**4.3.6 notes amended (owner-approved 2026-08-25):** superseded-by-4.3.7 banner (naming the
+dialog and warning against clicking Yes), and the two wrong claims corrected in place with a
+dated correction note ("zero reboot requests logged" -> zero reboots *initiated*; "pristine
+Windows image" -> a template carrying an earlier QWT-NG build). Owner posted the forum reply
+themselves.
