@@ -248,23 +248,47 @@ function Test-TestSigningActive {
     return ($v -and $v -match 'TESTSIGNING')
 }
 
-function Set-XenbusAutoReboot {
+function Disable-XenbusMonitor {
+    param([string]$Why = '')
     # The xenbus_monitor service (xenbus/src/monitor/monitor.c PromptForReboot) pops a modal
-    # Yes/No - "Xen PV Storage Host Adapter needs to restart the system to complete
-    # installation" - whenever a PV driver install wants a reboot. It hangs an unattended
-    # install, and on a seamless guest the user may not even be able to act on it. The
-    # monitor's own TryAutoReboot reads REG_DWORD AutoReboot under its Parameters key:
-    # non-zero => reboot SILENTLY, prompt never shown.
-    # Writing the key when the SERVICE does not exist yet is fine and is the point: the value
-    # is read at prompt time, so it must be in place before the install that would prompt.
-    # Silent auto-reboot on a PV-driver change is the right behaviour for a qube anyway - the
-    # same no-interactive-dialog philosophy as autologon and the disabled lock screen.
+    # Yes/No - "... needs to restart the system to complete installation" - whenever a PV
+    # driver install wants a reboot. It hangs an unattended install, and on a seamless guest
+    # the user may not even be able to act on it (forum 42717 post 33).
+    #
+    # Until 4.3.6 the answer was AutoReboot=1 (silent reboot instead of the prompt). The
+    # 2026-08-25 review showed why that cannot ship: xenvbd re-files its reboot request at
+    # EVERY AppVM boot (a volatile root forgets the PnP configure that would satisfy it), so
+    # the inherited AutoReboot=1 became the field's AppVM reboot loop - and the 4.3.6
+    # AutoReboot=0 alone left the request answered by a modal csrss "Xen" prompt on every
+    # AppVM boot, with the monitor wedged STOP_PENDING behind it.
+    #
+    # Nothing in the unattended QWT flow needs the monitor at all: this installer performs its
+    # own reboot/shutdown at the right moments (stage 1's shutdown /r, the final install
+    # shutdown), so the service is stopped and DISABLED - no prompt, no surprise reboot. The
+    # per-boot payload (pvnic-selfprime) re-asserts this on every boot as the belt for driver
+    # package upgrades that re-register the service. AutoReboot=0 stays written as the second
+    # belt in case something re-enables the service anyway.
     & reg.exe add 'HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' `
-        /v AutoReboot /t REG_DWORD /d 1 /f /reg:64 | Out-Null
-    $ok = ($LASTEXITCODE -eq 0)
-    Write-Log "xenbus_monitor AutoReboot=1 set (silent PV-driver reboot, no modal dialog) rc=$LASTEXITCODE"
-    $script:Result.detail.xenbus_autoreboot = $ok
-    return $ok
+        /v AutoReboot /t REG_DWORD /d 0 /f /reg:64 | Out-Null
+    $svc = Get-Service xenbus_monitor -ErrorAction SilentlyContinue
+    if ($svc) {
+        & sc.exe config xenbus_monitor start= disabled 2>&1 | Out-Null
+        if ($svc.Status -ne 'Stopped') {
+            & sc.exe stop xenbus_monitor 2>&1 | Out-Null
+            Start-Sleep -Milliseconds 500
+            if ((Get-Service xenbus_monitor -ErrorAction SilentlyContinue).Status -ne 'Stopped') {
+                # Mid-prompt the service cannot stop (measured: STOP_PENDING for hours); kill
+                # it. An already-shown dialog is csrss's and dies with this boot's session.
+                Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue |
+                    Stop-Process -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+    $state = if ($svc) { "was $($svc.StartType)/$($svc.Status)" } else { 'service not present yet' }
+    $reason = if ($Why) { " [$Why]" } else { '' }
+    Write-Log "xenbus_monitor disabled, AutoReboot=0 ($state)$reason"
+    $script:Result.detail.xenbus_monitor = 'disabled'
+    return $true
 }
 
 $script:TaskName = 'QwtImprovedSetup'
@@ -633,9 +657,9 @@ function Invoke-Stage1 {
 
     # Earliest possible point: a guest that ALREADY has PV drivers can raise the
     # xenbus_monitor reboot prompt during stage 1's uninstall of a previous QWT, long before
-    # stage 2 runs. The key is read at prompt time and costs nothing when no PV driver is
-    # ever installed.
-    Set-XenbusAutoReboot | Out-Null
+    # stage 2 runs. A stopped, disabled monitor cannot prompt (and cannot silently reboot
+    # mid-uninstall either); stage 1 performs its own shutdown /r when it is actually time.
+    Disable-XenbusMonitor -Why 'stage 1: before uninstall of a previous QWT' | Out-Null
 
     # --- certificates -------------------------------------------------------------
     # Root  : makes the self-signed publisher chain valid.
@@ -1065,12 +1089,12 @@ function Invoke-Stage2 {
     if ($script:SameVersionReinstall) { $msiArgs += 'REINSTALL=ALL' }
     $msiArgs += @('REBOOT=ReallySuppress', 'REINSTALLMODE=amus', 'MSIFASTINSTALL=7', '/l*v', "`"$msiLog`"")
     Write-Log "running msiexec ADDLOCAL=$addlocal REINSTALL=$(if($script:SameVersionReinstall){'ALL'}else{'(none)'}) (verbose log: $msiLog)"
-    # BEFORE msiexec, not after. The xenbus_monitor service pops its modal Yes/No the moment a
-    # PV driver install asks for a reboot - i.e. DURING this msiexec - so setting AutoReboot
-    # afterwards is too late for the very install that raises it. Observed live on 2026-08-14:
-    # the dialog was sitting on the dom0 desktop mid-install, which is the field report in
-    # forum 42717 post 33 ("the PV disk driver installer prompt is not clickable").
-    Set-XenbusAutoReboot
+    # BEFORE msiexec, not after. The running xenbus_monitor pops its modal Yes/No the moment a
+    # PV driver install asks for a reboot - i.e. DURING this msiexec. Observed live on
+    # 2026-08-14: the dialog was sitting on the dom0 desktop mid-install, which is the field
+    # report in forum 42717 post 33 ("the PV disk driver installer prompt is not clickable").
+    # A monitor that is stopped and disabled before msiexec starts can never show it.
+    Disable-XenbusMonitor -Why 'before msiexec'
 
     # RE-ARM THE INBOX STORAGE DRIVERS before the MSI touches the PV disk driver.
     # MEASURED 2026-08-15, upgrading a genuine stock QWT 4.2.2 guest to this package: the boot
@@ -1109,9 +1133,9 @@ function Invoke-Stage2 {
     $script:Result.detail.msiexec_rc = $p.ExitCode
     $script:Result.detail.addlocal = $addlocal
 
-    # Re-assert AFTER the install too: the MSI can lay the service down fresh, and a value
-    # written before it existed would be lost with the old service key.
-    Set-XenbusAutoReboot
+    # Re-assert AFTER the install too: the MSI lays the service down fresh (auto-start, new
+    # service key), losing both the disable and the AutoReboot value written before it.
+    Disable-XenbusMonitor -Why 'after msiexec: MSI re-registered the service'
 
     # --- prove the install put OUR agent on disk ------------------------------------
     # Without this the script would report success for an install that silently kept a
@@ -1591,25 +1615,9 @@ public static class QdbPrime {
         #
         # Arming here is safe in both directions: the tasks are already registered above, so the
         # forbidden latched-without-applier state cannot arise, and an AppVM re-arms per boot anyway.
-        # TURN AutoReboot BACK OFF before this template ships.
-        #
-        # Set-XenbusAutoReboot set it to 1 so THIS install could reboot silently instead of hanging
-        # on xenbus_monitor's modal prompt. That job is done here. Leaving it at 1 is what makes
-        # every AppVM built on this template unusable: an AppVM's root is VOLATILE, so the PV driver
-        # install re-runs on every boot, asks for a reboot on every boot, and with AutoReboot=1 it
-        # SILENTLY gets one - the guest reboots until Qubes halts it. Measured 2026-08-25 with the
-        # released 4.3.4 and again with 4.3.5: a fresh AppVM on a cleanly installed template dies at
-        # t+90 s, System log 1074 "xenbus_monitor ... has initiated the restart".
-        #
-        # Doing it per-boot from the payload is too late - the reboot demand beats the scheduled
-        # task, which does not run until ~25-29 s. The value has to SHIP as 0.
-        try {
-            reg add "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters" /v AutoReboot /t REG_DWORD /d 0 /f /reg:64 | Out-Null
-            $ar = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' -EA SilentlyContinue).AutoReboot
-            Write-Log "xenbus_monitor AutoReboot reset to 0 for shipping (read back: $ar)"
-            $script:Result.detail.xenbus_autoreboot_final = $ar
-        } catch { Write-Log "could not reset AutoReboot: $($_.Exception.Message)" 'WARN' }
-
+        # (The xenbus_monitor shipping state - disabled, AutoReboot=0 - is asserted below for EVERY
+        # qube class, not just templates; 4.3.6 had it in this branch only, which left StandaloneVMs
+        # with silent-AutoReboot permanently armed.)
         try {
             reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /t REG_DWORD /d 1 /f | Out-Null
             reg add "HKLM\SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001&DEV_VIF" /f | Out-Null
@@ -1629,6 +1637,24 @@ public static class QdbPrime {
         Write-Log "not a TemplateVM (class='$primeClass') - skipping netvm-free PV NIC priming (template-only)"
         $script:Result.detail.pvnic_prime = 'skipped-non-template'
     }
+
+    # SHIPPING STATE, every qube class: xenbus_monitor disabled, AutoReboot=0, no reboot request
+    # left parked. The msiexec earlier in this stage re-registered the service auto-start; this is
+    # the assertion that outlives the install. The per-boot payload re-asserts it on templates and
+    # AppVMs; a StandaloneVM (no payload) relies on exactly this line - 4.3.6 missed it there.
+    # The Request key holds whatever reboot demand the install itself parked (xenvbd's, typically);
+    # clearing it costs nothing - a demand that still matters is re-filed by the driver on the next
+    # boot that needs it, and the next boot completes the binding anyway (that is the documented
+    # ONE-shutdown handover).
+    try {
+        Disable-XenbusMonitor -Why 'final act: shipping state' | Out-Null
+        & reg.exe delete 'HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request' /f /reg:64 2>$null | Out-Null
+        $arFinal = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' -EA SilentlyContinue).AutoReboot
+        $xbmFinal = Get-Service xenbus_monitor -EA SilentlyContinue
+        Write-Log "xenbus_monitor shipping state: AutoReboot=$arFinal start=$($xbmFinal.StartType) status=$($xbmFinal.Status)"
+        $script:Result.detail.xenbus_autoreboot_final = $arFinal
+        $script:Result.detail.xenbus_monitor_final = "$($xbmFinal.StartType)/$($xbmFinal.Status)"
+    } catch { Write-Log "could not assert xenbus_monitor shipping state: $($_.Exception.Message)" 'WARN' }
 
     $script:Result.ok = $true
     $script:Result.reboot_needed = $true

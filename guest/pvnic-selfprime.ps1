@@ -102,6 +102,14 @@ public class QwtngNetSetup : ServiceBase {
     static extern IntPtr qdb_open(IntPtr path);
     [DllImport("qubesdb-client.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
     static extern IntPtr qdb_read(IntPtr h, string path, out uint len);
+    [DllImport("qubesdb-client.dll", CallingConvention = CallingConvention.Cdecl)]
+    static extern void qdb_close(IntPtr h);
+    // qdb_free is the DLL's own allocator's free, exported for exactly this case: a caller on a
+    // different CRT (verified exported by the shipped DLL, round-trip tested 2026-08-25). Every
+    // qdb_read buffer must go through it - the 4.3.6 build leaked all of them, plus one qdb_open
+    // connection per 2 s reconcile tick, in a permanent SYSTEM service.
+    [DllImport("qubesdb-client.dll", CallingConvention = CallingConvention.Cdecl)]
+    static extern void qdb_free(IntPtr p);
 
     const string LOG   = @"C:\ProgramData\QubesNetSetup.log";
     const string STAMP = @"C:\ProgramData\QubesNetSetup.applied";
@@ -118,8 +126,9 @@ public class QwtngNetSetup : ServiceBase {
     }
     static string Rd(IntPtr h, string k) {
         uint len; IntPtr p = qdb_read(h, k, out len);
-        if (p == IntPtr.Zero || len == 0) return null;
-        return Marshal.PtrToStringAnsi(p, (int)len);
+        if (p == IntPtr.Zero) return null;
+        try { return len == 0 ? null : Marshal.PtrToStringAnsi(p, (int)len); }
+        finally { qdb_free(p); }
     }
     static string XenGuid() {
         const string cls = @"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}";
@@ -185,9 +194,11 @@ public class QwtngNetSetup : ServiceBase {
                 if (h == IntPtr.Zero) System.Threading.Thread.Sleep(500);
             }
             if (h != IntPtr.Zero) {
-                ip = Rd(h, "/qubes-ip"); mask = Rd(h, "/qubes-netmask"); gw = Rd(h, "/qubes-gateway");
-                d1 = Rd(h, "/qubes-primary-dns"); d2 = Rd(h, "/qubes-secondary-dns");
-                Log("qubesdb ip=" + ip + " gw=" + gw);
+                try {
+                    ip = Rd(h, "/qubes-ip"); mask = Rd(h, "/qubes-netmask"); gw = Rd(h, "/qubes-gateway");
+                    d1 = Rd(h, "/qubes-primary-dns"); d2 = Rd(h, "/qubes-secondary-dns");
+                    Log("qubesdb ip=" + ip + " gw=" + gw);
+                } finally { qdb_close(h); }
             } else Log("qubesdb never opened; using cache");
         } catch (Exception e) { Log("qdb EXCEPTION " + e.Message); }
 
@@ -297,14 +308,25 @@ public class QwtngNetSetup : ServiceBase {
 
     static void Reconcile() {
         string lastTag = null;
+        // ONE connection for the life of the service. The 4.3.6 build opened a fresh one every
+        // 2 s tick and never closed any (no qdb_close import existed) - ~43k leaked connections
+        // and handles per day into qubesdb-daemon, until opens fail for every consumer in the
+        // guest. Reopen only when the connection is demonstrably dead.
+        IntPtr h = IntPtr.Zero;
         while (true) {
             System.Threading.Thread.Sleep(2000);
             try {
-                IntPtr h = qdb_open(IntPtr.Zero);
+                if (h == IntPtr.Zero) h = qdb_open(IntPtr.Zero);
                 if (h == IntPtr.Zero) continue;
                 string ip = Rd(h, "/qubes-ip"), mask = Rd(h, "/qubes-netmask"), gw = Rd(h, "/qubes-gateway");
                 string d1 = Rd(h, "/qubes-primary-dns"), d2 = Rd(h, "/qubes-secondary-dns");
-                if (ip == null || mask == null || gw == null) continue;
+                if (ip == null || mask == null || gw == null) {
+                    // No netvm (open works, /qubes-ip absent) reads the same as a DEAD connection
+                    // (daemon restarted). /name always exists, so it separates the two: dead ->
+                    // close and reopen next tick; no netvm -> keep the connection, nothing to do.
+                    if (Rd(h, "/name") == null) { qdb_close(h); h = IntPtr.Zero; }
+                    continue;
+                }
                 string guid = XenGuid();
                 if (guid == null) continue;
                 if (ConfigIsRight(guid, ip, gw)) { lastTag = ip + "|" + mask + "|" + gw; continue; }
@@ -323,21 +345,44 @@ public class QwtngNetSetup : ServiceBase {
     }
 }
 '@ | Set-Content -Path $svcSrc -Encoding ASCII
-    & $csc /nologo /target:exe /out:$svcOut /reference:System.ServiceProcess.dll $svcSrc 2>&1 | Out-Null
-    if (-not (Test-Path $svcOut)) { $fail['netsetup_build'] = 'csc produced no output' }
+    # A stale exe must not mask a failed compile: $svcOut persists in SYSTEM's TEMP on a template
+    # root, and inferring success from Test-Path alone would ship the PREVIOUS build's binary
+    # whenever csc fails (found in the 2026-08-25 review). Delete first, keep csc's own words.
+    Remove-Item $svcOut -Force -EA SilentlyContinue
+    $cscOut = & $csc /nologo /target:exe /out:$svcOut /reference:System.ServiceProcess.dll $svcSrc 2>&1
+    if (-not (Test-Path $svcOut)) {
+        $fail['netsetup_build'] = 'csc failed: ' + ((@($cscOut) | Select-Object -First 3) -join ' | ')
+    }
     else {
         try {
             & sc.exe stop QwtngNetSetup 2>&1 | Out-Null
             & sc.exe delete QwtngNetSetup 2>&1 | Out-Null
-            Start-Sleep -Milliseconds 700
             Copy-Item $svcOut $svcExe -Force -EA Stop
-            & sc.exe create QwtngNetSetup binPath= "`"$svcExe`"" start= auto DisplayName= "Qubes PV NIC address applier" 2>&1 | Out-Null
-            Remove-Item $nsPath -Force -EA SilentlyContinue
-            Remove-Item (Join-Path $bindir 'network-setup.exe.legacy') -Force -EA SilentlyContinue
+            # 'sc delete' on a service that is still stopping only MARKS it for delete, and
+            # 'sc create' then fails with 1072 (ERROR_SERVICE_MARKED_FOR_DELETE). One fixed
+            # sleep is a hope, not a fix - retry over ~10 s, and on 1073 (still exists: the
+            # earlier delete never took) delete again and go around.
+            $created = $false; $cr = ''
+            for ($i = 0; $i -lt 10 -and -not $created; $i++) {
+                Start-Sleep -Milliseconds 1000
+                $cr = (& sc.exe create QwtngNetSetup binPath= "`"$svcExe`"" start= auto DisplayName= "Qubes PV NIC address applier" 2>&1 | Out-String)
+                if ($LASTEXITCODE -eq 0) { $created = $true }
+                elseif ($cr -match '\b1073\b') { & sc.exe delete QwtngNetSetup 2>&1 | Out-Null }
+            }
             $q = (& sc.exe qc QwtngNetSetup 2>&1 | Out-String)
-            Write-Output ("QwtngNetSetup registered=" + ($q -notmatch 'does not exist') +
+            $registered = $created -and ($q -notmatch 'does not exist')
+            if ($registered) {
+                # Only after the replacement demonstrably exists may the stock applier go. The
+                # 4.3.6 order deleted first and swallowed the create, so a failed registration
+                # shipped a template with NO network applier at all and reported ok=true.
+                Remove-Item $nsPath -Force -EA SilentlyContinue
+                Remove-Item (Join-Path $bindir 'network-setup.exe.legacy') -Force -EA SilentlyContinue
+                if (Test-Path $nsPath) { $fail['netsetup_delete'] = 'stock binary still present' }
+            } else {
+                $fail['netsetup_register'] = 'sc create failed after retries: ' + $cr.Trim()
+            }
+            Write-Output ("QwtngNetSetup registered=" + $registered +
                           "; stock network-setup.exe present=" + (Test-Path $nsPath))
-            if (Test-Path $nsPath) { $fail['netsetup_delete'] = 'stock binary still present' }
         } catch { $fail['netsetup_install'] = $_.Exception.Message }
     }
 }
@@ -376,11 +421,55 @@ reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /t REG_DWORD
 reg add "HKLM\SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001&DEV_VIF" /f | Out-Null
 if ($RearmOnly) { L 'rearm-only trigger: latch re-armed'; exit 0 }
 
-# LogDir is global to all QWT modules; keep it bounded (template root is persistent).
+# LogDir now points at the PRIVATE volume (Q:\Qubes Logs), which PERSISTS - so that is the
+# directory that needs bounding, on templates and AppVMs alike. The 4.3.6 build kept pruning only
+# C:\ProgramData\QubesLogs, a directory QWT no longer writes to, while the real one grew without
+# bound. The C: prune stays for the residues still written there (this log, QubesNetSetup.log).
 Get-ChildItem 'C:\ProgramData\QubesLogs' -Filter '*.log' -EA SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -Skip 30 | Remove-Item -Force -EA SilentlyContinue
+if (Test-Path 'Q:\Qubes Logs') {
+    Get-ChildItem 'Q:\Qubes Logs' -Filter '*.log' -EA SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -Skip 60 | Remove-Item -Force -EA SilentlyContinue
+}
+# The netsetup service's own flat log on Q: appends forever; cap it by size.
+Get-Item 'Q:\qwtng-netsetup.log' -EA SilentlyContinue |
+    Where-Object { $_.Length -gt 1048576 } | Remove-Item -Force -EA SilentlyContinue
 L "--- run start (boot=$((Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')))"
 L "latch re-armed NICS=$((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug').NICS)"
+
+# 1b. KEEP xenbus_monitor OFF - every qube class, every boot, as early as this payload runs.
+#     Reviewed 2026-08-25: xenvbd re-files its reboot request at EVERY AppVM boot (the Request
+#     key's LastWriteTime equals boot time - the template ships one boot short of settled, and a
+#     volatile root forgets the PnP configure that would satisfy it). With AutoReboot=1 that
+#     request became the reboot loop 4.3.6 fixed; with AutoReboot=0 it becomes a modal csrss
+#     "Xen" prompt on the interactive session, with the monitor wedged STOP_PENDING behind it
+#     (the 4.3.5 'sc stop' could never complete - measured, 4.5 h in that state). Nothing in the
+#     unattended QWT flow needs the monitor: the installer does its own reboots at the right
+#     moments and disables the service as its final act. This per-boot pass is the belt for a
+#     root where a PV driver package upgrade re-registered the service (INF AddService resets
+#     the start type).
+#     UNCONDITIONAL by design: the 4.3.5 gate keyed on qubesdb /type and failed OPEN when
+#     qubesdb was not up yet - exactly the early-boot window this must cover - and it
+#     misclassified StandaloneVMs. No qube class runs an interactive PV-driver install that
+#     would want the prompt; the installer re-enables nothing and needs nothing enabled.
+try {
+    reg add "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters" /v AutoReboot /t REG_DWORD /d 0 /f | Out-Null
+    $xbm = Get-Service xenbus_monitor -EA SilentlyContinue
+    if ($xbm) {
+        & sc.exe config xenbus_monitor start= disabled 2>&1 | Out-Null
+        if ($xbm.Status -ne 'Stopped') {
+            & sc.exe stop xenbus_monitor 2>&1 | Out-Null
+            Start-Sleep -Milliseconds 500
+            if ((Get-Service xenbus_monitor -EA SilentlyContinue).Status -ne 'Stopped') {
+                # Mid-prompt the service cannot stop; kill it. An orphaned dialog, if one was
+                # already up, dies with this boot's session - it never persists across boots.
+                Get-Process -Name 'xenbus_monitor*' -EA SilentlyContinue |
+                    Stop-Process -Force -EA SilentlyContinue
+            }
+        }
+        L "xenbus_monitor enforced off (start=disabled, AutoReboot=0, was $($xbm.StartType)/$($xbm.Status))"
+    } else { L 'xenbus_monitor service not present' }
+} catch { L "xenbus_monitor enforcement failed: $($_.Exception.Message)" }
 
 function Loud($why) {
     L "FAILED: $why"
@@ -464,31 +553,6 @@ function QdbValues {
     if (-not $dns) { $dns = @('10.139.1.1', '10.139.1.2') }
     @{ ip = $ip; prefix = $prefix; gw = $gw; dns = $dns }
 }
-# 1b. ON AN APPVM, TAKE xenbus_monitor OUT OF THE LOOP.
-#     AutoReboot=1 (set by the installer, correct for an unattended TEMPLATE install) turns the
-#     PV-driver "needs to restart" prompt into a SILENT reboot. On an AppVM the root is VOLATILE,
-#     so the driver install re-runs every boot and a reboot can never complete it: the guest
-#     reboots, Qubes counts the resets and halts the qube. Measured 2026-08-25 on a clean template
-#     installed from the released 4.3.4 package - AppVM up 75 s, then Transient -> Halted, a new
-#     gui-agent log every ~60 s, System log 1074 "xenbus_monitor ... has initiated the restart".
-#     The latch is NOT the problem there: that same boot had the PV NIC at CM_PROB_NONE and the
-#     emulated Realtek at CM_PROB_PHANTOM, i.e. correctly unplugged.
-#     A reboot has nothing to complete on a volatile root, so on anything that is not a TemplateVM
-#     the monitor is stopped and disabled. The template keeps it - that is where it earns its place.
-try {
-    $qtype = $null
-    try { $qtype = QdbGet '/type' } catch { }
-    if ($qtype -and $qtype -ne 'TemplateVM') {
-        $ar = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' -EA SilentlyContinue).AutoReboot
-        reg add "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters" /v AutoReboot /t REG_DWORD /d 0 /f | Out-Null
-        & sc.exe config xenbus_monitor start= disabled 2>&1 | Out-Null
-        & sc.exe stop   xenbus_monitor 2>&1 | Out-Null
-        L "qube type '$qtype': xenbus_monitor disabled (was AutoReboot=$ar) - a reboot cannot complete an install on a volatile root"
-    } else {
-        L "qube type '$qtype': leaving xenbus_monitor alone"
-    }
-} catch { L "xenbus_monitor gating failed: $($_.Exception.Message)" }
-
 $script:want = $null
 function Applied {
     $ad = PvAdapter

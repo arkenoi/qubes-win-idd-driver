@@ -129,6 +129,26 @@ wait_alive() {
     return 1
 }
 
+wait_halted() {
+    # Same wall-clock discipline for the other direction. The bare `until Halted; sleep 5` loops
+    # this replaces had no exit at all: a wedged guest (a documented failure mode of this rig) or
+    # a qvm-ls hiccup making state() return empty hung the whole pipeline silently, forever.
+    # After the deadline: kill, then give the kill a moment to land.
+    local vm="$1" deadline=$(( SECONDS + ${2:-300} ))
+    until [ "$(state "$vm")" = Halted ]; do
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            log "  $vm did not halt within the deadline - qvm-kill"
+            qvm-kill "$vm" >/dev/null 2>&1
+            sleep 5
+            [ "$(state "$vm")" = Halted ] && return 0
+            log "  WARNING: $vm still not Halted even after qvm-kill"
+            return 1
+        fi
+        sleep 5
+    done
+    return 0
+}
+
 latch_readback() {
     # Guest-reported latch state via a PUSHED SCRIPT FILE. An inline powershell -Command
     # version of this probe shipped first and returned the concatenation operators as
@@ -262,34 +282,58 @@ install_patched_xenvif() {
     fi
     log "installing patched xenvif from $pkg"
     [ "$(state "$vm")" = Halted ] || timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
-    until [ "$(state "$vm")" = Halted ]; do sleep 5; done
+    wait_halted "$vm" 300 || return 1
     qvm-start "$vm" >/dev/null 2>&1
     wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec for the xenvif install"; return 1; }
     local repo; repo="$(cd "$(dirname "$0")/.." && pwd)"
-    local inc='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
+    # The incoming dir is named after THIS qube - tools/qtest derives it the same way. The
+    # hardcoded 'win-idd-mgmt' this replaces broke the pipeline from any other mgmt qube (or
+    # worse, silently installed a STALE package a previous run had left in that other dir).
+    local inc="${QTEST_INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\$(hostname)}"
     # qubes.Filecopy is NOT ready just because qubes.VMShell answered - measured 2026-08-23, the
     # first run of this step pushed four files, all silently failed to arrive, and pnputil then
-    # reported "Missing or invalid driver package". Push, VERIFY in-guest, retry.
-    local f try landed
+    # reported "Missing or invalid driver package". Push, VERIFY in-guest (every file, by name -
+    # the old `xenvif.*` wildcard could never count xenvif-signer.cer, so cert delivery was
+    # unverified behind a 'delivered N/4' log), retry.
+    local f try landed expect=0
+    for f in xenvif.inf xenvif.sys xenvif.cat xenvif-signer.cer; do
+        [ -f "$pkg/$f" ] && expect=$((expect+1))
+    done
     for try in 1 2 3 4 5; do
         for f in xenvif.inf xenvif.sys xenvif.cat xenvif-signer.cer; do
             [ -f "$pkg/$f" ] && QTEST_VM=$vm "$repo/tools/qtest" push "$pkg/$f" >/dev/null 2>&1
         done
-        landed=$(printf 'dir "%s\\xenvif.*" /b\r\nexit\r\n' "$inc" \
+        landed=$(printf 'dir "%s\\xenvif*" /b\r\nexit\r\n' "$inc" \
                  | timeout 60 qrexec-client-vm "$vm" qubes.VMShell 2>/dev/null | tr -d '\0\r' | grep -ci '^xenvif')
-        [ "${landed:-0}" -ge 3 ] && break
-        log "  push attempt $try delivered ${landed:-0}/4 files; retrying"
+        [ "${landed:-0}" -ge "$expect" ] && break
+        log "  push attempt $try delivered ${landed:-0}/$expect files; retrying"
         sleep 10
     done
-    [ "${landed:-0}" -ge 3 ] || { log "FAIL: xenvif package never reached $vm"; return 1; }
+    [ "${landed:-0}" -ge "$expect" ] || { log "FAIL: xenvif package never reached $vm (${landed:-0}/$expect)"; return 1; }
+    # Install, with each step's success made VISIBLE. certutil's status was never checked before,
+    # so an untrusted signer surfaced later as a misattributed pnputil failure.
     local out
-    out=$(printf 'certutil -addstore -f Root "%s\\xenvif-signer.cer"\r\ncertutil -addstore -f TrustedPublisher "%s\\xenvif-signer.cer"\r\npnputil /add-driver "%s\\xenvif.inf" /install\r\nexit\r\n' \
+    out=$(printf 'certutil -addstore -f Root "%s\\xenvif-signer.cer" && echo CERTROOT_OK\r\ncertutil -addstore -f TrustedPublisher "%s\\xenvif-signer.cer" && echo CERTPUB_OK\r\npnputil /add-driver "%s\\xenvif.inf" /install\r\nexit\r\n' \
               "$inc" "$inc" "$inc" \
           | timeout 400 qrexec-client-vm "$vm" qubes.VMShell 2>/dev/null | tr -d '\0')
-    case "$out" in
-        *"Driver package added successfully"*) log "  patched xenvif installed" ;;
-        *) log "FAIL: pnputil did not report success for xenvif"; return 1 ;;
-    esac
+    case "$out" in *CERTROOT_OK*) : ;; *) log "FAIL: certutil could not add the signer to Root"; return 1 ;; esac
+    case "$out" in *CERTPUB_OK*)  : ;; *) log "FAIL: certutil could not add the signer to TrustedPublisher"; return 1 ;; esac
+    # DO NOT trust pnputil's success string: "Driver package added successfully (Already exists
+    # in the system)" is rc=0 and means it KEPT the driver already in the store - the exact
+    # silent-stale-driver trap the pv-xenvif workflow documents. The only check that means "the
+    # artefact under test is installed" is the DriverStore holding OUR bytes: compare sha256 of
+    # the pushed xenvif.sys against every xenvif.sys in FileRepository.
+    local want_sha have_sha ps
+    want_sha=$(sha256sum "$pkg/xenvif.sys" | cut -d' ' -f1)
+    ps='(Get-ChildItem C:\Windows\System32\DriverStore\FileRepository -Filter xenvif.sys -Recurse -EA SilentlyContinue | Get-FileHash -Algorithm SHA256).Hash'
+    have_sha=$(printf 'powershell -NoProfile -NonInteractive -Command "%s"\r\nexit\r\n' "$ps" \
+               | timeout 120 qrexec-client-vm "$vm" qubes.VMShell 2>/dev/null | tr -d '\0\r' | grep -iE '^[0-9A-F]{64}$' | tr 'A-F' 'a-f')
+    if ! printf '%s\n' "$have_sha" | grep -qx "$want_sha"; then
+        log "FAIL: DriverStore does not hold the pushed xenvif.sys (want $want_sha, store has: ${have_sha:-<none>})"
+        log "      pnputil said: $(printf '%s' "$out" | grep -io 'Driver package added successfully[^\r\n]*' | head -1)"
+        return 1
+    fi
+    log "  patched xenvif installed and verified in the DriverStore (sha256 match)"
     timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
 }
 
@@ -312,7 +356,7 @@ scrub_net_identity() {
     log "scrubbing network identity from $vm (offline)"
     qvm-prefs "$vm" netvm '' >/dev/null 2>&1
     [ "$(state "$vm")" = Halted ] || timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
-    until [ "$(state "$vm")" = Halted ]; do sleep 5; done
+    wait_halted "$vm" 300 || return 1
     qvm-start "$vm" >/dev/null 2>&1
     wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec for the scrub boot"; return 1; }
 
@@ -460,7 +504,7 @@ prime_pv_nic() {
         log "  boot $boot: PV NIC problem code = ${prob:-<unreachable>}"
         [ "$prob" = 0 ] && break
         timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1 || qvm-kill "$vm" >/dev/null 2>&1
-        until [ "$(state "$vm")" = Halted ]; do sleep 5; done
+        wait_halted "$vm" 120 || true
     done
 
     timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
