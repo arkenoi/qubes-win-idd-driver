@@ -17171,3 +17171,41 @@ volume - so the value is correct in both places without special-casing.
     149 gui-agent logs, 2858 files total now retained on Q:
 
 Post-mortem of an AppVM boot is possible again.
+
+## 2026-08-25 — SHIPPED BUG REPRODUCED: the installer left every template un-latched. 4.3.4
+
+Field report (forum post 89, @random1, today): "I create the appvm, start it, and a couple seconds
+after I get the notification that it has started, it shuts down" - both Win10 and Win11 templates.
+Same as GWeck's posts 56 and 70.
+
+**We had NOT fixed this.** The latch re-arm added 2026-08-23 went into `mgmt/clone-to-template.sh` -
+our internal pipeline, which no user runs. Users get `packaging/setup/Install-QwtImproved.ps1`. Our
+own AppVMs stopped reset-looping; every user's kept doing it.
+
+**Reproduced on demand.** Set `NICS=0` on win10-tpl, shut the template down normally, start the
+AppVM: Running at t+10 s, **Dying at t+20 s**. That is the report verbatim, and it also proves the
+`QubesPvNicRearm` task (User32 event 1074, registered and "Ready") does NOT re-arm on a Qubes
+shutdown - the value stayed 0.
+
+**Root cause in the shipped path.** `pvnic-selfprime.ps1` is transactional by design: it registers
+the tasks and lets the TASK arm the latch, so a failed registration can never leave a template
+latched-but-applierless. The task runs ~25-29 s into a boot - and the installer does "ONE guest
+shutdown for the whole install" immediately after seeding. So on a normal install the task never
+runs and the template ships with NICS unset. xen.sys consumes NICS at every boot (delete-on-read),
+so an AppVM cannot finish its PV NIC install in one volatile boot: it demands a restart, the
+volatile root discards the half-finished install, and Qubes halts the qube.
+
+**Two fixes, both in the SHIPPED path this time:**
+1. `Install-QwtImproved.ps1` arms the latch as its last act before the install shutdown, and reads
+   it back - logging a WARN naming the restart-loop if it does not confirm. Safe in both directions:
+   the tasks are registered by then, so the forbidden latched-without-applier state cannot arise.
+2. `QwtngNetSetup` (auto-start service, runs ~8-12 s in) arms the latch as its FIRST action, which
+   shrinks the window in which any later shutdown can ship an un-latched template to the first few
+   seconds of a boot. This is the net that the 1074 task was supposed to be and measurably is not.
+
+Also shipping, both verified earlier: LogDir moved to the private volume (an AppVM's C: is volatile,
+so every boot-time failure previously lost its own log), and the QwtngNetSetup service replacing
+stock network-setup.exe.
+
+Verified on the shipping build: AppVM Running, first working 10 MB transfer at 17 s, 0 failures in
+21 samples.

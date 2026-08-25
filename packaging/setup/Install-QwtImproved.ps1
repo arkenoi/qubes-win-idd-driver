@@ -1575,6 +1575,37 @@ public static class QdbPrime {
             Write-Log 'pvnic-selfprime.ps1 not in payload - PV NIC priming unavailable' 'WARN'
             $script:Result.detail.pvnic_prime = 'not in payload'
         }
+        # ARM THE LATCH NOW, as the last act before this installer shuts the guest down.
+        #
+        # pvnic-selfprime.ps1 is transactional on purpose: it registers the tasks and lets the TASK
+        # arm the latch, so a failed registration can never leave a template latched-but-applierless.
+        # The task runs ~25-29 s into a boot - and the installer shuts the guest down immediately
+        # after this point ("ONE guest shutdown for the whole install"), so on a normal install the
+        # task never gets that far and the template ships with NICS UNSET.
+        #
+        # xen.sys consumes NICS at every boot (delete-on-read) and vetoes it unless an Enum\XENBUS
+        # subkey name contains "VIF", so an unset latch means an AppVM cannot complete its PV NIC
+        # install in one volatile boot: it demands a restart, the volatile root discards the
+        # half-finished install, and Qubes halts the qube. That is the "AppVM shuts down a couple of
+        # seconds after starting" report from the field (forum posts 56, 70, 89).
+        #
+        # Arming here is safe in both directions: the tasks are already registered above, so the
+        # forbidden latched-without-applier state cannot arise, and an AppVM re-arms per boot anyway.
+        try {
+            reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /t REG_DWORD /d 1 /f | Out-Null
+            reg add "HKLM\SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001&DEV_VIF" /f | Out-Null
+            $nics = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug' -EA SilentlyContinue).NICS
+            if ($nics -eq 1) {
+                Write-Log 'PV NIC unplug latch armed for shutdown (NICS=1)'
+                $script:Result.detail.pvnic_latch = 'armed'
+            } else {
+                Write-Log "PV NIC unplug latch did NOT read back armed (NICS='$nics') - AppVMs on this template may restart-loop" 'WARN'
+                $script:Result.detail.pvnic_latch = "unconfirmed:$nics"
+            }
+        } catch {
+            Write-Log "arming the PV NIC unplug latch failed: $($_.Exception.Message)" 'WARN'
+            $script:Result.detail.pvnic_latch = "error: $($_.Exception.Message)"
+        }
     } else {
         Write-Log "not a TemplateVM (class='$primeClass') - skipping netvm-free PV NIC priming (template-only)"
         $script:Result.detail.pvnic_prime = 'skipped-non-template'

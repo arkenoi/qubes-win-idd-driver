@@ -154,7 +154,26 @@ public class QwtngNetSetup : ServiceBase {
         } catch { return false; }
     }
 
+    // Arm the unplug latch as the FIRST thing this service does. xen.sys consumes NICS at every
+    // boot (delete-on-read); the scheduled task re-arms it, but not until ~25-29 s in, and the
+    // QubesPvNicRearm shutdown task does NOT reliably fire on a Qubes shutdown - measured
+    // 2026-08-25: a template shut down with NICS=0 shipped that way, and its AppVM died 20 s after
+    // start (the field report "AppVM shuts down a couple of seconds after starting"). This service
+    // is auto-start and runs ~8-12 s in, so arming here shrinks the window where a shutdown can
+    // ship an un-latched template to the first few seconds of a boot.
+    static void ArmLatch() {
+        try {
+            using (RegistryKey k = Registry.LocalMachine.CreateSubKey(
+                       @"SYSTEM\CurrentControlSet\Services\XEN\Unplug"))
+                if (k != null) k.SetValue("NICS", 1, RegistryValueKind.DWord);
+            using (Registry.LocalMachine.CreateSubKey(
+                       @"SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001&DEV_VIF")) { }
+            Log("unplug latch armed (NICS=1)");
+        } catch (Exception e) { Log("arming the unplug latch failed: " + e.Message); }
+    }
+
     static void Work() {
+        ArmLatch();
         string ip = null, mask = null, gw = null, d1 = null, d2 = null;
         // qubesdb is authoritative but not up early; retry briefly, then fall back to the cache
         // on the PRIVATE volume, which survives an AppVM reboot.
