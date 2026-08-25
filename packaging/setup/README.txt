@@ -20,6 +20,31 @@ Exact commits, per-file SHA-256 and the CI run that produced this package are
 in MANIFEST.json. SHA256SUMS.txt covers every file here and the installer
 refuses to run if anything fails to verify.
 
+CREATED YOUR WINDOWS QUBE BY HAND? TWO dom0 SETTINGS ARE REQUIRED
+-----------------------------------------------------------------
+Nothing inside the guest can apply these -- they are per-qube dom0 settings,
+and no Windows install path sets them for you unless you used
+qvm-create-windows-qube or installed our dom0 RPM (whose post-install runs
+`qwt-ng-prepare-qube --all`). For a manually created qube, run in dom0:
+
+    qvm-features <qube> vmexec 1
+    qvm-prefs    <qube> qrexec_timeout 1800
+
+  * vmexec=1: dom0 tools (including the Qubes Update tool) send commands over
+    qubes.VMExec only to qubes advertising this feature. Without it they fall
+    back to qubes.VMShell, the POSIX command line lands in cmd.exe, and you
+    get errors like `mkdir -p /run/qubes-update/& exit` -- the update run
+    aborts before the guest agent is ever invoked. The guest cannot advertise
+    the feature itself (the Windows qubesdb-cmd cannot write to QubesDB).
+  * qrexec_timeout: a Windows boot that is applying an update takes minutes
+    to answer qrexec (259 s measured). The Qubes default of 60 s makes dom0
+    give up on the qube exactly when it is finishing an update.
+
+Set them on the template (or the standalone). AppVMs inherit both from their
+template -- vmexec is checked with the template, and qrexec_timeout defaults
+to the template's value -- unless a qube overrides them locally. Details in
+WINDOWS UPDATES below.
+
 WHAT IT INSTALLS
 ----------------
 msiexec is driven with ADDLOCAL=PvDriversCore,Core,Gui[,PvDriversNetwork]:
