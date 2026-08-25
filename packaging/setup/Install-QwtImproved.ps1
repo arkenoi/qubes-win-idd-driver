@@ -1591,6 +1591,25 @@ public static class QdbPrime {
         #
         # Arming here is safe in both directions: the tasks are already registered above, so the
         # forbidden latched-without-applier state cannot arise, and an AppVM re-arms per boot anyway.
+        # TURN AutoReboot BACK OFF before this template ships.
+        #
+        # Set-XenbusAutoReboot set it to 1 so THIS install could reboot silently instead of hanging
+        # on xenbus_monitor's modal prompt. That job is done here. Leaving it at 1 is what makes
+        # every AppVM built on this template unusable: an AppVM's root is VOLATILE, so the PV driver
+        # install re-runs on every boot, asks for a reboot on every boot, and with AutoReboot=1 it
+        # SILENTLY gets one - the guest reboots until Qubes halts it. Measured 2026-08-25 with the
+        # released 4.3.4 and again with 4.3.5: a fresh AppVM on a cleanly installed template dies at
+        # t+90 s, System log 1074 "xenbus_monitor ... has initiated the restart".
+        #
+        # Doing it per-boot from the payload is too late - the reboot demand beats the scheduled
+        # task, which does not run until ~25-29 s. The value has to SHIP as 0.
+        try {
+            reg add "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters" /v AutoReboot /t REG_DWORD /d 0 /f /reg:64 | Out-Null
+            $ar = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' -EA SilentlyContinue).AutoReboot
+            Write-Log "xenbus_monitor AutoReboot reset to 0 for shipping (read back: $ar)"
+            $script:Result.detail.xenbus_autoreboot_final = $ar
+        } catch { Write-Log "could not reset AutoReboot: $($_.Exception.Message)" 'WARN' }
+
         try {
             reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /t REG_DWORD /d 1 /f | Out-Null
             reg add "HKLM\SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001&DEV_VIF" /f | Out-Null

@@ -17289,3 +17289,32 @@ output), so I "deployed" a fix three times without it reaching the guest and nea
 survival that had nothing to do with my change. And my first version of the gating called `QdbGet`
 above its own definition inside the payload, which would have made it a silent no-op. Verify the
 artefact is installed before believing any result from it.
+
+## 2026-08-25 — ROOT CAUSE CONFIRMED BY INTERVENTION: ship AutoReboot=0. 4.3.6
+
+4.3.5 did NOT fix it either: a fresh AppVM on a template cleanly installed from the built 4.3.5
+package still died at t+90 s. The per-boot gating I added there is too late - the reboot demand beats
+the scheduled task, which does not run until ~25-29 s.
+
+**The value has to SHIP as 0.** `Set-XenbusAutoReboot` sets `AutoReboot=1` so the install itself can
+reboot silently instead of hanging on xenbus_monitor's modal prompt. That job is finished when the
+install is. Leaving it at 1 is what breaks every AppVM: volatile root -> driver install re-runs every
+boot -> asks for a reboot every boot -> gets one silently -> Qubes halts the qube.
+
+**Single-variable intervention, nothing else changed:**
+
+    AutoReboot=1 in the template   fresh AppVM: Running at t+60s, DIED at t+90s
+    AutoReboot=0 in the template   fresh AppVM: Running at t+60/120/180/240/300s
+
+    with 0: uptime 345 s, ip 10.137.0.72, PV NIC OK/CM_PROB_NONE, tcp YES,
+            and 1074 events this boot = 0  (nothing asked for a reboot at all)
+
+The installer now resets `AutoReboot` to 0 as its last act, next to arming the latch, and reads the
+value back into the result JSON. The template still gets silent reboots DURING the install, which is
+the only place they were ever wanted.
+
+**Three releases to get here, and the reason is worth recording.** 4.3.4 fixed a real defect (the
+latch) that was not this one. 4.3.5 fixed the right component in the wrong place (per-boot, too
+late). Only 4.3.6 changes the shipped value. Each of the first two was "verified" against a rig whose
+template had been hand-modified; the defect only appears on a template built the way a user builds
+one, which is why the e2e-from-pristine test is the only one that counts.
