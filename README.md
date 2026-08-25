@@ -39,10 +39,8 @@ Upgrading a guest that already runs stock QWT or an older build of this package 
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction (validated end to end; see the release notes).
 
-**Created your Windows qube by hand** (without `qvm-create-windows-qube` or the dom0 RPM)? Run
-`qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800` in dom0 on the
-template/standalone (AppVMs inherit both), or the Qubes Update tool fails against the qube
-(`mkdir -p /run/qubes-update/& exit` in cmd.exe). Details in the package README.
+**Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
+in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
 **What changed in 4.3.7:** the "AppVM shuts down seconds after starting" field report is fixed
 for real — the PV drivers' per-boot reboot demand no longer reboots the qube (4.3.4/4.3.6) or
