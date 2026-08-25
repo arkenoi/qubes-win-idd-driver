@@ -17318,3 +17318,105 @@ latch) that was not this one. 4.3.5 fixed the right component in the wrong place
 late). Only 4.3.6 changes the shipped value. Each of the first two was "verified" against a rig whose
 template had been hand-modified; the defect only appears on a template built the way a user builds
 one, which is why the e2e-from-pristine test is the only one that counts.
+
+## 2026-08-25 — SECOND-OPINION REVIEW of the Aug 22–25 work (owner-requested re-check). The 4.3.6
+## verdict stands; its mechanism story does not; and every AppVM boot carries a hidden reboot prompt
+
+Re-checked everything shipped 2026-08-22..25 against live evidence (win10-app, still on its
+15:28 boot from the 4.3.6-installed template) plus a full code review of the range diff and the
+published mirage series.
+
+**Re-verified, independently: 4.3.6 fixes the user-facing symptom.** The template install log on
+the AppVM's inherited C: shows the reset ran in the real install ("xenbus_monitor AutoReboot reset
+to 0 for shipping (read back: 0)", `"xenbus_autoreboot_final":0`, 15:27:10), the AppVM booted at
+15:28:09 — after that install — and has now been Running for hours with working network. The
+"pristine e2e was never run" suspicion I opened with is WRONG in the way that matters: the released
+package was installed and a fresh AppVM survived on the result. One caveat kept below (¶ upgrade
+path).
+
+**But the shipped mechanism story is wrong, in three places:**
+
+1. **"The driver install re-runs on every boot" — no. A REBOOT REQUEST is re-created on every
+   AppVM boot, by xenvbd.** `HKLM\...\Services\xenbus_monitor\Request\xenvbd\Reboot=1` exists on
+   the running AppVM and the key's LastWriteTime is **15:28:08 — this boot**, not install time
+   (RegQueryInfoKey). The template ships one boot short of settled: the "ONE guest shutdown for
+   the whole install" design means the post-install boot that would run the PnP configure of the
+   updated xenvbd (setupapi.dev.log: "Configured ... and started" at 15:28:33, i.e. on the APPVM)
+   never happens in the template, so every AppVM re-runs it on a root that forgets, and xenvbd
+   files a fresh restart request every boot, forever.
+
+2. **"Zero 1074 events = nothing asked for a reboot at all" — unsound and false.** 1074 only
+   counts *initiated* restarts. With AutoReboot=0 the request becomes xenbus_monitor's modal
+   prompt: on the live AppVM there is a csrss-hosted window titled **"Xen"** ("needs to restart
+   the system to complete installation ... Press 'Yes' to restart") on **session 1, the user's
+   interactive desktop**, and `xenbus_monitor` has sat in **STOP_PENDING for 4.5 h** because the
+   4.3.5 payload's `sc stop` cannot interrupt the blocked prompt. dom0 knows the window
+   (fullshot geometry: `0x760018c 409x159 "Xen"`) but it is `mapped=0`, so the user happens not
+   to see it. That is incidental, not designed: one map event and every user gets a mystery
+   dialog whose Yes button reboots the qube. EVERY AppVM boot of every 4.3.6 user carries this.
+   The published release-note sentence "zero reboot requests logged" is wrong and should be
+   amended (owner's call — outward-facing).
+
+3. **The 4.3.4 entry's "the untested combination is IDD activation" attribution was never
+   isolated.** The pipeline templates that "worked all week" also got a settle/scrub BOOT after
+   install; the shipped-installer path does not. Given (1), the missing settle boot explains the
+   difference without involving the IDD at all.
+
+Likely related: the "residual sporadic first-boot reset" noted at netvm-free acceptance
+(2026-08-19) fits this same mechanism and predates the AutoReboot=0 fix.
+
+**Upgrade-path caveat on the e2e:** the 15:26 install was an in-place MSI upgrade over our own
+4.3.2, not the stock-4.2.2 pristine clone the 4.3.4 entry (correctly) declared the only test that
+counts — and the captured install console died at msiexec ("vchan connection closed early"), so
+the pass was only provable after the fact from the guest's own log. A stock-4.2.2 → 4.3.6 pristine
+run has still never been performed.
+
+**Code review of the range (13 findings, high-effort adversarial pass; the shipped ones verified
+by hand in source). In the SHIPPED 4.3.6 payload:**
+- `QwtngNetSetup.Reconcile()` (pvnic-selfprime.ps1 embedded C#): `qdb_open` every 2 s, **no
+  `qdb_close` import in the class at all**, and `Rd()` never frees the buffer `qdb_read`
+  mallocs — ~43k leaked qubesdb connections + ~216k leaked buffers per day in a permanent
+  SYSTEM service, until qdb_open fails for every consumer in the guest. (The PS helper `QdbP`
+  right below it closes in a `finally` — drift, not a DLL contract.)
+- `sc.exe create QwtngNetSetup` failure is swallowed (`Out-Null`, no $fail entry) AFTER stock
+  network-setup.exe is already deleted: a re-run/upgrade where delete leaves the service
+  marked-for-delete (700 ms fixed sleep) ships a template with NO network applier and ok=true.
+- StandaloneVM installs set AutoReboot=1 three times and never reset it — the reset lives only
+  in the TemplateVM branch — so every standalone keeps silent-AutoReboot armed forever.
+- The 4.3.5 gating keys on `/type != 'TemplateVM'` and **fails open** when qubesdb reads null
+  (leaves the monitor enabled on exactly the volatile guest); and on a persistent-root
+  StandaloneVM it wrongly disables the monitor. The discriminator it actually wants is root
+  volatility (`/qubes-vm-persistence`), fail-closed for AppVMs.
+- Per-boot log rotation still prunes `C:\ProgramData\QubesLogs` while LogDir moved to
+  `Q:\Qubes Logs` — the real log dir on the PERSISTENT private volume now grows unbounded.
+- csc compile of the embedded service discards errors and infers success from `Test-Path` on a
+  fixed, never-deleted TEMP path — a stale exe masks a failed compile and ships the OLD binary.
+
+**In the internal pipeline (mgmt/clone-to-template.sh):** pnputil "Already exists in the system"
+counted as success (can ship stock xenvif while logging "patched xenvif installed" — the very
+cmErr-43 failure the function exists to prevent, and no post-install bound-driver check);
+hardcoded `QubesIncoming\win-idd-mgmt`; the delivery verify's `xenvif.*` wildcard can never count
+the signer cert and certutil's rc is unchecked; two new until-Halted loops with no timeout.
+
+**Mirage upstream series re-audited (net-xen#121, qmf#232): clean.** PR heads == the local
+benchmarked commits; the state machine mirrors xen-netback with edge-triggered waits; cleanup
+ordering (on_closed pushed first, runs last) correct; the firewall's `cur == iface` identity
+check, guarded asyncs and serve/reserve retry classification hold up; the unbuildable
+`mirage-net-xen 2.2.0` pin and the placeholder sha256 are disclosed prominently in the PR body
+("This PR cannot go green on its own"), testing described honestly (20+ cold boots, 28 Linux
+clients). `NETRXF_data_validated`-on-GSO is empirically consistent (Linux netfront verifies
+non-GSO checksums from this backend today and passes). No defect found. The win-pv-devel
+ctrl-ring report is drafted but unsent — correctly awaiting owner approval.
+
+**FINDINGS-discipline verdict for the 3 days:** the retraction record is genuinely good (FIX5
+.text mismatch, the never-compiled reconciler build, the netvm hotplug self-infliction, two
+black-window theories — all caught in-house and recorded). The recurring failure mode is the one
+already named on 08-25: *verifying against a rig the fix was hand-applied to* and inferring
+absence of a demand from absence of its side effect. Both bit again in this pass ((2) above).
+
+**Proposed 4.3.7 (not started — review deliverable first):** (1) fix the qdb leak; (2) make
+sc-create fail closed before deleting the stock applier; (3) decide the xenvbd-request design:
+settle boot in the install flow vs shipping xenbus_monitor disabled with installer-time enable —
+either kills the per-boot prompt+STOP_PENDING; (4) reset AutoReboot on StandaloneVMs too;
+(5) rotate `Q:\Qubes Logs`; (6) re-key the 4.3.5 gate on persistence, fail-closed; (7) guard the
+csc step; (8) the clone-to-template.sh fixes. Release-notes amendment text ready for owner.
