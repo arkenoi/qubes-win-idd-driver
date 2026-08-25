@@ -17420,3 +17420,65 @@ settle boot in the install flow vs shipping xenbus_monitor disabled with install
 either kills the per-boot prompt+STOP_PENDING; (4) reset AutoReboot on StandaloneVMs too;
 (5) rotate `Q:\Qubes Logs`; (6) re-key the 4.3.5 gate on persistence, fail-closed; (7) guard the
 csc step; (8) the clone-to-template.sh fixes. Release-notes amendment text ready for owner.
+
+## 2026-08-25 — 4.3.7 RELEASED: xenbus_monitor ships disabled; acceptance with a fired control,
+## two upgrade paths, five clean cold boots — and the discovery that "win10-clean" is not stock
+
+Released as v4.3.7-agent24cf973 (owner-authorized), notes carry the corrected mechanism story.
+
+**What shipped** (52a76dd + f5578c5): the monitor design from the morning review — installer
+stops+disables xenbus_monitor before stage 1, before and after msiexec, and as final act for
+EVERY qube class (4.3.6 reset only templates); per-boot payload enforces it unconditionally (the
+/type gate is gone); Request key cleared at ship time. Plus the review's shipped defects: the
+QwtngNetSetup qdb leak (ONE connection for the service's life + qdb_free on every buffer -
+verified on the live rig: handles flat over 30 ticks, private bytes plateau after the first gen0
+GC; qdb_free confirmed exported by the shipped DLL by round-trip before use), sc-create made
+fail-closed with 1072-retry and the stock applier deleted only after the replacement registers,
+csc stale-exe mask removed, rotation moved to Q:\Qubes Logs, clone-to-template.sh hardened
+(DriverStore sha256 instead of pnputil's success string, hostname-derived incoming dir, certutil
+checked, wait_halted with kill fallback). Package README + repo README now document the two
+dom0-side settings a hand-created qube needs (vmexec=1, qrexec_timeout) - the exact cause of
+random1's `mkdir -p /run/qubes-update/& exit` updater error in forum post 89; AppVMs inherit
+both from the template (vmexec via check_with_template, qrexec_timeout via
+_default_with_template - verified in source and live).
+
+**Acceptance (all on the released bytes - the first build was re-run after a README rebuild
+because rebuilds are not byte-reproducible; the re-acceptance's push verified the v2 tar by
+exact size 28,068,932):**
+- U0 control, fresh AppVM on the 4.3.6 template: svc StopPending, xenwin 1, vbdreq 1 - the
+  full defect signature; the dialog was ALSO mapped and visible in dom0 (owner saw it live;
+  geometry: mapped=1) - correcting the earlier "not mapped" observation, which was a stale-boot
+  state. Every acceptance check has been seen to FAIL.
+- U, 4.3.6 -> 4.3.7 in-place upgrade + 2 cold boots: PASS (svc Stopped/Disabled, xenwin 0,
+  e1074 0, tcp true).
+- V2, fresh clone of win10-clean -> 4.3.7 + 2 cold boots (released bytes): PASS, same
+  signature; earlier same-day P pass on the v1 build was 3/3.
+- vbdreq reads 1 on unsettled-template AppVM boots: xenvbd still FILES its request per boot,
+  now inert - exactly the design. On the settled U-path template it is not even filed.
+- The pristine-path install log shows updater_agent deployed; the upgrade-path failure
+  ("relay compile failed csc rc=1") is upgrade-only and cosmetic - the relay is unchanged
+  since 4.3.6, so the resident copy keeps working. Retry-clean deploy queued for next release.
+
+**"win10-clean" carries QWT-NG 4.3.2, not stock 4.2.2.** Both of today's "pristine" install
+logs say `found existing QWT: 4.3.2.0` - and so does the 4.3.4 e2e log from this morning. The
+standing description of win10-clean as "stock QWT 4.2.2" has been stale since ~Aug 15. The
+consequence: a genuine stock-4.2.2 -> NG upgrade path has not been exercisable on this testbed
+since then; today's acceptance covers 4.3.2->4.3.7 and 4.3.6->4.3.7. The stock upgrade
+machinery itself is unchanged since it was validated for earlier releases, and the release
+notes say exactly what was tested. TODO: restore a genuinely stock image (or a fresh Windows
+install) before the next claim involving the word "stock".
+
+**Harness defects found by this run, all fixed in the skill/lib:** wait_install ALWAYS
+self-matched the failure markers in its own echoed findstr command (a run with NO install log
+reported "install FAILED") - and with the echo filtered, matched nothing, because the
+\"-escaped findstr patterns never survived cmd's parsing: the function had never produced a
+real match since the day it was written. It now pulls the whole log and judges dev-side. The
+same echo poisoned my launcher's path extraction (ran garbage, install never started - the
+"fast FAIL" that turned out to be the harness). Anchored whole-line greps are now the rule for
+VMShell transcripts. Also re-hit: Filecopy-not-ready silently delivering nothing (fixed with
+size-verified push+retry), and `sed s/run2/run3/` missing its own '[r]un2' bracket-trick
+pattern, which blinded a monitor and a watchdog.
+
+Residual for next release: retry-clean updater relay deploy on upgrades; clear the orphaned
+csrss dialog wedge class entirely remains impossible by design (csrss owns it; prevention is
+the fix and is what shipped).

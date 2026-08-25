@@ -20,19 +20,19 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.3-agentaa28fc7](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.3-agentaa28fc7)** — agent `aa28fc7`, package `4.3.3+agent.aa28fc78538f`.
+Release **[v4.3.7-agent24cf973](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.7-agent24cf973)** — agent `24cf973`, package `4.3.7+agent.24cf9739fb8d`.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.3-1.agentaa28fc78538f.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.3-agentaa28fc7/qubes-windows-tools-ng-4.3.3-1.agentaa28fc78538f.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
-| [`qwt-ng-4.3.3-agentaa28fc7.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.3-agentaa28fc7/qwt-ng-4.3.3-agentaa28fc7.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qwt-ng-4.3.3-agentaa28fc7-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.3-agentaa28fc7/qwt-ng-4.3.3-agentaa28fc7-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.3-agentaa28fc7/SHA256SUMS.txt) | checksums for all three |
+| [`qubes-windows-tools-ng-4.3.7-1.agent24cf9739fb8d.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.7-agent24cf973/qubes-windows-tools-ng-4.3.7-1.agent24cf9739fb8d.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
+| [`qwt-ng-4.3.7-agent24cf973.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.7-agent24cf973/qwt-ng-4.3.7-agent24cf973.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qwt-ng-4.3.7-agent24cf973-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.7-agent24cf973/qwt-ng-4.3.7-agent24cf973-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.7-agent24cf973/SHA256SUMS.txt) | checksums for all three |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.3-1.agentaa28fc78538f.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.7-1.agent24cf9739fb8d.noarch.rpm
 ```
 
 Upgrading a guest that already runs stock QWT or an older build of this package is a
@@ -44,13 +44,15 @@ MSI replace it in one transaction (validated end to end; see the release notes).
 template/standalone (AppVMs inherit both), or the Qubes Update tool fails against the qube
 (`mkdir -p /run/qubes-update/& exit` in cmd.exe). Details in the package README.
 
-**What changed in 4.3.3:** three defects reported from real installs (`install.cmd /iddoff`
-failing with `C:\iddoff`, a dead Windows key, and a black window on the first boot after
-install), the Windows-update path closed end to end, and the boot/shutdown flash removed.
-Full list: [docs/RELEASE-NOTES-4.3.3.md](docs/RELEASE-NOTES-4.3.3.md).
+**What changed in 4.3.7:** the "AppVM shuts down seconds after starting" field report is fixed
+for real — the PV drivers' per-boot reboot demand no longer reboots the qube (4.3.4/4.3.6) or
+parks a modal "Xen" dialog with a wedged service behind it (4.3.6); `xenbus_monitor` now ships
+disabled. Plus a qubesdb connection leak in the network service, a fail-open service install,
+and unbounded log growth, all found by review. Full story in the
+[release notes](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.7-agent24cf973).
 
 **Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
-commit; the agent is `aa28fc7` on
+commit; the agent is `24cf973` on
 [arkenoi/qubes-gui-agent-windows](https://github.com/arkenoi/qubes-gui-agent-windows). The
 Windows build is not timestamp-reproducible, so binary hashes differ across rebuilds of identical
 source; `MANIFEST.json` inside each asset records the exact source commits the build came from.
