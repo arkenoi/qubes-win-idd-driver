@@ -17248,3 +17248,44 @@ records `"idd_driver":"activated"`. That is the untested combination, and it is 
 
 4.3.4 fixes a real defect (templates shipped un-latched) but it is NOT the defect behind
 "AppVM shuts down seconds after starting". The release must not be announced as fixing that.
+
+## 2026-08-25 — the AppVM shutdown ROOT CAUSE: xenbus_monitor AutoReboot on a volatile root. 4.3.5
+
+4.3.4 did not fix it (entry above). The e2e test on a clean template installed from the released
+package still reboot-looped, so the real cause was still open. It is this:
+
+`Set-XenbusAutoReboot` in the installer writes `xenbus_monitor\Parameters\AutoReboot=1`, turning the
+PV-driver "needs to restart to complete installation" modal into a SILENT reboot. That is correct for
+an unattended TEMPLATE install and it is what makes our install non-interactive.
+
+It is inherited by every AppVM, where it is catastrophic: an AppVM's root is VOLATILE, so the driver
+install re-runs on every boot, wants a reboot on every boot, and now gets one silently. The guest
+reboots, Qubes counts the resets, and halts the qube - the field report, exactly.
+
+**It is NOT the latch.** On the failing boots the PV NIC read `CM_PROB_NONE` and the emulated Realtek
+read `CM_PROB_PHANTOM`, i.e. the latch had done its job and the emulated NIC was unplugged. The
+initiator is in the guest's own System log:
+
+    1074  C:\Windows\System32\xenbus_monitor_9_1_0_0.exe has initiated the RESTART
+    1074  C:\Windows\System32\xenagent_9_1_0_0.exe       has initiated the SHUTDOWN (reason 0x8000000c)
+
+- the first is the silent AutoReboot; the second is dom0 halting the qube afterwards.
+
+**Fix:** the per-boot payload reads the qube class from qubesdb and, on anything that is NOT a
+TemplateVM, stops and disables `xenbus_monitor`. A reboot has nothing to complete on a volatile root,
+so the service has no job there. Templates keep it - that is where it earns its place.
+
+**Verified, mechanism AND outcome:**
+
+    FINAL=Running at t+240s (previously Transient -> Halted at ~90 s)
+    sc query xenbus_monitor -> STATE 1 STOPPED, START_TYPE 4 DISABLED
+    payload log: "qube type 'AppVM': xenbus_monitor disabled - a reboot cannot complete an install
+                  on a volatile root"
+    across three boots: Running, ip 10.137.0.72, tcp YES each time
+
+**Two process failures on the way, both mine and both the same shape.** `tools/qtest push` silently
+delivered nothing ("The argument ... does not exist" only became visible when I stopped grepping the
+output), so I "deployed" a fix three times without it reaching the guest and nearly reported a
+survival that had nothing to do with my change. And my first version of the gating called `QdbGet`
+above its own definition inside the payload, which would have made it a silent no-op. Verify the
+artefact is installed before believing any result from it.

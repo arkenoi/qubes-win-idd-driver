@@ -375,6 +375,7 @@ if ((Get-Item $log -EA SilentlyContinue).Length -gt 262144) { Remove-Item $log -
 reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /t REG_DWORD /d 1 /f | Out-Null
 reg add "HKLM\SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001&DEV_VIF" /f | Out-Null
 if ($RearmOnly) { L 'rearm-only trigger: latch re-armed'; exit 0 }
+
 # LogDir is global to all QWT modules; keep it bounded (template root is persistent).
 Get-ChildItem 'C:\ProgramData\QubesLogs' -Filter '*.log' -EA SilentlyContinue |
     Sort-Object LastWriteTime -Descending | Select-Object -Skip 30 | Remove-Item -Force -EA SilentlyContinue
@@ -463,6 +464,31 @@ function QdbValues {
     if (-not $dns) { $dns = @('10.139.1.1', '10.139.1.2') }
     @{ ip = $ip; prefix = $prefix; gw = $gw; dns = $dns }
 }
+# 1b. ON AN APPVM, TAKE xenbus_monitor OUT OF THE LOOP.
+#     AutoReboot=1 (set by the installer, correct for an unattended TEMPLATE install) turns the
+#     PV-driver "needs to restart" prompt into a SILENT reboot. On an AppVM the root is VOLATILE,
+#     so the driver install re-runs every boot and a reboot can never complete it: the guest
+#     reboots, Qubes counts the resets and halts the qube. Measured 2026-08-25 on a clean template
+#     installed from the released 4.3.4 package - AppVM up 75 s, then Transient -> Halted, a new
+#     gui-agent log every ~60 s, System log 1074 "xenbus_monitor ... has initiated the restart".
+#     The latch is NOT the problem there: that same boot had the PV NIC at CM_PROB_NONE and the
+#     emulated Realtek at CM_PROB_PHANTOM, i.e. correctly unplugged.
+#     A reboot has nothing to complete on a volatile root, so on anything that is not a TemplateVM
+#     the monitor is stopped and disabled. The template keeps it - that is where it earns its place.
+try {
+    $qtype = $null
+    try { $qtype = QdbGet '/type' } catch { }
+    if ($qtype -and $qtype -ne 'TemplateVM') {
+        $ar = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' -EA SilentlyContinue).AutoReboot
+        reg add "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters" /v AutoReboot /t REG_DWORD /d 0 /f | Out-Null
+        & sc.exe config xenbus_monitor start= disabled 2>&1 | Out-Null
+        & sc.exe stop   xenbus_monitor 2>&1 | Out-Null
+        L "qube type '$qtype': xenbus_monitor disabled (was AutoReboot=$ar) - a reboot cannot complete an install on a volatile root"
+    } else {
+        L "qube type '$qtype': leaving xenbus_monitor alone"
+    }
+} catch { L "xenbus_monitor gating failed: $($_.Exception.Message)" }
+
 $script:want = $null
 function Applied {
     $ad = PvAdapter
