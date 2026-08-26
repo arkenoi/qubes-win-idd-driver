@@ -28,6 +28,21 @@ jobs:
                   Select-Object -First 1
           Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -Wait
 
+      - name: Stamp DLL version (unique per build)
+        shell: pwsh
+        run: |
+          # Two consecutive releases built from unchanged driver source produce BYTE-IDENTICAL
+          # DLLs; installing such a pair leaves System32\drivers\UMDF hardlinked to the OLD
+          # store generation and the device never starts cleanly (FINDINGS 2026-08-27, the
+          # withdrawn 4.3.8). A per-minute FILEVERSION makes every build byte-unique.
+          $epochMin = [int][Math]::Floor(([DateTimeOffset]::UtcNow - [DateTimeOffset]::new(2026,1,1,0,0,0,[TimeSpan]::Zero)).TotalMinutes)
+          $build = ($epochMin -shr 16) -band 0x7FFF
+          $rev = $epochMin -band 0xFFFF
+          $ver = "4.3.$build.$rev"
+          $h = "#pragma once`n#define QIDD_VER_MAJOR 4`n#define QIDD_VER_MINOR 3`n#define QIDD_VER_BUILD $build`n#define QIDD_VER_REV $rev`n#define QIDD_VER_STR `"$ver`"`n"
+          Set-Content driver/IddSampleDriver/qidd_version.h $h
+          Get-Content driver/IddSampleDriver/qidd_version.h
+
       - name: Build driver
         shell: pwsh
         run: |

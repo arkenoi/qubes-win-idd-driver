@@ -61,6 +61,68 @@ try {
     if ($inf.Count -ne 1) { throw "$iddDir holds $($inf.Count) .inf files (expected exactly 1)" }
     if (-not (Test-Path -LiteralPath $devcon)) { throw "devcon.exe missing from $iddDir" }
 
+    # ---- identical-bytes guard + self-heal (FINDINGS 2026-08-27, the withdrawn 4.3.8) --------
+    # Staging a package whose DLL is BYTE-IDENTICAL to the one already running re-binds the
+    # device to a new store generation while C:\Windows\System32\drivers\UMDF\ keeps its
+    # hardlink into the OLD generation (the copy engine skips identical content). The device
+    # then never starts cleanly: the QIDD control ioctl answers 0xC0000476 and registry modes
+    # are never offered. So: if the payload's DLL matches the running copy and the control
+    # interface answers, there is NOTHING to update - skip staging entirely. If it matches but
+    # the interface does NOT answer, this guest is already in the broken state (took the
+    # withdrawn 4.3.8): heal by re-binding to the package the UMDF copy actually belongs to.
+    function Test-QiddIoctl([string]$InstanceId) {
+        try {
+            if (-not ('QiddProbe' -as [type])) {
+                Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class QiddProbe {
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+    public static extern IntPtr CreateFileW(string n, uint acc, uint share, IntPtr sa, uint disp, uint flags, IntPtr tmpl);
+    [DllImport("kernel32.dll", SetLastError=true)]
+    public static extern bool DeviceIoControl(IntPtr h, uint code, IntPtr inb, uint insz, IntPtr outb, uint outsz, out uint ret, IntPtr ov);
+    [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+}
+'@
+            }
+            $path = '\\?\' + ($InstanceId -replace '\\','#') + '#{c7817eb4-b2b6-4996-a48c-04ef247952ab}'
+            $h = [QiddProbe]::CreateFileW($path, [uint32]3221225472, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
+            if ($h -eq [IntPtr]::new(-1)) { return $false }
+            $ret = [uint32]0
+            $ok = [QiddProbe]::DeviceIoControl($h, 0x00222000, [IntPtr]::Zero, 0, [IntPtr]::Zero, 0, [ref]$ret, [IntPtr]::Zero)
+            [QiddProbe]::CloseHandle($h) | Out-Null
+            return [bool]$ok
+        } catch { return $false }
+    }
+    $skipStage = $false
+    $payloadDll = Join-Path $iddDir 'IddSampleDriver.dll'
+    $umdfCopy = Join-Path $env:SystemRoot 'System32\drivers\UMDF\IddSampleDriver.dll'
+    $dev0 = Get-IddDev $iddHwId
+    if ($dev0 -and $dev0.ConfigManagerErrorCode -eq 0 -and (Test-Path $payloadDll) -and (Test-Path $umdfCopy)) {
+        $newHash = (Get-FileHash -LiteralPath $payloadDll -Algorithm SHA256).Hash
+        $runHash = (Get-FileHash -LiteralPath $umdfCopy -Algorithm SHA256).Hash
+        if ($newHash -eq $runHash) {
+            if (Test-QiddIoctl $dev0.InstanceId) {
+                Log 'IDD driver content identical to the running copy and the control interface answers - nothing to update, SKIPPING staging (an identical-bytes restage un-links the UMDF copy and breaks the device)'
+                $skipStage = $true
+            } else {
+                Log 'IDD control interface does not answer while the driver content is current - the identical-bytes-restage breakage; healing by re-binding to the package the UMDF copy belongs to' 'WARN'
+                $linked = (& fsutil.exe hardlink list $umdfCopy 2>$null) |
+                          Where-Object { $_ -match 'DriverStore\\FileRepository' } | Select-Object -First 1
+                if ($linked) {
+                    $healInf = Join-Path (Split-Path (Join-Path $env:SystemDrive $linked)) 'IddSampleDriver.inf'
+                    Log "  heal: devcon update $healInf"
+                    try { & $devcon update $healInf $iddHwId 2>&1 | ForEach-Object { Log "  devcon heal: $_" } } catch { Log "  heal failed: $_" 'WARN' }
+                    $result.reboot_needed = $true
+                    Log '  heal takes effect at the next boot (the wounded adapter state persists for this session)'
+                    $skipStage = $true
+                } else {
+                    Log '  could not resolve the UMDF copy hardlink target - proceeding with normal staging' 'WARN'
+                }
+            }
+        }
+    }
+
+    if (-not $skipStage) {
     Log "staging driver package $($inf[0].Name)"
     try { $out = & pnputil.exe /add-driver $inf[0].FullName /install 2>&1 } catch { $out = "$_" }
     $out | ForEach-Object { Log "  pnputil: $_" }
@@ -68,6 +130,7 @@ try {
     # packages: 0"). That is the NORMAL /iddonly re-activation case - success, not failure.
     if ($LASTEXITCODE -notin 0,3010,259) { throw "pnputil /add-driver failed ($LASTEXITCODE)" }
     if ($LASTEXITCODE -eq 3010) { $result.reboot_needed = $true }
+    } # -not $skipStage
 
     $createdByThisRun = $false
     $dev = Get-IddDev $iddHwId
