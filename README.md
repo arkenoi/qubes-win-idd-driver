@@ -20,19 +20,19 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.7-agent24cf973](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.7-agent24cf973)** — agent `24cf973`, package `4.3.7+agent.24cf9739fb8d`.
+Release **[v4.3.8-agent74df01f](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.8-agent74df01f)** — agent `74df01f`, package `4.3.8+agent.74df01faa51b`.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.7-1.agent24cf9739fb8d.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.7-agent24cf973/qubes-windows-tools-ng-4.3.7-1.agent24cf9739fb8d.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
-| [`qwt-ng-4.3.7-agent24cf973.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.7-agent24cf973/qwt-ng-4.3.7-agent24cf973.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qwt-ng-4.3.7-agent24cf973-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.7-agent24cf973/qwt-ng-4.3.7-agent24cf973-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.7-agent24cf973/SHA256SUMS.txt) | checksums for all three |
+| [`qubes-windows-tools-ng-4.3.8-1.agent74df01faa51b.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.8-agent74df01f/qubes-windows-tools-ng-4.3.8-1.agent74df01faa51b.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
+| [`qwt-ng-4.3.8-agent74df01f.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.8-agent74df01f/qwt-ng-4.3.8-agent74df01f.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qwt-ng-4.3.8-agent74df01f-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.8-agent74df01f/qwt-ng-4.3.8-agent74df01f-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.8-agent74df01f/SHA256SUMS.txt) | checksums for all three |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.7-1.agent24cf9739fb8d.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.8-1.agent74df01faa51b.noarch.rpm
 ```
 
 Upgrading a guest that already runs stock QWT or an older build of this package is a
@@ -42,15 +42,17 @@ MSI replace it in one transaction (validated end to end; see the release notes).
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
-**What changed in 4.3.7:** the "AppVM shuts down seconds after starting" field report is fixed
-for real — the PV drivers' per-boot reboot demand no longer reboots the qube (4.3.4/4.3.6) or
-parks a modal "Xen" dialog with a wedged service behind it (4.3.6); `xenbus_monitor` now ships
-disabled. Plus a qubesdb connection leak in the network service, a fail-open service install,
-and unbounded log growth, all found by review. Full story in the
-[release notes](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.7-agent24cf973).
+**What changed in 4.3.8:** should fix the black fullscreen window some rigs get in AppVMs
+(minimizable, not closable — the desktop window itself, mapped when two window filters fail
+together): a new attribute-based reject catches it regardless of which filter leg fails, and
+anything it rejects could only ever have rendered black. The failure state was simulated and the
+fix proven against it on Win11 25H2; field confirmation from an affected machine is still wanted.
+Also: the updater relay now deploys reliably on upgrade installs and can never lose the working
+relay to a failed compile. Full story in the
+[release notes](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.8-agent74df01f).
 
 **Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
-commit; the agent is `24cf973` on
+commit; the agent is `74df01f` on
 [arkenoi/qubes-gui-agent-windows](https://github.com/arkenoi/qubes-gui-agent-windows). The
 Windows build is not timestamp-reproducible, so binary hashes differ across rebuilds of identical
 source; `MANIFEST.json` inside each asset records the exact source commits the build came from.
