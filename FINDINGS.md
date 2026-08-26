@@ -17498,3 +17498,36 @@ TcpChecksumFailed -> 0.05 MB/s); repro for the 86% = rx_gso_checksum_fixup delta
 transfer; csum_blank on a COMPLETE checksum corrupts it in any finalizing consumer; un-gating
 from GSO drops end-to-end verification on all forwarded traffic. Offered to split commit 4 into
 its own PR. Draft file: mirage-gso/upstream/06-pr121-data-validated-reply.md.
+
+## 2026-08-27 — GWeck's black window: reproduced on demand, fixed, proven on one binary (agent 8ee3390)
+
+The field defect (forum 42717 post 85: Progman mapped as a black fullscreen window) needs TWO
+filter legs down at once: the GetShellWindow() identity check not matching (his rig runs
+OpenShell; on ours the check alone held the line even with service.gui-fullscreen forced on)
+AND the borderless-fullscreen gate not firing (his (a)/(b) cause still unknown - feature on,
+or an inflated desktop bounding box, or pre-xconf g_ScreenWidth=0). Rather than reproduce his
+exact rig, agent 8ee3390 adds a diagnostic registry bitmask DiagWindowFilterOff (default 0)
+that disables each leg individually, so ONE binary shows the defect and the fix:
+
+    win11-app (25H2, Progman attrs byte-identical to GWeck's dump), feature on:
+    Diag=3 (identity check off, new predicate off): dom0 geometry
+        0x7600189 0 0 5120 1440 0 1 Program Manager     <- THE BLACK WINDOW, on demand
+    Diag=1 (identity check off, predicate ON):
+        Program Manager gone
+    Diag=1 + fire-toast:
+        0x760018b 4740 1222 364 157 1 1 New notification <- toast maps, positioned
+
+The fix is the attribute predicate from the 08-24 analysis: NOREDIRECTIONBITMAP && TOOLWINDOW
+&& !TOPMOST -> reject (shell furniture; a toast is TOPMOST|NOREDIRECTIONBITMAP and cannot
+match). Identity- and timing-independent, so it covers his rig whatever the second leg is.
+
+Process note: the first repro attempt ran on win10-app because it happened to be the running
+qube - wrong rig (the defect and the predicate are Win11-attribute-shaped; win10 wasted an
+hour incl. an explorer-kill that muddied the session). GWeck's environment is Win11 25H2;
+start there next time. Also: FindWindow from the qrexec context is desktop-blind (service
+window station) - in-guest window probes must run via an interactive task or be replaced by
+dom0 geometry, which is authoritative anyway.
+
+Ship next as 4.3.8 with the relay retry (e5aa944). e2e gate: upgrade install on the 4.3.7
+template (exercises the relay-lock path - assert updater_agent deployed), 2 boots with the
+standard asserts + toast-maps + no Program Manager/Xen window in geometry.
