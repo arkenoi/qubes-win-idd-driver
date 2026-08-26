@@ -50,17 +50,28 @@ if (-not (Test-Path $src)) { throw "relay source not found at $src" }
 # Stop it, clear the target, and retry through the handle-release window - and keep csc's
 # own words instead of discarding them.
 Get-Process -Name 'qubes-updates-relay' -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+# Compile to a TEMP name and move into place only on success: a failed compile (or a lock
+# that survives the retries) must leave the PREVIOUS working relay untouched. The first
+# version of this fix deleted $exe before compiling, which could strand an upgraded guest
+# with no relay at all - worse than the failure it fixed.
+$exeNew = "$exe.new"
 $cscOut = $null
 for ($cscTry = 1; $cscTry -le 3; $cscTry++) {
-    Remove-Item $exe -Force -EA SilentlyContinue
-    $cscOut = & $csc /nologo /optimize /target:exe /out:"$exe" "$src" 2>&1
-    if ($LASTEXITCODE -eq 0) { break }
+    Remove-Item $exeNew -Force -EA SilentlyContinue
+    $cscOut = & $csc /nologo /optimize /target:exe /out:"$exeNew" "$src" 2>&1
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $exeNew)) { break }
     Log "relay compile attempt $cscTry failed (rc=$LASTEXITCODE); retrying"
     Start-Sleep -Seconds 2
 }
-if ($LASTEXITCODE -ne 0) {
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $exeNew)) {
     throw "relay compile failed (csc rc=$LASTEXITCODE): $((@($cscOut) | Select-Object -First 2) -join ' | ')"
 }
+$moved = $false
+for ($mvTry = 1; $mvTry -le 3; $mvTry++) {
+    try { Move-Item $exeNew $exe -Force -EA Stop; $moved = $true; break }
+    catch { Start-Sleep -Seconds 2 }   # the old exe can still be releasing its handle
+}
+if (-not $moved) { throw "relay compiled but could not replace $exe (still locked)" }
 Log "compiled relay -> $exe"
 
 # 2. place the agent script

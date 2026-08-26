@@ -17499,7 +17499,11 @@ transfer; csum_blank on a COMPLETE checksum corrupts it in any finalizing consum
 from GSO drops end-to-end verification on all forwarded traffic. Offered to split commit 4 into
 its own PR. Draft file: mirage-gso/upstream/06-pr121-data-validated-reply.md.
 
-## 2026-08-27 — GWeck's black window: reproduced on demand, fixed, proven on one binary (agent 8ee3390)
+## 2026-08-27 — GWeck's black window: defect state SIMULATED and the fix proven against it (agent 8ee3390)
+## CLAIM DISCIPLINE (owner, 2026-08-27): we never reproduced GWeck's NATURAL trigger - his second
+## filter leg (why the fullscreen gate did not fire on his rig) is still unidentified. What follows
+## is an engineered simulation of the failure STATE via DiagWindowFilterOff. The predicate covers
+## every candidate leg, but "fixes GWeck's bug" stays UNCLAIMED until he confirms in the field.
 
 The field defect (forum 42717 post 85: Progman mapped as a black fullscreen window) needs TWO
 filter legs down at once: the GetShellWindow() identity check not matching (his rig runs
@@ -17531,3 +17535,29 @@ dom0 geometry, which is authoritative anyway.
 Ship next as 4.3.8 with the relay retry (e5aa944). e2e gate: upgrade install on the 4.3.7
 template (exercises the relay-lock path - assert updater_agent deployed), 2 boots with the
 standard asserts + toast-maps + no Program Manager/Xen window in geometry.
+
+## 2026-08-27 — 4.3.8 pre-release regression sweep (owner-requested)
+
+**Predicate (NOREDIRECTIONBITMAP && TOOLWINDOW && !TOPMOST -> reject) - what could it wrongly
+hide?** Sweep over every visible window in GWeck's dump and ours: toasts (TOPMOST - immune,
+verified live), XAML popups/PopupWindowSiteBridge (TOPMOST, no TOOLWIN), snap overlays (already
+rejected, TOPMOST anyway), tooltips (no NOREDIRECTIONBITMAP), OpenShell windows (no
+NOREDIRECTIONBITMAP), Office shadow strips (rejected by design already). The structural argument:
+NOREDIRECTIONBITMAP means PrintWindow cannot capture the window - anything this predicate rejects
+would have rendered as a BLACK RECTANGLE, so the worst case is losing a black rectangle, never
+content. Residual risk: a window capturable by the newer per-window path yet carrying
+NOREDIR|TOOLWIN|!TOPMOST - no such window observed in any dump; accepted.
+
+**Diag switch**: default 0 on read failure; loud LogWarning when set; guest-local presentation
+only - dom0 borders/isolation unaffected in every state.
+
+**Relay retry**: REAL REGRESSION FOUND AND FIXED before ship - the first version deleted the
+working relay exe before compiling, so a persistently-failing csc on an upgrade would strand the
+guest with NO relay (worse than 4.3.7's cosmetic failure). Now compiles to $exe.new and moves
+into place only on success; a failed compile leaves the previous relay untouched.
+
+**e2e gate for 4.3.8**: upgrade install on the 4.3.7 template (updater_agent must read
+"deployed"), 2 AppVM cold boots with standard asserts + toast-maps + geometry free of
+Program Manager and Xen windows; then a Diag=3/Diag=1 A/B on the RELEASED agent binary (the
+overnight A/B ran on the pre-version-bump build; same source modulo the version file, but the
+released bytes get their own demonstration).
