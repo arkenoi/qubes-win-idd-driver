@@ -22,6 +22,12 @@
     <ClCompile Include="Driver.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <!-- The version resource was never wired into the build, so every rebuild of unchanged
+         source produced a byte-identical DLL - the exact condition that breaks upgrades
+         (FINDINGS 2026-08-27). CI stamps qidd_version.h per build; this makes it count. -->
+    <ResourceCompile Include="IddSampleDriver.rc" />
+  </ItemGroup>
+  <ItemGroup>
     <ClInclude Include="Driver.h" />
     <ClInclude Include="Trace.h" />
   </ItemGroup>
