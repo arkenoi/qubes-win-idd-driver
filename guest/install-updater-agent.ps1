@@ -45,8 +45,22 @@ $src = Join-Path $SetupRoot 'qubes-updates-relay.cs'
 $exe = Join-Path $BinDir 'qubes-updates-relay.exe'
 if (-not (Test-Path $csc)) { throw "in-box csc not found at $csc" }
 if (-not (Test-Path $src)) { throw "relay source not found at $src" }
-& $csc /nologo /optimize /target:exe /out:"$exe" "$src" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "relay compile failed (csc rc=$LASTEXITCODE)" }
+# On an UPGRADE the previous relay can be RUNNING (an updater task mid-pass) and holds the
+# exe open, so csc fails with rc=1 (measured on the 4.3.6->4.3.7 upgrade e2e, 2026-08-25).
+# Stop it, clear the target, and retry through the handle-release window - and keep csc's
+# own words instead of discarding them.
+Get-Process -Name 'qubes-updates-relay' -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
+$cscOut = $null
+for ($cscTry = 1; $cscTry -le 3; $cscTry++) {
+    Remove-Item $exe -Force -EA SilentlyContinue
+    $cscOut = & $csc /nologo /optimize /target:exe /out:"$exe" "$src" 2>&1
+    if ($LASTEXITCODE -eq 0) { break }
+    Log "relay compile attempt $cscTry failed (rc=$LASTEXITCODE); retrying"
+    Start-Sleep -Seconds 2
+}
+if ($LASTEXITCODE -ne 0) {
+    throw "relay compile failed (csc rc=$LASTEXITCODE): $((@($cscOut) | Select-Object -First 2) -join ' | ')"
+}
 Log "compiled relay -> $exe"
 
 # 2. place the agent script
