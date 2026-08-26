@@ -17580,3 +17580,34 @@ clean win10 Progman does not map even with both filter legs off is unestablished
 matter for the fix; the faithful rig is Win11 and both defect and fix are demonstrated there,
 twice (pre-release build and released bytes). Release notes and README both word the fix as
 "should fix - field confirmation wanted", per the owner's claim-discipline call.
+
+## 2026-08-27 — bounding-box theory (b) CLOSED: no filter hazard from multi-monitor on current
+## builds; found instead a live arbitrary-resolution defect on the win10 4.3.8 rig
+
+**The (b) premise was wrong at the source level.** g_ScreenWidth/Height is the PRIMARY display
+mode (EnumDisplaySettings(NULL) adopt + the dom0-driven apply), NOT the virtual-desktop bounding
+box - the 08-24 FINDINGS statement "an active second monitor inflates g_ScreenWidth" is
+RETRACTED. A second active monitor therefore cannot mis-size the fullscreen gate, and LogonUI
+(primary-sized) stays gated in every topology. Defenses verified: (1) Windows itself REFUSES an
+extended topology on the IDD guest - SetDisplayConfig(SDC_TOPOLOGY_EXTEND|SDC_APPLY) returns 31
+(ERROR_GEN_FAILURE) even with the emulated VGA re-enabled (measured, win10-app 4.3.8; DisplaySwitch
+/extend also no-ops); (2) if a second display ever attaches, WM_DISPLAYCHANGE fires
+ResolutionRequestIddSoloReassert (1.5 s debounce) which re-asserts IDD-solo; (3) AppVMs always
+boot solo (the VGA-disable is template state, volatile root restores it). RESDRIFT (in 4.3.3 too)
+adopts the actual mode, so intended-vs-actual mismatch cannot mis-size the gate either. GWeck's
+second filter leg remains unidentified (feature-on, or the pre-xconf g_ScreenWidth==0 boot race)
+- moot for the fix, the 4.3.8 predicate is leg-independent.
+
+**Found live instead: arbitrary resolutions are BROKEN on the win10-app 4.3.8 rig.** dom0
+requests 5120x1440; the agent logs `QIDD ioctl-reload unavailable, falling back to device
+restart (PnP)` then `RESKEEP 5120x1440-unavailable keeping 1024x768 reason=mode-never-appeared`.
+Pinned facts: the bound IDD driver IS the shipped 4.3.8 build (device ROOT\DISPLAY\0000 at
+21.22.19.960, oem14.inf; store also holds the 08/15 and 08/25 generations); QiddReloadModes()
+finds NO device-interface instance accepting IOCTL_QIDD_RELOAD_MODES (custom interface GUID,
+SetupDiGetClassDevs path); after the replug fallback the requested mode never appears in the
+mode list. Meanwhile win11-app (Aug-11-era agent+driver pair) sits at 5120x1440 fine - so either
+a regression between the Aug-11 and current driver, or an environment defect of this rebuilt
+template chain. The failure is FAIL-SAFE for filtering (RESKEEP keeps actual; gate sized right)
+but the T2 feature is dead on this rig. NEXT: check whether the 4.3.8 driver registers the QIDD
+interface at all (driver-side source + a fresh-boot interface enumeration), and whether the
+modes key the driver reads matches what the agent writes.
