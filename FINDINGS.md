@@ -17488,3 +17488,13 @@ dialog and warning against clicking Yes), and the two wrong claims corrected in 
 dated correction note ("zero reboot requests logged" -> zero reboots *initiated*; "pristine
 Windows image" -> a template carrying an earlier QWT-NG build). Owner posted the forum reply
 themselves.
+
+## 2026-08-26 — PR 121: answered palainp's data_validated questions (owner-approved text)
+
+palainp misread commit 4 as fragmentation-related and proposed csum_blank+data_validated on ALL
+frames. Reply posted (owner edited + approved): commit 4 is the RX direction and load-bearing for
+Windows (xenvif receiver.c:584-592 gates segment checksum handling on the flag; absent ->
+TcpChecksumFailed -> 0.05 MB/s); repro for the 86% = rx_gso_checksum_fixup delta around a 10 MB
+transfer; csum_blank on a COMPLETE checksum corrupts it in any finalizing consumer; un-gating
+from GSO drops end-to-end verification on all forwarded traffic. Offered to split commit 4 into
+its own PR. Draft file: mirage-gso/upstream/06-pr121-data-validated-reply.md.
