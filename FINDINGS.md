@@ -17611,3 +17611,48 @@ template chain. The failure is FAIL-SAFE for filtering (RESKEEP keeps actual; ga
 but the T2 feature is dead on this rig. NEXT: check whether the 4.3.8 driver registers the QIDD
 interface at all (driver-side source + a fresh-boot interface enumeration), and whether the
 modes key the driver reads matches what the agent writes.
+
+## 2026-08-27 — REGRESSION CONFIRMED AND ROOT-CAUSED: 4.3.8 upgrades break arbitrary resolutions;
+## the trigger is two driver-store generations with BYTE-IDENTICAL IddSampleDriver.dll
+
+**Differential (fresh clone of win10-clean, instrument-proof probes = agent log + dom0 geometry):**
+4.3.7 pristine install: 5120x1440 on BOTH cold boots, delivered by the boot-time registry-mode
+read (RESDRIFT adopts 5120x1440; the QIDD ioctl is never needed). In-place 4.3.8 upgrade on the
+same chain: BOTH boots stuck at 1024x768 - no boot-time mode, QiddReloadModes fails instantly
+with raw NTSTATUS 0xC0000476 (STATUS_OPERATION_IN_PROGRESS; measured via NtDeviceIoControlFile),
+the PnP-replug fallback's mode never appears. So: A USER-VISIBLE 4.3.7->4.3.8 UPGRADE REGRESSION,
+with driver SOURCE identical between the releases.
+
+**Package A/B on the broken template (same method, reboot each time):**
+    bind oem12 (08/25, the 4.3.7 package)             -> HEALED, 5120x1440 at boot     (E1)
+    bind oem14 (08/26, the 4.3.8 package)             -> BROKEN again                  (E2)
+    devcon remove + fresh install on the 4.3.8 INF    -> STILL BROKEN                  (E3)
+The two packages are byte-identical in the DLL (sha 5dc42759f55e), identical in the INF except
+the DriverVer line, signed by the SAME cert (e370c6e671bb1699 - the "throwaway" cert is a stable
+repo secret), and both cats embed their INF digests correctly.
+
+**Mechanism (leading hypothesis, consistent with every observation):**
+C:\Windows\System32\drivers\UMDF\IddSampleDriver.dll is a HARDLINK into the oem12 store
+directory (fsutil hardlink list; timestamps second-identical) even when the device is bound to
+oem14 - the copy engine skips the refresh because the content is identical, and UMDF device
+start then fails an IDENTITY (not content) consistency check, leaving the IddCx adapter
+perpetually "operation in progress": custom ioctls rejected 0xC0000476, registry modes never
+offered, only the 1024x768 default. RETRACTED along the way: WudfRd event 219 as the failure
+signature (it fires on EVERY boot here, healthy ones included - benign noise); an earlier
+"agent-free ioctl works" claim (the probe's 0xC0000000 parsed as a negative int in Windows
+PowerShell, CreateFileW never ran); stale-DLL, cert-trust, cat-integrity, and driver-source
+theories (all measured dead).
+
+**Why only now:** 4.3.7->4.3.8 is the FIRST release pair whose IDD driver was rebuilt from
+UNCHANGED source - every earlier release changed the driver, so the bytes differed and the copy
+refreshed. The same landmine will fire on ANY future identical-source rebuild pair, and it also
+explains the "wounded" original test chain (4 store generations, two identical pairs).
+
+**Fix (4.3.9, two independent layers):**
+1. activate-idd.ps1: when the payload DLL's sha256 equals the BOUND package's DLL and the device
+   is healthy, SKIP staging/rebinding entirely (nothing to update); and when a mismatch state is
+   detected (bound store dir != the umdf copy's hardlink target), HEAL by rebinding to the
+   package the hardlink points at when content-identical (proven by E1).
+2. CI: stamp the DLL's version resource per build so identical-source rebuilds are never
+   byte-identical again (same lesson pv-xenvif already learned for DriverVer).
+Template healed to oem12 and shut down pending the fix build.
