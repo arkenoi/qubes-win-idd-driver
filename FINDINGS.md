@@ -17561,3 +17561,22 @@ into place only on success; a failed compile leaves the previous relay untouched
 Program Manager and Xen windows; then a Diag=3/Diag=1 A/B on the RELEASED agent binary (the
 overnight A/B ran on the pre-version-bump build; same source modulo the version file, but the
 released bytes get their own demonstration).
+
+## 2026-08-27 — 4.3.8 RELEASED (v4.3.8-agent74df01f): black-window predicate + non-destructive relay deploy
+
+Gate results, all on the released bytes:
+- Upgrade install (4.3.7 -> 4.3.8 in win10-tpl): ALL PASS incl. the relay regression assert -
+  "updater_agent":"deployed" on the exact path where 4.3.7 hit the locked-exe failure.
+- 2 AppVM cold boots: standard signature clean, toast fired and mapped, geometry free of
+  Program Manager and Xen windows.
+- Diag A/B on the released agent, win11-app: Diag=3 -> Program Manager mapped (defect state);
+  Diag=1 -> rejected (predicate holds). Feature cleaned up, volatile root discarded the swap.
+
+**RETRACTION: the overnight win10 "phase A" hit was stale evidence.** The e2e's phase 3 ran on a
+CLEAN win10 boot (my mis-hosting - the defect and predicate are Win11-attribute-shaped and the
+owner had already flagged the win10 detour) and Diag=3 did NOT manifest there; the overnight
+win10 "Program Manager mapped" was the muddied session's leftover window, not the defect. Why a
+clean win10 Progman does not map even with both filter legs off is unestablished and does not
+matter for the fix; the faithful rig is Win11 and both defect and fix are demonstrated there,
+twice (pre-release build and released bytes). Release notes and README both word the fix as
+"should fix - field confirmation wanted", per the owner's claim-discipline call.
