@@ -39,6 +39,24 @@ try {
     # QWT must already be installed: the gui-agent does the topology apply that makes the IDD primary
     $qwt = Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools','HKLM:\SOFTWARE\WOW6432Node\Invisible Things Lab\Qubes Tools' -ErrorAction SilentlyContinue
     if (-not $qwt) { Log 'no "Qubes Tools" registry key found - IDD will install but nothing will drive it primary until QWT is installed. Continuing anyway.' 'WARN' }
+
+    # STALENESS BANNER (added after 4.3.10): C:\qwt-improved-setup can lag the installed QWT
+    # by whole releases (a stale Aug-15 copy run via /iddonly once damaged a live rig). Say
+    # which payload THIS run ships and which QWT is installed, loudly, before touching anything.
+    $payloadVer = $null
+    try {
+        $man = Get-Content (Join-Path $Root 'MANIFEST.json') -Raw -EA Stop | ConvertFrom-Json
+        $payloadVer = $man.package_version
+    } catch {}
+    $installedVer = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' -EA SilentlyContinue |
+                     Where-Object { $_.DisplayName -like 'Qubes Windows Tools*' } | Select-Object -First 1).DisplayVersion
+    Log "payload: $(if ($payloadVer) { $payloadVer } else { 'UNKNOWN (no MANIFEST.json)' })  installed QWT: $(if ($installedVer) { $installedVer } else { 'none found' })"
+    # manifest is '4.3.10+agent.<hash>', MSI DisplayVersion is 4-field '4.3.10.0' - compare 3-field cores
+    $pvCore = if ($payloadVer) { ($payloadVer -split '\+')[0] }
+    $ivCore = if ($installedVer) { ($installedVer -split '\.')[0..2] -join '.' }
+    if ($pvCore -and $ivCore -and $pvCore -ne $ivCore) {
+        Log "payload version $pvCore differs from installed QWT $ivCore - this tree at '$Root' may be a STALE copy; the driver staged now will be $pvCore's" 'WARN'
+    }
     # the IDD package is TEST-SIGNED - without testsigning the driver will not load
     $so = (& bcdedit.exe /enum '{current}' 2>&1 | Out-String)
     if ($so -notmatch 'testsigning\s+Yes') {
@@ -158,6 +176,33 @@ public static class QiddProbe {
         throw 'IDD device did not bind with a display adapter - NOT disabling the VGA'
     }
     Log "IDD display adapter present: $($ctrl.Name)"
+
+    # BIND-VERSION ASSERTION (added after 4.3.10): pnputil's ranking only rebinds UPWARD.
+    # On a DOWNGRADE (reinstalling an older release over a newer one - the exact recovery
+    # flow a withdrawn release forces) the staged lower-version package silently loses the
+    # ranking and the device keeps running the NEWER driver against an OLDER agent. Assert
+    # that the bound driver version equals the payload INF's DriverVer version; force-bind
+    # with devcon update when it does not, and FAIL if it still does not after that.
+    $infVer = $null
+    try {
+        if ((Get-Content -LiteralPath $inf[0].FullName -Raw) -match 'DriverVer\s*=\s*[^,]+,\s*([0-9][0-9.]*)') { $infVer = $Matches[1] }
+    } catch {}
+    if (-not $infVer) {
+        Log 'could not parse DriverVer from the payload INF - bind-version assertion skipped' 'WARN'
+    } else {
+        $boundVer = (Get-PnpDeviceProperty -InstanceId $dev.InstanceId -KeyName DEVPKEY_Device_DriverVersion -EA SilentlyContinue).Data
+        if ($boundVer -ne $infVer) {
+            Log "bound driver $boundVer != payload $infVer - forcing rebind (devcon update; ranking never rebinds downward)" 'WARN'
+            try { & $devcon update $inf[0].FullName $iddHwId 2>&1 | ForEach-Object { Log "  devcon update: $_" } } catch { Log "  devcon update failed: $_" 'WARN' }
+            $deadline = (Get-Date).AddSeconds(30)
+            do { $dev = Get-IddDev $iddHwId; if ($dev -and $dev.ConfigManagerErrorCode -eq 0) { break }; Start-Sleep 2 } while ((Get-Date) -lt $deadline)
+            if (-not ($dev -and $dev.ConfigManagerErrorCode -eq 0)) { throw "device did not come back healthy after the forced rebind to $infVer" }
+            $boundVer = (Get-PnpDeviceProperty -InstanceId $dev.InstanceId -KeyName DEVPKEY_Device_DriverVersion -EA SilentlyContinue).Data
+            if ($boundVer -ne $infVer) { throw "bound driver is $boundVer but the payload ships $infVer - agent/driver mismatch, refusing to continue" }
+        }
+        Log "bound driver version $boundVer matches payload"
+        $result['bound'] = $boundVer
+    }
 
     # disable the emulated VGA (PCI display class CC_0300, prefer VEN_1234&DEV_1111)
     $vga = @(Get-PnpDevice -Class Display -EA SilentlyContinue | Where-Object { $_.InstanceId -like 'PCI\*' -and ($_.HardwareID -match 'CC_0300') })

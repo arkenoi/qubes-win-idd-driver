@@ -1373,6 +1373,43 @@ function Invoke-Stage2 {
         }
         Write-Log "IDD display adapter present: $($iddCtrl.Name)"
 
+        # BIND-VERSION ASSERTION (added after 4.3.10): pnputil's ranking only rebinds
+        # UPWARD, so on a DOWNGRADE (reinstalling an older release over a newer one - the
+        # recovery flow a withdrawn release forces) the reused healthy device silently
+        # keeps the NEWER driver against this package's OLDER agent. Assert the bound
+        # driver version equals the payload INF's DriverVer version; force-bind with
+        # devcon update on mismatch. Same logic as guest/activate-idd.ps1.
+        $infVer = $null
+        try {
+            if ((Get-Content -LiteralPath $inf[0].FullName -Raw) -match 'DriverVer\s*=\s*[^,]+,\s*([0-9][0-9.]*)') { $infVer = $Matches[1] }
+        } catch {}
+        if (-not $infVer) {
+            Write-Log 'could not parse DriverVer from the payload INF - bind-version assertion skipped' 'WARN'
+        } else {
+            $boundVer = (Get-PnpDeviceProperty -InstanceId $dev.PNPDeviceID -KeyName DEVPKEY_Device_DriverVersion -ErrorAction SilentlyContinue).Data
+            if ($boundVer -ne $infVer) {
+                Write-Log "bound driver $boundVer != payload $infVer - forcing rebind (devcon update; ranking never rebinds downward)" 'WARN'
+                try { $out = & $devcon update $inf[0].FullName $iddHwId 2>&1 } catch { $out = "$_" }
+                $out | ForEach-Object { Write-Log "  devcon update: $_" }
+                $deadline = (Get-Date).AddSeconds(30)
+                while ($true) {
+                    $dev = Get-IddPnpDevice -HardwareId $iddHwId
+                    if ($dev -and $dev.ConfigManagerErrorCode -eq 0) { break }
+                    if ((Get-Date) -ge $deadline) { break }
+                    Start-Sleep -Seconds 2
+                }
+                if (-not ($dev -and $dev.ConfigManagerErrorCode -eq 0)) {
+                    throw "IDD device did not come back healthy after the forced rebind to $infVer - NOT disabling the VGA adapter"
+                }
+                $boundVer = (Get-PnpDeviceProperty -InstanceId $dev.PNPDeviceID -KeyName DEVPKEY_Device_DriverVersion -ErrorAction SilentlyContinue).Data
+                if ($boundVer -ne $infVer) {
+                    throw "bound driver is $boundVer but this package ships $infVer - agent/driver mismatch, refusing to activate"
+                }
+            }
+            Write-Log "bound driver version $boundVer matches the payload"
+            $script:Result.detail.idd_bound = $boundVer
+        }
+
         # Disable the emulated VGA adapter so the next boot comes up on the IDD. Match by
         # the PCI display class code (CC_0300 in the hardware ids), PREFERRING the
         # Qubes/QEMU stdvga identity VEN_1234&DEV_1111 when present - but not hardcoding
