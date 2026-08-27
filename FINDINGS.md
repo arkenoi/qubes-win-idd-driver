@@ -18227,3 +18227,48 @@ flagged the Terminal the trigger itself spawns - replaced with surface-identity 
 (consent-sized 400-560x330-440, backdrop >=3000px wide); and a transient trigger miss
 (INPUTDESKTOP=Default when consent had been killed moments before) needs a retry loop, not
 an immediate FAIL.
+
+## 2026-08-27 (late) — 4.3.11 E2E: ALL PHASES PASS on the shipping build; one more real
+## defect found on the way (the feature-clear footgun), owner-verified by hand
+
+Build under test: package `4.3.11+agent.71fa0a4f54f9`, gui-agent `32b5119a1aed`, binary
+hash verified against the payload manifest before every phase (rule 1).
+
+PHASE A (win10 chain, full rebuild from the pristine clone): 4.3.9 baseline install +
+loud-log control boot -> 4.3.11 upgrade -> two cold boots, bound driver 4.3.5.16219 ==
+payload INF (the new bind assertion, reported as idd_bound), 5120x1440, quiet logs ->
+debug-feature A/B both directions -> template primed (armed, NICS=1, re-arm tasks live,
+xenbus_monitor enforced off every boot) -> AppVM gate PASS (survived t+300s, svc Stopped,
+start Disabled, xenwin 0, e1074 0, tcp true, ip 10.137.0.72). Installer's new fields both
+present: idd_bound, uac_prompt_on_secure_desktop=0.
+
+PHASE B: WCBLACK fires on the RELEASE binary; session log 15 KB, perfframes=0, off-banner
+present.
+
+PHASE C (secure-desktop freeze, forced secure desktop as fullscreen/policy would): census
+2 -> 3 -> 2 with consent=0 backdrop=0 THROUGHOUT while a real consent.exe prompt was up on
+the guest's Winlogon desktop (the third window is the trigger's own Terminal, a legitimate
+Default-desktop window). Windows returned after dismissal: the v3 deadlock stays fixed.
+
+PHASE D (UAC policy): agent re-asserted PromptOnSecureDesktop=0 on restart in seamless,
+undoing phase C's forced 1 -> mode-driven policy confirmed. service.uac-disable=1 ->
+EnableLUA=0; CLEARING the feature the ordinary way -> EnableLUA back to 1.
+
+THE FOOTGUN THIS CAUGHT (fixed in 71fa0a4 before release): `qvm-features <vm> service.uac
+''` - the ordinary way to clear a feature - stores FALSE, which the first implementation
+read as "disable UAC" and applied. Clearing a feature must never disable a security
+control. Now only an explicit "1" acts, and the agent records whether IT applied the
+disable so it can undo exactly its own change (a guest that had UAC off before QWT keeps
+it off). Phase D's third assertion is the permanent regression test.
+
+OWNER HAND-VERIFICATION (2026-08-27, on this build): clicked Yes on a seamless-mode UAC
+prompt and the elevation proceeded; later clicked Yes/No across three more prompts. Real
+dom0 input reaches the high-IL consent dialog - UIPI blocks synthesized guest-side input,
+not the user's clicks arriving through the daemon.
+
+HARNESS BUGS FIXED THIS ROUND (mine, not the product's): (1) a window-COUNT assertion
+flagged the Terminal the UAC trigger itself spawns - replaced with surface-identity checks
+(consent 400-560x330-440, backdrop >=3000px wide); (2) phase C's premise was obsolete once
+prompts moved to the normal desktop in seamless - it now FORCES the secure desktop to test
+the freeze, which still must hold for lock/Ctrl+Alt+Del/policy; (3) the baseline census
+fired 12 s after an agent swap, before windows re-mapped - now polled up to 90 s.
