@@ -49,7 +49,8 @@ and the secure desktop is never mapped in any mode. A guest can also no longer p
 screen-sized window on your display: entering non-seamless mode shrinks the guest desktop first,
 and dom0-driven sizing (you resizing or maximizing the qube window) is untouched. Plus:
 reinstalling an older release really downgrades the driver now, and
-`qvm-features <qube> service.uac-disable 1` turns UAC off per template. Full story in the
+`qvm-features <qube> service.uac-disable 1` turns UAC off per template — the Windows
+equivalent of passwordless sudo, so use it with care. Full story in the
 [release notes](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.12-agent2adbd57).
 
 **Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
@@ -315,7 +316,7 @@ overrides, is [docs/QVM-FEATURES.md](docs/QVM-FEATURES.md). The short version:
 | `qvm-features <vm> service.gui-fullscreen 1` | allow the whole guest desktop to be shown in **one** dom0 window (non-seamless), and a borderless true-fullscreen app window. A maximized app with a title bar is always allowed; the boot/shutdown screen is never allowed, feature or not |
 | `qvm-features <vm> service.hideGuestTitleBar 1` | strip the guest's own title bars so only dom0's decoration shows. **Experimental — leave it alone:** the restyle makes windows minimize themselves |
 | `qvm-features <vm> service.gui-agent-debug 1` | full diagnostic logging in one switch: per-frame performance records, protocol traces and debug level. Set this before collecting a log for a bug report, unset it afterwards — a normal log is tens of KB, a debug log is megabytes |
-| `qvm-features <vm> service.uac-disable 1` | turn UAC **off** in the guest (reboot required). Only an explicit `1` acts; clearing the feature puts UAC back. **Set it on the TEMPLATE** — an AppVM's system drive is restored from its template at every boot and Windows reads this setting at boot, so a value applied inside an AppVM can never take effect. Not recommended: without UAC any code in the qube reaches admin/kernel, the surface facing the hypervisor |
+| `qvm-features <vm> service.uac-disable 1` | turn UAC **off** in the guest — the Windows equivalent of passwordless sudo, so use with care: anything running in the qube reaches admin/kernel without asking, and that is the surface facing the hypervisor. Reboot required. Only an explicit `1` acts; clearing the feature puts UAC back. **Set it on the TEMPLATE** — an AppVM's system drive is restored from its template at every boot and Windows reads this setting at boot, so a value applied inside an AppVM can never take effect |
 
 They are ordinary Qubes service features — any non-empty value enables, `qvm-features --unset`
 turns them off — and all are read **once, when the agent starts**, so restart the qube after
