@@ -18056,3 +18056,32 @@ driver is a mode-setting and lifecycle component; performance lives in the agent
 Track B surface is functional, not performance: mode-list/resize behavior (shipped), and any
 future stage-3 architecture change (IDD feeding frames directly), which per CLAUDE.md is a
 present-the-plan-first item, not something to start.
+
+## 2026-08-27 (night) — QUIET-HOST re-baseline: load was NOT the factor; the elevation vs
+## b299011 is real on this rig, and the profile says it lives in the damage path
+
+Conditions: owner confirmed testbed free; win11-fresh halted; ONLY win10-tpl running
+(4.3.10, QGAPERF via service.gui-agent-debug). Four runs, identical harness:
+| phase | q1 | q2 | q3 | q4 | under-load r1-r4 | canonical b299011 |
+|---|---|---|---|---|---|---|
+| drag p50 us | 826 | 781 | 1551 | 1050 | 938-1580 | 613 |
+| scroll      | 384 | 377 | 374  | 436  | 342-400  | 121 |
+| type        | 554 | 458 | 596  | 546  | 447-569  | 96  |
+| idle (pre)  | 392 | 381 | 302  | 307  | 331-1291 | ~95 |
+
+Quiet == under-load within noise → the 2-5x elevation vs canonical is NOT host load.
+Drag is bimodal across runs (781..1551 — the known scene-state trap; no drag verdicts from
+this data). Scroll is the clean metric: 374-436 stable, vs canonical 121.
+
+ATTRIBUTION (scroll phase, q2, field breakdown): dmg p50=216us mean=371 (45% of wall),
+snd mean=70 (8.6%), tracking 33% (enu spiky: p50 6us, p99 7.7ms — the periodic sweep),
+windows=1, dirty_px=164k/frame, sends=2.1/frame. The p50 total (377) is essentially
+dmg+snd+drq. LEAD, unproven: the per-window screen-content hash (PwScreenUnchanged reads
+the window's whole framebuffer region every frame; a 1054x752 window is ~3 MB/frame) plus
+the per-window damage/patch machinery post-dates b299011 and lands exactly in dmg.
+CONFOUNDS still standing for any regression claim: different rig (canonical was
+win-idd-test; vCPU/host unknown-identical), ~15 agent versions between, QGAPERF schema
+drift. What would settle it: A/B with the screen-hash short-circuited behind a flag on ONE
+build, same rig, interleaved — a proper Track A investigation, not started tonight.
+Raw canonical b299011 bench file was never committed (repo raws end Jul-31) — from now on
+bench raws for recorded baselines belong in instrumentation/ (q1-q4 committed).
