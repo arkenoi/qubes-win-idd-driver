@@ -18540,3 +18540,38 @@ to a grid (dom0 is the source of truth), so coverage would be partial; (b) find 
 can re-run the monitor description parse without arrival (unknown, needs API research);
 (c) accept the reload and attack only the capture death (task #23), which is the part that
 blanks the window. The chime itself is already silenced product-side as of 4.3.13.
+
+## 2026-08-28 — UAC claim independently REFUTED-CHECK'd and upheld; plus three rig facts worth
+## keeping
+
+A second agent tried to break the EnableLUA/CPBA result three ways (re-measurement,
+documentation, mechanism) and could not. Highlights beyond the first measurement:
+- The volatile-root premise was caught happening: EnableLUA read 0x0 at 02:14; the guest
+  rebooted at 02:15:38 and the same key read 0x1 (the template's value). The write was
+  discarded, live.
+- The decisive control is the FRESH-LOGON probe, not the elevation trials: LogonUser(INTERACTIVE)
+  + TokenElevationType stayed FILTERED across six interleaved EnableLUA flips, while
+  FilterAdministratorToken toggled RID 500 between NOT_SPLIT and FILTERED every time in the same
+  boot. That pair proves the token decision IS recomputed per logon and EnableLUA specifically
+  does not move it - a single elevation trial could not separate that from "the existing session
+  keeps its split", because schtasks /it reuses the boot-time token.
+- consent_max=1 in EVERY trial including the silent ones: consent.exe running is never evidence
+  of a prompt; persistence is. Pixels confirmed once by leaving a prompt standing and pulling a
+  dom0 screenshot of the real UAC window.
+- AMENDMENTS accepted: "latched inside LSA" is over-specific (boot-latching is measured, the
+  component is not); the shipped FEATURE remains unproven even though the mechanism is proven -
+  the set-feature -> reboot -> agent-writes-CPBA -> elevate acceptance has never been run; and on
+  a volatile root the template supplies CPBA=5 at every boot, so there is a WINDOW between boot
+  and the agent's first write in which elevations still prompt. That window is inherent and must
+  be documented if the feature is re-implemented on CPBA (task #28).
+
+RIG FACTS (all measured, all previously assumed otherwise):
+1. C:\Users\Public SURVIVES reboot - MoveUsers puts C:\Users on the PRIVATE volume. Anything
+   under C:\Users is persistent on an AppVM; the SAM (C:\Windows\System32\config) is not.
+2. `tools/qtest shot` returned a 0-byte tar once while qubes.VMShell stayed healthy: an empty
+   shot is NOT proof of "no windows", only of a failed capture. Re-take before concluding.
+3. win11-app rebooted ITSELF at least twice unattended (boots 02:15:38 and 02:25:08, plus a
+   Dying->Running cycle near 02:36), with xenagent_9_1_0_0.exe initiating shutdowns in the System
+   log (02:14:52, and 08-27 at 23:58 / 20:17 / 14:59). No 1074 record survives because the
+   System log is on the volatile C:. Given this project's AppVM reboot-loop history (4.3.5/4.3.6)
+   this deserves its own investigation before anyone trusts unattended AppVM uptime.
