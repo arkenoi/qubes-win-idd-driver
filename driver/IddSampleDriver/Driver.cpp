@@ -927,6 +927,47 @@ NTSTATUS IndirectDeviceContext::ReloadModes()
 {
     QubesDiag(L"DiagReload", L"t=%I64u enter monitor=%s", GetTickCount64(),
         m_Monitor ? L"present" : L"NULL");
+
+    // PREFERRED PATH: update the mode list IN PLACE (IddCx 1.4+).
+    //
+    // The departure/arrival pair below is a monitor UNPLUG followed by a PLUG. Windows treats
+    // it as exactly that, and the costs are all user-visible: the device connect/disconnect
+    // chime on every resolution change (which is why resizing a qube window beeps), a full
+    // display re-enumeration, and - measured repeatedly - desktop duplication dying with
+    // 0x887a0026 "keyed mutex abandoned", forcing the agent to rebuild capture and blanking
+    // the window for a moment.
+    //
+    // IddCxMonitorUpdateModes tells the OS this monitor's mode list changed; the OS re-runs
+    // EvtIddCxParseMonitorDescription / EvtIddCxMonitorQueryTargetModes (which read the
+    // registry list, exactly as the arrival path does) WITHOUT the monitor ever leaving. Same
+    // resulting mode set, none of the hot-plug side effects.
+    //
+    // The description handed over is the same one the arrival path builds, so a driver that
+    // takes this path and one that takes the fallback publish identical modes.
+    if (m_Monitor != nullptr)
+    {
+        IDDCX_MONITOR_DESCRIPTION Description = {};
+        Description.Size = sizeof(Description);
+        Description.Type = IDDCX_MONITOR_DESCRIPTION_TYPE_EDID;
+        Description.DataSize = (UINT) sizeof(s_QubesMonitorEdid);
+        Description.pData = const_cast<BYTE*>(s_QubesMonitorEdid);
+
+        IDARG_IN_UPDATEMODES UpdateIn = {};
+        UpdateIn.MonitorDescription = Description;
+
+        NTSTATUS UpStatus = IddCxMonitorUpdateModes(m_Monitor, &UpdateIn);
+        if (NT_SUCCESS(UpStatus))
+        {
+            QubesDiag(L"DiagReload", L"t=%I64u updatemodes ok (no replug)", GetTickCount64());
+            return UpStatus;
+        }
+        // Not fatal: fall through to the replug. Recorded so a log makes clear WHICH path ran
+        // - the two differ in exactly the side effects users notice.
+        QubesDiag(L"DiagReload", L"t=%I64u updatemodes FAILED 0x%08X - falling back to replug",
+            GetTickCount64(), (UINT)UpStatus);
+    }
+
+    // FALLBACK: departure + re-arrival (the original v1 mechanism).
     if (m_Monitor != nullptr)
     {
         NTSTATUS Status = IddCxMonitorDeparture(m_Monitor);
@@ -943,7 +984,7 @@ NTSTATUS IndirectDeviceContext::ReloadModes()
     // Re-create and re-arrive monitor 0 with the same identity; the arrival-path
     // callbacks re-read the registry mode list.
     NTSTATUS FiStatus = FinishInit(0);
-    QubesDiag(L"DiagReload", L"t=%I64u exit finishinit=0x%08X", GetTickCount64(), (UINT)FiStatus);
+    QubesDiag(L"DiagReload", L"t=%I64u exit finishinit=0x%08X (replug path)", GetTickCount64(), (UINT)FiStatus);
     return FiStatus;
 }
 
