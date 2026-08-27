@@ -1575,22 +1575,38 @@ public static class QdbPrime {
 }
 '@
         }
-        $qh = [QdbPrime]::qdb_open([IntPtr]::Zero)
-        if ($qh -ne [IntPtr]::Zero) {
-            $ql = [uint32]0
-            $qp = [QdbPrime]::qdb_read($qh, '/type', [ref]$ql)
-            if ($qp -ne [IntPtr]::Zero) { $primeClass = [Runtime.InteropServices.Marshal]::PtrToStringAnsi($qp, [int]$ql) }
-            [QdbPrime]::qdb_close($qh)
+        # The read is retried: a single failed attempt used to fall through to
+        # "skipped-non-template", silently shipping an unprimed template (the exact
+        # AppVM restart-loop this block exists to prevent). Field-observed as an
+        # intermittent misread; each retry re-opens the connection.
+        for ($qtry = 0; $qtry -lt 3 -and -not $primeClass; $qtry++) {
+            if ($qtry -gt 0) { Start-Sleep 2 }
+            $qh = [QdbPrime]::qdb_open([IntPtr]::Zero)
+            if ($qh -ne [IntPtr]::Zero) {
+                $ql = [uint32]0
+                $qp = [QdbPrime]::qdb_read($qh, '/type', [ref]$ql)
+                if ($qp -ne [IntPtr]::Zero) { $primeClass = [Runtime.InteropServices.Marshal]::PtrToStringAnsi($qp, [int]$ql) }
+                [QdbPrime]::qdb_close($qh)
+            }
         }
     } catch { }
-    if ($primeClass -eq 'TemplateVM') {
+    # FAIL CLOSED on an unreadable class: priming is transactional (tasks registered,
+    # latch armed last; an AppVM re-arms per boot, a StandaloneVM tolerates the armed
+    # latch - its persistent root completes the vif install either way), while SKIPPING
+    # on a template is the restart-loop defect. So: known TemplateVM -> prime; class
+    # unreadable after retries -> prime anyway; known non-template -> skip.
+    $primeIndeterminate = [string]::IsNullOrEmpty($primeClass)
+    if ($primeIndeterminate) {
+        Write-Log "qubesdb /type unreadable after 3 attempts - priming ANYWAY (fail closed: an unprimed template restart-loops its AppVMs; priming a non-template is harmless)" 'WARN'
+    }
+    if ($primeClass -eq 'TemplateVM' -or $primeIndeterminate) {
         $deployPrime = Join-Path $Root 'pvnic-selfprime.ps1'
         if (Test-Path -LiteralPath $deployPrime) {
-            Write-Log 'TemplateVM: seeding netvm-free PV NIC priming latch (pvnic-selfprime.ps1)'
+            Write-Log "$(if ($primeIndeterminate) { 'class-indeterminate' } else { 'TemplateVM' }): seeding netvm-free PV NIC priming latch (pvnic-selfprime.ps1)"
             try {
                 $pp = & $deployPrime 2>&1
                 foreach ($l in @($pp | Select-Object -Last 4)) { Write-Log "  $l" }
-                $script:Result.detail.pvnic_prime = 'seeded'
+                $script:Result.detail.pvnic_prime = if ($primeIndeterminate) { 'seeded-indeterminate-class' } else { 'seeded' }
             } catch {
                 Write-Log "pvnic priming failed: $($_.Exception.Message) (non-fatal)" 'WARN'
                 $script:Result.detail.pvnic_prime = "error: $($_.Exception.Message)"
