@@ -20,19 +20,19 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.10-agentab36aef](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.10-agentab36aef)** — agent `ab36aef`, package `4.3.10+agent.ab36aef58fcf`.
+Release **[v4.3.11-agent71fa0a4](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.11-agent71fa0a4)** — agent `71fa0a4`, package `4.3.11+agent.71fa0a4f54f9`.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.10-1.agentab36aef58fcf.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.10-agentab36aef/qubes-windows-tools-ng-4.3.10-1.agentab36aef58fcf.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
-| [`qwt-ng-4.3.10-agentab36aef.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.10-agentab36aef/qwt-ng-4.3.10-agentab36aef.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qwt-ng-4.3.10-agentab36aef-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.10-agentab36aef/qwt-ng-4.3.10-agentab36aef-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.10-agentab36aef/SHA256SUMS.txt) | checksums for all three |
+| [`qubes-windows-tools-ng-4.3.11-1.agent71fa0a4f54f9.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.11-agent71fa0a4/qubes-windows-tools-ng-4.3.11-1.agent71fa0a4f54f9.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
+| [`qwt-ng-4.3.11-agent71fa0a4.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.11-agent71fa0a4/qwt-ng-4.3.11-agent71fa0a4.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qwt-ng-4.3.11-agent71fa0a4-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.11-agent71fa0a4/qwt-ng-4.3.11-agent71fa0a4-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.11-agent71fa0a4/SHA256SUMS.txt) | checksums for all three |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.10-1.agentab36aef58fcf.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.11-1.agent71fa0a4f54f9.noarch.rpm
 ```
 
 Upgrading a guest that already runs stock QWT or an older build of this package is a
@@ -42,14 +42,15 @@ MSI replace it in one transaction (validated end to end; see the release notes).
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
-**What changed in 4.3.10:** the black-window report is now diagnosable from a plain log — the
-per-window capture engine gained `WCBLACK`/`WCDEAD` warnings (it previously logged nothing, so a
-black-rendering capture looked healthy), validated against a deliberately black window. If you
-see the black window: upgrade, reproduce, post the gui-agent log. Default logs also shrank ~40×
-(per-frame telemetry is now opt-in via the `PerfLog`/`ProtoTrace` registry switches), and the
-installer's template-priming gate fails closed instead of skipping when the qubesdb class read
-misfires. Full story in the
-[release notes](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.10-agentab36aef).
+**What changed in 4.3.11:** the recurring "unclosable black window" is fixed — it was Windows'
+**UAC secure desktop** being mapped into dom0 (the dimming backdrop behind an elevation prompt,
+with the prompt itself invisible or missing). Elevation prompts now appear as ordinary dom0
+windows in seamless mode, stay on the secure desktop in fullscreen where they render correctly,
+and the secure desktop is never mapped in either case. Also: reinstalling an *older* release now
+really downgrades the display driver (Windows' ranking only rebinds upward, which silently left a
+newer driver bound to an older agent), and `qvm-features <qube> service.uac-disable 1` can turn
+UAC off if you want it off. Full story in the
+[release notes](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.11-agent71fa0a4).
 
 **Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
 commit; the agent is `33f3109` on
