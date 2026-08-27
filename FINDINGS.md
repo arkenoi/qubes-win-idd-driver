@@ -17934,3 +17934,33 @@ RELEASE binary: 15 KB session log, perfframes=0, WCBLACK fired (wcblack:1). ALL 
 Field ask (forum draft in tmp/expblack/forum-draft.md, awaiting owner approval): GWeck
 upgrades to 4.3.10, reproduces, posts the (now ~40x smaller) log; WCBLACK-vs-WCDEAD in it
 distinguishes renders-black from capture-dead for his window.
+
+## 2026-08-27 — IDD activation hardened (repo 1efeee3, ships in the next release): downgrade
+## force-bind + bind-version assertion + staleness banner; guard skip-path finally exercised
+
+The gap (predicted from the 4.3.8 postmortem, now DEMONSTRATED on the rig): pnputil's driver
+ranking only rebinds UPWARD. Reinstalling an OLDER release over a newer one — the recovery
+flow a withdrawn release forces — staged the older package and reported success ("Driver
+package is up-to-date on device"!) while the device silently kept the NEWER driver against
+the older agent. Neither the installer's inline activation nor /iddonly noticed.
+
+Fix in BOTH paths (Install-QwtImproved.ps1 inline stage + guest/activate-idd.ps1): after the
+device is up, assert bound DriverVer version == payload INF version; on mismatch force-bind
+with devcon update, re-assert, FAIL if it still differs (result fields idd_bound / bound).
+activate-idd also prints a payload-vs-installed banner (manifest core vs MSI DisplayVersion
+3-field core) and warns on a stale tree — the C:\qwt-improved-setup staleness item.
+
+Validation ladder (win10-tpl, the post-run9 4.3.10 template; C:\q439 + C:\q4310 trees):
+1. SKIP-PATH (first time ever exercised): new activate-idd -Root C:\q4310 → guard logged
+   "SKIPPING staging", bind assert green (15838), ok:true, no false staleness warning.
+2. DEFECT DEMO (old code from C:\q439): downgrade run "succeeded", bound STAYED 4.3.5.15838
+   — the silent mismatch, reproduced with the shipped 4.3.9 script.
+3. FIX: new activate-idd -Root C:\q439 → staleness WARN fired + mismatch detected
+   (15838 != 15529) + devcon update forced the DOWNGRADE rebind + re-assert green,
+   RESULT bound=4.3.5.15529, ioctl OK.
+4. RE-UPGRADE: -Root C:\q4310 → pnputil /install rebound upward by ranking on its own;
+   assertion confirmed 15838.
+5. COLD BOOT: bound 4.3.5.15838 persists, 5120x1440, ioctl OK. Rig left healthy.
+
+Board note: run9 earlier confirmed the UPGRADE path always rebound correctly (bound advanced
+15529→15838) because pinned versions increase monotonically — the hole was downgrade-only.
