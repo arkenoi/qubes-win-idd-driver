@@ -20,6 +20,7 @@ guest-local registry value in every case.
 | `service.enableWinKey` | The Windows key reaches the guest, so Start — or a third-party shell like Open-Shell — opens. Left off, the agent drops Super *presses* and any Mod4 chord **in seamless mode only** (`agent/gui-agent/vchan-handlers.c:375-389`); Super *releases* always pass and fullscreen is never filtered. Read at `agent/gui-agent/perf.c:352` | off — the key is blocked |
 | `service.gui-fullscreen` | Allows a **borderless** true-fullscreen window — a game, video player or presentation — to be mapped (`agent/gui-agent/main.c:3165`), and lets dom0 switch the qube out of seamless into whole-screen mode (`main.c:3007`). A maximized window that still has a title bar is always allowed; the boot/shutdown screen is never allowed. Read at `main.c:6930` | off |
 | `service.hideGuestTitleBar` | Strips `WS_CAPTION` from guest windows so dom0's decoration is the only header (`main.c:1832-1845`). Read at `perf.c:348` | off |
+| `service.gui-agent-debug` | Full diagnostic logging in one switch (added 4.3.10+): per-frame `QGAPERF` telemetry, protocol/paint traces, and Debug log level. This is what to set before collecting a log for a bug report; unset it to return to the quiet default (a normal session logs tens of KB instead of MB). Overrides the guest-local `PerfLog`/`ProtoTrace` registry values in both directions. Read at `agent/gui-agent/perf.c` (QGADEBUG block in `PerfInit`) | off — quiet log |
 
 `service.hideGuestTitleBar` is **experimental and best left alone**: the restyle changes a window's
 style, which makes the agent re-map it, and dom0's window manager answers an unmap/map cycle with
@@ -70,7 +71,7 @@ You do not set these; Qubes writes them. Listed so a failure is diagnosable.
 |---|---|---|
 | `/name` | the qube name the agent reports (`agent/gui-agent/main.c:6811`) | falls back to `gethostname()` |
 | `/qubes-gui-domain-xid` | the domain the framebuffer grants are made to (`main.c:6843`) | the agent cannot grant — fatal for the GUI |
-| `/qubes-service/gui-fullscreen`, `/qubes-service/enableWinKey`, `/qubes-service/hideGuestTitleBar` | section 1 | section 1 |
+| `/qubes-service/gui-fullscreen`, `/qubes-service/enableWinKey`, `/qubes-service/hideGuestTitleBar`, `/qubes-service/gui-agent-debug` | section 1 | section 1 |
 | `/qubes-workarea` | dom0's work area and window-frame extents as `"x y w h fl fr ft fb"`, applied in the guest with `SPI_SETWORKAREA` so maximized windows fit dom0's screen rather than the guest's (`agent/gui-agent/workarea.c:333-334`). The **only key that is watched live** (`workarea.c:388`) — every other key here is read once | inferred from observed window origins; if that fails, the work area is left alone |
 
 **Note the inverted precedence.** For `gui-fullscreen` and `enableWinKey` a dom0 feature beats the
