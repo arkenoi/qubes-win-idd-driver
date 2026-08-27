@@ -923,6 +923,10 @@ void IndirectDeviceContext::QueueReloadModes(WDFREQUEST Request)
     WdfWorkItemEnqueue(m_ReloadWorkItem);
 }
 
+// Defined with the monitor callbacks further down; declared here because the in-place mode
+// update below needs the same list the query callback answers with.
+static std::vector<IDDCX_TARGET_MODE> BuildQubesTargetModes();
+
 NTSTATUS IndirectDeviceContext::ReloadModes()
 {
     QubesDiag(L"DiagReload", L"t=%I64u enter monitor=%s", GetTickCount64(),
