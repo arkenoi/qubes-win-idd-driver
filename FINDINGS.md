@@ -17722,6 +17722,9 @@ proven broken twice. Fix shipped as a workflow step that rewrites DriverVer to
 <date>,4.3.<build>.<rev> after stampinf and before Inf2Cat/signing, in both driver workflows.
 (The DLL FILEVERSION stamping and the activation identical-bytes guard stay as hygiene; the
 diag breadcrumbs move to PLUGPLAY_REGKEY_DRIVER - the hardware key rejected UMDF-host writes.)
+[CORRECTED 2026-08-28 by the unshipped-fix audit: that is not what shipped. PLUGPLAY_REGKEY_DRIVER
+was rejected too, so the breadcrumbs write to a plain FILE - Driver.cpp:269-277, appending to
+C:\ProgramData\QubesIDD-diag.log. The sentence above describes an intermediate attempt.]
 
 ## 2026-08-27 — 4.3.9 RELEASED (v4.3.9-agent33f3109): the build-hour regression fixed and sealed
 
@@ -18398,3 +18401,48 @@ That silences the SYMPTOM. The cause - a mode-list reload per new size, which Wi
 a monitor hot-plug - is task #26, and removing it also removes the latency the chime accompanies.
 AUDIT NOTE: any other "fixed" claim in this file whose implementation cannot be pointed at in the
 tree deserves the same suspicion; a hand-applied rig change is not a shipped fix.
+
+
+## 2026-08-28 — UNSHIPPED-FIX AUDIT of the whole of FINDINGS: one more gap, and it is the same
+## shape as the chime
+
+Prompted by the chime discovery (a 2026-08-05 "fix" applied by hand to a rig and written up as
+done, which no user ever received), four auditors swept all 18,400 lines. Method: extract every
+claim of a concrete applied change - registry value, service state, scheduled task, policy,
+dropped file - then actively hunt its implementation across guest/, packaging/, agent/, driver/,
+tools/, dom0/, mgmt/ and .github/workflows, including `git log -S` for things that existed and
+were removed. Instructed to bias AGAINST reporting: a false accusation costs more than a miss.
+
+RESULT: ~111 concrete claims examined; ONE further unshipped fix, plus two accuracy defects.
+
+1. NOT SHIPPED (now fixed, b17f415): guest/disable-session-lock.ps1 has existed since 6a447cd
+   but was never staged into the payload by make-setup.ps1 and never invoked by the installer -
+   only testbed guests ever got it, while FINDINGS 3128-3130 recorded the hygiene as done with
+   a product-wide rationale ("a guest whose input comes from dom0 must never take the input
+   desktop away"). It matters more now than when written: a lock screen is a secure-desktop
+   surface, which the agent deliberately refuses to map, so an idle lock leaves a shipped qube
+   looking frozen with no way in. Now staged and run at install (not gated by /noapptweaks),
+   reporting session_lock in the result JSON.
+2. ACCURACY (fixed, b17f415): the installer logged "DisableCursor=0" while seeding 1, and the
+   same stale text sat in packaging/setup/README.txt and make-setup's manifest description. A
+   log line that contradicts the code is how a future session concludes the wrong thing.
+3. ACCURACY (corrected in place above, line ~17724): the 4.3.9 entry says the IDD diag
+   breadcrumbs "move to PLUGPLAY_REGKEY_DRIVER"; the shipped code writes a plain file, because
+   that registry channel was rejected by the UMDF host too.
+
+Everything else verified SHIPPED with a file:line: the network-reapply task, PV driver certs and
+install, inbox-storage re-arm, quiet-desktop guard, autologon guard, the whole updater/relay
+plane (allowlists, spill-not-truncate, warm pool, debounce, proxy restore), IDD switches
+(/noidd, /iddoff, /iddonly), the DriverVer pin in both workflows, WCBLACK/WCDEAD plus the
+FI_PRINTWINDOW_FAIL fault point, secure-desktop suppression, service.uac-disable semantics,
+qubesdb DLL reads, xenbus_monitor shipping state, the PV NIC latch and QwtngNetSetup.
+
+Two claims the log had ALREADY self-retracted were confirmed genuinely landed later: the
+0x80072EFD in-script retry ("FALSE RECORD - no such commit exists", line 13358; substance now
+at qubes-windows-update.ps1:187-194) and the network-setup.exe retirement (line 16446; now
+pvnic-selfprime.ps1:66-385). The habit of retracting in place works - the gap is only ever the
+fix that was never written down as unfinished.
+
+STANDING RULE from this audit: a change applied by hand to a rig is NOT a fix. If a session
+applies something manually to keep moving, the log entry must say "applied by hand, NOT shipped"
+and carry a task, or it will read as done forever - which is exactly what happened twice here.
