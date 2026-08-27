@@ -18085,3 +18085,25 @@ drift. What would settle it: A/B with the screen-hash short-circuited behind a f
 build, same rig, interleaved — a proper Track A investigation, not started tonight.
 Raw canonical b299011 bench file was never committed (repo raws end Jul-31) — from now on
 bench raws for recorded baselines belong in instrumentation/ (q1-q4 committed).
+
+## 2026-08-27 (night) — 25H2 TEMPLATE BUILT; the GWeck repro matrix is now COMPLETE, all
+## four cells negative
+
+win11-tpl is now Win11 25H2: volumes cloned from win11-fresh (which carries OpenShell
+4.4.198 incl. ClassicExplorer and the user's real usage state) — note the clone landed on
+the EXISTING win11-tpl qube (win11-disp→win11-app→win11-tpl chain made removal impossible;
+the old 24H2 template state is gone, rebuildable from win11-24h2 if ever needed). Then a
+REAL 4.3.10 install in the template (tpl25h2-install.log: 4.3.10+agent.ab36aef58fcf, sha
+9e2f5b1fa902, pvnic_prime seeded, LogDir -> Q:\Qubes Logs). win11-app now derives from it.
+
+GWeck black-window matrix, dom0-pixel judged (qtest shot), agent engine identical to his:
+| arm | verdict |
+|---|---|
+| 25H2 StandaloneVM, plain Explorer | renders correctly |
+| 25H2 StandaloneVM + OpenShell/ClassicExplorer | renders correctly |
+| 24H2 AppVM | renders correctly |
+| **25H2 AppVM + OpenShell (this entry)** | **renders correctly** (shot6: Explorer, classic status bar visible, agent 4.3.10) |
+
+The defect is not reproducible with any combination we control. Remaining delta is his
+machine's specific state (exact build/updates/drivers); his next log on 4.3.10 carries
+WCBLACK/WCDEAD and answers the mechanism question directly.
