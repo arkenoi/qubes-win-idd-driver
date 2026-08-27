@@ -17904,3 +17904,33 @@ slice-fed). Eligible -> PrintWindow engine channel; DDA-OWNED while foreground+u
 (engine skips; DDA slices feed the buffer); engine sweep covers guest-occluded windows.
 GWeck's 0xa0042 attached ENGINE-path (no slice-fed suffix), so WCBLACK/WCDEAD will speak for
 his window as soon as he runs a build with e58274d.
+
+## 2026-08-27 — 4.3.10 SHIPPED (v4.3.10-agentab36aef): black-window telemetry, quiet
+## default logs with one dom0 debug switch, priming gate fails closed. E2E ALL PASS.
+
+Why a release now: the owner's call on the GWeck case — "better just give him new release
+and ask for the log again" — plus the measurement that his 2.3 MB log was 91% per-frame
+QGAPERF + 7% SYNTHPAINT traces (diagnostic content ≈ 50 KB). Contents:
+- agent e58274d: WCDEAD/WCBLACK/prefill-warn engine telemetry (WCBLACK validated earlier
+  today against a deliberately black window);
+- agent ffae88a: QGAPERF default OFF (perf.h QGA_PERF_DEFAULT 0), SYNTHPAINT gated on the
+  ProtoTrace switch its tag names; off-state logs one self-describing line;
+- agent ab36aef: `qvm-features <vm> service.gui-agent-debug 1` — ONE dom0 switch enabling
+  per-frame perf + proto traces + Debug level, read once at Init from
+  /qubes-service/gui-agent-debug, dom0 wins both directions (owner: "make it configurable
+  in our regular way" → "qvm-features please" → "to enable all debug");
+- installer (repo 0e02fdb): priming gate retries the qubesdb /type read 3x and PRIMES ANYWAY
+  when indeterminate (fail closed) — task #16 closed; result field seeded-indeterminate-class.
+
+E2E (run9, tmp/e2e4310/, agent build 9e2f5b1fa902 manifest-matched): pristine win10 chain →
+4.3.9 fresh (LOUD-log control: QGAPERF on — proves the quiet assert can fail) → 4.3.10
+upgrade → boot1+boot2 (bound=4.3.5.15838, 5120x1440, agentver 4.3.10, perfframes=0,
+off-banner present) → debug-feature A/B (feature=1: QGADEBUG ON + frames flowing;
+feature='': QGADEBUG OFF + quiet — dom0 override proven in both directions) → priming
+seeded (assert: never skipped-non-template) → xenvif + selfprime armed → AppVM gate PASS
+(survived t+300s, svc/start/xenwin/e1074/tcp all green) → Phase B on win11-app with the
+RELEASE binary: 15 KB session log, perfframes=0, WCBLACK fired (wcblack:1). ALL PASS 16:48.
+
+Field ask (forum draft in tmp/expblack/forum-draft.md, awaiting owner approval): GWeck
+upgrades to 4.3.10, reproduces, posts the (now ~40x smaller) log; WCBLACK-vs-WCDEAD in it
+distinguishes renders-black from capture-dead for his window.

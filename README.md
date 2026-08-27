@@ -20,19 +20,19 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.9-agent33f3109](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.9-agent33f3109)** — agent `33f3109`, package `4.3.9+agent.33f31091ef2d`.
+Release **[v4.3.10-agentab36aef](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.10-agentab36aef)** — agent `ab36aef`, package `4.3.10+agent.ab36aef58fcf`.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.9-1.agent33f31091ef2d.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.9-agent33f3109/qubes-windows-tools-ng-4.3.9-1.agent33f31091ef2d.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
-| [`qwt-ng-4.3.9-agent33f3109.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.9-agent33f3109/qwt-ng-4.3.9-agent33f3109.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qwt-ng-4.3.9-agent33f3109-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.9-agent33f3109/qwt-ng-4.3.9-agent33f3109-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.9-agent33f3109/SHA256SUMS.txt) | checksums for all three |
+| [`qubes-windows-tools-ng-4.3.10-1.agentab36aef58fcf.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.10-agentab36aef/qubes-windows-tools-ng-4.3.10-1.agentab36aef58fcf.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
+| [`qwt-ng-4.3.10-agentab36aef.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.10-agentab36aef/qwt-ng-4.3.10-agentab36aef.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qwt-ng-4.3.10-agentab36aef-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.10-agentab36aef/qwt-ng-4.3.10-agentab36aef-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.10-agentab36aef/SHA256SUMS.txt) | checksums for all three |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.9-1.agent33f31091ef2d.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.10-1.agentab36aef58fcf.noarch.rpm
 ```
 
 Upgrading a guest that already runs stock QWT or an older build of this package is a
@@ -42,15 +42,14 @@ MSI replace it in one transaction (validated end to end; see the release notes).
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
-**What changed in 4.3.9:** the withdrawn 4.3.8's regression is fixed, mechanism confirmed: the
-build stamped the INF version with the *build time*, and a display driver version's first field
-is — per Microsoft's spec — a WDDM model declaration. Versions ≥ 21 declare WDDM 2.1+, which
-this IddCx driver isn't, and Windows punishes the over-claim (measured: a perfect works/breaks
-step at exactly 21 across 14 code-identical packages). Evening builds broke; the version is now
-pinned to 4.3.x.y. Carried over from
-4.3.8: the black-fullscreen-window fix (field confirmation wanted), reliable updater-relay
-deploys, and a window-filter diagnostic switch. Full story in the
-[release notes](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.9-agent33f3109).
+**What changed in 4.3.10:** the black-window report is now diagnosable from a plain log — the
+per-window capture engine gained `WCBLACK`/`WCDEAD` warnings (it previously logged nothing, so a
+black-rendering capture looked healthy), validated against a deliberately black window. If you
+see the black window: upgrade, reproduce, post the gui-agent log. Default logs also shrank ~40×
+(per-frame telemetry is now opt-in via the `PerfLog`/`ProtoTrace` registry switches), and the
+installer's template-priming gate fails closed instead of skipping when the qubesdb class read
+misfires. Full story in the
+[release notes](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.10-agentab36aef).
 
 **Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
 commit; the agent is `33f3109` on
