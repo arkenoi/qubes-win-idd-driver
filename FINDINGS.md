@@ -17656,3 +17656,37 @@ explains the "wounded" original test chain (4 store generations, two identical p
 2. CI: stamp the DLL's version resource per build so identical-source rebuilds are never
    byte-identical again (same lesson pv-xenvif already learned for DriverVer).
 Template healed to oem12 and shut down pending the fix build.
+
+## 2026-08-27 (night) — 4.3.9 acceptance FAILED; three mechanism models falsified; do not publish
+
+The stamped-DLL build is real (FILEVERSION 4.3.5.1503, sha 88e323c1 != 5dc42759 - and the .rc
+had NEVER been referenced by the vcxproj, which is WHY all rebuilds were byte-identical). But
+phase A (upgrade of the healed rig to 4.3.9) FAILED: boot1 kept 1024x768, boot2 came up
+3440x1440, 5120x1440 never appears, ioctl still 0xC0000476. e2e did not pass -> 4.3.9 NOT
+published (owner's gate). 4.3.7 stays Latest and keeps working.
+
+**Falsified tonight, in order:**
+1. UMDF-copy hardlink identity: after the 4.3.9 rebind the copy, link and binding are fully
+   COHERENT (88e323c1, linked into the oem7 store dir, bound oem7) - and the device still
+   fails. RETRACTED as the mechanism (it was consistent with, but not the cause of, the E1/E2
+   package A/B).
+2. Byte-identical rebuilds as THE cause: a byte-DIFFERENT upgrade breaks identically. The
+   stamping stays (hygiene; removes a real confound) but it is not the fix.
+3. Modes-key content at boot: the failing boots had 5120x1440 FIRST in the key; and after a
+   deterministic key write (5120x1440,1024x768 only) the guest booted at 3440x1440 - a mode in
+   NEITHER the key NOR s_SampleDefaultModes (1920/1600/1024). Some third mode source exists
+   (suspect: dxgkrnl's persisted GraphicsDrivers configuration against the M1 stable EDID
+   identity) and the driver's actual read/offer behavior is invisible.
+
+**What is actually known:** oem12-bound boots reach 5120x1440 (many samples); every other
+binding tried (oem14, oem7) fails to surface 5120x1440 while sometimes surfacing OTHER
+registry modes (3440x1440); the QIDD ioctl answers STATUS_OPERATION_IN_PROGRESS in the failing
+states; the failure is per-BINDING, reproducible across reboots, and survives device
+recreation. Driver code identical (modulo the new version resource), cert identical, cats
+valid, INFs identical modulo DriverVer.
+
+**Next step (decided): instrument the driver.** It is our code and currently emits nothing:
+record into its device registry key (a) the modes-key content each read sees, (b) the mode
+list it offers at each arrival, (c) every ReloadModes entry/exit + ioctl disposition. Then the
+oem12-vs-other difference becomes readable instead of inferred. No further mechanism claims
+until that data exists.
