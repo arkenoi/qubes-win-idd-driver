@@ -18135,3 +18135,46 @@ linearly, host geometry differs). No like-for-like exists; no regression is clai
 absolute cost is immaterial anyway (~380us/frame at ~18 fps < 1% CPU). ACTION: none. The
 q1-q4 raws are the canonical baseline for win10-tpl from here on (rule-canonical-benchmarks).
 Rig restored: DdaCapture value deleted (default on), debug feature off, template halted.
+
+## 2026-08-27 (night) — GWECK'S BLACK WINDOW: ROOT CAUSE FOUND AND REPRODUCED. It is the
+## UAC secure-desktop DIMMING BACKDROP, mapped into dom0. Our testbeds never saw it because
+## they run with UAC OFF.
+
+His 4.3.10 log set (forum post 98, four logs, service.gui-agent-debug worked in the field —
+first production use) carried a loud double negative: ZERO WCBLACK and ZERO WCDEAD in 1.4 MB
+of debug log while the black window was on screen — the capture engine is exonerated
+entirely. What the logs DID show: his boot agent died at 18:51:13 on 0x887a0026 (keyed mutex
+abandoned) with the log truncating mid-recovery; TWO respawned agents racing 2 s apart, both
+attaching to the WINLOGON desktop ("QGADESK from=Winlogon"), both dying ("Die Pipe wurde
+beendet"); a working session 3 min later. from=Winlogon is the tell: THE GUEST WAS ON THE
+SECURE DESKTOP — a UAC prompt was up.
+
+Why we could never reproduce: every rig here runs EnableLUA=0 (UAC off, the self-deploy
+convenience). GWeck runs a normal UAC-on Windows. Flipping EnableLUA=1 in win11-tpl and
+triggering one elevation on the 25H2 AppVM reproduced the WHOLE report in one shot
+(shot8/win-1,2): the agent re-attaches to the Winlogon desktop, enumerates ITS windows, and
+maps BOTH the UAC consent dialog AND the fullscreen dimming backdrop into dom0. The mapped
+backdrop — a big, dark, unclosable, input-dead window (input is parked on the secure
+desktop; the Win key does nothing) — IS the black window, pixel for pixel matching his
+description. Whether the consent dialog appears next to it is agent-crash timing: his agent
+died during the switch, so he got the backdrop alone. "Still there" = the elevation was
+still pending. "At startup" = something on his machine elevates at logon. The old/new
+Win-key symptom flip = guest focus state. On dismissal (consent killed) a HEALTHY agent
+unmaps both cleanly (shot10: Explorer alone); agent-kill mid-UAC left NO dom0 orphan on our
+R4.3 daemon (shot11) — persistence on his rig is pending-UAC, not orphanhood.
+
+FIX (agent 07fb32d, next release): AttachToInputDesktop tracks g_OnSecureDesktop (input
+desktop != "Default", transitions logged: "secure-desktop ENTERED/LEFT ... mapping
+suppressed"); ShouldAcceptWindow rejects EVERYTHING while set. This enforces the owner rule
+("the secure desktop is NEVER granted", 2026-08-19) structurally — it was previously
+enforced only per-class (LogonUI), and consent.exe's surfaces sailed through. Boot/logon
+Winlogon passes get the same suppression, generalizing the LogonUI deny.
+
+OPEN, tracked in task #23: the 0x887a0026 death on the desktop switch (recovery path
+crashes), the QioReadBuffer 0x6d "pipe ended" short-lived-agent deaths at boot (both rigs,
+~3-min respawn gap), and the watchdog double-respawn race. OPEN, owner decision standing:
+a pending UAC is now INVISIBLE (suppression working as designed) — the qube "does nothing"
+until the prompt is answered or times out; the log says why. UAC visibility remains future
+work per the 2026-08-19 decision ("will see") — field evidence now quantifies the cost both
+ways. Testbed note: win11-tpl currently has EnableLUA=1 (kept deliberately: the UAC-on rig
+is the GWeck-faithful repro rig now; SYSTEM-path qrexec tooling is unaffected).
