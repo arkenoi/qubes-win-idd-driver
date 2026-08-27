@@ -946,30 +946,23 @@ NTSTATUS IndirectDeviceContext::ReloadModes()
     // takes this path and one that takes the fallback publish identical modes.
     if (m_Monitor != nullptr)
     {
-        // IDARG_IN_UPDATEMODES carries the TARGET mode list (Reason, TargetModeCount,
-        // pTargetModes) - there is no monitor description in it. Report exactly what the
-        // query callback would answer, so an in-place update and a replug publish the same
-        // set for the same registry state.
-        std::vector<IDDCX_TARGET_MODE> TargetModes = BuildQubesTargetModes();
+        IDDCX_MONITOR_DESCRIPTION Description = {};
+        Description.Size = sizeof(Description);
+        Description.Type = IDDCX_MONITOR_DESCRIPTION_TYPE_EDID;
+        Description.DataSize = (UINT) sizeof(s_QubesMonitorEdid);
+        Description.pData = const_cast<BYTE*>(s_QubesMonitorEdid);
 
         IDARG_IN_UPDATEMODES UpdateIn = {};
-        UpdateIn.Reason = IDDCX_UPDATE_REASON_OTHER;
-        UpdateIn.TargetModeCount = (UINT) TargetModes.size();
-        UpdateIn.pTargetModes = TargetModes.data();
+        UpdateIn.MonitorDescription = Description;
 
-        NTSTATUS UpStatus = TargetModes.empty()
-            ? STATUS_INVALID_PARAMETER
-            : IddCxMonitorUpdateModes(m_Monitor, &UpdateIn);
+        NTSTATUS UpStatus = IddCxMonitorUpdateModes(m_Monitor, &UpdateIn);
         if (NT_SUCCESS(UpStatus))
         {
-            QubesDiag(L"DiagReload", L"t=%I64u updatemodes ok (no replug) targets=%u",
-                GetTickCount64(), (UINT) TargetModes.size());
+            QubesDiag(L"DiagReload", L"t=%I64u updatemodes ok (no replug)", GetTickCount64());
             return UpStatus;
         }
-        // Non-fatal: fall through to the replug, and record WHICH path ran - they differ in
-        // exactly the side effects users notice. The agent re-checks whether the requested
-        // mode actually became available and replugs itself if not, so a no-op here cannot
-        // strand a resize.
+        // Not fatal: fall through to the replug. Recorded so a log makes clear WHICH path ran
+        // - the two differ in exactly the side effects users notice.
         QubesDiag(L"DiagReload", L"t=%I64u updatemodes FAILED 0x%08X - falling back to replug",
             GetTickCount64(), (UINT)UpStatus);
     }
@@ -1145,12 +1138,12 @@ NTSTATUS IddSampleMonitorGetDefaultModes(IDDCX_MONITOR MonitorObject, const IDAR
     return STATUS_SUCCESS;
 }
 
-// Qubes #26: the ONE target-mode list, shared by the query callback and the in-place mode
-// update. Both must answer with the same set, or an update would publish a different list
-// than a replug would and the two paths would behave differently for the same registry state.
-static std::vector<IDDCX_TARGET_MODE> BuildQubesTargetModes()
+_Use_decl_annotations_
+NTSTATUS IddSampleMonitorQueryModes(IDDCX_MONITOR MonitorObject, const IDARG_IN_QUERYTARGETMODES* pInArgs, IDARG_OUT_QUERYTARGETMODES* pOutArgs)
 {
-    std::vector<IDDCX_TARGET_MODE> TargetModes;
+    UNREFERENCED_PARAMETER(MonitorObject);
+
+    vector<IDDCX_TARGET_MODE> TargetModes;
 
     // Create a set of modes supported for frame processing and scan-out. These are typically not based on the
     // monitor's descriptor and instead are based on the static processing capability of the device. The OS will
@@ -1204,17 +1197,6 @@ static std::vector<IDDCX_TARGET_MODE> BuildQubesTargetModes()
             TargetModes.push_back(CreateIddCxTargetMode(RegMode.Width, RegMode.Height, VSync));
         }
     }
-
-    return TargetModes;
-}
-
-_Use_decl_annotations_
-NTSTATUS IddSampleMonitorQueryModes(IDDCX_MONITOR MonitorObject, const IDARG_IN_QUERYTARGETMODES* pInArgs, IDARG_OUT_QUERYTARGETMODES* pOutArgs)
-{
-    UNREFERENCED_PARAMETER(MonitorObject);
-
-    // Same list the in-place update reports (Qubes #26).
-    std::vector<IDDCX_TARGET_MODE> TargetModes = BuildQubesTargetModes();
 
     pOutArgs->TargetModeBufferOutputCount = (UINT) TargetModes.size();
 
