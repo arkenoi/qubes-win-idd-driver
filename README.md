@@ -42,10 +42,11 @@ MSI replace it in one transaction (validated end to end; see the release notes).
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
-**What changed in 4.3.9:** the withdrawn 4.3.8's regression is fixed — its cause was the *hour
-the release was built*: the driver build stamped the INF version with the build time, and
-evening builds (21.x/23.x) landed in the WDDM driver-version encoding space that graphics-stack
-compat logic parses, killing arbitrary resolutions. The version is now pinned. Carried over from
+**What changed in 4.3.9:** the withdrawn 4.3.8's regression is gone — the driver build stamped
+the INF version with the *build time*, and certain resulting version numbers (21.x/23.x) make
+Windows mishandle the driver, killing arbitrary resolutions; same bytes, different version,
+measured exhaustively. The version is now pinned, which eliminates the failure. The underlying
+OS mechanism is still being pinned down. Carried over from
 4.3.8: the black-fullscreen-window fix (field confirmation wanted), reliable updater-relay
 deploys, and a window-filter diagnostic switch. Full story in the
 [release notes](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.9-agent33f3109).
