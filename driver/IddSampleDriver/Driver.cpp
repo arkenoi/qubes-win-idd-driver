@@ -245,6 +245,49 @@ static IDDCX_TARGET_MODE CreateIddCxTargetMode(DWORD Width, DWORD Height, DWORD 
 // Origin = MONITORDESCRIPTOR) and EvtIddCxMonitorGetDefaultDescriptionModes (would fire
 // only for a DataSize == 0 monitor; Origin = DRIVER), so mode behavior is identical to
 // the proven EDID-less D4 path no matter which callback the OS chooses.
+// ==============================
+// Qubes DIAG: registry breadcrumbs into the device hardware key (Device Parameters).
+// The 2026-08-27 investigation burned three inferred mechanisms because this driver
+// emitted NOTHING observable; every decision point below now records its inputs and
+// outputs where `reg query HKLM\SYSTEM\CCS\Enum\ROOT\DISPLAY\0000\Device Parameters`
+// can read them. Values are latest-wins; DiagSeq counts total writes.
+// ==============================
+static WDFDEVICE g_QubesDiagDevice = nullptr;
+static volatile LONG g_QubesDiagSeq = 0;
+
+static void QubesDiag(PCWSTR Name, PCWSTR Format, ...)
+{
+    if (g_QubesDiagDevice == nullptr)
+        return;
+
+    WCHAR buf[512];
+    va_list ap;
+    va_start(ap, Format);
+    _vsnwprintf_s(buf, ARRAYSIZE(buf), _TRUNCATE, Format, ap);
+    va_end(ap);
+
+    WDFKEY key = nullptr;
+    if (!NT_SUCCESS(WdfDeviceOpenRegistryKey(g_QubesDiagDevice, PLUGPLAY_REGKEY_DEVICE,
+            KEY_SET_VALUE, WDF_NO_OBJECT_ATTRIBUTES, &key)))
+        return;
+
+    UNICODE_STRING un;
+    un.Buffer = (PWCH)Name;
+    un.Length = (USHORT)(wcslen(Name) * sizeof(WCHAR));
+    un.MaximumLength = un.Length + sizeof(WCHAR);
+    WdfRegistryAssignValue(key, &un, REG_SZ,
+        (ULONG)((wcslen(buf) + 1) * sizeof(WCHAR)), buf);
+
+    LONG seq = InterlockedIncrement(&g_QubesDiagSeq);
+    UNICODE_STRING us;
+    us.Buffer = (PWCH)L"DiagSeq";
+    us.Length = (USHORT)(wcslen(L"DiagSeq") * sizeof(WCHAR));
+    us.MaximumLength = us.Length + sizeof(WCHAR);
+    WdfRegistryAssignValue(key, &us, REG_DWORD, sizeof(seq), &seq);
+
+    WdfRegistryClose(key);
+}
+
 static std::vector<IDDCX_MONITOR_MODE> BuildQubesMonitorModes(IDDCX_MONITOR_MODE_ORIGIN Origin)
 {
     std::vector<IDDCX_MONITOR_MODE> MonitorModes;
@@ -281,6 +324,23 @@ static std::vector<IDDCX_MONITOR_MODE> BuildQubesMonitorModes(IDDCX_MONITOR_MODE
             MonitorModes.push_back(CreateIddCxMonitorMode(
                 RegMode.Width, RegMode.Height, VSync, Origin));
         }
+    }
+
+    // DIAG: full offered list (up to 12 entries) + origin + vsync, per invocation.
+    {
+        WCHAR list[384] = L"";
+        size_t used = 0;
+        for (size_t i = 0; i < MonitorModes.size() && i < 12 && used < 340; i++)
+        {
+            WCHAR one[32];
+            _snwprintf_s(one, ARRAYSIZE(one), _TRUNCATE, L"%ux%u,",
+                MonitorModes[i].MonitorVideoSignalInfo.activeSize.cx,
+                MonitorModes[i].MonitorVideoSignalInfo.activeSize.cy);
+            wcscat_s(list, one);
+            used = wcslen(list);
+        }
+        QubesDiag(L"DiagOffer", L"t=%I64u origin=%u vsync=%u n=%u %s",
+            GetTickCount64(), (UINT)Origin, VSync, (UINT)MonitorModes.size(), list);
     }
 
     return MonitorModes;
@@ -431,6 +491,10 @@ NTSTATUS IddSampleDeviceAdd(WDFDRIVER Driver, PWDFDEVICE_INIT pDeviceInit)
     // Create a new device context object and attach it to the WDF device object
     auto* pContext = WdfObjectGet_IndirectDeviceContextWrapper(Device);
     pContext->pContext = new IndirectDeviceContext(Device);
+
+    // DIAG: single-device driver; the global is diagnostic plumbing only.
+    g_QubesDiagDevice = Device;
+    QubesDiag(L"DiagDeviceAdd", L"t=%I64u", GetTickCount64());
 
     // Qubes D4v3: register the control device interface and create the reload work item.
     // Deliberately non-fatal: a failure here disables the IOCTL reload path only — the
@@ -839,14 +903,17 @@ void IndirectDeviceContext::QueueReloadModes(WDFREQUEST Request)
 {
     if (m_ReloadWorkItem == nullptr)
     {
+        QubesDiag(L"DiagIoctl", L"t=%I64u NOT_READY (no work item)", GetTickCount64());
         WdfRequestComplete(Request, STATUS_DEVICE_NOT_READY);
         return;
     }
     if (InterlockedCompareExchange(&m_ReloadPending, 1, 0) != 0)
     {
+        QubesDiag(L"DiagIoctl", L"t=%I64u BUSY (reload pending)", GetTickCount64());
         WdfRequestComplete(Request, STATUS_DEVICE_BUSY);
         return;
     }
+    QubesDiag(L"DiagIoctl", L"t=%I64u queued", GetTickCount64());
 
     // Hand the request to the work item: the IOCTL is completed only after the
     // departure + re-arrival sequence has run, with its status. Departure/arrival are
@@ -857,11 +924,14 @@ void IndirectDeviceContext::QueueReloadModes(WDFREQUEST Request)
 
 NTSTATUS IndirectDeviceContext::ReloadModes()
 {
+    QubesDiag(L"DiagReload", L"t=%I64u enter monitor=%s", GetTickCount64(),
+        m_Monitor ? L"present" : L"NULL");
     if (m_Monitor != nullptr)
     {
         NTSTATUS Status = IddCxMonitorDeparture(m_Monitor);
         if (!NT_SUCCESS(Status))
         {
+            QubesDiag(L"DiagReload", L"t=%I64u departure FAILED 0x%08X", GetTickCount64(), (UINT)Status);
             return Status;
         }
         // The departure destroyed the monitor object (its cleanup callback freed the
@@ -871,7 +941,9 @@ NTSTATUS IndirectDeviceContext::ReloadModes()
 
     // Re-create and re-arrive monitor 0 with the same identity; the arrival-path
     // callbacks re-read the registry mode list.
-    return FinishInit(0);
+    NTSTATUS FiStatus = FinishInit(0);
+    QubesDiag(L"DiagReload", L"t=%I64u exit finishinit=0x%08X", GetTickCount64(), (UINT)FiStatus);
+    return FiStatus;
 }
 
 IndirectMonitorContext::IndirectMonitorContext(_In_ IDDCX_MONITOR Monitor) :
@@ -919,6 +991,8 @@ NTSTATUS IddSampleAdapterInitFinished(IDDCX_ADAPTER AdapterObject, const IDARG_I
     // to report attached monitors.
 
     auto* pDeviceContextWrapper = WdfObjectGet_IndirectDeviceContextWrapper(AdapterObject);
+    QubesDiag(L"DiagInitFinished", L"t=%I64u status=0x%08X", GetTickCount64(),
+        (UINT)pInArgs->AdapterInitStatus);
     if (NT_SUCCESS(pInArgs->AdapterInitStatus))
     {
         for (DWORD i = 0; i < IDD_SAMPLE_MONITOR_COUNT; i++)
@@ -934,7 +1008,7 @@ _Use_decl_annotations_
 NTSTATUS IddSampleAdapterCommitModes(IDDCX_ADAPTER AdapterObject, const IDARG_IN_COMMITMODES* pInArgs)
 {
     UNREFERENCED_PARAMETER(AdapterObject);
-    UNREFERENCED_PARAMETER(pInArgs);
+    QubesDiag(L"DiagCommit", L"t=%I64u paths=%u", GetTickCount64(), pInArgs->PathCount);
 
     // For the sample, do nothing when modes are picked - the swap-chain is taken care of by IddCx
 
@@ -963,6 +1037,8 @@ NTSTATUS IddSampleParseMonitorDescription(const IDARG_IN_PARSEMONITORDESCRIPTION
     // ==============================
 
     vector<IDDCX_MONITOR_MODE> MonitorModes = BuildQubesMonitorModes(IDDCX_MONITOR_MODE_ORIGIN_MONITORDESCRIPTOR);
+    QubesDiag(L"DiagParse", L"t=%I64u inbuf=%u modes=%u", GetTickCount64(),
+        pInArgs->MonitorModeBufferInputCount, (UINT)MonitorModes.size());
 
     pOutArgs->MonitorModeBufferOutputCount = (UINT) MonitorModes.size();
 
