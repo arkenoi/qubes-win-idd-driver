@@ -18490,3 +18490,53 @@ Anything that forces a re-logon must write ForceAutoLogon=1 first.
 ENVIRONMENT NOTE: 25H2 carries TypeOfAdminApprovalMode=1 (legacy Admin Approval Mode) and
 ConsentPromptBehaviorEnhancedAdmin=1. If Administrator protection (TypeOfAdminApprovalMode=2)
 is ever enabled, CPBA stops governing and everything above needs re-measuring.
+
+## 2026-08-28 — #26 (resize chime/latency): IddCxMonitorUpdateModes TRIED AND REVERTED. The
+## replug is removable; making the new size ACTUALLY AVAILABLE by that route is not proven.
+
+Mechanism established first: every new size is written to HKLM\SOFTWARE\QubesIDD\Modes and the
+driver's ReloadModes then does IddCxMonitorDeparture -> re-create -> IddCxMonitorArrival. That
+is a genuine monitor unplug/replug, which is why Windows plays the device connect/disconnect
+chime on every resize, re-enumerates displays, and (measured) kills desktop duplication.
+
+ATTEMPT: replace the replug with IddCxMonitorUpdateModes (we build against IddCx 1.4, which
+has it). Two compile errors along the way, both my guesses: IDARG_IN_UPDATEMODES carries no
+monitor description - it is {Reason, TargetModeCount, pTargetModes} - and the shared target-mode
+builder needed a forward declaration. Third build compiled.
+
+MEASURED on win11-app with that driver bound (4.3.5.16443):
+- The replug IS eliminated: "DiagReload updatemodes ok (no replug) targets=10", twice, and the
+  OS reacted (DiagCommit paths=1 after each). No departure/arrival.
+- Capture still dies: 887a0026 count went 8 -> 10 across the reload window, against an IDLE
+  CONTROL of delta=0 over the same 12 s. So the in-place update does NOT save desktop
+  duplication; that teardown is not caused by the replug alone.
+- Whether the NEW SIZE becomes usable: NOT ESTABLISHED, and probably not. UpdateModes refreshes
+  the TARGET mode list; the MONITOR mode list comes from EvtIddCxParseMonitorDescription, which
+  runs on ARRIVAL. The OS offers the intersection, so without a re-parse the new size stays
+  unavailable - and the agent would then time out waiting and fall back to the PnP device
+  restart, which its own comments call the worse path (it disturbs the Xen platform device).
+
+REVERTED (7256c9f, 567e153, fa5a6e3) rather than shipped: a change that plausibly makes resize
+SLOWER, on the strength of "the replug went away", is exactly the kind of half-measured fix this
+project keeps paying for. Nothing was released with it - 4.3.13 was built from d3273de, before.
+
+INSTRUMENT WARNINGS EARNED THE HARD WAY (all mine, all cost real time):
+- schtasks /tr does NOT interpret redirection: without `cmd /c` the ">" is passed to PowerShell
+  as an argument and the output silently goes nowhere. Hours of "the task never ran".
+- A task running as the (non-elevated) user CANNOT write to C:\ root under UAC - every probe
+  that wrote C:\foo.txt produced nothing. Use C:\Users\Public (which, note, is on the PRIVATE
+  volume via MoveUsers and survives reboots).
+- WmiMonitorListedSupportedSourceModes is NOT an availability oracle: it listed 4 modes
+  (1024x768, 800x600, 640x480, 1920x1080) while the guest was running at 5120x1440. It reports
+  EDID-declared timings, not the effective mode set.
+- EnumDisplaySettings returns 0x0 from the qrexec SYSTEM context AND my DEVMODE marshalling read
+  zeros even in-session; do not trust a hand-rolled DEVMODE without validating it against a
+  known-good size first.
+
+WHERE #26 GOES NEXT (not started): the reload is needed because monitor modes are only rebuilt
+on arrival. Options: (a) publish a BROAD monitor mode list at arrival so common sizes never need
+a reload - but dom0 window sizes are arbitrary and the owner's rule forbids snapping the guest
+to a grid (dom0 is the source of truth), so coverage would be partial; (b) find whether IddCx
+can re-run the monitor description parse without arrival (unknown, needs API research);
+(c) accept the reload and attack only the capture death (task #23), which is the part that
+blanks the window. The chime itself is already silenced product-side as of 4.3.13.
