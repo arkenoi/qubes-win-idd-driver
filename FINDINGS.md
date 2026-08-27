@@ -17801,3 +17801,67 @@ via direct selfprime (class-read flake still skips it in the installer - task op
 gate PASS: survival t+300s, xenbus_monitor Stopped/Disabled, no dialogs, toast machinery
 intact, network up through fw-net/mirage. v4.3.9-agent33f3109 is the released, mechanism-
 confirmed, end-to-end-validated build.
+
+## 2026-08-27 — GWeck black-window field log (forum post 96): the log CANNOT show the defect,
+## because the per-window capture engine has zero telemetry. Suspect identified as his File
+## Explorer window; every reproduction arm we control renders it CORRECTLY on our rigs.
+
+His gui-agent-20260827-110828 log (agent 4.3.7.0, Win11 25H2 AppVM, host 1920x1200, boot at
+11:08:28, pulled 11:23): clean session — no vchan errors, no capture errors, normal map/unmap
+churn. The only persistent window is 0xa0042: per-window buffer 1054x752 attached 11:17:17,
+never unmapped, sticky-foreground (re-raised after every other window's unmap — matches "the
+black one keeps Windows-key response"), owns a synthesized tooltip child 0x3028e (279x50,
+three text-line paints: an Explorer item tooltip). 1054x752 equals the DWM bounds of the
+CabinetWClass window in his earlier winenum (1068x759 outer − 7px borders). Conclusion: the
+black window on THIS boot is (almost certainly) his File Explorer window, NOT Progman — the
+earlier Progman identification does not hold for this boot (no fullscreen window was ever
+attached; slabs top out at 775 pages).
+
+**Why the log is structurally blind here.** wincapture.cpp (the per-window engine, PrintWindow
++ PW_RENDERFULLCONTENT) contains not a single log statement. A channel goes dead after 5
+consecutive PrintWindow failures — silently. WcPrefill failure is LogDebug (invisible at his
+level); its own comment says failure "just means a black window until the first frame".
+QGAPERF's pwcap counts capture REQUESTS (WcMarkDirty), not engine outcomes. Therefore his log
+is IDENTICAL under three states: (a) PrintWindow succeeds but renders the window black (WinUI/
+DirectComposition blind spot), (b) PrintWindow fails 5x and the channel dies with the granted
+buffer never written (dom0 keeps showing the zero-filled = BLACK pages), (c) healthy capture.
+His eyes rule out (c). The DDA overlay explains the rest of his report: during a drag the DDA
+slice path paints real desktop fragments into the buffer (his 11:18:08 burst: ddacap=1,
+sends=2/frame, area≈4480px), and the settle capture re-blacks them — content flashes during
+drag, black on release.
+
+Dead ends closed while reading the log (each looked like the smoking gun and was not):
+- sends=0 in QGAPERF frames: g_PerfSendCount is __declspec(thread); the engine sends from the
+  capture thread, invisible to the main loop's counter. Retracted.
+- ddmov=1 per frame at log end: one real drag in progress; only ONE QGADDAMOVE in the whole
+  session (at attach). Not a stuck-moving state. Retracted.
+- "unknown msg type 127" x43: MSG_CROSSING — our handler switch simply has no case for it
+  (enter/leave ignored). Benign, worth adding a case someday.
+- "no shell window" at init: GetShellWindow()==NULL when the agent starts on 25H2 — the
+  filter's shell-window identity check can never match at that point. Noted, not this bug.
+
+**Reproduction attempts (all NEGATIVE — the defect is not reproducible with the deltas we
+control).** Instrument: exp-probe.ps1 (schtasks /it into the session; PrintWindow both flags
+on a CabinetWClass window; black-pixel ratio + PNG). Instrument validated in BOTH directions
+on win11-fresh 26200.9168: fullcontent arm 0.1% black (real content), plain arm 21.5% black —
+PrintWindow WITHOUT the flag reproduces exactly the failure shape (WinUI islands black), so
+the probe detects the defect class when present. Arms tested, Explorer content CORRECT in
+dom0 pixels (qtest shot) every time:
+- plain 25H2 StandaloneVM (win11-fresh), agent 4.3.9 — correct;
+- + OpenShell 4.4.198 incl. ClassicExplorer injected (his setup; classic status bar visible
+  in the shot) — correct, probe still 0.1% black;
+- Win11 AppVM (win11-app on win11-tpl), agent 4.3.9 swapped into the template — correct.
+- Engine code identical 4.3.7→4.3.9 (git: no wincapture.cpp/perwindow.c/capture.c commits in
+  24cf973..33f3109), so his 4.3.7 is not the delta.
+Remaining unknowns on his side: his exact Windows build/update level, the actual identity of
+0xa0042 (Explorer inference is strong but unproven), and his dom0 guid log (grant-map failures
+on MSG_WINDOW_DUMP would also render black and are invisible to the agent).
+
+Actions this produced (in flight): (1) pwdiag.ps1 — a one-command field diagnostic for GWeck:
+enumerate visible top-level windows, PrintWindow each with both flags, report class/title/rect
+/styles + black ratios + PNGs; (2) wincapture.cpp telemetry: log channel death (5 failures,
+with GetLastError), WcPrefill failure at warning level, and a one-shot per-channel all-black
+capture detector — so the NEXT field log answers (a)-vs-(b) outright; (3) draft forum reply
+(user must approve text) asking him to run pwdiag and attach dom0 guid.log.
+Baseline note: win11-fresh now has OpenShell 4.4.198 installed (uninstall before using it as
+a clean-shell baseline); win11-tpl carries the 4.3.9 agent binary (was 4.3.2).
