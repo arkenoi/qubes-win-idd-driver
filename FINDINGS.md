@@ -17750,3 +17750,43 @@ this TemplateVM during both installs, skipping template priming - filed as its o
 class-read code is unchanged, environmental, and the latch path was validated by direct priming;
 (4) C:\qwt-improved-setup was NOT refreshed by the B installs despite payload verification
 passing - the copy/verify interplay needs a look (same task family as 3).
+
+## 2026-08-27 — MECHANISM CONFIRMED: the DriverVer VERSION's first field is a machine-consumed
+## WDDM model declaration; values >= 21 (the WDDM 2.1 declaration) break the IddCx driver
+
+Owner demanded the mechanism, not the correlation. Established by a controlled on-guest variant
+factory: same DLL bytes, same INF except the DriverVer line, same self-signed catalog procedure,
+same machine, minutes apart - the version string was the ONLY variable. pnputil ranking silently
+kept old bindings at first (caught by a bind-mismatch assertion after one invalid rung), fixed
+with devcon force-bind per variant.
+
+**14-rung ladder, perfect monotone step:**
+    AA = 4, 8, 15, 16, 18, 19, 20      -> WORKS (5120x1440 at boot, QIDD ioctl returns OK -
+                                          the ioctl path's first recorded successes ever)
+    AA = 21, 22, 23, 24, 26, 30, 99    -> BROKEN (1024x768, ioctl 0xC0000476)
+**ABAB repeat control (owner-requested): 16.0.0.2 OK, 21.0.0.2 broken, 16.0.0.3 OK,
+21.0.0.3 broken** - fresh packages each time, outcome tracks the declared version perfectly.
+
+**The documented meaning** (Microsoft, "Driver Versioning", WDDM 2.1 features; and "Version
+Numbers for WDDM Drivers"): display driver file versions MUST follow AA.BB.CCCCC.DDDDD where
+AA declares the driver model (21=WDDM2.1, 20=2.0, 10=1.3, 9=1.2, 8=1.1, 7=1.0, 6=XDDM) and BB
+the D3D feature level; "a display driver with the wrong version number ... end users will
+encounter difficulties"; a mandatory HLK test enforces the format - "the mandatory requirement
+only applies to drivers built for WDDM 2.1 or higher". Our measured threshold sits exactly on
+that 2.1 line. The asymmetry follows: UNDER-declaring is tolerated (decades of legacy drivers
+below the line must keep working; no elevated expectations applied), OVER-declaring (>=2.1,
+the post-enforcement regime where the field is trusted) subjects the driver to WDDM-2.1+
+model handling an IddCx 1.2 sample driver does not implement - degraded adapter: registry
+modes never surfaced, custom ioctls answered STATUS_OPERATION_IN_PROGRESS. The exact internal
+checks in dxgkrnl remain unobserved; the threshold, asymmetry, and consequences are measured.
+
+**Why we shipped time-as-version at all:** the vendored Microsoft sample ships
+`DriverVer= ; TODO: set DriverVer in stampinf property pages` (IddSampleDriver.inf:13) -
+Microsoft's own unfinished TODO. Empty DriverVer -> stampinf's default stamps the BUILD CLOCK
+as the version. Every pre-Aug-26 driver build happened before 21:00 by pure scheduling luck;
+4.3.8 was the project's first evening driver build. Lesson: a vendored sample's TODO is an
+unowned landmine, and build defaults that SYNTHESIZE values can cross into fields that carry
+protocol semantics.
+
+Fix (shipped in 4.3.9): DriverVer pinned to 4.3.<build>.<rev> in both driver workflows -
+permanently below the declaration threshold and honest about what the driver is.
