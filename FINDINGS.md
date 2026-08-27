@@ -18446,3 +18446,47 @@ fix that was never written down as unfinished.
 STANDING RULE from this audit: a change applied by hand to a rig is NOT a fix. If a session
 applies something manually to keep moving, the log entry must say "applied by hand, NOT shipped"
 and carry a task, or it will read as done forever - which is exactly what happened twice here.
+
+## 2026-08-28 — UAC MECHANISM MEASURED (instrument validated both ways): EnableLUA is latched
+## in LSA at BOOT; ConsentPromptBehaviorAdmin and FilterAdministratorToken are read LIVE
+
+Answering the owner's question ("can we ENABLE it on the fly without reboot?"). Instrument:
+LogonUser(INTERACTIVE) + GetTokenInformation(TokenElevationType), validated by producing BOTH
+answers on the same machine before any verdict was taken.
+
+1. **EnableLUA is latched at BOOT, inside LSA - not re-read at logon.** Three interleaved
+   rounds on win11-app (booted with UAC on): writing EnableLUA=0 live left every FRESH
+   interactive logon token Limited (filtered). The same probe on win10-app (booted at 0)
+   returned Default/unfiltered in all 6 rounds, including with EnableLUA=1 written live. So the
+   AppVM limitation recorded earlier is confirmed at the mechanism level and is WORSE than "the
+   write is discarded at the next boot": not even a logoff/logon in the same boot picks it up.
+   The only routes are the TEMPLATE, or not using EnableLUA at all.
+2. **ConsentPromptBehaviorAdmin IS read per elevation, live.** CPBA=5 -> consent.exe appears and
+   STAYS up, no elevation. CPBA=0 written live, same session, no reboot -> the elevation
+   completes silently at High IL. Restore to 5 -> the prompt returns (defect-reintroduced
+   control PASSED, so the instrument is trusted here).
+3. **FilterAdministratorToken is read live, per logon**: FAT=0 -> RID-500 interactive token
+   Default/unfiltered; FAT=1 -> Limited; toggled twice in both directions with no reboot. RID
+   1000 (our "user" account) stays filtered throughout, so FAT is not a lever for us.
+
+CORRECTION TO OUR OWN HARNESS: "consent.exe is running" is NOT evidence that a prompt is being
+shown - it also runs under CPBA=0 and exits by itself after ~4 s. The signal is that it
+PERSISTS. The MODE 3 verdict earlier tonight counted consent processes AND observed a mapped
+consent window in dom0; the window is what made it valid. Any future check must use persistence
+or the dom0 window, never the bare process count.
+
+CONSEQUENCE (task #28): service.uac-disable CAN be made to work on an AppVM by dropping
+EnableLUA and writing ConsentPromptBehaviorAdmin=0 at every agent start - the same place
+ApplyUacPromptPolicy already writes PromptOnSecureDesktop=0. Honest framing required: this is
+not a security improvement over EnableLUA=0. The token split survives, so processes still start
+medium-IL and must ASK, but the ask is auto-approved - passwordless sudo, exactly as the README
+now says. Same loud warning, same template advice for anyone who wants the real thing.
+
+HAZARD (found the hard way, worth remembering): logging the session off to test the logon path
+did NOT re-fire autologon (no ForceAutoLogon), leaving the guest parked at LogonUI - which the
+agent deliberately never maps, so the qube goes dark with no way back except a restart.
+Anything that forces a re-logon must write ForceAutoLogon=1 first.
+
+ENVIRONMENT NOTE: 25H2 carries TypeOfAdminApprovalMode=1 (legacy Admin Approval Mode) and
+ConsentPromptBehaviorEnhancedAdmin=1. If Administrator protection (TypeOfAdminApprovalMode=2)
+is ever enabled, CPBA stops governing and everything above needs re-measuring.
