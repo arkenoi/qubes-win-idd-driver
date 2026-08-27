@@ -18216,8 +18216,11 @@ VALIDATION (v4, agent 7331cc056ebd, CI b0f0250):
 - PHASE B (PromptOnSecureDesktop=0, the newly shipped installer default): elevation does
   NOT switch desktops (INPUTDESKTOP=Default) and the consent dialog arrives in dom0 as a
   normal 456x376 window, fully rendered, readable ("Do you want to allow this app..."),
-  Yes/No visible. PASS. OWNER click-test outstanding (dom0 input into a high-IL dialog
-  through UIPI - the one thing this harness cannot prove).
+  Yes/No visible. PASS. OWNER CLICK-TEST PASSED (2026-08-27, owner clicked Yes in dom0 and
+  the elevation proceeded): dom0 input DOES reach the high-IL consent dialog - UIPI blocks
+  synthesized guest-side input, not the real user's clicks arriving through the daemon's
+  input path. The prompt is fully usable from dom0, which is the whole point of the
+  policy default.
 
 HARNESS CORRECTIONS (both were my bugs, not the product's): a window-COUNT assertion
 flagged the Terminal the trigger itself spawns - replaced with surface-identity checks
