@@ -1,5 +1,5 @@
 # Shared E2E helpers with STUCK-DETECTION and SHOOT-ON-DOUBT. Sourced by run scripts.
-export QTEST_VM=win11-fresh
+export QTEST_VM="${QTEST_VM:-win11-fresh}"   # default only - sourcing must NEVER clobber a caller-chosen target (misrouted a live install 2026-08-27)
 qstate(){ timeout -k 8 25 ./tools/qtest state 2>/dev/null | tr -d '\r\0' | grep -aoE 'power_state=[A-Za-z]+' | head -1; }
 qrun(){ timeout -k 8 55 ./tools/qtest run "$1" 2>/dev/null | tr -d '\r\0'; }
 qpr(){ timeout -k 8 90 ./tools/qtest pushrun "$1" 2>/dev/null | tr -d '\r\0'; }
@@ -42,11 +42,15 @@ bootwait(){ local m=${1:-15} logfn=${2:-:} i dead=0
 wait_install(){ local m=${1:-20} logfn=${2:-:} i
   for i in $(seq 1 $((m*3))); do
     echo "$(qstate)"|grep -qi Halted && { $logfn "  halted (reboot)"; return 0; }
-    # VMShell ECHOES the command line into the transcript, and the findstr arguments contain
-    # every marker being searched for - so the raw output ALWAYS matches its own echo (found
-    # 2026-08-25: a run with NO install log at all reported "install FAILED"). Strip the echoed
-    # command (the only line containing 'findstr') before judging.
-    local tail; tail=$(qrun 'cmd /c "type C:\qwt-improved-install.log 2>nul | findstr /C:\"FATAL\" /C:\"FAILED with\" /C:\"the C: boot disk is on the Xen PV\" /C:\"INSTALL COMPLETE\" /C:\"STAGE 2 COMPLETE\""' | grep -av findstr)
+    # Two traps found 2026-08-25, both in the old guest-side findstr pipeline:
+    # (1) VMShell ECHOES the command line, whose /C: arguments contain every marker - so the
+    #     raw transcript ALWAYS matched itself (a run with NO log reported "install FAILED");
+    # (2) with the echo filtered out it matches NOTHING, because the \"-escaped patterns never
+    #     survive cmd's parsing inside the piped construction - findstr has been printing
+    #     nothing since the day this was written; the echo was doing all the "matching".
+    # So: no guest-side filtering at all. Pull the whole log (a few KB) and judge HERE, with
+    # only the echoed prompt lines stripped.
+    local tail; tail=$(qrun 'cmd /c type C:\qwt-improved-install.log 2>nul' | grep -av 'system32>')
     if echo "$tail" | grep -qiE 'FATAL|FAILED with|boot disk is on the Xen PV'; then $logfn "  install FAILED (no reboot) - detected fast"; return 2; fi
     if echo "$tail" | grep -qiE 'INSTALL COMPLETE|STAGE 2 COMPLETE'; then $logfn "  install completed in place (no final reboot)"; return 0; fi
     sleep 20
