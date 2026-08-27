@@ -18272,3 +18272,56 @@ flagged the Terminal the UAC trigger itself spawns - replaced with surface-ident
 prompts moved to the normal desktop in seamless - it now FORCES the secure desktop to test
 the freeze, which still must hold for lock/Ctrl+Alt+Del/policy; (3) the baseline census
 fired 12 s after an agent swap, before windows re-mapped - now polled up to 90 s.
+
+## 2026-08-28 (early) — 4.3.12 validation on FROM-SCRATCH rigs: A-D pass, and the three-mode
+## phase found TWO real defects that registry-level checks could not
+
+Rigs rebuilt from pristine images at the owner's instruction ("do it from the very beginning
+so there is no fuckery residue"): win11-tpl re-cloned from the untouched 25H2 win11-fresh and
+given a REAL installer run of 4.3.12 (no binary swaps); win11-app destroyed and recreated from
+it (win11-disp removed first - it was a DispVM based on win11-app and blocked the removal);
+win10-tpl rebuilt from win10-clean by the e2e itself. Owner note that corrected me: an AppVM
+is NOT fully clean by template rebuild alone - MoveUsers puts the profile (and the HKCU hive)
+on the PRIVATE volume, which survives; that is why win11-app was recreated, not just rebooted.
+
+Build: 4.3.12+agent.61dfb7c5317e, gui-agent d6b6baf28bf2, hash-verified against the payload
+manifest and re-verified on the rig before each phase.
+
+PASSED: Phase A (4.3.9 -> 4.3.12 chain, two cold boots at bound=4.3.5.16291 == payload,
+quiet 16 KB logs, debug-feature A/B both directions, priming, AppVM gate with network),
+Phase B (WCBLACK on the release binary), Phase C (freeze holds through a real UAC prompt:
+census 3->4->3 with consent=0 backdrop=0, windows return, no deadlock), Phase D (registry:
+PromptOnSecureDesktop=0 in seamless; uac-disable writes EnableLUA 0 then 1 on clear),
+MODE 1 (seamless prompt IS a standalone dom0 window: consent=2 screencover=0),
+GUARD (non-seamless attempted at host resolution REFUSED, logged verbatim:
+"QGAFSFLASH non-seamless REFUSED: window 0 would be 5120x1440 against a 5120x1440 host
+screen", census screencover=0, stayed seamless - the guard SEEN firing, not inferred).
+
+DEFECT 1 - non-seamless is currently UNREACHABLE (the transition never shrinks the desktop).
+Seamless FORCES guest = host (RESREQ 5120x1440, seamless-force main.c:3143) and any resolution
+change restarts capture, which re-applies seamless and snaps the size back; non-seamless at
+host size is refused by the new guard. So neither order works: cannot shrink first (seamless
+undoes it), cannot switch first (guard refuses). This is why every earlier attempt produced a
+screen-covering window - nothing in the code ever asks for a smaller desktop on entry. The fix
+(owner-approved, next): keep the remembered WINDOWED size separate from the seamless-forced
+value (resolution.c:1626 currently clobbers it), request it when entering non-seamless, and
+complete the switch only once the smaller mode has landed. The guard then becomes a backstop.
+
+DEFECT 2 - service.uac-disable CANNOT WORK ON AN APPVM. EnableLUA is honoured only at boot,
+but an AppVM's C: is reset from the template at every boot: the agent's write lands after the
+boot that would have used it, and the next boot discards it. Measured: EnableLUA=0x0 after a
+reboot, yet UAC still prompted (2 consent processes, a consent window mapped in dom0). Phase D
+"passed" this same feature by reading the registry value - a check that could not fail. MODE 3,
+which judged behaviour (does a prompt appear?), caught it. Fix options: apply in the TEMPLATE
+only, and have the agent detect a volatile root and log loudly that the feature cannot take
+effect there. NOT yet fixed.
+
+Harness lessons this round (all mine): the version-bump sed missed '"agentver":"4.3.11' (no
+closing quote) and failed phase B on a stale string while every measured value was correct; a
+6-second census after a UAC trigger is too fast (the prompt has to appear AND be mapped) - now
+it waits for consent.exe then polls the census; the trigger retry loop keyed on
+INPUTDESKTOP=Default, which is ALWAYS true once prompts moved to the normal desktop, so it
+could not tell "prompt shown" from "no prompt"; display APIs are desktop-blind from the qrexec
+SYSTEM context (EnumDisplaySettings 0x0, ChangeDisplaySettings rc=-5) and must run via
+schtasks /it. Also: I ran a second concurrent instance of a VM-mutating script (bash -x on the
+same file) while the first was live - the serial-jobs rule exists for exactly that.
