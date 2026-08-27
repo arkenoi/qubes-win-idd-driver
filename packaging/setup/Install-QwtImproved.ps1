@@ -1709,6 +1709,25 @@ public static class QdbPrime {
         $script:Result.detail.xenbus_monitor_final = "$($xbmFinal.StartType)/$($xbmFinal.Status)"
     } catch { Write-Log "could not assert xenbus_monitor shipping state: $($_.Exception.Message)" 'WARN' }
 
+    # UAC PROMPTS ON THE NORMAL DESKTOP (owner decision 2026-08-27). The secure desktop is
+    # never granted to dom0 (its dimming backdrop mapped as an unclosable black window WAS
+    # the field-reported bug; the agent now freezes all output while it is up), which makes
+    # a secure-desktop UAC prompt INVISIBLE - the qube just sits there until the prompt
+    # times out. PromptOnSecureDesktop=0 renders consent on the Default desktop instead:
+    # the prompt becomes an ordinary dom0 window the user can see and answer. UAC itself
+    # stays ON (EnableLUA untouched - the admin/kernel ladder is real guest->host attack
+    # surface reduction); what is traded away is secure-desktop prompt integrity against
+    # in-guest overlay deception, a distinction worth little inside a qube. UIPI still
+    # blocks synthesized input from medium-IL guest code. Revert per guest:
+    #   reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v PromptOnSecureDesktop /t REG_DWORD /d 1 /f
+    try {
+        & reg.exe add 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' `
+            /v PromptOnSecureDesktop /t REG_DWORD /d 0 /f /reg:64 | Out-Null
+        $psd = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -EA SilentlyContinue).PromptOnSecureDesktop
+        Write-Log "UAC consent rendering: PromptOnSecureDesktop=$psd (0 = visible in dom0; EnableLUA untouched)"
+        $script:Result.detail.uac_prompt_on_secure_desktop = $psd
+    } catch { Write-Log "could not seed PromptOnSecureDesktop: $($_.Exception.Message)" 'WARN' }
+
     $script:Result.ok = $true
     $script:Result.reboot_needed = $true
     # The install cycle is over - the carried switches have done their job. Leaving the file would
