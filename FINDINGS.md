@@ -18016,3 +18016,43 @@ Win11 **24H2** (26100.9168), not 25H2. So the negative black-window arms actuall
 tested. Closing that cell needs a 25H2 template (clone win11-fresh to a template while
 halted); deferred while the user is actively using win11-fresh. The negative-arm conclusions
 stand for what they actually covered; the matrix label in the earlier entry was wrong.
+
+## 2026-08-27 (night) — Track B audit VERDICT: the driver-side Phase 2B items are moot under
+## the shipped architecture; measured, not assumed
+
+**Swapchain frame path** (Driver.cpp RunCore): still the pure Microsoft sample — acquire,
+release, FinishedProcessingFrame, zero processing. That is CORRECT for our pixel flow: frames
+reach dom0 via the agent (DDA + PrintWindow into granted buffers), never via the driver. So
+"dirty-rect-limited processing in the swapchain loop" (CLAUDE.md Phase 2B) has nothing to
+limit — there is no per-frame work to begin with.
+
+**Idle driver cost, measured** (win10-tpl, 4.3.10, 60 s desktop idle): the IDD UMDF host
+(WUDFHost hosting IddSampleDriver.dll) used **0 ms CPU** (0.000%), 7 threads, 9.3 MB working
+set. The loop's 16 ms wait-timeout poll is not a real cost. Nothing to optimize.
+
+**Hardware cursor: moot by architecture.** DisableCursor=1 ships by default (installer seeds
+it; the agent hides guest cursors) and dom0 draws its own cursor in both seamless and
+fullscreen — a guest-side hardware cursor plane would render something nobody ever sees.
+Decision: no cursor work; documented here so the sample's TODO stops looking like our TODO.
+
+**Benchmark (4 runs, one build, tools/bench-agent.sh + new instrumentation/bench-phases.sh):**
+win10-tpl @ 4.3.10, QGAPERF enabled via the new dom0 feature (its first production use):
+drag p50 938/1346/1497/1580 us, scroll 342-400, type 447-569, idle ~300-500. Runs agree with
+each other; they are 2-5x the canonical b299011 baseline (drag 613, scroll 121, type 96,
+idle ~95) but the comparison is CONFOUNDED and is NOT claimed as a regression: different rig
+(baseline was win-idd-test), ~15 agent versions in between, and the host was NOT quiet (the
+owner was actively using win11-fresh during all 4 runs, and the owner also flagged a possible
+mid-run virtual-desktop switch; these are wall-clock microseconds). These numbers stand as
+the under-load reference for THIS rig. **PENDING: canonical quiet-host re-baseline** when the
+testbed is free, before any regression verdicts against b299011.
+
+Harness repairs (plumbing only, workload untouched): bench-agent.sh now reads LogDir from the
+registry (logs moved to Q:\Qubes Logs on 2026-08-07; the hardcoded path found nothing);
+bench-phases.sh derives per-phase p50s from the ### PHASE markers (the guest-side marker JSON
+was never pulled by the bench script).
+
+**Track B bottom line:** driver-side performance work has nothing left to deliver — the
+driver is a mode-setting and lifecycle component; performance lives in the agent. Remaining
+Track B surface is functional, not performance: mode-list/resize behavior (shipped), and any
+future stage-3 architecture change (IDD feeding frames directly), which per CLAUDE.md is a
+present-the-plan-first item, not something to start.

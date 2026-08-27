@@ -29,7 +29,7 @@ echo "  $alive"
 # 2. note the current agent log so we only collect records produced by THIS run
 # NOTE: qubes.VMShell echoes the command line back, and that echo also contains "C:" and
 # ".log", so a naive grep matches the echo instead of the answer. Use an explicit marker.
-before_log=$(vmsh "powershell -NoProfile -Command \"Write-Output ('LOGPATH=' + (Get-ChildItem 'C:\\Program Files\\Qubes Tools\\log' -Filter 'gui-agent-*.log' | Sort LastWriteTime -Desc | Select -First 1).FullName)\"" | grep -oE '^LOGPATH=.*\.log' | tail -1 | cut -d= -f2-)
+before_log=$(vmsh "powershell -NoProfile -Command \"\$d=(Get-ItemProperty 'HKLM:\\SOFTWARE\\Invisible Things Lab\\Qubes Tools').LogDir; Write-Output ('LOGPATH=' + (Get-ChildItem \$d -Filter 'gui-agent-*.log' | Sort LastWriteTime -Desc | Select -First 1).FullName)\"" | grep -oE '^LOGPATH=.*\.log' | tail -1 | cut -d= -f2-)
 echo "  log: $before_log"
 
 # 3. run the workload (idle / drag / scroll / type / idle)
