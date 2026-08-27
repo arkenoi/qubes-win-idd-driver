@@ -266,28 +266,27 @@ static void QubesDiag(PCWSTR Name, PCWSTR Format, ...)
     _vsnwprintf_s(buf, ARRAYSIZE(buf), _TRUNCATE, Format, ap);
     va_end(ap);
 
-    WDFKEY key = nullptr;
-    // PLUGPLAY_REGKEY_DRIVER (the software/driver key): the DEVICE hardware key rejected
-    // KEY_SET_VALUE from the UMDF host account (verified: no values ever appeared there).
-    if (!NT_SUCCESS(WdfDeviceOpenRegistryKey(g_QubesDiagDevice, PLUGPLAY_REGKEY_DRIVER,
-            KEY_SET_VALUE, WDF_NO_OBJECT_ATTRIBUTES, &key)))
-        return;
-
-    UNICODE_STRING un;
-    un.Buffer = (PWCH)Name;
-    un.Length = (USHORT)(wcslen(Name) * sizeof(WCHAR));
-    un.MaximumLength = un.Length + sizeof(WCHAR);
-    WdfRegistryAssignValue(key, &un, REG_SZ,
-        (ULONG)((wcslen(buf) + 1) * sizeof(WCHAR)), buf);
-
+    // Registry channels failed silently twice (device key, then driver key - the UMDF host
+    // account gets neither with KEY_SET_VALUE on this OS). Plain file append instead: the
+    // UMDF host can always create/write its own file under ProgramData.
     LONG seq = InterlockedIncrement(&g_QubesDiagSeq);
-    UNICODE_STRING us;
-    us.Buffer = (PWCH)L"DiagSeq";
-    us.Length = (USHORT)(wcslen(L"DiagSeq") * sizeof(WCHAR));
-    us.MaximumLength = us.Length + sizeof(WCHAR);
-    WdfRegistryAssignValue(key, &us, REG_DWORD, sizeof(seq), &seq);
-
-    WdfRegistryClose(key);
+    HANDLE f = CreateFileW(L"C:\\ProgramData\\QubesIDD-diag.log", FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE)
+        return;
+    WCHAR line[600];
+    int n = _snwprintf_s(line, ARRAYSIZE(line), _TRUNCATE, L"%ld %s %s\r\n", seq, Name, buf);
+    if (n > 0)
+    {
+        char utf8[1400];
+        int cb = WideCharToMultiByte(CP_UTF8, 0, line, n, utf8, sizeof(utf8), nullptr, nullptr);
+        if (cb > 0)
+        {
+            DWORD written = 0;
+            WriteFile(f, utf8, (DWORD)cb, &written, nullptr);
+        }
+    }
+    CloseHandle(f);
 }
 
 static std::vector<IDDCX_MONITOR_MODE> BuildQubesMonitorModes(IDDCX_MONITOR_MODE_ORIGIN Origin)
