@@ -17690,3 +17690,35 @@ record into its device registry key (a) the modes-key content each read sees, (b
 list it offers at each arrival, (c) every ReloadModes entry/exit + ioctl disposition. Then the
 oem12-vs-other difference becomes readable instead of inferred. No further mechanism claims
 until that data exists.
+
+## 2026-08-27 — THE REGRESSION WAS THE BUILD HOUR: stampinf's time-of-day DriverVer version
+## decides whether the IDD works; leading fields 21.x/23.x break it, 15.x/8.x do not
+
+The instrumented-driver deployment produced the decisive datum by ACCIDENT before its
+breadcrumbs even worked: the new package (DriverVer version 8.1.39.461, built 08:01 UTC) came
+up at 5120x1440 on the first boot - on the same template where 21.22.*/23.53.* packages fail
+deterministically. Full table, all with functionally identical driver code on one template:
+
+    15.51.7.219  (4.3.7, built 15:51)   WORKS
+    21.22.19.960 (4.3.8, built 21:22)   BROKEN
+    23.53.52.119 (4.3.9rc, built 23:53) BROKEN
+    8.1.39.461   (diag, built 08:01)    WORKS
+
+stampinf's default writes the BUILD TIME (HH.MM.SS.ms) as the DriverVer VERSION. Display
+driver versions whose leading fields land in the WDDM driver-version encoding convention
+(21.20~WDDM2.1, 23.x~2.3, ...) are parsed by graphics-stack compatibility logic; our evening
+builds accidentally claimed to be WDDM 2.1/2.3-era drivers and the stack then never surfaced
+the registry modes and answered the QIDD ioctl with STATUS_OPERATION_IN_PROGRESS. Morning
+builds (15.x, 8.x) stayed out of the encoding space and worked. THE RELEASES WERE BROKEN OR
+NOT BY THE HOUR THEY WERE BUILT - which is why the "regression" appeared exactly at 4.3.8,
+why the package A/B followed the INF and not the bytes, and why every content-level theory
+(hardlinks, certs, cats, byte-identity) died: the content was never the variable.
+
+Epistemic status: N=4 packages, deterministic per package across many reboots, same bytes -
+the correlation is solid; the WDDM-encoding attribution is the best-fitting mechanism but is
+inference. The A/B seal: the PINNED build (DriverVer version 4.3.x.y, first field far below
+the encoding space) must work on this template, with the banked oem14 (21.22) control already
+proven broken twice. Fix shipped as a workflow step that rewrites DriverVer to
+<date>,4.3.<build>.<rev> after stampinf and before Inf2Cat/signing, in both driver workflows.
+(The DLL FILEVERSION stamping and the activation identical-bytes guard stay as hygiene; the
+diag breadcrumbs move to PLUGPLAY_REGKEY_DRIVER - the hardware key rejected UMDF-host writes.)
