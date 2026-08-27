@@ -45,7 +45,7 @@ in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails agains
 **What changed in 4.3.11:** the recurring "unclosable black window" is fixed — it was Windows'
 **UAC secure desktop** being mapped into dom0 (the dimming backdrop behind an elevation prompt,
 with the prompt itself invisible or missing). Elevation prompts now appear as ordinary dom0
-windows in seamless mode, stay on the secure desktop in fullscreen where they render correctly,
+windows in seamless mode, stay on the secure desktop in non-seamless mode (the whole-desktop window), where they render correctly,
 and the secure desktop is never mapped in either case. Also: reinstalling an *older* release now
 really downgrades the display driver (Windows' ranking only rebinds upward, which silently left a
 newer driver bound to an older agent), and `qvm-features <qube> service.uac-disable 1` can turn
