@@ -143,6 +143,25 @@ jobs:
           if ($devcon) { Copy-Item $devcon.FullName package\ }
           Get-ChildItem package
 
+      - name: Pin INF DriverVer version (never a time-of-day number)
+        shell: pwsh
+        run: |
+          # stampinf's default writes the BUILD TIME as the DriverVer VERSION (HH.MM.SS.ms).
+          # Versions with leading fields like 21.x / 23.x land in the WDDM driver-version
+          # encoding space that graphics-stack compat logic parses - measured 2026-08-27:
+          # packages versioned 21.22.* and 23.53.* never surface the registry modes and
+          # reject the QIDD ioctl, while 15.51.* and 8.1.* work, SAME BYTES. So releases
+          # built in the evening were broken and morning builds worked. Pin to 4.3.min.rev.
+          $inf = Get-ChildItem package -Filter *.inf | Select-Object -First 1
+          $epochMin = [int][Math]::Floor(([DateTimeOffset]::UtcNow - [DateTimeOffset]::new(2026,1,1,0,0,0,[TimeSpan]::Zero)).TotalMinutes)
+          $build = ($epochMin -shr 16) -band 0x7FFF
+          $rev = $epochMin -band 0xFFFF
+          $date = (Get-Date).ToUniversalTime().ToString('MM/dd/yyyy')
+          $txt = Get-Content $inf.FullName -Raw -Encoding Unicode
+          $txt = $txt -replace 'DriverVer\s*=\s*[^\r\n]+', "DriverVer = $date,4.3.$build.$rev"
+          Set-Content $inf.FullName $txt -Encoding Unicode
+          Select-String -Path $inf.FullName -Pattern DriverVer -Encoding Unicode | ForEach-Object Line
+
       - name: Test-sign package
         if: ${{ vars.SIGNING_ENABLED == 'true' }}
         shell: pwsh

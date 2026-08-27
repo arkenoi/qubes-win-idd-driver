@@ -267,7 +267,9 @@ static void QubesDiag(PCWSTR Name, PCWSTR Format, ...)
     va_end(ap);
 
     WDFKEY key = nullptr;
-    if (!NT_SUCCESS(WdfDeviceOpenRegistryKey(g_QubesDiagDevice, PLUGPLAY_REGKEY_DEVICE,
+    // PLUGPLAY_REGKEY_DRIVER (the software/driver key): the DEVICE hardware key rejected
+    // KEY_SET_VALUE from the UMDF host account (verified: no values ever appeared there).
+    if (!NT_SUCCESS(WdfDeviceOpenRegistryKey(g_QubesDiagDevice, PLUGPLAY_REGKEY_DRIVER,
             KEY_SET_VALUE, WDF_NO_OBJECT_ATTRIBUTES, &key)))
         return;
 
