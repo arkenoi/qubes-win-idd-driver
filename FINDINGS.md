@@ -18325,3 +18325,49 @@ could not tell "prompt shown" from "no prompt"; display APIs are desktop-blind f
 SYSTEM context (EnumDisplaySettings 0x0, ChangeDisplaySettings rc=-5) and must run via
 schtasks /it. Also: I ran a second concurrent instance of a VM-mutating script (bash -x on the
 same file) while the first was live - the serial-jobs rule exists for exactly that.
+
+## 2026-08-28 — 4.3.12 SHIPPED (v4.3.12-agent2adbd57): non-seamless is finally a WINDOW, and
+## the resize chime/slowness is explained (mode-list reload), not fixed
+
+NON-SEAMLESS SHRINK-ON-ENTRY, validated end to end on win11-app (agent c4caac381987, package
+4.3.12+agent.2adbd5745f5f, hash-verified):
+  QGAFSFLASH non-seamless requested while the desktop is host-sized (5120x1440): shrinking...
+  ProcessNewFrame: QGAFSFLASH desktop is now 1280x800 (host 5120x1440) - completing the
+    deferred non-seamless switch
+dom0 census: exactly ONE window, 1280x800, screencover=0 - the guest desktop as a genuinely
+small bounded window on a 5120x1440 display. With a UAC prompt raised: still ONE window,
+consent=0 - the prompt is drawn INSIDE the desktop window, which is what non-seamless means
+(owner's taxonomy: standalone window in seamless, window inside the desktop window otherwise).
+Back to seamless: per-window mapping restored.
+
+Two implementation facts learned the hard way:
+1. The completion hook must live on the FRAME path, not in StartFrameProcessing: a resolution
+   change frequently kills capture with 0x887a0026 and recovery runs RecreateDuplication,
+   which never passes through StartFrameProcessing - so the first attempt shrank correctly and
+   then sat there, mode unswitched (measured, then fixed).
+2. The seamless force-to-host must be suppressed while the switch is pending, or the shrink
+   and the force fight forever.
+The guard is scoped to GUEST-originated sizes via g_ResolutionFromDom0: a dom0 configure (the
+user sizing/maximizing the qube window) is never second-guessed. Confirmed in the same run -
+the post-test 1406x871 desktop came from `RESREQ src=dom0`, i.e. the owner dragging the window,
+not from a restore bug.
+
+RESIZE CHIME + SLOWNESS EXPLAINED (owner: "why is window resize still slow and emits sound?
+we should had fixed it many releases ago" - it never was). Mechanism, from resolution.c and
+guest logs: every NEW size is written to HKLM\SOFTWARE\QubesIDD\Modes, the driver's mode list
+is reloaded (QIDD ioctl; PnP replug as fallback), the agent POLLS until Windows offers the mode
+(up to EXACT_MODE_WAIT_TIMEOUT_MS), then calls ChangeDisplaySettings. Windows treats the
+mode-list change as a monitor arrival/change -> the device-connect chime; reload + wait -> the
+latency; and the mode change often triggers the 0x887a0026 capture death + rebuild on top.
+Already mitigating: debounced latest-wins resolution thread (one drag produced 2 settled
+requests, not one per pixel) and an LRU so a previously published size takes the silent
+replug=0 path. NOT fixed: a genuinely new size still reloads. Task #26 holds the two options -
+agent-side pre-published mode grid (stopgap) vs driver-side broad/continuous mode set so no
+monitor-change event ever fires (proper, Track B).
+
+Also in 4.3.12: the secure-desktop freeze is UNCONDITIONAL (owner re-affirmed after a demo put
+a screen-sized window on their display: "it could be a 'secure' desktop INSIDE the desktop
+window, it is ok... if it is not fullscreen and does not take over any dom0 controls" - the
+takeover criterion, but the guest desktop is host-sized, so in practice any secure-desktop
+mapping in seamless IS a takeover); service.uac-disable warns when set on a volatile-root guest
+where it cannot work; IDD bind-version assertions; WCBLACK/WCDEAD proven by fault injection.
