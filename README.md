@@ -42,11 +42,12 @@ MSI replace it in one transaction (validated end to end; see the release notes).
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
-**What changed in 4.3.9:** the withdrawn 4.3.8's regression is gone — the driver build stamped
-the INF version with the *build time*, and certain resulting version numbers (21.x/23.x) make
-Windows mishandle the driver, killing arbitrary resolutions; same bytes, different version,
-measured exhaustively. The version is now pinned, which eliminates the failure. The underlying
-OS mechanism is still being pinned down. Carried over from
+**What changed in 4.3.9:** the withdrawn 4.3.8's regression is fixed, mechanism confirmed: the
+build stamped the INF version with the *build time*, and a display driver version's first field
+is — per Microsoft's spec — a WDDM model declaration. Versions ≥ 21 declare WDDM 2.1+, which
+this IddCx driver isn't, and Windows punishes the over-claim (measured: a perfect works/breaks
+step at exactly 21 across 14 code-identical packages). Evening builds broke; the version is now
+pinned to 4.3.x.y. Carried over from
 4.3.8: the black-fullscreen-window fix (field confirmation wanted), reliable updater-relay
 deploys, and a window-filter diagnostic switch. Full story in the
 [release notes](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.9-agent33f3109).
