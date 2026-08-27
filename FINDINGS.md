@@ -18371,3 +18371,30 @@ window, it is ok... if it is not fullscreen and does not take over any dom0 cont
 takeover criterion, but the guest desktop is host-sized, so in practice any secure-desktop
 mapping in seamless IS a takeover); service.uac-disable warns when set on a volatile-root guest
 where it cannot work; IDD bind-version assertions; WCBLACK/WCDEAD proven by fault injection.
+
+## 2026-08-28 — the resize chime was NEVER SHIPPED: a hand-applied rig tweak recorded as a fix
+
+Owner: "we silenced it, and now it is chiming again." Investigated: FINDINGS 2026-08-05
+(addendum 4) says "monitor replugs fired Windows' device connect/disconnect sounds on every
+resize - silenced via HKCU AppEvents (DeviceConnect/DeviceDisconnect/DeviceFail set to no
+sound)". A repo-wide grep for AppEvents/DeviceConnect/SchemeName/etc found EXACTLY ONE hit -
+that FINDINGS sentence. No installer, payload script or agent code ever wrote those values.
+
+So the 2026-08-05 "fix" was applied by hand to the then-current test rig and written up as
+done. Consequences: every user of every release since has heard the chime on every resize, and
+tonight's from-scratch rebuild of the rigs (which discarded the hand tweak) made it audible
+here again - the rebuild did not cause the regression, it EXPOSED that there had never been a
+fix. This is the failure mode CLAUDE.md's rules exist to prevent: a result recorded from a
+state that no artifact reproduces.
+
+Now shipped (1ef4619) in guest/quiet-desktop.ps1, which already had the right machinery: the
+three .Current default values are set to an empty REG_SZ ("no sound") for the live user, every
+loaded profile, every offline profile (reg load/unload), and C:\Users\Default's hive - the last
+two matter because the installer runs as SYSTEM, where a plain HKCU write lands in SYSTEM's own
+hive rather than the interactive user's. Verified on win11-app: SET at all three scopes, value
+reads back as "(Default) REG_SZ" empty in the interactive user's hive.
+
+That silences the SYMPTOM. The cause - a mode-list reload per new size, which Windows treats as
+a monitor hot-plug - is task #26, and removing it also removes the latency the chime accompanies.
+AUDIT NOTE: any other "fixed" claim in this file whose implementation cannot be pointed at in the
+tree deserves the same suspicion; a hand-applied rig change is not a shipped fix.
