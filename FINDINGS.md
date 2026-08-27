@@ -17964,3 +17964,55 @@ Validation ladder (win10-tpl, the post-run9 4.3.10 template; C:\q439 + C:\q4310 
 
 Board note: run9 earlier confirmed the UPGRADE path always rebound correctly (bound advanced
 15529→15838) because pinned versions increase monotonically — the hole was downgrade-only.
+
+## 2026-08-27 (evening) — WCDEAD proven by fire via FI_PRINTWINDOW_FAIL; three testbed traps
+## bitten and fixed; win11-tpl finally has a REAL install; one repro-matrix CORRECTION
+
+**WCDEAD validated.** Killing a captured window's process does NOT reach the latch: tracking
+detaches the channel before the engine's sweep can retry (measured: clean PwDetachWindow, no
+WCDEAD) — so a field WCDEAD specifically means a LIVE window whose captures fail, which is
+exactly the diagnostic meaning wanted. To prove the latch itself: new fault point
+FI_PRINTWINDOW_FAIL (agent 73a5c1a; registry FaultPrintWindowFail=N, honors FaultArmDelaySec;
+faultinject.h gained extern-C guards for its first C++ consumer). FI build via qwt-full
+workflow_dispatch fault_injection=true, marker QGA-FAULT-INJECTION:on verified in the binary.
+Result: 5 injected failures on one live channel in 83 ms → `WCDEAD 0x80044: 5 consecutive
+capture failures - channel dead` — the header's prediction (failing channel re-marks dirty and
+burns shots on the 2 ms cadence before the sweep offers the fault elsewhere) held exactly.
+
+**Trap 1 — stale gui-agent.exe.orig in the golden image.** fi-restore "restored" agent 4.3.2:
+win10-clean's image ships a gui-agent.exe.orig from an ancient swap campaign, and swap-agent's
+keep-first-.orig guard preserved it instead of the current release binary. Caught by hash
+mismatch; fixed by deploying the manifest-matched 4.3.10 payload binary (9e2f5b1fa902)
+directly. Lesson: .orig means "before MY campaign" only on a rig without archaeology; verify
+the restored artifact's version, always.
+
+**Trap 2 — e2e-lib.sh clobbered QTEST_VM at source time** (`export QTEST_VM=win11-fresh`,
+line 2). An ad-hoc `export QTEST_VM=win11-tpl; source e2e-lib.sh; ...` block therefore sent
+clearlog + an installer launch + wait_install + a log capture to the USER'S LIVE win11-fresh.
+No harm done — the payload path did not exist there so the launch no-oped, the log survived,
+agent untouched (verified read-only) — but the misroute produced a spectacularly confusing
+hour: the "win11-tpl" log I captured was win11-fresh's log (the user's own 11:31 upgrade
+4.3.7→4.3.9 of win11-fresh — also explains where "existing 4.3.7" came from), and wait_install
+green-lit on a stale completion line. Fixed: the default no longer clobbers
+(`QTEST_VM="${QTEST_VM:-win11-fresh}"`, commit a280b15). run8/run9 were never affected (they
+export after sourcing).
+
+**Trap 3 — the LogDir "wtf" (owner) resolved.** The product is correct: every install
+force-seeds LogDir=Q:\Qubes Logs (Install-QwtImproved.ps1:352-365; run9's F-4310 log shows
+`LogDir -> Q:\Qubes Logs`, win10-tpl logs live on Q:). The C:\ProgramData\QubesLogs sighting
+was win11-app only, whose template had NEVER had a real 4.3.5+ install — golden 24H2 image +
+raw binary swaps, which never touch the registry. Root cause = swap-maintained rig drift, not
+a product defect.
+
+**win11-tpl now has a REAL 4.3.10 install** (win11tpl-install2.log: 4.3.10+agent.ab36aef58fcf,
+installed sha 9e2f5b1fa902 == manifest, pvnic_prime seeded, LogDir -> Q:\Qubes Logs). The
+"skipped-non-template" seen mid-confusion was win11-fresh's log — CORRECT behavior for a
+StandaloneVM, not the #16 defect.
+
+**CORRECTION to this morning's repro matrix (retract loudly):** win11-tpl/win11-app are
+Win11 **24H2** (26100.9168), not 25H2. So the negative black-window arms actually were:
+25H2 StandaloneVM plain (win11-fresh), 25H2 StandaloneVM + OpenShell (win11-fresh), and
+**24H2** AppVM (win11-app). GWeck's exact combination — a **25H2 AppVM** — has NOT been
+tested. Closing that cell needs a 25H2 template (clone win11-fresh to a template while
+halted); deferred while the user is actively using win11-fresh. The negative-arm conclusions
+stand for what they actually covered; the matrix label in the earlier entry was wrong.
