@@ -18178,3 +18178,49 @@ until the prompt is answered or times out; the log says why. UAC visibility rema
 work per the 2026-08-19 decision ("will see") — field evidence now quantifies the cost both
 ways. Testbed note: win11-tpl currently has EnableLUA=1 (kept deliberately: the UAC-on rig
 is the GWeck-faithful repro rig now; SYSTEM-path qrexec tooling is unaffected).
+
+## 2026-08-27 (late night) — secure-desktop freeze VALIDATED at v4 after v3 DEADLOCKED;
+## PromptOnSecureDesktop=0 validated as the shipped default
+
+Three iterations, each defect found by measurement, all on win11-app (25H2 AppVM,
+EnableLUA=1 - the GWeck-faithful rig):
+
+v1 (ShouldAcceptWindow deny) - WRONG: the tracking re-eval treats "no longer acceptable"
+as "unmap", so the instant UAC appeared every ALREADY-OPEN window was unmapped (measured:
+PwDetachWindow of the live Explorer, dom0 census -> 0). Reverted.
+
+v2 (ProcessNewFrame gate) - INSUFFICIENT: ProcessWindowEvents (the input-rate event leg)
+still ran TrackWindows and mapped the consent dialog, which then showed BLACK because the
+frame pipeline was frozen (shot14/win-4; the owner saw it live). Extended to v3.
+
+v3 (all three legs gated: frame, events, AddAllWindows) - DEADLOCKED, and this is the
+important one: g_OnSecureDesktop is written ONLY by AttachToInputDesktop, and every path
+that reaches it was gated by that same flag. Once latched (or on a respawn onto Winlogon -
+GWeck's exact case) the agent NEVER re-observed the desktop: stuck on Winlogon forever,
+zero windows in dom0, 0-byte screenshots, long after the prompt cleared. Strictly worse
+than the original bug. Caught only because the harness kept measuring after the dismiss.
+
+v4 (agent fb4c1cd) - CORRECT: EnsureOnInputDesktop() runs at the TOP of ProcessNewFrame,
+BEFORE the freeze early-return, so the flag can always clear itself (it no-ops cheaply
+while the desktop is unchanged and re-attaches + rearms hooks on each transition).
+Deadlock recovery demonstrated by deployment itself: the v3-stuck agent's dom0 census went
+0 -> 7 windows the moment v4 was swapped in.
+
+VALIDATION (v4, agent 7331cc056ebd, CI b0f0250):
+- PHASE A (secure desktop, policy default): TWO live consent.exe processes on the guest's
+  Winlogon desktop; dom0 census = 8 windows, consent=0 backdrop=0 - i.e. only the
+  pre-existing Explorer/Terminal windows, frozen at last-good content. Log: "secure-desktop
+  ENTERED ... window mapping suppressed", "AddAllWindows suppressed". Dismiss -> "secure
+  desktop left - resuming with a full resync and the frame signature invalidated"; census
+  back to 7. PASS.
+- PHASE B (PromptOnSecureDesktop=0, the newly shipped installer default): elevation does
+  NOT switch desktops (INPUTDESKTOP=Default) and the consent dialog arrives in dom0 as a
+  normal 456x376 window, fully rendered, readable ("Do you want to allow this app..."),
+  Yes/No visible. PASS. OWNER click-test outstanding (dom0 input into a high-IL dialog
+  through UIPI - the one thing this harness cannot prove).
+
+HARNESS CORRECTIONS (both were my bugs, not the product's): a window-COUNT assertion
+flagged the Terminal the trigger itself spawns - replaced with surface-identity checks
+(consent-sized 400-560x330-440, backdrop >=3000px wide); and a transient trigger miss
+(INPUTDESKTOP=Default when consent had been killed moments before) needs a retry loop, not
+an immediate FAIL.
