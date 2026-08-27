@@ -97,6 +97,16 @@ Set-Reg "$POL\WindowsStore" 'AutoDownload' 2 'DWord' 'Store auto app-updates off
 # accounts created later inherit it. Same machinery disable-hw-accel.ps1 uses for the Office keys,
 # and for the same reason: under qrexec this runs as SYSTEM, where a plain HKCU write lands in
 # the wrong hive and silently does nothing.
+# DEVICE SOUNDS. Every resolution change reloads the IDD's mode list, which Windows sees as a
+# monitor arrival/change and answers with the device connect/disconnect chime - so resizing the
+# qube's window makes the guest beep repeatedly. Silencing these three events was applied BY HAND
+# on a test rig on 2026-08-05 and never shipped (FINDINGS 2026-08-05 addendum 4), so every user
+# has heard it since; it is shipped here. The value is the DEFAULT value of the .Current key and
+# an EMPTY string means "no sound"; REG_SZ, not DWORD. Purely cosmetic, and per-user, which is
+# why it rides in this script - the same machinery already reaches the live user, every loaded
+# and offline profile, and the Default profile that new profiles are cloned from.
+$soundEvents = @('DeviceConnect', 'DeviceDisconnect', 'DeviceFail')
+
 $perUser = @(
     @{ sub = 'Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
        name = 'ShowSyncProviderNotifications'; val = 0; why = 'no OneDrive/365 adverts in File Explorer' },
@@ -110,6 +120,10 @@ $perUser = @(
 
 function Set-PerUserValues([string]$HiveRoot, [string]$Label) {
     foreach ($e in $perUser) { Set-Reg "$HiveRoot\$($e.sub)" $e.name $e.val 'DWord' "${Label}: $($e.why)" }
+    foreach ($ev in $soundEvents) {
+        Set-Reg "$HiveRoot\AppEvents\Schemes\Apps\.Default\$ev\.Current" '(default)' '' 'String' `
+                "${Label}: no $ev chime (the IDD mode reload looks like a monitor hot-plug)"
+    }
 }
 
 Set-PerUserValues 'HKCU:' 'current user'
