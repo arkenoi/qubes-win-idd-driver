@@ -17865,3 +17865,42 @@ capture detector — so the NEXT field log answers (a)-vs-(b) outright; (3) draf
 (user must approve text) asking him to run pwdiag and attach dom0 guid.log.
 Baseline note: win11-fresh now has OpenShell 4.4.198 installed (uninstall before using it as
 a clean-shell baseline); win11-tpl carries the 4.3.9 agent binary (was 4.3.2).
+
+## 2026-08-27 — WCBLACK telemetry VALIDATED (fired on a deliberately-black window); the
+## user-context probe caveat; slice-fed vs engine path clarified
+
+Telemetry shipped in agent e58274d (wincapture.cpp): WCDEAD on channel death (5 consecutive
+capture failures, with last error), WCBLACK latched after 3 consecutive >=99%-near-black
+successful captures (1/64 sampling, <0x0C per RGB channel), recovery line, WcPrefill failure
+now LogWarning. Threshold rationale: a partial render (frame paints, DComp client empty)
+never reaches 100%; the validation window measured 98.4% black; real windows measure <=4%
+near-black — 25x separation from the 99% latch.
+
+VALIDATION (win11-app, agent build 7aa4df791f2a from CI): blackwin.ps1 — a captioned
+FixedSingle form, all-black including caption via DWMWA_CAPTION/BORDER/TEXT_COLOR,
+ControlBox off (glyphs would break blackness), Text NON-empty (empty text+no controlbox
+drops WS_CAPTION and the agent slice-feeds it as override-redirect), which spawns its own
+white occluder after 2 s (a foreground/unoccluded window is DDA-owned and the engine
+deliberately never captures it — first two validation attempts failed for exactly that
+reason). Result: `WCBLACK 0x8035c: PrintWindow succeeds but returns >=99% near-black 602x432
+content (3 consecutive)` — fired; no WCBLACK on any normal window in the same session
+(Explorer attached engine-path alongside). WCDEAD: NOT observed to fire — window destruction
+is detected by tracking (WcRemoveWindow) faster than 5 engine failures accumulate; it shares
+the validated logging plumbing and counter path with WCBLACK, but per the instrument rule its
+PASS is recorded as unproven.
+
+CAVEAT ON TODAY'S EARLIER PROBES: pwdiag/exp-probe run in the USER context (schtasks /ru
+user); the agent captures as SYSTEM in session 1, and wincapture.cpp's own ULW comment
+records that user-context probes do not predict SYSTEM-context PrintWindow behavior (Edge
+bubble: fine as user, blank in the agent). The negative reproduction verdicts REMAIN valid
+because they rest on dom0-side pixels (qtest shot = what the agent actually delivered), not
+on the probe. pwdiag now carries this caveat in its header; for the field it identifies the
+window and gives a first pass, while WCBLACK/WCDEAD in the agent log are authoritative.
+
+Path taxonomy (was muddled today until read from source): PwWindowEligible=FALSE (override-
+redirect, WS_EX_NOREDIRECTIONBITMAP, ULW-layered, colorkey) -> slice-fed from the DDA desktop
+framebuffer, engine never involved (win11-app: terminal/CoreWindow/borderless popups all
+slice-fed). Eligible -> PrintWindow engine channel; DDA-OWNED while foreground+unoccluded
+(engine skips; DDA slices feed the buffer); engine sweep covers guest-occluded windows.
+GWeck's 0xa0042 attached ENGINE-path (no slice-fed suffix), so WCBLACK/WCDEAD will speak for
+his window as soon as he runs a build with e58274d.

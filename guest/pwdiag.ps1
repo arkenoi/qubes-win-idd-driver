@@ -5,6 +5,10 @@
 # What it answers: for every visible top-level window - identity (class/title/rect/styles)
 # and whether PrintWindow(PW_RENDERFULLCONTENT), the capture path the QWT-NG gui agent
 # uses, returns real content or black for THAT window on THIS machine.
+# CAVEAT: this runs in YOUR user context; the agent captures as SYSTEM in session 1,
+# and PrintWindow results can differ between the two (a window can capture fine here
+# and still blank in the agent). Treat pwdiag as window IDENTIFICATION plus a first
+# pass; the agent's own WCBLACK/WCDEAD log lines (4.3.10+) are the authoritative view.
 $ErrorActionPreference = 'SilentlyContinue'
 Remove-Item -Recurse -Force C:\pwdiag -EA SilentlyContinue
 New-Item -ItemType Directory -Force C:\pwdiag | Out-Null
