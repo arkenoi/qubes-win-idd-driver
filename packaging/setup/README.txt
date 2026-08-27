@@ -61,7 +61,7 @@ It also, before msiexec runs:
   * REMOVES an already-installed Qubes Windows Tools (see UPGRADING) and
     deletes the gui-agent.exe / gui-watchdog.exe it leaves behind;
   * pre-seeds HKLM\Software\Invisible Things Lab\Qubes Tools with
-    SeamlessMode=1, DisableCursor=0, LogDir=C:\Program Files\Qubes Tools\log
+    SeamlessMode=1, DisableCursor=1, LogDir=C:\Program Files\Qubes Tools\log
     (the MSI only writes these when they are absent, so ours win);
   * installs the Microsoft VC++ 2015-2022 x64 runtime;
   * turns on Windows test-signing and reboots.

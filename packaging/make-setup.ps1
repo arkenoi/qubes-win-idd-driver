@@ -121,6 +121,12 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\disable-hw-accel.ps1') 'app hw-accel
 # Consumer-nag silencer: OneDrive's "set up OneDrive" reminder pops over the seamless desktop
 # and on an offline qube can never succeed at anything. Same switch as the hw-accel tweak.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\quiet-desktop.ps1') 'consumer-nag silencer') $OutDir -Force
+# The guest must never take the input desktop away from dom0: a Windows lock screen is a
+# secure-desktop surface the agent (correctly) refuses to map, so an idle lock makes the qube
+# look frozen - and dom0's own screen lock is what actually protects the machine. This script
+# existed since 6a447cd but was only ever run on test rigs; shipping it makes the shipped
+# guests behave the way the project has always claimed they do.
+Copy-Item (Need (Join-Path $RepoRoot 'guest\disable-session-lock.ps1') 'session-lock preventer') $OutDir -Force
 # IDD-only activator, run by `install.cmd /iddonly` to add/activate the IddCx driver on a guest
 # that already has QWT (no MSI, no version/PV gate). Uses idd-driver/ staged below.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activator') $OutDir -Force
@@ -319,7 +325,7 @@ $manifest = [ordered]@{
         also           = @('6 ITL signing certs + our test cert into Root and TrustedPublisher',
                            'VC++ 2015-2022 x64 runtime',
                            'bcdedit /set testsigning on',
-                           'gui-agent registry defaults: SeamlessMode=1, DisableCursor=0, LogDir',
+                           'gui-agent registry defaults: SeamlessMode=1, DisableCursor=1, LogDir',
                            'Windows Update agent (unless /noupdates): reports availability via qubes.NotifyUpdates, answers dom0 qubes-vm-update so the Qubes Update GUI can drive the qube, and sets NoAutoUpdate=1 - dom0 owns installs')
     }
     never_installs = @('reference/', 'PvDriversDisk', 'MoveUsers', 'Autologon',

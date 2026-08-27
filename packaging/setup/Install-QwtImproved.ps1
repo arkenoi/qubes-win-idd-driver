@@ -362,7 +362,7 @@ function Set-GuiAgentRegistryDefaults {
         & reg.exe add $regPath /v $s[0] /t $s[1] /d $s[2] /f /reg:64 | Out-Null
         if ($LASTEXITCODE -ne 0) { Fail "reg add failed for $($s[0])" }
     }
-    Write-Log 'seeded gui-agent registry defaults (SeamlessMode=1, DisableCursor=0, LogDir)'
+    Write-Log 'seeded gui-agent registry defaults (SeamlessMode=1, DisableCursor=1, LogDir)'
 }
 
 # ------------------------------------------------------- pre-existing QWT: detect/remove
@@ -1491,6 +1491,30 @@ function Invoke-Stage2 {
             Write-Log 'disable-hw-accel.ps1 not in payload - pre-tweak unavailable' 'WARN'
             $script:Result.detail.app_hwaccel = 'not in payload'
         }
+    }
+
+    # --- session lock: never let the guest take the input desktop ----------------------
+    # A Windows lock screen is a secure-desktop surface, which the agent refuses to map (that
+    # rule is what stopped the field "black window"), so an idle lock leaves the qube looking
+    # frozen with no way in. dom0's own screen lock is the one that protects the machine, and a
+    # guest lock would invite typing a password into an untrusted VM. Not gated by /noapptweaks:
+    # this is correctness for a Qubes guest, not a cosmetic tweak.
+    $nolock = Join-Path $Root 'disable-session-lock.ps1'
+    if (Test-Path -LiteralPath $nolock) {
+        Write-Log 'preventing guest session lock / screen blank (dom0 owns the screen lock)'
+        try {
+            $no = & $nolock 2>&1
+            $tr = @($no) | Where-Object { $_ -match '=== RESULT === changed=(\d+) failed=(\d+)' } | Select-Object -Last 1
+            if ($tr -match 'changed=(\d+) failed=(\d+)') {
+                $script:Result.detail.session_lock = "changed=$($Matches[1]) failed=$($Matches[2])"
+            } else { $script:Result.detail.session_lock = 'ran, no result trailer' }
+        } catch {
+            Write-Log "session-lock prevention failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+            $script:Result.detail.session_lock = "error: $($_.Exception.Message)"
+        }
+    } else {
+        Write-Log 'disable-session-lock.ps1 not in payload - guest may idle-lock' 'WARN'
+        $script:Result.detail.session_lock = 'not in payload'
     }
 
     # --- consumer-nag silencer (same switch as the HW-accel tweak) ----------------------
