@@ -17790,3 +17790,14 @@ protocol semantics.
 
 Fix (shipped in 4.3.9): DriverVer pinned to 4.3.<build>.<rev> in both driver workflows -
 permanently below the declaration threshold and honest about what the driver is.
+
+## 2026-08-27 — FINAL CLEAN E2E ALL PASS: 4.3.9 stands, with bound-driver assertions this time
+
+Fresh chain (variant-circus rig destroyed), every boot asserting the BOUND driver version
+alongside the mode (the rule-1 lesson made structural): 4.3.7 baseline PASS
+(bound=15.51.7.219, 5120x1440); 4.3.9 upgrade boot1+boot2 PASS (bound=4.3.5.15529 - the
+released pinned driver - 5120x1440); patched xenvif installed in the TEMPLATE; priming armed
+via direct selfprime (class-read flake still skips it in the installer - task open); AppVM
+gate PASS: survival t+300s, xenbus_monitor Stopped/Disabled, no dialogs, toast machinery
+intact, network up through fw-net/mirage. v4.3.9-agent33f3109 is the released, mechanism-
+confirmed, end-to-end-validated build.
