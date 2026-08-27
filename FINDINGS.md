@@ -18107,3 +18107,31 @@ GWeck black-window matrix, dom0-pixel judged (qtest shot), agent engine identica
 The defect is not reproducible with any combination we control. Remaining delta is his
 machine's specific state (exact build/updates/drivers); his next log on 4.3.10 carries
 WCBLACK/WCDEAD and answers the mechanism question directly.
+
+## 2026-08-27 (late) — #22 CLOSED: the dmg-cost lead is resolved by ABAB — the DDA-slice
+## path is a measured 3x WIN, the screen hash is negligible, and the vs-canonical delta is
+## not a switchable regression
+
+Two hypotheses died in order (both retracted same-day):
+1. Screen hash (PwScreenUnchanged): barely executes — pwskip=0, pwcap=6 across a whole
+   bench run (during scroll the window is DDA-owned and the hash path never runs). Its own
+   in-code note ("0 skips in 5557 decisions") describes a rarely-reached path, not a cost.
+2. "DDA-slice moved copying into the measured main loop" (accounting-shift theory):
+   INVERTED by a clean ABAB (DdaCapture registry switch, agent restarted + banner-verified
+   per arm, win10-tpl 4.3.10, quiet host):
+   | arm | scroll p50 | type p50 | idle-pre | agent CPU over bench |
+   | B1 off | 1415us | 1419 | 1236 | 4188 ms |
+   | A1 on  |  376us |  448 |  326 | 2313 ms |
+   | B2 off | 1120us | 1106 | 1406 | 3281 ms |
+   | A2 on  |  426us |  472 |  446 | 2656 ms |
+   Off is ~3x worse in the main loop AND ~1.4-1.8x worse in TOTAL agent CPU: without DDA
+   ownership, foreground content goes through engine PrintWindow (synchronous round-trip
+   into the app + full-window diff). The DDA-slice default is validated, not indicted.
+
+The remaining vs-canonical delta (scroll 376-436 today vs 121 at b299011) is NOT reachable
+by any switch: today's LEGACY arm costs 1120-1415, so the b299011-era 121 was measured on a
+materially different rig/scene (win-idd-test; window sizes scale per-frame pixel volume
+linearly, host geometry differs). No like-for-like exists; no regression is claimed; and the
+absolute cost is immaterial anyway (~380us/frame at ~18 fps < 1% CPU). ACTION: none. The
+q1-q4 raws are the canonical baseline for win10-tpl from here on (rule-canonical-benchmarks).
+Rig restored: DdaCapture value deleted (default on), debug feature off, template halted.
