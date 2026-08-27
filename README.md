@@ -312,11 +312,20 @@ overrides, is [docs/QVM-FEATURES.md](docs/QVM-FEATURES.md). The short version:
 | set in dom0 | what it does |
 |---|---|
 | `qvm-features <vm> service.enableWinKey 1` | let the Windows key through, so Start (or a third-party shell) opens. Default: blocked in seamless mode |
-| `qvm-features <vm> service.gui-fullscreen 1` | allow a **borderless** true-fullscreen window (game, video, presentation). A maximized app with a title bar is always allowed; the boot/shutdown screen is never allowed, feature or not |
+| `qvm-features <vm> service.gui-fullscreen 1` | allow the whole guest desktop to be shown in **one** dom0 window (non-seamless), and a borderless true-fullscreen app window. A maximized app with a title bar is always allowed; the boot/shutdown screen is never allowed, feature or not |
+| `qvm-features <vm> service.hideGuestTitleBar 1` | strip the guest's own title bars so only dom0's decoration shows. **Experimental — leave it alone:** the restyle makes windows minimize themselves |
+| `qvm-features <vm> service.gui-agent-debug 1` | full diagnostic logging in one switch: per-frame performance records, protocol traces and debug level. Set this before collecting a log for a bug report, unset it afterwards — a normal log is tens of KB, a debug log is megabytes |
+| `qvm-features <vm> service.uac-disable 1` | turn UAC **off** in the guest (reboot required). Only an explicit `1` acts; clearing the feature puts UAC back. **Set it on the TEMPLATE** — an AppVM's system drive is restored from its template at every boot and Windows reads this setting at boot, so a value applied inside an AppVM can never take effect. Not recommended: without UAC any code in the qube reaches admin/kernel, the surface facing the hypervisor |
 
-Both are ordinary Qubes service features — any non-empty value enables, `qvm-features --unset`
-turns them off — and both are read **once, when the agent starts**, so restart the qube after
+They are ordinary Qubes service features — any non-empty value enables, `qvm-features --unset`
+turns them off — and all are read **once, when the agent starts**, so restart the qube after
 changing one.
+
+Not configurable, deliberately: **where a UAC prompt is drawn**. It is always the normal
+desktop, which makes the prompt an ordinary window — a standalone dom0 window in seamless mode,
+or a window inside the desktop window in non-seamless mode. Windows' secure desktop is never
+shown to dom0 in any mode; a prompt drawn there would be one nobody could see or answer (that
+was the "unclosable black window").
 
 Two settings are required rather than optional, and the dom0 RPM applies them for you
 (`qwt-ng-prepare-qube <vm>` applies them to a qube created later): the `vmexec` feature, without
