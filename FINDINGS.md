@@ -17722,3 +17722,31 @@ proven broken twice. Fix shipped as a workflow step that rewrites DriverVer to
 <date>,4.3.<build>.<rev> after stampinf and before Inf2Cat/signing, in both driver workflows.
 (The DLL FILEVERSION stamping and the activation identical-bytes guard stay as hygiene; the
 diag breadcrumbs move to PLUGPLAY_REGKEY_DRIVER - the hardware key rejected UMDF-host writes.)
+
+## 2026-08-27 — 4.3.9 RELEASED (v4.3.9-agent33f3109): the build-hour regression fixed and sealed
+
+Published on the owner's publish-on-green gate. Final evidence chain, all on bound-and-verified
+pinned drivers (rule 1 enforced after run7's res_boot was caught not asserting the binding):
+- Morning seal: old template, devcon-bound 4.3.5.15529, reboot -> 5120x1440.
+- run7 phase B (fresh chain): 4.3.7 baseline PASS; 4.3.9 staged AND "installed on device"
+  (oem13) before all three passing boots - initially misjudged invalid, then proven valid by
+  the log timeline: the later store damage (pinned+4.3.7 packages pruned, device rebound to
+  the 08/15 generation) was MY OWN diagnostic /iddonly run from the STALE Aug-15
+  C:\qwt-improved-setup payload inherited from win10-clean's image, at 11:44, after the boots.
+- Final rig gate: pinned binding restored, template primed by running pvnic-selfprime directly
+  (ok/armed/NICS=1), fresh AppVM: survival, monitor Stopped/Disabled, xenwin 0, toast mapped,
+  and network up through fw-net/mirage (tcp true, 10.137.0.72) - after re-installing the
+  PATCHED xenvif in the TEMPLATE (first attempt went to the AppVM's volatile root and was
+  discarded by the reboot; the chain had lost the patched xenvif, plausibly to the same stale
+  /iddonly pruning).
+
+Honest gaps, recorded not hidden: (1) the activate-idd guard's skip path remains e2e-unvalidated
+(the in-run test executed a nonexistent path, my manual test executed the STALE payload; the
+guard is /iddonly-only, parse-validated, worst case = old behavior); (2) the full installer's
+INLINE IDD section (Install-QwtImproved, "staging ... into the driver store") reuses a healthy
+device without rebinding - fine (old bindings keep working), but it means upgrades do not move
+devices to the new driver generation until recreation; (3) qubesdb /type read 'StandaloneVM' on
+this TemplateVM during both installs, skipping template priming - filed as its own task; the
+class-read code is unchanged, environmental, and the latch path was validated by direct priming;
+(4) C:\qwt-improved-setup was NOT refreshed by the B installs despite payload verification
+passing - the copy/verify interplay needs a look (same task family as 3).
