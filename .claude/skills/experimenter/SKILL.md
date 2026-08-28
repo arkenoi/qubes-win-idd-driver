@@ -34,6 +34,15 @@ which took three minutes and would have framed everything correctly.)
 **5. One variable per run, and injected defects must be switchable.**
 If the harness seeds a defect, it needs an off switch, and both sides get run. A brick with the
 seed ON and no seed-OFF control attributes nothing.
+A seed-OFF control is necessary and NOT sufficient: the defect must also be injected where and
+WHEN the code under test can act on it. (Cost, 2026-08-29: six "FAIL BRICKED" results measured an
+injection fired five seconds before the installer even started. Timestamp both the injection and
+the code under test, from the same clock, and check the order before reading the outcome.)
+
+**5b. Assert a precondition on the SAME signal the code under test consults.**
+A cell that checked a registry key for "no QWT installed" while the code under test consults the
+MSI product registration called a half-uninstalled guest "fresh" and then measured an upgrade.
+A test that asserts its own precondition on a different signal is not a test.
 
 **6. Every wait has THREE exits, and says which one it took.**
    * the thing happened;

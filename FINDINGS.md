@@ -19119,6 +19119,14 @@ was the load-bearing one.
 
 ## 2026-08-28 — the seeded reboot-prompt condition WEDGED the WIN10 template
 
+> **UNVERIFIED — instrument in doubt (marked 2026-08-29).** This entry attributes the wedge to the
+> seeded condition, using the same seeded-cell design that f530d2c later showed fires the reboot
+> trigger BEFORE the installer starts (see "RETRACTION: the seeded cell was measuring my own
+> injection" below). Whether this earliest instance had that timing was never established — the
+> entry itself already says the guest was too broken to read its log. Do not cite it as evidence
+> about the installer. The code change it motivated (61cdec9, delete the pending Request key) is
+> unaffected and stands on its own terms.
+
 The e2e seeds the field condition before installing (Request=1 + xenbus_monitor auto-start). On the
 WIN10 chain the install then produced NO log at all, every subsequent qrun returned empty, and
 win10-tpl sat in Qubes state "Transient" - it needed repeated qvm-kill over ~70 s to go down, and
@@ -19173,9 +19181,20 @@ building overlays around them.
 
 ## 2026-08-28 — the WIN10 chain's "failures" were my harness, and the wrecked template was my kills
 
+> **RETRACTED 2026-08-29:** BOTH numbered claims below were overturned the same day by
+> "the WIN10 brick: what is actually true, and three of my claims retracted" (9529f10). The WIN10
+> golden image does NOT take the two-stage path (its testsigning is already ACTIVE), and the
+> template did NOT reach Automatic Repair because of my hard kills. Read the numbered items only
+> as a record of what I believed at 18:22.
+
 TWO SELF-INFLICTED PROBLEMS, both mistaken for product defects while they were happening:
 
-1. `wait_install` RETURNS ON THE STAGE-1 REBOOT ("0 = ended (reboot or completed)", its own
+1. **RETRACTED 2026-08-29:** "The WIN10 image takes the TWO-stage path" is FALSE — measured an hour
+   later: `SystemStartOptions = TESTSIGNING NOEXECUTE=OPTIN`, boot disk already `BusType SCSI`, so
+   WIN10 installs in ONE stage like WIN11. The `wait_install` contract defect described here is real
+   and the fix is fine; the one-stage/two-stage explanation for the blank logs is not.
+
+   `wait_install` RETURNS ON THE STAGE-1 REBOOT ("0 = ended (reboot or completed)", its own
    contract). A guest that already has testsigning on installs in ONE stage with no reboot - that
    is the WIN11 golden image, which is why that chain passed. The WIN10 image takes the TWO-stage
    path, so the harness read C:\qwt-improved-install.log while the guest was rebooting into stage
@@ -19183,7 +19202,11 @@ TWO SELF-INFLICTED PROBLEMS, both mistaken for product defects while they were h
    did not finish". Fixed: after wait_install, poll until the guest is back AND 'stage2-install'
    appears in the log before judging anything.
 
-2. THE TEMPLATE ENDED IN AUTOMATIC REPAIR BECAUSE I HARD-KILLED IT, repeatedly, while it was
+2. **RETRACTED 2026-08-29:** this attribution is FALSE — 9529f10 (RETRACTION 1) measured a template
+   cloned fresh from the golden that reached Automatic Repair with no kill of mine anywhere in the
+   sequence. The hygiene fix to `stop_vm` stands; the causal claim does not.
+
+   THE TEMPLATE ENDED IN AUTOMATIC REPAIR BECAUSE I HARD-KILLED IT, repeatedly, while it was
    booting or installing. Repeated forced power-off during servicing is precisely how Windows
    gets there. Its disk is then unreachable for telemetry - no log on it is worth another cycle,
    and the chain re-clones from win10-clean anyway. Fixed: stop_vm gives a clean shutdown 480s
@@ -19198,6 +19221,10 @@ reports the request count.
 STANDING LESSON: when one chain passes and another fails, compare what differs about the CHAINS
 before concluding anything about the code. Here the difference - one-stage vs two-stage install -
 explained the whole thing, and I instead spent cycles theorising about the fix being incomplete.
+
+> **RETRACTED 2026-08-29 (the example, not the lesson):** one-stage vs two-stage explained nothing —
+> neither chain runs a two-stage install. The lesson (compare the chains first) survives; the
+> illustration is wrong.
 
 ## 2026-08-28 — 4.3.15 candidate (463c176), WIN11 stability e2e: 21 passed / 1 failed, and the 1 was my check
 
@@ -19246,6 +19273,13 @@ after I damaged it with repeated hard kills, so the two-stage (testsigning-off) 
 one that reboots between stages, and the one GWeck's reports exercise - is NOT covered by this run.
 Re-enable `install_chain win10-clean win10-tpl win10-app WIN10` once that template is repaired.
 
+> **PARTIALLY RETRACTED 2026-08-29 (this paragraph only — the 21/21 result above stands, and is
+> reconfirmed in the 2026-08-29 "what actually stands" entry).** Two premises here are false:
+> the hard kills did not damage win10-tpl (9529f10 RETRACTION 1), and running the WIN10 chain would
+> NOT have covered a two-stage install — win10-clean is a testsigning-ON, PV-disk image, so no chain
+> we have tests the testsigning-off two-stage path (9529f10 RETRACTION 2). The coverage gap is real
+> and WIDER than written: the two-stage path is uncovered on BOTH guests.
+
 ## 2026-08-28 (later) — the WIN10 brick: what is actually true, and three of my claims retracted
 
 **RETRACTION 1 - "my repeated hard kills wrecked win10-tpl".** Wrong. Measured today: a template
@@ -19253,6 +19287,14 @@ cloned fresh from the golden win10-clean at 18:53:57 was demonstrably healthy at
 qrexec, took a 28 MB push, extracted it, ran registry writes), our installer ran, the guest halted
 at 18:56:13, and it came back to **"Automatic Repair couldn't repair your PC"**. No kill of mine was
 involved anywhere in that sequence. The owner said the installer was responsible; the owner was right.
+
+> **UNVERIFIED — instrument in doubt (marked 2026-08-29).** The retraction of "my kills wrecked it"
+> stands. The replacement conclusion — "the installer was responsible" — does NOT: the 2026-08-29
+> entry established that the WIN10 cells were asserting preconditions on the wrong signal (a seeded
+> trigger that fired before the installer started; a "fresh install" cell that was actually an
+> upgrade over a half-uninstalled guest), and that an Automatic Repair loop from those cells "is not
+> evidence about our installer". Whether this particular 18:53-18:56 cell was contaminated the same
+> way was never determined. Treat the cause of this brick as OPEN.
 
 **BASELINE, run for the first time (it should have existed from the start).** A bare clone of
 win10-clean, with NO installer involved, boots, takes `shutdown /r`, and comes back with a working
@@ -19283,6 +19325,12 @@ the guest in the middle of the PV driver installation. `Start-XenbusPromptSuppre
 SECOND, so it has a race window it can lose. HYPOTHESIS, n=2, NOT yet proven: it needs one seeded
 reproduction with the instrument in place before it is stated as fact.
 
+> **RETRACTED 2026-08-29:** the hypothesis in this paragraph is withdrawn (f530d2c). The seeded cell
+> wrote the reboot Request while the monitor was already running and idle and BEFORE the installer
+> started, so the guest rebooted before any installer-side code could run. The seeded run measured
+> the injection, not the suppressor. The seed-OFF control above (19:25:24 -> 19:26:50, 90 s, healthy)
+> is unaffected and remains the ONE install configuration verified end to end.
+
 **INSTRUMENT DEFECTS FOUND (all mine, all fixed or recorded):**
 1. `qtest shot` returns an EMPTY tar for a guest with no gui-agent session, so every WIN10 failure
    was literally unreadable. The owner was right that it is capturable by window: `qtest fullshot`
@@ -19301,6 +19349,21 @@ reproduction with the instrument in place before it is stated as fact.
 
 ## 2026-08-28 (evening) — the WIN10 brick, ROOT CAUSE NAMED BY WINDOWS ITSELF
 
+> # RETRACTED IN FULL 2026-08-29 — THIS SECTION NAMES NO ROOT CAUSE.
+> The next section (f530d2c) withdraws it. Adding the Date field to the same event query showed the
+> restart was initiated at 00:20:10Z, **five seconds BEFORE the installer's first log line at
+> 00:20:15**: my harness wrote `xenbus_monitor\Request\xenvbd\Reboot=1` and the already-running idle
+> monitor acted on it at once. The "four reproductions" and the six later "FAIL BRICKED" results all
+> measured that injection, not the product. No fix to `Install-QwtImproved.ps1` or `xenbus.inf` could
+> have changed them. **The cause of the WIN10 brick is OPEN and unnamed.** The paragraphs below are
+> kept as a record of the wrong reading; do not cite any of them. Per-claim status:
+> * event 1074 as proof our install path restarts the guest — RETRACTED;
+> * "reproduced FOUR times" — RETRACTED (four measurements of my own injection);
+> * "why the suppressor does not save it" / the 1 Hz race — RETRACTED, never demonstrated;
+> * the xenagent shutdown 1074s (#29) — RETRACTED as a product of this run; dated capture shows
+>   those events are from 20 and 23 August, i.e. the golden image's own history, not this install;
+> * STILL STANDS: black-screen-with-CPU is not a dead guest, and the harness-defect list at the end.
+
 Not inference. Windows event 1074, captured live from the guest during the install (the guest is
 alive right up to the moment, so this had to be read while it lived - afterwards there is nothing
 left to ask):
@@ -19313,6 +19376,9 @@ So: with a pending `xenbus_monitor\Request\<driver>\Reboot=1` and the monitor ab
 monitor RESTARTS the guest roughly 28-30 s into msiexec - in the middle of the PV driver install -
 and the interrupted install leaves the guest unusable. Reproduced FOUR times (t+66, 68, 72, 80 s);
 the seed-off control on the same package and image completes in 90 s and stays healthy.
+
+> **RETRACTED 2026-08-29:** the restart was initiated BEFORE the installer started; these four
+> "reproductions" measured my own injection. Only the seed-OFF control in this sentence stands.
 
 **Why the suppressor does not save it.** `Start-XenbusPromptSuppressor` sweeps once a SECOND:
 disable the service, stop it, kill `xenbus_monitor*`, delete the Request key. But the monitor
@@ -19336,6 +19402,12 @@ The rule now requires black AND no CPU, or it declares a live guest dead.
 query returned three more 1074s from `C:\Windows\System32\xenagent_9_1_0_0.exe` initiating
 SHUTDOWNS (reason code 0x8000000c). That task has been theorising about which component shuts the
 guest down; Windows names it.
+
+> **RETRACTED 2026-08-29 as evidence from this run.** The dated capture shows those three xenagent
+> 1074s are stamped 2026-08-20 and 2026-08-23 — the golden image's own history, carried in the
+> image, not produced by this install. The events exist; they say nothing about what this run did,
+> and quoting them as "direct evidence" for #29 was the same undated-capture mistake. Task #29 is
+> back to where it was.
 
 **Harness defects fixed in the same session, each measured, not guessed:**
 * `qvm-start` BLOCKS until qrexec connects. With the clone's `qrexec_timeout=6000` that is 100
@@ -19454,3 +19526,30 @@ re-clone are needed before WIN10 work can resume.
 
 **The lesson, stated once:** a test that asserts its own precondition on a different signal than the
 code under test uses is not a test. Both invalid cells failed that way, and both cost hours.
+
+## 2026-08-29 — cleanup pass: the retractions above are now marked AT the claims they kill
+
+Documents-only pass, no VM touched, no code changed. The two retractions above were appended at the
+END of the file, so every invalidated claim still read as fact where a reader would actually meet it.
+Each is now marked inline with `RETRACTED 2026-08-29` or `UNVERIFIED — instrument in doubt`:
+
+| Entry | What was marked |
+|---|---|
+| 2026-08-28 "the seeded reboot-prompt condition WEDGED the WIN10 template" | whole entry — UNVERIFIED, same seeded-cell design; its code change (61cdec9) is unaffected |
+| 2026-08-28 "the WIN10 chain's 'failures' were my harness..." | item 1 (WIN10 takes the two-stage path) RETRACTED; item 2 (my hard kills wrecked the template) RETRACTED; the standing lesson's illustration RETRACTED, the lesson kept |
+| 2026-08-28 "4.3.15 candidate, WIN11 e2e 21/1" | the closing coverage-gap paragraph only — both of its premises are dead and the real gap is wider (no chain tests two-stage, on either guest). The 21/21 result itself STANDS |
+| 2026-08-28 (later) "the WIN10 brick: what is actually true" | RETRACTION 1's replacement conclusion ("the installer was responsible") — UNVERIFIED, cause OPEN; the suppressor-race hypothesis RETRACTED. The 19:25 seed-OFF control and both retractions stand |
+| 2026-08-28 (evening) "ROOT CAUSE NAMED BY WINDOWS ITSELF" | RETRACTED IN FULL, with a per-claim list at the head: event 1074, the four "reproductions", the suppressor race, and the xenagent-1074/#29 evidence all fall; black-with-CPU and the harness-defect list stand |
+
+Also amended `.claude/skills/experimenter/SKILL.md` rule 5 (a seed-OFF control is necessary, not
+sufficient — timestamp the injection against the code under test) and added rule 5b (assert the
+precondition on the same signal the code under test consults), which is this session's own lesson.
+
+Audited and found CLEAN: `CLAUDE.md`, `README.md`, `docs/`, `DESIGN-*.md`, `mgmt/` — none of them
+cite the retracted material. The auto-loaded memory files carry nothing from this session; one
+pre-existing index line in `MEMORY.md` (the wedge entry) was corrected because it asserted as PROVEN
+a trigger its own memory file retracted on 2026-08-20.
+
+**Still open, unchanged by this pass:** what actually bricks a WIN10 guest. The only WIN10 result
+that survives is the seed-OFF upgrade over our own 4.3.2. Everything else needs a re-run on a rig
+that is not in an Automatic Repair loop, with the corrected cell design.
