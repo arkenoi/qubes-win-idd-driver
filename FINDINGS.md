@@ -18929,3 +18929,31 @@ Path filters completed in release-package.yml (packaging/**, qwt-full.yml + pv-x
 themselves, patches/**, vendor/**, contrib/**, tools/qubesdb-read/**, tools/winenum.cs,
 .gitmodules; both submodules were already listed) and the FALSE comment in qwt-full.yml
 ("rpc scripts are staged from here") corrected — core-agent contributes nothing to the MSI today.
+
+## 2026-08-28 — 4.3.14 SHIPPED: v4.3.14-agent5634f90, 38 e2e checks, 0 failures
+
+Released from 163b6ed. Package 4.3.14+agent.5634f905a8dd, agent binary 5819126643911bb7.
+tools/cut-release.sh enforced every invariant (version strictly greater than the last tag, tag
+name derived from version+agent sha, artifact package_version == agent/version, checksums verify)
+and used docs/RELEASE-NOTES-4.3.14.md.
+
+E2E on the EXACT artifacts shipped, both chains rebuilt from the golden images and installed with
+the real installer: 38 passed, 0 failed. Per chain: installed agent == release binary, autologon
+armed by the installer, app-menu scripts placed over stock, reboot audit installed, get-appmenus
+exits 0, qubes.GetAppmenus present, all built-in menu entries reported, template + 3 AppVM cold
+boots each with a real user session, a mapped window measured at 3826x1016 (nothing host-sized),
+and the agent leaving the secure desktop normally.
+
+TWO OF MY OWN DEFECTS CAUGHT BY THE E2E BEFORE SHIPPING, both worth remembering:
+1. A fixed 8-second sleep before the screenshot raced an AppVM's first cold boot and produced a
+   false FAIL. Acceptance checks now poll (6 x ~7 s). A false failure costs exactly as much
+   credibility as a missed one.
+2. Hardening get-appmenus.ps1 routed every line through a new Emit-Entry that dropped the
+   ".desktop" suffix stock emits. dom0's parser makes it optional so nothing would have broken,
+   but the fork's output must be indistinguishable from stock except where we mean it - and the
+   assertion written against the documented format caught the drift on my own change.
+
+KNOWN GAP SHIPPED WITH IT, task #32: the qrexec-wrapper drain-race fix (core-agent ac33bc9 +
+e5e94b8) is built green in CI and reaches NO guest, because the MSI carries the stock binary and
+release-package does not build core-agent. The -CoreAgentBins staging channel and the guard
+ratchet are in place; wiring it is a separate change with its own e2e.
