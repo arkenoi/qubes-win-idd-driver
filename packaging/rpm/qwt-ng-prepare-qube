@@ -15,6 +15,14 @@
 #      capability - the guest simply cannot announce it, because the Windows build of qubesdb-cmd
 #      cannot write to QubesDB at all (upstream `optind -= 2` bug in client/qubesdb-cmd.c).
 #
+#  * feature `menu-items` (and `default-menu-items` on a template)
+#      A Windows guest reports EVERY Start Menu shortcut it can find - 45 entries on a stock
+#      Windows 11, most of them uninstallers, help files and vendor links. dom0 shows all of them
+#      when this feature is unset (qubesappmenus/__init__.py: the available list is filtered only
+#      when `menu-items` or a whitelist file exists), so the qube's menu arrives unusable. Set a
+#      small, sane default; everything else stays AVAILABLE and can be ticked in the qube's
+#      Settings -> Applications. Only set when unset - a user's own selection is never overwritten.
+#
 #  * pref `qrexec_timeout`
 #      A Windows guest APPLYING an update during boot took 259 s to answer qrexec (measured on
 #      25H2). The Qubes default is 60 s, so dom0 would give up starting the qube at exactly the
@@ -24,6 +32,12 @@
 # Idempotent, never lowers an existing higher timeout, and never exits nonzero for a missing
 # qube - it is also run from the RPM's %post, where failing the transaction would be wrong.
 set -u
+
+# What a new Windows qube shows in its menu until the user says otherwise. Deliberately short:
+# the guest offers dozens more, and an unusable wall of vendor links is worse than eight things
+# that work. `explorer` and `settings` are how you reach everything else inside the guest.
+DEFAULT_MENU='notepad.desktop explorer.desktop settings.desktop cmd.desktop powershell.desktop cmd-admin.desktop powershell-admin.desktop edge.desktop'
+DEFAULT_MENU_COUNT=8
 
 MIN_TIMEOUT=1800   # 30 min: covers the measured 259 s with wide margin, and the much longer
                    # boots a Windows FEATURE update takes to apply. qvm-create-windows-qube
@@ -61,6 +75,23 @@ for vm in "${QUBES[@]}"; do
     else
         echo "$vm: FAILED to set feature vmexec" >&2
         rc=1
+    fi
+
+    # The curated default menu. These ids come from the guest's qubes.GetAppmenus service
+    # (core-agent get-appmenus.ps1 built-ins), so they exist on every guest running QWT-NG.
+    if [ -n "$(qvm-features "$vm" menu-items 2>/dev/null)" ]; then
+        echo "$vm: menu-items already chosen - left alone"
+    elif qvm-features "$vm" menu-items "$DEFAULT_MENU" 2>/dev/null; then
+        echo "$vm: menu-items set to the default ${DEFAULT_MENU_COUNT} entries (the rest stay available in Settings)"
+    else
+        echo "$vm: FAILED to set feature menu-items" >&2
+        rc=1
+    fi
+    # On a template this also seeds every AppVM created from it.
+    if [ "$(qvm-prefs "$vm" klass 2>/dev/null)" = "TemplateVM" ] \
+       && [ -z "$(qvm-features "$vm" default-menu-items 2>/dev/null)" ]; then
+        qvm-features "$vm" default-menu-items "$DEFAULT_MENU" 2>/dev/null \
+            && echo "$vm: default-menu-items seeded for qubes created from this template"
     fi
 
     cur=$(qvm-prefs "$vm" qrexec_timeout 2>/dev/null) || cur=""
