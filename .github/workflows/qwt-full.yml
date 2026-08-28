@@ -2,11 +2,16 @@
 # OUR gui-agent fork integrated. PLAN-full-source-build.md steps 2+3; inventory and the
 # integration decision in ci-notes/qwt-full-build.md.
 #
-# What is built from source here: gui-agent.exe + gui-watchdog.exe (our fork, test-signed
-# with the throwaway cert the guest trusts), install-helper.exe, installer.msi and the Burn
-# bundle (WiX v4.0.5, upstream sources pinned at v4.2.2-1). Everything else in the MSI
-# (PV drivers, qrexec agent, qubesdb, ...) is staged bit-identical from the GPG-verified
-# shipped 4.2.2 MSI (vendor/qwt-4.2.2/), keeping ITL's Authenticode signatures.
+# What is built from source here: gui-agent.exe + gui-watchdog.exe (our fork), the fork's
+# core-agent user-mode tools (qrexec-*, the per-invocation rpc tool exes, wait-for-logon,
+# advertise-tools, autologon), the user-mode dependency DLLs (windows-utils, libvchan,
+# libxenvchan, qubesdb-client) plus qubesdb-cmd.exe, install-helper.exe, installer.msi and
+# the Burn bundle (WiX v4.0.5, upstream sources pinned at v4.2.2-1). Every PE binary we
+# build is test-signed with the throwaway cert the guest trusts. Which of them actually
+# lands INSIDE the MSI is decided by stage-qwt-repo.ps1's substitution table; the
+# deliberate remainder (kernel driver packages, catalog-covered service exes, binaries
+# under a recorded hold) is staged bit-identical from the GPG-verified shipped 4.2.2 MSI
+# (vendor/qwt-4.2.2/), keeping ITL's Authenticode signatures.
 name: qwt-full
 
 on:
@@ -27,16 +32,15 @@ on:
     branches: [main]
     paths:
       - 'agent'
-      # NOTE: core-agent contributes NOTHING to the MSI today - stage-qwt-repo.ps1 takes
-      # every non-gui-agent component from the stock image, and the rpc scripts ship via
-      # release-package's payload, not this MSI. (An earlier comment here claimed they
-      # were staged from core-agent - that was FALSE and papered over the exact silent
-      # no-op the ours-wins guard now bans.) The trigger is kept so a submodule bump
-      # still exercises the MSI build, and becomes load-bearing the day fork-built
-      # core-agent binaries are staged into the MSI (the qrexec-wrapper gap fix).
+      # core-agent FEEDS the MSI since the substitution-table change: stage-qwt-repo.ps1
+      # stages the fork-built qrexec-wrapper.exe and the rpc service definitions/handler
+      # scripts from this submodule, and this job builds+signs the rest of the fork's
+      # user-mode tool exes so the table can grow to claim them. A submodule bump must
+      # rebuild the MSI.
       - 'core-agent'
       - 'vendor/qwt-4.2.2/**'
       - 'packaging/stage-qwt-repo.ps1'
+      - 'packaging/patch-xenbus-inf.ps1'
       - '.github/workflows/qwt-full.yml'
 
 # REPRODUCIBLE BUILDS: /Brepro makes link.exe write a CONTENT HASH into the PE header's
@@ -217,6 +221,45 @@ jobs:
             @("$ws\deps-src\core-qubesdb\include\qubesdb.h",
               "$ws\deps-src\core-qubesdb\include\qubesdb-client.h") `
             @("$ws\deps-src\core-qubesdb\windows\vs2022\x64\$cfg\qubesdb-client\qubesdb-client.lib")
+          # qubesdb-cmd.exe (wave 2): same solution; target name verified against the pinned
+          # ref (windows/vs2022/core-qubesdb.sln @ v4.3.1 lists qubesdb-client, qubesdb-cmd,
+          # qubesdb-daemon). Built AFTER qubesdb-client: its LibraryPath resolves
+          # qubesdb-client.lib from the sibling output dir the previous MB just filled.
+          # qubesdb-daemon is deliberately NOT built (wave 3: boot-critical service).
+          MB "$ws\deps-src\core-qubesdb\windows\vs2022\core-qubesdb.sln" 'qubesdb-cmd'
+          # The DLLs these builds produce used to be DISCARDED right here - only the .libs
+          # were staged - while the MSI shipped the stock copies: the exact silent-stock
+          # class the substitution table ends. Collect them (plus qubesdb-cmd.exe) into
+          # deps-bins for signing and staging. A miss THROWS; it never falls back to stock.
+          # Version note (measured 2026-08-28): the stock 4.2.2 qubesdb-client.dll builds
+          # from core-qubesdb >= v4.2.8 (its PDB path contains the windows\vs2022 tree,
+          # which first appears in v4.2.8); the client-code diff v4.2.7..v4.3.1 is the
+          # mechanical WIN32->_WIN32 rename only and include/qubesdb.h (the wire protocol)
+          # is unchanged - so shipping the v4.3.1-built client DLL against the stock
+          # daemon carries no source-level protocol delta. QUBESDB_REF stays v4.3.1.
+          New-Item -ItemType Directory -Force "$ws\deps-bins" | Out-Null
+          function Collect([string]$src, [string]$root) {
+            $want = Split-Path $src -Leaf
+            if (-not (Test-Path $src)) {
+              $hit = Get-ChildItem $root -Recurse -Filter $want -ErrorAction SilentlyContinue |
+                     Where-Object FullName -match "x64\\$cfg" |
+                     Sort-Object LastWriteTime -Descending | Select-Object -First 1
+              if (-not $hit) { throw "deps-bins: cannot locate $want under $root" }
+              $src = $hit.FullName
+              Write-Host "  (located $want at $src)"
+            }
+            Copy-Item $src "$ws\deps-bins\" -Force
+          }
+          Collect "$ws\deps-src\pvdrivers\vs2022\x64\$cfg\libxenvchan\libxenvchan.dll"                  "$ws\deps-src\pvdrivers"
+          Collect "$ws\deps-src\core-vchan-xen\windows\vs2022\x64\$cfg\libvchan\libvchan.dll"           "$ws\deps-src\core-vchan-xen"
+          Collect "$ws\deps-src\windows-utils\vs2022\x64\$cfg\windows-utils\windows-utils.dll"          "$ws\deps-src\windows-utils"
+          Collect "$ws\deps-src\core-qubesdb\windows\vs2022\x64\$cfg\qubesdb-client\qubesdb-client.dll" "$ws\deps-src\core-qubesdb"
+          Collect "$ws\deps-src\core-qubesdb\windows\vs2022\x64\$cfg\qubesdb-cmd\qubesdb-cmd.exe"       "$ws\deps-src\core-qubesdb"
+          $expect  = 'libxenvchan.dll','libvchan.dll','windows-utils.dll','qubesdb-client.dll','qubesdb-cmd.exe'
+          $have    = (Get-ChildItem "$ws\deps-bins" -File).Name
+          $absent  = @($expect | Where-Object { $_ -notin $have })
+          if ($absent.Count) { throw "deps-bins incomplete: $($absent -join ', ')" }
+          Get-ChildItem "$ws\deps-bins" | ForEach-Object { Write-Host "deps-bins: $($_.Name) $($_.Length) bytes" }
           "QUBES_INCLUDES=$env:QUBES_INCLUDES" | Out-File -Append $env:GITHUB_ENV
           "QUBES_LIBS=$env:QUBES_LIBS"         | Out-File -Append $env:GITHUB_ENV
 
@@ -243,11 +286,20 @@ jobs:
       # close (e5e94b8). Built HERE because this job has already staged the exact dependency set
       # those projects need (libvchan, xencontrol, windows-utils, qubesdb-client).
       #
+      # Beyond the three qrexec binaries this builds every user-mode tool exe in the fork (the
+      # migration table's wave 2): the per-invocation rpc tools, wait-for-logon, advertise-tools
+      # and autologon - all v143, all against the deps staged above, all outputting to
+      # vs2022\x64\<cfg>\<name>\<name>.exe. NOT built, deliberately:
+      #   - relocate-dir: needs the WDK (ntifs.h / ntdllp.lib), which this runner does not have;
+      #   - network-setup: our own tooling retires it (pvnic-selfprime deletes it on-guest);
+      #     building it would re-ship a defect. End state is deleting its wxs component, not
+      #     substituting the binary.
+      #
       # REQUIRED, unlike build.yml's copy of this step. build.yml is the iteration path and lets a
       # core-agent break through with a warning; this is the RELEASE path, and a release that
       # silently falls back to the stock binary is the exact bug this build exists to end: the fix
       # was merged, CI was green, and every guest kept running the stock wrapper for months.
-      - name: Build core-agent (qrexec) fork
+      - name: Build core-agent (user-mode tools) fork
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -258,26 +310,41 @@ jobs:
           # build ORDER cannot decide whether the build works.
           & powershell "$env:QB_SCRIPTS\set-version.ps1" "$ws\core-agent\version" "$ws\core-agent\qwt_version.h"
           if (-not (Test-Path "$ws\core-agent\qwt_version.h")) { throw 'failed to generate qwt_version.h' }
-          # The qrexec projects only - `relocate-dir` in that solution includes the WDK's ntifs.h,
-          # which this runner does not have.
-          foreach ($proj in 'qrexec-wrapper','qrexec-agent','qrexec-client-vm') {
-            $vcx = "$ws\core-agent\vs2022\$proj\$proj.vcxproj"
+          # Relative vcxproj paths under vs2022\ (the rpc tool projects live one level down).
+          # Exe name == project leaf name == the wxs leaf stage-qwt-repo parses, verified
+          # against the pinned installer sources 2026-08-28.
+          $projects = @(
+            'qrexec-wrapper', 'qrexec-agent', 'qrexec-client-vm',
+            'advertise-tools', 'autologon',
+            'qubes-rpc-services\clipboard-copy', 'qubes-rpc-services\clipboard-paste',
+            'qubes-rpc-services\file-receiver',  'qubes-rpc-services\file-sender',
+            'qubes-rpc-services\get-image-rgba', 'qubes-rpc-services\open-in-vm',
+            'qubes-rpc-services\open-url',       'qubes-rpc-services\set-gui-mode',
+            'qubes-rpc-services\vm-file-editor', 'qubes-rpc-services\wait-for-logon'
+          )
+          foreach ($proj in $projects) {
+            $name = Split-Path $proj -Leaf
+            $vcx = "$ws\core-agent\vs2022\$proj\$name.vcxproj"
             if (-not (Test-Path $vcx)) { throw "core-agent project not found: $vcx" }
             & "${{ steps.vs.outputs.msbuild }}" $vcx `
                 -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
                 "-p:TreatWarningAsError=false"
-            if ($LASTEXITCODE -ne 0) { throw "core-agent: $proj build failed ($LASTEXITCODE)" }
+            if ($LASTEXITCODE -ne 0) { throw "core-agent: $name build failed ($LASTEXITCODE)" }
           }
           $caOut = "$ws\core-agent\vs2022\x64\$env:CONFIG"
           New-Item -ItemType Directory -Force core-agent-bins | Out-Null
-          foreach ($proj in 'qrexec-wrapper','qrexec-agent','qrexec-client-vm') {
-            $exe = "$caOut\$proj\$proj.exe"
-            if (-not (Test-Path $exe)) { throw "core-agent: $proj.exe was not produced" }
+          foreach ($proj in $projects) {
+            $name = Split-Path $proj -Leaf
+            $exe = "$caOut\$name\$name.exe"
+            if (-not (Test-Path $exe)) { throw "core-agent: $name.exe was not produced" }
             Copy-Item $exe core-agent-bins\ -Force
+          }
+          if ((Get-ChildItem core-agent-bins -Filter *.exe).Count -ne $projects.Count) {
+            throw "core-agent-bins does not hold one exe per project built"
           }
           Get-ChildItem core-agent-bins | ForEach-Object { Write-Host "core-agent: $($_.Name) $($_.Length) bytes" }
 
-      - name: Sign our agent binaries, export sign.crt
+      - name: Sign our binaries, export sign.crt
         shell: pwsh
         env:
           PFX_B64: ${{ secrets.SIGNING_PFX_B64 }}
@@ -288,16 +355,25 @@ jobs:
           New-Item -ItemType Directory -Force agent-bins | Out-Null
           Copy-Item "$out\gui-agent\gui-agent.exe"       agent-bins\
           Copy-Item "$out\gui-watchdog\gui-watchdog.exe" agent-bins\
-          # the fork's qrexec binaries get the same cert - they are overlaid into Program Files
-          # on a guest that trusts it
-          Copy-Item core-agent-bins\*.exe agent-bins\ -Force
           [IO.File]::WriteAllBytes('cert.pfx', [Convert]::FromBase64String($env:PFX_B64))
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
               Where-Object FullName -match 'x64' | Select-Object -First 1
           if (-not $signtool) { throw 'signtool.exe not found' }
-          Get-ChildItem agent-bins -Filter *.exe | ForEach-Object {
-            & $signtool.FullName sign /fd sha256 /f cert.pfx /p $env:PFX_PASS $_.FullName
-            if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($_.Name)" }
+          # ONE cert for every PE binary we build - the gui-agent pair, the core-agent tool
+          # exes (signed IN PLACE in core-agent-bins: stage-qwt-repo and the package both
+          # take them from there now, so the old copy-into-agent-bins detour is gone), and
+          # the dep DLLs + qubesdb-cmd.exe in deps-bins. The guest trusts the cert from
+          # firstboot / the MSI's gui-agent-windows sign.crt. The previous shape of this
+          # step filtered on *.exe only, which would have left every DLL unsigned.
+          $toSign  = @(Get-ChildItem agent-bins -Filter *.exe)
+          $toSign += @(Get-ChildItem core-agent-bins -Filter *.exe)
+          $toSign += @(Get-ChildItem deps-bins\* -Include *.exe, *.dll)
+          # 2 gui-agent + 15 core-agent + 5 deps: fewer means a bins dir went missing or a
+          # copy loop silently shrank - fail here, not with an unsigned binary in the MSI.
+          if ($toSign.Count -lt 22) { throw "expected at least 22 binaries to sign, found $($toSign.Count)" }
+          foreach ($f in $toSign) {
+            & $signtool.FullName sign /fd sha256 /f cert.pfx /p $env:PFX_PASS $f.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($f.Name)" }
           }
           $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
               (Resolve-Path cert.pfx).Path, $env:PFX_PASS)
@@ -329,10 +405,41 @@ jobs:
             -InstallerRepo "$ws\installer-src" `
             -AdminImage    $env:QWT_ADMIN_IMAGE `
             -AgentBins     "$ws\agent-bins" `
+            -CoreAgentBins "$ws\core-agent-bins" `
+            -RpcSources    "$ws\core-agent\src\qubes-rpc-services" `
+            -VMExecSource  "$ws\guest\VMExec.ps1" `
+            -DepsBins      "$ws\deps-bins" `
             -OurCert       "$ws\agent-bins\sign.crt" `
             -VendorCerts   "$ws\vendor\qwt-4.2.2\certs" `
             -OutRepo       "$ws\qubes-repo"
           "QUBES_REPO=$ws\qubes-repo" | Out-File -Append $env:GITHUB_ENV
+
+      # ROOT FIX for the mid-install brick, measured 2026-08-28 and named by Windows itself
+      # (event 1074): xenbus_monitor_9_1_0_0.exe RESTARTS the guest ~30 s into msiexec when a PV
+      # reboot request is pending, and the interrupted driver install leaves the guest unusable.
+      # It can do that because THIS INF - ours, inside an MSI we build - installs the service with
+      # SPSVCSINST_STARTSERVICE and StartType=auto. The installer's once-a-second suppressor cannot
+      # win a race against a service that reboots the instant it starts, so the fix is here rather
+      # than there, and it covers the interactive install from the ISO too, which has no suppressor
+      # at all. The script FAILS the build if either edit does not apply - a silently unpatched INF
+      # would ship the brick.
+      - name: Neutralise the xenbus_monitor service in our xenbus.inf
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.SIGNING_PFX_B64 }}
+          PFX_PASS: ${{ secrets.SIGNING_PFX_PASS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = "${{ github.workspace }}"
+          [IO.File]::WriteAllBytes('cat.pfx', [Convert]::FromBase64String($env:PFX_B64))
+          & .\packaging\patch-xenbus-inf.ps1 `
+            -InfPath     "$ws\qubes-repo\vmm-xen-windows-pvdrivers\bin\xenbus.inf" `
+            -PfxPath     "$pwd\cat.pfx" `
+            -PfxPassword $env:PFX_PASS
+          Remove-Item cat.pfx -Force
+          # Show what shipped, so the log carries the proof rather than a claim.
+          Select-String -Path "$ws\qubes-repo\vmm-xen-windows-pvdrivers\bin\xenbus.inf" `
+                        -Pattern 'AddService\s*=\s*xenbus_monitor|StartType' | ForEach-Object { "  $($_.Line.Trim())" }
 
       - name: Populate WiX .distfiles (pinned NuGet packages)
         shell: pwsh
@@ -411,35 +518,51 @@ jobs:
                     Select-Object -First 1
           if ($bundle) { Copy-Item $bundle.FullName package-qwt-full\ }
           else { Write-Warning 'Burn bundle not found at installer repo root' }
+          # EVERYTHING the package ships goes in BEFORE the manifest/sums are computed. The
+          # old order hashed first and copied after, so the loose agent exes and the whole
+          # core-agent-bins dir shipped UNHASHED - the standing MANIFEST gap.
+          Copy-Item agent-bins\gui-agent.exe, agent-bins\gui-watchdog.exe, agent-bins\sign.crt package-qwt-full\
+          # SIGNED fork core-agent binaries -> their own dir (signed in place by the signing
+          # step). release-package points make-setup.ps1 -CoreAgentBins at it; make-setup
+          # stages ONLY qrexec-wrapper.exe into the payload bin\ (recorded policy), the rest
+          # ride along for provenance and for stage-qwt-repo's table to claim as it grows.
+          New-Item -ItemType Directory -Force package-qwt-full\core-agent-bins | Out-Null
+          Copy-Item core-agent-bins\*.exe package-qwt-full\core-agent-bins\ -Force
+          # Our built+signed user-mode dep DLLs + qubesdb-cmd.exe - the bytes staged into
+          # the MSI (stage-qwt-repo -DepsBins), published so the artifact carries the exact
+          # binaries the MSI embeds.
+          New-Item -ItemType Directory -Force package-qwt-full\deps-bins | Out-Null
+          Copy-Item deps-bins\* package-qwt-full\deps-bins\ -Force
           git config --global --add safe.directory $ws
           git config --global --add safe.directory $ws/agent
+          git config --global --add safe.directory $ws/core-agent
           $manifest = [ordered]@{
             package          = 'qwt-full'
             built            = (Get-Date -AsUTC -Format o)
             repo_sha         = (git -C $ws rev-parse HEAD).Trim()
             agent_sha        = (git -C $ws/agent rev-parse HEAD).Trim()
             agent_describe   = (git -C $ws/agent describe --tags --long --always).Trim()
+            core_agent_sha   = (git -C $ws/core-agent rev-parse HEAD).Trim()
             installer_sha    = $env:INSTALLER_SHA
             stock_msi_sha256 = $env:STOCK_MSI_SHA256
-            files            = @{}
+            files            = [ordered]@{}
           }
-          Get-ChildItem package-qwt-full -File | ForEach-Object {
-            $manifest.files[$_.Name] = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+          $pkgRoot = (Resolve-Path package-qwt-full).Path
+          $all = Get-ChildItem package-qwt-full -Recurse -File | Sort-Object FullName
+          foreach ($f in $all) {
+            $rel = $f.FullName.Substring($pkgRoot.Length + 1) -replace '\\', '/'
+            $manifest.files[$rel] = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
           }
+          # Legacy keys make-setup.ps1 REQUIRES (it throws without them, corroborating the
+          # loose agent exes against what the MSI embeds): same bytes, historical names.
           foreach ($f in 'gui-agent.exe','gui-watchdog.exe') {
             $manifest.files["agent-bins/$f"] = (Get-FileHash "$ws\agent-bins\$f" -Algorithm SHA256).Hash.ToLower()
           }
           $manifest | ConvertTo-Json -Depth 5 | Set-Content package-qwt-full\MANIFEST.json
-          Get-ChildItem package-qwt-full -File | ForEach-Object {
-            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          $all | ForEach-Object {
+            $rel = $_.FullName.Substring($pkgRoot.Length + 1) -replace '\\', '/'
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $rel
           } | Set-Content package-qwt-full\SHA256SUMS.txt
-          Copy-Item agent-bins\gui-agent.exe,agent-bins\gui-watchdog.exe,agent-bins\sign.crt package-qwt-full\
-          # SIGNED fork qrexec binaries -> their own dir; release-package points
-          # make-setup.ps1 -CoreAgentBins at it, which stages them into the payload bin\.
-          New-Item -ItemType Directory -Force package-qwt-full\core-agent-bins | Out-Null
-          foreach ($f in 'qrexec-wrapper.exe','qrexec-agent.exe','qrexec-client-vm.exe') {
-            Copy-Item "agent-bins\$f" package-qwt-full\core-agent-bins\ -Force
-          }
           Get-Content package-qwt-full\MANIFEST.json
 
       - uses: actions/upload-artifact@v4
