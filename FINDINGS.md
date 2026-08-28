@@ -18575,3 +18575,45 @@ RIG FACTS (all measured, all previously assumed otherwise):
    log (02:14:52, and 08-27 at 23:58 / 20:17 / 14:59). No 1074 record survives because the
    System log is on the volatile C:. Given this project's AppVM reboot-loop history (4.3.5/4.3.6)
    this deserves its own investigation before anyone trusts unattended AppVM uptime.
+
+## 2026-08-28 — #23: single-instance guard SHIPPED and proven, but it does NOT explain the boot
+## deaths. My concurrency diagnosis was wrong; the agents die SEQUENTIALLY.
+
+TWO SEPARATE THINGS, and I conflated them:
+
+1. LATENT DEFECT, now fixed (agent c58f422): main.c claimed the shutdown event was "a safeguard
+   to not start multiple instances", but nothing ever checked ERROR_ALREADY_EXISTS - the guard
+   did nothing. Replaced with a named MUTEX (ownership is released by the kernel if the holder
+   dies, so a crashed agent cannot lock out its replacement; an event would strand the qube with
+   no GUI - the opposite of the intent). WAIT_ABANDONED counts as acquired; failure to create
+   the mutex is non-fatal.
+   PROVEN mechanically on win11-app: with one agent running, a second instance exits immediately
+   with code 183 (ERROR_ALREADY_EXISTS), the incumbent keeps the vchan, one agent remains, and
+   the refusal is logged ("another gui-agent instance is already running (mutex wait 258)").
+   CONTROL CAVEAT, stated because it matters: the pre-guard binary in the same test also exited,
+   with code 5 - my second instance started from the qrexec SYSTEM context (session 0), which is
+   NOT where the watchdog spawns (session 1). So the test proves the guard refuses duplicates;
+   it does not prove the guard prevents the FIELD failure.
+
+2. THE BOOT DEATHS ARE NOT A CONCURRENCY RACE. With the guarded binary in the TEMPLATE and the
+   AppVM booted three times, every boot still produced the same shape:
+     10:00:45 life=1s | 10:00:47 life=4s PIPE-DEATH | 10:01:37 life=47s (survivor)
+     10:02:27 life=0s | 10:02:28 life=3s PIPE-DEATH | 10:04:00 life=47s (survivor)
+   The instances are SEQUENTIAL - A starts and exits within ~1 s, B starts ~2 s LATER, so the
+   mutex is already free and there is nothing for the guard to refuse (zero guard refusals in
+   any boot log). The guard is therefore correct hardening but the wrong fix for this symptom.
+   What is actually happening: the first agent dies right after applying the boot resolution
+   (its log ends at "M0BLINK applied ... RESEXACT replug=1"), and the second dies a few seconds
+   later with "QioReadBuffer: ReadFile failed with error 0x6d: The pipe has been ended" - the
+   PEER closed the connection. So the question is not "who wins the vchan" but "why does the
+   daemon side end the pipe twice in the first minute of boot". Both die on the Winlogon desktop
+   (QGADESK from=Winlogon), i.e. before autologon completes.
+   NOTE the pipe deaths persisted with the guard, which is the useful negative result: had the
+   guard fixed it, they would have become guard refusals instead.
+
+NEXT for #23 (not started): instrument the vchan side of the boot path - correlate the agent's
+death timestamps against dom0's guid log for that qube (the daemon may be restarting, or
+rejecting a connection while the previous one is still torn down), and check whether the
+resolution apply + monitor replug at boot (RESEXACT replug=1, which #26 showed is a real
+monitor hot-plug) is what makes the daemon drop the connection. If it is, #23 and #26 are the
+same bug seen from two ends, and the fix is to not replug during early boot.
