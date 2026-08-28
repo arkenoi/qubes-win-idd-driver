@@ -224,19 +224,34 @@ Override-redirect + fullscreen is rejected **unconditionally** (never mapped, ev
 The feature is read once at agent Init from qubesdb `/qubes-service/gui-fullscreen` (dom0 wins)
 over the registry base, and governs ONLY Mode 2. Do NOT let it affect Mode 1.
 
-**The "secure desktop" is NEVER granted, under any condition** (owner, 2026-08-19; this
-supersedes any "safety" argument for showing the login screen):
-- The Windows **lock screen** is never wanted. If a lock LogonUI ever appears, that is a BUG in
-  our configuration — log and report it, do NOT paper over it by showing it. Recovery from a
-  failed autologon is to FIX autologon (hardened 2026-08-19: the updater re-arms it at every
-  pass that stages a reboot, and the account is at unlimited autologon), never to fall back to
-  a visible guest login.
-- **UAC**: future work — convert the elevation prompt to a normal in-desktop dialog, or gate it
-  from dom0; until then it is denied like any other secure-desktop surface. ("will see.")
-- Practical consequence: hiding LogonUI unconditionally is correct and intended, not a lockout
-  hazard. FUTURE: distinguish a genuine lock/UAC LogonUI (persists, awaits input) from the
-  benign boot/shutdown autologon LogonUI (transient) so only the former is logged/reported as
-  the bug it represents — the current filter cannot tell them apart and denies both silently.
+**The "secure desktop" rule — REVISED by the owner 2026-08-28. Read this version, not the old one.**
+
+The rule is now MODE-DEPENDENT, and the safety criterion is geometry, not desktop identity:
+- **SEAMLESS: never granted.** Each secure surface would become its own standalone dom0 window —
+  a consent box or a full-screen dimming backdrop indistinguishable from dom0's own UI (that
+  backdrop WAS GWeck's black window). The frame path freezes while the input desktop is not
+  Default; enforced in `ProcessNewFrame`.
+- **NON-SEAMLESS: shown, secure or not.** The guest desktop is ONE bounded window there, so the
+  sign-in screen appears inside it like any other guest content. Owner, 2026-08-28: *"in
+  non-seamless mode we may show desktop irregardless if it is 'secure' or not, just the same
+  general rule: no fullscreen unless dom0-initiated, no override-redirects."* The guards that
+  matter are unchanged and live in `SetSeamlessMode`: window 0 is shrunk on entry (1280x800) and
+  refused at host size unless `g_ResolutionFromDom0`, so a guest can never promote itself to
+  fullscreen; entering the mode still needs `service.gui-fullscreen`.
+- **WHY it changed**: hiding it unconditionally was believed to be lockout-safe because every
+  testbed here has autologon. It is not. Measured 2026-08-28: with autologon off, a guest maps
+  **0 windows** while qrexec still answers — running, reachable, and completely invisible, with
+  no password box anywhere. Two field reports (forum posts 98/101) were exactly this. Upstream
+  QWT has no such filter and defaults to the windowed desktop, so this was our regression.
+- **AUTOLOGON IS ENFORCED** (owner, 2026-08-28: "this is the way we deal with lockouts"). The
+  installer arms it: `guest/set-autologon.ps1` validates the credentials with `LogonUser` before
+  writing anything, stores the password as the LSA secret `DefaultPassword` (not consumed by
+  `AutoLogonCount`, not world-readable plaintext), and a boot-time SYSTEM task re-asserts it.
+  Managed / domain / Windows-Hello images cannot be armed this way — deferred, task #31.
+- **UAC**: already solved differently — `PromptOnSecureDesktop=0` moves the elevation prompt off
+  the secure desktop entirely, so it is an ordinary window in both modes.
+- The agent LOGS a persistent freeze (`QGADESKSTUCK`, after 30 s then every 120 s), which is the
+  "distinguish transient from persistent" item the old note asked for.
 
 ## Upstream policy (set by the user 2026-08-04) — SUPERSEDES the earlier guidance
 
