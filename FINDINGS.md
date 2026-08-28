@@ -19245,3 +19245,56 @@ misread as the agent crashing - including by me.
 after I damaged it with repeated hard kills, so the two-stage (testsigning-off) install path - the
 one that reboots between stages, and the one GWeck's reports exercise - is NOT covered by this run.
 Re-enable `install_chain win10-clean win10-tpl win10-app WIN10` once that template is repaired.
+
+## 2026-08-28 (later) — the WIN10 brick: what is actually true, and three of my claims retracted
+
+**RETRACTION 1 - "my repeated hard kills wrecked win10-tpl".** Wrong. Measured today: a template
+cloned fresh from the golden win10-clean at 18:53:57 was demonstrably healthy at 18:54:51 (answered
+qrexec, took a 28 MB push, extracted it, ran registry writes), our installer ran, the guest halted
+at 18:56:13, and it came back to **"Automatic Repair couldn't repair your PC"**. No kill of mine was
+involved anywhere in that sequence. The owner said the installer was responsible; the owner was right.
+
+**BASELINE, run for the first time (it should have existed from the start).** A bare clone of
+win10-clean, with NO installer involved, boots, takes `shutdown /r`, and comes back with a working
+session - the whole cycle in three minutes. So the golden image and the reboot path are sound, and
+the brick is caused by what the installer does. Until this control ran, "the installer bricked it"
+was an assumption with an untested alternative sitting right next to it.
+
+**RETRACTION 2 - "the WIN10 chain exercises the two-stage install".** It does not, and neither
+chain does. Measured on the golden: `SystemStartOptions = TESTSIGNING NOEXECUTE=OPTIN` (testsigning
+ACTIVE, so `Test-TestSigningActive` sends it straight to stage 2) and the boot disk already reports
+`BusType SCSI`, i.e. it is already on xenvbd. win10-clean is a testsigning-ON, PV-disk image. So the
+coverage gap I described in the previous entry is real but different from what I wrote: **no chain
+tests a true two-stage (testsigning-off) install**, and the WIN10 chain was never the thing that did.
+
+**WHAT ACTUALLY DIFFERS BETWEEN A GOOD AND A BRICKED RUN: the seeded xenbus condition.**
+Control run today, seed OFF, same package (4.3.15+agent.dd5a817b3aee), same golden, same guest:
+
+    19:25:24  install starts
+    19:26:50  INSTALL COMPLETE - QWT installed. The PV drivers bind at the guest's NEXT start.
+    19:26:50  No reboot from here.
+
+90 seconds, no reboot, guest healthy afterwards. The bricked run differed in exactly one way: the
+harness had first seeded `xenbus_monitor\Request\xenvbd\Reboot=1` plus `start= auto`, and that guest
+HALTED at 80 seconds - i.e. DURING the MSI, before the install could complete - and came back
+unbootable. The mechanism this points at is the one the suppressor exists to prevent: the MSI lays
+down and STARTS xenbus_monitor mid-install, the monitor finds a pending reboot request, and reboots
+the guest in the middle of the PV driver installation. `Start-XenbusPromptSuppressor` sweeps once a
+SECOND, so it has a race window it can lose. HYPOTHESIS, n=2, NOT yet proven: it needs one seeded
+reproduction with the instrument in place before it is stated as fact.
+
+**INSTRUMENT DEFECTS FOUND (all mine, all fixed or recorded):**
+1. `qtest shot` returns an EMPTY tar for a guest with no gui-agent session, so every WIN10 failure
+   was literally unreadable. The owner was right that it is capturable by window: `qtest fullshot`
+   does see it, and `tools/winshot.py` now crops that capture to the named window - verified on the
+   Automatic Repair screen. `winshot --classify` turns it into RECOVERY/BLACK/DESKTOP, validated
+   against a known repair screen and two known live desktops.
+2. `Get-Content -Wait` streamed over qrexec DIED SILENTLY at 28 lines while the guest-side log grew
+   to 104. A streaming instrument that truncates without saying so is worse than none - poll the log
+   with bounded reads instead, and compare counts.
+3. The probe waited 35 minutes for a Halted state that this install never produces ("No reboot from
+   here"). A wait whose exit condition cannot occur is not a timeout, it is a hang.
+4. Every wait loop of mine polls at a fixed cadence with no stall detection and no abort. The owner:
+   "38 cycles with 30s delays and no interrupt action if it did not fly at all - this experiment
+   design sucks." Correct. A wait must end early on a terminal state AND on no-progress, and must
+   say which happened.
