@@ -1,3 +1,0 @@
-# id x y w h override_redirect mapped name
-0x1c00188 0 0 1920 1080 0 0 VMapp command
-0x1c0018b 123 129 1426 746 0 1 Untitled - Notepad
