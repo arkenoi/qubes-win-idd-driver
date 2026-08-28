@@ -19351,3 +19351,61 @@ guest down; Windows names it.
   Clone and push now log their actual error text, and push retries three times - its first attempt
   failed one second after boot with rc=46, i.e. no session yet (the same 1326 truncation as the
   field's "exit status 46").
+
+## 2026-08-29 — RETRACTION: the seeded cell was measuring my own injection, not the installer
+
+**Retracted:** "the installer's once-a-second suppressor loses a race and bricks the guest mid-MSI",
+and with it the reading of event 1074 as proof that our install path restarts the guest.
+
+**What the dated evidence shows.** Adding the Date field to the event capture - which the earlier
+captures dropped - changed the answer completely:
+
+    # captured 2026-08-29 00:20:34 at t+21s
+      Date: 2026-08-29T00:20:10Z   xenbus_monitor_9_1_0_0.exe has initiated the restart ...
+      Date: 2026-08-23T14:35:09Z   xenagent_9_1_0_0.exe has initiated the shutdown ...
+      Date: 2026-08-20T23:06:58Z   xenagent ...
+      Date: 2026-08-20T20:47:40Z   xenagent ...
+
+The installer's first log line that run was 00:20:15. **The restart was initiated at 00:20:10 - five
+seconds BEFORE the installer started.** The harness had just written
+`xenbus_monitor\Request\xenvbd\Reboot=1`, and the monitor - already running and idle on this image
+since boot - acted on it at once. Everything else in that capture is the golden image's own history
+from 20 and 23 August, which is what I was quoting in earlier undated runs as "Windows names the
+culprit".
+
+**So the cell was invalid as a detector for the fix.** It wrote the trigger at a moment when the
+monitor was idle and the installer had not started, so the guest rebooted before any installer-side
+code could run. Six consecutive "FAIL BRICKED" results measured that injection, not the product, and
+no fix to Install-QwtImproved.ps1 or xenbus.inf could ever have changed them. The bricks were real -
+a mid-install reboot does leave a half-installed guest that boots black or to Automatic Repair - but
+the cause was the harness.
+
+**Corrected design.** The field's sequence is: installer runs, stops and disables the monitor,
+msiexec starts, and the PV driver install files the reboot Request MID-MSI. The cell now arms
+`start= auto` up front and writes the Request `SEED_DELAY` seconds after the install is launched,
+so the trigger arrives after the installer has had its chance - which is the only arrangement in
+which the two fixes (kill the running monitor; never let the service start) can be shown to work or
+to fail.
+
+**Also added: a direct process probe.** Every file-read poll lost the race with a dying guest - the
+counter saw 25 lines while the last content capture held 19, and the six missing lines were exactly
+the ones under test. `tasklist`/`sc query` cost a fraction of reading a growing log and keep
+answering while the guest is busy, so the monitor's presence or absence is now observed directly
+instead of inferred from a log that never arrives.
+
+**Instrument defects fixed in this round, all of which had been silently corrupting evidence:**
+* the install-log capture truncated what it already held (`>` opens before the guest answers), then
+  later replaced a 25-line capture with a 19-line partial - now tail-append + dedup, so a failed
+  poll costs nothing;
+* the MSI verbose log was read from a fixed path that SURVIVES previous installs - the capture
+  taken at 23:46 was stamped 15/08/2026, the golden image's own install - now deleted pre-install;
+* the CPU sample ended in `bc`, which is not installed here, so it produced nothing and the harness
+  printed "black AND no CPU" for guests it had never measured - now summed with awk, and a guest
+  that is black while consuming CPU is reported as RUNNING HEADLESS rather than dead (measured:
+  cpu_usage_raw 241-270 on a "dead" guest);
+* the dirty-volume recovery assumed the guest could boot, which the bricked ones cannot -
+  `admin.vm.volume.Revert` clears it in seconds without booting.
+
+**Standing lesson.** Every one of these made the harness assert something it had not measured. A
+test that injects a defect must inject it where the code under test can act on it, and a capture
+that can lose data must never overwrite what it already has.
