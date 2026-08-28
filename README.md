@@ -37,7 +37,10 @@ sudo rpm -i qubes-windows-tools-ng-4.3.14-1.agent5634f905a8dd.noarch.rpm
 
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
-MSI replace it in one transaction (validated end to end; see the release notes).
+MSI replace it in one transaction. Validated end to end for an upgrade **from an older
+build of this package**; an upgrade from **stock QWT 4.2.2** uses the same unchanged MSI
+machinery but has not been exercised on our testbed since August 2026, because the test
+images themselves carry a newer build (see the release notes).
 
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.

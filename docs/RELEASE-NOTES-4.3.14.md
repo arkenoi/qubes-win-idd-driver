@@ -103,5 +103,8 @@ in. UAC prompts are unaffected: they are ordinary windows in both modes.
 ## Upgrading
 
 An in-place upgrade: run the installer, it detects the older version and lets the MSI replace it
-in one transaction. Validated end to end on clean Windows 10 22H2 and Windows 11 25H2 installs,
-template plus an AppVM through three cold boots each.
+in one transaction. Validated end to end on Windows 10 22H2 and Windows 11 25H2 test images,
+template plus an AppVM through three cold boots each. To be precise about what that covers: those
+images already carry version 4.3.2 of this package, so what was exercised is an upgrade from an
+older build of this package. An upgrade from **stock QWT 4.2.2** goes through the same unchanged
+MSI machinery but was not part of this run.
