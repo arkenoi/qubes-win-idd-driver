@@ -4,17 +4,33 @@
 # in the dev qube.
 #
 # WHY THIS EXISTS (2026-08-29)
-# local.WinScreenshot (04-install-screenshot-service.sh) already captures per-window, selecting
-# by the dom0-set _QUBES_VMNAME property. It is the right shape and it is what should be used.
-# It has one real gap: a guest with no gui-agent session — Automatic Repair, the boot screen, a
-# wedged guest — is drawn by dom0 as an ordinary window that may carry NO _QUBES_VMNAME, so the
-# _QUBES_VMNAME filter matches nothing and the caller gets an empty tar.
+# local.WinScreenshot (04-install-screenshot-service.sh) already captures per-window, selecting by
+# the dom0-set _QUBES_VMNAME property. It is the right shape and it is what should be used. The
+# belief that it "cannot see" a guest without a gui-agent session, which is what sent this project
+# to whole-desktop capture, was never tested. When it finally was, the guest window in question
+# turned out to be an ordinary managed window and the two REAL causes were elsewhere:
+#   1. The caller asked about a qube that does not exist (`tools/qtest` defaulted to win-idd-test,
+#      long gone). The service refuses an unknown/untagged target by exiting non-zero having
+#      written NOTHING — an empty tar, indistinguishable from "the guest has no windows".
+#      tools/qtest now preflights the target and refuses up front.
+#   2. tools/winshot.py silently DISCARDED the window: it required 8 whitespace-separated fields
+#      per geometry line, so any window whose name was a single token — the bare VM name, or the
+#      "?" written when there is no WM_NAME — produced a 7-field line that was skipped, and the
+#      tool then reported "no window matching <vm>". Fixed 2026-08-29, with a reproduction.
+# Neither cause needed a whole-desktop capture. Three such captures nevertheless reached a PUBLIC
+# git repo (sm1-3.tar, commit fbee3ed, found and removed 2026-08-29).
 #
-# The response to that gap was local.WinFullScreen (07): photograph the WHOLE dom0 desktop and
-# crop afterwards (tools/winshot.py). That produces a file containing every other qube's windows
-# in order to look at one window. Three such captures reached a PUBLIC git repo (sm1-3.tar,
-# commit fbee3ed, removed 2026-08-29). This service closes the gap at its source instead: it
-# still captures ONE WINDOW AT A TIME and never grabs the root window.
+# So this service is NOT a workaround for a proven gap in 04. It is the per-window path made
+# explicit and diagnosable: it captures ONE WINDOW AT A TIME, never the root window, records which
+# rule matched each capture, and on no-match prints WHICH failure mode occurred instead of
+# returning an empty tar for the next reader to misdiagnose.
+#
+# UNVERIFIED, and deliberately marked as such: the title fallback below covers the case where a
+# qube's window carries no _QUBES_VMNAME at all. That case is plausible but has NOT been observed
+# here — every window actually examined had the property. The fallback is therefore written to be
+# harmless if the case never occurs (it runs only when the trusted rule matched nothing, and only
+# over windows with no owner property), and its use is recorded in the manifest so a reader can
+# see a heuristic match for what it is. Do not cite it as evidence of anything.
 #
 # local.WinFullScreen remains justified for exactly two things and should be used for nothing
 # else: override-redirect windows (menus/tooltips, absent from _NET_CLIENT_LIST) and dom0-side

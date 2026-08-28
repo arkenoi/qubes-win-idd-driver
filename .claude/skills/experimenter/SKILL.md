@@ -107,6 +107,26 @@ Do not hand-roll wait loops. Use the ones with the failure modes already in them
 `.claude/skills/win-guest-e2e/e2e-lib.sh` plus the matrix harness's `e2e-wait.sh`
 (`w_session`, `w_install`, `w_halt`, `w_screen`) - they implement rules 6, 7, 9 and 13.
 
-For a guest with no session, `qtest shot` returns an EMPTY tar; use `qtest fullshot` plus
-`tools/winshot.py <tar> <vm> --classify` (RECOVERY / BLACK / DESKTOP) - that is what makes
-rule 9 enforceable.
+An EMPTY tar from `qtest shot` is NOT evidence that the guest has no session. **CORRECTED
+2026-08-29** - this line previously said it was, and told you to escalate to `qtest fullshot`.
+That instruction is what routed normal, capturable windows to a whole-desktop capture, three of
+which reached a PUBLIC repo. An empty tar has three causes and you must tell them apart:
+1. **The target does not exist or lacks the `win-idd-testbed` tag** - the dom0 service exits
+   non-zero writing nothing, which looks identical to "no windows". A bare `tools/qtest`
+   defaulted to `win-idd-test`, which has not existed for some time; `tools/qtest` now refuses
+   this up front, so if you see that error, fix `QTEST_VM` - do not escalate.
+2. **The tool discarded the window.** `tools/winshot.py` used to drop every geometry line whose
+   name was a single token - the bare VM name, or the `?` written when a window has no WM_NAME -
+   and then reported "no window matching". Fixed 2026-08-29; if you are on an older checkout,
+   that is your answer.
+3. **Genuinely no windows** - only conclude this after 1 and 2 are excluded.
+
+To look at one guest window, use the per-window path: `local.WinScreenshot` (selects by the
+dom0-set `_QUBES_VMNAME`) or `local.WinWindowShot` (`dom0/15-...`, adds a manifest saying which
+rule matched each capture). Neither ever touches the root window.
+
+`qtest fullshot` photographs the ENTIRE dom0 desktop, every other qube included. It is justified
+for exactly two things: override-redirect windows (menus/tooltips, absent from `_NET_CLIENT_LIST`)
+and dom0-side compositing defects. Never reach for it merely because a per-window shot came back
+empty. `tools/winshot.py <tar> <vm> --classify` (RECOVERY / BLACK / DESKTOP) still classifies a
+crop, and is what makes rule 9 enforceable - feed it a per-window capture.

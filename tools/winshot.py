@@ -39,18 +39,56 @@ def load(tar_path):
             geom = tf.extractfile(m).read().decode("utf-8", "replace")
     if not png:
         sys.exit(3)
+    # The service has emitted TWO header formats over time:
+    #   7 columns: id x y w h override_redirect name
+    #   8 columns: id x y w h override_redirect mapped name      (mapped added 2026-08-07)
+    # Decide from the header, never from the field count of a data line - a title is free text
+    # and may hold any number of spaces, or none.
+    #
+    # This function used to do `f = line.split(None, 7)` and `if len(f) < 8: continue`, which
+    # silently DISCARDED every window whose name was a single token - including the bare VM name
+    # ("win10-tpl") and the "?" the service writes when a window has no WM_NAME. On the 7-column
+    # format it also ate the first word of every remaining title as if it were the mapped column.
+    # The result was a tool that reported "no window matching 'win10-tpl'" about a normal, mapped,
+    # full-size window that was sitting right there in the capture - which is what sent this
+    # project down the whole-desktop capture path in the first place. Do not reintroduce it.
+    has_mapped = None
+    for line in (geom or "").splitlines():
+        if line.startswith("#") and "override_redirect" in line:
+            has_mapped = "mapped" in line
+            break
+
+    def num(tok):
+        """int, or None for the '?' the service writes when xwininfo could not read it."""
+        try:
+            return int(tok)
+        except ValueError:
+            return None
+
     windows = []
     for line in (geom or "").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        f = line.split(None, 7)
-        if len(f) < 8:
+        f = line.split(None, 6)          # id x y w h ovr <rest>
+        if len(f) < 6:
             continue
-        try:
-            windows.append((f[0], int(f[1]), int(f[2]), int(f[3]), int(f[4]), f[5], f[6], f[7]))
-        except ValueError:
-            continue
+        rest = f[6] if len(f) > 6 else ""
+        if has_mapped is None:
+            # No usable header. Infer, and be explicit that it is an inference: a leading 0/1
+            # token followed by more text is the mapped column.
+            parts = rest.split(None, 1)
+            mapped_here = len(parts) == 2 and parts[0] in ("0", "1")
+        else:
+            mapped_here = has_mapped
+        if mapped_here:
+            parts = rest.split(None, 1)
+            mapped = parts[0] if parts else "?"
+            name = parts[1] if len(parts) > 1 else ""
+        else:
+            mapped, name = "?", rest
+        windows.append((f[0], num(f[1]), num(f[2]), num(f[3]), num(f[4]), f[5],
+                        mapped, name or "?"))
     return Image.open(io.BytesIO(png)), windows
 
 
@@ -68,7 +106,9 @@ def main():
     if a.list or not a.name:
         print(f"# capture is {screen.width}x{screen.height}")
         for w in windows:
-            print(f"{w[0]}  {w[3]}x{w[4]}+{w[1]}+{w[2]}  mapped={w[6]} override={w[5]}  {w[7]}")
+            geo = ("?x?+?+?" if None in w[1:5]
+                   else f"{w[3]}x{w[4]}+{w[1]}+{w[2]}")
+            print(f"{w[0]}  {geo}  mapped={w[6]} override={w[5]}  {w[7]}")
         return 0
 
     want = a.name.lower()
@@ -77,8 +117,16 @@ def main():
         print(f"no window matching '{a.name}' in this capture; it holds: "
               + ", ".join(sorted({w[7] for w in windows})), file=sys.stderr)
         return 2
+    # A window with unreadable geometry cannot be cropped - but say so, rather than dropping it
+    # and reporting "no match" for a window we can plainly see.
+    croppable = [w for w in hits if None not in w[1:5]]
+    if not croppable:
+        print(f"'{a.name}' matches {len(hits)} window(s), but the service could not read their "
+              "geometry (xwininfo missing in dom0?), so no crop is possible: "
+              + ", ".join(f"{w[0]} '{w[7]}'" for w in hits), file=sys.stderr)
+        return 3
     # Largest match: a qube usually owns one framebuffer window plus small decorations.
-    wid, x, y, w, h, _ovr, mapped, name = max(hits, key=lambda t: t[3] * t[4])
+    wid, x, y, w, h, _ovr, mapped, name = max(croppable, key=lambda t: t[3] * t[4])
     # Clamp to the screen: a window partly off-screen would otherwise raise or pad.
     left, top = max(0, x), max(0, y)
     right, bottom = min(screen.width, x + w), min(screen.height, y + h)

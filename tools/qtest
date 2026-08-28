@@ -15,6 +15,24 @@
 set -uo pipefail
 
 VM="${QTEST_VM:-win-idd-test}"
+# PREFLIGHT: refuse a target that does not exist, instead of calling dom0 about it.
+#
+# The dom0 screenshot services gate on the win-idd-testbed tag and, for an unknown or untagged
+# qube, exit non-zero having written NOTHING to stdout. The caller therefore receives an EMPTY
+# TAR - which is indistinguishable from "this guest has no windows", and was read that way: it
+# is why a normal, capturable window looked elusive, and why the harness escalated to
+# whole-desktop capture (whose output then reached a public repo). The default below is the
+# original Phase-0 qube and it has not existed for some time, so a bare `tools/qtest` hits this
+# exact path. 0.1s to check; hours to misdiagnose.
+if ! qvm-check --quiet "$VM" 2>/dev/null; then
+    echo "qtest: target qube '$VM' does not exist — set QTEST_VM explicitly." >&2
+    echo "       (an unset QTEST_VM defaults to '${VM}', which is not a live qube)" >&2
+    tagged=$(qvm-ls --raw-list 2>/dev/null | while read -r v; do
+                 qvm-tags "$v" list 2>/dev/null | grep -qx win-idd-testbed && echo "  $v"
+             done)
+    [ -n "$tagged" ] && { echo "       testbed qubes available:" >&2; echo "$tagged" >&2; }
+    exit 2
+fi
 # Discovered in Phase 0; override via env if different.
 INCOMING="${QTEST_INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\$(hostname)}"
 
