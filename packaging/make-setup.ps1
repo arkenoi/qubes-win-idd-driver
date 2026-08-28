@@ -37,6 +37,13 @@ param(
     # qubes-tools-<version>.exe - see the STOCK-SHAPE COMPATIBILITY block below.
     [string]$BootstrapExe,
     [string]$QubesdbReadExe,       # tools\qubesdb-read.exe (guest-side reliable qubesdb CLI reader)
+    # Directory holding the FORK-BUILT core-agent qrexec binaries (qrexec-wrapper.exe at
+    # minimum). The MSI carries the STOCK 4.2.2 binaries - stage-qwt-repo.ps1 substitutes
+    # only the gui-agent component - so the drain-race fix in qrexec-wrapper (fork commits
+    # ac33bc9 + e5e94b8: do not report the exit code before the i/o pumps have drained) is
+    # merged and CI-green yet deployed to NO guest unless it rides this channel. Optional
+    # only because the release workflow does not build core-agent yet; absence WARNS loudly.
+    [string]$CoreAgentBins,
     [Parameter(Mandatory = $true)][string]$VcRedist,
     [string]$RepoRoot = '.',
     [string]$OutDir = 'qwt-improved-setup'
@@ -135,14 +142,68 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\set-autologon.ps1') 'autologon armin
 # for it) with it - so an unattended reboot cannot be told apart from a dom0-requested one after
 # the fact. Event-triggered tasks copy those records onto the private volume as they are written.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\install-reboot-audit.ps1') 'reboot-cause audit installer') $OutDir -Force
-# App-menu service scripts. The MSI is assembled from the STOCK QWT image plus our gui-agent
-# binaries (stage-qwt-repo.ps1) - core-agent contributes only a signing cert - so a change to
-# these scripts in the core-agent submodule does NOT reach the guest through the MSI. Ship them
-# in the payload and let stage 2 place them over the stock copies, the same way the updater
-# agent's scripts are deployed.
-New-Item -ItemType Directory -Force -Path (Join-Path $OutDir 'rpc') | Out-Null
-foreach ($r in 'get-appmenus.ps1', 'start-app.ps1') {
-    Copy-Item (Need (Join-Path $RepoRoot "core-agent\src\qubes-rpc-services\$r") "app-menu rpc script ($r)") (Join-Path $OutDir 'rpc') -Force
+# qrexec rpc handler scripts + service definitions. The MSI is assembled from the STOCK QWT
+# image plus our gui-agent binaries (stage-qwt-repo.ps1) - core-agent contributes only a
+# signing cert - so NOTHING edited under core-agent/src/qubes-rpc-services/ ever reaches the
+# guest through the MSI. This used to be a hardcoded 2-file list (get-appmenus.ps1,
+# start-app.ps1), duplicated in Install-QwtImproved.ps1: editing any THIRD file in that
+# directory shipped nothing, with CI green and the stock copy silently winning on the guest
+# (the 2026-08-25 incident). So: SWEEP the directory instead of naming files. Whatever the
+# submodule holds is what the payload carries, and the installer sweeps the payload dirs in
+# turn - a new or changed handler ships by existing, with no list anywhere to forget.
+# Payload layout mirrors the guest install: rpc\qubes-rpc-services\ (handler scripts, .ps1/.bat)
+# and rpc\qubes-rpc\ (the qubes.* service definitions - shipping these fixes the fork-added
+# qubes.GetAppmenus alias too, which the installer used to fake by copying the guest's own
+# stock file, leaving OUR copy of it decorative).
+$rpcSvcOut = Join-Path $OutDir 'rpc\qubes-rpc-services'
+$rpcDefOut = Join-Path $OutDir 'rpc\qubes-rpc'
+New-Item -ItemType Directory -Force -Path $rpcSvcOut, $rpcDefOut | Out-Null
+$rpcSrcDir = Need (Join-Path $RepoRoot 'core-agent\src\qubes-rpc-services') 'core-agent rpc-services sources (is the submodule checked out?)'
+$rpcScripts = @(); $rpcDefs = @()
+foreach ($f in @(Get-ChildItem -LiteralPath $rpcSrcDir -File)) {
+    # VMExec.ps1 exists TWICE in this repo. guest\VMExec.ps1 is the MAINTAINED copy (exit-code
+    # propagation, UTF-8 decode, vmupdate-shim routing, audit log); the core-agent copy is the
+    # stock 4.2.2 text kept for upstream diffing. Sweeping the submodule copy would either be
+    # overwritten later by the updater-agent deploy (order-dependent) or - under /noupdates -
+    # REGRESS the guest to the stock handler. One source of truth: skip it here and stage the
+    # guest\ copy below, so the maintained VMExec ships through this channel unconditionally.
+    if ($f.Name -ieq 'VMExec.ps1') { continue }
+    if ($f.Name -like 'qubes.*') { Copy-Item $f.FullName $rpcDefOut -Force; $rpcDefs += $f.Name }
+    else                         { Copy-Item $f.FullName $rpcSvcOut -Force; $rpcScripts += $f.Name }
+}
+Copy-Item (Need (Join-Path $RepoRoot 'guest\VMExec.ps1') 'maintained VMExec.ps1 (guest copy is the single source of truth)') $rpcSvcOut -Force
+$rpcScripts += 'VMExec.ps1'
+# Tripwires: "the sweep swept nothing" must fail HERE, not silently ship a stock guest. The
+# two actively maintained scripts must be in the take, and the counts must be plausible.
+# (>= 13 definitions, not 14: qubes.GetAppMenus / qubes.GetAppmenus differ only by letter case
+# and materialize as ONE file on a case-insensitive checkout, e.g. a Windows CI runner.)
+foreach ($must in 'get-appmenus.ps1', 'start-app.ps1') {
+    if ($rpcScripts -notcontains $must) { throw "rpc sweep did not pick up $must - core-agent submodule stale, or the file was renamed?" }
+}
+if ($rpcDefs.Count -lt 13) { throw "rpc sweep found only $($rpcDefs.Count) qubes.* service definitions (expected >= 13) - core-agent submodule stale?" }
+Write-Host ("rpc payload: {0} handler scripts, {1} service definitions" -f $rpcScripts.Count, $rpcDefs.Count)
+
+# Fork-built qrexec binaries -> payload bin\, placed over `Qubes Tools\bin` by stage 2 with
+# *.qwt-stock backups. See the -CoreAgentBins comment in the param block: without this the
+# qrexec-wrapper drain-race fix exists only in a raw CI artifact and runs on no guest.
+if ($CoreAgentBins -and (Test-Path -LiteralPath $CoreAgentBins)) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $OutDir 'bin') | Out-Null
+    if (-not (Test-Path -LiteralPath (Join-Path $CoreAgentBins 'qrexec-wrapper.exe'))) {
+        throw '-CoreAgentBins given but qrexec-wrapper.exe is not in it - that binary carries the drain-race fix and is the reason this channel exists'
+    }
+    $binStaged = @()
+    foreach ($b in 'qrexec-wrapper.exe', 'qrexec-agent.exe', 'qrexec-client-vm.exe') {
+        $p = Join-Path $CoreAgentBins $b
+        if (Test-Path -LiteralPath $p) {
+            Copy-Item -LiteralPath $p (Join-Path $OutDir 'bin') -Force
+            $binStaged += $b
+        }
+    }
+    Write-Host "core-agent binaries: $($binStaged -join ', ')"
+} else {
+    # Loud on purpose: this is the exact silence that let the stock wrapper keep shipping
+    # while the fix sat merged and green.
+    Write-Warning 'no core-agent binaries supplied (-CoreAgentBins): the guest keeps the STOCK qrexec-wrapper.exe - the drain-race fix (lost bytes on service exit) ships NOWHERE'
 }
 # IDD-only activator, run by `install.cmd /iddonly` to add/activate the IddCx driver on a guest
 # that already has QWT (no MSI, no version/PV gate). Uses idd-driver/ staged below.
@@ -343,6 +404,7 @@ $manifest = [ordered]@{
                            'VC++ 2015-2022 x64 runtime',
                            'bcdedit /set testsigning on',
                            'gui-agent registry defaults: SeamlessMode=1, DisableCursor=1, LogDir',
+                           'OUR qubes-rpc handler scripts + service definitions over the stock MSI copies (payload rpc\, stock kept as *.qwt-stock); fork qrexec binaries from payload bin\ when built',
                            'Windows Update agent (unless /noupdates): reports availability via qubes.NotifyUpdates, answers dom0 qubes-vm-update so the Qubes Update GUI can drive the qube, and sets NoAutoUpdate=1 - dom0 owns installs')
     }
     never_installs = @('reference/', 'PvDriversDisk', 'MoveUsers', 'Autologon',

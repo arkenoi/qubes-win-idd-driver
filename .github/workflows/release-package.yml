@@ -24,23 +24,44 @@ on:
     # offers workflow_dispatch for files that exist on the DEFAULT branch, so until this
     # merges, a push trigger is the only way to exercise it.
     branches: [main, t2/release-package]
+    # EVERY input this workflow ships must be listed, or a change to it is committed, CI
+    # stays green, and the next download quietly ships the old bytes - the exact silent
+    # no-op class the ours-wins guard exists for. Audited 2026-08-28 against what the
+    # jobs actually consume; keep this in sync when adding an input.
     paths:
-      - 'packaging/setup/**'
-      - 'packaging/make-setup.ps1'
-      - 'packaging/make-iso.sh'
+      # Everything under packaging/ feeds this build: setup/ (the installer payload),
+      # make-setup.ps1, make-iso.sh, stage-qwt-repo.ps1 (via qwt-full), the ours-wins
+      # guard + its data file, and rpm/ (spec + dom0 scripts for the rpm job).
+      - 'packaging/**'
       - '.github/workflows/release-package.yml'
+      # Reused workflows ARE this build: jobs.msi calls qwt-full.yml, jobs.pv calls
+      # pv-xenvif.yml. A change to either must rebuild the package.
+      - '.github/workflows/qwt-full.yml'
+      - '.github/workflows/pv-xenvif.yml'
       # The artifact EMBEDS the driver and the agent (via qwt-full) - a change to either
       # must rebuild it, or the next download quietly ships stale binaries.
       - 'driver/**'
+      # Submodule PATHS (a bump shows as a change to the path itself - .gitmodules is the
+      # full set): agent = gui-agent binaries in the MSI; core-agent = the rpc overlay
+      # swept into the payload and the guard's compiled-source checks.
       - 'agent'
-      # the app-menu rpc scripts are staged from here into the package
       - 'core-agent'
+      - '.gitmodules'
       # make-setup.ps1 stages guest/*.ps1 (activate-idd, deactivate-idd, the updater agent,
-      # the desktop tweaks) into the package. Without this filter a fix to one of those
-      # scripts is committed, CI stays green, and the next download still ships the old copy.
+      # the desktop tweaks, VMExec) into the package. Without this filter a fix to one of
+      # those scripts is committed, CI stays green, and the next download ships the old copy.
       - 'guest/**'
       # The stock-shape entry point is compiled here and staged into the package.
       - 'tools/qwt-bootstrap/**'
+      # qubesdb-read.exe is compiled from here into tools\ of the package.
+      - 'tools/qubesdb-read/**'
+      # Shipped as compile-on-guest diagnostic source in tools\.
+      - 'tools/winenum.cs'
+      # pv-xenvif builds with these patches; the stock MSI + ITL certs come from vendor/.
+      - 'patches/**'
+      - 'vendor/**'
+      # The rpm job packages the auto-qwt stub and README from contrib/.
+      - 'contrib/**'
 
 # One release build at a time, newest wins. Without this, a 2026-08-06 background job
 # cancelled runs it took for duplicates and the cancellations looked like CI flakiness.
@@ -263,6 +284,10 @@ jobs:
         run: |
           git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
           git config --global --add safe.directory "$env:GITHUB_WORKSPACE/agent"
+          # core-agent too: the ours-wins guard diffs that submodule against its 4.2.2
+          # base to prove compiled-source changes actually ship. Dubious-ownership there
+          # would fail the CompiledSources check with a misleading message.
+          git config --global --add safe.directory "$env:GITHUB_WORKSPACE/core-agent"
           $repoSha = (git -C "$env:GITHUB_WORKSPACE" rev-parse HEAD).Trim()
           if (-not $repoSha) { throw 'could not resolve the repo SHA' }
           "QWT_REPO_SHA=$repoSha" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
@@ -327,6 +352,20 @@ jobs:
               -VcRedist    "$env:VC_REDIST" `
               -QubesdbReadExe "$env:QUBESDB_READ_EXE" `
               -OutDir      qwt-improved-setup
+
+      # THE OURS-WINS GUARD. Fails the build when any file this repo maintains a source
+      # for would ship from the vendored stock 4.2.2 image - or not ship at all - instead
+      # of from this repo (the 2026-08-25 silent no-op: an edit to a core-agent rpc script
+      # reached no guest while CI stayed green). Data-driven from packaging/ours-wins.psd1;
+      # extracts the stock MSI as its comparison baseline and cross-checks the assembled
+      # tree, the repo sources, and the core-agent submodule's diff against its 4.2.2 base.
+      - name: Guard - everything we maintain must ship from this repo (ours-wins)
+        shell: pwsh
+        run: |
+          & .\packaging\check-ours-wins.ps1 `
+              -RepoRoot . `
+              -PackageRoot qwt-improved-setup `
+              -StockMsi vendor\qwt-4.2.2\installer.msi
 
       - name: Show manifest
         shell: pwsh

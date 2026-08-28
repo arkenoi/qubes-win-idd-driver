@@ -1631,61 +1631,144 @@ function Invoke-Stage2 {
         $script:Result.detail.session_lock = 'not in payload'
     }
 
-    # --- app menu: place OUR rpc scripts over the stock ones ----------------------------
-    # A fresh guest's Start Menu yields almost nothing to the .lnk sweep, so dom0's application
-    # list comes up nearly empty - and in seamless mode there is no taskbar and no desktop, so
-    # that list is the only way in. Our get-appmenus.ps1 also reports Notepad, Edge, Explorer,
-    # Settings, cmd and PowerShell (plus elevated cmd/PowerShell), and our start-app.ps1 knows how
-    # to launch them. They cannot arrive through the MSI: it is built from the stock QWT image
-    # plus our gui-agent binaries only.
-    $rpcSrc = Join-Path $Root 'rpc'
-    $rpcDst = Join-Path $env:ProgramFiles 'Qubes Tools\qubes-rpc-services'
-    if ((Test-Path -LiteralPath $rpcSrc) -and (Test-Path -LiteralPath $rpcDst)) {
+    # --- qrexec rpc scripts + service definitions: place OUR copies over the stock ones -
+    # The MSI is the stock QWT image plus our gui-agent binaries only, so every file it puts
+    # under qubes-rpc-services\ and qubes-rpc\ is the STOCK text; this block is what makes the
+    # repo's copies real on a guest. It used to name exactly two files (get-appmenus.ps1,
+    # start-app.ps1) in a list duplicated in make-setup.ps1 - so when a THIRD script in that
+    # directory was edited (2026-08-25), both lists stayed as they were, CI stayed green, and
+    # the guest silently kept stock: the change shipped nothing. Now the payload directories
+    # are SWEPT: make-setup.ps1 stages everything core-agent/src/qubes-rpc-services holds
+    # (split to mirror the guest layout), and whatever was staged is what lands here. There is
+    # no list left to forget in either file.
+    # Why our scripts matter even on a fresh guest: a fresh Start Menu yields almost nothing
+    # to the .lnk sweep, so dom0's application list comes up nearly empty - and in seamless
+    # mode that list is the only way in. Our get-appmenus.ps1 also reports Notepad, Edge,
+    # Explorer, Settings, cmd and PowerShell, and our start-app.ps1 knows how to launch them.
+    $qtRoot = Join-Path $env:ProgramFiles 'Qubes Tools'
+    $rpcPairs = @(
+        @{ Src = Join-Path $Root 'rpc\qubes-rpc-services'; Dst = Join-Path $qtRoot 'qubes-rpc-services'; What = 'rpc handler scripts' },
+        @{ Src = Join-Path $Root 'rpc\qubes-rpc';          Dst = Join-Path $qtRoot 'qubes-rpc';          What = 'qrexec service definitions' }
+    )
+    $rpcReport = @()
+    $rpcFailed = @()
+    $rpcPlacedNames = @()
+    foreach ($pair in $rpcPairs) {
+        if (-not (Test-Path -LiteralPath $pair.Src)) {
+            # A payload without the dir is a packaging regression, not a supported shape - say
+            # which side is missing, because "not deployed" hid exactly this for months.
+            Write-Log "rpc payload dir missing ($($pair.Src)) - guest keeps the STOCK $($pair.What)" 'WARN'
+            $rpcReport += "$($pair.What): payload-missing"
+            continue
+        }
+        if (-not (Test-Path -LiteralPath $pair.Dst)) {
+            Write-Log "$($pair.Dst) not found (QWT install incomplete?) - STOCK $($pair.What) unreplaced" 'WARN'
+            $rpcReport += "$($pair.What): target-missing"
+            continue
+        }
+        $all = @(Get-ChildItem -LiteralPath $pair.Src -File)
         $placed = 0
-        foreach ($r in 'get-appmenus.ps1', 'start-app.ps1') {
-            $src = Join-Path $rpcSrc $r
-            $dst = Join-Path $rpcDst $r
-            if (-not (Test-Path -LiteralPath $src)) { continue }
+        foreach ($f in $all) {
+            $dst = Join-Path $pair.Dst $f.Name
             try {
                 if ((Test-Path -LiteralPath $dst) -and -not (Test-Path -LiteralPath "$dst.qwt-stock")) {
                     Copy-Item -LiteralPath $dst -Destination "$dst.qwt-stock" -Force
                 }
-                Copy-Item -LiteralPath $src -Destination $dst -Force
+                Copy-Item -LiteralPath $f.FullName -Destination $dst -Force
                 $placed++
+                $rpcPlacedNames += $f.Name
             } catch {
-                Write-Log "could not place $r : $($_.Exception.Message) (non-fatal)" 'WARN'
+                Write-Log "could not place $($f.Name): $($_.Exception.Message) (non-fatal)" 'WARN'
+                $rpcFailed += $f.Name
             }
         }
-        Write-Log "app-menu rpc scripts placed: $placed/2 (stock copies kept as *.qwt-stock)"
-        $script:Result.detail.appmenu_scripts = "placed=$placed"
+        Write-Log "$($pair.What) placed: $placed/$($all.Count) (stock copies kept as *.qwt-stock)"
+        $rpcReport += "$($pair.What): $placed/$($all.Count)"
+    }
+    if ($rpcFailed.Count) {
+        Write-Log ("rpc overlay INCOMPLETE - these stayed STOCK on the guest: " + ($rpcFailed -join ', ')) 'WARN'
+        $script:Result.detail.rpc_overlay_failed = $rpcFailed -join ','
+    }
+    $script:Result.detail.rpc_overlay = $rpcReport -join '; '
+    # Field kept for older log parsers: the app-menu pair specifically. Counted from what the
+    # sweep actually PLACED, not from Test-Path on the destination - the stock MSI installs
+    # files under these names too, so an existence check there could never fail.
+    $appmenuPlaced = @('get-appmenus.ps1', 'start-app.ps1' | Where-Object { $rpcPlacedNames -contains $_ }).Count
+    $script:Result.detail.appmenu_scripts = "placed=$appmenuPlaced"
 
-        # SERVICE NAME CASE. dom0 asks for 'qubes.GetAppmenus' (lowercase m - qubesappmenus'
-        # receive.py calls run_service('qubes.GetAppmenus')), while Windows Tools has always
-        # shipped the definition as 'qubes.GetAppMenus'. NTFS lookups are case-insensitive so this
-        # usually resolves, but nothing guarantees the qrexec agent opens it by name rather than
-        # matching a listing - and the failure mode is the whole application list disappearing
-        # with "returned non-zero exit status 1". Drop an exact-case alias next to it; costs one
-        # file, removes the question.
-        try {
-            $svc = Get-ChildItem -Path (Join-Path $env:ProgramFiles 'Qubes Tools') -Filter 'qubes.GetAppMenus' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($svc) {
-                $alias = Join-Path $svc.DirectoryName 'qubes.GetAppmenus'
-                if (-not (Test-Path -LiteralPath $alias)) {
-                    Copy-Item -LiteralPath $svc.FullName -Destination $alias -Force
-                    Write-Log "added qrexec service alias: $alias"
-                }
-                $script:Result.detail.appmenu_alias = 'present'
-            } else {
-                Write-Log 'qubes.GetAppMenus service definition not found - cannot add the lowercase alias' 'WARN'
-                $script:Result.detail.appmenu_alias = 'service-file-not-found'
+    # SERVICE NAME CASE. dom0 asks for 'qubes.GetAppmenus' (lowercase m - qubesappmenus'
+    # receive.py calls run_service('qubes.GetAppmenus')), while Windows Tools has always
+    # shipped the definition as 'qubes.GetAppMenus'. The sweep above now delivers the fork's
+    # own qubes.GetAppmenus file (it used to be re-implemented here by copying the guest's
+    # stock file, leaving the repo copy decorative - if the fork's command line ever changed,
+    # the guest kept stock). This block stays as the belt-and-braces fallback for a payload
+    # whose definitions dir went missing: on a case-insensitive volume it detects the file as
+    # already present; on a case-sensitive one it creates the exact-case alias.
+    try {
+        $svc = Get-ChildItem -Path $qtRoot -Filter 'qubes.GetAppMenus' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($svc) {
+            $alias = Join-Path $svc.DirectoryName 'qubes.GetAppmenus'
+            if (-not (Test-Path -LiteralPath $alias)) {
+                Copy-Item -LiteralPath $svc.FullName -Destination $alias -Force
+                Write-Log "added qrexec service alias: $alias"
             }
-        } catch {
-            Write-Log "service alias failed: $($_.Exception.Message) (non-fatal)" 'WARN'
-            $script:Result.detail.appmenu_alias = "error"
+            $script:Result.detail.appmenu_alias = 'present'
+        } else {
+            Write-Log 'qubes.GetAppMenus service definition not found - cannot add the lowercase alias' 'WARN'
+            $script:Result.detail.appmenu_alias = 'service-file-not-found'
         }
+    } catch {
+        Write-Log "service alias failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+        $script:Result.detail.appmenu_alias = "error"
+    }
+
+    # --- fork-built qrexec binaries: OUR bin\ over the stock one ------------------------
+    # The same gap in binary form: qrexec-wrapper.exe carries the drain-race fix ("do not
+    # report the exit code before the i/o pumps have drained") in the core-agent fork, but
+    # the MSI installs the stock 4.2.2 build - so the fix was merged, CI-green, and running
+    # on NO guest. When the package carries bin\ (make-setup.ps1 -CoreAgentBins), place its
+    # files over `Qubes Tools\bin`. A running exe cannot be overwritten but CAN be renamed,
+    # so on a locked file the live binary is moved aside and the copy retried; the swap takes
+    # effect at the next process spawn (qrexec-wrapper is started per connection) or, for the
+    # agent service itself, at the reboot this stage ends in.
+    $binSrc = Join-Path $Root 'bin'
+    $binDst = Join-Path $qtRoot 'bin'
+    if ((Test-Path -LiteralPath $binSrc) -and (Test-Path -LiteralPath $binDst)) {
+        $binPlaced = 0
+        $binFailed = @()
+        foreach ($b in @(Get-ChildItem -LiteralPath $binSrc -File)) {
+            $dst = Join-Path $binDst $b.Name
+            try {
+                if ((Test-Path -LiteralPath $dst) -and -not (Test-Path -LiteralPath "$dst.qwt-stock")) {
+                    Copy-Item -LiteralPath $dst -Destination "$dst.qwt-stock" -Force
+                }
+                try {
+                    Copy-Item -LiteralPath $b.FullName -Destination $dst -Force
+                } catch {
+                    # Sharing violation: the stock binary is executing right now (the qrexec
+                    # agent service, or the very wrapper hosting this connection). Rename it
+                    # out of the way - allowed for a running image - and copy again.
+                    Move-Item -LiteralPath $dst -Destination "$dst.qwt-prev" -Force
+                    Copy-Item -LiteralPath $b.FullName -Destination $dst -Force
+                }
+                $binPlaced++
+            } catch {
+                Write-Log "could not place bin\$($b.Name): $($_.Exception.Message) (non-fatal)" 'WARN'
+                $binFailed += $b.Name
+            }
+        }
+        Write-Log "fork qrexec binaries placed: $binPlaced (stock kept as *.qwt-stock)"
+        $script:Result.detail.qrexec_bins = if ($binFailed.Count) { "placed=$binPlaced FAILED=" + ($binFailed -join ',') } else { "placed=$binPlaced" }
+        if ($binFailed.Count) { Write-Log ("qrexec binaries left STOCK: " + ($binFailed -join ', ')) 'WARN' }
+    } elseif (Test-Path -LiteralPath $binSrc) {
+        Write-Log "payload bin\ present but $binDst missing - QWT install incomplete? STOCK qrexec binaries unreplaced" 'WARN'
+        $script:Result.detail.qrexec_bins = 'target-missing'
     } else {
-        Write-Log 'app-menu rpc scripts not deployed (payload or target dir missing) - the qube will report only Start Menu shortcuts' 'WARN'
-        $script:Result.detail.appmenu_scripts = 'not deployed'
+        # Not fatal while the release workflow does not yet build core-agent, but it must be
+        # VISIBLE: no bin\ means the guest runs the STOCK qrexec-wrapper (lost bytes on
+        # service exit) and this line is the only witness to that.
+        Write-Log 'no bin\ in payload - guest keeps the STOCK qrexec binaries (the drain-race fix is NOT deployed)' 'WARN'
+        $script:Result.detail.qrexec_bins = 'not-in-payload'
     }
 
     # --- reboot audit: keep the evidence of WHY a restart happened ----------------------
