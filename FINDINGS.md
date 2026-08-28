@@ -19021,3 +19021,46 @@ qrexec gets a real exit code because it waits on the process handle; cmd does no
 
 STILL UNKNOWN: what produces exit status 46 on the reporter's guest. Not this success path. Needs
 his gui-agent log and the qrexec side, not another hypothesis.
+
+## 2026-08-28 — seamless-mode switch failing with "exit status 46": localized to the LAUNCH path,
+## not to set-gui-mode
+
+WHAT dom0 DOES (qubes-manager settings.py:1229): the "Disable seamless mode" button calls
+run_service_for_stdio("qubes.SetGuiMode", input=b"FULLSCREEN"), and CalledProcessError prints the
+guest's exit code verbatim. So 46 is genuinely what the guest returned.
+
+WHAT 46 CANNOT BE. Measured on win10-app/win11-app against the STOCK binary, harness validated in
+the same run (a known-46 process reports 46; the binary's own bad-input path reports 87):
+
+    SEAMLESS   EXIT=0   (x3)      FULLSCREEN EXIT=0      GARBAGE EXIT=87
+
+set-gui-mode.exe returns only 0, 2 (event absent), 87 (bad input), or a SetEvent failure. It never
+returns 46. My earlier claim that it returns stale GetLastError() garbage on success is retracted
+above.
+
+WHAT 46 IS. qrexec-wrapper.c's cleanup path sends `status` - a WIN32 ERROR CODE - through the data
+vchan AS the exit code whenever child setup fails:
+
+    if (!piped || status != ERROR_SUCCESS) { VchanSendHello(...); VchanSendExitCode(child, status); }
+
+Proven by experiment: renaming qubes.VMExec's service file away made dom0 see rc=2
+(ERROR_FILE_NOT_FOUND) on three consecutive calls, and rc=0 again once restored. So the guest
+reports launch failures as Win32 errors in the exit-code field, and 46 (ERROR_SHARING_PAUSED) is
+one of those - from StartChild's CreatePipedProcessAsUser / CreateNormalProcessAsUser /
+CreateChildPipes, not from the service.
+
+CONCLUSION: on the reporter's guest the qubes.SetGuiMode SERVICE NEVER RAN - the wrapper could not
+create the process. That is consistent with his other symptom (an empty app menu: qubes.GetAppmenus
+would fail the same way) and with a partially-installed QWT, which is exactly what the other
+reporter described in post 104.
+
+THE EVIDENCE THAT WOULD NAME IT: qrexec-wrapper writes a per-call log,
+Q:\Qubes Logs\qrexec-wrapper-<timestamp>-<pid>.log, and StartChild's failures go through
+win_perror2, so the failing API and its code are IN THAT FILE. On a healthy guest there are no
+such lines (checked). Ask for the wrapper log from the minute he clicked the button - not the
+gui-agent log, which would only show the switch that never arrived.
+
+HARNESS NOTE: set-gui-mode.exe is a GUI-subsystem binary (wWinMain), so `cmd /c prog & echo
+%ERRORLEVEL%` reports nothing useful - cmd does not wait for it. qrexec gets a real code because it
+waits on the process handle. Measure with Start-Process -Wait -PassThru, and validate the harness
+with a known non-zero first.
