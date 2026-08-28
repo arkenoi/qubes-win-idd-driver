@@ -40,3 +40,4 @@ evidence/
 # drifted from source and shipped a pre-fix installer for three releases. See the README there.
 release-artifacts/*
 !release-artifacts/README.md
+__pycache__/
