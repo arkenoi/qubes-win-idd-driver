@@ -18617,3 +18617,96 @@ rejecting a connection while the previous one is still torn down), and check whe
 resolution apply + monitor replug at boot (RESEXACT replug=1, which #26 showed is a real
 monitor hot-plug) is what makes the daemon drop the connection. If it is, #23 and #26 are the
 same bug seen from two ends, and the fix is to not replug during early boot.
+
+## 2026-08-28 cont — RETRACTION: there is no boot double-spawn race. It is a SHUTDOWN artifact.
+## And the field "nothing is visible" reports are OUR regression against stock QWT.
+
+### 1. Retraction (loud, per the standing rule)
+
+I diagnosed #23 as a boot-time race between two gui-agent instances over the vchan. WRONG, twice
+over: they are not concurrent (already retracted this morning), and they are not at boot either.
+
+The watchdog log names it, and I had never read one:
+    095955.209  StartTargetProcess: gui-agent.exe in session 1      <- the session's agent
+    100044.999  "Process 'gui-agent.exe' not running, restarting it" <- it exited
+    100047.177  "died within 10000 ms of starting ... backing off"
+    100049.840  ControlHandlerEx: stopping...                        <- the SERVICE is stopping
+The service only gets that at machine shutdown. So the sequence is: shutdown starts, session 1 is
+torn down, the agent goes with it, the watchdog dutifully respawns it twice into a machine whose
+gui-daemon is already gone (hence "QioReadBuffer ... The pipe has been ended", logged from a
+worker thread, not main), and then the SCM stops the watchdog.
+
+GWeck's field logs say exactly the same thing, and the uptime header is the proof:
+    18:45:36  uptime  33.8 s  -> lived 5m37s   (the real session agent)
+    18:51:14  uptime 412.2 s  -> lived  0.4 s  } respawns
+    18:51:16  uptime 414.2 s  -> lived  4.1 s  } (pipe ended)
+    18:54:18  uptime  36.1 s  -> lived 2m42s   <- UPTIME RESET: the machine had rebooted
+Two agents 2 s apart at seven minutes' uptime, followed by a reboot. A shutdown, not a boot.
+
+Consequences:
+- #23's premise is void. The single-instance mutex (agent c58f422) stays - it is correct
+  hardening and provably refuses duplicates - but it fixed nothing that was ever happening.
+- The 02:34:35/02:34:36 pair I opened #23 on was the same shutdown pattern (qrexec-agent's next
+  log starts at 02:35:29, i.e. the reboot).
+- The boot-time replug theory built on top of it is also void: at boot this rig logs
+  "RESEXACT 5120x1440 replug=0" - the mode is already published, so no replug happens at all.
+
+FIXED (agent 284bda4): the watchdog now latches SERVICE_CONTROL_PRESHUTDOWN (newly accepted) /
+SHUTDOWN / STOP and skips the respawn while the machine is going down, and every death now logs
+the signals it looked at (servicestop, SM_SHUTTINGDOWN, console session, WTS state) so nobody has
+to guess again. WTS state is recorded but NOT acted on: at the sign-in screen the session is
+legitimately not active and the agent must still be started there.
+
+### 2. The forum reports are a REGRESSION we introduced, not longstanding QWT behaviour
+
+Post 101 (aptget, 2026-08-28): "in a clean win11 or win10 once i install the agent at the first
+restart of qube absolutely nothing is visible ... the only solution i have find is qvm-prefs
+debug true, strangely after that you see the login process then an empty black window".
+(The black window in debug mode is the stubdomain's emulated-VGA window: with the IDD active the
+desktop is not on the emulated adapter, so that window is legitimately black.)
+
+Checked against upstream QubesOS/qubes-gui-agent-windows (git show upstream/main:gui-agent/main.c,
+1613 lines):
+| behaviour                        | upstream                        | ours |
+|---|---|---|
+| sign-in / LogonUI screen         | no filter at all - it is SHOWN  | rejected unconditionally (2026-08-19) AND the whole frame path freezes on the secure desktop (4.3.11) |
+| default mode when SeamlessMode absent | FALSE = full desktop       | same code, but our installer WRITES SeamlessMode=1 (seamless) |
+| entering full-desktop mode       | SetSeamlessMode(FALSE) maps window 0, no gate | refused unless service.gui-fullscreen is set; then shrunk to 1280x800 |
+| autologon                        | QWT ISO ships an Autologon component | packaging/make-setup.ps1 never_installs it (deliberate) |
+
+So a field user of OUR package who has a password on their Windows account gets: no autologon,
+a sign-in screen that is never shown, a frozen frame path, and the traditional escape hatch
+(full-desktop mode) off by default. That is "absolutely nothing is visible", and on stock QWT it
+would not have happened - stock defaults to the full-desktop window and shows the login screen in
+it. Every testbed here has autologon, which is exactly why we never saw it.
+
+NOT ours: seamless mode showing no shell (no taskbar/desktop) is inherent to seamless and is true
+upstream too - which is precisely why upstream does not default to it.
+
+Two candidate mechanisms fit aptget's report and only his log can separate them:
+  M1 no autologon -> frozen on the sign-in screen forever, cannot log in at all;
+  M2 autologon fine -> seamless with no app windows and no working Start -> nothing to show.
+Both end at "nothing visible", so asking him is worth more than more theorising. The new
+QGADESKSTUCK line (below) answers it from a single log.
+
+### 3. Shipped now: the state stops being silent (agent 284bda4)
+
+While frozen on the secure desktop the agent logged NOTHING - a 5-minute freeze and a permanent
+one looked identical, and the log simply stopped. It now warns after 30 s and every 120 s after
+that, naming the desktop, the elapsed time, and the two ways out (autologon, or the guest
+console), and logs how long the freeze lasted when it clears. 15-17 s at boot is normal here
+(measured: "secure desktop left" at boot+15 s and boot+17 s on win11-app), so 30 s does not fire
+on a healthy boot - that threshold is chosen from measurement, not taste.
+
+### 4. OPEN, needs the owner: the sign-in screen for guests without autologon
+
+Not changed unilaterally - the "secure desktop is never granted" rule is the owner's and is
+absolute in the code today. But two things have changed since it was set on 2026-08-19:
+(a) the rule's stated rationale ("the guest desktop is sized to the HOST, so the non-seamless
+    window is as large as the user's entire screen") no longer holds: 4.3.12 shrinks the
+    non-seamless desktop on entry to 1280x800;
+(b) the owner has since said explicitly that a secure desktop INSIDE the bounded desktop window
+    is acceptable ("who cares, if it is not fullscreen and does not take over any dom0 controls").
+Minimal proposal, seamless behaviour untouched: in NON-SEAMLESS mode only, do not freeze - the
+bounded 1280x800 desktop window shows the sign-in screen, so a password-protected guest can be
+logged into. Seamless keeps hiding it exactly as now. Owner decision required before any code.
