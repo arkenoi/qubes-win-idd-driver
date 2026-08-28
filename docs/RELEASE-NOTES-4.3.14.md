@@ -43,7 +43,29 @@ The two elevated entries go through the ordinary Windows elevation prompt. They 
 not use any silent-elevation trick — a menu entry that quietly handed out admin would be a hole —
 and since 4.3.11 that prompt is an ordinary window in dom0, so it can actually be answered.
 
-Run `qvm-sync-appmenus <vm>` in dom0 after upgrading to pick them up.
+Only eight of them are **enabled** by default. A Windows guest reports every Start Menu shortcut
+it can find — 45 on a stock Windows 11, mostly uninstallers, help files and vendor links — and
+dom0 shows all of them when a qube has no menu selection yet. `qwt-ng-prepare-qube` now sets one:
+Notepad, File Explorer, Settings, Command Prompt, PowerShell, the two elevated variants and Edge.
+Everything else stays available and can be ticked in **Settings → Applications**, and an existing
+selection is never touched.
+
+## `qvm-sync-appmenus` no longer fails the whole sync
+
+Reported from the field as *"Refresh applications … returned non-zero exit status 1"*, with no
+application list at all. dom0 raises on **any** non-zero exit from the guest's appmenus service and
+throws away everything it received, and the guest script had several ways to throw before emitting
+a single line — most simply, it loaded its logging helper through `%QUBES_TOOLS%` and died outright
+if that variable was not in the service's environment. An absent Start Menu folder, an unreadable
+shortcut or a denied registry write did the same.
+
+Every stage is now guarded, one bad shortcut is skipped instead of fatal, and the service always
+exits 0 — reporting fewer apps is a bad day, reporting none is a broken qube. Two silent
+constraints of dom0's parser are also enforced now: it discards any line that is not ASCII (so a
+shortcut with a curly apostrophe used to vanish) and reads at most 1024 bytes per line. The service
+is additionally installed under the exact name dom0 asks for, `qubes.GetAppmenus`.
+
+Run `qvm-sync-appmenus <vm>` in dom0 after upgrading to pick all this up.
 
 ## Nothing fullscreen-sized during boot or shutdown, ever
 
