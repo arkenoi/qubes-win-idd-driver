@@ -279,11 +279,12 @@ function Start-XenbusPromptSuppressor {
         for ($i = 0; $i -lt 1800; $i++) {
             & sc.exe config xenbus_monitor start= disabled *>$null
             $svc = Get-Service xenbus_monitor -ErrorAction SilentlyContinue
-            if ($svc -and $svc.Status -ne 'Stopped') {
-                & sc.exe stop xenbus_monitor *>$null
-                Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue |
-                    Stop-Process -Force -ErrorAction SilentlyContinue
-            }
+            if ($svc -and $svc.Status -ne 'Stopped') { & sc.exe stop xenbus_monitor *>$null }
+            # UNCONDITIONAL, every tick, for the same reason as in Disable-XenbusMonitor: gating
+            # the kill on the SERVICE state lets a running PROCESS through, and a running process
+            # is the thing that restarts the guest mid-install.
+            Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue |
+                Stop-Process -Force -ErrorAction SilentlyContinue
             # Nothing pending -> nothing to ask about, even if something restarts the service.
             # Registry API, not reg.exe: no process spawned per tick, and no stderr to trip over.
             try {
@@ -375,13 +376,37 @@ function Disable-XenbusMonitor {
         if ($svc.Status -ne 'Stopped') {
             & sc.exe stop xenbus_monitor 2>&1 | Out-Null
             Start-Sleep -Milliseconds 500
-            if ((Get-Service xenbus_monitor -ErrorAction SilentlyContinue).Status -ne 'Stopped') {
-                # Mid-prompt the service cannot stop (measured: STOP_PENDING for hours); kill
-                # it. An already-shown dialog is csrss's and dies with this boot's session.
-                Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue |
-                    Stop-Process -Force -ErrorAction SilentlyContinue
-            }
         }
+    }
+    # KILL THE PROCESS UNCONDITIONALLY - this is what actually bricks guests.
+    #
+    # Measured 2026-08-28. On an UPGRADE the service is already `Disabled` (a previous QWT
+    # install disabled it) yet a monitor process from that earlier boot is still RUNNING, and
+    # disabling a service does nothing to a process already in memory. That survivor sees the
+    # reboot request the PV driver install files during msiexec and restarts the guest mid-install
+    # - Windows event 1074, "xenbus_monitor_9_1_0_0.exe has initiated the restart ... Operating
+    # System: Recovery (Planned)" - leaving a guest that boots to Automatic Repair or runs
+    # headless with no qrexec. Reproduced 5/5.
+    #
+    # The previous version could not prevent it: the kill sat behind "if the service STILL is not
+    # Stopped after sc stop", so the moment SCM reported success - which it does while the process
+    # is still exiting, and always for a process that is not under SCM control - the kill was
+    # skipped and the survivor did the damage. A stopped SERVICE and a dead PROCESS are different
+    # facts, and only the second one is safe to start msiexec on.
+    $killed = @()
+    foreach ($p in @(Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue)) {
+        $killed += "$($p.Name)($($p.Id))"
+        try { $p | Stop-Process -Force -ErrorAction Stop } catch { Write-Log "could not kill $($p.Name) ($($p.Id)): $($_.Exception.Message)" 'WARN' }
+    }
+    if ($killed.Count) { Write-Log "killed running monitor process(es): $($killed -join ', ')" }
+    # And VERIFY, because a survivor here is the difference between an install and a brick.
+    Start-Sleep -Milliseconds 300
+    $alive = @(Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue)
+    if ($alive.Count) {
+        Write-Log ("xenbus_monitor STILL RUNNING after the kill: " +
+                   (($alive | ForEach-Object { "$($_.Name)($($_.Id))" }) -join ', ') +
+                   ' - it can restart the guest during the install') 'WARN'
+        $script:Result.detail.xenbus_monitor_survivors = @($alive | ForEach-Object { $_.Id })
     }
     $state = if ($svc) { "was $($svc.StartType)/$($svc.Status)" } else { 'service not present yet' }
     $reason = if ($Why) { " [$Why]" } else { '' }
