@@ -18781,3 +18781,40 @@ PROCESS LESSON, recorded because this is the third occurrence: a display-mode ex
 qube renders on the owner's screen. "It is a test rig" and "only for a moment" are not defences.
 Do not enable an owner-disabled guard to demonstrate something; make the safe path testable
 instead - which is what the split above does.
+
+## 2026-08-28 cont 4 — autologon by LSA secret: PROVEN, after two invalid attempts of my own making
+
+WHAT IS PROVEN. `guest/set-autologon.ps1` arms autologon with the password stored ONLY as the LSA
+secret `DefaultPassword` - no plaintext registry value - and the guest logs itself in from it:
+
+    ok     credentials accepted by Windows
+    ok     password stored in the LSA secret and verified
+    ok     removed the plaintext registry DefaultPassword (LSA secret supersedes it)
+    === RESULT === armed=1 user=user stored=lsa warnings=0
+    PASS  g. session restored as 'WIN11-IDD-TEST\user' by set-autologon.ps1 alone
+
+Also proven: a WRONG password is refused before anything is written (`reason=bad-credentials`,
+AutoAdminLogon left at 0), and `ensure-autologon.ps1` now recognises the LSA secret instead of
+reporting an armed guest as broken.
+
+TWO INVALID RESULTS ON THE WAY, both retracted:
+
+1. The first run's decisive step used `bootwait`, which calls qubes.VMShell - and this testbed's
+   policy runs that as SYSTEM **with no session at all**. A guest sitting at the sign-in screen
+   passes that check, so "session formed after reboot" measured nothing. My own log gave it away
+   (`whoami=nt authority\system`, not `...\user`) and I reported the PASS anyway. The honest
+   signal is `Win32_ComputerSystem.UserName`, which is empty until someone is logged on.
+   RULE, again: an instrument that cannot distinguish the two states is not an instrument.
+
+2. The re-run's control failed for a reason that had nothing to do with the thing under test: the
+   plaintext registry `DefaultPassword` was PRESENT (I had written it back by hand at 11:10 while
+   cleaning up the fullscreen incident, and it reappeared again between the two runs). Windows
+   prefers the registry value over the LSA secret, so with it present neither the positive nor the
+   negative case says anything about the secret. Precondition checks belong in the script, not in
+   my head - the re-run now prints the registry state before deciding anything.
+
+STILL OPEN: something re-created the plaintext `DefaultPassword` between 11:31 and 11:33 (a
+shutdown and a boot, nothing else). If that writer is ours, the "no plaintext password" property
+is not actually delivered; if it is testbed provisioning, the rig needs it disabled before any
+further autologon measurement. Diagnostic running (tasks, Run/RunOnce, scripts on disk that
+contain the value name).
