@@ -18887,3 +18887,45 @@ before the SCM sends PRESHUTDOWN. Logged with the signals consulted; not fixed.
 NOT in this build, committed after it: the appmenus sync hardening, the qubes.GetAppmenus alias,
 and the curated 8-entry default menu. The release candidate must be rebuilt and re-tested with
 those before shipping - the e2e now asserts the service exits 0 and the alias exists.
+
+## 2026-08-28 — ours-wins CI guard: the stale-payload bug class is now a build failure (guard subagent)
+
+The 2026-08-25 incident class (a file we maintain sources for ships from the STOCK 4.2.2 image,
+or not at all, with CI green) is now guarded in CI. New files, both data-driven from ONE list:
+
+- `packaging/ours-wins.psd1` — THE list: Mirrors (the rpc payload sweep rules, matching
+  make-setup's new rpc/qubes-rpc-services + rpc/qubes-rpc layout), Files (one-offs, e.g.
+  guest/VMExec.ps1), Binaries (must differ from stock: reference/gui-agent.exe,
+  reference/gui-watchdog.exe, bin/qrexec-wrapper.exe when present), DeadEnds (core-agent's
+  VMExec.ps1 must STAY stock-identical — editing the dead-end copy now fails the build with
+  instructions), SweepTrees (core-agent rpc dir + guest/ compared against the stock image by
+  basename), CompiledSources (git diff of core-agent vs its 4.2.2 base f79d290ae62a with
+  dir→binary mappings for qrexec-wrapper/agent/client-vm), KnownGaps (documented, WARN-only,
+  stale entries FAIL).
+- `packaging/check-ours-wins.ps1` — the guard; runs in release-package.yml's setup job on every
+  package build, extracts the vendored stock MSI as its baseline (msiexec /a), collects ALL
+  violations then throws. Ours-vs-stock text compares are CRLF/BOM-tolerant (repo stores LF, a
+  Windows CI checkout materializes CRLF).
+
+INSTRUMENT VALIDATED before trusting it (pwsh 7.4.6 user-space in ~/pwsh74, fake stock image
+built from the core-agent base commit with CRLF conversion, fake package tree mimicking the new
+make-setup sweep): clean state PASSES with exactly the 2 expected G1 warnings; TEN deliberately
+seeded defects each FAIL with the targeted message — not-shipped-at-all (the incident itself),
+stale-copy-staged, fork-binary-identical-to-stock, unshipped-file-shadowed-by-stock (guest
+sweep), dead-end-copy-edited, overlay orphan, stale KnownGaps after the gap closes (the ratchet),
+missing base commit (missing data fails), divergent compiled dir with no binary mapping, and
+optional-binary-absent-with-no-KnownGaps-entry.
+
+Collision audit (decoded the stock MSI's string pool via olefile — no extraction tooling here):
+the ONLY basenames shared between the stock MSI and our maintained trees are the 7 known rpc
+files, all covered. The sweep cannot false-positive on the first real CI run.
+
+MAINTENANCE CONTRACT: when release-package.yml starts building core-agent and passing
+-CoreAgentBins, flip bin/qrexec-wrapper.exe to Required=$true and DELETE the KnownGaps entry in
+the same commit — the guard flags the entry as stale otherwise, and staging qrexec-agent.exe /
+qrexec-client-vm.exe without Binaries entries fails the orphan check until they are listed.
+
+Path filters completed in release-package.yml (packaging/**, qwt-full.yml + pv-xenvif.yml
+themselves, patches/**, vendor/**, contrib/**, tools/qubesdb-read/**, tools/winenum.cs,
+.gitmodules; both submodules were already listed) and the FALSE comment in qwt-full.yml
+("rpc scripts are staged from here") corrected — core-agent contributes nothing to the MSI today.
