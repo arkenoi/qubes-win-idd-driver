@@ -19064,3 +19064,34 @@ HARNESS NOTE: set-gui-mode.exe is a GUI-subsystem binary (wWinMain), so `cmd /c 
 %ERRORLEVEL%` reports nothing useful - cmd does not wait for it. qrexec gets a real code because it
 waits on the process handle. Measure with Start-Process -Wait -PassThru, and validate the harness
 with a known non-zero first.
+
+## 2026-08-28 — WHY the 2026-08-28 unshipped-fix audit missed the qrexec-wrapper drain fix
+
+Asked directly by the owner, and the audit's own method statement answers it. It swept for "every
+claim of a concrete applied change - registry value, service state, scheduled task, policy,
+dropped file" across guest/, packaging/, agent/, driver/, tools/, dom0/, mgmt/, .github/workflows.
+
+Three structural reasons that could never have found it:
+
+1. WRONG CATEGORY. It hunted CONFIGURATION - settings, tasks, dropped files. A C source change
+   compiled into a binary is none of those categories.
+2. THE CRITERION PASSES. Its test was "can the implementation be pointed at in the repo?" For
+   qrexec-wrapper.c the answer is yes: fix committed, build.yml compiles it, CI green, an
+   artifact contains it. It satisfies the audit perfectly WHILE SHIPPING NOTHING.
+3. core-agent/ WAS NOT IN THE SEARCHED PATHS. The submodule holding the fix sat outside the tree
+   the auditors swept.
+
+So the sweep had the right instinct on the wrong axis: exhaustive on unshipped SETTINGS, blind to
+unshipped BINARIES. Its standing rule ("a change applied by hand to a rig is NOT a fix") does not
+cover this case either - nobody applied this by hand. It was committed, built, and green. The
+failure mode is different and needs its own rule:
+
+    STANDING RULE: committed and CI-green is NOT shipped. The test is whether the ARTIFACT A USER
+    INSTALLS contains the change - not whether the repo does, and not whether some CI job built
+    it. Ask "which artifact carries this file, and does that artifact reach a user?"
+
+The destock workflow found it because it asked the complementary question - for every file the
+package installs, where does it come from? - which catches both classes. That question is now
+mechanised: packaging/check-ours-wins.ps1's CompiledSources check fails the build when a
+core-agent source diverges from its 4.2.2 base without its binary shipping, so this specific
+blindness cannot recur silently.
