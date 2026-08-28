@@ -1658,6 +1658,31 @@ function Invoke-Stage2 {
         }
         Write-Log "app-menu rpc scripts placed: $placed/2 (stock copies kept as *.qwt-stock)"
         $script:Result.detail.appmenu_scripts = "placed=$placed"
+
+        # SERVICE NAME CASE. dom0 asks for 'qubes.GetAppmenus' (lowercase m - qubesappmenus'
+        # receive.py calls run_service('qubes.GetAppmenus')), while Windows Tools has always
+        # shipped the definition as 'qubes.GetAppMenus'. NTFS lookups are case-insensitive so this
+        # usually resolves, but nothing guarantees the qrexec agent opens it by name rather than
+        # matching a listing - and the failure mode is the whole application list disappearing
+        # with "returned non-zero exit status 1". Drop an exact-case alias next to it; costs one
+        # file, removes the question.
+        try {
+            $svc = Get-ChildItem -Path (Join-Path $env:ProgramFiles 'Qubes Tools') -Filter 'qubes.GetAppMenus' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($svc) {
+                $alias = Join-Path $svc.DirectoryName 'qubes.GetAppmenus'
+                if (-not (Test-Path -LiteralPath $alias)) {
+                    Copy-Item -LiteralPath $svc.FullName -Destination $alias -Force
+                    Write-Log "added qrexec service alias: $alias"
+                }
+                $script:Result.detail.appmenu_alias = 'present'
+            } else {
+                Write-Log 'qubes.GetAppMenus service definition not found - cannot add the lowercase alias' 'WARN'
+                $script:Result.detail.appmenu_alias = 'service-file-not-found'
+            }
+        } catch {
+            Write-Log "service alias failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+            $script:Result.detail.appmenu_alias = "error"
+        }
     } else {
         Write-Log 'app-menu rpc scripts not deployed (payload or target dir missing) - the qube will report only Start Menu shortcuts' 'WARN'
         $script:Result.detail.appmenu_scripts = 'not deployed'
