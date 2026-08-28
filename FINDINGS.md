@@ -19409,3 +19409,48 @@ instead of inferred from a log that never arrives.
 **Standing lesson.** Every one of these made the harness assert something it had not measured. A
 test that injects a defect must inject it where the code under test can act on it, and a capture
 that can lose data must never overwrite what it already has.
+
+## 2026-08-29 (early hours) — the WIN10 rig results are INVALID; what actually stands
+
+The owner reported the guest cycling endlessly through "Automatic Repair". That explains the whole
+night's picture - a domain that looks alive with CPU, a shutdown that appears to land and then does
+not, a guest that never returns - and it is Windows failing to boot repeatedly, NOT the wedged
+hypervisor domain I proposed. That reading was wrong and is withdrawn.
+
+**Every WIN10 cell after the 19:25 control was measuring a harness defect. Specifically:**
+
+1. **The seeded cell wrote its trigger before the installer started.** Dated event capture: restart
+   initiated 00:20:10Z, installer's first line 00:20:15. Six "FAIL BRICKED" results measured the
+   injection. With the corrected mid-MSI timing the installer CLEARED the request and stopped the
+   monitor before msiexec, and no restart event was recorded at all.
+2. **The "fresh install" cell was never fresh.** Its uninstall removed the
+   `HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools` key - which is exactly what the precondition
+   check read, so it printed "PASS: precondition real (no QWT installed)" - while the MSI product
+   registration survived. Our installer then correctly reported "installed QWT (4.3.2.0) is older
+   than this package - IN-PLACE MSI major upgrade" and upgraded over a half-uninstalled guest. That
+   state does not occur in the field, so its Automatic Repair loop is not evidence about our
+   installer. A precondition must be asserted on the SAME signal the code under test consults.
+3. Supporting instrument defects, all fixed but all after the fact: capture truncation, an MSI log
+   from a two-week-old install, "no CPU" manufactured by a missing `bc`, a `tasklist` filter that
+   cannot match a versioned process name, a dirty-volume recovery that required a guest able to
+   boot, and `qvm-start` blocking for the whole `qrexec_timeout` on a guest that never boots.
+
+**What genuinely stands from the whole session:**
+* the destock guard now validates `msi-image/` entries against an admin extract of the BUILT MSI
+  and refuses to run vacuously (e92ffde, CI-green);
+* WIN11 chain 21/21 with a corrected secure-desktop check proven able to fail;
+* ONE install configuration verified end to end: upgrade over our own 4.3.2, no injection - install
+  completes in 90 s, guest stays reachable and healthy;
+* `xenbus.inf` no longer installs the monitor with SPSVCSINST_STARTSERVICE/auto-start, and the
+  catalog is regenerated and re-signed (build-verified, guest-unverified);
+* `Disable-XenbusMonitor` kills a surviving monitor PROCESS rather than trusting the SERVICE state -
+  correct on its own terms (a stopped service is not a dead process), but the brick it was written
+  for was my harness, so the commit message on 81d2b79 OVERCLAIMS and should be read with this entry.
+
+**Unproven and honestly still open:** the reboot dialog on a real guest; all three install/upgrade
+paths on either guest; AppVM function. The WIN10 template is in an Automatic Repair loop and cannot
+be freed from this qube (three admin.vm.Kill calls left it Transient); dom0 `xl destroy` and a
+re-clone are needed before WIN10 work can resume.
+
+**The lesson, stated once:** a test that asserts its own precondition on a different signal than the
+code under test uses is not a test. Both invalid cells failed that way, and both cost hours.
