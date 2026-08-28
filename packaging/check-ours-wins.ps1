@@ -37,6 +37,14 @@
                         (default: <RepoRoot>/vendor/qwt-4.2.2/installer.msi). Windows only.
 .PARAMETER StockImage   Pre-extracted admin image (msiexec /a TARGETDIR). Overrides
                         StockMsi; required to run on non-Windows.
+.PARAMETER MsiImage     Admin extract (msiexec /a) of the BUILT installer.msi. Entries whose
+                        package path starts 'msi-image/' resolve against THIS root instead of
+                        PackageRoot: they prove our bytes are inside the MSI that actually
+                        installs, not merely in the payload tree beside it. Without it those
+                        entries cannot be checked, so the guard REFUSES to run rather than
+                        report a vacuous pass - a guard that silently skips its own data is
+                        worse than no guard (measured 2026-08-28: the entries shipped without
+                        this support and every one of them failed as 'NOT SHIPPED AT ALL').
 #>
 [CmdletBinding()]
 param(
@@ -44,7 +52,8 @@ param(
     [Parameter(Mandatory = $true)][string]$PackageRoot,
     [string]$DataFile,
     [string]$StockMsi,
-    [string]$StockImage
+    [string]$StockImage,
+    [string]$MsiImage
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,7 +73,16 @@ function Warn([string]$Msg) {
     Write-Host "::warning::ours-wins: $($Msg -replace '\r?\n', ' | ')"
 }
 function RepoPath([string]$Rel) { Join-Path $RepoRoot ($Rel -replace '/', [IO.Path]::DirectorySeparatorChar) }
-function PkgPath([string]$Rel)  { Join-Path $PackageRoot ($Rel -replace '/', [IO.Path]::DirectorySeparatorChar) }
+function PkgPath([string]$Rel)  {
+    # Two roots. 'msi-image/...' is inside the BUILT MSI (admin extract); everything else is the
+    # payload tree. Same data file describes both, because both channels ship to the guest and a
+    # file can be right in one and stock in the other.
+    if ($Rel -like 'msi-image/*') {
+        if (-not $script:MsiImageRoot) { throw "entry '$Rel' needs -MsiImage but none was given" }
+        return Join-Path $script:MsiImageRoot (($Rel -replace '^msi-image/', '') -replace '/', [IO.Path]::DirectorySeparatorChar)
+    }
+    Join-Path $PackageRoot ($Rel -replace '/', [IO.Path]::DirectorySeparatorChar)
+}
 function Sha([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash }
 function IsTextName([string]$Leaf) {
     ($Leaf -match '\.(ps1|psm1|psd1|bat|cmd|txt|cs|reg|inf|ini|xml|json|config|md)$') -or ($Leaf -like 'qubes.*')
@@ -106,6 +124,32 @@ foreach ($f in $stockFiles) {
     $stockIndex[$f.Name] += $f.FullName
 }
 Write-Host "stock baseline: $($stockFiles.Count) files, $($stockIndex.Count) distinct basenames"
+
+# ---------------------------------------------------- built-MSI admin image (second root)
+# Only required if the data file actually uses it. If it does and we have no image, STOP: those
+# entries would otherwise all "fail" for the wrong reason, or - worse, if anyone made them
+# non-fatal - pass without being checked.
+$script:MsiImageRoot = $null
+$needsImage = @()
+foreach ($sec in 'Mirrors', 'Files', 'Binaries') {
+    foreach ($e in @($d[$sec])) {
+        foreach ($v in @($e.PackageDir, $e.Package)) { if ($v -like 'msi-image/*') { $needsImage += $v } }
+    }
+}
+if ($needsImage.Count) {
+    if (-not $MsiImage) {
+        throw ("ours-wins.psd1 has $($needsImage.Count) 'msi-image/' entries but -MsiImage was not given. " +
+               "Extract the BUILT installer.msi with 'msiexec /a <msi> /qn TARGETDIR=<dir>' and pass it, " +
+               "or remove those entries - they cannot be checked against the payload tree.")
+    }
+    if (-not (Test-Path -LiteralPath $MsiImage)) { throw "-MsiImage path does not exist: $MsiImage" }
+    $script:MsiImageRoot = (Resolve-Path -LiteralPath $MsiImage).Path
+    $imgFiles = @(Get-ChildItem -LiteralPath $script:MsiImageRoot -Recurse -File)
+    if ($imgFiles.Count -lt 60) {
+        throw "built-MSI image implausibly small ($($imgFiles.Count) files) at $script:MsiImageRoot - extraction failed, and a guard without its image cannot fail"
+    }
+    Write-Host "built-MSI image: $($imgFiles.Count) files at $script:MsiImageRoot"
+}
 
 # Repo-relative source paths ('/'-separated) that SHIP - covered, so exempt from the
 # stock-shadow sweep. Package-relative paths claimed by an entry - for the orphan check.

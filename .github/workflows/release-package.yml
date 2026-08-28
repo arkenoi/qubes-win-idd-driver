@@ -360,13 +360,33 @@ jobs:
       # reached no guest while CI stayed green). Data-driven from packaging/ours-wins.psd1;
       # extracts the stock MSI as its comparison baseline and cross-checks the assembled
       # tree, the repo sources, and the core-agent submodule's diff against its 4.2.2 base.
+      # The guard checks TWO channels, so it needs both roots. The payload tree it gets from
+      # -PackageRoot; the MSI's own contents have to be extracted, because "our file is in the
+      # setup tree" and "our file is inside the MSI that actually installs" are different claims
+      # and the second is the one the guest experiences. Extract our BUILT MSI the same way the
+      # stock baseline is extracted.
+      - name: Extract our built MSI (admin image for the guard)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = Resolve-Path 'qwt-improved-setup\msi\installer.msi'
+          $out = Join-Path $env:RUNNER_TEMP 'qwt-built-image'
+          Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
+          $p = Start-Process msiexec.exe -ArgumentList "/a `"$msi`" /qn TARGETDIR=`"$out`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "msiexec /a failed on our MSI: $($p.ExitCode)" }
+          $n = @(Get-ChildItem $out -Recurse -File).Count
+          Write-Host "built MSI image: $n files"
+          if ($n -lt 60) { throw "built MSI image implausibly small ($n files)" }
+          "BUILT_MSI_IMAGE=$out" | Out-File -Append $env:GITHUB_ENV
+
       - name: Guard - everything we maintain must ship from this repo (ours-wins)
         shell: pwsh
         run: |
           & .\packaging\check-ours-wins.ps1 `
               -RepoRoot . `
               -PackageRoot qwt-improved-setup `
-              -StockMsi vendor\qwt-4.2.2\installer.msi
+              -StockMsi vendor\qwt-4.2.2\installer.msi `
+              -MsiImage $env:BUILT_MSI_IMAGE
 
       - name: Show manifest
         shell: pwsh
