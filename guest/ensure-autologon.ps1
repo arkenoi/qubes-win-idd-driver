@@ -50,12 +50,64 @@ $user = Get-WL 'DefaultUserName'
 $pass = Get-WL 'DefaultPassword'
 if (-not $user) { Write-Output 'WARN   DefaultUserName is not set - autologon cannot work'; $warn++ }
 else { Write-Output "ok     DefaultUserName=$user" }
-if (-not $pass) {
-    Write-Output 'WARN   DefaultPassword is MISSING (already consumed). Autologon will NOT happen and'
-    Write-Output 'WARN   this qube will need an interactive logon before qrexec works again.'
-    $warn++
+
+# The password may live in the LSA secret instead of the registry - that is where
+# set-autologon.ps1 puts it, because an LSA secret is not consumed by AutoLogonCount and is not
+# world-readable plaintext. Winlogon reads it when the registry value is absent, so a guest with
+# only the secret is correctly armed and must NOT be reported as broken.
+$lsa = $null
+try {
+    Add-Type -ErrorAction Stop @'
+using System;
+using System.Runtime.InteropServices;
+public static class QubesLsaRead {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct LSA_UNICODE_STRING { public ushort Length; public ushort MaximumLength; public IntPtr Buffer; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct LSA_OBJECT_ATTRIBUTES { public int Length; public IntPtr RootDirectory; public IntPtr ObjectName; public int Attributes; public IntPtr SecurityDescriptor; public IntPtr SecurityQualityOfService; }
+    [DllImport("advapi32.dll", SetLastError=true)]
+    static extern uint LsaOpenPolicy(IntPtr system, ref LSA_OBJECT_ATTRIBUTES attrs, uint access, out IntPtr handle);
+    [DllImport("advapi32.dll", SetLastError=true)]
+    static extern uint LsaRetrievePrivateData(IntPtr policy, ref LSA_UNICODE_STRING key, out IntPtr data);
+    [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr policy);
+    [DllImport("advapi32.dll")] static extern uint LsaFreeMemory(IntPtr p);
+    public static bool Present(string key) {
+        LSA_OBJECT_ATTRIBUTES a = new LSA_OBJECT_ATTRIBUTES();
+        a.Length = Marshal.SizeOf(typeof(LSA_OBJECT_ATTRIBUTES));
+        IntPtr pol, data = IntPtr.Zero;
+        if (LsaOpenPolicy(IntPtr.Zero, ref a, 0x00000004 /* GET_PRIVATE_INFORMATION */, out pol) != 0) return false;
+        LSA_UNICODE_STRING k = new LSA_UNICODE_STRING();
+        k.Buffer = Marshal.StringToHGlobalUni(key);
+        k.Length = (ushort)(key.Length * 2); k.MaximumLength = (ushort)(k.Length + 2);
+        try {
+            if (LsaRetrievePrivateData(pol, ref k, out data) != 0 || data == IntPtr.Zero) return false;
+            LSA_UNICODE_STRING v = (LSA_UNICODE_STRING)Marshal.PtrToStructure(data, typeof(LSA_UNICODE_STRING));
+            return v.Length > 0 && v.Buffer != IntPtr.Zero;
+        } finally {
+            if (data != IntPtr.Zero) LsaFreeMemory(data);
+            LsaClose(pol); Marshal.FreeHGlobal(k.Buffer);
+        }
+    }
+}
+'@
+    $lsa = [QubesLsaRead]::Present('DefaultPassword')
+} catch {
+    Write-Output "note   could not query the LSA secret ($($_.Exception.Message.Split([char]10)[0]))"
+}
+
+if ($lsa) {
+    Write-Output 'ok     password present as the LSA secret (not consumable, not plaintext)'
+    if ($pass) {
+        Write-Output 'note   a plaintext registry DefaultPassword also exists and is redundant'
+    }
+} elseif ($pass) {
+    Write-Output 'ok     DefaultPassword present (plaintext registry value - consumable)'
 } else {
-    Write-Output 'ok     DefaultPassword present'
+    Write-Output 'WARN   NO autologon password is set: neither the LSA secret nor DefaultPassword.'
+    Write-Output 'WARN   Autologon will NOT happen, this qube will come back at the sign-in screen,'
+    Write-Output 'WARN   qrexec will have no session to run in, and in seamless mode dom0 will be'
+    Write-Output 'WARN   shown nothing at all. Re-arm with guest\set-autologon.ps1.'
+    $warn++
 }
 
 Write-Output ''

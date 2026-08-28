@@ -126,6 +126,15 @@ param(
     # user data belongs); this exists only to recover a guest that fails to boot after it.
     [switch]$NoMoveUsers,
     [switch]$ResumeAfterUninstall,
+
+    # AUTOLOGON. A Qubes Windows guest that stops at a sign-in screen is unreachable (no qrexec
+    # session) and, in seamless mode, invisible (the sign-in screen is not displayed). The
+    # installer therefore arms autologon: pass the account password here for an unattended
+    # install, or let it prompt. -NoAutologon opts out and says what that costs.
+    [string]$AutologonPassword,
+    [string]$AutologonUser,
+    [switch]$NoAutologon,
+
     [string]$WorkDir = 'C:\qwt-improved-setup'
 )
 
@@ -1515,6 +1524,78 @@ function Invoke-Stage2 {
     } else {
         Write-Log 'disable-session-lock.ps1 not in payload - guest may idle-lock' 'WARN'
         $script:Result.detail.session_lock = 'not in payload'
+    }
+
+    # --- autologon: the qube must be able to come back by itself ------------------------
+    #
+    # A Windows guest that stops at the sign-in screen is not merely inconvenient, it is GONE:
+    # qrexec service calls have no session to run in, so dom0 cannot run apps in it, update it or
+    # read it - and in seamless mode the sign-in screen is not displayed either, so the qube
+    # window is simply empty (measured 2026-08-28: autologon off -> 0 windows mapped in dom0;
+    # two field reports of exactly this). Owner decision 2026-08-28: enforce autologon.
+    #
+    # We cannot arm it without the account's password, so the order is: what the caller gave us,
+    # then an interactive prompt, then an EMPTY password (which is correct for the many guests
+    # that have no password at all - set-autologon.ps1 validates with LogonUser before writing,
+    # so a wrong guess is refused rather than stranding the guest). Skipping is always reported.
+    if ($NoAutologon) {
+        Write-Log 'autologon SKIPPED (/noautologon) - if this account needs a password, the qube will'
+        Write-Log '  come back at the sign-in screen, unreachable over qrexec and blank in dom0' 'WARN'
+        $script:Result.detail.autologon = 'skipped'
+    } else {
+        $setal = Join-Path $Root 'set-autologon.ps1'
+        if (Test-Path -LiteralPath $setal) {
+            $alUser = $AutologonUser
+            if (-not $alUser) {
+                $cs = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
+                if ($cs) { $alUser = $cs.Split('\')[-1] }
+            }
+            $alPass = $AutologonPassword
+            $alSource = 'parameter'
+            if ($null -eq $alPass) {
+                $canPrompt = $false
+                try { $canPrompt = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected } catch { $canPrompt = $false }
+                if ($canPrompt) {
+                    Write-Host ''
+                    Write-Host "  Qubes needs this guest to log in by itself, or the qube comes back unusable:"
+                    Write-Host "  no qrexec session, and nothing displayed in dom0 at all."
+                    Write-Host "  Enter the Windows password for '$alUser' (blank = the account has none;"
+                    Write-Host "  Ctrl+C to skip and arrange autologon yourself):"
+                    try {
+                        $sec = Read-Host -AsSecureString '  password'
+                        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+                        $alPass = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+                        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+                        $alSource = 'prompt'
+                    } catch { $alPass = $null }
+                }
+                if ($null -eq $alPass) { $alPass = ''; $alSource = 'empty-password-guess' }
+            }
+            Write-Log "arming autologon for '$alUser' (password from: $alSource)"
+            try {
+                $alOut = & $setal -User $alUser -Password $alPass 2>&1
+                foreach ($l in @($alOut | Select-Object -Last 6)) { Write-Log "  $l" }
+                $tr = @($alOut) | Where-Object { $_ -match '=== RESULT === armed=(\d)' } | Select-Object -Last 1
+                if ($tr -match 'armed=1') {
+                    $script:Result.detail.autologon = 'armed'
+                    Write-Log 'autologon armed and verified - this qube can come back on its own'
+                } else {
+                    $reason = if ($tr -match 'reason=([a-z-]+)') { $Matches[1] } else { 'unknown' }
+                    $script:Result.detail.autologon = "not-armed:$reason"
+                    Write-Log "autologon NOT armed ($reason). If this account has a password, arrange" 'WARN'
+                    Write-Log '  autologon yourself (guest\set-autologon.ps1 -Password ...) or the qube will' 'WARN'
+                    Write-Log '  come back at a sign-in screen that dom0 does not display in seamless mode.' 'WARN'
+                }
+            } catch {
+                Write-Log "autologon arming failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+                $script:Result.detail.autologon = "error: $($_.Exception.Message)"
+            } finally {
+                $alPass = $null
+            }
+        } else {
+            Write-Log 'set-autologon.ps1 not in payload - autologon not armed' 'WARN'
+            $script:Result.detail.autologon = 'not in payload'
+        }
     }
 
     # --- consumer-nag silencer (same switch as the HW-accel tweak) ----------------------

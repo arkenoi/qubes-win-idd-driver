@@ -37,6 +37,15 @@ REM                              model - without the agent the qube reports no u
 REM                              Qubes Update GUI cannot update it. See README.txt.
 REM     install.cmd /nonet       omit the PV network drivers (see README.txt)
 REM     install.cmd /nodisk      omit the PV disk drivers (diagnostic only)
+REM     install.cmd /autologon:PW  arm Windows autologon with this password, unattended. Without
+REM                              any switch the installer PROMPTS for it (and falls back to an
+REM                              empty password, correct for an account that has none). This is
+REM                              not optional polish: a guest that does not log itself in has no
+REM                              qrexec session for dom0 to use, and in seamless mode its window
+REM                              stays completely empty because the Windows sign-in screen is
+REM                              never displayed. See README.txt.
+REM     install.cmd /noautologon do NOT touch autologon. Only sensible if you have arranged it
+REM                              yourself, or you accept logging in through the windowed desktop.
 REM     install.cmd /noapptweaks skip the app HW-accel pre-tweak (registry
 REM                              policies making Office/browsers/Slack render
 REM                              in software - see README.txt)
@@ -114,8 +123,19 @@ if /i "%~1"=="/noupdates" ( set "PSARGS=!PSARGS! -NoUpdaterAgent" & shift & goto
 if /i "%~1"=="/iddonly" ( set "IDDONLY=1" & shift & goto parse )
 if /i "%~1"=="/iddoff" ( set "IDDOFF=1" & shift & goto parse )
 if /i "%~1"=="/updatesonly" ( set "UPDATESONLY=1" & shift & goto parse )
+if /i "%~1"=="/noautologon" ( set "PSARGS=!PSARGS! -NoAutologon" & shift & goto parse )
+REM  /autologon:<password> arms autologon unattended. Without it the installer prompts (or tries
+REM  an empty password, which is right for an account that has none). A guest that cannot log
+REM  itself in is unreachable over qrexec AND invisible in seamless mode.
+echo %~1 | findstr /i /b /c:"/autologon:" >nul && (
+  set "ALPW=%~1"
+  set "ALPW=!ALPW:*:=!"
+  set "PSARGS=!PSARGS! -AutologonPassword "!ALPW!""
+  shift & goto parse
+)
+if /i "%~1"=="/autologon" ( shift & goto parse )
 echo Unknown option: %~1
-echo Valid options: /auto /idd /noidd /reboot /iddonly /iddoff /updatesonly /noupdates /nonet /nodisk /acceptpvdiskupgrade /noapptweaks
+echo Valid options: /auto /idd /noidd /reboot /iddonly /iddoff /updatesonly /noupdates /nonet /nodisk /acceptpvdiskupgrade /noapptweaks /autologon[:pw] /noautologon
 exit /b 87
 :parsed
 

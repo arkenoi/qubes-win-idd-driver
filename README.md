@@ -333,18 +333,31 @@ qrexec against a 60 s default.
 
 ## Known limitations
 
-- **The guest must log itself in: the Windows sign-in screen is never displayed.** By design
-  this build never shows dom0 anything drawn on the Windows *secure desktop* — the sign-in and
-  lock screens live there. If your Windows account requires a password and nothing logs it in
-  automatically, the qube window stays **completely empty**: the qube is running and answers
-  qrexec, but dom0 is shown nothing and there is no password box to type into (measured
-  2026-08-28: autologon off → 0 windows mapped, qrexec still answering). Stock QWT behaves
-  differently here — it shows the sign-in screen — so this is a deliberate difference, not a
-  bug in your setup.
-  Arrange for the guest to log in by itself (autologon), and keep it that way: while
-  `AutoLogonCount` exists Windows *consumes* `DefaultPassword`, and Windows updates rewrite
-  those values. The agent now says so in its log — look for `QGADESKSTUCK`, which names the
-  desktop it is stuck on and how long it has been there.
+- **The guest logs itself in, and in seamless mode the sign-in screen is not displayed.**
+  In seamless mode this build never shows dom0 anything drawn on the Windows *secure desktop*,
+  where the sign-in and lock screens live. So a guest that does not log in by itself leaves the
+  qube window **completely empty**: it is running and answers qrexec, but there is no password
+  box to type into (measured 2026-08-28: autologon off → 0 windows mapped). Two things follow,
+  and the installer handles the first for you:
+  - **The installer arms autologon.** It prompts for the account password (or takes
+    `install.cmd /autologon:PASSWORD` for an unattended install, or `/noautologon` to skip),
+    validates it against Windows before writing anything, and stores it as an **LSA secret**
+    rather than the world-readable plaintext `DefaultPassword` registry value. A boot-time
+    SYSTEM task re-asserts the settings, because Windows updates rewrite them and, while
+    `AutoLogonCount` exists, Windows *consumes* a registry password and deletes it. Re-arm at
+    any time with `set-autologon.ps1` (kept in the guest under `Qubes Tools\vmupdate-shim\`).
+  - **If it is not armed, the way in is the windowed desktop.** Switch the qube out of seamless
+    mode and the whole guest desktop — sign-in screen included — is shown inside one bounded
+    window, where you can log in normally:
+
+        qvm-features <vm> service.gui-fullscreen 1
+        echo FULLSCREEN | qvm-run --pass-io --service <vm> qubes.SetGuiMode   # SEAMLESS to go back
+
+    That window is deliberately bounded (1280x800 by default) and never covers your screen: a
+    qube can only fill the display when *you* maximize its window in dom0.
+  The agent says which state it is in — look for `QGADESKSTUCK` in its log, which names the
+  desktop it is stuck on and for how long. Stock QWT differs here (it shows the sign-in screen
+  in both modes), so an empty seamless window is a deliberate difference, not a broken install.
   UAC prompts are **not** affected: this build moves them off the secure desktop, so they
   appear as ordinary windows.
 - **qrexec runs in the interactive user session.** A logged-off guest loses clipboard and

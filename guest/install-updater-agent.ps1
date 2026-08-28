@@ -166,6 +166,11 @@ if ((Test-Path $handlerDir) -and (Test-Path $svcDir)) {
     if (Test-Path (Join-Path $SetupRoot 'ensure-autologon.ps1')) {
         Copy-Item (Join-Path $SetupRoot 'ensure-autologon.ps1') (Join-Path $handlerDir 'ensure-autologon.ps1') -Force
     }
+    # Keep the ARMING script on disk too, not just the guard: re-arming is what a user needs
+    # after changing the account password, and the setup payload is long gone by then.
+    if (Test-Path (Join-Path $SetupRoot 'set-autologon.ps1')) {
+        Copy-Item (Join-Path $SetupRoot 'set-autologon.ps1') (Join-Path $handlerDir 'set-autologon.ps1') -Force
+    }
     $vmexec = Join-Path $handlerDir 'VMExec.ps1'
     $backup = Join-Path $handlerDir 'VMExec.ps1.qwt-orig'
     if ((Test-Path $vmexec) -and -not (Test-Path $backup)) { Copy-Item $vmexec $backup -Force }

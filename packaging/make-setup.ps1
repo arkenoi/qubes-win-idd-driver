@@ -127,6 +127,10 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\quiet-desktop.ps1') 'consumer-nag si
 # existed since 6a447cd but was only ever run on test rigs; shipping it makes the shipped
 # guests behave the way the project has always claimed they do.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\disable-session-lock.ps1') 'session-lock preventer') $OutDir -Force
+# Autologon arming. Without it a guest whose account has a password comes back at the sign-in
+# screen: no qrexec session for dom0 to use, and in seamless mode nothing displayed at all.
+# Validates the credentials before writing anything and stores the password as an LSA secret.
+Copy-Item (Need (Join-Path $RepoRoot 'guest\set-autologon.ps1') 'autologon arming script') $OutDir -Force
 # IDD-only activator, run by `install.cmd /iddonly` to add/activate the IddCx driver on a guest
 # that already has QWT (no MSI, no version/PV gate). Uses idd-driver/ staged below.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activator') $OutDir -Force
