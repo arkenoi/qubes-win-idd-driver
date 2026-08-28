@@ -33,6 +33,9 @@ param(
     [switch] $AllowPlaintextFallback
 )
 $ErrorActionPreference = 'Continue'
+# An unbound [string] parameter is $null, and $null is NOT the same as an empty password when it
+# reaches LogonUser - normalise before anything validates or stores it.
+if ($null -eq $Password) { $Password = '' }
 $WL = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 $warn = 0
 
@@ -190,8 +193,8 @@ if ($null -ne (Get-WL 'AutoLogonCount')) {
     Remove-ItemProperty -Path $WL -Name 'AutoLogonCount' -Force -ErrorAction SilentlyContinue
     Write-Output 'ok     removed AutoLogonCount (its presence consumes the password)'
 }
-# A lock screen is the same dead end as a sign-in screen for a headless qube.
-New-ItemProperty -Path $WL -Name 'DisableLockWorkstation' -Value 1 -PropertyType DWord -Force -ErrorAction SilentlyContinue | Out-Null
+# (Lock-screen prevention lives in disable-session-lock.ps1 - DisableLockWorkstation is a
+# Policies\System value, not a Winlogon one, and writing it here would do nothing.)
 
 Write-Output "ok     AutoAdminLogon=1 DefaultUserName=$User DefaultDomainName=$Domain"
 Write-Output "=== RESULT === armed=1 user=$User stored=$stored warnings=$warn"
