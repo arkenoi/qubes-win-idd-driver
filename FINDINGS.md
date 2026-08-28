@@ -19298,3 +19298,56 @@ reproduction with the instrument in place before it is stated as fact.
    "38 cycles with 30s delays and no interrupt action if it did not fly at all - this experiment
    design sucks." Correct. A wait must end early on a terminal state AND on no-progress, and must
    say which happened.
+
+## 2026-08-28 (evening) — the WIN10 brick, ROOT CAUSE NAMED BY WINDOWS ITSELF
+
+Not inference. Windows event 1074, captured live from the guest during the install (the guest is
+alive right up to the moment, so this had to be read while it lived - afterwards there is nothing
+left to ask):
+
+    The process C:\Windows\System32\xenbus_monitor_9_1_0_0.exe has initiated the RESTART of
+    computer WIN-IDD-TEST on behalf of user NT AUTHORITY\SYSTEM for the following reason:
+    Operating System: Recovery (Planned)   Reason Code: 0x80020002
+
+So: with a pending `xenbus_monitor\Request\<driver>\Reboot=1` and the monitor able to run, the
+monitor RESTARTS the guest roughly 28-30 s into msiexec - in the middle of the PV driver install -
+and the interrupted install leaves the guest unusable. Reproduced FOUR times (t+66, 68, 72, 80 s);
+the seed-off control on the same package and image completes in 90 s and stays healthy.
+
+**Why the suppressor does not save it.** `Start-XenbusPromptSuppressor` sweeps once a SECOND:
+disable the service, stop it, kill `xenbus_monitor*`, delete the Request key. But the monitor
+reboots the machine the instant it starts with a request pending, and the MSI both re-registers
+and STARTS that service mid-install. A 1 Hz poll against "starts and immediately reboots" is a race
+by construction, not a tuning problem - it ran for 28 s before the reboot landed and still lost.
+The fix therefore has to make the reboot impossible during the MSI window (deny the service start,
+or otherwise remove its ability to act), not sweep faster.
+
+**The outcome varies, and BOTH forms are unusable.** Run A came back to "Automatic Repair couldn't
+repair your PC". Run B booted past winload (spinner, then black) and stayed black - but
+`admin.vm.Stats` showed it consuming CPU steadily (cpu_time 92755 -> 119257 in 40 s, 8 GB resident).
+That guest was RUNNING, headless and unreachable: half-installed QWT, no qrexec, and the desktop no
+longer drawn to the emulated framebuffer dom0 can see. A user in this state has a qube that looks
+dead and is not.
+
+Consequence for the harness, corrected immediately: a black screen ALONE is not a terminal state.
+The rule now requires black AND no CPU, or it declares a live guest dead.
+
+**Bonus, and direct evidence for the open "unattended AppVM reboots" task (#29):** the same event
+query returned three more 1074s from `C:\Windows\System32\xenagent_9_1_0_0.exe` initiating
+SHUTDOWNS (reason code 0x8000000c). That task has been theorising about which component shuts the
+guest down; Windows names it.
+
+**Harness defects fixed in the same session, each measured, not guessed:**
+* `qvm-start` BLOCKS until qrexec connects. With the clone's `qrexec_timeout=6000` that is 100
+  minutes of total silence on a guest that never boots - 15 minutes of an apparently hung harness
+  was simply sitting inside it. Now fired in the background with our own polling; clones get
+  `qrexec_timeout=600`.
+* `qvm-kill` was never needed: a guest in the recovery screen, and even the black/Transient one,
+  honours ACPI shutdown (10 s and 20 s measured). The kill was actively harmful - it leaves the
+  volume dirty and qubesd then refuses the next clone outright ("Cannot import to dirty volume ...
+  start and stop a qube to cleanup"), which is how a cell that HAD reproduced the bug died with
+  "could not reclone". Kill is now the last resort and announces its cost.
+* Errors were being discarded. "could not reclone" said nothing; the real message named the cause.
+  Clone and push now log their actual error text, and push retries three times - its first attempt
+  failed one second after boot with rc=46, i.e. no session yet (the same 1326 truncation as the
+  field's "exit status 46").
