@@ -19198,3 +19198,50 @@ reports the request count.
 STANDING LESSON: when one chain passes and another fails, compare what differs about the CHAINS
 before concluding anything about the code. Here the difference - one-stage vs two-stage install -
 explained the whole thing, and I instead spent cycles theorising about the fix being incomplete.
+
+## 2026-08-28 — 4.3.15 candidate (463c176), WIN11 stability e2e: 21 passed / 1 failed, and the 1 was my check
+
+Fresh install from the golden image onto win11-fresh -> win11-tpl -> win11-app, then a template cold
+boot and three AppVM cold boots. Everything under test passed: agent sha == release binary, autologon
+armed as an LSA secret in STAGE 1, our qrexec-wrapper.exe live and differing from the stock copy, the
+rpc overlay in place, the reboot-cause audit installed, the install surviving the reboot-prompt
+condition with the xenbus monitor DISABLED, get-appmenus exiting 0 with 41 entries including every
+built-in and Edge, and on every boot a real user session with windows mapped and nothing
+fullscreen-sized.
+
+**The single FAIL was a harness defect, not a product defect. Retracting the verdict.**
+`WIN11-tpl: agent stuck on the secure desktop (QGADESKSTUCK fired)` was wrong. What the agent log
+(`gui-agent-20260828-183303-4320.log`) actually shows, on the template's first post-install cold boot:
+
+    18:33:03  secure-desktop ENTERED (input desktop 'Winlogon') - mapping suppressed
+    18:33:34  QGADESKSTUCK ... for 30 s          <- the WARNING, at its threshold
+    18:33:42  secure desktop left after 38 s - resuming with a full resync
+    18:33:42+ windows mapped normally; the 18:34 screenshot shows notepad on a live desktop
+
+So autologon took 38 s on that boot and the 30 s warning fired legitimately before recovering. The
+check failed on the PRESENCE of `QGADESKSTUCK` anywhere in the log, so a recovery read identically to
+a freeze. Corrected to judge the LAST of {QGADESKSTUCK, secure desktop left}, and unit-tested offline
+against five orderings: stuck-then-left PASSES, stuck-only FAILS, left-then-stuck FAILS (the case the
+presence test could never distinguish), left-only PASSES, neither is reported as "not exercised".
+Per rule 6 the check has now been SEEN TO FAIL with the defect present, so its PASS is evidence.
+
+**Second thing the same log explains: the "6 quick deaths" the watchdog reported are the shutdown
+race, not a crashing agent.** Timeline from `gui-watchdog-20260828-183302-4000.log`:
+
+    18:34:14.988  agent not running, restarting it (servicestop=0 sm_shuttingdown=0 console=0x1 wtsstate=0)
+    18:34:16.046  died within 10000 ms, 1 time(s) in a row - backing off, restarting again
+    18:34:17.036  ControlHandlerEx: preshutdown - the agent will not be restarted from here on
+
+The machine was already going down at 18:34:14; Windows only said so at 18:34:17. In that 2 s window
+every signal `AgentRespawnPointless()` polls says "keep it running": the service is not stopping,
+`SM_SHUTTINGDOWN` is 0, a console session exists, and `wtsstate=0` is **WTSActive** (WTS_CONNECTSTATE_CLASS
+starts at WTSActive=0 - I had this inverted at first and checked the enum before writing it down;
+wtsstate=1 seen earlier in the same boot is WTSConnected, i.e. still logging on). There is no signal
+available to close that gap, the respawned processes die harmlessly, and `preshutdown` stops it
+within seconds. Not worth a code change; worth knowing, because this artifact has repeatedly been
+misread as the agent crashing - including by me.
+
+**Coverage gap, stated rather than hidden:** the WIN10 chain did not run. win10-tpl is off-limits
+after I damaged it with repeated hard kills, so the two-stage (testsigning-off) install path - the
+one that reboots between stages, and the one GWeck's reports exercise - is NOT covered by this run.
+Re-enable `install_chain win10-clean win10-tpl win10-app WIN10` once that template is repaired.
