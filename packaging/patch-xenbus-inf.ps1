@@ -82,7 +82,10 @@ if ($afterType -eq $afterStart) {
 }
 
 Set-Content -LiteralPath $InfPath -Value $afterType -NoNewline -Encoding Ascii
-Write-Host "patched $InfPath: xenbus_monitor is installed but never started (no STARTSERVICE, StartType=disabled)"
+# ${InfPath}, not $InfPath: a colon straight after a variable name is a SCOPE qualifier to the
+# PowerShell parser ("Variable reference is not valid"), and it fails at PARSE time - the whole
+# script refuses to run, so this cost a full CI cycle.
+Write-Host "patched ${InfPath}: xenbus_monitor is installed but never started (no STARTSERVICE, StartType=disabled)"
 
 # --- prove it, on the file as written ------------------------------------------------------
 $check = Get-Content -LiteralPath $InfPath -Raw

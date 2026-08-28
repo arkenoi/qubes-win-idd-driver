@@ -91,6 +91,25 @@ jobs:
         with:
           submodules: recursive
 
+      # FAIL FAST ON SYNTAX. A PowerShell parse error is caught at PARSE time - the script never
+      # runs at all - and today one ("$InfPath:" reads as a scope qualifier) was found only after
+      # 15 minutes of toolchain setup and compilation, in a step near the end. There is no pwsh in
+      # the dev qube to catch it locally, so the build checks it in the first seconds instead.
+      - name: Parse-check our PowerShell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bad = @()
+          $files = Get-ChildItem -Recurse -Filter *.ps1 -Path packaging, guest, tools -ErrorAction SilentlyContinue
+          foreach ($f in $files) {
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errs)
+            if ($errs) { $bad += "$($f.FullName):$($errs[0].Extent.StartLineNumber): $($errs[0].Message)" }
+          }
+          Write-Host "parsed $($files.Count) PowerShell files"
+          if ($files.Count -lt 10) { throw "only $($files.Count) .ps1 files found - the search path is wrong, this check would pass vacuously" }
+          if ($bad) { throw "PowerShell parse errors:`n$($bad -join "`n")" }
+
       - name: Locate MSBuild and lib.exe
         id: vs
         shell: pwsh
