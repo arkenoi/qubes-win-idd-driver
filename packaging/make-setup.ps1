@@ -405,7 +405,7 @@ $manifest = [ordered]@{
     }
     installs = [ordered]@{
         msi_features   = @('PvDriversCore', 'Core', 'Gui', 'PvDriversNetwork (unless /nonet)')
-        also           = @('6 ITL signing certs + our test cert into Root and TrustedPublisher',
+        also           = @('6 self-signed "Qubes Windows Tools" certs (upstream QWT signs with these; they are trusted only because they are installed here) + our test cert, into Root and TrustedPublisher',
                            'VC++ 2015-2022 x64 runtime',
                            'bcdedit /set testsigning on',
                            'gui-agent registry defaults: SeamlessMode=1, DisableCursor=1, LogDir',

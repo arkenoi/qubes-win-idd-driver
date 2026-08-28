@@ -19134,3 +19134,39 @@ msiexec; this covers stage 1, the uninstall, and the post-install re-assert as w
 
 The template is not being nursed back: the e2e re-clones win10-tpl from the win10-clean golden
 image at the start of the chain, so the repair state is discarded rather than carried.
+
+## 2026-08-28 — THE "UPSTREAM / SIGNED" FRAMING WAS FALSE. It is all ours; stop citing it.
+
+Two claims I repeated today, both wrong, both used to justify overlays instead of fixing packaging:
+
+1. "The MSI is upstream's, we do not own its file list."
+   FALSE. qwt-full.yml compiles installer.sln from the pinned WiX sources - we BUILD the MSI.
+   packaging/stage-qwt-repo.ps1 parses the file list from those .wxs sources and then fills each
+   entry: ours if the component is 'gui-agent-windows' (line ~44), otherwise by basename from the
+   extracted stock image. ONE condition in OUR script is the only reason anything ships stock.
+
+2. "The PV drivers are ITL-signed / production-signed and we cannot reproduce that."
+   FALSE. Decoded the vendored certs: all six (Agent, Db, Drivers, Gui, Utils, Vchan) have subject
+   AND issuer "Qubes Windows Tools" - SELF-SIGNED. They are trusted on a guest only because our own
+   installer adds them to Root and TrustedPublisher; the code even says so
+   ("# Root : makes the self-signed publisher chain valid"). That is exactly the mechanism and
+   exactly the trust level of our test-signing cert. Stock's kernel drivers need testsigning for
+   the same reason ours do - a self-signed cert in Root does not satisfy kernel-mode code signing.
+
+WHAT ACTUALLY CONSTRAINS US, stated correctly for the next reader:
+ * A .cat binds file hashes, so changing a byte in a catalog-covered file (xenagent.exe,
+   xenbus_monitor.exe, the driver binaries) invalidates that package's catalog. That is MECHANICAL
+   work - regenerate and re-sign the catalog - not a trust barrier. The xenvif path already does
+   exactly this: patch, build, sign, pnputil /add-driver /install.
+ * Boot-start storage (xenvbd) remains the one place to be cautious, because a mistake there is an
+   unbootable guest rather than a degraded one - and because it would depend on testsigning
+   staying enabled.
+
+CORRECTED IN THE TREE: README.md and docs/WHAT-CHANGED-FOR-USERS.md said "stock QWT ships
+production-signed binaries"; packaging/make-setup.ps1's manifest said "6 ITL signing certs". Both
+now say what these certificates actually are. The destock audit's "NON-GAPS - stock by design"
+entry for the PV drivers rests on the same false premise and should be re-read with this note.
+
+RULE FOR ME: do not describe any part of this package as "upstream's" or "signed by someone we
+cannot match" without checking. Both excuses were used today to justify shipping stock bytes and
+building overlays around them.

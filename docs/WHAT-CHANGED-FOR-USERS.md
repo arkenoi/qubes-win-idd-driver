@@ -8,7 +8,8 @@ Windows 11 24H2, not inferred.
 
 **The binaries are TEST-SIGNED.** The installer runs `bcdedit /set testsigning on`, which
 weakens driver-signature enforcement for the whole guest until you turn it off. Stock QWT
-ships production-signed binaries and does not do this. It is inherent to an unofficial
+signs with its own self-signed "Qubes Windows Tools" certificates, trusted only because its
+installer puts them in the guest's Root store. It is inherent to an unofficial
 build, not a defect - but it is a real change to your guest's security posture and you
 should decide about it deliberately.
 

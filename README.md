@@ -64,7 +64,9 @@ source; `MANIFEST.json` inside each asset records the exact source commits the b
 
 **The binaries are TEST-SIGNED.** The installer runs `bcdedit /set testsigning on`, which
 weakens driver-signature enforcement for the whole guest until you turn it off. Stock QWT
-ships production-signed binaries and does not do this. It is inherent to an unofficial build,
+signs with its own self-signed "Qubes Windows Tools" certificates, which its installer adds to
+the guest's Root store - so stock needs testsigning for its kernel drivers too. Ours is the same
+mechanism with our certificate. It is inherent to an unofficial build,
 not a defect — but it is a real change to your guest's security posture, so decide about it
 deliberately.
 
