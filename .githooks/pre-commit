@@ -1,0 +1,47 @@
+#!/bin/sh
+# Block whole-dom0-desktop captures from entering this PUBLIC repo.
+#
+# Why this exists: .gitignore bans `screen.png` and `*fullshot*` by NAME, and on 2026-08-29
+# that was found to be insufficient — sm1.tar/sm2.tar/sm3.tar were committed in fbee3ed and
+# pushed to a public remote. Each was a `qtest fullshot` capture (geometry.txt + screen.png,
+# 3440x1440 of the whole dom0 desktop, other qubes included) wrapped in a tarball whose NAME
+# matched no ignore rule. A name-based rule cannot see inside a container; this checks content.
+#
+# Per-window `qtest shot` output (win-0.png, win-1.png … guest windows only) is a different and
+# accepted risk class — it is not blocked.
+#
+# Enable with:  git config core.hooksPath .githooks
+# Bypass, deliberately and only if you are sure:  git commit --no-verify
+
+bad=""
+
+for f in $(git diff --cached --name-only --diff-filter=ACM); do
+	case "$f" in
+	*.tar | *.tar.gz | *.tgz)
+		# List the archive as it will be committed (staged blob, not the worktree file).
+		if git cat-file -p ":$f" 2>/dev/null |
+			tar -t 2>/dev/null |
+			grep -qE '(^|/)(screen\.png|fullshot)'; then
+			bad="$bad $f"
+		fi
+		;;
+	*)
+		# A bare full-desktop capture that dodged .gitignore under another name.
+		case "${f##*/}" in
+		screen.png | *fullshot*) bad="$bad $f" ;;
+		esac
+		;;
+	esac
+done
+
+if [ -n "$bad" ]; then
+	echo "pre-commit: refusing to commit whole-dom0-desktop capture(s):" >&2
+	for f in $bad; do echo "  $f" >&2; done
+	echo >&2
+	echo "These contain the entire dom0 screen — every other qube's windows — and this repo is" >&2
+	echo "PUBLIC. Capture the single qube window by name instead of the whole desktop, or drop" >&2
+	echo "the file. If you are certain this one is safe: git commit --no-verify" >&2
+	exit 1
+fi
+
+exit 0
