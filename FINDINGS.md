@@ -18986,3 +18986,38 @@ TRAP CONFIRMED STILL HANDLED: qrexec-wrapper.exe cannot be overwritten from a qr
 such call IS that binary - and Install-QwtImproved's bin\ placement catches the sharing violation,
 renames the running image to *.qwt-prev, and copies again. Without that the release would install
 everything except the one binary this work exists to deliver.
+
+## 2026-08-28 — RETRACTED: the stock set-gui-mode.exe is NOT broken. I asserted a defect from
+## reading code and blamed upstream for it. Measurement says otherwise.
+
+CLAIM I MADE: upstream's `set-gui-mode.c` does `SetEvent(event); return GetLastError();`, and since
+GetLastError is only meaningful after a failure, a successful mode switch returns stale garbage -
+which is what produced the field report "Command 'qubes.SetGuiMode' returned non-zero exit status
+46" in Qubes Manager. I dated it to upstream commit 190d10f (2023-12-21) and said we had not broken
+it, we had inherited it.
+
+MEASURED on win11-app, against the STOCK binary actually installed (SHA 8DF3D0E1A6F2AB07, no
+*.qwt-stock backup - we have never replaced it), with the instrument validated BEFORE the result:
+
+    CONTROL-known-46      EXIT=46   <- a process with a known non-zero code reports it
+    CONTROL-invalid-input EXIT=87   <- the same binary's ERROR_INVALID_PARAMETER path works
+    SEAMLESS              EXIT=0    <- three runs, agent running, event present
+
+The success path returns 0. The defect does not exist in practice: with no prior API having failed,
+GetLastError is still 0 when it is returned. The pattern is fragile, but fragile is not broken, and
+"fragile" is not what I told the owner.
+
+TWO SEPARATE ERRORS, both mine:
+1. I asserted a runtime defect from source reading alone, on a binary I could have run in two
+   minutes - on a rig that was sitting idle.
+2. Having asserted it, I attributed it to upstream and to a 2023 commit. That is blame-shifting,
+   and it is worse than the original mistake because it invites everyone else to stop looking.
+
+FIRST ATTEMPT AT THE MEASUREMENT WAS ALSO WRONG and nearly became a third error: `cmd /c prog &
+echo %ERRORLEVEL%` reported nothing, because set-gui-mode is a GUI-subsystem binary (wWinMain) and
+cmd does not wait for one. The next attempt returned 0 even with the agent killed - which should
+have been impossible - and that is what forced the known-46 control that validated the harness.
+qrexec gets a real exit code because it waits on the process handle; cmd does not.
+
+STILL UNKNOWN: what produces exit status 46 on the reporter's guest. Not this success path. Needs
+his gui-agent log and the qrexec side, not another hypothesis.
