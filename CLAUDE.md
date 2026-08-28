@@ -208,9 +208,16 @@ fullscreen apps wrongly brought the boot/shutdown screen back):
 **Mode 1 — the boot/shutdown/logon SCREEN: UNCONDITIONALLY OFF, always.** Not gated by any
 feature. Measured 2026-08-19: this is a per-window **LogonUI** window (class "LogonUI Logon
 Window"), fullscreen — Windows renders login, lock, "shutting down", and the initial desktop
-through it. Enforced in `ShouldAcceptWindow` (gui-agent main.c): a fullscreen-sized window whose
-class contains "LogonUI" (or any override-redirect fullscreen) is rejected outright, regardless
-of the feature. (It is NOT the whole-screen window-0 path — that was an early wrong theory.)
+through it. Enforced in `ShouldAcceptWindow` (gui-agent main.c). (It is NOT the whole-screen
+window-0 path — that was an early wrong theory.)
+
+MATCHED BY **PHASE**, not only by class (2026-08-28, after class matching leaked and a
+fullscreen boot surface reached the owner's display with `service.gui-fullscreen` on): a
+fullscreen-sized window is denied outright while there is no shell window (boot, logon, and
+shutdown once explorer has gone), while the input desktop is secure, and for
+`FS_BOOT_SETTLE_MS` after it stops being secure — in addition to the LogonUI-class and
+override-redirect tests. In those phases nothing fullscreen-sized is an app the user asked for,
+whatever its class, and the feature does not apply.
 
 **Mode 2 — a BORDERLESS true-fullscreen window: CONDITIONALLY allowed.** Only a fullscreen-sized
 window with NO title bar (no `WS_CAPTION` — a game/video/presentation taking over the screen) is
@@ -323,3 +330,16 @@ other and destroyed hours of results.
 
 **Retract loudly and immediately.** When a claim turns out to be wrong, say so plainly in the
 next message and in the doc, and remove it from any status summary.
+
+## Controls: ONE feature, and follow the README (owner, 2026-08-28)
+
+`service.gui-fullscreen` is the single control for guest-originated fullscreen, and the top-level
+README's feature table is its specification: it allows the whole guest desktop in one dom0 window
+(non-seamless) AND a borderless true-fullscreen app window; a maximized app with a title bar is
+always allowed; **the boot/shutdown screen is never allowed, feature or not**. Do not invent
+additional knobs, modes or behaviours around it — "do not complicate the controls". When
+behaviour and README disagree, the README wins and the code is what changes.
+
+I violated the last clause of that table on 2026-08-28 by enabling the feature on a test qube: a
+fullscreen boot-phase surface reached the owner's display because Mode 1 was matched by class
+alone. The fix was to enforce the documented rule by phase, not to add a control.

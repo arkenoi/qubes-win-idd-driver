@@ -115,11 +115,10 @@ blanks the guest-side cursor so only dom0's is visible.
 
 Windows renders its login, lock, "shutting down" and initial-desktop screens through a single
 full-screen `LogonUI` window. Mapping it produced a black or blue frame that took over the qube's
-window at every boot and shutdown. In **seamless mode it is denied outright**, and a fullscreen-sized
-window is never mapped as its own dom0 window — a qube can only fill your screen when *you*
-maximize it. In the **windowed desktop** (non-seamless, opt-in) the whole guest desktop is shown
-inside one bounded window, sign-in screen included, because there it is ordinary content in a
-window you can move and close rather than a surface that takes over the display.
+window at every boot and shutdown. It is now denied outright — and permanently: the Windows
+**secure desktop is never presented to dom0**, which is a deliberate security decision, not a
+cosmetic one. A guest that reaches a *visible* Windows login screen is a misconfiguration to fix
+(autologon), not something this build will render for you.
 
 ### The Start menu works again
 
@@ -334,33 +333,6 @@ qrexec against a 60 s default.
 
 ## Known limitations
 
-- **The guest logs itself in, and in seamless mode the sign-in screen is not displayed.**
-  In seamless mode this build never shows dom0 anything drawn on the Windows *secure desktop*,
-  where the sign-in and lock screens live. So a guest that does not log in by itself leaves the
-  qube window **completely empty**: it is running and answers qrexec, but there is no password
-  box to type into (measured 2026-08-28: autologon off → 0 windows mapped). Two things follow,
-  and the installer handles the first for you:
-  - **The installer arms autologon.** It prompts for the account password (or takes
-    `install.cmd /autologon:PASSWORD` for an unattended install, or `/noautologon` to skip),
-    validates it against Windows before writing anything, and stores it as an **LSA secret**
-    rather than the world-readable plaintext `DefaultPassword` registry value. A boot-time
-    SYSTEM task re-asserts the settings, because Windows updates rewrite them and, while
-    `AutoLogonCount` exists, Windows *consumes* a registry password and deletes it. Re-arm at
-    any time with `set-autologon.ps1` (kept in the guest under `Qubes Tools\vmupdate-shim\`).
-  - **If it is not armed, the way in is the windowed desktop.** Switch the qube out of seamless
-    mode and the whole guest desktop — sign-in screen included — is shown inside one bounded
-    window, where you can log in normally:
-
-        qvm-features <vm> service.gui-windowed-desktop 1
-        echo FULLSCREEN | qvm-run --pass-io --service <vm> qubes.SetGuiMode   # SEAMLESS to go back
-
-    That window is deliberately bounded (1280x800 by default) and never covers your screen: a
-    qube can only fill the display when *you* maximize its window in dom0.
-  The agent says which state it is in — look for `QGADESKSTUCK` in its log, which names the
-  desktop it is stuck on and for how long. Stock QWT differs here (it shows the sign-in screen
-  in both modes), so an empty seamless window is a deliberate difference, not a broken install.
-  UAC prompts are **not** affected: this build moves them off the secure desktop, so they
-  appear as ordinary windows.
 - **qrexec runs in the interactive user session.** A logged-off guest loses clipboard and
   file-copy until someone logs in. This is how QWT is built, not something this build changed.
 - **`XENBUS\…&DEV_CONS` sits at code 28** — QWT ships no `xencons`. It is the PV console
