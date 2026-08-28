@@ -735,14 +735,38 @@ function Invoke-Stage1 {
                     Write-Host "  Qubes needs this guest to log in by itself, or the qube comes back unusable:"
                     Write-Host "  no qrexec session, and nothing displayed in dom0 at all."
                     Write-Host "  Enter the Windows password for '$alUser' (blank = the account has none;"
-                    Write-Host "  Ctrl+C to skip and arrange autologon yourself):"
+                    Write-Host "  Esc or 2 minutes of silence = skip and arrange autologon yourself):"
+                    Write-Host -NoNewline '  password: '
+                    # BOUNDED, not Read-Host. An install is routinely launched minimised or from a
+                    # script, where a console exists but nobody is watching it - and a Read-Host
+                    # there hangs the whole installation for ever. Read keys with a deadline
+                    # instead: no answer in 2 minutes means carry on without one.
                     try {
-                        $sec = Read-Host -AsSecureString '  password'
-                        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
-                        $alPass = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-                        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-                        $alSource = 'prompt'
-                    } catch { $alPass = $null }
+                        $sb = New-Object System.Text.StringBuilder
+                        $deadline = (Get-Date).AddSeconds(120)
+                        $answered = $false
+                        while ((Get-Date) -lt $deadline) {
+                            if ([Console]::KeyAvailable) {
+                                $k = [Console]::ReadKey($true)
+                                if ($k.Key -eq 'Enter')  { $answered = $true; break }
+                                if ($k.Key -eq 'Escape') { break }
+                                if ($k.Key -eq 'Backspace') {
+                                    if ($sb.Length -gt 0) { $sb.Length--; Write-Host -NoNewline "`b `b" }
+                                    continue
+                                }
+                                [void]$sb.Append($k.KeyChar)
+                                Write-Host -NoNewline '*'
+                            } else {
+                                Start-Sleep -Milliseconds 100
+                            }
+                        }
+                        Write-Host ''
+                        if ($answered) { $alPass = $sb.ToString(); $alSource = 'prompt' }
+                        else { Write-Log 'no password typed (skipped or timed out) - trying an empty one' }
+                    } catch {
+                        Write-Log "could not read a password from the console: $($_.Exception.Message)"
+                        $alPass = $null
+                    }
                 }
                 if ($null -eq $alPass) { $alPass = ''; $alSource = 'empty-password-guess' }
             }
