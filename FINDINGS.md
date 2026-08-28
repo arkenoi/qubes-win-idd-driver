@@ -18851,3 +18851,39 @@ reported autologon not-armed. Arming now happens in STAGE 1 (the password is in 
 the guest then returns by itself from the install's own reboot); stage 2 runs ensure-autologon.ps1
 to verify and report. Carrying the password into stage 2 would have meant writing it into a task
 command line on disk - a worse exposure than the registry value the LSA secret exists to avoid.
+
+## 2026-08-28 cont 6 — stability e2e on the 4.3.14 candidate: 33 passed, 1 failed (harness)
+
+Both chains rebuilt from the golden images and installed with the real installer
+(`install.cmd /auto /autologon:qubes`), package 4.3.14+agent.5634f905a8dd, agent 581912664391:
+
+    WIN11 / WIN10   installed agent == release binary          PASS / PASS
+                    installer armed autologon                  PASS / PASS
+                    app-menu rpc scripts placed over stock      PASS / PASS
+                    reboot-cause audit installed               PASS / PASS
+                    all built-in app-menu entries reported     PASS / PASS  (45 / 49 available)
+    template cold boot: user session + windows + secure desktop PASS / PASS
+    AppVM x3 cold boots: session, windows, secure desktop       PASS / PASS (one exception below)
+
+Every window check ran with notepad OPEN and measured the PNG: one window, 3826x1016 on a
+5120x1440 host. Nothing host-sized anywhere - the rule broken on 2026-08-28 now has direct
+evidence on both chains, on 8 separate boots.
+
+THE ONE FAILURE IS MINE: `WIN10-app-b1: screenshot failed` - an empty tar even with notepad
+launched, on the AppVM's FIRST cold boot (the slowest). The same check passed on the other seven
+boots including two later ones on that same VM. Cause: an 8-second fixed sleep racing a cold first
+boot, not a product defect. The check now POLLS (6 attempts, ~42 s) instead of sleeping a
+constant. A fixed sleep in an acceptance check is a false-failure generator, and a false failure
+costs exactly as much credibility as a missed one.
+
+REBOOT AUDIT (#29), second run: WIN11 recorded 4 records again, all `xenagent` executing a
+shutdown "on behalf of NT AUTHORITY\SYSTEM", timestamps matching the install's own reboot and the
+harness's qvm-shutdown calls. WIN10 recorded 0. No self-initiated restart in either chain.
+
+WATCHDOG: 'died within' 6 (WIN11) / 6 (WIN10), 'not restarting it (going down)' 1 / 22. The
+suppression fires, but the FIRST death of a shutdown still gets a respawn because it happens
+before the SCM sends PRESHUTDOWN. Logged with the signals consulted; not fixed.
+
+NOT in this build, committed after it: the appmenus sync hardening, the qubes.GetAppmenus alias,
+and the curated 8-entry default menu. The release candidate must be rebuilt and re-tested with
+those before shipping - the e2e now asserts the service exits 0 and the alias exists.
