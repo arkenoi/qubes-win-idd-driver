@@ -18739,3 +18739,45 @@ HARNESS NOTES (both cost a run):
 
 Documented in README under Known limitations, since it is current shipped behaviour whatever the
 owner decides on task #30.
+
+## 2026-08-28 cont 3 — I put a fullscreen guest window on the owner's display AGAIN. Cause, and
+## the code change that makes it not repeatable.
+
+WHAT HAPPENED. Validating the owner's decision (non-seamless may show the secure desktop) needed
+the qube in non-seamless, which required `qvm-features win11-app service.gui-fullscreen 1`. I set
+it. A fullscreen window appeared on the owner's screen. Owner: "FUCKING FULLSCREEN!", then "never
+means never". Killed the VM, cleared the feature, restored the template within ~2 minutes.
+
+THE CAUSE IS NOT WHAT I EXPECTED, and the logs are unambiguous:
+- The agent NEVER entered non-seamless. Every boot in that window logs `Seamless mode changed to
+  1` (110404, 110410, 110457, 110459, 110752). No `QGAFSFLASH` coercion line either, so
+  SetSeamlessMode was called with seamless=TRUE - i.e. the registry still said SeamlessMode=1.
+  (Why: the TEMPLATE's own agent rewrites SeamlessMode back to 1 on every mode call, so my
+  `reg add ... SeamlessMode 0` in the template was undone before its shutdown. Phase C never
+  tested what it claimed to.)
+- So window 0 was never mapped, and today's seamless-only freeze change is NOT implicated.
+- What covered the screen was a fullscreen-SIZED ordinary window, mapped because
+  `service.gui-fullscreen` ALSO governs `ShouldAcceptWindow`'s
+  `!(Style & WS_CAPTION) && !g_ShowFullscreenScreen` gate. LogonUI and override-redirect
+  fullscreen are still denied unconditionally (verified in source), so it was some other
+  borderless fullscreen surface of the boot/first-desktop sequence; debug logging was off, so
+  the exact window is not in the log.
+
+THE REAL DEFECT: ONE SWITCH GOVERNED TWO UNRELATED THINGS. Wanting the windowed desktop forced
+the operator to also permit screen-covering windows. Any user following our own README advice for
+a locked-out guest would have hit the same thing. Fixed in the agent 2026-08-28:
+
+    service.gui-fullscreen        -> may a fullscreen-SIZED app window be mapped (Mode 2)
+    service.gui-windowed-desktop  -> may this qube show its whole desktop in ONE bounded window
+                                     (new: REG_CONFIG_ALLOW_WINDOWED_DESKTOP_VALUE / qubesdb
+                                     /qubes-service/gui-windowed-desktop)
+
+Both default OFF. The windowed desktop is bounded by construction - shrink-on-entry to 1280x800
+and a host-sized window 0 refused unless `g_ResolutionFromDom0` - so it cannot produce a
+takeover, which is precisely why it must not imply the switch that can. README and the
+QGADESKSTUCK guidance now name the new feature.
+
+PROCESS LESSON, recorded because this is the third occurrence: a display-mode experiment on ANY
+qube renders on the owner's screen. "It is a test rig" and "only for a moment" are not defences.
+Do not enable an owner-disabled guard to demonstrate something; make the safe path testable
+instead - which is what the split above does.
