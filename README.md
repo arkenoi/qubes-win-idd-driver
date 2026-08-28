@@ -115,10 +115,11 @@ blanks the guest-side cursor so only dom0's is visible.
 
 Windows renders its login, lock, "shutting down" and initial-desktop screens through a single
 full-screen `LogonUI` window. Mapping it produced a black or blue frame that took over the qube's
-window at every boot and shutdown. It is now denied outright — and permanently: the Windows
-**secure desktop is never presented to dom0**, which is a deliberate security decision, not a
-cosmetic one. A guest that reaches a *visible* Windows login screen is a misconfiguration to fix
-(autologon), not something this build will render for you.
+window at every boot and shutdown. In **seamless mode it is denied outright**, and a fullscreen-sized
+window is never mapped as its own dom0 window — a qube can only fill your screen when *you*
+maximize it. In the **windowed desktop** (non-seamless, opt-in) the whole guest desktop is shown
+inside one bounded window, sign-in screen included, because there it is ordinary content in a
+window you can move and close rather than a surface that takes over the display.
 
 ### The Start menu works again
 
@@ -350,7 +351,7 @@ qrexec against a 60 s default.
     mode and the whole guest desktop — sign-in screen included — is shown inside one bounded
     window, where you can log in normally:
 
-        qvm-features <vm> service.gui-fullscreen 1
+        qvm-features <vm> service.gui-windowed-desktop 1
         echo FULLSCREEN | qvm-run --pass-io --service <vm> qubes.SetGuiMode   # SEAMLESS to go back
 
     That window is deliberately bounded (1280x800 by default) and never covers your screen: a
