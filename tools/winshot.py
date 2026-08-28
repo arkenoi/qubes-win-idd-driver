@@ -60,6 +60,8 @@ def main():
     ap.add_argument("name", nargs="?", help="window name to crop (substring, case-insensitive)")
     ap.add_argument("-o", "--out", default="window.png")
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--classify", action="store_true",
+                    help="also print a one-word verdict for what is on that window")
     a = ap.parse_args()
 
     screen, windows = load(a.tar)
@@ -84,10 +86,42 @@ def main():
         print(f"window '{name}' ({w}x{h}+{x}+{y}) lies outside the {screen.width}x{screen.height} "
               "capture - nothing to crop", file=sys.stderr)
         return 2
-    screen.crop((left, top, right, bottom)).save(a.out)
+    crop = screen.crop((left, top, right, bottom))
+    crop.save(a.out)
     clipped = " (clipped to the screen)" if (right - left, bottom - top) != (w, h) else ""
     print(f"{a.out}: {right-left}x{bottom-top} from window {wid} '{name}' mapped={mapped}{clipped}")
+    if a.classify:
+        print(f"VERDICT={classify(crop)}")
     return 0
+
+
+# Measured signatures, not guesses (2026-08-28, from captures of this testbed):
+#   Windows recovery / boot-error screens ("Automatic Repair couldn't repair your PC") are 93% of
+#   ONE colour, RGB(32,103,178) - the Windows recovery blue.
+#   A live guest desktop with an app open is ~87% white and otherwise varied.
+# The point of this is to give a wait loop a TERMINAL state to stop on. A harness that only times
+# out will sit for its full deadline on a guest that is never coming back, and - worse - restart
+# it, which is how this project burned hours on a VM that was in Automatic Repair the whole time.
+RECOVERY_BLUE = (32, 103, 178)
+
+
+def classify(img, tol=12, dominance=0.60):
+    """RECOVERY | BLACK | DESKTOP | UNKNOWN for a cropped window image."""
+    small = img.convert("RGB").resize((160, 120))
+    total = small.width * small.height
+    colours = small.getcolors(maxcolors=total)
+    if not colours:
+        return "UNKNOWN"
+    n, col = max(colours)
+    frac = n / total
+    if frac >= dominance:
+        if all(abs(c - r) <= tol for c, r in zip(col, RECOVERY_BLUE)):
+            return "RECOVERY"          # boot failed: recovery/repair screen, not a desktop
+        if max(col) <= 24:
+            return "BLACK"             # no output at all - pre-video, or a hung guest
+    if frac >= 0.98:
+        return "UNKNOWN"               # one flat colour we have no signature for
+    return "DESKTOP"                   # varied content: something is actually rendering
 
 
 if __name__ == "__main__":
