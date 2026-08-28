@@ -257,6 +257,58 @@ function Test-TestSigningActive {
     return ($v -and $v -match 'TESTSIGNING')
 }
 
+function Start-XenbusPromptSuppressor {
+    # KEEP the monitor down FOR THE DURATION of an msiexec/driver install, not just before and
+    # after it.
+    #
+    # Disabling it before msiexec is not enough and the field proved it: the MSI lays the
+    # service down FRESH (auto-start) and STARTS it while it is still running, so the PV driver
+    # install's reboot request is raised and answered by a modal "... needs to restart the
+    # system to complete installation" INSIDE the msiexec window - after our pre-disable, before
+    # our post-disable. Forum 42717 post 104: answering Yes shut the VM down mid-install and
+    # left "a QWT that was installed only partially, had no IDD graphics, and was not useful at
+    # all"; the reporter only got a working guest by answering No. An unattended install has
+    # nobody to answer at all, and on a seamless guest the dialog may not even be clickable.
+    #
+    # So: a background loop that re-disables the service, kills it if it is up, and deletes any
+    # pending reboot Request key, once a second until told to stop. Deleting Request is what
+    # makes this stick - a service restarted by the MSI then has nothing to prompt about.
+    $job = $null
+    try {
+    $job = Start-Job -ScriptBlock {
+        for ($i = 0; $i -lt 1800; $i++) {
+            & sc.exe config xenbus_monitor start= disabled *>$null
+            $svc = Get-Service xenbus_monitor -ErrorAction SilentlyContinue
+            if ($svc -and $svc.Status -ne 'Stopped') {
+                & sc.exe stop xenbus_monitor *>$null
+                Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue |
+                    Stop-Process -Force -ErrorAction SilentlyContinue
+            }
+            # nothing pending -> nothing to ask about, even if something restarts the service
+            & reg.exe delete 'HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request' /f /reg:64 *>$null
+            Start-Sleep -Seconds 1
+        }
+    }
+    } catch {
+        # A suppressor that cannot start must not take the install with it - the before/after
+        # Disable-XenbusMonitor calls still apply, they just leave the msiexec window uncovered.
+        Write-Log "could not start the xenbus prompt suppressor: $($_.Exception.Message) - the reboot prompt may appear during the install" 'WARN'
+        return $null
+    }
+    Write-Log "xenbus reboot-prompt suppressor running (job $($job.Id)) - it holds the monitor down THROUGH the install, which before/after calls alone do not"
+    return $job
+}
+
+function Stop-XenbusPromptSuppressor {
+    param($Job)
+    if (-not $Job) { return }
+    try {
+        Stop-Job $Job -ErrorAction SilentlyContinue
+        Remove-Job $Job -Force -ErrorAction SilentlyContinue
+        Write-Log 'xenbus reboot-prompt suppressor stopped'
+    } catch { }
+}
+
 function Disable-XenbusMonitor {
     param([string]$Why = '')
     # The xenbus_monitor service (xenbus/src/monitor/monitor.c PromptForReboot) pops a modal
@@ -594,10 +646,17 @@ function Uninstall-ExistingQwt {
         # /l*v+ appends: with more than one registered product the second msiexec would
         # otherwise truncate the log of the first, which is the one that usually explains
         # a failure.
-        $proc = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
-            '/x', $p.ProductCode, '/qn', '/norestart',
-            'REBOOT=ReallySuppress', '/l*v+', "`"$log`""
-        )
+        # Same window as the install: removing a previous QWT re-touches the PV drivers, so the
+        # monitor can raise its modal prompt DURING this msiexec too. Hold it down throughout.
+        $unGuard = Start-XenbusPromptSuppressor
+        try {
+            $proc = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+                '/x', $p.ProductCode, '/qn', '/norestart',
+                'REBOOT=ReallySuppress', '/l*v+', "`"$log`""
+            )
+        } finally {
+            Stop-XenbusPromptSuppressor $unGuard
+        }
         $rc = $proc.ExitCode
         $rcs[$p.ProductCode] = $rc
         # 0    removed
@@ -1241,7 +1300,13 @@ function Invoke-Stage2 {
         $script:Result.detail.inbox_disk_rearm = 'not shipped'
     }
 
-    $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $msiArgs
+    # The prompt appears INSIDE this call - see Start-XenbusPromptSuppressor.
+    $promptGuard = Start-XenbusPromptSuppressor
+    try {
+        $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $msiArgs
+    } finally {
+        Stop-XenbusPromptSuppressor $promptGuard
+    }
     if ($p.ExitCode -notin 0, 3010) { Fail "msiexec failed with $($p.ExitCode) - see $msiLog" }
     Write-Log "QWT_INSTALL_OK rc=$($p.ExitCode)"
     $script:Result.detail.msiexec_rc = $p.ExitCode
