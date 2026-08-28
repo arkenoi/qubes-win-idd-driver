@@ -19095,3 +19095,42 @@ package installs, where does it come from? - which catches both classes. That qu
 mechanised: packaging/check-ours-wins.ps1's CompiledSources check fails the build when a
 core-agent source diverges from its 4.2.2 base without its binary shipping, so this specific
 blindness cannot recur silently.
+
+## 2026-08-28 — seamless-switch 46: the "no interactive session" hypothesis is FALSIFIED (owner)
+
+My leading explanation was that on the reporter's guest the service could not be LAUNCHED (no user
+session to launch into), and that qrexec-wrapper reported the launch failure as the exit code -
+consistent with my measurement that a missing service file surfaces as rc=2.
+
+The owner falsified it directly: an unreachable guest makes the call WAIT, it does not return a
+weird rc. So "no session" produces a hang, not 46, and the hypothesis is dead. What survives from
+the measurements is narrower than I claimed:
+
+  * set-gui-mode.exe returns 0 on BOTH branches on a healthy guest (measured, harness validated
+    with a known-46 control and the binary's own 87 path);
+  * the wrapper does report Win32 setup failures in the exit-code field (measured: rc=2 for a
+    renamed-away service file);
+  * therefore 46 is a Win32 status from somewhere in the guest-side launch path - but WHICH one is
+    still unknown, and "the guest had no session" is now excluded.
+
+Standing lesson for me: I built a causal story out of two true facts and one assumption, then
+presented it as a diagnosis. The assumption (no session -> nonzero rc) was never measured, and it
+was the load-bearing one.
+
+## 2026-08-28 — the seeded reboot-prompt condition WEDGED the WIN10 template
+
+The e2e seeds the field condition before installing (Request=1 + xenbus_monitor auto-start). On the
+WIN10 chain the install then produced NO log at all, every subsequent qrun returned empty, and
+win10-tpl sat in Qubes state "Transient" - it needed repeated qvm-kill over ~70 s to go down, and
+came up in Windows Automatic Repair. Consistent with our own recorded note about this service
+("mid-prompt the service cannot stop - measured STOP_PENDING for hours"), but NOT proven: the
+guest was too broken to read its install log, so what actually blocked is unestablished.
+
+WHAT CHANGED AS A RESULT (61cdec9): Disable-XenbusMonitor now DELETES the pending
+xenbus_monitor\Request key, not just disables the service and writes AutoReboot=0. Disabling
+without clearing leaves the trigger for whatever re-enables the service next - and the MSI
+re-registers and starts it mid-install. The suppressor loop already cleared it every second during
+msiexec; this covers stage 1, the uninstall, and the post-install re-assert as well.
+
+The template is not being nursed back: the e2e re-clones win10-tpl from the win10-clean golden
+image at the start of the chain, so the repair state is discarded rather than carried.
