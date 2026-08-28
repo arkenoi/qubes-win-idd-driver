@@ -191,8 +191,13 @@ if ($CoreAgentBins -and (Test-Path -LiteralPath $CoreAgentBins)) {
     if (-not (Test-Path -LiteralPath (Join-Path $CoreAgentBins 'qrexec-wrapper.exe'))) {
         throw '-CoreAgentBins given but qrexec-wrapper.exe is not in it - that binary carries the drain-race fix and is the reason this channel exists'
     }
+    # ONLY the wrapper. qrexec-agent.exe and qrexec-client-vm.exe build from sources that are
+    # unmodified against the 4.2.2 base, so shipping our copies would be a functionally identical
+    # swap of - in qrexec-agent's case - the service dom0 talks to, where a bad swap costs the
+    # guest's manageability outright. No benefit, real risk: leave them stock until their source
+    # actually diverges (the guard's CompiledSources check fails the build the moment it does).
     $binStaged = @()
-    foreach ($b in 'qrexec-wrapper.exe', 'qrexec-agent.exe', 'qrexec-client-vm.exe') {
+    foreach ($b in 'qrexec-wrapper.exe') {
         $p = Join-Path $CoreAgentBins $b
         if (Test-Path -LiteralPath $p) {
             Copy-Item -LiteralPath $p (Join-Path $OutDir 'bin') -Force

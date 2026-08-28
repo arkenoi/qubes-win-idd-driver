@@ -351,6 +351,7 @@ jobs:
               -BootstrapExe "$env:BOOTSTRAP_EXE" `
               -VcRedist    "$env:VC_REDIST" `
               -QubesdbReadExe "$env:QUBESDB_READ_EXE" `
+              -CoreAgentBins dl\qwt-full\core-agent-bins `
               -OutDir      qwt-improved-setup
 
       # THE OURS-WINS GUARD. Fails the build when any file this repo maintains a source

@@ -67,7 +67,16 @@
     Binaries = @(
         @{ Package = 'reference/gui-agent.exe';    Stock = 'gui-agent.exe';      Required = $true }
         @{ Package = 'reference/gui-watchdog.exe'; Stock = 'gui-watchdog.exe';   Required = $true }
-        @{ Package = 'bin/qrexec-wrapper.exe';     Stock = 'qrexec-wrapper.exe'; Required = $false }
+        # The fork qrexec binaries. release-package builds core-agent in qwt-full and passes
+        # -CoreAgentBins, so absence now means the build silently fell back to stock - the
+        # exact failure that let the drain-race fix miss every guest for a week.
+        @{ Package = 'bin/qrexec-wrapper.exe';     Stock = 'qrexec-wrapper.exe';   Required = $true }
+        # qrexec-agent.exe / qrexec-client-vm.exe are deliberately NOT shipped. Their sources
+        # are unmodified against the 4.2.2 base, so our build would be functionally identical -
+        # no benefit - while qrexec-agent is the service dom0 talks to and a bad swap costs the
+        # guest's manageability entirely. They are built (qrexec-agent.vcxproj also generates
+        # qwt_version.h) and kept in the artifact for diagnostics, not staged into the payload.
+        # The moment either source diverges, CompiledSources fails the build until it ships.
     )
 
     # --------------------------------------------------------------------------- DeadEnds
@@ -123,17 +132,10 @@
     # (the guard fails on stale entries), and each downgrade is a loud ::warning:: in the
     # build log, never silence. Remove the entry the moment the gap is closed so the
     # guard starts enforcing it.
-    KnownGaps = @(
-        @{
-            # G1: the qrexec-wrapper drain-race fix (core-agent commits ac33bc9 +
-            # e5e94b8) builds green in build.yml but the release workflow does not build
-            # core-agent yet, so the MSI ships the STOCK 4.2.2 qrexec-wrapper.exe and
-            # the fix runs on no guest. make-setup.ps1 already has the -CoreAgentBins
-            # channel; when release-package.yml builds core-agent and passes it, flip
-            # the bin/qrexec-wrapper.exe Binaries entry to Required=$true and DELETE
-            # this entry in the same commit (the guard flags it as stale otherwise).
-            Missing = 'bin/qrexec-wrapper.exe'
-            Reason  = 'release workflow does not build core-agent yet; the drain-race fix ships nowhere until -CoreAgentBins is wired into release-package.yml'
-        }
-    )
+    # (Empty. G1 - the qrexec-wrapper drain-race fix shipping nowhere - was closed on
+    # 2026-08-28 by building core-agent in qwt-full and staging it via -CoreAgentBins; its
+    # entry was deleted in the same commit, which is what this list's stale-entry check
+    # demands. Add an entry here only for a gap that is deliberately tolerated, never to
+    # quiet a guard.)
+    KnownGaps = @()
 }
