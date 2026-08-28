@@ -27,6 +27,8 @@ on:
     branches: [main]
     paths:
       - 'agent'
+      # the app-menu rpc scripts are staged from here into the package
+      - 'core-agent'
       - 'vendor/qwt-4.2.2/**'
       - 'packaging/stage-qwt-repo.ps1'
       - '.github/workflows/qwt-full.yml'

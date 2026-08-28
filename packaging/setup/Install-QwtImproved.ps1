@@ -1631,6 +1631,38 @@ function Invoke-Stage2 {
         $script:Result.detail.session_lock = 'not in payload'
     }
 
+    # --- app menu: place OUR rpc scripts over the stock ones ----------------------------
+    # A fresh guest's Start Menu yields almost nothing to the .lnk sweep, so dom0's application
+    # list comes up nearly empty - and in seamless mode there is no taskbar and no desktop, so
+    # that list is the only way in. Our get-appmenus.ps1 also reports Notepad, Edge, Explorer,
+    # Settings, cmd and PowerShell (plus elevated cmd/PowerShell), and our start-app.ps1 knows how
+    # to launch them. They cannot arrive through the MSI: it is built from the stock QWT image
+    # plus our gui-agent binaries only.
+    $rpcSrc = Join-Path $Root 'rpc'
+    $rpcDst = Join-Path $env:ProgramFiles 'Qubes Tools\qubes-rpc-services'
+    if ((Test-Path -LiteralPath $rpcSrc) -and (Test-Path -LiteralPath $rpcDst)) {
+        $placed = 0
+        foreach ($r in 'get-appmenus.ps1', 'start-app.ps1') {
+            $src = Join-Path $rpcSrc $r
+            $dst = Join-Path $rpcDst $r
+            if (-not (Test-Path -LiteralPath $src)) { continue }
+            try {
+                if ((Test-Path -LiteralPath $dst) -and -not (Test-Path -LiteralPath "$dst.qwt-stock")) {
+                    Copy-Item -LiteralPath $dst -Destination "$dst.qwt-stock" -Force
+                }
+                Copy-Item -LiteralPath $src -Destination $dst -Force
+                $placed++
+            } catch {
+                Write-Log "could not place $r : $($_.Exception.Message) (non-fatal)" 'WARN'
+            }
+        }
+        Write-Log "app-menu rpc scripts placed: $placed/2 (stock copies kept as *.qwt-stock)"
+        $script:Result.detail.appmenu_scripts = "placed=$placed"
+    } else {
+        Write-Log 'app-menu rpc scripts not deployed (payload or target dir missing) - the qube will report only Start Menu shortcuts' 'WARN'
+        $script:Result.detail.appmenu_scripts = 'not deployed'
+    }
+
     # --- reboot audit: keep the evidence of WHY a restart happened ----------------------
     # An AppVM's System log is on the volatile C:, so Event 1074 - the record naming who asked
     # for a restart - is destroyed by the restart it describes. Without it a guest that reboots

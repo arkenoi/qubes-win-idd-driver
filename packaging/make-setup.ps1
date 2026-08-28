@@ -135,6 +135,15 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\set-autologon.ps1') 'autologon armin
 # for it) with it - so an unattended reboot cannot be told apart from a dom0-requested one after
 # the fact. Event-triggered tasks copy those records onto the private volume as they are written.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\install-reboot-audit.ps1') 'reboot-cause audit installer') $OutDir -Force
+# App-menu service scripts. The MSI is assembled from the STOCK QWT image plus our gui-agent
+# binaries (stage-qwt-repo.ps1) - core-agent contributes only a signing cert - so a change to
+# these scripts in the core-agent submodule does NOT reach the guest through the MSI. Ship them
+# in the payload and let stage 2 place them over the stock copies, the same way the updater
+# agent's scripts are deployed.
+New-Item -ItemType Directory -Force -Path (Join-Path $OutDir 'rpc') | Out-Null
+foreach ($r in 'get-appmenus.ps1', 'start-app.ps1') {
+    Copy-Item (Need (Join-Path $RepoRoot "core-agent\src\qubes-rpc-services\$r") "app-menu rpc script ($r)") (Join-Path $OutDir 'rpc') -Force
+}
 # IDD-only activator, run by `install.cmd /iddonly` to add/activate the IddCx driver on a guest
 # that already has QWT (no MSI, no version/PV gate). Uses idd-driver/ staged below.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activator') $OutDir -Force

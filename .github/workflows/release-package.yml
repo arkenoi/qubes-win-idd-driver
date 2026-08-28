@@ -33,6 +33,8 @@ on:
       # must rebuild it, or the next download quietly ships stale binaries.
       - 'driver/**'
       - 'agent'
+      # the app-menu rpc scripts are staged from here into the package
+      - 'core-agent'
       # make-setup.ps1 stages guest/*.ps1 (activate-idd, deactivate-idd, the updater agent,
       # the desktop tweaks) into the package. Without this filter a fix to one of those
       # scripts is committed, CI stays green, and the next download still ships the old copy.
