@@ -2134,8 +2134,12 @@ public static class QdbPrime {
     # boot that needs it, and the next boot completes the binding anyway (that is the documented
     # ONE-shutdown handover).
     try {
+        # Disable-XenbusMonitor now clears the Request key itself, through the registry API. The
+        # reg.exe delete that used to follow it here threw on an ABSENT key (stderr -> terminating
+        # error under ErrorActionPreference=Stop), and being inside this try/catch that silently
+        # skipped the state read and log lines below - so the shipping state went unrecorded
+        # exactly when it was already correct.
         Disable-XenbusMonitor -Why 'final act: shipping state' | Out-Null
-        & reg.exe delete 'HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request' /f /reg:64 2>$null | Out-Null
         $arFinal = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' -EA SilentlyContinue).AutoReboot
         $xbmFinal = Get-Service xenbus_monitor -EA SilentlyContinue
         Write-Log "xenbus_monitor shipping state: AutoReboot=$arFinal start=$($xbmFinal.StartType) status=$($xbmFinal.Status)"
