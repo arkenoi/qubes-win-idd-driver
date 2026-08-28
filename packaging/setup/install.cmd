@@ -127,9 +127,10 @@ if /i "%~1"=="/noautologon" ( set "PSARGS=!PSARGS! -NoAutologon" & shift & goto 
 REM  /autologon:<password> arms autologon unattended. Without it the installer prompts (or tries
 REM  an empty password, which is right for an account that has none). A guest that cannot log
 REM  itself in is unreachable over qrexec AND invisible in seamless mode.
-echo %~1 | findstr /i /b /c:"/autologon:" >nul && (
-  set "ALPW=%~1"
-  set "ALPW=!ALPW:*:=!"
+set "ARG=%~1"
+if /i "!ARG:~0,11!"=="/autologon:" (
+  REM  substring compare, not echo|findstr: a password containing & | > must not break parsing
+  set "ALPW=!ARG:*:=!"
   set "PSARGS=!PSARGS! -AutologonPassword "!ALPW!""
   shift & goto parse
 )
