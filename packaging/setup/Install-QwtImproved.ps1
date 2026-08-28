@@ -331,6 +331,14 @@ function Disable-XenbusMonitor {
     # belt in case something re-enables the service anyway.
     & reg.exe add 'HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' `
         /v AutoReboot /t REG_DWORD /d 0 /f /reg:64 | Out-Null
+    # AND REMOVE THE PENDING REQUEST. Disabling the service and setting AutoReboot=0 leaves the
+    # trigger itself in place: HKLM\...\xenbus_monitor\Request\<driver>\Reboot=1, written by a PV
+    # driver install, is what the monitor answers with its modal prompt. Anything that re-enables
+    # or reinstalls the service - the MSI does exactly that mid-install - then finds a request
+    # waiting and asks. With no request there is nothing to ask about, whoever starts the service.
+    # (The suppressor loop clears this every second DURING msiexec; doing it here covers every
+    # other call site too: stage 1, the uninstall, and the post-install re-assert.)
+    & reg.exe delete 'HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request' /f /reg:64 2>$null | Out-Null
     $svc = Get-Service xenbus_monitor -ErrorAction SilentlyContinue
     if ($svc) {
         & sc.exe config xenbus_monitor start= disabled 2>&1 | Out-Null
