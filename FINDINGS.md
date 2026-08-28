@@ -18818,3 +18818,36 @@ shutdown and a boot, nothing else). If that writer is ours, the "no plaintext pa
 is not actually delivered; if it is testbed provisioning, the rig needs it disabled before any
 further autologon measurement. Diagnostic running (tasks, Run/RunOnce, scripts on disk that
 contain the value name).
+
+## 2026-08-28 cont 5 — autologon via the LSA secret: PROVEN, with a control that fired
+
+The confound was the RIG's own: a testbed-only boot task `QwtAutologonRearm` running
+`C:\Windows\qwt-rearm-autologon.cmd` (hardcodes user/qubes/WIN11-IDD-TEST; appears NOWHERE in
+this repo, despite the "Qwt" name) rewrites the plaintext registry DefaultPassword on every boot,
+and Windows prefers that value over the LSA secret. While it runs, no measurement of the LSA path
+means anything - which is exactly why the first two attempts produced garbage.
+
+With that task disabled and the plaintext value removed:
+
+    armed=1 user=user stored=lsa warnings=0
+    plaintext DefaultPassword present after arming: 0
+    PASS  2. session as 'WIN11-IDD-TEST\user' with NO plaintext password anywhere
+    PASS  3. no session with a WRONG LSA secret - the secret we write is what autologon uses
+    === FINAL RESULT: 2 passed, 0 failed ===
+
+(3) is the part that makes (2) evidence rather than coincidence: poisoning the secret produced NO
+session, so Winlogon is demonstrably reading the value set-autologon.ps1 writes, not a leftover
+from the unattended install. The rig was restored exactly as found (task re-enabled, plaintext
+value back), so later runs behave as before.
+
+Measured by `Win32_ComputerSystem.UserName`, never by qrexec: on this testbed qubes.VMShell runs
+as SYSTEM with no session, so a guest parked at the sign-in screen answers every qrexec probe.
+Any future autologon check that uses bootwait/alive is measuring the wrong thing.
+
+INSTALLER DEFECT found while wiring this up, fixed before it shipped: with /auto the install
+reboots between stages and stage 2 resumes from a scheduled task whose argument list is rebuilt
+from a fixed set, which never carried -AutologonPassword - so every unattended install would have
+reported autologon not-armed. Arming now happens in STAGE 1 (the password is in hand there, and
+the guest then returns by itself from the install's own reboot); stage 2 runs ensure-autologon.ps1
+to verify and report. Carrying the password into stage 2 would have meant writing it into a task
+command line on disk - a worse exposure than the registry value the LSA secret exists to avoid.
