@@ -71,10 +71,6 @@
         # -CoreAgentBins, so absence now means the build silently fell back to stock - the
         # exact failure that let the drain-race fix miss every guest for a week.
         @{ Package = 'bin/qrexec-wrapper.exe';     Stock = 'qrexec-wrapper.exe';   Required = $true }
-        # rpc HANDLER, so it ships beside the handler scripts (qubes.SetGuiMode invokes it by
-        # bare name). Carries the fix for the bogus non-zero exit status Qubes Manager reported
-        # as "Failed to set fullscreen mode".
-        @{ Package = 'rpc/qubes-rpc-services/set-gui-mode.exe'; Stock = 'set-gui-mode.exe'; Required = $true }
         # qrexec-agent.exe / qrexec-client-vm.exe are deliberately NOT shipped. Their sources
         # are unmodified against the 4.2.2 base, so our build would be functionally identical -
         # no benefit - while qrexec-agent is the service dom0 talks to and a bad swap costs the
@@ -128,7 +124,6 @@
             'src/qrexec-wrapper'   = 'bin/qrexec-wrapper.exe'
             'src/qrexec-agent'     = 'bin/qrexec-agent.exe'
             'src/qrexec-client-vm' = 'bin/qrexec-client-vm.exe'
-            'src/qubes-rpc-services/set-gui-mode' = 'rpc/qubes-rpc-services/set-gui-mode.exe'
         }
     }
 

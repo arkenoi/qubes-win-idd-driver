@@ -260,15 +260,8 @@ jobs:
           if (-not (Test-Path "$ws\core-agent\qwt_version.h")) { throw 'failed to generate qwt_version.h' }
           # The qrexec projects only - `relocate-dir` in that solution includes the WDK's ntifs.h,
           # which this runner does not have.
-          # set-gui-mode is under vs2022\qubes-rpc-services\, the others at vs2022\ top level.
-          $projPaths = @{
-            'qrexec-wrapper'   = "$ws\core-agent\vs2022\qrexec-wrapper\qrexec-wrapper.vcxproj"
-            'qrexec-agent'     = "$ws\core-agent\vs2022\qrexec-agent\qrexec-agent.vcxproj"
-            'qrexec-client-vm' = "$ws\core-agent\vs2022\qrexec-client-vm\qrexec-client-vm.vcxproj"
-            'set-gui-mode'     = "$ws\core-agent\vs2022\qubes-rpc-services\set-gui-mode\set-gui-mode.vcxproj"
-          }
-          foreach ($proj in 'qrexec-wrapper','qrexec-agent','qrexec-client-vm','set-gui-mode') {
-            $vcx = $projPaths[$proj]
+          foreach ($proj in 'qrexec-wrapper','qrexec-agent','qrexec-client-vm') {
+            $vcx = "$ws\core-agent\vs2022\$proj\$proj.vcxproj"
             if (-not (Test-Path $vcx)) { throw "core-agent project not found: $vcx" }
             & "${{ steps.vs.outputs.msbuild }}" $vcx `
                 -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
@@ -277,7 +270,7 @@ jobs:
           }
           $caOut = "$ws\core-agent\vs2022\x64\$env:CONFIG"
           New-Item -ItemType Directory -Force core-agent-bins | Out-Null
-          foreach ($proj in 'qrexec-wrapper','qrexec-agent','qrexec-client-vm','set-gui-mode') {
+          foreach ($proj in 'qrexec-wrapper','qrexec-agent','qrexec-client-vm') {
             $exe = "$caOut\$proj\$proj.exe"
             if (-not (Test-Path $exe)) { throw "core-agent: $proj.exe was not produced" }
             Copy-Item $exe core-agent-bins\ -Force
@@ -444,7 +437,7 @@ jobs:
           # SIGNED fork qrexec binaries -> their own dir; release-package points
           # make-setup.ps1 -CoreAgentBins at it, which stages them into the payload bin\.
           New-Item -ItemType Directory -Force package-qwt-full\core-agent-bins | Out-Null
-          foreach ($f in 'qrexec-wrapper.exe','qrexec-agent.exe','qrexec-client-vm.exe','set-gui-mode.exe') {
+          foreach ($f in 'qrexec-wrapper.exe','qrexec-agent.exe','qrexec-client-vm.exe') {
             Copy-Item "agent-bins\$f" package-qwt-full\core-agent-bins\ -Force
           }
           Get-Content package-qwt-full\MANIFEST.json

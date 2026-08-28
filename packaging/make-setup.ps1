@@ -204,17 +204,6 @@ if ($CoreAgentBins -and (Test-Path -LiteralPath $CoreAgentBins)) {
             $binStaged += $b
         }
     }
-    # set-gui-mode.exe is an rpc HANDLER (qubes.SetGuiMode contains just "set-gui-mode.exe"),
-    # so it belongs beside the handler scripts, not in bin\. It returned GetLastError() after a
-    # SUCCESSFUL SetEvent, so every mode switch reported a garbage exit status and Qubes Manager
-    # showed "Failed to set fullscreen mode ... exit status 46" over a switch that had worked.
-    $sgm = Join-Path $CoreAgentBins 'set-gui-mode.exe'
-    if (Test-Path -LiteralPath $sgm) {
-        Copy-Item -LiteralPath $sgm $rpcSvcOut -Force
-        $binStaged += 'set-gui-mode.exe (rpc)'
-    } else {
-        throw '-CoreAgentBins given but set-gui-mode.exe is not in it - the SetGuiMode exit-status fix would ship nowhere'
-    }
     Write-Host "core-agent binaries: $($binStaged -join ', ')"
 } else {
     # Loud on purpose: this is the exact silence that let the stock wrapper keep shipping
