@@ -333,6 +333,20 @@ qrexec against a 60 s default.
 
 ## Known limitations
 
+- **The guest must log itself in: the Windows sign-in screen is never displayed.** By design
+  this build never shows dom0 anything drawn on the Windows *secure desktop* — the sign-in and
+  lock screens live there. If your Windows account requires a password and nothing logs it in
+  automatically, the qube window stays **completely empty**: the qube is running and answers
+  qrexec, but dom0 is shown nothing and there is no password box to type into (measured
+  2026-08-28: autologon off → 0 windows mapped, qrexec still answering). Stock QWT behaves
+  differently here — it shows the sign-in screen — so this is a deliberate difference, not a
+  bug in your setup.
+  Arrange for the guest to log in by itself (autologon), and keep it that way: while
+  `AutoLogonCount` exists Windows *consumes* `DefaultPassword`, and Windows updates rewrite
+  those values. The agent now says so in its log — look for `QGADESKSTUCK`, which names the
+  desktop it is stuck on and how long it has been there.
+  UAC prompts are **not** affected: this build moves them off the secure desktop, so they
+  appear as ordinary windows.
 - **qrexec runs in the interactive user session.** A logged-off guest loses clipboard and
   file-copy until someone logs in. This is how QWT is built, not something this build changed.
 - **`XENBUS\…&DEV_CONS` sits at code 28** — QWT ships no `xencons`. It is the PV console

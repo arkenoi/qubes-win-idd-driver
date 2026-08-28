@@ -18710,3 +18710,32 @@ absolute in the code today. But two things have changed since it was set on 2026
 Minimal proposal, seamless behaviour untouched: in NON-SEAMLESS mode only, do not freeze - the
 bounded 1280x800 desktop window shows the sign-in screen, so a password-protected guest can be
 logged into. Seamless keeps hiding it exactly as now. Owner decision required before any code.
+
+## 2026-08-28 cont 2 — the sign-in lockout is MEASURED, not inferred
+
+win11-tpl autologon disabled (AutoAdminLogon=0, DefaultPassword and AutoLogonCount removed),
+win11-app booted from it, 4.3.13 agent (020d1567408f):
+
+    control: windows mapped in dom0 = 0   (qtest shot tar is 0 bytes)
+    control: qrexec identity = nt authority\system
+    control: newest agent log = gui-agent-20260828-103548-4416.log
+
+So the qube is RUNNING and REACHABLE - qrexec answers as SYSTEM through the pre-session policy -
+and dom0 is shown nothing whatsoever. That is exactly the field report ("absolutely nothing is
+visible"), reproduced here for the first time, and it needed no exotic setup: only a Windows
+account that does not log itself in, which is the default for anyone who installs this package on
+a Windows VM they built themselves.
+
+HARNESS NOTES (both cost a run):
+- `qtest push` needs the USER-SESSION file receiver, so it cannot deploy into a guest that is
+  sitting at the sign-in screen. Deploy first, disable autologon second. qready/SYSTEM qrexec is
+  not a substitute for bootwait when the next step needs a session.
+- Parsing `reg query` output: the qrun transcript ECHOES the command, and that echo contains the
+  value NAME. `grep DefaultPassword | sed 's/.*REG_SZ//'` therefore returned the 116-character
+  command line as the "password". It was written back with `reg add /d "<116 chars>"`, which cmd
+  rejected, so the real value (`qubes`, per mgmt/autounattend.xml) survived by luck. Anchor the
+  grep to the value line (`^[[:space:]]+NAME[[:space:]]+REG_SZ`) and sanity-check the length
+  before writing anything back into a guest.
+
+Documented in README under Known limitations, since it is current shipped behaviour whatever the
+owner decides on task #30.
