@@ -52,8 +52,19 @@ echo "All invariants pass. Releasing ${TAG} (MSI ProductVersion ${VER}, agent ${
 mapfile -t ASSETS < <(find "$DIR" -maxdepth 1 -type f \( -name '*.iso' -o -name '*.rpm' -o -name '*.tar.gz' -o -name '*.exe' -o -name 'SHA256SUMS.txt' \))
 [ "${#ASSETS[@]}" -gt 0 ] || die "no release assets found in $DIR"
 
+# --- notes: prefer the written ones -----------------------------------------------------------
+# A release whose notes are a generated one-liner tells the reader nothing about what changed and
+# what was actually verified. If docs/RELEASE-NOTES-<version>.md exists, that is the release text.
+NOTES_FILE="docs/RELEASE-NOTES-${VER}.md"
+if [ -f "$NOTES_FILE" ]; then
+  echo "Using $NOTES_FILE as the release notes."
+  NOTES_ARG=(--notes-file "$NOTES_FILE")
+else
+  NOTES_ARG=(--notes "QWT-NG ${VER}. MSI ProductVersion ${VER} — a real bump over the previous release, so an in-place MajorUpgrade lands cleanly on an existing guest (no uninstall, no PV-disk gate, no reboot). See FINDINGS.md and docs/RELEASE-NOTES for details.")
+fi
+
 gh release create "$TAG" $DRAFT \
   --title "QWT-NG ${VER} (agent ${AGENTSHA})" \
-  --notes "QWT-NG ${VER}. MSI ProductVersion ${VER} — a real bump over the previous release, so an in-place MajorUpgrade lands cleanly on an existing guest (no uninstall, no PV-disk gate, no reboot). See FINDINGS.md and docs/RELEASE-NOTES for details." \
+  "${NOTES_ARG[@]}" \
   "${ASSETS[@]}"
 echo "Published ${TAG}."
