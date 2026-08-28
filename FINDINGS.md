@@ -18957,3 +18957,32 @@ KNOWN GAP SHIPPED WITH IT, task #32: the qrexec-wrapper drain-race fix (core-age
 e5e94b8) is built green in CI and reaches NO guest, because the MSI carries the stock binary and
 release-package does not build core-agent. The -CoreAgentBins staging channel and the guard
 ratchet are in place; wiring it is a separate change with its own e2e.
+
+## 2026-08-28 — CORRECTION: the U15 wrapper fix WAS verified. I quoted a superseded line.
+
+Earlier today I told the owner, and wrote into commit fb34e89's message, that the qrexec-wrapper
+drain fix was "built but not tested" and that the byte-loss probe was still owed. That is WRONG.
+I read the 2026-08-21 entry at FINDINGS:14752 ("STILL NOT CLAIMED AS FIXED: built is not tested")
+and missed that a LATER entry the same day (FINDINGS:14807) supersedes it with the measurement:
+
+    CONTROL, unfixed wrapper D59AB52B2C8F2E09:  9 short bodies in 60 fetches (26/30, 25/30)
+    TEST,    fixed wrapper 6C7068095A952FF1:    0 short bodies in 90 fetches (30/30 x3)
+
+Verified by effect, against a control, on the same guest with the wrapper hash asserted inside
+each run. The fix is proven; what was never done is SHIPPING it - the release path did not build
+core-agent, so every guest kept the stock binary.
+
+Also from that entry, and directly relevant to the release: the FIRST commit (ac33bc9, the wait
+before sending the exit code) is a real defect but on the OUTBOUND direction and cannot explain a
+short client-side receive; the SECOND (e5e94b8) is the root cause - the receive loop treated a
+closed vchan as an empty one, discarding whatever was still in the ring. Linux names that exact
+race in libqrexec/process_io.c. Both are in the fork.
+
+LESSON, and it is the same one as the bootwait mistake: when a topic has several entries in one
+day, read to the END of the day before quoting. A superseded line reads exactly like a current
+one, and quoting it cost the owner a false "unverified" on work that was actually finished.
+
+TRAP CONFIRMED STILL HANDLED: qrexec-wrapper.exe cannot be overwritten from a qrexec call - every
+such call IS that binary - and Install-QwtImproved's bin\ placement catches the sharing violation,
+renames the running image to *.qwt-prev, and copies again. Without that the release would install
+everything except the one binary this work exists to deliver.
