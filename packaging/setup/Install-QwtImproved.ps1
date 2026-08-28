@@ -284,8 +284,17 @@ function Start-XenbusPromptSuppressor {
                 Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue |
                     Stop-Process -Force -ErrorAction SilentlyContinue
             }
-            # nothing pending -> nothing to ask about, even if something restarts the service
-            & reg.exe delete 'HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request' /f /reg:64 *>$null
+            # Nothing pending -> nothing to ask about, even if something restarts the service.
+            # Registry API, not reg.exe: no process spawned per tick, and no stderr to trip over.
+            try {
+                $hk = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+                $sk = $hk.OpenSubKey('SYSTEM\CurrentControlSet\Services\xenbus_monitor', $true)
+                if ($sk) {
+                    if ($sk.GetSubKeyNames() -contains 'Request') { $sk.DeleteSubKeyTree('Request') }
+                    $sk.Close()
+                }
+                $hk.Close()
+            } catch { }
             Start-Sleep -Seconds 1
         }
     }
@@ -338,13 +347,28 @@ function Disable-XenbusMonitor {
     # waiting and asks. With no request there is nothing to ask about, whoever starts the service.
     # (The suppressor loop clears this every second DURING msiexec; doing it here covers every
     # other call site too: stage 1, the uninstall, and the post-install re-assert.)
-    # reg.exe delete FAILS on a key that is not there ("unable to find the specified registry key"),
-    # writing to stderr and exiting non-zero - which in this script became a TERMINATING error and
-    # aborted the install at stage 2 on any guest with no pending request, i.e. the normal case
-    # (measured 2026-08-28: "[FATAL] at Disable-XenbusMonitor ... line 341"). Absence is the
-    # desired state here, not a failure: swallow both streams and the exit code.
-    try { & cmd.exe /c 'reg delete "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request" /f /reg:64 >nul 2>&1' } catch { }
-    $global:LASTEXITCODE = 0
+    # Delete it through the registry API, checking first, rather than shelling out.
+    # reg.exe delete FAILS on a key that is not there ("unable to find the specified registry
+    # key"), writing to stderr and exiting non-zero - which in this script became a TERMINATING
+    # error and aborted stage 2 on any guest with NO pending request, i.e. the normal case
+    # (measured 2026-08-28: "[FATAL] at Disable-XenbusMonitor ... line 341", both chains).
+    # Absence is the desired state, so it must not even look like an error. OpenBaseKey with
+    # Registry64 keeps the same 64-bit view the reg.exe calls here ask for with /reg:64.
+    try {
+        $hklm64 = [Microsoft.Win32.RegistryKey]::OpenBaseKey('LocalMachine', 'Registry64')
+        $svcKey = $hklm64.OpenSubKey('SYSTEM\CurrentControlSet\Services\xenbus_monitor', $true)
+        if ($svcKey) {
+            if ($svcKey.GetSubKeyNames() -contains 'Request') {
+                $svcKey.DeleteSubKeyTree('Request')
+                Write-Log 'cleared a pending PV reboot request (xenbus_monitor\Request)'
+            }
+            $svcKey.Close()
+        }
+        $hklm64.Close()
+    } catch {
+        # Never fatal: not clearing the request costs a prompt, failing here costs the install.
+        Write-Log "could not clear xenbus_monitor\Request: $($_.Exception.Message) (continuing)" 'WARN'
+    }
     $svc = Get-Service xenbus_monitor -ErrorAction SilentlyContinue
     if ($svc) {
         & sc.exe config xenbus_monitor start= disabled 2>&1 | Out-Null
