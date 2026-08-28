@@ -338,7 +338,13 @@ function Disable-XenbusMonitor {
     # waiting and asks. With no request there is nothing to ask about, whoever starts the service.
     # (The suppressor loop clears this every second DURING msiexec; doing it here covers every
     # other call site too: stage 1, the uninstall, and the post-install re-assert.)
-    & reg.exe delete 'HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request' /f /reg:64 2>$null | Out-Null
+    # reg.exe delete FAILS on a key that is not there ("unable to find the specified registry key"),
+    # writing to stderr and exiting non-zero - which in this script became a TERMINATING error and
+    # aborted the install at stage 2 on any guest with no pending request, i.e. the normal case
+    # (measured 2026-08-28: "[FATAL] at Disable-XenbusMonitor ... line 341"). Absence is the
+    # desired state here, not a failure: swallow both streams and the exit code.
+    try { & cmd.exe /c 'reg delete "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request" /f /reg:64 >nul 2>&1' } catch { }
+    $global:LASTEXITCODE = 0
     $svc = Get-Service xenbus_monitor -ErrorAction SilentlyContinue
     if ($svc) {
         & sc.exe config xenbus_monitor start= disabled 2>&1 | Out-Null
