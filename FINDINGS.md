@@ -19170,3 +19170,31 @@ entry for the PV drivers rests on the same false premise and should be re-read w
 RULE FOR ME: do not describe any part of this package as "upstream's" or "signed by someone we
 cannot match" without checking. Both excuses were used today to justify shipping stock bytes and
 building overlays around them.
+
+## 2026-08-28 — the WIN10 chain's "failures" were my harness, and the wrecked template was my kills
+
+TWO SELF-INFLICTED PROBLEMS, both mistaken for product defects while they were happening:
+
+1. `wait_install` RETURNS ON THE STAGE-1 REBOOT ("0 = ended (reboot or completed)", its own
+   contract). A guest that already has testsigning on installs in ONE stage with no reboot - that
+   is the WIN11 golden image, which is why that chain passed. The WIN10 image takes the TWO-stage
+   path, so the harness read C:\qwt-improved-install.log while the guest was rebooting into stage
+   2 and got NOTHING: a 0-byte log and every assertion failing blank, twice, reported as "install
+   did not finish". Fixed: after wait_install, poll until the guest is back AND 'stage2-install'
+   appears in the log before judging anything.
+
+2. THE TEMPLATE ENDED IN AUTOMATIC REPAIR BECAUSE I HARD-KILLED IT, repeatedly, while it was
+   booting or installing. Repeated forced power-off during servicing is precisely how Windows
+   gets there. Its disk is then unreachable for telemetry - no log on it is worth another cycle,
+   and the chain re-clones from win10-clean anyway. Fixed: stop_vm gives a clean shutdown 480s
+   and announces loudly when it resorts to a kill.
+
+ALSO CORRECTED: the xenbus assertion failed on a pending Request. The installer's own comment says
+a demand that still matters is RE-FILED by the driver on the next boot that needs it, and the owner
+observed the notice twice as INFORMATIONAL. A pending request with the monitor DISABLED cannot
+produce a modal, which is the property that matters. The check now judges the service state and
+reports the request count.
+
+STANDING LESSON: when one chain passes and another fails, compare what differs about the CHAINS
+before concluding anything about the code. Here the difference - one-stage vs two-stage install -
+explained the whole thing, and I instead spent cycles theorising about the fix being incomplete.
