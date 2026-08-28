@@ -131,6 +131,10 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\disable-session-lock.ps1') 'session-
 # screen: no qrexec session for dom0 to use, and in seamless mode nothing displayed at all.
 # Validates the credentials before writing anything and stores the password as an LSA secret.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\set-autologon.ps1') 'autologon arming script') $OutDir -Force
+# Reboot audit: on an AppVM the System log dies with every restart, taking Event 1074 (who asked
+# for it) with it - so an unattended reboot cannot be told apart from a dom0-requested one after
+# the fact. Event-triggered tasks copy those records onto the private volume as they are written.
+Copy-Item (Need (Join-Path $RepoRoot 'guest\install-reboot-audit.ps1') 'reboot-cause audit installer') $OutDir -Force
 # IDD-only activator, run by `install.cmd /iddonly` to add/activate the IddCx driver on a guest
 # that already has QWT (no MSI, no version/PV gate). Uses idd-driver/ staged below.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activator') $OutDir -Force

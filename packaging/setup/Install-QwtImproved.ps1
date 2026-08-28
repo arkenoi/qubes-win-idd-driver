@@ -1526,6 +1526,29 @@ function Invoke-Stage2 {
         $script:Result.detail.session_lock = 'not in payload'
     }
 
+    # --- reboot audit: keep the evidence of WHY a restart happened ----------------------
+    # An AppVM's System log is on the volatile C:, so Event 1074 - the record naming who asked
+    # for a restart - is destroyed by the restart it describes. Without it a guest that reboots
+    # itself is indistinguishable from one dom0 asked to reboot, and those have opposite fixes.
+    $audit = Join-Path $Root 'install-reboot-audit.ps1'
+    if (Test-Path -LiteralPath $audit) {
+        Write-Log 'installing the reboot-cause audit (event-triggered, writes to the private volume)'
+        try {
+            $ao = & $audit 2>&1
+            foreach ($l in @($ao | Select-Object -Last 5)) { Write-Log "  $l" }
+            $tr = @($ao) | Where-Object { $_ -match '=== RESULT === changed=(\d+) failed=(\d+)' } | Select-Object -Last 1
+            if ($tr -match 'changed=(\d+) failed=(\d+)') {
+                $script:Result.detail.reboot_audit = "changed=$($Matches[1]) failed=$($Matches[2])"
+            } else { $script:Result.detail.reboot_audit = 'ran, no result trailer' }
+        } catch {
+            Write-Log "reboot audit install failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+            $script:Result.detail.reboot_audit = "error: $($_.Exception.Message)"
+        }
+    } else {
+        Write-Log 'install-reboot-audit.ps1 not in payload - reboot causes will not be recorded' 'WARN'
+        $script:Result.detail.reboot_audit = 'not in payload'
+    }
+
     # --- autologon: the qube must be able to come back by itself ------------------------
     #
     # A Windows guest that stops at the sign-in screen is not merely inconvenient, it is GONE:
