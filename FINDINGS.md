@@ -20581,3 +20581,42 @@ privileged context; only THIS dev qube's policy excludes it. A local-endpoint be
 tested and is genuinely blocked, but by the netvm's inter-VM drop, not by anything about visibility:
 this qube serves on 10.137.0.63:8899, the guest's own firewall was already `accept all`, adding an
 explicit accept rule changed nothing, and **zero requests reached the listener**. Rule reverted.
+
+## 2026-08-29 — DEFECT: an AppVM on a MoveUsers template has no user profile on its fresh private volume
+
+Found while running NET-2 on the rebuilt WIN10 AppVM path (`win10-app` on `win10-tpl`, template built
+from a current-package guest, applier verified present on both).
+
+**Symptom.** `qtest run` works; **every `qtest push` fails**:
+
+    wmain: getting Documents path failed with error 0x80070002: The system cannot find the file specified.
+    qrexec-client-vm: vchan connection closed early
+
+so nothing can be pushed to the guest — no probes, no health-check, no payload.
+
+**Root cause, measured in the guest:**
+
+    USERPROFILE = C:\Windows\system32\config\systemprofile     (qrexec runs as SYSTEM by policy)
+    Q:\ contains ONLY:  "Qubes Logs",  qwtng-netsetup.log       <-- NO Users directory
+    C:\Users listing    -> "Access denied" (reparse point)
+
+QWT's **MoveUsers** relocates `C:\Users` onto the PRIVATE volume. A template carries that relocated
+tree on ITS private volume — but **an AppVM gets a FRESH, EMPTY private volume**, so `Q:\Users` does
+not exist, the reparse target is missing, and the profile directory the file-copy service resolves
+("Documents") cannot be found. The AppVM still boots and autologon still produces an Active session
+(`query user` shows one), which is why VMShell works and only pushes fail — a partial-function state
+that looks healthy from the outside.
+
+**Not self-healing:** an AppVM's private volume persists across reboots, so rebooting does not
+create the tree.
+
+**Scope note, and why this was not seen before:** `win11-app` pushes fine and ran NET-2 earlier, so
+this is not universal — it depends on how that template's Users relocation and private volume were
+set up. The WIN10 template was built today by `mgmt/clone-to-template.sh` from a MoveUsers guest;
+the WIN11 one predates this session. **Which template configurations produce the broken state is not
+yet established** — that is the next thing to determine, not something to guess at.
+
+**Consequence for the campaign:** the WIN10 AppVM path (NET-2/NET-5 on `win10-app`) is BLOCKED on
+this defect, not on the PV NIC. It is a genuine product defect in the template→AppVM path, exactly
+the configuration forum post 56 describes, and it must be fixed rather than worked around by
+pushing files a different way.
