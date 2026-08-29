@@ -715,7 +715,11 @@ function Uninstall-ExistingQwt {
         try {
             $proc = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
                 '/x', $p.ProductCode, '/qn', '/norestart',
-                'REBOOT=ReallySuppress', '/l*v+', "`"$log`""
+                # '!' FLUSHES each line to disk instead of buffering. Without it a mid-install
+                # restart loses the buffered tail - which is exactly the part that says what was
+                # happening when the guest went down, and no MSI log from a failing run has ever
+                # been recovered here (FINDINGS 2026-08-29, dossier gaps). Slower, and worth it.
+                'REBOOT=ReallySuppress', '/l*v+!', "`"$log`""
             )
         } finally {
             Stop-XenbusPromptSuppressor $unGuard
@@ -1323,7 +1327,12 @@ function Invoke-Stage2 {
     # build time, not patched over here.
     $msiArgs = @('/i', "`"$msi`"", '/qn', '/norestart', "ADDLOCAL=$addlocal")
     if ($script:SameVersionReinstall) { $msiArgs += 'REINSTALL=ALL' }
-    $msiArgs += @('REBOOT=ReallySuppress', 'REINSTALLMODE=amus', 'MSIFASTINSTALL=7', '/l*v', "`"$msiLog`"")
+    # '/l*v!' - the '!' flushes every line to disk rather than buffering it. This is the install
+    # that reboots the guest mid-flight when it goes wrong, so the buffered tail is precisely the
+    # evidence that has never survived: the dossier records that NO MSI verbose log from any failing
+    # run was ever captured. Unbuffered logging is the difference between diagnosing the brick and
+    # guessing at it again.
+    $msiArgs += @('REBOOT=ReallySuppress', 'REINSTALLMODE=amus', 'MSIFASTINSTALL=7', '/l*v!', "`"$msiLog`"")
     Write-Log "running msiexec ADDLOCAL=$addlocal REINSTALL=$(if($script:SameVersionReinstall){'ALL'}else{'(none)'}) (verbose log: $msiLog)"
     # BEFORE msiexec, not after. The running xenbus_monitor pops its modal Yes/No the moment a
     # PV driver install asks for a reboot - i.e. DURING this msiexec. Observed live on

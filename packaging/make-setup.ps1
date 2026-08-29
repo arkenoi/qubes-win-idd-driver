@@ -254,7 +254,16 @@ foreach ($u in 'install-updater-agent.ps1', 'qubes-windows-update.ps1', 'qubes-u
 # (default ON), reading the qube class LIVE from qubesdb. So pvnic-selfprime.ps1 must be on the
 # medium. qubesdb-read.ps1 is the canonical reliable-read helper (a guest diagnostic; the
 # installer and updater carry inline mirrors of it). health-check.ps1 is the guest self-check.
-foreach ($g in 'pvnic-selfprime.ps1', 'qubesdb-read.ps1', 'health-check.ps1') {
+# reboot-dialog-watch.ps1 and qwt-state.ps1 added 2026-08-29. Both are ACCEPTANCE INSTRUMENTS and
+# an instrument that does not reach the guest measures nothing:
+#   * reboot-dialog-watch.ps1 is the only thing that watches for a premature reboot prompt. Until
+#     now "no dialog appeared" was unfalsifiable - nothing ever looked - which is how a suppressor
+#     race got asserted and then retracted (f530d2c). It must be ON THE MEDIUM because it has to be
+#     running BEFORE and ACROSS the install, including on a guest that a push cannot reach mid-run.
+#   * qwt-state.ps1 reads the precondition through the same signals the installer branches on. It
+#     ships so the state can be read without a working push path, e.g. after a failed install.
+foreach ($g in 'pvnic-selfprime.ps1', 'qubesdb-read.ps1', 'health-check.ps1',
+               'reboot-dialog-watch.ps1', 'qwt-state.ps1') {
     Copy-Item (Need (Join-Path $RepoRoot "guest\$g") "guest payload ($g)") $OutDir -Force
 }
 
