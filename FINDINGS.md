@@ -20857,3 +20857,53 @@ not reproduce it. What IS established: it is not the install (completed and veri
 PV NIC (bound and verified up before), and not eval-license expiry (checked). The IDD `WUDFRd` load
 failure at boot is a separate, real observation worth its own investigation — it is OUR driver
 failing to load, and it would explain the absent windows.
+
+## 2026-08-29 — same-version reinstall: DEFECT FOUND AND FIXED (validated against the real broken state)
+
+The last cell (`win10-clean`, 4.3.15 over 4.3.15) exposed a real defect on the same-version reinstall
+path — the path the acceptance protocol lists as never covered.
+
+**Sequence, from the guest's own log:**
+
+    18:42:45  force-terminating 1 x gui-agent.exe
+    18:42:49  leftover sweep ... removed [gui-agent.exe gui-watchdog.exe]     <- installer deletes them
+    18:42:51  running msiexec ADDLOCAL=...,Gui,... REINSTALL=ALL
+    18:43:05  FATAL: msiexec reported success but gui-agent.exe does not exist
+
+**Root cause, from the MSI verbose log:**
+
+    Feature: Gui;  Installed: Absent;  Request: Null;  Action: Null
+
+`REINSTALL=ALL` acts ONLY on features Windows Installer records as already installed. A feature
+recorded **Absent** is skipped outright, and `ADDLOCAL` is overridden while `REINSTALL` is present —
+so msiexec exits 0 having installed nothing. Combined with the leftover sweep, which deliberately
+deletes the binaries first, the guest is left **with no agent at all after a "successful" install.**
+
+**The installer's own post-install existence check caught it and refused to report success.** That
+guard is why this was found rather than shipped.
+
+**Fix:** on the same-version path, if `gui-agent.exe` is missing after msiexec, re-run ONCE with
+`ADDLOCAL` only and no `REINSTALL` — with no REINSTALL property, ADDLOCAL is honoured and an Absent
+feature installs normally. Bounded to one retry; the same existence test still decides.
+
+**Validated against the genuine defect-present state**, not a synthetic one — the guest was sitting
+in exactly the broken condition when the fix ran:
+
+    ADDLOCAL-only retry exit=3010
+    gui-agent.exe recovered by the ADDLOCAL-only retry
+    INSTALL COMPLETE
+
+then after reboot, `health-check ok = True`, zero genuine failures, all four PV drivers started,
+emulated NIC unplugged, ip 10.137.0.70 with DNS resolving.
+
+### ACCEPTANCE CAVEAT — this run does NOT count as acceptance
+
+Owner standing rule: *"nothing is accepted until reliably tested e2e with published distribution
+package"*. This validation ran on a **locally patched payload** (`4.3.15+agent.dd5a817b3aee+instr.62d2ed6`)
+— the CI package with my fix hand-staged into it. It proves the fix works; it is **not** an accepted
+cell. The fix is pushed so CI builds it, and the cell must be re-run against the **published**
+artifact before it counts.
+
+Status of the other five cells on this point: all were run from CI-downloaded packages
+(`898910d` via `gh run download`, or a template lineage built from one), so they do not carry this
+caveat — but a final pass on the newest published package is the honest bar for all six.
