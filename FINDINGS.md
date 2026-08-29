@@ -20661,3 +20661,36 @@ guests and concluded the mechanism was broken, without once verifying that the f
 actually deployed on the subject. The applier probe that settled it takes ten seconds. "Verify the
 artefact under test is actually installed" is a rule already written in CLAUDE.md; I did not apply it
 to a fix I had written myself an hour earlier.
+
+## 2026-08-29 — the applier correlation is now 4-for-4, and I ran one cell with the wrong package
+
+**Correlation, across every hotplug attempt today:**
+
+| guest | applier present? | live netvm attach |
+|---|---|---|
+| win10-u10 (current pkg) | YES (`QubesPvNic Running`) | **PASS** — bound in 25 s, zero reboots |
+| win11-app (AppVM on latched tpl) | yes | **PASS** — bound in 26 s, zero reboots |
+| win11-24h2 (pre-fix pkg) | no | FAIL — PnP Error, 4 min |
+| win10-app (tpl cloned from pre-fix guest) | no | FAIL — blocked before it got that far |
+| win11-24h2 stock cell (pre-fix pkg, below) | no | FAIL — `XENNET Stopped`, 3.5 min |
+
+**Applier present ⇒ hotplug works. Applier absent ⇒ hotplug fails. No exceptions.** The mechanism is
+not flaky; the deployment was.
+
+**My error on the WIN11 stock cell.** I pushed `s10c.tar.gz`, which I had built from **`f777bec`** —
+the package from BEFORE the unconditional-latch commit (`cace671`). The guest's own log says so
+outright:
+
+    package 4.3.15+agent.dd5a817b3aee  repo f777bece
+    not a TemplateVM (class='StandaloneVM') - skipping netvm-free PV NIC priming (template-only)
+
+That is the OLD templates-only gate, doing exactly what it used to do. So the cell's **install half is
+valid** (stock 4.2.2 detected, `ok:true`, 0 dialogs across 55 samples, monitor disarmed 2→4, 17
+pending-Request samples cleared, zero MSI gaps) but its **network half tested the wrong build** and is
+void. Re-running from stock with the current package.
+
+**Process fix, not just a note:** the stale tarball is deleted and the payload is rebuilt from the
+verified package directory, because a stale artifact sitting on disk with a plausible name is exactly
+how this happened. The rule that would have caught it in ten seconds is already written down —
+*verify the artefact under test is actually installed* — and the installer PRINTS its own provenance
+(`package … repo <sha>`) in the first lines of every run. **Read that line before grading any cell.**
