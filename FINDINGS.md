@@ -21251,3 +21251,58 @@ stop asserting a cursor for that window; on enter: the converse), and the Linux 
 XCrossingEvent is the reference. Recorded now because it was found now, and because an unhandled
 input-path message flooding the log at 10/s is worth knowing about regardless of whether it turns
 out to be the artifact's cause.
+
+## 2026-08-30 — the unbordered system dialog: FIXED and owner-confirmed; two NEW defects behind it
+
+**FIXED, confirmed by the owner on screen ("now it is good!").** The Windows Update dialog was
+reaching dom0 override-redirect - no trust border. Cause, measured with `guest/dialog-catch.ps1`:
+
+    proc=MusNotificationUx  class='Shell_SystemDialogProxy'  title="We've got an update for you"
+    style=0x94000000  exstyle=0x00040000  owner=0
+    caption=0 sysmenu=0 popup=0 toolwindow=0 noactivate=0 topmost=0 layered=0 cloaked=0
+
+`IsPopup()` required WS_CAPTION *or* (WS_SYSMENU **and** WS_EX_APPWINDOW). This window sets
+WS_EX_APPWINDOW but not WS_SYSMENU, so it fell to the popup branch. Fix: accept WS_EX_APPWINDOW
+alone, excluding tool windows and non-activatable windows. Verified: the running agent's hash
+matches the built binary (9EB778F96A6D41B0), and the `unknown msg type 127` flood went 185 -> 0.
+
+Inline app popups are untouched, as the owner required: dropdowns, menus and tooltips are owned
+transients that never request a taskbar button, so they carry no WS_EX_APPWINDOW. Confirmed against
+every window measured on the guest - Shell_TrayWnd (0x88), Progman (0x80), UWP CoreWindows
+(0x00200000), DWM listeners (0x08200080) - NONE carries it.
+
+### NEW defect 1: the dialog cannot be moved - it jumps back to its original position
+
+Owner-reported. Not yet root-caused. `HandleConfigure` already declines to apply a dom0 move for
+maximized windows ("either bounces (the window snaps back) or drags the whole..."), so a
+snap-back path is known to exist in this area; whether this dialog hits it, or re-centres itself,
+is unmeasured. Do not guess - instrument the configure path for this window.
+
+### NEW defect 2: the dialog is MODAL, and our modality detection CANNOT see it
+
+Owner: *"dialog is modal! attempt to move focus away from it causes weird chiming and no events
+passed to other windows"*.
+
+Modality is detected in `main.c:1445-1456` by exactly one pattern - the classic Win32 one:
+
+    HWND owner = GetWindow(window, GW_OWNER);
+    if (owner) { entry->ModalParent = (owner is WS_DISABLED) ? owner : NULL; }
+
+and `ModalParent` is what becomes `transient_for` in the MSG_MAP body (`send.c:832`).
+
+**MEASURED, while the dialog was blocking input:** the dialog has `owner=0x0`, and enumerating every
+visible top-level window shows **all of them `enabled=True`** - Explorer x3, the console, the
+CoreWindows, Progman. Nothing is WS_DISABLED anywhere.
+
+So this dialog blocks input WITHOUT an owner and WITHOUT disabling anything: our detection cannot
+fire for it under any circumstances, `transient_for` goes out as 0, and dom0 is never told the guest
+is input-blocked. The user then clicks another guest window in dom0, the guest refuses the input,
+and Windows emits the rejection beep - the "weird chiming".
+
+**Not fixed, and deliberately not fixed unilaterally.** Expressing "modal with no owner" (X11's
+_NET_WM_STATE_MODAL without a transient_for) is GUI-protocol semantics, which CLAUDE.md Phase 3
+requires be designed and reviewed before any code. Options to put to the owner:
+ 1. detect the blocked state behaviourally rather than structurally (a foreground window that
+    rejects activation of others), and announce transient_for against the guest's main window;
+ 2. extend the hint path (MSG_WINDOW_HINTS exists and is unused here) to carry a modal flag;
+ 3. accept it, and treat a system-modal guest dialog as a known seamless-mode limitation.
