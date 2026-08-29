@@ -21213,3 +21213,41 @@ does reach the observed conditions.
 StandaloneVM-with-internet carve-out should exist at all. It contradicts the recorded posture that
 dom0 owns every install, and dom0's `qubes-vm-update` can drive a StandaloneVM. Until that is
 settled, testbed StandaloneVMs must keep NoAutoUpdate=1 regardless of netvm.
+
+## 2026-08-30 — MSG_CROSSING (127) is NOT HANDLED by the Windows agent; candidate cause of cursor artifacts
+
+Found from an owner observation while Explorer was on screen: *"explorer DID appear. but
+override-redirect did not go and while it was visible the window was full of occlusion and cursor
+artifacts"*. (The override-redirect half is expected - the IsPopup fix was still building and was
+not deployed; that window was the pre-fix baseline.)
+
+The agent log was filling with, at roughly 10 lines per second while the pointer moved:
+
+    HandleServerData: got unknown msg type 127, ignoring
+
+**127 is MSG_CROSSING.** From the vendored protocol header
+(`upstream/ro/qubes-gui-common/include/qubes-gui-protocol.h`): `MSG_MIN = 123`, so KEYPRESS=124,
+BUTTON=125, MOTION=126, **CROSSING=127**, FOCUS=128.
+
+**It is unimplemented, not handled elsewhere.** `grep -rn MSG_CROSSING` over the whole agent returns
+NOTHING. `MSG_KEYPRESS`, `MSG_BUTTON` and `MSG_MOTION` are dispatched at
+`gui-agent/vchan-handlers.c:1293/1296/1299`; there is no CROSSING case, so every pointer
+enter/leave notification from dom0 falls through to the default branch at line 1364.
+
+**Why this plausibly produces the reported artifacts.** MSG_CROSSING carries EnterNotify/LeaveNotify
+- it is how the agent learns the pointer has ENTERED or LEFT a window. Dropping it means the guest
+is never told the pointer left: hover state, cursor shape ownership and capture are never released
+for the window the pointer has departed. Stale hover highlighting and a cursor still being drawn for
+a window the pointer is no longer over is exactly "cursor artifacts". UNPROVEN as the cause - stated
+as the leading hypothesis, not a conclusion.
+
+**A second, independent cost: the log flood itself.** A LogWarning per crossing event, at input
+rate, is file I/O on the input path - directly relevant to Track A, where the whole point is
+measuring what makes the guest feel slow. 185 warnings had accumulated in a 35 KB log largely from
+this and from `GetRealWindowRect ... inverted DWM bounds ... rejecting`.
+
+**Not yet fixed.** The right handler behaviour needs deciding (on leave: release hover/capture and
+stop asserting a cursor for that window; on enter: the converse), and the Linux agent's treatment of
+XCrossingEvent is the reference. Recorded now because it was found now, and because an unhandled
+input-path message flooding the log at 10/s is worth knowing about regardless of whether it turns
+out to be the artifact's cause.
