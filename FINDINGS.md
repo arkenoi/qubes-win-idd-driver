@@ -19920,3 +19920,46 @@ Security" contains neither "restart" nor "reboot". It was caught by the class+pr
 **Next:** the fix is to make the driver publisher trusted BEFORE the MSI installs drivers, so Windows
 does not prompt at all. Verification must show the defect-present case first (this run) and then its
 absence, on the same cell.
+
+## 2026-08-29 — the dialog's cause: the MSI's PV driver CATALOGS do not match their files (0xE0000247)
+
+Second uninjected run on `win10-u10`, same guest, one variable changed (the cert fix below).
+**My cert change is NOT the fix and I am not claiming it as one.**
+
+**What the second run proved.** With `Import-PayloadCerts` importing all 8 payload certs before
+msiexec — logged as `trusted 8 payload certs (Root + TrustedPublisher) [stage 2, before msiexec]` —
+the *same* "Windows Security" dialog appeared **1.3 s** after `InstallDriverPackages` (05:00:36.2 ->
+dialog 05:00:37.5) and stayed for the whole 1170 s gap. 518 of 569 samples. So trusting the
+publisher does not stop it.
+
+**What the cert change did achieve**, measured: `xenvif.sys`/`xenvif.cat` went from
+`status=UnknownError` to `status=Valid, "Signature verified"`, and the signer
+`923F9378A8E6176F7C99CA882B12C852F55225C8` is now in TrustedPublisher (`PVSIGNER_IN_TP=1`). It was
+a real gap — that cert lives in `pv-drivers\` and was imported only AFTER msiexec — and it is worth
+keeping. It is simply not the cause.
+
+**The actual cause, from setupapi.dev.log** (3.6 MB, the authoritative source, never read before):
+
+    sig: Verifying file against specific (valid) catalog failed.
+    sig: Verifying file against specific Authenticode(tm) catalog failed.
+    sig: Signer Score = 0x80000000 (Unsigned)
+    !!! sig: Driver package failed signature validation. Error = 0xE0000247
+    !!! sto: Failed to import driver package into Driver Store. Error = 0xE0000247
+
+for exactly three packages, all from the MSI's own driver payload
+(`C:\Program Files\Qubes Tools\bin\pvdrivers\...`):
+
+    xenvif.inf    xennet.inf    xenvbd.inf
+
+The `.cat` verifies as a signature (Authenticode is fine now) but the **per-file hashes inside the
+catalog do not match the files it ships with** — that is precisely what "verifying file against
+specific catalog failed" plus `Signer Score = Unsigned` means. An unsigned-looking driver package is
+what makes Windows raise the trust prompt, and unattended that prompt is an infinite hang.
+
+Note `xenbus.inf` is NOT among the failures, so the `patch-xenbus-inf.ps1` INF rewrite (29f43a7) is
+not implicated by this evidence — a hypothesis I formed and then had to drop.
+
+**Status.** The HANG mechanism is proven twice, timestamped, uninjected. The catalog mismatch is
+proven from setupapi. What is NOT yet proven is *why* the catalogs mismatch — that is a package-BUILD
+question (are the `.cat` files regenerated after the `.sys` files are signed?), answerable offline
+against the MSI contents without a guest. That is the next step, and it is where the real fix lives.
