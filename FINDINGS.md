@@ -20288,3 +20288,63 @@ to `Transient` — queued qrexec calls auto-starting it, the documented pattern.
 restoring `qrexec_timeout` to 6000 immediately after the first drain, so the next queued call re-pinned
 it for 100 minutes. Setting the timeout to 15 **before** the removal and leaving it there made the
 removal complete in 7 seconds. Pool went 82.1% -> 80.0% (163 GB free) once it finally landed.
+
+## 2026-08-29 — cell 6: FRESH install from the vendor ISO, two-stage path. PASSES, health-check ok:true
+
+`mgmt/reprovision-usb.sh win10-u10 loop0 loop9` — untouched Win10 22H2 vendor ISO plus the release
+answer stick, rebuilt with the fixed CI package (MSI hash verified identical to `pkg2`, installer
+verified to carry both `Import-PayloadCerts` and `Write-PreconditionSnapshot`). Install 1108 s.
+
+**It genuinely took the two-stage path** — the only cell that does, and the one no chain had ever
+covered:
+
+    06:33:28 run id: 2273ba1ab1fe
+    06:33:54 testsigning is NOT active in this boot -> stage 1
+    06:33:56 trusted 8 payload certs (Root + TrustedPublisher) [stage 1]
+    06:33:56 testsigning enabled for the NEXT boot
+             === RESULT === stage1-prepare, ok:true, reboot_needed:true
+    -- reboot --
+    06:36:32 run id: 52fae9d15508
+    06:37:24 testsigning is ACTIVE in this boot -> stage 2
+    06:37:26 trusted 8 payload certs (Root + TrustedPublisher) [stage 2, before msiexec]
+    06:38:53 INSTALL COMPLETE
+
+Two distinct run-ids, one per stage, exactly as designed — and the cert fix fires in BOTH stages.
+After the install `BUSTYPE=ATA` (emulated), and after the handover reboot `BUSTYPE=SCSI`: the PV
+disk handover completed. health-check: **ok = True**.
+
+**A trap I walked into and the builder had already documented.** The first attempt sat idle for 26
+minutes. Looking at the pixels (not the logs) showed Windows Setup's interactive locale picker —
+`build-answer-stick.sh`'s header warns that a locale mismatch makes Setup reject the answer file
+SILENTLY, "indistinguishable from 'the answer file was never found'", and that it cost a full
+debugging cycle on 2026-08-07. `LOCALE` defaults to **en-US** while the media is
+`Win10_22H2_EnglishInternational` = **en-GB**. Rebuilt with `LOCALE=en-GB`; the guest went from 1 s
+CPU per 40 s (idle at a prompt) to 45 s per 40 s (actually installing). The tell was the CPU rate,
+and the proof was the screenshot.
+
+## ALL SIX CELLS — final tally, all against the same unmodified CI package (f777bec)
+
+| # | cell | precondition | install | dialogs | health-check |
+|---|---|---|---|---|---|
+| 1 | WIN10 stage-2 | no QWT, monitor Disabled | COMPLETE 49 s | 0/61 | **ok:true** |
+| 2 | WIN11 25H2 upgrade | QWT 4.3.9, Disabled | COMPLETE 72 s | 0/46 | 12/15 |
+| 3 | WIN11 24H2 armed | QWT 4.3.1, **Auto+Running** | COMPLETE | **0/88** | 12/15 |
+| 4 | WIN10 armed | QWT 4.3.2, **Auto+Running** | COMPLETE 80 s | 0/72 | **ok:true** |
+| 5 | WIN10 **true stock** | **QWT 4.2.2 provisioned**, Auto+Running | COMPLETE 90 s | 0/43 | **ok:true** |
+| 6 | WIN10 **fresh, two-stage** | bare vendor ISO | COMPLETE, both stages | (no watcher) | **ok:true** |
+
+**Six of six installs completed. Zero hangs. Zero premature reboot dialogs across 310 watcher
+samples on five guests**, including all three armed-monitor cases where the pending Request was
+raised and cleared.
+
+### What is NOT proven, stated plainly
+
+- **Network is not demonstrated anywhere.** Every guest runs `netvm=''` because CLAUDE.md forbids
+  networking on the test VM, so there is no vif for the PV NIC to bind to. On cells 1, 4, 5 and 6
+  health-check grades this `na` and still returns ok:true; on cells 2 and 3 the same condition reads
+  as three FAILs only because those guests carry KM-TEST Loopback Adapters that defeat the
+  not-applicable predicate. "All drivers and network present" is therefore met for the bus,
+  interface, disk and display stacks and UNMET for the NIC — by rule, not by defect.
+- **Cell 6 has no dialog-watcher data.** The install runs unattended at first logon, before a watcher
+  can be armed. Its evidence for "no dialog" is that both stages completed unattended, which a modal
+  prompt would have prevented — weaker than the direct measurement the other five have.
