@@ -21335,3 +21335,30 @@ at the full size and no in-guest partition resize is needed for new provisions.
 behind - Qubes said so plainly ("Online resize of volume ... failed (you need to resize filesystem
 manually)"). Resized in-guest with Resize-Partition: Q: went 1.98 GB -> 19.98 GB, 19.68 GB free.
 Worth remembering: on an existing guest, `qvm-volume extend` alone changes nothing Windows can see.
+
+## 2026-08-30 — the PV console BINDS: DEV_CONS err=28 -> err=0, first time in this project
+
+Owner asked "console?". Checked rather than assumed, and the first answer was the honest negative:
+`win10-clean` was installed from the `fdd4700` (4.3.15) ISO, which predates the xencons wiring, so
+it read `DEV_CONS err=28`, no `xencons.sys`, and no `pv-drivers\xencons.inf` in its installed
+package. Built and shipping is not the same as installed.
+
+Side-loaded the 4.3.16 artifact's xencons payload (diagnostic install, NOT acceptance) to de-risk
+the matrix before six cells depend on it:
+
+    before:  XENBUS\VEN_XP0001&DEV_CONS\_  err=28  svc=(none)
+    after:   XENBUS\VEN_XP0001&DEV_CONS\_  err=0   svc=xencons  name="Xen PV Console"
+             C:\Windows\System32\drivers\xencons.sys present, service Running
+
+Verified the DEVICE, not pnputil's word for it - this project has a recorded trap where pnputil
+prints "Driver package added successfully" for a package that did not land.
+
+**Consequences.** The whole chain works: build from the pinned xenbits SHA, Inf2Cat, test-signing,
+signer-cert import into Root/TrustedPublisher, pnputil install, device bind. It also validates the
+health-check change made earlier today - dropping the `DEV_CONS:28` allowlist in favour of a real
+`pv_console_bound` assertion - which would otherwise have failed every cell.
+
+**Still unconfirmed, and only the owner can confirm it:** that `xl console <vm>` from dom0 actually
+produces readable output. This qube has no dom0 shell. That is the half that matters for the wedge,
+since the console is the only channel that does not die with qrexec, window capture and the event
+log.
