@@ -98,16 +98,33 @@ log "output: $OUT"
 
 st=$(state)
 if [ "$st" != "Running" ]; then log "$VM is $st - starting"; "$QTEST" start >>"$OUT/hunt.log" 2>&1; sleep 25; fi
-if ! alive; then
-	log "ABORT: qrexec not answering before the soak started. A guest that is already sick"
+# Preflight liveness, RETRIED. A single probe is not enough to call a guest sick: right after a
+# previous soak is torn down its in-flight qrexec calls are still draining, and a lone 30 s
+# probe into that backlog fails on a perfectly healthy guest. That exact false negative aborted
+# a run on 2026-08-29 seconds after the preceding soakers were killed - the guest answered
+# immediately when asked again. Give it several tries before declaring anything.
+ok=0
+for attempt in 1 2 3 4 5; do
+	if alive; then ok=1; break; fi
+	log "preflight probe $attempt/5 failed - waiting for any qrexec backlog to drain"
+	sleep 30
+done
+if [ "$ok" -ne 1 ]; then
+	log "ABORT: qrexec did not answer in 5 attempts over ~2.5min. A guest that is already sick"
 	log "       cannot measure a provocation."
 	exit 1
 fi
 
-# Record the pre-soak process count, so the heartbeat can be compared against the dump's 38.
-"$QTEST" run "powershell -ep bypass -c \"(Get-Process qrexec-client-vm,qrexec-wrapper -ErrorAction SilentlyContinue).Count\"" \
-	> "$OUT/procs-before.txt" 2>>"$OUT/hunt.log"
-log "qrexec bridge processes before soak: $(tr -d '\r\n' < "$OUT/procs-before.txt" | tail -c 20)"
+# Count the qrexec bridge processes, so the soak's concurrency can be compared against the
+# 38 seen in the dump at freeze time. MARKER-DELIMITED: qtest run goes through cmd, so raw
+# stdout carries the interactive banner and prompt and a bare number cannot be picked out of
+# it - the first version of this probe logged "C:\Windows\system32>" as the count.
+bridge_procs(){
+	timeout 40 "$QTEST" run "powershell -ep bypass -c \"'QBP:' + @(Get-Process qrexec-client-vm,qrexec-wrapper -ErrorAction SilentlyContinue).Count\"" 2>/dev/null \
+		| tr -d '\r' | sed -n 's/^QBP:\([0-9][0-9]*\)$/\1/p' | tail -1
+}
+before=$(bridge_procs)
+log "qrexec bridge processes before soak: ${before:-UNREADABLE}"
 
 # --- the soak -------------------------------------------------------------------------
 # Each iteration is one full qrexec service call: a bridge process is created in the guest,
@@ -143,6 +160,12 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
 			log "qrexec recovered after $(( $(date +%s) - dead_since ))s (transient, not a wedge)"
 			dead_since=0
 		fi
+		# Track peak CONCURRENCY, not just the call total. The dump's freeze happened at 38
+		# concurrent bridge processes, so if a survived run never got near that, the run did
+		# not actually reach the conditions the wedge was observed under - and reporting it
+		# as "survived" would overstate what was tested.
+		c=$(bridge_procs)
+		if [ -n "$c" ] && [ "$c" -gt "${peak:-0}" ] 2>/dev/null; then peak=$c; log "peak bridge procs: $peak"; fi
 	else
 		now=$(date +%s)
 		[ "$dead_since" -eq 0 ] && { dead_since=$now; log "qrexec stopped answering"; }
@@ -171,6 +194,8 @@ log "outcome: $outcome after ${elapsed}s, $total qrexec calls across $SOAKERS so
 	echo "vm=$VM outcome=$outcome minutes=$MINUTES soakers=$SOAKERS"
 	echo "elapsed_s=$elapsed qrexec_calls=$total"
 	echo "dose_calls_per_min=$(( total / (elapsed/60 + 1) ))"
+	echo "bridge_procs_before=${before:-unreadable} peak_concurrent=${peak:-unmeasured}"
+	echo "reference: the captured wedge froze at 38 concurrent qrexec-client-vm processes"
 } >> "$OUT/outcomes.txt"
 cat "$OUT/outcomes.txt" | tee -a "$OUT/hunt.log"
 
