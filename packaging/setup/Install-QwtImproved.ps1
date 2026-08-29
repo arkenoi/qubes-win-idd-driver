@@ -1518,6 +1518,42 @@ function Invoke-Stage2 {
         $script:Result.detail.pv_xenvif = 'not shipped'
     }
 
+    # --- PV console: an out-of-band channel for diagnosing a wedged guest ------------
+    # QWT vendors no xencons, so XENBUS\VEN_XP0001&DEV_CONS has always sat at CM code 28.
+    # Installing it gives dom0 `xl console` into the guest. This is DIAGNOSTIC only -
+    # nothing in QWT binds to it and no feature depends on it - so every failure below is a
+    # warning, never fatal: losing a diagnostic must not fail a working install.
+    #
+    # Why it is worth shipping in a release rather than side-loading when needed: the wedge
+    # takes qrexec with it, and a guest with no qrexec cannot be given a driver afterwards.
+    # An instrument that must be installed before the failure is only useful if it is
+    # already there.
+    $consInf = Join-Path $pvDir 'xencons.inf'
+    if (Test-Path -LiteralPath $consInf) {
+        $consCer = Join-Path $pvDir 'xencons-signer.cer'
+        if (Test-Path -LiteralPath $consCer) {
+            foreach ($store in 'Root', 'TrustedPublisher') {
+                try { $out = & certutil.exe -addstore -f $store $consCer 2>&1 } catch { $out = "$_" }
+                Write-Log "  certutil ${store} (xencons): rc=$LASTEXITCODE"
+            }
+        } else {
+            Write-Log 'pv-drivers/xencons-signer.cer missing - the xencons store add will likely fail' 'WARN'
+        }
+        Write-Log 'installing xencons (PV console - diagnostic channel)'
+        try { $out = & pnputil.exe /add-driver $consInf /install 2>&1 } catch { $out = "$_" }
+        $out | ForEach-Object { Write-Log "  pnputil(xencons): $_" }
+        if ($LASTEXITCODE -notin 0, 259, 3010) {
+            Write-Log "xencons install returned $LASTEXITCODE - DEV_CONS stays at code 28, no out-of-band channel" 'WARN'
+            $script:Result.detail.pv_xencons = "failed rc=$LASTEXITCODE"
+        } else {
+            Write-Log 'xencons installed - DEV_CONS should bind after the reboot'
+            $script:Result.detail.pv_xencons = 'installed'
+        }
+    } else {
+        Write-Log 'pv-drivers/xencons.inf not in the payload - no PV console (diagnostic only)'
+        $script:Result.detail.pv_xencons = 'not shipped'
+    }
+
     # --- optional: install and ACTIVATE the IddCx driver ----------------------------
     # Proven shipping configuration (win-idd-test, 2026-08): IDD device ROOT\DISPLAY\0000
     # (hardware id root\iddsampledriver) bound with ConfigManagerErrorCode 0, and the

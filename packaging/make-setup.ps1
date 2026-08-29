@@ -31,6 +31,12 @@
 [CmdletBinding()]
 param(
     [string]$PvArtifact,          # xenvif build (PV network fix) + its signer cert
+    # xencons build (the PV console) + its signer cert. QWT vendors no xencons at all, which
+    # is why XENBUS\VEN_XP0001&DEV_CONS sits at CM code 28 on every guest. Shipping it buys an
+    # OUT-OF-BAND diagnostic channel: when a guest wedges we lose qrexec, window capture and
+    # the event log simultaneously (measured twice on 2026-08-29), and `xl console` from dom0
+    # depends on none of the three. Optional: a package without it installs exactly as before.
+    [string]$ConsArtifact,
     [Parameter(Mandatory = $true)][string]$MsiArtifact,
     [string]$IddArtifact,
     # Compiled tools\qwt-bootstrap\qwt-bootstrap.exe, staged at the package root as
@@ -371,6 +377,38 @@ if ($PvArtifact -and (Test-Path $PvArtifact)) {
     Write-Host "pv-drivers: $($pvWanted.Name -join ', ')"
 } else {
     Write-Warning 'no PV artifact supplied; pv-drivers/ empty and PV networking will stay on the emulated NIC'
+}
+
+# --- PV console (xencons) ------------------------------------------------------------
+# DIAGNOSTIC, not a feature. Nothing in QWT binds to xencons; it is here so a wedged guest
+# still has one channel out. The wedge signature measured twice on 2026-08-29 is "guest
+# Running and burning CPU, qrexec dead, zero windows, nothing in the event log" - every
+# instrument we own runs through something that is already dead by then. A PV console is
+# read from dom0 with `xl console` and needs none of them.
+#
+# HONEST LIMIT: if the guest is deadlocked at high IRQL (the Xen HVM IPI/TLB-shootdown class
+# proven from two NMI dumps) the console may be silent too. This is the instrument for the
+# observed "alive but unreachable" class, not a guaranteed window into every hang.
+#
+# NOT fatal when absent, unlike xenvif: a missing xenvif means the guest silently runs on the
+# emulated NIC, which is a functional regression. A missing xencons costs a diagnostic only.
+if ($ConsArtifact -and (Test-Path $ConsArtifact)) {
+    $consNames = 'xencons.sys','xencons.inf','xencons.cat','xencons-signer.cer',
+                 'xencons_monitor.exe','xencons_tty.exe'
+    $consWanted = @(Get-ChildItem $ConsArtifact -Recurse -Include $consNames)
+    # The INF's [monitor_copyfiles]/[tty_copyfiles] sections reference the two exes, so a
+    # package carrying the .sys without them installs a driver whose userspace half is
+    # missing. Demand the whole set or ship none of it - a half-staged console is worse than
+    # no console, because it looks present and reports nothing.
+    foreach ($f in $consNames) {
+        if (-not ($consWanted.Name -contains $f)) {
+            throw "xencons artifact is missing $f - refusing to stage a half-complete PV console"
+        }
+    }
+    $consWanted | ForEach-Object { Copy-Item $_.FullName (Join-Path $OutDir 'pv-drivers') -Force }
+    Write-Host "pv-drivers (console): $($consWanted.Name -join ', ')"
+} else {
+    Write-Warning 'no xencons artifact supplied; DEV_CONS stays at CM code 28 and a wedged guest keeps no out-of-band channel'
 }
 
 # ------------------------------------------------------------------------------ manifest

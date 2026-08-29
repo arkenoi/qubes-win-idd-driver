@@ -27,11 +27,6 @@ name: pv-xencons
 on:
   workflow_call:
     inputs:
-      diagnostic:
-        description: 'Build with the enable-path xenstore diagnostic (never for release)'
-        type: boolean
-        required: false
-        default: false
       build_number:
         description: 'Override DriverVer build field (default 0).'
         type: string
@@ -39,11 +34,6 @@ on:
         default: ''
   workflow_dispatch:
     inputs:
-      diagnostic:
-        description: 'Build with the enable-path xenstore diagnostic (never for release)'
-        type: boolean
-        required: false
-        default: false
       build_number:
         description: 'Override DriverVer build field (default 0). Needed only to supersede a driver already installed on a test rig.'
         type: string
@@ -52,18 +42,16 @@ on:
   push:
     paths:
       - '.github/workflows/pv-xencons.yml'
-      - 'patches/xencons-ctrl-ring-fix.patch'
-      - 'patches/xencons-enable-diag.patch'
 
 env:
   # /Brepro: content-hash PE TimeDateStamp so the same commit yields the same binary.
   # Without it gui-agent.exe differed across runs at one commit (CBBD0206.. vs BDA4615A..).
   LINK: /Brepro
-  # UNPINNED (user, 2026-08-07: "unpin and upgrade xencons"). Track master so we always get
-  # the newest interface revisions; the resolved SHA is echoed and written into
-  # PROVENANCE.txt so a given artifact is still traceable to an exact commit.
-  # The rev-5 assertion below is what actually protects us - a master that ever lost
-  # 0x09000005 fails the build instead of shipping a driver that cannot bind.
+  # PINNED, deliberately. The xenvif job tracks master because it needs whatever interface
+  # revision xennet demands; xencons has no such consumer - nothing in QWT binds to it - so
+  # tracking a moving branch would only mean the diagnostic instrument can change underneath
+  # a measurement. An instrument whose build inputs drift is not evidence. Bump this SHA
+  # deliberately, and PROVENANCE.txt records whichever one an artifact came from.
   XENCONS_REF: a815963eb847b09ba038fc7454d6d41f6a95af69
 
 jobs:
@@ -114,31 +102,16 @@ jobs:
           # xencons revision - so asserting one would fail the build for no reason. The SHA
           # pin plus PROVENANCE.txt is the traceability that matters here.
 
-      # THE FIX, always applied. xencons fails the whole NIC when the backend offers no
-      # feature-ctrl-ring: ControllerConnect skips creating the control ring, ControllerEnable
-      # sets Enabled anyway, and ControllerPutRequest then hits a zeroed ring where RING_FULL is
-      # trivially true (0 - 0 == 0) and returns STATUS_INSUFFICIENT_RESOURCES. That propagates
-      # out of FrontendEnable, so xennet's MiniportRestart fails and the adapter ends at
-      # CM_PROB_FAILED_POST_START - purely because we could not say "no hashing" to a peer that
-      # never offered hashing. Measured against qubes-mirage-firewall; Linux xen-netback
-      # advertises feature-ctrl-ring, which is why it is not seen there.
-      # This MUST NOT be gated on `diagnostic`: without it a release build cannot bring up a
-      # Windows PV NIC on any ctrl-ring-less netback.
-      - name: Apply the enable-path diagnostic patch (opt-in)
-        if: inputs.diagnostic == true || inputs.diagnostic == 'true'
-        shell: pwsh
-        working-directory: xencons
-        run: |
-          $ErrorActionPreference = 'Stop'
-          git apply --verbose ..\repo\patches\xencons-enable-diag.patch
-          if ($LASTEXITCODE -ne 0) { throw "diagnostic patch did not apply" }
-          # A patch that silently no-ops would produce a driver that looks instrumented and
-          # is not - assert the markers are actually in the source before building.
-          foreach ($m in @('qwt-enable-diag','qwt-rx-fill','FrontendEnableDiag')) {
-            $hit = Select-String -Path src\xencons\frontend.c, src\xencons\receiver.c -Pattern $m -Quiet
-            if (-not $hit) { throw "diagnostic marker '$m' missing after patch" }
-          }
-          Write-Host "::notice title=xencons::DIAGNOSTIC build - publishes qwt-enable-diag / qwt-rx-fill to xenstore"
+      # NO PATCH STEP HERE, deliberately. This job was templated from pv-xenvif.yml, and it
+      # inherited xenvif's patch step wholesale: an `if: inputs.diagnostic` guard under a
+      # comment insisting the step "MUST NOT be gated on `diagnostic`", describing a
+      # feature-ctrl-ring bug that breaks xennet's MiniportRestart. None of that is about
+      # xencons - there is no NIC, no control ring and no xennet in this driver. The step
+      # applied `patches/xencons-enable-diag.patch`, which has never existed in this repo, and
+      # grepped `src\xencons\frontend.c` and `src\xencons\receiver.c`, neither of which exists
+      # in the xencons tree (its sources sit at the repo root, and it has no receiver at all).
+      # So the step could only ever throw, and only for someone who passed diagnostic=true -
+      # a landmine that looked like a supported option. Upstream xencons builds unpatched.
 
       - name: Build xencons via its own build.ps1
         shell: pwsh

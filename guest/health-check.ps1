@@ -18,28 +18,31 @@
 # passed. Exit 0 iff ok. Designed to FAIL LOUDLY on partial installs; validated against
 # a guest with no IDD (must fail) and the intended-state guest (must pass).
 param(
-    # Allowlist entries as 'HWID_SUBSTRING:CODE', case-insensitive. Defaults name the
-    # two states that are BY DESIGN on a Qubes guest with our package:
-    #  - the emulated VGA adapter we deliberately disable (code 22 = disabled)
-    #  - XENBUS\CONS code 28: QWT ships no xencons driver at all. Verified 2026-08-07:
-    #    the Qubes PV-drivers repo vendors only xenbus/xeniface/xennet/xenvbd/xenvif and
-    #    the MSI ships exactly those five, so nothing can bind CONS. It is the PV console
-    #    (xl console), a debugging convenience - no GUI/disk/network/display path uses it.
-    #    NOT a stand-in for VBD: PvDriversDisk is installed now and pv_disk_bound asserts it.
+    # Allowlist entries as 'HWID_SUBSTRING:CODE', case-insensitive. The one default names the
+    # single state that is BY DESIGN on a Qubes guest with our package: the emulated VGA
+    # adapter we deliberately disable (code 22 = disabled).
+    #
+    # XENBUS\...&DEV_CONS:28 WAS allowlisted here, on the reason "QWT ships no xencons driver
+    # at all" - true when written (2026-08-07: the Qubes PV-drivers repo vendored only
+    # xenbus/xeniface/xennet/xenvbd/xenvif). It stopped being true the moment we started
+    # shipping xencons in the package, and an allowlist outliving its premise is the exact
+    # failure mode this file already carries one scar from: DEV_VBD:28 was allowlisted the
+    # same way and certified as healthy a guest running entirely on emulated IDE. Keeping
+    # CONS allowlisted now would hide the binding of the very driver we added to diagnose the
+    # wedge - a check that cannot fail, guarding the instrument we most need to trust.
+    # pv_console_bound below asserts it instead.
+    #
     # Instance-ID substrings measured on the intended-state guest (win-idd-test
     # 2026-08-06): the emulated VGA is PCI\VEN_1234&DEV_1111, the Xen vendor string
     # is XP0001. XENVIF\...DEV_NET err=28 was ALSO observed there with a working Up
     # adapter - deliberately NOT allowlisted until explained; the sweep must surface it.
-    [string[]]$AllowPnpErrors = @('PCI\VEN_1234&DEV_1111:22',
-                                  # NOTE: XENBUS\...&DEV_VBD:28 was allowlisted here until
-                                  # 2026-08-07. That was wrong: it certified as healthy a
-                                  # guest running entirely on emulated IDE because we had
-                                  # dropped PvDriversDisk from ADDLOCAL on an unsourced
-                                  # claim. The disk device must BIND now, and pv_disk_bound
-                                  # below asserts it.
-                                  'XENBUS\VEN_XP0001&DEV_CONS:28'),
+    [string[]]$AllowPnpErrors = @('PCI\VEN_1234&DEV_1111:22'),
     [string]$ManifestPath = 'C:\qwt-improved-setup\MANIFEST.json',
-    [switch]$NoIddExpected   # for BDA-configuration guests (control runs only)
+    [switch]$NoIddExpected,   # for BDA-configuration guests (control runs only)
+    # For deliberate control runs against stock QWT or any pre-4.3.16 package, which ship no
+    # xencons: report pv_console_bound as evidence without failing on it. Never pass this for
+    # a package that is supposed to carry the console - it would turn the check into decoration.
+    [switch]$ConsoleOptional
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -352,6 +355,29 @@ Check 'pv_disk_bound' ($vbdOk -and $disks.Count -ge 1 -and $ideDisks.Count -eq 0
     @{ vbd_devices = @($vbd | ForEach-Object { $_.PNPDeviceID + ' err=' + $_.ConfigManagerErrorCode + ' svc=' + $_.Service })
        disks = @($disks | ForEach-Object { 'disk' + $_.Number + ' bustype=' + $_.BusType })
        still_on_emulated_ide = @($ideDisks | ForEach-Object { 'disk' + $_.Number }) }
+
+# --- 6b2. PV CONSOLE: the wedge instrument must actually be bound --------------------
+# Replaces the DEV_CONS:28 allowlist deleted from $AllowPnpErrors above. We now ship xencons,
+# so "CONS sits at code 28" changed from an expected state into a defect.
+#
+# This check exists because of HOW the driver is used. xencons is not a feature - nothing in
+# QWT binds to it - it is the out-of-band channel for reading a wedged guest from dom0 with
+# `xl console`. The wedge takes qrexec, window capture and the event log at the same instant
+# (measured twice, 2026-08-29), which means it must be installed and bound BEFORE the failure:
+# a wedged guest cannot be handed a driver afterwards. An unnoticed regression here would only
+# ever be discovered at the exact moment the instrument was needed and found dead.
+#
+# EXPECTED TO FAIL on stock QWT and on any pre-4.3.16 package (neither ships xencons); that is
+# correct - it distinguishes "console present" from "console absent", which is the whole point.
+# $ConsoleOptional downgrades it to evidence-only for deliberate control runs against stock.
+$cons = @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
+          Where-Object { $_.PNPDeviceID -like 'XENBUS\VEN_XP0001&DEV_CONS*' })
+$consBound = ($cons.Count -ge 1 -and @($cons | Where-Object { $_.ConfigManagerErrorCode -ne 0 }).Count -eq 0)
+Check 'pv_console_bound' ($consBound -or $ConsoleOptional) `
+    @{ cons_devices = @($cons | ForEach-Object { $_.PNPDeviceID + ' err=' + $_.ConfigManagerErrorCode + ' svc=' + $_.Service })
+       bound = $consBound
+       optional = [bool]$ConsoleOptional
+       note = 'xencons gives dom0 `xl console` into a guest whose qrexec/event log are already dead' }
 
 # --- 6b1. THIS BOOT'S KERNEL/SERVICE EVENTS ------------------------------------------------
 # Added 2026-08-29. Until now this script had ZERO Get-WinEvent calls, so it asserted the END state

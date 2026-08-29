@@ -250,8 +250,15 @@ jobs:
     # "Use UNPLUG v3"). Proven on a clean guest: Realtek -> Xen PV Network Device #0.
     uses: ./.github/workflows/pv-xenvif.yml
 
+  # The PV console. Not a feature - an instrument. Both wedges measured on 2026-08-29 killed
+  # qrexec, window capture and the event log at the same instant, so nothing we own could see
+  # in. `xl console` from dom0 depends on none of the three, but only if the driver is already
+  # installed: a wedged guest cannot be given one afterwards. Hence: in the release package.
+  cons:
+    uses: ./.github/workflows/pv-xencons.yml
+
   setup:
-    needs: [msi, idd, pv]
+    needs: [msi, idd, pv, cons]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -275,6 +282,11 @@ jobs:
         with:
           name: pv-xenvif
           path: dl/pv
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pv-xencons
+          path: dl/cons
 
       # actions/checkout marks the workspace safe inside a TEMPORARY HOME and then restores
       # HOME, so by this point git reports "detected dubious ownership" and provenance
@@ -348,6 +360,7 @@ jobs:
               -MsiArtifact dl\qwt-full `
               -IddArtifact dl\idd `
               -PvArtifact dl\pv `
+              -ConsArtifact dl\cons `
               -BootstrapExe "$env:BOOTSTRAP_EXE" `
               -VcRedist    "$env:VC_REDIST" `
               -QubesdbReadExe "$env:QUBESDB_READ_EXE" `
