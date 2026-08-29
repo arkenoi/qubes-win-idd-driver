@@ -21015,3 +21015,23 @@ or the GUI agent. QWT vendors no xencons at all today (this is why `XENBUS\...&D
 error 28 and is allowlisted in health-check), so it needs vendoring, building and signing. It would
 definitively help the observed class — guest alive, qrexec dead — though if the guest is genuinely
 deadlocked at high IRQL the console may be silent too. Worth doing; not a one-line fix.
+
+## 2026-08-29 — pristine WIN10 image created (the one the protocol says to park and clone)
+
+Built with a QWT-FREE answer stick (`build-answer-stick.sh` with no `RELEASE_SETUP`; verified: zero
+`payload/release/` entries in the image). Result on `win10-clean`, confirmed by pixels: Windows 10
+desktop, logged in, 1024x768 emulated VGA, no QWT. Fixture kept at
+`instrumentation/fixtures/win10-pristine-desktop.png`.
+
+**A monitoring mistake worth recording:** I watched for `INSTALL COMPLETE` in
+`C:\qwt-improved-install.log` and read low CPU as "still installing". A QWT-free install never writes
+that log at all — the guest had been sitting finished at the desktop. The screenshot answered in one
+step what the log poll could not answer at all. *When the expected signal cannot exist for the
+configuration under test, polling for it measures nothing.*
+
+**Consequence for the .13-vs-.15 comparison:** a pristine guest has NO qrexec, so it cannot be driven
+from here — the protocol already records this about stage ST0. Installing onto it therefore has to go
+through the answer stick's first-logon orchestration, which means one provisioning run per version
+rather than a clone. That is the honest cost of comparing two versions from an identical start, and
+it is why the pristine image is worth parking: everything AFTER a QWT install can be cloned from a
+later stage instead.
