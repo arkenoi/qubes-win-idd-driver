@@ -346,9 +346,25 @@ Before it: build/refresh the stick (§0.6) and verify the loops (§2.7). The scr
 the STICK loop (size + non-deleted inode) but NOT the ISO loop — eyeball that side yourself.
 `BUDGET` bounds the wait (default 5400 s; Win10 measured 17–20 min; Win11 unmeasured — time once
 and record, D19). Drain queued qrexec BEFORE it removes the qube (§2.5).
-*Expect:* `answer stick verified: /dev/loopN -> <file> (<bytes> bytes)` → shutdown/remove/create
-lines → `booting the vendor ISO (...) with the answer stick (...)` → several
+**Building an ST0 (pristine, QWT-free) image: set `PRISTINE=1`.**
+
+    PRISTINE=1 mgmt/reprovision-usb.sh win10-gold0 loop0 <pristine-stick-loop>
+
+This is not optional decoration. §2.1 defines ST0 as having **no qrexec — undriveable**, because the
+stick carries no QWT payload, so no qrexec agent is ever installed. The script's default completion
+test is `qrexec alive`, which such an image **cannot reach by construction**: it will run to a clean
+desktop and then sit until `BUDGET` (5400 s) expires and report `FAIL: never reached qrexec` for a
+perfectly good install. Measured 2026-08-30 — `win10-gold0` reached a clean Win10 desktop in ~20 min
+and the provisioner was still waiting 17 minutes later, having logged nothing since boot. With
+`PRISTINE=1` the criterion is instead a **settled desktop on screen** (two `VERDICT=DESKTOP`
+classifications 30 s apart, so one frame caught mid-OOBE cannot pass) — the screen being the only
+channel a pristine guest has, and pixels being the standing evidence rule.
+
+*Expect (default, payload stick):* `answer stick verified: /dev/loopN -> <file> (<bytes> bytes)` →
+shutdown/remove/create lines → `booting the vendor ISO (...) with the answer stick (...)` → several
 `install-phase halt -> restarting without CD` cycles → `qrexec alive after <N>s`, exit 0.
+*Expect (`PRISTINE=1`):* the same up to the reboot cycles, then
+`pristine desktop reached after <N>s (no qrexec expected - ST0)`, exit 0.
 *On `FAIL: never reached qrexec within <BUDGET>s`:* triage with screenshots (`w_screen`,
 `qtest shot`) BEFORE any retry — the classic silent cause is a locale or image-name mismatch
 (§0.6). One retry after a diagnosed cause; never blind-loop reprovisions.

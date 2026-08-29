@@ -14,6 +14,9 @@ ISOLOOP="${2:?}"
 STICKLOOP="${3:?}"
 HOLDER=win-idd-mgmt
 BUDGET=${BUDGET:-5400}
+# PRISTINE=1: building an ST0 (QWT-free) image. Success is a settled DESKTOP on screen rather than
+# qrexec, which such an image never gets. See the completion-criterion note at the wait loop.
+PRISTINE=${PRISTINE:-0}
 
 log() { echo "$(date -u +%H:%M:%S) reprovision-usb: $*"; }
 state() { qvm-ls --raw-data --fields state "$VM" 2>/dev/null; }
@@ -70,14 +73,49 @@ qvm-start "$VM" --cdrom="$HOLDER:$ISOLOOP" || exit 1
 
 # Setup reboots several times and each guest reboot destroys the domain, so restart WITHOUT
 # the CD until qrexec answers.
+# COMPLETION CRITERION. Two of them, because a QWT-free provision can never satisfy the qrexec one.
+#
+# PRISTINE=1 builds an ST0 image: the answer stick carries no QWT payload (RELEASE_SETUP unset), so
+# no gui-agent and no qrexec agent are ever installed. §2.1 states this plainly - ST0 is "No qrexec
+# - undriveable" - yet this script's only success test was `qrexec alive`, which such an image
+# cannot reach BY CONSTRUCTION. A successful pristine install therefore ran to the desktop and then
+# sat here until BUDGET (5400 s) expired, to be reported as "FAIL: never reached qrexec".
+# Measured 2026-08-30: win10-gold0 reached a clean Win10 desktop in ~20 min and the script was still
+# waiting 17 minutes later, having logged nothing since boot.
+#
+# For a pristine image the SCREEN is the only channel that exists, so it is the criterion - which is
+# also the project's standing rule that the evidence is pixels, not logs.
 t0=$(date +%s)
+SHOTDIR=$(mktemp -d); trap 'rm -rf "$SHOTDIR"' EXIT
+_desktop(){ # 0 = the guest is showing a usable desktop
+    rm -rf "$SHOTDIR"/* 2>/dev/null
+    QTEST_VM=$VM timeout 90 ./tools/qtest shot "$SHOTDIR/s.tar" >/dev/null 2>&1 || return 1
+    tar -xf "$SHOTDIR/s.tar" -C "$SHOTDIR" 2>/dev/null || return 1
+    local big; big=$(ls -S "$SHOTDIR"/*.png 2>/dev/null | head -1)
+    [ -n "$big" ] || return 1
+    ./tools/winshot.py --png "$big" 2>/dev/null | grep -q 'VERDICT=DESKTOP'
+}
 while [ $(( $(date +%s) - t0 )) -lt "$BUDGET" ]; do
-    if [ "$(QTEST_VM=$VM timeout 25 ./tools/qtest run 'echo BOOT_OK' 2>&1 | tr -d '\r\0' | grep -c BOOT_OK)" -ge 2 ]; then
+    if [ "${PRISTINE:-0}" = 1 ]; then
+        # Require it TWICE, 30 s apart: one DESKTOP frame can be caught mid-OOBE. Two is a settled
+        # desktop, not a transient.
+        if _desktop; then
+            sleep 30
+            if _desktop; then
+                log "pristine desktop reached after $(( $(date +%s) - t0 ))s (no qrexec expected - ST0)"
+                exit 0
+            fi
+        fi
+    elif [ "$(QTEST_VM=$VM timeout 25 ./tools/qtest run 'echo BOOT_OK' 2>&1 | tr -d '\r\0' | grep -c BOOT_OK)" -ge 2 ]; then
         log "qrexec alive after $(( $(date +%s) - t0 ))s"
         exit 0
     fi
     [ "$(state)" = Halted ] && { log "install-phase halt -> restarting without CD"; timeout 90 qvm-start "$VM" >/dev/null 2>&1; }
     sleep 30
 done
-log "FAIL: never reached qrexec within ${BUDGET}s"
+if [ "${PRISTINE:-0}" = 1 ]; then
+    log "FAIL: never reached a settled desktop within ${BUDGET}s"
+else
+    log "FAIL: never reached qrexec within ${BUDGET}s"
+fi
 exit 1
