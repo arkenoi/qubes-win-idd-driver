@@ -20222,3 +20222,30 @@ cases where the Request was raised and cleared. Not one install hung.
 
 Note: `win10-clean` was the WIN10 golden and now carries 4.3.15 rather than 4.3.2. Recorded so
 nobody later reads it as a pristine 4.3.2 source.
+
+## 2026-08-29 — I made win10-u10 undriveable trying to build a stock precondition. Recording the cost.
+
+To run the true stock-4.2.2 upgrade cell I needed a guest genuinely at stock. None existed — all
+five guests now carry 4.3.15. I tried to build one on the expendable guest (`win10-u10`) by
+uninstalling QWT and then installing the stock MSI from `artifacts-stock/` via our own installer,
+which FINDINGS records as the proven route for that MSI.
+
+**The uninstall succeeded and took the qrexec agent with it.** QWT *is* the qrexec agent, so the
+moment `msiexec /x` completed there was no channel left to push the stock package over. The guest
+now boots and halts normally under ACPI but answers nothing: ten probes across ~9 minutes, qrexec
+down every time, after a clean shutdown/start cycle.
+
+`win10-u10` is therefore driveable only through the provisioning route (`build-answer-stick.sh` /
+reprovision from ISO), not from here. That is a real cost of my own making and it is on the record.
+
+**The lesson, which the plan already stated and I did not weigh properly:** a precondition must
+never be *constructed by uninstalling*. `c1f4312` said so about the fresh cell for a different
+reason (leftover MSI registration graded as fresh); the stronger reason is that on this rig the
+uninstall removes the only control channel. A stock precondition can only come from provisioning —
+which is exactly why `build-answer-stick.sh` has a `STOCK_SETUP` path and why its comment says "our
+installer is the only path proven to install this MSI". It is a PROVISIONING-time route, not a
+running-guest one.
+
+Cells 5 and 6 (true stock-4.2.2 upgrade; fresh install from ISO exercising stage 1 -> stage 2) both
+require that provisioning route: an answer stick built per OS, a reprovision, and vm-pool headroom
+(81.8% used). They cannot be reached by manipulating a running guest.
