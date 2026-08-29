@@ -20563,7 +20563,21 @@ the job the owner asked of it — "also checks if stack is sane" — and it does
 arrives intact and the adapter's own rx counter agrees, which a ping could never show. It is a
 correctness probe, not a benchmark, and the protocol must label it as such.
 
-**To actually benchmark the PV NIC** you need a LOCAL endpoint — a file served from the netvm or a
-neighbouring qube — so no external hop is in the path. That is outside this dev qube's Admin API
-scope (fw-net is not even visible from here), so it is an owner-side setup item, and it belongs in
-the benchmarking section of the acceptance protocol rather than being inferred from a download.
+**RESOLVED, same day — the PV NIC is healthy; the mirror was the bottleneck.** Benchmarked against
+a fast CDN instead (owner: "you may benchmark against reasonably fast cdn"):
+
+    CDN 25 MB: bytes=26,214,400  secs=0.81  **258.2 Mbit/s**  rx_delta=29,054,236
+
+vs 3-5 Mbit/s from the Debian mirror. Exactly what the 3x session-to-session variance implied, now
+measured rather than argued. (A 100 MB request returns 403 — Cloudflare caps `__down` size — so 25 MB
+with a corroborating adapter rx delta is the usable size.) **Benchmark against a CDN, not a mirror,
+and never treat a mirror download as a link measurement.**
+
+**CORRECTION — I claimed "fw-net is not visible from here". That was wrong.** `qvm-check fw-net`
+answers `non-existent!`, but `qrexec-client-vm fw-net admin.vm.CurrentState` answers **`Request
+refused`** — a POLICY refusal. The Admin API returns a filtered view to a caller without permission,
+and I read that filtering as proof of non-existence. fw-net exists and is reachable from a properly
+privileged context; only THIS dev qube's policy excludes it. A local-endpoint benchmark was also
+tested and is genuinely blocked, but by the netvm's inter-VM drop, not by anything about visibility:
+this qube serves on 10.137.0.63:8899, the guest's own firewall was already `accept all`, adding an
+explicit accept rule changed nothing, and **zero requests reached the listener**. Rule reverted.
