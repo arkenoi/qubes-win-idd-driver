@@ -64,10 +64,17 @@ interleaved:
   Payload still ships via `qtest push`; a netvm is for exercising the PV NIC, not for fetching.
 
   **PV-network testing protocol — follow it or the result is meaningless:**
-  1. **First-vif needs TWO boots.** The first boot after a vif appears leaves `XENNET` unstarted
-     with the emulated Realtek still present (xenvif's NET-child start fails unless the boot-time
-     emulated-NIC unplug already happened that boot — see `guest/pvnic-selfprime.ps1`). Boot 2
-     completes the handover. Grading after one boot reports a false failure.
+  1. **A SECOND BOOT IS A FAILURE, not a property.** (Owner, 2026-08-29, correcting what I wrote
+     here an hour earlier — I had recorded "first-vif needs two boots" as normal. It is not, and
+     that is exactly the defect the seeding/latch was invented to remove.) **Acceptance: an AppVM
+     carrying our QWT must handle an immediate netvm attach with ZERO reboots** — vif appears, PV
+     NIC binds, emulated adapter unplugs, in that same boot. That is what
+     `guest/pvnic-selfprime.ps1`'s latch + veto key deliver ("complete in ONE boot at problem 0").
+     If a guest needs a second boot, the latch is ABSENT or broken — check `pvnic_applier`, which
+     reports `QubesPvNic task not registered - M1 latch deployment absent`. The installer seeds the
+     latch on TEMPLATES (AppVMs inherit it); a bare StandaloneVM has no latch, so a StandaloneVM
+     needing two boots means the latch was never there — it does NOT license two boots as normal,
+     and it is not the configuration to accept against.
   2. **Do not grade immediately after qrexec comes up.** Allow ~90 s. Measured: the same guest read
      `dns_resolves=False, rx=153,487` instantly and `dns_resolves=True, rx=9,463,443` 90 s later.
   3. **Never assert traffic by pinging the gateway.** A Qubes netvm is a routing endpoint and does
