@@ -1,0 +1,254 @@
+# Build xencons (the Xen PV console driver) from upstream, and test-sign it with the same
+# throwaway cert as the rest of the package.
+#
+# WHY THIS EXISTS (owner request, 2026-08-29). When a guest wedges we lose every channel at
+# once: qrexec stops answering, no windows are mapped so captures come back empty, and the
+# Windows event log records nothing for the whole window. That was measured twice on
+# 2026-08-29 (win11-24h2 after a netvm attach; win10-clean mid-install) - guest Running and
+# burning CPU, and not one diagnostic path left alive. Every instrument we have runs THROUGH
+# the things that are dead.
+#
+# xencons gives an out-of-band path that depends on none of them: the PV console, readable
+# from dom0 with `xl console`. QWT vendors no xencons at all today - which is exactly why
+# XENBUS\VEN_XP0001&DEV_CONS sits at CM code 28 on every guest and is allowlisted in
+# guest/health-check.ps1 (the allowlist comment states it plainly: "QWT ships no xencons
+# driver at all"). This job is the first half of changing that.
+#
+# HONEST LIMIT, stated up front: if the guest is genuinely deadlocked at high IRQL - the
+# Xen HVM IPI/TLB-shootdown class proven from two NMI dumps - the console may be silent too.
+# This is not a guaranteed fix for THAT failure; it is the instrument for the observed class
+# "guest alive, qrexec dead", which is what we keep hitting and currently cannot see into.
+#
+# Built at a PINNED SHA (never a moving ref - a build whose inputs can change is not
+# evidence), with PROVENANCE.txt so an artifact traces to an exact upstream commit.
+
+name: pv-xencons
+
+on:
+  workflow_call:
+    inputs:
+      diagnostic:
+        description: 'Build with the enable-path xenstore diagnostic (never for release)'
+        type: boolean
+        required: false
+        default: false
+      build_number:
+        description: 'Override DriverVer build field (default 0).'
+        type: string
+        required: false
+        default: ''
+  workflow_dispatch:
+    inputs:
+      diagnostic:
+        description: 'Build with the enable-path xenstore diagnostic (never for release)'
+        type: boolean
+        required: false
+        default: false
+      build_number:
+        description: 'Override DriverVer build field (default 0). Needed only to supersede a driver already installed on a test rig.'
+        type: string
+        required: false
+        default: ''
+  push:
+    paths:
+      - '.github/workflows/pv-xencons.yml'
+      - 'patches/xencons-ctrl-ring-fix.patch'
+      - 'patches/xencons-enable-diag.patch'
+
+env:
+  # /Brepro: content-hash PE TimeDateStamp so the same commit yields the same binary.
+  # Without it gui-agent.exe differed across runs at one commit (CBBD0206.. vs BDA4615A..).
+  LINK: /Brepro
+  # UNPINNED (user, 2026-08-07: "unpin and upgrade xencons"). Track master so we always get
+  # the newest interface revisions; the resolved SHA is echoed and written into
+  # PROVENANCE.txt so a given artifact is still traceable to an exact commit.
+  # The rev-5 assertion below is what actually protects us - a master that ever lost
+  # 0x09000005 fails the build instead of shipping a driver that cannot bind.
+  XENCONS_REF: a815963eb847b09ba038fc7454d6d41f6a95af69
+
+jobs:
+  xencons:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      # Copied VERBATIM from build.yml's proven idd-driver step. My paraphrase failed:
+      # it looked for VSIXInstaller.exe under ProgramFiles(x86)\...\Installer (it lives
+      # under ProgramFiles\Microsoft Visual Studio\2022) and set ErrorActionPreference=Stop,
+      # which turns choco's non-fatal output into a failure.
+      # This job builds an UPSTREAM tree, so it never needed our repo before. The opt-in
+      # diagnostic patch lives here, so it does now - and the checkout must land in a
+      # subdirectory, or it would collide with the xencons clone in the workspace root.
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+
+      - name: Install WDK + VS driver targets
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          choco install windowsdriverkit11 --no-progress -y
+          $vsix = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix" -Recurse -Filter '*.vsix' |
+                  Select-Object -First 1
+          if (-not $vsix) { throw "WDK.vsix not found after choco install" }
+          $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse -Filter VSIXInstaller.exe |
+                  Select-Object -First 1
+          Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -Wait
+
+      - name: Fetch xencons at the pinned SHA
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # XENCONS_REF is a full SHA, and `git clone --branch` does NOT accept one - it only
+          # takes branch/tag names. Clone then checkout, so the pin is exact and a moving
+          # upstream branch can never silently change what this job builds.
+          git clone --quiet https://xenbits.xen.org/git-http/pvdrivers/win/xencons.git xencons
+          if ($LASTEXITCODE -ne 0) { throw "clone of xencons failed" }
+          git -C xencons checkout --quiet $env:XENCONS_REF
+          if ($LASTEXITCODE -ne 0) { throw "checkout of $env:XENCONS_REF failed" }
+          $sha = (git -C xencons rev-parse HEAD).Trim()
+          if ($sha -ne $env:XENCONS_REF) { throw "pin mismatch: wanted $env:XENCONS_REF, got $sha" }
+          Write-Host "xencons $env:XENCONS_REF resolved to $sha"
+          "XENCONS_RESOLVED=$sha" | Out-File -Append $env:GITHUB_ENV
+          # NOTE: the xenvif job asserts revision 0x09000005 here because xennet cannot bind
+          # without it. xencons has no such consumer - nothing in QWT depends on a specific
+          # xencons revision - so asserting one would fail the build for no reason. The SHA
+          # pin plus PROVENANCE.txt is the traceability that matters here.
+
+      # THE FIX, always applied. xencons fails the whole NIC when the backend offers no
+      # feature-ctrl-ring: ControllerConnect skips creating the control ring, ControllerEnable
+      # sets Enabled anyway, and ControllerPutRequest then hits a zeroed ring where RING_FULL is
+      # trivially true (0 - 0 == 0) and returns STATUS_INSUFFICIENT_RESOURCES. That propagates
+      # out of FrontendEnable, so xennet's MiniportRestart fails and the adapter ends at
+      # CM_PROB_FAILED_POST_START - purely because we could not say "no hashing" to a peer that
+      # never offered hashing. Measured against qubes-mirage-firewall; Linux xen-netback
+      # advertises feature-ctrl-ring, which is why it is not seen there.
+      # This MUST NOT be gated on `diagnostic`: without it a release build cannot bring up a
+      # Windows PV NIC on any ctrl-ring-less netback.
+      - name: Apply the control-ring fix (always)
+        shell: pwsh
+        working-directory: xencons
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git apply --verbose ..\repo\patches\xencons-ctrl-ring-fix.patch
+          if ($LASTEXITCODE -ne 0) { throw "ctrl-ring fix did not apply" }
+          if (-not (Select-String -Path src\xencons\frontend.c -Pattern 'no hashing' -Quiet)) {
+            throw "ctrl-ring fix marker missing after patch"
+          }
+          Write-Host "::notice title=xencons::control-ring fix applied"
+
+      # DIAGNOSTIC BUILD, opt-in. On a Qubes host xencons's Error() output is unreachable:
+      # it goes to DbgPrint -> xen.sys -> __outbytestring to port 0xE9 or 0x12, and neither
+      # is wired to anything readable (xl dmesg AND the stubdom log are both empty - measured
+      # 2026-08-21). This patch republishes the outcome of every FrontendEnable step, plus the
+      # RX-ring fill shortfall, into the FRONTEND's own xenstore directory, which the guest
+      # reads back through the xeniface XenStore WMI interface. That is the only instrument
+      # that can attribute the MiniportRestart failure seen against a mirage netback.
+      #
+      # OFF by default and never part of a release: run this workflow with
+      # `-f diagnostic=true` to get it.
+      - name: Apply the enable-path diagnostic patch (opt-in)
+        if: inputs.diagnostic == true || inputs.diagnostic == 'true'
+        shell: pwsh
+        working-directory: xencons
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git apply --verbose ..\repo\patches\xencons-enable-diag.patch
+          if ($LASTEXITCODE -ne 0) { throw "diagnostic patch did not apply" }
+          # A patch that silently no-ops would produce a driver that looks instrumented and
+          # is not - assert the markers are actually in the source before building.
+          foreach ($m in @('qwt-enable-diag','qwt-rx-fill','FrontendEnableDiag')) {
+            $hit = Select-String -Path src\xencons\frontend.c, src\xencons\receiver.c -Pattern $m -Quiet
+            if (-not $hit) { throw "diagnostic marker '$m' missing after patch" }
+          }
+          Write-Host "::notice title=xencons::DIAGNOSTIC build - publishes qwt-enable-diag / qwt-rx-fill to xenstore"
+
+      - name: Build xencons via its own build.ps1
+        shell: pwsh
+        working-directory: xencons
+        run: |
+          # Use UPSTREAM'S OWN build script, not a bare msbuild call. msbuild alone fails
+          # with C2065 on MAJOR_VERSION/MINOR_VERSION/MICRO_VERSION/BUILD_NUMBER/
+          # VENDOR_NAME_STR: build.ps1 -> msbuild.ps1 derives those from the repo's
+          # `version` file and passes them as preprocessor defines. Reproducing that by
+          # hand would be another guess; the project already does it correctly.
+          # -Type free = release build. SignMode TestSign is the default and matches our
+          # test-signed guest.
+          # msbuild.ps1 invokes bare `msbuild.exe`, which is NOT on PATH on the runner
+          # (the previous failure: "The term 'msbuild.exe' is not recognized"). Put the VS
+          # MSBuild directory on PATH rather than editing upstream's script.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $mb = & $vswhere -latest -requires Microsoft.Component.MSBuild `
+                  -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          if (-not $mb) { throw "MSBuild.exe not found" }
+          $env:PATH = (Split-Path $mb) + ';' + $env:PATH
+          Write-Host "msbuild on PATH: $mb"
+          $env:VisualStudioVersion = '17.0'
+          # build.ps1 derives DriverVer from BUILD_NUMBER, which defaults to 0 on a fresh
+          # clone - so every build produced DriverVer 9.1.0.0 and a byte-identical INF.
+          # pnputil dedupes on that: it reports "Driver package added successfully (Already
+          # exists in the system)" with rc=0 and SILENTLY KEEPS THE OLD .sys. Measured - the
+          # driver store still held the previous build and the fix under test never ran.
+          # A release build keeps 0, so the same commit still yields the same binary; a
+          # DIAGNOSTIC build takes the run number, so each one is a distinct, higher version
+          # that Windows will actually install over its predecessor.
+          # An explicit override wins: a release build is 9.1.0.0 by design (same commit ->
+          # same binary), but 9.1.0.0 can never supersede a higher-versioned driver already
+          # installed on a test rig, and deleting that one falls back to an OLDER DriverStore
+          # entry. The override exists solely to make a clean build installable over a
+          # diagnostic one.
+          if ('${{ inputs.build_number }}' -ne '') {
+            $env:BUILD_NUMBER = '${{ inputs.build_number }}'
+            Write-Host "::notice title=xencons::DriverVer 9.1.0.$env:BUILD_NUMBER (explicit override)"
+          } elseif ('${{ inputs.diagnostic }}' -eq 'true') {
+            $env:BUILD_NUMBER = '${{ github.run_number }}'
+            Write-Host "::notice title=xencons::diagnostic build - DriverVer 9.1.0.$env:BUILD_NUMBER"
+          } else {
+            $env:BUILD_NUMBER = '0'
+          }
+          .\build.ps1 -Type free -Arch x64
+          if ($LASTEXITCODE -ne 0) { throw "xencons build.ps1 failed" }
+          Get-ChildItem . -Recurse -Include xencons.sys,xencons.inf,xencons.cat |
+            ForEach-Object { Write-Host "built: $($_.FullName)" }
+
+      - name: Test-sign and package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force pv-out | Out-Null
+          $files = Get-ChildItem xencons -Recurse -Include xencons.sys,xencons.inf,xencons_coinst*.dll
+          if (-not $files) { throw "no xencons build outputs found" }
+          $files | ForEach-Object { Copy-Item $_.FullName pv-out -Force }
+          # Same throwaway test cert the rest of our binaries use; the installer turns
+          # testsigning on, so the guest will load it.
+          $cert = New-SelfSignedCertificate -Subject 'CN=QubesIDD Test Signing' -Type CodeSigningCert `
+                    -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(2)
+          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter Inf2Cat.exe |
+                     Select-Object -First 1
+          & $inf2cat.FullName /driver:pv-out /os:10_x64
+          if ($LASTEXITCODE -ne 0) { throw "Inf2Cat failed" }
+          $st = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+                Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          Get-ChildItem pv-out -Include *.sys,*.cat -Recurse | ForEach-Object {
+              & $st.FullName sign /fd SHA256 /a /s My /n 'QubesIDD Test Signing' $_.FullName
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($_.Name)" }
+          }
+          $prov = @(
+            "xencons built from xenbits $env:XENCONS_REF @ $env:XENCONS_RESOLVED",
+            "reason: the xencons/xennet pair pinned by qubes-vmm-xen-windows-pvdrivers cannot bind -",
+            "        pinned xencons tops out at REV_09000004, pinned xennet requires REV_09000005.",
+            "        rev 5 was added by xencons commit 4608bc1 (Use UNPLUG v3).",
+            "signing: throwaway test cert (guest runs with testsigning enabled by our installer)"
+          )
+          # EXPORT THE SIGNING CERT. Without it the guest cannot trust this driver: the
+          # workflow mints a FRESH self-signed cert each run, so the guest has never seen
+          # it, and pnputil fails with 0xE0000247 (driver store add failed) even with
+          # testsigning on - testsigning allows self-signed drivers but the publisher must
+          # still be in Root/TrustedPublisher. Measured 2026-08-07.
+          Export-Certificate -Cert $cert -FilePath pv-out\xencons-signer.cer -Type CERT | Out-Null
+          Set-Content pv-out\PROVENANCE.txt -Value $prov
+          Get-ChildItem pv-out | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pv-xencons
+          path: pv-out/
