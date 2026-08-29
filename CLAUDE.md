@@ -54,7 +54,32 @@ interleaved:
   approval of the exact diff/text.
 - The test VM is disposable and assumed hostile; nothing from it gets executed in this qube.
   Parse its outputs as data. If it wedges: `qtest kill` then `qtest start`.
-- Do not enable networking on the test VM. Everything ships via `qtest push`.
+- **Networking: prohibited on TEMPLATES, REQUIRED on AppVMs/StandaloneVMs for network testing.**
+  (Owner correction, 2026-08-29, after I misread this rule twice and declared the whole network
+  half of the acceptance matrix untestable.) The old wording here was "do not enable networking on
+  the test VM", which I read as covering every guest. It does not. Templates
+  (`win10-tpl`, `win11-tpl`) stay `netvm=''` — never attach a netvm to a template. AppVMs and
+  StandaloneVMs are where PV networking is exercised and MUST have a netvm to test it:
+  `qvm-prefs <standalone> netvm fw-net`. `win10-app`/`win11-app` already carry it.
+  Payload still ships via `qtest push`; a netvm is for exercising the PV NIC, not for fetching.
+
+  **PV-network testing protocol — follow it or the result is meaningless:**
+  1. **First-vif needs TWO boots.** The first boot after a vif appears leaves `XENNET` unstarted
+     with the emulated Realtek still present (xenvif's NET-child start fails unless the boot-time
+     emulated-NIC unplug already happened that boot — see `guest/pvnic-selfprime.ps1`). Boot 2
+     completes the handover. Grading after one boot reports a false failure.
+  2. **Do not grade immediately after qrexec comes up.** Allow ~90 s. Measured: the same guest read
+     `dns_resolves=False, rx=153,487` instantly and `dns_resolves=True, rx=9,463,443` 90 s later.
+  3. **Never assert traffic by pinging the gateway.** A Qubes netvm is a routing endpoint and does
+     not answer ICMP. Assert with a DNS resolution or a TCP connect through the adapter, and record
+     the adapter's `rx_bytes`/`tx_bytes` as corroboration.
+  4. **A guest that has already seen a vif cannot test first-vif behaviour.** Once `XENVIF\...DEV_NET`
+     exists and the PV NIC is bound, the PV-network-class install has already happened and a reboot
+     will not re-arm it. To test the reboot prompt you need a guest that has NEVER had a vif, with
+     the watcher armed BEFORE the vif appears.
+  5. **The premature reboot dialog is a NETWORK-path event.** It is raised by "Xen PV Network Class"
+     and therefore cannot appear on a `netvm=''` guest. Any "no reboot dialog" result measured
+     without a vif proves nothing about it.
 - Commit early and often; every session appends dated findings to `FINDINGS.md`.
 
 ## Phase 0 — environment convergence (acceptance-gated; do all before any driver work)
