@@ -21068,3 +21068,39 @@ instrument for the observed class "guest alive, qrexec dead", which is what we k
 **Not yet shipped in the package.** Building it is half the job; adding it to the payload, installing
 it, and confirming `XENBUS\VEN_XP0001&DEV_CONS` leaves CM code 28 is the other half — and that
 allowlist entry in `guest/health-check.ps1` becomes wrong the moment it does.
+
+## 2026-08-29 — the wedge produces NO device-model activity at all (owner-supplied dm log)
+
+The owner exported dom0's device-model log for `win10-clean` (there is no `qemu-dm-<vm>.log` on this
+setup — it is the stubdom console log). Kept at
+`evidence/2026-08-29-wedge-dm-log/guest-win10-clean-dm.log.gz`. dom0 stamps are local = UTC+3.
+
+**The whole wedge window is a hole:**
+
+    19:57:43  qubes_gui: viewer disconnected, waiting for new connection   <- last entry
+    19:59     install launched from the release ISO
+    ~20:07    qrexec stops answering; guest Running, ~2 vCPUs busy
+    21:26     ACPI shutdown requested -> guest never responds
+    21:32     qvm-kill
+    21:34:14  Logfile Opened                                              <- next entry, the restart
+
+**Nothing between 19:57:43 and 21:34:14.** Not one line for ~97 minutes spanning the entire failure.
+
+**What that excludes** — qemu logs exceptional events, so silence is not "nothing happened", it is
+"nothing qemu considered abnormal happened":
+- no device I/O faults, no emulated-device errors, no QMP `DEVICE_DELETED`/`RESET`/`STOP`
+- no qemu-side crash or restart
+- **no `SHUTDOWN` event when ACPI was requested at 21:26** — the guest never acknowledged the power
+  button at the device-model level, which is consistent with a guest that cannot execute the ACPI
+  handler, not with one that received and ignored it
+
+So the failure is **entirely in-guest**: the device model saw a normally-running VM the whole time.
+That removes emulated-device faults and the qemu/stubdom layer from the candidate list, and leaves
+the in-guest kernel condition — which is what the Xen HVM IPI/TLB-shootdown hypothesis predicts, and
+why nothing is logged inside the guest either.
+
+**Still not proven, and the honest limit is unchanged:** a negative result narrows, it does not
+identify. Distinguishing the shootdown deadlock from another in-guest stall needs a view of the
+guest's CPUs at the moment it happens — an NMI dump (deliberately a human action here), or the PV
+console now built in CI. **The owner's assessment ("not much of interest") was correct about its
+content; the value is in what it rules out.**
