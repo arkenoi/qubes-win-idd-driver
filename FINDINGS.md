@@ -20724,3 +20724,59 @@ which is what left `win10-tpl` unbootable).
 
 **Cell status: install PASS, hotplug PASS, functional grading INCOMPLETE.** Recording it that way
 rather than inferring the last step from the first two.
+
+## 2026-08-29 — SESSION STATE: what is proven, what is open, what to do next
+
+Written deliberately at context exhaustion rather than starting another experiment (tripwire 4 of
+[[bad-session-fuckery-loop]]: notice the overload, write the state, continue from the summary).
+
+### PROVEN this session
+
+1. **Root cause of the WIN10 install hang: four of five MSI driver catalogs shipped UNSIGNED.**
+   `patch-xenbus-inf.ps1` regenerated every catalog via Inf2Cat and re-signed only `xenbus.cat`.
+   Fixed at source; the build now FAILS on any unsigned catalog. Verified end to end: 27.9-min hang →
+   49-second install.
+2. **The premature reboot dialog is a NETWORK-path event** ("Xen PV Network Class"), so it cannot
+   appear on a `netvm=''` guest. Our package does not raise it: 0/69 on a true first-vif guest with
+   the watcher armed before the vif existed. The dialog captured earlier came from the STOCK
+   installer's first-logon run, 15 s before ours started.
+3. **PV NIC hotplug works, and the applier is the deciding variable — 3-for-3 vs 0-for-3.**
+   Applier present → bound in 24–26 s with zero reboots (win10-u10, win11-app, win11-24h2 corrected).
+   Applier absent → PnP Error (same guests, pre-fix package). The latch is now unconditional
+   (`cace671`), verified deploying on StandaloneVMs.
+4. **Network carries real traffic** on win10-u10 (1.25 GB), win11-fresh, win11-app, win11-24h2, with
+   the emulated NIC unplugged in every case. PV NIC benchmarks **258 Mbit/s** against a CDN.
+
+### CELL STATUS (current-package code only)
+
+| cell | install | hotplug | functional |
+|---|---|---|---|
+| WIN10 stage-2 (win10-u10) | PASS | PASS 25 s | **ok:true** |
+| WIN11 25H2 upgrade (win11-fresh) | PASS | — | **ok:true** |
+| WIN11 AppVM (win11-app) | PASS | PASS 26 s | **ok:true** |
+| WIN11 stock (win11-24h2) | PASS | PASS 24 s | **INCOMPLETE** — qrexec died post-attach |
+| WIN10 AppVM (win10-app) | — | — | **BLOCKED** — MoveUsers defect |
+| WIN10 armed (win10-clean) | PASS (pre-fix pkg) | — | STALE — regrade needed |
+
+### OPEN, in priority order
+
+1. **MoveUsers/private-volume defect** — an AppVM on a MoveUsers template has no `Users` tree on its
+   fresh private volume, so `qubes.Filecopy` fails and NOTHING can be pushed. Blocks the whole WIN10
+   AppVM path. `win11-app` is unaffected, so it is configuration-dependent — determine which template
+   configurations produce it. **This is a real product defect, not a harness issue.**
+2. **qrexec death after a successful netvm attach** (win11-24h2, twice, ~3.5 vCPUs pegged, no windows
+   mapped, survives a reboot attempt). Not the install, not the NIC — both verified good first.
+   One reproduction; needs a second before any theory. Candidate: the Xen HVM IPI/TLB-shootdown class.
+3. **Regrade win10-clean** with the current package (it carries `f777bec`).
+4. Untouched subsystems: updates, rendering/benchmarks (BENCH-0 baselines never minted), safeguard
+   regressions.
+
+### METHOD RULES EARNED TODAY (all already cost a run)
+
+- **Read the installer's `package … repo <sha>` line BEFORE grading any cell.** Running a cell with a
+  pre-fix package voided it and cost 29 minutes.
+- **Verify the fix under test is deployed on the subject** before concluding its mechanism is broken.
+  Three runs were spent blaming hotplug for a missing applier.
+- **Never park a half-installed image**; park pristine and stock per OS and clone them. A full
+  reinstall is warranted only for the answer-file first-logon cell.
+- **An "impossible" is a measurement, not an intuition** — see `.claude/skills/rig-capabilities/SKILL.md`.
