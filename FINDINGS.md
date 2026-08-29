@@ -19790,3 +19790,50 @@ Two details worth keeping from the same install log, neither of them a verdict:
 **Status of the shipped mitigations: UNPROVEN, not wrong.** Nothing here shows they are unnecessary;
 it shows they were never tested against an uncontaminated run. The decisive experiment is three
 uninjected upgrade-over-own WIN10 runs with the environment dumped and asserted `SEED*`-free.
+
+## 2026-08-29 — step-0: first-hand guest measurements, and the instrument chain proven on a live guest
+
+All measured today by me on `win10-u10`, booted, probed, shut down cleanly via ACPI. These are
+first-hand readings, not inherited claims.
+
+**win10-u10 actual content** (`guest/qwt-state.ps1`, both Uninstall roots):
+
+    QWTVERS=4.2.2.0   QWTCOUNT=1        AGENTFILEVER=4.3.3.0
+    TESTSIGNING=True  SYSTEMSTARTOPTIONS=" TESTSIGNING  NOEXECUTE=OPTIN"
+    BUSTYPE=SCSI      XBMSTATUS=Running XBMSTART=2  XBMPIDS=3076
+
+Three things follow:
+
+1. **This guest is a ready-made stock-QWT-4.2.2 target with the STOCK monitor state** —
+   `xenbus_monitor` Start=2 (Automatic) and *Running*. That is the S10 precondition the plan
+   costed at 17-90 min of golden-building, and it already exists. It is also a genuinely different
+   precondition from the win10-clean clones, where the installer logged `(was Disabled/Running)`:
+   Automatic+Running vs Disabled+Running. **Preserve this guest** — do not reuse it as a scratch
+   target.
+2. **It is NOT pristine stock.** The registered product is 4.2.2.0 while `gui-agent.exe` is
+   4.3.3.0, i.e. an agent binary was swapped in without the MSI registration changing. Usable as a
+   stock-*registration* upgrade source; NOT a clean stock image. Recorded rather than smoothed over.
+3. Its boot disk is already on the PV path (`BUSTYPE=SCSI`).
+
+**Instrument chain validated end-to-end on a live guest**, each state produced deliberately:
+
+| case | condition | result |
+|---|---|---|
+| A | healthy guest, no app open | `EMPTY` |
+| B | unserviceable target (`win-idd-test`) | `CAPTURE-FAILED` |
+| C | healthy guest, notepad open | `CAPTURED`, 1 window 2566x1022, `VERDICT=DESKTOP` |
+
+**Two defects in my own new code, found only because this ran against a real guest:**
+
+- `local.WinScreenshot` exits 1 **both** when it refuses a target and when the guest simply has no
+  mapped windows. My first `_snap` judged rc alone and so labelled a *healthy* win10-u10
+  `CAPTURE-FAILED`: seamless mode maps nothing with no app open, and opening notepad immediately
+  produced a 1-window capture. The discriminator cannot be rc, and cannot be stderr (qrexec does
+  not propagate it) — it is whether the target is serviceable at all, decided locally.
+- `_snap` set `SNAP_STATE` but every caller invoked it as `n=$(_snap ...)`, a **subshell**, so the
+  state never escaped and `screenverdict` returned `NOSHOT` even for a captured window. That
+  silently disables `bootwait`'s terminal detection — the very guard against the kill-restart loop
+  that is H2's suspected brick mechanism. A guard that cannot fire is worse than none.
+
+Both are the same lesson the campaign exists for: an instrument is not trustworthy until it has
+been seen to produce each of its outcomes on the real system.

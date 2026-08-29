@@ -33,24 +33,42 @@ alive(){  qrun 'cmd /c "echo ALIVE"' | grep -aoE ALIVE | head -1; }
 #
 # 3. CAPTURE-FAILED, EMPTY and CAPTURED are three different states and are no longer collapsed.
 #    "0 PNGs" was being read as "nothing on screen" when it frequently meant the service refused.
-_snap(){ # $1=dir $2=label -> echoes "<n>" and sets SNAP_STATE
+#    MEASURED 2026-08-29, and it corrected this very function: local.WinScreenshot exits 1 BOTH
+#    when it refuses a target AND when the target simply has no mapped windows. So a non-zero rc
+#    alone does NOT mean the instrument failed - on win10-u10, with gui-agent running in an active
+#    session, an empty tar was legitimate (seamless mode maps nothing when no app is open; opening
+#    notepad immediately produced a 1-window capture). Judging rc alone would have recorded
+#    CAPTURE-FAILED for a healthy guest, which is the same wrong-signal class this file exists to
+#    kill. The discriminator is whether the target is one the service will serve at all, which is
+#    decidable HERE, cheaply, and does not depend on stderr (qrexec does not propagate it).
+_target_serviceable(){ qvm-check --quiet "$QTEST_VM" 2>/dev/null &&
+                       qvm-tags "$QTEST_VM" list 2>/dev/null | grep -qx win-idd-testbed; }
+_snap(){ # $1=dir $2=label -> sets SNAP_N and SNAP_STATE. Sets globals; echoes NOTHING.
+  # NOT via $(command substitution): that runs in a subshell and the state assignment is lost.
+  # Measured 2026-08-29 - the first version echoed the count and set SNAP_STATE, every caller used
+  # n=$(_snap ...), so SNAP_STATE was ALWAYS empty and screenverdict returned NOSHOT even for a
+  # captured window. That silently disables bootwait's terminal detection, i.e. the guard against
+  # kill-restart loops. Globals, deliberately.
   local tar="$1/e2e-$2.tar"
+  SNAP_N=0; SNAP_STATE=
   _q 70 ./tools/qtest shot "$tar" >/dev/null
-  if [ "$QRC" -ne 0 ] || [ ! -s "$tar" ]; then SNAP_STATE=CAPTURE-FAILED; echo 0; return; fi
+  if [ ! -s "$tar" ]; then
+    if _target_serviceable; then SNAP_STATE=EMPTY; else SNAP_STATE=CAPTURE-FAILED; fi
+    return
+  fi
   rm -rf "$1/e2e-$2-ex"; mkdir -p "$1/e2e-$2-ex"
   tar xf "$tar" -C "$1/e2e-$2-ex" 2>/dev/null
-  local n; n=$(ls "$1/e2e-$2-ex"/*.png 2>/dev/null | wc -l)
-  if [ "$n" -eq 0 ]; then SNAP_STATE=EMPTY; else SNAP_STATE=CAPTURED; fi
-  echo "$n"; }
+  SNAP_N=$(ls "$1/e2e-$2-ex"/*.png 2>/dev/null | wc -l)
+  if [ "$SNAP_N" -eq 0 ]; then SNAP_STATE=EMPTY; else SNAP_STATE=CAPTURED; fi; }
 
-cap(){ local S=$1 lbl=$2 R=$3 n
-  n=$(_snap "$S" "$lbl")
+cap(){ local S=$1 lbl=$2 R=$3
+  _snap "$S" "$lbl"
   if [ "$SNAP_STATE" = EMPTY ]; then
     _q 25 ./tools/qtest run 'cmd /c start "" notepad.exe' >/dev/null; sleep 4
-    n=$(_snap "$S" "$lbl"); _q 20 ./tools/qtest run 'cmd /c "taskkill /im notepad.exe /f"' >/dev/null
+    _snap "$S" "$lbl"; _q 20 ./tools/qtest run 'cmd /c "taskkill /im notepad.exe /f"' >/dev/null
   fi
   local d; d=$(ls "$S/e2e-$lbl-ex"/*.png 2>/dev/null|head -1|xargs -r file|grep -oE '[0-9]+ x [0-9]+'|head -1)
-  echo "[$(date +%H:%M:%S)] [shot] $lbl: $SNAP_STATE $n png ${d}  (READ e2e-$lbl-ex/*.png)" >> "$R"; }
+  echo "[$(date +%H:%M:%S)] [shot] $lbl: $SNAP_STATE $SNAP_N png ${d}  (READ e2e-$lbl-ex/*.png)" >> "$R"; }
 
 # Classify what is on the guest's largest window: RECOVERY | BLACK | DESKTOP | UNKNOWN | NOSHOT.
 # Uses the PER-WINDOW capture, never a whole-desktop one.
@@ -58,7 +76,7 @@ cap(){ local S=$1 lbl=$2 R=$3 n
 # real captures are still owed (plan T2.14). Treat DESKTOP as "something is rendering", not as
 # "the install succeeded".
 screenverdict(){ # $1=scratchdir $2=label
-  local n; n=$(_snap "$1" "$2")
+  _snap "$1" "$2"
   if [ "$SNAP_STATE" != CAPTURED ]; then echo NOSHOT; return; fi
   local big; big=$(ls -S "$1/e2e-$2-ex"/*.png 2>/dev/null | head -1)
   [ -n "$big" ] || { echo NOSHOT; return; }
