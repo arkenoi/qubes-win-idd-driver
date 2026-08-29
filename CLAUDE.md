@@ -78,8 +78,11 @@ interleaved:
   2. **Do not grade immediately after qrexec comes up.** Allow ~90 s. Measured: the same guest read
      `dns_resolves=False, rx=153,487` instantly and `dns_resolves=True, rx=9,463,443` 90 s later.
   3. **Never assert traffic by pinging the gateway.** A Qubes netvm is a routing endpoint and does
-     not answer ICMP. Assert with a DNS resolution or a TCP connect through the adapter, and record
-     the adapter's `rx_bytes`/`tx_bytes` as corroboration.
+     not answer ICMP. Assert with an actual **FILE TRANSFER** (owner, 2026-08-29: "not ping the gw
+     (not working), but file transfer (also checks if stack is sane)") — a few MB fetched over the
+     PV NIC, cross-checked against that adapter's own `rx_bytes` delta so the bytes are proven to
+     have crossed IT and not something else. DNS resolution / a TCP connect are acceptable as a
+     cheap smoke test; a transfer is what proves the stack.
   4. **A guest that has already seen a vif cannot test first-vif behaviour.** Once `XENVIF\...DEV_NET`
      exists and the PV NIC is bound, the PV-network-class install has already happened and a reboot
      will not re-arm it. To test the reboot prompt you need a guest that has NEVER had a vif, with

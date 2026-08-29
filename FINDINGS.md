@@ -20444,3 +20444,56 @@ for cell 5, then the fresh install for cell 6). Their install results and health
 recorded (`ok:true` at the time, network `na` because no netvm was attached then). The network stack
 is a property of the package, not of a cell's precondition, and it behaves identically on all five
 guests exercised above, across both operating systems.
+
+## 2026-08-29 — ACCEPTANCE MET: AppVM takes an immediate netvm attach with ZERO reboots, and moves real data
+
+Owner's two corrections drove this: networking is prohibited on the TEMPLATE only, and **a second
+boot is a FAILURE** — an AppVM carrying our QWT must handle an immediate netvm attach with zero
+reboots, which is exactly what the seeding/latch was invented for. I had recorded "first-vif needs
+two boots" in CLAUDE.md as if it were normal; that was wrong and is corrected there and in memory.
+
+**Test, on `win11-app` (AppVM on win11-tpl, which carries the latch):**
+
+    boot with netvm=''            -> baseline: no vif, only two KM-TEST Loopback Adapters
+    arm the dialog watcher        -> BEFORE the vif exists, so a prompt cannot be missed
+    08:20:27  qvm-prefs win11-app netvm fw-net      (guest RUNNING, no reboot)
+    08:20:53  NIC Xen PV Network Device | pnp=XENVIF\VEN_XP&DEV_NET\0 enabled=True
+
+**26 seconds, zero reboots.** Watcher over the whole attach: 62 samples, `SAMPLES_WITH_DIALOG=0`.
+
+**Then a real file transfer, not a ping** (owner: "file transfer (also checks if stack is sane)"):
+
+    PVNIC = Ethernet 4, status Up, 100 Gbps
+    XFER_OK=True  bytes=16,192,808  secs=76.5
+    PVNIC_RX_DELTA=21,966,263        <- the bytes crossed THAT adapter, not another
+    EMULATED_LEFT=                   <- no emulated physical NIC remains
+
+16 MB fetched over the PV NIC, corroborated by the adapter's own counter delta. That is "all drivers
+and network present" demonstrated by moving data, with the emulated adapter unplugged.
+
+### Why the earlier StandaloneVM results needed two boots — and why that is not a pass
+
+The four StandaloneVMs needed a second boot because they have **no latch**: `pvnic_applier` reported
+`QubesPvNic task not registered - M1 latch deployment absent`. The installer seeds the latch on
+TEMPLATES, and AppVMs inherit it; a bare StandaloneVM does not get one. So a StandaloneVM needing
+two boots is the un-latched case, not the acceptance configuration — and recording it as normal, as
+I briefly did, would have taught later sessions to accept the broken behaviour.
+
+### And the premature reboot dialog IS real — on the stock path, with a vif
+
+Captured verbatim for the first time on the networked stock guest:
+
+    TITLE=Xen  CLASS=#32770  PROC=csrss
+    "Xen PV Network Class needs to restart the system to complete installation.
+     Press 'Yes' to restart the system now or 'No' if you plan to restart the system later."
+
+It appeared at 10:48:58, **15 s before** our installer's first log line (10:49:13), so the STOCK
+QWT's first-logon install raised it — not ours — and it was still on screen after our install
+finished. Our suppressor clears the pending Request and disables the monitor; it does not dismiss an
+already-displayed csrss hard-error window.
+
+**This retires my earlier framing.** "Zero premature reboot dialogs across 310 samples" was measured
+on `netvm=''` guests, where the Xen PV **Network** Class never installs and therefore cannot raise
+that prompt. Those runs could not have seen it. The dialog is a NETWORK-path event; it must be
+tested with a vif present, and the watcher armed before the vif appears — which is what this run
+finally did, and on our package's own path it stayed clean (0 of 62).
