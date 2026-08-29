@@ -62,12 +62,20 @@ export QTEST_VM="$VM"          # qtest reads the target from the environment, no
 OUT="${WEDGE_OUT:-$REPO/evidence/wedge-hunt-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
 
-DEAD_THRESHOLD="${DEAD_THRESHOLD:-120}"   # seconds of silence before calling it a wedge
+# Seconds of silence before calling it a wedge. 600, not 120: transient unresponsiveness of
+# ~2 minutes was MEASURED on a healthy guest under this exact soak (probes failing, then the
+# same guest answering in 0 s once the backlog drained). A threshold inside the transient range
+# manufactures wedges out of load, which would be worse than finding nothing - it would
+# "confirm" the mechanism with noise and send the fix in a fabricated direction.
+DEAD_THRESHOLD="${DEAD_THRESHOLD:-600}"
 STOP="$OUT/.stop"
 
 log(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/hunt.log"; }
 state(){ qvm-ls --raw-data --fields STATE "$VM" 2>/dev/null | tail -1; }
-alive(){ timeout 30 "$QTEST" run "echo alive" >/dev/null 2>&1; }
+# 60 s, not 30. Measured 2026-08-29: under 36-way churn a HEALTHY guest can take longer than
+# 30 s to answer, and the backlog left by a torn-down soak kept probes failing for ~2 minutes
+# before the same guest answered in 0 s. A 30 s probe reports load as death.
+alive(){ timeout 60 "$QTEST" run "echo alive" >/dev/null 2>&1; }
 
 # --- recovery -------------------------------------------------------------------------
 # A wedged guest cannot be shut down cleanly (it never sees ACPI - the 2026-08-29 dm log
