@@ -161,6 +161,23 @@ These watermarks are canonical protocol-wide (they supersede the update draft's 
 
 ---
 
+**WEDGE CAPTURE — what to collect the moment a guest goes unresponsive (owner action).**
+When the wedge hits, every in-guest channel dies at once: qrexec stops answering, no windows are
+mapped so captures come back empty, and the event log records nothing for the whole window
+(measured twice, 2026-08-29). Everything this qube can reach runs THROUGH those. What survives is
+outside the guest:
+
+- **`sudo tail -200 /var/log/xen/qemu-dm-<vm>.log`** in dom0 — the device model's own view. Shows
+  whether the guest is still issuing device I/O, which separates "CPU spinning but alive" from
+  "stopped issuing I/O entirely". Nothing measurable from inside can distinguish those.
+- **`sudo xl dmesg`** — hypervisor-side messages for the same window.
+- `admin.vm.CurrentState` cputime deltas — reachable from here, and the only in-scope signal.
+
+**This dev qube CANNOT read either log** — tested 2026-08-29, not assumed: `admin.vm.Console` is
+refused by policy and `/var/log/xen/` is unreadable here. So it is a genuine owner action, and it is
+the highest-value evidence available for this failure class. `xencons` (now built in CI) is the
+in-band complement: a PV console readable via `xl console` that does not depend on qrexec.
+
 ## 3. Execution rules (H) — every part runs through these
 
 ### H0 — Foundation
