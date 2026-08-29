@@ -353,6 +353,43 @@ Check 'pv_disk_bound' ($vbdOk -and $disks.Count -ge 1 -and $ideDisks.Count -eq 0
        disks = @($disks | ForEach-Object { 'disk' + $_.Number + ' bustype=' + $_.BusType })
        still_on_emulated_ide = @($ideDisks | ForEach-Object { 'disk' + $_.Number }) }
 
+# --- 6b1. THIS BOOT'S KERNEL/SERVICE EVENTS ------------------------------------------------
+# Added 2026-08-29. Until now this script had ZERO Get-WinEvent calls, so it asserted the END state
+# (device bound, desktop on the IDD) and was blind to a driver that FAILED TO LOAD and was retried,
+# or to a service that died. The event that exposed the gap:
+#     id 219  Kernel-PnP  "\Driver\WUDFRd failed to load. Device: ROOT\DISPLAY\0000
+#                          Status: 0xC0000365"   (STATUS_DRIVER_FAILED_PRIOR_UNLOAD)
+# on a boot where no windows were mapped. It is LEVEL 3 (Warning), and the project's two event
+# scanners both filter Level 1-2, so nothing in the acceptance path could ever have seen it.
+#
+# Scope: THIS BOOT only (LastBootUpTime), and only signatures that bear on whether OUR stack came up.
+# Reported as evidence always; it FAILS only on the signatures that mean a component of ours did not
+# load, so unrelated Windows noise cannot fail an otherwise good guest.
+$bootEvents = @(); $bootBad = @()
+try {
+    $since = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+    foreach ($e in @(Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=$since; Level=1,2,3} -MaxEvents 200 -ErrorAction SilentlyContinue)) {
+        $msg = ($e.Message -replace "`r`n", ' ')
+        # our stack failing to load / start
+        $isOurs = ($e.Id -eq 219  -and $msg -match 'ROOT\\DISPLAY|Xen|WUDFRd') -or
+                  ($e.Id -eq 7000 -and $msg -match 'Qubes|Xen|Qdb|Qrexec') -or
+                  ($e.Id -eq 7043 -and $msg -match 'Qubes') -or
+                  ($e.Id -eq 7031 -and $msg -match 'Qubes|Xen')
+        if ($isOurs) {
+            $rec = @{ id = $e.Id; level = $e.Level; provider = $e.ProviderName
+                      time = $e.TimeCreated.ToUniversalTime().ToString('o')
+                      msg = $msg.Substring(0, [Math]::Min(160, $msg.Length)) }
+            $bootEvents += $rec
+            # 7043 is a shutdown-phase complaint about the PREVIOUS boot and does not mean this boot
+            # is broken; record it, do not fail on it.
+            if ($e.Id -ne 7043) { $bootBad += $rec }
+        }
+    }
+    Check 'boot_events_clean' ($bootBad.Count -eq 0) @{ failing = $bootBad; all_ours = $bootEvents; since = $since }
+} catch {
+    Check 'boot_events_clean' $false @{ error = "could not read the System log: $($_.Exception.Message)" }
+}
+
 # --- 6b2. the network must actually CARRY TRAFFIC, not merely be bound -------------
 # "PV NIC present" is not "networking works". Assert an IP and a working gateway.
 $ipOk = $false; $gw = $null; $addr = $null
