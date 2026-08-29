@@ -193,7 +193,12 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force pv-out | Out-Null
-          $files = Get-ChildItem xencons -Recurse -Include xencons.sys,xencons.inf,xencons_coinst*.dll
+          # xencons ships MORE than xenvif does: its INF has [monitor_copyfiles] and [tty_copyfiles]
+          # sections referencing xencons_monitor_*.exe and xencons_tty_*.exe (a PV console has a
+          # userspace side; a NIC does not). Collecting only the xenvif set made Inf2Cat fail the
+          # signability test with "xencons_monitor_9_1_0_0.exe ... is missing". Collect everything
+          # the INF references.
+          $files = Get-ChildItem xencons -Recurse -Include xencons.sys,xencons.inf,xencons_coinst*.dll,xencons_monitor*.exe,xencons_tty*.exe
           if (-not $files) { throw "no xencons build outputs found" }
           $files | ForEach-Object { Copy-Item $_.FullName pv-out -Force }
           # Same throwaway test cert the rest of our binaries use; the installer turns
