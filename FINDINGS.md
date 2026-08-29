@@ -20096,3 +20096,47 @@ longer separate a guest window from a host capture. The rule is left as-is (it f
 is the right direction) but it will now reject legitimate wide per-window captures, and it must not
 be relaxed by simply raising the number - that would disable the check entirely. Recorded rather
 than quietly weakened.
+
+## 2026-08-29 — cell U11 (upgrade-over-ours, WIN11 25H2): install PASSES, network cannot be judged
+
+`win11-fresh`, build 10.0.26200.9168, precondition recorded from the guest: QWT **4.3.9.0**
+installed, testsigning ON, boot disk on PV, xenbus_monitor Disabled/Stopped. Same CI package
+(`f777bec`), unmodified.
+
+**Install half — PASS:**
+
+    INSTALL COMPLETE, ok:true, ~72 s (msiexec 06:12:23 -> 06:13:35)
+    reboot-dialog watcher: 46 samples, blind=false, SAMPLES_WITH_DIALOG=0
+    MSI log 3036 lines, BIGGEST_GAPS=0
+
+13 samples show a pending PV reboot Request armed and then cleared by the installer, with the
+monitor Stopped throughout — the mechanism working as designed, and unable to prompt.
+
+**Functional half — 12 of 15 health-check assertions pass.** Passing: agent binary hash ==
+MANIFEST, agent process, all Qubes services, IDD device bound, desktop on the IDD, IDD modes
+published, no unexpected PnP errors, agent log healthy, cursor hidden, user data on private volume,
+PV **disk** bound, clipboard. Failing, all three network:
+
+    pv_drivers_bound        XENVIF/XENNET not started, pv_nics: []
+    network_carries_traffic ip 169.254.130.108 (APIPA), gateway unreachable
+    pvnic_applier           "QubesPvNic task not registered - M1 latch deployment absent"
+
+All three trace to `qvm-prefs win11-fresh netvm` being `''`: with no vif there is nothing for the PV
+NIC to bind to and no gateway to reach. Confirmed independently on win10-u10, where the XENBUS enum
+carries `VEN_XP0001&DEV_VIF` (the veto key the latch seeds) but no live VIF PnP device exists and
+`XENVIF_ENUM` is empty. The drivers ARE in the driver store (`pnputil /enum-drivers` lists
+xenvif.inf and xennet.inf); there is simply no device.
+
+**Instrument defect found here, worth fixing separately:** health-check documents "NO NETWORK
+ATTACHED is 'not applicable', never a pass", and that branch keys on `$nics.Count -eq 0`. On
+win11-fresh it did not fire, because the guest has two **Microsoft KM-TEST Loopback Adapter**
+entries which `Win32_NetworkAdapter ... PhysicalAdapter` counts as physical NICs. So an offline
+guest with a loopback adapter is graded as "PV NIC missing" rather than "not applicable". win10-u10
+has no loopback adapter, which is why the same offline condition returned ok:true there. That
+asymmetry is an artefact of the check, not of the build.
+
+**Standing constraint:** CLAUDE.md forbids enabling networking on the test VM. PV networking
+therefore cannot be demonstrated on this rig as configured, by rule rather than by defect. Either a
+cell gets a netvm (owner decision) or "all drivers and network present" is met only for the disk,
+bus, interface and display stacks, with the NIC asserted structurally (driver in store + latch
+armed) rather than by carrying traffic.
