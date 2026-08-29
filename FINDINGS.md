@@ -20791,3 +20791,36 @@ Written deliberately at context exhaustion rather than starting another experime
 - **Never park a half-installed image**; park pristine and stock per OS and clone them. A full
   reinstall is warranted only for the answer-file first-logon cell.
 - **An "impossible" is a measurement, not an intuition** — see `.claude/skills/rig-capabilities/SKILL.md`.
+
+## 2026-08-29 — WIN10 AppVM path UNBLOCKED and PASSING; the blocker was our own 2 GiB private volume
+
+The "MoveUsers product defect" was `mgmt/clone-to-template.sh` never extending the private volume,
+exactly as README.md line 76 documents. Fixed there (extends template AND AppVM, fails loudly),
+`win10-u10` extended, template rebuilt.
+
+**Immediately after the fix, on the same path that had been blocked all session:**
+
+    template  Q:\ now contains Users        push works (TINY_OK)
+    AppVM     push works (TINY_OK)          applier inherited: QubesPvNic Ready, script present
+
+**NET-2 on `win10-app` — PASS:**
+
+    18:26:52  qvm-prefs win10-app netvm fw-net     (RUNNING guest, no reboot)
+    18:27:17  XENNET = Running, ADAPTER = Ethernet Up      -> 25 seconds
+
+    LastBootUpTime  18:23:51.2683940Z before AND after   -> zero reboots
+    watcher         48 samples, SAMPLES_WITH_DIALOG = 0
+    health-check    ok = True, zero genuine failures
+    pv_drivers      XENBUS/XENIFACE/XENVIF/XENNET all started, emulated_nics_still_present: []
+    network         ip 10.137.0.72, DNS resolves, traffic flowing
+
+So the WIN10 template→AppVM path — the configuration forum post 56 describes, and the one that had
+never been exercised — now works end to end with zero reboots.
+
+**Applier correlation is now 4-for-4 / 0-for-3.** Present → binds in 24–26 s, zero reboots
+(win10-u10, win11-app, win11-24h2, win10-app). Absent → PnP Error. Both operating systems, both
+qube classes.
+
+**What actually cost the time:** I diagnosed a product defect without reading our own README, then
+spent an hour on it. Gate 0 (`tools/assert-payload.sh`) and the preflight private-volume assertion
+now make both classes of error structurally catchable rather than dependent on me remembering.
