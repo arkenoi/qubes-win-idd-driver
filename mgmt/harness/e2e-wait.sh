@@ -132,7 +132,17 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
         # partial or failed poll costs nothing instead of replacing good data with less of it.
         QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run \
           "cmd /c powershell -NoProfile -Command \"if(Test-Path '$glog'){Get-Content '$glog' -Tail 15}\"" \
-          2>/dev/null | tr -d '\r' | grep -a '^2026' >> "$dir/$lbl-install.tail" || true
+          2>/dev/null | tr -d '\r' | grep -aE '^[0-9]{4}-[0-9]{2}-[0-9]{2}|^=== RESULT ===' >> "$dir/$lbl-install.tail" || true
+        # THE FILTER MUST KEEP THE RESULT TRAILER. It used to be `grep -a '^2026'`, which drops
+        # every line not starting with a timestamp - and the installer writes its trailer as
+        # "=== RESULT === {json}" with NO timestamp (Install-QwtImproved.ps1). The success test
+        # below then searched this filtered file for exactly that line, so w_install's success exit
+        # was UNREACHABLE: every completed install ran to the STALL_SECS deadline and was graded
+        # FAIL. A green product could not have produced a green matrix. Found 2026-08-30 by auditing
+        # the harness against the installer instead of trusting it; never observed before only
+        # because both archived runs aborted earlier for other reasons.
+        # The year is no longer hardcoded either - '^2026' would have started silently dropping
+        # every log line on 1 January.
         # Cumulative, order-preserving, deduplicated view - this is the file to read.
         if [ -s "$dir/$lbl-install.tail" ]; then
           awk '!seen[$0]++' "$dir/$lbl-install.tail" > "$dir/$lbl-install.log.tmp" && \

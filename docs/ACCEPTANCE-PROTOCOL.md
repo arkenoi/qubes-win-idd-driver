@@ -297,8 +297,18 @@ Builder: `mgmt/build-answer-stick.sh`. Read its header before first use of a new
       OUT=$HOME/win-iso/answer-usb-stock.img mgmt/build-answer-stick.sh "Windows 10 Pro"
 
     # Win10 PRISTINE (ST0) stick: leave RELEASE_SETUP / STOCK_SETUP / REAL_STOCK_EXE all unset
-    # -> a QWT-free stick, deliberately:
-    LOCALE=en-GB OUT=$HOME/win-iso/answer-usb.img mgmt/build-answer-stick.sh "Windows 10 Pro"
+    # -> a QWT-free stick, deliberately. NOTE THE DISTINCT OUT PATH - writing a pristine stick to
+    # the RELEASE stick's filename overwrites it in place while its loop keeps serving that file,
+    # so the next default reprovision silently installs no payload and dies on "never reached
+    # qrexec". Measured 2026-08-30: answer-usb.img was clobbered exactly this way.
+    LOCALE=en-GB OUT=$HOME/win-iso/answer-pristine-win10.img \
+      mgmt/build-answer-stick.sh "Windows 10 Pro"
+
+    # Win11 PRISTINE (ST0.11): the WIN11 TEMPLATE IS MANDATORY - see §0.6b(a). Without it Setup
+    # halts at "This PC doesn't currently meet Windows 11 system requirements".
+    UNATTEND=$PWD/mgmt/autounattend-win11.xml LOCALE=en-US \
+      OUT=$HOME/win-iso/answer-pristine-win11.img \
+      mgmt/build-answer-stick.sh "Windows 11 Enterprise Evaluation"
 
     # Win11 (eval media is en-US, matching the builder default; image name confirmed by wiminfo):
     UNATTEND=mgmt/autounattend-win11.xml OUT=$HOME/win-iso/answer-usb-win11.img \
@@ -404,8 +414,12 @@ channel a pristine guest has, and pixels being the standing evidence rule.
 *Expect (default, payload stick):* `answer stick verified: /dev/loopN -> <file> (<bytes> bytes)` →
 shutdown/remove/create lines → `booting the vendor ISO (...) with the answer stick (...)` → several
 `install-phase halt -> restarting without CD` cycles → `qrexec alive after <N>s`, exit 0.
-*Expect (`PRISTINE=1`):* the same up to the reboot cycles, then
-`pristine desktop reached after <N>s (no qrexec expected - ST0)`, exit 0.
+*Expect (`PRISTINE=1`):* the same up to the reboot cycles, then periodic
+`t+<N>s screen=VERDICT=<X> (advisory)` lines, and finally — no earlier than 900 s —
+`candidate desktop after <N>s` plus `NEEDS VISUAL CONFIRMATION - READ <dir>/latest.png`,
+**exit 3**. Exit 3 is NOT success: READ that image before sealing anything. An earlier draft of
+this line promised `pristine desktop reached ... exit 0`; that criterion was retracted in §0.6b
+after it passed a Setup error dialog, and the script no longer implements it.
 *On `FAIL: never reached qrexec within <BUDGET>s`:* triage with screenshots (`w_screen`,
 `qtest shot`) BEFORE any retry — the classic silent cause is a locale or image-name mismatch
 (§0.6). One retry after a diagnosed cause; never blind-loop reprovisions.
