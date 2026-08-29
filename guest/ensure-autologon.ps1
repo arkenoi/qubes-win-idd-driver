@@ -56,6 +56,11 @@ else { Write-Output "ok     DefaultUserName=$user" }
 # world-readable plaintext. Winlogon reads it when the registry value is absent, so a guest with
 # only the secret is correctly armed and must NOT be reported as broken.
 $lsa = $null
+# Default FALSE, not $null: if the Add-Type or the LSA query throws, the catch leaves this
+# untouched, and an unset value must mean "not proven valid" rather than silently passing the
+# -and test. A validity flag that defaults to permissive would reintroduce the exact hole this
+# closes.
+$lsaValid = $false
 try {
     Add-Type -ErrorAction Stop @'
 using System;
@@ -71,6 +76,36 @@ public static class QubesLsaRead {
     static extern uint LsaRetrievePrivateData(IntPtr policy, ref LSA_UNICODE_STRING key, out IntPtr data);
     [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr policy);
     [DllImport("advapi32.dll")] static extern uint LsaFreeMemory(IntPtr p);
+    [DllImport("advapi32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+    static extern bool LogonUser(string user, string domain, string pass, int type, int provider, out IntPtr token);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr h);
+
+    // VALIDATE, do not merely detect. Present() below answers "is a secret stored", which is a
+    // strictly weaker question than "will Winlogon be able to log in with it" - and the weaker
+    // answer is the one that shipped a broken guest. Retrieve the secret and actually try it.
+    // LOGON32_LOGON_INTERACTIVE(2) is the type Winlogon itself uses, so a pass here means the
+    // same credential Winlogon will present is accepted.
+    public static bool Validates(string key, string user, string domain) {
+        LSA_OBJECT_ATTRIBUTES a = new LSA_OBJECT_ATTRIBUTES();
+        a.Length = Marshal.SizeOf(typeof(LSA_OBJECT_ATTRIBUTES));
+        IntPtr pol, data = IntPtr.Zero;
+        if (LsaOpenPolicy(IntPtr.Zero, ref a, 0x00000004, out pol) != 0) return false;
+        LSA_UNICODE_STRING k = new LSA_UNICODE_STRING();
+        k.Buffer = Marshal.StringToHGlobalUni(key);
+        k.Length = (ushort)(key.Length * 2); k.MaximumLength = (ushort)(k.Length + 2);
+        try {
+            if (LsaRetrievePrivateData(pol, ref k, out data) != 0 || data == IntPtr.Zero) return false;
+            LSA_UNICODE_STRING v = (LSA_UNICODE_STRING)Marshal.PtrToStructure(data, typeof(LSA_UNICODE_STRING));
+            string secret = (v.Buffer == IntPtr.Zero) ? "" : Marshal.PtrToStringUni(v.Buffer, v.Length / 2);
+            IntPtr tok;
+            if (!LogonUser(user, domain, secret, 2, 0, out tok)) return false;
+            CloseHandle(tok);
+            return true;
+        } finally {
+            if (data != IntPtr.Zero) LsaFreeMemory(data);
+            LsaClose(pol); Marshal.FreeHGlobal(k.Buffer);
+        }
+    }
     public static bool Present(string key) {
         LSA_OBJECT_ATTRIBUTES a = new LSA_OBJECT_ATTRIBUTES();
         a.Length = Marshal.SizeOf(typeof(LSA_OBJECT_ATTRIBUTES));
@@ -91,15 +126,35 @@ public static class QubesLsaRead {
 }
 '@
     $lsa = [QubesLsaRead]::Present('DefaultPassword')
+    # The credential must WORK, not merely exist. Measured 2026-08-30 on win10-clean: stage 1
+    # refused with "autologon NOT armed (bad-credentials)" after LogonUser rejected the password,
+    # and this script then reported "password present as the LSA secret" and the installer logged
+    # "autologon verified - this qube can come back on its own". The guest booted, failed three
+    # logons with 0xC000006D, and parked at the sign-in screen mapping ZERO windows - reachable by
+    # qrexec, invisible in dom0. The lockout guard reported success while causing the lockout.
+    $lsaUser = (Get-ItemProperty $WL -Name DefaultUserName -EA SilentlyContinue).DefaultUserName
+    if (-not $lsaUser) { $lsaUser = $env:USERNAME }
+    $lsaDomain = (Get-ItemProperty $WL -Name DefaultDomainName -EA SilentlyContinue).DefaultDomainName
+    if (-not $lsaDomain) { $lsaDomain = $env:COMPUTERNAME }
+    if ($lsa) { $lsaValid = [QubesLsaRead]::Validates('DefaultPassword', $lsaUser, $lsaDomain) }
 } catch {
     Write-Output "note   could not query the LSA secret ($($_.Exception.Message.Split([char]10)[0]))"
 }
 
-if ($lsa) {
-    Write-Output 'ok     password present as the LSA secret (not consumable, not plaintext)'
+if ($lsa -and $lsaValid) {
+    Write-Output 'ok     password present as the LSA secret AND accepted by LogonUser'
     if ($pass) {
         Write-Output 'note   a plaintext registry DefaultPassword also exists and is redundant'
     }
+} elseif ($lsa -and -not $lsaValid) {
+    # Present but WRONG. This is the worst state: the guard looks armed to every check that only
+    # asks "is something stored", so it silently defeats itself. Fail loudly - a stored credential
+    # that Winlogon will reject strands the qube exactly as if none were stored at all.
+    Write-Output ("WARN   LSA secret DefaultPassword is present but REJECTED for " +
+                  "$lsaDomain\$lsaUser - Winlogon will NOT be able to log in.")
+    Write-Output 'WARN   The qube will come back at the sign-in screen with NO windows mapped:'
+    Write-Output 'WARN   reachable over qrexec, invisible in dom0. Re-arm with guest\set-autologon.ps1.'
+    $warn++
 } elseif ($pass) {
     Write-Output 'ok     DefaultPassword present (plaintext registry value - consumable)'
 } else {

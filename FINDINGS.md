@@ -21362,3 +21362,49 @@ health-check change made earlier today - dropping the `DEV_CONS:28` allowlist in
 produces readable output. This qube has no dom0 shell. That is the half that matters for the wedge,
 since the console is the only channel that does not die with qrexec, window capture and the event
 log.
+
+## 2026-08-30 — the "black window": guest parked at the sign-in screen, and TWO defects behind it
+
+Owner: the console log looks healthy, *"not like black window of win10-clean"*. Measured on that
+guest: `EXPLORER=0`, `LOGONUI=1`, `quser` -> "No User exists", **`SendWindowMap` count = 0**.
+
+So the black window is not a capture failure. It is the LOCKOUT SHAPE this project already documented:
+a guest that maps ZERO windows while qrexec still answers - running, reachable, invisible. The
+capture path was fine: the boot-time `0x887a0026` keyed-mutex error self-recovered
+("A7RETRY capture initialized after 1 retries").
+
+### Defect A: stage 2 declares autologon "verified" using a check that cannot fail on a bad password
+
+From the install log of this guest, contradicting itself across stages:
+
+    STAGE 1  autologon NOT armed (bad-credentials)      "autologon":"not-armed:bad-credentials"
+    STAGE 2  ok password present as the LSA secret
+             autologon verified - this qube can come back on its own   "autologon":"armed"
+
+Stage 1 validates with `LogonUser` and refused. Stage 2's `guest/ensure-autologon.ps1` only asked
+`LsaRetrievePrivateData` whether a secret EXISTS - never whether it WORKS - so it overrode a correct
+negative with a weaker positive. A stored-but-rejected credential is the worst state: every
+presence check reports "armed" while the guard silently defeats itself.
+
+**Fixed:** `ensure-autologon.ps1` now retrieves the secret and calls `LogonUser` with
+LOGON32_LOGON_INTERACTIVE - the same type Winlogon uses - against DefaultUserName/DefaultDomainName,
+and reports a distinct loud failure for present-but-rejected. `$lsaValid` defaults to FALSE so a
+thrown query cannot pass permissively. Run against this guest it now reports "present as the LSA
+secret AND accepted by LogonUser".
+
+### Defect B (NEW, separate): qrexec-wrapper fails interactive logons as `user`
+
+The three 4625 failures (0xC000006D, "Unknown user name or bad password") at 01:15:27/37/43 are NOT
+autologon attempts. Event detail:
+
+    Account Name: user   Account Domain: WIN-IDD-TEST   Logon Type: 2 (interactive)
+    Caller Process Name: C:\Program Files\Qubes Tools\bin\qrexec-wrapper.exe
+
+They also post-date the boot-time re-arm (`QubesAutologonGuard` last run 01:15:15, result 0), so the
+credential was already armed when they failed - and the LSA secret for that same account validates
+now. **qrexec-wrapper is therefore using a different credential source than the one autologon
+stores, and failing with it.** Not root-caused; recorded with the evidence rather than guessed at.
+
+**Caveat on this guest:** it has had many manual interventions tonight (debug toggle, hard restarts,
+agent swaps, a side-loaded xencons). It is not a clean specimen. Whether the sign-in-screen state
+reproduces belongs to the matrix, on freshly provisioned guests.
