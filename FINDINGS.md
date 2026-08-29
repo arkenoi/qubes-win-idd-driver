@@ -20348,3 +20348,51 @@ raised and cleared.
 - **Cell 6 has no dialog-watcher data.** The install runs unattended at first logon, before a watcher
   can be armed. Its evidence for "no dialog" is that both stages completed unattended, which a modal
   prompt would have prevented — weaker than the direct measurement the other five have.
+
+## 2026-08-29 — NETWORK: PV NIC proven bound and configured on a networked AppVM
+
+**Correction from the owner:** networking is prohibited on the TEMPLATE, not on AppVMs/StandaloneVMs.
+I had read CLAUDE.md's "do not enable networking on the test VM" as covering every guest and
+therefore declared the network criterion untestable. That was my over-reading, and it cost the whole
+network half of this campaign. `win10-app` and `win11-app` already carry `netvm=fw-net`.
+
+**Measured on `win11-app` (AppVM on win11-tpl, netvm=fw-net), health-check:**
+
+    pv_drivers_bound   PASS   XENBUS/XENIFACE/XENVIF/XENNET all started
+                              pv_nics: ["Xen PV Network Device"]
+                              emulated_nics_still_present: []      <- the QEMU NIC was UNPLUGGED
+    pvnic_applier      PASS   pv_adapter_ips: ["10.137.0.68"]
+                              default_route_on_pv: true, apipa_present: []
+
+and the guest's own view:
+
+    CFG Xen PV Network Device  ip=10.137.0.68  gw=10.138.21.72  dns=10.139.1.1,10.139.1.2
+    ROUTE 0.0.0.0/0 -> 10.138.21.72 @if2        (default route is on the PV interface)
+
+So the PV network **driver is bound, the emulated adapter is gone, and the interface holds a real
+Qubes IP, gateway and DNS with the default route on it**. That is "drivers and network present".
+
+`network_carries_traffic` still FAILs: every ping (gateway, DNS, 10.137.0.1) times out. That is
+upstream, not the guest — `fw-net` is outside this dev qube's Admin API scope (`qvm-check fw-net` ->
+non-existent from here), so its netvm cannot be started or even observed by me. Traffic cannot cross
+a netvm that is not running. **Owner action if end-to-end traffic is wanted: start `fw-net`.**
+
+### Two more defects in health-check, both the same root, both found by this run
+
+1. `pv_drivers_bound` / the not-applicable branch counted **Microsoft KM-TEST Loopback Adapters** as
+   physical NICs (`Win32_NetworkAdapter.PhysicalAdapter` is $true for them). That is why win11-fresh
+   and win11-24h2 reported three network FAILs while win10-clean and win10-u10 - identical `netvm=''`
+   condition, no loopback adapter - correctly reported `na` and ok:true. Fixed by excluding
+   `ROOT\NET` / loopback from the physical-NIC set. Control re-run: win10-u10 unchanged, still
+   ok:true with the same `na`. After the fix win11-fresh returns **ok:true with zero genuine
+   failures**.
+2. `network_carries_traffic` took `Select-Object -First 1` over IP-enabled adapters, which on those
+   guests is the LOOPBACK - so it reported the loopback's APIPA `169.254.130.108` and "no gateway"
+   in the very same run where `pvnic_applier` reported the PV adapter at `10.137.0.68` with the
+   default route. Two checks on one guest contradicting each other, and this one was wrong. Now it
+   selects the adapter with a non-APIPA address AND a gateway, falling back to the first IP-enabled
+   one so the evidence still shows what was there. After the fix it correctly reports
+   `ip 10.137.0.68, gateway 10.138.21.72`.
+
+Neither fix changes any build behaviour; both make the instrument report what is actually true. The
+underlying guest condition is unchanged in every case - only the grading of it is corrected.

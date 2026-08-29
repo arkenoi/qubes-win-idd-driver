@@ -240,8 +240,18 @@ foreach ($d in @($universe)) {
 }
 $pvMissing = @($pvWanted.Keys | Where-Object { -not $pvWanted[$_] })
 # The decisive one: which driver is behind the NIC actually carrying traffic?
+# LOOPBACK ADAPTERS ARE NOT PHYSICAL NICs, whatever WMI says. Win32_NetworkAdapter reports
+# PhysicalAdapter=$true for "Microsoft KM-TEST Loopback Adapter", so a guest carrying one looks
+# network-attached to the not-applicable branch below and is then graded "PV NIC missing".
+# Measured 2026-08-29: win11-fresh and win11-24h2 both carry two KM-TEST Loopback Adapters and
+# reported three network FAILs, while win10-clean and win10-u10 - identical netvm='' condition,
+# no loopback adapter - correctly reported "na" and ok:true. The asymmetry was entirely this
+# predicate; nothing about those builds differed. A loopback adapter carries no traffic to a vif
+# and can never be the PV NIC, so it must not count toward "is a network attached".
 $nics = @(Get-CimInstance Win32_NetworkAdapter -ErrorAction SilentlyContinue |
-          Where-Object { $_.PhysicalAdapter -eq $true })
+          Where-Object { $_.PhysicalAdapter -eq $true -and
+                         $_.PNPDeviceID -notmatch '(?i)ROOT\\NET|\bMS_LOOPBACK\b' -and
+                         $_.Name -notmatch '(?i)loopback' })
 $nicUp = @($nics | Where-Object { $_.NetEnabled -eq $true })
 # ALL physical adapters, not First-1: after the xenvif upgrade a STALE rev-4 devnode can
 # linger beside the working rev-5 one (measured 2026-08-07), and a First-1 match on the
@@ -347,8 +357,26 @@ Check 'pv_disk_bound' ($vbdOk -and $disks.Count -ge 1 -and $ideDisks.Count -eq 0
 # "PV NIC present" is not "networking works". Assert an IP and a working gateway.
 $ipOk = $false; $gw = $null; $addr = $null
 try {
-    $cfg = Get-CimInstance Win32_NetworkAdapterConfiguration -ErrorAction Stop |
-           Where-Object { $_.IPEnabled -eq $true } | Select-Object -First 1
+    # Pick the adapter that actually CARRIES traffic, not merely the first IP-enabled one.
+    # `Select-Object -First 1` chose whatever WMI happened to enumerate first, which on a guest
+    # with a Microsoft KM-TEST Loopback Adapter is the LOOPBACK - so this reported the loopback's
+    # APIPA address and "no gateway" while the PV NIC sat there with a real Qubes IP and the
+    # default route. Measured 2026-08-29 on win11-app: this check FAILED with ip 169.254.130.108
+    # in the same run where pvnic_applier PASSED with pv_adapter_ips ["10.137.0.68"] and
+    # default_route_on_pv true. Two checks, one guest, contradicting each other - and this one was
+    # wrong. Same root as the physical-NIC predicate above: loopback adapters must not be treated
+    # as the network.
+    $cands = @(Get-CimInstance Win32_NetworkAdapterConfiguration -ErrorAction Stop |
+               Where-Object { $_.IPEnabled -eq $true })
+    $cfg = $null
+    foreach ($c in $cands) {
+        $a = ($c.IPAddress | Where-Object { $_ -match '^\d+\.' -and $_ -notmatch '^169\.254\.' } | Select-Object -First 1)
+        $g = ($c.DefaultIPGateway | Select-Object -First 1)
+        if ($a -and $g) { $cfg = $c; break }
+    }
+    # Nothing routable: fall back to the first IP-enabled adapter so the evidence still shows what
+    # WAS there, rather than reporting an empty record.
+    if (-not $cfg) { $cfg = ($cands | Select-Object -First 1) }
     if ($cfg) {
         $addr = ($cfg.IPAddress | Where-Object { $_ -match '^\d+\.' } | Select-Object -First 1)
         $gw   = ($cfg.DefaultIPGateway | Select-Object -First 1)
