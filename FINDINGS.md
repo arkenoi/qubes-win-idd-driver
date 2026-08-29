@@ -21306,3 +21306,32 @@ requires be designed and reviewed before any code. Options to put to the owner:
     rejects activation of others), and announce transient_for against the guest's main window;
  2. extend the hint path (MSG_WINDOW_HINTS exists and is unused here) to carry a modal flag;
  3. accept it, and treat a system-modal guest dialog as a known seamless-mode limitation.
+
+## 2026-08-30 — every acceptance guest was built with a 2 GiB private volume (Q:)
+
+Owner, seeing it in an Explorer screenshot: *"this qube has Q: of 2Gb, wtf even is that?"*
+
+Measured: `win10-clean:private` size 2147483648 (exactly the Qubes default), ~300 MB used, Q:
+reporting 1.98 GB total. Q: is the private volume, and QWT's MoveUsers relocates `C:\Users` onto it -
+stock behaviour, and README.md explicitly says to "check the private volume size first". So 2 GiB
+was the ENTIRE budget for every user profile on the guest.
+
+**Cause: the fix existed but only covered half the fleet.** `mgmt/clone-to-template.sh` already
+extended private to 20 GiB for the template/AppVM path, with a comment recording why. But
+`scratchpad/reprovision.sh` - which is what the ACCEPTANCE MATRIX actually uses to build guests -
+extended only `root` (to 80 GiB) and never touched `private`. Every cell therefore ran against a
+2 GiB private volume.
+
+This is the same root cause as the earlier AppVM push failure, where a 2 GiB private volume left no
+`Q:\Users` at all and `qubes.Filecopy` failed with "getting Documents path failed 0x80070002" -
+nothing could be pushed, so nothing could be tested. That was diagnosed and fixed in one script and
+not the other, which is exactly how a fixed bug comes back.
+
+**Fixed** in `reprovision.sh` (20 GiB, per the owner: "40gb of private volumes is a waste, 20 should
+be typically enough"). Placement matters: the extend runs BEFORE Windows installs, so QWT formats Q:
+at the full size and no in-guest partition resize is needed for new provisions.
+
+**The live guest needed both halves.** Extending an EXISTING guest's volume leaves the filesystem
+behind - Qubes said so plainly ("Online resize of volume ... failed (you need to resize filesystem
+manually)"). Resized in-guest with Resize-Partition: Q: went 1.98 GB -> 19.98 GB, 19.68 GB free.
+Worth remembering: on an existing guest, `qvm-volume extend` alone changes nothing Windows can see.
