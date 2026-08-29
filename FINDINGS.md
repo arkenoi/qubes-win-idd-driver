@@ -19870,3 +19870,53 @@ per-window capture class, not a desktop capture.
 Not resolvable from here: WHY the boot fails. That needs the volume read offline (dom0-assisted) —
 which is the owner call recorded in the plan's Q3. Having extracted everything obtainable from
 inside, the qube is released for campaign use.
+
+## 2026-08-29 — ROOT CAUSE, uncontaminated: the WIN10 install hangs on a "Windows Security" DRIVER-TRUST dialog
+
+First uninjected WIN10 install run since 2026-08-28 19:26. Cell S10 (stock QWT 4.2.2 -> ours) on
+`win10-u10`, package `4.3.15+agent.dd5a817b3aee+instr.8f7986e` (CI run 33198910830, **MSI byte-identical
+to CI**; only PowerShell instrumented). No seeding: `SEED_DELAY` unset, and the new guard would have
+aborted the cell otherwise. Evidence in `evidence/2026-08-29-s10-win10-driver-trust-dialog/`.
+
+**The finding.** `msiexec` invoked its driver custom action and never came back:
+
+    [04:20:10.288] Invoking remote custom action. DLL: MSI9480.tmp, Entrypoint: InstallDriverPackages
+      ... 1676 s (27.9 min) with no further MSI log line at all ...
+
+and the dialog watcher, running in session 1 with `blind=false` throughout, shows why. 737 samples
+over 04:18:40-04:48:03 with continuous coverage; **700 of them (95%) had a modal dialog on screen**:
+
+    title "Windows Security"   class #32770   process rundll32   visible=true
+    first seen 04:20:11.835  — 1.5 SECONDS after InstallDriverPackages was invoked
+    last  seen 04:48:03.647  — still up when I shut the guest down
+
+That is the driver-publisher trust prompt ("Would you like to install this device software?"). It is
+modal, nothing answers it in an unattended install, and it blocks the driver custom action forever.
+The guest is not crashed and not deadlocked — it is *waiting for a human*. Hence the symptoms that
+looked mysterious: qrexec down (the installer had already terminated the agent, and the MSI is
+mid-way through reinstalling the services), no windows mapped, and 1.2-1.5 vCPUs busy for 28 minutes.
+
+**The shipped mitigations address a different mechanism.** In all 737 samples the xenbus machinery
+behaved exactly as designed: `monitor_start` 2 (Automatic) -> 4 (Disabled), `monitor_running`
+Running -> Stopped, and the only 26 samples with a pending Request are the ones before the installer
+cleared it ("cleared a pending PV reboot request", 04:19:42). **No sample ever showed a reboot
+prompt.** The suppressor (29f43a7), the unconditional process kill (81d2b79) and the INF patch are
+therefore UNPROVEN as fixes for *this* hang — they are aimed at a prompt that never appeared. They
+may still be correct for the field-reported reboot prompt; they are simply not what stops this.
+
+**The guest is NOT bricked by the hang.** ACPI `qvm-shutdown` was honoured within 30 s, and the guest
+then booted normally with qrexec up. So the hang is recoverable, and by contrast the previous
+session's response to this same state — repeated hard kills — is the credible explanation for why
+`win10-tpl` no longer boots at all (measured earlier today: black 1024x768, qrexec never up). That
+is direct support for H2, and it makes the harness's old kill-restart loop the brick's likely author
+rather than the installer.
+
+**Why the instruments mattered.** Nothing here was inferable from the previous evidence. The MSI log
+had never survived a failing run (it does now only because of `/l*v!`, which flushes per line); no
+dialog had ever been watched for; and the title-only pattern would have MISSED this one — "Windows
+Security" contains neither "restart" nor "reboot". It was caught by the class+process rule
+(`#32770` + `rundll32` + visible), which is why that rule was written broad.
+
+**Next:** the fix is to make the driver publisher trusted BEFORE the MSI installs drivers, so Windows
+does not prompt at all. Verification must show the defect-present case first (this run) and then its
+absence, on the same cell.
