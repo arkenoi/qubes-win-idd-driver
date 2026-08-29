@@ -20497,3 +20497,50 @@ on `netvm=''` guests, where the Xen PV **Network** Class never installs and ther
 that prompt. Those runs could not have seen it. The dialog is a NETWORK-path event; it must be
 tested with a vif present, and the watcher armed before the vif appears — which is what this run
 finally did, and on our package's own path it stayed clean (0 of 62).
+
+## 2026-08-29 — TRUE first-vif test of OUR package: no dialog, but a latch-less StandaloneVM lands in PnP Error
+
+This closes the gap I named: does OUR package raise the premature reboot prompt on a guest that has
+NEVER had a vif, with the watcher armed before the vif appears?
+
+**Subject** — `win10-u10`, freshly provisioned from the vendor ISO with our fixed package at first
+logon and `netvm=''` throughout, so the PV network class had never bound. Baseline confirmed from
+the guest before the test:
+
+    XENBUS_ENUM = VEN_XP0001&DEV_CONS | VEN_XP0001&DEV_IFACE | VEN_XP0001&DEV_VBD   (no VIF)
+    XENVIF_ENUM = (empty)                     driver store DOES hold xenvif.inf
+    QWT 4.3.15.0, agent 4.3.15.0
+
+Watcher armed (27 samples before the attach), then `netvm fw-net` attached to the RUNNING guest.
+
+**Result 1 — NO premature reboot dialog. 69 samples, `SAMPLES_WITH_DIALOG=0`.** This is the first
+time that claim has been made under conditions where the dialog COULD have appeared: a real vif, a
+first-ever PV-network-class install, and the watcher running before the device existed. The earlier
+"zero across 310 samples" was vacuous; this one is not. **Our package does not raise the prompt.**
+(The prompt captured earlier came from the STOCK installer's first-logon install, not ours.)
+
+**Result 2 — the PV NIC did NOT come up, and that is a real gap:**
+
+    PNP Error  XENVIF\VEN_XP&DEV_NET\0  "Xen PV Network Device #0"
+    SVC XENVIF = Running     SVC XENNET = Stopped
+    ADAPTER = Ethernet (blank status)
+
+That is the `STATUS_PNP_REBOOT_REQUIRED` / problem-14 case `guest/pvnic-selfprime.ps1` describes,
+and it happens here because **a StandaloneVM gets no latch**: the installer seeds it on TEMPLATES
+(AppVMs inherit it), so a Standalone taking an immediate netvm attach lands in PnP Error until a
+reboot. By the owner's rule — a second boot is a failure — **the StandaloneVM immediate-attach path
+does not meet acceptance.**
+
+**Contrast, same package, AppVM path (`win11-app`):** PV NIC bound 26 s after a live attach, zero
+reboots, zero dialogs (0/62), then 16,192,808 bytes transferred with the adapter's own counter
+confirming it. That is the acceptance configuration and it passes. Note for anyone reading later:
+an AppVM's root is volatile, so per `pvnic-selfprime.ps1` the PV-network-class install is redone
+every boot — which is precisely why the latch is load-bearing there and why the AppVM result is the
+meaningful one.
+
+**Open, and stated rather than smoothed over:**
+- The latch is not deployed on StandaloneVMs. Whether it should be is a product decision, not
+  something to paper over by rebooting twice and calling it a pass.
+- Our suppressor clears the pending Request and disables the monitor, but does NOT dismiss a csrss
+  hard-error window that is already displayed — as seen when the stock installer had raised one
+  before our install ran.
