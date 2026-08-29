@@ -2043,12 +2043,16 @@ function Invoke-Stage2 {
         }
     }
 
-    # --- Netvm-free PV NIC priming (TEMPLATES only, default ON) --------------------------
-    # A template built from this medium is self-primed so its AppVMs get working PV networking
-    # in ONE boot with no netvm ever attached (guest/pvnic-selfprime.ps1). This ONLY makes sense
-    # on a persistent-root TemplateVM: an AppVM discards the latch state every boot, and a
-    # StandaloneVM has a persistent root that completes the vif install on its own first netvm
-    # boot (and has no derived AppVMs to prime). The class is read LIVE from qubesdb via the
+    # --- PV NIC priming latch: UNCONDITIONAL, every qube class (owner, 2026-08-29) -------
+    # Was TEMPLATES-only. The stated reason was that "a StandaloneVM has a persistent root that
+    # completes the vif install on its own first netvm boot". MEASURED 2026-08-29 and that is
+    # FALSE: on win10-u10, freshly installed from our package with netvm='' and then given a vif
+    # live, the PV NIC landed in PnP Error (XENVIF\VEN_XP&DEV_NET\0, XENNET Stopped) and stayed
+    # there until a reboot. A second boot is a FAILURE, not a property - it is precisely what the
+    # latch exists to remove. The old comment already conceded "priming a non-template is
+    # harmless", so there was never a cost to doing it everywhere, only an untested assumption
+    # that it was unnecessary. Now seeded for EVERY class; the class is read only for the log.
+    # (guest/pvnic-selfprime.ps1 is transactional: tasks registered first, latch armed last.) The class is read LIVE from qubesdb via the
     # client DLL in SYSTEM32 (qdb_open/qdb_read) - the earlier "qubesdb is unreadable in a
     # Windows guest" belief was a P/Invoke marshaling bug, now retired. /type is the exact class
     # name. Non-template, or class unreadable -> skip harmlessly. (If a qube is converted to a
@@ -2089,13 +2093,12 @@ public static class QdbPrime {
     # on a template is the restart-loop defect. So: known TemplateVM -> prime; class
     # unreadable after retries -> prime anyway; known non-template -> skip.
     $primeIndeterminate = [string]::IsNullOrEmpty($primeClass)
-    if ($primeIndeterminate) {
-        Write-Log "qubesdb /type unreadable after 3 attempts - priming ANYWAY (fail closed: an unprimed template restart-loops its AppVMs; priming a non-template is harmless)" 'WARN'
-    }
-    if ($primeClass -eq 'TemplateVM' -or $primeIndeterminate) {
+    # The class no longer gates anything - it is recorded for the log only.
+    if ($primeIndeterminate) { Write-Log 'qubesdb /type unreadable - priming anyway (it is unconditional)' 'WARN' }
+    if ($true) {
         $deployPrime = Join-Path $Root 'pvnic-selfprime.ps1'
         if (Test-Path -LiteralPath $deployPrime) {
-            Write-Log "$(if ($primeIndeterminate) { 'class-indeterminate' } else { 'TemplateVM' }): seeding netvm-free PV NIC priming latch (pvnic-selfprime.ps1)"
+            Write-Log "class='$(if ($primeIndeterminate) { 'indeterminate' } else { $primeClass })': seeding PV NIC priming latch UNCONDITIONALLY (pvnic-selfprime.ps1)"
             try {
                 $pp = & $deployPrime 2>&1
                 foreach ($l in @($pp | Select-Object -Last 4)) { Write-Log "  $l" }
@@ -2142,9 +2145,6 @@ public static class QdbPrime {
             Write-Log "arming the PV NIC unplug latch failed: $($_.Exception.Message)" 'WARN'
             $script:Result.detail.pvnic_latch = "error: $($_.Exception.Message)"
         }
-    } else {
-        Write-Log "not a TemplateVM (class='$primeClass') - skipping netvm-free PV NIC priming (template-only)"
-        $script:Result.detail.pvnic_prime = 'skipped-non-template'
     }
 
     # SHIPPING STATE, every qube class: xenbus_monitor disabled, AutoReboot=0, no reboot request

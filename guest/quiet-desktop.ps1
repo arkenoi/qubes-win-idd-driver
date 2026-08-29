@@ -34,6 +34,28 @@ function Set-Reg {
 
 $POL = 'HKLM:\SOFTWARE\Policies\Microsoft'
 
+# --- network location / "discoverable" prompt -------------------------------------------------
+# The moment a vif appears, Windows throws the full-height "Do you want to allow your PC to be
+# discoverable by other PCs and devices on this network?" flyout over the seamless desktop. Owner,
+# 2026-08-29, seeing it on win10-u10: "we do not need it ever either". It is also a modal-ish
+# surface arriving exactly when the PV NIC binds, i.e. in the middle of the one event the reboot
+# dialog watcher is trying to observe - so it is noise in the measurement as well as noise for the
+# user. NewNetworkWindowOff is a KEY whose mere presence suppresses the prompt (it takes no value),
+# so it is created rather than set; Windows then treats a new network as Public without asking.
+$NNW = 'HKLM:\SYSTEM\CurrentControlSet\Control\Network\NewNetworkWindowOff'
+try {
+    if (Test-Path $NNW) {
+        Write-Output 'ok     network discoverability prompt off (already set)'
+    } else {
+        New-Item -Path $NNW -Force | Out-Null
+        $script:changed++
+        Write-Output 'SET    network discoverability prompt off (NewNetworkWindowOff)'
+    }
+} catch {
+    $script:failed++
+    Write-Output "FAIL   network discoverability prompt off : $($_.Exception.Message)"
+}
+
 # --- OneDrive --------------------------------------------------------------------------------
 # The "set up OneDrive" reminder pops over the seamless desktop and on an offline qube can never
 # succeed at anything. DisableFileSyncNGSC stops the client starting at all.
