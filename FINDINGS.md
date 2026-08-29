@@ -19739,3 +19739,54 @@ vCPU/reinstall escalation triggers are themselves over-broad, since the Admin AP
 policied. That may be right, but widening my own autonomy by editing the owner's safety rules is
 not a cleanup task and is not mine to do. Flagged, untouched.
 
+## 2026-08-29 — the WIN10 "fresh" cell was contaminated TWICE, and neither is in any earlier retraction
+
+Verified today directly from the raw cell logs, now preserved in
+`evidence/2026-08-29-fresh-cell-contamination/` (the originals lived in a garbage-collectable
+session tmp). This is a NEW fact: `f530d2c` retracted the suppressor-race conclusion and `c1f4312`
+invalidated the cells *after* the 19:25 control, but neither records what follows.
+
+**Contamination 1 — the cell called "fresh" was not fresh, and the harness asserted otherwise.**
+`matrix.log` 01:16:18 records `PASS WIN10-fresh: precondition real (no QWT installed)`. The
+installer's own log, 25 s later, records the opposite:
+
+    01:16:43 [INFO] found existing QWT: 'Qubes Windows Tools v4.3.2.0' 4.3.2.0 {89757D6A-...}
+    01:16:43 [INFO] installed QWT (4.3.2.0) is older than this package (4.3.15) -
+                    IN-PLACE MSI major upgrade, no uninstall, no intermediate reboot
+
+So the cell exercised the UPGRADE path while its transcript claims a fresh install. The harness
+probe and the code under test read different signals — the exact defect class `c1f4312` names, here
+caught red-handed in the same run's two logs.
+
+**Contamination 2 — the "fresh" cell was ALSO seeded, and its transcript never says so.**
+`WIN10-fresh-seed.log` records a PV reboot Request injected mid-install:
+
+    reg add "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request\xenvbd" /v Reboot ... 1
+    request written at install+25s (01:16:47)
+
+msiexec started at 01:16:55, so the injection preceded it by 8 s and landed inside the install
+window. `matrix.log` — the cell's own transcript, and the file anyone reads to judge the cell —
+does not mention the seed at all.
+
+**Root cause of contamination 2, from source** (`mgmt/harness/matrix.sh:134-141`): the seed is gated
+on `SEED_DELAY`, an ENVIRONMENT VARIABLE. If it is set anywhere in the calling environment it fires
+in EVERY cell, including ones named and reported as unseeded, and its only record is a separate
+`<label>-seed.log`. Nothing writes it into the cell transcript. An exported variable from an earlier
+seeded cell is therefore invisible contamination of every later cell.
+
+**What this costs.** The WIN10 "fresh" cell then STALLED and the guest went BLACK/Transient while
+consuming CPU (`matrix.log` 01:19:53 onward) — i.e. the one brick observation from that cell is
+contaminated by BOTH defects. Combined with `c1f4312`, **there is no uninjected WIN10 install run
+after 2026-08-28 19:26 at all.** The cause of the WIN10 brick is therefore OPEN, and the mitigation
+stack shipped against it (`29f43a7` suppressor, `81d2b79` unconditional process kill, the INF patch)
+targets a mechanism whose only *demonstrated* trigger to date is the harness's own injection.
+
+Two details worth keeping from the same install log, neither of them a verdict:
+- `01:16:56 [INFO] cleared a pending PV reboot request (xenbus_monitor\Request)` — the installer DID
+  clear the injected Request, and `xenbus_monitor disabled, AutoReboot=0 (was Disabled/Running)`.
+- `(was Disabled/Running)` independently confirms the disabled-service-with-live-process state on
+  win10-clean clones, which is a real precondition difference from WIN11 (Disabled/Stopped).
+
+**Status of the shipped mitigations: UNPROVEN, not wrong.** Nothing here shows they are unnecessary;
+it shows they were never tested against an uncontaminated run. The decisive experiment is three
+uninjected upgrade-over-own WIN10 runs with the environment dumped and asserted `SEED*`-free.

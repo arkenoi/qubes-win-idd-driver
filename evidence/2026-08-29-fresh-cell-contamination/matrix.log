@@ -1,0 +1,32 @@
+[01:12:44] === MATRIX for 4.3.15+agent.dd5a817b3aee (agent e5d125cc8a2a) ===
+[01:12:44]   cells: win10-fresh
+[01:12:44] ######## CELL WIN10-fresh (uninstall QWT, then install ours) ########
+[01:12:55]   shutdown-win10-tpl: halted at t+11s
+[01:12:57]   clone attempt 1 FAILED: [1;35mqubesadmin.exc.StoragePoolException[0m: [35mCannot import to dirty volume qubes_dom0/vm-win10-tpl-private - start and stop a qube to cleanup[0m
+[01:12:57]   dirty volume - reverting root+private to their last snapshot (clone attempt 2)
+[01:15:02]   revert-halt-win10-tpl: DEADLINE 120s, still Running
+[01:15:16]     reverted root to 01787955174-back
+[01:15:16]     reverted private to 01787955171-back
+[01:15:21]   cloned win10-clean -> win10-tpl
+[01:15:41]   WIN10-fresh-boot: session up at t+0s
+[01:15:41]   QWT before: <none>
+[01:15:55]   WIN10-fresh-unihalt: halted at t+10s
+[01:16:17]   WIN10-fresh-reboot: session up at t+0s
+[01:16:18] PASS  WIN10-fresh: precondition real (no QWT installed)
+[01:16:20]   q4315: payload pushed and extracted
+[01:16:32]   WIN10-fresh: t+0s 0 log lines | 2026-08-29 01:16:33 [INFO] testsigning is ACTIVE in this boot -> stage 2
+[01:16:44]   WIN10-fresh: t+15s 10 log lines | 2026-08-29 01:16:43 [INFO] signalled Global\QGA_SHUTDOWN - waiting 5 s for a graceful agent exit
+[01:16:58]   WIN10-fresh: t+27s 23 log lines | 2026-08-29 01:16:59 [INFO] xenbus reboot-prompt suppressor running (job 5) - it holds the monitor down THROUGH the insta
+[01:19:53]   WIN10-fresh: STALLED - unreachable for 120s, screen=NOWINDOW
+[01:19:53] FAIL  WIN10-fresh: install STALLED (no progress for 120s)
+[01:23:18]   WIN10-fresh-back: t+110s qvm=Transient screen=BLACK
+[01:23:38]   WIN10-fresh-back: black #1, cpu_usage_raw=200
+[01:25:27]   WIN10-fresh-back: t+240s qvm=Transient screen=BLACK
+[01:25:47]   WIN10-fresh-back: black #2, cpu_usage_raw=1380
+[01:27:37]   WIN10-fresh-back: t+369s qvm=Transient screen=BLACK
+[01:27:57]   WIN10-fresh-back: black #3, cpu_usage_raw=311
+[01:27:57]   WIN10-fresh-back: black but consuming CPU (311) - the guest is RUNNING HEADLESS, not dead; still waiting
+[01:29:46]   WIN10-fresh-back: t+499s qvm=Transient screen=BLACK
+[01:30:06]   WIN10-fresh-back: black #1, cpu_usage_raw=320
+[01:31:58]   WIN10-fresh-back: t+628s qvm=Transient screen=BLACK
+[01:32:18]   WIN10-fresh-back: black #2, cpu_usage_raw=8839
