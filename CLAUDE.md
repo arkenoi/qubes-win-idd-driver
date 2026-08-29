@@ -48,8 +48,19 @@ interleaved:
 | Agent fork | `agent/` submodule; `upstream` remote = QubesOS. Commit there, bump submodule here |
 
 **Hard rules:**
-- You control ONLY `win-idd-test`, only via `tools/qtest`. Never touch other qubes, dom0,
-  or qrexec policy. Anything needing dom0 or `sudo` → ask the user, never attempt it.
+- **You control every qube TAGGED `win-idd-testbed`, and you may CREATE more.** (Corrected
+  2026-08-29: this rule used to read "You control ONLY `win-idd-test`… anything needing dom0 → ask
+  the user", which was obsolete and actively harmful — it had me handing the owner work the Admin
+  API already grants, and inventing a "policied name roster" that does not exist.) dom0 policy is
+  **tag-based** (`@tag:win-idd-testbed`, see `dom0/03-install-policy.sh`), so: create a qube, tag it
+  immediately, and it is drivable. Verified 2026-08-29 with a brand-new name.
+  Pre-authorised without asking: qube create/remove, `qvm-prefs` read+write (incl. `netvm`),
+  `qvm-tags`, `qvm-firewall`, `qvm-volume` info/clone, power state, `qtest` run/push/shot.
+  **Still genuinely off-limits:** a dom0 SHELL, `sudo` in this qube (e.g. `losetup` attach), editing
+  qrexec policy, and qubes that are NOT tagged. `fw-net` cannot be started from here — that is a
+  policy refusal, not absence; it exists and serves traffic.
+  **Before declaring anything impossible, read `.claude/skills/rig-capabilities/SKILL.md`** — it is
+  the measured inventory, and it lists five limitations previously invented and disproven.
 - Never push to QubesOS upstream repos or open upstream PRs/issues without explicit user
   approval of the exact diff/text.
 - The test VM is disposable and assumed hostile; nothing from it gets executed in this qube.
