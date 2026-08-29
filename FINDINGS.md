@@ -20544,3 +20544,26 @@ meaningful one.
 - Our suppressor clears the pending Request and disables the monitor, but does NOT dismiss a csrss
   hard-error window that is already displayed — as seen when the stock installer had raised one
   before our install ran.
+
+## 2026-08-29 — the file-transfer figure is a STACK CHECK, not a PV NIC benchmark
+
+Owner flagged 16 MB in 23 s as suspiciously low. It is, and the number does not mean what it looks
+like. Measured, same 16.18 MB file, same guest (`win10-u10`), three consecutive runs:
+
+    41.3 s | 38.6 s | 41.2 s      (~400 KB/s, tight within the session)
+
+but across guests/sessions the same file took 23.3 s on win10-u10 and 76.5 s on win11-app — a 3x
+spread (212-695 KB/s) over an identical PV path. Consistent within a session, wildly different
+between them, is the signature of an UPSTREAM limit, not a link limit: the bytes cross fw-net and
+come from an external Debian mirror.
+
+**So this figure characterises the internet path, not the PV NIC.** A PV link on a local hypervisor
+should move hundreds of Mbps; 0.2-0.7 MB/s is the mirror and the upstream. The transfer still does
+the job the owner asked of it — "also checks if stack is sane" — and it does that well: 16 MB
+arrives intact and the adapter's own rx counter agrees, which a ping could never show. It is a
+correctness probe, not a benchmark, and the protocol must label it as such.
+
+**To actually benchmark the PV NIC** you need a LOCAL endpoint — a file served from the netvm or a
+neighbouring qube — so no external hop is in the path. That is outside this dev qube's Admin API
+scope (fw-net is not even visible from here), so it is an owner-side setup item, and it belongs in
+the benchmarking section of the acceptance protocol rather than being inferred from a download.
