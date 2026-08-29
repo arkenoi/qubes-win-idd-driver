@@ -6,6 +6,72 @@
 
 ---
 
+## 0. RUNBOOK — do exactly this (added 2026-08-30)
+
+This section exists because the rest of this document is dense REFERENCE material with no executable
+procedure, and the operational parts got improvised. Every failure of the 2026-08-30 attempt was
+covered somewhere below and still happened: a hand-rolled runner was written instead of using the
+harness (H0), the release was delivered by a cdrom route the harness does not use, bare `sleep`
+polls replaced the three-exit waits (H2), two Windows guests ran at once (H3.6), and cells were
+cloned from a golden that had been used all evening as a scratch guest (P1.0). Read this section
+first; use the rest as reference.
+
+**The harness already exists. Do not write another one.** `mgmt/harness/matrix.sh` implements every
+cell (`cell_fresh_1stage`, `cell_fresh_2stage`, `cell_seeded`, `cell_upgrade_stock`, `cell_appvm`)
+on top of `reclone / push_payload / run_install / verify_installed / start_vm`, with the waits from
+`mgmt/harness/e2e-wait.sh`. If something is missing, ADD IT THERE and commit it (H0).
+
+### Campaign, in order
+
+    # 1. Pin the release. Never gate against HEAD - it moves under a campaign.
+    REL=<commit>                      # the commit the artifacts were built from
+    tools/assert-payload.sh <payload-dir> "$REL"        # Gate 0, must print PASS
+
+    # 2. Golden custody. Refuses if a golden drifted; UNSEALED also fails.
+    mgmt/golden.sh verify win10-clean
+    mgmt/golden.sh verify win11-fresh
+
+    # 3. One Windows guest at a time (H3.6). Halt everything before starting.
+    for v in $(qvm-ls --raw-data --fields NAME,STATE | grep '^win1' \
+               | grep -v Halted | cut -d'|' -f1); do qvm-shutdown --wait --timeout 300 "$v"; done
+
+    # 4. Stage the artifacts the harness expects.
+    #    $MATRIX_WORK/qwt-setup.tar.gz              <- tarball of the release package
+    #    $MATRIX_WORK/dl/qwt-full-package/gui-agent.exe
+    #    $MATRIX_WORK/dl/qwt-improved-iso/MANIFEST.json
+
+    # 5. Run cells SERIALLY through the harness. Never two at once, never a hand-rolled loop.
+    CELLS="win10-1stage win10-2stage win10-stock win11-1stage win10-appvm win11-appvm" \
+      MATRIX_OUT=$HOME/qwt-matrix/$(date -u +%Y%m%d-%H%M%S) bash mgmt/harness/matrix.sh
+
+    # 6. Verdicts are the harness's own PASS/FAIL lines plus $MATRIX_OUT/matrix.log.
+
+### Hard prohibitions (each cost a real failure)
+
+| Never | Because |
+|---|---|
+| Write a parallel runner / hand-rolled wait | H0/H2. The harness has three-exit waits; a bare `sleep N && continue` is prohibited outright. |
+| Start a second Windows guest | H3.6. Concurrent runs have destroyed each other's results; three 8 GB guests starved qubesd. |
+| Boot, log into, or "just check" a golden | It contaminates every clone made from it afterwards. Use a churn qube. See §Golden custody. |
+| Grade a cell whose payload was not Gate-0 verified | A whole cell once ran against the commit BEFORE the fix under test. |
+| Read a drive letter as "the release ISO" | An answer disc left attached from provisioning is picked up instead. Find media BY CONTENT. |
+| Use `attach --persistent` to attach now | It is an alias for `assign --required` = applied at NEXT START. Use plain `attach` on a running guest. |
+| Treat silence as absence | A watcher that never sampled is `INVALID-VACUOUS`, never PASS (H2 vacuity gate). |
+
+### Golden custody (the rule, enforced)
+
+A golden is **sealed**, then only ever **cloned**:
+
+    mgmt/golden.sh seal   win10-clean "ST2G.10 - release <ver>"
+    mgmt/golden.sh verify win10-clean      # exit 2 = drifted or unsealed -> do not clone
+
+`seal` refuses a running qube; `verify` needs no boot (booting a golden to check it would BE the
+modification) and keys on the root-volume revision list, which gains an entry on every clean
+shutdown. Seals live in `mgmt/goldens/*.json` and are committed - a record that dies with the
+session is not a record.
+
+---
+
 ## 1. How to run one part
 
 **GATE 0 — VERIFY THE PAYLOAD. Not optional, and it comes before everything else.**

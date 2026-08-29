@@ -16,6 +16,15 @@
 # VM-mutating jobs reboot each other, which has destroyed results here before.
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
+# e2e-lib.sh hard-stops if QTEST_VM is unset, deliberately: a DEFAULT target once routed a whole
+# run at whatever qube it named, and dom0 refuses an unknown target by writing nothing - which
+# reads exactly like "the guest has no windows". That guard is correct and is not weakened here.
+#
+# Every guest call in this file sets QTEST_VM=$vm explicitly on the command, so the ambient value
+# is never used for real work. It is set to a name that CANNOT exist so the guard is satisfied
+# without inventing a default: if any call ever forgets its per-call target, qtest refuses the
+# invalid name loudly instead of quietly operating on a real guest.
+export QTEST_VM="${QTEST_VM:-__matrix_no_ambient_target__}"
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 # P0-PRE (protocol H0): the wait primitives are sourced from the REPO, not from a session tmp
 # directory. They used to live under /home/user/.claude/jobs/<id>/tmp, which is session-scoped and
