@@ -24,6 +24,11 @@ LOOP="${2:?usage: $0 <vm> <loopN> [outdir]}"
 OUT="${3:-evidence/cell-$VM-$(date +%Y%m%d-%H%M%S)}"
 HOLDER=win-idd-mgmt
 ACCEPT_MODE="${ACCEPT_MODE:-quick}"
+# The release under test, pinned. Gate 0 defaults to HEAD, but HEAD moves every time anything is
+# committed - and a matrix whose gate drifts mid-campaign cannot mean "single package for all
+# tests". Set RELEASE_SHA to the commit the ISO was built from and every cell is graded against
+# that one artifact, whatever the working tree does afterwards.
+RELEASE_SHA="${RELEASE_SHA:-HEAD}"
 mkdir -p "$OUT"
 
 export QTEST_VM="$VM"
@@ -39,8 +44,8 @@ log "mode=$ACCEPT_MODE loop=$LOOP out=$OUT"
 # Non-negotiable: on 2026-08-29 a whole cell ran against a payload built from the commit BEFORE
 # the fix under test, and every number it produced was about a different build.
 if [ -d artifacts/rel ]; then
-    tools/assert-payload.sh artifacts/rel 2>&1 | tee -a "$OUT/gate0.txt" | tail -2
-    grep -q '^PASS' "$OUT/gate0.txt" || fail "Gate 0: payload does not match HEAD (see $OUT/gate0.txt)"
+    tools/assert-payload.sh artifacts/rel "$RELEASE_SHA" 2>&1 | tee -a "$OUT/gate0.txt" | tail -2
+    grep -q '^PASS' "$OUT/gate0.txt" || fail "Gate 0: payload is not $RELEASE_SHA (see $OUT/gate0.txt)"
 else
     fail "Gate 0: artifacts/rel missing - nothing to verify the ISO against"
 fi
@@ -77,15 +82,25 @@ log "release ISO at ${ISODRIVE}:"
 # The ISO's own manifest must equal the payload Gate 0 just verified. Attaching the right file and
 # installing from a stale disc still in the drive is a real way to lose a cell.
 ISOCOMMIT=$(qrun "powershell -NoProfile -Command \"(Get-Content ${ISODRIVE}:\\MANIFEST.json -Raw | ConvertFrom-Json).source.driver_repo_commit\"" | tr -d '\r' | grep -oE '^[0-9a-f]{40}' | head -1)
-WANT=$(git rev-parse HEAD)
+WANT=$(git rev-parse "$RELEASE_SHA")
 [ "${ISOCOMMIT:0:12}" = "${WANT:0:12}" ] || fail "ISO carries ${ISOCOMMIT:0:12}, expected ${WANT:0:12}"
 log "ISO provenance verified: ${ISOCOMMIT:0:12}"
 
 # --- 3. install -------------------------------------------------------------------------------
 startrun log || fail "could not arm the run marker (stale install log)"
+
+# P1 common execution: watch for the premature reboot dialog THROUGH the install. Without this the
+# "premature reboot dialogs are gone" criterion has no instrument behind it and the cell would be
+# asserting absence it never looked for.
+./tools/qtest push guest/reboot-dialog-watch.ps1 >/dev/null 2>&1
+qrun "cmd /c start \"dlg\" powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt\\reboot-dialog-watch.ps1 -Minutes 45" >/dev/null 2>&1
+log "dialog watcher armed"
+
 log "launching install from ${ISODRIVE}:"
 qrun "cmd /c start \"qwt\" ${ISODRIVE}:\\install.cmd" >/dev/null 2>&1
-wait_install 40 log
+# HARD CAP 20 MIN PER IN-GUEST STAGE (P1): the real hang ran 27.9 minutes, so an unbounded wait
+# would have sat through it. Two stages plus reboot slack, never "wait forever".
+wait_install 20 log
 rc=$?
 _logtail > "$OUT/install-log.txt" 2>/dev/null
 [ "$rc" = 2 ] && fail "install reported failure (see $OUT/install-log.txt)"
@@ -133,5 +148,39 @@ sys.exit(0 if d.get('ok') else 1)
 PY
 [ "${PIPESTATUS[0]}" -eq 0 ] || fail "health-check reported failures (see $OUT/health.json)"
 
-log "CELL=PASS reason=install+boot+health all asserted on ${ISOCOMMIT:0:12}"
+# --- 7. P1 acceptance: PIXELS, not logs ---------------------------------------------------
+# "qtest shot shows a live desktop" is a required observable, and it exists because
+# "RecreateDuplication: recovered - windows kept" was once logged while every dom0 window was
+# frozen. The criterion is whether the pixels changed.
+V=$(screenverdict "$OUT" post)
+log "screen verdict: $V"
+case "$V" in
+    DESKTOP) ;;
+    NOSHOT)  fail "no screenshot after the reboot - cannot assert a live desktop" ;;
+    *)       fail "screen verdict $V after the reboot (expected DESKTOP)" ;;
+esac
+
+# --- 8. P1 acceptance: the RUNNING agent must be the one the manifest ships ----------------
+EXP=$(python3 -c "
+import json,glob,hashlib,sys
+p=glob.glob('artifacts/rel/reference/gui-agent.exe')
+print(hashlib.sha256(open(p[0],'rb').read()).hexdigest() if p else '')" 2>/dev/null)
+GOT=$(qrun "powershell -NoProfile -Command \"(Get-FileHash (Get-Process gui-agent -EA SilentlyContinue).Path -Algorithm SHA256).Hash\"" | tr -d '\r' | grep -oE '^[0-9A-Fa-f]{64}' | head -1)
+log "agent running=${GOT:0:16} manifest=${EXP:0:16}"
+[ -n "$GOT" ] || fail "no gui-agent running after the reboot"
+[ "$(echo "$EXP" | tr 'a-f' 'A-F')" = "$(echo "$GOT" | tr 'a-f' 'A-F')" ] \
+    || fail "running agent hash != the package's - the artefact under test is not what installed"
+
+# --- 9. dialog verdict ----------------------------------------------------------------------
+qrun "powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt\\reboot-dialog-watch.ps1 -Summary" \
+    2>&1 | tr -d '\r' | grep -aE 'SAMPLES|DIALOG|VERDICT|BLIND|COVERAGE' > "$OUT/dialog.txt" || true
+if [ -s "$OUT/dialog.txt" ]; then
+    while read -r l; do log "  $l"; done < "$OUT/dialog.txt"
+    grep -qiE 'DIALOG OBSERVED' "$OUT/dialog.txt" && fail "a premature reboot dialog was OBSERVED"
+    grep -qiE 'NO SAMPLES|BLIND' "$OUT/dialog.txt" && fail "dialog watcher was blind - 'no dialog' would be vacuous"
+else
+    log "  WARNING: no dialog-watcher summary; the no-dialog claim for this cell is UNPROVEN"
+fi
+
+log "CELL=PASS reason=install+boot+pixels+agent-hash+health asserted on ${ISOCOMMIT:0:12}"
 exit 0
