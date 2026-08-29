@@ -385,6 +385,40 @@ available can separate "finished desktop" from "Setup error" automatically — a
 decide" beats a gate that decides wrongly. **Any claim that a guest reached a desktop must cite an
 image that was read, not a verdict string.**
 
+### 0.6c Building a golden from scratch (RB-01/RB-02 resolution, 2026-08-30)
+
+The audit found that "rebuild the golden" had **no procedure anywhere**, so every documented exit
+from an UNSEALED or drifted golden was blocked by some other rule — the runbook could not start.
+It also found that the prescribed "clone ST0 and install into the clone" has **no execution
+channel**: a pristine guest has no qrexec, and the answer stick's `FirstLogonCommands` are consumed
+at its own provisioning, so there is nothing left to drive an install with. That gap is also why
+`cell_fresh` reaches for `msiexec /x` — the standing goldens carry QWT *because* that is the only
+way to have a control channel, so "fresh" gets faked by uninstalling, which P1.0 forbids.
+
+**Do not solve it by cloning. Build the golden in one pass with a PAYLOAD stick.** One R3 per OS
+installs Windows *and* the release at first logon, yielding a golden that already has qrexec — which
+every later cell can clone and drive normally. Once per OS, not once per cell.
+
+    # 1. Payload stick (release staged under \payload\release). Win11 needs its own template.
+    LOCALE=en-GB RELEASE_SETUP=$MATRIX_WORK/dl/qwt-improved-setup \
+      OUT=$HOME/win-iso/answer-usb.img mgmt/build-answer-stick.sh "Windows 10 Pro"
+
+    # 2. Fresh NAME - never over a standing golden, so a failed build cannot destroy the last
+    #    good one, and §0.7's "no R3 on golden names" is respected.
+    mgmt/reprovision-usb.sh win10-goldN loop0 <payload-stick-loop>     # expects: qrexec alive
+
+    # 3. READ the screen and the install log before believing it (§0.6b).
+    # 4. Halt, then seal.
+    mgmt/golden.sh seal win10-goldN "ST2G.10 - release <ver>"
+
+**ST0 parks remain worth building** — they are the cheap base for re-cutting an ST2G when only the
+package changes, and they are the only honest subject for "what does Windows look like with nothing
+of ours on it". They are simply not a clone-and-install source. Until a driveable path into a
+pristine clone exists (owner decision), treat ST0 as a reference image, not a production base.
+
+**Retired by this section:** the instruction to reach an ST2G by cloning ST0 and installing into the
+clone. It cannot be executed as written.
+
 ### 0.7 Runbook: reprovision from vendor media (R3)
 
 Only for the cell that actually tests Windows-install-plus-QWT-at-first-logon (ST0 row, §2.1; at
