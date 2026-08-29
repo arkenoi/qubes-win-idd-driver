@@ -58,12 +58,21 @@ env:
   # /Brepro: content-hash PE TimeDateStamp so the same commit yields the same binary.
   # Without it gui-agent.exe differed across runs at one commit (CBBD0206.. vs BDA4615A..).
   LINK: /Brepro
-  # UNPINNED (user, 2026-08-07: "unpin and upgrade xenvif"). Track master so we always get
-  # the newest interface revisions; the resolved SHA is echoed and written into
-  # PROVENANCE.txt so a given artifact is still traceable to an exact commit.
-  # The rev-5 assertion below is what actually protects us - a master that ever lost
-  # 0x09000005 fails the build instead of shipping a driver that cannot bind.
-  XENVIF_REF: master
+  # PINNED to the commit every shipped build has actually used so far.
+  #
+  # This was `master` from 2026-08-07 ("unpin and upgrade xenvif") until 2026-08-29, on the
+  # reasoning that the rev-5 assertion below was protection enough. It is not: that assertion
+  # only proves the driver CAN bind xennet, not that two builds contain the SAME driver.
+  # Tracking a branch means the kernel-mode PV NIC driver in a release is chosen by the wall
+  # clock at build time - so "the same version" can ship different driver code, and rebuilding
+  # an old tag produces a driver that tag never shipped. Under the standing rule that
+  # acceptance runs against ONE package end to end, a release whose driver content can drift
+  # is not a fixed artifact.
+  #
+  # This exact hazard was checked on 2026-08-29 while deriving the .13-vs-.15 difference: both
+  # builds happened to carry 0c61248, so nothing was mis-measured - by luck, not by design.
+  # Bumping is a deliberate edit now, and the rev-5 assertion still guards the bump.
+  XENVIF_REF: 0c61248439c6bdeb862178c95843bba9a27877fc
 
 jobs:
   xenvif:
@@ -97,9 +106,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          git clone --quiet --branch $env:XENVIF_REF https://xenbits.xen.org/git-http/pvdrivers/win/xenvif.git xenvif
-          if ($LASTEXITCODE -ne 0) { throw "clone of $env:XENVIF_REF failed" }
+          # Clone THEN checkout: `git clone --branch` takes branch/tag names only and rejects a
+          # full SHA, so the previous form silently required a moving ref to work at all.
+          git clone --quiet https://xenbits.xen.org/git-http/pvdrivers/win/xenvif.git xenvif
+          if ($LASTEXITCODE -ne 0) { throw "clone of xenvif failed" }
+          git -C xenvif checkout --quiet $env:XENVIF_REF
+          if ($LASTEXITCODE -ne 0) { throw "checkout of $env:XENVIF_REF failed" }
           $sha = (git -C xenvif rev-parse HEAD).Trim()
+          if ($env:XENVIF_REF -match '^[0-9a-f]{40}$' -and $sha -ne $env:XENVIF_REF) {
+              throw "pin mismatch: wanted $env:XENVIF_REF, got $sha"
+          }
           Write-Host "xenvif $env:XENVIF_REF resolved to $sha"
           "XENVIF_RESOLVED=$sha" | Out-File -Append $env:GITHUB_ENV
           # ASSERT the reason this build exists. If a future SHA bump loses rev 5 the job
