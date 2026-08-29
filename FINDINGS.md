@@ -19963,3 +19963,34 @@ not implicated by this evidence — a hypothesis I formed and then had to drop.
 proven from setupapi. What is NOT yet proven is *why* the catalogs mismatch — that is a package-BUILD
 question (are the `.cat` files regenerated after the `.sys` files are signed?), answerable offline
 against the MSI contents without a guest. That is the next step, and it is where the real fix lives.
+
+### CORRECTION (same day) to the entry above: the cert fix DID eliminate the signature failures
+
+I wrote above that the cert change "is not the fix". That was wrong on one half and I am correcting
+it rather than leaving it to be read as fact.
+
+Counting `0xE0000247` occurrences in `setupapi.dev.log` BY RUN:
+
+    run 1 (before the fix): 15 - five each for xenvif.inf, xennet.inf, xenvbd.inf
+    run 2 (after the fix) : 0        (`E247_AFTER_0500=0`)
+
+So importing `pv-drivers\xenvif-signer.cer` before msiexec **did** fix the driver-package signature
+validation, exactly as the 0xE0000247 comment in the code predicts. My earlier reading pulled the
+last 14 matching lines from a log containing both runs and attributed run-1 failures to run 2 — the
+same "which run wrote this line" mistake that voided the August matrix. The `/l*v!` and per-run
+marker discipline exists precisely to prevent it, and I still made it by not filtering by run.
+
+**What remains true and unexplained:** the "Windows Security" dialog appears in BOTH runs, 1.3-1.5 s
+after `InstallDriverPackages`, and blocks it regardless. In run 2 there is no signature failure at
+all — the dialog simply appears and nothing proceeds — and `xenvif`/`xennet` are still ABSENT
+afterwards, so the driver install never completed either way.
+
+**Current standing:**
+- PROVEN (twice, uninjected, timestamped): the WIN10 install hang is a modal "Windows Security"
+  dialog (`#32770`, `rundll32`) blocking the MSI's driver custom action indefinitely.
+- PROVEN: the xenbus reboot-prompt machinery is NOT involved — Disabled/Stopped with no pending
+  Request across all 1306 samples of both runs.
+- PROVEN: the hang does not brick the guest; ACPI shutdown recovers it and it reboots cleanly. Twice.
+- FIXED: driver-package signature validation (0xE0000247), by trusting the PV signer before msiexec.
+- OPEN: why Windows still raises the trust dialog when the publisher IS in TrustedPublisher and the
+  catalog verifies as Valid. That is the remaining question, and it is the whole install bug.
