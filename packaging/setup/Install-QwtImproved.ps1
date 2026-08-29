@@ -2223,11 +2223,144 @@ public static class QdbPrime {
     Emit-Result 0
 }
 
+function Write-PreconditionSnapshot {
+    # The FIRST act of the installer, before anything mutates. Records the guest state THE
+    # INSTALLER ITSELF SEES, read through the same helpers the install decisions are made with.
+    #
+    # WHY (2026-08-29): the 2026-08-28 WIN10 matrix was voided because cells asserted their
+    # precondition on a signal the code under test does not consult. The clearest case: a cell
+    # logged "precondition real (no QWT installed)" at 01:16:18 while this script, 25 s later,
+    # found QWT 4.3.2.0 and took the in-place major-upgrade path. Both statements were recorded;
+    # only one came from the code that branches. A harness may still probe whatever it likes, but
+    # the RECORD OF RECORD for what path a run exercised is this snapshot - taken here, by us,
+    # before we have changed anything.
+    #
+    # Emitted as one parseable line into the install log (the channel already proven to survive a
+    # mid-install reboot) and, best-effort, as a file. The log line is authoritative.
+    param([string]$RunId)
+
+    $snap = [ordered]@{ run_id = $RunId; t = (Get-Date).ToUniversalTime().ToString('o') }
+
+    # Local clock offset, so an injection timestamped by a harness on another clock can be
+    # reconciled with this log instead of guessed at.
+    try { $snap.utc_offset_minutes = [int]([TimeZoneInfo]::Local.GetUtcOffset((Get-Date))).TotalMinutes }
+    catch { $snap.utc_offset_minutes = $null }
+
+    try { $snap.testsigning_active = [bool](Test-TestSigningActive) } catch { $snap.testsigning_active = 'ERROR' }
+
+    # The decisive one: what the installer's own detector reports. This is the signal that decides
+    # fresh vs upgrade, so it is what defines which scenario a cell actually ran.
+    try {
+        $q = @(Get-InstalledQwt)
+        $snap.installed_qwt = @($q | ForEach-Object {
+            [ordered]@{ name = $_.DisplayName; version = $_.DisplayVersion; code = $_.PSChildName } })
+        $snap.installed_qwt_count = $q.Count
+    } catch { $snap.installed_qwt = 'ERROR'; $snap.installed_qwt_count = -1 }
+
+    try { $snap.pv_boot_disk = [bool](Test-BootDiskOnPvPath) } catch { $snap.pv_boot_disk = 'ERROR' }
+
+    # xenbus_monitor: service state AND live processes. These differ - 81d2b79 exists because the
+    # service was Disabled while the process was still running and acting. Recorded separately so
+    # that difference is never collapsed again.
+    $mon = [ordered]@{}
+    try {
+        $svc = Get-Service -Name 'xenbus_monitor' -ErrorAction SilentlyContinue
+        if ($svc) { $mon.status = [string]$svc.Status } else { $mon.status = 'ABSENT' }
+        $k = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\xenbus_monitor' -ErrorAction SilentlyContinue
+        if ($k) { $mon.start = $k.Start } else { $mon.start = $null }
+        $mon.pids = @(Get-Process -ErrorAction SilentlyContinue |
+                      Where-Object { $_.ProcessName -match '(?i)xenbus_monitor' } |
+                      ForEach-Object { $_.Id })
+    } catch { $mon.error = $_.Exception.Message }
+    $snap.xenbus_monitor = $mon
+
+    # Pending PV reboot Request, WITH VALUES. A bare subkey list cannot distinguish "armed" from
+    # "present but zero", and that distinction is the whole suppressor question.
+    $req = @()
+    try {
+        $rp = 'HKLM:\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request'
+        foreach ($c in @(Get-ChildItem -LiteralPath $rp -ErrorAction SilentlyContinue)) {
+            $vals = [ordered]@{}
+            $p = Get-ItemProperty -LiteralPath $c.PSPath -ErrorAction SilentlyContinue
+            if ($p) {
+                foreach ($n in @($p.PSObject.Properties.Name | Where-Object { $_ -notlike 'PS*' })) {
+                    $vals[$n] = $p.$n
+                }
+            }
+            $req += [ordered]@{ key = $c.PSChildName; values = $vals }
+        }
+    } catch {}
+    $snap.pending_request = $req
+    try {
+        $ar = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Xen\XenBusMonitor' -Name 'AutoReboot' -ErrorAction SilentlyContinue
+        if ($ar) { $snap.auto_reboot = $ar.AutoReboot } else { $snap.auto_reboot = $null }
+    } catch { $snap.auto_reboot = $null }
+
+    # Installed PV driver binaries, by file version - the thing an upgrade path acts on.
+    $drv = [ordered]@{}
+    try {
+        foreach ($n in @('xenbus','xenvif','xennet','xenvbd','xeniface')) {
+            $f = Join-Path $env:SystemRoot ("System32\drivers\$n.sys")
+            if (Test-Path -LiteralPath $f) {
+                $drv[$n] = (Get-Item -LiteralPath $f).VersionInfo.FileVersion
+            } else { $drv[$n] = 'ABSENT' }
+        }
+    } catch {}
+    $snap.pv_drivers = $drv
+
+    # Windows' own "a reboot is already owed" state. If this is set BEFORE we start, a reboot
+    # during our install is not necessarily ours, and that ambiguity must be on the record.
+    $pend = [ordered]@{}
+    try {
+        $pend.cbs_reboot_pending = [bool](Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending')
+        $pend.wu_reboot_required = [bool](Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
+        $sm = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name 'PendingFileRenameOperations' -ErrorAction SilentlyContinue
+        if ($sm -and $sm.PendingFileRenameOperations) {
+            $pend.pending_file_renames = @($sm.PendingFileRenameOperations).Count
+        } else { $pend.pending_file_renames = 0 }
+    } catch {}
+    $snap.reboot_already_pending = $pend
+
+    # Set both keys unconditionally first, so the record has ONE schema whatever fails. A snapshot
+    # whose key set varies with which call threw forces every consumer to special-case absence, and
+    # "key missing" then reads as "not applicable" instead of "we could not measure it".
+    $snap.last_boot_utc = $null
+    $snap.os_build      = $null
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+        $snap.last_boot_utc = $os.LastBootUpTime.ToUniversalTime().ToString('o')
+        $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction SilentlyContinue
+        $ubr = ''
+        if ($cv) { $ubr = [string]$cv.UBR }
+        $snap.os_build = ($os.Version + '.' + $ubr)
+    } catch { }
+
+    $json = ($snap | ConvertTo-Json -Compress -Depth 6)
+    Write-Log ('=== PRECONDITION === ' + $json)
+    try {
+        $dir = Split-Path $WorkDir -Parent
+        if (-not (Test-Path -LiteralPath $WorkDir)) { New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null }
+        Set-Content -LiteralPath (Join-Path $WorkDir 'precondition.json') -Value $json -Encoding ASCII
+    } catch {
+        Write-Log ("precondition snapshot file could not be written: $($_.Exception.Message) " +
+                   '- the log line above is the record') 'WARN'
+    }
+    $script:Result.detail.precondition = $snap
+    return $snap
+}
+
 # ---------------------------------------------------------------------------------- main
 try {
     Write-Log '================================================================'
     Write-Log 'Qubes Windows Tools (improved GUI agent) - setup'
     Assert-Elevated
+
+    # FIRST, before anything mutates - see the function header. A run whose log has no
+    # '=== PRECONDITION ===' line did not get this far, and its scenario is therefore unknown:
+    # the harness must treat that as an instrument failure, never as a fresh install.
+    $script:RunId = [guid]::NewGuid().ToString('N').Substring(0, 12)
+    Write-Log ("run id: $script:RunId")
+    [void](Write-PreconditionSnapshot -RunId $script:RunId)
 
     $src = $PSScriptRoot
     if (-not $src) { Fail 'cannot determine script directory' }
