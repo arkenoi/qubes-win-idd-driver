@@ -122,6 +122,38 @@ $signtool = (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recur
              Where-Object FullName -match 'x64' | Select-Object -First 1).FullName
 if (-not $signtool) { throw 'signtool.exe not found - cannot sign the regenerated catalog' }
 
-& $signtool sign /fd sha256 /f $PfxPath /p $PfxPassword $cat
-if ($LASTEXITCODE -ne 0) { throw "signtool failed on $cat" }
-Write-Host "regenerated and signed $cat"
+# SIGN EVERY CATALOG Inf2Cat JUST WROTE, not only xenbus.cat.
+#
+# `Inf2Cat /driver:$dir` regenerates a catalog for EVERY .inf in the directory, and all five PV
+# driver INFs (xenbus, xenvif, xennet, xenvbd, xeniface) live in the same bin\ folder. So this step
+# invalidates all five catalogs and, until 2026-08-29, re-signed exactly one. The other four shipped
+# UNSIGNED - measured on win10-u10:
+#     xenbus.cat   Valid (CN=QubesIDD Test Signing)
+#     xenvif.cat / xennet.cat / xenvbd.cat / xeniface.cat   NotSigned
+# Windows validates a driver PACKAGE against its CATALOG, so an unsigned catalog is an unsigned
+# package. Installing one unattended raises "The driver software ... does not have a valid digital
+# signature", which is modal, which nothing answers, which hangs msiexec's InstallDriverPackages
+# indefinitely. That is the WIN10 install bug, and this step is what created it: the fix for the
+# mid-install brick (29f43a7) invalidated four catalogs on its way past them.
+#
+# The individual .sys files are signed separately and stay valid, which is exactly why this hid for
+# so long - every file-level check passes while the package-level one fails.
+$cats = @(Get-ChildItem -LiteralPath $dir -Filter *.cat -ErrorAction Stop)
+if ($cats.Count -lt 1) { throw "Inf2Cat reported success but no .cat files exist in $dir" }
+foreach ($c in $cats) {
+    & $signtool sign /fd sha256 /f $PfxPath /p $PfxPassword $c.FullName
+    if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($c.FullName)" }
+}
+
+# Verify rather than assume: an unsigned catalog must fail the BUILD, not the customer's install.
+$unsigned = @()
+foreach ($c in $cats) {
+    $sig = Get-AuthenticodeSignature $c.FullName
+    Write-Host ("  catalog $($c.Name): $($sig.Status)")
+    if ($sig.Status -ne 'Valid') { $unsigned += "$($c.Name) [$($sig.Status)]" }
+}
+if ($unsigned.Count -gt 0) {
+    throw ("these driver catalogs are not validly signed and would hang an unattended install: " +
+           ($unsigned -join ', '))
+}
+Write-Host "regenerated and signed $($cats.Count) catalogs in $dir"
