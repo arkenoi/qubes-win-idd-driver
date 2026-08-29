@@ -94,13 +94,31 @@ def load(tar_path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("tar")
+    ap.add_argument("tar", nargs="?")
     ap.add_argument("name", nargs="?", help="window name to crop (substring, case-insensitive)")
     ap.add_argument("-o", "--out", default="window.png")
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--classify", action="store_true",
                     help="also print a one-word verdict for what is on that window")
+    # Classify a bare PNG - specifically, one window from `qtest shot`, which is the PER-WINDOW
+    # capture path. Without this, the only way to get a verdict was to classify a crop out of a
+    # `qtest fullshot`, i.e. to photograph the whole dom0 desktop (every other qube included) in
+    # order to decide whether one guest is at a recovery screen. That is what put three
+    # whole-desktop captures into a public repo. A per-window PNG needs no cropping and no
+    # geometry, so classify it directly.
+    ap.add_argument("--png", help="classify a single PNG (e.g. one window from `qtest shot`)")
     a = ap.parse_args()
+
+    if a.png:
+        try:
+            img = Image.open(a.png)
+        except Exception as e:
+            print(f"cannot read {a.png}: {e}", file=sys.stderr)
+            return 3
+        print(f"VERDICT={classify(img)}")
+        return 0
+    if not a.tar:
+        ap.error("give a capture tar, or --png FILE")
 
     screen, windows = load(a.tar)
     if a.list or not a.name:
