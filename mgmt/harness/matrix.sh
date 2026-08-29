@@ -483,11 +483,28 @@ d=open(sys.argv[1],'rb').read(33); w,h=struct.unpack('>II',d[16:24]); print(w,h)
 
 # --------------------------------------------------------------------------- driver
 [ -s "$TAR" ] || { say "FATAL no setup tarball at $TAR"; exit 1; }
-ASHA=$(sha256sum $S/dl/qwt-full-package/gui-agent.exe | cut -c1-12)
+# ASHA is the release binary's hash, and verify_installed greps the guest's RESULT for
+# "installed_gui_agent_sha256":"$ASHA. If the file is missing, sha256sum fails, ASHA becomes EMPTY,
+# and that grep degenerates to matching the bare key - i.e. it matches ANY result and the cell
+# passes without ever checking which build installed. That is a manufactured PASS for a build that
+# may never have run, which H1 names INVALID-WRONGBUILD. Fail closed instead.
+[ -s "$S/dl/qwt-full-package/gui-agent.exe" ] || {
+  say "FATAL: $S/dl/qwt-full-package/gui-agent.exe missing - without it the agent-hash check"
+  say "       silently matches any build and every cell would report a vacuous PASS."
+  exit 1; }
+ASHA=$(sha256sum "$S/dl/qwt-full-package/gui-agent.exe" | cut -c1-12)
+[ -n "$ASHA" ] || { say "FATAL: could not hash the release gui-agent.exe"; exit 1; }
 PV=$(python3 -c "import json;print(json.load(open('$S/dl/qwt-improved-iso/MANIFEST.json'))['package_version'])")
 say "=== MATRIX for $PV (agent $ASHA) ==="
-say "  cells: ${CELLS:-seeded}"
-for c in ${CELLS:-seeded}; do
+# CELLS used to default to "seeded", which matches NO case arm below: the driver would fall
+# straight through and print "0 passed, 0 failed" - a run that looks completed and tested nothing.
+# A campaign with no cells is an operator error, not a default.
+[ -n "${CELLS:-}" ] || {
+  say "FATAL: CELLS is unset. Name the cells explicitly, e.g."
+  say "  CELLS=\"win10-1stage win10-2stage win10-stock win11-1stage win10-appvm win11-appvm\""
+  exit 1; }
+say "  cells: $CELLS"
+for c in $CELLS; do
   case $c in
     win10-seeded)   cell_seeded        win10-clean win10-tpl WIN10 ;;
     win10-1stage)   cell_fresh_1stage  win10-clean win10-tpl WIN10 ;;
@@ -501,7 +518,9 @@ for c in ${CELLS:-seeded}; do
     win11-stock)    cell_upgrade_stock win11-fresh win11-tpl WIN11 ;;
     win10-appvm)    cell_appvm         - win10-tpl WIN10 win10-app ;;
     win11-appvm)    cell_appvm         - win11-tpl WIN11 win11-app ;;
-    *) say "unknown cell '$c'" ;;
+    # An unknown selector must FAIL the campaign, not be narrated past: a typo would otherwise
+    # silently shrink the matrix and the summary would still read as a clean run.
+    *) say "FATAL: unknown cell '$c'"; FAIL=$((FAIL+1)) ;;
   esac
 done
 say ""

@@ -21434,3 +21434,45 @@ is UNPROVEN by this project's own standard until seen to fail on a deliberately 
 Recorded cost, since I introduced it for a defect I never demonstrated: LogonUser with
 LOGON32_LOGON_INTERACTIVE creates a real logon session on every run - Security audit events every
 time, and lockout-counter pressure if a password ever were wrong.
+
+## 2026-08-30 — the matrix harness could report a VACUOUS PASS, and a 0-cell run that looked clean
+
+Found by the runbook conversion (Fable), reviewing `mgmt/harness/matrix.sh` against the protocol
+rather than trusting it. Three defects, two of which manufacture false results in silence.
+
+**1. Vacuous PASS on a missing release binary.** `verify_installed` asserts the guest installed OUR
+build with
+
+    grep -qa "\"installed_gui_agent_sha256\":\"$ASHA"
+
+and `ASHA=$(sha256sum $S/dl/qwt-full-package/gui-agent.exe ...)`. If that file is absent, sha256sum
+fails, **ASHA is empty**, and the pattern degenerates to matching the bare key - so it matches ANY
+RESULT line and the cell passes without ever checking which build installed. That is precisely the
+`INVALID-WRONGBUILD` case H1 exists to prevent, produced by the check meant to prevent it.
+
+**2. A campaign with no cells reported as a clean run.** `CELLS` defaulted to `seeded`, which
+matches no case arm in the driver, so the loop fell through and the summary printed
+`0 passed, 0 failed` - indistinguishable at a glance from a completed matrix. An unknown selector
+was likewise narrated (`unknown cell 'x'`) and then ignored, so a typo silently shrank the matrix
+while the summary still read clean.
+
+**3. Preconditions built by uninstalling.** `cell_fresh` / `cell_upgrade_stock` construct their
+entry state with `msiexec /x`, which **P1.0 forbids explicitly** - QWT *is* the qrexec agent, so
+removing it removes the control channel, and the protocol records that this already "cost
+`win10-u10`". They also invoke helper scripts from `/home/user/.claude/jobs/<id>/tmp/`, the
+garbage-collectable session path H0 banned for the wait library. NOT fixed here - it needs the
+precondition rebuilt a legal way, and it is recorded as P0-PRE.8.
+
+**Fixed (1) and (2), and both guards were SEEN TO FAIL before being trusted:**
+
+    CELLS unset            -> FATAL: CELLS is unset. Name the cells explicitly
+    gui-agent.exe removed  -> FATAL: ... missing - without it the agent-hash check
+                                     silently matches any build
+
+An unknown selector now increments FAIL instead of being narrated past. Per H5 these guards move
+from "PASS-UNPROVEN" to having a fail-proof on record.
+
+**Bearing on tonight's aborted matrix run:** `gui-agent.exe` was present, so ASHA was non-empty and
+that run was not vacuous on this axis. The 0-cell path was never hit either, since CELLS was always
+passed explicitly. The defects were latent, not active - but they were latent in the one instrument
+the whole acceptance claim rests on.
