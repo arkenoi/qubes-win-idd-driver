@@ -217,9 +217,11 @@ jobs:
           }
           $prov = @(
             "xencons built from xenbits $env:XENCONS_REF @ $env:XENCONS_RESOLVED",
-            "reason: the xencons/xennet pair pinned by qubes-vmm-xen-windows-pvdrivers cannot bind -",
-            "        pinned xencons tops out at REV_09000004, pinned xennet requires REV_09000005.",
-            "        rev 5 was added by xencons commit 4608bc1 (Use UNPLUG v3).",
+            "reason: QWT vendors no xencons at all, which is why XENBUS\\VEN_XP0001&DEV_CONS sits at",
+            "        CM code 28 on every guest. Built to give an OUT-OF-BAND diagnostic channel: when a",
+            "        guest wedges we lose qrexec, window capture and the event log at once (measured",
+            "        twice on 2026-08-29), and a PV console readable from dom0 via `xl console` depends",
+            "        on none of them. Caveat: a guest deadlocked at high IRQL may leave it silent too.",
             "signing: throwaway test cert (guest runs with testsigning enabled by our installer)"
           )
           # EXPORT THE SIGNING CERT. Without it the guest cannot trust this driver: the
