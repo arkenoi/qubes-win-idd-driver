@@ -17,9 +17,15 @@
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 source .claude/skills/win-guest-e2e/e2e-lib.sh
-source /home/user/.claude/jobs/c2a0f57b/tmp/e2e-wait.sh
+# P0-PRE (protocol H0): the wait primitives are sourced from the REPO, not from a session tmp
+# directory. They used to live under /home/user/.claude/jobs/<id>/tmp, which is session-scoped and
+# garbage-collectable - the same class of mistake that once nearly lost the only copy of a
+# matrix's evidence. A harness whose wait library can vanish between campaigns is not a harness.
+source "$(dirname "${BASH_SOURCE[0]}")/e2e-wait.sh"
 
-S=/home/user/.claude/jobs/c2a0f57b/tmp/stability
+# Working area for downloaded artifacts. Overridable, and no longer hardcoded to one session's
+# tmp: a campaign must be re-runnable from a fresh session.
+S="${MATRIX_WORK:-$HOME/qwt-matrix-work}"; mkdir -p "$S"
 # Results directory. It used to be hardcoded to a Claude session tmp
 # (/home/user/.claude/jobs/<id>/tmp/matrix) — session-scoped and garbage-collectable, which is how
 # the only copy of the 2026-08-28 matrix evidence came within a GC of being lost, and why the cell
