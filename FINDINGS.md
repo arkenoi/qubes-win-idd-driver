@@ -21408,3 +21408,29 @@ stores, and failing with it.** Not root-caused; recorded with the evidence rathe
 **Caveat on this guest:** it has had many manual interventions tonight (debug toggle, hard restarts,
 agent swaps, a side-loaded xencons). It is not a clean specimen. Whether the sign-in-screen state
 reproduces belongs to the matrix, on freshly provisioned guests.
+
+## 2026-08-30 — RETRACTION: the "autologon falsely verified" defect was misattributed
+
+The entry above ("stage 2 declares autologon verified using a check that cannot fail on a bad
+password") is **RETRACTED as a defect claim**. Owner asked the right question - "is autologon
+validation fix needed?" - and the answer on the evidence is no.
+
+What actually holds:
+- the stored LSA secret **VALIDATES**. The new LogonUser check passes on the very guest that was
+  parked at the sign-in screen, so no bad credential was ever accepted by the presence check;
+- the three 0xC000006D failures were **qrexec-wrapper.exe**, logon type 2, not autologon;
+- stage 1 rejected a password at 19:44:52 that was not yet in place; stage 2 armed a working one at
+  19:49:07. The two verdicts are consistent, not contradictory. I read them as a contradiction and
+  attached the guest's sign-in state to the nearest plausible log line.
+
+**The sign-in-screen state therefore has an UNIDENTIFIED cause.** It is not explained by autologon
+being unarmed, and that question is reopened, not closed. The guest had also taken many manual
+interventions (debug toggle, hard restarts, agent swaps, side-loaded xencons), so it is a poor
+specimen; whether it reproduces belongs to the matrix on fresh guests.
+
+**The code change is KEPT, with its justification corrected in place.** Validity is the right
+question and present-but-rejected is a reachable state, but it is a strengthening on principle and
+is UNPROVEN by this project's own standard until seen to fail on a deliberately broken credential.
+Recorded cost, since I introduced it for a defect I never demonstrated: LogonUser with
+LOGON32_LOGON_INTERACTIVE creates a real logon session on every run - Security audit events every
+time, and lockout-counter pressure if a password ever were wrong.

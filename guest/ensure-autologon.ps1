@@ -126,12 +126,25 @@ public static class QubesLsaRead {
 }
 '@
     $lsa = [QubesLsaRead]::Present('DefaultPassword')
-    # The credential must WORK, not merely exist. Measured 2026-08-30 on win10-clean: stage 1
-    # refused with "autologon NOT armed (bad-credentials)" after LogonUser rejected the password,
-    # and this script then reported "password present as the LSA secret" and the installer logged
-    # "autologon verified - this qube can come back on its own". The guest booted, failed three
-    # logons with 0xC000006D, and parked at the sign-in screen mapping ZERO windows - reachable by
-    # qrexec, invisible in dom0. The lockout guard reported success while causing the lockout.
+    # The credential must WORK, not merely exist - presence is a strictly weaker question than
+    # validity, and "armed" should mean Winlogon can actually log in.
+    #
+    # HONEST PROVENANCE (corrected 2026-08-30). This was originally written up as a fix for a
+    # measured defect: stage 1 refusing with "bad-credentials" while this script reported the
+    # secret present and the installer logged "autologon verified", on a guest found parked at the
+    # sign-in screen with zero windows mapped. That attribution was WRONG and is retracted. The
+    # stored secret VALIDATES - this very check passes on that guest - and the three 0xC000006D
+    # failures came from qrexec-wrapper.exe, not from autologon. Stage 1 rejected a password that
+    # was not yet in place at 19:44; stage 2 armed a working one at 19:49. They do not contradict.
+    #
+    # So NO case of a bad credential passing the presence check has ever been observed. This is a
+    # strengthening on principle, not a demonstrated bug fix, and per this project's own rule it
+    # counts as UNPROVEN until seen to fail on a deliberately broken credential.
+    #
+    # It is not free: LogonUser with LOGON32_LOGON_INTERACTIVE creates a real logon session, so
+    # every run emits Security audit events, and against a wrong password it would feed
+    # account-lockout counters. Kept because present-but-rejected is a real reachable state and
+    # stranding a qube at a sign-in screen is expensive; drop it if that cost ever bites.
     $lsaUser = (Get-ItemProperty $WL -Name DefaultUserName -EA SilentlyContinue).DefaultUserName
     if (-not $lsaUser) { $lsaUser = $env:USERNAME }
     $lsaDomain = (Get-ItemProperty $WL -Name DefaultDomainName -EA SilentlyContinue).DefaultDomainName
