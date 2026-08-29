@@ -21104,3 +21104,59 @@ identify. Distinguishing the shootdown deadlock from another in-guest stall need
 guest's CPUs at the moment it happens — an NMI dump (deliberately a human action here), or the PV
 console now built in CI. **The owner's assessment ("not much of interest") was correct about its
 content; the value is in what it rules out.**
+
+## 2026-08-29 — deriving the .13/.15 difference: there ISN'T one that could cause the wedge
+
+Owner: *"yet if we know for sure it was not there on .13, we may logically derive what is the
+difference"*, and *"it happens often enough on 15 to be annoying, so we may look for triggers and
+apply them on 13"*. Both are right, and the derivation is cheap enough to do without the rig. It
+came back negative, which is itself the finding.
+
+**Method.** .13 was current 2026-08-28 01:56→12:01 (+0300), so the last .13-era release build is
+run 33155989995 (repo `5a318d3`) and the .15 build under acceptance is run 33268592115 (repo
+`82f3a0c` = the `fdd4700` ISO). Diffed the two, and pulled the `pv-xenvif` artifact from each.
+
+**Result 1 — the kernel-mode PV driver is IDENTICAL.** Both artifacts' PROVENANCE.txt read
+`xenvif built from xenbits master @ 0c61248439c6bdeb862178c95843bba9a27877fc`. The `xenvif.sys`
+hashes differ (`c187727f…` vs `f813db14…`) but the source does not: the workflow mints a fresh
+self-signed cert per run, so the embedded signature differs while the code is the same commit.
+
+**Result 2 — nothing else kernel-adjacent changed.** Filtering the .13→.15 file list for
+driver/INF/PV/workflow files returns EMPTY. The whole delta is:
+
+    agent (submodule)  gui-agent/main.c +164, include/common.h +5, watchdog/watchdog.c +74
+    guest/*.ps1, packaging/*  autologon + reboot-audit churn, 511 deletions / 7 insertions
+
+All user-mode.
+
+**Therefore: the delta contains no mechanism that could produce a Xen HVM IPI/TLB-shootdown
+deadlock.** A user-mode agent cannot wedge the hypervisor's shootdown path directly, and — the
+decisive point — **wedge occurrence #2 happened MID-INSTALL, during CD file copy, before the agent
+was running at all.** So no agent change can be the common factor across both occurrences.
+
+**What this does NOT say.** It does not say .13 is affected, and it does not say the owner's
+observation is wrong. It says the *build version is probably not the variable*, and that a
+build-version A/B run on its own would most likely produce two clean runs and teach nothing —
+which is exactly the outcome this project keeps mistaking for evidence.
+
+**What it changes.** The A/B is now a FALSIFICATION test with a stated prediction: the diff says
+.13 and .15 behave the same. That makes it worth running, because a .13 that reliably survives what
+reliably kills .15 would mean the diff review above missed something, and that would be a strong
+lead rather than another quiet null.
+
+**Precondition, and the actual work: a REPRODUCER.** ".13 idled quietly" is absence of observation.
+The A/B is only meaningful once a provocation reliably kills .15, so the trigger hunt comes first —
+`guest/wedge-provoke.ps1` + `tools/wedge-hunt.sh`, aimed at the mechanism the two NMI dumps proved
+(concurrent MM ops + PV driver churn), with a WriteThrough black box because a wedged guest never
+flushes a buffered log.
+
+**Bonus finding, unrelated to the wedge but worse in the long run: `XENVIF_REF: master` is
+UNPINNED.** The release clones xenbits master at build time, so the kernel-mode PV NIC driver can
+change between two builds of "the same" QWT with no record outside each artifact's PROVENANCE.txt.
+It happened not to move between .13 and .15 — pure luck. Under the "single package for all tests"
+rule a release whose driver content is decided by the wall clock is not a fixed artifact at all,
+and a rebuild of an old tag silently produces a DIFFERENT driver than the tag originally shipped.
+Pin it.
+
+**Artifact retention checked:** every .13-era artifact is still `expired=false`, so the A/B can
+install the ORIGINAL .13 ISO. No rebuild, therefore no exposure to the unpinned-master drift above.
