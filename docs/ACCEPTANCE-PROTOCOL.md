@@ -334,6 +334,47 @@ Loop inventory and the deleted-inode rule: §2.7. Attaching a NEW loop from this
 `.claude/skills/rig-capabilities/SKILL.md` first — this qube has no sudo, and the standing loops
 exist precisely so new ones are rarely needed.
 
+### 0.6b Two failures that cost a provisioning run (2026-08-30) — read before building any stick
+
+**(a) Windows 11 REQUIRES its own answer template. `UNATTEND` is not optional.**
+
+    UNATTEND="$PWD/mgmt/autounattend-win11.xml" LOCALE=en-US \
+      OUT=/home/user/win-iso/answer-pristine-win11.img \
+      ./mgmt/build-answer-stick.sh "Windows 11 Enterprise Evaluation"
+
+`build-answer-stick.sh` defaults to `mgmt/autounattend.xml`, the **Win10** template. Only
+`mgmt/autounattend-win11.xml` carries the windowsPE `LabConfig` registry writes
+(`BypassTPMCheck`, `BypassSecureBootCheck`, `BypassRAMCheck`, `BypassCPUCheck`,
+`BypassStorageCheck`) that let Setup proceed on a Qubes HVM. Build a Win11 stick without it and
+Setup stops at **"This PC doesn't currently meet Windows 11 system requirements"** and installs
+nothing — measured 2026-08-30 on `win11-gold0`.
+
+*Verify before provisioning* (note the capital A — the file on the FAT image is `Autounattend.xml`,
+and a lowercase `7z e` silently extracts nothing, which reads as "no bypasses"):
+
+    7z e -y -o/tmp/stickx <stick.img> Autounattend.xml
+    grep -oE 'Bypass[A-Za-z]+Check' /tmp/stickx/Autounattend.xml | sort -u   # expect all five
+    grep -c '@[A-Z_]*@' /tmp/stickx/Autounattend.xml                          # expect 0
+
+Also required for the eval media: `"Windows 11 Enterprise Evaluation"` as the image name — the
+positional argument is the Windows EDITION, not a filename (§0.6).
+
+**(b) The screen classifier is ADVISORY. Never gate on `VERDICT=`.**
+
+`tools/winshot.py`'s verdict answers "is something rendering", not "did this step succeed" — H2 says
+so, and it was still built into a completion gate. Measured the same day: a pristine `win11-gold0`
+build reported **"pristine desktop reached after 137s"** while the screen showed the Windows 11
+Setup error dialog above. The classifier saw a light window on a dark ground and returned `DESKTOP`;
+sampling twice 30 s apart changed nothing, because a static error dialog is identical 30 s later.
+137 s is also not a Windows install, and no elapsed-time floor was checked.
+
+Consequently `PRISTINE=1` **does not declare success**. It waits for a candidate screen, saves the
+capture, and exits **3 = NEEDS-VISUAL-CONFIRMATION**; a human or agent must READ that PNG before the
+qube is sealed. An ST0 guest has no qrexec and the capture carries no window titles, so nothing
+available can separate "finished desktop" from "Setup error" automatically — an honest "cannot
+decide" beats a gate that decides wrongly. **Any claim that a guest reached a desktop must cite an
+image that was read, not a verdict string.**
+
 ### 0.7 Runbook: reprovision from vendor media (R3)
 
 Only for the cell that actually tests Windows-install-plus-QWT-at-first-logon (ST0 row, §2.1; at
@@ -395,6 +436,8 @@ guest-read stage attestation.
 | Run a cell with no P0 preflight | 2026-08-30: cells ran with none; a precondition discovered failed afterwards voids the cell (`INVALID-PRECONDITION`). |
 | Read a drive letter as "the release ISO" | An answer disc left attached from provisioning is picked up instead. Find media BY CONTENT (§0.5). |
 | Use `attach --persistent` to attach now | It is an alias for `assign --required` = applied at NEXT START; three attempts lost 2026-08-30. Plain `attach` on a running guest; `assign --required` before start when the disc must survive a reboot. |
+| Gate anything on `VERDICT=DESKTOP` | The classifier called a "PC doesn't meet requirements" Setup dialog DESKTOP, twice. It is advisory; READ the image (§0.6b). |
+| Build a Win11 stick without `UNATTEND=...autounattend-win11.xml` | No LabConfig bypasses -> Setup refuses to install on a Qubes HVM (§0.6b). |
 | Treat silence as absence | A watcher that never sampled is `INVALID-VACUOUS`, never PASS (H2 vacuity gate). |
 | Trust a `0 passed, 0 failed` matrix summary | An unset `CELLS` matches no selector; the run does nothing and still prints a normal-looking footer (§0.9.4). |
 | Reprovision (R3) where R0/R1/R2 reaches the entry stage | Protocol rule (§1.2, §10): ~20 min each, and it destroys the qube's history. |

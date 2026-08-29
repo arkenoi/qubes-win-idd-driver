@@ -73,39 +73,49 @@ qvm-start "$VM" --cdrom="$HOLDER:$ISOLOOP" || exit 1
 
 # Setup reboots several times and each guest reboot destroys the domain, so restart WITHOUT
 # the CD until qrexec answers.
-# COMPLETION CRITERION. Two of them, because a QWT-free provision can never satisfy the qrexec one.
+# COMPLETION CRITERION.
 #
-# PRISTINE=1 builds an ST0 image: the answer stick carries no QWT payload (RELEASE_SETUP unset), so
-# no gui-agent and no qrexec agent are ever installed. §2.1 states this plainly - ST0 is "No qrexec
-# - undriveable" - yet this script's only success test was `qrexec alive`, which such an image
-# cannot reach BY CONSTRUCTION. A successful pristine install therefore ran to the desktop and then
-# sat here until BUDGET (5400 s) expired, to be reported as "FAIL: never reached qrexec".
-# Measured 2026-08-30: win10-gold0 reached a clean Win10 desktop in ~20 min and the script was still
-# waiting 17 minutes later, having logged nothing since boot.
+# RETRACTION (2026-08-30, same day it was written): an earlier version of this block declared a
+# pristine build SUCCESSFUL when tools/winshot.py classified the screen as VERDICT=DESKTOP twice,
+# 30 s apart. That is UNSOUND and it produced a false pass within minutes of being written:
+# win11-gold0 reported "pristine desktop reached after 137s" while the screen was actually showing
+# the Windows 11 Setup dialog "This PC doesn't currently meet Windows 11 system requirements".
+# 137 s is not a Windows install. The classifier saw a light window on a dark ground and said
+# DESKTOP; taking two samples changed nothing, because a static error dialog looks identical 30 s
+# later. The protocol says this outright - "Screenshots are READ, not counted" and "DESKTOP means
+# 'something renders', never 'step succeeded'" - and the gate was built on it regardless.
 #
-# For a pristine image the SCREEN is the only channel that exists, so it is the criterion - which is
-# also the project's standing rule that the evidence is pixels, not logs.
+# So PRISTINE mode NO LONGER DECLARES SUCCESS. An ST0 image has no qrexec, the capture carries no
+# window titles, and nothing else available here can distinguish a finished desktop from a Setup
+# error screen. It waits for the screen to go quiet, SAVES the capture, and exits 3 =
+# NEEDS-VISUAL-CONFIRMATION. A human or agent must READ that image before the qube is sealed.
+# An honest "I cannot decide this" beats a gate that decides wrongly.
 t0=$(date +%s)
-SHOTDIR=$(mktemp -d); trap 'rm -rf "$SHOTDIR"' EXIT
-_desktop(){ # 0 = the guest is showing a usable desktop
-    rm -rf "$SHOTDIR"/* 2>/dev/null
+SHOTDIR="${PRISTINE_SHOTDIR:-$PWD/evidence/pristine-$VM-$(date -u +%Y%m%d-%H%M%S)}"
+mkdir -p "$SHOTDIR"
+_grab(){ # capture; echo the classifier verdict (advisory only, never a pass)
+    rm -f "$SHOTDIR"/latest*.png "$SHOTDIR"/s.tar 2>/dev/null
     QTEST_VM=$VM timeout 90 ./tools/qtest shot "$SHOTDIR/s.tar" >/dev/null 2>&1 || return 1
     tar -xf "$SHOTDIR/s.tar" -C "$SHOTDIR" 2>/dev/null || return 1
     local big; big=$(ls -S "$SHOTDIR"/*.png 2>/dev/null | head -1)
     [ -n "$big" ] || return 1
-    ./tools/winshot.py --png "$big" 2>/dev/null | grep -q 'VERDICT=DESKTOP'
+    cp "$big" "$SHOTDIR/latest.png"
+    ./tools/winshot.py --png "$big" 2>/dev/null | grep -oE 'VERDICT=[A-Z]+' | head -1
 }
 while [ $(( $(date +%s) - t0 )) -lt "$BUDGET" ]; do
     if [ "${PRISTINE:-0}" = 1 ]; then
-        # Require it TWICE, 30 s apart: one DESKTOP frame can be caught mid-OOBE. Two is a settled
-        # desktop, not a transient.
-        if _desktop; then
-            sleep 30
-            if _desktop; then
-                log "pristine desktop reached after $(( $(date +%s) - t0 ))s (no qrexec expected - ST0)"
-                exit 0
-            fi
+        v=$(_grab || echo NOSHOT)
+        el=$(( $(date +%s) - t0 ))
+        # MINIMUM PLAUSIBLE INSTALL TIME. Win10 measured 17-20 min; nothing that "finishes" in
+        # three minutes installed an operating system. This alone would not have caught the false
+        # pass safely, which is why the verdict below is still not a pass.
+        if [ "$v" = "DESKTOP" ] && [ "$el" -ge 900 ]; then
+            log "candidate desktop after ${el}s, verdict=$v (advisory)"
+            log "NEEDS VISUAL CONFIRMATION - READ $SHOTDIR/latest.png before sealing this qube."
+            log "  A Setup error dialog also classifies as DESKTOP; the classifier cannot decide this."
+            exit 3
         fi
+        [ -n "$v" ] && log "  t+${el}s screen=$v (advisory)"
     elif [ "$(QTEST_VM=$VM timeout 25 ./tools/qtest run 'echo BOOT_OK' 2>&1 | tr -d '\r\0' | grep -c BOOT_OK)" -ge 2 ]; then
         log "qrexec alive after $(( $(date +%s) - t0 ))s"
         exit 0
@@ -114,7 +124,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$BUDGET" ]; do
     sleep 30
 done
 if [ "${PRISTINE:-0}" = 1 ]; then
-    log "FAIL: never reached a settled desktop within ${BUDGET}s"
+    log "FAIL: no candidate desktop within ${BUDGET}s (last capture in $SHOTDIR)"
 else
     log "FAIL: never reached qrexec within ${BUDGET}s"
 fi
