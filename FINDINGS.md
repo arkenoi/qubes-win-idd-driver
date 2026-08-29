@@ -20972,3 +20972,46 @@ answer "rare or common": let a check that cannot produce false failures observe 
 **Note on instrument vs artifact:** the product under test is the single release ISO. `health-check.ps1`
 is an INSTRUMENT and is run from the repo (newer than the ISO's copy) — a measuring tool may be newer
 than the thing it measures. Everything installed on the guest comes from the ISO and nothing else.
+
+## 2026-08-29 — the .13 comparison: two false starts, and what they actually establish
+
+Owner's approach: the post-install qrexec wedge did not appear on 4.3.13, so try to reproduce it
+there — if it does not reproduce, something changed between .13 and .15 and we should know what.
+
+Built 4.3.13 from its own commit (`82f3a0c`) via `workflow_dispatch` on a throwaway branch, so the
+comparison uses a REAL release ISO of that version, not a reconstruction. ISO checksum verified.
+
+**Two false starts, both mine, both worth recording so nobody repeats them:**
+
+1. **`/autologon:qubes` does not exist in .13.** My acceptance script passes it unconditionally; .13's
+   `install.cmd` printed `Unknown option: /autologon:qubes` and refused. The run looked like ".13 is
+   immune" — it had simply never started. **Installer flags are version-specific; a cross-version
+   comparison must use each version's own accepted options.**
+2. **.13 cannot install over .15 on a PV-booted guest at all.** With valid flags it stopped at
+   `[FATAL] REFUSING to remove the installed QWT: the C: boot disk is served by [the PV path]` — its
+   uninstall-first design meeting the documented PV-disk safety gate. So the wedge cannot be tested
+   as a downgrade; it needs a guest with no QWT installed.
+
+**What the wedge evidence now says (2 occurrences, one signature):**
+
+| | win11-24h2 | win10-clean |
+|---|---|---|
+| when | after a live netvm attach | during install, at `copying payload E:\ -> C:\qwt-improved-setup` |
+| guest state | Running, ~3.5 vCPUs | Running, ~2 vCPUs |
+| windows mapped | none | none (empty capture) |
+| events logged during | **none at all** | **none at all** |
+| ACPI shutdown | halted in 30 s | did NOT halt; needed the qrexec_timeout drain + kill |
+
+The common signature is total event-log silence with the guest alive and busy. **It is NOT tied to
+hotplug** — my earlier framing — because the second occurrence was mid-install with the netvm already
+attached, during a FILE COPY FROM THE CD, before msiexec and before the suppressor loop ever starts.
+That also clears the suppressor's 1 Hz process-kill loop (1800 ticks max, normally ~60-90) as the
+trigger for this occurrence.
+
+**Instrumentation gap the owner identified:** when this happens we lose every channel at once —
+qrexec dead, no windows to capture, event log silent. A PV console driver (`xencons`, upstream
+`win-xencons` at xenbits) would give an out-of-band `xl console` path that does not depend on qrexec
+or the GUI agent. QWT vendors no xencons at all today (this is why `XENBUS\...&DEV_CONS` sits at
+error 28 and is allowlisted in health-check), so it needs vendoring, building and signing. It would
+definitively help the observed class — guest alive, qrexec dead — though if the guest is genuinely
+deadlocked at high IRQL the console may be silent too. Worth doing; not a one-line fix.
