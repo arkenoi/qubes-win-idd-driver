@@ -1381,7 +1381,33 @@ function Invoke-Stage2 {
     # previously present stock binary.
     $installed = 'C:\Program Files\Qubes Tools\bin\gui-agent.exe'
     if (-not (Test-Path -LiteralPath $installed)) {
-        Fail "msiexec reported success but $installed does not exist"
+        # SAME-VERSION REINSTALL RECOVERY (measured 2026-08-29 on win10-clean, 4.3.15 over 4.3.15).
+        #
+        # REINSTALL=ALL acts ONLY on features Windows Installer records as already installed. If a
+        # feature is recorded Absent it is skipped outright - the MSI log says it plainly:
+        #     Feature: Gui;  Installed: Absent;  Request: Null;  Action: Null
+        # and ADDLOCAL is overridden while REINSTALL is present, so msiexec exits 0 having installed
+        # nothing. Combined with the leftover sweep above - which deliberately DELETES gui-agent.exe
+        # and gui-watchdog.exe before msiexec runs - the guest is left with no agent at all and a
+        # "successful" install. This check caught it; that is what it is for.
+        #
+        # Recovery: re-run WITHOUT REINSTALL. With no REINSTALL property, ADDLOCAL is honoured and an
+        # Absent feature is installed normally. Bounded to ONE retry, and the same existence test
+        # decides afterwards - a retry that does not produce the binary still Fails.
+        if ($script:SameVersionReinstall) {
+            Write-Log ("gui-agent.exe absent after REINSTALL=ALL - the MSI records a feature as " +
+                       "Absent, which REINSTALL skips. Retrying ONCE with ADDLOCAL only.") 'WARN'
+            $retryArgs = @('/i', "`"$msi`"", '/qn', '/norestart', "ADDLOCAL=$addlocal",
+                           'REBOOT=ReallySuppress', 'REINSTALLMODE=amus', 'MSIFASTINSTALL=7',
+                           '/l*v+!', "`"$msiLog`"")
+            $rp = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $retryArgs
+            Write-Log "  ADDLOCAL-only retry exit=$($rp.ExitCode)"
+            $script:Result.detail.same_version_addlocal_retry = $rp.ExitCode
+        }
+        if (-not (Test-Path -LiteralPath $installed)) {
+            Fail "msiexec reported success but $installed does not exist"
+        }
+        Write-Log 'gui-agent.exe recovered by the ADDLOCAL-only retry'
     }
     $haveHash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
     $wantHash = $null
