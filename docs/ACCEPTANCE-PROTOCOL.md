@@ -60,6 +60,21 @@ Templates never get a netvm; Standalones/AppVMs must have one for any network ce
 
 So: **create as many qubes as the pool affords, and tag each one `win-idd-testbed` at creation.** Park four standing images - `ST0.10`, `ST0.11`, `ST1.10`, `ST1.11` (~20 GB each, ~80 GB of the ~155 GB free) - and clone them into freshly-created churn qubes per cell. The only real limit is pool space, so prune churn qubes when a campaign ends and re-check `qvm-pool info vm-pool` before adding a park. The one hard rule that IS true: a new qube must be TAGGED before any policied call, which is why `qvm-clone` fails and `clone-to-template.sh` uses create -> tag -> copy.
 
+**PRIVATE VOLUME SIZE — check it before every template/AppVM build.** README.md says it plainly:
+QWT places user data on `Q:\Users` on the PRIVATE image (stock behaviour), and the Qubes default
+private volume is **2 GiB**, which a bare Windows profile does not fit in. Extend to **40 GiB**:
+
+    qvm-volume extend <vm>:private 40GiB
+
+**The TEMPLATE must be extended too** — an AppVM's private volume follows its template's size.
+Skipping this is silent and total: the guest boots, autologon works, `qtest run` works, and ONLY
+file copy fails (`getting Documents path failed 0x80070002`), so no probe, health-check or payload
+can reach it and the cell cannot be graded at all. Measured 2026-08-29: `win11-tpl`/`win11-app` at
+40 GiB worked; `win10-tpl`/`win10-app` built at the 2 GiB default did not, and I misdiagnosed it as
+a product defect for an hour before reading the README. `mgmt/clone-to-template.sh` now extends both
+and fails loudly if it cannot. **Assert `private >= 40 GiB` in P0 preflight for every guest a cell
+will push to.**
+
 ### 2.3 Restore mechanisms and costs
 
 | # | Mechanism | Wall clock | Pool cost | Notes |

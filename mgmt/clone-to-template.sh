@@ -56,6 +56,21 @@ EOF
 log "creating AppVM $APP on $TPL"
 qvm-create --class AppVM --template "$TPL" --label red "$APP" || exit 1
 qvm-tags "$APP" add win-idd-testbed || exit 1
+
+# EXTEND THE PRIVATE VOLUME. README.md ("check the private volume size first"): QWT places user
+# data on Q:\Users on the private image - stock behaviour - and the Qubes default private volume is
+# 2 GiB, which a bare Windows profile does not fit in. Skipping this produced a template and AppVM
+# with a 2 GiB private volume, no Q:\Users at all, and therefore a guest where qubes.Filecopy fails
+# with "getting Documents path failed 0x80070002" - nothing can be pushed, so nothing can be tested.
+# Measured 2026-08-29: win11-tpl/app (40 GiB) worked; win10-tpl/app built without this (2 GiB) did not.
+# The TEMPLATE must be extended too - an AppVM's private volume default follows its template's size.
+for _v in "$TPL" "$APP"; do
+    _cur=$(qvm-volume info "$_v":private 2>/dev/null | awk '/^size/{print $2}')
+    if [ -n "$_cur" ] && [ "$_cur" -lt 42949672960 ]; then
+        log "extending $_v:private $(( _cur / 1073741824 ))GiB -> 40GiB (README: Q:\\Users needs room)"
+        qvm-volume extend "$_v":private 40GiB || { log "FAIL: could not extend $_v:private"; exit 1; }
+    fi
+done
 for p in virt_mode kernel memory maxmem vcpus qrexec_timeout netvm; do
     v=$(qvm-prefs "$TPL" "$p" 2>/dev/null)
     qvm-prefs "$APP" "$p" "$v" >/dev/null 2>&1

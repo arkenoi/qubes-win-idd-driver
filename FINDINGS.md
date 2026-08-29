@@ -20616,10 +20616,21 @@ set up. The WIN10 template was built today by `mgmt/clone-to-template.sh` from a
 the WIN11 one predates this session. **Which template configurations produce the broken state is not
 yet established** — that is the next thing to determine, not something to guess at.
 
-**Consequence for the campaign:** the WIN10 AppVM path (NET-2/NET-5 on `win10-app`) is BLOCKED on
-this defect, not on the PV NIC. It is a genuine product defect in the template→AppVM path, exactly
-the configuration forum post 56 describes, and it must be fixed rather than worked around by
-pushing files a different way.
+**RETRACTED 2026-08-29, same day — this is NOT a product defect. It is documented procedure I did
+not follow.** README.md line 76: *"If you install onto an existing qube, check the private volume
+size first... the Qubes default private volume is 2 GiB and a bare Windows profile [needs more] —
+`qvm-volume extend <vm>:private 40GiB`"*. The measurement that settles it: `win11-tpl`/`win11-app`
+have **40 GiB** private volumes and work; `win10-tpl`/`win10-app`, which I built today, got the
+**2 GiB** Qubes default and do not. An AppVM's private volume follows its TEMPLATE's size, and
+`mgmt/clone-to-template.sh` never extended either — that is the whole bug, and it is in our tooling,
+not in QWT.
+
+Fixed: the script now extends template and AppVM to 40 GiB and fails loudly if it cannot; the
+acceptance protocol asserts `private >= 40 GiB` in preflight for any guest a cell pushes to.
+
+**The error worth remembering is mine:** I diagnosed a 'genuine product defect' without reading the
+project's own README, which documents the exact failure and its one-line fix. Before calling
+anything a product defect, grep the README and FINDINGS for the symptom.
 
 ## 2026-08-29 — RETRACTION: PV NIC hotplug does NOT fail. The unconditional latch fixes it.
 
