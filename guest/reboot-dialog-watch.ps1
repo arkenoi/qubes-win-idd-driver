@@ -57,6 +57,22 @@ public class Win32Enum {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr h, EnumProc cb, IntPtr l);
+    // The TITLE of a driver-trust prompt says almost nothing ("Windows Security"). What it is
+    // actually asking lives in its CHILD CONTROLS. Without this the watcher can prove a dialog
+    // blocked the install but not WHICH question it asked, which is the difference between
+    // knowing the mechanism and knowing the cause.
+    public static List<string> ChildText(IntPtr parent) {
+        var outp = new List<string>();
+        EnumChildWindows(parent, (h, l) => {
+            var t = new StringBuilder(1024); GetWindowTextW(h, t, 1024);
+            var c = new StringBuilder(128);  GetClassNameW(h, c, 128);
+            string s = t.ToString().Trim();
+            if (s.Length > 0) outp.Add(c.ToString() + ": " + s);
+            return true;
+        }, IntPtr.Zero);
+        return outp;
+    }
     public static List<string[]> Top() {
         var outp = new List<string[]>();
         EnumWindows((h, l) => {
@@ -96,6 +112,8 @@ function Get-Candidates {
                 visible = $vis; pid = $wpid; process = $pname
                 matched = @(@{n='title';v=$titleHit},@{n='class';v=$classHit},@{n='proc';v=$procHit} |
                             Where-Object { $_.v } | ForEach-Object { $_.n }) -join '+'
+                # WHAT IT ASKS, not just that it exists.
+                text = @([Win32Enum]::ChildText([IntPtr]::new([int64]$handle)))
             }
         }
     }
@@ -197,7 +215,11 @@ if ($SelfTest) {
     # Prove the detector FIRES. Separate file, every record tagged injected=true, so this can
     # never be mistaken for an observation of the real thing.
     $OutFile = [IO.Path]::ChangeExtension($OutFile, '.selftest.jsonl')
-    New-Item -ItemType Directory -Force -Path (Split-Path $OutFile) | Out-Null
+    $dir = Split-Path $OutFile -Parent
+    # Split-Path of 'C:\rbw.jsonl' is 'C:\', and New-Item -ItemType Directory on a DRIVE ROOT
+    # throws InvalidArgument. Measured on win10-u10 2026-08-29 - the self-test died here before
+    # it could prove anything, which is exactly what a self-test is for.
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     Remove-Item -LiteralPath $OutFile -ErrorAction SilentlyContinue
 
     Add-Type -AssemblyName System.Windows.Forms
@@ -222,7 +244,11 @@ if ($SelfTest) {
 
 # ---------------------------------------------------------------------------------------------
 # Sampling run.
-New-Item -ItemType Directory -Force -Path (Split-Path $OutFile) | Out-Null
+$dir = Split-Path $OutFile -Parent
+# Split-Path of 'C:\rbw.jsonl' is 'C:\', and New-Item -ItemType Directory on a DRIVE ROOT
+# throws InvalidArgument. Measured on win10-u10 2026-08-29 - the self-test died here before
+# it could prove anything, which is exactly what a self-test is for.
+if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
 $vantage = Test-Blind
 Add-Content -LiteralPath $OutFile -Value ([ordered]@{
     kind='start'; t=(& $stamp); interval=$IntervalSeconds; duration=$DurationSeconds

@@ -19994,3 +19994,46 @@ afterwards, so the driver install never completed either way.
 - FIXED: driver-package signature validation (0xE0000247), by trusting the PV signer before msiexec.
 - OPEN: why Windows still raises the trust dialog when the publisher IS in TrustedPublisher and the
   catalog verifies as Valid. That is the remaining question, and it is the whole install bug.
+
+## 2026-08-29 — THE ANSWER: four of the five MSI driver catalogs are shipped UNSIGNED
+
+The dialog's own text, captured by extending the watcher to dump child-control text (a title alone
+says nothing; "Windows Security" is the title of many things):
+
+    SysLink: "The driver software that you're attempting to install does not have a valid digital
+              signature that verifies who published it and could potentially be malicious software."
+    Button:  "Do&n't install this driver software"
+    Button:  "&Install this driver software anyway"
+
+That is the INVALID-SIGNATURE warning, not the trusted-publisher prompt. So the question was never
+"is the publisher trusted" — it was "is this package signed at all".
+
+Measured on the MSI-installed packages under `C:\Program Files\Qubes Tools\bin\pvdrivers\`:
+
+    xenbus/xenbus.cat      status=Valid      signer=CN=QubesIDD Test Signing  E370C6E6...
+    xeniface/xeniface.cat  status=NotSigned
+    xennet/xennet.cat      status=NotSigned
+    xenvbd/xenvbd.cat      status=NotSigned
+    xenvif/xenvif.cat      status=NotSigned
+
+**Four of the five driver catalogs the MSI ships are not signed at all.** The `.sys` binaries are
+individually signed (`CN=Qubes Windows Tools`), which is why the files look fine and why every
+earlier check passed — but Windows validates a driver PACKAGE against its CATALOG, and an unsigned
+catalog means the package is unsigned. Unattended, the resulting warning blocks the install forever.
+
+This explains every observation, including the ones that looked contradictory:
+- setupapi named exactly **xenvif, xennet, xenvbd** as failing (0xE0000247, "Signer Score =
+  Unsigned"). All three have unsigned catalogs. xenbus never failed — its catalog is signed.
+- `pnputil /add-driver` on the PAYLOAD's `pv-drivers\xenvif` succeeded with rc=0 and NO dialog: that
+  is a separately built package whose catalog IS signed (923F9378, Valid). I had verified that copy
+  and wrongly generalised from it to the MSI's copies.
+- No cert import could ever have fixed this. Trusting a publisher does not sign an unsigned file.
+
+**Why only xenbus is signed** is the ironic part: `packaging/patch-xenbus-inf.ps1` patches xenbus.inf
+and then re-runs Inf2Cat + signtool to regenerate and re-sign **xenbus.cat**. That step is the only
+thing in the build that signs a driver catalog, and it is scoped to the one package it patches. The
+other four catalogs are shipped as built, unsigned.
+
+**The fix is in the package build, not the installer:** sign all five catalogs (or run the same
+Inf2Cat+signtool pass over every driver package, not just the patched one). Acceptance requires the
+defect-present case (this run) and its absence on the same cell afterwards.
