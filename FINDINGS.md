@@ -20140,3 +20140,41 @@ therefore cannot be demonstrated on this rig as configured, by rule rather than 
 cell gets a netvm (owner decision) or "all drivers and network present" is met only for the disk,
 bus, interface and display stacks, with the NIC asserted structurally (driver in store + latch
 armed) rather than by carrying traffic.
+
+## 2026-08-29 — cell WIN11-24H2 with the monitor ARMED: the decisive "no premature reboot dialog" result
+
+`win11-24h2`, precondition read from the guest: QWT **4.3.1.0**, testsigning ON, PV boot disk, and —
+uniquely among the cells run so far — **`xenbus_monitor` Start=2 (Automatic) and Running**. That is
+the armed field state, the only configuration in which the premature reboot prompt can actually
+fire. Same CI package (`f777bec`), unmodified.
+
+**Result: `INSTALL COMPLETE`, `ok:true`.** Watcher: **88 samples, SAMPLES_WITH_DIALOG=0**, blind=false
+throughout. The mechanism is visible working in the same record: `MONITOR_STATES=Running,Stopped`
+and `MONITOR_START_VALUES=2,4` — the installer disarmed the running Automatic monitor — and 15
+samples carry a pending PV reboot Request that was armed and then cleared. So the Request WAS raised,
+the monitor WAS live at the start, and no dialog appeared at any point. `BIGGEST_GAPS=2` in a
+3006-line MSI log, both short: a real driver install, not a stall.
+
+This is the strongest evidence available for the "premature reboot dialogs are gone" criterion,
+because it is the one cell where the prompt had every precondition it needs.
+
+**Functional: 12 of 15, identical pattern to U11.** Same three network failures
+(`pv_drivers_bound`, `network_carries_traffic` at APIPA 169.254.130.108, `pvnic_applier` absent),
+same root — `netvm=''` — and the same KM-TEST Loopback artefact defeating health-check's
+not-applicable branch.
+
+### Also settled here: xenagent in event 1074 is NOT evidence of a guest-initiated reboot
+
+While recovering this guest I read its shutdown events with ages. The most recent 1074 was
+`ageMin=2` — my own ACPI `qvm-shutdown` — attributed to
+`C:\WINDOWS\System32\xenagent_9_1_0_0.exe ... on behalf of NT AUTHORITY\SYSTEM`. So xenagent is
+simply the component that EXECUTES a dom0-initiated ACPI shutdown; seeing it in 1074 is expected and
+says nothing about who decided to reboot. An earlier session cited exactly this signature as "direct
+evidence for task #29" (unattended shutdowns); today's audit had already downgraded that on dating
+grounds, and this measurement retires it on mechanism grounds as well.
+
+Equally: there was **no 1074 at all** between this guest's boot and my shutdown, during the ~8
+minutes it sat `Transient` with qrexec down. It did not reboot itself — its qrexec agent died while
+the guest kept running. That is a separate, still-unexplained fault on this guest (it answered two
+probes, then went unreachable), and it is NOT the install bug: it happened before any install was
+started.
