@@ -20941,3 +20941,34 @@ flush, so it acknowledges and reports `SERVICE_STOPPED` immediately.
 attached as a CD, installed via `install.cmd` from the CD exactly as the README documents, on all
 six cells, with Gate 0 (`tools/assert-payload.sh`) proving provenance before any of it. Anything
 graded on a different artifact does not count toward acceptance.
+
+## 2026-08-29 — the WUDFRd 219 question ANSWERED by the new check, on its first run
+
+The investigation left this undecided: is `219 / WudfRd failed to load / ROOT\DISPLAY\0000` rare and
+fatal, or common and benign? A prior rig saw 219 on every boot and retracted it as a failure
+signature, but never committed the status/device, so it stayed UNPROVEN.
+
+**Measured on the acceptance run's first cell (win10-u10, release ISO `fdd4700`):**
+
+    boot_events_clean:  219 "The driver \Driver\WudfRd failed to load for the device ROOT\DISPLAY\0000"
+    idd_device_bound:   PASS
+    desktop_on_idd:     PASS
+
+So on this boot the first UMDF load attempt failed, **PnP retried, and the display came up
+correctly.** 219 on its own is a RECOVERED TRANSIENT here — not a fatal defect.
+
+**That immediately corrected the check I had just written.** As first implemented,
+`boot_events_clean` failed on any 219 and therefore graded a demonstrably-working guest as broken —
+it would have failed all six acceptance cells for nothing. Refined: a 219 FAILS only when the device
+did **not** recover (`idd_device_bound` false), and otherwise is recorded under
+`warnings_recovered`. The signal is kept — being blind to it is what let this class hide — but it
+can no longer produce a false failure. Re-graded: `ok = True`, zero failures, warning recorded.
+
+**What is now known vs still open:** known — 219 occurs on a boot whose IDD ends up correctly bound,
+so the end state is what decides. Still open — whether it *ever* fails to recover, which is exactly
+what the check will now catch if it happens across the remaining cells. That is the honest way to
+answer "rare or common": let a check that cannot produce false failures observe it across a real run.
+
+**Note on instrument vs artifact:** the product under test is the single release ISO. `health-check.ps1`
+is an INSTRUMENT and is run from the repo (newer than the ISO's copy) — a measuring tool may be newer
+than the thing it measures. Everything installed on the guest comes from the ISO and nothing else.

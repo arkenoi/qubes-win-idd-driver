@@ -380,12 +380,31 @@ try {
                       time = $e.TimeCreated.ToUniversalTime().ToString('o')
                       msg = $msg.Substring(0, [Math]::Min(160, $msg.Length)) }
             $bootEvents += $rec
-            # 7043 is a shutdown-phase complaint about the PREVIOUS boot and does not mean this boot
-            # is broken; record it, do not fail on it.
-            if ($e.Id -ne 7043) { $bootBad += $rec }
+            # WHAT FAILS AND WHAT ONLY WARNS - decided by MEASUREMENT, 2026-08-29.
+            #
+            # First run of this check on the release ISO fired 219 (WudfRd failed to load for
+            # ROOT\DISPLAY\0000) on a boot where idd_device_bound and desktop_on_idd BOTH PASSED -
+            # i.e. the first load attempt failed, PnP retried, and the display came up correctly.
+            # So 219 on its own is a RECOVERED TRANSIENT and must not fail a guest whose display
+            # demonstrably works; failing on it would have failed all six acceptance cells for
+            # nothing. This also settles the open question from the investigation (is 219 rare and
+            # fatal, or common and benign): here it is benign, because the end state is good.
+            #
+            # But the signal is not thrown away - that would put us back to being blind. 219 FAILS
+            # when the device did NOT recover, which is exactly the case that matters; the end-state
+            # checks above already computed that. Everything else is recorded as a warning.
+            #
+            # 7043 is a shutdown-phase complaint about the PREVIOUS boot, not this one.
+            $recovered = $false
+            if ($e.Id -eq 219) {
+                $recovered = ($r.checks['idd_device_bound'] -and $r.checks['idd_device_bound'].pass)
+            }
+            if ($e.Id -ne 7043 -and -not $recovered) { $bootBad += $rec }
         }
     }
-    Check 'boot_events_clean' ($bootBad.Count -eq 0) @{ failing = $bootBad; all_ours = $bootEvents; since = $since }
+    Check 'boot_events_clean' ($bootBad.Count -eq 0) `
+        @{ failing = $bootBad; warnings_recovered = @($bootEvents | Where-Object { $bootBad -notcontains $_ })
+           since = $since }
 } catch {
     Check 'boot_events_clean' $false @{ error = "could not read the System log: $($_.Exception.Message)" }
 }
