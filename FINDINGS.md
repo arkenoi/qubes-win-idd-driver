@@ -20037,3 +20037,26 @@ other four catalogs are shipped as built, unsigned.
 **The fix is in the package build, not the installer:** sign all five catalogs (or run the same
 Inf2Cat+signtool pass over every driver package, not just the patched one). Acceptance requires the
 defect-present case (this run) and its absence on the same cell afterwards.
+
+### Why nobody noticed: pnputil installs an unsigned package silently, DIFx refuses it
+
+Measured on win10-u10, same guest, minutes apart, watcher armed for both:
+
+    pnputil /add-driver "...\pvdrivers\xenvif\xenvif.inf" /install   -> rc=0, ZERO dialogs (41 samples)
+    the MSI's DIFx InstallDriverPackages over the same packages      -> modal dialog, indefinite hang
+
+So with testsigning on, `pnputil` installs an unsigned-catalog package without complaint, while
+DIFxApp (what the MSI's `MsiInstallDrivers` custom action uses) shows the invalid-signature dialog
+and waits. That asymmetry is why four unsigned catalogs survived undetected: the installer's own
+later `pnputil /add-driver` step for the payload's xenvif always worked, so the driver path *looked*
+healthy, while the MSI's driver path — the one that actually installs the PV drivers — was blocked.
+
+It also means the hang is NOT reproducible with pnputil. Any future check of this defect must go
+through the MSI/DIFx path, or assert the catalog signatures directly. The build now asserts them:
+`patch-xenbus-inf.ps1` verifies every regenerated catalog with Get-AuthenticodeSignature and fails
+the build on anything not Valid, so this specific defect can never ship silently again.
+
+**Verification still owed:** the fix changes the package BUILD, so it needs a CI-built MSI to
+confirm end-to-end. That requires pushing the local commits (owner Q6). Until then the fix is
+argued from measurement, not demonstrated on a rebuilt package — and the honest status of the
+6-cell matrix is: 0 passed, S10 exercised three times, all three hung on this defect.
