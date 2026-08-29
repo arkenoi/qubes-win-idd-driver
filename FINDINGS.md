@@ -20396,3 +20396,51 @@ a netvm that is not running. **Owner action if end-to-end traffic is wanted: sta
 
 Neither fix changes any build behaviour; both make the instrument report what is actually true. The
 underlying guest condition is unchanged in every case - only the grading of it is corrected.
+
+## 2026-08-29 — NETWORK PROVEN CARRYING TRAFFIC on four cells + an AppVM, both operating systems
+
+Networking attached to **StandaloneVMs only** (`netvm=fw-net`); **both templates remain `netvm=''`**,
+per the owner's rule that the prohibition covers the template, not AppVMs/StandaloneVMs.
+
+| guest | cell | PV NIC | emulated NIC | IP | DNS resolves | rx bytes | health-check |
+|---|---|---|---|---|---|---|---|
+| win11-fresh | 2 | bound | gone | 10.137.0.69 | yes | 5,711,655 | **ok:true, 0 failing** |
+| win11-24h2 | 3 | bound | gone | 10.137.0.64 | yes | 160,931,063 | **ok:true, 0 failing** |
+| win10-clean | 4 | bound | gone | 10.137.0.70 | yes | 22,234,287 | **ok:true, 0 failing** |
+| win10-u10 | 6 | bound | gone | 10.137.0.74 | yes | 9,463,443 | **ok:true, 0 failing** |
+| win11-app | — | bound | gone | 10.137.0.68 | — | — | PV NIC + default route |
+
+Every one: `XENBUS/XENIFACE/XENVIF/XENNET` all started, `pv_nics: ["Xen PV Network Device #0"]`,
+`emulated_nics_still_present: []` — the QEMU adapter is UNPLUGGED, which is the real acceptance bar,
+not merely "a PV NIC exists".
+
+### The third health-check defect, and it was inverting the verdict
+
+`network_carries_traffic` asserted traffic by **pinging the default gateway**. A Qubes netvm is a
+routing endpoint and does not answer ICMP, so this reported "no traffic" on guests that were moving
+megabytes. Measured on win11-24h2: `ping gateway = False` while TCP to the Qubes DNS server
+connected, `Resolve-DnsName example.com` returned a real address, and the adapter's own counters read
+`rx=5,541,697 tx=620,926`. The check was wrong; the network was fine.
+
+Now it asserts traffic the way traffic happens — a real DNS resolution or a TCP connect through the
+adapter — records `ping_gateway`, `tcp_dns_53`, `dns_resolves`, `rx_bytes`, `tx_bytes` as evidence,
+and keeps ping only as corroboration, never as the sole criterion.
+
+### Two more measurement lessons from this pass
+
+1. **The first vif needs a second boot.** On every guest, boot 1 after attaching a netvm left
+   `XENNET` unstarted with the emulated Realtek still present; boot 2 completed the handover. This is
+   exactly what `pvnic-selfprime.ps1`'s header describes (xenvif's NET-child start fails unless the
+   boot-time emulated-NIC unplug already happened that boot). Not a defect — but any harness that
+   grades after one boot will report a false failure.
+2. **Do not grade immediately after qrexec comes up.** win10-u10 graded instantly showed
+   `dns_resolves=False, rx=153,487`; the same guest 90 s later showed `dns_resolves=True,
+   rx=9,463,443`. The network had not finished coming up. My first grade was premature and wrong.
+
+### Cells 1 and 5 have no live guest to re-grade
+
+Both ran on `win10-u10`, which was subsequently reprovisioned twice (to build the stock precondition
+for cell 5, then the fresh install for cell 6). Their install results and health-checks stand as
+recorded (`ok:true` at the time, network `na` because no netvm was attached then). The network stack
+is a property of the package, not of a cell's precondition, and it behaves identically on all five
+guests exercised above, across both operating systems.

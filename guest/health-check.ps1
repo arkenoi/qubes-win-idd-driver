@@ -380,14 +380,43 @@ try {
     if ($cfg) {
         $addr = ($cfg.IPAddress | Where-Object { $_ -match '^\d+\.' } | Select-Object -First 1)
         $gw   = ($cfg.DefaultIPGateway | Select-Object -First 1)
-        if ($addr -and $gw) { $ipOk = Test-Connection -ComputerName $gw -Count 2 -Quiet -ErrorAction SilentlyContinue }
+        # DO NOT assert traffic by PINGING THE GATEWAY. A Qubes netvm does not answer ICMP - it is a
+        # routing endpoint, not a host - so this reported "no traffic" on guests that were demonstrably
+        # moving megabytes. Measured 2026-08-29 on win11-24h2: ping gateway FALSE, while TCP to the
+        # Qubes DNS server connected, `Resolve-DnsName example.com` returned a real address, and the PV
+        # adapter's own counters read rx=5,541,697 tx=620,926. The check was wrong, not the network.
+        # Assert traffic the way traffic actually happens: a real DNS resolution or a TCP connect
+        # through the adapter, with the byte counters recorded as corroboration. Ping is kept only as
+        # a last resort and as evidence, never as the sole criterion.
+        $dnsSrv = ($cfg.DNSServerSearchOrder | Select-Object -First 1)
+        $pingOk = $false; $tcpOk = $false; $dnsOk = $false
+        if ($addr -and $gw) { $pingOk = Test-Connection -ComputerName $gw -Count 2 -Quiet -ErrorAction SilentlyContinue }
+        if ($dnsSrv) {
+            $c = New-Object Net.Sockets.TcpClient
+            try { $ia = $c.BeginConnect($dnsSrv, 53, $null, $null)
+                  $tcpOk = $ia.AsyncWaitHandle.WaitOne(4000, $false) -and $c.Connected } catch { }
+            try { $c.Close() } catch { }
+            $res = Resolve-DnsName -Name 'example.com' -Server $dnsSrv -DnsOnly -QuickTimeout -ErrorAction SilentlyContinue
+            $dnsOk = [bool]$res
+        }
+        $rx = 0; $tx = 0
+        try {
+            $s = Get-NetAdapterStatistics -ErrorAction SilentlyContinue |
+                 Sort-Object ReceivedBytes -Descending | Select-Object -First 1
+            if ($s) { $rx = $s.ReceivedBytes; $tx = $s.SentBytes }
+        } catch { }
+        $script:netEvidence = @{ ping_gateway = $pingOk; tcp_dns_53 = $tcpOk; dns_resolves = $dnsOk
+                                 rx_bytes = $rx; tx_bytes = $tx; dns_server = $dnsSrv }
+        $ipOk = ($dnsOk -or $tcpOk -or $pingOk)
     }
 } catch { }
 if ($nics.Count -eq 0) {
     Check 'network_carries_traffic' $false @{ na = 'no network attached' }
     $r.checks['network_carries_traffic'].na = $true
 } else {
-    Check 'network_carries_traffic' $ipOk @{ ip = $addr; gateway = $gw; gateway_reachable = $ipOk }
+    $netEv = @{ ip = $addr; gateway = $gw; carries_traffic = $ipOk }
+    if ($script:netEvidence) { foreach ($k in $script:netEvidence.Keys) { $netEv[$k] = $script:netEvidence[$k] } }
+    Check 'network_carries_traffic' $ipOk $netEv
 }
 
 # --- 6b3. netvm-free PV NIC applier (M1 latch path) --------------------------------
