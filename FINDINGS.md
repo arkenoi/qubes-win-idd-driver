@@ -20620,3 +20620,44 @@ yet established** — that is the next thing to determine, not something to gues
 this defect, not on the PV NIC. It is a genuine product defect in the template→AppVM path, exactly
 the configuration forum post 56 describes, and it must be fixed rather than worked around by
 pushing files a different way.
+
+## 2026-08-29 — RETRACTION: PV NIC hotplug does NOT fail. The unconditional latch fixes it.
+
+I wrote earlier: *"A true first-vif via hotplug has now failed twice and succeeded zero times"* and
+that the StandaloneVM immediate-attach path *"does not meet acceptance"*. **Both statements are
+withdrawn.** Every one of those failures was on a guest with **no applier** — either a pre-latch-fix
+package (`f777bec`, before `cace671`) or a template cloned from such a guest. I was measuring the
+absence of the fix and attributing it to the mechanism.
+
+**Decisive run — `win10-u10`, StandaloneVM, current package, applier VERIFIED present first:**
+
+    TASK QubesPvNic = Running   TASK QubesPvNicRearm = Ready
+    APPLIER_SCRIPT = present    UNPLUG_NICS = 1
+
+then booted `netvm=''`, watcher armed with 29 pre-attach samples, and the netvm attached to the
+RUNNING guest:
+
+    14:21:03  qvm-prefs win10-u10 netvm fw-net      (no reboot)
+    14:21:28  PNP OK  XENVIF\VEN_XP&DEV_NET\0 | XENNET = Running | ADAPTER = Ethernet Up
+
+**25 seconds, zero reboots.** Acceptance in full:
+
+| criterion | result |
+|---|---|
+| PV NIC bound after live attach | **PASS** — 25 s |
+| zero reboots (`LastBootUpTime`) | **PASS** — `14:18:44.5624990Z` byte-identical before and after |
+| no premature reboot dialog | **PASS** — 49 samples, `SAMPLES_WITH_DIALOG=0` |
+| emulated NIC unplugged | **PASS** — `emulated_nics_still_present: []` |
+| all PV drivers started | **PASS** — XENBUS/XENIFACE/XENVIF/XENNET |
+| health-check | **`ok = True`, zero genuine failures** |
+| traffic | ip `10.137.0.74`, DNS resolves, **rx 1,258,830,241** (1.25 GB) |
+
+**So the acceptance criterion the owner set — an immediate netvm attach with ZERO reboots — is met
+on a StandaloneVM**, and `NET-7`'s "KNOWN GAP / EXPECTED-FAIL" framing is obsolete: the gap was the
+missing latch, and the latch is now unconditional for every qube class (`cace671`).
+
+**The methodological error, stated plainly:** I ran the same experiment three times across two
+guests and concluded the mechanism was broken, without once verifying that the fix under test was
+actually deployed on the subject. The applier probe that settled it takes ten seconds. "Verify the
+artefact under test is actually installed" is a rule already written in CLAUDE.md; I did not apply it
+to a fix I had written myself an hour earlier.
