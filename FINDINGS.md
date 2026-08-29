@@ -20178,3 +20178,47 @@ minutes it sat `Transient` with qrexec down. It did not reboot itself — its qr
 the guest kept running. That is a separate, still-unexplained fault on this guest (it answered two
 probes, then went unreachable), and it is NOT the install bug: it happened before any install was
 started.
+
+## 2026-08-29 — cell WIN10 armed-monitor (win10-clean): PASSES, health-check ok:true
+
+`win10-clean`, precondition from the guest: QWT **4.3.2.0**, testsigning ON, PV boot disk,
+**xenbus_monitor Start=2 (Automatic) and Running**. This is the WIN10 armed-monitor case — the
+closest match to the originally reported failing scenario. Same CI package (`f777bec`), unmodified.
+
+    INSTALL COMPLETE, ok:true, ~80 s (06:45:23 -> 06:46:38)
+    watcher: 72 samples, SAMPLES_WITH_DIALOG=0
+    MONITOR_STATES=Running,Stopped   MONITOR_START_VALUES=2,4   (installer disarmed it)
+    SAMPLES_WITH_PENDING_REQUEST=13  (armed, then cleared)
+    MSI log 2964 lines, BIGGEST_GAPS=0
+
+**health-check: `ok = True`.**
+
+### This also settles the health-check asymmetry, in health-check's favour
+
+Three checks report `pass:false` here but carry an explicit `na`:
+
+    pv_drivers_bound        na: "no physical network adapter attached - PV NIC not assertable here"
+    network_carries_traffic na: "no network attached"
+    pvnic_applier           na: "QubesPvNic task not registered - M1 latch deployment absent"
+
+and the overall verdict is still `ok:true`. So the documented "no network attached is not
+applicable, never a pass" logic WORKS. It did not fire on win11-fresh or win11-24h2 for the reason
+identified earlier: those guests carry two **Microsoft KM-TEST Loopback Adapter** entries that
+`Win32_NetworkAdapter ... PhysicalAdapter` counts as physical, so the guest does not look
+network-less. That is a defect in the *predicate*, not in the build and not in the check's intent —
+the fix is to exclude loopback adapters from the physical-NIC count.
+
+### Cell status after four runs, all on the same unmodified CI package (f777bec)
+
+| cell | guest | precondition | install | dialogs | health-check |
+|---|---|---|---|---|---|
+| WIN10 stage-2 | win10-u10 | no QWT, monitor Disabled | COMPLETE 49 s | 0/61 | **ok:true** |
+| WIN11 upgrade | win11-fresh 25H2 | QWT 4.3.9, monitor Disabled | COMPLETE 72 s | 0/46 | 12/15 (loopback artefact) |
+| WIN11 armed | win11-24h2 | QWT 4.3.1, **monitor Auto+Running** | COMPLETE | **0/88** | 12/15 (loopback artefact) |
+| WIN10 armed | win10-clean | QWT 4.3.2, **monitor Auto+Running** | COMPLETE 80 s | 0/72 | **ok:true** |
+
+Zero premature reboot dialogs across **267 samples** on four guests, including both armed-monitor
+cases where the Request was raised and cleared. Not one install hung.
+
+Note: `win10-clean` was the WIN10 golden and now carries 4.3.15 rather than 4.3.2. Recorded so
+nobody later reads it as a pristine 4.3.2 source.
