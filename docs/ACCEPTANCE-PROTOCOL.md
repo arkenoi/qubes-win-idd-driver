@@ -56,13 +56,9 @@ Three flavors of "pristine" exist and each carries a proof obligation recorded i
 
 Templates never get a netvm; Standalones/AppVMs must have one for any network cell. `fw-net` is outside this qube's Admin API reach: "fw-net not running" is an **owner escalation, not a debuggable failure**. Binding, traffic aside, needs no fw-net.
 
-**Roster constraint on parking (2026-08-29, needs an owner decision).** Standing parks compete with working qubes for the eight policied names, and names cannot be invented (dom0 policy is name-based). Four parks (ST0/ST1 × win10/win11) + two templates + two AppVMs = eight, leaving **zero churn qubes** to clone into. Workable allocations:
+**Parking allocation (2026-08-29) — NO owner action needed.** An earlier version of this note claimed qube names could not be invented because dom0 policy is name-based, and on that basis asked the owner for two extra names. **That was false and is retracted.** Policy is TAG-based (`@tag:win-idd-testbed`), verified by creating `qwt-probe-tmp` - a name on no roster - tagging it, and getting full Admin API access immediately. See `.claude/skills/rig-capabilities/SKILL.md`.
 
-- **A — two parks, keeps churn:** park ST0.10/ST0.11 only; rebuild stock per campaign (costs ~18 min each time it is needed).
-- **B — four parks, no churn:** park ST0 and ST1 for both OSes; every cell then has to run *in* a park or overwrite one, which is exactly how pristine images got clobbered today. Not recommended without more names.
-- **C — four parks + churn (recommended):** requires **two additional policied qube names** from the owner. This is the only allocation that gives standing pristine AND stock images while still leaving somewhere to run.
-
-Until C is granted, run A and accept the stock rebuild cost.
+So: **create as many qubes as the pool affords, and tag each one `win-idd-testbed` at creation.** Park four standing images - `ST0.10`, `ST0.11`, `ST1.10`, `ST1.11` (~20 GB each, ~80 GB of the ~155 GB free) - and clone them into freshly-created churn qubes per cell. The only real limit is pool space, so prune churn qubes when a campaign ends and re-check `qvm-pool info vm-pool` before adding a park. The one hard rule that IS true: a new qube must be TAGGED before any policied call, which is why `qvm-clone` fails and `clone-to-template.sh` uses create -> tag -> copy.
 
 ### 2.3 Restore mechanisms and costs
 
