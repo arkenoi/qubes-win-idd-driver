@@ -124,28 +124,6 @@ jobs:
       # advertises feature-ctrl-ring, which is why it is not seen there.
       # This MUST NOT be gated on `diagnostic`: without it a release build cannot bring up a
       # Windows PV NIC on any ctrl-ring-less netback.
-      - name: Apply the control-ring fix (always)
-        shell: pwsh
-        working-directory: xencons
-        run: |
-          $ErrorActionPreference = 'Stop'
-          git apply --verbose ..\repo\patches\xencons-ctrl-ring-fix.patch
-          if ($LASTEXITCODE -ne 0) { throw "ctrl-ring fix did not apply" }
-          if (-not (Select-String -Path src\xencons\frontend.c -Pattern 'no hashing' -Quiet)) {
-            throw "ctrl-ring fix marker missing after patch"
-          }
-          Write-Host "::notice title=xencons::control-ring fix applied"
-
-      # DIAGNOSTIC BUILD, opt-in. On a Qubes host xencons's Error() output is unreachable:
-      # it goes to DbgPrint -> xen.sys -> __outbytestring to port 0xE9 or 0x12, and neither
-      # is wired to anything readable (xl dmesg AND the stubdom log are both empty - measured
-      # 2026-08-21). This patch republishes the outcome of every FrontendEnable step, plus the
-      # RX-ring fill shortfall, into the FRONTEND's own xenstore directory, which the guest
-      # reads back through the xeniface XenStore WMI interface. That is the only instrument
-      # that can attribute the MiniportRestart failure seen against a mirage netback.
-      #
-      # OFF by default and never part of a release: run this workflow with
-      # `-f diagnostic=true` to get it.
       - name: Apply the enable-path diagnostic patch (opt-in)
         if: inputs.diagnostic == true || inputs.diagnostic == 'true'
         shell: pwsh
