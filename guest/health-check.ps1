@@ -42,7 +42,12 @@ param(
     # For deliberate control runs against stock QWT or any pre-4.3.16 package, which ship no
     # xencons: report pv_console_bound as evidence without failing on it. Never pass this for
     # a package that is supposed to carry the console - it would turn the check into decoration.
-    [switch]$ConsoleOptional
+    [switch]$ConsoleOptional,
+    # Accept a guest that updates itself (the documented StandaloneVM-with-direct-internet
+    # carve-out). Pass it ONLY when self-updating is genuinely intended for that guest - never
+    # to quiet the check on a guest under acceptance, where a self-updating guest is exactly
+    # the confound the check exists to catch.
+    [switch]$SelfUpdatingAllowed
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -378,6 +383,41 @@ Check 'pv_console_bound' ($consBound -or $ConsoleOptional) `
        bound = $consBound
        optional = [bool]$ConsoleOptional
        note = 'xencons gives dom0 `xl console` into a guest whose qrexec/event log are already dead' }
+
+# --- 6b3. UPDATES ARE DOM0-OWNED: the guest must not be updating itself -------------
+# Added 2026-08-30 after the owner saw a Windows Update toast on their screen from a guest that
+# was MID-ACCEPTANCE. Investigation: win10-clean (StandaloneVM, netvm=fw-net) had NoAutoUpdate
+# absent, wuauserv Running, 3 servicing processes, and RebootRequired=True - it had already
+# installed updates on its own.
+#
+# The cause is deliberate code, not an omission: qubes-windows-update.ps1 classifies a
+# StandaloneVM with direct internet as self-updating and REMOVES NoAutoUpdate. Attaching a
+# netvm to StandaloneVMs for PV-network testing (which we began doing on 2026-08-29) therefore
+# silently flips those guests into self-updating mode.
+#
+# Why this is a TEST-INTEGRITY defect and not a cosmetic one:
+#   - a guest that services updates mid-cell is no longer the artifact under test, so the cell
+#     grades something that no longer exists ("single package for all tests" is defeated from
+#     inside the guest);
+#   - Windows Update installs DRIVERS and sets a pending-reboot flag, which is an independent
+#     source of the very reboot prompts an acceptance cell is grading as "gone";
+#   - it adds heavy uncontrolled PnP/IO churn, which is exactly the load class the wedge feeds
+#     on - a plausible reason the wedge appears more often lately with no code change to explain
+#     it.
+# Nothing in the acceptance path could have caught this: no check looked at WU state at all.
+$nauPath = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+$nau = (Get-ItemProperty -Path $nauPath -Name NoAutoUpdate -ErrorAction SilentlyContinue).NoAutoUpdate
+$wuSvc = (Get-Service wuauserv -ErrorAction SilentlyContinue).Status
+$wuPendingReboot = Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+$servicing = @(Get-Process TiWorker, TrustedInstaller -ErrorAction SilentlyContinue).Count
+$updatesOwned = ($nau -eq 1 -and -not $wuPendingReboot)
+Check 'updates_dom0_owned' ($updatesOwned -or $SelfUpdatingAllowed) `
+    @{ NoAutoUpdate = $nau
+       wuauserv = "$wuSvc"
+       wu_pending_reboot = $wuPendingReboot
+       servicing_processes = $servicing
+       allowed_by_switch = [bool]$SelfUpdatingAllowed
+       note = 'dom0 owns every install; a guest updating itself mutates the artifact under test and can raise its own reboot prompts' }
 
 # --- 6b1. THIS BOOT'S KERNEL/SERVICE EVENTS ------------------------------------------------
 # Added 2026-08-29. Until now this script had ZERO Get-WinEvent calls, so it asserted the END state

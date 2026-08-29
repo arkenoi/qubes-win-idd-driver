@@ -21160,3 +21160,56 @@ Pin it.
 
 **Artifact retention checked:** every .13-era artifact is still `expired=false`, so the A/B can
 install the ORIGINAL .13 ISO. No rebuild, therefore no exposure to the unpinned-master drift above.
+
+## 2026-08-30 — CAUGHT: acceptance guests were installing Windows updates on their own
+
+Found because the owner saw a Windows Update toast on their screen and asked "is it standalonevm?".
+It was: `win10-clean`, StandaloneVM, `netvm=fw-net`, MID-ACCEPTANCE.
+
+**Measured on that guest:**
+
+    NoAutoUpdate            ABSENT (AU key existed but empty)
+    wuauserv                Running
+    TiWorker/TrustedInstaller/MsMpEng   3 processes
+    RebootRequired          True     <- updates were ALREADY INSTALLED
+
+**Cause: deliberate code, not an omission.** `guest/qubes-windows-update.ps1:1247` classifies a
+StandaloneVM with direct internet as self-updating and explicitly removes the policy:
+
+    'StandaloneVM with direct internet - it updates ITSELF via Windows Update. ... Undoing NoAutoUpdate=1.'
+    Remove-ItemProperty -Path 'HKLM:\...\WindowsUpdate\AU' -Name NoAutoUpdate
+
+We began attaching a netvm to StandaloneVMs on 2026-08-29 to test the PV NIC. That attach is what
+flipped these guests into self-updating mode. The two changes are individually reasonable and
+jointly wrong.
+
+**Why this is serious, in order of severity:**
+
+1. **It destroys test integrity.** A guest that services updates during a cell is no longer the
+   artifact under test. "Single package for all tests" was being defeated from INSIDE the guest,
+   invisibly - the ISO was right, the guest was not.
+2. **It manufactures the exact defect being graded.** WU sets a pending-reboot flag and installs
+   drivers, so it is an independent source of reboot prompts - and "premature reboot dialogs are
+   gone" is an acceptance criterion. A cell could have failed, or passed, for reasons that had
+   nothing to do with our package.
+3. **It is a candidate explanation for the wedge frequency.** WU servicing is heavy PnP + I/O +
+   driver-install churn, the load class the wedge feeds on. It appeared on the rig on 2026-08-29,
+   which fits "happens often enough on .15 to be annoying" WITHOUT any code difference - and the
+   .13-vs-.15 diff contains no mechanism for the wedge (see the previous entry). This is now a
+   better hypothesis than the build version, and it is testable: hold WU off on both sides.
+4. **Nothing could have caught it.** No check in the acceptance path looked at Windows Update state
+   at all.
+
+**Done:** restored the posture on win10-clean (NoAutoUpdate=1, wuauserv stopped + disabled), and
+added an `updates_dom0_owned` assertion to `guest/health-check.ps1` (NoAutoUpdate=1 and no WU
+pending-reboot), with a `-SelfUpdatingAllowed` switch for the deliberate carve-out only.
+
+**Voided by this:** the wedge soak running on win10-clean at the time was competing with TiWorker
+servicing and is not a controlled measurement - stopped rather than reported. Instrument note from
+it: the soak reached **peak 30 concurrent bridge processes** against the dump's 38, so the harness
+does reach the observed conditions.
+
+**Open decision for the owner (NOT actioned - Track C is out of scope for this repo):** whether the
+StandaloneVM-with-internet carve-out should exist at all. It contradicts the recorded posture that
+dom0 owns every install, and dom0's `qubes-vm-update` can drive a StandaloneVM. Until that is
+settled, testbed StandaloneVMs must keep NoAutoUpdate=1 regardless of netvm.

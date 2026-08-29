@@ -56,25 +56,48 @@ MINUTES="${2:-20}"
 # soaker is a serial loop, so this is the concurrency of bridge processes, not a rate cap.
 SOAKERS="${3:-6}"
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-QTEST="$REPO/tools/qtest"
+REPO="${WEDGE_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+QTEST="${QTEST_BIN:-$REPO/tools/qtest}"
+# FAIL LOUDLY if the tool is missing. Without this check the harness cannot tell "qtest is not
+# where I looked" from "the guest is dead": every probe runs `timeout 60 "$QTEST" ...`, a
+# missing file exits non-zero instantly, and the run reports an ABORT about a sick guest.
+# That is exactly what happened on 2026-08-30 - long runs were being started from a snapshot
+# copy in a scratch dir (so edits could not corrupt a running script), which made REPO resolve
+# to the scratch dir and QTEST point at nothing. Three runs "aborted on an unresponsive guest"
+# that was in fact answering in 0 s, and I nearly recorded a healthy-guest latency transient
+# that never existed. A probe that cannot distinguish a broken instrument from a real result
+# is worse than no probe. Override REPO/QTEST via WEDGE_REPO/QTEST_BIN when running a snapshot.
+if [ ! -x "$QTEST" ]; then
+	echo "FATAL: qtest not found or not executable at '$QTEST'." >&2
+	echo "       This is an INSTRUMENT failure, not a guest failure - do not read it as a wedge." >&2
+	echo "       Running from a copy outside the repo? Set WEDGE_REPO=/path/to/repo (or QTEST_BIN)." >&2
+	exit 2
+fi
 export QTEST_VM="$VM"          # qtest reads the target from the environment, not a flag
 OUT="${WEDGE_OUT:-$REPO/evidence/wedge-hunt-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT"
 
-# Seconds of silence before calling it a wedge. 600, not 120: transient unresponsiveness of
-# ~2 minutes was MEASURED on a healthy guest under this exact soak (probes failing, then the
-# same guest answering in 0 s once the backlog drained). A threshold inside the transient range
-# manufactures wedges out of load, which would be worse than finding nothing - it would
-# "confirm" the mechanism with noise and send the fix in a fabricated direction.
+# Seconds of silence before calling it a wedge.
+#
+# RETRACTION (2026-08-30): an earlier version of this comment justified 600 by claiming a
+# "~2 minute transient unresponsiveness MEASURED on a healthy guest under this soak". That
+# measurement was NOT REAL. Those probe failures came from the harness being unable to find
+# qtest (see the QTEST check above), not from the guest, which was answering in 0 s throughout.
+# No healthy-guest transient of any length has been observed here.
+#
+# 600 is kept anyway, on an honest basis: it is a deliberately conservative floor for a fault
+# whose defining property is that it NEVER recovers. Making it generous costs one thing - a
+# slower verdict - and buys immunity to load transients, whereas a threshold that is too tight
+# fabricates wedges and would send a fix in an invented direction.
 DEAD_THRESHOLD="${DEAD_THRESHOLD:-600}"
 STOP="$OUT/.stop"
 
 log(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$OUT/hunt.log"; }
 state(){ qvm-ls --raw-data --fields STATE "$VM" 2>/dev/null | tail -1; }
-# 60 s, not 30. Measured 2026-08-29: under 36-way churn a HEALTHY guest can take longer than
-# 30 s to answer, and the backlog left by a torn-down soak kept probes failing for ~2 minutes
-# before the same guest answered in 0 s. A 30 s probe reports load as death.
+# 60 s rather than 30, as headroom for a guest under 36-way churn. NOTE: the "~2 minutes of
+# healthy-guest silence" once cited here was an artefact of a broken qtest path, not a
+# measurement - see the RETRACTION on DEAD_THRESHOLD. Measured round-trip on this guest,
+# repeatedly, is 0-1 s.
 alive(){ timeout 60 "$QTEST" run "echo alive" >/dev/null 2>&1; }
 
 # --- recovery -------------------------------------------------------------------------
@@ -108,9 +131,9 @@ st=$(state)
 if [ "$st" != "Running" ]; then log "$VM is $st - starting"; "$QTEST" start >>"$OUT/hunt.log" 2>&1; sleep 25; fi
 # Preflight liveness, RETRIED. A single probe is not enough to call a guest sick: right after a
 # previous soak is torn down its in-flight qrexec calls are still draining, and a lone 30 s
-# probe into that backlog fails on a perfectly healthy guest. That exact false negative aborted
-# a run on 2026-08-29 seconds after the preceding soakers were killed - the guest answered
-# immediately when asked again. Give it several tries before declaring anything.
+# probe into that backlog can fail on a healthy guest. Retries are cheap insurance. (The runs
+# that actually aborted here were caused by a missing qtest binary, not a backlog - guarded
+# directly by the QTEST check above.)
 ok=0
 for attempt in 1 2 3 4 5; do
 	if alive; then ok=1; break; fi
