@@ -20824,3 +20824,36 @@ qube classes.
 **What actually cost the time:** I diagnosed a product defect without reading our own README, then
 spent an hour on it. Gate 0 (`tools/assert-payload.sh`) and the preflight private-volume assertion
 now make both classes of error structurally catchable rather than dependent on me remembering.
+
+## 2026-08-29 — WIN11 stock cell COMPLETE (ok:true); and the qrexec death investigated, not retried
+
+**Cell complete.** After the guest recovered on its own, `health-check` on `win11-24h2`:
+`ok = True`, zero genuine failures, XENBUS/XENIFACE/XENVIF/XENNET all started,
+`emulated_nics_still_present: []`, ip `10.137.0.64`, DNS resolving, traffic flowing. Combined with
+the earlier install (stock 4.2.2 detected, `ok:true`, 0 dialogs / 58 samples, monitor disarmed 2→4,
+zero MSI gaps) and the hotplug (24 s, zero reboots), the cell PASSES end to end.
+
+**The qrexec death — investigated from the guest's own logs.** Read the System and Application logs
+across the failure window (15:45–16:20 guest local):
+
+- `15:46:27  L2 7043` GUI agent watchdog did not shut down properly after preshutdown
+- `15:47:02  L3 219`  **`\Driver\WUDFRd` failed to load. Device: `ROOT\DISPLAY\0000` Status `0xC0000365`**
+  (`STATUS_DRIVER_FAILED_PRIOR_UNLOAD`) — the IDD's UMDF driver failed to load on that boot, which
+  explains "no windows mapped" independently of qrexec
+- `15:47:24  L2 7000` `luafv` failed to start (driver blocked)
+- `15:50:36–38 L2` Security-SPP License Activation failed (`0x80072EE7`) — fired the moment the
+  network arrived. Checked: the image is `Windows(R), EnterpriseEval edition` but
+  **`LicenseStatus=1` (Licensed), ~90 days grace** — so activation failure is NOT the cause.
+- **Then nothing at all until 16:20.** No crash, no service failure, no bugcheck — while the guest
+  burned ~107 s CPU per 30 s wall (≈3.5 vCPUs).
+
+**High CPU with zero logged events is the signature of the known wedge** — the Xen HVM
+IPI/TLB-shootdown deadlock proven from two NMI dumps (see `wedge-ipi-shootdown-deadlock`), where the
+guest keeps running and qrexec-wrapper is the thing deadlocked, so nothing gets logged. That class is
+**out of QWT scope and reportable upstream**, not our defect.
+
+**Confidence, stated honestly: PLAUSIBLE, not proven.** One occurrence, no NMI dump taken, and I did
+not reproduce it. What IS established: it is not the install (completed and verified before), not the
+PV NIC (bound and verified up before), and not eval-license expiry (checked). The IDD `WUDFRd` load
+failure at boot is a separate, real observation worth its own investigation — it is OUR driver
+failing to load, and it would explain the absent windows.
