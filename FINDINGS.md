@@ -20694,3 +20694,33 @@ verified package directory, because a stale artifact sitting on disk with a plau
 how this happened. The rule that would have caught it in ten seconds is already written down —
 *verify the artefact under test is actually installed* — and the installer PRINTS its own provenance
 (`package … repo <sha>`) in the first lines of every run. **Read that line before grading any cell.**
+
+## 2026-08-29 — WIN11 stock cell, correct package: install + hotplug PASS, then qrexec dies post-attach
+
+Re-run of the WIN11 stock cell with the **verified-correct** package (provenance checked BEFORE the
+run this time: `repo 898910d`, 5 latch-fix markers in the staged installer).
+
+**Install half — PASS.** Genuine stock precondition (QWT 4.2.2.0, agent 4.2.2.0, testsigning on,
+monitor Auto+Running); `found existing QWT: 'Qubes Windows Tools v4.2.2.0'`; **latch seeded
+unconditionally on a StandaloneVM** — `class='StandaloneVM': seeding PV NIC priming latch
+UNCONDITIONALLY` → `{"ok":true,"armed":true,"nics":1,"vif_enum_key":true}`; `INSTALL COMPLETE`;
+**58 watcher samples, 0 dialogs**; monitor disarmed 2→4.
+
+**Hotplug — PASS.** After the reboot the applier was confirmed present (`TASK QubesPvNic = Ready`,
+`APPLIER_SCRIPT = present`) — the exact variable that was ABSENT when this same guest failed on the
+pre-fix package. Live attach at 12:50:32, **PV NIC up at 12:50:56: 24 seconds, no reboot.** That makes
+the correlation **3-for-3 with the applier present, 0-for-3 without**, across both operating systems.
+
+**Then qrexec died and did not return.** From ~12:52 onward: guest `Running`, ~107 s CPU per 30 s wall
+(≈3.5 vCPUs pegged), **no windows mapped** (empty capture), qrexec down through 13:11 — 19+ minutes.
+So the final grading of this cell (health-check, traffic) could not be taken.
+
+**What this is NOT:** not the install (that completed and was verified), and not the PV NIC (it bound
+and was verified up). It happens AFTER a successful attach. Whether it is the network reconfiguration
+killing the agent, the known Xen HVM IPI/TLB-shootdown wedge class (see
+`wedge-ipi-shootdown-deadlock`), or something specific to this guest, is **UNPROVEN** — one occurrence,
+no repeat, and I will not guess at it. Guest preserved and shut down via ACPI (never a hard kill,
+which is what left `win10-tpl` unbootable).
+
+**Cell status: install PASS, hotplug PASS, functional grading INCOMPLETE.** Recording it that way
+rather than inferring the last step from the first two.
