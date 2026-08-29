@@ -60,38 +60,62 @@ until out=$(qq run 'echo BOOT_OK' 2>&1) && grep -q BOOT_OK <<<"$out"; do
 done
 log "back from reboot; settling 45s"; sleep 45
 
-# --- 3b. RECORD, then suppress, guest self-updating ---------------------------------
+# --- 3b. UPDATE POSTURE: record always; suppress ONLY in quick mode ------------------
+# Owner, 2026-08-30: "for quick tests, we disable updater; for full pass we let them complete",
+# and - correcting an earlier reading of mine - "we do not suppress it on standalonevm, neither
+# it is 'premature'. premature boots were related to our install process which they broke."
+#
+# So Windows Update running on a self-updating StandaloneVM is EXPECTED behaviour, not a defect,
+# and its restart dialog is a legitimate dialog. It is NOT the "premature reboot dialog" this
+# matrix grades: that one came from our install process being broken by the PV drivers. Treating
+# the two as one thing (which an earlier version of this block did, by suppressing WU
+# unconditionally) would both hide a real dialog and mis-attribute it.
+#
+# ACCEPT_MODE=quick (default): disable the updater so a cell is a controlled measurement of OUR
+#   package, with no background servicing mutating the guest mid-cell.
+# ACCEPT_MODE=full: leave Windows Update alone and let updates complete - the realistic
+#   StandaloneVM configuration, and the only mode that exercises the post-update state.
+#
+# The posture is RECORDED in both modes regardless, because a cell whose update state is unknown
+# cannot be interpreted later.
+ACCEPT_MODE="${ACCEPT_MODE:-quick}"
 # On 2026-08-30 a cell was found running against a guest that had installed Windows updates on
 # its own: win10-clean (StandaloneVM, netvm=fw-net) had NoAutoUpdate absent, wuauserv Running
 # and RebootRequired=True. The cause is the deliberate StandaloneVM-with-direct-internet
 # carve-out in qubes-windows-update.ps1, which strips NoAutoUpdate; attaching a netvm to test
 # the PV NIC is what triggers it.
 #
-# A guest that services updates mid-cell is not the artifact under test, and WU sets its own
-# pending-reboot flag - an independent source of the reboot prompts this cell grades. So the
-# cell cannot simply proceed. But it must not simply fail either: WU's restart dialog and the
-# PV-driver install prompt are DIFFERENT dialogs with different causes, and failing the cell
-# would conflate them and hide which one actually appeared.
-#
-# So: RECORD the state first (this is the evidence that the carve-out fired on this guest),
-# THEN force the dom0-owned posture so the rest of the cell is a controlled measurement. The
-# recorded file is the per-cell proof - never silently skipped, and never quietly "fixed".
-log "recording WU state before suppressing it (self-update carve-out check)"
+# In QUICK mode a guest that services updates mid-cell is not the artifact under test, so the
+# updater is disabled after the state is recorded. In FULL mode it is left alone deliberately.
+# Either way the state is RECORDED first: that record is the per-cell evidence of which
+# configuration was actually measured, and it is never skipped.
+log "recording WU state (mode=$ACCEPT_MODE)"
 qq run "powershell -ep bypass -c \"'NAU:'+([string](Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -EA SilentlyContinue).NoAutoUpdate); 'SVC:'+(Get-Service wuauserv -EA SilentlyContinue).Status; 'PENDINGREBOOT:'+(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'); 'SERVICING:'+@(Get-Process TiWorker,TrustedInstaller -EA SilentlyContinue).Count\"" \
     2>&1 | tr -d '\r' | grep -aE '^(NAU|SVC|PENDINGREBOOT|SERVICING):' > "$OUT/wu-state-before.txt" || true
 if [ -s "$OUT/wu-state-before.txt" ]; then
     while read -r l; do log "    $l"; done < "$OUT/wu-state-before.txt"
     if grep -q '^NAU:$' "$OUT/wu-state-before.txt" || grep -q '^PENDINGREBOOT:True' "$OUT/wu-state-before.txt"; then
-        log "WARNING: this guest was SELF-UPDATING (carve-out fired). Recorded in wu-state-before.txt;"
-        log "         suppressing WU now so the remainder of the cell is controlled."
+        log "note: guest is SELF-UPDATING (StandaloneVM direct-internet carve-out) - expected on a"
+        log "      netvm-attached standalone, not a defect. Recorded; mode=$ACCEPT_MODE decides what happens next."
     fi
 else
     # Missing data fails: without this record we cannot tell a controlled cell from a
     # contaminated one, which is the whole point of taking it.
     fail "could not read WU state - refusing to grade a cell whose update posture is unknown"
 fi
-qq run "powershell -ep bypass -c \"New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -Value 1 -Type DWord; Stop-Service wuauserv -Force -EA SilentlyContinue; Set-Service wuauserv -StartupType Disabled -EA SilentlyContinue\"" \
-    >/dev/null 2>&1 || true
+if [ "$ACCEPT_MODE" = "quick" ]; then
+    log "mode=quick: disabling the updater so this cell measures OUR package, not WU servicing"
+    qq run "powershell -ep bypass -c \"New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -Value 1 -Type DWord; Stop-Service wuauserv -Force -EA SilentlyContinue; Set-Service wuauserv -StartupType Disabled -EA SilentlyContinue\"" \
+        >/dev/null 2>&1 || true
+else
+    # FULL pass: Windows Update is deliberately left running. A self-updating StandaloneVM is
+    # the real configuration, and its restart dialog is a legitimate dialog - NOT the premature
+    # reboot dialog this matrix grades, which came from our install process being broken by the
+    # PV drivers. So health-check must not fail the cell on it: -SelfUpdatingAllowed downgrades
+    # updates_dom0_owned to evidence for this cell only.
+    log "mode=full: leaving Windows Update alone; updates are allowed to complete"
+    HEALTH_ARGS="${HEALTH_ARGS:+$HEALTH_ARGS }-SelfUpdatingAllowed"
+fi
 
 # --- 4. activity + health assertion -------------------------------------------------
 qq ps 'Start-Process notepad' >/dev/null 2>&1; sleep 5
