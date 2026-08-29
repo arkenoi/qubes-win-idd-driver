@@ -21035,3 +21035,36 @@ through the answer stick's first-logon orchestration, which means one provisioni
 rather than a clone. That is the honest cost of comparing two versions from an identical start, and
 it is why the pristine image is worth parking: everything AFTER a QWT install can be cloned from a
 later stage instead.
+
+## 2026-08-29 — xencons (PV console) now BUILDS and test-signs in CI
+
+Owner: *"why not to give it a cheap shot -- download, build, add?"* Done — the source is public, it
+uses the same `build.ps1`/`msbuild.ps1` layout as xenvif, and CI already builds and signs that.
+
+`.github/workflows/pv-xencons.yml`, pinned to upstream SHA `a815963`, produces:
+
+    xencons.sys 79,248   xencons_monitor.exe 128,720   xencons_tty.exe 112,664
+    xencons.inf 3,788    xencons.cat 3,518 (SIGNED)    xencons-signer.cer   PROVENANCE.txt
+
+**Four inherited assumptions had to be corrected**, three of them mine from copying the template and
+one the driver itself surfaced. Recorded because "copy the working workflow" is cheap and its baked-in
+assumptions are not:
+1. the header carried xenvif's `rev 0x09000005` argument — that is about xennet binding and is
+   meaningless for a console driver; rewritten truthfully;
+2. `git clone --branch $SHA` does not accept a raw SHA — now clone, checkout, and assert the resolved
+   SHA equals the pin, so a moving branch can never silently change what is built;
+3. the xenvif control-ring patch step (mirage-firewall's `feature-ctrl-ring`) has no meaning here and
+   was failing on a nonexistent patch file — removed rather than stubbed;
+4. **the driver ships more than xenvif does**: its INF has `[monitor_copyfiles]` and `[tty_copyfiles]`
+   referencing `xencons_monitor_*.exe` and `xencons_tty_*.exe` — a PV console has a userspace side a
+   NIC does not — so Inf2Cat failed signability until the file set was widened.
+
+**What this buys, precisely:** an out-of-band channel for the failure that currently blinds every
+other one. When the wedge hits we lose qrexec, window capture and the event log simultaneously; a PV
+console is readable from dom0 with `xl console` and depends on none of them. **What it does not buy:**
+a guarantee — if the guest is deadlocked at high IRQL the console may be silent too. It is the
+instrument for the observed class "guest alive, qrexec dead", which is what we keep hitting.
+
+**Not yet shipped in the package.** Building it is half the job; adding it to the payload, installing
+it, and confirming `XENBUS\VEN_XP0001&DEV_CONS` leaves CM code 28 is the other half — and that
+allowlist entry in `guest/health-check.ps1` becomes wrong the moment it does.
