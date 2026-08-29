@@ -20249,3 +20249,42 @@ running-guest one.
 Cells 5 and 6 (true stock-4.2.2 upgrade; fresh install from ISO exercising stage 1 -> stage 2) both
 require that provisioning route: an answer stick built per OS, a reprovision, and vm-pool headroom
 (81.8% used). They cannot be reached by manipulating a running guest.
+
+## 2026-08-29 — cell 5: TRUE stock-4.2.2 upgrade, WIN10. PASSES, health-check ok:true
+
+The stock precondition was built by PROVISIONING, not by uninstalling. `mgmt/reprovision-usb.sh
+win10-u10 loop0 loop11` — untouched Win10 22H2 vendor ISO plus the stock answer stick, whose MSI I
+verified byte-identical to the vendor bundle first (sha256 `7049322128d1cf...`, matching the value
+FINDINGS records). Install took 993 s; qrexec came up on its own.
+
+Resulting guest, read from the guest: **QWT 4.2.2.0, agent 4.2.2.0** (matching — a pristine stock
+image, unlike the earlier 4.2.2-registered/4.3.3-agent hybrid), testsigning ON, PV boot disk,
+**xenbus_monitor Start=2 (Automatic) and Running** — the stock field state. The installer's own log
+then confirms it independently: `found existing QWT: 'Qubes Windows Tools v4.2.2.0'`.
+
+    INSTALL COMPLETE, ok:true, ~90 s
+    watcher: 43 samples, SAMPLES_WITH_DIALOG=0
+    MONITOR_STATES=Running,Stopped   MONITOR_START_VALUES=2,4
+    SAMPLES_WITH_PENDING_REQUEST=11  (armed, then cleared)
+    MSI log 2984 lines, BIGGEST_GAPS=0
+    health-check after reboot: ok = True (the three network checks explicitly "na")
+
+### Two self-inflicted errors on the way here, both recorded
+
+1. **I ignored my own guard.** The first attempt at this cell had `startrun` report
+   `INSTRUMENT FAILURE: install log still present after delete - refusing to run`, and I launched the
+   install anyway because I did not check its return code. The guard was RIGHT: a freshly provisioned
+   stock guest legitimately carries `C:\qwt-improved-install.log`, because the stock QWT is itself
+   installed by our installer at first logon. Writing the guard and then not honouring it is worse
+   than not having it.
+2. **I then deleted that log while the install was writing to it**, contaminating the run with my own
+   action — the exact class of error this campaign exists to eliminate. I abandoned that run rather
+   than report from a corrupted record, reprovisioned (16.5 min), and re-ran with the guard honoured.
+
+### Also learned: why qube removal kept hanging
+
+`qvm-remove` blocked for 5+ minutes twice and the pool never moved, because the qube kept returning
+to `Transient` — queued qrexec calls auto-starting it, the documented pattern. My mistake was
+restoring `qrexec_timeout` to 6000 immediately after the first drain, so the next queued call re-pinned
+it for 100 minutes. Setting the timeout to 15 **before** the removal and leaving it there made the
+removal complete in 7 seconds. Pool went 82.1% -> 80.0% (163 GB free) once it finally landed.
