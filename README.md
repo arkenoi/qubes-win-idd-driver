@@ -79,7 +79,7 @@ a change here. But the Qubes default private volume is 2 GiB and a bare Windows 
 already uses ~550 MB, so it is worth extending before it fills:
 
 ```
-qvm-volume extend <vm>:private 40GiB
+qvm-volume extend <vm>:private 20GiB
 ```
 
 ---

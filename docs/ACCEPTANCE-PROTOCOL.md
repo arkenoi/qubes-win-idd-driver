@@ -8,6 +8,23 @@
 
 ## 1. How to run one part
 
+**GATE 0 — VERIFY THE PAYLOAD. Not optional, and it comes before everything else.**
+
+    tools/assert-payload.sh <payload-dir-or-tar> [expected-commit]
+
+It fails closed on: missing manifest, any file not matching `SHA256SUMS.txt` (catches a truncated
+push before it reaches a guest), a `driver_repo_commit` that is not the commit you meant, or a
+staged `Install-QwtImproved.ps1` that differs from the repo at that commit. With no commit argument
+it asserts against HEAD, which is what you want when testing what you just built.
+
+**Why it is Gate 0:** on 2026-08-29 a full cell was run against a payload built from `f777bec` — the
+commit BEFORE the fix under test — and graded as if it were meaningful. The guest's own log named
+the package in its first line. That is an acceptance-protocol breach, not a slip: an ungraded
+artefact makes every number in the cell a number about a different build. **A cell whose payload
+did not pass Gate 0 is `INVALID-PROVENANCE`, not a result.** Record the gate's PASS line in the
+part transcript.
+
+
 1. **Allocate a campaign id** even for a single part: `AP-<UTCdate>-<seq>` (a partial run is a campaign with one part). Part run id: `<campaign>/<part-id>` (e.g. `AP-20260830-1/NET-2.10`).
 2. **Check prerequisites by ID.** Each cell lists `prereq:` — phase-level gates (always at least `P0-CORE`) and its entry stage. If the entry stage is standing on the roster and its manifest attestation matches (§2.4), start there; otherwise build it via the cheapest restore in §2.3. **No cell may reprovision (R3) where a cheaper restore (R0/R1/R2) reaches its entry stage** — this is a protocol rule, not advice.
 3. **Write the five-line header** (`HYPOTHESIS / BASELINE / VARIABLE / INSTRUMENT / BUDGET`) into the part transcript before launching. A header with a blank line does not launch (H0.3).
@@ -62,17 +79,17 @@ So: **create as many qubes as the pool affords, and tag each one `win-idd-testbe
 
 **PRIVATE VOLUME SIZE — check it before every template/AppVM build.** README.md says it plainly:
 QWT places user data on `Q:\Users` on the PRIVATE image (stock behaviour), and the Qubes default
-private volume is **2 GiB**, which a bare Windows profile does not fit in. Extend to **40 GiB**:
+private volume is **2 GiB**, which a bare Windows profile does not fit in. Extend to **20 GiB**:
 
-    qvm-volume extend <vm>:private 40GiB
+    qvm-volume extend <vm>:private 20GiB
 
 **The TEMPLATE must be extended too** — an AppVM's private volume follows its template's size.
 Skipping this is silent and total: the guest boots, autologon works, `qtest run` works, and ONLY
 file copy fails (`getting Documents path failed 0x80070002`), so no probe, health-check or payload
 can reach it and the cell cannot be graded at all. Measured 2026-08-29: `win11-tpl`/`win11-app` at
-40 GiB worked; `win10-tpl`/`win10-app` built at the 2 GiB default did not, and I misdiagnosed it as
+20 GiB worked; `win10-tpl`/`win10-app` built at the 2 GiB default did not, and I misdiagnosed it as
 a product defect for an hour before reading the README. `mgmt/clone-to-template.sh` now extends both
-and fails loudly if it cannot. **Assert `private >= 40 GiB` in P0 preflight for every guest a cell
+and fails loudly if it cannot. **Assert `private >= 20 GiB` in P0 preflight for every guest a cell
 will push to.**
 
 ### 2.3 Restore mechanisms and costs
@@ -81,7 +98,7 @@ will push to.**
 |---|---|---|---|---|
 | **R0** | AppVM reboot (volatile root) | 2–4 min | 0 GB | THE workhorse: every AppVM cell starts bit-identical ST3A for free. |
 | **R1** | `qvm-volume revert <vm>:root` | ~1 min | ≤0 (frees drift) | Qube Halted; `revisions_to_keep=2`, revision cut per clean shutdown ⇒ window = **two clean shutdowns** past capture. An upgrade cell (boot→install→reboot→verify→shutdown) fits exactly; one extra reboot forfeits the stage. Permission from this qube unverified — decision D5 (§11); if denied, R1 rows collapse into R3. |
-| **R2** | Clone a parked master into a roster name (create → tag `win-idd-testbed` → prefs → volume clone; one-shot `qvm-clone` fails tag policy) | 5–10 min | **≈0 GB at creation** (lvm_thin CoW, measured 2.7 s for 80+40 GiB — §12 note 4); budget ~20 GB settled divergence | Master Halted. Re-apply reset-prone properties (§2.5). |
+| **R2** | Clone a parked master into a roster name (create → tag `win-idd-testbed` → prefs → volume clone; one-shot `qvm-clone` fails tag policy) | 5–10 min | **≈0 GB at creation** (lvm_thin CoW, measured 2.7 s for 80+20 GiB — §12 note 4); budget ~20 GB settled divergence | Master Halted. Re-apply reset-prone properties (§2.5). |
 | **R3** | `mgmt/reprovision-usb.sh <vm> <iso-loop> <stick-loop>` | 17–20 min measured (Win10; 993–1108 s in-guest). **Win11 unmeasured — time once and record.** | ±0 GB (remove-then-recreate on the same name, never a sibling) | Stick rebuilt in place (inode-preserving, constant SIZE_MB); locale match; drain queued qrexec BEFORE the remove (§2.5). |
 | **R4** | `mgmt/clone-to-template.sh <golden> <tpl> <app>` template-pair rebuild | 45–75 min (≈8 serial boots) | +~20 GB (replaces old template root) | Golden Halted; script self-verifies (see ST3). |
 
