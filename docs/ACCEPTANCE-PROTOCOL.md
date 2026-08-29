@@ -4,75 +4,421 @@
 
 **ID scheme.** Stages `ST*` (§2.1), restores `R0–R4` (§2.3), phases `P0–P5`, cells `G0`/`C1–C12` (install), `NET-0–8` (network), `U0–U6` (updates), `RND-0–9`+`BENCH-0–2` (rendering/perf), `SG0–SG11` (safeguards), harness rules `H0–H5` (§3). Per-OS stage suffix: `.10` / `.11` (e.g. `ST1.10`).
 
+**Structure.** Part I (§0) is the executable runbook: ordered steps with the command, the expected
+output, and the failure action, every command verified against the script it invokes. Part II
+(§1–§12) is the reference and remains the authority on cells, stages, and rules — nothing in it
+was weakened when Part I was written. Execute Part I; consult Part II; when they disagree, stop
+and reconcile (and record the divergence in §0.9) — do not improvise around either.
+
 ---
 
-## 0. RUNBOOK — do exactly this (added 2026-08-30)
+# Part I — Runbook
 
-This section exists because the rest of this document is dense REFERENCE material with no executable
-procedure, and the operational parts got improvised. Every failure of the 2026-08-30 attempt was
-covered somewhere below and still happened: a hand-rolled runner was written instead of using the
-harness (H0), the release was delivered by a cdrom route the harness does not use, bare `sleep`
-polls replaced the three-exit waits (H2), two Windows guests ran at once (H3.6), and cells were
-cloned from a golden that had been used all evening as a scratch guest (P1.0). Read this section
-first; use the rest as reference.
+## 0. RUNBOOK — do exactly this (added 2026-08-30; expanded same day into the full Part I)
 
-**The harness already exists. Do not write another one.** `mgmt/harness/matrix.sh` implements every
-cell (`cell_fresh_1stage`, `cell_fresh_2stage`, `cell_seeded`, `cell_upgrade_stock`, `cell_appvm`)
-on top of `reclone / push_payload / run_install / verify_installed / start_vm`, with the waits from
-`mgmt/harness/e2e-wait.sh`. If something is missing, ADD IT THERE and commit it (H0).
+This section exists because the rest of this document is dense REFERENCE material and the
+operational parts got improvised. Every failure of the 2026-08-30 attempt was covered somewhere in
+Part II and still happened: a hand-rolled cell runner was written instead of using the harness (H0
+names `mgmt/harness/matrix.sh` explicitly); the release was delivered by attaching it as a cdrom —
+a route the harness does not implement — and three attempts were then lost because
+`qvm-device block attach --persistent` is an alias for `assign --required` (applied at NEXT VM
+start) and because a stale answer disc from provisioning was picked up by drive letter; bare
+`sleep N` polls replaced the three-exit waits H2 prohibits outright; two Windows guests ran at
+once against H3.6; cells were cloned from a golden that had served as a scratch guest all evening
+against P1.0; and cells ran with no P0 preflight at all. Read this section first and execute it
+verbatim; use Part II as the authority on what each step means.
 
-### Campaign, in order
+**The harness already exists. Do not write another one.** If a primitive is missing, ADD IT to
+`mgmt/harness/` with the three-exit contract, commit it, then use it (H0).
 
-    # 1. Pin the release. Never gate against HEAD - it moves under a campaign.
-    REL=<commit>                      # the commit the artifacts were built from
-    tools/assert-payload.sh <payload-dir> "$REL"        # Gate 0, must print PASS
+### 0.1 The instruments (verified against source 2026-08-30)
 
-    # 2. Golden custody. Refuses if a golden drifted; UNSEALED also fails.
+| Script | What it provides | The guard to respect |
+|---|---|---|
+| `mgmt/harness/matrix.sh` | The cell driver: `reclone / push_payload / run_install / verify_installed / start_vm`, cells `cell_fresh_1stage`, `cell_fresh_2stage`, `cell_fresh`, `cell_seeded`, `cell_upgrade_stock`, `cell_appvm`; selected via `CELLS=`, run strictly serially. Inputs: `MATRIX_WORK` (default `$HOME/qwt-matrix-work`), `MATRIX_OUT` (default `$HOME/qwt-matrix/<UTC-timestamp>`). | It sets the ambient `QTEST_VM` to an impossible name and passes `QTEST_VM=<vm>` per call — a forgotten target fails loudly instead of hitting a real guest. Do not weaken that. |
+| `mgmt/harness/e2e-wait.sh` | The three-exit waits: `w_session` / `w_install` / `w_halt` / `w_screen` / `w_alive` (exit table in §0.3). `STALL_SECS=300`, `POLL_SECS=20` (floor ~5 s, H3.9), `MSI_POLL=1` default, `EVENT_POLL` opt-in. | Every wait says which exit it took; a wait that cannot fail is worthless. |
+| `.claude/skills/win-guest-e2e/e2e-lib.sh` | `qrun`/`qpr`/`alive`/`cap`/`screenverdict`/`startrun`/`_logtail`/`bootwait`/`wait_install`, `E2E_RESTART_BUDGET=2`. | **Refuses to load when `QTEST_VM` is unset — deliberately, no default.** A default target once routed a whole run at whatever qube it named, and dom0 refuses an unknown target by writing NOTHING, which reads exactly like "the guest has no windows". Export `QTEST_VM` explicitly, always. |
+| `tools/qtest` | `run`/`ps`/`push`/`pushrun`/`synctime`/`start`/`shutdown`/`kill`/`state`/`shot`/`fullshot`/`resize`/`wedge`. `push` lands files in `C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\`. | Refuses a nonexistent target and prints the tagged roster. Its baked-in fallback name `win-idd-test` is a dead qube by design, so an unset `QTEST_VM` fails loudly here too. |
+| `tools/assert-payload.sh` | Gate 0 (§0.2 step 1). | Fails closed; no commit argument means "assert against HEAD", which is wrong for a campaign. |
+| `mgmt/golden.sh` | seal / verify / list (§0.4). | `verify` exits 2 for UNSEALED as well as DRIFTED — both mean "do not clone". |
+| `mgmt/reprovision-usb.sh` | R3 rebuild from vendor media (§0.7). | Removes and recreates the named qube; leaves `qrexec_timeout=300` and the stick assigned — §0.7's reset-trap block undoes both. |
+| `mgmt/build-answer-stick.sh` | Answer-stick construction (§0.6). | Arg 1 is the Windows EDITION NAME; the output path is the `OUT` env var. `LOCALE` must match the media. |
+
+### 0.2 The campaign, in order
+
+Every step names the qube(s) it touches. Do the steps in this order; do not start a later step
+while an earlier one is unresolved.
+
+**Step 1 — pin the release and pass Gate 0.** *Dev qube only; no guest involved.*
+
+    cd /home/user/qubes-win-idd-driver
+    REL=<commit>                              # the commit the artifacts were built from.
+                                              # Never gate against HEAD - it moves under a campaign.
+    export MATRIX_WORK=$HOME/qwt-matrix-work  # matrix.sh's default work area
+    gh run download <run-id> -D "$MATRIX_WORK/dl"   # CI artifacts: qwt-improved-setup,
+                                                    # qwt-full-package, qwt-improved-iso
+    tools/assert-payload.sh "$MATRIX_WORK/dl/qwt-improved-setup" "$REL"
+
+*Expect:* `PASS: payload verified — <N> files, built from <sha12> (<REL>), installer matches repo`,
+exit 0. Record the PASS line in the campaign transcript.
+*On failure:* exit 1 (file/hash mismatch, wrong `driver_repo_commit`, installer drift) or exit 2
+(unusable input) — stop; rebuild or fix `REL`. Any cell run on an ungated payload is
+`INVALID-PROVENANCE` (§1 Gate 0 — the 2026-08-29 `f777bec` incident).
+
+**Step 2 — golden custody.** *Targets `win10-clean` and `win11-fresh`; both stay Halted — verify
+never boots anything.*
+
     mgmt/golden.sh verify win10-clean
     mgmt/golden.sh verify win11-fresh
 
-    # 3. One Windows guest at a time (H3.6). Halt everything before starting.
-    for v in $(qvm-ls --raw-data --fields NAME,STATE | grep '^win1' \
-               | grep -v Halted | cut -d'|' -f1); do qvm-shutdown --wait --timeout 300 "$v"; done
+*Expect:* `VERIFIED <vm> matches its seal (sealed <UTC>)`, exit 0.
+*On failure* (exit 2, `UNSEALED: ...` or `DRIFTED:` + `REFUSE to clone from <vm>`): do NOT clone.
+Rebuild the golden, or re-seal deliberately with the change recorded. Every cell derived from an
+unverified golden is `INVALID-CONTAMINATED` (H5; P1.0 golden-provenance clause).
+*Standing state 2026-08-30:* `mgmt/goldens/` is EMPTY — nothing has ever been sealed, so this step
+currently fails closed for every golden. That is correct behaviour, not an error to route around:
+seal each golden at its next accepted state (§0.4) and this step becomes the campaign gate.
 
-    # 4. Stage the artifacts the harness expects.
-    #    $MATRIX_WORK/qwt-setup.tar.gz              <- tarball of the release package
-    #    $MATRIX_WORK/dl/qwt-full-package/gui-agent.exe
-    #    $MATRIX_WORK/dl/qwt-improved-iso/MANIFEST.json
+**Step 3 — P0 preflight. Never skipped** (cells ran with none on 2026-08-30). *Dev qube plus
+read-only roster queries.* Run P0-CORE (§4): the G0 catalog-signature gate on the payload; the
+build fingerprint (H1); pool and roster:
 
-    # 5. Run cells SERIALLY through the harness. Never two at once, never a hand-rolled loop.
+    qvm-pool info vm-pool                                # record %, compare §2.6 watermarks
+    qvm-ls --raw-data --fields NAME,STATE,CLASS,NETVM    # roster per §2.2
+
+*Expect:* templates carry `netvm=''` (a template with a netvm = STOP-and-report, NET-0); classes
+match §2.2; every guest a cell will push to has `private >= 20 GiB` (§2.2 — the silent
+file-copy-failure trap); fw-net confirmed with the owner if any traffic cell is in scope;
+instrument self-tests for the selected parts (§4 P0-CORE.4).
+*On any mismatch:* fix it first. A cell run against a failed precondition is
+`INVALID-PRECONDITION`, not a product verdict (H4.2).
+
+**Step 4 — halt every Windows guest.** *Targets every `win1*` qube (H3.6: one Windows guest at a
+time, and a campaign starts with zero).*
+
+    qvm-ls --raw-data --fields NAME,STATE | grep '^win1' | grep -v 'Halted'
+    # for each name printed:
+    qvm-shutdown --wait --timeout 300 <name>
+
+*Expect:* re-running the first command prints nothing.
+*On a guest that will not halt or flips back to Transient:* that is queued qrexec restarting it —
+drain per §2.5 (`qrexec_timeout 15` → kill → Halted CONTINUOUSLY → restore 6000). Never
+`xl destroy`; never diagnose a "wedged" guest before checking `qrexec_timeout` (H3.1).
+
+**Step 5 — stage the harness inputs.** *Dev qube.* `matrix.sh` consumes exactly three paths:
+
+    tar -czf "$MATRIX_WORK/qwt-setup.tar.gz" -C "$MATRIX_WORK/dl/qwt-improved-setup" .
+    ls -l "$MATRIX_WORK/qwt-setup.tar.gz" \
+          "$MATRIX_WORK/dl/qwt-full-package/gui-agent.exe" \
+          "$MATRIX_WORK/dl/qwt-improved-iso/MANIFEST.json"
+    tools/assert-payload.sh "$MATRIX_WORK/qwt-setup.tar.gz" "$REL"
+
+The tarball's root must hold `install.cmd` (`run_install` executes `C:\<dir>\install.cmd`); the
+`-C <payload-dir> .` form produces exactly that shape.
+The `ls` is load-bearing, not ceremony: matrix.sh hard-fails only on a missing tarball; a missing
+`gui-agent.exe` leaves its `ASHA` variable empty and the "installed agent == release binary" check
+then matches ANY result line — a vacuous PASS (verified in source; §0.9.3). Re-gating the tarball
+proves the artifact actually pushed is the artifact that was gated.
+*Expect:* all three files listed; a second Gate-0 PASS line.
+*On failure:* re-download the artifacts; never substitute a file from another build.
+
+**Step 6 — run the cells, serially, through the harness.** *Clones `win10-clean`/`win11-fresh`
+into `win10-tpl`/`win11-tpl` and installs there; AppVM cells cold-boot `win10-app`/`win11-app`.*
+
     CELLS="win10-1stage win10-2stage win10-stock win11-1stage win10-appvm win11-appvm" \
-      MATRIX_OUT=$HOME/qwt-matrix/$(date -u +%Y%m%d-%H%M%S) bash mgmt/harness/matrix.sh
+      MATRIX_OUT=$HOME/qwt-matrix/$(date -u +%Y%m%d-%H%M%S) \
+      bash mgmt/harness/matrix.sh
 
-    # 6. Verdicts are the harness's own PASS/FAIL lines plus $MATRIX_OUT/matrix.log.
+(`MATRIX_WORK` was exported in step 1. Seeded cells additionally need `SEED_DELAY=<secs>` AND
+`SEED_CELL=1` both exported — H3.11; an inherited `SEED_DELAY` without the per-run opt-in
+hard-aborts the cell, by design.)
 
-### Hard prohibitions (each cost a real failure)
+Selector map (verified against the `case` dispatch in matrix.sh, 2026-08-30):
+
+| Selector (`win11-*` analogous) | Function | Golden → target | What it actually exercises |
+|---|---|---|---|
+| `win10-1stage` | `cell_fresh_1stage` | `win10-clean` → `win10-tpl` | Push + install with testsigning already on. NOTE the name: over a golden that already carries QWT this takes the in-place-upgrade branch (C3-like), NOT C2 — the installer's `PRECONDITION` line is the authority on the branch taken (P1.0). |
+| `win10-2stage` | `cell_fresh_2stage` | same | Turns testsigning OFF, reboots, asserts `SystemStartOptions` really lost TESTSIGNING, then installs — the E1 two-stage entry. Same PRECONDITION caveat. |
+| `win10-fresh` | `cell_fresh` | same | Constructs a no-QWT precondition by uninstalling, rebooting, asserting `QWTPRODUCTS=0`, then installs. Diverges from P1.0's "preconditions are never constructed by uninstalling" — read §0.9.2 before treating its verdict as C1/C2-grade. |
+| `win10-seeded` | `cell_seeded` | same | Armed monitor (`sc config xenbus_monitor start= auto`) + optional mid-MSI Request injection (only with `SEED_DELAY` + `SEED_CELL=1`; without `SEED_DELAY` it is the armed-monitor-only variant, and the transcript records the seed state either way). |
+| `win10-stock` | `cell_upgrade_stock` | same | Uninstall ours → install `vendor/qwt-4.2.2/installer.msi` → assert 4.2.2 → install ours over it (C4 shape; ST1 constructed in-cell — §0.9.2). |
+| `win10-appvm` | `cell_appvm` | (no clone) points `win10-app` at `win10-tpl` | 3 cold boots; judged from pixels: ≥1 window mapped, none fullscreen-sized. |
+
+*Expect:* `=== MATRIX for <version> (agent <sha12>) ===` and `cells: ...`, then per cell a
+`######## CELL <name> ########` banner, timestamped progress, and the harness's own
+`PASS  ...`/`FAIL  ...` lines; footer `=== MATRIX: N passed, M failed ===` then `=== DONE ===`.
+`FATAL no setup tarball at ...` at startup means step 5 was skipped.
+*While it runs:* nothing else touches any Windows guest; never edit the running script (H3.6);
+watch by tailing `$MATRIX_OUT/matrix.log`, not by poking guests.
+*On a FAIL cell:* the guest's state is evidence — preserved per H3.5; the campaign continues on
+other cells (H4.5). A `could not reclone` that survives the built-in dirty-volume revert retries:
+stop and read the logged clone error; do not hand-clone around it.
+
+Three operational facts about this driver, all verified in source (details §0.9): an unset `CELLS`
+defaults to the string `seeded`, which matches NO selector — the run prints a header, does
+nothing, and ends `0 passed, 0 failed`; never read that as a passed campaign. `reclone` sets
+`qrexec_timeout=600`, not the standing 6000 (P0-PRE.2 owed). The install cells CONSUME the
+standing ST3 templates — after a matrix run `win10-tpl`/`win11-tpl` contain this campaign's
+install result, so re-establish ST3 with R4 (`mgmt/clone-to-template.sh`) when standing
+template/AppVM stages are needed next.
+
+**Step 7 — read the verdicts.** *Dev qube.*
+
+- `$MATRIX_OUT/matrix.log` — every PASS/FAIL line; the exit summary counts them.
+- Per cell: `<label>-install.log` (cumulative, deduplicated installer log), `<label>-msi.log`
+  (msiexec verbose tail), `<label>-monitor.log` (xenbus_monitor probe), `<label>-final.log`,
+  shot tars and PNGs.
+- Before believing any cell's label, check its `=== PRECONDITION ===` line matches the identity
+  the label claims — the PRECONDITION line is the authority on found state, `upgrade_mode`+`stage`
+  on the branch taken; a harness probe disagreeing with either is the harness being wrong (P1.0,
+  the `c1f4312` voiding).
+- Transcribe one H5 verdict line per check into the campaign's `verdicts.tsv`; a cell that died
+  without a verdict line is `ABORTED`, never inferred successful (H4.4).
+
+**Step 8 — restore and record.** Restore entry stages or capture exit stages per §2.4 before
+releasing any qube; record pool % if any R2/R3/R4 ran; append stage manifests and dated findings
+to FINDINGS.md.
+
+### 0.3 Runbook: one part outside the matrix
+
+§1 defines the contract (Gate 0 → campaign id → prerequisites by ID → five-line header → harness →
+evidence → verdict lines). The executable skeleton for a scripted part:
+
+    cd /home/user/qubes-win-idd-driver
+    export QTEST_VM=<the ONE qube this part targets>   # e2e-lib refuses to load without it
+    source .claude/skills/win-guest-e2e/e2e-lib.sh
+    source mgmt/harness/e2e-wait.sh
+
+Waits — use these and only these. A bare `sleep N && continue` poll is prohibited (H2); the only
+fixed delay allowed is a *declared settle window* attached to a grading step (e.g. the 90 s
+network settle).
+
+| Primitive | Keys on | Exits |
+|---|---|---|
+| `w_session <vm> <deadline> <label> <outdir> <logfn>` | qrexec liveness + per-minute screen classify | 0 session up; 1 TERMINAL (RECOVERY, or BLACK ×3 min with cpu≈0); 2 DEADLINE |
+| `w_install <vm> <deadline> <label> <outdir> <logfn> <guest-log>` | log line COUNT past the marker, fresh read per poll | 0 RESULT present; 1 recovery; 2 deadline; 3 guest halted; 4 STALLED (`STALL_SECS`, default 300) |
+| `w_halt <vm> <deadline> <label> <logfn>` | domain state | 0 halted; 2 deadline (never kills — the caller decides) |
+| `bootwait [min] [logfn] [dir]` (e2e-lib) | `alive` + `screenverdict` + restart budget (`E2E_RESTART_BUDGET`, default 2) | 0 alive; 3 terminal, guest preserved; 1 timed out |
+| `wait_install [min] [logfn]` (e2e-lib) | `_logtail` past the `startrun` marker | 0 ended; 2 failed; 1 stalled/timeout. Requires `startrun` first — refuses otherwise, because a stale log would be judged |
+
+Poll cadence ≥15 s steady-state, absolute floor 5 s (H3.9 — per-second qrexec churn triggered the
+IPI-shootdown wedge). Starting a guest: `qvm-start` blocks up to `qrexec_timeout` on a non-booting
+guest (15 min measured) — fire-and-poll instead (H3.7), as matrix.sh's `start_vm` does.
+A missing wait is added to `mgmt/harness/e2e-wait.sh` with the three-exit contract, committed,
+then used (H0). Worked example: §1's NET-2 walk-through (`win10-app`, ~25 min, no reprovision).
+
+### 0.4 Runbook: golden custody (`mgmt/golden.sh`)
+
+A golden is **sealed**, then only ever **cloned** — never started, never logged into, never "just
+checked"; diagnostics belong on a churn qube (`win10-u10`, `win11-24h2`). One careless boot
+contaminates every later clone silently: on 2026-08-29/30 the Win10 golden served as a scratch
+guest all evening (agent binary hot-swapped twice, xencons side-loaded by hand, `debug` toggled,
+Windows Update enabled then disabled, private volume extended mid-life, repeated hard restarts) —
+and cells were then cloned from it.
+
+    mgmt/golden.sh seal   win10-clean "ST2G.10 - release <ver>"
+    mgmt/golden.sh verify win10-clean      # exit 2 = drifted OR unsealed -> do not clone
+    mgmt/golden.sh list
+
+- `seal <vm> [note]` — target must be Halted. *Expect:* `SEALED <vm> -> mgmt/goldens/<vm>.json`.
+  Refuses a running qube (`REFUSING: <vm> is <state>`). **Commit the JSON** — a record that dies
+  with the session is not a record.
+- `verify <vm>` — needs no boot (booting a golden to check it would BE the modification).
+  *Expect:* `VERIFIED <vm> matches its seal (sealed <UTC>)`, exit 0. Exit 2 is either `UNSEALED`
+  (fails closed — "no record" must never read as "unchanged") or `DRIFTED` with the changed fields
+  printed; either way rebuild, or re-seal deliberately with the change recorded. The tamper signal
+  is the root-volume revision list — Qubes cuts a revision on every clean shutdown, so a booted
+  golden gains one its seal never recorded; volume sizes and the clone-relevant qube properties
+  are compared too.
+- `list` — every sealed golden with date and note.
+- *Standing state 2026-08-30:* `mgmt/goldens/` is empty. Seal both goldens at their next accepted
+  state; until then §0.2 step 2 fails closed, correctly.
+
+### 0.5 Runbook: delivering a release to a RUNNING guest
+
+Two legitimate routes (P1.0 "Payload delivery"). A pristine guest has no qrexec and takes
+neither — it is stick-orchestrated (§0.6).
+
+**Route A — attach the release ISO as a cdrom (the user-realistic path).** Works on any
+*installed, running* Windows: it has PV drivers, so the disc is visible. (The WinPE invisibility
+caveat does NOT apply here — §0.6.) The backend is this qube; serve the ISO from a loop device
+that `losetup -l` shows backed by the intended file and NOT `(deleted)`.
+
+    qvm-device block attach --ro --option devtype=cdrom <running-vm> win-idd-mgmt:<loopN>
+
+*Expect:* silent success (exit 0); the disc appears in the guest within seconds — verify from the
+guest, never from the attach's exit code.
+**Never `--persistent` on attach:** it is documented as an alias for `assign --required`, i.e.
+applied at the qube's NEXT startup — against a running guest it succeeds and changes nothing the
+guest can see, and a subsequent plain `attach` is then refused with "already assigned" (three
+attempts lost to exactly this on 2026-08-30). When the disc must survive the install's own reboot,
+use `qvm-device block assign --required ...` BEFORE starting the qube instead.
+In-guest, locate the disc BY CONTENT, never by drive letter — a stale answer disc still attached
+from provisioning gets picked up otherwise. The check has this shape (a drive carrying both
+`install.cmd` and `MANIFEST.json`):
+
+    QTEST_VM=<vm> tools/qtest run 'cmd /c for %d in (D E F G H I) do @if exist %d:\install.cmd if exist %d:\MANIFEST.json echo RELDISC=%d:'
+
+Then assert that disc's `MANIFEST.json` `source.driver_repo_commit` equals `$REL` before running
+anything from it. *On failure* (no RELDISC): check the qube's block assignments and the loop's
+backing file; do not fish drive letters by hand.
+
+**Route B — `qtest push` (what `mgmt/harness/matrix.sh:push_payload` implements).** One tarball,
+pushed as a single file, extracted guest-side into a fresh per-cell directory (the harness uses
+`C:\q4315`):
+
+    QTEST_VM=<vm> tools/qtest push "$MATRIX_WORK/qwt-setup.tar.gz"
+    QTEST_VM=<vm> tools/qtest run 'cmd /c "rmdir /s /q C:\q4315 2>nul & mkdir C:\q4315 & tar -xzf C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\qwt-setup.tar.gz -C C:\q4315 && echo EXTRACT_OK"'
+
+*Expect:* `EXTRACT_OK`. The fresh directory is mandatory — a stale directory from a previous cell
+is grading contamination.
+*On failure:* retry up to 3× with 20 s backoff KEEPING stderr (H3.8) — the first attempt reliably
+fails about a second after a session first answers `QREADY`. Three failures = the cell fails;
+never retry forever.
+
+### 0.6 Runbook: media — answer sticks, and which medium reaches which consumer
+
+The rule that decides the medium (measured twice, 2026-08-07): **Windows Setup / WinPE carries no
+Xen PV drivers, so a PV cdrom is INVISIBLE to it.** OS provisioning therefore boots the untouched
+vendor ISO plus an **emulated USB answer stick** (WinPE does carry USBSTOR/USBXHCI inbox). **An
+installed, running Windows has PV drivers**, so a cdrom attach is fine there — it is the standard
+QWT install path (§0.5 Route A). Installing an OS and installing QWT onto a running guest are
+different problems with different media rules; never carry the caveat from one to the other.
+
+Builder: `mgmt/build-answer-stick.sh`. Read its header before first use of a new variant.
+
+    # Win10 RELEASE stick (Win10 media here is en-GB - see the locale trap below):
+    LOCALE=en-GB RELEASE_SETUP="$MATRIX_WORK/dl/qwt-improved-setup" \
+      OUT=$HOME/win-iso/answer-usb.img mgmt/build-answer-stick.sh "Windows 10 Pro"
+
+    # Win10 STOCK stick (stock package dir installed via OUR installer; its MANIFEST.json must
+    # have reference_binaries removed - the builder enforces both):
+    LOCALE=en-GB STOCK_SETUP=<stock-package-dir> \
+      OUT=$HOME/win-iso/answer-usb-stock.img mgmt/build-answer-stick.sh "Windows 10 Pro"
+
+    # Win10 PRISTINE (ST0) stick: leave RELEASE_SETUP / STOCK_SETUP / REAL_STOCK_EXE all unset
+    # -> a QWT-free stick, deliberately:
+    LOCALE=en-GB OUT=$HOME/win-iso/answer-usb.img mgmt/build-answer-stick.sh "Windows 10 Pro"
+
+    # Win11 (eval media is en-US, matching the builder default; image name confirmed by wiminfo):
+    UNATTEND=mgmt/autounattend-win11.xml OUT=$HOME/win-iso/answer-usb-win11.img \
+      mgmt/build-answer-stick.sh "Windows 11 Enterprise Evaluation"
+
+The traps, each of which has cost a real debugging cycle:
+
+- **The first positional argument is the Windows EDITION/IMAGE NAME** (default
+  `Windows 10 Pro`), not an output path. **The output path is the `OUT` env var** (default
+  `~/win-iso/answer-usb.img`). A path passed as arg 1 builds a stick whose answer file names a
+  nonexistent edition, and Setup stops at the image picker.
+- **LOCALE must match the media or Setup silently ignores the answer file** and drops to the
+  interactive locale picker — indistinguishable from "the answer file was never found". The Win10
+  media here is `Win10_22H2_EnglishInternational` = **en-GB**; the builder defaults to **en-US**.
+  Every Win10 stick build passes `LOCALE=en-GB`. Tell of the mismatch: guest CPU ~1 s per 40 s
+  poll instead of ~45 s; proof is a screenshot (§2.1).
+- **`RELEASE_SETUP` unset produces a QWT-free stick.** That is how ST0 is built — a feature and a
+  foot-gun: forgetting it silently provisions pristine Windows with no payload.
+  `RELEASE_SETUP` / `STOCK_SETUP` / `REAL_STOCK_EXE` are mutually exclusive (enforced).
+- **Keep `SIZE_MB` constant (default 96).** The image is rewritten in place, inode preserved, so
+  already-attached loops keep serving current content; a size change would be served truncated.
+  `reprovision-usb.sh` asserts exposed-vs-actual size and refuses `(deleted)` backings. Corollary:
+  replace a loop's backing file CONTENT in place (truncate/cp to the same path); never
+  rm-and-recreate under an attached loop.
+- `INSTALL_FLAGS` defaults to `/idd`; `WITH_KEY` defaults to 1 (generic key — retail
+  multi-edition media needs one to select the edition).
+
+*Expect from a good build:* `locale: <l> (input <kbd>), image: <name>` → `answer file: all
+placeholders substituted, XML well-formed` → `payload: ...` (absent on a pristine stick) → a
+directory listing → `built <OUT> (<size>)` plus the attach recipe. All failure paths are loud
+(placeholder assert, XML parse, `mcopy -Q`, Autounattend-presence check).
+Loop inventory and the deleted-inode rule: §2.7. Attaching a NEW loop from this qube: consult
+`.claude/skills/rig-capabilities/SKILL.md` first — this qube has no sudo, and the standing loops
+exist precisely so new ones are rarely needed.
+
+### 0.7 Runbook: reprovision from vendor media (R3)
+
+Only for the cell that actually tests Windows-install-plus-QWT-at-first-logon (ST0 row, §2.1; at
+most three R3 per full pass, §10), and only on churn qubes — the sole Win10 R3 target is
+`win10-u10` (§2.2). The script REMOVES AND RECREATES the named qube.
+
+    mgmt/reprovision-usb.sh win10-u10 loop0 loop9    # <vm> <vendor-iso-loop> <answer-stick-loop>
+
+Before it: build/refresh the stick (§0.6) and verify the loops (§2.7). The script self-asserts
+the STICK loop (size + non-deleted inode) but NOT the ISO loop — eyeball that side yourself.
+`BUDGET` bounds the wait (default 5400 s; Win10 measured 17–20 min; Win11 unmeasured — time once
+and record, D19). Drain queued qrexec BEFORE it removes the qube (§2.5).
+*Expect:* `answer stick verified: /dev/loopN -> <file> (<bytes> bytes)` → shutdown/remove/create
+lines → `booting the vendor ISO (...) with the answer stick (...)` → several
+`install-phase halt -> restarting without CD` cycles → `qrexec alive after <N>s`, exit 0.
+*On `FAIL: never reached qrexec within <BUDGET>s`:* triage with screenshots (`w_screen`,
+`qtest shot`) BEFORE any retry — the classic silent cause is a locale or image-name mismatch
+(§0.6). One retry after a diagnosed cause; never blind-loop reprovisions.
+
+After success — the reset trap (§2.5): the script leaves `qrexec_timeout 300` and the stick
+assigned `--required`, which makes every later boot depend on this qube's loop layout (D2).
+Re-apply the standing values and remove the boot-time dependency:
+
+    qvm-prefs win10-u10 qrexec_timeout 6000
+    qvm-prefs win10-u10 netvm fw-net          # Standalones/AppVMs only; NEVER templates
+    qvm-device block unassign win10-u10 win-idd-mgmt:loop9
+    qvm-features --unset win10-u10 qemu-extra-args
+
+(The assign side is scripted; the unassign side is not — the `unassign` verb exists in
+`qvm-device block --help`, but if it argues about the assignment form, read the help output
+rather than forcing, and record the working form here.)
+Then run restore validation (§2.3): state sane → `QTEST_VM=win10-u10 tools/qtest run "echo ok"` →
+guest-read stage attestation.
+
+### 0.8 Hard prohibitions (each row is scar tissue)
 
 | Never | Because |
 |---|---|
 | Write a parallel runner / hand-rolled wait | H0/H2. The harness has three-exit waits; a bare `sleep N && continue` is prohibited outright. |
 | Start a second Windows guest | H3.6. Concurrent runs have destroyed each other's results; three 8 GB guests starved qubesd. |
-| Boot, log into, or "just check" a golden | It contaminates every clone made from it afterwards. Use a churn qube. See §Golden custody. |
-| Grade a cell whose payload was not Gate-0 verified | A whole cell once ran against the commit BEFORE the fix under test. |
-| Read a drive letter as "the release ISO" | An answer disc left attached from provisioning is picked up instead. Find media BY CONTENT. |
-| Use `attach --persistent` to attach now | It is an alias for `assign --required` = applied at NEXT START. Use plain `attach` on a running guest. |
+| Boot, log into, or "just check" a golden | It contaminates every clone made from it afterwards. Use a churn qube. §0.4. |
+| Grade a cell whose payload was not Gate-0 verified | A whole cell once ran against the commit BEFORE the fix under test (2026-08-29, `f777bec`). |
+| Run a cell with no P0 preflight | 2026-08-30: cells ran with none; a precondition discovered failed afterwards voids the cell (`INVALID-PRECONDITION`). |
+| Read a drive letter as "the release ISO" | An answer disc left attached from provisioning is picked up instead. Find media BY CONTENT (§0.5). |
+| Use `attach --persistent` to attach now | It is an alias for `assign --required` = applied at NEXT START; three attempts lost 2026-08-30. Plain `attach` on a running guest; `assign --required` before start when the disc must survive a reboot. |
 | Treat silence as absence | A watcher that never sampled is `INVALID-VACUOUS`, never PASS (H2 vacuity gate). |
+| Trust a `0 passed, 0 failed` matrix summary | An unset `CELLS` matches no selector; the run does nothing and still prints a normal-looking footer (§0.9.4). |
+| Reprovision (R3) where R0/R1/R2 reaches the entry stage | Protocol rule (§1.2, §10): ~20 min each, and it destroys the qube's history. |
 
-### Golden custody (the rule, enforced)
+### 0.9 Where the scripts and this protocol disagree today (verified against source 2026-08-30 — fix at P0-PRE, do not paper over)
 
-A golden is **sealed**, then only ever **cloned**:
-
-    mgmt/golden.sh seal   win10-clean "ST2G.10 - release <ver>"
-    mgmt/golden.sh verify win10-clean      # exit 2 = drifted or unsealed -> do not clone
-
-`seal` refuses a running qube; `verify` needs no boot (booting a golden to check it would BE the
-modification) and keys on the root-volume revision list, which gains an entry on every clean
-shutdown. Seals live in `mgmt/goldens/*.json` and are committed - a record that dies with the
-session is not a record.
+1. `matrix.sh reclone` sets `qrexec_timeout=600`; the protocol standard is 6000 (§2.5, §12
+   note 5). P0-PRE.2 still owed.
+2. `cell_fresh` and `cell_upgrade_stock` construct their preconditions by UNINSTALLING, which
+   P1.0 forbids for protocol-grade verdicts ("preconditions are never constructed by
+   uninstalling — QWT *is* the qrexec agent"; it cost `win10-u10`). They also invoke helper
+   scripts from a SESSION TMP path (`/home/user/.claude/jobs/c2a0f57b/tmp/uninstall-qwt.ps1`,
+   `.../count-qwt.ps1`) — garbage-collectable, the exact path class H0 banned for the wait
+   library. Promote both scripts into the repo (P0-PRE.8) before relying on the `*-fresh` /
+   `*-stock` selectors; protocol-grade C1/C2 and ST1 still enter via the stick (R3+ST0/ST0T,
+   stock stick loop11).
+3. A missing `$MATRIX_WORK/dl/qwt-full-package/gui-agent.exe` does not stop matrix.sh: `ASHA`
+   ends up empty and the "installed agent == release binary" check becomes vacuously green.
+   §0.2 step 5's `ls` is the guard.
+4. An unset `CELLS` defaults to the string `seeded`, which matches no `case` arm: a 0-cell run
+   with a normal-looking summary. Always set `CELLS` explicitly.
+5. The matrix's install cells write into `win10-tpl`/`win11-tpl`: a campaign consumes the
+   standing ST3 templates. Re-establish ST3 with R4 (`mgmt/clone-to-template.sh`) afterwards
+   when standing template/AppVM stages are needed.
+6. `mgmt/goldens/` is empty: `golden.sh verify` fails closed for every golden until the first
+   seal (§0.4). Correct behaviour; seal, don't bypass.
+7. `reprovision-usb.sh` leaves `qrexec_timeout=300` and the answer stick assigned
+   `--required` — §0.7's reset-trap block undoes both.
+8. `tools/qtest`'s baked-in fallback target `win-idd-test` is a dead name by design (the tool
+   refuses it loudly and prints the tagged roster); the true no-default guard lives in
+   e2e-lib.sh. Export `QTEST_VM` explicitly in every context regardless.
 
 ---
 
-## 1. How to run one part
+# Part II — Reference
+
+Everything below is the authority on cells, stages, and rules. The runbook (Part I) tells you
+what to type; nothing here was weakened when it was added.
+
+## 1. How to run one part (executable skeleton: runbook §0.3; whole-campaign order: §0.2)
 
 **GATE 0 — VERIFY THE PAYLOAD. Not optional, and it comes before everything else.**
 
@@ -213,7 +559,7 @@ vm-pool (2026-08-29): **875 GB, 80.0% used, ~163 GB free**. Six owned roots ≈1
 
 These watermarks are canonical protocol-wide (they supersede the update draft's "60 GB free" floor — stricter wins, §12 note 7). Record pool % before/after every R2/R3/R4. The eight roster guests ARE the stage set; headroom exists for ~3 extra fully-materialized images before RED and the protocol uses **zero** standing extras — all additional state is transient within one campaign. Prune ladder when AMBER/RED: (1) reprovision-or-park `win10-u10`; (2) R1-revert drift on Standalones; (3) `revisions_to_keep 2→1` temporarily on expendable Standalones only — never templates or goldens; (4) removing any golden/template = owner sign-off.
 
-### 2.7 Media / loop inventory (verify before every R3)
+### 2.7 Media / loop inventory (verify before every R3; stick construction runbook: §0.6)
 
 | Loop | Backing | Role |
 |---|---|---|
@@ -311,6 +657,10 @@ One machine-greppable line per check into `verdicts.tsv` + transcript: `<campaig
 5. Confirm `dom0/10-install-resize-service.sh` is installed on the current dom0 (owner) — gates RND-8.
 6. One-time audits: `qemu-extra-args`/stick assignment on parked guests (D2); R1 permission probe (D5).
 7. Create/refresh `mgmt/harness/instrument-proofs.md` and the known-issue register (D9).
+8. Promote the helper scripts `matrix.sh`'s `cell_fresh`/`cell_upgrade_stock` invoke from session
+   tmp (`/home/user/.claude/jobs/c2a0f57b/tmp/uninstall-qwt.ps1`, `.../count-qwt.ps1`) into the
+   repo — same defect class as item 1, found 2026-08-30 (§0.9.2); until then those selectors
+   depend on garbage-collectable files.
 
 ### P0-CORE — campaign preamble (every campaign, incl. single-part)
 
@@ -333,7 +683,7 @@ The installer's first act writes `=== PRECONDITION === {json}` (run_id, testsign
 
 Branch map (from source): entry **E1** two-stage (testsigning off → stage1 prepare/reboot/resume) vs **E2** stage-2-only (testsigning on; stage 2's `Import-PayloadCerts` is the only cert import — the path the hang lived on). Detection: **D0** clean; **D1** in-place MSI major upgrade; **D2** same-version reinstall (`REINSTALL=ALL`); **D3** uninstall-first → **D3r** hard refusal when `pv_boot_disk=true` / **D3c** continue / **D3b** rc-3010 uninstall-reboot + `-ResumeAfterUninstall`; **R2gate** PV-disk downgrade refusal (test hook `QUBES_FAKE_INSTALLED_PVDISK_VERSION`). Orthogonal: **I** `/noidd`, **P** template-vs-known-class pvnic priming. Note: upgrade-over-stock vs upgrade-over-ours is the **same code path, different data** (kept as separate cells because the data — monitor Auto+Running, no prior cert trust — is what the suppressor/kill logic exists for).
 
-**Payload delivery — two routes, both legitimate (added 2026-08-30, CORRECTED same day).**
+**Payload delivery — two routes, both legitimate (added 2026-08-30, CORRECTED same day; executable form: runbook §0.5).**
 
 *Correction first:* an earlier version of this paragraph said the release must never be attached as a cdrom for an install cell. **That was wrong and is retracted.** Attaching the QWT ISO and running its installer IS a standard path — it is how a user actually installs QWT, so it is the realistic route and must stay covered. The failure that produced the bad advice was mechanical, and is worth recording because it is silent:
 
