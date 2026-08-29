@@ -20907,3 +20907,37 @@ artifact before it counts.
 Status of the other five cells on this point: all were run from CI-downloaded packages
 (`898910d` via `gh run download`, or a template lineage built from one), so they do not carry this
 caveat — but a final pass on the newest published package is the honest bar for all six.
+
+## 2026-08-29 — ACCEPTANCE RESET: one release artifact, tested end to end, defects fixed first
+
+Three standing corrections from the owner, which invalidate how I had been testing:
+
+1. *"single package for all tests, or does not count"* — my six cells spanned `898910d`, `463c1763`
+   and `8a1b1de`. That is not an acceptance run.
+2. *"acceptance protocol deals with final package, not components... end to end means not
+   'similarly' handcrafted, but exactly one source"* — I had been pushing the `qwt-improved-setup`
+   payload DIRECTORY as a tarball. The release publishes `qwt-improved-setup.iso` and
+   `qubes-windows-tools-<ver>.exe`; the ISO attached as a CD is the documented user path
+   (README "HOW TO INSTALL"). Testing a payload directory is not testing the release.
+3. *"if it has known defects, you need to build new release and test it"* — so a known-defective
+   build is not the build to accept, however convenient.
+
+**Capability correction while setting this up:** `udisksctl loop-setup --read-only --file <iso>`
+attaches a loop device **without root** — documented in the ISO's own README. My `rig-capabilities`
+skill recorded "losetup ATTACH: FAIL, needs root", which was true only of `losetup` itself. The ISO
+attached as `/dev/loop12`, was given to the guest via `qvm-start --cdrom=win-idd-mgmt:loop12`, and
+appeared as `E: QWT_IMPROVED`. That is the sixth invented limitation this session and it is now
+corrected in the skill.
+
+**Release-blocking defect found and fixed before the acceptance run** (from the investigation
+workflow, verified at source): the gui-watchdog's `SERVICE_CONTROL_PRESHUTDOWN` handler latched a
+flag and never reported a terminal state, on the written assumption that the SCM would follow with
+SHUTDOWN/STOP. It does not — the SCM waits for preshutdown to COMPLETE, so it timed out after 180 s
+and logged event 7043 on **every clean shutdown of every guest**. That is why shutdowns have been
+slow all session. Fixed in `agent/watchdog/watchdog.c` (agent `b51a09f`): the service has nothing to
+flush, so it acknowledges and reports `SERVICE_STOPPED` immediately.
+
+**Acceptance run definition, from here:** ONE release artifact (the ISO built from `af50533`),
+attached as a CD, installed via `install.cmd` from the CD exactly as the README documents, on all
+six cells, with Gate 0 (`tools/assert-payload.sh`) proving provenance before any of it. Anything
+graded on a different artifact does not count toward acceptance.
