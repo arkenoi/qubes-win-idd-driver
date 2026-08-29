@@ -146,14 +146,38 @@ foreach ($c in $cats) {
 }
 
 # Verify rather than assume: an unsigned catalog must fail the BUILD, not the customer's install.
-$unsigned = @()
+#
+# The property to assert is "carries a signature from our certificate" - NOT "chains to a trusted
+# root on this machine". Demanding Status -eq 'Valid' here was wrong and failed a build in which all
+# five catalogs had just been signed successfully: the CI runner does not trust our self-signed test
+# CA, so every correctly-signed catalog reports UnknownError. That status means "signed, chain not
+# trusted HERE", which is exactly what a test-signed package looks like on a machine that has not
+# imported the cert. The guest imports it; the build agent has no reason to.
+#
+# NotSigned is the real defect - it is what four of these catalogs were, and what hangs an
+# unattended install.
+$bad = @()
 foreach ($c in $cats) {
     $sig = Get-AuthenticodeSignature $c.FullName
-    Write-Host ("  catalog $($c.Name): $($sig.Status)")
-    if ($sig.Status -ne 'Valid') { $unsigned += "$($c.Name) [$($sig.Status)]" }
+    $thumb = ''
+    if ($sig.SignerCertificate) { $thumb = $sig.SignerCertificate.Thumbprint }
+    Write-Host ("  catalog $($c.Name): status=$($sig.Status) signer=$thumb")
+    if ($sig.Status -eq 'NotSigned' -or -not $sig.SignerCertificate) {
+        $bad += "$($c.Name) [$($sig.Status)]"
+    }
 }
-if ($unsigned.Count -gt 0) {
-    throw ("these driver catalogs are not validly signed and would hang an unattended install: " +
-           ($unsigned -join ', '))
+if ($bad.Count -gt 0) {
+    throw ("these driver catalogs carry no signature and would hang an unattended install on the " +
+           "invalid-signature dialog: " + ($bad -join ', '))
 }
+# All catalogs must come from ONE certificate - a mixed set means some package was signed by a
+# different pass and the guest would have to trust two publishers to install the set.
+$thumbs = @($cats | ForEach-Object {
+    $s = Get-AuthenticodeSignature $_.FullName
+    if ($s.SignerCertificate) { $s.SignerCertificate.Thumbprint } }) | Sort-Object -Unique
+if ($thumbs.Count -ne 1) {
+    throw ("driver catalogs are signed by $($thumbs.Count) different certificates: " +
+           ($thumbs -join ', ') + " - the guest would have to trust all of them")
+}
+Write-Host ("  all $($cats.Count) catalogs signed by $($thumbs[0])")
 Write-Host "regenerated and signed $($cats.Count) catalogs in $dir"
