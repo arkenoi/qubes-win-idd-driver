@@ -60,6 +60,39 @@ until out=$(qq run 'echo BOOT_OK' 2>&1) && grep -q BOOT_OK <<<"$out"; do
 done
 log "back from reboot; settling 45s"; sleep 45
 
+# --- 3b. RECORD, then suppress, guest self-updating ---------------------------------
+# On 2026-08-30 a cell was found running against a guest that had installed Windows updates on
+# its own: win10-clean (StandaloneVM, netvm=fw-net) had NoAutoUpdate absent, wuauserv Running
+# and RebootRequired=True. The cause is the deliberate StandaloneVM-with-direct-internet
+# carve-out in qubes-windows-update.ps1, which strips NoAutoUpdate; attaching a netvm to test
+# the PV NIC is what triggers it.
+#
+# A guest that services updates mid-cell is not the artifact under test, and WU sets its own
+# pending-reboot flag - an independent source of the reboot prompts this cell grades. So the
+# cell cannot simply proceed. But it must not simply fail either: WU's restart dialog and the
+# PV-driver install prompt are DIFFERENT dialogs with different causes, and failing the cell
+# would conflate them and hide which one actually appeared.
+#
+# So: RECORD the state first (this is the evidence that the carve-out fired on this guest),
+# THEN force the dom0-owned posture so the rest of the cell is a controlled measurement. The
+# recorded file is the per-cell proof - never silently skipped, and never quietly "fixed".
+log "recording WU state before suppressing it (self-update carve-out check)"
+qq run "powershell -ep bypass -c \"'NAU:'+([string](Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -EA SilentlyContinue).NoAutoUpdate); 'SVC:'+(Get-Service wuauserv -EA SilentlyContinue).Status; 'PENDINGREBOOT:'+(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'); 'SERVICING:'+@(Get-Process TiWorker,TrustedInstaller -EA SilentlyContinue).Count\"" \
+    2>&1 | tr -d '\r' | grep -aE '^(NAU|SVC|PENDINGREBOOT|SERVICING):' > "$OUT/wu-state-before.txt" || true
+if [ -s "$OUT/wu-state-before.txt" ]; then
+    while read -r l; do log "    $l"; done < "$OUT/wu-state-before.txt"
+    if grep -q '^NAU:$' "$OUT/wu-state-before.txt" || grep -q '^PENDINGREBOOT:True' "$OUT/wu-state-before.txt"; then
+        log "WARNING: this guest was SELF-UPDATING (carve-out fired). Recorded in wu-state-before.txt;"
+        log "         suppressing WU now so the remainder of the cell is controlled."
+    fi
+else
+    # Missing data fails: without this record we cannot tell a controlled cell from a
+    # contaminated one, which is the whole point of taking it.
+    fail "could not read WU state - refusing to grade a cell whose update posture is unknown"
+fi
+qq run "powershell -ep bypass -c \"New-Item -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Force | Out-Null; Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -Value 1 -Type DWord; Stop-Service wuauserv -Force -EA SilentlyContinue; Set-Service wuauserv -StartupType Disabled -EA SilentlyContinue\"" \
+    >/dev/null 2>&1 || true
+
 # --- 4. activity + health assertion -------------------------------------------------
 qq ps 'Start-Process notepad' >/dev/null 2>&1; sleep 5
 log "running health-check.ps1"
