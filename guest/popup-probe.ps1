@@ -25,8 +25,17 @@ $ErrorActionPreference = 'Continue'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -Namespace P -Name N -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-[DllImport("user32.dll")] public static extern IntPtr FindWindowW(string cls, string title);
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+// FindWindowW is NOT used to locate Explorer. Measured 2026-08-30, in one process and one
+// breath: FindWindowW("CabinetWClass", null) returned 0 while EnumWindows found FOUR visible
+// CabinetWClass windows. Adding CharSet.Unicode did not help, so it is not a marshaling fault -
+// CabinetWClass is registered per-process by Explorer, and the class-name-to-atom lookup does not
+// resolve across the process boundary. This probe reported "EXPLORER_WINDOW=absent" twice while
+// Explorer was plainly on screen. Enumerate instead.
+[DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc cb, IntPtr p);
+public delegate bool EnumWindowsProc(IntPtr h, IntPtr p);
+[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, System.Text.StringBuilder s, int n);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
 '@
 
 Write-Output '=== RESULT ==='
@@ -37,7 +46,19 @@ Start-Sleep -Seconds 6
 
 # CabinetWClass is Explorer's browser frame. If it never appears, say so - a probe that silently
 # raised nothing would let a "no misbehaviour" verdict rest on nothing having been tested.
-$hwnd = [P.N]::FindWindowW('CabinetWClass', $null)
+$found = New-Object System.Collections.ArrayList
+$cb = [P.N+EnumWindowsProc]{
+    param($h, $p)
+    if ([P.N]::IsWindowVisible($h)) {
+        $sb = New-Object System.Text.StringBuilder 256
+        [void][P.N]::GetClassNameW($h, $sb, 256)
+        if ($sb.ToString() -eq 'CabinetWClass') { [void]$found.Add($h) }
+    }
+    return $true
+}
+[void][P.N]::EnumWindows($cb, [IntPtr]::Zero)
+$hwnd = if ($found.Count -gt 0) { $found[0] } else { [IntPtr]::Zero }
+Write-Output ("EXPLORER_WINDOWS_FOUND=" + $found.Count)
 if ($hwnd -eq [IntPtr]::Zero) {
     Write-Output 'EXPLORER_WINDOW=absent  (probe raised nothing - do NOT read this run as a pass)'
     exit 1
