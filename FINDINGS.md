@@ -19837,3 +19837,36 @@ Three things follow:
 
 Both are the same lesson the campaign exists for: an instrument is not trustworthy until it has
 been seen to produce each of its outcomes on the real system.
+
+## 2026-08-29 — what the bricked win10-tpl actually shows (measured before releasing it)
+
+Booted `win10-tpl` in its post-brick state and sampled it for 5 minutes before reusing the qube, so
+the physical evidence was read rather than discarded. Measured, not inferred:
+
+- `admin.vm.Start` never returns: qrexec does not come up (the call was still waiting at the 240 s
+  cap; the qube sat `Transient`). This is the queued-call pattern — drained afterwards with the
+  documented `qrexec_timeout 15` + kill, then restored to 6000.
+- Exactly ONE window is mapped, **1024x768**, and it classifies **BLACK**.
+- Ten consecutive captures over 5 minutes are **byte-identical** (same md5). Nothing renders at all;
+  this is not a slow boot.
+
+Two things follow, and they matter for the hypotheses:
+
+1. **It is NOT an Automatic Repair screen.** The owner-reported repair loop is not what this guest
+   shows now. Either the repair cycle already ran to its end and the guest now fails earlier, or the
+   earlier repair observations came from a different run — and every one of those observations is
+   from a contaminated cell anyway. Treat "endless Automatic Repair" as UNPROVEN for this guest.
+2. **1024x768 is the emulated-VGA resolution.** A healthy guest on this rig maps 2566x1022
+   (measured today on win10-u10). So this guest never gets far enough to reach the Qubes video path
+   — the failure is early, before the PV/IDD display comes up, which is consistent with a boot-path
+   break rather than a QWT-level fault. That is a genuine discriminator for H3 and it is the first
+   piece of physical evidence about the brick that is not contaminated by harness injection.
+
+The capture is kept as `instrumentation/fixtures/win10-tpl-brick-black-1024x768.png` — a REAL
+BLACK fixture from the actual failure, replacing one of the synthetic-only classifier validations
+the plan flagged as owed. It is a single guest window, 1024 px wide, so it is the accepted
+per-window capture class, not a desktop capture.
+
+Not resolvable from here: WHY the boot fails. That needs the volume read offline (dom0-assisted) —
+which is the owner call recorded in the plan's Q3. Having extracted everything obtainable from
+inside, the qube is released for campaign use.
