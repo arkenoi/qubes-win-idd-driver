@@ -800,17 +800,7 @@ function Invoke-Stage1 {
     # Root  : makes the self-signed publisher chain valid.
     # TrustedPublisher : stops the "install this device software?" trust prompt, which
     #                    nobody is there to click during an unattended msiexec /qn.
-    $certDir = Join-Path $Root 'certs'
-    $certs = @(Get-ChildItem -LiteralPath $certDir -Filter *.cer -ErrorAction SilentlyContinue)
-    if ($certs.Count -lt 2) { Fail "expected the QWT signing certs in $certDir, found $($certs.Count)" }
-    foreach ($c in $certs) {
-        foreach ($store in 'Root', 'TrustedPublisher') {
-            & certutil.exe -addstore -f $store $c.FullName | Out-Null
-            if ($LASTEXITCODE -ne 0) { Fail "certutil -addstore $store failed for $($c.Name)" }
-        }
-        Write-Log "trusted $($c.Name) (Root + TrustedPublisher)"
-    }
-    $script:Result.detail.certs_installed = $certs.Count
+    [void](Import-PayloadCerts -Root $Root -Why 'stage 1')
 
     Set-GuiAgentRegistryDefaults
 
@@ -990,13 +980,11 @@ function Invoke-Stage2 {
     Clear-BootResume
 
     # Certs again: stage 1 may have run from the CD in a previous boot, and re-adding is
-    # idempotent. Cheap insurance against a half-prepared machine.
-    $certDir = Join-Path $Root 'certs'
-    foreach ($c in @(Get-ChildItem -LiteralPath $certDir -Filter *.cer)) {
-        foreach ($store in 'Root', 'TrustedPublisher') {
-            & certutil.exe -addstore -f $store $c.FullName | Out-Null
-        }
-    }
+    # idempotent. Cheap insurance against a half-prepared machine - and NOT optional: on a guest
+    # that arrives with testsigning already on, stage 2 is the ONLY stage that runs, so this is
+    # the single point at which the driver publishers become trusted before msiexec installs
+    # them. That is the path the 2026-08-29 hang was found on.
+    [void](Import-PayloadCerts -Root $Root -Why 'stage 2, before msiexec')
 
     # --- remove any previously installed QWT ----------------------------------------
     # Rationale in the file header. Without this the MSI reports success while silently
@@ -2230,6 +2218,47 @@ public static class QdbPrime {
     Write-Log 'No reboot from here. qrexec answers in this boot; PV drivers and their'
     Write-Log 'emulated-device handover complete the next time the qube starts.'
     Emit-Result 0
+}
+
+function Import-PayloadCerts {
+    # Trust EVERY publisher whose driver this payload will install, BEFORE anything installs one.
+    #
+    # ROOT CAUSE, measured 2026-08-29 on win10-u10 (FINDINGS: "the WIN10 install hangs on a
+    # Windows Security driver-trust dialog"). The old code imported only certs\*.cer here, and
+    # imported pv-drivers\xenvif-signer.cer LATER, after msiexec. But msiexec's own ADDLOCAL
+    # installs the PV drivers, and they are signed by that same throwaway CI certificate. So at
+    # InstallDriverPackages time the publisher was NOT trusted, Windows raised a modal
+    # "Windows Security" prompt (class #32770, rundll32) 1.5 s into the custom action, and with
+    # nobody there to click it the install hung for 27.9 minutes until the guest was shut down.
+    # The code already knew the rule - "Trust the signer FIRST: an untrusted publisher fails the
+    # driver-store add with 0xE0000247" - but applied it only to its own pnputil step.
+    #
+    # Note the certs share a common name ("QubesIDD Test Signing") but differ by THUMBPRINT
+    # between builds, because CI test-signs with a throwaway key. Matching by name is therefore
+    # useless; every .cer the payload ships must be imported.
+    param([Parameter(Mandatory)][string]$Root, [string]$Why = '')
+
+    $dirs = @((Join-Path $Root 'certs'), (Join-Path $Root 'pv-drivers'))
+    $certs = @()
+    foreach ($d in $dirs) {
+        $certs += @(Get-ChildItem -LiteralPath $d -Filter *.cer -ErrorAction SilentlyContinue)
+    }
+    if ($certs.Count -lt 2) {
+        Fail "expected the QWT signing certs under $Root (certs\ + pv-drivers\), found $($certs.Count)"
+    }
+    foreach ($c in $certs) {
+        foreach ($store in 'Root', 'TrustedPublisher') {
+            & certutil.exe -addstore -f $store $c.FullName | Out-Null
+            # CHECKED, in both stages. Stage 2's old import discarded the result and logged
+            # nothing, so a failed import was invisible - and stage 2 is the path this bug was
+            # found on. An untrusted publisher does not fail loudly; it waits for a human.
+            if ($LASTEXITCODE -ne 0) { Fail "certutil -addstore $store failed for $($c.Name)" }
+        }
+    }
+    Write-Log ("trusted $($certs.Count) payload certs (Root + TrustedPublisher)" +
+               $(if ($Why) { " [$Why]" } else { '' }))
+    $script:Result.detail.certs_installed = $certs.Count
+    return $certs.Count
 }
 
 function Write-PreconditionSnapshot {
