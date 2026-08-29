@@ -20060,3 +20060,39 @@ the build on anything not Valid, so this specific defect can never ship silently
 confirm end-to-end. That requires pushing the local commits (owner Q6). Until then the fix is
 argued from measurement, not demonstrated on a rebuilt package — and the honest status of the
 6-cell matrix is: 0 passed, S10 exercised three times, all three hung on this defect.
+
+## 2026-08-29 — FIX VERIFIED END-TO-END: WIN10 install completes in 49 s, no dialog, health-check ok
+
+Package: CI artifact from run 33229992796, `driver_repo_commit f777bec`, **no local modification** —
+the instruments now ship in the package itself. Offline pre-check before touching the guest: four
+catalogs in the new MSI grew by ~1.6 KB each (the added signature) and `xenbus.cat`, already signed,
+is unchanged in size. Exactly the predicted delta.
+
+**Defect-present vs defect-absent, same guest (`win10-u10`), one variable changed:**
+
+| | before (3 runs) | after |
+|---|---|---|
+| `InstallDriverPackages` | hung 1676 s / 1170 s / hung | no gap at all (`BIGGEST_GAPS=0`, 3229-line MSI log) |
+| "Windows Security" dialog | 700/737, 518/569, 200+ samples | **0 of 61 samples** |
+| install outcome | never completed | `INSTALL COMPLETE`, `ok:true`, **49 s** (06:00:06 -> 06:00:55) |
+| QWT registered afterwards | none | **4.3.15.0** |
+
+**Functional acceptance after reboot — `health-check.ps1` returns `ok:true`:** agent binary hash ==
+MANIFEST, agent process running, all three Qubes services Running/Auto, IDD device bound
+(`ROOT\DISPLAY\0000`, `cm_error 0`), desktop actually on the IDD (`non_idd_active 0`) at 5120x1440,
+modes published, and no unexpected PnP errors (only the allowlisted `XENBUS\...&DEV_CONS:28`).
+Pixels, not logs: a per-window capture classifies `DESKTOP`.
+
+`xenvif`/`xennet` are absent from `System32\drivers`, which is CORRECT here and not a gap:
+`qvm-prefs win10-u10 netvm` is `''`, so the guest has no vif at all and nothing for the PV NIC to
+bind to. health-check treats "no network attached" as not-applicable rather than a pass, by design.
+A cell that must prove PV networking needs a guest with a netvm.
+
+**Caveat found while capturing the evidence — the desktop-capture hook's heuristic is now
+degenerate.** `tools/pre-commit-no-desktop-captures.sh` and `.githooks/pre-commit` block any PNG
+wider than 3440 on the reasoning "the guest screen is at most 3440 wide here". That is no longer
+true: this guest's IDD runs at **5120x1440**, the same width as the dom0 desktop, so width can no
+longer separate a guest window from a host capture. The rule is left as-is (it fails closed, which
+is the right direction) but it will now reject legitimate wide per-window captures, and it must not
+be relaxed by simply raising the number - that would disable the check entirely. Recorded rather
+than quietly weakened.
