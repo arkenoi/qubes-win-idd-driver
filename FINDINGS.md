@@ -21660,3 +21660,41 @@ win10-tpl 2026-08-30:
 The self-test writes to a SEPARATE file and tags injected records, so seeded evidence can never be
 read back as an observation - the direct lesson of the 2026-08-28 retraction where a cell measured
 its own injection.
+
+## 2026-08-30 — CAMPAIGN 20260830-035153: 32 passed, 0 failed, incl. the seeded reboot condition
+
+Six runnable cells on release 6022427 (4.3.16), from sealed goldens verified intact BEFORE and
+AFTER, payload Gate-0 verified, one Windows guest at a time enforced by the harness.
+
+    WIN10-fresh-1stage   6/6    WIN11-fresh-1stage   6/6
+    WIN10-seeded         7/7    WIN11-seeded         7/7
+    WIN10-appvm          3/3    WIN11-appvm          3/3     = 32 passed, 0 failed
+
+**The seeded cells are the result that matters.** They arm `xenbus_monitor` to auto-start and write
+the pending PV reboot Request MID-MSI - the field state the suppressor exists to defeat, and the
+cell its own header calls "the suspected brick". On BOTH OSes the guest came back with a session,
+kept the release binary (hash-verified against the package), armed autologon, and left
+xenbus_monitor DISABLED and not running *despite having been armed to auto-start*. That is the
+suppressor winning against an injected state, not a clean guest staying clean.
+
+**The dialog criterion is now measured rather than assumed.** Previous campaigns asserted
+"xenbus_monitor disabled", which is the MECHANISM; nothing looked for the dialog. Every install cell
+now runs `guest/reboot-dialog-watch.ps1` throughout, and the grade distinguishes
+no-summary / NO-SAMPLES / BLIND / COVERAGE-GAP / DIALOG-OBSERVED / clean-with-samples. Only the last
+passes, and it reads "the watcher proves it looked". Fail-proof on record (H5 plain PASS, not
+PASS-UNPROVEN): `-SelfTest` returned
+`{"matched":["You must restart your computer to apply these changes"],"detector_fires":true}`,
+writing to a SEPARATE file with injected records tagged - the direct fix for the 2026-08-28
+retraction where a cell measured its own injection.
+
+**Cells swapped, and why.** The previous campaign's win10-2stage and win10-upgrade-stock were
+INVALID because neither could build its own entry state (testsigning-off on a clone whose boot disk
+driver is test-signed; a precondition built by uninstalling QWT, which P1.0 forbids). They were
+replaced by the seeded cells, which are runnable AND test the goal's own criterion adversarially.
+The two INVALID cells remain unfixed and are NOT claimed - see below.
+
+**What this campaign does NOT establish**, stated so the 32 greens are not over-read:
+ - the TWO-STAGE install path (needs an ST0 entry via stick; ST0.10/ST0.11 are sealed and ready)
+ - UPGRADE-OVER-STOCK (needs a legal precondition, not an uninstall)
+ - PV NETWORKING - no NET cell ran; "network present" is untested here
+ - xencons in-cell (it binds, proven separately, but no cell asserts it)
