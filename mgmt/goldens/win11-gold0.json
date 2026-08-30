@@ -1,0 +1,26 @@
+{
+  "note": "ST0.11 pristine Win11 Enterprise Eval build 26100 en-US, QWT-free stick, desktop READ 2026-08-30",
+  "props": {
+    "klass": "StandaloneVM",
+    "maxmem": "8192",
+    "memory": "8192",
+    "vcpus": "4",
+    "virt_mode": "hvm"
+  },
+  "sealed_utc": "2026-08-30T00:37:42Z",
+  "vm": "win11-gold0",
+  "volumes": {
+    "private": {
+      "revisions": [],
+      "revisions_to_keep": "2",
+      "size": "2147483648",
+      "usage": "429496"
+    },
+    "root": {
+      "revisions": [],
+      "revisions_to_keep": "2",
+      "size": "85899345920",
+      "usage": "13005160972"
+    }
+  }
+}

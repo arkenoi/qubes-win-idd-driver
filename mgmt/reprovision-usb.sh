@@ -94,7 +94,9 @@ t0=$(date +%s)
 SHOTDIR="${PRISTINE_SHOTDIR:-$PWD/evidence/pristine-$VM-$(date -u +%Y%m%d-%H%M%S)}"
 mkdir -p "$SHOTDIR"
 _grab(){ # capture; echo the classifier verdict (advisory only, never a pass)
-    rm -f "$SHOTDIR"/latest*.png "$SHOTDIR"/s.tar 2>/dev/null
+    # Do NOT delete latest.png up front: a failed capture (NOSHOT) would otherwise destroy the
+    # last good image, which is the one a human needs to read.
+    rm -f "$SHOTDIR"/s.tar "$SHOTDIR"/win-*.png 2>/dev/null
     QTEST_VM=$VM timeout 90 ./tools/qtest shot "$SHOTDIR/s.tar" >/dev/null 2>&1 || return 1
     tar -xf "$SHOTDIR/s.tar" -C "$SHOTDIR" 2>/dev/null || return 1
     local big; big=$(ls -S "$SHOTDIR"/*.png 2>/dev/null | head -1)
@@ -109,7 +111,12 @@ while [ $(( $(date +%s) - t0 )) -lt "$BUDGET" ]; do
         # MINIMUM PLAUSIBLE INSTALL TIME. Win10 measured 17-20 min; nothing that "finishes" in
         # three minutes installed an operating system. This alone would not have caught the false
         # pass safely, which is why the verdict below is still not a pass.
-        if [ "$v" = "DESKTOP" ] && [ "$el" -ge 900 ]; then
+        # MATCH WHAT _grab ACTUALLY ECHOES. It returns the full match "VERDICT=DESKTOP" (grep -oE
+        # 'VERDICT=[A-Z]+'), so comparing against the bare word "DESKTOP" was never true and this
+        # exit was UNREACHABLE - the same defect species as RB-03, written by me while fixing RB-03.
+        # Measured: win11-gold0 sat at a finished desktop logging "screen=VERDICT=DESKTOP (advisory)"
+        # for ~35 minutes past the 900 s floor without ever exiting.
+        if [ "$v" = "VERDICT=DESKTOP" ] && [ "$el" -ge 900 ]; then
             log "candidate desktop after ${el}s, verdict=$v (advisory)"
             log "NEEDS VISUAL CONFIRMATION - READ $SHOTDIR/latest.png before sealing this qube."
             log "  A Setup error dialog also classifies as DESKTOP; the classifier cannot decide this."
