@@ -24,13 +24,39 @@ VOLID=${3:-QWT_IMPROVED}
 
 command -v xorriso >/dev/null || { echo "FATAL: xorriso not installed" >&2; exit 1; }
 
+# --- autorun.inf ------------------------------------------------------------------------------
+# The ISO carried NO autorun.inf, which is confusing next to the thing it replaces: dom0's
+# `qvm-start <vm> --install-windows-tools` attaches the tools CDROM precisely so it can start
+# itself, and stock's media does. Ours presented an installer and then sat there.
+#
+# It is staged into a COPY, never into $SETUP_DIR: that tree ships as its own artifact with a
+# SHA256SUMS.txt covering every file, and the verification below re-checks it from inside the ISO.
+# Writing an extra file into the source would make those sums fail - correctly - so the ISO gets
+# the file and the setup tree stays exactly what it was built as.
+#
+# It points at qubes-tools-<ver>.exe, the stock-shape entry point already at the root, falling back
+# to install.cmd. NOTE what autorun can and cannot do here: AutoRun only launches the target, it
+# does NOT elevate. Our installer needs elevation, so the user still gets a UAC prompt - that is
+# inherent, not a defect. (Stock has the same shape and worse: its own installer stops with a modal
+# telling the user to run `bcdedit /set testsigning on` by hand, because its drivers are signed by a
+# private CA. Ours enables testsigning itself in stage 1.)
+STAGE="$(mktemp -d)"
+trap 'chmod -R u+w "$STAGE" 2>/dev/null; rm -rf "$STAGE"' EXIT
+cp -a "$SETUP_DIR/." "$STAGE/"
+ENTRY="$(cd "$STAGE" && ls qubes-tools-*.exe 2>/dev/null | head -1)"
+[ -n "$ENTRY" ] || ENTRY=install.cmd
+# CRLF and plain ASCII: autorun.inf is parsed by the shell's INI reader, which is unforgiving.
+printf '[autorun]\r\nopen=%s\r\nicon=%s,0\r\nlabel=Qubes Windows Tools NG\r\n' \
+    "$ENTRY" "$ENTRY" > "$STAGE/autorun.inf"
+echo "== autorun.inf -> $ENTRY"
+
 echo "== building $OUT_ISO from $SETUP_DIR (volume id $VOLID)"
 xorriso -as mkisofs \
     -V "$VOLID" \
     -J -joliet-long \
     -r \
     -o "$OUT_ISO" \
-    "$SETUP_DIR"
+    "$STAGE"
 
 WORK=$(mktemp -d)
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
@@ -38,7 +64,10 @@ trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 echo "== verifying content (Rock Ridge view)"
 xorriso -osirrox on -indev "$OUT_ISO" -extract / "$WORK/rr" >/dev/null 2>&1
 chmod -R u+w "$WORK/rr"
+# autorun.inf is added by this script and is deliberately NOT in SHA256SUMS.txt (that file
+# describes the setup tree artifact). Everything the sums DO cover must still match exactly.
 ( cd "$WORK/rr" && sha256sum -c SHA256SUMS.txt --quiet )
+[ -f "$WORK/rr/autorun.inf" ] || { echo "FATAL: autorun.inf missing from the ISO" >&2; exit 1; }
 echo "== all files in the ISO match SHA256SUMS.txt"
 
 echo "== verifying names (Joliet view - this is what Windows sees)"
@@ -46,7 +75,7 @@ echo "== verifying names (Joliet view - this is what Windows sees)"
 # not notice a Joliet truncation, and the user is told to run "install.cmd" by name.
 xorriso -osirrox on -indev "$OUT_ISO" -joliet on -extract / "$WORK/joliet" >/dev/null 2>&1
 chmod -R u+w "$WORK/joliet"
-for f in install.cmd Install-QwtImproved.ps1 README.txt MANIFEST.json SHA256SUMS.txt \
+for f in autorun.inf install.cmd Install-QwtImproved.ps1 README.txt MANIFEST.json SHA256SUMS.txt \
          msi/installer.msi msi/vc_redist.x64.exe; do
     [ -f "$WORK/joliet/$f" ] || {
         echo "FATAL: '$f' is not present in the ISO's Joliet tree under that exact name" >&2
