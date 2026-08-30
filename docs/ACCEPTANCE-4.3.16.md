@@ -23,10 +23,11 @@
 
 ## Verdict
 
-**Ship the install, upgrade, network and rendering paths. Do NOT ship the Windows Update path.**
+**Ship the install, upgrade, network and rendering paths. The update path carries an UNEXPLAINED INTERMITTENT SCAN FAILURE — not a known defect, and not a clean pass.**
 
-Everything the previous release notes listed as unverified is now measured and passes. One material
-defect was found, in a subsystem the previous campaign never exercised.
+> **Corrected after the verdict was first written.** This report originally said *"do NOT ship the Windows Update path"* and attributed the failure to a missing SYSTEM-account proxy plane. **That attribution was falsified by a later run**: the scan offered 8 updates and reported 5 to dom0 (`qubes.NotifyUpdates`, exit 0) on the shipped build with that plane demonstrably ABSENT. The scan did fail `0x8024402C` four times earlier — that is real — but the cause is **unknown**, and the ship-blocking verdict built on my attribution is withdrawn. See the FALSIFIED entry in FINDINGS.
+
+Everything the previous release notes listed as unverified is now measured and passes.
 
 ---
 
