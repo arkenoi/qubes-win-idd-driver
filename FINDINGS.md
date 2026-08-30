@@ -22980,3 +22980,37 @@ not optional. `set-resolution.ps1` is broken (recorded separately) and `qtest re
 `GEOM ok=0 err=no_window` with no window mapped, so containment is currently unreachable; both are
 the owed fix, and SG2/SG4 are blocked behind them rather than being run unsafely or scored
 optimistically.
+
+## 2026-08-30 — Why install worked while the scan was broken, and a "known gap" that may be the same defect
+
+Owner asked the sharp question: *"how did install work if scan was broken?"* Because they are two
+independent paths, and only one of them goes through the component the missing proxy plane breaks.
+
+| path | how it reaches the network | broken by the missing SYSTEM WinINET plane? |
+|---|---|---|
+| **Catalog** — resolve the KB, fetch the `.msu`, install offline with DISM/`wusa` | OUR code: `Invoke-WebRequest ... -Proxy $Proxy` — an explicit parameter on our own call | **No** |
+| **Scan** (availability to dom0) | WU COM searcher, running as SYSTEM | **Yes** — `0x8024402C` |
+| **`Install-ViaWU`** fallback (Defender definitions, MSRT — not `.msu` packages, so the catalog can never serve them) | WU COM API, as SYSTEM | **Yes** |
+
+The proven Win10 drain (FINDINGS:15091) is unambiguously the catalog path: `DISM /Online
+/Add-Package` rc=50 on a combined SSU+LCU, then `wusa` rc=3010, reboot, `19045.2965 -> 19045.6456`,
+`KB5066791 installed=True`. A `.msu` already on disk, applied offline. No scan, no `wuauserv`.
+
+So "install is proven" and "the scan is broken" were never in tension — the install path simply
+never touches the broken component.
+
+### The prediction worth testing
+
+FINDINGS:13306 records, as an ACCEPTED limitation: *"Deterministic known gap (not flakiness):
+non-catalog KBs (Defender defs, MSRT, UHT, KB5066747, KB5001716) fail honestly every pass."*
+
+**Those are exactly the KBs routed through `Install-ViaWU`, which uses the same WU COM API as the
+broken scan.** The mechanism matches the defect exactly: no SYSTEM-account proxy plane, so the COM
+path cannot reach the network, so every non-catalog KB fails every pass — deterministically, which
+is precisely how it was described.
+
+**This is a prediction, not a measurement.** It has not been tested. The test is cheap and one
+variable: add `bitsadmin /util /setieproxy LOCALSYSTEM MANUAL_PROXY 127.0.0.1:8082 "<local>"` in
+`Ensure-Proxy`, then re-run a Defender-definition install and see whether it stops failing. If it
+does, a limitation this project has been living with and documenting as permanent was a one-line
+omission all along — and the "known gap" register entry should be retired rather than inherited.
