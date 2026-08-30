@@ -22792,3 +22792,34 @@ unreachable. The guest state was restored to the offline baseline afterwards (`w
 
 **The release under test was NOT modified.** Fixing `Ensure-Proxy` mid-campaign would change the
 artifact being graded; the fix belongs to the next build, where this section is the acceptance test.
+
+## 2026-08-30 — U0 and U2 PASS; the VM-class matrix and the QdbDaemon race fix are validated
+
+**U0** (deploy state, read-only, `win11-tpl`): task shapes exactly as specified —
+`QubesWindowsUpdateScan` boot PT2M + PT6H repeat as SYSTEM with `-Scheduled`;
+`QubesWindowsUpdateRun`/`Download` with no triggers and no `-Scheduled`; `QubesAutologonGuard`
+boot PT30S. Policy `NoAutoUpdate=1` and `ExcludeWUDriversInQualityUpdate=1` (the latter is what
+stops Windows Update delivering Xen drivers over the PV-NIC latch). Offline baseline clean:
+no relay process, winhttp Direct. All five deployed scripts hash-match the shipped payload.
+
+**U2** — every class arm behaves as the security model requires, witnessed by what CHANGED rather
+than what was logged:
+
+| class | observed |
+|---|---|
+| TemplateVM (`win11-tpl`) | classified from qubesdb, ran the proxy pass |
+| AppVM (`win11-app`) | *"AppVM - not a template; updates are the template's business. Exiting before any proxy activity."* exit 0, `RELAY_AFTER 0`, `ProxyEnable 0` |
+| StandaloneVM + netvm (`win10-c1`) | *"StandaloneVM with direct internet - it updates ITSELF ... Undoing NoAutoUpdate=1."* `NoAutoUpdate` 1 -> **removed**, no relay, proxy settings removed |
+
+**The boot-path clause is the valuable one.** U2 binds classification to a COLD BOOT because a live
+re-run clears the QdbDaemon startup race it exists to catch. Armed, cold-booted, checked:
+
+    {"rebooted":true,"classes_seen":"TemplateVM","class_correct":true,"saw_empty_class":false,
+     "refused_to_classify":false,"skipped_as_standalone":false,"qdb_retry_evidence":true,"ok":true}
+
+`qdb_retry_evidence:true` means the retry loop actually fired — so the fix is load-bearing on a real
+cold boot, not merely present in the source. That had never been exercised before.
+
+Minor instrument nit: `wu-boot-acceptance-arm.ps1` reports `vm_class_now=WIN-IDD-TEST`, which is the
+hostname, not a class. The post-boot CHECK is the authority and is correct; the ARM line is
+mislabelled and would mislead a reader.
