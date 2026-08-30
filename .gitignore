@@ -41,3 +41,10 @@ evidence/
 release-artifacts/*
 !release-artifacts/README.md
 __pycache__/
+
+# Campaign fixture receipts (mgmt/harness/prime-run.sh). A receipt describes a TRANSIENT guest that
+# is built on demand and removed at campaign end (owner decision 2026-08-30: only the two pristine
+# bases are sealed goldens). Committing them would imply a custody promise the project has decided
+# not to make, and they would go stale the moment the fixture is torn down. The durable record is
+# the campaign ledger and FINDINGS.
+mgmt/fixtures/
