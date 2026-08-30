@@ -134,6 +134,40 @@ echo "$st" | grep -qa '"detector_fires":true' || {
 geom > "$TMP/g0.txt"; base=$(parse_geom "$TMP/g0.txt"); baseo=$(echo "$base" | cut -d'|' -f2)
 log "  baseline dom0 list: total=${base%%|*} override_redirect=$baseo"
 
+# ORDER MATTERS: the menu cell runs FIRST. fire-toast raises a PERSISTENT reminder toast, and on
+# 2026-08-31 it was still on screen during the menu cell - it held focus so Alt+F never reached
+# Notepad, and its 23 ovr=1 samples made the vacuity guard believe the menu had opened. Scene
+# contamination between cells is a real failure mode; the cheap fix is ordering.
+# ------------------------------------------------------------------ RND-3: menus (synth design)
+log "=== RND-3: a menu must be SYNTHESIZED onto its owner, and the owner's pixels must change ==="
+r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
+q run 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 16
+h_before=$(owner_hash); log "  owner before menu: $h_before"
+mark=$(T=200 q pushrun "$TMP/mark.ps1" | tr -d '\r' | grep -ao 'AGENTMARK [0-9]*' | awk '{print $2}')
+T=200 q pushrun guest/run-as-user.ps1 -Tag menu -Script "$GUEST\\menu.ps1" -NoWait >/dev/null 2>&1
+sleep 16
+h_after=$(owner_hash); log "  owner with menu open: $h_after"
+syn=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${mark:-0}" -Pattern 'msg=SYNTH,hwnd=' | tr -d '\r' | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
+# #32768 SPECIFICALLY, not "any ovr=1 surface". Measured 2026-08-31: a persistent toast from the
+# previous cell was still on screen, contributing 23 ovr=1 hits, so the cell concluded "the menu
+# opened" when it had not - and then reported FAIL because nothing had been synthesized. A vacuity
+# guard that any other surface can satisfy is not a vacuity guard.
+ovr=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${mark:-0}" -Pattern '#32768' | tr -d '\r' | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
+log "  agent: SYNTH events=${syn:-0}  #32768 menu surfaces seen=${ovr:-0}"
+if [ "${ovr:-0}" -eq 0 ]; then
+  log "  -> INVALID-VACUOUS: the agent never saw a #32768 menu window; the menu never opened"
+  printf 'RND-3\tmenu-synthesized-onto-owner\tINVALID-VACUOUS\tno #32768 surface seen by the agent\t%s\n' "$EV" >> "$V"; rc=1
+elif [ "${syn:-0}" -gt 0 ] && [ "$h_before" != "$h_after" ] && [ "$h_after" != NOCAP ] && [ "$h_after" != NOWIN ]; then
+  log "  -> PASS: menu synthesized onto its owner AND the owner's dom0 pixels changed"
+  printf 'RND-3\tmenu-synthesized-onto-owner\tPASS-UNPROVEN\t%s SYNTH events; owner capture %s -> %s\t%s\n' "$syn" "$h_before" "$h_after" "$EV" >> "$V"
+elif [ "${syn:-0}" -eq 0 ]; then
+  log "  -> FAIL: an override-redirect surface existed but the agent did not synthesize it"
+  printf 'RND-3\tmenu-synthesized-onto-owner\tFAIL\t#32768 surfaces=%s but 0 SYNTH events\t%s\n' "$ovr" "$EV" >> "$V"; rc=1
+else
+  log "  -> FAIL: synthesized, but the owner's dom0 pixels did not change - invisible to the user"
+  printf 'RND-3\tmenu-visible-in-dom0\tFAIL\t%s SYNTH events but owner capture identical (%s)\t%s\n' "$syn" "$h_before" "$EV" >> "$V"; rc=1
+fi
+
 # ------------------------------------------------------------------ RND-4 / SG7: toasts
 log "=== RND-4 / SG7: a toast must reach the user - by EITHER path ==="
 r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
@@ -169,32 +203,6 @@ elif [ "${tsyn:-0}" -gt 0 ] && [ "$th_before" != "$th_after" ]; then
 else
   log "  -> FAIL: the toast existed guest-side but reached dom0 by NEITHER path"
   printf 'RND-4\ttoast-reaches-dom0\tFAIL\tguest samples=%s but dom0 o-r stayed %s and no synth+pixel change\t%s\n' "$sw" "$o1" "$EV" >> "$V"; rc=1
-fi
-
-# ------------------------------------------------------------------ RND-3: menus (synth design)
-log "=== RND-3: a menu must be SYNTHESIZED onto its owner, and the owner's pixels must change ==="
-r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
-q run 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 16
-h_before=$(owner_hash); log "  owner before menu: $h_before"
-mark=$(T=200 q pushrun "$TMP/mark.ps1" | tr -d '\r' | grep -ao 'AGENTMARK [0-9]*' | awk '{print $2}')
-T=200 q pushrun guest/run-as-user.ps1 -Tag menu -Script "$GUEST\\menu.ps1" -NoWait >/dev/null 2>&1
-sleep 16
-h_after=$(owner_hash); log "  owner with menu open: $h_after"
-syn=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${mark:-0}" -Pattern 'msg=SYNTH,hwnd=' | tr -d '\r' | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
-ovr=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${mark:-0}" -Pattern 'ovr=1' | tr -d '\r' | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
-log "  agent: SYNTH events=${syn:-0}  override-redirect surfaces seen=${ovr:-0}"
-if [ "${ovr:-0}" -eq 0 ]; then
-  log "  -> INVALID-VACUOUS: the agent never saw an override-redirect surface; the menu never opened"
-  printf 'RND-3\tmenu-synthesized-onto-owner\tINVALID-VACUOUS\tno ovr=1 surface seen by the agent\t%s\n' "$EV" >> "$V"; rc=1
-elif [ "${syn:-0}" -gt 0 ] && [ "$h_before" != "$h_after" ] && [ "$h_after" != NOCAP ] && [ "$h_after" != NOWIN ]; then
-  log "  -> PASS: menu synthesized onto its owner AND the owner's dom0 pixels changed"
-  printf 'RND-3\tmenu-synthesized-onto-owner\tPASS-UNPROVEN\t%s SYNTH events; owner capture %s -> %s\t%s\n' "$syn" "$h_before" "$h_after" "$EV" >> "$V"
-elif [ "${syn:-0}" -eq 0 ]; then
-  log "  -> FAIL: an override-redirect surface existed but the agent did not synthesize it"
-  printf 'RND-3\tmenu-synthesized-onto-owner\tFAIL\tovr=1 surfaces=%s but 0 SYNTH events\t%s\n' "$ovr" "$EV" >> "$V"; rc=1
-else
-  log "  -> FAIL: synthesized, but the owner's dom0 pixels did not change - invisible to the user"
-  printf 'RND-3\tmenu-visible-in-dom0\tFAIL\t%s SYNTH events but owner capture identical (%s)\t%s\n' "$syn" "$h_before" "$EV" >> "$V"; rc=1
 fi
 
 r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
