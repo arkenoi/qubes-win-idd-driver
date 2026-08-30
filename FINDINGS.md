@@ -21633,3 +21633,30 @@ fullscreen-sized. That is the boot path, not a just-installed session.
 **What they do NOT establish:** the two-stage install path, upgrade-over-stock, PV networking under
 load, or the premature reboot DIALOG itself (the dialog watcher is not wired into these cells - the
 xenbus_monitor checks measure the mechanism, not the visible dialog).
+
+## 2026-08-30 — the premature-reboot DIALOG now has an instrument in the install cells
+
+The goal says "premature reboot dialogs are gone", and campaign 20260830-021859 could not speak to
+it: the cells asserted `xenbus_monitor is DISABLED` and `not running`, which is the MECHANISM, not
+the dialog. Nothing looked for the dialog itself, and per the protocol's vacuity rule an absence
+claimed by a cell that never watched is INVALID-VACUOUS, never a PASS.
+
+`guest/reboot-dialog-watch.ps1` is now armed in `run_install` for the duration of every install
+(~10 s sampling), and `verify_installed` grades its summary with four distinct outcomes rather than
+reading silence as success:
+
+    no summary at all        -> FAIL "would be vacuous (INVALID)"
+    NO SAMPLES / BLIND /
+      COVERAGE GAP           -> FAIL "watch not credible"
+    DIALOG OBSERVED          -> FAIL, with the record
+    clean, samples present   -> PASS "no premature reboot dialog, and the watcher proves it looked"
+
+**Fail-proof on record**, so this is a plain PASS under H5 rather than PASS-UNPROVEN. Run on
+win10-tpl 2026-08-30:
+
+    === REBOOTWATCH-SELFTEST === {"matched":["You must restart your computer to apply these
+    changes"],"detector_fires":true}
+
+The self-test writes to a SEPARATE file and tags injected records, so seeded evidence can never be
+read back as an observation - the direct lesson of the 2026-08-28 retraction where a cell measured
+its own injection.

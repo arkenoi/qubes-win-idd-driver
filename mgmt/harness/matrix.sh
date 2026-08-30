@@ -203,6 +203,16 @@ run_install(){ # $1=vm $2=label $3=payload-dir $4=extra-args
   mkdir -p "$M"
   echo "$E2E_MARK" >> "$M/$lbl-install.tail"
   say "  $lbl: run marker $E2E_MARK"
+
+  # ARM THE PREMATURE-REBOOT DIALOG WATCHER, through the install.
+  # "premature reboot dialogs are gone" is an acceptance criterion, and until now NOTHING in these
+  # cells looked for the dialog: the xenbus_monitor checks measure the MECHANISM (service disabled,
+  # not running), which is not the same claim. Per the protocol's vacuity rule, "no dialog" from a
+  # cell that never watched is INVALID-VACUOUS, never a PASS - so the absence has to be backed by a
+  # timestamped record of having looked, at a known rate, over the interval that matters.
+  QTEST_VM=$vm timeout -k 5 120 ./tools/qtest push guest/reboot-dialog-watch.ps1 >/dev/null 2>&1
+  QTEST_VM=$vm qrun "cmd /c start \"dlgwatch\" /min powershell -NoProfile -ExecutionPolicy Bypass -File $INC\\reboot-dialog-watch.ps1 -Minutes 45" >/dev/null 2>&1
+  say "  $lbl: reboot-dialog watcher armed"
   QTEST_VM=$vm qrun "cmd /c start \"\" /min C:\\$d\\install.cmd /auto /autologon:qubes $extra" >/dev/null 2>&1
   # SEED_DELAY: write the PV reboot Request mid-MSI, which is when the field gets it.
   #
@@ -322,6 +332,21 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   say "  $lbl RESULT: $(echo "$j" | cut -c1-300)"
   echo "$j" | grep -qa "\"installed_gui_agent_sha256\":\"$ASHA" \
     && ok "$lbl: installed agent == release binary" || no "$lbl: installed agent is NOT the release binary"
+  # DIALOG VERDICT. Read the watcher's own summary rather than inferring from silence: it reports
+  # NO SAMPLES / BLIND / COVERAGE GAPS as distinct outcomes, and each of those means "this cell
+  # cannot claim the dialog was absent" - not "it was absent".
+  local dv
+  dv=$(QTEST_VM=$vm timeout -k 5 120 ./tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -File $INC\\reboot-dialog-watch.ps1 -Summary" 2>/dev/null | tr -d '\r' | grep -a '=== REBOOTWATCH ===' | tail -1)
+  if [ -z "$dv" ]; then
+    no "$lbl: reboot-dialog watcher produced NO summary - 'no dialog' would be vacuous (INVALID)"
+  elif echo "$dv" | grep -qai 'NO SAMPLES\|BLIND\|COVERAGE GAP'; then
+    no "$lbl: reboot-dialog watch not credible: $(echo "$dv" | cut -c1-160)"
+  elif echo "$dv" | grep -qai 'DIALOG OBSERVED'; then
+    no "$lbl: a premature reboot DIALOG was observed: $(echo "$dv" | cut -c1-160)"
+  else
+    ok "$lbl: no premature reboot dialog, and the watcher proves it looked"
+  fi
+
   echo "$j" | grep -qa '"autologon":"armed"' \
     && ok "$lbl: autologon armed" || no "$lbl: autologon NOT armed ($(echo "$j" | grep -ao '"autologon":"[^"]*"'))"
   local ver; ver=$(QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run 'cmd /c reg query "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v Version' 2>/dev/null | tr -d '\r' | grep -a REG_SZ | head -1)
