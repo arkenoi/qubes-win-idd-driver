@@ -23225,3 +23225,46 @@ it is a real defect and the fix belongs in the installer's MoveUsers/known-folde
 **TemplateVM** — SSU cab rc=0, LCU cab rc=3010, graceful reboot, `UBR 19045.2965 -> 19045.6456`,
 `CBS_PENDING False`. That is the gap FINDINGS:13306 named ("no install has ever run on win10-tpl
 itself"). It must be re-run clean before the gap can be closed, but the mechanism is not in doubt.
+
+## 2026-08-30 — LIVE WEDGE reproduced on a clean subject during BENCH-1 run 3
+
+**A wedge is live on `win10-p45` right now and the guest has been PRESERVED, not killed (G-0).**
+The dom0-side forensics this failure class needs are an owner action — this qube cannot read
+`/var/log/xen/qemu-dm-<vm>.log` or `xl dmesg` (tested 2026-08-29, not assumed).
+
+**Signature, captured from outside the guest:**
+
+    domain state        Running
+    cpu_usage_raw_max   366 / 363 / 351 / 357 / 375   (sustained, ~3.5 of 4 vCPUs)
+    qrexec VMShell      NO ANSWER (rc=124)
+    window capture      EMPTY TAR - no windows mapped
+    gui-agent           gone (bench-agent.sh: "FATAL: gui-agent not running")
+
+This is the recorded wedge: *"every in-guest channel dies at once: qrexec stops answering, no windows
+are mapped so captures come back empty."* The CPU sample is the discriminator the protocol asks for —
+it separates *spinning but alive* from *stopped issuing I/O*, and this one is **spinning**, which is
+consistent with the IPI/TLB-shootdown deadlock proven from two NMI dumps (a single-target TLB
+shootdown a Xen HVM vCPU never ACKs).
+
+**Trigger context, recorded as context and NOT as a cause** (the record already retracted qrexec
+churn as *the* trigger, calling it only a provocation): it appeared during the **third consecutive
+`bench-agent.sh` pass** — a workload of scripted drag, scroll and typing via SendInput, with heavy
+qrexec traffic, on a freshly installed guest. Runs 1 and 2 completed normally (scroll p50 417 / 366).
+
+**Why this instance is unusually valuable:**
+- The subject is **clean** — built minutes earlier from the sealed `win10-base` by the primer,
+  provenance verified by `golden.sh fixture`, no diagnosis or mutation performed on it.
+- It is **live**, so dom0-side capture (`qemu-dm` log, `xl dmesg`, NMI dump) is possible now rather
+  than reconstructed.
+- The reproduction path is short and scripted: install from the golden, then three back-to-back
+  `bench-agent.sh` runs.
+
+**Consequence for P4:** BENCH-2 completed (idle CPU 0.08 / 0.00 / 0.02 s per 120 s, at or better than
+the ~0.08 baseline). BENCH-1 has two clean runs — **scroll p50 417 and 366 µs, both INSIDE the
+canonical 374-436 band** — and the third wedged. Two runs is below the >=3 the protocol requires, so
+BENCH-1 does not carry a verdict yet.
+
+**And a note that vindicates the contamination rule.** The contaminated run reported scroll
+307/334/345 — *below* the canonical band. The clean subject reports 417/366 — *inside* it. Whatever
+caused that shift, the contaminated numbers were measurably different, so voiding them was not
+pedantry.
