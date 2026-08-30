@@ -22008,3 +22008,44 @@ cannot.
 pointing at the existing entry point would restore parity. NOT implemented yet - implementing it
 before confirming what stock actually does would be inventing a requirement, which is the exact
 failure this session has been correcting.
+
+### 2026-08-30 — autorun.inf implemented (owner instruction: "the absense is confusing")
+
+The half-measured finding above is closed by instruction rather than by further measurement: the
+owner confirmed stock's media autoruns ("yes, iso autoruns, that's the point") and directed that
+ours carry an `autorun.inf`. Implemented in `packaging/make-iso.sh` (54dc49a).
+
+**Where it goes, and why not into the setup tree.** The file is written into a *copy* of the setup
+tree, never into `$SETUP_DIR`. That tree ships as its own artifact with a `SHA256SUMS.txt` covering
+every file, and `make-iso.sh` re-verifies those sums from *inside* the finished ISO, in both the
+Rock Ridge and the Joliet view. Writing an extra file into the source would make that verification
+fail — correctly. So the ISO gains the file and the setup tree stays exactly what it was built as.
+
+**Content** — CRLF, ASCII, pointing at the stock-shape entry point already at the root:
+
+    [autorun]
+    open=qubes-tools-4.3.16.exe
+    icon=qubes-tools-4.3.16.exe,0
+    label=Qubes Windows Tools NG
+
+`autorun.inf` is now asserted present in both trees by the build's own verification, so an ISO
+built without it fails the build rather than shipping silently.
+
+**Which artifact this actually matters for.** `packaging/rpm/qubes-windows-tools-ng.spec` installs
+the ISO as `/usr/lib/qubes/qubes-windows-tools.iso` — the exact file dom0 attaches for
+`qvm-start <vm> --install-windows-tools`. That dom0 route is the one the owner asked about, and it
+is the one that was landing a CD which did nothing.
+
+**Not backported into the published v4.3.16 assets.** Those are the graded artifact; re-wrapping a
+release ISO after its campaign would break the "tested == published" identity that the protocol
+exists to protect. It ships in the next package build.
+
+**STILL OWED — the acceptance test, and do not record a pass without it.** What has been proven is
+only that the file is in the image under the right name with the right line endings. NOT proven:
+that Windows acts on it when Qubes attaches the ISO. Expected behaviour, which must be checked
+rather than assumed: since Windows 7, `open=` is honoured for **optical** media only (a `--cdrom`
+attach is optical, so this should apply), but Windows 10 typically raises an **AutoPlay prompt**
+offering "Run <program>" rather than executing silently — and AutoRun does **not** elevate, so a UAC
+prompt remains either way. The honest claim to make afterwards is whichever of those is measured.
+Test: attach the ISO to a running guest, `qtest shot`, read the pixels. Queued behind the
+win10-u10 stock provisioning — one Windows guest at a time.

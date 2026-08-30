@@ -20,20 +20,24 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.14-agent5634f90](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.14-agent5634f90)** — agent `5634f90`, package `4.3.14+agent.5634f905a8dd`.
+Release **[v4.3.16-agent409439d](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.16-agent409439d)** — agent `4f1c1865`, package `4.3.16`. See
+[`docs/RELEASE-NOTES-4.3.16.md`](docs/RELEASE-NOTES-4.3.16.md) for what changed **and for the two
+upgrade paths that are not yet tested**.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.14-1.agent5634f905a8dd.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.14-agent5634f90/qubes-windows-tools-ng-4.3.14-1.agent5634f905a8dd.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
-| [`qwt-ng-4.3.14-agent5634f90.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.14-agent5634f90/qwt-ng-4.3.14-agent5634f90.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qwt-ng-4.3.14-agent5634f90-setup.tar.gz`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.14-agent5634f90/qwt-ng-4.3.14-agent5634f90-setup.tar.gz) | the same installer tree, if you would rather copy files in than mount a CD |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.14-agent5634f90/SHA256SUMS.txt) | checksums for all three |
+| [`qubes-windows-tools-ng-4.3.16-1.agent4f1c1865351e.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.16-agent409439d/qubes-windows-tools-ng-4.3.16-1.agent4f1c1865351e.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.16-agent409439d/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.16-agent409439d/SHA256SUMS.txt) | checksums for both |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.14-1.agent5634f905a8dd.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.16-1.agent4f1c1865351e.noarch.rpm
 ```
+
+With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
+hands the guest exactly this ISO as a CD.
 
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
