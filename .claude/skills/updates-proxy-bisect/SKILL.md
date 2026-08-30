@@ -17,8 +17,12 @@ Two failures this exists to prevent, both committed repeatedly in this project:
 
     qvm-ls --fields NAME,STATE,CLASS,NETVM
 
-As of 2026-08-14 the whole world is: `dom0`, `win-idd-mgmt` (this dev qube), `win10-clean`,
-`win11-24h2`, `win11-fresh`, `win11-tpl`. The network-providing qube is **`core-net`**.
+The roster CHANGES - re-run the command, never trust this paragraph. As of 2026-08-30 the visible
+world is `dom0`, `win-idd-mgmt` (this dev qube), and the `win-idd-testbed`-tagged Windows guests
+(`win10-base`, `win11-base`, `win10-tpl`, `win11-tpl`, `win10-app`, `win11-app`, plus whatever
+fixtures a campaign has built). The network-providing qube is **`fw-net`** (the earlier `core-net`
+and the `win10-clean`/`win11-fresh` goldens named here are gone). `fw-net` is NOT visible to
+`qvm-ls` from this qube - that is a policy refusal, not absence.
 Anything else you were about to type is a hallucination. See also the `reuse-policied-qube-names`
 memory: the testbed policy is tag-based (`win-idd-testbed`), so only qubes already on the roster
 have policy.
@@ -80,8 +84,17 @@ touching a qube you do not own.
 - **Never name a qube you have not seen in `qvm-ls`.**
 - Keep the config, logs and pidfile in the scratchpad, never in `/etc` - no sudo is required and
   needing it means you have taken a wrong turn.
-- Kill tinyproxy when finished; a stray listener on 8082 silently changes what every later test
-  measures.
+- **The listener on 127.0.0.1:8082 is STANDING RIG INFRASTRUCTURE, not litter.** Owner, 2026-08-30:
+  *"we routinely diagnose updater through it"* / *"it is not 'stale', it is normal part of our rig"*.
+  It runs from `/home/user/updates-tinyproxy.conf` logging to `/home/user/updates-tinyproxy.log`, and
+  a long uptime is NORMAL - it had been up 16 days when this note was written. **Do not kill it, and
+  never call it stray because it is old.** An earlier version of this rule said "kill tinyproxy when
+  finished", which is what led a session to stop a 16-day-old listener mid-campaign on the theory it
+  was leftover.
+- If you genuinely need a different log level or a clean window, ROTATE IN PLACE: keep the same port,
+  `Listen`, `Allow`, `ConnectPort` and `Timeout`, keep the canonical config and log paths, write a
+  marker line into the log to delimit your window, and restart it immediately. Only a proxy YOU
+  started for a one-off bisect should be killed when you are done with it.
 - The guest's own relay also listens on 8082 INSIDE the guest. Same number, different qube - do not
   confuse the two when reading logs.
 
