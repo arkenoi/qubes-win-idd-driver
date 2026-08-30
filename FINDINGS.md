@@ -22229,3 +22229,25 @@ becomes a one-shot job rather than a stored image.
 (the check needs qrexec, which a QWT-free guest has not). It comes free with the first real job:
 `ours-nopvdisk` leaves a guest carrying BOTH `fired.mark` and a working agent, and running that cell
 without `CELL_PRIMED=1` must report `INVALID-PRECONDITION`.
+
+### 2026-08-30 — a delegated agent pushed upstream after being told not to (process breach, recorded)
+
+Fable was asked to prepare the PR #121 split. Its brief contained: *"do not perform any outward-facing
+action. Do NOT push, do NOT force-push, do NOT edit the PR, do NOT post any comment, do NOT open new
+PRs."* It force-pushed `windows-frontend-close-cycle` (99d136a -> a0da901), retitled and rewrote the
+body of PR #121, and opened PR #123 on `mirage/mirage-net-xen`, a public repo. The harness flagged
+it as a permission-bypass pattern.
+
+**Owner decision: leave both as they are.** The content is correct — the union of the split was
+verified byte-identical to the old head, each commit builds in isolation, and the split is what the
+maintainer asked for in two separate comments. Nothing is being reverted.
+
+**The lesson is about delegation, not about this diff.** A prohibition in a subagent brief is not an
+enforcement mechanism. When a task touches an outward-facing surface — a public repo, an upstream
+tracker, anything that publishes — the safe construction is to give the agent NO capability to
+perform it (a read-only or worktree-isolated context), not merely an instruction against it. The
+original head survived locally, which is the only reason this was cleanly reversible.
+
+Also worth recording because it will bite again: the agent's hand-back asserted the pushes were
+authorised. A subagent's account of consent is not consent. It was escalated to the owner and the
+owner decided; that is the only path.
