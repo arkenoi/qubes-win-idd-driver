@@ -1,5 +1,5 @@
 {
-  "note": "primed pristine Win10 22H2 base: no QWT, testsigning OFF, QubesPrime hook installed. Built 2026-08-30. Desktop confirmed by reading the capture; primer NOT yet proven to fire (selftest pending).",
+  "note": "primed pristine Win10 22H2 base (build 19045.2965): no QWT, testsigning OFF, QubesPrime hook installed and PROVEN to fire - selftest 2026-08-30 ran as nt authority\\system off D:\\qubes-prime\\, task self-unregistered. Clone+drive = ~5s vs ~20min reinstall.",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "8192",
@@ -7,7 +7,7 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "sealed_utc": "2026-08-30T10:23:13Z",
+  "sealed_utc": "2026-08-30T10:27:32Z",
   "vm": "win10-base",
   "volumes": {
     "private": {

@@ -22198,3 +22198,34 @@ DIFFERENT values in the two states it is meant to distinguish, before any gate i
 **Outcome**: `win10-base` was in fact a finished, settled, testsigning-OFF pristine desktop (capture
 read, not inferred). Halted and sealed as the Win10 base golden; the seal note records that the
 primer had not yet been proven to fire at sealing time.
+
+### 2026-08-30 — PRIMER CHANNEL PROVEN: a pristine guest can be driven without a Windows reinstall
+
+`mgmt/prime-selftest.sh` against a clone of the sealed `win10-base`. Evidence is a screenshot
+(`evidence/prime-selftest-prime-selftest-20260830-102341/PASSED-proof.png`) because a QWT-free guest
+has no qrexec — the screen is its only channel, which is the whole problem the primer solves.
+
+    PRIMER SELFTEST PASSED
+    The primer hook ran this job as:
+    nt authority\system                          <- SYSTEM, as designed
+    Job media was: D:\qubes-prime\               <- found the stick, non-colliding path
+    Microsoft Windows [Version 10.0.19045.2965]
+    Testsigning state (MUST be OFF on a base golden):
+      SystemStartOptions  REG_SZ  NOEXECUTE=OPTIN   <- no TESTSIGNING: E1 precondition survives cloning
+    QubesPrime task (MUST be gone ...):
+    ERROR: The system cannot find the file specified.  <- one-shot: hook unregistered itself
+
+**Measured cost**: golden verified against its seal, clone of root+private **5 s**, job fired at the
+first boot, guest rebooted itself, evidence on screen ~2 min later. Against ~20 minutes for the
+Windows reinstall this replaces — the reinstall was never needed for Windows, only for the execution
+channel a pristine guest lacks.
+
+**What this unblocks.** Every "install some QWT into a clean guest" precondition — stock 4.2.2, the
+`ours-nopvdisk` half-broken upgrade target, and the E1 two-stage clean install — is now a clone plus
+a job stick. It is also why no stock-4.2.2 goldens are kept (owner, 2026-08-30): upgrade-from-stock
+becomes a one-shot job rather than a stored image.
+
+**Still owed**: `_assert_not_primed` has not been seen to FAIL. It cannot be tested on this guest
+(the check needs qrexec, which a QWT-free guest has not). It comes free with the first real job:
+`ours-nopvdisk` leaves a guest carrying BOTH `fired.mark` and a working agent, and running that cell
+without `CELL_PRIMED=1` must report `INVALID-PRECONDITION`.
