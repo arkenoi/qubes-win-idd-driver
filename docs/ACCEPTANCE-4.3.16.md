@@ -177,6 +177,43 @@ Had the harness been trusted, this campaign would have reported three fabricated
 
 ---
 
+## GAP CLOSURE PASS (2026-08-31) — every FAIL / INVALID / INCONCLUSIVE closed
+
+Starting state: 31 gaps. Ending state: **one**, and it needs a dom0 action.
+
+| cell | closed how |
+|---|---|
+| **SG6 fail-proof** | EARNED. Planted the 2026-08-28 defect (AutoAdminLogon=0 + guard task deleted) and cold-booted: `sessions=0, explorer=0, logonui=1`, qrexec answering. Its five positive checks now emit plain `PASS`. |
+| **SG2 / SG4** | Exercised for the first time this campaign, containment finally provable. |
+| **SG1** (5 checks) | 4–6 dom0 samples spanning a PROVEN cold boot, 0 windows ≥99% of screen, capture proven alive after; `QGADESK secure-desktop ENTERED/LEFT` + `QGADESKSTUCK 0`; `PromptOnSecureDesktop=0`. Also passes on win11-tpl. |
+| **RND-3** | Menus are SYNTHESIZED onto their owner, not mapped: 2 `msg=SYNTH`, 3 `#32768` surfaces, owner pixels changed. |
+| **RND-4 / SG7** | 83 detector samples; dom0 override-redirect 0→1, window `"New notification"`. |
+| **RND-8** | 3 modes followed (guest AND agent), pixels changed after each; keyed-mutex abandonments all recovered, 0 thread deaths. |
+| **U1** | 3/3 scans on `win11-tpl`: 1 update offered, reported to dom0 exit 0, confirmed dom0-side (`updates-available=1`). |
+| **U2** | Proven cold boot of a template with the scan armed and the debounce cleared: `class_correct=true`, **`qdb_retry_evidence=true`** — the fix exercised for the first time. |
+
+**The one remaining gap — needs the owner, in dom0.** `RND-8 / dom0-driven-resize` is `BLOCKED`:
+`local.WinResize` returns `err=no_window` while `local.WinScreenshot` returns windows for the same
+VM **in the same second**, and `local.WinFullScreen` lists them too. All three read the same X
+session; the first two prove `xprop`, `import` and `xwininfo` all work in dom0, so the fault is
+inside the installed resize service itself. `dom0/10-install-resize-service.sh` v5 distinguishes
+`empty_client_list` / `no_window` / `geometry_unreadable`, but **dom0 must reinstall it** before that
+half of RND-8 — the path a user actually drives by dragging the qube window — can be graded.
+
+### Nine wrong verdicts, zero product defects
+Every "failure" this pass hit was the instrument. SG3 FAIL (a window the agent had MAPped); SG2/SG4
+FAIL (my launcher's own console window counted as a leak); RND-3 FAIL twice (wrong criterion, then a
+stale toast holding focus); RND-4 vacuous twice (killed sampler, then split arguments); SG6 NOT-RED
+(the command echo counted as a running process); U2 vacuous twice (my own disarm, then my own
+debounce). The corrections are in protocol §0.8b as standing rules rather than notes attached to
+whichever cell exposed them.
+
+Two product claims in the project's own docs were also falsified and corrected: menus "map as o-r
+popups" (they are synthesized), and the Phase-2B "PREREQUISITE BUG" that the capture thread dies on
+`0x887a0026` (12 abandonments, 27 recoveries, **0** thread deaths, pixels resumed every time).
+
+---
+
 ## What is NOT covered, stated plainly
 
 - **U1 — availability to dom0.** Blocked by the defect above, in THIS campaign.
