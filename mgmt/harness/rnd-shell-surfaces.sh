@@ -131,6 +131,24 @@ echo "$st" | grep -qa '"detector_fires":true' || {
   log "FATAL: the surface detector did not fire on its own self-test; nothing it reports can be"
   log "       trusted in either direction. Refusing to grade."; exit 2; }
 
+# ------------------------------------------------------------------ SCENE RESET
+# fire-toast raises a PERSISTENT reminder toast: it stays until dismissed and SURVIVES BETWEEN RUNS.
+# Measured 2026-08-31, twice: a toast left over from the previous run was on screen at baseline
+# (override_redirect=1 before anything had been fired). It held focus, so the menu cell's Alt+F never
+# reached Notepad; and it made RND-4's delta check read 1->1 and report FAIL for a toast that had in
+# fact appeared. Restarting ShellExperienceHost dismisses everything it owns and it respawns on
+# demand, so the run starts from a known scene instead of inheriting the last one.
+log "=== scene reset: dismiss any leftover notifications ==="
+r 'cmd /c taskkill /f /im ShellExperienceHost.exe & taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
+sleep 8
+geom > "$TMP/gr.txt"; pre=$(parse_geom "$TMP/gr.txt"); preo=$(echo "$pre" | cut -d'|' -f2)
+log "  after reset: total=${pre%%|*} override_redirect=$preo"
+if [ "${preo:-0}" -ne 0 ]; then
+  log "FATAL: an override-redirect surface is STILL on screen after the reset, so neither cell can"
+  log "       measure a delta. Refusing to grade rather than reporting against a dirty scene."
+  exit 2
+fi
+
 geom > "$TMP/g0.txt"; base=$(parse_geom "$TMP/g0.txt"); baseo=$(echo "$base" | cut -d'|' -f2)
 log "  baseline dom0 list: total=${base%%|*} override_redirect=$baseo"
 
