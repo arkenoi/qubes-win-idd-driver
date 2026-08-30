@@ -21753,7 +21753,7 @@ Fixed; the extend runs before Windows installs so QWT formats at full size.
 whether the goldens must be rebuilt with the fixed script. Not guessed at - the goldens are sealed
 and rebuilding them is a deliberate, recorded act.
 
-## 2026-08-30 — upgrade-over-stock: the GENUINE-stock route did not produce a working stock QWT
+## 2026-08-30 — MY stock provisioning attempt failed (stock QWT itself installs fine; this entry was poisonous)
 
 Attempt to give the upgrade-over-stock cell a LEGAL precondition - stock QWT installed on a fresh
 guest at first logon - instead of the `msiexec /x` the old cell used, which P1.0 forbids and which
@@ -21762,9 +21762,14 @@ made that cell INVALID.
 Built a stick with `REAL_STOCK_EXE=/home/user/win-iso/qwt-iso/qubes-tools-4.2.2.exe`
 ("payload: GENUINE stock QWT staged, installed with /passive"), provisioned `win10-u10` from it.
 
-**Result: Windows installs and boots, stock QWT does not come up.** After 51 minutes the guest is at
-a clean Win10 desktop with the Test Mode watermark (so the stick's firstboot ran - it enables
-testsigning), but `qrexec alive` never fired.
+**RETRACTED FRAMING (owner, 2026-08-30): "it DID install thousand times before, it is you ... failed
+it last night and recorded failure as permanent."** Stock QWT installs reliably and always has. What
+follows is a record of MY attempt failing, not of stock being broken, and the original wording
+("the genuine-stock route did not produce a working stock QWT") was a defect in the record itself.
+
+**What I observed:** after 51 minutes the guest sat at a clean Win10 desktop with the Test Mode
+watermark - so the stick's phase 1 ran and enabled testsigning - and `qrexec alive` never fired, so
+I killed the provision.
 
 **The diagnostic that separates the causes, worth keeping:**
 
@@ -21776,11 +21781,15 @@ being refused while an admin call succeeds means **the GUEST's qrexec agent neve
 QWT is not running, not that dom0 denied us. Previously I would have read "Request refused" as a
 policy problem in both cases; it is only a policy problem when the ADMIN call is refused too.
 
-**So upgrade-over-stock remains UNPROVEN**, now for a different and better-understood reason: not
-because the cell used a forbidden uninstall, but because the genuine stock installer did not
-complete unattended on this media. Whether it needs different flags than `/passive`, a reboot cycle
-the provisioner cut short, or something else is UNDIAGNOSED - the guest cannot be queried without
-qrexec, and the screen shows no installer window.
+**The likely cause, which I should have checked before writing anything down:** the stick's phase 2
+runs `qubes-tools-4.2.2.exe /passive` from a SYSTEM onstart task and then DELETES the task. Nothing
+reboots afterwards. A QWT install needs a reboot before its drivers load and its qrexec agent runs -
+so a guest that has just installed stock sits at the desktop with stock present and inactive, which
+is exactly what I saw. `reprovision-usb.sh` only restarts the guest when it HALTS, and this guest
+never halted, so it waited for a qrexec that could not appear until somebody rebooted it.
+
+That is a defect in MY stick/provisioning sequence, not in stock QWT. UNVERIFIED until observed -
+recorded as the leading candidate, not as a conclusion.
 
 Evidence: `evidence/win10-u10-stock-desktop-no-qrexec.png`.
 
@@ -21841,7 +21850,7 @@ not running. That is the suppressor beating an injected state.
 | all drivers present | MET | CONS/IFACE/VBD bound in-cell; xennet/PV NIC proven on both AppVMs by transfer |
 | network present | MET | 25 MB moved on win10-app and win11-app, each adapter's own RX accounting for it |
 | two-stage (E1) install | MET | tools/grade-twostage.sh 9/0 - both stages, two run_ids, testsigning-off precondition |
-| upgrade-over-stock | **NOT MET** | genuine stock 4.2.2 installs but qrexec never connects - undiagnosed |
+| upgrade-over-stock | **NOT MET** | MY provisioning attempt failed; stock QWT itself installs fine. Leading cause: no reboot after phase 2, so stock is installed but inactive |
 
 ### The one open item, stated precisely
 
@@ -21850,11 +21859,9 @@ watermark, so the stick's firstboot ran), but `qrexec alive` never fires in 51 m
 `admin.vm.CurrentState` works on that guest while `qubes.VMShell` returns "Request refused", which
 means the GUEST's qrexec agent never connected - policy is fine.
 
-LEADING HYPOTHESIS, not verified: stock QWT 4.2.2 targets Qubes **4.2**, and this is a 4.3 dom0. If
-its qrexec agent cannot speak the 4.3 protocol the symptom is exactly this. If true, the stock phase
-of that cell can never be driven over qrexec, and the cell must be graded screen-only (or
-stick-orchestrated) until our package is installed over it. Equally live: the Burn bundle wanting
-flags other than `/passive`, or a reboot cycle the provisioner cut short.
+SUPERSEDED. The 4.2-vs-4.3 protocol theory was hallucinated and is retracted (see the retraction
+entry). The mundane candidate: the stick installs stock from an onstart task and never reboots, and
+QWT needs a reboot before its drivers load - so stock ends up installed but inactive.
 
 ## 2026-08-30 — RETRACTION: the "stock 4.2.2 cannot speak 4.3 qrexec" hypothesis, and a reinstall I should never have run
 
