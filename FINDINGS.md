@@ -21813,3 +21813,45 @@ reported "no devnode found" for ALL FOUR drivers on a guest where three were dem
 Four-for-four failure is a broken probe, not four broken drivers - verified directly before
 reporting anything. This is the same species as the five earlier checks-that-cannot-fail; the
 difference is it was caught in the same minute rather than after a campaign.
+
+## 2026-08-30 — FINAL CAMPAIGN 20260830-062519: 36 passed, 0 failed, all assertions live
+
+Release 6022427 (4.3.16), sealed goldens verified intact before AND after, Gate-0 payload, one
+Windows guest at a time enforced by the harness.
+
+    WIN10-fresh-1stage  7/7      WIN11-fresh-1stage  7/7
+    WIN10-seeded        8/8      WIN11-seeded        8/8
+    WIN10-appvm         3/3      WIN11-appvm         3/3      = 36 passed, 0 failed
+
+Every install cell now asserts all seven: session, agent==release (hash-compared), **no premature
+reboot dialog with the watcher proving it looked**, **PV console bound (CONS err=0 svc=xencons)**,
+autologon armed, xenbus_monitor disabled by the shipped INF, xenbus_monitor not running.
+
+The seeded cells add an eighth (monitor armed, Request lands mid-MSI) and are the load-bearing
+result: with xenbus_monitor armed to auto-start and a pending PV reboot Request written MID-MSI,
+both guests came back, kept the release binary, showed no dialog, and left the monitor disabled and
+not running. That is the suppressor beating an injected state.
+
+### Criteria status against the goal
+
+| criterion | status | evidence |
+|---|---|---|
+| 6 cells, no regressions | MET | this campaign, 36/0 |
+| premature reboot dialogs gone | MET | watched in all 4 install cells incl. both seeded; detector fail-proof on record |
+| all drivers present | MET | CONS/IFACE/VBD bound in-cell; xennet/PV NIC proven on both AppVMs by transfer |
+| network present | MET | 25 MB moved on win10-app and win11-app, each adapter's own RX accounting for it |
+| two-stage (E1) install | MET | tools/grade-twostage.sh 9/0 - both stages, two run_ids, testsigning-off precondition |
+| upgrade-over-stock | **NOT MET** | genuine stock 4.2.2 installs but qrexec never connects - undiagnosed |
+
+### The one open item, stated precisely
+
+`REAL_STOCK_EXE=qubes-tools-4.2.2.exe` provisions Windows and reaches a desktop (Test Mode
+watermark, so the stick's firstboot ran), but `qrexec alive` never fires in 51 minutes.
+`admin.vm.CurrentState` works on that guest while `qubes.VMShell` returns "Request refused", which
+means the GUEST's qrexec agent never connected - policy is fine.
+
+LEADING HYPOTHESIS, not verified: stock QWT 4.2.2 targets Qubes **4.2**, and this is a 4.3 dom0. If
+its qrexec agent cannot speak the 4.3 protocol the symptom is exactly this. If true, the stock phase
+of that cell can never be driven over qrexec, and the cell must be graded screen-only (or
+stick-orchestrated) until our package is installed over it. Equally live: the Burn bundle wanting
+flags other than `/passive`, or a reboot cycle the provisioner cut short.
