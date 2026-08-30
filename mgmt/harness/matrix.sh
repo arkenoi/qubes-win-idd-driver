@@ -173,10 +173,23 @@ run_install(){ # $1=vm $2=label $3=payload-dir $4=extra-args
   # that build's RESULT as this cell's. Deleting and hoping is how a cell grades someone else's
   # install.
   QTEST_VM=$vm qrun "cmd /c del /f /q $GLOG 2>nul & del /f /q C:\\qwt-install.log 2>nul & echo CLEARED" >/dev/null 2>&1
-  local left
-  left=$(QTEST_VM=$vm qrun "cmd /c if exist $GLOG (echo STILLTHERE) else (echo GONE)" 2>/dev/null | tr -d '\r' | grep -ao 'STILLTHERE\|GONE' | head -1)
+  # RETRY THE CLEAR. Boot-time tasks append to this same log - the autologon guard's re-assert
+  # writes its banner there, which is how the golden's own log came to contain
+  # "[INFO]   === RESULT === changed=0 warnings=0". Immediately after a clone boots, the delete
+  # therefore races that writer and the file reappears. Measured 2026-08-30: the first attempt
+  # returned STILLTHERE on a freshly booted clone. Retry until the writer is done, then verify -
+  # and refuse only if it genuinely cannot be cleared, because a stale log WOULD be judged as this
+  # cell's result.
+  local left a
+  for a in 1 2 3 4 5; do
+    QTEST_VM=$vm qrun "cmd /c del /f /q $GLOG 2>nul & echo CLEARED" >/dev/null 2>&1
+    left=$(QTEST_VM=$vm qrun "cmd /c if exist $GLOG (echo STILLTHERE) else (echo GONE)" 2>/dev/null | tr -d '\r' | grep -ao 'STILLTHERE\|GONE' | head -1)
+    [ "$left" = GONE ] && break
+    say "  $lbl: $GLOG still present after clear attempt $a (a boot task is writing it) - retrying"
+    sleep 15
+  done
   if [ "$left" != GONE ]; then
-    no "$lbl: could not clear $GLOG (got '${left:-no answer}') - refusing to run, a stale log would be judged as this cell's"
+    no "$lbl: could not clear $GLOG after 5 attempts (got '${left:-no answer}') - refusing to run, a stale log would be judged as this cell's"
     return 1
   fi
   QTEST_VM=$vm qrun "cmd /c start \"\" /min C:\\$d\\install.cmd /auto /autologon:qubes $extra" >/dev/null 2>&1
