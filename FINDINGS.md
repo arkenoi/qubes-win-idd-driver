@@ -22660,3 +22660,62 @@ right for the wrong reason — exactly the kind of accidental PASS this protocol
 
 **D3 (Win11 true-stock stage) is being settled by running it** rather than carried as
 `N/A-by-design`: the stock prime job is OS-agnostic, so C4.11 costs one fixture build.
+
+## 2026-08-30 — P2 (networking) COMPLETE on both OSes, and three instruments were lying
+
+NET-0 through NET-4 plus NET-6, all PASS. Headline results:
+
+| cell | result |
+|---|---|
+| NET-2 (AppVM live attach) | PV NIC bound, **`LastBootUpTime` byte-identical across the attach — ZERO reboots**, emulated adapter gone |
+| NET-3 (traffic) | 25,000,000 B received, **PV rx delta 25,240,896 (Win10) / 28,195,642 (Win11)** — the XENVIF adapter's own counter accounts for the bytes; `loopback_present=false` |
+| NET-4 (3-boot soak) | **3/3**: PV bound, `EMULATED_LEFT=0`, real qubesdb IP `10.137.0.64`, `APIPA 0`, default route on the PV adapter, 5 MB smoke each, `LastBootUpTime` advancing exactly once per boot |
+| NET-6 (first vif) | **`samples=141, dialogs_seen=0, blind_samples=0, coverage_gaps=[]`** on `win10-c1`; 148 samples on `win11-app`. Vif demonstrably appeared (`XENVIF_DEVICES 0 -> 1`), zero reboots |
+
+**fw-net was confirmed BY MEASUREMENT, not by asking.** It is invisible to `qvm-ls` from here (policy,
+not absence), so rather than treat it as an owner dependency the traffic itself is the proof: 25 MB
+crossed the PV NIC and that adapter's own counter accounts for it.
+
+### Defect 1 — the reboot-dialog watcher has NEVER sampled in a matrix cell
+
+`run_install` arms it as `-Minutes 45`. The script's parameters are `OutFile`, `IntervalSeconds`,
+`DurationSeconds`, `Summary`, `SelfTest` — **there is no `-Minutes`**, so PowerShell rejected the
+unknown parameter and the watcher exited instantly, every time, writing no log.
+
+Invisible because it is launched with `start /min` and its output goes nowhere. The cell then
+reported *"watcher produced NO summary — INVALID"*, which fails closed, so it never produced a false
+PASS — but the dialog criterion **could not be met by any cell that ran it**. `-SelfTest` was
+unaffected and does fire, which is exactly why the instrument looked healthy. Fixed to
+`-DurationSeconds 2700`; the same run then produced 141 and 148 continuous samples.
+
+### Defect 2 — an AppVM's private volume keeps a 2 GB partition forever
+
+Both AppVMs came up `QUSERS_NO` with `D:` at 2,130,636,800 bytes, so `qubes.Filecopy` could not
+resolve Documents and every `qtest push` failed. An AppVM's private volume is its OWN — repointing
+the template does not touch it, and **extending it at the Qubes layer does not repartition an
+already-formatted disk**. Recreating the AppVM fixes it: the fresh volume is formatted by QWT at
+full size (`Q:` 20 GB, `Q:\Users` present). Recorded because "extend the volume" is the obvious and
+wrong fix.
+
+### Defect 3 — `qvm-prefs netvm` reported failure AND removed the vif
+
+`qvm-prefs win10-app netvm ''` on a running guest returned *"Failed to access 'netvm' property"*, and
+re-reading showed `netvm` still `fw-net` — so by the documented rule (rig-capabilities: *"has
+reported failure while the write took effect ... re-read the property"*) it looked like a no-op.
+It was not: the guest's PV NIC **vanished** — `ALL_ADAPTERS` empty, no IPv4, no default route, only
+the `DEV_VIF` parent left — between a successful 25 MB transfer and two minutes later.
+
+So the failure is worse than the recorded one: the property re-read agrees with the pre-write value
+while the backend has already detached the vif, leaving property and reality inconsistent. Recovery
+is a halt, re-assert, and boot. **Attaching** a netvm to a running guest with none works (that is
+NET-2 and it is proven); **changing or clearing** one on a running guest is refused here. NET-5
+(live detach/reattach) is therefore not runnable from this qube — it is TIER-C, so out of TIER-B's
+scope, and it is recorded rather than quietly skipped.
+
+### Defect 4 (mine) — arming a watcher against a script that was never pushed
+
+The first Win11 attempt armed the watcher and read a summary while `reboot-dialog-watch.ps1` was not
+on the guest: the `pushrun` right after boot failed silently (the `rc=46` transient `matrix.sh`
+already retries) and my driver had no retry, so it "ran" a cell that never observed anything. Now it
+retries the push and **hard-fails if `detector_fires` is not proven in that session** — a negative
+from an unproven detector is vacuous by H2, and must not be gradeable.
