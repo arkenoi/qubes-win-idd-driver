@@ -60,9 +60,14 @@ function Get-Surfaces {
         if ([SurfEnum]::IsWindowVisible($h)) {
             $t = New-Object Text.StringBuilder 512; [void][SurfEnum]::GetWindowTextW($h, $t, 512)
             $c = New-Object Text.StringBuilder 512; [void][SurfEnum]::GetClassNameW($h, $c, 512)
-            $pid = 0; [void][SurfEnum]::GetWindowThreadProcessId($h, [ref]$pid)
+            # $pid IS A POWERSHELL AUTOMATIC VARIABLE (the CURRENT process id) and is effectively
+            # read-only for this purpose: writing to it via [ref] silently does not take, so
+            # Get-Process -Id $pid returned the SAMPLER'S OWN process for every window. First run
+            # reported proc=powershell for Shell_TrayWnd, Progman and ShellExperienceHost alike -
+            # obviously impossible, which is the only reason it was caught. Use a distinct name.
+            $wpid = 0; [void][SurfEnum]::GetWindowThreadProcessId($h, [ref]$wpid)
             $pn = ''
-            try { $pn = (Get-Process -Id $pid -ErrorAction Stop).ProcessName } catch { $pn = '?' }
+            try { $pn = (Get-Process -Id $wpid -ErrorAction Stop).ProcessName } catch { $pn = '?' }
             $style = [SurfEnum]::GetWindowLongW($h, -16)
             $ex    = [SurfEnum]::GetWindowLongW($h, -20)
             $r = New-Object SurfEnum+RECT; [void][SurfEnum]::GetWindowRect($h, [ref]$r)
@@ -74,6 +79,7 @@ function Get-Surfaces {
                 cls     = $c.ToString()
                 title   = $t.ToString()
                 proc    = $pn
+                pid     = $wpid
                 style   = ('0x{0:X8}' -f $style)
                 ex      = ('0x{0:X8}' -f $ex)
                 rect    = ('{0},{1} {2}x{3}' -f $r.L, $r.T, ($r.R-$r.L), ($r.B-$r.T))
