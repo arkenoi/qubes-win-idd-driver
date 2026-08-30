@@ -22932,3 +22932,51 @@ resolution ... so even a broken gate maps a bounded 1600x900 bordered window") a
 it. Any cell that maps a window at or near host size must either set a sub-host guest resolution
 first, or be scheduled with the owner. Recorded as a standing precondition, not as a one-off
 apology.
+
+## 2026-08-30 — P5: SG1 and SG6 PASS; SG2/SG4 blocked because SG0.2 containment does not survive a boot
+
+**SG1 (Mode 1 — the boot/shutdown/logon screen is never shown) PASSES**, with a genuine vacuity
+guard rather than an absence:
+
+    SG1_FULLSCREEN_SEEN=0
+    QGADESK secure-desktop ENTERED (input desktop 'Winlogon') - window mapping suppressed
+    AddAllWindows: suppressed: secure desktop is active
+    ApplyGuestShadows: no shell window; cannot disable guest shadows
+    ProcessNewFrame: secure desktop left after 5 s - resuming with a full resync
+    ApplyUacPromptPolicy: PromptOnSecureDesktop=0
+
+The secure desktop was genuinely entered and mapping genuinely suppressed, so "nothing fullscreen
+appeared" is a filter result and not a run that saw nothing.
+
+**SG6 (autologon) PASSES** on every product criterion: `AutoAdminLogon=1`, `DefaultUserName=user`,
+**`AutoLogonCount` ABSENT** (its presence would mean the password is being consumed toward lockout),
+registry `DefaultPassword` ABSENT by design (the credential is the LSA secret), `QubesAutologonGuard`
+registered and Ready, and one window mapped after autologon — the invisible-guest regression absent.
+
+### SG2/SG4 are INVALID-PRECONDITION, and the reason is a protocol gap
+
+I sized the probes to 1600x900 after setting that resolution pre-reboot. The trace then showed
+captionless and override-redirect 1600x900 windows being MAPped with `service.gui-fullscreen` off,
+which reads as a serious Mode-2/Mode-4 gate failure. **It is not one**, and the owner named the
+reason immediately: *"because it knows it does not match dom0 geometry?"* Exactly —
+
+    HandleXconf: host resolution: 5120x1440
+    SetVideoMode: RESREQ 5120x1440 src=lastapplied
+    ResolutionAdoptCurrent: RESDRIFT believed=0x0 actual=5120x1440 - adopting the actual mode
+
+**The agent re-applies dom0's geometry at startup.** A resolution set before the reboot does not
+survive it. By probe time the screen was 5120x1440 and a 1600x900 window is 31% of it — correctly
+not fullscreen-sized, correctly mapped as an ordinary window. The gate was never exercised, so this
+is neither a pass nor a fail: the cell did not run.
+
+**The protocol gap:** SG0.2 prescribes running the fullscreen-gate cells at a sub-host guest
+resolution as containment, but does not say the containment must be established AFTER the agent has
+settled and verified against **the agent's believed screen size**, not merely against
+`Win32_VideoController`. Set before a reboot, it is silently undone.
+
+**Why SG2/SG4 were not simply re-run at 5120x1440:** if the gate did fail, that puts a genuine
+full-screen window on the owner's display — the harm already caused once today. Containment first is
+not optional. `set-resolution.ps1` is broken (recorded separately) and `qtest resize` returns
+`GEOM ok=0 err=no_window` with no window mapped, so containment is currently unreachable; both are
+the owed fix, and SG2/SG4 are blocked behind them rather than being run unsafely or scored
+optimistically.
