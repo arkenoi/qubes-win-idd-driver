@@ -760,6 +760,184 @@ sampler's own process; a `bitsadmin` state was first read from the string values
 `DefaultConnectionSettings` blob; `Marshal::SizeOf` silently returned nothing and `[int16]` of it
 produced a plausible 124.
 
+### 0.10 RUNBOOK — P3 (updates), step by step
+
+*Subject: a TEMPLATE (netvm=''). Every step names its command, its expected output, and what to do
+when it fails. Part II §7 remains the authority on what each cell means.*
+
+**P3-1. Own the proxy backend.** The guest reaches the internet only through
+`qubes.UpdatesProxy`, which on this rig is served by THIS qube: `/etc/qubes-rpc/qubes.UpdatesProxy`
+is a symlink to `/dev/tcp/127.0.0.1/8082`, and a tinyproxy runs there **permanently** from
+`/home/user/updates-tinyproxy.conf`.
+
+    ss -ltnp | grep 8082          # expect: tinyproxy LISTENING
+
+*It is standing rig infrastructure — a long uptime is normal.* **Do not kill it.** If you need a
+clean evidence window, append a marker line to `/home/user/updates-tinyproxy.log` and slice from
+there; if you need `LogLevel Connect`, change it in the canonical config and restart in place.
+*On absence:* start tinyproxy from the canonical config — never invent a second proxy on another port.
+
+**P3-2. U0 — deploy state, read-only.** Push and run:
+
+    tools/qtest pushrun guest/wu-verify-stack.ps1        # hashes of the deployed stack
+    tools/qtest pushrun <task/policy probe>              # task shapes + policy + offline baseline
+
+*Expect:* `QubesWindowsUpdateScan` boot PT2M + PT6H repeat, SYSTEM, `-Scheduled`;
+`Run`/`Download` with **no triggers** and no `-Scheduled`; `QubesAutologonGuard` boot PT30S;
+`NoAutoUpdate=1`; `ExcludeWUDriversInQualityUpdate=1`; no relay process; winhttp Direct.
+**Compare the stack hashes against the SHIPPED PAYLOAD, not the repo** — the build rewrites LF to
+CRLF, so a raw repo comparison always "differs" (measured: 4 of 5 files, purely line endings).
+
+**P3-3. U1 — availability to dom0.** Kick the scan **detached**, never through a live pushrun:
+
+    tools/qtest run 'cmd /c schtasks /run /tn QubesWindowsUpdateScan'
+
+then poll `C:\ProgramData\Qubes\update-status.json` every 30 s. *Expect* phases
+`ensure-proxy → sync-revocation → scan → done`, `Sync-Revocation: 3/3 CTLs`, `available[]` populated,
+and — the dom0-observable half — `qvm-features <vm> updates-available` set.
+*The status file's fields are `testsigning_active` / `installed_qwt_count`, and PRECONDITION lines
+carry a `[INFO]` timestamp prefix while the RESULT trailer does not — do not anchor a grep with `^`
+on the former.*
+
+**P3-4. On a scan FAILURE — this is where a whole campaign was lost.** **G-0 applies: write the
+failure off BEFORE touching anything.**
+1. Record the H5 verdict line and copy out `update-status.json`, the agent log, the relay logs and
+   your own proxy log slice.
+2. **Change nothing on the guest.** No `SoftwareDistribution` rename, no proxy-plane experiment, no
+   reboot, no "just try one thing".
+3. **Clone the guest**, and diagnose on the clone with the reverse control in both directions (G-2).
+4. Per **G-0b** the original is out of service until rebuilt to its entry stage; anything run on it
+   before that rebuild is `INVALID-CONTAMINATED`.
+
+*Attribution aid, since both ends are yours:* if the CTL cabs appear in the proxy log but nothing
+else does, the WU COM searcher never dialled. **Do not "fix" that by re-enabling `Install-ViaWU`** —
+`FINDINGS:13513` records the content-class router that gates it off for netvm-free guests
+deliberately (G-5).
+
+**P3-5. U2 — the class matrix, witnessed by what CHANGED.** Run the agent with `-Action scan` on one
+guest of each class and read the new agent-log lines:
+
+| class | expect |
+|---|---|
+| TemplateVM | classified from qubesdb, runs the proxy pass |
+| AppVM | `not a template; updates are the template's business`, exit 0, **relay count 0**, `ProxyEnable 0` |
+| StandaloneVM + netvm | `updates ITSELF via Windows Update`, **`NoAutoUpdate` REMOVED**, relay 0 |
+
+Then the binding half: **classification must be proven on a COLD BOOT**
+(`wu-boot-acceptance-arm.ps1` → reboot → `wu-boot-acceptance-check.ps1`), because a live re-run
+clears the QdbDaemon startup race the cell exists to catch. *Expect* `rebooted:true`,
+`class_correct:true`, `saw_empty_class:false`, `qdb_retry_evidence:true`.
+
+**P3-6. Before recording anything as "we don't ship X":** run the same query on a **StandaloneVM with
+a netvm**, with `IsInstalled=0` and **no `Type` filter**. If stock does not offer it either, it is
+**not a defect** (§7, the standalone control). Dynamic Updates are already settled this way.
+
+---
+
+### 0.11 RUNBOOK — P4 (rendering + benchmarks), step by step
+
+**P4-1. DISARM THE UPDATE SCAN. First. Always.** Nothing else in this part may run until this
+passes — see G-0c.
+
+    mgmt/harness/p4-run.sh <vm>      # does the disarm, ASSERTS it, and re-enables on exit
+
+*Expect:* `SCAN_AFTER state=Disabled`, `RELAY_AFTER 0`, `DISARMED True`.
+*On failure:* **run nothing.** An unmeasured cell beats a bad number.
+**The trap:** cold-booting a guest and benchmarking within a few minutes lands the workload on the
+boot+PT2M scan. Measured 2026-08-30 — booted 17:52, scan due 17:54, BENCH started 17:53, guest
+wedged mid-benchmark, every number void.
+
+**P4-2. Confirm the subject.** `golden.sh fixture <vm>` (or `verify` for a sealed golden), agent
+hash == manifest, and tracing on via `qvm-features <vm> service.gui-agent-debug 1` — **never a
+registry poke**.
+
+**P4-3. BENCH-2 tripwire.** `guest/cpu-bench.ps1 -IdleSec 120`, **three runs**.
+*Expect:* idle CPU ≈ 0.08 s per 120 s or better (pre-fix control: 3.95 s).
+
+**P4-4. BENCH-1.** `tools/bench-agent.sh <label>` ×3, then `instrumentation/bench-phases.sh <label>`.
+**Scroll p50 is the only metric that may carry a verdict**; compare ONLY against the recorded
+canonical baselines (4.3.10 quiet-host set, 374–436 µs) — never an intra-day build. **Drag p50 is
+bimodal and gates nothing.** Commit the raw `instrumentation/bench-*.txt` files.
+*If a run returns nothing:* stop the part, preserve the guest (G-0), and check whether the agent is
+still alive before assuming a slow number.
+
+**P4-5. Pick the capture instrument PER CELL (RND-0b) — this is not a judgement call:**
+
+| subject | instrument |
+|---|---|
+| managed windows (RND-6/7/8, Start's "nothing maps") | `qtest shot` window count |
+| **override-redirect** (menus RND-3, toasts RND-4) | **`fullshot` + `winshot.py`** — `qtest shot` is structurally blind |
+| wobble / drag replay | QGAPROTO trace, never cross-VM capture |
+
+A `qtest shot` negative on an o-r subject is `INVALID-VACUOUS`. **Whole-desktop captures are read and
+DELETED in the same step** — they contain the owner's entire desktop.
+
+**P4-6. Drive shell UI as the interactive USER, not over qrexec (RND-0c).** qrexec runs as
+`NT AUTHORITY\SYSTEM` here; toasts, Start and shell flyouts are per-user and a SYSTEM-fired one
+renders for nobody.
+
+    schtasks /create /tn <t> /sc once /st 00:00 /ru user /rl LIMITED /it /f /tr "<cmd>"
+    schtasks /run /tn <t>
+
+**P4-7. Prove the detector before citing a negative (G-7).** `guest/surface-watch.ps1 -SelfTest`
+must report `detector_fires:true` **in the same session**; then sample continuously
+(`-DurationSeconds N -IntervalSeconds 1`) and read `-Summary`. `coverage_gaps` must be empty.
+
+---
+
+### 0.12 RUNBOOK — P5 (safeguards), step by step
+
+**P5-1. Read SG0 and obey it.** **Never set `service.gui-fullscreen`.** Every arm needing it ON is
+owner-attended and is listed `ATTENDED-PENDING` — never silently dropped.
+
+**P5-2. Disarm the update scan** exactly as P4-1. The SG cells drive the same qrexec/SendInput load.
+
+**P5-3. ESTABLISH CONTAINMENT — after the agent settles, and verify it against the AGENT.**
+The agent re-applies dom0's geometry at startup (`RESREQ … src=lastapplied`,
+`RESDRIFT … adopting the actual mode`), so **a resolution set before a reboot does not survive it**.
+
+    # boot, wait for the agent, THEN set a sub-host mode and read it back
+    tools/qtest run '<read Win32_VideoController>'          # the guest's view
+    <agent log>  HandleXconf / SetVideoMode / ResolutionAdoptCurrent   # the AGENT's view
+
+Both must agree on the sub-host size **before any fullscreen-gate probe is sized**. Measured
+2026-08-30: probes were built for 1600x900 while the agent had re-adopted 5120x1440, so they were
+31% of the screen, the gate was never exercised, and the cell was `INVALID-PRECONDITION` — while
+looking exactly like a serious gate failure.
+*`guest/set-resolution.ps1` is currently BROKEN (DEVMODE marshalling); use the product path —
+map a window, then `tools/qtest resize <WxH>`.*
+
+**P5-4. Run the "must not map" cells** (SG1 Mode-1, SG2 borderless, SG4 override-redirect, SG9
+Start, SG10 furniture). For each, the verdict needs **two** things: nothing mapped in dom0 **and**
+the agent's own deny line proving the surface existed and was evaluated. A silent absence is
+`INVALID-VACUOUS`.
+
+**P5-5. Run the "must map" cells** (SG3 maximized captioned window, SG7 toasts). These put windows on
+the OWNER'S DISPLAY — containment from P5-3 is what keeps them bounded, and a cell that maps at or
+near host size without it will steal focus mid-work.
+
+**P5-6. SG6 and its fail-proof.** Positive: `AutoAdminLogon=1`, **`AutoLogonCount` ABSENT**, registry
+`DefaultPassword` absent (the credential is the LSA secret), guard task Ready, windows map after a
+cold boot. Fail-proof: `mgmt/harness/sg6-failproof.sh <standalone>` — control first, then disarm
+`AutoAdminLogon` **and** the guard task, cold boot, expect **qrexec answering while ZERO windows
+map**, then re-arm. **StandaloneVM only** (SG0.8): an AppVM reverts HKLM before the reboot.
+
+**P5-7. Fill in the SG11 matrix** (safeguard × {positive, negative control, fail-proof}). **A blank
+fail-proof cell renders that safeguard's PASS `UNPROVEN` in every citing report** — record it, do
+not quietly upgrade it.
+
+---
+
+### 0.13 RUNBOOK — closing a campaign
+
+**C-1.** `tools/campaign-verdict.sh <verdicts.tsv>` and paste its output as the summary's first
+block. COMPLETE requires zero FAIL / INVALID / INCONCLUSIVE / BLOCKED **and** every PASS carrying a
+fail-proof entry in `mgmt/harness/instrument-proofs.md`. Anything else is **EXECUTED WITH GAPS**.
+**C-2.** Restore or rebuild every subject; remove transient fixtures and their receipts.
+**C-3.** Record pool % before and after; verify both goldens still match their seals.
+**C-4.** Append dated findings to FINDINGS.md, and suffix any wrong verdict `RETRACTED:<reason>`
+**in place** — never delete a line.
+
 ### 0.8 Hard prohibitions (each row is scar tissue)
 
 | Never | Because |
