@@ -22719,3 +22719,76 @@ on the guest: the `pushrun` right after boot failed silently (the `rc=46` transi
 already retries) and my driver had no retry, so it "ran" a cell that never observed anything. Now it
 retries the push and **hard-fails if `detector_fires` is not proven in that session** — a negative
 from an unproven detector is vacuous by H2, and must not be gradeable.
+
+## 2026-08-30 — U1 FAILS: the shipped updater omits the SYSTEM-account proxy plane, so no scan can ever succeed
+
+**This is a product defect in release `4.3.16+agent.409439d8cc46`, found by acceptance, with a proven
+root cause and a proven fix.** It is ours (`guest/qubes-windows-update.ps1`), so it stays in the fork
+per the standing upstream policy.
+
+### Symptom
+
+Every `QubesWindowsUpdateScan` on `win11-tpl` ends `phase:"error"`,
+`error:"Exception from HRESULT: 0x8024402C"` (`WU_E_PT_WINHTTP_NAME_NOT_RESOLVED`), in **2-4 seconds**.
+Reproduced 4/4: 16:51, 18:06, 18:09, 18:22. The first predates any change of mine.
+
+### What is NOT the cause (each tested, not assumed)
+
+- **Not the proxy path.** Owning both ends shows it working: this qube's tinyproxy logged
+  `GET .../authrootstl.cab`, `.../pinrulesstl.cab`, `.../disallowedcertstl.cab` — all established —
+  and the guest agrees, logging `Sync-Revocation: 3/3 CTLs refreshed through the relay`. That is a
+  U1 criterion, and it PASSES.
+- **Not relay unreliability.** The plain-HTTP flakiness recorded on 2026-08-2x is absent here: every
+  fetch `complete=True cut_response=False cut_request=False`, full bodies (4987 / 80736 / 7796 B),
+  3/3 on all four attempts.
+- **Not a backoff-cached fast-fail.** FINDINGS:6429 names clearing `C:\Windows\SoftwareDistribution`
+  as part of the required plane set, so I renamed it and re-ran. **Still `0x8024402C`.** Hypothesis
+  refuted and recorded as such.
+- **Not a relay leak.** `RELAY 9` looks alarming but is one parent plus the 8 warm channels the relay
+  itself announces (`POOL warm channels target=8`).
+
+### The actual cause
+
+`Ensure-Proxy` sets three planes: `netsh winhttp set proxy`, **HKLM** `Internet Settings`
+(`ProxyEnable`/`ProxyServer`, with `ProxySettingsPerUser=0`), and `DODownloadMode`. It does **not**
+set the **SYSTEM account's own WinINET settings** — `HKU\S-1-5-18`, which is what
+`bitsadmin /util /setieproxy LOCALSYSTEM MANUAL_PROXY` writes. HKLM `Internet Settings` is a
+different hive, and `wuauserv` runs as SYSTEM and reads the per-account one. So the WU COM searcher
+never dials at all: after the three CTL fetches the relay log is silent, and the failure arrives two
+seconds later.
+
+FINDINGS:6429 had already established this exact requirement — *"the machine WinHTTP proxy (netsh
+winhttp) alone is NOT enough ... the missing piece is the SYSTEM-account WU/BITS proxy: `bitsadmin
+/util /setieproxy LOCALSYSTEM` ... So the shipped plane set is: netsh winhttp + device-wide WinINET
++ DODownloadMode=0 + **bitsadmin setieproxy LOCALSYSTEM** + a one-time SoftwareDistribution reset"*.
+The shipped script implements three of the five. The knowledge was on the record and did not reach
+the product.
+
+### Proof
+
+Same guest, same relay, planes set by hand with the missing one added:
+
+    BITSADMIN ... Internet proxy settings for account LOCALSYSTEM were set (connection = default)
+    WUA_OK count=4 seconds=104.8
+      Update for Windows Security platform - KB5007651
+      Windows Malicious Software Removal Tool x64 - v5.144 (KB890830)
+      Security Intelligence Update for Microsoft Defender Antivirus - KB2267602
+      2026-08 Security Update (KB5121003) (26100.9168)
+
+A real online scan, netvm-free, four real updates, ~105 s. The only variable changed was the
+`setieproxy LOCALSYSTEM` plane. **This is the seen-to-fail control the fix will need** (H5.2): the
+defect is present in the shipped build and demonstrably absent once the plane is added.
+
+Note `bitsadmin` warns *"There's a policy in effect that disables the storage of proxy settings per
+user"* — that is the agent's own `ProxySettingsPerUser=0` — and then sets the plane anyway
+(*"were set"*). So that policy value does not block the fix, and is not an argument against it.
+
+### Consequence for the release
+
+**U1 FAILS on this build**, and with it every downstream update claim: availability never reaches
+dom0, so `qvm-features <vm> updates-available` cannot be populated, and U3 (dom0-driven install) is
+unreachable. The guest state was restored to the offline baseline afterwards (`winhttp` Direct,
+`ProxyEnable 0`, `setieproxy NO_PROXY`, relay stopped) so no later cell inherits the experiment.
+
+**The release under test was NOT modified.** Fixing `Ensure-Proxy` mid-campaign would change the
+artifact being graded; the fix belongs to the next build, where this section is the acceptance test.
