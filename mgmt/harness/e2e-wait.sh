@@ -147,6 +147,17 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
         if [ -s "$dir/$lbl-install.tail" ]; then
           awk '!seen[$0]++' "$dir/$lbl-install.tail" > "$dir/$lbl-install.log.tmp" && \
             mv -f "$dir/$lbl-install.log.tmp" "$dir/$lbl-install.log"
+          # JUDGE ONLY THIS RUN. run_install appends a unique E2E_MARK before launching the
+          # installer, because the guest log CANNOT be reliably deleted - boot tasks append to the
+          # same file, so a delete right after a clone boots races a live writer (measured: five
+          # failed attempts over 75 s, then RC=0 GONE minutes later on the same guest). Everything
+          # before the marker belongs to the golden's own install or to a boot task, and grading it
+          # is how a cell reports someone else's result as its own.
+          if [ -n "${E2E_MARK:-}" ] && grep -qa "$E2E_MARK" "$dir/$lbl-install.log"; then
+            sed -n "/$E2E_MARK/,\$p" "$dir/$lbl-install.log" > "$dir/$lbl-install.cur"
+          else
+            : > "$dir/$lbl-install.cur"
+          fi
         fi
         $log "  $lbl: t+${now}s ${n} log lines | $(tail -1 "$dir/$lbl-install.log" | cut -c1-120)"
         # MATCH THE INSTALLER'S TERMINAL TRAILER, NOT ANY "=== RESULT ===" LINE.
@@ -161,7 +172,7 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
         #   === RESULT === {"stage":"stage2-install","ok":true,...}
         # while nested banners are timestamped ("2026-.. [INFO]   === RESULT === ...") and are not
         # JSON. Anchoring to start-of-line plus the opening brace separates them exactly.
-        if grep -qa '^=== RESULT === {' "$dir/$lbl-install.log"; then
+        if grep -qa '^=== RESULT === {' "$dir/$lbl-install.cur" 2>/dev/null; then
           $log "  $lbl: RESULT line present at t+${now}s"; return 0
         fi
       elif [ $(( $(date +%s) - lastchange )) -ge "$STALL_SECS" ]; then

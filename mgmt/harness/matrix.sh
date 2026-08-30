@@ -173,25 +173,25 @@ run_install(){ # $1=vm $2=label $3=payload-dir $4=extra-args
   # that build's RESULT as this cell's. Deleting and hoping is how a cell grades someone else's
   # install.
   QTEST_VM=$vm qrun "cmd /c del /f /q $GLOG 2>nul & del /f /q C:\\qwt-install.log 2>nul & echo CLEARED" >/dev/null 2>&1
-  # RETRY THE CLEAR. Boot-time tasks append to this same log - the autologon guard's re-assert
-  # writes its banner there, which is how the golden's own log came to contain
-  # "[INFO]   === RESULT === changed=0 warnings=0". Immediately after a clone boots, the delete
-  # therefore races that writer and the file reappears. Measured 2026-08-30: the first attempt
-  # returned STILLTHERE on a freshly booted clone. Retry until the writer is done, then verify -
-  # and refuse only if it genuinely cannot be cleared, because a stale log WOULD be judged as this
-  # cell's result.
-  local left a
-  for a in 1 2 3 4 5; do
-    QTEST_VM=$vm qrun "cmd /c del /f /q $GLOG 2>nul & echo CLEARED" >/dev/null 2>&1
-    left=$(QTEST_VM=$vm qrun "cmd /c if exist $GLOG (echo STILLTHERE) else (echo GONE)" 2>/dev/null | tr -d '\r' | grep -ao 'STILLTHERE\|GONE' | head -1)
-    [ "$left" = GONE ] && break
-    say "  $lbl: $GLOG still present after clear attempt $a (a boot task is writing it) - retrying"
-    sleep 15
-  done
-  if [ "$left" != GONE ]; then
-    no "$lbl: could not clear $GLOG after 5 attempts (got '${left:-no answer}') - refusing to run, a stale log would be judged as this cell's"
+  # RUN MARKER, not deletion. Deleting the guest log cannot be made reliable: boot tasks append to
+  # the SAME file the installer uses (the autologon guard writes its banner there), so right after a
+  # clone boots the delete races a live writer. Measured 2026-08-30: five attempts over 75 s all
+  # returned STILLTHERE, while the identical delete on the same guest minutes later returned RC=0
+  # GONE. Widening the window is guesswork about someone else's task.
+  #
+  # H1 already prescribes the answer - a run identity - so use it: append a unique marker and judge
+  # ONLY what follows it. That is immune to other writers, needs no deletion, and makes "this cell's
+  # output" a positive fact rather than the absence of someone else's.
+  E2E_MARK="E2EMARK-$(date -u +%Y%m%d%H%M%S)-$$"
+  export E2E_MARK
+  QTEST_VM=$vm qrun "cmd /c echo $E2E_MARK >> $GLOG & del /f /q C:\\qwt-install.log 2>nul & echo MARKED" >/dev/null 2>&1
+  local seen
+  seen=$(QTEST_VM=$vm qrun "cmd /c findstr /c:\"$E2E_MARK\" $GLOG >nul 2>&1 && echo PRESENT || echo ABSENT" 2>/dev/null | tr -d '\r' | grep -ao 'PRESENT\|ABSENT' | head -1)
+  if [ "$seen" != PRESENT ]; then
+    no "$lbl: could not write the run marker into $GLOG (got '${seen:-no answer}') - refusing to run, this cell could not be told apart from a previous one"
     return 1
   fi
+  say "  $lbl: run marker $E2E_MARK"
   QTEST_VM=$vm qrun "cmd /c start \"\" /min C:\\$d\\install.cmd /auto /autologon:qubes $extra" >/dev/null 2>&1
   # SEED_DELAY: write the PV reboot Request mid-MSI, which is when the field gets it.
   #
@@ -293,7 +293,15 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   # (e.g. "=== RESULT === changed=0 warnings=0") and every json check then fails against a
   # non-json string - reported as product FAILs. The installer's own trailer starts the line and
   # is followed by JSON.
-  j=$(grep -a '^=== RESULT === {' "$M/$lbl-final.log" | tail -1)
+  # Judge only past this run's marker, for the same reason w_install does: the log carries the
+  # golden's own install RESULT and anything boot tasks appended, and `tail -1` alone would happily
+  # return the newest of those if this cell's installer never wrote one.
+  if [ -n "${E2E_MARK:-}" ] && grep -qa "$E2E_MARK" "$M/$lbl-final.log"; then
+    sed -n "/$E2E_MARK/,\$p" "$M/$lbl-final.log" > "$M/$lbl-final.cur"
+  else
+    : > "$M/$lbl-final.cur"
+  fi
+  j=$(grep -a '^=== RESULT === {' "$M/$lbl-final.cur" | tail -1)
   if [ -z "$j" ]; then
     # Missing data FAILS, and says so as an instrument problem rather than as a product verdict:
     # without the trailer nothing about this install has been measured.
