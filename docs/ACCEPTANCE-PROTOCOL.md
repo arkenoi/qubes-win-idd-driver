@@ -65,11 +65,24 @@ exit 0. Record the PASS line in the campaign transcript.
 (unusable input) — stop; rebuild or fix `REL`. Any cell run on an ungated payload is
 `INVALID-PROVENANCE` (§1 Gate 0 — the 2026-08-29 `f777bec` incident).
 
-**Step 2 — golden custody.** *Targets `win10-clean` and `win11-fresh`; both stay Halted — verify
+**Step 2 — entry-image custody.** *Targets `win10-base` and `win11-base`; both stay Halted — verify
 never boots anything.*
 
-    mgmt/golden.sh verify win10-clean
-    mgmt/golden.sh verify win11-fresh
+    mgmt/golden.sh verify win10-base
+    mgmt/golden.sh verify win11-base
+    mgmt/golden.sh fixture <any campaign fixture a cell will enter from>
+
+> **Roster corrected 2026-08-30.** This step used to name `win10-clean` / `win11-fresh`. Those were
+> the historical goldens; they were never sealed, `win10-clean` had served as a scratch guest for a
+> whole evening, and both were **removed** with owner sign-off (§2.6 prune ladder step 4) when the
+> pool hit RED. The canonical goldens are the two pristine bases of §0.7c.
+
+**Two acceptable provenances, both strict** (owner decision 2026-08-30, §0.7c): a **sealed golden**
+passes `golden.sh verify`; a **campaign fixture** passes `golden.sh fixture`, which reads the
+receipt `mgmt/harness/prime-run.sh` wrote when it built the fixture *and re-verifies the base
+golden's seal at that moment* — so a fixture whose base has since drifted stops being acceptable.
+Only the two pristine bases are ever sealed; everything carrying software (a previous release of
+ours, stock 4.2.2, the nopvdisk shape) is a fixture, built on demand and removed at campaign end.
 
 *Expect:* `VERIFIED <vm> matches its seal (sealed <UTC>)`, exit 0.
 *On failure* (exit 2, `UNSEALED: ...` or `DRIFTED:` + `REFUSE to clone from <vm>`): do NOT clone.
@@ -122,8 +135,15 @@ proves the artifact actually pushed is the artifact that was gated.
 *Expect:* all three files listed; a second Gate-0 PASS line.
 *On failure:* re-download the artifacts; never substitute a file from another build.
 
-**Step 6 — run the cells, serially, through the harness.** *Clones `win10-clean`/`win11-fresh`
-into `win10-tpl`/`win11-tpl` and installs there; AppVM cells cold-boot `win10-app`/`win11-app`.*
+**Step 6 — run the cells, serially, through the harness.** *Clones the entry image named by
+`G10`/`G11` into `win10-tpl`/`win11-tpl` and installs there; AppVM cells cold-boot
+`win10-app`/`win11-app`.*
+
+`G10`/`G11` have **no default** since 2026-08-30 — the run refuses to start until they are named.
+The old default was `win10-goldr`/`win11-goldr`, which carried the release under test, so every cell
+called "fresh" or "upgrade" silently took the same-version-reinstall branch. The right entry differs
+per cell: a pristine base for a clean install, an N−1 fixture for C3, a stock fixture for C4, the C1
+exit for C6.
 
     CELLS="win10-1stage win10-2stage win10-stock win11-1stage win10-appvm win11-appvm" \
       MATRIX_OUT=$HOME/qwt-matrix/$(date -u +%Y%m%d-%H%M%S) \
@@ -137,7 +157,7 @@ Selector map (verified against the `case` dispatch in matrix.sh, 2026-08-30):
 
 | Selector (`win11-*` analogous) | Function | Golden → target | What it actually exercises |
 |---|---|---|---|
-| `win10-1stage` | `cell_fresh_1stage` | `win10-clean` → `win10-tpl` | Push + install with testsigning already on. NOTE the name: over a golden that already carries QWT this takes the in-place-upgrade branch (C3-like), NOT C2 — the installer's `PRECONDITION` line is the authority on the branch taken (P1.0). |
+| `win10-1stage` | `cell_fresh_1stage` | `$G10` → `win10-tpl` | Push + install with testsigning already on. NOTE the name: over a golden that already carries QWT this takes the in-place-upgrade branch (C3-like), NOT C2 — the installer's `PRECONDITION` line is the authority on the branch taken (P1.0). |
 | `win10-2stage` | `cell_fresh_2stage` | same | Turns testsigning OFF, reboots, asserts `SystemStartOptions` really lost TESTSIGNING, then installs — the E1 two-stage entry. Same PRECONDITION caveat. |
 | `win10-fresh` | `cell_fresh` | same | Constructs a no-QWT precondition by uninstalling, rebooting, asserting `QWTPRODUCTS=0`, then installs. Diverges from P1.0's "preconditions are never constructed by uninstalling" — read §0.9.2 before treating its verdict as C1/C2-grade. |
 | `win10-seeded` | `cell_seeded` | same | Armed monitor (`sc config xenbus_monitor start= auto`) + optional mid-MSI Request injection (only with `SEED_DELAY` + `SEED_CELL=1`; without `SEED_DELAY` it is the armed-monitor-only variant, and the transcript records the seed state either way). |
@@ -216,8 +236,9 @@ guest all evening (agent binary hot-swapped twice, xencons side-loaded by hand, 
 Windows Update enabled then disabled, private volume extended mid-life, repeated hard restarts) —
 and cells were then cloned from it.
 
-    mgmt/golden.sh seal   win10-clean "ST2G.10 - release <ver>"
-    mgmt/golden.sh verify win10-clean      # exit 2 = drifted OR unsealed -> do not clone
+    mgmt/golden.sh seal    win10-base "pristine ST0.10 + primer"
+    mgmt/golden.sh verify  win10-base      # exit 2 = drifted OR unsealed -> do not clone
+    mgmt/golden.sh fixture win10-c1        # the OTHER provenance: a receipt + a live base seal
     mgmt/golden.sh list
 
 - `seal <vm> [note]` — target must be Halted. *Expect:* `SEALED <vm> -> mgmt/goldens/<vm>.json`.
@@ -231,8 +252,12 @@ and cells were then cloned from it.
   golden gains one its seal never recorded; volume sizes and the clone-relevant qube properties
   are compared too.
 - `list` — every sealed golden with date and note.
-- *Standing state 2026-08-30:* `mgmt/goldens/` is empty. Seal both goldens at their next accepted
-  state; until then §0.2 step 2 fails closed, correctly.
+- `fixture <vm>` — the provenance check for a **campaign fixture**, which by decision is never
+  sealed. Reads the receipt `prime-run.sh` wrote (base golden, its seal timestamp, job, flags, build
+  time) and RE-VERIFIES the base's seal now. Exit 2 for a missing/unreadable receipt or a drifted
+  base — a qube built by hand is refused exactly as loudly as an unsealed golden.
+- *Standing state 2026-08-30:* `win10-base` and `win11-base` are sealed and verify intact. The four
+  older seals (`*-gold0`, `*-goldr`) are superseded and are not the roster.
 
 ### 0.5 Runbook: delivering a release to a RUNNING guest
 
@@ -637,8 +662,10 @@ raises a driver-trust dialog that nothing in session 0 can answer.
 5. The matrix's install cells write into `win10-tpl`/`win11-tpl`: a campaign consumes the
    standing ST3 templates. Re-establish ST3 with R4 (`mgmt/clone-to-template.sh`) afterwards
    when standing template/AppVM stages are needed.
-6. `mgmt/goldens/` is empty: `golden.sh verify` fails closed for every golden until the first
-   seal (§0.4). Correct behaviour; seal, don't bypass.
+6. ~~`mgmt/goldens/` is empty~~ — **RESOLVED 2026-08-30.** Both pristine bases are sealed and
+   verify intact. `matrix.sh`'s `G10`/`G11` default (`*-goldr`) is also gone: it pointed at goldens
+   carrying the candidate, so "fresh"/"upgrade" cells were reinstall cells. Naming the entry is now
+   mandatory, and it is checked as a sealed golden OR a campaign fixture (§0.4).
 7. `reprovision-usb.sh` leaves `qrexec_timeout=300` and the answer stick assigned
    `--required` — §0.7's reset-trap block undoes both.
 8. `tools/qtest`'s baked-in fallback target `win-idd-test` is a dead name by design (the tool
@@ -695,7 +722,7 @@ Three flavors of "pristine" exist and each carries a proof obligation recorded i
 | **ST1** | stock-QWT 4.2.2 | ST0 + genuine upstream QWT installed at provisioning (stock stick loop11; `STOCK_SETUP` = stock MSI via our installer for single-variable control, `REAL_STOCK_EXE` = vendor exe for field fidelity). | Stock MSI sha256 byte-identical to vendor bundle (`7049322128d1cf...`) before stick build; guest-read QWT **and** agent both 4.2.2.0 (the 4.2.2/4.3.3 hybrid was caught only by checking both); `xenbus_monitor` Start=2 + Running; testsigning on. | **PARKED AND CLONED, standing — one per OS.** (Owner, 2026-08-29: "so you can save at least two types of images: pristine and stock qwt".) Building a stock image costs a full reprovision (~18 min) and, like ST0, it does not drift once built, so it is parked and cloned rather than rebuilt. Together with ST0 that is FOUR standing images: ST0.10, ST0.11, ST1.10, ST1.11. Disk is the ONLY constraint (~20 GB each ≈ 80 GB against ~155 GB free); qube names are free — policy is tag-based, so create and tag churn qubes as needed. |
 | **ST1F** | stock, testsigning off | ST1 + `bcdedit /set testsigning off` + reboot + verify qrexec answers and PV drivers still bound (stock binaries are production-signed — verify, don't assume). | ST1 proofs + testsigning inactive in PRECONDITION. | Transient (constructed for C5 only). |
 | **ST2** | ours-installed (fresh lineage) | Stock-or-pristine lineage carrying the current CI package. | Package passed **G0**; guest-read MSI hash vs artifact; running agent hash vs `MANIFEST.json`. | Parkable on churn qube within a campaign. |
-| **ST2G** | golden ours | Accepted release on the standing golden (`win10-clean` / `win11-fresh`). | ST2 proofs + stage manifest current (drift recorded — `win10-clean` is 4.3.15, no longer pristine-4.3.2; recorded, never read as pristine). | **Standing.** |
+| **ST2G** | fixture ours | An accepted release of ours, installed into a clone of a pristine base by `prime-run.sh`. | `golden.sh fixture` passes (receipt present, base seal still verifies) + the installer's own `PRECONDITION` line confirms the version the cell claims. | **TRANSIENT** — built on demand, removed at campaign end (owner 2026-08-30). Never sealed: a golden built from the candidate turned every upgrade cell into a reinstall cell. |
 | **ST2NP** | ours, no PV disk | Current release installed `/nodisk` → `pv_boot_disk=false`. Enables C8. | ST2 proofs + PRECONDITION `pv_boot_disk:false`. | Transient. |
 | **ST3** | template ours+latch | Golden → `mgmt/clone-to-template.sh` with `PRIME_NETVM=latch`, `XENVIF_PKG` set. Script self-verifies: latch readback across a boot cycle, net-identity scrub residue=0, xenvif sha256 in DriverStore. A template failing any gate is not shipped. | Script gates + NET-1 attestation. netvm='' **forever**. | **Standing** (`win10-tpl`/`win11-tpl`). |
 | **ST3A** | AppVM fresh boot | AppVM boot off ST3; volatile root ⇒ bit-identical every boot. | NET-1 attestation. | Free, infinitely repeatable (R0). |
@@ -708,11 +735,11 @@ Three flavors of "pristine" exist and each carries a proof obligation recorded i
 
 | Qube | Class | netvm standing | Role / standing stage |
 |---|---|---|---|
-| `win10-clean` | StandaloneVM | fw-net | **ST2G.10** golden |
+| `win10-base` | StandaloneVM | — | **ST0.10** sealed golden — pristine Win10 22H2, no QWT, testsigning OFF, primer hook. The ONLY Win10 golden. |
 | `win10-u10` | StandaloneVM | fw-net | **churn** — sole Win10 R3 target; carries transient ST0/ST1/ST2 within campaigns |
 | `win10-tpl` | TemplateVM | **'' always** | **ST3.10** |
 | `win10-app` | AppVM | fw-net | **ST3A.10 / ST4.10** network vehicle |
-| `win11-fresh` | StandaloneVM | fw-net | **ST2G.11** (25H2 current build) |
+| `win11-base` | StandaloneVM | — | **ST0.11** sealed golden — pristine Win11 24H2 Eval, no QWT, testsigning OFF, primer hook (proven 2026-08-30). The ONLY Win11 golden. |
 | `win11-24h2` | StandaloneVM | fw-net | Win11 churn + upgrade-path guest (older-ours lineage; no proven Win11 stock stage — owner decision D3, §11) |
 | `win11-tpl` | TemplateVM | **'' always** | **ST3.11** |
 | `win11-app` | AppVM | fw-net | **ST3A.11 / ST4.11** (the config that PASSED zero-reboot attach) |
@@ -931,7 +958,7 @@ Branch map (from source): entry **E1** two-stage (testsigning off → stage1 pre
 
 Pristine-start cells are stick-orchestrated instead (no qrexec exists yet). Pin the release for the whole campaign rather than gating against `HEAD` — `HEAD` moves on every commit, so a campaign spanning any commit silently changes the artefact it gates against, which is what "single package for all tests" forbids.
 
-**Golden provenance is a P0 assertion, not an assumption (added 2026-08-30).** Every install cell `reclone`s from a golden (`win10-clean` / `win11-fresh`), so the golden's state is inherited by every clone made from it. On 2026-08-30 the Win10 golden was used all evening as a scratch guest - agent binary hot-swapped twice, xencons side-loaded by hand, `debug` toggled, Windows Update enabled then disabled, private volume extended mid-life, repeated hard restarts - and cells were then cloned from it. Before any campaign, assert the golden matches its recorded stage manifest (§2.4); if it does not, either rebuild it or mark every cell derived from it `INVALID-CONTAMINATED` (H5). Diagnostic work belongs on a churn qube, never on a golden - and a golden that has been touched is no longer one, whatever its name says.
+**Entry-image provenance is a P0 assertion, not an assumption (added 2026-08-30).** Every install cell `reclone`s from the image named by `G10`/`G11`, so that image's state is inherited by every clone made from it. It must pass ONE of the two custody checks — `golden.sh verify` (sealed golden) or `golden.sh fixture` (campaign fixture with a receipt whose base seal still verifies). On 2026-08-30 the Win10 golden was used all evening as a scratch guest - agent binary hot-swapped twice, xencons side-loaded by hand, `debug` toggled, Windows Update enabled then disabled, private volume extended mid-life, repeated hard restarts - and cells were then cloned from it. Before any campaign, assert the golden matches its recorded stage manifest (§2.4); if it does not, either rebuild it or mark every cell derived from it `INVALID-CONTAMINATED` (H5). Diagnostic work belongs on a churn qube, never on a golden - and a golden that has been touched is no longer one, whatever its name says.
 
 Pin the release for the whole campaign rather than comparing against `HEAD` — `HEAD` moves on every commit, so a campaign spanning any commit silently changes the artefact it gates against, which is what "single package for all tests" forbids.
 
@@ -1106,12 +1133,12 @@ Reprovision discipline for a full pass: at most **three** R3 runs (Win10 fresh, 
 - **D4** ST1F constructibility (stock 4.2.2 drivers with testsigning off) — if not, C5 is unreachable without a field image: flag, don't drop.
 - **D5** R1 (`qvm-volume revert`) and `revisions_to_keep` permission from this qube — unverified; if denied, R1 rows collapse into R3 and U3's primary rollback design falls to its fallback.
 - **D6** G0 tooling: openssl-asn1parse form vs installing osslsigncode.
-- **D7** G0 negative-control fixture source (pre-2026-08-29 archived package / evidence tree; else cut once from a deliberately un-resigned rebuild).
+- ~~**D7** G0 negative-control fixture source~~ — **SETTLED 2026-08-30.** No archived package needed: the defect is a STRUCTURE (a PKCS#7 SignedData with an empty `signerInfos` SET), so the fixture is synthesised to it. `tools/tests/g0-negative-control.sh` is two-sided — the untouched payload must PASS, the same copy with one catalog replaced must FAIL *and name that catalog*. Measured: PASS 8/0, then FAIL naming `iddsampledriver.cat`. G0's PASS is now evidence, no longer `PASS-UNPROVEN`.
 - **D8** Canonical PKG(N−1) artifact for C7/C8 (+ surviving MANIFEST.json).
 - **D9** Known-issue register location (FINDINGS section vs dedicated file) — so "known" cannot silently absorb new regressions (24H2 Start, z-order class live there).
 - **D10** Privacy ruling on whole-desktop fullshot cells (owner-away window vs crop-and-delete handling) and on any high-rate dom0 capture for sub-second flash proof.
 - **D11** Quarantine release: campaign halts that OS lane until owner releases, or autonomous release once terminal state is fully captured?
-- **D12** Golden refresh policy: in-place per accepted release (current practice) vs re-derived from stock lineage per release.
+- ~~**D12** Golden refresh policy~~ — **DECIDED 2026-08-30, in a third way neither option named:** goldens are not refreshed per release at all, because **only the two pristine bases are goldens**. Owner: *"installing our qwt is cheap, and full upgrade test is rare, so we can build those images but we are not going to keep them forever as golden untouchables"*. Every software-carrying precondition is a transient fixture built by `prime-run.sh` and removed at campaign end; its provenance is checked with `golden.sh fixture` (§0.4). This also kills the circularity that voided the previous campaign — a golden built from the candidate made "upgrade" cells into reinstall cells.
 - **D13** `DiagWindowFilterOff` bit extension for the remaining SG fail-proofs (each bit weakens filtering — sign-off required).
 - **D14** ESU MAK for Win10 19045 (until then Win10 CU acceptance capped at the honest ceiling); Win11 sibling-checkpoint-drop bug needs a pre-checkpoint 26100 image that doesn't exist on the rig.
 - **D15** Commit `verdicts.tsv` + fail-proof registry into `evidence/` per campaign, or keep only under `~/qwt-accept/` (the 2026-08-29 near-loss argues for committing at least the ledger — default here: registry committed, per-campaign tsv copied into `evidence/` on release acceptance).
