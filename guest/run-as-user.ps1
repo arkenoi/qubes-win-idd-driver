@@ -38,6 +38,13 @@ param(
     [string]$Command,
     [string]$Script,
     [string]$ScriptArgs = '',
+    # Base64 (UTF-16LE) of the argument string. USE THIS FOR ANYTHING WITH A SPACE.
+    # -ScriptArgs travels bash -> qtest -> cmd.exe -> powershell, and each hop re-splits on
+    # whitespace. Measured 2026-08-31: '-DurationSeconds 90 -IntervalSeconds 1' arrived as a
+    # fragment and PowerShell reported "Missing an argument for parameter", so the surface sampler
+    # never started - and RND-4 then graded INVALID-VACUOUS "the toast never existed" when nothing
+    # had been watching. A base64 blob has no spaces and survives every hop intact.
+    [string]$ArgsB64 = '',
     [switch]$NoWait,
     [int]$TimeoutSec = 120,
     [int]$SettleSec = 4,
@@ -58,6 +65,9 @@ New-Item -ItemType Directory -Force -Path $work | Out-Null
 $outf = Join-Path $work ($(if ($Tag) { "out-$Tag.txt" } else { 'out.txt' }))
 Remove-Item $outf -Force -EA SilentlyContinue
 
+if ($ArgsB64) {
+    $ScriptArgs = [Text.Encoding]::Unicode.GetString([Convert]::FromBase64String($ArgsB64))
+}
 if ($Script) {
     if (-not (Test-Path $Script)) { Write-Output "RUNASUSER error=script_not_found path=$Script"; exit 2 }
     # A wrapper is needed because schtasks' /tr cannot carry redirection, and we want the child's

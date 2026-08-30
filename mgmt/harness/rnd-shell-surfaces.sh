@@ -142,10 +142,12 @@ r 'cmd /c del /q C:\qwt-improved-setup\surface-watch.jsonl 2>nul & exit 0' >/dev
 tmark=$(T=200 q pushrun "$TMP/mark.ps1" | tr -d '\r' | grep -ao 'AGENTMARK [0-9]*' | awk '{print $2}')
 th_before=$(owner_hash)
 # distinct -Tag: run-as-user deletes its task on entry, so a shared name kills the sampler
-T=120 q pushrun guest/run-as-user.ps1 -Tag watch -Script "$GUEST\\surface-watch.ps1" \
-    -ScriptArgs '-DurationSeconds 90 -IntervalSeconds 1' -NoWait >/dev/null 2>&1
+# base64 the args: they contain spaces and would be re-split at every hop (see run-as-user.ps1)
+WB64=$(python3 -c "import base64;print(base64.b64encode('-DurationSeconds 90 -IntervalSeconds 1'.encode('utf-16-le')).decode())")
+T=120 q pushrun guest/run-as-user.ps1 -Tag watch -Script "$GUEST\\surface-watch.ps1" -ArgsB64 "$WB64" -NoWait >/dev/null 2>&1
 sleep 6
-T=300 q pushrun guest/run-as-user.ps1 -Tag toast -Script "$GUEST\\fire-toast.ps1" -ScriptArgs "-Title 'QWT ACCEPT TOAST'" >/dev/null 2>&1
+TB64=$(python3 -c "import base64;print(base64.b64encode(\"-Title 'QWT ACCEPT TOAST'\".encode('utf-16-le')).decode())")
+T=300 q pushrun guest/run-as-user.ps1 -Tag toast -Script "$GUEST\\fire-toast.ps1" -ArgsB64 "$TB64" >/dev/null 2>&1
 sleep 12
 geom > "$TMP/g1.txt"; g1=$(parse_geom "$TMP/g1.txt"); cp "$TMP/g1.txt" "$OUT/geom-toast.txt"
 o1=$(echo "$g1" | cut -d'|' -f2); n1=$(echo "$g1" | cut -d'|' -f3)
