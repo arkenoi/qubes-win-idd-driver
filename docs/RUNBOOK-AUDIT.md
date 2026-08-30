@@ -501,7 +501,7 @@ Script side: done — the file lives at `mgmt/harness/e2e-wait.sh` and `matrix.s
 table (line 39) already lists the repo path. Part II contradicts Part I and the source; P0-PRE's
 completion state is misstated, which matters because P0-CORE (every campaign) lists P0-PRE as its
 prerequisite. Note the *same defect class* genuinely persists in P0-PRE.8 — `cell_fresh`/
-`cell_upgrade_stock` still pushrun `/home/user/.claude/jobs/c2a0f57b/tmp/{uninstall-qwt,count-qwt}.ps1`
+`cell_upgrade_stock` still pushrun `/home/user/.claude/jobs/c2a0f57b/tmp/guest/{uninstall-qwt,count-qwt}.ps1 [FIXED 2026-08-31]`
 (matrix.sh:368, 383, 404 — verified present today, still GC-able) — so the fix is to mark item 1
 done, not to delete the section.
 

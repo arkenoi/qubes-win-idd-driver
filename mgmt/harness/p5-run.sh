@@ -16,10 +16,28 @@
 # ATTENDED-PENDING, never silently dropped (SG0).
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
+
+# PREFLIGHT: every guest-side script this harness needs must exist IN THE REPO.
+# Until 2026-08-31 three of them (startproof/enumwin/sg6-state) lived only in a per-job scratch
+# directory. The harness still ran without them - it just printed `?` for the deny counts, i.e. it
+# silently dropped the vacuity proofs that are the load-bearing half of every "nothing mapped"
+# verdict. Missing data must FAIL, never degrade quietly (H5.4).
+require_scripts(){
+  local missing=""
+  for s in "$@"; do [ -f "$s" ] || missing="$missing $s"; done
+  if [ -n "$missing" ]; then
+    echo "FATAL: required guest script(s) not found in the repo:$missing" >&2
+    echo "       Refusing to run - a cell without its vacuity proof grades nothing." >&2
+    exit 2
+  fi
+}
+
+require_scripts guest/fsgate-probe.ps1 guest/set-resolution.ps1 guest/open-start.ps1
 VM="${1:?usage: $0 <vm> [outdir]}"
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/P5-$VM}"
 mkdir -p "$OUT"
-TMP=/home/user/.claude/jobs/c2a0f57b/tmp
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
 GUEST='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-120}" ./tools/qtest "$@" 2>/dev/null; }
 log(){ echo "$(date -u +%H:%M:%S) p5[$VM]: $*" | tee -a "$OUT/p5.log"; }

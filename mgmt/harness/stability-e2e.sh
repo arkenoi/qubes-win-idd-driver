@@ -21,7 +21,9 @@
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 source .claude/skills/win-guest-e2e/e2e-lib.sh
-T=/home/user/.claude/jobs/c2a0f57b/tmp; S=$T/stability; mkdir -p $S
+# Evidence goes somewhere DURABLE. This used to be a per-job scratch directory, so every artefact
+# a run produced - shots, logs, the run ledger - was deleted with the job that made it.
+T="${STAB_OUT:-$HOME/qwt-accept/stability}"; S=$T/stability; mkdir -p $S
 R=$S/run.log; : > "$R"
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$R"; }
 PASS=0; FAIL=0

@@ -22,9 +22,27 @@
 # is not a checker). 2 = could not run.
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
+
+# PREFLIGHT: every guest-side script this harness needs must exist IN THE REPO.
+# Until 2026-08-31 three of them (startproof/enumwin/sg6-state) lived only in a per-job scratch
+# directory. The harness still ran without them - it just printed `?` for the deny counts, i.e. it
+# silently dropped the vacuity proofs that are the load-bearing half of every "nothing mapped"
+# verdict. Missing data must FAIL, never degrade quietly (H5.4).
+require_scripts(){
+  local missing=""
+  for s in "$@"; do [ -f "$s" ] || missing="$missing $s"; done
+  if [ -n "$missing" ]; then
+    echo "FATAL: required guest script(s) not found in the repo:$missing" >&2
+    echo "       Refusing to run - a cell without its vacuity proof grades nothing." >&2
+    exit 2
+  fi
+}
+
+require_scripts guest/sg6-state.ps1
 VM="${1:?usage: $0 <standalone-vm>}"
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/SG6-failproof-$VM}"
 mkdir -p "$OUT"
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-120}" ./tools/qtest "$@" 2>/dev/null; }
 
 klass=$(qvm-prefs "$VM" klass 2>/dev/null)
@@ -61,7 +79,7 @@ windows_mapped(){
 # running, reachable, invisible guest. An in-guest control window is impossible here (there is no
 # session to put one in), so this is what replaces it.
 defect_state(){
-  T=300 q pushrun /home/user/.claude/jobs/c2a0f57b/tmp/sg6-state.ps1 2>/dev/null | tr -d '\r' \
+  T=300 q pushrun guest/sg6-state.ps1 2>/dev/null | tr -d '\r' \
     | grep -aE '^(SESSIONS|AUTOLOGON|GUARD)' 
 }
 
@@ -76,7 +94,7 @@ q run 'cmd /c taskkill /f /im notepad.exe' >/dev/null 2>&1
 [ "${ctrl:-0}" -ge 1 ] || { echo "FATAL: control mapped no windows - the subject is already broken, a red would be meaningless"; exit 2; }
 
 echo "=== 2. PLANT THE DEFECT: disarm AutoAdminLogon AND the re-assert task ==="
-cat > /home/user/.claude/jobs/c2a0f57b/tmp/sg6-disarm.ps1 <<'PS'
+cat > "$TMP/sg6-disarm.ps1" <<'PS'
 $ErrorActionPreference='Continue'
 $WL='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 Set-ItemProperty $WL -Name AutoAdminLogon -Value '0' -Type String
@@ -85,7 +103,7 @@ Set-ItemProperty $WL -Name AutoAdminLogon -Value '0' -Type String
 Write-Output ('AutoAdminLogon ' + (Get-ItemProperty $WL -Name AutoAdminLogon).AutoAdminLogon)
 Write-Output ('GuardTask ' + $(if (Get-ScheduledTask -TaskName QubesAutologonGuard -EA SilentlyContinue) {'STILL PRESENT'} else {'REMOVED'}))
 PS
-T=300 q pushrun /home/user/.claude/jobs/c2a0f57b/tmp/sg6-disarm.ps1 | tr -d '\r' | grep -aE '^(AutoAdminLogon|GuardTask)' | sed 's/^/  /' | tee "$OUT/disarm.txt"
+T=300 q pushrun "$TMP/sg6-disarm.ps1" | tr -d '\r' | grep -aE '^(AutoAdminLogon|GuardTask)' | sed 's/^/  /' | tee "$OUT/disarm.txt"
 
 echo "=== 3. COLD BOOT (SG0.7 - never an agent restart) ==="
 qvm-shutdown --wait --timeout 300 "$VM" >/dev/null 2>&1
@@ -116,7 +134,7 @@ else
 fi
 
 echo "=== 5. RE-ARM and confirm the guest comes back (never leave a subject locked out) ==="
-cat > /home/user/.claude/jobs/c2a0f57b/tmp/sg6-rearm.ps1 <<'PS'
+cat > "$TMP/sg6-rearm.ps1" <<'PS'
 $ErrorActionPreference='Continue'
 $WL='HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 Set-ItemProperty $WL -Name AutoAdminLogon -Value '1' -Type String
@@ -124,7 +142,7 @@ Set-ItemProperty $WL -Name AutoAdminLogon -Value '1' -Type String
 Write-Output ('AutoAdminLogon ' + (Get-ItemProperty $WL -Name AutoAdminLogon).AutoAdminLogon)
 Write-Output ('GuardTask ' + $(if (Get-ScheduledTask -TaskName QubesAutologonGuard -EA SilentlyContinue) {'present'} else {'ABSENT'}))
 PS
-T=300 q pushrun /home/user/.claude/jobs/c2a0f57b/tmp/sg6-rearm.ps1 | tr -d '\r' | grep -aE '^(AutoAdminLogon|GuardTask)' | sed 's/^/  /'
+T=300 q pushrun "$TMP/sg6-rearm.ps1" | tr -d '\r' | grep -aE '^(AutoAdminLogon|GuardTask)' | sed 's/^/  /'
 qvm-shutdown --wait --timeout 300 "$VM" >/dev/null 2>&1
 boot_and_wait && { back=$(windows_mapped rearmed); echo "  after re-arm: $back window(s) mapped"; } || echo "  WARNING: guest did not return after re-arm"
 exit $rc

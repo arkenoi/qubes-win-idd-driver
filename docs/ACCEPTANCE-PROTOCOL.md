@@ -1014,8 +1014,8 @@ fail-proof entry in `mgmt/harness/instrument-proofs.md`. Anything else is **EXEC
 2. `cell_fresh` and `cell_upgrade_stock` construct their preconditions by UNINSTALLING, which
    P1.0 forbids for protocol-grade verdicts ("preconditions are never constructed by
    uninstalling — QWT *is* the qrexec agent"; it cost `win10-u10`). They also invoke helper
-   scripts from a SESSION TMP path (`/home/user/.claude/jobs/c2a0f57b/tmp/uninstall-qwt.ps1`,
-   `.../count-qwt.ps1`) — garbage-collectable, the exact path class H0 banned for the wait
+   scripts from a SESSION TMP path (`guest/uninstall-qwt.ps1 [FIXED 2026-08-31 — was a session-tmp path]`,
+   `guest/count-qwt.ps1` [FIXED 2026-08-31]) — garbage-collectable, the exact path class H0 banned for the wait
    library. Promote both scripts into the repo (P0-PRE.8) before relying on the `*-fresh` /
    `*-stock` selectors; protocol-grade C1/C2 and ST1 still enter via the stick (R3+ST0/ST0T,
    stock stick loop11).
@@ -1284,7 +1284,7 @@ One machine-greppable line per check into `verdicts.tsv` + transcript: `<campaig
 6. One-time audits: `qemu-extra-args`/stick assignment on parked guests (D2); R1 permission probe (D5).
 7. Create/refresh `mgmt/harness/instrument-proofs.md` and the known-issue register (D9).
 8. Promote the helper scripts `matrix.sh`'s `cell_fresh`/`cell_upgrade_stock` invoke from session
-   tmp (`/home/user/.claude/jobs/c2a0f57b/tmp/uninstall-qwt.ps1`, `.../count-qwt.ps1`) into the
+   tmp (`guest/uninstall-qwt.ps1 [FIXED 2026-08-31 — was a session-tmp path]`, `guest/count-qwt.ps1` [FIXED 2026-08-31]) into the
    repo — same defect class as item 1, found 2026-08-30 (§0.9.2); until then those selectors
    depend on garbage-collectable files.
 

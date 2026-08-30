@@ -14,6 +14,23 @@
 # establish the precondition (in which case NOTHING is run - an unmeasured cell beats a bad number).
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
+
+# PREFLIGHT: every guest-side script this harness needs must exist IN THE REPO.
+# Until 2026-08-31 three of them (startproof/enumwin/sg6-state) lived only in a per-job scratch
+# directory. The harness still ran without them - it just printed `?` for the deny counts, i.e. it
+# silently dropped the vacuity proofs that are the load-bearing half of every "nothing mapped"
+# verdict. Missing data must FAIL, never degrade quietly (H5.4).
+require_scripts(){
+  local missing=""
+  for s in "$@"; do [ -f "$s" ] || missing="$missing $s"; done
+  if [ -n "$missing" ]; then
+    echo "FATAL: required guest script(s) not found in the repo:$missing" >&2
+    echo "       Refusing to run - a cell without its vacuity proof grades nothing." >&2
+    exit 2
+  fi
+}
+
+require_scripts guest/startproof.ps1 guest/enumwin.ps1 guest/cpu-bench.ps1 guest/open-start.ps1
 VM="${1:?usage: $0 <vm> [outdir]}"
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/P4-$VM}"
 mkdir -p "$OUT"
@@ -22,7 +39,7 @@ log(){ echo "$(date -u +%H:%M:%S) p4[$VM]: $*" | tee -a "$OUT/p4.log"; }
 
 # ---------------------------------------------------------------- precondition
 log "=== G-0c: disarm QubesWindowsUpdateScan BEFORE anything runs ==="
-cat > /home/user/.claude/jobs/c2a0f57b/tmp/p4-disarm.ps1 <<'PS'
+cat > "$TMP/p4-disarm.ps1" <<'PS'
 $ErrorActionPreference='Continue'
 $t = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
 if (-not $t) { Write-Output 'SCAN_TASK ABSENT'; Write-Output 'DISARMED true'; exit 0 }
@@ -39,7 +56,7 @@ Write-Output ('SCAN_AFTER state=' + $t2.State)
 Write-Output ('RELAY_AFTER ' + @(Get-Process qubes-updates-relay -EA SilentlyContinue).Count)
 Write-Output ('DISARMED ' + ($t2.State -eq 'Disabled'))
 PS
-dis=$(T=300 q pushrun /home/user/.claude/jobs/c2a0f57b/tmp/p4-disarm.ps1 | tr -d '\r')
+dis=$(T=300 q pushrun "$TMP/p4-disarm.ps1" | tr -d '\r')
 echo "$dis" | grep -aE '^(SCAN_BEFORE|SCAN_AFTER|RELAY_|DISARMED)' | sed 's/^/  /' | tee "$OUT/disarm.txt"
 echo "$dis" | grep -qa 'DISARMED True' || { log "FATAL: could not disarm the scan - refusing to run. An unmeasured cell beats a bad number."; exit 2; }
 log "scan disarmed and verified"
@@ -75,7 +92,7 @@ if [ "$rc" = 0 ]; then
   q push artifacts/chromerepro.exe >/dev/null 2>&1
   q run 'cmd /c start "" C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe' >/dev/null 2>&1
   sleep 20
-  hw=$(T=300 q pushrun /home/user/.claude/jobs/c2a0f57b/tmp/enumwin.ps1 | tr -d '\r' | grep -aoE 'CHROMEREPRO_HWNDS [0-9]+' | awk '{print $2}')
+  hw=$(T=300 q pushrun guest/enumwin.ps1 | tr -d '\r' | grep -aoE 'CHROMEREPRO_HWNDS [0-9]+' | awk '{print $2}')
   rm -f "$OUT/rnd7.tar"; q shot "$OUT/rnd7.tar" >/dev/null 2>&1
   mapped=$(tar tf "$OUT/rnd7.tar" 2>/dev/null | grep -c '\.png$'); mapped=${mapped:-0}
   log "  guest-side HWNDs=${hw:-?}  dom0 mapped=${mapped:-?}   (accept: 5 and 1)"
@@ -90,7 +107,7 @@ if [ "$rc" = 0 ]; then
   sleep 12
   rm -f "$OUT/rnd5.tar"; q shot "$OUT/rnd5.tar" >/dev/null 2>&1
   m5=$(tar tf "$OUT/rnd5.tar" 2>/dev/null | grep -c '\.png$'); m5=${m5:-0}
-  d5=$(T=300 q pushrun /home/user/.claude/jobs/c2a0f57b/tmp/startproof.ps1 | tr -d '\r' | grep -aoE 'DISCRIM_HITS [0-9]+' | awk '{print $2}')
+  d5=$(T=300 q pushrun guest/startproof.ps1 | tr -d '\r' | grep -aoE 'DISCRIM_HITS [0-9]+' | awk '{print $2}')
   log "  dom0 mapped=${m5:-?}  agent deny lines=${d5:-?}   (accept: 0 mapped AND >0 deny = stimulus existed)"
   echo "RND5 mapped=${m5:-?} deny=${d5:-?}" >> "$OUT/rnd.txt"
 fi

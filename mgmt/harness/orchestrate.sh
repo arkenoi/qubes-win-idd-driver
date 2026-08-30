@@ -11,7 +11,11 @@
 # the evidence survives.
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
-T=/home/user/.claude/jobs/c2a0f57b/tmp
+# STALE-SESSION FIX (2026-08-31): this used to read and PATCH a copy of matrix.sh inside a per-job
+# scratch directory. That copy is long gone, so the script would abort on a missing file - and its
+# patch has since landed in the repo copy anyway. Drive the repo script; keep the log durable.
+T="${ORCH_OUT:-$HOME/qwt-accept/orchestrate}"; mkdir -p "$T"
+MATRIX=mgmt/harness/matrix.sh
 L=$T/orchestrate.log
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$L"; }
 
@@ -29,7 +33,7 @@ say "no cell running - safe to patch and drive"
 # earlier. Delete it before each install so what we read belongs to the run under test.
 if ! grep -q 'del /f /q C:\\qwt-install.log' $T/matrix.sh; then
   python3 - <<'PY'
-p='/home/user/.claude/jobs/c2a0f57b/tmp/matrix.sh'; s=open(p).read()
+p='mgmt/harness/matrix.sh'; s=open(p).read()
 old = '''  QTEST_VM=$vm qrun "cmd /c del /f /q $GLOG 2>nul & echo CLEARED" >/dev/null 2>&1'''
 new = '''  # Clear BOTH logs. The MSI verbose log lives at a fixed path and survives from earlier installs,
   # so without this the capture can show a two-week-old install and read as this run's evidence.
