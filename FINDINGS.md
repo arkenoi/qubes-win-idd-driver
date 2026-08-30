@@ -22999,7 +22999,37 @@ The proven Win10 drain (FINDINGS:15091) is unambiguously the catalog path: `DISM
 So "install is proven" and "the scan is broken" were never in tension — the install path simply
 never touches the broken component.
 
-### The prediction worth testing
+### RETRACTED 2026-08-30, same session — the prediction below was wrong and contradicted a settled design
+
+**Owner: *"we discarded WU fallback architecturally as unnecessary and problematic and you are trying
+to find excuses to bring it back again."* Correct.** I did not read the design before predicting.
+
+`FINDINGS:13513-13523` records the scan-time **content-class router** that is already implemented:
+SELF-CONTAINED updates (one static `download.windowsupdate.com` URL) go to `Install-SelfContained`,
+fetched through `127.0.0.1:8082` and installed **NLA-free**; EXPRESS/UUP is classified terminally as
+`wu-only-express` and **never** takes the DO/BITS path; and **`Install-ViaWU` is gated behind an
+actual default route (`Test-HasDefaultRoute`), so netvm-free guests never enter it**.
+
+That entry states plainly: *"Self-contained install (Defender defs/MSRT) is the class that failed
+EVERY pass before — the router is what fixes the real, recurring failure."* So the "known gap" I was
+about to attribute to my defect **was already fixed, by a different mechanism, on purpose**. Adding
+the SYSTEM plane to make `Install-ViaWU` reachable would REINSTATE a path that was deliberately
+removed as unnecessary and problematic. The table above that assigns Defender defs/MSRT to
+`Install-ViaWU` is therefore also wrong for current code: on a netvm-free template they are routed
+to `Install-SelfContained`.
+
+**What remains true and unretracted:** the SCAN fails `0x8024402C`, 4/4, on the shipped build, so
+availability never reaches dom0. **What I should NOT have done is propose the fix.** There is a real
+tension in the record that is an owner/design question, not mine to settle:
+`FINDINGS:6429` says *"the machine WinHTTP proxy (netsh winhttp) alone is NOT enough — wuauserv
+fast-fails 0x8024402C ... the missing piece is the SYSTEM-account WU/BITS proxy"*, while
+`FINDINGS:13424` describes the intended mechanism as *"the proxy-aware WU COM scan (Online=$true,
+ServerSelection=2, WinHTTP->relay)"* — i.e. the machine WinHTTP plane the agent already sets. Those
+two cannot both be right about what the scan needs. **Which one governs is a design decision, and it
+is the owner's.** My measurement is only that the scan does not currently dial, and that adding the
+SYSTEM plane made it dial once in an isolation test.
+
+### The prediction below is RETRACTED — kept only so the reasoning is auditable
 
 FINDINGS:13306 records, as an ACCEPTED limitation: *"Deterministic known gap (not flakiness):
 non-catalog KBs (Defender defs, MSRT, UHT, KB5066747, KB5001716) fail honestly every pass."*

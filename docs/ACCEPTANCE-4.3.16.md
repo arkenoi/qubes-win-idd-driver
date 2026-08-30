@@ -52,7 +52,7 @@ the relay log is silent after the CTL fetches.
     bitsadmin /util /setieproxy LOCALSYSTEM MANUAL_PROXY 127.0.0.1:8082 "<local>"
     -> WUA_OK count=4 seconds=104.8   (KB5007651, KB890830, KB2267602, KB5121003)
 
-That is also the seen-to-fail control the fix will need. The backoff-cache hypothesis was tested and
+That is an isolation result, **not a proposed fix**: `Install-ViaWU` (the DO/BITS rung) is deliberately gated off for netvm-free guests, and re-enabling the WU COM path would reinstate an architecture that was discarded on purpose. What the scan should use instead is an owner design decision — `FINDINGS:6429` and `FINDINGS:13424` disagree about whether the machine WinHTTP plane alone is sufficient, and that must be settled before any change. The backoff-cache hypothesis was tested and
 **refuted** (`SoftwareDistribution` renamed, still `0x8024402C`).
 
 `FINDINGS:6429` had already recorded the required plane set — *"netsh winhttp + device-wide WinINET
