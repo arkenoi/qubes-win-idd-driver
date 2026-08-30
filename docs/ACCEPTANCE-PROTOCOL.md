@@ -1054,6 +1054,34 @@ Instrument blindness table (do not conclude from silence): `qtest shot` sees man
 
 **Capture-class rule (binding):** per-window capture is the accepted class. Whole-desktop (`fullshot`; `qtest-geom` triggers one) only for (a) o-r surfaces and (b) suspected dom0 compositing defects; processed locally, cropped immediately, **never committed** — not even inside a tar (a name rule cannot see inside an archive). `tools/pre-commit-no-desktop-captures.sh` + the enabled `.githooks/pre-commit` (P0-PRE) screen commits. Privacy ruling on owner-attended windows for fullshot cells = decision D10.
 
+### RND-0b — WHICH CAPTURE TOOL, PER CELL (added 2026-08-30; owner: *"cover the protocol gap, it is all consequences of 'instructions not a runbook'"*)
+
+RND-0 states the blindness table and RND-3 warns that `qtest shot` "cannot photograph a menu", but no cell NAMES the instrument it must be judged with — so the choice is left to judgement at the moment it is easiest to get wrong. It was got wrong here: RND-4 (toasts) was first judged with `qtest shot`, which sees **managed windows only** and is structurally blind to the override-redirect surface a toast IS. The dom0 half of that cell was therefore measured with a tool that could not have seen a pass. **This table is now part of the cell, not advice next to it.**
+
+| cell | dom0 instrument | why |
+|---|---|---|
+| RND-1 drag (replay/wobble) | QGAPROTO trace; `qtest shot` for window presence | wobble is judged from `ax/ay` vs `lx/ly`, NEVER cross-VM capture |
+| RND-1 debris | **`fullshot`** (declared legitimate whole-desktop use) | fragments appear between windows, not inside one |
+| RND-2 scroll | QGAPERF only | a metric, not a picture |
+| **RND-3 menus / o-r** | **`fullshot` + `winshot.py`** | `_NET_CLIENT_LIST` excludes o-r; `qtest shot` is blind by construction |
+| **RND-4 toasts** | **`fullshot` + `winshot.py`** | a toast is topmost + layered + often DWM-cloaked — an o-r surface |
+| RND-5 Start | `qtest shot` **plus** the agent deny line | acceptance is that NOTHING maps; the discriminator is the vacuity proof |
+| RND-6 occlusion | `qtest shot` per-window + `check-occlusion.py` | both windows are managed |
+| RND-7 compound chrome | `qtest shot` window COUNT + guest-side `EnumWindows` | both sides are managed windows; the count is the verdict |
+| RND-8 resolution | `qtest shot` + `snap-regress` | managed windows; pixels must change |
+| RND-9 boot/LogonUI | `qtest shot` + protocol trace armed pre-reboot | sub-second flashes need the trace |
+
+**Binding rules that follow from it:**
+1. **A cell whose subject can be override-redirect MUST use `fullshot`.** A `qtest shot` negative on such a cell is `INVALID-VACUOUS`, never a PASS and never a FAIL — the instrument could not have seen the thing.
+2. **Whole-desktop captures are deleted in the same step that reads them** (capture-class rule, D10). They contain the owner's entire desktop. Read, decide, delete — never commit, never retain, not even inside a tar.
+3. **Guest-side existence is proven with `EnumWindows` (`CharSet.Unicode`), not with the capture.** The two halves answer different questions: did the surface exist, and did it reach dom0.
+
+### RND-0c — THE INTERACTIVE-SESSION TRAP (added 2026-08-30)
+
+**qrexec on this testbed runs as `NT AUTHORITY\SYSTEM`** (dom0 policy — see the `presession-qrexec-system` memory). Shell UI is PER-USER. So anything driven directly over qrexec that needs the logged-in user's session — **toasts, Start, shell flyouts, notification surfaces** — is accepted by the API and rendered for nobody. Measured: `fire-toast.ps1` returned `{"fired": true}` while no window existed in the guest at all.
+
+Such cells must be driven **as the interactive user** (`schtasks /ru user /it`, which is why `open-start.ps1` and `toast-probe-uia.ps1` already schedule tasks). A cell that fired its stimulus as SYSTEM has not established the stimulus, and its result is `INVALID-VACUOUS` under SG0.4 regardless of what the capture shows.
+
 ### RND-1 … RND-9 — the battery
 
 *Run per OS at minimum on: the fresh-install exit (ST2 on churn) and one upgrade exit (ST2G), seamless mode; RND-8 additionally in the fullscreen/IDD configuration. After any battery: **RND-cold** — one reboot, then RND-3/4/5 again (a live agent restart clears exactly the faults cold boot exposes). Settle rule: ≥20 s after scene setup before first capture; expected window counts derive from the scene's own window list — never hardcoded. Cost: ~1.5–2.5 h per OS per configuration, 0 GB.*
