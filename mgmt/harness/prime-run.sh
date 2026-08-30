@@ -74,6 +74,12 @@ if [ -n "$PAYLOAD" ]; then
     log "TERMINAL: staged payload has no install.cmd at its root ($JOBDIR/setup)"; exit 1; }
   log "payload staged: $(find "$JOBDIR/setup" -type f | wc -l) files from $PAYLOAD"
 fi
+# CLEAR STALE FLAGS FIRST. Flags are files in the job directory, and the job directory persists
+# between runs - so a run that set c12.flag would leave it there and the NEXT run, which never asked
+# for C12, would silently get it too. That is the same class as the stale-payload and stale-log
+# traps the harness already guards: state from a previous cell being read as this cell's. Clearing
+# is unconditional, so "no --flag" always means "no flags".
+for stale in "$JOBDIR"/*.flag; do [ -e "$stale" ] && { rm -f "$stale"; log "cleared stale flag: $(basename "$stale")"; }; done
 for f in ${FLAGS+"${FLAGS[@]}"}; do : > "$JOBDIR/$f"; log "flag set: $f"; done
 
 # --- build the job stick ---------------------------------------------------------------------
