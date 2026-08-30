@@ -665,16 +665,41 @@ PV=$(python3 -c "import json;print(json.load(open('$S/dl/qwt-improved-iso/MANIFE
 # evening, so every clone made from it inherited that contamination silently. Goldens are now named
 # here (overridable) and VERIFIED against their seal before any cell runs: a drifted or unsealed
 # golden aborts the campaign instead of quietly poisoning it.
-G10="${G10:-win10-goldr}"
-G11="${G11:-win11-goldr}"
+#
+# NO DEFAULT ANY MORE (2026-08-30). It used to default to win10-goldr/win11-goldr, which carried
+# the release UNDER TEST - so every "fresh"/"upgrade" cell cloned a guest that already had the
+# candidate on it and silently took the same-version-reinstall branch. The cell names claimed one
+# thing and the installer did another. There is no safe default here: the correct entry differs per
+# cell (pristine base for a clean install, an N-1 fixture for C3, a stock fixture for C4), so name
+# it explicitly or the run does not start.
+[ -n "${G10:-}" ] || [ -n "${G11:-}" ] || {
+  say "FATAL: neither G10 nor G11 is set. Name the entry image(s) explicitly, e.g."
+  say "  G10=win10-c1 CELLS=win10-seeded ...        # a fixture built by prime-run.sh"
+  say "  G10=win10-base CELLS=...                   # a sealed pristine golden"
+  say "There is no default: the right entry differs per cell, and the old default (win10-goldr)"
+  say "carried the candidate itself, which turned every upgrade cell into a reinstall cell."
+  exit 1; }
+
+# CUSTODY GATE - two acceptable provenances, both strict, neither optional.
+#   sealed golden : golden.sh verify   - untouched since it was sealed
+#   fixture       : golden.sh fixture  - built by prime-run.sh from a base whose seal STILL verifies
+# Owner decision 2026-08-30: only the pristine bases are sealed; software-carrying preconditions are
+# transient fixtures. So demanding a seal from every entry image would block the upgrade cells
+# entirely, while accepting anything unchecked is how a contaminated golden poisoned a whole
+# campaign. Hence: one of the two, always, and say which.
 for g in "$G10" "$G11"; do
-  if ! ./mgmt/golden.sh verify "$g" >/dev/null 2>&1; then
-    say "FATAL: golden $g failed custody verification (drifted or unsealed)."
-    say "       ./mgmt/golden.sh verify $g   # for the detail"
-    say "       Cloning from it would inherit whatever changed. Rebuild per protocol 0.6c or re-seal."
+  [ -n "$g" ] || continue
+  if ./mgmt/golden.sh verify "$g" >/dev/null 2>&1; then
+    say "  entry $g: SEALED GOLDEN, intact"
+  elif ./mgmt/golden.sh fixture "$g" >/dev/null 2>&1; then
+    say "  entry $g: CAMPAIGN FIXTURE, $(./mgmt/golden.sh fixture "$g" | head -1 | sed 's/^FIXTURE //')"
+  else
+    say "FATAL: entry image $g has NEITHER an intact seal NOR a fixture record."
+    say "       ./mgmt/golden.sh verify $g    # if it is meant to be a sealed golden"
+    say "       ./mgmt/golden.sh fixture $g   # if it is meant to be a campaign fixture"
+    say "       Cloning from it would inherit whatever it happens to contain."
     exit 1
   fi
-  say "  golden $g: sealed and intact"
 done
 
 say "=== MATRIX for $PV (agent $ASHA) ==="
@@ -686,6 +711,17 @@ say "=== MATRIX for $PV (agent $ASHA) ==="
   say "  CELLS=\"win10-1stage win10-2stage win10-stock win11-1stage win10-appvm win11-appvm\""
   exit 1; }
 say "  cells: $CELLS"
+# A cell whose entry image is unset would call reclone with an EMPTY golden name. Catch that here,
+# before anything boots: G10/G11 are now per-cell choices, so selecting a win11 cell while only G10
+# is set is an operator error, not something to discover halfway through a run. The appvm cells are
+# exempt - they pass a literal "-" and clone nothing.
+for c in $CELLS; do
+  case $c in
+    *-appvm) ;;
+    win10-*) [ -n "$G10" ] || { say "FATAL: cell '$c' needs G10 set (the Win10 entry image)"; exit 1; } ;;
+    win11-*) [ -n "$G11" ] || { say "FATAL: cell '$c' needs G11 set (the Win11 entry image)"; exit 1; } ;;
+  esac
+done
 for c in $CELLS; do
   case $c in
     win10-seeded)   cell_seeded        "$G10" win10-tpl WIN10 ;;

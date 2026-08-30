@@ -158,6 +158,36 @@ QTEST_VM=$CHURN timeout -k 5 90 ./tools/qtest shot "$OUT/screen.tar" >/dev/null 
 echo "restarts=$restarts" > "$OUT/prime-run.meta"
 echo "job=$JOB base=$BASE churn=$CHURN" >> "$OUT/prime-run.meta"
 
+# --- fixture provenance record ----------------------------------------------------------------
+# Campaign fixtures are NOT sealed goldens (owner 2026-08-30: "we are not going to keep them
+# forever as golden untouchables"), so `golden.sh verify` can never pass for one - it fails closed
+# on anything unsealed, correctly. But the concern the seal exists for is still real: no cell may
+# clone from a source of unknown provenance.
+#
+# A fixture's provenance is established by CONSTRUCTION rather than by a seal: it was built minutes
+# ago, by this script, from a base golden whose seal was verified before the clone. Recording that
+# lets `golden.sh fixture` re-check it later - and re-verify the BASE's seal at that moment, so a
+# fixture whose base has since drifted stops being acceptable too. The record is per-campaign and
+# dies with the fixture; it is not custody, it is a receipt.
+if [ "$ready" = 1 ]; then
+  mkdir -p "$HERE/mgmt/fixtures"
+  python3 - "$CHURN" "$BASE" "$JOB" "$OUT" "${FLAGS[*]:-}" \
+      > "$HERE/mgmt/fixtures/$CHURN.json" <<'PY'
+import json, subprocess, sys, os
+churn, base, job, out, flags = sys.argv[1:6]
+seal = f"mgmt/goldens/{base}.json"
+base_sealed = json.load(open(seal))["sealed_utc"] if os.path.exists(seal) else None
+print(json.dumps({
+    "vm": churn, "base": base, "base_sealed_utc": base_sealed, "job": job,
+    "flags": flags.split() if flags else [],
+    "evidence": os.path.basename(out),
+    "built_utc": subprocess.run(["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"],
+                                capture_output=True, text=True).stdout.strip(),
+}, indent=2, sort_keys=True))
+PY
+  log "fixture record -> mgmt/fixtures/$CHURN.json (base $BASE, job $JOB)"
+fi
+
 if [ "$ready" != 1 ]; then
     log "DEADLINE: ${DEADLINE}s elapsed with no qrexec after $restarts restart(s)."
     log "  Guest LEFT RUNNING and NOT removed - its state is the evidence (H3.5). Read $OUT."

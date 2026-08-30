@@ -139,6 +139,37 @@ PY
         rm -f "$now"; exit 2
     fi
     ;;
+  fixture)
+    # CAMPAIGN FIXTURE CHECK - the second acceptable provenance, alongside `verify`.
+    #
+    # Owner decision 2026-08-30: only the two PRISTINE bases are sealed goldens; every precondition
+    # that carries software (a previous release of ours, stock 4.2.2, the nopvdisk shape) is built
+    # on demand and torn down. So `verify` can never pass for one - it fails closed on anything
+    # unsealed, which is right for a golden and wrong as the only question to ask.
+    #
+    # A fixture earns trust by CONSTRUCTION: prime-run.sh built it from a base golden whose seal it
+    # verified first, and wrote a receipt. This re-reads that receipt AND re-verifies the base's
+    # seal now - so a fixture whose base has drifted since stops being acceptable, and a qube with
+    # no receipt at all is refused exactly as loudly as an unsealed golden.
+    [ -n "$vm" ] || { echo "usage: $0 fixture <vm>"; exit 1; }
+    rec="$HERE/mgmt/fixtures/$vm.json"
+    [ -f "$rec" ] || { echo "NO FIXTURE RECORD for $vm - built by hand, or not by prime-run.sh."; \
+                       echo "  A cell must not clone from a qube whose provenance is unknown."; exit 2; }
+    base=$(python3 -c "import json;print(json.load(open('$rec'))['base'])" 2>/dev/null)
+    [ -n "$base" ] || { echo "FIXTURE RECORD for $vm is unreadable - refusing"; exit 2; }
+    if ! "$0" verify "$base" >/dev/null 2>&1; then
+        echo "REFUSE: $vm was built from $base, whose seal no longer verifies."
+        echo "  Whatever changed in $base was inherited by $vm at clone time."
+        exit 2
+    fi
+    python3 -c "
+import json; d=json.load(open('$rec'))
+print('FIXTURE %s: built %s from %s (sealed %s), job=%s%s' % (
+    d['vm'], d['built_utc'], d['base'], d.get('base_sealed_utc'), d['job'],
+    (' flags=' + ' '.join(d['flags'])) if d.get('flags') else ''))"
+    echo "  base seal re-verified now - provenance intact"
+    exit 0
+    ;;
   list)
     for f in "$SEALDIR"/*.json; do
         [ -e "$f" ] || { echo "(no goldens sealed)"; break; }
