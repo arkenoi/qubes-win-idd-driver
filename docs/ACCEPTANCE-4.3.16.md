@@ -206,14 +206,14 @@ Per SG11, a blank fail-proof cell renders that safeguard's PASS **UNPROVEN** in 
 | safeguard | positive | negative control | fail-proof | verdict |
 |---|---|---|---|---|
 | **SG1** Mode 1 never shown | PASS — nothing fullscreen across a cold boot | secure desktop entered *and* suppressed; no-shell phase observed | — (attended diag build owed) | `PASS-UNPROVEN` |
-| **SG2** borderless fullscreen gated | not exercised | — | — | `INVALID-PRECONDITION` |
-| **SG3** windowed fullscreen allowed | PASS — maximized captioned window mapped | — | — (deny-direction diag build owed) | `PASS-UNPROVEN` |
-| **SG4** o-r fullscreen never mapped | not exercised | — | — | `INVALID-PRECONDITION` |
+| **SG2** borderless fullscreen gated | PASS — 1024x768 caption-less `WS_EX_APPWINDOW` probe absent from dom0 in 6/6 samples | discriminator `hidden (set service.gui-fullscreen to allow)` ×2; probe styles read back; control window seen 6/6 | — (feature-ON arm attended) | `PASS-UNPROVEN` |
+| **SG3** windowed fullscreen allowed | PASS — captioned 1024x768 probe mapped as 1010x761 in 6/6 samples | probe carries `WS_CAPTION`, read back with GetWindowLong; control seen 6/6 | — (deny-direction diag build owed) | `PASS-UNPROVEN` |
+| **SG4** o-r fullscreen never mapped | PASS — 1024x768 o-r probe absent from dom0 in 6/6 samples | discriminator `unconditionally denied, feature or not` ×2; control seen 6/6 | — (feature-ON arm attended) | `PASS-UNPROVEN` |
 | **SG5** secure desktop per mode | partial — freeze observed during SG1's Winlogon phase | — | — | not run as a cell |
 | **SG6** autologon armed | PASS — `AutoLogonCount` absent, task Ready, windows map | — | **INCONCLUSIVE** — selftest cannot build its negative | `PASS-UNPROVEN` |
 | **SG7** toasts survive filter | PASS — owner-observed onscreen | — | — (naive-cloak diag build owed) | `PASS-UNPROVEN` |
 | **SG8** compound chrome | PASS via RND-7 — 5 HWNDs guest-side, 1 mapped | the 4 shadow strips proven present in the same run | — | `PASS-UNPROVEN` |
-| **SG9** Start per shipped spec | PASS — denied with the documented discriminator | Start surface genuinely created and evaluated | — | `PASS-UNPROVEN` |
+| **SG9** Start per shipped spec | PASS — control only in dom0, re-run on the clean subject | 25 deny lines `Start surface not presented in seamless mode`; control seen | — | `PASS-UNPROVEN` |
 | **SG10** shell identity/furniture | not run | — | — | not run |
 
 ## Closing record (runbook §0.2 step 8)
