@@ -396,6 +396,23 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   # NO SAMPLES / BLIND / COVERAGE GAPS as distinct outcomes, and each of those means "this cell
   # cannot claim the dialog was absent" - not "it was absent".
   local dv
+  # N/A-BY-DESIGN GATE, before the vacuity gate. The protocol's dialog-vacuity clause (P2) is
+  # binding: the premature-reboot dialog is raised by "Xen PV Network Class" and therefore CANNOT
+  # appear on a guest with no netvm. On such a guest neither verdict means anything - "no dialog"
+  # is vacuous, and a FAIL for a missing watcher summary is equally meaningless, because there was
+  # nothing for the watcher to see.
+  #
+  # This is NOT a way to skip the check where it counts. It fires only when netvm is literally
+  # empty, it reports N/A rather than PASS so nothing can cite it as evidence, and it names the
+  # cell that does own the claim (NET-6, on a guest that has never had a vif). Without it, every
+  # primer-installed clean-install cell would carry a structural FAIL that says nothing about the
+  # product.
+  local nv; nv=$(qvm-prefs "$vm" netvm 2>/dev/null)
+  if [ -z "$nv" ]; then
+    say "  N/A   $lbl: premature-reboot dialog NOT APPLICABLE - $vm has netvm='' and the dialog is a"
+    say "        Xen PV Network Class event, so it cannot occur here. NET-6 owns this claim."
+    return 0
+  fi
   dv=$(QTEST_VM=$vm timeout -k 5 120 ./tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -File $INC\\reboot-dialog-watch.ps1 -Summary" 2>/dev/null | tr -d '\r' | grep -a '=== REBOOTWATCH ===' | tail -1)
   if [ -z "$dv" ]; then
     no "$lbl: reboot-dialog watcher produced NO summary - 'no dialog' would be vacuous (INVALID)"
