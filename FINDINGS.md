@@ -21520,3 +21520,36 @@ withdrawn.
 **Pattern worth noting:** this is the fourth unreachable-or-wrong success criterion found today
 (RB-03's timestamp filter, the harness's empty-ASHA match, my own PRISTINE `VERDICT=DESKTOP`
 comparison, and now this). Every one produced a confident verdict about something never measured.
+
+## 2026-08-30 — cell_fresh_2stage CANNOT run from an ST2G golden: it makes the clone unbootable
+
+Cell 2 of the campaign failed with "did not come back with testsigning off". That is **not a product
+regression**. The cell's own construction bricks the guest.
+
+    WIN10-2stage-boot: t+220s..549s   qvm=Transient  screen=NOWINDOW
+    WIN10-2stage-boot: DEADLINE 600s with no session
+
+**Mechanism.** `cell_fresh_2stage` reclones the golden and then runs `bcdedit /set testsigning off`
+before rebooting, to construct the "testsigning was never on" precondition of the two-stage path.
+But the golden is an **ST2G** image - it already has QWT installed, and QWT's PV drivers are
+TEST-SIGNED by our CI. `xenvbd` is among them, and it is the **boot disk** driver. With testsigning
+off those drivers cannot load, so the guest cannot reach a bootable state at all: it sits Transient
+with no window until the deadline.
+
+**The protocol already says so.** C1 fresh-2stage's entry is `R3+ST0` - a PRISTINE guest with no
+QWT, where testsigning-off is simply the natural state and nothing test-signed is needed to boot.
+Cloning an ST2G golden and switching testsigning off can never produce that precondition; it
+produces an unbootable disk.
+
+This is the RB-02 family again ("three prescribed configurations have no producer"): ST0T and the
+two-stage entry state have no constructible path in the harness as written. The audit predicted
+exactly this, and I ran the cell anyway.
+
+**Correct verdict for this cell: INVALID-PRECONDITION**, not FAIL. The harness recorded FAIL because
+it has no vocabulary for "the cell could not build its own entry state" - H5 defines
+INVALID-PRECONDITION precisely for this and the harness does not implement it.
+
+**What a real two-stage cell needs:** entry from ST0 (pristine, QWT-free - both are now sealed and
+available), with the payload delivered by the answer stick at first logon, since a pristine guest
+has no qrexec to push to. That is the stick-orchestrated route P1 already describes and it is a
+different code path from `cell_fresh_2stage`'s clone-and-flip.
