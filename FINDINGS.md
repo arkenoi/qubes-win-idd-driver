@@ -21712,6 +21712,10 @@ reported "no traffic" on guests that were demonstrably online), and not "an adap
 KM-TEST loopback reports PhysicalAdapter=$true and masquerades as both). Bytes moved, and the PV
 adapter's own counter accounts for them, with no emulated adapter left to have carried them instead.
 
+**win11-app, same package, same method:** PV NIC `Xen PV Network Device #0` Up and again the only
+adapter; 25,000,000 bytes transferred; PV rx 28,140,653. So the network criterion holds on BOTH
+OSes for release 6022427.
+
 `guest/net-transfer-proof.ps1` now implements this as a script rather than ad-hoc commands. The
 2026-08-29 proof was real but lived only in a transcript, so it could not be re-run against a new
 package - the same way the matrix cells were lost.
