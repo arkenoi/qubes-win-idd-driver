@@ -38,8 +38,9 @@ settings** (`HKU\S-1-5-18`), which is what `bitsadmin /util /setieproxy LOCALSYS
 `wuauserv` — running as SYSTEM — actually reads.
 
 Every scan therefore fast-fails `0x8024402C` (`WU_E_PT_WINHTTP_NAME_NOT_RESOLVED`) in 2–4 s, 4/4
-attempts. Availability never reaches dom0, so `qvm-features <vm> updates-available` cannot populate
-and U3 (dom0-driven install) is unreachable.
+attempts. Availability never reaches dom0, so `qvm-features <vm> updates-available` cannot populate,
+and U3 cannot be driven **on this build** until the plane is added — note U3 itself is a proven
+capability from earlier work (UBR advanced, CBS `state=112`), not an untested one.
 
 **Attribution is complete because both ends of the proxy were owned.** The path works: the proxy
 logged all three CTL cabs established and the guest logged `Sync-Revocation: 3/3 CTLs refreshed
@@ -108,7 +109,13 @@ chrome filter (owner-observed).
 
 ## What is NOT covered, stated plainly
 
-- **U1/U3 — the update path.** Blocked by the defect above.
+- **U1 — availability to dom0.** Blocked by the defect above, in THIS campaign.
+- **U3 — download + install.** Not run today. **This is not an unproven capability**: prior sessions
+  drove it end to end — `19045.2965 -> 19045.6456` (FINDINGS:15097), Win11 `UBR 8875 -> 9168` with
+  KB5121003 applied (FINDINGS:8249), KBs reaching CBS `state=112` (FINDINGS:9548). The one genuine
+  gap is narrower and already named in the record (FINDINGS:13306): **install has never run on a
+  TemplateVM** — the proven drain was on `win10-clean`, a Standalone rig. One dom0-driven drain on
+  `win10-tpl` with UBR + CBS `state=112` acceptance closes it.
 - **SG2 / SG4** — `INVALID-PRECONDITION`. The agent re-applies dom0 geometry at boot, so the SG0.2
   sub-host containment did not survive the reboot and the probes were 31% of the real screen; the
   gate was never exercised. Not run uncontained, because a real failure would put a full-screen
