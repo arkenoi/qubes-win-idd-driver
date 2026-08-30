@@ -21,6 +21,23 @@ fail() { log "ACCEPT=FAIL reason=$*"; exit 1; }
 
 qq() { QTEST_VM="$VM" timeout "${QT:-60}" "$HERE/tools/qtest" "$@"; }
 
+# SKIP_PROVISION=1 — grade a guest that is ALREADY installed, starting at the reboot (step 3).
+#
+# Steps 3-6 (boot-path reboot, WU posture, health assertion, pixels-actually-change, chrome) are
+# the post-install acceptance the protocol requires of EVERY install cell, not just of ones this
+# script provisioned. The clean-install cells C1/C2 now enter through the primer
+# (mgmt/harness/prime-run.sh), because a pristine base has no qrexec and therefore cannot be
+# reached any other way - so by the time they need grading the guest is installed and destroying
+# it to reinstall it from an ISO would throw away the very artifact under test.
+#
+# Writing a second script for those steps is what protocol 0.8 forbids ("never write a second
+# route to a result the rig already reaches"), and the last time it was done it returned 1603.
+# Hence a switch, not a fork. LOOP is unused in this mode; pass any placeholder.
+if [ "${SKIP_PROVISION:-0}" = 1 ]; then
+    log "SKIP_PROVISION=1 - grading the guest as it stands; starting at the boot-path reboot"
+    log "  (the guest must already carry the build under test - its provenance is the caller's claim)"
+else
+
 # --- 1. clean-slate reinstall (reprovision has its own flock + qrexec wait) ---------
 log "reprovisioning from $LOOP (this destroys $VM)"
 # PIPESTATUS, not $?: with `cmd | tee`, $? is TEE's status, so a failing reprovision was
@@ -43,6 +60,7 @@ done
 [ "$done_install" = 1 ] || fail "install never reported stage2 ok:true + running agent (see $OUT/accept.log)"
 qq run 'powershell -NoProfile -Command "Get-Content C:\qwt-improved-install.log -Tail 40"' > "$OUT/install-log-tail.txt" 2>&1
 log "install reported complete"
+fi   # SKIP_PROVISION
 
 # --- 3. reboot: acceptance is the BOOT path, not the just-installed session ---------
 log "reboot for boot-path acceptance"

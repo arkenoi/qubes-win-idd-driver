@@ -128,11 +128,40 @@ qvm-start "$CHURN" >/dev/null 2>&1
 # --- drive it to a qrexec-answering state -----------------------------------------------------
 # The terminating signal is a POSITIVE fact - the guest answers qrexec - not a timer. Polling is
 # >=20 s (H3.9: per-second qrexec churn triggered the IPI-shootdown wedge).
-t0=$(date +%s); restarts=0; ready=0
+#
+# THE ONE-SHOT RESCUE REBOOT. Waiting only for qrexec is not always enough: on a path that
+# installs the PV drivers FRESH, the driver swap can tear down the vchan qrexec runs on, and no
+# session appears until the guest restarts. verify_installed documents exactly this and handles it;
+# stock QWT's own installer reboots itself; ours deliberately does NOT - its closing line says the
+# caller reboots. Without a rescue this script would sit out its whole deadline on a SUCCESSFUL
+# install and report DEADLINE, which is a false negative of the worst kind: the product worked.
+#
+# Measured 2026-08-30 on the Win10 C1 run: qrexec actually came back at t+309s with no rescue
+# needed, because the PV drivers do not bind until the next boot and the existing vchan survives.
+# So this is insurance, not the normal path - and it is deliberately conservative: it fires at most
+# ONCE, only after RESCUE_AFTER seconds, and only when the guest has also gone CPU-quiet, so it can
+# never interrupt an install that is still working.
+RESCUE_AFTER=${RESCUE_AFTER:-720}
+t0=$(date +%s); restarts=0; ready=0; rescued=0; quiet=0
 while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     sleep 20
     el=$(( $(date +%s) - t0 ))
     st=$(state "$CHURN")
+    # CPU quiescence, read the same way verify_installed reads it. The stats stream is
+    # NULL-separated records; stripping the separators runs values together (3 becomes "31") and
+    # the quiet test can then never pass - that bug was already found and fixed twice here.
+    if [ "$st" = Running ] && [ "$ready" = 0 ]; then
+        cpu=$(printf '' | timeout 10 qrexec-client-vm "$CHURN" admin.vm.Stats 2>/dev/null | tr '\0' '\n' \
+              | awk '/^cpu_usage_raw$/{getline v; if(v+0>m)m=v+0; n++} END{if(n==0)print 9999; else print m}')
+        if [ "${cpu:-9999}" -lt 15 ] 2>/dev/null; then quiet=$((quiet+1)); else quiet=0; fi
+        if [ "$rescued" = 0 ] && [ "$el" -ge "$RESCUE_AFTER" ] && [ "$quiet" -ge 3 ]; then
+            rescued=1
+            log "  t+${el}s no qrexec for ${RESCUE_AFTER}s and CPU quiet (${cpu}) - the install has stopped"
+            log "    working but no session appeared. Rebooting ONCE, as the installer's contract"
+            log "    requires of its caller (a fresh PV install can tear down the vchan qrexec uses)."
+            qvm-shutdown "$CHURN" >/dev/null 2>&1
+        fi
+    fi
     if [ "$st" = Halted ]; then
         restarts=$((restarts+1))
         log "  t+${el}s guest halted (the job rebooted it) - restart #$restarts"

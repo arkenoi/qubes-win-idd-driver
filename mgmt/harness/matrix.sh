@@ -361,7 +361,12 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     # rather than a product verdict (H4.2). So this branch proves the same thing the marker does,
     # from the log's own contents, and proves the cell's entry state at the same time.
     local p1
-    p1=$(grep -a '^=== PRECONDITION === {' "$M/$lbl-final.log" | head -1)
+    # NOT ANCHORED. The installer writes the PRECONDITION line through Write-Log, which prefixes a
+    # timestamp and level ("2026-08-30 12:11:12 [INFO] === PRECONDITION === {...}"), while the
+    # RESULT trailer is written raw and DOES start at column 0. Anchoring this one with ^ matched
+    # nothing and would have reported INVALID-INSTRUMENT for every healthy guest - a false FAIL
+    # introduced by assuming the two banners share a format. Verified against a real log.
+    p1=$(grep -a '=== PRECONDITION === {' "$M/$lbl-final.log" | head -1)
     if [ -z "$p1" ]; then
       no "$lbl: no PRECONDITION line at all - INVALID-INSTRUMENT, nothing about this install was measured"
       return 1
@@ -419,12 +424,18 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   # cell that does own the claim (NET-6, on a guest that has never had a vif). Without it, every
   # primer-installed clean-install cell would carry a structural FAIL that says nothing about the
   # product.
+  #
+  # `return 0` HERE WOULD BE A BUG, and was one: it returns from verify_installed, so every check
+  # AFTER the dialog block - PV console bound, autologon armed, installed version, xenbus_monitor
+  # start type and state - silently never runs, while the summary still prints a clean
+  # "N passed, 0 failed". Measured on the first C1 grade: 5 green lines, four checks skipped.
+  # Skip the dialog check only; fall through to the rest.
   local nv; nv=$(qvm-prefs "$vm" netvm 2>/dev/null)
   if [ -z "$nv" ]; then
     say "  N/A   $lbl: premature-reboot dialog NOT APPLICABLE - $vm has netvm='' and the dialog is a"
     say "        Xen PV Network Class event, so it cannot occur here. NET-6 owns this claim."
-    return 0
-  fi
+    dv=SKIP
+  else
   dv=$(QTEST_VM=$vm timeout -k 5 120 ./tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -File $INC\\reboot-dialog-watch.ps1 -Summary" 2>/dev/null | tr -d '\r' | grep -a '=== REBOOTWATCH ===' | tail -1)
   if [ -z "$dv" ]; then
     no "$lbl: reboot-dialog watcher produced NO summary - 'no dialog' would be vacuous (INVALID)"
@@ -434,6 +445,7 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     no "$lbl: a premature reboot DIALOG was observed: $(echo "$dv" | cut -c1-160)"
   else
     ok "$lbl: no premature reboot dialog, and the watcher proves it looked"
+  fi
   fi
 
   # BRANCH-VS-CLAIM. The installer records which branch it took (`upgrade_mode`), and P1.0 names
@@ -770,7 +782,7 @@ PV=$(python3 -c "import json;print(json.load(open('$S/dl/qwt-improved-iso/MANIFE
 # transient fixtures. So demanding a seal from every entry image would block the upgrade cells
 # entirely, while accepting anything unchecked is how a contaminated golden poisoned a whole
 # campaign. Hence: one of the two, always, and say which.
-for g in "$G10" "$G11"; do
+for g in "${G10:-}" "${G11:-}"; do
   [ -n "$g" ] || continue
   if ./mgmt/golden.sh verify "$g" >/dev/null 2>&1; then
     say "  entry $g: SEALED GOLDEN, intact"
@@ -801,8 +813,8 @@ say "  cells: $CELLS"
 for c in $CELLS; do
   case $c in
     *-appvm|grade10|grade11) ;;
-    win10-*) [ -n "$G10" ] || { say "FATAL: cell '$c' needs G10 set (the Win10 entry image)"; exit 1; } ;;
-    win11-*) [ -n "$G11" ] || { say "FATAL: cell '$c' needs G11 set (the Win11 entry image)"; exit 1; } ;;
+    win10-*) [ -n "${G10:-}" ] || { say "FATAL: cell '$c' needs G10 set (the Win10 entry image)"; exit 1; } ;;
+    win11-*) [ -n "${G11:-}" ] || { say "FATAL: cell '$c' needs G11 set (the Win11 entry image)"; exit 1; } ;;
   esac
 done
 for c in $CELLS; do
