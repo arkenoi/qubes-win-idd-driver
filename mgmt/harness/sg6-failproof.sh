@@ -39,18 +39,39 @@ boot_and_wait(){
   done
   return 1
 }
+# Returns "<count>|<capture_ok>". BOTH halves matter.
+# Two bugs lived in the old one-liner, and they compounded:
+#   * `grep -c '\.png$' || echo 0` emits TWO zeros when nothing matches (grep -c prints 0 AND
+#     exits 1), so the caller's arithmetic saw "0\n0";
+#   * an EMPTY TAR - the screenshot service failing, which it does by writing its reason to a
+#     stderr qrexec does not forward - was reported as "0 windows mapped", i.e. as the very
+#     condition this fail-proof is trying to detect. A blind capture path would have printed
+#     "RED AS REQUIRED" and earned SG6 a fail-proof it never demonstrated.
 windows_mapped(){
   local t="$OUT/$1.tar"; rm -f "$t"
   q shot "$t" >/dev/null 2>&1
-  [ -s "$t" ] && tar tf "$t" 2>/dev/null | grep -c '\.png$' || echo 0
+  local ok=yes n=0
+  [ -s "$t" ] || ok=no
+  if [ "$ok" = yes ]; then n=$(tar tf "$t" 2>/dev/null | grep -c '\.png$'); n=${n:-0}; fi
+  echo "$n|$ok"
+}
+
+# The defect state asserted POSITIVELY, not as an absence of windows: with autologon disarmed there
+# is no interactive session at all, which is why nothing maps and why the field reports described a
+# running, reachable, invisible guest. An in-guest control window is impossible here (there is no
+# session to put one in), so this is what replaces it.
+defect_state(){
+  T=300 q pushrun /home/user/.claude/jobs/c2a0f57b/tmp/sg6-state.ps1 2>/dev/null | tr -d '\r' \
+    | grep -aE '^(SESSIONS|AUTOLOGON|GUARD)' 
 }
 
 echo "=== 1. CONTROL: with autologon armed, windows MUST map (else the later red proves nothing) ==="
 [ "$(qvm-ls --raw-data --fields STATE "$VM" | tail -1)" = Halted ] || qvm-shutdown --wait --timeout 300 "$VM" >/dev/null 2>&1
 boot_and_wait || { echo "FATAL: $VM never answered qrexec in the control"; exit 2; }
 q run 'cmd /c start "" notepad.exe' >/dev/null; sleep 10
-ctrl=$(windows_mapped control)
-echo "  control: $ctrl window(s) mapped, qrexec alive"
+cd=$(windows_mapped control); ctrl=${cd%%|*}; cok=${cd#*|}
+echo "  control: $ctrl window(s) mapped (capture_ok=$cok), qrexec alive"
+[ "$cok" = yes ] || { echo "FATAL: the capture path returned nothing even in the control - it is blind."; echo "       A later '0 windows' would prove nothing. Fix the screenshot service first."; exit 2; }
 q run 'cmd /c taskkill /f /im notepad.exe' >/dev/null 2>&1
 [ "${ctrl:-0}" -ge 1 ] || { echo "FATAL: control mapped no windows - the subject is already broken, a red would be meaningless"; exit 2; }
 
@@ -71,16 +92,25 @@ qvm-shutdown --wait --timeout 300 "$VM" >/dev/null 2>&1
 boot_and_wait || { echo "the guest did not answer qrexec at all - that is a DIFFERENT failure than the one under test"; exit 1; }
 echo "  qrexec answers"
 sleep 45
-red=$(windows_mapped defect)
-echo "  with autologon disarmed: $red window(s) mapped, qrexec alive"
+rd=$(windows_mapped defect); red=${rd%%|*}; rok=${rd#*|}
+echo "  with autologon disarmed: $red window(s) mapped (capture_ok=$rok), qrexec alive"
+echo "  defect state asserted directly:"
+defect_state | sed 's/^/    /' | tee "$OUT/defect-state.txt"
 
 echo "=== 4. VERDICT ==="
-if [ "${red:-0}" -eq 0 ]; then
-  echo "RED AS REQUIRED: qrexec answers while ZERO windows map - the invisible-guest condition."
+nosession=no
+grep -qa 'SESSIONS 0' "$OUT/defect-state.txt" 2>/dev/null && nosession=yes
+if [ "$rok" != yes ]; then
+  echo "INVALID-INSTRUMENT: the capture path returned nothing at all after the cold boot, so a"
+  echo "count of 0 is indistinguishable from an outage. Not a fail-proof. Re-run."
+  rc=1
+elif [ "${red:-0}" -eq 0 ] && [ "$nosession" = yes ]; then
+  echo "RED AS REQUIRED: qrexec answers, ZERO windows map, and there is NO interactive session -"
+  echo "the invisible-guest condition, asserted positively rather than inferred from an absence."
   echo "SG6's checker is now seen-to-fail; its PASS may be cited as PASS (H5), not PASS-UNPROVEN."
   rc=0
 else
-  echo "NOT RED: $red window(s) still mapped with autologon disarmed."
+  echo "NOT RED: $red window(s) mapped / session present ($nosession) with autologon disarmed."
   echo "Either the defect was not planted, or the checker cannot detect it. SG6 stays PASS-UNPROVEN."
   rc=1
 fi
