@@ -52,6 +52,22 @@ qvm-prefs "$VM" vcpus 4
 qvm-prefs "$VM" qrexec_timeout 300
 qvm-prefs "$VM" netvm ''
 qvm-volume extend "$VM:root" 80GiB
+# EXTEND THE PRIVATE VOLUME TOO. This is the THIRD script to need this fix, which is the point:
+# scratchpad/reprovision.sh and mgmt/clone-to-template.sh both already do it, and this one - the
+# script that builds the GOLDENS - did not, so every golden and every clone taken from it carried
+# the Qubes default of 2 GiB.
+#
+# QWT's MoveUsers relocates C:\Users onto the private volume (stock behaviour; README says to check
+# the size first). At 2 GiB it cannot complete, Q:\Users is never established, and then
+# qubes.Filecopy fails with the file-receiver's own message:
+#   "wmain: getting Documents path failed with error 0x80070002"
+# which reads like a broken guest rather than a too-small disk. Measured 2026-08-30 on win10-app,
+# derived from a 2 GiB-private golden: nothing could be pushed, so nothing could be tested.
+#
+# Runs BEFORE Windows installs, so QWT formats the volume at full size and no in-guest partition
+# resize is needed. 20GiB per the owner ("40gb of private volumes is a waste, 20 should be
+# typically enough").
+qvm-volume extend "$VM:private" 20GiB || { log "FAIL: could not extend $VM:private"; exit 1; }
 qvm-features "$VM" os Windows
 qvm-tags "$VM" add win-idd-testbed
 

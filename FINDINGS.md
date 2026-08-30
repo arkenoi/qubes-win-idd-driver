@@ -21698,3 +21698,53 @@ The two INVALID cells remain unfixed and are NOT claimed - see below.
  - UPGRADE-OVER-STOCK (needs a legal precondition, not an uninstall)
  - PV NETWORKING - no NET cell ran; "network present" is untested here
  - xencons in-cell (it binds, proven separately, but no cell asserts it)
+
+## 2026-08-30 — NETWORK PROVEN on 4.3.16 (win10-app), and a REAL AppVM defect found on the way
+
+### Network: present, and demonstrated by moving data
+
+    PV NIC      Ethernet | Xen PV Network Device #0 | Up     <- the ONLY adapter present
+    transferred 25,000,000 bytes  (speed.cloudflare.com/__down)
+    PV rx total 27,412,451 bytes                             <- accounts for the transfer
+
+Not a gateway ping (a Qubes netvm is a routing endpoint and does not answer ICMP - that method
+reported "no traffic" on guests that were demonstrably online), and not "an adapter is Up" (a
+KM-TEST loopback reports PhysicalAdapter=$true and masquerades as both). Bytes moved, and the PV
+adapter's own counter accounts for them, with no emulated adapter left to have carried them instead.
+
+`guest/net-transfer-proof.ps1` now implements this as a script rather than ad-hoc commands. The
+2026-08-29 proof was real but lived only in a transcript, so it could not be re-run against a new
+package - the same way the matrix cells were lost.
+
+### The defect found on the way: an AppVM's private volume comes up as D:, 2 GB, not Q:
+
+Pushing the script to `win10-app` failed with the file-receiver's own message:
+
+    wmain: getting Documents path failed with error 0x80070002
+
+which reads as a broken guest. It is not. Measured on that AppVM:
+
+    DISK:1 size=40GB GPT
+    PART:disk1 letter=(none) size=0GB
+    PART:disk1 letter=D      size=2GB      <- the private volume, mounted as D:, 2 GB partition
+    Q: present = False,  Q:\Users = False
+
+So the private volume was extended to 40 GiB at the Qubes layer, but inside the guest it is still a
+2 GB partition mounted as **D:**, with ~38 GB unallocated and no Q: at all. QWT's MoveUsers expects
+`Q:\Users`, so the Documents path cannot resolve and qubes.Filecopy fails - while the guest is
+otherwise healthy (the campaign's AppVM cells mapped windows on all three cold boots).
+
+**Not to be confused with:** `PROFILE:C:\Windows\system32\config\systemprofile` in the same probe.
+That is just qrexec running as SYSTEM, not a broken user profile.
+
+### And the same old bug in a THIRD script
+
+`mgmt/reprovision-usb.sh` - the script that builds the GOLDENS - extended only `root`, never
+`private`, so `win10-goldr`/`win11-goldr` and every clone from them carry the 2 GiB default.
+`scratchpad/reprovision.sh` and `mgmt/clone-to-template.sh` were both already fixed for exactly
+this. Third code path, same defect, and it is what made the AppVM's volume small in the first place.
+Fixed; the extend runs before Windows installs so QWT formats at full size.
+
+**Open:** whether extending + re-partitioning the existing goldens repairs the AppVM Q: mapping, or
+whether the goldens must be rebuilt with the fixed script. Not guessed at - the goldens are sealed
+and rebuilding them is a deliberate, recorded act.
