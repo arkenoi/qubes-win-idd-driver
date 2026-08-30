@@ -177,6 +177,38 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     log "  t+${el}s state=$st restarts=$restarts (no qrexec yet)"
 done
 
+# SETTLE BEFORE DECLARING SUCCESS. First qrexec is not the end of the job: `stock-422` installs,
+# gets rc=3010 and then does `shutdown /r /t 15` to bind drivers, so the guest reboots AFTER
+# answering. With on_reboot=destroy that reboot halts the domain, and because this script had
+# already returned, nothing restarted it - measured 2026-08-30 on win11-stk, which was left
+# Transient and then Halted, and whose first probe came back "Request refused" (the file copy could
+# not reach a guest that was not up). Returning on the first sign of life reports a job finished
+# while it is still working.
+#
+# So: confirm the guest is STILL answering after a settle window, and if it went away in the
+# meantime, restart it and wait again. Bounded, and it re-uses the same restart loop's contract.
+if [ "$ready" = 1 ]; then
+    log "  qrexec answered - settling ${SETTLE_SECS:-90}s to catch a post-install reboot the job may still do"
+    sleep "${SETTLE_SECS:-90}"
+    if ! QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY; then
+        log "  the guest stopped answering during the settle window - the job rebooted it after install"
+        st=$(state "$CHURN")
+        [ "$st" = Halted ] && { restarts=$((restarts+1)); log "  restart #$restarts (post-install reboot)"; qvm-start "$CHURN" >/dev/null 2>&1; }
+        ready=0
+        t1=$(date +%s)
+        while [ $(( $(date +%s) - t1 )) -lt 900 ]; do
+            sleep 20
+            [ "$(state "$CHURN")" = Halted ] && { qvm-start "$CHURN" >/dev/null 2>&1; continue; }
+            if QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY; then
+                ready=1; log "  qrexec back after the post-install reboot"; break
+            fi
+        done
+        [ "$ready" = 1 ] || log "  WARNING: guest did not return within 900s of its post-install reboot"
+    else
+        log "  still answering after the settle window - the job is genuinely finished"
+    fi
+fi
+
 # Capture the job's own log and the installer's, whether or not we succeeded - a failed run's
 # evidence is the point of preserving it (H3.5).
 if [ "$ready" = 1 ]; then
