@@ -348,6 +348,37 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   # return the newest of those if this cell's installer never wrote one.
   if [ -n "${E2E_MARK:-}" ] && grep -qa "$E2E_MARK" "$M/$lbl-final.log"; then
     sed -n "/$E2E_MARK/,\$p" "$M/$lbl-final.log" > "$M/$lbl-final.cur"
+  elif [ "${ENTRY_PRISTINE:-0}" = 1 ]; then
+    # PRISTINE-ENTRY CELLS (C1/C2 via the primer) have no run marker, because run_install never
+    # ran - the installer was launched inside the guest by the primer job, which is the only way
+    # into a guest that has no qrexec yet.
+    #
+    # The marker exists to stop a clone's inherited log being graded as this cell's. A pristine
+    # base cannot have one: it has never had QWT, so it has never had an installer write to
+    # C:\qwt-improved-install.log. That is not an assumption - it is CHECKED here, by requiring
+    # the FIRST precondition line in the log to report a guest with no QWT and no testsigning.
+    # If it does not, the entry was not pristine and the whole cell is INVALID-PRECONDITION
+    # rather than a product verdict (H4.2). So this branch proves the same thing the marker does,
+    # from the log's own contents, and proves the cell's entry state at the same time.
+    local p1
+    p1=$(grep -a '^=== PRECONDITION === {' "$M/$lbl-final.log" | head -1)
+    if [ -z "$p1" ]; then
+      no "$lbl: no PRECONDITION line at all - INVALID-INSTRUMENT, nothing about this install was measured"
+      return 1
+    fi
+    # FIELD NAMES ARE `testsigning_active` AND `installed_qwt_count`, verified against
+    # Install-QwtImproved.ps1:2349/2357 - not `testsigning`/`installed_qwt` as the protocol prose
+    # abbreviates them. And the COUNT is the discriminator, not the array: an empty PowerShell
+    # array's ConvertTo-Json rendering is not something to bet a gate on, while
+    # "installed_qwt_count":0 is unambiguous. Both error paths set the count to -1, so a failed
+    # probe can never be mistaken for "no QWT installed".
+    if echo "$p1" | grep -qa '"testsigning_active":false' && echo "$p1" | grep -qa '"installed_qwt_count":0'; then
+      ok "$lbl: entry was genuinely PRISTINE (testsigning_active:false, installed_qwt_count:0) - clean-install path"
+    else
+      no "$lbl: INVALID-PRECONDITION - cell claims a pristine entry but the installer saw: $(echo "$p1" | cut -c1-200)"
+      return 1
+    fi
+    cp "$M/$lbl-final.log" "$M/$lbl-final.cur"
   else
     : > "$M/$lbl-final.cur"
   fi
@@ -435,6 +466,29 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   else
     no "$lbl: xenbus_monitor is RUNNING ($state) - it can still restart the guest"
   fi
+}
+
+# GRADE-ONLY CELL. Runs the full verify_installed battery against a guest that is ALREADY
+# installed, without recloning or reinstalling anything.
+#
+# Why it exists: the clean-install cells (C1/C2) cannot go through run_install at all. A pristine
+# base has no qrexec, so the installer has to be launched inside the guest by the primer job
+# (mgmt/harness/prime-run.sh), and by the time this qube can talk to the guest the install is
+# already done. Without this selector the only way to grade that guest would be a second,
+# hand-rolled battery - which is exactly the "write a second route to a result the rig already
+# reaches" that protocol 0.8 forbids, and which returned 1603 the last time it was done.
+#
+# Set ENTRY_PRISTINE=1 for a clean-install subject: verify_installed then proves the entry state
+# from the installer's own first PRECONDITION line instead of looking for a run marker that never
+# existed. EXPECT_MODE still applies and is still the branch-vs-claim authority.
+cell_grade(){ # $1=vm $2=tag
+  say "######## CELL $2-grade (grade-only, no reclone, no reinstall) ########"
+  local vm=$1
+  if [ "$(w_state "$vm")" = Halted ]; then
+    say "  $vm is Halted - starting it for grading"
+    start_vm "$vm"
+  fi
+  verify_installed "$vm" "$2-grade"
 }
 
 # --------------------------------------------------------------------------- cells
@@ -717,7 +771,7 @@ say "  cells: $CELLS"
 # exempt - they pass a literal "-" and clone nothing.
 for c in $CELLS; do
   case $c in
-    *-appvm) ;;
+    *-appvm|grade10|grade11) ;;
     win10-*) [ -n "$G10" ] || { say "FATAL: cell '$c' needs G10 set (the Win10 entry image)"; exit 1; } ;;
     win11-*) [ -n "$G11" ] || { say "FATAL: cell '$c' needs G11 set (the Win11 entry image)"; exit 1; } ;;
   esac
@@ -734,6 +788,8 @@ for c in $CELLS; do
     win11-fresh)    cell_fresh         "$G11" win11-tpl WIN11 ;;
     win10-stock)    cell_upgrade_stock "$G10" win10-tpl WIN10 ;;
     win11-stock)    cell_upgrade_stock "$G11" win11-tpl WIN11 ;;
+    grade10)        cell_grade         "${GRADE_VM:?set GRADE_VM to the guest to grade}" WIN10 ;;
+    grade11)        cell_grade         "${GRADE_VM:?set GRADE_VM to the guest to grade}" WIN11 ;;
     win10-appvm)    cell_appvm         - win10-tpl WIN10 win10-app ;;
     win11-appvm)    cell_appvm         - win11-tpl WIN11 win11-app ;;
     # An unknown selector must FAIL the campaign, not be narrated past: a typo would otherwise
