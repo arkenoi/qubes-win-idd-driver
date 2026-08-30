@@ -1048,6 +1048,15 @@ writing every artefact it produced into the scratch dir.
 runtime. After editing a harness, also `grep -n '\${((' ` it. More generally, a clean `bash -n` is
 not evidence the script runs.
 
+**10. `pgrep -f` / `pkill -f` MATCH THE SEARCHING SHELL ITSELF.** The pattern appears in your own
+`bash -c` command line, so the process list always contains at least one hit. Three separate costs
+on 2026-08-31: `pkill -f 'p5-run.sh win10-p46'` **killed my own shell** (exit 144); `pgrep -f
+'harness/p5-run'` reported **STILL RUNNING** for a run that had finished nine minutes earlier; and a
+`until ! pgrep -f 'bash mgmt/harness/p5-run'; do sleep 15; done` waiter **spun for 110 minutes**
+matching itself while the run it waited on had exited `rc=0` long before. Use a bracket class so the
+pattern cannot match its own literal — `pgrep -af 'harness/p5-ru[n]'` — or kill by PID. A waiter
+that can never exit looks exactly like work still in progress.
+
 **9. THE PRODUCT'S OWN DEBOUNCES AND CACHES CARRY CONTAMINATION BETWEEN CELLS.** The `-Scheduled`
 update scan skips when a completed pass wrote an answer in the last 30 minutes. Measured 2026-08-31:
 three U1 scans at 02:24-02:26 left an answer, U2's boot-triggered pass fired correctly at 02:35:26
