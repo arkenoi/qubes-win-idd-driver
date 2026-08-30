@@ -55,8 +55,27 @@ GLOG='C:\qwt-improved-install.log'
 TAR=$S/qwt-setup.tar.gz
 INC='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 
+# H3.6 ENFORCEMENT: exactly one Windows guest up at a time, structurally rather than by discipline.
+# Cells never shut their target down when they finish, and reclone only halts its OWN target - so a
+# cell list that crosses an OS boundary (…win10-stock win11-1stage…) leaves the previous guest
+# RUNNING while the next one starts. Audit finding RB-05: 3 of the 6 cells in the documented example
+# list did exactly that. Concurrent runs have destroyed each other's results here before, and three
+# 8 GB guests starved qubesd. ACPI only - a killed guest leaves a dirty volume that blocks the next
+# clone, which is the same reason reclone refuses to kill.
+_halt_other_windows(){ # $1=the guest this cell is about to use
+  local keep=$1 v
+  for v in $(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | grep -E '^win1' | grep -v '|Halted' | cut -d'|' -f1); do
+    [ "$v" = "$keep" ] && continue
+    say "  H3.6: halting $v before working on $keep"
+    qvm-shutdown --wait --timeout 300 "$v" >/dev/null 2>&1
+    echo "$(qvm-ls --raw-data --fields STATE "$v" 2>/dev/null | tail -1)" | grep -qi Halted \
+      || say "  WARNING: $v did not halt - refusing to run two Windows guests is now unenforceable"
+  done
+}
+
 reclone(){ # $1=golden $2=target
   local g=$1 t=$2
+  _halt_other_windows "$t"
   # NEVER KILL. Measured 2026-08-28: a guest sitting in the Windows recovery screen honours ACPI
   # shutdown and halts in 10 s, so the kill bought nothing - and it COST the next step, because a
   # killed guest leaves its volume dirty and qubesd then refuses the clone outright:
@@ -432,6 +451,11 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm - derive an AppVM and cold boot
   say "######## CELL $3-appvm (derive from the installed template, cold boot) ########"
   local tpl=$2 app=${4:-}
   [ -n "$app" ] || { no "$3-appvm: no AppVM name"; return; }
+  # This cell derives an AppVM instead of recloning, so it never passed through reclone's H3.6
+  # guard - and it is the cell most likely to follow an install cell on the other OS. Halt
+  # everything else first, the template included (the AppVM must be derived from a HALTED template
+  # anyway, which the check just below re-asserts).
+  _halt_other_windows "$app"
   if [ "$(w_state "$tpl")" != Halted ]; then
     qvm-shutdown "$tpl" >/dev/null 2>&1
     w_halt "$tpl" 420 "$3-appvm-tplhalt" say || { no "$3-appvm: template would not halt"; return; }
