@@ -23098,3 +23098,35 @@ a stale `SoftwareDistribution` that only cleared on the next boot; `-Action scan
 failing path) versus the `-OnlyKb` pass used here; some state cleared by the intervening reboots.
 Establishing it needs a controlled bisect on a restored image, one variable at a time, with the
 reverse control run in both directions — not another single-run inference from me.
+
+### 2026-08-30 — and the refuting evidence was inside my own quoted output
+
+Owner asked whether I had added the plane during the passing run. Answer: **not during that run.**
+Earlier in the session `enum-updates.ps1` set `setieproxy LOCALSYSTEM MANUAL_PROXY` on `win10-tpl`,
+and `wurestore.ps1` cleared it with `NO_PROXY`. State at the passing run, checked in the location
+bitsadmin actually writes (the `Connections\DefaultConnectionSettings` blob, not the string values —
+my first probe read the wrong key and I re-checked rather than trust it):
+
+    ProxyEnable  <empty>   ProxyServer  <empty>   DefaultConnectionSettings  ABSENT
+
+So the plane was genuinely absent and the falsification stands.
+
+**But the deeper error is worse than a wrong attribution.** `bitsadmin /util /getieproxy LOCALSYSTEM`
+reports:
+
+    There's a policy in effect that disables the storage of proxy settings per user.
+
+That policy is **`ProxySettingsPerUser=0`, which `Ensure-Proxy` sets deliberately** — it makes the
+machine-wide HKLM proxy apply to every account **including SYSTEM**. So HKLM + `ProxySettingsPerUser=0`
+**is** the mechanism that covers `wuauserv`; there was never a missing plane to add. The design was
+already complete.
+
+**I quoted that exact warning in my original defect write-up** and glossed it as *"so that policy
+value does not block the fix, and is not an argument against it."* It is not an obstacle to the fix —
+it is the statement that the fix is unnecessary. The evidence that refuted my diagnosis was inside
+the output I had already pasted into the record, and I read past it because I had decided what the
+answer was before reading.
+
+**Standing lesson:** when an instrument prints something that does not fit the hypothesis, that line
+is the finding. Explaining it away as "not an argument against it" is the tell. Read the output that
+disagrees first.
