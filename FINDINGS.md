@@ -23394,3 +23394,66 @@ manufacture.
 - `mgmt/harness/p5-run.sh` — P5 with the scan disarmed, containment applied AND verified against the
   agent, per-cell deny-line vacuity proofs, and the live control above.
 - `guest/run-as-user.ps1` — runs a command/script as the user principal and recovers its stdout.
+
+---
+
+## 2026-08-31 — `pushrun` needs a logged-on session, and the SG6 fail-proof bricked its own subject
+
+### The mechanism, measured
+`qtest push` is `qubes.Filecopy`, and its destination is `QubesIncoming` under the **logged-on
+user's** Documents folder. With no interactive session, `GetFolderPath('MyDocuments')` is empty for
+SYSTEM and the copy fails — and from the caller's side it simply produces **no output**, not an
+error. `qtest run` with an inline command is unaffected: qrexec runs as SYSTEM and answers fine.
+
+Measured on `win10-p46` sitting at LogonUI:
+
+```
+qtest pushrun guest/sg6-state.ps1   -> (nothing at all)
+qtest run 'cmd /c query user'       -> works; shows no Active session
+qtest run 'cmd /c reg query ...'    -> works
+```
+
+**This is a general rule, not an SG6 detail.** Any cell that probes a guest which may not have a
+session — anything at the sign-in screen, mid-update, pre-autologon, or with autologon deliberately
+disarmed — must use inline `qtest run`. A `pushrun` there returns empty and reads as "the probe found
+nothing", which is indistinguishable from a real negative result.
+
+**Open question this raises about an existing candidate defect.** The unexplained
+`qubes.Filecopy` failure recorded earlier (`sent 0/1 KBEOF`, `GetFolderPath('MyDocuments')` empty for
+SYSTEM, "broke immediately after a CU installed") has exactly this signature. The CU may be
+irrelevant; the guest may simply have had no logged-on session at that moment. **Not concluded** —
+it needs a clean reproduction with the session state recorded at the moment of failure. But the
+"a CU broke Filecopy" framing should not be carried forward as established.
+
+### The SG6 fail-proof bricked its own subject
+Ran for real. Control passed (1 window mapped, capture_ok=yes). The defect was planted correctly
+(`AutoAdminLogon 0`, `GuardTask REMOVED`) and the cold boot produced the intended state. Then:
+
+* the defect-state probe used `pushrun` → returned nothing, so the positive assertion the verdict
+  depended on was never available;
+* **the re-arm also used `pushrun` → it never ran.** The subject was left at LogonUI with
+  `AutoAdminLogon=0` and the guard task deleted.
+
+Repaired inline: `reg add ... AutoAdminLogon 1`, ran the shipped
+`ensure-autologon.ps1` in place (`ok password present as the LSA secret`), and re-registered
+`QubesAutologonGuard` from the installer's own XML via `powershell -EncodedCommand`. Verified by cold
+boot: `sessions=1 Active`, `explorer.exe` running, window maps.
+
+### My "capture_ok" hardening had made the cell unrunnable
+Earlier the same day I hardened `windows_mapped()` because an empty tar was being read as "zero
+windows mapped" — which would let a blind capture path **earn** the fail-proof. The correction was
+right in intent and wrong in mechanism: `local.WinScreenshot` exits 1 with an empty body **both**
+when zero windows are mapped and when the service fails, writing the distinction to a stderr qrexec
+does not forward. So the gate fired on every legitimate red, and the first real run reported
+`INVALID-INSTRUMENT` for a correctly reproduced defect.
+
+Both the original bug and the over-correction come from the same place: **treating an ambiguous
+signal as decisive.** The verdict is now the positive defect state — qrexec alive, `sessions=0`,
+`explorer=0` — with the window count recorded as corroboration only.
+
+### Wedge during the run (postponed class, recorded not investigated)
+Three cold boots in ~10 minutes plus qrexec churn ended in the known wedge: `Running`, qrexec
+silent, and a flat sustained burn of **~36.5 s CPU per 10 s wall across 4 vCPUs** (deltas 36.51,
+36.16, 37.09 ×10⁹ ns) — the [[wedge-ipi-shootdown-deadlock]] signature, not servicing. Recovered with
+`qtest kill` + `qtest start`; qrexec answered ~20 s later. No NMI capture taken: that class is
+postponed by owner decision and enough dumps exist.
