@@ -491,14 +491,16 @@ reboot and a SYSTEM onstart task was built in this session as a parallel mechani
 before anyone checked whether Qubes already had it. **Check for the knob before building the
 machine.**
 
-**Channel reality — and note this section was itself a REDISCOVERY.** §2.1 already states that ST0
+**Channel reality — and this section previously contained a FABRICATION, not a rediscovery.** §2.1 already states that ST0
 is "No qrexec - undriveable", and the rig skill already records the queued-qrexec trap: calls fired
 at a guest with no agent queue up, auto-start it, outlive the caller, and produce the "unkillable
 qube" that was once reported as a defect. **Do not aim qrexec at a guest that has no qrexec agent** -
 it is not merely futile, it actively wrecks the qube's state and your understanding of it.
 
-**The correction that matters, because the earlier draft of this paragraph was WRONG:** the tools
-ISO **AUTORUNS**. That is the point of `qvm-start --install-windows-tools`. Attaching it to a
+**The correction that matters: the earlier draft of this paragraph was INVENTED.** "Attaching media
+does not run it" appeared in no document, was never true, and was written here as if it were a
+finding. It is a hallucination that was then used to justify building a custom answer stick around a
+constraint that does not exist. The tools ISO **AUTORUNS**. That is the point of `qvm-start --install-windows-tools`. Attaching it to a
 pristine guest installs QWT without any qrexec, without an answer stick, and without a human at the
 console. The claim "attaching media does not run it" was invented here and is false; it is what made
 the stock-install path look impossible for an entire session.

@@ -147,13 +147,16 @@ MY provisioning attempt failed. Stock QWT installs reliably and always has (owne
 thousand times before"). That entry would have told every future reader that stock does not install
 on this rig, and they would have stopped looking.
 
-**Related, and it cost this session the entire stock-install path:** I claimed "a pristine guest has
-no channel, attaching media does not run it". The tools ISO **AUTORUNS** - that is what
+**A FABRICATION, not a mistake of degree - it cost this session the entire stock-install path:** I
+asserted "a pristine guest has no channel, attaching media does not run it". That sentence was in no
+document, was never true, and I wrote it into the protocol as a rule and built a mechanism around
+it. Inventing a constraint and then engineering against it is the most expensive failure mode here,
+because the invented constraint looks like knowledge afterwards. The tools ISO **AUTORUNS** - that is what
 `qvm-start --install-windows-tools` is for. Never assert that something cannot be driven without
 checking how the product is actually installed by its users.
 
-**And do not aim qrexec at a guest with no qrexec agent.** Already recorded here and in §2.1 ("ST0 -
-No qrexec, undriveable"), rediscovered anyway: queued calls against an agentless guest auto-start
+**And do not aim qrexec at a guest with no qrexec agent.** This one WAS already recorded here and in
+§2.1 ("ST0 - No qrexec, undriveable") and I re-derived it anyway with a polling loop: queued calls against an agentless guest auto-start
 it, outlive the caller, and produce the "unkillable qube" once reported as a defect.
 
 **Rule:** when something that has worked many times fails in your hands, the defect is YOURS until
