@@ -22477,3 +22477,50 @@ wait for session), and stock QWT's own installer reboots itself, but ours delibe
 its closing line says the caller reboots. So `prime-run.sh` will sit until its deadline on a
 **successful** install. Tracked; the fix is to port `verify_installed`'s logic, and it cannot be
 applied while a run is in flight (H3.6 forbids editing a running script).
+
+## 2026-08-30 — C1.10 ACCEPTED: the first genuine clean install (D0) this project has graded
+
+Campaign `20260830-acceptance-4.3.16`. **22 PASS, 2 N/A, 0 FAIL.** Guest `win10-c1`, cloned from the
+sealed `win10-base` and driven by `mgmt/prime-jobs/ours` through the primer.
+
+This is the cell the previous campaign could not reach. Its 36/0 was measured on clones of goldens
+that already carried the candidate, so the installer took `in-place-same-version-reinstall` while the
+cells were labelled "fresh". Here the installer's own first PRECONDITION line reads
+`testsigning_active:false, installed_qwt_count:0` and its own branch marker reads
+*"no previously installed Qubes Windows Tools found - clean install path"* — the D0 path, asserted
+from the product's output rather than inferred from a cell name.
+
+**The install (E1 two-stage, from a testsigning-OFF base):** three `stage1-prepare` RESULTs all
+`ok:true` (two of them the C12 repeats), exactly one reboot, then `stage2-install ok:true`. Four
+distinct run_ids. Stage 2's PRECONDITION shows `testsigning_active:true` — the reboot really did
+activate it, which is the whole point of the two-stage path.
+
+**C12 (stage-1 idempotence) inside it:** the second pre-reboot run saw `testsigning_active:false`
+again and re-ran stage 1 successfully — the installer's documented *"the stage is DETECTED, not
+remembered"* holding under repetition — and the resume still fired exactly once (one restart, one
+`stage2-install` RESULT).
+
+**Boot-path acceptance** (`tools/accept-clean.sh SKIP_PROVISION=1`), because a restart clears
+exactly the faults a cold boot exposes:
+
+| check | result |
+|---|---|
+| `pv_disk_bound` | `DEV_VBD err=CM_PROB_NONE svc=xenvbd`, **`still_on_emulated_ide: []`** |
+| `pv_console_bound` | `DEV_CONS err=CM_PROB_NONE svc=xencons` — **4.3.16's new PV console, on a clean install** |
+| `idd_device_bound` / `desktop_on_idd` | `ROOT\DISPLAY\0000` cm_error 0, IddSampleDriver is the primary adapter |
+| `idd_modes_published` | `5120x1440, 1024x768` |
+| `user_data_on_private` | `C:\Users` is a reparse point to `Q:\Users` — MoveUsers works |
+| `agent_binary_hash` | `20CAB4C56816…` == manifest |
+| `updates_dom0_owned` | `NoAutoUpdate=1`, wuauserv Stopped |
+| pixels reach dom0 | two shots around a typed marker DIFFER |
+| window chrome | `CHROME=OK 3826x1022`, bands 19/16 |
+
+**A trap worth naming.** Immediately after stage 2, every disk still reads `bus=IDE` and
+`pv_boot_disk:false`. That is not a defect and must not be graded as one — the installer's own
+contract says the PV drivers bind at the guest's NEXT start. `pv_disk_bound` only becomes true, and
+`still_on_emulated_ide` only becomes empty, after the cold reboot. A cell that graded the disk
+without rebooting would report a false FAIL; one that graded the install without rebooting at all
+would miss the boot path entirely, which is why the reboot is part of acceptance.
+
+**The two N/A are honest:** `pv_drivers_bound` and `network_carries_traffic` cannot apply to a
+`netvm=''` offline install. P2 (NET-2/NET-3) owns them, on a guest that has a vif.
