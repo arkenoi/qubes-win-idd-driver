@@ -60,7 +60,16 @@ log "  guest screen ${GW}; a window >= ${THRW}x${THRH} counts as fullscreen for 
 
 # ------------------------------------------------------------------ cold boot, watched from dom0
 log "=== COLD BOOT, watched from dom0 throughout (the guest has no qrexec for most of it) ==="
+# PROVE THE BOOT. On 2026-08-31 this cell reported "qrexec came up at sample 1 (~4s)" and I read it
+# as "the shutdown never took" and killed the run - wrongly: LastBootUpTime showed the guest HAD
+# cold-booted and had simply come up in ~13 s. A cold-boot cell that cannot demonstrate a cold boot
+# forces exactly that guess, so the boot is now evidence rather than an assumption.
+bootid(){ r 'cmd /c powershell -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString(\"o\")"' | grep -aoE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+' | head -1; }
+BOOT_BEFORE=$(bootid); log "  LastBootUpTime before: ${BOOT_BEFORE:-unknown}"
 timeout -k 10 320 qvm-shutdown --wait --timeout 260 "$VM" >/dev/null 2>&1; sleep 4
+st=$(qvm-ls --raw-data --fields STATE "$VM" | tail -1)
+[ "$st" = Halted ] || { log "FATAL: $VM is $st after qvm-shutdown --wait; this cell REQUIRES a cold boot"; exit 2; }
+log "  guest is Halted - the shutdown took"
 timeout -k 10 200 qvm-start "$VM" >/dev/null 2>&1 & disown
 
 BIG=0; SAMPLES=0; MAXDIM="none"
@@ -86,6 +95,12 @@ log "  dom0 watch: $SAMPLES sample(s) returned windows; fullscreen-sized hits: $
 
 alive || { log "FATAL: guest never answered qrexec after the cold boot"; exit 2; }
 sleep 35
+BOOT_AFTER=$(bootid); log "  LastBootUpTime after: ${BOOT_AFTER:-unknown}"
+if [ -n "$BOOT_BEFORE" ] && [ "$BOOT_BEFORE" = "$BOOT_AFTER" ]; then
+  log "FATAL: LastBootUpTime is unchanged - the guest did NOT cold boot, so nothing below grades."
+  exit 2
+fi
+log "  COLD BOOT PROVEN (boot time advanced)"
 
 # ------------------------------------------------------------------ the agent's own wire log
 log "=== the agent's wire log for THIS boot ==="
