@@ -58,14 +58,20 @@ rem and then sat at that prompt indefinitely - guest idle at 0-3% CPU, desktop u
 rem anywhere (the prompt is on session 0's invisible console), which reads exactly like "the primer
 rem never fired". Redirecting stdin from NUL makes pause return immediately and changes nothing else
 rem about the route.
-if exist "%~dp0c12.flag" (
-    echo --- C12: stage 1 run BARE, pass 1 of 2 [expect exit 10, no reboot] >> %LOG%
-    call C:\qwtsetup\install.cmd /autologon:qubes <nul >> %LOG% 2>&1
-    echo C12 pass 1 rc=%ERRORLEVEL% >> %LOG%
-    echo --- C12: stage 1 run BARE, pass 2 of 2 [must RE-DETECT stage 1, not fall into stage 2] >> %LOG%
-    call C:\qwtsetup\install.cmd /autologon:qubes <nul >> %LOG% 2>&1
-    echo C12 pass 2 rc=%ERRORLEVEL% >> %LOG%
-)
+rem GOTO, NOT A PARENTHESISED BLOCK. Inside `if exist (...)` cmd expands %ERRORLEVEL% when it PARSES
+rem the whole block, not as each line runs - so both passes logged the value from before the block.
+rem Measured on the Win10 C1 run: `C12 pass 1 rc=0` and `C12 pass 2 rc=0`, when a bare stage 1
+rem returns 10. The installs were fine and the graded evidence comes from the installer's own RESULT
+rem trailers, but the job log was quietly reporting a number it had not measured, which is the kind
+rem of thing that gets believed later. Outside a block, %ERRORLEVEL% expands per line at execution.
+if not exist "%~dp0c12.flag" goto :noc12
+echo --- C12: stage 1 run BARE, pass 1 of 2 [expect exit 10, no reboot] >> %LOG%
+call C:\qwtsetup\install.cmd /autologon:qubes <nul >> %LOG% 2>&1
+echo C12 pass 1 rc=%ERRORLEVEL% >> %LOG%
+echo --- C12: stage 1 run BARE, pass 2 of 2 [must RE-DETECT stage 1, not fall into stage 2] >> %LOG%
+call C:\qwtsetup\install.cmd /autologon:qubes <nul >> %LOG% 2>&1
+echo C12 pass 2 rc=%ERRORLEVEL% >> %LOG%
+:noc12
 
 echo --- stage 1 /auto [arms the resume task, reboots, stage 2 follows] >> %LOG%
 call C:\qwtsetup\install.cmd /auto /autologon:qubes >> %LOG% 2>&1
