@@ -38,6 +38,12 @@ if not exist C:\qwtsetup\install.cmd (
     exit /b 2
 )
 
-call C:\qwtsetup\install.cmd /nodisk /auto >> %LOG% 2>&1
+rem /autologon:qubes added 2026-08-30. Without an autologon switch the installer PROMPTS for the
+rem password, and this job runs as SYSTEM in session 0 where nothing can answer; the documented
+rem fallback is an EMPTY password, which is wrong for these images (the account's password is
+rem `qubes` - mgmt/autounattend.xml), and a guest that cannot log itself in has no qrexec session,
+rem which would look like an install failure. matrix.sh's run_install has always passed
+rem `/auto /autologon:qubes`; this job was the odd one out.
+call C:\qwtsetup\install.cmd /nodisk /auto /autologon:qubes >> %LOG% 2>&1
 echo installer rc=%ERRORLEVEL% >> %LOG%
 exit /b %ERRORLEVEL%
