@@ -656,6 +656,29 @@ was then used for further cells, compounding it.
 **Test for whether this gate applies:** if the answer to *"could I still reproduce the failure on
 this guest right now?"* is no, and you changed something to make it so, you violated it.
 
+**G-0b. AFTER A FAILURE, REBUILD TO THE ENTRY STAGE BEFORE RUNNING ANYTHING ELSE ON THAT GUEST.**
+*(owner, 2026-08-30: "you needed to rebuild it to original state, all subsequent results on it are
+contaminated")*
+
+Writing the failure off is not enough to resume. The guest carrying a fault — and any guest you
+touched while diagnosing one — is **out of service** until it is rebuilt to its entry stage (R2/R4
+reclone, or a fresh install). Until that rebuild, **every subsequent result on that guest is
+`INVALID-CONTAMINATED`**, and the protocol already says so for goldens: *"either rebuild it or mark
+every cell derived from it INVALID-CONTAMINATED (H5)"*. This extends the same rule to any subject.
+
+**Contamination is NOT judged by whether the change plausibly affected the later cell.** "I only
+changed proxy settings, that cannot affect a rendering benchmark" is precisely the reasoning the
+verdict exists to forbid — it is unfalsifiable, it is always available, and it is how a contaminated
+run gets reported as clean. If the guest was mutated and not rebuilt, the later results are
+contaminated. Full stop.
+
+*Failure that produced this gate:* after the U1 scan failure I mutated `win11-tpl` (SoftwareDistribution
+rename, proxy planes) and `win10-tpl` (proxy planes, `setieproxy`), restored *some* of it by hand, and
+then ran the entire P4 rendering battery, the BENCH suite and the P5 safeguard cells on `win10-tpl`
+without rebuilding it. Those results are now contaminated — not because proxy settings plausibly
+affect a scroll benchmark, but because the subject's state was no longer the entry stage and I cannot
+prove what else changed.
+
 **G-2. No causal claim without the REVERSE control.** A root cause is established only when the
 defect has been removed AND re-introduced, both observed. One positive after one change is a
 correlation.

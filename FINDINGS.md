@@ -23158,3 +23158,31 @@ The correct sequence, for the next time a cell fails:
 
 Encoded as gate **G-0** in the runbook, placed ahead of every other gate because all of them depend
 on the evidence still existing.
+
+### 2026-08-30 — P4 and P5 are VOID: I never rebuilt the subject after contaminating it
+
+Owner: *"you needed to rebuild it to original state, all subsequent results on it are contaminated."*
+Correct, and the scope is larger than the U1 cell.
+
+`enum-updates.ps1` set proxy planes and `setieproxy LOCALSYSTEM MANUAL_PROXY` on **`win10-tpl`** while
+I was chasing the U1 failure. I hand-restored some of it with `wurestore.ps1` and carried on — I never
+rebuilt the guest to its entry stage. Everything subsequently run on `win10-tpl` therefore has a
+subject whose state I cannot prove: **BENCH-1, BENCH-2, RND-3, RND-4, RND-5, RND-7, SG1, SG3, SG6,
+SG7, and U2's cold-boot arm — 27 checks, now `INVALID-CONTAMINATED`.**
+
+**The temptation to resist, and it is strong:** every one of those cells is about rendering, window
+gating or frame timing, and a proxy registry value plainly has nothing to do with any of them. That
+argument is unfalsifiable, always available, and is the exact mechanism by which a contaminated run
+gets published as clean. The protocol already refuses it for goldens — *"either rebuild it or mark
+every cell derived from it INVALID-CONTAMINATED"* — and G-0b now extends it to any subject.
+
+**What survives, and why:**
+- **P0** — dev-qube gates, no guest.
+- **P1** — every install cell `reclone`s its own subject from a verified entry image at the start of
+  the cell, so each ran on a fresh guest predating any mutation of mine.
+- **P2** — ran on `win10-app`, `win11-app`, `win10-c1`; none was touched by the U1 diagnosis.
+- **U0** — ran on `win11-tpl` before that guest was mutated.
+
+**To recover P4/P5:** rebuild `win10-tpl` from a C-chain exit (R4 / `mgmt/clone-to-template.sh`), then
+re-run both phases. Nothing from today's P4/P5 numbers may be carried forward, including the ones that
+looked good.

@@ -65,6 +65,23 @@ product.
 
 ---
 
+## CONTAMINATION — P4 and P5 are void on this campaign
+
+**All of P4 (rendering + benchmarks) and P5 (safeguards) ran on `win10-tpl` after I had mutated it
+during the U1 diagnosis (proxy planes + `setieproxy`, via `enum-updates.ps1`) and never rebuilt it to
+its entry stage.** Per G-0b those 27 checks are `INVALID-CONTAMINATED`, not results.
+
+That covers BENCH-1 and BENCH-2, RND-3/4/5/7, SG1, SG3, SG6, SG7, and U2's cold-boot arm. The
+numbers they produced (scroll p50 334/307/345 µs, SG1 with no fullscreen window, RND-7's 5-HWNDs-to-1)
+may well be correct — **but "the mutation probably didn't affect a scroll benchmark" is exactly the
+unfalsifiable reasoning the contaminated verdict exists to forbid.** They must be re-run on a rebuilt
+subject before they mean anything.
+
+**What survives:** P0 (gates), P1 (install/upgrade — every cell recloned its own subject from a
+verified entry image *before* any mutation), and P2 (networking — ran on `win10-app`, `win11-app` and
+`win10-c1`, none of them touched by the U1 diagnosis). U0 ran on `win11-tpl` before that guest was
+mutated.
+
 ## What passed
 
 **P0 — gates.** Gate 0 (76 files, built from `0f6fcaa`). **G0 catalog signatures: 8 catalogs, 0
