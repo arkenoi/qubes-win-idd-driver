@@ -1,0 +1,21 @@
+=== CAMPAIGN IDENTITY (H1 build fingerprint) ===
+campaign_id        20260830-acceptance-4.3.16
+release            4.3.16+agent.409439d8cc46
+driver_repo_commit 0f6fcaaa7df97ca686bdcdd64ce24d1aff56c492
+agent_commit       409439d8cc4630c177655ed3f8497356a444f498
+ci_run             33303456913 (release-package, conclusion=success)
+artifacts          /home/user/qwt-matrix-work/dl/{qwt-improved-setup,qwt-full-package,qwt-improved-iso}
+gui_agent_sha256   20cab4c56816077d
+profile            TIER-B (full release acceptance)
+
+=== GATES PASSED BEFORE ANY GUEST WORK ===
+Gate 0 (assert-payload)   PASS  76 files, built from 0f6fcaaa7df9, installer matches repo
+G0 (catalog signatures)   PASS  8 catalogs, 0 unsigned, 3 signers, all matched a shipped .cer
+G0 negative control       PASS  seen to FAIL on a planted empty-signerInfos catalog
+pool watermark            OK    85.7% used / 124.9 GB free after prune (was 91.9% = RED)
+roster                    OK    templates netvm='', classes match, zero Windows guests running
+goldens                   OK    win10-base + win11-base sealed and verified intact
+
+=== ENTRY IMAGES ===
+win10-base  SEALED GOLDEN  pristine Win10 22H2 19045.2965, no QWT, testsigning OFF, primer proven
+win11-base  SEALED GOLDEN  pristine Win11 24H2 26100.1742, no QWT, testsigning OFF, primer proven
