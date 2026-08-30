@@ -44,6 +44,25 @@ def collect(name, pred):
     if hits:
         blockers[name] = hits
 
+# SUPERSEDED-BY:<evidence> means "this run was invalid, but a VALID re-run of the same check
+# exists". That is only true if the re-run is actually on the ledger, so verify it rather than
+# trusting the label - otherwise 'superseded' becomes the way gaps get hidden, which is precisely
+# the failure this file was written to stop.
+valid = {}
+for r in rows:
+    if not (r['verdict'].startswith(('INVALID', 'FAIL', 'SUPERSEDED', 'INCONCLUSIVE', 'BLOCKED', 'RETRACTED'))):
+        valid.setdefault(r['cell'], []).append(r)
+
+def superseded_unbacked(r):
+    if not r['verdict'].startswith('SUPERSEDED-BY:'):
+        return False
+    ev = r['verdict'].split(':', 1)[1].strip()
+    for c in valid.get(r['cell'], []):
+        if c['ev'] == ev and c['check'] == r['check']:
+            return False   # a valid row for the SAME cell AND SAME check from that run exists
+    return True            # the label points at nothing that re-tested this check - still a gap
+
+collect('SUPERSEDED but NOT backed by a valid re-run', superseded_unbacked)
 collect('FAIL (product defect)',        lambda r: r['verdict'] == 'FAIL')
 collect('FAIL-MINE (instrumentation)',  lambda r: r['verdict'] == 'FAIL-MINE')
 collect('INVALID (cell did not run)',   lambda r: r['verdict'].startswith('INVALID'))

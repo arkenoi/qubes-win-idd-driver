@@ -29,6 +29,7 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `xenbus_monitor DISABLED by INF` | 2026-08-2x | the pre-fix INF starts the service (`SPSVCSINST_STARTSERVICE`, StartType=auto) | the `81d2b79` brick, 5/5 reproduced |
 | `harness preflight (require_scripts)` | 2026-08-31 | a required guest script renamed away, on p5-run.sh and p4-run.sh independently | both printed `FATAL: required guest script(s) not found in the repo: <name>` and exited 2. Before this gate the harness ran anyway and printed `deny=?`, silently dropping the vacuity proof |
 | `P5 capture-path control` | 2026-08-30 | the capture path WAS blind for a whole run (18 s settle < PowerShell's Add-Type compile); the harness scored SG3 FAIL against a window the agent logged as MAPped | `p5b.log` 2026-08-30; the control Notepad (747x502) now appears in 6/6 samples of every cell, and its absence forces INVALID-INSTRUMENT |
+| `SG6 autologon checker` | 2026-08-31 | `AutoAdminLogon=0` + `QubesAutologonGuard` deleted + COLD BOOT — the literal 2026-08-28 field defect | `mgmt/harness/sg6-failproof.sh win10-p46`: control (sessions=1, windows=1) then RED (sessions=0, explorer=0, logonui=1, windows=0, qrexec alive), then re-armed and the subject returned |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Partially proven — cite as PASS-UNPROVEN until completed
@@ -50,9 +51,9 @@ their results are reported as `PASS-UNPROVEN`:
 - `zero-reboots` (LastBootUpTime unchanged), `emulated-unplugged`, `transfer-crossed-pv-nic`,
   `one-boot-per-command`
 - `autologon-armed`, `autologoncount-absent`, `no-plaintext-password`, `reassert-task-registered`
-  — **SG6's fail-proof is INCONCLUSIVE**: the selftest builds its negative by deleting a registry
-  `DefaultPassword` that our design deliberately never writes, so it skips. Breaking the LSA secret
-  instead is the owed fix.
+  — **RESOLVED 2026-08-31**: SG6's fail-proof is EARNED (see the table above). The shipped selftest
+  still cannot construct its negative, but `mgmt/harness/sg6-failproof.sh` does, by disarming
+  `AutoAdminLogon` and the guard task and cold-booting. These five checks now emit plain `PASS`.
 - `SG1` Mode-1 phase gate — the attended diag-build arm (phase test removed + captioned fullscreen
   window pre-explorer) has not been run
 - `SG7` toasts-survive-filter — positive is owner-observed; the naive-cloak-filter diag build is owed
