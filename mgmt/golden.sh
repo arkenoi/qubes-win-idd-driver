@@ -50,8 +50,29 @@ for v in ("root", "private"):
             d[p[0]] = p[1].strip()
     # Revisions are the tamper signal: a clean shutdown cuts one, so a booted golden gains a
     # revision its seal never recorded.
-    revs = run("qvm-volume", "revisions", f"{vm}:{v}")
-    d["revisions"] = sorted(l.strip() for l in revs.splitlines() if l.strip())
+    #
+    # THEY COME FROM `qvm-volume info`, NOT from a `revisions` subcommand. The first version of
+    # this script shelled out to `qvm-volume revisions`, which DOES NOT EXIST in this client
+    # (qvm-volume takes info/config/set/resize/extend/list/revert/import/clear). run() swallows
+    # the failure and returns "", so every seal written before 2026-08-30 recorded
+    # revisions: [] - the signal was dead in all four goldens, and "verified intact" was really
+    # only comparing size and properties, neither of which changes when a golden is booted.
+    # That is precisely the modification this tool exists to catch, so it caught nothing.
+    revs, seen_header = [], False
+    for line in info.splitlines():
+        if "available revisions" in line.lower():
+            seen_header = True
+            continue
+        if seen_header and line.strip():
+            revs.append(line.strip())
+    # Fail loudly rather than silently emptying the signal again: a check that cannot fail is
+    # worthless, and this one already failed that way once.
+    if not seen_header:
+        sys.stderr.write(
+            f"FATAL: no revision list in `qvm-volume info {vm}:{v}` - the tamper signal cannot "
+            f"be read, so this seal would be worthless. Has the qvm-volume output changed?\n")
+        sys.exit(3)
+    d["revisions"] = sorted(revs)
     out["volumes"][v] = d
 for p in ("klass", "virt_mode", "kernel", "memory", "maxmem", "vcpus", "netvm", "template"):
     val = run("qvm-prefs", vm, p).strip()
@@ -69,7 +90,10 @@ case "$cmd" in
     # Sealing a RUNNING guest would record a state that changes the moment it stops - and a golden
     # should not be running in the first place.
     [ "$st" = "Halted" ] || { echo "REFUSING: $vm is $st. A golden must be Halted to be sealed."; exit 1; }
-    tmp=$(mktemp); _state "$vm" > "$tmp"
+    tmp=$(mktemp)
+    # _state exits 3 when the tamper signal is unreadable. Sealing anyway would write a seal that
+    # cannot detect anything - exactly the failure being fixed here.
+    _state "$vm" > "$tmp" || { echo "REFUSING to seal $vm: state could not be read"; rm -f "$tmp"; exit 3; }
     python3 - "$tmp" "${3:-}" <<'PY' > "$SEALDIR/$vm.json"
 import json, sys, subprocess
 d = json.load(open(sys.argv[1]))
@@ -88,7 +112,8 @@ PY
     # An unsealed golden fails CLOSED. "No record" must never read as "unchanged" - that is exactly
     # how the contaminated golden went unnoticed.
     [ -f "$seal" ] || { echo "UNSEALED: no record for $vm - a golden with no seal cannot be trusted"; exit 2; }
-    now=$(mktemp); _state "$vm" > "$now"
+    now=$(mktemp)
+    _state "$vm" > "$now" || { echo "CANNOT VERIFY $vm: state could not be read"; rm -f "$now"; exit 3; }
     if python3 - "$seal" "$now" <<'PY'
 import json, sys
 a = json.load(open(sys.argv[1])); b = json.load(open(sys.argv[2]))

@@ -43,7 +43,16 @@ every clean shutdown for about three minutes.
 ## What was actually tested — and what was not
 
 Campaign `20260830-062519`, **36 checks, 0 failures**, on this exact artifact, from sealed goldens
-verified intact before and after, with one Windows guest running at a time:
+checked before and after, with one Windows guest running at a time:
+
+> **Correction (2026-08-30), and it weakens the sentence above.** Those golden checks compared
+> volume *size* and qube *properties* only. `mgmt/golden.sh` read the revision list — the signal
+> that actually detects a golden having been booted — by shelling out to `qvm-volume revisions`,
+> a subcommand that does not exist in this client; the failure was swallowed and every seal
+> recorded `revisions: []`. So "verified intact" could not have caught a boot, which is the exact
+> modification the tool exists to catch. Fixed and re-proved on real revision data. Nothing here
+> is known to have been contaminated — but the custody evidence for this campaign is weaker than
+> this document originally claimed, and that is stated rather than quietly repaired.
 
 | Path | Result |
 |---|---|
