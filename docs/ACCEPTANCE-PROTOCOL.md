@@ -1048,6 +1048,17 @@ writing every artefact it produced into the scratch dir.
 runtime. After editing a harness, also `grep -n '\${((' ` it. More generally, a clean `bash -n` is
 not evidence the script runs.
 
+**7. A VACUITY GUARD MUST BE SPECIFIC TO THE STIMULUS.** RND-3's guard counted *any* override-redirect
+surface as proof "the menu opened". Measured 2026-08-31: a PERSISTENT toast raised by the previous
+cell was still on screen and contributed 23 such surfaces, so the guard was satisfied, the menu had
+never opened, and the cell reported a product **FAIL**. A guard that some other surface can satisfy
+is not a guard — key it on the exact thing (`#32768` for a menu, the toast's own class for a toast).
+
+**8. SCENE CONTAMINATION BETWEEN CELLS IS REAL — order the cells so it cannot happen.** The same
+persistent toast held FOCUS, so the `Alt+F` the menu cell sent never reached Notepad. Anything that
+lingers (toasts, dialogs, a maximized window) belongs AFTER the cells it could disturb, and each
+cell should assert its own starting scene rather than assume the previous cell tidied up.
+
 **6. `grep -c` prints `0` AND exits 1.** So `$(... | grep -c X || echo 0)` yields **two** zeros and
 the variable becomes `"0\n0"`, which silently mangles any line it is interpolated into. Use
 `n=$(... | grep -c X); n=${n:-0}`.
