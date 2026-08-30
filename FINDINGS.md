@@ -21920,3 +21920,28 @@ clean install, and it is the only D0 evidence in this session.
    the candidate over it, which is what makes them an upgrade test rather than a reinstall test;
  - same-version reinstall (C6) is the cell that legitimately wants candidate-over-candidate.
 Building the goldens from the candidate collapsed all three into one.
+
+## 2026-08-30 — what changed in ensure-autologon, and a correction to why 4.3.17 was cut
+
+**The change.** `guest/ensure-autologon.ps1` asked only whether the LSA secret `DefaultPassword`
+EXISTS. It now retrieves the secret and calls `LogonUser` with LOGON32_LOGON_INTERACTIVE - the type
+Winlogon uses - against DefaultUserName/DefaultDomainName, and reports present-but-REJECTED as its
+own loud failure. `$lsaValid` defaults to FALSE so a thrown query cannot pass permissively.
+
+**Why it was written, and why that reason is RETRACTED.** I thought stage 2 was certifying a bad
+credential: stage 1 logged `not-armed:bad-credentials`, stage 2 logged `autologon verified`, and the
+guest sat at a sign-in screen mapping zero windows. All three observations are real; the inference
+was wrong. The stored secret VALIDATES (the new check passes on that very guest), the three failed
+logons were qrexec-wrapper.exe rather than autologon, and the stages are consistent - stage 1
+rejected a password not yet in place, stage 2 armed a working one five minutes later.
+
+**No bad credential has ever been seen passing the presence check.** So this is a strengthening on
+principle and is UNPROVEN by this project's own standard until observed failing on a deliberately
+broken credential. Its cost is real: an interactive LogonUser creates a logon session per run, so it
+emits Security audit events and would feed lockout counters against a wrong password.
+
+**Correction to the 4.3.17 commit message.** It claims 4.3.17 is "a real release rather than a
+version bump for testing convenience", citing this change. That overstates it. The honest reason for
+4.3.17 is the testing one: 4.3.16 is what the goldens carry, so the candidate MUST differ or every
+cell takes the same-version-reinstall branch instead of the upgrade branch. The autologon change
+rides along; it does not justify the release on its own.
