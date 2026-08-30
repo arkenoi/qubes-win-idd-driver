@@ -23268,3 +23268,24 @@ BENCH-1 does not carry a verdict yet.
 307/334/345 — *below* the canonical band. The clean subject reports 417/366 — *inside* it. Whatever
 caused that shift, the contaminated numbers were measurably different, so voiding them was not
 pedantry.
+
+### 2026-08-30 — the read-but-not-applied pattern, counted
+
+Five times today I read a rule or a piece of evidence into this session and then acted against it.
+Listing them together because the individual corrections make each look like a one-off, and it is not
+a one-off — it is the dominant failure mode of this session:
+
+| # | what the record said | what I did |
+|---|---|---|
+| 1 | `bitsadmin`: *"There's a policy in effect that disables the storage of proxy settings per user"* — I QUOTED it | glossed it as "not an argument against the fix"; it meant the fix was unnecessary |
+| 2 | `FINDINGS:15097` — install proven, UBR `2965 -> 6456` | wrote that install was untested |
+| 3 | `FINDINGS:13513` — the router deliberately gates `Install-ViaWU` off | proposed re-enabling it |
+| 4 | §7 standing rule — *"never concurrent with a benchmark ... (wedge trigger)"*, pasted into this session | cold-booted and benchmarked across the boot+2min scan; wedged the guest |
+| 5 | §0.8 prohibition — *"Report the status of `cmd \| tee log` ... Use PIPESTATUS"* | reported `exit 0` from a `prime-run \| tee` that had actually refused (H3.6 guard, correctly) |
+
+The gates G-3, G-4, G-5, G-0c address 1–4 individually. What they share is that the information was
+present and unused: reading is not applying, and a session that has "already read" a section is the
+one most likely to act against it. **The mitigation that generalises is the executable step** — a
+rule with a command attached (`p4-run.sh` disarms and ASSERTS; `campaign-verdict.sh` computes the
+verdict) gets applied; a rule stated as prose gets read and skipped. That is why 0.10–0.13 were
+written as command sequences rather than principles.
