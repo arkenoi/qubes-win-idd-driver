@@ -90,7 +90,7 @@ echo
 python3 - <<'PY'
 import qubesadmin
 a=qubesadmin.Qubes()
-p=a.pools.get('vm-pool') or list(a.pools.values())[0]
+p=next((x for x in a.pools.values() if x.name=='vm-pool'), None) or list(a.pools.values())[0]
 u,s=getattr(p,'usage',None),getattr(p,'size',None)
 if u and s: print(f"pool {p.name}: {100*u/s:.1f}% used, {(s-u)/2**30:.1f} GB free")
 PY
