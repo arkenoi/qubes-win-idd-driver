@@ -22617,3 +22617,46 @@ bound, IDD driving the desktop, pixels change in dom0, chrome intact.
 
 **Both 4.3.14 fixtures were removed immediately after their cells** and their receipts deleted, per
 the standing decision that only the two pristine bases are kept. Pool returned to ~146 GB free.
+
+## 2026-08-30 — C4.10 ACCEPTED: upgrade over stock QWT 4.2.2, and stock's PV disk MEASURED
+
+`C4.10`, 18 PASS / 1 N/A, 0 FAIL. Entry built by `mgmt/prime-jobs/stock-422` into a clone of the
+sealed `win10-base`; `stock installer rc=3010` then a self-reboot to bind drivers.
+
+**The correction about stock is now measured, not just documented.** Earlier today the premise that
+`ours-nopvdisk` reproduces a stock-shaped image was corrected from the record (the 2026-08-07 audit
+and the protocol's own C4 row). The live fixture settles it three independent ways:
+
+    PRODUCT Qubes Windows Tools :: 4.2.2.0      PRODUCT Qubes Windows Tools v4.2.2.0 :: 4.2.2.0
+    BUS DISK:0 bus=SCSI 80GB                    <- the BOOT disk is on the PV path
+    PRECONDITION pv_boot_disk: True
+
+So stock 4.2.2 installs `PvDriversDisk` and boots from the PV disk. The `pv_boot_disk:false`
+installed base is OURS, from the `24a1ded` regression — which is what makes `ours-nopvdisk` an
+upgrade-from-OURS fixture and C3/C4 genuinely different cells.
+
+**This run IS the armed-monitor C4 variant, by construction.** Stock leaves its monitor running:
+
+    xenbus_monitor: {'status': 'Running', 'start': 2, 'pids': [2904]}
+
+and the installer handled it exactly as the `81d2b79` brick guard requires — `was Disabled/Running
+[before msiexec]`, re-disabled `[after msiexec: MSI re-registered the service]`, then `[final act:
+shipping state]`. msiexec ran 16:27:58–16:28:38 with **zero Event-1074 in that window**, so no
+guest-initiated restart occurred during the install.
+
+### An evidence hazard: a clone inherits the fixture's Windows event log
+
+The 1074 probe first appeared to show the monitor restarting the guest during the cell — two
+`xenagent_9_1_0_0.exe` shutdowns at 16:25:10 and 16:26:11. They are not from the cell. `win10-tpl`
+was cloned from `win10-stk` at **16:26:21**, *after* both events: they happened on the FIXTURE (its
+armed stock monitor firing when the fixture was started to verify it) and were inherited in the
+copied event log.
+
+Two lessons. First, **any Windows event-log evidence from a cloned guest must be time-bounded
+against the clone timestamp**, or the source image's history reads as the cell's behaviour. Second,
+the probe's own discriminator was wrong: it filtered on `xenbus` while the message names
+`xenagent_9_1_0_0.exe`, so it reported `XENBUS_INITIATED=0` for events that were real. The count was
+right for the wrong reason — exactly the kind of accidental PASS this protocol treats as a defect.
+
+**D3 (Win11 true-stock stage) is being settled by running it** rather than carried as
+`N/A-by-design`: the stock prime job is OS-agnostic, so C4.11 costs one fixture build.
