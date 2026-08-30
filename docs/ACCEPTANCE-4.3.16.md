@@ -65,7 +65,14 @@ product.
 
 ---
 
-## CONTAMINATION — P4 and P5 are void on this campaign
+## CONTAMINATION — P4 and P5 were void, and have since been RE-RUN (2026-08-30/31)
+
+**Status update.** Everything in this section stands as the verdict of the *contaminated* runs. P4
+and P5 have since been re-executed on `win10-p46`, a subject rebuilt to its entry stage, with the
+update scan provably disarmed. See "P4/P5 RE-RUN" below. The contaminated verdicts are NOT deleted —
+they remain on the ledger as `INVALID-CONTAMINATED`, superseded rather than overwritten.
+
+### The original contamination
 
 **All of P4 (rendering + benchmarks) and P5 (safeguards) ran on `win10-tpl` after I had mutated it
 during the U1 diagnosis (proxy planes + `setieproxy`, via `enum-updates.ps1`) and never rebuilt it to
@@ -125,6 +132,51 @@ chrome filter (owner-observed).
 
 ---
 
+## P4/P5 RE-RUN on a rebuilt subject (`win10-p46`, 2026-08-30/31)
+
+**P4** — `mgmt/harness/p4-run.sh`, rc=0, with the G-0c precondition in the transcript
+(`SCAN_BEFORE Ready` → `SCAN_AFTER Disabled`, `RELAY_AFTER 0`, `DISARMED True`):
+
+| cell | result |
+|---|---|
+| BENCH-1 scroll p50 | **351 / 314 / 368 µs** vs canonical 374–436 — below the band on all three |
+| BENCH-2 idle CPU | 0.03 / 0.02 / 0.00 s per 120 s (baseline ~0.08, pre-fix 3.95) |
+| RND-7 | 5 HWNDs guest-side → exactly 1 mapped |
+| RND-5 | 0 mapped, **6** deny lines for HWND 0x10174 |
+
+The controls mattered: contaminated subject + scan live = 334/307/345; clean subject + scan **live**
+= 417/366; clean subject + scan **disarmed** = 351/314/368.
+
+**P5** — `mgmt/harness/p5-run.sh`, rc=0. **SG0.2 containment was established and PROVEN for the
+first time in this campaign**: guest 1024x768 = agent 1024x768 (`A6CONFIGURE window 0 -> 1024x768`)
+inside a 5120x1440 host. A control Notepad (747x502) was visible to the capture path in **6/6
+samples of every cell**, so no "nothing mapped" here came from a blind instrument.
+
+| cell | probe | dom0 | discriminator | verdict |
+|---|---|---|---|---|
+| **SG4** o-r fullscreen | 1024x768, o-r, covers screen | absent 6/6 | `unconditionally denied, feature or not` ×2 | PASS-UNPROVEN |
+| **SG2** borderless fullscreen | 1024x768, no caption, `WS_EX_APPWINDOW` | absent 6/6 | `hidden (set service.gui-fullscreen to allow)` ×2 | PASS-UNPROVEN |
+| **SG3** windowed fullscreen | 1024x768, captioned | **present as 1010x761, 6/6** | n/a (must map) | PASS-UNPROVEN |
+| **SG9** Start | `open-start.ps1` | control only | `Start surface not presented in seamless mode` ×25 | PASS-UNPROVEN |
+
+**SG2 and SG4 were `INVALID-PRECONDITION` for the whole campaign** — unreachable because containment
+was unreachable. They are now genuinely exercised.
+
+### Three harness defects found while doing it — each faked a verdict in BOTH directions
+
+1. **A fixed settle is not a readiness signal.** An 18 s sleep is shorter than PowerShell's runtime
+   `Add-Type` compile, so the probe window did not exist when the shot was taken and the empty tar
+   read as a denial. **SG3 was scored FAIL against a window the agent's log shows it MAPped**
+   (`SendWindowMap … ovr=0, vis=1, 1586x893`). Now waits on the probe's own output.
+2. **"Nothing mapped" from an unvalidated capture path is not a result.** Hence the control window.
+3. **The launcher's own console window** (979x512, created by `cmd /c "... > file"`) was counted as
+   a leak and produced FAIL on SG2 and SG4. Now launched `-WindowStyle Hidden`, and the probe is
+   identified **by size**, not by a window count.
+
+Had the harness been trusted, this campaign would have reported three fabricated safeguard failures.
+
+---
+
 ## What is NOT covered, stated plainly
 
 - **U1 — availability to dom0.** Blocked by the defect above, in THIS campaign.
@@ -134,13 +186,17 @@ chrome filter (owner-observed).
   gap is narrower and already named in the record (FINDINGS:13306): **install has never run on a
   TemplateVM** — the proven drain was on `win10-clean`, a Standalone rig. One dom0-driven drain on
   `win10-tpl` with UBR + CBS `state=112` acceptance closes it.
-- **SG2 / SG4** — `INVALID-PRECONDITION`. The agent re-applies dom0 geometry at boot, so the SG0.2
-  sub-host containment did not survive the reboot and the probes were 31% of the real screen; the
-  gate was never exercised. Not run uncontained, because a real failure would put a full-screen
-  window on the owner's display.
+- **SG2 / SG4** — ~~`INVALID-PRECONDITION`~~ **RESOLVED 2026-08-30**: containment now works
+  (`guest/set-resolution.ps1` fixed), both gates exercised at 1024x768 with their discriminators.
+  See "P4/P5 RE-RUN".
 - **RND-3 menus** — `INVALID-VACUOUS`; the menu never opened (interactive-session trap).
 - **SG6 fail-proof** — `INCONCLUSIVE`; the selftest cannot construct its negative on this build.
-- **RND-8 resolution changes** — blocked on `set-resolution.ps1`, which is broken.
+- **RND-8 resolution changes** — ~~blocked on `set-resolution.ps1`~~ **UNBLOCKED 2026-08-30**. The
+  script was not broken by DEVMODE marshalling as recorded; it passed `lpszDeviceName = NULL` on a
+  guest whose desktop is on `\\.\DISPLAY2` (`DISPLAY1` publishes 29 modes and has no current mode;
+  `EnumDisplayDevices` enumerates nothing here). Also refuted: the session hypothesis — qrexec runs
+  as SYSTEM in **session 1 on WinSta0** and an identical probe is byte-identical through both paths.
+  RND-8 itself is still **not run**.
 - Owner-attended SG arms remain `ATTENDED-PENDING` and were not run.
 
 ## SG11 — safeguard results matrix
