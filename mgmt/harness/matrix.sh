@@ -579,7 +579,7 @@ cell_fresh(){ # $1=golden $2=tpl $3=tag  - a TRUE fresh install: QWT removed fir
   local before; before=$(QTEST_VM=$2 timeout -k 5 60 ./tools/qtest run 'cmd /c reg query "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v Version' 2>/dev/null | tr -d '\r' | grep -a REG_SZ | head -1)
   say "  QWT before: ${before:-<none>}"
   # Uninstall every registered QWT product, quietly, suppressing any reboot.
-  QTEST_VM=$2 timeout -k 8 1200 ./tools/qtest pushrun /home/user/.claude/jobs/c2a0f57b/tmp/uninstall-qwt.ps1 2>/dev/null | tr -d '\r' | grep -a "=== UNINSTALL ===" | tail -1 | sed 's/^/  /' | tee -a "$R"
+  QTEST_VM=$2 timeout -k 8 1200 ./tools/qtest pushrun guest/uninstall-qwt.ps1 2>/dev/null | tr -d '\r' | grep -a "=== UNINSTALL ===" | tail -1 | sed 's/^/  /' | tee -a "$R"
   # The uninstall may want a reboot to finish; give it one so the next install starts clean.
   QTEST_VM=$2 qrun 'cmd /c shutdown /r /t 0' >/dev/null 2>&1
   w_halt "$2" 420 "$3-fresh-unihalt" say || { no "$3-fresh: guest did not reboot after uninstall"; return; }
@@ -594,7 +594,7 @@ cell_fresh(){ # $1=golden $2=tpl $3=tag  - a TRUE fresh install: QWT removed fir
   # printed "precondition real (no QWT installed)" about a guest where the installer then found
   # "installed QWT (4.3.2.0) ... IN-PLACE MSI major upgrade", so the cell upgraded over a
   # half-uninstalled system: a state no user produces, and its failure was not evidence about us.
-  local prod; prod=$(QTEST_VM=$2 timeout -k 8 240 ./tools/qtest pushrun /home/user/.claude/jobs/c2a0f57b/tmp/count-qwt.ps1 \
+  local prod; prod=$(QTEST_VM=$2 timeout -k 8 240 ./tools/qtest pushrun guest/count-qwt.ps1 \
     2>/dev/null | tr -d '\r' | grep -aoE 'QWTPRODUCTS=[0-9]+' | tail -1 | cut -d= -f2)
   say "  QWT products still registered after uninstall: ${prod:-<unreadable>}"
   if [ "${prod:-1}" != 0 ]; then
@@ -615,7 +615,7 @@ cell_upgrade_stock(){ # $1=golden $2=tpl $3=tag  - stock QWT 4.2.2 in place, the
   start_vm "$2"
   w_session "$2" 600 "$3-stock-boot" "$M" say || { no "$3-upgrade-stock: clone did not boot"; return; }
   # Remove the newer QWT first: Windows Installer will not "upgrade" down to 4.2.2.
-  QTEST_VM=$2 timeout -k 8 1200 ./tools/qtest pushrun /home/user/.claude/jobs/c2a0f57b/tmp/uninstall-qwt.ps1 2>/dev/null | tr -d '\r' | grep -a "=== UNINSTALL ===" | tail -1 | sed 's/^/  stock-prep /' | tee -a "$R"
+  QTEST_VM=$2 timeout -k 8 1200 ./tools/qtest pushrun guest/uninstall-qwt.ps1 2>/dev/null | tr -d '\r' | grep -a "=== UNINSTALL ===" | tail -1 | sed 's/^/  stock-prep /' | tee -a "$R"
   QTEST_VM=$2 qrun 'cmd /c shutdown /r /t 0' >/dev/null 2>&1
   w_halt "$2" 420 "$3-stock-unihalt" say || { no "$3-upgrade-stock: no reboot after removing QWT"; return; }
   start_vm "$2"
