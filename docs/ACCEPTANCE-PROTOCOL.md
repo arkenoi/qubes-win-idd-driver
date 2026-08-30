@@ -622,6 +622,34 @@ raises a driver-trust dialog that nothing in session 0 can answer.
 
 Every rule here is a failure committed in the 4.3.16 campaign. They are gates, not intentions.
 
+**G-0c. BEFORE ANY BENCH OR RND PART, POSITIVELY DISARM THE UPDATE SCAN.** *(owner, 2026-08-30:
+"how come you run UPDATES and gui performance benchmark overlapping? thats total bs")*
+
+P3's standing rules already say it: *"**serial** — never concurrent with a benchmark/rendering part,
+and before any BENCH part check `QubesWindowsUpdateScan`'s next run (6-hourly + boot+2 min) — a
+mid-benchmark scan raises the proxy and churns qrexec (**wedge trigger**)"*. The rule existed; what
+was missing was an executable step, so it was read and not applied.
+
+**The step, before any BENCH/RND cell:**
+
+    schtasks /query /tn QubesWindowsUpdateScan /v /fo LIST | findstr /i "Next Run Time"
+    schtasks /change /tn QubesWindowsUpdateScan /disable      # and re-enable at the end of the part
+
+and **record the disarm in the cell's evidence**. A benchmark whose transcript does not show the scan
+disarmed is `INVALID-PRECONDITION` — not a slow number, not a wedge worth investigating: an
+unmeasured cell.
+
+**Note the boot+2min trigger specifically.** Cold-booting a guest and starting a benchmark within a
+few minutes puts the workload directly on top of the scheduled scan. That is the single easiest way
+to hit this, and it is what happened: `win10-p45` booted ~17:52 UTC with the scan due ~17:54, and
+BENCH-2 started ~17:53.
+
+*Failure that produced this gate:* every BENCH number taken on 2026-08-30 — on both the contaminated
+and the rebuilt subject — was measured inside a window where a scheduled scan may have been running,
+so none of them is citable. The rebuilt subject then wedged mid-benchmark, i.e. the documented
+consequence of the documented trigger. The rule had been read into the session transcript hours
+earlier.
+
 **G-1. The completion verdict is ARITHMETIC, not prose.** Run `tools/campaign-verdict.sh <verdicts.tsv>`
 and paste its output as the summary's first block. A campaign is COMPLETE only with **zero FAIL, zero
 INVALID-\*, zero INCONCLUSIVE, zero BLOCKED, and every PASS carrying a fail-proof registry entry**.
