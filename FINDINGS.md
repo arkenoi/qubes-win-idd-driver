@@ -21586,3 +21586,50 @@ time. Deferred deliberately rather than guessed at.
 result, which is the correct behaviour for a precondition it could not establish. It is the second
 INVALID cell of the campaign, both for the same underlying reason - the cell could not build its
 entry state - and neither says anything about the release.
+
+## 2026-08-30 — CAMPAIGN 20260830-021859: 16 passed, 2 INVALID, on release 6022427 (4.3.16)
+
+First campaign of the night whose instrument can be trusted. Run from SEALED goldens
+(win10-goldr / win11-goldr, both verified intact before and after), payload Gate-0 verified
+(76 files, 6022427bd0ab), one Windows guest at a time enforced by the harness.
+
+    CELL WIN10-fresh-1stage      PASS session / agent==release / autologon armed
+                                 PASS xenbus_monitor DISABLED by the shipped INF / not running
+    CELL WIN10-fresh-2stage      INVALID-PRECONDITION (reported as FAIL - see below)
+    CELL WIN10-upgrade-stock     INVALID (cell says so itself)
+    CELL WIN11-fresh-1stage      PASS session / agent==release / autologon armed
+                                 PASS xenbus_monitor DISABLED / not running
+    CELL WIN10-appvm             PASS cold boots 1,2,3 - 1 window mapped, none fullscreen-sized
+    CELL WIN11-appvm             PASS cold boots 1,2,3 - 1 window mapped, none fullscreen-sized
+
+**Neither failure is a product defect. Both are cells that could not build their own entry state.**
+
+**win10-2stage** flips testsigning off on a clone of an ST2G golden. QWT's PV drivers are TEST-SIGNED
+by our CI and `xenvbd` is the BOOT DISK driver, so with testsigning off the clone cannot boot at all
+- it sat Transient with no window for the full 600 s. The protocol's own entry for this cell is
+R3+ST0 (pristine, no QWT), where testsigning-off is the natural state. Clone-and-flip can never
+produce that precondition; it produces an unbootable disk.
+
+**win10-upgrade-stock** builds its precondition by UNINSTALLING QWT, which P1.0 forbids outright.
+Verified afterwards on the guest: `Qubes Windows Tools v4.3.16.0` is still installed and a gui-agent
+is running - so the uninstall did not remove ours, the 4.2.2 MSI had nothing to do (it cannot
+install over 4.3.16), and the legacy `Invisible Things Lab\Qubes Tools\Version` key that our package
+does not write came back empty. The cell's own INVALID verdict is correct.
+
+**RETRACTED:** I hypothesised mid-run that stock 4.2.2 had probably installed correctly and the
+probe was looking in the wrong registry key. The guest disproves it - stock is not installed at all.
+Recorded because the hypothesis was stated before it was checked.
+
+**Also measured, and it stands:** `STOCKRC=0` is meaningless - `msiexec ... & echo %ERRORLEVEL%` in
+one `cmd /c` expands the variable at parse time, before msiexec runs. The registry probe was the
+only honest signal in that cell.
+
+**What the 16 PASSes actually establish** on 4.3.16: a clean single-stage install on both Win10 and
+Win11 puts the RELEASE binary in place (hash-verified against the package, not assumed), arms
+autologon, leaves xenbus_monitor disabled and not running (the premature-reboot mechanism), and an
+AppVM derived from each installed template maps windows on three consecutive COLD boots with nothing
+fullscreen-sized. That is the boot path, not a just-installed session.
+
+**What they do NOT establish:** the two-stage install path, upgrade-over-stock, PV networking under
+load, or the premature reboot DIALOG itself (the dialog watcher is not wired into these cells - the
+xenbus_monitor checks measure the mechanism, not the visible dialog).
