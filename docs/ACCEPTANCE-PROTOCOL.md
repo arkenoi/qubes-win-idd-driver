@@ -630,6 +630,32 @@ Anything else is **"EXECUTED WITH GAPS"** and the gaps go in the first paragraph
 INVALID-PRECONDITION cells, one INVALID-VACUOUS, one INCONCLUSIVE, two blocked cells and 183 passes
 with no fail-proof. Every gap was honestly in the ledger; the prose averaged them away.
 
+**G-0. DO NOT TOUCH THE SYSTEM UNDER TEST UNTIL THE FAILURE IS WRITTEN OFF.** *(owner, 2026-08-30:
+"you are explicitly prohibited to mess with the tested system before you wrote off a failure")*
+This gate comes first because every other gate depends on the evidence still existing.
+
+When a check FAILS: **STOP.** Before any other action — no re-run, no "just try one thing", no
+registry poke, no reboot, no service restart:
+1. Write the H5 verdict line with the failing evidence paths.
+2. Capture the state: logs, status files, screen, relevant registry, process list.
+3. Leave the guest EXACTLY as it is (H3.5 already says FAIL states are preserved; this is the
+   operational form of it).
+
+**Diagnosis begins only after the write-off, and it happens on a CLONE or a restored copy — never on
+the failed subject.** The failed subject is the only instance of the fault that exists; it is
+evidence, not a workbench.
+
+*Failure that produced this gate:* the U1 scan failed `0x8024402C` four times. Instead of writing it
+off I began mutating the subject immediately — renamed `C:\Windows\SoftwareDistribution`, set and
+later cleared proxy planes, ran isolation passes, and let it cold-boot repeatedly. When it later
+scanned successfully, **no attribution was possible**: at least three variables had changed on the
+one guest carrying the fault. A root cause that was merely UNKNOWN became UNKNOWABLE on that subject,
+and a false root cause plus a ship-blocking verdict were published from the wreckage. The same guest
+was then used for further cells, compounding it.
+
+**Test for whether this gate applies:** if the answer to *"could I still reproduce the failure on
+this guest right now?"* is no, and you changed something to make it so, you violated it.
+
 **G-2. No causal claim without the REVERSE control.** A root cause is established only when the
 defect has been removed AND re-introduced, both observed. One positive after one change is a
 correlation.

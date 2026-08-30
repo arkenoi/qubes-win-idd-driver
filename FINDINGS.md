@@ -23130,3 +23130,31 @@ answer was before reading.
 **Standing lesson:** when an instrument prints something that does not fit the hypothesis, that line
 is the finding. Explaining it away as "not an argument against it" is the tell. Read the output that
 disagrees first.
+
+### 2026-08-30 — why the U1 root cause is UNKNOWABLE, not merely unknown
+
+Owner: *"you are explicitly prohibited to mess with the tested system before you wrote off a
+failure."* This is the rule I broke, and it is the reason the diagnosis collapsed.
+
+The scan failed `0x8024402C` four times on `win10-tpl`. The correct action was to write the failure
+off with its evidence and preserve the guest — H3.5 already requires FAIL states to be preserved.
+Instead, before recording anything, I began mutating the subject: renamed
+`C:\Windows\SoftwareDistribution`, set proxy planes, cleared them again, ran isolation passes, and
+allowed several cold boots. Later the same guest scanned successfully.
+
+**At that point no attribution was possible.** At least three variables had changed on the only
+instance of the fault in existence. The failure state cannot be re-examined because it no longer
+exists, and it was I who destroyed it. That is the difference between a root cause that is UNKNOWN —
+recoverable by more work — and one that is UNKNOWABLE on this subject.
+
+Compounding it: `win10-tpl` was then used for the SG cells and for the KB5066791 template install,
+so even the post-failure state is now gone.
+
+The correct sequence, for the next time a cell fails:
+1. Verdict line written, evidence captured, guest untouched.
+2. Clone the guest (or restore the entry stage into a second name).
+3. Diagnose on the COPY, one variable at a time, with the reverse control in both directions.
+4. The original stays frozen until the finding is accepted.
+
+Encoded as gate **G-0** in the runbook, placed ahead of every other gate because all of them depend
+on the evidence still existing.
