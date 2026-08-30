@@ -268,6 +268,30 @@ run_install(){ # $1=vm $2=label $3=payload-dir $4=extra-args
   return 0
 }
 
+_assert_not_primed(){ # $1=vm $2=label - a primed guest has had arbitrary SYSTEM code run in it
+  # PROTOCOL 0.7c. Both base goldens carry the primer hook (a pristine guest has no qrexec, so it is
+  # the only way to drive a clone without a 20-minute Windows reinstall). The hook is inert unless a
+  # job stick is attached, and it leaves C:\qubes-prime\fired.mark when it has run. A guest that ran
+  # a primer job is NOT a clean guest and must never be graded as one - unless the cell declares it,
+  # via CELL_PRIMED=1.
+  local vm=$1 lbl=$2 mark
+  mark=$(QTEST_VM=$vm timeout -k 5 90 ./tools/qtest run \
+      "cmd /c if exist C:\\qubes-prime\\fired.mark (echo PRIMED) else (echo CLEAN)" 2>/dev/null \
+      | tr -d '\r\0' | grep -aoE '^(PRIMED|CLEAN)$' | tail -1)
+  case "$mark" in
+    CLEAN)  ok "$lbl: guest is not primed (no fired.mark)" ;;
+    PRIMED)
+      if [ "${CELL_PRIMED:-0}" = 1 ]; then
+        ok "$lbl: guest is primed, and this cell declares it (CELL_PRIMED=1)"
+      else
+        no "$lbl: INVALID-PRECONDITION - guest carries C:\\qubes-prime\\fired.mark, so a primer job ran arbitrary SYSTEM code in it; this cell did not declare CELL_PRIMED=1"
+      fi ;;
+    *)
+      # Missing data fails. A probe that cannot answer must never read as "clean".
+      no "$lbl: INVALID-INSTRUMENT - could not read the primer marker (got '${mark:-nothing}')" ;;
+  esac
+}
+
 verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR build
   local vm=$1 lbl=$2 j
   # Report WHICH terminal state, never a guess. This line used to say "boots to the Windows
@@ -307,6 +331,7 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     2) no "$lbl: no session within 900s even after the post-install reboot (last screen: $(w_screen "$vm" "$lbl-final" "$M"))"; return 1 ;;
   esac
   ok "$lbl: guest came back with a session"
+  _assert_not_primed "$vm" "$lbl"
   QTEST_VM=$vm timeout -k 5 120 ./tools/qtest run "cmd /c type \"$GLOG\"" 2>/dev/null \
     | tr -d '\r' | grep -av 'system32>' > "$M/$lbl-final.log"
   # Same discriminator as w_install: 111 guest scripts emit "=== RESULT ===" banners and the

@@ -555,8 +555,16 @@ genuinely about installing Windows itself.
    package and must never ship in one.
 
 **Grading gate (H5 fail-proof registry):** any guest whose result is being graded must be asserted
-to have **no `C:\qubes-prime\fired.mark`**, unless its cell declares that it was primed. A primed
-guest has had arbitrary SYSTEM code run in it and must never be silently mistaken for a clean one.
+to have **no `C:\qubes-prime\fired.mark`**, unless its cell declares that it was primed (`CELL_PRIMED=1`).
+A primed guest has had arbitrary SYSTEM code run in it and must never be silently mistaken for a
+clean one. Implemented as `_assert_not_primed` in `mgmt/harness/matrix.sh`, called from
+`verify_installed`; an unreadable marker is `INVALID-INSTRUMENT`, never "clean".
+
+> **FAIL-PROOF OWED — this check's PASS is UNPROVEN until then.** Per H5, a check counts as evidence
+> only once it has been seen to FAIL with the defect deliberately present. Owed test: create
+> `C:\qubes-prime\fired.mark` on a throwaway guest, run the cell without `CELL_PRIMED=1`, and
+> confirm it reports `INVALID-PRECONDITION`. Until that is recorded here, treat every
+> "guest is not primed" PASS as unverified.
 
 **Stock QWT 4.2.2 goldens are deliberately NOT kept** (owner, 2026-08-30: *"if we implement it, we
 do not need preinstalled 4.2.2 goldens because testing upgrade from stock is rare enough one-shot"*).
