@@ -22284,3 +22284,46 @@ toast would appear, so a suppressed/queued toast cannot be excluded from these t
 console". That is the owner's report and is not being contradicted for stock's media or for the
 insertion path - but it is NOT what this measurement shows for OUR ISO present at boot, and no claim
 that our media self-starts should be made on the strength of shipping the file.
+
+### 2026-08-30 — BOTH BASE GOLDENS BUILT AND SEALED
+
+| golden | image | state |
+|---|---|---|
+| `win10-base` | Win10 22H2 Pro, build 19045.2965 | sealed; primer **PROVEN** to fire (selftest) |
+| `win11-base` | Win11 24H2 Enterprise Evaluation, build 26100.240331-1435 | sealed; primer selftest **NOT yet run on Win11** |
+
+Both: no QWT, **testsigning OFF** (verified on screen - no Test Mode watermark - which is what makes
+them valid E1 two-stage preconditions), private volume 20 GiB, `QubesPrime` hook installed, revisions
+recorded, `golden.sh verify` clean.
+
+**Two operational facts learned from the owner during this build, both of which invalidate
+screen-based gates as written:**
+
+1. **`qtest shot` cannot see a guest window on a different dom0 VIRTUAL DESKTOP.** `local.WinScreenshot`
+   captures dom0 windows; when the owner switched virtual desktops the capture returned **zero PNGs**
+   for a perfectly healthy guest, and the loop logged `NOSHOT` three times running. So `NOSHOT` means
+   "no VISIBLE window", not "no window" and certainly not "sick guest" - and any gate that treats a
+   missing capture as a state signal is measuring where the operator's desktop happens to be. This
+   compounds the existing note that an empty tar is not evidence of no windows.
+
+2. **The absolute CPU-idle threshold is wrong for Win11.** Measured idle floor: Win10 = **3**;
+   Win11 24H2 on a fresh profile ran **40-163** for over ten minutes after reaching the desktop. With
+   `netvm=''` there is no Windows Update, no Store, no telemetry - that activity is purely local
+   (Search indexing, Defender, SysMain, NGEN) and it does not change the screen at all: two captures
+   nine minutes apart were identical but for the clock. So a `< 15` gate would have held until the
+   5400 s budget expired on a guest that was finished.
+
+   **Owner, correctly**: *"why are we going to wait an hour? what is going to happen?"* and
+   *"nothing changes, and what could it do on non-networked vm with no updates?"* Nothing would have.
+   The install was complete and the wait was mine, not the guest's.
+
+   **NOT silently retuned.** Lowering the number to make it pass is the failure this whole day was
+   spent fixing. The criterion is simply wrong in kind: CPU-to-idle is not what "the install
+   finished" means on an offline Win11. The signals that actually held here were **no further
+   in-guest reboots** (last at 11:05, desktop at 11:11) and **an unchanging screen across minutes**.
+   A correct gate compares consecutive captures for change and counts reboots; that is owed work, and
+   until it exists PRISTINE mode's exit-3 remains what it always was - a prompt for a human to look.
+
+**Still owed on the goldens**: run `mgmt/prime-selftest.sh win11-base` before relying on the Win11
+primer. The hook is installed by the same PRIMER=1 stick that Win10 used, but "same code path" is not
+a measurement.

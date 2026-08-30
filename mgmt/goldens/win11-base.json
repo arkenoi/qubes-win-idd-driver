@@ -1,0 +1,32 @@
+{
+  "note": "primed pristine Win11 24H2 Enterprise Evaluation base (build 26100.240331-1435): no QWT, testsigning OFF, QubesPrime hook installed. Built 2026-08-30. Settled desktop confirmed by reading two captures 9 min apart (identical but for the clock). Primer NOT yet selftested on Win11 - do that before relying on it.",
+  "props": {
+    "klass": "StandaloneVM",
+    "maxmem": "8192",
+    "memory": "8192",
+    "vcpus": "4",
+    "virt_mode": "hvm"
+  },
+  "sealed_utc": "2026-08-30T11:22:54Z",
+  "vm": "win11-base",
+  "volumes": {
+    "private": {
+      "revisions": [
+        "1788087903-back",
+        "1788088958-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "21474836480",
+      "usage": "2147483"
+    },
+    "root": {
+      "revisions": [
+        "1788087903-back",
+        "1788088958-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "85899345920",
+      "usage": "12979391168"
+    }
+  }
+}
