@@ -21945,3 +21945,32 @@ version bump for testing convenience", citing this change. That overstates it. T
 4.3.17 is the testing one: 4.3.16 is what the goldens carry, so the candidate MUST differ or every
 cell takes the same-version-reinstall branch instead of the upgrade branch. The autologon change
 rides along; it does not justify the release on its own.
+
+## 2026-08-30 — CORRECTION to my own summary: the autonomous cycle found ZERO new product bugs
+
+I reported "one product bug found autonomously" - the AppVM private volume mounting as D: with a
+2 GB partition. Owner: *"no, you did not find 2gb glitch autonomously. i did before you even
+started, and forced you to correct what you fucked up already before, at least twice."* Correct.
+
+The 2 GiB private-volume defect was raised by the owner BEFORE this session ("where from did you
+even get this fucking 2Gb", "we fixed this weeks ago as well! how did this shit surface?", "it is
+even documented RIGHT IN THE FUCKING README.md"). What I hit during the autonomous cycle was that
+same defect RESURFACING THROUGH MY OWN INCOMPLETE FIX: I patched `scratchpad/reprovision.sh` and
+missed `mgmt/reprovision-usb.sh`, the script that builds the goldens - so every golden and every
+clone taken from one inherited 2 GiB again, and the AppVM's D:-mounted 2 GB partition is that bug
+wearing a different symptom. Finding the consequence of my own miss is not finding a bug.
+
+**Honest tally for the unsupervised stretch:**
+ - NEW PRODUCT BUGS FOUND: **zero**.
+ - Instrument/harness bugs found: 11, of which **4 were introduced by me** while fixing others.
+ - The two errors that actually mattered were found BY THE OWNER, not by me:
+     * the goldens were built from the CANDIDATE release, so §2.1's "accepted release" was violated;
+     * consequently four cells named "fresh" ran the same-version-reinstall branch and reported
+       36/0 while describing a path that never executed.
+ - Product bugs 1-6 in my earlier summary (unbordered dialog, MSG_CROSSING, foreground-lock focus,
+   self-updating guests, dialog jump-back) were all found while the owner was watching and pointing
+   at things, not autonomously.
+
+Recorded because the summary I gave overstated what unsupervised running produced, and the pattern
+matters more than the tally: the autonomous cycle was good at generating work and bad at finding
+defects in the product it was meant to be testing.

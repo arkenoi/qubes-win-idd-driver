@@ -347,6 +347,27 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     ok "$lbl: no premature reboot dialog, and the watcher proves it looked"
   fi
 
+  # BRANCH-VS-CLAIM. The installer records which branch it took (`upgrade_mode`), and P1.0 names
+  # that as THE AUTHORITY on the branch - "a harness probe disagreeing with either is the harness
+  # being wrong". Nothing compared the two, so on 2026-08-30 four cells named "fresh" ran with
+  # upgrade_mode:in-place-same-version-reinstall and reported 7/7 PASS each. The goldens carried the
+  # candidate release, so every clone already had it and no clean install was possible - 36 green
+  # lines describing a path that never executed.
+  #
+  # EXPECT_MODE names the branch a cell CLAIMS. A mismatch is INVALID-PRECONDITION (H5): the cell
+  # could not establish its own entry state, which is not a product verdict and must never be
+  # reported as one.
+  local um
+  um=$(echo "$j" | grep -ao '"upgrade_mode":"[^"]*"' | head -1 | cut -d'"' -f4)
+  say "  $lbl: installer branch = ${um:-<none reported>}"
+  if [ -n "${EXPECT_MODE:-}" ]; then
+    if [ "$um" = "$EXPECT_MODE" ]; then
+      ok "$lbl: branch matches the cell's claim ($um)"
+    else
+      no "$lbl: INVALID-PRECONDITION - cell claims '$EXPECT_MODE' but the installer took '${um:-none}'"
+    fi
+  fi
+
   # XENCONS (PV console) must be BOUND, not merely shipped. QWT historically vendored no xencons at
   # all, so XENBUS\VEN_XP0001&DEV_CONS sat at CM code 28 on every guest and that was allowlisted as
   # expected. Since 4.3.16 ships it, "code 28" changed from an expected state into a defect - and
