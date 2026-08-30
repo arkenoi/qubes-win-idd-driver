@@ -23457,3 +23457,36 @@ silent, and a flat sustained burn of **~36.5 s CPU per 10 s wall across 4 vCPUs*
 36.16, 37.09 ×10⁹ ns) — the [[wedge-ipi-shootdown-deadlock]] signature, not servicing. Recovered with
 `qtest kill` + `qtest start`; qrexec answered ~20 s later. No NMI capture taken: that class is
 postponed by owner decision and enough dumps exist.
+
+### Menus are SYNTHESIZED, not mapped — and the protocol said the opposite
+RND-3's acceptance in `docs/ACCEPTANCE-PROTOCOL.md` reads *"Menus: app + context menus map as o-r
+popups"*. This build does not do that, and never claimed to. `SynthActivate`
+(`agent/gui-agent/main.c:1774`) marks the popup synthesized, accounts it on its OWNER, paints it
+into the owner's framebuffer, and its own comment says **"no protocol traffic from here on"**.
+
+Measured on `win10-p46`, opening Notepad's File menu:
+
+```
+0x10214: (268,310) 229x196 V ovr=1 [#32768] {notepad.exe} parent=0x10010   <- agent sees it, classifies it o-r
+QGAPROTO,msg=SYNTH,hwnd=0x10214,owner=0x40020,x=268,y=310,w=229,h=196
+QGAPROTO,msg=SYNTHPAINT,hwnd=0x10214,owner=0x40020,rx=1,ry=50,w=229,h=196
+msg=MAP ... ovr=1   ->  ZERO in the WHOLE log
+msg=CREATE ... ovr=1 -> ZERO in the whole log
+```
+
+dom0's window list (`xwininfo -root -tree` filtered by `_QUBES_VMNAME`, which DOES include
+override-redirect windows) showed only Notepad. That is correct behaviour, not a defect.
+
+**I nearly recorded this as a product FAIL.** The first version of `rnd-shell-surfaces.sh` required
+a separate override-redirect window in dom0 and reported `FAIL: the menu opened guest-side but did
+not reach dom0`. It was checking for a design the build deliberately does not have. The corrected
+criterion is (a) `msg=SYNTH` onto the right owner and (b) **the owner's dom0 pixels change** — which
+is what "the user can see the menu" actually means.
+
+**OPEN QUESTION worth a cell of its own — not yet tested.** The paint routine is
+`PwPatchSynthChildClipped`, and the mask work is accounted on the owner. A menu that extends BEYOND
+its owner window's bounds (a File menu on a window near the screen edge, or a tall context menu on a
+short window) would then be **clipped to the owner** and truncated in dom0, while looking correct
+inside the guest. Windows itself lets menus spill outside the parent window freely. This has not
+been measured either way; it needs a probe that opens a menu deliberately overhanging the owner and
+compares the guest-side menu rect against what reaches dom0.

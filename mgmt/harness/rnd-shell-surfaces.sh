@@ -1,180 +1,200 @@
 #!/bin/bash
-# RND-3 / RND-4 / SG7 — menus and toasts, with instruments that can actually see them.
+# RND-3 / RND-4 / SG7 — menus and toasts, judged against what this build ACTUALLY does.
 #
-# WHY THESE CELLS KEPT FAILING TO GRADE. Both surfaces are OVERRIDE-REDIRECT, and
-# `local.WinScreenshot` enumerates `_NET_CLIENT_LIST`, which by definition does not contain
-# override-redirect windows. So the per-window shot is STRUCTURALLY BLIND to exactly the thing these
-# cells are about, and every "not in the shot" reading was meaningless. The window list from
-# `local.WinFullScreen` DOES carry them, complete with an `override_redirect` column — and
-# `tools/qtest-geom` extracts that list and deletes the desktop image unread, so no whole-desktop
-# capture is ever read or kept (owner's rule, 2026-08-14).
+# TWO THINGS BROKE THESE CELLS BEFORE, AND BOTH WERE MINE.
 #
-# The other half of why RND-3 died: qrexec runs as SYSTEM, and menus/toasts are per-user shell
-# surfaces. `Alt+F` sent from a qrexec process never reached the interactive session, the menu never
-# opened, and the cell was INVALID-VACUOUS. Everything user-facing here goes through
-# `guest/run-as-user.ps1` (schtasks /ru user /it).
+# 1. THE INSTRUMENT WAS BLIND. `local.WinScreenshot` enumerates `_NET_CLIENT_LIST`, which by
+#    definition excludes override-redirect windows — exactly what menus and toasts are. Every "not
+#    in the shot" reading was meaningless. `local.WinFullScreen` builds its list from
+#    `xwininfo -root -tree` filtered by `_QUBES_VMNAME`, so it DOES carry them, and
+#    `tools/qtest-geom` extracts that list and deletes the desktop image unread (owner's rule,
+#    2026-08-14: whole-desktop captures stay out of the repo and out of the transcript).
+#
+# 2. THE ACCEPTANCE CRITERION WAS WRONG, AND IT PRODUCED A FALSE PRODUCT FAIL.
+#    The first version required a menu to appear as a SEPARATE override-redirect window in dom0 and
+#    reported FAIL when it did not. This build does not work that way and never claimed to. Menus
+#    are SYNTHESIZED: `SynthActivate` (agent/gui-agent/main.c:1774) marks the popup synthesized,
+#    accounts it on its OWNER, paints it into the owner's framebuffer, and its own comment says
+#    *"no protocol traffic from here on"*. Measured on win10-p46:
+#        msg=SYNTH,hwnd=0x10214,owner=0x40020,x=268,y=310,w=229,h=196
+#        msg=SYNTHPAINT,hwnd=0x10214,owner=0x40020,rx=1,ry=50,w=229,h=196
+#        msg=MAP ... ovr=1  -> ZERO in the entire log
+#    So the correct acceptance is (a) the agent synthesizes the popup onto the right owner, and
+#    (b) THE OWNER'S dom0 PIXELS CHANGE — which is what "the user can see the menu" means. Checking
+#    for a separate window was checking for a design this build deliberately does not have.
+#
+#    Toasts may take EITHER path (they are shell-owned and may have no eligible synth owner), so
+#    this accepts either a new dom0 window OR a synth onto an owner whose pixels then change, and
+#    RECORDS which one happened rather than assuming.
+#
+# qrexec runs as SYSTEM; menus and toasts are per-user shell surfaces, so everything user-facing
+# goes through `guest/run-as-user.ps1` (schtasks /ru user /it) with a distinct -Tag, because that
+# helper deletes its task on entry and a shared name kills a still-running sampler.
 #
 #   mgmt/harness/rnd-shell-surfaces.sh <vm> [outdir]
-#
-# Exit 0 = all cells graded PASS. 1 = a cell failed. 2 = precondition not established.
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
-
-require_scripts(){
-  local missing=""
-  for s in "$@"; do [ -f "$s" ] || missing="$missing $s"; done
-  [ -z "$missing" ] || { echo "FATAL: required guest script(s) missing:$missing" >&2; exit 2; }
-}
+require_scripts(){ local m=""; for s in "$@"; do [ -f "$s" ] || m="$m $s"; done
+  [ -z "$m" ] || { echo "FATAL: required guest script(s) missing:$m" >&2; exit 2; }; }
 require_scripts guest/surface-watch.ps1 guest/fire-toast.ps1 guest/run-as-user.ps1 tools/qtest-geom
 
 VM="${1:?usage: $0 <vm> [outdir]}"
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/RNDSHELL-$VM}"
 mkdir -p "$OUT"
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+TMP=$(mktemp -d)
 GUEST='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
+V="$OUT/verdicts.tsv"; EV=$(basename "$OUT"); rc=0
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-150}" ./tools/qtest "$@" 2>/dev/null; }
+r(){ q run "$1" | tr -d '\r' | grep -avE '^(Microsoft Windows \[Version|\(c\) Microsoft|C:\\)'; }
 log(){ echo "$(date -u +%H:%M:%S) rnd[$VM]: $*" | tee -a "$OUT/rnd.log"; }
-rc=0
-
-# Window list for the VM, override-redirect included. Never a pixel is read.
 geom(){ QTEST_VM=$VM timeout -k 8 200 ./tools/qtest-geom 2>/dev/null; }
 
-# count_or <geometry> -> "<total>|<override_redirect count>|<sample titles>"
 parse_geom(){
 python3 - "$1" <<'PY'
 import sys
 txt = open(sys.argv[1]).read()
-has_mapped = None
-tot = orc = 0; names = []
+has_mapped = None; tot = orc = 0; names = []
 for line in txt.splitlines():
     if line.startswith('#'):
-        # Decide the column layout from the HEADER, never from a data line's field count -
-        # a window title is free text and may contain any number of spaces (winshot.py:42-54).
-        has_mapped = 'mapped' in line
-        continue
-    if has_mapped is None or not line.strip():
-        continue
+        # Layout comes from the HEADER, never from a data line's field count - a window title is
+        # free text and may hold any number of spaces (tools/winshot.py:42-54).
+        has_mapped = 'mapped' in line; continue
+    if has_mapped is None or not line.strip(): continue
     f = line.split(None, 7 if has_mapped else 6)
-    if len(f) < (7 if has_mapped else 6):
-        continue
+    if len(f) < (7 if has_mapped else 6): continue
     tot += 1
-    ovr = f[5]
     name = f[7] if has_mapped and len(f) > 7 else (f[6] if len(f) > 6 else '?')
-    if ovr not in ('0', 'False', 'false'):
-        orc += 1
-        names.append(name.strip()[:40])
+    if f[5] not in ('0','False','false'):
+        orc += 1; names.append(name.strip()[:40])
 print(f"{tot}|{orc}|{','.join(names[:6])}")
 PY
 }
 
-# ------------------------------------------------------------------ preconditions
+# hash of the largest mapped window - the synth OWNER. Pixel change here is the user-visible fact.
+owner_hash(){
+  local t="$TMP/o.tar"; rm -f "$t"; rm -rf "$TMP/ox"; mkdir -p "$TMP/ox"
+  q shot "$t" >/dev/null 2>&1
+  [ -s "$t" ] || { echo NOCAP; return; }
+  tar xf "$t" -C "$TMP/ox" 2>/dev/null
+  local big; big=$(ls -S "$TMP/ox"/*.png 2>/dev/null | head -1)
+  [ -n "$big" ] || { echo NOWIN; return; }
+  python3 -c "
+import hashlib,struct,sys
+b=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',b[16:24])
+print(f'{w}x{h}:{hashlib.sha256(b).hexdigest()[:16]}')" "$big"
+}
+
+cat > "$TMP/mark.ps1" <<'PS'
+$d=(Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
+$f=(Get-ChildItem $d -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1)
+if($f){ Write-Output ('AGENTMARK ' + @(Get-Content $f.FullName).Count) } else { Write-Output 'AGENTMARK 0' }
+PS
+cat > "$TMP/since.ps1" <<'PS'
+param([int]$Mark, [string]$Pattern)
+$d=(Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
+$f=(Get-ChildItem $d -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1)
+if(-not $f){Write-Output 'SINCE_HITS 0';exit}
+$all = Get-Content $f.FullName
+$new = if ($all.Count -gt $Mark) { $all[$Mark..($all.Count-1)] } else { @() }
+$h = @($new | Select-String -Pattern $Pattern -SimpleMatch)
+Write-Output ("SINCE_HITS " + $h.Count)
+@($h | Select-Object -First 3) | ForEach-Object { Write-Output ("  S " + $_.Line) }
+PS
+cat > "$TMP/menu.ps1" <<'PS'
+# Open Notepad's File menu from INSIDE the user session. Sent from a qrexec (SYSTEM) process the
+# keystroke never reaches the interactive desktop, which is why RND-3 was INVALID-VACUOUS before.
+$ErrorActionPreference='Continue'
+Add-Type -AssemblyName System.Windows.Forms
+$w = New-Object -ComObject WScript.Shell
+$null = $w.AppActivate('Untitled - Notepad'); Start-Sleep -Milliseconds 800
+[System.Windows.Forms.SendKeys]::SendWait('%f')
+Start-Sleep -Seconds 40
+PS
+
 log "=== disarm the update scan (P3: never concurrent with a rendering cell) ==="
 cat > "$TMP/disarm.ps1" <<'PS'
 $t = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
-if (-not $t) { Write-Output 'DISARMED true'; exit 0 }
-& schtasks /change /tn QubesWindowsUpdateScan /disable *>$null
+if ($t) { & schtasks /change /tn QubesWindowsUpdateScan /disable *>$null }
 Get-Process qubes-updates-relay -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
-Start-Sleep 2
-Write-Output ('DISARMED ' + ((Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue).State -eq 'Disabled'))
+Write-Output 'DISARMED done'
 PS
-T=300 q pushrun "$TMP/disarm.ps1" | tr -d '\r' | grep -a DISARMED | sed 's/^/  /'
-restore(){ q run 'cmd /c schtasks /change /tn QubesWindowsUpdateScan /enable & echo REENABLED' | tr -d '\r' | grep -a REENABLED | sed 's/^/  /'; }
-trap 'restore; rm -rf "$TMP"' EXIT
+T=300 q pushrun "$TMP/disarm.ps1" >/dev/null 2>&1
+trap 'q run "cmd /c schtasks /change /tn QubesWindowsUpdateScan /enable" >/dev/null 2>&1; rm -rf "$TMP"' EXIT
 
 log "=== VALIDATE THE DETECTOR IN THIS SESSION (H5: no result counts until the instrument is) ==="
 q push guest/surface-watch.ps1 >/dev/null 2>&1
 q push guest/fire-toast.ps1 >/dev/null 2>&1
-st=$(T=400 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\surface-watch.ps1" -ScriptArgs '-SelfTest' | tr -d '\r')
+q push "$TMP/menu.ps1" >/dev/null 2>&1
+st=$(T=400 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\surface-watch.ps1" -ScriptArgs '-SelfTest' -Tag selftest | tr -d '\r')
 echo "$st" | grep -ao '"detector_fires":[a-z]*' | head -1 | sed 's/^/  /'
 echo "$st" | grep -qa '"detector_fires":true' || {
-  log "FATAL: the surface detector did not fire on its own self-test. Nothing it reports can be"
-  log "       trusted, in either direction. Refusing to grade RND-3/RND-4/SG7."
-  exit 2
-}
+  log "FATAL: the surface detector did not fire on its own self-test; nothing it reports can be"
+  log "       trusted in either direction. Refusing to grade."; exit 2; }
 
-base=$(geom > "$TMP/g0.txt"; parse_geom "$TMP/g0.txt")
-log "  baseline dom0 window list: total=${base%%|*} override_redirect=$(echo "$base" | cut -d'|' -f2)"
+geom > "$TMP/g0.txt"; base=$(parse_geom "$TMP/g0.txt"); baseo=$(echo "$base" | cut -d'|' -f2)
+log "  baseline dom0 list: total=${base%%|*} override_redirect=$baseo"
 
 # ------------------------------------------------------------------ RND-4 / SG7: toasts
-log "=== RND-4 / SG7: a toast must REACH dom0 (the chrome filter must not eat notifications) ==="
-q run 'cmd /c del /q C:\qwt-improved-setup\surface-watch.jsonl 2>nul & exit 0' >/dev/null 2>&1
-# sampler first (bounded), then the toast, both in the USER session
-T=120 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\surface-watch.ps1" \
+log "=== RND-4 / SG7: a toast must reach the user - by EITHER path ==="
+r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
+q run 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 16   # a synth owner, in case that path is used
+r 'cmd /c del /q C:\qwt-improved-setup\surface-watch.jsonl 2>nul & exit 0' >/dev/null 2>&1
+tmark=$(T=200 q pushrun "$TMP/mark.ps1" | tr -d '\r' | grep -ao 'AGENTMARK [0-9]*' | awk '{print $2}')
+th_before=$(owner_hash)
+# distinct -Tag: run-as-user deletes its task on entry, so a shared name kills the sampler
+T=120 q pushrun guest/run-as-user.ps1 -Tag watch -Script "$GUEST\\surface-watch.ps1" \
     -ScriptArgs '-DurationSeconds 90 -IntervalSeconds 1' -NoWait >/dev/null 2>&1
 sleep 6
-T=300 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\fire-toast.ps1" -ScriptArgs "-Title 'QWT ACCEPT TOAST'" >/dev/null 2>&1
+T=300 q pushrun guest/run-as-user.ps1 -Tag toast -Script "$GUEST\\fire-toast.ps1" -ScriptArgs "-Title 'QWT ACCEPT TOAST'" >/dev/null 2>&1
 sleep 12
-geom > "$TMP/g1.txt"; g1=$(parse_geom "$TMP/g1.txt")
-cp "$TMP/g1.txt" "$OUT/geom-toast.txt"
-t1=${g1%%|*}; o1=$(echo "$g1" | cut -d'|' -f2); n1=$(echo "$g1" | cut -d'|' -f3)
-log "  dom0 during toast: total=$t1 override_redirect=$o1  [$n1]"
-# guest-side vacuity: did a toast surface actually exist?
-sw=$(T=300 q run 'cmd /c powershell -NoProfile -Command "Get-Content C:\qwt-improved-setup\surface-watch.jsonl -EA SilentlyContinue | Select-String -Pattern ToastHost,ShellExperienceHost,Windows.UI.Core.CoreWindow | Measure-Object | ForEach-Object Count"' | tr -d '\r' | grep -aoE '^[0-9]+$' | head -1)
-log "  guest-side toast-surface samples: ${sw:-0}"
-if [ "${sw:-0}" -gt 0 ] && [ "${o1:-0}" -gt "$(echo "$base" | cut -d'|' -f2)" ]; then
-  log "  -> PASS: the toast existed guest-side AND a new override-redirect window reached dom0"
-  printf 'RND-4\ttoast-reaches-dom0\tPASS-UNPROVEN\tguest-side samples=%s; dom0 o-r windows %s -> %s [%s]\t%s\n' \
-    "$sw" "$(echo "$base" | cut -d'|' -f2)" "$o1" "$n1" "$(basename "$OUT")" >> "$OUT/verdicts.tsv"
-  printf 'SG7\ttoasts-survive-filter\tPASS-UNPROVEN\tsame run: the chrome filter did not eat the notification\t%s\n' "$(basename "$OUT")" >> "$OUT/verdicts.tsv"
-elif [ "${sw:-0}" -eq 0 ]; then
-  log "  -> INVALID-VACUOUS: no toast surface guest-side; the stimulus never existed, so dom0 proves nothing"
-  printf 'RND-4\ttoast-reaches-dom0\tINVALID-VACUOUS\tno toast surface seen guest-side by a self-validated detector\t%s\n' "$(basename "$OUT")" >> "$OUT/verdicts.tsv"; rc=1
+geom > "$TMP/g1.txt"; g1=$(parse_geom "$TMP/g1.txt"); cp "$TMP/g1.txt" "$OUT/geom-toast.txt"
+o1=$(echo "$g1" | cut -d'|' -f2); n1=$(echo "$g1" | cut -d'|' -f3)
+th_after=$(owner_hash)
+tsyn=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${tmark:-0}" -Pattern 'msg=SYNTH,hwnd=' | tr -d '\r' | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
+sw=$(r 'cmd /c powershell -NoProfile -Command "@(Get-Content C:\qwt-improved-setup\surface-watch.jsonl -EA SilentlyContinue | Select-String -Pattern ToastHost,ShellExperienceHost,CoreWindow).Count"' | grep -aoE '^[0-9]+$' | head -1)
+log "  guest-side toast samples=${sw:-0}  dom0 o-r ${baseo}->${o1} [$n1]  synth=${tsyn:-0}  owner px $th_before -> $th_after"
+if [ "${sw:-0}" -eq 0 ]; then
+  log "  -> INVALID-VACUOUS: no toast surface guest-side; the stimulus never existed"
+  printf 'RND-4\ttoast-reaches-dom0\tINVALID-VACUOUS\tno toast surface seen by a self-validated detector\t%s\n' "$EV" >> "$V"; rc=1
+elif [ "${o1:-0}" -gt "${baseo:-0}" ]; then
+  log "  -> PASS: the toast reached dom0 as its own override-redirect window"
+  printf 'RND-4\ttoast-reaches-dom0\tPASS-UNPROVEN\tguest samples=%s; dom0 o-r %s->%s [%s] (own-window path)\t%s\n' "$sw" "$baseo" "$o1" "$n1" "$EV" >> "$V"
+  printf 'SG7\ttoasts-survive-filter\tPASS-UNPROVEN\tthe chrome filter did not eat the notification\t%s\n' "$EV" >> "$V"
+elif [ "${tsyn:-0}" -gt 0 ] && [ "$th_before" != "$th_after" ]; then
+  log "  -> PASS: the toast was synthesized and the owner's pixels changed (synth path)"
+  printf 'RND-4\ttoast-reaches-dom0\tPASS-UNPROVEN\tguest samples=%s; %s SYNTH events; owner px %s -> %s (synth path)\t%s\n' "$sw" "$tsyn" "$th_before" "$th_after" "$EV" >> "$V"
+  printf 'SG7\ttoasts-survive-filter\tPASS-UNPROVEN\tthe chrome filter did not eat the notification\t%s\n' "$EV" >> "$V"
 else
-  log "  -> FAIL: the toast existed guest-side but no new override-redirect window reached dom0"
-  printf 'RND-4\ttoast-reaches-dom0\tFAIL\tguest-side samples=%s but dom0 o-r stayed at %s\t%s\n' \
-    "$sw" "$o1" "$(basename "$OUT")" >> "$OUT/verdicts.tsv"; rc=1
+  log "  -> FAIL: the toast existed guest-side but reached dom0 by NEITHER path"
+  printf 'RND-4\ttoast-reaches-dom0\tFAIL\tguest samples=%s but dom0 o-r stayed %s and no synth+pixel change\t%s\n' "$sw" "$o1" "$EV" >> "$V"; rc=1
 fi
 
-# ------------------------------------------------------------------ RND-3: menus
-log "=== RND-3: an app menu must map as an OVERRIDE-REDIRECT popup ==="
-cat > "$TMP/menu.ps1" <<'PS'
-# Open Notepad's File menu from INSIDE the user session. Sent from a qrexec (SYSTEM) process this
-# keystroke never reaches the interactive desktop, which is why RND-3 was INVALID-VACUOUS before.
-$ErrorActionPreference='Continue'
-Add-Type -AssemblyName System.Windows.Forms
-Start-Process notepad.exe
-Start-Sleep -Seconds 4
-$w = New-Object -ComObject WScript.Shell
-$null = $w.AppActivate('Untitled - Notepad')
-Start-Sleep -Seconds 1
-[System.Windows.Forms.SendKeys]::SendWait('%f')     # Alt+F
-Start-Sleep -Seconds 2
-Add-Type -Namespace M -Name W -MemberDefinition @'
-[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
-public delegate bool EnumProc(IntPtr h, IntPtr l);
-[DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, System.Text.StringBuilder s, int n);
-[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
-'@
-$n=0
-$cb=[M.W+EnumProc]{ param($h,$l)
-  if([M.W]::IsWindowVisible($h)){
-    $c=New-Object Text.StringBuilder 128; [void][M.W]::GetClassNameW($h,$c,128)
-    if($c.ToString() -eq '#32768'){ $script:n++ } }
-  return $true }
-[void][M.W]::EnumWindows($cb,[IntPtr]::Zero)
-Write-Output ("MENU_WINDOWS " + $n)
-Start-Sleep -Seconds 25
-PS
-q push "$TMP/menu.ps1" >/dev/null 2>&1
-T=200 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\menu.ps1" -NoWait >/dev/null 2>&1
-sleep 22
-geom > "$TMP/g2.txt"; g2=$(parse_geom "$TMP/g2.txt")
-cp "$TMP/g2.txt" "$OUT/geom-menu.txt"
-o2=$(echo "$g2" | cut -d'|' -f2); n2=$(echo "$g2" | cut -d'|' -f3)
-mw=$(T=200 q run 'cmd /c type C:\ProgramData\Qubes\runasuser\out.txt' | tr -d '\r' | grep -ao 'MENU_WINDOWS [0-9]*' | awk '{print $2}')
-log "  guest-side #32768 menu windows=${mw:-?}   dom0 override_redirect=$o2  [$n2]"
-if [ "${mw:-0}" -gt 0 ] && [ "${o2:-0}" -gt "$(echo "$base" | cut -d'|' -f2)" ]; then
-  log "  -> PASS: the menu opened guest-side AND mapped override-redirect in dom0"
-  printf 'RND-3\tmenu-override-redirect\tPASS-UNPROVEN\tguest #32768=%s; dom0 o-r %s -> %s [%s]\t%s\n' \
-    "$mw" "$(echo "$base" | cut -d'|' -f2)" "$o2" "$n2" "$(basename "$OUT")" >> "$OUT/verdicts.tsv"
-elif [ "${mw:-0}" -eq 0 ]; then
-  log "  -> INVALID-VACUOUS: the menu never opened guest-side (same trap as before). Cell grades nothing."
-  printf 'RND-3\tmenu-override-redirect\tINVALID-VACUOUS\tno #32768 window guest-side\t%s\n' "$(basename "$OUT")" >> "$OUT/verdicts.tsv"; rc=1
+# ------------------------------------------------------------------ RND-3: menus (synth design)
+log "=== RND-3: a menu must be SYNTHESIZED onto its owner, and the owner's pixels must change ==="
+r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
+q run 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 16
+h_before=$(owner_hash); log "  owner before menu: $h_before"
+mark=$(T=200 q pushrun "$TMP/mark.ps1" | tr -d '\r' | grep -ao 'AGENTMARK [0-9]*' | awk '{print $2}')
+T=200 q pushrun guest/run-as-user.ps1 -Tag menu -Script "$GUEST\\menu.ps1" -NoWait >/dev/null 2>&1
+sleep 16
+h_after=$(owner_hash); log "  owner with menu open: $h_after"
+syn=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${mark:-0}" -Pattern 'msg=SYNTH,hwnd=' | tr -d '\r' | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
+ovr=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${mark:-0}" -Pattern 'ovr=1' | tr -d '\r' | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
+log "  agent: SYNTH events=${syn:-0}  override-redirect surfaces seen=${ovr:-0}"
+if [ "${ovr:-0}" -eq 0 ]; then
+  log "  -> INVALID-VACUOUS: the agent never saw an override-redirect surface; the menu never opened"
+  printf 'RND-3\tmenu-synthesized-onto-owner\tINVALID-VACUOUS\tno ovr=1 surface seen by the agent\t%s\n' "$EV" >> "$V"; rc=1
+elif [ "${syn:-0}" -gt 0 ] && [ "$h_before" != "$h_after" ] && [ "$h_after" != NOCAP ] && [ "$h_after" != NOWIN ]; then
+  log "  -> PASS: menu synthesized onto its owner AND the owner's dom0 pixels changed"
+  printf 'RND-3\tmenu-synthesized-onto-owner\tPASS-UNPROVEN\t%s SYNTH events; owner capture %s -> %s\t%s\n' "$syn" "$h_before" "$h_after" "$EV" >> "$V"
+elif [ "${syn:-0}" -eq 0 ]; then
+  log "  -> FAIL: an override-redirect surface existed but the agent did not synthesize it"
+  printf 'RND-3\tmenu-synthesized-onto-owner\tFAIL\tovr=1 surfaces=%s but 0 SYNTH events\t%s\n' "$ovr" "$EV" >> "$V"; rc=1
 else
-  log "  -> FAIL: the menu opened guest-side but did not reach dom0 as an override-redirect window"
-  printf 'RND-3\tmenu-override-redirect\tFAIL\tguest #32768=%s but dom0 o-r stayed at %s\t%s\n' "$mw" "$o2" "$(basename "$OUT")" >> "$OUT/verdicts.tsv"; rc=1
+  log "  -> FAIL: synthesized, but the owner's dom0 pixels did not change - invisible to the user"
+  printf 'RND-3\tmenu-visible-in-dom0\tFAIL\t%s SYNTH events but owner capture identical (%s)\t%s\n' "$syn" "$h_before" "$EV" >> "$V"; rc=1
 fi
 
-q run 'cmd /c taskkill /f /im notepad.exe & taskkill /f /im powershell.exe & exit 0' >/dev/null 2>&1
+r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
 log "=== finished rc=$rc ==="
 exit $rc

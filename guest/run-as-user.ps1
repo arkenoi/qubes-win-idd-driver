@@ -40,20 +40,29 @@ param(
     [string]$ScriptArgs = '',
     [switch]$NoWait,
     [int]$TimeoutSec = 120,
-    [int]$SettleSec = 4
+    [int]$SettleSec = 4,
+    # A UNIQUE task name per concurrent launch. The task name used to be the constant
+    # 'QwtRunAsUser', and this function DELETES the task on entry - so starting a long-running
+    # sampler with -NoWait and then launching anything else through this same helper destroyed the
+    # sampler. Measured 2026-08-31: RND-4 started surface-watch.ps1, then fired the toast through
+    # here, which deleted surface-watch's task; the sampler recorded nothing and the cell graded
+    # INVALID-VACUOUS ("the toast never existed") when in fact the DETECTOR had been killed. Pass a
+    # distinct -Tag for anything that must survive a subsequent launch.
+    [string]$Tag = ''
 )
 $ErrorActionPreference = 'Continue'
-$tn   = 'QwtRunAsUser'
+$tn   = if ($Tag) { 'QwtRunAsUser_' + ($Tag -replace '[^A-Za-z0-9_]','') } else { 'QwtRunAsUser' }
 $work = 'C:\ProgramData\Qubes\runasuser'
+# Per-tag working dir too, or two concurrent launches overwrite each other's output file.
 New-Item -ItemType Directory -Force -Path $work | Out-Null
-$outf = Join-Path $work 'out.txt'
+$outf = Join-Path $work ($(if ($Tag) { "out-$Tag.txt" } else { 'out.txt' }))
 Remove-Item $outf -Force -EA SilentlyContinue
 
 if ($Script) {
     if (-not (Test-Path $Script)) { Write-Output "RUNASUSER error=script_not_found path=$Script"; exit 2 }
     # A wrapper is needed because schtasks' /tr cannot carry redirection, and we want the child's
     # exit code too - `$LASTEXITCODE` inside the wrapper, written next to the output.
-    $wrap = Join-Path $work 'wrap.ps1'
+    $wrap = Join-Path $work ($(if ($Tag) { "wrap-$Tag.ps1" } else { 'wrap.ps1' }))
 @"
 `$ErrorActionPreference = 'Continue'
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File '$Script' $ScriptArgs *>&1 |
