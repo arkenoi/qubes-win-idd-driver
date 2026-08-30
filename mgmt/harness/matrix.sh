@@ -191,6 +191,17 @@ run_install(){ # $1=vm $2=label $3=payload-dir $4=extra-args
     no "$lbl: could not write the run marker into $GLOG (got '${seen:-no answer}') - refusing to run, this cell could not be told apart from a previous one"
     return 1
   fi
+  # SEED THE LOCAL CUMULATIVE TAIL WITH THE MARKER.
+  # w_install samples the guest log with `Get-Content -Tail 15`. The marker is written BEFORE the
+  # installer runs, and the install then emits ~120 lines, so the marker scrolls out of every
+  # sample window and never reaches the cumulative tail - the slice finds nothing, .cur stays
+  # empty, and the wait STALLS on an install that succeeded. Measured twice on 2026-08-30: cell
+  # WIN10-1stage logged stage2-install ok:true and was still declared STALLED 300 s later, while
+  # verify_installed - which reads the FULL guest log - passed every check.
+  # The harness knows the marker, so it writes it locally instead of hoping to sample it back. It
+  # goes in FIRST, so everything appended by later polls is unambiguously this run's.
+  mkdir -p "$M"
+  echo "$E2E_MARK" >> "$M/$lbl-install.tail"
   say "  $lbl: run marker $E2E_MARK"
   QTEST_VM=$vm qrun "cmd /c start \"\" /min C:\\$d\\install.cmd /auto /autologon:qubes $extra" >/dev/null 2>&1
   # SEED_DELAY: write the PV reboot Request mid-MSI, which is when the field gets it.
