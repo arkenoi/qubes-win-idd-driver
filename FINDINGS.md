@@ -22895,3 +22895,40 @@ instrument needs work before RND-4 or SG7 can carry a verdict.
 
 Consequence: **SG7 (toasts survive the filter) inherits this** — its positive arm is RND-4, so it is
 `PASS-UNPROVEN` too. Recorded, not skipped.
+
+## 2026-08-30 — RETRACTION: "the toast never rendered" was WRONG. It rendered; my detection failed.
+
+**Owner, watching the actual display: *"during the test, the toast WAS onscreen."*** That is direct
+evidence and it overrides every negative I recorded. The earlier entry claiming
+`TOAST_NEVER_VISIBLE` — and the RND-4 `INVALID-VACUOUS` built on it — are **withdrawn**. The product
+criterion PASSES: a toast fires, renders, and reaches dom0, so the compound-chrome filter is not
+eating notifications (the CLAUDE.md 2A-3c guard holds). SG7's positive arm is satisfied by
+observation; its diag-build fail-proof remains owed.
+
+**Three compounding instrument errors, all mine:**
+
+1. **`qtest shot` for an override-redirect surface.** It sees managed windows only. Its "0 windows"
+   was never evidence of anything — the very trap RND-0's blindness table exists to prevent, and
+   which I then wrote into the protocol as RND-0b *after* falling into it.
+2. **My `EnumWindows` filter was too narrow.** It required the owning process to match
+   `ShellExperienceHost|explorer|...` or the class to match `CoreWindow|Toast|Flyout`. A Win10 toast
+   that does not present under those names is invisible to it. I treated a filter miss as an absence.
+3. **`fullshot` timing.** I captured at ~6 s and ~10 s after kicking a scheduled task that has its
+   own start latency. A transient toast can be gone, or not yet up, at both instants. One sample
+   either side of an unmeasured latency is not a search.
+
+**The methodological failure underneath all three:** I asserted a NEGATIVE from instruments I had
+not validated against a KNOWN-PRESENT instance of the thing. The protocol's own rule covers this —
+a check counts only once it has been seen to FIRE on a positive — and I applied it to the product's
+checks while exempting my own ad-hoc probes. A "not found" from an unvalidated detector is not a
+finding; it is an unmeasured cell.
+
+**Second, unrelated harm in the same run.** SG3 maximized a guest Notepad to 5088x1368, which mapped
+onto the owner's real display and **stole keyboard focus mid-work**: *"some shitty window captured
+focus in front of my keyboard so this exact run is spoiled."* Window-mapping cells are not
+background work — they put windows on the owner's actual screen. Guest halted immediately.
+**SG0.2 already anticipates this** ("all per-window fullscreen-gate cells run at a sub-host guest
+resolution ... so even a broken gate maps a bounded 1600x900 bordered window") and I did not apply
+it. Any cell that maps a window at or near host size must either set a sub-host guest resolution
+first, or be scheduled with the owner. Recorded as a standing precondition, not as a one-off
+apology.
