@@ -1,18 +1,30 @@
 # Run a command, or a PowerShell script, in the LOGGED-ON USER'S INTERACTIVE SESSION and return
 # its output.
 #
-# WHY THIS EXISTS. qrexec on this testbed runs as NT AUTHORITY\SYSTEM (memory:
-# `presession-qrexec-system`), i.e. in SESSION 0 on a non-interactive window station. Two distinct
-# consequences, and both have already cost this project measurements:
+# WHY THIS EXISTS - and what it is NOT for.
+# qrexec on this testbed runs as NT AUTHORITY\SYSTEM (memory: `presession-qrexec-system`). It is
+# tempting to conclude "therefore session 0, therefore no windows and no display APIs". MEASURED
+# 2026-08-30 on win10-p46, that conclusion is WRONG:
 #
-#   1. A process started from `qtest run` has NO window on the user's desktop, so the gui-agent -
-#      which enumerates the INPUT desktop - never sees it. A cell needing a real mapped window
-#      silently measures nothing.
-#   2. Display APIs bound to a window station fail outright there. Measured 2026-08-30:
-#      `EnumDisplaySettings(NULL, ENUM_CURRENT_SETTINGS, &dm)` returns 0 from session 0 with a
-#      correct 220-byte DEVMODEW, while `Win32_VideoController` (a WMI device property, not a
-#      session one) answers fine. That difference is what made the session fault look for months
-#      like a DEVMODE marshalling bug in `set-resolution.ps1`.
+#   via qtest (qrexec):        whoami=nt authority\system  sessionId=1  winsta=WinSta0
+#   via schtasks /ru user /it: whoami=win-idd-test\user     sessionId=1  winsta=WinSta0
+#
+# qrexec lands in the INTERACTIVE session on the interactive window station. So from `qtest run`:
+# windows DO map (two notepads started that way were both mapped by the agent, `win=2` in QGAPERF),
+# and display APIs DO work - `EnumDisplaySettings("\\.\DISPLAY2", ENUM_CURRENT_SETTINGS)` and
+# `ChangeDisplaySettingsEx` both succeed there. An identical probe run through this wrapper and
+# through qrexec returned byte-identical output.
+#
+# I wrote the opposite here earlier the same day - that session-0 blindness was what had made
+# `set-resolution.ps1` fail - and committed it before testing it. It was not the cause. The cause
+# was a NULL lpszDeviceName on a guest whose desktop is on DISPLAY2 (see set-resolution.ps1).
+# Recorded rather than quietly deleted, because a plausible cause written into a file header is
+# indistinguishable from a measured one the next time somebody reads it.
+#
+# WHAT THIS IS ACTUALLY FOR: running something as the USER PRINCIPAL rather than as SYSTEM.
+# That difference is real and matters for per-user state - toasts and the Action Center, the Start
+# menu, HKCU, the user's own Explorer - none of which SYSTEM owns. It is NOT needed for display
+# work, and it is NOT needed to get a window mapped.
 #
 # `schtasks /ru user /it` is the pattern already used across this repo (guest/fire-toast.ps1:32).
 # This wraps it AND recovers stdout/stderr, which the bare pattern throws away - the reason it was
