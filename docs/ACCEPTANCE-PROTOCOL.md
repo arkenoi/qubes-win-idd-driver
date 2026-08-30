@@ -491,12 +491,21 @@ reboot and a SYSTEM onstart task was built in this session as a parallel mechani
 before anyone checked whether Qubes already had it. **Check for the knob before building the
 machine.**
 
-**Channel reality, so it is not rediscovered a fourth time:** a PRISTINE guest has no QWT, therefore
-no qrexec, therefore no way to *launch* anything inside it. Attaching media does not run it. The
-execution channels into a Windows guest are, in order of preference: qrexec (needs QWT already
-installed), the answer file's FirstLogonCommands (only during a fresh install), and a human at the
-console. Any plan that says "clone the pristine golden and install X into it" must name which of
-those three it uses.
+**Channel reality — and note this section was itself a REDISCOVERY.** §2.1 already states that ST0
+is "No qrexec - undriveable", and the rig skill already records the queued-qrexec trap: calls fired
+at a guest with no agent queue up, auto-start it, outlive the caller, and produce the "unkillable
+qube" that was once reported as a defect. **Do not aim qrexec at a guest that has no qrexec agent** -
+it is not merely futile, it actively wrecks the qube's state and your understanding of it.
+
+**The correction that matters, because the earlier draft of this paragraph was WRONG:** the tools
+ISO **AUTORUNS**. That is the point of `qvm-start --install-windows-tools`. Attaching it to a
+pristine guest installs QWT without any qrexec, without an answer stick, and without a human at the
+console. The claim "attaching media does not run it" was invented here and is false; it is what made
+the stock-install path look impossible for an entire session.
+
+So the channels into a Windows guest are: **an autorunning attached ISO** (works on a pristine
+guest - the supported route), the answer file's FirstLogonCommands (only during a fresh install),
+and qrexec (only once QWT is already installed).
 
 ### 0.8 Hard prohibitions (each row is scar tissue)
 

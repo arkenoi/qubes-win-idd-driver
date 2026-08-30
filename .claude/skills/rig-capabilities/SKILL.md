@@ -147,6 +147,15 @@ MY provisioning attempt failed. Stock QWT installs reliably and always has (owne
 thousand times before"). That entry would have told every future reader that stock does not install
 on this rig, and they would have stopped looking.
 
+**Related, and it cost this session the entire stock-install path:** I claimed "a pristine guest has
+no channel, attaching media does not run it". The tools ISO **AUTORUNS** - that is what
+`qvm-start --install-windows-tools` is for. Never assert that something cannot be driven without
+checking how the product is actually installed by its users.
+
+**And do not aim qrexec at a guest with no qrexec agent.** Already recorded here and in §2.1 ("ST0 -
+No qrexec, undriveable"), rediscovered anyway: queued calls against an agentless guest auto-start
+it, outlive the caller, and produce the "unkillable qube" once reported as a defect.
+
 **Rule:** when something that has worked many times fails in your hands, the defect is YOURS until
 proven otherwise. Write "my attempt failed, cause unknown", never "X does not work". A wrong record
 outlives the session that made it.
