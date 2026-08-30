@@ -70,6 +70,8 @@ def retracted_unreplaced(r):
     # root cause was falsified, and nothing has re-tested them since.)
     if not r['verdict'].startswith('RETRACTED'):
         return False
+    if r['verdict'].startswith('RETRACTED-REPLACED:'):
+        pass   # still verified below - the replacement must actually exist
     for c in valid.get(r['cell'], []):
         if c['check'] == r['check']:
             return False

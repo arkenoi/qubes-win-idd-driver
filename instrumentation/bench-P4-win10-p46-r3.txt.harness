@@ -1,0 +1,92 @@
+Microsoft Windows [Version 10.0.19045.2965]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\drag-harness.ps1"
+# session=1 user=WIN-IDD-TEST$ interactive=True
+# virtual screen origin (0,0) size 5120x1440
+# SendInput verified: cursor (2560,720) -> (1707,480)
+# cleared other app windows before measuring
+# notepad hwnd=0x21005a rect=(2160,420)-(2960,1020)
+### PHASE-START idle-pre 20260830.221245.919
+### PHASE-END   idle-pre 20260830.221250.947
+### PHASE-START drag 20260830.221252.964
+#   drag cadence: steps=600 wall_ms=10002 want_ms=10000 jitter_ms p50=14.88 p95=16.12 max=16.43
+### PHASE-END   drag 20260830.221303.184
+### PHASE-START idle-mid1 20260830.221303.209
+### PHASE-END   idle-mid1 20260830.221305.214
+### PHASE-START scroll 20260830.221305.216
+#   scroll cadence: steps=200 wall_ms=10000 want_ms=10000 jitter_ms p50=49.31 p95=49.57 max=49.79
+### PHASE-END   scroll 20260830.221315.437
+### PHASE-START idle-mid2 20260830.221315.438
+### PHASE-END   idle-mid2 20260830.221317.501
+### PHASE-START type 20260830.221317.504
+#   type cadence: steps=100 wall_ms=10000 want_ms=10000 jitter_ms p50=99.68 p95=99.77 max=99.80
+### PHASE-END   type 20260830.221327.844
+### PHASE-START idle-post 20260830.221327.846
+### PHASE-END   idle-post 20260830.221332.853
+=== RESULT ===
+{
+    "ok":  true,
+    "phases":  [
+                   {
+                       "name":  "idle-pre",
+                       "start":  "20260830.221245.919",
+                       "end":  "20260830.221250.947",
+                       "ms":  5014
+                   },
+                   {
+                       "name":  "drag",
+                       "start":  "20260830.221252.964",
+                       "end":  "20260830.221303.184",
+                       "ms":  10219
+                   },
+                   {
+                       "name":  "idle-mid1",
+                       "start":  "20260830.221303.209",
+                       "end":  "20260830.221305.214",
+                       "ms":  2004
+                   },
+                   {
+                       "name":  "scroll",
+                       "start":  "20260830.221305.216",
+                       "end":  "20260830.221315.437",
+                       "ms":  10219
+                   },
+                   {
+                       "name":  "idle-mid2",
+                       "start":  "20260830.221315.438",
+                       "end":  "20260830.221317.501",
+                       "ms":  2010
+                   },
+                   {
+                       "name":  "type",
+                       "start":  "20260830.221317.504",
+                       "end":  "20260830.221327.844",
+                       "ms":  10339
+                   },
+                   {
+                       "name":  "idle-post",
+                       "start":  "20260830.221327.846",
+                       "end":  "20260830.221332.853",
+                       "ms":  5006
+                   }
+               ],
+    "notes":  [
+                  "session=1 user=WIN-IDD-TEST$ interactive=True",
+                  "virtual screen origin (0,0) size 5120x1440",
+                  "SendInput verified: cursor (2560,720) -\u003e (1707,480)",
+                  "cleared other app windows before measuring",
+                  "notepad hwnd=0x21005a rect=(2160,420)-(2960,1020)"
+              ],
+    "cadence":  {
+                    "drag":  "steps=600 wall_ms=10002 want_ms=10000 jitter_ms p50=14.88 p95=16.12 max=16.43",
+                    "scroll":  "steps=200 wall_ms=10000 want_ms=10000 jitter_ms p50=49.31 p95=49.57 max=49.79",
+                    "type":  "steps=100 wall_ms=10000 want_ms=10000 jitter_ms p50=99.68 p95=99.77 max=99.80"
+                },
+    "logdir":  "C:\\Program Files\\Qubes Tools\\log",
+    "markerFile":  "C:\\Windows\\TEMP\\qgaperf-harness-20260830-221332.json",
+    "error":  null,
+    "hwnd":  "0x21005a"
+}
+
+C:\Windows\system32>
