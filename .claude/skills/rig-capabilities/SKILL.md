@@ -171,3 +171,55 @@ Two failure modes from the same night, both corrected by the owner:
    no evidence, contradicting a path known to work. Owner: "obvious hallucinatory bullshit that came
    from context overload."
 If a cause is unknown, the words are "undiagnosed", and the next action is a measurement.
+
+## WHEN A ROUTE ALREADY WORKS, CHANGE ONE VARIABLE — DO NOT WRITE A SECOND ROUTE
+
+Added 2026-08-30, after the owner asked "so wtf, why did you break what already works?" and, before
+that, "you did it before thousand times, what changed?".
+
+**What happened.** Installing stock QWT on a fresh guest had worked reliably for weeks via
+`answer-stock.iso` → `payload/install-qwt.cmd`: it drives stock's extracted MSI and, critically,
+imports the six vendor `SigningCert*.cer` into **Root AND TrustedPublisher** first. The comment
+above that loop says why, in my own words, from measurement: without TrustedPublisher the PnP
+driver-store step can stall or fail on the "install this device software?" trust prompt, and
+"nobody is clicking here".
+
+For the upgrade-over-stock cell I needed stock's *default* feature set (the defect being reproduced
+is about `xenvbd`, which the old route deliberately omits). Instead of changing that one variable, I
+added a whole parallel route — `REAL_STOCK_EXE`, running the genuine bundle from a SYSTEM onstart
+task — and reimplemented the install from scratch. The new implementation did not seed the certs.
+First real run: `stock installer rc=1603`, a guest with testsigning on, no QWT, no qrexec, and no
+way to see why, sitting unnoticed for hours.
+
+**Why it was invisible for so long.** The parallel route also dropped the *observability* the old
+one had. It logged one rc and nothing else, on a guest that by definition has no qrexec. A failure
+there is completely mute.
+
+**The rules.**
+1. Before writing a new path to a result the rig already achieves, find the existing one and
+   diff the intent. If the difference is one flag, one feature list, one file — change that.
+2. A new route inherits none of the old route's hard-won workarounds. Every one of them was a bug
+   someone paid for. Grep the working route for its comments and carry them across explicitly.
+3. Any route that runs on a guest with **no qrexec** must be able to report its own failure on the
+   only channel such a guest has: THE SCREEN. Write the log, then arrange for it to be displayed
+   (a self-deleting script in the all-users Startup folder + one reboot works, because autologon is
+   enforced). "It failed silently" is a defect in the harness, not bad luck.
+4. Do not generate a batch script with a stack of `echo` lines into another batch script. The
+   quoting has to survive two layers of `cmd` parsing and silently does not — that is the origin of
+   the `%%ERRORLEVEL%%` class of bugs here. Stage a real file.
+
+## ONE OWNER PER GUEST, AND IT IS THE ORCHESTRATOR
+
+Same day, same incident. `mgmt/reprovision-usb.sh` was already running and correctly restarting
+win10-u10 on every halt (it holds `/tmp/reprovision-<vm>.lock` for exactly this reason). I did not
+check for it, diagnosed "nobody is restarting it between stages", and armed **two** ad-hoc monitors
+that also shut down and started the guest. One of them issued a reboot while the MSI was mid-flight.
+
+- **Check for the lock and for a running orchestrator before touching a guest**:
+  `fuser -v /tmp/reprovision-<vm>.lock` and `ps -eo pid,etime,cmd | grep reprovision`.
+- A watcher that acts on the guest is a second owner. If an orchestrator is running, watchers are
+  **passive** — read state, read the screen, report. Nothing else.
+- Two of my conclusions that day ("stage 2 never fired", "the restarts were missing") were artefacts
+  of not looking for the existing owner. Retract loudly when this happens.
+- `cmd | tee log` reports **tee's** exit status. The orchestrator's `exit 1` refusal was reported to
+  me as success because of this. Use `PIPESTATUS`, or do not pipe a status-bearing command.
