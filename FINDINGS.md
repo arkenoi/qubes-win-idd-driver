@@ -22857,3 +22857,41 @@ have installed.
 **And a positive result worth keeping:** our updater's offered set is IDENTICAL to stock Windows' on
 the same guest — the same 8 KBs on Win10 22H2. Whatever the U1 proxy-plane defect blocks, it is not
 a difference in WHICH updates the product considers applicable.
+
+## 2026-08-30 — RND-7 PASSES with both directions proven; RND-4 is UNMEASURABLE on this rig
+
+**RND-7 (compound chrome) PASS, and this is the cell the 2A-chrome work exists for.** `chromerepro`
+creates a main window plus four layered/transparent/toolwindow "shadow strips" owned by it — the
+Office border artefact in miniature. Measured on `win10-tpl`:
+
+    guest-side (EnumWindows, CharSet.Unicode):  5 visible top-level HWNDs
+      QubesChromeReproMain    layered=False transparent=False toolwin=False owner=0x0
+      QubesChromeReproShadow  layered=True  transparent=True  toolwin=True  owner=0x60130   x4
+    dom0 (qtest shot):                          1 window mapped, 612x446
+
+Exactly the acceptance shape: before = 5 bordered windows, after = 1. The vacuity guard is
+satisfied positively — the four strips were *proven present in the guest* in the same run, so
+"only one reached dom0" is a filter result and not an absence of stimulus.
+
+**RND-4 (toasts) cannot be graded on this rig, and that is recorded as INVALID-VACUOUS rather than
+as either verdict.** SG0.4 is explicit: *"nothing appeared in dom0" passes only when the same run
+proves the stimulus existed guest-side; absent stimulus = run FAILS.* No toast ever rendered:
+
+| attempt | result |
+|---|---|
+| `fire-toast.ps1` over qrexec | `{"fired": true}` — but that is the API accepting the call |
+| enumerate for 16 s after firing | no new window; the only CoreWindows are pre-existing and unchanged |
+| scheduled task `/ru user` | `TOAST_NEVER_VISIBLE` |
+| scheduled task `/ru user /it` | `TOAST_NEVER_VISIBLE` |
+
+**The reason the first attempt could never have worked** is worth keeping: qrexec on this testbed
+runs as **`NT AUTHORITY\SYSTEM`** (dom0 policy, see the presession-qrexec-system memory). Toasts are
+PER-USER. A toast fired from SYSTEM is accepted by the API and rendered for nobody — which is
+exactly why `fired:true` and an empty screen are consistent. That trap applies to every shell-UI
+cell, not just this one: **anything needing the interactive user's session (toasts, Start, shell
+flyouts) must not be driven directly over qrexec.** Scheduling it as the user, with and without
+`/it`, still produced nothing, so the remaining cause is in the image or the toast payload and the
+instrument needs work before RND-4 or SG7 can carry a verdict.
+
+Consequence: **SG7 (toasts survive the filter) inherits this** — its positive arm is RND-4, so it is
+`PASS-UNPROVEN` too. Recorded, not skipped.
