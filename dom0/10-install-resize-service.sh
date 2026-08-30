@@ -73,18 +73,38 @@ geom() {  # \$1 = wid -> sets gx gy gw gh (client-area geometry)
         /Height:/ {print "gh="\$2}')"
 }
 
+# v5: COUNT the loop's stages, so a failure is attributable. The old code reported every
+# possible cause as "err=no_window", which names a GUEST condition. Measured 2026-08-30:
+# local.WinScreenshot returned 2 windows for win10-p46 while this service said no_window in the
+# same second, using identical selection - the difference was geom()/xwininfo, i.e. a DOM0 TOOLING
+# fault wearing a guest-shaped error string. That cost a P5 run: the obvious reading of no_window
+# is "the guest has mapped nothing", which is a safeguard result, not an outage.
+nlist=0; nowned=0; nogeom=0
 best=""; besta=0
 for wid in \$(X xprop -root _NET_CLIENT_LIST 2>/dev/null \\
               | sed 's/.*# *//' | tr -d ' ' | tr ',' '\\n' | grep '^0x'); do
+    nlist=\$((nlist+1))
     owner=\$(X xprop -id "\$wid" _QUBES_VMNAME 2>/dev/null \\
             | sed -n 's/^_QUBES_VMNAME(STRING) = "\\(.*\\)"\$/\\1/p')
     [ "\$owner" = "\$VM" ] || continue
+    nowned=\$((nowned+1))
     gx=""; gy=""; gw=""; gh=""; geom "\$wid"
-    [ -n "\$gw" ] || continue
+    if [ -z "\$gw" ]; then nogeom=\$((nogeom+1)); continue; fi
     a=\$((gw*gh))
     if [ "\$a" -gt "\$besta" ]; then besta=\$a; best=\$wid; fi
 done
-if [ -z "\$best" ]; then echo "GEOM ok=0 err=no_window"; exit 0; fi
+if [ -z "\$best" ]; then
+    if [ "\$nlist" -eq 0 ]; then
+        echo "GEOM ok=0 err=empty_client_list dom0_side=1 hint=xprop_or_xauth"
+    elif [ "\$nowned" -eq 0 ]; then
+        echo "GEOM ok=0 err=no_window vm=\$VM listed=\$nlist owned=0"
+    else
+        # Windows ARE owned by the guest; we simply could not measure them. Never call this
+        # no_window - that would blame the guest for a missing/failing xwininfo in dom0.
+        echo "GEOM ok=0 err=geometry_unreadable dom0_side=1 owned=\$nowned unreadable=\$nogeom hint=xwininfo"
+    fi
+    exit 0
+fi
 
 if [ "\$REQ" != "query" ]; then
     W="\${REQ%x*}"; H="\${REQ#*x}"
