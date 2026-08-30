@@ -223,3 +223,36 @@ that also shut down and started the guest. One of them issued a reboot while the
   of not looking for the existing owner. Retract loudly when this happens.
 - `cmd | tee log` reports **tee's** exit status. The orchestrator's `exit 1` refusal was reported to
   me as success because of this. Use `PIPESTATUS`, or do not pipe a status-bearing command.
+
+## WHEN GUEST STATE IS IN QUESTION, LOOK AT IT. YOU HAVE THE SCREENSHOT TOOL.
+
+Added 2026-08-30, after the owner asked: *"why i am always telling you what i see on the guest screen
+while you have the screenshot tool yourself?"*
+
+In ONE session the owner had to report, from their own screen, four things I could have captured at
+any moment with `qtest shot`:
+
+| owner told me | what I was doing instead |
+|---|---|
+| "it says stock installer rc=1603" | speculating about hang-vs-fail across several turns |
+| "it is sitting idle, apparently" | polling a log and believing `cpu=6225` from a probe I had just written wrong |
+| "notepad app is preventing shutdown" | reading `qvm-shutdown: error: Failed to shut down` and moving on |
+| "wants password now" | nothing - I had not looked since the shutdown failed |
+
+The idle one cost the most: one capture would have shown a settled desktop and exposed the parse bug
+an hour earlier.
+
+**The rule.** A screenshot costs ~30 s and needs no qrexec. Take one BEFORE reasoning about guest
+state, not after a checkpoint says to. Specifically, capture immediately when:
+
+- any guest-directed command FAILS or times out (`qvm-shutdown` failing means something is on screen
+  saying why - a blocking app, a dialog, a lock screen);
+- a wait loop is not progressing as expected, ESPECIALLY when a metric disagrees with the elapsed
+  time - the screen is the independent witness that catches a broken instrument;
+- before reporting "it is still working" / "it is stuck" / "it is idle" to the owner. Those are
+  claims about the screen. Do not make them from a log;
+- before concluding anything about a guest with no qrexec. The screen is its ONLY channel; that is
+  the entire premise of the primer and of `PRISTINE` mode.
+
+**Do not wait to be told.** If the owner can see it, so can I - the tool is `tools/qtest shot`, it
+works on any tagged guest, and an unread screen is a choice.
