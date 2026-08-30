@@ -22823,3 +22823,37 @@ cold boot, not merely present in the source. That had never been exercised befor
 Minor instrument nit: `wu-boot-acceptance-arm.ps1` reports `vm_class_now=WIN-IDD-TEST`, which is the
 hostname, not a class. The post-boot CHECK is the authority and is correct; the ARM line is
 mislabelled and would mislead a reader.
+
+## 2026-08-30 — Dynamic Updates are NOT a shipping gap: measured against stock Windows
+
+Owner asked what "Dynamic Updates" are and set the decisive test: *"just compare: will they install on
+StandaloneVM? if no, then it is not a defect."* Correct, and now measured.
+
+**What they are.** Dynamic Update is a Windows **Setup** mechanism, not part of servicing. When Setup
+runs (feature update, in-place upgrade, clean install) it pulls fresh components at setup time:
+*Setup Dynamic Update* (KB5106084) patches Setup's own binaries, *Safe OS Dynamic Update*
+(KB5121002) patches the WinRE recovery image. They ship as `.cab` and are consumed by the setup
+process.
+
+**The control.** `win10-c1` is a StandaloneVM with a netvm, so per the class carve-out it updates
+ITSELF through stock Windows Update — no relay, no proxy, no `.msu` filter, **none of our code in
+the path**. The probe searched `IsInstalled=0` with **no `Type` filter**, so Dynamic Updates would
+have appeared if WU offered them.
+
+    OFFERED_TOTAL 8         <- the SAME eight our agent enumerates on win10-tpl
+    zero Dynamic-Update-class rows offered
+    HISTORY_COUNT 0         <- and none ever installed
+
+**Conclusion: Windows itself does not offer Safe OS / Setup Dynamic Updates to a running,
+already-installed system.** Our not shipping them is therefore not a gap — it reproduces stock
+behaviour exactly. The same holds for the server variants (KB5120233 cumulative, KB5120708 .NET):
+a client SKU is never offered them.
+
+**RETRACTION.** The earlier entry listed KB5121002/KB5106084 under "structurally NOT shipped" in a
+way that implied a possible shortfall. That framing is withdrawn: the exclusion is correct, and the
+`\.msu` filter and KB-specific catalog search are not hiding anything a normal Windows machine would
+have installed.
+
+**And a positive result worth keeping:** our updater's offered set is IDENTICAL to stock Windows' on
+the same guest — the same 8 KBs on Win10 22H2. Whatever the U1 proxy-plane defect blocks, it is not
+a difference in WHICH updates the product considers applicable.
