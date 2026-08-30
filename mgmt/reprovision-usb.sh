@@ -136,10 +136,19 @@ _grab(){ # capture; echo the classifier verdict (advisory only, never a pass)
 #
 # admin.vm.Stats needs no qrexec, which matters because this guest has none. Setup copying files and
 # installing updates is busy; a settled desktop is not. Same probe matrix.sh uses in verify_installed.
+# PARSE THE STREAM PROPERLY. admin.vm.Stats emits repeating NULL-separated records:
+#   win10-base \0 vm-stats \0 memory_kb \0 8388656 \0 cpu_time \0 ... \0 cpu_usage_raw \0 0 \0
+# The first version of this did `tr -d '\0'` and then `grep -oE 'cpu_usage_raw[0-9]+'`, which is
+# wrong twice over: deleting the separators runs the value into the NEXT record (a real value of 3
+# was read as "31"), and it then SUMMED every record in the whole 20 s stream. Measured 2026-08-30
+# on a genuinely idle guest: the probe reported 149 and 6225 where the true value was 3, so the
+# `quiet` threshold could never be met and the build would have spun to its 90-minute budget and
+# failed with the install long since finished.
+# Translate NULLs to newlines and read the value on the line AFTER each cpu_usage_raw key; report
+# the MAX across the sampled window, so a brief idle moment inside heavy work does not read as calm.
 _cpu(){
-    printf '' | timeout 20 qrexec-client-vm "$VM" admin.vm.Stats 2>/dev/null | tr -d '\0' \
-        | grep -aoE 'cpu_usage_raw[0-9]+' | grep -aoE '[0-9]+' \
-        | awk '{t+=$1} END{if(NR)print t; else print 9999}'
+    printf '' | timeout 10 qrexec-client-vm "$VM" admin.vm.Stats 2>/dev/null | tr '\0' '\n' \
+        | awk '/^cpu_usage_raw$/{getline v; if(v+0>m)m=v+0; n++} END{if(n==0)print 9999; else print m}'
 }
 while [ $(( $(date +%s) - t0 )) -lt "$BUDGET" ]; do
     if [ "${PRISTINE:-0}" = 1 ]; then
@@ -154,7 +163,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$BUDGET" ]; do
         # Measured: win11-gold0 sat at a finished desktop logging "screen=VERDICT=DESKTOP (advisory)"
         # for ~35 minutes past the 900 s floor without ever exiting.
         c=$(_cpu)
-        if [ "$v" = "VERDICT=DESKTOP" ] && [ "${c:-9999}" -lt 60 ] 2>/dev/null; then
+        if [ "$v" = "VERDICT=DESKTOP" ] && [ "${c:-9999}" -lt 15 ] 2>/dev/null; then
             QUIET=$((QUIET+1))
         else
             QUIET=0

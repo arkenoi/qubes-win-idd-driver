@@ -310,9 +310,13 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     say "  $lbl: no qrexec (expected while the MSI replaces the agent / swaps PV drivers) - waiting for the install to go quiet"
     local quiet=0 q c
     for q in $(seq 1 60); do
-      c=$(printf '' | timeout 20 qrexec-client-vm "$vm" admin.vm.Stats 2>/dev/null | tr -d '\0' \
-          | grep -aoE 'cpu_usage_raw[0-9]+' | grep -aoE '[0-9]+' | awk '{t+=$1} END{if(NR)print t; else print 9999}')
-      if [ "${c:-9999}" -lt 60 ] 2>/dev/null; then quiet=$((quiet+1)); else quiet=0; fi
+      # See the note in mgmt/reprovision-usb.sh:_cpu - this same probe was parsed wrongly. The
+      # stats stream is NULL-separated records; deleting the separators runs each value into the
+      # next record (3 reads as "31") and the sum then covers the entire stream window. Measured
+      # 149 on a guest whose true usage was 3, so this "quiet" test could effectively never pass.
+      c=$(printf '' | timeout 10 qrexec-client-vm "$vm" admin.vm.Stats 2>/dev/null | tr '\0' '\n' \
+          | awk '/^cpu_usage_raw$/{getline v; if(v+0>m)m=v+0; n++} END{if(n==0)print 9999; else print m}')
+      if [ "${c:-9999}" -lt 15 ] 2>/dev/null; then quiet=$((quiet+1)); else quiet=0; fi
       [ $((q % 4)) -eq 0 ] && say "    t+$((q*15))s cpu=${c:-?} quiet=$quiet"
       [ "$quiet" -ge 3 ] && { say "  $lbl: CPU quiet - the install has finished working"; break; }
       w_alive "$vm" && { say "  $lbl: qrexec came back on its own at t+$((q*15))s"; break; }
