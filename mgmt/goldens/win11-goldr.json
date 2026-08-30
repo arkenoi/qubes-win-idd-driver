@@ -1,5 +1,5 @@
 {
-  "note": "ST2G.11 - Win11 Ent Eval 26100 + release 6022427 (4.3.16), stage1+stage2 ok:true, seamless verified",
+  "note": "re-sealed 2026-08-30 after fixing the dead revision reader; baseline is CURRENT state - this seal cannot certify the golden was untouched BEFORE it, only detect changes after",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "0",
@@ -7,17 +7,23 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "sealed_utc": "2026-08-30T01:34:01Z",
+  "sealed_utc": "2026-08-30T09:13:53Z",
   "vm": "win11-goldr",
   "volumes": {
     "private": {
-      "revisions": [],
+      "revisions": [
+        "1788053012-back",
+        "1788053635-back"
+      ],
       "revisions_to_keep": "2",
       "size": "2147483648",
       "usage": "16320875"
     },
     "root": {
-      "revisions": [],
+      "revisions": [
+        "1788053012-back",
+        "1788053635-back"
+      ],
       "revisions_to_keep": "2",
       "size": "85899345920",
       "usage": "12541304504"

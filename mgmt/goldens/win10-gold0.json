@@ -1,5 +1,5 @@
 {
-  "note": "ST0.10 pristine Win10 22H2 en-GB, QWT-free stick, desktop verified 2026-08-30",
+  "note": "re-sealed 2026-08-30 after fixing the dead revision reader; baseline is CURRENT state - this seal cannot certify the golden was untouched BEFORE it, only detect changes after",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "8192",
@@ -7,17 +7,23 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "sealed_utc": "2026-08-29T23:36:28Z",
+  "sealed_utc": "2026-08-30T09:13:45Z",
   "vm": "win10-gold0",
   "volumes": {
     "private": {
-      "revisions": [],
+      "revisions": [
+        "1788044806-back",
+        "1788046480-back"
+      ],
       "revisions_to_keep": "2",
       "size": "2147483648",
       "usage": "429496"
     },
     "root": {
-      "revisions": [],
+      "revisions": [
+        "1788044806-back",
+        "1788046480-back"
+      ],
       "revisions_to_keep": "2",
       "size": "85899345920",
       "usage": "11879879540"

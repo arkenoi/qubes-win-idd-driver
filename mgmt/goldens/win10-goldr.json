@@ -1,5 +1,5 @@
 {
-  "note": "ST2G.10 - Win10 22H2 + release 6022427 (4.3.16), stage1+stage2 ok:true, seamless verified",
+  "note": "re-sealed 2026-08-30 after fixing the dead revision reader; baseline is CURRENT state - this seal cannot certify the golden was untouched BEFORE it, only detect changes after",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "0",
@@ -7,17 +7,23 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "sealed_utc": "2026-08-30T01:01:47Z",
+  "sealed_utc": "2026-08-30T09:13:47Z",
   "vm": "win10-goldr",
   "volumes": {
     "private": {
-      "revisions": [],
+      "revisions": [
+        "1788051095-back",
+        "1788051700-back"
+      ],
       "revisions_to_keep": "2",
       "size": "2147483648",
       "usage": "16320875"
     },
     "root": {
-      "revisions": [],
+      "revisions": [
+        "1788051095-back",
+        "1788051700-back"
+      ],
       "revisions_to_keep": "2",
       "size": "85899345920",
       "usage": "10771777978"
