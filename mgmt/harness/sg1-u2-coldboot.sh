@@ -43,7 +43,7 @@ alive(){ r 'cmd /c echo ALIVE' | grep -qa ALIVE; }
 # watch loop below then takes ONE sample and waits, i.e. it does not watch the boot at all, which is
 # the only interval in which the defect could appear. Measured 2026-08-31: "dom0 watch: 0 sample(s)"
 # with the loop reporting "sample 1", and my "~4s" was arithmetic, not elapsed time.
-alive_fast(){ QTEST_VM=$VM timeout -k 3 8 ./tools/qtest run 'cmd /c echo ALIVE' 2>/dev/null | grep -qa ALIVE; }
+alive_fast(){ QTEST_VM=$VM timeout -k 2 5 ./tools/qtest run 'cmd /c echo ALIVE' 2>/dev/null | grep -qa ALIVE; }
 
 # ------------------------------------------------------------------ preconditions
 alive || { log "FATAL: $VM is not answering qrexec before we start"; exit 2; }
@@ -99,8 +99,12 @@ b=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',b[16:24]); print(f'{w} 
     done
   fi
   TAKEN=$((TAKEN+1))
-  alive_fast && { log "  qrexec came up after $TAKEN sample(s), $(( $(date +%s) - WSTART ))s of watching"; break; }
-  sleep 3
+  # The liveness probe costs more than the screenshot, so only run it every other pass - otherwise
+  # it dominates the loop and the boot window (~22 s on this rig) fits only 2 samples.
+  if [ $((TAKEN % 2)) -eq 0 ] && alive_fast; then
+    log "  qrexec came up after $TAKEN sample(s), $(( $(date +%s) - WSTART ))s of watching"; break
+  fi
+  sleep 1
 done
 log "  dom0 watch: $TAKEN sample(s) TAKEN across the boot, $SAMPLES returned windows; fullscreen hits: $BIG ($MAXDIM)"
 
@@ -192,15 +196,35 @@ fi
 
 # ------------------------------------------------------------------ U2, on the same boot
 log "=== U2: boot classification + QdbDaemon startup-race retry, on this same cold boot ==="
-U=$(T=400 q pushrun guest/wu-boot-acceptance-check.ps1 | tr -d '\r' | sed -n '/=== RESULT ===/,$p' | grep -a '^{')
+U=$(T=400 q pushrun guest/wu-boot-acceptance-check.ps1 | tr -d '\r' | sed -n '/=== RESULT ===/,$p' | grep -ao '{.*}' | head -1)
 echo "  ${U:-NO RESULT}" | tee "$OUT/u2.json"
-if echo "$U" | grep -qa 'qdb_retry_evidence'; then
-  qr=$(echo "$U" | grep -ao '"qdb_retry_evidence":[a-z]*' | cut -d: -f2)
-  printf 'U2\tqdbdaemon-race-fix-exercised\tPASS-UNPROVEN\tqdb_retry_evidence=%s on a clean cold boot\t%s\n' "$qr" "$EV" >> "$V"
-  printf 'U2\tcoldboot-classification\tPASS-UNPROVEN\t%s\t%s\n' "$(echo "$U" | cut -c1-160)" "$EV" >> "$V"
+KLASS=$(qvm-prefs "$VM" klass 2>/dev/null)
+if [ -z "$U" ]; then
+  log "  -> INVALID-INSTRUMENT: wu-boot-acceptance-check produced no RESULT block"
+  printf 'U2\tcoldboot-classification\tINVALID-INSTRUMENT\tno RESULT block\t%s\n' "$EV" >> "$V"; rc=1
+elif [ "$KLASS" != TemplateVM ]; then
+  # THE FIX UNDER TEST IS TEMPLATE-SPECIFIC. wu-boot-acceptance-arm.ps1 states it: at early boot the
+  # QubesDB daemon is not yet serving its pipe, Get-QubesVmClass read an EMPTY class, and a
+  # TEMPLATEVM was therefore treated as a standalone and the boot pass skipped. On a StandaloneVM
+  # there is no misclassification to make, so the retry loop cannot be exercised and
+  # `qdb_retry_evidence:false` is the CORRECT reading, not a failure. Measured here: rebooted=true,
+  # class_lines=0, ok=false on win10-p46 (StandaloneVM). Grading that as a product result would be
+  # reporting against a subject the defect cannot occur on.
+  log "  -> N/A on a $KLASS: the QdbDaemon race misclassifies a TEMPLATE as a standalone, so this"
+  log "     cell needs a TemplateVM subject. Reboot itself confirmed: $(echo "$U" | grep -ao '"rebooted":[a-z]*')"
+  printf 'U2\tcoldboot-classification\tN/A\tsubject is a %s; the QdbDaemon race is template-specific (a TemplateVM read as a standalone), so it cannot occur here. Needs a TemplateVM subject - win11-tpl is uncontaminated\t%s\n' "$KLASS" "$EV" >> "$V"
+  printf 'U2\tqdbdaemon-race-fix-exercised\tN/A\tsame: unexercisable on a %s\t%s\n' "$KLASS" "$EV" >> "$V"
+  printf 'U2\tcoldboot-reboot-confirmed\tPASS-UNPROVEN\t%s (LastBootUpTime advanced %s -> %s)\t%s\n' "$(echo "$U" | grep -ao '"rebooted":[a-z]*')" "$BOOT_BEFORE" "$BOOT_AFTER" "$EV" >> "$V"
 else
-  log "  -> U2 produced no parsable result"
-  printf 'U2\tcoldboot-classification\tINVALID-INSTRUMENT\twu-boot-acceptance-check produced no RESULT block\t%s\n' "$EV" >> "$V"; rc=1
+  qr=$(echo "$U" | grep -ao '"qdb_retry_evidence":[a-z]*' | cut -d: -f2)
+  cc=$(echo "$U" | grep -ao '"class_correct":[a-z]*' | cut -d: -f2)
+  log "  TemplateVM subject: qdb_retry_evidence=$qr class_correct=$cc"
+  if [ "$cc" = true ]; then
+    printf 'U2\tcoldboot-classification\tPASS-UNPROVEN\tclass_correct=true on a real cold boot of a TemplateVM\t%s\n' "$EV" >> "$V"
+    printf 'U2\tqdbdaemon-race-fix-exercised\tPASS-UNPROVEN\tqdb_retry_evidence=%s\t%s\n' "$qr" "$EV" >> "$V"
+  else
+    printf 'U2\tcoldboot-classification\tFAIL\tclass_correct=false on a TemplateVM cold boot: %s\t%s\n' "$U" "$EV" >> "$V"; rc=1
+  fi
 fi
 
 log "=== finished rc=$rc ==="

@@ -57,7 +57,7 @@ HOSTW=$(xdpyinfo 2>/dev/null | awk '/dimensions:/{split($2,a,"x"); print a[1]}')
 HOSTH=$(xdpyinfo 2>/dev/null | awk '/dimensions:/{split($2,a,"x"); print a[2]}')
 HOSTW=${HOSTW:-5120}; HOSTH=${HOSTH:-1440}
 log "=== P5-3: containment (host ${HOSTW}x${HOSTH}) ==="
-con=$(T=300 q pushrun guest/set-resolution.ps1 -Contain | tr -d '\r' | sed -n '/=== RESULT ===/,$p' | grep -a '^{')
+con=$(T=300 q pushrun guest/set-resolution.ps1 -Contain | tr -d '\r' | sed -n '/=== RESULT ===/,$p' | grep -ao '{.*}' | head -1)
 echo "  $con" | tee "$OUT/containment.txt"
 echo "$con" | grep -qa '"ok":true' || {
     # A guest already at the contained size reports ok:false ("no offered mode strictly smaller"),
