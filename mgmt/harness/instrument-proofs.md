@@ -32,6 +32,8 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `SG6 autologon checker` | 2026-08-31 | `AutoAdminLogon=0` + `QubesAutologonGuard` deleted + COLD BOOT — the literal 2026-08-28 field defect | `mgmt/harness/sg6-failproof.sh win10-p46`: control (sessions=1, windows=1) then RED (sessions=0, explorer=0, logonui=1, windows=0, qrexec alive), then re-armed and the subject returned |
 | `RND-4 toast detector` | 2026-08-31 | the sampler was prevented from starting (`-ScriptArgs` split at a shell hop) | it reported `samples=0` and the cell graded INVALID-VACUOUS; with `-ArgsB64` the identical run reported 83. `detector_fires:true` proven in-session both times |
 | `RND-3 scene-reset gate` | 2026-08-31 | a persistent reminder toast survived from a previous run | the runner refused with `an override-redirect surface is STILL on screen after the reset ... Refusing to grade` and exited 2 rather than grading a dirty scene |
+| `U2 boot-pass debounce clear` | 2026-08-31 | `update-status.json` left in place by a scan 9 minutes earlier | the boot-triggered pass fired correctly (`lastresult=0`) and SKIPPED, giving `class_lines:0`; with the file cleared the identical boot gives `class_lines:1, class_correct:true, qdb_retry_evidence:true` |
+| `SG1 dom0 boot watch` | 2026-08-31 | the liveness probe inherited a 150s timeout and BLOCKED, so the loop took one sample and waited | the run reported `0 sample(s)` and the `TAKEN < 3` gate refused it as INVALID-INSTRUMENT; with a 5s probe the same boot yields 4-6 samples |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Partially proven — cite as PASS-UNPROVEN until completed
