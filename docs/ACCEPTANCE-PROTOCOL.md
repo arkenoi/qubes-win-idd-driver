@@ -566,6 +566,25 @@ clean one. Implemented as `_assert_not_primed` in `mgmt/harness/matrix.sh`, call
 > confirm it reports `INVALID-PRECONDITION`. Until that is recorded here, treat every
 > "guest is not primed" PASS as unverified.
 
+**Prime jobs (`mgmt/prime-jobs/<name>/onboot.cmd`) — the preconditions worth building this way:**
+
+| job | builds | why it matters |
+|---|---|---|
+| `stock-422` | genuine upstream QWT 4.2.2 | the rare one-shot upgrade-from-stock check |
+| `ours-nopvdisk` | our MSI with `ADDLOCAL` **minus `PvDriversDisk`** | **the better upgrade target** — see below |
+
+**`ours-nopvdisk` is the higher-value upgrade precondition** (owner, 2026-08-30: *"this half-broken
+install makes better target to test upgrade paths"*). Our own releases in the regression window
+(`FINDINGS:5578`) shipped without `PvDriversDisk`, so there is a real installed base in exactly that
+state: QWT working, every disk on emulated ATA (`FINDINGS:5350`). Upgrading one means the boot disk
+must switch **from emulated to PV** — the dangerous direction, and the one the in-place path only
+survives because the first boot stays on the emulated stack while xenvbd re-binds on the second
+(`FINDINGS:6253`). That is a path we own and our users will actually take, unlike stock->ours.
+
+Build the precondition by driving the CURRENT MSI with the feature omitted, rather than by hunting
+down an old release binary: it reproduces the same installed state and stays reproducible as the
+package moves. It is a TEST FIXTURE — do not add a product flag for it.
+
 **Stock QWT 4.2.2 goldens are deliberately NOT kept** (owner, 2026-08-30: *"if we implement it, we
 do not need preinstalled 4.2.2 goldens because testing upgrade from stock is rare enough one-shot"*).
 Upgrade-from-stock is a one-shot: clone a base golden, drive `mgmt/prime-jobs/stock-422` into it,
