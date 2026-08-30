@@ -23186,3 +23186,42 @@ every cell derived from it INVALID-CONTAMINATED"* — and G-0b now extends it to
 **To recover P4/P5:** rebuild `win10-tpl` from a C-chain exit (R4 / `mgmt/clone-to-template.sh`), then
 re-run both phases. Nothing from today's P4/P5 numbers may be carried forward, including the ones that
 looked good.
+
+## 2026-08-30 — CANDIDATE DEFECT: qubes.Filecopy stops working after a cumulative update installs
+
+**Observed, not diagnosed — the subject is contaminated (G-0b) so this needs clean reproduction
+before it is a finding.** Recording it because it is a plausible real regression and the evidence is
+cheap to lose.
+
+Sequence on `win10-tpl`: the catalog path staged and applied KB5066791, `19045.2965 -> 19045.6456`,
+`CBS_PENDING False`. Immediately after that reboot, `qtest push` stopped working:
+
+    qtest push        -> "sent 0/1 KBEOF"          (transfer opens, sends nothing, EOF)
+    incoming dir      -> 42 files, newest 18:42    (copies worked BEFORE the update, not after)
+    qtest run         -> PING / PSOK               (qrexec itself is fine)
+
+Not the known 2 GiB-private trap: `Q:\` and `Q:\Users` are present and `C:\Users` is still a
+`SYMLINKD` to `Q:\Users`. What HAS changed is the path the file receiver resolves:
+
+    DOCS=                                          <- [Environment]::GetFolderPath('MyDocuments') is EMPTY
+    USERPROFILE=C:\Windows\system32\config\systemprofile
+    WHOAMI=NT AUTHORITY\SYSTEM
+
+`USERPROFILE` pointing at the systemprofile is normal here — qrexec runs as SYSTEM by policy, and
+FINDINGS already warns not to mistake that for a broken profile. The new thing is **`MyDocuments`
+resolving to empty for SYSTEM**, which is what `qubes.Filecopy` needs; the historical failure mode
+was the same symptom with a different cause (`getting Documents path failed with error 0x80070002`).
+
+**Why this matters if it reproduces:** installing a Windows cumulative update on a template would
+silently break file copy INTO that template and every AppVM derived from it — and the guest still
+answers qrexec, so it looks healthy.
+
+**Test (on a CLEAN subject, per G-0b):** rebuild a template to its entry stage, confirm
+`qtest push` works and `GetFolderPath('MyDocuments')` is non-empty for SYSTEM, install one CU
+through the catalog path, reboot, and re-check both. If `MyDocuments` goes empty across the update,
+it is a real defect and the fix belongs in the installer's MoveUsers/known-folder handling.
+
+**Also established by this run, though on a contaminated subject:** the catalog path DOES install on a
+**TemplateVM** — SSU cab rc=0, LCU cab rc=3010, graceful reboot, `UBR 19045.2965 -> 19045.6456`,
+`CBS_PENDING False`. That is the gap FINDINGS:13306 named ("no install has ever run on win10-tpl
+itself"). It must be re-run clean before the gap can be closed, but the mechanism is not in doubt.
