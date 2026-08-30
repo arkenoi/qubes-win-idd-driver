@@ -23289,3 +23289,108 @@ one most likely to act against it. **The mitigation that generalises is the exec
 rule with a command attached (`p4-run.sh` disarms and ASSERTS; `campaign-verdict.sh` computes the
 verdict) gets applied; a rule stated as prose gets read and skipped. That is why 0.10–0.13 were
 written as command sequences rather than principles.
+
+---
+
+## 2026-08-30 (evening) — P4 re-run clean, and THREE instruments found lying
+
+Continuation of the 4.3.16 acceptance campaign. All work on `win10-p46`, the rebuilt clean subject.
+
+### P4 re-run on a clean subject with the scan provably disarmed — DONE
+`mgmt/harness/p4-run.sh win10-p46` → rc=0, with the G-0c precondition in the transcript:
+`SCAN_BEFORE Ready nextrun=08/31 03:00` → `SCAN_AFTER Disabled`, `RELAY_AFTER 0`, `DISARMED True`.
+
+| cell | result |
+|---|---|
+| BENCH-2 idle CPU | 0.03 / 0.02 / 0.00 s per 120 s (baseline ~0.08, pre-fix control 3.95) |
+| BENCH-1 scroll p50 | 351 / 314 / 368 µs vs canonical 374–436 — below the band on all three |
+| RND-7 | guest-side 5 HWNDs, dom0 mapped exactly 1 |
+| RND-5 | dom0 0 mapped, **6** deny lines `Start surface not presented in seamless mode (SeamlessStart=0)` for HWND 0x10174 |
+
+Three measurement conditions, showing the controls were load-bearing: contaminated subject + scan
+live = 334/307/345; clean subject + scan **live** = 417/366; clean subject + scan **disarmed** =
+351/314/368.
+
+`p4-run.sh` bug found and fixed: `$(... | grep -c '\.png$' || echo 0)` emits **two** zeros (grep -c
+prints `0` *and* exits 1), so the variable became `"0\n0"` and mangled the log line it was
+interpolated into — RND-5's output lost its deny-count half, which is the vacuity proof.
+
+### `set-resolution.ps1`: the bug was a NULL device name, not DEVMODE marshalling — RETRACTION
+The note committed in that file earlier the same day claimed `Marshal::SizeOf` and
+`Marshal::OffsetOf` disagreed, and hard-coded `dmSize=156` to match the offsets. That was wrong.
+Measured on win10-p46:
+
+```
+ES  DISPLAY1/mode0/220    rc=1  640x480      <- the 220-byte layout reads correctly
+ES  null/current/220      rc=0  0x0
+CUR \\.\DISPLAY1          rc=0  modes=29     <- attached, INACTIVE
+CUR \\.\DISPLAY2          rc=1  5120x1440    <- the desktop lives HERE
+EnumDisplayDevices(NULL,0..3) -> rc=0 for every index (enumerates nothing on this guest)
+```
+
+Two display devices; the desktop is on **DISPLAY2**; the script passed `lpszDeviceName = NULL`, and
+`EnumDisplayDevices` returning nothing meant there was no cheap way to see which device was active.
+Marshalling was never involved. Hard-coding a constant to reconcile two measurements of one fact is
+how a broken instrument gets a green banner.
+
+**Also refuted: the session-0 story.** qrexec here runs as SYSTEM but in **session 1 on WinSta0**:
+
+```
+via qtest (qrexec):        whoami=nt authority\system  sessionId=1  winsta=WinSta0
+via schtasks /ru user /it: whoami=win-idd-test\user     sessionId=1  winsta=WinSta0
+```
+
+An identical probe returned byte-identical output through both paths, and `ChangeDisplaySettingsEx`
+succeeds from qrexec. I had written session-0 blindness into `guest/run-as-user.ps1`'s header as the
+cause *before testing it*, and committed it. Corrected in place. `run-as-user.ps1` keeps its real
+purpose — running as the USER PRINCIPAL (toasts, Start, HKCU), which is a different thing from the
+session.
+
+Fixed script verified end to end: containment 5120x1440 → 1920x1080 → 1600x900, each step confirmed
+by read-back **and** by the agent (`SendWindowConfigure hwnd=0x0,w=1600,h=900`,
+`A6CONFIGURE window 0 -> 1600x900`). RND-8's blocker is gone.
+
+### `local.WinResize` reported a dom0 tooling fault as a guest condition
+`local.WinScreenshot` returned **2 windows** for win10-p46 while `local.WinResize` returned
+`GEOM ok=0 err=no_window` **in the same second**, using byte-identical selection
+(`_NET_CLIENT_LIST` + `_QUBES_VMNAME`). The only difference is `geom()`, which shells out to
+`xwininfo`. `no_window` names a *guest* condition, so the obvious reading is "the guest mapped
+nothing" — a safeguard result, not an outage. `dom0/10-install-resize-service.sh` v5 now
+distinguishes `empty_client_list` / `no_window` / `geometry_unreadable` and flags the dom0-side
+ones. **dom0 must reinstall it before the new strings appear.**
+
+### The P5 harness scored a product PASS as a FAIL — and its "0 mapped" was blind
+First P5 run graded SG3 (captioned windowed-fullscreen, which the README says is ALWAYS allowed) as
+FAIL on `dom0 mapped=0`. The agent's own log for that HWND:
+
+```
+SendWindowCreateInternal: QGAPROTO,msg=CREATE,hwnd=0x40236,...,ovr=0,style=0x14cf0000
+PwAttachWindow: 0x40236: per-window buffer 1586x893 attached
+SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x40236,ovr=0,...,vis=1,w=1586,h=893
+```
+
+The product mapped it. The harness used a fixed 18 s settle, which is shorter than PowerShell's
+runtime `Add-Type` C# compile, so the probe window did not exist yet and `qtest shot` returned an
+empty tar — read as "the gate denied it". Proven by re-measuring the same probe at increasing
+settles: **25 s / 60 s / 100 s all return the probe (1186x693) plus its console (979x512)**; a
+1176x600 notepad was captured throughout as a control.
+
+This also voids the *dom0 half* of SG2/SG4/SG9 from that run — same blind settle. Their agent-side
+deny evidence stands.
+
+**Structural fix, not a longer sleep**: `p5-run.sh` now (a) waits on the probe's own
+`"visible":true` JSON as the readiness signal instead of guessing, and (b) keeps a small Notepad
+mapped for the whole run as a LIVE POSITIVE CONTROL — a cell whose capture cannot see the control is
+`INVALID-INSTRUMENT`, never a pass. Until this, "nothing mapped" was a verdict a blind tool could
+manufacture.
+
+### New instruments
+- `guest/fsgate-probe.ps1` — creates one window with exactly-specified styles at the guest screen
+  size, reads the styles BACK with `GetWindowLong`, and prints hwnd/style/exstyle/rect/covers_screen
+  as the cell's vacuity proof. `WS_SYSMENU|WS_EX_APPWINDOW` on the borderless arm is load-bearing:
+  without it `IsPopup()` (main.c:1221) classifies the window override-redirect and it is denied by
+  the **Mode 1** branch, so the cell would pass while never reaching the Mode 2 gate it exists to test.
+  Refuses to run unless the guest screen is strictly inside the host screen.
+- `mgmt/harness/p5-run.sh` — P5 with the scan disarmed, containment applied AND verified against the
+  agent, per-cell deny-line vacuity proofs, and the live control above.
+- `guest/run-as-user.ps1` — runs a command/script as the user principal and recovers its stdout.

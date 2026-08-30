@@ -904,8 +904,27 @@ Both must agree on the sub-host size **before any fullscreen-gate probe is sized
 2026-08-30: probes were built for 1600x900 while the agent had re-adopted 5120x1440, so they were
 31% of the screen, the gate was never exercised, and the cell was `INVALID-PRECONDITION` — while
 looking exactly like a serious gate failure.
-*`guest/set-resolution.ps1` is currently BROKEN (DEVMODE marshalling); use the product path —
-map a window, then `tools/qtest resize <WxH>`.*
+**Use `guest/set-resolution.ps1 -Contain`** (fixed 2026-08-30). It scans `\\.\DISPLAY1..8` for the
+device reporting a current mode, cross-checks it against `GetSystemMetrics` before trusting any
+read, refuses a size the adapter does not offer, and verifies by read-back. Then confirm the AGENT
+followed, in its log: `SendWindowConfigure … hwnd=0x0,w=<W>,h=<H>` and `A6CONFIGURE window 0 -> WxH`.
+
+Two corrections to what this section said before, both measured on win10-p46:
+* The script was **not** broken by DEVMODE marshalling. It passed `lpszDeviceName = NULL`, and on
+  these guests the desktop is on **`\\.\DISPLAY2`** — `DISPLAY1` publishes 29 modes and has NO
+  current mode. `EnumDisplayDevices` enumerates nothing here, so the wrong device was invisible.
+  The prior "fix" hard-coded `dmSize=156` to reconcile `Marshal::SizeOf` with `Marshal::OffsetOf`;
+  that silenced a symptom and left the wrong argument in place.
+* It is **not** a session problem either. qrexec runs as SYSTEM but in **session 1 on WinSta0**
+  (`sessionId=1`, `winsta=WinSta0` measured through both qrexec and `schtasks /ru user /it`), so
+  display APIs and window mapping work from `qtest run`. `guest/run-as-user.ps1` is for running as
+  the USER PRINCIPAL (toasts, Start, HKCU) — not for display work.
+
+*`tools/qtest resize` is NOT the fallback it was described as: on 2026-08-30 it returned
+`GEOM ok=0 err=no_window` while `local.WinScreenshot` returned 2 windows for the same VM in the same
+second. That string named a guest condition for a dom0-side tooling fault; the service now reports
+`empty_client_list` / `no_window` / `geometry_unreadable` separately (`dom0/10-install-resize-service.sh`
+v5), but **dom0 must reinstall it** before the new strings appear.*
 
 **P5-4. Run the "must not map" cells** (SG1 Mode-1, SG2 borderless, SG4 override-redirect, SG9
 Start, SG10 furniture). For each, the verdict needs **two** things: nothing mapped in dom0 **and**
