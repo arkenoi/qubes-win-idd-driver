@@ -49,12 +49,21 @@ if not exist C:\qwtsetup\install.cmd (
     exit /b 2
 )
 
+rem `<nul` IS LOAD-BEARING ON THE BARE RUNS - do not remove it.
+rem install.cmd ends with `if not defined AUTO pause` (install.cmd:201), deliberately: it keeps the
+rem window open so a double-click user can read the outcome, and it is skipped under /auto because
+rem the machine is already rebooting on a timer. This job is neither - it runs as SYSTEM in session
+rem 0, where nothing can ever press a key. Measured 2026-08-30: the first C12 pass completed stage 1
+rem and then sat at that prompt indefinitely - guest idle at 0-3% CPU, desktop up, no dialog visible
+rem anywhere (the prompt is on session 0's invisible console), which reads exactly like "the primer
+rem never fired". Redirecting stdin from NUL makes pause return immediately and changes nothing else
+rem about the route.
 if exist "%~dp0c12.flag" (
     echo --- C12: stage 1 run BARE, pass 1 of 2 [expect exit 10, no reboot] >> %LOG%
-    call C:\qwtsetup\install.cmd /autologon:qubes >> %LOG% 2>&1
+    call C:\qwtsetup\install.cmd /autologon:qubes <nul >> %LOG% 2>&1
     echo C12 pass 1 rc=%ERRORLEVEL% >> %LOG%
     echo --- C12: stage 1 run BARE, pass 2 of 2 [must RE-DETECT stage 1, not fall into stage 2] >> %LOG%
-    call C:\qwtsetup\install.cmd /autologon:qubes >> %LOG% 2>&1
+    call C:\qwtsetup\install.cmd /autologon:qubes <nul >> %LOG% 2>&1
     echo C12 pass 2 rc=%ERRORLEVEL% >> %LOG%
 )
 
