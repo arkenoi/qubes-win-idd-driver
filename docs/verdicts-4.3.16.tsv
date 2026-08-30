@@ -1,251 +1,251 @@
 cell	check	verdict	detail	evidence
 C1.10	entry-pristine	PASS	testsigning_active:false installed_qwt_count:0	C1-win10
-C1.10	branch-clean-install	PASS	installer's own 'clean install path' marker	C1-win10
-C1.10	stage1-prepare-ok	PASS	3 stage1 RESULTs ok:true (2 are C12 repeats)	C1-win10
-C1.10	stage2-install-ok	PASS	stage2-install ok:true after exactly one reboot	C1-win10
-C1.10	distinct-run-ids	PASS	4 run_ids: 5a6e54e7f906 4b27c2d4487e ddbaf41a8381 e4abc051fd5b	C1-win10
+C1.10	branch-clean-install	PASS-UNPROVEN	installer's own 'clean install path' marker	C1-win10
+C1.10	stage1-prepare-ok	PASS-UNPROVEN	3 stage1 RESULTs ok:true (2 are C12 repeats)	C1-win10
+C1.10	stage2-install-ok	PASS-UNPROVEN	stage2-install ok:true after exactly one reboot	C1-win10
+C1.10	distinct-run-ids	PASS-UNPROVEN	4 run_ids: 5a6e54e7f906 4b27c2d4487e ddbaf41a8381 e4abc051fd5b	C1-win10
 C1.10	agent-hash-vs-release	PASS	20CAB4C56816..==manifest	C1-win10
-C1.10	pv-console-bound	PASS	DEV_CONS err=CM_PROB_NONE svc=xencons	C1-win10
-C1.10	autologon-armed	PASS	installer RESULT autologon:armed	C1-win10
+C1.10	pv-console-bound	PASS-UNPROVEN	DEV_CONS err=CM_PROB_NONE svc=xencons	C1-win10
+C1.10	autologon-armed	PASS-UNPROVEN	installer RESULT autologon:armed	C1-win10
 C1.10	xenbus-monitor-disabled	PASS	START_TYPE=4 DISABLED	C1-win10
 C1.10	xenbus-monitor-stopped	PASS	STATE=1 STOPPED	C1-win10
 C1.10	reboot-dialog	N/A	netvm='' - PV-network event cannot occur; NET-6 owns it	C1-win10
-C12.10	stage-redetected	PASS	2nd pre-reboot run saw testsigning_active:false, re-ran stage1 ok:true	C1-win10
-C12.10	resume-fires-once	PASS	one restart, exactly one stage2-install RESULT	C1-win10
-C1.10	cold-boot-session	PASS	qrexec answered after boot-path reboot	C1-win10-coldboot
-C1.10	pv-disk-bound	PASS	DEV_VBD err=CM_PROB_NONE svc=xenvbd, still_on_emulated_ide=[]	C1-win10-coldboot
-C1.10	idd-device-bound	PASS	ROOT\DISPLAY\0000 cm_error=0	C1-win10-coldboot
-C1.10	desktop-on-idd	PASS	IddSampleDriver Device is the primary adapter	C1-win10-coldboot
-C1.10	idd-modes-published	PASS	5120x1440, 1024x768	C1-win10-coldboot
-C1.10	user-data-on-private	PASS	C:\Users is a reparse to Q:\Users	C1-win10-coldboot
-C1.10	updates-dom0-owned	PASS	NoAutoUpdate=1, wuauserv Stopped	C1-win10-coldboot
-C1.10	pnp-no-unexpected-errors	PASS	unexpected=[]	C1-win10-coldboot
-C1.10	pixels-reach-dom0	PASS	two shots around a typed marker differ	C1-win10-coldboot
-C1.10	window-chrome-present	PASS	CHROME=OK 3826x1022 bands 19/16	C1-win10-coldboot
+C12.10	stage-redetected	PASS-UNPROVEN	2nd pre-reboot run saw testsigning_active:false, re-ran stage1 ok:true	C1-win10
+C12.10	resume-fires-once	PASS-UNPROVEN	one restart, exactly one stage2-install RESULT	C1-win10
+C1.10	cold-boot-session	PASS-UNPROVEN	qrexec answered after boot-path reboot	C1-win10-coldboot
+C1.10	pv-disk-bound	PASS-UNPROVEN	DEV_VBD err=CM_PROB_NONE svc=xenvbd, still_on_emulated_ide=[]	C1-win10-coldboot
+C1.10	idd-device-bound	PASS-UNPROVEN	ROOT\DISPLAY\0000 cm_error=0	C1-win10-coldboot
+C1.10	desktop-on-idd	PASS-UNPROVEN	IddSampleDriver Device is the primary adapter	C1-win10-coldboot
+C1.10	idd-modes-published	PASS-UNPROVEN	5120x1440, 1024x768	C1-win10-coldboot
+C1.10	user-data-on-private	PASS-UNPROVEN	C:\Users is a reparse to Q:\Users	C1-win10-coldboot
+C1.10	updates-dom0-owned	PASS-UNPROVEN	NoAutoUpdate=1, wuauserv Stopped	C1-win10-coldboot
+C1.10	pnp-no-unexpected-errors	PASS-UNPROVEN	unexpected=[]	C1-win10-coldboot
+C1.10	pixels-reach-dom0	PASS-UNPROVEN	two shots around a typed marker differ	C1-win10-coldboot
+C1.10	window-chrome-present	PASS-UNPROVEN	CHROME=OK 3826x1022 bands 19/16	C1-win10-coldboot
 C1.10	network-checks	N/A	offline install, netvm='' - P2 owns these	C1-win10-coldboot
 C1.11	entry-pristine	PASS	testsigning_active:false installed_qwt_count:0	C1-win11
-C1.11	branch-clean-install	PASS	installer's own 'clean install path' marker	C1-win11
-C1.11	stage1-prepare-ok	PASS	3 stage1 RESULTs ok:true (2 are C12 repeats)	C1-win11
-C1.11	stage2-install-ok	PASS	stage2-install ok:true after exactly one reboot	C1-win11
-C1.11	distinct-run-ids	PASS	4 run_ids: 060c34535cd4 32cd7bdf602b f69d68294361 66f41ef5832c	C1-win11
+C1.11	branch-clean-install	PASS-UNPROVEN	installer's own 'clean install path' marker	C1-win11
+C1.11	stage1-prepare-ok	PASS-UNPROVEN	3 stage1 RESULTs ok:true (2 are C12 repeats)	C1-win11
+C1.11	stage2-install-ok	PASS-UNPROVEN	stage2-install ok:true after exactly one reboot	C1-win11
+C1.11	distinct-run-ids	PASS-UNPROVEN	4 run_ids: 060c34535cd4 32cd7bdf602b f69d68294361 66f41ef5832c	C1-win11
 C1.11	agent-hash-vs-release	PASS	20CAB4C56816..==manifest	C1-win11
-C1.11	pv-console-bound	PASS	DEV_CONS err=CM_PROB_NONE svc=xencons	C1-win11
-C1.11	autologon-armed	PASS	installer RESULT autologon:armed	C1-win11
+C1.11	pv-console-bound	PASS-UNPROVEN	DEV_CONS err=CM_PROB_NONE svc=xencons	C1-win11
+C1.11	autologon-armed	PASS-UNPROVEN	installer RESULT autologon:armed	C1-win11
 C1.11	xenbus-monitor-disabled	PASS	START_TYPE=4 DISABLED	C1-win11
 C1.11	xenbus-monitor-stopped	PASS	STATE=1 STOPPED	C1-win11
 C1.11	reboot-dialog	N/A	netvm='' - NET-6 owns it	C1-win11
-C12.11	stage-redetected	PASS	runs 2+3 saw testsigning_active:false, re-ran stage1 ok:true	C1-win11
-C12.11	resume-fires-once	PASS	restarts=1, exactly one stage2-install RESULT	C1-win11
-C1.11	cold-boot-session	PASS	qrexec answered after boot-path reboot	C1-win11-coldboot
-C1.11	pv-disk-bound	PASS	DEV_VBD err=CM_PROB_NONE svc=xenvbd	C1-win11-coldboot
-C1.11	idd-device-bound	PASS	ROOT\DISPLAY\0000 cm_error=0	C1-win11-coldboot
-C1.11	desktop-on-idd	PASS	IddSampleDriver Device is primary adapter	C1-win11-coldboot
-C1.11	idd-modes-published	PASS	5120x1440, 1024x768	C1-win11-coldboot
-C1.11	user-data-on-private	PASS	C:\Users reparse to Q:\Users	C1-win11-coldboot
-C1.11	updates-dom0-owned	PASS	NoAutoUpdate=1, wuauserv Stopped	C1-win11-coldboot
-C1.11	pnp-no-unexpected-errors	PASS	unexpected=[]	C1-win11-coldboot
-C1.11	boot-events-clean	PASS	failing=[]	C1-win11-coldboot
-C1.11	pixels-reach-dom0	PASS	two shots around typed marker differ	C1-win11-coldboot
-C1.11	window-chrome-present	PASS	CHROME=OK 3826x1016 bands 21/17	C1-win11-coldboot
+C12.11	stage-redetected	PASS-UNPROVEN	runs 2+3 saw testsigning_active:false, re-ran stage1 ok:true	C1-win11
+C12.11	resume-fires-once	PASS-UNPROVEN	restarts=1, exactly one stage2-install RESULT	C1-win11
+C1.11	cold-boot-session	PASS-UNPROVEN	qrexec answered after boot-path reboot	C1-win11-coldboot
+C1.11	pv-disk-bound	PASS-UNPROVEN	DEV_VBD err=CM_PROB_NONE svc=xenvbd	C1-win11-coldboot
+C1.11	idd-device-bound	PASS-UNPROVEN	ROOT\DISPLAY\0000 cm_error=0	C1-win11-coldboot
+C1.11	desktop-on-idd	PASS-UNPROVEN	IddSampleDriver Device is primary adapter	C1-win11-coldboot
+C1.11	idd-modes-published	PASS-UNPROVEN	5120x1440, 1024x768	C1-win11-coldboot
+C1.11	user-data-on-private	PASS-UNPROVEN	C:\Users reparse to Q:\Users	C1-win11-coldboot
+C1.11	updates-dom0-owned	PASS-UNPROVEN	NoAutoUpdate=1, wuauserv Stopped	C1-win11-coldboot
+C1.11	pnp-no-unexpected-errors	PASS-UNPROVEN	unexpected=[]	C1-win11-coldboot
+C1.11	boot-events-clean	PASS-UNPROVEN	failing=[]	C1-win11-coldboot
+C1.11	pixels-reach-dom0	PASS-UNPROVEN	two shots around typed marker differ	C1-win11-coldboot
+C1.11	window-chrome-present	PASS-UNPROVEN	CHROME=OK 3826x1016 bands 21/17	C1-win11-coldboot
 C1.11	network-checks	N/A	offline install, netvm='' - P2 owns these	C1-win11-coldboot
-C6.11	entry-carries-N	PASS	PRECOND installed_qwt=[Qubes Windows Tools v4.3.16.0]	C6-win11
+C6.11	entry-carries-N	PASS-UNPROVEN	PRECOND installed_qwt=[Qubes Windows Tools v4.3.16.0]	C6-win11
 C6.11	branch-same-version-reinstall	PASS	upgrade_mode=in-place-same-version-reinstall, matches claim	C6-win11
-C6.11	reinstall-all-on-msiexec	PASS	msiexec ADDLOCAL=...,PvDriversDisk,MoveUsers REINSTALL=ALL	C6-win11
-C6.11	no-pv-gate-refusal	PASS	no REFUSING in the log (2026-08-11 regression guard)	C6-win11
-C6.11	pnputil-259-accepted	PASS	xenvif: added successfully (Already exists in the system)	C6-win11
-C6.11	stage2-install-ok	PASS	stage2-install ok:true, no intermediate reboot	C6-win11
+C6.11	reinstall-all-on-msiexec	PASS-UNPROVEN	msiexec ADDLOCAL=...,PvDriversDisk,MoveUsers REINSTALL=ALL	C6-win11
+C6.11	no-pv-gate-refusal	PASS-UNPROVEN	no REFUSING in the log (2026-08-11 regression guard)	C6-win11
+C6.11	pnputil-259-accepted	PASS-UNPROVEN	xenvif: added successfully (Already exists in the system)	C6-win11
+C6.11	stage2-install-ok	PASS-UNPROVEN	stage2-install ok:true, no intermediate reboot	C6-win11
 C6.11	agent-hash-vs-release	PASS	installed agent == release binary	C6-win11
-C6.11	pv-console-bound	PASS	CONS:err=0 svc=xencons	C6-win11
-C6.11	autologon-armed	PASS	installer RESULT autologon:armed	C6-win11
+C6.11	pv-console-bound	PASS-UNPROVEN	CONS:err=0 svc=xencons	C6-win11
+C6.11	autologon-armed	PASS-UNPROVEN	installer RESULT autologon:armed	C6-win11
 C6.11	xenbus-monitor-disabled	PASS	START_TYPE=4 DISABLED	C6-win11
 C6.11	xenbus-monitor-stopped	PASS	STATE=1 STOPPED	C6-win11
 C6.11	reboot-dialog	N/A	win11-tpl netvm='' - NET-6 owns it	C6-win11
-C6.11	cold-boot-health	PASS	health-check every check asserted (2 network N/A)	C6-win11-coldboot
-C6.11	pixels-reach-dom0	PASS	two shots around typed marker differ	C6-win11-coldboot
-C6.11	window-chrome-present	PASS	CHROME=OK 3826x1016	C6-win11-coldboot
-C6.10	entry-carries-N	PASS	PRECOND installed_qwt=Qubes Windows Tools v4.3.16.0	C6-win10
+C6.11	cold-boot-health	PASS-UNPROVEN	health-check every check asserted (2 network N/A)	C6-win11-coldboot
+C6.11	pixels-reach-dom0	PASS-UNPROVEN	two shots around typed marker differ	C6-win11-coldboot
+C6.11	window-chrome-present	PASS-UNPROVEN	CHROME=OK 3826x1016	C6-win11-coldboot
+C6.10	entry-carries-N	PASS-UNPROVEN	PRECOND installed_qwt=Qubes Windows Tools v4.3.16.0	C6-win10
 C6.10	branch-same-version-reinstall	PASS	upgrade_mode=in-place-same-version-reinstall, matches claim	C6-win10
-C6.10	reinstall-all-on-msiexec	PASS	ADDLOCAL=...,PvDriversDisk,MoveUsers REINSTALL=ALL	C6-win10
-C6.10	no-pv-gate-refusal	PASS	zero REFUSING lines (2026-08-11 regression guard)	C6-win10
-C6.10	pnputil-259-accepted	PASS	xenvif added successfully (Already exists in the system)	C6-win10
-C6.10	no-intermediate-reboot	PASS	installer: no uninstall, no intermediate reboot	C6-win10
+C6.10	reinstall-all-on-msiexec	PASS-UNPROVEN	ADDLOCAL=...,PvDriversDisk,MoveUsers REINSTALL=ALL	C6-win10
+C6.10	no-pv-gate-refusal	PASS-UNPROVEN	zero REFUSING lines (2026-08-11 regression guard)	C6-win10
+C6.10	pnputil-259-accepted	PASS-UNPROVEN	xenvif added successfully (Already exists in the system)	C6-win10
+C6.10	no-intermediate-reboot	PASS-UNPROVEN	installer: no uninstall, no intermediate reboot	C6-win10
 C6.10	agent-hash-vs-release	PASS	installed agent == release binary	C6-win10
-C6.10	pv-console-bound	PASS	CONS:err=0 svc=xencons	C6-win10
-C6.10	autologon-armed	PASS	installer RESULT autologon:armed	C6-win10
+C6.10	pv-console-bound	PASS-UNPROVEN	CONS:err=0 svc=xencons	C6-win10
+C6.10	autologon-armed	PASS-UNPROVEN	installer RESULT autologon:armed	C6-win10
 C6.10	xenbus-monitor-disabled	PASS	START_TYPE=4 DISABLED	C6-win10
 C6.10	xenbus-monitor-stopped	PASS	STATE=1 STOPPED	C6-win10
 C6.10	reboot-dialog	N/A	win10-tpl netvm='' - NET-6 owns it	C6-win10
-C6.10	cold-boot-health	PASS	health-check every check asserted (2 network N/A)	C6-win10-coldboot
-C6.10	pixels-reach-dom0	PASS	two shots around typed marker differ	C6-win10-coldboot
-C6.10	window-chrome-present	PASS	CHROME=OK 3826x1022	C6-win10-coldboot
+C6.10	cold-boot-health	PASS-UNPROVEN	health-check every check asserted (2 network N/A)	C6-win10-coldboot
+C6.10	pixels-reach-dom0	PASS-UNPROVEN	two shots around typed marker differ	C6-win10-coldboot
+C6.10	window-chrome-present	PASS-UNPROVEN	CHROME=OK 3826x1022	C6-win10-coldboot
 C3.10	fixture-carries-N-1	PASS	win10-u14 probe: Qubes Windows Tools v4.3.14.0	fixture-4314-win10
-C3.10	entry-is-previous-release	PASS	PRECOND installed_qwt=[Qubes Windows Tools v4.3.14.0]	C3-win10
+C3.10	entry-is-previous-release	PASS-UNPROVEN	PRECOND installed_qwt=[Qubes Windows Tools v4.3.14.0]	C3-win10
 C3.10	branch-major-upgrade	PASS	upgrade_mode=in-place-msi-major-upgrade, matches claim	C3-win10
-C3.10	one-precondition-no-mid-reboot	PASS	exactly 1 PRECONDITION line in the run slice	C3-win10
-C3.10	inbox-disk-rearm-done	PASS	inbox_disk_rearm:done	C3-win10
-C3.10	no-refusing	PASS	zero REFUSING lines	C3-win10
+C3.10	one-precondition-no-mid-reboot	PASS-UNPROVEN	exactly 1 PRECONDITION line in the run slice	C3-win10
+C3.10	inbox-disk-rearm-done	PASS-UNPROVEN	inbox_disk_rearm:done	C3-win10
+C3.10	no-refusing	PASS-UNPROVEN	zero REFUSING lines	C3-win10
 C3.10	agent-hash-vs-release	PASS	installed agent == release binary	C3-win10
-C3.10	pv-console-bound	PASS	CONS:err=0 svc=xencons	C3-win10
-C3.10	autologon-armed	PASS	installer RESULT autologon:armed	C3-win10
+C3.10	pv-console-bound	PASS-UNPROVEN	CONS:err=0 svc=xencons	C3-win10
+C3.10	autologon-armed	PASS-UNPROVEN	installer RESULT autologon:armed	C3-win10
 C3.10	xenbus-monitor-disabled	PASS	START_TYPE=4 DISABLED	C3-win10
 C3.10	xenbus-monitor-stopped	PASS	STATE=1 STOPPED	C3-win10
 C3.10	reboot-dialog	N/A	win10-tpl netvm='' - NET-6 owns it	C3-win10
-C3.10	cold-boot-health	PASS	health-check every check asserted (2 network N/A)	C3-win10-coldboot
-C3.10	pixels-reach-dom0	PASS	two shots around typed marker differ	C3-win10-coldboot
-C3.10	window-chrome-present	PASS	CHROME=OK 3826x1022	C3-win10-coldboot
+C3.10	cold-boot-health	PASS-UNPROVEN	health-check every check asserted (2 network N/A)	C3-win10-coldboot
+C3.10	pixels-reach-dom0	PASS-UNPROVEN	two shots around typed marker differ	C3-win10-coldboot
+C3.10	window-chrome-present	PASS-UNPROVEN	CHROME=OK 3826x1022	C3-win10-coldboot
 C3.11	fixture-carries-N-1	PASS	win11-u14 probe: Qubes Windows Tools v4.3.14.0	fixture-4314-win11
-C3.11	entry-is-previous-release	PASS	PRECOND installed_qwt=[Qubes Windows Tools v4.3.14.0]	C3-win11
+C3.11	entry-is-previous-release	PASS-UNPROVEN	PRECOND installed_qwt=[Qubes Windows Tools v4.3.14.0]	C3-win11
 C3.11	branch-major-upgrade	PASS	upgrade_mode=in-place-msi-major-upgrade, matches claim	C3-win11
-C3.11	one-precondition-no-mid-reboot	PASS	exactly 1 PRECONDITION line	C3-win11
-C3.11	inbox-disk-rearm-done	PASS	inbox_disk_rearm:done	C3-win11
-C3.11	no-refusing	PASS	zero REFUSING lines	C3-win11
+C3.11	one-precondition-no-mid-reboot	PASS-UNPROVEN	exactly 1 PRECONDITION line	C3-win11
+C3.11	inbox-disk-rearm-done	PASS-UNPROVEN	inbox_disk_rearm:done	C3-win11
+C3.11	no-refusing	PASS-UNPROVEN	zero REFUSING lines	C3-win11
 C3.11	agent-hash-vs-release	PASS	installed agent == release binary	C3-win11
-C3.11	pv-console-bound	PASS	CONS:err=0 svc=xencons	C3-win11
-C3.11	autologon-armed	PASS	installer RESULT autologon:armed	C3-win11
+C3.11	pv-console-bound	PASS-UNPROVEN	CONS:err=0 svc=xencons	C3-win11
+C3.11	autologon-armed	PASS-UNPROVEN	installer RESULT autologon:armed	C3-win11
 C3.11	xenbus-monitor-disabled	PASS	START_TYPE=4 DISABLED	C3-win11
 C3.11	xenbus-monitor-stopped	PASS	STATE=1 STOPPED	C3-win11
 C3.11	reboot-dialog	N/A	win11-tpl netvm='' - NET-6 owns it	C3-win11
-C3.11	cold-boot-health	PASS	health-check every check asserted (2 network N/A)	C3-win11-coldboot
-C3.11	pixels-reach-dom0	PASS	two shots around typed marker differ	C3-win11-coldboot
-C3.11	window-chrome-present	PASS	CHROME=OK 3826x1016	C3-win11-coldboot
+C3.11	cold-boot-health	PASS-UNPROVEN	health-check every check asserted (2 network N/A)	C3-win11-coldboot
+C3.11	pixels-reach-dom0	PASS-UNPROVEN	two shots around typed marker differ	C3-win11-coldboot
+C3.11	window-chrome-present	PASS-UNPROVEN	CHROME=OK 3826x1016	C3-win11-coldboot
 C4.10	fixture-carries-stock	PASS	win10-stk probe: Qubes Windows Tools 4.2.2.0 (bundle+MSI)	fixture-stock-win10
-C4.10	stock-pv-boot-disk	PASS	PRECOND pv_boot_disk:true; probe BUS DISK:0 bus=SCSI - stock ships PvDriversDisk	C4-win10
-C4.10	entry-is-stock-422	PASS	PRECOND installed_qwt=[Qubes Windows Tools, v4.2.2.0]	C4-win10
-C4.10	armed-monitor-precondition	PASS	xenbus_monitor{status:Running, start:2, pids:[2904]}	C4-win10
+C4.10	stock-pv-boot-disk	PASS-UNPROVEN	PRECOND pv_boot_disk:true; probe BUS DISK:0 bus=SCSI - stock ships PvDriversDisk	C4-win10
+C4.10	entry-is-stock-422	PASS-UNPROVEN	PRECOND installed_qwt=[Qubes Windows Tools, v4.2.2.0]	C4-win10
+C4.10	armed-monitor-precondition	PASS-UNPROVEN	xenbus_monitor{status:Running, start:2, pids:[2904]}	C4-win10
 C4.10	branch-major-upgrade	PASS	upgrade_mode=in-place-msi-major-upgrade, matches claim	C4-win10
-C4.10	monitor-disabled-before-msiexec	PASS	'was Disabled/Running [before msiexec]' - 81d2b79 brick guard	C4-win10
-C4.10	monitor-redisabled-after-msi	PASS	'[after msiexec: MSI re-registered the service]'	C4-win10
-C4.10	no-restart-during-msiexec	PASS	msiexec 16:27:58-16:28:38; zero Event-1074 in that window	C4-win10
-C4.10	one-precondition-no-mid-reboot	PASS	exactly 1 PRECONDITION line	C4-win10
-C4.10	no-refusing	PASS	zero REFUSING lines	C4-win10
+C4.10	monitor-disabled-before-msiexec	PASS-UNPROVEN	'was Disabled/Running [before msiexec]' - 81d2b79 brick guard	C4-win10
+C4.10	monitor-redisabled-after-msi	PASS-UNPROVEN	'[after msiexec: MSI re-registered the service]'	C4-win10
+C4.10	no-restart-during-msiexec	PASS-UNPROVEN	msiexec 16:27:58-16:28:38; zero Event-1074 in that window	C4-win10
+C4.10	one-precondition-no-mid-reboot	PASS-UNPROVEN	exactly 1 PRECONDITION line	C4-win10
+C4.10	no-refusing	PASS-UNPROVEN	zero REFUSING lines	C4-win10
 C4.10	agent-hash-vs-release	PASS	installed agent == release binary	C4-win10
-C4.10	pv-console-bound	PASS	CONS:err=0 svc=xencons	C4-win10
-C4.10	autologon-armed	PASS	installer RESULT autologon:armed	C4-win10
+C4.10	pv-console-bound	PASS-UNPROVEN	CONS:err=0 svc=xencons	C4-win10
+C4.10	autologon-armed	PASS-UNPROVEN	installer RESULT autologon:armed	C4-win10
 C4.10	xenbus-monitor-disabled	PASS	START_TYPE=4 DISABLED (shipping state)	C4-win10
 C4.10	xenbus-monitor-stopped	PASS	STATE=1 STOPPED	C4-win10
 C4.10	reboot-dialog	N/A	win10-tpl netvm='' - NET-6 owns it	C4-win10
-C4.10	cold-boot-health	PASS	health-check every check asserted (2 network N/A)	C4-win10-coldboot
-C4.10	pixels-reach-dom0	PASS	two shots around typed marker differ	C4-win10-coldboot
-C4.10	window-chrome-present	PASS	CHROME=OK 3826x1022	C4-win10-coldboot
+C4.10	cold-boot-health	PASS-UNPROVEN	health-check every check asserted (2 network N/A)	C4-win10-coldboot
+C4.10	pixels-reach-dom0	PASS-UNPROVEN	two shots around typed marker differ	C4-win10-coldboot
+C4.10	window-chrome-present	PASS-UNPROVEN	CHROME=OK 3826x1022	C4-win10-coldboot
 C4.11	fixture-carries-stock	PASS	win11-stk probe: Qubes Windows Tools 4.2.2.0; BUS DISK:0 SCSI	fixture-stock-win11
-C4.11	stock-pv-boot-disk	PASS	PRECOND pv_boot_disk:true - stock ships PvDriversDisk on Win11 too	C4-win11
-C4.11	entry-is-stock-422	PASS	PRECOND installed_qwt=[Qubes Windows Tools, v4.2.2.0]	C4-win11
-C4.11	armed-monitor-precondition	PASS	xenbus_monitor{status:Running, start:2, pids:[3168]}	C4-win11
+C4.11	stock-pv-boot-disk	PASS-UNPROVEN	PRECOND pv_boot_disk:true - stock ships PvDriversDisk on Win11 too	C4-win11
+C4.11	entry-is-stock-422	PASS-UNPROVEN	PRECOND installed_qwt=[Qubes Windows Tools, v4.2.2.0]	C4-win11
+C4.11	armed-monitor-precondition	PASS-UNPROVEN	xenbus_monitor{status:Running, start:2, pids:[3168]}	C4-win11
 C4.11	branch-major-upgrade	PASS	upgrade_mode=in-place-msi-major-upgrade, matches claim	C4-win11
-C4.11	monitor-disabled-before-msiexec	PASS	was Disabled/Running [before msiexec] - 81d2b79 guard	C4-win11
-C4.11	one-precondition-no-mid-reboot	PASS	exactly 1 PRECONDITION line	C4-win11
-C4.11	no-refusing	PASS	zero REFUSING lines	C4-win11
+C4.11	monitor-disabled-before-msiexec	PASS-UNPROVEN	was Disabled/Running [before msiexec] - 81d2b79 guard	C4-win11
+C4.11	one-precondition-no-mid-reboot	PASS-UNPROVEN	exactly 1 PRECONDITION line	C4-win11
+C4.11	no-refusing	PASS-UNPROVEN	zero REFUSING lines	C4-win11
 C4.11	agent-hash-vs-release	PASS	installed agent == release binary	C4-win11
-C4.11	pv-console-bound	PASS	CONS:err=0 svc=xencons	C4-win11
-C4.11	autologon-armed	PASS	installer RESULT autologon:armed	C4-win11
+C4.11	pv-console-bound	PASS-UNPROVEN	CONS:err=0 svc=xencons	C4-win11
+C4.11	autologon-armed	PASS-UNPROVEN	installer RESULT autologon:armed	C4-win11
 C4.11	xenbus-monitor-disabled	PASS	START_TYPE=4 DISABLED	C4-win11
 C4.11	xenbus-monitor-stopped	PASS	STATE=1 STOPPED	C4-win11
 C4.11	reboot-dialog	N/A	win11-tpl netvm='' - NET-6 owns it	C4-win11
-C4.11	cold-boot-health	PASS	health-check every check asserted (2 network N/A)	C4-win11-coldboot
-C4.11	pixels-reach-dom0	PASS	two shots around typed marker differ	C4-win11-coldboot
-C4.11	window-chrome-present	PASS	CHROME=OK 3826x1016	C4-win11-coldboot
-C3armed.10	monitor-armed-and-running	PASS	harness readback RUNNING; PRECOND xenbus_monitor{Running,start:2,pids:[6984]}	C3armed-win10
-C3armed.10	entry-is-previous-release	PASS	PRECOND installed_qwt=[Qubes Windows Tools v4.3.14.0]	C3armed-win10
+C4.11	cold-boot-health	PASS-UNPROVEN	health-check every check asserted (2 network N/A)	C4-win11-coldboot
+C4.11	pixels-reach-dom0	PASS-UNPROVEN	two shots around typed marker differ	C4-win11-coldboot
+C4.11	window-chrome-present	PASS-UNPROVEN	CHROME=OK 3826x1016	C4-win11-coldboot
+C3armed.10	monitor-armed-and-running	PASS-UNPROVEN	harness readback RUNNING; PRECOND xenbus_monitor{Running,start:2,pids:[6984]}	C3armed-win10
+C3armed.10	entry-is-previous-release	PASS-UNPROVEN	PRECOND installed_qwt=[Qubes Windows Tools v4.3.14.0]	C3armed-win10
 C3armed.10	branch-major-upgrade	PASS	upgrade_mode=in-place-msi-major-upgrade, matches claim	C3armed-win10
-C3armed.10	monitor-disabled-before-msiexec	PASS	was Disabled/Running [before msiexec]	C3armed-win10
-C3armed.10	no-restart-during-msiexec	PASS	msiexec 17:01:21-17:02:08, single PRECONDITION, guest never halted	C3armed-win10
-C3armed.10	one-precondition-no-mid-reboot	PASS	exactly 1 PRECONDITION line	C3armed-win10
-C3armed.10	no-refusing	PASS	zero REFUSING lines	C3armed-win10
+C3armed.10	monitor-disabled-before-msiexec	PASS-UNPROVEN	was Disabled/Running [before msiexec]	C3armed-win10
+C3armed.10	no-restart-during-msiexec	PASS-UNPROVEN	msiexec 17:01:21-17:02:08, single PRECONDITION, guest never halted	C3armed-win10
+C3armed.10	one-precondition-no-mid-reboot	PASS-UNPROVEN	exactly 1 PRECONDITION line	C3armed-win10
+C3armed.10	no-refusing	PASS-UNPROVEN	zero REFUSING lines	C3armed-win10
 C3armed.10	agent-hash-vs-release	PASS	installed agent == release binary	C3armed-win10
-C3armed.10	pv-console-bound	PASS	CONS:err=0 svc=xencons	C3armed-win10
-C3armed.10	autologon-armed	PASS	installer RESULT autologon:armed	C3armed-win10
+C3armed.10	pv-console-bound	PASS-UNPROVEN	CONS:err=0 svc=xencons	C3armed-win10
+C3armed.10	autologon-armed	PASS-UNPROVEN	installer RESULT autologon:armed	C3armed-win10
 C3armed.10	xenbus-monitor-disabled	PASS	START_TYPE=4 DISABLED (shipping state)	C3armed-win10
 C3armed.10	xenbus-monitor-stopped	PASS	STATE=1 STOPPED	C3armed-win10
 C3armed.10	reboot-dialog	N/A	win10-tpl netvm='' - NET-6 owns it	C3armed-win10
-C3armed.10	cold-boot-health	PASS	health-check every check asserted; pixels differ; CHROME=OK	C3armed-win10-coldboot
-C4.11	d3-settled	PASS	Win11 true-stock run rather than carried N/A-by-design	C4-win11
-C11.10	template-pvnic-seeded	PASS	win10-tpl (TemplateVM): pvnic_prime=seeded, pvnic_latch=armed, NICS=1	C3armed-win10
-C11.10	standalone-pvnic-seeded	PASS	win10-c1 (StandaloneVM): pvnic_prime=seeded, pvnic_latch=armed - D1 behaviour	C1-win10-full
-C11.10	d1-validated-on-a-build	PASS	D1 (latch always on incl. StandaloneVM) validated on a built package for the first time	C1-win10-full
+C3armed.10	cold-boot-health	PASS-UNPROVEN	health-check every check asserted; pixels differ; CHROME=OK	C3armed-win10-coldboot
+C4.11	d3-settled	PASS-UNPROVEN	Win11 true-stock run rather than carried N/A-by-design	C4-win11
+C11.10	template-pvnic-seeded	PASS-UNPROVEN	win10-tpl (TemplateVM): pvnic_prime=seeded, pvnic_latch=armed, NICS=1	C3armed-win10
+C11.10	standalone-pvnic-seeded	PASS-UNPROVEN	win10-c1 (StandaloneVM): pvnic_prime=seeded, pvnic_latch=armed - D1 behaviour	C1-win10-full
+C11.10	d1-validated-on-a-build	PASS-UNPROVEN	D1 (latch always on incl. StandaloneVM) validated on a built package for the first time	C1-win10-full
 NET-0	detector-fires	PASS	reboot-dialog-watch -SelfTest: detector_fires=true	NET-preflight
-NET-0	templates-netvm-empty	PASS	win10-tpl and win11-tpl both netvm=''	NET-preflight
-NET-0	fw-net-confirmed	PASS	confirmed BY MEASUREMENT: 25 MB crossed the PV NIC in NET-3	NET3-win10
-NET-1	latch-task-registered	PASS	TASK_QubesPvNic=True on win10-app	NET1-win10
-NET-1	applier-script-present	PASS	pvnic-boot.ps1 present	NET1-win10
-NET-1	no-failure-marker	PASS	QubesPvNic-FAILED.txt absent	NET1-win10
-NET-1	veto-key-seeded-not-a-vif	PASS	XENBUS DEV_VIF seeded while XENVIF enum empty - correct latched state	NET1-win10
-NET-2	pv-nic-bound-live	PASS	XENVIF\VEN_XP&DEV_NET\0 err=0 svc=xennet after live attach	NET2-win10
-NET-2	zero-reboots	PASS	LastBootUpTime byte-identical across the attach (17:10:07.1885010Z)	NET2-win10
-NET-2	emulated-unplugged	PASS	only adapter present is the PV NIC	NET2-win10
-NET-2	dialog-window	PASS	re-run on a fresh never-vif win11-app with the watcher correctly armed: samples=148 dialogs_seen=0 blind_samples=0 coverage_gaps=[]	NET6-win11-app
-NET-3	transfer-crossed-pv-nic	PASS	25,000,000 B received; PV rx delta 25,240,896; crossed_pv_nic=true	NET3-win10
-NET-3	no-loopback-masquerade	PASS	loopback_present=false	NET3-win10
-NET-4	three-boot-soak	PASS	3/3 boots: PV bound, EMULATED_LEFT=0, IP 10.137.0.64, APIPA 0, route on PV, 5 MB smoke each	NET4-win10
-NET-4	one-boot-per-command	PASS	LastBootUpTime advanced exactly once per boot (17:27:01, 17:29:31, 17:32:04)	NET4-win10
-NET-6	eligibility-never-had-vif	PASS	XENVIF_ENUM absent, 0 devices, 0 ghosts on win10-c1	NET6-win10-c1
+NET-0	templates-netvm-empty	PASS-UNPROVEN	win10-tpl and win11-tpl both netvm=''	NET-preflight
+NET-0	fw-net-confirmed	PASS-UNPROVEN	confirmed BY MEASUREMENT: 25 MB crossed the PV NIC in NET-3	NET3-win10
+NET-1	latch-task-registered	PASS-UNPROVEN	TASK_QubesPvNic=True on win10-app	NET1-win10
+NET-1	applier-script-present	PASS-UNPROVEN	pvnic-boot.ps1 present	NET1-win10
+NET-1	no-failure-marker	PASS-UNPROVEN	QubesPvNic-FAILED.txt absent	NET1-win10
+NET-1	veto-key-seeded-not-a-vif	PASS-UNPROVEN	XENBUS DEV_VIF seeded while XENVIF enum empty - correct latched state	NET1-win10
+NET-2	pv-nic-bound-live	PASS-UNPROVEN	XENVIF\VEN_XP&DEV_NET\0 err=0 svc=xennet after live attach	NET2-win10
+NET-2	zero-reboots	PASS-UNPROVEN	LastBootUpTime byte-identical across the attach (17:10:07.1885010Z)	NET2-win10
+NET-2	emulated-unplugged	PASS-UNPROVEN	only adapter present is the PV NIC	NET2-win10
+NET-2	dialog-window	PASS-UNPROVEN	re-run on a fresh never-vif win11-app with the watcher correctly armed: samples=148 dialogs_seen=0 blind_samples=0 coverage_gaps=[]	NET6-win11-app
+NET-3	transfer-crossed-pv-nic	PASS-UNPROVEN	25,000,000 B received; PV rx delta 25,240,896; crossed_pv_nic=true	NET3-win10
+NET-3	no-loopback-masquerade	PASS-UNPROVEN	loopback_present=false	NET3-win10
+NET-4	three-boot-soak	PASS-UNPROVEN	3/3 boots: PV bound, EMULATED_LEFT=0, IP 10.137.0.64, APIPA 0, route on PV, 5 MB smoke each	NET4-win10
+NET-4	one-boot-per-command	PASS-UNPROVEN	LastBootUpTime advanced exactly once per boot (17:27:01, 17:29:31, 17:32:04)	NET4-win10
+NET-6	eligibility-never-had-vif	PASS-UNPROVEN	XENVIF_ENUM absent, 0 devices, 0 ghosts on win10-c1	NET6-win10-c1
 NET-6	detector-fires-in-session	PASS	detector_fires=true in the same session	NET6-win10-c1
-NET-6	no-premature-reboot-dialog	PASS	samples=141 dialogs_seen=0 blind_samples=0 coverage_gaps=[] spanning the attach	NET6-win10-c1
-NET-6	stimulus-existed	PASS	XENVIF_DEVICES 0 -> 1: the vif really appeared (vacuity guard)	NET6-win10-c1
-NET-6	zero-reboots-standalone	PASS	LastBootUpTime unchanged across the first-vif attach	NET6-win10-c1
-NET-2.11	eligibility-never-had-vif	PASS	win11-app: XENVIF_ENUM absent, 0 devices, 0 ghosts	NET6-win11-app
+NET-6	no-premature-reboot-dialog	PASS-UNPROVEN	samples=141 dialogs_seen=0 blind_samples=0 coverage_gaps=[] spanning the attach	NET6-win10-c1
+NET-6	stimulus-existed	PASS-UNPROVEN	XENVIF_DEVICES 0 -> 1: the vif really appeared (vacuity guard)	NET6-win10-c1
+NET-6	zero-reboots-standalone	PASS-UNPROVEN	LastBootUpTime unchanged across the first-vif attach	NET6-win10-c1
+NET-2.11	eligibility-never-had-vif	PASS-UNPROVEN	win11-app: XENVIF_ENUM absent, 0 devices, 0 ghosts	NET6-win11-app
 NET-2.11	detector-fires-in-session	PASS	detector_fires=true in the same session	NET6-win11-app
-NET-2.11	no-premature-reboot-dialog	PASS	samples=148 dialogs_seen=0 blind_samples=0 coverage_gaps=[] spanning the attach	NET6-win11-app
-NET-2.11	zero-reboots	PASS	LastBootUpTime 17:50:59.0211440Z unchanged across the live attach	NET6-win11-app
-NET-2.11	stimulus-existed	PASS	XENVIF_DEVICES 0 -> 1	NET6-win11-app
-NET-3.11	transfer-crossed-pv-nic	PASS	25,000,000 B received; PV rx delta 28,195,642; crossed_pv_nic=true	NET3-win11
-NET-3.11	no-loopback-masquerade	PASS	loopback_present=false	NET3-win11
-NET-1.11	appvm-private-reformatted	PASS	recreated AppVM formats Q: correctly (Q:\Users present)	NET-preflight
-U0	scan-task-shape	PASS	QubesWindowsUpdateScan: boot PT2M + PT6H repeat, SYSTEM, -Scheduled	U0-win11-tpl
-U0	run-download-no-triggers	PASS	QubesWindowsUpdateRun/Download: no triggers, no -Scheduled	U0-win11-tpl
-U0	autologon-guard-shape	PASS	QubesAutologonGuard: boot PT30S, SYSTEM, Running	U0-win11-tpl
-U0	no-auto-update-policy	PASS	NoAutoUpdate=1	U0-win11-tpl
-U0	exclude-wu-drivers	PASS	ExcludeWUDriversInQualityUpdate=1 - guards the PV-NIC latch against WU-delivered Xen packages	U0-win11-tpl
-U0	offline-baseline	PASS	RELAY_PROCESS=0, winhttp Direct access (no proxy)	U0-win11-tpl
-U0	deployed-stack-hashes	PASS	all 5 scripts match the shipped payload exactly (and the repo modulo CRLF)	U0-win11-tpl
-U1	backend-egress-proven	PASS	tinyproxy log: authroot/pinrules/disallowedcert cabs all established	U1-win11-tpl
-U1	ensure-proxy-phase	PASS	relay started, listening on 127.0.0.1:8082, target=@default	U1-win11-tpl
-U1	sync-revocation-3of3	PASS	Sync-Revocation: 3/3 CTLs refreshed through the relay, chain cache flushed	U1-win11-tpl
-U1	relay-transport-clean	PASS	all fetches complete=True cut_response=False cut_request=False, full bodies	U1-win11-tpl
+NET-2.11	no-premature-reboot-dialog	PASS-UNPROVEN	samples=148 dialogs_seen=0 blind_samples=0 coverage_gaps=[] spanning the attach	NET6-win11-app
+NET-2.11	zero-reboots	PASS-UNPROVEN	LastBootUpTime 17:50:59.0211440Z unchanged across the live attach	NET6-win11-app
+NET-2.11	stimulus-existed	PASS-UNPROVEN	XENVIF_DEVICES 0 -> 1	NET6-win11-app
+NET-3.11	transfer-crossed-pv-nic	PASS-UNPROVEN	25,000,000 B received; PV rx delta 28,195,642; crossed_pv_nic=true	NET3-win11
+NET-3.11	no-loopback-masquerade	PASS-UNPROVEN	loopback_present=false	NET3-win11
+NET-1.11	appvm-private-reformatted	PASS-UNPROVEN	recreated AppVM formats Q: correctly (Q:\Users present)	NET-preflight
+U0	scan-task-shape	PASS-UNPROVEN	QubesWindowsUpdateScan: boot PT2M + PT6H repeat, SYSTEM, -Scheduled	U0-win11-tpl
+U0	run-download-no-triggers	PASS-UNPROVEN	QubesWindowsUpdateRun/Download: no triggers, no -Scheduled	U0-win11-tpl
+U0	autologon-guard-shape	PASS-UNPROVEN	QubesAutologonGuard: boot PT30S, SYSTEM, Running	U0-win11-tpl
+U0	no-auto-update-policy	PASS-UNPROVEN	NoAutoUpdate=1	U0-win11-tpl
+U0	exclude-wu-drivers	PASS-UNPROVEN	ExcludeWUDriversInQualityUpdate=1 - guards the PV-NIC latch against WU-delivered Xen packages	U0-win11-tpl
+U0	offline-baseline	PASS-UNPROVEN	RELAY_PROCESS=0, winhttp Direct access (no proxy)	U0-win11-tpl
+U0	deployed-stack-hashes	PASS-UNPROVEN	all 5 scripts match the shipped payload exactly (and the repo modulo CRLF)	U0-win11-tpl
+U1	backend-egress-proven	PASS-UNPROVEN	tinyproxy log: authroot/pinrules/disallowedcert cabs all established	U1-win11-tpl
+U1	ensure-proxy-phase	PASS-UNPROVEN	relay started, listening on 127.0.0.1:8082, target=@default	U1-win11-tpl
+U1	sync-revocation-3of3	PASS-UNPROVEN	Sync-Revocation: 3/3 CTLs refreshed through the relay, chain cache flushed	U1-win11-tpl
+U1	relay-transport-clean	PASS-UNPROVEN	all fetches complete=True cut_response=False cut_request=False, full bodies	U1-win11-tpl
 U1	scan-phase	FAIL	phase=error 0x8024402C in 2-4s, 4/4 attempts; WU COM searcher never dials	U1-win11-tpl
 U1	available-populated	FAIL	available[]=[] count=0 - blocked by the scan failure	U1-win11-tpl
 U1	updates-available-to-dom0	FAIL	cannot reach dom0: no availability was ever produced	U1-win11-tpl
-U1	root-cause-identified	PASS	SYSTEM-account WinINET plane (bitsadmin setieproxy LOCALSYSTEM) not set by Ensure-Proxy	U1-win11-tpl
-U1	fix-proven-by-isolation	PASS	same guest+relay, add only that plane -> WUA_OK count=4 in 104.8s, 4 real updates	U1-win11-tpl
-U1	backoff-cache-hypothesis	PASS	tested and REFUTED: SoftwareDistribution renamed, still 0x8024402C	U1-win11-tpl
-U2	template-arm	PASS	win11-tpl: 'VM class (live from qubesdb): TemplateVM', ran the proxy pass	U1-win11-tpl
-U2	appvm-skipped	PASS	win11-app: skipped-appvm, exit 0, 'Exiting before any proxy activity'	U2-win11-app
-U2	appvm-proxy-unchanged	PASS	RELAY_AFTER=0, PROXY_AFTER enable=0 - no relay, proxy untouched	U2-win11-app
-U2	standalone-skipped	PASS	win10-c1: skipped-standalone, 'updates ITSELF via Windows Update'	U2-win10-c1
-U2	standalone-nau-removed	PASS	NoAutoUpdate 1 -> removed, exactly as the carve-out requires	U2-win10-c1
-U2	standalone-no-relay	PASS	RELAY_AFTER=0, proxy settings removed	U2-win10-c1
-U2	coldboot-classification	PASS	rebooted=true class_correct=true saw_empty_class=false qdb_retry_evidence=true ok=true	U2-coldboot-win10-tpl
-U2	qdbdaemon-race-fix-exercised	PASS	qdb_retry_evidence=true on a REAL cold boot - the fix is load-bearing, not inferred	U2-coldboot-win10-tpl
-BENCH-2	agent-idle-cpu	PASS	0.02/0.03/0.06 s CPU per 120s idle, 3 runs - baseline ~0.08, pre-fix control 3.95	bench-accept4316
-BENCH-1	scroll-p50-vs-canonical	PASS	334/307/345 us vs canonical 374-436 - better on every run, no overlap	bench-accept4316
-BENCH-1	metric-stability	PASS	scroll spread 307-345 (12%) across 3 runs on one unchanged binary	bench-accept4316
+U1	root-cause-identified	PASS-UNPROVEN	SYSTEM-account WinINET plane (bitsadmin setieproxy LOCALSYSTEM) not set by Ensure-Proxy	U1-win11-tpl
+U1	fix-proven-by-isolation	PASS-UNPROVEN	same guest+relay, add only that plane -> WUA_OK count=4 in 104.8s, 4 real updates	U1-win11-tpl
+U1	backoff-cache-hypothesis	PASS-UNPROVEN	tested and REFUTED: SoftwareDistribution renamed, still 0x8024402C	U1-win11-tpl
+U2	template-arm	PASS-UNPROVEN	win11-tpl: 'VM class (live from qubesdb): TemplateVM', ran the proxy pass	U1-win11-tpl
+U2	appvm-skipped	PASS-UNPROVEN	win11-app: skipped-appvm, exit 0, 'Exiting before any proxy activity'	U2-win11-app
+U2	appvm-proxy-unchanged	PASS-UNPROVEN	RELAY_AFTER=0, PROXY_AFTER enable=0 - no relay, proxy untouched	U2-win11-app
+U2	standalone-skipped	PASS-UNPROVEN	win10-c1: skipped-standalone, 'updates ITSELF via Windows Update'	U2-win10-c1
+U2	standalone-nau-removed	PASS-UNPROVEN	NoAutoUpdate 1 -> removed, exactly as the carve-out requires	U2-win10-c1
+U2	standalone-no-relay	PASS-UNPROVEN	RELAY_AFTER=0, proxy settings removed	U2-win10-c1
+U2	coldboot-classification	PASS-UNPROVEN	rebooted=true class_correct=true saw_empty_class=false qdb_retry_evidence=true ok=true	U2-coldboot-win10-tpl
+U2	qdbdaemon-race-fix-exercised	PASS-UNPROVEN	qdb_retry_evidence=true on a REAL cold boot - the fix is load-bearing, not inferred	U2-coldboot-win10-tpl
+BENCH-2	agent-idle-cpu	PASS-UNPROVEN	0.02/0.03/0.06 s CPU per 120s idle, 3 runs - baseline ~0.08, pre-fix control 3.95	bench-accept4316
+BENCH-1	scroll-p50-vs-canonical	PASS-UNPROVEN	334/307/345 us vs canonical 374-436 - better on every run, no overlap	bench-accept4316
+BENCH-1	metric-stability	PASS-UNPROVEN	scroll spread 307-345 (12%) across 3 runs on one unchanged binary	bench-accept4316
 BENCH-1	drag-p50-record-only	N/A	3200/1309/891 us - the documented bimodality; gates nothing by protocol	bench-accept4316
-RND-7	shadow-strips-dropped	PASS	guest-side 5 HWNDs (1 main + 4 layered/transparent/toolwin owned); dom0 mapped exactly 1	RND7-win10
-RND-7	vacuity-stimulus-existed	PASS	EnumWindows proved the 4 QubesChromeReproShadow HWNDs were visible guest-side	RND7-win10
-RND-4	toast-reaches-dom0	PASS	OWNER-OBSERVED: the toast WAS onscreen during the run. My automated detection failed, not the product	RND4-win10
+RND-7	shadow-strips-dropped	PASS-UNPROVEN	guest-side 5 HWNDs (1 main + 4 layered/transparent/toolwin owned); dom0 mapped exactly 1	RND7-win10
+RND-7	vacuity-stimulus-existed	PASS-UNPROVEN	EnumWindows proved the 4 QubesChromeReproShadow HWNDs were visible guest-side	RND7-win10
+RND-4	toast-reaches-dom0	PASS-UNPROVEN	OWNER-OBSERVED: the toast WAS onscreen during the run. My automated detection failed, not the product	RND4-win10
 RND-4	detection-instrument	FAIL-MINE	qtest shot is o-r blind; my EnumWindows filter was too narrow; fullshot timing missed the window. Retracted TOAST_NEVER_VISIBLE	RND4-win10
-RND-5	start-not-presented	PASS	0 windows in dom0; agent denied HWND 0x1017a 6x with 'Start surface not presented in seamless mode (SeamlessStart=0)'	RND5-win10
-RND-5	vacuity-stimulus-existed	PASS	the Start surface was created and EVALUATED - the deny line is the proof, StartMenuExperienceHost running	RND5-win10
-RND-5	no-phantom-window	PASS	no 1201x919 wallpaper phantom, no offscreen window	RND5-win10
+RND-5	start-not-presented	PASS-UNPROVEN	0 windows in dom0; agent denied HWND 0x1017a 6x with 'Start surface not presented in seamless mode (SeamlessStart=0)'	RND5-win10
+RND-5	vacuity-stimulus-existed	PASS-UNPROVEN	the Start surface was created and EVALUATED - the deny line is the proof, StartMenuExperienceHost running	RND5-win10
+RND-5	no-phantom-window	PASS-UNPROVEN	no 1201x919 wallpaper phantom, no offscreen window	RND5-win10
 RND-0b	instrument-error-found-and-fixed	PASS	qtest shot was used for an o-r subject; protocol now names the capture tool per cell (1033474)	protocol
 RND-3	menu-override-redirect	INVALID-VACUOUS	menu never opened: trace shows only Notepad ovr=0, no #32768; Alt+F did not reach the interactive session (RND-0c class)	RND3-win10
-RND-3	owner-window-renders	PASS	side-result: Notepad maps with full chrome (title bar, menu bar, status bar) - capture path healthy	RND3-win10
-SG7	toasts-survive-filter	PASS	owner-observed toast onscreen - the chrome filter does NOT eat notifications (CLAUDE.md 2A-3c guard holds)	RND4-win10
-SG3	maximized-window-maps	PASS	maximized Notepad WS_CAPTION=True WS_MAXIMIZE=True mapped at 5088x1368 - windowed fullscreen always allowed	SG3-win10
+RND-3	owner-window-renders	PASS-UNPROVEN	side-result: Notepad maps with full chrome (title bar, menu bar, status bar) - capture path healthy	RND3-win10
+SG7	toasts-survive-filter	PASS-UNPROVEN	owner-observed toast onscreen - the chrome filter does NOT eat notifications (CLAUDE.md 2A-3c guard holds)	RND4-win10
+SG3	maximized-window-maps	PASS-UNPROVEN	maximized Notepad WS_CAPTION=True WS_MAXIMIZE=True mapped at 5088x1368 - windowed fullscreen always allowed	SG3-win10
 INSTR	surface-watch-built	PASS	continuous validated sampler; detector_fires=true; 50 samples 0 coverage gaps	instrumentation
 INSTR	surface-watch-pid-bug-fixed	PASS	$pid automatic-variable collision made every window report the sampler; fixed and re-verified	instrumentation
-INSTR	set-resolution-fails-loudly	PASS	was printing a success banner while doing nothing; now checks enum rc and verifies by read-back	instrumentation
+INSTR	set-resolution-fails-loudly	PASS-UNPROVEN	was printing a success banner while doing nothing; now checks enum rc and verifies by read-back	instrumentation
 INSTR	set-resolution-still-broken	FAIL-MINE	DEVMODE marshalling wrong (SizeOf 124 vs OffsetOf-proven 156); RND-8 blocked on it	instrumentation
-SG1	no-fullscreen-during-boot	PASS	cold boot watched: SG1_FULLSCREEN_SEEN=0, no window >=99% of the 1600x900 guest screen	SG1-SG6-win10-tpl
-SG1	vacuity-secure-desktop-entered	PASS	QGADESK secure-desktop ENTERED (input desktop Winlogon) - window mapping suppressed; AddAllWindows suppressed	SG1-SG6-win10-tpl
-SG1	no-shell-phase-observed	PASS	ApplyGuestShadows: no shell window - the boot phase the gate is keyed to was genuinely present	SG1-SG6-win10-tpl
-SG1	secure-desktop-left-cleanly	PASS	secure desktop left after 5 s - resuming with a full resync and the frame signature invalidated	SG1-SG6-win10-tpl
-SG1	uac-off-secure-desktop	PASS	PromptOnSecureDesktop=0 applied: elevation prompts are ordinary windows	SG1-SG6-win10-tpl
-SG6	autologon-armed	PASS	AutoAdminLogon=1, DefaultUserName=user	SG1-SG6-win10-tpl
-SG6	autologoncount-absent	PASS	AutoLogonCount ABSENT - the password is not being consumed toward lockout	SG1-SG6-win10-tpl
-SG6	no-plaintext-password	PASS	registry DefaultPassword ABSENT by design; credential held as the LSA secret	SG1-SG6-win10-tpl
-SG6	reassert-task-registered	PASS	QubesAutologonGuard task present and Ready	SG1-SG6-win10-tpl
-SG6	windows-map-after-autologon	PASS	1 window mapped post-boot - the invisible-guest regression is absent	SG1-SG6-win10-tpl
+SG1	no-fullscreen-during-boot	PASS-UNPROVEN	cold boot watched: SG1_FULLSCREEN_SEEN=0, no window >=99% of the 1600x900 guest screen	SG1-SG6-win10-tpl
+SG1	vacuity-secure-desktop-entered	PASS-UNPROVEN	QGADESK secure-desktop ENTERED (input desktop Winlogon) - window mapping suppressed; AddAllWindows suppressed	SG1-SG6-win10-tpl
+SG1	no-shell-phase-observed	PASS-UNPROVEN	ApplyGuestShadows: no shell window - the boot phase the gate is keyed to was genuinely present	SG1-SG6-win10-tpl
+SG1	secure-desktop-left-cleanly	PASS-UNPROVEN	secure desktop left after 5 s - resuming with a full resync and the frame signature invalidated	SG1-SG6-win10-tpl
+SG1	uac-off-secure-desktop	PASS-UNPROVEN	PromptOnSecureDesktop=0 applied: elevation prompts are ordinary windows	SG1-SG6-win10-tpl
+SG6	autologon-armed	PASS-UNPROVEN	AutoAdminLogon=1, DefaultUserName=user	SG1-SG6-win10-tpl
+SG6	autologoncount-absent	PASS-UNPROVEN	AutoLogonCount ABSENT - the password is not being consumed toward lockout	SG1-SG6-win10-tpl
+SG6	no-plaintext-password	PASS-UNPROVEN	registry DefaultPassword ABSENT by design; credential held as the LSA secret	SG1-SG6-win10-tpl
+SG6	reassert-task-registered	PASS-UNPROVEN	QubesAutologonGuard task present and Ready	SG1-SG6-win10-tpl
+SG6	windows-map-after-autologon	PASS-UNPROVEN	1 window mapped post-boot - the invisible-guest regression is absent	SG1-SG6-win10-tpl
 SG6	guard-failproof	INCONCLUSIVE	selftest cannot construct its broken case (looks for a registry DefaultPassword we deliberately never write); must break the LSA secret instead	SG1-SG6-win10-tpl
 SG2	borderless-fullscreen-gated	INVALID-PRECONDITION	probe was 1600x900 but the agent had re-adopted dom0 geometry 5120x1440 at boot, so the window was only 31% of screen and correctly NOT fullscreen-sized. Gate never exercised	SG2-SG4
 SG4	or-fullscreen-never-mapped	INVALID-PRECONDITION	same: ovr=1 window was 1600x900 against a 5120x1440 screen. Not a violation, and not a test	SG2-SG4
-SG0.2	containment-defeated-by-adoption	PASS	FINDING: the agent re-applies dom0 geometry at boot (RESREQ src=lastapplied, RESDRIFT adopting the actual mode), so a pre-reboot sub-host resolution does NOT survive - SG0.2 containment must be applied AFTER boot and verified against the agent's believed size	SG2-SG4
+SG0.2	containment-defeated-by-adoption	PASS-UNPROVEN	FINDING: the agent re-applies dom0 geometry at boot (RESREQ src=lastapplied, RESDRIFT adopting the actual mode), so a pre-reboot sub-host resolution does NOT survive - SG0.2 containment must be applied AFTER boot and verified against the agent's believed size	SG2-SG4

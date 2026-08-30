@@ -6,11 +6,20 @@
 
 | outcome | count |
 |---|---|
-| PASS | 229 |
-| **FAIL (product)** | **3** — all U1, one defect |
-| N/A by design | 12 |
-| unmeasured (INVALID / INCONCLUSIVE) | 4 |
-| FAIL-MINE (my instrumentation) | 2 |
+| `PASS` — effect demonstrated **and a fail-proof on record** | **46** |
+| `PASS-UNPROVEN` — succeeded, never seen to fail | **183** |
+| **`FAIL` (product)** | **3** — all U1, one defect |
+| `N/A` by design | 12 |
+| `INVALID` / `INCONCLUSIVE` — unmeasured | 4 |
+| `FAIL-MINE` — my instrumentation | 2 |
+
+> **The PASS/PASS-UNPROVEN split is the honest headline.** H5 defines `PASS` as requiring *"the check
+> has a fail-proof on record"*, and states that a check absent from the registry **can never emit
+> plain `PASS`**. `mgmt/harness/instrument-proofs.md` did not exist before this campaign (P0-PRE.7,
+> owed since the protocol was written), so **every plain PASS this project has ever written was
+> unproven by its own rule**. The registry now exists, and this report is the first to apply the
+> split. 183 of 229 successes are second-class: they mean "the product did the right thing in this
+> run", not "the check would have caught the wrong thing".
 
 ## Verdict
 
@@ -108,6 +117,35 @@ chrome filter (owner-observed).
 - **SG6 fail-proof** — `INCONCLUSIVE`; the selftest cannot construct its negative on this build.
 - **RND-8 resolution changes** — blocked on `set-resolution.ps1`, which is broken.
 - Owner-attended SG arms remain `ATTENDED-PENDING` and were not run.
+
+## SG11 — safeguard results matrix
+
+Per SG11, a blank fail-proof cell renders that safeguard's PASS **UNPROVEN** in every citing report.
+
+| safeguard | positive | negative control | fail-proof | verdict |
+|---|---|---|---|---|
+| **SG1** Mode 1 never shown | PASS — nothing fullscreen across a cold boot | secure desktop entered *and* suppressed; no-shell phase observed | — (attended diag build owed) | `PASS-UNPROVEN` |
+| **SG2** borderless fullscreen gated | not exercised | — | — | `INVALID-PRECONDITION` |
+| **SG3** windowed fullscreen allowed | PASS — maximized captioned window mapped | — | — (deny-direction diag build owed) | `PASS-UNPROVEN` |
+| **SG4** o-r fullscreen never mapped | not exercised | — | — | `INVALID-PRECONDITION` |
+| **SG5** secure desktop per mode | partial — freeze observed during SG1's Winlogon phase | — | — | not run as a cell |
+| **SG6** autologon armed | PASS — `AutoLogonCount` absent, task Ready, windows map | — | **INCONCLUSIVE** — selftest cannot build its negative | `PASS-UNPROVEN` |
+| **SG7** toasts survive filter | PASS — owner-observed onscreen | — | — (naive-cloak diag build owed) | `PASS-UNPROVEN` |
+| **SG8** compound chrome | PASS via RND-7 — 5 HWNDs guest-side, 1 mapped | the 4 shadow strips proven present in the same run | — | `PASS-UNPROVEN` |
+| **SG9** Start per shipped spec | PASS — denied with the documented discriminator | Start surface genuinely created and evaluated | — | `PASS-UNPROVEN` |
+| **SG10** shell identity/furniture | not run | — | — | not run |
+
+## Closing record (runbook §0.2 step 8)
+
+- **Pool:** 91.9% used at campaign start (**RED**) → pruned to 83.1% → **83.5% used, 144.5 GB free** at
+  close. Fixtures (`win10-u14`, `win11-u14`, `win10-stk`, `win11-stk`) built on demand and **all
+  removed**; receipts deleted. No standing extras, per the owner's goldens decision.
+- **Goldens:** `win10-base` and `win11-base` verified intact at close — never booted, only cloned.
+- **Guests:** all Windows guests Halted. `service.gui-agent-debug` unset on `win10-tpl`.
+- **Whole-desktop captures:** read, judged, and deleted in the same step (capture-class rule, D10).
+  None committed.
+- **Standing state:** `win10-c1` / `win11-c1` have now had a vif and are **no longer NET-6-eligible**;
+  a future first-vif cell needs a fresh clean-install exit.
 
 ## Protocol and instrumentation changed by this campaign
 
