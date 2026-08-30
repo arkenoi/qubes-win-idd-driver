@@ -116,9 +116,13 @@ _grab(){ # capture; echo the classifier verdict (advisory only, never a pass)
     rm -f "$SHOTDIR"/s.tar "$SHOTDIR"/win-*.png 2>/dev/null
     QTEST_VM=$VM timeout 90 ./tools/qtest shot "$SHOTDIR/s.tar" >/dev/null 2>&1 || return 1
     tar -xf "$SHOTDIR/s.tar" -C "$SHOTDIR" 2>/dev/null || return 1
-    local big; big=$(ls -S "$SHOTDIR"/*.png 2>/dev/null | head -1)
+    # EXCLUDE latest.png from the candidates. It is the PREVIOUS iteration's image, so when a
+    # capture produces no win-*.png this glob would select it, "succeed" by copying it onto itself
+    # (the `cp: same file` noise in every log), and hand the classifier a STALE frame - reporting an
+    # old screen as the current one. A failed capture must fail, not silently repeat itself.
+    local big; big=$(ls -S "$SHOTDIR"/win-*.png 2>/dev/null | head -1)
     [ -n "$big" ] || return 1
-    cp "$big" "$SHOTDIR/latest.png"
+    cp -f "$big" "$SHOTDIR/latest.png"
     ./tools/winshot.py --png "$big" 2>/dev/null | grep -oE 'VERDICT=[A-Z]+' | head -1
 }
 
