@@ -1226,7 +1226,7 @@ Such cells must be driven **as the interactive user** (`schtasks /ru user /it`, 
 
 ### RND-1 … RND-9 — the battery
 
-*Run per OS at minimum on: the fresh-install exit (ST2 on churn) and one upgrade exit (ST2G), seamless mode; RND-8 additionally in the fullscreen/IDD configuration. After any battery: **RND-cold** — one reboot, then RND-3/4/5 again (a live agent restart clears exactly the faults cold boot exposes). Settle rule: ≥20 s after scene setup before first capture; expected window counts derive from the scene's own window list — never hardcoded. Cost: ~1.5–2.5 h per OS per configuration, 0 GB.*
+*Entry precondition, same as BENCH: **`QubesWindowsUpdateScan` DISARMED and recorded** (G-0c) — the RND battery drives the same SendInput/qrexec load and shares the wedge exposure. Run per OS at minimum on: the fresh-install exit (ST2 on churn) and one upgrade exit (ST2G), seamless mode; RND-8 additionally in the fullscreen/IDD configuration. After any battery: **RND-cold** — one reboot, then RND-3/4/5 again (a live agent restart clears exactly the faults cold boot exposes). Settle rule: ≥20 s after scene setup before first capture; expected window counts derive from the scene's own window list — never hardcoded. Cost: ~1.5–2.5 h per OS per configuration, 0 GB.*
 
 - **RND-1 drag** (replay/wobble/debris). Driver: scripted circle drag (`drag-harness.ps1` / `drag-measure.ps1`). Judges: *replay* — stationary ≤~1 s after release (`pos-sampler.ps1`; regression guard for the 2026-08-12 2 s playback, fixed in 336ccc7); *wobble* — from QGAPROTO `ax/ay` vs `lx/ly` at damage time, **never** cross-VM capture (capture skew invented "tearing"); shipped bar stale-origin ≤~4%, dx p95=0 px; *debris* — one mid-drag fullshot over overlapping windows (legitimate whole-desktop use), no fragments in the lower window. Trap: **never judge against a window whose content is not verified rendering** (a wedged white Notepad faked two regressions); if a window goes empty, capture guest truth before killing anything. Drag *quality* is owner-PARKED — read `docs/PLAN-drag-quality.md` before touching drag code; this cell only guards shipped behavior.
 - **RND-2 scroll.** Bench scroll phase (400-line file, ±3 notches @20 Hz); judge: QGAPERF scroll p50 vs the canonical baseline + `damage-within-window` invariant.
@@ -1242,7 +1242,22 @@ Such cells must be driven **as the interactive user** (`schtasks /ru user /it`, 
 
 ### BENCH — benchmarks
 
-*Entry: the stage being baselined (ST2/ST2G/ST5), quiet host, no WU scan due (P3 rule). Prereq: P0-CORE, agent hash verified. Cost: ~45–60 min per baseline set, 0 GB.*
+*Entry: the stage being baselined (ST2/ST2G/ST5), quiet host, **`QubesWindowsUpdateScan` DISARMED and the disarm recorded in the cell evidence** (P3 rule; G-0c). Prereq: P0-CORE, agent hash verified. Cost: ~45–60 min per baseline set, 0 GB.*
+
+> **MANDATORY FIRST STEP OF EVERY BENCH AND RND CELL — not advice, a step:**
+>
+>     schtasks /query /tn QubesWindowsUpdateScan /v /fo LIST | findstr /i "Next Run Time"
+>     schtasks /change /tn QubesWindowsUpdateScan /disable
+>     ... run the cell ...
+>     schtasks /change /tn QubesWindowsUpdateScan /enable
+>
+> A BENCH/RND transcript that does not show the disarm is **`INVALID-PRECONDITION`** — an
+> unmeasured cell, never a slow number and never a wedge worth chasing. **The boot+2min trigger
+> is the trap**: cold-booting a guest and starting a benchmark within a few minutes puts the
+> workload directly on top of the scheduled scan. Measured 2026-08-30: guest booted ~17:52,
+> scan due ~17:54, BENCH started ~17:53, guest wedged mid-benchmark — the documented
+> consequence of the documented trigger, and every number from that session was void.
+> `mgmt/harness/p4-run.sh` performs the disarm, asserts it, and re-enables at the end.
 
 - **BENCH-0 — mint canonical baselines on the pristine-lineage rigs** (the protocol's first benchmarking act; §12 note 9). `tools/bench-agent.sh <label>` fixed workload (idle 5 s → drag 10 s → idle → scroll 10 s → idle → type 10 s → idle-post; SendInput proven to reach the input desktop; cadence+jitter reported so a loaded guest is visible). ≥3 runs (≥5 for drag) on ONE unchanged binary; record in FINDINGS with **raw files committed to `instrumentation/`** (standing rule — the b299011 raws were never committed). b299011 (613 µs drag etc.) is retired to a historical footnote; the 4.3.10 quiet-host set (`bench-4310-q1..q4`, scroll 374–436 µs) is the current-rig reference until BENCH-0 supersedes it.
 - **BENCH-1 — comparison runs.** Against recorded canonical baselines only, never an intra-day build (owner rule; violating it burned ~1M tokens). ≥3 runs per side, **interleaved** with the control. **Scroll is the metric that can carry a verdict; drag p50 is bimodal (scene-state — the trap that voided a bisect) and gates nothing until its variance is re-established** (decision D-open). Guest-side cost counts even when dom0 corrections hide it. Host state recorded with every run.
