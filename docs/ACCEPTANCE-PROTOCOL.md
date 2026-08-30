@@ -1010,6 +1010,50 @@ fail-proof entry in `mgmt/harness/instrument-proofs.md`. Anything else is **EXEC
 | Act on a guest an orchestrator already owns | `reprovision-usb.sh` holds `/tmp/reprovision-<vm>.lock` and restarts the guest on every halt. Two ad-hoc monitors were added beside it and one rebooted a guest mid-MSI. Check `fuser -v` on the lock first; watchers must be PASSIVE. |
 | Report the status of `cmd \| tee log` | You get **tee's** exit code. A refused reprovision was reported as success this way. Use `PIPESTATUS`. |
 
+### 0.8b INSTRUMENT RULES — driving the guest without lying to yourself
+
+Every rule here cost a wrong verdict on 2026-08-30/31. They are properties of the transport and the
+harness, not of any one cell, so they apply to every cell.
+
+**1. `qtest run` echoes the command back. Strip it before counting or parsing.**
+The reply carries the guest `cmd.exe` banner and the PROMPT LINE WITH THE COMMAND ON IT:
+`C:\Windows\system32>cmd /c tasklist /fi "imagename eq explorer.exe"`. That line contains whatever
+string you are grepping for, so every count comes back one too high and every `reg query` matches
+the value NAME as well as the value. Measured: the SG6 fail-proof reproduced its defect perfectly
+and still reported **NOT RED**, because `explorer=1` was the echo alone. Filter with
+`grep -avE '^(Microsoft Windows \[Version|\(c\) Microsoft|C:\\)'`. `mgmt/reprovision-usb.sh`
+compensates differently — it requires `-ge 2` matches — which is correct and is now commented.
+
+**2. `-ScriptArgs` is re-split at every hop. Anything with a space must be base64.**
+Arguments travel bash → `qtest` → `cmd.exe` → PowerShell, and each hop re-splits on whitespace.
+`-DurationSeconds 90 -IntervalSeconds 1` arrived as a fragment, PowerShell said *"Missing an
+argument for parameter"*, the surface sampler never started — and RND-4 then graded
+`INVALID-VACUOUS` "the toast never existed" while **nothing had been watching**. Use
+`guest/run-as-user.ps1 -ArgsB64 <base64 of UTF-16LE>`; a blob has no spaces and survives intact.
+The same trick (`powershell -EncodedCommand`) is the way to run any multi-line snippet inline.
+
+**3. `run-as-user.ps1` is one scheduled task per `-Tag`, and it deletes its task on entry.**
+Two concurrent launches without distinct tags means the second one KILLS the first. That is how a
+long-running sampler got destroyed by the very stimulus it was watching for.
+
+**4. Every guest script a harness calls must live in the repo, and the harness must REFUSE without it.**
+Three of them (`startproof`, `enumwin`, `sg6-state`) lived only in a per-job scratch directory that
+is deleted with the job. The harness did not fail without them — it printed `deny=?` and carried on,
+silently dropping the vacuity proofs that are the load-bearing half of every "nothing mapped"
+verdict. All harnesses now call `require_scripts` and exit 2 when one is missing (H5.4: missing data
+must fail). Evidence directories must be durable for the same reason — `stability-e2e.sh` was
+writing every artefact it produced into the scratch dir.
+
+**5. `bash -n` does NOT catch bad substitutions.** `${((a-b))}` passes a syntax check and fails at
+runtime. After editing a harness, also `grep -n '\${((' ` it. More generally, a clean `bash -n` is
+not evidence the script runs.
+
+**6. `grep -c` prints `0` AND exits 1.** So `$(... | grep -c X || echo 0)` yields **two** zeros and
+the variable becomes `"0\n0"`, which silently mangles any line it is interpolated into. Use
+`n=$(... | grep -c X); n=${n:-0}`.
+
+---
+
 ### 0.9 Where the scripts and this protocol disagree today (verified against source 2026-08-30 — fix at P0-PRE, do not paper over)
 
 1. `matrix.sh reclone` sets `qrexec_timeout=600`; the protocol standard is 6000 (§2.5, §12
