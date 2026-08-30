@@ -132,7 +132,15 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
         # partial or failed poll costs nothing instead of replacing good data with less of it.
         QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run \
           "cmd /c powershell -NoProfile -Command \"if(Test-Path '$glog'){Get-Content '$glog' -Tail 15}\"" \
-          2>/dev/null | tr -d '\r' | grep -aE '^[0-9]{4}-[0-9]{2}-[0-9]{2}|^=== RESULT ===' >> "$dir/$lbl-install.tail" || true
+          2>/dev/null | tr -d '\r' | grep -aE '^[0-9]{4}-[0-9]{2}-[0-9]{2}|^=== RESULT ===|^E2EMARK-' >> "$dir/$lbl-install.tail" || true
+        # THE FILTER MUST ALSO KEEP THE RUN MARKER (^E2EMARK-). It kept only timestamped lines and
+        # the RESULT trailer, so the marker run_install appends never reached this cumulative log -
+        # the marker slice below then found nothing, emptied .cur, and the success test could never
+        # match. Measured 2026-08-30: cell WIN10-1stage logged
+        # "=== RESULT === {stage:stage2-install, ok:true}" at t+21s and was still declared
+        # "install STALLED (no progress for 300s)" five minutes later. That was an interaction
+        # between two fixes of mine - anchoring the trailer, and marking the run - each correct
+        # alone.
         # THE FILTER MUST KEEP THE RESULT TRAILER. It used to be `grep -a '^2026'`, which drops
         # every line not starting with a timestamp - and the installer writes its trailer as
         # "=== RESULT === {json}" with NO timestamp (Install-QwtImproved.ps1). The success test
