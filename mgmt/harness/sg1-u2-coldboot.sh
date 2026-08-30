@@ -27,7 +27,7 @@ set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 require_scripts(){ local m=""; for s in "$@"; do [ -f "$s" ] || m="$m $s"; done
   [ -z "$m" ] || { echo "FATAL: required guest script(s) missing:$m" >&2; exit 2; }; }
-require_scripts guest/set-resolution.ps1 guest/wu-boot-acceptance-check.ps1
+require_scripts guest/set-resolution.ps1 guest/wu-boot-acceptance-check.ps1 guest/wu-boot-acceptance-arm.ps1
 
 VM="${1:?usage: $0 <vm> [outdir]}"
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/SG1U2-$VM}"
@@ -39,6 +39,11 @@ log(){ echo "$(date -u +%H:%M:%S) sg1[$VM]: $*" | tee -a "$OUT/sg1u2.log"; }
 rc=0
 
 alive(){ r 'cmd /c echo ALIVE' | grep -qa ALIVE; }
+# SHORT timeout. `alive` inherits T=150, so during a boot it BLOCKS until qrexec comes up - the
+# watch loop below then takes ONE sample and waits, i.e. it does not watch the boot at all, which is
+# the only interval in which the defect could appear. Measured 2026-08-31: "dom0 watch: 0 sample(s)"
+# with the loop reporting "sample 1", and my "~4s" was arithmetic, not elapsed time.
+alive_fast(){ QTEST_VM=$VM timeout -k 3 8 ./tools/qtest run 'cmd /c echo ALIVE' 2>/dev/null | grep -qa ALIVE; }
 
 # ------------------------------------------------------------------ preconditions
 alive || { log "FATAL: $VM is not answering qrexec before we start"; exit 2; }
@@ -66,13 +71,18 @@ log "=== COLD BOOT, watched from dom0 throughout (the guest has no qrexec for mo
 # forces exactly that guess, so the boot is now evidence rather than an assumption.
 bootid(){ r 'cmd /c powershell -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString(\"o\")"' | grep -aoE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+' | head -1; }
 BOOT_BEFORE=$(bootid); log "  LastBootUpTime before: ${BOOT_BEFORE:-unknown}"
+# U2 MUST BE ARMED BEFORE THE BOOT. wu-boot-acceptance-check.ps1 compares against
+# C:\ProgramData\Qubes\boot-accept-arm.txt written by the arm script; without it the check emits no
+# RESULT block at all - which is exactly what happened on the first attempt.
+log "  arming U2 (wu-boot-acceptance-arm.ps1) before the reboot"
+T=300 q pushrun guest/wu-boot-acceptance-arm.ps1 2>/dev/null | tr -d '\r' | grep -aE '^(ARMED|=== RESULT|\{)' | head -2 | sed 's/^/    /'
 timeout -k 10 320 qvm-shutdown --wait --timeout 260 "$VM" >/dev/null 2>&1; sleep 4
 st=$(qvm-ls --raw-data --fields STATE "$VM" | tail -1)
 [ "$st" = Halted ] || { log "FATAL: $VM is $st after qvm-shutdown --wait; this cell REQUIRES a cold boot"; exit 2; }
 log "  guest is Halted - the shutdown took"
 timeout -k 10 200 qvm-start "$VM" >/dev/null 2>&1 & disown
 
-BIG=0; SAMPLES=0; MAXDIM="none"
+BIG=0; SAMPLES=0; TAKEN=0; MAXDIM="none"; WSTART=$(date +%s)
 for i in $(seq 1 70); do
   t="$TMP/boot-$i.tar"; rm -f "$t"
   timeout -k 5 25 qrexec-client-vm dom0 "local.WinScreenshot+$VM" </dev/null > "$t" 2>/dev/null
@@ -88,10 +98,11 @@ b=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',b[16:24]); print(f'{w} 
       [ "$w" -ge "$THRW" ] && [ "$h" -ge "$THRH" ] && { BIG=$((BIG+1)); MAXDIM="${w}x${h}"; cp "$f" "$OUT/FULLSCREEN-DURING-BOOT-$i.png"; }
     done
   fi
-  alive && { log "  qrexec came up at sample $i (~$((i*4))s of watching)"; break; }
-  sleep 4
+  TAKEN=$((TAKEN+1))
+  alive_fast && { log "  qrexec came up after $TAKEN sample(s), $(( $(date +%s) - WSTART ))s of watching"; break; }
+  sleep 3
 done
-log "  dom0 watch: $SAMPLES sample(s) returned windows; fullscreen-sized hits: $BIG ($MAXDIM)"
+log "  dom0 watch: $TAKEN sample(s) TAKEN across the boot, $SAMPLES returned windows; fullscreen hits: $BIG ($MAXDIM)"
 
 alive || { log "FATAL: guest never answered qrexec after the cold boot"; exit 2; }
 sleep 35
@@ -101,6 +112,13 @@ if [ -n "$BOOT_BEFORE" ] && [ "$BOOT_BEFORE" = "$BOOT_AFTER" ]; then
   exit 2
 fi
 log "  COLD BOOT PROVEN (boot time advanced)"
+
+# ------------------------------------------------------------------ negative control
+log "=== negative control: a normal window must still map (the filter must not be a brick) ==="
+r 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 16
+nd=$(rm -f "$TMP/n.tar"; q shot "$TMP/n.tar" >/dev/null 2>&1; tar tf "$TMP/n.tar" 2>/dev/null | grep -c '\.png$')
+log "  notepad mapped: ${nd:-0} window(s)"
+r 'cmd /c taskkill /f /im notepad.exe' >/dev/null 2>&1
 
 # ------------------------------------------------------------------ the agent's own wire log
 log "=== the agent's wire log for THIS boot ==="
@@ -125,34 +143,50 @@ DENY=$(echo "$W" | grep -ao 'DENY_FULLSCREEN [0-9]*' | awk '{print $2}')
 BIGMAP=$(awk -v tw="$THRW" -v th="$THRH" '$3>=tw && $4>=th {n++} END{print n+0}' "$OUT/mapped.txt")
 log "  MAPs at >= ${THRW}x${THRH}: $BIGMAP   'unconditionally denied' lines: ${DENY:-0}"
 
-# ------------------------------------------------------------------ negative control
-log "=== negative control: a normal window must still map (the filter must not be a brick) ==="
-r 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 16
-nd=$(rm -f "$TMP/n.tar"; q shot "$TMP/n.tar" >/dev/null 2>&1; tar tf "$TMP/n.tar" 2>/dev/null | grep -c '\.png$')
-log "  notepad mapped: ${nd:-0} window(s)"
-r 'cmd /c taskkill /f /im notepad.exe' >/dev/null 2>&1
-
 # ------------------------------------------------------------------ SG1 verdict
 log "=== SG1 VERDICT ==="
 V="$OUT/verdicts.tsv"; EV=$(basename "$OUT")
-if [ "${DENY:-0}" -eq 0 ]; then
-  log "  -> INVALID-VACUOUS: the agent never logged a Mode-1 denial. LogonUI is created on EVERY"
-  log "     boot, so its absence means the filter was not exercised - 'nothing appeared' proves nothing."
-  printf 'SG1\tvacuity-secure-desktop-entered\tINVALID-VACUOUS\t0 "unconditionally denied" lines across a cold boot\t%s\n' "$EV" >> "$V"; rc=1
-elif [ "${BIGMAP:-0}" -eq 0 ] && [ "${BIG:-0}" -eq 0 ]; then
-  log "  -> PASS: no fullscreen-sized window was MAPped (agent wire) and none reached dom0 (watch),"
-  log "     while the filter provably ran (${DENY} denial lines)."
-  printf 'SG1\tno-fullscreen-during-boot\tPASS-UNPROVEN\t0 MAPs >= %sx%s across the boot; dom0 watch %s samples, 0 fullscreen; %s denial lines\t%s\n' "$THRW" "$THRH" "$SAMPLES" "$DENY" "$EV" >> "$V"
-  printf 'SG1\tvacuity-secure-desktop-entered\tPASS-UNPROVEN\t%s "unconditionally denied, feature or not" lines - the filter was exercised\t%s\n' "$DENY" "$EV" >> "$V"
-  printf 'SG1\tno-shell-phase-observed\tPASS-UNPROVEN\tdenials logged with shell=0 during the pre-explorer phase\t%s\n' "$EV" >> "$V"
+
+# INSTRUMENT GATES FIRST. Both of these were violated on the first attempt and would have produced
+# a confident "no fullscreen window appeared" from a watch that never looked.
+if [ "${TAKEN:-0}" -lt 3 ]; then
+  log "  -> INVALID-INSTRUMENT: only ${TAKEN:-0} dom0 sample(s) were TAKEN across the boot. The"
+  log "     boot window is the only interval in which the defect could appear; a watch that did not"
+  log "     iterate proves nothing about it."
+  printf 'SG1\tno-fullscreen-during-boot\tINVALID-INSTRUMENT\tonly %s dom0 samples taken across the boot\t%s\n' "${TAKEN:-0}" "$EV" >> "$V"; rc=1
+elif [ "${nd:-0}" -lt 1 ]; then
+  # The capture path must be shown ALIVE after the boot, or "nothing seen during boot" is
+  # indistinguishable from a dead service (which exits 1 with an empty body either way).
+  log "  -> INVALID-INSTRUMENT: the post-boot control window did not map, so the capture path"
+  log "     cannot be shown to have been working during the boot either."
+  printf 'SG1\tno-fullscreen-during-boot\tINVALID-INSTRUMENT\tpost-boot control mapped 0 windows\t%s\n' "$EV" >> "$V"; rc=1
+elif [ "${BIG:-0}" -eq 0 ] && [ "${BIGMAP:-0}" -eq 0 ]; then
+  log "  -> PASS: across $TAKEN dom0 samples spanning the boot, no window >= ${THRW}x${THRH} ever"
+  log "     appeared, and the agent MAPped none either; the capture path was proven alive after."
+  printf 'SG1\tno-fullscreen-during-boot\tPASS-UNPROVEN\t%s dom0 samples across the boot, 0 fullscreen; 0 agent MAPs >= %sx%s; capture proven alive after\t%s\n' "$TAKEN" "$THRW" "$THRH" "$EV" >> "$V"
+  printf 'SG1\tno-shell-phase-observed\tPASS-UNPROVEN\tthe watch spanned Halted -> qrexec-up, i.e. the entire no-shell phase\t%s\n' "$EV" >> "$V"
 else
   log "  -> FAIL: fullscreen-sized surface(s) reached dom0 (watch=$BIG, agent MAPs=$BIGMAP, $MAXDIM)"
   printf 'SG1\tno-fullscreen-during-boot\tFAIL\tdom0 watch hits=%s (%s), agent MAPs >= threshold=%s\t%s\n' "$BIG" "$MAXDIM" "$BIGMAP" "$EV" >> "$V"; rc=1
 fi
+
+# THE LOGONUI DENIAL IS NOT AVAILABLE ON AN AUTOLOGON GUEST - state that, do not fake it either way.
+# The gui-agent is a USER-SESSION process: it starts after logon, and LogonUI exists only before it.
+# Measured 2026-08-31: boot at 01:54:28, agent log created 01:54:44, DENY_LOGONUI 0. So on a rig
+# where autologon is ENFORCED (and it is, deliberately) the agent can never witness the LogonUI
+# phase, and requiring its denial line would make this cell permanently unprovable. The dom0-side
+# watch above is the instrument that covers that phase; the agent-side denial is reachable only on
+# an attended, autologon-disabled arm.
+if [ "${DENY:-0}" -gt 0 ]; then
+  printf 'SG1\tvacuity-secure-desktop-entered\tPASS-UNPROVEN\t%s "unconditionally denied, feature or not" lines - the Mode-1 filter was exercised\t%s\n' "$DENY" "$EV" >> "$V"
+else
+  log "  LogonUI denial not observable here: the agent is a user-session process and autologon is"
+  log "  enforced, so it starts after LogonUI is gone (agent log 01:54:44 vs boot 01:54:28)."
+  printf 'SG1\tvacuity-secure-desktop-entered\tN/A\tunobservable on an autologon guest: the gui-agent starts after logon, LogonUI exists only before it. Covered instead by the dom0-side watch; the agent-side denial needs an attended autologon-off arm\t%s\n' "$EV" >> "$V"
+fi
 if [ "${nd:-0}" -ge 1 ]; then
   printf 'SG1\tnegative-control-normal-window-maps\tPASS-UNPROVEN\tnotepad mapped %s window(s) after settle - the filter is not a brick\t%s\n' "$nd" "$EV" >> "$V"
 else
-  log "  -> the negative control did not map; the filter may be over-firing"
   printf 'SG1\tnegative-control-normal-window-maps\tFAIL\tnotepad mapped 0 windows\t%s\n' "$EV" >> "$V"; rc=1
 fi
 
