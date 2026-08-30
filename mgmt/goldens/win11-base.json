@@ -1,5 +1,5 @@
 {
-  "note": "primed pristine Win11 24H2 Enterprise Evaluation base (build 26100.240331-1435): no QWT, testsigning OFF, QubesPrime hook installed. Built 2026-08-30. Settled desktop confirmed by reading two captures 9 min apart (identical but for the clock). Primer NOT yet selftested on Win11 - do that before relying on it.",
+  "note": "primed pristine Win11 24H2 Enterprise Evaluation base (build 26100.240331-1435, running 10.0.26100.1742): no QWT, testsigning OFF (SystemStartOptions=NOEXECUTE=OPTIN FVEBOOT=2633728, no TESTSIGNING), QubesPrime hook installed and PROVEN to fire - selftest 2026-08-30 ran as nt authority\\system off D:\\qubes-prime\\, task self-unregistered. Re-sealed to record the selftest; volumes byte-identical to the 11:22Z seal (the golden was never booted - a clone was).",
   "props": {
     "klass": "StandaloneVM",
     "maxmem": "8192",
@@ -7,7 +7,7 @@
     "vcpus": "4",
     "virt_mode": "hvm"
   },
-  "sealed_utc": "2026-08-30T11:22:54Z",
+  "sealed_utc": "2026-08-30T11:58:20Z",
   "vm": "win11-base",
   "volumes": {
     "private": {

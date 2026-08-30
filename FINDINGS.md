@@ -22382,3 +22382,48 @@ because stock is already on PV.
 Consequence for the matrix: C3 (upgrade-over-ours) and C4 (upgrade-over-stock) are different cells
 with different preconditions and neither substitutes for the other. `ours-nopvdisk` is a third,
 optional shape covering the old-ours `pv_boot_disk:false` installed base.
+
+## 2026-08-30 — Win11 primer PROVEN, and the selftest harness nearly reported the opposite
+
+`win11-base`'s seal carried the caveat *"Primer NOT yet selftested on Win11 - do that before relying
+on it."* Settled: `mgmt/prime-selftest.sh win11-base prime-selftest-11 selftest`. Evidence is a
+screenshot, because a primed guest is pristine Windows with no QWT and therefore no qrexec —
+`evidence/prime-selftest-prime-selftest-11-20260830-114839/PASSED-proof-win11.png`. All four
+criteria visible on screen:
+
+    PRIMER SELFTEST PASSED
+    The primer hook ran this job as: nt authority\system
+    Date: Sun 08/30/2026 11:49:38.96      Job media was: D:\qubes-prime\
+    Windows build: Microsoft Windows [Version 10.0.26100.1742]
+    Testsigning state: SystemStartOptions REG_SZ NOEXECUTE=OPTIN FVEBOOT=2633728   <- no TESTSIGNING
+    QubesPrime task: ERROR: The system cannot find the file specified.             <- self-unregistered
+
+`win11-base` re-sealed to record this. The volumes are byte-identical to the 11:22Z seal — the
+golden itself was never booted, a clone was.
+
+### The harness produced a FALSE NEGATIVE on this very run, and it was a timer
+
+The first frame this script captured was a **bare desktop**, and its own closing message says *"A
+bare desktop with no Notepad means the hook did NOT fire - the channel is broken."* The channel was
+fine. Re-capturing the same guest three minutes later showed the full PASS text above.
+
+Cause: the loop exited on `restarts>=1 && elapsed>=240`, an ELAPSED-TIME condition measured from
+the start of the whole run. On Win11 the job's reboot landed later than on Win10, so 240 s arrived
+while the guest was still booting — before the StartUp shower opened Notepad. This is exactly the
+failure H2 bans a bare `sleep`-poll for: a timer cannot tell *"not yet"* from *"never"*, and here it
+turned a PASS into a "the channel is broken" verdict that would have sent the next session chasing
+the primer instead of running cells.
+
+Fixed two ways, both in `mgmt/prime-selftest.sh`:
+1. The settle window is now anchored to the RESTART (`SETTLE=210` s after the guest comes back),
+   not to the start of the run — the one form of fixed delay H2 permits, a declared settle attached
+   to a grading step.
+2. Frames are numbered and never overwritten. The old code deleted `win-*.png` each pass and copied
+   the largest PNG to `latest.png`; once `latest.png` existed it was usually the largest, so `cp`
+   copied it onto itself (`are the same file`) and DISCARDED the new capture. The evidence directory
+   could hold an old frame under a name asserting it was current.
+
+Standing lesson, and it is the same one twice in one day: **the CPU-quiescence probe, the PRISTINE
+gate, and now this** all failed by grading on a proxy (a timer, a verdict string) instead of the
+signal. Judge the thing itself, and when the instrument and the guest disagree, re-measure before
+believing the instrument.

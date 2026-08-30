@@ -60,27 +60,52 @@ qvm-start "$CHURN" >/dev/null 2>&1
 
 # The job reboots the guest, and on_reboot=destroy means that HALTS it. Restarting is this script's
 # job - it is the sole owner of this guest for the duration (protocol 0.8: one owner per guest).
-t0=$(date +%s); restarts=0
+# TWO BUGS FIXED HERE 2026-08-30, after this loop returned a FALSE NEGATIVE on the Win11 run.
+#
+# 1. THE EXIT WAS A TIMER. It broke at `restarts>=1 && elapsed>=240`, which on Win11 fired while
+#    the guest was still booting after the job's reboot - BEFORE the StartUp shower had opened
+#    Notepad. The captured frame was a bare desktop, and this script's own closing message says a
+#    bare desktop means the channel is broken. The channel was fine: re-capturing the same guest
+#    three minutes later showed the full PASS text. A timer that decides when to look is exactly
+#    the "wait that cannot fail" H2 prohibits - it cannot distinguish "not yet" from "never", and
+#    here it reported a working primer as a broken one. The wait is now anchored to the RESTART,
+#    with a declared settle window after it, which is the only fixed delay H2 permits.
+#
+# 2. FRAMES WERE OVERWRITTEN, and `latest.png` could go STALE. Each pass deleted win-*.png and
+#    copied the largest PNG to latest.png - but once latest.png existed it was usually the largest,
+#    so `cp` copied it onto itself (`are the same file`) and the newest capture was discarded. The
+#    evidence directory could therefore hold an OLD frame under a name that claims to be current.
+#    Frames are now numbered and never overwritten, so the series itself is the record.
+SETTLE=210          # declared settle window after the job's reboot, per H2
+t0=$(date +%s); restarts=0; t_restart=0; frame=0
 while [ $(( $(date +%s) - t0 )) -lt 900 ]; do
     sleep 30
+    el=$(( $(date +%s) - t0 ))
     st=$(state "$CHURN")
     if [ "$st" = Halted ]; then
-        restarts=$((restarts+1))
-        log "  guest halted (the job rebooted it) - restart #$restarts"
+        restarts=$((restarts+1)); t_restart=$(date +%s)
+        log "  t+${el}s guest halted (the job rebooted it) - restart #$restarts"
         qvm-start "$CHURN" >/dev/null 2>&1
         continue
     fi
     rm -f "$SHOTDIR"/s.tar "$SHOTDIR"/win-*.png 2>/dev/null
     if QTEST_VM=$CHURN timeout 90 ./tools/qtest shot "$SHOTDIR/s.tar" >/dev/null 2>&1; then
         tar -xf "$SHOTDIR/s.tar" -C "$SHOTDIR" 2>/dev/null
-        big=$(ls -S "$SHOTDIR"/*.png 2>/dev/null | head -1)
-        [ -n "$big" ] && cp "$big" "$SHOTDIR/latest.png"
+        big=$(ls -S "$SHOTDIR"/win-*.png 2>/dev/null | head -1)
+        if [ -n "$big" ]; then
+            frame=$((frame+1))
+            cp "$big" "$(printf '%s/frame-%03d.png' "$SHOTDIR" "$frame")"
+        fi
     fi
-    log "  t+$(( $(date +%s) - t0 ))s state=$st restarts=$restarts"
-    [ "$restarts" -ge 1 ] && [ $(( $(date +%s) - t0 )) -ge 240 ] && break
+    since=$([ "$t_restart" -gt 0 ] && echo $(( $(date +%s) - t_restart )) || echo -1)
+    log "  t+${el}s state=$st restarts=$restarts frames=$frame since_restart=${since}s"
+    # Only start counting once the guest has actually come back from the job's reboot.
+    [ "$restarts" -ge 1 ] && [ "$since" -ge "$SETTLE" ] && break
 done
 
-log "READ $SHOTDIR/latest.png"
+LAST=$(ls "$SHOTDIR"/frame-*.png 2>/dev/null | tail -1)
+[ -n "$LAST" ] && cp "$LAST" "$SHOTDIR/latest.png"
+log "READ $SHOTDIR/latest.png  (the LAST of $frame frames; the whole series is kept)"
 log "  PASS looks like: Notepad showing 'PRIMER SELFTEST PASSED', whoami = nt authority\\system,"
 log "  and 'QubesPrime' reported as NOT FOUND (the hook unregisters itself before running a job)."
 log "  A bare desktop with no Notepad means the hook did NOT fire - the channel is broken."
