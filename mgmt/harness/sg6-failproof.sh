@@ -52,7 +52,16 @@ mkdir -p "$OUT"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 log(){ echo "$(date -u +%H:%M:%S) sg6[$VM]: $*" | tee -a "$OUT/sg6.log"; }
 # INLINE ONLY - see rule 1. Never pushrun in this script.
-r(){ QTEST_VM=$VM timeout -k 8 "${T:-150}" ./tools/qtest run "$1" 2>/dev/null | tr -d '\r'; }
+#
+# AND IT STRIPS THE COMMAND ECHO. `qtest run` returns the guest cmd.exe banner and the PROMPT LINE
+# WITH THE COMMAND ON IT, e.g. `C:\Windows\system32>cmd /c tasklist /fi "imagename eq explorer.exe"`.
+# That echoed line CONTAINS the very string the counters below grep for, so every count came back
+# one too high and every reg read matched the value name twice. Measured 2026-08-31: the defect was
+# reproduced perfectly - sessions=0, LogonUI up, autologon 0 - and the run still reported
+# `explorer=1` (the echo alone) and therefore NOT RED, plus a mangled `autologon=AutoAdminLogon\n0`.
+# The instrument said no while the subject said yes.
+r(){ QTEST_VM=$VM timeout -k 8 "${T:-150}" ./tools/qtest run "$1" 2>/dev/null | tr -d '\r' \
+     | grep -avE '^(Microsoft Windows \[Version|\(c\) Microsoft|C:\\)'; }
 
 klass=$(qvm-prefs "$VM" klass 2>/dev/null)
 [ "$klass" = StandaloneVM ] || { log "REFUSING: $VM is $klass. SG0.8 requires a StandaloneVM."; exit 2; }
@@ -86,7 +95,7 @@ windows_mapped(){
 session_count(){  r 'cmd /c query user'                                          | grep -acE '^[ >]*[A-Za-z0-9_.-]+ +console'; }
 explorer_count(){ r 'cmd /c tasklist /fi "imagename eq explorer.exe" /nh'        | grep -ac 'explorer\.exe'; }
 logonui_count(){  r 'cmd /c tasklist /fi "imagename eq LogonUI.exe" /nh'         | grep -ac 'LogonUI\.exe'; }
-autologon_val(){  r "cmd /c reg query \"$WL\" /v AutoAdminLogon"                 | grep -a AutoAdminLogon | awk '{print $NF}'; }
+autologon_val(){  r "cmd /c reg query \"$WL\" /v AutoAdminLogon" | grep -a 'REG_SZ' | awk '{print $NF}' | head -1; }
 guard_present(){  r 'cmd /c schtasks /query /tn QubesAutologonGuard 2>&1' | grep -qa 'QubesAutologonGuard *N/A' && echo yes || echo no; }
 state_block(){ echo "    sessions=$(session_count) explorer=$(explorer_count) logonui=$(logonui_count) autologon=$(autologon_val) guard=$(guard_present)"; }
 
