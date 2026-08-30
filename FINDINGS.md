@@ -23044,3 +23044,57 @@ variable: add `bitsadmin /util /setieproxy LOCALSYSTEM MANUAL_PROXY 127.0.0.1:80
 `Ensure-Proxy`, then re-run a Defender-definition install and see whether it stops failing. If it
 does, a limitation this project has been living with and documenting as permanent was a one-line
 omission all along — and the "known gap" register entry should be retired rather than inherited.
+
+## 2026-08-30 — FALSIFIED: the U1 root cause. The scan WORKS on the shipped build with no plane added.
+
+**Retracting the headline finding of this campaign.** I reported that the shipped 4.3.16 updater
+cannot scan, root cause "`Ensure-Proxy` omits the SYSTEM-account WinINET plane", and blocked the
+release on it. **That attribution is false.**
+
+Measured on `win10-tpl`, shipped build, during a `-OnlyKb` pass at 20:09:
+
+    VM class (live from qubesdb): TemplateVM
+    Sync-Revocation: 3/3 CTLs refreshed through the relay
+    scan: 8 update(s) offered; 5 actionable (3 ESU-gated/express informational)
+    reported 5 update(s) to dom0 qubes.NotifyUpdates (exit 0)
+
+and the plane state at that moment:
+
+    SYSTEM_ProxyEnable   <empty>        <- the plane I claimed was required
+    SYSTEM_ProxyServer   <empty>
+    HKLM_ProxyEnable  1    HKLM_ProxyServer  127.0.0.1:8082
+    winhttp           Proxy Server(s): 127.0.0.1:8082  Bypass: <local>
+
+**The scan succeeded, and availability reached dom0, with the SYSTEM plane absent.** So the omission
+I identified is not what stopped the earlier scans, and `qvm-features updates-available` is NOT
+structurally unreachable on this build.
+
+### What is still true
+
+The scan really did fail `0x8024402C` four times (16:51, 18:06, 18:09, 18:22). That is measured and
+not retracted. What is retracted is the CAUSE, the claim that the path is broken as shipped, and the
+ship-blocking verdict built on both.
+
+### The methodological failure, which is the part worth keeping
+
+**I never ran the reverse control.** I added the plane, the scan worked once, and I called it
+causation. The protocol's own rule — a check counts only once it has been seen to FAIL with the
+defect deliberately present — is exactly the discipline that would have caught this: remove the
+plane again, show the scan breaks again. I applied that standard to every product check in this
+campaign and exempted my own root-cause claim from it.
+
+Worse, the isolation was confounded and I said it was clean. Before that run I had renamed
+`C:\Windows\SoftwareDistribution` (the backoff test). I re-tested immediately, it still failed, and I
+recorded the backoff hypothesis as "REFUTED" — **but a SoftwareDistribution reset is documented as
+needing a reboot to take effect** (`FINDINGS:6429` pairs it with the plane precisely as an
+"on enable" step). The guest has since cold-booted several times. So at least two variables changed
+between the failing and passing states, and I attributed the difference to the one I had just
+written about.
+
+### What is actually unknown, stated as unknown
+
+Why the scan failed four times and now succeeds is **NOT established**. Candidates, none tested:
+a stale `SoftwareDistribution` that only cleared on the next boot; `-Action scan -Scheduled` (the
+failing path) versus the `-OnlyKb` pass used here; some state cleared by the intervening reboots.
+Establishing it needs a controlled bisect on a restored image, one variable at a time, with the
+reverse control run in both directions — not another single-run inference from me.
