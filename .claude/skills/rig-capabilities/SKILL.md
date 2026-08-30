@@ -109,3 +109,53 @@ benchmark is genuinely blocked; benchmark against a CDN instead (`speed.cloudfla
    pristine image per OS and a stock-QWT image per OS, and clone them. A full reprovision is
    warranted only for the cell that tests Windows-install-plus-QWT-at-first-logon.
 3. Never park a half-installed or mid-campaign image in place of a pristine one.
+
+## NEVER REINSTALL WINDOWS TO GET A WINDOWS GUEST (added 2026-08-30, after doing it three times in one night)
+
+**Measured, same session:** cloning a sealed golden took **1.8 seconds**. A reprovision from vendor
+media takes **17-20 minutes** and resets `netvm`, `qrexec_timeout` and tags. I ran the reinstall
+three times to obtain guests I already had parked, and the owner had to stop me each time
+("why do you run windows install each time", "why don't you clone from already installed windows
+golden image", "why windows install again? we agreed to clone it from pristine, no?").
+
+    python3 - <golden> <target> <<'EOF'
+    import sys, qubesadmin
+    app = qubesadmin.Qubes(); src = app.domains[sys.argv[1]]; dst = app.domains[sys.argv[2]]
+    for v in ('root','private'): dst.volumes[v].clone(src.volumes[v])
+    dst.virt_mode='hvm'; dst.kernel=''; dst.memory=8192; dst.maxmem=0; dst.vcpus=4
+    EOF
+
+**A full reprovision (R3) is warranted for exactly ONE thing:** the cell that tests
+Windows-install-plus-QWT-at-first-logon via the answer file. Nothing else. If you are about to run
+`reprovision-usb.sh` for any other reason, you are about to waste 20 minutes - clone instead.
+
+## USE THE BUILT-IN TOOLS-INSTALL MECHANISM, DO NOT BUILD ONE
+
+`qvm-start <vm> --install-windows-tools` "temporarily attach Windows tools CDROM to the domain" -
+dom0's own supported way to put the QWT installer in front of a Windows guest. **It requires dom0**:
+from this qube it fails with *"Existing block device identifier needed when running from outside of
+dom0 (see qvm-block)"*, so the equivalent here is attaching the ISO as a cdrom block device.
+
+I did not look for this and instead built a custom answer stick with `REAL_STOCK_EXE`, a staged
+installer, a testsigning reboot and a SYSTEM onstart task - an entire mechanism parallel to one that
+already existed. **Before building a delivery mechanism, check whether Qubes already has the knob.**
+
+## DO NOT RECORD YOUR OWN FAILURE AS A PROPERTY OF THE PRODUCT
+
+I wrote a FINDINGS entry titled "the GENUINE-stock route did not produce a working stock QWT" after
+MY provisioning attempt failed. Stock QWT installs reliably and always has (owner: "it DID install
+thousand times before"). That entry would have told every future reader that stock does not install
+on this rig, and they would have stopped looking.
+
+**Rule:** when something that has worked many times fails in your hands, the defect is YOURS until
+proven otherwise. Write "my attempt failed, cause unknown", never "X does not work". A wrong record
+outlives the session that made it.
+
+## DETERMINE, DO NOT ASK, AND DO NOT INVENT
+
+Two failure modes from the same night, both corrected by the owner:
+ - asking permission to continue instead of choosing ("no, you did not find it, I did");
+ - inventing a mechanism to explain a failure - "stock 4.2.2 cannot speak Qubes 4.3 qrexec" - with
+   no evidence, contradicting a path known to work. Owner: "obvious hallucinatory bullshit that came
+   from context overload."
+If a cause is unknown, the words are "undiagnosed", and the next action is a measurement.

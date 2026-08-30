@@ -473,6 +473,31 @@ rather than forcing, and record the working form here.)
 Then run restore validation (§2.3): state sane → `QTEST_VM=win10-u10 tools/qtest run "echo ok"` →
 guest-read stage attestation.
 
+### 0.7b Getting a Windows guest, and getting QWT onto it (added 2026-08-30 — three wasted reinstalls)
+
+**Cloning a sealed golden takes ~2 seconds. A reprovision takes 17-20 minutes.** Measured the same
+session: `dst.volumes[v].clone(src.volumes[v])` for root+private completed in **1.8 s**, against a
+reprovision that also resets `netvm`, `qrexec_timeout` and tags. R3 is warranted for exactly one
+cell - the one testing Windows-install-plus-QWT-at-first-logon via the answer file. **Reaching for
+`reprovision-usb.sh` for any other reason is a 20-minute mistake**, and it was made three times in
+one night despite the ST0 row already saying so.
+
+**To put the QWT installer in front of a guest, use the mechanism that exists.**
+`qvm-start <vm> --install-windows-tools` = "temporarily attach Windows tools CDROM to the domain".
+It needs dom0; from the mgmt qube it fails with *"Existing block device identifier needed when
+running from outside of dom0 (see qvm-block)"*, so here the equivalent is attaching the ISO as a
+cdrom block device (§0.5 Route A). A custom answer stick with a staged installer, a testsigning
+reboot and a SYSTEM onstart task was built in this session as a parallel mechanism to this one,
+before anyone checked whether Qubes already had it. **Check for the knob before building the
+machine.**
+
+**Channel reality, so it is not rediscovered a fourth time:** a PRISTINE guest has no QWT, therefore
+no qrexec, therefore no way to *launch* anything inside it. Attaching media does not run it. The
+execution channels into a Windows guest are, in order of preference: qrexec (needs QWT already
+installed), the answer file's FirstLogonCommands (only during a fresh install), and a human at the
+console. Any plan that says "clone the pristine golden and install X into it" must name which of
+those three it uses.
+
 ### 0.8 Hard prohibitions (each row is scar tissue)
 
 | Never | Because |
@@ -486,6 +511,9 @@ guest-read stage attestation.
 | Use `attach --persistent` to attach now | It is an alias for `assign --required` = applied at NEXT START; three attempts lost 2026-08-30. Plain `attach` on a running guest; `assign --required` before start when the disc must survive a reboot. |
 | Gate anything on `VERDICT=DESKTOP` | The classifier called a "PC doesn't meet requirements" Setup dialog DESKTOP, twice. It is advisory; READ the image (§0.6b). |
 | Build a Win11 stick without `UNATTEND=...autounattend-win11.xml` | No LabConfig bypasses -> Setup refuses to install on a Qubes HVM (§0.6b). |
+| Reinstall Windows when a sealed golden exists | Clone is 1.8 s, reprovision is 17-20 min and resets netvm/timeout/tags. Done three times in one night (§0.7b). |
+| Build a delivery mechanism before checking for a Qubes knob | An entire custom stick was built parallel to `qvm-start --install-windows-tools` (§0.7b). |
+| Record your own failed attempt as a product property | "stock QWT does not install" was written after MY setup failed; stock installs reliably. A wrong record outlives the session. |
 | Treat silence as absence | A watcher that never sampled is `INVALID-VACUOUS`, never PASS (H2 vacuity gate). |
 | Trust a `0 passed, 0 failed` matrix summary | An unset `CELLS` matches no selector; the run does nothing and still prints a normal-looking footer (§0.9.4). |
 | Reprovision (R3) where R0/R1/R2 reaches the entry stage | Protocol rule (§1.2, §10): ~20 min each, and it destroys the qube's history. |
