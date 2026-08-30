@@ -1,0 +1,4 @@
+# Release setup trees staged into job dirs are release-specific and ~30 MB. The job's onboot.cmd
+# is the artefact worth keeping; the payload is re-staged per release.
+*/setup/
+*/qubes-tools-*.exe
