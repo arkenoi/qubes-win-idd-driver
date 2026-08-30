@@ -22049,3 +22049,75 @@ offering "Run <program>" rather than executing silently — and AutoRun does **n
 prompt remains either way. The honest claim to make afterwards is whichever of those is measured.
 Test: attach the ISO to a running guest, `qtest shot`, read the pixels. Queued behind the
 win10-u10 stock provisioning — one Windows guest at a time.
+
+### 2026-08-30 — stock provisioning: the cause is 1603 from an uncertified driver install, NOT a missing reboot
+
+**This corrects the entry above** (`upgrade-over-stock ... Leading cause: no reboot after phase 2,
+so stock is installed but inactive`). That cause is wrong and is withdrawn. Stock was never
+installed at all.
+
+**Measured.** The guest sat at an idle desktop with testsigning on, no Qubes tray, no qrexec, and
+`qtest shot` returning ONE window containing the whole desktop — i.e. the stubdom video path, so no
+gui-agent. The owner read the guest's own log off the screen: `stock installer rc=1603`.
+
+**Root cause.** `answer-stock-real.img` staged **zero** `SigningCert*.cer` (measured: 0 matches in
+the image). Stock QWT's drivers are signed by a private self-signed "Qubes Windows Tools" CA — six
+distinct certs, decoded from the vendor payload. Without that CA in **TrustedPublisher**, PnP raises
+"Would you like to install this device software?", which stock's own ISO README instructs a human to
+click. `run-stock.cmd` runs as SYSTEM in session 0, where no dialog is even visible, so the driver
+step fails and Burn returns 1603.
+
+**Why the rig had never seen this.** The route that has always worked —
+`answer-stock.iso` → `payload/install-qwt.cmd` — seeds all six certs into Root AND TrustedPublisher
+before touching the MSI, with a comment saying exactly why. The `REAL_STOCK_EXE` route is a SECOND
+implementation I added for the upgrade-over-stock cell and it inherited none of that. Its first real
+run is the failure above.
+
+**Two of my own inferences from this morning are also retracted, loudly:**
+1. *"stage 2 never fired / nobody restarted the guest between stages"* — false.
+   `mgmt/reprovision-usb.sh` (PID 3813669) had been running for 38 minutes as the legitimate owner,
+   restarting the guest on every halt exactly as designed, holding `/tmp/reprovision-win10-u10.lock`.
+   I never checked for it. I then armed two ad-hoc monitors that also stopped and started the guest;
+   one issued a reboot while the MSI was mid-flight. **I was the interference.**
+2. *"a second boot was missing"* — same error, same cause.
+
+**And the work was already done.** `FINDINGS.md` §2026-08-10 records
+"IN-PLACE MSI UPGRADE OVER STOCK: END-TO-END PASS", 12/12 on a clean-room stock 4.2.2 guest with the
+PV boot disk active, plus the full 0x7B investigation, the gate, and the storage re-arm mitigation.
+Last night I even wrote the correct cheap procedure (clone the pristine ST0 golden, install stock
+into the clone, install ours over it) and noted the `/passive` stick route was "constructed tonight
+and has never been exercised here" — then rebuilt the stick route again this morning. Nothing about
+this path needed investigating; what is owed is re-running the existing cell against **4.3.16**.
+
+**Fixes landed** (90fda04, 0f6fcaa): certs seeded before the bundle runs; `/log C:\stock-burn.log`;
+helper scripts staged as real files instead of `echo`-generated nested batch; and — because a
+QWT-less guest has no qrexec and the screen is its only channel — a failure now drops a
+self-deleting script into the all-users Startup folder and reboots once, so autologon opens both
+logs in Notepad where `qtest shot` can read them. Previously a failure here was completely mute,
+which is why it went unnoticed for hours.
+
+**Standing decision:** once this guest comes up it is SEALED as the reusable stock golden. Every
+later upgrade-over-stock run clones from it. No stick, no Windows reinstall — which is what
+`FINDINGS` §5969 ("reprovision one reusable stock guest") and the no-reinstall rule already required.
+
+### 2026-08-30 — golden custody: the tamper signal was dead in all four seals
+
+`mgmt/golden.sh` read the revision list by shelling out to `qvm-volume revisions`. **That subcommand
+does not exist** in this client (`info|config|set|resize|extend|list|revert|import|clear`). The
+helper swallowed the failure and returned "", so every seal recorded `revisions: []`.
+
+Consequence: "VERIFIED intact" compared **only** volume size and qube properties — neither of which
+changes when a golden is booted and shut down. Booting a golden is the exact modification the tool
+exists to forbid, so the check could not fail for its own purpose. Campaign `20260830-062519`'s
+custody claim is correspondingly weaker than `docs/RELEASE-NOTES-4.3.16.md` stated; the note is
+corrected there rather than quietly repaired.
+
+Fixed: revisions are parsed out of `qvm-volume info` (they are printed under "List of available
+revisions (for revert):"), and a missing section now ABORTS the seal instead of silently emptying
+it. Proven on real data, not asserted: a clean shutdown of win10-u10 added `1788080291-back`, and a
+halted AppVM seals with its private revisions populated (`root: []` there is correct — an AppVM's
+root is a template snapshot with no revisions of its own).
+
+All four goldens re-sealed. Their drift against the old seals was ENTIRELY the revisions field and
+is an artefact of the fix, **not** evidence of tampering — and equally not evidence of innocence,
+since there was never a valid baseline. The new seals record that limitation in their note.
