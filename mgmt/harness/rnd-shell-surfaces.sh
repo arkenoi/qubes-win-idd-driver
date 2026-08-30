@@ -36,7 +36,7 @@ set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 require_scripts(){ local m=""; for s in "$@"; do [ -f "$s" ] || m="$m $s"; done
   [ -z "$m" ] || { echo "FATAL: required guest script(s) missing:$m" >&2; exit 2; }; }
-require_scripts guest/surface-watch.ps1 guest/fire-toast.ps1 guest/run-as-user.ps1 tools/qtest-geom
+require_scripts guest/surface-watch.ps1 guest/fire-toast.ps1 guest/run-as-user.ps1 guest/dismiss-toast.ps1 tools/qtest-geom
 
 VM="${1:?usage: $0 <vm> [outdir]}"
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/RNDSHELL-$VM}"
@@ -139,7 +139,13 @@ echo "$st" | grep -qa '"detector_fires":true' || {
 # fact appeared. Restarting ShellExperienceHost dismisses everything it owns and it respawns on
 # demand, so the run starts from a known scene instead of inheriting the last one.
 log "=== scene reset: dismiss any leftover notifications ==="
-r 'cmd /c taskkill /f /im ShellExperienceHost.exe & taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
+# Killing ShellExperienceHost is NOT enough - the platform re-shows a reminder-scenario toast when
+# the host respawns (measured: three runs in a row started with a leftover toast on screen). The
+# toast has to be removed from the per-user NOTIFICATION HISTORY, which means running as the user.
+q push guest/dismiss-toast.ps1 >/dev/null 2>&1
+r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
+T=300 q pushrun guest/run-as-user.ps1 -Tag dismiss -Script "$GUEST\\dismiss-toast.ps1" 2>/dev/null \
+  | tr -d '\r' | grep -a '^{' | head -1 | sed 's/^/    /'
 sleep 8
 geom > "$TMP/gr.txt"; pre=$(parse_geom "$TMP/gr.txt"); preo=$(echo "$pre" | cut -d'|' -f2)
 log "  after reset: total=${pre%%|*} override_redirect=$preo"
