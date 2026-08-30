@@ -158,7 +158,11 @@ run_cell(){
   local mark; mark=$(T=200 q pushrun "$TMP/p5-mark.ps1" | tr -d '\r' | grep -ao 'AGENTMARK [0-9]*' | awk '{print $2}')
   local gf="C:\\ProgramData\\Qubes\\fsgate-$id.txt"
   q run "cmd /c del /q $gf 2>nul & exit 0" >/dev/null 2>&1
-  q run "cmd /c start \"\" cmd /c \"powershell -NoProfile -ExecutionPolicy Bypass -File $GUEST\\fsgate-probe.ps1 -Mode $mode -HoldSeconds 220 -HostWidth $HOSTW -HostHeight $HOSTH > $gf 2>&1\"" >/dev/null 2>&1
+  # -WindowStyle Hidden and NO shell redirection: the previous form wrapped the probe in
+  # `cmd /c "... > file"`, whose CONSOLE WINDOW (979x512) is itself mapped by the agent. The harness
+  # counted it and reported SG2/SG4 as FAIL - "a screen-sized window reached dom0" - when the only
+  # extra window was the launcher's own console and the probe had been denied correctly.
+  q run "cmd /c start \"\" powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File $GUEST\\fsgate-probe.ps1 -Mode $mode -HoldSeconds 220 -HostWidth $HOSTW -HostHeight $HOSTH -OutFile $gf" >/dev/null 2>&1
 
   if ! wait_probe_ready "$gf"; then
     log "  -> INVALID-INSTRUMENT: the probe never reported a created window; this cell grades nothing"
@@ -167,11 +171,26 @@ run_cell(){
   fi
   local probe; probe=$(T=200 q run "cmd /c type $gf" | tr -d '\r' | grep -a '^{' | head -1)
 
-  local best=0 bestdims="" saw_control=no n dims d
+  # Identify the probe BY SIZE, not by a window count. A count is fooled by anything else that
+  # happens to be on the desktop - a stray Notepad left by an aborted run, an installer, a toast -
+  # in BOTH directions: a leftover window fakes "the gate leaked", and a probe that maps while
+  # something else closes fakes "nothing mapped". The probe reports its own rect, and on a
+  # contained screen the gap is wide (probe 1024x768 vs a Notepad at 744x501 = 73% of width).
+  local pw ph
+  pw=$(echo "$probe" | grep -ao '"rect":"[0-9]*,[0-9]* [0-9]*x[0-9]*"' | grep -ao '[0-9]*x[0-9]*' | cut -dx -f1)
+  ph=$(echo "$probe" | grep -ao '"rect":"[0-9]*,[0-9]* [0-9]*x[0-9]*"' | grep -ao '[0-9]*x[0-9]*' | cut -dx -f2)
+  local probe_mapped=no saw_control=no alldims="" n dims d
   for _ in $(seq 1 6); do
     d=$(mapped_list "$id"); n=${d%%|*}; dims="${d#*|}"
     control_alive "$dims" && saw_control=yes
-    if [ "${n:-0}" -gt "$best" ]; then best=$n; bestdims="$dims"; fi
+    alldims="$alldims $dims"
+    # tolerance: the agent trims the invisible resize border on captioned windows
+    # (measured 1600x900 -> 1586x893), so match at >=93% width and >=88% height.
+    for wh in $(echo "$dims" | tr ',' ' '); do
+      local mw=${wh%x*} mh=${wh#*x}
+      [ -z "$mw" ] && continue
+      if [ "$mw" -ge $(( pw * 93 / 100 )) ] && [ "$mh" -ge $(( ph * 88 / 100 )) ]; then probe_mapped=yes; fi
+    done
     sleep 10
   done
   local hits nh
@@ -184,7 +203,7 @@ run_cell(){
   local existed=no
   echo "$probe" | grep -qa '"visible":true' && existed=yes
   log "  probe: ${probe:-NONE}"
-  log "  dom0 windows=$best [${bestdims:-none}]  control_seen=$saw_control  '${disc}' hits=${nh:-0}"
+  log "  probe ${pw}x${ph} mapped=$probe_mapped  control_seen=$saw_control  dom0 dims:${alldims:- none}  '${disc}' hits=${nh:-0}"
 
   if [ "$existed" != yes ]; then
     log "  -> INVALID-VACUOUS: probe window never existed"
@@ -197,23 +216,23 @@ run_cell(){
   fi
 
   if [ "$expect" = nomap ]; then
-    if [ "$best" -le "$CONTROL_N" ] && [ "${nh:-0}" -gt 0 ]; then
-      log "  -> PASS-UNPROVEN: only the control mapped, AND the agent logged the deny"
-      printf '%s\tnot-mapped\tPASS-UNPROVEN\tdom0=%s (control %s), %s x%s\t\n' "$id" "$best" "$CONTROL_N" "$disc" "${nh}" >> "$OUT/verdicts.tsv"
-    elif [ "$best" -gt "$CONTROL_N" ]; then
-      log "  -> FAIL: $best windows vs control $CONTROL_N - a screen-sized window reached dom0"
-      printf '%s\tnot-mapped\tFAIL\tdom0=%s [%s] vs control %s\t\n' "$id" "$best" "$bestdims" "$CONTROL_N" >> "$OUT/verdicts.tsv"; rc=1
+    if [ "$probe_mapped" = no ] && [ "${nh:-0}" -gt 0 ]; then
+      log "  -> PASS-UNPROVEN: no ${pw}x${ph} window in dom0, AND the agent logged the deny"
+      printf '%s\tnot-mapped\tPASS-UNPROVEN\tno %sx%s in dom0 (control seen), %s x%s\t\n' "$id" "$pw" "$ph" "$disc" "${nh}" >> "$OUT/verdicts.tsv"
+    elif [ "$probe_mapped" = yes ]; then
+      log "  -> FAIL: a ${pw}x${ph} window reached dom0 - the gate leaked"
+      printf '%s\tnot-mapped\tFAIL\t%sx%s present in dom0 dims:%s\t\n' "$id" "$pw" "$ph" "$alldims" >> "$OUT/verdicts.tsv"; rc=1
     else
       log "  -> INVALID-VACUOUS: nothing extra mapped but the agent never logged the deny"
       printf '%s\tnot-mapped\tINVALID-VACUOUS\t0 discriminator hits\t\n' "$id" >> "$OUT/verdicts.tsv"; rc=1
     fi
   else
-    if [ "$best" -gt "$CONTROL_N" ]; then
+    if [ "$probe_mapped" = yes ]; then
       log "  -> PASS-UNPROVEN: the captioned screen-sized window mapped, as the README requires"
-      printf '%s\tmapped\tPASS-UNPROVEN\tdom0=%s [%s] vs control %s\t\n' "$id" "$best" "$bestdims" "$CONTROL_N" >> "$OUT/verdicts.tsv"
+      printf '%s\tmapped\tPASS-UNPROVEN\t%sx%s present in dom0 dims:%s\t\n' "$id" "$pw" "$ph" "$alldims" >> "$OUT/verdicts.tsv"
     else
       log "  -> FAIL: a captioned windowed-fullscreen window did NOT map - the gate over-fired"
-      printf '%s\tmapped\tFAIL\tdom0=%s [%s], control %s\t\n' "$id" "$best" "$bestdims" "$CONTROL_N" >> "$OUT/verdicts.tsv"; rc=1
+      printf '%s\tmapped\tFAIL\tno %sx%s in dom0 dims:%s\t\n' "$id" "$pw" "$ph" "$alldims" >> "$OUT/verdicts.tsv"; rc=1
     fi
   fi
 }

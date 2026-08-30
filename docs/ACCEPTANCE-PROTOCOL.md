@@ -926,6 +926,32 @@ second. That string named a guest condition for a dom0-side tooling fault; the s
 `empty_client_list` / `no_window` / `geometry_unreadable` separately (`dom0/10-install-resize-service.sh`
 v5), but **dom0 must reinstall it** before the new strings appear.*
 
+**P5-3b. THE CAPTURE PATH MUST BE PROVEN ALIVE IN THE SAME MEASUREMENT.** Run
+`mgmt/harness/p5-run.sh <vm>`, which encodes P5-3 through SG9. Three harness defects were found on
+2026-08-30 by grading a cell against the agent's own log instead of trusting the harness; each is
+now structural, and each would silently reappear in a hand-run cell:
+
+1. **A fixed settle is not a readiness signal.** An 18 s sleep is shorter than PowerShell's runtime
+   `Add-Type` C# compile, so the probe window did not exist when the shot was taken, `qtest shot`
+   returned an empty tar, and the harness read that as "the gate denied it". **SG3 was scored FAIL
+   against a window the agent had MAPped** (`SendWindowMap ... ovr=0, vis=1, 1586x893`). Wait on the
+   probe's own `"visible":true` output, then sample dom0 repeatedly.
+2. **"Nothing mapped" from an unvalidated capture path is not a result.** A small Notepad now stays
+   mapped for the whole run; **a cell whose shot cannot see the control is `INVALID-INSTRUMENT`,
+   never a pass.** Without this, a blind tool manufactures safeguard passes.
+3. **Count the PROBE, not the windows.** Launching via `cmd /c start "" cmd /c "... > file"` gives
+   the redirection a console window, and that console (979x512) is itself mapped — the harness
+   counted it and reported SG2 and SG4 as **FAIL, "a screen-sized window reached dom0"**, when the
+   only extra window was its own launcher. Launch with `powershell -WindowStyle Hidden` and
+   `-OutFile`, and identify the probe **by size** (>=93% width, >=88% height of its reported rect;
+   the agent trims the invisible resize border, measured 1600x900 -> 1586x893).
+
+**The probe is `guest/fsgate-probe.ps1`.** It sets exact styles, reads them BACK with
+`GetWindowLong`, and prints hwnd/style/exstyle/rect/covers_screen as the cell's vacuity proof. On
+the borderless arm `WS_SYSMENU|WS_EX_APPWINDOW` is load-bearing: without it `IsPopup()`
+(`agent/gui-agent/main.c:1221`) classifies the window override-redirect, so it is denied by the
+**Mode 1** branch and the cell passes without ever reaching the Mode 2 gate it exists to test.
+
 **P5-4. Run the "must not map" cells** (SG1 Mode-1, SG2 borderless, SG4 override-redirect, SG9
 Start, SG10 furniture). For each, the verdict needs **two** things: nothing mapped in dom0 **and**
 the agent's own deny line proving the surface existed and was evaluated. A silent absence is

@@ -29,9 +29,21 @@ param(
     # agent (CREATE+MAP, ovr=0) yet never appears in dom0's _NET_CLIENT_LIST, while a 1176x600
     # notepad in the same shot does.
     [int]$Width = 0,
-    [int]$Height = 0
+    [int]$Height = 0,
+    # Write this script's own output here. WHY: launching it as
+    # `cmd /c start "" cmd /c "powershell ... > file"` gave the redirection a CONSOLE WINDOW, and
+    # that console (979x512) is itself mapped by the agent. The P5 harness counted it and reported
+    # "2 windows vs control 1 - a screen-sized window reached dom0" for SG2 and SG4 - a FAIL
+    # manufactured entirely by the launcher, while the 1024x768 probe had in fact been denied
+    # correctly. Writing our own file lets the launcher use `powershell -WindowStyle Hidden` with
+    # no shell redirection and therefore no extra window.
+    [string]$OutFile = ''
 )
 $ErrorActionPreference = 'Stop'
+
+$script:OutLines = @()
+function Emit($t) { $script:OutLines += $t; Write-Output $t
+    if ($OutFile) { $script:OutLines | Out-File -FilePath $OutFile -Encoding ASCII } }
 
 Add-Type -TypeDefinition @'
 using System;
@@ -135,10 +147,10 @@ $sw = [FsGate]::GetSystemMetrics(0); $sh = [FsGate]::GetSystemMetrics(1)
 # --- containment gate ---------------------------------------------------------------------------
 if ($HostWidth -gt 0 -and $HostHeight -gt 0) {
     if (-not ($sw -lt $HostWidth -and $sh -lt $HostHeight)) {
-        Write-Output '=== RESULT ==='
-        @{ ok = $false; error = 'containment_absent'
+        Emit '=== RESULT ==='
+        Emit ((@{ ok = $false; error = 'containment_absent'
            guest_screen = "${sw}x${sh}"; host_screen = "${HostWidth}x${HostHeight}"
-           note = 'guest screen is not strictly smaller than the host - refusing to open a screen-sized window on the owner display (P5-3)' } | ConvertTo-Json -Compress
+           note = 'guest screen is not strictly smaller than the host - refusing to open a screen-sized window on the owner display (P5-3)' } | ConvertTo-Json -Compress))
         exit 3
     }
 }
@@ -155,8 +167,8 @@ $WS_CAPTION = 0x00C00000
 
 # This block is the VACUITY PROOF: it shows the surface existed, was visible, carried the styles the
 # cell is about, and covered the guest screen. Without it "nothing mapped" grades nothing.
-Write-Output '=== PROBE ==='
-@{ mode = $Mode
+Emit '=== PROBE ==='
+Emit ((@{ mode = $Mode
    hwnd = ('0x{0:X}' -f $h.ToInt64())
    style = ('0x{0:X8}' -f $style); exstyle = ('0x{0:X8}' -f $ex)
    has_caption = (($style -band $WS_CAPTION) -ne 0)
@@ -164,9 +176,9 @@ Write-Output '=== PROBE ==='
    rect = "$($r.L),$($r.T) $($r.R - $r.L)x$($r.B - $r.T)"
    guest_screen = "${sw}x${sh}"
    covers_screen = (($r.R - $r.L) -ge [int]($sw * 0.99) -and ($r.B - $r.T) -ge [int]($sh * 0.99))
-   hold_seconds = $HoldSeconds } | ConvertTo-Json -Compress
+   hold_seconds = $HoldSeconds } | ConvertTo-Json -Compress))
 
 [FsGate]::Pump($HoldSeconds)
 [FsGate]::Destroy()
-Write-Output '=== RESULT ==='
-@{ ok = $true; mode = $Mode; destroyed = $true } | ConvertTo-Json -Compress
+Emit '=== RESULT ==='
+Emit ((@{ ok = $true; mode = $Mode; destroyed = $true } | ConvertTo-Json -Compress))
