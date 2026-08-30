@@ -211,7 +211,14 @@ run_install(){ # $1=vm $2=label $3=payload-dir $4=extra-args
   # cell that never watched is INVALID-VACUOUS, never a PASS - so the absence has to be backed by a
   # timestamped record of having looked, at a known rate, over the interval that matters.
   QTEST_VM=$vm timeout -k 5 120 ./tools/qtest push guest/reboot-dialog-watch.ps1 >/dev/null 2>&1
-  QTEST_VM=$vm qrun "cmd /c start \"dlgwatch\" /min powershell -NoProfile -ExecutionPolicy Bypass -File $INC\\reboot-dialog-watch.ps1 -Minutes 45" >/dev/null 2>&1
+  # -DurationSeconds, NOT -Minutes. The script's param block has no -Minutes (OutFile,
+  # IntervalSeconds, DurationSeconds, Summary, SelfTest), so PowerShell rejected the unknown
+  # parameter and the watcher exited INSTANTLY, every time, writing no log at all. The failure was
+  # invisible because it is launched with `start /min` and its output goes nowhere: the cell then
+  # reported "watcher produced NO summary - INVALID", which fails closed and so never produced a
+  # false PASS - but it also meant the dialog criterion could never actually be met. Measured
+  # 2026-08-30 on win10-app: no jsonl, no powershell process.
+  QTEST_VM=$vm qrun "cmd /c start \"dlgwatch\" /min powershell -NoProfile -ExecutionPolicy Bypass -File $INC\\reboot-dialog-watch.ps1 -DurationSeconds 2700" >/dev/null 2>&1
   say "  $lbl: reboot-dialog watcher armed"
   QTEST_VM=$vm qrun "cmd /c start \"\" /min C:\\$d\\install.cmd /auto /autologon:qubes $extra" >/dev/null 2>&1
   # SEED_DELAY: write the PV reboot Request mid-MSI, which is when the field gets it.
