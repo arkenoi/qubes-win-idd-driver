@@ -22585,3 +22585,35 @@ Also confirmed fixed in this lineage: `win10-tpl`/`win11-tpl` now carry **20 GiB
 (inherited from the C1 exits, which came from bases built with the corrected reprovision script), and
 `user_data_on_private` passes — so the 2 GiB `D:`-with-no-`Q:` trap that broke `qubes.Filecopy` is
 gone for everything this campaign derives.
+
+## 2026-08-30 — C3 ACCEPTED on both OSes: upgrade over our PREVIOUS release (E2xD1)
+
+`C3.10` and `C3.11`, 14 PASS / 1 N/A each, 0 FAIL. **This is the path RELEASE-NOTES-4.3.16 listed
+as "NOT tested, stated plainly: Upgrade over a previous QWT-NG release ... unverified for this
+build."** It is now measured on both operating systems.
+
+**Why it was unreachable before.** The goldens were built from the candidate, so an "upgrade" cell
+cloned a guest that already had 4.3.16 on it and the installer correctly took the same-version
+branch. The fix was not a harness change but a precondition change: build the entry image from the
+PREVIOUS release. `mgmt/harness/prime-run.sh win10-base win10-u14 ours --payload <4.3.14 setup>`
+does it in ~4 minutes from a sealed pristine base, which is why keeping a 4.3.14 golden around
+forever was never necessary (owner decision, same day).
+
+**The fixture was verified before use, not assumed.** Probing the built guest returned
+`PRODUCT Qubes Windows Tools v4.3.14.0 :: 4.3.14.0`. A fixture that had silently carried the
+candidate would have turned C3 into another reinstall test — the exact failure being corrected.
+
+**What the installer itself reported** (P1.0: its own lines are the branch authority):
+
+    installed QWT (4.3.14.0) is older than this package (4.3.16) - IN-PLACE MSI major upgrade,
+      no uninstall, no intermediate reboot
+    upgrade_mode: in-place-msi-major-upgrade          <- matches the cell's declared EXPECT_MODE
+    PRECONDITION lines in the run slice: 1            <- no mid-reboot, as the cell requires
+    inbox_disk_rearm: done
+    REFUSING: 0 occurrences
+
+Boot-path acceptance passed on both exits: health-check every check asserted, PV disk and PV console
+bound, IDD driving the desktop, pixels change in dom0, chrome intact.
+
+**Both 4.3.14 fixtures were removed immediately after their cells** and their receipts deleted, per
+the standing decision that only the two pristine bases are kept. Pool returned to ~146 GB free.
