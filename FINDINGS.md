@@ -22121,3 +22121,42 @@ root is a template snapshot with no revisions of its own).
 All four goldens re-sealed. Their drift against the old seals was ENTIRELY the revisions field and
 is an artefact of the fix, **not** evidence of tampering — and equally not evidence of innocence,
 since there was never a valid baseline. The new seals record that limitation in their note.
+
+### 2026-08-30 — the PRISTINE completion gate declared a mid-install guest finished (instrument bug, fixed)
+
+**Found by reading the image, which is the only reason it was caught.** `reprovision-usb.sh`
+PRISTINE mode reported `exit=3` ("candidate desktop after 900s, NEEDS VISUAL CONFIRMATION") for
+`win10-base`. The saved capture shows **Windows Setup, "Installing Windows", status "Installing
+updates"** — the install was minutes from finished, not finished.
+
+**Cause.** The function's own header has always claimed it "waits for the screen to go quiet". It
+never did. The only conditions were:
+
+    [ "$v" = "VERDICT=DESKTOP" ] && [ "$el" -ge 900 ]
+
+and §0.8 of the protocol already records that the classifier calls Setup dialogs DESKTOP (twice
+before). So the gate fired at the earliest instant both conditions could hold. A comment describing
+behaviour the code does not implement is worse than no comment: it is what stopped me looking here.
+
+**Two real consequences, not just a wrong log line:**
+1. **The guest was abandoned mid-install.** The wait loop is also what restarts the qube on every
+   halt (`on_reboot=destroy` means each Setup reboot halts it). Exiting the loop left nothing to do
+   that, so the guest would have stopped dead at its next reboot.
+2. **It caused a second Windows guest to run concurrently** (H3.6). My chain script treated exit 3
+   as permission to start the next build, so `win11-base` began provisioning while `win10-base` was
+   still installing. Both were found Running.
+
+**Fixes.**
+- The gate now needs THREE conditions: `elapsed >= 900`, the DESKTOP verdict, **and CPU idle for
+  three consecutive samples** read via `admin.vm.Stats` — which needs no qrexec, so it works on
+  exactly the QWT-free guest this mode exists for. Setup copying files and installing updates is
+  busy; it fails the third condition even when it fools the first two.
+- It still exits 3 and still demands the image be read. An idle guest is not necessarily a finished
+  one — a Setup dialog awaiting input is idle too.
+- The build script no longer chains. Exit 3 means "a human must look", which cannot be automated
+  away, so it builds ONE base and stops. It also refuses to start when any `win10*`/`win11*` guest
+  is not Halted.
+
+**Standing lesson:** when a comment claims a safeguard, check that the code has it. Two of today's
+defects — this one and `golden.sh`'s dead revision reader — were safeguards that existed only in
+prose while the code did something weaker.
