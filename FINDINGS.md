@@ -21882,3 +21882,41 @@ owner told me hours ago not to reinstall where a clone will do; I wrote that rul
 That also removes the stick entirely from the stock cell, which is what made it fragile: a fresh
 Windows install plus an untested unattended installer invocation, when the only thing under test is
 "ours installs over stock".
+
+## 2026-08-30 — CORRECTION: the goldens carry the release UNDER TEST, so the "fresh" cells were same-version reinstalls
+
+Owner asked why the current release goes into the golden images and what the protocol says. The
+protocol says the opposite of what I built.
+
+**§2.1 ST2G: "golden ours — ACCEPTED release on the standing golden."** Accepted, i.e. a known-good
+prior baseline. I built `win10-goldr`/`win11-goldr` carrying release 6022427 (4.3.16) - the very
+release under test - which is circular: the candidate is being measured against a baseline made
+from itself.
+
+**Consequence, confirmed on the installer's own authority** (P1.0: `upgrade_mode`+`stage` are the
+authority on the branch taken), from campaign 20260830-062519:
+
+    "upgrade_mode":"in-place-same-version-reinstall"
+    "installed_qwt":[{"name":"Qubes Windows Tools v4.3.16.0"}]
+
+So `cell_fresh_1stage` and `cell_seeded` were NOT exercising **D0 (clean install)**. Every clone
+already carried 4.3.16, so the installer took **D2 (same-version reinstall, REINSTALL=ALL)** - which
+is a real and useful path (protocol cell C6), but not the one the cell names claim.
+
+**What campaign 20260830-062519 (36/0) therefore actually proves:**
+ - the SAME-VERSION REINSTALL path (C6/D2) on Win10 and Win11, including under the seeded
+   pending-reboot condition - all seven/eight assertions, dialog watched, PV console bound;
+ - AppVM cold-boot window mapping, 3x each.
+It does NOT prove the clean-install path D0, and I described it as "fresh install" throughout.
+That characterisation is RETRACTED.
+
+**What does cover D0:** the two-stage grade on `win10-u10` (9/0), which ran on a guest provisioned
+from pristine media - no QWT present, `testsigning_active:false` at stage 1. That is a genuine
+clean install, and it is the only D0 evidence in this session.
+
+**The fix, per the protocol:** a golden must carry an ACCEPTED release, not the candidate. Then
+ - clean-install cells enter from ST0 (pristine) - `win10-gold0`/`win11-gold0` are sealed and ready;
+ - upgrade-over-ours cells clone the ST2G golden carrying the PREVIOUS accepted release and install
+   the candidate over it, which is what makes them an upgrade test rather than a reinstall test;
+ - same-version reinstall (C6) is the cell that legitimately wants candidate-over-candidate.
+Building the goldens from the candidate collapsed all three into one.
