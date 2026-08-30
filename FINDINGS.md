@@ -22427,3 +22427,53 @@ Standing lesson, and it is the same one twice in one day: **the CPU-quiescence p
 gate, and now this** all failed by grading on a proxy (a timer, a verdict string) instead of the
 signal. Judge the thing itself, and when the instrument and the guest disagree, re-measure before
 believing the instrument.
+
+## 2026-08-30 — C1 (clean install) is reachable at last, and the first attempt hung on `pause`
+
+Campaign `20260830-acceptance-4.3.16`, release `4.3.16+agent.409439d8cc46` (`0f6fcaa`, CI run
+33303456913). Gate 0 PASS (76 files), G0 PASS (8 catalogs, 0 unsigned, 3 signers, all matched a
+shipped `.cer`), G0 negative control PASS.
+
+**Why C1 needed new machinery.** `matrix.sh`'s `cell_fresh_1stage`/`cell_fresh_2stage` both open with
+`w_session` + `push_payload`, which need qrexec, which needs QWT already installed. So they can only
+clone a golden that already carries our package — which is precisely why every "fresh install" cell
+in campaign `20260830-062519` took the same-version-reinstall branch. A genuine D0 clean install has
+to enter from a pristine base, and a pristine base has no qrexec, so the primer is the only way in.
+`mgmt/prime-jobs/ours` + `mgmt/harness/prime-run.sh` close that gap.
+
+### The failure: `install.cmd` bare ends at `pause`, and session 0 cannot press a key
+
+C12 folds into C1 by running stage 1 twice before the reboot, to exercise the installer's documented
+property that *"the stage is DETECTED, not remembered"*. I used **bare** `install.cmd` for the
+repeats because bare exits 10 without rebooting — which is true, and which I verified. What I did
+not verify is that bare is also INTERACTIVE:
+
+    install.cmd:201    if not defined AUTO pause
+
+Deliberate, and correct for its purpose: it keeps the window open so a double-click user can read
+the outcome, and it is skipped under `/auto` because the machine is already rebooting on a timer.
+This job is neither — it runs as SYSTEM in session 0, where nothing can ever press a key. The first
+pass completed stage 1 and then sat at that prompt indefinitely.
+
+**What it looked like from outside, and why that matters:** guest idle at **0–3% CPU**, desktop up,
+autologon done, no dialog visible in any capture — because the prompt is on session 0's invisible
+console. That is indistinguishable from *"the primer never fired"*, and chasing the primer is
+exactly the wrong layer; it is the same trap the primer selftest exists to prevent.
+
+**What actually discriminated it:** CPU. A real install on this rig runs at **125–162**; the stuck
+run sat at **0–3**. After adding `<nul` to the bare invocations the same job showed 125–162 within a
+minute. Idle CPU during a nominal install is the signature — not the screen, which looks identical
+either way.
+
+Fixed with `<nul` on the bare runs only: `pause` reads a key from stdin, and NUL gives it EOF
+immediately. One variable changed on the proven route; the `/auto` run is untouched.
+
+### A second defect this surfaced, not yet fixed at the time of writing
+
+`prime-run.sh` terminates on "the guest answers qrexec". On a **fresh** PV-driver install that
+signal never arrives without a reboot: the driver swap tears down the vchan qrexec runs on.
+`verify_installed` already documents this and handles it (no qrexec → wait for CPU quiet → reboot →
+wait for session), and stock QWT's own installer reboots itself, but ours deliberately does not —
+its closing line says the caller reboots. So `prime-run.sh` will sit until its deadline on a
+**successful** install. Tracked; the fix is to port `verify_installed`'s logic, and it cannot be
+applied while a run is in flight (H3.6 forbids editing a running script).
