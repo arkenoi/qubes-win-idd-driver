@@ -180,6 +180,9 @@ while [ $(( $(date +%s) - t0 )) -lt "$BUDGET" ]; do
             log "  An idle guest is not necessarily a FINISHED one - a Setup dialog awaiting input is idle too."
             exit 3
         fi
+    # -ge 2, not -ge 1, because qtest run echoes the prompt line WITH THE COMMAND on it, so
+    # 'echo BOOT_OK' always matches once from the echo alone. Two matches = the guest actually ran it.
+    # (Stated explicitly because the same echo silently inflated counts in two other harnesses.)
     elif [ "$(QTEST_VM=$VM timeout 25 ./tools/qtest run 'echo BOOT_OK' 2>&1 | tr -d '\r\0' | grep -c BOOT_OK)" -ge 2 ]; then
         log "qrexec alive after $(( $(date +%s) - t0 ))s"
         exit 0

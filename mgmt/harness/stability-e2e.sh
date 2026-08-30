@@ -263,7 +263,11 @@ EOF
   # Did the install survive it, and is the guest left in the shipping state?
   local XS XR
   XS=$(qrun 'cmd /c sc qc xenbus_monitor | findstr START_TYPE' 2>/dev/null | tr -d '\r' | grep -ao 'DISABLED\|AUTO_START\|DEMAND_START' | head -1)
-  XR=$(qrun 'cmd /c reg query "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request" /s /reg:64 2>nul | findstr /i Reboot' 2>/dev/null | tr -d '\r' | grep -ac 'Reboot')
+  # `grep -av 'system32>'` is load-bearing: qtest run echoes the PROMPT LINE WITH THE COMMAND on it,
+  # and that line contains the word "Reboot" from the findstr argument - so this count came back one
+  # too high on every run, reporting a pending Request where there were none. Same trap cost a whole
+  # SG6 fail-proof run on 2026-08-31 (it read explorer=1 from the echo and reported NOT RED).
+  XR=$(qrun 'cmd /c reg query "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Request" /s /reg:64 2>nul | findstr /i Reboot' 2>/dev/null | tr -d '\r' | grep -av 'system32>' | grep -ac 'Reboot')
   # A pending Request is NOT a failure: the driver re-files it on any boot that still needs the
   # binding, and the installer's own comment says so. What must hold is that nothing can ANSWER it
   # with a modal - i.e. the monitor is disabled. Report the count, judge the service state.
