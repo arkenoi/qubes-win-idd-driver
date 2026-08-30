@@ -22547,3 +22547,41 @@ path than Win10 — stage-1 reboot at t+234s vs t+142s, qrexec back at t+410s vs
 still writing its RESULT after qrexec answered on both. That gap is exactly what made the old
 timer-based selftest exit early on Win11 and call a working primer broken. Wait on the SIGNAL
 (`stage2-install ok:true`), never on an elapsed-time guess.
+
+## 2026-08-30 — C6 ACCEPTED on both OSes: same-version reinstall (E2xD2)
+
+`C6.10` 15 PASS / 1 N/A, `C6.11` 15 PASS / 1 N/A, 0 FAIL. Entry for each is the corresponding C1
+exit, which genuinely carries N — the PRECONDITION reads
+`installed_qwt=[Qubes Windows Tools v4.3.16.0]`, and the installer's own branch is
+`in-place-same-version-reinstall`, matching the cell's declared `EXPECT_MODE`. This is the first
+time that branch has been asserted against a claim rather than merely observed after the fact.
+
+The three C6-specific criteria, read from the installer's own log rather than inferred:
+
+    running msiexec ADDLOCAL=PvDriversCore,Core,Gui,PvDriversNetwork,PvDriversDisk,MoveUsers REINSTALL=ALL
+    installed QWT (4.3.16.0) is the SAME version as this package (4.3.16) - IN-PLACE
+      reinstall/repair (REINSTALL=ALL), no uninstall, no intermediate reboot
+    pnputil(xenvif): Driver package added successfully. (Already exists in the system)   <- the 259 case
+    REFUSING  ->  0 occurrences                    <- the 2026-08-11 PV-gate regression guard holds
+
+Note `PvDriversDisk` present in ADDLOCAL — the `24a1ded` regression stays fixed on the reinstall
+path too, which matters because that is the feature whose absence defines the `ours-nopvdisk` shape.
+
+Boot-path acceptance passed on both exits (health-check every check asserted, pixels change in dom0,
+chrome intact). Both cells ran on `netvm=''` guests, so the premature-reboot dialog is N/A by the
+protocol's own vacuity clause; NET-6 owns that claim.
+
+### Pool discipline during the campaign
+
+The pool crossed into AMBER (86.3% used, 119.5 GB free) after the C1 exits and template installs.
+Ran prune-ladder step 1 — removed `win10-u10` and `win11-24h2`, both unsealed churn StandaloneVMs
+with nothing derived from them and their evidence already in FINDINGS rather than on their disks —
+recovering to **83.1% used, 148.1 GB free**. Fixtures are built ONE AT A TIME and removed after
+their cell, so at most one extra image is alive at any moment. The four superseded seals
+(`*-gold0`, `*-goldr`, ~48 GB) are still on disk: removing a sealed golden needs owner sign-off
+per 2.6 ladder step 4, and it has not been needed.
+
+Also confirmed fixed in this lineage: `win10-tpl`/`win11-tpl` now carry **20 GiB** private volumes
+(inherited from the C1 exits, which came from bases built with the corrected reprovision script), and
+`user_data_on_private` passes — so the 2 GiB `D:`-with-no-`Q:` trap that broke `qubes.Filecopy` is
+gone for everything this campaign derives.
