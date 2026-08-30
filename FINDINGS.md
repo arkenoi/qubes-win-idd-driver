@@ -21981,3 +21981,30 @@ wearing a different symptom. Finding the consequence of my own miss is not findi
 Recorded because the summary I gave overstated what unsupervised running produced, and the pattern
 matters more than the tally: the autonomous cycle was good at generating work and bad at finding
 defects in the product it was meant to be testing.
+
+## 2026-08-30 — our release ISO carries no autorun.inf (stock's behaviour is the comparison to confirm)
+
+Owner, explaining what `qvm-start --install-windows-tools` is for: *"yes, iso autoruns, that's the
+point"*. That knob attaches dom0's Qubes Windows Tools CDROM to a guest, and the ISO running itself
+is how QWT gets installed into a Windows guest that has no qrexec yet.
+
+**Measured on our side:** the release ISO contains **no `autorun.inf`**. Its top level is
+`install.cmd`, `qubes-tools-<ver>.exe` (the stock-shape entry point), `msi/`, `idd-driver/`,
+`reference/`, `tools/`. Verified on both `qwt-413.iso` and the ISO from the current build - zero
+matches for `autorun.inf`.
+
+**Not verified here:** whether the STOCK tools ISO carries one. The dom0
+`qubes-windows-tools` package is not reachable from this qube, and the local extracted copy
+(`/home/user/win-iso/qwt-iso/attached/`) is empty. So the comparison "stock autoruns, ours does not"
+is stated as HALF-MEASURED: our half is certain, stock's half is the owner's report.
+
+**If stock does autorun, this is a real gap for a package meant to replace it:** attaching our ISO
+by the supported route puts the installer in front of the user and then does nothing, while the
+package it replaces starts itself. That also has a testing consequence - it is the difference
+between a pristine guest that can install QWT with no qrexec and no answer stick, and one that
+cannot.
+
+**Fix if confirmed:** `packaging/make-iso.sh` stages the setup tree into the ISO; an `autorun.inf`
+pointing at the existing entry point would restore parity. NOT implemented yet - implementing it
+before confirming what stock actually does would be inventing a requirement, which is the exact
+failure this session has been correcting.
