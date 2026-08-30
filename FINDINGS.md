@@ -23527,3 +23527,46 @@ no thread death, pixels resume.
 drives by dragging the qube window). `local.WinResize` returns `no_window` while
 `local.WinScreenshot` returns windows for the same VM in the same second. `dom0/10-install-resize-service.sh`
 v5 distinguishes the causes, but **dom0 must reinstall it** — an owner action, recorded BLOCKED.
+
+### U1 and U2 are TEMPLATE-ONLY cells — attempting them on a StandaloneVM grades nothing
+Both were being re-run on `win10-p46`, a StandaloneVM, and both produced results that looked like
+failures. Neither was. The updater says so itself:
+
+```
+VM class (live from qubesdb): StandaloneVM
+StandaloneVM, offline - the qubes proxy updater is template-only and never runs here;
+this VM must update itself. Doing nothing.
+```
+
+- **U1** (availability reported to dom0) drives the dom0-proxy updater, which by design runs only on
+  a TemplateVM. On a Standalone it does nothing — so "the scan produced no output" was correct
+  behaviour, not the defect.
+- **U2** (QdbDaemon startup race) tests a fault whose whole shape is *a TemplateVM being
+  misclassified as a standalone at early boot*. On an actual StandaloneVM there is no
+  misclassification to make, so `qdb_retry_evidence:false` is the right reading.
+
+This is why the original U1 work used `win10-tpl`, and why contaminating that template mattered so
+much: it was the only Win10 subject on which U1 can be exercised at all.
+
+**U1 CLOSED on `win11-tpl` (uncontaminated), three consecutive runs:**
+
+```
+VM class (live from qubesdb): TemplateVM
+Sync-Revocation: 3/3 CTLs refreshed through the relay, chain cache flushed
+scan: 1 update(s) offered
+reported 1 update(s) to dom0 qubes.NotifyUpdates (exit 0)
+proxy removed, relay stopped (offline baseline restored)
+```
+
+Confirmed independently from the dom0 side — `qvm-features win11-tpl` shows
+`updates-available 1`, `last-updates-check 2026-08-31 02:25:09` — and the standing tinyproxy log
+grew by exactly 31 lines on each of the three runs, so the fetches provably crossed the real proxy.
+
+**What is NOT claimed.** The 2026-08-30 failure's root cause remains **UNKNOWN**, and its evidence
+was destroyed when I mutated the subject before writing the failure off. These three runs establish
+current behaviour on a clean template; they say nothing about that failure. `root-cause-identified`,
+`fix-proven-by-isolation` and `backoff-cache-hypothesis` are recorded `N/A` with that reason rather
+than being quietly closed by a passing run.
+
+**Still owed:** U1 on a Win10 template. `win10-tpl` must be rebuilt to its entry stage first (G-0b) —
+it is the subject the U1 diagnosis contaminated.
