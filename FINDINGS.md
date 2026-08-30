@@ -22327,3 +22327,58 @@ screen-based gates as written:**
 **Still owed on the goldens**: run `mgmt/prime-selftest.sh win11-base` before relying on the Win11
 primer. The hook is installed by the same PRIMER=1 stick that Win10 used, but "same code path" is not
 a measurement.
+
+## 2026-08-30 — DECISION (owner): upgrade-path preconditions are BUILT ON DEMAND, never sealed as goldens
+
+Owner, during acceptance planning for 4.3.16: *"installing our qwt is cheap, and full upgrade test
+is rare, so we can build those images but we are not going to keep them forever as golden
+untouchables"* and *"lets install 3.4.14 on demand when needed to test the upgrade path, but dont
+make them golden, record this decision"*.
+
+**The rule.** The only sealed goldens are the two PRISTINE bases, `win10-base` and `win11-base`
+(protocol 0.7c). Every precondition that carries software — a previous release of ours, stock QWT
+4.2.2, the `ours-nopvdisk` half-broken shape — is a **transient campaign fixture**: cloned from a
+base, installed into, used by its cell, and REMOVED at campaign end. None of them is sealed, none
+appears in `mgmt/goldens/`, and none is expected to survive to the next campaign.
+
+**Why this is right and not a shortcut.** Installing our package into a clone is minutes; keeping a
+sealed image is permanent pool cost plus permanent custody obligation (every seal is a thing that
+can drift, that must be verified before every campaign, and that silently contaminates every clone
+made from it if it is ever booted). Protocol 2.6 already said the same thing from the disk side —
+*"the protocol uses **zero** standing extras — all additional state is transient within one
+campaign"* — so this decision aligns custody policy with the disk budget rather than changing it.
+It also kills the circularity that voided the previous campaign: a golden built from the candidate
+made "upgrade" cells into same-version reinstalls (see the 2026-08-30 correction above). A fixture
+built on demand is always built from the release the cell actually names.
+
+**What this obsoletes.** `win10-goldr` / `win11-goldr` (carrying 4.3.16 from `6022427`) and
+`win10-gold0` / `win11-gold0` (pristine but no primer, 2 GiB private) are superseded by the two
+bases. They are not the roster any more; keeping them sealed implies a custody promise the project
+has now decided not to make.
+
+**Registered as D12.** Protocol 11 listed D12 as *"Golden refresh policy: in-place per accepted
+release (current practice) vs re-derived from stock lineage per release"* — pending. It is now
+DECIDED, and in a third way neither option named: goldens are not refreshed per release at all,
+because only pristine bases are goldens.
+
+## 2026-08-30 — CORRECTION: stock QWT 4.2.2 DOES install PvDriversDisk; the no-PV-disk state is OURS
+
+Raised during acceptance planning: whether `mgmt/prime-jobs/ours-nopvdisk` is really a stock-shaped
+image, which would make it an upgrade-from-stock fixture rather than an upgrade-from-ours one.
+
+It is not. Two independent places in the record say stock ships the PV disk driver:
+
+- The 2026-08-07 audit of `24a1ded`: *"Stock installs ALL SEVEN MSI features: no feature in
+  `Package.wxs` sets a `Level` attribute and WiX defaults them to Level=1."* Its table row reads
+  `PvDriversDisk | stock: installed | ours: was DROPPED | REGRESSION - FIXED`.
+- The protocol's own C4 precondition (5, P1 cells): `installed: QWT 4.2.2.0, **pv_boot_disk:true**`.
+
+So the `pv_boot_disk:false` installed base is one **we** created — `PvDriversDisk` was omitted by us
+on purpose in `24a1ded` (*"disk is switched off BY US on purpose"*), shipped that way through the
+regression window, and later fixed. `ours-nopvdisk` therefore reproduces OUR OWN old releases, and
+upgrading one is the emulated->PV boot-disk switch. Upgrading from stock never performs that switch,
+because stock is already on PV.
+
+Consequence for the matrix: C3 (upgrade-over-ours) and C4 (upgrade-over-stock) are different cells
+with different preconditions and neither substitutes for the other. `ours-nopvdisk` is a third,
+optional shape covering the old-ours `pv_boot_disk:false` installed base.
