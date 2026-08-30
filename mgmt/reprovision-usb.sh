@@ -107,6 +107,7 @@ qvm-start "$VM" --cdrom="$HOLDER:$ISOLOOP" || exit 1
 # NEEDS-VISUAL-CONFIRMATION. A human or agent must READ that image before the qube is sealed.
 # An honest "I cannot decide this" beats a gate that decides wrongly.
 t0=$(date +%s)
+QUIET=0
 SHOTDIR="${PRISTINE_SHOTDIR:-$PWD/evidence/pristine-$VM-$(date -u +%Y%m%d-%H%M%S)}"
 mkdir -p "$SHOTDIR"
 _grab(){ # capture; echo the classifier verdict (advisory only, never a pass)
@@ -120,6 +121,22 @@ _grab(){ # capture; echo the classifier verdict (advisory only, never a pass)
     cp "$big" "$SHOTDIR/latest.png"
     ./tools/winshot.py --png "$big" 2>/dev/null | grep -oE 'VERDICT=[A-Z]+' | head -1
 }
+
+# CPU QUIESCENCE - the signal that was missing, and the reason 2026-08-30's win10-base was declared
+# done while Windows Setup was still on "Installing updates". The header above has always claimed
+# this loop "waits for the screen to go quiet"; it never did. The only conditions were the
+# classifier's DESKTOP verdict and 900 s elapsed, and §0.8 already records that the classifier calls
+# Setup dialogs DESKTOP. So the gate fired at the earliest instant it could, abandoned a guest
+# mid-install with nothing left to restart it on its next reboot, and let the caller start a SECOND
+# Windows guest concurrently.
+#
+# admin.vm.Stats needs no qrexec, which matters because this guest has none. Setup copying files and
+# installing updates is busy; a settled desktop is not. Same probe matrix.sh uses in verify_installed.
+_cpu(){
+    printf '' | timeout 20 qrexec-client-vm "$VM" admin.vm.Stats 2>/dev/null | tr -d '\0' \
+        | grep -aoE 'cpu_usage_raw[0-9]+' | grep -aoE '[0-9]+' \
+        | awk '{t+=$1} END{if(NR)print t; else print 9999}'
+}
 while [ $(( $(date +%s) - t0 )) -lt "$BUDGET" ]; do
     if [ "${PRISTINE:-0}" = 1 ]; then
         v=$(_grab || echo NOSHOT)
@@ -132,13 +149,24 @@ while [ $(( $(date +%s) - t0 )) -lt "$BUDGET" ]; do
         # exit was UNREACHABLE - the same defect species as RB-03, written by me while fixing RB-03.
         # Measured: win11-gold0 sat at a finished desktop logging "screen=VERDICT=DESKTOP (advisory)"
         # for ~35 minutes past the 900 s floor without ever exiting.
-        if [ "$v" = "VERDICT=DESKTOP" ] && [ "$el" -ge 900 ]; then
-            log "candidate desktop after ${el}s, verdict=$v (advisory)"
+        c=$(_cpu)
+        if [ "$v" = "VERDICT=DESKTOP" ] && [ "${c:-9999}" -lt 60 ] 2>/dev/null; then
+            QUIET=$((QUIET+1))
+        else
+            QUIET=0
+        fi
+        [ -n "$v" ] && log "  t+${el}s screen=$v cpu=${c:-?} quiet=$QUIET (all advisory)"
+        # THREE conditions, not one: past the minimum plausible install time, the classifier sees a
+        # desktop, AND the guest has been CPU-idle for three consecutive samples (~90 s). A busy
+        # Setup screen fails the third even when it fools the first two - which is exactly what
+        # happened on 2026-08-30.
+        if [ "$el" -ge 900 ] && [ "$QUIET" -ge 3 ]; then
+            log "candidate desktop after ${el}s: verdict=$v, cpu idle for $QUIET consecutive samples"
             log "NEEDS VISUAL CONFIRMATION - READ $SHOTDIR/latest.png before sealing this qube."
             log "  A Setup error dialog also classifies as DESKTOP; the classifier cannot decide this."
+            log "  An idle guest is not necessarily a FINISHED one - a Setup dialog awaiting input is idle too."
             exit 3
         fi
-        [ -n "$v" ] && log "  t+${el}s screen=$v (advisory)"
     elif [ "$(QTEST_VM=$VM timeout 25 ./tools/qtest run 'echo BOOT_OK' 2>&1 | tr -d '\r\0' | grep -c BOOT_OK)" -ge 2 ]; then
         log "qrexec alive after $(( $(date +%s) - t0 ))s"
         exit 0
