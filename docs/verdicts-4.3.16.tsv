@@ -201,12 +201,12 @@ U1	backend-egress-proven	PASS-UNPROVEN	tinyproxy log: authroot/pinrules/disallow
 U1	ensure-proxy-phase	PASS-UNPROVEN	relay started, listening on 127.0.0.1:8082, target=@default	U1-win11-tpl
 U1	sync-revocation-3of3	PASS-UNPROVEN	Sync-Revocation: 3/3 CTLs refreshed through the relay, chain cache flushed	U1-win11-tpl
 U1	relay-transport-clean	PASS-UNPROVEN	all fetches complete=True cut_response=False cut_request=False, full bodies	U1-win11-tpl
-U1	scan-phase	FAIL	phase=error 0x8024402C in 2-4s, 4/4 attempts; WU COM searcher never dials	U1-win11-tpl
-U1	available-populated	FAIL	available[]=[] count=0 - blocked by the scan failure	U1-win11-tpl
-U1	updates-available-to-dom0	FAIL	cannot reach dom0: no availability was ever produced	U1-win11-tpl
-U1	root-cause-identified	PASS-UNPROVEN	SYSTEM-account WinINET plane (bitsadmin setieproxy LOCALSYSTEM) not set by Ensure-Proxy	U1-win11-tpl
-U1	fix-proven-by-isolation	PASS-UNPROVEN	same guest+relay, add only that plane -> WUA_OK count=4 in 104.8s, 4 real updates	U1-win11-tpl
-U1	backoff-cache-hypothesis	PASS-UNPROVEN	tested and REFUTED: SoftwareDistribution renamed, still 0x8024402C	U1-win11-tpl
+U1	scan-phase	RETRACTED	RETRACTED: root cause falsified - the scan later succeeded on the shipped build with the SYSTEM plane ABSENT (8 offered, 5 reported to dom0). The 4 failures are real; the cause is UNKNOWN	U1-win11-tpl
+U1	available-populated	RETRACTED	RETRACTED: root cause falsified - the scan later succeeded on the shipped build with the SYSTEM plane ABSENT (8 offered, 5 reported to dom0). The 4 failures are real; the cause is UNKNOWN	U1-win11-tpl
+U1	updates-available-to-dom0	RETRACTED	RETRACTED: root cause falsified - the scan later succeeded on the shipped build with the SYSTEM plane ABSENT (8 offered, 5 reported to dom0). The 4 failures are real; the cause is UNKNOWN	U1-win11-tpl
+U1	root-cause-identified	RETRACTED	RETRACTED: no reverse control was run (G-2); the isolation was confounded by a SoftwareDistribution rename and intervening reboots	U1-win11-tpl
+U1	fix-proven-by-isolation	RETRACTED	RETRACTED: no reverse control was run (G-2); the isolation was confounded by a SoftwareDistribution rename and intervening reboots	U1-win11-tpl
+U1	backoff-cache-hypothesis	RETRACTED	RETRACTED: no reverse control was run (G-2); the isolation was confounded by a SoftwareDistribution rename and intervening reboots	U1-win11-tpl
 U2	template-arm	PASS-UNPROVEN	win11-tpl: 'VM class (live from qubesdb): TemplateVM', ran the proxy pass	U1-win11-tpl
 U2	appvm-skipped	PASS-UNPROVEN	win11-app: skipped-appvm, exit 0, 'Exiting before any proxy activity'	U2-win11-app
 U2	appvm-proxy-unchanged	PASS-UNPROVEN	RELAY_AFTER=0, PROXY_AFTER enable=0 - no relay, proxy untouched	U2-win11-app

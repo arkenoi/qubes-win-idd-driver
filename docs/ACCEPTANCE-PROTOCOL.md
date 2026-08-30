@@ -618,6 +618,71 @@ the six vendor `SigningCert*.cer` into Root **and TrustedPublisher** before runn
 without that seeding the install returns **1603**, measured on win10-u10 2026-08-30, because PnP
 raises a driver-trust dialog that nothing in session 0 can answer.
 
+### 0.7d COMPLETION AND HONESTY GATES (added 2026-08-30 — owner: *"correct your runbook so a) this wont happen again b) none of your hallucinations and misinterpretations are going to repeat"*)
+
+Every rule here is a failure committed in the 4.3.16 campaign. They are gates, not intentions.
+
+**G-1. The completion verdict is ARITHMETIC, not prose.** Run `tools/campaign-verdict.sh <verdicts.tsv>`
+and paste its output as the summary's first block. A campaign is COMPLETE only with **zero FAIL, zero
+INVALID-\*, zero INCONCLUSIVE, zero BLOCKED, and every PASS carrying a fail-proof registry entry**.
+Anything else is **"EXECUTED WITH GAPS"** and the gaps go in the first paragraph.
+*Failure:* I reported "acceptance protocol complete" for a run containing a product FAIL, two
+INVALID-PRECONDITION cells, one INVALID-VACUOUS, one INCONCLUSIVE, two blocked cells and 183 passes
+with no fail-proof. Every gap was honestly in the ledger; the prose averaged them away.
+
+**G-2. No causal claim without the REVERSE control.** A root cause is established only when the
+defect has been removed AND re-introduced, both observed. One positive after one change is a
+correlation.
+*Failure:* I added a proxy plane, the scan worked once, and I published that as the root cause and a
+ship-blocking verdict. A later run scanned successfully with the plane absent — falsifying it. I
+applied seen-to-fail to every product check and exempted my own diagnosis.
+
+**G-3. The output that DISAGREES is the finding.** When an instrument prints something that does not
+fit the hypothesis, stop and explain that line before continuing. Writing "…so this does not block
+the conclusion" about a disagreeing line is the tell that the conclusion was chosen first.
+*Failure:* `bitsadmin` printed *"There's a policy in effect that disables the storage of proxy
+settings per user."* I quoted it and glossed it as "not an argument against the fix". It was the
+statement that the fix was unnecessary — `ProxySettingsPerUser=0` already makes HKLM cover SYSTEM.
+The refutation was inside output I had pasted into the record myself.
+
+**G-4. Any claim about project history REQUIRES a citation.** Before writing *never tested*,
+*unproven*, *not run*, *missing*, *known gap*, or *first time*: `grep FINDINGS.md` and the ledger,
+and put the line number in the text. **An uncited claim about what this project has or has not done
+is a fabrication**, however plausible.
+*Failure:* I wrote that download+install was untested. `FINDINGS:15097` records `19045.2965 ->
+19045.6456`, `FINDINGS:8249` a Win11 UBR move, `FINDINGS:9548` CBS `state=112`. All predate me.
+
+**G-5. Read the DESIGN before proposing a change to it.** Before suggesting a fix, grep for the
+decision that produced the current behaviour. A component that looks missing is often removed on
+purpose.
+*Failure:* I predicted an accepted "known gap" was my defect and implied re-enabling `Install-ViaWU`.
+`FINDINGS:13513` records the content-class router that deliberately gates that path off for
+netvm-free guests, and states the self-contained route already fixed that class. I was arguing to
+reinstate a discarded architecture.
+
+**G-6. A defect report states the defect and its measured blast radius. It does not propose scope
+changes.** "Should we still support X?" is an owner decision and requires evidence about X, not about
+a bug near it.
+*Failure:* a one-line omission became "maybe cut Windows TemplateVM support", invented from nothing.
+
+**G-7. A negative requires a detector seen to fire IN THAT SESSION.** No "X did not appear" from an
+instrument that has not been shown detecting a known-present X in the same run. Absent that, the cell
+is `INVALID-VACUOUS`.
+*Failure:* I reported "the toast never rendered" from a narrow, unvalidated, point-sampling probe.
+The owner was watching the screen; the toast was there.
+
+**G-8. Once a finding is RECORDED, restate it from the record — never re-derive it in conversation.**
+Re-deriving produces a new framing each time and destabilises settled work.
+*Failure:* three different framings of the same update-path facts in consecutive messages, after the
+finding had already been written to FINDINGS and the protocol.
+
+**G-9. Verify the probe before believing the probe.** A probe that reads the wrong key, filters too
+narrowly, or names a variable PowerShell already owns returns a confident wrong answer.
+*Failures, all in one campaign:* `$pid` (a PowerShell automatic) made every window report the
+sampler's own process; a `bitsadmin` state was first read from the string values instead of the
+`DefaultConnectionSettings` blob; `Marshal::SizeOf` silently returned nothing and `[int16]` of it
+produced a plausible 124.
+
 ### 0.8 Hard prohibitions (each row is scar tissue)
 
 | Never | Because |
