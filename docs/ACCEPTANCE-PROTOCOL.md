@@ -1048,6 +1048,15 @@ writing every artefact it produced into the scratch dir.
 runtime. After editing a harness, also `grep -n '\${((' ` it. More generally, a clean `bash -n` is
 not evidence the script runs.
 
+**9. THE PRODUCT'S OWN DEBOUNCES AND CACHES CARRY CONTAMINATION BETWEEN CELLS.** The `-Scheduled`
+update scan skips when a completed pass wrote an answer in the last 30 minutes. Measured 2026-08-31:
+three U1 scans at 02:24-02:26 left an answer, U2's boot-triggered pass fired correctly at 02:35:26
+(`lastresult=0`) and skipped, writing nothing — so U2 read `class_lines:0` and looked like a
+classification failure when it was MY OWN earlier cell suppressing it. Before a cell that depends on
+a scheduled pass actually running, clear the state that suppresses it (here
+`C:\ProgramData\Qubes\update-status.json`). This is the same class as the persistent toast in rule 8,
+one layer down: not a leftover WINDOW but a leftover ANSWER.
+
 **7. A VACUITY GUARD MUST BE SPECIFIC TO THE STIMULUS.** RND-3's guard counted *any* override-redirect
 surface as proof "the menu opened". Measured 2026-08-31: a PERSISTENT toast raised by the previous
 cell was still on screen and contributed 23 such surfaces, so the guard was satisfied, the menu had

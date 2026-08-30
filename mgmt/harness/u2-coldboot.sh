@@ -48,6 +48,17 @@ grep -qi 'ready' "$OUT/scan-state.txt" || { log "FATAL: the scan task is not Rea
 log "=== ARM the acceptance baseline BEFORE the reboot ==="
 T=300 q pushrun guest/wu-boot-acceptance-arm.ps1 2>/dev/null | tr -d '\r' | grep -aE 'boot_time_before|vm_class_now|enabled' | sed 's/^/  /'
 
+# CLEAR THE DEBOUNCE, or this cell measures my own previous activity.
+# The -Scheduled scan (which is what the boot trigger runs) has a 30-MINUTE DEBOUNCE: it skips when
+# a completed pass already left an answer in update-status.json. Measured 2026-08-31: three manual
+# U1 scans at 02:24-02:26 wrote an answer, the boot pass fired correctly at 02:35:26 (lastresult=0)
+# 9 minutes later, and skipped - writing nothing. `class_lines:0` was therefore MY OWN earlier runs
+# suppressing the thing under test, not a defect. The updater's own comment describes exactly this
+# case. Removing the status file puts the guest in the state U2 is about: a boot with no recent
+# answer, where the boot scan is the recovery path.
+log "=== clear the scan debounce (update-status.json) so the boot pass is not suppressed ==="
+r 'cmd /c del /q C:\ProgramData\Qubes\update-status.json 2>nul & if exist C:\ProgramData\Qubes\update-status.json (echo STILL_THERE) else (echo CLEARED)' | grep -aE 'CLEARED|STILL_THERE' | sed 's/^/  /'
+
 bootid(){ r 'cmd /c powershell -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString(\"o\")"' | grep -aoE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+' | head -1; }
 B0=$(bootid); log "  LastBootUpTime before: ${B0:-unknown}"
 
