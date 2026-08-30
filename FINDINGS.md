@@ -21752,3 +21752,34 @@ Fixed; the extend runs before Windows installs so QWT formats at full size.
 **Open:** whether extending + re-partitioning the existing goldens repairs the AppVM Q: mapping, or
 whether the goldens must be rebuilt with the fixed script. Not guessed at - the goldens are sealed
 and rebuilding them is a deliberate, recorded act.
+
+## 2026-08-30 — upgrade-over-stock: the GENUINE-stock route did not produce a working stock QWT
+
+Attempt to give the upgrade-over-stock cell a LEGAL precondition - stock QWT installed on a fresh
+guest at first logon - instead of the `msiexec /x` the old cell used, which P1.0 forbids and which
+made that cell INVALID.
+
+Built a stick with `REAL_STOCK_EXE=/home/user/win-iso/qwt-iso/qubes-tools-4.2.2.exe`
+("payload: GENUINE stock QWT staged, installed with /passive"), provisioned `win10-u10` from it.
+
+**Result: Windows installs and boots, stock QWT does not come up.** After 51 minutes the guest is at
+a clean Win10 desktop with the Test Mode watermark (so the stick's firstboot ran - it enables
+testsigning), but `qrexec alive` never fired.
+
+**The diagnostic that separates the causes, worth keeping:**
+
+    qrexec-client-vm win10-u10 admin.vm.CurrentState  -> works (power_state=Running)
+    qrexec-client-vm win10-u10 qubes.VMShell          -> "Request refused"
+
+Policy is FINE - the tag `win-idd-testbed` is present and admin calls are served. `qubes.VMShell`
+being refused while an admin call succeeds means **the GUEST's qrexec agent never connected**, i.e.
+QWT is not running, not that dom0 denied us. Previously I would have read "Request refused" as a
+policy problem in both cases; it is only a policy problem when the ADMIN call is refused too.
+
+**So upgrade-over-stock remains UNPROVEN**, now for a different and better-understood reason: not
+because the cell used a forbidden uninstall, but because the genuine stock installer did not
+complete unattended on this media. Whether it needs different flags than `/passive`, a reboot cycle
+the provisioner cut short, or something else is UNDIAGNOSED - the guest cannot be queried without
+qrexec, and the screen shows no installer window.
+
+Evidence: `evidence/win10-u10-stock-desktop-no-qrexec.png`.

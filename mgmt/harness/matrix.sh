@@ -347,6 +347,19 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     ok "$lbl: no premature reboot dialog, and the watcher proves it looked"
   fi
 
+  # XENCONS (PV console) must be BOUND, not merely shipped. QWT historically vendored no xencons at
+  # all, so XENBUS\VEN_XP0001&DEV_CONS sat at CM code 28 on every guest and that was allowlisted as
+  # expected. Since 4.3.16 ships it, "code 28" changed from an expected state into a defect - and
+  # "all drivers present" is an acceptance criterion, so a cell has to assert it rather than trust
+  # that packaging staged the files.
+  local cons
+  cons=$(QTEST_VM=$vm timeout -k 5 90 ./tools/qtest run "powershell -NoProfile -Command \"(Get-CimInstance Win32_PnPEntity -EA SilentlyContinue | Where-Object { \$_.PNPDeviceID -like 'XENBUS\\VEN_XP0001&DEV_CONS*' } | ForEach-Object { 'CONS:err='+\$_.ConfigManagerErrorCode+' svc='+\$_.Service })\"" 2>/dev/null | tr -d '\r' | grep -ao 'CONS:err=[0-9]* svc=[A-Za-z]*' | head -1)
+  case "$cons" in
+    "CONS:err=0 svc=xencons") ok "$lbl: PV console bound ($cons)" ;;
+    "")                       no "$lbl: could not read DEV_CONS state - driver presence UNVERIFIED" ;;
+    *)                        no "$lbl: PV console NOT bound ($cons)" ;;
+  esac
+
   echo "$j" | grep -qa '"autologon":"armed"' \
     && ok "$lbl: autologon armed" || no "$lbl: autologon NOT armed ($(echo "$j" | grep -ao '"autologon":"[^"]*"'))"
   local ver; ver=$(QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run 'cmd /c reg query "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v Version' 2>/dev/null | tr -d '\r' | grep -a REG_SZ | head -1)
