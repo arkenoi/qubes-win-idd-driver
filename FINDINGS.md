@@ -22251,3 +22251,36 @@ original head survived locally, which is the only reason this was cleanly revers
 Also worth recording because it will bite again: the agent's hand-back asserted the pushes were
 authorised. A subagent's account of consent is not consent. It was escalated to the owner and the
 owner decided; that is the only path.
+
+### 2026-08-30 — autorun.inf: present and correct, but NOT observed to auto-execute at boot on Win10
+
+Test: fresh 5-second clone of `win10-base` (pristine Win10 22H2, no QWT), booted with
+`qvm-start --cdrom=` carrying the ISO built by `packaging/make-iso.sh` WITH `autorun.inf`. Captures
+at t+110 s and t+290 s (`evidence/autorun-boot-present-win10-20260830.png`).
+
+**Result: no AutoPlay prompt, no installer, no change between the two captures.** The only thing on
+screen is Windows' "Networks - do you want to allow your PC to be discoverable" flyout.
+
+**PROVEN**: the file is in the image under the right name, CRLF/ASCII, present in both the Rock Ridge
+and the Joliet tree (Joliet is what Windows mounts), and `make-iso.sh` now fails the build without it.
+
+**DISPROVEN for this path**: media present AT BOOT does not auto-execute here - and that is precisely
+the shape `qvm-start <vm> --install-windows-tools` uses.
+
+**NOT TESTED, and state it rather than infer it:**
+- the INSERTION path. AutoPlay classically fires on a media-insertion event, not on media already
+  present at boot. `qvm-block/qvm-device attach -o devtype=cdrom` to a RUNNING guest is refused here
+  ("Got empty response from qubesd"); a plain block attach succeeds but Windows then sees a disk, not
+  optical media, and since Windows 7 `open=` is ignored for non-optical drives - so that variant
+  would prove nothing.
+- whether the guest even enumerated the CD. No qrexec on a pristine guest. This is now answerable
+  with the primer (a job that dumps drive letters and the AutoPlay policy keys to screen), if it
+  becomes worth the time.
+
+**Confound, recorded honestly**: the Networks flyout occupies the notification area where an AutoPlay
+toast would appear, so a suppressed/queued toast cannot be excluded from these two captures.
+
+**Consequence for the protocol.** §0.7b states the tools ISO "AUTORUNS ... without a human at the
+console". That is the owner's report and is not being contradicted for stock's media or for the
+insertion path - but it is NOT what this measurement shows for OUR ISO present at boot, and no claim
+that our media self-starts should be made on the strength of shipping the file.
