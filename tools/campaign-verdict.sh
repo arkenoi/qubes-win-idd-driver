@@ -62,6 +62,20 @@ def superseded_unbacked(r):
             return False   # a valid row for the SAME cell AND SAME check from that run exists
     return True            # the label points at nothing that re-tested this check - still a gap
 
+def retracted_unreplaced(r):
+    # A RETRACTED verdict says "this result was wrong". If nothing valid replaced it, the check has
+    # NO result at all - which is a gap, not a resolution. Without this, retracting a row is a way to
+    # make a gap disappear, exactly as an unbacked SUPERSEDED would be. (U1's scan-phase,
+    # available-populated and updates-available-to-dom0 were all retracted on 2026-08-30 when the
+    # root cause was falsified, and nothing has re-tested them since.)
+    if not r['verdict'].startswith('RETRACTED'):
+        return False
+    for c in valid.get(r['cell'], []):
+        if c['check'] == r['check']:
+            return False
+    return True
+
+collect('RETRACTED with nothing valid replacing it', retracted_unreplaced)
 collect('SUPERSEDED but NOT backed by a valid re-run', superseded_unbacked)
 collect('FAIL (product defect)',        lambda r: r['verdict'] == 'FAIL')
 collect('FAIL-MINE (instrumentation)',  lambda r: r['verdict'] == 'FAIL-MINE')
