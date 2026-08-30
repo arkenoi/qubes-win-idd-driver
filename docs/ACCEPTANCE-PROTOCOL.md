@@ -509,6 +509,63 @@ So the channels into a Windows guest are: **an autorunning attached ISO** (works
 guest - the supported route), the answer file's FirstLogonCommands (only during a fresh install),
 and qrexec (only once QWT is already installed).
 
+### 0.7c TWO BASE GOLDENS AND THE PRIMER CHANNEL (added 2026-08-30, owner: "we need just two goldens for e2e all matrix")
+
+**The whole matrix derives from two images, and nothing else is kept:**
+
+| golden | what it is | what it is NOT |
+|---|---|---|
+| `win10-base` | pristine Win10 22H2, no QWT, testsigning **OFF**, primer hook installed | not a release carrier, not stock-QWT |
+| `win11-base` | pristine Win11 24H2 Eval, same | same |
+
+Testsigning stays OFF on purpose: that is what makes these valid preconditions for the two-stage
+(E1) clean-install cell, where stage 1 must be observed turning it on.
+
+**Why a primer at all.** A pristine guest has no QWT, therefore no qrexec, therefore no way to run
+anything in it. `FirstLogonCommands` fire only at the first logon of a fresh install and never
+again, so *cloning* a pristine golden does not get you a second shot at them. That is why every
+"install some QWT into a clean guest" job kept collapsing into a 17-20 minute Windows REINSTALL: the
+reinstall was never needed for Windows, it was needed for the one execution channel such a guest
+has. §0.7b's autorunning ISO is the supported end-user channel; the primer is the rig's, and it
+depends on no AutoPlay behaviour at all.
+
+**The channel.** `mgmt/primer/qubes-prime.cmd` is baked into both base goldens as a SYSTEM `onstart`
+task (`QubesPrime`). At every boot it looks for `<removable>:\qubes-prime\onboot.cmd`. Attach a job
+stick carrying that path and it runs, once, as SYSTEM.
+
+    # build a job stick (payload staged at \qubes-prime\, must contain onboot.cmd)
+    PRIME_JOB=mgmt/prime-jobs/stock-422 OUT=~/win-iso/job.img SIZE_MB=96 mgmt/build-answer-stick.sh
+    # clone a base golden, attach the stick the same way reprovision-usb.sh does, boot it
+    qvm-features <clone> qemu-extra-args -- '-drive file=/dev/xvdi,...usb-storage...'
+
+Clone (~2 s) + boot beats reprovision (~20 min) for every precondition except the one cell that is
+genuinely about installing Windows itself.
+
+**CONTAMINATION RULES — the reason this is safe to leave in a golden every clone inherits.**
+
+1. **Inert by default.** With no primer media attached the hook performs `if exist` tests and exits.
+   It writes nothing: no log, no marker, no registry, no file. A boot without a stick is
+   indistinguishable from a boot without the primer.
+2. **One shot.** It unregisters its own task *before* running the job, so a job that reboots (they
+   all do) cannot re-trigger, and a guest that has been primed is no longer primed.
+3. **Auditable.** Having fired leaves `C:\qubes-prime\fired.mark`.
+4. **Non-colliding.** It looks for `\qubes-prime\onboot.cmd`. Every other stick this rig builds uses
+   `\payload\setup.cmd`, so no answer stick can trigger it by accident.
+5. **Rig-only.** It is baked into golden IMAGES at provisioning time. It is not part of the QWT
+   package and must never ship in one.
+
+**Grading gate (H5 fail-proof registry):** any guest whose result is being graded must be asserted
+to have **no `C:\qubes-prime\fired.mark`**, unless its cell declares that it was primed. A primed
+guest has had arbitrary SYSTEM code run in it and must never be silently mistaken for a clean one.
+
+**Stock QWT 4.2.2 goldens are deliberately NOT kept** (owner, 2026-08-30: *"if we implement it, we
+do not need preinstalled 4.2.2 goldens because testing upgrade from stock is rare enough one-shot"*).
+Upgrade-from-stock is a one-shot: clone a base golden, drive `mgmt/prime-jobs/stock-422` into it,
+then install ours over that. The job is two passes either side of a testsigning reboot and it seeds
+the six vendor `SigningCert*.cer` into Root **and TrustedPublisher** before running the bundle —
+without that seeding the install returns **1603**, measured on win10-u10 2026-08-30, because PnP
+raises a driver-trust dialog that nothing in session 0 can answer.
+
 ### 0.8 Hard prohibitions (each row is scar tissue)
 
 | Never | Because |
@@ -528,6 +585,10 @@ and qrexec (only once QWT is already installed).
 | Treat silence as absence | A watcher that never sampled is `INVALID-VACUOUS`, never PASS (H2 vacuity gate). |
 | Trust a `0 passed, 0 failed` matrix summary | An unset `CELLS` matches no selector; the run does nothing and still prints a normal-looking footer (§0.9.4). |
 | Reprovision (R3) where R0/R1/R2 reaches the entry stage | Protocol rule (§1.2, §10): ~20 min each, and it destroys the qube's history. |
+| Grade a guest carrying `C:\qubes-prime\fired.mark` | It has had arbitrary SYSTEM code run in it by a primer job. Only a cell that DECLARES it was primed may grade one (§0.7c). |
+| Write a second route to a result the rig already reaches | The stock install already had a working route; a parallel one was written for the upgrade cell, inherited none of its workarounds, and returned 1603 (§0.7c, FINDINGS 2026-08-30). Change the one variable instead. |
+| Act on a guest an orchestrator already owns | `reprovision-usb.sh` holds `/tmp/reprovision-<vm>.lock` and restarts the guest on every halt. Two ad-hoc monitors were added beside it and one rebooted a guest mid-MSI. Check `fuser -v` on the lock first; watchers must be PASSIVE. |
+| Report the status of `cmd \| tee log` | You get **tee's** exit code. A refused reprovision was reported as success this way. Use `PIPESTATUS`. |
 
 ### 0.9 Where the scripts and this protocol disagree today (verified against source 2026-08-30 — fix at P0-PRE, do not paper over)
 

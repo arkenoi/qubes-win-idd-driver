@@ -34,6 +34,10 @@
 #        INSTALL_FLAGS=       flags for install.cmd (default /idd)
 #        WITH_KEY=0           omit the generic install key (default 1: retail multi-edition
 #                             media needs a key to select the edition)
+#        PRIMER=1             stick installs ONLY the resident primer hook (no QWT) - used to
+#                             provision pristine ST0 goldens that clones can be driven from
+#        PRIME_JOB=<dir>      build a JOB stick for an already-primed guest; <dir> is staged at
+#                             \qubes-prime\ and must contain onboot.cmd
 #        SIZE_MB=             image size (default 96)
 set -euo pipefail
 
@@ -250,6 +254,35 @@ echo rebooting for testsigning >> C:\qubes-win-idd-setup.log
 shutdown /r /t 5
 SETUPEOF
     echo "payload: GENUINE stock QWT staged ($_exe) + $_ncerts vendor certs, /passive with burn log"
+fi
+
+# PRIMER=1: build a stick that installs ONLY the resident primer hook and no QWT at all. Used to
+# provision the pristine ST0 goldens so that CLONES of them can be driven later without a Windows
+# reinstall. See mgmt/primer/qubes-prime.cmd for the contamination rules this obeys.
+if [ "${PRIMER:-0}" = 1 ]; then
+    [ -n "${RELEASE_SETUP:-}${STOCK_SETUP:-}${REAL_STOCK_EXE:-}" ] && { echo "ERROR: PRIMER=1 is mutually exclusive with RELEASE_SETUP/STOCK_SETUP/REAL_STOCK_EXE" >&2; exit 1; }
+    mkdir -p "$WORK/payload/prime"
+    cp "$HERE/primer/qubes-prime.cmd"   "$WORK/payload/prime/" || exit 1
+    cp "$HERE/primer/install-primer.cmd" "$WORK/payload/setup.cmd" || exit 1
+    echo "payload: PRIMER only - resident hook, no QWT, testsigning left OFF"
+fi
+
+# PRIME_JOB=<dir>: build a JOB stick for an already-provisioned, primed guest. The directory's
+# contents are staged at \qubes-prime\ on the stick, and it must contain onboot.cmd - that is the
+# entry point the resident hook calls, exactly once, as SYSTEM.
+#
+# This is the OTHER half of the primer: PRIMER=1 bakes the channel into a golden, PRIME_JOB drives a
+# clone of it. Attach the stick with the same qemu-extra-args line reprovision-usb.sh uses, boot,
+# and the job runs - no Windows install, no QWT, no qrexec needed.
+if [ -n "${PRIME_JOB:-}" ]; then
+    [ -d "$PRIME_JOB" ] || { echo "PRIME_JOB not a directory: $PRIME_JOB" >&2; exit 1; }
+    [ -f "$PRIME_JOB/onboot.cmd" ] || { echo "ERROR: $PRIME_JOB/onboot.cmd missing - the hook calls that exact name" >&2; exit 1; }
+    [ "${PRIMER:-0}" = 1 ] && { echo "ERROR: PRIMER=1 builds the golden, PRIME_JOB drives a clone - not the same stick" >&2; exit 1; }
+    mkdir -p "$WORK/qubes-prime"
+    cp -r "$PRIME_JOB"/. "$WORK/qubes-prime/" || exit 1
+    # A job stick carries NO \payload\setup.cmd on purpose: it is attached to a guest that is
+    # already installed, where FirstLogonCommands will never fire again anyway.
+    echo "payload: PRIME_JOB staged at \\qubes-prime\\ ($(find "$PRIME_JOB" -type f | wc -l) files)"
 fi
 
 cp "$HERE/../guest/firstboot-setup.ps1" "$WORK/payload/" 2>/dev/null || true
