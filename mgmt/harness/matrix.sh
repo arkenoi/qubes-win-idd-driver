@@ -598,8 +598,27 @@ cell_seeded(){ # the field's state: a pending PV reboot request + the monitor se
   # The field's sequence is: installer runs -> stops/disables the monitor -> msiexec starts -> the
   # PV driver install files a Request MID-MSI. So arm auto-start here, and write the Request
   # DURING msiexec (run_install, SEED_DELAY) - after the installer has had its chance.
-  QTEST_VM=$2 qrun "cmd /c sc config xenbus_monitor start= auto >nul & echo ARMED" 2>/dev/null \
-    | grep -qa ARMED && ok "$3-seeded: monitor armed (Request lands mid-MSI)" || { no "$3-seeded: could not arm - cell inconclusive"; return; }
+  # ARM *AND START*. `sc config start= auto` only sets the START TYPE; the service does not begin
+  # running until the next boot. This cell reclones and boots BEFORE arming, so without an explicit
+  # start the PRECONDITION reads `xenbus_monitor{start:2, status:Stopped}` - and the protocol's
+  # armed-monitor variant (§5, C3/C4) requires `{Running, start:2}`. A cell that cannot establish
+  # its own declared precondition is INVALID-PRECONDITION, not a product verdict (H4.2).
+  #
+  # Running is also the honest field state: it is exactly what stock QWT leaves behind, measured on
+  # the C4 fixture (`xenbus_monitor{status:Running, start:2, pids:[2904]}`). A monitor that is merely
+  # set to auto-start cannot restart anything during this install, so grading the installer's
+  # kill-the-survivor logic against it would be vacuous - that logic exists precisely because
+  # disabling the SERVICE does not stop the already-running PROCESS (the 81d2b79 brick).
+  QTEST_VM=$2 qrun "cmd /c sc config xenbus_monitor start= auto >nul & sc start xenbus_monitor >nul 2>&1 & echo ARMED" 2>/dev/null \
+    | grep -qa ARMED || { no "$3-seeded: could not arm - cell inconclusive"; return; }
+  local mst; mst=$(QTEST_VM=$2 qrun 'cmd /c sc query xenbus_monitor' 2>/dev/null | tr -d '\r' | grep -aoE 'RUNNING|STOPPED' | head -1)
+  if [ "$mst" = RUNNING ]; then
+    ok "$3-seeded: monitor armed AND RUNNING (start=auto) - the field state"
+  else
+    # Report it rather than proceeding silently: the cell can still run, but it is no longer the
+    # armed-monitor variant and must not be cited as one.
+    no "$3-seeded: INVALID-PRECONDITION - monitor is '${mst:-unreadable}', not RUNNING; this is not the armed-monitor arm"
+  fi
   run_install "$2" "$3-seeded" q4315
   if [ "$(w_state "$2")" = Halted ]; then
     say "  the guest HALTED during the install - this is the reproduction if it now fails to boot"
