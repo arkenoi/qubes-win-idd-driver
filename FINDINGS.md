@@ -22524,3 +22524,26 @@ would miss the boot path entirely, which is why the reboot is part of acceptance
 
 **The two N/A are honest:** `pv_drivers_bound` and `network_carries_traffic` cannot apply to a
 `netvm=''` offline install. P2 (NET-2/NET-3) owns them, on a guest that has a vif.
+
+## 2026-08-30 — C1.11 ACCEPTED: clean install on Windows 11 24H2
+
+**23 PASS, 2 N/A, 0 FAIL.** Guest `win11-c1`, cloned from the sealed `win11-base`, same primer route
+as Win10. This closes the second of the three paths RELEASE-NOTES-4.3.16 listed as untested
+(*"Clean install on Windows 11. Only Win10 was graded on pristine media."*).
+
+Four PRECONDITION lines: three at `testsigning_active:false, installed_qwt_count:0` (the two C12
+repeats plus the `/auto` run — the stage re-detected each time) and the fourth at
+`testsigning_active:true` for stage 2 after the single reboot. `stage2-install ok:true`.
+`restarts=1`, so the resume fired exactly once.
+
+Cold-boot acceptance identical in shape to Win10: `pv_disk_bound`, `pv_console_bound` (xencons),
+`idd_device_bound` + `desktop_on_idd` + modes `5120x1440, 1024x768`, `user_data_on_private` (reparse
+to `Q:\Users`), `pnp_no_unexpected_errors`, `boot_events_clean`, agent hash == manifest, pixels
+change in dom0, `CHROME=OK 3826x1016`. Same two honest N/A (`pv_drivers_bound`,
+`network_carries_traffic`) — the guest is offline by design.
+
+**Timing difference worth recording for future waits:** Win11 is consistently slower through this
+path than Win10 — stage-1 reboot at t+234s vs t+142s, qrexec back at t+410s vs t+309s, and stage 2
+still writing its RESULT after qrexec answered on both. That gap is exactly what made the old
+timer-based selftest exit early on Win11 and call a working primer broken. Wait on the SIGNAL
+(`stage2-install ok:true`), never on an elapsed-time guess.
