@@ -77,7 +77,7 @@ if [ "$rc" = 0 ]; then
   sleep 20
   hw=$(T=300 q pushrun /home/user/.claude/jobs/c2a0f57b/tmp/enumwin.ps1 | tr -d '\r' | grep -aoE 'CHROMEREPRO_HWNDS [0-9]+' | awk '{print $2}')
   rm -f "$OUT/rnd7.tar"; q shot "$OUT/rnd7.tar" >/dev/null 2>&1
-  mapped=$(tar tf "$OUT/rnd7.tar" 2>/dev/null | grep -c '\.png$' || echo 0)
+  mapped=$(tar tf "$OUT/rnd7.tar" 2>/dev/null | grep -c '\.png$'); mapped=${mapped:-0}
   log "  guest-side HWNDs=${hw:-?}  dom0 mapped=${mapped:-?}   (accept: 5 and 1)"
   echo "RND7 hwnds=${hw:-?} mapped=${mapped:-?}" >> "$OUT/rnd.txt"
   q run 'cmd /c taskkill /f /im chromerepro.exe' >/dev/null 2>&1
@@ -89,7 +89,7 @@ if [ "$rc" = 0 ]; then
   T=400 q pushrun guest/open-start.ps1 >/dev/null 2>&1
   sleep 12
   rm -f "$OUT/rnd5.tar"; q shot "$OUT/rnd5.tar" >/dev/null 2>&1
-  m5=$(tar tf "$OUT/rnd5.tar" 2>/dev/null | grep -c '\.png$' || echo 0)
+  m5=$(tar tf "$OUT/rnd5.tar" 2>/dev/null | grep -c '\.png$'); m5=${m5:-0}
   d5=$(T=300 q pushrun /home/user/.claude/jobs/c2a0f57b/tmp/startproof.ps1 | tr -d '\r' | grep -aoE 'DISCRIM_HITS [0-9]+' | awk '{print $2}')
   log "  dom0 mapped=${m5:-?}  agent deny lines=${d5:-?}   (accept: 0 mapped AND >0 deny = stimulus existed)"
   echo "RND5 mapped=${m5:-?} deny=${d5:-?}" >> "$OUT/rnd.txt"
