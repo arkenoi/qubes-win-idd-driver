@@ -61,16 +61,28 @@ else
     no "running agent '$got' != release '$exp' - the artefact under test is not what installed"
 fi
 
-# 5. DRIVERS. "all drivers present" is a criterion, so assert the devices, not the package contents.
-DRV=$(q 150 "powershell -NoProfile -Command \"Get-CimInstance Win32_PnPEntity -EA SilentlyContinue | Where-Object { \$_.PNPDeviceID -like 'XENBUS\\\\VEN_XP0001*' } | ForEach-Object { 'D:'+(\$_.PNPDeviceID -replace '.*DEV_([A-Z]+).*','\$1')+'='+\$_.ConfigManagerErrorCode+':'+\$_.Service }\"")
-for d in VIF VBD CONS IFACE; do
-    line=$(echo "$DRV" | grep -a "^D:$d=" | head -1)
-    case "$line" in
-        "D:$d=0:"*) ok "PV driver $d bound (${line#D:$d=})" ;;
-        "")         no "PV driver $d: no devnode found - UNVERIFIED" ;;
-        *)          no "PV driver $d NOT bound (${line#D:$d=})" ;;
-    esac
+# 5. DRIVERS. "all drivers present" is a criterion, so assert the DEVICES, not package contents.
+# The probe emits the raw PNPDeviceID and matches in shell: an earlier version did the extraction
+# with a PowerShell -replace whose '$1' was mangled by shell quoting, so it reported "no devnode
+# found" for ALL FOUR drivers on a guest where three were demonstrably bound. Four-for-four failure
+# is a broken probe, not four broken drivers, and it must not be reported as a regression.
+DRV=$(q 150 "powershell -NoProfile -Command \"Get-CimInstance Win32_PnPEntity -EA SilentlyContinue | Where-Object { \$_.PNPDeviceID -like 'XENBUS*' } | ForEach-Object { 'DEV:'+\$_.PNPDeviceID+' err='+\$_.ConfigManagerErrorCode+' svc='+\$_.Service }\"")
+for d in CONS IFACE VBD; do
+    line=$(echo "$DRV" | grep -a "DEV_$d" | head -1)
+    if [ -z "$line" ]; then
+        no "PV driver $d: no devnode found - UNVERIFIED"
+    elif echo "$line" | grep -qa 'err=0'; then
+        ok "PV driver $d bound ($(echo "$line" | grep -ao 'svc=[a-z]*'))"
+    else
+        no "PV driver $d NOT bound ($(echo "$line" | grep -ao 'err=[0-9]*'))"
+    fi
 done
+# VIF is deliberately NOT required here. A freshly provisioned guest has netvm='' (reprovision
+# resets it), so no vif exists for xenvif to bind to and the devnode is legitimately absent.
+# Demanding it would fail this cell for a network that was never attached - the PV NIC is proven
+# separately, on the AppVMs that actually have a netvm.
+vif=$(echo "$DRV" | grep -ac 'DEV_VIF')
+echo "note  DEV_VIF devnodes present: $vif (0 is expected on a netvm='' guest; PV NIC is graded on the AppVM cells)"
 
 # 6. The premature-reboot mechanism, and the dialog itself if a watcher log survived the reboots.
 mon=$(q 120 "cmd /c sc query xenbus_monitor")

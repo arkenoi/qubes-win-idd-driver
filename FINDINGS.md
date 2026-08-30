@@ -21783,3 +21783,33 @@ the provisioner cut short, or something else is UNDIAGNOSED - the guest cannot b
 qrexec, and the screen shows no installer window.
 
 Evidence: `evidence/win10-u10-stock-desktop-no-qrexec.png`.
+
+## 2026-08-30 — TWO-STAGE (E1) path GRADED: 9 passed, 0 failed, and xencons proven in-cell
+
+`tools/grade-twostage.sh win10-u10 6022427`, on a guest provisioned from pristine media with the
+release payload stick (stick-orchestrated, because a pristine guest has no qrexec to push to):
+
+    PASS  stage1-prepare ok:true            PASS  two distinct run_ids
+    PASS  stage2-install ok:true            PASS  stage 1 ran with testsigning INACTIVE
+    PASS  installed agent == release binary (20CAB4C56816077D)
+    PASS  PV driver CONS bound (svc=xencons)
+    PASS  PV driver IFACE bound (svc=xeniface)
+    PASS  PV driver VBD bound (svc=xenvbd)
+    PASS  xenbus_monitor is not running
+    note  DEV_VIF present: 0  (expected on netvm=''; the PV NIC is graded on the AppVM cells)
+
+This is the E1 two-stage path proven as a graded cell, not merely observed in passing. The checks
+that make it a two-stage claim rather than a relabelled single-stage one: BOTH stage RESULTs, TWO
+distinct run_ids (one would mean a single invocation), and `testsigning_active:false` on the
+installer's own PRECONDITION line - the state that DEFINES E1, asserted on the authority P1.0 names.
+
+**xencons is now proven bound in a graded install** (`DEV_CONS err=0 svc=xencons`), which closes the
+"all drivers" gap for the console. It had been allowlisted as expected-broken since QWT shipped no
+xencons at all; that ceased to be true at 4.3.16.
+
+**Probe defect caught before it became a false regression.** The first version of the driver check
+used a PowerShell `-replace '.*DEV_([A-Z]+).*','$1'` whose `$1` was mangled by shell quoting, and it
+reported "no devnode found" for ALL FOUR drivers on a guest where three were demonstrably bound.
+Four-for-four failure is a broken probe, not four broken drivers - verified directly before
+reporting anything. This is the same species as the five earlier checks-that-cannot-fail; the
+difference is it was caught in the same minute rather than after a campaign.
