@@ -378,6 +378,18 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
       no "$lbl: INVALID-PRECONDITION - cell claims a pristine entry but the installer saw: $(echo "$p1" | cut -c1-200)"
       return 1
     fi
+    # BRANCH AUTHORITY FOR A CLEAN INSTALL. `upgrade_mode` is only assigned inside the
+    # "an existing QWT was found" branch (Install-QwtImproved.ps1:1105), so a genuine clean install
+    # emits NO upgrade_mode at all - and EXPECT_MODE therefore cannot be the authority here. The
+    # installer's own clean-install marker is (Install-QwtImproved.ps1:1021):
+    #   "no previously installed Qubes Windows Tools found - clean install path"
+    # Asserting it positively is what stops a silent D2 reinstall from being reported as D0, which
+    # is exactly how campaign 20260830-062519 produced 36 green lines for a path that never ran.
+    if grep -qa 'clean install path' "$M/$lbl-final.log"; then
+      ok "$lbl: installer took the CLEAN INSTALL path (D0) - its own marker, not an inference"
+    else
+      no "$lbl: INVALID-PRECONDITION - no 'clean install path' marker; this was not a clean install"
+    fi
     cp "$M/$lbl-final.log" "$M/$lbl-final.cur"
   else
     : > "$M/$lbl-final.cur"
