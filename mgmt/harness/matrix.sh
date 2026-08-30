@@ -519,6 +519,23 @@ d=open(sys.argv[1],'rb').read(33); w,h=struct.unpack('>II',d[16:24]); print(w,h)
 ASHA=$(sha256sum "$S/dl/qwt-full-package/gui-agent.exe" | cut -c1-12)
 [ -n "$ASHA" ] || { say "FATAL: could not hash the release gui-agent.exe"; exit 1; }
 PV=$(python3 -c "import json;print(json.load(open('$S/dl/qwt-improved-iso/MANIFEST.json'))['package_version'])")
+# GOLDEN SELECTION + CUSTODY GATE. The cell driver used to hardcode win10-clean / win11-fresh,
+# which are the historical goldens - and win10-clean was used as a scratch guest for a whole
+# evening, so every clone made from it inherited that contamination silently. Goldens are now named
+# here (overridable) and VERIFIED against their seal before any cell runs: a drifted or unsealed
+# golden aborts the campaign instead of quietly poisoning it.
+G10="${G10:-win10-goldr}"
+G11="${G11:-win11-goldr}"
+for g in "$G10" "$G11"; do
+  if ! ./mgmt/golden.sh verify "$g" >/dev/null 2>&1; then
+    say "FATAL: golden $g failed custody verification (drifted or unsealed)."
+    say "       ./mgmt/golden.sh verify $g   # for the detail"
+    say "       Cloning from it would inherit whatever changed. Rebuild per protocol 0.6c or re-seal."
+    exit 1
+  fi
+  say "  golden $g: sealed and intact"
+done
+
 say "=== MATRIX for $PV (agent $ASHA) ==="
 # CELLS used to default to "seeded", which matches NO case arm below: the driver would fall
 # straight through and print "0 passed, 0 failed" - a run that looks completed and tested nothing.
@@ -530,16 +547,16 @@ say "=== MATRIX for $PV (agent $ASHA) ==="
 say "  cells: $CELLS"
 for c in $CELLS; do
   case $c in
-    win10-seeded)   cell_seeded        win10-clean win10-tpl WIN10 ;;
-    win10-1stage)   cell_fresh_1stage  win10-clean win10-tpl WIN10 ;;
-    win10-2stage)   cell_fresh_2stage  win10-clean win10-tpl WIN10 ;;
-    win11-1stage)   cell_fresh_1stage  win11-fresh win11-tpl WIN11 ;;
-    win11-2stage)   cell_fresh_2stage  win11-fresh win11-tpl WIN11 ;;
-    win11-seeded)   cell_seeded        win11-fresh win11-tpl WIN11 ;;
-    win10-fresh)    cell_fresh         win10-clean win10-tpl WIN10 ;;
-    win11-fresh)    cell_fresh         win11-fresh win11-tpl WIN11 ;;
-    win10-stock)    cell_upgrade_stock win10-clean win10-tpl WIN10 ;;
-    win11-stock)    cell_upgrade_stock win11-fresh win11-tpl WIN11 ;;
+    win10-seeded)   cell_seeded        "$G10" win10-tpl WIN10 ;;
+    win10-1stage)   cell_fresh_1stage  "$G10" win10-tpl WIN10 ;;
+    win10-2stage)   cell_fresh_2stage  "$G10" win10-tpl WIN10 ;;
+    win11-1stage)   cell_fresh_1stage  "$G11" win11-tpl WIN11 ;;
+    win11-2stage)   cell_fresh_2stage  "$G11" win11-tpl WIN11 ;;
+    win11-seeded)   cell_seeded        "$G11" win11-tpl WIN11 ;;
+    win10-fresh)    cell_fresh         "$G10" win10-tpl WIN10 ;;
+    win11-fresh)    cell_fresh         "$G11" win11-tpl WIN11 ;;
+    win10-stock)    cell_upgrade_stock "$G10" win10-tpl WIN10 ;;
+    win11-stock)    cell_upgrade_stock "$G11" win11-tpl WIN11 ;;
     win10-appvm)    cell_appvm         - win10-tpl WIN10 win10-app ;;
     win11-appvm)    cell_appvm         - win11-tpl WIN11 win11-app ;;
     # An unknown selector must FAIL the campaign, not be narrated past: a typo would otherwise

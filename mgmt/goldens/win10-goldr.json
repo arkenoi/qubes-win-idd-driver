@@ -1,0 +1,26 @@
+{
+  "note": "ST2G.10 - Win10 22H2 + release 6022427 (4.3.16), stage1+stage2 ok:true, seamless verified",
+  "props": {
+    "klass": "StandaloneVM",
+    "maxmem": "0",
+    "memory": "8192",
+    "vcpus": "4",
+    "virt_mode": "hvm"
+  },
+  "sealed_utc": "2026-08-30T01:01:47Z",
+  "vm": "win10-goldr",
+  "volumes": {
+    "private": {
+      "revisions": [],
+      "revisions_to_keep": "2",
+      "size": "2147483648",
+      "usage": "16320875"
+    },
+    "root": {
+      "revisions": [],
+      "revisions_to_keep": "2",
+      "size": "85899345920",
+      "usage": "10771777978"
+    }
+  }
+}
