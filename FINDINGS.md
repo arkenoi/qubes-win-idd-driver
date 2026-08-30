@@ -23490,3 +23490,40 @@ short window) would then be **clipped to the owner** and truncated in dom0, whil
 inside the guest. Windows itself lets menus spill outside the parent window freely. This has not
 been measured either way; it needs a probe that opens a menu deliberately overhanging the owner and
 compares the guest-side menu rect against what reaches dom0.
+
+### RND-8 run: modes follow, capture survives, and the CLAUDE.md "prerequisite bug" does NOT reproduce
+`mgmt/harness/rnd8-resolution.sh win10-p46`, three sub-host modes, each verified by guest read-back
+AND by the agent (`A6CONFIGURE window 0 -> WxH`), each judged **from pixels**:
+
+| mode | guest+agent | dom0 pixels after a visible guest change |
+|---|---|---|
+| 1024x768  | both report it | `2ad68474` → `de3b7ed5` (changed) |
+| 1600x900  | both report it | `de3b7ed5` → `7d244d33` (changed) |
+| 1920x1080 | both report it | `7d244d33` → `106f90b7` (changed) |
+
+**CLAUDE.md's Phase-2B-resize PREREQUISITE BUG needs updating.** It states that on a resolution
+change `AcquireNextFrame` fails with `0x887a0026` ("the keyed mutex was abandoned") **and the
+capture thread dies**, calling the resolution-change path "already broken in the shipped build".
+Measured across three mode changes:
+
+```
+KEYED 12      RECREATE 27      THREAD_DIED 0
+GetFrame: ... failed with error 0x887a0026: The keyed mutex was abandoned.
+RecreateDuplication: STAGING dormant-park-path (screen grant kept across duplication recreate)
+GetDuplication: Got output duplication. Surface dimensions = 1024x768 ...
+```
+
+Every abandonment is followed immediately by a recreate and a fresh duplication **at the new size**,
+the capture thread never dies, and — the part that matters, because CLAUDE.md itself warns that
+`RecreateDuplication: recovered` was once logged while every dom0 window was frozen — the pixel
+comparison shows frames genuinely resumed after each change.
+
+`0x887a0026` is simply how DXGI signals that the duplication is stale after a mode change. **My
+first criterion demanded ZERO occurrences, which would fail a correctly-behaving build** — the same
+mistake as RND-3's "menus must map as separate windows". Corrected to: every abandonment recovered,
+no thread death, pixels resume.
+
+**Still genuinely blocked:** the dom0-driven half of RND-8 (`qtest resize`, the path a user actually
+drives by dragging the qube window). `local.WinResize` returns `no_window` while
+`local.WinScreenshot` returns windows for the same VM in the same second. `dom0/10-install-resize-service.sh`
+v5 distinguishes the causes, but **dom0 must reinstall it** — an owner action, recorded BLOCKED.
