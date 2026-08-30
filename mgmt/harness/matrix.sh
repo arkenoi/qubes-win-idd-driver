@@ -168,7 +168,17 @@ run_install(){ # $1=vm $2=label $3=payload-dir $4=extra-args
   local vm=$1 lbl=$2 d=$3 extra=${4:-}
   # Clear BOTH logs. The MSI verbose log lives at a fixed path and survives from earlier installs,
   # so without this the capture can show a two-week-old install and read as this run's evidence.
+  # VERIFY THE CLEAR (H1). A failed delete leaves the GOLDEN's own install log in place - every
+  # clone inherits C:\qwt-improved-install.log from the ST2G build - and the next poll then reads
+  # that build's RESULT as this cell's. Deleting and hoping is how a cell grades someone else's
+  # install.
   QTEST_VM=$vm qrun "cmd /c del /f /q $GLOG 2>nul & del /f /q C:\\qwt-install.log 2>nul & echo CLEARED" >/dev/null 2>&1
+  local left
+  left=$(QTEST_VM=$vm qrun "cmd /c if exist $GLOG (echo STILLTHERE) else (echo GONE)" 2>/dev/null | tr -d '\r' | grep -ao 'STILLTHERE\|GONE' | head -1)
+  if [ "$left" != GONE ]; then
+    no "$lbl: could not clear $GLOG (got '${left:-no answer}') - refusing to run, a stale log would be judged as this cell's"
+    return 1
+  fi
   QTEST_VM=$vm qrun "cmd /c start \"\" /min C:\\$d\\install.cmd /auto /autologon:qubes $extra" >/dev/null 2>&1
   # SEED_DELAY: write the PV reboot Request mid-MSI, which is when the field gets it.
   #
@@ -265,7 +275,18 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   ok "$lbl: guest came back with a session"
   QTEST_VM=$vm timeout -k 5 120 ./tools/qtest run "cmd /c type \"$GLOG\"" 2>/dev/null \
     | tr -d '\r' | grep -av 'system32>' > "$M/$lbl-final.log"
-  j=$(grep -ao '=== RESULT === .*' "$M/$lbl-final.log" | tail -1)
+  # Same discriminator as w_install: 111 guest scripts emit "=== RESULT ===" banners and the
+  # installer logs their output, so `grep -ao '=== RESULT === .*'` can pick up a nested one
+  # (e.g. "=== RESULT === changed=0 warnings=0") and every json check then fails against a
+  # non-json string - reported as product FAILs. The installer's own trailer starts the line and
+  # is followed by JSON.
+  j=$(grep -a '^=== RESULT === {' "$M/$lbl-final.log" | tail -1)
+  if [ -z "$j" ]; then
+    # Missing data FAILS, and says so as an instrument problem rather than as a product verdict:
+    # without the trailer nothing about this install has been measured.
+    no "$lbl: no installer RESULT trailer in the final log - INVALID-INSTRUMENT, not a product result"
+    return 1
+  fi
   say "  $lbl RESULT: $(echo "$j" | cut -c1-300)"
   echo "$j" | grep -qa "\"installed_gui_agent_sha256\":\"$ASHA" \
     && ok "$lbl: installed agent == release binary" || no "$lbl: installed agent is NOT the release binary"

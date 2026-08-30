@@ -149,7 +149,19 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
             mv -f "$dir/$lbl-install.log.tmp" "$dir/$lbl-install.log"
         fi
         $log "  $lbl: t+${now}s ${n} log lines | $(tail -1 "$dir/$lbl-install.log" | cut -c1-120)"
-        if grep -qa '=== RESULT ===' "$dir/$lbl-install.log"; then
+        # MATCH THE INSTALLER'S TERMINAL TRAILER, NOT ANY "=== RESULT ===" LINE.
+        # 111 guest scripts emit that banner, and the installer LOGS THEIR OUTPUT as it runs - so a
+        # bare match stops the wait at the first nested banner, mid-install. Measured 2026-08-30:
+        # cell WIN10-1stage was graded 5 s after
+        #   "2026-08-30 04:37:16 [INFO]   === RESULT === changed=0 warnings=0"
+        # (ensure-autologon.ps1's banner) while the installer was still seeding the PV NIC latch.
+        # The whole cell "completed" in 33 s and every json-derived check then failed against an
+        # absent RESULT - reported as product FAILs when nothing had been measured.
+        # Install-QwtImproved.ps1 writes its own trailer UNPREFIXED and followed by JSON:
+        #   === RESULT === {"stage":"stage2-install","ok":true,...}
+        # while nested banners are timestamped ("2026-.. [INFO]   === RESULT === ...") and are not
+        # JSON. Anchoring to start-of-line plus the opening brace separates them exactly.
+        if grep -qa '^=== RESULT === {' "$dir/$lbl-install.log"; then
           $log "  $lbl: RESULT line present at t+${now}s"; return 0
         fi
       elif [ $(( $(date +%s) - lastchange )) -ge "$STALL_SECS" ]; then

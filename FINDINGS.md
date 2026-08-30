@@ -21476,3 +21476,47 @@ from "PASS-UNPROVEN" to having a fail-proof on record.
 that run was not vacuous on this axis. The 0-cell path was never hit either, since CELLS was always
 passed explicitly. The defects were latent, not active - but they were latent in the one instrument
 the whole acceptance claim rests on.
+
+## 2026-08-30 — the matrix graded an install that was still running: "=== RESULT ===" is not unique
+
+First cell of the first campaign run from sealed goldens produced two FAILs. They were NOT product
+failures. The cell "completed" in 33 seconds:
+
+    04:36:52  WIN10-1stage: SEED_DELAY=unset SEED_CELL=unset      <- install starts
+    04:37:20  [INFO] class='TemplateVM': seeding PV NIC priming latch   <- still installing
+    04:37:25  FAIL  installed agent is NOT the release binary
+    04:37:25  FAIL  autologon NOT armed ()                        <- empty parens: no field at all
+
+**Cause.** `w_install`'s success test was `grep -qa '=== RESULT ==='`. That banner is not unique to
+the installer: **111 guest scripts under `guest/` emit it**, and the installer LOGS THEIR OUTPUT as
+it runs. The line that ended the wait was
+
+    2026-08-30 04:37:16 [INFO]   === RESULT === changed=0 warnings=0
+
+which is `ensure-autologon.ps1`'s banner, mid-install. Everything downstream then evaluated against
+an absent trailer, and json-derived checks failed - and were reported as product regressions.
+
+**Discriminator.** `Install-QwtImproved.ps1` writes its own trailer UNPREFIXED and followed by JSON
+(`Add-Content ... "=== RESULT === $json"`), while nested banners are timestamped and are not JSON:
+
+    === RESULT === {"stage":"stage2-install","ok":true,...}        <- the installer's, column 0
+    2026-08-30 04:37:16 [INFO]   === RESULT === changed=0 ...      <- a nested script's
+
+So the test is now `^=== RESULT === {`, proven both ways: the nested banner is ignored, the real
+trailer matches.
+
+**Fixed alongside (RB-11, which the audit flagged and I had left):**
+- `verify_installed` extracted the json with `grep -ao '=== RESULT === .*'` - same ambiguity - and
+  now anchors identically. If no trailer is present it reports **INVALID-INSTRUMENT and returns**,
+  rather than emitting product verdicts about an install it never observed.
+- `run_install` deleted the guest log without verifying. Every clone inherits
+  `C:\qwt-improved-install.log` from the golden's own ST2G build, so a failed delete means the cell
+  reads THAT build's RESULT as its own. It now asserts the file is GONE and refuses to run otherwise.
+
+**Bearing on the campaign:** cells 1-6 of run 20260830-013504 are VOID - stopped after cell 1 rather
+than letting five more inherit it. Nothing about the product was measured; the two FAILs are
+withdrawn.
+
+**Pattern worth noting:** this is the fourth unreachable-or-wrong success criterion found today
+(RB-03's timestamp filter, the harness's empty-ASHA match, my own PRISTINE `VERDICT=DESKTOP`
+comparison, and now this). Every one produced a confident verdict about something never measured.
