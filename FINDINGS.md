@@ -22160,3 +22160,41 @@ behaviour the code does not implement is worse than no comment: it is what stopp
 **Standing lesson:** when a comment claims a safeguard, check that the code has it. Two of today's
 defects — this one and `golden.sh`'s dead revision reader — were safeguards that existed only in
 prose while the code did something weaker.
+
+### 2026-08-30 — the CPU quiescence probe was misparsing admin.vm.Stats (my own instrument bug)
+
+**Found by the owner looking at the guest** — *"it is sitting idle, apparently"* — while my gate was
+logging `cpu=6225` for that same guest and refusing to fire.
+
+`admin.vm.Stats` streams repeating NULL-separated records:
+
+    win10-base \0 vm-stats \0 memory_kb \0 8388656 \0 cpu_time \0 818994 \0 cpu_usage \0 0 \0 cpu_usage_raw \0 0 \0
+
+Both call sites did `tr -d '\0'` and then `grep -aoE 'cpu_usage_raw[0-9]+'`. That is wrong twice:
+
+1. deleting the separators runs the value into the **next record**, so a true `3` is read as `31`;
+2. the result was then **summed over the entire 20 s stream**, i.e. across ~100 samples.
+
+Measured on a genuinely idle `win10-base`: the probe reported **149** and **6225** where the true
+value was **3**. The `< 60` threshold could therefore effectively never be met, so the PRISTINE
+build would have spun to its full 5400 s budget and reported FAIL with the install long finished.
+`mgmt/harness/matrix.sh` carried the identical probe in `verify_installed`, where it made the
+post-install "wait for the install to go quiet" similarly toothless — that one has been in place for
+days and every cell that relied on it was waiting the full 60 iterations rather than detecting calm.
+
+**Fix**: translate NULLs to newlines, take the value on the line *after* each `cpu_usage_raw` key,
+and report the **MAX** over a short window (a brief calm inside heavy work must not read as idle).
+Threshold 15.
+
+**Proven on both sides, same guest, same moment**: corrected parse **3**, broken parse **149**.
+
+**This is the fourth check-that-cannot-fail found today and the only one I introduced myself.** The
+other three — `golden.sh`'s non-existent `qvm-volume revisions`, the PRISTINE gate's unimplemented
+"waits for the screen to go quiet", and `_grab` falling back to the stale `latest.png` — were all
+pre-existing. The pattern is identical in every case: a safeguard that reads plausibly, produces a
+number, and cannot report the condition it exists to detect. **A probe must be shown to produce
+DIFFERENT values in the two states it is meant to distinguish, before any gate is built on it.**
+
+**Outcome**: `win10-base` was in fact a finished, settled, testsigning-OFF pristine desktop (capture
+read, not inferred). Halted and sealed as the Win10 base golden; the seal note records that the
+primer had not yet been proven to fire at sealing time.
