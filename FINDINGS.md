@@ -21553,3 +21553,36 @@ INVALID-PRECONDITION precisely for this and the harness does not implement it.
 available), with the payload delivered by the answer stick at first logon, since a pristine guest
 has no qrexec to push to. That is the stick-orchestrated route P1 already describes and it is a
 different code path from `cell_fresh_2stage`'s clone-and-flip.
+
+## 2026-08-30 — STOCKRC always reports 0: %ERRORLEVEL% expands before the command runs
+
+Cell WIN10-upgrade-stock reported
+
+    stock install STOCKRC=0        <- claims the stock MSI succeeded
+    stock QWT now: <none>          <- HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools\Version absent
+    FAIL  stock 4.2.2 is not installed () - cell INVALID
+
+Both cannot be true. The registry probe is the honest one.
+
+**Cause.** The cell runs, in ONE `cmd /c`:
+
+    msiexec /i "...\installer.msi" /qn ... & echo STOCKRC=%ERRORLEVEL%
+
+cmd expands `%ERRORLEVEL%` when it PARSES the line, i.e. before msiexec has run, so the value
+printed is whatever the errorlevel happened to be beforehand - effectively always 0 here. STOCKRC
+is therefore not a result at all; it is a constant wearing the costume of one. Delayed expansion
+(`setlocal enabledelayedexpansion` + `!ERRORLEVEL!`), a `call echo %^ERRORLEVEL%`, or simply a
+separate second call is required to read it.
+
+That makes it another check that CANNOT FAIL - the fifth found today, after RB-03's unreachable
+success exit, the empty-ASHA match, the 0-cell default, and my own VERDICT=DESKTOP comparison.
+
+**What actually happened to the stock install is UNVERIFIED.** The MSI may have failed, or installed
+without writing that key. `C:\stock-install.log` (msiexec /l*v) is on `win10-tpl` and will answer it,
+but the guest cannot be started while a later cell is using another guest - one Windows guest at a
+time. Deferred deliberately rather than guessed at.
+
+**The cell's own verdict is right**: it declares itself INVALID rather than reporting a product
+result, which is the correct behaviour for a precondition it could not establish. It is the second
+INVALID cell of the campaign, both for the same underlying reason - the cell could not build its
+entry state - and neither says anything about the release.
