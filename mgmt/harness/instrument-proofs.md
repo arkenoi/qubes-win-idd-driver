@@ -67,6 +67,9 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `monitor-redisabled-after-msi` | 2026-08-31 | every `[after msiexec` monitor line stripped | -> red. The MSI re-registers xenbus_monitor, so disarming it once before the install is not enough |
 | `stock-pv-boot-disk` | 2026-08-31 | `pv_boot_disk` flipped to false on a log whose entry state shows a prior QWT | -> red. Self-consistency invariant (true IFF a prior QWT was installed), so the real C1/C3/C4/C6 logs are each other's negative |
 | `no-failure-marker` | 2026-08-31 | a `QubesPvNic-FAILED.txt` line injected | -> red |
+| `idd_modes_published` | 2026-08-31 | the `HKLM\SOFTWARE\QubesIDD` `Modes` value removed | -> `failed=[idd_modes_published]`; restored to `5120x1440,1024x768` -> green. Disabling the IDD DEVICE does NOT turn it red - it reads the registry value the agent writes, not the device, which is why the device plant left it green |
+| `offline-baseline` | 2026-08-31 | a winhttp proxy set to 127.0.0.1:9999 | `netsh winhttp show proxy` flips from `Direct access (no proxy server)` to `Proxy Server(s)`; reset restores it |
+| `standalone-skipped` / `standalone-no-relay` / `template-arm` | 2026-08-31 | the SAME shipped script run on the other VM class | StandaloneVM: 'the qubes proxy updater is template-only ... Doing nothing', RELAY=0; TemplateVM: full path, scan offers 1 update, relay listening |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Predicate validated, DEPLOYED CHECK NOT — these do NOT count (added 2026-08-31)
