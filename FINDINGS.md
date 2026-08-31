@@ -24360,3 +24360,27 @@ everything else. Nothing measured since contradicts the caveat written when the 
     smaller set than it sounds, because SYSTEM qrexec already survives most of it.
 **If we want wedge RESCUE, the emulated serial + EMS/SAC is the thing to build**, not this: SAC is
 in-kernel, answers at IRQLs a user-mode tty cannot, and offers restart/crashdump verbs.
+
+**Post-reboot check, and a further limit found.** win10-app came back clean and self-healed
+exactly as the volume config predicted: `AutoAdminLogon = 1`, session `WIN-IDD-TEST\user`,
+explorer running, QrexecAgent Running, and the `contest` account **does not exist** (its creation
+was refused by the permission classifier and the experiment was redesigned without it - no guest
+credentials were ever touched).
+
+But the console after that reboot is at **`login:`**, not a shell: the previous cmd.exe died with
+the restart. So the console survived the LOGOFF earlier only because a session had already been
+established on it (the owner had logged in via `sudo xl console`). **A guest console is a usable
+COMMAND channel only if someone has logged into it since the last boot** - `tools/qcon --raw`
+always works and proves liveness, but `tools/qcon <cmd>` needs that login. This rig has no stored
+guest credentials and must not acquire any casually.
+
+That is a third dent in the "introspect a dead-qrexec guest" story, after the two above: the
+channel needs a human at boot time, which is exactly what you do not have when a guest wedges
+overnight.
+**There is a way out, and it is the OWNER's call because it is a security tradeoff, not a
+technical one:** `xencons_monitor` runs as SYSTEM and does `CreateProcess` on whatever
+`HKLM\...\Services\xencons_monitor\Parameters\default\Executable` names - today
+`xencons_tty_9_1_0_0.exe`, which authenticates first. Pointing it at something else would give an
+UNAUTHENTICATED SYSTEM console to anyone who can attach. On a Qubes guest that set is only dom0
+plus qubes holding `admin.vm.Console` policy, so it may well be acceptable here - but it removes
+the guest's own authentication boundary and must not be done without an explicit decision.
