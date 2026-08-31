@@ -36,7 +36,14 @@ def _rescan() -> None:
     deliberate violation of each rule - a lint that has never been seen to fire is exactly the
     unproven check this whole file is about (H5, applied to the linter)."""
     global HARNESS, GUEST_PS, FAULTINJECT
-    HARNESS = sorted((ROOT / "mgmt" / "harness").glob("*.sh"))
+    # SCOPE: campaign harnesses AND tools/*.sh. Measured 2026-09-01: L3 scanned only
+    # mgmt/harness and therefore missed two real nested-quote violations in tools/ - one of them
+    # in bench-agent.sh, the source of the canonical benchmark baselines, where a silently-empty
+    # query corrupts the numbers everything else is compared against. The doc's own VERIFY
+    # command found what the lint could not, which is the argument for having both.
+    # tools/tests/ is excluded: those files contain DELIBERATE violations as fixtures.
+    HARNESS = sorted((ROOT / "mgmt" / "harness").glob("*.sh")) + \
+              [p for p in sorted((ROOT / "tools").glob("*.sh")) if "tests" not in p.parts]
     GUEST_PS = sorted((ROOT / "guest").glob("*.ps1"))
     FAULTINJECT = ROOT / "agent" / "gui-agent" / "faultinject.c"
 

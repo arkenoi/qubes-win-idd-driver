@@ -29,7 +29,10 @@ powershell) and **fails silently** — cmd echoes the command, no output, no err
 and written out as a product FAIL.*
 → **CONSTRAINT:** no `-Command` with an escaped quote, anywhere.
 → **VERIFY:** `grep -rE 'powershell[^\n]*-Command\s+"[^\n]*\\"' mgmt/ tools/` → must be empty.
-(Lint L3.)
+(Lint L3. *Scope matters: L3 originally scanned only `mgmt/harness` and missed two real violations
+in `tools/`, one of them in `bench-agent.sh` — the source of the canonical benchmark baselines,
+where a silently-empty query corrupts the numbers everything else is compared against. This
+VERIFY line found what the lint could not, which is the argument for keeping both.*)
 
 **1.3 Guest scripts run as `NT AUTHORITY\SYSTEM` via qrexec on testbed-tagged qubes.**
 Imposed by dom0 policy; the caller cannot request it. Session-0 blindness is **not** a thing here —
