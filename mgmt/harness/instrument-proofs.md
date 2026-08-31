@@ -63,6 +63,7 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `no-restart-during-msiexec` | 2026-08-31 | an Event-1074 restart injected into the install window | → red |
 | `entry-is-previous-release` / `entry-is-stock-422` / `entry-carries-N` | 2026-08-31 | the version assertion pointed at a version never shipped | two-sided across REAL logs with NOTHING planted: C3 v4.3.14.0, C4 v4.2.2.0, C6 v4.3.16.0 each pass their own and fail a bogus one |
 | `deployed-stack-hashes` | 2026-08-31 | one deployed copy mutated | `tools/tests/failproof-misc.sh`: 5 real shipped scripts vs deployed copies → 0 mismatches; mutate one → exactly 1, naming the drifted file. Runs the same comparison the check performs, on the real artefacts |
+| `idd_device_bound` / `desktop_on_idd` / `boot_events_clean` | 2026-08-31 | the `ROOT\DISPLAY` indirect display device disabled | `failed=[idd_device_bound, desktop_on_idd, pnp_no_unexpected_errors, agent_log_healthy, boot_events_clean]`; re-enabled -> `status=OK`, `IddSampleDriver Device 5120x1440`, battery green after a reboot. **`idd_modes_published` did NOT go red** in that run and remains owed |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Predicate validated, DEPLOYED CHECK NOT — these do NOT count (added 2026-08-31)

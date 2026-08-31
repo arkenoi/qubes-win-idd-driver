@@ -118,6 +118,16 @@ run_proof qubes_services_running \
   "Start-Service QubesGuiWatchdog -ErrorAction Continue; Start-Sleep 3" \
   "stop the QubesGuiWatchdog service - an Auto service that is not Running is the condition this check asserts against"
 
+# The IDD trio: idd_device_bound / desktop_on_idd / idd_modes_published all rest on the indirect
+# display device being present and primary. Disabling it is the same technique that proved
+# pv_console_bound, and it is recoverable for the same reason: qrexec is unaffected by the display
+# (measured repeatedly this session - the guest answers while mapping zero windows). Restore is one
+# Enable-PnpDevice. Done LAST so a mishap cannot contaminate the earlier proofs.
+run_proof idd_device_bound \
+  "Get-PnpDevice | Where-Object { \$_.InstanceId -like 'ROOT\\DISPLAY*' } | Disable-PnpDevice -Confirm:\$false -ErrorAction Continue; Start-Sleep 6" \
+  "Get-PnpDevice | Where-Object { \$_.InstanceId -like 'ROOT\\DISPLAY*' } | Enable-PnpDevice -Confirm:\$false -ErrorAction Continue; Start-Sleep 8" \
+  "disable the indirect display device - with no IDD there is no Qubes display adapter to be bound or primary"
+
 log "=== finished rc=$rc ==="
 log "OWED (no safe plant exists): pv_disk_bound (boot disk), user_data_on_private, pnp_no_unexpected_errors, boot_events_clean"
 exit $rc
