@@ -1025,7 +1025,61 @@ not quietly upgrade it.
     deployed check — H5 does not apply to it and it must be reclassified rather than "proven".
     Audited 2026-08-31: of the 38 checks then unproven, ~15 have no implementing harness at all.
 
+18. **The vacuity test: could this evidence be produced by something OTHER than the property?**
+    Four checks failed it in one day, and every one had a detail string asserting more than the
+    code verified:
+    * `or-fullscreen-never-mapped` — graded from a screenshot, which structurally CANNOT see an
+      override-redirect window. Would have passed a build leaking a fullscreen takeover surface.
+    * `keyed-mutex-recovered` / `capture-thread-survives-resize` — its death counter was a log
+      grep whose only match, with the fault armed, was **the injector's own message**.
+    * `menu-synthesized-onto-owner` — hashed the WHOLE owner window, so a caret blink satisfied
+      it; passed with `SYNTHPAINT 0`, not one paint having occurred.
+    * `mode-followed-*` — emitted `"guest+agent both report <M>"` from inside the *pixel* branch
+      while the agent's value was logged and never compared; passed with `AGENTSCREEN none`.
+    The repairs share one shape: **bind the evidence to the narrowest thing the property is about.**
+    Not "a window exists" but "no MAP for THIS hwnd". Not "pixels changed" but "the pixels IN THE
+    RECT THE AGENT SAYS IT PAINTED changed". Not "no death string" but "the frame counter ADVANCED".
+    Corollary: **a check that an unrelated branch can SKIP is nearly as bad as one that cannot
+    fail** — two `mode-followed` rows simply were not emitted when the pixel judge went INVALID.
+
+19. **A fault injector must never emit text the checks it validates grep for.** `FI_CAPTURE_EXIT`'s
+    message contained "capture thread", the exact string RND-8 counted deaths with, so the check
+    detected the injector announcing itself and the red proved nothing. Reworded to "the DDA
+    worker". Before adding a fault, grep the harnesses for every distinctive word in its message.
+
+20. **Classify checks by EXACT-literal grep, never by prefix.** A prefix sweep wrongly reported six
+    checks as implemented (`emulated-unplugged`, `standalone-pvnic-seeded`, `template-pvnic-seeded`,
+    `standalone-nau-removed`, `maximized-window-maps`, `secure-desktop-left-cleanly`); exact
+    matching found nothing emitting them. Use
+    `grep -rl -F -- "<check>" mgmt/harness/*.sh tools/*.sh tools/*.py guest/*.ps1`, plus one probe
+    for a printf-built name (`"<stem>-%s"`), and EXCLUDE any harness you wrote for the proof
+    itself. A row nothing emits is a hand-recorded OBSERVATION: H5 does not apply, and it must be
+    reclassified rather than "proven".
+
+21. **Triage by how LOUD the failure is.** A check's importance is inversely proportional to how
+    obvious its failure would be in ordinary use. Vacuous check for a SILENT failure (frozen
+    capture while every log says healthy) = dangerous, fix it. Vacuous check for a LOUD failure
+    (menus invisible) = low cost, because the world supplies the signal for free. Apply this before
+    spending a 28-minute cycle, and to the observation rows before promoting any of them.
+
 ### 0.13b RUNBOOK — earning a fail-proof with a DIAG BUILD, step by step
+
+**D-0 (NEW, do this first): PREFLIGHT — 3 minutes instead of 28.** Run
+`mgmt/harness/gate-preflight.sh <vm> <hex-bits>`. It asks one question: *with this bit armed, can
+the harness still see its control?* If not, the bit cannot be proved through that harness and no
+amount of runtime changes it. Two cases on 2026-08-31 each burned a full 28-minute cycle to return
+INVALID for a reason visible seconds after arming (`START|NOCARD` destabilised the window set;
+`FI_DROP_CAPTIONED` dropped the captioned Notepad that IS the control). A prove cycle costs exactly
+28 minutes — 14 armed + 14 restored — so preflight pays for itself the first time it refuses.
+
+**D-0b: work guests in PARALLEL.** `vmlock.sh` is per-VM precisely so cross-guest work is safe;
+three Windows guests ran concurrently on 2026-08-31 without trouble. Running everything serially on
+one guest while others sit halted is the single largest avoidable cost in this campaign.
+
+**D-0c: if the check is VACUOUS, repair it before proving it.** Two of the proofs earned on
+2026-08-31 (`mode-followed-*`, the capture pair) were unreachable until the check was fixed, because
+the check could not fail against the very defect it names. Apply rule 18's test first; a proof of a
+vacuous check is worthless even when it goes red.
 
 H5 says a check is evidence only once it has been SEEN to fail with the defect present. For the
 safeguard and capture/render checks the only way to create that defect is a build with the guard
