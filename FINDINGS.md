@@ -23885,3 +23885,32 @@ the *method*: two proofs earned, the vehicle for the rest built and validated, a
 defects removed that were producing false verdicts. What remains is 39 rows, of which the window
 cluster now has a measured obstacle (defence in depth, and control-window interference) rather
 than an unknown one.
+
+### PAUSED 2026-08-31 (owner request) — state at the stop
+
+Nothing in flight; both subjects (`win10-p46`, `win10-app`) verified back on the RELEASE agent
+`20cab4c5…` with `FaultGateOff` cleared. Tree clean.
+
+**Ledger: PASS 304 / PASS-UNPROVEN 56 / N/A 20 of 429.** The 56 split into 22 hand-recorded
+observations with no deployed check (H5 inapplicable — annotated `NO DEPLOYED CHECK`) and 34
+genuine rows.
+
+**Resume point.** A build carrying `FI_NOSCREENCONFIG` (0x100) is already built and downloaded at
+`~/qwt-accept/20260830-acceptance-4.3.16/diag-gates5/gui-agent.exe`, sha `24d75cd1…`. It suppresses
+the screen-window CONFIGURE after a resolution change, aimed at the six-row resolution cluster
+(`mode-followed-*`, `pixels-change-after-resize-*`), which reads the `A6CONFIGURE window 0 -> WxH`
+line and takes the LAST one. Untested. To resume: deploy it, `gate-preflight.sh <vm> 0x100`, then
+armed/cleared runs of `rnd8-resolution.sh`.
+
+**Three checks are measured VACUOUS and need rewriting, not proving** — this is the campaign's
+main open item, and it is more valuable than the remaining proofs:
+1. `or-fullscreen-never-mapped`'s original detection (screenshot only) could not see an
+   override-redirect leak — FIXED by the two-witness change, proof then earned.
+2. `keyed-mutex-recovered` / `capture-thread-survives-resize` — the death counter matched only the
+   injector's own log line; no independent evidence of a silent capture-thread death exists.
+3. `menu-synthesized-onto-owner` / `owner-window-renders` — with `SYNTHPAINT 0` (not one synth
+   paint), the cell still reported "the owner's dom0 pixels changed".
+
+**Open scope decision for the owner:** accept documented `PASS-UNPROVEN` with a measured reason
+for the observational and vacuous rows (≈1–2 sessions of remaining work), or require PASS
+everywhere (weeks, dominated by check rewrites).
