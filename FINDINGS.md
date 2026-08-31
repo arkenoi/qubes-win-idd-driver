@@ -24490,3 +24490,51 @@ already have" is not available. Kernel debugging needs the emulated serial too.
 today with no new driver; (b) emulated serial + EMS/SAC, one dom0 libvirt change and one bcdedit
 change, covering pre-Windows and bugcheck states the PV ring cannot reach; (c) kernel-mode
 DbgPrint forwarding, most work and with a real perf caveat.
+
+## 2026-09-01 — an emulated SERIAL PORT needs NO dom0 change. EMS/SAC is reachable from here
+
+Owner asked whether EMS/SAC really requires a dom0-side change. **Half of it does not.** Measured
+on win10-app:
+
+    qvm-features win10-app qemu-extra-args '-serial file:/dev/hvc0'   (guest metadata, Admin API)
+    restart -> domain came up normally (42 s)
+    guest:  SERIAL: COM1 | Communications Port (COM1)
+            PNP:    Communications Port (COM1) | cm=0 | ACPI\PNP0501\1
+    guest writing to COM1 -> 'COM1 WRITE OK'
+
+Two source facts make this work, and both were checked rather than assumed:
+ - libxl passes **`-nodefaults`** to the HVM qemu (libxl_dm.c:1032), which is exactly why the
+   guest had NO com port before - not a Qubes decision, a libxl one;
+ - the stubdom wiring `-serial /dev/hvc3` is inside `if (b_info->u.hvm.serial ...)` and only
+   `<serial>` in the libvirt XML sets that. But Qubes' template interpolates the
+   `qemu-extra-args` FEATURE into the same qemu command line, so we can supply our own `-serial`
+   whose backend is something that already exists inside the stubdom.
+
+**What you get without dom0, and what you do not:**
+ - **OUTPUT: yes.** `file:/dev/hvc0` is the stubdom's logging console, whose dom0 side is
+   `file:/var/log/xen/console/guest-<vm>-dm.log`. So EMS boot messages, the SAC banner and
+   **bugcheck output** land in a dom0 file, collected by the wedge-forensics service (extended
+   for exactly this earlier today). One-way.
+ - **INTERACTION: no.** SAC's `cmd` channel and its `restart`/`crashdump` verbs need a
+   bidirectional backend. The only bidirectional stubdom->dom0 pipe is console 3, which requires
+   `<serial>` in the libvirt XML = a dom0 template change. `file:` is write-only, and the
+   stubdom has no other route to dom0 (its only network is the guest-IP lwip path, which is not
+   a dom0 channel and must not become one).
+
+**Not yet closed, and it needs dom0 eyes:** the last link, that the bytes actually appear in
+`guest-win10-app-dm.log`, cannot be read from this qube. Three `SERIALMARK-n ... via-COM1-to-
+stubdom-hvc0` lines were emitted at the time of writing; `sudo grep SERIALMARK
+/var/log/xen/console/guest-win10-app-dm.log` in dom0 confirms or refutes it. Everything up to
+that point is measured.
+
+**Also not done:** enabling EMS itself. `bcdedit /ems on` writes the BCD store, which lives on
+the ROOT volume - and win10-app is an AppVM with `snap_on_start=True/save_on_stop=False`, so the
+setting would be discarded by the very reboot needed to apply it. EMS has to be armed on a
+persistent guest (a StandaloneVM, or the template so AppVMs inherit). The transport is proven
+independently of EMS by the COM1 marker write.
+
+**State left behind, deliberately visible:** `win10-app` now carries
+`qemu-extra-args = -serial file:/dev/hvc0`. Revert with
+`qvm-features --unset win10-app qemu-extra-args` + a restart. Note this feature is arbitrary
+device-model arguments - a powerful knob to leave set; the specific value here only adds a
+write-only serial to a log file.
