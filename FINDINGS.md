@@ -24442,3 +24442,51 @@ watchdog heartbeat and last words, installer phase markers, IDD mode changes.
 **NOT DONE, and it is the owner's call:** wiring this into the gui-agent as a log sink. That is a
 change to shipped agent behaviour and adds a guest->dom0 emission path, so it wants an explicit
 decision rather than being slipped in as instrumentation.
+
+## 2026-09-01 — what Windows-native text streams are worth plugging into the console ring
+
+Measured on win10-app first, because every option below is gated on config this guest does not
+have:
+
+    bcdedit {current}: no `debug`, no `ems`, no `bootlog`      debugtype = Local (no wire transport)
+    Debug Print Filter key: ABSENT   -> DbgPrintEx INFO-level output is suppressed by default
+    Win32_SerialPort: NONE           -> EMS/SAC has literally nowhere to emit
+    C:\Windows\ntbtlog.txt: absent
+
+So Windows currently emits nothing out-of-band by any route. Ranked candidates:
+
+1. **`DbgPrint`/`DbgPrintEx` - the real `printk` analogue.** A kernel driver registers
+   `DbgSetDebugPrintCallback` (Vista+, works with NO debugger attached) and forwards to the
+   console ring. Content includes the Xen PV drivers' own logging, PnP/storage, and our IDD -
+   i.e. the PV stack's own view of a wedge, which nothing else gives us. Being kernel-mode it
+   also pairs with a kernel-mode ring writer, removing the user-mode dependency the PowerShell
+   helper has. **Requires unmasking** `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\
+   Debug Print Filter` (absent here, so a naive implementation would receive nothing and look
+   broken). Costs: firehose volume; the callback runs at the caller's IRQL and must not block;
+   and DbgPrint is a global serialisation point, so broad unmasking measurably slows the guest -
+   which matters in a project whose whole point is measuring latency. API claims here are from
+   documentation, NOT yet verified on this rig.
+2. **EMS / SAC - Windows' own designed out-of-band console.** Boot progress, an interactive text
+   shell, and `restart`/`crashdump` verbs, in the kernel, answering in states user-mode cannot.
+   **But it emits to a SERIAL PORT and this guest has none** (measured above), so it is the
+   emulated-serial route (`<serial type='pty'/>` -> stubdom console 3), not the PV ring. This is
+   the strongest answer for wedge RESCUE specifically, and it is Microsoft's mechanism rather
+   than something we invent.
+3. **Bugcheck last-words** via `KeRegisterBugCheckReasonCallback`: a driver writes a final
+   summary into the ring as the machine dies. Narrow but exactly on target for "what was
+   happening when it went". Design care needed: that callback runs at HIGH_LEVEL with interrupts
+   off, so the ring write must be lock-free with everything pre-allocated.
+4. **ETW / Event Log forwarding**: the richest CONTENT (Kernel-Boot, Kernel-General, WHEA, disk),
+   but user-mode consumers, so it dies with everything else - and the event log is already
+   recorded here as silent during the wedge. Good for boot-phase and post-mortem-adjacent work,
+   useless for last words.
+5. **`bcdedit /set bootlog yes` -> ntbtlog.txt**: a file, not a stream. Low value.
+
+**What does NOT exist, so nobody should go looking:** there is no Xen KD transport (no "KDXEN"),
+and KDNET does not support the Xen PV NIC - so "attach a kernel debugger over the PV plumbing we
+already have" is not available. Kernel debugging needs the emulated serial too.
+
+**Ordering that follows:** (a) our own QWT text (gui-agent lifecycle) into the ring - possible
+today with no new driver; (b) emulated serial + EMS/SAC, one dom0 libvirt change and one bcdedit
+change, covering pre-Windows and bugcheck states the PV ring cannot reach; (c) kernel-mode
+DbgPrint forwarding, most work and with a real perf caveat.
