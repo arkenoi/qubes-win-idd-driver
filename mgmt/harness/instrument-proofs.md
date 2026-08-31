@@ -82,6 +82,7 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `zero-reboots` / `zero-reboots-standalone` / `one-boot-per-command` / `coldboot-reboot-confirmed` | 2026-08-31 | a real non-rebooting operation on a live StandaloneVM | LastBootUpTime byte-identical (`04:45:43.7192010` twice); across ONE real reboot it advances to `04:47:02.8275610` and is stable on re-read. Both directions measured on the guest, not simulated |
 | `stage-redetected` | 2026-08-31 | every `testsigning_active` flipped true in a two-stage log | -> red. Scoped to genuine two-stage runs (the 1-stage path starts with testsigning on, so requiring the transition there failed 7 of 10 good logs) |
 | `no-intermediate-reboot` | 2026-08-31 | an `uninstalling ...` line added to an upgrade log that claims no uninstall | -> red |
+| `veto-key-seeded-not-a-vif` | 2026-08-31 | `win10-app`, where XENVIF is NOT empty | shipped `guest/pvnic-latch-readback.ps1`: `win10-p46` (netvm='') has `vif_enum_key=True` with `XENVIF_DEVICES=0` - the veto key seeded while genuinely not a vif; `win10-app` has `XENVIF_DEVICES=1`, so the 'enum empty' half is false there |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Predicate validated, DEPLOYED CHECK NOT — these do NOT count (added 2026-08-31)
@@ -92,7 +93,8 @@ tier separate is the difference between measuring the product and measuring my o
 
 | check | what was validated | what is still owed |
 |---|---|---|
-| `emulated-unplugged` | the predicate rejects a list still carrying the emulated NIC | run the real check on a guest where the emulated adapter is still present |
+| `emulated-unplugged` | positive now REAL (`EMULATED_LEFT 0` on live win10-app) | no guest here still carries a surviving emulated NIC |
+| `standalone-pvnic-seeded` / `template-pvnic-seeded` | positive REAL (nics=1 disks=1, both tasks registered, no failure marker) | every guest on this rig carries the latch, so an unseeded guest does not exist to point the check at |
 | `eligibility-never-had-vif` | the predicate rejects non-zero device/ghost counts | run the real check on a guest that HAS seen a vif |
 
 ## Partially proven — cite as PASS-UNPROVEN until completed
