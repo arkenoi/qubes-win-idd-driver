@@ -24538,3 +24538,48 @@ independently of EMS by the COM1 marker write.
 `qvm-features --unset win10-app qemu-extra-args` + a restart. Note this feature is arbitrary
 device-model arguments - a powerful knob to leave set; the specific value here only adds a
 write-only serial to a log file.
+
+## 2026-09-01 — the main console log IS written; and INTERACTIVE SAC is not reachable on Qubes at all
+
+Owner confirmed the SERIALMARK lines arrived in `guest-win10-app-dm.log`, closing the last hop:
+**guest COM1 -> stubdom hvc0 -> a dom0 log file, with no dom0 change.** Also observed: "nothing
+useful in main console log anyway". Two Qubes patches to qubes-vmm-xen explain both halves.
+
+**1. `1004-systemd-enable-xenconsoled-logging-by-default.patch`.** Upstream xenconsoled defaults
+to `log_guest = 0, log_hv = 0` - logging OFF. Qubes flips it:
+
+    Environment=XENCONSOLED_ARGS="--replace-escape --timestamp=all"
+    Environment=XENCONSOLED_TRACE=all
+
+So the guest console ring **is** captured, timestamped, continuously. "Nothing useful in the main
+console log" is not logging being off - it is Windows emitting nothing there, which is exactly
+the gap `guest/console-write.ps1` closes. Bonus: `--replace-escape` rewrites ESC to a dot in the
+log, which already blunts the ANSI-injection caution I raised earlier - a hostile guest can still
+spam volume, but not paint someone's terminal. **Open, and worth one check: whether
+`guest-<vm>.log` survives a domain restart or is truncated per boot.** The `[QWT] HELPER
+VALIDATION` line was written before two subsequent reboots, so its absence would answer that
+rather than contradict the mechanism.
+
+**2. `0618-libxl-do-not-start-qemu-in-dom0-just-for-extra-conso.patch` - this RETRACTS what I told
+the owner earlier.** I said interactive SAC "needs a dom0 libvirt change". It needs more than
+that, and probably is not reachable at all. Qubes patches libxl:
+
+    -    need_qemu = 1 || libxl__need_xenpv_qemu(gc, &sdss->dm_config);
+    +    need_qemu = libxl__need_xenpv_qemu(gc, &sdss->dm_config);
+
+with the commit message *"We prefer to have broken extra consoles (breaking also saving/restoring
+HVM to a savefile), than running qemu in dom0."* Stubdom consoles 1-3 are left with
+`consback = IOEMU` and **no qemu in dom0 to serve them**. So even after adding `<serial>` to the
+libvirt XML - which would make libxl create console 3 - nothing would back it. Interactive SAC
+(the `cmd` channel, `restart`, `crashdump`) would additionally require reverting a deliberate
+Qubes security/complexity decision to keep qemu out of dom0. That is not a knob, it is a
+disagreement with the platform, and it should not be pursued.
+
+**Consequence - the two channels have clean, non-overlapping roles, and neither needs dom0:**
+ - **PV console ring** (`guest-<vm>.log`): OUR structured telemetry. Clean channel, nothing else
+   writes it, bidirectional if a human logs in. Use `guest/console-write.ps1` / an agent sink.
+ - **Emulated serial via `qemu-extra-args`** (`guest-<vm>-dm.log`): WINDOWS' OWN output - EMS boot
+   messages, SAC banner, and bugcheck text - with no forwarder to write. Write-only, and that is
+   now understood to be the ceiling on Qubes, not a temporary limitation.
+Both are captured by xenconsoled to files that survive the guest, and both are collected by the
+wedge-forensics change made earlier today.
