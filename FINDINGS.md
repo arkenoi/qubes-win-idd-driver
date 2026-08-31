@@ -24172,3 +24172,44 @@ high IRQL. Both DESIGNED, NOT TESTED:
 ~52 s with "Cannot connect to qrexec agent for 6000 seconds" (the early-exit path: the domain
 stopped running) and the qube ends Halted. `win10-app` starts in 18 s on the same rig, so this is
 guest-specific, not systemic.
+
+## 2026-09-01 (same session, cont.) — the qvm-console failure is a POLICY DENY, and it is stock
+
+Owner ran, in dom0:
+
+    $ qvm-console win10-app
+    Use '^]' to exit remote console
+    Cannot connect to win10-app2026/09/01 00:54:25 socat[284623] W waitpid(): child 284624 exited with status 1
+
+That is neither of the two mechanisms above. "Cannot connect to %s" is `qvm-console`'s own
+message, printed by its `qrexec_console()` for ANY nonzero exit of the inner
+`qrexec-client-vm ... admin.vm.Console` (it special-cases only 200 = flock busy), and the inner
+call's stderr is thrown away by the wrapper (`2>/dev/null`) - so the real reason never reaches
+the terminal. The socat "status 1" is just `qrexec_console`'s own `exit 1` and discriminates
+nothing.
+
+**Stock Qubes denies `admin.vm.Console` to everyone, dom0 included.** In qubes-core-admin:
+`qubes-rpc-policy/admin.vm.Console.policy` contains **only comments** - *"The admin.vm.Console
+service is dangerous... This is why the default policy is 'deny'"* - and
+`90-admin-default.policy.header` resolves the service to `include/admin-local-rwx`, which ships
+with **no rules at all**. There is no implicit dom0 allow in qrexec policy: `@adminvm` is an
+ordinary source token. So a stock system has `qvm-console` permanently dead, for every qube and
+every caller, with that one uninformative line as its only symptom.
+
+Confirm in dom0 (the wrapper hides exactly this): `qrexec-client-vm win10-app admin.vm.Console
+</dev/null; echo rc=$?` -> expect `Request refused`, rc=126.
+
+**Grant added to `dom0/12-install-policy-tagged.sh`** (needs a dom0 re-run to take effect):
+
+    admin.vm.Console  *  @adminvm      @tag:win-idd-testbed  allow target=dom0
+    admin.vm.Console  *  win-idd-mgmt  @tag:win-idd-testbed  allow target=dom0
+
+Needs no policy at all, and proves the guest end immediately: `sudo xl console -t pv <vm>`,
+then **press Enter** -> the cmd.exe prompt that xencons_tty is already running.
+
+**Second defect found in our own kit, same file.** `12-install-policy-tagged.sh` writes
+`29-win-idd-testbed.policy` with `cat >` (truncate), and
+`13-install-wedge-forensics-service.sh` APPENDS its grant to that same file - so re-running 12
+after 13 silently revokes wedge forensics. That is why `local.WinWedgeForensics` answered
+"Request refused" from win-idd-mgmt this session despite having been installed. 12 now declares
+the line itself; 13 checks before appending, so it will not duplicate.

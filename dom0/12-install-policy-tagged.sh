@@ -31,6 +31,17 @@ admin.vm.List         *  $DEV  @tag:win-idd-testbed  allow target=dom0
 admin.vm.property.Get *  $DEV  @tag:win-idd-testbed  allow target=dom0
 admin.vm.property.Set *  $DEV  @tag:win-idd-testbed  allow target=dom0
 
+# THE XEN PV CONSOLE. Since 4.3.16 we ship xencons, so the guest runs an interactive cmd.exe
+# on the PV console ring - but stock Qubes denies admin.vm.Console to EVERYONE, dom0 included:
+# qubes-core-admin's qubes-rpc-policy/admin.vm.Console.policy is comments only ("the default
+# policy is 'deny'") and the include/admin-local-rwx it resolves to has no rules at all. So
+# \`qvm-console <vm>\` fails IN DOM0 with the uninformative "Cannot connect to <vm>" (measured
+# 2026-09-01) - that is a missing grant, not a broken console. These two lines are the fix.
+# dom0 keeps using \`sudo xl console -t pv <vm>\`, which needs no policy; the plain form can
+# never work on a Qubes HVM (no <serial> => the stubdom has no console 3; qubes-issues #3039).
+admin.vm.Console      *  @adminvm  @tag:win-idd-testbed  allow target=dom0
+admin.vm.Console      *  $DEV      @tag:win-idd-testbed  allow target=dom0
+
 # Let the dev qube tag/untag qubes itself, so a newly created test qube can be
 # admitted to the testbed without another dom0 visit. Deliberately NOT restricted
 # to the tag (a qube cannot yet carry the tag it is about to be given).
@@ -44,6 +55,12 @@ admin.vm.tag.List     *  $DEV  @anyvm  allow target=dom0
 local.WinScreenshot   *  $DEV  dom0  allow
 local.WinFullScreen   *  $DEV  dom0  allow
 local.WinResize       *  $DEV  dom0  allow
+# 13-install-wedge-forensics-service.sh APPENDS its grant to this same file, and the \`cat >\`
+# above truncates it - so re-running this script silently revoked wedge forensics. Measured
+# 2026-09-01: local.WinWedgeForensics came back "Request refused" from win-idd-mgmt although
+# the service had been installed. Declaring it here makes 12 idempotent w.r.t. 13 (13 checks
+# for the line before appending, so it will not duplicate it).
+local.WinWedgeForensics *  $DEV  dom0  allow
 EOF
 
 echo "Installed $POLICY"
