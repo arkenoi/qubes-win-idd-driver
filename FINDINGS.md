@@ -23605,3 +23605,77 @@ NON-SEAMLESS windowed desktop, i.e. `service.gui-fullscreen` — which I must ne
 **Still worth doing:** installing `dom0/10-install-resize-service.sh` v5 in dom0, so the service
 stops depending on a hardcoded qube name and reports its failure cause. `win-idd-test` is kept as a
 running-name shim until then — without it, `local.WinResize` cannot find any guest.
+
+---
+
+## 2026-08-31 — the first DIAG-BUILD fail-proof, and a fabricated FAIL that took an hour to write off
+
+### SG2's fail-proof is EARNED (`borderless-fullscreen-gated`)
+
+The Mode-2 gate — a borderless screen-sized window is mapped only when `service.gui-fullscreen` is
+set — had never been seen to fail, so under H5 every row citing it could only say PASS-UNPROVEN. It
+is now proven, by the first diag build of this campaign:
+
+| | binary | SG2 probe (1024x768 borderless) | verdict |
+|---|---|---|---|
+| release | `20cab4c5…` | `mapped=no`, agent logged `hidden (set service.gui-fullscreen to allow)` | PASS |
+| diag `diag/sg2-mode2-gate-removed` | `c507ed21…` | `mapped=yes`, present in dom0 in **6/6** samples | FAIL — "the gate leaked" |
+
+Same harness, same probe, same guest, running image hash asserted on both sides. **SG4, SG3 and SG9
+all still passed on the diag build**, so the change moved exactly the check it targeted and nothing
+else — which is what makes the red attributable. The release binary was restored afterwards and its
+running image hash re-verified.
+
+The procedure is now written down as protocol §0.13b (D-1..D-9) so the remaining ~19 safeguard
+clauses do not have to rediscover it.
+
+### A FAIL I fabricated, and how it was written off
+
+The D-9 restore-confirm run scored **SG2 = FAIL: "a 1600x900 window reached dom0 — the gate
+leaked"** on the *restored release* binary. Taken at face value that would have retracted the proof
+above. It was mine, not the product's:
+
+* I launched the runner with `nohup … &` *inside* an already-backgrounded task. The wrapper exited
+  instantly, the harness reported **exit code 0**, and the teardown killed the process group — but
+  the `nohup`'d runner **survived**, which is exactly what `nohup` is for.
+* Believing it dead, I `rm -rf`'d its output and started a second run **against the same guest and
+  the same directory**. The two interleaved.
+* Tells, all present in the log: doubled banners (`=== SG4 ===` at 08:29:59 *and* 08:32:04), and a
+  probe JSON whose `"mode"` disagreed with the banner above it.
+* The FAIL was scored against the *other* run's **captioned** probe, which maps legitimately at
+  1586x893 — within the ≥93%/≥88% size tolerance the harness uses to identify its own probe.
+
+This is CLAUDE.md's "run VM-mutating jobs serially", broken in a new way. Two durable fixes, not a
+resolution to be more careful:
+
+* **protocol rule 14** — never background a runner twice; and an `exit 0` whose `verdicts.tsv` is
+  absent or empty is a *killed* run, never a clean one.
+* **protocol rule 15 + `mgmt/harness/vmlock.sh`** — every guest-touching runner now takes a per-VM
+  `flock`. A second runner refuses to start and names the holder's pid. Re-entrant within one job so
+  a harness can still call another as a subroutine. **Validated the same day**: with a run in
+  flight, a second invocation printed `REFUSING TO START`, named the holder, and created nothing.
+
+**Provenance of the SG2 proof was then audited for this failure mode and it is clean**: the red run
+has exactly one banner per cell; the green run's directory holds three runs 30 minutes apart with no
+overlap, and the surviving rows are the last one's. Neither side carries the signature.
+
+*Lesson worth more than the proof: when a verdict surprises you, look for a second runner before you
+believe it.*
+
+### Fault-injection build is up (`diag/faultinject`)
+
+`agent/gui-agent/faultinject.c` was already written but had never been built. CI now produces an
+agent with `QGA_FAULT_INJECTION=1` (`gui-agent.exe` sha `a6da96e9…`), via a one-line flip of the
+msbuild default on a diag branch — no workflow input needed.
+
+This vehicle is **stronger than SG2's pairing**: every fault defaults to OFF and needs an explicit
+registry value, so the unarmed fault build is behaviourally identical to the release and *both*
+sides of a proof come from **one artifact**. Green→red→green is then attributable to the registry
+value alone, not to a build difference.
+
+`mgmt/harness/failproof-faultinject.sh` drives it for `keyed-mutex-recovered` and
+`capture-thread-survives-resize`, reusing RND-8 as the instrument rather than writing a second one
+that would itself need validating. One subtlety it encodes: RND-8 counts thread deaths by grepping
+for `/capture thread|…/`, and **FI_CAPTURE_EXIT's own trigger message contains "capture thread"** —
+so the log half of the red is self-referential. The harness therefore treats the **pixel** half as
+primary evidence and refuses to record a log-only red.
