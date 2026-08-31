@@ -973,6 +973,14 @@ not quietly upgrade it.
 
 ---
 
+14. **Never background a runner twice.** `nohup runner.sh &` inside an already-backgrounded task
+    makes the WRAPPER exit instantly; the harness then reports `exit code 0` and tears down the
+    process group, killing the runner mid-flight. Measured 2026-08-31: a P5 restore-confirm
+    reported success while its log stopped at P5-3 containment, having graded nothing. Launch the
+    runner as the task's own foreground command. Corollary for reading results: an `exit 0` whose
+    verdicts.tsv is ABSENT OR EMPTY is a killed run, never a clean one — check for the file before
+    reading the code.
+
 ### 0.13b RUNBOOK — earning a fail-proof with a DIAG BUILD, step by step
 
 H5 says a check is evidence only once it has been SEEN to fail with the defect present. For the
