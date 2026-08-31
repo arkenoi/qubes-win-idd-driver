@@ -192,7 +192,19 @@ Starting state: 31 gaps. Ending state: **one**, and it needs a dom0 action.
 | **U1** | 3/3 scans on `win11-tpl`: 1 update offered, reported to dom0 exit 0, confirmed dom0-side (`updates-available=1`). |
 | **U2** | Proven cold boot of a template with the scan armed and the debounce cleared: `class_correct=true`, **`qdb_retry_evidence=true`** — the fix exercised for the first time. |
 
-**The one remaining gap — needs the owner, in dom0.** `RND-8 / dom0-driven-resize` is `BLOCKED`:
+**RETRACTED (2026-08-31): there is no remaining dom0-blocked gap.** I recorded the following as
+`BLOCKED` on an owner dom0 action and asserted it without measuring — the exact failure the
+rig-capabilities skill exists to prevent. Measured afterwards: with TWO tagged guests running the
+installed service returns `err=no_window` where the repo v2+ build prints `multiple_testbed_guests`,
+so dom0 runs the PRE-FIX build that hardcodes the qube name `win-idd-test` (since deleted). Creating
+a StandaloneVM of that name made it answer `GEOM ok=1` instantly, and `local.WinResize+1400x800`
+resized the dom0 window `3826x1029 → 1386x793` with the agent logging `CONFIGURE=3`. **The
+dom0→agent geometry channel is live and no dom0 action was needed to prove it.** What remains is
+`ATTENDED-PENDING`, not blocked: the resolution path is gated on `window == 0`, which is unmapped in
+seamless mode, so it needs the non-seamless windowed desktop (`service.gui-fullscreen`, which the
+harness must never set). Original text follows.
+
+~~**The one remaining gap — needs the owner, in dom0.** `RND-8 / dom0-driven-resize` is `BLOCKED`:~~
 `local.WinResize` returns `err=no_window` while `local.WinScreenshot` returns windows for the same
 VM **in the same second**, and `local.WinFullScreen` lists them too. All three read the same X
 session; the first two prove `xprop`, `import` and `xwininfo` all work in dom0, so the fault is
