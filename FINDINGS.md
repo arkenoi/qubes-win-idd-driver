@@ -24246,3 +24246,60 @@ problems, all fixed in the installer this session:
 
 It cannot start a halted VM: `qubesdb-write -d` talks to a dom0-local socket, not qrexec. On a
 halted `win-idd-test` it simply fails silently once a minute.
+
+## 2026-09-01 — PV CONSOLE WORKS END TO END from the dev qube; what it buys over qrexec
+
+With `admin.vm.Console` granted (owner installed the policy), from win-idd-mgmt:
+
+    $ qrexec-client-vm win10-app admin.vm.Console      rc=0
+      \r\n[ATTACHED]\r\n\r\nWIN-IDD-TEST login:
+    (later, after login) sent "\r" -> received '\r\nC:\Users\user>'
+
+So it is a **bidirectional interactive Windows shell over qrexec**, not a read-only trickle.
+`sudo xl console -t pv <vm>` gives dom0 the same thing (owner confirmed; sudo was the fix -
+`/usr/libexec/xen/bin/xenconsole` is mode 0700 root, and xl's "Unable to attach console" is
+printed unconditionally after a FAILED execv, so it means "could not run xenconsole", never
+"no tty").
+
+**ONE ATTACHER AT A TIME.** dom0's `xl console` and the dev qube's `qvm-console` open the same
+pty slave and split the byte stream. Measured here: probe 1 got the login banner, probe 2 got
+NOTHING (owner was attached concurrently), probe 3 got the prompt. A silent console is therefore
+not evidence of a dead console until you have checked that nobody else is attached. The cmd.exe
+session also PERSISTS across detach/reattach - probe 3 found it already logged in.
+
+**What it buys over qrexec** (the honest list):
+1. **Disjoint transport.** qrexec = vchan + qrexec-agent in the interactive user session
+   (+ gui-agent for capture). The console = xenbus console ring + evtchn, serviced by dom0's
+   xenconsoled. They share no code, no session, no service. The recurring wedge class recorded
+   here is exactly "guest alive, qrexec dead - qrexec, window capture and the event log all go
+   at once"; the console is the only instrument that is not in that set.
+2. **No logged-on session needed.** qrexec runs in the user's session - `pushrun` against a
+   session-less guest returns NOTHING and reads as "found nothing" (it bricked a subject once).
+   `xencons_tty` prompts for a login itself and builds its own token
+   (`LoadUserProfile` + `CreateProcessAsUser`, src/tty/tty.c:119,159), so it can produce a shell
+   where qrexec structurally cannot: sign-in screen, logged-off guest, autologon disabled - the
+   2026-08-28 lockout ("0 windows mapped, qrexec answers, no password box anywhere").
+   **INFERRED FROM SOURCE + the login prompt, NOT YET DEMONSTRATED on a logged-off guest.** That
+   is a cheap, high-value test and it is the claim to prove before relying on this.
+3. **Retroactive.** xenconsoled writes `/var/log/xen/console/guest-<vm>.log` continuously whether
+   or not anyone is attached, so it holds output from BEFORE you started looking. No other
+   instrument here retains that.
+4. **Zero guest cooperation from dom0.** `sudo xl console -t pv <vm>`: no policy, no agent, no
+   qubesdb, no netvm.
+
+**What it does NOT buy** (do not oversell it):
+1. **It probably will not survive the measured wedge.** That is a Xen HVM IPI/TLB-shootdown
+   deadlock (proven from two NMI captures). If vCPUs spin at high IRQL, xencons's own DPC/worker
+   does not run either and the console goes silent with everything else.
+2. **No pre-Windows coverage.** xencons is a PnP driver enumerated by XenBus well into boot -
+   nothing for firmware, Setup, or a bugcheck screen. That is the gap the emulated-serial + EMS
+   option covers (SAC also survives states a user-mode tty cannot, and offers restart/crashdump).
+3. **No pixels.** It does not replace `qtest shot` for anything display-related, which is most
+   of this project.
+4. **Not on QWT-free images.** xencons ships in OUR package, so a pristine guest still cannot be
+   driven; the "one provisioning run per version" cost from 2026-08-29 stands unchanged.
+
+**Loose end, low value now:** the owner's `qvm-console` IN DOM0 still failed after the policy
+went in, while the same call from win-idd-mgmt succeeded - so the policy did take effect and the
+remaining dom0-side issue is separate (dom0-as-source/dom0-as-target routing). Moot in practice:
+dom0 has `sudo xl console -t pv`, which needs no policy at all.
