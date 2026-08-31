@@ -38,6 +38,9 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `pnp_no_unexpected_errors` | 2026-08-31 | same run — a disabled device IS an unexpected PnP error | caught it in the same `failed` list, cleared on restore |
 | `updates_dom0_owned` | 2026-08-31 | `NoAutoUpdate=0` — the guest would service itself | `failed=[updates_dom0_owned]`; restored to 1 → `failed=NONE`. Reproduced three times |
 | `autologon-armed` | 2026-08-31 | `AutoAdminLogon=0` + guard task deleted + cold boot | `mgmt/harness/sg6-failproof.sh`: read back `autologon=0`, guest mapped ZERO windows with qrexec alive; re-armed → 1 |
+| `cold-boot-health` | 2026-08-31 | `NoAutoUpdate=0` planted, then a real COLD BOOT | battery read after the boot: `ok:false failed:[updates_dom0_owned]`; restored → green. Proves the assertion survives and detects across a reboot, not just in a live session |
+| `window-chrome-present` | 2026-08-31 | a synthetic PNG with no title bar and no border bands | `tools/tests/failproof-check-chrome.sh`, two-sided: negative → rc=1 *"the window's top band is featureless - title bar / menu bar were cropped out"*; positive (a real capture) → rc=0 `CHROME=OK top_band_colours=23 bottom_band_colours=16` |
+| `pixels-reach-dom0` | 2026-08-31 | two captures taken with NO stimulus between them | byte-identical (`f34de700`), so the check correctly reports no pixels reaching dom0; typing a marker changes it (`b29395c0`) |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Partially proven — cite as PASS-UNPROVEN until completed
