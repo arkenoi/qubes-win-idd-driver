@@ -34,6 +34,12 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 GUEST='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-150}" ./tools/qtest "$@" 2>/dev/null; }
 r(){ q run "$1" | tr -d '\r' | grep -avE '^(Microsoft Windows \[Version|\(c\) Microsoft|C:\\)'; }
+# Any PowerShell with quotes or backslashes goes through -EncodedCommand: bash -> qtest ->
+# cmd.exe -> powershell re-splits a nested-quote one-liner at every hop, and the failure mode
+# is SILENCE, not an error (protocol 0.8b rule 2).
+psrun(){ local b; b=$(python3 -c "
+import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode(), end='')" <<< "$1")
+  r "cmd /c powershell -NoProfile -EncodedCommand $b"; }
 log(){ echo "$(date -u +%H:%M:%S) rnd8[$VM]: $*" | tee -a "$OUT/rnd8.log"; }
 V="$OUT/verdicts.tsv"; EV=$(basename "$OUT"); rc=0
 
@@ -159,10 +165,28 @@ done
 # recovered and FRAMES RESUME - and the per-mode pixel comparison above is the independent proof of
 # the second half (CLAUDE.md: "RecreateDuplication: recovered - windows kept" was once logged while
 # every dom0 window was frozen, so the log line alone is not enough).
-KM=$(r 'cmd /c powershell -NoProfile -Command "$d=(Get-ItemProperty \"HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir; $f=(Get-ChildItem $d -Filter gui-agent-*.log | Sort LastWriteTime -Desc | Select -First 1); $a=Get-Content $f.FullName; \"KM=\" + @($a | Select-String -SimpleMatch 887a0026).Count + \" RC=\" + @($a | Select-String -SimpleMatch RecreateDuplication).Count + \" DIED=\" + @($a | Select-String -Pattern \"capture thread|thread exiting|giving up\").Count"' | grep -ao 'KM=[0-9]* RC=[0-9]* DIED=[0-9]*' | head -1)
+# THROUGH -EncodedCommand, NOT nested quotes. The previous form was a `cmd /c powershell
+# -Command "... \"...\" ..."` one-liner, and on 2026-08-31 it was measured returning NOTHING at
+# all: cmd echoed the command and produced no output, no error. km/rec/died came back EMPTY,
+# `[ "" -eq 0 ]` failed, and the else-branch wrote `keyed-mutex-recovered FAIL` with a detail
+# line reading " abandonments,  recreates,  thread deaths". A fabricated product defect from a
+# silently broken query - protocol 0.8b rule 2, the same hazard that made a health-check plant
+# silently do nothing. The identical query through -EncodedCommand returns `KM=10 RC=23 DIED=0`.
+KM=$(psrun '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
+$f=Get-ChildItem $d -Filter gui-agent-*.log | Sort LastWriteTime -Desc | Select -First 1
+$a=Get-Content $f.FullName
+Write-Output ("KM=" + @($a | Select-String -SimpleMatch 887a0026).Count + " RC=" + @($a | Select-String -SimpleMatch RecreateDuplication).Count + " DIED=" + @($a | Select-String -Pattern "capture thread|thread exiting|giving up").Count)' \
+  | grep -aoE 'KM=[0-9]+ RC=[0-9]+ DIED=[0-9]+' | head -1)
 km=$(echo "$KM" | grep -ao 'KM=[0-9]*' | cut -d= -f2); rec=$(echo "$KM" | grep -ao 'RC=[0-9]*' | cut -d= -f2); died=$(echo "$KM" | grep -ao 'DIED=[0-9]*' | cut -d= -f2)
 log "=== keyed mutex: ${km:-?} abandonment(s), ${rec:-?} RecreateDuplication, ${died:-?} thread death(s) ==="
-if [ "${died:-1}" -eq 0 ] && [ "${rec:-0}" -ge "${km:-1}" ]; then
+# MISSING DATA IS AN INSTRUMENT FAULT, NOT A PRODUCT VERDICT. CLAUDE.md says missing data must
+# fail - it must never be approximated or skipped - but failing it as FAIL would put a defect
+# on the PRODUCT's record that the product never committed. Distinguish the two explicitly.
+if [ -z "$km" ] || [ -z "$rec" ] || [ -z "$died" ]; then
+  log "  -> INVALID-INSTRUMENT: the log counter returned no data (raw='${KM}'). Nothing is graded"
+  log "     here; this says nothing about the guest, only that the query did not run."
+  printf 'RND-8\tkeyed-mutex-recovered\tINVALID-INSTRUMENT\tcounter query returned no data (raw=%s)\t%s\n' "${KM:-EMPTY}" "$EV" >> "$V"; rc=1
+elif [ "$died" -eq 0 ] && [ "$rec" -ge "$km" ]; then
   log "  -> PASS: every abandonment was recovered and the capture thread never died; frames"
   log "     provably resumed (the pixel comparisons above)."
   printf 'RND-8\tkeyed-mutex-recovered\tPASS-UNPROVEN\t%s abandonment(s), %s RecreateDuplication, 0 thread deaths; pixels changed after every mode change\t%s\n' "$km" "$rec" "$EV" >> "$V"

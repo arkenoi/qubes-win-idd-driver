@@ -991,6 +991,23 @@ not quietly upgrade it.
     second invocation printed "REFUSING TO START", named the holder, and created no output.
     **When a verdict surprises you, check for a second runner BEFORE believing it.**
 
+16. **A silently-empty query fabricates verdicts — audit for it, don't assume.** Rule 2 said to
+    send PowerShell through `-EncodedCommand`; it did not say what a violation looks like when it
+    bites a *measurement* rather than a plant. Measured 2026-08-31 in `rnd8-resolution.sh`: the
+    keyed-mutex counter, a nested-quote `cmd /c powershell -Command "... \"...\" ..."` one-liner,
+    returned **nothing at all** — cmd echoed the command, emitted no output and no error. `km`,
+    `rec` and `died` came back empty, `[ "" -eq 0 ]` failed, and the harness wrote
+    `keyed-mutex-recovered FAIL` with the detail " abandonments,  recreates,  thread deaths". A
+    product defect invented by a broken query. The same query through `-EncodedCommand` returns
+    `KM=10 RC=23 DIED=0`.
+    Two obligations follow:
+    * **Missing data must fail as `INVALID-INSTRUMENT`, never as `FAIL`.** Failing it is right;
+      recording it against the *product* is not. Test emptiness explicitly, before any numeric
+      comparison — `${x:-0}` defaults turn "no data" into a confident wrong number.
+    * **Still carrying the risky pattern** (each feeds a verdict, each unaudited):
+      `u2-coldboot.sh`, `sg1-u2-coldboot.sh`, `stability-e2e.sh`. Convert before trusting a
+      verdict from any of them.
+
 ### 0.13b RUNBOOK — earning a fail-proof with a DIAG BUILD, step by step
 
 H5 says a check is evidence only once it has been SEEN to fail with the defect present. For the
