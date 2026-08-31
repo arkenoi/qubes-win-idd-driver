@@ -89,8 +89,79 @@ def check(path):
                 'announcement of it',
     }
 
-    failed = [k for k, v in res.items() if not v['ok']]
-    return {'file': path, 'checks': res, 'failed': failed, 'ok': not failed}
+    # --- stage RESULT invariants ----------------------------------------------------------------
+    # The installer emits `=== RESULT === {"stage":"...","ok":bool,...}` per stage. Grade the stages
+    # the slice actually contains; a slice without a stage is `na`, never a vacuous pass.
+    stage_res = []
+    for ln in lines:
+        m = re.search(r'===\s*RESULT\s*===\s*(\{.*)$', ln)
+        if not m:
+            continue
+        try:
+            o = json.loads(m.group(1))
+        except Exception:
+            continue
+        if isinstance(o, dict) and 'stage' in o:
+            stage_res.append(o)
+
+    def stage_rows(name):
+        return [o for o in stage_res if o.get('stage') == name]
+
+    s1 = stage_rows('stage1-prepare')
+    res['stage1_prepare_ok'] = {
+        'ok': (all(o.get('ok') for o in s1) if s1 else True),
+        'na': not s1, 'count': len(s1),
+        'not_ok': [o for o in s1 if not o.get('ok')][:2],
+    }
+    s2 = stage_rows('stage2-install')
+    res['stage2_install_ok'] = {
+        'ok': (all(o.get('ok') for o in s2) and len(s2) >= 1) if s2 else True,
+        'na': not s2, 'count': len(s2),
+        'not_ok': [o for o in s2 if not o.get('ok')][:2],
+    }
+    # resume_fires_once: the resume path must run stage 2 EXACTLY once. Two stage2 RESULTs means the
+    # resume fired twice - a second unnecessary install pass over a guest that was already done.
+    res['resume_fires_once'] = {
+        'ok': (len(s2) == 1) if s2 else True, 'na': not s2, 'stage2_results': len(s2),
+    }
+
+    # --- the msiexec command line ---------------------------------------------------------------
+    msi_lines = [ln for ln in lines if re.search(r'running\s+msiexec', ln, re.I)]
+    # REINSTALL=ALL is BRANCH-SPECIFIC, not universal. Measured across the campaign: the
+    # same-version reinstall path (C6) uses `REINSTALL=ALL`; clean install (C1) and the
+    # uninstall-first upgrades (C3/C4) use `REINSTALL=(none)` - correctly, since there is nothing
+    # to reinstall. Demanding ALL unconditionally failed 8 of 10 good logs, and cross-checking the
+    # ledger showed only the two C6 cells ever claimed this check. What IS universal is that
+    # ADDLOCAL carries PvDriversDisk and MoveUsers.
+    reinstall_vals = [m.group(1) for ln in msi_lines
+                      for m in [re.search(r'REINSTALL=(\S+?)[\s)]', ln + ' ')] if m]
+    addlocal_ok = all(('PvDriversDisk' in ln and 'MoveUsers' in ln) for ln in msi_lines)
+    is_all = any(v.upper().startswith('ALL') for v in reinstall_vals)
+    res['reinstall_all_on_msiexec'] = {
+        'ok': addlocal_ok and (is_all if reinstall_vals else True),
+        # na when the branch did not ask for a reinstall - the cell does not claim this check there
+        'na': (not msi_lines) or (bool(reinstall_vals) and not is_all),
+        'invocations': len(msi_lines), 'reinstall': reinstall_vals[:2], 'addlocal_ok': addlocal_ok,
+    }
+
+    # --- pnputil ---------------------------------------------------------------------------------
+    # rc=259 ("Already exists in the system") is SUCCESS for a driver already in the store; the
+    # check exists because treating 259 as an error once failed a correct install.
+    pnp_ok = [ln for ln in lines if re.search(r'added successfully|Already exists in the system', ln, re.I)]
+    pnp_bad = [ln.strip()[:140] for ln in lines
+               if re.search(r'pnputil', ln, re.I) and re.search(r'\bfail|error', ln, re.I)]
+    res['pnputil_259_accepted'] = {
+        'ok': (len(pnp_bad) == 0) if (pnp_ok or pnp_bad) else True,
+        'na': not (pnp_ok or pnp_bad), 'accepted': len(pnp_ok), 'failures': pnp_bad[:2],
+    }
+
+    # An `na` check must NOT read as a pass and must NOT fail the run either - the same rule
+    # health-check.ps1 already applies ("counting them as failures made acceptance unpassable on the
+    # very path it creates"). They are reported separately so a release CLAIM can require one while
+    # a run does not.
+    failed = [k for k, v in res.items() if not v['ok'] and not v.get('na')]
+    na = [k for k, v in res.items() if v.get('na')]
+    return {'file': path, 'checks': res, 'failed': failed, 'not_applicable': na, 'ok': not failed}
 
 
 def main(argv):
@@ -109,10 +180,14 @@ def main(argv):
                 extra = f"runs={v['runs']} distinct={v['distinct_runs']} repeated={v['repeated_run_ids'] or '{}'}"
             elif name == 'no_refusing':
                 extra = f"count={v['count']}" + (f" e.g. {v['lines'][0]}" if v['lines'] else '')
-            else:
+            elif name == 'monitor_disabled_before_msiexec':
                 extra = f"msiexec_invocations={v['msiexec_invocations']} monitor_before={v['monitor_before_msiexec_lines']}"
+            else:
+                extra = ' '.join(f"{k}={v[k]}" for k in v if k not in ('ok','na','note'))
             print(f"{mark} {name}: {extra}")
-        print(('INSTALLLOG=OK' if out['ok'] else 'INSTALLLOG=FAIL ' + ','.join(out['failed'])))
+        na = out.get('not_applicable') or []
+        tail = 'INSTALLLOG=OK' if out['ok'] else 'INSTALLLOG=FAIL ' + ','.join(out['failed'])
+        print(tail + (('  na=' + ','.join(na)) if na else ''))
     return 0 if out['ok'] else 1
 
 

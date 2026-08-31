@@ -44,6 +44,11 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `one-precondition-no-mid-reboot` | 2026-08-31 | a second PRECONDITION replayed under the SAME `run_id` | `tools/tests/failproof-install-log.sh` → red on `one_precondition_per_run`; 10/10 real campaign logs pass untouched |
 | `no-refusing` | 2026-08-31 | a `REFUSING to install:` line appended | → red on `no_refusing`; 10/10 real logs pass untouched |
 | `monitor-disabled-before-msiexec` | 2026-08-31 | every `xenbus_monitor disabled` line stripped (the 81d2b79 brick condition) | → red on `monitor_disabled_before_msiexec`; 10/10 real logs pass untouched |
+| `stage1-prepare-ok` / `stage2-install-ok` | 2026-08-31 | the stage RESULT flipped to `ok:false` | `tools/tests/failproof-install-log.sh` negatives 4 and 5 → each turns its own invariant red |
+| `resume-fires-once` | 2026-08-31 | a second `stage2-install` RESULT appended | negative 6 → red; the resume must run stage 2 exactly once |
+| `reinstall-all-on-msiexec` | 2026-08-31 | `PvDriversDisk` dropped from ADDLOCAL | negative 7 → red. Branch-aware: `REINSTALL=(none)` is CORRECT on clean-install/uninstall-first and reports `na` |
+| `pnputil-259-accepted` | 2026-08-31 | a pnputil failure line injected | negative 8 → red; rc=259 "Already exists in the system" stays accepted, which is the check's purpose |
+| `no-pv-gate-refusal` | 2026-08-31 | a `REFUSING to install:` line appended | negative 2 → red (same assertion as `no-refusing`, under the cell-specific name for the 2026-08-11 PV-gate guard) |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Partially proven — cite as PASS-UNPROVEN until completed
