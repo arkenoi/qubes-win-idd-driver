@@ -23914,3 +23914,55 @@ main open item, and it is more valuable than the remaining proofs:
 **Open scope decision for the owner:** accept documented `PASS-UNPROVEN` with a measured reason
 for the observational and vacuous rows (≈1–2 sessions of remaining work), or require PASS
 everywhere (weeks, dominated by check rewrites).
+
+### Tractable set, part 1: resolution cluster earned — after repairing the check
+
+`mode-followed-1024x768 / -1600x900 / -1920x1080` are **PASS**, proved on one artifact with
+`FaultGateOff=0x100` (`FI_NOSCREENCONFIG`, build `24d75cd1`): armed → all three FAIL
+(*"the guest adopted <M> but the agent last told dom0 none — dom0 is on stale geometry"*);
+cleared → all three PASS (*"AGENTSCREEN <M> … they agree"*).
+
+**It could not have been earned without fixing the check first.** `mode-followed` was emitted from
+inside the *pixel* branch with the detail string *"guest+agent both report <M>"* while `ag` was
+logged and never compared. With `AGENTSCREEN none` on every mode it still recorded agreement — and
+two of the three rows weren't emitted at all, because the pixel judge went INVALID first and took
+the mode verdict with it. **Fourth vacuous check found by the injector.** Now graded on its own.
+
+`pixels-change-after-resize-*` is explicitly **not** earned: the defect destroyed the capture, so
+all three reported INVALID-INSTRUMENT rather than FAIL, and INVALID is never folded into a proof.
+Open limitation: the harness cannot distinguish *"my instrument broke"* from *"the product broke my
+instrument"*.
+
+### Tractable set, part 2: the install-time cluster is not what it looked like
+
+Built a disposable clone (create → tag → copy, per the rig-capabilities skill — a bare `qvm-clone`
+is refused because it copies volumes before tags exist; the documented order took **1.8 s**), and
+installed a setup tree with `pvnic-selfprime.ps1` removed. Result:
+
+**`pvnic_prime: not in payload`**, `stage2-install / ok:true`. So the defect state *does* exist,
+which **narrows a claim previously recorded as "negative proven unreachable by measurement"** — that
+finding was about the LATCH (unseeding `NICS`, which the PV stack re-seeds below the task layer).
+The PAYLOAD route reaches it.
+
+But it earns no proof, because of a correction to my own earlier audit:
+
+**AUDIT CORRECTED.** The earlier sweep used loose PREFIX matching and wrongly reported six checks as
+implemented. Exact-literal grep finds **nothing** emitting `emulated-unplugged`,
+`standalone-pvnic-seeded`, `template-pvnic-seeded`, `standalone-nau-removed`,
+`maximized-window-maps` or `secure-desktop-left-cleanly`. They are hand-recorded observations; H5
+cannot apply. 14 rows re-annotated.
+
+Revised split of the 53 unproven: **36 rows are observations with no deployed check**, **17 rows
+across 12 checks are genuine**.
+
+### Incidental: payload verification demonstrated, not assumed
+
+Two independent defects, both refused *before* `msiexec`, and a consistent tree then installed
+normally:
+
+* file deleted but still listed → `payload verification FAILED: MISSING pvnic-selfprime.ps1`
+* `MANIFEST.json` edited → `MISMATCH MANIFEST.json (got fb598f…, want 7eee93…)` — the manifest is
+  itself covered by the sums, so tampering with it is self-detecting.
+
+The installer will not install a partial or tampered payload. That is now measured rather than
+believed, from two different directions, as a side effect of trying to build a negative.
