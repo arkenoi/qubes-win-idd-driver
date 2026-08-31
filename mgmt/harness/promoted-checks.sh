@@ -75,19 +75,23 @@ fi
 # VACUITY FIRST: with no vif there is no NIC of any kind, so "only the PV adapter is present" is
 # trivially true and proves nothing. Refuse to grade it rather than bank a free pass.
 log "=== emulated-unplugged ==="
-NS=$(T=400 q pushrun guest/nic-state.ps1 | tr -d '\r' | sed -n '/=== RESULT ===/,$p' | grep -ao '{.*}' | head -1)
-log "  nic-state: ${NS:-NO DATA}"
-if [ -z "$NS" ]; then
-  emit PROM emulated-unplugged INVALID-INSTRUMENT "nic-state produced no JSON"
+# ASK FOR THE DRIVER IDENTITY, NOT THE FRIENDLY NAME. guest/nic-state.ps1 reports
+# adapter_names as Name:Status ("Ethernet:Up"), which is what Windows calls the connection, not
+# what drives it - a Xen PV NIC and a Realtek are both "Ethernet". Measured 2026-08-31: grading on
+# that string FAILED a perfectly healthy win10-app, because neither pattern matched. The driver is
+# in InterfaceDescription, so ask for that.
+NS=$(psrun 'Get-NetAdapter -EA SilentlyContinue | ForEach-Object {
+  Write-Output ("NIC " + $_.InterfaceDescription + " | " + $_.Status) }')
+log "  adapters (driver identity):"; echo "$NS" | grep -a '^NIC ' | sed 's/^/    /' | tee -a "$OUT/promoted.log"
+if [ -z "$(echo "$NS" | grep -a '^NIC ')" ] && [ -n "$NETVM" ]; then
+  emit PROM emulated-unplugged INVALID-INSTRUMENT "Get-NetAdapter returned nothing on a guest that HAS a netvm"
 elif [ -z "$NETVM" ]; then
   log "  -> N/A: no netvm attached, so no adapter exists at all; the assertion is vacuous here"
   emit PROM emulated-unplugged N/A "subject has no netvm: with no vif there is no adapter, so 'only the PV NIC is present' is vacuously true"
 else
-  names=$(echo "$NS" | python3 -c "
-import sys,json
-d=json.loads(sys.stdin.read()); print('|'.join(d.get('adapter_names') or []))" 2>/dev/null)
-  pv=$(echo "$names" | grep -ciE 'xen|qubes' || true)
-  emu=$(echo "$names" | tr '|' '\n' | grep -ciE 'realtek|intel|e1000|rtl|pcnet|vmxnet' || true)
+  names=$(echo "$NS" | grep -a '^NIC ' | sed 's/^NIC //' | paste -sd'|')
+  pv=$(echo "$NS"  | grep -a '^NIC ' | grep -ciE 'xen|qubes' || true)
+  emu=$(echo "$NS" | grep -a '^NIC ' | grep -ciE 'realtek|intel|e1000|rtl8|pcnet|vmxnet|am79c' || true)
   log "  adapters: [$names]  pv=$pv emulated=$emu"
   if [ "${pv:-0}" -ge 1 ] && [ "${emu:-0}" -eq 0 ]; then
     emit PROM emulated-unplugged PASS-UNPROVEN "a vif exists and the only adapter is the Xen PV NIC: [$names]"
