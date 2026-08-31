@@ -52,8 +52,26 @@ ps aux | grep "[g]uid.*$VM" > "$OUT/guid-ps.txt" 2>&1
 cp "/var/log/qubes/guid.$VM.log" "$OUT/" 2>/dev/null
 cp "/var/log/qubes/qrexec.$VM.log" "$OUT/" 2>/dev/null
 
-# 5. Serial console (may be empty; xl console has crashed here before - bounded)
-timeout 6 xl console "$DOMID" > "$OUT/console.txt" 2>&1 || true
+# 5. Consoles. NOTE (2026-09-01): plain `xl console $DOMID` could NEVER have worked here.
+#    A Qubes HVM has a stubdomain, so libxl__primary_console_find() redirects the default to
+#    the STUBDOM's console 3 (STUBDOM_CONSOLE_SERIAL) - and libxl only creates that console
+#    when the guest has an emulated serial port (libxl_dm.c: `if (b_info->u.hvm.serial)
+#    num_console++`). Qubes' libvirt template emits no <serial>, so nserials==0, the stubdom
+#    gets consoles 0-2 only, and xenconsole dies on the missing tty node (qubes-issues #3039;
+#    the "buffer overflow detected" crash logged on 2026-08-04 was this call). `-t pv` targets
+#    the GUEST's own Xen PV console ring instead - the one xenconsoled logs to guest-$VM.log.
+timeout 6 xl console -t pv "$DOMID" > "$OUT/console-pv.txt" 2>&1 || true
+
+# 5b. The console LOGS are the only channel that carries firmware/serial output on an HVM
+#     (Windows itself never writes to the PV ring). guest-$VM.log = the guest's PV console
+#     ring; guest-$VM-dm.log = the stubdomain's logging console, which is also where a
+#     `qemu-extra-args '-serial file:/dev/hvc0'` feature would land guest COM1/EMS output.
+for f in "/var/log/xen/console/guest-$VM.log" "/var/log/xen/console/guest-$VM-dm.log"; do
+    [ -f "$f" ] && tail -c 262144 "$f" > "$OUT/$(basename "$f")" 2>/dev/null
+done
+# What libvirt believes the console pty is - "" here means qvm-console is structurally dead
+# for this domain (admin.vm.Console returns /domain/devices/console/@tty verbatim).
+virsh -c xen:/// dumpxml "$VM" 2>/dev/null | grep -E '<(console|serial)|@?tty=' > "$OUT/libvirt-console.txt" 2>&1 || true
 
 echo "--- summary ---" | tee -a "$OUT/grant-summary.txt"
 grep -E "Mem|VCPUs|state" "$OUT/xentop.txt" 2>/dev/null | tail -2

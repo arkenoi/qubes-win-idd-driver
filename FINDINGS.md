@@ -24085,3 +24085,63 @@ concrete edits, not judgement calls.
 first, re-run the campaign against repaired checks, and treat any PASS predating that as
 unverified. Do not add prose rules. When something is learned, ask whether it can be a lint; if it
 cannot, write it down AND mark it unenforced, so its unreliability is visible rather than assumed.
+
+# 2026-09-01 — Xen console: why `xl console` and `qvm-console` can never reach a Windows guest
+
+Traced end to end in source (Xen 4.21 = installed version, qubes-core-admin main, libvirt main,
+qubes-vmm-xen-stubdom-linux main). Not a bug in our rig: three structural facts.
+
+**They are not the same tool.** `qvm-console` -> `qrexec-client-vm <vm> admin.vm.Console` ->
+dom0 `/etc/qubes-rpc/admin.vm.Console` -> `qubesd-query` -> `qubes/api/admin.py::vm_console`,
+which is literally
+`xpath("string(/domain/devices/console/@tty)")` on the libvirt XML, returned to the script, which
+then runs `socat - OPEN:"$path"`. libvirt filled that attribute at domain-create from
+`libxl_console_get_tty(domid, port 0, LIBXL_CONSOLE_TYPE_PV)` on the GUEST domain
+(libvirt `libxlConsoleCallback`). So **`qvm-console <vm>` == `xl console -t pv <vm>`**, and plain
+`xl console <vm>` is a DIFFERENT console. `xl` is dom0-only: it is installed in win-idd-mgmt but
+every hypercall returns Permission denied, so nothing here can run it.
+
+1. **`xl console <vm>` (no `-t`) cannot work on any Qubes HVM.**
+   `libxl__primary_console_find()`: a domain with a stubdomain redirects to
+   `(stubdomid, STUBDOM_CONSOLE_SERIAL=3, TYPE_PV)`. libxl creates stubdom console 3 only if the
+   guest has an emulated serial: `libxl_dm.c` `num_console = 3; if (b_info->u.hvm.serial)
+   num_console++`. libvirt sets `u.hvm.serial` only from `<serial>` elements
+   (`libxl_conf.c:778 if (def->nserials)`), and Qubes' `templates/libvirt/xen.xml` emits
+   `<console type="pty"><target type="xen" port="0"/></console>` and **no `<serial>` at all**.
+   => stubdom has consoles 0,1,2; console 3's xenstore `tty` node does not exist; xenconsole
+   fails with "Could not read tty from store". = qubes-issues **#3039**, marmarek's answer there
+   is exactly "use `sudo xl console -t pv <hvm_domain>`".
+2. **`-t pv` / `qvm-console` attach fine and stay silent.** That is the guest's Xen PV console
+   ring. On an HVM only firmware writes to it; Windows has no PV console frontend and never
+   writes a byte. `/var/log/xen/console/guest-<vm>.log` is xenconsoled's independent copy of that
+   same ring, which is why **the log looks healthy while the live attach shows nothing** - the
+   log is the power-on firmware text, and nothing has been added since.
+3. **qvm-console's own extra failure mode: the empty tty.** `xpath("string(...)")` yields `""`
+   for a missing attribute with no error, so a domain whose XML has `<console type='pty'>` and no
+   `tty=` makes the RPC run `socat - OPEN:""` -> "Cannot connect to <vm>", no diagnostic. That is
+   qubes-issues **#5156** (libvirt loses the race to read `console/tty`). Xen 4.21 added an
+   xswait on `console/tty` before firing console-available (`libxl_create.c:1959`), so it should
+   be fixed - but an INSTANT "Cannot connect" is this, and a silent attach is (2).
+   Discriminator, dom0: `virsh -c xen:/// dumpxml <vm> | grep -A2 '<console'`.
+
+**Tooling fixed:** `dom0/11-wedge-forensics.sh` step 5 called `xl console "$DOMID"` with no
+`-t pv`, i.e. it has been capturing nothing since it was written, and this is the call that
+"crashed with buffer overflow" on 2026-08-04. Now `-t pv`, plus it collects
+`/var/log/xen/console/guest-$VM{,-dm}.log` and the libvirt console XML. Needs a dom0 reinstall of
+the service to take effect (`13-install-wedge-forensics-service.sh`); the service is currently
+REFUSED by policy anyway (`local.WinWedgeForensics` -> "Request refused"), so it needs reinstall
+regardless.
+
+**To get real Windows output on a console** (nothing in the stack carries any today):
+ - read-only, no dom0 change: `qvm-features <vm> qemu-extra-args '-serial file:/dev/hvc0'` (the
+   template interpolates this into the stubdom qemu cmdline; hvc0 is the stubdom logging console
+   -> `guest-<vm>-dm.log`) + `bcdedit /ems on /bootems on /emssettings EMSPORT:1` in the guest.
+   DESIGNED, NOT TESTED.
+ - interactive: add `<serial type='pty'/>` via a dom0 `/etc/qubes/templates/libvirt/xen-user.xml`
+   override -> stubdom gets console 3 -> plain `xl console <vm>` works and, with EMS, gives an
+   interactive SAC prompt on a guest whose qrexec and gui-agent are dead. Needs dom0.
+
+**Unrelated observation, same session:** `win-idd-test` no longer boots - `qvm-start` dies after
+~52 s with "Cannot connect to qrexec agent for 6000 seconds" (the early-exit path: the domain
+stopped running) and the qube ends Halted. `win10-app` starts in 18 s on the same rig, so this is
+guest-specific, not systemic.
