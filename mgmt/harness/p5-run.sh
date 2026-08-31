@@ -127,16 +127,28 @@ q push guest/fsgate-probe.ps1 >/dev/null 2>&1
 cat > "$TMP/p5-mark.ps1" <<'PS'
 $d=(Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
 $f=(Get-ChildItem $d -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1)
-if($f){ Write-Output ('AGENTMARK ' + @(Get-Content $f.FullName).Count) } else { Write-Output 'AGENTMARK 0' }
+# Emit the FILE as well as the offset. An offset alone is meaningless if the agent restarts
+# before the count is taken - see p5-since.ps1.
+if($f){ Write-Output ('AGENTMARK ' + @(Get-Content $f.FullName).Count + ' ' + $f.Name) } else { Write-Output 'AGENTMARK 0 none' }
 PS
 # $args[0] = mark line, $args[1] = pattern
 cat > "$TMP/p5-since.ps1" <<'PS'
-param([int]$Mark, [string]$Pattern)
+param([int]$Mark, [string]$Pattern, [string]$MarkFile = '')
 $d=(Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
 $f=(Get-ChildItem $d -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1)
 if(-not $f){Write-Output 'SINCE_HITS 0';exit}
 $all = Get-Content $f.FullName
-$new = if ($all.Count -gt $Mark) { $all[$Mark..($all.Count-1)] } else { @() }
+# THE OFFSET IS ONLY VALID IN THE FILE IT WAS TAKEN FROM. The agent rotates to a new log on every
+# restart, and several cells restart it. Applying a stale offset to a different file counts lines
+# from an arbitrary point in the middle of it - measured 2026-08-31: an SG9 cell reported 3 deny
+# hits for a clause that a clean direct measurement showed fired 0 times. If the file changed,
+# EVERY line in the current one postdates the mark, so the whole file is the correct window.
+if ($MarkFile -and $MarkFile -ne $f.Name) {
+  Write-Output ("SINCE_NOTE log rotated ($MarkFile -> " + $f.Name + "); counting the whole new file")
+  $new = $all
+} else {
+  $new = if ($all.Count -gt $Mark) { $all[$Mark..($all.Count-1)] } else { @() }
+}
 $hits = @($new | Select-String -Pattern $Pattern -SimpleMatch)
 Write-Output ("SINCE_HITS " + $hits.Count)
 @($hits | Select-Object -First 3) | ForEach-Object { Write-Output ("  S " + $_.Line) }
@@ -200,7 +212,9 @@ log "=== control UP: dom0 sees $CONTROL_N window(s), control=$CONTROL_DIM - capt
 run_cell(){
   local id="$1" mode="$2" expect="$3" disc="$4"
   log "=== $id: -Mode $mode  (expect: $expect) ==="
-  local mark; mark=$(T=200 q pushrun "$TMP/p5-mark.ps1" | tr -d '\r' | grep -ao 'AGENTMARK [0-9]*' | awk '{print $2}')
+  local markraw mark markfile
+  markraw=$(T=200 q pushrun "$TMP/p5-mark.ps1" | tr -d '\r' | grep -aoE 'AGENTMARK [0-9]+ [^ ]+' | head -1)
+  mark=$(echo "$markraw" | awk '{print $2}'); markfile=$(echo "$markraw" | awk '{print $3}')
   local gf="C:\\ProgramData\\Qubes\\fsgate-$id.txt"
   q run "cmd /c del /q $gf 2>nul & exit 0" >/dev/null 2>&1
   # -WindowStyle Hidden and NO shell redirection: the previous form wrapped the probe in
@@ -252,7 +266,7 @@ run_cell(){
   fi
 
   local hits nh
-  hits=$(T=300 q pushrun "$TMP/p5-since.ps1" -Mark "${mark:-0}" -Pattern "$disc" | tr -d '\r')
+  hits=$(T=300 q pushrun "$TMP/p5-since.ps1" -Mark "${mark:-0}" -Pattern "$disc" -MarkFile "${markfile:-}" | tr -d '\r')
   nh=$(echo "$hits" | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
   { echo "$probe"; echo "$hits"; echo "AGENTMAP $phwnd -> ${nmap:-?}"; } > "$OUT/$id.probe.txt"
   q run 'cmd /c taskkill /f /im powershell.exe 2>nul & exit 0' >/dev/null 2>&1
@@ -304,11 +318,12 @@ run_cell SG3 captioned        map   'not-used'
 
 # ---------------------------------------------------------------- SG9: Start, per the shipped spec
 log "=== SG9: Start is NOT presented in seamless (acceptance is the OPPOSITE of 'Start maps') ==="
-mark=$(T=200 q pushrun "$TMP/p5-mark.ps1" | tr -d '\r' | grep -ao 'AGENTMARK [0-9]*' | awk '{print $2}')
+markraw=$(T=200 q pushrun "$TMP/p5-mark.ps1" | tr -d '\r' | grep -aoE 'AGENTMARK [0-9]+ [^ ]+' | head -1)
+mark=$(echo "$markraw" | awk '{print $2}'); markfile=$(echo "$markraw" | awk '{print $3}')
 T=400 q pushrun guest/open-start.ps1 >/dev/null 2>&1
 sleep 10
 d9=$(mapped_list SG9); n9=${d9%%|*}
-h9=$(T=300 q pushrun "$TMP/p5-since.ps1" -Mark "${mark:-0}" -Pattern 'Start surface not presented in seamless mode' | tr -d '\r')
+h9=$(T=300 q pushrun "$TMP/p5-since.ps1" -Mark "${mark:-0}" -Pattern 'Start surface not presented in seamless mode' -MarkFile "${markfile:-}" | tr -d '\r')
 nh9=$(echo "$h9" | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
 log "  dom0 windows=$n9 (control $CONTROL_N) [${d9#*|}]  deny hits=${nh9:-0}"
 if [ "$n9" -le "$CONTROL_N" ] && [ "${nh9:-0}" -gt 0 ]; then
