@@ -347,8 +347,13 @@ qrexec against a 60 s default.
 
 - **qrexec runs in the interactive user session.** A logged-off guest loses clipboard and
   file-copy until someone logs in. This is how QWT is built, not something this build changed.
-- **`XENBUS\…&DEV_CONS` sits at code 28** — QWT ships no `xencons`. It is the PV console
-  (`xl console`), a debugging convenience; no display, disk, network or GUI path uses it.
+- **The PV console needs `-t pv`.** Since 4.3.16 we ship `xencons`, so `XENBUS\…&DEV_CONS`
+  binds (`err=0`, `svc=xencons`) and the guest runs an interactive `cmd.exe` on the Xen PV
+  console ring. Reach it with `qvm-console <vm>` or `sudo xl console -t pv <vm>` — a fresh
+  attach is BLANK until you press Enter, because a pty has no scrollback. Plain
+  `sudo xl console <vm>` can never work on any Qubes HVM: with no `<serial>` in the libvirt
+  XML the stubdomain has no serial console for libxl to redirect the default to
+  (qubes-issues #3039).
 - **mirage-firewall as netvm hangs Windows HVM domain creation** (dom0/mirage side — the
   guest never starts). Use `core-net`, or install offline.
 - **Audio is emulated, not paravirtualised.** The guest gets QEMU's Intel HD Audio device

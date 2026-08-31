@@ -105,9 +105,11 @@ The published mode set now always contains the host size while seamless is activ
 - **qrexec needs a logged-in session.** dom0→guest RPC - including clipboard and file copy -
   runs in the interactive user session. If the guest is logged off, those stop working until
   someone logs in. This is how QWT is built, not something this package changed.
-- **The Xen PV console device has no driver.** `XENBUS\…&DEV_CONS` sits at code 28 because
-  QWT ships no `xencons`. It affects `xl console` debugging only; nothing in the display,
-  disk, network or GUI path uses it.
+- **The Xen PV console now works — but you must ask for it by name.** We ship `xencons`, so
+  `XENBUS\…&DEV_CONS` binds and the guest runs an interactive `cmd.exe` on the PV console
+  ring. Use `qvm-console <vm>` or `sudo xl console -t pv <vm>`, and **press Enter** — a fresh
+  attach shows a blank screen because a pty has no scrollback. Plain `sudo xl console <vm>`
+  fails on any Qubes HVM (no emulated serial exists for it to attach to).
 - **mirage-firewall as netvm hangs domain creation** for Windows HVMs. This is dom0/mirage
   side - the guest never starts. Use `core-net`, or install offline.
 - **No audio.** QWT 4.2.2 contains no audio component at all (verified by scanning the MSI in

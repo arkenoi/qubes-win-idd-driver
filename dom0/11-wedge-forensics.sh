@@ -62,10 +62,11 @@ cp "/var/log/qubes/qrexec.$VM.log" "$OUT/" 2>/dev/null
 #    the GUEST's own Xen PV console ring instead - the one xenconsoled logs to guest-$VM.log.
 timeout 6 xl console -t pv "$DOMID" > "$OUT/console-pv.txt" 2>&1 || true
 
-# 5b. The console LOGS are the only channel that carries firmware/serial output on an HVM
-#     (Windows itself never writes to the PV ring). guest-$VM.log = the guest's PV console
-#     ring; guest-$VM-dm.log = the stubdomain's logging console, which is also where a
-#     `qemu-extra-args '-serial file:/dev/hvc0'` feature would land guest COM1/EMS output.
+# 5b. guest-$VM.log = the guest's PV console ring. Since 4.3.16 we ship xencons, so that ring
+#     carries an interactive cmd.exe (xencons_monitor -> xencons_tty -> cmd.exe /q /a) and the
+#     log is a real transcript, not just firmware output. guest-$VM-dm.log = the stubdomain's
+#     logging console, where a `qemu-extra-args '-serial file:/dev/hvc0'` feature would land
+#     guest COM1/EMS output (pre-Windows and high-IRQL coverage xencons cannot give).
 for f in "/var/log/xen/console/guest-$VM.log" "/var/log/xen/console/guest-$VM-dm.log"; do
     [ -f "$f" ] && tail -c 262144 "$f" > "$OUT/$(basename "$f")" 2>/dev/null
 done

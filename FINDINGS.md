@@ -24111,11 +24111,30 @@ every hypercall returns Permission denied, so nothing here can run it.
    => stubdom has consoles 0,1,2; console 3's xenstore `tty` node does not exist; xenconsole
    fails with "Could not read tty from store". = qubes-issues **#3039**, marmarek's answer there
    is exactly "use `sudo xl console -t pv <hvm_domain>`".
-2. **`-t pv` / `qvm-console` attach fine and stay silent.** That is the guest's Xen PV console
-   ring. On an HVM only firmware writes to it; Windows has no PV console frontend and never
-   writes a byte. `/var/log/xen/console/guest-<vm>.log` is xenconsoled's independent copy of that
-   same ring, which is why **the log looks healthy while the live attach shows nothing** - the
-   log is the power-on firmware text, and nothing has been added since.
+2. **`-t pv` / `qvm-console` attach fine and land on a LIVE interactive cmd.exe.**
+   **RETRACTED, same session:** I first wrote here that "Windows has no PV console frontend and
+   never writes a byte". That is wrong, and it contradicted our own work - the owner caught it
+   ("windows has pv console"). Since 4.3.16 we build and ship **xencons** (CI
+   `.github/workflows/pv-xencons.yml`, xenbits SHA a815963). Measured on `win10-app`, 2026-09-01:
+
+       XENBUS\VEN_XP0001&DEV_CONS\_      cm=0  svc=xencons   "Xen PV Console"
+       XENCONS\VEN_XP&DEV_CONSOLE\0      cm=0                (the statically-created "default" PDO)
+       xencons.sys present; xencons_monitor  Running/Automatic  pid 3280
+       xencons_tty_9_1_0_0.exe  RUNNING  pid 3656
+       HKLM\...\xencons_monitor\Parameters\default\Executable = xencons_tty_9_1_0_0.exe
+
+   Source chain: the default PDO takes `ConsoleCreate` (not `FrontendCreate`) and rides
+   xenbus.sys's `XENBUS_CONSOLE_INTERFACE` = the primary HVM console ring, the very one
+   xenconsoled serves. `IOCTL_XENCONS_GET_NAME` returns `"default"`, matching the INF's
+   `Parameters\default`. `xencons_tty` runs `%SystemRoot%\system32\cmd.exe /q /a` via
+   `CreateProcessAsUser` (src/tty/tty.c:119,159).
+   So dom0 xenconsoled <-> HVM console ring <-> xenbus <-> xencons <-> monitor -> tty -> cmd.exe
+   is **complete and live right now**. `qvm-console <vm>` / `xl console -t pv <vm>` give an
+   interactive Windows prompt.
+   **Why it reads as "cannot attach": a pty has no scrollback.** cmd.exe printed its banner at
+   boot; a later attach sees a blank screen and produces nothing until you PRESS ENTER. The log
+   `/var/log/xen/console/guest-<vm>.log` is xenconsoled's independent copy of the same ring, so
+   it holds that history - hence "the log shows it is ok" while the live attach looks dead.
 3. **qvm-console's own extra failure mode: the empty tty.** `xpath("string(...)")` yields `""`
    for a missing attribute with no error, so a domain whose XML has `<console type='pty'>` and no
    `tty=` makes the RPC run `socat - OPEN:""` -> "Cannot connect to <vm>", no diagnostic. That is
@@ -24132,7 +24151,15 @@ the service to take effect (`13-install-wedge-forensics-service.sh`); the servic
 REFUSED by policy anyway (`local.WinWedgeForensics` -> "Request refused"), so it needs reinstall
 regardless.
 
-**To get real Windows output on a console** (nothing in the stack carries any today):
+**Stale docs that caused the wrong claim, now fixed:** `README.md` and
+`docs/WHAT-CHANGED-FOR-USERS.md` both still listed "`XENBUS\...&DEV_CONS` sits at code 28 - QWT
+ships no `xencons`" under Known limitations. `guest/health-check.ps1` had been updated correctly
+(it asserts CONS is bound), the user-facing docs had not. Both now say `-t pv` / `qvm-console`
+and "press Enter".
+
+**An emulated serial would still ADD something** - not the interactive console (we have that),
+but the two windows xencons cannot cover: before Windows/xencons loads, and a guest deadlocked at
+high IRQL. Both DESIGNED, NOT TESTED:
  - read-only, no dom0 change: `qvm-features <vm> qemu-extra-args '-serial file:/dev/hvc0'` (the
    template interpolates this into the stubdom qemu cmdline; hvc0 is the stubdom logging console
    -> `guest-<vm>-dm.log`) + `bcdedit /ems on /bootems on /emssettings EMSPORT:1` in the guest.
