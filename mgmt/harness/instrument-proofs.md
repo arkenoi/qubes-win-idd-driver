@@ -94,7 +94,7 @@ tier separate is the difference between measuring the product and measuring my o
 
 | check | what was validated | what is still owed |
 |---|---|---|
-| `emulated-unplugged` | positive now REAL (`EMULATED_LEFT 0` on live win10-app) | no guest here still carries a surviving emulated NIC |
+| `emulated-unplugged` / `standalone-pvnic-seeded` / `template-pvnic-seeded` | positive REAL; negative **proven unreachable by measurement** | two attempts to unseed `XEN\Unplug NICS=0` and reboot - the second with BOTH latch tasks disabled - came back `NICS=1, EMULATED_LEFT 0` every time. The PV stack re-seeds below the task layer on every boot, so the defect cannot be planted; it would need a guest with the PV drivers removed |
 | `appvm-private-reformatted` | positive REAL (Q:\Users present on a 40 GiB private) | the 2 GiB defect state is not creatable here: an AppVM's private follows its template's (20 GiB) and qvm-volume only extends |
 | `standalone-pvnic-seeded` / `template-pvnic-seeded` | positive REAL (nics=1 disks=1, both tasks registered, no failure marker) | every guest on this rig carries the latch, so an unseeded guest does not exist to point the check at |
 | `eligibility-never-had-vif` | the predicate rejects non-zero device/ghost counts | run the real check on a guest that HAS seen a vif |
