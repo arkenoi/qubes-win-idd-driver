@@ -111,6 +111,13 @@ run_proof pv_console_bound \
   "Get-PnpDevice | Where-Object { \$_.InstanceId -like 'XENBUS\\VEN_XP0001&DEV_CONS*' } | Enable-PnpDevice -Confirm:\$false -ErrorAction Continue; Start-Sleep 3" \
   "disable the XENBUS PV console device - dom0 loses xl console into a guest whose qrexec is dead"
 
+# qubes_services_running: stop an auto-start Qubes service. Safe and instantly reversible - the
+# check asserts every Auto service is Running, so stopping one is exactly its own defect condition.
+run_proof qubes_services_running \
+  "Stop-Service QubesGuiWatchdog -Force -ErrorAction Continue; Start-Sleep 3" \
+  "Start-Service QubesGuiWatchdog -ErrorAction Continue; Start-Sleep 3" \
+  "stop the QubesGuiWatchdog service - an Auto service that is not Running is the condition this check asserts against"
+
 log "=== finished rc=$rc ==="
 log "OWED (no safe plant exists): pv_disk_bound (boot disk), user_data_on_private, pnp_no_unexpected_errors, boot_events_clean"
 exit $rc
