@@ -1066,6 +1066,12 @@ a scheduled pass actually running, clear the state that suppresses it (here
 `C:\ProgramData\Qubes\update-status.json`). This is the same class as the persistent toast in rule 8,
 one layer down: not a leftover WINDOW but a leftover ANSWER.
 
+**11. `@($null).Count` IS **1** IN POWERSHELL.** So `@($x.Triggers).Count` reports 1 for a task with
+NO triggers at all. Measured 2026-08-31: that made `QubesWindowsUpdateRun` and
+`...Download` look like they carried a trigger each, contradicting a correct ledger entry - I
+nearly recorded a discrepancy against the product from my own counting idiom. Same family as
+`grep -c` in rule 6. Count real objects: `@($x.Triggers | Where-Object { $_ -ne $null }).Count`.
+
 **7. A VACUITY GUARD MUST BE SPECIFIC TO THE STIMULUS.** RND-3's guard counted *any* override-redirect
 surface as proof "the menu opened". Measured 2026-08-31: a PERSISTENT toast raised by the previous
 cell was still on screen and contributed 23 such surfaces, so the guard was satisfied, the menu had

@@ -54,6 +54,9 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `applier-script-present` | 2026-08-31 | `Test-Path` against a path that does not exist | shipped `bin\pvnic-boot.ps1` → True; absent path → False. (The first attempt failed on the POSITIVE side — I had guessed the wrong directory) |
 | `no-loopback-masquerade` | 2026-08-31 | the same predicate over an adapter list that DOES contain a loopback | live adapters → True; synthetic list with `Microsoft KM-TEST Loopback Adapter` → False |
 | `no-auto-update-policy` | 2026-08-31 | `NoAutoUpdate=0` | same assertion as `updates_dom0_owned`; battery red, restored green, reproduced 3x |
+| `set-resolution-fails-loudly` | 2026-08-31 | asked for `1234x567`, a mode the adapter does not offer | `ok:false, error:"requested mode is not in the adapter's list"` with the offered list printed — the exact defect it was written for (the old version printed a success banner while doing nothing) |
+| `exclude-wu-drivers` | 2026-08-31 | `ExcludeWUDriversInQualityUpdate=0` | → False; restored to 1 and verified |
+| `run-download-no-triggers` | 2026-08-31 | the same assertion on `QubesWindowsUpdateScan`, which legitimately has triggers | Run/Download `triggers=0 scheduled=False`; Scan `triggers=2 scheduled=True` → False |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Partially proven — cite as PASS-UNPROVEN until completed
