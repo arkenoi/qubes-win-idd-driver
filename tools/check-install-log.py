@@ -11,7 +11,12 @@ The real invariant is ONE PRECONDITION PER run_id. A repeated run_id means the i
 precondition twice inside a single run, i.e. it restarted mid-run - which is the defect the check is
 actually about.
 
-  tools/check-install-log.py <install-log> [--json]
+  tools/check-install-log.py <install-log> [--json] [--expect-entry SUBSTRING]
+
+--expect-entry asserts the PRECONDITION's recorded installed_qwt contains SUBSTRING - that is how
+C3/C4/C6 grade "the guest we upgraded FROM was the release we meant". Different campaign logs
+genuinely record different entry states (C1 [], C3 v4.3.14.0, C4 v4.2.2.0, C6 v4.3.16.0), so this
+assertion is two-sided across REAL logs with nothing planted.
 
 Exit 0 = all invariants hold. Exit 1 = at least one failed (it says which, and why).
 """
@@ -24,7 +29,7 @@ PRECOND = re.compile(r'===\s*PRECONDITION\s*===\s*(\{.*)$')
 RUNID = re.compile(r'"run_id"\s*:\s*"([0-9a-f]+)"')
 
 
-def check(path):
+def check(path, expect_entry=None):
     text = open(path, 'r', errors='replace').read()
     lines = text.splitlines()
     res = {}
@@ -155,6 +160,61 @@ def check(path):
         'na': not (pnp_ok or pnp_bad), 'accepted': len(pnp_ok), 'failures': pnp_bad[:2],
     }
 
+    # --- entry state and branch self-consistency ------------------------------------------------
+    # The PRECONDITION records what QWT was already installed. Two things follow, and the second is
+    # checkable WITHOUT planting anything: an EMPTY installed_qwt means nothing was there, so the
+    # installer must take (and log) the clean-install path; a NON-empty one means it must NOT.
+    # C1 (empty + marker) and C4 (v4.2.2 + no marker) are both real logs, so this is two-sided for
+    # free - the negative does not have to be manufactured.
+    entry = None
+    for ln in lines:
+        m = PRECOND.search(ln)
+        if not m:
+            continue
+        try:
+            o = json.loads(m.group(1))
+        except Exception:
+            continue
+        if 'installed_qwt' in o:
+            entry = o['installed_qwt']
+            break
+    marker = any('clean install path' in ln for ln in lines)
+    res['entry_state_recorded'] = {'ok': entry is not None, 'na': entry is None, 'installed_qwt': entry}
+    res['branch_clean_install'] = {
+        'ok': (marker == (not entry)) if entry is not None else True,
+        'na': entry is None,
+        'installed_qwt': entry, 'clean_install_marker': marker,
+        'note': 'empty installed_qwt <=> the clean-install marker must be present, and vice versa',
+    }
+
+    if expect_entry is not None:
+        blob = json.dumps(entry or [])
+        res['entry_version_matches'] = {
+            'ok': expect_entry in blob, 'expected': expect_entry, 'recorded': blob[:160],
+        }
+
+    # --- run ids must all be distinct -------------------------------------------------------------
+    res['distinct_run_ids'] = {
+        'ok': len(ids) == len(set(ids)) and len(ids) > 0,
+        'na': not ids, 'ids': len(ids), 'distinct': len(set(ids)),
+    }
+
+    # --- inbox disk re-arm ------------------------------------------------------------------------
+    rearm = [ln for ln in lines if re.search(r'"inbox_disk_rearm"\s*:\s*"done"', ln)]
+    rearm_any = [ln for ln in lines if 'inbox_disk_rearm' in ln]
+    res['inbox_disk_rearm_done'] = {
+        'ok': len(rearm) >= 1 if rearm_any else True,
+        'na': not rearm_any, 'done': len(rearm), 'mentions': len(rearm_any),
+    }
+
+    # --- no restart during msiexec ---------------------------------------------------------------
+    # Event 1074 is "the process X has initiated the restart" - one of those while msiexec is
+    # running is the brick this guards against.
+    e1074 = [ln.strip()[:140] for ln in lines if re.search(r'\b1074\b', ln)]
+    res['no_restart_during_msiexec'] = {
+        'ok': len(e1074) == 0, 'count': len(e1074), 'lines': e1074[:2],
+    }
+
     # An `na` check must NOT read as a pass and must NOT fail the run either - the same rule
     # health-check.ps1 already applies ("counting them as failures made acceptance unpassable on the
     # very path it creates"). They are reported separately so a release CLAIM can require one while
@@ -169,7 +229,12 @@ def main(argv):
     if not args:
         print(__doc__.strip().splitlines()[-3], file=sys.stderr)
         return 2
-    out = check(args[0])
+    exp = None
+    for i, a in enumerate(argv):
+        if a == '--expect-entry' and i + 1 < len(argv):
+            exp = argv[i + 1]
+    args = [a for a in args if a != exp]
+    out = check(args[0], expect_entry=exp)
     if '--json' in argv:
         print(json.dumps(out, indent=2))
     else:

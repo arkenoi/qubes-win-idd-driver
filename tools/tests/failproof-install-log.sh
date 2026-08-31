@@ -69,4 +69,34 @@ echo "=== NEGATIVE 8: pnputil reports a failure ==="
 { cat "$SRC"; echo "2026-08-30 99:99:99 [ERROR] pnputil: adding driver package failed with error 0x800f0217"; } > "$TMP/pnp.log"
 expect_red pnputil-failure "$TMP/pnp.log" pnputil_259_accepted
 
+# (early exit removed - the negatives below must run too)
+
+echo "=== NEGATIVE 9a: a CLEAN-install log (empty installed_qwt) loses its clean-install marker ==="
+if [ -f "$C1" ]; then
+  grep -v 'clean install path' "$C1" > "$TMP/nomarker.log"
+  expect_red missing-clean-marker "$TMP/nomarker.log" branch_clean_install
+fi
+
+echo "=== NEGATIVE 9b: an UPGRADE log (prior QWT present) gains a clean-install marker ==="
+C4=$(ls "$HOME"/qwt-accept/20260830-acceptance-4.3.16/C4-win10/[A-Z]*.log 2>/dev/null | head -1)
+if [ -f "$C4" ]; then
+  { cat "$C4"; echo "2026-08-30 99:99:99 [INFO] no installed Qubes Windows Tools found - clean install path"; } > "$TMP/falsemarker.log"
+  expect_red false-clean-marker "$TMP/falsemarker.log" branch_clean_install
+fi
+
+echo "=== NEGATIVE 10: two runs share a run_id (ids not distinct) ==="
+if [ -f "$C1" ]; then
+  RID2=$(grep -ao '"run_id":"[0-9a-f]*"' "$C1" | head -1 | cut -d'"' -f4)
+  { cat "$C1"; echo "2026-08-30 99:99:99 [INFO] === PRECONDITION === {\"run_id\":\"$RID2\",\"installed_qwt\":[]}"; } > "$TMP/dup2.log"
+  expect_red duplicate-run-id "$TMP/dup2.log" distinct_run_ids
+fi
+
+echo "=== NEGATIVE 11: the inbox disk re-arm did not complete ==="
+sed 's/"inbox_disk_rearm":"done"/"inbox_disk_rearm":"skipped"/' "$SRC" > "$TMP/rearm.log"
+expect_red rearm-not-done "$TMP/rearm.log" inbox_disk_rearm_done
+
+echo "=== NEGATIVE 12: an Event-1074 restart lands during the install ==="
+{ cat "$SRC"; echo "2026-08-30 16:28:10 [WARN] Event 1074: the process msiexec.exe has initiated the restart of computer"; } > "$TMP/e1074.log"
+expect_red restart-during-msiexec "$TMP/e1074.log" no_restart_during_msiexec
+
 exit $rc

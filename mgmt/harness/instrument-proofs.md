@@ -57,6 +57,11 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `set-resolution-fails-loudly` | 2026-08-31 | asked for `1234x567`, a mode the adapter does not offer | `ok:false, error:"requested mode is not in the adapter's list"` with the offered list printed — the exact defect it was written for (the old version printed a success banner while doing nothing) |
 | `exclude-wu-drivers` | 2026-08-31 | `ExcludeWUDriversInQualityUpdate=0` | → False; restored to 1 and verified |
 | `run-download-no-triggers` | 2026-08-31 | the same assertion on `QubesWindowsUpdateScan`, which legitimately has triggers | Run/Download `triggers=0 scheduled=False`; Scan `triggers=2 scheduled=True` → False |
+| `branch-clean-install` | 2026-08-31 | BOTH directions | strip the marker from a log with `installed_qwt: []` → red; ADD the marker to an upgrade log with `v4.2.2.0` → red. The invariant is empty-entry ⇔ marker-present |
+| `distinct-run-ids` | 2026-08-31 | a PRECONDITION replayed under an existing `run_id` | → red |
+| `inbox-disk-rearm-done` | 2026-08-31 | `inbox_disk_rearm` flipped `done` → `skipped` | → red |
+| `no-restart-during-msiexec` | 2026-08-31 | an Event-1074 restart injected into the install window | → red |
+| `entry-is-previous-release` / `entry-is-stock-422` / `entry-carries-N` | 2026-08-31 | the version assertion pointed at a version never shipped | two-sided across REAL logs with NOTHING planted: C3 v4.3.14.0, C4 v4.2.2.0, C6 v4.3.16.0 each pass their own and fail a bogus one |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Partially proven — cite as PASS-UNPROVEN until completed
