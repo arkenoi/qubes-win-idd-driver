@@ -981,6 +981,16 @@ not quietly upgrade it.
     verdicts.tsv is ABSENT OR EMPTY is a killed run, never a clean one — check for the file before
     reading the code.
 
+15. **One harness per guest, enforced — not remembered.** Every guest-touching runner sources
+    `mgmt/harness/vmlock.sh` and calls `vm_lock "$VM"`; a second runner on the same guest refuses
+    to start and names the holder's pid. This exists because the serial-jobs rule was enforced
+    only by my memory of it, and memory failed: two P5 instances shared one guest and one output
+    directory, interleaved, and produced an SG2 FAIL against the OTHER run's captioned probe —
+    a fabricated product defect. The lock is re-entrant inside one job (`QWT_VMLOCK_HELD`) so a
+    harness may still call another as a subroutine. Validated 2026-08-31: with a run in flight, a
+    second invocation printed "REFUSING TO START", named the holder, and created no output.
+    **When a verdict surprises you, check for a second runner BEFORE believing it.**
+
 ### 0.13b RUNBOOK — earning a fail-proof with a DIAG BUILD, step by step
 
 H5 says a check is evidence only once it has been SEEN to fail with the defect present. For the
