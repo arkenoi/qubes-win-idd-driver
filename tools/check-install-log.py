@@ -215,6 +215,39 @@ def check(path, expect_entry=None):
         'ok': len(e1074) == 0, 'count': len(e1074), 'lines': e1074[:2],
     }
 
+    # --- monitor RE-disabled after msiexec --------------------------------------------------------
+    # The MSI re-registers xenbus_monitor, so disarming it once before the install is not enough -
+    # it must be disarmed AGAIN afterwards or it is live again on the next boot. The installer tags
+    # that line "[after msiexec: MSI re-registered the service]".
+    after = [ln for ln in lines if re.search(r'xenbus_monitor.*\[after msiexec', ln, re.I)]
+    res['monitor_redisabled_after_msi'] = {
+        'ok': (len(after) >= 1) if invoked else True,
+        'na': not invoked, 'lines': len(after),
+    }
+
+    # --- the PV boot disk state recorded in the PRECONDITION ---------------------------------------
+    pvbd = None
+    m = re.search(r'"pv_boot_disk"\s*:\s*(true|false)', text)
+    if m:
+        pvbd = (m.group(1) == 'true')
+    # pv_boot_disk is true IFF a prior QWT was installed. Measured across the campaign: C1
+    # (installed_qwt []) records false, C3/C4/C6 (a prior version present) record true. Demanding
+    # `true` unconditionally failed all three clean-install logs. Like branch_clean_install this is
+    # a SELF-CONSISTENCY invariant, so the real logs are each other's negative and nothing has to
+    # be planted to prove it.
+    res['stock_pv_boot_disk'] = {
+        'ok': (pvbd == bool(entry)) if (pvbd is not None and entry is not None) else True,
+        'na': pvbd is None or entry is None,
+        'pv_boot_disk': pvbd, 'entry_present': bool(entry),
+        'note': 'a guest with a prior QWT must record pv_boot_disk:true; a clean guest must not',
+    }
+
+    # --- the PV-NIC latch must not have left a failure marker --------------------------------------
+    failed_marker = [ln.strip()[:140] for ln in lines if 'QubesPvNic-FAILED' in ln]
+    res['no_failure_marker'] = {
+        'ok': len(failed_marker) == 0, 'count': len(failed_marker), 'lines': failed_marker[:2],
+    }
+
     # An `na` check must NOT read as a pass and must NOT fail the run either - the same rule
     # health-check.ps1 already applies ("counting them as failures made acceptance unpassable on the
     # very path it creates"). They are reported separately so a release CLAIM can require one while

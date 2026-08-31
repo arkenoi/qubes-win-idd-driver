@@ -99,4 +99,18 @@ echo "=== NEGATIVE 12: an Event-1074 restart lands during the install ==="
 { cat "$SRC"; echo "2026-08-30 16:28:10 [WARN] Event 1074: the process msiexec.exe has initiated the restart of computer"; } > "$TMP/e1074.log"
 expect_red restart-during-msiexec "$TMP/e1074.log" no_restart_during_msiexec
 
+
+echo "=== NEGATIVE 13: the monitor is never RE-disabled after msiexec (MSI re-registered it) ==="
+grep -v 'after msiexec' "$SRC" > "$TMP/noafter.log"
+expect_red monitor-not-redisabled "$TMP/noafter.log" monitor_redisabled_after_msi
+
+echo "=== NEGATIVE 14: pv_boot_disk contradicts the entry state ==="
+# flip the flag on an UPGRADE log (prior QWT present) so it claims no PV boot disk
+sed 's/"pv_boot_disk":true/"pv_boot_disk":false/' "$SRC" > "$TMP/pvbd.log"
+expect_red pv-boot-disk-contradiction "$TMP/pvbd.log" stock_pv_boot_disk
+
+echo "=== NEGATIVE 15: the PV-NIC latch left a failure marker ==="
+{ cat "$SRC"; echo "2026-08-30 99:99:99 [ERROR] QubesPvNic-FAILED.txt written: applier could not bind the PV NIC"; } > "$TMP/marker.log"
+expect_red pvnic-failure-marker "$TMP/marker.log" no_failure_marker
+
 exit $rc
