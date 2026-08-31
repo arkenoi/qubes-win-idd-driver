@@ -973,6 +973,59 @@ not quietly upgrade it.
 
 ---
 
+### 0.13b RUNBOOK — earning a fail-proof with a DIAG BUILD, step by step
+
+H5 says a check is evidence only once it has been SEEN to fail with the defect present. For the
+safeguard and capture/render checks the only way to create that defect is a build with the guard
+removed. This is that procedure. Every numbered step exists because skipping it produced a wrong
+answer on 2026-08-31.
+
+**D-1. Check whether the product ALREADY ships the toggle before writing anything.** Twice in one
+session the proof was already in the tree: `agent/gui-agent/faultinject.c` (`QGA_FAULT_INJECTION=1`,
+exposed as `qwt-full.yml`'s `fault_injection` input) re-introduces ten capture/render defects from
+the registry, and `qubes-updates-relay.exe --selftest` carries the entire `relay-transport-clean`
+proof. I hand-edited a diag branch before finding the first, and nearly wrote a truncation harness
+before finding the second.
+
+    gh workflow run qwt-full.yml -f fault_injection=true      # ~12 capture/render checks, no source edit
+    gh workflow run build.yml --ref diag/<clause>             # one per ShouldAcceptWindow clause
+
+**D-2. Only the safeguard clauses need a source branch.** Branch the SUBMODULE and the superproject,
+disable the single `return FALSE` under test, leave a `DIAGBUILD` marker in the log line, and put
+NEVER MERGE in both commit messages. Delete both branches once the proof is on record.
+
+**D-3. VERIFY THE ARTEFACT CONTAINS THE DEFECT before deploying it.** Windows binaries store strings
+as UTF-16, so `strings` alone finds nothing — use `strings -a -e l`. For the fault build, expect the
+ten `Fault*` value names; for a clause build, expect your `DIAGBUILD` marker.
+
+**D-4. STOP `QubesGuiWatchdog` BEFORE SWAPPING THE BINARY.** It restarts gui-agent within seconds and
+re-locks the file, so `Copy-Item` fails *silently* and the guest keeps running the RELEASE build.
+Measured: `INSTALLED_SHA` came back as the release hash after a "successful" swap. Order is: stop the
+service, kill the agent, assert it is gone, copy, then start the service.
+
+**D-5. ASSERT THE RUNNING IMAGE'S HASH, not the file's** (H5.3). Compare
+`(Get-Process gui-agent).Path`'s SHA256 against the artefact you built. A cell that proceeds on a
+failed swap reports results for a build that was never running.
+
+**D-6. RE-ESTABLISH CONTAINMENT AFTER THE SWAP, never before.** Restarting the agent makes it
+re-adopt dom0's geometry (`RESREQ … src=lastapplied`), so a resolution set before the swap is gone.
+Measured: containment set to 1024x768, agent swapped, guest silently back at host size — the probe's
+own containment gate refused and prevented a 5120-wide window reaching the owner's display. Re-set
+the mode, then confirm the AGENT agrees (`A6CONFIGURE window 0 -> WxH`).
+
+**D-7. Run the cell with the real harness, not by hand.** `mgmt/harness/p5-run.sh` polls for
+readiness, keeps a control window mapped, and identifies the probe by size. A single hand-taken
+screenshot missed a window the agent's log proved it had announced (`msg=DAMAGE … w=1024,h=768`).
+
+**D-8. The cell must FLIP.** Record the same check PASSing on the release build and FAILing on the
+diag build, with both binary hashes in the evidence. A red that cannot be paired with a green from
+the same harness is not a fail-proof.
+
+**D-9. RESTORE, and prove it.** Put the release binary back (same D-4 ordering), assert the running
+hash matches the release, and re-run the cell to confirm it is green again. Delete the diag branches.
+
+---
+
 ### 0.13 RUNBOOK — closing a campaign
 
 **C-1.** `tools/campaign-verdict.sh <verdicts.tsv>` and paste its output as the summary's first
@@ -1065,6 +1118,18 @@ classification failure when it was MY OWN earlier cell suppressing it. Before a 
 a scheduled pass actually running, clear the state that suppresses it (here
 `C:\ProgramData\Qubes\update-status.json`). This is the same class as the persistent toast in rule 8,
 one layer down: not a leftover WINDOW but a leftover ANSWER.
+
+**12. A BINARY SWAP CAN FAIL SILENTLY, AND THE CELL WILL THEN GRADE THE OLD BUILD.**
+`QubesGuiWatchdog` restarts gui-agent within seconds and re-locks the file, so `Copy-Item` reports
+nothing and the guest keeps running the release binary. Stop the service first, and always assert
+the RUNNING image's SHA256 (`(Get-Process gui-agent).Path`), never the file's. Measured 2026-08-31:
+a swap that looked clean left `INSTALLED_SHA` equal to the release hash.
+
+**13. RESTARTING THE AGENT DESTROYS CONTAINMENT.** It re-adopts dom0's geometry on startup
+(`RESREQ … src=lastapplied`), so any resolution set before a swap or restart is silently gone. Always
+re-contain AFTER the agent settles and confirm the AGENT agrees. Measured: containment set to
+1024x768, agent swapped, guest back at host size - only the probe's own containment gate stopped a
+5120-wide window reaching the owner's display.
 
 **11. `@($null).Count` IS **1** IN POWERSHELL.** So `@($x.Triggers).Count` reports 1 for a task with
 NO triggers at all. Measured 2026-08-31: that made `QubesWindowsUpdateRun` and
