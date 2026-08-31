@@ -14,14 +14,16 @@
 # agent generally. A bit that reddens more than its own cell is reported as NOT PROVEN: it means
 # the bypass is broader than the clause it claims to bypass.
 #
-#   bit                  cell   check earned
-#   FI_GATE_MODE1  0x1   SG4    or-fullscreen-never-mapped / no-fullscreen-during-boot
-#   FI_GATE_MODE2  0x2   SG2    borderless-fullscreen-gated  (re-proof from one artifact)
-#   FI_GATE_START  0x4   SG9    start-not-presented
+#   bits                     cell  check earned
+#   MODE1|MODE2      0x3     SG4   or-fullscreen-never-mapped   (companion: SG2)
+#   MODE2            0x2     SG2   borderless-fullscreen-gated  - ALREADY EARNED, not re-run
+#   START|NOCARD     0x14    SG9   start-not-presented          (defended in depth)
+#   FI_DROP_CAPTIONED 0x20   SG3   windowed-fullscreen-allowed
 #
-# FI_GATE_SHELLOVERLAY (0x8) is deliberately NOT here: its cell is in rnd-shell-surfaces.sh, not
-# P5, and that harness still carries the nested-quote query pattern rule 16 names. Proving a check
-# with an unaudited instrument would be the same mistake in a new place.
+# Combinations, not single bits, because two of these properties are defended IN DEPTH - see the
+# comment on prove(). FI_GATE_SHELLOVERLAY (0x8) and FI_DROP_SHELLSURFACE (0x40) are not here:
+# their cells live in rnd-shell-surfaces.sh, which must be audited for the rule-16 query pattern
+# before its verdicts are trusted.
 #
 #   mgmt/harness/failproof-gates.sh <vm> [outdir]
 set -uo pipefail
@@ -145,7 +147,6 @@ prove(){  # <bitname> <hex> <cell> <check> [cells allowed to move too]
 # green because a second clause defends the same property. The combinations below are what
 # actually falsify each property, with the companion cell declared.
 prove FI_GATE_MODE1_2     0x3  SG4 or-fullscreen-never-mapped  SG2
-prove FI_GATE_MODE2       0x2  SG2 borderless-fullscreen-gated
 prove FI_GATE_START_NOCARD 0x14 SG9 start-not-presented
 prove FI_DROP_CAPTIONED   0x20 SG3 windowed-fullscreen-allowed
 
