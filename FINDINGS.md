@@ -24384,3 +24384,61 @@ technical one:** `xencons_monitor` runs as SYSTEM and does `CreateProcess` on wh
 UNAUTHENTICATED SYSTEM console to anyone who can attach. On a Qubes guest that set is only dom0
 plus qubes holding `admin.vm.Console` policy, so it may well be acceptable here - but it removes
 the guest's own authentication boundary and must not be done without an explicit decision.
+
+## 2026-09-01 — THE GUEST CAN WRITE TO THE PV CONSOLE RING. Windows now has a dom0-captured log
+
+Owner: *"linux writes a lot there. windows, nothing. can we write something useful there?"* Yes,
+and it is cheap. **PROVEN end to end on win10-app**, both directions of the claim:
+
+    guest: [QubesConsoleWriter]::Send(...)  -> OPEN_OK write_ok=True wrote=47/47 err=0
+    dev qube listener over admin.vm.Console -> '\r\nQCONMARK-ALPHA host=win-idd-test t=01:23:47\r\n
+                                                QCONMARK-BRAVO second write proves streaming\r\n'
+    shipped helper, re-validated as the file we commit:
+                                              '[QWT] 2026-09-01T01:26:30.589+00:00 HELPER VALIDATION ...'
+
+**And bytes written with NO reader attached were still delivered on attach** - the 01:23:47 pair
+was written before the listener existed and arrived anyway. Independently of that, xenconsoled
+writes the ring to `/var/log/xen/console/guest-<vm>.log` continuously.
+
+**Mechanism.** Open a SECOND handle on the xencons device
+`\\?\XENCONS#VEN_XP&DEV_CONSOLE#0#{0d3edd21-8ef9-4dff-856c-8c68bf4fdca3}` and WriteFile to it.
+Legitimate by construction: xencons.sys keeps a per-FileObject handle list and xencons_monitor
+opens with `FILE_SHARE_READ|FILE_SHARE_WRITE`, so this does not disturb the interactive tty
+sharing the ring. The interface path comes from the DeviceClasses key NAME with its leading
+separators unescaped (`##?#...` -> `\\?\...`); there is **no `#` subkey holding SymbolicLink** on
+19045, and assuming there was is why the first attempt reported "no interface" on a bound driver.
+
+**Instrument bug worth remembering, second time this class has cost this project time:** calling
+WriteFile via `Add-Type -MemberDefinition` with an `out uint` parameter returned
+**wrote=0 err=0** - a silent no-op that reads exactly like "the guest cannot write to this
+device". Moving the whole call into a real C# type fixed it. Identical failure class to the
+qubesdb P/Invoke bug already recorded here ("unreadable in a Windows guest" was marshalling).
+**A capability conclusion drawn from a P/Invoke that returned zero-and-no-error is not a
+capability conclusion.**
+
+**Shipped:** `guest/console-write.ps1` (validated by pushing and running THE COMMITTED FILE, not
+the scratch script that proved the mechanism).
+
+**Why this matters here.** It converts the console from "a shell someone must log into" - which
+the three dents above made nearly useless for unattended work - into a **guest -> dom0 telemetry
+channel that needs no qrexec, no session, no gui-agent and no attached reader**, and that is
+captured retroactively. That is precisely the gap: *"when this happens we lose every channel at
+once."* Candidates to emit: gui-agent lifecycle (init, seamless switch, resolution change,
+`AcquireNextFrame` 0x887a0026 keyed-mutex death, RecreateDuplication, QGADESKSTUCK), the wedge
+watchdog heartbeat and last words, installer phase markers, IDD mode changes.
+
+**Cautions, all real:**
+ - it crosses an isolation boundary into a dom0-readable file. dom0 must treat it as DATA -
+   sanitise before display (the helper strips control chars at the source too, but a hostile
+   guest will not use the helper);
+ - volume is unbounded from dom0's side; a chatty or hostile guest can grow that log. Phase
+   markers and failures only, rate-limited;
+ - it interleaves with the interactive console session, so attached humans see it scroll past
+   their prompt - hence the `[TAG] timestamp` prefix, so it is filterable;
+ - user-mode and post-PnP: nothing before xencons loads, and nothing during a high-IRQL wedge.
+   A KERNEL-mode writer (the agent's driver side, via XENBUS_CONSOLE at DISPATCH_LEVEL) would
+   narrow the second gap and is the obvious follow-up if wedge last-words are the goal.
+
+**NOT DONE, and it is the owner's call:** wiring this into the gui-agent as a log sink. That is a
+change to shipped agent behaviour and adds a guest->dom0 emission path, so it wants an explicit
+decision rather than being slipped in as instrumentation.
