@@ -155,5 +155,42 @@ else
   emit PROM secure-desktop-left-cleanly FAIL "ENTERED=$ent but LEFT=$lft: the agent is still on the secure desktop"
 fi
 
+# ---------------------------------------------------------------- shadow-strips-dropped
+# 2A-chrome: a compound window (Office-style) is one main HWND plus layered/transparent/toolwindow
+# shadow strips. dom0 must map the MAIN window only; mapping the strips is the "visually broken,
+# five bordered windows" defect. p4-run has measured this since it was written but only ECHOED the
+# numbers to a text file - it emits no verdict, which is why the row was an observation.
+#
+# Counted as a DELTA against the pre-launch scene, not an absolute. "exactly 1 mapped" silently
+# assumes an empty desktop, and every stray window then reads as a leak.
+log "=== shadow-strips-dropped ==="
+if [ ! -f artifacts/chromerepro.exe ]; then
+  log "  -> INVALID-INSTRUMENT: artifacts/chromerepro.exe absent"
+  emit PROM shadow-strips-dropped INVALID-INSTRUMENT "chromerepro.exe not built"
+else
+  r 'cmd /c taskkill /f /im chromerepro.exe 2>nul & exit 0' >/dev/null 2>&1; sleep 3
+  base_t="$OUT/chrome-base.tar"; rm -f "$base_t"; q shot "$base_t" >/dev/null 2>&1
+  base_n=$(tar tf "$base_t" 2>/dev/null | grep -c '\.png$'); base_n=${base_n:-0}
+  q push artifacts/chromerepro.exe >/dev/null 2>&1
+  q run 'cmd /c start "" C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\chromerepro.exe' >/dev/null 2>&1
+  sleep 20
+  hw=$(T=300 q pushrun guest/enumwin.ps1 | tr -d '\r' | grep -aoE 'CHROMEREPRO_HWNDS [0-9]+' | awk '{print $2}')
+  af_t="$OUT/chrome-after.tar"; rm -f "$af_t"; q shot "$af_t" >/dev/null 2>&1
+  af_n=$(tar tf "$af_t" 2>/dev/null | grep -c '\.png$'); af_n=${af_n:-0}
+  delta=$(( af_n - base_n ))
+  log "  guest HWNDs=${hw:-?}   dom0 windows ${base_n} -> ${af_n}  (delta ${delta})"
+  r 'cmd /c taskkill /f /im chromerepro.exe 2>nul & exit 0' >/dev/null 2>&1
+  if [ -z "$hw" ] || [ "${hw:-0}" -lt 2 ]; then
+    log "  -> INVALID-VACUOUS: chromerepro did not create its compound window (HWNDs=${hw:-0}),"
+    log "     so nothing was offered to the filter and 'only 1 mapped' proves nothing."
+    emit PROM shadow-strips-dropped INVALID-VACUOUS "chromerepro HWNDs=${hw:-0} - the stimulus did not exist"
+  elif [ "$delta" -eq 1 ]; then
+    emit PROM shadow-strips-dropped PASS-UNPROVEN "guest created $hw HWNDs (1 main + shadow strips); dom0 gained exactly 1 window ($base_n -> $af_n)"
+  else
+    log "  -> FAIL: dom0 gained $delta windows for one compound window - shadow strips are being mapped"
+    emit PROM shadow-strips-dropped FAIL "guest created $hw HWNDs but dom0 gained $delta windows ($base_n -> $af_n): the chrome filter is not dropping the strips"
+  fi
+fi
+
 log "=== finished rc=$rc ==="
 exit $rc
