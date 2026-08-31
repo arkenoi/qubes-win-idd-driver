@@ -24583,3 +24583,46 @@ disagreement with the platform, and it should not be pursued.
    now understood to be the ceiling on Qubes, not a temporary limitation.
 Both are captured by xenconsoled to files that survive the guest, and both are collected by the
 wedge-forensics change made earlier today.
+
+## 2026-09-01 — would EMS have diagnosed the wedge? NO, and the reason is structural
+
+Asked directly, so answered against the proven mechanism rather than hopefully. The wedge is a
+Xen HVM IPI/TLB-shootdown deadlock (two NMI dumps): CPU0 spinning at
+`KeFlushMultipleRangeTb+0x13e` on `_KPRCB.PacketBarrier` with PacketBarrier=1/TargetCount=1,
+other CPUs in `MmUnmapIoSpace` / `MiDeleteVaDirect`, i.e. three CPUs in shootdown paths at once
+and one target vCPU that never ACKs.
+
+**EMS emits nothing in that state, for two reasons that are not "we did not try":**
+1. **No bugcheck happens.** The guest livelocks - it spins, it does not crash. EMS/SAC's most
+   valuable output (bugcheck code + parameters on the serial) is triggered by `KeBugCheck`, which
+   never runs.
+2. **Nothing is schedulable to emit anything.** SAC's output and command processing ride DPCs and
+   threads. With CPUs stuck in shootdown waits at IPI level and one vCPU not being scheduled by
+   Xen at all, no user- or kernel-mode writer gets called. This is the same reason the console
+   ring goes quiet, and it was flagged when xencons was first built.
+
+**The instrument for this failure already exists and is strictly better: NMI -> kernel dump.**
+An NMI is delivered regardless of IRQL - that is the whole point of it - and both existing
+captures came from `dom0/11-wedge-forensics.sh --nmi`. A full dump with stacks beats a serial
+header.
+
+**Where EMS DOES pay, and it is worth arming anyway:**
+ - **as insurance on the NMI path**: the bugcheck code and parameters would land in
+   `guest-<vm>-dm.log` immediately and out-of-band, so the headline survives cases where the dump
+   is unwritable or unretrievable (guest never boots again, or the disk path is the broken thing).
+   DOCUMENTED behaviour, NOT verified here - and cheaply testable exactly the right way: arm EMS
+   on a StandaloneVM, fire `--nmi` (a known-good deliberate bugcheck), and check the log. Until
+   that test runs its PASS would be unproven.
+ - **spontaneous BSODs while nobody is watching**: today only visible via MEMORY.DMP after the
+   guest reboots and qrexec returns. EMS puts the code in a dom0 log regardless.
+ - **boot failures** - `bootems` gives boot-loader progress. Immediately applicable: `win-idd-test`
+   currently dies ~52 s into boot with zero visibility, which is precisely EMS's design case.
+
+**What would actually help with the WEDGE, honestly:**
+ - the missing evidence is Xen-side - WHY that vCPU never ACKs - and is invisible in a guest dump.
+   It needs Xen instrumentation at repro time (`xl debug-keys` vcpu/evtchn state, `xentrace`),
+   which is dom0 work already partly in wedge-forensics.
+ - the one thing the console channel adds: a **kernel-mode heartbeat** written to the ring every
+   N seconds. It explains nothing, but its stopping timestamps the ONSET precisely in a
+   dom0-captured log, where today onset is inferred from when probes began failing. Marginal, but
+   it is real and it is cheap.
