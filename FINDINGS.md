@@ -24047,3 +24047,41 @@ restore is hash-verified.
 
 **Ledger: PASS 319 / PASS-UNPROVEN 41 / N/A 20.** The 41 are 23 observations with no deployed check
 and 18 rows across 12 deployed-but-unproven checks.
+
+---
+
+## 2026-09-01 — acceptance protocol work CONCLUDED. An honest accounting.
+
+Owner: *"i think we conclude the acceptance protocol for now. it was a humbling exercise in
+futility."* Largely correct, and the record should say so plainly rather than bury it.
+
+**What was futile.** Twenty-five prose rules were added to this protocol. Measured the same day
+they were written, by the linter, against their own author: rule 15 ("one harness per guest") had
+**7 harnesses** not following it after I stated I had wired it everywhere; rule 18 ("a check must
+be able to fail") had **9 more checks** that can only ever emit PASS after I had hand-repaired
+four. Adherence to hours-old rules, by the person who wrote them, was roughly 60%. A rule that
+requires a reader to notice something is worth what that reader's attention is worth on the day.
+The three days spent refining protocol prose bought understanding, not control.
+
+**What was not futile**, and is worth keeping:
+
+* **The verification apparatus was measuring less than it claimed, and that is now known.**
+  `or-fullscreen-never-mapped` was graded from a screenshot that structurally cannot see an
+  override-redirect window — it would have passed a build leaking a fullscreen takeover surface,
+  the exact class the Mode-1/Mode-2 design exists to prevent. Three more checks were vacuous in
+  the same way. `L7` finds **105** ledger names that no harness emits at all.
+* **The fault injector** (`FI_GATE_OFF`, `FI_DROP_*`, `FI_NOSYNTHPAINT`, `FI_NOSCREENCONFIG`) —
+  reusable, compiled out of release builds, and the only reason any of the above was findable.
+* **`tools/lint-harness.py` + the pre-commit hook** — seven mechanical lints, self-tested 8/8
+  against planted violations plus a negative control, enforcing rather than advisory.
+
+**Where the ledger stands:** PASS 319 / PASS-UNPROVEN 40 / N/A 21 of 429. Those numbers are worth
+less than they look and should not be quoted as an acceptance result: an unknown share of the
+PASS rows rest on checks of the quality the linter is now finding. **The 33 open lint findings are
+the honest backlog** — 7 missing locks, 9 unfailable checks, 17 fragile probes — and they are
+concrete edits, not judgement calls.
+
+**If this is resumed**, the order that follows from all of the above: clear the 33 lint findings
+first, re-run the campaign against repaired checks, and treat any PASS predating that as
+unverified. Do not add prose rules. When something is learned, ask whether it can be a lint; if it
+cannot, write it down AND mark it unenforced, so its unreliability is visible rather than assumed.
