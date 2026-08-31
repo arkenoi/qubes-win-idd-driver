@@ -113,4 +113,18 @@ echo "=== NEGATIVE 15: the PV-NIC latch left a failure marker ==="
 { cat "$SRC"; echo "2026-08-30 99:99:99 [ERROR] QubesPvNic-FAILED.txt written: applier could not bind the PV NIC"; } > "$TMP/marker.log"
 expect_red pvnic-failure-marker "$TMP/marker.log" no_failure_marker
 
+
+echo "=== NEGATIVE 16: a two-stage run whose preconditions never show the testsigning transition ==="
+if [ -f "$C1" ]; then
+  sed 's/"testsigning_active":false/"testsigning_active":true/g' "$C1" > "$TMP/nostage.log"
+  expect_red stage-not-redetected "$TMP/nostage.log" stage_redetected
+fi
+
+echo "=== NEGATIVE 17: an in-place upgrade that actually ran an uninstall ==="
+C4b=$(ls "$HOME"/qwt-accept/20260830-acceptance-4.3.16/C4-win10/[A-Z]*.log 2>/dev/null | head -1)
+if [ -f "$C4b" ]; then
+  { cat "$C4b"; echo "2026-08-30 99:99:99 [INFO] uninstalling Qubes Windows Tools v4.2.2.0 before the upgrade"; } > "$TMP/uninst.log"
+  expect_red upgrade-ran-uninstall "$TMP/uninst.log" no_intermediate_reboot
+fi
+
 exit $rc

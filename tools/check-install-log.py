@@ -248,6 +248,33 @@ def check(path, expect_entry=None):
         'ok': len(failed_marker) == 0, 'count': len(failed_marker), 'lines': failed_marker[:2],
     }
 
+    # --- the installer RE-DETECTED its stage rather than assuming it ------------------------------
+    # Each PRECONDITION records testsigning_active. A two-stage run must show BOTH values: false
+    # before the testsigning reboot (stage 1) and true after it (stage 2). If every precondition
+    # reports the same value while a stage2 RESULT exists, the installer did not re-detect - it
+    # carried its stage across the reboot, which is the fault this check is about.
+    ts = [m.group(1) == 'true' for m in re.finditer(r'"testsigning_active"\s*:\s*(true|false)', text)]
+    res['stage_redetected'] = {
+        # Applies ONLY to a genuine TWO-STAGE run. The 1-stage path (C3/C4/C6) starts with
+        # testsigning already active, so every precondition reports true and there is no
+        # transition to observe - that is correct, not a defect. Requiring it there failed 7 of
+        # 10 good logs.
+        'ok': (any(ts) and not all(ts)) if (s1 and s2 and ts) else True,
+        'na': not (s1 and s2 and ts),
+        'testsigning_values': f"{sum(ts)} true / {len(ts) - sum(ts)} false",
+    }
+
+    # --- in-place upgrade: no uninstall, no intermediate reboot -----------------------------------
+    # The upgrade path states its own guarantee ("IN-PLACE MSI major upgrade, no uninstall, no
+    # intermediate reboot"). Assert that claim is present AND that no uninstall was actually run.
+    claim = [ln for ln in lines if re.search(r'no uninstall, no intermediate reboot', ln, re.I)]
+    did_uninstall = [ln.strip()[:130] for ln in lines
+                     if re.search(r'\buninstalling\b|running msiexec.*\bX\b|/x\s*\{', ln, re.I)]
+    res['no_intermediate_reboot'] = {
+        'ok': (len(did_uninstall) == 0) if claim else True,
+        'na': not claim, 'claimed': len(claim), 'uninstall_actions': did_uninstall[:2],
+    }
+
     # An `na` check must NOT read as a pass and must NOT fail the run either - the same rule
     # health-check.ps1 already applies ("counting them as failures made acceptance unpassable on the
     # very path it creates"). They are reported separately so a release CLAIM can require one while

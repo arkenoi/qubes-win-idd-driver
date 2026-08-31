@@ -79,6 +79,9 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `appvm-skipped` / `appvm-proxy-unchanged` | 2026-08-31 | the same script on a TemplateVM, which does NOT skip | AppVM: *'not a template; updates are the template's business. Exiting before any proxy activity.'*, RELAY_AFTER 0, ProxyEnable absent |
 | `vacuity-stimulus-existed` | 2026-08-31 | chromerepro not running | shipped `guest/enumwin.ps1` reports `CHROMEREPRO_HWNDS 0`; with it running, `5` |
 | `cold-boot-session` | 2026-08-31 | the samples taken while the guest was still booting | liveness probe FALSE during boot, TRUE once qrexec came up, on a boot proven by LastBootUpTime advancing |
+| `zero-reboots` / `zero-reboots-standalone` / `one-boot-per-command` / `coldboot-reboot-confirmed` | 2026-08-31 | a real non-rebooting operation on a live StandaloneVM | LastBootUpTime byte-identical (`04:45:43.7192010` twice); across ONE real reboot it advances to `04:47:02.8275610` and is stable on re-read. Both directions measured on the guest, not simulated |
+| `stage-redetected` | 2026-08-31 | every `testsigning_active` flipped true in a two-stage log | -> red. Scoped to genuine two-stage runs (the 1-stage path starts with testsigning on, so requiring the transition there failed 7 of 10 good logs) |
+| `no-intermediate-reboot` | 2026-08-31 | an `uninstalling ...` line added to an upgrade log that claims no uninstall | -> red |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Predicate validated, DEPLOYED CHECK NOT — these do NOT count (added 2026-08-31)
@@ -89,7 +92,6 @@ tier separate is the difference between measuring the product and measuring my o
 
 | check | what was validated | what is still owed |
 |---|---|---|
-| `coldboot-reboot-confirmed` | a timestamp comparison distinguishes advanced from identical | run the real check against a guest that did NOT reboot |
 | `emulated-unplugged` | the predicate rejects a list still carrying the emulated NIC | run the real check on a guest where the emulated adapter is still present |
 | `eligibility-never-had-vif` | the predicate rejects non-zero device/ghost counts | run the real check on a guest that HAS seen a vif |
 
