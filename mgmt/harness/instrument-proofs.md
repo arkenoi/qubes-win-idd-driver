@@ -34,6 +34,10 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `RND-3 scene-reset gate` | 2026-08-31 | a persistent reminder toast survived from a previous run | the runner refused with `an override-redirect surface is STILL on screen after the reset ... Refusing to grade` and exited 2 rather than grading a dirty scene |
 | `U2 boot-pass debounce clear` | 2026-08-31 | `update-status.json` left in place by a scan 9 minutes earlier | the boot-triggered pass fired correctly (`lastresult=0`) and SKIPPED, giving `class_lines:0`; with the file cleared the identical boot gives `class_lines:1, class_correct:true, qdb_retry_evidence:true` |
 | `SG1 dom0 boot watch` | 2026-08-31 | the liveness probe inherited a 150s timeout and BLOCKED, so the loop took one sample and waited | the run reported `0 sample(s)` and the `TAKEN < 3` gate refused it as INVALID-INSTRUMENT; with a 5s probe the same boot yields 4-6 samples |
+| `pv_console_bound` | 2026-08-31 | `XENBUS\VEN_XP0001&DEV_CONS` disabled via `Disable-PnpDevice` (`problem=CM_PROB_DISABLED`) | `mgmt/harness/failproof-healthcheck.sh`: `failed=[pnp_no_unexpected_errors, pv_console_bound]`, `pass:false bound:false`; re-enabled → `OK CM_PROB_NONE`, `failed=NONE` |
+| `pnp_no_unexpected_errors` | 2026-08-31 | same run — a disabled device IS an unexpected PnP error | caught it in the same `failed` list, cleared on restore |
+| `updates_dom0_owned` | 2026-08-31 | `NoAutoUpdate=0` — the guest would service itself | `failed=[updates_dom0_owned]`; restored to 1 → `failed=NONE`. Reproduced three times |
+| `autologon-armed` | 2026-08-31 | `AutoAdminLogon=0` + guard task deleted + cold boot | `mgmt/harness/sg6-failproof.sh`: read back `autologon=0`, guest mapped ZERO windows with qrexec alive; re-armed → 1 |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Partially proven — cite as PASS-UNPROVEN until completed
