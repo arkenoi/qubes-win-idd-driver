@@ -23966,3 +23966,35 @@ normally:
 
 The installer will not install a partial or tampered payload. That is now measured rather than
 believed, from two different directions, as a side effect of trying to build a negative.
+
+### Both remaining vacuous checks repaired and then proven
+
+Neither could be earned until the check itself was fixed — which is the point of the exercise.
+
+**`keyed-mutex-recovered` / `capture-thread-survives-resize`.** Its death counter was a log grep
+(`/capture thread|thread exiting|giving up/`) whose only match, with the fault armed, was **the
+injector's own message**; a silently dead capture thread emits no such line at all. Frame liveness
+is now the primary criterion — `QGAPERF`'s monotonic `seq` must advance across a visible guest
+change, which no log line can satisfy. Proven: armed `seq 3 -> 3` → FAIL; cleared `seq 190 -> 237`
+→ PASS.
+
+*This also settled an open question recorded earlier today.* With `FI_CAPTURE_EXIT` armed the old
+pixel probe reported "pixels changed" and I could not explain it. Now measured: capture really was
+dead (`seq` frozen), so **that probe was never measuring live capture** — it was seeing dom0
+re-render the window frame on resize. The ambiguity is resolved, not left open.
+
+**`menu-synthesized-onto-owner`.** It hashed the *whole* owner window, so a caret blink satisfied
+it — it passed with `SYNTHPAINT 0`, not one paint having occurred. Evidence is now cropped to the
+exact rect the agent reports painting (`SYNTHPAINT rx,ry,w,h` are owner-relative), and
+SYNTH-without-SYNTHPAINT is FAIL: accounted onto the owner but never drawn there is precisely the
+invisible-menu defect. Proven: armed → FAIL on the missing paint; cleared → painted rect
+`1,50 229x196` changed `6f477934 -> 228e6e7d` → PASS.
+
+**All four vacuous checks found this campaign are now repaired and proven.** The repairs share one
+shape, now protocol rule 18: *bind the evidence to the narrowest thing the property is about.* Not
+"a window exists" but "no MAP for THIS hwnd"; not "pixels changed" but "the pixels in the rect the
+agent says it painted"; not "no death string" but "the frame counter advanced".
+
+Runbook synced: rules 18–21 (the vacuity test; an injector must not emit text the checks grep for;
+classify by exact-literal grep, never prefix; triage by how loud the failure is) and runbook steps
+D-0 preflight, D-0b cross-guest parallelism, D-0c repair-before-proving.
