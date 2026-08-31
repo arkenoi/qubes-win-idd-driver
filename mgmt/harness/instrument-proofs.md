@@ -132,3 +132,32 @@ their results are reported as `PASS-UNPROVEN`:
 ## Retractions
 
 None yet. Per H5, a wrong verdict is suffixed `RETRACTED:<reason>` in place, never deleted.
+
+## The 34 build-blocked checks: how to earn them (found 2026-08-31)
+
+They are NOT one homogeneous set, and most do not need a hand-edited branch:
+
+**~12 — the capture/render regression cluster** (`capture-thread-survives-resize`,
+`keyed-mutex-recovered`, `pixels-change-after-resize-*`, `mode-followed-*`, `agent-idle-cpu`,
+`scroll-p50-vs-canonical`, `metric-stability`, `drag-p50-record-only`). The project **already ships
+the toggle**: `agent/gui-agent/faultinject.c`, built in via `QGA_FAULT_INJECTION=1`, exposed as the
+`fault_injection` input of `.github/workflows/qwt-full.yml`. Its own header states the reason in
+CLAUDE.md's words — *"a check counts as evidence only once it has been seen to FAIL on a build with
+the defect deliberately re-introduced … This module is that toggle."* It offers ten registry-selected
+faults: `FaultCaptureExit`, `FaultPrintWindowFail`, `FaultNegCreate`, `FaultNegCreateHwnd`,
+`FaultDupCreate`, `FaultRawCreate`, `FaultPumpStallSec`, `FaultRingStallSec`, `FaultLegacySend`,
+`FaultArmDelaySec`. **One dispatch produces a binary that re-introduces many defects on demand** —
+no per-clause branch, no source edit:
+
+    gh workflow run qwt-full.yml -f fault_injection=true
+
+**~20 — the safeguard clauses** (`borderless-fullscreen-gated`, `or-fullscreen-never-mapped`,
+`maximized-window-maps`, `toasts-survive-filter`, `shadow-strips-dropped`, `no-fullscreen-during-boot`,
+`start-not-presented`, `menu-*`, `secure-desktop-*`, `uac-off-secure-desktop`, …). The injector does
+NOT cover these — they need the specific `ShouldAcceptWindow` clause removed, one build per clause.
+`diag/sg2-mode2-gate-removed` (agent) + `diag/sg2-failproof` (superproject) are staged for the Mode-2
+gate as the worked example.
+
+**Note for whoever picks this up:** the fault injector was found only after hand-editing a diag
+branch. Check whether the product already ships the toggle before writing one — the relay's
+`--selftest` turned out the same way, carrying the entire `relay-transport-clean` proof.
