@@ -30,7 +30,7 @@ require_scripts(){
   fi
 }
 
-require_scripts guest/startproof.ps1 guest/enumwin.ps1 guest/cpu-bench.ps1 guest/open-start.ps1
+require_scripts guest/disarm-update-scan.ps1 guest/startproof.ps1 guest/enumwin.ps1 guest/cpu-bench.ps1 guest/open-start.ps1
 VM="${1:?usage: $0 <vm> [outdir]}"
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/P4-$VM}"
 mkdir -p "$OUT"
@@ -39,24 +39,7 @@ log(){ echo "$(date -u +%H:%M:%S) p4[$VM]: $*" | tee -a "$OUT/p4.log"; }
 
 # ---------------------------------------------------------------- precondition
 log "=== G-0c: disarm QubesWindowsUpdateScan BEFORE anything runs ==="
-cat > "$TMP/p4-disarm.ps1" <<'PS'
-$ErrorActionPreference='Continue'
-$t = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
-if (-not $t) { Write-Output 'SCAN_TASK ABSENT'; Write-Output 'DISARMED true'; exit 0 }
-$i = Get-ScheduledTaskInfo -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
-Write-Output ('SCAN_BEFORE state=' + $t.State + ' nextrun=' + $i.NextRunTime)
-& schtasks /change /tn QubesWindowsUpdateScan /disable *>$null
-# Kill a pass that is ALREADY running - disabling the task does not stop a live one, and a live
-# one is exactly the condition the rule exists to prevent.
-$p = Get-Process qubes-updates-relay -EA SilentlyContinue
-if ($p) { Write-Output ('RELAY_RUNNING ' + $p.Count + ' - stopping'); $p | Stop-Process -Force -EA SilentlyContinue }
-Start-Sleep -Seconds 2
-$t2 = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
-Write-Output ('SCAN_AFTER state=' + $t2.State)
-Write-Output ('RELAY_AFTER ' + @(Get-Process qubes-updates-relay -EA SilentlyContinue).Count)
-Write-Output ('DISARMED ' + ($t2.State -eq 'Disabled'))
-PS
-dis=$(T=300 q pushrun "$TMP/p4-disarm.ps1" | tr -d '\r')
+dis=$(T=300 q pushrun guest/disarm-update-scan.ps1 | tr -d '\r')
 echo "$dis" | grep -aE '^(SCAN_BEFORE|SCAN_AFTER|RELAY_|DISARMED)' | sed 's/^/  /' | tee "$OUT/disarm.txt"
 echo "$dis" | grep -qa 'DISARMED True' || { log "FATAL: could not disarm the scan - refusing to run. An unmeasured cell beats a bad number."; exit 2; }
 log "scan disarmed and verified"

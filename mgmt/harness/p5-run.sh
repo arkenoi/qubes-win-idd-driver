@@ -32,7 +32,7 @@ require_scripts(){
   fi
 }
 
-require_scripts guest/fsgate-probe.ps1 guest/set-resolution.ps1 guest/open-start.ps1
+require_scripts guest/disarm-update-scan.ps1 guest/fsgate-probe.ps1 guest/set-resolution.ps1 guest/open-start.ps1
 VM="${1:?usage: $0 <vm> [outdir]}"
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/P5-$VM}"
 mkdir -p "$OUT"
@@ -45,7 +45,7 @@ rc=0
 
 # ---------------------------------------------------------------- P5-2: disarm the scan
 log "=== P5-2: disarm QubesWindowsUpdateScan (same gate as P4-1) ==="
-dis=$(T=300 q pushrun "$TMP/p4-disarm.ps1" | tr -d '\r')
+dis=$(T=300 q pushrun guest/disarm-update-scan.ps1 | tr -d '\r')
 echo "$dis" | grep -aE '^(SCAN_|RELAY_|DISARMED)' | sed 's/^/  /' | tee "$OUT/disarm.txt"
 echo "$dis" | grep -qa 'DISARMED True' || { log "FATAL: scan not disarmed - refusing to run"; exit 2; }
 restore(){ log "=== re-enabling QubesWindowsUpdateScan ==="
