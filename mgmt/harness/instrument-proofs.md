@@ -72,6 +72,8 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `standalone-skipped` / `standalone-no-relay` / `template-arm` | 2026-08-31 | the SAME shipped script run on the other VM class | StandaloneVM: 'the qubes proxy updater is template-only ... Doing nothing', RELAY=0; TemplateVM: full path, scan offers 1 update, relay listening |
 | `user-data-on-private` | 2026-08-31 | the same predicate on `C:\Windows`, which legitimately is not a reparse point | `C:\Users` -> ReparsePoint True, Target `Q:\Users`; `C:\Windows` -> False. No mutation |
 | `armed-monitor-precondition` | 2026-08-31 | the SHIPPING state is the negative | xenbus_monitor `Stopped/Disabled` -> armed to `Running/Auto` -> restored to `Stopped/Disabled`, all verified |
+| `pv-nic-bound-live` / `eligibility-never-had-vif` / `stimulus-existed` | 2026-08-31 | the same queries on `win10-p46`, which has `netvm=''` | `win10-app` (netvm=fw-net): XENVIF device err=0 svc=xennet, ENUM True, 1 PV adapter Up, IP 10.137.0.64. Control: 0 devices, ENUM False, 0 adapters. *stimulus-existed measured ACROSS TWO GUESTS, not across an attach* |
+| `transfer-crossed-pv-nic` / `fw-net-confirmed` | 2026-08-31 | the same fetch through 127.0.0.1:8082, where no relay runs on an AppVM | direct fetch: DNS resolved, 80,736 bytes, PV adapter ReceivedBytes +102,881. Proxy attempt: 'Unable to connect', RX_DELTA 0. Asserted by TRANSFER, never by ping - a Qubes netvm does not answer ICMP |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Predicate validated, DEPLOYED CHECK NOT — these do NOT count (added 2026-08-31)
