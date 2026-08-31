@@ -1,72 +1,11 @@
 #!/bin/bash
-# Reject any staged capture of the whole dom0 desktop — including one hidden inside an archive.
-#
-# HISTORY, because each layer here exists for a failure that actually happened:
-#   1. .gitignore bans `screen.png`, `*fullshot*`, `**/fullshot/` by NAME. 41 full-desktop PNGs
-#      still reached public history (purged 2026-08-09) because names are not content.
-#   2. tools/pre-commit-no-desktop-captures.sh (09c61a5) added the honest test: PNG WIDTH. The
-#      guest screen is at most 3440 wide here, so anything wider is the host desktop with other
-#      qubes on it. It was installed at .git/hooks/pre-commit and it worked.
-#   3. It missed sm1.tar/sm2.tar/sm3.tar (committed 2026-08-11 in fbee3ed, found 2026-08-29)
-#      because it inspects staged *.png only, and those PNGs were inside TARBALLS.
-# So: check content, and look inside containers. Both rules below, no coverage dropped.
-#
-# NOTE: this file only runs if `git config core.hooksPath .githooks` is set — and setting that
-# DISABLES .git/hooks/ entirely, which is where rule 2 used to live. That is precisely why rule 2
-# is reproduced here rather than left behind. Do not re-split them.
-#
-# Bypass, deliberately and only if you are sure:  git commit --no-verify
-
-MAXW=3440   # widest legitimate guest screen on this rig; the dom0 desktop is 5120
-fail=0
-
-# Width of a PNG delivered on stdin, or 0 if it is not a PNG.
-png_width() {
-	python3 -c "
-import sys,struct
-d=sys.stdin.buffer.read(33)
-print(struct.unpack('>II', d[16:24])[0] if d[:8]==b'\x89PNG\r\n\x1a\n' else 0)" 2>/dev/null || echo 0
-}
-
-while IFS= read -r f; do
-	case "$f" in
-	*.png)
-		w=$(git show ":$f" 2>/dev/null | png_width)
-		if [ "${w:-0}" -gt "$MAXW" ]; then
-			echo "BLOCKED: $f is ${w}px wide — that is the dom0 desktop, not a guest window." >&2
-			fail=1
-		fi
-		;;
-	*.tar | *.tar.gz | *.tgz)
-		# Read the STAGED blob, not the worktree file.
-		members=$(git show ":$f" 2>/dev/null | tar -t 2>/dev/null)
-		case "$members" in
-		*screen.png* | *fullshot*)
-			echo "BLOCKED: $f contains a full-desktop capture (screen.png/fullshot)." >&2
-			fail=1
-			;;
-		esac
-		# Dimension test for every image inside, so a renamed member cannot dodge the above.
-		for m in $(printf '%s\n' "$members" | grep -Ei '\.(png)$'); do
-			w=$(git show ":$f" 2>/dev/null | tar -xO -f - "$m" 2>/dev/null | png_width)
-			if [ "${w:-0}" -gt "$MAXW" ]; then
-				echo "BLOCKED: $f holds $m at ${w}px wide — that is the dom0 desktop." >&2
-				fail=1
-			fi
-		done
-		;;
-	esac
-	# Name-based rules last: cheap, and they catch the obvious cases early in review.
-	case "${f##*/}" in
-	screen.png | *fullshot*) echo "BLOCKED: $f matches a full-desktop capture path." >&2; fail=1 ;;
-	esac
-done < <(git diff --cached --name-only --diff-filter=AM)
-
-if [ "$fail" -eq 1 ]; then
-	echo >&2
-	echo "Commit refused: these leak other qubes' windows into a PUBLIC repo." >&2
-	echo "Capture the single qube window instead of the desktop — local.WinWindowShot" >&2
-	echo "(dom0/15-install-window-screenshot-service.sh) never touches the root window." >&2
-	exit 1
+# Mechanical gate. Prose rules slip; this does not.
+out=$(python3 tools/lint-harness.py --quiet 2>&1)
+if [ $? -ne 0 ]; then
+  echo "$out"
+  echo
+  echo "pre-commit REFUSED: tools/lint-harness.py has findings (see above)."
+  echo "Fix them, or run with --no-verify and say why in the commit message."
+  exit 1
 fi
 exit 0
