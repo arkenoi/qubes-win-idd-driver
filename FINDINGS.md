@@ -23570,3 +23570,38 @@ than being quietly closed by a passing run.
 
 **Still owed:** U1 on a Win10 template. `win10-tpl` must be rebuilt to its entry stage first (G-0b) —
 it is the subject the U1 diagnosis contaminated.
+
+### The "blocked on dom0" resize was a MISDIAGNOSIS — dom0 runs the pre-fix service build
+I recorded `RND-8 / dom0-driven-resize` as `BLOCKED` on an owner action ("dom0 must reinstall the
+resize service"), and asserted that without measuring it. The rig-capabilities skill says exactly
+this must not happen: *"an assertion of impossibility must be MEASURED, not assumed."*
+
+**The measurement.** The repo's v2+ service resolves its target at runtime and prints
+`err=multiple_testbed_guests:...` when more than one tagged guest is running. With `win10-p46` AND
+`win10-app` both running and tagged, the installed service printed `err=no_window`. It therefore is
+**not** the repo build — it is the pre-fix build whose own successor comments describe it: *"the old
+build baked `win-idd-test` in"*. That qube had been deleted, so the service was searching for
+windows owned by a non-existent VM and correctly finding none.
+
+**Proven by construction.** Created a StandaloneVM literally named `win-idd-test`
+(create → tag → copy, per `mgmt/clone-to-template.sh`'s ordering), booted it, mapped a window:
+
+```
+GEOM ok=1 x=168 y=212 w=3826 h=1029          <- immediately, no dom0 change at all
+local.WinResize+1400x800  ->  w=1386 h=793   <- the dom0 window really resized
+agent log: CONFIGURE=3                        <- and the guest received it
+```
+
+So the dom0→agent geometry channel is **live and measured**, and no dom0 action was ever required to
+prove it.
+
+**What actually remains, and why it is not a dom0 problem.** The resolution-following half is gated
+on `window == 0` — `vchan-handlers.c`: `else { // gui daemon requests screen resize }`. Window 0 is
+unmapped in seamless mode, so a dom0 resize lands on an app window and is correctly only ACKed
+(`RESREQ=0`, `src=dom0` count 0, guest screen unchanged at 5120x1440). Exercising it needs the
+NON-SEAMLESS windowed desktop, i.e. `service.gui-fullscreen` — which I must never set. That makes it
+`ATTENDED-PENDING`, the protocol's existing category for owner-attended arms, not `BLOCKED`.
+
+**Still worth doing:** installing `dom0/10-install-resize-service.sh` v5 in dom0, so the service
+stops depending on a hardcoded qube name and reports its failure cause. `win-idd-test` is kept as a
+running-name shim until then — without it, `local.WinResize` cannot find any guest.

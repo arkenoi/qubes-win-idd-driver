@@ -86,6 +86,11 @@ collect('INCONCLUSIVE',                 lambda r: r['verdict'] == 'INCONCLUSIVE'
 collect('BLOCKED / SKIPPED',            lambda r: r['verdict'].startswith(('BLOCKED', 'SKIPPED')))
 
 unproven = counts.get('PASS-UNPROVEN', 0)
+# ATTENDED-PENDING is the protocol's declared category for arms that CANNOT be run unattended -
+# they need the owner present, or a feature the harness is forbidden to set. They are not failures
+# and not gaps the harness can close, but they must never be invisible: print them by name so a
+# report cannot quietly omit an arm nobody ever ran.
+attended = [r for r in rows if r['verdict'].startswith('ATTENDED-PENDING')]
 
 print()
 if not blockers and unproven == 0:
@@ -102,6 +107,10 @@ for name, hits in blockers.items():
         print(f"      {h['cell']} / {h['check']}  -- {h['detail'][:90]}")
     if len(hits) > 6:
         print(f"      ... and {len(hits)-6} more")
+if attended:
+    print(f"  ATTENDED-PENDING: {len(attended)}  (cannot be run unattended - owner required)")
+    for h in attended:
+        print(f"      {h['cell']} / {h['check']}  -- {h['detail'][:110]}")
 if unproven:
     print(f"  PASS-UNPROVEN: {unproven}")
     print("      succeeded but never seen to fail. H5: a check absent from the fail-proof")
