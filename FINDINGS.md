@@ -24303,3 +24303,60 @@ session also PERSISTS across detach/reattach - probe 3 found it already logged i
 went in, while the same call from win-idd-mgmt succeeded - so the policy did take effect and the
 remaining dom0-side issue is separate (dom0-as-source/dom0-as-target routing). Moot in practice:
 dom0 has `sudo xl console -t pv`, which needs no policy at all.
+
+## 2026-09-01 — "can we introspect a guest with dead qrexec?" MEASURED. Answer: partly, and the part that matters is NOT proven
+
+Owner reframed the question correctly: *"we pretty well know that PV console won't die if we stop
+qrexec agent. The question is rather if something that prevents qrexec agent from functioning
+wont touch the PV console."* Right - a deliberate `net stop` proves nothing. (It did not even run:
+`net stop QrexecAgent` hit the dependency prompt for QubesGuiWatchdog and aborted, subject
+unchanged.) So the test became: take away the thing that ACTUALLY kills qrexec in the field.
+
+New tool: **`tools/qcon`** - run a command in a guest over the PV console instead of qrexec.
+Validated both ways before use (rule 3): correct output on a known-good guest, and rc=4
+"not Running" on a halted one. Two instrument defects found and fixed DURING validation, both of
+which would have produced false results:
+ - syncing on `'>'` matched a prompt still trickling in from the previous exchange, so the buffer
+   was cleared at the wrong moment and a command was silently skipped - the tool reported a
+   stall for a command it had thrown away. Now syncs on silence + the token's own echo.
+ - "no bytes" was reported as one verdict. `admin.vm.Console` takes `flock -n -E 200`, so a
+   second attacher exits **200** and a policy refusal exits **126**; both looked like a dead
+   console. Now distinguished (BUSY / REFUSED / NOCONSOLE). The first NOCONSOLE seen in this
+   session was in fact lock contention, and re-attaching worked.
+
+**THE MEASUREMENT (win10-app; root volume is snap_on_start/save_on_stop=False, so C: resets on
+reboot and the whole thing is undone by a restart).** Disabled AutoAdminLogon, `shutdown /l /f`:
+
+    interactive session user: ''      explorer procs: 0      query session: console 2 Conn, no user
+    qrexec probe  -> ANSWERED, `whoami` = nt authority\system
+    PV console    -> ANSWERED, live prompt `C:\Users\user>`
+
+**This RETRACTS the advantage I claimed hours earlier.** I wrote that the console's edge is that
+"qrexec needs a logged-on session". On THIS rig it does not: dom0 policy imposes `user=SYSTEM`
+for `qubes.VMShell` (memory `presession-qrexec-system`), so qrexec answers with no session at all.
+The console adds nothing there **for us**. It remains a real advantage for an end user's Windows
+qube, where stock QWT qrexec does run in the interactive session - that is the limitation the
+README lists - but it is not an advantage on the testbed.
+
+**What the two channels actually share** (the owner's real question):
+ - `xenbus.sys` - both PV stacks sit on it;
+ - the guest kernel being able to schedule work at all;
+ - Xen event channels;
+ - and for THIS qube, dom0-side qrexec: `admin.vm.Console` is itself a qrexec call from
+   win-idd-mgmt to dom0. Only the GUEST's agent is bypassed, never the whole path.
+**What they do not share:** the vchan/grant rings, qrexec-agent, the gui-agent, the interactive
+session, and any Windows service the QWT installer owns.
+
+**Consequence for the failure we actually keep hitting: the console probably does NOT rescue it.**
+The measured wedge is a Xen HVM IPI/TLB-shootdown deadlock (two NMI captures). If vCPUs spin
+without yielding, xencons's DPC/worker does not run either and the console goes silent with
+everything else. Nothing measured since contradicts the caveat written when the driver was built.
+
+**So the console's honest unique value is narrower than I said:**
+ 1. the RETROACTIVE transcript - `/var/log/xen/console/guest-<vm>.log`, written continuously by
+    xenconsoled whether or not anyone is attached. Nothing else here keeps pre-failure output.
+ 2. a dom0-side path needing no policy, no agent, no qubesdb: `sudo xl console -t pv <vm>`.
+ 3. a channel that survives anything scoped to the QWT services/session - which on this rig is a
+    smaller set than it sounds, because SYSTEM qrexec already survives most of it.
+**If we want wedge RESCUE, the emulated serial + EMS/SAC is the thing to build**, not this: SAC is
+in-kernel, answers at IRQLs a user-mode tty cannot, and offers restart/crashdump verbs.

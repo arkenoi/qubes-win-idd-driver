@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""qcon - run a command in a Windows testbed guest over the XEN PV CONSOLE.
+
+WHY THIS EXISTS. Every other way this qube reaches a guest goes through the guest's own
+qrexec agent (tools/qtest run/ps/push/pushrun), so all of them die together in the failure
+class this project keeps hitting: "guest alive, qrexec dead". The PV console rides a
+different transport entirely - xenbus's console ring + evtchn, serviced by dom0's
+xenconsoled, terminated in the guest by xencons.sys -> xencons_monitor -> xencons_tty ->
+cmd.exe. It shares no code, no service and no user session with qrexec.
+
+WHAT STILL HAS TO BE ALIVE (this is NOT "works on any dead guest"):
+  - THIS qube's qrexec to dom0. admin.vm.Console is itself a qrexec call; what it does not
+    need is the GUEST's qrexec agent. dom0 opens the guest's console pty locally.
+  - the guest's xencons driver and its worker. A guest deadlocked at high IRQL - the
+    measured wedge here - silences this too.
+  - policy: admin.vm.Console for this qube (dom0/12-install-policy-tagged.sh).
+
+ONE ATTACHER AT A TIME. dom0's `xl console` and this tool open the same pty slave and split
+the byte stream, so a concurrent attach makes this return nothing. That is why NOCONSOLE is
+reported as an inconclusive result and never as "the guest is dead".
+
+Usage:
+    tools/qcon <vm> <command...>            # run in the existing console session
+    QCON_USER=user QCON_PASS=... tools/qcon <vm> <cmd>   # log in first if at the prompt
+    tools/qcon <vm> --raw                   # just dump whatever the console says
+
+Exit codes: 0 output captured / 2 NOCONSOLE / 3 NEEDS_LOGIN / 4 guest not running / 5 stall.
+"""
+import os
+import select
+import subprocess
+import sys
+import time
+
+DEADLINE = float(os.environ.get("QCON_DEADLINE", "45"))
+STALL = float(os.environ.get("QCON_STALL", "12"))
+
+
+def vm_running(vm):
+    """Terminal-state check (rule 6): a halted guest can never produce a console."""
+    try:
+        out = subprocess.run(["qvm-ls", "--raw-data", "--fields", "NAME,STATE"],
+                             capture_output=True, text=True, timeout=60).stdout
+    except Exception:
+        return None                      # unknown - do not claim a terminal state
+    for line in out.splitlines():
+        parts = line.split("|")
+        if len(parts) >= 2 and parts[0] == vm:
+            return parts[1] == "Running"
+    return False
+
+
+class Console:
+    def __init__(self, vm):
+        self.p = subprocess.Popen(["qrexec-client-vm", vm, "admin.vm.Console"],
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE)
+        os.set_blocking(self.p.stdout.fileno(), False)
+        self.buf = b""
+
+    def send(self, s):
+        self.p.stdin.write(s.encode())
+        self.p.stdin.flush()
+
+    def pump(self, until=None, deadline=DEADLINE, stall=STALL):
+        """Three exits, and the caller is told which one (rule 6):
+        'hit' the marker appeared, 'stall' nothing arrived for `stall`s, 'deadline'."""
+        t0 = last = time.time()
+        while True:
+            if until and until.encode() in self.buf:
+                return "hit"
+            now = time.time()
+            if now - t0 > deadline:
+                return "deadline"
+            if now - last > stall:
+                return "stall"
+            r, _, _ = select.select([self.p.stdout], [], [], 0.4)
+            if r:
+                d = self.p.stdout.read()
+                if d:
+                    self.buf += d
+                    last = time.time()
+
+    def drain_quiet(self, quiet=1.5, deadline=15):
+        """Read until the console has been silent for `quiet` seconds, then discard.
+
+        REQUIRED between commands. Syncing on a prompt character instead was the bug that
+        made the first real run of this tool silently skip its command: pump(until='>')
+        matched a prompt that was still trickling in from the PREVIOUS exchange, so the
+        buffer was cleared at the wrong moment and the tool waited for output it had
+        already thrown away. Sync on silence, and on the token itself - never on '>'.
+        """
+        t0 = last = time.time()
+        while time.time() - t0 < deadline:
+            r, _, _ = select.select([self.p.stdout], [], [], 0.3)
+            if r:
+                d = self.p.stdout.read()
+                if d:
+                    last = time.time()
+                    continue
+            if time.time() - last > quiet:
+                break
+        self.buf = b""
+
+    def close(self):
+        try:
+            self.p.kill()
+            self.p.wait(timeout=5)
+        except Exception:
+            pass
+
+
+def main():
+    if len(sys.argv) < 3:
+        sys.exit(__doc__)
+    vm, rest = sys.argv[1], sys.argv[2:]
+
+    running = vm_running(vm)
+    if running is False:
+        print(f"qcon: {vm} is not Running - a halted guest has no console", file=sys.stderr)
+        return 4
+
+    c = Console(vm)
+    try:
+        c.send("\r")
+        c.pump(until="\n", deadline=8, stall=6)
+
+        if not c.buf:
+            # Distinguish the causes instead of lumping them into one useless verdict.
+            # admin.vm.Console's dom0 script takes `flock -n -E 200`, so a second attacher -
+            # including a stale lock from a killed client - exits 200, and qrexec refusal
+            # exits 126. Both arrive here as "no bytes" unless the exit code is inspected.
+            rc = c.p.poll()
+            err = b""
+            try:
+                err = c.p.stderr.read() or b""
+            except Exception:
+                pass
+            err = err.decode("utf-8", "replace").strip()
+            if rc == 200:
+                print("qcon: BUSY - another attacher holds the console lock "
+                      "(dom0 `xl console`, or a stale lock from a killed client)",
+                      file=sys.stderr)
+                return 6
+            if rc == 126:
+                print(f"qcon: REFUSED by qrexec policy - admin.vm.Console not granted. {err}",
+                      file=sys.stderr)
+                return 7
+            print(f"qcon: NOCONSOLE - no bytes from the console (child rc={rc} {err!r}).\n"
+                  "  INCONCLUSIVE, not proof the guest is dead. Check, in order:\n"
+                  "   1. is someone else attached? (dom0 `xl console` splits the same pty)\n"
+                  "   2. is xencons bound in the guest? (DEV_CONS err=0 svc=xencons)\n"
+                  "   3. is the guest wedged at high IRQL? then nothing user-mode answers",
+                  file=sys.stderr)
+            return 2
+
+        if rest == ["--raw"]:
+            sys.stdout.write(c.buf.decode("utf-8", "replace"))
+            return 0
+
+        if b"login:" in c.buf.split(b"\n")[-1] or b"login:" in c.buf[-40:]:
+            user, pw = os.environ.get("QCON_USER"), os.environ.get("QCON_PASS")
+            if not user:
+                print("qcon: NEEDS_LOGIN - console is at the login prompt; set "
+                      "QCON_USER/QCON_PASS", file=sys.stderr)
+                return 3
+            c.send(user + "\r")
+            c.pump(until="assword", deadline=10, stall=8)
+            c.send((pw or "") + "\r")
+            c.pump(until=">", deadline=15, stall=10)
+
+        # Token built in the guest so the ECHOED input line can never contain the literal
+        # marker - otherwise the terminal's echo of what we typed is mistaken for output.
+        tok = os.urandom(4).hex().upper()
+        c.drain_quiet()
+        c.send(f"set QT={tok}\r")
+        # Sync on the TOKEN's own echo, which cannot be left over from a previous exchange.
+        if c.pump(until=tok, deadline=15, stall=10) != "hit":
+            print("qcon: console did not echo the token - input is not reaching the shell",
+                  file=sys.stderr)
+            return 5
+        c.drain_quiet()
+        c.send("echo B-%QT%&" + " ".join(rest) + "&echo E-%QT%\r")
+        why = c.pump(until=f"E-{tok}")
+        text = c.buf.decode("utf-8", "replace")
+
+        b, e = text.find(f"B-{tok}"), text.rfind(f"E-{tok}")
+        if b < 0 or e < 0:
+            print(f"qcon: markers not seen (pump exit: {why}); raw transcript follows",
+                  file=sys.stderr)
+            sys.stdout.write(text)
+            return 5
+        sys.stdout.write(text[b + len(tok) + 2:e].strip("\r\n") + "\n")
+        return 0
+    finally:
+        c.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
