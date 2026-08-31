@@ -24213,3 +24213,36 @@ then **press Enter** -> the cmd.exe prompt that xencons_tty is already running.
 after 13 silently revokes wedge forensics. That is why `local.WinWedgeForensics` answered
 "Request refused" from win-idd-mgmt this session despite having been installed. 12 now declares
 the line itself; 13 checks before appending, so it will not duplicate.
+
+## 2026-09-01 — `xl console` "Unable to attach console" = execv failed; and the dom0 workarea leftover
+
+**"Unable to attach console" is not a console diagnosis.** From `tools/xl/xl_console.c`,
+`main_console` prints that string **unconditionally after the exec call returns**:
+
+    if (!type) libxl_primary_console_exec(...); else libxl_console_exec(...);
+    fprintf(stderr, "Unable to attach console\n");
+    return EXIT_FAILURE;
+
+Both helpers end in `execv()` - on success the process image is replaced and the fprintf can
+never run. So that message means the **execv did not happen**, and the overwhelmingly likely
+cause is permissions: `/usr/libexec/xen/bin/xenconsole` is **mode 0700, root:root** (verified in
+this qube's xen-runtime 4.21.1-4.fc44, same package as dom0). Run it under `sudo`. It is NOT the
+missing-tty error - that one comes from xenconsole itself ("Could not read tty from store") and
+only after the exec succeeded.
+
+**dom0 workarea watcher: leftover, now removable.** `dom0/09-install-workarea-watcher.sh`
+installs `~/.local/bin/qubes-win-workarea-watch.sh` plus a `~/.config/autostart/` entry, hard
+coded to `win-idd-test`, that mirrors dom0's `_NET_WORKAREA` into that guest's qubesdb. Three
+problems, all fixed in the installer this session:
+1. **No uninstaller** - it survives every dom0 login. Added `--uninstall` (kills, removes both
+   files, and prints the `qubesdb-rm -d <vm> /qubes-workarea` needed to clear the last value).
+2. **Hard-coded VM** - it makes ONE testbed guest a different experimental subject from all the
+   others (the agent watches `/qubes-workarea`; FINDINGS records workarea churn at 12.2
+   applies/s on a pre-fix agent). Now takes the VM as `$1`.
+3. **Unconditional write every 60 s** - `push()` compared against a local `last` cache which the
+   poll loop cleared each minute so a restarted guest's fresh qubesdb got repopulated; net
+   effect was a qubesdb write + syslog line every minute forever. `push()` now reads back the
+   VM's actual value and writes only on a real change, which covers the restart case for free.
+
+It cannot start a halted VM: `qubesdb-write -d` talks to a dom0-local socket, not qrexec. On a
+halted `win-idd-test` it simply fails silently once a minute.
