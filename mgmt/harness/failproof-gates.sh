@@ -93,8 +93,16 @@ done
 log "  all four cells green with every safeguard in force"
 
 # ---------------------------------------------------------------- one bit at a time
-prove(){  # <bitname> <hex> <cell> <check>
-  local name="$1" bit="$2" cell="$3" chk="$4"
+prove(){  # <bitname> <hex> <cell> <check> [cells allowed to move too]
+  # The 5th argument exists because some properties are defended IN DEPTH and a single bit
+  # cannot isolate them. Measured 2026-08-31: FI_GATE_START alone left `start-not-presented`
+  # green because the genuine-open gate rejected the surface independently, and FI_GATE_MODE1
+  # alone left SG4 green because the Mode-2 gate caught the probe. Clearing two clauses at once
+  # is then the only way to falsify the property - but it necessarily moves the companion cell
+  # as well, so that cell must be declared here rather than silently tolerated. Cells NOT
+  # declared must still stay green: that is what keeps the red attributable.
+  local name="$1" bit="$2" cell="$3" chk="$4"; shift 4
+  local allowed=" $* "
   log "=== $name ($bit) -> expect $cell to go RED, the other three to stay green ==="
   set_gate "$bit"
   local A; A=$(p5 "armed-$name")
@@ -103,7 +111,11 @@ prove(){  # <bitname> <hex> <cell> <check>
   tgt=$(field "$A" "$cell")
   for o in SG4 SG2 SG3 SG9; do
     [ "$o" = "$cell" ] && continue
-    green "$(field "$A" $o)" || { others_ok=no; log "  NOTE: $o also moved ($(field "$A" $o)) - the bypass is broader than this clause"; }
+    green "$(field "$A" $o)" && continue
+    case "$allowed" in
+      *" $o "*) log "  NOTE: $o also moved ($(field "$A" $o)) - DECLARED as a companion of this bit" ;;
+      *) others_ok=no; log "  NOTE: $o also moved ($(field "$A" $o)) - UNDECLARED, so the bypass is broader than this clause" ;;
+    esac
   done
   set_gate 0
   local B; B=$(p5 "restored-$name")
@@ -129,9 +141,13 @@ prove(){  # <bitname> <hex> <cell> <check>
   fi
 }
 
-prove FI_GATE_MODE1 1 SG4 or-fullscreen-never-mapped
-prove FI_GATE_MODE2 2 SG2 borderless-fullscreen-gated
-prove FI_GATE_START 4 SG9 start-not-presented
+# MODE1 and MODE2 alone are NOT run any more: both were measured 2026-08-31 leaving their cell
+# green because a second clause defends the same property. The combinations below are what
+# actually falsify each property, with the companion cell declared.
+prove FI_GATE_MODE1_2     0x3  SG4 or-fullscreen-never-mapped  SG2
+prove FI_GATE_MODE2       0x2  SG2 borderless-fullscreen-gated
+prove FI_GATE_START_NOCARD 0x14 SG9 start-not-presented
+prove FI_DROP_CAPTIONED   0x20 SG3 windowed-fullscreen-allowed
 
 log "=== clearing FaultGateOff and leaving the subject with every safeguard in force ==="
 set_gate 0
