@@ -49,6 +49,11 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `reinstall-all-on-msiexec` | 2026-08-31 | `PvDriversDisk` dropped from ADDLOCAL | negative 7 → red. Branch-aware: `REINSTALL=(none)` is CORRECT on clean-install/uninstall-first and reports `na` |
 | `pnputil-259-accepted` | 2026-08-31 | a pnputil failure line injected | negative 8 → red; rc=259 "Already exists in the system" stays accepted, which is the check's purpose |
 | `no-pv-gate-refusal` | 2026-08-31 | a `REFUSING to install:` line appended | negative 2 → red (same assertion as `no-refusing`, under the cell-specific name for the 2026-08-11 PV-gate guard) |
+| `templates-netvm-empty` | 2026-08-31 | the same assertion pointed at `win10-app`, which legitimately HAS `netvm=fw-net` | `mgmt/harness/failproof-config.sh`: templates → True, AppVM → False. **No netvm was ever attached to a template** to manufacture this — that is banned |
+| `autologon-guard-shape` / `scan-task-shape` / `latch-task-registered` | 2026-08-31 | the same query against a task name that was never registered | real task → True (boot trigger, SYSTEM); `QubesTaskThatWasNeverRegistered` → False |
+| `applier-script-present` | 2026-08-31 | `Test-Path` against a path that does not exist | shipped `bin\pvnic-boot.ps1` → True; absent path → False. (The first attempt failed on the POSITIVE side — I had guessed the wrong directory) |
+| `no-loopback-masquerade` | 2026-08-31 | the same predicate over an adapter list that DOES contain a loopback | live adapters → True; synthetic list with `Microsoft KM-TEST Loopback Adapter` → False |
+| `no-auto-update-policy` | 2026-08-31 | `NoAutoUpdate=0` | same assertion as `updates_dom0_owned`; battery red, restored green, reproduced 3x |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Partially proven — cite as PASS-UNPROVEN until completed
