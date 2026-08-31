@@ -41,7 +41,33 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 GUEST='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-120}" ./tools/qtest "$@" 2>/dev/null; }
+psrun(){ local b; b=$(python3 -c "
+import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode(), end='')" <<< "$1")
+  q run "cmd /c powershell -NoProfile -EncodedCommand $b" | tr -d '\r'; }
 log(){ echo "$(date -u +%H:%M:%S) p5[$VM]: $*" | tee -a "$OUT/p5.log"; }
+
+# Did the AGENT announce this window to dom0? Counts `msg=MAP,hwnd=<h>` in the agent's own log.
+#
+# WHY THIS EXISTS - the screenshot cannot see an override-redirect window.
+# Measured 2026-08-31 with FaultGateOff=0x3 (both fullscreen clauses bypassed): the agent logged
+#   SendWindowCreateInternal: 0x3601e6, (0,0) 1920x1080, override=1
+#   SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x3601e6,ovr=1,...,w=1920,h=1080
+# i.e. it offered dom0 a full-screen override-redirect window - the precise leak SG4 asserts
+# against - and `qtest shot` still returned ONLY the control window. Override-redirect windows are
+# undecorated and do not appear in that enumeration, so a cell graded on the screenshot alone is
+# BLIND to this defect and would pass a leaking build. (Compare the memory note: an empty shot tar
+# is not evidence of no windows.)
+#
+# Guest-side log evidence is weaker than pixels and does not replace them - it is ADDITIVE. A
+# "nothing mapped" verdict now requires BOTH: no matching window in dom0, AND no MAP from the
+# agent for that hwnd. Either one alone can miss the leak.
+agent_mapped(){  # <hwnd like 0x3601e6> -> count of MAP messages for it
+  local h; h=$(echo "${1#0x}" | tr 'A-Z' 'a-z')
+  psrun '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
+$f=Get-ChildItem $d -Filter gui-agent-*.log | Sort LastWriteTime -Desc | Select -First 1
+Write-Output ("AGENTMAP " + @(Get-Content $f.FullName | Select-String -SimpleMatch "msg=MAP,hwnd=0x'"$h"'").Count)' \
+    | grep -aoE 'AGENTMAP [0-9]+' | awk '{print $2}' | head -1
+}
 rc=0
 
 # ---------------------------------------------------------------- P5-2: disarm the scan
@@ -212,17 +238,30 @@ run_cell(){
     done
     sleep 10
   done
+  # SECOND, INDEPENDENT WITNESS: ask the agent whether it announced this window to dom0 at all.
+  # The screenshot cannot see an override-redirect window (see agent_mapped above), so a cell
+  # graded on dom0 dims alone is blind to exactly the leak SG4 asserts against.
+  local phwnd nmap
+  phwnd=$(echo "$probe" | grep -ao '"hwnd":"0x[0-9A-Fa-f]*"' | grep -ao '0x[0-9A-Fa-f]*' | head -1)
+  if [ -n "$phwnd" ]; then
+    nmap=$(agent_mapped "$phwnd")
+    if [ -n "$nmap" ] && [ "$nmap" -gt 0 ]; then
+      log "  AGENT MAPPED the probe: $nmap MAP message(s) for $phwnd - dom0 was offered this window"
+      probe_mapped=yes
+    fi
+  fi
+
   local hits nh
   hits=$(T=300 q pushrun "$TMP/p5-since.ps1" -Mark "${mark:-0}" -Pattern "$disc" | tr -d '\r')
   nh=$(echo "$hits" | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
-  { echo "$probe"; echo "$hits"; } > "$OUT/$id.probe.txt"
+  { echo "$probe"; echo "$hits"; echo "AGENTMAP $phwnd -> ${nmap:-?}"; } > "$OUT/$id.probe.txt"
   q run 'cmd /c taskkill /f /im powershell.exe 2>nul & exit 0' >/dev/null 2>&1
   sleep 8
 
   local existed=no
   echo "$probe" | grep -qa '"visible":true' && existed=yes
   log "  probe: ${probe:-NONE}"
-  log "  probe ${pw}x${ph} mapped=$probe_mapped  control_seen=$saw_control  dom0 dims:${alldims:- none}  '${disc}' hits=${nh:-0}"
+  log "  probe ${pw}x${ph} mapped=$probe_mapped  control_seen=$saw_control  agent_map=${nmap:-?}  dom0 dims:${alldims:- none}  '${disc}' hits=${nh:-0}"
 
   if [ "$existed" != yes ]; then
     log "  -> INVALID-VACUOUS: probe window never existed"
