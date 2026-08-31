@@ -23746,3 +23746,56 @@ Fixed, and **missing data now reports `INVALID-INSTRUMENT`, never `FAIL`** — f
 putting it on the product's record is not. Protocol rule 16 names the three harnesses still
 carrying the pattern (`u2-coldboot.sh`, `sg1-u2-coldboot.sh`, `stability-e2e.sh`); their verdicts
 should not be trusted until converted.
+
+### FI_GATE_OFF results — one proof earned, and a check found blind to its own defect
+
+`FaultGateOff` bits armed one at a time on the gate build `f143f0f1`, each run's startup banner
+confirming the bit was live (`gateoff=0x1`, `0x2`, `0x4`):
+
+| bit | cell | result |
+|---|---|---|
+| `FI_GATE_MODE2` (0x2) | SG2 | **PROOF EARNED** — SG2 FAIL with the bit set, green with it cleared, SG4/SG3/SG9 green throughout |
+| `FI_GATE_MODE1` (0x1) | SG4 | not red — **defence in depth**, confirmed from the log |
+| `FI_GATE_START` (0x4) | SG9 | not red — **defence in depth**, confirmed by direct measurement |
+
+**`borderless-fullscreen-gated` is now proved from ONE artifact.** Baseline all four cells green;
+`FaultGateOff=0x2` made SG2 fail while the other three stayed green; clearing it restored green.
+Only a registry value differed across the three runs — strictly stronger than the two-binary SG2
+proof, and it validates the whole `FI_GATE_OFF` mechanism end to end.
+
+**Defence in depth, measured rather than assumed.** Both non-reds were investigated instead of
+being written off:
+* Mode 1 bypassed alone: the agent log shows the probe rejected by the **Mode-2** clause
+  (`borderless fullscreen ... hidden (set service.gui-fullscreen to allow)`).
+* Start clause bypassed alone: with the bit live and Start opened, `Start surface not presented`
+  logged **0** times while `shell surface with no card` logged **5** — the genuine-open gate
+  rejects it independently — and dom0 showed only the control window.
+
+#### The serious finding: SG4 could not see the leak it asserts against
+
+With **both** fullscreen clauses bypassed (`FaultGateOff=0x3`), the agent's own log shows it
+offered dom0 a full-screen override-redirect window — the precise thing the check forbids:
+
+```
+SendWindowCreateInternal: 0x3601e6, (0,0) 1920x1080, override=1
+SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x3601e6,ovr=1,style=0x84000000,w=1920,h=1080
+SendWindowDamageEvent:   QGAPROTO,msg=DAMAGE,hwnd=0x3601e6,w=1920,h=1080
+```
+
+…and `qtest shot` returned **only the control window**, so SG4 scored "not mapped". Override-
+redirect windows are undecorated and never appear in that enumeration. **The check would have
+passed a build that leaks a fullscreen takeover surface** — the exact class the whole Mode-1/Mode-2
+design exists to prevent. (Consistent with the standing note that an empty shot tar is not evidence
+of no windows; here a *non-empty* tar was equally misleading.)
+
+Fixed: every `nomap` cell now requires **two witnesses** — no matching window in dom0 **and** no
+`msg=MAP` from the agent for that hwnd. Guest-side log evidence does not replace pixels; it catches
+what the screenshot structurally cannot see.
+
+This is what H5 is for. The fault build did not just fail to earn a proof — it exposed a check that
+could not fail, which is worth considerably more.
+
+**Caveat recorded, not yet fixed:** `p5-since.ps1` marks a LINE OFFSET into "the newest agent log"
+and re-resolves "newest" when counting, so an agent restart between mark and count makes the offset
+meaningless. Suspected cause of a 3-hit count that a clean direct measurement showed should be 0.
+Deny-hit counts spanning a restart should not be trusted until this is reworked to pin the file.
