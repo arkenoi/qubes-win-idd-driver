@@ -130,6 +130,31 @@ PS
   fi
   log "  agent: ${ag:-?}"
 
+  # GRADE THE AGENT'S AGREEMENT, which is what this check has always CLAIMED to do.
+  #
+  # Until 2026-08-31 `ag` was logged here and then never compared: `mode-followed-<M>` was
+  # emitted from inside the PIXEL branch below, with the detail string "guest+agent both report
+  # <M>" - a statement about a comparison that no line of code performed. Measured with
+  # FI_NOSCREENCONFIG armed (the agent deliberately never tells dom0 the resolution changed):
+  # AGENTSCREEN came back `none` for all three modes and the cell still recorded
+  # "guest+agent both report 1920x1080". The check could not fail against the exact defect it
+  # names, and would have passed a build where dom0 is left on stale geometry forever.
+  #
+  # Graded on its own now, not as a side effect of the pixel test - a check that can be SKIPPED
+  # by an unrelated branch is nearly as bad as one that cannot fail (the other two modes emitted
+  # no mode-followed verdict at all in that run, because the pixel judge went INVALID first).
+  agv=$(echo "$ag" | awk '{print $2}')
+  if [ -z "$agv" ]; then
+    log "  -> INVALID-INSTRUMENT: the agent-screen query returned nothing; not grading mode-followed"
+    printf 'RND-8\tmode-followed-%s\tINVALID-INSTRUMENT\tagent-screen query returned no data\t%s\n' "$M" "$EV" >> "$V"; rc=1
+  elif [ "$agv" = "$M" ]; then
+    log "  -> PASS: the guest adopted $M AND the agent's last A6CONFIGURE to dom0 agrees ($agv)"
+    printf 'RND-8\tmode-followed-%s\tPASS-UNPROVEN\tguest adopted %s and the agent last told dom0 %s - they agree\t%s\n' "$M" "$M" "$agv" "$EV" >> "$V"
+  else
+    log "  -> FAIL: the guest adopted $M but the agent last told dom0 '$agv' - dom0 is on stale geometry"
+    printf 'RND-8\tmode-followed-%s\tFAIL\tguest adopted %s but the agent last told dom0 %s\t%s\n' "$M" "$M" "$agv" "$EV" >> "$V"; rc=1
+  fi
+
   sleep 6
   h1=$(shot_hash)
   T=200 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\type.ps1" >/dev/null 2>&1
@@ -143,7 +168,6 @@ PS
     printf 'RND-8\tpixels-change-after-resize-%s\tINVALID-INSTRUMENT\tcapture returned %s / %s\t%s\n' "$M" "$h1" "$h2" "$EV" >> "$V"; rc=1
   elif [ "$h1" != "$h2" ]; then
     log "  -> PASS: capture is alive after the resize (window ${h2%%:*}, pixels changed)"
-    printf 'RND-8\tmode-followed-%s\tPASS-UNPROVEN\tguest+agent both report %s\t%s\n' "$M" "$M" "$EV" >> "$V"
     printf 'RND-8\tpixels-change-after-resize-%s\tPASS-UNPROVEN\t%s -> %s after a visible guest change\t%s\n' "$M" "$h1" "$h2" "$EV" >> "$V"
   else
     log "  -> FAIL: identical pixels after a visible guest change - capture is FROZEN at $M"
