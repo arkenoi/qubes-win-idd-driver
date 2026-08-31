@@ -49,12 +49,25 @@ Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 2
 Start-Service QubesGuiWatchdog -EA SilentlyContinue; Start-Sleep 22
 Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)" | grep -a GATEOFF; }
 
-control_up(){ q run 'cmd /c taskkill /f /im notepad.exe 2>nul & start "" notepad.exe' >/dev/null 2>&1; sleep 14; }
+# POLL for the control, never a fixed sleep. A fixed settle is how P5 once scored SG3 as FAIL
+# against a window the agent had already mapped: the settle was shorter than the guest needed to
+# draw. Measured again 2026-08-31 on a cold AppVM - 14 s was not enough for a first-run Notepad,
+# and the preflight reported "0 windows" for a guest whose agent was perfectly healthy (vchan
+# connected, seamless mode 1, no errors). Wait for the OUTCOME, with a deadline.
+control_up(){  # -> echoes the window list once the control appears, or after the deadline
+  q run 'cmd /c taskkill /f /im notepad.exe 2>nul & start "" notepad.exe' >/dev/null 2>&1
+  local i w n
+  for i in $(seq 1 12); do
+    sleep 6
+    w=$(windows); n=${w%%|*}
+    [ "${n:-0}" -gt 0 ] && { echo "$w"; return 0; }
+  done
+  echo "$w"; return 0
+}
 
 log "=== control WITHOUT the bit (this is the reference) ==="
 set_bits 0 | sed 's/^/  /'
-control_up
-BEFORE=$(windows); log "  dom0: $BEFORE"
+BEFORE=$(control_up); log "  dom0: $BEFORE"
 nb=${BEFORE%%|*}
 if [ "${nb:-0}" -eq 0 ]; then
   log "REFUSING: the harness control is not visible even with NO bit set. The rig is not in a"
@@ -65,8 +78,7 @@ fi
 
 log "=== control WITH $BITS armed ==="
 set_bits "$BITS" | sed 's/^/  /'
-control_up
-AFTER=$(windows); log "  dom0: $AFTER"
+AFTER=$(control_up); log "  dom0: $AFTER"
 na=${AFTER%%|*}
 
 log "=== restoring (bit cleared, notepad killed) ==="
