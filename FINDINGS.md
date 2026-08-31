@@ -23998,3 +23998,52 @@ agent says it painted"; not "no death string" but "the frame counter advanced".
 Runbook synced: rules 18–21 (the vacuity test; an injector must not emit text the checks grep for;
 classify by exact-literal grep, never prefix; triage by how loud the failure is) and runbook steps
 D-0 preflight, D-0b cross-guest parallelism, D-0c repair-before-proving.
+
+### Promotions: 8 rows earned, 5 promoted-but-honestly-unproven, 2 new defects found
+
+The owner selected the silent-failure observations (rule 21) for promotion into real checks.
+`mgmt/harness/promoted-checks.sh` is that promotion; every check in it states its route to red in
+the header, because one that ships without a route to red is just a longer sentence in the ledger.
+
+**EARNED (8 rows).**
+* `standalone-pvnic-seeded` (3) + `emulated-unplugged` (4) — red on `win10-noprime`, a disposable
+  clone with the latch tasks, applier and `NICS` removed and then rebooted: `task_main=false
+  task_rearm=false`, applier absent → FAIL; and `Realtek RTL8139C+ … | Up` present alongside a PV
+  NIC that is not connected → FAIL. Green on `win10-app`: tasks registered, applier `c98dfc40`,
+  only `Xen PV Network Device #0 | Up`.
+  **This RETRACTS the recorded "NEGATIVE PROVEN UNREACHABLE BY MEASUREMENT".** It is reachable.
+  The earlier attempts only unset `XEN\Unplug NICS`, which the PV stack re-seeds; removing the
+  TASKS and the APPLIER as well makes it stick.
+* `uac-off-secure-desktop` (1) — `PromptOnSecureDesktop=1` → FAIL, restored → PASS. Reversible
+  registry plant, no build.
+
+**PROMOTED BUT NOT PROVEN (5 rows), each with a specific reason rather than a shrug.**
+* `template-pvnic-seeded` (3) — same code path as the standalone proof, but no TemplateVM run was
+  obtained (the probe was not delivered to `win10-tpl`: `PROBE=False`, and that template is flagged
+  contaminated). Deliberately **not** upgraded on the strength of the standalone proof.
+* `secure-desktop-left-cleanly` (1) — now a real check reading ENTERED/LEFT/QGADESKSTUCK; its red
+  needs an injector bit suppressing the desktop re-attach (the v3 deadlock), not yet built.
+* `shadow-strips-dropped` (1) — see below.
+
+**Two new defects found, both worth more than the proof would have been.**
+
+1. **The 2A-chrome repro never reaches the chrome filter.** With `FI_GATE_SHELLOVERLAY=0x8` armed
+   (banner `gateoff=0x8` confirmed) dom0 still gained exactly one window. The agent log says why:
+   chromerepro's shadow strips are rejected by `GetRealWindowRect` as *"inverted DWM bounds
+   (0,0)-(0,0) and no usable GetWindowRect"* — **geometrically degenerate, before any chrome
+   predicate runs**. So the cell demonstrates that zero-area windows are dropped, not that the
+   2A-chrome filter works — and the whole 2A-chrome acceptance rests on this repro. Fix owed: give
+   the strips real rects.
+
+2. **`pvnic-latch-readback.ps1` could not describe the defect it exists to find.** On the unseeded
+   guest it printed `MARKJSON` and nothing else — `.Hash.ToLower()` on the missing applier threw and
+   killed the whole object, so the check that detects a *missing applier* could only ever report
+   INVALID-INSTRUMENT for it. Made null-safe.
+
+**Protocol rule 22** added from a restore that silently did nothing: an AppVM's `C:` is volatile, so
+a backup in `C:\ProgramData` does not survive a reboot — and conversely a plain reboot is the
+cleanest restore for an AppVM, which is how `win10-app` was recovered. Caught only because the
+restore is hash-verified.
+
+**Ledger: PASS 319 / PASS-UNPROVEN 41 / N/A 20.** The 41 are 23 observations with no deployed check
+and 18 rows across 12 deployed-but-unproven checks.
