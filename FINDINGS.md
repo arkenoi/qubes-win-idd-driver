@@ -24663,8 +24663,23 @@ Plus a fifth: a missing AppMap value threw unhandled, so a stale entry died sile
 failure path now writes to stderr, which qrexec returns to dom0, instead of being a menu entry
 that does nothing.
 
-**Added:** a `terminal` / "Run Terminal" entry mirroring the Linux one, resolving
-`wt.exe -> pwsh.exe -> powershell.exe -> cmd.exe` (and the menu icon follows whichever is chosen).
+**CORRECTED, and this is the ACTUAL cause - owner, 2026-09-01:** *"these launchers are tied to
+fixed labels on linux, and those labels do not exist on windows, we need to create them."* Right,
+and my four-bug hunt above was largely beside the point. dom0's per-qube launchers are wired to
+SPECIFIC desktop-entry ids that `qubes-core-agent-linux` installs on every Linux qube
+(`app-menu/Makefile`): **`qubes-run-terminal.desktop`** and **`qubes-open-file-manager.desktop`**.
+A Windows guest emitted NEITHER id, so those launchers had nothing to point at and did nothing.
+Our own ids (`cmd`, `explorer`, ...) are extra entries; they were never what dom0's Terminal and
+File Manager buttons look for. Both ids are now emitted by `get-appmenus.ps1` and handled by
+`start-app.ps1`, with the upstream names verbatim ("Run Terminal", "Open File Manager").
+
+Of the four defects found while going the long way round, exactly TWO were real and observed:
+`Start-Process -Wait` blocks the service forever (measured: the child was still running after
+25 s), and `explorer.exe` with no argument yields the shell's own empty-title Progman window
+rather than a browser window (measured: `explorer pid=5628 title=''`). The other two - the
+unguarded dot-source and the unbounded logon loop - are hardening, NOT observed causes:
+`QUBES_TOOLS` is set machine-wide (`C:\Program Files\Qubes Tools\`) and a session existed.
+Recorded as hardening so nobody later cites them as the fix.
 
 **NOT VERIFIED YET, and it must be before this is claimed fixed.** win10-app's qrexec stopped
 answering mid-session - self-inflicted: I ran `taskkill /f /im cmd.exe`, which killed the
