@@ -24626,3 +24626,56 @@ header.
    N seconds. It explains nothing, but its stopping timestamps the ONSET precisely in a
    dom0-captured log, where today onset is inferred from when probes began failing. Marginal, but
    it is real and it is cheap.
+
+## 2026-09-01 — "Run Terminal": what it is, and why OUR Windows equivalents launch nothing
+
+**What the Linux shortcut actually is.** No magic: `qubes-core-agent` ships
+`/usr/share/applications/qubes-run-terminal.desktop` (`Name=Run Terminal`,
+`Exec=qubes-run-terminal`) INSIDE the VM. dom0 picks it up through `qubes.GetAppmenus` and
+launches it through `qubes.StartApp+qubes-run-terminal`. `/usr/bin/qubes-run-terminal` is a shell
+script that tries `x-terminal-emulator ptyxis gnome-terminal kgx xfce4-terminal konsole ... xterm`
+and execs the first one present. (Not to be confused with `qubes.ShowInTerminal`, which is the
+DispVM-xterm service behind `qvm-console-dispvm`.)
+
+**Do we have it for Windows? The PLUMBING yes, the FUNCTION no.** Our fork already emits built-in
+appmenu entries from `get-appmenus.ps1` - Command Prompt, Command Prompt (Administrator), Windows
+PowerShell (+admin), Notepad, File Explorer, Settings, Edge - precisely because a fresh Windows
+guest's Start Menu sweep finds almost nothing and seamless mode has no taskbar or desktop. But
+owner, 2026-09-01: *"it does not open a terminal from dom0 either ... neither it does file
+manager. we need both."* Correct. Reading `start-app.ps1` found **four independent ways it
+launches nothing and reports nothing**, all now fixed:
+
+1. **Unguarded dot-source on line 1**: `. $env:QUBES_TOOLS\qubes-rpc-services\log.ps1`. With
+   `QUBES_TOOLS` unset in the service environment this expands to `. \qubes-rpc-services\log.ps1`,
+   **throws**, and the script is dead before it reads its argument. `get-appmenus.ps1` carries an
+   explicit warning about this exact trap and was hardened; `start-app.ps1` - the half that
+   actually launches things - never was.
+2. **An unbounded wait**: `while (!(Get-CimInstance Win32_ComputerSystem).UserName) { sleep }` has
+   no exit. No session (or a throwing CIM call) = spin forever = the qrexec call hangs and the
+   menu entry does nothing. Now bounded at 60 s and it says which exit it took.
+3. **`Start-Process -Wait`** held the qrexec service open for the launched app's ENTIRE LIFETIME.
+   Linux's qubes.StartApp does not wait. This is also why a manual
+   `qrexec-client-vm <vm> qubes.StartApp+cmd` appears to hang (measured: rc=124).
+4. **`explorer.exe` with no argument** asks the already-running shell to act and the new process
+   exits immediately; whether a window appears depends on shell state. Now passes `%USERPROFILE%`
+   so it deterministically opens a browser window.
+Plus a fifth: a missing AppMap value threw unhandled, so a stale entry died silently. Every
+failure path now writes to stderr, which qrexec returns to dom0, instead of being a menu entry
+that does nothing.
+
+**Added:** a `terminal` / "Run Terminal" entry mirroring the Linux one, resolving
+`wt.exe -> pwsh.exe -> powershell.exe -> cmd.exe` (and the menu icon follows whichever is chosen).
+
+**NOT VERIFIED YET, and it must be before this is claimed fixed.** win10-app's qrexec stopped
+answering mid-session - self-inflicted: I ran `taskkill /f /im cmd.exe`, which killed the
+`qubes.VMShell` shell running that very command (the self-matching-process trap, in a new
+costume). The PV console confirms the guest is alive (`[ATTACHED] / WIN-IDD-TEST login:`) - and
+demonstrates its documented limit at the same time, since post-reboot it is at a login prompt and
+this rig holds no guest credentials, so I can see the guest but not act on it. There is also no
+PowerShell in this dev qube, so the two edited scripts have only had a brace-balance check, not a
+parse. Acceptance is: deploy both scripts, `qvm-sync-appmenus`, then launch Command Prompt, Run
+Terminal and File Explorer FROM THE DOM0 MENU and see three windows.
+
+**Unrelated note for the owner:** the dom0 policy dialog seen during this was MY call -
+`qubes.StartApp` is not granted to win-idd-mgmt in `12-install-policy-tagged.sh`, so it fell
+through to an ask rule. dom0's own menu launches are not affected by that.
