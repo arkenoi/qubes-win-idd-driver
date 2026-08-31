@@ -70,7 +70,13 @@ log "=== COLD BOOT, watched from dom0 throughout (the guest has no qrexec for mo
 # as "the shutdown never took" and killed the run - wrongly: LastBootUpTime showed the guest HAD
 # cold-booted and had simply come up in ~13 s. A cold-boot cell that cannot demonstrate a cold boot
 # forces exactly that guess, so the boot is now evidence rather than an assumption.
-bootid(){ r 'cmd /c powershell -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString(\"o\")"' | grep -aoE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+' | head -1; }
+# Through -EncodedCommand: a nested-quote one-liner fails SILENTLY (rule 16), and an empty
+# bootid would make the "did a cold boot happen" test compare "" against "" and pass vacuously.
+psrun(){ local b; b=$(python3 -c "
+import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode(), end='')" <<< "$1")
+  r "cmd /c powershell -NoProfile -EncodedCommand $b"; }
+bootid(){ psrun 'Write-Output (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString("o")' \
+  | grep -aoE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+' | head -1; }
 BOOT_BEFORE=$(bootid); log "  LastBootUpTime before: ${BOOT_BEFORE:-unknown}"
 # U2 MUST BE ARMED BEFORE THE BOOT. wu-boot-acceptance-check.ps1 compares against
 # C:\ProgramData\Qubes\boot-accept-arm.txt written by the arm script; without it the check emits no

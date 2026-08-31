@@ -31,6 +31,13 @@ mkdir -p "$OUT"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-200}" ./tools/qtest "$@" 2>/dev/null; }
 r(){ q run "$1" | tr -d '\r' | grep -avE '^(Microsoft Windows \[Version|\(c\) Microsoft|C:\\)'; }
+# PowerShell with quotes goes through -EncodedCommand. A nested-quote one-liner is re-split at
+# every hop (bash -> qtest -> cmd.exe -> powershell) and its failure mode is SILENCE: measured
+# 2026-08-31 in rnd8-resolution.sh, cmd echoed the command, produced no output and no error, and
+# the empty result was then compared numerically and written out as a product FAIL. Rule 16.
+psrun(){ local b; b=$(python3 -c "
+import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode(), end='')" <<< "$1")
+  r "cmd /c powershell -NoProfile -EncodedCommand $b"; }
 log(){ echo "$(date -u +%H:%M:%S) u2[$VM]: $*" | tee -a "$OUT/u2.log"; }
 V="$OUT/verdicts.tsv"; EV=$(basename "$OUT"); rc=0
 
@@ -60,7 +67,8 @@ T=300 q pushrun guest/wu-boot-acceptance-arm.ps1 2>/dev/null | tr -d '\r' | grep
 log "=== clear the scan debounce (update-status.json) so the boot pass is not suppressed ==="
 r 'cmd /c del /q C:\ProgramData\Qubes\update-status.json 2>nul & if exist C:\ProgramData\Qubes\update-status.json (echo STILL_THERE) else (echo CLEARED)' | grep -aE 'CLEARED|STILL_THERE' | sed 's/^/  /'
 
-bootid(){ r 'cmd /c powershell -NoProfile -Command "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString(\"o\")"' | grep -aoE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+' | head -1; }
+bootid(){ psrun 'Write-Output (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString("o")' \
+  | grep -aoE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+' | head -1; }
 B0=$(bootid); log "  LastBootUpTime before: ${B0:-unknown}"
 
 log "=== COLD BOOT ==="
@@ -79,10 +87,20 @@ log "  COLD BOOT PROVEN"
 log "=== waiting out the boot-triggered scan (trigger is boot + PT2M) ==="
 for i in $(seq 1 12); do
   sleep 30
-  n=$(r 'cmd /c powershell -NoProfile -Command "@(Select-String -Path (Get-ChildItem \"C:\ProgramData\Qubes\qubes-windows-update*.log\" | Sort LastWriteTime -Desc | Select -First 1).FullName -Pattern \"VM class\" -EA SilentlyContinue).Count"' | grep -aoE '^[0-9]+$' | head -1)
-  log "  +$((i*30))s: 'VM class' lines in the updater log: ${n:-?}"
-  [ "${n:-0}" -gt 0 ] && break
+  n=$(psrun '$f = Get-ChildItem "C:\ProgramData\Qubes\qubes-windows-update*.log" | Sort LastWriteTime -Desc | Select -First 1
+Write-Output ("CLASSLINES " + @(Select-String -Path $f.FullName -Pattern "VM class" -EA SilentlyContinue).Count)' \
+    | grep -aoE 'CLASSLINES [0-9]+' | awk '{print $2}' | head -1)
+  log "  +$((i*30))s: 'VM class' lines in the updater log: ${n:-NO-DATA}"
+  # An EMPTY n is not "zero lines" - it is the query not answering. Distinguish them, or a
+  # silent query would look like the boot pass never classifying anything (rule 16).
+  [ -n "$n" ] && [ "$n" -gt 0 ] && break
 done
+if [ -z "${n:-}" ]; then
+  log "  -> INVALID-INSTRUMENT: the class-line counter never returned a number, so the wait above"
+  log "     proves nothing about whether the boot pass ran. Not grading U2 on this."
+  printf 'U2\tcoldboot-classification\tINVALID-INSTRUMENT\tclass-line counter returned no data\t%s\n' "$EV" >> "$V"
+  exit 1
+fi
 
 log "=== U2 CHECK ==="
 U=$(T=400 q pushrun guest/wu-boot-acceptance-check.ps1 | tr -d '\r' | sed -n '/=== RESULT ===/,$p' | grep -ao '{.*}' | head -1)

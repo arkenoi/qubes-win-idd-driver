@@ -44,7 +44,13 @@ stop_vm(){ local vm=$1 dl; qvm-shutdown --wait "$vm" >/dev/null 2>&1; dl=$(( SEC
   done; }
 qready(){ local n=${1:-40} i; for i in $(seq 1 "$n"); do
     timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY && return 0; sleep 10; done; return 1; }
-session_user(){ timeout -k 5 60 ./tools/qtest run 'cmd /c powershell -NoProfile -Command "\"SESSIONUSER=\" + (Get-CimInstance Win32_ComputerSystem).UserName"' 2>/dev/null \
+# -EncodedCommand, not nested quotes: the nested form fails SILENTLY (rule 16), and here that
+# would make session_user return empty forever, so wait_session would time out and be read as
+# "the guest never logged a user in" - a guest-side conclusion drawn from a broken query.
+e2e_psrun(){ local b; b=$(python3 -c "
+import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode(), end='')" <<< "$1")
+  timeout -k 5 60 ./tools/qtest run "cmd /c powershell -NoProfile -EncodedCommand $b" 2>/dev/null; }
+session_user(){ e2e_psrun 'Write-Output ("SESSIONUSER=" + (Get-CimInstance Win32_ComputerSystem).UserName)' \
     | tr -d '\r' | grep -aoE '^SESSIONUSER=.+' | head -1 | cut -d= -f2- | sed 's/[[:space:]]*$//'; }
 wait_session(){ local n=$1 i u; for i in $(seq 1 "$n"); do u=$(session_user); [ -n "$u" ] && { echo "$u"; return 0; }; sleep 10; done; return 1; }
 INC='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
@@ -243,12 +249,20 @@ EOF
     && ok "$TAG: fork qrexec-wrapper placed" \
     || no "$TAG: qrexec-wrapper NOT placed ($(echo "$J" | grep -ao '"qrexec_bins":"[^"]*"'))"
   local WH SH
-  WH=$(qrun 'cmd /c powershell -NoProfile -Command "(Get-FileHash \"C:\Program Files\Qubes Tools\bin\qrexec-wrapper.exe\" -Algorithm SHA256).Hash"' 2>/dev/null | tr -d '\r' | grep -aoE '^[0-9A-F]{64}' | head -1)
-  SH=$(qrun 'cmd /c powershell -NoProfile -Command "(Get-FileHash \"C:\Program Files\Qubes Tools\bin\qrexec-wrapper.exe.qwt-stock\" -Algorithm SHA256).Hash"' 2>/dev/null | tr -d '\r' | grep -aoE '^[0-9A-F]{64}' | head -1)
-  if [ -n "$WH" ] && [ -n "$SH" ] && [ "$WH" != "$SH" ]; then
+  # -EncodedCommand (rule 16). These paths contain both spaces and backslashes, which is exactly
+  # what the nested-quote form mangles, and a silent empty here used to land in the same branch as
+  # "the hashes matched" - conflating a broken query with a real finding about the binary.
+  WH=$(e2e_psrun 'Write-Output (Get-FileHash "C:\Program Files\Qubes Tools\bin\qrexec-wrapper.exe" -Algorithm SHA256).Hash' \
+    | tr -d '\r' | grep -aoE '^[0-9A-F]{64}' | head -1)
+  SH=$(e2e_psrun 'Write-Output (Get-FileHash "C:\Program Files\Qubes Tools\bin\qrexec-wrapper.exe.qwt-stock" -Algorithm SHA256).Hash' \
+    | tr -d '\r' | grep -aoE '^[0-9A-F]{64}' | head -1)
+  if [ -z "$WH" ] || [ -z "$SH" ]; then
+    # NOT the same as "it is stock". Say which one it is.
+    no "$TAG: qrexec-wrapper hashes UNREADABLE (installed=${WH:-EMPTY} stock=${SH:-EMPTY}) - this is an instrument fault, not a finding about the binary"
+  elif [ "$WH" != "$SH" ]; then
     ok "$TAG: installed qrexec-wrapper differs from the stock copy (ours is live)"
   else
-    no "$TAG: qrexec-wrapper is stock or unverifiable (ours=${WH:0:12} stock=${SH:0:12})"
+    no "$TAG: qrexec-wrapper is STOCK (installed hash equals the stock copy: ${WH:0:12})"
   fi
   echo "$J" | grep -qa '"appmenu_scripts":"placed=2"' \
     && ok "$TAG: app-menu rpc scripts placed over the stock ones" \
