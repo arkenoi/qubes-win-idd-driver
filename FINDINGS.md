@@ -23799,3 +23799,51 @@ could not fail, which is worth considerably more.
 and re-resolves "newest" when counting, so an agent restart between mark and count makes the offset
 meaningless. Suspected cause of a 3-hit count that a clean direct measurement showed should be 0.
 Deny-hit counts spanning a restart should not be trusted until this is reworked to pin the file.
+
+### Audit: a third of the "unproven" rows are not checks at all
+
+Prompted by two class-conditional proofs that both failed for the same reason — I designed them
+from the ledger's *detail string* instead of from the check's code — I swept every unproven check
+name against `mgmt/harness/`, `tools/` and `guest/`:
+
+* **23 are implemented** by a harness that emits the verdict. H5 applies: each needs a fail-proof.
+* **~15 have no implementing harness at all.** They are names written into the ledger by hand from
+  a one-off observation. H5 does not apply to them, because there is no deployed check that could
+  be "seen to fail" — proving one would mean inventing a check first, and then the proof would be
+  about the new check, not about the campaign's evidence.
+
+Those rows need **reclassifying, not proving**: either promote them to real checks (and then earn
+the proof) or record them explicitly as observations with the evidence that backs them. Counting
+them as "verification gaps to close" overstates what is missing; counting them as PASS would
+overstate what is verified.
+
+The two failed class-pair attempts are recorded honestly as `PASS-UNPROVEN` and are worth keeping
+as worked examples of the error:
+
+| check | I assumed | measured |
+|---|---|---|
+| `standalone-nau-removed` | Standalone removes `NoAutoUpdate`, Template keeps it | **both** read `PRESENT=1` — the detail describes a *transition* during a scan, not a steady state |
+| `appvm-private-reformatted` | only an AppVM has a formatted `Q:` | `Q:\Users` exists on the **StandaloneVM too** |
+
+Now protocol **rule 17**: design a fail-proof from the check's code, never from its ledger detail;
+and `grep -rl <check-name>` first — if nothing emits it, it is an observation, not a check.
+
+### Defence in depth changes how these proofs must be built
+
+Two properties could not be falsified by clearing a single clause, because a second clause defends
+the same thing — established from the agent's own log, not inferred:
+
+* `or-fullscreen-never-mapped`: Mode 1 bypassed → the **Mode-2** clause rejected the probe.
+* `start-not-presented`: Start clause bypassed → `Start surface not presented` logged **0** times
+  while the genuine-open gate logged **5**.
+
+So `failproof-gates.sh` now arms **combinations** (`MODE1|MODE2`, `START|NOCARD`) and takes a
+declared list of companion cells that are expected to move with the target. Undeclared movement
+still fails the proof — that is what keeps a red attributable.
+
+Two new injector bits invert the direction entirely. Every `FI_GATE_*` bit REMOVES a safeguard,
+which can only falsify a check asserting a window is **denied**; the negative control, a maximized
+app, and a toast surviving the chrome filter all assert the opposite. `FI_DROP_CAPTIONED` and
+`FI_DROP_SHELLSURFACE` add a reject at the very end of the predicate instead. The regression they
+reproduce is real: the 2A-chrome filter aimed at Office shadow strips would have silently killed
+every Windows notification.
