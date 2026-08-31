@@ -112,7 +112,27 @@ if attended:
     for h in attended:
         print(f"      {h['cell']} / {h['check']}  -- {h['detail'][:110]}")
 if unproven:
+    # Itemise the unproven set by WHY it is unproven. All of it still blocks COMPLETE - this does
+    # not soften the verdict - but "nobody has done the work" and "the defect state provably cannot
+    # be created on this rig" are different facts, and a report that lumps them together tells the
+    # reader neither. Each reason below is recorded per-check in the ledger detail.
+    import collections as _c
+    buckets = _c.Counter()
+    for r in rows:
+        if r['verdict'] != 'PASS-UNPROVEN':
+            continue
+        d = r['detail']
+        if 'UNREACHABLE' in d or 'NOT CREATABLE' in d:
+            buckets['defect state provably cannot be created on this rig'] += 1
+        elif 'PREDICATE' in d:
+            buckets['predicate validated, shipped instrument not exercised'] += 1
+        elif 'NOT OBSERVED' in d or 'NOT EARNED' in d:
+            buckets['not exercised by any available path'] += 1
+        else:
+            buckets['no fail-proof attempted yet'] += 1
     print(f"  PASS-UNPROVEN: {unproven}")
+    for why, n in buckets.most_common():
+        print(f"      {n:>4}  {why}")
     print("      succeeded but never seen to fail. H5: a check absent from the fail-proof")
     print("      registry can NEVER emit plain PASS. Report these separately, always.")
 print()
