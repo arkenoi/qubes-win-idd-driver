@@ -1071,6 +1071,33 @@ not quietly upgrade it.
     volatile root discards the swapped binary by itself, which is how this one was recovered.
     On a StandaloneVM or Template the `C:` backup is fine, because the root is persistent.
 
+23. **A PROBE must be able to describe the defect it was written to find.** Rule 18 asks whether
+    the *evidence* could come from something else; this asks whether the instrument can even
+    REPORT the bad state. Measured 2026-08-31: `pvnic-latch-readback.ps1` computed
+    `payload_sha256` as `(Get-FileHash <applier>).Hash.ToLower()`, and on a guest whose applier was
+    MISSING — precisely the defect the check exists to catch — the null-dereference threw and killed
+    the whole object, so the probe emitted `MARKJSON` and nothing else. The check could only ever
+    report INVALID-INSTRUMENT for its own target condition. **Test every probe against the defective
+    state, not only the healthy one**, and make each field null-safe independently so one missing
+    thing cannot suppress the rest of the report.
+
+24. **The stimulus must reach the CODE UNDER TEST — a vacuity guard proving it EXISTED is not
+    enough.** Rule 4's guards ask "did the stimulus exist guest-side?"; that can be satisfied while
+    the stimulus never touches the predicate being graded. Measured 2026-08-31: the 2A-chrome cell
+    saw its 5 HWNDs (guard satisfied) and mapped exactly 1, and stayed green with
+    `FI_GATE_SHELLOVERLAY` armed — because chromerepro's shadow strips are rejected upstream by
+    `GetRealWindowRect` as *"inverted DWM bounds (0,0)-(0,0) and no usable GetWindowRect"*, i.e. as
+    geometrically degenerate, **before any chrome predicate runs**. The cell proves zero-area windows
+    are dropped; the entire 2A-chrome acceptance rests on it. When a bypass bit does NOT move a
+    cell, read the agent log for WHICH clause actually rejected the stimulus before concluding
+    "defence in depth" — the honest answer may be "the test never got there".
+
+25. **Never upgrade a check on a sibling row's proof.** `template-pvnic-seeded` and
+    `standalone-pvnic-seeded` are the same function emitted under two names by VM class, and it was
+    tempting to mark both PASS from the one proof. Left unproven on purpose: the TemplateVM install
+    path differs and was never exercised (the probe was not even delivered to `win10-tpl`). A proof
+    covers the SUBJECT CLASS it ran on, not every row sharing the code.
+
 ### 0.13b RUNBOOK — earning a fail-proof with a DIAG BUILD, step by step
 
 **D-0 (NEW, do this first): PREFLIGHT — 3 minutes instead of 28.** Run
