@@ -1012,6 +1012,19 @@ not quietly upgrade it.
       Re-check with `grep -rc 'Command "[^"]*\\"' mgmt/harness/*.sh` before trusting a new
       harness.
 
+17. **Design a fail-proof from the CHECK's code, never from its ledger detail string.** The detail
+    is prose written at grading time and it routinely describes the *observation*, not the
+    predicate. Measured 2026-08-31: I built two class-conditional proofs from detail strings and
+    both were wrong — `standalone-nau-removed` reads "NoAutoUpdate 1 -> removed", which is a
+    TRANSITION during a scan, not a steady state (both classes read `PRESENT=1`); and
+    `appvm-private-reformatted` assumes a StandaloneVM has no `Q:`, which is false in this rig
+    (`Q:\Users` exists on both). Neither produced a two-sided result, and the harness correctly
+    refused to record either.
+    Before writing a proof: `grep -rl <check-name> mgmt/harness/ tools/ guest/` and read the code
+    that emits the verdict. If nothing emits it, the row is a HAND-RECORDED OBSERVATION, not a
+    deployed check — H5 does not apply to it and it must be reclassified rather than "proven".
+    Audited 2026-08-31: of the 38 checks then unproven, ~15 have no implementing harness at all.
+
 ### 0.13b RUNBOOK — earning a fail-proof with a DIAG BUILD, step by step
 
 H5 says a check is evidence only once it has been SEEN to fail with the defect present. For the
