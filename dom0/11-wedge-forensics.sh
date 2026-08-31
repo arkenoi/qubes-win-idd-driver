@@ -50,10 +50,21 @@ sleep 10
 xl vcpu-list "$DOMID" > "$OUT/vcpu-list-2.txt" 2>&1
 
 # 2. THE grant table: how many entries, how many still pinned by dom0.
-#    (debug-keys output goes to the hypervisor ring, so dump it right after.)
+#    debug-keys output goes to the hypervisor ring, which is SMALL. On the 2026-09-01 capture
+#    `g` printed ~1952 entry lines and the ring WRAPPED: by the time `xl dmesg` ran, the only
+#    "grant-table for remote dN" header left was the STUBDOM's (d4612), not the guest's (d4611).
+#    The summary below then reported "grant entries (this domain, active): 0" - which reads as
+#    the finding "no grant leak" and is really "we captured nothing". CLEAR the ring first so it
+#    holds our output and nothing else; -c prints-and-clears, so keep the pre-existing contents.
+xl dmesg -c > "$OUT/xl-dmesg-before.txt" 2>&1
 xl debug-keys g 2>/dev/null
 sleep 2
 xl dmesg > "$OUT/xl-dmesg.txt" 2>&1
+if ! grep -q "grant-table for remote d$DOMID" "$OUT/xl-dmesg.txt"; then
+    echo "WARNING: no grant table for d$DOMID in the captured ring - it wrapped or the domain" \
+         "printed none. Treat any count below as MISSING DATA, not as zero." \
+         > "$OUT/grant-CAPTURE-INCOMPLETE.txt"
+fi
 grep -A100000 "grant-table for remote d$DOMID" "$OUT/xl-dmesg.txt" \
     | head -200 > "$OUT/granttable-head.txt" 2>/dev/null
 echo "grant entries (this domain, active):" > "$OUT/grant-summary.txt"

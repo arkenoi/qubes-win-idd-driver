@@ -24689,3 +24689,46 @@ message that lists the running domains. `VM=` env still works, which is how
 `13-install-wedge-forensics-service.sh` invokes it (`VM="$VM" /usr/local/sbin/win-wedge-forensics.sh`)
 - verified unchanged. A forensics tool that defaults to the wrong subject at the only moment it
 matters is worse than no tool.
+
+## 2026-09-01 — THIRD wedge capture (win10-app, owner fired --nmi): the XEN-SIDE half, which no guest dump can hold
+
+Owner asked the right question - *"but you have dump already, what do you add to it now?"* The
+guest dumps say WHO is spinning. This says what **the vCPU they are all waiting on** is doing,
+and that was explicitly the open, inferred part: the memory note reads *"INFERRED (not visible in
+a guest dump) = WHY that one vCPU never ACKed (Xen not scheduling it / emulated-LAPIC delivery);
+proving the Xen side needs dom0/Xen instrumentation at repro time."* This is that instrumentation,
+at repro time.
+
+    xentop:  win10-app  -----r   289.6% CPU        (~3 vCPUs pegged)
+    vcpu-list, two samples 10 s apart:
+      vCPU0  r--   1430.2 -> 1439.2   (+9.0 s)   pegged
+      vCPU1  -b-    347.0 ->  347.1   (+0.1 s)   BLOCKED, going nowhere
+      vCPU2  r--   1396.1 -> 1406.0   (+9.9 s)   pegged
+      vCPU3  r--   1712.5 -> 1722.4   (+9.9 s)   pegged
+
+**Three vCPUs burn 100% each; the fourth is `-b-` (blocked/halted).** That discriminates the two
+candidate explanations that had been left open:
+ - *"Xen is not scheduling it"* (starvation/contention) predicts the target vCPU **runnable but
+   not running** - `r--` with flat time. NOT what we see.
+ - *"interrupt/LAPIC delivery"* predicts exactly this: the vCPU HLTed, and the IPI that should
+   have made it runnable never did, so it stays blocked while the senders spin on its ACK.
+The evidence favours **delivery to a halted vCPU**, not scheduler starvation. Honest limits: two
+snapshots 10 s apart, one instance, and it still does not show WHY the IPI failed to land.
+
+Third guest, third workload class (win10-app: no relay, no servicing, an essentially idle guest
+that had been poked with qrexec calls) - consistent with "concurrent MM ops", inconsistent with
+any workload-specific trigger. No hypervisor faults or errors for the domain.
+
+**Two kit defects the capture proved, both fixed in the repo today, NEITHER deployed to dom0 yet
+- so the next capture is still degraded until it is pulled:**
+1. `console.txt` = `*** buffer overflow detected ***: terminated / timeout: the monitored command
+   dumped core`. **Third occurrence**, and exactly what this morning's source reading predicted:
+   plain `xl console` on a Qubes HVM targets a stubdom console that does not exist. Fixed to
+   `-t pv`.
+2. `grant-summary.txt` said **"grant entries (this domain, active): 0"** - and that is FALSE. The
+   Xen console ring wrapped under ~1952 grant-entry lines, and the only `grant-table for remote
+   dN` header surviving in `xl dmesg` was **d4612, the STUBDOM** - the guest d4611's table was
+   never captured. A reader would have taken "0" as the finding "no grant leak" from data that
+   does not exist. This is the "missing data fails" rule violated by our own tool. Fixed: clear
+   the ring with `xl dmesg -c` before `debug-keys g`, and drop a
+   `grant-CAPTURE-INCOMPLETE.txt` when the header is absent rather than printing a number.
