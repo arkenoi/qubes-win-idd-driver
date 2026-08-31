@@ -1062,6 +1062,15 @@ not quietly upgrade it.
     (menus invisible) = low cost, because the world supplies the signal for free. Apply this before
     spending a 28-minute cycle, and to the observation rows before promoting any of them.
 
+22. **An AppVM's `C:` is VOLATILE — never park a restore there, and remember the swap self-undoes.**
+    Measured 2026-08-31: a release binary backed up to `C:\ProgramData\gui-agent.release.bak` on
+    `win10-app` was GONE after the next boot (`BAK False`), so the restore silently copied the diag
+    build over itself and the running hash never changed. Caught only because the restore is
+    hash-verified. Two consequences: put an AppVM backup on the PRIVATE volume (`Q:`) or keep it
+    dom0-side; and conversely, **a plain reboot is the cleanest restore for an AppVM** — the
+    volatile root discards the swapped binary by itself, which is how this one was recovered.
+    On a StandaloneVM or Template the `C:` backup is fine, because the root is persistent.
+
 ### 0.13b RUNBOOK — earning a fail-proof with a DIAG BUILD, step by step
 
 **D-0 (NEW, do this first): PREFLIGHT — 3 minutes instead of 28.** Run
