@@ -23679,3 +23679,70 @@ that would itself need validating. One subtlety it encodes: RND-8 counts thread 
 for `/capture thread|…/`, and **FI_CAPTURE_EXIT's own trigger message contains "capture thread"** —
 so the log half of the red is self-referential. The harness therefore treats the **pixel** half as
 primary evidence and refuses to record a log-only red.
+
+### The capture fail-proof was ATTEMPTED and NOT earned — and that is the more useful result
+
+With the fault build installed on `win10-p46`, `FI_CAPTURE_EXIT` produced a textbook cycle on one
+artifact, changing nothing but a registry value:
+
+| | abandonments | RecreateDuplication | thread deaths | verdict |
+|---|---|---|---|---|
+| unarmed | 20 | 46 | 0 | PASS |
+| **armed** | 0 | 0 | **1** | **FAIL** |
+| disarmed | 9 | 21 | 0 | PASS |
+
+The harness refused to count it, and it was right. Two checks, neither satisfied:
+
+1. **The log half is self-referential.** A direct grep of the agent log showed the *only* line
+   matching RND-8's death pattern (`/capture thread|thread exiting|giving up/`) was
+   **the injector's own message**, whose old wording contained "capture thread". The check scored
+   a death it had detected from the injector announcing itself.
+2. **The pixel half did not corroborate.** It reported "pixels changed" on all three mode changes
+   *with the fault armed* — so it did not witness a wedge either.
+
+So `keyed-mutex-recovered` and `capture-thread-survives-resize` **stay PASS-UNPROVEN**, and are now
+known to be **vacuous for the defect they name**: neither half detects a silent capture-thread
+death. That is worth more than the proof would have been — it is precisely the "a check that cannot
+fail is worthless" case, caught by building the instrument that could expose it.
+
+Fixed: the injector message now says "the DDA worker", so it can no longer trip the check it
+exists to validate. *An injector that manufactures the evidence is worse than no injector.*
+
+**OPEN QUESTION, recorded as a question and not a conclusion:** with the fault armed the run logged
+**zero** abandonments and **zero** recreates across three mode changes (against 20/46 unarmed), which
+reads as capture being inactive — yet the dom0 pixel hash changed three times with the same ~25–28 s
+first-pixel latency as the healthy run. Either capture recovered by a path that logs nothing, or
+RND-8's pixel comparison does not actually prove capture is alive. Both possibilities matter, and
+neither is established. Do not cite the pixel half as independent evidence until this is resolved.
+
+Subject restored: running hash back to the release `20cab4c5…`, and the fresh agent log contains
+**0** `QGAFAULT` lines — a release binary has no injector compiled in at all.
+
+### FI_GATE_OFF: the remaining safeguard proofs no longer need a build each
+
+`FiGateOff()` (agent `6eb3ff4`) turns each `ShouldAcceptWindow` safeguard into a registry bit:
+`FI_GATE_MODE1`, `FI_GATE_MODE2`, `FI_GATE_START`, `FI_GATE_SHELLOVERLAY`. Every pairing then comes
+from **one artifact** differing only by that value — strictly stronger than SG2's two-binary proof,
+and no CI round trip per clause.
+
+Deliberately **not** added to `main.c`'s `DiagWindowFilterOff`, which was the obvious place: that
+bitmask ships in RELEASE binaries as a field-diagnosis knob, and widening it would put every new
+safeguard bypass into shipped code. These are deliberate defects, so they live behind
+`QGA_FAULT_INJECTION` and compile out to a constant `FALSE`.
+
+`mgmt/harness/failproof-gates.sh` drives them, and gets its specificity control for free: P5 grades
+four cells at once, so an armed run must redden the **targeted** cell while the other three stay
+green. A bit that moves more than its own clause is reported NOT PROVEN.
+
+### A measurement that had been silently returning nothing
+
+RND-8's keyed-mutex counter was a nested-quote `cmd /c powershell -Command "... \"...\" ..."`
+one-liner. Measured today: it returns **nothing at all** — cmd echoes the command, no output, no
+error. `km`/`rec`/`died` came back empty, `[ "" -eq 0 ]` failed, and the harness wrote
+`keyed-mutex-recovered FAIL` detailed " abandonments,  recreates,  thread deaths". A product defect
+invented by a broken query. Through `-EncodedCommand` the same query returns `KM=10 RC=23 DIED=0`.
+
+Fixed, and **missing data now reports `INVALID-INSTRUMENT`, never `FAIL`** — failing it is right,
+putting it on the product's record is not. Protocol rule 16 names the three harnesses still
+carrying the pattern (`u2-coldboot.sh`, `sg1-u2-coldboot.sh`, `stability-e2e.sh`); their verdicts
+should not be trusted until converted.
