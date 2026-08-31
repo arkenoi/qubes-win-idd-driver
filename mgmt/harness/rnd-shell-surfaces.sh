@@ -78,17 +78,46 @@ PY
 }
 
 # hash of the largest mapped window - the synth OWNER. Pixel change here is the user-visible fact.
-owner_hash(){
-  local t="$TMP/o.tar"; rm -f "$t"; rm -rf "$TMP/ox"; mkdir -p "$TMP/ox"
+#
+# WHOLE-WINDOW HASHING IS NOT EVIDENCE OF SYNTHESIS, and this is measured, not theoretical.
+# 2026-08-31, with FI_NOSYNTHPAINT armed at the paint chokepoint so that NOT ONE synth paint
+# occurred (`SYNTHPAINT 0` in the agent log), this cell still reported "menu synthesized onto its
+# owner AND the owner's dom0 pixels changed". A full-window hash moves for any reason at all - a
+# caret blink, a clock digit, a cursor - so it can never distinguish "the menu was composited onto
+# the owner" from "something, anything, changed". `owner_png` + `crop_hash` below fix that by
+# comparing ONLY the rectangle the agent says it painted.
+owner_png(){   # -> path to the largest mapped window's PNG, or empty
+  local tag="${1:-o}"
+  local t="$TMP/$tag.tar"; rm -f "$t"; rm -rf "$TMP/${tag}x"; mkdir -p "$TMP/${tag}x"
   q shot "$t" >/dev/null 2>&1
-  [ -s "$t" ] || { echo NOCAP; return; }
-  tar xf "$t" -C "$TMP/ox" 2>/dev/null
-  local big; big=$(ls -S "$TMP/ox"/*.png 2>/dev/null | head -1)
-  [ -n "$big" ] || { echo NOWIN; return; }
+  [ -s "$t" ] || return 1
+  tar xf "$t" -C "$TMP/${tag}x" 2>/dev/null
+  ls -S "$TMP/${tag}x"/*.png 2>/dev/null | head -1
+}
+owner_hash(){
+  local p; p=$(owner_png "${1:-o}") || { echo NOCAP; return; }
+  [ -n "$p" ] || { echo NOWIN; return; }
   python3 -c "
 import hashlib,struct,sys
 b=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',b[16:24])
-print(f'{w}x{h}:{hashlib.sha256(b).hexdigest()[:16]}')" "$big"
+print(f'{w}x{h}:{hashlib.sha256(b).hexdigest()[:16]}')" "$p"
+}
+# hash of ONE RECT of a capture, in owner-relative coordinates - the coordinates the agent's own
+# SYNTHPAINT line reports (msg=SYNTHPAINT,...,rx=,ry=,w=,h=). Clamped to the image, and it refuses
+# rather than guessing if the rect does not intersect.
+crop_hash(){   # <png> <rx> <ry> <w> <h>
+  python3 - "$@" <<'PY'
+import sys, hashlib
+from PIL import Image
+p, rx, ry, w, h = sys.argv[1], *map(int, sys.argv[2:6])
+im = Image.open(p).convert('RGB')
+L, T = max(0, rx), max(0, ry)
+R, B = min(im.width, rx + w), min(im.height, ry + h)
+if R <= L or B <= T:
+    print('NORECT'); raise SystemExit
+c = im.crop((L, T, R, B))
+print(f"{R-L}x{B-T}:{hashlib.sha256(c.tobytes()).hexdigest()[:16]}")
+PY
 }
 
 cat > "$TMP/mark.ps1" <<'PS'
@@ -173,11 +202,11 @@ log "  baseline dom0 list: total=${base%%|*} override_redirect=$baseo"
 log "=== RND-3: a menu must be SYNTHESIZED onto its owner, and the owner's pixels must change ==="
 r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
 q run 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 16
-h_before=$(owner_hash); log "  owner before menu: $h_before"
+h_before=$(owner_hash before); png_before=$(owner_png before); log "  owner before menu: $h_before"
 mark=$(T=200 q pushrun "$TMP/mark.ps1" | tr -d '\r' | grep -ao 'AGENTMARK [0-9]*' | awk '{print $2}')
 T=200 q pushrun guest/run-as-user.ps1 -Tag menu -Script "$GUEST\\menu.ps1" -NoWait >/dev/null 2>&1
 sleep 16
-h_after=$(owner_hash); log "  owner with menu open: $h_after"
+h_after=$(owner_hash after); png_after=$(owner_png after); log "  owner with menu open: $h_after"
 syn=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${mark:-0}" -Pattern 'msg=SYNTH,hwnd=' | tr -d '\r' | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
 # #32768 SPECIFICALLY, not "any ovr=1 surface". Measured 2026-08-31: a persistent toast from the
 # previous cell was still on screen, contributing 23 ovr=1 hits, so the cell concluded "the menu
@@ -188,9 +217,33 @@ log "  agent: SYNTH events=${syn:-0}  #32768 menu surfaces seen=${ovr:-0}"
 if [ "${ovr:-0}" -eq 0 ]; then
   log "  -> INVALID-VACUOUS: the agent never saw a #32768 menu window; the menu never opened"
   printf 'RND-3\tmenu-synthesized-onto-owner\tINVALID-VACUOUS\tno #32768 surface seen by the agent\t%s\n' "$EV" >> "$V"; rc=1
-elif [ "${syn:-0}" -gt 0 ] && [ "$h_before" != "$h_after" ] && [ "$h_after" != NOCAP ] && [ "$h_after" != NOWIN ]; then
-  log "  -> PASS: menu synthesized onto its owner AND the owner's dom0 pixels changed"
-  printf 'RND-3\tmenu-synthesized-onto-owner\tPASS-UNPROVEN\t%s SYNTH events; owner capture %s -> %s\t%s\n' "$syn" "$h_before" "$h_after" "$EV" >> "$V"
+elif [ "${syn:-0}" -gt 0 ] && [ "$h_after" != NOCAP ] && [ "$h_after" != NOWIN ]; then
+  # THE EVIDENCE IS THE RECT THE AGENT SAYS IT PAINTED, not the whole window.
+  # SYNTHPAINT reports rx,ry,w,h in OWNER-RELATIVE coordinates - exactly the crop needed. A
+  # whole-window hash passed on 2026-08-31 with SYNTHPAINT 0 (not one paint), because any caret
+  # blink satisfies it.
+  sp=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${mark:-0}" -Pattern 'msg=SYNTHPAINT' | tr -d '\r' | grep -aoE 'rx=[0-9-]+,ry=[0-9-]+,w=[0-9]+,h=[0-9]+' | tail -1)
+  if [ -z "$sp" ]; then
+    log "  -> FAIL: the agent logged SYNTH but NEVER a SYNTHPAINT - the menu was accounted onto its"
+    log "     owner and never drawn there, which is invisible to the user."
+    printf 'RND-3\tmenu-synthesized-onto-owner\tFAIL\t%s SYNTH events but ZERO SYNTHPAINT - accounted but never painted\t%s\n' "$syn" "$EV" >> "$V"; rc=1
+  else
+    rx=$(echo "$sp" | grep -o 'rx=[0-9-]*' | cut -d= -f2); ry=$(echo "$sp" | grep -o 'ry=[0-9-]*' | cut -d= -f2)
+    pw=$(echo "$sp" | grep -o 'w=[0-9]*' | cut -d= -f2);   ph=$(echo "$sp" | grep -o 'h=[0-9]*' | cut -d= -f2)
+    cb=$(crop_hash "$png_before" "$rx" "$ry" "$pw" "$ph" 2>/dev/null)
+    ca=$(crop_hash "$png_after"  "$rx" "$ry" "$pw" "$ph" 2>/dev/null)
+    log "  synth rect (owner-relative) ${rx},${ry} ${pw}x${ph}   crop $cb -> $ca"
+    if [ -z "$cb" ] || [ -z "$ca" ] || [ "$cb" = NORECT ] || [ "$ca" = NORECT ]; then
+      log "  -> INVALID-INSTRUMENT: the synth rect does not intersect the captured owner window"
+      printf 'RND-3\tmenu-synthesized-onto-owner\tINVALID-INSTRUMENT\tsynth rect %s,%s %sx%s does not intersect the capture\t%s\n' "$rx" "$ry" "$pw" "$ph" "$EV" >> "$V"; rc=1
+    elif [ "$cb" != "$ca" ]; then
+      log "  -> PASS: the menu was synthesized onto its owner AND the pixels IN THE PAINTED RECT changed"
+      printf 'RND-3\tmenu-synthesized-onto-owner\tPASS-UNPROVEN\t%s SYNTH events; painted rect %s,%s %sx%s changed %s -> %s (cropped evidence, not a whole-window hash)\t%s\n' "$syn" "$rx" "$ry" "$pw" "$ph" "$cb" "$ca" "$EV" >> "$V"
+    else
+      log "  -> FAIL: synthesized and painted, but the pixels in that exact rect are IDENTICAL"
+      printf 'RND-3\tmenu-synthesized-onto-owner\tFAIL\tpainted rect %s,%s %sx%s identical before and after (%s)\t%s\n' "$rx" "$ry" "$pw" "$ph" "$cb" "$EV" >> "$V"; rc=1
+    fi
+  fi
 elif [ "${syn:-0}" -eq 0 ]; then
   log "  -> FAIL: an override-redirect surface existed but the agent did not synthesize it"
   printf 'RND-3\tmenu-synthesized-onto-owner\tFAIL\t#32768 surfaces=%s but 0 SYNTH events\t%s\n' "$ovr" "$EV" >> "$V"; rc=1

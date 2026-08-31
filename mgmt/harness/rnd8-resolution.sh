@@ -203,6 +203,36 @@ Write-Output ("KM=" + @($a | Select-String -SimpleMatch 887a0026).Count + " RC="
   | grep -aoE 'KM=[0-9]+ RC=[0-9]+ DIED=[0-9]+' | head -1)
 km=$(echo "$KM" | grep -ao 'KM=[0-9]*' | cut -d= -f2); rec=$(echo "$KM" | grep -ao 'RC=[0-9]*' | cut -d= -f2); died=$(echo "$KM" | grep -ao 'DIED=[0-9]*' | cut -d= -f2)
 log "=== keyed mutex: ${km:-?} abandonment(s), ${rec:-?} RecreateDuplication, ${died:-?} thread death(s) ==="
+
+# ---------------------------------------------------------------- FRAME LIVENESS, from OUTPUT
+# The `DIED` counter above is a LOG GREP, and on 2026-08-31 it was measured to be worthless for
+# the defect it names: with FI_CAPTURE_EXIT armed - the capture thread returning without
+# signalling its error event - the ONLY line in the whole agent log matching
+# /capture thread|thread exiting|giving up/ was the FAULT INJECTOR'S OWN MESSAGE. The check
+# scored a "thread death" it had detected from the injector announcing itself, and a silently
+# dead capture thread produces no such line at all.
+#
+# So ask the capture engine whether it is still PRODUCING. QGAPERF emits one line per frame with
+# a monotonic `seq=`; if seq advances across a visible guest change, frames are genuinely being
+# captured. That cannot be satisfied by any log message, which is the whole point
+# (CLAUDE.md: "Judge output, not logs").
+perf_seq(){ psrun '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
+$f=Get-ChildItem $d -Filter gui-agent-*.log | Sort LastWriteTime -Desc | Select -First 1
+$m=@(Get-Content $f.FullName -Tail 3000 | Select-String -Pattern "QGAPERF,v=\d+,seq=(\d+)")
+if ($m.Count -eq 0) { Write-Output "PERFSEQ none" }
+else { Write-Output ("PERFSEQ " + $m[-1].Matches[0].Groups[1].Value) }'     | grep -aoE 'PERFSEQ [0-9]+|PERFSEQ none' | awk '{print $2}' | head -1; }
+
+s0=$(perf_seq)
+T=200 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\type.ps1" >/dev/null 2>&1
+sleep 8
+s1=$(perf_seq)
+log "  frame liveness: QGAPERF seq $s0 -> $s1"
+alive=unknown
+if [ "$s0" = none ] || [ "$s1" = none ] || [ -z "$s0" ] || [ -z "$s1" ]; then
+  alive=unknown
+elif [ "$s1" -gt "$s0" ] 2>/dev/null; then alive=yes
+else alive=no
+fi
 # MISSING DATA IS AN INSTRUMENT FAULT, NOT A PRODUCT VERDICT. CLAUDE.md says missing data must
 # fail - it must never be approximated or skipped - but failing it as FAIL would put a defect
 # on the PRODUCT's record that the product never committed. Distinguish the two explicitly.
@@ -210,11 +240,21 @@ if [ -z "$km" ] || [ -z "$rec" ] || [ -z "$died" ]; then
   log "  -> INVALID-INSTRUMENT: the log counter returned no data (raw='${KM}'). Nothing is graded"
   log "     here; this says nothing about the guest, only that the query did not run."
   printf 'RND-8\tkeyed-mutex-recovered\tINVALID-INSTRUMENT\tcounter query returned no data (raw=%s)\t%s\n' "${KM:-EMPTY}" "$EV" >> "$V"; rc=1
+elif [ "$alive" = unknown ]; then
+  log "  -> INVALID-INSTRUMENT: QGAPERF produced no seq (is service.gui-agent-debug on?), so frame"
+  log "     liveness could not be measured. The log counters alone are NOT sufficient evidence -"
+  log "     see the comment above; they were measured detecting the injector rather than a death."
+  printf 'RND-8\tkeyed-mutex-recovered\tINVALID-INSTRUMENT\tno QGAPERF seq available; frame liveness unmeasurable\t%s\n' "$EV" >> "$V"; rc=1
+elif [ "$alive" = no ]; then
+  log "  -> FAIL: frames are NOT advancing (QGAPERF seq $s0 -> $s1) after a visible guest change."
+  log "     Capture has stopped producing, whatever the log counters say."
+  printf 'RND-8\tkeyed-mutex-recovered\tFAIL\tQGAPERF seq did not advance (%s -> %s) after a visible change: capture is not producing\t%s\n' "$s0" "$s1" "$EV" >> "$V"
+  printf 'RND-8\tcapture-thread-survives-resize\tFAIL\tframes stopped: QGAPERF seq %s -> %s\t%s\n' "$s0" "$s1" "$EV" >> "$V"; rc=1
 elif [ "$died" -eq 0 ] && [ "$rec" -ge "$km" ]; then
   log "  -> PASS: every abandonment was recovered and the capture thread never died; frames"
   log "     provably resumed (the pixel comparisons above)."
-  printf 'RND-8\tkeyed-mutex-recovered\tPASS-UNPROVEN\t%s abandonment(s), %s RecreateDuplication, 0 thread deaths; pixels changed after every mode change\t%s\n' "$km" "$rec" "$EV" >> "$V"
-  printf 'RND-8\tcapture-thread-survives-resize\tPASS-UNPROVEN\tthe CLAUDE.md prerequisite bug (thread dies on 0x887a0026) did NOT reproduce across %s mode changes\t%s\n' "$(echo $MODES | wc -w)" "$EV" >> "$V"
+  printf 'RND-8\tkeyed-mutex-recovered\tPASS-UNPROVEN\t%s abandonment(s), %s RecreateDuplication, 0 thread deaths, AND frames provably still advancing (QGAPERF seq %s -> %s after a visible change)\t%s\n' "$km" "$rec" "$s0" "$s1" "$EV" >> "$V"
+  printf 'RND-8\tcapture-thread-survives-resize\tPASS-UNPROVEN\tthe prerequisite bug (thread dies on 0x887a0026) did NOT reproduce across %s mode changes, and capture is still PRODUCING (QGAPERF seq %s -> %s)\t%s\n' "$(echo $MODES | wc -w)" "$s0" "$s1" "$EV" >> "$V"
 else
   log "  -> FAIL: abandonment(s) not recovered (thread deaths=${died:-?}, recreates=${rec:-?} vs ${km:-?})"
   printf 'RND-8\tkeyed-mutex-recovered\tFAIL\t%s abandonments, %s recreates, %s thread deaths\t%s\n' "$km" "$rec" "$died" "$EV" >> "$V"; rc=1
