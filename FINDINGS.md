@@ -24679,3 +24679,13 @@ Terminal and File Explorer FROM THE DOM0 MENU and see three windows.
 **Unrelated note for the owner:** the dom0 policy dialog seen during this was MY call -
 `qubes.StartApp` is not granted to win-idd-mgmt in `12-install-policy-tagged.sh`, so it fell
 through to an ask rule. dom0's own menu launches are not affected by that.
+
+**Kit defect found at the worst possible moment (2026-09-01).** `dom0/11-wedge-forensics.sh` took
+its subject from `VM="${VM:-win-idd-test}"` with no argument - so the documented invocation,
+during a LIVE wedge on `win10-app`, would have aborted with "FATAL: win-idd-test not running per
+xl list" against a qube that has not booted in weeks, losing the evidence while someone worked
+out why. Now `sudo ./11-wedge-forensics.sh <vm> [--nmi]`, arguments in any order, with a usage
+message that lists the running domains. `VM=` env still works, which is how
+`13-install-wedge-forensics-service.sh` invokes it (`VM="$VM" /usr/local/sbin/win-wedge-forensics.sh`)
+- verified unchanged. A forensics tool that defaults to the wrong subject at the only moment it
+matters is worse than no tool.

@@ -5,15 +5,34 @@
 # spinning code. Nothing here is destructive except --nmi, which deliberately
 # bugchecks the guest (it reboots itself afterwards and the dump survives).
 #
-#   sudo ./11-wedge-forensics.sh            # capture only
-#   sudo ./11-wedge-forensics.sh --nmi      # capture, then NMI (guest bugchecks)
+#   sudo ./11-wedge-forensics.sh <vm>            # capture only
+#   sudo ./11-wedge-forensics.sh <vm> --nmi      # capture, then NMI (guest bugchecks)
+#
+# THE VM IS AN ARGUMENT NOW. It used to be `VM="${VM:-win-idd-test}"` with no way to pass one
+# except an environment variable that sudo often refuses to forward - so during a LIVE wedge on
+# win10-app (2026-09-01) the documented invocation would have aborted with "FATAL: win-idd-test
+# not running", against a qube that has not booted for weeks, and the evidence would have been
+# lost while someone worked out why. A forensics tool that defaults to the wrong subject at the
+# only moment it matters is worse than no tool. Env VM= still works, for the qrexec service.
 #
 # Results land in ~/wedge-<timestamp>/ and are copied to the dev qube at the end.
 set -u
-VM="${VM:-win-idd-test}"
 DEV="${DEV:-win-idd-mgmt}"
 NMI=0
-[ "${1:-}" = "--nmi" ] && NMI=1
+VM="${VM:-}"
+for a in "$@"; do
+    case "$a" in
+        --nmi) NMI=1 ;;
+        -*)    echo "unknown option: $a" >&2; exit 2 ;;
+        *)     VM="$a" ;;
+    esac
+done
+if [ -z "$VM" ]; then
+    echo "usage: $0 <vm> [--nmi]     (or VM=<vm> $0 [--nmi])" >&2
+    echo "running domains:" >&2
+    xl list 2>/dev/null | awk 'NR>1 && $1!="Domain-0" {print "  " $1}' >&2
+    exit 2
+fi
 
 OUT=~/wedge-$(date +%Y%m%d-%H%M%S)
 mkdir -p "$OUT"
