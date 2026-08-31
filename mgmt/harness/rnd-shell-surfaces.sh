@@ -47,6 +47,12 @@ GUEST='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 V="$OUT/verdicts.tsv"; EV=$(basename "$OUT"); rc=0
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-150}" ./tools/qtest "$@" 2>/dev/null; }
 r(){ q run "$1" | tr -d '\r' | grep -avE '^(Microsoft Windows \[Version|\(c\) Microsoft|C:\\)'; }
+# Rule 16: PowerShell goes through -EncodedCommand. This harness had no ESCAPED quotes, so it was
+# probably fine - but "probably fine" is exactly what rnd8's counter was before it was measured
+# returning nothing, so the doubt is removed rather than reasoned away.
+psrun(){ local b; b=$(python3 -c "
+import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode(), end='')" <<< "$1")
+  r "cmd /c powershell -NoProfile -EncodedCommand $b"; }
 log(){ echo "$(date -u +%H:%M:%S) rnd[$VM]: $*" | tee -a "$OUT/rnd.log"; }
 geom(){ QTEST_VM=$VM timeout -k 8 200 ./tools/qtest-geom 2>/dev/null; }
 
@@ -212,7 +218,16 @@ geom > "$TMP/g1.txt"; g1=$(parse_geom "$TMP/g1.txt"); cp "$TMP/g1.txt" "$OUT/geo
 o1=$(echo "$g1" | cut -d'|' -f2); n1=$(echo "$g1" | cut -d'|' -f3)
 th_after=$(owner_hash)
 tsyn=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${tmark:-0}" -Pattern 'msg=SYNTH,hwnd=' | tr -d '\r' | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
-sw=$(r 'cmd /c powershell -NoProfile -Command "@(Get-Content C:\qwt-improved-setup\surface-watch.jsonl -EA SilentlyContinue | Select-String -Pattern ToastHost,ShellExperienceHost,CoreWindow).Count"' | grep -aoE '^[0-9]+$' | head -1)
+sw=$(psrun 'Write-Output ("SWCOUNT " + @(Get-Content "C:\qwt-improved-setup\surface-watch.jsonl" -EA SilentlyContinue | Select-String -Pattern ToastHost,ShellExperienceHost,CoreWindow).Count)' \
+  | grep -aoE 'SWCOUNT [0-9]+' | awk '{print $2}' | head -1)
+# Distinguish "the query did not answer" from "it answered zero". `${sw:-0}` collapses them, and
+# the collapsed value routes into the vacuity branch below - which would read as "the guest never
+# raised a toast" when in fact nothing was asked (rule 16).
+if [ -z "$sw" ]; then
+  log "  -> INVALID-INSTRUMENT: the surface-watch counter returned no data; not grading toasts on this run"
+  printf 'RND-SHELL\ttoast-surface-count\tINVALID-INSTRUMENT\tsurface-watch query returned no data\t%s\n' "$EV" >> "$V"
+  rc=1
+fi
 log "  guest-side toast samples=${sw:-0}  dom0 o-r ${baseo}->${o1} [$n1]  synth=${tsyn:-0}  owner px $th_before -> $th_after"
 if [ "${sw:-0}" -eq 0 ]; then
   log "  -> INVALID-VACUOUS: no toast surface guest-side; the stimulus never existed"
