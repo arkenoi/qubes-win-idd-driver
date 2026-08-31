@@ -36,6 +36,7 @@ require_scripts(){ local m=""; for s in "$@"; do [ -f "$s" ] || m="$m $s"; done
 require_scripts mgmt/harness/rnd8-resolution.sh
 
 VM="${1:?usage: $0 <vm> [outdir]}"
+source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/FAILPROOF-fi-$VM}"
 mkdir -p "$OUT"
 q(){ QTEST_VM=$VM timeout -k 8 "${T:-300}" ./tools/qtest "$@" 2>/dev/null; }

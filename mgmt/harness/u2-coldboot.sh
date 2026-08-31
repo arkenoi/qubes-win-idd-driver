@@ -25,6 +25,7 @@ require_scripts(){ local m=""; for s in "$@"; do [ -f "$s" ] || m="$m $s"; done
 require_scripts guest/wu-boot-acceptance-arm.ps1 guest/wu-boot-acceptance-check.ps1
 
 VM="${1:?usage: $0 <template-vm> [outdir]}"
+source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/U2-$VM}"
 mkdir -p "$OUT"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT

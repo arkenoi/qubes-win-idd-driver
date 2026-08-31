@@ -47,6 +47,7 @@
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 VM="${1:?usage: $0 <standalone-vm>}"
+source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/SG6-failproof-$VM}"
 mkdir -p "$OUT"
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT

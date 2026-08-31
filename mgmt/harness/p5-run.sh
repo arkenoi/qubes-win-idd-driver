@@ -34,6 +34,7 @@ require_scripts(){
 
 require_scripts guest/disarm-update-scan.ps1 guest/fsgate-probe.ps1 guest/set-resolution.ps1 guest/open-start.ps1
 VM="${1:?usage: $0 <vm> [outdir]}"
+source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/P5-$VM}"
 mkdir -p "$OUT"
 TMP=$(mktemp -d)
