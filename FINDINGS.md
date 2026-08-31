@@ -23847,3 +23847,41 @@ app, and a toast surviving the chrome filter all assert the opposite. `FI_DROP_C
 `FI_DROP_SHELLSURFACE` add a reject at the very end of the predicate instead. The regression they
 reproduce is real: the 2A-chrome filter aimed at Office shadow strips would have silently killed
 every Windows notification.
+
+### Gate round 2: one proof earned, two routes measured unusable
+
+Extended injector (`fd01cf82`) adding `FI_GATE_NOCARD`, `FI_DROP_CAPTIONED`, `FI_DROP_SHELLSURFACE`.
+Baseline all four P5 cells green; each case armed, then cleared.
+
+| bits | target | result |
+|---|---|---|
+| `MODE1\|MODE2` 0x3 | SG4 | **PROOF EARNED** — SG4 FAIL, SG2 FAIL as the *declared* companion, SG3/SG9 green, all four green again after clearing |
+| `START\|NOCARD` 0x14 | SG9 | **not earned** — bypassing the cardless reject destabilises the WINDOW SET: SG4/SG2/SG3 returned INVALID-INSTRUMENT with `dom0 dims:` **empty**, the control window itself gone |
+| `FI_DROP_CAPTIONED` 0x20 | SG3 | **not earned** — the bit works, but P5's own control is a **captioned Notepad**, so it disables the instrument's control. P5 aborted: *"the control window never became visible … the capture path is blind"* |
+
+Both failures are recorded with their reason rather than worked around. The second is the more
+interesting: **a fault bit that disables the harness's own control cannot prove anything through
+that harness.** Proving `windowed-fullscreen-allowed` needs a control that is not captioned — the
+bit is fine, the pairing is not.
+
+`start-not-presented` remains genuinely hard: it is defended by two clauses, and removing the
+second one takes the whole measurement with it.
+
+Subject restored and verified twice over: running hash back to `20cab4c5…`, **0** `QGAFAULT` lines
+in the fresh log, and a clean P5 with all four cells green.
+
+### Where the campaign actually stands
+
+429 checks — **PASS 299, PASS-UNPROVEN 61, N/A 20**. The 61 split into two very different things:
+
+* **22 rows are hand-recorded observations with no deployed check.** H5 cannot apply. They are
+  annotated in the ledger as `NO DEPLOYED CHECK` and deliberately left PASS-UNPROVEN: upgrading
+  them would overstate verification, and "proving" one would mean writing a new check and proving
+  *that* instead.
+* **39 rows are genuinely unproven deployed checks.** These are the real remaining gap.
+
+**The session goal — all verification gaps decisively closed — is NOT met.** What was closed is
+the *method*: two proofs earned, the vehicle for the rest built and validated, and four instrument
+defects removed that were producing false verdicts. What remains is 39 rows, of which the window
+cluster now has a measured obstacle (defence in depth, and control-window interference) rather
+than an unknown one.
