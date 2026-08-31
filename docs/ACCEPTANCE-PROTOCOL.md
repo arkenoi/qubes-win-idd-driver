@@ -1004,9 +1004,13 @@ not quietly upgrade it.
     * **Missing data must fail as `INVALID-INSTRUMENT`, never as `FAIL`.** Failing it is right;
       recording it against the *product* is not. Test emptiness explicitly, before any numeric
       comparison — `${x:-0}` defaults turn "no data" into a confident wrong number.
-    * **Still carrying the risky pattern** (each feeds a verdict, each unaudited):
-      `u2-coldboot.sh`, `sg1-u2-coldboot.sh`, `stability-e2e.sh`. Convert before trusting a
-      verdict from any of them.
+    * **All harnesses were swept and converted the same day** — `u2-coldboot.sh`,
+      `sg1-u2-coldboot.sh` and `stability-e2e.sh` each fed a verdict from the risky form. Two of
+      them also *conflated* a broken query with a finding: stability-e2e reported an unreadable
+      `qrexec-wrapper` hash in the same branch as "it is stock", and u2's class-line counter let
+      an empty count read as "the boot pass never classified anything". Both now say which it is.
+      Re-check with `grep -rc 'Command "[^"]*\\"' mgmt/harness/*.sh` before trusting a new
+      harness.
 
 ### 0.13b RUNBOOK — earning a fail-proof with a DIAG BUILD, step by step
 
