@@ -117,11 +117,19 @@ if unproven:
     # be created on this rig" are different facts, and a report that lumps them together tells the
     # reader neither. Each reason below is recorded per-check in the ledger detail.
     import collections as _c
-    buckets = _c.Counter()
+    # Bucket by CHECK, not by row. A reason recorded on a later row for the same check applies to
+    # the check, and per-row bucketing counted those as "not attempted" - which overstated the
+    # unattempted set (measured: 53 rows vs the true 40).
+    per_check = {}
     for r in rows:
         if r['verdict'] != 'PASS-UNPROVEN':
             continue
+        k = r['check'].replace('_', '-')
         d = r['detail']
+        best = per_check.get(k, '')
+        per_check[k] = d if len(d) > len(best) else best
+    buckets = _c.Counter()
+    for k, d in per_check.items():
         if 'UNREACHABLE' in d or 'NOT CREATABLE' in d:
             buckets['defect state provably cannot be created on this rig'] += 1
         elif 'PREDICATE' in d:
@@ -130,7 +138,7 @@ if unproven:
             buckets['not exercised by any available path'] += 1
         else:
             buckets['no fail-proof attempted yet'] += 1
-    print(f"  PASS-UNPROVEN: {unproven}")
+    print(f"  PASS-UNPROVEN: {unproven} rows / {len(per_check)} distinct checks")
     for why, n in buckets.most_common():
         print(f"      {n:>4}  {why}")
     print("      succeeded but never seen to fail. H5: a check absent from the fail-proof")

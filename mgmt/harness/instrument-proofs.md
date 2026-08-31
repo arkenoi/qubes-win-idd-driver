@@ -84,6 +84,7 @@ that date no registry existed, which means **every plain `PASS` written by this 
 | `no-intermediate-reboot` | 2026-08-31 | an `uninstalling ...` line added to an upgrade log that claims no uninstall | -> red |
 | `veto-key-seeded-not-a-vif` | 2026-08-31 | `win10-app`, where XENVIF is NOT empty | shipped `guest/pvnic-latch-readback.ps1`: `win10-p46` (netvm='') has `vif_enum_key=True` with `XENVIF_DEVICES=0` - the veto key seeded while genuinely not a vif; `win10-app` has `XENVIF_DEVICES=1`, so the 'enum empty' half is false there |
 | `three-boot-soak` | 2026-08-31 | `win10-p46` (netvm=''), where the same query finds 0 adapters and no IP | three REAL cold boots of win10-app with distinct LastBootUpTimes (04:52:36 / 04:55:05 / 04:57:40), all `pv_up=1 emulated_left=0 ip=10.137.0.64 apipa=0` |
+| `relay-transport-clean` | 2026-08-31 | a truncated response — using the relay's OWN shipped self-test | `qubes-updates-relay.exe --selftest` on win11-tpl: `PASS short: reported incomplete`, `PASS chunked: truncated reads incomplete`, `PASS GET: headers-only still reads INCOMPLETE`, alongside `PASS large: reported complete`. 13/13 assertions. The fail-proof was already in the product — it only needed running |
 | `NET-7 applier present` | 2026-08-29 | a guest with no applier (pre-`cace671` package) — the PnP problem-14 state | FINDINGS 2026-08-29 |
 
 ## Predicate validated, DEPLOYED CHECK NOT — these do NOT count (added 2026-08-31)
