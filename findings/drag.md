@@ -8,17 +8,20 @@ correction lines were buried chronologically in a 25k-line log, so reading a top
 top-down returned the stale answer.
 
 - Wobble was FIXED 2026-08-16 by `InputDragQuantise` + interpolated origin. Shipped defaults `AdoptMs=25 / AnnounceMs=50`, `LagMs=10`, `OriginInterp=1`; the servo is superseded and OFF. Do not read the top of docs/PLAN-drag-quality.md, which still says "parked". [verified 2026-08-16]
-- Owner reports the wobble is BACK as of 2026-09-01. Cause NOT found. UNVERIFIED
+- Owner reports the wobble is BACK as of 2026-09-01. **Cause FOUND and fixed (`6385c25`) - see the crossing entry below.** Awaiting the owner's confirming hand drag on the fixed build.
 - All three good translation branches gate on `window == g_InputDragWindow && g_InputDragOriginValid`; anything else falls through to the LIVE origin, i.e. the gain-1 oscillator. So any path that fails to arm the latch or clears it mid-drag silently restores stock wobble. Code-read, not measured. [verified 2026-09-01]
-- `MSG_CROSSING` (b71f611, 2026-08-30) cleared that state on ANY LeaveNotify, ignoring `mode`; fixed in 8b72b4e. The fix is correct - grab bookkeeping is not a departure - but it did NOT resolve the owner's complaint, so it is NOT the regression. [verified 2026-09-01]
+- **ROOT CAUSE, MEASURED on a hand drag 2026-09-01: `HandleCrossing` releases the drag latch mid-drag on a GENUINE normal-mode LeaveNotify.** 569 ms into a 5.0 s guest-native drag, dom0 sent `LeaveNotify mode=0 (NotifyNormal)` and the latch was torn down. Before it: 50 motion events, 50/50 on the interpolated origin, 8 % window-path reversals. After it: 490 events, **489/490 on the LIVE origin** - the gain-1 oscillator - and **20 % reversals**, which is the wobble exactly as originally measured (16-19 %). The same teardown also disables `InputDragFreezeContent`, `DragEventPriority` and the announce pacing (they gate on the same latch): the announce rate inside the drag was 33.5/s against the ~14/s the tuning was fitted at. Fixed in `6385c25`: the latch is released only when dom0's own button mask says no button is held (`msg_crossing.state & Button1Mask`), plus `detail != NotifyInferior`. [verified 2026-09-01, hand drag, agent EB25802E85D471A8]
+- **RETRACTED**: the 2026-09-01 claim that "the `MSG_CROSSING` handler ... did NOT resolve the owner's complaint, so it is NOT the regression". It IS the regression. That claim was made from code reading and a hand drag with no instrument; measurement reverses it. `b71f611` introduced it, `8b72b4e`'s `mode == NotifyNormal` guard is correct but insufficient - the damaging event is a genuine normal-mode leave, because in a guest-native drag the WINDOW moves out from under a nearly-stationary hand, which is precisely what X reports that way.
+- **NOT the cause, both measured and both now excluded**: (a) dom0's apply lag - the synthetic calibration shows a lag > ~25 ms *would* reproduce the wobble, but on the real drag 91 % of events never consulted the announce history at all, so the wobble is explained without it; (b) inbound daemon configures yanking the window (`InputDragCfgGuard`) - the hand drag recorded **0** `CONFIGURE-IN` and **0** `DAEMONMOVE` with `drag=1`, so it is inert on the real path exactly as it was in 2026-08-12. Keep the knob, default OFF; do not spend another session on either. [verified 2026-09-01]
 - No `InputDrag*` default changed between the user-approved baseline 168a869 and HEAD, so the regression is in behaviour around the drag path, not in its tuning. [verified 2026-09-01]
 - **"The tuning was never committed, only written to the registry" is DISPROVEN.** `b75358b` put 25/50 in `perf.c` and `168a869` put `OriginInterp=TRUE` there; `git diff 168a869..HEAD -- gui-agent/perf.c` changes no drag default and no drag constant in main.c/main.h either. The live guest confirms it from the other end: `HKLM\...\Qubes Tools\gui-agent` holds ONLY `ProtoTrace=0` and `ProtoTraceWobble=0` - zero `InputDrag*` overrides - so the running agent is on compiled-in defaults that equal the approved values. The installer seeds only SeamlessMode/DisableCursor/LogDir, so no missing seeding script exists to find. [verified 2026-09-01]
 - **What was NOT committed is the LOGGING LOAD the tuning was fitted against, and it is a timing parameter.** The whole ladder and the approval ran with `ProtoTrace=1` (written by `scratchpad/swap-interp.ps1`, which is how the metric was computed at all) on a build whose `QGA_PERF_DEFAULT` was 1, i.e. a per-frame QGAPERF line by default. `ffae88a` (2026-08-27) set `QGA_PERF_DEFAULT` to 0 and moved SYNTHPAINT under ProtoTrace for log-size reasons. The drag law is a delayed-feedback controller whose constants were fitted at a measured 13.7 announces/s that the ladder itself calls "saturated by the window's own movement", not by the 50 ms pacing floor (which would allow 20/s). Remove the logging and the saturation point moves. HYPOTHESIS, not measured - the announce cadence on a quiet build has never been measured, because the only instrument that measured it was the thing that slowed it. That is what `ProtoTraceDrag` exists to close. UNVERIFIED
 - The four-fix drag-wobble series of 2026-08-12 (`43de7d4`) was reverted whole by `e2f36be` because sub-fix 1 (suppress ALL PrintWindow recapture for the latched window) made it worse. The other three - rate-limiter exemption for the latched window, inbound MSG_MOTION coalescing, and IGNORE MID-DRAG DAEMON CONFIGURES WHILE THE LATCH HOLDS - were measured INERT that day and reverted as collateral. None was ever re-landed. The configure guard is worth re-testing specifically, because the machinery it guards against (`DaemonStreamTick`, `ApplyPendingDaemonMove`) landed in `336ccc7` AFTER that measurement, so "zero inbound configures inside the latch window" was measured on code that did not yet have it. Re-added as `InputDragCfgGuard`, DEFAULT OFF, with the trace that decides it. [verified 2026-09-01]
 - `scratchpad/drag-armcheck.ps1` reads `HKLM\SOFTWARE\Qubes\GuiAgent`, which is not the key the agent uses (`HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent`). Its `overrides = "none (shipped defaults)"` answer was structurally incapable of reporting an override, so it is not evidence for any run it was used on. [verified 2026-09-01]
 - Residual BY DESIGN: `AdoptMs` assumes a constant dom0 apply lag against a measured median 0 / p75 17 / tail 82, 398 ms. Events past adopt take the wrong sign. [verified 2026-08-16]
+- The instrument now exists and is calibrated: `ProtoTraceDrag=1` (input-rate QGAPROTO lines only, ~44/s, no per-rect DAMAGE flood so feel and mechanism come from ONE run), `msg=MOTION br=` naming the translation law actually taken, `msg=DRAGLATCH` naming every arm/teardown, and `tools/drag-analyze.py`. Arm with `guest/drag-trace-run.ps1 -Sim 0`, pull with `guest/drag-trace-pull.ps1` (pulling must never use the -run script: it restarts the agent and would destroy the episode). [verified 2026-09-01]
 - `guest/sample-window-motion.ps1` REPORTS `armed: true` AND WRITES NOTHING - the task ends Ready with no winmotion.txt, not even its own "no notepad" sentinel. Fix it and prove it writes a file BEFORE asking anyone to drag. Three hand drags on 2026-09-01 produced zero measurements. [verified 2026-09-01]
-- Next suspect, never examined: the 141-line insertion in the frame path at `FrameRedundant`/`ProcessNewFrame` from the secure-desktop freeze work (878ae5e, 7e3f0b6, fb4c1cd). Announces are slaved to frames. UNVERIFIED
+- The "next suspect" from the previous session - the frame-path insertion from the secure-desktop freeze work (878ae5e, 7e3f0b6, fb4c1cd) - was NOT the cause and needs no further work: its body only runs on the secure desktop, and the measured drag ran entirely on the Default desktop. [verified 2026-09-01]
 
 ## History
 
@@ -1749,3 +1752,55 @@ Notepad `0xC001A` at 600,400 900x650. Banner asserted from the log, not assumed:
 Quiet build, so the feel verdict is valid on the same run as the mechanism. Drag Notepad by its
 title bar for ~10 s, then `guest/drag-trace-run.ps1 -Sim 0 -WaitMs 0` pulls the lines and
 `tools/drag-analyze.py` answers all four questions at once.
+
+## 2026-09-01 (session 2, cont.) — ROOT CAUSE: one crossing event disables every drag fix
+
+The hand drag the previous session could not turn into a measurement. Guest win10-app, agent
+`EB25802E85D471A8` (running hash verified against the pushed artifact), shipped tuning asserted
+from the log banner, quiet build (`QGAPROTO off ... drag-only trace on`, `QGAPERF off`), so the
+feel verdict and the mechanism come from the same 5 s.
+
+    press     t=0
+    crossing  t=+569 ms   LeaveNotify mode=0 (NotifyNormal)  -> latch released
+    release   t=+4985 ms
+
+|  | motion events | translation branch | window-path reversals |
+|---|---|---|---|
+| before the crossing | 50 | 50/50 INTERP | 4/50 = 8 % |
+| after the crossing | 490 | **489/490 LIVE (gain-1 oscillator)** | 99/490 = **20 %** |
+
+20 % against the 16-19 % that defined the wobble when it was first measured. One event, and
+every shipped drag fix stops applying at once - the interpolated origin, `InputDragFreezeContent`,
+`DragEventPriority`, and the 50 ms announce pacing all gate on `g_InputDragWindow`. The announce
+rate inside the drag was 33.5/s (gap p50 30 ms) against the ~14/s the 2026-08-16 ladder was
+fitted at, because pacing is one of the things the latch gates.
+
+**Why the previous session's mode guard did not save it.** `8b72b4e` reasoned that X synthesises
+crossings for grab bookkeeping and guarded on `mode == NotifyNormal`. True, and insufficient: the
+event that does the damage IS normal-mode. In a guest-native drag the WINDOW is what moves - each
+announced position makes dom0's WM move the frame under a hand that is nearly stationary in root
+coordinates - and a window moving out from under the pointer is exactly what X reports as a
+normal-mode LeaveNotify. The handler's premise, "a pointer that has left the window cannot still
+be dragging it", is false whenever the window is the thing that left.
+
+**Fix (`6385c25`): the button decides, not the mode.** `msg_crossing.state` carries X's button
+mask and gui-daemon forwards it verbatim (`xside.c`: `k.state = ev->state`). While button 1 is
+held there is no such thing as "the drag ended". The only case this release was ever written for
+- a LOST Button1 release - is exactly the case where the mask is clear, so the guard costs it
+nothing, and a genuinely stuck latch is still caught twice over (the next Button1 event anywhere,
+and the `INPUT_DRAG_STUCK_MS` sweep). `detail == NotifyInferior` is excluded for the same reason
+as the grab modes: the pointer moved to a child window and is still inside.
+
+**Two hypotheses this measurement killed, recorded so they are not re-run:**
+ - dom0's apply lag. The synthetic calibration is real (22 % reversals at 80 ms, 35 % at 200 ms
+   against 1 % at 17 ms) and worth keeping as the known failure mode of `AdoptMs`/`LagMs`, but it
+   is not what happened here: 91 % of the drag's events never consulted the announce history at
+   all. The lag fit on this trace is meaningless for the same reason.
+ - `InputDragCfgGuard` (ignore mid-drag daemon configures). The hand drag recorded **0**
+   `CONFIGURE-IN` and **0** `DAEMONMOVE` with `drag=1` - inert on the real path, exactly as
+   `e2f36be` measured it on 2026-08-12. The knob stays, default OFF, and should not be revisited
+   without a trace that shows a non-zero count.
+
+**Evidence rule 5 is satisfied without extra work**: the build that produced the table above IS
+the defect build, measured on the same guest, same window, same tuning, with the same instrument
+that will grade the fix. The failing side is not hypothetical.
