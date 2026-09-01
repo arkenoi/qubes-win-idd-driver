@@ -44,7 +44,11 @@ SCEN_ROOT = PROTO / "scenarios"
 FAILPROOFS = PROTO / "failproofs.json"
 
 MECH_KINDS = {"gate", "probe", "action", "wait"}
-KINDS = MECH_KINDS | {"judgement"}
+KINDS = MECH_KINDS | {"judgement", "declare"}
+# declare: a row emitted by design without running anything - for arms that CANNOT run
+# unattended (owner present, or a feature the harness is forbidden to set). Never PASS, so
+# exempt from the falsifiability gate; campaign-verdict.sh prints them on every branch.
+DECLARE_VERDICTS = ("ATTENDED-PENDING", "BLOCKED", "N/A")
 FAIL_ACTIONS = {"HALT_CAMPAIGN", "HALT_PART", "CONTINUE", "RETRY"}
 # Steps that gate or grade must be falsifiable; plain actions (mkdir, tar) need not be.
 FALSIFIABLE_KINDS = {"gate", "probe", "judgement", "wait"}
@@ -81,6 +85,15 @@ def load_steps(paths: list[Path], check_scenarios: bool = True) -> list[dict]:
             kind = s.get("kind")
             if kind not in KINDS:
                 errors.append(f"{where}: kind must be one of {sorted(KINDS)}, got {kind!r}")
+                continue
+            if kind == "declare":
+                if not s.get("check"):
+                    errors.append(f"{where}: declare needs a check name")
+                if not str(s.get("verdict", "")).startswith(DECLARE_VERDICTS):
+                    errors.append(f"{where}: declare verdict must start with one of {DECLARE_VERDICTS}")
+                if not (s.get("detail") or "").strip():
+                    errors.append(f"{where}: declare needs a detail saying WHY it cannot run unattended")
+                steps.append(s)
                 continue
             if kind in MECH_KINDS:
                 if not s.get("command"):
@@ -340,6 +353,12 @@ def advance(c: Campaign, steps: list[dict], failproofs: dict, auto_truth: bool =
                                                      "blocked_noted": True}
                         c.trace("blocked", step=step["id"], why=why)
                         progressed = True
+                continue
+            if step["kind"] == "declare":
+                c.ledger(step["part"], step["check"], step["verdict"], step["detail"], "")
+                mark(c, step, GREEN, verdict=step["verdict"])
+                progressed = True
+                c.save()
                 continue
             if step["kind"] == "judgement":
                 ans = (c.st["steps"].get(step["id"]) or {}).get("answer")

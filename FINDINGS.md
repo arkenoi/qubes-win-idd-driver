@@ -18,6 +18,7 @@ gave the stale answer first. That is not a filing preference; it produced wrong 
 | install | 88 | [`findings/install.md`](findings/install.md) |
 | misc | 24 | [`findings/misc.md`](findings/misc.md) |
 | network | 58 | [`findings/network.md`](findings/network.md) |
+| protocol | 1 | [`findings/protocol.md`](findings/protocol.md) |
 | qrexec | 24 | [`findings/qrexec.md`](findings/qrexec.md) |
 | rig | 35 | [`findings/rig.md`](findings/rig.md) |
 | updates | 75 | [`findings/updates.md`](findings/updates.md) |
