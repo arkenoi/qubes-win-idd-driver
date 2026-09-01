@@ -1,0 +1,16 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "p1-matrix-run",
+    "verdict": "FAIL"
+   }
+  ],
+  "ledger_absent": [
+   "p1-matrix-nonvacuous",
+   "p1-precondition-authority"
+  ]
+ }
+}

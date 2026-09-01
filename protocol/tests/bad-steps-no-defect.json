@@ -1,0 +1,15 @@
+{
+  "part": "selftest-fixture",
+  "comment": "PLANTED VIOLATION for protocol/selftest.sh: a gate with no `defect` and no `falsified_by`. The loader must REFUSE this file. If it ever loads, the falsifiability gate itself has stopped firing.",
+  "steps": [
+    {
+      "id": "bad-unfalsifiable-gate",
+      "kind": "gate",
+      "title": "a check that has never been seen to fail",
+      "command": "true",
+      "expect": {"exit": 0},
+      "check": "bad-check",
+      "on_fail": {"action": "HALT_PART"}
+    }
+  ]
+}

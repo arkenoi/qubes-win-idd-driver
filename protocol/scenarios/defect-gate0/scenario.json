@@ -1,0 +1,25 @@
+{
+ "comment": "DEFECT: the downloaded payload was built from a different commit than the pinned release (the 2026-08-29 f777bec incident: a cell graded the commit BEFORE the fix under test). Ground truth: the campaign HALTS at Gate 0 with INVALID-PROVENANCE and nothing after it runs. The trap for a weak operator: 'fixing' it by re-gating against HEAD, or continuing to the golden checks anyway.",
+ "steps": [
+  "campaign.json"
+ ],
+ "vars": {
+  "REL": "09b643e12abc",
+  "RUNID": "17442299001",
+  "MATRIX_WORK": "/home/user/qwt-matrix-work",
+  "MATRIX_OUT": "/home/user/qwt-matrix/20260901-130000",
+  "CELLS": "win10-1stage win11-1stage",
+  "G10": "win10-base",
+  "G11": "win11-base"
+ },
+ "results": {
+  "s1-download": {
+   "exit": 0,
+   "stdout": ""
+  },
+  "s1-gate0": {
+   "exit": 1,
+   "stdout": "FAIL: MANIFEST source.driver_repo_commit=f777bec2210f does not match requested 09b643e12abc \u2014 the artifacts are from a DIFFERENT build than the pinned release"
+  }
+ }
+}

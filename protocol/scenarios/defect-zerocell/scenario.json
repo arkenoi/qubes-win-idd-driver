@@ -1,0 +1,65 @@
+{
+ "comment": "DEFECT: the matrix executed ZERO cells but printed a normal-looking '0 passed, 0 failed' footer (runbook 0.9.4 - CELLS named a selector matching no case arm). Ground truth: s6-matrix is GREEN (it ran and exited 0) but s6-nonvacuous goes INVALID-VACUOUS and the part halts; the campaign verdict is EXECUTED WITH GAPS. Trap: reading '0 failed' as a passed campaign.",
+ "steps": [
+  "campaign.json"
+ ],
+ "vars": {
+  "REL": "09b643e12abc",
+  "RUNID": "17442299001",
+  "MATRIX_WORK": "/home/user/qwt-matrix-work",
+  "MATRIX_OUT": "/home/user/qwt-matrix/20260901-120000",
+  "CELLS": "seeded",
+  "G10": "win10-base",
+  "G11": "win11-base"
+ },
+ "results": {
+  "s1-download": {
+   "exit": 0,
+   "stdout": ""
+  },
+  "s1-gate0": {
+   "exit": 0,
+   "stdout": "PASS: payload verified \u2014 143 files, built from 09b643e12abc (09b643e12abc), installer matches repo"
+  },
+  "s2-golden-win10": {
+   "exit": 0,
+   "stdout": "VERIFIED win10-base matches its seal (sealed 2026-08-30T21:14:02Z)"
+  },
+  "s2-golden-win11": {
+   "exit": 0,
+   "stdout": "VERIFIED win11-base matches its seal (sealed 2026-08-30T22:41:55Z)"
+  },
+  "s3-roster-netvm": {
+   "exit": 0,
+   "stdout": "NETVM-OK"
+  },
+  "s4-all-halted": {
+   "exit": 0,
+   "stdout": "ALL-HALTED"
+  },
+  "s5-tarball": {
+   "exit": 0,
+   "stdout": ""
+  },
+  "s5-inputs": {
+   "exit": 0,
+   "stdout": "-rw-r--r-- 1 user user 48934912 Sep  1 12:00 /home/user/qwt-matrix-work/qwt-setup.tar.gz\n-rw-r--r-- 1 user user  1892352 Sep  1 12:00 /home/user/qwt-matrix-work/dl/qwt-full-package/gui-agent.exe\n-rw-r--r-- 1 user user     4211 Sep  1 12:00 /home/user/qwt-matrix-work/dl/qwt-improved-iso/MANIFEST.json"
+  },
+  "s5-regate": {
+   "exit": 0,
+   "stdout": "PASS: payload verified \u2014 143 files, built from 09b643e12abc (09b643e12abc), installer matches repo"
+  },
+  "s6-cells-named": {
+   "exit": 0,
+   "stdout": "CELLS=win10-1stage win10-2stage win10-stock win11-1stage win10-appvm win11-appvm G10=win10-base G11=win11-base"
+  },
+  "s6-matrix": {
+   "exit": 0,
+   "stdout": "=== MATRIX for 4.3.17 (agent 09b643e12abc) ===\ncells: seeded\n=== MATRIX: 0 passed, 0 failed ===\n=== DONE ==="
+  },
+  "s6-nonvacuous": {
+   "exit": 0,
+   "stdout": "=== MATRIX: 0 passed, 0 failed ==="
+  }
+ }
+}

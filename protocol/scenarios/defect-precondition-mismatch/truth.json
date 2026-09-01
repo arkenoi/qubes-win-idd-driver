@@ -1,0 +1,14 @@
+{
+ "truth": {
+  "s7-precondition-authority": "MISMATCH"
+ },
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "p1-precondition-authority",
+    "verdict": "INVALID-PRECONDITION"
+   }
+  ]
+ }
+}

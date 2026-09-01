@@ -1,0 +1,16 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "s4-all-halted",
+  "ledger": [
+   {
+    "check": "p0-all-halted",
+    "verdict": "INVALID-PRECONDITION"
+   }
+  ],
+  "ledger_absent": [
+   "p1-matrix-run"
+  ]
+ }
+}

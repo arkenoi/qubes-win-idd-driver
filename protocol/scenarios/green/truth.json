@@ -1,0 +1,54 @@
+{
+ "truth": {
+  "s7-precondition-authority": "ALL_MATCH"
+ },
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "gate0-payload",
+    "verdict": "PASS"
+   },
+   {
+    "check": "golden-win10-base",
+    "verdict": "PASS"
+   },
+   {
+    "check": "golden-win11-base",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p0-roster-netvm",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p0-all-halted",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p0-stage-inputs",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p0-regate-tarball",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p0-cells-named",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p1-matrix-run",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p1-matrix-nonvacuous",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p1-precondition-authority",
+    "verdict": "PASS"
+   }
+  ]
+ }
+}

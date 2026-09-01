@@ -1,0 +1,17 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "s3-roster-netvm",
+  "ledger": [
+   {
+    "check": "p0-roster-netvm",
+    "verdict": "INVALID-PRECONDITION"
+   }
+  ],
+  "ledger_absent": [
+   "p0-all-halted",
+   "p1-matrix-run"
+  ]
+ }
+}

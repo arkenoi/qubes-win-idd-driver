@@ -1,0 +1,16 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "s5-regate",
+  "ledger": [
+   {
+    "check": "p0-regate-tarball",
+    "verdict": "INVALID-PROVENANCE"
+   }
+  ],
+  "ledger_absent": [
+   "p1-matrix-run"
+  ]
+ }
+}

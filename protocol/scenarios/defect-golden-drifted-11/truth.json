@@ -1,0 +1,21 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "s2-golden-win11",
+  "ledger": [
+   {
+    "check": "golden-win10-base",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-win11-base",
+    "verdict": "INVALID-CONTAMINATED"
+   }
+  ],
+  "ledger_absent": [
+   "p0-roster-netvm",
+   "p1-matrix-run"
+  ]
+ }
+}

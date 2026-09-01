@@ -1,0 +1,33 @@
+{
+ "comment": "DEFECT: win11-base drifted while win10-base verifies clean - the same contamination class one subject over, so golden-win11-base earns its OWN fail-proof (V6: a sibling's proof does not transfer). Ground truth: HALT at s2-golden-win11, INVALID-CONTAMINATED.",
+ "steps": [
+  "campaign.json"
+ ],
+ "vars": {
+  "REL": "09b643e12abc",
+  "RUNID": "17442299001",
+  "MATRIX_WORK": "/home/user/qwt-matrix-work",
+  "MATRIX_OUT": "/home/user/qwt-matrix/20260901-120000",
+  "CELLS": "win10-1stage win10-2stage win10-stock win11-1stage win10-appvm win11-appvm",
+  "G10": "win10-base",
+  "G11": "win11-base"
+ },
+ "results": {
+  "s1-download": {
+   "exit": 0,
+   "stdout": ""
+  },
+  "s1-gate0": {
+   "exit": 0,
+   "stdout": "PASS: payload verified \u2014 143 files, built from 09b643e12abc (09b643e12abc), installer matches repo"
+  },
+  "s2-golden-win10": {
+   "exit": 0,
+   "stdout": "VERIFIED win10-base matches its seal (sealed 2026-08-30T21:14:02Z)"
+  },
+  "s2-golden-win11": {
+   "exit": 2,
+   "stdout": "DRIFTED: win11-base root volume carries 1 revision not present at seal time (a clean shutdown after the seal = the golden was BOOTED)\nchanged: root.revisions 7 -> 8\nREFUSE to clone from win11-base"
+  }
+ }
+}

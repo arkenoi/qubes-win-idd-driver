@@ -1,0 +1,17 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "s5-inputs",
+  "ledger": [
+   {
+    "check": "p0-stage-inputs",
+    "verdict": "INVALID-PRECONDITION"
+   }
+  ],
+  "ledger_absent": [
+   "p0-regate-tarball",
+   "p1-matrix-run"
+  ]
+ }
+}

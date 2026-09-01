@@ -1,0 +1,16 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "s6-cells-named",
+  "ledger": [
+   {
+    "check": "p0-cells-named",
+    "verdict": "INVALID-PRECONDITION"
+   }
+  ],
+  "ledger_absent": [
+   "p1-matrix-run"
+  ]
+ }
+}

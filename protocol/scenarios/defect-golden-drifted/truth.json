@@ -1,0 +1,17 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "s2-golden-win10",
+  "ledger": [
+   {
+    "check": "golden-win10-base",
+    "verdict": "INVALID-CONTAMINATED"
+   }
+  ],
+  "ledger_absent": [
+   "golden-win11-base",
+   "p1-matrix-run"
+  ]
+ }
+}

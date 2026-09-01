@@ -1,0 +1,18 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "s1-gate0",
+  "ledger": [
+   {
+    "check": "gate0-payload",
+    "verdict": "INVALID-PROVENANCE"
+   }
+  ],
+  "ledger_absent": [
+   "golden-win10-base",
+   "golden-win11-base",
+   "p1-matrix-run"
+  ]
+ }
+}
