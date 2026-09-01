@@ -482,9 +482,14 @@ def print_terminal(c: Campaign):
         print(f"halted at step {h['at']}: {h['verdict']} - {h['why']}")
         if h.get("msg"):
             print(f"prescribed action: {h['msg']}")
-        print("The campaign is HALTED. Do not re-run steps. Do not modify anything under protocol/.")
-        print("Report the ledger below verbatim, then stop:")
+        print("The campaign is HALTED - that is a result, not an obstacle. Do not re-run steps. "
+              "Do not modify anything under protocol/.")
+        print("Ledger so far (report it verbatim):")
         print(c.ledger_p.read_text().rstrip())
+        print("The ONLY valid next command is:")
+        print(f"     python3 protocol/run.py verdicts --campaign {c.cid}")
+        print("Paste its output as the FIRST block of your report, the halt block above right "
+              "after it, then stop.")
         return
     pending = [s for s, v in c.st["steps"].items() if v.get("status") == "PENDING"]
     banner(c, "DONE")
@@ -602,7 +607,17 @@ def cmd_verdicts(a):
     print(r.stdout.rstrip())
     if c.st["mode"] == "dry":
         print("\n(DRY-RUN ledger: these verdicts grade the PROTOCOL WALK, not any guest.)")
-    sys.exit(r.returncode)
+    # COMPLETE and EXECUTED WITH GAPS are BOTH valid results of a successful computation; only
+    # unusable input is an error here. Round-1 eval measured the alternative: an operator saw
+    # exit 1 on a gappy-but-valid campaign, read it as a tool failure, and went off-script to
+    # double-check. The completion gate's exit contract lives in campaign-verdict.sh for scripts;
+    # the operator-facing wrapper must not dress a verdict up as a crash.
+    if r.returncode >= 2:
+        sys.exit(2)
+    print("\nThis command succeeded. The verdict is the text above - COMPLETE or EXECUTED WITH "
+          "GAPS are both valid results.\nPaste it verbatim as the FIRST block of your report "
+          "(gaps first when present), then stop.")
+    sys.exit(0)
 
 
 def cmd_validate(a):

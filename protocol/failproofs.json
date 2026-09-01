@@ -1,79 +1,79 @@
 {
  "gate0-payload": {
-  "campaign": "st-defect-gate0-20260901-140156",
+  "campaign": "st-defect-gate0-20260901-141048",
   "grade": "dry",
   "observed_verdict": "INVALID-PROVENANCE",
   "scenario": "defect-gate0",
-  "utc": "2026-09-01T14:01:57Z"
+  "utc": "2026-09-01T14:10:48Z"
  },
  "golden-win10-base": {
-  "campaign": "st-defect-golden-drifted-20260901-140156",
+  "campaign": "st-defect-golden-drifted-20260901-141048",
   "grade": "dry",
   "observed_verdict": "INVALID-CONTAMINATED",
   "scenario": "defect-golden-drifted",
-  "utc": "2026-09-01T14:01:57Z"
+  "utc": "2026-09-01T14:10:48Z"
  },
  "golden-win11-base": {
-  "campaign": "st-defect-golden-drifted-11-20260901-140156",
+  "campaign": "st-defect-golden-drifted-11-20260901-141048",
   "grade": "dry",
   "observed_verdict": "INVALID-CONTAMINATED",
   "scenario": "defect-golden-drifted-11",
-  "utc": "2026-09-01T14:01:57Z"
+  "utc": "2026-09-01T14:10:48Z"
  },
  "p0-all-halted": {
-  "campaign": "st-defect-guest-running-20260901-140156",
+  "campaign": "st-defect-guest-running-20260901-141048",
   "grade": "dry",
   "observed_verdict": "INVALID-PRECONDITION",
   "scenario": "defect-guest-running",
-  "utc": "2026-09-01T14:01:57Z"
+  "utc": "2026-09-01T14:10:49Z"
  },
  "p0-cells-named": {
-  "campaign": "st-defect-empty-cells-20260901-140156",
+  "campaign": "st-defect-empty-cells-20260901-141048",
   "grade": "dry",
   "observed_verdict": "INVALID-PRECONDITION",
   "scenario": "defect-empty-cells",
-  "utc": "2026-09-01T14:01:56Z"
+  "utc": "2026-09-01T14:10:48Z"
  },
  "p0-regate-tarball": {
-  "campaign": "st-defect-stale-tarball-20260901-140156",
+  "campaign": "st-defect-stale-tarball-20260901-141048",
   "grade": "dry",
   "observed_verdict": "INVALID-PROVENANCE",
   "scenario": "defect-stale-tarball",
-  "utc": "2026-09-01T14:01:58Z"
+  "utc": "2026-09-01T14:10:49Z"
  },
  "p0-roster-netvm": {
-  "campaign": "st-defect-template-netvm-20260901-140156",
+  "campaign": "st-defect-template-netvm-20260901-141048",
   "grade": "dry",
   "observed_verdict": "INVALID-PRECONDITION",
   "scenario": "defect-template-netvm",
-  "utc": "2026-09-01T14:01:58Z"
+  "utc": "2026-09-01T14:10:49Z"
  },
  "p0-stage-inputs": {
-  "campaign": "st-defect-missing-agent-exe-20260901-140156",
+  "campaign": "st-defect-missing-agent-exe-20260901-141048",
   "grade": "dry",
   "observed_verdict": "INVALID-PRECONDITION",
   "scenario": "defect-missing-agent-exe",
-  "utc": "2026-09-01T14:01:57Z"
+  "utc": "2026-09-01T14:10:49Z"
  },
  "p1-matrix-nonvacuous": {
-  "campaign": "st-defect-zerocell-20260901-140156",
+  "campaign": "st-defect-zerocell-20260901-141048",
   "grade": "dry",
   "observed_verdict": "INVALID-VACUOUS",
   "scenario": "defect-zerocell",
-  "utc": "2026-09-01T14:01:58Z"
+  "utc": "2026-09-01T14:10:49Z"
  },
  "p1-matrix-run": {
-  "campaign": "st-defect-cell-fail-20260901-140156",
+  "campaign": "st-defect-cell-fail-20260901-141048",
   "grade": "dry",
   "observed_verdict": "FAIL",
   "scenario": "defect-cell-fail",
-  "utc": "2026-09-01T14:01:56Z"
+  "utc": "2026-09-01T14:10:48Z"
  },
  "p1-precondition-authority": {
-  "campaign": "st-defect-precondition-mismatch-20260901-140156",
+  "campaign": "st-defect-precondition-mismatch-20260901-141048",
   "grade": "dry",
   "observed_verdict": "INVALID-PRECONDITION",
   "scenario": "defect-precondition-mismatch",
-  "utc": "2026-09-01T14:01:57Z"
+  "utc": "2026-09-01T14:10:49Z"
  }
 }

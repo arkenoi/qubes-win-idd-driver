@@ -31,6 +31,20 @@ if [ "$fail" -eq 1 ]; then
     exit 1
 fi
 
+# THE FALSIFIABILITY GATE at commit time (owner, 2026-09-01: decisive and falsifiable over
+# probable). A protocol step that cannot fail - no declared defect, no scenario where it is seen
+# to fail - does not enter history. run.py validate is read-only and refuses the whole load.
+if git diff --cached --name-only | grep -q '^protocol/'; then
+  out=$(python3 protocol/run.py validate 2>&1)
+  if [ $? -ne 0 ]; then
+    echo "$out"
+    echo "pre-commit REFUSED: protocol data violates its own contract (protocol/run.py validate)."
+    echo "Every check must name its defect and the scenario where it fails. --no-verify does not"
+    echo "fix data that the runner itself will refuse to load."
+    exit 1
+  fi
+fi
+
 out=$(python3 tools/lint-harness.py --quiet 2>&1)
 if [ $? -ne 0 ]; then
   echo "$out"

@@ -1,5 +1,9 @@
 # Operator card — the ONLY instructions an operator needs
 
+This card is the whole job. Do not orient yourself first — no listing directories, no exploring
+`protocol/`, no reading other files. There is no context you need that this card and the runner's
+own output do not give you.
+
 The protocol is code and data, not prose. `protocol/run.py` decides every step, runs every
 command, and owns every verdict. Your job has exactly four verbs. Anything else is a deviation.
 
@@ -19,9 +23,9 @@ command, and owns every verdict. Your job has exactly four verbs. Anything else 
    fits no token, use `OTHER:<one line>` only if OTHER is listed; otherwise pick the listed token
    that says the evidence is unusable.
 
-4. **Report.** When the runner prints `state=DONE`, run the printed `verdicts` command and paste
-   its output as the FIRST block of your report, verbatim. When it prints `state=HALTED`, report
-   the halt block verbatim. Then stop.
+4. **Report.** When the runner prints `state=DONE` or `state=HALTED`, it prints the one valid
+   `verdicts` command. Run it and paste its output as the FIRST block of your report, verbatim;
+   for a halted campaign include the halt block right after it. Then stop.
 
 ## The five prohibitions (each one voids the run)
 

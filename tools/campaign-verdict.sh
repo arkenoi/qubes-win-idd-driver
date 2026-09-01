@@ -93,8 +93,17 @@ unproven = counts.get('PASS-UNPROVEN', 0)
 attended = [r for r in rows if r['verdict'].startswith('ATTENDED-PENDING')]
 
 print()
+# ATTENDED-PENDING must be visible on BOTH branches. Before 2026-09-01 it was printed only in
+# the gaps branch, so an otherwise-clean campaign said COMPLETE and silently omitted every arm
+# that needs the owner present - the exact invisibility the category exists to prevent.
+if attended:
+    print(f"ATTENDED-PENDING: {len(attended)}  (cannot be run unattended - owner required; "
+          f"not a gap the harness can close, but never invisible)")
+    for h in attended:
+        print(f"    {h['cell']} / {h['check']}  -- {h['detail'][:110]}")
+    print()
 if not blockers and unproven == 0:
-    print("VERDICT: COMPLETE")
+    print("VERDICT: COMPLETE" + (" (plus the ATTENDED-PENDING arms above)" if attended else ""))
     print("  zero FAIL, zero INVALID, zero INCONCLUSIVE, and every PASS has a fail-proof on record.")
     sys.exit(0)
 
