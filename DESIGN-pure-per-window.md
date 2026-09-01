@@ -149,11 +149,26 @@ few thousand lines, roughly half the architect's original claim.
 
 ## 6. Decision probes (serial, on the testbed, in this order)
 
-- **P2 — ungranted staging (RUN FIRST; its payoff survives every refutation).** Build with
-  the staging grant skipped + `SendScreenGrants` suppressed in seamless. Pass: qtest shot
-  pixel-identical to shipped seamless baseline across 3 boots; no desktop-sized grant in
-  the grant table; all Writer-B slices still correct. This probe alone, if green, justifies
-  shipping grant removal *independently of the rest of the model*.
+- **P2 — ungranted staging: RUN 2026-09-02, PASS.** Probe = `SeamlessNoScreenGrant` registry
+  flag (agent `p2/noscreengrant`, commit 6533765; artifact `ECA1317A…`): staging allocated
+  but never granted, both window-0 dump sites suppressed, `CREATE(0)` kept. Subject:
+  `win10-p2`, a StandaloneVM clone of win10-tpl (first attempt on win10-app was INVALID —
+  an AppVM's root volume reverts the swapped binary and the HKLM flag on every boot; the
+  rerun hash-gates every boot). Arms: baseline / probe-flag-off / flag-on ×3 cold boots /
+  flag-off again, one binary. Result: flag-on markers `STAGING allocated UNGRANTED` +
+  `P2NOGRANT window-0 dump suppressed` (+ the post-recreate suppression exercised by boot
+  transitions) on all 3 boots, granted markers return in the off arms — instrument seen to
+  fail both directions; **2 of 3 flag-on boots pixel-IDENTICAL (0/3.9M px) to the flag-off
+  control**, third differs by a 1-px status-bar hairline (0.098%) — less than the granted
+  arms' own boot-to-boot variation (0.15–0.24%); no attach failures, no `QGADESKSTUCK`, no
+  fatal markers. Scope honestly: evidence of grant absence is agent-side (grant call never
+  made + refs never sent — nothing for dom0 to map); toast fired `true` every arm but no
+  arm's per-window capture contains the toast surface (instrument limitation, equal across
+  arms), so toast rendering is unproven visually and rests on the path being
+  grant-independent by construction. Perf was NOT measured (P3). Grant removal in seamless
+  is hereby demonstrated viable on this rig; remaining before shipping it: reroute
+  `PwForceLegacy`-class fallbacks to the guest-side sliceFed channel, gate on negotiated
+  protocol ≥ 1.7, and grant-on-demand for a non-seamless switch.
 - **P1 — PrintWindow area scaling** at 800×600 / 1080p / 1440p / 5120×1440 under the IDD,
   100 ticks each, CPU-ms and wall-ms. Bar: ≤~10 ms CPU/tick at maximized size (NOT 30 ms —
   that bar ships below-stock scroll regressions). Expected per current extrapolation: FAIL
