@@ -24865,3 +24865,37 @@ sets `g_ProtoTrace` (perf.c:288), and ProtoTrace multiplies the frame-walk tail 
   RUN 1 (feel)      - default logging, drag by hand, judge the wobble. This is the verdict.
   RUN 2 (mechanism) - only if run 1 is ambiguous: enable gui-agent-debug, drag, grep the log for
                       the latch lines, and do NOT judge feel on that run.
+
+## 2026-09-01 — the drag just tested was measured with ProtoTrace ON. Verdict void, guest re-staged
+
+Owner dragged and I went looking for the evidence. Found something that invalidates the run:
+
+    HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent
+        ProtoTrace       = 1
+        ProtoTraceWobble = 1
+
+Left set in the registry from an earlier debugging session and never cleared. The running agent's
+log confirms it was ACTIVE, not merely configured: **1900 of 2076 lines were QGAPROTO**. This
+project's own rule, `docs/PLAN-drag-quality.md:83`: *"ProtoTrace=1 multiplies the frame-walk tail
+(tot max 580 ms vs 66 ms off). **Never judge latency with it on.**"* So "wobbles as hell" was
+measured on a build carrying a known latency multiplier, and it says nothing about the crossing
+fix either way. **The verdict is void - not negative.**
+
+Cleared both keys, restarted the agent (pid 7692, hash 21E157E1640B9BBB - still the fixed build),
+and confirmed the trace really stopped: **QGAPROTO now 1 line of 140.**
+
+**Why the log showed zero crossing lines, and why that is NOT evidence of absence.** Every line in
+that log is `-I]` (Info). `LogLevel = 3` on the parent key filters Debug and Verbose, and both the
+crossing tell-tales are below Info - `HandleCrossing`'s per-event line is LogVerbose, and the
+latch-release / latch-KEPT lines are LogDebug. At this level they cannot appear no matter how many
+crossings arrive. This is the same class as the recorded trap "a stale gui-agent\LogLevel silently
+discards every LogDebug line - hours of instrumentation went to a file nobody wrote", and it cost
+a round again today.
+
+**Guest is re-staged for a clean run:** fixed agent running, ProtoTrace off, a Notepad window open.
+ - RUN 1 (feel, do this first): drag by hand. Quiet build, no trace, no debug logging. This is the
+   verdict.
+ - RUN 2 (mechanism, only if run 1 is ambiguous): set
+   `HKLM\...\Qubes Tools\gui-agent\LogLevel = 5` (Verbose), restart the agent, drag, then grep for
+   `crossing` / `latch KEPT` / `drag latch was held`. Do NOT judge feel on that run - and put
+   LogLevel back afterwards.
