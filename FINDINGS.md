@@ -24852,3 +24852,16 @@ restart and must be re-applied):
  - `arkenoi/qubes-win-idd-driver` -> new branch `fix/drag-crossing-mode`
 `main` here is still 201 commits ahead of origin, unchanged - that is the pre-existing state, not
 something this session altered.
+
+**STAGING COMPLETE.** Build 33454192029 green; `gui-agent.exe` = `21E157E1640B9BBB` swapped onto
+win10-app with `guest/swap-agent.ps1`, which confirms the RUNNING process hash matches the pushed
+binary (`HASH_RUNNING=21E157E1640B9BBB`, `SWAP_OK`) - the "verify the artefact under test is
+actually installed" rule satisfied rather than assumed. Seamless re-verified afterwards by pixels:
+a Notepad window opened and dom0 captured it cleanly.
+
+**Logging deliberately left at DEFAULT.** `qvm-features win10-app service.gui-agent-debug 1` also
+sets `g_ProtoTrace` (perf.c:288), and ProtoTrace multiplies the frame-walk tail (tot max 580 ms vs
+66 ms off) - judging drag feel with it on would poison the measurement. So:
+  RUN 1 (feel)      - default logging, drag by hand, judge the wobble. This is the verdict.
+  RUN 2 (mechanism) - only if run 1 is ambiguous: enable gui-agent-debug, drag, grep the log for
+                      the latch lines, and do NOT judge feel on that run.
