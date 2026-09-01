@@ -42,12 +42,8 @@ of this file.
 - P3 field "exit status 46" on seamless switch: localized to the qrexec launch path, exact Win32 error unknown — needs the reporter's qrexec-wrapper log. [verified 2026-08-29]
 
 ### test-framework
-- P1 lint backlog is the honest harness debt (40 live: 13 missing vm_lock, 9 unfailable checks, 16 fragile probes, 2 nested-quote) — it also blocks clean findings commits (gate fires repo-wide), so clearing it ends the --no-verify habit for good. [verified 2026-09-01]
-- P2 live-grade fail-proofs owed: SG matrix diag-build arms (SG1/SG3/SG7 naive-cloak), `desktop_on_idd` falsification, SG6 re-verification (its recorded fail-proof sits in the voided window). [verified 2026-09-01]
-- P2 voided-window re-verification debt: U1-closure-on-win11-tpl, template-pvnic-seeded, SG2/SG4 recorded verdicts, ISO-autorun + primer-in-goldens claims — all need live re-runs before citation. UNVERIFIED
-- P2 the compiled protocol runner (protocol/run.py) has run only dry-run/eval campaigns — first live campaign with live-grade proofs still ahead. [verified 2026-09-01]
-- P3 chromerepro shadow strips may arrive geometrically degenerate at the filter (making RND-7 vacuous) — one live run with real rects decides it. UNVERIFIED
-- P3 U3 dom0-driven install drain has never run on a TemplateVM proper (close with UBR + CBS state=112 on win10-tpl). [verified 2026-08-20]
+- P2 first LIVE campaign through protocol/run.py is the single forward item (owner, 2026-09-01: the Fable-rewritten, Sonnet-eval-verified runner IS the framework; the legacy bash-harness lineage, its meltdown-era campaign bookkeeping, and its lint backlog are PURGED). The runner's own gates subsume the old debt: falsifiability at load time, PASS refused without a recorded fail-proof, live-grade proofs required in live mode. Whatever matters gets re-established by that campaign, not by re-running old cells. [verified 2026-09-01]
+- P3 legacy lint findings (40) are BASELINED in tools/lint-baseline.txt — not open work; editing a legacy harness re-exposes its findings (line-anchored), so touched code gets fixed and NEW findings still fail the gate. Never add entries to the baseline. [verified 2026-09-01]
 
 ### network
 - P2 live netvm handling: raw admin.vm.property.Set on a running guest strands the vif without changing the property (qubesd aborts replyless) — dom0-side question, candidate upstream report. [also: upstream] [verified 2026-08-23]
@@ -67,6 +63,7 @@ of this file.
 - P2 WU dialog defects: cannot be moved (jumps back — not root-caused) and its modality is invisible to dom0 (transient_for=0) — three options pending with the owner. [also: rendering, user-facing] [verified 2026-08-30]
 - P3 plain-HTTP qrexec/vchan transport loss (~1/3 of responses) — not our code, not yet established as an upstream defect; needs a repro from a Linux qube or after a proxy restart. [also: upstream] [verified 2026-08-14]
 - P3 Win10 ESU: real 2025-11 CU resolves and is installable; the gate is CBS ESU entitlement — owner MAK/licensing decision. [verified 2026-08-20]
+- P3 U3 dom0-driven install drain has never run on a TemplateVM proper (close with UBR + CBS state=112 on win10-tpl). [verified 2026-08-20]
 
 ### installer
 - P2 the media insertion path (release ISO attached, autorun launches installer) has never been tested live; the primer-task-in-goldens claim also needs re-verification. UNVERIFIED

@@ -1,0 +1,43 @@
+# accepted LEGACY lint findings - superseded bash-harness lineage (owner purge
+# 2026-09-01, protocol/run.py is the framework). Never ADD entries; editing a
+# legacy file re-exposes its findings (line-anchored) so touched code gets fixed.
+L2-missing-vmlock|accept-clean.sh
+L2-missing-vmlock|bench-agent.sh
+L2-missing-vmlock|clean-shot-template.sh
+L2-missing-vmlock|e2e-wait.sh
+L2-missing-vmlock|failproof-classpairs.sh
+L2-missing-vmlock|failproof-config.sh
+L2-missing-vmlock|grade-twostage.sh
+L2-missing-vmlock|matrix.sh
+L2-missing-vmlock|p4-run.sh
+L2-missing-vmlock|prime-run.sh
+L2-missing-vmlock|snap-regress.sh
+L2-missing-vmlock|stability-e2e.sh
+L2-missing-vmlock|wedge-hunt.sh
+L3-nested-quote-powershell|accept-clean.sh:56
+L3-nested-quote-powershell|bench-agent.sh:22
+L4-check-cannot-fail|failproof-classpairs.sh:%s
+L4-check-cannot-fail|failproof-classpairs.sh:appvm-private-reformatted
+L4-check-cannot-fail|failproof-classpairs.sh:standalone-nau-removed
+L4-check-cannot-fail|failproof-config.sh:%s
+L4-check-cannot-fail|failproof-faultinject.sh:%s
+L4-check-cannot-fail|rnd-shell-surfaces.sh:toasts-survive-filter
+L4-check-cannot-fail|sg1-u2-coldboot.sh:coldboot-reboot-confirmed
+L4-check-cannot-fail|sg1-u2-coldboot.sh:no-shell-phase-observed
+L4-check-cannot-fail|u2-coldboot.sh:qdbdaemon-race-fix-exercised
+L6-probe-null-deref|defect-evidence.ps1:14
+L6-probe-null-deref|deploy-gui-agent.ps1:31
+L6-probe-null-deref|deploy-relay-fix.ps1:36
+L6-probe-null-deref|pvnic-latch-readback.ps1:17
+L6-probe-null-deref|pvnic-selfprime.ps1:659
+L6-probe-null-deref|swap-agent.ps1:26
+L6-probe-null-deref|swap-agent.ps1:28
+L6-probe-null-deref|swap-agent.ps1:46
+L6-probe-null-deref|swap-agent.ps1:54
+L6-probe-null-deref|verify-running-agent.ps1:16
+L6-probe-null-deref|verify-running-agent.ps1:8
+L6-probe-null-deref|verify-running-agent.ps1:9
+L6-probe-null-deref|wu-appvm-acceptance.ps1:19
+L6-probe-null-deref|wu-standalone-online-test.ps1:22
+L6-probe-null-deref|wu-verify-stack.ps1:23
+L6-probe-null-deref|wu-verify-stack.ps1:38

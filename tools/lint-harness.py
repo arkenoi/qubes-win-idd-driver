@@ -268,6 +268,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--baseline", type=Path, default=None,
+                    help="fingerprint file of accepted LEGACY findings (superseded bash-harness "
+                         "lineage, owner purge 2026-09-01); only findings NOT in it fail")
+    ap.add_argument("--write-baseline", type=Path, default=None,
+                    help="write current finding fingerprints and exit 0")
     ap.add_argument("--root", type=Path, default=None, help="tree to lint (default: the repo)")
     a = ap.parse_args()
     if a.root:
@@ -286,8 +291,27 @@ def main() -> int:
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 
+    def fp(f: tuple[str, str, str]) -> str:
+        return f"{f[0]}|{f[1]}"
+
+    if a.write_baseline:
+        a.write_baseline.write_text(
+            "# accepted LEGACY lint findings - superseded bash-harness lineage (owner purge\n"
+            "# 2026-09-01, protocol/run.py is the framework). Never ADD entries; editing a\n"
+            "# legacy file re-exposes its findings (line-anchored) so touched code gets fixed.\n"
+            + "".join(sorted(fp(f) + "\n" for f in findings)))
+        print(f"baseline written: {len(findings)} fingerprints")
+        return 0
+
+    legacy: set[str] = set()
+    if a.baseline and a.baseline.exists():
+        legacy = {ln.strip() for ln in a.baseline.read_text().splitlines()
+                  if ln.strip() and not ln.startswith("#")}
+    live = [f for f in findings if fp(f) not in legacy]
+    baselined = len(findings) - len(live)
+
     by_lint: dict[str, list[tuple[str, str]]] = {}
-    for lint, where, msg in findings:
+    for lint, where, msg in live:
         by_lint.setdefault(lint, []).append((where, msg))
 
     for lint in sorted(by_lint):
@@ -300,8 +324,11 @@ def main() -> int:
         for rule, why in NOT_LINTED:
             print(f"  {rule}: {why}")
 
-    print(f"\n{'FINDINGS: ' + str(len(findings)) if findings else 'CLEAN'}")
-    return 1 if findings else 0
+    tail = f"FINDINGS: {len(live)}" if live else "CLEAN"
+    if baselined:
+        tail += f" ({baselined} legacy baselined)"
+    print(f"\n{tail}")
+    return 1 if live else 0
 
 
 if __name__ == "__main__":

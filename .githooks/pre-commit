@@ -26,33 +26,21 @@ if [ "$fail" -eq 1 ]; then
   exit 1
 fi
 
-# ---- FINDINGS RULE 4, which needs the DIFF and so cannot live in lint-harness.py: a commit that
-# appends a dated section to findings/<topic>.md must also touch that file's CURRENT STATE block.
-# The whole point of the 2026-09-01 split is that corrections were buried chronologically - 654 of
-# them in one 25k-line log - so a topic read top-down returned the stale answer. Appending history
-# without updating the head recreates exactly that, one commit at a time.
+# ---- FINDINGS ARE HEADS ONLY (owner, 2026-09-01). The dated-log format caused stale-first
+# reads and contaminated whole sessions; the histories were amputated. Any dated section
+# header in a findings file starts regrowing the log one commit at a time, so it is refused
+# outright - new information goes into the CURRENT STATE bullets, edited in place.
 fail=0
 while IFS= read -r f; do
     case "$f" in findings/*.md) ;; *) continue ;; esac
-    added=$(git diff --cached -U0 -- "$f" | grep -cE '^\+#{1,2} [0-9]{4}-[0-9]{2}-[0-9]{2}')
-    [ "${added:-0}" -eq 0 ] && continue
-    # Compare the CURRENT STATE block itself, HEAD vs staged. Diff context cannot be used here:
-    # the head sits at the top of a 2000-line file and the appended section at the bottom, so
-    # even -U1000 puts them in separate hunks and the block never appears in the diff. That bug
-    # made the control case fail on 2026-09-01 - the check refused a commit that DID update the
-    # head, which would have trained everyone to pass --no-verify.
-    blk() { awk '/^## CURRENT STATE/{f=1;next} /^## History/{f=0} f'; }
-    old=$(git show "HEAD:$f" 2>/dev/null | blk)
-    new=$(git show ":$f"     2>/dev/null | blk)
-    if [ "$old" = "$new" ]; then
-        echo "BLOCKED: $f gains a dated section but its CURRENT STATE block is unchanged."
-        echo "         Put the conclusion in CURRENT STATE - history nobody re-reads is how"
-        echo "         'parked' outlived 'fixed' for two weeks."
+    if git show ":$f" | grep -qE '^#{1,2} 20[0-9]{2}-[0-9]{2}-[0-9]{2}'; then
+        echo "BLOCKED: $f contains a dated section header. findings/*.md are CURRENT STATE"
+        echo "         heads ONLY - edit bullets in place, never append dated log sections."
         fail=1
     fi
 done < <(git diff --cached --name-only --diff-filter=AM)
 if [ "$fail" -eq 1 ]; then
-    echo "pre-commit REFUSED (findings rule 4). --no-verify overrides; say why in the message."
+    echo "pre-commit REFUSED (findings heads-only rule)."
     exit 1
 fi
 
@@ -74,7 +62,7 @@ fi
 # commit; with a standing backlog that made --no-verify routine, and --no-verify disables every
 # gate in this file including the capture gate above. Scoping removes the reason to bypass.
 if git diff --cached --name-only | grep -qE '^(findings/|mgmt/|tools/|guest/|protocol/)'; then
-  out=$(python3 tools/lint-harness.py --quiet 2>&1)
+  out=$(python3 tools/lint-harness.py --quiet --baseline tools/lint-baseline.txt 2>&1)
   if [ $? -ne 0 ]; then
     echo "$out"
     echo
