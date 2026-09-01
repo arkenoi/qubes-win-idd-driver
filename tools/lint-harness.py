@@ -212,7 +212,52 @@ def l7_orphan_ledger_checks(ledger: Path) -> None:
                 "no harness emits this verdict: it is an observation, not a deployed check")
 
 
+def l8_findings_current_state() -> None:
+    """The record must answer a topic from its HEAD, not from its chronology.
+
+    FINDINGS.md was one 24,994-line append-only log: 566 dated sections carrying 654 lines that
+    retract or supersede something earlier. Reading a topic top-down therefore returned the STALE
+    answer, which is not a filing complaint - it produced wrong work twice on 2026-09-01 (the drag
+    wobble was read as "parked" when a later section says FIXED; the README said "QWT ships no
+    xencons" months after we shipped it). Split into findings/<topic>.md, each with a CURRENT
+    STATE head that supersedes its History. These checks keep that shape:
+
+      a. every topic file has a CURRENT STATE block;
+      b. every bullet in it is dated `[verified <date>]` or explicitly `UNVERIFIED`, so an
+         undistilled claim cannot masquerade as a settled one;
+      c. FINDINGS.md stays an index - if prose reappears there, the log is regrowing.
+    """
+    fdir = ROOT / "findings"
+    if not fdir.is_dir():
+        return
+    for p in sorted(fdir.glob("*.md")):
+        txt = p.read_text(errors="replace")
+        if "## CURRENT STATE" not in txt:
+            finding("L8-findings-no-current-state", p.name,
+                    "no '## CURRENT STATE' block: the topic can only be answered by reading its "
+                    "whole history, which is the failure this split exists to remove")
+            continue
+        head = txt.split("## CURRENT STATE", 1)[1].split("## History", 1)[0]
+        for line in head.splitlines():
+            s = line.strip()
+            if not s.startswith(("- ", "* ")):
+                continue
+            if "UNVERIFIED" in s or re.search(r"\[verified \d{4}-\d{2}-\d{2}\]", s):
+                continue
+            finding("L8-findings-undated-claim", f"{p.name}: {s[:70]}",
+                    "CURRENT STATE bullet carries neither [verified <date>] nor UNVERIFIED")
+
+    idx = ROOT / "FINDINGS.md"
+    if idx.exists():
+        body = idx.read_text(errors="replace")
+        if re.search(r"^#{1,2} \d{4}-\d{2}-\d{2}", body, re.M):
+            finding("L8-findings-index-regrowing", "FINDINGS.md",
+                    "a dated section was appended to the INDEX: it belongs in findings/<topic>.md")
+
+
 NOT_LINTED = [
+    ("findings rule 4", "a commit appending history must also touch CURRENT STATE - needs the "
+                        "git diff, so it lives in the pre-commit hook, not here"),
     ("rule 21", "triage by how loud the failure is - a judgement about severity"),
     ("rule 24", "the stimulus must reach the code under test - needs a run, not a grep"),
     ("rule 25", "never upgrade a check on a sibling row's proof - judgement about subject class"),
@@ -237,6 +282,7 @@ def main() -> int:
     l4_every_check_can_fail()
     l5_injector_string_collision()
     l6_probe_null_deref()
+    l8_findings_current_state()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

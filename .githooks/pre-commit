@@ -1,5 +1,33 @@
 #!/bin/bash
 # Mechanical gate. Prose rules slip; this does not.
+
+# FINDINGS RULE 4, which needs the DIFF and so cannot live in lint-harness.py: a commit that
+# appends a dated section to findings/<topic>.md must also touch that file's CURRENT STATE block.
+# The whole point of the 2026-09-01 split is that corrections were buried chronologically - 654 of
+# them in one 25k-line log - so a topic read top-down returned the stale answer. Appending history
+# without updating the head recreates exactly that, one commit at a time.
+fail=0
+while IFS= read -r f; do
+    case "$f" in findings/*.md) ;; *) continue ;; esac
+    added=$(git diff --cached -U0 -- "$f" | grep -cE '^\+#{1,2} [0-9]{4}-[0-9]{2}-[0-9]{2}')
+    [ "${added:-0}" -eq 0 ] && continue
+    # Did the same diff touch anything between "## CURRENT STATE" and "## History"?
+    if ! git diff --cached -U1000 -- "$f" | awk '
+        /^[ +-]## CURRENT STATE/ {inblk=1}
+        /^[ +-]## History/       {inblk=0}
+        inblk && /^[+-]/ && !/^[+-][+-]/ {found=1}
+        END {exit !found}'; then
+        echo "BLOCKED: $f gains a dated section but its CURRENT STATE block is unchanged."
+        echo "         Put the conclusion in CURRENT STATE - history nobody re-reads is how"
+        echo "         'parked' outlived 'fixed' for two weeks."
+        fail=1
+    fi
+done < <(git diff --cached --name-only --diff-filter=AM)
+if [ "$fail" -eq 1 ]; then
+    echo "pre-commit REFUSED (findings rule 4). --no-verify overrides; say why in the message."
+    exit 1
+fi
+
 out=$(python3 tools/lint-harness.py --quiet 2>&1)
 if [ $? -ne 0 ]; then
   echo "$out"
