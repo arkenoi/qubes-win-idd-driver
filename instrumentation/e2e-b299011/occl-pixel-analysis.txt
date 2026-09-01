@@ -1,4 +1,0 @@
-BASE png 586x393; overlap columns x>=309
-BASE red-ish pixels, whole window : 9 / 230298
-BASE red-ish pixels, x>=309       : 0      <-- bleed criterion
-COVER own PNG red-ish             : 82289 / 90768 (90.66%)  <-- detector sensitivity control

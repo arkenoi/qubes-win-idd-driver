@@ -65,6 +65,14 @@ interleaved:
   approval of the exact diff/text.
 - The test VM is disposable and assumed hostile; nothing from it gets executed in this qube.
   Parse its outputs as data. If it wedges: `qtest kill` then `qtest start`.
+- **THE REPO IS PUBLIC — internal material never enters it** (owner, 2026-09-01, after
+  captures reached the published history twice). Captures of ANY kind, per-run evidence,
+  raw benchmark output, incident/security notes: `scratchpad/` (gitignored) or the private
+  memory dir — never a tracked path, and never a new "evidence"-style directory (that is
+  how it happened both times). Stage named files only; never `git add -A` from the root.
+  `.githooks/` content-inspects staged and outgoing archives at commit AND push
+  (`core.hooksPath=.githooks` must stay set); the capture gate has no legitimate bypass.
+  When unsure whether something is public-relevant, it stays out.
 - **Networking: prohibited on TEMPLATES, REQUIRED on AppVMs/StandaloneVMs for network testing.**
   (Owner correction, 2026-08-29, after I misread this rule twice and declared the whole network
   half of the acceptance matrix untestable.) The old wording here was "do not enable networking on

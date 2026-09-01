@@ -1,3 +1,0 @@
-grant entries (this domain, active):
-0
---- summary ---

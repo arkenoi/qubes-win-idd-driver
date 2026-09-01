@@ -1,4 +1,0 @@
-ark      1768823  0.0  0.1  78776  7812 ?        Ss   22:29   0:00 /usr/bin/qubes-guid -f -N win-idd-test -c 0xcc0000 -i /usr/share/icons/hicolor/128x128/devices/appvm-red.png -l 1 -q -Q -C /var/run/qubes/guid-conf.564 -d 564 -n
-win-idd-mg --b---      93889    0.0    4177976    4.2    4195328       4.2     2    0        0        0    4        0  3089115  1904005  690332351  446949976    0
-win-idd-te -----r       2155    0.0    8388372    8.4    8389632       8.4     4    0        0        0    3        0        0        0          0          0    0
-win-idd-te --b---        100    0.0     147456    0.1     148480       0.1     1    0        0        0    3        0    34684    10145    4541912     289128    0

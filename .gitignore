@@ -13,8 +13,9 @@ rel-out/
 release-assets/
 dl/
 
-# Per-run evidence and measurements
+# Per-run evidence and measurements - internal, of no interest to the public audience
 evidence/
+instrumentation/
 # The whole scratchpad is LOCAL-ONLY (owner decision 2026-08-10): working scripts,
 # drafts and run outputs stay on this machine and are never pushed.
 scratchpad/

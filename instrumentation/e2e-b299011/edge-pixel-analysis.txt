@@ -1,5 +1,0 @@
-edge-main-window size (3440, 1384) mean_rgb (87.8, 86.5, 83.2) std 82.24
-   black_frac(<8)=0.047583 white_frac(>247)=0.127639 uniq=112106
-dom0-fullscreen size (5120, 1440) mean_rgb (133.4, 130.7, 126.0) std 100.07
-   black_frac(<8)=0.045668 white_frac(>247)=0.094418 uniq=106537
-ULW-overlay crop mean (83.5, 82.3, 80.4) std 81.34 black%=0.088047 white%=0.089481 uniq 25668

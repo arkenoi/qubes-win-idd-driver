@@ -1,7 +1,0 @@
-Icon size: 128x128
-Window 0x1c00192 is still set as transient_for for a 0x1c00194 window, but VM tried to destroy it
-libvchan_is_eof
-Icon size: 128x128
-libvchan_is_eof
-Icon size: 128x128
-msg 0x86 without CREATE for 0x20340

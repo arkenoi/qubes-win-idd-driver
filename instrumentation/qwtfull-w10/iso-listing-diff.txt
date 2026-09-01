@@ -1,9 +1,0 @@
-599a600,601
-> 3325952 3325952 payload/installer.msi
-> 3325952 3325952 sources/$OEM$/$1/payload/installer.msi
-601,602d602
-< 3350528 3350528 payload/installer.msi
-< 3350528 3350528 sources/$OEM$/$1/payload/installer.msi
-840,841d839
-< 80 80 payload/installer.msi.sha256
-< 80 80 sources/$OEM$/$1/payload/installer.msi.sha256

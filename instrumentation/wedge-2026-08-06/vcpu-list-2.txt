@@ -1,5 +1,0 @@
-Name                                ID  VCPU   CPU State   Time(s) Affinity (Hard / Soft)
-win-idd-test                       694     0   21   ---      57.0  all / all
-win-idd-test                       694     1   21   ---      53.5  all / all
-win-idd-test                       694     2   16   -b-      53.3  all / all
-win-idd-test                       694     3   11   r--      45.3  all / all

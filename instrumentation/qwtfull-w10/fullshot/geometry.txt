@@ -1,3 +1,0 @@
-# id x y w h override_redirect name
-0x1c00188 0 0 3440 1440 0 win-idd-test (Windows Desktop)
-0x1c0018b 0 56 3440 1400 0 Untitled - Notepad

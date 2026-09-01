@@ -1,9 +1,0 @@
-Microsoft Windows [Version 10.0.19045.2965]
-(c) Microsoft Corporation. All rights reserved.
-
-C:\Windows\system32>powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& "$env:USERPROFILE\Documents\QubesIncoming\win-idd-mgmt\occl-pixel.ps1""
-RESULT=BASEHWND 524386 COVERHWND 197328
-RESULT=WINDOWS-UP
-RESULT=WINDOWS-DOWN
-
-C:\Windows\system32>

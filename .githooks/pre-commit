@@ -1,7 +1,32 @@
 #!/bin/bash
-# Mechanical gate. Prose rules slip; this does not.
+# Mechanical gates. Prose rules slip; these do not.
 
-# FINDINGS RULE 4, which needs the DIFF and so cannot live in lint-harness.py: a commit that
+# ---- GATE 0 (capture gate): no dom0 desktop capture ever enters a commit. -------------------
+# Runs FIRST and UNCONDITIONALLY. Content check, not a name check: a name rule cannot see
+# inside an archive, which is exactly how every past capture reached the tree.
+. "$(git rev-parse --show-toplevel)/.githooks/capture-scan.sh"
+fail=0
+tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+while IFS= read -r f; do
+  case "$f" in
+    *screen.png|*fullshot*)
+      echo "BLOCKED: '$f' is capture-class by name."; fail=1; continue ;;
+  esac
+  case "$f" in
+    *.tar|*.tgz|*.tar.gz|*.tar.xz|*.tar.zst|*.zip)
+      git show ":$f" > "$tmp" 2>/dev/null || continue
+      if archive_members "$f" "$tmp" | grep -qiE "$CAPTURE_RE"; then
+        echo "BLOCKED: '$f' contains a desktop capture (screen.png / fullshot member)."; fail=1
+      fi ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=AM)
+if [ "$fail" -eq 1 ]; then
+  echo "pre-commit REFUSED (capture gate). No bypass is legitimate for this gate; the"
+  echo "pre-push hook screens for the same content, so a bypassed commit will not push."
+  exit 1
+fi
+
+# ---- FINDINGS RULE 4, which needs the DIFF and so cannot live in lint-harness.py: a commit that
 # appends a dated section to findings/<topic>.md must also touch that file's CURRENT STATE block.
 # The whole point of the 2026-09-01 split is that corrections were buried chronologically - 654 of
 # them in one 25k-line log - so a topic read top-down returned the stale answer. Appending history
@@ -31,7 +56,7 @@ if [ "$fail" -eq 1 ]; then
     exit 1
 fi
 
-# THE FALSIFIABILITY GATE at commit time (owner, 2026-09-01: decisive and falsifiable over
+# ---- THE FALSIFIABILITY GATE at commit time (owner, 2026-09-01: decisive and falsifiable over
 # probable). A protocol step that cannot fail - no declared defect, no scenario where it is seen
 # to fail - does not enter history. run.py validate is read-only and refuses the whole load.
 if git diff --cached --name-only | grep -q '^protocol/'; then
@@ -45,12 +70,17 @@ if git diff --cached --name-only | grep -q '^protocol/'; then
   fi
 fi
 
-out=$(python3 tools/lint-harness.py --quiet 2>&1)
-if [ $? -ne 0 ]; then
-  echo "$out"
-  echo
-  echo "pre-commit REFUSED: tools/lint-harness.py has findings (see above)."
-  echo "Fix them, or run with --no-verify and say why in the commit message."
-  exit 1
+# ---- LINT GATE, SCOPED to the paths lint-harness.py actually lints. It used to run on EVERY
+# commit; with a standing backlog that made --no-verify routine, and --no-verify disables every
+# gate in this file including the capture gate above. Scoping removes the reason to bypass.
+if git diff --cached --name-only | grep -qE '^(findings/|mgmt/|tools/|guest/|protocol/)'; then
+  out=$(python3 tools/lint-harness.py --quiet 2>&1)
+  if [ $? -ne 0 ]; then
+    echo "$out"
+    echo
+    echo "pre-commit REFUSED: tools/lint-harness.py has findings (see above)."
+    echo "Fix them, or run with --no-verify and say why in the commit message."
+    exit 1
+  fi
 fi
 exit 0
