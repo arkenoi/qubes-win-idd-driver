@@ -328,7 +328,10 @@ def runnable(c: Campaign, step: dict) -> tuple[bool, str]:
     g = guest_of(step, c.st["vars"])
     if g and c.st["guests"].get(g, {}).get("status") == "OUT_OF_SERVICE" and not step.get("restores"):
         return False, (f"guest {g} is OUT_OF_SERVICE since {c.st['guests'][g]['since']} "
-                       f"({c.st['guests'][g]['why']}) - G-0b: rebuild before any further step")
+                       f"({c.st['guests'][g]['why']}) - G-0b: restore to the entry stage first. "
+                       f"After the evidence is captured: mgmt/harness/checkpoint.sh undo-session "
+                       f"(the failed session's entry state, 2s) or unpark a park; reclone "
+                       f"otherwise. R3 reprovision ONLY for install-at-first-logon cells")
     for v in step.get("vars_in", []):
         if v not in c.st["vars"]:
             return False, f"var {v} unbound"

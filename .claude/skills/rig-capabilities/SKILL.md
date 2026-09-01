@@ -41,7 +41,7 @@ before tags exist (hence `mgmt/clone-to-template.sh`'s create → tag → copy o
 | `qvm-prefs` read/write | **PASS** | incl. `netvm`, `qrexec_timeout`, `memory`, `vcpus` |
 | `qvm-tags` add/list | **PASS** | |
 | `qvm-firewall` add/del | **PASS** | Per-qube rules only; inter-VM traffic is dropped in the netvm regardless |
-| `qvm-volume info` / `revisions` | **PASS** | `revisions` has returned empty here — do not rely on snapshots |
+| `qvm-volume info` / `revisions` | **PASS** | Revisions exist and `qvm-volume revert` WORKS from here (proven 2026-09-01, marker round-trip: 2 s revert, later write gone, earlier one kept). The old "returned empty — do not rely on snapshots" note is RETRACTED. Cut on clean shutdown, hold the session's ENTRY state, `revisions_to_keep=2` and `qvm-volume config` is policy-refused. Use `mgmt/harness/checkpoint.sh` (park/unpark = exact+durable 2-4 s; undo-session = post-hoc, depth 2) — never reprovision for a restore |
 | Volume clone between qubes | **PASS** | via `mgmt/clone-to-template.sh` (create → tag → copy). A bare `qvm-clone` fails on tag ordering |
 | `qvm-pool info` | **PASS** | `vm-pool` ~81% used, ~155 GB free |
 | Start/Shutdown/Kill guests | **PASS** | ACPI `qvm-shutdown` recovers a headless-but-running guest; a hard kill mid-driver-transition can leave it unbootable |

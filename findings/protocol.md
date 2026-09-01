@@ -34,6 +34,13 @@ AUTHORITATIVE. Supersedes everything under History below.
 - Dry-run fail-proofs prove the CHECK LOGIC fails on its defect; they do not prove the live
   instrument fails on a real guest defect. Live-grade proofs (diag build, 0.13b) remain the bar
   for live campaigns. [verified 2026-09-01]
+- RESTORES ARE SECONDS, NOT REPROVISIONS (owner directive): `mgmt/harness/checkpoint.sh` —
+  park/unpark (thin volume clone, 2.8-3.8 s, exact + durable) and undo-session (2 s revert to
+  the last completed session's ENTRY state; depth 2, dom0-fixed). Proven by marker round-trip
+  with a validated probe and a no-revert control; all refusal branches seen firing (golden,
+  running, missing park, park-exists). R3 reprovision only for install-at-first-logon cells.
+  The runner's OUT_OF_SERVICE message and the matrix FAIL step prescribe this path.
+  [verified 2026-09-01]
 
 ## History
 
@@ -58,3 +65,17 @@ Eval: 48 blind Sonnet operator runs over 4 rounds. Two artifact defects found by
 fixed (verdicts exit code; pre-card orientation window). Two consecutive clean rounds on
 unchanged artifacts closed the acceptance. Full extraction of the 1877-line doc (5 agents,
 476 records) feeds the part compilation.
+
+## 2026-09-01 — checkpoint/revert proven; reprovision demoted to one cell class
+
+Owner: "avoid unnecessary long reprovisioning, save snapshots as checkpoints and revert."
+Experiment on ckpt-probe (throwaway, cloned 1.6-1.9 s from win10-tpl): validated marker probe
+(seen ABSENT before write = its fail-proof), no-revert persistence control, then single-variable
+revert — `qvm-volume revert` root+private in 2 s: post-checkpoint marker GONE, pre-checkpoint
+marker KEPT. Traps measured: `-back` revisions hold the session's ENTRY state (a naive
+"checkpoint now" verb recorded one-session-ago and was redesigned away); `revisions_to_keep=2`,
+`qvm-volume config` policy-refused; a first probe against a win10-base clone waited 360 s for
+qrexec that ST0 cannot have (screen showed a healthy pristine desktop — premise error, not a
+boot failure). Shipped `mgmt/harness/checkpoint.sh` (park/unpark/undo-session/list), every
+branch proven including refusals. rig-capabilities snapshot note retracted; memory
+`checkpoints-over-reprovision` written.

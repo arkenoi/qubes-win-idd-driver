@@ -127,7 +127,7 @@
       "expect": {"exit": 0, "stdout_re": "^=== MATRIX: [0-9]+ passed, [0-9]+ failed ===$", "stdout_absent_re": "^FATAL no setup tarball"},
       "vars_out": {"MATRIX_PASSED": "^=== MATRIX: ([0-9]+) passed", "MATRIX_FAILED": "^=== MATRIX: [0-9]+ passed, ([0-9]+) failed"},
       "check": "p1-matrix-run",
-      "on_fail": {"action": "HALT_PART", "verdict": "FAIL", "msg": "A cell failed or the matrix aborted. The failing guest's state is EVIDENCE (G-0): do not touch it, do not re-run, do not reboot, do not 'just try one thing'. Read $MATRIX_OUT/matrix.log and the per-cell logs; write the verdict first. Diagnosis happens on a CLONE, never on the failed subject."},
+      "on_fail": {"action": "HALT_PART", "verdict": "FAIL", "msg": "A cell failed or the matrix aborted. The failing guest's state is EVIDENCE (G-0): do not touch it, do not re-run, do not reboot, do not 'just try one thing'. Read $MATRIX_OUT/matrix.log and the per-cell logs; write the verdict first. Diagnosis happens on a CLONE (or a PARK taken beforehand), never on the failed subject. Restore afterwards with mgmt/harness/checkpoint.sh (undo-session = the failed cell's entry state, seconds) - NEVER a reprovision unless the cell under test is install-at-first-logon itself."},
       "defect": "a cell FAILs or the matrix aborts before its footer; on 2026-08-30 a failing campaign was still reported complete because the summary was prose",
       "falsified_by": "defect-cell-fail"
     },
