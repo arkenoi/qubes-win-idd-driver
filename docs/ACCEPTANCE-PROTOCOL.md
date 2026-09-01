@@ -1,5 +1,14 @@
 # QWT Acceptance Protocol
 
+> **THE EXECUTABLE FORM OF THIS DOCUMENT IS `protocol/` (2026-09-01).** `protocol/run.py` owns
+> scheduling, verdicts, and guest custody; the steps are data under `protocol/steps/`; the
+> operator's entire job is `protocol/OPERATOR.md` (four verbs). Every check declares the defect
+> it catches and a scenario where it is seen to fail, or it refuses to load; `protocol/selftest.sh`
+> proves it. Proven Sonnet-operable: 36 consecutive blind operator runs with zero deviations.
+> This document remains the REFERENCE the data was compiled from; when they disagree, fix the
+> data or this text - do not improvise around either. Genuinely unmechanisable items:
+> `protocol/not-mechanisable.json`. Rule-to-enforcement map: `protocol/rule-coverage.json`.
+
 **Scope.** Full acceptance for the QWT-NG deliverable (installer, gui-agent, IDD driver, PV-NIC latch, updates agent, safeguards), runnable **as a whole or in parts**, starting from pristine Win10/Win11 vendor images. Every phase and cell below has a stable ID, a named entry stage, a named exit stage, and prerequisites by ID — start anywhere the prerequisites are met. Inherited and binding: CLAUDE.md's autonomy/instrument rules, the PV-network testing protocol (CLAUDE.md, 2026-08-29 — encoded here in P2, not reinvented), the memory rules (never `service.gui-fullscreen`, never resize-to-viewport, canonical benchmarks, roster names only).
 
 **ID scheme.** Stages `ST*` (§2.1), restores `R0–R4` (§2.3), phases `P0–P5`, cells `G0`/`C1–C12` (install), `NET-0–8` (network), `U0–U6` (updates), `RND-0–9`+`BENCH-0–2` (rendering/perf), `SG0–SG11` (safeguards), harness rules `H0–H5` (§3). Per-OS stage suffix: `.10` / `.11` (e.g. `ST1.10`).

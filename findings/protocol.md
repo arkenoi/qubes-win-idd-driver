@@ -29,8 +29,13 @@ AUTHORITATIVE. Supersedes everything under History below.
 - Mechanizability accounting from the full-doc extraction (476 records): 165 already SCRIPTED,
   247 SCRIPTABLE, 40 CLOSED_JUDGEMENT, 24 NOT_MECHANISABLE (quarantined visibly in
   `protocol/not-mechanisable.json`, never assumed covered). [verified 2026-09-01]
-- Parts P0/golden, P2-P5 compiled to step data by fan-out from the extraction records.
-  UNVERIFIED until the integrated selftest and an operator eval round cover them.
+- Parts golden + P2-P5 compiled to step data (138 steps, 79 falsifiable checks, 8 judgement
+  points, 35 declare rows; 34 defect scenarios arming the real incidents). Integrated selftest
+  ALL GREEN (every check seen to fail; 37 fail-proofs harvested), and eval round 5 - 12 blind
+  Sonnet operators over the part scenarios - was NO-DEVIATIONS on the first attempt, including
+  the screen-PNG judgement (operator overrode the advisory VERDICT=DESKTOP log against the
+  Setup-error image) and the second-boot timestamp witness. Cumulative: 60 blind operator runs
+  over 5 rounds; rounds 3-5 (36 runs) fully clean. [verified 2026-09-01]
 - Dry-run fail-proofs prove the CHECK LOGIC fails on its defect; they do not prove the live
   instrument fails on a real guest defect. Live-grade proofs (diag build, 0.13b) remain the bar
   for live campaigns. [verified 2026-09-01]
