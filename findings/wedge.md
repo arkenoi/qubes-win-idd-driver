@@ -7,6 +7,7 @@ not only as a new dated section — the whole reason this file exists is that 65
 correction lines were buried chronologically in a 25k-line log, so reading a topic
 top-down returned the stale answer.
 
+- Sections dated 2026-08-30/31 were ERASED on 2026-09-01 (owner call: those sessions were contaminated and their output is void). Do not cite them and do not reconstruct them from git history. Claims RETRACTED in that window STAY retracted; claims MADE in that window are void — re-verify live before relying on anything that traces there. [verified 2026-09-01]
 - Not yet distilled from the history below. UNVERIFIED
 
 ## History
@@ -1889,97 +1890,6 @@ Pin it.
 **Artifact retention checked:** every .13-era artifact is still `expired=false`, so the A/B can
 install the ORIGINAL .13 ISO. No rebuild, therefore no exposure to the unpinned-master drift above.
 
-## 2026-08-30 — what changed in ensure-autologon, and a correction to why 4.3.17 was cut
-
-**The change.** `guest/ensure-autologon.ps1` asked only whether the LSA secret `DefaultPassword`
-EXISTS. It now retrieves the secret and calls `LogonUser` with LOGON32_LOGON_INTERACTIVE - the type
-Winlogon uses - against DefaultUserName/DefaultDomainName, and reports present-but-REJECTED as its
-own loud failure. `$lsaValid` defaults to FALSE so a thrown query cannot pass permissively.
-
-**Why it was written, and why that reason is RETRACTED.** I thought stage 2 was certifying a bad
-credential: stage 1 logged `not-armed:bad-credentials`, stage 2 logged `autologon verified`, and the
-guest sat at a sign-in screen mapping zero windows. All three observations are real; the inference
-was wrong. The stored secret VALIDATES (the new check passes on that very guest), the three failed
-logons were qrexec-wrapper.exe rather than autologon, and the stages are consistent - stage 1
-rejected a password not yet in place, stage 2 armed a working one five minutes later.
-
-**No bad credential has ever been seen passing the presence check.** So this is a strengthening on
-principle and is UNPROVEN by this project's own standard until observed failing on a deliberately
-broken credential. Its cost is real: an interactive LogonUser creates a logon session per run, so it
-emits Security audit events and would feed lockout counters against a wrong password.
-
-**Correction to the 4.3.17 commit message.** It claims 4.3.17 is "a real release rather than a
-version bump for testing convenience", citing this change. That overstates it. The honest reason for
-4.3.17 is the testing one: 4.3.16 is what the goldens carry, so the candidate MUST differ or every
-cell takes the same-version-reinstall branch instead of the upgrade branch. The autologon change
-rides along; it does not justify the release on its own.
-
-## 2026-08-30 — LIVE WEDGE reproduced on a clean subject during BENCH-1 run 3
-
-**A wedge is live on `win10-p45` right now and the guest has been PRESERVED, not killed (G-0).**
-The dom0-side forensics this failure class needs are an owner action — this qube cannot read
-`/var/log/xen/qemu-dm-<vm>.log` or `xl dmesg` (tested 2026-08-29, not assumed).
-
-**Signature, captured from outside the guest:**
-
-    domain state        Running
-    cpu_usage_raw_max   366 / 363 / 351 / 357 / 375   (sustained, ~3.5 of 4 vCPUs)
-    qrexec VMShell      NO ANSWER (rc=124)
-    window capture      EMPTY TAR - no windows mapped
-    gui-agent           gone (bench-agent.sh: "FATAL: gui-agent not running")
-
-This is the recorded wedge: *"every in-guest channel dies at once: qrexec stops answering, no windows
-are mapped so captures come back empty."* The CPU sample is the discriminator the protocol asks for —
-it separates *spinning but alive* from *stopped issuing I/O*, and this one is **spinning**, which is
-consistent with the IPI/TLB-shootdown deadlock proven from two NMI dumps (a single-target TLB
-shootdown a Xen HVM vCPU never ACKs).
-
-**Trigger context, recorded as context and NOT as a cause** (the record already retracted qrexec
-churn as *the* trigger, calling it only a provocation): it appeared during the **third consecutive
-`bench-agent.sh` pass** — a workload of scripted drag, scroll and typing via SendInput, with heavy
-qrexec traffic, on a freshly installed guest. Runs 1 and 2 completed normally (scroll p50 417 / 366).
-
-**Why this instance is unusually valuable:**
-- The subject is **clean** — built minutes earlier from the sealed `win10-base` by the primer,
-  provenance verified by `golden.sh fixture`, no diagnosis or mutation performed on it.
-- It is **live**, so dom0-side capture (`qemu-dm` log, `xl dmesg`, NMI dump) is possible now rather
-  than reconstructed.
-- The reproduction path is short and scripted: install from the golden, then three back-to-back
-  `bench-agent.sh` runs.
-
-**Consequence for P4:** BENCH-2 completed (idle CPU 0.08 / 0.00 / 0.02 s per 120 s, at or better than
-the ~0.08 baseline). BENCH-1 has two clean runs — **scroll p50 417 and 366 µs, both INSIDE the
-canonical 374-436 band** — and the third wedged. Two runs is below the >=3 the protocol requires, so
-BENCH-1 does not carry a verdict yet.
-
-**And a note that vindicates the contamination rule.** The contaminated run reported scroll
-307/334/345 — *below* the canonical band. The clean subject reports 417/366 — *inside* it. Whatever
-caused that shift, the contaminated numbers were measurably different, so voiding them was not
-pedantry.
-
-### 2026-08-30 — the read-but-not-applied pattern, counted
-
-Five times today I read a rule or a piece of evidence into this session and then acted against it.
-Listing them together because the individual corrections make each look like a one-off, and it is not
-a one-off — it is the dominant failure mode of this session:
-
-| # | what the record said | what I did |
-|---|---|---|
-| 1 | `bitsadmin`: *"There's a policy in effect that disables the storage of proxy settings per user"* — I QUOTED it | glossed it as "not an argument against the fix"; it meant the fix was unnecessary |
-| 2 | `FINDINGS:15097` — install proven, UBR `2965 -> 6456` | wrote that install was untested |
-| 3 | `FINDINGS:13513` — the router deliberately gates `Install-ViaWU` off | proposed re-enabling it |
-| 4 | §7 standing rule — *"never concurrent with a benchmark ... (wedge trigger)"*, pasted into this session | cold-booted and benchmarked across the boot+2min scan; wedged the guest |
-| 5 | §0.8 prohibition — *"Report the status of `cmd \| tee log` ... Use PIPESTATUS"* | reported `exit 0` from a `prime-run \| tee` that had actually refused (H3.6 guard, correctly) |
-
-The gates G-3, G-4, G-5, G-0c address 1–4 individually. What they share is that the information was
-present and unused: reading is not applying, and a session that has "already read" a section is the
-one most likely to act against it. **The mitigation that generalises is the executable step** — a
-rule with a command attached (`p4-run.sh` disarms and ASSERTS; `campaign-verdict.sh` computes the
-verdict) gets applied; a rule stated as prose gets read and skipped. That is why 0.10–0.13 were
-written as command sequences rather than principles.
-
----
-
 ## 2026-09-01 — an emulated SERIAL PORT needs NO dom0 change. EMS/SAC is reachable from here
 
 Owner asked whether EMS/SAC really requires a dom0-side change. **Half of it does not.** Measured
@@ -2113,4 +2023,3 @@ any workload-specific trigger. No hypervisor faults or errors for the domain.
    does not exist. This is the "missing data fails" rule violated by our own tool. Fixed: clear
    the ring with `xl dmesg -c` before `debug-keys g`, and drop a
    `grant-CAPTURE-INCOMPLETE.txt` when the header is absent rather than printing a number.
-

@@ -7,6 +7,7 @@ not only as a new dated section — the whole reason this file exists is that 65
 correction lines were buried chronologically in a 25k-line log, so reading a topic
 top-down returned the stale answer.
 
+- Sections dated 2026-08-30/31 were ERASED on 2026-09-01 (owner call: those sessions were contaminated and their output is void). Do not cite them and do not reconstruct them from git history. Claims RETRACTED in that window STAY retracted; claims MADE in that window are void — re-verify live before relying on anything that traces there. [verified 2026-09-01]
 - Not yet distilled from the history below. UNVERIFIED
 
 ## History
@@ -909,33 +910,6 @@ PV NIC (bound and verified up before), and not eval-license expiry (checked). Th
 failure at boot is a separate, real observation worth its own investigation — it is OUR driver
 failing to load, and it would explain the absent windows.
 
-## 2026-08-30 — RETRACTION: the "stock 4.2.2 cannot speak 4.3 qrexec" hypothesis, and a reinstall I should never have run
-
-**Retracted.** I wrote that stock QWT 4.2.2 might target Qubes 4.2 and be unable to connect to a 4.3
-dom0. Owner: *"upgrading from stock to ours was a standard procedure before and it almost never
-failed"* and *"your 'leading hypothesis' is obvious hallucinatory bullshit that came from context
-overload"*. Both correct. I had no evidence for it, and it contradicts a path known to work. I
-invented a mechanism to explain a failure instead of looking for my own mistake in causing it.
-
-**The likely truth, with no protocol theory needed:** my stock stick installs
-`qubes-tools-4.2.2.exe` with `/passive` at first logon - a route I constructed tonight and that has
-never been exercised here. If stock QWT simply never installed, its qrexec agent was never there to
-connect, which fits the observation exactly (`admin.vm.CurrentState` works, `qubes.VMShell` refused
-= the GUEST's agent absent).
-
-**And the process error that matters more:** I was REINSTALLING WINDOWS to get a stock guest while
-`win10-gold0` - a sealed, pristine, QWT-free ST0 image - sat Halted for exactly this purpose. The
-owner told me hours ago not to reinstall where a clone will do; I wrote that rule into the protocol
-(ST0 row, §2.1) and then broke it twice tonight. Correct procedure is one clone (~1 min):
-
-    clone win10-gold0 -> churn qube        # pristine Windows, no QWT
-    install stock QWT into the clone       # its own installer, on a running guest
-    install ours over it                   # the upgrade path under test
-
-That also removes the stick entirely from the stock cell, which is what made it fragile: a fresh
-Windows install plus an untested unattended installer invocation, when the only thing under test is
-"ours installs over stock".
-
 ## 2026-09-01 — "can we introspect a guest with dead qrexec?" MEASURED. Answer: partly, and the part that matters is NOT proven
 
 Owner reframed the question correctly: *"we pretty well know that PV console won't die if we stop
@@ -1016,4 +990,3 @@ technical one:** `xencons_monitor` runs as SYSTEM and does `CreateProcess` on wh
 UNAUTHENTICATED SYSTEM console to anyone who can attach. On a Qubes guest that set is only dom0
 plus qubes holding `admin.vm.Console` policy, so it may well be acceptable here - but it removes
 the guest's own authentication boundary and must not be done without an explicit decision.
-

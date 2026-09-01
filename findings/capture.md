@@ -7,6 +7,7 @@ not only as a new dated section — the whole reason this file exists is that 65
 correction lines were buried chronologically in a 25k-line log, so reading a topic
 top-down returned the stale answer.
 
+- Sections dated 2026-08-30/31 were ERASED on 2026-09-01 (owner call: those sessions were contaminated and their output is void). Do not cite them and do not reconstruct them from git history. Claims RETRACTED in that window STAY retracted; claims MADE in that window are void — re-verify live before relying on anything that traces there. [verified 2026-09-01]
 - Not yet distilled from the history below. UNVERIFIED
 
 ## History
@@ -1795,98 +1796,3 @@ HARNESS NOTES (both cost a run):
 
 Documented in README under Known limitations, since it is current shipped behaviour whatever the
 owner decides on task #30.
-
-## 2026-08-30 — the "black window": guest parked at the sign-in screen, and TWO defects behind it
-
-Owner: the console log looks healthy, *"not like black window of win10-clean"*. Measured on that
-guest: `EXPLORER=0`, `LOGONUI=1`, `quser` -> "No User exists", **`SendWindowMap` count = 0**.
-
-So the black window is not a capture failure. It is the LOCKOUT SHAPE this project already documented:
-a guest that maps ZERO windows while qrexec still answers - running, reachable, invisible. The
-capture path was fine: the boot-time `0x887a0026` keyed-mutex error self-recovered
-("A7RETRY capture initialized after 1 retries").
-
-### Defect A: stage 2 declares autologon "verified" using a check that cannot fail on a bad password
-
-From the install log of this guest, contradicting itself across stages:
-
-    STAGE 1  autologon NOT armed (bad-credentials)      "autologon":"not-armed:bad-credentials"
-    STAGE 2  ok password present as the LSA secret
-             autologon verified - this qube can come back on its own   "autologon":"armed"
-
-Stage 1 validates with `LogonUser` and refused. Stage 2's `guest/ensure-autologon.ps1` only asked
-`LsaRetrievePrivateData` whether a secret EXISTS - never whether it WORKS - so it overrode a correct
-negative with a weaker positive. A stored-but-rejected credential is the worst state: every
-presence check reports "armed" while the guard silently defeats itself.
-
-**Fixed:** `ensure-autologon.ps1` now retrieves the secret and calls `LogonUser` with
-LOGON32_LOGON_INTERACTIVE - the same type Winlogon uses - against DefaultUserName/DefaultDomainName,
-and reports a distinct loud failure for present-but-rejected. `$lsaValid` defaults to FALSE so a
-thrown query cannot pass permissively. Run against this guest it now reports "present as the LSA
-secret AND accepted by LogonUser".
-
-### Defect B (NEW, separate): qrexec-wrapper fails interactive logons as `user`
-
-The three 4625 failures (0xC000006D, "Unknown user name or bad password") at 01:15:27/37/43 are NOT
-autologon attempts. Event detail:
-
-    Account Name: user   Account Domain: WIN-IDD-TEST   Logon Type: 2 (interactive)
-    Caller Process Name: C:\Program Files\Qubes Tools\bin\qrexec-wrapper.exe
-
-They also post-date the boot-time re-arm (`QubesAutologonGuard` last run 01:15:15, result 0), so the
-credential was already armed when they failed - and the LSA secret for that same account validates
-now. **qrexec-wrapper is therefore using a different credential source than the one autologon
-stores, and failing with it.** Not root-caused; recorded with the evidence rather than guessed at.
-
-**Caveat on this guest:** it has had many manual interventions tonight (debug toggle, hard restarts,
-agent swaps, a side-loaded xencons). It is not a clean specimen. Whether the sign-in-screen state
-reproduces belongs to the matrix, on freshly provisioned guests.
-
-## 2026-08-30 — P5: SG1 and SG6 PASS; SG2/SG4 blocked because SG0.2 containment does not survive a boot
-
-**SG1 (Mode 1 — the boot/shutdown/logon screen is never shown) PASSES**, with a genuine vacuity
-guard rather than an absence:
-
-    SG1_FULLSCREEN_SEEN=0
-    QGADESK secure-desktop ENTERED (input desktop 'Winlogon') - window mapping suppressed
-    AddAllWindows: suppressed: secure desktop is active
-    ApplyGuestShadows: no shell window; cannot disable guest shadows
-    ProcessNewFrame: secure desktop left after 5 s - resuming with a full resync
-    ApplyUacPromptPolicy: PromptOnSecureDesktop=0
-
-The secure desktop was genuinely entered and mapping genuinely suppressed, so "nothing fullscreen
-appeared" is a filter result and not a run that saw nothing.
-
-**SG6 (autologon) PASSES** on every product criterion: `AutoAdminLogon=1`, `DefaultUserName=user`,
-**`AutoLogonCount` ABSENT** (its presence would mean the password is being consumed toward lockout),
-registry `DefaultPassword` ABSENT by design (the credential is the LSA secret), `QubesAutologonGuard`
-registered and Ready, and one window mapped after autologon — the invisible-guest regression absent.
-
-### SG2/SG4 are INVALID-PRECONDITION, and the reason is a protocol gap
-
-I sized the probes to 1600x900 after setting that resolution pre-reboot. The trace then showed
-captionless and override-redirect 1600x900 windows being MAPped with `service.gui-fullscreen` off,
-which reads as a serious Mode-2/Mode-4 gate failure. **It is not one**, and the owner named the
-reason immediately: *"because it knows it does not match dom0 geometry?"* Exactly —
-
-    HandleXconf: host resolution: 5120x1440
-    SetVideoMode: RESREQ 5120x1440 src=lastapplied
-    ResolutionAdoptCurrent: RESDRIFT believed=0x0 actual=5120x1440 - adopting the actual mode
-
-**The agent re-applies dom0's geometry at startup.** A resolution set before the reboot does not
-survive it. By probe time the screen was 5120x1440 and a 1600x900 window is 31% of it — correctly
-not fullscreen-sized, correctly mapped as an ordinary window. The gate was never exercised, so this
-is neither a pass nor a fail: the cell did not run.
-
-**The protocol gap:** SG0.2 prescribes running the fullscreen-gate cells at a sub-host guest
-resolution as containment, but does not say the containment must be established AFTER the agent has
-settled and verified against **the agent's believed screen size**, not merely against
-`Win32_VideoController`. Set before a reboot, it is silently undone.
-
-**Why SG2/SG4 were not simply re-run at 5120x1440:** if the gate did fail, that puts a genuine
-full-screen window on the owner's display — the harm already caused once today. Containment first is
-not optional. `set-resolution.ps1` is broken (recorded separately) and `qtest resize` returns
-`GEOM ok=0 err=no_window` with no window mapped, so containment is currently unreachable; both are
-the owed fix, and SG2/SG4 are blocked behind them rather than being run unsafely or scored
-optimistically.
-
