@@ -113,9 +113,11 @@ was verified against the stock baseline on the same guest (evidence in `FINDINGS
 
 ### Lower CPU cost than stock — measured
 
-The agent costs less CPU than stock on typing (~20 % below), drag (~30 %) and scroll
-(~20 %), and its working set stays flat where stock's grows ~87 MB per workload. Numbers
-and caveats: "Performance" below.
+The agent costs a fraction of stock's CPU on every workload measured: typing −92 %,
+scroll −92 %, idle −94 %, drag −56 %, with every repetition of one side beating every
+repetition of the other. Its working set also stays flat where stock's grows ~87 MB per
+workload. The margin scales with screen area — these are large-screen numbers. Numbers,
+method and caveats: "Performance" below.
 
 ### One mouse cursor instead of two
 
@@ -261,24 +263,29 @@ after:   Xen PV Network Device #0              (emulated NIC UNPLUGGED)
 
 ## Performance
 
-gui-agent CPU, % of one core (agent `09b643e`, 2026-08-10; stock = hash-verified
-reference, same guest and harness):
+gui-agent CPU, % of one core, median of 3 (2026-09-01, `tools/bench-stock-vs-ours.sh`).
+ONE guest (Windows 10, 5120x1440), ONE install, ONE display stack — only `gui-agent.exe` is
+swapped, and both binaries are built by the same CI job from the same toolchain, so neither
+the compiler nor the install is a variable. Stock is this fork's upstream merge-base
+(`431e4517`, three commits after `v4.2.2`). 3 rounds interleaved; 6 repetitions, 6 valid:
 
-| workload | stock 4.2.2 | this build |
-|---|---:|---:|
-| typing | 2.02–2.19 | **1.71** |
-| drag   | 12.31 | **8.67** |
-| scroll | 4.37 | **3.51** |
-| idle   | 0.57 | 0.83 |
+| workload | stock 4.2.2 | this build | delta |
+|---|---:|---:|---:|
+| typing | 26.115 | **2.007** | −92.3 % |
+| scroll | 47.161 | **3.577** | −92.4 % |
+| drag   | 32.251 | **14.064** | −56.4 % |
+| idle   |  5.053 | **0.328** | −93.5 % |
 
-Working set stays flat over a workload where stock's grows ~87 MB. Idle is the one phase
-still marginally above stock.
+Every row has **disjoint ranges** — every repetition of one side beat every repetition of the
+other — which is the only condition under which this project reports a verdict. The running
+binary's hash was read back off the guest each repetition and the scene verified by pixels.
 
-An earlier build carried an idle burn that made typing cost 2× stock; it was found by a
-single-variable comparison, fixed, and verified by an A/B with the defect deliberately
-re-introduced as control. Windows 10 cross-install numbers (large margins, but not
-single-variable), methodology, caveats and every retraction:
-[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+Read the margin as scaling with screen area: stock streams the whole 7.4 Mpx framebuffer,
+while this build adds DDA-sourced capture, per-window capture and dirty-rect-limited
+processing to avoid exactly that. Expect less on a small screen. This measures agent CPU for
+a fixed workload, not frames delivered; the earlier "2× stock on typing" result was real for
+the build and guest it measured and is superseded. Method, per-repetition values, what this
+does not measure, and every retraction: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ---
 

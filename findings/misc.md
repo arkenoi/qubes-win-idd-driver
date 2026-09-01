@@ -197,3 +197,58 @@ qrexec gets a real exit code because it waits on the process handle; cmd does no
 STILL UNKNOWN: what produces exit status 46 on the reporter's guest. Not this success path. Needs
 his gui-agent log and the qrexec side, not another hypothesis.
 
+## 2026-09-01 — stock-vs-ours benchmark suite RE-RUN; the direction has inverted, and the harness is now code
+
+Owner: *"re-run stock vs ours benchmark suite, unattended, i want all the numbers properly
+updated."* Done. The authoritative comparison in docs/BENCHMARKS.md was single-variable and
+last run 2026-08-09 on a guest that no longer exists, so every published CPU number was stale.
+
+**Result — 6 repetitions, 6 valid, 0 invalid, all four workloads with DISJOINT ranges:**
+
+| workload | stock 4.2.2 | ours 4.3.17 | delta |
+|---|---:|---:|---:|
+| idle   |  5.053 | 0.328 | -93.5 % |
+| drag   | 32.251 | 14.064 | -56.4 % |
+| scroll | 47.161 | 3.577 | -92.4 % |
+| typing | 26.115 | 2.007 | -92.3 % |
+
+This RETIRES the standing headline "ours costs 2x stock on typing" (2026-08-09), which was true
+for the build and guest it measured and has been superseded twice over since. Absolute figures
+are guest-relative and not comparable to the old tables; the DIRECTION is.
+
+**Method, and why each piece is there.** `tools/bench-stock-vs-ours.sh`: one guest
+(`win10-app`, Win10 19045.6456, 5120x1440), one install, one display stack, `gui-agent.exe`
+swapped in place, 3 rounds interleaved with the starting side alternating. The stock control is
+`431e4517` - the fork's merge-base with QubesOS/qubes-gui-agent-windows, three upstream commits
+after `v4.2.2` - built through the SAME CI job, runner image, pinned dependencies and linker
+flags as ours, so the compiler is not a variable either. Control branches pushed and NOT merged:
+agent `control/stock-431e451`, superproject `control/stock-4.2.2`.
+
+**What was checked before the numbers were believed:**
+ - the RUNNING binary's hash read back off the guest every repetition (`464772F1630E47BF` /
+   `5CEF96155147CDC6`) - a harness that proceeds on a failed swap reports numbers for a build
+   that never ran;
+ - the scene verified BY PIXELS every repetition (luminance stddev of the Notepad client area,
+   frame cropped, `tools/bench-scene-check.py`) - the 2026-08-12 wedged Notepad survives agent
+   restarts and binary swaps and nothing in the agent's own output can see it;
+ - stock is not merely BROKEN: its log for a repetition is 22 lines with 4 warnings, i.e. no
+   error loop. It also logs LESS than ours (156 lines over the same workload), so instrumentation
+   cost cannot explain the direction;
+ - the metric is stable on an unchanged binary - within-side spread 10-13 % (ours) and 21-26 %
+   (stock) against a 2.3x-13x separation between sides.
+
+**Why the margin is this large:** the desktop is 7.4 Mpx. Stock streams the whole framebuffer;
+this fork adds DDA capture, per-window capture and dirty-rect-limited processing to avoid that.
+The effect scales with screen area, so a small guest will show less. Said in the README and in
+BENCHMARKS.md rather than left for someone to discover.
+
+**NOT measured, and said so in both documents:** frames delivered (this is CPU cost for a fixed
+workload; the scene was verified present on both sides, but a build can be cheap and wrong), and
+anything about Windows 11 - one guest, Win10 only.
+
+**Harness defects fixed on the way:** `guest/phase-cpu-bench.ps1` had a chained property access
+that threw on exactly the state it exists to report (lint L6) and read screen width through an
+assembly not loaded under `-NoProfile`, silently producing nothing. `tools/bench-agent.sh`'s
+L3 nested-quote defect is untouched and that harness is NOT what this suite uses. Lint 41 -> 40.
+
+Raw data: `instrumentation/bench-stock-vs-ours-20260901-091217/`.

@@ -18,7 +18,72 @@ and its confounds, the single-variable stock comparison, the retractions, and th
 analysis. The README carries only the current verdict; this document is the record of how it
 was reached. Raw per-session data and the running lab notebook are in `FINDINGS.md`.
 
-## Current state (2026-08-10) — read this before the history below
+## Current state (2026-09-01) — single-variable stock vs ours, re-measured
+
+**This supersedes every CPU number below it**, including the 2026-08-10 table and the
+2026-08-09 "ours costs 2× stock on typing" headline. Both were measured on guests that no
+longer exist; absolute CPU here is guest-relative (see the 2026-08-12 addendum at the top of
+this file), so those tables cannot be compared against this one figure-for-figure. What CAN be
+compared is the direction, and it has inverted.
+
+Method: `tools/bench-stock-vs-ours.sh`, unattended. ONE guest (`win10-app`, Windows 10
+19045.6456, 5120x1440), ONE install, ONE display stack; only `gui-agent.exe` is swapped, in
+place. Both binaries built by the SAME CI job, same runner image, same pinned dependencies and
+same linker flags — stock from `431e4517`, this fork's merge-base with
+QubesOS/qubes-gui-agent-windows (three upstream commits after `v4.2.2`), ours from the released
+4.3.17 source. So neither the compiler nor the install is a variable. 3 rounds, interleaved,
+with the starting side alternating per round.
+
+**6 repetitions, 6 valid, 0 invalid.** The running binary's hash was read back off the guest
+every repetition (`stock 464772F1630E47BF`, `ours 5CEF96155147CDC6`), and the scene was verified
+by PIXELS each time (luminance stddev of the Notepad client area with the frame cropped) — the
+wedged-window trap of 2026-08-12 is checked for, not merely remembered.
+
+| workload | stock 4.2.2 | ours (4.3.17) | delta | verdict |
+|---|---:|---:|---:|---|
+| idle   |  5.053 | **0.328** | −93.5 % | **REAL** — ranges disjoint |
+| drag   | 32.251 | **14.064** | −56.4 % | **REAL** — ranges disjoint |
+| scroll | 47.161 |  **3.577** | −92.4 % | **REAL** — ranges disjoint |
+| typing | 26.115 |  **2.007** | −92.3 % | **REAL** — ranges disjoint |
+
+gui-agent CPU, % of one core, median of 3. "Ranges disjoint" means every repetition of one side
+beat every repetition of the other — the only condition under which this project reports a
+verdict at all. Per-repetition values:
+
+```
+idle     stock 4.252  5.053  5.547        ours 0.325  0.328  0.812
+drag     stock 31.238 32.251 33.780       ours 11.885 14.064 14.935
+scroll   stock 41.325 47.161 52.156       ours 3.337  3.577  3.703
+typing   stock 22.286 26.115 27.550       ours 1.269  2.007  2.014
+```
+
+The metric is stable on an unchanged binary, which is the precondition for any verdict: within a
+side the spread is 10–13 % on ours' drag/scroll and 21–26 % on stock's, and the two sides are
+separated by 2.3× to 13× — an order of magnitude outside that.
+
+**Why the gap is this large, and why it is not a surprise.** The desktop here is 5120x1440 =
+7.4 Mpx. Stock streams the whole framebuffer; this fork adds DDA-sourced capture, per-window
+capture and dirty-rect-limited processing, all of which exist precisely to avoid that. The
+effect therefore scales with screen area, and these numbers are for a large screen. On the small
+guests the historical tables were measured on, expect a smaller margin.
+
+**What this does NOT measure, stated plainly:**
+- **Frames delivered.** This is agent CPU cost for a fixed scripted workload. The scene was
+  verified present and rendering in dom0 on both sides by pixels, so neither side is cheap
+  because it drew nothing — but frame rate is not measured here, and a build can be cheap and
+  still be wrong. Correctness defects (stock's seamless drag artifacts, its z-order dependency)
+  were found by looking at the screen, not by this harness.
+- **Stock being broken rather than merely expensive.** Checked, because a stock agent stuck in
+  an error loop would produce exactly this shape: its log for a repetition was 22 lines with 4
+  warnings. It is behaving normally. It also logs LESS than ours — ours writes 156 lines over
+  the same workload — so instrumentation cost cannot explain the direction either.
+- **Anything about win11.** One guest, Windows 10. The historical win11 rows are not refreshed
+  and remain what they were.
+
+Raw data, per-repetition JSON, swap transcripts and the scene captures:
+`instrumentation/bench-stock-vs-ours-20260901-091217/`.
+
+## Current state (2026-08-10) — SUPERSEDED by the 2026-09-01 section above
 
 The sections that follow are the RECORD, kept verbatim, and several of their verdicts are
 **superseded**: the "2× stock on typing" result was real for the build it measured, was
