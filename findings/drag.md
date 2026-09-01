@@ -12,6 +12,10 @@ top-down returned the stale answer.
 - All three good translation branches gate on `window == g_InputDragWindow && g_InputDragOriginValid`; anything else falls through to the LIVE origin, i.e. the gain-1 oscillator. So any path that fails to arm the latch or clears it mid-drag silently restores stock wobble. Code-read, not measured. [verified 2026-09-01]
 - `MSG_CROSSING` (b71f611, 2026-08-30) cleared that state on ANY LeaveNotify, ignoring `mode`; fixed in 8b72b4e. The fix is correct - grab bookkeeping is not a departure - but it did NOT resolve the owner's complaint, so it is NOT the regression. [verified 2026-09-01]
 - No `InputDrag*` default changed between the user-approved baseline 168a869 and HEAD, so the regression is in behaviour around the drag path, not in its tuning. [verified 2026-09-01]
+- **"The tuning was never committed, only written to the registry" is DISPROVEN.** `b75358b` put 25/50 in `perf.c` and `168a869` put `OriginInterp=TRUE` there; `git diff 168a869..HEAD -- gui-agent/perf.c` changes no drag default and no drag constant in main.c/main.h either. The live guest confirms it from the other end: `HKLM\...\Qubes Tools\gui-agent` holds ONLY `ProtoTrace=0` and `ProtoTraceWobble=0` - zero `InputDrag*` overrides - so the running agent is on compiled-in defaults that equal the approved values. The installer seeds only SeamlessMode/DisableCursor/LogDir, so no missing seeding script exists to find. [verified 2026-09-01]
+- **What was NOT committed is the LOGGING LOAD the tuning was fitted against, and it is a timing parameter.** The whole ladder and the approval ran with `ProtoTrace=1` (written by `scratchpad/swap-interp.ps1`, which is how the metric was computed at all) on a build whose `QGA_PERF_DEFAULT` was 1, i.e. a per-frame QGAPERF line by default. `ffae88a` (2026-08-27) set `QGA_PERF_DEFAULT` to 0 and moved SYNTHPAINT under ProtoTrace for log-size reasons. The drag law is a delayed-feedback controller whose constants were fitted at a measured 13.7 announces/s that the ladder itself calls "saturated by the window's own movement", not by the 50 ms pacing floor (which would allow 20/s). Remove the logging and the saturation point moves. HYPOTHESIS, not measured - the announce cadence on a quiet build has never been measured, because the only instrument that measured it was the thing that slowed it. That is what `ProtoTraceDrag` exists to close. UNVERIFIED
+- The four-fix drag-wobble series of 2026-08-12 (`43de7d4`) was reverted whole by `e2f36be` because sub-fix 1 (suppress ALL PrintWindow recapture for the latched window) made it worse. The other three - rate-limiter exemption for the latched window, inbound MSG_MOTION coalescing, and IGNORE MID-DRAG DAEMON CONFIGURES WHILE THE LATCH HOLDS - were measured INERT that day and reverted as collateral. None was ever re-landed. The configure guard is worth re-testing specifically, because the machinery it guards against (`DaemonStreamTick`, `ApplyPendingDaemonMove`) landed in `336ccc7` AFTER that measurement, so "zero inbound configures inside the latch window" was measured on code that did not yet have it. Re-added as `InputDragCfgGuard`, DEFAULT OFF, with the trace that decides it. [verified 2026-09-01]
+- `scratchpad/drag-armcheck.ps1` reads `HKLM\SOFTWARE\Qubes\GuiAgent`, which is not the key the agent uses (`HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent`). Its `overrides = "none (shipped defaults)"` answer was structurally incapable of reporting an override, so it is not evidence for any run it was used on. [verified 2026-09-01]
 - Residual BY DESIGN: `AdoptMs` assumes a constant dom0 apply lag against a measured median 0 / p75 17 / tail 82, 398 ms. Events past adopt take the wrong sign. [verified 2026-08-16]
 - `guest/sample-window-motion.ps1` REPORTS `armed: true` AND WRITES NOTHING - the task ends Ready with no winmotion.txt, not even its own "no notepad" sentinel. Fix it and prove it writes a file BEFORE asking anyone to drag. Three hand drags on 2026-09-01 produced zero measurements. [verified 2026-09-01]
 - Next suspect, never examined: the 141-line insertion in the frame path at `FrameRedundant`/`ProcessNewFrame` from the secure-desktop freeze work (878ae5e, 7e3f0b6, fb4c1cd). Announces are slaved to frames. UNVERIFIED
@@ -1632,3 +1636,116 @@ errors as discoveries. The rule that would have prevented all three: an experime
 instrument has not been shown to produce data on a known-good subject is not ready to run, and a
 human's time is the most expensive input on this rig.
 
+## 2026-09-01 (session 2) — the tuning WAS committed; the instrument now exists; dom0's apply lag is the mechanism
+
+Owner: *"my main suspect is tuning: you could commit the code, but not the script that writes
+proper defaults for it."* Checked properly, and it is not that. What the check DID turn up is a
+measured mechanism that needs nothing in our code to have regressed.
+
+### 1. The tuning is in the code, and the guest is running it
+
+ - `b75358b` (2026-08-16 18:33) put `AdoptMs=25 / AnnounceMs=50` in `perf.c`; `168a869` put
+   `OriginInterp=TRUE` there. `git diff 168a869..HEAD -- gui-agent/perf.c` changes no drag
+   default; no drag constant in main.c/main.h changed either (`CFG_POS_MIN_INTERVAL_MS`,
+   `DAEMON_DRIVE_ACTIVE_MS`, `DAEMON_MOVE_INFLIGHT_MS`, `DAEMON_OFF_TTL_MS`,
+   `INPUT_DRAG_STUCK_MS`, `DRAG_ANNOUNCE_RING` all identical).
+ - The live guest confirms it from the other end. Full dump of
+   `HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools` on win10-app: root key has SeamlessMode,
+   DisableCursor, LogDir, Fullscreen/Windowed W/H, LogLevel=3, Vchan*; the `gui-agent` subkey
+   has ONLY `ProtoTrace=0` and `ProtoTraceWobble=0`. **Zero `InputDrag*` overrides**, so the
+   running agent is on compiled-in defaults - which equal the approved values.
+ - The installer seeds only `SeamlessMode`, `DisableCursor`, `LogDir`
+   (`packaging/setup/Install-QwtImproved.ps1`). There is no missing seeding script to find,
+   because none is needed.
+ - `guest/tune-drag.ps1` and `scratchpad/{swap-interp,set-rung,drag-mode}.ps1` write the knobs
+   by hand, and nothing in the install path calls them. Every value they set is also a code
+   default at the approved value.
+
+**So the owner's main suspect is disproven, with evidence from both ends.**
+
+### 2. What the approval state really was, and the two things about it that were NOT code
+
+The LAST acceptance is **2026-08-16 evening, baseline v2** ("good enough, we can stop here and
+take it as baseline"). Earlier ones: 08-12 drag REPLAY "all good" (a different defect, dom0-WM
+drags), 08-13 "parked - both suck in a way" (not an approval), 08-16 morning baseline v1
+(70/140, superseded the same day).
+
+Two properties of that approved run are not in any commit:
+ - it ran with **`ProtoTrace=1`** (written by `scratchpad/swap-interp.ps1` - the ladder metric is
+   computed FROM that trace, so every rung including the approved one had it on), and
+ - on a build with **`QGA_PERF_DEFAULT` = 1**, a per-frame QGAPERF line by default. `ffae88a`
+   (2026-08-27) set it to 0 for log-size reasons.
+Both make the approved build slower than today's on the frame/announce path, and the drag law is
+a delayed-feedback controller fitted to that timing. **Measured today and NOT supported as the
+cause**: the announce cadence on the quiet build is 14.9/s (gap p50 67 ms) against 13.7/s
+recorded at approval. The plant did not move here. Recorded so nobody re-derives it.
+
+### 3. Also found: three drag fixes were reverted as collateral in 2026-08-12 and never re-landed
+
+`43de7d4` landed four; `e2f36be` reverted all four because sub-fix 1 (suppress ALL PrintWindow
+recapture for the latched window) was measured to make the wobble WORSE. The other three -
+latched-window rate-limiter exemption, inbound MSG_MOTION coalescing, and **ignore mid-drag
+daemon configures while the latch holds** - were measured INERT that day and went with it. The
+configure guard is re-added here as `InputDragCfgGuard` (DEFAULT OFF) because the machinery it
+guards (`DaemonStreamTick`, `ApplyPendingDaemonMove`) only landed in `336ccc7`, AFTER the
+measurement that called it inert. Measured again today on the synthetic drag: still zero inbound
+configures inside the latch window, so still inert THERE - the hand-drag trace decides it.
+
+### 4. The instrument now exists, and it is calibrated
+
+Improved the EXISTING QGAPROTO trace rather than adding another (agent `3d5afec`):
+ - `ProtoTraceDrag=1` enables ONLY the input-rate messages (~44 lines/s measured), leaving the
+   per-DAMAGE-rect flood off - so feel and mechanism come from the SAME run instead of the two
+   incomparable runs the "never judge latency with ProtoTrace on" rule used to force;
+ - `msg=MOTION` gained `br=` (which of the three fixed translation laws the event took; `trk`
+   said 1 for the LIVE origin too, so the old line could not tell "the fix applied and still
+   wobbles" from "the fix was never armed") and `wx,wy` (the window's real position per event);
+ - `msg=DRAGLATCH` names every arm/teardown with `armed=`;
+ - `msg=CONFIGURE-IN` / `msg=DAEMONMOVE` name what an inbound configure DID.
+`tools/drag-analyze.py` reads the trace and fits dom0's apply lag from it.
+
+**Calibrated against known truth** (`dragsim.c` injects a chosen dom0 lag; guest win10-app,
+agent `EB25802E85D471A8`, hash-verified running, shipped tuning, quiet build):
+
+| injected dom0 apply lag | analyzer's fitted lag | window-path reversals | mean deviation |
+|---|---|---|---|
+| 17 ms (the p75 the tuning assumes) | **10 ms** | 5 % | 1 px |
+| 80 ms | **90 ms** | 41 % | 187 px |
+| 200 ms | **190 ms** | 40 % | 828 px |
+
+The fit recovers the injected value within one 10 ms grid step every time, and the wobble metric
+moves 5 % -> 41 % with it. **The check has been seen to FAIL on a deliberately reintroduced
+defect**, which is what makes a PASS mean anything (CLAUDE.md evidence rule 5).
+
+### 5. The mechanism this exposes
+
+At the shipped tuning, with dom0 answering in 17 ms, the drag is EXACT at every hand speed
+tested (150/400/900/1600 px/s: 1 reversal, mean deviation 1 px - the single reversal is a
+stimulus artefact, `SimPath` starts the triangle at -amp so the first event teleports the cursor
+by one amplitude). The law only breaks when **dom0's actual apply lag exceeds the assumption**:
+22 % reversals at 80 ms, 35 % at 200 ms - and 16-19 % is the wobble signature as originally
+measured. Matching the estimator to reality (`InputDragLagMs` = the real lag) collapses the
+positional error (187 -> 27 px at 80 ms; 828 -> 14 px at 200 ms) but not the reversals, so a slow
+dom0 is intrinsically jittery and a WRONG assumption about it is what adds the large excursions.
+
+**Consequence: "we fixed it once, now it wobbles like crazy again" is fully explained by dom0's
+apply lag rising past ~25 ms, with no regression anywhere in our code.** That is consistent with
+every negative result to date: no knob changed, no default lost, the latch arms, and the branch
+taken is INTERP for 100 % of events. It is a HYPOTHESIS until dom0's lag is measured on a real
+drag, which is the one thing a script cannot do (owner, this session: *"instrumented drag that
+does not depend on pointer fails to do it"* - and indeed the synthetic drag is clean at 1 %).
+
+### 6. State the guest was left in - ready for ONE hand drag
+
+win10-app, agent `EB25802E85D471A8` (running hash verified against the pushed artifact),
+Notepad `0xC001A` at 600,400 900x650. Banner asserted from the log, not assumed:
+
+    QGADRAGQUANT on (adopt=25 ms, announce pacing=50 ms)
+    QGADRAGINTERP on (lag=10 ms)
+    QGAPROTO off (wobble probe off, drag-only trace on)
+    QGAPERF off
+    QGADRAGCFGGUARD off
+
+Quiet build, so the feel verdict is valid on the same run as the mechanism. Drag Notepad by its
+title bar for ~10 s, then `guest/drag-trace-run.ps1 -Sim 0 -WaitMs 0` pulls the lines and
+`tools/drag-analyze.py` answers all four questions at once.
