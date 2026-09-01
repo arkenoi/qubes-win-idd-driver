@@ -24899,3 +24899,52 @@ a round again today.
    `HKLM\...\Qubes Tools\gui-agent\LogLevel = 5` (Verbose), restart the agent, drag, then grep for
    `crossing` / `latch KEPT` / `drag latch was held`. Do NOT judge feel on that run - and put
    LogLevel back afterwards.
+
+## 2026-09-01 — STOPPING the drag work. Three hand drags burned, zero measurements. Read this first.
+
+Owner: *"why did i drag at all?"* and *"you are obviously in degraded state"*. Both correct, and
+the record needs to say so plainly rather than leave a trail of half-claims.
+
+**Three drags, nothing to show:**
+ 1. drag 1 - VOID. I said the guest was staged without checking its registry; `ProtoTrace=1` and
+    `ProtoTraceWobble=1` were still set from an old session, and this project's own rule is never
+    to judge latency with them on. My staging error, not a finding.
+ 2. drag 2 - NO INSTRUMENT. I asked for it before arming anything, then discovered the tell-tale
+    lines are LogDebug/LogVerbose and `LogLevel=3` filters them. Nothing could have been learned.
+ 3. drag 3 - INSTRUMENT DID NOT FIRE. `sample-window-motion.ps1` reported `armed: true`, the
+    `QwtWinMotion` task shows state Ready (so it ran and exited), and **no `winmotion.txt` was
+    ever written** - not even the script's own "no notepad" sentinel. So the task failed before
+    its first write. Cause unknown; the arming function's success return is clearly not evidence
+    that sampling happened, which is itself a defect in the instrument.
+
+**What is actually established about the wobble (all code-reading, none of it measured):**
+ - The three good translation branches all gate on `window == g_InputDragWindow &&
+   g_InputDragOriginValid`; anything else falls through to the LIVE origin, i.e. the gain-1
+   oscillator. So any path that fails to arm or clears the latch mid-drag silently restores stock
+   wobble.
+ - `g_InputDragOriginValid = (buttonMsg.type == ButtonPress) && haveTracked` - a press that does
+   not find the window tracked disables the whole mechanism for that drag.
+ - The `MSG_CROSSING` handler (b71f611, 2026-08-30) cleared that state on ANY LeaveNotify,
+   ignoring `mode`. Fixed (8b72b4e) and shipped in the build now on the guest. **Did not resolve
+   the owner's complaint**, so it was at most contributory. The fix is still correct - grab
+   bookkeeping must not be read as a departure - but it is NOT the regression.
+ - Fault injection is compiled into this build (044712a) but is NOT armed: the only values under
+   the gui-agent key are ProtoTrace=0 and ProtoTraceWobble=0. Ruled out.
+ - No `InputDrag*` default changed between the 2026-08-16 user-approved baseline (168a869) and
+   HEAD. The regression is therefore in behaviour around the drag path, not in its tuning.
+
+**Where the next session should look, in order** (do NOT re-derive the above):
+ 1. Arm a WORKING ground-truth sampler first and prove it writes a file BEFORE asking for a drag.
+    Fix `sample-window-motion.ps1` or replace it; its "armed" return is not proof.
+ 2. The 141-line insertion in the frame path at `FrameRedundant`/`ProcessNewFrame` from the
+    secure-desktop freeze work (878ae5e, 7e3f0b6, fb4c1cd). Announces are slaved to frames, and
+    the quantise law needs a paced announce stream; a new early-return in that path is the
+    strongest remaining candidate and was never examined.
+ 3. `ShouldAcceptWindow` (+72 lines, several new `return FALSE`) and `IsPopup` (+40): a window
+    that stops being tracked stops arming the latch.
+
+**Process note, kept because it cost the owner three drags.** The failure mode was mine and it is
+the recorded one: reading code and re-staging instead of measuring, and treating my own setup
+errors as discoveries. The rule that would have prevented all three: an experiment whose
+instrument has not been shown to produce data on a known-good subject is not ready to run, and a
+human's time is the most expensive input on this rig.
