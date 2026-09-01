@@ -12,7 +12,7 @@ of this file.
 
 ### guest-stability
 - P1 the IPI/TLB-shootdown wedge's last mile is open — WHY the IPI never lands (Xen scheduling vs LAPIC delivery); needs Xen-side instrumentation at repro time, and no validated reproducer exists (wedge-hunt.sh unproven). Blocks any .13/.15 A/B. [also: upstream] UNVERIFIED
-- P2 forensics-kit fixes (console `-t pv`, grant-capture-incomplete marker) are in-repo but NOT deployed to dom0 — the next wedge capture is degraded until the owner pulls. [also: debug-introspection] [verified 2026-09-01]
+- P2 forensics-kit fixes (console `-t pv`, grant-capture-incomplete marker) are in-repo but NOT deployed to dom0 — dom0 cannot be pushed to; the one-paste pull procedure was handed to the owner 2026-09-02, and after it runs one `qtest wedge` capture verifies the fixed kit end-to-end. [also: debug-introspection] [verified 2026-09-02]
 - P2 staging grant per agent start (7200 pages) is never reclaimed — ~144 restarts to exhaustion; needs an owner outliving the agent (holder service or IDD-granted framebuffer). [also: architecture] [verified 2026-08-16]
 - P2 `VchanSendBuffer` spins unbounded when the daemon dies with a full ring, and a window flip-storm can fill the vchan and kill the capture thread (S1b) — last recorded open; re-verify live, then fix with bounded/non-blocking writes. [also: architecture] UNVERIFIED
 - P3 ~3085 of 3445 agent starts once died before StagingEnsure, unexplained (2026-08-20 record; history erased) — re-derive from live telemetry before investigating. UNVERIFIED
@@ -52,7 +52,7 @@ of this file.
 - P3 mirage upstream PRs (mirage-net-xen#121, qubes-mirage-firewall#232) status unknown since 2026-08-24 — re-check before relying. [verified 2026-08-24]
 
 ### debug-introspection
-- P2 emulated-serial last link: confirm SERIALMARK lines land in dom0's guest-<vm>-dm.log (one dom0 grep); then arm EMS on a persistent guest for bugcheck-headline insurance. [verified 2026-09-01]
+- P3 EMS is armed (both templates, inherited by AppVMs — win10-app verified `ems Yes`; COM1 feature on all four qubes); the only remaining link is the dom0 grep confirming EMS/SAC/SERIALMARK bytes in guest-<vm>-dm.log — in the owner's pending dom0 paste. [verified 2026-09-02]
 - P3 does `/var/log/xen/console/guest-<vm>.log` survive a domain restart — one cheap check with the existing HELPER VALIDATION marker. [verified 2026-09-01]
 - P3 kernel heartbeat writer (would timestamp wedge onset in a dom0 log) — not built. [verified 2026-09-01]
 - P3 OWNER GATES: gui-agent log sink onto the console writer; unauthenticated SYSTEM console shell. Both security tradeoffs, not technical ones. [verified 2026-09-01]
