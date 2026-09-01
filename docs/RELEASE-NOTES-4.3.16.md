@@ -24,6 +24,16 @@ retries, always detaches, and logs when focus still cannot be taken.
 default branch and wrote a warning — file I/O on the input path at roughly ten lines per second. It
 also releases a drag latch that could otherwise stick if a button release was lost.
 
+> **RETRACTED 2026-09-01 — the second sentence describes a DEFECT, not a feature.** Releasing the
+> drag latch on a `LeaveNotify` tears down the guest-native drag mid-gesture: measured on a hand
+> drag, 569 ms into a 5.0 s drag a genuine `NotifyNormal` crossing dropped the latch and the
+> following 489 of 490 motion events fell back to the live-origin translation, i.e. the gain-1
+> oscillator, with window-path reversals going 8 % → 20 % and announced positions swinging
+> ~1600 px at 15 Hz. That is the drag wobble. The latch release was never requested, was not
+> measured, and closed a hole `INPUT_DRAG_STUCK_MS` had already closed 17 days earlier. It is
+> deleted in **4.3.17**; the log-flood half of this item stands. See `docs/RELEASE-NOTES-4.3.17.md`
+> and the 2026-09-01 entries in `findings/drag.md`.
+
 **The PV console (xencons) ships and binds.** `XENBUS\VEN_XP0001&DEV_CONS` sat at CM code 28 on every
 guest because QWT vendored no xencons at all. It is now built from a pinned xenbits commit,
 test-signed with the rest of the package, and installed — giving dom0 an out-of-band channel into a
