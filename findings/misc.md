@@ -252,3 +252,69 @@ assembly not loaded under `-NoProfile`, silently producing nothing. `tools/bench
 L3 nested-quote defect is untouched and that harness is NOT what this suite uses. Lint 41 -> 40.
 
 Raw data: `instrumentation/bench-stock-vs-ours-20260901-091217/`.
+
+## 2026-09-01 (cont.) — win11 measured; the drag "regression" was MY HARNESS, retracted same day
+
+Owner: *"it was win10 only benchmark? we need win11 too."* Correct, and win11 was the half that
+mattered - the historical concern was that ours cost MORE than stock there (+100 % typing,
+2026-08-09). Run on `win11-app` (24H2 build 26100, 5120x1440), same binaries, same method.
+
+**Result, after a harness defect was found and fixed: nothing on win11 is distinguishable from
+stock.**
+
+| workload | stock 4.2.2 | ours 4.3.17 | delta | verdict |
+|---|---:|---:|---:|---|
+| drag   | 14.641 | 16.967 | +15.9 % | inside noise (spread 36 %) - no verdict |
+| scroll |  2.965 |  3.046 |  +2.7 % | inside noise - no verdict |
+| typing |  2.335 |  2.028 | -13.1 % | inside noise - no verdict |
+| idle   |  0.000 |  0.331 | | one side read 0.000 every time - below counter resolution, no verdict |
+
+**RETRACTED, same day, loudly: "win11 drag +59.9 %, REAL, ranges disjoint, ours WORSE."** I
+reported that and put it in the README as a known regression. It was an artifact of the harness I
+wrote. The suite alternates stock and ours, so every repetition follows a swap between two
+DIFFERENT agents - a full re-establishment (re-enumeration, per-window capture channels, buffers,
+grants) - and our startup is heavier than stock's, so a short settle biases against whichever side
+was just swapped in. Settle was 8 s. At 45 s, nothing else changed: stock 12.203 -> 14.641, ours
+19.516 -> 16.967, gap +59.9 % -> +15.9 %, no verdict. BOTH sides moved, which is what a shared
+transient looks like.
+
+**What exposed it, and the lesson.** The ablation ran on the same guest, same binary, same
+defaults and read ours' drag at 13.3-16.3 against the suite's 18.3-21.7. **Between-session
+variance larger than the within-session spread is exactly what a disjoint-ranges verdict cannot
+survive** - and the suite never measured between-session variance, so it could not see it. A
+disjointness test is only as good as the variance it has actually sampled. The settle is now 45 s
+(`BENCH_SETTLE_S` to override) with that measurement written into the comment.
+
+**Also withdrawn:** "our drag went 8.67 (2026-08-10) -> 19.5, +125 %, against a stock control that
+did not move". Same inflated figure, and the anchor is soft anyway: that 2026-08-10 table's stock
+column was not measured that day (its own caveat says so), and ours read 11.727 on 08-09 vs 8.67
+on 08-10 - a 26 % swing on one binary across one day, which now looks like the same session
+variance rather than the `SweepDdaExempt` fix it was credited to.
+
+**Second harness defect fixed in the same pass:** a phase where one side read 0.000 in EVERY
+repetition was being reported as "ranges disjoint, REAL". A 5 s quiet window can leave the CPU
+counter un-ticked; that is the sampler failing to resolve the rate, not a measurement of no CPU.
+Both summarisers now refuse a verdict on it - the same missing-data-fails rule the harness already
+enforced everywhere else, which I had left a hole in.
+
+**The win10 verdicts stand** (2.3x-13x margins, taken at the same 8 s settle, so the same inflation
+on both sides - a 36 % transient cannot manufacture a 13x gap). Direction safe; absolutes are upper
+bounds until a re-run at 45 s replaces them.
+
+**Ablation (win11, one binary, knobs only, 3 rounds):** no mechanism is attributable. base 13.826;
+noslice 11.102 (-19.7 %), nopw 13.376, noevtprio 14.772, nofreeze 14.777 - every range overlaps
+base's, spreads 22-47 %. `InputDragSlice` is the only suggestive one and it explains nothing at
+this sample size. No quick fix exists to propose, and none was invented.
+
+**Operational note, owner-reported and mine to own:** while these runs were in flight the owner saw
+"an override-redirect piece of desktop on screen". The timeline puts it in the STOCK repetition
+(that agent's log carries `Module version: 4.2.2.0` and it mapped three windows in ~80 s where ours
+maps one) - stock has none of the 2A-chrome filtering and feeds shell surfaces from the desktop
+framebuffer at their rect, which is exactly how one renders as a borderless piece of desktop. It is
+stock's documented defect, not ours. **But benchmarking stock on a guest whose windows are on the
+owner's real display means the owner watches stock's artifacts for 20 minutes, and I did not warn
+them beforehand. Say so before starting, next time.**
+
+Raw data: `instrumentation/bench-stock-vs-ours-20260901-120938/` (win11, 8 s settle, retracted),
+`.../bench-stock-vs-ours-20260901-124616/` (win11, 45 s settle, authoritative),
+`.../bench-ablate-20260901-122017/`.
