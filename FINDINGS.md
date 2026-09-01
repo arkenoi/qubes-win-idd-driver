@@ -24812,3 +24812,43 @@ constant apply lag against a measured distribution of median 0 / p75 17 / tail 8
 announce whose real lag exceeds 25 ms adopts an origin dom0 has not applied, the error takes the
 wrong sign, and the loop reopens for those events (perf.c says exactly this). That residual was
 accepted at 08-16; it is a tail effect, not the "as hell" case.
+
+## 2026-09-01 — STAGED FOR THE OWNER'S DRAG TEST (build 33454192029, branch fix/drag-crossing-mode)
+
+Two independent changes are waiting on one thing only: a HAND drag. Neither can be graded from
+here - a scripted drag never arms the drag latch (PLAN-drag-quality: it "cannot show this defect
+at all"), and dom0 menu launchers cannot be clicked from this qube.
+
+**1. Drag wobble - `mode == NotifyNormal` guard on the crossing handler** (agent `8b72b4e`).
+   WHAT TO LOOK FOR: drag a window around for ~10 s. The claim is that the wobble returns to the
+   2026-08-16 user-approved behaviour. Grade it the way it was graded then - by hand, against
+   memory of stock - because that is the only instrument that works.
+   THE LOG TELL, which decides it independently of feel:
+     - regression present (old binary): `pointer left the window while the drag latch was held -
+       releasing it` appears DURING a drag;
+     - fix working (new binary): `crossing mode=N on the dragged window - grab bookkeeping,
+       latch KEPT` appears instead, with N != 0.
+   If NEITHER line appears, the crossing path is not the cause and the next suspect is the
+   frame-pipeline gating from the secure-desktop work (878ae5e, 7e3f0b6, fb4c1cd), because
+   announces are slaved to frames.
+
+**2. dom0 app-menu launchers - the two fixed ids** (core-agent `b2ccd83`, verified on the guest
+   already: both entries emit, both launch, both return in 4-5 s instead of blocking, and File
+   Explorer opens on the interactive user's folder). The only unverified step is clicking them in
+   dom0 after `qvm-sync-appmenus win10-app`.
+
+**State win10-app was left in** (an AppVM: C: resets on shutdown, so all of this is lost on a
+restart and must be re-applied):
+ - fixed `start-app.ps1` + `get-appmenus.ps1` deployed over the installed copies, `.orig` backups
+   kept alongside;
+ - `qemu-extra-args = -serial file:/dev/hvc0` still SET on the qube (survives restarts - it is
+   qube metadata, not guest state). Stubdom-side only, cannot affect drag. Remove with
+   `qvm-features --unset win10-app qemu-extra-args` + restart if unwanted;
+ - test windows closed; a Microsoft Store window opened itself during testing and was left.
+
+**Pushed for CI** (all to the owner's own forks, on branches, nothing to QubesOS):
+ - `arkenoi/qubes-gui-agent-windows` -> new branch `fix/drag-crossing-mode` (8b72b4e)
+ - `arkenoi/qubes-core-agent-windows` -> `fix/qrexec-wrapper-drain-race` (b2ccd83)
+ - `arkenoi/qubes-win-idd-driver` -> new branch `fix/drag-crossing-mode`
+`main` here is still 201 commits ahead of origin, unchanged - that is the pre-existing state, not
+something this session altered.
