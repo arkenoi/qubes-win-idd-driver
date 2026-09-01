@@ -1775,6 +1775,24 @@ every shipped drag fix stops applying at once - the interpolated origin, `InputD
 rate inside the drag was 33.5/s (gap p50 30 ms) against the ~14/s the 2026-08-16 ladder was
 fitted at, because pacing is one of the things the latch gates.
 
+**The event, and what the wire looked like on either side of it.** It was
+`mode=0 (NotifyNormal), detail=3 (NotifyNonlinear)` - X's label for a real move between windows
+in different branches, not bookkeeping. Before it, `ox/oy` steps cleanly to each announced
+position and `rx` stays in a ~420-610 band while the window walks 605 -> 1388 px. After it, `ox`
+is the LIVE window origin and the loop diverges within four events:
+
+    +551  MOTION rx=435 ox=1369 br=2   CONFIGURE x=1395     <- last good event
+    +569  DRAGLATCH ev=crossing armed=0 mode=0 detail=3
+    +569  MOTION rx=474 ox=1435 br=0   CONFIGURE x=1496
+    +651  MOTION rx=745 ox=1386 br=0   CONFIGURE x=1386
+    +670  MOTION rx=103 ox=2072 br=0   CONFIGURE x=2072
+    +701  MOTION rx=1034 ox=1212 br=0  CONFIGURE x=1212
+    +718  MOTION rx=1073 ox=2475 br=0  CONFIGURE x=2475
+    +751  MOTION rx=1477 ox=867  br=0  CONFIGURE x=867
+
+i.e. announced positions swinging 867 <-> 2475 - **~1600 px excursions at ~15 Hz** - which is the
+"wobbles like crazy" the owner reported, written down.
+
 **Why the previous session's mode guard did not save it.** `8b72b4e` reasoned that X synthesises
 crossings for grab bookkeeping and guarded on `mode == NotifyNormal`. True, and insufficient: the
 event that does the damage IS normal-mode. In a guest-native drag the WINDOW is what moves - each
