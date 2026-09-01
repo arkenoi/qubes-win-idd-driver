@@ -8,11 +8,27 @@ $out = 'C:\Windows\Temp\phasecpu-harness.txt'
 Remove-Item $out -ErrorAction SilentlyContinue
 $a = Get-Process gui-agent -ErrorAction SilentlyContinue
 if (-not $a) { Write-Output '=== META ==='; Write-Output '{"error":"no agent"}'; exit 1 }
+# Chained property access on a cmdlet that can return $null throws on exactly the broken state a
+# probe exists to report (lint L6). Resolve the hash defensively so a missing binary is REPORTED,
+# not turned into a terminating error in the middle of the META block.
+$binPath = 'C:\Program Files\Qubes Tools\bin\gui-agent.exe'
+$binHash = 'unavailable'
+$fh = Get-FileHash $binPath -Algorithm SHA256 -ErrorAction SilentlyContinue
+if ($fh -and $fh.Hash) { $binHash = $fh.Hash.Substring(0,16) }
+# The screen width came from System.Windows.Forms, whose assembly is not loaded in a bare
+# -NoProfile session, so this field silently produced nothing. Use the Win32 metric instead.
+$screenW = 0
+try { Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+      $screenW = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width } catch { }
 Write-Output '=== META ==='
 @{ agent_pid = $a.Id
-   bin_sha256 = (Get-FileHash 'C:\Program Files\Qubes Tools\bin\gui-agent.exe' -Algorithm SHA256).Hash.Substring(0,16)
-   screen = "$([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width)" } | ConvertTo-Json -Compress
-$proc = Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$Harness`"" `
+   bin_sha256 = $binHash
+   screen = $screenW } | ConvertTo-Json -Compress
+# -KeepNotepad: the scene must survive the run so the CALLER can verify by PIXELS that the window
+# the numbers came from was actually rendering. A wedged Notepad (client area white, typing
+# invisible) survives agent restarts and binary swaps and faked two regressions here on
+# 2026-08-12; nothing in the agent's own output can detect it.
+$proc = Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$Harness`" -KeepNotepad" `
     -RedirectStandardOutput $out -PassThru -WindowStyle Hidden
 $samples = New-Object System.Collections.Generic.List[string]
 while (-not $proc.HasExited) {
