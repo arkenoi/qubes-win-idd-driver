@@ -1,0 +1,14 @@
+repetitions: 6 total, 0 valid, 6 INVALID
+  INVALID r1-ours: swap did not land: running= want=5CEF96155147CDC6
+  INVALID r1-stock: swap did not land: running= want=464772F1630E47BF
+  INVALID r2-ours: swap did not land: running= want=5CEF96155147CDC6
+  INVALID r2-stock: swap did not land: running= want=464772F1630E47BF
+  INVALID r3-ours: swap did not land: running= want=5CEF96155147CDC6
+  INVALID r3-stock: swap did not land: running= want=464772F1630E47BF
+  (invalid repetitions carry no number and are excluded from every figure below)
+
+binaries actually measured (from the guest, per repetition):
+
+phase                 stock (n)           ours (n)      delta  verdict
+
+per-repetition values (% of one core):

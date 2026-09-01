@@ -1,0 +1,50 @@
+{
+  "bin_sha256": "464772F1630E47BF",
+  "agent_pid": 6564,
+  "samples": 195,
+  "phases": {
+    "idle-pre": {
+      "pct_core": 0.329,
+      "samples": 19,
+      "wall_s": 5.04
+    },
+    "drag": {
+      "pct_core": 15.291,
+      "samples": 38,
+      "wall_s": 10.26
+    },
+    "idle-mid1": {
+      "pct_core": 0.995,
+      "samples": 7,
+      "wall_s": 2.01
+    },
+    "scroll": {
+      "pct_core": 4.229,
+      "samples": 39,
+      "wall_s": 10.22
+    },
+    "idle-mid2": {
+      "pct_core": 0.0,
+      "samples": 8,
+      "wall_s": 2.01
+    },
+    "type": {
+      "pct_core": 1.408,
+      "samples": 39,
+      "wall_s": 10.32
+    },
+    "idle-post": {
+      "pct_core": 0.0,
+      "samples": 19,
+      "wall_s": 5.01
+    }
+  },
+  "valid": true,
+  "why": [],
+  "scene": "rendering",
+  "scene_detail": {
+    "window": "./win-0.png",
+    "size": "786x593",
+    "luma_std": 45.8
+  }
+}

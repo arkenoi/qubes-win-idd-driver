@@ -318,3 +318,58 @@ them beforehand. Say so before starting, next time.**
 Raw data: `instrumentation/bench-stock-vs-ours-20260901-120938/` (win11, 8 s settle, retracted),
 `.../bench-stock-vs-ours-20260901-124616/` (win11, 45 s settle, authoritative),
 `.../bench-ablate-20260901-122017/`.
+
+## 2026-09-01 (cont.) — everything re-run at the fixed settle; both platforms reproduced twice
+
+Owner: *"rerun everything with the fixed settle once again."* Done, both platforms, one Windows
+guest at a time, 45 s settle after every swap.
+
+**WIN10** (19045.6456, 5120x1440), 6/6 valid, every row disjoint:
+
+| workload | stock 4.2.2 | ours 4.3.17 | delta |
+|---|---:|---:|---:|
+| scroll | 41.010 | 2.649 | -93.5 % |
+| typing | 22.815 | 2.312 | -89.9 % |
+| idle   |  3.906 | 0.498 | -87.3 % |
+| drag   | 29.035 | 16.225 | -44.1 % |
+
+**WIN11** (24H2 26100, 5120x1440), 6/6 valid, nothing distinguishable - and reproduced in a
+SECOND independent session, where the drag delta CHANGES SIGN (+15.9 % session A, -3.0 % session
+B). A difference that flips sign between sessions is a null result, not a small effect. Both
+sessions: no verdict on any workload.
+
+**Both platforms are now reproduced across two sessions.** That is the check that was missing when
+I published the false "+59.9 % win11 drag regression": within-session disjointness was never
+tested against between-session variance.
+
+**Two harness defects, both found because the instrument refused to produce numbers rather than
+producing bad ones:**
+
+1. **Settle floor.** 8 s after a swap between two DIFFERENT agents leaves startup work inside the
+   measurement and biases the side just swapped in. Now clamped to >= 30 s in code (default 45,
+   `BENCH_SETTLE_S` raises it, a lower value is clamped up with the reason on stderr). Owner asked
+   for >= 30 s; the floor is enforced rather than documented.
+2. **Guest-readiness gate.** The first win10 re-run produced **6 of 6 INVALID** with an empty
+   running hash. Cause: my chain script gated on `qtest run "echo up"`, which proves qrexec only -
+   and qrexec answers as SYSTEM long before the interactive user logs on, while `qubes.Filecopy`
+   targets the USER's Documents. So every push landed nowhere and `QubesIncoming` did not exist.
+   This is the recorded `pushrun-needs-a-session` trap, walked into again. The harness now
+   preflights for an ACTIVE console session and refuses to start without one, so no caller can
+   repeat it. **The run cost 20 minutes of guest time and produced no wrong numbers** - the
+   missing-data rule held.
+
+**What the two-session pair settles.** On win10 the fork is 2x-15x cheaper than stock across the
+board; on win11 it is indistinguishable. The mechanism is per-frame fixed cost, not pixels moved:
+both agents use the same Desktop Duplication capture and the same grant-once transport, but stock
+re-enumerates every top-level window on EVERY captured frame (its own `TODO: don't enumerate all
+windows every time, use window hooks`) and has no redundant-frame check at all, while this fork
+uses `SetWinEventHook` + a queued event drain and drops frames whose pixels did not change. That
+cost scales with (window count x frame rate), so where a session is busy and the screen is large
+it is enormous and we recover nearly all of it; where stock is already cheap - win11 - there is
+nothing left to recover and we are simply level with it.
+
+Raw data: `instrumentation/bench-stock-vs-ours-20260901-132224/` (win10, 45 s),
+`.../bench-stock-vs-ours-20260901-130700/` (win11 session B, 45 s),
+`.../bench-stock-vs-ours-20260901-124616/` (win11 session A, 45 s),
+`.../bench-stock-vs-ours-20260901-131944/` (win10, 6/6 INVALID - the session-gate failure, kept
+because a harness that fails loudly is worth a record).

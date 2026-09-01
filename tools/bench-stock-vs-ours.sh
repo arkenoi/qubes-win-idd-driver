@@ -59,6 +59,23 @@ STOCK_H="$(hash16 "$STOCK")"; OURS_H="$(hash16 "$OURS")"
 echo "   stock=$STOCK_H  ours=$OURS_H"
 [ "$STOCK_H" = "$OURS_H" ] && { echo "FATAL: both sides are the same binary"; exit 2; }
 
+# PREFLIGHT: an INTERACTIVE SESSION, not merely qrexec. qrexec answers as SYSTEM long before
+# the user logs on, and qubes.Filecopy targets the USER's Documents - so every push onto a
+# session-less guest lands nowhere and returns success. Measured 2026-09-01: a win10 re-run
+# gated on `qtest run "echo up"` produced 6 of 6 repetitions INVALID with an empty running
+# hash, because QubesIncoming did not exist yet. The harness caught it (missing data fails),
+# but 20 minutes of guest time were spent proving the gate was wrong. Gate on the session.
+for _ in $(seq 1 40); do
+    if qt run "quser" 2>/dev/null | grep -qi 'console .*Active'; then break; fi
+    sleep 15
+done
+if ! qt run "quser" 2>/dev/null | grep -qi 'console .*Active'; then
+    echo "FATAL: $VM has no ACTIVE console session - qubes.Filecopy would land nowhere and every" >&2
+    echo "       repetition would be INVALID. Check autologon on this guest." >&2
+    exit 2
+fi
+echo "   interactive session present"
+
 cp "$STOCK" "$OUTDIR/agent-stock.exe"; cp "$OURS" "$OUTDIR/agent-ours.exe"
 qt push "$HERE/guest/swap-agent.ps1" "$HERE/guest/phase-cpu-bench.ps1" \
         "$HERE/instrumentation/drag-harness.ps1" >/dev/null 2>&1

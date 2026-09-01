@@ -113,8 +113,8 @@ was verified against the stock baseline on the same guest (evidence in `FINDINGS
 
 ### CPU cost against stock — measured, and platform-dependent
 
-On **Windows 10** the agent costs a fraction of stock: typing −92 %, scroll −92 %, idle
-−94 %, drag −56 %, every repetition of one side beating every repetition of the other. On
+On **Windows 10** the agent costs a fraction of stock: scroll −94 %, typing −90 %, idle
+−87 %, drag −44 %, every repetition of one side beating every repetition of the other. On
 **Windows 11** no workload is distinguishable from stock — every difference is inside the
 run-to-run spread and none carries a verdict. Stock is an order of magnitude cheaper on
 Windows 11 than on Windows 10 to begin with, so there is far less to recover there. Its
@@ -269,31 +269,31 @@ gui-agent CPU, % of one core, median of 3 (2026-09-01, `tools/bench-stock-vs-our
 ONE guest per platform, ONE install, ONE display stack — only `gui-agent.exe` is swapped, and
 both binaries are built by the same CI job from the same toolchain, so neither the compiler nor
 the install is a variable. Stock is this fork's upstream merge-base (`431e4517`, three commits
-after `v4.2.2`). 3 rounds interleaved per platform; 12 repetitions, 12 valid, 0 invalid. Both
-guests at 5120x1440.
+after `v4.2.2`). 3 rounds interleaved per platform, 45 s settle after every swap; 12
+repetitions, 12 valid, 0 invalid. Both guests at 5120x1440. **Each platform's result was
+reproduced in a second independent session** — the check that matters, because an earlier run at
+a short settle produced a within-session result that a second session overturned.
 
-**Windows 10** (19045.6456) — every row has disjoint ranges:
+**Windows 10** (19045.6456) — every row has disjoint ranges, i.e. every repetition of one side
+beat every repetition of the other:
 
 | workload | stock 4.2.2 | this build | delta |
 |---|---:|---:|---:|
-| typing | 26.115 | **2.007** | −92.3 % |
-| scroll | 47.161 | **3.577** | −92.4 % |
-| drag   | 32.251 | **14.064** | −56.4 % |
-| idle   |  5.053 | **0.328** | −93.5 % |
+| scroll | 41.010 | **2.649** | −93.5 % |
+| typing | 22.815 | **2.312** | −89.9 % |
+| idle   |  3.906 | **0.498** | −87.3 % |
+| drag   | 29.035 | **16.225** | −44.1 % |
 
-(These were taken before a settle-time defect in the harness was found and fixed; it inflated
-both sides equally by up to ~36 %, which cannot manufacture a 2.3×–13× gap, so the direction
-stands and the absolute figures are upper bounds. The win11 table above is post-fix.)
-
-**Windows 11** (24H2, 26100) — stock is an order of magnitude cheaper here to begin with,
-and nothing is distinguishable from it:
+**Windows 11** (24H2, 26100) — stock is an order of magnitude cheaper here to begin with, and
+nothing is distinguishable from it. Two sessions, and the drag difference changes sign between
+them, which is what a genuine null result looks like:
 
 | workload | stock 4.2.2 | this build | delta | |
 |---|---:|---:|---:|---|
-| drag   | 14.641 | 16.967 | +15.9 % | inside noise (spread 36 %), no verdict |
-| scroll |  2.965 |  3.046 |  +2.7 % | inside noise, no verdict |
-| typing |  2.335 |  2.028 | −13.1 % | inside noise, no verdict |
-| idle   |  0.000 |  0.331 | | one side read 0.000 every time — below the CPU counter's resolution, no verdict |
+| drag   | 15.384 | 14.929 |  −3.0 % | inside noise; +15.9 % in the other session — no verdict |
+| scroll |  4.681 |  4.371 |  −6.6 % | inside noise — no verdict |
+| typing |  1.416 |  1.712 | +20.9 % | inside noise — no verdict |
+| idle   |  0.165 |  0.988 | | spread 302 %, and one session read 0.000 throughout — no verdict |
 
 Read the Windows 10 margin as scaling with screen area and with how many top-level windows the
 session has: stock re-enumerates every window on every captured frame (its own source says

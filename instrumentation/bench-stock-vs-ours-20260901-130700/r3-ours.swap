@@ -1,0 +1,15 @@
+Microsoft Windows [Version 10.0.26100.1742]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\System32>powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\swap-agent.ps1 -NewAgent C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\agent-ours.exe
+=== RESULT ===
+TARGET=C:\Program Files\Qubes Tools\bin\gui-agent.exe
+HASH_BEFORE=464772F1630E47BF
+HASH_PUSHED=5CEF96155147CDC6
+WATCHDOG_STOPPED=Stopped
+HASH_AFTER=5CEF96155147CDC6
+RUNNING_PID=3696
+HASH_RUNNING=5CEF96155147CDC6
+SWAP_OK
+
+C:\Windows\System32>

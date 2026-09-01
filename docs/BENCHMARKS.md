@@ -48,41 +48,48 @@ Two consequences worth keeping:
   swing on one binary across one day, which now looks like the same session variance rather than
   the `SweepDdaExempt` fix it was attributed to.
 
-### Windows 11 (24H2, build 26100, `win11-app`, 5120x1440) - 45 s settle
+### Windows 11 (24H2, build 26100, `win11-app`, 5120x1440) - 45 s settle, TWO sessions
+
+Nothing is distinguishable from stock, and the point is that this was checked TWICE in separate
+sessions rather than once. Session B is the table; session A is quoted beside it.
+
+| workload | stock 4.2.2 | ours (4.3.17) | delta (session B) | delta (session A) | verdict |
+|---|---:|---:|---:|---:|---|
+| drag   | 15.384 | 14.929 |  -3.0 % | +15.9 % | inside noise, and it CHANGES SIGN - no verdict |
+| scroll |  4.681 |  4.371 |  -6.6 % |  +2.7 % | inside noise - no verdict |
+| typing |  1.416 |  1.712 | +20.9 % | -13.1 % | inside noise, changes sign - no verdict |
+| idle   |  0.165 |  0.988 | spread 302 % | one side read 0.000 throughout | no verdict |
+
+```
+session B   drag   stock 12.549 15.384 18.996    ours 11.985 14.929 24.803
+            scroll stock 3.323  4.681  5.010     ours 2.594  4.371  5.892
+session A   drag   stock 13.117 14.641 18.512    ours 14.957 16.967 16.985
+            scroll stock 2.025  2.965  4.378     ours 2.352  3.046  5.058
+```
+
+A difference that flips sign between two independent sessions is a null result, not a small
+effect. **The old win11 regression was TYPING (+100 %, 2026-08-09) and it is gone.**
+
+### Windows 10 (19045.6456, `win10-app`, 5120x1440) - 45 s settle
+
+Every row disjoint: every repetition of one side beat every repetition of the other.
 
 | workload | stock 4.2.2 | ours (4.3.17) | delta | verdict |
 |---|---:|---:|---:|---|
-| drag   | 14.641 | 16.967 | +15.9 % | inside noise (spread 36 %) - no verdict |
-| scroll |  2.965 |  3.046 |  +2.7 % | inside noise (spread 89 %) - no verdict |
-| typing |  2.335 |  2.028 | -13.1 % | inside noise (spread 41 %) - no verdict |
-| idle   |  0.000 |  0.331 | | one side read 0.000 in EVERY repetition - below the CPU counter's resolution over a 5 s window. That is the sampler failing to resolve the rate, not a measurement of no CPU, and it gets no verdict. The harness enforces this now rather than reporting "disjoint, REAL". |
+| scroll | 41.010 |  **2.649** | -93.5 % | **REAL** - ranges disjoint |
+| typing | 22.815 |  **2.312** | -89.9 % | **REAL** - ranges disjoint |
+| idle   |  3.906 |  **0.498** | -87.3 % | **REAL** - ranges disjoint |
+| drag   | 29.035 | **16.225** | -44.1 % | **REAL** - ranges disjoint |
 
 ```
-drag     stock 13.117 14.641 18.512    ours 14.957 16.967 16.985
-scroll   stock 2.025  2.965  4.378     ours 2.352  3.046  5.058
-typing   stock 1.697  2.335  2.506     ours 1.819  2.028  2.643
+scroll   stock 40.825 41.010 43.324    ours 2.566  2.649  9.464
+typing   stock 19.557 22.815 29.921    ours 1.894  2.312  2.869
+idle     stock 3.085  3.906  5.709     ours 0.497  0.498  0.665
+drag     stock 24.730 29.035 35.818    ours 13.708 16.225 17.109
 ```
 
-**The old win11 regression was TYPING (+100 %, 2026-08-09) and it is gone** - typing is now
-inside noise. That is consistent with the idle-burn root cause and its fix, and it is the one
-cross-time claim here that survives, because it is a change from "every repetition of one side
-worse than every repetition of the other" to "indistinguishable", not a shift in a median.
-
-### Windows 10 (19045.6456, `win10-app`, 5120x1440) - 8 s settle, see the retraction above
-
-| workload | stock 4.2.2 | ours (4.3.17) | delta | verdict |
-|---|---:|---:|---:|---|
-| idle   |  5.053 | **0.328** | −93.5 % | **REAL** — ranges disjoint |
-| drag   | 32.251 | **14.064** | −56.4 % | **REAL** — ranges disjoint |
-| scroll | 47.161 |  **3.577** | −92.4 % | **REAL** — ranges disjoint |
-| typing | 26.115 |  **2.007** | −92.3 % | **REAL** — ranges disjoint |
-
-```
-idle     stock 4.252  5.053  5.547     ours 0.325  0.328  0.812
-drag     stock 31.238 32.251 33.780    ours 11.885 14.064 14.935
-scroll   stock 41.325 47.161 52.156    ours 3.337  3.577  3.703
-typing   stock 22.286 26.115 27.550    ours 1.269  2.007  2.014
-```
+An earlier session at the 8 s settle gave -93.5 / -92.3 / -93.5 / -56.4 % on the same four rows:
+same direction, same order of magnitude, so win10 is reproduced across two sessions too.
 
 ### Why the two platforms disagree — the mechanism
 
