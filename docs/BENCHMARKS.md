@@ -120,6 +120,32 @@ interrogated per frame) is in the QGAPERF record to measure this properly.
 
 ### Method and what was checked
 
+### The measurement protocol, in code rather than in prose
+
+Every rule below is enforced by `tools/bench-stock-vs-ours.sh` itself, because each was broken
+here first and a rule that depends on being remembered is not a control:
+
+1. **Settle at least 30 s after any binary swap** (default 45, `BENCH_SETTLE_S` to raise, clamped
+   up if set lower). Swapping between two different agents forces a full re-establishment and our
+   startup is heavier than stock's, so a short settle leaves startup work inside the measurement
+   and biases the side just swapped in. 8 s produced a published-then-retracted "+59.9 % win11
+   drag regression"; 45 s reproduced no such gap.
+2. **`vm_lock`** - two harnesses on one guest interleave their probes and fabricate verdicts.
+3. **Interleaved, with the starting side alternating per round** - guest drift must not land on
+   one side.
+4. **The RUNNING binary's hash read back off the guest every repetition** - a harness that
+   proceeds on a failed swap reports numbers for a build that never ran.
+5. **Missing data fails.** Too few CPU samples, no phase markers, or an unparseable run is
+   recorded INVALID and excluded - never coerced to zero. A side that reads 0.000 in EVERY
+   repetition is refused as below the counter's resolution, not reported as a disjoint result.
+6. **The scene verified by PIXELS every repetition** - luminance stddev of the client area with
+   the frame cropped. A wedged window survives agent restarts and binary swaps and nothing in the
+   agent's own output can see it.
+7. **A verdict only on DISJOINT ranges**, and only against variance that has actually been
+   sampled. Within-session disjointness is not enough on its own: the retraction above happened
+   because between-session variance was larger than the within-session spread and the suite had
+   never measured it. When a result matters, re-run it in a separate session before publishing.
+
 `tools/bench-stock-vs-ours.sh`, unattended. ONE guest per platform, ONE install, ONE display
 stack; only `gui-agent.exe` is swapped, in place. Both binaries built by the SAME CI job, same
 runner image, same pinned dependencies and same linker flags — stock from `431e4517`, this

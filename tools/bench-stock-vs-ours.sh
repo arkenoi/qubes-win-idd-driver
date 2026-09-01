@@ -35,8 +35,21 @@ VM="${QTEST_VM:?set QTEST_VM to the guest to benchmark}"
 IN='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 OUTDIR="$HERE/instrumentation/bench-stock-vs-ours-$(date -u +%Y%m%d-%H%M%S)"
 
+# SETTLE FLOOR, ENFORCED, not documented-and-hoped-for (owner, 2026-09-01: "give settle time
+# 30s at least"). 8 s produced a published-then-retracted "+59.9% win11 drag regression" that was
+# entirely this harness; 45 s reproduced no such gap. A floor in code cannot be forgotten by the
+# next caller the way a paragraph can.
+SETTLE_S="${BENCH_SETTLE_S:-45}"
+if [ "$SETTLE_S" -lt 30 ] 2>/dev/null; then
+    echo "settle ${SETTLE_S}s is below the 30 s floor - raising it. Below this, swapping between" >&2
+    echo "two different agents leaves startup work inside the measurement and biases the side" >&2
+    echo "that was just swapped in (measured 2026-09-01; see docs/BENCHMARKS.md)." >&2
+    SETTLE_S=30
+fi
+
 vm_lock "$VM"
 mkdir -p "$OUTDIR"
+echo "   settle after each swap: ${SETTLE_S}s (floor 30)"
 echo "== stock-vs-ours on $VM, $ROUNDS rounds, out=$OUTDIR"
 
 qt() { "$HERE/tools/qtest" "$@"; }
@@ -75,7 +88,7 @@ run_side() {  # run_side <side> <exe> <expected-hash> <round>
     # 13.3-16.3. Between-session variance larger than the within-session spread is exactly what
     # a disjoint-ranges verdict cannot survive, so the settle is now long enough for the
     # transient to be over, and overridable for anyone re-testing that claim.
-    sleep "${BENCH_SETTLE_S:-45}"
+    sleep "$SETTLE_S"
 
     qt run "powershell -NoProfile -ExecutionPolicy Bypass -File $IN\\phase-cpu-bench.ps1" \
         > "$OUTDIR/$tag.raw" 2>&1
