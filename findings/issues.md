@@ -34,7 +34,6 @@ of this file.
 - P3 Start-in-seamless stays off by owner decision; re-enable path is SeamlessStart=1 + docs/PLAN-start-menu.md when wanted. [verified 2026-09-01]
 
 ### rendering
-- P1 GWeck's 25H2 persistent black window — unreproduced on any rig we control; needs HIS pwdiag.ps1 output + dom0 guid log (the one artifact that closes the worst field item). [verified 2026-08-28]
 - P2 guest title-bar hiding parked opt-in OFF: dom0 WM sends WINDOW_FLAG_MINIMIZE to caption-stripped windows after a raise — dom0-side mechanism unexplained. [verified 2026-09-01]
 - P2 drag distortion when an override-redirect modal appears mid-drag — never reproduced; needs the exact modal + winwatch (shots are o-r-blind); plain overlap exonerated by measurement. (2026-08-16 record; history erased.) UNVERIFIED
 - P2 menu-overhang clipping: synthesized menu painted into the owner's buffer would truncate an overhanging menu in dom0 while looking right in-guest — never measured either way. UNVERIFIED
