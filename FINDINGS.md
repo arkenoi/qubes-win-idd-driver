@@ -24747,3 +24747,68 @@ any workload-specific trigger. No hypervisor faults or errors for the domain.
    does not exist. This is the "missing data fails" rule violated by our own tool. Fixed: clear
    the ring with `xl dmesg -c` before `debug-keys g`, and drop a
    `grant-CAPTURE-INCOMPLETE.txt` when the header is absent rather than printing a number.
+
+## 2026-09-01 — DRAG WOBBLE: full chronology, and the regression that undid the fix
+
+Owner: *"it certainly was deemed acceptable at some moment. dig the full chronology and examine
+what is missing."* It was, and something specific undid it.
+
+**Chronology (agent submodule, dates from git):**
+
+    2026-08-12  wobble first root-caused: input translated against the LIVE window origin, which
+                leads dom0 and closes a gain-1 loop. A four-fix series landed and was REVERTED
+                the same day (e2f36be reverts 43de7d4 ...).
+    2026-08-13  the ACCEPTED configuration: content freeze (InputDragFreezeContent), input-rate
+                drain (DragEventPriority), MonInfoCache. Servo experiment shipped default-OFF.
+                Owner PARKS the wobble - "the difference is marginal, both suck in a way".
+    2026-08-16  60f1cb4 quantised origin: translate against an announce dom0 has CERTAINLY
+                applied. 9b8f888 ships it at 70/140. a024918 adds a MOTION trace, which MEASURES
+                dom0's apply lag for the first time: median 0, p75 17 ms, tail (82, 398).
+                b75358b retunes to 25/50 on that measurement (ladder in perf.c; 25/50 was the
+                minimum, 20/40 measurably worse). 49c100a adds the interpolated origin.
+                **168a869 - "Interpolated origin ON by default: USER-APPROVED drag baseline".**
+    2026-08-17..08-31  ~90 further agent commits. VERIFIED: `git diff 168a869..HEAD -- perf.c`
+                contains NO change to any InputDrag* knob. The tuning is byte-identical to what
+                was approved, so the regression is not a retune.
+    2026-08-30  **b71f611 "handle MSG_CROSSING (127) instead of logging it as unknown at input
+                rate"** - and this is the one.
+
+**What is missing: `mode`.** `HandleCrossing` released the drag latch on ANY `LeaveNotify`:
+
+    if (crossingMsg.type == LeaveNotify && window && window == g_InputDragWindow) {
+        g_InputDragWindow = NULL; g_InputDragOriginValid = FALSE; DragAnnounceClear();
+    }
+
+X synthesises crossing events for GRAB BOOKKEEPING as well as for real pointer motion, and
+gui-daemon forwards the mode verbatim and unfiltered (`xside.c process_xevent_crossing`:
+`k.mode = ev->mode`). **A drag IS a pointer grab**: activating it delivers `LeaveNotify` with
+`mode=NotifyGrab` to the windows below the grab window - and dom0 decorates guest windows, so the
+WM's grab is on the frame and the guest window sits below it - with the matching `NotifyUngrab`
+on release. Reading those as "the pointer left" tears down the drag state at the moment a drag
+begins:
+ - `g_InputDragWindow = NULL` -> `InputDragFreezeContent` stops suppressing the per-frame
+   `PrintWindow`, which is the 193-211 ms startup stall coming back;
+ - `DragAnnounceClear()` -> the announce ring `InputDragQuantise` translates against is EMPTY, so
+   the reconstruction falls back to the live origin. That is exactly the gain-1 oscillator
+   Quantise was written to remove.
+So both shipped drag fixes are silently disabled mid-drag and the wobble returns at full
+strength - matching "it wobbles as hell" after a period when it was acceptable.
+
+Root enabler: **`NotifyNormal`/`NotifyGrab`/`NotifyUngrab` were never defined** in
+`gui-agent/xorg-keymap.h` (only `EnterNotify`/`LeaveNotify` were), so the field was easy to
+ignore. Defined now, and the latch release is guarded on `mode == NotifyNormal`. The non-normal
+case logs `latch KEPT` with the mode so its frequency is visible.
+
+**NOT CONFIRMED FIRING on a live guest, and that matters.** A scripted drag never arms the latch
+(PLAN-drag-quality: it "cannot show this defect at all"), so only a hand drag can prove it. The
+tell in the CURRENT build is the line `pointer left the window while the drag latch was held -
+releasing it` appearing in the agent log during a drag. If it is there, this is the cause. If it
+is absent, the regression is elsewhere and the next place to look is the frame-pipeline gating
+added for the secure-desktop work (878ae5e, 7e3f0b6, fb4c1cd), since announces are slaved to
+frames.
+
+**Second, independent and already known:** even with the latch intact, `AdoptMs=25` assumes a
+constant apply lag against a measured distribution of median 0 / p75 17 / tail 82, 398 ms. Every
+announce whose real lag exceeds 25 ms adopts an origin dom0 has not applied, the error takes the
+wrong sign, and the loop reopens for those events (perf.c says exactly this). That residual was
+accepted at 08-16; it is a tail effect, not the "as hell" case.
