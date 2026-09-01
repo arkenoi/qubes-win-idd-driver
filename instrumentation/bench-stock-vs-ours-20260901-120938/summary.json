@@ -1,0 +1,128 @@
+{
+  "idle-pre": {
+    "stock_median": 0.657,
+    "ours_median": 0.33,
+    "delta_pct": -49.8,
+    "stock": [
+      0.313,
+      0.657,
+      1.001
+    ],
+    "ours": [
+      0.0,
+      0.33,
+      0.662
+    ],
+    "disjoint": false,
+    "spread_pct": 200.6,
+    "verdict": "inside noise (spread 201%) - NO VERDICT"
+  },
+  "drag": {
+    "stock_median": 12.203,
+    "ours_median": 19.516,
+    "delta_pct": 59.9,
+    "stock": [
+      10.117,
+      12.203,
+      13.025
+    ],
+    "ours": [
+      18.298,
+      19.516,
+      21.673
+    ],
+    "disjoint": true,
+    "spread_pct": 23.8,
+    "verdict": "REAL - ranges disjoint, ours WORSE"
+  },
+  "idle-mid1": {
+    "stock_median": 0.0,
+    "ours_median": 1.669,
+    "delta_pct": NaN,
+    "stock": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "ours": [
+      0.0,
+      1.669,
+      2.552
+    ],
+    "disjoint": false,
+    "spread_pct": 152.9,
+    "verdict": "inside noise (spread 153%) - NO VERDICT"
+  },
+  "scroll": {
+    "stock_median": 3.118,
+    "ours_median": 1.883,
+    "delta_pct": -39.6,
+    "stock": [
+      2.363,
+      3.118,
+      5.227
+    ],
+    "ours": [
+      1.574,
+      1.883,
+      4.337
+    ],
+    "disjoint": false,
+    "spread_pct": 146.7,
+    "verdict": "inside noise (spread 147%) - NO VERDICT"
+  },
+  "idle-mid2": {
+    "stock_median": 0.851,
+    "ours_median": 1.696,
+    "delta_pct": 99.3,
+    "stock": [
+      0.0,
+      0.851,
+      0.986
+    ],
+    "ours": [
+      0.0,
+      1.696,
+      1.982
+    ],
+    "disjoint": false,
+    "spread_pct": 116.9,
+    "verdict": "inside noise (spread 117%) - NO VERDICT"
+  },
+  "type": {
+    "stock_median": 1.399,
+    "ours_median": 1.68,
+    "delta_pct": 20.1,
+    "stock": [
+      0.924,
+      1.399,
+      2.642
+    ],
+    "ours": [
+      0.783,
+      1.68,
+      3.412
+    ],
+    "disjoint": false,
+    "spread_pct": 156.5,
+    "verdict": "inside noise (spread 156%) - NO VERDICT"
+  },
+  "idle-post": {
+    "stock_median": 0.331,
+    "ours_median": 0.0,
+    "delta_pct": -100.0,
+    "stock": [
+      0.0,
+      0.331,
+      1.328
+    ],
+    "ours": [
+      0.0,
+      0.0,
+      0.327
+    ],
+    "disjoint": false,
+    "spread_pct": 401.2,
+    "verdict": "inside noise (spread 401%) - NO VERDICT"
+  }
+}

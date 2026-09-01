@@ -1,0 +1,7 @@
+Microsoft Windows [Version 10.0.26100.1742]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\System32>reg delete "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" /v InputDragSlice /f >nul 2>&1 & reg delete "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" /v DragEventPriority /f >nul 2>&1 & reg delete "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" /v InputDragFreezeContent /f >nul 2>&1 & reg delete "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" /v PerWindowCapture /f >nul 2>&1 & reg add "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" /v InputDragFreezeContent /t REG_DWORD /d 0 /f >nul & echo KNOBS_SET
+KNOBS_SET
+
+C:\Windows\System32>

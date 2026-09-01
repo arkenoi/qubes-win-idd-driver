@@ -67,9 +67,15 @@ run_side() {  # run_side <side> <exe> <expected-hash> <round>
     fi
     echo "   running $got"
 
-    # Scene: the workload harness opens its own Notepad. Give the desktop a moment to settle so
-    # the first phase is not measuring the swap's own restart storm.
-    sleep 8
+    # SETTLE. Not cosmetic: swapping between two DIFFERENT agents forces a full
+    # re-establishment - re-enumeration, per-window capture channels, buffers, grants - and our
+    # startup is heavier than stock's, so a short settle biases against whichever side was just
+    # swapped in. Measured 2026-09-01: with an 8 s settle, ours' win11 drag read 18.3-21.7,
+    # while the same binary at the same defaults in a session with no cross-agent swap read
+    # 13.3-16.3. Between-session variance larger than the within-session spread is exactly what
+    # a disjoint-ranges verdict cannot survive, so the settle is now long enough for the
+    # transient to be over, and overridable for anyone re-testing that claim.
+    sleep "${BENCH_SETTLE_S:-45}"
 
     qt run "powershell -NoProfile -ExecutionPolicy Bypass -File $IN\\phase-cpu-bench.ps1" \
         > "$OUTDIR/$tag.raw" 2>&1

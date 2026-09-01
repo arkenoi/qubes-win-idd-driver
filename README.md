@@ -111,13 +111,15 @@ was verified against the stock baseline on the same guest (evidence in `FINDINGS
 - **No stray border rectangles or double titles** on compound windows (see the Office
   item below).
 
-### Lower CPU cost than stock — measured
+### CPU cost against stock — measured, and platform-dependent
 
-The agent costs a fraction of stock's CPU on every workload measured: typing −92 %,
-scroll −92 %, idle −94 %, drag −56 %, with every repetition of one side beating every
-repetition of the other. Its working set also stays flat where stock's grows ~87 MB per
-workload. The margin scales with screen area — these are large-screen numbers. Numbers,
-method and caveats: "Performance" below.
+On **Windows 10** the agent costs a fraction of stock: typing −92 %, scroll −92 %, idle
+−94 %, drag −56 %, every repetition of one side beating every repetition of the other. On
+**Windows 11** no workload is distinguishable from stock — every difference is inside the
+run-to-run spread and none carries a verdict. Stock is an order of magnitude cheaper on
+Windows 11 than on Windows 10 to begin with, so there is far less to recover there. Its
+working set stays flat where stock's grows ~87 MB per workload. Numbers, method and
+caveats: "Performance" below.
 
 ### One mouse cursor instead of two
 
@@ -264,10 +266,13 @@ after:   Xen PV Network Device #0              (emulated NIC UNPLUGGED)
 ## Performance
 
 gui-agent CPU, % of one core, median of 3 (2026-09-01, `tools/bench-stock-vs-ours.sh`).
-ONE guest (Windows 10, 5120x1440), ONE install, ONE display stack — only `gui-agent.exe` is
-swapped, and both binaries are built by the same CI job from the same toolchain, so neither
-the compiler nor the install is a variable. Stock is this fork's upstream merge-base
-(`431e4517`, three commits after `v4.2.2`). 3 rounds interleaved; 6 repetitions, 6 valid:
+ONE guest per platform, ONE install, ONE display stack — only `gui-agent.exe` is swapped, and
+both binaries are built by the same CI job from the same toolchain, so neither the compiler nor
+the install is a variable. Stock is this fork's upstream merge-base (`431e4517`, three commits
+after `v4.2.2`). 3 rounds interleaved per platform; 12 repetitions, 12 valid, 0 invalid. Both
+guests at 5120x1440.
+
+**Windows 10** (19045.6456) — every row has disjoint ranges:
 
 | workload | stock 4.2.2 | this build | delta |
 |---|---:|---:|---:|
@@ -276,16 +281,31 @@ the compiler nor the install is a variable. Stock is this fork's upstream merge-
 | drag   | 32.251 | **14.064** | −56.4 % |
 | idle   |  5.053 | **0.328** | −93.5 % |
 
-Every row has **disjoint ranges** — every repetition of one side beat every repetition of the
-other — which is the only condition under which this project reports a verdict. The running
-binary's hash was read back off the guest each repetition and the scene verified by pixels.
+(These were taken before a settle-time defect in the harness was found and fixed; it inflated
+both sides equally by up to ~36 %, which cannot manufacture a 2.3×–13× gap, so the direction
+stands and the absolute figures are upper bounds. The win11 table above is post-fix.)
 
-Read the margin as scaling with screen area: stock streams the whole 7.4 Mpx framebuffer,
-while this build adds DDA-sourced capture, per-window capture and dirty-rect-limited
-processing to avoid exactly that. Expect less on a small screen. This measures agent CPU for
-a fixed workload, not frames delivered; the earlier "2× stock on typing" result was real for
-the build and guest it measured and is superseded. Method, per-repetition values, what this
-does not measure, and every retraction: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+**Windows 11** (24H2, 26100) — stock is an order of magnitude cheaper here to begin with,
+and nothing is distinguishable from it:
+
+| workload | stock 4.2.2 | this build | delta | |
+|---|---:|---:|---:|---|
+| drag   | 14.641 | 16.967 | +15.9 % | inside noise (spread 36 %), no verdict |
+| scroll |  2.965 |  3.046 |  +2.7 % | inside noise, no verdict |
+| typing |  2.335 |  2.028 | −13.1 % | inside noise, no verdict |
+| idle   |  0.000 |  0.331 | | one side read 0.000 every time — below the CPU counter's resolution, no verdict |
+
+Read the Windows 10 margin as scaling with screen area and with how many top-level windows the
+session has: stock re-enumerates every window on every captured frame (its own source says
+`TODO: don't enumerate all windows every time, use window hooks`) and never drops a frame whose
+pixels did not change, both of which this build does. That is per-frame fixed cost, not pixels
+moved — the transport is identical on both sides. Where stock's per-frame cost is already low,
+as on Windows 11, there is nothing for that to recover and our added machinery shows up instead.
+
+This measures agent CPU for a fixed workload, not frames delivered. The earlier "2× stock on
+typing" result was real for the build and guest it measured and is superseded — typing is now
+inside noise on Windows 11. Method, per-repetition values, what this does not measure, and
+every retraction: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ---
 

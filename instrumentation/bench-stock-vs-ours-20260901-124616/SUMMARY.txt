@@ -1,0 +1,30 @@
+repetitions: 6 total, 6 valid, 0 INVALID
+
+binaries actually measured (from the guest, per repetition):
+  ours  5CEF96155147CDC6
+  stock 464772F1630E47BF
+
+phase                 stock (n)           ours (n)      delta  verdict
+idle-pre            0.000 (3)        0.000 (3)      +nan%  inside noise (spread 0%) - NO VERDICT
+drag               14.641 (3)       16.967 (3)     +15.9%  inside noise (spread 36%) - NO VERDICT
+idle-mid1           0.000 (3)        0.968 (3)      +nan%  inside noise (spread 264%) - NO VERDICT
+scroll              2.965 (3)        3.046 (3)      +2.7%  inside noise (spread 89%) - NO VERDICT
+idle-mid2           0.000 (3)        0.841 (3)      +nan%  inside noise (spread 101%) - NO VERDICT
+type                2.335 (3)        2.028 (3)     -13.1%  inside noise (spread 41%) - NO VERDICT
+idle-post           0.000 (3)        0.662 (3)      +nan%  REAL - ranges disjoint, ours WORSE
+
+per-repetition values (% of one core):
+  idle-pre     stock r1=0.000  r2=0.000  r3=0.000
+  idle-pre     ours  r1=0.000  r2=0.000  r3=0.000
+  drag         stock r1=14.641  r2=14.144  r3=19.422
+  drag         ours  r1=16.967  r2=14.957  r3=16.985
+  idle-mid1    stock r1=1.003  r2=0.000  r3=0.000
+  idle-mid1    ours  r1=0.846  r2=0.968  r3=3.397
+  scroll       stock r1=2.025  r2=4.378  r3=2.965
+  scroll       ours  r1=3.046  r2=2.352  r3=5.058
+  idle-mid2    stock r1=0.000  r2=0.846  r3=0.000
+  idle-mid2    ours  r1=0.000  r2=0.849  r3=0.841
+  type         stock r1=2.506  r2=2.335  r3=1.697
+  type         ours  r1=1.819  r2=2.028  r3=2.643
+  idle-post    stock r1=0.000  r2=0.000  r3=0.000
+  idle-post    ours  r1=0.328  r2=0.664  r3=0.662

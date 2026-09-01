@@ -18,7 +18,138 @@ and its confounds, the single-variable stock comparison, the retractions, and th
 analysis. The README carries only the current verdict; this document is the record of how it
 was reached. Raw per-session data and the running lab notebook are in `FINDINGS.md`.
 
-## Current state (2026-09-01) — single-variable stock vs ours, re-measured
+## Current state (2026-09-01) — single-variable stock vs ours, BOTH platforms
+
+**On Windows 10 this build costs a fraction of stock on every workload. On Windows 11 nothing
+is distinguishable from stock.** That is the whole result.
+
+**RETRACTED, within this same section and the same day: an earlier revision reported "win11 drag
++59.9 %, REAL, ranges disjoint" and called it a regression.** It was an artifact of this harness.
+The suite alternates stock and ours, so every repetition follows a swap between two DIFFERENT
+agents, which forces a full re-establishment - re-enumeration, per-window capture channels,
+buffers, grants - and our startup is heavier than stock's. The settle after the swap was 8 s.
+Re-run at 45 s, with nothing else changed, drag went stock 12.203 -> 14.641 and ours
+19.516 -> 16.967: BOTH sides moved, the gap collapsed from +59.9 % to +15.9 %, and it is now
+inside the run-to-run spread with no verdict. An ablation session on the same guest and binary
+had already read ours' drag at 13.3-16.3 against the suite's 18.3-21.7, which is what exposed
+it: between-session variance larger than the within-session spread is exactly what a
+disjoint-ranges verdict cannot survive. The settle is now 45 s and overridable via
+`BENCH_SETTLE_S`.
+
+Two consequences worth keeping:
+- **The Windows 10 verdicts stand.** They were taken at the 8 s settle too, so their absolute
+  figures carry the same inflation on BOTH sides - but the margins there are 2.3x to 13x, and a
+  36 % transient cannot manufacture a 13x gap. The DIRECTION is safe; treat the absolute numbers
+  as upper bounds until a re-run at 45 s replaces them.
+- **The cross-time comparison is withdrawn too.** "Our drag went 8.67 (2026-08-10) -> 19.5,
+  +125 %, against a stock control that did not move" was built on the same inflated figure, and
+  its 2026-08-10 anchor is itself soft: that table's stock column was not measured that day (the
+  section below says so), and ours' own drag read 11.727 on 08-09 and 8.67 on 08-10 - a 26 %
+  swing on one binary across one day, which now looks like the same session variance rather than
+  the `SweepDdaExempt` fix it was attributed to.
+
+### Windows 11 (24H2, build 26100, `win11-app`, 5120x1440) - 45 s settle
+
+| workload | stock 4.2.2 | ours (4.3.17) | delta | verdict |
+|---|---:|---:|---:|---|
+| drag   | 14.641 | 16.967 | +15.9 % | inside noise (spread 36 %) - no verdict |
+| scroll |  2.965 |  3.046 |  +2.7 % | inside noise (spread 89 %) - no verdict |
+| typing |  2.335 |  2.028 | -13.1 % | inside noise (spread 41 %) - no verdict |
+| idle   |  0.000 |  0.331 | | one side read 0.000 in EVERY repetition - below the CPU counter's resolution over a 5 s window. That is the sampler failing to resolve the rate, not a measurement of no CPU, and it gets no verdict. The harness enforces this now rather than reporting "disjoint, REAL". |
+
+```
+drag     stock 13.117 14.641 18.512    ours 14.957 16.967 16.985
+scroll   stock 2.025  2.965  4.378     ours 2.352  3.046  5.058
+typing   stock 1.697  2.335  2.506     ours 1.819  2.028  2.643
+```
+
+**The old win11 regression was TYPING (+100 %, 2026-08-09) and it is gone** - typing is now
+inside noise. That is consistent with the idle-burn root cause and its fix, and it is the one
+cross-time claim here that survives, because it is a change from "every repetition of one side
+worse than every repetition of the other" to "indistinguishable", not a shift in a median.
+
+### Windows 10 (19045.6456, `win10-app`, 5120x1440) - 8 s settle, see the retraction above
+
+| workload | stock 4.2.2 | ours (4.3.17) | delta | verdict |
+|---|---:|---:|---:|---|
+| idle   |  5.053 | **0.328** | −93.5 % | **REAL** — ranges disjoint |
+| drag   | 32.251 | **14.064** | −56.4 % | **REAL** — ranges disjoint |
+| scroll | 47.161 |  **3.577** | −92.4 % | **REAL** — ranges disjoint |
+| typing | 26.115 |  **2.007** | −92.3 % | **REAL** — ranges disjoint |
+
+```
+idle     stock 4.252  5.053  5.547     ours 0.325  0.328  0.812
+drag     stock 31.238 32.251 33.780    ours 11.885 14.064 14.935
+scroll   stock 41.325 47.161 52.156    ours 3.337  3.577  3.703
+typing   stock 22.286 26.115 27.550    ours 1.269  2.007  2.014
+```
+
+### Why the two platforms disagree — the mechanism
+
+Both agents use the SAME Desktop Duplication capture and the SAME transport: the framebuffer is
+granted once and only dirty-rect metadata crosses the vchan. So the difference is **per-frame
+fixed cost, not pixels moved.**
+
+Stock's `ProcessNewFrame` (`431e4517`) does this on EVERY captured frame, under its own TODO:
+
+    // TODO: don't enumerate all windows every time, use window hooks to monitor for changes
+
+- `UpdateWindowData()` for every tracked window — `GetWindowInfo`, `GetWindowRect`, DWM
+  queries, class and caption reads;
+- `AddAllWindows()` → a full `EnumWindows` over every top-level window in the session, each
+  candidate interrogated;
+- and there is no redundant-frame check anywhere in it (`grep -c redundant` on stock's main.c
+  returns 0).
+
+This fork replaced the first two with `SetWinEventHook` + a queued event drain, and added
+`FrameRedundant()`, which drops a captured frame outright when its pixels are unchanged.
+
+That predicts both results. Stock's cost is roughly (top-level window count x frame rate), so
+where a session has many windows and the desktop is large, it is enormous and we recover almost
+all of it — Windows 10 idle 15x, typing and scroll 13x, and drag only 2.3x because during a drag
+the window genuinely moves and there is real work on both sides. Where stock's per-frame cost is
+already low — Windows 11, whose measured stock cost is an order of magnitude below Windows 10's
+on the identical workload and resolution — there is nothing left to recover, and our ADDED
+machinery is what shows up. Hence the win11 drag regression.
+
+**A cross-platform caveat that must not be skipped:** these are two different guests with
+different window populations, and stock's cost scales with exactly that. win10-app has had a
+Microsoft Store window open since earlier testing. So win10-vs-win11 absolute figures are NOT a
+platform comparison; only stock-vs-ours WITHIN one guest is single-variable. `iwn` (windows
+interrogated per frame) is in the QGAPERF record to measure this properly.
+
+### Method and what was checked
+
+`tools/bench-stock-vs-ours.sh`, unattended. ONE guest per platform, ONE install, ONE display
+stack; only `gui-agent.exe` is swapped, in place. Both binaries built by the SAME CI job, same
+runner image, same pinned dependencies and same linker flags — stock from `431e4517`, this
+fork's merge-base with QubesOS/qubes-gui-agent-windows (three upstream commits after `v4.2.2`),
+ours from the released 4.3.17 source. So neither the compiler nor the install is a variable.
+3 rounds per platform, interleaved, with the starting side alternating per round.
+
+**12 repetitions across both platforms, 12 valid, 0 invalid.** Per repetition: the running
+binary's hash was read back off the guest (`stock 464772F1630E47BF`, `ours 5CEF96155147CDC6`),
+and the scene was verified by PIXELS — luminance stddev of the Notepad client area with the
+frame cropped, so the wedged-window trap of 2026-08-12 is checked for rather than remembered.
+
+"REAL" means the two sides' ranges are DISJOINT: every repetition of one side beat every
+repetition of the other. Nothing else gets a verdict — the 2026-08-09 harness tagged drag "beats
+stock" on a −4.8 % difference inside a 34.6 % spread, and this one prints the spread instead.
+
+**What this does NOT measure, stated plainly:**
+- **Frames delivered.** This is agent CPU cost for a fixed scripted workload. The scene was
+  verified present and rendering in dom0 on both sides, so neither side is cheap because it drew
+  nothing — but frame rate is not measured here, and a build can be cheap and still be wrong.
+  Correctness defects (stock's seamless drag artifacts, its z-order dependency) were found by
+  looking at the screen, not by this harness.
+- **Stock being broken rather than merely expensive.** Checked: its log for a repetition was 22
+  lines with 4 warnings, no error loop. It also logs LESS than ours (156 lines over the same
+  workload), so instrumentation cost cannot explain the direction either.
+
+Raw data: `instrumentation/bench-stock-vs-ours-20260901-091217/` (win10) and
+`instrumentation/bench-stock-vs-ours-20260901-120938/` (win11).
+
+## Superseded first draft of the above (win10 only) — kept for the record
 
 **This supersedes every CPU number below it**, including the 2026-08-10 table and the
 2026-08-09 "ours costs 2× stock on typing" headline. Both were measured on guests that no

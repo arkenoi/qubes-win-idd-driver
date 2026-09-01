@@ -1,0 +1,128 @@
+{
+  "idle-pre": {
+    "stock_median": 0.0,
+    "ours_median": 0.0,
+    "delta_pct": NaN,
+    "stock": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "ours": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "disjoint": false,
+    "spread_pct": 0,
+    "verdict": "inside noise (spread 0%) - NO VERDICT"
+  },
+  "drag": {
+    "stock_median": 14.641,
+    "ours_median": 16.967,
+    "delta_pct": 15.9,
+    "stock": [
+      14.144,
+      14.641,
+      19.422
+    ],
+    "ours": [
+      14.957,
+      16.967,
+      16.985
+    ],
+    "disjoint": false,
+    "spread_pct": 36.0,
+    "verdict": "inside noise (spread 36%) - NO VERDICT"
+  },
+  "idle-mid1": {
+    "stock_median": 0.0,
+    "ours_median": 0.968,
+    "delta_pct": NaN,
+    "stock": [
+      0.0,
+      0.0,
+      1.003
+    ],
+    "ours": [
+      0.846,
+      0.968,
+      3.397
+    ],
+    "disjoint": false,
+    "spread_pct": 263.5,
+    "verdict": "inside noise (spread 264%) - NO VERDICT"
+  },
+  "scroll": {
+    "stock_median": 2.965,
+    "ours_median": 3.046,
+    "delta_pct": 2.7,
+    "stock": [
+      2.025,
+      2.965,
+      4.378
+    ],
+    "ours": [
+      2.352,
+      3.046,
+      5.058
+    ],
+    "disjoint": false,
+    "spread_pct": 88.8,
+    "verdict": "inside noise (spread 89%) - NO VERDICT"
+  },
+  "idle-mid2": {
+    "stock_median": 0.0,
+    "ours_median": 0.841,
+    "delta_pct": NaN,
+    "stock": [
+      0.0,
+      0.0,
+      0.846
+    ],
+    "ours": [
+      0.0,
+      0.841,
+      0.849
+    ],
+    "disjoint": false,
+    "spread_pct": 101.0,
+    "verdict": "inside noise (spread 101%) - NO VERDICT"
+  },
+  "type": {
+    "stock_median": 2.335,
+    "ours_median": 2.028,
+    "delta_pct": -13.1,
+    "stock": [
+      1.697,
+      2.335,
+      2.506
+    ],
+    "ours": [
+      1.819,
+      2.028,
+      2.643
+    ],
+    "disjoint": false,
+    "spread_pct": 40.6,
+    "verdict": "inside noise (spread 41%) - NO VERDICT"
+  },
+  "idle-post": {
+    "stock_median": 0.0,
+    "ours_median": 0.662,
+    "delta_pct": NaN,
+    "stock": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "ours": [
+      0.328,
+      0.662,
+      0.664
+    ],
+    "disjoint": true,
+    "spread_pct": 50.8,
+    "verdict": "REAL - ranges disjoint, ours WORSE"
+  }
+}

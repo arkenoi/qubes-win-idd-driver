@@ -43,6 +43,12 @@ def main(outdir):
             print(f"| {label} | n/a | n/a | | too few valid repetitions — NO VERDICT |")
             continue
         ms, mo = statistics.median(st), statistics.median(ou)
+        # See bench-summarise.py: an all-zero side is the CPU counter failing to resolve the
+        # rate over a short quiet phase, not a measurement of no CPU. No verdict from it.
+        if max(st) == 0 or max(ou) == 0:
+            print(f"| {label} | {ms:.3f} | {mo:.3f} | | one side read 0.000 every repetition "
+                  f"— below counter resolution, no verdict |")
+            continue
         disjoint = (max(st) < min(ou)) or (max(ou) < min(st))
         spread = max((max(st) - min(st)) / ms * 100 if ms else 0,
                      (max(ou) - min(ou)) / mo * 100 if mo else 0)

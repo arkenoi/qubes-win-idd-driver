@@ -78,6 +78,15 @@ def main(outdir):
                   f"(stock n={len(st)}, ours n={len(ou)}) - NO VERDICT")
             continue
         ms, mo = statistics.median(st), statistics.median(ou)
+        # A SIDE THAT READ ZERO EVERY TIME IS MISSING DATA, NOT A VALUE. The CPU counter has
+        # finite resolution, so a short quiet phase can leave it un-ticked for the whole window;
+        # that is the sampler failing to resolve the rate, not the agent using no CPU. Reporting
+        # "0.000 vs 0.331, ranges disjoint, REAL" off the back of it would be the same class of
+        # error as coercing a failed run to zero, which this harness refuses to do elsewhere.
+        if max(st) == 0 or max(ou) == 0:
+            print(f"{p:12s} {ms:12.3f} ({len(st)}) {mo:12.3f} ({len(ou)}) {'':>9s}  one side read 0.000 "
+                  f"in every repetition - below the CPU counter's resolution, NO VERDICT")
+            continue
         delta = (mo - ms) / ms * 100 if ms else float("nan")
         disjoint = (max(st) < min(ou)) or (max(ou) < min(st))
         spread = max(
