@@ -52,7 +52,7 @@ of this file.
 - P3 mirage upstream PRs (mirage-net-xen#121, qubes-mirage-firewall#232) status unknown since 2026-08-24 — re-check before relying. [verified 2026-08-24]
 
 ### debug-introspection
-- P3 EMS is armed (both templates, inherited by AppVMs — win10-app verified `ems Yes`; COM1 feature on all four qubes); the only remaining link is the dom0 grep confirming EMS/SAC/SERIALMARK bytes in guest-<vm>-dm.log — in the owner's pending dom0 paste. [verified 2026-09-02]
+- DONE: EMS armed (both templates, AppVM-inherited) and the serial channel proven end-to-end — SERIALMARK x3 land in guest-<vm>-dm.log. EMS/SAC silence on a healthy client boot is expected (SAC is Server-only); the bugcheck-time payoff is unprovable from userspace and EMS won't diagnose the IPI wedge regardless — insurance only. [verified 2026-09-02]
 - P3 does `/var/log/xen/console/guest-<vm>.log` survive a domain restart — one cheap check with the existing HELPER VALIDATION marker. [verified 2026-09-01]
 - P3 kernel heartbeat writer (would timestamp wedge onset in a dom0 log) — not built. [verified 2026-09-01]
 - P3 OWNER GATES: gui-agent log sink onto the console writer; unauthenticated SYSTEM console shell. Both security tradeoffs, not technical ones. [verified 2026-09-01]
