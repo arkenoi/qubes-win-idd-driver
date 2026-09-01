@@ -62,7 +62,7 @@ of this file.
 - P3 OWNER GATES: gui-agent log sink onto the console writer; unauthenticated SYSTEM console shell. Both security tradeoffs, not technical ones. [verified 2026-09-01]
 
 ### updates
-- P1 U1 scan failures (0x8024402C x4) cause UNKNOWN + the proxy-plane set is an open OWNER design decision (record disagrees with itself; the LOCALSYSTEM-plane attribution was falsified). [verified 2026-08-30]
+- P3 U1 (update availability to dom0) is UNMEASURED post-void — the 08-30 "scan failure" was ruled a meltdown hallucination by the owner; one clean live scan verifies the cell when convenient. [verified 2026-09-01]
 - P2 open deployment items: win11-fresh relay/updater deploy returned empty (cause unknown); `-Scheduled` missing from scan tasks on 3 guests; live large-download acceptance for the relay truncation fix never re-run. UNVERIFIED
 - P2 WU dialog defects: cannot be moved (jumps back — not root-caused) and its modality is invisible to dom0 (transient_for=0) — three options pending with the owner. [also: rendering, user-facing] [verified 2026-08-30]
 - P3 plain-HTTP qrexec/vchan transport loss (~1/3 of responses) — not our code, not yet established as an upstream defect; needs a repro from a Linux qube or after a proxy restart. [also: upstream] [verified 2026-08-14]
