@@ -1,0 +1,85 @@
+{
+ "truth": {
+  "p5-suite-verdict": "ALL_FOUR_GRADED_GREEN"
+ },
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "p5-sg0-feature-never-set",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p5-running-image-is-artefact",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p5-sg-unattended-suite",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p5-containment-agent-agrees",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p5-gate-preflight-clear",
+    "verdict": "INVALID-INSTRUMENT"
+   },
+   {
+    "check": "p5-sg1-mode1-coldboot",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg1-failproof",
+    "verdict": "ATTENDED-PENDING"
+   },
+   {
+    "check": "p5-sg2-feature-on-arm",
+    "verdict": "ATTENDED-PENDING"
+   },
+   {
+    "check": "p5-sg4-feature-on-arm",
+    "verdict": "ATTENDED-PENDING"
+   },
+   {
+    "check": "p5-sg5-secure-desktop",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg6-positive-residual",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg7-toasts",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg8-chrome",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg9-devarm",
+    "verdict": "N/A.*"
+   },
+   {
+    "check": "p5-sg10-filteroff-defense",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg10-progman-e2e",
+    "verdict": "ATTENDED-PENDING"
+   },
+   {
+    "check": "p5-nonseamless-signin-view",
+    "verdict": "ATTENDED-PENDING"
+   },
+   {
+    "check": "p5-sg11-matrix",
+    "verdict": "N/A.*"
+   }
+  ],
+  "ledger_absent": [
+   "p5-prove-cycle"
+  ]
+ }
+}

@@ -1,0 +1,50 @@
+{
+ "comment": "DEFECT (the suite's leak direction - the 2026-08-28 class-only Mode-1 class, and the measured 2026-08-31 leak where the agent offered dom0 a fullscreen override-redirect window the screenshot was blind to): p5-run.sh's TSV carries SG4 FAIL and SG2 FAIL - the probes MAPPED, the agent-log MAP witness confirms dom0 was offered the windows, the deny lines never fired. The suite judgement must answer GATE_LEAKED -> FAIL (a product defect, on_fail CONTINUE), and the runner's G-0 custody must refuse every later step on the subject: sg6, the whole diag lane, the loglevel restore and the shutdown - the failing guest is evidence, and the restore step is correctly unreachable because the swap it undoes never ran.",
+ "steps": [
+  "p5-safeguards.json"
+ ],
+ "vars": {
+  "SA": "win10-sa1",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260901-5/p5-safeguards",
+  "RELEASE_DIR": "/home/user/qwt-accept/AP-20260901-5/dl/qwt-full-package",
+  "RELEASE_SHA": "9C4F2A8B0D3E6F17",
+  "FI_DIR": "/home/user/qwt-accept/AP-20260901-5/dl/qwt-fault-package",
+  "FI_SHA": "5E1D0C9A7B42F380",
+  "HOSTW": "5120",
+  "HOSTH": "1440"
+ },
+ "results": {
+  "p5-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-5/p5-safeguards"
+  },
+  "p5-sg0-feature-gate": {
+   "exit": 0,
+   "stdout": "FEATURE-ABSENT"
+  },
+  "p5-release-artefact": {
+   "exit": 0,
+   "stdout": "RELEASE-ARTEFACT sha16=9C4F2A8B0D3E6F17 declared=9C4F2A8B0D3E6F17"
+  },
+  "p5-boot-sa": {
+   "exit": 0,
+   "stdout": "  p5-boot-sa: session up at t+187s"
+  },
+  "p5-hash-release": {
+   "exit": 0,
+   "stdout": "=== RESULT ===\n{\n    \"file_path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n    \"file_sha256\":  \"9C4F2A8B0D3E6F17\",\n    \"file_written\":  \"08:36:12\",\n    \"instances\":  1,\n    \"procs\":  [\n                  {\n                      \"pid\":  4812,\n                      \"start\":  \"18:37:44\",\n                      \"path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n                      \"image_sha256\":  \"9C4F2A8B0D3E6F17\",\n                      \"started_after_file_write\":  true\n                  }\n              ],\n    \"watchdog\":  \"Running\",\n    \"orig_present\":  false,\n    \"newest_log\":  \"gui-agent-20260901-183744.log\",\n    \"log_has_blockwin\":  true,\n    \"log_has_shellpolicy\":  true\n}\nRUNNING-IMAGE instances=1 image_matches_intended=1 started_after_write=1"
+  },
+  "p5-loglevel5": {
+   "exit": 0,
+   "stdout": "LOGLEVEL global=5 module=5"
+  },
+  "p5-fi-artefact": {
+   "exit": 0,
+   "stdout": "FI-ARTEFACT sha16=5E1D0C9A7B42F380 declared=5E1D0C9A7B42F380 fault_value_names=10"
+  },
+  "p5-suite-run": {
+   "exit": 0,
+   "stdout": "18:44:02 p5[win10-sa1]: === P5-2: disarm QubesWindowsUpdateScan (same gate as P4-1) ===\n  SCAN_BEFORE state=Ready nextrun=09/01/2026 8:41:12 PM\n  SCAN_AFTER state=Disabled\n  RELAY_AFTER 0\n  DISARMED True\n18:44:41 p5[win10-sa1]: === P5-3: containment (host 5120x1440) ===\n  {\"ok\":true,\"device\":\"\\\\.\\DISPLAY2\",\"was\":\"5120x1440\",\"wanted\":\"1600x900\",\"readback\":\"1600x900\",\"instrument_validated\":true}\n18:45:19 p5[win10-sa1]:   guest screen now: 1600x900\n18:45:52 p5[win10-sa1]:   agent believes: AGENTSCREEN 1600x900\n18:45:52 p5[win10-sa1]:   containment PROVEN: guest 1600x900, agent 1600x900, host 5120x1440\n18:46:40 p5[win10-sa1]: === control UP: dom0 sees 1 window(s), control=744x501 - capture path proven alive ===\n18:46:40 p5[win10-sa1]: === SG4: -Mode overrideredirect  (expect: nomap) ===\n18:48:35 p5[win10-sa1]:   probe: {\"mode\":\"overrideredirect\",\"hwnd\":\"0x2f04a2\",\"style\":\"0x96000000\",\"exstyle\":\"0x8\",\"rect\":\"0,0 1600x900\",\"covers_screen\":true,\"visible\":true}\n18:49:44 p5[win10-sa1]:   AGENT MAPPED the probe: 2 MAP message(s) for 0x2f04a2 - dom0 was offered this window\n18:49:52 p5[win10-sa1]:   probe 1600x900 mapped=yes  control_seen=yes  agent_map=2  dom0 dims: 744x501,1600x900 744x501,1600x900 744x501,1600x900 744x501,1600x900 744x501,1600x900 744x501,1600x900  'unconditionally denied, feature or not' hits=0\n18:49:52 p5[win10-sa1]:   -> FAIL: a 1600x900 window reached dom0 - the gate leaked\n18:50:11 p5[win10-sa1]: === SG2: -Mode borderless  (expect: nomap) ===\n18:51:58 p5[win10-sa1]:   probe: {\"mode\":\"borderless\",\"hwnd\":\"0x3a0188\",\"style\":\"0x96080000\",\"exstyle\":\"0x40000\",\"rect\":\"0,0 1600x900\",\"covers_screen\":true,\"visible\":true}\n18:53:07 p5[win10-sa1]:   AGENT MAPPED the probe: 1 MAP message(s) for 0x3a0188 - dom0 was offered this window\n18:53:14 p5[win10-sa1]:   probe 1600x900 mapped=yes  control_seen=yes  agent_map=1  dom0 dims: 744x501,1600x900 744x501,1600x900 744x501 744x501 744x501 744x501  'hidden (set service.gui-fullscreen to allow)' hits=0\n18:53:14 p5[win10-sa1]:   -> FAIL: a 1600x900 window reached dom0 - the gate leaked\n18:53:31 p5[win10-sa1]: === SG3: -Mode captioned  (expect: map) ===\n18:55:02 p5[win10-sa1]:   probe: {\"mode\":\"captioned\",\"hwnd\":\"0x1c06e4\",\"style\":\"0x96cf0000\",\"exstyle\":\"0x40100\",\"rect\":\"0,0 1600x900\",\"covers_screen\":true,\"visible\":true}\n18:56:18 p5[win10-sa1]:   probe 1600x900 mapped=yes  control_seen=yes  agent_map=1  dom0 dims: 744x501,1586x893 744x501,1586x893 744x501,1586x893 744x501,1586x893 744x501,1586x893 744x501,1586x893  'not-used' hits=0\n18:56:18 p5[win10-sa1]:   -> PASS-UNPROVEN: the captioned screen-sized window mapped, as the README requires\n18:56:35 p5[win10-sa1]: === SG9: Start is NOT presented in seamless (acceptance is the OPPOSITE of 'Start maps') ===\n18:57:22 p5[win10-sa1]:   dom0 windows=1 (control 1) [744x501]  deny hits=1\n18:57:22 p5[win10-sa1]:   -> PASS-UNPROVEN: no Start window in dom0, and the agent logged the deny\n18:57:24 p5[win10-sa1]: === P5 finished rc=1 ===\n18:57:24 p5[win10-sa1]: ATTENDED-PENDING (never run unattended - they need service.gui-fullscreen, which is banned):\n18:57:24 p5[win10-sa1]:   SG1 fail-proof (diag build, phase test removed), SG2 feature-ON arm, SG4 feature-ON arm,\n18:57:24 p5[win10-sa1]:   SG7 fail-proof (naive cloak filter diag build), SG10 both-bits arm\n18:57:26 p5[win10-sa1]: === re-enabling QubesWindowsUpdateScan ===\n  REENABLED\nP5RC=1"
+  }
+ }
+}

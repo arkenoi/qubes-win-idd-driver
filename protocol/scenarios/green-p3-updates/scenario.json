@@ -1,0 +1,73 @@
+{
+ "comment": "GREEN P3 walk on the standing Win10 template: no bench harness live, tinyproxy owns both ends (200 on the control CTL fetch), the boot+PT2M trigger is disarmed-and-recorded (G-0c) before any cell, the deployed stack hash-matches the SHIPPED PAYLOAD (never the repo - CRLF), the debounce answer is cleared before the kick (rule 9), the detached -Scheduled scan reaches phase=done with 3/3 CTLs and the dom0-visible updates-available feature, and U2's committed cold-boot primitive proves class_correct=true with qdb_retry_evidence on a real cold boot. Scan re-armed and the guest released at the end. Ground truth: DONE, every check PASS(-UNPROVEN until fail-proofs are harvested), honest BLOCKED/ATTENDED-PENDING/N-A declares for U1's sub-arms, U3, U4, U5, U6 and the standalone control.",
+ "steps": [
+  "p3-updates.json"
+ ],
+ "vars": {
+  "TPL": "win10-tpl",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260901-3/p3-updates",
+  "PAYLOAD_DIR": "/home/user/qwt-accept/AP-20260901-3/dl/qwt-improved-setup"
+ },
+ "results": {
+  "p3-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-3/p3-updates"
+  },
+  "p3-serial-gate": {
+   "exit": 0,
+   "stdout": "SERIAL-OK"
+  },
+  "p3-proxy-listen": {
+   "exit": 0,
+   "stdout": "LISTEN 0      128            127.0.0.1:8082          0.0.0.0:*    users:((\"tinyproxy\",pid=1873,fd=4))"
+  },
+  "p3-backend-egress": {
+   "exit": 0,
+   "stdout": "EGRESS http=200 bytes=7796"
+  },
+  "p3-boot-tpl": {
+   "exit": 0,
+   "stdout": "  p3-boot-tpl: session up at t+164s"
+  },
+  "p3-g0c-disarm": {
+   "exit": 0,
+   "stdout": "SCAN_BEFORE state=Ready nextrun=09/01/2026 6:43:27 PM\nSCAN_AFTER state=Disabled\nRELAY_AFTER 0\nDISARMED True"
+  },
+  "p3-u0-stack": {
+   "exit": 0,
+   "stdout": "=== RESULT ===\nqubes-windows-update.ps1     3f6b0d8a4c21e9b7    64512 bytes\nwu-update.ps1                9c01d2aa5e77f310    28438 bytes\nvmupdate-shim.ps1            5b8e6f0212aa9c44     9714 bytes\nensure-autologon.ps1         c44d1b7e880f5a23     6120 bytes\nVMExec.ps1                   7a90e3c6d1f24b58     3384 bytes\nqubes-updates-relay.exe      compiled 08:42:19  38912 bytes\nqubes-updates-relay.cs       d0e5b2a91c3f7468    87340 bytes  (compiler input)"
+  },
+  "p3-u0-tasks": {
+   "exit": 0,
+   "stdout": "U0TASKS scan_boot_pt2m=1 scan_rep_pt6h=1 scan_scheduled=1 scan_system=1 rundl_forbidden_triggers=0 rundl_scheduled=0 guard_pt30s=1 nau=1 xwud=1 winhttp_direct=1 relay_procs=0\n<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n  <Triggers>\n    <BootTrigger>\n      <Enabled>true</Enabled>\n      <Delay>PT2M</Delay>\n      <Repetition>\n        <Interval>PT6H</Interval>\n        <StopAtDurationEnd>false</StopAtDurationEnd>\n      </Repetition>\n    </BootTrigger>\n  </Triggers>\n  <Principals>\n    <Principal id=\"Author\">\n      <UserId>S-1-5-18</UserId>\n      <RunLevel>HighestAvailable</RunLevel>\n    </Principal>\n  </Principals>\n  <Settings>\n    <ExecutionTimeLimit>PT20M</ExecutionTimeLimit>\n    <Enabled>false</Enabled>\n  </Settings>\n  <Actions Context=\"Author\">\n    <Exec>\n      <Command>powershell.exe</Command>\n      <Arguments>-NoProfile -ExecutionPolicy Bypass -File \"C:\\Program Files\\Qubes Tools\\bin\\qubes-windows-update.ps1\" -Action scan -Scheduled</Arguments>\n    </Exec>\n  </Actions>\n</Task>\n<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n  <Triggers />\n  <Principals>\n    <Principal id=\"Author\">\n      <UserId>S-1-5-18</UserId>\n    </Principal>\n  </Principals>\n  <Settings>\n    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>\n    <Enabled>true</Enabled>\n  </Settings>\n  <Actions Context=\"Author\">\n    <Exec>\n      <Command>powershell.exe</Command>\n      <Arguments>-NoProfile -ExecutionPolicy Bypass -File \"C:\\Program Files\\Qubes Tools\\qubes-rpc-services\\wu-update.ps1\" -Action install</Arguments>\n    </Exec>\n  </Actions>\n</Task>\n<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n  <Triggers />\n  <Principals>\n    <Principal id=\"Author\">\n      <UserId>S-1-5-18</UserId>\n    </Principal>\n  </Principals>\n  <Settings>\n    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>\n    <Enabled>true</Enabled>\n  </Settings>\n  <Actions Context=\"Author\">\n    <Exec>\n      <Command>powershell.exe</Command>\n      <Arguments>-NoProfile -ExecutionPolicy Bypass -File \"C:\\Program Files\\Qubes Tools\\qubes-rpc-services\\wu-update.ps1\" -Action download</Arguments>\n    </Exec>\n  </Actions>\n</Task>\n<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n  <Triggers>\n    <BootTrigger>\n      <Enabled>true</Enabled>\n      <Delay>PT30S</Delay>\n    </BootTrigger>\n  </Triggers>\n  <Principals>\n    <Principal id=\"Author\">\n      <UserId>S-1-5-18</UserId>\n    </Principal>\n  </Principals>\n  <Actions Context=\"Author\">\n    <Exec>\n      <Command>powershell.exe</Command>\n      <Arguments>-NoProfile -ExecutionPolicy Bypass -File \"C:\\Program Files\\Qubes Tools\\qubes-rpc-services\\ensure-autologon.ps1\"</Arguments>\n    </Exec>\n  </Actions>\n</Task>\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU\n    NoAutoUpdate    REG_DWORD    0x1\n\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\n    ExcludeWUDriversInQualityUpdate    REG_DWORD    0x1\n\nCurrent WinHTTP proxy settings:\n\n    Direct access (no proxy server).\n\nINFO: No tasks are running which match the specified criteria."
+  },
+  "p3-u0-assert": {
+   "exit": 0,
+   "stdout": "STACK-MATCH:qubes-windows-update.ps1 3f6b0d8a4c21e9b7\nSTACK-MATCH:wu-update.ps1 9c01d2aa5e77f310\nSTACK-MATCH:vmupdate-shim.ps1 5b8e6f0212aa9c44\nSTACK-MATCH:ensure-autologon.ps1 c44d1b7e880f5a23\nSTACK-MATCH:VMExec.ps1 7a90e3c6d1f24b58"
+  },
+  "p3-u1-clear-debounce": {
+   "exit": 0,
+   "stdout": "DEBOUNCE_CLEARED"
+  },
+  "p3-u1-kick": {
+   "exit": 0,
+   "stdout": "2026-09-01T18:12:41Z\nSUCCESS: The parameters of scheduled task \"QubesWindowsUpdateScan\" have been changed.\nSUCCESS: Attempted to run the scheduled task \"QubesWindowsUpdateScan\".\nGUEST_KICK_LOCAL Tue 09/01/2026 18:12:43.71\nKICKED"
+  },
+  "p3-u1-collect": {
+   "exit": 0,
+   "stdout": "{\n    \"action\":  \"scan\",\n    \"phase\":  \"done\",\n    \"ts\":  \"2026-09-01T18:19:12\",\n    \"count\":  2,\n    \"available\":  [\n                      {\"kb\":\"KB5065426\",\"title\":\"2026-08 Cumulative Update for Windows 10 Version 22H2 for x64-based Systems (KB5065426)\",\"content_class\":\"quality\"},\n                      {\"kb\":\"KB5064401\",\"title\":\"2026-08 Cumulative Update for .NET Framework 3.5, 4.8 and 4.8.1 for Windows 10 Version 22H2 for x64 (KB5064401)\",\"content_class\":\"quality\"}\n                  ],\n    \"downloading\":  null,\n    \"installing\":  null,\n    \"result\":  [],\n    \"reboot_needed\":  false,\n    \"error\":  null,\n    \"done_ts\":  \"2026-09-01T18:19:12\"\n}\nSTATUSEOF\n18:13:07 Sync-Revocation: 3/3 CTLs refreshed through the relay, chain cache flushed\n18:19:12 reported 2 update(s) to dom0 qubes.NotifyUpdates (exit 0)\nAGENTLOGEOF\n1\nFEATEOF\nMARKER P3EGRESS-20260901T181158Z\nCONNECT   Sep 01 18:11:59.104 [1873]: Request (file descriptor 7): GET http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/disallowedcertstl.cab HTTP/1.1\nCONNECT   Sep 01 18:13:04.377 [1873]: Request (file descriptor 9): GET http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/authrootstl.cab HTTP/1.1\nCONNECT   Sep 01 18:13:05.812 [1873]: Request (file descriptor 9): GET http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/pinrulesstl.cab HTTP/1.1\nCONNECT   Sep 01 18:13:06.921 [1873]: Request (file descriptor 9): GET http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/disallowedcertstl.cab HTTP/1.1"
+  },
+  "p3-u2-run": {
+   "exit": 0,
+   "stdout": "18:21:02 u2[win10-tpl]: === ENSURE the boot scan is ENABLED (the opposite of every rendering cell) ===\n  Status:                                Ready\n18:21:05 u2[win10-tpl]: === ARM the acceptance baseline BEFORE the reboot ===\n  boot_time_before : 2026-09-01T08:41:27.5031250+00:00\n  vm_class_now     : TemplateVM\n  enabled          : True\n18:21:08 u2[win10-tpl]: === clear the scan debounce (update-status.json) so the boot pass is not suppressed ===\n  CLEARED\n18:21:10 u2[win10-tpl]:   LastBootUpTime before: 2026-09-01T08:41:27.5031250\n18:21:10 u2[win10-tpl]: === COLD BOOT ===\n18:24:48 u2[win10-tpl]:   LastBootUpTime after: 2026-09-01T18:23:16.2210937\n18:24:48 u2[win10-tpl]:   COLD BOOT PROVEN\n18:24:48 u2[win10-tpl]: === waiting out the boot-triggered scan (trigger is boot + PT2M) ===\n18:25:18 u2[win10-tpl]:   +30s: 'VM class' lines in the updater log: 0\n18:25:48 u2[win10-tpl]:   +60s: 'VM class' lines in the updater log: 0\n18:26:18 u2[win10-tpl]:   +90s: 'VM class' lines in the updater log: 0\n18:26:48 u2[win10-tpl]:   +120s: 'VM class' lines in the updater log: 0\n18:27:18 u2[win10-tpl]:   +150s: 'VM class' lines in the updater log: 1\n18:30:48 u2[win10-tpl]: === U2 CHECK ===\n  {\"rebooted\":true,\"boot_time_before\":\"2026-09-01T08:41:27\",\"boot_time_now\":\"2026-09-01T18:23:16\",\"class_lines\":1,\"class_correct\":true,\"saw_empty_class\":false,\"qdb_retry_evidence\":true}\n18:31:02 u2[win10-tpl]:   class_lines=1 class_correct=true saw_empty_class=false qdb_retry_evidence=true\n18:31:02 u2[win10-tpl]:   -> PASS: the boot pass classified this TemplateVM CORRECTLY from qubesdb on a real cold boot\n18:31:02 u2[win10-tpl]: === finished rc=0 ===\nU2RC=0"
+  },
+  "p3-rearm-scan": {
+   "exit": 0,
+   "stdout": "SUCCESS: The parameters of scheduled task \"QubesWindowsUpdateScan\" have been changed.\nTaskName:      \\QubesWindowsUpdateScan\nStatus:        Ready\nREARMED"
+  },
+  "p3-shutdown-tpl": {
+   "exit": 0,
+   "stdout": "TPL-HALTED"
+  }
+ }
+}

@@ -1,0 +1,29 @@
+{
+ "comment": "DEFECT: the M1 latch was never deployed on the AppVM lineage - pvnic-latch-readback shows no tasks and no applier payload, and health-check reports the REAL measured absence line 'QubesPvNic task not registered - M1 latch deployment absent' (hc-u10net2, 2026-08-30). This is the second-boot-needed incident at its root: without the latch the first attach cannot complete in one boot. The probe must FAIL and halt the part BEFORE the attach wastes the subject.",
+ "steps": [
+  "p2-network.json"
+ ],
+ "vars": {
+  "APPVM": "win10-app",
+  "CHURN": "win10-c1",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260901-2/p2-network"
+ },
+ "results": {
+  "p2-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-2/p2-network"
+  },
+  "p2-template-netvm": {
+   "exit": 0,
+   "stdout": "NETVM-OK"
+  },
+  "p2-boot-appvm": {
+   "exit": 0,
+   "stdout": "  p2-boot-appvm: session up at t+142s"
+  },
+  "p2-latch-presence": {
+   "exit": 0,
+   "stdout": "MARKJSON\n{\"nics\":null,\"disks\":null,\"vif_enum_key\":false,\"task_main\":false,\"task_rearm\":false,\"payload_sha256\":null,\"marker\":false,\"boot\":\"2026-09-01T08:41:27.5031250+00:00\",\"log_tail\":null}\n\"pvnic_applier\":{\"pass\":false,\"evidence\":{\"na\":\"QubesPvNic task not registered - M1 latch deployment absent\"},\"na\":true}"
+  }
+ }
+}

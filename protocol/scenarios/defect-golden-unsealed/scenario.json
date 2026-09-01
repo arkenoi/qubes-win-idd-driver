@@ -1,0 +1,29 @@
+{
+ "comment": "DEFECT: win10-base has NO seal record on disk - the seal JSON was never committed (the 0.4 'a record that dies with the session is not a record' class; historically win10-clean/win11-fresh were never sealed at all and served as entry images anyway). The live roster is missing the base (advisory probe goes INVALID and the walk continues), then the verify gate fails CLOSED: UNSEALED exit 2 -> INVALID-CONTAMINATED, HALT. Trap for a weak operator: reading 'no record' as 'probably unchanged, proceed' - the doc says no-record must never read as unchanged; the exit is the 0.6c rebuild, not a shrug.",
+ "steps": [
+  "golden.json"
+ ],
+ "vars": {
+  "REL": "09b643e12abc",
+  "MATRIX_WORK": "/home/user/qwt-matrix-work",
+  "GOLD10": "win10-base",
+  "FIXTURE": "win10-p46",
+  "GOLD_NEW10": "win10-st2g",
+  "GOLD_NEW11": "win11-st0p",
+  "ISO_LOOP10": "loop0",
+  "ISO_LOOP11": "loop3",
+  "STICK_LOOP10": "loop9",
+  "STICK_LOOP11": "loop17",
+  "R3_EVID": "/home/user/qwt-matrix-work/r3-pristine-win11-st0p"
+ },
+ "results": {
+  "gp-roster": {
+   "exit": 0,
+   "stdout": "win10-gold0      sealed 2026-08-30T09:13:45Z  re-sealed 2026-08-30 after fixing the dead revision reader\nwin10-goldr      sealed 2026-08-30T09:13:47Z  re-sealed 2026-08-30 after fixing the dead revision reader\nwin11-base       sealed 2026-08-30T11:58:20Z  primed pristine Win11 24H2 Enterprise Evaluation base (build 26100.240331-1435): no QWT, testsigning OFF, QubesPrime hook installed and PROVEN to fire\nwin11-gold0      sealed 2026-08-30T09:13:50Z  re-sealed 2026-08-30 after fixing the dead revision reader\nwin11-goldr      sealed 2026-08-30T09:13:53Z  re-sealed 2026-08-30 after fixing the dead revision reader"
+  },
+  "gp-verify-base": {
+   "exit": 2,
+   "stdout": "UNSEALED: no record for win10-base - a golden with no seal cannot be trusted"
+  }
+ }
+}

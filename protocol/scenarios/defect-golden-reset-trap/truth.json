@@ -1,0 +1,23 @@
+{
+ "truth": {
+  "st0-screen": "DESKTOP_SETTLED"
+ },
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "resettrap-verify",
+  "ledger": [
+   {
+    "check": "golden-pristine-screen",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-guest-attest",
+    "verdict": "INVALID-INSTRUMENT"
+   },
+   {
+    "check": "golden-reset-trap-restored",
+    "verdict": "INVALID-PRECONDITION"
+   }
+  ]
+ }
+}

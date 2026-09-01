@@ -1,0 +1,160 @@
+{
+ "comment": "QUARANTINE REGISTRY. Every extraction record classified NOT_MECHANISABLE across the five extraction files (extract-harness/segA/segB/segC/segD, job c2a0f57b), deduplicated (24 records -> 22 entries: gate-fw-net-owner==P0-CORE-3, 0.7b-check-for-the-knob==prohib-delivery-before-knob). Stated visibility is the point: NOTHING here is enforced by run.py, the lints, the step data, or campaign-verdict.sh, except the named partial_detector, which covers only the part it names. Nobody may assume these are covered. NOTE: RIG-CONSTRAINTS.md section 6 items 1-4 and lint-harness.py's NOT_LINTED list (rules 21/24/25, findings rule 4) are separate prose quarantines - the extraction classified those CLOSED_JUDGEMENT, so they are deliberately NOT duplicated here; they stay visible in their own files.",
+ "sections_key": "sections are ACCEPTANCE-PROTOCOL.md unless prefixed",
+ "records": [
+  {
+   "id": "structure-authority",
+   "section": "header (Structure)",
+   "summary": "Part I (§0) is the executable runbook; Part II (§1-§12) is the authority. When they disagree, STOP and reconcile, recording the divergence in §0.9. Never improvise around either.",
+   "why_not_mechanisable": "Detecting that two prose bodies disagree, and 'stop and reconcile', have no defined procedure; the doc itself contains an unreconciled contradiction (note-12.3). Judgement about texts, not a checkable predicate.",
+   "partial_detector": null
+  },
+  {
+   "id": "runbook-genesis",
+   "section": "0 (preamble)",
+   "summary": "Catalog of the 2026-08-30 failures the runbook exists to prevent (hand-rolled runner, cdrom side-channel delivery, stale answer disc, bare sleep polls, two guests up, scratch-guest golden, no P0 preflight).",
+   "why_not_mechanisable": "A historical catalog, not a rule: it asserts nothing testable itself. Its individual items are armed as separate mechanisms.",
+   "partial_detector": "steps data (s2-golden-win10, s2-golden-win11, s4-all-halted, s6-matrix) arm the golden-custody, one-guest and harness-only-runner incidents individually; the catalog as a whole has no check"
+  },
+  {
+   "id": "gate-fw-net-owner",
+   "section": "0.2 step 3; also II.4 P0-CORE.3 (record P0-CORE-3, deduplicated here)",
+   "summary": "fw-net must be confirmed WITH THE OWNER if any traffic cell is in scope (fw-net cannot be started from the dev qube - policy refusal, not absence); a traffic FAIL without this confirmation is unattributable.",
+   "why_not_mechanisable": "An ask-the-human gate: the dev qube can neither start fw-net nor verify its serving state, so no probe from here can close it.",
+   "partial_detector": "declare - owner-gated network arms are carried as declare rows in steps data (p2-net8-throughput, p2-net7-standalone-attach) and campaign-verdict.sh prints ATTENDED-PENDING rows on BOTH branches, so the unconfirmed arm is visible; nothing verifies the confirmation happened"
+  },
+  {
+   "id": "rule-missing-wait-h0",
+   "section": "0.3",
+   "summary": "A missing wait is added to mgmt/harness/e2e-wait.sh with the three-exit contract, committed, then used (H0) - never replaced by an ad-hoc loop.",
+   "why_not_mechanisable": "Writing a correct new wait primitive is model work; no lint can validate that a new wait honours the three-exit contract or keys on a real signal.",
+   "partial_detector": "run.py:run_command bounds every protocol step with timeout_s (a timeout is a red, never a fall-through), so an unbounded ad-hoc wait cannot run INSIDE a campaign step; work outside the runner is uncovered"
+  },
+  {
+   "id": "fact-0.6c-audit",
+   "section": "0.6c",
+   "summary": "RB-01/RB-02: 'rebuild the golden' had no procedure and 'clone ST0 and install into the clone' had no execution channel - every documented exit from a bad golden was itself forbidden, which is why cell_fresh fakes 'fresh' by uninstalling.",
+   "why_not_mechanisable": "Detecting that a rule system deadlocks requires reading the rules as a system; context record explaining why cell-sel-fresh and the golden-rebuild steps exist.",
+   "partial_detector": null
+  },
+  {
+   "id": "0.7b-check-for-the-knob",
+   "section": "0.7b; also 0.8 Hard prohibitions (record prohib-delivery-before-knob, deduplicated here)",
+   "summary": "Check whether a Qubes knob already provides a capability (e.g. qvm-start --install-windows-tools / §0.5 Route A cdrom attach) before building any new delivery machinery. A whole custom answer stick was once built parallel to an existing knob.",
+   "why_not_mechanisable": "'Check for an existing knob' is open-ended research; the space of knobs is not enumerable in advance, so no gate can prove the search was done.",
+   "partial_detector": null
+  },
+  {
+   "id": "G-3",
+   "section": "0.7d",
+   "summary": "The output that DISAGREES is the finding: when an instrument prints something that does not fit the hypothesis, stop and explain that line before continuing.",
+   "why_not_mechanisable": "Recognising that a line disagrees with a hypothesis is open judgement. The mechanizable shadow named in extraction (a lint for dismissive phrases adjacent to quoted output) has not been built.",
+   "partial_detector": null
+  },
+  {
+   "id": "G-8",
+   "section": "0.7d",
+   "summary": "Once a finding is RECORDED, restate it from the record - never re-derive it in conversation; re-deriving produces a new framing each time and destabilises settled work.",
+   "why_not_mechanisable": "No mechanical test distinguishes restating from re-deriving.",
+   "partial_detector": "lint-harness.py:L8 keeps findings/<topic>.md answerable from a dated CURRENT STATE head, so a verbatim-quotable record exists; it cannot detect re-derivation"
+  },
+  {
+   "id": "D-0b",
+   "section": "0.13b",
+   "summary": "Work guests in PARALLEL - vmlock.sh is per-VM precisely so cross-guest work is safe; serialising everything on one guest is the single largest avoidable cost.",
+   "why_not_mechanisable": "A scheduling judgement, in tension with the older per-guest 'run VM-mutating jobs serially' rule and with H3.6; run.py deliberately executes steps strictly serially, so within a protocol campaign this rule is not merely unenforced but unimplemented.",
+   "partial_detector": "lint-harness.py:L2 and run.py:advance enforce the per-guest lock that makes cross-guest parallelism SAFE; nothing drives the parallelism itself"
+  },
+  {
+   "id": "div-0-meta",
+   "section": "0.9",
+   "summary": "Known script/protocol divergences are fixed at P0-PRE, never papered over mid-campaign.",
+   "why_not_mechanisable": "Recognising a new divergence and choosing the repair site (P0-PRE vs an in-cell workaround) is judgement; a model hitting a divergence mid-run can patch it locally and leave the source divergent.",
+   "partial_detector": null
+  },
+  {
+   "id": "wedge-capture",
+   "section": "II.2 (wedge)",
+   "summary": "When a guest wedges every in-guest channel dies at once; forensics are dom0/OWNER actions (qemu-dm log tail, xl dmesg) - from this qube only admin.vm.CurrentState cputime deltas are reachable; xencons is the in-band complement.",
+   "why_not_mechanisable": "The named commands are policy-refused from the dev qube (tested 2026-08-29, not assumed); only the owner can run them, and §11 postpones further NMI dumps outright.",
+   "partial_detector": "declare - an owner-forensics arm can be carried as a visible non-PASS ledger row (run.py declare kind, printed by campaign-verdict.sh); the in-scope cputime/xencons observations are partial evidence, not the forensics"
+  },
+  {
+   "id": "P0-PRE-5",
+   "section": "II.4 P0-PRE",
+   "summary": "Confirm dom0/10-install-resize-service.sh is installed on the current dom0 (OWNER action) - gates RND-8.",
+   "why_not_mechanisable": "A dom0 install state this qube cannot inspect or change; owner action by definition.",
+   "partial_detector": "declare - steps data (p4-rnd8-dom0-resize) carries the dom0-resize arm as a declare row so its pending state is never invisible"
+  },
+  {
+   "id": "TIER-attended",
+   "section": "II.10",
+   "summary": "Owner-attended session (~2 h): SG feature-ON arms, non-seamless view, Progman end-to-end, real-Office chrome, dom0 GUI progress click, NET-8.",
+   "why_not_mechanisable": "Requires the owner at the screen; cannot run unattended by definition (and several arms involve features the harness is forbidden to set).",
+   "partial_detector": "declare - these arms exist as declare rows in steps data (e.g. p4-rnd7-chrome, p4-rnd1-drag, p3-u3-venue) and campaign-verdict.sh prints ATTENDED-PENDING on both branches so no report can quietly omit them"
+  },
+  {
+   "id": "owner-deps",
+   "section": "II.11",
+   "summary": "Roster of owner dependencies not executable from this qube: NMI dumps (POSTPONED - do not propose another), fw-net up, NET-8 endpoint, dom0 resize service, dom0 wedge forensics, Qubes Update GUI click, real-Office validation, all ATTENDED-PENDING SG arms, any dom0/sudo/policy change, removing any golden or template.",
+   "why_not_mechanisable": "Every item is a dom0/owner action outside this qube's authority; subsumes gate-fw-net-owner, P0-PRE-5, wedge-capture and TIER-attended, kept as the complete roster.",
+   "partial_detector": "declare - the arms that map to cells are carried as declare rows and surfaced by campaign-verdict.sh; the roster itself has no check"
+  },
+  {
+   "id": "D6",
+   "section": "II.11",
+   "summary": "OPEN owner decision: G0 signature tooling - openssl-asn1parse form vs installing osslsigncode.",
+   "why_not_mechanisable": "An open decision, not a check; no mechanism can close it.",
+   "partial_detector": "steps data (s1-gate0) - gate0-payload already runs tools/assert-payload.sh either way; only the choice of signature tool inside it is open"
+  },
+  {
+   "id": "D9",
+   "section": "II.11",
+   "summary": "OPEN owner decision: known-issue register location (FINDINGS section vs dedicated file) - so 'known' cannot silently absorb new regressions.",
+   "why_not_mechanisable": "A filing decision; and 'is this regression genuinely the known one' is judgement wherever the register lives.",
+   "partial_detector": "lint-harness.py:L8 constrains the shape of findings/ topic files (dated CURRENT STATE claims), which covers the register only if it lands there"
+  },
+  {
+   "id": "D10",
+   "section": "II.11",
+   "summary": "OPEN owner decision: privacy ruling on whole-desktop fullshot cells (owner-away window vs crop-and-delete) and on any high-rate dom0 capture for sub-second flash proof.",
+   "why_not_mechanisable": "A privacy tradeoff only the owner can rule on.",
+   "partial_detector": null
+  },
+  {
+   "id": "D11",
+   "section": "II.11",
+   "summary": "OPEN owner decision: quarantine release - does a quarantined guest halt that OS lane until owner release, or is autonomous release allowed once the terminal state is fully captured?",
+   "why_not_mechanisable": "The release policy is an undecided owner call (H3.5 explicitly defers to it).",
+   "partial_detector": "run.py:handle_red + run.py:runnable mechanise the QUARANTINE itself (FAIL/INVALID marks the guest OUT_OF_SERVICE and every step touching it is refused until a `restores` step completes); only the release policy is open"
+  },
+  {
+   "id": "D13",
+   "section": "II.11",
+   "summary": "OPEN owner decision: DiagWindowFilterOff bit extension for the remaining SG fail-proofs - each bit weakens filtering; owner sign-off required.",
+   "why_not_mechanisable": "A security tradeoff (deliberately weakening the window filter to prove checks can fail) that requires owner sign-off per bit.",
+   "partial_detector": "lint-harness.py:L5 guards injector-string/check collisions for whatever diagnostic bits exist; the sign-off itself has no mechanism"
+  },
+  {
+   "id": "D16",
+   "section": "II.11",
+   "summary": "OPEN owner decision: are owner-attended arms part of release acceptance or a separate scheduled session? Carried ATTENDED-PENDING either way.",
+   "why_not_mechanisable": "A scheduling/scope decision for the owner.",
+   "partial_detector": "declare - the arms stay ATTENDED-PENDING in the ledger and campaign-verdict.sh prints them on both branches whichever way the decision goes"
+  },
+  {
+   "id": "D17",
+   "section": "II.11",
+   "summary": "OPEN owner decision (default taken: record-only): drag-harness variance fix in scope vs scroll-only perf gating with drag record-only; also whether the never-run dmg-hash A/B is a named cell or separate Track A work.",
+   "why_not_mechanisable": "Scope decisions for the owner; the default is applied but not ratified.",
+   "partial_detector": "steps data (p4-bench-suite) implements the default - SCROLL is the only phase whose verdict gates, drag gates nothing"
+  },
+  {
+   "id": "note-12.3",
+   "section": "II.12",
+   "summary": "Stale-note contradiction: note 12.3 says no standing stock golden (lifecycle disk rule), but the ST1 row (owner 2026-08-29) says ST1 is parked and cloned, one per OS. The ST1 row citing the owner is the later/stronger authority.",
+   "why_not_mechanisable": "Resolving a genuine internal contradiction between two authorities requires judging which is later/stronger; a compiler must pick the ST1 reading and flag this note stale, which no check can do.",
+   "partial_detector": null
+  }
+ ]
+}

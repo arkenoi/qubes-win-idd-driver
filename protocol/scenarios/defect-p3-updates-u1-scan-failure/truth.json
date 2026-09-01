@@ -1,0 +1,69 @@
+{
+ "truth": {
+  "p3-u1-verdict": "SCAN_FAILED"
+ },
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "p3-serial-no-bench",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p3-g0c-scan-disarmed",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p3-u1-scan-to-dom0",
+    "verdict": "FAIL"
+   },
+   {
+    "check": "p3-u2-run",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p3-rearm-scan",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p3-shutdown-tpl",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p3-u1-stability-and-controls",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p3-u3-venue",
+    "verdict": "N/A.*"
+   },
+   {
+    "check": "p3-u3-install-e2e",
+    "verdict": "ATTENDED-PENDING"
+   },
+   {
+    "check": "p3-u4-failure-drills",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p3-u5-introspection",
+    "verdict": "N/A.*"
+   },
+   {
+    "check": "p3-u6-netvm-policy",
+    "verdict": "N/A.*"
+   },
+   {
+    "check": "p3-standalone-control",
+    "verdict": "N/A.*"
+   },
+   {
+    "check": "p3-dynamic-updates-settled",
+    "verdict": "N/A.*"
+   }
+  ],
+  "ledger_absent": [
+   "p3-u2-coldboot-class"
+  ]
+ }
+}

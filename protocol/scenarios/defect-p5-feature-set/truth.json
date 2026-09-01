@@ -1,0 +1,21 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "p5-sg0-feature-gate",
+  "ledger": [
+   {
+    "check": "p5-sg0-feature-never-set",
+    "verdict": "INVALID-PRECONDITION"
+   }
+  ],
+  "ledger_absent": [
+   "p5-running-image-is-artefact",
+   "p5-sg-unattended-suite",
+   "p5-containment-agent-agrees",
+   "p5-gate-preflight-clear",
+   "p5-sg1-mode1-coldboot",
+   "p5-sg11-matrix"
+  ]
+ }
+}

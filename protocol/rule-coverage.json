@@ -1,0 +1,399 @@
+{
+ "comment": "RULE-COVERAGE ACCOUNTING for the instrumented acceptance protocol. One entry per named rule: instrument rules 1-13 (ACCEPTANCE-PROTOCOL.md 0.8b), honesty gates G-0/G-0b/G-0c/G-1..G-9 (0.7d), harness rules H0-H5 (section 3), verdict semantics V1-V7 (docs/RIG-CONSTRAINTS.md section 4), lints L1-L8 (tools/lint-harness.py). Every enforcement point was verified against the named file before being written down; anything not verifiable is listed under residual instead. 'residual' = what remains unenforced by any of: run.py, lint-harness.py, steps data, declare rows, the quarantine registry, campaign-verdict.sh. An empty enforcement list means the rule is currently prose-only.",
+ "rules": [
+  {
+   "rule": "instrument-1",
+   "statement": "qtest run echoes the command back - strip the echo before counting or parsing guest output.",
+   "enforcement": [
+    {"point": "steps data (p3-g0c-disarm)", "how": "protocol steps anchor their parses to structured ^-prefixed lines (grep -aE '^(SCAN_BEFORE|...)'), so the echoed command line cannot satisfy them - compliance by construction in the step commands"}
+   ],
+   "residual": "No lint checks new harness/guest-driving code for echo-safe parsing; the rule is applied per-script (e.g. mgmt/reprovision-usb.sh's -ge 2 compensation), not enforced anywhere."
+  },
+  {
+   "rule": "instrument-2",
+   "statement": "-ScriptArgs is re-split at every hop - anything containing a space must travel as base64 (-ArgsB64 / -EncodedCommand).",
+   "enforcement": [
+    {"point": "lint-harness.py:L3", "how": "catches the adjacent class: escaped quotes inside powershell -Command, which fails silently for the same multi-hop re-splitting reason"}
+   ],
+   "residual": "The -ScriptArgs whitespace-splitting case itself is not linted; nothing enforces -ArgsB64 for spaced arguments."
+  },
+  {
+   "rule": "instrument-3",
+   "statement": "run-as-user.ps1 is one scheduled task per -Tag and deletes its task on entry - concurrent launches need distinct tags.",
+   "enforcement": [],
+   "residual": "Entire rule: no lint or gate checks for duplicate -Tag use; a second launch still kills the first silently."
+  },
+  {
+   "rule": "instrument-4",
+   "statement": "Every guest script a harness calls must live in the repo, and the harness must REFUSE to run without it.",
+   "enforcement": [],
+   "residual": "Enforced only inside individual harnesses via require_scripts (verified present in 10 mgmt/harness/*.sh), which is harness code, not a protocol-level mechanism; no lint asserts that a harness calling guest scripts uses require_scripts."
+  },
+  {
+   "rule": "instrument-5",
+   "statement": "bash -n does not catch bad substitutions - a clean syntax check is not evidence the script runs.",
+   "enforcement": [],
+   "residual": "Entire rule: the prescribed grep for '${((' after edits is not automated."
+  },
+  {
+   "rule": "instrument-6",
+   "statement": "grep -c prints 0 AND exits 1, so '|| echo 0' yields two zeros that silently mangle the interpolated line.",
+   "enforcement": [],
+   "residual": "Entire rule: statically lintable per the extraction, but no such lint exists."
+  },
+  {
+   "rule": "instrument-7",
+   "statement": "A vacuity guard must be specific to the stimulus - a guard any other surface can satisfy is not a guard.",
+   "enforcement": [
+    {"point": "steps data (p4-rnd3-stimulus)", "how": "the RND-3 vacuity gate keys on the #32768 menu class specifically ('a guard any other ovr=1 surface can satisfy is not a vacuity guard'), gating check p4-rnd3-stimulus-established"},
+    {"point": "steps data (p4-rnd4-toast)", "how": "the toast probe requires the toast's own two-path evidence (p4-rnd4-toast-two-path), not any-surface counting"}
+   ],
+   "residual": "Rule holds only where a step encodes it; nothing forces stimulus-specific guards onto new checks."
+  },
+  {
+   "rule": "instrument-8",
+   "statement": "Scene contamination between cells is real - order cells so lingering surfaces cannot disturb later ones, and assert the starting scene.",
+   "enforcement": [
+    {"point": "run.py:load_steps", "how": "execution order is data (file order); `requires` may only reference earlier steps and load is refused otherwise, so a declared ordering cannot be silently violated"},
+    {"point": "run.py:runnable", "how": "a step runs only when every `requires` is GREEN, mechanising the declared cell ordering"}
+   ],
+   "residual": "Nothing verifies the chosen ordering actually isolates scenes, and per-cell starting-scene assertions are not mandated."
+  },
+  {
+   "rule": "instrument-9",
+   "statement": "The product's own debounces and caches carry contamination between cells - clear the suppressing state before a cell that depends on the pass actually running.",
+   "enforcement": [
+    {"point": "steps data (p3-u1-clear-debounce)", "how": "deletes C:\\ProgramData\\Qubes\\update-status.json before the U1 kick and verifies the delete, executable form of rule 9 for the update-scan debounce"}
+   ],
+   "residual": "Only the update-scan instance is mechanised; the general class (any product cache suppressing a later cell's stimulus) has no generic guard."
+  },
+  {
+   "rule": "instrument-10",
+   "statement": "pgrep -f / pkill -f match the searching shell itself - use a bracket class or kill by PID.",
+   "enforcement": [
+    {"point": "steps data (p3-serial-gate)", "how": "the serial gate's own pgrep uses bracket-class patterns ('p[45]-run', 'stability-e2[e]') explicitly citing instrument rule 10, so this step cannot self-match"}
+   ],
+   "residual": "No lint scans harnesses for self-matching pgrep/pkill -f patterns; only this one step is safe by construction."
+  },
+  {
+   "rule": "instrument-11",
+   "statement": "@($null).Count is 1 in PowerShell - count real objects, not auto-wrapped nulls.",
+   "enforcement": [],
+   "residual": "Entire rule: no lint over guest/*.ps1 for the @(...).Count-on-nullable idiom (L6 covers the different null-chain-throw trap)."
+  },
+  {
+   "rule": "instrument-12",
+   "statement": "A binary swap can fail silently (the watchdog re-locks the file) - stop the service and assert the RUNNING image's hash, never the file's.",
+   "enforcement": [
+    {"point": "steps data (p4-subject-identity)", "how": "before any number is taken, health-check.ps1's agent_binary_hash (the RUNNING agent) is compared to the manifest"},
+    {"point": "steps data (s6-matrix)", "how": "matrix.sh's verify_installed asserts installed_gui_agent_sha256 == ASHA from the RESULT trailer for every cell"},
+    {"point": "steps data (s5-inputs)", "how": "gates gui-agent.exe's presence so ASHA cannot be empty - the empty-ASHA vacuous-match trap named in its defect field"}
+   ],
+   "residual": "Swaps performed outside these steps (ad-hoc sessions, other harnesses) are unguarded; RIG-CONSTRAINTS 4 lists running-image hash assertion as a framework obligation not yet centralised."
+  },
+  {
+   "rule": "instrument-13",
+   "statement": "Restarting the agent destroys containment (it re-adopts dom0 geometry) - re-contain after it settles and confirm the agent agrees.",
+   "enforcement": [],
+   "residual": "Entire rule: no protocol step, lint or runner function re-establishes containment after an agent restart; RIG-CONSTRAINTS 4 names it a framework obligation, still hand-rolled per harness."
+  },
+  {
+   "rule": "G-0",
+   "statement": "Do not touch the system under test until the failure is written off - the failed subject is evidence; diagnosis happens on a clone.",
+   "enforcement": [
+    {"point": "run.py:handle_red", "how": "any FAIL/INVALID on a guest marks it OUT_OF_SERVICE in campaign state ('the subject is now evidence'), a state transition, not a judgement call"},
+    {"point": "run.py:runnable", "how": "every subsequent step touching an OUT_OF_SERVICE guest is refused until a step declaring `restores` for it completes; refusal text prescribes evidence capture first"},
+    {"point": "steps data (s6-matrix)", "how": "on_fail msg mechanically delivers the gate's wording: state is EVIDENCE, no re-run, no 'just try one thing', diagnosis on a CLONE"}
+   ],
+   "residual": "Only binds work routed through run.py; ad-hoc sessions on a failed guest are not blocked, and the evidence-capture step (logs/screen/registry) is prescribed, not automated."
+  },
+  {
+   "rule": "G-0b",
+   "statement": "After a failure, rebuild the guest to its entry stage before running anything else on it - everything until then is INVALID-CONTAMINATED.",
+   "enforcement": [
+    {"point": "run.py:runnable", "how": "OUT_OF_SERVICE is lifted by no plausibility argument - only a completed step that declares `restores` for that guest"},
+    {"point": "run.py:advance", "how": "the `restores` transition to IN_SERVICE fires only after the restoring step's expect passes, and is traced (guest_restored)"}
+   ],
+   "residual": "The runner trusts the restoring step's own expect; it cannot verify the restore truly reached the entry stage (that proof is the step's content), and guests mutated outside a campaign carry no OUT_OF_SERVICE mark."
+  },
+  {
+   "rule": "G-0c",
+   "statement": "Before any BENCH/RND part, positively disarm QubesWindowsUpdateScan and record the disarm in the cell evidence; re-enable at the end.",
+   "enforcement": [
+    {"point": "steps data (p4-scan-disarm)", "how": "first P4 step disarms and records to {ACCEPT_OUT}/disarm.txt, check p4-scan-disarmed; paired p4-scan-reenable at part end"},
+    {"point": "steps data (p4-bench-suite)", "how": "the bench command itself re-asserts the disarm evidence (grep -aq 'DISARMED True' disarm.txt) before any number is taken"},
+    {"point": "steps data (p3-g0c-disarm)", "how": "the updates part disarms against its own boot+PT2M trigger race, check p3-g0c-scan-disarmed, paired with p3-rearm-scan"}
+   ],
+   "residual": "Benchmarks launched outside the protocol steps are not forced through the disarm; the transcript-shows-disarm-else-INVALID-PRECONDITION rule is enforced only for these encoded cells."
+  },
+  {
+   "rule": "G-1",
+   "statement": "The completion verdict is arithmetic, not prose - run tools/campaign-verdict.sh and paste its output as the summary's first block.",
+   "enforcement": [
+    {"point": "campaign-verdict.sh", "how": "computes COMPLETE vs EXECUTED WITH GAPS from the ledger (zero FAIL/INVALID/INCONCLUSIVE/BLOCKED and every PASS fail-proofed); names every gap; verifies SUPERSEDED/RETRACTED rows are actually backed"},
+    {"point": "run.py:cmd_verdicts", "how": "`verdicts` delegates to campaign-verdict.sh and prints it as the ONLY valid next command with paste-verbatim-first instructions; exit contract keeps a gappy-but-valid verdict from reading as a crash"}
+   ],
+   "residual": "The runner instructs but cannot verify the composed human report actually opens with the pasted block."
+  },
+  {
+   "rule": "G-2",
+   "statement": "No causal claim without the reverse control - the defect removed AND re-introduced, both observed.",
+   "enforcement": [
+    {"point": "run.py:load_steps", "how": "for CHECKS: the falsifiability gate makes `defect` and `falsified_by` mandatory, and protocol/selftest.sh walks each named defect scenario so every check is SEEN to fail with the defect present - the re-introduce half, mechanised for checks"}
+   ],
+   "residual": "The gate's actual subject - causal claims made during DIAGNOSIS (root-cause narratives) - has no mechanism; nothing forces a reverse control on a published root cause."
+  },
+  {
+   "rule": "G-3",
+   "statement": "The output that DISAGREES is the finding - stop and explain a disagreeing line before continuing.",
+   "enforcement": [
+    {"point": "quarantined (not-mechanisable.json)", "how": "registered as G-3: recognising disagreement is open judgement; the proposed dismissive-phrase lint was never built"}
+   ],
+   "residual": "Entire gate is judgement; quarantine gives it visibility, not coverage."
+  },
+  {
+   "rule": "G-4",
+   "statement": "Any claim about project history requires a citation - grep FINDINGS.md and the ledger, line number in the text.",
+   "enforcement": [
+    {"point": "lint-harness.py:L8", "how": "CURRENT STATE bullets in findings/ must carry [verified <date>] or UNVERIFIED, so an undistilled historical claim cannot masquerade as settled in the record itself"}
+   ],
+   "residual": "Citations for history claims made in conversation, reports or commit text are unenforced - the gate's original failure mode."
+  },
+  {
+   "rule": "G-5",
+   "statement": "Read the design before proposing a change to it - a component that looks missing is often removed on purpose.",
+   "enforcement": [],
+   "residual": "Entire gate: 'grep for the decision that produced the current behaviour' is judgement work with no mechanism."
+  },
+  {
+   "rule": "G-6",
+   "statement": "A defect report states the defect and its measured blast radius - it never proposes scope changes (those are owner decisions).",
+   "enforcement": [],
+   "residual": "Entire gate: no mechanism inspects report content for invented scope proposals."
+  },
+  {
+   "rule": "G-7",
+   "statement": "A negative requires a detector seen to fire in that session - otherwise the cell is INVALID-VACUOUS.",
+   "enforcement": [
+    {"point": "run.py:load_steps", "how": "no verdict-emitting step loads without a `falsified_by` scenario in which the detector is seen to fire (selftest executes them)"},
+    {"point": "run.py:emit_verdict", "how": "V1: plain PASS - including a 'nothing happened' PASS - requires a recorded fail-proof, else PASS-UNPROVEN"},
+    {"point": "steps data (p4-rnd5-verdict)", "how": "the canonical negative ('Start is NOT presented') demands TWO WITNESSES plus the vacuity proof (p4-rnd5-nomap-two-witness)"}
+   ],
+   "residual": "'IN THAT SESSION' is weakened to 'on record': the fail-proof registry is historical, so a detector broken since its proof still upgrades a PASS; same-run detector validation stays judgement."
+  },
+  {
+   "rule": "G-8",
+   "statement": "Once a finding is recorded, restate it from the record - never re-derive it in conversation.",
+   "enforcement": [
+    {"point": "quarantined (not-mechanisable.json)", "how": "registered as G-8: no mechanical test distinguishes restating from re-deriving"},
+    {"point": "lint-harness.py:L8", "how": "keeps a quotable dated CURRENT STATE head per findings topic, the compiled form the extraction recommends quoting verbatim"}
+   ],
+   "residual": "Re-derivation itself is undetectable; only the existence of a canonical restatable record is enforced."
+  },
+  {
+   "rule": "G-9",
+   "statement": "Verify the probe before believing the probe - a probe that reads the wrong key or filters too narrowly returns a confident wrong answer.",
+   "enforcement": [
+    {"point": "run.py:handle_red", "how": "a probe returning NOTHING is INVALID-INSTRUMENT, never a product verdict in either direction (V3 / RIG-CONSTRAINTS 1.1)"},
+    {"point": "lint-harness.py:L6", "how": "catches probes that go silent on exactly the defective state they report (null-chain throw inside structured-output scripts)"},
+    {"point": "lint-harness.py:L3", "how": "catches the silently-failing nested-quote powershell class that produced rnd8's empty keyed-mutex counter"}
+   ],
+   "residual": "The gate's core case - a probe returning a confident, non-empty, WRONG answer ($pid shadowing, wrong registry key) - is mechanically undetectable; only silent/empty failure classes are covered."
+  },
+  {
+   "rule": "H0",
+   "statement": "Foundation: build on the corrected libraries (e2e-wait, winshot, qtest, matrix.sh cell patterns) - no hand-rolled waits or runners; a missing wait is added to the library first.",
+   "enforcement": [
+    {"point": "steps data (s6-matrix)", "how": "the only route to cell results is 'Run the cells, serially, through the harness (never a hand-rolled runner)' - the step invokes mgmt/harness/matrix.sh, which sources the library waits"},
+    {"point": "quarantined (not-mechanisable.json)", "how": "the add-the-missing-wait half is registered as rule-missing-wait-h0: writing a correct new wait is model work no lint can validate"}
+   ],
+   "residual": "Nothing prevents hand-rolled waits or runners outside the protocol runner; the e2e-wait.sh promotion is a P0-PRE checklist item, not a gate."
+  },
+  {
+   "rule": "H1",
+   "statement": "Run identity: one id from dom0 log line to guest log byte; append-only durable results; build fingerprint asserted (the artifact, then the running binary), never assumed.",
+   "enforcement": [
+    {"point": "run.py:Campaign.create", "how": "refuses an existing campaign id ('state is evidence and is never overwritten'); ledger and trace are append-only files under protocol/state/<cid>/"},
+    {"point": "steps data (s1-gate0)", "how": "Gate 0 asserts the downloaded artifact against the pinned commit (tools/assert-payload.sh), HALT_CAMPAIGN with INVALID-PROVENANCE otherwise"},
+    {"point": "steps data (s5-regate)", "how": "the staged tarball is re-gated so the artifact actually pushed is the artifact that was gated"},
+    {"point": "steps data (s6-matrix)", "how": "matrix.sh's run_install writes and read-verifies a unique E2EMARK run marker, refusing a cell that cannot be told apart from a previous one; verify_installed slices all grading past it"}
+   ],
+   "residual": "Guest-side marker and running-binary assertions live in matrix.sh code, enforced for other harnesses by nothing; the per-part five-line header is prose."
+  },
+  {
+   "rule": "H2",
+   "statement": "Every wait keys on a real signal with exactly three exits (GOAL / TERMINAL / STALL-DEADLINE); bare sleep-and-continue is prohibited; settle windows are declared; a vacuous grade is INVALID-VACUOUS, never PASS.",
+   "enforcement": [
+    {"point": "run.py:run_command", "how": "every step is bounded by timeout_s; a timeout returns a red result to handle_red - no wait inside a campaign can fall through or run forever"},
+    {"point": "steps data (s6-matrix)", "how": "delegates all guest waiting to e2e-wait.sh's three-exit primitives (w_install/w_session/w_halt) rather than ad-hoc loops"},
+    {"point": "steps data (p2-net3-transfer)", "how": "the declared 90 s settle is part of the instrument, stated in the step ('graded only after the instrument's DECLARED 90 s settle')"},
+    {"point": "steps data (s6-nonvacuous)", "how": "the vacuity rule at matrix level: '0 passed, 0 failed' halts the part as INVALID-VACUOUS, never a pass"},
+    {"point": "steps data (p2-net6-firstvif-virgin)", "how": "first-vif eligibility (never had a vif) is asserted before the cell, so the dialog grade cannot be vacuous"}
+   ],
+   "residual": "The three-exit contract inside e2e-wait.sh is convention, not linted; the H3.9 poll-cadence floor is enforced nowhere ('nothing enforces the floor', extraction); bare sleeps outside the runner are not detected."
+  },
+  {
+   "rule": "H3",
+   "statement": "Glitch resistance: qrexec drain, empty-capture triage, headless-but-alive, ACPI-first/kill-last/revert-after-kill, restart budget + quarantine, serial one-guest-up, fire-and-poll starts, retried transients with kept errors, poll cadence floor, watchdog, seeded defects opted into twice.",
+   "enforcement": [
+    {"point": "run.py:advance", "how": "H3.6: live mode takes the same per-guest flock file as mgmt/harness/vmlock.sh and dies rather than start over another holder; steps run strictly serially"},
+    {"point": "steps data (s4-all-halted)", "how": "H3.6 at campaign entry: a campaign starts with ZERO Windows guests running, HALT_CAMPAIGN otherwise"},
+    {"point": "run.py:handle_red", "how": "H3.5 quarantine: FAIL/INVALID marks the guest OUT_OF_SERVICE; run.py:advance writes visible BLOCKED ledger rows for steps refused because of it"},
+    {"point": "lint-harness.py:L2", "how": "any harness driving a guest via tools/qtest without vm_lock is a finding"},
+    {"point": "lint-harness.py:L1", "how": "nohup...& backgrounding that detaches a runner from its caller (the double-run incident behind the lock) is a finding"},
+    {"point": "steps data (s6-matrix)", "how": "H3.4/H3.7/H3.11 inside matrix.sh: reclone is ACPI-first with volume Revert after any kill, start_vm is fire-and-poll, and the SEED guard hard-aborts on inherited SEED_DELAY without SEED_CELL=1"}
+   ],
+   "residual": "H3.1 drain, H3.2 empty-capture triage, H3.3 headless-alive CPU rule, H3.8 retry-with-captured-stderr and H3.10 watchdog live in harness code or prose only; H3.9's cadence floor is enforced nowhere; quarantine release policy is open (D11, quarantined)."
+  },
+  {
+   "rule": "H4",
+   "statement": "Part contract: self-contained baseline, preconditions asserted on the signal the code under test consults (failed precondition = INVALID-PRECONDITION), idempotent re-runs, declared outputs (silence is never success), continue-on-failure at campaign level.",
+   "enforcement": [
+    {"point": "steps data (s2-golden-win10)", "how": "entry-image custody gates (with s2-golden-win11) rebuild the baseline claim every campaign - no inherited assumption"},
+    {"point": "steps data (s7-precondition-authority)", "how": "the installer's own PRECONDITION line is the authority each cell label is judged against; LINE_ABSENT maps to INVALID, mismatch to INVALID-PRECONDITION"},
+    {"point": "run.py:handle_red", "how": "a red non-check step defaults to INVALID-PRECONDITION, never FAIL; on_fail CONTINUE/HALT_PART give campaign-level continue-on-failure"},
+    {"point": "run.py:load_steps", "how": "declared outputs: every gate/probe/wait must declare expect.exit or stdout_re, so silence can never satisfy a step"},
+    {"point": "run.py:Campaign.create", "how": "idempotent re-runs: a re-run is a new campaign id with its own state dir; old state is never overwritten or re-graded"}
+   ],
+   "residual": "'A part never assumes a prior part ran' holds only within one campaign's requires-graph; cross-campaign entry stages rest on the golden/fixture gates plus convention."
+  },
+  {
+   "rule": "H5",
+   "statement": "Verdict grammar: one machine-greppable ledger line per check (PASS / PASS-UNPROVEN / FAIL / INVALID-* / TERMINAL-PRESERVED / SKIPPED-*), plus the fail-proof registry mapping check id to the run where it FAILED with the defect present.",
+   "enforcement": [
+    {"point": "run.py:Campaign.ledger", "how": "the writer emits the five-column TSV grammar (cell/check/verdict/detail/evidence), tabs and newlines sanitised - no free-form verdict lines"},
+    {"point": "run.py:emit_verdict", "how": "the PASS vocabulary is enforced at write time: no fail-proof on record -> PASS-UNPROVEN, mechanically"},
+    {"point": "campaign-verdict.sh", "how": "parses exactly that grammar, counts every verdict class separately, itemises PASS-UNPROVEN by check, and refuses unbacked SUPERSEDED/RETRACTED rows"}
+   ],
+   "residual": "Two registries exist: the doc names mgmt/harness/instrument-proofs.md while the runner reads protocol/failproofs.json (harvested by selftest) - unreconciled; metric stability (>=3 interleaved runs) is enforced only inside the bench tooling invoked by p4-bench-suite; the in-place RETRACTED:<reason> workflow is manual."
+  },
+  {
+   "rule": "V1",
+   "statement": "PASS requires a recorded fail-proof for that check; without one the verdict is PASS-UNPROVEN - the writer refuses, it is not a convention.",
+   "enforcement": [
+    {"point": "run.py:emit_verdict", "how": "on verdict PASS, looks up failproofs.json by check; absent or wrong-grade proof demotes to PASS-UNPROVEN with the reason appended (a dry proof upgrades only dry runs)"},
+    {"point": "campaign-verdict.sh", "how": "any PASS-UNPROVEN blocks COMPLETE and is itemised by check and by why-unproven"}
+   ],
+   "residual": "emit_verdict trusts the registry entry as-is; nothing re-validates the proof's evidence path at verdict time, and harnesses that print their own PASS lines outside the runner (matrix.sh ok()) are not subject to the demotion - their rows enter the protocol ledger only via the s6-matrix summary."
+  },
+  {
+   "rule": "V2",
+   "statement": "INVALID-* is never folded into FAIL - a broken instrument is not a product defect.",
+   "enforcement": [
+    {"point": "run.py:handle_red", "how": "INVALID-INSTRUMENT / INVALID-PRECONDITION / step-declared INVALID-* verdicts are emitted as themselves, end to end distinct from FAIL"},
+    {"point": "campaign-verdict.sh", "how": "collects 'FAIL (product defect)' and 'INVALID (cell did not run)' as separate blocker categories, never summed"}
+   ],
+   "residual": "Inside matrix.sh (reached via s6-matrix) INVALID-* and product FAIL share one FAIL counter; the distinction survives only in the per-line message text, so the step's MATRIX_FAILED variable conflates them."
+  },
+  {
+   "rule": "V3",
+   "statement": "Missing data is INVALID-INSTRUMENT, never FAIL and never a default - ${x:-0} on an unanswered query is forbidden.",
+   "enforcement": [
+    {"point": "run.py:handle_red", "how": "a probe that returns NOTHING becomes INVALID-INSTRUMENT explicitly, 'never a verdict about the product, in either direction'"},
+    {"point": "run.py:advance", "how": "dry mode: a scenario with no fixture for a reached step fails as missing data ('never approximated and never defaulted'); a selftest judgement with no recorded truth is INVALID-INSTRUMENT"}
+   ],
+   "residual": "The ${x:-0} ban is not linted; live-mode guest-side missing data must be caught by each harness itself (cell_fresh's ${prod:-1} fails closed but mislabels a probe failure as product state)."
+  },
+  {
+   "rule": "V4",
+   "statement": "Every check must have at least one reachable non-PASS branch - a check that cannot fail does not load.",
+   "enforcement": [
+    {"point": "run.py:load_steps", "how": "the falsifiability gate: any gate/probe/wait/judgement or check-carrying step without `defect` and an existing `falsified_by` scenario refuses the whole load; protocol/selftest.sh walks every defect scenario so each check is OBSERVED to fail"},
+    {"point": "lint-harness.py:L4", "how": "a harness check name that only ever appears with PASS/PASS-UNPROVEN verdicts in its printf emissions is a finding (no branch can produce FAIL/INVALID)"}
+   ],
+   "residual": "L4 sees only printf-'...' literal emissions (computed verdict strings with % are skipped); RIG-CONSTRAINTS records L4 still finds 9 standing violations in the legacy harnesses - detected, not yet fixed."
+  },
+  {
+   "rule": "V5",
+   "statement": "A verdict needs a vacuity guard proving the stimulus existed AND evidence the stimulus reached the code under test.",
+   "enforcement": [
+    {"point": "steps data (p4-rnd3-stimulus)", "how": "stimulus-existence half: the menu-opened guard keyed on the exact surface class, gating the RND-3 verdict step behind it"},
+    {"point": "steps data (p2-net6-firstvif-virgin)", "how": "eligibility/vacuity half for NET-6: XENVIF enum must be ABSENT or the first-vif grade is void"},
+    {"point": "steps data (p4-rnd5-verdict)", "how": "negative verdicts demand two witnesses plus the vacuity proof"}
+   ],
+   "residual": "The 'reached the code under test' half is explicitly NOT mechanisable (RIG-CONSTRAINTS section 6 item 1; lint-harness NOT_LINTED rule 24 - 'needs a run, not a grep'); those quarantines live in the docs, not in not-mechanisable.json, because the extraction classified rule-24 CLOSED_JUDGEMENT. No generic mechanism forces a vacuity guard onto new checks."
+  },
+  {
+   "rule": "V6",
+   "statement": "A fail-proof covers the subject class it ran on, not every row sharing the code.",
+   "enforcement": [
+    {"point": "steps data (s2-golden-win11)", "how": "per-class check ids force per-class proofs: golden-win11-base is a distinct check from golden-win10-base, its defect field citing V6 verbatim ('the win10 proof does not cover this check - each subject class earns its own'), with its own falsified_by scenario defect-golden-drifted-11"}
+   ],
+   "residual": "Enforced only through the discipline of naming one check per subject class in step data; nothing mechanically prevents a single check id spanning classes, in which case V7's check-keyed registry would let one class's proof cover another's rows."
+  },
+  {
+   "rule": "V7",
+   "statement": "The registry is keyed by CHECK, not by row: one proof closes every row citing that check.",
+   "enforcement": [
+    {"point": "run.py:emit_verdict", "how": "failproofs.get(check) - the lookup key is the check name, so one recorded proof upgrades every row emitting that check"},
+    {"point": "campaign-verdict.sh", "how": "PASS-UNPROVEN accounting buckets by CHECK, not by row (the per-row counting that overstated the unattempted set was fixed)"}
+   ],
+   "residual": null
+  },
+  {
+   "rule": "L1",
+   "statement": "No `nohup ... &` inside a harness - it backgrounds a runner the caller cannot wait on (double-run / fabricated-verdict incident).",
+   "enforcement": [
+    {"point": "lint-harness.py:L1", "how": "flags any non-comment harness line containing nohup and ending with &, over mgmt/harness/*.sh and tools/*.sh; fired-on-fixture proven by tools/tests/lint-selftest.sh"}
+   ],
+   "residual": "Only the literal single-line nohup-&-at-EOL shape is matched; setsid, plain `&` with disown, or backgrounding split across lines escape it."
+  },
+  {
+   "rule": "L2",
+   "statement": "Any harness that drives a guest must take the per-VM lock (vm_lock), or two of them can interleave probes on one subject.",
+   "enforcement": [
+    {"point": "lint-harness.py:L2", "how": "a harness containing tools/qtest but not vmlock.sh+vm_lock is a finding"},
+    {"point": "run.py:advance", "how": "the runner itself honours the same lock file in live mode, so protocol campaigns and harnesses mutually exclude"}
+   ],
+   "residual": "Keys on the literal 'tools/qtest': a harness driving guests via qvm-run/qrexec directly is invisible to it; the QWT_VMLOCK_HELD env-outliving-the-flock leak (extraction ambiguity) is not lintable."
+  },
+  {
+   "rule": "L3",
+   "statement": "No powershell -Command with escaped quotes - re-split at every hop, it fails silently (empty output written out as a product FAIL).",
+   "enforcement": [
+    {"point": "lint-harness.py:L3", "how": "regex over non-comment lines of mgmt/harness/*.sh and tools/*.sh (scope widened after it missed two real violations in tools/, one in bench-agent.sh)"}
+   ],
+   "residual": "Single-line regex: multi-line command construction and guest-side .ps1 or python callers are out of scope; RIG-CONSTRAINTS 1.2 deliberately keeps its manual VERIFY grep as the complement."
+  },
+  {
+   "rule": "L4",
+   "statement": "Every harness check must have a branch emitting a non-PASS verdict - a check that cannot fail is worthless however carefully worded.",
+   "enforcement": [
+    {"point": "lint-harness.py:L4", "how": "groups printf-emitted verdict lines by check name and flags names with GOOD verdicts but no BAD branch in the emitting file"}
+   ],
+   "residual": "Only printf '<literal>' emissions parse; verdicts built with %-format or emitted from python/PowerShell escape; cross-file emission (branches in two scripts) would false-positive or miss."
+  },
+  {
+   "rule": "L5",
+   "statement": "A fault injector's log strings must not collide with the patterns harness checks grep for - or the check detects the injector announcing itself.",
+   "enforcement": [
+    {"point": "lint-harness.py:L5", "how": "intersects every faultinject.c Log* literal with every harness Select-String pattern alternative (multi-word, >=8 chars) and flags overlaps"}
+   ],
+   "residual": "Single-token collisions are ignored by design (noise); only Select-String patterns are collected - findstr/grep-based checks and injector strings outside faultinject.c are not intersected."
+  },
+  {
+   "rule": "L6",
+   "statement": "No chained property access on a cmdlet that can return $null inside a structured-output probe - it throws and the probe goes silent on exactly the state it exists to report.",
+   "enforcement": [
+    {"point": "lint-harness.py:L6", "how": "flags Get-FileHash/Item/ItemProperty/Process/ChildItem null-chains in guest/*.ps1 that emit structured output (ConvertTo-Json / === RESULT ===), skipping same-line Test-Path/if guards"}
+   ],
+   "residual": "Scoped to guest/*.ps1 instruments only; a guard on the preceding line suppresses the finding even when the deref is still reachable, and other nullable cmdlets are not in the regex."
+  },
+  {
+   "rule": "L7",
+   "statement": "A ledger row no harness emits is a hand-recorded observation, not a check - H5 cannot apply to it.",
+   "enforcement": [
+    {"point": "lint-harness.py:L7", "how": "with --ledger, every PASS/PASS-UNPROVEN check name must appear as an exact literal (or printf stem) in some harness/tool source"}
+   ],
+   "residual": "Runs only when a ledger path is passed; an exact name match anywhere in a source file - including a comment - counts as 'emitted'."
+  },
+  {
+   "rule": "L8",
+   "statement": "The record answers a topic from its CURRENT STATE head, not its chronology: every topic file has a dated head, every bullet is [verified <date>] or UNVERIFIED, and FINDINGS.md stays an index.",
+   "enforcement": [
+    {"point": "lint-harness.py:L8", "how": "three checks: missing '## CURRENT STATE' block, undated CURRENT STATE bullets, and dated sections regrowing in the FINDINGS.md index"}
+   ],
+   "residual": "Cannot verify a CURRENT STATE claim is actually current (a stale but dated bullet passes); the commit-must-touch-CURRENT-STATE half (findings rule 4) is explicitly NOT_LINTED - it lives in the pre-commit hook, not the linter."
+  }
+ ]
+}

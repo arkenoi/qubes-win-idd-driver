@@ -1,0 +1,24 @@
+{
+ "truth": {
+  "st0-screen": "SETUP_ERROR_DIALOG"
+ },
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "st0-screen",
+  "ledger": [
+   {
+    "check": "golden-stick11-bypasses",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-pristine-screen",
+    "verdict": "FAIL"
+   }
+  ],
+  "ledger_absent": [
+   "gate0-payload",
+   "golden-guest-attest",
+   "golden-reset-trap-restored"
+  ]
+ }
+}

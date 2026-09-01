@@ -1,0 +1,21 @@
+{
+ "comment": "DEFECT: a TEMPLATE carries a netvm (NET-0 STOP-and-report). The roster probe must go INVALID-PRECONDITION and HALT THE CAMPAIGN before any guest boots. Trap: detaching it and continuing the same campaign, or reading the rule as 'no networking anywhere' (AppVMs MUST have a netvm for network cells).",
+ "steps": [
+  "p2-network.json"
+ ],
+ "vars": {
+  "APPVM": "win10-app",
+  "CHURN": "win10-c1",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260901-2/p2-network"
+ },
+ "results": {
+  "p2-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-2/p2-network"
+  },
+  "p2-template-netvm": {
+   "exit": 0,
+   "stdout": "TEMPLATE-HAS-NETVM:win10-tpl"
+  }
+ }
+}

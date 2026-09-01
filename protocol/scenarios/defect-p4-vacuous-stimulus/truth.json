@@ -1,0 +1,40 @@
+{
+ "truth": {
+  "p4-rnd5-verdict": "NOMAP_BOTH_WITNESSES"
+ },
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "p4-scan-disarmed",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-bench-canonical-suite",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-rnd5-nomap-two-witness",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-rnd8-resolution-liveness",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-rnd3-stimulus-established",
+    "verdict": "INVALID-VACUOUS"
+   }
+  ],
+  "ledger_absent": [
+   "p4-rnd3-synth-crop",
+   "p4-rnd4-toast-two-path",
+   "p4-rnd1-drag",
+   "p4-rnd2-scroll",
+   "p4-rnd6-occlusion",
+   "p4-rnd7-chrome",
+   "p4-rnd9-coldboot",
+   "p4-rnd8-dom0-resize"
+  ]
+ }
+}

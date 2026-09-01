@@ -1,0 +1,53 @@
+{
+ "comment": "DEFECT: the R3 'candidate desktop' is a Windows 11 Setup requirements error dialog. Every upstream gate passed (stick verified BYPASSES=5, loops sane) and the provisioner exited 3 with a log full of screen=VERDICT=DESKTOP lines - because the classifier calls a light dialog on a dark ground DESKTOP, and an error dialog awaiting input is CPU-idle, so the quiet counter climbs exactly like a real desktop. Note the tells in the log the operator must cross-check: NO 'install-phase halt -> restarting without CD' cycles ever appeared (Setup died in windowsPE before the first reboot) and DESKTOP verdicts start at t+191s. Lineage: the 137s 'pristine desktop reached' false-PASS of 2026-08-30 (0.6b) - the exit-0 criterion was retracted and THIS judgement is its replacement; the fixture PNG must classify as SETUP_ERROR_DIALOG and any judge calling it DESKTOP_SETTLED is broken. Ground truth: FAIL, campaign HALTS, the guest is preserved as evidence (G-0), nothing is sealed. Trap: answering DESKTOP_SETTLED because the log said candidate/quiet=3.",
+ "steps": [
+  "golden.json"
+ ],
+ "vars": {
+  "REL": "09b643e12abc",
+  "MATRIX_WORK": "/home/user/qwt-matrix-work",
+  "GOLD10": "win10-base",
+  "FIXTURE": "win10-p46",
+  "GOLD_NEW10": "win10-st2g",
+  "GOLD_NEW11": "win11-st0p",
+  "ISO_LOOP10": "loop0",
+  "ISO_LOOP11": "loop3",
+  "STICK_LOOP10": "loop9",
+  "STICK_LOOP11": "loop17",
+  "R3_EVID": "/home/user/qwt-matrix-work/r3-pristine-win11-st0p"
+ },
+ "results": {
+  "gp-roster": {
+   "exit": 0,
+   "stdout": "win10-base       sealed 2026-08-30T10:27:32Z  primed pristine Win10 22H2 base (build 19045.2965): no QWT, testsigning OFF, QubesPrime hook installed and PROVEN to fire\nwin10-gold0      sealed 2026-08-30T09:13:45Z  re-sealed 2026-08-30 after fixing the dead revision reader\nwin10-goldr      sealed 2026-08-30T09:13:47Z  re-sealed 2026-08-30 after fixing the dead revision reader\nwin11-base       sealed 2026-08-30T11:58:20Z  primed pristine Win11 24H2 Enterprise Evaluation base (build 26100.240331-1435): no QWT, testsigning OFF, QubesPrime hook installed and PROVEN to fire\nwin11-gold0      sealed 2026-08-30T09:13:50Z  re-sealed 2026-08-30 after fixing the dead revision reader\nwin11-goldr      sealed 2026-08-30T09:13:53Z  re-sealed 2026-08-30 after fixing the dead revision reader"
+  },
+  "gp-verify-base": {
+   "exit": 0,
+   "stdout": "VERIFIED win10-base matches its seal (sealed 2026-08-30T10:27:32Z)"
+  },
+  "gp-fixture": {
+   "exit": 0,
+   "stdout": "FIXTURE win10-p46: built 2026-08-30T18:51:26Z from win10-base (sealed 2026-08-30T10:27:32Z), job=ours\n  base seal re-verified now - provenance intact"
+  },
+  "st0-stick-build": {
+   "exit": 0,
+   "stdout": "locale: en-US (input 0409:00000409), image: Windows 11 Enterprise Evaluation\nanswer file: all placeholders substituted, XML well-formed\n-rwxr-xr-x 1 user user 4711 Sep  1 17:02 Autounattend.xml\nbuilt /home/user/win-iso/answer-pristine-win11.img (96M)\nattach it before first boot (reprovision-usb.sh does this itself):\n  qvm-features <vm> qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99'"
+  },
+  "st0-stick-verify": {
+   "exit": 0,
+   "stdout": "BYPASSES=5 PLACEHOLDERS=0"
+  },
+  "st0-freshname": {
+   "exit": 2,
+   "stdout": "UNSEALED: no record for win11-st0p - a golden with no seal cannot be trusted"
+  },
+  "st0-loops": {
+   "exit": 0,
+   "stdout": "NAME       SIZELIMIT OFFSET AUTOCLEAR RO BACK-FILE                                        DIO LOG-SEC\n/dev/loop3         0      0         0  1 /home/user/win-iso/win11-24h2-eval-x64-en-us.iso   0     512\nNAME        SIZELIMIT OFFSET AUTOCLEAR RO BACK-FILE                                    DIO LOG-SEC\n/dev/loop17         0      0         0  1 /home/user/win-iso/answer-pristine-win11.img   0     512"
+  },
+  "st0-r3": {
+   "exit": 3,
+   "stdout": "16:03:41 reprovision-usb: answer stick verified: /dev/loop17 -> /home/user/win-iso/answer-pristine-win11.img (100663296 bytes)\n16:03:41 reprovision-usb: shutting down win11-st0p (if present) and removing it\n16:03:48 reprovision-usb: creating win11-st0p and tagging win-idd-testbed\n16:03:51 reprovision-usb: booting the vendor ISO (/dev/loop3) with the answer stick (/dev/loop17)\n16:07:02 reprovision-usb:   t+191s screen=VERDICT=DESKTOP cpu=2 quiet=1 (all advisory)\n16:07:35 reprovision-usb:   t+224s screen=VERDICT=DESKTOP cpu=1 quiet=2 (all advisory)\n16:08:08 reprovision-usb:   t+257s screen=VERDICT=DESKTOP cpu=1 quiet=3 (all advisory)\n16:12:29 reprovision-usb:   t+518s screen=VERDICT=DESKTOP cpu=1 quiet=3 (all advisory)\n16:18:45 reprovision-usb:   t+904s screen=VERDICT=DESKTOP cpu=1 quiet=3 (all advisory)\n16:19:15 reprovision-usb: candidate desktop after 934s: verdict=VERDICT=DESKTOP, cpu idle for 3 consecutive samples\n16:19:15 reprovision-usb: NEEDS VISUAL CONFIRMATION - READ /home/user/qwt-matrix-work/r3-pristine-win11-st0p/latest.png before sealing this qube.\n16:19:15 reprovision-usb:   A Setup error dialog also classifies as DESKTOP; the classifier cannot decide this.\n16:19:15 reprovision-usb:   An idle guest is not necessarily a FINISHED one - a Setup dialog awaiting input is idle too."
+  }
+ }
+}

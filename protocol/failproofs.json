@@ -1,79 +1,261 @@
 {
  "gate0-payload": {
-  "campaign": "st-defect-gate0-20260901-141048",
+  "campaign": "st-defect-gate0-20260901-155106",
   "grade": "dry",
   "observed_verdict": "INVALID-PROVENANCE",
   "scenario": "defect-gate0",
-  "utc": "2026-09-01T14:10:48Z"
+  "utc": "2026-09-01T15:51:07Z"
+ },
+ "golden-entry-verify": {
+  "campaign": "st-defect-golden-unsealed-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-CONTAMINATED",
+  "scenario": "defect-golden-unsealed",
+  "utc": "2026-09-01T15:51:08Z"
+ },
+ "golden-fixture-provenance": {
+  "campaign": "st-defect-golden-fixture-drift-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-CONTAMINATED",
+  "scenario": "defect-golden-fixture-drift",
+  "utc": "2026-09-01T15:51:08Z"
+ },
+ "golden-guest-attest": {
+  "campaign": "st-defect-golden-reset-trap-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-INSTRUMENT",
+  "scenario": "defect-golden-reset-trap",
+  "utc": "2026-09-01T15:51:08Z"
+ },
+ "golden-pristine-screen": {
+  "campaign": "st-defect-golden-setup-error-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "FAIL",
+  "scenario": "defect-golden-setup-error",
+  "utc": "2026-09-01T15:51:08Z"
+ },
+ "golden-reset-trap-restored": {
+  "campaign": "st-defect-golden-reset-trap-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-PRECONDITION",
+  "scenario": "defect-golden-reset-trap",
+  "utc": "2026-09-01T15:51:08Z"
+ },
+ "golden-roster-live": {
+  "campaign": "st-defect-golden-unsealed-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-PRECONDITION",
+  "scenario": "defect-golden-unsealed",
+  "utc": "2026-09-01T15:51:08Z"
+ },
+ "golden-stick11-bypasses": {
+  "campaign": "st-defect-golden-labconfig-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-PRECONDITION",
+  "scenario": "defect-golden-labconfig",
+  "utc": "2026-09-01T15:51:08Z"
  },
  "golden-win10-base": {
-  "campaign": "st-defect-golden-drifted-20260901-141048",
+  "campaign": "st-defect-golden-drifted-20260901-155106",
   "grade": "dry",
   "observed_verdict": "INVALID-CONTAMINATED",
   "scenario": "defect-golden-drifted",
-  "utc": "2026-09-01T14:10:48Z"
+  "utc": "2026-09-01T15:51:08Z"
  },
  "golden-win11-base": {
-  "campaign": "st-defect-golden-drifted-11-20260901-141048",
+  "campaign": "st-defect-golden-drifted-11-20260901-155106",
   "grade": "dry",
   "observed_verdict": "INVALID-CONTAMINATED",
   "scenario": "defect-golden-drifted-11",
-  "utc": "2026-09-01T14:10:48Z"
+  "utc": "2026-09-01T15:51:07Z"
  },
  "p0-all-halted": {
-  "campaign": "st-defect-guest-running-20260901-141048",
+  "campaign": "st-defect-guest-running-20260901-155106",
   "grade": "dry",
   "observed_verdict": "INVALID-PRECONDITION",
   "scenario": "defect-guest-running",
-  "utc": "2026-09-01T14:10:49Z"
+  "utc": "2026-09-01T15:51:09Z"
  },
  "p0-cells-named": {
-  "campaign": "st-defect-empty-cells-20260901-141048",
+  "campaign": "st-defect-empty-cells-20260901-155106",
   "grade": "dry",
   "observed_verdict": "INVALID-PRECONDITION",
   "scenario": "defect-empty-cells",
-  "utc": "2026-09-01T14:10:48Z"
+  "utc": "2026-09-01T15:51:07Z"
  },
  "p0-regate-tarball": {
-  "campaign": "st-defect-stale-tarball-20260901-141048",
+  "campaign": "st-defect-stale-tarball-20260901-155106",
   "grade": "dry",
   "observed_verdict": "INVALID-PROVENANCE",
   "scenario": "defect-stale-tarball",
-  "utc": "2026-09-01T14:10:49Z"
+  "utc": "2026-09-01T15:51:14Z"
  },
  "p0-roster-netvm": {
-  "campaign": "st-defect-template-netvm-20260901-141048",
+  "campaign": "st-defect-template-netvm-20260901-155106",
   "grade": "dry",
   "observed_verdict": "INVALID-PRECONDITION",
   "scenario": "defect-template-netvm",
-  "utc": "2026-09-01T14:10:49Z"
+  "utc": "2026-09-01T15:51:14Z"
  },
  "p0-stage-inputs": {
-  "campaign": "st-defect-missing-agent-exe-20260901-141048",
+  "campaign": "st-defect-missing-agent-exe-20260901-155106",
   "grade": "dry",
   "observed_verdict": "INVALID-PRECONDITION",
   "scenario": "defect-missing-agent-exe",
-  "utc": "2026-09-01T14:10:49Z"
+  "utc": "2026-09-01T15:51:09Z"
  },
  "p1-matrix-nonvacuous": {
-  "campaign": "st-defect-zerocell-20260901-141048",
+  "campaign": "st-defect-zerocell-20260901-155106",
   "grade": "dry",
   "observed_verdict": "INVALID-VACUOUS",
   "scenario": "defect-zerocell",
-  "utc": "2026-09-01T14:10:49Z"
+  "utc": "2026-09-01T15:51:15Z"
  },
  "p1-matrix-run": {
-  "campaign": "st-defect-cell-fail-20260901-141048",
+  "campaign": "st-defect-cell-fail-20260901-155106",
   "grade": "dry",
   "observed_verdict": "FAIL",
   "scenario": "defect-cell-fail",
-  "utc": "2026-09-01T14:10:48Z"
+  "utc": "2026-09-01T15:51:07Z"
  },
  "p1-precondition-authority": {
-  "campaign": "st-defect-precondition-mismatch-20260901-141048",
+  "campaign": "st-defect-precondition-mismatch-20260901-155106",
   "grade": "dry",
   "observed_verdict": "INVALID-PRECONDITION",
   "scenario": "defect-precondition-mismatch",
-  "utc": "2026-09-01T14:10:49Z"
+  "utc": "2026-09-01T15:51:14Z"
+ },
+ "p2-net0-template-netvm": {
+  "campaign": "st-defect-p2-template-netvm-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-PRECONDITION",
+  "scenario": "defect-p2-template-netvm",
+  "utc": "2026-09-01T15:51:10Z"
+ },
+ "p2-net1-latch-applier": {
+  "campaign": "st-defect-p2-latch-absent-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "FAIL",
+  "scenario": "defect-p2-latch-absent",
+  "utc": "2026-09-01T15:51:09Z"
+ },
+ "p2-net2-zero-reboot-attach": {
+  "campaign": "st-defect-p2-second-boot-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "FAIL",
+  "scenario": "defect-p2-second-boot",
+  "utc": "2026-09-01T15:51:10Z"
+ },
+ "p2-net3-transfer-rx": {
+  "campaign": "st-defect-p2-rx-not-crossing-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "FAIL",
+  "scenario": "defect-p2-rx-not-crossing",
+  "utc": "2026-09-01T15:51:09Z"
+ },
+ "p2-net6-firstvif-eligible": {
+  "campaign": "st-defect-p2-vif-veteran-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-VACUOUS",
+  "scenario": "defect-p2-vif-veteran",
+  "utc": "2026-09-01T15:51:10Z"
+ },
+ "p3-g0c-scan-disarmed": {
+  "campaign": "st-defect-p3-updates-probe-dark-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-INSTRUMENT",
+  "scenario": "defect-p3-updates-probe-dark",
+  "utc": "2026-09-01T15:51:10Z"
+ },
+ "p3-serial-no-bench": {
+  "campaign": "st-defect-p3-updates-scan-armed-during-bench-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-PRECONDITION",
+  "scenario": "defect-p3-updates-scan-armed-during-bench",
+  "utc": "2026-09-01T15:51:11Z"
+ },
+ "p3-u1-scan-to-dom0": {
+  "campaign": "st-defect-p3-updates-u1-scan-failure-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "FAIL",
+  "scenario": "defect-p3-updates-u1-scan-failure",
+  "utc": "2026-09-01T15:51:11Z"
+ },
+ "p3-u2-coldboot-class": {
+  "campaign": "st-defect-p3-updates-scan-suppressed-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-INSTRUMENT",
+  "scenario": "defect-p3-updates-scan-suppressed",
+  "utc": "2026-09-01T15:51:11Z"
+ },
+ "p4-bench-canonical-suite": {
+  "campaign": "st-defect-p4-scan-armed-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-PRECONDITION",
+  "scenario": "defect-p4-scan-armed",
+  "utc": "2026-09-01T15:51:12Z"
+ },
+ "p4-rnd3-stimulus-established": {
+  "campaign": "st-defect-p4-vacuous-stimulus-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-VACUOUS",
+  "scenario": "defect-p4-vacuous-stimulus",
+  "utc": "2026-09-01T15:51:12Z"
+ },
+ "p4-rnd3-synth-crop": {
+  "campaign": "st-defect-p4-caret-hash-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "FAIL",
+  "scenario": "defect-p4-caret-hash",
+  "utc": "2026-09-01T15:51:11Z"
+ },
+ "p4-rnd5-nomap-two-witness": {
+  "campaign": "st-defect-p4-map-unwitnessed-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "FAIL",
+  "scenario": "defect-p4-map-unwitnessed",
+  "utc": "2026-09-01T15:51:12Z"
+ },
+ "p4-scan-disarmed": {
+  "campaign": "st-defect-p4-scan-armed-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-PRECONDITION",
+  "scenario": "defect-p4-scan-armed",
+  "utc": "2026-09-01T15:51:12Z"
+ },
+ "p5-containment-agent-agrees": {
+  "campaign": "st-defect-p5-containment-lost-after-restart-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-PRECONDITION",
+  "scenario": "defect-p5-containment-lost-after-restart",
+  "utc": "2026-09-01T15:51:13Z"
+ },
+ "p5-gate-preflight-clear": {
+  "campaign": "st-defect-p5-failproof-blind-harness-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-INSTRUMENT",
+  "scenario": "defect-p5-failproof-blind-harness",
+  "utc": "2026-09-01T15:51:13Z"
+ },
+ "p5-running-image-is-artefact": {
+  "campaign": "st-defect-p5-silent-binary-swap-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-WRONGBUILD",
+  "scenario": "defect-p5-silent-binary-swap",
+  "utc": "2026-09-01T15:51:14Z"
+ },
+ "p5-sg-unattended-suite": {
+  "campaign": "st-defect-p5-sg-gate-leaked-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "FAIL",
+  "scenario": "defect-p5-sg-gate-leaked",
+  "utc": "2026-09-01T15:51:14Z"
+ },
+ "p5-sg0-feature-never-set": {
+  "campaign": "st-defect-p5-feature-set-20260901-155106",
+  "grade": "dry",
+  "observed_verdict": "INVALID-PRECONDITION",
+  "scenario": "defect-p5-feature-set",
+  "utc": "2026-09-01T15:51:13Z"
  }
 }

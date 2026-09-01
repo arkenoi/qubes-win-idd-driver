@@ -1,0 +1,295 @@
+{
+  "part": "p3-updates",
+  "comment": "P3 - Updates (dom0-owned Windows Update path): ACCEPTANCE-PROTOCOL.md 0.10 runbook (P3-1..P3-6, doc lines 763-836) + Part II section 7 (U0-U6, lines 1670-1698) compiled to runner data. Subject: ONE TemplateVM (netvm=''), the documented P3 rig. Structure this file enforces: (1) the SERIAL rule is a GATE - no benchmark/rendering harness may be live anywhere on the rig when P3 starts, because a scan and rendering load on one box is the documented wedge trigger; (2) G-0c is a PAIR of steps - p3-g0c-disarm positively disarms QubesWindowsUpdateScan and RECORDS state+nextrun in evidence before any cell runs, p3-rearm-scan positively re-enables it at part end (a weak model disarms and never re-arms, leaving the guest's update path dead); (3) instrument rule 9 (the product's own debounce carries contamination between cells) is executable: update-status.json is cleared before every cell that needs a -Scheduled pass to RUN - by p3-u1-clear-debounce for U1's kick, and inside mgmt/harness/u2-coldboot.sh for U2's boot pass; (4) U1's scan is kicked DETACHED via the task (never a live pushrun - it dies with the connection) and graded from OUTPUT: the status JSON, the dom0-visible qvm-features half, and the rig-side proxy slice, never log prose alone; (5) a U1 FAIL takes the G-0 write-off path mechanically - evidence is copied out BEFORE grading, the judgement's on_fail is CONTINUE, and the runner's custody machinery then refuses every later step on the guest (the 0x8024402C campaign was lost precisely because the subject was mutated before write-off). U0's stack comparison runs against the SHIPPED PAYLOAD, never the repo (CRLF rewrites made 4 of 5 repo diffs phantom tampers); a mismatch is INVALID-WRONGBUILD (H1), not FAIL. U3/U4 are declared, not faked: U3 needs the owner-contingent venue decision (D5/R1) plus a poll choreography no committed primitive implements, U4 needs env-armed drills with per-drill restores (H0 forbids hand-rolling either in a step command). P3-standing-rules is compiled structurally: serial -> p3-serial-gate, detach -> p3-u1-kick, judge-output-not-logs -> p3-u1-collect/-verdict evidence, reboot semantics -> u2-coldboot.sh, drain hygiene -> p3-shutdown-tpl's on_fail. P3-4 (G-0 on scan failure) lives in p3-u1-verdict's on_fail plus the runner's OUT_OF_SERVICE custody.",
+  "steps": [
+    {
+      "id": "p3-outdir",
+      "kind": "action",
+      "title": "Create the part's evidence directory (evidence lands under ACCEPT_OUT, never session tmp)",
+      "vars_in": ["ACCEPT_OUT"],
+      "command": "mkdir -p {ACCEPT_OUT} && echo \"OUTDIR-READY {ACCEPT_OUT}\"",
+      "expect": {"exit": 0, "stdout_re": "^OUTDIR-READY "},
+      "on_fail": {"action": "HALT_PART", "msg": "cannot create the evidence directory; fix ACCEPT_OUT and start a new campaign"}
+    },
+    {
+      "id": "p3-serial-gate",
+      "kind": "probe",
+      "title": "P3 standing rule SERIAL as a gate: NO benchmark/rendering harness may be live when an updates part starts (bracket-class pgrep so the pattern can never match this shell itself - instrument rule 10)",
+      "requires": ["p3-outdir"],
+      "vars_in": ["ACCEPT_OUT"],
+      "command": "c=$(pgrep -af 'mgmt/harness/p[45]-run|mgmt/harness/stability-e2[e]|mgmt/harness/rnd[8-]|tools/bench-agent\\.s[h]|tools/bench-stock-vs-ours\\.s[h]' || true); if [ -n \"$c\" ]; then printf '%s\\n' \"$c\" | sed 's/^/CONCURRENT-HARNESS:/'; else echo SERIAL-OK; fi | tee {ACCEPT_OUT}/serial-gate.txt",
+      "timeout_s": 60,
+      "expect": {"exit": 0, "stdout_re": "^SERIAL-OK$", "stdout_absent_re": "^CONCURRENT-HARNESS:"},
+      "check": "p3-serial-no-bench",
+      "on_fail": {"action": "HALT_CAMPAIGN", "verdict": "INVALID-PRECONDITION", "msg": "A benchmark/rendering harness is live (printed above). P3 is SERIAL - never concurrent with a benchmark/rendering part: an update scan raises the proxy and churns qrexec, a documented wedge trigger under rendering load, and the bench numbers void too. WAIT for the printed holder to finish (or kill it BY PID - never pkill -f, it matches your own command line), then start a NEW campaign."},
+      "defect": "2026-08-30: a guest was cold-booted ~17:52 with QubesWindowsUpdateScan due ~17:54 (boot + PT2M) and BENCH-2 started ~17:53; the guest wedged mid-benchmark and every BENCH number from both subjects that evening is uncitable. The serial rule existed in P3's standing rules; what was missing was an executable gate (G-0c's origin incident)",
+      "falsified_by": "defect-p3-updates-scan-armed-during-bench"
+    },
+    {
+      "id": "p3-proxy-listen",
+      "kind": "action",
+      "title": "P3-1 own the proxy backend: tinyproxy LISTENING on 127.0.0.1:8082 (qubes.UpdatesProxy is a symlink to /dev/tcp/127.0.0.1/8082 served by THIS qube - standing rig infrastructure, long uptime is normal)",
+      "requires": ["p3-serial-gate"],
+      "vars_in": ["ACCEPT_OUT"],
+      "command": "ss -ltnp 2>/dev/null | grep -a ':8082 ' | tee {ACCEPT_OUT}/proxy-listen.txt",
+      "timeout_s": 60,
+      "expect": {"stdout_re": "127\\.0\\.0\\.1:8082"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "Nothing listens on 127.0.0.1:8082. Start tinyproxy from the CANONICAL config /home/user/updates-tinyproxy.conf - NEVER invent a second proxy on another port, NEVER kill a running one (it is permanent rig infrastructure; for a clean evidence window append a marker line to /home/user/updates-tinyproxy.log and slice from it). Then start a new campaign."}
+    },
+    {
+      "id": "p3-backend-egress",
+      "kind": "action",
+      "title": "U1 precondition - own BOTH ends: one control fetch of a small CTL cab through the backend proves proxy egress (else every guest scan verdict is vacuous); drops the marker line that scopes this part's proxy-log slice",
+      "requires": ["p3-proxy-listen"],
+      "vars_in": ["ACCEPT_OUT"],
+      "command": "m=\"P3EGRESS-$(date -u +%Y%m%dT%H%M%SZ)\"; echo \"MARKER $m\" >> /home/user/updates-tinyproxy.log; echo \"$m\" > {ACCEPT_OUT}/proxy-marker.txt; curl -sS --max-time 90 -x http://127.0.0.1:8082 -o /dev/null -w \"EGRESS http=%{http_code} bytes=%{size_download}\\n\" http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/disallowedcertstl.cab | tee {ACCEPT_OUT}/backend-egress.txt",
+      "timeout_s": 120,
+      "expect": {"exit": 0, "stdout_re": "^EGRESS http=200 bytes=[1-9][0-9]*"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The proxy backend cannot fetch a CTL cab, so it has no egress. Every guest scan verdict taken now would be VACUOUS (U1's own-both-ends precondition). Fix the backend's netvm/egress (see the updates-proxy-bisect skill), then start a new campaign."}
+    },
+    {
+      "id": "p3-boot-tpl",
+      "kind": "action",
+      "title": "Boot the TemplateVM subject netvm='' (fire-and-poll via the e2e-wait library - a foreground qvm-start blocks up to qrexec_timeout on a non-booting guest)",
+      "requires": ["p3-serial-gate"],
+      "guest": "TPL",
+      "vars_in": ["TPL", "ACCEPT_OUT"],
+      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {TPL} >/dev/null 2>&1 & ) ; w_session {TPL} 1200 p3-boot-tpl {ACCEPT_OUT} echo",
+      "timeout_s": 1400,
+      "expect": {"exit": 0, "stdout_re": "session up at t\\+[0-9]+s"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The template subject never produced a session (w_session took its TERMINAL or DEADLINE exit). That is a boot problem, not an updates verdict - the guest's state is evidence, investigate before any update cell; never poll it by hand."}
+    },
+    {
+      "id": "p3-g0c-disarm",
+      "kind": "probe",
+      "title": "G-0c (paired with p3-rearm-scan): POSITIVELY disarm QubesWindowsUpdateScan and RECORD state+nextrun in evidence BEFORE any cell runs - the freshly booted guest carries a boot+PT2M trigger that would race this part's own kick, and a completed scheduled pass arms the 30-min debounce (rule 9)",
+      "requires": ["p3-boot-tpl"],
+      "guest": "TPL",
+      "vars_in": ["TPL", "ACCEPT_OUT"],
+      "command": "QTEST_VM={TPL} timeout -k 8 300 tools/qtest pushrun guest/disarm-update-scan.ps1 | tr -d '\\r' | grep -aE '^(SCAN_BEFORE|SCAN_AFTER|RELAY_|DISARMED|SCAN_TASK)' | tee {ACCEPT_OUT}/g0c-disarm.txt",
+      "timeout_s": 400,
+      "expect": {"stdout_re": "(?s)SCAN_BEFORE state=.* nextrun=.*SCAN_AFTER state=Disabled.*RELAY_AFTER 0.*DISARMED True", "stdout_absent_re": "DISARMED False|SCAN_TASK ABSENT"},
+      "check": "p3-g0c-scan-disarmed",
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The scan could not be disarmed-and-proven (SCAN_TASK ABSENT means the update stack is not even deployed - U0 territory, fix the install first). Run NOTHING further on this subject: an unmeasured cell beats a bad number. Empty output is the pushrun-without-a-session trap (RIG-CONSTRAINTS 1.1) and reads INVALID-INSTRUMENT, never a product verdict."},
+      "defect": "the 2026-08-30 boot+PT2M incident (scan fired into a running part because nothing positively disarmed it and recorded the disarm in evidence), plus rule 9's corollary: a scheduled pass left armed completes and its answer suppresses the -Scheduled pass a later cell needs. The probe half: pushrun on a session-less guest returns NOTHING (RIG-CONSTRAINTS 1.1 - pvnic-latch-readback returned nothing on win10-tpl 2026-08-31 and the empty output was nearly graded)",
+      "falsified_by": "defect-p3-updates-probe-dark"
+    },
+    {
+      "id": "p3-u0-stack",
+      "kind": "action",
+      "title": "U0 collect (read-only): hash the DEPLOYED update stack with guest/wu-verify-stack.ps1 - verify installed content, never installer output (the $PSScriptRoot silent death)",
+      "requires": ["p3-g0c-disarm"],
+      "guest": "TPL",
+      "vars_in": ["TPL", "ACCEPT_OUT"],
+      "command": "QTEST_VM={TPL} timeout -k 8 400 tools/qtest pushrun guest/wu-verify-stack.ps1 | tr -d '\\r' | tee {ACCEPT_OUT}/u0-stack.txt",
+      "timeout_s": 500,
+      "expect": {"stdout_re": "(?s)=== RESULT ===.*qubes-windows-update\\.ps1.*wu-update\\.ps1.*vmupdate-shim\\.ps1.*ensure-autologon\\.ps1.*VMExec\\.ps1"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-INSTRUMENT", "msg": "The stack probe returned nothing or lost its RESULT block. pushrun without a logged-on session returns NOTHING (RIG-CONSTRAINTS 1.1) - empty output is a broken instrument, NEVER a deploy verdict in either direction. Missing data fails (V3); do not grade U0 from partial evidence."}
+    },
+    {
+      "id": "p3-u0-tasks",
+      "kind": "action",
+      "title": "U0 task/policy/baseline probe: Scan boot PT2M + PT6H repeat, SYSTEM, -Scheduled; Run/Download NO triggers and no -Scheduled (counted rig-side - PowerShell's @($null).Count is 1, instrument rule 11); QubesAutologonGuard boot PT30S; NoAutoUpdate=1; ExcludeWUDriversInQualityUpdate=1; winhttp Direct; no relay process",
+      "requires": ["p3-g0c-disarm"],
+      "guest": "TPL",
+      "vars_in": ["TPL", "ACCEPT_OUT"],
+      "command": "s=$(QTEST_VM={TPL} timeout -k 8 120 tools/qtest run 'cmd /c schtasks /query /tn QubesWindowsUpdateScan /xml' | tr -d '\\r'); r=$(QTEST_VM={TPL} timeout -k 8 120 tools/qtest run 'cmd /c schtasks /query /tn QubesWindowsUpdateRun /xml' | tr -d '\\r'); d=$(QTEST_VM={TPL} timeout -k 8 120 tools/qtest run 'cmd /c schtasks /query /tn QubesWindowsUpdateDownload /xml' | tr -d '\\r'); g=$(QTEST_VM={TPL} timeout -k 8 120 tools/qtest run 'cmd /c schtasks /query /tn QubesAutologonGuard /xml' | tr -d '\\r'); p=$(QTEST_VM={TPL} timeout -k 8 120 tools/qtest run 'cmd /c reg query HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU /v NoAutoUpdate & reg query HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate /v ExcludeWUDriversInQualityUpdate & netsh winhttp show proxy & tasklist /fi \"imagename eq qubes-updates-relay.exe\"' | tr -d '\\r' | grep -avE '^(Microsoft Windows \\[Version|\\(c\\) Microsoft|C:\\\\)'); { echo \"U0TASKS scan_boot_pt2m=$(grep -c '<Delay>PT2M</Delay>' <<<\"$s\") scan_rep_pt6h=$(grep -c '<Interval>PT6H</Interval>' <<<\"$s\") scan_scheduled=$(grep -c -- '-Scheduled' <<<\"$s\") scan_system=$(grep -c 'S-1-5-18' <<<\"$s\") rundl_forbidden_triggers=$(grep -cE '<(Boot|Time|Calendar|Logon)Trigger>' <<<\"$r$d\") rundl_scheduled=$(grep -c -- '-Scheduled' <<<\"$r$d\") guard_pt30s=$(grep -c '<Delay>PT30S</Delay>' <<<\"$g\") nau=$(grep -c 'NoAutoUpdate *REG_DWORD *0x1' <<<\"$p\") xwud=$(grep -c 'ExcludeWUDriversInQualityUpdate *REG_DWORD *0x1' <<<\"$p\") winhttp_direct=$(grep -c 'Direct access' <<<\"$p\") relay_procs=$(grep -c 'qubes-updates-relay.exe' <<<\"$p\")\"; echo \"$s\"; echo \"$r\"; echo \"$d\"; echo \"$g\"; echo \"$p\"; } | tee {ACCEPT_OUT}/u0-tasks.txt",
+      "timeout_s": 700,
+      "expect": {"stdout_re": "(?s)^U0TASKS scan_boot_pt2m=[1-9] scan_rep_pt6h=[1-9] scan_scheduled=[1-9] scan_system=[1-9] rundl_forbidden_triggers=0 rundl_scheduled=0 guard_pt30s=[1-9] nau=1 xwud=1 winhttp_direct=1 relay_procs=0$.*<Task .*Direct access"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The deploy state diverges from the release contract (read the U0TASKS summary line against the raw XML/reg blocks below it in the evidence). relay_procs>0 means a pass is LIVE right now - drain it, never grade beside it. Absent raw <Task blocks mean the instrument returned nothing (RIG-CONSTRAINTS 1.1) - an instrument problem, not a deploy verdict. Any other divergence: the subject is not carrying the expected configuration, so later update cells would grade the wrong deploy - investigate the installer, then a NEW campaign."}
+    },
+    {
+      "id": "p3-u0-assert",
+      "kind": "action",
+      "title": "U0 authority line: compare the deployed stack hashes against the SHIPPED PAYLOAD, never the repo - the build rewrites LF to CRLF, so a raw repo diff is a phantom tamper (measured: 4 of 5 files 'differed' purely on line endings, win11-tpl 2026-08-30)",
+      "requires": ["p3-u0-stack"],
+      "guest": "TPL",
+      "vars_in": ["TPL", "ACCEPT_OUT", "PAYLOAD_DIR"],
+      "command": "for f in qubes-windows-update.ps1 wu-update.ps1 vmupdate-shim.ps1 ensure-autologon.ps1 VMExec.ps1; do pf=$(find {PAYLOAD_DIR} -name \"$f\" -type f 2>/dev/null | head -1); if [ -z \"$pf\" ]; then echo \"PAYLOAD-FILE-ABSENT:$f\"; continue; fi; h=$(sha256sum \"$pf\" | cut -c1-16); if grep -qa \"$h\" {ACCEPT_OUT}/u0-stack.txt; then echo \"STACK-MATCH:$f $h\"; else echo \"STACK-MISMATCH:$f payload=$h\"; fi; done | tee {ACCEPT_OUT}/u0-assert.txt; if grep -qa 'MISSING at' {ACCEPT_OUT}/u0-stack.txt; then echo STACK-DEPLOY-MISSING | tee -a {ACCEPT_OUT}/u0-assert.txt; fi",
+      "timeout_s": 120,
+      "expect": {"stdout_re": "(?s)STACK-MATCH:qubes-windows-update\\.ps1.*STACK-MATCH:wu-update\\.ps1.*STACK-MATCH:vmupdate-shim\\.ps1.*STACK-MATCH:ensure-autologon\\.ps1.*STACK-MATCH:VMExec\\.ps1", "stdout_absent_re": "STACK-MISMATCH|PAYLOAD-FILE-ABSENT|STACK-DEPLOY-MISSING"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-WRONGBUILD", "msg": "The deployed update stack is NOT the gated payload (or a payload file is absent from PAYLOAD_DIR). H1: a cell run on a diverged deploy grades a build that was never gated - INVALID-WRONGBUILD, never FAIL. Do NOT 'fix' this by comparing against the repo: raw repo hashes ALWAYS differ (CRLF). Redeploy from the gated payload, then a NEW campaign."}
+    },
+    {
+      "id": "p3-u1-clear-debounce",
+      "kind": "action",
+      "title": "Instrument rule 9, executable: clear update-status.json BEFORE a cell that needs the -Scheduled pass to RUN - a completed pass in the last 30 min suppresses it (measured 2026-08-31: three U1 scans at 02:24-02:26 left an answer; U2's boot pass fired correctly at 02:35:26, lastresult=0, and SKIPPED)",
+      "requires": ["p3-g0c-disarm", "p3-backend-egress"],
+      "guest": "TPL",
+      "vars_in": ["TPL", "ACCEPT_OUT"],
+      "command": "QTEST_VM={TPL} timeout -k 8 120 tools/qtest run 'cmd /c del /q C:\\ProgramData\\Qubes\\update-status.json 2>nul & if exist C:\\ProgramData\\Qubes\\update-status.json (echo DEBOUNCE_STILL_THERE) else (echo DEBOUNCE_CLEARED)' | tr -d '\\r' | grep -avE '^(Microsoft Windows \\[Version|\\(c\\) Microsoft|C:\\\\)' | tee {ACCEPT_OUT}/u1-clear.txt",
+      "timeout_s": 200,
+      "expect": {"stdout_re": "^DEBOUNCE_CLEARED$", "stdout_absent_re": "DEBOUNCE_STILL_THERE"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The suppression state could not be cleared. DEBOUNCE_STILL_THERE usually means a pass is LIVE and holds the file - drain and start a NEW campaign; kicking the scan now would grade my own earlier activity, not the product (rule 9). Empty output is the no-session instrument trap (RIG-CONSTRAINTS 1.1)."}
+    },
+    {
+      "id": "p3-u1-kick",
+      "kind": "action",
+      "title": "U1 stimulus, DETACHED (P3 standing rule: schtasks /run via qtest run, never a live pushrun - it dies with the connection): re-enable the task for its own pass and kick it; record the kick clock BOTH dom0-UTC and guest-local for the freshness half of the verdict",
+      "requires": ["p3-u1-clear-debounce"],
+      "guest": "TPL",
+      "vars_in": ["TPL", "ACCEPT_OUT"],
+      "command": "date -u +%FT%TZ | tee {ACCEPT_OUT}/u1-kick-utc.txt && QTEST_VM={TPL} timeout -k 8 120 tools/qtest run 'cmd /c schtasks /change /tn QubesWindowsUpdateScan /enable & schtasks /run /tn QubesWindowsUpdateScan & echo GUEST_KICK_LOCAL %date% %time% & echo KICKED' | tr -d '\\r' | grep -avE '^(Microsoft Windows \\[Version|\\(c\\) Microsoft|C:\\\\)' | tee -a {ACCEPT_OUT}/u1-kick-utc.txt",
+      "timeout_s": 200,
+      "expect": {"stdout_re": "(?s)SUCCESS.*SUCCESS.*GUEST_KICK_LOCAL .*^KICKED$", "stdout_absent_re": "^ERROR"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The kick did not go through (task missing/refused, or the channel returned nothing). No stimulus means nothing downstream may be graded (V5) - fix and start a NEW campaign."}
+    },
+    {
+      "id": "p3-u1-collect",
+      "kind": "action",
+      "title": "U1 evidence at the DECLARED 600 s settle (single fixed settle attached to this step - U1's binding says first status write <=3 min of kick, and a scan pass completes in minutes; no hand-rolled poll loop): status JSON + agent-log witness lines + the dom0-observable qvm-features half + the rig-side proxy slice. This copy-out happens BEFORE grading, so a failing guest is already written off with its evidence (P3-4 step 1)",
+      "requires": ["p3-u1-kick"],
+      "guest": "TPL",
+      "vars_in": ["TPL", "ACCEPT_OUT"],
+      "command": "sleep 600 && QTEST_VM={TPL} timeout -k 8 120 tools/qtest run 'cmd /c type C:\\ProgramData\\Qubes\\update-status.json & echo STATUSEOF & findstr /c:\"Sync-Revocation\" /c:\"skipping this scheduled scan\" /c:\"reported\" C:\\ProgramData\\Qubes\\wu\\agent.log & echo AGENTLOGEOF' | tr -d '\\r' | grep -avE '^(Microsoft Windows \\[Version|\\(c\\) Microsoft|C:\\\\)' | tee {ACCEPT_OUT}/u1-status.txt && { qvm-features {TPL} updates-available 2>&1; echo FEATEOF; } | tee {ACCEPT_OUT}/u1-feature.txt && sed -n \"/$(cat {ACCEPT_OUT}/proxy-marker.txt)/,\"'$p' /home/user/updates-tinyproxy.log | grep -aE 'MARKER|authrootstl|pinrulesstl|disallowedcertstl' | tail -40 | tee {ACCEPT_OUT}/u1-proxy-slice.txt",
+      "timeout_s": 900,
+      "expect": {"stdout_re": "(?s)STATUSEOF.*AGENTLOGEOF.*FEATEOF"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-INSTRUMENT", "msg": "An evidence channel returned nothing or lost its end marker. Empty instrument output is NEVER a product verdict in either direction (RIG-CONSTRAINTS 1.1, V3). Do not grade U1 from partial evidence; missing data fails."}
+    },
+    {
+      "id": "p3-u1-verdict",
+      "kind": "judgement",
+      "title": "U1 verdict: availability reached dom0 - judged from OUTPUT (status JSON + qvm-features + proxy slice), never from log prose",
+      "requires": ["p3-u1-collect"],
+      "guest": "TPL",
+      "judgement": {
+        "evidence": ["{ACCEPT_OUT}/u1-status.txt", "{ACCEPT_OUT}/u1-kick-utc.txt", "{ACCEPT_OUT}/u1-feature.txt", "{ACCEPT_OUT}/u1-proxy-slice.txt"],
+        "question": "In u1-status.txt read the JSON before STATUSEOF: its \"phase\", \"count\", \"available\", \"error\" and \"done_ts\" fields, and the agent-log lines between STATUSEOF and AGENTLOGEOF. In u1-kick-utc.txt find the GUEST_KICK_LOCAL time. In u1-feature.txt read what precedes FEATEOF. In u1-proxy-slice.txt check which CTL cabs the backend served after the MARKER. Which ONE statement does the evidence support?",
+        "answers": {
+          "SCAN_DONE_TO_DOM0": "phase is done, done_ts is LATER than GUEST_KICK_LOCAL (guest-local clocks, same boot), the 'Sync-Revocation: 3/3 CTLs' line is present, count>0 with available[] populated, AND u1-feature.txt shows a value (not an error) before FEATEOF - the dom0-observable half, a log line alone does not count",
+          "SCAN_FAILED": "phase is scan-failed or error, or the error field carries an HRESULT (the 0x8024402C class) - regardless of how healthy anything else looks",
+          "SCAN_SUPPRESSED_OR_STALE": "the 'skipping this scheduled scan' line appears, or done_ts PREDATES GUEST_KICK_LOCAL - the kicked pass never ran fresh, so this reading is my own earlier answer, not the product (rule 9)",
+          "NO_STATUS_WRITTEN": "no JSON precedes STATUSEOF (file-not-found) although the kick step recorded KICKED - the product wrote nothing inside the declared 600 s settle against its own <=3 min first-write binding",
+          "EVIDENCE_INCOMPLETE": "any of the four files, or the STATUSEOF/AGENTLOGEOF/FEATEOF/GUEST_KICK_LOCAL/MARKER witnesses, is missing"
+        },
+        "map": {"SCAN_DONE_TO_DOM0": "GREEN", "SCAN_FAILED": "RED", "NO_STATUS_WRITTEN": "RED", "SCAN_SUPPRESSED_OR_STALE": "INVALID", "EVIDENCE_INCOMPLETE": "INVALID"}
+      },
+      "check": "p3-u1-scan-to-dom0",
+      "on_fail": {"action": "CONTINUE", "verdict": "FAIL", "msg": "G-0 applies and is enforced by the runner: the guest is now OUT_OF_SERVICE and every later step on it will be refused. (1) The verdict and evidence are already copied out by p3-u1-collect - add nothing. (2) Change NOTHING on the guest: no SoftwareDistribution rename, no proxy-plane experiment, no reboot, no 'just try one thing' - the 2026-08-30 diagnosis collapsed exactly this way (three variables mutated on the only instance of the fault; root cause now UNKNOWABLE). (3) Diagnose on a CLONE with the reverse control in both directions (G-2). (4) The original stays out of service until rebuilt to entry stage. Attribution aid, since both proxy ends are ours: CTL cabs in the proxy slice with nothing else means the WU COM searcher never dialled - and do NOT 'fix' that by re-enabling Install-ViaWU (FINDINGS:13513 gates it off for netvm-free guests deliberately, G-5)."},
+      "defect": "the U1 scan-failure class, measured 4/4 on 2026-08-30 (16:51, 18:06, 18:09, 18:22): every scan ended phase:error, error:'Exception from HRESULT: 0x8024402C' (WU_E_PT_WINHTTP_NAME_NOT_RESOLVED) in 2-4 s while the proxy slice showed all three CTL cabs served. A whole campaign was then lost because the subject was mutated before the failure was written off",
+      "falsified_by": "defect-p3-updates-u1-scan-failure"
+    },
+    {
+      "id": "p3-u1-subarms",
+      "kind": "declare",
+      "check": "p3-u1-stability-and-controls",
+      "verdict": "BLOCKED",
+      "title": "U1 sub-arms: 3-scan stability binding, honest-empty guard, debounce A-E contract",
+      "detail": "WHY unattended-blocked: the binding 3-scans-stable-count series, the honest-empty negative control (QUBES_UPDATES_FAKE_EMPTY_SCAN=1 -> exit 75 phase=scan-failed, NOT '0 to dom0' - the 2026-08-15 lie made fail-able), and the Win10 esu/notice rows each require repeated kick->settle->read choreography or an env-armed negative-control pass, and no committed harness primitive runs the series - H0 forbids hand-rolling the loop in a step command. The debounce A-E contract (scheduled+recent skips; explicit never skips; stale/disabled/future-stamp run) has its deterministic core committed as guest/wu-debounce-tests.ps1 (mutex-held, no network) and stands ready when a falsifiable slot exists. None of these may be quoted as tested from this compilation."
+    },
+    {
+      "id": "p3-u2-run",
+      "kind": "action",
+      "title": "U2 stimulus via the COMMITTED primitive mgmt/harness/u2-coldboot.sh: arms the scan (the opposite of every rendering cell), clears the debounce per rule 9, proves a real COLD BOOT (live re-runs clear the QdbDaemon race the cell exists to catch), waits out boot+PT2M, and grades class_lines/class_correct itself. Collection only - the verdict is read from the console by the next step. Guest-initiated reboot semantics (on_reboot=destroy, qvm-start it yourself) are the harness's job",
+      "requires": ["p3-u0-assert"],
+      "guest": "TPL",
+      "vars_in": ["TPL", "ACCEPT_OUT"],
+      "command": "set -o pipefail; QWT_VMLOCK_HELD={TPL} bash mgmt/harness/u2-coldboot.sh {TPL} {ACCEPT_OUT}/u2 2>&1 | tee {ACCEPT_OUT}/u2-console.txt; echo U2RC=$?",
+      "timeout_s": 3600,
+      "expect": {"exit": 0, "stdout_re": "(?s)=== finished rc=[0-9]+ ===.*^U2RC=[0-9]+$"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-INSTRUMENT", "msg": "The U2 harness never reached its finish marker (refusal, no qrexec, no cold boot, or timeout). That is the instrument/precondition failing, not a classification verdict. On timeout: introspect per U5 (wu-what-is-it-doing.ps1), never 'probably still working'. The guest's state is evidence."}
+    },
+    {
+      "id": "p3-u2-verdict",
+      "kind": "judgement",
+      "title": "U2 verdict: VM-class classification proven on a real cold boot, witnessed by what CHANGED (the new class lines from THIS boot's pass, never stale log content)",
+      "requires": ["p3-u2-run"],
+      "guest": "TPL",
+      "judgement": {
+        "evidence": ["{ACCEPT_OUT}/u2-console.txt"],
+        "question": "The file is mgmt/harness/u2-coldboot.sh's own transcript. Find: the 'COLD BOOT PROVEN' line; the debounce-clear result (CLEARED or STILL_THERE); the summary line 'class_lines=... class_correct=... saw_empty_class=... qdb_retry_evidence=...'; and the final '->' verdict line(s). Which ONE statement does the transcript support?",
+        "answers": {
+          "CLASSIFIED_CORRECT_ON_COLD_BOOT": "COLD BOOT PROVEN appears, class_lines >= 1, class_correct=true, and the line '-> PASS: the boot pass classified this TemplateVM CORRECTLY from qubesdb on a real cold boot' is present, with '=== finished rc=0 ==='",
+          "CLASSIFIED_WRONG": "the line '-> FAIL: a TemplateVM was NOT classified correctly on a cold boot' is present (class_correct=false with class_lines >= 1)",
+          "BOOT_PASS_NEVER_RAN": "the '-> INVALID-VACUOUS' line is present (class_lines=0: the boot-triggered pass produced no class line, so the transcript grades the SCAN not having run - rule 9's suppression class - and says nothing about classification)",
+          "HARNESS_DID_NOT_GRADE": "a '-> INVALID-INSTRUMENT' line, a FATAL/REFUSING line, or no '->' verdict line at all"
+        },
+        "map": {"CLASSIFIED_CORRECT_ON_COLD_BOOT": "GREEN", "CLASSIFIED_WRONG": "RED", "BOOT_PASS_NEVER_RAN": "INVALID", "HARNESS_DID_NOT_GRADE": "INVALID"}
+      },
+      "check": "p3-u2-coldboot-class",
+      "on_fail": {"action": "CONTINUE", "verdict": "FAIL", "msg": "A TemplateVM misclassified on a real cold boot is the QdbDaemon startup race live in the product - the exact defect the wait-out fix exists to close. G-0: the runner has taken the guest OUT_OF_SERVICE; its post-boot state is evidence. Diagnose on a CLONE; do not re-run U2 on this subject (a second boot destroys the failing state)."},
+      "defect": "instrument rule 9, measured 2026-08-31: three U1 scans at 02:24-02:26 left a completed answer; U2's boot-triggered pass fired correctly at 02:35:26 (lastresult=0) and SKIPPED, writing nothing - class_lines:0 was then read as a classification failure when it was my own earlier cells suppressing the subject. The underlying product defect class: a live re-run clears the QdbDaemon startup race, so only a cold boot can catch a template read as a standalone at early boot",
+      "falsified_by": "defect-p3-updates-scan-suppressed"
+    },
+    {
+      "id": "p3-u3-venue",
+      "kind": "declare",
+      "check": "p3-u3-venue",
+      "verdict": "N/A - venue rule, binds U3 when it runs",
+      "title": "U3-venue: where the install pass runs",
+      "detail": "WHY not an executable cell: this is the venue RULE for U3, itself contingent on owner decision D5. Primary: directly on the standing template with R1 as rollback (the pre-update volume revision is the rollback point), the pass fitting the two-shutdown window exactly. Fallback if R1 is denied or the pass overruns: R2-materialize the lineage on the churn name CREATED TemplateVM-class (classification reads qubesdb /type, so the class must be genuine); retain at most one update-stage image per lineage (2 fleet-wide, <=~40 GB settled), delete once ST5 is stamped. NEVER service a golden until the pass is accepted."
+    },
+    {
+      "id": "p3-u3-install",
+      "kind": "declare",
+      "check": "p3-u3-install-e2e",
+      "verdict": "ATTENDED-PENDING",
+      "title": "U3: dom0-driven install end-to-end (the long stage, 1-2.5 h)",
+      "detail": "WHY attended: the venue is contingent on owner decision D5 (R1 rollback on the standing template); the shim's progress-GUI render is an owner checkpoint; and the 60 s poll choreography across download/install/reboot has no committed dom0-side primitive - H0 forbids composing it in a step command. Its authority lines, binding when it runs: baseline first (UBR, no RebootPending, pool GB, autologon armed - unarmed + staged reboot = sign-in lockout); download pct/mb must advance between polls (two flat polls -> read the relay log for PLAIN REFUSED before any verdict); rc in {0,3010,2359302}; superseded siblings never fed to CBS (the KB5043080 poisoning class); EXACTLY ONE reboot-requiring package per session, rest deferred (CBS discards a second staged session - measured twice); shutdown timing is DIAGNOSTIC (6.3 min = real apply, 77 s-class = staged package DISCARDED -> run wu-boot-servicing.ps1, never proceed on vibes); the POST-BOOT verdict is the only one that counts (UBR moved, KB state=112 in CBS packages, RebootPending gone, DISM clean, autologon survived - shot shows a desktop not sign-in, NoAutoUpdate=1, offline baseline restored, boot scan's done_ts postdating the boot); outer bound 2 h 15 min, then collect evidence per U5 and declare FAIL - never 'probably finishing'."
+    },
+    {
+      "id": "p3-u4-drills",
+      "kind": "declare",
+      "check": "p3-u4-failure-drills",
+      "verdict": "BLOCKED",
+      "title": "U4: failure-mode drills (defect-reintroduced proofs on a template rig, restore after each)",
+      "detail": "WHY unattended-blocked: each of the six drills needs an env-armed negative control plus a per-drill restore of the subject - (1) 0x80072F8F: delete CTL cabs, empty RootDirURL, resync chain cache -> class fires; Sync-Revocation repairs through the relay (CDP CRLs proven irrelevant - do not re-derive); (2) relay dead / 8082 squatted mid-pass -> probe kills/respawns or fails loudly, never 0x80072EFD blamed on 'the network'; (3) FAKE_STAGED + FAKE_FALLBACK_KB defer paths, ALLOW_MULTISTAGE=1 only on a disposable image with wu-boot-servicing as judge; (4) scan-vs-Run mutex, the shim's action='scan' filter never adopting a scan's done; (5) exit contract: forced phase=error -> exit 1, routeless wuinstall refused by the route gate; (6) ESU honesty on Win10 (severity=info, excluded from remaining, no fail-loop). No committed primitive runs the drill-restore series, and H0 forbids hand-rolling that choreography in a step command."
+    },
+    {
+      "id": "p3-u5-introspection",
+      "kind": "declare",
+      "check": "p3-u5-introspection",
+      "verdict": "N/A - standing discipline, embedded in U3/U4",
+      "title": "U5: introspection discipline for any long servicing",
+      "detail": "WHY not a standalone cell: U5 is a discipline embedded in U3/U4 (both pending above), not an executable stage. Binding whenever they run: never describe the guest without a <=1-min-old measurement (wu-what-is-it-doing.ps1 / wu-busy-probe.ps1, two samples 3-5 min apart); STUCK only when CBS.log mtime, worker CPU (~0.4 CPU-s/s during real apply), and status ts are ALL flat across 10 min with the task Running (largest measured legitimate idle gap: 468 s); collect before any kill and state what the kill destroyed; qrexec dropping mid-servicing is I/O starvation, not death - wait bounded 15 min re-probing first; a missing process is not a finished job."
+    },
+    {
+      "id": "p3-u6-policy",
+      "kind": "declare",
+      "check": "p3-u6-netvm-policy",
+      "verdict": "N/A - policy row, enforced by this part's shape",
+      "title": "U6: netvm truth table, budget, and sequencing",
+      "detail": "WHY not executable: U6 is the policy row this part's structure already obeys. Template pass/drills/NotifyUpdates/progress need NO guest netvm - the PROXY BACKEND needs egress, which p3-backend-egress asserts rig-side (U1 precondition); the AppVM leg needs none; the standalone self-update leg needs a netvm with egress proven per NET-3 (file transfer cross-checked on the XENVIF counter - never ping, never <90 s; P2's cells, not this part's); the WU-driver-exclusion check protecting the latch is asserted by p3-u0-tasks (xwud=1). Watermarks per runbook 2.6. Sequencing: updates run AFTER install/upgrade acceptance on a lineage and BEFORE re-baselining benchmarks - a serviced image is a DIFFERENT benchmark subject; baselines are re-taken on ST5 and never compared across the servicing boundary."
+    },
+    {
+      "id": "p3-standalone-control",
+      "kind": "declare",
+      "check": "p3-standalone-control",
+      "verdict": "N/A - claim gate, no such claim recorded by this part",
+      "title": "P3-6 / the STANDALONE CONTROL: binding for any 'our updater does not ship X' claim",
+      "detail": "WHY not executable here: this rule gates a CLAIM, and this part records no such claim. Binding whenever one is about to be recorded (owner 2026-08-30: 'just compare: will they install on StandaloneVM? if no, then it is not a defect'): run the SAME query on a StandaloneVM WITH a netvm - stock Windows Update, none of our code in the path - with IsInstalled=0 and NO Type filter (a Type filter or IsInstalled=1 hides non-Software classes and fabricates the 'defect'). Stock does not offer it either -> NOT A DEFECT, record as matching stock. Stock offers it and we do not -> that is the real finding, and only then."
+    },
+    {
+      "id": "p3-dynamic-updates",
+      "kind": "declare",
+      "check": "p3-dynamic-updates-settled",
+      "verdict": "N/A - settled fact, do not re-litigate",
+      "title": "Dynamic Updates: already settled via the standalone control",
+      "detail": "WHY nothing to execute: settled 2026-08-30 and standing - Dynamic Updates are a Windows SETUP mechanism, not servicing (Setup DU KB5106084 patches Setup's own binaries; Safe OS DU KB5121002 patches WinRE; both .cab, consumed during a feature update). Measured on win10-c1 (StandaloneVM, direct WU, no Type filter): ZERO Dynamic-Update rows offered, none in history; the offered set was the SAME eight KBs our agent enumerates on win10-tpl, so the .msu filter and the KB-specific catalog search hide nothing. Server variants (KB5120233, KB5120708) are never offered to client SKUs. Kept fact: our updater's offered set is IDENTICAL to stock Windows' on the same guest."
+    },
+    {
+      "id": "p3-rearm-scan",
+      "kind": "action",
+      "title": "G-0c pair of p3-g0c-disarm: POSITIVELY re-enable QubesWindowsUpdateScan at part end and RECORD the armed state - the standing deploy state is armed, and a part that disarms without re-arming leaves the guest's update path dead",
+      "requires": ["p3-g0c-disarm"],
+      "guest": "TPL",
+      "vars_in": ["TPL", "ACCEPT_OUT"],
+      "command": "QTEST_VM={TPL} timeout -k 8 120 tools/qtest run 'cmd /c schtasks /change /tn QubesWindowsUpdateScan /enable & schtasks /query /tn QubesWindowsUpdateScan /fo list | findstr /i \"TaskName Status\" & echo REARMED' | tr -d '\\r' | grep -avE '^(Microsoft Windows \\[Version|\\(c\\) Microsoft|C:\\\\)' | tee {ACCEPT_OUT}/g0c-rearm.txt",
+      "timeout_s": 200,
+      "expect": {"stdout_re": "(?s)SUCCESS.*Status: +Ready.*^REARMED$"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The scan was NOT verifiably re-enabled - the guest's update path is left dead, which is the exact failure this pairing exists to prevent. Re-enable by hand (schtasks /change /tn QubesWindowsUpdateScan /enable), verify Status Ready, and record it before any further use of this subject."}
+    },
+    {
+      "id": "p3-shutdown-tpl",
+      "kind": "action",
+      "title": "Release the template subject cleanly (H3.6: one Windows guest at a time; clean shutdown, never a kill)",
+      "requires": ["p3-boot-tpl"],
+      "guest": "TPL",
+      "vars_in": ["TPL"],
+      "command": "qvm-shutdown --wait --timeout 300 {TPL} && echo TPL-HALTED",
+      "timeout_s": 400,
+      "expect": {"exit": 0, "stdout_re": "^TPL-HALTED$"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The template did not shut down cleanly. A guest that flips back to Transient is queued qrexec restarting it - drain per runbook 2.5 (qrexec_timeout 15 -> kill -> Halted CONTINUOUSLY -> restore 6000; 15 is never left in place)."}
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "gp-fixture",
+  "ledger": [
+   {
+    "check": "golden-roster-live",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-entry-verify",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-fixture-provenance",
+    "verdict": "INVALID-CONTAMINATED"
+   }
+  ],
+  "ledger_absent": [
+   "golden-stick11-bypasses",
+   "golden-pristine-screen",
+   "gate0-payload"
+  ]
+ }
+}

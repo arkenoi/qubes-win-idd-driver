@@ -1,0 +1,212 @@
+{
+  "part": "p2-network",
+  "comment": "P2 - Networking (PV NIC path): ACCEPTANCE-PROTOCOL.md section 6 (NET-0..8, doc lines 1648-1669) compiled to runner data. Direct encoding of CLAUDE.md's PV-network testing protocol ('follow it or the result is meaningless'). Self-contained: boots its own subjects, one Windows guest at a time (H3.6), and shuts them down when green; a FAILed guest is EVIDENCE (G-0) and is deliberately left up. Standing constraints carried in the steps: templates netvm='' always; the AppVM subject MUST take an IMMEDIATE live netvm attach with ZERO reboots (a second boot is a FAIL, not a property - owner 2026-08-29); no network-shaped grading inside the declared 90 s settle; traffic is proven by FILE TRANSFER cross-checked against the XENVIF adapter's own rx_bytes (never ping - a Qubes netvm answers no ICMP); a guest that has ever seen XENVIF\\...DEV_NET cannot test first-vif. Evidence-collection steps are kind 'action' with an explicit INVALID-INSTRUMENT on_fail verdict (pushrun without a session returns NOTHING - RIG-CONSTRAINTS 1.1 - and empty instrument output is never a product verdict); the two fixed delays are DECLARED settle windows attached to their grading steps (120 s bind budget, 90 s network settle inside net-transfer-proof.ps1), never a poll loop. Cells NET-4/5/7/8 and both dialog-watcher halves are declare rows: no committed harness primitive implements their choreography and H0 forbids hand-rolling one inside a step command.",
+  "steps": [
+    {
+      "id": "p2-outdir",
+      "kind": "action",
+      "title": "Create the part's evidence directory (evidence lands under ACCEPT_OUT, never session tmp)",
+      "vars_in": ["ACCEPT_OUT"],
+      "command": "mkdir -p {ACCEPT_OUT} && echo \"OUTDIR-READY {ACCEPT_OUT}\"",
+      "expect": {"exit": 0, "stdout_re": "^OUTDIR-READY "},
+      "on_fail": {"action": "HALT_PART", "msg": "cannot create the evidence directory; fix ACCEPT_OUT and start a new campaign"}
+    },
+    {
+      "id": "p2-template-netvm",
+      "kind": "probe",
+      "title": "NET-0: no TEMPLATE carries a netvm (a template with a netvm = STOP-and-report; network behaviour is tested through AppVMs, which MUST have one)",
+      "command": "qvm-ls --raw-data --fields NAME,STATE,CLASS,NETVM | awk -F'|' '$3==\"TemplateVM\" && $4!=\"\" && $4!=\"-\" {print \"TEMPLATE-HAS-NETVM:\"$1; bad=1} END {if(!bad) print \"NETVM-OK\"}'",
+      "expect": {"exit": 0, "stdout_re": "^NETVM-OK$", "stdout_absent_re": "^TEMPLATE-HAS-NETVM:"},
+      "check": "p2-net0-template-netvm",
+      "on_fail": {"action": "HALT_CAMPAIGN", "verdict": "INVALID-PRECONDITION", "msg": "A template carries a netvm (NET-0: STOP-and-report). Detach it (qvm-prefs <tpl> netvm ''), then start a NEW campaign. Do not read the rule as 'no networking anywhere': AppVMs/Standalones MUST have netvm fw-net for network cells."},
+      "defect": "networking is prohibited on TEMPLATES (NET-0 STOP-and-report, CLAUDE.md - a rule misread twice, owner-corrected 2026-08-29): a template with a netvm poisons every AppVM network cell derived from it, and a cell run against the failed precondition is INVALID-PRECONDITION, not a product verdict",
+      "falsified_by": "defect-p2-template-netvm"
+    },
+    {
+      "id": "p2-boot-appvm",
+      "kind": "action",
+      "title": "Boot the ST3A AppVM subject netvm='' (fire-and-poll via the e2e-wait library - H3.7: a foreground qvm-start blocks up to qrexec_timeout on a non-booting guest)",
+      "requires": ["p2-outdir", "p2-template-netvm"],
+      "guest": "APPVM",
+      "vars_in": ["APPVM", "ACCEPT_OUT"],
+      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {APPVM} >/dev/null 2>&1 & ) ; w_session {APPVM} 1200 p2-boot-appvm {ACCEPT_OUT} echo",
+      "timeout_s": 1400,
+      "expect": {"exit": 0, "stdout_re": "session up at t\\+[0-9]+s"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The AppVM subject never produced a session (w_session took its TERMINAL or DEADLINE exit). That is a boot problem, not a network verdict - the guest's state is evidence, investigate it before any network cell; never poll it by hand."}
+    },
+    {
+      "id": "p2-latch-presence",
+      "kind": "probe",
+      "title": "NET-1: M1 latch + applier present BEFORE the attach (latch tasks registered, applier payload on disk, no failure marker; health-check's pvnic_applier must not report the latch absent)",
+      "requires": ["p2-boot-appvm"],
+      "guest": "APPVM",
+      "vars_in": ["APPVM", "ACCEPT_OUT"],
+      "command": "QTEST_VM={APPVM} timeout -k 8 400 tools/qtest pushrun guest/pvnic-latch-readback.ps1 | tr -d '\\r' | tee {ACCEPT_OUT}/net1-latch-readback.txt ; QTEST_VM={APPVM} timeout -k 8 500 tools/qtest pushrun guest/health-check.ps1 | tr -d '\\r' | grep -ao '\"pvnic_applier\":{[^}]*}[^}]*}' | tee -a {ACCEPT_OUT}/net1-latch-readback.txt",
+      "timeout_s": 1000,
+      "expect": {"stdout_re": "(?s)\"vif_enum_key\":true,\"task_main\":true,\"task_rearm\":true,\"payload_sha256\":\"[0-9a-f]{64}\",\"marker\":false.*\"pvnic_applier\":\\{\"pass\":true", "stdout_absent_re": "QubesPvNic task not registered - M1 latch deployment absent"},
+      "check": "p2-net1-latch-applier",
+      "on_fail": {"action": "HALT_PART", "verdict": "FAIL", "msg": "The M1 latch/applier is not fully deployed on this AppVM (on a template/AppVM lineage 'na' is a deployment FAILURE, not a class property). Without the latch the first netvm attach needs a SECOND BOOT - the exact defect the latch exists to remove - so NET-2..5 on this subject would grade the deployment gap, not the product. The guest is evidence (G-0): do not attach, do not reboot it to 'fix' it."},
+      "defect": "M1 latch absent: health-check reports 'QubesPvNic task not registered - M1 latch deployment absent' (real output, hc-u10net2 2026-08-30). A guest without the latch needs a second boot to bind the PV NIC, and every earlier 'hotplug is broken' verdict was an applier-less guest - that mistake cost three runs (NET-7). NICS is delete-on-read, so the load-bearing evidence is tasks + applier payload + no marker, per mgmt/harness/promoted-checks.sh",
+      "falsified_by": "defect-p2-latch-absent"
+    },
+    {
+      "id": "p2-net2-attach",
+      "kind": "action",
+      "title": "NET-2 stimulus: record the never-attached baseline (netvm must be ''), then the IMMEDIATE live netvm attach - no reboot commanded, none permitted",
+      "requires": ["p2-latch-presence"],
+      "guest": "APPVM",
+      "vars_in": ["APPVM", "ACCEPT_OUT"],
+      "command": "{ echo \"NETVM_BEFORE=[$(qvm-prefs {APPVM} netvm)]\"; qvm-prefs {APPVM} netvm fw-net; echo \"NETVM_AFTER=[$(qvm-prefs {APPVM} netvm)]\"; } | tee {ACCEPT_OUT}/net2-attach.txt",
+      "expect": {"exit": 0, "stdout_re": "(?s)NETVM_BEFORE=\\[\\].*NETVM_AFTER=\\[fw-net\\]"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The subject was not in the netvm='' baseline state (or qvm-prefs failed). A subject already carrying a netvm cannot test the IMMEDIATE first attach - H4.2: assert preconditions on the signal the code under test consults. Fix the roster, start a new campaign."}
+    },
+    {
+      "id": "p2-net2-collect",
+      "kind": "action",
+      "title": "NET-2 evidence collection at the DECLARED 120 s bind budget (single fixed settle attached to this grading step - the accept budget is bind <=120 s, ref 26 s; no hand-rolled poll loop): health-check + a second latch readback for the post-attach boot timestamp",
+      "requires": ["p2-net2-attach"],
+      "guest": "APPVM",
+      "vars_in": ["APPVM", "ACCEPT_OUT"],
+      "command": "sleep 120 && QTEST_VM={APPVM} timeout -k 8 500 tools/qtest pushrun guest/health-check.ps1 | tr -d '\\r' | tee {ACCEPT_OUT}/net2-health.txt && QTEST_VM={APPVM} timeout -k 8 400 tools/qtest pushrun guest/pvnic-latch-readback.ps1 | tr -d '\\r' | tee {ACCEPT_OUT}/net2-postboot.txt",
+      "timeout_s": 1200,
+      "expect": {"stdout_re": "(?s)=== HEALTH ===.*MARKJSON.*\"boot\":\"[0-9T:.+-]+\""},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-INSTRUMENT", "msg": "An instrument returned nothing or lost its boot-timestamp witness. pushrun without a logged-on session returns NOTHING (RIG-CONSTRAINTS 1.1) - empty output is a broken instrument, NEVER a product verdict in either direction. Do not grade NET-2 from partial evidence; missing data fails (V3)."}
+    },
+    {
+      "id": "p2-net2-zero-reboot",
+      "kind": "judgement",
+      "title": "NET-2 verdict: an immediate netvm attach must bind the PV NIC in the SAME boot - a second boot is a FAIL",
+      "requires": ["p2-net2-collect"],
+      "guest": "APPVM",
+      "judgement": {
+        "evidence": ["{ACCEPT_OUT}/net1-latch-readback.txt", "{ACCEPT_OUT}/net2-health.txt", "{ACCEPT_OUT}/net2-postboot.txt"],
+        "question": "Compare the pre-attach 'boot' timestamp (the MARKJSON JSON in net1-latch-readback.txt) with the post-attach 'boot' timestamp (the MARKJSON JSON in net2-postboot.txt) - they must be BYTE-IDENTICAL for a zero-reboot pass. Then, in net2-health.txt, read pv_drivers_bound (pass, emulated_nics_still_present) and pvnic_applier (pass, pv_adapter_ips, apipa_present, default_route_on_pv, failure_marker_present). Which one statement does the evidence support?",
+        "answers": {
+          "SAME_BOOT_BOUND": "boot timestamps byte-identical AND pv_drivers_bound pass:true AND emulated_nics_still_present is [] AND pvnic_applier pass:true with a real (non-169.254) IP, apipa_present [], default route on the PV NIC, no failure marker",
+          "SECOND_BOOT": "the boot timestamps DIFFER - the guest rebooted between the attach and this evidence, however healthy the bind now looks",
+          "NOT_BOUND": "boot timestamps identical but the bind is not clean: PV NIC absent/APIPA-only/no default route, an emulated NIC still present, or the failure marker exists",
+          "EVIDENCE_INCOMPLETE": "either boot timestamp, the === HEALTH === JSON, or any of the named fields is missing from the files"
+        },
+        "map": {"SAME_BOOT_BOUND": "GREEN", "SECOND_BOOT": "RED", "NOT_BOUND": "RED", "EVIDENCE_INCOMPLETE": "INVALID"}
+      },
+      "check": "p2-net2-zero-reboot-attach",
+      "on_fail": {"action": "HALT_PART", "verdict": "FAIL", "msg": "An immediate netvm attach must bind the PV NIC in the SAME boot - a second boot is a FAIL of the latch/applier chain, not noise and not a property (owner 2026-08-29: the latch exists to make it one boot at problem 0). If a second boot happened, check p2-net1's readback for what the latch was missing. The guest is EVIDENCE (G-0): leave it up, diagnose on a clone."},
+      "defect": "the 'first-vif needs two boots is normal' claim, recorded 2026-08-29 and owner-corrected within the hour: a second boot is a FAILURE the latch was invented to remove - and a bind that looks perfect post-hoc can hide the reboot entirely, which is why the boot-timestamp witness (LastBootUpTime byte-compare) exists as an independent proof",
+      "falsified_by": "defect-p2-second-boot"
+    },
+    {
+      "id": "p2-net2-dialog-watch",
+      "kind": "declare",
+      "check": "p2-net2-dialog-watch",
+      "verdict": "BLOCKED",
+      "title": "NET-2 dialog half: sampling watcher armed BEFORE the vif exists",
+      "detail": "WHY unattended-blocked: the zero-dialog half of NET-2 (reboot-dialog-watch.ps1 armed BEFORE the attach, then -Summary with samples>0, dialogs_seen=0, blind_samples=0, coverage_gaps=[]) requires the arm->attach->summarise choreography, and no committed harness primitive implements it - H0 forbids composing a hand-rolled runner inside a step command, and a watcher armed AFTER the attach is on the vacuity ledger (it produced a false 'no dialog' verdict). The zero-reboot claim itself is carried mechanically by the boot-timestamp witness in p2-net2-zero-reboot; the dialog negative stays unproven in this compilation and must not be quoted as tested."
+    },
+    {
+      "id": "p2-net3-transfer",
+      "kind": "probe",
+      "title": "NET-3: traffic by FILE TRANSFER cross-checked against the XENVIF adapter's OWN rx_bytes delta, graded only after the instrument's DECLARED 90 s settle (never ping - a Qubes netvm answers no ICMP; DNS/TCP are smoke only; stack sanity, NOT a benchmark)",
+      "requires": ["p2-net2-zero-reboot"],
+      "guest": "APPVM",
+      "vars_in": ["APPVM", "ACCEPT_OUT"],
+      "command": "QTEST_VM={APPVM} timeout -k 8 700 tools/qtest pushrun guest/net-transfer-proof.ps1 | tr -d '\\r' | tee {ACCEPT_OUT}/net3-transfer.txt",
+      "timeout_s": 800,
+      "expect": {"stdout_re": "(?s)settling 90 s before grading.*=== NETPROOF ===.*\"transfer_ok\":true,\"crossed_pv_nic\":true,\"ok\":true"},
+      "check": "p2-net3-transfer-rx",
+      "on_fail": {"action": "HALT_PART", "verdict": "FAIL", "msg": "Either the settle was skipped (any network grade <90 s after qrexec is on the vacuity ledger: measured dns_resolves False->True inversion at +90 s), the transfer did not complete, or the bytes did NOT cross the PV NIC (its own rx counter failed to account for them). Before reading a completed-but-slow transfer as a product FAIL, note fw-net egress is owner-assured (NET-3 prereq) and 'fw-net non-existent!' is a filtered view, not absence. The guest is evidence (G-0)."},
+      "defect": "traffic asserted by anything but a transfer cross-checked on the XENVIF adapter's own counter: gateway ping ('no traffic' false verdicts - a Qubes netvm answers no ICMP), byte deltas read on an unspecified adapter, and the KM-TEST loopback masquerading as a physical NIC have each produced a false verdict (NET vacuity ledger). dns_resolves=true while the XENVIF rx delta stays ~0 - bytes arriving over some other path - is exactly the masquerade this check exists to catch; ref good run: 16,192,808 B fetched, adapter delta 21,966,263",
+      "falsified_by": "defect-p2-rx-not-crossing"
+    },
+    {
+      "id": "p2-shutdown-appvm",
+      "kind": "action",
+      "title": "Release the AppVM subject cleanly (H3.6: one Windows guest at a time; clean shutdown, never a kill - a kill mid-driver-transition half-switches the boot path)",
+      "requires": ["p2-net3-transfer"],
+      "guest": "APPVM",
+      "vars_in": ["APPVM"],
+      "command": "qvm-shutdown --wait --timeout 300 {APPVM} && echo APPVM-HALTED",
+      "timeout_s": 400,
+      "expect": {"exit": 0, "stdout_re": "^APPVM-HALTED$"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The AppVM did not shut down cleanly. A guest that flips back to Transient is queued qrexec restarting it - drain per the runbook (qrexec_timeout 15 -> kill -> Halted CONTINUOUSLY -> restore 6000; 15 is never left in place). Do not start the churn subject over a live AppVM."}
+    },
+    {
+      "id": "p2-boot-churn",
+      "kind": "action",
+      "title": "Boot the first-vif candidate subject (persistent-root churn guest off the C1 chain, kept netvm='' since install)",
+      "requires": ["p2-shutdown-appvm"],
+      "guest": "CHURN",
+      "vars_in": ["CHURN", "ACCEPT_OUT"],
+      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {CHURN} >/dev/null 2>&1 & ) ; w_session {CHURN} 1200 p2-boot-churn {ACCEPT_OUT} echo",
+      "timeout_s": 1400,
+      "expect": {"exit": 0, "stdout_re": "session up at t\\+[0-9]+s"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The churn subject never produced a session - a boot problem, not a first-vif verdict. Its state is evidence; investigate before any eligibility claim."}
+    },
+    {
+      "id": "p2-net6-firstvif-virgin",
+      "kind": "probe",
+      "title": "NET-6 eligibility: the subject has NEVER had a vif - the XENVIF enum must be ABSENT (a guest that has seen XENVIF\\...DEV_NET cannot test first-vif; the seeded XENBUS DEV_VIF veto-bypass key does NOT disqualify - 2026-08-30 correction; ghost adapters (-IncludeHidden) belong to the declared NET-6 cell)",
+      "requires": ["p2-boot-churn"],
+      "guest": "CHURN",
+      "vars_in": ["CHURN", "ACCEPT_OUT"],
+      "command": "QTEST_VM={CHURN} timeout -k 8 120 tools/qtest run 'cmd /c \"reg query HKLM\\SYSTEM\\CurrentControlSet\\Enum\\XENVIF /s 2>&1 & echo XENVIF_QUERY_DONE\"' | tr -d '\\r' | grep -avE '^(Microsoft Windows \\[Version|\\(c\\) Microsoft|C:\\\\)' | tee {ACCEPT_OUT}/net6-eligibility.txt",
+      "timeout_s": 300,
+      "expect": {"stdout_re": "(?s)ERROR: The system was unable to find the specified registry key or value\\..*XENVIF_QUERY_DONE", "stdout_absent_re": "HKEY_LOCAL_MACHINE\\\\SYSTEM\\\\CurrentControlSet\\\\Enum\\\\XENVIF"},
+      "check": "p2-net6-firstvif-eligible",
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-VACUOUS", "msg": "The subject has already had a vif (XENVIF enum present) - first-vif behaviour is VACUOUS on it: the PV-network-class install has already happened and no reboot re-arms it. 'first-vif OK after two boots' is on the vacuity ledger. Do NOT 'clean' this guest and retry - devnode removal does not restore virginity; the only valid subject is a persistent-root guest straight off the C1 chain that has kept netvm='' since install."},
+      "defect": "a vif-veteran guest presented as a first-vif subject: once XENVIF\\...DEV_NET exists the PV-network-class install has already happened (CLAUDE.md PV protocol 4), so any 'no premature-reboot dialog' negative on it proves nothing. NOTE the XENBUS Enum DEV_VIF veto-bypass key is SEEDED by the latch and is CORRECT on a never-vif guest (measured on win10-c1: DEV_VIF present while XENVIF_ENUM <absent>) - requiring its absence would make the cell permanently ineligible; the XENVIF side is the real discriminator",
+      "falsified_by": "defect-p2-vif-veteran"
+    },
+    {
+      "id": "p2-net6-firstvif-dialog",
+      "kind": "declare",
+      "check": "p2-net6-firstvif-dialog",
+      "verdict": "BLOCKED",
+      "title": "NET-6: first-vif premature-reboot dialog observation",
+      "detail": "WHY unattended-blocked: the dialog observation itself needs the watcher choreography no committed primitive implements (reboot-dialog-watch.ps1 -SelfTest with detector_fires=true seen in the SAME session, then >=20 pre-attach samples ARMED BEFORE THE VIF, attach, then -Summary with samples>0, dialogs_seen=0, blind_samples=0, coverage_gaps=[] - session-0 self-reporting blind voids the run), plus fw-net for vif plumbing. H0 forbids hand-rolling that runner in a step command. p2-net6-firstvif-eligible gates the subject; this row records that the dialog negative itself was NOT taken by this compilation. Ref: ours 0/69 clean; STOCK first-logon DOES raise it (csrss/#32770/'Xen')."
+    },
+    {
+      "id": "p2-net4-perboot-soak",
+      "kind": "declare",
+      "check": "p2-net4-perboot-soak",
+      "verdict": "BLOCKED",
+      "title": "NET-4: per-boot reinstall soak (3 serial AppVM reboots with netvm attached)",
+      "detail": "WHY unattended-blocked: 3 serial reboots each graded after the settle (pv_drivers_bound, applier SUCCESS with no marker, LastBootUpTime monotonic one step per commanded boot, NET-3 smoke; accept 3/3, any self-halt/APIPA/second boot = FAIL of the latch chain) require repeated H2 three-exit boot waits interleaved with per-boot grading. No committed harness primitive implements the loop and a step command may not hand-roll one (H0)."
+    },
+    {
+      "id": "p2-net5-reconciler",
+      "kind": "declare",
+      "check": "p2-net5-reconciler",
+      "verdict": "BLOCKED",
+      "title": "NET-5: live netvm detach/reattach reconciler",
+      "detail": "WHY unattended-blocked: detach netvm '' -> quiet handling (vif gone, no failure marker, ghost devnode ignored) -> reattach -> reconverge <=120 s with zero reboots and reconciler evidence in Q:\\qwtng-netsetup.log -> NET-3 smoke. The detach/reattach choreography with its own bind budget has no committed primitive; hand-rolling it in a step command is forbidden (H0)."
+    },
+    {
+      "id": "p2-net7-standalone-attach",
+      "kind": "declare",
+      "check": "p2-net7-standalone-attach",
+      "verdict": "BLOCKED",
+      "title": "NET-7: StandaloneVM immediate live attach, zero reboots (NET-2's criteria verbatim)",
+      "detail": "WHY unattended-blocked: needs a second, LATCHED ST2 standalone subject, while this part's only standalone (the churn guest) must stay never-vif for NET-6 eligibility - attaching a vif for NET-7 would destroy the campaign's only first-vif subject, and H3.6 allows one guest at a time. When run, the make-or-break precondition is asserting TASK QubesPvNic + APPLIER_SCRIPT present BEFORE the attach: every earlier 'hotplug is broken' result was an applier-less guest and that mistake cost three runs; the pre-fix PnP problem-14 state is the cell's seen-to-fail negative control. Last verified passing 2026-08-29 on win10-u10 (bound 25 s, LastBootUpTime byte-identical, 49 samples 0 dialogs)."
+    },
+    {
+      "id": "p2-net8-throughput",
+      "kind": "declare",
+      "check": "p2-net8-throughput",
+      "verdict": "BLOCKED",
+      "title": "NET-8: PV throughput benchmark against a fast CDN",
+      "detail": "WHY unattended-blocked: the benchmark form (>=3 runs against speed.cloudflare.com/__down?bytes=26214400 - 25 MB is the working size, 100 MB returns 403 - median well above mirror-class rates, each run cross-checked against the XENVIF rx delta; ref 258.2 Mbit/s vs 3-5 Mbit/s mirror-class) has no committed primitive that runs the series and computes the median, and no pinned numeric threshold exists yet for 'well above mirror-class'. NET-3 (implemented above) is the acceptance-bearing stack-sanity check and is explicitly NOT a benchmark; throughput numbers from it must not be quoted."
+    },
+    {
+      "id": "p2-shutdown-churn",
+      "kind": "action",
+      "title": "Release the churn subject cleanly (part exit: restore/release per protocol 1.6; its first-vif virginity is intact - the probe attached nothing)",
+      "requires": ["p2-net6-firstvif-virgin"],
+      "guest": "CHURN",
+      "vars_in": ["CHURN"],
+      "command": "qvm-shutdown --wait --timeout 300 {CHURN} && echo CHURN-HALTED",
+      "timeout_s": 400,
+      "expect": {"exit": 0, "stdout_re": "^CHURN-HALTED$"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The churn guest did not shut down cleanly - drain queued qrexec per the runbook before touching it (a guest that 'restarts forever' is being restarted by queued calls)."}
+    }
+  ]
+}

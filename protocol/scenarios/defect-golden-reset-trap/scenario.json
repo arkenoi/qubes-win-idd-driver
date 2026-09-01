@@ -1,0 +1,105 @@
+{
+ "comment": "DEFECT, two independent end-of-flow residues armed in one walk. (1) The restore validation probe gets NOTHING back from qtest - which must read INVALID-INSTRUMENT and continue to the dom0-side readback, never 'the guest is broken' (RIG-CONSTRAINTS 1.1: an empty qtest answer bricked a verdict twice). (2) The reset-trap readback finds the --required stick assignment SURVIVED its unassign (the unassign form is admittedly unverified in doc 0.7) although every restore command exited 0: STICKROWS=1 -> INVALID-PRECONDITION, HALT. Left armed, the assignment makes the golden's every boot depend on this qube's loop layout (D2) - and a wrong standing qrexec_timeout corrupts later wedge diagnosis (2.5). Ground truth: HALTED at resettrap-verify, NOTHING sealed on the win10 side. Trap: skipping the readback because the restore commands exited 0, then sealing.",
+ "steps": [
+  "golden.json"
+ ],
+ "vars": {
+  "REL": "09b643e12abc",
+  "MATRIX_WORK": "/home/user/qwt-matrix-work",
+  "GOLD10": "win10-base",
+  "FIXTURE": "win10-p46",
+  "GOLD_NEW10": "win10-st2g",
+  "GOLD_NEW11": "win11-st0p",
+  "ISO_LOOP10": "loop0",
+  "ISO_LOOP11": "loop3",
+  "STICK_LOOP10": "loop9",
+  "STICK_LOOP11": "loop17",
+  "R3_EVID": "/home/user/qwt-matrix-work/r3-pristine-win11-st0p"
+ },
+ "results": {
+  "gp-roster": {
+   "exit": 0,
+   "stdout": "win10-base       sealed 2026-08-30T10:27:32Z  primed pristine Win10 22H2 base (build 19045.2965): no QWT, testsigning OFF, QubesPrime hook installed and PROVEN to fire\nwin10-gold0      sealed 2026-08-30T09:13:45Z  re-sealed 2026-08-30 after fixing the dead revision reader\nwin10-goldr      sealed 2026-08-30T09:13:47Z  re-sealed 2026-08-30 after fixing the dead revision reader\nwin11-base       sealed 2026-08-30T11:58:20Z  primed pristine Win11 24H2 Enterprise Evaluation base (build 26100.240331-1435): no QWT, testsigning OFF, QubesPrime hook installed and PROVEN to fire\nwin11-gold0      sealed 2026-08-30T09:13:50Z  re-sealed 2026-08-30 after fixing the dead revision reader\nwin11-goldr      sealed 2026-08-30T09:13:53Z  re-sealed 2026-08-30 after fixing the dead revision reader"
+  },
+  "gp-verify-base": {
+   "exit": 0,
+   "stdout": "VERIFIED win10-base matches its seal (sealed 2026-08-30T10:27:32Z)"
+  },
+  "gp-fixture": {
+   "exit": 0,
+   "stdout": "FIXTURE win10-p46: built 2026-08-30T18:51:26Z from win10-base (sealed 2026-08-30T10:27:32Z), job=ours\n  base seal re-verified now - provenance intact"
+  },
+  "st0-stick-build": {
+   "exit": 0,
+   "stdout": "locale: en-US (input 0409:00000409), image: Windows 11 Enterprise Evaluation\nanswer file: all placeholders substituted, XML well-formed\n-rwxr-xr-x 1 user user 4711 Sep  1 17:02 Autounattend.xml\nbuilt /home/user/win-iso/answer-pristine-win11.img (96M)\nattach it before first boot (reprovision-usb.sh does this itself):\n  qvm-features <vm> qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99'"
+  },
+  "st0-stick-verify": {
+   "exit": 0,
+   "stdout": "BYPASSES=5 PLACEHOLDERS=0"
+  },
+  "st0-freshname": {
+   "exit": 2,
+   "stdout": "UNSEALED: no record for win11-st0p - a golden with no seal cannot be trusted"
+  },
+  "st0-loops": {
+   "exit": 0,
+   "stdout": "NAME       SIZELIMIT OFFSET AUTOCLEAR RO BACK-FILE                                        DIO LOG-SEC\n/dev/loop3         0      0         0  1 /home/user/win-iso/win11-24h2-eval-x64-en-us.iso   0     512\nNAME        SIZELIMIT OFFSET AUTOCLEAR RO BACK-FILE                                    DIO LOG-SEC\n/dev/loop17         0      0         0  1 /home/user/win-iso/answer-pristine-win11.img   0     512"
+  },
+  "st0-r3": {
+   "exit": 3,
+   "stdout": "17:31:02 reprovision-usb: answer stick verified: /dev/loop17 -> /home/user/win-iso/answer-pristine-win11.img (100663296 bytes)\n17:31:02 reprovision-usb: shutting down win11-st0p (if present) and removing it\n17:31:09 reprovision-usb: creating win11-st0p and tagging win-idd-testbed\n17:31:12 reprovision-usb: booting the vendor ISO (/dev/loop3) with the answer stick (/dev/loop17)\n17:38:44 reprovision-usb: install-phase halt -> restarting without CD\n17:43:57 reprovision-usb: install-phase halt -> restarting without CD\n17:46:32 reprovision-usb:   t+922s screen=VERDICT=DESKTOP cpu=41 quiet=0 (all advisory)\n17:47:05 reprovision-usb:   t+955s screen=VERDICT=DESKTOP cpu=3 quiet=1 (all advisory)\n17:47:38 reprovision-usb:   t+988s screen=VERDICT=DESKTOP cpu=2 quiet=2 (all advisory)\n17:48:11 reprovision-usb:   t+1021s screen=VERDICT=DESKTOP cpu=1 quiet=3 (all advisory)\n17:48:11 reprovision-usb: candidate desktop after 1021s: verdict=VERDICT=DESKTOP, cpu idle for 3 consecutive samples\n17:48:11 reprovision-usb: NEEDS VISUAL CONFIRMATION - READ /home/user/qwt-matrix-work/r3-pristine-win11-st0p/latest.png before sealing this qube.\n17:48:11 reprovision-usb:   A Setup error dialog also classifies as DESKTOP; the classifier cannot decide this.\n17:48:11 reprovision-usb:   An idle guest is not necessarily a FINISHED one - a Setup dialog awaiting input is idle too."
+  },
+  "st0-restore": {
+   "exit": 0,
+   "stdout": ""
+  },
+  "st0-halt": {
+   "exit": 0,
+   "stdout": ""
+  },
+  "st0-seal": {
+   "exit": 0,
+   "stdout": "SEALED win11-st0p -> mgmt/goldens/win11-st0p.json"
+  },
+  "st0-verify-seal": {
+   "exit": 0,
+   "stdout": "VERIFIED win11-st0p matches its seal (sealed 2026-09-01T17:52:41Z)"
+  },
+  "st2g-regate": {
+   "exit": 0,
+   "stdout": "PASS: payload verified \u2014 143 files, built from 09b643e12abc (09b643e12abc), installer matches repo"
+  },
+  "st2g-stick-build": {
+   "exit": 0,
+   "stdout": "locale: en-GB (input 0809:00000809), image: Windows 10 Pro\nanswer file: all placeholders substituted, XML well-formed\npayload: release package staged, install flags /idd\n-rwxr-xr-x 1 user user 4698 Sep  1 17:58 Autounattend.xml\nbuilt /home/user/win-iso/answer-usb.img (96M)\nattach it before first boot (reprovision-usb.sh does this itself):\n  qvm-features <vm> qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99'"
+  },
+  "st2g-freshname": {
+   "exit": 2,
+   "stdout": "UNSEALED: no record for win10-st2g - a golden with no seal cannot be trusted"
+  },
+  "st2g-loops": {
+   "exit": 0,
+   "stdout": "NAME       SIZELIMIT OFFSET AUTOCLEAR RO BACK-FILE                                                    DIO LOG-SEC\n/dev/loop0         0      0         0  1 /home/user/win-iso/Win10_22H2_EnglishInternational_x64v1.iso   0     512\nNAME       SIZELIMIT OFFSET AUTOCLEAR RO BACK-FILE                           DIO LOG-SEC\n/dev/loop9         0      0         0  0 /home/user/win-iso/answer-usb.img     0     512"
+  },
+  "st2g-r3": {
+   "exit": 0,
+   "stdout": "18:01:11 reprovision-usb: answer stick verified: /dev/loop9 -> /home/user/win-iso/answer-usb.img (100663296 bytes)\n18:01:11 reprovision-usb: shutting down win10-st2g (if present) and removing it\n18:01:18 reprovision-usb: creating win10-st2g and tagging win-idd-testbed\n18:01:21 reprovision-usb: booting the vendor ISO (/dev/loop0) with the answer stick (/dev/loop9)\n18:13:44 reprovision-usb: install-phase halt -> restarting without CD\n18:19:52 reprovision-usb: install-phase halt -> restarting without CD\n18:22:03 reprovision-usb: qrexec alive after 1252s"
+  },
+  "st2g-installlog": {
+   "exit": 0,
+   "stdout": "Microsoft Windows [Version 10.0.19045.2965]\n(c) Microsoft Corporation. All rights reserved.\n\nC:\\Users\\user>cmd /c type C:\\qubes-win-idd-setup.log\n=== answer-stick payload ===\ninstall.cmd rc=0"
+  },
+  "st2g-restore": {
+   "exit": 0,
+   "stdout": ""
+  },
+  "st2g-attest": {
+   "exit": 0,
+   "stdout": ""
+  },
+  "resettrap-verify": {
+   "exit": 0,
+   "stdout": "T10=6000 T11=6000 STICKROWS=1"
+  }
+ }
+}

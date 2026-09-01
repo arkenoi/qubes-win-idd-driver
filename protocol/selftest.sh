@@ -52,22 +52,34 @@ for dir in protocol/scenarios/defect-*/; do
 done
 rm -f /tmp/grade.$$
 
-echo "== 4. green scenario: every check plain PASS, campaign COMPLETE =="
-cid="st-green-$TS"
-PROTOCOL_SELFTEST=1 python3 protocol/run.py start --campaign "$cid" \
-  --mode dry --scenario green --auto-answer-truth >"protocol/state/.$cid.log" 2>&1
-if python3 protocol/grade.py "$cid" >/tmp/grade.$$ 2>&1; then
-  echo "ok: green walk matches ground truth"
-else
-  echo "SELFTEST FAIL: green scenario deviates:"
-  sed 's/^/    /' /tmp/grade.$$
-  fail=1
-fi
+echo "== 4. green scenarios (all parts): clean walks; the SPINE additionally reaches COMPLETE =="
+for gdir in protocol/scenarios/green*/; do
+  gname=$(basename "$gdir")
+  cid="st-$gname-$TS"
+  PROTOCOL_SELFTEST=1 python3 protocol/run.py start --campaign "$cid" \
+    --mode dry --scenario "$gname" --auto-answer-truth >"protocol/state/.$cid.log" 2>&1
+  rc=$?
+  if [ "$rc" -ge 2 ]; then
+    echo "SELFTEST FAIL: $gname - runner error rc=$rc (see protocol/state/.$cid.log)"
+    fail=1
+    continue
+  fi
+  if python3 protocol/grade.py "$cid" >/tmp/grade.$$ 2>&1; then
+    echo "ok: $gname walk matches ground truth"
+  else
+    echo "SELFTEST FAIL: $gname deviates:"
+    sed 's/^/    /' /tmp/grade.$$
+    fail=1
+  fi
+done
 rm -f /tmp/grade.$$
+# the spine's green is the strict V1 exerciser: every check plain PASS -> COMPLETE. Part greens
+# may carry PASS-UNPROVEN (their truths say so) and declare rows, so only the spine gets this bar.
+cid="st-green-$TS"
 if python3 protocol/run.py verdicts --campaign "$cid" | grep -q '^VERDICT: COMPLETE'; then
-  echo "ok: campaign-verdict arithmetic says COMPLETE"
+  echo "ok: spine campaign-verdict arithmetic says COMPLETE"
 else
-  echo "SELFTEST FAIL: green campaign did not reach COMPLETE (a PASS is missing its fail-proof?)"
+  echo "SELFTEST FAIL: spine green did not reach COMPLETE (a PASS is missing its fail-proof?)"
   python3 protocol/run.py verdicts --campaign "$cid" | sed 's/^/    /'
   fail=1
 fi

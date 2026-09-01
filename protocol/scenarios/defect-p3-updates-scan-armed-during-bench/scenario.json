@@ -1,0 +1,21 @@
+{
+ "comment": "DEFECT (the 2026-08-30 overlap incident): a P4 bench harness is LIVE on the rig while this updates part starts - the same evening a guest was cold-booted ~17:52 with the scan due ~17:54 (boot+PT2M) and BENCH-2 started ~17:53; the guest wedged mid-benchmark and every number was void. The serial gate must print the concurrent holders, go INVALID-PRECONDITION, and HALT THE CAMPAIGN before any guest is touched. Trap: killing the printed holder with pkill -f (matches your own command line) or 'just waiting a bit' and continuing the same campaign.",
+ "steps": [
+  "p3-updates.json"
+ ],
+ "vars": {
+  "TPL": "win10-tpl",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260901-3/p3-updates",
+  "PAYLOAD_DIR": "/home/user/qwt-accept/AP-20260901-3/dl/qwt-improved-setup"
+ },
+ "results": {
+  "p3-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-3/p3-updates"
+  },
+  "p3-serial-gate": {
+   "exit": 0,
+   "stdout": "CONCURRENT-HARNESS:184223 bash mgmt/harness/p4-run.sh win10-p45\nCONCURRENT-HARNESS:184391 bash tools/bench-agent.sh P4-win10-p45-r1"
+  }
+ }
+}

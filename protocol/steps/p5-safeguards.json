@@ -1,0 +1,375 @@
+{
+  "part": "p5-safeguards",
+  "comment": "P5 - Safeguards (SG suite): ACCEPTANCE-PROTOCOL.md 0.12 runbook P5-1..P5-7 + instrument rules 14-25 (doc lines 888-1180), 0.13b diag fail-proof runbook D-0..D-9, and section 9 SG0-SG11 (lines 1780-1817) compiled to runner data. Subject: ONE StandaloneVM restore (SG0.8: mutation+reboot arms need a persistent root; sg6-failproof.sh itself REFUSES any other class, so the venue rule is enforced by the primitive, not by prose). Structure: (1) SG0.1 is the opening GATE and it only READS - no command in this part sets service.gui-fullscreen, ever (owner: 'never means never'); every arm needing it ON, or the owner at the display, is a declare row, never silently dropped. (2) The running-image hash rule (rule 12 / D-5) is THREE probe rows sharing one check: release running before any cell, DIAG running after the swap, release running again after the restore - always (Get-Process gui-agent).Path's hash via guest/verify-running-agent.ps1, never the file's, because a same-size failed copy keeps deploy-gui-agent's swapped=true while the guest still runs the old image. (3) The containment rule (SG0.2 / instrument rule 13 / D-6) appears twice: inside mgmt/harness/p5-run.sh for the suite (its transcript's 'containment PROVEN' line is part of the suite judgement), and as the explicit POST-SWAP PAIR p5-recontain + p5-recontain-agent, because the swap restarts the agent and a restarted agent re-adopts dom0's geometry (RESREQ src=lastapplied) - re-contain AFTER it settles and confirm the AGENT agrees via guest/geometry-truth.ps1's log fields. (4) D-0 gate-preflight (3 min) runs for each FI_GATE_OFF bit BEFORE the 28-min prove cycle; the cycle itself is the committed mgmt/harness/failproof-gates.sh (D-7/D-8: the cells must FLIP, with the companion-cell specificity control). (5) SG0.5 is the loglevel-5 pair plus the hash rows; SG0.3/SG0.4 (dom0-boundary judging, vacuity guards) are structural properties of p5-run.sh that the suite judgement's tokens surface (INVALID rows, missing-TSV = rule 14's killed run). (6) Serial discipline: the campaign spine's s4-all-halted starts this part with zero other Windows guests, mgmt/harness/vmlock.sh + the runner's live-mode lock enforce one-harness-per-guest (rule 15), and p5-run.sh's own P5-2 disarms the update scan (the documented wedge trigger) - so no separate serial gate is compiled here. (7) G-0 custody is the runner's: a red on the subject blocks every later step on it; p5-restore-release declares `restores` and is hash-proven by p5-hash-restored, so the subject never leaves the part carrying the diag binary silently. Falsifiability: five defect scenarios (the three named in the extraction order plus the SG0.1 gate's and the suite judgement's own) - the loader's V4 gate requires every check to be SEEN red, and the three named scenarios leave the SG0.1 gate and the suite verdict green by construction, so folding them in would have conflated defects; one scenario = one armed incident, per the exemplar.",
+  "steps": [
+    {
+      "id": "p5-outdir",
+      "kind": "action",
+      "title": "Create the part's evidence directories (evidence lands under ACCEPT_OUT, never session tmp)",
+      "vars_in": ["ACCEPT_OUT"],
+      "command": "mkdir -p {ACCEPT_OUT} {ACCEPT_OUT}/p5 {ACCEPT_OUT}/sg6 {ACCEPT_OUT}/gates && echo \"OUTDIR-READY {ACCEPT_OUT}\"",
+      "expect": {"exit": 0, "stdout_re": "^OUTDIR-READY "},
+      "on_fail": {"action": "HALT_PART", "msg": "cannot create the evidence directory; fix ACCEPT_OUT and start a new campaign"}
+    },
+    {
+      "id": "p5-sg0-feature-gate",
+      "kind": "gate",
+      "title": "SG0.1 as a gate, read-only: service.gui-fullscreen is NOT set on the subject - violating this voids the run, and NO step in this part ever sets it (owner: never means never)",
+      "requires": ["p5-outdir"],
+      "guest": "SA",
+      "vars_in": ["SA", "ACCEPT_OUT"],
+      "command": "if v=$(qvm-features {SA} service.gui-fullscreen 2>/dev/null); then echo \"FEATURE-SET:${v:-empty-string-means-enabled}\"; else echo \"FEATURE-ABSENT\"; fi | tee {ACCEPT_OUT}/sg0-feature.txt",
+      "timeout_s": 60,
+      "expect": {"exit": 0, "stdout_re": "^FEATURE-ABSENT$", "stdout_absent_re": "^FEATURE-SET:"},
+      "check": "p5-sg0-feature-never-set",
+      "on_fail": {"action": "HALT_CAMPAIGN", "verdict": "INVALID-PRECONDITION", "msg": "service.gui-fullscreen is SET on the subject (SG0.1: violating any ground rule voids the run). No arm of this campaign may set it and none may run while it is set - a safeguard suite measured with the gate feature ON grades a different product. Clear it (qvm-features --unset <vm> service.gui-fullscreen), record WHO set it and why in FINDINGS.md, then start a NEW campaign. NEVER 'just continue': the 2026-08-28 screen-cover incident started exactly as a feature left set on a test qube."},
+      "defect": "three screen-cover incidents, the measured one 2026-08-28: with service.gui-fullscreen enabled on a test qube a fullscreen boot-phase surface reached the owner's display (Mode 1 was matched by class alone); owner ruling: 'never means never' - every arm requiring the feature ON is ATTENDED-PENDING and the unattended suite covers only the default state",
+      "falsified_by": "defect-p5-feature-set"
+    },
+    {
+      "id": "p5-release-artefact",
+      "kind": "action",
+      "title": "The release artefact's own hash matches the declared RELEASE_SHA (the reference every running-image assertion compares against)",
+      "requires": ["p5-sg0-feature-gate"],
+      "vars_in": ["RELEASE_DIR", "RELEASE_SHA", "ACCEPT_OUT"],
+      "command": "h=$(sha256sum {RELEASE_DIR}/gui-agent.exe 2>/dev/null | cut -c1-16 | tr 'a-f' 'A-F'); echo \"RELEASE-ARTEFACT sha16=${h:-unreadable} declared={RELEASE_SHA}\" | tee {ACCEPT_OUT}/release-artefact.txt",
+      "timeout_s": 60,
+      "expect": {"exit": 0, "stdout_re": "^RELEASE-ARTEFACT sha16=([0-9A-F]+) declared=\\1$", "stdout_absent_re": "sha16=unreadable"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PROVENANCE", "msg": "The gui-agent.exe under RELEASE_DIR does not hash to the declared RELEASE_SHA (or is unreadable). Every running-image assertion in this part compares against RELEASE_SHA, so proceeding would grade hash agreement with the WRONG reference. Fix RELEASE_DIR/RELEASE_SHA from the gated payload (Gate 0), never substitute a file from another build."}
+    },
+    {
+      "id": "p5-boot-sa",
+      "kind": "action",
+      "title": "Boot the StandaloneVM subject (fire-and-poll via the e2e-wait library - a foreground qvm-start blocks up to qrexec_timeout on a non-booting guest)",
+      "requires": ["p5-sg0-feature-gate"],
+      "guest": "SA",
+      "vars_in": ["SA", "ACCEPT_OUT"],
+      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {SA} >/dev/null 2>&1 & ) ; w_session {SA} 1200 p5-boot-sa {ACCEPT_OUT} echo",
+      "timeout_s": 1400,
+      "expect": {"exit": 0, "stdout_re": "session up at t\\+[0-9]+s"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The subject never produced a session (w_session took its TERMINAL or DEADLINE exit). That is a boot problem, not a safeguards verdict - the guest's state is evidence; investigate before any SG cell, never poll it by hand."}
+    },
+    {
+      "id": "p5-hash-release",
+      "kind": "probe",
+      "title": "Rule 12 row 1 (SG0.5): the RUNNING agent image is the gated release binary - (Get-Process gui-agent).Path's hash via guest/verify-running-agent.ps1, never the file's",
+      "requires": ["p5-boot-sa", "p5-release-artefact"],
+      "guest": "SA",
+      "vars_in": ["SA", "RELEASE_SHA", "ACCEPT_OUT"],
+      "command": "out=$(QTEST_VM={SA} timeout -k 8 300 tools/qtest pushrun guest/verify-running-agent.ps1 | tr -d '\\r' | sed -n '/=== RESULT ===/,$p'); if [ -n \"$out\" ]; then printf '%s\\n' \"$out\" | tee {ACCEPT_OUT}/hash-release.txt; m=$(printf '%s\\n' \"$out\" | grep -acE '\"image_sha256\": *\"{RELEASE_SHA}\"'); i=$(printf '%s\\n' \"$out\" | grep -ao '\"instances\": *[0-9]*' | grep -aoE '[0-9]+' | head -1); w=$(printf '%s\\n' \"$out\" | grep -acE '\"started_after_file_write\": *true'); echo \"RUNNING-IMAGE instances=${i:-parse-error} image_matches_intended=$m started_after_write=$w\"; fi",
+      "timeout_s": 400,
+      "expect": {"stdout_re": "^RUNNING-IMAGE instances=1 image_matches_intended=[1-9][0-9]* started_after_write=[1-9]", "stdout_absent_re": "ACCESS_DENIED|image_matches_intended=0"},
+      "check": "p5-running-image-is-artefact",
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-WRONGBUILD", "msg": "The RUNNING gui-agent image is not the gated release binary, so every SG cell would grade a build that was never gated (H1). Do NOT trust the file's hash in either direction - assert the running process's image (rule 12). Empty output is the pushrun-without-a-session trap (RIG-CONSTRAINTS 1.1) and reads INVALID-INSTRUMENT, never a product verdict. Fix the deploy, then a NEW campaign."},
+      "defect": "rule 12 / RIG-CONSTRAINTS 2.3: a binary swap can SILENTLY fail (QubesGuiWatchdog re-locks the file) and an entire comparison then runs against the wrong build while reporting the intended hash - measured 2026-08-31, INSTALLED_SHA came back as the release hash after a 'successful' swap",
+      "falsified_by": "defect-p5-silent-binary-swap"
+    },
+    {
+      "id": "p5-loglevel5",
+      "kind": "action",
+      "title": "SG0.5 first half: set-loglevel.ps1 5 - global AND module keys, because a stale module key silently swallows Debug and every deny-line count then reads 0 (vacuous 'nothing mapped' cells)",
+      "requires": ["p5-hash-release"],
+      "guest": "SA",
+      "vars_in": ["SA", "ACCEPT_OUT"],
+      "command": "out=$(QTEST_VM={SA} timeout -k 8 300 tools/qtest pushrun guest/set-loglevel.ps1 5 | tr -d '\\r' | sed -n '/=== RESULT ===/,$p'); if [ -n \"$out\" ]; then printf '%s\\n' \"$out\" | tee {ACCEPT_OUT}/loglevel5.txt >/dev/null; g=$(printf '%s\\n' \"$out\" | grep -ao '\"loglevel_global\": *[0-9]*' | grep -aoE '[0-9]+' | head -1); m=$(printf '%s\\n' \"$out\" | grep -ao '\"loglevel_module\": *[0-9]*' | grep -aoE '[0-9]+' | head -1); echo \"LOGLEVEL global=${g:-parse-error} module=${m:-parse-error}\"; fi",
+      "timeout_s": 400,
+      "expect": {"stdout_re": "^LOGLEVEL global=5 module=5$"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "Log level 5 could not be set-and-proven on BOTH keys. Without it the agent's deny lines (every cell's vacuity proof) may be absent from the log and each 'nothing mapped' verdict would be vacuous. Empty output is the no-session instrument trap (RIG-CONSTRAINTS 1.1). Fix, then a NEW campaign."}
+    },
+    {
+      "id": "p5-suite-run",
+      "kind": "action",
+      "title": "P5-3..SG9 via the committed suite mgmt/harness/p5-run.sh: disarms the scan (P5-2, the wedge guard), establishes containment AFTER the agent settles and proves it against the AGENT (SG0.2), proves the capture path alive with a control window in the SAME measurement (P5-3b), then grades SG4/SG2 (must NOT map), SG3 (must map) and SG9 (Start not presented) with per-cell vacuity guards. Collection only - the verdict is read from its TSV by the next step",
+      "requires": ["p5-release-artefact", "p5-hash-release", "p5-loglevel5"],
+      "guest": "SA",
+      "vars_in": ["SA", "ACCEPT_OUT"],
+      "command": "set -o pipefail; QWT_VMLOCK_HELD={SA} bash mgmt/harness/p5-run.sh {SA} {ACCEPT_OUT}/p5 2>&1 | tee {ACCEPT_OUT}/p5-console.txt; echo P5RC=$?",
+      "timeout_s": 14400,
+      "expect": {"exit": 0, "stdout_re": "(?s)containment PROVEN: guest .*capture path proven alive.*=== P5 finished rc=[0-9]+ ===.*^P5RC=[0-9]+$", "stdout_absent_re": "REFUSING TO START|^FATAL"},
+      "on_fail": {"action": "CONTINUE", "verdict": "INVALID-PRECONDITION", "msg": "The suite never reached its finish marker with containment and the control proven. Read the console: 'FATAL: guest screen ... is not strictly inside host' or 'agent's believed screen != guest screen' = SG0.2 containment not established (the 2026-08-30 31%-probe class); 'the control window never became visible' = the capture path is blind and every 'nothing mapped' would be manufactured; 'REFUSING TO START' = another harness holds the vm lock (rule 15) - wait or kill BY PID, never pkill -f. All are instrument/precondition, never a product verdict. The guest is OUT_OF_SERVICE; its state is evidence."}
+    },
+    {
+      "id": "p5-suite-verdict",
+      "kind": "judgement",
+      "title": "SG suite verdict: the four unattended cells, judged from the suite's OWN five-column TSV plus its transcript's precondition proofs - never from log prose",
+      "requires": ["p5-suite-run"],
+      "guest": "SA",
+      "judgement": {
+        "evidence": ["{ACCEPT_OUT}/p5/verdicts.tsv", "{ACCEPT_OUT}/p5-console.txt"],
+        "question": "verdicts.tsv is tab-separated: cell, check, verdict, detail. Find the rows for SG4 (override-redirect fullscreen must NOT map), SG2 (borderless fullscreen must NOT map, feature off), SG3 (maximized captioned window MUST map) and SG9 (Start not presented). In p5-console.txt confirm the run's own preconditions: a 'containment PROVEN: guest' line, a 'capture path proven alive' line, and the '=== P5 finished rc=' marker. Which ONE statement does the evidence support?",
+        "answers": {
+          "ALL_FOUR_GRADED_GREEN": "all four cells have rows with verdict PASS or PASS-UNPROVEN, and the console shows containment PROVEN, the capture-path control alive, and the finish marker",
+          "GATE_LEAKED": "SG4, SG2 or SG9 carries FAIL - a screen-sized window or a Start surface reached dom0 (or the agent's log MAPped it): the safeguard stopped firing",
+          "GATE_OVERFIRED": "SG3 carries FAIL - the always-allowed captioned windowed-fullscreen did not map: the safeguard eats UI it must keep (the 2026-08-07 title-bar-clamp direction)",
+          "CELLS_INVALID": "any of the four rows carries an INVALID-* verdict (probe never visible, control absent from the shot, zero discriminator hits), or one of the four cells has no row at all",
+          "EVIDENCE_MISSING": "verdicts.tsv is absent or empty, or the console lacks its '=== P5 finished rc=' marker - rule 14: an exit-0 whose verdicts.tsv is absent or empty is a KILLED run, never a clean one"
+        },
+        "map": {"ALL_FOUR_GRADED_GREEN": "GREEN", "GATE_LEAKED": "RED", "GATE_OVERFIRED": "RED", "CELLS_INVALID": "INVALID", "EVIDENCE_MISSING": "INVALID"}
+      },
+      "check": "p5-sg-unattended-suite",
+      "on_fail": {"action": "CONTINUE", "verdict": "FAIL", "msg": "G-0 is mechanised: the subject is OUT_OF_SERVICE and every later step on it will be refused. (1) Evidence is already under ACCEPT_OUT - add nothing, change nothing on the guest. (2) BEFORE believing a surprising red, check for a second runner (rule 15: two P5 instances once interleaved and fabricated an SG2 FAIL against the other run's captioned probe; vm_lock names the holder). (3) Diagnose on a CLONE; the failing subject stays as evidence until restored to entry stage. (4) A leak red is the 2026-08-28 class (safeguard stopped firing); an over-fire red is the 2026-08-07 class (safeguard eats required UI) - both are product FAILs, report them as such."},
+      "defect": "both failure directions are measured: 2026-08-28 the class-only Mode-1 match let a boot-phase fullscreen surface through (stops firing), 2026-08-07 the title-bar clamp passed every numeric check while eating UI (over-fires), and 2026-08-31 with FaultGateOff=0x3 the agent offered dom0 a 1920x1080 override-redirect window the screenshot was structurally blind to - only the agent-log MAP witness caught it",
+      "falsified_by": "defect-p5-sg-gate-leaked"
+    },
+    {
+      "id": "p5-sg6-failproof",
+      "kind": "action",
+      "title": "P5-6 / SG6 via the committed mgmt/harness/sg6-failproof.sh: control first (armed guest has a session and maps a window), plant the canonical 2026-08-28 defect (AutoAdminLogon=0 AND guard task removed), COLD BOOT (SG0.7), expect the invisible-guest red asserted POSITIVELY (qrexec answers, sessions=0, explorer=0), then re-arm INLINE and prove the subject comes back - the harness refuses non-StandaloneVM subjects itself (SG0.8)",
+      "requires": ["p5-suite-run"],
+      "guest": "SA",
+      "vars_in": ["SA", "ACCEPT_OUT"],
+      "command": "set -o pipefail; QWT_VMLOCK_HELD={SA} bash mgmt/harness/sg6-failproof.sh {SA} {ACCEPT_OUT}/sg6 2>&1 | tee {ACCEPT_OUT}/sg6-console.txt; echo SG6RC=$?",
+      "timeout_s": 5400,
+      "expect": {"exit": 0, "stdout_re": "(?s)RED AS REQUIRED: qrexec answers while NOBODY IS LOGGED ON.*after re-arm: sessions=[1-9].*^SG6RC=0$", "stdout_absent_re": "NOT RED|SUBJECT NOT REPAIRED|SUBJECT DID NOT RETURN|REFUSING"},
+      "on_fail": {"action": "CONTINUE", "verdict": "INVALID-INSTRUMENT", "msg": "The SG6 fail-proof did not complete red-and-restored. Read the console: 'NOT RED' = the checker cannot detect the invisible-guest condition - a finding about the CHECK; SG6 stays PASS-UNPROVEN (P5-7: record it, never quietly upgrade). 'SUBJECT NOT REPAIRED' / 'SUBJECT DID NOT RETURN' = run the printed INLINE repair commands NOW (reg add AutoAdminLogon=1 + ensure-autologon.ps1 via qtest run - NEVER pushrun, there is no session to push into) before anything else touches the guest. 'FATAL: no session in the control' = the subject was already broken before the plant - a product suspect, investigate on a clone. The guest is OUT_OF_SERVICE either way."}
+    },
+    {
+      "id": "p5-fi-artefact",
+      "kind": "action",
+      "title": "D-3: the diag artefact CONTAINS the injector before it is deployed - strings -a -e l (Windows binaries store strings as UTF-16; plain strings finds nothing) must show the Fault* registry value names, and the file hashes to the declared FI_SHA",
+      "requires": ["p5-release-artefact"],
+      "vars_in": ["FI_DIR", "FI_SHA", "ACCEPT_OUT"],
+      "command": "h=$(sha256sum {FI_DIR}/gui-agent.exe 2>/dev/null | cut -c1-16 | tr 'a-f' 'A-F'); n=$(strings -a -e l {FI_DIR}/gui-agent.exe 2>/dev/null | grep -acE '^Fault[A-Za-z]+$'); echo \"FI-ARTEFACT sha16=${h:-unreadable} declared={FI_SHA} fault_value_names=$n\" | tee {ACCEPT_OUT}/fi-artefact.txt",
+      "timeout_s": 120,
+      "expect": {"exit": 0, "stdout_re": "^FI-ARTEFACT sha16=([0-9A-F]+) declared=\\1 fault_value_names=[1-9][0-9]*$", "stdout_absent_re": "sha16=unreadable"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PROVENANCE", "msg": "The artefact under FI_DIR does not hash to FI_SHA or carries no Fault* value names (D-3). A fail-proof lane run with an injector-less binary comes back green for the wrong reason - every armed run would grade nothing. Rebuild via qwt-full.yml's fault_injection input (D-1: the toggle already ships; never hand-edit a diag branch first)."}
+    },
+    {
+      "id": "p5-swap-diag",
+      "kind": "action",
+      "title": "D-4 via the committed primitive guest/deploy-gui-agent.ps1 (stop watchdog -> kill agent -> assert gone -> .orig backup -> copy -> start): deploy the fault build. The file-level result is NOT trusted in either direction - the next step asserts the RUNNING image (rule 12)",
+      "requires": ["p5-sg6-failproof", "p5-fi-artefact"],
+      "guest": "SA",
+      "vars_in": ["SA", "FI_DIR", "ACCEPT_OUT"],
+      "command": "QTEST_VM={SA} timeout -k 8 200 tools/qtest push {FI_DIR}/gui-agent.exe >/dev/null 2>&1; QTEST_VM={SA} timeout -k 8 600 tools/qtest pushrun guest/deploy-gui-agent.ps1 | tr -d '\\r' | grep -a '=== RESULT ===' | tee {ACCEPT_OUT}/swap-diag.txt",
+      "timeout_s": 900,
+      "expect": {"exit": 0, "stdout_re": "(?s)=== RESULT === .*\"swapped\":true.*\"agent_running\":true.*\"ok\":true", "stdout_absent_re": "\"ok\":false"},
+      "on_fail": {"action": "CONTINUE", "verdict": "INVALID-INSTRUMENT", "msg": "The deploy primitive did not report a completed swap with the agent back up. That is the instrument failing, not a product verdict. Do NOT proceed to arm anything: a lane that continues past a failed deploy grades a build that was never running (D-5). The guest is OUT_OF_SERVICE; restore via p5-restore-release's path once the evidence is captured."}
+    },
+    {
+      "id": "p5-hash-diag",
+      "kind": "probe",
+      "title": "Rule 12 row 2 / D-5, THE anti-silent-swap assertion: the RUNNING image's hash equals the DIAG artefact's - never the file's hash, because the watchdog can re-lock the file, Copy-Item -EA SilentlyContinue fails silently, and a same-size artefact keeps deploy's swapped=true while the guest still runs the release",
+      "requires": ["p5-swap-diag"],
+      "guest": "SA",
+      "vars_in": ["SA", "FI_SHA", "ACCEPT_OUT"],
+      "command": "out=$(QTEST_VM={SA} timeout -k 8 300 tools/qtest pushrun guest/verify-running-agent.ps1 | tr -d '\\r' | sed -n '/=== RESULT ===/,$p'); if [ -n \"$out\" ]; then printf '%s\\n' \"$out\" | tee {ACCEPT_OUT}/hash-diag.txt; m=$(printf '%s\\n' \"$out\" | grep -acE '\"image_sha256\": *\"{FI_SHA}\"'); i=$(printf '%s\\n' \"$out\" | grep -ao '\"instances\": *[0-9]*' | grep -aoE '[0-9]+' | head -1); w=$(printf '%s\\n' \"$out\" | grep -acE '\"started_after_file_write\": *true'); echo \"RUNNING-IMAGE instances=${i:-parse-error} image_matches_intended=$m started_after_write=$w\"; fi",
+      "timeout_s": 400,
+      "expect": {"stdout_re": "^RUNNING-IMAGE instances=1 image_matches_intended=[1-9][0-9]* started_after_write=[1-9]", "stdout_absent_re": "ACCESS_DENIED|image_matches_intended=0"},
+      "check": "p5-running-image-is-artefact",
+      "on_fail": {"action": "CONTINUE", "verdict": "INVALID-WRONGBUILD", "msg": "The RUNNING agent is NOT the diag build - the 2026-08-31 silent-swap class exactly (INSTALLED_SHA equal to the release hash after a 'clean' swap). Every armed cell that would have run now would grade the RELEASE while reporting the diag hash - a proof fabricated by the instrument. The guest is OUT_OF_SERVICE; the lane is void. Restore (p5-restore-release runs on an out-of-service guest), re-verify, then retry the lane in a NEW campaign with the watchdog's stop asserted before the copy."},
+      "defect": "D-4/D-5 measured 2026-08-31: QubesGuiWatchdog restarted gui-agent within seconds and re-locked the file, Copy-Item failed SILENTLY (-EA SilentlyContinue), and because the artefacts were the same size deploy's swapped=true stayed green - INSTALLED_SHA came back as the release hash after a 'successful' swap and an entire comparison nearly ran against the wrong binary",
+      "falsified_by": "defect-p5-silent-binary-swap"
+    },
+    {
+      "id": "p5-recontain",
+      "kind": "action",
+      "title": "Instrument rule 13 / D-6, pair half 1: RE-establish containment AFTER the swap's agent restart has settled - guest/set-resolution.ps1 -Contain (scans DISPLAY1..8 for the device with a current mode, cross-checks GetSystemMetrics, verifies by read-back). Setting it before the restart is exactly what the 2026-08-30 incident proved worthless",
+      "requires": ["p5-hash-diag"],
+      "guest": "SA",
+      "vars_in": ["SA", "ACCEPT_OUT"],
+      "command": "out=$(QTEST_VM={SA} timeout -k 8 300 tools/qtest pushrun guest/set-resolution.ps1 -Contain | tr -d '\\r' | sed -n '/=== RESULT ===/,$p'); if [ -n \"$out\" ]; then printf '%s\\n' \"$out\" | tee {ACCEPT_OUT}/recontain.txt; fi",
+      "timeout_s": 400,
+      "expect": {"stdout_re": "(?s)=== RESULT ===.*\"ok\": *true", "stdout_absent_re": "\"ok\": *false"},
+      "on_fail": {"action": "CONTINUE", "verdict": "INVALID-PRECONDITION", "msg": "The contain set did not apply-and-read-back. Without a sub-host guest mode, every screen-sized probe the prove cycle opens would reach the owner's display at host size (SG0.2). The guest is OUT_OF_SERVICE for the lane; do not arm anything."}
+    },
+    {
+      "id": "p5-recontain-agent",
+      "kind": "gate",
+      "title": "Instrument rule 13 / D-6, pair half 2: confirm the AGENT agrees - guest/geometry-truth.ps1's sm_screen and its agent-log RESAPPLIED field must both show the contained sub-host size. A restarted agent re-adopts dom0's geometry (RESREQ src=lastapplied), so the GUEST view alone lies",
+      "requires": ["p5-recontain"],
+      "guest": "SA",
+      "vars_in": ["SA", "HOSTW", "HOSTH", "ACCEPT_OUT"],
+      "command": "out=$(QTEST_VM={SA} timeout -k 8 300 tools/qtest pushrun guest/geometry-truth.ps1 | tr -d '\\r' | sed -n '/=== RESULT ===/,$p'); if [ -n \"$out\" ]; then printf '%s\\n' \"$out\" | tee {ACCEPT_OUT}/recontain-agent.txt >/dev/null; g=$(printf '%s\\n' \"$out\" | grep -ao '\"sm_screen\": *\"[0-9]*x[0-9]*\"' | grep -ao '[0-9]*x[0-9]*' | head -1); a=$(printf '%s\\n' \"$out\" | grep -aoE 'RESAPPLIED [0-9]+x[0-9]+' | tail -1); q=$(printf '%s\\n' \"$out\" | grep -aoE 'RESREQ [0-9]+x[0-9]+ src=lastapplied' | tail -1); gw=$(echo \"$g\" | cut -dx -f1); gh=$(echo \"$g\" | cut -dx -f2); inside=no; if [ -n \"$gw\" ] && [ \"$gw\" -lt {HOSTW} ] && [ \"$gh\" -lt {HOSTH} ]; then inside=yes; fi; agrees=no; if [ \"$a\" = \"RESAPPLIED $g\" ]; then agrees=yes; fi; echo \"RECONTAIN guest=${g:-none} inside=$inside agent_agrees=$agrees agent_line=${a:-none} lastapplied_line=${q:-none}\"; fi",
+      "timeout_s": 400,
+      "expect": {"stdout_re": "^RECONTAIN guest=[0-9]+x[0-9]+ inside=yes agent_agrees=yes", "stdout_absent_re": "inside=no|agent_agrees=no|guest=none"},
+      "check": "p5-containment-agent-agrees",
+      "on_fail": {"action": "CONTINUE", "verdict": "INVALID-PRECONDITION", "msg": "Containment is NOT in force by the AGENT's own account (rule 13: an agent restart re-applies dom0's geometry - RESREQ src=lastapplied - so a mode set before the restart is silently undone). Every probe sized to the contained mode would be a fraction of the real screen, the gate under test would never be exercised, and the cell would look exactly like a serious gate failure while being INVALID-PRECONDITION (measured 2026-08-30: 1600x900 probes at 31% of a 5120x1440 screen). The guest is OUT_OF_SERVICE for the lane. Re-contain AFTER the agent settles, confirm the agent agrees, then a NEW campaign for the lane."},
+      "defect": "instrument rule 13 / SG0.2, measured 2026-08-30 and again at D-6: containment set to a sub-host mode, agent restarted (swap or reboot), guest silently back at host size with 'RESREQ 5120x1440 src=lastapplied' in the log - the probe's own containment gate was what stopped a 5120-wide window from reaching the owner's display",
+      "falsified_by": "defect-p5-containment-lost-after-restart"
+    },
+    {
+      "id": "p5-preflight",
+      "kind": "gate",
+      "title": "D-0: gate-preflight (3 min) for EVERY bit before the 28-min prove cycle - with the bit armed, can the harness still see its own control? One armed restart + one screenshot per bit (0x3, 0x14, 0x20 - failproof-gates.sh's table), instead of 28 minutes to learn the proof was impossible",
+      "requires": ["p5-recontain-agent"],
+      "guest": "SA",
+      "vars_in": ["SA", "ACCEPT_OUT"],
+      "command": "set -o pipefail; { for b in 0x3 0x14 0x20; do QWT_VMLOCK_HELD={SA} bash mgmt/harness/gate-preflight.sh {SA} $b; done; } 2>&1 | tee {ACCEPT_OUT}/preflight.txt",
+      "timeout_s": 2400,
+      "expect": {"exit": 0, "stdout_re": "(?s)CLEAR TO RUN.*CLEAR TO RUN.*CLEAR TO RUN", "stdout_absent_re": "DO NOT SPEND THE 28 MINUTES|REFUSING"},
+      "check": "p5-gate-preflight-clear",
+      "on_fail": {"action": "CONTINUE", "verdict": "INVALID-INSTRUMENT", "msg": "With a bit armed the harness cannot see its own control, so the proof is IMPOSSIBLE through this harness and no amount of runtime changes that (D-0). Do NOT spend the 28-minute cycle. The bit needs a control it cannot affect, or a different harness - exactly the two 2026-08-31 cases: START|NOCARD destabilised the whole window set, FI_DROP_CAPTIONED dropped the captioned Notepad that IS the control. The guest is OUT_OF_SERVICE for the lane; restore and redesign the proof."},
+      "defect": "D-0's origin, measured 2026-08-31: two full 28-minute prove cycles (14 armed + 14 restored) each returned INVALID-INSTRUMENT for a reason visible seconds after arming - the harness had been made blind to its own control by the very bit under proof, so every 'nothing mapped' it could produce was manufactured",
+      "falsified_by": "defect-p5-failproof-blind-harness"
+    },
+    {
+      "id": "p5-prove-cycle",
+      "kind": "action",
+      "title": "D-7/D-8 via the committed mgmt/harness/failproof-gates.sh: baseline green with FaultGateOff=0, then per bit armed->RED->cleared->green ON ONE ARTIFACT, with the specificity control (the other three cells must stay green, companions declared) - earns or-fullscreen-never-mapped, start-not-presented, windowed-fullscreen-allowed. Collection is the harness's own TSV; a non-flip is graded by its exit and markers",
+      "requires": ["p5-preflight"],
+      "guest": "SA",
+      "vars_in": ["SA", "ACCEPT_OUT"],
+      "command": "set -o pipefail; QWT_VMLOCK_HELD={SA} bash mgmt/harness/failproof-gates.sh {SA} {ACCEPT_OUT}/gates 2>&1 | tee {ACCEPT_OUT}/gates-console.txt; echo GATESRC=$?",
+      "timeout_s": 21600,
+      "expect": {"exit": 0, "stdout_re": "(?s)gate-capable build CONFIRMED running.*all four cells green with every safeguard in force.*PROOF EARNED: or-fullscreen-never-mapped.*PROOF EARNED: start-not-presented.*PROOF EARNED: windowed-fullscreen-allowed.*=== finished rc=0 ===.*^GATESRC=0$", "stdout_absent_re": "NOT PROVEN|NOT RED|INVALID-INSTRUMENT|REFUSING|ABORTING"},
+      "on_fail": {"action": "CONTINUE", "verdict": "INVALID-INSTRUMENT", "msg": "The flip was not earned for every clause (D-8: a red that cannot be paired with a green from the same harness is not a fail-proof). Read the console: 'NOT RED' = the bit is not wired or the cell cannot detect the defect - a finding about the CHECK; 'NOT PROVEN' = the bypass moved more than its own cell; 'INVALID-INSTRUMENT' = the subject stayed red after clearing - dirty, restore before grading anything on it; 'REFUSING' = the running build has no gateoff banner (wrong artefact). The affected checks' PASS rows stay PASS-UNPROVEN in every citing report (P5-7): record it, never quietly upgrade."}
+    },
+    {
+      "id": "p5-restore-release",
+      "kind": "action",
+      "title": "D-9: put the release binary back through the SAME primitive (same D-4 ordering) and prove the FILE is the release - the running-image proof is the next step. Declares `restores`: this step is how an out-of-service subject re-enters service, after its evidence is captured",
+      "requires": ["p5-swap-diag"],
+      "guest": "SA",
+      "restores": "SA",
+      "vars_in": ["SA", "RELEASE_DIR", "RELEASE_SHA", "ACCEPT_OUT"],
+      "command": "QTEST_VM={SA} timeout -k 8 200 tools/qtest push {RELEASE_DIR}/gui-agent.exe >/dev/null 2>&1; QTEST_VM={SA} timeout -k 8 600 tools/qtest pushrun guest/deploy-gui-agent.ps1 | tr -d '\\r' | grep -a '=== RESULT ===' | tee {ACCEPT_OUT}/restore-release.txt; grep -qa '\"dst_hash16\":\"{RELEASE_SHA}\"' {ACCEPT_OUT}/restore-release.txt && echo RESTORED-FILE-IS-RELEASE",
+      "timeout_s": 900,
+      "expect": {"exit": 0, "stdout_re": "(?s)=== RESULT === .*\"swapped\":true.*\"agent_running\":true.*\"ok\":true.*^RESTORED-FILE-IS-RELEASE$", "stdout_absent_re": "\"ok\":false"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The subject is left carrying a DIAG binary - it must NEVER re-enter service like this. Repair inline NOW (qtest run: copy gui-agent.exe.orig back, or re-push the release and re-run deploy-gui-agent.ps1), then verify with guest/verify-running-agent.ps1 that the RUNNING image is the release. A StandaloneVM's root is persistent: a reboot will NOT discard the swap (rule 22 - only an AppVM's volatile C: does)."}
+    },
+    {
+      "id": "p5-hash-restored",
+      "kind": "probe",
+      "title": "Rule 12 row 3 / D-9: the RUNNING image is the release again - restore is proven, never assumed (the same watchdog-relock class that fakes a swap can fake a restore; the 2026-08-31 AppVM incident had the restore copy the diag build over itself while the running hash never changed)",
+      "requires": ["p5-restore-release"],
+      "guest": "SA",
+      "vars_in": ["SA", "RELEASE_SHA", "ACCEPT_OUT"],
+      "command": "out=$(QTEST_VM={SA} timeout -k 8 300 tools/qtest pushrun guest/verify-running-agent.ps1 | tr -d '\\r' | sed -n '/=== RESULT ===/,$p'); if [ -n \"$out\" ]; then printf '%s\\n' \"$out\" | tee {ACCEPT_OUT}/hash-restored.txt; m=$(printf '%s\\n' \"$out\" | grep -acE '\"image_sha256\": *\"{RELEASE_SHA}\"'); i=$(printf '%s\\n' \"$out\" | grep -ao '\"instances\": *[0-9]*' | grep -aoE '[0-9]+' | head -1); w=$(printf '%s\\n' \"$out\" | grep -acE '\"started_after_file_write\": *true'); echo \"RUNNING-IMAGE instances=${i:-parse-error} image_matches_intended=$m started_after_write=$w\"; fi",
+      "timeout_s": 400,
+      "expect": {"stdout_re": "^RUNNING-IMAGE instances=1 image_matches_intended=[1-9][0-9]* started_after_write=[1-9]", "stdout_absent_re": "ACCESS_DENIED|image_matches_intended=0"},
+      "check": "p5-running-image-is-artefact",
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-WRONGBUILD", "msg": "The restore did NOT take - the running image is not the release (the same silent-relock class as the swap). The subject stays out of service until the running hash is proven; repair inline and re-run verify-running-agent.ps1. Never hand the subject to another part in this state."},
+      "defect": "rule 12's restore half, measured 2026-08-31 on win10-app: the release backup parked on the volatile C: was gone after a boot, the restore copied the diag build over itself, and only the running-image hash assertion caught that the 'restored' guest was still on the diag build",
+      "falsified_by": "defect-p5-silent-binary-swap"
+    },
+    {
+      "id": "p5-loglevel-restore",
+      "kind": "action",
+      "title": "SG0.5 second half: restore the log level to 3 on BOTH keys and prove it - a subject left at Debug is not the standing deploy state",
+      "requires": ["p5-loglevel5"],
+      "guest": "SA",
+      "vars_in": ["SA", "ACCEPT_OUT"],
+      "command": "out=$(QTEST_VM={SA} timeout -k 8 300 tools/qtest pushrun guest/set-loglevel.ps1 3 | tr -d '\\r' | sed -n '/=== RESULT ===/,$p'); if [ -n \"$out\" ]; then printf '%s\\n' \"$out\" | tee {ACCEPT_OUT}/loglevel-restore.txt >/dev/null; g=$(printf '%s\\n' \"$out\" | grep -ao '\"loglevel_global\": *[0-9]*' | grep -aoE '[0-9]+' | head -1); m=$(printf '%s\\n' \"$out\" | grep -ao '\"loglevel_module\": *[0-9]*' | grep -aoE '[0-9]+' | head -1); echo \"LOGLEVEL global=${g:-parse-error} module=${m:-parse-error}\"; fi",
+      "timeout_s": 400,
+      "expect": {"stdout_re": "^LOGLEVEL global=3 module=3$"},
+      "on_fail": {"action": "CONTINUE", "verdict": "INVALID-PRECONDITION", "msg": "The log level was not verifiably restored. Re-run guest/set-loglevel.ps1 3 by hand and confirm both keys before the subject is reused - the paired disarm/re-arm discipline exists because a part that mutates without restoring leaves the guest in a non-standing state."}
+    },
+    {
+      "id": "p5-shutdown-sa",
+      "kind": "action",
+      "title": "Release the subject cleanly (H3.6: one Windows guest at a time; clean shutdown, never a kill)",
+      "requires": ["p5-boot-sa"],
+      "guest": "SA",
+      "vars_in": ["SA"],
+      "command": "qvm-shutdown --wait --timeout 300 {SA} && echo SA-HALTED",
+      "timeout_s": 400,
+      "expect": {"exit": 0, "stdout_re": "^SA-HALTED$"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The subject did not shut down cleanly. A guest that flips back to Transient is queued qrexec restarting it - drain per runbook 2.5 (qrexec_timeout 15 -> kill -> Halted CONTINUOUSLY -> restore 6000; 15 is never left in place)."}
+    },
+    {
+      "id": "p5-sg1-coldboot",
+      "kind": "declare",
+      "check": "p5-sg1-mode1-coldboot",
+      "verdict": "BLOCKED",
+      "title": "SG1 positive: boot/shutdown/logon screen never shown across a cold boot",
+      "detail": "WHY blocked in this compilation: the committed primitive exists (mgmt/harness/sg1-u2-coldboot.sh - shot loop watching dom0 while the guest has no qrexec, the 'unconditionally denied' vacuity guard, U2 riding the same boot) but compiling it honestly needs its own transcript judgement (V2: its cell-FAIL must not fold into a mechanical expect's single verdict) and that judgement needs its own defect scenario (V4); this part's scenario budget is spent on the named incident set. Compile it with its own scenario in a follow-up revision; until then SG1 must not be quoted as tested from this part."
+    },
+    {
+      "id": "p5-sg1-failproof",
+      "kind": "declare",
+      "check": "p5-sg1-failproof",
+      "verdict": "ATTENDED-PENDING",
+      "title": "SG1 fail-proof: diag build with the phase test removed, captioned fullscreen window created pre-explorer",
+      "detail": "WHY attended: it reintroduces the literal 2026-08-28 defect - a boot-phase fullscreen surface offered to dom0 - so the owner must be at the display; the doc marks it attended, and the diag branch is D-2 build work (NEVER MERGE) that is torn down the same session."
+    },
+    {
+      "id": "p5-sg2-feature-on",
+      "kind": "declare",
+      "check": "p5-sg2-feature-on-arm",
+      "verdict": "ATTENDED-PENDING",
+      "title": "SG2 feature-ON arm: borderless fullscreen maps when service.gui-fullscreen is set",
+      "detail": "WHY attended: it requires service.gui-fullscreen ON, which is NEVER set by any command (SG0.1, owner: never means never - three screen-cover incidents). Owner-attended session only; listed here so it is never silently dropped."
+    },
+    {
+      "id": "p5-sg4-feature-on",
+      "kind": "declare",
+      "check": "p5-sg4-feature-on-arm",
+      "verdict": "ATTENDED-PENDING",
+      "title": "SG4 feature-ON arm: override-redirect fullscreen is denied EVEN WITH the feature on",
+      "detail": "WHY attended: proving the deny with the feature on requires setting service.gui-fullscreen, which is NEVER set by any command (SG0.1). The feature-OFF half is covered by the suite's SG4 cell; this half waits for the owner-attended session."
+    },
+    {
+      "id": "p5-sg5-secure-desktop",
+      "kind": "declare",
+      "check": "p5-sg5-secure-desktop",
+      "verdict": "BLOCKED",
+      "title": "SG5: secure-desktop freeze (seamless), recovery, UAC-as-ordinary-window, fail-proofs A and B",
+      "detail": "WHY blocked unattended: the cell needs an in-session validated pixel differ (SG0.6: known change + known no-change, x3, before any frozen/changed assertion), a LockWorkstation scheduled-task stimulus, a reboot+autologon recovery leg, and two fail-proof arms with per-arm restores (A: PromptOnSecureDesktop=1 revert on a Standalone restore; B: diag build skipping the early-return) - no committed primitive runs that choreography end to end and H0 forbids hand-rolling it in a step command. The QGADESKSTUCK absence-is-a-regression assertion belongs to this cell. Non-seamless arm is attended besides. Nothing from SG5 may be quoted as tested from this compilation."
+    },
+    {
+      "id": "p5-sg6-positive-residual",
+      "kind": "declare",
+      "check": "p5-sg6-positive-residual",
+      "verdict": "BLOCKED",
+      "title": "SG6 positive residuals: AutoLogonCount ABSENT, registry DefaultPassword absent, guard task Ready via wu-autologon-selftest.ps1/pwdiag.ps1",
+      "detail": "WHY blocked: the probes are committed (guest/wu-autologon-selftest.ps1, guest/pwdiag.ps1) but their verdict needs a falsifiable slot of its own (V4) and this part's scenario budget is spent; SG6's load-bearing defect - the invisible guest, qrexec answering with zero sessions - is mechanically covered by the p5-sg6-failproof step, whose control and re-arm blocks carry these sub-assertions as corroboration only. AutoLogonCount PRESENT would mean the password is being consumed toward lockout; until this row is compiled falsifiably it is not citable."
+    },
+    {
+      "id": "p5-sg7-toasts",
+      "kind": "declare",
+      "check": "p5-sg7-toasts",
+      "verdict": "BLOCKED",
+      "title": "SG7: toasts survive the filter (positive = RND-4), plus the naive-cloak-filter fail-proof",
+      "detail": "WHY blocked unattended: the committed positive harness (mgmt/harness/rnd-shell-surfaces.sh) is QUARANTINED pending the rule-16 audit - failproof-gates.sh records that it 'must be audited for the rule-16 query pattern before its verdicts are trusted' (a silently-empty query fabricates verdicts, the rnd8 keyed-mutex incident). The fail-proof needs a defect/* diag build applying the naive cloak/layered/topmost filter (D-2 build work, NEVER MERGE) preceded by a winenum measurement of which style arm actually spares the toast (the assumed !WS_EX_TOPMOST clause must be measured, not assumed). dom0 click-through is an owner-hand residual regardless."
+    },
+    {
+      "id": "p5-sg8-chrome",
+      "kind": "declare",
+      "check": "p5-sg8-chrome",
+      "verdict": "BLOCKED",
+      "title": "SG8: compound chrome dropped, real UI kept (chromerepro + NetUI rule + negative controls)",
+      "detail": "WHY blocked: the committed reproducer's stimulus NEVER REACHES the chrome predicate - rule 24, measured 2026-08-31: chromerepro's shadow strips are rejected upstream by GetRealWindowRect as degenerate geometry (inverted DWM bounds, no usable GetWindowRect) before any chrome clause runs, and the cell stayed green with FI_GATE_SHELLOVERLAY armed. A green from this cell proves only that zero-area windows are dropped. D-0c applies: repair the vacuous check (fix the reproducer to present non-degenerate strips) BEFORE proving it - a proof of a vacuous check is worthless even when it goes red. Real-Office validation is owner-attended in the owner's qube. During any future defect run, gui-daemon death is a legitimate red (the CONFIGURE-without-CREATE exit), not a rig glitch."
+    },
+    {
+      "id": "p5-sg9-devarm",
+      "kind": "declare",
+      "check": "p5-sg9-devarm",
+      "verdict": "N/A - dev arm, not release acceptance",
+      "title": "SG9 dev arm: SeamlessStart=1 cropped Start card per the 25H2 baseline",
+      "detail": "WHY not a cell here: the shipped spec is the OPPOSITE - Start is NOT presented in seamless (SeamlessStart=0, Super blocked), and that positive is graded inside the suite's SG9 cell. The SeamlessStart=1 arm is restore-only development work, never release acceptance, and enabling it in an acceptance campaign would be an unrequested behaviour change."
+    },
+    {
+      "id": "p5-sg10-defense",
+      "kind": "declare",
+      "check": "p5-sg10-filteroff-defense",
+      "verdict": "BLOCKED",
+      "title": "SG10 unattended defense-in-depth: boot a restore with DiagWindowFilterOff=1, Progman still rejected by the attribute rule",
+      "detail": "WHY blocked: the arm needs a registry-armed COLD BOOT on a Standalone restore plus grading of the discriminator chain ('uncapturable non-topmost toolwindow ... shell furniture') across that boot, and no committed primitive performs the arm-boot-grade-restore sequence (the DiagWindowFilterOff DWORD is SG0.9's canonical mechanism but its harness was never committed); H0 forbids composing it in a step command. Extension of the DWORD to more bits stays decision D-open (owner sign-off - each bit weakens filtering)."
+    },
+    {
+      "id": "p5-sg10-e2e",
+      "kind": "declare",
+      "check": "p5-sg10-progman-e2e",
+      "verdict": "ATTENDED-PENDING",
+      "title": "SG10 both-bits arm (DiagWindowFilterOff=3): full end-to-end field Progman reproduction",
+      "detail": "WHY attended: on our rigs Progman with both filter layers off is still stopped by the Mode-2 gate, so the full field reproduction (the OpenShell case) needs the banned feature ON - owner-attended only (SG0.1). Unattended evidence remains the discriminator chain plus no MAP in the trace."
+    },
+    {
+      "id": "p5-nonseamless-view",
+      "kind": "declare",
+      "check": "p5-nonseamless-signin-view",
+      "verdict": "ATTENDED-PENDING",
+      "title": "Non-seamless sign-in view: the secure desktop shown INSIDE the one bounded desktop window",
+      "detail": "WHY attended: exercising the non-seamless (windowed desktop) mode requires service.gui-fullscreen, which is NEVER set by any command (SG0.1; the service.gui-windowed-desktop split was never written - one flag still gates both). The owner drives it at the display; the seamless-mode freeze half of the secure-desktop rule is SG5's territory."
+    },
+    {
+      "id": "p5-sg11-matrix",
+      "kind": "declare",
+      "check": "p5-sg11-matrix",
+      "verdict": "N/A - structural, mechanised by the runner",
+      "title": "SG11: results matrix (safeguard x positive/negative-control/fail-proof) and evidence layout",
+      "detail": "WHY nothing to execute: the campaign ledger plus protocol/failproofs.json plus ACCEPT_OUT ARE the SG11 matrix for the compiled cells - V1 makes a blank fail-proof cell surface as PASS-UNPROVEN in every citing report automatically (the writer refuses plain PASS), the prove-cycle step earns entries per instrument version (SG0.9: once per instrument version, not per release), and the attended arms are the ATTENDED-PENDING rows above, never silently dropped."
+    }
+  ]
+}

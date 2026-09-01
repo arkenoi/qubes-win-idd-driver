@@ -1,0 +1,533 @@
+{
+  "part": "p4-rendering",
+  "comment": "P4 - complex rendering and benchmarking: ACCEPTANCE-PROTOCOL.md 0.11 (P4-1..P4-7, doc lines 837-887) and Part II section 8 (RND-0..9 + BENCH, lines 1699-1779) compiled to runner data. Self-contained: boots its own subject, one Windows guest at a time (H3.6), releases it when green; a FAILed guest is EVIDENCE (G-0) and is deliberately left up. P4-pixels-only is the part's law: every rendering verdict is judged from PIXELS or the wire (QGAPROTO/QGAPERF), never agent log strings alone - the RecreateDuplication precedent. SCENE-CONTAMINATION ORDERING (RND battery rule; incident 2026-08-31, twice): the persistent-toast cell is the LAST measuring cell in the file because a reminder toast survives between cells - it held focus so the menu cell's Alt+F never reached Notepad, and it made the toast delta read 1->1. File order therefore is: bench (typing/drag/scroll scenes) -> RND-5 Start -> RND-8 resolution -> RND-3 menu -> RND-4 toast, and rnd-shell-surfaces.sh additionally scene-resets and orders menu before toast internally. CAPTURE-CLASS RULE (RND-0b, a table lookup, never a judgement call): RND-5/7/8 subjects are managed windows -> qtest shot counts; menu/toast subjects can be override-redirect, to which qtest shot is STRUCTURALLY BLIND (RIG-CONSTRAINTS 3.1) -> the o-r-capable witnesses here are the agent-log MAP witness (p4-rnd5-verdict) and rnd-shell-surfaces.sh's qtest-geom listing, which extracts the o-r-capable window list and deletes the whole-desktop image UNREAD (whole-desktop captures are read and deleted in the same step, never committed, never retained - not even inside a tar). Guest-side existence is proven with EnumWindows CharSet.Unicode (startproof.ps1), never with the capture: the two halves answer different questions. INTERACTIVE-SESSION TRAP (RND-0c): qrexec runs as NT AUTHORITY\\SYSTEM; toasts/Start/flyouts are per-user, so every shell stimulus here goes through a scheduled interactive-user task (open-start.ps1, run-as-user.ps1 inside rnd-shell-surfaces.sh) - a SYSTEM-fired stimulus renders for nobody and its cell is INVALID-VACUOUS. VMLOCK: run.py holds the per-guest lock in live mode; the harness steps export QWT_VMLOCK_HELD={VM} so the re-entrant vm_lock in child harnesses passes through instead of refusing its own parent. CELL MAP (nothing silently dropped): P4-1/BENCH-disarm/G-0c -> p4-scan-disarm + the bench step's re-assert; P4-2 -> p4-trace-feature + p4-subject-identity; P4-3/BENCH-2 and P4-4/BENCH-0/BENCH-1 -> p4-bench-suite (the canonical suite measures idle/drag/scroll/type each repetition, enforces the 30 s settle floor, interleaves >=3 rounds/side, asserts the RUNNING binary hash, checks the scene by pixels) + p4-bench-raws; P4-5/RND-0b rules 1-3 and RND-0-blindness/RND-capture-class -> p4-rnd5-collect/p4-rnd5-verdict + this comment's binding order; P4-6/RND-0c -> p4-rnd5-collect + p4-shell-run; P4-7 (G-7 detector proof, same session) -> p4-rnd4-toast; RND-battery-preamble -> p4-scan-disarm + declared 20 s settles + p4-rnd9-coldboot declare; RND-1 -> p4-rnd1-drag declare; RND-2 -> p4-rnd2-scroll declare; RND-3 -> p4-rnd3-stimulus + p4-rnd3-synth-crop; RND-4 -> p4-rnd4-toast; RND-5 -> p4-rnd5-*; RND-6 -> p4-rnd6-occlusion declare; RND-7 -> p4-rnd7-chrome declare; RND-8 -> p4-rnd8 + p4-rnd8-dom0-resize declare; RND-9 -> p4-rnd9-coldboot declare; RND-pixel-rules -> carried in p4-rnd3-synth-crop's question (crop to the agent-reported rect; a comparison tool must not auto-align; CharSet.Unicode probes) and p4-rnd8's pixel judges.",
+  "steps": [
+    {
+      "id": "p4-outdir",
+      "kind": "action",
+      "title": "Create the part's evidence directory (evidence lands under ACCEPT_OUT, never session tmp)",
+      "vars_in": [
+        "ACCEPT_OUT"
+      ],
+      "command": "mkdir -p {ACCEPT_OUT} && echo \"OUTDIR-READY {ACCEPT_OUT}\"",
+      "expect": {
+        "exit": 0,
+        "stdout_re": "^OUTDIR-READY "
+      },
+      "on_fail": {
+        "action": "HALT_PART",
+        "msg": "cannot create the evidence directory; fix ACCEPT_OUT and start a new campaign"
+      }
+    },
+    {
+      "id": "p4-boot-subject",
+      "kind": "action",
+      "title": "Boot the P4 subject (an ST2/ST2G fixture carrying the build under test; fire-and-poll via the e2e-wait library - a foreground qvm-start blocks up to qrexec_timeout on a non-booting guest)",
+      "requires": [
+        "p4-outdir"
+      ],
+      "guest": "VM",
+      "vars_in": [
+        "VM",
+        "ACCEPT_OUT"
+      ],
+      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {VM} >/dev/null 2>&1 & ) ; w_session {VM} 1200 p4-boot-subject {ACCEPT_OUT} echo",
+      "timeout_s": 1400,
+      "expect": {
+        "exit": 0,
+        "stdout_re": "session up at t\\+[0-9]+s"
+      },
+      "on_fail": {
+        "action": "HALT_PART",
+        "verdict": "INVALID-PRECONDITION",
+        "msg": "The subject never produced a logged-on session. That is a boot problem, not a rendering verdict - the guest's state is evidence; investigate before any P4 cell. Note qubes.Filecopy targets the USER's Documents, so nothing in this part can even be delivered without a session (RIG-CONSTRAINTS 1.1)."
+      },
+      "cells": [
+        "RND-battery-preamble"
+      ]
+    },
+    {
+      "id": "p4-scan-disarm",
+      "kind": "probe",
+      "title": "P4-1 / BENCH-disarm / G-0c: DISARM QubesWindowsUpdateScan. First. Always. The disarm is RECORDED in the cell evidence; the paired re-enable is the last step of the part",
+      "requires": [
+        "p4-boot-subject"
+      ],
+      "vars_in": [
+        "VM",
+        "ACCEPT_OUT"
+      ],
+      "command": "QTEST_VM={VM} timeout -k 8 400 tools/qtest pushrun guest/disarm-update-scan.ps1 | tr -d '\\r' | tee {ACCEPT_OUT}/disarm.txt",
+      "timeout_s": 500,
+      "expect": {
+        "stdout_re": "(?s)SCAN_AFTER state=Disabled.*RELAY_AFTER 0.*DISARMED True",
+        "stdout_absent_re": "DISARMED False"
+      },
+      "check": "p4-scan-disarmed",
+      "detail": "This step deliberately carries NO guest field and on_fail CONTINUE: an armed scan is a failed precondition of the PART, not evidence of a product defect in the guest, so custody (G-0) is not tripped - instead every measuring cell refuses on its own (the bench step re-asserts this step's evidence file and goes INVALID-PRECONDITION, which halts the part). That keeps the refusal visible as verdict rows instead of a wall of BLOCKED rows, and nothing is ever measured with the scan armed. The boot+PT2M trigger is the trap: this step runs immediately after boot, before anything else in the part.",
+      "on_fail": {
+        "action": "CONTINUE",
+        "verdict": "INVALID-PRECONDITION",
+        "msg": "The scan could not be disarmed (or the probe answered nothing - an empty pushrun is INVALID-INSTRUMENT, never a product result). RUN NOTHING MEASURED: the bench step will refuse on its own re-assertion and halt the part. An unmeasured cell beats a bad number. Fix the scan task, then start a NEW campaign."
+      },
+      "defect": "every BENCH number taken 2026-08-30 (both subjects) was measured inside a possible-scan window and none is citable: the guest booted ~17:52, the scan was due ~17:54 (boot+PT2M), BENCH started ~17:53 and the subject wedged mid-benchmark - the documented consequence of the documented trigger. The rule existed in P3's standing rules; what was missing was an executable step. This is the step",
+      "falsified_by": "defect-p4-scan-armed",
+      "cells": [
+        "P4-1",
+        "BENCH-disarm",
+        "G-0c",
+        "RND-battery-preamble"
+      ]
+    },
+    {
+      "id": "p4-trace-feature",
+      "kind": "action",
+      "title": "P4-2: enable agent tracing via qvm-features service.gui-agent-debug - NEVER a registry poke (the registry route works, which is why it is banned: it mutates the subject outside the declared channel)",
+      "requires": [
+        "p4-boot-subject"
+      ],
+      "guest": "VM",
+      "vars_in": [
+        "VM"
+      ],
+      "command": "qvm-features {VM} service.gui-agent-debug 1 && echo TRACE-FEATURE-SET",
+      "expect": {
+        "exit": 0,
+        "stdout_re": "^TRACE-FEATURE-SET$"
+      },
+      "on_fail": {
+        "action": "HALT_PART",
+        "verdict": "INVALID-PRECONDITION",
+        "msg": "The debug-tracing feature could not be set. Without it QGAPERF emits nothing and every frame-liveness judge in this part reads INVALID-INSTRUMENT. Fix the feature channel; do not fall back to a registry poke."
+      },
+      "cells": [
+        "P4-2"
+      ]
+    },
+    {
+      "id": "p4-subject-identity",
+      "kind": "action",
+      "title": "P4-2: confirm the subject - the RUNNING agent's hash equals the manifest (health-check agent_binary_hash), before any number is taken",
+      "requires": [
+        "p4-trace-feature"
+      ],
+      "guest": "VM",
+      "vars_in": [
+        "VM",
+        "ACCEPT_OUT"
+      ],
+      "command": "QTEST_VM={VM} timeout -k 8 500 tools/qtest pushrun guest/health-check.ps1 | tr -d '\\r' | grep -ao '\"agent_binary_hash\":{[^}]*}[^}]*}' | tee {ACCEPT_OUT}/subject-identity.txt",
+      "timeout_s": 600,
+      "expect": {
+        "stdout_re": "\"agent_binary_hash\":\\{\"pass\":true"
+      },
+      "on_fail": {
+        "action": "HALT_PART",
+        "verdict": "INVALID-PRECONDITION",
+        "msg": "The running agent is not the manifest binary, or the probe answered nothing. A swap can SILENTLY fail - QubesGuiWatchdog re-locks the file (RIG-CONSTRAINTS 2.3) - and an entire comparison once ran against the wrong build while reporting the right hash. If the output is EMPTY, read it as INVALID-INSTRUMENT (pushrun without a session returns NOTHING, RIG-CONSTRAINTS 1.1), never as a product claim. Nothing is benchmarked on an unconfirmed subject."
+      },
+      "cells": [
+        "P4-2"
+      ]
+    },
+    {
+      "id": "p4-bench-suite",
+      "kind": "wait",
+      "title": "BENCH: the canonical stock-vs-ours suite (bench-stock-vs-ours.sh, 3 interleaved rounds, 45 s settle - the 30 s floor is enforced IN CODE), run only after re-asserting this part's own disarm evidence. SCROLL is the only phase whose verdict gates; drag is bimodal and gates NOTHING",
+      "requires": [
+        "p4-subject-identity"
+      ],
+      "guest": "VM",
+      "vars_in": [
+        "VM",
+        "ACCEPT_OUT",
+        "STOCK_AGENT",
+        "OURS_AGENT"
+      ],
+      "command": "grep -aq 'DISARMED True' {ACCEPT_OUT}/disarm.txt && QTEST_VM={VM} QWT_VMLOCK_HELD={VM} BENCH_SETTLE_S=45 tools/bench-stock-vs-ours.sh {STOCK_AGENT} {OURS_AGENT} 3 2>&1 | tee {ACCEPT_OUT}/bench-suite.log",
+      "timeout_s": 5400,
+      "expect": {
+        "exit": 0,
+        "stdout_re": "(?s)settle after each swap: [0-9]+s \\(floor 30\\).*== summary.*repetitions: [0-9]+ total, [0-9]+ valid, 0 INVALID.*^scroll\\s+[0-9]+\\.[0-9]+ \\([0-9]+\\)\\s+[0-9]+\\.[0-9]+ \\([0-9]+\\)\\s+[+-][0-9.]+%\\s+REAL - ranges disjoint, ours BETTER",
+        "stdout_absent_re": "^scroll .*(ours WORSE|NO VERDICT)|MORE THAN ONE BINARY ON THIS SIDE|^FATAL"
+      },
+      "check": "p4-bench-canonical-suite",
+      "detail": "One guest, one install, one display stack; the only variable is gui-agent.exe, swapped in place. The suite enforces in code what the records demand: per-repetition RUNNING-hash assertion (P4-2; a harness that proceeds on a failed swap reports numbers for a build that never ran), missing data recorded INVALID and excluded - never coerced to zero, the scene checked by PIXELS each repetition (the wedged white Notepad faked two regressions), sides interleaved with alternating start order (BENCH-1: >=3 runs per side, interleaved with the control), and the settle floor (an 8 s settle produced the published-then-retracted '+60% win11 drag regression'). BENCH-2's always-on idle tripwire is carried by the suite's idle-pre/mid/post phases, measured every repetition. The expect grades ONLY the scroll row (BENCH-1: scroll is the metric that may carry a verdict; drag p50 is scene-state bimodal - it once voided a whole bisect - and gates nothing, whatever its row shows).",
+      "on_fail": {
+        "action": "HALT_PART",
+        "verdict": "INVALID-PRECONDITION",
+        "msg": "Either the disarm re-assertion refused the run (scan not provably disarmed - an unmeasured cell beats a bad number), a repetition was INVALID (running-hash mismatch, unparseable sampler, scene not rendering), the scroll row failed to show a disjoint improvement, or the suite returned nothing. If a run returns nothing: stop, preserve the guest (G-0), and check whether the agent is still alive before assuming a slow number. The numbers from this session are not citable."
+      },
+      "defect": "2026-08-30: BENCH was started ~60 s before the scheduled scan on a freshly booted guest; the guest wedged mid-benchmark and every number from the session was void. The compiled protection is this step's leading re-assert of {ACCEPT_OUT}/disarm.txt - in the armed scenario the disarm gate goes INVALID-PRECONDITION and THIS step is then seen refusing (exit 1, no output) rather than measuring",
+      "falsified_by": "defect-p4-scan-armed",
+      "cells": [
+        "P4-3",
+        "P4-4",
+        "BENCH-0",
+        "BENCH-1",
+        "BENCH-2",
+        "P4-pixels-only"
+      ]
+    },
+    {
+      "id": "p4-bench-raws",
+      "kind": "action",
+      "title": "BENCH-0 standing rule: commit the raw suite output to instrumentation/ (the b299011 baseline became unusable because its raws were never committed)",
+      "requires": [
+        "p4-bench-suite"
+      ],
+      "command": "git add instrumentation/bench-stock-vs-ours-* && git commit -q -m 'bench: p4-rendering acceptance raws' && echo RAWS-COMMITTED",
+      "expect": {
+        "exit": 0,
+        "stdout_re": "^RAWS-COMMITTED$"
+      },
+      "on_fail": {
+        "action": "CONTINUE",
+        "msg": "The raws did not commit (dirty tree, or nothing new). Record why in the report; a baseline without committed raws cannot be cited later."
+      },
+      "cells": [
+        "BENCH-0"
+      ]
+    },
+    {
+      "id": "p4-rnd5-collect",
+      "kind": "action",
+      "title": "RND-5 evidence collection: drive Start as the INTERACTIVE USER (RND-0c - open-start.ps1 schedules the task itself; a SYSTEM-fired Win-key renders for nobody), settle the DECLARED >=20 s battery window, then collect all three witnesses: dom0 shot count, guest-side stimulus proof (deny lines + EnumWindows CharSet.Unicode shell surfaces), and the agent-log MAP witness",
+      "requires": [
+        "p4-bench-suite"
+      ],
+      "guest": "VM",
+      "vars_in": [
+        "VM",
+        "ACCEPT_OUT"
+      ],
+      "command": "{ QTEST_VM={VM} timeout -k 8 120 tools/qtest run 'cmd /c taskkill /f /im notepad.exe & echo SCENE-CLEARED' | tr -d '\\r' | grep -a SCENE-CLEARED ; QTEST_VM={VM} timeout -k 8 400 tools/qtest pushrun guest/open-start.ps1 >/dev/null 2>&1 ; sleep 20 ; rm -f {ACCEPT_OUT}/rnd5.tar ; QTEST_VM={VM} timeout -k 8 200 tools/qtest shot {ACCEPT_OUT}/rnd5.tar >/dev/null 2>&1 ; if [ -s {ACCEPT_OUT}/rnd5.tar ]; then echo \"SHOT_MAPPED $(tar tf {ACCEPT_OUT}/rnd5.tar | grep -ac '\\.png$')\"; else echo SHOT_EMPTY_TAR; fi ; QTEST_VM={VM} timeout -k 8 300 tools/qtest pushrun guest/startproof.ps1 | tr -d '\\r' | grep -aE '^(DISCRIM_HITS|  D |SHELL_SURFACES|  S |STARTPROC)' ; QTEST_VM={VM} timeout -k 8 200 tools/qtest run 'cmd /c powershell -NoProfile -EncodedCommand JABkAD0AKABHAGUAdAAtAEkAdABlAG0AUAByAG8AcABlAHIAdAB5ACAAJwBIAEsATABNADoAXABTAE8ARgBUAFcAQQBSAEUAXABJAG4AdgBpAHMAaQBiAGwAZQAgAFQAaABpAG4AZwBzACAATABhAGIAXABRAHUAYgBlAHMAIABUAG8AbwBsAHMAJwAgAC0ARQBBACAAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQApAC4ATABvAGcARABpAHIACgBpAGYAKAAtAG4AbwB0ACAAJABkACkAewAkAGQAPQAnAFEAOgBcAFEAdQBiAGUAcwAgAEwAbwBnAHMAJwB9AAoAJABmAD0ARwBlAHQALQBDAGgAaQBsAGQASQB0AGUAbQAgACQAZAAgAC0ARgBpAGwAdABlAHIAIAAnAGcAdQBpAC0AYQBnAGUAbgB0AC0AKgAuAGwAbwBnACcAIAAtAEUAQQAgAFMAaQBsAGUAbgB0AGwAeQBDAG8AbgB0AGkAbgB1AGUAIAB8ACAAUwBvAHIAdAAtAE8AYgBqAGUAYwB0ACAATABhAHMAdABXAHIAaQB0AGUAVABpAG0AZQAgAC0ARABlAHMAYwBlAG4AZABpAG4AZwAgAHwAIABTAGUAbABlAGMAdAAtAE8AYgBqAGUAYwB0ACAALQBGAGkAcgBzAHQAIAAxAAoAaQBmACgALQBuAG8AdAAgACQAZgApAHsAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAE8AVgBSAE0AQQBQAF8ATgBPAEwATwBHACcAOwBlAHgAaQB0ACAAMAB9AAoAJABtAD0AQAAoAEcAZQB0AC0AQwBvAG4AdABlAG4AdAAgACQAZgAuAEYAdQBsAGwATgBhAG0AZQAgAHwAIABTAGUAbABlAGMAdAAtAFMAdAByAGkAbgBnACAALQBTAGkAbQBwAGwAZQBNAGEAdABjAGgAIAAnAG0AcwBnAD0ATQBBAFAAJwAgAHwAIABXAGgAZQByAGUALQBPAGIAagBlAGMAdAAgAHsAIAAkAF8ALgBMAGkAbgBlACAALQBtAGEAdABjAGgAIAAnAG8AdgByAD0AMQAnACAAfQApAAoAJABiAGkAZwA9AEAAKAAkAG0AIAB8ACAAVwBoAGUAcgBlAC0ATwBiAGoAZQBjAHQAIAB7ACAAJABfAC4ATABpAG4AZQAgAC0AbQBhAHQAYwBoACAAJwB3AD0AXABkAHsANAAsAH0AJwAgAH0AKQAKAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAKAAnAE8AVgBSAE0AQQBQAF8AVABPAFQAQQBMACAAJwAgACsAIAAkAG0ALgBDAG8AdQBuAHQAKQAKAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAKAAnAE8AVgBSAE0AQQBQAF8AQgBJAEcAIAAnACAAKwAgACQAYgBpAGcALgBDAG8AdQBuAHQAKQAKACQAYgBpAGcAIAB8ACAAUwBlAGwAZQBjAHQALQBPAGIAagBlAGMAdAAgAC0ARgBpAHIAcwB0ACAAMwAgAHwAIABGAG8AcgBFAGEAYwBoAC0ATwBiAGoAZQBjAHQAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAoACcAIAAgAE0AIAAnACAAKwAgACQAXwAuAEwAaQBuAGUAKQAgAH0A' | tr -d '\\r' | grep -avE '^(Microsoft Windows \\[Version|\\(c\\) Microsoft|C:\\\\)' | grep -aE '^(OVRMAP_TOTAL|OVRMAP_BIG|  M )' ; } | tee {ACCEPT_OUT}/rnd5-two-witness.txt",
+      "timeout_s": 1400,
+      "expect": {
+        "stdout_re": "(?s)^SHOT_MAPPED [0-9]+$.*^DISCRIM_HITS [0-9]+.*^SHELL_SURFACES [0-9]+.*^OVRMAP_TOTAL [0-9]+.*^OVRMAP_BIG [0-9]+",
+        "stdout_absent_re": "SHOT_EMPTY_TAR|OVRMAP_NOLOG"
+      },
+      "detail": "The 20 s sleep is the battery's declared settle (>=20 s after scene setup before first capture), attached to this collection step - not a poll loop. The PowerShell goes through -EncodedCommand (a -Command with escaped quotes is re-split at every hop and fails SILENTLY - rnd8's counter once returned nothing and the empty values were graded as a product FAIL), and the qtest run output is filtered for the cmd.exe echo-back. An empty shot tar is NOT zero windows (RIG-CONSTRAINTS 3.2) and an absent agent log is not zero MAPs - both are instrument faults, which is why they fail THIS step as INVALID-INSTRUMENT instead of reaching the verdict step.",
+      "on_fail": {
+        "action": "HALT_PART",
+        "verdict": "INVALID-INSTRUMENT",
+        "msg": "A witness half is missing: empty shot tar (not evidence of no windows - check the target and the tool first), no agent log, or a silent pushrun (no session - RIG-CONSTRAINTS 1.1). Missing data FAILS the instrument, never the product, and never defaults (V3). Do not grade RND-5 from partial evidence."
+      },
+      "cells": [
+        "RND-5",
+        "RND-0c",
+        "P4-6",
+        "RND-0b-rule-3",
+        "RND-battery-preamble"
+      ]
+    },
+    {
+      "id": "p4-rnd5-verdict",
+      "kind": "judgement",
+      "title": "RND-5 verdict: Start is NOT presented in seamless (shipped spec) - a 'nothing mapped' PASS requires TWO WITNESSES plus the vacuity proof",
+      "requires": [
+        "p4-rnd5-collect"
+      ],
+      "guest": "VM",
+      "judgement": {
+        "evidence": [
+          "{ACCEPT_OUT}/rnd5-two-witness.txt"
+        ],
+        "question": "The file holds three instruments: SHOT_MAPPED (dom0 shot window count - sees MANAGED windows only, structurally blind to override-redirect surfaces), OVRMAP_TOTAL/OVRMAP_BIG with ' M ' sample lines (the agent's own log: msg=MAP lines with ovr=1; OVRMAP_BIG counts those with 4-digit width - the screen-scale takeover class), and the stimulus proof (DISCRIM_HITS = the agent's deny/discriminator lines; SHELL_SURFACES = guest-side EnumWindows CharSet.Unicode shell surfaces). Apply IN THIS ORDER: (1) if OVRMAP_BIG is not 0, answer MAP_IN_AGENT_LOG - the agent offered dom0 an override-redirect surface, whatever the shot shows; (2) else if SHOT_MAPPED is not 0, answer WINDOW_IN_SHOT; (3) else if DISCRIM_HITS is 0 or SHELL_SURFACES is 0, answer STIMULUS_ABSENT - without both, 'nothing mapped' is vacuous; (4) else answer NOMAP_BOTH_WITNESSES. Which one?",
+        "answers": {
+          "NOMAP_BOTH_WITNESSES": "SHOT_MAPPED 0 AND OVRMAP_BIG 0, with the stimulus proven (DISCRIM_HITS>=1 and SHELL_SURFACES>=1): nothing reached dom0, by both witnesses",
+          "MAP_IN_AGENT_LOG": "OVRMAP_BIG >= 1: the agent log shows a MAP with ovr=1 at screen scale - the shot cannot see this class, the log half is the witness that catches it",
+          "WINDOW_IN_SHOT": "SHOT_MAPPED >= 1: a window reached dom0 and the shot shows it",
+          "STIMULUS_ABSENT": "DISCRIM_HITS 0 or SHELL_SURFACES 0: the Start stimulus was never established, so the negative proves nothing",
+          "EVIDENCE_INCOMPLETE": "any of the named counters is missing from the file"
+        },
+        "map": {
+          "NOMAP_BOTH_WITNESSES": "GREEN",
+          "MAP_IN_AGENT_LOG": "RED",
+          "WINDOW_IN_SHOT": "RED",
+          "STIMULUS_ABSENT": "INVALID",
+          "EVIDENCE_INCOMPLETE": "INVALID"
+        }
+      },
+      "check": "p4-rnd5-nomap-two-witness",
+      "on_fail": {
+        "action": "HALT_PART",
+        "verdict": "FAIL",
+        "msg": "A Start/shell surface reached dom0 (by shot or by the agent's own MAP line). If only the log half fired, that is exactly why the two-witness rule exists: qtest shot is structurally blind to override-redirect windows and would have passed the leaking build. The guest is EVIDENCE (G-0): leave it up, diagnose on a clone."
+      },
+      "defect": "2026-08-31, measured with FaultGateOff=0x3: the agent logged 'SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x3601e6,ovr=1,...,w=1920,h=1080' - a full-screen override-redirect window offered to dom0, the exact takeover the design forbids - and the shot showed only the control, so the shot-only check reported 'not mapped'. A 'nothing mapped' verdict therefore requires BOTH witnesses: no matching window in the shot AND no msg=MAP in the agent log (RIG-CONSTRAINTS 3.1)",
+      "falsified_by": "defect-p4-map-unwitnessed",
+      "cells": [
+        "RND-5",
+        "P4-5",
+        "RND-0b-table",
+        "RND-0b-rule-1",
+        "RND-0-blindness"
+      ]
+    },
+    {
+      "id": "p4-rnd8",
+      "kind": "wait",
+      "title": "RND-8 guest-driven resolution battery (rnd8-resolution.sh): sub-host modes only, judged FROM PIXELS after each resize, and frame liveness proven by QGAPERF seq ADVANCING across a visible guest change - never by a log string",
+      "requires": [
+        "p4-rnd5-verdict"
+      ],
+      "guest": "VM",
+      "vars_in": [
+        "VM",
+        "ACCEPT_OUT"
+      ],
+      "command": "QWT_VMLOCK_HELD={VM} bash mgmt/harness/rnd8-resolution.sh {VM} {ACCEPT_OUT}/rnd8 2>&1 | tee {ACCEPT_OUT}/rnd8-run.log",
+      "timeout_s": 3600,
+      "expect": {
+        "exit": 0,
+        "stdout_re": "(?s)frame liveness: QGAPERF seq [0-9]+ -> [0-9]+.*=== finished rc=0 ===",
+        "stdout_absent_re": "-> FAIL|-> INVALID-INSTRUMENT|^FATAL"
+      },
+      "check": "p4-rnd8-resolution-liveness",
+      "detail": "The harness enforces the pixel law in code: after each mode change a visible guest change must change the dom0 capture (the 0x887a0026 keyed-mutex signature is 'everything reports success, frames stop'), the agent's A6CONFIGURE must agree with the guest's mode (dom0 on stale geometry is a FAIL), and the capture-death criterion is QGAPERF seq advancing - the DIED log-grep was measured detecting only the fault injector's own message (RIG-CONSTRAINTS 3.4), so no log string can satisfy this check. Its own red branches each carry a LIVE fail-proof in mgmt/harness/instrument-proofs.md (FI_NOSCREENCONFIG and FI_CAPTURE_EXIT, 2026-08-31); the in-scenario red for THIS runner row is at the shared scan gate (the RND battery shares BENCH's precondition and the same wedge exposure - defect-p4-scan-armed halts the part before any RND cell). On failure read {ACCEPT_OUT}/rnd8/verdicts.tsv: an INVALID-INSTRUMENT row there is an instrument fault, not a product defect (V2).",
+      "on_fail": {
+        "action": "HALT_PART",
+        "verdict": "FAIL",
+        "msg": "A resolution cell failed or capture stopped producing. Read {ACCEPT_OUT}/rnd8/verdicts.tsv for the classification first: mode-followed FAIL = dom0 on stale geometry; pixels-change FAIL = frozen capture (the keyed-mutex death); INVALID-INSTRUMENT rows = the instrument, not the product. The guest is EVIDENCE (G-0): leave it as it is."
+      },
+      "defect": "the prerequisite bug: AcquireNextFrame fails 0x887a0026 on a resolution change and the capture thread historically died - while 'RecreateDuplication: recovered - windows kept' was once logged with every dom0 window frozen, and the death-counter grep was measured matching only the injector's own message. Frames advancing (QGAPERF seq) across a visible change is the only acceptable liveness evidence",
+      "falsified_by": "defect-p4-scan-armed",
+      "cells": [
+        "RND-8",
+        "P4-pixels-only",
+        "RND-pixel-rules",
+        "RND-battery-preamble"
+      ]
+    },
+    {
+      "id": "p4-shell-run",
+      "kind": "action",
+      "title": "RND-3 + RND-4/SG7 collection: rnd-shell-surfaces.sh - detector self-test IN THIS SESSION (P4-7/G-7), scene reset, menu cell BEFORE toast cell (the persistent toast survives between cells), everything user-facing via run-as-user (RND-0c)",
+      "requires": [
+        "p4-rnd8"
+      ],
+      "guest": "VM",
+      "vars_in": [
+        "VM",
+        "ACCEPT_OUT"
+      ],
+      "command": "QWT_VMLOCK_HELD={VM} bash mgmt/harness/rnd-shell-surfaces.sh {VM} {ACCEPT_OUT}/rndshell 2>&1 | tee {ACCEPT_OUT}/rndshell-run.log",
+      "timeout_s": 2400,
+      "expect": {
+        "stdout_re": "(?s)(=== finished rc=[0-9] ===|FATAL)"
+      },
+      "detail": "The action itself does not grade (rc=1 means a cell failed and the NEXT steps classify it from the log; rc=2 means the harness refused - dead detector or dirty scene - and the next probe then reads INVALID-INSTRUMENT from the missing lines). The harness's own design carries the compiled rules: menus are SYNTHESIZED in this build (msg=SYNTH + msg=SYNTHPAINT onto the owner, never a separate o-r MAP - the SG9 reconciliation), the o-r-capable listing comes from qtest-geom which deletes the whole-desktop image unread (capture-class rule), and the vacuity guard counts #32768 surfaces SPECIFICALLY, because 'any ovr=1 sample' was satisfied by a leftover toast on 2026-08-31.",
+      "on_fail": {
+        "action": "HALT_PART",
+        "verdict": "INVALID-INSTRUMENT",
+        "msg": "The shell-surface harness produced no terminal line (timeout or crash). Nothing about menus or toasts was measured; the guest state is evidence."
+      },
+      "cells": [
+        "RND-3",
+        "RND-4",
+        "P4-7",
+        "RND-0c",
+        "RND-capture-class",
+        "RND-0b-rule-2"
+      ]
+    },
+    {
+      "id": "p4-rnd3-stimulus",
+      "kind": "probe",
+      "title": "RND-3 vacuity gate: the menu actually OPENED - the agent saw a #32768 menu surface (a guard any other ovr=1 surface can satisfy is not a vacuity guard)",
+      "requires": [
+        "p4-shell-run"
+      ],
+      "vars_in": [
+        "ACCEPT_OUT"
+      ],
+      "command": "grep -a 'menu surfaces seen=' {ACCEPT_OUT}/rndshell-run.log | tee {ACCEPT_OUT}/rnd3-vacuity.txt",
+      "expect": {
+        "stdout_re": "#32768 menu surfaces seen=[1-9][0-9]*"
+      },
+      "check": "p4-rnd3-stimulus-established",
+      "on_fail": {
+        "action": "HALT_PART",
+        "verdict": "INVALID-VACUOUS",
+        "msg": "The agent never saw a #32768 menu window: the menu never opened, so nothing downstream (synthesis, paint, pixels) can be graded in either direction. The classic cause is a lingering persistent toast holding focus so Alt+F never reaches Notepad - which is also why the toast cell is ordered LAST in this part. Reset the scene (a reboot discards it on an AppVM) and start a NEW campaign; do not grade this run."
+      },
+      "defect": "2026-08-31, twice: a reminder toast left over from a previous run held focus, the menu cell's Alt+F never reached Notepad, and the old vacuity guard counted the toast's 23 ovr=1 samples as 'the menu opened' - then reported a product FAIL for a menu that never existed. The repaired guard counts #32768 surfaces specifically",
+      "falsified_by": "defect-p4-vacuous-stimulus",
+      "cells": [
+        "RND-3",
+        "RND-battery-preamble"
+      ]
+    },
+    {
+      "id": "p4-rnd3-synth-crop",
+      "kind": "judgement",
+      "title": "RND-3 verdict: the menu is SYNTHESIZED onto its owner AND the pixels IN THE AGENT-REPORTED RECT changed - a whole-window hash is NOT region evidence",
+      "requires": [
+        "p4-rnd3-stimulus"
+      ],
+      "guest": "VM",
+      "judgement": {
+        "evidence": [
+          "{ACCEPT_OUT}/rndshell-run.log"
+        ],
+        "question": "IGNORE the whole-window 'owner before/with menu' hash lines - a full-window hash moves for a caret blink, a clock digit, a cursor, and it was measured moving while NOT ONE synth paint had occurred (SYNTHPAINT 0), so it can never distinguish 'the menu was composited onto the owner' from 'something, anything, changed' (RIG-CONSTRAINTS 3.3). Judge ONLY from: the SYNTH/SYNTHPAINT accounting the harness reports, and the 'synth rect (owner-relative) rx,ry WxH   crop A -> B' line, which compares only the rectangle the agent itself says it painted. Which one statement does the log support?",
+        "answers": {
+          "RECT_PAINTED_CHANGED": "a SYNTHPAINT rect was reported and its crop hashes differ (crop A -> B with A != B): the menu was painted onto the owner and is visible",
+          "SYNTH_NO_SYNTHPAINT": "SYNTH was logged but there was NO SYNTHPAINT (the harness says 'accounted but never painted' / 'SYNTH but NEVER a SYNTHPAINT') - whatever any whole-window hash did",
+          "RECT_IDENTICAL": "a SYNTHPAINT rect was reported but the crop hashes are identical before and after",
+          "RECT_NOT_IN_CAPTURE": "the harness reports the synth rect does not intersect the captured owner window",
+          "EVIDENCE_INCOMPLETE": "the SYNTH/SYNTHPAINT accounting or the crop line is missing entirely"
+        },
+        "map": {
+          "RECT_PAINTED_CHANGED": "GREEN",
+          "SYNTH_NO_SYNTHPAINT": "RED",
+          "RECT_IDENTICAL": "RED",
+          "RECT_NOT_IN_CAPTURE": "INVALID",
+          "EVIDENCE_INCOMPLETE": "INVALID"
+        }
+      },
+      "check": "p4-rnd3-synth-crop",
+      "on_fail": {
+        "action": "HALT_PART",
+        "verdict": "FAIL",
+        "msg": "The menu was accounted onto its owner but never became visible there (no SYNTHPAINT, or the painted rect's pixels did not change) - invisible to the user, whatever the bookkeeping says. The guest is EVIDENCE (G-0). Note the VM-color border on menus is stock daemon behavior and never a defect; daemon-side bordering is never weakened."
+      },
+      "defect": "2026-08-31, with FI_NOSYNTHPAINT armed at the paint chokepoint so NOT ONE synth paint occurred (SYNTHPAINT 0 in the agent log), the old whole-window-hash check still reported 'menu synthesized onto its owner AND the owner's dom0 pixels changed' - the hash had moved on a caret blink. The repaired evidence is the crop of the exact rect the agent reports painting (msg=SYNTHPAINT rx,ry,w,h, owner-relative)",
+      "falsified_by": "defect-p4-caret-hash",
+      "cells": [
+        "RND-3",
+        "P4-5",
+        "RND-pixel-rules",
+        "P4-pixels-only",
+        "RND-0b-table"
+      ]
+    },
+    {
+      "id": "p4-rnd4-toast",
+      "kind": "probe",
+      "title": "RND-4/SG7: the toast reached the user by EITHER path (own o-r window, or synth+pixel change), with the detector proven IN THIS SESSION (P4-7/G-7) - the standing guard that the chrome filter has not killed notifications",
+      "requires": [
+        "p4-rnd3-synth-crop"
+      ],
+      "vars_in": [
+        "ACCEPT_OUT"
+      ],
+      "command": "{ grep -a 'detector_fires' {ACCEPT_OUT}/rndshell-run.log ; grep -aE 'toast-reaches-dom0|toasts-survive-filter' {ACCEPT_OUT}/rndshell/verdicts.tsv ; } | tee {ACCEPT_OUT}/rnd4-toast.txt",
+      "expect": {
+        "stdout_re": "(?s)\"detector_fires\":true.*toast-reaches-dom0\\tPASS(-UNPROVEN)?.*toasts-survive-filter\\tPASS(-UNPROVEN)?",
+        "stdout_absent_re": "toast-reaches-dom0\\t(FAIL|INVALID)"
+      },
+      "check": "p4-rnd4-toast-two-path",
+      "detail": "The harness fires the toast as the INTERACTIVE USER (RND-0c: fire-toast over bare qrexec once returned {\"fired\": true} while no window existed in the guest at all), requires surface-watch's -SelfTest to report detector_fires:true in the SAME session before anything is graded (G-7: a negative from an unproven detector is INVALID-VACUOUS), and accepts either delivery path, recording which one happened. Its own red branches (toast reached dom0 by NEITHER path; surface-watch returned no data -> INVALID-INSTRUMENT, never a coerced zero) are in-code; the shared falsified_by scenario demonstrates this cell family's upstream vacuity guard - the same 2026-08-31 lingering-toast incident broke both shell cells, and the part halts at the menu vacuity gate before this row. SG7's fail-proof home is the safeguards part.",
+      "on_fail": {
+        "action": "HALT_PART",
+        "verdict": "FAIL",
+        "msg": "The toast existed guest-side but reached dom0 by neither path (or was graded FAIL/INVALID by the harness). This is the chrome-filter-eats-notifications regression class (CLAUDE.md 2A-3c). If the detector_fires line is absent the detector never proved itself and NOTHING here counts, in either direction. Guest is evidence (G-0)."
+      },
+      "defect": "a mapped-forever toast was a real bug (the ghost check exists because of it); the toast cell was first judged with qtest shot, which is structurally blind to the o-r surface a toast IS - the dom0 half of the cell was measured with a tool that could not have seen a pass; and on 2026-08-31 a leftover persistent toast made the delta check read 1->1, reporting FAIL for a toast that had in fact appeared",
+      "falsified_by": "defect-p4-vacuous-stimulus",
+      "cells": [
+        "RND-4",
+        "P4-7",
+        "RND-0b-table",
+        "RND-0c",
+        "P4-6"
+      ]
+    },
+    {
+      "id": "p4-rnd1-drag",
+      "kind": "declare",
+      "check": "p4-rnd1-drag",
+      "verdict": "BLOCKED",
+      "title": "RND-1: drag replay / wobble / debris",
+      "detail": "WHY unattended-blocked: no committed harness primitive implements the drag choreography end to end (scripted circle drag -> pos-sampler replay window -> QGAPROTO ax/ay-vs-lx/ly wobble extraction -> one mid-drag fullshot debris read); drag-harness.ps1, pos-sampler.ps1 and tools/drag-analyze.py are pieces, not a runner, and H0 forbids composing one inside a step command. Standing rules recorded, not dropped: wobble is judged from the QGAPROTO trace, NEVER cross-VM capture (capture skew invented 'tearing'); shipped bar stale-origin <=~4% and dx p95=0; replay stationary <=~1 s after release (guard for the 2026-08-12 2 s playback, fixed in 336ccc7); never judge against a window whose content is not verified rendering (a wedged white Notepad faked two regressions); and drag QUALITY is owner-PARKED - read docs/PLAN-drag-quality.md before touching any drag code."
+    },
+    {
+      "id": "p4-rnd2-scroll",
+      "kind": "declare",
+      "check": "p4-rnd2-scroll",
+      "verdict": "BLOCKED",
+      "title": "RND-2: scroll QGAPERF p50 vs canonical baseline + damage-within-window",
+      "detail": "WHY unattended-blocked: the microsecond half (QGAPERF scroll p50 compared ONLY against the recorded canonical baselines - the 4.3.10 quiet-host set, 374-436 us, never an intra-day build) and the damage-within-window invariant have no committed comparator primitive that emits a machine verdict, and H0 forbids hand-rolling one in a step command. The CPU-side scroll verdict IS taken in this part by p4-bench-canonical-suite (disjoint-ranges rule); this row records that the us-scale half stays untested rather than silently folding it into that pass."
+    },
+    {
+      "id": "p4-rnd6-occlusion",
+      "kind": "declare",
+      "check": "p4-rnd6-occlusion",
+      "verdict": "BLOCKED",
+      "title": "RND-6: occlusion clipping, both directions",
+      "detail": "WHY unattended-blocked: occlusion-test.ps1 and check-occlusion.py exist, but no committed harness drives the scene setup -> covered/uncovered captures -> BOTH-direction grading (no damage past the cover while covered = under-clip corruption; damage past it once hidden = over-clip blank), and H0 forbids composing that runner inline. Both directions carry recorded negative-control proofs (0eabb2b8a0fc, 5598a2fbda93). Z-order disagreement (OVERLAP-IN-MOTION.md) is a known open defect class needing daemon z-order (Phase 3): reproductions grade as known-issue unless measurably worse than the recorded captures."
+    },
+    {
+      "id": "p4-rnd7-chrome",
+      "kind": "declare",
+      "check": "p4-rnd7-chrome",
+      "verdict": "BLOCKED",
+      "title": "RND-7: compound chrome - exactly 1 bordered window, not 5",
+      "detail": "WHY unattended-blocked: the only committed runner for the chromerepro choreography (push exe -> launch -> settle -> guest EnumWindows count -> qtest shot count -> kill) is mgmt/harness/p4-run.sh, which unconditionally runs its own BENCH-1/BENCH-2 first - re-benchmarking the same subject this part already measured with the canonical suite would double-measure inside one part - and H0 forbids re-composing the choreography inline. Acceptance stands recorded: guest-side CHROMEREPRO_HWNDS 5, dom0 shot count exactly 1 bordered window (+1 o-r popup when open); winenum for attribute inventory when extending the predicate; real Office only in the owner's Office qube, ask first. Fail-proof home is SG8 in the safeguards part."
+    },
+    {
+      "id": "p4-rnd9-coldboot",
+      "kind": "declare",
+      "check": "p4-rnd9-coldboot",
+      "verdict": "BLOCKED",
+      "title": "RND-9 + RND-cold: safeguard-rendering interactions after a COLD BOOT",
+      "detail": "WHY unattended-blocked: RND-cold requires one reboot then RND-3/4/5 AGAIN (a live agent restart clears exactly the faults cold boot exposes), interleaved with H2 three-exit boot waits - no committed primitive implements that loop (sg1-u2-coldboot.sh covers the SG1/U2 cold-boot cells, not the RND re-run battery), and H0 forbids hand-rolling it. Standing rules recorded: cold boot + autologon must map >=1 window (the invisible-guest regression); the LogonUI/boot-fullscreen half is checked PASSIVELY only - service.gui-fullscreen is NEVER set by any command, by anyone, for any reason (absolute rule; a step that sets it is a review-fail); toasts-still-render is p4-rnd4-toast's live-session half. Fail-proofs live in SG1/SG6/SG7."
+    },
+    {
+      "id": "p4-rnd8-dom0-resize",
+      "kind": "declare",
+      "check": "p4-rnd8-dom0-resize",
+      "verdict": "BLOCKED",
+      "title": "RND-8 dom0-driven half: qtest resize <WxH>",
+      "detail": "WHY unattended-blocked: the dom0-initiated resize path (the product path a user actually drives) needs dom0 to reinstall 10-install-resize-service.sh v5 first - the installed service was measured returning 'GEOM ok=0 err=no_window' while WinScreenshot returned 2 windows for the same VM in the same second, a dom0-side tooling fault reported as a guest condition. Until dom0 reinstalls it (a dom0 action this qube cannot perform), any no_window result is uninterpretable and the half cannot run; rnd8-resolution.sh records the same BLOCKED row in its own verdicts.tsv. The guest-driven half ran above as p4-rnd8."
+    },
+    {
+      "id": "p4-scan-reenable",
+      "kind": "action",
+      "title": "G-0c pairing: re-enable QubesWindowsUpdateScan at the end of the part (a halted part deliberately leaves it disarmed - the guest is then evidence, not a subject to tidy)",
+      "requires": [
+        "p4-rnd4-toast"
+      ],
+      "vars_in": [
+        "VM"
+      ],
+      "command": "QTEST_VM={VM} timeout -k 8 120 tools/qtest run 'cmd /c schtasks /change /tn QubesWindowsUpdateScan /enable & echo REENABLED' | tr -d '\\r' | grep -a REENABLED",
+      "expect": {
+        "stdout_re": "REENABLED"
+      },
+      "on_fail": {
+        "action": "CONTINUE",
+        "msg": "The scan did not re-enable. Record it: a guest whose update path stays dead will fail later P3 cells for a reason manufactured here."
+      },
+      "cells": [
+        "G-0c",
+        "BENCH-disarm"
+      ]
+    },
+    {
+      "id": "p4-shutdown-subject",
+      "kind": "action",
+      "title": "Release the subject cleanly (H3.6: one Windows guest at a time; clean shutdown, never a kill)",
+      "requires": [
+        "p4-scan-reenable"
+      ],
+      "guest": "VM",
+      "vars_in": [
+        "VM"
+      ],
+      "command": "qvm-shutdown --wait --timeout 300 {VM} && echo SUBJECT-HALTED",
+      "timeout_s": 400,
+      "expect": {
+        "exit": 0,
+        "stdout_re": "^SUBJECT-HALTED$"
+      },
+      "on_fail": {
+        "action": "HALT_PART",
+        "verdict": "INVALID-PRECONDITION",
+        "msg": "The subject did not shut down cleanly. A guest that flips back to Transient is queued qrexec restarting it - drain per the runbook (TEMPORARY qrexec_timeout 15 -> kill -> Halted CONTINUOUSLY -> restore 6000; 15 is never left in place)."
+      }
+    }
+  ]
+}

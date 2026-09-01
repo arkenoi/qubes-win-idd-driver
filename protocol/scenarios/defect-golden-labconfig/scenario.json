@@ -1,0 +1,41 @@
+{
+ "comment": "DEFECT: the win11 stick on disk carries NO LabConfig bypasses - the checked-out autounattend-win11.xml lost its windowsPE LabConfig block (regressed template), and the builder output is byte-for-byte indistinguishable from a good build, because the builder validates placeholders and XML, not bypass content. The content probe reads BYPASSES=0 PLACEHOLDERS=0 (real output, reproduced 2026-09-01 against a win10-template stick) -> INVALID-PRECONDITION, HALT before any provisioning. Incident: 2026-08-30 win11-gold0 - without the bypasses Setup halts at 'This PC doesn't currently meet Windows 11 system requirements' and installs nothing. Trap: skipping the content check because the build step printed 'built ...' - or 'verifying' with a lowercase 7z filename, which extracts nothing and must read INVALID-INSTRUMENT, not BYPASSES=0.",
+ "steps": [
+  "golden.json"
+ ],
+ "vars": {
+  "REL": "09b643e12abc",
+  "MATRIX_WORK": "/home/user/qwt-matrix-work",
+  "GOLD10": "win10-base",
+  "FIXTURE": "win10-p46",
+  "GOLD_NEW10": "win10-st2g",
+  "GOLD_NEW11": "win11-st0p",
+  "ISO_LOOP10": "loop0",
+  "ISO_LOOP11": "loop3",
+  "STICK_LOOP10": "loop9",
+  "STICK_LOOP11": "loop17",
+  "R3_EVID": "/home/user/qwt-matrix-work/r3-pristine-win11-st0p"
+ },
+ "results": {
+  "gp-roster": {
+   "exit": 0,
+   "stdout": "win10-base       sealed 2026-08-30T10:27:32Z  primed pristine Win10 22H2 base (build 19045.2965): no QWT, testsigning OFF, QubesPrime hook installed and PROVEN to fire\nwin10-gold0      sealed 2026-08-30T09:13:45Z  re-sealed 2026-08-30 after fixing the dead revision reader\nwin10-goldr      sealed 2026-08-30T09:13:47Z  re-sealed 2026-08-30 after fixing the dead revision reader\nwin11-base       sealed 2026-08-30T11:58:20Z  primed pristine Win11 24H2 Enterprise Evaluation base (build 26100.240331-1435): no QWT, testsigning OFF, QubesPrime hook installed and PROVEN to fire\nwin11-gold0      sealed 2026-08-30T09:13:50Z  re-sealed 2026-08-30 after fixing the dead revision reader\nwin11-goldr      sealed 2026-08-30T09:13:53Z  re-sealed 2026-08-30 after fixing the dead revision reader"
+  },
+  "gp-verify-base": {
+   "exit": 0,
+   "stdout": "VERIFIED win10-base matches its seal (sealed 2026-08-30T10:27:32Z)"
+  },
+  "gp-fixture": {
+   "exit": 0,
+   "stdout": "FIXTURE win10-p46: built 2026-08-30T18:51:26Z from win10-base (sealed 2026-08-30T10:27:32Z), job=ours\n  base seal re-verified now - provenance intact"
+  },
+  "st0-stick-build": {
+   "exit": 0,
+   "stdout": "locale: en-US (input 0409:00000409), image: Windows 11 Enterprise Evaluation\nanswer file: all placeholders substituted, XML well-formed\n-rwxr-xr-x 1 user user 4711 Sep  1 17:02 Autounattend.xml\nbuilt /home/user/win-iso/answer-pristine-win11.img (96M)\nattach it before first boot (reprovision-usb.sh does this itself):\n  qvm-features <vm> qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99'"
+  },
+  "st0-stick-verify": {
+   "exit": 0,
+   "stdout": "BYPASSES=0 PLACEHOLDERS=0"
+  }
+ }
+}

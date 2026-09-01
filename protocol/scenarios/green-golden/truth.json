@@ -1,0 +1,46 @@
+{
+ "truth": {
+  "st0-screen": "DESKTOP_SETTLED"
+ },
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "golden-notprimed-failproof",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "golden-roster-live",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-entry-verify",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-fixture-provenance",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-stick11-bypasses",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-pristine-screen",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "gate0-payload",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-guest-attest",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-reset-trap-restored",
+    "verdict": "PASS(-UNPROVEN)?"
+   }
+  ]
+ }
+}

@@ -1,0 +1,54 @@
+{
+ "truth": {
+  "p2-net2-zero-reboot": "SAME_BOOT_BOUND"
+ },
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "p2-net0-template-netvm",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p2-net1-latch-applier",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p2-net2-zero-reboot-attach",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p2-net2-dialog-watch",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p2-net3-transfer-rx",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p2-net6-firstvif-eligible",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p2-net6-firstvif-dialog",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p2-net4-perboot-soak",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p2-net5-reconciler",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p2-net7-standalone-attach",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p2-net8-throughput",
+    "verdict": "BLOCKED"
+   }
+  ]
+ }
+}

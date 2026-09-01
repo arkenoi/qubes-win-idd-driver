@@ -1,0 +1,53 @@
+{
+ "comment": "DEFECT: a vif-veteran guest is presented as the first-vif subject - the XENVIF enum holds VEN_XP0001&DEV_NET, so the PV-network-class install has already happened and no reboot re-arms it. The eligibility probe must go INVALID-VACUOUS ('first-vif OK after two boots' is on the vacuity ledger). Trap: 'cleaning' the devnode and retrying, or disqualifying on the XENBUS DEV_VIF veto-bypass key, which the latch SEEDS on every guest (2026-08-30 correction: the XENVIF side is the discriminator).",
+ "steps": [
+  "p2-network.json"
+ ],
+ "vars": {
+  "APPVM": "win10-app",
+  "CHURN": "win10-c1",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260901-2/p2-network"
+ },
+ "results": {
+  "p2-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-2/p2-network"
+  },
+  "p2-template-netvm": {
+   "exit": 0,
+   "stdout": "NETVM-OK"
+  },
+  "p2-boot-appvm": {
+   "exit": 0,
+   "stdout": "  p2-boot-appvm: session up at t+142s"
+  },
+  "p2-latch-presence": {
+   "exit": 0,
+   "stdout": "MARKJSON\n{\"nics\":1,\"disks\":1,\"vif_enum_key\":true,\"task_main\":true,\"task_rearm\":true,\"payload_sha256\":\"c98dfc40249b111b9afe469a9f8f849a77f0a7793b3cfbe09cdb72eb9e5bb1bb\",\"marker\":false,\"boot\":\"2026-09-01T08:41:27.5031250+00:00\",\"log_tail\":\"08:43:10 --- run start (boot=2026-09-01T08:41:27.5031250+00:00) // 08:43:10 latch re-armed NICS=1 // 08:43:11 xenbus_monitor enforced off (start=disabled, AutoReboot=0)\"}\n\"pvnic_applier\":{\"pass\":true,\"evidence\":{\"offline\":true,\"failure_marker_present\":false}}"
+  },
+  "p2-net2-attach": {
+   "exit": 0,
+   "stdout": "NETVM_BEFORE=[]\nNETVM_AFTER=[fw-net]"
+  },
+  "p2-net2-collect": {
+   "exit": 0,
+   "stdout": "=== HEALTH === {\"ok\":true,\"checks\":{\"agent_binary_hash\":{\"pass\":true,\"evidence\":{\"installed\":\"E5D125CC8A2AA8FA5520609FEE6B0160F692EFA846FF44FBFF30B7E5AB851A0E\",\"manifest\":\"e5d125cc8a2aa8fa5520609fee6b0160f692efa846ff44fbff30b7e5ab851a0e\"}},\"agent_process\":{\"pass\":true,\"evidence\":{\"pid\":4188}},\"qubes_services_running\":{\"pass\":true,\"evidence\":[{\"Name\":\"QdbDaemon\",\"State\":\"Running\",\"StartMode\":\"Auto\"},{\"Name\":\"QrexecAgent\",\"State\":\"Running\",\"StartMode\":\"Auto\"},{\"Name\":\"QubesGuiWatchdog\",\"State\":\"Running\",\"StartMode\":\"Auto\"},{\"Name\":\"QwtngNetSetup\",\"State\":\"Running\",\"StartMode\":\"Auto\"}]},\"idd_device_bound\":{\"pass\":true,\"evidence\":{\"instance\":\"ROOT\\\\DISPLAY\\\\0000\",\"status\":\"OK\",\"cm_error\":0}},\"pv_drivers_bound\":{\"pass\":true,\"evidence\":{\"emulated_nics_still_present\":[],\"started\":{\"XENNET\":true,\"XENVIF\":true,\"XENBUS\":true,\"XENIFACE\":true},\"pv_nics\":[\"Xen PV Network Device #0\"]}},\"network_carries_traffic\":{\"pass\":true,\"evidence\":{\"dns_resolves\":true,\"ping_gateway\":false,\"ip\":\"10.137.0.72\",\"gateway\":\"10.138.21.72\",\"tcp_dns_53\":true,\"dns_server\":\"10.139.1.1\",\"rx_bytes\":379307,\"tx_bytes\":197939,\"carries_traffic\":true}},\"pvnic_applier\":{\"pass\":true,\"evidence\":{\"failure_marker_present\":false,\"pv_adapter_ips\":[\"10.137.0.72\"],\"default_route_on_pv\":true,\"apipa_present\":[]}},\"clipboard_works\":{\"pass\":true,\"evidence\":{\"qubes_services_running\":1,\"windows_clipboard_roundtrip\":true}}},\"resolution\":\"1280x800\",\"failed\":[],\"not_applicable\":[],\"asserted_all\":true}\nMARKJSON\n{\"nics\":1,\"disks\":1,\"vif_enum_key\":true,\"task_main\":true,\"task_rearm\":true,\"payload_sha256\":\"c98dfc40249b111b9afe469a9f8f849a77f0a7793b3cfbe09cdb72eb9e5bb1bb\",\"marker\":false,\"boot\":\"2026-09-01T08:41:27.5031250+00:00\",\"log_tail\":\"08:43:11 xenbus_monitor enforced off // 08:47:21 vif appeared, applier run // 08:47:24 SUCCESS ip=10.137.0.72 gw=10.138.21.72 route-on-pv\"}"
+  },
+  "p2-net3-transfer": {
+   "exit": 0,
+   "stdout": "settling 90 s before grading (measured inversion at +90 s)\n=== NETPROOF ===\n{\"pv_nic\":[\"Ethernet [Xen PV Network Device #0] Up\"],\"loopback_present\":false,\"emulated_left\":[],\"bytes_requested\":25000000,\"bytes_received\":25000000,\"seconds\":1.3,\"pv_rx_before\":9463443,\"pv_rx_after\":38517706,\"pv_rx_delta\":29054263,\"transfer_ok\":true,\"crossed_pv_nic\":true,\"ok\":true,\"reason\":\"bytes moved, and the PV adapter's own counter accounts for them\"}"
+  },
+  "p2-shutdown-appvm": {
+   "exit": 0,
+   "stdout": "APPVM-HALTED"
+  },
+  "p2-boot-churn": {
+   "exit": 0,
+   "stdout": "  p2-boot-churn: session up at t+188s"
+  },
+  "p2-net6-firstvif-virgin": {
+   "exit": 0,
+   "stdout": "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Enum\\XENVIF\\VEN_XP0001&DEV_NET&REV_09000000\\_\n    DeviceDesc    REG_SZ    @oem8.inf,%xennetdevice.devicedesc%;XP0001 XENVIF NET\n    Service       REG_SZ    xennet\n    ClassGUID     REG_SZ    {4d36e972-e325-11ce-bfc1-08002be10318}\n    Driver        REG_SZ    {4d36e972-e325-11ce-bfc1-08002be10318}\\0007\n\nXENVIF_QUERY_DONE"
+  }
+ }
+}

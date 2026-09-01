@@ -1,0 +1,30 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "st0-stick-verify",
+  "ledger": [
+   {
+    "check": "golden-roster-live",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-entry-verify",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-fixture-provenance",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "golden-stick11-bypasses",
+    "verdict": "INVALID-PRECONDITION"
+   }
+  ],
+  "ledger_absent": [
+   "golden-pristine-screen",
+   "gate0-payload",
+   "golden-guest-attest"
+  ]
+ }
+}

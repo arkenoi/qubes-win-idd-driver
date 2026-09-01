@@ -1,0 +1,46 @@
+{
+ "comment": "DEFECT: the 2026-08-31 ovr=1 incident (FaultGateOff=0x3). The shot half is CLEAN - SHOT_MAPPED 0 - because qtest shot is structurally blind to override-redirect windows, but the agent's own log holds 'SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x3601e6,ovr=1,...,w=1920,h=1080': a full-screen o-r surface offered to dom0, the exact takeover the design forbids. The judgement must answer MAP_IN_AGENT_LOG -> FAIL. Trap: answering NOMAP_BOTH_WITNESSES because the shot shows nothing - the shot-only check reported 'not mapped' in the real incident and would have passed the leaking build.",
+ "steps": [
+  "p4-rendering.json"
+ ],
+ "vars": {
+  "VM": "win10-p47",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260901-2/p4-rendering",
+  "STOCK_AGENT": "/home/user/qwt-accept/AP-20260901-2/dl/bench-pair/agent-stock.exe",
+  "OURS_AGENT": "/home/user/qwt-accept/AP-20260901-2/dl/bench-pair/agent-ours.exe"
+ },
+ "results": {
+  "p4-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-2/p4-rendering"
+  },
+  "p4-boot-subject": {
+   "exit": 0,
+   "stdout": "  p4-boot-subject: session up at t+151s"
+  },
+  "p4-scan-disarm": {
+   "exit": 0,
+   "stdout": "SCAN_BEFORE state=Ready nextrun=09/01/2026 6:41:12 PM\nSCAN_AFTER state=Disabled\nRELAY_AFTER 0\nDISARMED True"
+  },
+  "p4-trace-feature": {
+   "exit": 0,
+   "stdout": "TRACE-FEATURE-SET"
+  },
+  "p4-subject-identity": {
+   "exit": 0,
+   "stdout": "\"agent_binary_hash\":{\"pass\":true,\"evidence\":{\"installed\":\"E5D125CC8A2AA8FA5520609FEE6B0160F692EFA846FF44FBFF30B7E5AB851A0E\",\"manifest\":\"e5d125cc8a2aa8fa5520609fee6b0160f692efa846ff44fbff30b7e5ab851a0e\"}}"
+  },
+  "p4-bench-suite": {
+   "exit": 0,
+   "stdout": "   settle after each swap: 45s (floor 30)\n== stock-vs-ours on win10-p47, 3 rounds, out=/home/user/qubes-win-idd-driver/instrumentation/bench-stock-vs-ours-20260901-182140\n   stock=464772F1630E47BF  ours=5CEF96155147CDC6\n   interactive session present\n-- r1-stock\n   running 464772F1630E47BF\n    {'idle-pre': 3.254, 'drag': 28.714, 'idle-mid1': 0.0, 'scroll': 45.201, 'idle-mid2': 7.822, 'type': 23.87, 'idle-post': 4.23} valid= True scene ok\n-- r1-ours\n   running 5CEF96155147CDC6\n    {'idle-pre': 0.977, 'drag': 14.102, 'idle-mid1': 0.412, 'scroll': 1.707, 'idle-mid2': 0.655, 'type': 3.1, 'idle-post': 0.33} valid= True scene ok\n-- r2-ours\n   running 5CEF96155147CDC6\n    {'idle-pre': 0.912, 'drag': 13.900, 'idle-mid1': 0.398, 'scroll': 1.620, 'idle-mid2': 0.600, 'type': 2.000, 'idle-post': 0.31} valid= True scene ok\n-- r2-stock\n   running 464772F1630E47BF\n    {'idle-pre': 3.412, 'drag': 30.100, 'idle-mid1': 0.0, 'scroll': 44.900, 'idle-mid2': 6.900, 'type': 23.400, 'idle-post': 4.10} valid= True scene ok\n-- r3-stock\n   running 464772F1630E47BF\n    {'idle-pre': 3.188, 'drag': 32.300, 'idle-mid1': 0.0, 'scroll': 47.200, 'idle-mid2': 8.400, 'type': 26.100, 'idle-post': 5.05} valid= True scene ok\n-- r3-ours\n   running 5CEF96155147CDC6\n    {'idle-pre': 1.033, 'drag': 16.800, 'idle-mid1': 0.430, 'scroll': 3.600, 'idle-mid2': 0.710, 'type': 3.723, 'idle-post': 0.42} valid= True scene ok\n== summary\nrepetitions: 6 total, 6 valid, 0 INVALID\n\nbinaries actually measured (from the guest, per repetition):\n  ours  5CEF96155147CDC6\n  stock 464772F1630E47BF\n\nphase                 stock (n)           ours (n)      delta  verdict\nidle-pre            3.254 (3)        0.977 (3)     -70.0%  REAL - ranges disjoint, ours BETTER\ndrag               28.714 (3)       14.102 (3)     -50.9%  REAL - ranges disjoint, ours BETTER\nidle-mid1           0.000 (3)        0.412 (3)            one side read 0.000 in every repetition - below the CPU counter's resolution, NO VERDICT\nscroll             45.201 (3)        1.707 (3)     -96.2%  REAL - ranges disjoint, ours BETTER\nidle-mid2           7.822 (3)        0.655 (3)     -91.6%  REAL - ranges disjoint, ours BETTER\ntype               23.870 (3)        3.100 (3)     -87.0%  REAL - ranges disjoint, ours BETTER\nidle-post           4.230 (3)        0.330 (3)     -92.2%  REAL - ranges disjoint, ours BETTER\n\nper-repetition values (% of one core):\n  scroll       stock r1=45.201  r2=44.900  r3=47.200\n  scroll       ours  r1=1.707  r2=1.620  r3=3.600\nraw data: /home/user/qubes-win-idd-driver/instrumentation/bench-stock-vs-ours-20260901-182140"
+  },
+  "p4-bench-raws": {
+   "exit": 0,
+   "stdout": "RAWS-COMMITTED"
+  },
+  "p4-rnd5-collect": {
+   "exit": 0,
+   "stdout": "SCENE-CLEARED\nSHOT_MAPPED 0\nDISCRIM_HITS 1\n  D 17:40:58.301 gui-agent[4188]: ShouldAcceptWindow: hwnd=0x2050c Start surface not presented in seamless mode (SeamlessStart=0)\nSHELL_SURFACES 1\n  S class=Windows.UI.Core.CoreWindow proc=StartMenuExperienceHost title=\"Start\"\nSTARTPROC 1\nOVRMAP_TOTAL 1\nOVRMAP_BIG 1\n  M 17:41:22.503 gui-agent[4188]: SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x3601e6,ovr=1,x=0,y=0,w=1920,h=1080,parent=0x0"
+  }
+ }
+}

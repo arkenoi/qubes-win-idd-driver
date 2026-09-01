@@ -1,0 +1,29 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "gp-verify-base",
+  "ledger": [
+   {
+    "check": "golden-notprimed-failproof",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "golden-roster-live",
+    "verdict": "INVALID-PRECONDITION"
+   },
+   {
+    "check": "golden-entry-verify",
+    "verdict": "INVALID-CONTAMINATED"
+   }
+  ],
+  "ledger_absent": [
+   "golden-fixture-provenance",
+   "golden-stick11-bypasses",
+   "golden-pristine-screen",
+   "gate0-payload",
+   "golden-guest-attest",
+   "golden-reset-trap-restored"
+  ]
+ }
+}

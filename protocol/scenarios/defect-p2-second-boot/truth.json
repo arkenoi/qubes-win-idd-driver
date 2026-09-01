@@ -1,0 +1,28 @@
+{
+ "truth": {
+  "p2-net2-zero-reboot": "SECOND_BOOT"
+ },
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "p2-net1-latch-applier",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p2-net2-zero-reboot-attach",
+    "verdict": "FAIL"
+   }
+  ],
+  "ledger_absent": [
+   "p2-net3-transfer-rx",
+   "p2-net6-firstvif-eligible",
+   "p2-net2-dialog-watch",
+   "p2-net6-firstvif-dialog",
+   "p2-net4-perboot-soak",
+   "p2-net5-reconciler",
+   "p2-net7-standalone-attach",
+   "p2-net8-throughput"
+  ]
+ }
+}

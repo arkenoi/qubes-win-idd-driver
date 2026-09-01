@@ -1,0 +1,30 @@
+{
+ "truth": {
+  "p2-net2-zero-reboot": "SAME_BOOT_BOUND"
+ },
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "p2-net2-zero-reboot-attach",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p2-net2-dialog-watch",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p2-net3-transfer-rx",
+    "verdict": "FAIL"
+   }
+  ],
+  "ledger_absent": [
+   "p2-net6-firstvif-eligible",
+   "p2-net6-firstvif-dialog",
+   "p2-net4-perboot-soak",
+   "p2-net5-reconciler",
+   "p2-net7-standalone-attach",
+   "p2-net8-throughput"
+  ]
+ }
+}

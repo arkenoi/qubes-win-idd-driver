@@ -1,0 +1,90 @@
+{
+ "comment": "DEFECT (D-0's origin, measured 2026-08-31 twice): with 0x14 (START|NOCARD) armed the harness sees NO windows at all - its own control included - so no verdict it could produce would mean anything, and a 28-minute prove cycle through it would return INVALID for a reason visible seconds after arming. The preflight gate must refuse with INVALID-INSTRUMENT (do not spend the 28 minutes; the bit needs a control it cannot affect or a different harness), custody must block the prove cycle, and the restore lane must still run and prove the release running.",
+ "steps": [
+  "p5-safeguards.json"
+ ],
+ "vars": {
+  "SA": "win10-sa1",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260901-5/p5-safeguards",
+  "RELEASE_DIR": "/home/user/qwt-accept/AP-20260901-5/dl/qwt-full-package",
+  "RELEASE_SHA": "9C4F2A8B0D3E6F17",
+  "FI_DIR": "/home/user/qwt-accept/AP-20260901-5/dl/qwt-fault-package",
+  "FI_SHA": "5E1D0C9A7B42F380",
+  "HOSTW": "5120",
+  "HOSTH": "1440"
+ },
+ "results": {
+  "p5-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-5/p5-safeguards"
+  },
+  "p5-sg0-feature-gate": {
+   "exit": 0,
+   "stdout": "FEATURE-ABSENT"
+  },
+  "p5-release-artefact": {
+   "exit": 0,
+   "stdout": "RELEASE-ARTEFACT sha16=9C4F2A8B0D3E6F17 declared=9C4F2A8B0D3E6F17"
+  },
+  "p5-boot-sa": {
+   "exit": 0,
+   "stdout": "  p5-boot-sa: session up at t+187s"
+  },
+  "p5-hash-release": {
+   "exit": 0,
+   "stdout": "=== RESULT ===\n{\n    \"file_path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n    \"file_sha256\":  \"9C4F2A8B0D3E6F17\",\n    \"file_written\":  \"08:36:12\",\n    \"instances\":  1,\n    \"procs\":  [\n                  {\n                      \"pid\":  4812,\n                      \"start\":  \"18:37:44\",\n                      \"path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n                      \"image_sha256\":  \"9C4F2A8B0D3E6F17\",\n                      \"started_after_file_write\":  true\n                  }\n              ],\n    \"watchdog\":  \"Running\",\n    \"orig_present\":  false,\n    \"newest_log\":  \"gui-agent-20260901-183744.log\",\n    \"log_has_blockwin\":  true,\n    \"log_has_shellpolicy\":  true\n}\nRUNNING-IMAGE instances=1 image_matches_intended=1 started_after_write=1"
+  },
+  "p5-loglevel5": {
+   "exit": 0,
+   "stdout": "LOGLEVEL global=5 module=5"
+  },
+  "p5-suite-run": {
+   "exit": 0,
+   "stdout": "18:44:02 p5[win10-sa1]: === P5-2: disarm QubesWindowsUpdateScan (same gate as P4-1) ===\n  SCAN_BEFORE state=Ready nextrun=09/01/2026 8:41:12 PM\n  SCAN_AFTER state=Disabled\n  RELAY_AFTER 0\n  DISARMED True\n18:44:41 p5[win10-sa1]: === P5-3: containment (host 5120x1440) ===\n  {\"ok\":true,\"device\":\"\\\\.\\DISPLAY2\",\"was\":\"5120x1440\",\"wanted\":\"1600x900\",\"readback\":\"1600x900\",\"instrument_validated\":true}\n18:45:19 p5[win10-sa1]:   guest screen now: 1600x900\n18:45:52 p5[win10-sa1]:   agent believes: AGENTSCREEN 1600x900\n18:45:52 p5[win10-sa1]:   containment PROVEN: guest 1600x900, agent 1600x900, host 5120x1440\n18:46:40 p5[win10-sa1]: === control UP: dom0 sees 1 window(s), control=744x501 - capture path proven alive ===\n18:46:40 p5[win10-sa1]: === SG4: -Mode overrideredirect  (expect: nomap) ===\n18:48:35 p5[win10-sa1]:   probe: {\"mode\":\"overrideredirect\",\"hwnd\":\"0x2f04a2\",\"style\":\"0x96000000\",\"exstyle\":\"0x8\",\"rect\":\"0,0 1600x900\",\"covers_screen\":true,\"visible\":true}\n18:49:52 p5[win10-sa1]:   probe 1600x900 mapped=no  control_seen=yes  agent_map=0  dom0 dims: 744x501 744x501 744x501 744x501 744x501 744x501  'unconditionally denied, feature or not' hits=1\n18:49:52 p5[win10-sa1]:   -> PASS-UNPROVEN: no 1600x900 window in dom0, AND the agent logged the deny\n18:50:11 p5[win10-sa1]: === SG2: -Mode borderless  (expect: nomap) ===\n18:51:58 p5[win10-sa1]:   probe: {\"mode\":\"borderless\",\"hwnd\":\"0x3a0188\",\"style\":\"0x96080000\",\"exstyle\":\"0x40000\",\"rect\":\"0,0 1600x900\",\"covers_screen\":true,\"visible\":true}\n18:53:14 p5[win10-sa1]:   probe 1600x900 mapped=no  control_seen=yes  agent_map=0  dom0 dims: 744x501 744x501 744x501 744x501 744x501 744x501  'hidden (set service.gui-fullscreen to allow)' hits=1\n18:53:14 p5[win10-sa1]:   -> PASS-UNPROVEN: no 1600x900 window in dom0, AND the agent logged the deny\n18:53:31 p5[win10-sa1]: === SG3: -Mode captioned  (expect: map) ===\n18:55:02 p5[win10-sa1]:   probe: {\"mode\":\"captioned\",\"hwnd\":\"0x1c06e4\",\"style\":\"0x96cf0000\",\"exstyle\":\"0x40100\",\"rect\":\"0,0 1600x900\",\"covers_screen\":true,\"visible\":true}\n18:56:18 p5[win10-sa1]:   probe 1600x900 mapped=yes  control_seen=yes  agent_map=1  dom0 dims: 744x501,1586x893 744x501,1586x893 744x501,1586x893 744x501,1586x893 744x501,1586x893 744x501,1586x893  'not-used' hits=0\n18:56:18 p5[win10-sa1]:   -> PASS-UNPROVEN: the captioned screen-sized window mapped, as the README requires\n18:56:35 p5[win10-sa1]: === SG9: Start is NOT presented in seamless (acceptance is the OPPOSITE of 'Start maps') ===\n18:57:22 p5[win10-sa1]:   dom0 windows=1 (control 1) [744x501]  deny hits=1\n18:57:22 p5[win10-sa1]:   -> PASS-UNPROVEN: no Start window in dom0, and the agent logged the deny\n18:57:24 p5[win10-sa1]: === P5 finished rc=0 ===\n18:57:24 p5[win10-sa1]: ATTENDED-PENDING (never run unattended - they need service.gui-fullscreen, which is banned):\n18:57:24 p5[win10-sa1]:   SG1 fail-proof (diag build, phase test removed), SG2 feature-ON arm, SG4 feature-ON arm,\n18:57:24 p5[win10-sa1]:   SG7 fail-proof (naive cloak filter diag build), SG10 both-bits arm\n18:57:26 p5[win10-sa1]: === re-enabling QubesWindowsUpdateScan ===\n  REENABLED\nP5RC=0"
+  },
+  "p5-sg6-failproof": {
+   "exit": 0,
+   "stdout": "19:02:04 sg6[win10-sa1]: === 1. CONTROL: an armed guest must have a SESSION and map a window ===\n19:06:31 sg6[win10-sa1]:   control: sessions=1 windows=1 (capture_ok=yes)\n19:06:40 sg6[win10-sa1]: === 2. PLANT THE DEFECT: AutoAdminLogon=0 AND remove the re-assert task ===\n    SUCCESS: The operation completed successfully.\n    SUCCESS: The scheduled task \"QubesAutologonGuard\" was successfully deleted.\n19:06:58 sg6[win10-sa1]:   planted:\n    sessions=1 explorer=1 logonui=0 autologon=0 guard=no\n19:06:58 sg6[win10-sa1]: === 3. COLD BOOT (SG0.7 - never an agent restart) ===\n19:12:44 sg6[win10-sa1]:   defect state: sessions=0 explorer=0 logonui=1 autologon=0 windows=0 (capture_ok=no)\n19:12:47 sg6[win10-sa1]: === 4. VERDICT ===\n19:12:47 sg6[win10-sa1]: RED AS REQUIRED: qrexec answers while NOBODY IS LOGGED ON (sessions=0, explorer=0,\n19:12:47 sg6[win10-sa1]:   logonui=1). The invisible-guest condition, asserted positively. Windows mapped: 0.\n19:12:47 sg6[win10-sa1]:   SG6's checker is seen-to-fail; its PASS may be cited as PASS (H5), not PASS-UNPROVEN.\n19:12:50 sg6[win10-sa1]: === 5. RE-ARM (inline - there is no session to push a file into) ===\n    SUCCESS: The operation completed successfully.\n    ok autologon re-asserted (LSA secret present, AutoLogonCount absent)\n    GUARD_REGISTER rc=0 SUCCESS: The scheduled task \"QubesAutologonGuard\" has successfully been created.\n19:13:22 sg6[win10-sa1]:   re-armed:\n    sessions=0 explorer=0 logonui=1 autologon=1 guard=yes\n19:13:22 sg6[win10-sa1]: === 6. CONFIRM THE SUBJECT COMES BACK (never leave it at a sign-in screen) ===\n19:19:03 sg6[win10-sa1]:   after re-arm: sessions=1 windows=1\nSG6RC=0"
+  },
+  "p5-fi-artefact": {
+   "exit": 0,
+   "stdout": "FI-ARTEFACT sha16=5E1D0C9A7B42F380 declared=5E1D0C9A7B42F380 fault_value_names=10"
+  },
+  "p5-swap-diag": {
+   "exit": 0,
+   "stdout": "=== RESULT === {\"host\":\"WIN10-SA1\",\"new_size\":872448,\"old_size\":872448,\"old_hash16\":\"9C4F2A8B0D3E6F17\",\"watchdog_stopped\":true,\"agent_running_after_stop\":false,\"backup_made\":true,\"dst_size\":872448,\"dst_hash16\":\"5E1D0C9A7B42F380\",\"swapped\":true,\"watchdog_started\":true,\"agent_wait_secs\":27,\"agent_running\":true,\"agent_pid\":\"4812\",\"running_image_size\":872448,\"ok\":true}"
+  },
+  "p5-hash-diag": {
+   "exit": 0,
+   "stdout": "=== RESULT ===\n{\n    \"file_path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n    \"file_sha256\":  \"5E1D0C9A7B42F380\",\n    \"file_written\":  \"19:30:18\",\n    \"instances\":  1,\n    \"procs\":  [\n                  {\n                      \"pid\":  6120,\n                      \"start\":  \"19:31:02\",\n                      \"path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n                      \"image_sha256\":  \"5E1D0C9A7B42F380\",\n                      \"started_after_file_write\":  true\n                  }\n              ],\n    \"watchdog\":  \"Running\",\n    \"orig_present\":  true,\n    \"newest_log\":  \"gui-agent-20260901-193102.log\",\n    \"log_has_blockwin\":  true,\n    \"log_has_shellpolicy\":  true\n}\nRUNNING-IMAGE instances=1 image_matches_intended=1 started_after_write=1"
+  },
+  "p5-recontain": {
+   "exit": 0,
+   "stdout": "=== RESULT ===\n{\n    \"ok\":  true,\n    \"device\":  \"\\\\\\\\.\\\\DISPLAY2\",\n    \"was\":  \"5120x1440\",\n    \"wanted\":  \"1600x900\",\n    \"readback\":  \"1600x900\",\n    \"instrument_validated\":  true\n}"
+  },
+  "p5-recontain-agent": {
+   "exit": 0,
+   "stdout": "RECONTAIN guest=1600x900 inside=yes agent_agrees=yes agent_line=RESAPPLIED 1600x900 lastapplied_line=none"
+  },
+  "p5-restore-release": {
+   "exit": 0,
+   "stdout": "=== RESULT === {\"host\":\"WIN10-SA1\",\"new_size\":872448,\"old_size\":872448,\"old_hash16\":\"9C4F2A8B0D3E6F17\",\"watchdog_stopped\":true,\"agent_running_after_stop\":false,\"backup_made\":true,\"dst_size\":872448,\"dst_hash16\":\"9C4F2A8B0D3E6F17\",\"swapped\":true,\"watchdog_started\":true,\"agent_wait_secs\":27,\"agent_running\":true,\"agent_pid\":\"4812\",\"running_image_size\":872448,\"ok\":true}\nRESTORED-FILE-IS-RELEASE"
+  },
+  "p5-hash-restored": {
+   "exit": 0,
+   "stdout": "=== RESULT ===\n{\n    \"file_path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n    \"file_sha256\":  \"9C4F2A8B0D3E6F17\",\n    \"file_written\":  \"21:46:30\",\n    \"instances\":  1,\n    \"procs\":  [\n                  {\n                      \"pid\":  7204,\n                      \"start\":  \"21:47:12\",\n                      \"path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n                      \"image_sha256\":  \"9C4F2A8B0D3E6F17\",\n                      \"started_after_file_write\":  true\n                  }\n              ],\n    \"watchdog\":  \"Running\",\n    \"orig_present\":  true,\n    \"newest_log\":  \"gui-agent-20260901-214712.log\",\n    \"log_has_blockwin\":  true,\n    \"log_has_shellpolicy\":  true\n}\nRUNNING-IMAGE instances=1 image_matches_intended=1 started_after_write=1"
+  },
+  "p5-loglevel-restore": {
+   "exit": 0,
+   "stdout": "LOGLEVEL global=3 module=3"
+  },
+  "p5-shutdown-sa": {
+   "exit": 0,
+   "stdout": "SA-HALTED"
+  },
+  "p5-preflight": {
+   "exit": 0,
+   "stdout": "19:24:02 preflight[win10-sa1 0x3]: === control WITHOUT the bit (this is the reference) ===\n  GATEOFF 0\n19:25:11 preflight[win10-sa1 0x3]:   dom0: 1|744x501\n19:25:11 preflight[win10-sa1 0x3]: === control WITH 0x3 armed ===\n  GATEOFF 3\n19:26:24 preflight[win10-sa1 0x3]:   dom0: 1|744x501\n19:26:24 preflight[win10-sa1 0x3]: === restoring (bit cleared, notepad killed) ===\n19:27:31 preflight[win10-sa1 0x3]: -> CLEAR TO RUN: the control survives the bit (1 window(s) before, 1 after), so a\n19:27:31 preflight[win10-sa1 0x3]:    'nothing mapped' verdict from the armed run will mean something.\n19:24:02 preflight[win10-sa1 0x14]: === control WITHOUT the bit (this is the reference) ===\n  GATEOFF 0\n19:25:11 preflight[win10-sa1 0x14]:   dom0: 1|744x501\n19:25:11 preflight[win10-sa1 0x14]: === control WITH 0x14 armed ===\n  GATEOFF 20\n19:26:24 preflight[win10-sa1 0x14]:   dom0: 0|\n19:26:24 preflight[win10-sa1 0x14]: === restoring (bit cleared, notepad killed) ===\n19:27:31 preflight[win10-sa1 0x14]: -> DO NOT SPEND THE 28 MINUTES. With 0x14 armed the harness sees NO windows at all,\n19:27:31 preflight[win10-sa1 0x14]:    its control included. Any verdict from that state would be INVALID-INSTRUMENT, exactly\n19:27:31 preflight[win10-sa1 0x14]:    as START|NOCARD and FI_DROP_CAPTIONED both were. This bit needs a control the bit\n19:27:31 preflight[win10-sa1 0x14]:    cannot affect, or a different harness.\n19:24:02 preflight[win10-sa1 0x20]: === control WITHOUT the bit (this is the reference) ===\n  GATEOFF 0\n19:25:11 preflight[win10-sa1 0x20]:   dom0: 1|744x501\n19:25:11 preflight[win10-sa1 0x20]: === control WITH 0x20 armed ===\n  GATEOFF 32\n19:26:24 preflight[win10-sa1 0x20]:   dom0: 1|744x501\n19:26:24 preflight[win10-sa1 0x20]: === restoring (bit cleared, notepad killed) ===\n19:27:31 preflight[win10-sa1 0x20]: -> CLEAR TO RUN: the control survives the bit (1 window(s) before, 1 after), so a\n19:27:31 preflight[win10-sa1 0x20]:    'nothing mapped' verdict from the armed run will mean something."
+  }
+ }
+}

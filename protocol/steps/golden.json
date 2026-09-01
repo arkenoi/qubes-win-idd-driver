@@ -1,0 +1,749 @@
+{
+ "part": "golden",
+ "comment": "Entry-image custody and provisioning: ACCEPTANCE-PROTOCOL.md 0.4-0.7d compiled to data. Custody of the standing roster (list/verify/fixture), then the 0.6c one-pass golden builds - the ST0.11 pristine park (stick verified for the five LabConfig bypasses, PRISTINE=1 R3 whose ONLY good exit is 3 = NEEDS-VISUAL-CONFIRMATION, closed-answer screen read) and the ST2G.10 payload golden (payload re-gated against the pinned release, payload line asserted, install log read before seal), with the R3 reset trap disarmed and READ BACK before any seal. Context carried from the records: 0.6c exists because 'rebuild the golden' had no procedure and 'clone ST0 and install into it' has no execution channel (RETIRED); fixture construction via the primer (0.7c) belongs to the prime-run/cell part - this part verifies receipts and declares the OWED not-primed fail-proof.",
+ "steps": [
+  {
+   "id": "gd-notprimed-failproof",
+   "kind": "declare",
+   "check": "golden-notprimed-failproof",
+   "verdict": "BLOCKED",
+   "detail": "0.7c OWED live fail-proof, declared on every golden campaign until it is earned: plant C:\\qubes-prime\\fired.mark on a THROWAWAY clone, run a matrix cell without CELL_PRIMED=1, and see _assert_not_primed report INVALID-PRECONDITION. It needs a live guest plus a matrix cell run, so it cannot be earned inside this custody part or in any dry walk; until it is on record, every 'guest is not primed' PASS in the cell parts is unproven (doc 0.7c fail-proof-owed block).",
+   "cells": [
+    "0.7c-not-primed-gate",
+    "0.7c-primed-failproof-owed"
+   ]
+  },
+  {
+   "id": "gp-roster",
+   "kind": "probe",
+   "title": "Live sealed-golden roster: both pristine bases on disk (trust the list, not the doc)",
+   "command": "mgmt/golden.sh list",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "(?s)win10-base\\s+sealed\\s.*win11-base\\s+sealed\\s"
+   },
+   "check": "golden-roster-live",
+   "detail": "The doc contradicts itself about standing seal state (0.2-step-2 says mgmt/goldens/ is EMPTY; 0.4 says both bases are sealed - both dated 2026-08-30). Neither paragraph is authority: this list, read from disk, is. The whole matrix derives from exactly two sealed images, win10-base and win11-base (0.7c); *-gold0/*-goldr seals are superseded roster residue.",
+   "on_fail": {
+    "action": "CONTINUE",
+    "verdict": "INVALID-PRECONDITION"
+   },
+   "defect": "a base missing from the live roster means its seal JSON was never committed or was lost - 'a record that dies with the session is not a record' (0.4 seal rule); the authoritative refusal follows at the verify gate",
+   "falsified_by": "defect-golden-unsealed",
+   "cells": [
+    "fact-golden-standing",
+    "divergence-goldens-empty",
+    "0.7c-two-goldens",
+    "fact-roster-correction"
+   ]
+  },
+  {
+   "id": "gp-verify-base",
+   "kind": "gate",
+   "title": "Entry-image custody: verify win10-base against its seal - no boot, ever",
+   "vars_in": [
+    "GOLD10"
+   ],
+   "command": "mgmt/golden.sh verify {GOLD10}",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "^VERIFIED \\S+ matches its seal \\(sealed "
+   },
+   "check": "golden-entry-verify",
+   "detail": "verify needs no boot - booting a golden to check it would BE the modification (0.4). Exit 2 is UNSEALED as well as DRIFTED and BOTH mean do-not-clone: 'no record' must never read as 'unchanged'. Tamper signal: the root-volume revision list - Qubes cuts a revision on every clean shutdown, so a booted golden gains one its seal never recorded.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-CONTAMINATED",
+    "msg": "Do NOT clone from the base. UNSEALED and DRIFTED are the same refusal: rebuild the golden via the 0.6c one-pass payload-stick flow (this part's st0-*/st2g-* chains), or re-seal DELIBERATELY with the change recorded. Every cell derived from an unverified golden is INVALID-CONTAMINATED."
+   },
+   "defect": "2026-08-29/30: the Win10 golden served as a scratch guest all evening (agent binary hot-swapped twice, xencons side-loaded, Windows Update toggled, repeated hard restarts) and cells were cloned from it; separately the historical goldens win10-clean/win11-fresh were NEVER SEALED and served as entry images anyway - fails-closed on no-record is what this gate exists for",
+   "falsified_by": "defect-golden-unsealed",
+   "cells": [
+    "rule-golden-never-boot",
+    "gate-golden-verify",
+    "0.7c-two-goldens"
+   ]
+  },
+  {
+   "id": "gp-fixture",
+   "kind": "gate",
+   "title": "Campaign-fixture provenance: receipt read AND base seal re-verified NOW",
+   "requires": [
+    "gp-verify-base"
+   ],
+   "vars_in": [
+    "FIXTURE"
+   ],
+   "command": "mgmt/golden.sh fixture {FIXTURE}",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "^FIXTURE \\S+: built \\S+ from \\S+ \\(sealed \\S+\\), job=",
+    "stdout_absent_re": "^REFUSE|^NO FIXTURE RECORD"
+   },
+   "check": "golden-fixture-provenance",
+   "detail": "The second acceptable provenance (owner 2026-08-30): only the two pristine bases are ever sealed; everything carrying software is a fixture built by prime-run.sh, which wrote a receipt. This check re-reads that receipt AND re-verifies the base's seal at THIS moment - a fixture whose base has drifted since stops being acceptable, and a qube built by hand is refused exactly as loudly as an unsealed golden.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-CONTAMINATED",
+    "msg": "The fixture's provenance is broken (no receipt, unreadable receipt, or its base no longer verifies). Do NOT clone from it. Rebuild it via mgmt/harness/prime-run.sh from a verified base, then start a NEW campaign."
+   },
+   "defect": "the same scratch-guest class as the base gates: whatever changed in the base was inherited by the fixture at clone time; a receipt-less hand-built qube has unknown provenance and must never seed a cell",
+   "falsified_by": "defect-golden-fixture-drift",
+   "cells": [
+    "gate-golden-fixture",
+    "rule-two-provenances"
+   ]
+  },
+  {
+   "id": "st0-stick-build",
+   "kind": "action",
+   "title": "Build the Win11 PRISTINE (ST0.11) answer stick - win11 template mandatory, distinct OUT path",
+   "command": "UNATTEND=$PWD/mgmt/autounattend-win11.xml LOCALE=en-US OUT=$HOME/win-iso/answer-pristine-win11.img mgmt/build-answer-stick.sh \"Windows 11 Enterprise Evaluation\"",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "^built /home/user/win-iso/answer-pristine-win11\\.img",
+    "stdout_absent_re": "^payload:"
+   },
+   "detail": "Arg 1 is the Windows EDITION/IMAGE NAME, never a path; OUT is the output (0.6 traps). A pristine stick deliberately has NO 'payload:' line - RELEASE_SETUP unset is how ST0 is built - and it MUST go to its own OUT path: writing it over the release stick's filename clobbers answer-usb.img in place while loop9 keeps serving it (measured 2026-08-30, killed the next reprovision with 'never reached qrexec'). SIZE_MB stays at the default 96 so attached loops keep serving current content.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "The stick build failed or produced the wrong stick shape (a payload line on a pristine build means the wrong variables leaked in). All builder failure paths are loud; read its output, fix the invocation, rebuild. Never provision from an unverified stick."
+   },
+   "cells": [
+    "step-stick-win11-pristine",
+    "trap-arg1-edition",
+    "trap-release-setup-unset",
+    "trap-size-mb-inode",
+    "inst-build-answer-stick"
+   ]
+  },
+  {
+   "id": "st0-stick-verify",
+   "kind": "probe",
+   "title": "Verify the stick CONTENT before provisioning: five LabConfig bypasses, zero placeholders",
+   "requires": [
+    "st0-stick-build"
+   ],
+   "command": "rm -rf /tmp/qwt-stickx && mkdir -p /tmp/qwt-stickx && 7z e -y -o/tmp/qwt-stickx $HOME/win-iso/answer-pristine-win11.img Autounattend.xml >/dev/null 2>&1; if [ -f /tmp/qwt-stickx/Autounattend.xml ]; then echo \"BYPASSES=$(grep -oE 'Bypass[A-Za-z]+Check' /tmp/qwt-stickx/Autounattend.xml | sort -u | wc -l) PLACEHOLDERS=$(grep -c '@[A-Z_]*@' /tmp/qwt-stickx/Autounattend.xml)\"; fi",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "^BYPASSES=5 PLACEHOLDERS=0$"
+   },
+   "check": "golden-stick11-bypasses",
+   "detail": "Only mgmt/autounattend-win11.xml carries the windowsPE LabConfig writes (BypassTPMCheck, BypassSecureBootCheck, BypassRAMCheck, BypassCPUCheck, BypassStorageCheck) that let Setup proceed on a Qubes HVM; BYPASSES counts the distinct names and must be 5, PLACEHOLDERS counts unsubstituted @X@ markers and must be 0. The extraction names 'Autounattend.xml' with a capital A on purpose: a lowercase name silently extracts NOTHING, the probe then prints nothing, and the runner grades that INVALID-INSTRUMENT - never 'the stick lacks bypasses' (instrument proven both ways 2026-09-01: a win10-template stick reads BYPASSES=0, a lowercase extraction stays silent).",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "The stick on disk does NOT carry the win11 bypasses (or carries raw placeholders). Rebuild it with UNATTEND=$PWD/mgmt/autounattend-win11.xml and re-run this probe. NEVER provision on it: Setup halts at 'This PC doesn't currently meet Windows 11 system requirements' and installs nothing after ~20 min of silence."
+   },
+   "defect": "measured 2026-08-30 on win11-gold0: a stick built with the Win10 template (the builder default) halted Setup at the requirements screen; the builder output is IDENTICAL either way, so only reading the stick content catches it",
+   "falsified_by": "defect-golden-labconfig",
+   "cells": [
+    "gate-win11-unattend-verify",
+    "trap-autounattend-case",
+    "step-stick-win11-pristine"
+   ]
+  },
+  {
+   "id": "st0-freshname",
+   "kind": "action",
+   "title": "R3 target must be a FRESH NAME: the name must be UNSEALED (never R3 over a standing golden)",
+   "vars_in": [
+    "GOLD_NEW11"
+   ],
+   "command": "mgmt/golden.sh verify {GOLD_NEW11}",
+   "expect": {
+    "exit": 2,
+    "stdout_re": "^UNSEALED"
+   },
+   "detail": "0.6c step 2: reprovision under a fresh name so a failed build cannot destroy the last good golden, and 0.7's 'no R3 on golden names' holds. UNSEALED here is the GOOD answer - a sealed record under this name means the name collides with a standing golden. This is also the clone-vs-reprovision rule's only sanctioned R3 use: everything that is not a golden build clones a sealed base in ~2 s (0.7b).",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "The chosen fresh name carries a seal - running R3 on it would REMOVE AND RECREATE a sealed golden. Pick a different GOLD_NEW11 name and start a new campaign."
+   },
+   "cells": [
+    "step-golden-scratch",
+    "step-r3",
+    "0.7b-clone-not-reprovision"
+   ]
+  },
+  {
+   "id": "st0-loops",
+   "kind": "action",
+   "title": "R3 preflight: both loops backed by the intended files, neither '(deleted)'",
+   "vars_in": [
+    "ISO_LOOP11",
+    "STICK_LOOP11"
+   ],
+   "command": "losetup -l /dev/{ISO_LOOP11}; losetup -l /dev/{STICK_LOOP11}",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "(?s)win11-24h2-eval-x64-en-us\\.iso.*answer-pristine-win11\\.img",
+    "stdout_absent_re": "\\(deleted\\)"
+   },
+   "detail": "reprovision-usb.sh self-asserts the STICK loop (size + non-deleted inode) but NOT the ISO loop - this step eyeballs both. A '(deleted)' backing serves stale content or nothing; the fix is replacing loop-backing content IN PLACE (cp to the same path), never rm-and-recreate under an attached loop (0.6/2.7). Queued-qrexec drain before qube removal (2.5) is N/A here by construction: the target is a fresh name that never existed, so nothing can be queued at it. Media rule (0.6): Setup/WinPE sees no PV cdrom - OS provisioning is vendor ISO + emulated USB stick, which is exactly what R3 attaches.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "A loop is wrong or deleted-backed. Fix the loop layout first (see .claude/skills/rig-capabilities for the standing inventory - this qube has no sudo for new loops). Never run R3 on a bad loop."
+   },
+   "cells": [
+    "rule-r3-preflight",
+    "trap-size-mb-inode",
+    "rule-media-selection",
+    "rule-new-loop-consult"
+   ]
+  },
+  {
+   "id": "st0-r3",
+   "kind": "action",
+   "title": "R3 with PRISTINE=1: exit 3 = NEEDS-VISUAL-CONFIRMATION is the ONLY good outcome (never exit 0)",
+   "requires": [
+    "st0-stick-verify",
+    "st0-freshname",
+    "st0-loops"
+   ],
+   "vars_in": [
+    "GOLD_NEW11",
+    "ISO_LOOP11",
+    "STICK_LOOP11",
+    "R3_EVID"
+   ],
+   "guest": "GOLD_NEW11",
+   "timeout_s": 7200,
+   "command": "set -o pipefail; mkdir -p {R3_EVID}; PRISTINE=1 PRISTINE_SHOTDIR={R3_EVID} mgmt/reprovision-usb.sh {GOLD_NEW11} {ISO_LOOP11} {STICK_LOOP11} 2>&1 | tee {R3_EVID}/provision-log.txt",
+   "expect": {
+    "exit": 3,
+    "stdout_re": "NEEDS VISUAL CONFIRMATION - READ .*/latest\\.png"
+   },
+   "detail": "PRISTINE=1 is not decoration: an ST0 image has no qrexec BY CONSTRUCTION, so the default 'qrexec alive' completion test cannot ever pass - without the flag a perfect install burns the whole 5400 s BUDGET and reports FAIL (measured 2026-08-30: win10-gold0 sat finished for 17 minutes). The script waits for two advisory DESKTOP classifications plus >=900 s elapsed plus ~90 s of CPU quiescence, SAVES the capture, and exits 3. Exit 0 here would mean the RETRACTED 'pristine desktop reached' criterion is back - the one that passed a Setup error dialog - so expect.exit=3 enforces the retraction structurally. BUDGET default 5400 s bounds the wait; Win11 R3 duration is unmeasured (D19) - the first live run of this step times it: record the figure in FINDINGS.md.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "R3 did not reach a candidate desktop. Triage from PIXELS before any retry: read the latest capture under the R3 evidence dir and classify - LOCALE_PICKER (LOCALE/media mismatch: Setup silently ignored the answer file), IMAGE_PICKER (edition name wrong), WIN11_REQUIREMENTS_DIALOG (LabConfig bypasses absent at runtime), INSTALL_STILL_RUNNING (raise BUDGET), OTHER. ONE retry after a diagnosed cause; never blind-loop reprovisions. The guest is evidence until written off (G-0)."
+   },
+   "cells": [
+    "step-r3",
+    "trap-pristine-qrexec-wait",
+    "expect-r3-pristine",
+    "rule-r3-fail-triage",
+    "fact-r3-budget",
+    "rule-classifier-advisory",
+    "trap-locale-mismatch",
+    "inst-reprovision"
+   ]
+  },
+  {
+   "id": "st0-screen",
+   "kind": "judgement",
+   "title": "READ the screen capture: only a settled desktop permits sealing (the classifier cannot decide this)",
+   "requires": [
+    "st0-r3"
+   ],
+   "vars_in": [
+    "R3_EVID"
+   ],
+   "guest": "GOLD_NEW11",
+   "judgement": {
+    "evidence": [
+     "{R3_EVID}/latest.png",
+     "{R3_EVID}/provision-log.txt"
+    ],
+    "question": "Look at the PNG - the guest's screen at candidate time - and cross-check the provision log tail. What does the SCREEN show? Judge the pixels, not the log: the log's screen=VERDICT lines are ADVISORY and the classifier calls a light Setup dialog on a dark ground DESKTOP. Plausibility cross-checks from the log: a 'candidate desktop after Ns' with N under ~900, or a log with no 'install-phase halt -> restarting without CD' reboot cycles at all, means no Windows install actually ran to completion, whatever the image resembles.",
+    "answers": {
+     "DESKTOP_SETTLED": "a finished, settled Windows desktop: taskbar visible, no Setup/OOBE surface, no dialog box of any kind, and the log shows a plausible install (reboot cycles present, candidate elapsed >= 900 s)",
+     "SETUP_ERROR_DIALOG": "ANY Setup/installer error or requirements dialog is on screen - e.g. 'This PC doesn't currently meet Windows 11 system requirements' or 'Windows could not complete the installation'",
+     "OOBE_IN_PROGRESS": "Windows Setup or OOBE is still running: region/keyboard/account screens, 'Installing updates', spinners or progress UI",
+     "BLACK_OR_BLANK": "the capture is black, blank, or carries no readable content",
+     "OTHER": "anything else - name what you see after the colon (OTHER:<one line>)"
+    },
+    "map": {
+     "DESKTOP_SETTLED": "GREEN",
+     "SETUP_ERROR_DIALOG": "RED",
+     "OOBE_IN_PROGRESS": "RED",
+     "BLACK_OR_BLANK": "INVALID",
+     "OTHER": "INVALID"
+    }
+   },
+   "check": "golden-pristine-screen",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "FAIL",
+    "msg": "Do NOT seal the qube. Write the verdict off first, leave the guest exactly as it is (it is the only instance of the fault - G-0), then triage per 0.7 on the evidence already captured. A candidate screen that is not a settled desktop is a failed or unfinished provision, and an unreadable capture is a broken instrument - neither is sealable."
+   },
+   "defect": "the 137 s incident (0.6b, 2026-08-30): a pristine win11-gold0 build reported 'pristine desktop reached after 137s' while the screen showed the Windows 11 Setup requirements error - the classifier saw a light window on a dark ground and returned DESKTOP, and 137 s is not a Windows install; the exit-0 criterion was retracted and this read-the-PNG judgement is its replacement",
+   "falsified_by": "defect-golden-setup-error",
+   "cells": [
+    "judgement-pristine-png",
+    "rule-classifier-advisory",
+    "expect-r3-pristine",
+    "step-golden-scratch"
+   ]
+  },
+  {
+   "id": "st0-restore",
+   "kind": "action",
+   "title": "Disarm the R3 reset trap on the park BEFORE sealing (the seal records qube properties)",
+   "requires": [
+    "st0-screen"
+   ],
+   "vars_in": [
+    "GOLD_NEW11",
+    "STICK_LOOP11"
+   ],
+   "command": "qvm-prefs {GOLD_NEW11} qrexec_timeout 6000 && qvm-device block unassign {GOLD_NEW11} win-idd-mgmt:{STICK_LOOP11} && qvm-features --unset {GOLD_NEW11} qemu-extra-args",
+   "expect": {
+    "exit": 0
+   },
+   "detail": "reprovision-usb.sh leaves qrexec_timeout=300 and the stick assigned --required (0.7 reset trap). Restore BEFORE halt+seal, because the seal records clone-relevant qube properties - sealing first would bake the armed trap into the record. No netvm is set here: the fw-net line in 0.7's restore applies to churn Standalones/AppVMs, never to a golden every clone inherits, and NEVER to templates.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "A restore command failed. If 'unassign' argues about the assignment form, read `qvm-device block --help` rather than forcing, apply the working form, and record it in doc 0.7 (the unassign side is admittedly unverified). Do not seal until the readback gate passes."
+   },
+   "cells": [
+    "restore-r3-reset-trap"
+   ]
+  },
+  {
+   "id": "st0-halt",
+   "kind": "action",
+   "title": "Halt the pristine park via ACPI - it has no qrexec, so qvm-shutdown's power-button path is the only channel",
+   "requires": [
+    "st0-restore"
+   ],
+   "vars_in": [
+    "GOLD_NEW11"
+   ],
+   "timeout_s": 700,
+   "command": "qvm-shutdown --wait --timeout 600 {GOLD_NEW11}",
+   "expect": {
+    "exit": 0
+   },
+   "detail": "NEVER aim qtest/qrexec at this guest: an ST0 image has no qrexec agent, and calls aimed at an agentless guest queue up, auto-start it, outlive the caller, and wreck the qube's state (0.7b). The three channels into a Windows guest are an autorunning attached ISO, the answer file's first-logon commands (already consumed by this build), and qrexec (absent here) - none of which this step needs: ACPI shutdown suffices for a guest idling at the desktop.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "The guest did not halt on ACPI within 600 s. Use QTEST_VM=<park> tools/qtest kill (a killed VM is Halted; the seal then records volumes as they are - state that on the seal note), then continue with seal by starting a new campaign."
+   },
+   "cells": [
+    "0.7b-no-qrexec-at-agentless-guest",
+    "0.7b-three-channels"
+   ]
+  },
+  {
+   "id": "st0-seal",
+   "kind": "action",
+   "title": "Seal the ST0.11 park (reference image only - never a clone-and-install source)",
+   "requires": [
+    "st0-halt"
+   ],
+   "vars_in": [
+    "GOLD_NEW11"
+   ],
+   "command": "mgmt/golden.sh seal {GOLD_NEW11} \"ST0.11 park - pristine Win11 24H2 Eval, no QWT, no qrexec, testsigning OFF; built 0.6c one-pass; reference image, NOT a clone-and-install source (no execution channel into a pristine clone)\"",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "^SEALED "
+   },
+   "detail": "seal refuses a running qube, which is why st0-halt precedes it. The note carries 0.6c's standing decision: ST0 parks are the cheap base for re-cutting an ST2G and the honest 'nothing of ours installed' reference, but cloning-and-installing into one is RETIRED - a pristine clone has no execution channel (FirstLogonCommands are consumed at its own provisioning).",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "REFUSING means the qube is not Halted - re-run the halt step's remedy first."
+   },
+   "cells": [
+    "gate-golden-seal",
+    "rule-st0-reference-only",
+    "divergence-retired-clone-st0",
+    "fact-0.6c-audit"
+   ]
+  },
+  {
+   "id": "st0-verify-seal",
+   "kind": "gate",
+   "title": "Verify the fresh park seal (custody starts at birth)",
+   "requires": [
+    "st0-seal"
+   ],
+   "vars_in": [
+    "GOLD_NEW11"
+   ],
+   "command": "mgmt/golden.sh verify {GOLD_NEW11}",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "^VERIFIED \\S+ matches its seal \\(sealed "
+   },
+   "check": "golden-entry-verify",
+   "detail": "Same check as the entry gate (V7: the fail-proof registry is keyed by CHECK, and this check is seen to fail in defect-golden-unsealed). A seal that does not immediately verify is a broken record, not a golden.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-CONTAMINATED",
+    "msg": "The just-written seal does not verify - the record is unusable; re-seal and investigate golden.sh."
+   },
+   "defect": "an unverifiable seal record would let the next campaign clone an image with no custody at all",
+   "falsified_by": "defect-golden-unsealed",
+   "cells": [
+    "gate-golden-verify"
+   ]
+  },
+  {
+   "id": "st2g-regate",
+   "kind": "gate",
+   "title": "Re-gate the payload dir against the PINNED release before it is baked into a golden",
+   "vars_in": [
+    "MATRIX_WORK",
+    "REL"
+   ],
+   "command": "tools/assert-payload.sh {MATRIX_WORK}/dl/qwt-improved-setup {REL}",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "^PASS: payload verified"
+   },
+   "check": "gate0-payload",
+   "detail": "Same check as the campaign spine's Gate 0, re-asserted against the exact directory the stick is built from (V7: one fail-proof per CHECK; this check is seen to fail in the spine's defect-gate0 scenario). REL is passed EXPLICITLY: with no commit argument assert-payload gates against HEAD, which moves under a campaign - a PASS that pins nothing. A golden outlives every campaign, so baking an ungated payload into one contaminates everything after.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PROVENANCE",
+    "msg": "The payload dir does not match the pinned release. Re-download the artifacts for REL; NEVER re-gate against HEAD and never substitute files from another build."
+   },
+   "defect": "the 2026-08-29 f777bec incident: a cell graded the commit BEFORE the fix under test because the payload was never asserted against the pinned release - baked into a golden, that mistake would outlive the campaign",
+   "falsified_by": "defect-gate0",
+   "cells": [
+    "inst-assert-payload",
+    "step-golden-scratch"
+   ]
+  },
+  {
+   "id": "st2g-stick-build",
+   "kind": "action",
+   "title": "Build the Win10 RELEASE payload stick - the 'payload:' line is the whole point",
+   "requires": [
+    "st2g-regate"
+   ],
+   "vars_in": [
+    "MATRIX_WORK"
+   ],
+   "command": "LOCALE=en-GB RELEASE_SETUP={MATRIX_WORK}/dl/qwt-improved-setup OUT=$HOME/win-iso/answer-usb.img mgmt/build-answer-stick.sh \"Windows 10 Pro\"",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "^payload: release package staged, install flags"
+   },
+   "detail": "LOCALE=en-GB is load-bearing: the Win10 media is Win10_22H2_EnglishInternational (en-GB) while the builder defaults to en-US, and a mismatch makes Setup SILENTLY ignore the answer file (the classic silent cause of 'never reached qrexec'). The expected 'payload: release package staged, install flags /idd' line proves this is NOT a pristine stick: RELEASE_SETUP unset builds a QWT-free stick with identical-looking output otherwise - measured 2026-08-30 when answer-usb.img was clobbered by a pristine build and the next reprovision died 90 minutes later. INSTALL_FLAGS defaults to /idd, WITH_KEY to 1 (builder defaults).",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "No payload line = a pristine (QWT-free) stick was built - RELEASE_SETUP unset or pointing nowhere. Fix the invocation and rebuild; a payloadless stick fed to a default R3 wastes 90 minutes and reports 'never reached qrexec' for a healthy Windows."
+   },
+   "cells": [
+    "step-stick-win10-release",
+    "trap-release-setup-unset",
+    "trap-locale-mismatch",
+    "trap-arg1-edition",
+    "fact-stick-defaults",
+    "step-golden-scratch"
+   ]
+  },
+  {
+   "id": "st2g-freshname",
+   "kind": "action",
+   "title": "ST2G target must be a FRESH NAME (UNSEALED is the good answer)",
+   "vars_in": [
+    "GOLD_NEW10"
+   ],
+   "command": "mgmt/golden.sh verify {GOLD_NEW10}",
+   "expect": {
+    "exit": 2,
+    "stdout_re": "^UNSEALED"
+   },
+   "detail": "Identical rule to the park flow: 0.6c builds on fresh names so a failed R3 cannot destroy the last good golden. Reconciliation of 0.6c vs 0.7's 'churn qubes only': 0.6c uses fresh NAMES, never standing golden names - both texts are satisfied.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "The fresh name collides with a sealed golden. Pick another GOLD_NEW10; never R3 over a golden name."
+   },
+   "cells": [
+    "step-golden-scratch",
+    "0.7b-clone-not-reprovision"
+   ]
+  },
+  {
+   "id": "st2g-loops",
+   "kind": "action",
+   "title": "R3 preflight for the payload build: Win10 ISO loop + release stick loop sane",
+   "vars_in": [
+    "ISO_LOOP10",
+    "STICK_LOOP10"
+   ],
+   "command": "losetup -l /dev/{ISO_LOOP10}; losetup -l /dev/{STICK_LOOP10}",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "(?s)Win10_22H2_EnglishInternational_x64v1\\.iso.*answer-usb\\.img",
+    "stdout_absent_re": "\\(deleted\\)"
+   },
+   "detail": "Same eyeball as st0-loops on the win10 side: the script asserts only the stick loop; the ISO loop is checked here. Drain-before-remove (2.5) is again N/A on a fresh name.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "Fix the loop backing (in place - never rm-and-recreate under an attached loop) before R3."
+   },
+   "cells": [
+    "rule-r3-preflight",
+    "trap-size-mb-inode"
+   ]
+  },
+  {
+   "id": "st2g-r3",
+   "kind": "action",
+   "title": "R3 default mode: Windows + release at first logon; completion test is qrexec alive",
+   "requires": [
+    "st2g-stick-build",
+    "st2g-freshname",
+    "st2g-loops"
+   ],
+   "vars_in": [
+    "GOLD_NEW10",
+    "ISO_LOOP10",
+    "STICK_LOOP10"
+   ],
+   "guest": "GOLD_NEW10",
+   "timeout_s": 7200,
+   "command": "mgmt/reprovision-usb.sh {GOLD_NEW10} {ISO_LOOP10} {STICK_LOOP10}",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "qrexec alive after [0-9]+s"
+   },
+   "detail": "The 0.6c one-pass build: one R3 installs Windows AND the release at first logon, yielding a golden that already has qrexec - every later cell clones it in ~2 s and drives it normally (once per OS, not once per cell). Expected shape: 'answer stick verified' -> create/boot lines -> several 'install-phase halt -> restarting without CD' cycles -> 'qrexec alive after <N>s', exit 0. Win10 measured 17-20 min; BUDGET default 5400 s.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "'never reached qrexec' has three classic SILENT causes, all presenting identically: LOCALE mismatch (Setup ignored the answer file - screenshot shows a locale picker), a clobbered/payloadless stick (desktop reached, no payload ran), wrong edition name (image picker on screen). Triage from a screenshot BEFORE any retry; ONE retry after a diagnosed cause; never blind-loop. The guest is evidence until written off (G-0)."
+   },
+   "cells": [
+    "step-golden-scratch",
+    "step-r3",
+    "expect-r3-default",
+    "rule-r3-fail-triage",
+    "fact-r3-budget",
+    "trap-locale-mismatch",
+    "inst-reprovision"
+   ]
+  },
+  {
+   "id": "st2g-installlog",
+   "kind": "probe",
+   "title": "Read the first-logon install log: the payload actually ran and exited 0",
+   "requires": [
+    "st2g-r3"
+   ],
+   "vars_in": [
+    "GOLD_NEW10"
+   ],
+   "guest": "GOLD_NEW10",
+   "command": "QTEST_VM={GOLD_NEW10} tools/qtest run 'cmd /c type C:\\qubes-win-idd-setup.log'",
+   "expect": {
+    "stdout_re": "^install\\.cmd rc=0"
+   },
+   "check": "golden-guest-attest",
+   "detail": "0.6c step 3's evidence rule mechanised for the qrexec-capable build: read the install log BEFORE believing the build (the answer-stick payload writes 'install.cmd rc=<N>' to C:\\qubes-win-idd-setup.log). The regex is line-anchored so qtest's command echo-back cannot satisfy it. EMPTY output is INVALID-INSTRUMENT by probe semantics - a silent qtest answer is a dead instrument, never evidence about the install (RIG-CONSTRAINTS 1.1). Check shared with st2g-attest (V7, keyed by check; seen to fail in defect-golden-reset-trap).",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "FAIL",
+    "msg": "install.cmd exited nonzero (or the log shows no rc line): the release install failed at first logon. Do NOT seal. Write the verdict off, leave the guest exactly as it is (G-0), and diagnose on the captured log - the failed subject is evidence, not a workbench."
+   },
+   "defect": "a golden sealed without reading this log can carry a half-installed release - the 'judge output, not logs' failure class: qrexec answering proves the agent runs, not that install.cmd succeeded",
+   "falsified_by": "defect-golden-reset-trap",
+   "cells": [
+    "step-golden-scratch",
+    "step-r3-restore-validation"
+   ]
+  },
+  {
+   "id": "st2g-restore",
+   "kind": "action",
+   "title": "Disarm the R3 reset trap on the ST2G before sealing",
+   "requires": [
+    "st2g-installlog"
+   ],
+   "vars_in": [
+    "GOLD_NEW10",
+    "STICK_LOOP10"
+   ],
+   "command": "qvm-prefs {GOLD_NEW10} qrexec_timeout 6000 && qvm-device block unassign {GOLD_NEW10} win-idd-mgmt:{STICK_LOOP10} && qvm-features --unset {GOLD_NEW10} qemu-extra-args",
+   "expect": {
+    "exit": 0
+   },
+   "detail": "qrexec_timeout back to the standing 6000 (300 left in place corrupts every later wedge diagnosis - H3.1/2.5), stick unassigned (a --required assignment makes every boot depend on this qube's loop layout - D2), qemu-extra-args cleared. Before seal, same reason as the park: the seal records qube properties. No netvm on a golden, ever.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "A restore command failed - if unassign argues about the assignment form, read `qvm-device block --help`, use the working form, and record it in doc 0.7. Do not seal until the readback gate passes."
+   },
+   "cells": [
+    "restore-r3-reset-trap"
+   ]
+  },
+  {
+   "id": "st2g-attest",
+   "kind": "probe",
+   "title": "Restore validation: the running guest still answers over qrexec (empty = dead instrument)",
+   "requires": [
+    "st2g-restore"
+   ],
+   "vars_in": [
+    "GOLD_NEW10"
+   ],
+   "command": "QTEST_VM={GOLD_NEW10} tools/qtest run \"echo ok\"",
+   "expect": {
+    "stdout_re": "^ok\\r?$"
+   },
+   "check": "golden-guest-attest",
+   "detail": "2.3 restore validation, run while the guest is still up (a sealed golden is never booted again, so this is the last chance). Line-anchored match: qtest echoes the prompt line WITH the command on it, so an unanchored 'ok' would match the echo alone - the same echo silently inflated counts in two other harnesses. An EMPTY answer reads INVALID-INSTRUMENT and the campaign continues to the dom0-side readback, which does not depend on the guest.",
+   "on_fail": {
+    "action": "CONTINUE",
+    "verdict": "INVALID-INSTRUMENT"
+   },
+   "defect": "qtest returning NOTHING was twice read as a guest defect ('found nothing', 'no windows') when it was the instrument - RIG-CONSTRAINTS 1.1; the dom0 readback that follows is deliberately independent of this probe",
+   "falsified_by": "defect-golden-reset-trap",
+   "cells": [
+    "step-r3-restore-validation"
+   ]
+  },
+  {
+   "id": "resettrap-verify",
+   "kind": "gate",
+   "title": "Readback: the reset trap is actually disarmed on BOTH R3 subjects (never trust the restore's exit 0)",
+   "requires": [
+    "st2g-restore"
+   ],
+   "vars_in": [
+    "GOLD_NEW10",
+    "GOLD_NEW11"
+   ],
+   "command": "echo \"T10=$(qvm-prefs {GOLD_NEW10} qrexec_timeout) T11=$(qvm-prefs {GOLD_NEW11} qrexec_timeout) STICKROWS=$(qvm-device block list 2>/dev/null | grep -cE '{GOLD_NEW10}|{GOLD_NEW11}')\"",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "^T10=6000 T11=6000 STICKROWS=0$"
+   },
+   "check": "golden-reset-trap-restored",
+   "detail": "The restore commands exiting 0 proves intent, not state - the unassign form is admittedly unverified in doc 0.7 ('if it argues ... record the working form'). This gate reads the state back: standing qrexec_timeout 6000 on both fresh goldens, and no block-device row naming either of them. If the STICKROWS grep form proves wrong live, fix THIS command and record the working form - never weaken the expectation.",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "The reset trap is still armed. qrexec_timeout != 6000 corrupts every later wedge diagnosis (2.5: 15/300 are never left in place); a surviving --required stick assignment makes the golden's every boot depend on this qube's loop layout (D2). Re-apply the standing values, verify by readback, and only then seal - in a NEW campaign."
+   },
+   "defect": "the 0.7 reset trap left armed: reprovision leaves qrexec_timeout=300 and the stick assigned --required; a left-behind assignment broke later boots (D2) and a wrong standing timeout produced phantom 'wedged guest' diagnoses (memory: queued-qrexec)",
+   "falsified_by": "defect-golden-reset-trap",
+   "cells": [
+    "restore-r3-reset-trap",
+    "restore-reclone-timeout"
+   ]
+  },
+  {
+   "id": "st2g-halt",
+   "kind": "action",
+   "title": "Halt the ST2G cleanly (it has qrexec; qvm-shutdown is graceful here)",
+   "requires": [
+    "resettrap-verify"
+   ],
+   "vars_in": [
+    "GOLD_NEW10"
+   ],
+   "timeout_s": 700,
+   "command": "qvm-shutdown --wait --timeout 600 {GOLD_NEW10}",
+   "expect": {
+    "exit": 0
+   },
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "The guest did not halt in 600 s. A guest that flips back to Transient is queued qrexec restarting it - drain per 2.5 (TEMPORARY qrexec_timeout 15 -> kill -> Halted CONTINUOUSLY -> restore 6000; 15 is never left in place). Then re-verify the reset-trap gate before sealing."
+   },
+   "cells": [
+    "step-golden-scratch"
+   ]
+  },
+  {
+   "id": "st2g-seal",
+   "kind": "action",
+   "title": "Seal the ST2G golden (the clone source every later cell derives from)",
+   "requires": [
+    "st2g-halt"
+   ],
+   "vars_in": [
+    "GOLD_NEW10",
+    "REL"
+   ],
+   "command": "mgmt/golden.sh seal {GOLD_NEW10} \"ST2G.10 - Win10 22H2 + release {REL} installed at first logon; 0.6c one-pass payload-stick build; qrexec-capable clone source\"",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "^SEALED "
+   },
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "REFUSING means the qube is not Halted - resolve the halt first."
+   },
+   "cells": [
+    "gate-golden-seal",
+    "step-golden-scratch"
+   ]
+  },
+  {
+   "id": "st2g-verify-seal",
+   "kind": "gate",
+   "title": "Verify the fresh ST2G seal",
+   "requires": [
+    "st2g-seal"
+   ],
+   "vars_in": [
+    "GOLD_NEW10"
+   ],
+   "command": "mgmt/golden.sh verify {GOLD_NEW10}",
+   "expect": {
+    "exit": 0,
+    "stdout_re": "^VERIFIED \\S+ matches its seal \\(sealed "
+   },
+   "check": "golden-entry-verify",
+   "detail": "Same check and rationale as st0-verify-seal (V7; seen to fail in defect-golden-unsealed).",
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-CONTAMINATED",
+    "msg": "The just-written seal does not verify; the record is unusable - re-seal and investigate."
+   },
+   "defect": "an unverifiable seal on the primary clone source voids custody for every later cell",
+   "falsified_by": "defect-golden-unsealed",
+   "cells": [
+    "gate-golden-verify"
+   ]
+  },
+  {
+   "id": "seals-commit",
+   "kind": "action",
+   "title": "Commit both seal records - a record that dies with the session is not a record",
+   "requires": [
+    "st0-verify-seal",
+    "st2g-verify-seal"
+   ],
+   "vars_in": [
+    "GOLD_NEW10",
+    "GOLD_NEW11",
+    "REL"
+   ],
+   "command": "git add mgmt/goldens/{GOLD_NEW10}.json mgmt/goldens/{GOLD_NEW11}.json && git commit -m 'goldens: seal {GOLD_NEW11} (ST0.11 park) and {GOLD_NEW10} (ST2G.10 {REL}) - 0.6c rebuild'",
+   "expect": {
+    "exit": 0
+   },
+   "on_fail": {
+    "action": "HALT_CAMPAIGN",
+    "verdict": "INVALID-PRECONDITION",
+    "msg": "Commit the seal JSONs before reporting the part done - an uncommitted seal is the defect-golden-unsealed scenario waiting to happen."
+   },
+   "cells": [
+    "gate-golden-seal"
+   ]
+  }
+ ]
+}

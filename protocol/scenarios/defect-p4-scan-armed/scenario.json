@@ -1,0 +1,38 @@
+{
+ "comment": "DEFECT: the update scan is ARMED (the 2026-08-30 incident: guest booted ~17:52, scan due ~17:54 boot+PT2M, BENCH started ~17:53, subject wedged mid-benchmark, every number void). The disarm probe answers DISARMED False -> INVALID-PRECONDITION and CONTINUES (custody is not tripped - the guest is fine, the precondition is not); the bench step's own leading re-assertion of disarm.txt then REFUSES to run (exit 1, no output) -> INVALID-PRECONDITION, part halted. Nothing is measured. Trap: 'the disarm mostly worked, RELAY_AFTER is 0, run the bench anyway' - an unmeasured cell beats a bad number.",
+ "steps": [
+  "p4-rendering.json"
+ ],
+ "vars": {
+  "VM": "win10-p47",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260901-2/p4-rendering",
+  "STOCK_AGENT": "/home/user/qwt-accept/AP-20260901-2/dl/bench-pair/agent-stock.exe",
+  "OURS_AGENT": "/home/user/qwt-accept/AP-20260901-2/dl/bench-pair/agent-ours.exe"
+ },
+ "results": {
+  "p4-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-2/p4-rendering"
+  },
+  "p4-boot-subject": {
+   "exit": 0,
+   "stdout": "  p4-boot-subject: session up at t+151s"
+  },
+  "p4-scan-disarm": {
+   "exit": 0,
+   "stdout": "SCAN_BEFORE state=Ready nextrun=09/01/2026 5:54:03 PM\nRELAY_RUNNING 1 - stopping\nSCAN_AFTER state=Ready\nRELAY_AFTER 0\nDISARMED False"
+  },
+  "p4-trace-feature": {
+   "exit": 0,
+   "stdout": "TRACE-FEATURE-SET"
+  },
+  "p4-subject-identity": {
+   "exit": 0,
+   "stdout": "\"agent_binary_hash\":{\"pass\":true,\"evidence\":{\"installed\":\"E5D125CC8A2AA8FA5520609FEE6B0160F692EFA846FF44FBFF30B7E5AB851A0E\",\"manifest\":\"e5d125cc8a2aa8fa5520609fee6b0160f692efa846ff44fbff30b7e5ab851a0e\"}}"
+  },
+  "p4-bench-suite": {
+   "exit": 1,
+   "stdout": ""
+  }
+ }
+}

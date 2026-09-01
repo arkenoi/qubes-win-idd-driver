@@ -1,0 +1,26 @@
+{
+ "comment": "DEFECT (SG0.1, the 2026-08-28 screen-cover class): service.gui-fullscreen is SET on the subject when the campaign starts. The opening gate must read it, refuse with INVALID-PRECONDITION and HALT THE CAMPAIGN - violating a ground rule voids the run; nothing downstream (no boot, no suite, no declares) may execute, and no step may 'fix' it by unsetting-and-continuing. The real incident: the feature enabled on a test qube let a fullscreen boot-phase surface reach the owner's display; owner ruling 'never means never'.",
+ "steps": [
+  "p5-safeguards.json"
+ ],
+ "vars": {
+  "SA": "win10-sa1",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260901-5/p5-safeguards",
+  "RELEASE_DIR": "/home/user/qwt-accept/AP-20260901-5/dl/qwt-full-package",
+  "RELEASE_SHA": "9C4F2A8B0D3E6F17",
+  "FI_DIR": "/home/user/qwt-accept/AP-20260901-5/dl/qwt-fault-package",
+  "FI_SHA": "5E1D0C9A7B42F380",
+  "HOSTW": "5120",
+  "HOSTH": "1440"
+ },
+ "results": {
+  "p5-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-5/p5-safeguards"
+  },
+  "p5-sg0-feature-gate": {
+   "exit": 0,
+   "stdout": "FEATURE-SET:1"
+  }
+ }
+}

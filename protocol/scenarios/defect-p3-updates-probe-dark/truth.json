@@ -1,0 +1,31 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "p3-serial-no-bench",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p3-g0c-scan-disarmed",
+    "verdict": "INVALID-INSTRUMENT"
+   }
+  ],
+  "ledger_absent": [
+   "p3-u1-scan-to-dom0",
+   "p3-u2-coldboot-class",
+   "p3-u1-stability-and-controls",
+   "p3-u3-venue",
+   "p3-u3-install-e2e",
+   "p3-u4-failure-drills",
+   "p3-u5-introspection",
+   "p3-u6-netvm-policy",
+   "p3-standalone-control",
+   "p3-dynamic-updates-settled",
+   "p3-u2-run",
+   "p3-rearm-scan",
+   "p3-shutdown-tpl"
+  ]
+ }
+}

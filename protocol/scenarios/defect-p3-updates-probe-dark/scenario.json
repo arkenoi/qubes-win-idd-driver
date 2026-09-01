@@ -1,0 +1,37 @@
+{
+ "comment": "DEFECT (RIG-CONSTRAINTS 1.1): the G-0c disarm pushrun returns NOTHING - no logged-on session, so Filecopy lands nowhere and the script never runs (the exact mechanism that returned nothing for pvnic-latch-readback on win10-tpl, 2026-08-31, and once got a subject declared broken). The probe kind must turn the empty answer into INVALID-INSTRUMENT - never FAIL, never 'the scan is disarmed', never a product verdict in either direction - and halt the part before any cell runs against an unproven precondition.",
+ "steps": [
+  "p3-updates.json"
+ ],
+ "vars": {
+  "TPL": "win10-tpl",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260901-3/p3-updates",
+  "PAYLOAD_DIR": "/home/user/qwt-accept/AP-20260901-3/dl/qwt-improved-setup"
+ },
+ "results": {
+  "p3-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-3/p3-updates"
+  },
+  "p3-serial-gate": {
+   "exit": 0,
+   "stdout": "SERIAL-OK"
+  },
+  "p3-proxy-listen": {
+   "exit": 0,
+   "stdout": "LISTEN 0      128            127.0.0.1:8082          0.0.0.0:*    users:((\"tinyproxy\",pid=1873,fd=4))"
+  },
+  "p3-backend-egress": {
+   "exit": 0,
+   "stdout": "EGRESS http=200 bytes=7796"
+  },
+  "p3-boot-tpl": {
+   "exit": 0,
+   "stdout": "  p3-boot-tpl: session up at t+164s"
+  },
+  "p3-g0c-disarm": {
+   "exit": 0,
+   "stdout": ""
+  }
+ }
+}

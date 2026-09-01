@@ -1,0 +1,70 @@
+{
+ "comment": "GREEN P4 walk: scan disarmed and recorded, subject's running agent equals the manifest, the canonical stock-vs-ours suite runs 3 interleaved rounds at the enforced settle floor with every repetition valid and the scroll row disjoint-better, Start produces NOTHING by BOTH witnesses with the stimulus proven, the resolution battery keeps pixels moving and QGAPERF seq advancing, the menu is synthesized AND its agent-reported rect's crop changes, the toast reaches dom0 with the detector proven in-session, scan re-enabled, subject released. Ground truth: DONE, every check PASS(-UNPROVEN until fail-proofs are harvested), six honest BLOCKED declares.",
+ "steps": [
+  "p4-rendering.json"
+ ],
+ "vars": {
+  "VM": "win10-p47",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260901-2/p4-rendering",
+  "STOCK_AGENT": "/home/user/qwt-accept/AP-20260901-2/dl/bench-pair/agent-stock.exe",
+  "OURS_AGENT": "/home/user/qwt-accept/AP-20260901-2/dl/bench-pair/agent-ours.exe"
+ },
+ "results": {
+  "p4-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-2/p4-rendering"
+  },
+  "p4-boot-subject": {
+   "exit": 0,
+   "stdout": "  p4-boot-subject: session up at t+151s"
+  },
+  "p4-scan-disarm": {
+   "exit": 0,
+   "stdout": "SCAN_BEFORE state=Ready nextrun=09/01/2026 6:41:12 PM\nSCAN_AFTER state=Disabled\nRELAY_AFTER 0\nDISARMED True"
+  },
+  "p4-trace-feature": {
+   "exit": 0,
+   "stdout": "TRACE-FEATURE-SET"
+  },
+  "p4-subject-identity": {
+   "exit": 0,
+   "stdout": "\"agent_binary_hash\":{\"pass\":true,\"evidence\":{\"installed\":\"E5D125CC8A2AA8FA5520609FEE6B0160F692EFA846FF44FBFF30B7E5AB851A0E\",\"manifest\":\"e5d125cc8a2aa8fa5520609fee6b0160f692efa846ff44fbff30b7e5ab851a0e\"}}"
+  },
+  "p4-bench-suite": {
+   "exit": 0,
+   "stdout": "   settle after each swap: 45s (floor 30)\n== stock-vs-ours on win10-p47, 3 rounds, out=/home/user/qubes-win-idd-driver/instrumentation/bench-stock-vs-ours-20260901-182140\n   stock=464772F1630E47BF  ours=5CEF96155147CDC6\n   interactive session present\n-- r1-stock\n   running 464772F1630E47BF\n    {'idle-pre': 3.254, 'drag': 28.714, 'idle-mid1': 0.0, 'scroll': 45.201, 'idle-mid2': 7.822, 'type': 23.87, 'idle-post': 4.23} valid= True scene ok\n-- r1-ours\n   running 5CEF96155147CDC6\n    {'idle-pre': 0.977, 'drag': 14.102, 'idle-mid1': 0.412, 'scroll': 1.707, 'idle-mid2': 0.655, 'type': 3.1, 'idle-post': 0.33} valid= True scene ok\n-- r2-ours\n   running 5CEF96155147CDC6\n    {'idle-pre': 0.912, 'drag': 13.900, 'idle-mid1': 0.398, 'scroll': 1.620, 'idle-mid2': 0.600, 'type': 2.000, 'idle-post': 0.31} valid= True scene ok\n-- r2-stock\n   running 464772F1630E47BF\n    {'idle-pre': 3.412, 'drag': 30.100, 'idle-mid1': 0.0, 'scroll': 44.900, 'idle-mid2': 6.900, 'type': 23.400, 'idle-post': 4.10} valid= True scene ok\n-- r3-stock\n   running 464772F1630E47BF\n    {'idle-pre': 3.188, 'drag': 32.300, 'idle-mid1': 0.0, 'scroll': 47.200, 'idle-mid2': 8.400, 'type': 26.100, 'idle-post': 5.05} valid= True scene ok\n-- r3-ours\n   running 5CEF96155147CDC6\n    {'idle-pre': 1.033, 'drag': 16.800, 'idle-mid1': 0.430, 'scroll': 3.600, 'idle-mid2': 0.710, 'type': 3.723, 'idle-post': 0.42} valid= True scene ok\n== summary\nrepetitions: 6 total, 6 valid, 0 INVALID\n\nbinaries actually measured (from the guest, per repetition):\n  ours  5CEF96155147CDC6\n  stock 464772F1630E47BF\n\nphase                 stock (n)           ours (n)      delta  verdict\nidle-pre            3.254 (3)        0.977 (3)     -70.0%  REAL - ranges disjoint, ours BETTER\ndrag               28.714 (3)       14.102 (3)     -50.9%  REAL - ranges disjoint, ours BETTER\nidle-mid1           0.000 (3)        0.412 (3)            one side read 0.000 in every repetition - below the CPU counter's resolution, NO VERDICT\nscroll             45.201 (3)        1.707 (3)     -96.2%  REAL - ranges disjoint, ours BETTER\nidle-mid2           7.822 (3)        0.655 (3)     -91.6%  REAL - ranges disjoint, ours BETTER\ntype               23.870 (3)        3.100 (3)     -87.0%  REAL - ranges disjoint, ours BETTER\nidle-post           4.230 (3)        0.330 (3)     -92.2%  REAL - ranges disjoint, ours BETTER\n\nper-repetition values (% of one core):\n  scroll       stock r1=45.201  r2=44.900  r3=47.200\n  scroll       ours  r1=1.707  r2=1.620  r3=3.600\nraw data: /home/user/qubes-win-idd-driver/instrumentation/bench-stock-vs-ours-20260901-182140"
+  },
+  "p4-bench-raws": {
+   "exit": 0,
+   "stdout": "RAWS-COMMITTED"
+  },
+  "p4-rnd5-collect": {
+   "exit": 0,
+   "stdout": "SCENE-CLEARED\nSHOT_MAPPED 0\nDISCRIM_HITS 2\n  D 18:19:02.114 gui-agent[4188]: ShouldAcceptWindow: hwnd=0x2050c Start surface not presented in seamless mode (SeamlessStart=0)\n  D 18:19:02.117 gui-agent[4188]: ShouldAcceptWindow: hwnd=0x105a2 cardless deny: Windows.UI.Core.CoreWindow\nSHELL_SURFACES 1\n  S class=Windows.UI.Core.CoreWindow proc=StartMenuExperienceHost title=\"Start\"\nSTARTPROC 1\nOVRMAP_TOTAL 0\nOVRMAP_BIG 0"
+  },
+  "p4-rnd8": {
+   "exit": 0,
+   "stdout": "18:22:01 rnd8[win10-p47]: === disarm the update scan ===\n  {\"current\":\"1600x900\",\"modes\":[\"1024x768\",\"1600x900\",\"5120x1440\"]}\n18:22:31 rnd8[win10-p47]:   sub-host modes to exercise: 1024x768 1600x900\n18:22:40 rnd8[win10-p47]: === mode 1024x768 ===\n18:22:52 rnd8[win10-p47]:   set: {\"ok\":true,\"requested\":\"1024x768\",\"applied\":\"1024x768\",\"device\":\"\\\\.\\DISPLAY2\"}\n18:22:58 rnd8[win10-p47]:   agent: AGENTSCREEN 1024x768\n18:22:58 rnd8[win10-p47]:   -> PASS: the guest adopted 1024x768 AND the agent's last A6CONFIGURE to dom0 agrees (1024x768)\n18:23:22 rnd8[win10-p47]:   pixels before=1006x716:8a11c2d05b7e33f0  after=1006x716:f27d9c4a10bb85e1   (set 812ms, first-pixel ~14210ms)\n18:23:22 rnd8[win10-p47]:   -> PASS: capture is alive after the resize (window 1006x716, pixels changed)\n18:23:30 rnd8[win10-p47]: === mode 1600x900 ===\n18:23:44 rnd8[win10-p47]:   set: {\"ok\":true,\"requested\":\"1600x900\",\"applied\":\"1600x900\",\"device\":\"\\\\.\\DISPLAY2\"}\n18:23:50 rnd8[win10-p47]:   agent: AGENTSCREEN 1600x900\n18:23:50 rnd8[win10-p47]:   -> PASS: the guest adopted 1600x900 AND the agent's last A6CONFIGURE to dom0 agrees (1600x900)\n18:24:14 rnd8[win10-p47]:   pixels before=1586x893:0b19d7a4e2c58f01  after=1586x893:77aa02ce94d1b3e6   (set 794ms, first-pixel ~13820ms)\n18:24:14 rnd8[win10-p47]:   -> PASS: capture is alive after the resize (window 1586x893, pixels changed)\n18:25:12 rnd8[win10-p47]: === keyed mutex: 4 abandonment(s), 9 RecreateDuplication, 0 thread death(s) ===\n18:25:31 rnd8[win10-p47]:   frame liveness: QGAPERF seq 41210 -> 41395\n18:25:31 rnd8[win10-p47]:   -> PASS: every abandonment was recovered and the capture thread never died; frames\n18:25:31 rnd8[win10-p47]:      provably resumed (the pixel comparisons above).\n18:25:32 rnd8[win10-p47]: === finished rc=0 ==="
+  },
+  "p4-shell-run": {
+   "exit": 0,
+   "stdout": "18:31:04 rnd[win10-p47]: === disarm the update scan (P3: never concurrent with a rendering cell) ===\n18:31:21 rnd[win10-p47]: === VALIDATE THE DETECTOR IN THIS SESSION (H5: no result counts until the instrument is) ===\n  \"detector_fires\":true\n18:31:44 rnd[win10-p47]: === scene reset: dismiss any leftover notifications ===\n    {\"killed\":1,\"history_cleared\":true,\"dismissed\":1}\n18:32:03 rnd[win10-p47]:   after reset: total=1 override_redirect=0\n18:32:05 rnd[win10-p47]:   baseline dom0 list: total=1 override_redirect=0\n18:32:05 rnd[win10-p47]: === RND-3: a menu must be SYNTHESIZED onto its owner, and the owner's pixels must change ===\n18:32:23 rnd[win10-p47]:   owner before menu: 1586x893:6f4779341b22acde\n18:33:02 rnd[win10-p47]:   owner with menu open: 1586x893:9c01d4e2b5aa7f10\n18:33:09 rnd[win10-p47]:   agent: SYNTH events=1  #32768 menu surfaces seen=1\n18:33:15 rnd[win10-p47]:   synth rect (owner-relative) 1,50 229x196   crop 229x196:6f477934c0ffee12 -> 229x196:228e6e7d91ab34cd\n18:33:15 rnd[win10-p47]:   -> PASS: the menu was synthesized onto its owner AND the pixels IN THE PAINTED RECT changed\n18:33:16 rnd[win10-p47]: === RND-4 / SG7: a toast must reach the user - by EITHER path ===\n18:34:20 rnd[win10-p47]:   guest-side toast samples=41  dom0 o-r 0->1 [QWT ACCEPT TOAST]  synth=0  owner px 1586x893:9c01d4e2b5aa7f10 -> 1586x893:9c01d4e2b5aa7f10\n18:34:20 rnd[win10-p47]:   -> PASS: the toast reached dom0 as its own override-redirect window\n18:34:31 rnd[win10-p47]: === finished rc=0 ==="
+  },
+  "p4-rnd3-stimulus": {
+   "exit": 0,
+   "stdout": "18:33:09 rnd[win10-p47]:   agent: SYNTH events=1  #32768 menu surfaces seen=1"
+  },
+  "p4-rnd4-toast": {
+   "exit": 0,
+   "stdout": "  \"detector_fires\":true\nRND-4\ttoast-reaches-dom0\tPASS-UNPROVEN\tguest samples=41; dom0 o-r 0->1 [QWT ACCEPT TOAST] (own-window path)\trndshell\nSG7\ttoasts-survive-filter\tPASS-UNPROVEN\tthe chrome filter did not eat the notification\trndshell"
+  },
+  "p4-scan-reenable": {
+   "exit": 0,
+   "stdout": "REENABLED"
+  },
+  "p4-shutdown-subject": {
+   "exit": 0,
+   "stdout": "SUBJECT-HALTED"
+  }
+ }
+}
