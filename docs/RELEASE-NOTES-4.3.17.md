@@ -72,11 +72,21 @@ result. Nothing is emitted unless the value is set.
   registry carries no `InputDrag*` override.
 - App-menu entries: emitted, launched, and returning on a live guest.
 
-**NOT verified, stated plainly:**
+**Confirmed by hand after this release was cut** (owner, 2026-09-01: *"it drags fine now"*), on
+agent `C3D2A0193F9D493A`, which differs from the released `45e788d` by the version file alone. The
+trace from those drags, same guest, same window, same tuning as the defect table above:
 
-- **The fix has not been confirmed by a hand drag on the fixed build.** The root cause is measured
-  and the mechanism is not in doubt, but the thing a user judges — how it feels — has not been
-  re-checked since the fix. Only a person dragging a window can do that.
+| | defect build | fixed build |
+|---|---|---|
+| `NotifyNormal` crossings during the drag | 1 | **21** |
+| what each did to the latch | destroyed it | **kept it, every one** |
+| motion events on the fixed translation law | 50/540 = 9 % | **587/587 = 100 %** |
+| window-path reversals, per drag | 20 % after the crossing | 11 % / 0 % / 8 % |
+
+Note the crossing *rate*: 14 arrived inside the first 3.5 s drag alone. On the defect build the
+first one lands within about half a second of any drag, which is why this was not intermittent.
+
+**NOT verified, stated plainly:**
 - Clicking the two app-menu entries **in dom0** after `qvm-sync-appmenus` is unverified; only the
   guest half was exercised.
 - No acceptance campaign was run against this artifact. It is a targeted bugfix on top of the

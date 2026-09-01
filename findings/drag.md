@@ -8,7 +8,7 @@ correction lines were buried chronologically in a 25k-line log, so reading a top
 top-down returned the stale answer.
 
 - Wobble was FIXED 2026-08-16 by `InputDragQuantise` + interpolated origin. Shipped defaults `AdoptMs=25 / AnnounceMs=50`, `LagMs=10`, `OriginInterp=1`; the servo is superseded and OFF. Do not read the top of docs/PLAN-drag-quality.md, which still says "parked". [verified 2026-08-16]
-- Owner reports the wobble is BACK as of 2026-09-01. **Cause FOUND and fixed (`6385c25`) - see the crossing entry below.** Awaiting the owner's confirming hand drag on the fixed build.
+- Wobble reported back 2026-09-01, root-caused, fixed, and **CONFIRMED BY THE OWNER'S HAND on the fixed build the same day** (*"it drags fine now"*). Shipped in **4.3.17**. [verified 2026-09-01]
 - All three good translation branches gate on `window == g_InputDragWindow && g_InputDragOriginValid`; anything else falls through to the LIVE origin, i.e. the gain-1 oscillator. So any path that fails to arm the latch or clears it mid-drag silently restores stock wobble. Code-read, not measured. [verified 2026-09-01]
 - **ROOT CAUSE, MEASURED on a hand drag 2026-09-01: `HandleCrossing` releases the drag latch mid-drag on a GENUINE normal-mode LeaveNotify.** 569 ms into a 5.0 s guest-native drag, dom0 sent `LeaveNotify mode=0 (NotifyNormal)` and the latch was torn down. Before it: 50 motion events, 50/50 on the interpolated origin, 8 % window-path reversals. After it: 490 events, **489/490 on the LIVE origin** - the gain-1 oscillator - and **20 % reversals**, which is the wobble exactly as originally measured (16-19 %). The same teardown also disables `InputDragFreezeContent`, `DragEventPriority` and the announce pacing (they gate on the same latch): the announce rate inside the drag was 33.5/s against the ~14/s the tuning was fitted at. Fixed in `ae09bdc` by DELETING the teardown, not guarding it: `HandleCrossing` now receives the message, records it under the drag trace, and touches no state. The intermediate guarded version (`6385c25`, `2ad98c8`) is superseded - keeping a speculative path alive on a hypothetical was the same reasoning that caused the bug. The one defect that commit had a mandate for, a `LogWarning` per crossing on the INPUT path at ~10/s, stays fixed. [verified 2026-09-01, hand drag, agent EB25802E85D471A8]
 - **PROVENANCE of that teardown, because it is the process lesson and not just a bug** (owner asked, 2026-09-01: *"what exactly invented this teardown path?"*). The task in hand on 2026-08-30 was an owner-reported unbordered Windows Update dialog (`096fa98`, `93a0d9c`, `30c4e65`); from 01:01 that day onward the whole session was the acceptance/test framework. At **00:42** I recorded MSG_CROSSING as unhandled and ended the entry *"Not yet fixed. The right handler behaviour needs deciding (on leave: release hover/capture ...), and the Linux agent's treatment of XCrossingEvent is the reference."* At **00:44** - two minutes later - I wrote the handler anyway, and not the behaviour that note described: it tore down the DRAG latch, a different subsystem, not the reported problem, not in the note, not requested, not measured. It shipped inside a legitimate log-flood fix and was reviewed as one. The hole it claimed to close had been closed 17 days earlier by `INPUT_DRAG_STUCK_MS` (`cef692a`, 2026-08-13). Cost: a wobble regression plus three burned hand drags. [verified 2026-09-01]
@@ -1823,3 +1823,32 @@ as the grab modes: the pointer moved to a child window and is still inside.
 **Evidence rule 5 is satisfied without extra work**: the build that produced the table above IS
 the defect build, measured on the same guest, same window, same tuning, with the same instrument
 that will grade the fix. The failing side is not hypothetical.
+
+## 2026-09-01 (session 2, cont.) — FIX CONFIRMED, and the crossing rate says why it was never intermittent
+
+Owner dragged on the fixed build (agent `C3D2A0193F9D493A`, hash-verified running; it differs
+from the released `45e788d` by the version file alone) and reported *"it drags fine now"*. The
+trace from those three drags, against the defect trace on the same guest, same window, same
+tuning, same instrument:
+
+| | defect build `EB25802E85D471A8` | fixed build `C3D2A0193F9D493A` |
+|---|---|---|
+| `LeaveNotify mode=0` crossings during the drag | 1 | **21** |
+| what each did to the latch | destroyed it | **kept it, every one** (`armed=1`) |
+| motion events on the fixed translation law | 50/540 = 9 % | **587/587 = 100 %** (339/339, 92/92, 156/156) |
+| window-path direction reversals | 20 % after the crossing | 11 % / 0 % / 8 % per drag |
+| inbound daemon configures with `drag=1` | 0 | 0 |
+
+**The crossing rate is the part worth keeping.** 14 normal-mode crossings arrived inside the first
+3.5 s drag alone. On the defect build the FIRST one lands within about half a second of any drag
+and the latch never re-arms until the next button press - so the regression was not intermittent
+and never could have been. Anyone who dragged after 2026-08-30 got it every time.
+
+**Residual, not claimed as zero.** Drag 1 still shows 11 % reversals. That is the known
+`AdoptMs`/`LagMs` residual (announce quantisation plus dom0's apply-lag tail), quantified earlier
+this session at 1 % / 22 % / 35 % for a dom0 lag of 17 / 80 / 200 ms. The owner's verdict is
+"fine"; the number is recorded so a future session compares against 11 %, not against 0.
+
+**`InputDragCfgGuard` stays default OFF and should not be revisited without evidence**: zero
+inbound configures with `drag=1` on both the defect and the fixed hand drags, matching the
+2026-08-12 measurement that first called it inert.
