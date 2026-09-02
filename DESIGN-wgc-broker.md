@@ -86,6 +86,25 @@ slot with `Hwnd == WGCBRK_MONITOR_HWND`: a full-desktop `CreateForMonitor` captu
 same bounds-checked copy as the per-HWND path. This is the user-session WGC replacement for the DDA
 slice; with it, the agent's own Desktop-Duplication capture can be fully retired.
 
+### Menus UNSLICED — broker PrintWindow fallback (2026-09-02)
+
+The monitor-slice is still slicing (moved to the broker). To take o-r **menus** off the slice
+entirely and onto a clean per-window source: WGC `CreateForWindow` rejects menu/popup HWNDs, but
+`PrintWindow(PW_RENDERFULLCONTENT)` captures them from the broker's user session (proven — both
+redirected WinForms/Win32 menus AND modern Win11 XAML menus `Microsoft.UI.Content.PopupWindowSiteBridge`
+render their content; the SYSTEM agent can't be relied on for PrintWindow, but the broker's user
+session can). So when a broker window channel fails WGC, it now falls back to **polled PrintWindow**
+into a top-down 32bpp DIB, published through the same seqlock (`wgcbroker.cpp` PublishPrintWindow),
+gated by a non-black check (CoreWindow/NRB/ULW that PrintWindow also can't do fall back to the slice)
+and change-detection (no republish while static). The loop polls ~30 Hz while any PrintWindow channel
+is live. No agent change — `BrokerRegister` already broadens to all sliceFed under `SliceRetire`, and
+the consumer's per-HWND `BrokerFreshFrame` branch already precedes MONSLICE.
+
+**VERIFIED (win11-p2/26100, cold boot, fresh arena):** a WinForms context menu logged
+`BROKERFRAME first WGC frame consumed hwnd 0x5021c slot 2 187x158` and rendered all seven items
+cleanly, per-window — off the slice. (It briefly MONSLICEs for one pass before the first PrintWindow
+poll publishes, then the broker frame takes over.)
+
 **The CreateForMonitor launch-context bug (RESOLVED 2026-09-02).** `CreateForMonitor` returned
 `E_HANDLE (0x80070006)` from the broker for a long chase. Excluded, one at a time, each with the
 monitor slot's `AckState/FailHr` as the instrument: the HMONITOR handle (`MonitorFromPoint` vs
@@ -107,6 +126,18 @@ regression under `SliceRetire` is FIXED. PASS.
 
 ## Owed / follow-ons
 
+- **Arena free-list (durability, needed for menus).** `WgcArenaAlloc` is a bump allocator that
+  NEVER reclaims — `BrokerUnregister` frees the slot but not its arena bytes. Menus are high-churn
+  (every open allocates ~2×W×H×4, never returned), so the 128 MB arena exhausts within a session and
+  new registrations fail → menus fall back to the slice. Measured directly: after a long test session
+  a menu MONSLICEd; on a fresh (cold-boot) arena the same menu BROKERFRAMEd. Add a free-list (return
+  a slot's [off0,off1] on unregister; alloc reuses a freed region ≥ needed before bumping) so menu
+  unslicing holds across a session. This also helps NRB app churn. The agent's bounds-checks on
+  broker-written offsets must stay intact.
+- **Drop the menu shadow companion.** A Win11 menu maps as TWO o-r windows: the content
+  (PrintWindow-clean, now BROKERFRAMEd) and a slightly larger shadow/backdrop (still MONSLICEs).
+  Drop the shadow in the window-acceptance predicate — same droppable-chrome class as the Office
+  shadow-strip (2A-chrome) filter. (Owner 2026-09-02: "shadows and glows we just drop".)
 - Occlusion A/B DONE 2026-09-02 (win11-p2): Calculator occluded by Notepad in the guest. Broker ON
   -> Calculator renders CLEAN (WGC occlusion-independent). Broker OFF (control) -> Notepad bleeds
   into Calculator's window from the composited slice. Disjoint, seen-to-fail on the control - the
