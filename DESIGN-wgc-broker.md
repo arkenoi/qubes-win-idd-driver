@@ -49,10 +49,17 @@ hybrid untouched (WGC border unremovable on 19045).
   fully in-bounds, secure-desktop freshness — so a hostile user-IL process cannot drive an OOB
   read into the granted slab. The broker only ever sees the interactive user's own windows (pixels
   that user could already WGC-scrape); NOT an isolation-boundary change.
-- **Lifecycle**: agent creates the section + spawns the broker (shell-token borrow, keeps the
-  process handle) + supervises at ~1 Hz (main-loop wait capped to 1 s while active so the heartbeat
-  stays fresh during idle); relaunch on death/session-change; broker exits on Shutdown / agent
-  process death / agent-pid mismatch (stale broker) / session change / 10 s heartbeat stall.
+- **Lifecycle**: agent creates the section + launches the broker **via the Task Scheduler**
+  (`schtasks /create /tn Qubes-WgcBroker /tr "<8.3-short-path>\wgcbroker.exe --serve ..." /ru
+  <interactive-user> /it /f` then `/run`) + supervises at ~1 Hz (main-loop wait capped to 1 s while
+  active so the heartbeat stays fresh during idle). There is NO child process handle under Task
+  Scheduler, so **liveness = the shared-memory BrokerHeartbeat advancing within ~6 s** (relaunch
+  throttled to no more than once/8 s so a starting broker isn't re-fired). Broker exits on Shutdown /
+  agent-pid mismatch (stale broker) / session change / 10 s heartbeat stall. The broker is built
+  **Windows-subsystem** (`wmainCRTStartup`) so the Task-Scheduler /it launch shows no console window
+  that the agent would map. WHY Task Scheduler and not CreateProcessAsUser: see the monitor-slice
+  section — `CreateForMonitor` returns E_HANDLE from a CreateProcessAsUser-spawned broker regardless
+  of token/environment, and succeeds only from a Task-Scheduler /it launch.
 - **Fallback**: any broker miss (down, no fresh frame, secure desktop, torn read, dim mismatch)
   falls through to the exact composited-desktop slice — a broker-fed window is NEVER blank.
 - **Gate**: `g_OsBuild >= 26100` AND registry `WgcBroker`/qubesdb `/qubes-service/wgc-broker`
@@ -67,16 +74,54 @@ hybrid untouched (WGC border unremovable on 19045).
   (not slice-fallback). Calculator's dom0 window rendered its full live UWP content (typed "78"
   visible) — DirectComposition content PrintWindow cannot capture. PASS.
 
+## Full slicer retirement — the monitor-slice (o-r / static windows)
+
+The broker retires the SYSTEM agent's DDA slice for NRB app windows (stage 2b, per-HWND
+`CreateForWindow`). But o-r / static windows — menus, tooltips, toasts (shell CoreWindows) — have
+NO per-HWND WGC source (`CreateForWindow` fails E_INVALIDARG on CoreWindows; FrameArrived never
+fires on static o-r windows). To retire the DDA slice for THOSE too, the broker opens ONE extra
+slot with `Hwnd == WGCBRK_MONITOR_HWND`: a full-desktop `CreateForMonitor` capture. Under
+`SliceRetire`, the agent slices each o-r window's screen rect out of that composited monitor frame
+(screen-relative, origin 0,0) instead of the DDA framebuffer — `ProcessNewFrame` MONSLICE branch,
+same bounds-checked copy as the per-HWND path. This is the user-session WGC replacement for the DDA
+slice; with it, the agent's own Desktop-Duplication capture can be fully retired.
+
+**The CreateForMonitor launch-context bug (RESOLVED 2026-09-02).** `CreateForMonitor` returned
+`E_HANDLE (0x80070006)` from the broker for a long chase. Excluded, one at a time, each with the
+monitor slot's `AckState/FailHr` as the instrument: the HMONITOR handle (`MonitorFromPoint` vs
+`MonitorFromWindow` — both failed), the launch token (shell-borrow → **WTS session token**,
+confirmed `WTS session 1`, still E_HANDLE), and the **user environment block** (`CreateEnvironmentBlock`,
+still E_HANDLE) — all under `CreateProcessAsUser`. The control that broke it open: `wgcprobe mon`
+launched via `schtasks /ru user /it` captured the monitor perfectly (`frameArrived=1 content=5120x1440
+hr=0`). So the differentiator is the **launch mechanism**, not the token/env/handle: `CreateForMonitor`
+(DWM interop) needs a Task-Scheduler-interactive launch context. `CreateForWindow` tolerates
+CreateProcessAsUser, which is why stage 2b worked while the monitor slot did not. Fix = launch the
+broker via Task Scheduler **and** use `MonitorFromPoint({0,0}, MONITOR_DEFAULTTOPRIMARY)` (the two
+together — neither alone; wgcprobe used exactly both).
+
+**Result (win11-p2, 26100, 2026-09-02, live-swap):** monitor slot `ack=2 fail=0x0 frameId=137
+5120x1440` (was ack=3/E_HANDLE); consumer logs `MONSLICE ... monAvail=1` for every o-r/sliceFed
+window; a real shell **toast rendered its full content** (title/body/buttons) via the monitor-slice,
+NOT black; o-r popup-menu background renders (gray, red dom0 border), not black. The black-popup
+regression under `SliceRetire` is FIXED. PASS.
+
 ## Owed / follow-ons
 
 - Occlusion A/B DONE 2026-09-02 (win11-p2): Calculator occluded by Notepad in the guest. Broker ON
   -> Calculator renders CLEAN (WGC occlusion-independent). Broker OFF (control) -> Notepad bleeds
   into Calculator's window from the composited slice. Disjoint, seen-to-fail on the control - the
   broker's value-over-slice is proven.
-- Cold-boot acceptance (the guest test currently uses a live agent restart — Win11 flaky-autologon
-  cold boots stalled the heavy harness; verified live instead). Re-run through a clean cold boot.
+- Cold-boot acceptance: stage 2b + the monitor-slice were proven via live agent-swap; a clean
+  cold-boot run (scratchpad/p2/run-coldboot.sh) confirms the Task-Scheduler launch path arms from
+  boot (no live restart to lean on). [running / see results]
 - The dim-match requirement (FrameWidth==entry->Width) means a window whose WGC ContentSize differs
   from the agent's DWM-visible bound falls back to the slice; refine with cropX/Y if needed.
 - DirtyRegions (24H2) not yet consumed (whole-window frames today); MinUpdateInterval not set.
-- Toast interceptor (separate component) + o-r-menu WGC probe — decide whether the slicer retires
-  FULLY (north star).
+- Full slicer retirement: RESOLVED for the o-r/static class via the monitor-slice (above). The
+  toast interceptor (notifhost) remains a complementary path that promotes toasts to normal windows.
+  Two refinement notes: (1) the monitor-slice does a one-shot full copy + dirty-rect updates keyed
+  on the daemon's dirty_rects; an o-r window that keeps repainting AFTER the initial slice (observed
+  on a synthetic WinForms menu — background rendered, later-painted item text lagged) may need a
+  small periodic refresh or its own damage signal. Real shell toasts painted fully before slicing,
+  so this did not affect them. (2) `MonitorFromPoint({0,0})` assumes the primary monitor origin at
+  (0,0) — fine for the single guest monitor; revisit if multi-monitor is ever added.
