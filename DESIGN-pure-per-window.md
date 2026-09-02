@@ -169,15 +169,34 @@ few thousand lines, roughly half the architect's original claim.
   is hereby demonstrated viable on this rig; remaining before shipping it: reroute
   `PwForceLegacy`-class fallbacks to the guest-side sliceFed channel, gate on negotiated
   protocol ≥ 1.7, and grant-on-demand for a non-seamless switch.
-- **P1 — PrintWindow area scaling** at 800×600 / 1080p / 1440p / 5120×1440 under the IDD,
-  100 ticks each, CPU-ms and wall-ms. Bar: ≤~10 ms CPU/tick at maximized size (NOT 30 ms —
-  that bar ships below-stock scroll regressions). Expected per current extrapolation: FAIL
-  above ~1 Mpx, confirming concession 1.
-- **P3 — prototype canonical bench + two scenarios the canonical suite lacks**: drag over
-  a maximized Writer-A window, and focused-editor caret idle at maximized size (caret blink
-  is real pixel change the hash cannot gate; ungated it extrapolates to worse-than-stock
-  idle for a maximized editor). All four canonical phases must stay disjoint-below stock
-  (45 s-settle bars: idle 3.91, drag 29.0, scroll 41.0, typing 22.8).
+- **P1 — PrintWindow area scaling: RAN 2026-09-02 (win10-p2), bar FAILED above ~2 Mpx as
+  predicted → concession 1 (DDA-owned foreground channel) is MANDATORY, not conditional.**
+  Measured CPU-ms per whole-window PrintWindow(PW_RENDERFULLCONTENT), 40 calls/size (800×600
+  wall p50 16.1 ms validates the instrument vs the 15–18 ms anchor): 0.48 Mpx → 2.7 ms;
+  1.02 Mpx → 1.6 ms; 2.07 Mpx → 12.9 ms; 3.69 Mpx → 14.5 ms; maximized 5122×1393 (7.13 Mpx)
+  → 40.2 ms (wall p50 88 ms). The ≤10 ms/tick bar (to hold disjoint-below-stock 20 Hz scroll)
+  is crossed between 1 and 2 Mpx — any ordinary maximized window — exactly the adversary's
+  0.9–2.9 Mpx estimate. Whole-window PrintWindow therefore cannot feed the drag/scroll/typing
+  hot path at real sizes; the mirror sub-rect path (~121 µs) must. (Measured 40 ms at
+  maximized is ~half the design's 80–96 ms linear extrapolation — the extrapolation was
+  pessimistic, ~5.6 ms/Mpx actual — but 40 ms is still 4× the bar, so the verdict is
+  unchanged.) Instrument traps burned in: the probe MUST run as the interactive user
+  (`schtasks /ru user /it`; session-0 qrun is desktop-blind → 0×0 rect), find Notepad via
+  `Get-Process … MainWindowHandle` (FindWindowW(cls,$null) fails — PowerShell marshals $null
+  as an empty-title match), write to a SYSTEM-precreated world-writable dir (`C:\Users\Public`;
+  a non-admin task cannot mkdir under `C:\`), and flush results incrementally per size (the
+  large sizes take minutes; a single final write always lost the poll race).
+- **P3 — canonical bench, P2 flag OFF vs ON: RAN 2026-09-02 (win10-p2), PASS (perf-neutral).**
+  One binary, flag flipped per side, cold boot + log-marker assertion per side, 3 interleaved
+  rounds. Means (pct of one core) OFF vs ON: drag 14.6/15.1, scroll 3.2/3.4, typing 2.8/3.4,
+  idle 0.5/0.4 — every phase's OFF and ON ranges OVERLAP, and the round-to-round variance
+  within each side (drag swung 13–18 on both) exceeds any OFF/ON gap, so removing the desktop
+  grant is statistically indistinguishable in cost. Both sides sit far below stock (drag 29.0,
+  scroll 41.0, typing 22.8, idle 3.91). This is P2-scoped (flag toggles only the grant, not the
+  engine), so it measures grant removal, not the full pure model. STILL OWED for the full
+  model: the two scenarios the canonical suite lacks — drag over a maximized Writer-A window
+  (the R1 tick-storm risk), and focused-editor caret idle at maximized size (real micro-dirt
+  the hash cannot gate) — plus a Win11 arm (see below).
 - **P4** — Win11 idle hash-on/hash-off on one binary (defect-reintroduced instrument proof).
 - **P5** — dom0 blit/ring flood: 4×1080p windows ticking whole-window 30 Hz × 60 s; zero
   degraded-mode drops, live pixels, no dom0 freeze.
