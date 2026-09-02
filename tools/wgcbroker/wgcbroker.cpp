@@ -143,8 +143,16 @@ static void OpenChannel(int i) {
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{ nullptr };
         if (monitor)
-            check_hresult(interop->CreateForMonitor(MonitorFromPoint(POINT{0,0}, MONITOR_DEFAULTTOPRIMARY),
+        {
+            // Robust primary-HMONITOR: MonitorFromWindow(desktop) is reliable in the broker's
+            // spawn context; MonitorFromPoint({0,0}) returned a handle CreateForMonitor rejected
+            // with E_HANDLE. Record the handle low bits in FailHr on failure for diagnosis.
+            HMONITOR hmon = MonitorFromWindow(GetDesktopWindow(), MONITOR_DEFAULTTOPRIMARY);
+            if (!hmon) hmon = MonitorFromPoint(POINT{0,0}, MONITOR_DEFAULTTOPRIMARY);
+            if (!hmon) { s->AckState = WGCBRK_FAILED; s->FailHr = (LONG)0xDEAD0000; return; }
+            check_hresult(interop->CreateForMonitor(hmon,
                           guid_of<GraphicsCaptureItem>(), reinterpret_cast<void**>(put_abi(item))));
+        }
         else
             check_hresult(interop->CreateForWindow(hwnd, guid_of<GraphicsCaptureItem>(),
                           reinterpret_cast<void**>(put_abi(item))));
