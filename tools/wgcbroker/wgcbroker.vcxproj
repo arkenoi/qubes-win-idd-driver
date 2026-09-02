@@ -79,7 +79,12 @@
       <TreatWarningAsError>false</TreatWarningAsError>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <!-- Windows subsystem (not Console): the broker is launched interactively via the Task
+           Scheduler, and a console-subsystem process would flash/keep a console window in the
+           user session that the gui-agent would then map as a guest window. wmainCRTStartup
+           keeps wmain() as the entry. -->
+      <SubSystem>Windows</SubSystem>
+      <EntryPointSymbol>wmainCRTStartup</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>d3d11.lib;dxgi.lib;user32.lib;gdi32.lib;advapi32.lib;kernel32.lib;windowsapp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
@@ -99,7 +104,8 @@
       <TreatWarningAsError>false</TreatWarningAsError>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
+      <EntryPointSymbol>wmainCRTStartup</EntryPointSymbol>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
