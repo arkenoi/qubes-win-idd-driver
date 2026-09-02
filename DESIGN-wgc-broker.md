@@ -126,6 +126,17 @@ regression under `SliceRetire` is FIXED. PASS.
 
 ## Owed / follow-ons
 
+- **Composite-synthesis slice dependency — ELIMINATED 2026-09-02.** Synthesis (o-r popups painted
+  into their owner's buffer instead of announced — `PwPatchSynthChildClipped`) copied from `g_FbBits`,
+  the agent's DDA composited desktop, which full retirement removes — a retirement blocker. Now under
+  `SliceRetire` it sources from the broker's `CreateForMonitor` frame (`BrokerMonitorFrame`; same
+  composited desktop in screen coords, identical clip/copy), DDA-fb fallback otherwise. Keeps the
+  DWM-composited blend synthesis relies on (a per-window opaque capture would lose the popup's shadow
+  blend). VERIFIED: regedit's classic File menu synthesized into the regedit window (SynthActivate
+  logged, no separate window, no "no composited source" warning) and rendered fully via the per-window
+  shot. NOTE: the explorer XAML PopupHost menu still does NOT synthesize (untracked-`GW_OWNER` guard —
+  Office shadow-ghost scar tissue) so it maps as a separate broker-PrintWindow window; relaxing that to
+  synthesize-on-containment is a separate, riskier enhancement (and would also fix its shadow margin).
 - **Arena free-list — DONE 2026-09-02.** `WgcArenaAlloc` was bump-only and never reclaimed, so
   high-churn menus exhausted the 128 MB arena within a session → new registrations failed → menus
   fell back to the slice. Now a best-fit free-list with coalescing (`WgcArenaFree`); each
