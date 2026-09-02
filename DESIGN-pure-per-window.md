@@ -227,6 +227,21 @@ few thousand lines, roughly half the architect's original claim.
   dirty-region behaviour, capture cost vs the 40 ms PrintWindow, and logoff/secure-desktop
   lifecycle. Verdict: the Win11-only WGC broker is REAL and worth pursuing; it is not yet an
   end-to-end capture path.
+- **P8 stranded-class capture (RAN 2026-09-02, win11-p2/26100) — CRITICAL SPLIT: per-HWND WGC
+  works for real app windows but NOT for shell CoreWindows, and the TOAST is a shell CoreWindow.**
+  PASS A: `CreateForWindow` on Calculator's `ApplicationFrameWindow` (NRB, ex=0x00200100) →
+  `nonBlank=true`, 16 colors, real content 322×534 — WGC captures the UWP/NRB class PrintWindow
+  cannot. PASS B: `CreateForWindow` on the **toast** (`ShellExperienceHost` `Windows.UI.Core.CoreWindow`
+  396×369, found via HWND brute-force scan — EnumWindows can't see it) → **`E_INVALIDARG`
+  (0x80070057), itemCreated=false**; same failure on the Start (`StartMenuExperienceHost`) and
+  `SearchHost` CoreWindows. So Windows refuses per-HWND WGC capture of shell CoreWindows.
+  CONSEQUENCE for the broker: the naive "CreateForWindow on every stranded HWND" model works for
+  UWP/NRB *app* windows (and, expected, o-r menus — untested) but **cannot capture toasts** — the
+  one class the project rules MUST keep. Toasts therefore need either (a) WGC **monitor** capture
+  (`CreateForMonitor`, slice the toast rect out — probe in flight) or (b) staying on the existing
+  DDA slice. Either way the composited-desktop *source* does not fully die even with the broker;
+  toasts keep needing a whole-surface source. This mirrors the pure-model finding that NRB shell
+  surfaces have no per-window pixel source. [verified 2026-09-02]
 - **Version floor = 24H2 (26100), not 25H2 (owner-confirmed 2026-09-02).** The WGC upgrades that
   make the broker worthwhile (DirtyRegions, DirtyRegionMode, MinUpdateInterval,
   IncludeSecondaryWindows, border-off) all land in 24H2; border-off is measured working on
