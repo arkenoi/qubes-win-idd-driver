@@ -119,9 +119,17 @@ regression under `SliceRetire` is FIXED. PASS.
 - DirtyRegions (24H2) not yet consumed (whole-window frames today); MinUpdateInterval not set.
 - Full slicer retirement: RESOLVED for the o-r/static class via the monitor-slice (above). The
   toast interceptor (notifhost) remains a complementary path that promotes toasts to normal windows.
-  Two refinement notes: (1) the monitor-slice does a one-shot full copy + dirty-rect updates keyed
-  on the daemon's dirty_rects; an o-r window that keeps repainting AFTER the initial slice (observed
-  on a synthetic WinForms menu — background rendered, later-painted item text lagged) may need a
-  small periodic refresh or its own damage signal. Real shell toasts painted fully before slicing,
-  so this did not affect them. (2) `MonitorFromPoint({0,0})` assumes the primary monitor origin at
-  (0,0) — fine for the single guest monitor; revisit if multi-monitor is ever added.
+- **Menu repaint-lag FIXED (2026-09-02, frame-chase).** The one-shot-full-copy + DDA-dirty-rect
+  updates were keyed on the daemon's dirty_rects, but the DDA damage clock and the WGC monitor-frame
+  clock are independent: a repaint the DDA reports can land in a WGC frame that arrives AFTER the
+  damage, with no further DDA damage to trigger a re-copy — leaving a menu with stale pixels
+  (a synthetic WinForms menu showed its background but lagged its item text; the black bottom band
+  was the not-yet-arrived paint). Fix: `BrokerMonitorFrame` now returns the monitor `FrameId`, and
+  after any damage over a monitor-sliced window the consumer CHASES fresh monitor frames for
+  `WGC_MON_CHASE_MS` (250 ms) — re-copying the full window rect each time the FrameId advances,
+  so the lagged WGC frame is picked up. Bounded to the post-damage window so a static o-r window
+  near unrelated on-screen animation is not repeatedly re-copied. Per-window state:
+  `PwMonLastId`/`PwMonRefreshUntil`/`PwMonLogged`. VERIFIED: the same WinForms menu now renders all
+  seven items ("Open … Properties"), no black band. [live-swap PASS; cold-boot confirm in results]
+- `MonitorFromPoint({0,0})` assumes the primary monitor origin at (0,0) — fine for the single guest
+  monitor; revisit if multi-monitor is ever added.
