@@ -28,10 +28,17 @@ working (toasts above all) have no pixel source except the composited desktop, a
 whole-window ticks at measured PrintWindow prices break the project's own
 disjoint-below-stock performance bar at ordinary maximized-window sizes. Every deletion the
 ideal promises was checked; about half survive. What this redesign buys is **structure and
-security** (grant removal, secure-desktop exposure closure, thousands of lines of state
-machine deleted); what it costs is **measured performance headroom** (typing ~2.5–3×,
-scroll ~3–4× the shipped hybrid — still far below stock) unless the foreground fast path is
-retained. Drag outcome is unknown, not predicted-won.
+tidiness** (grant removal, the never-reclaimed staging-grant leak gone, no longer copying the
+whole desktop to dom0, thousands of lines of state machine deleted); what it costs is
+**measured performance headroom** (typing ~2.5–3×, scroll ~3–4× the shipped hybrid — still
+far below stock) unless the foreground fast path is retained. Drag outcome is unknown, not
+predicted-won.
+
+> **Owner ruling 2026-09-02: this is NOT a security/isolation win.** Removing the desktop
+> grant does not change the qube boundary or gui-daemon's trust model (dom0/the GUI domain
+> already receives guest window content; a hostile guest can grant what it likes regardless).
+> The value is hygiene — fewer/leak-free grants, less redundant copying, a simpler agent.
+> Wherever this doc earlier said "security" or "exposure closure", read "tidiness/correctness".
 
 ## 2. What is CONFIRMED (source-verified this study)
 
@@ -53,11 +60,13 @@ retained. Drag outcome is unknown, not predicted-won.
   `XcGnttabPermitForeignAccess2` in `StagingEnsure` + suppressing `SendScreenGrants` in
   seamless leaves all agent-side code working. The identity assumption (granted buffer ==
   DDA image) survives only in the direct-map fallback path, which dies. [verified]
-- **Payoff that survives every refutation:** the 7200-page-per-start staging-grant leak
-  (findings/capture.md open defect) closes structurally, and the secure-desktop residual
-  exposure (StagingCopyFrame copies secure-desktop pixels into a dom0-mapped grant during
-  the seamless freeze — it has no secure gate) ceases to exist *for sessions that never
-  enter non-seamless*. Caveat honestly: grants are irrevocable in practice (xeniface
+- **Payoff that survives every refutation (hygiene, not security — owner ruling):** the
+  7200-page-per-start staging-grant leak (findings/capture.md open defect) closes
+  structurally, and the agent stops copying the whole desktop — secure-desktop pixels
+  included — into a dom0-mapped grant (`StagingCopyFrame` has no secure gate) *for sessions
+  that never enter non-seamless*. This is a correctness/tidiness gain (dom0 already receives
+  guest window content and is trusted; it is NOT an isolation improvement). Caveat honestly:
+  grants are irrevocable in practice (xeniface
   release builds never revoke), so the first entry into non-seamless grants the desktop
   mirror for the process lifetime; a hard guarantee needs a separately-granted
   non-seamless buffer (~30 MB @5120×1440 + copy plumbing) or acceptance of
@@ -142,8 +151,9 @@ staging-grant-per-start leak; A6 park/ack/revoke screen-grant lifecycle (seamles
 the direct-map fallback + identity assert; `GetFrameMoveRects` instrumentation;
 `PwScreenUnchanged` per-window hash; drag-slice machinery for eligible windows; row-diff
 as a *damage shape* generator (a change/no-change gate remains); the daemon-side legacy
-screen-slice contract for unattached windows; the secure-desktop staging exposure (with
-the §2 caveat). Net: ProcessNewFrame's seamless arm collapses substantially — but the
+screen-slice contract for unattached windows; and the redundant whole-desktop copy to a
+dom0-mapped grant (secure-desktop pixels included — a tidiness gain, not a security one; §2
+caveat). Net: ProcessNewFrame's seamless arm collapses substantially — but the
 DDA pipeline, DDA-owned arbitration, synthesis, and a repair tick all remain. Order of a
 few thousand lines, roughly half the architect's original claim.
 
@@ -238,7 +248,8 @@ because it was expected to differ — and it does, decisively on P1.
 ## 7. Recommendation
 
 Do P2 regardless of the rest — desktop-grant removal in seamless stands on its own as a
-security/structure win with near-zero blast radius. Treat the full pinned model as
+tidiness/structure win (leak gone, less redundant copying, simpler agent; NOT a security
+win per the owner ruling in §1) with near-zero blast radius. Treat the full pinned model as
 conditionally attractive: commit only if P1 lands under the corrected bar or the owner
 accepts the concession set in §4 (which amounts to "hybrid minus desktop grant", keeping
 DDA-owned and drag attribution). Do not chase WGC on Win10; re-evaluate a Win11 broker
