@@ -144,12 +144,11 @@ static void OpenChannel(int i) {
         GraphicsCaptureItem item{ nullptr };
         if (monitor)
         {
-            // Robust primary-HMONITOR: MonitorFromWindow(desktop) is reliable in the broker's
-            // spawn context; MonitorFromPoint({0,0}) returned a handle CreateForMonitor rejected
-            // with E_HANDLE. Record the handle low bits in FailHr on failure for diagnosis.
-            HMONITOR hmon = MonitorFromWindow(GetDesktopWindow(), MONITOR_DEFAULTTOPRIMARY);
-            if (!hmon) hmon = MonitorFromPoint(POINT{0,0}, MONITOR_DEFAULTTOPRIMARY);
-            if (!hmon) { s->AckState = WGCBRK_FAILED; s->FailHr = (LONG)0xDEAD0000; return; }
+            // EXACTLY wgcprobe's proven call: CreateForMonitor takes only the HMONITOR, so the
+            // handle is the sole variable, and MonitorFromPoint({0,0}, DEFAULTTOPRIMARY) is what
+            // captured the monitor successfully from a Task-Scheduler /it launch. (MonitorFromWindow
+            // (GetDesktopWindow()) was an earlier wrong theory - the real fix was the launch path.)
+            HMONITOR hmon = MonitorFromPoint(POINT{0,0}, MONITOR_DEFAULTTOPRIMARY);
             check_hresult(interop->CreateForMonitor(hmon,
                           guid_of<GraphicsCaptureItem>(), reinterpret_cast<void**>(put_abi(item))));
         }
