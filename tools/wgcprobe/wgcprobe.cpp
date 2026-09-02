@@ -142,7 +142,7 @@ int main(int argc, char** argv){
   HANDLE evt=CreateEventW(nullptr,FALSE,FALSE,nullptr); // auto-reset
   std::mutex mtx; Direct3D11CaptureFrame pending{nullptr};
   event_token token{};
-  try{ token=pool.FrameArrived([&](Direct3D11CaptureFramePool const& s, IInspectable const&){
+  try{ token=pool.FrameArrived([&](Direct3D11CaptureFramePool const& s, winrt::Windows::Foundation::IInspectable const&){
         auto f=s.TryGetNextFrame(); if(f){ std::lock_guard<std::mutex> lk(mtx); pending=f; SetEvent(evt); } }); }catch(...){}
   try{ session.StartCapture(); }
   catch(hresult_error const& e){ CloseHandle(evt); emitDead("start",(unsigned)e.code().value); return 1; }
