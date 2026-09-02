@@ -181,21 +181,27 @@ static void PublishPrintWindow(int i) {
         if (!g_hdr->Producing) break;                        // secure desktop: do not publish
         HWND hwnd = c.hwnd;
         if (!hwnd || !IsWindow(hwnd)) break;
-        int w = s->ReqWidth, h = s->ReqHeight;               // published (card) size
-        int cropX = s->ReqCropX, cropY = s->ReqCropY;        // where the card sits in the window
+        int w = s->ReqWidth, h = s->ReqHeight;               // published (card) size, agent-sized buffer
+        int cropX = s->ReqCropX, cropY = s->ReqCropY;        // agent's current crop offset
         if (w <= 0 || h <= 0 || cropX < 0 || cropY < 0) break;
         if ((LONGLONG)w * h * 4 > s->BufBytes) break;         // agent sized for ReqW*ReqH*4
-        // PrintWindow draws the window at the DC origin and CLIPS to the DIB, so a w*h DIB would
-        // capture the window's top-left w*h - i.e. the transparent shadow margin - and the card
-        // (which sits at (cropX,cropY)) would be shifted right/down and clipped. Render into a DIB
-        // big enough to reach the card's far edge, then lift out the card sub-rect. With no crop
-        // (cropX==cropY==0) renderW/H == w/h and this is byte-for-byte the old path.
-        int renderW = w + cropX, renderH = h + cropY;
-        if (!EnsurePwDib(c, renderW, renderH)) break;
+        // Render the FULL window: PrintWindow draws it at the DC origin and CLIPS to the DIB, so we
+        // need a DIB spanning the whole window to (a) lift the card sub-rect at (cropX,cropY) and
+        // (b) measure the menu's true OPAQUE bounds - the transparent shadow margin comes out black,
+        // so the opaque bounding box is the menu's exterior edge, which we report so the agent can
+        // crop pixel-exact instead of trusting UIA's +/-1-2px estimate.
+        RECT wr;
+        if (!GetWindowRect(hwnd, &wr)) break;
+        int fullW = wr.right - wr.left, fullH = wr.bottom - wr.top;
+        if (fullW < cropX + w) fullW = cropX + w;             // safety: must at least cover the card
+        if (fullH < cropY + h) fullH = cropY + h;
+        if (fullW <= 0 || fullH <= 0) break;
+        if (!EnsurePwDib(c, fullW, fullH)) break;
         if (!PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT)) break;
-        const int fstride = renderW * 4;
-        const BYTE* card = (const BYTE*)c.pwBits + (size_t)cropY * fstride + (size_t)cropX * 4; // card top-left
-        // Non-black check (sampled) over the CARD sub-rect: a black/near-black capture is the
+        const BYTE* rend = (const BYTE*)c.pwBits;
+        const int fstride = fullW * 4;
+        const BYTE* card = rend + (size_t)cropY * fstride + (size_t)cropX * 4; // card top-left (agent crop)
+        // Non-black check (sampled) over the extracted card: a black/near-black capture is the
         // "PrintWindow cannot do this class" signal (CoreWindow/NRB/ULW) - mark FAILED so the
         // agent slices it instead.
         size_t total = 0, nonblack = 0;
@@ -221,6 +227,28 @@ static void PublishPrintWindow(int i) {
             s->FrameWidth == w && s->FrameHeight == h) {
             const BYTE* cur = WGCBRK_ARENA(g_base, s->BufOffset[s->ActiveBuffer]);
             if (memcmp(cur, dst, (size_t)w * h * 4) == 0) break;
+        }
+
+        // Changed frame: measure the OPAQUE bounding box across the full render (one pass, non-black
+        // = any channel > 16) and report it as insets from the window rect. The agent tightens its
+        // crop to these - they only ever remove transparent margin, never opaque content. Done here,
+        // after the unchanged-skip, so a static menu pays for it once, not every poll.
+        {
+            int minx = fullW, miny = fullH, maxx = -1, maxy = -1;
+            for (int y = 0; y < fullH; y++) {
+                const BYTE* rr = rend + (size_t)y * fstride;
+                for (int x = 0; x < fullW; x++) {
+                    const BYTE* p = rr + (size_t)x * 4;
+                    if (p[0] > 16 || p[1] > 16 || p[2] > 16) {
+                        if (x < minx) minx = x; if (x > maxx) maxx = x;
+                        if (y < miny) miny = y; if (y > maxy) maxy = y;
+                    }
+                }
+            }
+            if (maxx >= minx && maxy >= miny) {
+                s->OpaqueL = minx; s->OpaqueT = miny;
+                s->OpaqueR = fullW - 1 - maxx; s->OpaqueB = fullH - 1 - maxy;
+            }
         }
 
         s->FrameWidth = w; s->FrameHeight = h; s->Stride = w * 4;
