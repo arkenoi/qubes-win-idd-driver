@@ -238,7 +238,10 @@ int wmain(int argc, wchar_t** argv) {
         if (g_hdr->AgentPid && (DWORD)g_hdr->AgentPid != g_launcherPid) break;
         if (g_agent && WaitForSingleObject(g_agent, 0) == WAIT_OBJECT_0) break;
         if (WTSGetActiveConsoleSessionId() != g_mySession) break;
-        if ((GetTickCount64() - (ULONGLONG)g_hdr->AgentHeartbeat) > 5000) break;
+        // Agent-liveness: the process-death wait (g_agent) below is primary and instant; this
+        // heartbeat is a generous backstop for a HUNG (not exited) agent. The agent bumps it
+        // ~1/s (it caps its idle wait while the broker is active), so 10 s is safe headroom.
+        if ((GetTickCount64() - (ULONGLONG)g_hdr->AgentHeartbeat) > 10000) break;
 
         g_hdr->Producing = InputDesktopIsDefault() ? 1 : 0;
         g_hdr->BrokerHeartbeat = (LONGLONG)GetTickCount64();
