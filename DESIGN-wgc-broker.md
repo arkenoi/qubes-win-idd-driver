@@ -69,8 +69,10 @@ hybrid untouched (WGC border unremovable on 19045).
 
 ## Owed / follow-ons
 
-- Occlusion A/B (broker shows correct occluded content vs slice occluder-bleed) — the extra
-  correctness proof; core function already demonstrated.
+- Occlusion A/B DONE 2026-09-02 (win11-p2): Calculator occluded by Notepad in the guest. Broker ON
+  -> Calculator renders CLEAN (WGC occlusion-independent). Broker OFF (control) -> Notepad bleeds
+  into Calculator's window from the composited slice. Disjoint, seen-to-fail on the control - the
+  broker's value-over-slice is proven.
 - Cold-boot acceptance (the guest test currently uses a live agent restart — Win11 flaky-autologon
   cold boots stalled the heavy harness; verified live instead). Re-run through a clean cold boot.
 - The dim-match requirement (FrameWidth==entry->Width) means a window whose WGC ContentSize differs
