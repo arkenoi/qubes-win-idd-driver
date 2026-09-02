@@ -227,6 +227,14 @@ few thousand lines, roughly half the architect's original claim.
   dirty-region behaviour, capture cost vs the 40 ms PrintWindow, and logoff/secure-desktop
   lifecycle. Verdict: the Win11-only WGC broker is REAL and worth pursuing; it is not yet an
   end-to-end capture path.
+- **Version floor = 24H2 (26100), not 25H2 (owner-confirmed 2026-09-02).** The WGC upgrades that
+  make the broker worthwhile (DirtyRegions, DirtyRegionMode, MinUpdateInterval,
+  IncludeSecondaryWindows, border-off) all land in 24H2; border-off is measured working on
+  win11-p2/26100 (not dormant). 25H2 (26200) shares 24H2's servicing branch and system files
+  (it is an enablement package — MS Learn "what's new in 25H2"), so raising the floor to 25H2
+  buys zero capture capability, only install-base cut. 23H2 is excluded (EOL + below the floor).
+  Pre-24H2 Win11 and all Win10 keep the current PrintWindow+DDA hybrid (border unremovable on
+  19045) — the broker is a 24H2+ upgrade, never a dependency.
 
 ## 6a. Win11 arm (win11-p2, RAN 2026-09-02)
 
