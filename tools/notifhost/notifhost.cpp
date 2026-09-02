@@ -86,10 +86,13 @@ static void ShowToast(std::wstring const& title, std::wstring const& body)
     int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
     // stack toward the bottom-right, above any already-open toast windows
     int y = sh - H - margin - (int)g_wins.size() * (H + 12);
-    // WS_OVERLAPPED|WS_CAPTION => a NORMAL, redirected, PrintWindow-capturable window that dom0
-    // borders; NOT topmost/NRB/o-r, so it is NOT slice-fed and needs no broker.
-    HWND h = CreateWindowExW(WS_EX_APPWINDOW, cls, L"Notification",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+    // Override-redirect + unmovable, toast-like (owner request): a bare WS_POPUP with no caption
+    // is classified override-redirect by the agent (IsPopup), so dom0 maps it borderless and the
+    // user cannot drag it. It is a plain GDI window (has a redirection surface), so it is captured
+    // by the normal slice OR by the broker (unlike shell CoreWindows) - it just must not be a
+    // shell CoreWindow. WS_EX_NOACTIVATE keeps focus off it (toast semantics); click dismisses.
+    HWND h = CreateWindowExW(WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW, cls, L"Notification",
+        WS_POPUP | WS_VISIBLE,
         sw - W - margin, y, W, H, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
     if (!h) return;
     ToastWin* tw = new ToastWin{ h, title, body, GetTickCount64() + 12000 };
