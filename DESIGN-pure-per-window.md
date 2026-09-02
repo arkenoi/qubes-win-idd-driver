@@ -205,6 +205,36 @@ few thousand lines, roughly half the architect's original claim.
 - **P8 (non-gating)** — WGC broker A/B (SYSTEM-in-session-1 vs `schtasks /ru user`, interop
   `CreateForWindow` on an NRB window): the Win11-only upgrade path question.
 
+## 6a. Win11 arm (win11-p2, RAN 2026-09-02)
+
+Win11 was run as its own suite (StandaloneVM clone of win11-tpl, probe installed and persisted)
+because it was expected to differ — and it does, decisively on P1.
+
+- **P2 (win11) — PASS, identical to Win10.** All 3 flag-on cold boots: `STAGING allocated
+  UNGRANTED` + `P2NOGRANT window-0 dump suppressed`; flag-off control returns `STAGING granted`;
+  no `A7DEGRADED`/`VCHANWEDGE`/`WCBLACK`/`WCDEAD`. Grant removal holds on Win11.
+- **P1 (win11) — whole-window PrintWindow is ~2× costlier than Win10, and charges the TARGET
+  process too.** CPU-ms/call (probe + target) and wall p50: 0.48 Mpx → 6.6+5.9=12.5 (38 ms);
+  1.02 → 9.0+12.9=21.9 (59 ms); 2.07 → 17.6+13.3=30.9 (78 ms); 3.69 → 23.1+15.6=38.7 (80 ms);
+  maximized 7.13 Mpx → 43.4+23.4=66.8 (141 ms). Win10 had ~0 target-side cost; Win11's
+  PrintWindow pulls the target's DWM/render path in. The ≤10 ms/tick bar is blown at the
+  SMALLEST size tested — so on Win11 whole-window PrintWindow is even less viable and the
+  DDA-owned foreground channel is unconditionally required. This is the concrete reason the WGC
+  broker (P8) is specifically a Win11 play: PrintWindow is worst exactly where WGC is best
+  (border removable ≥22000, DirtyRegions ≥24H2).
+- **P3 (win11) — drag perf-neutral; scroll/type/idle too noisy at N=3 to call, and the apparent
+  scroll delta is an instrument artifact, not a grant cost.** Means OFF vs ON: drag 15.3/14.6
+  (clean, overlapping), scroll 1.5/3.4, type 1.4/1.9, idle-pre 1.0/0.8. The scroll ranges do not
+  overlap, BUT Win11's DDA over-reporting smears CPU across phase boundaries: the OFF side's
+  "missing" scroll CPU shows up as inflated idle-mid spikes (4.3/5.0/12.8 vs ON's 0/2.0/2.5), and
+  P2 cannot mechanistically change scroll cost (it removes only the grant, not the DDA-slice
+  path). So the scroll "regression" co-varies with idle-mid mis-attribution and is rejected as a
+  phase-boundary artifact; drag (the cleanest, longest phase) is identical off/on. All steady-state
+  numbers remain far below stock. A clean Win11 disjointness verdict on scroll/type would need
+  more rounds; the mechanism rules out a real P2 cost.
+- Win11 P1 instrument note: same finder fix as Win10 needed (Get-Process MainWindowHandle; the
+  suite's first P1 failed on a notepad-launch race, re-run with a window present succeeded).
+
 ## 7. Recommendation
 
 Do P2 regardless of the rest — desktop-grant removal in seamless stands on its own as a
