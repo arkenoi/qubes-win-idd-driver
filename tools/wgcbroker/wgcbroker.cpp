@@ -181,34 +181,47 @@ static void PublishPrintWindow(int i) {
         if (!g_hdr->Producing) break;                        // secure desktop: do not publish
         HWND hwnd = c.hwnd;
         if (!hwnd || !IsWindow(hwnd)) break;
-        int w = s->ReqWidth, h = s->ReqHeight;
-        if (w <= 0 || h <= 0) break;
+        int w = s->ReqWidth, h = s->ReqHeight;               // published (card) size
+        int cropX = s->ReqCropX, cropY = s->ReqCropY;        // where the card sits in the window
+        if (w <= 0 || h <= 0 || cropX < 0 || cropY < 0) break;
         if ((LONGLONG)w * h * 4 > s->BufBytes) break;         // agent sized for ReqW*ReqH*4
-        if (!EnsurePwDib(c, w, h)) break;
-
+        // PrintWindow draws the window at the DC origin and CLIPS to the DIB, so a w*h DIB would
+        // capture the window's top-left w*h - i.e. the transparent shadow margin - and the card
+        // (which sits at (cropX,cropY)) would be shifted right/down and clipped. Render into a DIB
+        // big enough to reach the card's far edge, then lift out the card sub-rect. With no crop
+        // (cropX==cropY==0) renderW/H == w/h and this is byte-for-byte the old path.
+        int renderW = w + cropX, renderH = h + cropY;
+        if (!EnsurePwDib(c, renderW, renderH)) break;
         if (!PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT)) break;
-        const BYTE* bits = (const BYTE*)c.pwBits;             // BGRX, top-down, stride w*4
-        // Non-black check (sampled): a black/near-black capture is the "PrintWindow cannot do this
-        // class" signal (CoreWindow/NRB/ULW) - mark FAILED so the agent slices it instead.
+        const int fstride = renderW * 4;
+        const BYTE* card = (const BYTE*)c.pwBits + (size_t)cropY * fstride + (size_t)cropX * 4; // card top-left
+        // Non-black check (sampled) over the CARD sub-rect: a black/near-black capture is the
+        // "PrintWindow cannot do this class" signal (CoreWindow/NRB/ULW) - mark FAILED so the
+        // agent slices it instead.
         size_t total = 0, nonblack = 0;
         for (int y = 0; y < h; y += 8)
             for (int x = 0; x < w; x += 8) {
-                const BYTE* p = bits + (size_t)y * w * 4 + (size_t)x * 4;
+                const BYTE* p = card + (size_t)y * fstride + (size_t)x * 4;
                 total++;
                 if (p[0] > 16 || p[1] > 16 || p[2] > 16) nonblack++;
             }
         if (total == 0 || (nonblack * 100 / total) < 2) { s->AckState = WGCBRK_FAILED; s->FailHr = (LONG)0x00000103; break; }
 
-        // Skip republish if unchanged vs the active buffer (menus are static once open;
-        // republishing would flood dom0 with damage). memcmp of a small menu is cheap.
-        if (s->AckState == WGCBRK_ACTIVE && s->ActiveBuffer >= 0 && s->ActiveBuffer < WGCBRK_RING) {
-            const BYTE* cur = WGCBRK_ARENA(g_base, s->BufOffset[s->ActiveBuffer]);
-            if (s->FrameWidth == w && s->FrameHeight == h && memcmp(cur, bits, (size_t)w * h * 4) == 0) break;
-        }
         int wbuf = 1 - s->ActiveBuffer;
         if (wbuf < 0 || wbuf >= WGCBRK_RING) wbuf = 0;
         BYTE* dst = WGCBRK_ARENA(g_base, s->BufOffset[wbuf]);
-        memcpy(dst, bits, (size_t)w * h * 4);
+        // Copy the card sub-rect (source stride fstride) into the contiguous w*h arena buffer.
+        for (int y = 0; y < h; y++)
+            memcpy(dst + (size_t)y * w * 4, card + (size_t)y * fstride, (size_t)w * 4);
+
+        // Skip republish if the card is unchanged vs the active buffer (menus are static once open;
+        // republishing would flood dom0 with damage). The sub-rect copy has strides, so compare the
+        // just-written contiguous dst against the active buffer and, if identical, don't flip.
+        if (s->AckState == WGCBRK_ACTIVE && s->ActiveBuffer >= 0 && s->ActiveBuffer < WGCBRK_RING &&
+            s->FrameWidth == w && s->FrameHeight == h) {
+            const BYTE* cur = WGCBRK_ARENA(g_base, s->BufOffset[s->ActiveBuffer]);
+            if (memcmp(cur, dst, (size_t)w * h * 4) == 0) break;
+        }
 
         s->FrameWidth = w; s->FrameHeight = h; s->Stride = w * 4;
         LONG q = s->Seq;
