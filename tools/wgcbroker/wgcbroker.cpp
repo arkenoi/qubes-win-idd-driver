@@ -136,20 +136,26 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
 static void OpenChannel(int i) {
     WGCBRK_SLOT* s = &g_slots[i];
     Channel& c = g_ch[i];
-    HWND hwnd = (HWND)(ULONG_PTR)s->Hwnd;
-    if (!hwnd || !IsWindow(hwnd)) { s->AckState = WGCBRK_FAILED; s->FailHr = E_HANDLE; return; }
+    bool monitor = (s->Hwnd == WGCBRK_MONITOR_HWND);
+    HWND hwnd = monitor ? nullptr : (HWND)(ULONG_PTR)s->Hwnd;
+    if (!monitor && (!hwnd || !IsWindow(hwnd))) { s->AckState = WGCBRK_FAILED; s->FailHr = E_HANDLE; return; }
     try {
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{ nullptr };
-        check_hresult(interop->CreateForWindow(hwnd, guid_of<GraphicsCaptureItem>(),
-                      reinterpret_cast<void**>(put_abi(item))));
+        if (monitor)
+            check_hresult(interop->CreateForMonitor(MonitorFromPoint(POINT{0,0}, MONITOR_DEFAULTTOPRIMARY),
+                          guid_of<GraphicsCaptureItem>(), reinterpret_cast<void**>(put_abi(item))));
+        else
+            check_hresult(interop->CreateForWindow(hwnd, guid_of<GraphicsCaptureItem>(),
+                          reinterpret_cast<void**>(put_abi(item))));
         auto size = item.Size();
         auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             g_rtDev, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
         auto session = pool.CreateCaptureSession(item);
         try { session.IsCursorCaptureEnabled(false); } catch (...) {}
         try { session.IsBorderRequired(false); } catch (...) {}   // borderDisableOk proven on 26100
-        c.hwnd = hwnd; c.item = item; c.pool = pool; c.session = session; c.slot = i;
+        c.hwnd = monitor ? (HWND)(ULONG_PTR)WGCBRK_MONITOR_HWND : hwnd;
+        c.item = item; c.pool = pool; c.session = session; c.slot = i;
         c.rev = pool.FrameArrived(auto_revoke,
             [i](Direct3D11CaptureFramePool const& sender, auto const&) {
                 auto f = sender.TryGetNextFrame();
