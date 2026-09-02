@@ -421,6 +421,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "wgcbroker msbuild failed" }
           Get-ChildItem tools\wgcbroker\x64\Release\wgcbroker.exe
 
+      - name: Build notifhost
+        shell: pwsh
+        run: |
+          # tools/notifhost: user-session toast interceptor - renders toasts as NORMAL windows
+          # (UserNotificationListener + GDI). Lets the slicer retire for the toast class.
+          & "${{ steps.vs.outputs.msbuild }}" tools\notifhost\notifhost.vcxproj `
+              /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "notifhost msbuild failed" }
+          Get-ChildItem tools\notifhost\x64\Release\notifhost.exe
+
       # core-agent-windows (our fork) carries the qrexec-wrapper drain-race fix (U15). It needs the
       # SAME dependency set the gui-agent build just staged - libvchan, xencontrol, windows-utils,
       # qubesdb-client - so it is built here rather than in a job that would have to stage them all
@@ -491,6 +501,9 @@ jobs:
           if (Test-Path tools\wgcbroker\x64\Release\wgcbroker.exe) {
             Copy-Item tools\wgcbroker\x64\Release\wgcbroker.exe package-agent\ -Force
           } else { Write-Warning 'wgcbroker.exe missing from package-agent' }
+          if (Test-Path tools\notifhost\x64\Release\notifhost.exe) {
+            Copy-Item tools\notifhost\x64\Release\notifhost.exe package-agent\ -Force
+          } else { Write-Warning 'notifhost.exe missing from package-agent' }
           Get-ChildItem package-agent
 
       - uses: actions/upload-artifact@v4
