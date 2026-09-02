@@ -212,8 +212,21 @@ few thousand lines, roughly half the architect's original claim.
   degraded-mode drops, live pixels, no dom0 freeze.
 - **P6** — occluded staleness: mutate covered window, reveal, correct within one tick.
 - **P7** — toast + context-menu acceptance under Writer B (a blank toast fails the model).
-- **P8 (non-gating)** — WGC broker A/B (SYSTEM-in-session-1 vs `schtasks /ru user`, interop
-  `CreateForWindow` on an NRB window): the Win11-only upgrade path question.
+- **P8 — WGC broker A/B: RAN 2026-09-02 (win11-p2, build 26100/24H2), PASS on activation +
+  basic capture.** Compiled `tools/wgcprobe` (agent branch p2-noscreengrant) run in both
+  contexts. SYSTEM/session-0 (the agent's context — and note this testbed's SYSTEM is already
+  on WinSta0/Default/interactive=1): `IsSupported` threw `0x80070424` (service-context refusal),
+  brokerViable=false. Interactive user (`schtasks /ru user /it`): `IsSupported=1`,
+  `frameArrived=1`, `nonBlank=1` (626×473, 16 distinct colors), **brokerViable=true**. So WGC
+  is refused by the SYSTEM *token*, not the window station, and the user-session broker pattern
+  works. Both Win11-critical gates green on 24H2: **border disables cleanly**
+  (`borderDisableOk=true`, hr 0) and **DirtyRegions/DirtyRegionMode APIs present**. SCOPE — what
+  this does NOT yet prove: the frame captured was the probe's OWN normal gradient window, not a
+  stranded class; capturing an actual NRB toast / o-r menu / ULW surface (the classes that
+  justify the broker) is the next probe, then the broker→SYSTEM-agent frame IPC, per-window
+  dirty-region behaviour, capture cost vs the 40 ms PrintWindow, and logoff/secure-desktop
+  lifecycle. Verdict: the Win11-only WGC broker is REAL and worth pursuing; it is not yet an
+  end-to-end capture path.
 
 ## 6a. Win11 arm (win11-p2, RAN 2026-09-02)
 
