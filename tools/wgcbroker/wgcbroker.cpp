@@ -28,9 +28,14 @@
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "windowsapp.lib")
+
+#ifndef PW_RENDERFULLCONTENT
+#define PW_RENDERFULLCONTENT 0x00000002
+#endif
 
 using namespace winrt;
 using namespace winrt::Windows::Graphics::Capture;
@@ -56,8 +61,19 @@ struct Channel {
     GraphicsCaptureSession        session{ nullptr };
     Direct3D11CaptureFramePool::FrameArrived_revoker rev;
     int slot = -1;
+    // PrintWindow fallback: WGC CreateForWindow rejects override-redirect menus/popups
+    // (itemCreated fails), but PrintWindow(PW_RENDERFULLCONTENT) captures them from THIS user
+    // session (proven). When WGC fails, the channel switches to a polled PrintWindow into a
+    // top-down 32bpp DIB, published through the same seqlock. True-black results (CoreWindows,
+    // NRB/ULW) fail the non-black check and fall back to the agent's slice.
+    bool    pw     = false;   // this channel is PrintWindow-polled, not WGC
+    HDC     pwDC   = nullptr;  // memory DC holding pwBmp
+    HBITMAP pwBmp  = nullptr;  // top-down 32bpp DIB section (BGRX)
+    void*   pwBits = nullptr;  // pixels of pwBmp
+    int     pwW = 0, pwH = 0;  // current DIB dimensions
 };
 static std::vector<Channel> g_ch(WGCBRK_MAX_SLOTS);
+static bool g_anyPw = false;   // any PrintWindow channel active -> poll the loop faster
 
 static bool InitD3D() {
     D3D_FEATURE_LEVEL fl;
@@ -133,6 +149,81 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
     LeaveCriticalSection(&g_pubCs[i]);
 }
 
+// (re)create the channel's top-down 32bpp DIB section to match w x h.
+static bool EnsurePwDib(Channel& c, int w, int h) {
+    if (c.pwDC && c.pwW == w && c.pwH == h) return true;
+    if (c.pwBmp) { DeleteObject(c.pwBmp); c.pwBmp = nullptr; c.pwBits = nullptr; }
+    if (!c.pwDC) { HDC scr = GetDC(nullptr); c.pwDC = CreateCompatibleDC(scr); ReleaseDC(nullptr, scr); }
+    if (!c.pwDC) return false;
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;          // top-down, so rows match the agent's expected layout
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB; // BGRX, same channel order as B8G8R8A8
+    c.pwBmp = CreateDIBSection(c.pwDC, &bi, DIB_RGB_COLORS, &c.pwBits, nullptr, 0);
+    if (!c.pwBmp || !c.pwBits) return false;
+    SelectObject(c.pwDC, c.pwBmp);
+    c.pwW = w; c.pwH = h;
+    return true;
+}
+
+// Poll one PrintWindow-mode channel: render the window into its DIB and publish if the pixels
+// changed. Non-black check filters the classes PrintWindow cannot capture (they slice instead).
+static void PublishPrintWindow(int i) {
+    EnterCriticalSection(&g_pubCs[i]);
+    do {
+        WGCBRK_SLOT* s = &g_slots[i];
+        Channel& c = g_ch[i];
+        if (!c.pw) break;
+        if (s->ReqState != WGCBRK_REQUESTED && s->AckState != WGCBRK_ACTIVE) break;
+        if (!g_hdr->Producing) break;                        // secure desktop: do not publish
+        HWND hwnd = c.hwnd;
+        if (!hwnd || !IsWindow(hwnd)) break;
+        int w = s->ReqWidth, h = s->ReqHeight;
+        if (w <= 0 || h <= 0) break;
+        if ((LONGLONG)w * h * 4 > s->BufBytes) break;         // agent sized for ReqW*ReqH*4
+        if (!EnsurePwDib(c, w, h)) break;
+
+        if (!PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT)) break;
+        const BYTE* bits = (const BYTE*)c.pwBits;             // BGRX, top-down, stride w*4
+        // Non-black check (sampled): a black/near-black capture is the "PrintWindow cannot do this
+        // class" signal (CoreWindow/NRB/ULW) - mark FAILED so the agent slices it instead.
+        size_t total = 0, nonblack = 0;
+        for (int y = 0; y < h; y += 8)
+            for (int x = 0; x < w; x += 8) {
+                const BYTE* p = bits + (size_t)y * w * 4 + (size_t)x * 4;
+                total++;
+                if (p[0] > 16 || p[1] > 16 || p[2] > 16) nonblack++;
+            }
+        if (total == 0 || (nonblack * 100 / total) < 2) { s->AckState = WGCBRK_FAILED; s->FailHr = (LONG)0x00000103; break; }
+
+        // Skip republish if unchanged vs the active buffer (menus are static once open;
+        // republishing would flood dom0 with damage). memcmp of a small menu is cheap.
+        if (s->AckState == WGCBRK_ACTIVE && s->ActiveBuffer >= 0 && s->ActiveBuffer < WGCBRK_RING) {
+            const BYTE* cur = WGCBRK_ARENA(g_base, s->BufOffset[s->ActiveBuffer]);
+            if (s->FrameWidth == w && s->FrameHeight == h && memcmp(cur, bits, (size_t)w * h * 4) == 0) break;
+        }
+        int wbuf = 1 - s->ActiveBuffer;
+        if (wbuf < 0 || wbuf >= WGCBRK_RING) wbuf = 0;
+        BYTE* dst = WGCBRK_ARENA(g_base, s->BufOffset[wbuf]);
+        memcpy(dst, bits, (size_t)w * h * 4);
+
+        s->FrameWidth = w; s->FrameHeight = h; s->Stride = w * 4;
+        LONG q = s->Seq;
+        _InterlockedExchange(&s->Seq, q | 1);
+        MemoryBarrier();
+        s->ActiveBuffer = wbuf;
+        s->FrameId++;
+        s->CaptureTick = (LONGLONG)GetTickCount64();
+        MemoryBarrier();
+        _InterlockedExchange(&s->Seq, (q | 1) + 1);
+        s->AckState = WGCBRK_ACTIVE;
+    } while (0);
+    LeaveCriticalSection(&g_pubCs[i]);
+}
+
 static void OpenChannel(int i) {
     WGCBRK_SLOT* s = &g_slots[i];
     Channel& c = g_ch[i];
@@ -179,10 +270,21 @@ static void OpenChannel(int i) {
             });
         session.StartCapture();
         s->AckState = WGCBRK_ACTIVE; s->FailHr = 0;
+        return;
     } catch (hresult_error const& e) {
-        s->AckState = WGCBRK_FAILED; s->FailHr = e.code();
+        s->FailHr = e.code();
     } catch (...) {
-        s->AckState = WGCBRK_FAILED; s->FailHr = E_FAIL;
+        s->FailHr = E_FAIL;
+    }
+    // WGC could not capture this window (o-r menu / CoreWindow / popup). For a real window, fall
+    // back to polled PrintWindow instead of giving up - redirected & modern XAML menus render that
+    // way, so they leave the slice. The monitor slot never falls back here. Non-black check in
+    // PublishPrintWindow marks FAILED (agent slices) for the classes PrintWindow also cannot do.
+    if (!monitor && hwnd && IsWindow(hwnd)) {
+        c.hwnd = hwnd; c.slot = i; c.pw = true; s->FailHr = 0;
+        s->AckState = WGCBRK_REQUESTED;   // pending until the first PrintWindow poll publishes
+    } else {
+        s->AckState = WGCBRK_FAILED;
     }
 }
 
@@ -192,6 +294,8 @@ static void CloseChannel(int i) {
     c.rev.revoke();
     if (c.session) { try { c.session.Close(); } catch (...) {} }
     if (c.pool)    { try { c.pool.Close();    } catch (...) {} }
+    if (c.pwBmp)   { DeleteObject(c.pwBmp); }
+    if (c.pwDC)    { DeleteDC(c.pwDC); }
     c = Channel{};
     g_slots[i].AckState = WGCBRK_FREE;
     LeaveCriticalSection(&g_pubCs[i]);
@@ -259,16 +363,23 @@ int wmain(int argc, wchar_t** argv) {
         g_hdr->Producing = InputDesktopIsDefault() ? 1 : 0;
         g_hdr->BrokerHeartbeat = (LONGLONG)GetTickCount64();
 
-        HANDLE waits[2] = { g_hCtl, g_agent };
+        // PrintWindow channels are polled (no FrameArrived), so tighten the wait while any is
+        // active so menus refresh at ~30 Hz; otherwise stay lazy (WGC is event-driven).
+        DWORD timeout = g_anyPw ? 33 : 250;
         DWORD n = 0; HANDLE compact[2];
         if (g_hCtl) compact[n++] = g_hCtl;
         if (g_agent) compact[n++] = g_agent;
-        if (n == 0) { Sleep(250); }
+        if (n == 0) { Sleep(timeout); }
         else {
-            DWORD wr = WaitForMultipleObjects(n, compact, FALSE, 250);
+            DWORD wr = WaitForMultipleObjects(n, compact, FALSE, timeout);
             if (g_agent && wr == WAIT_OBJECT_0 + (g_hCtl ? 1 : 0)) break; // agent exited
         }
         Reconcile();
+        // Service PrintWindow-mode channels and recompute whether any is active.
+        bool anyPw = false;
+        for (int i = 0; i < WGCBRK_MAX_SLOTS; i++)
+            if (g_ch[i].pw && g_ch[i].hwnd) { anyPw = true; PublishPrintWindow(i); }
+        g_anyPw = anyPw;
     }
     for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) if (g_ch[i].hwnd) CloseChannel(i);
     return 0;
