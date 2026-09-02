@@ -126,14 +126,16 @@ regression under `SliceRetire` is FIXED. PASS.
 
 ## Owed / follow-ons
 
-- **Arena free-list (durability, needed for menus).** `WgcArenaAlloc` is a bump allocator that
-  NEVER reclaims — `BrokerUnregister` frees the slot but not its arena bytes. Menus are high-churn
-  (every open allocates ~2×W×H×4, never returned), so the 128 MB arena exhausts within a session and
-  new registrations fail → menus fall back to the slice. Measured directly: after a long test session
-  a menu MONSLICEd; on a fresh (cold-boot) arena the same menu BROKERFRAMEd. Add a free-list (return
-  a slot's [off0,off1] on unregister; alloc reuses a freed region ≥ needed before bumping) so menu
-  unslicing holds across a session. This also helps NRB app churn. The agent's bounds-checks on
-  broker-written offsets must stay intact.
+- **Arena free-list — DONE 2026-09-02.** `WgcArenaAlloc` was bump-only and never reclaimed, so
+  high-churn menus exhausted the 128 MB arena within a session → new registrations failed → menus
+  fell back to the slice. Now a best-fit free-list with coalescing (`WgcArenaFree`); each
+  unregistered slot's two buffers are reclaimed, DEFERRED ~2 s (`WgcArenaFreeDeferred` /
+  `WgcArenaReapPending` from BrokerSupervise) so a region is never reused while the broker could
+  still publish to the just-closed slot. Agent-thread-only; reused offsets stay in-arena so the
+  broker-frame bounds-checks are unaffected. VERIFIED: 350 back-to-back menu open/close cycles (would
+  exhaust the old allocator at ~290) then a fresh menu still BROKERFRAMEd. CAVEAT: under a
+  pathological burst (~7 opens/s) the 2 s deferral + 1 Hz reap lag, so burst-peak menus transiently
+  MONSLICE; at human menu speed reclaim keeps up and there is no permanent exhaustion.
 - **Drop the menu shadow companion.** A Win11 menu maps as TWO o-r windows: the content
   (PrintWindow-clean, now BROKERFRAMEd) and a slightly larger shadow/backdrop (still MONSLICEs).
   Drop the shadow in the window-acceptance predicate — same droppable-chrome class as the Office
