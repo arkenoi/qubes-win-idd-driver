@@ -19,6 +19,7 @@
 #include <windows.graphics.directx.direct3d11.interop.h>   // CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <string>
 #include <mutex>
 #pragma comment(lib, "d3d11.lib")
@@ -54,6 +55,13 @@ static GraphicsCaptureItem ItemForWindow(HWND hwnd){
   GraphicsCaptureItem item{nullptr};
   check_hresult(interop->CreateForWindow(hwnd, guid_of<GraphicsCaptureItem>(),
       reinterpret_cast<void**>(put_abi(item))));   // reinterpret_cast<void**> REQUIRED (was the C2664 bug)
+  return item;
+}
+static GraphicsCaptureItem ItemForMonitor(HMONITOR mon){
+  auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
+  GraphicsCaptureItem item{nullptr};
+  check_hresult(interop->CreateForMonitor(mon, guid_of<GraphicsCaptureItem>(),
+      reinterpret_cast<void**>(put_abi(item))));
   return item;
 }
 static com_ptr<ID3D11Texture2D> TexFromSurface(IDirect3DSurface const& s){
@@ -116,17 +124,22 @@ int main(int argc, char** argv){
       user.c_str(),(unsigned long)sid,winsta.c_str(),desktop.c_str(),interactive?"true":"false",osb.c_str());
   };
   if(!supported){ emitDead("is_supported", supHr); return threw?4:1; }
-  // ---- pick a target HWND: argv[1] hex -> Notepad -> our own gradient window ----
-  HWND hwnd=nullptr; const char* how="argv"; bool ownWin=false;
-  if(argc>=2){ unsigned long long v=_strtoui64(argv[1],nullptr,16); if(v) hwnd=(HWND)(uintptr_t)v; }
-  if(!hwnd){ hwnd=FindWindowW(L"Notepad",nullptr); if(hwnd) how="notepad"; }
-  if(!hwnd){ hwnd=MakeOwnWindow(); ownWin=true; how="own"; Pump(500); }
-  if(!hwnd || !IsWindow(hwnd)){ emitDead("target", 0); return 1; }
-  ShowWindow(hwnd,SW_RESTORE); SetWindowPos(hwnd,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW); Pump(200);
+  // ---- target: argv[1]=="mon" -> primary monitor (CreateForMonitor); else hex HWND ->
+  //      Notepad -> own gradient window (CreateForWindow) ----
+  bool monMode = (argc>=2 && _stricmp(argv[1],"mon")==0);
+  HWND hwnd=nullptr; const char* how = monMode?"monitor":"argv"; bool ownWin=false;
+  if(!monMode){
+    if(argc>=2){ unsigned long long v=_strtoui64(argv[1],nullptr,16); if(v) hwnd=(HWND)(uintptr_t)v; }
+    if(!hwnd){ hwnd=FindWindowW(L"Notepad",nullptr); if(hwnd) how="notepad"; }
+    if(!hwnd){ hwnd=MakeOwnWindow(); ownWin=true; how="own"; Pump(500); }
+    if(!hwnd || !IsWindow(hwnd)){ emitDead("target", 0); return 1; }
+    ShowWindow(hwnd,SW_RESTORE); SetWindowPos(hwnd,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_SHOWWINDOW); Pump(200);
+  }
   D3D d; if(!MakeD3D(d)){ emitDead("d3d", 0); return 1; }
   bool itemCreated=false, borderSet=false; unsigned borderHr=0;
   GraphicsCaptureItem item{nullptr};
-  try{ item=ItemForWindow(hwnd); itemCreated=(item!=nullptr); }
+  try{ item = monMode ? ItemForMonitor(MonitorFromPoint(POINT{0,0}, MONITOR_DEFAULTTOPRIMARY))
+                      : ItemForWindow(hwnd); itemCreated=(item!=nullptr); }
   catch(hresult_error const& e){ emitDead("item",(unsigned)e.code().value); return 1; }
   catch(...){ emitDead("item",0xFFFFFFFF); return 1; }
   SizeInt32 isz=item.Size(); if(isz.Width<=0||isz.Height<=0){ isz={640,480}; }
@@ -151,7 +164,7 @@ int main(int argc, char** argv){
   DWORD deadline=GetTickCount()+8000;
   while((LONG)(GetTickCount()-deadline)<0){
     if(ownWin){ InvalidateRect(hwnd,nullptr,FALSE); }
-    SetWindowPos(hwnd,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE); RedrawWindow(hwnd,nullptr,nullptr,RDW_INVALIDATE|RDW_UPDATENOW);
+    if(hwnd){ SetWindowPos(hwnd,HWND_TOP,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE); RedrawWindow(hwnd,nullptr,nullptr,RDW_INVALIDATE|RDW_UPDATENOW); }
     Pump(0);
     if(WaitForSingleObject(evt,200)!=WAIT_OBJECT_0) continue;
     Direct3D11CaptureFrame frame{nullptr};
