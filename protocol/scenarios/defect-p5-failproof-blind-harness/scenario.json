@@ -64,7 +64,7 @@
   },
   "p5-recontain-agent": {
    "exit": 0,
-   "stdout": "RECONTAIN guest=1600x900 inside=yes agent_agrees=yes agent_line=RESAPPLIED 1600x900 lastapplied_line=none"
+   "stdout": "RECONTAIN guest=1600x900 inside=yes agent_agrees=yes agent_line=none grant_line=A3CHECK g=1600x900 lastapplied_line=none"
   },
   "p5-restore-release": {
    "exit": 0,

@@ -80,7 +80,7 @@
   },
   "p5-recontain-agent": {
    "exit": 0,
-   "stdout": "RECONTAIN guest=5120x1440 inside=no agent_agrees=yes agent_line=RESAPPLIED 5120x1440 lastapplied_line=RESREQ 5120x1440 src=lastapplied"
+   "stdout": "RECONTAIN guest=5120x1440 inside=no agent_agrees=yes agent_line=RESAPPLIED 5120x1440 grant_line=A3CHECK g=5120x1440 lastapplied_line=RESREQ 5120x1440 src=lastapplied"
   }
  }
 }
