@@ -22,6 +22,15 @@ RED/INVALID on its defect fixture:
     p5-suite            defect-p5-sg-gate-leaked         -> GATE_LEAKED / RED
 A wrong scorer makes the selftest deviate; it can never turn a defect green.
 
+One token maps to N/A rather than GREEN/RED/INVALID: rnd5-verdict's START_HIDDEN_BY_DESIGN.
+On a SHIPPED build Start is deliberately not presented in seamless (SeamlessStart=0; the
+positive is graded in the suite's SG9 cell, and enabling SeamlessStart=1 in an acceptance
+campaign is forbidden - p5-safeguards.json p5-sg9-devarm), so the shipped-correct state
+(denial line present, zero maps by both witnesses) is BY DESIGN, never a defect and never a
+broken instrument. run.py records it as a non-halting N/A row - not a PASS - and the campaign
+continues; the RED branches are evaluated FIRST, so a real map still fails whatever the denial
+line says.
+
 Fail-closed doctrine (V3): missing data is the step's unusable-evidence token, NEVER a pass in
 either direction; a measured contradiction (MISMATCH) outranks a merely-absent line; a token the
 scorer cannot justify from the evidence is never emitted.
@@ -67,21 +76,38 @@ def counter(text, key):
     return int(m.group(1)) if m else None
 
 
+# The shipped-spec denial (agent perf.h: SeamlessStart DWORD, default 0 - Start hidden in
+# seamless). Matched only inside a '  D ' DISCRIM sample line, the collect step's own grep class.
+RND5_DENIAL_RE = re.compile(
+    r"^  D .*Start surface not presented in seamless mode \(SeamlessStart=0\)", re.M)
+
+
 def score_rnd5(text):
     # Apply IN ORDER (p4-rnd5-verdict decision rule). Missing counter -> EVIDENCE_INCOMPLETE.
     shot = counter(text, "SHOT_MAPPED")
+    ovr_total = counter(text, "OVRMAP_TOTAL")
     ovr_big = counter(text, "OVRMAP_BIG")
     disc = counter(text, "DISCRIM_HITS")
     shell = counter(text, "SHELL_SURFACES")
-    if None in (shot, ovr_big, disc, shell):
+    if None in (shot, ovr_total, ovr_big, disc, shell):
         return "EVIDENCE_INCOMPLETE"
     if ovr_big != 0:
         return "MAP_IN_AGENT_LOG"     # agent log shows an o-r MAP at screen scale (shot is blind to it)
     if shot != 0:
         return "WINDOW_IN_SHOT"       # a managed window reached dom0
+    if ovr_total == 0 and RND5_DENIAL_RE.search(text):
+        # Shipped spec (p5-safeguards.json p5-sg9-devarm): Start is deliberately NOT presented
+        # in seamless (SeamlessStart=0), so on a release subject this stimulus CANNOT be
+        # established and the absence is BY DESIGN, not vacuous - the denial line is the proof,
+        # and the positive (Start correctly hidden) is graded in the suite's SG9 cell. N/A,
+        # non-halting. Ordered AFTER the two RED branches so it can never mask a real leak:
+        # defect-p4-map-unwitnessed carries this exact denial line PLUS OVRMAP_BIG 1 and still
+        # resolves MAP_IN_AGENT_LOG above; any ovr=1 MAP at all (OVRMAP_TOTAL != 0) also
+        # forfeits this branch and falls through to the fail-closed logic below.
+        return "START_HIDDEN_BY_DESIGN"
     if disc == 0 or shell == 0:
         return "STIMULUS_ABSENT"      # the Start stimulus was never established -> negative is vacuous
-    return "NOMAP_BOTH_WITNESSES"     # nothing reached dom0, by both witnesses, stimulus proven
+    return "NOMAP_BOTH_WITNESSES"     # nothing reached dom0, by both witnesses, stimulus proven (SeamlessStart=1 dev arm only)
 
 
 def score_rnd3(text):

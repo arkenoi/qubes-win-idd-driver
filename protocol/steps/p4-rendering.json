@@ -224,7 +224,7 @@
     {
       "id": "p4-rnd5-verdict",
       "kind": "judgement",
-      "title": "RND-5 verdict: Start is NOT presented in seamless (shipped spec) - a 'nothing mapped' PASS requires TWO WITNESSES plus the vacuity proof",
+      "title": "RND-5 verdict: no unwitnessed map. On a SHIPPED build (SeamlessStart=0) the proven denial resolves N/A - Start hidden by design, positive graded in SG9, campaign continues; a 'nothing mapped' PASS (SeamlessStart=1 dev arm only) requires TWO WITNESSES plus the vacuity proof",
       "requires": [
         "p4-rnd5-collect"
       ],
@@ -233,9 +233,10 @@
         "evidence": [
           "{ACCEPT_OUT}/rnd5-two-witness.txt"
         ],
-        "question": "The file holds three instruments: SHOT_MAPPED (dom0 shot window count - sees MANAGED windows only, structurally blind to override-redirect surfaces), OVRMAP_TOTAL/OVRMAP_BIG with ' M ' sample lines (the agent's own log: msg=MAP lines with ovr=1; OVRMAP_BIG counts those with 4-digit width - the screen-scale takeover class), and the stimulus proof (DISCRIM_HITS = the agent's deny/discriminator lines; SHELL_SURFACES = guest-side EnumWindows CharSet.Unicode shell surfaces). Apply IN THIS ORDER: (1) if OVRMAP_BIG is not 0, answer MAP_IN_AGENT_LOG - the agent offered dom0 an override-redirect surface, whatever the shot shows; (2) else if SHOT_MAPPED is not 0, answer WINDOW_IN_SHOT; (3) else if DISCRIM_HITS is 0 or SHELL_SURFACES is 0, answer STIMULUS_ABSENT - without both, 'nothing mapped' is vacuous; (4) else answer NOMAP_BOTH_WITNESSES. Which one?",
+        "question": "The file holds three instruments: SHOT_MAPPED (dom0 shot window count - sees MANAGED windows only, structurally blind to override-redirect surfaces), OVRMAP_TOTAL/OVRMAP_BIG with ' M ' sample lines (the agent's own log: msg=MAP lines with ovr=1; OVRMAP_BIG counts those with 4-digit width - the screen-scale takeover class), and the stimulus proof (DISCRIM_HITS = the agent's deny/discriminator lines; SHELL_SURFACES = guest-side EnumWindows CharSet.Unicode shell surfaces). Apply IN THIS ORDER: (1) if OVRMAP_BIG is not 0, answer MAP_IN_AGENT_LOG - the agent offered dom0 an override-redirect surface, whatever the shot shows; (2) else if SHOT_MAPPED is not 0, answer WINDOW_IN_SHOT; (3) else if a '  D ' sample line carries the 'Start surface not presented in seamless mode (SeamlessStart=0)' denial AND OVRMAP_TOTAL is 0, answer START_HIDDEN_BY_DESIGN - the shipped spec deliberately withholds Start in seamless (p5-safeguards p5-sg9-devarm: the positive is graded in the suite's SG9 cell, and enabling SeamlessStart=1 for acceptance is forbidden), so the denial line proves the absence is BY DESIGN, not vacuous - N/A, non-halting; (4) else if DISCRIM_HITS is 0 or SHELL_SURFACES is 0, answer STIMULUS_ABSENT - without both, 'nothing mapped' is vacuous; (5) else answer NOMAP_BOTH_WITNESSES. Which one?",
         "answers": {
-          "NOMAP_BOTH_WITNESSES": "SHOT_MAPPED 0 AND OVRMAP_BIG 0, with the stimulus proven (DISCRIM_HITS>=1 and SHELL_SURFACES>=1): nothing reached dom0, by both witnesses",
+          "NOMAP_BOTH_WITNESSES": "SHOT_MAPPED 0 AND OVRMAP_BIG 0, with the stimulus proven (DISCRIM_HITS>=1 and SHELL_SURFACES>=1) and NO SeamlessStart=0 denial: nothing reached dom0, by both witnesses (reachable only on the SeamlessStart=1 dev arm)",
+          "START_HIDDEN_BY_DESIGN": "Start not presented per shipped spec: the SeamlessStart=0 'Start surface not presented' denial line is present with SHOT_MAPPED 0 and OVRMAP_TOTAL 0 - hidden BY DESIGN, not vacuous; the positive is graded in the suite's SG9 cell (p5-safeguards p5-sg9-devarm), so this step is N/A and the campaign continues",
           "MAP_IN_AGENT_LOG": "OVRMAP_BIG >= 1: the agent log shows a MAP with ovr=1 at screen scale - the shot cannot see this class, the log half is the witness that catches it",
           "WINDOW_IN_SHOT": "SHOT_MAPPED >= 1: a window reached dom0 and the shot shows it",
           "STIMULUS_ABSENT": "DISCRIM_HITS 0 or SHELL_SURFACES 0: the Start stimulus was never established, so the negative proves nothing",
@@ -243,6 +244,7 @@
         },
         "map": {
           "NOMAP_BOTH_WITNESSES": "GREEN",
+          "START_HIDDEN_BY_DESIGN": "NA",
           "MAP_IN_AGENT_LOG": "RED",
           "WINDOW_IN_SHOT": "RED",
           "STIMULUS_ABSENT": "INVALID",

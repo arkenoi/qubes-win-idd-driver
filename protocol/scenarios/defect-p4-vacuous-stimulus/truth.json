@@ -1,6 +1,6 @@
 {
  "truth": {
-  "p4-rnd5-verdict": "NOMAP_BOTH_WITNESSES"
+  "p4-rnd5-verdict": "START_HIDDEN_BY_DESIGN"
  },
  "expect": {
   "final": "DONE",
@@ -15,7 +15,7 @@
    },
    {
     "check": "p4-rnd5-nomap-two-witness",
-    "verdict": "PASS(-UNPROVEN)?"
+    "verdict": "N/A"
    },
    {
     "check": "p4-rnd8-resolution-liveness",

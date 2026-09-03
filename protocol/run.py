@@ -110,9 +110,12 @@ def load_steps(paths: list[Path], check_scenarios: bool = True) -> list[dict]:
                 missing = [a for a in answers if a not in jmap and "*" not in jmap]
                 if missing:
                     errors.append(f"{where}: judgement.map does not cover {missing}")
-                bad = [v for v in jmap.values() if v not in (GREEN, RED, "INVALID")]
+                # NA: a by-design non-applicability outcome, proven from the evidence (e.g.
+                # RND-5's SeamlessStart=0 denial line). Ledgered as N/A - never PASS, never a
+                # halt - exactly the category declare rows already use; see apply_answer.
+                bad = [v for v in jmap.values() if v not in (GREEN, RED, "INVALID", "NA")]
                 if bad:
-                    errors.append(f"{where}: judgement.map values must be GREEN/RED/INVALID, got {bad}")
+                    errors.append(f"{where}: judgement.map values must be GREEN/RED/INVALID/NA, got {bad}")
                 if not j.get("evidence"):
                     errors.append(f"{where}: judgement needs evidence file(s) to read")
             of = s.get("on_fail") or {}
@@ -464,10 +467,25 @@ def apply_answer(c: Campaign, step: dict, value: str, failproofs: dict):
     j = step["judgement"]
     key = value.split(":", 1)[0]
     outcome = j["map"].get(key, j["map"].get("*"))
-    c.st["steps"][step["id"]] = {"status": GREEN if outcome == GREEN else RED,
+    # NA resolves GREEN for SCHEDULING only (downstream `requires` proceed, like a declare row);
+    # its ledger row is N/A, never PASS - the branch below never calls emit_verdict with PASS.
+    c.st["steps"][step["id"]] = {"status": GREEN if outcome in (GREEN, "NA") else RED,
                                  "answer": value, "t": utc()}
     c.trace("answer", step=step["id"], value=value, outcome=outcome)
-    if outcome == GREEN:
+    if outcome == "NA":
+        # By-design non-applicability, proven from the evidence (RND-5: the shipped
+        # SeamlessStart=0 denial line - Start is deliberately not presented in seamless, the
+        # positive is graded in the suite's SG9 cell, p5-safeguards p5-sg9-devarm). N/A is
+        # NON-HALTING: no FAIL, no INVALID, no guest custody, no halt - the campaign continues.
+        # And it is NOT a pass: V1 is untouched (no fail-proof consumed) and campaign-verdict.sh
+        # counts N/A outside the PASS set, the same category the declare rows use. The detail
+        # carries the step's own description of the token so the row says WHY it does not apply.
+        c.st["steps"][step["id"]]["verdict"] = "N/A"
+        if step.get("check"):
+            emit_verdict(c, step, "N/A",
+                         f"answered {value} - {j['answers'].get(key, 'not applicable by design')}",
+                         step.get("evidence", ""), failproofs)
+    elif outcome == GREEN:
         if step.get("check"):
             emit_verdict(c, step, "PASS", f"operator answered {value}",
                          step.get("evidence", ""), failproofs)
