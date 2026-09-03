@@ -172,18 +172,18 @@
     {
       "id": "p4-bench-raws",
       "kind": "action",
-      "title": "BENCH-0 standing rule: commit the raw suite output to instrumentation/ (the b299011 baseline became unusable because its raws were never committed)",
+      "title": "BENCH-0: preserve the NUMERIC bench summary in the acceptance evidence dir. NEVER git-commit the raws - they carry scene .tar CAPTURES, and captures never enter the repo (owner rule, twice-purged). instrumentation/ is gitignored for exactly this reason; the numeric summary lives in {ACCEPT_OUT}/bench-suite.log (non-repo evidence), which is the citable record.",
       "requires": [
         "p4-bench-suite"
       ],
-      "command": "git add instrumentation/bench-stock-vs-ours-* && git commit -q -m 'bench: p4-rendering acceptance raws' && echo RAWS-COMMITTED",
+      "command": "grep -aq '== summary' {ACCEPT_OUT}/bench-suite.log && echo RAWS-RECORDED",
       "expect": {
         "exit": 0,
-        "stdout_re": "^RAWS-COMMITTED$"
+        "stdout_re": "^RAWS-RECORDED$"
       },
       "on_fail": {
         "action": "CONTINUE",
-        "msg": "The raws did not commit (dirty tree, or nothing new). Record why in the report; a baseline without committed raws cannot be cited later."
+        "msg": "The numeric bench summary is not in {ACCEPT_OUT}/bench-suite.log - the bench output was not teed. Record why; a baseline without its numeric summary cannot be cited later. (Do NOT switch to committing instrumentation/ - those raws carry scene captures.)"
       },
       "cells": [
         "BENCH-0"

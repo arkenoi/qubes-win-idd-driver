@@ -36,7 +36,7 @@
   },
   "p4-bench-raws": {
    "exit": 0,
-   "stdout": "RAWS-COMMITTED"
+   "stdout": "RAWS-RECORDED"
   },
   "p4-rnd5-collect": {
    "exit": 0,
