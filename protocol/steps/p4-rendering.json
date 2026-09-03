@@ -144,15 +144,15 @@
         "STOCK_AGENT",
         "OURS_AGENT"
       ],
-      "command": "grep -aq 'DISARMED True' {ACCEPT_OUT}/disarm.txt && QTEST_VM={VM} QWT_VMLOCK_HELD={VM} BENCH_SETTLE_S=45 tools/bench-stock-vs-ours.sh {STOCK_AGENT} {OURS_AGENT} 3 2>&1 | tee {ACCEPT_OUT}/bench-suite.log",
+      "command": "bash mgmt/harness/bench-gate-run.sh {VM} {STOCK_AGENT} {OURS_AGENT} {ACCEPT_OUT}",
       "timeout_s": 5400,
       "expect": {
         "exit": 0,
-        "stdout_re": "(?s)settle after each swap: [0-9]+s \\(floor 30\\).*== summary.*repetitions: [0-9]+ total, [0-9]+ valid, 0 INVALID.*^scroll\\s+[0-9]+\\.[0-9]+ \\([0-9]+\\)\\s+[0-9]+\\.[0-9]+ \\([0-9]+\\)\\s+[+-][0-9.]+%\\s+REAL - ranges disjoint, ours BETTER",
-        "stdout_absent_re": "^scroll .*(ours WORSE|NO VERDICT)|MORE THAN ONE BINARY ON THIS SIDE|^FATAL"
+        "stdout_re": "(?s)settle after each swap: [0-9]+s \\(floor 30\\).*== summary.*repetitions: [0-9]+ total, [0-9]+ valid, 0 INVALID.*^GUEST_BUILD=[0-9]+.*^BENCH-GATE PASS",
+        "stdout_absent_re": "^BENCH-GATE FAIL|MORE THAN ONE BINARY ON THIS SIDE|^FATAL"
       },
       "check": "p4-bench-canonical-suite",
-      "detail": "One guest, one install, one display stack; the only variable is gui-agent.exe, swapped in place. The suite enforces in code what the records demand: per-repetition RUNNING-hash assertion (P4-2; a harness that proceeds on a failed swap reports numbers for a build that never ran), missing data recorded INVALID and excluded - never coerced to zero, the scene checked by PIXELS each repetition (the wedged white Notepad faked two regressions), sides interleaved with alternating start order (BENCH-1: >=3 runs per side, interleaved with the control), and the settle floor (an 8 s settle produced the published-then-retracted '+60% win11 drag regression'). BENCH-2's always-on idle tripwire is carried by the suite's idle-pre/mid/post phases, measured every repetition. The expect grades ONLY the scroll row (BENCH-1: scroll is the metric that may carry a verdict; drag p50 is scene-state bimodal - it once voided a whole bisect - and gates nothing, whatever its row shows).",
+      "detail": "One guest, one install, one display stack; the only variable is gui-agent.exe, swapped in place. The suite enforces in code what the records demand: per-repetition RUNNING-hash assertion (P4-2; a harness that proceeds on a failed swap reports numbers for a build that never ran), missing data recorded INVALID and excluded - never coerced to zero, the scene checked by PIXELS each repetition (the wedged white Notepad faked two regressions), sides interleaved with alternating start order (BENCH-1: >=3 runs per side, interleaved with the control), and the settle floor (an 8 s settle produced the published-then-retracted '+60% win11 drag regression'). BENCH-2's always-on idle tripwire is carried by the suite's idle-pre/mid/post phases, measured every repetition. The scroll gate is GUEST-AWARE (bench-gate-run.sh -> tools/bench-gate.py, keyed on the guest's own build number): win10 (build<26100) demands REAL disjoint ours BETTER (the fork perf win against the whole-desktop DDA stock); win11 24H2+ (build>=26100) demands NO REGRESSION (scroll not REAL-disjoint-WORSE) because the platform makes every agent indistinguishable from stock on scroll (rule-canonical-benchmarks) - a disjoint-better verdict is unsatisfiable there for ANY build, so a win10-only gate would be a structural false-FAIL, not a product signal. The gate still FAILS a win11 disjoint-worse scroll, a win10 non-disjoint scroll, or any INVALID rep (proven in tools/bench-gate.py falsification cases). drag p50 is scene-state bimodal - it once voided a whole bisect - and gates nothing, whatever its row shows.",
       "on_fail": {
         "action": "HALT_PART",
         "verdict": "INVALID-PRECONDITION",
