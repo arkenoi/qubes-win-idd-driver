@@ -1097,12 +1097,43 @@ d=open(sys.argv[1],'rb').read(33); w,h=struct.unpack('>II',d[16:24]); print(w,h)
 # qwt-improved-setup artifact - prime-run's --payload); RELEASE_ISO/RELEASE_LOOP name the SAME
 # release's ISO for the over-existing cells. Deliberately NO default: a default pointing at a
 # stale tree is exactly how a 4.3.15 tarball once stood in for the release under test.
+#
+# BOOK INTERFACE (campaign.json s1-download -> s6-matrix, reconciled 2026-09-03): when the runner
+# supplies MATRIX_WORK (the `gh run download` area the book stages in s1), the release inputs are
+# DERIVED from it - {MATRIX_WORK}/dl is not "a default pointing at a stale tree", it is the very
+# directory Gate-0 (s1-gate0) and the regate (s5) just verified, and deriving from it is what
+# removes the per-run hand-editing the runner exists to abolish. An explicit RELEASE_SETUP /
+# RELEASE_ISO / RELEASE_COMMIT always wins; with no MATRIX_WORK nothing is derived and the
+# hard FATALs below keep their old bite.
+if [ -z "${RELEASE_SETUP:-}" ] && [ -n "${MATRIX_WORK:-}" ] && [ -d "$MATRIX_WORK/dl/qwt-improved-setup" ]; then
+  RELEASE_SETUP="$MATRIX_WORK/dl/qwt-improved-setup"
+  say "RELEASE_SETUP derived from MATRIX_WORK: $RELEASE_SETUP"
+fi
+if [ -z "${RELEASE_ISO:-}" ] && [ -z "${RELEASE_LOOP:-}" ] && [ -n "${MATRIX_WORK:-}" ] \
+   && [ -s "$MATRIX_WORK/dl/qwt-improved-iso/qwt-improved-setup.iso" ]; then
+  RELEASE_ISO="$MATRIX_WORK/dl/qwt-improved-iso/qwt-improved-setup.iso"
+  say "RELEASE_ISO derived from MATRIX_WORK: $RELEASE_ISO"
+fi
 [ -n "${RELEASE_SETUP:-}" ] || {
   say "FATAL: RELEASE_SETUP is unset. Point it at the release setup tree, e.g."
   say "  RELEASE_SETUP=\$HOME/deslice-dl-setup RELEASE_ISO=\$HOME/rel/qwt-improved-setup.iso \\"
   say "  RELEASE_COMMIT=<sha> CELLS=\"win10-clean win10-reinstall\" G10=win10-iqi mgmt/harness/matrix.sh"
   exit 1; }
 [ -d "$RELEASE_SETUP" ] || { say "FATAL: RELEASE_SETUP=$RELEASE_SETUP is not a directory"; exit 1; }
+# RELEASE_COMMIT, when the caller does not pin one, comes from the setup tree's OWN MANIFEST
+# (source.driver_repo_commit) - the artifact then gates against the commit it says it was built
+# from, which keeps Gate-0's sums/installer checks honest for a standalone invocation. A CAMPAIGN
+# must still pin explicitly (campaign.json passes RELEASE_COMMIT={REL}): self-gating proves
+# internal consistency, only the external pin proves it is the release the campaign intends.
+# Falling back to HEAD is the last resort and says so - HEAD moves under a campaign.
+if [ -z "${RELEASE_COMMIT:-}" ]; then
+  RELEASE_COMMIT=$(python3 -c "import json;print((json.load(open('$RELEASE_SETUP/MANIFEST.json')).get('source') or {}).get('driver_repo_commit') or '')" 2>/dev/null)
+  if [ -n "$RELEASE_COMMIT" ]; then
+    say "RELEASE_COMMIT derived from the setup MANIFEST: ${RELEASE_COMMIT:0:12} (self-consistency only - a campaign passes the pin explicitly)"
+  else
+    say "WARNING: RELEASE_COMMIT unset and the MANIFEST names no commit - gating against HEAD, which is WRONG for a campaign"
+  fi
+fi
 RELEASE_REF="${RELEASE_COMMIT:-HEAD}"
 RELEASE_SHA=$(git rev-parse "$RELEASE_REF" 2>/dev/null)
 [ -n "$RELEASE_SHA" ] || { say "FATAL: cannot resolve RELEASE_COMMIT='$RELEASE_REF' in this repo"; exit 1; }
@@ -1254,10 +1285,44 @@ for c in $CELLS; do
     *) say "FATAL: unknown cell '$c'"; FAIL=$((FAIL+1)) ;;
   esac
 done
+# PRECONDITION EVIDENCE for the book's s7 judgement (p1-precondition-authority): one entry per
+# install cell, carrying the '=== PRECONDITION ===' line from THIS run's log slice (the .cur file
+# verify_installed cut past the run marker; the full final log only when no slice exists). The
+# installer's line is the authority on found state (P1.0); this file only COLLECTS it - the
+# match-vs-label ruling belongs to the campaign's scorer (tools/rnd-score.py precondition-authority),
+# never to the harness. Cells that died before verify_installed produce no entry, and the matrix's
+# own non-zero exit has already failed the campaign step in that case.
+{
+  echo "Cell-by-cell PRECONDITION lines, extracted from each cell's install-log slice."
+  echo "(The '=== PRECONDITION ===' line is the installer's own report of the state it FOUND;"
+  echo "it is the authority on cell identity - P1.0.)"
+  echo ""
+  for f in "$M"/*-final.log; do
+    [ -e "$f" ] || continue
+    lbl=$(basename "$f"); lbl=${lbl%-final.log}
+    src="$M/$lbl-final.cur"; [ -s "$src" ] || src="$f"
+    pline=$(grep -a '=== PRECONDITION === {' "$src" | head -1 | sed 's/.*=== PRECONDITION === /=== PRECONDITION === /')
+    echo "cell $lbl"
+    if [ -n "$pline" ]; then echo "  $pline"; else echo "  <NO PRECONDITION LINE in $(basename "$src")>"; fi
+    echo ""
+  done
+} > "$M/precondition-lines.txt"
+say "precondition lines collected: $M/precondition-lines.txt"
+
 say ""
-say "=== MATRIX: $PASS passed, $FAIL failed ==="
+# The footer and DONE marker are printed WITHOUT say's timestamp prefix, deliberately: they are
+# the machine-readable contract the book keys on (campaign.json s6-matrix expects
+# '^=== MATRIX: N passed, M failed ===$' and s6-nonvacuous greps the same anchor in matrix.log).
+# A timestamped footer matches neither - measured as exactly the book<->code divergence class
+# this file was reconciled for on 2026-09-03.
+echo "=== MATRIX: $PASS passed, $FAIL failed ===" | tee -a "$R"
 # Parks are campaign-scoped: pool cost grows as content diverges, so remove them when the
 # campaign is DONE (not per cell - later cells unpark them). NEVER park or remove a golden.
 parks=$(qvm-ls --raw-data --fields NAME 2>/dev/null | grep '^ckpt-' | tr '\n' ' ')
 [ -n "${parks// /}" ] && say "parks on the rig (remove at campaign end with qvm-remove): $parks"
-say "=== DONE ==="
+echo "=== DONE ===" | tee -a "$R"
+# A failed or aborted cell fails the WHOLE invocation, mechanically. The 2026-08-30 campaign was
+# reported complete over a failing matrix because the summary was prose and the exit code said
+# nothing; campaign.json's s6-matrix (and its defect-cell-fail fixture) expect exit 1 here.
+[ "$FAIL" -eq 0 ] || exit 1
+exit 0

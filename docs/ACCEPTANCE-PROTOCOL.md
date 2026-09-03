@@ -44,7 +44,7 @@ verbatim; use Part II as the authority on what each step means.
 
 | Script | What it provides | The guard to respect |
 |---|---|---|
-| `mgmt/harness/matrix.sh` | The cell driver: `reclone / push_payload / run_install / verify_installed / start_vm`, cells `cell_fresh_1stage`, `cell_fresh_2stage`, `cell_fresh`, `cell_seeded`, `cell_upgrade_stock`, `cell_appvm`; selected via `CELLS=`, run strictly serially. Inputs: `MATRIX_WORK` (default `$HOME/qwt-matrix-work`), `MATRIX_OUT` (default `$HOME/qwt-matrix/<UTC-timestamp>`). | It sets the ambient `QTEST_VM` to an impossible name and passes `QTEST_VM=<vm>` per call — a forgotten target fails loudly instead of hitting a real guest. Do not weaken that. |
+| `mgmt/harness/matrix.sh` | The cell driver under the release-only model: `reclone / boot_with_release_iso / locate_release_disc / run_install / verify_installed / accept_grade / park_installed / unpark_installed`, cells `cell_clean`, `cell_reinstall`, `cell_upgrade`, `cell_seeded`, `cell_stock` (capability only), `cell_appvm`, `cell_grade`; selected via `CELLS=`, run strictly serially. Inputs: `MATRIX_WORK` (the `gh run download` area — `RELEASE_SETUP`/`RELEASE_ISO`/`RELEASE_COMMIT` are DERIVED from `$MATRIX_WORK/dl` when not explicitly set), `MATRIX_OUT` (default `$HOME/qwt-matrix/<UTC-timestamp>`). Exit 1 when any cell FAILed; footer + `=== DONE ===` are printed unprefixed for the runner. | It sets the ambient `QTEST_VM` to an impossible name and passes `QTEST_VM=<vm>` per call — a forgotten target fails loudly instead of hitting a real guest. Do not weaken that. The retired pushed-payload selectors (`win1X-fresh/1stage/2stage`) FAIL by name — our code enters a guest ONLY from the release package. |
 | `mgmt/harness/e2e-wait.sh` | The three-exit waits: `w_session` / `w_install` / `w_halt` / `w_screen` / `w_alive` (exit table in §0.3). `STALL_SECS=300`, `POLL_SECS=20` (floor ~5 s, H3.9), `MSI_POLL=1` default, `EVENT_POLL` opt-in. | Every wait says which exit it took; a wait that cannot fail is worthless. |
 | `.claude/skills/win-guest-e2e/e2e-lib.sh` | `qrun`/`qpr`/`alive`/`cap`/`screenverdict`/`startrun`/`_logtail`/`bootwait`/`wait_install`, `E2E_RESTART_BUDGET=2`. | **Refuses to load when `QTEST_VM` is unset — deliberately, no default.** A default target once routed a whole run at whatever qube it named, and dom0 refuses an unknown target by writing NOTHING, which reads exactly like "the guest has no windows". Export `QTEST_VM` explicitly, always. |
 | `tools/qtest` | `run`/`ps`/`push`/`pushrun`/`synctime`/`start`/`shutdown`/`kill`/`state`/`shot`/`fullshot`/`resize`/`wedge`. `push` lands files in `C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\`. | Refuses a nonexistent target and prints the tagged roster. Its baked-in fallback name `win-idd-test` is a dead qube by design, so an unset `QTEST_VM` fails loudly here too. |
@@ -127,69 +127,92 @@ time, and a campaign starts with zero).*
 drain per §2.5 (`qrexec_timeout 15` → kill → Halted CONTINUOUSLY → restore 6000). Never
 `xl destroy`; never diagnose a "wedged" guest before checking `qrexec_timeout` (H3.1).
 
-**Step 5 — stage the harness inputs.** *Dev qube.* `matrix.sh` consumes exactly three paths:
+**Step 5 — verify the harness inputs.** *Dev qube.* There is NO tarball stage any more — the
+pushed-payload route is forbidden (owner: "no swap fuckery is ever permitted"). `matrix.sh`
+consumes the step-1 download area directly, and exactly these paths must exist:
 
-    tar -czf "$MATRIX_WORK/qwt-setup.tar.gz" -C "$MATRIX_WORK/dl/qwt-improved-setup" .
-    ls -l "$MATRIX_WORK/qwt-setup.tar.gz" \
-          "$MATRIX_WORK/dl/qwt-full-package/gui-agent.exe" \
-          "$MATRIX_WORK/dl/qwt-improved-iso/MANIFEST.json"
-    tools/assert-payload.sh "$MATRIX_WORK/qwt-setup.tar.gz" "$REL"
+    ls -l "$MATRIX_WORK/dl/qwt-improved-setup/install.cmd" \
+          "$MATRIX_WORK/dl/qwt-improved-setup/reference/gui-agent.exe" \
+          "$MATRIX_WORK/dl/qwt-improved-iso/qwt-improved-setup.iso"
 
-The tarball's root must hold `install.cmd` (`run_install` executes `C:\<dir>\install.cmd`); the
-`-C <payload-dir> .` form produces exactly that shape.
-The `ls` is load-bearing, not ceremony: matrix.sh hard-fails only on a missing tarball; a missing
-`gui-agent.exe` leaves its `ASHA` variable empty and the "installed agent == release binary" check
-then matches ANY result line — a vacuous PASS (verified in source; §0.9.3). Re-gating the tarball
-proves the artifact actually pushed is the artifact that was gated.
-*Expect:* all three files listed; a second Gate-0 PASS line.
-*On failure:* re-download the artifacts; never substitute a file from another build.
+The setup TREE is prime-run's `--payload` for the clean cells (`install.cmd` at its root;
+`reference/gui-agent.exe` is where `ASHA` comes from — matrix.sh fails closed without it); the
+ISO is the CD every over-existing cell installs from (`qvm-start --cdrom`). The `ls` is
+load-bearing, not ceremony: a missing ISO would otherwise abort only when the first over-existing
+cell resolves the release loop — after gates have passed. The regate proves the MEDIUM, not a
+copy: extract `MANIFEST.json` from inside the ISO (`7z e -so`) and require its
+`source.driver_repo_commit` to equal `$REL` (campaign.json `s5-regate` does exactly this;
+matrix.sh then re-gates the mounted disc, and every cell re-reads the disc MANIFEST in-guest).
+*Expect:* all three files listed; `PASS: payload verified - the ISO's embedded MANIFEST names …`.
+*On failure:* re-download the run's artifacts; never substitute a file from another build.
 
-**Step 6 — run the cells, serially, through the harness.** *Clones the entry image named by
-`G10`/`G11` into `win10-tpl`/`win11-tpl` and installs there; AppVM cells cold-boot
+**Step 6 — run the cells, serially, through the harness.** *Install cells churn the DISPOSABLE
+per-OS StandaloneVMs `win10-acc`/`win11-acc` (created on demand, recreated freely — nothing may
+ever depend on them). The templates `win10-tpl`/`win11-tpl` are touched ONLY by the appvm cell,
+and only by volume restore from the campaign's `installed` park; AppVM cells cold-boot
 `win10-app`/`win11-app`.*
 
 `G10`/`G11` have **no default** since 2026-08-30 — the run refuses to start until they are named.
-The old default was `win10-goldr`/`win11-goldr`, which carried the release under test, so every cell
-called "fresh" or "upgrade" silently took the same-version-reinstall branch. The right entry differs
-per cell: a pristine base for a clean install, an N−1 fixture for C3, a stock fixture for C4, the C1
-exit for C6.
+The old default carried the release under test, so every cell called "fresh" or "upgrade"
+silently took the same-version-reinstall branch. `G10`/`G11` name the OVER-EXISTING entry image
+for the upgrade/seeded cells (a previous-ours fixture, e.g. `win10-iqi` carrying N−1) or the
+stock fixture for a deliberate stock run; the pristine bases for the clean cells are `B10`/`B11`
+(default `win10-base`/`win11-base`, the only sealed goldens). Every entry image must pass
+`golden.sh verify` (sealed) or `golden.sh fixture` (prime-run receipt); a churn target is refused
+as an entry image outright.
 
-    CELLS="win10-1stage win10-2stage win10-stock win11-1stage win10-appvm win11-appvm" \
+The full documented cell set (stock is a capability, never a default — owner 2026-09-03: stock is
+not re-tested per campaign):
+
+    CELLS="win10-clean win10-reinstall win10-upgrade win10-seeded win10-appvm \
+           win11-clean win11-reinstall win11-upgrade win11-seeded win11-appvm" \
+      G10=win10-iqi G11=win11-iqi \
+      RELEASE_COMMIT=$REL MATRIX_WORK=$MATRIX_WORK \
       MATRIX_OUT=$HOME/qwt-matrix/$(date -u +%Y%m%d-%H%M%S) \
       bash mgmt/harness/matrix.sh
 
-(`MATRIX_WORK` was exported in step 1. Seeded cells additionally need `SEED_DELAY=<secs>` AND
-`SEED_CELL=1` both exported — H3.11; an inherited `SEED_DELAY` without the per-run opt-in
-hard-aborts the cell, by design.)
+(`RELEASE_SETUP`/`RELEASE_ISO` are derived from `$MATRIX_WORK/dl` — the area steps 1 and 5
+gated; set them explicitly only to override. Without `RELEASE_COMMIT` the matrix gates against
+the setup MANIFEST's own `source.driver_repo_commit` — self-consistency only; a campaign passes
+the pin. The mid-MSI Request INJECTION variant of the seeded cells needs `SEED_DELAY=<secs>` AND
+`SEED_CELL=1` both exported — H3.11 — and because those are ambient for EVERY cell of the
+invocation, an injection run is its OWN campaign carrying seeded cells only; in the default set
+above the seeded cells run the armed-monitor variant, and the transcript records the seed state
+either way. An inherited `SEED_DELAY` without the opt-in hard-aborts the cell, by design.)
 
-Selector map (verified against the `case` dispatch in matrix.sh, 2026-08-30):
+Selector map (verified against the `case` dispatch in matrix.sh, 2026-09-03 — release-only model):
 
-| Selector (`win11-*` analogous) | Function | Golden → target | What it actually exercises |
+| Selector (`win11-*` analogous) | Function | Entry → target | What it actually exercises |
 |---|---|---|---|
-| `win10-1stage` | `cell_fresh_1stage` | `$G10` → `win10-tpl` | Push + install with testsigning already on. NOTE the name: over a golden that already carries QWT this takes the in-place-upgrade branch (C3-like), NOT C2 — the installer's `PRECONDITION` line is the authority on the branch taken (P1.0). |
-| `win10-2stage` | `cell_fresh_2stage` | same | Turns testsigning OFF, reboots, asserts `SystemStartOptions` really lost TESTSIGNING, then installs — the E1 two-stage entry. Same PRECONDITION caveat. |
-| `win10-fresh` | `cell_fresh` | same | Constructs a no-QWT precondition by uninstalling, rebooting, asserting `QWTPRODUCTS=0`, then installs. Diverges from P1.0's "preconditions are never constructed by uninstalling" — read §0.9.2 before treating its verdict as C1/C2-grade. |
-| `win10-seeded` | `cell_seeded` | same | Armed monitor (`sc config xenbus_monitor start= auto`) + optional mid-MSI Request injection (only with `SEED_DELAY` + `SEED_CELL=1`; without `SEED_DELAY` it is the armed-monitor-only variant, and the transcript records the seed state either way). |
-| `win10-stock` | `cell_upgrade_stock` | same | Uninstall ours → install `vendor/qwt-4.2.2/installer.msi` → assert 4.2.2 → install ours over it (C4 shape; ST1 constructed in-cell — §0.9.2). |
-| `win10-appvm` | `cell_appvm` | (no clone) points `win10-app` at `win10-tpl` | 3 cold boots; judged from pixels: ≥1 window mapped, none fullscreen-sized. |
+| `win10-clean` | `cell_clean` | `$B10` (pristine base) → `win10-acc` via prime-run `ours`, payload = release setup tree | THE clean install (D0×E1): base has no qrexec and testsigning OFF, so this is the true two-stage path, installer launched by the primer job. Parks the `installed` snapshot for the whole campaign, then grades (ENTRY_PRISTINE proof from the installer's own first PRECONDITION line + `clean install path` marker) and runs the accept-clean battery. |
+| `win10-reinstall` | `cell_reinstall` | unpark `ckpt-win10-acc-installed` → `win10-acc` | Same-version reinstall (C6) from the release ISO presented as a CD at boot; branch authority must report `in-place-same-version-reinstall`. |
+| `win10-upgrade` | `cell_upgrade` | reclone `$G10` (previous-ours fixture) → `win10-acc` | N−1 → N in-place MSI major upgrade from the ISO; entry QWT presence asserted via MSI product registrations (`qwt_products`), never the ITL Version key. |
+| `win10-seeded` | `cell_seeded` | reclone `$G10` → `win10-acc` | The field's armed-monitor state (`xenbus_monitor` set to auto AND started) + optional mid-MSI Request injection (only with `SEED_DELAY` + `SEED_CELL=1`); install from the ISO. |
+| `win10-stock` | `cell_stock` | reclone `$G10` (= a stock-4.2.2 fixture built by prime-run job `stock-422`) → `win10-acc` | Capability only, never a default: stock 4.2.2 → release upgrade from the ISO. |
+| `win10-appvm` | `cell_appvm` | volume-restore `ckpt-win10-acc-installed` → `win10-tpl`, then `win10-app` | The ONLY cell that touches a template, and only by volume restore from the clean cell's park. 3 cold boots; judged from pixels: ≥1 window mapped, none fullscreen-sized. |
+| `grade10` | `cell_grade` | `$GRADE_VM` as-is | Grade-only battery against an already-installed guest; no reclone, no reinstall. |
+| `win10-fresh`/`win10-1stage`/`win10-2stage` | — | — | RETIRED, fail by name: they installed from a pushed payload tree, which the release-only model forbids. |
 
 *Expect:* `=== MATRIX for <version> (agent <sha12>) ===` and `cells: ...`, then per cell a
 `######## CELL <name> ########` banner, timestamped progress, and the harness's own
-`PASS  ...`/`FAIL  ...` lines; footer `=== MATRIX: N passed, M failed ===` then `=== DONE ===`.
-`FATAL no setup tarball at ...` at startup means step 5 was skipped.
+`PASS  ...`/`FAIL  ...` lines; then `precondition lines collected: $MATRIX_OUT/precondition-lines.txt`
+(the s7 evidence file); footer `=== MATRIX: N passed, M failed ===` then `=== DONE ===`, both
+unprefixed (the runner keys on them), and **exit 0 only when 0 failed** — a failing cell fails the
+invocation mechanically. `FATAL: RELEASE_SETUP is unset` at startup means `MATRIX_WORK` carried no
+gated download area and nothing was passed explicitly — step 1/5 were skipped.
 *While it runs:* nothing else touches any Windows guest; never edit the running script (H3.6);
 watch by tailing `$MATRIX_OUT/matrix.log`, not by poking guests.
 *On a FAIL cell:* the guest's state is evidence — preserved per H3.5; the campaign continues on
 other cells (H4.5). A `could not reclone` that survives the built-in dirty-volume revert retries:
 stop and read the logged clone error; do not hand-clone around it.
 
-Three operational facts about this driver, all verified in source (details §0.9): an unset `CELLS`
-defaults to the string `seeded`, which matches NO selector — the run prints a header, does
-nothing, and ends `0 passed, 0 failed`; never read that as a passed campaign. `reclone` sets
-`qrexec_timeout=600`, not the standing 6000 (P0-PRE.2 owed). The install cells CONSUME the
-standing ST3 templates — after a matrix run `win10-tpl`/`win11-tpl` contain this campaign's
-install result, so re-establish ST3 with R4 (`mgmt/clone-to-template.sh`) when standing
-template/AppVM stages are needed next.
+Operational facts about this driver, verified in source (2026-09-03): an unset `CELLS` is a hard
+FATAL (the old silent `0 passed, 0 failed` default is gone), and an unknown/retired selector
+FAILs its cell — the footer can no longer look clean over a shrunken matrix. `reclone` sets
+`qrexec_timeout=600`, not the standing 6000 (P0-PRE.2 owed). Install cells NEVER touch
+`win10-tpl`/`win11-tpl` (they churn `win10-acc`/`win11-acc`); after a campaign the templates hold
+the `installed`-park restore only if the appvm cell ran. Parks (`ckpt-*-installed`) are
+campaign-scoped — remove them at campaign end with `qvm-remove`.
 
 **Step 7 — read the verdicts.** *Dev qube.*
 
@@ -297,18 +320,12 @@ Then assert that disc's `MANIFEST.json` `source.driver_repo_commit` equals `$REL
 anything from it. *On failure* (no RELDISC): check the qube's block assignments and the loop's
 backing file; do not fish drive letters by hand.
 
-**Route B — `qtest push` (what `mgmt/harness/matrix.sh:push_payload` implements).** One tarball,
-pushed as a single file, extracted guest-side into a fresh per-cell directory (the harness uses
-`C:\q4315`):
-
-    QTEST_VM=<vm> tools/qtest push "$MATRIX_WORK/qwt-setup.tar.gz"
-    QTEST_VM=<vm> tools/qtest run 'cmd /c "rmdir /s /q C:\q4315 2>nul & mkdir C:\q4315 & tar -xzf C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\qwt-setup.tar.gz -C C:\q4315 && echo EXTRACT_OK"'
-
-*Expect:* `EXTRACT_OK`. The fresh directory is mandatory — a stale directory from a previous cell
-is grading contamination.
-*On failure:* retry up to 3× with 20 s backoff KEEPING stderr (H3.8) — the first attempt reliably
-fails about a second after a session first answers `QREADY`. Three failures = the cell fails;
-never retry forever.
+**Route B — `qtest push` of a payload tarball: RETIRED for the PRODUCT (owner, 2026-09-03).**
+`matrix.sh:push_payload` is gone — "the only source of our code for e2e testing is RELEASE
+PACKAGES, nothing else. no swap fuckery is ever permitted." The product reaches a guest only via
+Route A (the release ISO as a CD — at BOOT via `qvm-start --cdrom` for the matrix cells) or the
+primer stick (pristine entries). `qtest push` remains legitimate for INSTRUMENTS only
+(watchers, probes, health checks): they are the harness, not the product.
 
 ### 0.6 Runbook: media — answer sticks, and which medium reaches which consumer
 
@@ -1309,22 +1326,21 @@ the variable becomes `"0\n0"`, which silently mangles any line it is interpolate
 
 1. `matrix.sh reclone` sets `qrexec_timeout=600`; the protocol standard is 6000 (§2.5, §12
    note 5). P0-PRE.2 still owed.
-2. `cell_fresh` and `cell_upgrade_stock` construct their preconditions by UNINSTALLING, which
-   P1.0 forbids for protocol-grade verdicts ("preconditions are never constructed by
-   uninstalling — QWT *is* the qrexec agent"; it cost `win10-u10`). They also invoke helper
-   scripts from a SESSION TMP path (`guest/uninstall-qwt.ps1 [FIXED 2026-08-31 — was a session-tmp path]`,
-   `guest/count-qwt.ps1` [FIXED 2026-08-31]) — garbage-collectable, the exact path class H0 banned for the wait
-   library. Promote both scripts into the repo (P0-PRE.8) before relying on the `*-fresh` /
-   `*-stock` selectors; protocol-grade C1/C2 and ST1 still enter via the stick (R3+ST0/ST0T,
-   stock stick loop11).
-3. A missing `$MATRIX_WORK/dl/qwt-full-package/gui-agent.exe` does not stop matrix.sh: `ASHA`
-   ends up empty and the "installed agent == release binary" check becomes vacuously green.
-   §0.2 step 5's `ls` is the guard.
-4. An unset `CELLS` defaults to the string `seeded`, which matches no `case` arm: a 0-cell run
-   with a normal-looking summary. Always set `CELLS` explicitly.
-5. The matrix's install cells write into `win10-tpl`/`win11-tpl`: a campaign consumes the
-   standing ST3 templates. Re-establish ST3 with R4 (`mgmt/clone-to-template.sh`) afterwards
-   when standing template/AppVM stages are needed.
+2. ~~`cell_fresh` and `cell_upgrade_stock` construct their preconditions by UNINSTALLING~~ —
+   **RESOLVED 2026-09-03 by retirement.** The release-only rewrite removed every
+   uninstall-constructed precondition: clean = `cell_clean` (prime-run from the pristine base),
+   stock = `cell_stock` entering from a fixture built by prime-run job `stock-422`. The retired
+   selectors (`win1X-fresh/1stage/2stage`) now FAIL by name.
+3. ~~A missing `gui-agent.exe` leaves `ASHA` empty and the release-binary check vacuous~~ —
+   **RESOLVED:** matrix.sh fails closed unless `$RELEASE_SETUP/reference/gui-agent.exe` exists
+   AND its hash agrees with MANIFEST `reference_binaries`. §0.2 step 5's `ls` remains the
+   earlier, cheaper guard.
+4. ~~An unset `CELLS` defaults to the string `seeded` (silent 0-cell run)~~ — **RESOLVED:**
+   unset `CELLS` is a hard FATAL; an unknown/retired selector FAILs its cell; the matrix exits
+   non-zero whenever any cell failed.
+5. ~~The matrix's install cells write into `win10-tpl`/`win11-tpl`~~ — **RESOLVED 2026-09-03:**
+   install cells churn the disposable `win10-acc`/`win11-acc`; only the appvm cell touches a
+   template, by volume restore from the campaign's `installed` park.
 6. ~~`mgmt/goldens/` is empty~~ — **RESOLVED 2026-08-30.** Both pristine bases are sealed and
    verify intact. `matrix.sh`'s `G10`/`G11` default (`*-goldr`) is also gone: it pointed at goldens
    carrying the candidate, so "fresh"/"upgrade" cells were reinstall cells. Naming the entry is now

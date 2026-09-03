@@ -1,5 +1,5 @@
 {
- "comment": "GREEN campaign: every gate passes, the matrix runs 6 cells clean, the PRECONDITION lines all match. Ground truth: the walk ends DONE with every check PASS (requires the defect scenarios' fail-proofs harvested first - V1: no PASS before the check has been seen to fail).",
+ "comment": "GREEN campaign: every gate passes, the matrix runs the documented 10-cell set clean (clean/reinstall/upgrade/seeded/appvm per OS, release-only delivery), the PRECONDITION lines all match their selectors. Ground truth: the walk ends DONE with every check PASS (requires the defect scenarios' fail-proofs harvested first - V1: no PASS before the check has been seen to fail).",
  "steps": [
   "campaign.json"
  ],
@@ -8,9 +8,9 @@
   "RUNID": "17442299001",
   "MATRIX_WORK": "/home/user/qwt-matrix-work",
   "MATRIX_OUT": "/home/user/qwt-matrix/20260901-120000",
-  "CELLS": "win10-1stage win10-2stage win10-stock win11-1stage win10-appvm win11-appvm",
-  "G10": "win10-base",
-  "G11": "win11-base"
+  "CELLS": "win10-clean win10-reinstall win10-upgrade win10-seeded win10-appvm win11-clean win11-reinstall win11-upgrade win11-seeded win11-appvm",
+  "G10": "win10-iqi",
+  "G11": "win11-iqi"
  },
  "results": {
   "s1-download": {
@@ -19,7 +19,7 @@
   },
   "s1-gate0": {
    "exit": 0,
-   "stdout": "PASS: payload verified \u2014 143 files, built from 09b643e12abc (09b643e12abc), installer matches repo"
+   "stdout": "PASS: payload verified — 143 files, built from 09b643e12abc (09b643e12abc), installer matches repo"
   },
   "s2-golden-win10": {
    "exit": 0,
@@ -37,29 +37,25 @@
    "exit": 0,
    "stdout": "ALL-HALTED"
   },
-  "s5-tarball": {
-   "exit": 0,
-   "stdout": ""
-  },
   "s5-inputs": {
    "exit": 0,
-   "stdout": "-rw-r--r-- 1 user user 48934912 Sep  1 12:00 /home/user/qwt-matrix-work/qwt-setup.tar.gz\n-rw-r--r-- 1 user user  1892352 Sep  1 12:00 /home/user/qwt-matrix-work/dl/qwt-full-package/gui-agent.exe\n-rw-r--r-- 1 user user     4211 Sep  1 12:00 /home/user/qwt-matrix-work/dl/qwt-improved-iso/MANIFEST.json"
+   "stdout": "-rw-r--r-- 1 user user     4198 Sep  1 12:00 /home/user/qwt-matrix-work/dl/qwt-improved-setup/install.cmd\n-rw-r--r-- 1 user user  1892352 Sep  1 12:00 /home/user/qwt-matrix-work/dl/qwt-improved-setup/reference/gui-agent.exe\n-rw-r--r-- 1 user user 31586304 Sep  1 12:00 /home/user/qwt-matrix-work/dl/qwt-improved-iso/qwt-improved-setup.iso"
   },
   "s5-regate": {
    "exit": 0,
-   "stdout": "PASS: payload verified \u2014 143 files, built from 09b643e12abc (09b643e12abc), installer matches repo"
+   "stdout": "PASS: payload verified - the ISO's embedded MANIFEST names 09b643e12abc (09b643e12abc)"
   },
   "s6-cells-named": {
    "exit": 0,
-   "stdout": "CELLS=win10-1stage win10-2stage win10-stock win11-1stage win10-appvm win11-appvm G10=win10-base G11=win11-base"
+   "stdout": "CELLS=win10-clean win10-reinstall win10-upgrade win10-seeded win10-appvm win11-clean win11-reinstall win11-upgrade win11-seeded win11-appvm G10=win10-iqi G11=win11-iqi"
   },
   "s6-matrix": {
    "exit": 0,
-   "stdout": "=== MATRIX for 4.3.17 (agent 09b643e12abc) ===\ncells: win10-1stage win10-2stage win10-stock win11-1stage win10-appvm win11-appvm\n######## CELL win10-1stage ########\nPASS  win10-1stage install result=0 installed-agent-sha=match\n######## CELL win10-2stage ########\nPASS  win10-2stage testsigning-off asserted; install result=0\n######## CELL win10-stock ########\nPASS  win10-stock 4.2.2 asserted then upgraded; result=0\n######## CELL win11-1stage ########\nPASS  win11-1stage install result=0 installed-agent-sha=match\n######## CELL win10-appvm ########\nPASS  win10-appvm 3 cold boots, >=1 window mapped, none fullscreen-sized\n######## CELL win11-appvm ########\nPASS  win11-appvm 3 cold boots, >=1 window mapped, none fullscreen-sized\n=== MATRIX: 6 passed, 0 failed ===\n=== DONE ==="
+   "stdout": "[12:00:01] RELEASE_SETUP derived from MATRIX_WORK: /home/user/qwt-matrix-work/dl/qwt-improved-setup\n[12:00:01] RELEASE_ISO derived from MATRIX_WORK: /home/user/qwt-matrix-work/dl/qwt-improved-iso/qwt-improved-setup.iso\n[12:00:02] Gate-0 (setup tree): PASS: payload verified - 143 files, built from 09b643e12abc (09b643e12abc), installer matches repo\n[12:00:03] === MATRIX for 4.3.18 (agent 3fbe12a09c44) ===\n[12:00:03] cells: win10-clean win10-reinstall win10-upgrade win10-seeded win10-appvm win11-clean win11-reinstall win11-upgrade win11-seeded win11-appvm\n[12:10:00] ######## CELL WIN10-clean (prime-run from win10-base: pristine -> two-stage clean install of the RELEASE) ########\n[12:10:00] PASS  WIN10-clean: guest came back with a session\n[12:10:00] PASS  WIN10-clean: installed agent == release binary\n[12:14:00] ######## CELL WIN10-reinstall (unpark 'installed' snapshot -> same-version reinstall from the release ISO) ########\n[12:14:00] PASS  WIN10-reinstall: guest came back with a session\n[12:14:00] PASS  WIN10-reinstall: installed agent == release binary\n[12:18:00] ######## CELL WIN10-upgrade (previous ours [win10-iqi] -> release, installed from the ISO) ########\n[12:18:00] PASS  WIN10-upgrade: guest came back with a session\n[12:18:00] PASS  WIN10-upgrade: installed agent == release binary\n[12:22:00] ######## CELL WIN10-seeded (pending xenbus Request + monitor auto-start, install from the ISO) ########\n[12:22:00] PASS  WIN10-seeded: guest came back with a session\n[12:22:00] PASS  WIN10-seeded: installed agent == release binary\n[12:26:00] ######## CELL WIN10-appvm (restore 'installed' park into the template, derive AppVM, cold boot) ########\n[12:26:00] PASS  WIN10-appvm: guest came back with a session\n[12:26:00] PASS  WIN10-appvm: installed agent == release binary\n[12:30:00] ######## CELL WIN11-clean (prime-run from win11-base: pristine -> two-stage clean install of the RELEASE) ########\n[12:30:00] PASS  WIN11-clean: guest came back with a session\n[12:30:00] PASS  WIN11-clean: installed agent == release binary\n[12:34:00] ######## CELL WIN11-reinstall (unpark 'installed' snapshot -> same-version reinstall from the release ISO) ########\n[12:34:00] PASS  WIN11-reinstall: guest came back with a session\n[12:34:00] PASS  WIN11-reinstall: installed agent == release binary\n[12:38:00] ######## CELL WIN11-upgrade (previous ours [win11-iqi] -> release, installed from the ISO) ########\n[12:38:00] PASS  WIN11-upgrade: guest came back with a session\n[12:38:00] PASS  WIN11-upgrade: installed agent == release binary\n[12:42:00] ######## CELL WIN11-seeded (pending xenbus Request + monitor auto-start, install from the ISO) ########\n[12:42:00] PASS  WIN11-seeded: guest came back with a session\n[12:42:00] PASS  WIN11-seeded: installed agent == release binary\n[12:46:00] ######## CELL WIN11-appvm (restore 'installed' park into the template, derive AppVM, cold boot) ########\n[12:46:00] PASS  WIN11-appvm: guest came back with a session\n[12:46:00] PASS  WIN11-appvm: installed agent == release binary\n[13:05:00] precondition lines collected: /home/user/qwt-matrix/20260901-120000/precondition-lines.txt\n[13:05:00] \n=== MATRIX: 96 passed, 0 failed ===\n=== DONE ==="
   },
   "s6-nonvacuous": {
    "exit": 0,
-   "stdout": "=== MATRIX: 6 passed, 0 failed ==="
+   "stdout": "=== MATRIX: 96 passed, 0 failed ==="
   }
  }
 }

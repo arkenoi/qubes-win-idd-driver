@@ -5,7 +5,7 @@
   "halted_at": "s5-regate",
   "ledger": [
    {
-    "check": "p0-regate-tarball",
+    "check": "p0-regate-iso",
     "verdict": "INVALID-PROVENANCE"
    }
   ],

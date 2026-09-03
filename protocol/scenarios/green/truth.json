@@ -30,7 +30,7 @@
     "verdict": "PASS"
    },
    {
-    "check": "p0-regate-tarball",
+    "check": "p0-regate-iso",
     "verdict": "PASS"
    },
    {

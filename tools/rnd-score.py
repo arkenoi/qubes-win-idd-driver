@@ -77,7 +77,68 @@ def score_rnd3(text):
     return "EVIDENCE_INCOMPLETE"              # accounting/crop line absent entirely
 
 
-SCORERS = {"rnd5-verdict": score_rnd5, "rnd3-synth-crop": score_rnd3}
+def score_precondition(text):
+    """s7-precondition-authority (campaign.json): P1.0's authority rule, mechanized.
+
+    Evidence = $MATRIX_OUT/precondition-lines.txt, written by matrix.sh: one 'cell <LABEL>' entry
+    per install cell, followed by that cell's '=== PRECONDITION ===' line (the installer's own
+    report of the state it FOUND - real form is JSON with "installed_qwt_count"; the older
+    fixtures use the QWTPRODUCTS=<n> shorthand, both are parsed). The decision is a closed table
+    over the cell SELECTOR and the FOUND count - no discretion:
+
+        clean / fresh / 1stage / 2stage  -> the installer must have found NO QWT (count == 0)
+        reinstall / upgrade / seeded / stock -> it must have found one (count >= 1)
+        appvm / grade                    -> no install ran; not this check's subject (skipped)
+
+    Anything else fails closed: an unknown selector or a count-free line proves nothing, and a
+    'no' that was never measured must never read as a pass (V3). MISMATCH outranks LINE_ABSENT -
+    a measured contradiction is the stronger fact - and zero install entries is LINE_ABSENT, so a
+    run that listed nothing can never vacuously ALL_MATCH."""
+    entries = []
+    cur = None
+    for line in text.splitlines():
+        m = re.match(r"^cell\s+(\S+)", line)
+        if m:
+            cur = {"label": m.group(1), "body": []}
+            entries.append(cur)
+        elif cur is not None:
+            cur["body"].append(line)
+    verdicts = []
+    for e in entries:
+        lbl = e["label"].lower()
+        if "appvm" in lbl or lbl.endswith("-grade"):
+            continue
+        if any(k in lbl for k in ("reinstall", "upgrade", "seeded", "stock")):
+            want_present = True
+        elif any(k in lbl for k in ("clean", "fresh", "1stage", "2stage")):
+            want_present = False
+        else:
+            verdicts.append("MISMATCH")       # unknown selector: identity not established
+            continue
+        body = "\n".join(e["body"])
+        pm = re.search(r"=== PRECONDITION === (.+)", body)
+        if not pm:
+            verdicts.append("LINE_ABSENT")
+            continue
+        cm = (re.search(r'"installed_qwt_count"\s*:\s*(-?\d+)', pm.group(1))
+              or re.search(r"QWTPRODUCTS=(-?\d+)", pm.group(1)))
+        if not cm:
+            verdicts.append("LINE_ABSENT")    # a line naming no count decides nothing
+            continue
+        n = int(cm.group(1))                  # installer error paths report -1: matches neither
+        ok = (n >= 1) if want_present else (n == 0)
+        verdicts.append("ALL_MATCH" if ok else "MISMATCH")
+    if not verdicts:
+        return "LINE_ABSENT"
+    if "MISMATCH" in verdicts:
+        return "MISMATCH"
+    if "LINE_ABSENT" in verdicts:
+        return "LINE_ABSENT"
+    return "ALL_MATCH"
+
+
+SCORERS = {"rnd5-verdict": score_rnd5, "rnd3-synth-crop": score_rnd3,
+           "precondition-authority": score_precondition}
 
 
 def main(argv):
