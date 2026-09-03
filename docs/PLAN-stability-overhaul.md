@@ -52,7 +52,7 @@ ingestion rather than at the wire (would move the per-window capture crop origin
 
 Every fix must show **no regression** on the existing instrumentation before it counts as landed.
 
-- **Metric source**: the agent's own `QGAPERF,v=7` frame line (`perf.c:282`) — use `tot`, `snd`,
+- **Metric source**: the agent's own `QGAPERF` frame line (perf.c, PerfEmitFrame) — use `tot`, `snd`,
   `dmg`, `enu`, and frame interval; report p50/p95/p99, never means alone.
 - **Protocol**: ≥3 runs per side, **interleaved** with the control build, same scene, binary hash
   verified against the manifest before each run, cold boot included. (CLAUDE.md validation rules —
