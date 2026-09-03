@@ -263,7 +263,8 @@
         "RND-0b-table",
         "RND-0b-rule-1",
         "RND-0-blindness"
-      ]
+      ],
+      "scorer": "rnd5-verdict"
     },
     {
       "id": "p4-rnd8",
@@ -401,7 +402,8 @@
         "RND-pixel-rules",
         "P4-pixels-only",
         "RND-0b-table"
-      ]
+      ],
+      "scorer": "rnd3-synth-crop"
     },
     {
       "id": "p4-rnd4-toast",
