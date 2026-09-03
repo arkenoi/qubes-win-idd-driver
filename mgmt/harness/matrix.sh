@@ -28,8 +28,20 @@
 #   stock       CAPABILITY ONLY, never a default cell (owner: never re-test stock per campaign):
 #               reclone a stock-4.2.2 fixture built on demand by prime-run job stock-422, then
 #               release ISO over it.
-#   appvm       derive an AppVM from the installed subject, cold boot it (unchanged).
+#   appvm       restore the 'installed' park into the TEMPLATE (volume restore), derive an
+#               AppVM from it, cold boot it.
 #   grade       grade-only battery against an already-installed guest (unchanged).
+#
+# TARGET MODEL (matrix-4318 lesson, 2026-09-03). The install cells (clean/reinstall/upgrade/
+# seeded/stock) churn a DISPOSABLE per-OS StandaloneVM - win10-acc / win11-acc - that NOTHING
+# depends on. They used to target win10-tpl/win11-tpl, but those are TemplateVMs with
+# win10-app/win11-app bound to them, and prime-run RECREATES its target (qvm-remove +
+# qvm-create), which dom0 refuses while an AppVM depends on the name: "prime-run TERMINAL:
+# could not create win10-tpl", cascading into reinstall ("no restorable 'installed' park").
+# prime-run creates the churn subject itself; the reclone-entry cells create it on first use
+# (ensure_churn_target). The templates are touched ONLY by the appvm cell, and only by VOLUME
+# restore (checkpoint.sh unpark <tpl> installed <acc> - a clone of the park's volumes, legal on
+# a template with dependents), never by a recreate.
 #
 # SNAPSHOTS ARE THE OPTIMIZATION (owner 2026-09-01: "we do snapshots for optimizations"): the
 # release is installed ONCE per OS per campaign - by the clean cell, which parks the installed
@@ -280,6 +292,37 @@ clear_prime_leftovers(){ # $1=vm - prime-run's own exit text: "The stick is stil
     say "  WARNING: no loop backing answer-usb.img found - primer stick assignment not cleared for $vm"
   fi
   qvm-features --unset "$vm" qemu-extra-args 2>/dev/null
+}
+
+qwt_products(){ # $1=vm - echo the count of MSI-REGISTERED QWT products; echo nothing if unreadable.
+  # THE AUTHORITATIVE QWT-PRESENCE SIGNAL, restored from the pre-void cell_fresh (c910ff4):
+  # "ASSERT ON THE SIGNAL THE CODE UNDER TEST USES" - Install-QwtImproved.ps1 decides
+  # upgrade-vs-clean by enumerating MSI product registrations, which is exactly what
+  # guest/count-qwt.ps1 counts. The ITL "Qubes Tools\Version" registry key is NOT that signal:
+  # our NG QWT does not populate it at all. Measured 2026-09-03 (matrix-4318): win10-iqi carried
+  # a working installed 4.3.17 (qrexec answering, whoami=SYSTEM) while the Version query returned
+  # nothing, so the upgrade cell declared a QWT-carrying entry "carries NO installed QWT" and
+  # voided itself. Callers: empty output = INVALID-INSTRUMENT (missing data fails, never "absent").
+  QTEST_VM=$1 timeout -k 8 240 ./tools/qtest pushrun guest/count-qwt.ps1 2>/dev/null \
+    | tr -d '\r' | grep -aoE 'QWTPRODUCTS=[0-9]+' | tail -1 | cut -d= -f2
+}
+
+ensure_churn_target(){ # $1=vm - create the disposable churn StandaloneVM if it does not exist.
+  # The reclone-entry cells (upgrade/seeded/stock) clone volumes INTO an existing qube, so on a
+  # rig where the clean cell has not run yet (prime-run creates the subject) the churn target may
+  # simply not exist. Create it exactly the way prime-run.sh does: create -> TAG -> everything
+  # else, in that order - dom0 policy here is tag-based, so any call before the tag lands on a
+  # qube policy does not yet cover and is refused.
+  local vm=$1 p
+  qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "$vm" && return 0
+  say "  creating churn target $vm (disposable StandaloneVM; nothing may ever depend on it - prime-run recreates it freely)"
+  qvm-create --class StandaloneVM --label red --property virt_mode=hvm --property kernel='' "$vm" \
+    || { no "could not create churn target $vm"; return 1; }
+  qvm-tags "$vm" add win-idd-testbed || { no "could not tag churn target $vm"; return 1; }
+  qvm-features "$vm" os Windows
+  for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do qvm-prefs "$vm" "${p%%:*}" "${p##*:}"; done
+  qvm-prefs "$vm" netvm '' 2>/dev/null
+  return 0
 }
 
 park_installed(){ # $1=vm $2=label - halt and park the just-installed subject as the campaign's
@@ -674,8 +717,11 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
 
   echo "$j" | grep -qa '"autologon":"armed"' \
     && ok "$lbl: autologon armed" || no "$lbl: autologon NOT armed ($(echo "$j" | grep -ao '"autologon":"[^"]*"'))"
+  # INFORMATIONAL ONLY, and labeled so nobody re-derives the matrix-4318 false negative from this
+  # line: the ITL Version key is a STOCK-era signal that our NG QWT leaves empty. Presence is
+  # asserted elsewhere via qwt_products (MSI product registrations), never via this key.
   local ver; ver=$(QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run 'cmd /c reg query "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v Version' 2>/dev/null | tr -d '\r' | grep -a REG_SZ | head -1)
-  say "  $lbl installed version: $ver"
+  say "  $lbl ITL Version key (stock-era signal, empty on our NG QWT - not a presence check): ${ver:-<empty>}"
 
   # PROVE THE MECHANISM, not just the absence of a brick. The fix is in xenbus.inf: the monitor
   # service must be installed but DISABLED and NOT RUNNING after the driver install. Asserting
@@ -790,12 +836,23 @@ cell_upgrade(){ # $1=previous-ours entry image $2=subject $3=tag - previous rele
   # discipline guarantees; override with UPGRADE_EXPECT_MODE only for a deliberate variant.
   say "######## CELL $3-upgrade (previous ours [$1] -> release, installed from the ISO) ########"
   local prev=$1 vm=$2 tag=$3
+  ensure_churn_target "$vm" || return
   reclone "$prev" "$vm" || { no "$tag-upgrade: could not reclone"; return; }
   start_vm "$vm"
   w_session "$vm" 900 "$tag-upgrade-boot" "$M" say || { no "$tag-upgrade: clone did not boot"; return; }
-  local before; before=$(QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run 'cmd /c reg query "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v Version' 2>/dev/null | tr -d '\r' | grep -a REG_SZ | head -1)
-  say "  QWT before upgrade: ${before:-<none>}"
-  [ -n "$before" ] || { no "$tag-upgrade: entry image carries NO installed QWT - not an upgrade cell, INVALID-PRECONDITION"; return; }
+  # QWT presence via the installer's OWN signal (MSI product registrations - qwt_products), never
+  # the ITL "Qubes Tools\Version" reg key: our NG QWT does not populate that key, so it
+  # false-negatives on exactly the entries this cell exists for. Measured on matrix-4318:
+  # win10-iqi ran a working installed 4.3.17 (qrexec answering) while the Version query returned
+  # nothing, and this cell voided itself with "carries NO installed QWT".
+  local before; before=$(qwt_products "$vm")
+  say "  QWT products at entry: ${before:-<unreadable>}"
+  if [ -z "$before" ]; then
+    no "$tag-upgrade: INVALID-INSTRUMENT - could not count QWT products at entry (missing data fails; it never reads as 'absent')"; return
+  elif [ "$before" -lt 1 ] 2>/dev/null; then
+    no "$tag-upgrade: entry image carries NO installed QWT (QWTPRODUCTS=0) - not an upgrade cell, INVALID-PRECONDITION"; return
+  fi
+  ok "$tag-upgrade: entry carries an installed QWT (QWTPRODUCTS=$before)"
   install_from_release_iso "$vm" "$tag-upgrade" || return
   ENTRY_PRISTINE=0; EXPECT_MODE="${UPGRADE_EXPECT_MODE:-in-place-msi-major-upgrade}"; CELL_PRIMED=1
   run_install "$vm" "$tag-upgrade" "$RELDISC"
@@ -814,9 +871,22 @@ cell_seeded(){ # $1=QWT-carrying entry image $2=subject $3=tag
   say "######## CELL $3-seeded (pending xenbus Request + monitor auto-start, install from the ISO) ########"
   say "  THIS IS THE SUSPECTED BRICK. Control (seed off) completed in 90 s and stayed healthy;"
   say "  the seeded run halted at 80 s mid-MSI and came back in Automatic Repair. n=2, unproven."
+  ensure_churn_target "$2" || return
   reclone "$1" "$2" || { no "$3-seeded: could not reclone"; return; }
   start_vm "$2"
   w_session "$2" 600 "$3-seeded-boot" "$M" say || { no "$3-seeded: clone did not boot"; return; }
+  # The entry must CARRY a QWT: the seeded cell models a PV reboot Request arriving over an
+  # EXISTING install (the field's state). Same authoritative presence signal as cell_upgrade -
+  # MSI product registrations (qwt_products), never the ITL Version key, which is empty on our
+  # NG QWT and false-negatived matrix-4318's upgrade cell.
+  local sn; sn=$(qwt_products "$2")
+  say "  QWT products at entry: ${sn:-<unreadable>}"
+  if [ -z "$sn" ]; then
+    no "$3-seeded: INVALID-INSTRUMENT - could not count QWT products at entry (missing data fails; it never reads as 'absent')"; return
+  elif [ "$sn" -lt 1 ] 2>/dev/null; then
+    no "$3-seeded: INVALID-PRECONDITION - entry carries NO installed QWT (QWTPRODUCTS=0); the seeded cell needs an existing install to seed over"; return
+  fi
+  ok "$3-seeded: entry carries an installed QWT (QWTPRODUCTS=$sn)"
   local XK='HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor'
   # TIMING IS THE WHOLE TEST, and the old timing made this cell meaningless. Writing the Request
   # BEFORE the install let the already-running, idle monitor act on it immediately: measured
@@ -870,14 +940,26 @@ cell_stock(){ # $1=stock-4.2.2 fixture $2=subject $3=tag - CAPABILITY ONLY, neve
   # the provisioning job). Then: the release ISO as a CD installs over stock.
   say "######## CELL $3-stock (stock 4.2.2 fixture [$1] -> release, installed from the ISO) ########"
   local entry=$1 vm=$2 tag=$3
+  ensure_churn_target "$vm" || return
   reclone "$entry" "$vm" || { no "$tag-stock: could not reclone"; return; }
   start_vm "$vm"
   w_session "$vm" 900 "$tag-stock-boot" "$M" say || { no "$tag-stock: clone did not boot"; return; }
+  # PRESENCE via the authoritative signal (MSI product registrations - qwt_products); the ITL
+  # Version key is then a legitimate STOCKNESS discriminator, because stock 4.2.2 writes it and
+  # our NG QWT does not. So here "key empty" means "not stock" - never "no QWT", which qwt_products
+  # has already ruled on. (Presence-by-reg-key is the exact false negative that voided
+  # matrix-4318's upgrade cell.)
+  local n; n=$(qwt_products "$vm")
+  if [ -z "$n" ]; then
+    no "$tag-stock: INVALID-INSTRUMENT - could not count QWT products at entry (missing data fails; it never reads as 'absent')"; return
+  elif [ "$n" -lt 1 ] 2>/dev/null; then
+    no "$tag-stock: entry carries NO installed QWT (QWTPRODUCTS=0) - build the fixture with prime-run job stock-422; cell INVALID"; return
+  fi
   local sv; sv=$(QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run 'cmd /c reg query "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v Version' 2>/dev/null | tr -d '\r' | grep -a REG_SZ | head -1)
-  say "  QWT at entry: ${sv:-<none>}"
+  say "  QWT at entry: QWTPRODUCTS=$n, ITL Version key: ${sv:-<empty - ours leaves it unset>}"
   case "$sv" in
-    *4.2.2*) ok "$tag-stock: precondition real (stock 4.2.2 installed)" ;;
-    *) no "$tag-stock: entry does not carry stock 4.2.2 ($sv) - build the fixture with prime-run job stock-422; cell INVALID"; return ;;
+    *4.2.2*) ok "$tag-stock: precondition real (stock 4.2.2 installed, QWTPRODUCTS=$n)" ;;
+    *) no "$tag-stock: entry carries A QWT but not stock 4.2.2 (Version key: ${sv:-empty}) - build the fixture with prime-run job stock-422; cell INVALID"; return ;;
   esac
   install_from_release_iso "$vm" "$tag-stock" || return
   ENTRY_PRISTINE=0; EXPECT_MODE=in-place-msi-major-upgrade; CELL_PRIMED=1
@@ -888,10 +970,11 @@ cell_stock(){ # $1=stock-4.2.2 fixture $2=subject $3=tag - CAPABILITY ONLY, neve
   accept_grade "$vm" "$tag-stock"
 }
 
-cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm - derive an AppVM and cold boot it
-  say "######## CELL $3-appvm (derive from the installed template, cold boot) ########"
-  local tpl=$2 app=${4:-}
+cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the 'installed' park)
+  say "######## CELL $3-appvm (restore 'installed' park into the template, derive AppVM, cold boot) ########"
+  local tpl=$2 app=${4:-} acc=${5:-}
   [ -n "$app" ] || { no "$3-appvm: no AppVM name"; return; }
+  [ -n "$acc" ] || { no "$3-appvm: no churn-subject name (source of the 'installed' park)"; return; }
   # This cell derives an AppVM instead of recloning, so it never passed through reclone's H3.6
   # guard - and it is the cell most likely to follow an install cell on the other OS. Halt
   # everything else first, the template included (the AppVM must be derived from a HALTED template
@@ -902,18 +985,24 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm - derive an AppVM and cold boot
     w_halt "$tpl" 420 "$3-appvm-tplhalt" say || { no "$3-appvm: template would not halt"; return; }
   fi
   # SNAPSHOT ENTRY (owner: "we do snapshots for optimizations"). The AppVM boots the template's
-  # system volume, so what this cell grades is whatever the template happens to carry after the
-  # previous cell. The deterministic entry is the campaign's 'installed' park - restore it when
-  # it exists (~2 s); without one, say loudly that the cell grades the template AS-IS, so the
-  # transcript records which state was actually derived from.
-  if qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "ckpt-$tpl-installed"; then
-    if ./mgmt/harness/checkpoint.sh unpark "$tpl" installed >>"$R" 2>&1; then
-      say "  $3-appvm: template restored from ckpt-$tpl-installed (snapshot entry, release installed)"
-    else
-      say "  WARNING: unpark of $tpl failed - grading the template AS-IS (previous cell's state)"
-    fi
+  # system volume, so what this cell grades is whatever the template carries. Under the churn-
+  # target model NO install cell touches the template any more - the ONLY way the release gets
+  # onto it is the CROSS-VM volume restore of the campaign's 'installed' park (parked from the
+  # churn subject by the clean cell): checkpoint.sh unpark <tpl> installed <acc>. A volume clone
+  # is legal on a TemplateVM with a bound AppVM; a recreate is refused by dom0 while a dependent
+  # exists - matrix-4318's upgrade cell failed exactly there ("could not create win10-tpl").
+  # Without a park there is NO deterministic release-carrying state to derive from ("AS-IS" used
+  # to mean "the previous install cell's result"; now it would mean "whatever the template last
+  # happened to hold"), so a missing park is a hard refusal, not a downgrade.
+  if ! qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "ckpt-$acc-installed"; then
+    no "$3-appvm: no 'installed' park (ckpt-$acc-installed) - run the clean cell first; the appvm cell only ever enters from that park"
+    return
+  fi
+  if ./mgmt/harness/checkpoint.sh unpark "$tpl" installed "$acc" >>"$R" 2>&1; then
+    say "  $3-appvm: template $tpl restored from ckpt-$acc-installed (cross-vm volume restore - release installed)"
   else
-    say "  $3-appvm: no 'installed' park for $tpl - grading the template AS-IS (previous cell's state)"
+    no "$3-appvm: cross-vm unpark of ckpt-$acc-installed into $tpl FAILED (see $R) - refusing to grade a template in an unknown state"
+    return
   fi
   if [ "$(w_state "$app")" != Halted ]; then
     qvm-shutdown "$app" >/dev/null 2>&1; w_halt "$app" 420 "$3-appvm-halt" say >/dev/null 2>&1
@@ -1011,6 +1100,14 @@ PV=$(python3 -c "import json;print(json.load(open('$RELEASE_SETUP/MANIFEST.json'
 B10="${B10:-win10-base}"
 B11="${B11:-win11-base}"
 
+# A10/A11 = the DISPOSABLE per-OS churn subjects EVERY install cell targets (TARGET MODEL above).
+# Fixed names, deliberately not knobs ("do not complicate the controls"): prime-run recreates
+# them freely, ensure_churn_target creates them on demand, and nothing - no AppVM, no derived
+# state - may ever bind to them. The templates (win10-tpl/win11-tpl) are NEVER an install-cell
+# target; only the appvm cell touches them, by volume restore.
+A10=win10-acc
+A11=win11-acc
+
 # CUSTODY GATE - two acceptable provenances, both strict, neither optional.
 #   sealed golden : golden.sh verify   - untouched since it was sealed
 #   fixture       : golden.sh fixture  - built by prime-run.sh from a base whose seal STILL verifies
@@ -1018,6 +1115,18 @@ B11="${B11:-win11-base}"
 # transient fixtures. So demanding a seal from every entry image would block the upgrade cells
 # entirely, while accepting anything unchecked is how a contaminated golden poisoned a whole
 # campaign. Hence: one of the two, always, and say which.
+# A churn target can never be an entry image: the install cells recreate/overwrite A10/A11
+# freely (prime-run removes and recreates its target; reclone clones over the volumes), so an
+# operator pointing an entry variable at one would have the cell destroy its own entry state.
+for g in "$B10" "$B11" "${G10:-}" "${G11:-}"; do
+  case "$g" in
+    "$A10"|"$A11")
+      say "FATAL: entry image '$g' is a CHURN TARGET (disposable install subject) - the cells"
+      say "       recreate it freely, so it can never serve as an entry image. Name a sealed"
+      say "       base (B10/B11) or a fixture (G10/G11) instead."
+      exit 1 ;;
+  esac
+done
 for g in "${G10:-}" "${G11:-}"; do
   [ -n "$g" ] || continue
   if ./mgmt/golden.sh verify "$g" >/dev/null 2>&1; then
@@ -1072,20 +1181,24 @@ done
 [ "$NEED_ISO" = 1 ] && ensure_release_loop
 for c in $CELLS; do
   case $c in
-    win10-clean)     cell_clean     "$B10" win10-tpl WIN10 ;;
-    win11-clean)     cell_clean     "$B11" win11-tpl WIN11 ;;
-    win10-reinstall) cell_reinstall win10-tpl WIN10 ;;
-    win11-reinstall) cell_reinstall win11-tpl WIN11 ;;
-    win10-upgrade)   cell_upgrade   "$G10" win10-tpl WIN10 ;;
-    win11-upgrade)   cell_upgrade   "$G11" win11-tpl WIN11 ;;
-    win10-seeded)    cell_seeded    "$G10" win10-tpl WIN10 ;;
-    win11-seeded)    cell_seeded    "$G11" win11-tpl WIN11 ;;
-    win10-stock)     cell_stock     "$G10" win10-tpl WIN10 ;;
-    win11-stock)     cell_stock     "$G11" win11-tpl WIN11 ;;
+    # INSTALL CELLS churn the disposable subjects A10/A11 - NEVER win10-tpl/win11-tpl (TARGET
+    # MODEL above; matrix-4318: prime-run cannot recreate a template with a bound AppVM). The
+    # appvm cell is the only one that touches a template, and only by volume restore from the
+    # churn subject's 'installed' park.
+    win10-clean)     cell_clean     "$B10" "$A10" WIN10 ;;
+    win11-clean)     cell_clean     "$B11" "$A11" WIN11 ;;
+    win10-reinstall) cell_reinstall "$A10" WIN10 ;;
+    win11-reinstall) cell_reinstall "$A11" WIN11 ;;
+    win10-upgrade)   cell_upgrade   "$G10" "$A10" WIN10 ;;
+    win11-upgrade)   cell_upgrade   "$G11" "$A11" WIN11 ;;
+    win10-seeded)    cell_seeded    "$G10" "$A10" WIN10 ;;
+    win11-seeded)    cell_seeded    "$G11" "$A11" WIN11 ;;
+    win10-stock)     cell_stock     "$G10" "$A10" WIN10 ;;
+    win11-stock)     cell_stock     "$G11" "$A11" WIN11 ;;
     grade10)         cell_grade     "${GRADE_VM:?set GRADE_VM to the guest to grade}" WIN10 ;;
     grade11)         cell_grade     "${GRADE_VM:?set GRADE_VM to the guest to grade}" WIN11 ;;
-    win10-appvm)     cell_appvm     - win10-tpl WIN10 win10-app ;;
-    win11-appvm)     cell_appvm     - win11-tpl WIN11 win11-app ;;
+    win10-appvm)     cell_appvm     - win10-tpl WIN10 win10-app "$A10" ;;
+    win11-appvm)     cell_appvm     - win11-tpl WIN11 win11-app "$A11" ;;
     # The RETIRED selectors fail with the reason, not as a bare typo: they are the cells that
     # installed from a PUSHED payload, which the owner forbids absolutely.
     win10-fresh|win11-fresh|win10-1stage|win11-1stage|win10-2stage|win11-2stage)

@@ -28,9 +28,15 @@
 # NOT FOR GOLDENS: a sealed golden's tamper signal IS its revision list (golden.sh); refused.
 #
 #   checkpoint.sh park         <vm> <label>
-#   checkpoint.sh unpark       <vm> <label>
+#   checkpoint.sh unpark       <vm> <label> [<from-vm>]
 #   checkpoint.sh undo-session <vm>
 #   checkpoint.sh list         <vm>
+#
+# unpark's optional <from-vm> restores ANOTHER vm's park (ckpt-<from-vm>-<label>) into <vm>.
+# This is the matrix's appvm-cell entry: the campaign's 'installed' state is parked from the
+# disposable churn subject (win10-acc), and the TEMPLATE (win10-tpl) is put into that state by
+# VOLUME restore - the only restore that works on a TemplateVM with an AppVM bound to it
+# (a recreate is refused by dom0 while a dependent exists; matrix-4318 failed exactly there).
 #
 # Exits: 0 done; 1 the restore is impossible (park missing / revisions unusable) - caller
 # decides (reclone, or R3 if truly the install-at-first-logon cell); 2 misuse/refusal (running
@@ -46,7 +52,7 @@ die(){ echo "REFUSE: $*" >&2; exit 2; }
 vm_state(){ qvm-ls --raw-data --fields NAME,STATE | grep "^$1|" | cut -d'|' -f2; }
 latest_rev(){ qvm-volume info "$1:$2" 2>/dev/null | sed -n '/available revisions/,$p' | tail -n +2 | tr -d ' ' | tail -1; }
 
-CMD="${1:?usage: checkpoint.sh park|unpark|undo-session|list <vm> [label]}"
+CMD="${1:?usage: checkpoint.sh park|unpark|undo-session|list <vm> [label] [from-vm]}"
 VM="${2:?<vm> required}"
 [ -f "mgmt/goldens/$VM.json" ] && die "$VM is a SEALED GOLDEN - its revision list is its tamper signal (golden.sh); checkpointing or reverting it would desync the seal. Clone a subject from it instead."
 
@@ -70,9 +76,12 @@ EOF
     ;;
   unpark)
     LABEL="${3:?<label> required}"
+    # Optional 4th arg: restore FROM another vm's park (cross-vm restore, see header). Defaults
+    # to $VM, which is the original same-vm behaviour, unchanged.
+    FROM="${4:-$VM}"
     vm_lock "$VM"
     st=$(vm_state "$VM"); [ "$st" = "Halted" ] || die "$VM is $st - halt before unparking"
-    CK="ckpt-$VM-$LABEL"
+    CK="ckpt-$FROM-$LABEL"
     if ! qvm-ls --raw-data --fields NAME,STATE | grep -q "^$CK|Halted"; then
       echo "UNRESTORABLE: park $CK missing (or not Halted). Reclone the subject from its entry image instead." >&2
       exit 1
