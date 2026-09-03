@@ -244,6 +244,13 @@ elif [ "${syn:-0}" -gt 0 ] && [ "$h_after" != NOCAP ] && [ "$h_after" != NOWIN ]
       printf 'RND-3\tmenu-synthesized-onto-owner\tFAIL\tpainted rect %s,%s %sx%s identical before and after (%s)\t%s\n' "$rx" "$ry" "$pw" "$ph" "$cb" "$EV" >> "$V"; rc=1
     fi
   fi
+elif [ "${syn:-0}" -gt 0 ] && { [ "$h_after" = NOCAP ] || [ "$h_after" = NOWIN ]; }; then
+  # The menu opened (#32768 seen) and was synthesized, but the AFTER shot FAILED (NOCAP/NOWIN), so
+  # the painted rect cannot be judged. Falling through to the final else here would emit a product
+  # "menu-visible-in-dom0 FAIL" ('invisible to the user') for what is actually a capture-instrument
+  # fault (V2: INVALID-* must never be folded into a product FAIL).
+  log "  -> INVALID-INSTRUMENT: owner capture failed at menu-open (h_after=$h_after); cannot judge the painted rect"
+  printf 'RND-3\tmenu-synthesized-onto-owner\tINVALID-INSTRUMENT\towner capture returned %s at menu-open - painted rect unjudgeable, not a product FAIL\t%s\n' "$h_after" "$EV" >> "$V"; rc=1
 elif [ "${syn:-0}" -eq 0 ]; then
   log "  -> FAIL: an override-redirect surface existed but the agent did not synthesize it"
   printf 'RND-3\tmenu-synthesized-onto-owner\tFAIL\t#32768 surfaces=%s but 0 SYNTH events\t%s\n' "$ovr" "$EV" >> "$V"; rc=1
@@ -282,13 +289,25 @@ if [ -z "$sw" ]; then
   rc=1
 fi
 log "  guest-side toast samples=${sw:-0}  dom0 o-r ${baseo}->${o1} [$n1]  synth=${tsyn:-0}  owner px $th_before -> $th_after"
-if [ "${sw:-0}" -eq 0 ]; then
+if [ -z "$sw" ]; then
+  # The counter query returned NO DATA (already recorded INVALID-INSTRUMENT above). Do NOT also let
+  # the ${sw:-0}=0 collapse fall into the vacuity branch and assert "the stimulus never existed" - a
+  # fact the unanswered query never measured (rule 16 / V3). Skip the toast grade entirely.
+  log "  (toast grading skipped: surface-watch returned no data - see the INVALID-INSTRUMENT row above)"
+elif [ "${sw:-0}" -eq 0 ]; then
   log "  -> INVALID-VACUOUS: no toast surface guest-side; the stimulus never existed"
   printf 'RND-4\ttoast-reaches-dom0\tINVALID-VACUOUS\tno toast surface seen by a self-validated detector\t%s\n' "$EV" >> "$V"; rc=1
 elif [ "${o1:-0}" -gt "${baseo:-0}" ]; then
   log "  -> PASS: the toast reached dom0 as its own override-redirect window"
   printf 'RND-4\ttoast-reaches-dom0\tPASS-UNPROVEN\tguest samples=%s; dom0 o-r %s->%s [%s] (own-window path)\t%s\n' "$sw" "$baseo" "$o1" "$n1" "$EV" >> "$V"
   printf 'SG7\ttoasts-survive-filter\tPASS-UNPROVEN\tthe chrome filter did not eat the notification\t%s\n' "$EV" >> "$V"
+elif [ "$th_before" = NOCAP ] || [ "$th_after" = NOCAP ] || [ "$th_before" = NOWIN ] || [ "$th_after" = NOWIN ]; then
+  # The own-window path did not fire, so we would fall back to the synth path - but that compares the
+  # owner_hash before/after, and a NOCAP/NOWIN sentinel is NOT a pixel hash: "1586x893:.." != "NOCAP"
+  # is trivially true and would score a CAPTURE FAILURE as "pixels changed" -> a FALSE PASS (owner
+  # rule: an invalid PASS is worse than a FAIL). Refuse instead of manufacturing a pass.
+  log "  -> INVALID-INSTRUMENT: owner capture failed (before=$th_before after=$th_after); cannot judge the toast synth path"
+  printf 'RND-4\ttoast-reaches-dom0\tINVALID-INSTRUMENT\towner capture returned %s / %s - synth path unjudgeable\t%s\n' "$th_before" "$th_after" "$EV" >> "$V"; rc=1
 elif [ "${tsyn:-0}" -gt 0 ] && [ "$th_before" != "$th_after" ]; then
   log "  -> PASS: the toast was synthesized and the owner's pixels changed (synth path)"
   printf 'RND-4\ttoast-reaches-dom0\tPASS-UNPROVEN\tguest samples=%s; %s SYNTH events; owner px %s -> %s (synth path)\t%s\n' "$sw" "$tsyn" "$th_before" "$th_after" "$EV" >> "$V"

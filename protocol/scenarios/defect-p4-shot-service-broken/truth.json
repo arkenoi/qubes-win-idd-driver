@@ -1,0 +1,27 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "p4-scan-disarmed",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-bench-canonical-suite",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-rnd5-collect",
+    "verdict": "INVALID-INSTRUMENT"
+   }
+  ],
+  "ledger_absent": [
+   "p4-rnd5-nomap-two-witness",
+   "p4-rnd8-resolution-liveness",
+   "p4-rnd3-stimulus-established",
+   "p4-rnd3-synth-crop",
+   "p4-rnd4-toast-two-path"
+  ]
+ }
+}

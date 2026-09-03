@@ -157,13 +157,22 @@ PS
 
   sleep 6
   h1=$(shot_hash)
-  T=200 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\type.ps1" >/dev/null 2>&1
+  # CAPTURE the stimulus result - a discarded stimulus was the bug. type.ps1 reports 'TYPED ok' vs
+  # 'TYPED no-notepad', and run-as-user reports no-session; if none of that is checked and the
+  # stimulus silently fails to land (no interactive session, AppActivate/SendKeys no-op, Notepad not
+  # focusable), the pixels never change, h1==h2, and a MISSING STIMULUS gets recorded as the product
+  # capture-death defect (V3: missing data must be INVALID-INSTRUMENT, never FAIL).
+  typed=$(T=200 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\type.ps1" 2>/dev/null | tr -d '\r')
   sleep 8
   h2=$(shot_hash)
   t2=$(date +%s%3N)
   log "  pixels before=$h1  after=$h2   (set $((t1-t0))ms, first-pixel ~$((t2-t1))ms)"
 
-  if [ "$h1" = NOCAP ] || [ "$h2" = NOCAP ] || [ "$h1" = NOWIN ] || [ "$h2" = NOWIN ]; then
+  if ! echo "$typed" | grep -qa 'TYPED ok'; then
+    log "  -> INVALID-INSTRUMENT: the visible-change typing stimulus did not land at $M (no 'TYPED ok');"
+    log "     without a guaranteed pixel change, identical h1==h2 says nothing about frozen capture - not grading"
+    printf 'RND-8\tpixels-change-after-resize-%s\tINVALID-INSTRUMENT\ttyping stimulus did not land (run-as-user/type.ps1 gave no TYPED ok) - not a product frozen-capture\t%s\n' "$M" "$EV" >> "$V"; rc=1
+  elif [ "$h1" = NOCAP ] || [ "$h2" = NOCAP ] || [ "$h1" = NOWIN ] || [ "$h2" = NOWIN ]; then
     log "  -> INVALID-INSTRUMENT: no capture at $M, so the pixel judge could not run"
     printf 'RND-8\tpixels-change-after-resize-%s\tINVALID-INSTRUMENT\tcapture returned %s / %s\t%s\n' "$M" "$h1" "$h2" "$EV" >> "$V"; rc=1
   elif [ "$h1" != "$h2" ]; then
@@ -223,10 +232,14 @@ if ($m.Count -eq 0) { Write-Output "PERFSEQ none" }
 else { Write-Output ("PERFSEQ " + $m[-1].Matches[0].Groups[1].Value) }'     | grep -aoE 'PERFSEQ [0-9]+|PERFSEQ none' | awk '{print $2}' | head -1; }
 
 s0=$(perf_seq)
-T=200 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\type.ps1" >/dev/null 2>&1
+# CAPTURE the liveness stimulus too: a flat QGAPERF seq after a stimulus that never landed is a
+# missing stimulus, not a dead capture thread. Grading it as capture-death would fabricate a product
+# defect (V3), the same class as the per-mode pixel judge above.
+typed2=$(T=200 q pushrun guest/run-as-user.ps1 -Script "$GUEST\\type.ps1" 2>/dev/null | tr -d '\r')
 sleep 8
 s1=$(perf_seq)
 log "  frame liveness: QGAPERF seq $s0 -> $s1"
+if echo "$typed2" | grep -qa 'TYPED ok'; then live_stim=yes; else live_stim=no; fi
 alive=unknown
 if [ "$s0" = none ] || [ "$s1" = none ] || [ -z "$s0" ] || [ -z "$s1" ]; then
   alive=unknown
@@ -240,6 +253,10 @@ if [ -z "$km" ] || [ -z "$rec" ] || [ -z "$died" ]; then
   log "  -> INVALID-INSTRUMENT: the log counter returned no data (raw='${KM}'). Nothing is graded"
   log "     here; this says nothing about the guest, only that the query did not run."
   printf 'RND-8\tkeyed-mutex-recovered\tINVALID-INSTRUMENT\tcounter query returned no data (raw=%s)\t%s\n' "${KM:-EMPTY}" "$EV" >> "$V"; rc=1
+elif [ "$live_stim" = no ]; then
+  log "  -> INVALID-INSTRUMENT: the liveness typing stimulus did not land (no 'TYPED ok'), so a flat"
+  log "     QGAPERF seq here would be a MISSING STIMULUS, not a capture death. Frame liveness unmeasurable."
+  printf 'RND-8\tkeyed-mutex-recovered\tINVALID-INSTRUMENT\tliveness typing stimulus did not land (no TYPED ok) - frame liveness unmeasurable, not a capture death\t%s\n' "$EV" >> "$V"; rc=1
 elif [ "$alive" = unknown ]; then
   log "  -> INVALID-INSTRUMENT: QGAPERF produced no seq (is service.gui-agent-debug on?), so frame"
   log "     liveness could not be measured. The log counters alone are NOT sufficient evidence -"
