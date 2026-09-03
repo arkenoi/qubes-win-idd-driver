@@ -90,6 +90,7 @@
         "map": {"SAME_BOOT_BOUND": "GREEN", "SECOND_BOOT": "RED", "NOT_BOUND": "RED", "EVIDENCE_INCOMPLETE": "INVALID"}
       },
       "check": "p2-net2-zero-reboot-attach",
+      "scorer": "net2-zero-reboot",
       "on_fail": {"action": "HALT_PART", "verdict": "FAIL", "msg": "An immediate netvm attach must bind the PV NIC in the SAME boot - a second boot is a FAIL of the latch/applier chain, not noise and not a property (owner 2026-08-29: the latch exists to make it one boot at problem 0). If a second boot happened, check p2-net1's readback for what the latch was missing. The guest is EVIDENCE (G-0): leave it up, diagnose on a clone."},
       "defect": "the 'first-vif needs two boots is normal' claim, recorded 2026-08-29 and owner-corrected within the hour: a second boot is a FAILURE the latch was invented to remove - and a bind that looks perfect post-hoc can hide the reboot entirely, which is why the boot-timestamp witness (LastBootUpTime byte-compare) exists as an independent proof",
       "falsified_by": "defect-p2-second-boot"

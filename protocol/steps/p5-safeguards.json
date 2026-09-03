@@ -107,6 +107,7 @@
         "map": {"ALL_FOUR_GRADED_GREEN": "GREEN", "GATE_LEAKED": "RED", "GATE_OVERFIRED": "RED", "CELLS_INVALID": "INVALID", "EVIDENCE_MISSING": "INVALID"}
       },
       "check": "p5-sg-unattended-suite",
+      "scorer": "p5-suite",
       "on_fail": {"action": "CONTINUE", "verdict": "FAIL", "msg": "G-0 is mechanised: the subject is OUT_OF_SERVICE and every later step on it will be refused. (1) Evidence is already under ACCEPT_OUT - add nothing, change nothing on the guest. (2) BEFORE believing a surprising red, check for a second runner (rule 15: two P5 instances once interleaved and fabricated an SG2 FAIL against the other run's captioned probe; vm_lock names the holder). (3) Diagnose on a CLONE; the failing subject stays as evidence until restored to entry stage. (4) A leak red is the 2026-08-28 class (safeguard stopped firing); an over-fire red is the 2026-08-07 class (safeguard eats required UI) - both are product FAILs, report them as such."},
       "defect": "both failure directions are measured: 2026-08-28 the class-only Mode-1 match let a boot-phase fullscreen surface through (stops firing), 2026-08-07 the title-bar clamp passed every numeric check while eating UI (over-fires), and 2026-08-31 with FaultGateOff=0x3 the agent offered dom0 a 1920x1080 override-redirect window the screenshot was structurally blind to - only the agent-log MAP witness caught it",
       "falsified_by": "defect-p5-sg-gate-leaked"

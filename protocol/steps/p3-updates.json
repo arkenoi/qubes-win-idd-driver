@@ -165,6 +165,7 @@
         "map": {"SCAN_DONE_TO_DOM0": "GREEN", "SCAN_FAILED": "RED", "NO_STATUS_WRITTEN": "RED", "SCAN_SUPPRESSED_OR_STALE": "INVALID", "EVIDENCE_INCOMPLETE": "INVALID"}
       },
       "check": "p3-u1-scan-to-dom0",
+      "scorer": "u1-scan-to-dom0",
       "on_fail": {"action": "CONTINUE", "verdict": "FAIL", "msg": "G-0 applies and is enforced by the runner: the guest is now OUT_OF_SERVICE and every later step on it will be refused. (1) The verdict and evidence are already copied out by p3-u1-collect - add nothing. (2) Change NOTHING on the guest: no SoftwareDistribution rename, no proxy-plane experiment, no reboot, no 'just try one thing' - the 2026-08-30 diagnosis collapsed exactly this way (three variables mutated on the only instance of the fault; root cause now UNKNOWABLE). (3) Diagnose on a CLONE with the reverse control in both directions (G-2). (4) The original stays out of service until rebuilt to entry stage. Attribution aid, since both proxy ends are ours: CTL cabs in the proxy slice with nothing else means the WU COM searcher never dialled - and do NOT 'fix' that by re-enabling Install-ViaWU (FINDINGS:13513 gates it off for netvm-free guests deliberately, G-5)."},
       "defect": "the U1 scan-failure class, measured 4/4 on 2026-08-30 (16:51, 18:06, 18:09, 18:22): every scan ended phase:error, error:'Exception from HRESULT: 0x8024402C' (WU_E_PT_WINHTTP_NAME_NOT_RESOLVED) in 2-4 s while the proxy slice showed all three CTL cabs served. A whole campaign was then lost because the subject was mutated before the failure was written off",
       "falsified_by": "defect-p3-updates-u1-scan-failure"
@@ -207,6 +208,7 @@
         "map": {"CLASSIFIED_CORRECT_ON_COLD_BOOT": "GREEN", "CLASSIFIED_WRONG": "RED", "BOOT_PASS_NEVER_RAN": "INVALID", "HARNESS_DID_NOT_GRADE": "INVALID"}
       },
       "check": "p3-u2-coldboot-class",
+      "scorer": "u2-coldboot-class",
       "on_fail": {"action": "CONTINUE", "verdict": "FAIL", "msg": "A TemplateVM misclassified on a real cold boot is the QdbDaemon startup race live in the product - the exact defect the wait-out fix exists to close. G-0: the runner has taken the guest OUT_OF_SERVICE; its post-boot state is evidence. Diagnose on a CLONE; do not re-run U2 on this subject (a second boot destroys the failing state)."},
       "defect": "instrument rule 9, measured 2026-08-31: three U1 scans at 02:24-02:26 left a completed answer; U2's boot-triggered pass fired correctly at 02:35:26 (lastresult=0) and SKIPPED, writing nothing - class_lines:0 was then read as a classification failure when it was my own earlier cells suppressing the subject. The underlying product defect class: a live re-run clears the QdbDaemon startup race, so only a cold boot can catch a template read as a standalone at early boot",
       "falsified_by": "defect-p3-updates-scan-suppressed"

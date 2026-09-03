@@ -11,6 +11,11 @@
 #      on its defect-armed fixture. This is how failproofs.json is EARNED, never hand-written.
 #   4. The green scenario runs LAST and must end with every check plain PASS - which can only
 #      happen because step 3 put the proofs on record (V1 exercised end to end).
+#   5. The WHOLE-CAMPAIGN green (spine + P2..P5) is walked again with NO --auto-answer-truth and
+#      NO PROTOCOL_SELFTEST: every judgement in the release path carries a deterministic scorer,
+#      so the walk must reach DONE and a campaign verdict with ZERO operator input. An operator
+#      prompt appearing anywhere here means a judgement lost its scorer - the autonomy regression
+#      this section exists to catch.
 #
 # Exit 0 = all green. Non-zero = the protocol machinery cannot be trusted; fix before any use.
 set -uo pipefail
@@ -83,6 +88,36 @@ else
   python3 protocol/run.py verdicts --campaign "$cid" | sed 's/^/    /'
   fail=1
 fi
+
+echo "== 5. whole campaign, judge-free: spine + parts reach a verdict with NO operator input =="
+cid="st-autonomous-$TS"
+python3 protocol/run.py start --campaign "$cid" \
+    --mode dry --scenario green-whole-campaign >"protocol/state/.$cid.log" 2>&1
+rc=$?
+if [ "$rc" -ge 2 ]; then
+  echo "SELFTEST FAIL: whole-campaign walk - runner error rc=$rc (see protocol/state/.$cid.log)"
+  fail=1
+elif grep -q 'OPERATOR ACTION REQUIRED' "protocol/state/.$cid.log"; then
+  echo "SELFTEST FAIL: the whole-campaign walk asked an OPERATOR for an answer - a release-path"
+  echo "  judgement has no working scorer; the campaign is no longer autonomous"
+  fail=1
+elif ! grep -q 'state=DONE' "protocol/state/.$cid.log"; then
+  echo "SELFTEST FAIL: whole-campaign walk did not reach state=DONE (see protocol/state/.$cid.log)"
+  fail=1
+elif ! python3 protocol/grade.py "$cid" >/tmp/grade.$$ 2>&1; then
+  echo "SELFTEST FAIL: whole-campaign walk deviates from ground truth:"
+  sed 's/^/    /' /tmp/grade.$$
+  fail=1
+elif ! python3 protocol/run.py verdicts --campaign "$cid" | grep -q '^VERDICT: '; then
+  echo "SELFTEST FAIL: whole-campaign verdict arithmetic produced no VERDICT line"
+  fail=1
+else
+  v=$(python3 protocol/run.py verdicts --campaign "$cid" | grep '^VERDICT: ')
+  echo "ok: whole campaign (spine+P2..P5) walked judge-free to '$v' - zero operator input,"
+  echo "    no --auto-answer-truth (EXECUTED WITH GAPS is the honest autonomous ceiling: the"
+  echo "    BLOCKED/ATTENDED-PENDING declares and the live-fail-proof rule stay untouched)"
+fi
+rm -f /tmp/grade.$$
 
 [ "$fail" -eq 0 ] && echo "SELFTEST: ALL GREEN" || echo "SELFTEST: FAILURES (fix before trusting any run)"
 exit $fail

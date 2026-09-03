@@ -1,0 +1,316 @@
+{
+ "comment": "GREEN WHOLE-CAMPAIGN walk (spine + P2 + P3 + P4 + P5), composed by protocol/tests/gen-whole-campaign.py from the per-part greens - regenerate there, never edit by hand. Proves the release campaign is judge-free end to end: every judgement carries a scorer, so the walk reaches its campaign verdict with no operator input and no --auto-answer-truth (selftest section 5 runs it exactly that way). Ground truth: DONE; the campaign verdict is EXECUTED WITH GAPS by design (the honest BLOCKED/ATTENDED-PENDING declares - the autonomous ceiling), never COMPLETE.",
+ "steps": [
+  "campaign.json",
+  "p2-network.json",
+  "p3-updates.json",
+  "p4-rendering.json",
+  "p5-safeguards.json"
+ ],
+ "vars": {
+  "REL": "09b643e12abc",
+  "RUNID": "17442299001",
+  "MATRIX_WORK": "/home/user/qwt-matrix-work",
+  "MATRIX_OUT": "/home/user/qwt-matrix/20260901-120000",
+  "CELLS": "win10-clean win10-reinstall win10-upgrade win10-seeded win10-appvm win11-clean win11-reinstall win11-upgrade win11-seeded win11-appvm",
+  "G10": "win10-iqi",
+  "G11": "win11-iqi",
+  "APPVM": "win10-app",
+  "CHURN": "win10-c1",
+  "TPL": "win10-tpl",
+  "PAYLOAD_DIR": "/home/user/qwt-accept/AP-20260901-3/dl/qwt-improved-setup",
+  "VM": "win10-p47",
+  "STOCK_AGENT": "/home/user/qwt-accept/AP-20260901-2/dl/bench-pair/agent-stock.exe",
+  "OURS_AGENT": "/home/user/qwt-accept/AP-20260901-2/dl/bench-pair/agent-ours.exe",
+  "SA": "win10-sa1",
+  "RELEASE_DIR": "/home/user/qwt-accept/AP-20260901-5/dl/qwt-full-package",
+  "RELEASE_SHA": "9C4F2A8B0D3E6F17",
+  "FI_DIR": "/home/user/qwt-accept/AP-20260901-5/dl/qwt-fault-package",
+  "FI_SHA": "5E1D0C9A7B42F380",
+  "HOSTW": "5120",
+  "HOSTH": "1440",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-WHOLE/evidence"
+ },
+ "results": {
+  "s1-download": {
+   "exit": 0,
+   "stdout": ""
+  },
+  "s1-gate0": {
+   "exit": 0,
+   "stdout": "PASS: payload verified \u2014 143 files, built from 09b643e12abc (09b643e12abc), installer matches repo"
+  },
+  "s2-golden-win10": {
+   "exit": 0,
+   "stdout": "VERIFIED win10-base matches its seal (sealed 2026-08-30T21:14:02Z)"
+  },
+  "s2-golden-win11": {
+   "exit": 0,
+   "stdout": "VERIFIED win11-base matches its seal (sealed 2026-08-30T22:41:55Z)"
+  },
+  "s3-roster-netvm": {
+   "exit": 0,
+   "stdout": "NETVM-OK"
+  },
+  "s4-all-halted": {
+   "exit": 0,
+   "stdout": "ALL-HALTED"
+  },
+  "s5-inputs": {
+   "exit": 0,
+   "stdout": "-rw-r--r-- 1 user user     4198 Sep  1 12:00 /home/user/qwt-matrix-work/dl/qwt-improved-setup/install.cmd\n-rw-r--r-- 1 user user  1892352 Sep  1 12:00 /home/user/qwt-matrix-work/dl/qwt-improved-setup/reference/gui-agent.exe\n-rw-r--r-- 1 user user 31586304 Sep  1 12:00 /home/user/qwt-matrix-work/dl/qwt-improved-iso/qwt-improved-setup.iso"
+  },
+  "s5-regate": {
+   "exit": 0,
+   "stdout": "PASS: payload verified - the ISO's embedded MANIFEST names 09b643e12abc (09b643e12abc)"
+  },
+  "s6-cells-named": {
+   "exit": 0,
+   "stdout": "CELLS=win10-clean win10-reinstall win10-upgrade win10-seeded win10-appvm win11-clean win11-reinstall win11-upgrade win11-seeded win11-appvm G10=win10-iqi G11=win11-iqi"
+  },
+  "s6-matrix": {
+   "exit": 0,
+   "stdout": "[12:00:01] RELEASE_SETUP derived from MATRIX_WORK: /home/user/qwt-matrix-work/dl/qwt-improved-setup\n[12:00:01] RELEASE_ISO derived from MATRIX_WORK: /home/user/qwt-matrix-work/dl/qwt-improved-iso/qwt-improved-setup.iso\n[12:00:02] Gate-0 (setup tree): PASS: payload verified - 143 files, built from 09b643e12abc (09b643e12abc), installer matches repo\n[12:00:03] === MATRIX for 4.3.18 (agent 3fbe12a09c44) ===\n[12:00:03] cells: win10-clean win10-reinstall win10-upgrade win10-seeded win10-appvm win11-clean win11-reinstall win11-upgrade win11-seeded win11-appvm\n[12:10:00] ######## CELL WIN10-clean (prime-run from win10-base: pristine -> two-stage clean install of the RELEASE) ########\n[12:10:00] PASS  WIN10-clean: guest came back with a session\n[12:10:00] PASS  WIN10-clean: installed agent == release binary\n[12:14:00] ######## CELL WIN10-reinstall (unpark 'installed' snapshot -> same-version reinstall from the release ISO) ########\n[12:14:00] PASS  WIN10-reinstall: guest came back with a session\n[12:14:00] PASS  WIN10-reinstall: installed agent == release binary\n[12:18:00] ######## CELL WIN10-upgrade (previous ours [win10-iqi] -> release, installed from the ISO) ########\n[12:18:00] PASS  WIN10-upgrade: guest came back with a session\n[12:18:00] PASS  WIN10-upgrade: installed agent == release binary\n[12:22:00] ######## CELL WIN10-seeded (pending xenbus Request + monitor auto-start, install from the ISO) ########\n[12:22:00] PASS  WIN10-seeded: guest came back with a session\n[12:22:00] PASS  WIN10-seeded: installed agent == release binary\n[12:26:00] ######## CELL WIN10-appvm (restore 'installed' park into the template, derive AppVM, cold boot) ########\n[12:26:00] PASS  WIN10-appvm: guest came back with a session\n[12:26:00] PASS  WIN10-appvm: installed agent == release binary\n[12:30:00] ######## CELL WIN11-clean (prime-run from win11-base: pristine -> two-stage clean install of the RELEASE) ########\n[12:30:00] PASS  WIN11-clean: guest came back with a session\n[12:30:00] PASS  WIN11-clean: installed agent == release binary\n[12:34:00] ######## CELL WIN11-reinstall (unpark 'installed' snapshot -> same-version reinstall from the release ISO) ########\n[12:34:00] PASS  WIN11-reinstall: guest came back with a session\n[12:34:00] PASS  WIN11-reinstall: installed agent == release binary\n[12:38:00] ######## CELL WIN11-upgrade (previous ours [win11-iqi] -> release, installed from the ISO) ########\n[12:38:00] PASS  WIN11-upgrade: guest came back with a session\n[12:38:00] PASS  WIN11-upgrade: installed agent == release binary\n[12:42:00] ######## CELL WIN11-seeded (pending xenbus Request + monitor auto-start, install from the ISO) ########\n[12:42:00] PASS  WIN11-seeded: guest came back with a session\n[12:42:00] PASS  WIN11-seeded: installed agent == release binary\n[12:46:00] ######## CELL WIN11-appvm (restore 'installed' park into the template, derive AppVM, cold boot) ########\n[12:46:00] PASS  WIN11-appvm: guest came back with a session\n[12:46:00] PASS  WIN11-appvm: installed agent == release binary\n[13:05:00] precondition lines collected: /home/user/qwt-matrix/20260901-120000/precondition-lines.txt\n[13:05:00] \n=== MATRIX: 96 passed, 0 failed ===\n=== DONE ==="
+  },
+  "s6-nonvacuous": {
+   "exit": 0,
+   "stdout": "=== MATRIX: 96 passed, 0 failed ==="
+  },
+  "p2-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-2/p2-network"
+  },
+  "p2-template-netvm": {
+   "exit": 0,
+   "stdout": "NETVM-OK"
+  },
+  "p2-boot-appvm": {
+   "exit": 0,
+   "stdout": "  p2-boot-appvm: session up at t+142s"
+  },
+  "p2-latch-presence": {
+   "exit": 0,
+   "stdout": "MARKJSON\n{\"nics\":1,\"disks\":1,\"vif_enum_key\":true,\"task_main\":true,\"task_rearm\":true,\"payload_sha256\":\"c98dfc40249b111b9afe469a9f8f849a77f0a7793b3cfbe09cdb72eb9e5bb1bb\",\"marker\":false,\"boot\":\"2026-09-01T08:41:27.5031250+00:00\",\"log_tail\":\"08:43:10 --- run start (boot=2026-09-01T08:41:27.5031250+00:00) // 08:43:10 latch re-armed NICS=1 // 08:43:11 xenbus_monitor enforced off (start=disabled, AutoReboot=0)\"}\n\"pvnic_applier\":{\"pass\":true,\"evidence\":{\"offline\":true,\"failure_marker_present\":false}}"
+  },
+  "p2-net2-attach": {
+   "exit": 0,
+   "stdout": "NETVM_BEFORE=[]\nNETVM_AFTER=[fw-net]"
+  },
+  "p2-net2-collect": {
+   "exit": 0,
+   "stdout": "=== HEALTH === {\"ok\":true,\"checks\":{\"agent_binary_hash\":{\"pass\":true,\"evidence\":{\"installed\":\"E5D125CC8A2AA8FA5520609FEE6B0160F692EFA846FF44FBFF30B7E5AB851A0E\",\"manifest\":\"e5d125cc8a2aa8fa5520609fee6b0160f692efa846ff44fbff30b7e5ab851a0e\"}},\"agent_process\":{\"pass\":true,\"evidence\":{\"pid\":4188}},\"qubes_services_running\":{\"pass\":true,\"evidence\":[{\"Name\":\"QdbDaemon\",\"State\":\"Running\",\"StartMode\":\"Auto\"},{\"Name\":\"QrexecAgent\",\"State\":\"Running\",\"StartMode\":\"Auto\"},{\"Name\":\"QubesGuiWatchdog\",\"State\":\"Running\",\"StartMode\":\"Auto\"},{\"Name\":\"QwtngNetSetup\",\"State\":\"Running\",\"StartMode\":\"Auto\"}]},\"idd_device_bound\":{\"pass\":true,\"evidence\":{\"instance\":\"ROOT\\\\DISPLAY\\\\0000\",\"status\":\"OK\",\"cm_error\":0}},\"pv_drivers_bound\":{\"pass\":true,\"evidence\":{\"emulated_nics_still_present\":[],\"started\":{\"XENNET\":true,\"XENVIF\":true,\"XENBUS\":true,\"XENIFACE\":true},\"pv_nics\":[\"Xen PV Network Device #0\"]}},\"network_carries_traffic\":{\"pass\":true,\"evidence\":{\"dns_resolves\":true,\"ping_gateway\":false,\"ip\":\"10.137.0.72\",\"gateway\":\"10.138.21.72\",\"tcp_dns_53\":true,\"dns_server\":\"10.139.1.1\",\"rx_bytes\":379307,\"tx_bytes\":197939,\"carries_traffic\":true}},\"pvnic_applier\":{\"pass\":true,\"evidence\":{\"failure_marker_present\":false,\"pv_adapter_ips\":[\"10.137.0.72\"],\"default_route_on_pv\":true,\"apipa_present\":[]}},\"clipboard_works\":{\"pass\":true,\"evidence\":{\"qubes_services_running\":1,\"windows_clipboard_roundtrip\":true}}},\"resolution\":\"1280x800\",\"failed\":[],\"not_applicable\":[],\"asserted_all\":true}\nMARKJSON\n{\"nics\":1,\"disks\":1,\"vif_enum_key\":true,\"task_main\":true,\"task_rearm\":true,\"payload_sha256\":\"c98dfc40249b111b9afe469a9f8f849a77f0a7793b3cfbe09cdb72eb9e5bb1bb\",\"marker\":false,\"boot\":\"2026-09-01T08:41:27.5031250+00:00\",\"log_tail\":\"08:43:11 xenbus_monitor enforced off // 08:47:21 vif appeared, applier run // 08:47:24 SUCCESS ip=10.137.0.72 gw=10.138.21.72 route-on-pv\"}"
+  },
+  "p2-net3-transfer": {
+   "exit": 0,
+   "stdout": "settling 90 s before grading (measured inversion at +90 s)\n=== NETPROOF ===\n{\"pv_nic\":[\"Ethernet [Xen PV Network Device #0] Up\"],\"loopback_present\":false,\"emulated_left\":[],\"bytes_requested\":25000000,\"bytes_received\":25000000,\"seconds\":1.3,\"pv_rx_before\":9463443,\"pv_rx_after\":38517706,\"pv_rx_delta\":29054263,\"transfer_ok\":true,\"crossed_pv_nic\":true,\"ok\":true,\"reason\":\"bytes moved, and the PV adapter's own counter accounts for them\"}"
+  },
+  "p2-shutdown-appvm": {
+   "exit": 0,
+   "stdout": "APPVM-HALTED"
+  },
+  "p2-boot-churn": {
+   "exit": 0,
+   "stdout": "  p2-boot-churn: session up at t+188s"
+  },
+  "p2-net6-firstvif-virgin": {
+   "exit": 0,
+   "stdout": "ERROR: The system was unable to find the specified registry key or value.\nXENVIF_QUERY_DONE"
+  },
+  "p2-shutdown-churn": {
+   "exit": 0,
+   "stdout": "CHURN-HALTED"
+  },
+  "p3-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-3/p3-updates"
+  },
+  "p3-serial-gate": {
+   "exit": 0,
+   "stdout": "SERIAL-OK"
+  },
+  "p3-proxy-listen": {
+   "exit": 0,
+   "stdout": "LISTEN 0      128            127.0.0.1:8082          0.0.0.0:*    users:((\"tinyproxy\",pid=1873,fd=4))"
+  },
+  "p3-backend-egress": {
+   "exit": 0,
+   "stdout": "EGRESS http=200 bytes=7796"
+  },
+  "p3-boot-tpl": {
+   "exit": 0,
+   "stdout": "  p3-boot-tpl: session up at t+164s"
+  },
+  "p3-g0c-disarm": {
+   "exit": 0,
+   "stdout": "SCAN_BEFORE state=Ready nextrun=09/01/2026 6:43:27 PM\nSCAN_AFTER state=Disabled\nRELAY_AFTER 0\nDISARMED True"
+  },
+  "p3-u0-stack": {
+   "exit": 0,
+   "stdout": "=== RESULT ===\nqubes-windows-update.ps1     3f6b0d8a4c21e9b7    64512 bytes\nwu-update.ps1                9c01d2aa5e77f310    28438 bytes\nvmupdate-shim.ps1            5b8e6f0212aa9c44     9714 bytes\nensure-autologon.ps1         c44d1b7e880f5a23     6120 bytes\nVMExec.ps1                   7a90e3c6d1f24b58     3384 bytes\nqubes-updates-relay.exe      compiled 08:42:19  38912 bytes\nqubes-updates-relay.cs       d0e5b2a91c3f7468    87340 bytes  (compiler input)"
+  },
+  "p3-u0-tasks": {
+   "exit": 0,
+   "stdout": "U0TASKS scan_boot_pt2m=1 scan_rep_pt6h=1 scan_scheduled=1 scan_system=1 rundl_forbidden_triggers=0 rundl_scheduled=0 guard_pt30s=1 nau=1 xwud=1 winhttp_direct=1 relay_procs=0\n<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n  <Triggers>\n    <BootTrigger>\n      <Enabled>true</Enabled>\n      <Delay>PT2M</Delay>\n      <Repetition>\n        <Interval>PT6H</Interval>\n        <StopAtDurationEnd>false</StopAtDurationEnd>\n      </Repetition>\n    </BootTrigger>\n  </Triggers>\n  <Principals>\n    <Principal id=\"Author\">\n      <UserId>S-1-5-18</UserId>\n      <RunLevel>HighestAvailable</RunLevel>\n    </Principal>\n  </Principals>\n  <Settings>\n    <ExecutionTimeLimit>PT20M</ExecutionTimeLimit>\n    <Enabled>false</Enabled>\n  </Settings>\n  <Actions Context=\"Author\">\n    <Exec>\n      <Command>powershell.exe</Command>\n      <Arguments>-NoProfile -ExecutionPolicy Bypass -File \"C:\\Program Files\\Qubes Tools\\bin\\qubes-windows-update.ps1\" -Action scan -Scheduled</Arguments>\n    </Exec>\n  </Actions>\n</Task>\n<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n  <Triggers />\n  <Principals>\n    <Principal id=\"Author\">\n      <UserId>S-1-5-18</UserId>\n    </Principal>\n  </Principals>\n  <Settings>\n    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>\n    <Enabled>true</Enabled>\n  </Settings>\n  <Actions Context=\"Author\">\n    <Exec>\n      <Command>powershell.exe</Command>\n      <Arguments>-NoProfile -ExecutionPolicy Bypass -File \"C:\\Program Files\\Qubes Tools\\qubes-rpc-services\\wu-update.ps1\" -Action install</Arguments>\n    </Exec>\n  </Actions>\n</Task>\n<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n  <Triggers />\n  <Principals>\n    <Principal id=\"Author\">\n      <UserId>S-1-5-18</UserId>\n    </Principal>\n  </Principals>\n  <Settings>\n    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>\n    <Enabled>true</Enabled>\n  </Settings>\n  <Actions Context=\"Author\">\n    <Exec>\n      <Command>powershell.exe</Command>\n      <Arguments>-NoProfile -ExecutionPolicy Bypass -File \"C:\\Program Files\\Qubes Tools\\qubes-rpc-services\\wu-update.ps1\" -Action download</Arguments>\n    </Exec>\n  </Actions>\n</Task>\n<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n<Task version=\"1.4\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n  <Triggers>\n    <BootTrigger>\n      <Enabled>true</Enabled>\n      <Delay>PT30S</Delay>\n    </BootTrigger>\n  </Triggers>\n  <Principals>\n    <Principal id=\"Author\">\n      <UserId>S-1-5-18</UserId>\n    </Principal>\n  </Principals>\n  <Actions Context=\"Author\">\n    <Exec>\n      <Command>powershell.exe</Command>\n      <Arguments>-NoProfile -ExecutionPolicy Bypass -File \"C:\\Program Files\\Qubes Tools\\qubes-rpc-services\\ensure-autologon.ps1\"</Arguments>\n    </Exec>\n  </Actions>\n</Task>\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU\n    NoAutoUpdate    REG_DWORD    0x1\n\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\n    ExcludeWUDriversInQualityUpdate    REG_DWORD    0x1\n\nCurrent WinHTTP proxy settings:\n\n    Direct access (no proxy server).\n\nINFO: No tasks are running which match the specified criteria."
+  },
+  "p3-u0-assert": {
+   "exit": 0,
+   "stdout": "STACK-MATCH:qubes-windows-update.ps1 3f6b0d8a4c21e9b7\nSTACK-MATCH:wu-update.ps1 9c01d2aa5e77f310\nSTACK-MATCH:vmupdate-shim.ps1 5b8e6f0212aa9c44\nSTACK-MATCH:ensure-autologon.ps1 c44d1b7e880f5a23\nSTACK-MATCH:VMExec.ps1 7a90e3c6d1f24b58"
+  },
+  "p3-u1-clear-debounce": {
+   "exit": 0,
+   "stdout": "DEBOUNCE_CLEARED"
+  },
+  "p3-u1-kick": {
+   "exit": 0,
+   "stdout": "2026-09-01T18:12:41Z\nSUCCESS: The parameters of scheduled task \"QubesWindowsUpdateScan\" have been changed.\nSUCCESS: Attempted to run the scheduled task \"QubesWindowsUpdateScan\".\nGUEST_KICK_LOCAL Tue 09/01/2026 18:12:43.71\nKICKED"
+  },
+  "p3-u1-collect": {
+   "exit": 0,
+   "stdout": "{\n    \"action\":  \"scan\",\n    \"phase\":  \"done\",\n    \"ts\":  \"2026-09-01T18:19:12\",\n    \"count\":  2,\n    \"available\":  [\n                      {\"kb\":\"KB5065426\",\"title\":\"2026-08 Cumulative Update for Windows 10 Version 22H2 for x64-based Systems (KB5065426)\",\"content_class\":\"quality\"},\n                      {\"kb\":\"KB5064401\",\"title\":\"2026-08 Cumulative Update for .NET Framework 3.5, 4.8 and 4.8.1 for Windows 10 Version 22H2 for x64 (KB5064401)\",\"content_class\":\"quality\"}\n                  ],\n    \"downloading\":  null,\n    \"installing\":  null,\n    \"result\":  [],\n    \"reboot_needed\":  false,\n    \"error\":  null,\n    \"done_ts\":  \"2026-09-01T18:19:12\"\n}\nSTATUSEOF\n18:13:07 Sync-Revocation: 3/3 CTLs refreshed through the relay, chain cache flushed\n18:19:12 reported 2 update(s) to dom0 qubes.NotifyUpdates (exit 0)\nAGENTLOGEOF\n1\nFEATEOF\nMARKER P3EGRESS-20260901T181158Z\nCONNECT   Sep 01 18:11:59.104 [1873]: Request (file descriptor 7): GET http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/disallowedcertstl.cab HTTP/1.1\nCONNECT   Sep 01 18:13:04.377 [1873]: Request (file descriptor 9): GET http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/authrootstl.cab HTTP/1.1\nCONNECT   Sep 01 18:13:05.812 [1873]: Request (file descriptor 9): GET http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/pinrulesstl.cab HTTP/1.1\nCONNECT   Sep 01 18:13:06.921 [1873]: Request (file descriptor 9): GET http://ctldl.windowsupdate.com/msdownload/update/v3/static/trustedr/en/disallowedcertstl.cab HTTP/1.1"
+  },
+  "p3-u2-run": {
+   "exit": 0,
+   "stdout": "18:21:02 u2[win10-tpl]: === ENSURE the boot scan is ENABLED (the opposite of every rendering cell) ===\n  Status:                                Ready\n18:21:05 u2[win10-tpl]: === ARM the acceptance baseline BEFORE the reboot ===\n  boot_time_before : 2026-09-01T08:41:27.5031250+00:00\n  vm_class_now     : TemplateVM\n  enabled          : True\n18:21:08 u2[win10-tpl]: === clear the scan debounce (update-status.json) so the boot pass is not suppressed ===\n  CLEARED\n18:21:10 u2[win10-tpl]:   LastBootUpTime before: 2026-09-01T08:41:27.5031250\n18:21:10 u2[win10-tpl]: === COLD BOOT ===\n18:24:48 u2[win10-tpl]:   LastBootUpTime after: 2026-09-01T18:23:16.2210937\n18:24:48 u2[win10-tpl]:   COLD BOOT PROVEN\n18:24:48 u2[win10-tpl]: === waiting out the boot-triggered scan (trigger is boot + PT2M) ===\n18:25:18 u2[win10-tpl]:   +30s: 'VM class' lines in the updater log: 0\n18:25:48 u2[win10-tpl]:   +60s: 'VM class' lines in the updater log: 0\n18:26:18 u2[win10-tpl]:   +90s: 'VM class' lines in the updater log: 0\n18:26:48 u2[win10-tpl]:   +120s: 'VM class' lines in the updater log: 0\n18:27:18 u2[win10-tpl]:   +150s: 'VM class' lines in the updater log: 1\n18:30:48 u2[win10-tpl]: === U2 CHECK ===\n  {\"rebooted\":true,\"boot_time_before\":\"2026-09-01T08:41:27\",\"boot_time_now\":\"2026-09-01T18:23:16\",\"class_lines\":1,\"class_correct\":true,\"saw_empty_class\":false,\"qdb_retry_evidence\":true}\n18:31:02 u2[win10-tpl]:   class_lines=1 class_correct=true saw_empty_class=false qdb_retry_evidence=true\n18:31:02 u2[win10-tpl]:   -> PASS: the boot pass classified this TemplateVM CORRECTLY from qubesdb on a real cold boot\n18:31:02 u2[win10-tpl]: === finished rc=0 ===\nU2RC=0"
+  },
+  "p3-rearm-scan": {
+   "exit": 0,
+   "stdout": "SUCCESS: The parameters of scheduled task \"QubesWindowsUpdateScan\" have been changed.\nTaskName:      \\QubesWindowsUpdateScan\nStatus:        Ready\nREARMED"
+  },
+  "p3-shutdown-tpl": {
+   "exit": 0,
+   "stdout": "TPL-HALTED"
+  },
+  "p4-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-2/p4-rendering"
+  },
+  "p4-boot-subject": {
+   "exit": 0,
+   "stdout": "  p4-boot-subject: session up at t+151s"
+  },
+  "p4-scan-disarm": {
+   "exit": 0,
+   "stdout": "SCAN_BEFORE state=Ready nextrun=09/01/2026 6:41:12 PM\nSCAN_AFTER state=Disabled\nRELAY_AFTER 0\nDISARMED True"
+  },
+  "p4-trace-feature": {
+   "exit": 0,
+   "stdout": "TRACE-FEATURE-SET"
+  },
+  "p4-subject-identity": {
+   "exit": 0,
+   "stdout": "\"agent_binary_hash\":{\"pass\":true,\"evidence\":{\"installed\":\"E5D125CC8A2AA8FA5520609FEE6B0160F692EFA846FF44FBFF30B7E5AB851A0E\",\"manifest\":\"e5d125cc8a2aa8fa5520609fee6b0160f692efa846ff44fbff30b7e5ab851a0e\"}}"
+  },
+  "p4-bench-suite": {
+   "exit": 0,
+   "stdout": "   settle after each swap: 45s (floor 30)\n== stock-vs-ours on win10-p47, 3 rounds, out=/home/user/qubes-win-idd-driver/instrumentation/bench-stock-vs-ours-20260901-182140\n   stock=464772F1630E47BF  ours=5CEF96155147CDC6\n   interactive session present\n-- r1-stock\n   running 464772F1630E47BF\n    {'idle-pre': 3.254, 'drag': 28.714, 'idle-mid1': 0.0, 'scroll': 45.201, 'idle-mid2': 7.822, 'type': 23.87, 'idle-post': 4.23} valid= True scene ok\n-- r1-ours\n   running 5CEF96155147CDC6\n    {'idle-pre': 0.977, 'drag': 14.102, 'idle-mid1': 0.412, 'scroll': 1.707, 'idle-mid2': 0.655, 'type': 3.1, 'idle-post': 0.33} valid= True scene ok\n-- r2-ours\n   running 5CEF96155147CDC6\n    {'idle-pre': 0.912, 'drag': 13.900, 'idle-mid1': 0.398, 'scroll': 1.620, 'idle-mid2': 0.600, 'type': 2.000, 'idle-post': 0.31} valid= True scene ok\n-- r2-stock\n   running 464772F1630E47BF\n    {'idle-pre': 3.412, 'drag': 30.100, 'idle-mid1': 0.0, 'scroll': 44.900, 'idle-mid2': 6.900, 'type': 23.400, 'idle-post': 4.10} valid= True scene ok\n-- r3-stock\n   running 464772F1630E47BF\n    {'idle-pre': 3.188, 'drag': 32.300, 'idle-mid1': 0.0, 'scroll': 47.200, 'idle-mid2': 8.400, 'type': 26.100, 'idle-post': 5.05} valid= True scene ok\n-- r3-ours\n   running 5CEF96155147CDC6\n    {'idle-pre': 1.033, 'drag': 16.800, 'idle-mid1': 0.430, 'scroll': 3.600, 'idle-mid2': 0.710, 'type': 3.723, 'idle-post': 0.42} valid= True scene ok\n== summary\nrepetitions: 6 total, 6 valid, 0 INVALID\n\nbinaries actually measured (from the guest, per repetition):\n  ours  5CEF96155147CDC6\n  stock 464772F1630E47BF\n\nphase                 stock (n)           ours (n)      delta  verdict\nidle-pre            3.254 (3)        0.977 (3)     -70.0%  REAL - ranges disjoint, ours BETTER\ndrag               28.714 (3)       14.102 (3)     -50.9%  REAL - ranges disjoint, ours BETTER\nidle-mid1           0.000 (3)        0.412 (3)            one side read 0.000 in every repetition - below the CPU counter's resolution, NO VERDICT\nscroll             45.201 (3)        1.707 (3)     -96.2%  REAL - ranges disjoint, ours BETTER\nidle-mid2           7.822 (3)        0.655 (3)     -91.6%  REAL - ranges disjoint, ours BETTER\ntype               23.870 (3)        3.100 (3)     -87.0%  REAL - ranges disjoint, ours BETTER\nidle-post           4.230 (3)        0.330 (3)     -92.2%  REAL - ranges disjoint, ours BETTER\n\nper-repetition values (% of one core):\n  scroll       stock r1=45.201  r2=44.900  r3=47.200\n  scroll       ours  r1=1.707  r2=1.620  r3=3.600\nraw data: /home/user/qubes-win-idd-driver/instrumentation/bench-stock-vs-ours-20260901-182140\nGUEST_BUILD=19045\nBENCH-GATE PASS: win10 scroll disjoint-better (build 19045; scroll: REAL - ranges disjoint, ours BETTER)"
+  },
+  "p4-bench-raws": {
+   "exit": 0,
+   "stdout": "RAWS-RECORDED"
+  },
+  "p4-rnd5-collect": {
+   "exit": 0,
+   "stdout": "SCENE-CLEARED\nSHOT_MAPPED 0\nDISCRIM_HITS 2\n  D 18:19:02.114 gui-agent[4188]: ShouldAcceptWindow: hwnd=0x2050c Start surface not presented in seamless mode (SeamlessStart=0)\n  D 18:19:02.117 gui-agent[4188]: ShouldAcceptWindow: hwnd=0x105a2 cardless deny: Windows.UI.Core.CoreWindow\nSHELL_SURFACES 1\n  S class=Windows.UI.Core.CoreWindow proc=StartMenuExperienceHost title=\"Start\"\nSTARTPROC 1\nOVRMAP_TOTAL 0\nOVRMAP_BIG 0"
+  },
+  "p4-rnd8": {
+   "exit": 0,
+   "stdout": "18:22:01 rnd8[win10-p47]: === disarm the update scan ===\n  {\"current\":\"1600x900\",\"modes\":[\"1024x768\",\"1600x900\",\"5120x1440\"]}\n18:22:31 rnd8[win10-p47]:   sub-host modes to exercise: 1024x768 1600x900\n18:22:40 rnd8[win10-p47]: === mode 1024x768 ===\n18:22:52 rnd8[win10-p47]:   set: {\"ok\":true,\"requested\":\"1024x768\",\"applied\":\"1024x768\",\"device\":\"\\\\.\\DISPLAY2\"}\n18:22:58 rnd8[win10-p47]:   agent: AGENTSCREEN 1024x768\n18:22:58 rnd8[win10-p47]:   -> PASS: the guest adopted 1024x768 AND the agent's last A6CONFIGURE to dom0 agrees (1024x768)\n18:23:22 rnd8[win10-p47]:   pixels before=1006x716:8a11c2d05b7e33f0  after=1006x716:f27d9c4a10bb85e1   (set 812ms, first-pixel ~14210ms)\n18:23:22 rnd8[win10-p47]:   -> PASS: capture is alive after the resize (window 1006x716, pixels changed)\n18:23:30 rnd8[win10-p47]: === mode 1600x900 ===\n18:23:44 rnd8[win10-p47]:   set: {\"ok\":true,\"requested\":\"1600x900\",\"applied\":\"1600x900\",\"device\":\"\\\\.\\DISPLAY2\"}\n18:23:50 rnd8[win10-p47]:   agent: AGENTSCREEN 1600x900\n18:23:50 rnd8[win10-p47]:   -> PASS: the guest adopted 1600x900 AND the agent's last A6CONFIGURE to dom0 agrees (1600x900)\n18:24:14 rnd8[win10-p47]:   pixels before=1586x893:0b19d7a4e2c58f01  after=1586x893:77aa02ce94d1b3e6   (set 794ms, first-pixel ~13820ms)\n18:24:14 rnd8[win10-p47]:   -> PASS: capture is alive after the resize (window 1586x893, pixels changed)\n18:25:12 rnd8[win10-p47]: === keyed mutex: 4 abandonment(s), 9 RecreateDuplication, 0 thread death(s) ===\n18:25:31 rnd8[win10-p47]:   frame liveness: QGAPERF seq 41210 -> 41395\n18:25:31 rnd8[win10-p47]:   -> PASS: every abandonment was recovered and the capture thread never died; frames\n18:25:31 rnd8[win10-p47]:      provably resumed (the pixel comparisons above).\n18:25:32 rnd8[win10-p47]: === finished rc=0 ==="
+  },
+  "p4-shell-run": {
+   "exit": 0,
+   "stdout": "18:31:04 rnd[win10-p47]: === disarm the update scan (P3: never concurrent with a rendering cell) ===\n18:31:21 rnd[win10-p47]: === VALIDATE THE DETECTOR IN THIS SESSION (H5: no result counts until the instrument is) ===\n  \"detector_fires\":true\n18:31:44 rnd[win10-p47]: === scene reset: dismiss any leftover notifications ===\n    {\"killed\":1,\"history_cleared\":true,\"dismissed\":1}\n18:32:03 rnd[win10-p47]:   after reset: total=1 override_redirect=0\n18:32:05 rnd[win10-p47]:   baseline dom0 list: total=1 override_redirect=0\n18:32:05 rnd[win10-p47]: === RND-3: a menu must be SYNTHESIZED onto its owner, and the owner's pixels must change ===\n18:32:23 rnd[win10-p47]:   owner before menu: 1586x893:6f4779341b22acde\n18:33:02 rnd[win10-p47]:   owner with menu open: 1586x893:9c01d4e2b5aa7f10\n18:33:09 rnd[win10-p47]:   agent: SYNTH events=1  #32768 menu surfaces seen=1\n18:33:15 rnd[win10-p47]:   synth rect (owner-relative) 1,50 229x196   crop 229x196:6f477934c0ffee12 -> 229x196:228e6e7d91ab34cd\n18:33:15 rnd[win10-p47]:   -> PASS: the menu was synthesized onto its owner AND the pixels IN THE PAINTED RECT changed\n18:33:16 rnd[win10-p47]: === RND-4 / SG7: a toast must reach the user - by EITHER path ===\n18:34:20 rnd[win10-p47]:   guest-side toast: samples=45 match_hits=41 coverage_ok=true  dom0 o-r 0->1 [QWT ACCEPT TOAST]  synth=0  owner px 1586x893:9c01d4e2b5aa7f10 -> 1586x893:9c01d4e2b5aa7f10\n18:34:20 rnd[win10-p47]:   -> PASS: the toast reached dom0 as its own override-redirect window\n18:34:31 rnd[win10-p47]: === finished rc=0 ==="
+  },
+  "p4-rnd3-stimulus": {
+   "exit": 0,
+   "stdout": "18:33:09 rnd[win10-p47]:   agent: SYNTH events=1  #32768 menu surfaces seen=1"
+  },
+  "p4-rnd4-toast": {
+   "exit": 0,
+   "stdout": "  \"detector_fires\":true\nRND-4\ttoast-reaches-dom0\tPASS-UNPROVEN\tguest match_hits=41/samples=45; dom0 o-r 0->1 [QWT ACCEPT TOAST] (own-window path)\trndshell\nSG7\ttoasts-survive-filter\tPASS-UNPROVEN\tthe chrome filter did not eat the notification\trndshell"
+  },
+  "p4-scan-reenable": {
+   "exit": 0,
+   "stdout": "REENABLED"
+  },
+  "p4-shutdown-subject": {
+   "exit": 0,
+   "stdout": "SUBJECT-HALTED"
+  },
+  "p5-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260901-5/p5-safeguards"
+  },
+  "p5-sg0-feature-gate": {
+   "exit": 0,
+   "stdout": "FEATURE-ABSENT"
+  },
+  "p5-release-artefact": {
+   "exit": 0,
+   "stdout": "RELEASE-ARTEFACT sha16=9C4F2A8B0D3E6F17 declared=9C4F2A8B0D3E6F17"
+  },
+  "p5-boot-sa": {
+   "exit": 0,
+   "stdout": "  p5-boot-sa: session up at t+187s"
+  },
+  "p5-hash-release": {
+   "exit": 0,
+   "stdout": "=== RESULT ===\n{\n    \"file_path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n    \"file_sha256\":  \"9C4F2A8B0D3E6F17\",\n    \"file_written\":  \"08:36:12\",\n    \"instances\":  1,\n    \"procs\":  [\n                  {\n                      \"pid\":  4812,\n                      \"start\":  \"18:37:44\",\n                      \"path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n                      \"image_sha256\":  \"9C4F2A8B0D3E6F17\",\n                      \"started_after_file_write\":  true\n                  }\n              ],\n    \"watchdog\":  \"Running\",\n    \"orig_present\":  false,\n    \"newest_log\":  \"gui-agent-20260901-183744.log\",\n    \"log_has_blockwin\":  true,\n    \"log_has_shellpolicy\":  true\n}\nRUNNING-IMAGE instances=1 image_matches_intended=1 started_after_write=1"
+  },
+  "p5-loglevel5": {
+   "exit": 0,
+   "stdout": "LOGLEVEL global=5 module=5"
+  },
+  "p5-suite-run": {
+   "exit": 0,
+   "stdout": "18:44:02 p5[win10-sa1]: === P5-2: disarm QubesWindowsUpdateScan (same gate as P4-1) ===\n  SCAN_BEFORE state=Ready nextrun=09/01/2026 8:41:12 PM\n  SCAN_AFTER state=Disabled\n  RELAY_AFTER 0\n  DISARMED True\n18:44:41 p5[win10-sa1]: === P5-3: containment (host 5120x1440) ===\n  {\"ok\":true,\"device\":\"\\\\.\\DISPLAY2\",\"was\":\"5120x1440\",\"wanted\":\"1600x900\",\"readback\":\"1600x900\",\"instrument_validated\":true}\n18:45:19 p5[win10-sa1]:   guest screen now: 1600x900\n18:45:52 p5[win10-sa1]:   agent believes: AGENTSCREEN 1600x900\n18:45:52 p5[win10-sa1]:   containment PROVEN: guest 1600x900, agent 1600x900, host 5120x1440\n18:46:40 p5[win10-sa1]: === control UP: dom0 sees 1 window(s), control=744x501 - capture path proven alive ===\n18:46:40 p5[win10-sa1]: === SG4: -Mode overrideredirect  (expect: nomap) ===\n18:48:35 p5[win10-sa1]:   probe: {\"mode\":\"overrideredirect\",\"hwnd\":\"0x2f04a2\",\"style\":\"0x96000000\",\"exstyle\":\"0x8\",\"rect\":\"0,0 1600x900\",\"covers_screen\":true,\"visible\":true}\n18:49:52 p5[win10-sa1]:   probe 1600x900 mapped=no  control_seen=yes  agent_map=0  dom0 dims: 744x501 744x501 744x501 744x501 744x501 744x501  'unconditionally denied, feature or not' hits=1\n18:49:52 p5[win10-sa1]:   -> PASS-UNPROVEN: no 1600x900 window in dom0, AND the agent logged the deny\n18:50:11 p5[win10-sa1]: === SG2: -Mode borderless  (expect: nomap) ===\n18:51:58 p5[win10-sa1]:   probe: {\"mode\":\"borderless\",\"hwnd\":\"0x3a0188\",\"style\":\"0x96080000\",\"exstyle\":\"0x40000\",\"rect\":\"0,0 1600x900\",\"covers_screen\":true,\"visible\":true}\n18:53:14 p5[win10-sa1]:   probe 1600x900 mapped=no  control_seen=yes  agent_map=0  dom0 dims: 744x501 744x501 744x501 744x501 744x501 744x501  'hidden (set service.gui-fullscreen to allow)' hits=1\n18:53:14 p5[win10-sa1]:   -> PASS-UNPROVEN: no 1600x900 window in dom0, AND the agent logged the deny\n18:53:31 p5[win10-sa1]: === SG3: -Mode captioned  (expect: map) ===\n18:55:02 p5[win10-sa1]:   probe: {\"mode\":\"captioned\",\"hwnd\":\"0x1c06e4\",\"style\":\"0x96cf0000\",\"exstyle\":\"0x40100\",\"rect\":\"0,0 1600x900\",\"covers_screen\":true,\"visible\":true}\n18:56:18 p5[win10-sa1]:   probe 1600x900 mapped=yes  control_seen=yes  agent_map=1  dom0 dims: 744x501,1586x893 744x501,1586x893 744x501,1586x893 744x501,1586x893 744x501,1586x893 744x501,1586x893  'not-used' hits=0\n18:56:18 p5[win10-sa1]:   -> PASS-UNPROVEN: the captioned screen-sized window mapped, as the README requires\n18:56:35 p5[win10-sa1]: === SG9: Start is NOT presented in seamless (acceptance is the OPPOSITE of 'Start maps') ===\n18:57:22 p5[win10-sa1]:   dom0 windows=1 (control 1) [744x501]  deny hits=1\n18:57:22 p5[win10-sa1]:   -> PASS-UNPROVEN: no Start window in dom0, and the agent logged the deny\n18:57:24 p5[win10-sa1]: === P5 finished rc=0 ===\n18:57:24 p5[win10-sa1]: ATTENDED-PENDING (never run unattended - they need service.gui-fullscreen, which is banned):\n18:57:24 p5[win10-sa1]:   SG1 fail-proof (diag build, phase test removed), SG2 feature-ON arm, SG4 feature-ON arm,\n18:57:24 p5[win10-sa1]:   SG7 fail-proof (naive cloak filter diag build), SG10 both-bits arm\n18:57:26 p5[win10-sa1]: === re-enabling QubesWindowsUpdateScan ===\n  REENABLED\nP5RC=0"
+  },
+  "p5-sg6-failproof": {
+   "exit": 0,
+   "stdout": "19:02:04 sg6[win10-sa1]: === 1. CONTROL: an armed guest must have a SESSION and map a window ===\n19:06:31 sg6[win10-sa1]:   control: sessions=1 windows=1 (capture_ok=yes)\n19:06:40 sg6[win10-sa1]: === 2. PLANT THE DEFECT: AutoAdminLogon=0 AND remove the re-assert task ===\n    SUCCESS: The operation completed successfully.\n    SUCCESS: The scheduled task \"QubesAutologonGuard\" was successfully deleted.\n19:06:58 sg6[win10-sa1]:   planted:\n    sessions=1 explorer=1 logonui=0 autologon=0 guard=no\n19:06:58 sg6[win10-sa1]: === 3. COLD BOOT (SG0.7 - never an agent restart) ===\n19:12:44 sg6[win10-sa1]:   defect state: sessions=0 explorer=0 logonui=1 autologon=0 windows=0 (capture_ok=no)\n19:12:47 sg6[win10-sa1]: === 4. VERDICT ===\n19:12:47 sg6[win10-sa1]: RED AS REQUIRED: qrexec answers while NOBODY IS LOGGED ON (sessions=0, explorer=0,\n19:12:47 sg6[win10-sa1]:   logonui=1). The invisible-guest condition, asserted positively. Windows mapped: 0.\n19:12:47 sg6[win10-sa1]:   SG6's checker is seen-to-fail; its PASS may be cited as PASS (H5), not PASS-UNPROVEN.\n19:12:50 sg6[win10-sa1]: === 5. RE-ARM (inline - there is no session to push a file into) ===\n    SUCCESS: The operation completed successfully.\n    ok autologon re-asserted (LSA secret present, AutoLogonCount absent)\n    GUARD_REGISTER rc=0 SUCCESS: The scheduled task \"QubesAutologonGuard\" has successfully been created.\n19:13:22 sg6[win10-sa1]:   re-armed:\n    sessions=0 explorer=0 logonui=1 autologon=1 guard=yes\n19:13:22 sg6[win10-sa1]: === 6. CONFIRM THE SUBJECT COMES BACK (never leave it at a sign-in screen) ===\n19:19:03 sg6[win10-sa1]:   after re-arm: sessions=1 windows=1\nSG6RC=0"
+  },
+  "p5-fi-artefact": {
+   "exit": 0,
+   "stdout": "FI-ARTEFACT sha16=5E1D0C9A7B42F380 declared=5E1D0C9A7B42F380 fault_value_names=10"
+  },
+  "p5-swap-diag": {
+   "exit": 0,
+   "stdout": "=== RESULT === {\"host\":\"WIN10-SA1\",\"new_size\":872448,\"old_size\":872448,\"old_hash16\":\"9C4F2A8B0D3E6F17\",\"watchdog_stopped\":true,\"agent_running_after_stop\":false,\"backup_made\":true,\"dst_size\":872448,\"dst_hash16\":\"5E1D0C9A7B42F380\",\"swapped\":true,\"watchdog_started\":true,\"agent_wait_secs\":27,\"agent_running\":true,\"agent_pid\":\"4812\",\"running_image_size\":872448,\"ok\":true}"
+  },
+  "p5-hash-diag": {
+   "exit": 0,
+   "stdout": "=== RESULT ===\n{\n    \"file_path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n    \"file_sha256\":  \"5E1D0C9A7B42F380\",\n    \"file_written\":  \"19:30:18\",\n    \"instances\":  1,\n    \"procs\":  [\n                  {\n                      \"pid\":  6120,\n                      \"start\":  \"19:31:02\",\n                      \"path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n                      \"image_sha256\":  \"5E1D0C9A7B42F380\",\n                      \"started_after_file_write\":  true\n                  }\n              ],\n    \"watchdog\":  \"Running\",\n    \"orig_present\":  true,\n    \"newest_log\":  \"gui-agent-20260901-193102.log\",\n    \"log_has_blockwin\":  true,\n    \"log_has_shellpolicy\":  true\n}\nRUNNING-IMAGE instances=1 image_matches_intended=1 started_after_write=1"
+  },
+  "p5-recontain": {
+   "exit": 0,
+   "stdout": "=== RESULT ===\n{\n    \"ok\":  true,\n    \"device\":  \"\\\\\\\\.\\\\DISPLAY2\",\n    \"was\":  \"5120x1440\",\n    \"wanted\":  \"1600x900\",\n    \"readback\":  \"1600x900\",\n    \"instrument_validated\":  true\n}"
+  },
+  "p5-recontain-agent": {
+   "exit": 0,
+   "stdout": "RECONTAIN guest=1600x900 inside=yes agent_agrees=yes agent_line=RESAPPLIED 1600x900 lastapplied_line=none"
+  },
+  "p5-preflight": {
+   "exit": 0,
+   "stdout": "19:24:02 preflight[win10-sa1 0x3]: === control WITHOUT the bit (this is the reference) ===\n  GATEOFF 0\n19:25:11 preflight[win10-sa1 0x3]:   dom0: 1|744x501\n19:25:11 preflight[win10-sa1 0x3]: === control WITH 0x3 armed ===\n  GATEOFF 3\n19:26:24 preflight[win10-sa1 0x3]:   dom0: 1|744x501\n19:26:24 preflight[win10-sa1 0x3]: === restoring (bit cleared, notepad killed) ===\n19:27:31 preflight[win10-sa1 0x3]: -> CLEAR TO RUN: the control survives the bit (1 window(s) before, 1 after), so a\n19:27:31 preflight[win10-sa1 0x3]:    'nothing mapped' verdict from the armed run will mean something.\n19:24:02 preflight[win10-sa1 0x14]: === control WITHOUT the bit (this is the reference) ===\n  GATEOFF 0\n19:25:11 preflight[win10-sa1 0x14]:   dom0: 1|744x501\n19:25:11 preflight[win10-sa1 0x14]: === control WITH 0x14 armed ===\n  GATEOFF 20\n19:26:24 preflight[win10-sa1 0x14]:   dom0: 1|744x501\n19:26:24 preflight[win10-sa1 0x14]: === restoring (bit cleared, notepad killed) ===\n19:27:31 preflight[win10-sa1 0x14]: -> CLEAR TO RUN: the control survives the bit (1 window(s) before, 1 after), so a\n19:27:31 preflight[win10-sa1 0x14]:    'nothing mapped' verdict from the armed run will mean something.\n19:24:02 preflight[win10-sa1 0x20]: === control WITHOUT the bit (this is the reference) ===\n  GATEOFF 0\n19:25:11 preflight[win10-sa1 0x20]:   dom0: 1|744x501\n19:25:11 preflight[win10-sa1 0x20]: === control WITH 0x20 armed ===\n  GATEOFF 32\n19:26:24 preflight[win10-sa1 0x20]:   dom0: 1|744x501\n19:26:24 preflight[win10-sa1 0x20]: === restoring (bit cleared, notepad killed) ===\n19:27:31 preflight[win10-sa1 0x20]: -> CLEAR TO RUN: the control survives the bit (1 window(s) before, 1 after), so a\n19:27:31 preflight[win10-sa1 0x20]:    'nothing mapped' verdict from the armed run will mean something."
+  },
+  "p5-prove-cycle": {
+   "exit": 0,
+   "stdout": "20:01:12 gates[win10-sa1]: === confirm the RUNNING agent understands FI_GATE_OFF ===\n  BANNER 20:00:41.220 [4812] QGAFAULT-INIT build carries the fault injector; armed=0 gateoff=0x0\n  RUNSHA 5e1d0c9a7b42f380a91c44e2b07d63f5218ea90c7d41b6f0234c8d5e17a2b943\n20:01:12 gates[win10-sa1]:   gate-capable build CONFIRMED running\n20:01:20 gates[win10-sa1]: === BASELINE: FaultGateOff=0, all safeguards in force ===\n  GATEOFF 0\n20:15:44 gates[win10-sa1]:   baseline: SG4=PASS-UNPROVEN SG2=PASS-UNPROVEN SG3=PASS-UNPROVEN SG9=PASS-UNPROVEN\n20:15:44 gates[win10-sa1]:   all four cells green with every safeguard in force\n20:15:50 gates[win10-sa1]: === FI_GATE_MODE1_2 (0x3) -> expect SG4 to go RED, the other three to stay green ===\n  GATEOFF 3\n20:30:12 gates[win10-sa1]:   armed: SG4=FAIL SG2=FAIL SG3=PASS-UNPROVEN SG9=PASS-UNPROVEN\n20:30:12 gates[win10-sa1]:   NOTE: SG2 also moved (FAIL) - DECLARED as a companion of this bit\n  GATEOFF 0\n20:44:38 gates[win10-sa1]:   restored: SG4=PASS-UNPROVEN SG2=PASS-UNPROVEN SG3=PASS-UNPROVEN SG9=PASS-UNPROVEN\n20:44:38 gates[win10-sa1]:   -> PROOF EARNED: or-fullscreen-never-mapped\n20:44:45 gates[win10-sa1]: === FI_GATE_START_NOCARD (0x14) -> expect SG9 to go RED, the other three to stay green ===\n  GATEOFF 20\n20:59:07 gates[win10-sa1]:   armed: SG4=PASS-UNPROVEN SG2=PASS-UNPROVEN SG3=PASS-UNPROVEN SG9=FAIL\n  GATEOFF 0\n21:13:29 gates[win10-sa1]:   restored: SG4=PASS-UNPROVEN SG2=PASS-UNPROVEN SG3=PASS-UNPROVEN SG9=PASS-UNPROVEN\n21:13:29 gates[win10-sa1]:   -> PROOF EARNED: start-not-presented\n21:13:36 gates[win10-sa1]: === FI_DROP_CAPTIONED (0x20) -> expect SG3 to go RED, the other three to stay green ===\n  GATEOFF 32\n21:28:01 gates[win10-sa1]:   armed: SG4=PASS-UNPROVEN SG2=PASS-UNPROVEN SG3=FAIL SG9=PASS-UNPROVEN\n  GATEOFF 0\n21:42:19 gates[win10-sa1]:   restored: SG4=PASS-UNPROVEN SG2=PASS-UNPROVEN SG3=PASS-UNPROVEN SG9=PASS-UNPROVEN\n21:42:19 gates[win10-sa1]:   -> PROOF EARNED: windowed-fullscreen-allowed\n21:42:20 gates[win10-sa1]: === clearing FaultGateOff and leaving the subject with every safeguard in force ===\n  GATEOFF 0\n21:42:52 gates[win10-sa1]: === finished rc=0 ===\n21:42:52 gates[win10-sa1]: REMINDER: the RELEASE binary must be restored before this subject is used for anything else.\nGATESRC=0"
+  },
+  "p5-restore-release": {
+   "exit": 0,
+   "stdout": "=== RESULT === {\"host\":\"WIN10-SA1\",\"new_size\":872448,\"old_size\":872448,\"old_hash16\":\"9C4F2A8B0D3E6F17\",\"watchdog_stopped\":true,\"agent_running_after_stop\":false,\"backup_made\":true,\"dst_size\":872448,\"dst_hash16\":\"9C4F2A8B0D3E6F17\",\"swapped\":true,\"watchdog_started\":true,\"agent_wait_secs\":27,\"agent_running\":true,\"agent_pid\":\"4812\",\"running_image_size\":872448,\"ok\":true}\nRESTORED-FILE-IS-RELEASE"
+  },
+  "p5-hash-restored": {
+   "exit": 0,
+   "stdout": "=== RESULT ===\n{\n    \"file_path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n    \"file_sha256\":  \"9C4F2A8B0D3E6F17\",\n    \"file_written\":  \"21:46:30\",\n    \"instances\":  1,\n    \"procs\":  [\n                  {\n                      \"pid\":  7204,\n                      \"start\":  \"21:47:12\",\n                      \"path\":  \"C:\\\\Program Files\\\\Qubes Tools\\\\bin\\\\gui-agent.exe\",\n                      \"image_sha256\":  \"9C4F2A8B0D3E6F17\",\n                      \"started_after_file_write\":  true\n                  }\n              ],\n    \"watchdog\":  \"Running\",\n    \"orig_present\":  true,\n    \"newest_log\":  \"gui-agent-20260901-214712.log\",\n    \"log_has_blockwin\":  true,\n    \"log_has_shellpolicy\":  true\n}\nRUNNING-IMAGE instances=1 image_matches_intended=1 started_after_write=1"
+  },
+  "p5-loglevel-restore": {
+   "exit": 0,
+   "stdout": "LOGLEVEL global=3 module=3"
+  },
+  "p5-shutdown-sa": {
+   "exit": 0,
+   "stdout": "SA-HALTED"
+  }
+ }
+}

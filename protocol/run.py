@@ -374,10 +374,19 @@ def advance(c: Campaign, steps: list[dict], failproofs: dict, auto_truth: bool =
                         # only the human is removed. Falsifiability is proven by the same scenarios:
                         # the selftest feeds this scorer each fixture and grades against truth.
                         token = run_scorer(c, step, scorer)
-                        if token is None:
-                            mark(c, step, RED, verdict="INVALID-INSTRUMENT",
-                                 why=f"scorer {scorer} produced no answer token")
+                        key = token.split(":", 1)[0] if token else None
+                        if key is None or key not in step["judgement"]["answers"]:
+                            # V3 fail-closed: a scorer that answers nothing, or answers OUTSIDE
+                            # the step's closed token set, is a broken instrument. It gets a
+                            # visible INVALID-INSTRUMENT ledger row (a silent gap hides from
+                            # campaign-verdict) and can never become FAIL or PASS - the closed
+                            # set is what keeps the 3-way verdict intact.
+                            why = f"scorer {scorer} produced no valid answer token ({token!r})"
+                            emit_verdict(c, step, "INVALID-INSTRUMENT", why,
+                                         step.get("evidence", ""), failproofs)
+                            mark(c, step, RED, verdict="INVALID-INSTRUMENT", why=why)
                             progressed = True
+                            c.save()
                             continue
                         print(f"  [scorer {scorer}] {step['id']} := {token}")
                         apply_answer(c, step, token, failproofs)

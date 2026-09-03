@@ -1,0 +1,294 @@
+{
+ "truth": {
+  "s7-precondition-authority": "ALL_MATCH",
+  "p2-net2-zero-reboot": "SAME_BOOT_BOUND",
+  "p3-u1-verdict": "SCAN_DONE_TO_DOM0",
+  "p3-u2-verdict": "CLASSIFIED_CORRECT_ON_COLD_BOOT",
+  "p4-rnd5-verdict": "NOMAP_BOTH_WITNESSES",
+  "p4-rnd3-synth-crop": "RECT_PAINTED_CHANGED",
+  "p5-suite-verdict": "ALL_FOUR_GRADED_GREEN"
+ },
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "gate0-payload",
+    "verdict": "PASS"
+   },
+   {
+    "check": "golden-win10-base",
+    "verdict": "PASS"
+   },
+   {
+    "check": "golden-win11-base",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p0-roster-netvm",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p0-all-halted",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p0-stage-inputs",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p0-regate-iso",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p0-cells-named",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p1-matrix-run",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p1-matrix-nonvacuous",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p1-precondition-authority",
+    "verdict": "PASS"
+   },
+   {
+    "check": "p2-net0-template-netvm",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p2-net1-latch-applier",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p2-net2-zero-reboot-attach",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p2-net2-dialog-watch",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p2-net3-transfer-rx",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p2-net6-firstvif-eligible",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p2-net6-firstvif-dialog",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p2-net4-perboot-soak",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p2-net5-reconciler",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p2-net7-standalone-attach",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p2-net8-throughput",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p3-serial-no-bench",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p3-g0c-scan-disarmed",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p3-u1-scan-to-dom0",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p3-u2-coldboot-class",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p3-u1-stability-and-controls",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p3-u3-venue",
+    "verdict": "N/A.*"
+   },
+   {
+    "check": "p3-u3-install-e2e",
+    "verdict": "ATTENDED-PENDING"
+   },
+   {
+    "check": "p3-u4-failure-drills",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p3-u5-introspection",
+    "verdict": "N/A.*"
+   },
+   {
+    "check": "p3-u6-netvm-policy",
+    "verdict": "N/A.*"
+   },
+   {
+    "check": "p3-standalone-control",
+    "verdict": "N/A.*"
+   },
+   {
+    "check": "p3-dynamic-updates-settled",
+    "verdict": "N/A.*"
+   },
+   {
+    "check": "p4-scan-disarmed",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-bench-canonical-suite",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-rnd5-nomap-two-witness",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-rnd8-resolution-liveness",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-rnd3-stimulus-established",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-rnd3-synth-crop",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-rnd4-toast-two-path",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p4-rnd1-drag",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p4-rnd2-scroll",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p4-rnd6-occlusion",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p4-rnd7-chrome",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p4-rnd9-coldboot",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p4-rnd8-dom0-resize",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg0-feature-never-set",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p5-running-image-is-artefact",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p5-sg-unattended-suite",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p5-containment-agent-agrees",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p5-gate-preflight-clear",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "p5-sg1-mode1-coldboot",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg1-failproof",
+    "verdict": "ATTENDED-PENDING"
+   },
+   {
+    "check": "p5-sg2-feature-on-arm",
+    "verdict": "ATTENDED-PENDING"
+   },
+   {
+    "check": "p5-sg4-feature-on-arm",
+    "verdict": "ATTENDED-PENDING"
+   },
+   {
+    "check": "p5-sg5-secure-desktop",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg6-positive-residual",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg7-toasts",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg8-chrome",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg9-devarm",
+    "verdict": "N/A.*"
+   },
+   {
+    "check": "p5-sg10-filteroff-defense",
+    "verdict": "BLOCKED"
+   },
+   {
+    "check": "p5-sg10-progman-e2e",
+    "verdict": "ATTENDED-PENDING"
+   },
+   {
+    "check": "p5-nonseamless-signin-view",
+    "verdict": "ATTENDED-PENDING"
+   },
+   {
+    "check": "p5-sg11-matrix",
+    "verdict": "N/A.*"
+   }
+  ],
+  "ledger_absent": [
+   "p3-u2-run",
+   "p3-rearm-scan",
+   "p3-shutdown-tpl",
+   "p5-outdir",
+   "p5-release-artefact",
+   "p5-boot-sa",
+   "p5-loglevel5",
+   "p5-suite-run",
+   "p5-sg6-failproof",
+   "p5-fi-artefact",
+   "p5-swap-diag",
+   "p5-recontain",
+   "p5-prove-cycle",
+   "p5-restore-release",
+   "p5-loglevel-restore",
+   "p5-shutdown-sa"
+  ]
+ }
+}
