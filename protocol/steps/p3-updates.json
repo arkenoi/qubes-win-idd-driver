@@ -54,10 +54,10 @@
       "requires": ["p3-serial-gate"],
       "guest": "TPL",
       "vars_in": ["TPL", "ACCEPT_OUT"],
-      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {TPL} >/dev/null 2>&1 & ) ; w_session {TPL} 1200 p3-boot-tpl {ACCEPT_OUT} echo",
-      "timeout_s": 1400,
-      "expect": {"exit": 0, "stdout_re": "session up at t\\+[0-9]+s"},
-      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The template subject never produced a session (w_session took its TERMINAL or DEADLINE exit). That is a boot problem, not an updates verdict - the guest's state is evidence, investigate before any update cell; never poll it by hand."}
+      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {TPL} >/dev/null 2>&1 & ) ; w_session {TPL} 1200 p3-boot-tpl {ACCEPT_OUT} echo && w_usersession {TPL} 600 p3-boot-tpl {ACCEPT_OUT} echo",
+      "timeout_s": 2000,
+      "expect": {"exit": 0, "stdout_re": "(?s)session up at t\\+[0-9]+s.*user session up at t\\+[0-9]+s"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The template subject never produced a logged-on USER session (w_session or w_usersession took its TERMINAL or DEADLINE exit). That is a boot problem, not an updates verdict - the guest's state is evidence, investigate before any update cell; never poll it by hand. w_usersession DEADLINE after a w_session pass = SYSTEM pre-session qrexec answered while autologon never completed; the pushrun-based cells would return NOTHING (RIG-CONSTRAINTS 1.1)."}
     },
     {
       "id": "p3-g0c-disarm",

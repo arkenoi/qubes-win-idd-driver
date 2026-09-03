@@ -16,7 +16,7 @@
   },
   "p4-boot-subject": {
    "exit": 0,
-   "stdout": "  p4-boot-subject: session up at t+151s"
+   "stdout": "  p4-boot-subject: session up at t+151s\n  p4-boot-subject: user session up at t+163s (explorer running, marker pushrun round-tripped)"
   },
   "p4-scan-disarm": {
    "exit": 0,

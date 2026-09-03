@@ -28,7 +28,7 @@
   },
   "p5-boot-sa": {
    "exit": 0,
-   "stdout": "  p5-boot-sa: session up at t+187s"
+   "stdout": "  p5-boot-sa: session up at t+187s\n  p5-boot-sa: user session up at t+199s (explorer running, marker pushrun round-tripped)"
   },
   "p5-hash-release": {
    "exit": 0,

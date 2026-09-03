@@ -74,6 +74,54 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
   done
 }
 
+# Wait for the interactive USER (autologon) session, not just qrexec. 0=user session
+# 1=terminal(recovery) 2=deadline.
+# WHY THIS EXISTS: w_alive/w_session prove only that qubes.VMShell answers - and on this
+# testbed dom0 policy runs VMShell as NT AUTHORITY\SYSTEM (pre-session qrexec), which answers
+# BEFORE autologon completes. qubes.Filecopy - what every `qtest pushrun` rides - delivers into
+# the logged-on USER's Documents and yields NOTHING without the interactive session
+# (RIG-CONSTRAINTS 1.1). Measured 2026-09-02 (P4 campaign): w_session passed on the SYSTEM
+# channel, the pushrun preconditions fired immediately, and a HEALTHY 4.3.18 subject was graded
+# INVALID-PRECONDITION - p4-scan-disarm returned shell banners only, p4-subject-identity 0
+# bytes; the same health-check after settle returned a full healthy result. Gate on THIS after
+# w_session, before any pushrun-based step.
+# Two signals, in order, both required:
+#   (a) explorer.exe is running - the shell exists only once the user logon completed
+#       (whoami is NOT a discriminator here: policy pins the VMShell channel to SYSTEM
+#       before AND after logon);
+#   (b) a marker pushrun ROUND-TRIPS - the exact Filecopy-into-user-Documents path every
+#       downstream pushrun needs. (a) alone could still race profile/file-agent readiness.
+# Same three-exit shape as w_session; poll cadence >= 15 s (qrexec churn floor).
+w_usersession(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
+  local vm=$1 dl=$2 lbl=$3 dir=$4 log=$5 t0 now st shots=0 out probe
+  probe="$dir/$lbl-usersession-probe.ps1"
+  printf 'Write-Output "USERSESSION-MARKER-OK"\n' > "$probe"
+  t0=$(date +%s)
+  while :; do
+    now=$(( $(date +%s) - t0 ))
+    if [ "$now" -ge "$dl" ]; then
+      $log "  $lbl: DEADLINE ${dl}s - qrexec answers (SYSTEM pre-session channel) but the interactive user session never came up (screen=$(w_screen "$vm" "$lbl-usr-dl" "$dir")); autologon broken or not settled - every pushrun-based step would return NOTHING"
+      return 2
+    fi
+    if QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run 'cmd /c tasklist /fi "imagename eq explorer.exe" /nh' 2>/dev/null | grep -qai 'explorer\.exe'; then
+      out=$(QTEST_VM=$vm timeout -k 8 150 ./tools/qtest pushrun "$probe" 2>/dev/null | tr -d '\r')
+      if grep -qa 'USERSESSION-MARKER-OK' <<<"$out"; then
+        $log "  $lbl: user session up at t+${now}s (explorer running, marker pushrun round-tripped)"
+        return 0
+      fi
+      $log "  $lbl: t+${now}s explorer running but marker pushrun did not round-trip yet (Filecopy/user profile not ready)"
+    else
+      $log "  $lbl: t+${now}s qrexec answers but no explorer.exe - autologon not complete"
+    fi
+    if [ $(( now / 60 )) -gt "$shots" ]; then
+      shots=$(( now / 60 )); st=$(w_screen "$vm" "$lbl-usr-t${now}" "$dir")
+      $log "  $lbl: t+${now}s qvm=$(w_state "$vm") screen=$st"
+      [ "$st" = RECOVERY ] && { $log "  $lbl: TERMINAL - recovery screen, no user session is coming ($dir/$lbl-usr-t${now}.png)"; return 1; }
+    fi
+    sleep 20
+  done
+}
+
 # Wait for the install to reach a conclusion, whatever that conclusion is.
 # 0=RESULT present  1=terminal(recovery)  2=deadline  3=guest halted  4=STALLED
 # Reads the guest log by bounded polls: the Get-Content -Wait stream truncated silently at 28 of

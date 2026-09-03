@@ -19,7 +19,7 @@
   },
   "p2-boot-appvm": {
    "exit": 0,
-   "stdout": "  p2-boot-appvm: session up at t+142s"
+   "stdout": "  p2-boot-appvm: session up at t+142s\n  p2-boot-appvm: user session up at t+154s (explorer running, marker pushrun round-tripped)"
   },
   "p2-latch-presence": {
    "exit": 0,
@@ -43,7 +43,7 @@
   },
   "p2-boot-churn": {
    "exit": 0,
-   "stdout": "  p2-boot-churn: session up at t+188s"
+   "stdout": "  p2-boot-churn: session up at t+188s\n  p2-boot-churn: user session up at t+201s (explorer running, marker pushrun round-tripped)"
   },
   "p2-net6-firstvif-virgin": {
    "exit": 0,

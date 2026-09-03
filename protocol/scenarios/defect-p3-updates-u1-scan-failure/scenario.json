@@ -27,7 +27,7 @@
   },
   "p3-boot-tpl": {
    "exit": 0,
-   "stdout": "  p3-boot-tpl: session up at t+164s"
+   "stdout": "  p3-boot-tpl: session up at t+164s\n  p3-boot-tpl: user session up at t+177s (explorer running, marker pushrun round-tripped)"
   },
   "p3-g0c-disarm": {
    "exit": 0,

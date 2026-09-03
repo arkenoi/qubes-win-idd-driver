@@ -29,10 +29,10 @@
       "requires": ["p2-outdir", "p2-template-netvm"],
       "guest": "APPVM",
       "vars_in": ["APPVM", "ACCEPT_OUT"],
-      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {APPVM} >/dev/null 2>&1 & ) ; w_session {APPVM} 1200 p2-boot-appvm {ACCEPT_OUT} echo",
-      "timeout_s": 1400,
-      "expect": {"exit": 0, "stdout_re": "session up at t\\+[0-9]+s"},
-      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The AppVM subject never produced a session (w_session took its TERMINAL or DEADLINE exit). That is a boot problem, not a network verdict - the guest's state is evidence, investigate it before any network cell; never poll it by hand."}
+      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {APPVM} >/dev/null 2>&1 & ) ; w_session {APPVM} 1200 p2-boot-appvm {ACCEPT_OUT} echo && w_usersession {APPVM} 600 p2-boot-appvm {ACCEPT_OUT} echo",
+      "timeout_s": 2000,
+      "expect": {"exit": 0, "stdout_re": "(?s)session up at t\\+[0-9]+s.*user session up at t\\+[0-9]+s"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The AppVM subject never produced a logged-on USER session (w_session or w_usersession took its TERMINAL or DEADLINE exit). That is a boot problem, not a network verdict - the guest's state is evidence, investigate it before any network cell; never poll it by hand. w_usersession DEADLINE after a w_session pass = qrexec answered on the SYSTEM pre-session channel while autologon never completed; the pushrun-based cells below would return NOTHING (RIG-CONSTRAINTS 1.1)."}
     },
     {
       "id": "p2-latch-presence",
@@ -137,10 +137,10 @@
       "requires": ["p2-shutdown-appvm"],
       "guest": "CHURN",
       "vars_in": ["CHURN", "ACCEPT_OUT"],
-      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {CHURN} >/dev/null 2>&1 & ) ; w_session {CHURN} 1200 p2-boot-churn {ACCEPT_OUT} echo",
-      "timeout_s": 1400,
-      "expect": {"exit": 0, "stdout_re": "session up at t\\+[0-9]+s"},
-      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The churn subject never produced a session - a boot problem, not a first-vif verdict. Its state is evidence; investigate before any eligibility claim."}
+      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {CHURN} >/dev/null 2>&1 & ) ; w_session {CHURN} 1200 p2-boot-churn {ACCEPT_OUT} echo && w_usersession {CHURN} 600 p2-boot-churn {ACCEPT_OUT} echo",
+      "timeout_s": 2000,
+      "expect": {"exit": 0, "stdout_re": "(?s)session up at t\\+[0-9]+s.*user session up at t\\+[0-9]+s"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The churn subject never produced a logged-on USER session - a boot problem, not a first-vif verdict. Its state is evidence; investigate before any eligibility claim. w_usersession DEADLINE after a w_session pass = SYSTEM pre-session qrexec answered while autologon never completed; pushrun cells would return NOTHING."}
     },
     {
       "id": "p2-net6-firstvif-virgin",

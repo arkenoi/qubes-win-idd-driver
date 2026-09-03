@@ -22,7 +22,7 @@
     {
       "id": "p4-boot-subject",
       "kind": "action",
-      "title": "Boot the P4 subject (an ST2/ST2G fixture carrying the build under test; fire-and-poll via the e2e-wait library - a foreground qvm-start blocks up to qrexec_timeout on a non-booting guest)",
+      "title": "Boot the P4 subject (an ST2/ST2G fixture carrying the build under test; fire-and-poll via the e2e-wait library - a foreground qvm-start blocks up to qrexec_timeout on a non-booting guest), then gate on the interactive USER session (w_usersession) - w_session only proves qrexec, which this testbed answers as SYSTEM pre-session, while every pushrun below needs the autologon user session",
       "requires": [
         "p4-outdir"
       ],
@@ -31,16 +31,16 @@
         "VM",
         "ACCEPT_OUT"
       ],
-      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {VM} >/dev/null 2>&1 & ) ; w_session {VM} 1200 p4-boot-subject {ACCEPT_OUT} echo",
-      "timeout_s": 1400,
+      "command": "source mgmt/harness/e2e-wait.sh && ( timeout -k 10 150 qvm-start {VM} >/dev/null 2>&1 & ) ; w_session {VM} 1200 p4-boot-subject {ACCEPT_OUT} echo && w_usersession {VM} 600 p4-boot-subject {ACCEPT_OUT} echo",
+      "timeout_s": 2000,
       "expect": {
         "exit": 0,
-        "stdout_re": "session up at t\\+[0-9]+s"
+        "stdout_re": "(?s)session up at t\\+[0-9]+s.*user session up at t\\+[0-9]+s"
       },
       "on_fail": {
         "action": "HALT_PART",
         "verdict": "INVALID-PRECONDITION",
-        "msg": "The subject never produced a logged-on session. That is a boot problem, not a rendering verdict - the guest's state is evidence; investigate before any P4 cell. Note qubes.Filecopy targets the USER's Documents, so nothing in this part can even be delivered without a session (RIG-CONSTRAINTS 1.1)."
+        "msg": "The subject never produced a logged-on USER session. That is a boot problem, not a rendering verdict - the guest's state is evidence; investigate before any P4 cell. Note qubes.Filecopy targets the USER's Documents, so nothing in this part can even be delivered without a session (RIG-CONSTRAINTS 1.1). If w_session passed but w_usersession hit DEADLINE, qrexec answered on the SYSTEM pre-session channel while autologon never completed - the 2026-09-02 P4 failure mode; firing the pushrun preconditions there grades a healthy subject INVALID."
       },
       "cells": [
         "RND-battery-preamble"

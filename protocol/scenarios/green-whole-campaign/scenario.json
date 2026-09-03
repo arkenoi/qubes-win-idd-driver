@@ -86,7 +86,7 @@
   },
   "p2-boot-appvm": {
    "exit": 0,
-   "stdout": "  p2-boot-appvm: session up at t+142s"
+   "stdout": "  p2-boot-appvm: session up at t+142s\n  p2-boot-appvm: user session up at t+154s (explorer running, marker pushrun round-tripped)"
   },
   "p2-latch-presence": {
    "exit": 0,
@@ -110,7 +110,7 @@
   },
   "p2-boot-churn": {
    "exit": 0,
-   "stdout": "  p2-boot-churn: session up at t+188s"
+   "stdout": "  p2-boot-churn: session up at t+188s\n  p2-boot-churn: user session up at t+201s (explorer running, marker pushrun round-tripped)"
   },
   "p2-net6-firstvif-virgin": {
    "exit": 0,
@@ -138,7 +138,7 @@
   },
   "p3-boot-tpl": {
    "exit": 0,
-   "stdout": "  p3-boot-tpl: session up at t+164s"
+   "stdout": "  p3-boot-tpl: session up at t+164s\n  p3-boot-tpl: user session up at t+177s (explorer running, marker pushrun round-tripped)"
   },
   "p3-g0c-disarm": {
    "exit": 0,
@@ -186,7 +186,7 @@
   },
   "p4-boot-subject": {
    "exit": 0,
-   "stdout": "  p4-boot-subject: session up at t+151s"
+   "stdout": "  p4-boot-subject: session up at t+151s\n  p4-boot-subject: user session up at t+163s (explorer running, marker pushrun round-tripped)"
   },
   "p4-scan-disarm": {
    "exit": 0,
@@ -250,7 +250,7 @@
   },
   "p5-boot-sa": {
    "exit": 0,
-   "stdout": "  p5-boot-sa: session up at t+187s"
+   "stdout": "  p5-boot-sa: session up at t+187s\n  p5-boot-sa: user session up at t+199s (explorer running, marker pushrun round-tripped)"
   },
   "p5-hash-release": {
    "exit": 0,
