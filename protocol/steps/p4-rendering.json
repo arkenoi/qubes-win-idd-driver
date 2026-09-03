@@ -144,7 +144,7 @@
         "STOCK_AGENT",
         "OURS_AGENT"
       ],
-      "command": "bash mgmt/harness/bench-gate-run.sh {VM} {STOCK_AGENT} {OURS_AGENT} {ACCEPT_OUT}",
+      "command": "QWT_VMLOCK_HELD={VM} bash mgmt/harness/bench-gate-run.sh {VM} {STOCK_AGENT} {OURS_AGENT} {ACCEPT_OUT}",
       "timeout_s": 5400,
       "expect": {
         "exit": 0,
