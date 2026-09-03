@@ -1,5 +1,5 @@
 {
- "comment": "DEFECT: the 2026-08-31 ovr=1 incident (FaultGateOff=0x3). The shot half is CLEAN - SHOT_MAPPED 0 - because qtest shot is structurally blind to override-redirect windows, but the agent's own log holds 'SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x3601e6,ovr=1,...,w=1920,h=1080': a full-screen o-r surface offered to dom0, the exact takeover the design forbids. The judgement must answer MAP_IN_AGENT_LOG -> FAIL. Trap: answering NOMAP_BOTH_WITNESSES because the shot shows nothing - the shot-only check reported 'not mapped' in the real incident and would have passed the leaking build.",
+ "comment": "DEFECT: the dom0 shot SERVICE is broken (untagged target / no X session / qrexec policy-refused), which the deployed service signals identically to 'zero managed windows' - a 0-byte file. RND-5's PASS scene is legitimately zero managed windows, so the collector runs a POSITIVE CONTROL shot against a launched Notepad first; here that control ALSO captures nothing, so the step emits SHOT_CONTROL_FAIL (no SHOT_MAPPED) -> stdout_re fails and stdout_absent_re matches -> INVALID-INSTRUMENT, HALT_PART. This is the empty=broken guard, relocated onto the control, still able to FAIL (H5). Trap: reading the empty RND-5 shot as SHOT_MAPPED 0 and passing the verdict - the whole point of the control is that a broken service can never masquerade as a clean zero.",
  "steps": [
   "p4-rendering.json"
  ],
@@ -40,7 +40,7 @@
   },
   "p4-rnd5-collect": {
    "exit": 0,
-   "stdout": "SCENE-CLEARED\nSHOT_MAPPED 0\nDISCRIM_HITS 1\n  D 17:40:58.301 gui-agent[4188]: ShouldAcceptWindow: hwnd=0x2050c Start surface not presented in seamless mode (SeamlessStart=0)\nSHELL_SURFACES 1\n  S class=Windows.UI.Core.CoreWindow proc=StartMenuExperienceHost title=\"Start\"\nSTARTPROC 1\nOVRMAP_TOTAL 1\nOVRMAP_BIG 1\n  M 17:41:22.503 gui-agent[4188]: SendWindowMap: QGAPROTO,msg=MAP,hwnd=0x3601e6,ovr=1,x=0,y=0,w=1920,h=1080,parent=0x0"
+   "stdout": "SCENE-CLEARED\nSHOT_CONTROL_FAIL\nDISCRIM_HITS 2\n  D 18:19:02.114 gui-agent[4188]: ShouldAcceptWindow: hwnd=0x2050c Start surface not presented in seamless mode (SeamlessStart=0)\n  D 18:19:02.117 gui-agent[4188]: ShouldAcceptWindow: hwnd=0x105a2 cardless deny: Windows.UI.Core.CoreWindow\nSHELL_SURFACES 1\n  S class=Windows.UI.Core.CoreWindow proc=StartMenuExperienceHost title=\"Start\"\nSTARTPROC 1\nOVRMAP_TOTAL 0\nOVRMAP_BIG 0"
   }
  }
 }

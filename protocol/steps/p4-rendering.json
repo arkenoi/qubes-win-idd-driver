@@ -144,15 +144,15 @@
         "STOCK_AGENT",
         "OURS_AGENT"
       ],
-      "command": "grep -aq 'DISARMED True' {ACCEPT_OUT}/disarm.txt && QTEST_VM={VM} QWT_VMLOCK_HELD={VM} BENCH_SETTLE_S=45 tools/bench-stock-vs-ours.sh {STOCK_AGENT} {OURS_AGENT} 3 2>&1 | tee {ACCEPT_OUT}/bench-suite.log",
+      "command": "QWT_VMLOCK_HELD={VM} bash mgmt/harness/bench-gate-run.sh {VM} {STOCK_AGENT} {OURS_AGENT} {ACCEPT_OUT}",
       "timeout_s": 5400,
       "expect": {
         "exit": 0,
-        "stdout_re": "(?s)settle after each swap: [0-9]+s \\(floor 30\\).*== summary.*repetitions: [0-9]+ total, [0-9]+ valid, 0 INVALID.*^scroll\\s+[0-9]+\\.[0-9]+ \\([0-9]+\\)\\s+[0-9]+\\.[0-9]+ \\([0-9]+\\)\\s+[+-][0-9.]+%\\s+REAL - ranges disjoint, ours BETTER",
-        "stdout_absent_re": "^scroll .*(ours WORSE|NO VERDICT)|MORE THAN ONE BINARY ON THIS SIDE|^FATAL"
+        "stdout_re": "(?s)settle after each swap: [0-9]+s \\(floor 30\\).*== summary.*repetitions: [0-9]+ total, [0-9]+ valid, 0 INVALID.*^GUEST_BUILD=[0-9]+.*^BENCH-GATE PASS",
+        "stdout_absent_re": "^BENCH-GATE FAIL|MORE THAN ONE BINARY ON THIS SIDE|^FATAL"
       },
       "check": "p4-bench-canonical-suite",
-      "detail": "One guest, one install, one display stack; the only variable is gui-agent.exe, swapped in place. The suite enforces in code what the records demand: per-repetition RUNNING-hash assertion (P4-2; a harness that proceeds on a failed swap reports numbers for a build that never ran), missing data recorded INVALID and excluded - never coerced to zero, the scene checked by PIXELS each repetition (the wedged white Notepad faked two regressions), sides interleaved with alternating start order (BENCH-1: >=3 runs per side, interleaved with the control), and the settle floor (an 8 s settle produced the published-then-retracted '+60% win11 drag regression'). BENCH-2's always-on idle tripwire is carried by the suite's idle-pre/mid/post phases, measured every repetition. The expect grades ONLY the scroll row (BENCH-1: scroll is the metric that may carry a verdict; drag p50 is scene-state bimodal - it once voided a whole bisect - and gates nothing, whatever its row shows).",
+      "detail": "One guest, one install, one display stack; the only variable is gui-agent.exe, swapped in place. The suite enforces in code what the records demand: per-repetition RUNNING-hash assertion (P4-2; a harness that proceeds on a failed swap reports numbers for a build that never ran), missing data recorded INVALID and excluded - never coerced to zero, the scene checked by PIXELS each repetition (the wedged white Notepad faked two regressions), sides interleaved with alternating start order (BENCH-1: >=3 runs per side, interleaved with the control), and the settle floor (an 8 s settle produced the published-then-retracted '+60% win11 drag regression'). BENCH-2's always-on idle tripwire is carried by the suite's idle-pre/mid/post phases, measured every repetition. The scroll gate is GUEST-AWARE (bench-gate-run.sh -> tools/bench-gate.py, keyed on the guest's own build number): win10 (build<26100) demands REAL disjoint ours BETTER (the fork perf win against the whole-desktop DDA stock); win11 24H2+ (build>=26100) demands NO REGRESSION (scroll not REAL-disjoint-WORSE) because the platform makes every agent indistinguishable from stock on scroll (rule-canonical-benchmarks) - a disjoint-better verdict is unsatisfiable there for ANY build, so a win10-only gate would be a structural false-FAIL, not a product signal. The gate still FAILS a win11 disjoint-worse scroll, a win10 non-disjoint scroll, or any INVALID rep (proven in tools/bench-gate.py falsification cases). drag p50 is scene-state bimodal - it once voided a whole bisect - and gates nothing, whatever its row shows.",
       "on_fail": {
         "action": "HALT_PART",
         "verdict": "INVALID-PRECONDITION",
@@ -172,18 +172,18 @@
     {
       "id": "p4-bench-raws",
       "kind": "action",
-      "title": "BENCH-0 standing rule: commit the raw suite output to instrumentation/ (the b299011 baseline became unusable because its raws were never committed)",
+      "title": "BENCH-0: preserve the NUMERIC bench summary in the acceptance evidence dir. NEVER git-commit the raws - they carry scene .tar CAPTURES, and captures never enter the repo (owner rule, twice-purged). instrumentation/ is gitignored for exactly this reason; the numeric summary lives in {ACCEPT_OUT}/bench-suite.log (non-repo evidence), which is the citable record.",
       "requires": [
         "p4-bench-suite"
       ],
-      "command": "git add instrumentation/bench-stock-vs-ours-* && git commit -q -m 'bench: p4-rendering acceptance raws' && echo RAWS-COMMITTED",
+      "command": "grep -aq '== summary' {ACCEPT_OUT}/bench-suite.log && echo RAWS-RECORDED",
       "expect": {
         "exit": 0,
-        "stdout_re": "^RAWS-COMMITTED$"
+        "stdout_re": "^RAWS-RECORDED$"
       },
       "on_fail": {
         "action": "CONTINUE",
-        "msg": "The raws did not commit (dirty tree, or nothing new). Record why in the report; a baseline without committed raws cannot be cited later."
+        "msg": "The numeric bench summary is not in {ACCEPT_OUT}/bench-suite.log - the bench output was not teed. Record why; a baseline without its numeric summary cannot be cited later. (Do NOT switch to committing instrumentation/ - those raws carry scene captures.)"
       },
       "cells": [
         "BENCH-0"
@@ -201,17 +201,17 @@
         "VM",
         "ACCEPT_OUT"
       ],
-      "command": "{ QTEST_VM={VM} timeout -k 8 120 tools/qtest run 'cmd /c taskkill /f /im notepad.exe & echo SCENE-CLEARED' | tr -d '\\r' | grep -a SCENE-CLEARED ; QTEST_VM={VM} timeout -k 8 400 tools/qtest pushrun guest/open-start.ps1 >/dev/null 2>&1 ; sleep 20 ; rm -f {ACCEPT_OUT}/rnd5.tar ; QTEST_VM={VM} timeout -k 8 200 tools/qtest shot {ACCEPT_OUT}/rnd5.tar >/dev/null 2>&1 ; if [ -s {ACCEPT_OUT}/rnd5.tar ]; then echo \"SHOT_MAPPED $(tar tf {ACCEPT_OUT}/rnd5.tar | grep -ac '\\.png$')\"; else echo SHOT_EMPTY_TAR; fi ; QTEST_VM={VM} timeout -k 8 300 tools/qtest pushrun guest/startproof.ps1 | tr -d '\\r' | grep -aE '^(DISCRIM_HITS|  D |SHELL_SURFACES|  S |STARTPROC)' ; QTEST_VM={VM} timeout -k 8 200 tools/qtest run 'cmd /c powershell -NoProfile -EncodedCommand JABkAD0AKABHAGUAdAAtAEkAdABlAG0AUAByAG8AcABlAHIAdAB5ACAAJwBIAEsATABNADoAXABTAE8ARgBUAFcAQQBSAEUAXABJAG4AdgBpAHMAaQBiAGwAZQAgAFQAaABpAG4AZwBzACAATABhAGIAXABRAHUAYgBlAHMAIABUAG8AbwBsAHMAJwAgAC0ARQBBACAAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQApAC4ATABvAGcARABpAHIACgBpAGYAKAAtAG4AbwB0ACAAJABkACkAewAkAGQAPQAnAFEAOgBcAFEAdQBiAGUAcwAgAEwAbwBnAHMAJwB9AAoAJABmAD0ARwBlAHQALQBDAGgAaQBsAGQASQB0AGUAbQAgACQAZAAgAC0ARgBpAGwAdABlAHIAIAAnAGcAdQBpAC0AYQBnAGUAbgB0AC0AKgAuAGwAbwBnACcAIAAtAEUAQQAgAFMAaQBsAGUAbgB0AGwAeQBDAG8AbgB0AGkAbgB1AGUAIAB8ACAAUwBvAHIAdAAtAE8AYgBqAGUAYwB0ACAATABhAHMAdABXAHIAaQB0AGUAVABpAG0AZQAgAC0ARABlAHMAYwBlAG4AZABpAG4AZwAgAHwAIABTAGUAbABlAGMAdAAtAE8AYgBqAGUAYwB0ACAALQBGAGkAcgBzAHQAIAAxAAoAaQBmACgALQBuAG8AdAAgACQAZgApAHsAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAE8AVgBSAE0AQQBQAF8ATgBPAEwATwBHACcAOwBlAHgAaQB0ACAAMAB9AAoAJABtAD0AQAAoAEcAZQB0AC0AQwBvAG4AdABlAG4AdAAgACQAZgAuAEYAdQBsAGwATgBhAG0AZQAgAHwAIABTAGUAbABlAGMAdAAtAFMAdAByAGkAbgBnACAALQBTAGkAbQBwAGwAZQBNAGEAdABjAGgAIAAnAG0AcwBnAD0ATQBBAFAAJwAgAHwAIABXAGgAZQByAGUALQBPAGIAagBlAGMAdAAgAHsAIAAkAF8ALgBMAGkAbgBlACAALQBtAGEAdABjAGgAIAAnAG8AdgByAD0AMQAnACAAfQApAAoAJABiAGkAZwA9AEAAKAAkAG0AIAB8ACAAVwBoAGUAcgBlAC0ATwBiAGoAZQBjAHQAIAB7ACAAJABfAC4ATABpAG4AZQAgAC0AbQBhAHQAYwBoACAAJwB3AD0AXABkAHsANAAsAH0AJwAgAH0AKQAKAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAKAAnAE8AVgBSAE0AQQBQAF8AVABPAFQAQQBMACAAJwAgACsAIAAkAG0ALgBDAG8AdQBuAHQAKQAKAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAKAAnAE8AVgBSAE0AQQBQAF8AQgBJAEcAIAAnACAAKwAgACQAYgBpAGcALgBDAG8AdQBuAHQAKQAKACQAYgBpAGcAIAB8ACAAUwBlAGwAZQBjAHQALQBPAGIAagBlAGMAdAAgAC0ARgBpAHIAcwB0ACAAMwAgAHwAIABGAG8AcgBFAGEAYwBoAC0ATwBiAGoAZQBjAHQAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAoACcAIAAgAE0AIAAnACAAKwAgACQAXwAuAEwAaQBuAGUAKQAgAH0A' | tr -d '\\r' | grep -avE '^(Microsoft Windows \\[Version|\\(c\\) Microsoft|C:\\\\)' | grep -aE '^(OVRMAP_TOTAL|OVRMAP_BIG|  M )' ; } | tee {ACCEPT_OUT}/rnd5-two-witness.txt",
+      "command": "{ QTEST_VM={VM} timeout -k 8 120 tools/qtest run 'cmd /c start \"\" notepad.exe' >/dev/null 2>&1 ; sleep 8 ; rm -f {ACCEPT_OUT}/rnd5-control.tar ; QTEST_VM={VM} timeout -k 8 200 tools/qtest shot {ACCEPT_OUT}/rnd5-control.tar >/dev/null 2>&1 ; ctl=$(tar tf {ACCEPT_OUT}/rnd5-control.tar 2>/dev/null | grep -ac '\\.png$') ; QTEST_VM={VM} timeout -k 8 120 tools/qtest run 'cmd /c taskkill /f /im notepad.exe & echo SCENE-CLEARED' | tr -d '\\r' | grep -a SCENE-CLEARED ; QTEST_VM={VM} timeout -k 8 400 tools/qtest pushrun guest/open-start.ps1 >/dev/null 2>&1 ; sleep 20 ; rm -f {ACCEPT_OUT}/rnd5.tar ; QTEST_VM={VM} timeout -k 8 200 tools/qtest shot {ACCEPT_OUT}/rnd5.tar >/dev/null 2>&1 ; if [ \"${ctl:-0}\" -lt 1 ]; then echo SHOT_CONTROL_FAIL; elif [ -s {ACCEPT_OUT}/rnd5.tar ]; then echo \"SHOT_MAPPED $(tar tf {ACCEPT_OUT}/rnd5.tar | grep -ac '\\.png$')\"; else echo \"SHOT_MAPPED 0\"; fi ; QTEST_VM={VM} timeout -k 8 300 tools/qtest pushrun guest/startproof.ps1 | tr -d '\\r' | grep -aE '^(DISCRIM_HITS|  D |SHELL_SURFACES|  S |STARTPROC)' ; QTEST_VM={VM} timeout -k 8 200 tools/qtest run 'cmd /c powershell -NoProfile -EncodedCommand JABkAD0AKABHAGUAdAAtAEkAdABlAG0AUAByAG8AcABlAHIAdAB5ACAAJwBIAEsATABNADoAXABTAE8ARgBUAFcAQQBSAEUAXABJAG4AdgBpAHMAaQBiAGwAZQAgAFQAaABpAG4AZwBzACAATABhAGIAXABRAHUAYgBlAHMAIABUAG8AbwBsAHMAJwAgAC0ARQBBACAAUwBpAGwAZQBuAHQAbAB5AEMAbwBuAHQAaQBuAHUAZQApAC4ATABvAGcARABpAHIACgBpAGYAKAAtAG4AbwB0ACAAJABkACkAewAkAGQAPQAnAFEAOgBcAFEAdQBiAGUAcwAgAEwAbwBnAHMAJwB9AAoAJABmAD0ARwBlAHQALQBDAGgAaQBsAGQASQB0AGUAbQAgACQAZAAgAC0ARgBpAGwAdABlAHIAIAAnAGcAdQBpAC0AYQBnAGUAbgB0AC0AKgAuAGwAbwBnACcAIAAtAEUAQQAgAFMAaQBsAGUAbgB0AGwAeQBDAG8AbgB0AGkAbgB1AGUAIAB8ACAAUwBvAHIAdAAtAE8AYgBqAGUAYwB0ACAATABhAHMAdABXAHIAaQB0AGUAVABpAG0AZQAgAC0ARABlAHMAYwBlAG4AZABpAG4AZwAgAHwAIABTAGUAbABlAGMAdAAtAE8AYgBqAGUAYwB0ACAALQBGAGkAcgBzAHQAIAAxAAoAaQBmACgALQBuAG8AdAAgACQAZgApAHsAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAnAE8AVgBSAE0AQQBQAF8ATgBPAEwATwBHACcAOwBlAHgAaQB0ACAAMAB9AAoAJABtAD0AQAAoAEcAZQB0AC0AQwBvAG4AdABlAG4AdAAgACQAZgAuAEYAdQBsAGwATgBhAG0AZQAgAHwAIABTAGUAbABlAGMAdAAtAFMAdAByAGkAbgBnACAALQBTAGkAbQBwAGwAZQBNAGEAdABjAGgAIAAnAG0AcwBnAD0ATQBBAFAAJwAgAHwAIABXAGgAZQByAGUALQBPAGIAagBlAGMAdAAgAHsAIAAkAF8ALgBMAGkAbgBlACAALQBtAGEAdABjAGgAIAAnAG8AdgByAD0AMQAnACAAfQApAAoAJABiAGkAZwA9AEAAKAAkAG0AIAB8ACAAVwBoAGUAcgBlAC0ATwBiAGoAZQBjAHQAIAB7ACAAJABfAC4ATABpAG4AZQAgAC0AbQBhAHQAYwBoACAAJwB3AD0AXABkAHsANAAsAH0AJwAgAH0AKQAKAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAKAAnAE8AVgBSAE0AQQBQAF8AVABPAFQAQQBMACAAJwAgACsAIAAkAG0ALgBDAG8AdQBuAHQAKQAKAFcAcgBpAHQAZQAtAE8AdQB0AHAAdQB0ACAAKAAnAE8AVgBSAE0AQQBQAF8AQgBJAEcAIAAnACAAKwAgACQAYgBpAGcALgBDAG8AdQBuAHQAKQAKACQAYgBpAGcAIAB8ACAAUwBlAGwAZQBjAHQALQBPAGIAagBlAGMAdAAgAC0ARgBpAHIAcwB0ACAAMwAgAHwAIABGAG8AcgBFAGEAYwBoAC0ATwBiAGoAZQBjAHQAIAB7ACAAVwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIAAoACcAIAAgAE0AIAAnACAAKwAgACQAXwAuAEwAaQBuAGUAKQAgAH0A' | tr -d '\\r' | grep -avE '^(Microsoft Windows \\[Version|\\(c\\) Microsoft|C:\\\\)' | grep -aE '^(OVRMAP_TOTAL|OVRMAP_BIG|  M )' ; } | tee {ACCEPT_OUT}/rnd5-two-witness.txt",
       "timeout_s": 1400,
       "expect": {
         "stdout_re": "(?s)^SHOT_MAPPED [0-9]+$.*^DISCRIM_HITS [0-9]+.*^SHELL_SURFACES [0-9]+.*^OVRMAP_TOTAL [0-9]+.*^OVRMAP_BIG [0-9]+",
-        "stdout_absent_re": "SHOT_EMPTY_TAR|OVRMAP_NOLOG"
+        "stdout_absent_re": "SHOT_CONTROL_FAIL|OVRMAP_NOLOG"
       },
-      "detail": "The 20 s sleep is the battery's declared settle (>=20 s after scene setup before first capture), attached to this collection step - not a poll loop. The PowerShell goes through -EncodedCommand (a -Command with escaped quotes is re-split at every hop and fails SILENTLY - rnd8's counter once returned nothing and the empty values were graded as a product FAIL), and the qtest run output is filtered for the cmd.exe echo-back. An empty shot tar is NOT zero windows (RIG-CONSTRAINTS 3.2) and an absent agent log is not zero MAPs - both are instrument faults, which is why they fail THIS step as INVALID-INSTRUMENT instead of reaching the verdict step.",
+      "detail": "The 20 s sleep is the battery's declared settle (>=20 s after scene setup before first capture), attached to this collection step - not a poll loop. The PowerShell goes through -EncodedCommand (a -Command with escaped quotes is re-split at every hop and fails SILENTLY - rnd8's counter once returned nothing and the empty values were graded as a product FAIL), and the qtest run output is filtered for the cmd.exe echo-back. RND-5's PASS scene is 'zero managed windows' (Start correctly NOT presented), so the RND-5 shot is LEGITIMATELY empty - but the deployed dom0 shot service writes a 0-byte file both when there are 0 managed windows AND when it is broken (untagged target, no X session, policy-refused), and its exit code cannot tell them apart (RIG-CONSTRAINTS 3.2: an empty tar is NOT zero windows). So a POSITIVE CONTROL shot runs first against a deterministic managed window (a launched Notepad, then killed): if that control captures >=1 png the service provably reached window enumeration, and the subsequent empty RND-5 shot is trusted as SHOT_MAPPED 0; if the control is ALSO empty the service/policy is broken and the step emits SHOT_CONTROL_FAIL -> INVALID-INSTRUMENT. The empty=broken guard is preserved, relocated onto the control. An absent agent log is likewise an instrument fault (OVRMAP_NOLOG), which is why these fail THIS step as INVALID-INSTRUMENT instead of reaching the verdict step.",
       "on_fail": {
         "action": "HALT_PART",
         "verdict": "INVALID-INSTRUMENT",
-        "msg": "A witness half is missing: empty shot tar (not evidence of no windows - check the target and the tool first), no agent log, or a silent pushrun (no session - RIG-CONSTRAINTS 1.1). Missing data FAILS the instrument, never the product, and never defaults (V3). Do not grade RND-5 from partial evidence."
+        "msg": "A witness half is missing or the shot service is broken: SHOT_CONTROL_FAIL means the positive control shot captured no window, so the empty RND-5 shot cannot be read as 'zero managed windows' (check the target's win-idd-testbed tag, the X session, and qrexec policy - not the product); OVRMAP_NOLOG means no agent log; a silent pushrun means no session (RIG-CONSTRAINTS 1.1). Missing data FAILS the instrument, never the product, and never defaults (V3). Do not grade RND-5 from partial evidence."
       },
       "cells": [
         "RND-5",
@@ -263,7 +263,8 @@
         "RND-0b-table",
         "RND-0b-rule-1",
         "RND-0-blindness"
-      ]
+      ],
+      "scorer": "rnd5-verdict"
     },
     {
       "id": "p4-rnd8",
@@ -401,7 +402,8 @@
         "RND-pixel-rules",
         "P4-pixels-only",
         "RND-0b-table"
-      ]
+      ],
+      "scorer": "rnd3-synth-crop"
     },
     {
       "id": "p4-rnd4-toast",

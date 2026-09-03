@@ -244,6 +244,13 @@ elif [ "${syn:-0}" -gt 0 ] && [ "$h_after" != NOCAP ] && [ "$h_after" != NOWIN ]
       printf 'RND-3\tmenu-synthesized-onto-owner\tFAIL\tpainted rect %s,%s %sx%s identical before and after (%s)\t%s\n' "$rx" "$ry" "$pw" "$ph" "$cb" "$EV" >> "$V"; rc=1
     fi
   fi
+elif [ "${syn:-0}" -gt 0 ] && { [ "$h_after" = NOCAP ] || [ "$h_after" = NOWIN ]; }; then
+  # The menu opened (#32768 seen) and was synthesized, but the AFTER shot FAILED (NOCAP/NOWIN), so
+  # the painted rect cannot be judged. Falling through to the final else here would emit a product
+  # "menu-visible-in-dom0 FAIL" ('invisible to the user') for what is actually a capture-instrument
+  # fault (V2: INVALID-* must never be folded into a product FAIL).
+  log "  -> INVALID-INSTRUMENT: owner capture failed at menu-open (h_after=$h_after); cannot judge the painted rect"
+  printf 'RND-3\tmenu-synthesized-onto-owner\tINVALID-INSTRUMENT\towner capture returned %s at menu-open - painted rect unjudgeable, not a product FAIL\t%s\n' "$h_after" "$EV" >> "$V"; rc=1
 elif [ "${syn:-0}" -eq 0 ]; then
   log "  -> FAIL: an override-redirect surface existed but the agent did not synthesize it"
   printf 'RND-3\tmenu-synthesized-onto-owner\tFAIL\t#32768 surfaces=%s but 0 SYNTH events\t%s\n' "$ovr" "$EV" >> "$V"; rc=1
@@ -258,7 +265,7 @@ r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
 q run 'cmd /c start "" notepad.exe' >/dev/null 2>&1; sleep 16   # a synth owner, in case that path is used
 r 'cmd /c del /q C:\qwt-improved-setup\surface-watch.jsonl 2>nul & exit 0' >/dev/null 2>&1
 tmark=$(T=200 q pushrun "$TMP/mark.ps1" | tr -d '\r' | grep -ao 'AGENTMARK [0-9]*' | awk '{print $2}')
-th_before=$(owner_hash)
+th_before=$(owner_hash tb); tpng_before=$(owner_png tb)
 # distinct -Tag: run-as-user deletes its task on entry, so a shared name kills the sampler
 # base64 the args: they contain spaces and would be re-split at every hop (see run-as-user.ps1)
 WB64=$(python3 -c "import base64;print(base64.b64encode('-DurationSeconds 90 -IntervalSeconds 1'.encode('utf-16-le')).decode())")
@@ -269,34 +276,101 @@ T=300 q pushrun guest/run-as-user.ps1 -Tag toast -Script "$GUEST\\fire-toast.ps1
 sleep 12
 geom > "$TMP/g1.txt"; g1=$(parse_geom "$TMP/g1.txt"); cp "$TMP/g1.txt" "$OUT/geom-toast.txt"
 o1=$(echo "$g1" | cut -d'|' -f2); n1=$(echo "$g1" | cut -d'|' -f3)
-th_after=$(owner_hash)
+th_after=$(owner_hash ta); tpng_after=$(owner_png ta)
 tsyn=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${tmark:-0}" -Pattern 'msg=SYNTH,hwnd=' | tr -d '\r' | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
-sw=$(psrun 'Write-Output ("SWCOUNT " + @(Get-Content "C:\qwt-improved-setup\surface-watch.jsonl" -EA SilentlyContinue | Select-String -Pattern ToastHost,ShellExperienceHost,CoreWindow).Count)' \
-  | grep -aoE 'SWCOUNT [0-9]+' | awk '{print $2}' | head -1)
-# Distinguish "the query did not answer" from "it answered zero". `${sw:-0}` collapses them, and
-# the collapsed value routes into the vacuity branch below - which would read as "the guest never
-# raised a toast" when in fact nothing was asked (rule 16).
-if [ -z "$sw" ]; then
-  log "  -> INVALID-INSTRUMENT: the surface-watch counter returned no data; not grading toasts on this run"
-  printf 'RND-SHELL\ttoast-surface-count\tINVALID-INSTRUMENT\tsurface-watch query returned no data\t%s\n' "$EV" >> "$V"
-  rc=1
+
+# GUEST-SIDE VACUITY PROOF - through surface-watch's OWN -Summary analysis over the FULL capture,
+# NOT a bash substring grep for three hard-coded host names. That narrow filter reintroduced the
+# EXACT fault surface-watch was rebuilt to move to analysis time (its header, fault #2: "a filter
+# miss was read as an absence"). Measured on win11-p2 (2026-09-02): the agent DID map the toast to
+# dom0 as a "New notification" override-redirect window (delivery worked), but its guest-side host
+# and class fall OUTSIDE {ToastHost,ShellExperienceHost,CoreWindow}, so the old substring count
+# collapsed to 0 and a DELIVERED toast graded INVALID-VACUOUS "the stimulus never existed".
+#   * -Summary parses every recorded window (fixing the narrow filter) and reports the SAMPLE count
+#     SEPARATELY from the toast MATCH count, so a dead/stalled -NoWait sampler (no samples / coverage
+#     gaps) is told apart from a genuine no-toast (samples present, 0 matches) - the two used to
+#     collapse to the same 0 and both read as "no toast" (V3 / rule 16 violated on the vacuity axis).
+#   * -Match catches the toast by a known host/class (win10) AND by the title dom0 itself witnessed
+#     ("New notification") AND by the fired toast's title text - a union across the observed platforms,
+#     none of which matches any baseline window in the reset scene, so the vacuity guard stays honest.
+# Read as SYSTEM: -Summary only PARSES the machine-path jsonl (no user session, no window APIs).
+SWSUM=$(psrun "& '$GUEST\\surface-watch.ps1' -Summary -Match 'notification|QWT ACCEPT TOAST|ToastHost|ShellExperienceHost|ShellHost|CoreWindow'" | grep -a '^=== SURFACEWATCH ===' | head -1)
+swsamp=$(echo "$SWSUM" | grep -ao '"samples":[0-9]*' | head -1 | cut -d: -f2)
+sw=$(echo "$SWSUM" | grep -ao '"match_hits":[0-9]*' | head -1 | cut -d: -f2)
+swok=$(echo "$SWSUM" | grep -aoE '"ok":(true|false)' | head -1 | sed 's/.*://')
+# Order matters: a POSITIVE detection (match_hits>0) is valid whether or not coverage had a gap -
+# the samples that DID match are real. Coverage only undermines a NEGATIVE, so the gap check sits
+# BETWEEN "toast seen" and "no toast": with full coverage a 0 count is genuinely vacuous, with a
+# gap it is merely uncitable (INVALID-INSTRUMENT), never asserted as "the stimulus never existed".
+if   [ -z "$SWSUM" ];                               then tstate=NODATA
+elif [ -z "$swsamp" ] || [ "${swsamp:-0}" -eq 0 ];  then tstate=NOSAMPLES
+elif [ "${sw:-0}" -gt 0 ];                          then tstate=TOAST
+elif [ "$swok" != "true" ];                         then tstate=GAPS
+else                                                     tstate=NOTOAST
 fi
-log "  guest-side toast samples=${sw:-0}  dom0 o-r ${baseo}->${o1} [$n1]  synth=${tsyn:-0}  owner px $th_before -> $th_after"
-if [ "${sw:-0}" -eq 0 ]; then
-  log "  -> INVALID-VACUOUS: no toast surface guest-side; the stimulus never existed"
-  printf 'RND-4\ttoast-reaches-dom0\tINVALID-VACUOUS\tno toast surface seen by a self-validated detector\t%s\n' "$EV" >> "$V"; rc=1
-elif [ "${o1:-0}" -gt "${baseo:-0}" ]; then
-  log "  -> PASS: the toast reached dom0 as its own override-redirect window"
-  printf 'RND-4\ttoast-reaches-dom0\tPASS-UNPROVEN\tguest samples=%s; dom0 o-r %s->%s [%s] (own-window path)\t%s\n' "$sw" "$baseo" "$o1" "$n1" "$EV" >> "$V"
-  printf 'SG7\ttoasts-survive-filter\tPASS-UNPROVEN\tthe chrome filter did not eat the notification\t%s\n' "$EV" >> "$V"
-elif [ "${tsyn:-0}" -gt 0 ] && [ "$th_before" != "$th_after" ]; then
-  log "  -> PASS: the toast was synthesized and the owner's pixels changed (synth path)"
-  printf 'RND-4\ttoast-reaches-dom0\tPASS-UNPROVEN\tguest samples=%s; %s SYNTH events; owner px %s -> %s (synth path)\t%s\n' "$sw" "$tsyn" "$th_before" "$th_after" "$EV" >> "$V"
-  printf 'SG7\ttoasts-survive-filter\tPASS-UNPROVEN\tthe chrome filter did not eat the notification\t%s\n' "$EV" >> "$V"
-else
-  log "  -> FAIL: the toast existed guest-side but reached dom0 by NEITHER path"
-  printf 'RND-4\ttoast-reaches-dom0\tFAIL\tguest samples=%s but dom0 o-r stayed %s and no synth+pixel change\t%s\n' "$sw" "$o1" "$EV" >> "$V"; rc=1
-fi
+log "  guest-side toast: samples=${swsamp:-?} match_hits=${sw:-?} coverage_ok=${swok:-?}  dom0 o-r ${baseo}->${o1} [$n1]  synth=${tsyn:-0}  owner px $th_before -> $th_after"
+
+case "$tstate" in
+NODATA)
+  # rule 16 / V3: an unanswered query is an instrument fault, never a product or vacuity claim.
+  log "  -> INVALID-INSTRUMENT: surface-watch -Summary returned no data; not grading toasts on this run"
+  printf 'RND-SHELL\ttoast-surface-count\tINVALID-INSTRUMENT\tsurface-watch -Summary returned no data\t%s\n' "$EV" >> "$V"; rc=1 ;;
+NOSAMPLES)
+  # The -NoWait sampler wrote no samples (dead detector). This is NOT proof the toast never existed -
+  # the very distinction the old single count could not make (samples=0 and matches=0 were one value).
+  log "  -> INVALID-INSTRUMENT: surface-watch produced no samples (the -NoWait sampler did not run/write); a dead detector proves nothing about the toast"
+  printf 'RND-4\ttoast-reaches-dom0\tINVALID-INSTRUMENT\tsurface-watch produced no samples - detector dead, not a vacuous stimulus\t%s\n' "$EV" >> "$V"; rc=1 ;;
+GAPS)
+  # A stalled sampler cannot support a negative (surface-watch's own coverage rule).
+  log "  -> INVALID-INSTRUMENT: surface-watch coverage has gaps (coverage_ok=$swok); a stalled sampler cannot support a negative"
+  printf 'RND-4\ttoast-reaches-dom0\tINVALID-INSTRUMENT\tsurface-watch coverage gaps - a negative is not citable\t%s\n' "$EV" >> "$V"; rc=1 ;;
+NOTOAST)
+  # Sampler ran with continuous coverage and recorded windows, but NONE was a toast surface: the
+  # stimulus genuinely never rendered guest-side. VACUITY GUARD PRESERVED - a real no-toast still fails.
+  log "  -> INVALID-VACUOUS: no toast surface across ${swsamp} covered samples; the stimulus never existed"
+  printf 'RND-4\ttoast-reaches-dom0\tINVALID-VACUOUS\tno toast surface in %s covered samples (self-validated detector)\t%s\n' "$swsamp" "$EV" >> "$V"; rc=1 ;;
+TOAST)
+  # A toast surface WAS captured guest-side; now which delivery path reached dom0?
+  if [ "${o1:-0}" -gt "${baseo:-0}" ]; then
+    log "  -> PASS: the toast reached dom0 as its own override-redirect window"
+    printf 'RND-4\ttoast-reaches-dom0\tPASS-UNPROVEN\tguest match_hits=%s/samples=%s; dom0 o-r %s->%s [%s] (own-window path)\t%s\n' "$sw" "$swsamp" "$baseo" "$o1" "$n1" "$EV" >> "$V"
+    printf 'SG7\ttoasts-survive-filter\tPASS-UNPROVEN\tthe chrome filter did not eat the notification\t%s\n' "$EV" >> "$V"
+  elif [ "$th_before" = NOCAP ] || [ "$th_after" = NOCAP ] || [ "$th_before" = NOWIN ] || [ "$th_after" = NOWIN ]; then
+    # The own-window path did not fire, so the synth path is the only route left - but it needs an
+    # owner capture, and a NOCAP/NOWIN sentinel is not a hash. Refuse rather than manufacture a pass.
+    log "  -> INVALID-INSTRUMENT: owner capture failed (before=$th_before after=$th_after); cannot judge the toast synth path"
+    printf 'RND-4\ttoast-reaches-dom0\tINVALID-INSTRUMENT\towner capture returned %s / %s - synth path unjudgeable\t%s\n' "$th_before" "$th_after" "$EV" >> "$V"; rc=1
+  elif [ "${tsyn:-0}" -gt 0 ]; then
+    # SYNTH path: judge from the crop of the exact rect the agent SAYS it painted, never a
+    # whole-window hash - the identical fault fixed in RND-3 (a full-window hash moves for a caret
+    # blink / clock digit / cursor and once "passed" with SYNTHPAINT 0). rx,ry,w,h are owner-relative.
+    tsp=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${tmark:-0}" -Pattern 'msg=SYNTHPAINT' | tr -d '\r' | grep -aoE 'rx=[0-9-]+,ry=[0-9-]+,w=[0-9]+,h=[0-9]+' | tail -1)
+    if [ -z "$tsp" ]; then
+      log "  -> FAIL: the agent logged SYNTH but NEVER a SYNTHPAINT - the toast was accounted onto an owner and never drawn there, which is invisible to the user"
+      printf 'RND-4\ttoast-reaches-dom0\tFAIL\t%s SYNTH events but ZERO SYNTHPAINT - accounted but never painted\t%s\n' "$tsyn" "$EV" >> "$V"; rc=1
+    else
+      rx=$(echo "$tsp" | grep -o 'rx=[0-9-]*' | cut -d= -f2); ry=$(echo "$tsp" | grep -o 'ry=[0-9-]*' | cut -d= -f2)
+      pw=$(echo "$tsp" | grep -o 'w=[0-9]*' | cut -d= -f2);   ph=$(echo "$tsp" | grep -o 'h=[0-9]*' | cut -d= -f2)
+      tcb=$(crop_hash "$tpng_before" "$rx" "$ry" "$pw" "$ph" 2>/dev/null)
+      tca=$(crop_hash "$tpng_after"  "$rx" "$ry" "$pw" "$ph" 2>/dev/null)
+      log "  toast synth rect (owner-relative) ${rx},${ry} ${pw}x${ph}   crop $tcb -> $tca"
+      if [ -z "$tcb" ] || [ -z "$tca" ] || [ "$tcb" = NORECT ] || [ "$tca" = NORECT ]; then
+        log "  -> INVALID-INSTRUMENT: the toast synth rect does not intersect the captured owner window"
+        printf 'RND-4\ttoast-reaches-dom0\tINVALID-INSTRUMENT\tsynth rect %s,%s %sx%s does not intersect the capture\t%s\n' "$rx" "$ry" "$pw" "$ph" "$EV" >> "$V"; rc=1
+      elif [ "$tcb" != "$tca" ]; then
+        log "  -> PASS: the toast was synthesized and the pixels IN THE PAINTED RECT changed (synth path)"
+        printf 'RND-4\ttoast-reaches-dom0\tPASS-UNPROVEN\tguest match_hits=%s/samples=%s; %s SYNTH events; painted rect %s,%s %sx%s changed %s -> %s (synth path)\t%s\n' "$sw" "$swsamp" "$tsyn" "$rx" "$ry" "$pw" "$ph" "$tcb" "$tca" "$EV" >> "$V"
+        printf 'SG7\ttoasts-survive-filter\tPASS-UNPROVEN\tthe chrome filter did not eat the notification\t%s\n' "$EV" >> "$V"
+      else
+        log "  -> FAIL: synthesized and painted, but the pixels in that exact rect are IDENTICAL"
+        printf 'RND-4\ttoast-reaches-dom0\tFAIL\tpainted rect %s,%s %sx%s identical before and after (%s)\t%s\n' "$rx" "$ry" "$pw" "$ph" "$tcb" "$EV" >> "$V"; rc=1
+      fi
+    fi
+  else
+    log "  -> FAIL: the toast existed guest-side but reached dom0 by NEITHER path"
+    printf 'RND-4\ttoast-reaches-dom0\tFAIL\tguest match_hits=%s but dom0 o-r stayed %s and no synth+pixel change\t%s\n' "$sw" "$o1" "$EV" >> "$V"; rc=1
+  fi ;;
+esac
 
 r 'cmd /c taskkill /f /im notepad.exe & exit 0' >/dev/null 2>&1
 log "=== finished rc=$rc ==="

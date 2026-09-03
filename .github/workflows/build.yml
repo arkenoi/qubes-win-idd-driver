@@ -410,6 +410,37 @@ jobs:
               "-p:TreatWarningAsError=false"
           if ($LASTEXITCODE -ne 0) { throw "gui-agent build failed" }
 
+      - name: Build wgcbroker
+        shell: pwsh
+        run: |
+          # tools/wgcbroker: user-session Windows.Graphics.Capture broker for the gui-agent
+          # (Win11 24H2+ occluded-window capture). Plain v143, /MT, C++/WinRT from the SDK,
+          # no WDK/nuget - mirrors tools/wgcprobe.
+          & "${{ steps.vs.outputs.msbuild }}" tools\wgcbroker\wgcbroker.vcxproj `
+              /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "wgcbroker msbuild failed" }
+          Get-ChildItem tools\wgcbroker\x64\Release\wgcbroker.exe
+
+      - name: Build notifhost
+        shell: pwsh
+        run: |
+          # tools/notifhost: user-session toast interceptor - renders toasts as NORMAL windows
+          # (UserNotificationListener + GDI). Lets the slicer retire for the toast class.
+          & "${{ steps.vs.outputs.msbuild }}" tools\notifhost\notifhost.vcxproj `
+              /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "notifhost msbuild failed" }
+          Get-ChildItem tools\notifhost\x64\Release\notifhost.exe
+
+      - name: Build wgcprobe
+        shell: pwsh
+        run: |
+          # tools/wgcprobe: WGC diagnostic (per-window + "mon" CreateForMonitor). Packaged with the
+          # agent so the broker's CreateForMonitor failure can be A/B'd against a schtasks launch.
+          & "${{ steps.vs.outputs.msbuild }}" tools\wgcprobe\wgcprobe.vcxproj `
+              /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "wgcprobe msbuild failed" }
+          Get-ChildItem tools\wgcprobe\x64\Release\wgcprobe.exe
+
       # core-agent-windows (our fork) carries the qrexec-wrapper drain-race fix (U15). It needs the
       # SAME dependency set the gui-agent build just staged - libvchan, xencontrol, windows-utils,
       # qubesdb-client - so it is built here rather than in a job that would have to stage them all
@@ -477,6 +508,15 @@ jobs:
           if (Test-Path tools\grantprobe\x64\Release\grantprobe.exe) {
             Copy-Item tools\grantprobe\x64\Release\grantprobe.exe package-agent\ -Force
           } else { Write-Warning 'grantprobe.exe missing from package-agent' }
+          if (Test-Path tools\wgcbroker\x64\Release\wgcbroker.exe) {
+            Copy-Item tools\wgcbroker\x64\Release\wgcbroker.exe package-agent\ -Force
+          } else { Write-Warning 'wgcbroker.exe missing from package-agent' }
+          if (Test-Path tools\notifhost\x64\Release\notifhost.exe) {
+            Copy-Item tools\notifhost\x64\Release\notifhost.exe package-agent\ -Force
+          } else { Write-Warning 'notifhost.exe missing from package-agent' }
+          if (Test-Path tools\wgcprobe\x64\Release\wgcprobe.exe) {
+            Copy-Item tools\wgcprobe\x64\Release\wgcprobe.exe package-agent\ -Force
+          } else { Write-Warning 'wgcprobe.exe missing from package-agent' }
           Get-ChildItem package-agent
 
       - uses: actions/upload-artifact@v4

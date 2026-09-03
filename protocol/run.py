@@ -366,6 +366,23 @@ def advance(c: Campaign, steps: list[dict], failproofs: dict, auto_truth: bool =
             if step["kind"] == "judgement":
                 ans = (c.st["steps"].get(step["id"]) or {}).get("answer")
                 if ans is None:
+                    scorer = step.get("scorer")
+                    if scorer:
+                        # DETERMINISTIC auto-answer: the scorer computes the token a correct judge
+                        # would pick, from the same evidence - no operator, live OR selftest. The
+                        # 3-way verdict and every V-rule are unchanged (apply_answer maps the token);
+                        # only the human is removed. Falsifiability is proven by the same scenarios:
+                        # the selftest feeds this scorer each fixture and grades against truth.
+                        token = run_scorer(c, step, scorer)
+                        if token is None:
+                            mark(c, step, RED, verdict="INVALID-INSTRUMENT",
+                                 why=f"scorer {scorer} produced no answer token")
+                            progressed = True
+                            continue
+                        print(f"  [scorer {scorer}] {step['id']} := {token}")
+                        apply_answer(c, step, token, failproofs)
+                        progressed = True
+                        continue
                     if auto_truth and c.st["mode"] == "dry" and os.environ.get("PROTOCOL_SELFTEST") == "1":
                         truth = json.loads((Path(c.st["scenario"]) / "truth.json").read_text()) \
                             .get("truth", {}).get(step["id"])
@@ -461,6 +478,31 @@ def apply_answer(c: Campaign, step: dict, value: str, failproofs: dict):
         elif act == "HALT_PART":
             c.st.setdefault("halted_parts", []).append(step["part"])
     c.save()
+
+
+def run_scorer(c: Campaign, step: dict, scorer: str) -> str | None:
+    """Run a judgement's DETERMINISTIC scorer on its (resolved) evidence; return the answer token.
+    Live: the real evidence paths. Dry/selftest: the scenario-owned fixture of the same basename -
+    the SAME resolution print_wait_block uses - so the selftest exercises the real scorer on the
+    fixtures and grades the result against recorded truth (a wrong scorer makes the walk deviate;
+    it can never turn a defect green). Returns None if evidence is unbound or the scorer emits no
+    token, which the caller turns into INVALID-INSTRUMENT (V3: missing data is never a pass)."""
+    ev = []
+    for e in step["judgement"]["evidence"]:
+        try:
+            p = subst(e, c.st["vars"])
+        except KeyError:
+            return None
+        if c.st["mode"] == "dry":
+            p = str(Path(c.st["scenario"]) / "evidence" / Path(p).name)
+        ev.append(p)
+    try:
+        r = subprocess.run(["python3", str(ROOT / "tools" / "rnd-score.py"), scorer, *ev],
+                           cwd=ROOT, capture_output=True, text=True, timeout=60)
+    except Exception:
+        return None
+    m = re.search(r"RND-ANSWER:\s*(\S+)", r.stdout)
+    return m.group(1) if m else None
 
 
 # --------------------------------------------------------------------------- operator UI

@@ -65,7 +65,14 @@ $haveHash = (Get-FileHash -LiteralPath $agentPath -ErrorAction SilentlyContinue)
 $wantHash = $null
 if (Test-Path $ManifestPath) {
     $mf = Get-Content $ManifestPath -Raw | ConvertFrom-Json
-    if ($mf.reference_binaries) { $wantHash = $mf.reference_binaries.'gui-agent.exe' }
+    # Manifest schema: current CI writes `binaries.<name>.sha256` (an object per binary); older
+    # packages wrote a flat `reference_binaries.<name>` hash string. Read the current schema first,
+    # fall back to the old one, so this instrument is not a false negative on the shipped package.
+    if ($mf.binaries -and $mf.binaries.'gui-agent.exe' -and $mf.binaries.'gui-agent.exe'.sha256) {
+        $wantHash = $mf.binaries.'gui-agent.exe'.sha256
+    } elseif ($mf.reference_binaries) {
+        $wantHash = $mf.reference_binaries.'gui-agent.exe'
+    }
 }
 Check 'agent_binary_hash' ($haveHash -and $wantHash -and ($haveHash -ieq $wantHash)) `
     @{ installed = $haveHash; manifest = $wantHash }
