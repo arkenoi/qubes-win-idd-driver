@@ -129,20 +129,24 @@ qvm-start "$CHURN" >/dev/null 2>&1
 # The terminating signal is a POSITIVE fact - the guest answers qrexec - not a timer. Polling is
 # >=20 s (H3.9: per-second qrexec churn triggered the IPI-shootdown wedge).
 #
-# THE ONE-SHOT RESCUE REBOOT. Waiting only for qrexec is not always enough: on a path that
-# installs the PV drivers FRESH, the driver swap can tear down the vchan qrexec runs on, and no
-# session appears until the guest restarts. verify_installed documents exactly this and handles it;
-# stock QWT's own installer reboots itself; ours deliberately does NOT - its closing line says the
-# caller reboots. Without a rescue this script would sit out its whole deadline on a SUCCESSFUL
-# install and report DEADLINE, which is a false negative of the worst kind: the product worked.
-#
-# Measured 2026-08-30 on the Win10 C1 run: qrexec actually came back at t+309s with no rescue
-# needed, because the PV drivers do not bind until the next boot and the existing vchan survives.
-# So this is insurance, not the normal path - and it is deliberately conservative: it fires at most
-# ONCE, only after RESCUE_AFTER seconds, and only when the guest has also gone CPU-quiet, so it can
-# never interrupt an install that is still working.
-RESCUE_AFTER=${RESCUE_AFTER:-720}
-t0=$(date +%s); restarts=0; ready=0; rescued=0; quiet=0
+# THE ONE-SHOT RESCUE REBOOT - BACKUP ONLY, NOT THE NORMAL PATH. On a path that installs the PV
+# drivers FRESH they bind only at the guest's NEXT start, so qrexec CANNOT answer in the boot the
+# install ran in: the guest must reboot after stage 2. Every job is responsible for that reboot
+# itself (stock-422 always did `shutdown /r`; the ours jobs pass `/reboot` -> -RebootAtEnd since
+# 2026-09-03), so the normal signal is the guest HALTING, which the restart-on-Halt below turns
+# into the qrexec-carrying boot within one poll. Measured cost of relying on the rescue instead:
+# the 2026-09-03 prove-ours run sat at "state=Running (no qrexec yet)" from t+134s onward with the
+# rescue never firing by t+1083s - the install itself was long finished. The rescue therefore
+# exists ONLY for a job that fails its own contract: it fires at most ONCE, after RESCUE_AFTER
+# seconds AND 3 consecutive CPU-quiet reads (so it can never interrupt an install still working),
+# and the cpu value is logged on every poll line so a rescue that cannot fire is visible in the
+# log instead of being discovered after the deadline.
+RESCUE_AFTER=${RESCUE_AFTER:-420}
+# Terminal, not deadline, when the guest crash-loops: stage1 + stage2 + post-install is at most a
+# handful of reboots; a guest that halts more than 8 times is cycling, and restarting it for the
+# rest of the budget would just shred the evidence of why.
+MAX_RESTARTS=${MAX_RESTARTS:-8}
+t0=$(date +%s); restarts=0; ready=0; rescued=0; quiet=0; cpu=-
 while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     sleep 20
     el=$(( $(date +%s) - t0 ))
@@ -156,16 +160,22 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
         if [ "${cpu:-9999}" -lt 15 ] 2>/dev/null; then quiet=$((quiet+1)); else quiet=0; fi
         if [ "$rescued" = 0 ] && [ "$el" -ge "$RESCUE_AFTER" ] && [ "$quiet" -ge 3 ]; then
             rescued=1
-            log "  t+${el}s no qrexec for ${RESCUE_AFTER}s and CPU quiet (${cpu}) - the install has stopped"
-            log "    working but no session appeared. Rebooting ONCE, as the installer's contract"
-            log "    requires of its caller (a fresh PV install can tear down the vchan qrexec uses)."
+            log "  t+${el}s no qrexec for ${RESCUE_AFTER}s and CPU quiet (${cpu}) - the install has"
+            log "    finished but the job did not reboot the guest as its contract requires (a fresh"
+            log "    PV install cannot produce qrexec in this boot). Rebooting ONCE as backup."
             qvm-shutdown "$CHURN" >/dev/null 2>&1
         fi
     fi
     if [ "$st" = Halted ]; then
         restarts=$((restarts+1))
+        if [ "$restarts" -gt "$MAX_RESTARTS" ]; then
+            log "TERMINAL: guest halted for the ${restarts}th time - it is crash-looping, not installing."
+            log "  Guest LEFT HALTED and NOT removed - its state is the evidence (H3.5). Read $OUT."
+            exit 1
+        fi
         log "  t+${el}s guest halted (the job rebooted it) - restart #$restarts"
         qvm-start "$CHURN" >/dev/null 2>&1
+        quiet=0
         continue
     fi
     if QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null \
@@ -174,7 +184,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
         log "  t+${el}s QREXEC ANSWERS after $restarts restart(s) - the guest carries a working QWT"
         break
     fi
-    log "  t+${el}s state=$st restarts=$restarts (no qrexec yet)"
+    log "  t+${el}s state=$st restarts=$restarts cpu=${cpu} quiet=$quiet (no qrexec yet)"
 done
 
 # SETTLE BEFORE DECLARING SUCCESS. First qrexec is not the end of the job: `stock-422` installs,

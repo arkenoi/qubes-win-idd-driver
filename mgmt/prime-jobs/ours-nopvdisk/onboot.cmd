@@ -44,6 +44,8 @@ rem fallback is an EMPTY password, which is wrong for these images (the account'
 rem `qubes` - mgmt/autounattend.xml), and a guest that cannot log itself in has no qrexec session,
 rem which would look like an install failure. matrix.sh's run_install has always passed
 rem `/auto /autologon:qubes`; this job was the odd one out.
-call C:\qwtsetup\install.cmd /nodisk /auto /autologon:qubes >> %LOG% 2>&1
+rem /reboot: same reason as the `ours` job - on a fresh PV install qrexec cannot answer until the
+rem next boot, so stage 2 must reboot itself or the guest is stranded until prime-run's rescue.
+call C:\qwtsetup\install.cmd /nodisk /auto /reboot /autologon:qubes >> %LOG% 2>&1
 echo installer rc=%ERRORLEVEL% >> %LOG%
 exit /b %ERRORLEVEL%

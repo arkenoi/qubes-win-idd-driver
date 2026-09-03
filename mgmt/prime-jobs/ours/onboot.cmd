@@ -73,7 +73,15 @@ call C:\qwtsetup\install.cmd /autologon:qubes <nul >> %LOG% 2>&1
 echo C12 pass 2 rc=%ERRORLEVEL% >> %LOG%
 :noc12
 
-echo --- stage 1 /auto [arms the resume task, reboots, stage 2 follows] >> %LOG%
-call C:\qwtsetup\install.cmd /auto /autologon:qubes >> %LOG% 2>&1
+rem /reboot IS LOAD-BEARING ON THIS PATH - do not remove it. On a PRISTINE base the PV drivers
+rem bind only at the guest's NEXT start, so qrexec CANNOT answer in the boot stage 2 runs in.
+rem Without /reboot the installer's contract ("the caller reboots") strands the guest at an idle
+rem desktop that no channel can reach, and prime-run can only fall back to its CPU-quiescence
+rem rescue - measured 2026-09-03: ~9.5 min of dead polling before the run was interrupted.
+rem With /reboot, -RebootAtEnd rides the resume task into stage 2 (Install-QwtImproved.ps1
+rem carries it explicitly), stage 2 flushes its === RESULT === trailer to the log and reboots
+rem itself, the guest Halts, and prime-run's restart-on-Halt fires within one poll.
+echo --- stage 1 /auto /reboot [arms the resume task, reboots, stage 2 follows and reboots itself] >> %LOG%
+call C:\qwtsetup\install.cmd /auto /reboot /autologon:qubes >> %LOG% 2>&1
 echo installer rc=%ERRORLEVEL% >> %LOG%
 exit /b %ERRORLEVEL%
