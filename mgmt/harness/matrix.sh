@@ -1,19 +1,46 @@
 #!/bin/bash
-# FULL INSTALL/UPGRADE MATRIX for 4.3.15.
+# INSTALL/UPGRADE MATRIX - RELEASE-PACKAGE-ONLY (owner model, 2026-09-03).
 #
-# "we did major change so regressions could be literally anywhere" - so this covers the paths a
-# user can actually take, not just the one the previous e2e happened to exercise:
+# THE ONE RULE THAT SHAPES EVERY CELL: our code enters a guest ONLY from the release package.
+# Owner: "the only source of our code for e2e testing is RELEASE PACKAGES, nothing else. no swap
+# fuckery is ever permitted." The old cells pushed a payload tarball (push_payload q4315 - a
+# stale 4.3.15 tree) over qrexec and ran install.cmd from the pushed copy; that pattern is GONE
+# and must never come back. The two channels that remain, both carrying the published artifact:
 #
-#   fresh-1stage   testsigning already ACTIVE -> stage 2 only, no reboot          (win10, win11)
-#   fresh-2stage   testsigning OFF -> stage 1, reboot, stage 2                    (never tested before)
-#   seeded         pending xenbus reboot Request + monitor auto-start             (the field's state)
-#   upgrade-ours   4.3.14 installed first, then 4.3.15 over it
-#   upgrade-stock  stock QWT 4.2.2 installed first, then 4.3.15 over it
-#   appvm          derive an AppVM from the installed template, cold boot it
+#   PRISTINE entry   -> mgmt/harness/prime-run.sh <base> <subject> ours --payload $RELEASE_SETUP
+#                       (a pristine guest has no qrexec; the primer stick is the only way in,
+#                       and the payload it carries IS the release setup tree)
+#   INSTALLED entry  -> the release ISO attached as a CD to the running guest, and
+#                       <CD>:\install.cmd run from the disc over qrexec, per the README
+#                       ("attach to a running Windows qube as a CD and run install.cmd elevated")
 #
-# Every cell starts from a FRESH CLONE of the golden, so no cell can inherit another's damage, and
-# each states its own verdict. Cells are selected with CELLS="..." and run SERIALLY - concurrent
-# VM-mutating jobs reboot each other, which has destroyed results here before.
+# THE CELLS:
+#   clean       prime-run from the pristine base (win10-base/win11-base, the ONLY sealed
+#               goldens). Bases carry testsigning OFF, so this is inherently the TRUE two-stage
+#               path (stage 1, reboot, stage 2) - the old fresh/1stage/2stage constructions are
+#               retired: they required a qrexec-carrying golden plus a pushed tarball, i.e. both
+#               forbidden things at once. Ends by PARKING the installed state (see below).
+#   reinstall   unpark the 'installed' snapshot -> same-version reinstall from the release ISO.
+#   upgrade     reclone a previous-ours fixture (e.g. win10-iqi, shipped 4.3.17) -> release ISO
+#               over it (in-place MSI major upgrade).
+#   seeded      the field's state (armed xenbus_monitor + PV reboot Request mid-MSI) over an
+#               existing install, from the release ISO.
+#   stock       CAPABILITY ONLY, never a default cell (owner: never re-test stock per campaign):
+#               reclone a stock-4.2.2 fixture built on demand by prime-run job stock-422, then
+#               release ISO over it.
+#   appvm       derive an AppVM from the installed subject, cold boot it (unchanged).
+#   grade       grade-only battery against an already-installed guest (unchanged).
+#
+# SNAPSHOTS ARE THE OPTIMIZATION (owner 2026-09-01: "we do snapshots for optimizations"): the
+# release is installed ONCE per OS per campaign - by the clean cell, which parks the installed
+# state via mgmt/harness/checkpoint.sh (park <vm> installed, ~2 s). Every cell that merely needs
+# "a guest carrying the release" unparks that snapshot instead of reinstalling. Only genuinely
+# different entry states provision themselves: clean (prime-run from pristine) and
+# upgrade/seeded/stock (reclone of a QWT-carrying fixture). Remove parks at campaign end
+# (qvm-remove ckpt-<vm>-installed); NEVER park a golden (checkpoint.sh refuses anyway).
+#
+# Each cell states its own verdict. Cells are selected with CELLS="..." and run SERIALLY -
+# concurrent VM-mutating jobs reboot each other, which has destroyed results here before.
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 # e2e-lib.sh hard-stops if QTEST_VM is unset, deliberately: a DEFAULT target once routed a whole
@@ -32,9 +59,6 @@ source .claude/skills/win-guest-e2e/e2e-lib.sh
 # matrix's evidence. A harness whose wait library can vanish between campaigns is not a harness.
 source "$(dirname "${BASH_SOURCE[0]}")/e2e-wait.sh"
 
-# Working area for downloaded artifacts. Overridable, and no longer hardcoded to one session's
-# tmp: a campaign must be re-runnable from a fresh session.
-S="${MATRIX_WORK:-$HOME/qwt-matrix-work}"; mkdir -p "$S"
 # Results directory. It used to be hardcoded to a Claude session tmp
 # (/home/user/.claude/jobs/<id>/tmp/matrix) — session-scoped and garbage-collectable, which is how
 # the only copy of the 2026-08-28 matrix evidence came within a GC of being lost, and why the cell
@@ -52,7 +76,6 @@ no(){ FAIL=$((FAIL+1)); say "FAIL  $*"; }
 start_vm(){ timeout -k 10 150 qvm-start "$1" >/dev/null 2>&1 & disown; sleep 8; }
 
 GLOG='C:\qwt-improved-install.log'
-TAR=$S/qwt-setup.tar.gz
 INC='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 
 # H3.6 ENFORCEMENT: exactly one Windows guest up at a time, structurally rather than by discipline.
@@ -145,27 +168,187 @@ EOF
   say "  cloned $g -> $t"
 }
 
-push_payload(){ # $1=vm $2=dir-name
-  # RETRY, and keep the error text. A session that has just answered its first `echo QREADY` is
-  # not necessarily ready to receive a file: the first attempt failed in ONE SECOND right after
-  # "session up at t+0s", and the old code threw the message away and failed the whole cell on a
-  # transient. Three attempts, 20 s apart, and the stderr goes into the log either way.
-  local vm=$1 d=$2 a rc
-  for a in 1 2 3; do
-    QTEST_VM=$vm timeout -k 8 900 ./tools/qtest push "$TAR" >"$M/$d-push.out" 2>&1; rc=$?
-    [ $rc -eq 0 ] && break
-    say "  $d: push attempt $a failed (rc=$rc): $(tail -1 "$M/$d-push.out" | cut -c1-140)"
-    sleep 20
+# ------------------------------------------------------------------- release delivery + snapshots
+# push_payload is GONE. Pushing a payload tarball and running install.cmd from the pushed tree is
+# the forbidden pattern (owner: "no swap fuckery is ever permitted") - it let a stale 4.3.15 tree
+# stand in for the release under test. Instruments (reboot-dialog-watch.ps1, health-check.ps1,
+# uninstall/count scripts) may still be pushed: they are the harness, not the product. The PRODUCT
+# only ever arrives via prime-run's primer stick or the release ISO attached as a CD.
+
+ensure_release_loop(){ # resolves RELEASE_LOOP (loopN on THIS qube backing the release ISO)
+  # Accepts an operator-provided RELEASE_LOOP, or RELEASE_ISO (a path), which is loop-set up
+  # read-only via udisksctl - proven root-free on this rig (the "needs sudo losetup" blocker was
+  # invented; findings/install.md [verified 2026-08-29]). Protocol 0.5 Route A requires the loop
+  # to be backed by the intended file and NOT "(deleted)", or the guest reads a stale disc.
+  if [ -z "${RELEASE_LOOP:-}" ]; then
+    [ -n "${RELEASE_ISO:-}" ] || { say "FATAL: over-existing cells need RELEASE_ISO (path to qwt-improved-setup.iso) or RELEASE_LOOP (an existing loopN)"; exit 1; }
+    [ -s "$RELEASE_ISO" ] || { say "FATAL: RELEASE_ISO=$RELEASE_ISO missing or empty"; exit 1; }
+    local dev
+    dev=$(udisksctl loop-setup -r -f "$RELEASE_ISO" 2>&1 | grep -o '/dev/loop[0-9]*' | head -1)
+    [ -n "$dev" ] || { say "FATAL: udisksctl loop-setup failed for $RELEASE_ISO"; exit 1; }
+    RELEASE_LOOP=${dev#/dev/}
+    say "  release ISO on /dev/$RELEASE_LOOP ($RELEASE_ISO)"
+  fi
+  local backing
+  backing=$(losetup -l 2>/dev/null | awk -v d="/dev/$RELEASE_LOOP" '$1==d{print $6}')
+  [ -n "$backing" ] || { say "FATAL: /dev/$RELEASE_LOOP is not an active loop device"; exit 1; }
+  case "$backing" in *'(deleted)'*)
+    say "FATAL: /dev/$RELEASE_LOOP backing file is DELETED - the guest would read a stale disc"; exit 1;; esac
+  say "  /dev/$RELEASE_LOOP backed by $backing"
+  # GATE-0 ON THE DISC ITSELF, not only on the setup tree: mount locally, run assert-payload
+  # (sums + provenance commit + installer bytes), unmount. A truncated or stale ISO is caught
+  # here, where the message is readable, instead of surfacing as an in-guest mystery.
+  local mnt
+  mnt=$(udisksctl mount --block-device "/dev/$RELEASE_LOOP" 2>/dev/null | sed -n 's/^Mounted .* at //p' | sed 's/\.$//')
+  [ -n "$mnt" ] || mnt=$(findmnt -no TARGET "/dev/$RELEASE_LOOP" 2>/dev/null | head -1)
+  [ -n "$mnt" ] || { say "FATAL: could not mount /dev/$RELEASE_LOOP to verify the ISO content"; exit 1; }
+  if ./tools/assert-payload.sh "$mnt" "$RELEASE_REF" >"$M/iso-gate0.out" 2>&1; then
+    say "  Gate-0 (ISO): $(tail -1 "$M/iso-gate0.out")"
+  else
+    say "FATAL: Gate-0 FAILED on the ISO at /dev/$RELEASE_LOOP:"
+    tail -3 "$M/iso-gate0.out" | sed 's/^/    /' | tee -a "$R"
+    udisksctl unmount --block-device "/dev/$RELEASE_LOOP" >/dev/null 2>&1
+    exit 1
+  fi
+  udisksctl unmount --block-device "/dev/$RELEASE_LOOP" >/dev/null 2>&1
+  findmnt -no TARGET "/dev/$RELEASE_LOOP" >/dev/null 2>&1 \
+    && say "  WARNING: /dev/$RELEASE_LOOP is still mounted locally after unmount - attach proceeds read-only, but investigate"
+}
+
+install_from_release_iso(){ # $1=vm $2=label -> sets RELDISC (e.g. "E:") on success
+  local vm=$1 lbl=$2 a d
+  # Attach to the RUNNING guest. NEVER --persistent on attach: it is documented as an alias for
+  # `assign --required`, applied at the qube's NEXT startup - against a running guest it succeeds
+  # and changes nothing the guest can see (three attempts lost to exactly that on 2026-08-30;
+  # protocol 0.5 Route A). A live attach is enough here: over-existing installs are ONE-stage
+  # (testsigning is already active on any QWT-carrying guest), so the disc never needs to survive
+  # a mid-install reboot - and the caller's post-install reboot drops it naturally.
+  qvm-device block attach --ro --option devtype=cdrom "$vm" "win-idd-mgmt:$RELEASE_LOOP" \
+      >"$M/$lbl-attach.out" 2>&1 \
+    || { no "$lbl: could not attach the release ISO ($(tail -1 "$M/$lbl-attach.out" | cut -c1-140))"; return 1; }
+  say "  $lbl: release ISO attached as cdrom (win-idd-mgmt:$RELEASE_LOOP)"
+  # Locate the disc BY CONTENT, never by an assumed drive letter (a stale answer disc still
+  # attached from provisioning would be picked up otherwise), and only among drives that carry
+  # BOTH install.cmd and MANIFEST.json. The attach's exit code proves nothing - the disc appears
+  # in the guest within seconds, so poll.
+  RELDISC=
+  for a in 1 2 3 4 5 6; do
+    sleep 5
+    d=$(QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run \
+        'cmd /c for %d in (D E F G H I J K L M N) do @if exist %d:\install.cmd if exist %d:\MANIFEST.json echo RELDISC=%d:' \
+        2>/dev/null | tr -d '\r' | grep -ao 'RELDISC=[D-N]:' | head -1 | cut -d= -f2)
+    [ -n "$d" ] && { RELDISC=$d; break; }
   done
-  [ $rc -eq 0 ] || { no "$d: push failed 3 times - $(tail -1 "$M/$d-push.out" | cut -c1-140)"; return 1; }
-  QTEST_VM=$vm qrun "cmd /c \"rmdir /s /q C:\\$d 2>nul & mkdir C:\\$d & tar -xzf $INC\\$(basename $TAR) -C C:\\$d && echo EXTRACT_OK\"" 2>/dev/null \
-    | grep -qa EXTRACT_OK || { no "$d: extract failed"; return 1; }
-  say "  $d: payload pushed and extracted"
+  [ -n "$RELDISC" ] || { no "$lbl: attached ISO never appeared in the guest (no drive carries install.cmd + MANIFEST.json)"; return 1; }
+  # Provenance of the DISC AS THE GUEST SEES IT - Gate-0's last leg. Its MANIFEST must name the
+  # commit under test; a plausible-looking stale medium has voided a cell before (2026-08-29).
+  local got
+  got=$(QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run "cmd /c type $RELDISC\\MANIFEST.json" 2>/dev/null \
+        | tr -d '\r' | grep -a 'driver_repo_commit' | grep -ao '[0-9a-f]\{40\}' | head -1)
+  if [ "${got:0:12}" != "${RELEASE_SHA:0:12}" ]; then
+    no "$lbl: disc at $RELDISC was built from '${got:-unreadable}', expected ${RELEASE_SHA:0:12} - refusing to install from it"
+    return 1
+  fi
+  ok "$lbl: release disc verified at $RELDISC (driver_repo_commit ${got:0:12})"
+}
+
+detach_release_iso(){ # $1=vm $2=label - best effort. A non-persistent attach dies with the
+  # guest's next shutdown anyway (every cell reboots for verify_installed), so a failed detach is
+  # logged, never fatal. NOTE: `qvm-device block list` is policy-refused from this qube
+  # (findings/rig.md), so the detach verb is exercised optimistically here - if dom0 refuses it
+  # too, the shutdown-drop covers us and the message below says so.
+  local vm=$1 lbl=$2
+  if qvm-device block detach "$vm" "win-idd-mgmt:$RELEASE_LOOP" >/dev/null 2>&1; then
+    say "  $lbl: release ISO detached"
+  else
+    say "  $lbl: could not detach the ISO (harmless: the live attach drops at the guest's next shutdown)"
+  fi
+}
+
+clear_prime_leftovers(){ # $1=vm - prime-run's own exit text: "The stick is still assigned
+  # --required and qemu-extra-args is still set - clear both before using this guest as a cell
+  # subject." Without this, every later boot of the subject depends on this qube's loop layout.
+  local vm=$1 stickloop
+  stickloop=$(losetup -l 2>/dev/null | awk '$6 ~ /answer-usb\.img$/{sub("/dev/","",$1); print $1; exit}')
+  if [ -n "$stickloop" ]; then
+    if qvm-device block unassign "$vm" "win-idd-mgmt:$stickloop" >/dev/null 2>&1; then
+      say "  $vm: primer stick unassigned (win-idd-mgmt:$stickloop)"
+    else
+      say "  WARNING: could not unassign the primer stick from $vm - its boots depend on this qube's loop layout until cleared"
+    fi
+  else
+    say "  WARNING: no loop backing answer-usb.img found - primer stick assignment not cleared for $vm"
+  fi
+  qvm-features --unset "$vm" qemu-extra-args 2>/dev/null
+}
+
+park_installed(){ # $1=vm $2=label - halt and park the just-installed subject as the campaign's
+  # 'installed' snapshot (owner 2026-09-01: "we do snapshots for optimizations"). The release is
+  # installed ONCE per OS per campaign; later cells that merely need "a guest carrying the
+  # release" unpark this in ~2 s instead of reinstalling.
+  local vm=$1 lbl=$2 ck="ckpt-$vm-installed"
+  if [ "$(w_state "$vm")" != Halted ]; then
+    qvm-shutdown "$vm" >/dev/null 2>&1
+    w_halt "$vm" 420 "$lbl-park-halt" say || { no "$lbl: subject would not halt for parking"; return 1; }
+  fi
+  if qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "$ck"; then
+    say "  $lbl: replacing the previous campaign's park $ck"
+    qvm-remove -f "$ck" >/dev/null 2>&1 || { no "$lbl: stale park $ck exists and cannot be removed"; return 1; }
+  fi
+  if ./mgmt/harness/checkpoint.sh park "$vm" installed >>"$R" 2>&1; then
+    ok "$lbl: installed state parked ($ck) - remove at campaign end: qvm-remove $ck"
+  else
+    no "$lbl: park failed - snapshot cells will refuse until a park exists"
+    return 1
+  fi
+}
+
+unpark_installed(){ # $1=vm $2=label - restore the campaign's 'installed' snapshot into $vm.
+  local vm=$1 lbl=$2
+  _halt_other_windows "$vm"
+  qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "$vm" \
+    || { no "$lbl: subject $vm does not exist - run the clean cell first (it creates, installs and parks)"; return 1; }
+  if [ "$(w_state "$vm")" != Halted ]; then
+    qvm-shutdown "$vm" >/dev/null 2>&1
+    w_halt "$vm" 420 "$lbl-unpark-halt" say || { no "$lbl: subject would not halt for unpark"; return 1; }
+  fi
+  if ./mgmt/harness/checkpoint.sh unpark "$vm" installed >>"$R" 2>&1; then
+    say "  $lbl: unparked $vm from ckpt-$vm-installed (snapshot entry - the release is NOT reinstalled per cell)"
+  else
+    no "$lbl: no restorable 'installed' park for $vm - run the clean cell first (it installs ONCE and parks)"
+    return 1
+  fi
+}
+
+accept_grade(){ # $1=vm $2=label - the post-install acceptance battery, REUSED not reinvented
+  # (owner model: grading an already-installed guest = tools/accept-clean.sh SKIP_PROVISION=1 -
+  # boot-path reboot, WU posture, health-check.ps1, pixels-actually-change, window chrome).
+  # verify_installed above grades the INSTALL (branch-vs-claim, release binary hash, monitor
+  # state, autologon); this grades the RESULTING GUEST. Writing a second battery for that is what
+  # protocol 0.8 forbids, and the last hand-rolled one returned 1603.
+  local vm=$1 lbl=$2 nv allowna=0
+  nv=$(qvm-prefs "$vm" netvm 2>/dev/null)
+  # ALLOW_NA=1 is accept-clean's DOCUMENTED posture for a deliberately-offline subject
+  # (netvm=''): the health-check's network assertions cannot apply there, and accept-clean warns
+  # loudly about every tolerated NA. On a netvm-carrying subject every check must be asserted.
+  [ -z "$nv" ] && allowna=1
+  say "  $lbl: accept-clean SKIP_PROVISION=1 ALLOW_NA=$allowna (evidence: $M/$lbl-accept)"
+  SKIP_PROVISION=1 ALLOW_NA=$allowna ./tools/accept-clean.sh "$vm" no-loop-in-skip-mode "$M/$lbl-accept" \
+      >"$M/$lbl-accept.out" 2>&1
+  local rc=$?
+  say "  $lbl: accept-clean says: $(tail -1 "$M/$lbl-accept.out" | cut -c1-200)"
+  if [ $rc -eq 0 ] && grep -qa 'ACCEPT=PASS' "$M/$lbl-accept.out"; then
+    ok "$lbl: accept-clean battery PASS (boot path, WU posture, health, pixels, chrome)"
+  else
+    no "$lbl: accept-clean battery FAILED (see $M/$lbl-accept.out)"
+  fi
 }
 
 # Run the installer and judge the outcome. Sets CELL_RC.
-run_install(){ # $1=vm $2=label $3=payload-dir $4=extra-args
-  local vm=$1 lbl=$2 d=$3 extra=${4:-}
+# $3 is the INSTALL SOURCE the guest runs install.cmd from - under the release-only model that is
+# the CD drive returned by install_from_release_iso (e.g. "E:"), never a pushed directory.
+run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cmd) $4=extra-args
+  local vm=$1 lbl=$2 src=$3 extra=${4:-}
   # Clear BOTH logs. The MSI verbose log lives at a fixed path and survives from earlier installs,
   # so without this the capture can show a two-week-old install and read as this run's evidence.
   # VERIFY THE CLEAR (H1). A failed delete leaves the GOLDEN's own install log in place - every
@@ -220,7 +403,7 @@ run_install(){ # $1=vm $2=label $3=payload-dir $4=extra-args
   # 2026-08-30 on win10-app: no jsonl, no powershell process.
   QTEST_VM=$vm qrun "cmd /c start \"dlgwatch\" /min powershell -NoProfile -ExecutionPolicy Bypass -File $INC\\reboot-dialog-watch.ps1 -DurationSeconds 2700" >/dev/null 2>&1
   say "  $lbl: reboot-dialog watcher armed"
-  QTEST_VM=$vm qrun "cmd /c start \"\" /min C:\\$d\\install.cmd /auto /autologon:qubes $extra" >/dev/null 2>&1
+  QTEST_VM=$vm qrun "cmd /c start \"\" /min $src\\install.cmd /auto /autologon:qubes $extra" >/dev/null 2>&1
   # SEED_DELAY: write the PV reboot Request mid-MSI, which is when the field gets it.
   #
   # CONTAMINATION GUARD, added 2026-08-29. SEED_DELAY is an ENVIRONMENT variable, so if it is set
@@ -540,61 +723,100 @@ cell_grade(){ # $1=vm $2=tag
 }
 
 # --------------------------------------------------------------------------- cells
-cell_fresh_1stage(){ # $1=golden $2=tpl $3=tag   testsigning already active -> stage 2, no reboot
-  say "######## CELL $3-fresh-1stage ########"
-  reclone "$1" "$2" || { no "$3-fresh-1stage: could not reclone"; return; }
-  start_vm "$2"
-  w_session "$2" 600 "$3-1stage-boot" "$M" say || { no "$3-fresh-1stage: clone did not boot"; return; }
-  push_payload "$2" q4315 || return
-  run_install "$2" "$3-1stage" q4315
-  if [ "$(w_state "$2")" = Halted ]; then start_vm "$2"; fi
-  verify_installed "$2" "$3-1stage"
+cell_clean(){ # $1=pristine-base $2=subject $3=tag
+  # THE clean-install cell (D0 x E1). A pristine base has NO qrexec, so the release setup tree
+  # rides the primer stick and the guest installs itself as SYSTEM (prime-run job 'ours') - the
+  # only channel into a pristine guest, and the payload it carries IS the release. Because the
+  # bases keep testsigning OFF, this is inherently the TRUE two-stage path (stage 1, reboot,
+  # stage 2). The old fresh-1stage/fresh-2stage constructions are retired: they needed a
+  # qrexec-carrying golden AND a pushed tarball - both forbidden under the release-only model.
+  #
+  # ENDS BY PARKING: the release is installed ONCE per OS per campaign; the snapshot cells
+  # (reinstall, grade re-entries) unpark this state in seconds instead of reinstalling.
+  say "######## CELL $3-clean (prime-run from $1: pristine -> two-stage clean install of the RELEASE) ########"
+  local base=$1 vm=$2 tag=$3
+  _halt_other_windows "$vm"
+  say "  prime-run $base -> $vm (job ours, payload $RELEASE_SETUP)"
+  ./mgmt/harness/prime-run.sh "$base" "$vm" ours --payload "$RELEASE_SETUP" >"$M/$tag-clean-prime.log" 2>&1
+  local prc=$?
+  say "  prime-run tail: $(tail -1 "$M/$tag-clean-prime.log" | cut -c1-180)"
+  case $prc in
+    0) ok "$tag-clean: prime-run delivered a qrexec-answering installed guest" ;;
+    1) no "$tag-clean: prime-run TERMINAL (see $M/$tag-clean-prime.log)"; return ;;
+    2) no "$tag-clean: prime-run hit its deadline (see $M/$tag-clean-prime.log)"; return ;;
+    *) no "$tag-clean: prime-run rc=$prc (see $M/$tag-clean-prime.log)"; return ;;
+  esac
+  clear_prime_leftovers "$vm"
+  # Park FIRST, grade the parked state AFTER: the snapshot must be the clean installed state,
+  # not one carrying grading residue (notepad, typed markers, an extra boot's mutations).
+  park_installed "$vm" "$tag-clean" || say "  $tag-clean: continuing without a park - snapshot cells will refuse loudly"
+  start_vm "$vm"
+  w_session "$vm" 900 "$tag-clean-boot" "$M" say || { no "$tag-clean: installed guest did not come back for grading"; return; }
+  # Grade the install. ENTRY_PRISTINE=1 proves the entry state from the installer's own first
+  # PRECONDITION line (there is no run marker: the installer was launched by the primer job, not
+  # by run_install) and demands the installer's own 'clean install path' marker. CELL_PRIMED=1
+  # declares the primer honestly - under the release-only model the clean subject is primer-built
+  # BY CONSTRUCTION, and _assert_not_primed still fails on an unreadable probe.
+  E2E_MARK=""; ENTRY_PRISTINE=1; EXPECT_MODE=""; CELL_PRIMED=1
+  verify_installed "$vm" "$tag-clean"
+  ENTRY_PRISTINE=0
+  accept_grade "$vm" "$tag-clean"
 }
 
-cell_fresh_2stage(){ # testsigning OFF first -> the TRUE two-stage path, never tested before
-  say "######## CELL $3-fresh-2stage (testsigning OFF -> stage 1 -> reboot -> stage 2) ########"
-  reclone "$1" "$2" || { no "$3-fresh-2stage: could not reclone"; return; }
-  start_vm "$2"
-  w_session "$2" 600 "$3-2stage-pre" "$M" say || { no "$3-fresh-2stage: clone did not boot"; return; }
-  QTEST_VM=$2 qrun 'cmd /c bcdedit /set testsigning off & echo TS_OFF' 2>/dev/null | grep -qa TS_OFF \
-    && say "  testsigning turned OFF for the next boot" || { no "$3-fresh-2stage: could not turn testsigning off"; return; }
-  QTEST_VM=$2 qrun 'cmd /c shutdown /r /t 0' >/dev/null 2>&1
-  w_halt "$2" 420 "$3-2stage-tsoff-halt" say || { no "$3-fresh-2stage: did not halt"; return; }
-  start_vm "$2"
-  w_session "$2" 600 "$3-2stage-boot" "$M" say || { no "$3-fresh-2stage: did not come back with testsigning off"; return; }
-  local sso; sso=$(QTEST_VM=$2 timeout -k 5 60 ./tools/qtest run 'cmd /c reg query "HKLM\SYSTEM\CurrentControlSet\Control" /v SystemStartOptions' 2>/dev/null | tr -d '\r' | grep -a REG_SZ | head -1)
-  say "  SystemStartOptions now: $sso"
-  echo "$sso" | grep -qai TESTSIGNING && { no "$3-fresh-2stage: testsigning still ACTIVE - this cell cannot test what it claims"; return; }
-  ok "$3-fresh-2stage: precondition real (testsigning inactive) - the installer must now do stage 1"
-  push_payload "$2" q4315 || return
-  run_install "$2" "$3-2stage-s1" q4315
-  # stage 1 ends by rebooting; this testbed halts on that.
-  if [ "$(w_state "$2")" = Halted ]; then
-    say "  stage 1 rebooted the guest - starting it for stage 2"
-    start_vm "$2"
-    w_session "$2" 900 "$3-2stage-s2boot" "$M" say
-    case $? in
-      1) no "$3-fresh-2stage: BRICKED after stage 1 - recovery screen"; return ;;
-      2) no "$3-fresh-2stage: never came back after stage 1"; return ;;
-    esac
-    # stage 2 resumes from the boot task; wait for it to write its RESULT
-    w_install "$2" 2400 "$3-2stage-s2" "$M" say "$GLOG"
-    grep -qa 'stage2' "$M/$3-2stage-s2-install.log" 2>/dev/null \
-      && ok "$3-fresh-2stage: stage 2 ran after the reboot" || no "$3-fresh-2stage: no stage-2 marker in the log"
-  else
-    no "$3-fresh-2stage: stage 1 did not reboot the guest - the two-stage path did not happen"
-  fi
-  verify_installed "$2" "$3-2stage"
+cell_reinstall(){ # $1=subject $2=tag - same-version reinstall of the release over itself (C6)
+  # Entry = the campaign's 'installed' SNAPSHOT (unpark, ~2 s) - never a reinstall-from-scratch
+  # and never a reclone: cell_clean installed the release once and parked it. Install source =
+  # the release ISO attached as a CD, per the README. The snapshot carries exactly this release,
+  # so the installer's own branch authority must report the same-version reinstall.
+  say "######## CELL $2-reinstall (unpark 'installed' snapshot -> same-version reinstall from the release ISO) ########"
+  local vm=$1 tag=$2
+  unpark_installed "$vm" "$tag-reinstall" || return
+  start_vm "$vm"
+  w_session "$vm" 900 "$tag-reinstall-boot" "$M" say || { no "$tag-reinstall: unparked subject did not boot"; return; }
+  install_from_release_iso "$vm" "$tag-reinstall" || return
+  ENTRY_PRISTINE=0; EXPECT_MODE=in-place-same-version-reinstall; CELL_PRIMED=1
+  run_install "$vm" "$tag-reinstall" "$RELDISC"
+  detach_release_iso "$vm" "$tag-reinstall"
+  if [ "$(w_state "$vm")" = Halted ]; then start_vm "$vm"; fi
+  verify_installed "$vm" "$tag-reinstall"
+  accept_grade "$vm" "$tag-reinstall"
 }
 
-cell_seeded(){ # the field's state: a pending PV reboot request + the monitor set to auto-start
-  say "######## CELL $3-seeded (pending xenbus Request + monitor auto-start) ########"
+cell_upgrade(){ # $1=previous-ours entry image $2=subject $3=tag - previous release -> this one
+  # Entry = a guest CARRYING THE PREVIOUS RELEASE (e.g. win10-iqi with shipped 4.3.17), named via
+  # G10/G11 and custody-gated at the driver (sealed golden or prime-run fixture record). reclone
+  # - with its dirty-volume recovery - puts it into the subject; the release ISO as a CD installs
+  # over it. EXPECT_MODE defaults to the in-place MSI major upgrade that the version-bump
+  # discipline guarantees; override with UPGRADE_EXPECT_MODE only for a deliberate variant.
+  say "######## CELL $3-upgrade (previous ours [$1] -> release, installed from the ISO) ########"
+  local prev=$1 vm=$2 tag=$3
+  reclone "$prev" "$vm" || { no "$tag-upgrade: could not reclone"; return; }
+  start_vm "$vm"
+  w_session "$vm" 900 "$tag-upgrade-boot" "$M" say || { no "$tag-upgrade: clone did not boot"; return; }
+  local before; before=$(QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run 'cmd /c reg query "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v Version' 2>/dev/null | tr -d '\r' | grep -a REG_SZ | head -1)
+  say "  QWT before upgrade: ${before:-<none>}"
+  [ -n "$before" ] || { no "$tag-upgrade: entry image carries NO installed QWT - not an upgrade cell, INVALID-PRECONDITION"; return; }
+  install_from_release_iso "$vm" "$tag-upgrade" || return
+  ENTRY_PRISTINE=0; EXPECT_MODE="${UPGRADE_EXPECT_MODE:-in-place-msi-major-upgrade}"; CELL_PRIMED=1
+  run_install "$vm" "$tag-upgrade" "$RELDISC"
+  detach_release_iso "$vm" "$tag-upgrade"
+  if [ "$(w_state "$vm")" = Halted ]; then start_vm "$vm"; fi
+  verify_installed "$vm" "$tag-upgrade"
+  accept_grade "$vm" "$tag-upgrade"
+}
+
+cell_seeded(){ # $1=QWT-carrying entry image $2=subject $3=tag
+  # The field's state: an EXISTING QWT whose xenbus_monitor is armed AND RUNNING, plus a PV
+  # reboot Request written MID-MSI (SEED_DELAY - opt-in via SEED_CELL=1, see run_install's
+  # contamination guard). Entry = a QWT-carrying fixture named via G10/G11 (previous-ours is the
+  # honest field entry); install source = the release ISO as a CD. EXPECT_MODE is the operator's
+  # claim about the entry (previous-ours -> SEEDED_EXPECT_MODE=in-place-msi-major-upgrade).
+  say "######## CELL $3-seeded (pending xenbus Request + monitor auto-start, install from the ISO) ########"
   say "  THIS IS THE SUSPECTED BRICK. Control (seed off) completed in 90 s and stayed healthy;"
   say "  the seeded run halted at 80 s mid-MSI and came back in Automatic Repair. n=2, unproven."
   reclone "$1" "$2" || { no "$3-seeded: could not reclone"; return; }
   start_vm "$2"
   w_session "$2" 600 "$3-seeded-boot" "$M" say || { no "$3-seeded: clone did not boot"; return; }
-  push_payload "$2" q4315 || return
   local XK='HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor'
   # TIMING IS THE WHOLE TEST, and the old timing made this cell meaningless. Writing the Request
   # BEFORE the install let the already-running, idle monitor act on it immediately: measured
@@ -626,87 +848,44 @@ cell_seeded(){ # the field's state: a pending PV reboot request + the monitor se
     # armed-monitor variant and must not be cited as one.
     no "$3-seeded: INVALID-PRECONDITION - monitor is '${mst:-unreadable}', not RUNNING; this is not the armed-monitor arm"
   fi
-  run_install "$2" "$3-seeded" q4315
+  install_from_release_iso "$2" "$3-seeded" || return
+  ENTRY_PRISTINE=0; EXPECT_MODE="${SEEDED_EXPECT_MODE:-}"; CELL_PRIMED=1
+  run_install "$2" "$3-seeded" "$RELDISC"
+  detach_release_iso "$2" "$3-seeded"
   if [ "$(w_state "$2")" = Halted ]; then
     say "  the guest HALTED during the install - this is the reproduction if it now fails to boot"
     start_vm "$2"
   fi
   verify_installed "$2" "$3-seeded"
+  accept_grade "$2" "$3-seeded"
 }
 
-cell_fresh(){ # $1=golden $2=tpl $3=tag  - a TRUE fresh install: QWT removed first
-  # The goldens all carry QWT already, so "fresh" has to be constructed: uninstall what is there,
-  # confirm it is gone, then install ours onto a guest with no previous QWT. This is the path a
-  # brand-new qube takes, and it is the one the xenbus.inf change governs (the driver package IS
-  # applied when it was never installed, so AddService/StartType actually take effect).
-  say "######## CELL $3-fresh (uninstall QWT, then install ours) ########"
-  reclone "$1" "$2" || { no "$3-fresh: could not reclone"; return; }
-  start_vm "$2"
-  w_session "$2" 600 "$3-fresh-boot" "$M" say || { no "$3-fresh: clone did not boot"; return; }
-  local before; before=$(QTEST_VM=$2 timeout -k 5 60 ./tools/qtest run 'cmd /c reg query "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v Version' 2>/dev/null | tr -d '\r' | grep -a REG_SZ | head -1)
-  say "  QWT before: ${before:-<none>}"
-  # Uninstall every registered QWT product, quietly, suppressing any reboot.
-  QTEST_VM=$2 timeout -k 8 1200 ./tools/qtest pushrun guest/uninstall-qwt.ps1 2>/dev/null | tr -d '\r' | grep -a "=== UNINSTALL ===" | tail -1 | sed 's/^/  /' | tee -a "$R"
-  # The uninstall may want a reboot to finish; give it one so the next install starts clean.
-  QTEST_VM=$2 qrun 'cmd /c shutdown /r /t 0' >/dev/null 2>&1
-  w_halt "$2" 420 "$3-fresh-unihalt" say || { no "$3-fresh: guest did not reboot after uninstall"; return; }
-  start_vm "$2"
-  w_session "$2" 900 "$3-fresh-reboot" "$M" say
-  case $? in
-    1) no "$3-fresh: guest bricked by the UNINSTALL, before our install ran at all"; return ;;
-    2) no "$3-fresh: guest never came back after the uninstall reboot"; return ;;
+cell_stock(){ # $1=stock-4.2.2 fixture $2=subject $3=tag - CAPABILITY ONLY, never a default cell
+  # Owner 2026-09-03: never RE-test stock per campaign. The capability stays for the rare
+  # deliberate run, but the entry is a stock fixture built on demand by
+  #     mgmt/harness/prime-run.sh <base> <fixture> stock-422
+  # (provisioning, NEVER uninstalling: the old in-cell "uninstall ours, push the vendor MSI"
+  # construction is gone - it pushed a payload, and stock preconditions built by uninstalling
+  # were already ruled out in findings/install.md: the only proven route for the stock MSI is
+  # the provisioning job). Then: the release ISO as a CD installs over stock.
+  say "######## CELL $3-stock (stock 4.2.2 fixture [$1] -> release, installed from the ISO) ########"
+  local entry=$1 vm=$2 tag=$3
+  reclone "$entry" "$vm" || { no "$tag-stock: could not reclone"; return; }
+  start_vm "$vm"
+  w_session "$vm" 900 "$tag-stock-boot" "$M" say || { no "$tag-stock: clone did not boot"; return; }
+  local sv; sv=$(QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run 'cmd /c reg query "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v Version' 2>/dev/null | tr -d '\r' | grep -a REG_SZ | head -1)
+  say "  QWT at entry: ${sv:-<none>}"
+  case "$sv" in
+    *4.2.2*) ok "$tag-stock: precondition real (stock 4.2.2 installed)" ;;
+    *) no "$tag-stock: entry does not carry stock 4.2.2 ($sv) - build the fixture with prime-run job stock-422; cell INVALID"; return ;;
   esac
-  # ASSERT ON THE SIGNAL THE CODE UNDER TEST USES. The old check read the ITL registry Version key -
-  # which our own uninstall deletes - while the MSI PRODUCT REGISTRATION survived. It therefore
-  # printed "precondition real (no QWT installed)" about a guest where the installer then found
-  # "installed QWT (4.3.2.0) ... IN-PLACE MSI major upgrade", so the cell upgraded over a
-  # half-uninstalled system: a state no user produces, and its failure was not evidence about us.
-  local prod; prod=$(QTEST_VM=$2 timeout -k 8 240 ./tools/qtest pushrun guest/count-qwt.ps1 \
-    2>/dev/null | tr -d '\r' | grep -aoE 'QWTPRODUCTS=[0-9]+' | tail -1 | cut -d= -f2)
-  say "  QWT products still registered after uninstall: ${prod:-<unreadable>}"
-  if [ "${prod:-1}" != 0 ]; then
-    no "$3-fresh: ${prod:-?} QWT product(s) still registered - NOT a fresh install, cell INVALID"
-    return
-  fi
-  ok "$3-fresh: precondition real (no QWT product registered - the signal the installer reads)"
-  push_payload "$2" q4315 || return
-  run_install "$2" "$3-fresh" q4315
-  if [ "$(w_state "$2")" = Halted ]; then start_vm "$2"; fi
-  verify_installed "$2" "$3-fresh"
-}
-
-cell_upgrade_stock(){ # $1=golden $2=tpl $3=tag  - stock QWT 4.2.2 in place, then ours over it
-  # The field's actual path: a guest running the shipped 4.2.2 gets our package on top.
-  say "######## CELL $3-upgrade-stock (stock 4.2.2 -> 4.3.15) ########"
-  reclone "$1" "$2" || { no "$3-upgrade-stock: could not reclone"; return; }
-  start_vm "$2"
-  w_session "$2" 600 "$3-stock-boot" "$M" say || { no "$3-upgrade-stock: clone did not boot"; return; }
-  # Remove the newer QWT first: Windows Installer will not "upgrade" down to 4.2.2.
-  QTEST_VM=$2 timeout -k 8 1200 ./tools/qtest pushrun guest/uninstall-qwt.ps1 2>/dev/null | tr -d '\r' | grep -a "=== UNINSTALL ===" | tail -1 | sed 's/^/  stock-prep /' | tee -a "$R"
-  QTEST_VM=$2 qrun 'cmd /c shutdown /r /t 0' >/dev/null 2>&1
-  w_halt "$2" 420 "$3-stock-unihalt" say || { no "$3-upgrade-stock: no reboot after removing QWT"; return; }
-  start_vm "$2"
-  w_session "$2" 900 "$3-stock-clean" "$M" say || { no "$3-upgrade-stock: guest lost after removing QWT"; return; }
-  # Push and install the SHIPPED 4.2.2 MSI - the real thing users have.
-  QTEST_VM=$2 timeout -k 8 900 ./tools/qtest push vendor/qwt-4.2.2/installer.msi >/dev/null 2>&1 \
-    || { no "$3-upgrade-stock: could not push the stock MSI"; return; }
-  QTEST_VM=$2 timeout -k 8 1800 ./tools/qtest run "cmd /c msiexec /i \"$INC\\installer.msi\" /qn /norestart REBOOT=ReallySuppress /l*v C:\\stock-install.log & echo STOCKRC=%ERRORLEVEL%" 2>/dev/null | tr -d '\r' | grep -a 'STOCKRC=' | tail -1 | sed 's/^/  stock install /' | tee -a "$R"
-  QTEST_VM=$2 qrun 'cmd /c shutdown /r /t 0' >/dev/null 2>&1
-  w_halt "$2" 420 "$3-stock-halt" say
-  start_vm "$2"
-  w_session "$2" 900 "$3-stock-up" "$M" say
-  case $? in
-    1) no "$3-upgrade-stock: guest bricked by the STOCK install (not ours)"; return ;;
-    2) no "$3-upgrade-stock: guest never came back after the stock install"; return ;;
-  esac
-  local sv; sv=$(QTEST_VM=$2 timeout -k 5 60 ./tools/qtest run 'cmd /c reg query "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v Version' 2>/dev/null | tr -d '\r' | grep -a REG_SZ | head -1)
-  say "  stock QWT now: ${sv:-<none>}"
-  case "$sv" in *4.2.2*) ok "$3-upgrade-stock: precondition real (stock 4.2.2 installed)" ;;
-                *) no "$3-upgrade-stock: stock 4.2.2 is not installed ($sv) - cell INVALID"; return ;; esac
-  push_payload "$2" q4315 || return
-  run_install "$2" "$3-upgrade-stock" q4315
-  if [ "$(w_state "$2")" = Halted ]; then start_vm "$2"; fi
-  verify_installed "$2" "$3-upgrade-stock"
+  install_from_release_iso "$vm" "$tag-stock" || return
+  ENTRY_PRISTINE=0; EXPECT_MODE=in-place-msi-major-upgrade; CELL_PRIMED=1
+  run_install "$vm" "$tag-stock" "$RELDISC"
+  detach_release_iso "$vm" "$tag-stock"
+  if [ "$(w_state "$vm")" = Halted ]; then start_vm "$vm"; fi
+  verify_installed "$vm" "$tag-stock"
+  accept_grade "$vm" "$tag-stock"
 }
 
 cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm - derive an AppVM and cold boot it
@@ -721,6 +900,20 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm - derive an AppVM and cold boot
   if [ "$(w_state "$tpl")" != Halted ]; then
     qvm-shutdown "$tpl" >/dev/null 2>&1
     w_halt "$tpl" 420 "$3-appvm-tplhalt" say || { no "$3-appvm: template would not halt"; return; }
+  fi
+  # SNAPSHOT ENTRY (owner: "we do snapshots for optimizations"). The AppVM boots the template's
+  # system volume, so what this cell grades is whatever the template happens to carry after the
+  # previous cell. The deterministic entry is the campaign's 'installed' park - restore it when
+  # it exists (~2 s); without one, say loudly that the cell grades the template AS-IS, so the
+  # transcript records which state was actually derived from.
+  if qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "ckpt-$tpl-installed"; then
+    if ./mgmt/harness/checkpoint.sh unpark "$tpl" installed >>"$R" 2>&1; then
+      say "  $3-appvm: template restored from ckpt-$tpl-installed (snapshot entry, release installed)"
+    else
+      say "  WARNING: unpark of $tpl failed - grading the template AS-IS (previous cell's state)"
+    fi
+  else
+    say "  $3-appvm: no 'installed' park for $tpl - grading the template AS-IS (previous cell's state)"
   fi
   if [ "$(w_state "$app")" != Halted ]; then
     qvm-shutdown "$app" >/dev/null 2>&1; w_halt "$app" 420 "$3-appvm-halt" say >/dev/null 2>&1
@@ -768,38 +961,55 @@ d=open(sys.argv[1],'rb').read(33); w,h=struct.unpack('>II',d[16:24]); print(w,h)
 }
 
 # --------------------------------------------------------------------------- driver
-[ -s "$TAR" ] || { say "FATAL no setup tarball at $TAR"; exit 1; }
+# GATE-0: the release package is verified BEFORE anything touches a guest, and it is the ONLY
+# source of our code in every cell. RELEASE_SETUP names the release setup tree (the extracted
+# qwt-improved-setup artifact - prime-run's --payload); RELEASE_ISO/RELEASE_LOOP name the SAME
+# release's ISO for the over-existing cells. Deliberately NO default: a default pointing at a
+# stale tree is exactly how a 4.3.15 tarball once stood in for the release under test.
+[ -n "${RELEASE_SETUP:-}" ] || {
+  say "FATAL: RELEASE_SETUP is unset. Point it at the release setup tree, e.g."
+  say "  RELEASE_SETUP=\$HOME/deslice-dl-setup RELEASE_ISO=\$HOME/rel/qwt-improved-setup.iso \\"
+  say "  RELEASE_COMMIT=<sha> CELLS=\"win10-clean win10-reinstall\" G10=win10-iqi mgmt/harness/matrix.sh"
+  exit 1; }
+[ -d "$RELEASE_SETUP" ] || { say "FATAL: RELEASE_SETUP=$RELEASE_SETUP is not a directory"; exit 1; }
+RELEASE_REF="${RELEASE_COMMIT:-HEAD}"
+RELEASE_SHA=$(git rev-parse "$RELEASE_REF" 2>/dev/null)
+[ -n "$RELEASE_SHA" ] || { say "FATAL: cannot resolve RELEASE_COMMIT='$RELEASE_REF' in this repo"; exit 1; }
+if ./tools/assert-payload.sh "$RELEASE_SETUP" "$RELEASE_REF" >"$M/setup-gate0.out" 2>&1; then
+  say "Gate-0 (setup tree): $(tail -1 "$M/setup-gate0.out")"
+else
+  say "FATAL: Gate-0 FAILED on RELEASE_SETUP=$RELEASE_SETUP:"
+  tail -3 "$M/setup-gate0.out" | sed 's/^/  /' | tee -a "$R"
+  exit 1
+fi
 # ASHA is the release binary's hash, and verify_installed greps the guest's RESULT for
-# "installed_gui_agent_sha256":"$ASHA. If the file is missing, sha256sum fails, ASHA becomes EMPTY,
-# and that grep degenerates to matching the bare key - i.e. it matches ANY result and the cell
-# passes without ever checking which build installed. That is a manufactured PASS for a build that
-# may never have run, which H1 names INVALID-WRONGBUILD. Fail closed instead.
-[ -s "$S/dl/qwt-full-package/gui-agent.exe" ] || {
-  say "FATAL: $S/dl/qwt-full-package/gui-agent.exe missing - without it the agent-hash check"
+# "installed_gui_agent_sha256":"$ASHA. If it were empty that grep would degenerate to matching the
+# bare key - i.e. ANY result passes without ever checking which build installed (INVALID-
+# WRONGBUILD). The release ships the byte-exact agent at reference/gui-agent.exe and names its
+# hash in MANIFEST.json reference_binaries; require BOTH and require them to AGREE. Fail closed.
+[ -s "$RELEASE_SETUP/reference/gui-agent.exe" ] || {
+  say "FATAL: $RELEASE_SETUP/reference/gui-agent.exe missing - without it the agent-hash check"
   say "       silently matches any build and every cell would report a vacuous PASS."
   exit 1; }
-ASHA=$(sha256sum "$S/dl/qwt-full-package/gui-agent.exe" | cut -c1-12)
-[ -n "$ASHA" ] || { say "FATAL: could not hash the release gui-agent.exe"; exit 1; }
-PV=$(python3 -c "import json;print(json.load(open('$S/dl/qwt-improved-iso/MANIFEST.json'))['package_version'])")
-# GOLDEN SELECTION + CUSTODY GATE. The cell driver used to hardcode win10-clean / win11-fresh,
-# which are the historical goldens - and win10-clean was used as a scratch guest for a whole
-# evening, so every clone made from it inherited that contamination silently. Goldens are now named
-# here (overridable) and VERIFIED against their seal before any cell runs: a drifted or unsealed
-# golden aborts the campaign instead of quietly poisoning it.
-#
-# NO DEFAULT ANY MORE (2026-08-30). It used to default to win10-goldr/win11-goldr, which carried
-# the release UNDER TEST - so every "fresh"/"upgrade" cell cloned a guest that already had the
-# candidate on it and silently took the same-version-reinstall branch. The cell names claimed one
-# thing and the installer did another. There is no safe default here: the correct entry differs per
-# cell (pristine base for a clean install, an N-1 fixture for C3, a stock fixture for C4), so name
-# it explicitly or the run does not start.
-[ -n "${G10:-}" ] || [ -n "${G11:-}" ] || {
-  say "FATAL: neither G10 nor G11 is set. Name the entry image(s) explicitly, e.g."
-  say "  G10=win10-c1 CELLS=win10-seeded ...        # a fixture built by prime-run.sh"
-  say "  G10=win10-base CELLS=...                   # a sealed pristine golden"
-  say "There is no default: the right entry differs per cell, and the old default (win10-goldr)"
-  say "carried the candidate itself, which turned every upgrade cell into a reinstall cell."
+ASHA=$(sha256sum "$RELEASE_SETUP/reference/gui-agent.exe" | cut -c1-12)
+MSHA=$(python3 -c "import json;print((json.load(open('$RELEASE_SETUP/MANIFEST.json')).get('reference_binaries') or {}).get('gui-agent.exe',''))" 2>/dev/null | cut -c1-12)
+{ [ -n "$ASHA" ] && [ "$ASHA" = "$MSHA" ]; } || {
+  say "FATAL: reference/gui-agent.exe hash ('$ASHA') disagrees with MANIFEST reference_binaries ('$MSHA')"
   exit 1; }
+PV=$(python3 -c "import json;print(json.load(open('$RELEASE_SETUP/MANIFEST.json'))['package_version'])")
+# ENTRY IMAGES + CUSTODY GATE.
+#
+# B10/B11 = the pristine bases the clean cells prime from. These DEFAULT to win10-base/win11-base
+# because the owner's model names exactly those two as the ONLY sealed goldens - there is nothing
+# else a clean cell could legitimately enter from. Their seal is verified here AND again by
+# prime-run itself (both fail closed).
+#
+# G10/G11 = the entry image for the OVER-EXISTING cells (upgrade/seeded: a previous-ours fixture
+# such as win10-iqi; stock: a stock-422 fixture). NO DEFAULT (2026-08-30): the old default
+# carried the release under test, which silently turned every upgrade cell into a same-version
+# reinstall. Name it explicitly or the run does not start.
+B10="${B10:-win10-base}"
+B11="${B11:-win11-base}"
 
 # CUSTODY GATE - two acceptable provenances, both strict, neither optional.
 #   sealed golden : golden.sh verify   - untouched since it was sealed
@@ -829,36 +1039,61 @@ say "=== MATRIX for $PV (agent $ASHA) ==="
 # A campaign with no cells is an operator error, not a default.
 [ -n "${CELLS:-}" ] || {
   say "FATAL: CELLS is unset. Name the cells explicitly, e.g."
-  say "  CELLS=\"win10-1stage win10-2stage win10-stock win11-1stage win10-appvm win11-appvm\""
+  say "  CELLS=\"win10-clean win10-reinstall win10-upgrade win10-appvm win11-clean win11-appvm\""
+  say "  (win1X-stock exists as a capability but is never a default: stock is not re-tested per campaign)"
   exit 1; }
 say "  cells: $CELLS"
-# A cell whose entry image is unset would call reclone with an EMPTY golden name. Catch that here,
-# before anything boots: G10/G11 are now per-cell choices, so selecting a win11 cell while only G10
-# is set is an operator error, not something to discover halfway through a run. The appvm cells are
-# exempt - they pass a literal "-" and clone nothing.
+# PER-CELL PREFLIGHT, before anything boots.
+#  - over-existing cells (upgrade/seeded/stock) reclone from G10/G11: an unset G would hand
+#    reclone an EMPTY golden name, so it is an operator error caught here;
+#  - clean cells prime from B10/B11, whose SEAL must verify (they are the only sealed goldens;
+#    prime-run re-verifies, but a drifted base should abort before any guest churn);
+#  - every cell that installs from the ISO needs the release loop resolved and Gate-0'd.
+NEED_ISO=0
 for c in $CELLS; do
   case $c in
-    *-appvm|grade10|grade11) ;;
-    win10-*) [ -n "${G10:-}" ] || { say "FATAL: cell '$c' needs G10 set (the Win10 entry image)"; exit 1; } ;;
-    win11-*) [ -n "${G11:-}" ] || { say "FATAL: cell '$c' needs G11 set (the Win11 entry image)"; exit 1; } ;;
+    win10-upgrade|win10-seeded|win10-stock)
+      [ -n "${G10:-}" ] || { say "FATAL: cell '$c' needs G10 set (the Win10 entry image: previous-ours or stock fixture)"; exit 1; }
+      NEED_ISO=1 ;;
+    win11-upgrade|win11-seeded|win11-stock)
+      [ -n "${G11:-}" ] || { say "FATAL: cell '$c' needs G11 set (the Win11 entry image: previous-ours or stock fixture)"; exit 1; }
+      NEED_ISO=1 ;;
+    win10-reinstall|win11-reinstall) NEED_ISO=1 ;;
+    win10-clean)
+      ./mgmt/golden.sh verify "$B10" >/dev/null 2>&1 \
+        || { say "FATAL: base $B10 failed its seal check - a clean cell cannot enter from a drifted base"; exit 1; }
+      say "  base $B10: SEALED GOLDEN, intact" ;;
+    win11-clean)
+      ./mgmt/golden.sh verify "$B11" >/dev/null 2>&1 \
+        || { say "FATAL: base $B11 failed its seal check - a clean cell cannot enter from a drifted base"; exit 1; }
+      say "  base $B11: SEALED GOLDEN, intact" ;;
   esac
 done
+[ "$NEED_ISO" = 1 ] && ensure_release_loop
 for c in $CELLS; do
   case $c in
-    win10-seeded)   cell_seeded        "$G10" win10-tpl WIN10 ;;
-    win10-1stage)   cell_fresh_1stage  "$G10" win10-tpl WIN10 ;;
-    win10-2stage)   cell_fresh_2stage  "$G10" win10-tpl WIN10 ;;
-    win11-1stage)   cell_fresh_1stage  "$G11" win11-tpl WIN11 ;;
-    win11-2stage)   cell_fresh_2stage  "$G11" win11-tpl WIN11 ;;
-    win11-seeded)   cell_seeded        "$G11" win11-tpl WIN11 ;;
-    win10-fresh)    cell_fresh         "$G10" win10-tpl WIN10 ;;
-    win11-fresh)    cell_fresh         "$G11" win11-tpl WIN11 ;;
-    win10-stock)    cell_upgrade_stock "$G10" win10-tpl WIN10 ;;
-    win11-stock)    cell_upgrade_stock "$G11" win11-tpl WIN11 ;;
-    grade10)        cell_grade         "${GRADE_VM:?set GRADE_VM to the guest to grade}" WIN10 ;;
-    grade11)        cell_grade         "${GRADE_VM:?set GRADE_VM to the guest to grade}" WIN11 ;;
-    win10-appvm)    cell_appvm         - win10-tpl WIN10 win10-app ;;
-    win11-appvm)    cell_appvm         - win11-tpl WIN11 win11-app ;;
+    win10-clean)     cell_clean     "$B10" win10-tpl WIN10 ;;
+    win11-clean)     cell_clean     "$B11" win11-tpl WIN11 ;;
+    win10-reinstall) cell_reinstall win10-tpl WIN10 ;;
+    win11-reinstall) cell_reinstall win11-tpl WIN11 ;;
+    win10-upgrade)   cell_upgrade   "$G10" win10-tpl WIN10 ;;
+    win11-upgrade)   cell_upgrade   "$G11" win11-tpl WIN11 ;;
+    win10-seeded)    cell_seeded    "$G10" win10-tpl WIN10 ;;
+    win11-seeded)    cell_seeded    "$G11" win11-tpl WIN11 ;;
+    win10-stock)     cell_stock     "$G10" win10-tpl WIN10 ;;
+    win11-stock)     cell_stock     "$G11" win11-tpl WIN11 ;;
+    grade10)         cell_grade     "${GRADE_VM:?set GRADE_VM to the guest to grade}" WIN10 ;;
+    grade11)         cell_grade     "${GRADE_VM:?set GRADE_VM to the guest to grade}" WIN11 ;;
+    win10-appvm)     cell_appvm     - win10-tpl WIN10 win10-app ;;
+    win11-appvm)     cell_appvm     - win11-tpl WIN11 win11-app ;;
+    # The RETIRED selectors fail with the reason, not as a bare typo: they are the cells that
+    # installed from a PUSHED payload, which the owner forbids absolutely.
+    win10-fresh|win11-fresh|win10-1stage|win11-1stage|win10-2stage|win11-2stage)
+      say "FATAL: cell '$c' is RETIRED - it installed from a pushed payload tree (push_payload"
+      say "       q4315), which is forbidden: our code enters a guest ONLY from the release"
+      say "       package. Clean install = win1X-clean (prime-run from the pristine base; the"
+      say "       base's testsigning OFF makes it the true two-stage path)."
+      FAIL=$((FAIL+1)) ;;
     # An unknown selector must FAIL the campaign, not be narrated past: a typo would otherwise
     # silently shrink the matrix and the summary would still read as a clean run.
     *) say "FATAL: unknown cell '$c'"; FAIL=$((FAIL+1)) ;;
@@ -866,4 +1101,8 @@ for c in $CELLS; do
 done
 say ""
 say "=== MATRIX: $PASS passed, $FAIL failed ==="
+# Parks are campaign-scoped: pool cost grows as content diverges, so remove them when the
+# campaign is DONE (not per cell - later cells unpark them). NEVER park or remove a golden.
+parks=$(qvm-ls --raw-data --fields NAME 2>/dev/null | grep '^ckpt-' | tr '\n' ' ')
+[ -n "${parks// /}" ] && say "parks on the rig (remove at campaign end with qvm-remove): $parks"
 say "=== DONE ==="
