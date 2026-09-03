@@ -10,9 +10,11 @@
 #   PRISTINE entry   -> mgmt/harness/prime-run.sh <base> <subject> ours --payload $RELEASE_SETUP
 #                       (a pristine guest has no qrexec; the primer stick is the only way in,
 #                       and the payload it carries IS the release setup tree)
-#   INSTALLED entry  -> the release ISO attached as a CD to the running guest, and
-#                       <CD>:\install.cmd run from the disc over qrexec, per the README
-#                       ("attach to a running Windows qube as a CD and run install.cmd elevated")
+#   INSTALLED entry  -> the release ISO presented as a CD at BOOT (qvm-start --cdrom=..., the
+#                       rig's proven ISO path - mgmt/reprovision-usb.sh boots the vendor ISO the
+#                       same way; live block attach gets "empty response from qubesd" here), then
+#                       <CD>:\install.cmd run from the disc over qrexec - delivering the README's
+#                       "attach as a CD and run install.cmd elevated"
 #
 # THE CELLS:
 #   clean       prime-run from the pristine base (win10-base/win11-base, the ONLY sealed
@@ -185,7 +187,8 @@ EOF
 # the forbidden pattern (owner: "no swap fuckery is ever permitted") - it let a stale 4.3.15 tree
 # stand in for the release under test. Instruments (reboot-dialog-watch.ps1, health-check.ps1,
 # uninstall/count scripts) may still be pushed: they are the harness, not the product. The PRODUCT
-# only ever arrives via prime-run's primer stick or the release ISO attached as a CD.
+# only ever arrives via prime-run's primer stick or the release ISO presented as a CD at boot
+# (qvm-start --cdrom; see boot_with_release_iso below).
 
 ensure_release_loop(){ # resolves RELEASE_LOOP (loopN on THIS qube backing the release ISO)
   # Accepts an operator-provided RELEASE_LOOP, or RELEASE_ISO (a path), which is loop-set up
@@ -227,22 +230,40 @@ ensure_release_loop(){ # resolves RELEASE_LOOP (loopN on THIS qube backing the r
     && say "  WARNING: /dev/$RELEASE_LOOP is still mounted locally after unmount - attach proceeds read-only, but investigate"
 }
 
-install_from_release_iso(){ # $1=vm $2=label -> sets RELDISC (e.g. "E:") on success
+# RELEASE-ISO DELIVERY: AT BOOT, VIA qvm-start --cdrom (2026-09-03, supersedes the live attach).
+# The rig's PROVEN path for putting an ISO in front of a guest is presenting it as a CD when the
+# domain STARTS - mgmt/reprovision-usb.sh boots the vendor ISO with exactly
+# `qvm-start $VM --cdrom=$HOLDER:$LOOP`. Live `qvm-device block attach` against the running guest
+# is NOT a mechanism this qube has: the matrix-4318-live run got "Got empty response from qubesd"
+# from it (and block `list` is policy-refused outright). So the over-existing cells boot their
+# churn target WITH the disc: reclone/unpark leaves the subject Halted -> boot_with_release_iso ->
+# w_session -> entry preconditions -> locate_release_disc (content + provenance) -> install.cmd
+# /auto from the disc. The CD is a start-time attach, so it drops at the guest's next shutdown -
+# which every cell performs for grading - and the mid-install reboot never needs it (over-existing
+# installs are ONE-stage: testsigning is already active on any QWT-carrying guest).
+
+boot_with_release_iso(){ # $1=vm $2=label - boot a HALTED subject with the release ISO as its CD
+  local vm=$1 lbl=$2
+  if [ "$(w_state "$vm")" != Halted ]; then
+    no "$lbl: INTERNAL - boot_with_release_iso needs $vm Halted (state=$(w_state "$vm")); the CD is a start-time attach and cannot be handed to a guest that is already up"
+    return 1
+  fi
+  # Fire-and-poll like start_vm (same rationale: qvm-start blocks until qrexec connects, which on
+  # a guest that never boots is dead silence for the whole qrexec_timeout). The start's output is
+  # kept: if the disc never shows up in the guest, $M/$lbl-cdboot.out says whether the start
+  # itself refused.
+  say "  $lbl: booting $vm with the release ISO as CD (qvm-start --cdrom=win-idd-mgmt:$RELEASE_LOOP)"
+  timeout -k 10 150 qvm-start "$vm" --cdrom="win-idd-mgmt:$RELEASE_LOOP" >"$M/$lbl-cdboot.out" 2>&1 & disown
+  sleep 8
+}
+
+locate_release_disc(){ # $1=vm $2=label -> sets RELDISC (e.g. "E:") on success. Guest must be up
+  # (booted via boot_with_release_iso, session established by the caller).
   local vm=$1 lbl=$2 a d
-  # Attach to the RUNNING guest. NEVER --persistent on attach: it is documented as an alias for
-  # `assign --required`, applied at the qube's NEXT startup - against a running guest it succeeds
-  # and changes nothing the guest can see (three attempts lost to exactly that on 2026-08-30;
-  # protocol 0.5 Route A). A live attach is enough here: over-existing installs are ONE-stage
-  # (testsigning is already active on any QWT-carrying guest), so the disc never needs to survive
-  # a mid-install reboot - and the caller's post-install reboot drops it naturally.
-  qvm-device block attach --ro --option devtype=cdrom "$vm" "win-idd-mgmt:$RELEASE_LOOP" \
-      >"$M/$lbl-attach.out" 2>&1 \
-    || { no "$lbl: could not attach the release ISO ($(tail -1 "$M/$lbl-attach.out" | cut -c1-140))"; return 1; }
-  say "  $lbl: release ISO attached as cdrom (win-idd-mgmt:$RELEASE_LOOP)"
   # Locate the disc BY CONTENT, never by an assumed drive letter (a stale answer disc still
   # attached from provisioning would be picked up otherwise), and only among drives that carry
-  # BOTH install.cmd and MANIFEST.json. The attach's exit code proves nothing - the disc appears
-  # in the guest within seconds, so poll.
+  # BOTH install.cmd and MANIFEST.json. Poll briefly anyway: a session can answer before the
+  # drive letter is mounted.
   RELDISC=
   for a in 1 2 3 4 5 6; do
     sleep 5
@@ -251,7 +272,7 @@ install_from_release_iso(){ # $1=vm $2=label -> sets RELDISC (e.g. "E:") on succ
         2>/dev/null | tr -d '\r' | grep -ao 'RELDISC=[D-N]:' | head -1 | cut -d= -f2)
     [ -n "$d" ] && { RELDISC=$d; break; }
   done
-  [ -n "$RELDISC" ] || { no "$lbl: attached ISO never appeared in the guest (no drive carries install.cmd + MANIFEST.json)"; return 1; }
+  [ -n "$RELDISC" ] || { no "$lbl: no drive carries install.cmd + MANIFEST.json - was this boot made by boot_with_release_iso? (start log: $M/$lbl-cdboot.out)"; return 1; }
   # Provenance of the DISC AS THE GUEST SEES IT - Gate-0's last leg. Its MANIFEST must name the
   # commit under test; a plausible-looking stale medium has voided a cell before (2026-08-29).
   local got
@@ -264,16 +285,17 @@ install_from_release_iso(){ # $1=vm $2=label -> sets RELDISC (e.g. "E:") on succ
   ok "$lbl: release disc verified at $RELDISC (driver_repo_commit ${got:0:12})"
 }
 
-detach_release_iso(){ # $1=vm $2=label - best effort. A non-persistent attach dies with the
-  # guest's next shutdown anyway (every cell reboots for verify_installed), so a failed detach is
-  # logged, never fatal. NOTE: `qvm-device block list` is policy-refused from this qube
-  # (findings/rig.md), so the detach verb is exercised optimistically here - if dom0 refuses it
-  # too, the shutdown-drop covers us and the message below says so.
+detach_release_iso(){ # $1=vm $2=label - best effort. The CD is a start-time attach
+  # (qvm-start --cdrom), so it drops at the guest's next shutdown anyway (every cell reboots for
+  # verify_installed) - a failed detach is logged, never fatal. NOTE: `qvm-device block list` is
+  # policy-refused from this qube (findings/rig.md), so the detach verb is exercised
+  # optimistically here - if dom0 refuses it too, the shutdown-drop covers us and the message
+  # below says so.
   local vm=$1 lbl=$2
   if qvm-device block detach "$vm" "win-idd-mgmt:$RELEASE_LOOP" >/dev/null 2>&1; then
     say "  $lbl: release ISO detached"
   else
-    say "  $lbl: could not detach the ISO (harmless: the live attach drops at the guest's next shutdown)"
+    say "  $lbl: could not detach the ISO (harmless: the start-time attach drops at the guest's next shutdown)"
   fi
 }
 
@@ -303,8 +325,27 @@ qwt_products(){ # $1=vm - echo the count of MSI-REGISTERED QWT products; echo no
   # a working installed 4.3.17 (qrexec answering, whoami=SYSTEM) while the Version query returned
   # nothing, so the upgrade cell declared a QWT-carrying entry "carries NO installed QWT" and
   # voided itself. Callers: empty output = INVALID-INSTRUMENT (missing data fails, never "absent").
-  QTEST_VM=$1 timeout -k 8 240 ./tools/qtest pushrun guest/count-qwt.ps1 2>/dev/null \
-    | tr -d '\r' | grep -aoE 'QWTPRODUCTS=[0-9]+' | tail -1 | cut -d= -f2
+  #
+  # INLINE OVER QREXEC + BOUNDED RETRY (matrix-4318-live). This used to `pushrun`
+  # guest/count-qwt.ps1 once, and pushrun needs a LOGGED-ON user session - its Filecopy lands in
+  # the user's Documents (memory: pushrun-needs-a-session) - while w_session's "session up" only
+  # proves qrexec answers. cell_upgrade probed at t+0s, before autologon had finished, got nothing
+  # back, and declared INVALID-INSTRUMENT against a perfectly readable guest. Two changes:
+  #   1. the count runs INLINE via `qtest run` (needs only qrexec, no session) - the command below
+  #      IS guest/count-qwt.ps1's logic verbatim, quoting per the DEV_CONS probe;
+  #   2. an empty answer is retried a few times with a short sleep, so "guest not ready yet" and
+  #      "genuinely unreadable" are told apart. Empty after ALL retries still reads as
+  #      INVALID-INSTRUMENT at the caller - the retry never weakens the verdict, it only stops a
+  #      too-early single shot from impersonating one.
+  local vm=$1 a n
+  for a in 1 2 3 4 5; do
+    n=$(QTEST_VM=$vm timeout -k 8 60 ./tools/qtest run \
+        "powershell -NoProfile -Command \"\$n=0; foreach(\$k in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')){foreach(\$p in Get-ItemProperty \$k -ErrorAction SilentlyContinue){if(\$p.DisplayName -like '*Qubes Windows Tools*'){\$n++}}}; Write-Host ('QWTPRODUCTS='+\$n)\"" \
+        2>/dev/null | tr -d '\r' | grep -aoE 'QWTPRODUCTS=[0-9]+' | tail -1 | cut -d= -f2)
+    [ -n "$n" ] && { echo "$n"; return 0; }
+    [ "$a" -lt 5 ] && sleep 15
+  done
+  return 1
 }
 
 ensure_churn_target(){ # $1=vm - create the disposable churn StandaloneVM if it does not exist.
@@ -389,7 +430,7 @@ accept_grade(){ # $1=vm $2=label - the post-install acceptance battery, REUSED n
 
 # Run the installer and judge the outcome. Sets CELL_RC.
 # $3 is the INSTALL SOURCE the guest runs install.cmd from - under the release-only model that is
-# the CD drive returned by install_from_release_iso (e.g. "E:"), never a pushed directory.
+# the CD drive returned by locate_release_disc (e.g. "E:"), never a pushed directory.
 run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cmd) $4=extra-args
   local vm=$1 lbl=$2 src=$3 extra=${4:-}
   # Clear BOTH logs. The MSI verbose log lives at a fixed path and survives from earlier installs,
@@ -812,14 +853,15 @@ cell_clean(){ # $1=pristine-base $2=subject $3=tag
 cell_reinstall(){ # $1=subject $2=tag - same-version reinstall of the release over itself (C6)
   # Entry = the campaign's 'installed' SNAPSHOT (unpark, ~2 s) - never a reinstall-from-scratch
   # and never a reclone: cell_clean installed the release once and parked it. Install source =
-  # the release ISO attached as a CD, per the README. The snapshot carries exactly this release,
-  # so the installer's own branch authority must report the same-version reinstall.
+  # the release ISO presented as a CD at boot (boot_with_release_iso). The snapshot carries
+  # exactly this release, so the installer's own branch authority must report the same-version
+  # reinstall.
   say "######## CELL $2-reinstall (unpark 'installed' snapshot -> same-version reinstall from the release ISO) ########"
   local vm=$1 tag=$2
   unpark_installed "$vm" "$tag-reinstall" || return
-  start_vm "$vm"
+  boot_with_release_iso "$vm" "$tag-reinstall" || return
   w_session "$vm" 900 "$tag-reinstall-boot" "$M" say || { no "$tag-reinstall: unparked subject did not boot"; return; }
-  install_from_release_iso "$vm" "$tag-reinstall" || return
+  locate_release_disc "$vm" "$tag-reinstall" || return
   ENTRY_PRISTINE=0; EXPECT_MODE=in-place-same-version-reinstall; CELL_PRIMED=1
   run_install "$vm" "$tag-reinstall" "$RELDISC"
   detach_release_iso "$vm" "$tag-reinstall"
@@ -838,7 +880,7 @@ cell_upgrade(){ # $1=previous-ours entry image $2=subject $3=tag - previous rele
   local prev=$1 vm=$2 tag=$3
   ensure_churn_target "$vm" || return
   reclone "$prev" "$vm" || { no "$tag-upgrade: could not reclone"; return; }
-  start_vm "$vm"
+  boot_with_release_iso "$vm" "$tag-upgrade" || return
   w_session "$vm" 900 "$tag-upgrade-boot" "$M" say || { no "$tag-upgrade: clone did not boot"; return; }
   # QWT presence via the installer's OWN signal (MSI product registrations - qwt_products), never
   # the ITL "Qubes Tools\Version" reg key: our NG QWT does not populate that key, so it
@@ -853,7 +895,7 @@ cell_upgrade(){ # $1=previous-ours entry image $2=subject $3=tag - previous rele
     no "$tag-upgrade: entry image carries NO installed QWT (QWTPRODUCTS=0) - not an upgrade cell, INVALID-PRECONDITION"; return
   fi
   ok "$tag-upgrade: entry carries an installed QWT (QWTPRODUCTS=$before)"
-  install_from_release_iso "$vm" "$tag-upgrade" || return
+  locate_release_disc "$vm" "$tag-upgrade" || return
   ENTRY_PRISTINE=0; EXPECT_MODE="${UPGRADE_EXPECT_MODE:-in-place-msi-major-upgrade}"; CELL_PRIMED=1
   run_install "$vm" "$tag-upgrade" "$RELDISC"
   detach_release_iso "$vm" "$tag-upgrade"
@@ -873,7 +915,7 @@ cell_seeded(){ # $1=QWT-carrying entry image $2=subject $3=tag
   say "  the seeded run halted at 80 s mid-MSI and came back in Automatic Repair. n=2, unproven."
   ensure_churn_target "$2" || return
   reclone "$1" "$2" || { no "$3-seeded: could not reclone"; return; }
-  start_vm "$2"
+  boot_with_release_iso "$2" "$3-seeded" || return
   w_session "$2" 600 "$3-seeded-boot" "$M" say || { no "$3-seeded: clone did not boot"; return; }
   # The entry must CARRY a QWT: the seeded cell models a PV reboot Request arriving over an
   # EXISTING install (the field's state). Same authoritative presence signal as cell_upgrade -
@@ -918,7 +960,7 @@ cell_seeded(){ # $1=QWT-carrying entry image $2=subject $3=tag
     # armed-monitor variant and must not be cited as one.
     no "$3-seeded: INVALID-PRECONDITION - monitor is '${mst:-unreadable}', not RUNNING; this is not the armed-monitor arm"
   fi
-  install_from_release_iso "$2" "$3-seeded" || return
+  locate_release_disc "$2" "$3-seeded" || return
   ENTRY_PRISTINE=0; EXPECT_MODE="${SEEDED_EXPECT_MODE:-}"; CELL_PRIMED=1
   run_install "$2" "$3-seeded" "$RELDISC"
   detach_release_iso "$2" "$3-seeded"
@@ -942,7 +984,7 @@ cell_stock(){ # $1=stock-4.2.2 fixture $2=subject $3=tag - CAPABILITY ONLY, neve
   local entry=$1 vm=$2 tag=$3
   ensure_churn_target "$vm" || return
   reclone "$entry" "$vm" || { no "$tag-stock: could not reclone"; return; }
-  start_vm "$vm"
+  boot_with_release_iso "$vm" "$tag-stock" || return
   w_session "$vm" 900 "$tag-stock-boot" "$M" say || { no "$tag-stock: clone did not boot"; return; }
   # PRESENCE via the authoritative signal (MSI product registrations - qwt_products); the ITL
   # Version key is then a legitimate STOCKNESS discriminator, because stock 4.2.2 writes it and
@@ -961,7 +1003,7 @@ cell_stock(){ # $1=stock-4.2.2 fixture $2=subject $3=tag - CAPABILITY ONLY, neve
     *4.2.2*) ok "$tag-stock: precondition real (stock 4.2.2 installed, QWTPRODUCTS=$n)" ;;
     *) no "$tag-stock: entry carries A QWT but not stock 4.2.2 (Version key: ${sv:-empty}) - build the fixture with prime-run job stock-422; cell INVALID"; return ;;
   esac
-  install_from_release_iso "$vm" "$tag-stock" || return
+  locate_release_disc "$vm" "$tag-stock" || return
   ENTRY_PRISTINE=0; EXPECT_MODE=in-place-msi-major-upgrade; CELL_PRIMED=1
   run_install "$vm" "$tag-stock" "$RELDISC"
   detach_release_iso "$vm" "$tag-stock"
