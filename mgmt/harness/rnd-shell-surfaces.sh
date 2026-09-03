@@ -294,7 +294,19 @@ tsyn=$(T=300 q pushrun "$TMP/since.ps1" -Mark "${tmark:-0}" -Pattern 'msg=SYNTH,
 #     ("New notification") AND by the fired toast's title text - a union across the observed platforms,
 #     none of which matches any baseline window in the reset scene, so the vacuity guard stays honest.
 # Read as SYSTEM: -Summary only PARSES the machine-path jsonl (no user session, no window APIs).
-SWSUM=$(psrun "& '$GUEST\\surface-watch.ps1' -Summary -Match 'notification|QWT ACCEPT TOAST|ToastHost|ShellExperienceHost|ShellHost|CoreWindow'" | grep -a '^=== SURFACEWATCH ===' | head -1)
+# ONE match set, used by BOTH witnesses (the guest-side -Summary and the dom0 Path-B title check
+# below) so the two can never drift apart.
+TOASTRE='notification|QWT ACCEPT TOAST|ToastHost|ShellExperienceHost|ShellHost|CoreWindow'
+# Rule-16 hardening (win10-p4, 2026-09-04): this was the ONLY guest query in the section riding
+# q()'s default 150 s budget (peers run T=200-400), and it is the one that came back EMPTY
+# (NODATA) - note -Summary prints an '=== SURFACEWATCH ===' header on EVERY path, including
+# "no log" and "no parsable samples", so an empty answer means the qrexec round-trip itself died,
+# not the sampler. Budget it like its peers and retry ONCE on empty: the query is an idempotent
+# READ of the jsonl (no stimulus), so a retry can only recover data that exists - if there is
+# none, it returns the same header and the states below grade exactly as before.
+SWSUM=$(T=400 psrun "& '$GUEST\\surface-watch.ps1' -Summary -Match '$TOASTRE'" | grep -a '^=== SURFACEWATCH ===' | head -1)
+[ -n "$SWSUM" ] || { sleep 10
+  SWSUM=$(T=400 psrun "& '$GUEST\\surface-watch.ps1' -Summary -Match '$TOASTRE'" | grep -a '^=== SURFACEWATCH ===' | head -1); }
 swsamp=$(echo "$SWSUM" | grep -ao '"samples":[0-9]*' | head -1 | cut -d: -f2)
 sw=$(echo "$SWSUM" | grep -ao '"match_hits":[0-9]*' | head -1 | cut -d: -f2)
 swok=$(echo "$SWSUM" | grep -aoE '"ok":(true|false)' | head -1 | sed 's/.*://')
@@ -308,18 +320,38 @@ elif [ "${sw:-0}" -gt 0 ];                          then tstate=TOAST
 elif [ "$swok" != "true" ];                         then tstate=GAPS
 else                                                     tstate=NOTOAST
 fi
+# PATH B, COMPUTED INDEPENDENTLY OF PATH A: dom0's own override-redirect list grew AND the new
+# surface carries a notification title/class (same TOASTRE set; -i to match PowerShell's
+# case-insensitive -match). n1 comes from tools/qtest-geom - dom0's X window tree - so this
+# witness owes nothing to the guest-side sampler or its jsonl.
+domtoast=0
+[ "${o1:-0}" -gt "${baseo:-0}" ] && echo "$n1" | grep -qiE "$TOASTRE" && domtoast=1
 log "  guest-side toast: samples=${swsamp:-?} match_hits=${sw:-?} coverage_ok=${swok:-?}  dom0 o-r ${baseo}->${o1} [$n1]  synth=${tsyn:-0}  owner px $th_before -> $th_after"
 
 case "$tstate" in
-NODATA)
-  # rule 16 / V3: an unanswered query is an instrument fault, never a product or vacuity claim.
-  log "  -> INVALID-INSTRUMENT: surface-watch -Summary returned no data; not grading toasts on this run"
-  printf 'RND-SHELL\ttoast-surface-count\tINVALID-INSTRUMENT\tsurface-watch -Summary returned no data\t%s\n' "$EV" >> "$V"; rc=1 ;;
-NOSAMPLES)
-  # The -NoWait sampler wrote no samples (dead detector). This is NOT proof the toast never existed -
-  # the very distinction the old single count could not make (samples=0 and matches=0 were one value).
-  log "  -> INVALID-INSTRUMENT: surface-watch produced no samples (the -NoWait sampler did not run/write); a dead detector proves nothing about the toast"
-  printf 'RND-4\ttoast-reaches-dom0\tINVALID-INSTRUMENT\tsurface-watch produced no samples - detector dead, not a vacuous stimulus\t%s\n' "$EV" >> "$V"; rc=1 ;;
+NODATA|NOSAMPLES)
+  # "BY EITHER PATH" MUST MEAN OR, NOT "A AND THEN B". Until 2026-09-04 the dom0 witness (Path B)
+  # was only consulted INSIDE the TOAST state - after Path A had already delivered - so a dead
+  # guest-side sampler vetoed a toast that dom0 itself had watched arrive. Measured on win10-p4
+  # (4.3.18): SWSUM was empty (NODATA) while the same log line carried "dom0 o-r 0->1
+  # [New notification]" - the toast REACHED THE USER, and the run graded INVALID-INSTRUMENT,
+  # which p4-rnd4-toast then folded into a product FAIL. Path B is an independent positive
+  # witness and only ever a POSITIVE: with no dom0 o-r either, a dead sampler still proves
+  # nothing (INVALID-INSTRUMENT below), so a genuine no-toast can never pass through here.
+  if [ "$domtoast" -eq 1 ]; then
+    log "  -> PASS: the toast reached dom0 as its own override-redirect window (guest-side sampler dead: $tstate)"
+    printf 'RND-4\ttoast-reaches-dom0\tPASS-UNPROVEN\tdom0-path: o-r %s->%s [%s]; guest-side sampler dead (%s)\t%s\n' "$baseo" "$o1" "$n1" "$tstate" "$EV" >> "$V"
+    printf 'SG7\ttoasts-survive-filter\tPASS-UNPROVEN\tthe chrome filter did not eat the notification\t%s\n' "$EV" >> "$V"
+  elif [ "$tstate" = NODATA ]; then
+    # rule 16 / V3: an unanswered query is an instrument fault, never a product or vacuity claim.
+    log "  -> INVALID-INSTRUMENT: surface-watch -Summary returned no data and no dom0 o-r witness; not grading toasts on this run"
+    printf 'RND-SHELL\ttoast-surface-count\tINVALID-INSTRUMENT\tsurface-watch -Summary returned no data\t%s\n' "$EV" >> "$V"; rc=1
+  else
+    # The -NoWait sampler wrote no samples (dead detector). This is NOT proof the toast never existed -
+    # the very distinction the old single count could not make (samples=0 and matches=0 were one value).
+    log "  -> INVALID-INSTRUMENT: surface-watch produced no samples (the -NoWait sampler did not run/write) and no dom0 o-r witness; a dead detector proves nothing about the toast"
+    printf 'RND-4\ttoast-reaches-dom0\tINVALID-INSTRUMENT\tsurface-watch produced no samples - detector dead, not a vacuous stimulus\t%s\n' "$EV" >> "$V"; rc=1
+  fi ;;
 GAPS)
   # A stalled sampler cannot support a negative (surface-watch's own coverage rule).
   log "  -> INVALID-INSTRUMENT: surface-watch coverage has gaps (coverage_ok=$swok); a stalled sampler cannot support a negative"
