@@ -55,6 +55,10 @@ on:
       - 'tools/qwt-bootstrap/**'
       # qubesdb-read.exe is compiled from here into tools\ of the package.
       - 'tools/qubesdb-read/**'
+      # The user-session helpers are built by qwt-full and staged into the setup tree's bin\;
+      # a source change to either must repackage or the shipped helper goes stale.
+      - 'tools/notifhost/**'
+      - 'tools/wgcbroker/**'
       # Shipped as compile-on-guest diagnostic source in tools\.
       - 'tools/winenum.cs'
       # pv-xenvif builds with these patches; the stock MSI + ITL certs come from vendor/.

@@ -42,6 +42,11 @@ on:
       - 'packaging/stage-qwt-repo.ps1'
       - 'packaging/patch-xenbus-inf.ps1'
       - '.github/workflows/qwt-full.yml'
+      # The user-session helpers are BUILT here and staged into the setup tree's bin\ - a
+      # source change to either must rebuild them or the shipped helper goes stale (the
+      # silent-drop class: helper built in CI, never reaching the guest).
+      - 'tools/notifhost/**'
+      - 'tools/wgcbroker/**'
 
 # REPRODUCIBLE BUILDS: /Brepro makes link.exe write a CONTENT HASH into the PE header's
 # TimeDateStamp instead of the wall-clock time of the build. Without it the same source
