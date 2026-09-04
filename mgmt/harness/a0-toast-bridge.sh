@@ -176,11 +176,22 @@ done
   || { verdict P3 "FAIL bridge up but never connected: $(tail -5 "$OUT/p3-blog.txt" | tr '\n' ';')"; exit 1; }
 
 # ---------- P4 the split -------------------------------------------------------------------
-log "P4: split - allowlisted bridges, control stays windowed"
+# NOTE lazy suppression (notifhost fail-open fix): an app's banner is suppressed only AFTER its
+# first successful forward, so toast #1 per app double-shows (banner + dom0) and toast #2+ is
+# suppressed. So P4a fires a WARM-UP toast to earn suppression (expect SENT OK), then the real
+# check toast (expect SENT OK + NO new guest banner). This is the fail-open invariant made
+# visible: a bridge that never forwards never suppresses.
+log "P4: split - allowlisted bridges (lazy suppression), control stays windowed"
+Lw=$(blog_len)
+fire_info "A0T warmup" > /dev/null 2>&1        # toast #1: earns suppression (double-shows)
+warm=""
+for i in $(seq 1 15); do blog_since "$Lw" | grep -qa "SENT id=.*OK" && { warm=1; break; }; sleep 2; done
+[ -n "$warm" ] && log "P4: warm-up forwarded (suppression earned)" || log "P4: WARN warm-up not forwarded"
+sleep 3
 L0=$(blog_len)
 snap_or "$TOASTRE" p4-guest-base > "$OUT/p4-guest-base.ids"
 snap_or "$DOMRE" p4-dom0-base > "$OUT/p4-dom0-base.ids"
-fire_info "A0T bridged" > /dev/null 2>&1
+fire_info "A0T bridged" > /dev/null 2>&1        # toast #2: must be suppressed now
 sent=""
 for i in $(seq 1 15); do
   blog_since "$L0" > "$OUT/p4-blog.txt"
@@ -255,20 +266,25 @@ for i in $(seq 1 30); do   # <=150s: supervise 5s + 60s throttle + connect
   sleep 5
 done
 if [ -n "$rec" ]; then
+  # recovery cleared suppression (reconnect), so re-earn it with a warm-up (lazy suppression)
+  Lw2=$(blog_len); fire_info "A0T recov-warmup" > /dev/null 2>&1
+  for i in $(seq 1 15); do blog_since "$Lw2" | grep -qa "SENT id=.*OK" && break; sleep 2; done
+  sleep 3
   L4=$(blog_len)
   snap_or "$TOASTRE" p6b-guest-base > "$OUT/p6b-guest-base.ids"
   fire_info "A0T recovered" > /dev/null 2>&1
   sent=""
   for i in $(seq 1 15); do blog_since "$L4" | grep -qa "SENT id=.*OK" && { sent=1; break; }; sleep 2; done
   gb=no; new_or_window "$OUT/p6b-guest-base.ids" "$TOASTRE" 3 p6b-guest && gb=yes
-  [ -n "$sent" ] && [ "$gb" = no ] && verdict P6b "PASS recovery: bridged again after consent restore" \
+  [ -n "$sent" ] && [ "$gb" = no ] && verdict P6b "PASS recovery: bridged again + re-suppressed after consent restore" \
     || verdict P6b "FAIL recovery sent=${sent:-no} guestbanner=$gb"
 else
   verdict P6b "FAIL bridge never recovered after consent restore"
 fi
 
 log "P6c: kill the relay -> banners restored, then auto-reconnect"
-qrun "powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\"Name='notifhost.exe'\\\" | Where-Object { \\\$_.CommandLine -match '--relay' } | ForEach-Object { Stop-Process -Id \\\$_.ProcessId -Force }\"" >/dev/null 2>&1
+raspush guest/a0-kill-relay.ps1 "" a0k$RANDOM > "$OUT/p6c-kill.txt" 2>&1
+grep -aoE 'KILLED-RELAY=[0-9]+' "$OUT/p6c-kill.txt" | head -1 | tee -a "$R"
 sleep 8    # reader notices EOF, banners restore; backoff first retry 5s
 L5=$(blog_len)
 recon=""

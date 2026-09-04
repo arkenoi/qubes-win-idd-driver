@@ -35,6 +35,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <sddl.h>   // ConvertSidToStringSidW
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -211,10 +212,13 @@ static std::vector<std::wstring> ReadAllowlist()
     return out;
 }
 
-// Seed the per-user listener consent (same value the Settings toggle writes; proven
-// sufficient for an unpackaged reader by guest/listener-probe.ps1). The authoritative
-// health check is GetAccessStatus afterwards - if the platform still refuses, the bridge
-// exits WITHOUT having suppressed anything (fail-open).
+// Seed the per-user listener consent ONLY when it has never been set (same value the Settings
+// toggle writes; proven sufficient for an unpackaged reader by guest/listener-probe.ps1). An
+// explicit value - crucially "Deny" - is the user's decision and is left untouched: re-seeding
+// Allow over a Deny would (a) override a user who deliberately turned notification access off
+// and (b) defeat the fail-open selftest, since the agent relaunches this process ~1/min and each
+// launch would re-grant. The authoritative health check is GetAccessStatus afterwards - on Deny
+// the bridge exits WITHOUT having suppressed anything (fail-open).
 static void EnsureConsent()
 {
     HKEY k;
@@ -224,19 +228,26 @@ static void EnsureConsent()
         return;
     wchar_t cur[16] = { 0 }; DWORD cb = sizeof(cur), type = 0;
     LONG r = RegQueryValueExW(k, L"Value", nullptr, &type, (BYTE*)cur, &cb);
-    if (r != ERROR_SUCCESS || type != REG_SZ || _wcsicmp(cur, L"Allow") != 0)
+    if (r != ERROR_SUCCESS || type != REG_SZ || cur[0] == 0)   // ABSENT/empty only - never over an explicit value
     {
         RegSetValueExW(k, L"Value", 0, REG_SZ, (const BYTE*)L"Allow", 6 * sizeof(wchar_t));
-        BLog(L"consent seeded Allow");
+        BLog(L"consent seeded Allow (was unset)");
     }
+    else if (_wcsicmp(cur, L"Allow") != 0)
+        BLog(L"consent is '%s' (explicit) - respecting it, not re-seeding", cur);
     RegCloseKey(k);
 }
 
 // --- ShowBanner lifecycle -----------------------------------------------------------------
-// Suppression is applied only while the connection to dom0 is UP, and the pre-existing value
-// is recorded in a marker file first, so every exit path (and the next start, after a crash)
-// can restore the user's setting. This is the P.6 top-risk mitigation: a dead bridge must
-// not leave an allowlisted app bannerless.
+// Suppression is LAZY - applied to an AUMID only after its first SUCCESSFUL forward while the
+// connection is up - and the pre-existing value is recorded in a marker file first, so every
+// exit path (and the next start, after a crash) can restore the user's setting. This is the
+// P.6 top-risk mitigation, strengthened: a bridge that never forwards never suppresses, so a
+// dead/failing bridge can never leave an allowlisted app bannerless-and-unforwarded.
+//
+// Markers are SID-scoped. HKCU is per-user but %ProgramData% is machine-wide, so a marker from
+// user A must never be restored into user B's hive; the SID in the filename keeps each user's
+// restore set separate (BannerRestoreAll globs only the current SID).
 
 static ULONGLONG Fnv1a64(std::string const& s)
 {
@@ -245,11 +256,34 @@ static ULONGLONG Fnv1a64(std::string const& s)
     return h;
 }
 
+static std::wstring CurrentUserSid()
+{
+    HANDLE tok = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return L"unknown";
+    DWORD cb = 0; GetTokenInformation(tok, TokenUser, nullptr, 0, &cb);
+    std::vector<BYTE> buf(cb ? cb : 1);
+    std::wstring out = L"unknown";
+    if (cb && GetTokenInformation(tok, TokenUser, buf.data(), cb, &cb))
+    {
+        LPWSTR s = nullptr;
+        if (ConvertSidToStringSidW(((TOKEN_USER*)buf.data())->User.Sid, &s) && s)
+        { out = s; LocalFree(s); }
+    }
+    CloseHandle(tok);
+    return out;
+}
+
+// Marker basename glob for the current user (shared by MarkerPath and BannerRestoreAll).
+static std::wstring MarkerPrefix()
+{
+    return L"\\banner-" + std::to_wstring(Fnv1a64(Utf8(CurrentUserSid()))) + L"-";
+}
+
 static std::wstring MarkerPath(std::wstring const& aumid)
 {
-    wchar_t name[64];
-    swprintf(name, RTL_NUMBER_OF(name), L"\\banner-%016llx.prev", Fnv1a64(Utf8(aumid)));
-    return StateDir() + name;
+    wchar_t tail[48];
+    swprintf(tail, RTL_NUMBER_OF(tail), L"%016llx.prev", Fnv1a64(Utf8(aumid)));
+    return StateDir() + MarkerPrefix() + tail;
 }
 
 static std::wstring BannerKey(std::wstring const& aumid)
@@ -257,44 +291,44 @@ static std::wstring BannerKey(std::wstring const& aumid)
     return L"Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\" + aumid;
 }
 
-static void BannerApply(std::vector<std::wstring> const& allow)
+// Suppress ONE AUMID's banner (lazy: called after its first successful forward), recording the
+// prior state in a SID-scoped marker so it can be restored on any exit path or a later start.
+static void BannerApplyOne(std::wstring const& a)
 {
-    for (auto const& a : allow)
+    std::wstring marker = MarkerPath(a);
+    if (GetFileAttributesW(marker.c_str()) == INVALID_FILE_ATTRIBUTES)
     {
-        std::wstring marker = MarkerPath(a);
-        if (GetFileAttributesW(marker.c_str()) == INVALID_FILE_ATTRIBUTES)
-        {
-            // record prior state: "absent", "0" or "1" (second line; first line = AUMID)
-            std::wstring prior = L"absent";
-            HKEY k;
-            if (!RegOpenKeyExW(HKEY_CURRENT_USER, BannerKey(a).c_str(), 0, KEY_READ, &k))
-            {
-                DWORD v = 0, cb = sizeof(v), type = 0;
-                if (!RegQueryValueExW(k, L"ShowBanner", nullptr, &type, (BYTE*)&v, &cb) && type == REG_DWORD)
-                    prior = v ? L"1" : L"0";
-                RegCloseKey(k);
-            }
-            std::string body = Utf8(a + L"\n" + prior + L"\n");
-            HANDLE f = CreateFileW(marker.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                                   FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (f != INVALID_HANDLE_VALUE)
-            { DWORD wr; WriteFile(f, body.data(), (DWORD)body.size(), &wr, nullptr); CloseHandle(f); }
-        }
+        // record prior state: "absent", "0" or "1" (second line; first line = AUMID)
+        std::wstring prior = L"absent";
         HKEY k;
-        if (!RegCreateKeyExW(HKEY_CURRENT_USER, BannerKey(a).c_str(), 0, nullptr, 0,
-                             KEY_SET_VALUE, nullptr, &k, nullptr))
+        if (!RegOpenKeyExW(HKEY_CURRENT_USER, BannerKey(a).c_str(), 0, KEY_READ, &k))
         {
-            DWORD zero = 0;
-            RegSetValueExW(k, L"ShowBanner", 0, REG_DWORD, (const BYTE*)&zero, sizeof(zero));
+            DWORD v = 0, cb = sizeof(v), type = 0;
+            if (!RegQueryValueExW(k, L"ShowBanner", nullptr, &type, (BYTE*)&v, &cb) && type == REG_DWORD)
+                prior = v ? L"1" : L"0";
             RegCloseKey(k);
         }
-        BLog(L"ShowBanner=0 for %s", a.c_str());
+        std::string body = Utf8(a + L"\n" + prior + L"\n");
+        HANDLE f = CreateFileW(marker.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                               FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f != INVALID_HANDLE_VALUE)
+        { DWORD wr; WriteFile(f, body.data(), (DWORD)body.size(), &wr, nullptr); CloseHandle(f); }
     }
+    HKEY k;
+    if (!RegCreateKeyExW(HKEY_CURRENT_USER, BannerKey(a).c_str(), 0, nullptr, 0,
+                         KEY_SET_VALUE, nullptr, &k, nullptr))
+    {
+        DWORD zero = 0;
+        RegSetValueExW(k, L"ShowBanner", 0, REG_DWORD, (const BYTE*)&zero, sizeof(zero));
+        RegCloseKey(k);
+    }
+    BLog(L"ShowBanner=0 for %s (after first successful forward)", a.c_str());
 }
 
 static void BannerRestoreAll()
 {
-    std::wstring pat = StateDir() + L"\\banner-*.prev";
+    // SID-scoped: restore ONLY this user's markers, never another user's HKCU state.
+    std::wstring pat = StateDir() + MarkerPrefix() + L"*.prev";
     WIN32_FIND_DATAW fd;
     HANDLE fh = FindFirstFileW(pat.c_str(), &fd);
     if (fh == INVALID_HANDLE_VALUE) return;
@@ -446,15 +480,23 @@ static DWORD WINAPI ReaderThread(LPVOID)
         else if (tag == 3 && len >= 12)               // Dismissed{id u32, reason u32}
         {
             uint32_t id = GetU32(p.data() + 4);
+            uint32_t reason = GetU32(p.data() + 8);
+            // freedesktop NotificationClosed reasons: 1=expired, 2=dismissed BY THE USER,
+            // 3=CloseNotification call, 4=undefined. Only a deliberate user dismissal may
+            // remove the guest's Notification Center record - a bubble that merely timed
+            // out must leave the guest history intact, or the bridge silently destroys
+            // the user's only remaining copy of the notification.
             EnterCriticalSection(&g_corrLock);
             for (size_t i = 0; i < g_corr.size(); i++)
                 if (g_corr[i].dom0Id == id && id != 0)
                 {
-                    if (g_corr[i].guestId) g_pendingDismiss.push_back(g_corr[i].guestId);
-                    g_corr.erase(g_corr.begin() + i);
+                    if (reason == 2 && g_corr[i].guestId)
+                        g_pendingDismiss.push_back(g_corr[i].guestId);
+                    g_corr.erase(g_corr.begin() + i);   // no further replies for this id either way
                     break;
                 }
             LeaveCriticalSection(&g_corrLock);
+            if (reason != 2) BLog(L"Dismissed id=%u reason=%u (not user-dismissed - guest record kept)", id, reason);
         }
         else if (tag == 4)                            // ActionInvoked - phase 2 consumes this
             BLog(L"reader: ActionInvoked (ignored in A0)");
@@ -472,6 +514,14 @@ static void ConnDown()
     if (g_reader) { WaitForSingleObject(g_reader, 3000); CloseHandle(g_reader); g_reader = nullptr; }
     if (g_pipe != INVALID_HANDLE_VALUE) { CloseHandle(g_pipe); g_pipe = INVALID_HANDLE_VALUE; }
     ResetEvent(g_connStop);
+    // Drop the correlation table: the proxy spawns a FRESH server per qrexec connection whose
+    // guest-facing id space restarts (first id is deterministically 2), so a stale entry would
+    // collide with a new dom0 id after reconnect and a Dismissed{id} could RemoveNotification the
+    // WRONG guest toast. Sequence numbers are ours and monotonic, but dom0 ids are per-connection.
+    EnterCriticalSection(&g_corrLock);
+    g_corr.clear();
+    g_pendingDismiss.clear();
+    LeaveCriticalSection(&g_corrLock);
     MarkConnDead();
 }
 
@@ -492,6 +542,13 @@ static bool ConnUp()
     DWORD ce = c ? ERROR_PIPE_CONNECTED : GetLastError();
     if (ce != ERROR_IO_PENDING && ce != ERROR_PIPE_CONNECTED)
     { BLog(L"ConnectNamedPipe failed %lu", ce); ConnDown(); return false; }
+    // Every failure return below MUST drain the pending connect first: `ov` is stack-local,
+    // and closing the pipe only *starts* an async cancel - returning while the kernel still
+    // owns the OVERLAPPED corrupts this frame.
+    auto abortConnect = [&]() {
+        CancelIoEx(g_pipe, &ov);
+        DWORD x; GetOverlappedResult(g_pipe, &ov, &x, TRUE);
+    };
 
     // qrexec-client-vm hands the relay command line to qrexec-agent (it does NOT wire our
     // stdio); the agent spawns "<self> --relay <pipe>" in the interactive session with its
@@ -511,12 +568,12 @@ static bool ConnUp()
              qcv.c_str(), user, self, pipeName);
     STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
     if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
-    { BLog(L"CreateProcess(qrexec-client-vm) failed %lu", GetLastError()); ConnDown(); return false; }
+    { BLog(L"CreateProcess(qrexec-client-vm) failed %lu", GetLastError()); abortConnect(); ConnDown(); return false; }
     CloseHandle(pi.hThread);
     WaitForSingleObject(pi.hProcess, 10000);
     DWORD ec = 1; GetExitCodeProcess(pi.hProcess, &ec);
     CloseHandle(pi.hProcess);
-    if (ec != 0) { BLog(L"qrexec-client-vm exited %lu", ec); ConnDown(); return false; }
+    if (ec != 0) { BLog(L"qrexec-client-vm exited %lu", ec); abortConnect(); ConnDown(); return false; }
 
     if (ce == ERROR_IO_PENDING)
     {
@@ -524,7 +581,7 @@ static bool ConnUp()
         // only) - the relay then never connects and this wait is the failure detector.
         HANDLE hs[2] = { g_rdEvt, g_connStop };
         if (WaitForMultipleObjects(2, hs, FALSE, 15000) != WAIT_OBJECT_0)
-        { BLog(L"relay never connected (policy refusal? no session?)"); ConnDown(); return false; }
+        { BLog(L"relay never connected (policy refusal? no session?)"); abortConnect(); ConnDown(); return false; }
         DWORD x;
         if (!GetOverlappedResult(g_pipe, &ov, &x, FALSE) && GetLastError() != ERROR_PIPE_CONNECTED)
         { BLog(L"pipe connect completion failed %lu", GetLastError()); ConnDown(); return false; }
@@ -604,12 +661,18 @@ static int BridgeMain()
         BLog(L"BRIDGE armed allow=[%s]", joined.c_str());
     }
 
-    // baseline: everything already in the center predates us - never forwarded
+    // baseline: everything already in the center predates us - never forwarded. If the FIRST read
+    // throws we must NOT proceed with an empty set (that would forward the whole backlog to dom0);
+    // `primed` gates forwarding until a poll has successfully seeded `seen`.
     std::unordered_set<uint32_t> seen;
-    try { for (auto const& un : listener.GetNotificationsAsync(NotificationKinds::Toast).get()) seen.insert(un.Id()); }
-    catch (...) { BLog(L"baseline read failed"); }
+    bool primed = false;
+    try {
+        for (auto const& un : listener.GetNotificationsAsync(NotificationKinds::Toast).get()) seen.insert(un.Id());
+        primed = true;
+    } catch (...) { BLog(L"baseline read failed - will prime on the first good poll, forwarding nothing until then"); }
 
-    bool bannersOn = false;
+    bool connected = false;                        // a connection is up (banners may be suppressed)
+    std::unordered_set<std::wstring> suppressed;   // AUMIDs whose banner is currently ShowBanner=0
     int failStreak = 0, backoff = 0;
     ULONGLONG nextReconnect = 0, nextConsent = 0;
     int rc = 0;
@@ -633,15 +696,21 @@ static int BridgeMain()
             }
         }
 
-        // connection maintenance. Down => banners RESTORED (fail-open: allowlisted apps take
-        // the window path while dom0 is unreachable); up => suppression applied.
+        // connection maintenance. Down => every suppression RESTORED (fail-open: allowlisted apps
+        // take the window path while dom0 is unreachable) and re-suppression is EARNED again by a
+        // fresh successful forward. Suppression is never applied eagerly on connect - only lazily,
+        // after a forward proves the path works (see below).
         if (g_connDead)
         {
             ConnDown();   // reap the reader/pipe of a connection that died mid-flight
-            if (bannersOn) { BannerRestoreAll(); bannersOn = false; BLog(L"connection down - banners restored"); }
+            if (connected || !suppressed.empty())
+            {
+                BannerRestoreAll(); suppressed.clear(); connected = false;
+                BLog(L"connection down - banners restored, suppression cleared");
+            }
             if (!allow.empty() && now >= nextReconnect)
             {
-                if (ConnUp()) { backoff = 0; BannerApply(allow); bannersOn = true; }
+                if (ConnUp()) { backoff = 0; connected = true; }
                 else
                 {
                     static const DWORD bo[] = { 5000, 15000, 60000, 300000 };
@@ -667,39 +736,68 @@ static int BridgeMain()
         {
             auto list = listener.GetNotificationsAsync(NotificationKinds::Toast).get();
             failStreak = 0;
-            struct NewToast { uint32_t id; std::wstring app, title, body; };
-            std::vector<NewToast> fresh;
-            for (auto const& un : list)
+            // First good poll after a failed baseline: seed `seen` with the whole current center
+            // and forward NOTHING this pass (the backlog predates us). This is the legacy `primed`
+            // guard, mirrored, so a failed baseline can never replay the backlog to dom0.
+            if (!primed)
             {
-                uint32_t id = un.Id();
-                if (!seen.insert(id).second) continue;
-                std::wstring aumid, app;
-                try { aumid = un.AppInfo().AppUserModelId().c_str(); } catch (...) {}
-                try { app = un.AppInfo().DisplayInfo().DisplayName().c_str(); } catch (...) {}
-                bool listed = false;
-                for (auto const& a : allow) if (_wcsicmp(a.c_str(), aumid.c_str()) == 0) { listed = true; break; }
-                if (!listed) { BLog(L"skip id=%u aumid=%s (window path)", id, aumid.c_str()); continue; }
-                auto tb = FirstTexts(un);
-                size_t sep = tb.find(L'\x1f');
-                fresh.push_back({ id, app, tb.substr(0, sep),
-                                  sep == std::wstring::npos ? L"" : tb.substr(sep + 1) });
+                for (auto const& un : list) seen.insert(un.Id());
+                primed = true;
+                BLog(L"primed on a good poll (%u pre-existing) - forwarding starts now", (UINT)seen.size());
             }
-            if (!fresh.empty() && g_connDead)
-                BLog(L"%u allowlisted toast(s) while disconnected - left on the window path", (UINT)fresh.size());
-            else if (fresh.size() > 3)
+            else
             {
-                // coalesce a burst into one dom0 notification (politeness rule)
-                std::wstring lines;
-                for (auto const& e : fresh) { if (!lines.empty()) lines += L"\n"; lines += e.title + L": " + e.body; }
-                wchar_t sum[256];
-                swprintf(sum, RTL_NUMBER_OF(sum), L"%u notifications (%s)", (UINT)fresh.size(), fresh[0].app.c_str());
-                bool ok = ForwardText(sum, lines, 0);
-                BLog(L"SENT coalesced x%u: %s", (UINT)fresh.size(), ok ? L"OK" : L"FAIL");
-            }
-            else for (auto const& e : fresh)
-            {
-                bool ok = ForwardText(e.title, e.body.empty() ? e.app : e.body, e.id);
-                BLog(L"SENT id=%u app='%s' title='%s': %s", e.id, e.app.c_str(), e.title.c_str(), ok ? L"OK" : L"FAIL");
+                struct NewToast { uint32_t id; std::wstring aumid, app, title, body; };
+                std::vector<NewToast> fresh;
+                for (auto const& un : list)
+                {
+                    uint32_t id = un.Id();
+                    if (seen.count(id)) continue;
+                    std::wstring aumid, app;
+                    try { aumid = un.AppInfo().AppUserModelId().c_str(); } catch (...) {}
+                    try { app = un.AppInfo().DisplayInfo().DisplayName().c_str(); } catch (...) {}
+                    bool listed = false;
+                    for (auto const& a : allow) if (_wcsicmp(a.c_str(), aumid.c_str()) == 0) { listed = true; break; }
+                    if (!listed) { seen.insert(id); BLog(L"skip id=%u aumid=%s (window path)", id, aumid.c_str()); continue; }
+                    // allowlisted: DEFER marking seen until a forward succeeds, so a failed/absent
+                    // forward is retried and never silently drops a toast (P.2 fail-open invariant).
+                    auto tb = FirstTexts(un);
+                    size_t sep = tb.find(L'\x1f');
+                    fresh.push_back({ id, aumid, app, tb.substr(0, sep),
+                                      sep == std::wstring::npos ? L"" : tb.substr(sep + 1) });
+                }
+                // Lazy suppression: an allowlisted app is banner-suppressed ONLY after one of its
+                // toasts forwards successfully. So the first toast per app double-shows (guest
+                // banner + dom0), and a bridge that never forwards never suppresses - fail-open.
+                auto suppressNow = [&](std::wstring const& aumid) {
+                    if (!aumid.empty() && suppressed.insert(aumid).second) BannerApplyOne(aumid);
+                };
+                if (fresh.empty() || g_connDead)
+                {
+                    if (!fresh.empty())
+                        BLog(L"%u allowlisted toast(s) while disconnected - left on the window path (unseen, retried)", (UINT)fresh.size());
+                    // leave `fresh` UNSEEN so they forward once the connection returns
+                }
+                else if (fresh.size() > 3)
+                {
+                    // coalesce a burst into one dom0 notification (politeness rule). guestId 0 =>
+                    // no dismiss-sync for coalesced items (documented A0 limit).
+                    std::wstring lines;
+                    for (auto const& e : fresh) { if (!lines.empty()) lines += L"\n"; lines += e.title + L": " + e.body; }
+                    wchar_t sum[256];
+                    swprintf(sum, RTL_NUMBER_OF(sum), L"%u notifications (%s)", (UINT)fresh.size(), fresh[0].app.c_str());
+                    bool ok = ForwardText(sum, lines, 0);
+                    if (ok) for (auto const& e : fresh) { seen.insert(e.id); suppressNow(e.aumid); }
+                    BLog(L"SENT coalesced x%u: %s%s", (UINT)fresh.size(), ok ? L"OK" : L"FAIL",
+                         ok ? L"" : L" (unseen, retried)");
+                }
+                else for (auto const& e : fresh)
+                {
+                    bool ok = ForwardText(e.title, e.body.empty() ? e.app : e.body, e.id);
+                    if (ok) { seen.insert(e.id); suppressNow(e.aumid); }
+                    BLog(L"SENT id=%u app='%s' title='%s': %s%s", e.id, e.app.c_str(), e.title.c_str(),
+                         ok ? L"OK" : L"FAIL", ok ? L"" : L" (unseen, retried)");
+                }
             }
             // bound the seen-set (rebuild from what is still in the center)
             if (seen.size() > 500)
@@ -732,7 +830,9 @@ static int BridgeMain()
         Sleep(2000);
     }
 
-    if (bannersOn) BannerRestoreAll();
+    // Restore unconditionally: any marker this (or a crashed prior) instance wrote must be undone
+    // on every exit path, whether or not we think a suppression is currently standing.
+    BannerRestoreAll();
     ConnDown();
     DeleteFileW(stopf.c_str());
     DeleteFileW(hbf.c_str());        // dead bridge must read as dead, not as freshly alive
@@ -745,17 +845,37 @@ static int BridgeMain()
 // bridge's named pipe. Exit when either direction closes - process exit closes our ends,
 // which the counterpart notices as EOF/broken pipe.
 
+// One direction of the splice. The PIPE handle is opened OVERLAPPED (see RelayMain) and is
+// used concurrently by BOTH pumps (one reads it, one writes it) - so every pipe op must be
+// overlapped with its OWN event, or the two directions serialize on the file object and the
+// server-speaks-first handshake self-deadlocks (t2's parked ReadFile(pipe) would block t1's
+// WriteFile(pipe) that must deliver the very bytes t2 is waiting for). The std handle end is
+// synchronous: each std handle is touched by exactly one pump, one direction, so it never
+// contends. `pipeIsSrc` says which side is the overlapped pipe.
+struct RelayDir { HANDLE src, dst; BOOL pipeIsSrc; HANDLE evt; };
+
+static BOOL RelayOne(BOOL doRead, HANDLE h, BOOL overlapped, HANDLE evt,
+                     BYTE* buf, DWORD n, DWORD* done)
+{
+    if (!overlapped)
+        return doRead ? ReadFile(h, buf, n, done, nullptr) : WriteFile(h, buf, n, done, nullptr);
+    OVERLAPPED ov = {}; ov.hEvent = evt; ResetEvent(evt);   // byte pipe: Offset fields ignored
+    BOOL ok = doRead ? ReadFile(h, buf, n, nullptr, &ov) : WriteFile(h, buf, n, nullptr, &ov);
+    if (!ok && GetLastError() != ERROR_IO_PENDING) return FALSE;
+    return GetOverlappedResult(h, &ov, done, TRUE);
+}
+
 static DWORD WINAPI RelayPump(LPVOID p)
 {
-    HANDLE* h = (HANDLE*)p;   // h[0] = src, h[1] = dst
+    RelayDir* d = (RelayDir*)p;
     BYTE buf[16384]; DWORD n, wr;
     for (;;)
     {
-        if (!ReadFile(h[0], buf, sizeof(buf), &n, nullptr) || n == 0) return 0;
+        if (!RelayOne(TRUE, d->src, d->pipeIsSrc, d->evt, buf, sizeof(buf), &n) || n == 0) return 0;
         DWORD off = 0;
         while (off < n)
         {
-            if (!WriteFile(h[1], buf + off, n - off, &wr, nullptr) || wr == 0) return 0;
+            if (!RelayOne(FALSE, d->dst, !d->pipeIsSrc, d->evt, buf + off, n - off, &wr) || wr == 0) return 0;
             off += wr;
         }
     }
@@ -763,16 +883,30 @@ static DWORD WINAPI RelayPump(LPVOID p)
 
 static int RelayMain(const wchar_t* pipeName)
 {
+    // OVERLAPPED so the two directions do not serialize on the one duplex handle (nMaxInstances=1
+    // + FILE_FLAG_FIRST_PIPE_INSTANCE on the resident side rule out a second handle).
     HANDLE pipe = CreateFileW(pipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                              OPEN_EXISTING, 0, nullptr);
+                              OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
     if (pipe == INVALID_HANDLE_VALUE) return 1;
-    HANDLE in2pipe[2] = { GetStdHandle(STD_INPUT_HANDLE), pipe };    // dom0 -> resident
-    HANDLE pipe2out[2] = { pipe, GetStdHandle(STD_OUTPUT_HANDLE) };  // resident -> dom0
-    HANDLE t1 = CreateThread(nullptr, 0, RelayPump, in2pipe, 0, nullptr);
-    HANDLE t2 = CreateThread(nullptr, 0, RelayPump, pipe2out, 0, nullptr);
+    HANDLE eA = CreateEventW(nullptr, TRUE, FALSE, nullptr);   // pump A's pipe-write event
+    HANDLE eB = CreateEventW(nullptr, TRUE, FALSE, nullptr);   // pump B's pipe-read event
+    if (!eA || !eB) return 1;
+    RelayDir in2pipe = { GetStdHandle(STD_INPUT_HANDLE), pipe, FALSE, eA };   // dom0 -> resident (write pipe)
+    RelayDir pipe2out = { pipe, GetStdHandle(STD_OUTPUT_HANDLE), TRUE, eB };  // resident -> dom0 (read pipe)
+    HANDLE t1 = CreateThread(nullptr, 0, RelayPump, &in2pipe, 0, nullptr);
+    HANDLE t2 = CreateThread(nullptr, 0, RelayPump, &pipe2out, 0, nullptr);
     if (!t1 || !t2) return 1;
     HANDLE ts[2] = { t1, t2 };
+    // Either direction closing (EOF/broken pipe) ends the splice. CancelIoEx then unblocks the
+    // OTHER pump if it is parked in an overlapped read/write on the pipe, so it does not hang;
+    // the pump parked on a std handle instead is reclaimed by process exit (this is the top of
+    // the relay process). Bounded join so a stuck pump can never wedge the exit.
     WaitForMultipleObjects(2, ts, FALSE, INFINITE);
+    CancelIoEx(pipe, nullptr);
+    WaitForMultipleObjects(2, ts, TRUE, 2000);
+    CloseHandle(t1); CloseHandle(t2);
+    CloseHandle(eA); CloseHandle(eB);
+    CloseHandle(pipe);
     return 0;
 }
 
