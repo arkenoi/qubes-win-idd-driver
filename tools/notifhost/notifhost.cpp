@@ -223,6 +223,26 @@ static void BLog(const wchar_t* fmt, ...)
     CloseHandle(f);
 }
 
+// DIAGNOSTIC (2026-09-05 silent-vanish localization): last-chance crash breadcrumb. Under
+// /EHsc catch(...) sees only C++ exceptions; an SEH fault (AV etc.) bypasses every guard and
+// killed the process with no log line. This filter logs the code+address+thread before the
+// process dies. A __fastfail/heap-corruption fail-fast BYPASSES even this filter - so a vanish
+// with NO CRASH line and NO guard line is itself a signal (memory-safety class). Process still
+// terminates (fail-open: the agent supervisor relaunches on the stale heartbeat, and the next
+// start's BannerRestoreAll undoes any standing suppression).
+static LONG WINAPI BridgeCrashFilter(EXCEPTION_POINTERS* ep)
+{
+    if (ep && ep->ExceptionRecord)
+        BLog(L"CRASH code=0x%08lX addr=%p tid=%lu (unhandled - terminating)",
+             ep->ExceptionRecord->ExceptionCode,
+             ep->ExceptionRecord->ExceptionAddress,
+             GetCurrentThreadId());
+    else
+        BLog(L"CRASH (no exception record) tid=%lu (unhandled - terminating)",
+             GetCurrentThreadId());
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 // --- config -------------------------------------------------------------------------------
 
 // DEFAULT allowlist - the conservative seed used when NotifyBridgeAllow is unset. The
@@ -525,6 +545,13 @@ static BOOL PipeXfer(BOOL rd, void* buf, DWORD n, DWORD timeoutMs)
 
 static DWORD WINAPI ReaderThread(LPVOID)
 {
+    // DIAGNOSTIC guard (2026-09-05): this thread had NO exception handler, so any C++ throw
+    // here (bad_alloc in the frame vector / pendingDismiss push_back / BLog's Utf8, ...) was
+    // an instant std::terminate with no log line - a prime suspect for the silent vanish.
+    // Catch, log DISTINCTLY, and fail open: conn marked dead -> the main loop restores
+    // banners and reconnects. Body deliberately NOT re-indented (diagnostic diff minimalism).
+    try
+    {
     for (;;)
     {
         BYTE hdr[4];
@@ -577,6 +604,13 @@ static DWORD WINAPI ReaderThread(LPVOID)
             MarkConnDead(); return 0;
         }
     }
+    }
+    catch (...)
+    {
+        BLog(L"READER THREAD caught exception - marking conn dead");
+        MarkConnDead();
+    }
+    return 0;
 }
 
 static void ConnDown()
@@ -700,6 +734,7 @@ static bool ForwardText(std::wstring const& title, std::wstring const& body, uin
 
 static int BridgeMain()
 {
+    SetUnhandledExceptionFilter(BridgeCrashFilter);   // crash breadcrumb (see BridgeCrashFilter)
     HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Local\\QubesToastBridgeSingleton");
     if (mtx) { DWORD w = WaitForSingleObject(mtx, 0); if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) return 0; }
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
@@ -779,6 +814,13 @@ static int BridgeMain()
 
     for (;;)
     {
+        // DIAGNOSTIC guard (2026-09-05) around the WHOLE iteration - AgentGone/heartbeat/
+        // conn-maintenance/consent included, not just the inner poll try: a C++ throw outside
+        // that inner try had no handler and killed the process silently. Log DISTINCTLY and
+        // keep running (fail-open); an SEH fault still falls to BridgeCrashFilter instead
+        // (/EHsc: catch(...) sees C++ throws only). Body deliberately NOT re-indented.
+        try
+        {
         ULONGLONG now = GetTickCount64();
         if (AgentGone()) { BLog(L"agent gone"); break; }
         if (WTSGetActiveConsoleSessionId() != g_mySession) { BLog(L"session changed"); break; }
@@ -960,6 +1002,13 @@ static int BridgeMain()
         }
 
         Sleep(2000);
+        }
+        catch (...)
+        {
+            BLog(L"MAIN LOOP caught exception (continuing)");
+            Sleep(2000);   // keep the normal loop pace: a hot rethrow must not spin CPU/log
+            continue;
+        }
     }
 
     // Restore unconditionally: any marker this (or a crashed prior) instance wrote must be undone
@@ -1069,6 +1118,7 @@ static int DumpMain()
 
 int wmain(int argc, wchar_t** argv)
 {
+    SetUnhandledExceptionFilter(BridgeCrashFilter);   // every mode: crash leaves a breadcrumb
     const wchar_t* relayPipe = nullptr;
     bool bridge = false, dump = false, stop = false, restore = false;
     for (int i = 1; i < argc; i++)
