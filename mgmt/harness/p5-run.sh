@@ -123,7 +123,31 @@ echo "$as" | grep -qa "AGENTSCREEN ${GW}" || {
 log "  containment PROVEN: guest ${GW}, agent ${GW}, host ${HOSTW}x${HOSTH}"
 
 # ---------------------------------------------------------------- helpers
-q push guest/fsgate-probe.ps1 >/dev/null 2>&1
+# The probe SCRIPT must be ON the guest before any cell launches it. The previous blind
+# `q push ... >/dev/null 2>&1` was the discarded-transient trap (experimenter rule 11) verbatim:
+# qvm-copy-to-vm fails transiently on a freshly-settled session (file-agent/no session yet), the
+# error was thrown away, and every SG cell then burned its full deadline launching a script that
+# was never there. Measured 2026-09-04 on win10-acc (fresh standalone): SG2/SG3/SG4 ALL graded
+# INVALID-INSTRUMENT "never reported a created window" (~120 s each) while the control Notepad -
+# which needs no pushed file - came up fine ("capture path proven alive, control=1426x752"), and
+# the SAME cells passed on the warm win10-p4. Verify on the SAME signal the launcher consults
+# (rule 5b): the file's existence at the exact path the launch names.
+ensure_probe_pushed(){
+  local i
+  for i in 1 2 3; do
+    T=200 q push guest/fsgate-probe.ps1 >/dev/null 2>&1
+    if T=90 q run "cmd /c if exist $GUEST\\fsgate-probe.ps1 (echo PROBEFILE-OK) else (echo PROBEFILE-MISSING)" \
+        | tr -d '\r' | grep -qa 'PROBEFILE-OK'; then return 0; fi
+    log "  fsgate-probe.ps1 not on the guest after push attempt $i/3 - retrying"
+    sleep 10
+  done
+  return 1
+}
+if ! ensure_probe_pushed; then
+  log "FATAL: guest/fsgate-probe.ps1 could not be pushed-and-verified after 3 attempts. Every SG"
+  log "       cell would launch a script that is not there and grade INVALID-INSTRUMENT."
+  exit 2
+fi
 cat > "$TMP/p5-mark.ps1" <<'PS'
 $d=(Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -EA SilentlyContinue).LogDir
 $f=(Get-ChildItem $d -Filter 'gui-agent-*.log' -EA SilentlyContinue | Sort-Object LastWriteTime -Desc | Select-Object -First 1)
@@ -191,11 +215,22 @@ control_alive(){ echo "$1" | grep -q "$CONTROL_DIM"; }
 
 # Wait until the PROBE ITSELF says it created the window. Never a fixed sleep: the probe's own JSON
 # is the readiness signal, and dom0 lags it by a further ~5-20 s.
+# THREE exits (experimenter rule 6), and the caller must branch on which was taken:
+#   0 = the probe reported "visible":true - ready, grade it;
+#   2 = the probe REPORTED but the window is not visible ("visible":false is written once and
+#       never changes; containment_absent means the probe refused and exited) - a REAL result,
+#       terminal: grade it, NEVER relaunch;
+#   1 = no probe report at all by the deadline - the LAUNCH never took (instrument gap; the only
+#       exit a relaunch may answer).
 wait_probe_ready(){  # $1 = guest file path
-  for _ in $(seq 1 20); do
-    T=90 q run "cmd /c type $1" 2>/dev/null | tr -d '\r' | grep -qa '"visible":true' && return 0
+  local body=""
+  for _ in $(seq 1 25); do
+    body=$(T=90 q run "cmd /c type $1" 2>/dev/null | tr -d '\r')
+    echo "$body" | grep -qa '"visible":true' && return 0
+    echo "$body" | grep -qa '"visible":false\|containment_absent' && return 2
     sleep 6
   done
+  echo "$body" | grep -qa '===\|{' && return 2
   return 1
 }
 
@@ -221,13 +256,36 @@ run_cell(){
   # `cmd /c "... > file"`, whose CONSOLE WINDOW (979x512) is itself mapped by the agent. The harness
   # counted it and reported SG2/SG4 as FAIL - "a screen-sized window reached dom0" - when the only
   # extra window was the launcher's own console and the probe had been denied correctly.
-  q run "cmd /c start \"\" powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File $GUEST\\fsgate-probe.ps1 -Mode $mode -HoldSeconds 220 -HostWidth $HOSTW -HostHeight $HOSTH -OutFile $gf" >/dev/null 2>&1
+  #
+  # BOUNDED RELAUNCH, covering ONLY the "launch never took" instrument gap (wait exit 1: no probe
+  # report at all). Measured 2026-09-04 on win10-acc (fresh standalone): SG2/SG3/SG4 each burned the
+  # full deadline with "never reported a created window" while the same suite's control Notepad was
+  # up and the SAME cells passed on warm win10-p4 - launch flakiness, not the product. A probe that
+  # DID report (exits 0/2) is a REAL result and is graded exactly as before, never relaunched:
+  # retrying a reported window could let a once-only wrong mapping vanish into a clean second
+  # attempt. The gate under test is deterministic on styles, so a relaunched window exercises the
+  # identical ShouldAcceptWindow decision - a real leak cannot hide behind the retry.
+  local attempt=1 ready
+  while :; do
+    q run "cmd /c start \"\" powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File $GUEST\\fsgate-probe.ps1 -Mode $mode -HoldSeconds 220 -HostWidth $HOSTW -HostHeight $HOSTH -OutFile $gf" >/dev/null 2>&1
+    wait_probe_ready "$gf"; ready=$?
+    [ "$ready" -ne 1 ] && break          # 0 = visible; 2 = reported-not-visible: real, grade it
+    [ "$attempt" -ge 3 ] && break        # bounded: a silent launch gets exactly two relaunches
+    log "  probe launch $attempt/3 produced no report file - killing strays, re-verifying the script, relaunching"
+    # a half-started probe must not double the window under the relaunch; same hammer as post-cell
+    q run 'cmd /c taskkill /f /im powershell.exe 2>nul & exit 0' >/dev/null 2>&1
+    sleep 5
+    ensure_probe_pushed || log "  WARNING: fsgate-probe.ps1 still not verifiable on the guest"
+    q run "cmd /c del /q $gf 2>nul & exit 0" >/dev/null 2>&1
+    attempt=$((attempt+1))
+  done
 
-  if ! wait_probe_ready "$gf"; then
-    log "  -> INVALID-INSTRUMENT: the probe never reported a created window; this cell grades nothing"
-    printf '%s\tprobe-ready\tINVALID-INSTRUMENT\tno window within deadline\t\n' "$id" >> "$OUT/verdicts.tsv"
+  if [ "$ready" -eq 1 ]; then
+    log "  -> INVALID-INSTRUMENT: the probe never reported a created window in $attempt launches; this cell grades nothing"
+    printf '%s\tprobe-ready\tINVALID-INSTRUMENT\tno probe report after %s launches\t\n' "$id" "$attempt" >> "$OUT/verdicts.tsv"
     rc=1; return
   fi
+  [ "$ready" -eq 2 ] && log "  probe REPORTED but never visible:true - grading the real report (no relaunch)"
   local probe; probe=$(T=200 q run "cmd /c type $gf" | tr -d '\r' | grep -a '^{' | head -1)
 
   # Identify the probe BY SIZE, not by a window count. A count is fooled by anything else that
