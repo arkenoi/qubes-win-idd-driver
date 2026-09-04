@@ -53,7 +53,13 @@ source mgmt/harness/e2e-wait.sh
 # (measured during the win10-app residue cleanup); -Script + -ArgsB64 survives every hop.
 INCOMING='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 raspush(){ # $1=repo script path, $2=args string (may be empty), $3=tag
-  QTEST_VM=$VM timeout -k 8 60 ./tools/qtest push "$1" >/dev/null 2>&1
+  # Push run-as-user.ps1 TOO, not just the target script. The harness invokes
+  # `powershell -File $INCOMING\run-as-user.ps1 -Script $INCOMING\<target>`, so run-as-user.ps1
+  # MUST be present at $INCOMING. On a FRESH PRIME QubesIncoming is empty and nothing else pushes
+  # it, so powershell fell to its interactive banner and every fire silently no-op'd - misread as
+  # "cold-session timing" for five runs (2026-09-04). qtest push deletes-then-copies, so pushing
+  # both every call is idempotent and cheap.
+  QTEST_VM=$VM timeout -k 8 60 ./tools/qtest push guest/run-as-user.ps1 "$1" >/dev/null 2>&1
   local base b64
   base=$(basename "$1")
   b64=$(printf '%s' "$2" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
