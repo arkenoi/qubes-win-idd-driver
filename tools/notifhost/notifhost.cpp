@@ -213,7 +213,7 @@ static std::vector<std::wstring> ReadAllowlist()
 }
 
 // Seed the per-user listener consent ONLY when it has never been set (same value the Settings
-// toggle writes; proven sufficient for an unpackaged reader by guest/listener-probe.ps1). An
+// toggle writes; proven sufficient for an unpackaged reader on this guest). An
 // explicit value - crucially "Deny" - is the user's decision and is left untouched: re-seeding
 // Allow over a Deny would (a) override a user who deliberately turned notification access off
 // and (b) defeat the fail-open selftest, since the agent relaunches this process ~1/min and each

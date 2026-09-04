@@ -1,7 +1,9 @@
 # fire-demo-toast.ps1 — fire ONE toast of a chosen class, in the interactive user session
-# (run via run-as-user.ps1). Companion to toast-bridge.ps1 demos and the DESIGN-toast-bridge
-# split: -RealChoice fires the window-path class (reminder scenario + buttons), default fires
-# the informational class (ToastGeneric, no actions).
+# (run via run-as-user.ps1). Fixture for the toast-bridge A0 acceptance (mgmt/harness/
+# a0-toast-bridge.sh) and the DESIGN-toast-bridge split: -RealChoice fires the window-path
+# class (reminder scenario + buttons), default fires the informational class (ToastGeneric,
+# no actions). The bridge itself is notifhost.exe --bridge (the retired PS spike was
+# guest/toast-bridge.ps1).
 param(
     [string]$Aumid = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe',
     [string]$Title = 'demo toast',
