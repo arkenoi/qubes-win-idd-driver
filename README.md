@@ -20,20 +20,20 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.16-agent409439d](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.16-agent409439d)** — agent `4f1c1865`, package `4.3.16`. See
-[`docs/RELEASE-NOTES-4.3.16.md`](docs/RELEASE-NOTES-4.3.16.md) for what changed **and for the two
-upgrade paths that are not yet tested**.
+Release **[v4.3.18-agentd45428e](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.18-agentd45428e)** — agent `d45428e` (code `9379eb3`), package `4.3.18`. See
+[`docs/RELEASE-NOTES-4.3.18.md`](docs/RELEASE-NOTES-4.3.18.md) for what changed and what was
+verified — the full install/upgrade matrix (clean install, reinstall, upgrade, AppVM) passed 94/94.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.16-1.agent4f1c1865351e.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.16-agent409439d/qubes-windows-tools-ng-4.3.16-1.agent4f1c1865351e.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
-| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.16-agent409439d/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.16-agent409439d/SHA256SUMS.txt) | checksums for both |
+| [`qubes-windows-tools-ng-4.3.18-1.agentd45428e87210.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.18-agentd45428e/qubes-windows-tools-ng-4.3.18-1.agentd45428e87210.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.18-agentd45428e/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.18-agentd45428e/SHA256SUMS.txt) | checksums for both |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.16-1.agent4f1c1865351e.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.18-1.agentd45428e87210.noarch.rpm
 ```
 
 With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
@@ -42,26 +42,26 @@ hands the guest exactly this ISO as a CD.
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction. Validated end to end for an upgrade **from an older
-build of this package**; an upgrade from **stock QWT 4.2.2** uses the same unchanged MSI
-machinery but has not been exercised on our testbed since August 2026, because the test
-images themselves carry a newer build (see the release notes).
+build of this package** — 4.3.18's acceptance ran clean install, reinstall, upgrade and
+AppVM cells, 94/94 passed. An upgrade from **stock QWT 4.2.2** uses the same unchanged
+MSI machinery but has not been exercised on our testbed since August 2026, because the
+test images themselves carry a newer build.
 
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
-**What changed in 4.3.14 — stability.** The installer now **arms autologon** (validating the
-password first, storing it as an LSA secret rather than plaintext), because a Windows guest that
-stops at a sign-in screen is unreachable over qrexec *and* invisible in seamless mode. A fresh
-qube gets a usable **application menu** — Notepad, Edge, Explorer, Settings, cmd and PowerShell
-plus elevated cmd/PowerShell — and `qvm-sync-appmenus` no longer fails the whole sync when one
-shortcut misbehaves. Nothing fullscreen-sized is shown during boot or shutdown, now enforced by
-phase rather than by window class. Plus a reboot-cause audit that survives an AppVM's volatile C:,
-and a watchdog that stops respawning the agent into a shutting-down machine. Validated end to end
-on both chains: 38 checks, 0 failures. Full story in the
-[release notes](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.14-agent5634f90).
+**What changed in 4.3.18 — menus rendered whole.** Seamless menus and shell surfaces are now
+mapped as a single pixel-accurate surface instead of stitched slices — the completion of the
+menu pixel-perfect work (edge-trim, crop-before-show) followed by the de-slice plan, with the
+WGC capture broker **default-on for Windows 11 24H2+** and the legacy slice knobs removed.
+Verified with the full acceptance protocol — all five parts (install/upgrade matrix 94/94,
+network, updates, rendering, safeguards), zero product-defect failures — and re-benchmarked
+against stock on Windows 10 with every workload's ranges disjoint ("Performance" below). One
+pre-existing Windows 11 24H2 issue on the resolution-change path is tracked separately in the
+notes. Full story in [`docs/RELEASE-NOTES-4.3.18.md`](docs/RELEASE-NOTES-4.3.18.md).
 
 **Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
-commit; the agent is `5634f90` on
+commit; the agent is `d45428e` on
 [arkenoi/qubes-gui-agent-windows](https://github.com/arkenoi/qubes-gui-agent-windows). The
 Windows build is not timestamp-reproducible, so binary hashes differ across rebuilds of identical
 source; `MANIFEST.json` inside each asset records the exact source commits the build came from.
@@ -113,8 +113,8 @@ was verified against the stock baseline on the same guest (evidence in `FINDINGS
 
 ### CPU cost against stock — measured, and platform-dependent
 
-On **Windows 10** the agent costs a fraction of stock: scroll −94 %, typing −90 %, idle
-−87 %, drag −44 %, every repetition of one side beating every repetition of the other. On
+On **Windows 10** the agent costs a fraction of stock: scroll −88 %, typing −87 %, idle
+−70…−87 %, drag −45 %, every repetition of one side beating every repetition of the other. On
 **Windows 11** no workload is distinguishable from stock — every difference is inside the
 run-to-run spread and none carries a verdict. Stock is an order of magnitude cheaper on
 Windows 11 than on Windows 10 to begin with, so there is far less to recover there. Its
@@ -265,35 +265,44 @@ after:   Xen PV Network Device #0              (emulated NIC UNPLUGGED)
 
 ## Performance
 
-gui-agent CPU, % of one core, median of 3 (2026-09-01, `tools/bench-stock-vs-ours.sh`).
-ONE guest per platform, ONE install, ONE display stack — only `gui-agent.exe` is swapped, and
-both binaries are built by the same CI job from the same toolchain, so neither the compiler nor
-the install is a variable. Stock is this fork's upstream merge-base (`431e4517`, three commits
-after `v4.2.2`). 3 rounds interleaved per platform, 45 s settle after every swap; 12
-repetitions, 12 valid, 0 invalid. Both guests at 5120x1440. **Each platform's result was
-reproduced in a second independent session** — the check that matters, because an earlier run at
-a short settle produced a within-session result that a second session overturned.
+gui-agent CPU, % of one core, median of 3 (2026-09-03, `tools/bench-stock-vs-ours.sh`, run as
+part of 4.3.18 acceptance). ONE guest per platform, ONE install, ONE display stack — only
+`gui-agent.exe` is swapped, and both binaries are built by the same CI job from the same
+toolchain, so neither the compiler nor the install is a variable. Stock is this fork's upstream
+merge-base (`431e4517`, three commits after `v4.2.2`). 3 repetitions per side, interleaved,
+45 s settle after every swap; each session 6 repetitions, 6 valid, 0 invalid, the running
+binary's hash read back from the guest every repetition. Both guests at 5120x1440. **The
+Windows 10 result was reproduced in a second independent session the same day** — the check
+that matters, because an earlier run at a short settle produced a within-session result that a
+second session overturned.
 
-**Windows 10** (19045.6456) — every row has disjoint ranges, i.e. every repetition of one side
+**Windows 10** (19045) — every row has disjoint ranges, i.e. every repetition of one side
 beat every repetition of the other:
 
 | workload | stock 4.2.2 | this build | delta |
 |---|---:|---:|---:|
-| scroll | 41.010 | **2.649** | −93.5 % |
-| typing | 22.815 | **2.312** | −89.9 % |
-| idle   |  3.906 | **0.498** | −87.3 % |
-| drag   | 29.035 | **16.225** | −44.1 % |
+| scroll | 44.283 | **5.351** | −87.9 % |
+| typing | 23.991 | **3.164** | −86.8 % |
+| idle   | 3.426–4.879 | **0.653–0.976** | −71.5…−86.6 % |
+| drag   | 32.519 | **17.928** | −44.9 % |
+
+The second session read scroll −87.6 %, typing −84.5 %, drag −50.6 % — again every row disjoint.
 
 **Windows 11** (24H2, 26100) — stock is an order of magnitude cheaper here to begin with, and
-nothing is distinguishable from it. Two sessions, and the drag difference changes sign between
-them, which is what a genuine null result looks like:
+nothing carries a verdict. Two sessions again, and the differences that looked real in one were
+absent or inverted in the other — between-session variance swamps them all:
 
 | workload | stock 4.2.2 | this build | delta | |
 |---|---:|---:|---:|---|
-| drag   | 15.384 | 14.929 |  −3.0 % | inside noise; +15.9 % in the other session — no verdict |
-| scroll |  4.681 |  4.371 |  −6.6 % | inside noise — no verdict |
-| typing |  1.416 |  1.712 | +20.9 % | inside noise — no verdict |
-| idle   |  0.165 |  0.988 | | spread 302 %, and one session read 0.000 throughout — no verdict |
+| drag   | 15.813 | 13.758 |  −13.0 % | inside noise; +36.5 % and disjoint in the other session — sign flips, no verdict |
+| scroll |  3.747 |  3.463 |  −7.6 % | inside noise — no verdict |
+| typing |  2.496 |  2.664 |  +6.7 % | inside noise; +200 % and disjoint in the other session — not reproduced, no verdict |
+| idle   |  0.660 |  0.330 | | spread up to 284 %, several phases read 0.000 — no verdict |
+
+The acceptance gate is OS-aware for exactly this reason: on Windows 10 the fork's win must show
+(scroll disjoint, ours better) or the build fails; on Windows 11 indistinguishability from stock
+is the pass condition, because the platform bounds every agent there. The first-session Windows
+11 drag reading is being root-caused, but two sessions disagreeing on its sign is not a verdict.
 
 Read the Windows 10 margin as scaling with screen area and with how many top-level windows the
 session has: stock re-enumerates every window on every captured frame (its own source says
@@ -303,8 +312,8 @@ moved — the transport is identical on both sides. Where stock's per-frame cost
 as on Windows 11, there is nothing for that to recover and our added machinery shows up instead.
 
 This measures agent CPU for a fixed workload, not frames delivered. The earlier "2× stock on
-typing" result was real for the build and guest it measured and is superseded — typing is now
-inside noise on Windows 11. Method, per-repetition values, what this does not measure, and
+typing" result was real for the build and guest it measured and is superseded — typing carries
+no verdict on Windows 11. Method, per-repetition values, what this does not measure, and
 every retraction: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ---
