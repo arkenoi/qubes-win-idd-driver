@@ -67,6 +67,21 @@ blog_since(){ # $1 = old line count
   qrun "powershell -NoProfile -Command \"if (Test-Path '$BLOG') { Get-Content '$BLOG' | Select-Object -Skip $1 }\""
 }
 
+# --- heartbeat / file-presence probe (SELF-MATCH-SAFE) --------------------------------------
+# The old `cmd /c "if exist ... echo YESHB else echo NOHB"` idiom SELF-MATCHED: qtest run echoes
+# the command line, which literally contains both markers, so a grep for them always hit the echo,
+# not the result (the P2/P3/P6/P8 heartbeat false-fail, 2026-09-04). Fix: run Test-Path via a
+# base64 -EncodedCommand, so the command line the console echoes is an opaque base64 blob and the
+# markers HBPRESENT/HBABSENT appear ONLY in the actual output. Prints PRESENT or ABSENT.
+path_state(){ # $1 = guest path
+  local ps b64
+  ps="if (Test-Path -LiteralPath '$1') { 'HBPRESENT' } else { 'HBABSENT' }"
+  b64=$(printf '%s' "$ps" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+  qrun "powershell -NoProfile -EncodedCommand $b64" | grep -aoE 'HBPRESENT|HBABSENT' | tail -1 \
+    | sed 's/HBPRESENT/PRESENT/; s/HBABSENT/ABSENT/'
+}
+hb_state(){ path_state "$HBF"; }   # PRESENT = bridge heartbeat file exists (bridge running)
+
 fire_info(){ raspush guest/fire-demo-toast.ps1 "-Title '$1'" "a0i$RANDOM"; }
 fire_ctl(){ raspush guest/fire-demo-toast.ps1 "-RealChoice -Aumid $CTLAUMID -Title '$1'" "a0c$RANDOM"; }
 
@@ -122,11 +137,22 @@ for exe in notifhost.exe gui-agent.exe; do
 done
 verdict P1b "build identity proven"
 
+# INSTRUMENT SELF-TEST (experimenter rule 3: the heartbeat probe must be shown to distinguish
+# present vs absent, AND to be able to FAIL, before any verdict relies on it). Point path_state
+# at a file that ALWAYS exists (cmd.exe) and one that never does; both directions must be right.
+pst_yes=$(path_state 'C:\Windows\System32\cmd.exe')
+pst_no=$(path_state 'C:\ProgramData\qubes-toast-bridge\__nope_selftest_marker__')
+if [ "$pst_yes" = PRESENT ] && [ "$pst_no" = ABSENT ]; then
+  log "P1c: heartbeat instrument self-test OK (present->$pst_yes absent->$pst_no)"
+else
+  verdict P1c "FAIL heartbeat instrument self-test present='$pst_yes' absent='$pst_no' - probe unreliable, aborting"; exit 1
+fi
+
 # ---------- P2 instrument validation + gate-OFF baseline -----------------------------------
 log "P2: detectors + baseline (gate off - as-installed default)"
-hb=$(qrun "cmd /c \"if exist \\\"$HBF\\\" (echo YESHB) else (echo NOHB)\"" | grep -aoE 'YESHB|NOHB')
-[ "$hb" = "NOHB" ] && log "P2: no heartbeat with gate off (expected)" \
-  || verdict P2 "FAIL bridge heartbeat present with gate OFF"
+hb=$(hb_state)
+[ "$hb" = "ABSENT" ] && log "P2: no heartbeat with gate off (expected)" \
+  || verdict P2 "FAIL bridge heartbeat present with gate OFF (hb=$hb)"
 
 snap_or "$DOMRE" p2-dom0-base > "$OUT/p2-dom0-base.ids"
 # known-good dom0 bubble: the proven NotifyClient direct send
@@ -163,8 +189,7 @@ timeout -k 8 60 ./tools/qtest start >/dev/null 2>&1
 w_usersession "$VM" 900 p3-session "$OUT" log || { log "FATAL no session after cold boot"; exit 1; }
 ok=""
 for i in $(seq 1 30); do   # agent launches bridge on shell-up; 5s supervise cadence
-  hb=$(qrun "cmd /c \"if exist \\\"$HBF\\\" (echo YESHB) else (echo NOHB)\"" | grep -aoE 'YESHB|NOHB')
-  [ "$hb" = "YESHB" ] && { ok=1; break; }; sleep 5
+  [ "$(hb_state)" = PRESENT ] && { ok=1; break; }; sleep 5
 done
 [ -n "$ok" ] || { cap "$VM" p3-nobridge "$OUT"; verdict P3 "FAIL bridge never heartbeat after cold boot"; exit 1; }
 conn=""
@@ -262,7 +287,7 @@ rec=""
 for i in $(seq 1 30); do   # <=150s: supervise 5s + 60s throttle + connect
   L3=$(blog_len); blog_since 0 > "$OUT/p6b-blog.txt"
   tail -20 "$OUT/p6b-blog.txt" | grep -qa "connected (server version" && \
-    qrun "cmd /c \"if exist \\\"$HBF\\\" echo YESHB\"" | grep -qa YESHB && { rec=1; break; }
+    [ "$(hb_state)" = PRESENT ] && { rec=1; break; }
   sleep 5
 done
 if [ -n "$rec" ]; then
@@ -333,7 +358,7 @@ w_usersession "$VM" 900 p8-session "$OUT" log || { verdict P8 "FAIL no session a
 # bridge must NOT come up (gate forced off); allow a generous window then confirm no heartbeat
 hbseen=""
 for i in $(seq 1 20); do
-  qrun "cmd /c \"if exist \\\"$HBF\\\" echo YESHB\"" | grep -qa YESHB && { hbseen=1; break; }; sleep 5
+  [ "$(hb_state)" = PRESENT ] && { hbseen=1; break; }; sleep 5
 done
 L8=$(blog_len 2>/dev/null || echo 0)
 snap_or "$TOASTRE" p8-guest-base > "$OUT/p8-guest-base.ids"
