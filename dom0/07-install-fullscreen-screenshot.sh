@@ -118,31 +118,36 @@ echo "capture method: $captured" >&2
 
 # Geometry is best effort and must never abort the capture: the PNG is the point. It also
 # requires xwininfo, which dom0 may not have - absence is not an error.
-{
-    # The 'mapped' column exists because this list comes from xwininfo -root -tree,
-    # which enumerates EXISTING X windows - a withdrawn (unmapped) window still
-    # appears. Reading geometry without map state misled a whole investigation
-    # (2026-08-07: the seamless desktop window was reported as "mapped full-screen"
-    # when it was actually withdrawn).
-    echo "# id x y w h override_redirect mapped name"
-    command -v xwininfo >/dev/null || echo "# xwininfo not installed in dom0 - geometry omitted"
-    "${X[@]}" xwininfo -root -tree 2>/dev/null |
-      grep -oE '0x[0-9a-f]+' | sort -u | while read -r id; do
-        owner=$("${X[@]}" xprop -id "$id" _QUBES_VMNAME 2>/dev/null |
-                sed -n 's/^_QUBES_VMNAME(STRING) = "\(.*\)"$/\1/p')
-        [ "$owner" = "$VM" ] || continue
-        info=$("${X[@]}" xwininfo -id "$id" -stats 2>/dev/null) || continue
-        x=$(printf '%s' "$info" | sed -n 's/.*Absolute upper-left X: *\([0-9-]*\).*/\1/p' | head -1)
-        y=$(printf '%s' "$info" | sed -n 's/.*Absolute upper-left Y: *\([0-9-]*\).*/\1/p' | head -1)
-        w=$(printf '%s' "$info" | sed -n 's/.*Width: *\([0-9]*\).*/\1/p' | head -1)
-        h=$(printf '%s' "$info" | sed -n 's/.*Height: *\([0-9]*\).*/\1/p' | head -1)
-        ovr=$(printf '%s' "$info" | grep -c 'Override Redirect State: yes')
-        name=$("${X[@]}" xprop -id "$id" WM_NAME 2>/dev/null |
-               sed -n 's/^WM_NAME(\(STRING\|UTF8_STRING\)) = "\(.*\)"$/\2/p' | head -1)
-        ms=$(printf '%s' "$info" | grep -c 'Map State: IsViewable')
-        echo "$id ${x:-?} ${y:-?} ${w:-?} ${h:-?} $ovr $ms ${name:-?}"
-    done
-} > "$TMP/geometry.txt" 2>/dev/null || true
+#
+# ONE sudo context for the WHOLE enumeration. The old shape ran `sudo -u DOMUSER env ... xprop`
+# PER WINDOW over every id on the dom0 root tree (hundreds) - a sudo-spawn storm that was the
+# real ~58s cost of geometry (proven 2026-09-04: a geometry-only, capture-less service was still
+# ~58s, and scrot vs no-capture differed by only ~1s). Here a single `sudo -u DOMUSER ... bash -s`
+# runs the loop, so xwininfo/xprop run as the domuser with NO per-call sudo. $VM -> $TARGETVM;
+# the inner heredoc is quoted so it expands only inside bash -s. The 'mapped' column comes from
+# xwininfo -root -tree, which lists EXISTING windows incl. withdrawn ones (2026-08-07 lesson).
+if command -v xwininfo >/dev/null; then
+    "${X[@]}" TARGETVM="$VM" bash -s > "$TMP/geometry.txt" 2>/dev/null <<'GEOMINNER' || true
+echo "# id x y w h override_redirect mapped name"
+xwininfo -root -tree 2>/dev/null | grep -oE '0x[0-9a-f]+' | sort -u | while read -r id; do
+    owner=$(xprop -id "$id" _QUBES_VMNAME 2>/dev/null |
+            sed -n 's/^_QUBES_VMNAME(STRING) = "\(.*\)"$/\1/p')
+    [ "$owner" = "$TARGETVM" ] || continue
+    info=$(xwininfo -id "$id" -stats 2>/dev/null) || continue
+    x=$(printf '%s' "$info" | sed -n 's/.*Absolute upper-left X: *\([0-9-]*\).*/\1/p' | head -1)
+    y=$(printf '%s' "$info" | sed -n 's/.*Absolute upper-left Y: *\([0-9-]*\).*/\1/p' | head -1)
+    w=$(printf '%s' "$info" | sed -n 's/.*Width: *\([0-9]*\).*/\1/p' | head -1)
+    h=$(printf '%s' "$info" | sed -n 's/.*Height: *\([0-9]*\).*/\1/p' | head -1)
+    ovr=$(printf '%s' "$info" | grep -c 'Override Redirect State: yes')
+    name=$(xprop -id "$id" WM_NAME 2>/dev/null |
+           sed -n 's/^WM_NAME(\(STRING\|UTF8_STRING\)) = "\(.*\)"$/\2/p' | head -1)
+    ms=$(printf '%s' "$info" | grep -c 'Map State: IsViewable')
+    echo "$id ${x:-?} ${y:-?} ${w:-?} ${h:-?} $ovr $ms ${name:-?}"
+done
+GEOMINNER
+else
+    echo "# xwininfo not installed in dom0 - geometry omitted" > "$TMP/geometry.txt"
+fi
 
 tar -C "$TMP" -cf - .
 EOF

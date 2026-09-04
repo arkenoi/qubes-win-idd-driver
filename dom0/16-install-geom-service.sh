@@ -64,24 +64,30 @@ done
 [ -n "$XA" ] || { echo "ERROR: no usable X session for $DOMUSER on $DISP" >&2; exit 2; }
 X=(sudo -u "$DOMUSER" env DISPLAY="$DISP" XAUTHORITY="$XA")
 
-# Same emission as local.WinFullScreen's geometry block, verbatim, minus the PNG capture.
+# ONE sudo context for the WHOLE enumeration. The old shape ran `sudo -u DOMUSER env ... xprop`
+# PER WINDOW over every id on the dom0 root tree (hundreds) - a sudo-spawn storm that was the
+# real ~58s cost (NOT the capture; a geometry-only service was still ~58s). Here a single
+# `sudo -u DOMUSER ... bash -s` runs the loop, so xwininfo/xprop run as the domuser with NO
+# per-call sudo. $VM is passed in as $TARGETVM; the inner heredoc is quoted so it expands only
+# inside bash -s.
+"${X[@]}" TARGETVM="$VM" bash -s <<'GEOMINNER'
 echo "# id x y w h override_redirect mapped name"
-"${X[@]}" xwininfo -root -tree 2>/dev/null |
-  grep -oE '0x[0-9a-f]+' | sort -u | while read -r id; do
-    owner=$("${X[@]}" xprop -id "$id" _QUBES_VMNAME 2>/dev/null |
+xwininfo -root -tree 2>/dev/null | grep -oE '0x[0-9a-f]+' | sort -u | while read -r id; do
+    owner=$(xprop -id "$id" _QUBES_VMNAME 2>/dev/null |
             sed -n 's/^_QUBES_VMNAME(STRING) = "\(.*\)"$/\1/p')
-    [ "$owner" = "$VM" ] || continue
-    info=$("${X[@]}" xwininfo -id "$id" -stats 2>/dev/null) || continue
+    [ "$owner" = "$TARGETVM" ] || continue
+    info=$(xwininfo -id "$id" -stats 2>/dev/null) || continue
     x=$(printf '%s' "$info" | sed -n 's/.*Absolute upper-left X: *\([0-9-]*\).*/\1/p' | head -1)
     y=$(printf '%s' "$info" | sed -n 's/.*Absolute upper-left Y: *\([0-9-]*\).*/\1/p' | head -1)
     w=$(printf '%s' "$info" | sed -n 's/.*Width: *\([0-9]*\).*/\1/p' | head -1)
     h=$(printf '%s' "$info" | sed -n 's/.*Height: *\([0-9]*\).*/\1/p' | head -1)
     ovr=$(printf '%s' "$info" | grep -c 'Override Redirect State: yes')
-    name=$("${X[@]}" xprop -id "$id" WM_NAME 2>/dev/null |
+    name=$(xprop -id "$id" WM_NAME 2>/dev/null |
            sed -n 's/^WM_NAME(\(STRING\|UTF8_STRING\)) = "\(.*\)"$/\2/p' | head -1)
     ms=$(printf '%s' "$info" | grep -c 'Map State: IsViewable')
     echo "$id ${x:-?} ${y:-?} ${w:-?} ${h:-?} $ovr $ms ${name:-?}"
 done
+GEOMINNER
 EOF
 chmod 755 "$SVC"
 
