@@ -18,9 +18,11 @@
 #     notifhost --dump-aumids for Notification Center records, certutil sha256 of the
 #     installed binaries vs the package (rule 1). Each detector is seen to FAIL before its
 #     PASS is trusted (P2 baseline + P6a are the fail-proofs).
-#   BUDGET: prime <=3600s; session waits per e2e-wait budgets; toast checks <=30s @2s; bridge
-#     relaunch waits <=150s (agent supervise 5s poll + 60s throttle); overall watchdog is the
-#     caller's job (launch with run_in_background + a pkill watchdog).
+#   BUDGET: prime <=3600s; session waits per e2e-wait budgets; bridge relaunch waits <=150s
+#     (agent supervise 5s poll + 60s throttle). NOTE the rig's whole-desktop capture (geom /
+#     local.WinFullScreen) is ~59s PER CALL here (measured), so window-path detection uses
+#     PERSISTENT toasts (fire_info_p) caught in <=2 geom tries, not many polls of a transient
+#     toast; total ~60-90 min incl. 3 cold boots. Overall watchdog is the caller's job (>=130 min).
 #
 # Evidence: scratchpad/a0-toast-bridge-<UTC>/ (gitignored - internal never enters the repo).
 set -uo pipefail
@@ -83,7 +85,17 @@ path_state(){ # $1 = guest path
 hb_state(){ path_state "$HBF"; }   # PRESENT = bridge heartbeat file exists (bridge running)
 
 fire_info(){ raspush guest/fire-demo-toast.ps1 "-Title '$1'" "a0i$RANDOM"; }
+# PERSISTENT informational toast (scenario=reminder) for WINDOW-PATH detection: the rig's
+# whole-desktop capture (geom) is ~59s/call, so a transient ~5s toast is gone before any snapshot
+# aligns and its o-r window is never caught. Use fire_info_p where the check is "an o-r window
+# mapped" (geom); use fire_info where the check is the bridge.log SENT line (fast, no window needed).
+fire_info_p(){ raspush guest/fire-demo-toast.ps1 "-Persistent -Title '$1'" "a0p$RANDOM"; }
 fire_ctl(){ raspush guest/fire-demo-toast.ps1 "-RealChoice -Aumid $CTLAUMID -Title '$1'" "a0c$RANDOM"; }
+# Clear persistent test toasts from the Notification Center so they do not outlive the phase and
+# pollute the next baseline (dismiss-toast.ps1 clears by AppId; default = the PS test AUMID).
+dismiss_toasts(){ # $1 = AUMID (optional; default PS test AUMID)
+  raspush guest/dismiss-toast.ps1 "${1:+-AppId '$1'}" "a0z$RANDOM" >/dev/null 2>&1
+}
 
 # poll for a NEW mapped o-r window vs a baseline id set, name matching $2; returns 0 found
 new_or_window(){ # $1=baseline-file $2=name-regex $3=tries(2s each) $4=save-as
@@ -163,20 +175,22 @@ DOMDET=none
 if [ -n "$NCG" ] && qrun "cmd /c \"if exist \\\"$NCG\\\" echo HAVE\"" | grep -qa HAVE; then
   qrun "\"$NCG\" --send \"A0T detector probe\" body --timeout 20" > "$OUT/p2-ncsend.txt" 2>&1 &
   ncpid=$!
-  if new_or_window "$OUT/p2-dom0-base.ids" "$DOMRE" 12 p2-dom0-probe; then DOMDET=geom
+  if new_or_window "$OUT/p2-dom0-base.ids" "$DOMRE" 2 p2-dom0-probe; then DOMDET=geom
   else DOMDET=ack; fi
   wait $ncpid || true
   grep -qa "OK id=" "$OUT/p2-ncsend.txt" || log "P2 WARN: NotifyClient probe not acked: $(cat "$OUT/p2-ncsend.txt")"
 fi
 log "P2: dom0-bubble detector mode = $DOMDET (geom=window-list visible, ack=protocol-ack only)"
 
-# baseline toast, gate off: MUST banner in-guest, MUST NOT bridge
+# baseline toast, gate off: MUST banner in-guest (o-r window), MUST NOT bridge. PERSISTENT so the
+# ~59s geom can catch the o-r window (2 tries is plenty for a toast that stays up).
 snap_or "$TOASTRE" p2-guest-base > "$OUT/p2-guest-base.ids"
-fire_info "A0T baseline gate-off" > "$OUT/p2-fire.txt" 2>&1
-if new_or_window "$OUT/p2-guest-base.ids" "$TOASTRE" 15 p2-guest-toast; then
+fire_info_p "A0T baseline gate-off" > "$OUT/p2-fire.txt" 2>&1
+if new_or_window "$OUT/p2-guest-base.ids" "$TOASTRE" 2 p2-guest-toast; then
+  dismiss_toasts
   verdict P2 "PASS gate-off toast banners in guest (window path; detector CAN fire)"
 else
-  cap "$VM" p2-noshow "$OUT"; verdict P2 "FAIL gate-off toast produced no guest o-r banner - baseline broken, aborting"; exit 1
+  cap "$VM" p2-noshow "$OUT"; dismiss_toasts; verdict P2 "FAIL gate-off toast produced no guest o-r banner - baseline broken, aborting"; exit 1
 fi
 
 # ---------- P3 enable + cold boot ----------------------------------------------------------
@@ -224,10 +238,10 @@ for i in $(seq 1 15); do
 done
 domseen="n/a"
 if [ "$DOMDET" = geom ]; then
-  new_or_window "$OUT/p4-dom0-base.ids" "$DOMRE" 5 p4-dom0 && domseen=yes || domseen=no
+  new_or_window "$OUT/p4-dom0-base.ids" "$DOMRE" 2 p4-dom0 && domseen=yes || domseen=no
 fi
 guestbanner=no
-new_or_window "$OUT/p4-guest-base.ids" "$TOASTRE" 3 p4-guest && guestbanner=yes
+new_or_window "$OUT/p4-guest-base.ids" "$TOASTRE" 2 p4-guest && guestbanner=yes
 if [ -n "$sent" ] && [ "$guestbanner" = no ] && [ "$domseen" != no ]; then
   verdict P4a "PASS bridged: SENT OK, no guest banner, dom0=$domseen"
 else
@@ -237,10 +251,11 @@ L1=$(blog_len)
 snap_or "$TOASTRE" p4c-guest-base > "$OUT/p4c-guest-base.ids"
 fire_ctl "A0T control" > /dev/null 2>&1
 ctlbanner=no
-new_or_window "$OUT/p4c-guest-base.ids" "$TOASTRE" 15 p4c-guest && ctlbanner=yes
+new_or_window "$OUT/p4c-guest-base.ids" "$TOASTRE" 2 p4c-guest && ctlbanner=yes
 blog_since "$L1" > "$OUT/p4c-blog.txt"
 ctlskip=$(grep -ca "skip id=" "$OUT/p4c-blog.txt" || true)
 ctlsent=$(grep -ca "SENT" "$OUT/p4c-blog.txt" || true)
+dismiss_toasts "$CTLAUMID"   # the control toast is a persistent reminder - clear it
 if [ "$ctlbanner" = yes ] && [ "$ctlsent" = 0 ]; then
   verdict P4b "PASS control: guest banner, no bridge send (skip=$ctlskip)"
 else
@@ -273,11 +288,12 @@ echo "$sb" | grep -qa 'SHOWBANNER-NOW=0$' && verdict P6a-restore "FAIL ShowBanne
 sleep 90
 snap_or "$TOASTRE" p6-guest-base > "$OUT/p6-guest-base.ids"
 L2=$(blog_len)
-fire_info "A0T consent-revoked" > /dev/null 2>&1
-if new_or_window "$OUT/p6-guest-base.ids" "$TOASTRE" 15 p6-guest; then
+fire_info_p "A0T consent-revoked" > /dev/null 2>&1   # persistent: geom must catch the o-r window
+if new_or_window "$OUT/p6-guest-base.ids" "$TOASTRE" 2 p6-guest; then
+  dismiss_toasts
   verdict P6a "PASS consent revoked => window path (fail-open proven by failure)"
 else
-  cap "$VM" p6a "$OUT"; verdict P6a "FAIL toast lost with consent revoked - FAIL-CLOSED DEFECT"
+  cap "$VM" p6a "$OUT"; dismiss_toasts; verdict P6a "FAIL toast lost with consent revoked - FAIL-CLOSED DEFECT"
 fi
 blog_since "$L2" | grep -a "FATAL" > "$OUT/p6-fatal.txt" || true
 
@@ -300,7 +316,7 @@ if [ -n "$rec" ]; then
   fire_info "A0T recovered" > /dev/null 2>&1
   sent=""
   for i in $(seq 1 15); do blog_since "$L4" | grep -qa "SENT id=.*OK" && { sent=1; break; }; sleep 2; done
-  gb=no; new_or_window "$OUT/p6b-guest-base.ids" "$TOASTRE" 3 p6b-guest && gb=yes
+  gb=no; new_or_window "$OUT/p6b-guest-base.ids" "$TOASTRE" 2 p6b-guest && gb=yes
   [ -n "$sent" ] && [ "$gb" = no ] && verdict P6b "PASS recovery: bridged again + re-suppressed after consent restore" \
     || verdict P6b "FAIL recovery sent=${sent:-no} guestbanner=$gb"
 else
@@ -362,9 +378,10 @@ for i in $(seq 1 20); do
 done
 L8=$(blog_len 2>/dev/null || echo 0)
 snap_or "$TOASTRE" p8-guest-base > "$OUT/p8-guest-base.ids"
-fire_info "A0T legacy" > /dev/null 2>&1
-lgwin=no; new_or_window "$OUT/p8-guest-base.ids" "$TOASTRE" 15 p8-guest && lgwin=yes
+fire_info_p "A0T legacy" > /dev/null 2>&1   # persistent: geom must catch the o-r window
+lgwin=no; new_or_window "$OUT/p8-guest-base.ids" "$TOASTRE" 2 p8-guest && lgwin=yes
 lgsent=$(blog_since "$L8" 2>/dev/null | grep -ca "SENT" || true)
+dismiss_toasts
 if [ -z "$hbseen" ] && [ "$lgwin" = yes ] && [ "${lgsent:-0}" = 0 ]; then
   verdict P8 "PASS legacy-toasts: bridge did NOT run (no heartbeat), toast took the window path, no forward"
 else

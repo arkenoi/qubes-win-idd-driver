@@ -8,7 +8,16 @@ param(
     [string]$Aumid = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe',
     [string]$Title = 'demo toast',
     [string]$Body = 'demo body',
-    [switch]$RealChoice
+    [switch]$RealChoice,
+    # -Persistent: use scenario=reminder so the toast STAYS on screen until dismissed. A default
+    # toast lives ~5s, but the rig's whole-desktop window capture (local.WinFullScreen) takes ~59s
+    # per call, so a transient toast is gone before any snapshot aligns and its o-r window is never
+    # caught (the 2026-09-04 false P2/P6/P8 window-path failures). Persistence lets a slow capture
+    # catch it. Routing is unaffected: A0 classifies per-APP (by AUMID), NOT by scenario/content, so
+    # a persistent informational toast from an allowlisted AUMID still bridges. (A future per-TOAST
+    # Phase 3 WOULD read scenario=reminder as a window-path signal - a persistent-toast harness would
+    # need content-pure toasts then; noted so it is not a silent trap later.)
+    [switch]$Persistent
 )
 $ErrorActionPreference = 'Stop'
 [void][Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]
@@ -16,8 +25,13 @@ $ErrorActionPreference = 'Stop'
 $esc = { param($s) $s -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;' }
 $t = & $esc $Title; $b = & $esc $Body
 if ($RealChoice) {
+    # real-choice class: reminder + buttons (inherently persistent; the window-path control)
     $x = "<toast scenario=""reminder""><visual><binding template=""ToastGeneric""><text>$t</text><text>$b</text></binding></visual><actions><action content=""OK"" arguments=""ok""/><action content=""Later"" arguments=""later""/></actions></toast>"
+} elseif ($Persistent) {
+    # informational content, made persistent for detection (reminder needs one action to stay up)
+    $x = "<toast scenario=""reminder""><visual><binding template=""ToastGeneric""><text>$t</text><text>$b</text></binding></visual><actions><action content=""OK"" arguments=""ok""/></actions></toast>"
 } else {
+    # transient informational (the true buttonless class; used where detection is via bridge.log)
     $x = "<toast><visual><binding template=""ToastGeneric""><text>$t</text><text>$b</text></binding></visual></toast>"
 }
 $xml = New-Object Windows.Data.Xml.Dom.XmlDocument

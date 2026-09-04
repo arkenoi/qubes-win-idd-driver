@@ -27,7 +27,19 @@
     3. then remove the IDD device, so nothing is left that could bind as a second display.
 #>
 [CmdletBinding()]
-param([string]$Root = $PSScriptRoot, [switch]$NoReboot)
+param([string]$Root = '', [switch]$NoReboot)
+
+# $PSScriptRoot is EMPTY when this is run as `powershell -File deactivate-idd.ps1` in some
+# contexts (notably the SYSTEM/qrexec invocation the header documents), which made
+# `Join-Path $Root 'idd-driver\devcon.exe'` throw "Cannot bind argument to parameter 'Path'
+# because it is an empty string" and abort AFTER re-enabling the VGA but BEFORE removing the
+# IDD device — leaving the guest dual-display (found 2026-09-04). Resolve a robust root.
+if (-not $Root) {
+    if ($PSScriptRoot) { $Root = $PSScriptRoot }
+    elseif ($PSCommandPath) { $Root = Split-Path -Parent $PSCommandPath }
+    elseif ($MyInvocation.MyCommand.Path) { $Root = Split-Path -Parent $MyInvocation.MyCommand.Path }
+    else { $Root = (Get-Location).Path }
+}
 
 $ErrorActionPreference = 'Stop'
 $log = 'C:\qwt-idd-deactivate.log'
