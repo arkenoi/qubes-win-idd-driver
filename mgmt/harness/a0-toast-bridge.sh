@@ -175,17 +175,21 @@ else
   verdict P1c "FAIL heartbeat instrument self-test present='$pst_yes' absent='$pst_no' - probe unreliable, aborting"; exit 1
 fi
 
-# P1d WARM the user-session fire path. The FIRST run-as-user call after a cold boot can silently
-# no-op (Task Scheduler / interactive session not yet ready) - it returns no FIRED line and no
-# toast shows, which defeated P2 three times while detection was fine (2026-09-04). fire_raw
-# already verifies FIRED and retries, so this both primes the path AND confirms it before any
-# TIMED detection depends on it (experimenter rule 3: the fire instrument must be shown to work).
-log "P1d: warming + validating the run-as-user fire path"
-if fire_raw "-Title 'A0T warmup-prime'" "warm$RANDOM" | grep -qa FIRED; then
-  log "P1d: fire path confirmed (FIRED)"
-else
-  verdict P1d "FAIL run-as-user fire never confirmed FIRED after retries - fire instrument down, aborting"; exit 1
-fi
+# P1d READINESS GATE for the user-session fire path. The FIRST run-as-user fire after a cold boot
+# silently no-ops (no FIRED, no toast) until Task Scheduler + the interactive session fully
+# initialize - measured in MINUTES, not the ~32s fire_raw allowed (that defeated P2 three times
+# while detection itself was fine, 2026-09-04). So POLL a real fire until it actually shows FIRED,
+# up to ~12 min, breaking the instant it works. This is the fire instrument's readiness proof
+# (experimenter rule 3) AND the warm-up - once it fires here, mid-run fires are warm.
+log "P1d: readiness poll for the run-as-user fire path (up to ~12 min, breaks as soon as it fires)"
+p1d_ok=""
+for i in $(seq 1 40); do
+  if raspush guest/fire-demo-toast.ps1 "-Title 'A0T warmup-prime'" "warm$i" 2>&1 | grep -qa FIRED; then
+    p1d_ok=1; log "P1d: fire path READY on attempt $i (~$((i*20))s)"; break
+  fi
+  sleep 18
+done
+[ -n "$p1d_ok" ] || { verdict P1d "FAIL run-as-user fire never confirmed FIRED in ~12 min - fire instrument down, aborting"; exit 1; }
 dismiss_toasts
 
 # ---------- P2 instrument validation + gate-OFF baseline -----------------------------------
