@@ -25,6 +25,14 @@
 // --dump-aumids: print AUMID + title of every toast currently in the Notification Center
 // (allowlist authoring aid; the listener exposes AppInfo.AppUserModelId).
 //
+// --bridge-stop: write the ProgramData stop file the resident bridge polls; it exits and
+// restores every banner suppression on the way out.
+//
+// --restore-banners: one-shot BannerRestoreAll for the invoking user, then exit. The agent
+// launches this in the user session when the bridge gate is OFF but crash-leftover ShowBanner
+// markers exist (no bridge will ever start to run its own startup restore) - the restorer of
+// last resort for the fail-open invariant.
+//
 // Wire protocol: see tools/notify-proxy/NotifyClient.cs (verified against
 // qubes-notification-proxy v1.1.2) - u32 LE version handshake (server speaks first), then
 // u32-LE-length-prefixed bincode-1.x fixint LE frames. The encoder here is that file's
@@ -35,7 +43,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
-#include <sddl.h>   // ConvertSidToStringSidW
+#include <sddl.h>       // ConvertSidToStringSidW
+#include <tlhelp32.h>   // agent-liveness fallback (CreateToolhelp32Snapshot)
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -60,7 +69,34 @@ using namespace winrt::Windows::UI::Notifications;
 using namespace winrt::Windows::UI::Notifications::Management;
 
 static HANDLE g_agent = nullptr;
+static DWORD  g_agentPid = 0;
 static DWORD  g_mySession = 0;
+
+// Agent-liveness check. The SYNCHRONIZE handle is the cheap path, but OpenProcess on the
+// SYSTEM gui-agent is DENIED to this limited user token (the schtasks /ru <user> /it launch
+// gives the bridge no privilege over a SYSTEM process), so g_agent is normally NULL and the
+// fallback does the real work: a toolhelp snapshot scan for the PID, which needs no access to
+// the target at all. Throttled to 5 s - PID reuse inside that window merely defers the exit to
+// the agent's stop-file channel, and the bridge is fail-open throughout, so the race is benign.
+static bool AgentGone()
+{
+    if (g_agent) return WaitForSingleObject(g_agent, 0) == WAIT_OBJECT_0;
+    if (!g_agentPid) return false;
+    static ULONGLONG next = 0;
+    static bool gone = false;
+    ULONGLONG now = GetTickCount64();
+    if (gone || now < next) return gone;
+    next = now + 5000;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return false;   // cannot tell - stay up (stop file still works)
+    PROCESSENTRY32W pe; pe.dwSize = sizeof(pe);
+    bool found = false;
+    if (Process32FirstW(snap, &pe))
+        do { if (pe.th32ProcessID == g_agentPid) { found = true; break; } } while (Process32NextW(snap, &pe));
+    CloseHandle(snap);
+    gone = !found;
+    return gone;
+}
 
 struct ToastWin { HWND hwnd; std::wstring title, body; ULONGLONG dieAt; };
 static std::deque<ToastWin*> g_wins;
@@ -355,7 +391,11 @@ static void BannerApplyOne(std::wstring const& a)
     BLog(L"ShowBanner=0 for %s (after first successful forward)", a.c_str());
 }
 
-static void BannerRestoreAll()
+// Restores every suppression this user's markers record. A marker found at STARTUP is positive
+// evidence of a suppression gap (the previous instance died without restoring, so ShowBanner=0
+// stood while nobody was forwarding); the optional out-param reports those AUMIDs so the caller
+// can avoid silently baselining away a toast that fired bannerless in that gap.
+static void BannerRestoreAll(std::vector<std::wstring>* restoredAumids = nullptr)
 {
     // SID-scoped: restore ONLY this user's markers, never another user's HKCU state.
     std::wstring pat = StateDir() + MarkerPrefix() + L"*.prev";
@@ -396,6 +436,7 @@ static void BannerRestoreAll()
                 }
             }
             BLog(L"ShowBanner restored (%hs) for %s", prior.c_str(), aumid.c_str());
+            if (restoredAumids) restoredAumids->push_back(aumid);
         }
         DeleteFileW(marker.c_str());
     } while (FindNextFileW(fh, &fd));
@@ -672,7 +713,14 @@ static int BridgeMain()
     std::wstring stopf = StateDir() + L"\\stop";
     DeleteFileW(stopf.c_str());       // a stale stop request must not kill a fresh start
     std::wstring hbf = StateDir() + L"\\heartbeat";
-    BannerRestoreAll();               // crash leftovers from a previous instance: clean slate
+    // Crash leftovers from a previous instance are POSITIVE evidence of a suppression gap:
+    // ShowBanner=0 stood through the supervision gap, so a toast from one of these AUMIDs that
+    // fired in the gap showed no banner and was forwarded by nobody. Capture the AUMIDs before
+    // the markers are discarded; the baseline below leaves those apps' center toasts UNSEEN so
+    // the normal poll forwards them (a duplicate in dom0 for a pre-gap toast is the accepted
+    // price - silent loss would break the fail-open invariant).
+    std::vector<std::wstring> gapAumids;
+    BannerRestoreAll(&gapAumids);
 
     init_apartment(apartment_type::multi_threaded);
     EnsureConsent();
@@ -694,15 +742,37 @@ static int BridgeMain()
     // baseline: everything already in the center predates us - never forwarded. If the FIRST read
     // throws we must NOT proceed with an empty set (that would forward the whole backlog to dom0);
     // `primed` gates forwarding until a poll has successfully seeded `seen`.
+    // EXCEPTION: a toast from a suppression-gap AUMID (leftover marker above) may itself BE a gap
+    // toast - already bannerless - so it is left out of the baseline and forwarded like a fresh one.
+    auto inGap = [&](UserNotification const& un) -> bool {
+        if (gapAumids.empty()) return false;
+        std::wstring aumid;
+        try { aumid = un.AppInfo().AppUserModelId().c_str(); } catch (...) {}
+        if (aumid.empty()) return false;
+        for (auto const& g : gapAumids) if (_wcsicmp(g.c_str(), aumid.c_str()) == 0) return true;
+        return false;
+    };
     std::unordered_set<uint32_t> seen;
     bool primed = false;
     try {
-        for (auto const& un : listener.GetNotificationsAsync(NotificationKinds::Toast).get()) seen.insert(un.Id());
+        for (auto const& un : listener.GetNotificationsAsync(NotificationKinds::Toast).get())
+        {
+            if (inGap(un)) { BLog(L"baseline: id=%u left unseen (suppression-gap AUMID)", un.Id()); continue; }
+            seen.insert(un.Id());
+        }
         primed = true;
     } catch (...) { BLog(L"baseline read failed - will prime on the first good poll, forwarding nothing until then"); }
 
     bool connected = false;                        // a connection is up (banners may be suppressed)
     std::unordered_set<std::wstring> suppressed;   // AUMIDs whose banner is currently ShowBanner=0
+    // Per-toast-id count of forward attempts REJECTED BY A LIVE SERVER (reply tag 1/2: ForwardText
+    // returns false without marking the connection dead). Such a rejection is deterministic - the
+    // center record persists, so unbounded retry would resend at 0.5 Hz forever. Transient failures
+    // (write error, ack timeout, disconnect) kill the connection and are NOT counted; that
+    // fail-open retry path stays unlimited. At the cap the id is given up: marked seen + logged
+    // (its guest Notification Center record remains the surviving copy).
+    std::unordered_map<uint32_t, int> fwdFails;
+    const int kFwdFailCap = 5;
     int failStreak = 0, backoff = 0;
     ULONGLONG nextReconnect = 0, nextConsent = 0;
     int rc = 0;
@@ -710,7 +780,7 @@ static int BridgeMain()
     for (;;)
     {
         ULONGLONG now = GetTickCount64();
-        if (g_agent && WaitForSingleObject(g_agent, 0) == WAIT_OBJECT_0) { BLog(L"agent gone"); break; }
+        if (AgentGone()) { BLog(L"agent gone"); break; }
         if (WTSGetActiveConsoleSessionId() != g_mySession) { BLog(L"session changed"); break; }
         if (GetFileAttributesW(stopf.c_str()) != INVALID_FILE_ATTRIBUTES) { BLog(L"stop requested"); break; }
 
@@ -769,9 +839,14 @@ static int BridgeMain()
             // First good poll after a failed baseline: seed `seen` with the whole current center
             // and forward NOTHING this pass (the backlog predates us). This is the legacy `primed`
             // guard, mirrored, so a failed baseline can never replay the backlog to dom0.
+            // Suppression-gap AUMIDs are excepted, exactly as in the startup baseline.
             if (!primed)
             {
-                for (auto const& un : list) seen.insert(un.Id());
+                for (auto const& un : list)
+                {
+                    if (inGap(un)) { BLog(L"prime: id=%u left unseen (suppression-gap AUMID)", un.Id()); continue; }
+                    seen.insert(un.Id());
+                }
                 primed = true;
                 BLog(L"primed on a good poll (%u pre-existing) - forwarding starts now", (UINT)seen.size());
             }
@@ -796,6 +871,26 @@ static int BridgeMain()
                     fresh.push_back({ id, aumid, app, tb.substr(0, sep),
                                       sep == std::wstring::npos ? L"" : tb.substr(sep + 1) });
                 }
+                // prune failure counters for ids no longer pending (forwarded, given up, or gone
+                // from the center) - keeps `fwdFails` no larger than `fresh` across polls
+                if (!fwdFails.empty())
+                {
+                    std::unordered_set<uint32_t> pending;
+                    for (auto const& e : fresh) pending.insert(e.id);
+                    for (auto it = fwdFails.begin(); it != fwdFails.end(); )
+                    { if (pending.count(it->first)) ++it; else it = fwdFails.erase(it); }
+                }
+                // A rejection from a LIVE server (false + connection still up) is deterministic:
+                // count it, and at the cap stop resending that id (see fwdFails above).
+                auto capFailed = [&](uint32_t id) {
+                    if (g_connDead) return;   // transient path: unlimited fail-open retry
+                    if (++fwdFails[id] >= kFwdFailCap)
+                    {
+                        seen.insert(id); fwdFails.erase(id);
+                        BLog(L"GIVE UP id=%u after %d server rejections - not resent (guest center record kept)",
+                             id, kFwdFailCap);
+                    }
+                };
                 // Lazy suppression: an allowlisted app is banner-suppressed ONLY after one of its
                 // toasts forwards successfully. So the first toast per app double-shows (guest
                 // banner + dom0), and a bridge that never forwards never suppresses - fail-open.
@@ -817,23 +912,30 @@ static int BridgeMain()
                     wchar_t sum[256];
                     swprintf(sum, RTL_NUMBER_OF(sum), L"%u notifications (%s)", (UINT)fresh.size(), fresh[0].app.c_str());
                     bool ok = ForwardText(sum, lines, 0);
-                    if (ok) for (auto const& e : fresh) { seen.insert(e.id); suppressNow(e.aumid); }
+                    if (ok) for (auto const& e : fresh) { seen.insert(e.id); suppressNow(e.aumid); fwdFails.erase(e.id); }
+                    else for (auto const& e : fresh) capFailed(e.id);
                     BLog(L"SENT coalesced x%u: %s%s", (UINT)fresh.size(), ok ? L"OK" : L"FAIL",
                          ok ? L"" : L" (unseen, retried)");
                 }
                 else for (auto const& e : fresh)
                 {
                     bool ok = ForwardText(e.title, e.body.empty() ? e.app : e.body, e.id);
-                    if (ok) { seen.insert(e.id); suppressNow(e.aumid); }
+                    if (ok) { seen.insert(e.id); suppressNow(e.aumid); fwdFails.erase(e.id); }
+                    else capFailed(e.id);
                     BLog(L"SENT id=%u app='%s' title='%s': %s%s", e.id, e.app.c_str(), e.title.c_str(),
                          ok ? L"OK" : L"FAIL", ok ? L"" : L" (unseen, retried)");
                 }
             }
-            // bound the seen-set (rebuild from what is still in the center)
+            // bound the seen-set: INTERSECT with what is still in the center. A plain rebuild
+            // from the center would re-mark ids deliberately left unseen for the fail-open
+            // retry (silently cancelling it); intersection only ever DROPS ids that left the
+            // center, so retry candidates stay unseen and the bound still holds (the result
+            // is no larger than the center listing).
             if (seen.size() > 500)
             {
                 std::unordered_set<uint32_t> keep;
-                for (auto const& un : list) keep.insert(un.Id());
+                for (auto const& un : list)
+                { uint32_t id = un.Id(); if (seen.count(id)) keep.insert(id); }
                 seen.swap(keep);
             }
         }
@@ -968,17 +1070,20 @@ static int DumpMain()
 int wmain(int argc, wchar_t** argv)
 {
     const wchar_t* relayPipe = nullptr;
-    bool bridge = false, dump = false, stop = false;
+    bool bridge = false, dump = false, stop = false, restore = false;
     for (int i = 1; i < argc; i++)
     {
         if (_wcsicmp(argv[i], L"--agent-pid") == 0 && i + 1 < argc)
         {
             DWORD pid = (DWORD)_wtoi64(argv[++i]);
-            if (pid) g_agent = OpenProcess(SYNCHRONIZE, FALSE, pid);
+            // The handle open normally FAILS (SYSTEM agent vs limited token) - keep the PID
+            // for AgentGone()'s snapshot fallback either way.
+            if (pid) { g_agentPid = pid; g_agent = OpenProcess(SYNCHRONIZE, FALSE, pid); }
         }
         else if (_wcsicmp(argv[i], L"--relay") == 0 && i + 1 < argc) relayPipe = argv[++i];
         else if (_wcsicmp(argv[i], L"--bridge") == 0) bridge = true;
         else if (_wcsicmp(argv[i], L"--bridge-stop") == 0) stop = true;
+        else if (_wcsicmp(argv[i], L"--restore-banners") == 0) restore = true;
         else if (_wcsicmp(argv[i], L"--dump-aumids") == 0) dump = true;
     }
     if (relayPipe) return RelayMain(relayPipe);
@@ -988,6 +1093,18 @@ int wmain(int argc, wchar_t** argv)
         HANDLE h = CreateFileW(f.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
                                FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h != INVALID_HANDLE_VALUE) { DWORD wr; WriteFile(h, "stop", 4, &wr, nullptr); CloseHandle(h); }
+        return 0;
+    }
+    if (restore)
+    {
+        // One-shot restorer of last resort: undo every ShowBanner suppression this user's
+        // markers record and exit. Launched by the agent (in the user session - markers are
+        // SID-scoped HKCU state) when the bridge gate is OFF and a crashed bridge may have
+        // left markers behind: with the gate off no bridge will ever start to run its own
+        // startup BannerRestoreAll, so without this pass those apps stay bannerless forever.
+        // Registry/file work only - no COM, no listener consent needed.
+        BLog(L"RESTORE one-shot (--restore-banners)");
+        BannerRestoreAll();
         return 0;
     }
     if (dump) return DumpMain();
@@ -1013,7 +1130,7 @@ int wmain(int argc, wchar_t** argv)
     MSG msg;
     for (;;) {
         // exit conditions
-        if (g_agent && WaitForSingleObject(g_agent, 0) == WAIT_OBJECT_0) break;
+        if (AgentGone()) break;
         if (WTSGetActiveConsoleSessionId() != g_mySession) break;
 
         ULONGLONG now = GetTickCount64();
