@@ -201,10 +201,6 @@ window-acceptance predicate (build it into the SetWinEventHook rework):
    no extra software needed), `qtest shot`, confirm it still appears after the filter lands.
    Run `winenum` while a toast is visible to get its real attributes first — if cloak state
    alone cannot separate the two, the discriminator is likely ownership + zero alpha.
-   NOTE on scope: forwarding notifications to dom0's notification daemon is NOT the goal and
-   must not be built — Linux qubes don't do that either (their notification daemon runs
-   in-VM and the popup arrives as a normal bordered window). dom0 rendering guest-supplied
-   text as native UI would be a spoofing surface and would be rejected upstream.
 4. NEVER weaken daemon-side bordering — the fix is to stop presenting chrome fragments as
    windows, not to let the guest opt out of borders. Real-Office validation happens later in
    the user's Office qube (ask first).
