@@ -31,6 +31,7 @@ of this file.
 - P2 task #28: `service.uac-disable` cannot work on AppVMs (EnableLUA boot-latched, volatile root) — direction: apply in template + loud log; feature acceptance never run. [also: installer] [verified 2026-08-27]
 - P2 a pending UAC elevation is invisible in seamless (by design today); UAC visibility is declared future work. [verified 2026-08-28]
 - P2 video-modes-during-update: hide or shrink+decorate the guest desktop during servicing, restore on every exit path — planned, not started. [also: updates] UNVERIFIED
+- P2 toast-bridge A0 (docs/DESIGN-toast-bridge.md Proposal C): C++ resident shipped in notifhost `--bridge` + agent NotifyBridge gate/supervision (0c9f5eb/05b5bdd) after the 2026-09-04 PS spike proved the mechanism; acceptance P.5 steps 1-5 NOT yet run (selftest-fail proof, forward split, dismiss-sync, fail-open regressions, cold boot). Gate default OFF; allowlist HKLM gui-agent NotifyBridgeAllow. Phase 2 (synthetic "default"/Open action) queued behind A0 acceptance. [also: architecture] UNVERIFIED
 - P3 dom0-menu click of the new Terminal / File Explorer app-menu entries after qvm-sync-appmenus — guest half verified, dom0 half not. [verified 2026-09-01]
 - P3 Start-in-seamless stays off by owner decision; re-enable path is SeamlessStart=1 + docs/PLAN-start-menu.md when wanted. [verified 2026-09-01]
 
