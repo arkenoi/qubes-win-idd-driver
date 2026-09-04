@@ -67,10 +67,27 @@ raspush(){ # $1=repo script path, $2=args string (may be empty), $3=tag
 }
 
 geom(){ QTEST_VM=$VM timeout -k 8 200 ./tools/qtest-geom 2>/dev/null; }
-# mapped override-redirect window lines (id x y w h or mapped name)
-ors(){ awk '$6==1 && $7==1' ; }
+# override-redirect toast/banner window lines (id x y w h override_redirect mapped name).
+# Accept mapped=0 too: a Windows toast BANNER window auto-collapses (unmaps) a few seconds after it
+# pops, but the window OBJECT lingers in the list. Requiring mapped=1 (the old `&& $7==1`) made P6a
+# false-fail "toast lost" when the fail-open banner HAD appeared and then unmapped before geom
+# sampled. Safe: a SUPPRESSED toast creates no banner window at all, and persistent shell lurkers
+# are in the pre-fire baseline (new_or_window diffs new-vs-baseline), so any-mapped never false-adds.
+ors(){ awk '$6==1' ; }
 
-blog_len(){ qrun "cmd /c \"type \\\"$BLOG\\\" 2>nul | find /c /v \\\"\\\"\"" | grep -aoE '[0-9]+' | head -1; }
+# Echo the bridge.log line count. Retries a transient read (a cold-boot session can briefly fail the
+# qrun) and returns NONZERO on hard failure - callers MUST NOT default a failed read to 0. (P8 did
+# `blog_len || echo 0`; the cold-boot read failed, L8 became 0, and `blog_since 0` then counted the
+# WHOLE accumulated log - P7's 8 SENT lines - as P8 "fresh" forwards: the sent-lines=8 false-fail.)
+blog_len(){
+  local i n
+  for i in 1 2 3; do
+    n=$(qrun "cmd /c \"type \\\"$BLOG\\\" 2>nul | find /c /v \\\"\\\"\"" | grep -aoE '[0-9]+' | head -1)
+    [ -n "$n" ] && { printf '%s' "$n"; return 0; }
+    sleep 2
+  done
+  return 1
+}
 blog_since(){ # $1 = old line count
   qrun "powershell -NoProfile -Command \"if (Test-Path '$BLOG') { Get-Content '$BLOG' | Select-Object -Skip $1 }\""
 }
@@ -88,7 +105,20 @@ path_state(){ # $1 = guest path
   qrun "powershell -NoProfile -EncodedCommand $b64" | grep -aoE 'HBPRESENT|HBABSENT' | tail -1 \
     | sed 's/HBPRESENT/PRESENT/; s/HBABSENT/ABSENT/'
 }
-hb_state(){ path_state "$HBF"; }   # PRESENT = bridge heartbeat file exists (bridge running)
+# hb_fresh: PRESENT only if the file exists AND its mtime is within $2 seconds. The bridge rewrites
+# the heartbeat every loop (~2s), so a running bridge is always fresh; a file left by a PRIOR boot
+# is stale. Test-Path alone (the old hb_state) read a STALE heartbeat as "bridge running" - the P8
+# hbseen=1 false-fail on a cold boot where legacy-toasts correctly kept the bridge OFF (proven: no
+# notifhost console window in that boot's geom). Same base64/-EncodedCommand idiom as path_state so
+# the echoed command line can't self-match the markers.
+hb_fresh(){ # $1=guest path, $2=max age seconds (default 45)
+  local max="${2:-45}" ps b64
+  ps="if (Test-Path -LiteralPath '$1') { if ((((Get-Date)-(Get-Item -LiteralPath '$1').LastWriteTime).TotalSeconds) -le $max) { 'HBFRESH' } else { 'HBSTALE' } } else { 'HBGONE' }"
+  b64=$(printf '%s' "$ps" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+  qrun "powershell -NoProfile -EncodedCommand $b64" | grep -aoE 'HBFRESH|HBSTALE|HBGONE' | tail -1 \
+    | sed 's/HBFRESH/PRESENT/; s/HBSTALE/ABSENT/; s/HBGONE/ABSENT/'
+}
+hb_state(){ hb_fresh "$HBF" 45; }   # PRESENT = heartbeat exists AND fresh (bridge actually running now)
 
 # Fire a toast and CONFIRM it actually fired. fire-demo-toast.ps1 prints a `FIRED ...` line via
 # run-as-user; the FIRST run-as-user call right after a COLD boot can silently no-op (Task
@@ -112,6 +142,12 @@ fire_info(){ fire_raw "-Title '$1'" "a0i$RANDOM"; }
 # mapped" (geom); use fire_info where the check is the bridge.log SENT line (fast, no window needed).
 fire_info_p(){ fire_raw "-Persistent -Title '$1'" "a0p$RANDOM"; }
 fire_ctl(){ fire_raw "-RealChoice -Aumid $CTLAUMID -Title '$1'" "a0c$RANDOM"; }
+# Read the CURRENT ShowBanner state for the PS test AUMID (absent|0|1) - read-only introspection,
+# the deciding signal the previous run lacked. P4a: did the warmup earn suppression (=0), making the
+# no-banner CORRECT and isolating the forward as the only failure? P8: is a LEFTOVER ShowBanner=0
+# from a prior bridge suppressing the legacy toast with no bridge left to restore it (=0, a REAL
+# product bug) or did the toast simply take the window path / not fire (=absent)?
+showbanner(){ raspush guest/a0-showbanner.ps1 "" "a0sb$RANDOM" | tr -d '\r' | grep -aoE 'SHOWBANNER-NOW=[^ ]+' | tail -1; }
 # Clear persistent test toasts from the Notification Center so they do not outlive the phase and
 # pollute the next baseline (dismiss-toast.ps1 clears by AppId; default = the PS test AUMID).
 dismiss_toasts(){ # $1 = AUMID (optional; default PS test AUMID)
@@ -135,7 +171,10 @@ snap_or(){ # $1=name-regex $2=save-as ; prints matching ids to stdout
   geom > "$OUT/$2.txt"; ors < "$OUT/$2.txt" | grep -iaE "$1" | awk '{print $1}' | sort
 }
 
-TOASTRE='notification|demo toast|ToastHost|ShellExperienceHost|CoreWindow|A0T'
+# The real toast BANNER window title on Win10 is "New notification" (measured in P6a geom). Keep
+# only banner-specific tokens; CoreWindow/ShellExperienceHost/ToastHost were speculative and, now
+# that ors accepts mapped=0, broad enough to risk matching an unmapped shell lurker.
+TOASTRE='notification|demo toast|A0T|toast'
 DOMRE='notifyd|notification'
 
 log "=== A0 toast-bridge acceptance: subject=$VM base=$BASE setup=$SETUP out=$OUT ==="
@@ -179,6 +218,19 @@ if [ "$pst_yes" = PRESENT ] && [ "$pst_no" = ABSENT ]; then
   log "P1c: heartbeat instrument self-test OK (present->$pst_yes absent->$pst_no)"
 else
   verdict P1c "FAIL heartbeat instrument self-test present='$pst_yes' absent='$pst_no' - probe unreliable, aborting"; exit 1
+fi
+# hb_fresh's FRESHNESS discriminator must ALSO be shown both ways (the P8 hbseen=1 false-fail was a
+# STALE heartbeat read as "running"): a just-written file reads PRESENT (fresh); an old-but-existing
+# system file (cmd.exe, mtime years old) reads ABSENT (stale) with a tight max-age. Proves hb_state
+# can no longer accept a stale heartbeat as a live bridge.
+qrun "cmd /c echo x> C:\\ProgramData\\__hbself__" >/dev/null 2>&1
+hbf_fresh=$(hb_fresh 'C:\ProgramData\__hbself__' 120)
+hbf_stale=$(hb_fresh 'C:\Windows\System32\cmd.exe' 30)
+qrun "cmd /c del C:\\ProgramData\\__hbself__" >/dev/null 2>&1
+if [ "$hbf_fresh" = PRESENT ] && [ "$hbf_stale" = ABSENT ]; then
+  log "P1c: heartbeat FRESHNESS self-test OK (fresh->$hbf_fresh stale->$hbf_stale)"
+else
+  verdict P1c "FAIL heartbeat freshness self-test fresh='$hbf_fresh' stale='$hbf_stale' - mtime probe unreliable, aborting"; exit 1
 fi
 
 # P1d READINESS GATE for the user-session fire path. The FIRST run-as-user fire after a cold boot
@@ -299,10 +351,11 @@ if [ "$DOMDET" = geom ]; then
 fi
 guestbanner=no
 new_or_window "$OUT/p4-guest-base.ids" "$TOASTRE" 2 p4-guest && guestbanner=yes
+sb4=$(showbanner); log "P4a introspection: $sb4 (=0 -> warmup earned suppression, so no-banner is CORRECT and only the forward failed; =absent -> nothing was ever forwarded/suppressed)"
 if [ -n "$sent" ] && [ "$guestbanner" = no ] && [ "$domseen" != no ]; then
-  verdict P4a "PASS bridged: SENT OK, no guest banner, dom0=$domseen"
+  verdict P4a "PASS bridged: SENT OK, no guest banner, dom0=$domseen ($sb4)"
 else
-  cap "$OUT" p4a "$R"; verdict P4a "FAIL sent=${sent:-no} guestbanner=$guestbanner dom0=$domseen"
+  cap "$OUT" p4a "$R"; verdict P4a "FAIL sent=${sent:-no} guestbanner=$guestbanner dom0=$domseen $sb4"
 fi
 L1=$(blog_len)
 snap_or "$TOASTRE" p4c-guest-base > "$OUT/p4c-guest-base.ids"
@@ -433,16 +486,17 @@ hbseen=""
 for i in $(seq 1 20); do
   [ "$(hb_state)" = PRESENT ] && { hbseen=1; break; }; sleep 5
 done
-L8=$(blog_len 2>/dev/null || echo 0)
+L8=$(blog_len) || { log "P8 WARN: blog_len unreadable after retries - using a high sentinel so the fresh-forward count reads 0 (never the whole-log residue) and P8 can only fail on a REAL fresh forward, not stale P7 data"; L8=1000000000; }
 snap_or "$TOASTRE" p8-guest-base > "$OUT/p8-guest-base.ids"
 fire_info_p "A0T legacy" > /dev/null 2>&1   # persistent: geom must catch the o-r window
 lgwin=no; new_or_window "$OUT/p8-guest-base.ids" "$TOASTRE" 2 p8-guest && lgwin=yes
 lgsent=$(blog_since "$L8" 2>/dev/null | grep -ca "SENT" || true)
+sb8=$(showbanner); log "P8 introspection: $sb8 (=0 with no bridge -> a LEFTOVER suppression the disabled bridge never restored, a REAL product bug; =absent -> legacy toast took the window path or did not fire)"
 dismiss_toasts
 if [ -z "$hbseen" ] && [ "$lgwin" = yes ] && [ "${lgsent:-0}" = 0 ]; then
-  verdict P8 "PASS legacy-toasts: bridge did NOT run (no heartbeat), toast took the window path, no forward"
+  verdict P8 "PASS legacy-toasts: bridge did NOT run (no heartbeat), toast took the window path, no forward ($sb8)"
 else
-  cap "$OUT" p8 "$R"; verdict P8 "FAIL legacy-toasts hbseen=${hbseen:-no} windowpath=$lgwin sent-lines=${lgsent:-?}"
+  cap "$OUT" p8 "$R"; verdict P8 "FAIL legacy-toasts hbseen=${hbseen:-no} windowpath=$lgwin sent-lines=${lgsent:-?} $sb8"
 fi
 qvm-features --unset "$VM" service.legacy-toasts 2>/dev/null || true
 

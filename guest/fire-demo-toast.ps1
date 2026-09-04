@@ -36,6 +36,13 @@ if ($RealChoice) {
 }
 $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
 $xml.LoadXml($x)
-[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($Aumid).Show(
-    [Windows.UI.Notifications.ToastNotification]::new($xml))
-Write-Output ("FIRED class={0} aumid={1} title='{2}'" -f $(if ($RealChoice) {'realchoice'} else {'informational'}), $Aumid, $Title)
+$notif = [Windows.UI.Notifications.ToastNotification]::new($xml)
+# Unique per-fire Tag+Group so Windows never coalesces two same-AUMID test toasts into one
+# notification slot. A same-tag toast REPLACES the prior one and is not re-raised to
+# UserNotificationListener as a NEW id, which would make a genuine forward read as sent=no (the
+# P4a suspect: warmup + check toast, same AUMID, no tag). Tag/Group cap at 64 chars.
+$uniq = [guid]::NewGuid().ToString('N').Substring(0, 16)
+$notif.Tag = $uniq
+$notif.Group = 'a0tb'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($Aumid).Show($notif)
+Write-Output ("FIRED class={0} aumid={1} title='{2}' tag={3}" -f $(if ($RealChoice) {'realchoice'} else {'informational'}), $Aumid, $Title, $uniq)
