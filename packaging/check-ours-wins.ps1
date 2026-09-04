@@ -246,6 +246,11 @@ foreach ($b in @($d.Binaries)) {
         }
         continue
     }
+    # NoStock: a NEW fork-built binary with no stock counterpart (e.g. wgcbroker.exe,
+    # notifhost.exe - user-session helpers that do not exist in the stock 4.2.2 image). The
+    # differ-from-stock check cannot apply; the entry still claims the overlay path (so it is
+    # not an orphan) and Required already proved it is present. Nothing more to verify.
+    if ($b.NoStock) { continue }
     $stockHits = @($stockIndex[$b.Stock] | Where-Object { $_ })
     if ($stockHits.Count -eq 0) {
         Fail "Binaries: stock counterpart '$($b.Stock)' not in the admin image - bad entry for $($b.Package)?"

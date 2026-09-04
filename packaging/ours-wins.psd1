@@ -125,6 +125,13 @@
         # absence means the build silently fell back to stock - the exact failure that let
         # the drain-race fix miss every guest for a week.
         @{ Package = 'bin/qrexec-wrapper.exe';     Stock = 'qrexec-wrapper.exe'; Required = $true }
+        # User-session HELPERS staged into bin\ by make-setup.ps1 (Install-QwtImproved's
+        # bin-overlay installs them next to gui-agent.exe). NoStock: these do not exist in the
+        # stock 4.2.2 image, so there is no differ-from-stock check - the entry exists so they
+        # are NOT orphans and Required proves they shipped. Absence here is exactly the
+        # 2026-09-04 gap that shipped the de-slice broker with no wgcbroker.exe on the guest.
+        @{ Package = 'bin/wgcbroker.exe';          NoStock = $true;             Required = $true }
+        @{ Package = 'bin/notifhost.exe';          NoStock = $true;             Required = $true }
 
         # -- inside the built MSI (stage-qwt-repo.ps1 substitution table) -----------------
         # Our gui-agent fork - the original substitution the table replicates.
