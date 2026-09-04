@@ -181,15 +181,34 @@ fi
 # while detection itself was fine, 2026-09-04). So POLL a real fire until it actually shows FIRED,
 # up to ~12 min, breaking the instant it works. This is the fire instrument's readiness proof
 # (experimenter rule 3) AND the warm-up - once it fires here, mid-run fires are warm.
-log "P1d: readiness poll for the run-as-user fire path (up to ~12 min, breaks as soon as it fires)"
-p1d_ok=""
+# P1d gates on the fire path's ACTUAL precondition. run-as-user.ps1 (line 92-95) refuses with
+# exit 3 "no_active_interactive_session" - in ~1.5s, NOT the 120s task wait - until `query user`
+# reports an Active session. On a FRESH PRIME that is false for ~12+ min while the two-stage
+# install settles, even though P1's explorer+pushrun signal passed at t+0 (the signals diverge).
+# So poll `query user` DIRECTLY (cheap) for an Active session, up to ~20 min, logging the state
+# each time so the transition is on record; THEN confirm one real fire and CAPTURE its output
+# (so a residual failure names its reason instead of being grepped away). P3/P8 reboots settle
+# fast, so their short mid-run fire retry is unaffected.
+log "P1d: waiting for an Active interactive session (query user), up to ~20 min"
+p1d_active=""; qu=""
 for i in $(seq 1 40); do
-  if raspush guest/fire-demo-toast.ps1 "-Title 'A0T warmup-prime'" "warm$i" 2>&1 | grep -qa FIRED; then
-    p1d_ok=1; log "P1d: fire path READY on attempt $i (~$((i*20))s)"; break
+  qu=$(qrun 'query user' 2>&1 | tr -d '\r')
+  if printf '%s' "$qu" | grep -qE '[[:space:]]Active([[:space:]]|$)'; then
+    p1d_active=1; log "P1d: Active session after ~$((i*30))s: $(printf '%s' "$qu" | grep -E 'Active' | head -1 | tr -s ' ')"; break
   fi
-  sleep 18
+  sleep 30
 done
-[ -n "$p1d_ok" ] || { verdict P1d "FAIL run-as-user fire never confirmed FIRED in ~12 min - fire instrument down, aborting"; exit 1; }
+if [ -z "$p1d_active" ]; then
+  printf '%s\n' "$qu" > "$OUT/p1d-lastquser.txt"
+  verdict P1d "FAIL no Active interactive session in ~20 min (install still settling?); last query user: $(printf '%s' "$qu" | tr '\n' '|' | head -c 300)"; exit 1
+fi
+# Confirm the fire path actually works now, and keep the run-as-user output for the record.
+fout=$(fire_raw "-Title 'A0T warmup-prime'" "warm$RANDOM"); printf '%s\n' "$fout" > "$OUT/p1d-fire.txt"
+if printf '%s' "$fout" | grep -qa FIRED; then
+  log "P1d: fire path READY (Active session + confirmed FIRED)"
+else
+  verdict P1d "FAIL session Active but fire still not FIRED: $(printf '%s' "$fout" | grep -a 'RUNASUSER\|error' | head -1)"; exit 1
+fi
 dismiss_toasts
 
 # ---------- P2 instrument validation + gate-OFF baseline -----------------------------------
