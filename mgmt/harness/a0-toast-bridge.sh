@@ -319,6 +319,34 @@ else
   verdict P7 "FAIL burst tot=$tot conns $conncount0->$conncount1"
 fi
 
+# ---------- P8 legacy-toasts opt-out (wins over notify-bridge) ------------------------------
+# service.legacy-toasts must force the bridge OFF even with notify-bridge=1: an allowlisted
+# toast then renders as an override-redirect guest window (window path) and is NOT forwarded.
+# Read at agent init, so this needs a cold boot. Proven-to-fail: without the opt-out the same
+# toast bridges (P4a), so a window-path result here is a real discriminator.
+log "P8: legacy-toasts opt-out forces the bridge off (cold boot)"
+qvm-features "$VM" service.legacy-toasts 1 || log "P8 WARN: qvm-features legacy-toasts failed"
+timeout -k 8 60 ./tools/qtest shutdown >/dev/null 2>&1
+w_halt "$VM" 300 p8-halt log || { QTEST_VM=$VM timeout -k 8 30 ./tools/qtest kill >/dev/null 2>&1; sleep 5; }
+timeout -k 8 60 ./tools/qtest start >/dev/null 2>&1
+w_usersession "$VM" 900 p8-session "$OUT" log || { verdict P8 "FAIL no session after legacy-toasts cold boot"; }
+# bridge must NOT come up (gate forced off); allow a generous window then confirm no heartbeat
+hbseen=""
+for i in $(seq 1 20); do
+  qrun "cmd /c \"if exist \\\"$HBF\\\" echo YESHB\"" | grep -qa YESHB && { hbseen=1; break; }; sleep 5
+done
+L8=$(blog_len 2>/dev/null || echo 0)
+snap_or "$TOASTRE" p8-guest-base > "$OUT/p8-guest-base.ids"
+fire_info "A0T legacy" > /dev/null 2>&1
+lgwin=no; new_or_window "$OUT/p8-guest-base.ids" "$TOASTRE" 15 p8-guest && lgwin=yes
+lgsent=$(blog_since "$L8" 2>/dev/null | grep -ca "SENT" || true)
+if [ -z "$hbseen" ] && [ "$lgwin" = yes ] && [ "${lgsent:-0}" = 0 ]; then
+  verdict P8 "PASS legacy-toasts: bridge did NOT run (no heartbeat), toast took the window path, no forward"
+else
+  cap "$VM" p8 "$OUT"; verdict P8 "FAIL legacy-toasts hbseen=${hbseen:-no} windowpath=$lgwin sent-lines=${lgsent:-?}"
+fi
+qvm-features --unset "$VM" service.legacy-toasts 2>/dev/null || true
+
 # ---------- wrap ---------------------------------------------------------------------------
 cap "$VM" final "$OUT" || true
 blog_since 0 > "$OUT/bridge-full.log" 2>/dev/null || true
