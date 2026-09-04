@@ -122,6 +122,73 @@ w_usersession(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
   done
 }
 
+# Readiness gate for AppVM subjects: distinguish "logon session but NO desktop shell" - the
+# STALE-PRIVATE-VOLUME signature - from a healthy shell. 0=shell up  1=terminal(diagnosed)
+# 2=deadline.
+#
+# WHY THIS EXISTS (owner correction, 2026-09-04): an AppVM's PRIVATE volume (QWT redirects
+# C:\Users onto it) is seeded from the template's private AT APPVM CREATION ONLY. It is NOT
+# re-seeded when the AppVM is re-pointed at a template, nor when the template's root is re-based
+# underneath it (checkpoint.sh unpark). A reused AppVM over a re-based template therefore boots
+# and AUTOLOGONS - a console session goes Active - but the profile on the stale private is
+# missing/mismatched, so explorer.exe NEVER starts: no desktop shell, and every pushrun/
+# w_usersession dies as a silent timeout while the template itself boots fine. That state is
+# PERMANENT for the boot - waiting longer cannot help - so a session that stays shell-less past a
+# bounded settle is TERMINAL with the repair named, never a generic deadline. w_session cannot
+# see this (it proves only the SYSTEM qrexec channel); w_usersession sees it only as its
+# 600 s deadline with a generic "autologon broken" guess. Callers gating an AppVM subject chain
+# this AFTER w_session (cell_appvm does; P2's boot path - protocol/steps/p2-network.json,
+# p2-boot-appvm - should chain it after its w_session/w_usersession pair too).
+#
+# The probes are separate functions so the wait logic is testable rig-free (a stub overrides
+# them; see mgmt/harness/failproof-appvm-shell.sh), and they are SELF-MATCH-SAFE: `qtest run`
+# echoes the cmd.exe banner and the PROMPT LINE WITH THE COMMAND ON IT, which contains the very
+# string grepped for - sg6-failproof measured explorer=1 on a shell-less guest from the echo
+# alone. Both probes strip banner/prompt lines (the sg6 filter) before matching.
+_shell_echo_strip(){ grep -avE '^(Microsoft Windows \[Version|\(c\) Microsoft|C:\\)'; }
+_shell_probe_explorer(){ # $1=vm -> 0 iff explorer.exe is running
+  QTEST_VM=$1 timeout -k 5 60 ./tools/qtest run 'cmd /c tasklist /fi "imagename eq explorer.exe" /nh' 2>/dev/null \
+    | tr -d '\r' | _shell_echo_strip | grep -qa 'explorer\.exe'
+}
+_shell_probe_session(){ # $1=vm -> 0 iff an Active console logon session exists
+  QTEST_VM=$1 timeout -k 5 60 ./tools/qtest run 'cmd /c query user' 2>/dev/null \
+    | tr -d '\r' | _shell_echo_strip | grep -qaE '^[ >]*[A-Za-z0-9_.-]+ +console +[0-9]+ +Active'
+}
+
+# How long a session may stay shell-less before it is diagnosed. Healthy autologon starts
+# explorer within seconds; 180 s is generous slack for a cold profile, small enough that the
+# diagnosis lands minutes before any pushrun-based step would have silently timed out.
+SHELL_SETTLE_SECS=${SHELL_SETTLE_SECS:-180}
+
+w_appvm_shell(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
+  local vm=$1 dl=$2 lbl=$3 dir=$4 log=$5 t0 now sess_t0=
+  t0=$(date +%s)
+  while :; do
+    now=$(( $(date +%s) - t0 ))
+    [ "$now" -ge "$dl" ] && { $log "  $lbl: DEADLINE ${dl}s with no desktop shell and no settled session verdict (screen=$(w_screen "$vm" "$lbl-shell-dl" "$dir"))"; return 2; }
+    if _shell_probe_explorer "$vm"; then
+      $log "  $lbl: desktop shell up at t+${now}s (explorer.exe running)"
+      return 0
+    fi
+    if _shell_probe_session "$vm"; then
+      if [ -z "$sess_t0" ]; then
+        sess_t0=$(date +%s)
+        $log "  $lbl: t+${now}s console session Active but no explorer.exe yet - allowing ${SHELL_SETTLE_SECS}s settle"
+      elif [ $(( $(date +%s) - sess_t0 )) -ge "$SHELL_SETTLE_SECS" ]; then
+        $log "  $lbl: TERMINAL - AppVM booted with a logon session but NO desktop shell (explorer absent ${SHELL_SETTLE_SECS}s after the session went Active) - stale private volume; the AppVM was not re-created after its template was re-based. Re-create it fresh (see cell_appvm). (screen=$(w_screen "$vm" "$lbl-noshell" "$dir"))"
+        return 1
+      fi
+    else
+      # No Active session yet: autologon still in flight. The settle clock runs only while a
+      # session is CONTINUOUSLY seen, so a slow logon (or a transient probe miss) restarts it -
+      # the safe direction: a false reset delays the diagnosis, never fabricates one.
+      sess_t0=
+      $log "  $lbl: t+${now}s no Active console session yet (autologon in flight)"
+    fi
+    sleep 15
+  done
+}
+
 # Wait for the install to reach a conclusion, whatever that conclusion is.
 # 0=RESULT present  1=terminal(recovery)  2=deadline  3=guest halted  4=STALLED
 # Reads the guest log by bounded polls: the Get-Content -Wait stream truncated silently at 28 of

@@ -1046,11 +1046,48 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
     no "$3-appvm: cross-vm unpark of ckpt-$acc-installed into $tpl FAILED (see $R) - refusing to grade a template in an unknown state"
     return
   fi
-  if [ "$(w_state "$app")" != Halted ]; then
-    qvm-shutdown "$app" >/dev/null 2>&1; w_halt "$app" 420 "$3-appvm-halt" say >/dev/null 2>&1
+  # AppVM private seeds from the template private AT CREATION only; re-basing a template under an
+  # existing AppVM leaves a stale private (no profile -> no shell) - so re-create, never reuse.
+  # (Owner correction, 2026-09-04.) QWT redirects C:\Users onto the private volume, and dom0
+  # copies the template's private into an AppVM's private ONLY at qvm-create - neither
+  # `qvm-prefs <app> template <tpl>` nor the volume restore above ever re-seeds it. Measured: the
+  # reused AppVM autologons against the stale profile, explorer never starts, NO desktop shell,
+  # and every pushrun/w_usersession dies as a silent timeout - while the template itself boots
+  # fine. The line that stood here was exactly that reuse (`qvm-prefs "$app" template "$tpl"`).
+  local applabel= appnetvm= had_app=0
+  if qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "$app"; then
+    had_app=1
+    applabel=$(qvm-prefs "$app" label 2>/dev/null)
+    appnetvm=$(qvm-prefs "$app" netvm 2>/dev/null)
+    if [ "$(w_state "$app")" != Halted ]; then
+      qvm-shutdown "$app" >/dev/null 2>&1
+      w_halt "$app" 420 "$3-appvm-halt" say || { no "$3-appvm: $app would not halt for re-create"; return; }
+    fi
+    if ! qvm-remove -f "$app" >/dev/null 2>&1 || qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "$app"; then
+      no "$3-appvm: could not remove $app - REFUSING to reuse it (its private volume is stale; grading it would reproduce the no-shell defect)"
+      return
+    fi
+    say "  $3-appvm: removed stale $app (label=${applabel:-?}, netvm='${appnetvm:-}' recorded for re-apply)"
   fi
-  qvm-prefs "$app" template "$tpl" >/dev/null 2>&1 || { no "$3-appvm: could not point $app at $tpl"; return; }
-  say "  $app now derives from $tpl"
+  qvm-create --class AppVM --template "$tpl" --label "${applabel:-red}" "$app" \
+    || { no "$3-appvm: qvm-create $app from $tpl FAILED - no subject to grade"; return; }
+  # Re-apply what creation does not carry. TAG FIRST - dom0 policy is tag-based; every qtest/qvm
+  # call below is refused until it lands. The pvnic latch and autologon live on the template ROOT
+  # and need no re-apply. netvm was never this cell's contract (it never set one; the subject's
+  # posture belonged to the caller) - restore exactly what the removed AppVM carried, and leave a
+  # first-time subject offline; callers exercising the PV NIC attach their own.
+  qvm-tags "$app" add win-idd-testbed \
+    || { no "$3-appvm: could not TAG $app win-idd-testbed - dom0 policy will refuse every call to it; not proceeding"; return; }
+  qvm-features "$app" os Windows >/dev/null 2>&1
+  qvm-prefs "$app" memory 8192 >/dev/null 2>&1; qvm-prefs "$app" maxmem 0 >/dev/null 2>&1
+  qvm-prefs "$app" vcpus 4 >/dev/null 2>&1; qvm-prefs "$app" qrexec_timeout 6000 >/dev/null 2>&1
+  if [ "$had_app" = 1 ]; then
+    qvm-prefs "$app" netvm "${appnetvm:-}" 2>/dev/null \
+      || say "  WARNING: could not restore netvm='${appnetvm:-}' on $app - re-apply it before any network use"
+  else
+    qvm-prefs "$app" netvm '' >/dev/null 2>&1
+  fi
+  say "  $app re-created FRESH from $tpl (private auto-seeded from the template's private at creation)"
   local b
   for b in 1 2 3; do
     say "  --- $3 AppVM cold boot $b/3 ---"
@@ -1063,6 +1100,18 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
       0) : ;;
       1) no "$3-appvm boot $b: terminal state, guest unusable"; return ;;
       2) no "$3-appvm boot $b: no session within 900s"; return ;;
+    esac
+    # MECHANIZED stale-private guard (e2e-wait.sh w_appvm_shell): w_session proves only the
+    # SYSTEM qrexec channel, which a stale-private AppVM answers happily while explorer never
+    # starts - the exact defect the re-create above removes. If it ever recurs (re-create
+    # skipped, a future reuse path), it must fail HERE, loudly and self-diagnosed, not as a
+    # silent pushrun timeout downstream. P2's boot path (protocol/steps/p2-network.json,
+    # p2-boot-appvm) should chain this after its w_session/w_usersession pair too.
+    w_appvm_shell "$app" 600 "$3-appvm-b$b-shell" "$M" say
+    case $? in
+      0) : ;;
+      1) no "$3-appvm boot $b: logon session but NO desktop shell - STALE PRIVATE VOLUME (an AppVM reused across a template re-base; the re-create in this cell exists to prevent exactly this - see the w_appvm_shell diagnosis in $R)"; return ;;
+      2) no "$3-appvm boot $b: no desktop shell within 600s"; return ;;
     esac
     # Pixels, not logs: open notepad and require a mapped, non-fullscreen window.
     QTEST_VM=$app timeout -k 5 45 ./tools/qtest run 'cmd /c start "" notepad.exe' >/dev/null 2>&1
