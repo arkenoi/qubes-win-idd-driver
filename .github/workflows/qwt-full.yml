@@ -300,6 +300,24 @@ jobs:
               "-p:TreatWarningAsError=false" "-p:QgaFaultInjection=$fi"
           if ($LASTEXITCODE -ne 0) { throw "gui-agent build failed" }
 
+      # User-session HELPERS the agent launches via Task Scheduler: wgcbroker.exe (WGC capture
+      # broker - the de-slice broker path) and notifhost.exe (the notification bridge). These are
+      # standalone tools\*.vcxproj, NOT part of gui-agent-windows.sln and NOT in the stock MSI, so
+      # they have to be built and staged EXPLICITLY - the gap that shipped the de-slice broker with
+      # no wgcbroker.exe on the guest (packaging finding 2026-09-04). Plain v143, /MT, C++/WinRT.
+      - name: Build user-session helpers (wgcbroker, notifhost)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $mb = "${{ steps.vs.outputs.msbuild }}"
+          foreach ($proj in 'wgcbroker', 'notifhost') {
+            & $mb "tools\$proj\$proj.vcxproj" /p:Configuration=Release /p:Platform=x64 /t:Build
+            if ($LASTEXITCODE -ne 0) { throw "$proj msbuild failed" }
+            $exe = "tools\$proj\x64\Release\$proj.exe"
+            if (-not (Test-Path $exe)) { throw "$proj built but $exe is missing" }
+            Get-ChildItem $exe
+          }
+
       # core-agent-windows (our fork) carries the qrexec-wrapper drain-race fix: do not report the
       # exit code before the i/o pumps have drained (ac33bc9), drain the vchan before leaving on
       # close (e5e94b8). Built HERE because this job has already staged the exact dependency set
@@ -374,6 +392,12 @@ jobs:
           New-Item -ItemType Directory -Force agent-bins | Out-Null
           Copy-Item "$out\gui-agent\gui-agent.exe"       agent-bins\
           Copy-Item "$out\gui-watchdog\gui-watchdog.exe" agent-bins\
+          # The user-session helpers ride in agent-bins too, so they are signed here and exported
+          # in package-qwt-full below; make-setup.ps1 stages them into the setup tree's bin\, from
+          # where Install-QwtImproved's bin-overlay installs them next to gui-agent.exe.
+          New-Item -ItemType Directory -Force helper-bins | Out-Null
+          Copy-Item 'tools\wgcbroker\x64\Release\wgcbroker.exe' helper-bins\
+          Copy-Item 'tools\notifhost\x64\Release\notifhost.exe' helper-bins\
           [IO.File]::WriteAllBytes('cert.pfx', [Convert]::FromBase64String($env:PFX_B64))
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
               Where-Object FullName -match 'x64' | Select-Object -First 1
@@ -385,11 +409,12 @@ jobs:
           # firstboot / the MSI's gui-agent-windows sign.crt. The previous shape of this
           # step filtered on *.exe only, which would have left every DLL unsigned.
           $toSign  = @(Get-ChildItem agent-bins -Filter *.exe)
+          $toSign += @(Get-ChildItem helper-bins -Filter *.exe)
           $toSign += @(Get-ChildItem core-agent-bins -Filter *.exe)
           $toSign += @(Get-ChildItem deps-bins\* -Include *.exe, *.dll)
-          # 2 gui-agent + 15 core-agent + 5 deps: fewer means a bins dir went missing or a
-          # copy loop silently shrank - fail here, not with an unsigned binary in the MSI.
-          if ($toSign.Count -lt 22) { throw "expected at least 22 binaries to sign, found $($toSign.Count)" }
+          # 2 gui-agent + 2 helpers + 15 core-agent + 5 deps: fewer means a bins dir went missing
+          # or a copy loop silently shrank - fail here, not with an unsigned binary shipping.
+          if ($toSign.Count -lt 24) { throw "expected at least 24 binaries to sign, found $($toSign.Count)" }
           foreach ($f in $toSign) {
             & $signtool.FullName sign /fd sha256 /f cert.pfx /p $env:PFX_PASS $f.FullName
             if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($f.Name)" }
@@ -541,6 +566,11 @@ jobs:
           # old order hashed first and copied after, so the loose agent exes and the whole
           # core-agent-bins dir shipped UNHASHED - the standing MANIFEST gap.
           Copy-Item agent-bins\gui-agent.exe, agent-bins\gui-watchdog.exe, agent-bins\sign.crt package-qwt-full\
+          # SIGNED user-session helpers -> their own dir. make-setup.ps1 stages these into the
+          # setup tree's bin\ so Install-QwtImproved installs wgcbroker.exe/notifhost.exe next to
+          # gui-agent.exe (the de-slice broker + notification bridge; previously shipped NOWHERE).
+          New-Item -ItemType Directory -Force package-qwt-full\helper-bins | Out-Null
+          Copy-Item helper-bins\wgcbroker.exe, helper-bins\notifhost.exe package-qwt-full\helper-bins\ -Force
           # SIGNED fork core-agent binaries -> their own dir (signed in place by the signing
           # step). release-package points make-setup.ps1 -CoreAgentBins at it; make-setup
           # stages ONLY qrexec-wrapper.exe into the payload bin\ (recorded policy), the rest

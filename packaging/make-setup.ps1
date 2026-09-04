@@ -216,6 +216,29 @@ if ($CoreAgentBins -and (Test-Path -LiteralPath $CoreAgentBins)) {
     # while the fix sat merged and green.
     Write-Warning 'no core-agent binaries supplied (-CoreAgentBins): the guest keeps the STOCK qrexec-wrapper.exe - the drain-race fix (lost bytes on service exit) ships NOWHERE'
 }
+
+# USER-SESSION HELPERS into bin\ (wgcbroker.exe, notifhost.exe). These are NOT in the MSI - they
+# are standalone tools the agent launches via Task Scheduler - so they MUST ride in the setup
+# tree's bin\, from where Install-QwtImproved's bin-overlay installs them next to gui-agent.exe.
+# THROW if absent, do not warn: shipping the de-slice broker with no wgcbroker.exe on the guest
+# is exactly the 2026-09-04 packaging gap (broker task armed, binary missing, silent DDA-slice
+# fallback). The agent now hard-fails loudly (QGADESLICEDOWN) when this happens, but the package
+# must not create the condition in the first place.
+$helperSrc = Join-Path $MsiArtifact 'helper-bins'
+if (-not (Test-Path -LiteralPath $helperSrc)) {
+    throw "helper-bins missing from the qwt-full artifact ($helperSrc) - wgcbroker.exe/notifhost.exe would ship NOWHERE (de-slice broker + notification bridge dead on the guest)"
+}
+New-Item -ItemType Directory -Force -Path (Join-Path $OutDir 'bin') | Out-Null
+$helpersStaged = @()
+foreach ($h in 'wgcbroker.exe', 'notifhost.exe') {
+    $p = Join-Path $helperSrc $h
+    if (-not (Test-Path -LiteralPath $p)) {
+        throw "$h missing from helper-bins - the $(if ($h -eq 'wgcbroker.exe') {'de-slice broker'} else {'notification bridge'}) would ship NOWHERE"
+    }
+    Copy-Item -LiteralPath $p (Join-Path $OutDir 'bin') -Force
+    $helpersStaged += $h
+}
+Write-Host "user-session helpers staged into bin\: $($helpersStaged -join ', ')"
 # IDD-only activator, run by `install.cmd /iddonly` to add/activate the IddCx driver on a guest
 # that already has QWT (no MSI, no version/PV gate). Uses idd-driver/ staged below.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\activate-idd.ps1') 'IDD-only activator') $OutDir -Force
