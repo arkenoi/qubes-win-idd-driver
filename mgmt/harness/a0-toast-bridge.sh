@@ -400,25 +400,43 @@ fi
 
 # ---------- P6 fail-open, seen to fail -----------------------------------------------------
 log "P6a: revoke consent -> bridge must fail open (banner returns), THE selftest fail-proof"
-raspush guest/a0-consent.ps1 "-Value Deny" a0x1$RANDOM >/dev/null 2>&1
-qrun "\"$QT\\notifhost.exe\" --bridge-stop" >/dev/null 2>&1
-sleep 12   # bridge exits (2s poll), restores banners, deletes heartbeat
-raspush guest/a0-showbanner.ps1 "" a0x2$RANDOM > "$OUT/p6-showbanner.txt" 2>&1
-sb=$(grep -aoE 'SHOWBANNER-NOW=.*' "$OUT/p6-showbanner.txt" | head -1)
-echo "$sb" | grep -qa 'SHOWBANNER-NOW=0$' && verdict P6a-restore "FAIL ShowBanner still 0 after bridge stop" \
-  || log "P6a: ShowBanner restored ($sb)"
-# agent relaunches within ~75s; relaunched bridge must EXIT on the consent selftest
-sleep 90
-snap_or "$TOASTRE" p6-guest-base > "$OUT/p6-guest-base.ids"
-L2=$(blog_len)
-fire_info_p "A0T consent-revoked" > /dev/null 2>&1   # persistent: geom must catch the o-r window
-if new_or_window "$OUT/p6-guest-base.ids" "$TOASTRE" 2 p6-guest; then
-  dismiss_toasts
-  verdict P6a "PASS consent revoked => window path (fail-open proven by failure)"
+# ASSERT the revoke actually landed. a0-consent.ps1 prints CONSENT-NOW=<value>; the old code
+# discarded it, so a silent revoke failure (run-as-user no-op) left consent=Allow and P6a
+# false-PASSED (relaunched bridge re-suppresses+forwards, lazy suppression double-shows a banner,
+# new_or_window hits) - THE fail-proof proving nothing. If it did not land, P6a is INSTRUMENT, not
+# a bridge verdict. (audit 2026-09-05)
+crev=$(raspush guest/a0-consent.ps1 "-Value Deny" a0x1$RANDOM | tr -d '\r' | grep -aoE 'CONSENT-NOW=[^ ]+' | tail -1)
+if [ "$crev" != "CONSENT-NOW=Deny" ]; then
+  cap "$OUT" p6a-noconsent "$R"; verdict P6a "INSTRUMENT consent revoke did not land ($crev) - fail-open test invalid, NOT a bridge verdict"
 else
-  cap "$OUT" p6a "$R"; dismiss_toasts; verdict P6a "FAIL toast lost with consent revoked - FAIL-CLOSED DEFECT"
+  qrun "\"$QT\\notifhost.exe\" --bridge-stop" >/dev/null 2>&1
+  Lpre=$(blog_len) || Lpre=0    # offset BEFORE relaunch, to catch its FATAL-consent exit lines
+  sleep 12   # bridge exits (2s poll), restores banners, deletes heartbeat
+  raspush guest/a0-showbanner.ps1 "" a0x2$RANDOM > "$OUT/p6-showbanner.txt" 2>&1
+  sb=$(grep -aoE 'SHOWBANNER-NOW=.*' "$OUT/p6-showbanner.txt" | head -1)
+  echo "$sb" | grep -qa 'SHOWBANNER-NOW=0$' && verdict P6a-restore "FAIL ShowBanner still 0 after bridge stop" \
+    || log "P6a: ShowBanner restored ($sb)"
+  # agent relaunches within ~75s; relaunched bridge must EXIT on the consent selftest (FATAL)
+  sleep 90
+  snap_or "$TOASTRE" p6-guest-base > "$OUT/p6-guest-base.ids"
+  L2=$(blog_len) || L2=1000000000
+  if fire_info_p "A0T consent-revoked" > /dev/null 2>&1; then fired6=1; else fired6=; fi
+  win6=no; new_or_window "$OUT/p6-guest-base.ids" "$TOASTRE" 2 p6-guest && win6=yes
+  sleep 6   # let a (wrongly) forwarded toast reach dom0 before asserting NONE did
+  sent6=$(blog_since "$L2" 2>/dev/null | grep -ca "SENT id=.*OK" || true)
+  blog_since "$Lpre" 2>/dev/null | grep -a "FATAL" > "$OUT/p6-fatal.txt" || true
+  fatal6=$(grep -ca 'FATAL' "$OUT/p6-fatal.txt" || true)
+  dismiss_toasts
+  if [ -z "$fired6" ]; then
+    cap "$OUT" p6a "$R"; verdict P6a "INSTRUMENT consent-revoked toast never FIRED - cannot judge fail-open, NOT a bridge verdict"
+  elif [ "$win6" = yes ] && [ "${sent6:-0}" = 0 ]; then
+    verdict P6a "PASS fail-open: consent=Deny, window path (o-r window), NO dom0 forward (sent=$sent6, relaunch-FATAL=$fatal6)"
+  elif [ "$win6" = yes ]; then
+    cap "$OUT" p6a "$R"; verdict P6a "FAIL consent=Deny but toast ALSO forwarded to dom0 (sent=$sent6) - fail-open leaked a bridged copy"
+  else
+    cap "$OUT" p6a "$R"; verdict P6a "FAIL toast lost with consent revoked (no window, sent=$sent6, FATAL=$fatal6) - FAIL-CLOSED DEFECT"
+  fi
 fi
-blog_since "$L2" | grep -a "FATAL" > "$OUT/p6-fatal.txt" || true
 
 log "P6b: restore consent -> bridge recovers"
 raspush guest/a0-consent.ps1 "-Value Allow" a0x3$RANDOM >/dev/null 2>&1
