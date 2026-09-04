@@ -32,7 +32,7 @@ require_scripts(){
   fi
 }
 
-require_scripts guest/disarm-update-scan.ps1 guest/fsgate-probe.ps1 guest/set-resolution.ps1 guest/open-start.ps1
+require_scripts guest/disarm-update-scan.ps1 guest/fsgate-probe.ps1 guest/set-resolution.ps1 guest/open-start.ps1 guest/run-as-user.ps1
 VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/P5-$VM}"
@@ -132,20 +132,42 @@ log "  containment PROVEN: guest ${GW}, agent ${GW}, host ${HOSTW}x${HOSTH}"
 # which needs no pushed file - came up fine ("capture path proven alive, control=1426x752"), and
 # the SAME cells passed on the warm win10-p4. Verify on the SAME signal the launcher consults
 # (rule 5b): the file's existence at the exact path the launch names.
+# The probe LAUNCH STAGE, run through guest/run-as-user.ps1 (see run_cell for why). run-as-user's
+# schtasks child owns a VISIBLE conhost for as long as it runs, and the probe holds its window for
+# 220 s - launched directly, that console would sit in every mapped_list sample (the very
+# launcher-console FAIL documented in run_cell). This stage Start-Process-es the probe with a
+# HIDDEN console and exits immediately: the visible wrap console lives ~1-2 s, gone before the
+# first sample (sampling starts only after the probe reports), and the probe's own console is
+# never shown at all. No shell redirection anywhere - the probe writes its own -OutFile.
+cat > "$TMP/p5-fsgate-launch.ps1" <<'PS'
+param([string]$Mode,[int]$HoldSeconds=220,[int]$HostWidth=0,[int]$HostHeight=0,[string]$OutFile='')
+$probe = Join-Path $PSScriptRoot 'fsgate-probe.ps1'
+if (-not (Test-Path $probe)) { Write-Output "FSGATE-LAUNCH error=probe_not_found $probe"; exit 2 }
+Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @(
+  '-NoProfile','-ExecutionPolicy','Bypass','-File',$probe,
+  '-Mode',$Mode,'-HoldSeconds',$HoldSeconds,'-HostWidth',$HostWidth,'-HostHeight',$HostHeight,
+  '-OutFile',$OutFile)
+Write-Output "FSGATE-LAUNCH ok mode=$Mode out=$OutFile"
+PS
 ensure_probe_pushed(){
-  local i
+  local i f ok
   for i in 1 2 3; do
-    T=200 q push guest/fsgate-probe.ps1 >/dev/null 2>&1
-    if T=90 q run "cmd /c if exist $GUEST\\fsgate-probe.ps1 (echo PROBEFILE-OK) else (echo PROBEFILE-MISSING)" \
-        | tr -d '\r' | grep -qa 'PROBEFILE-OK'; then return 0; fi
-    log "  fsgate-probe.ps1 not on the guest after push attempt $i/3 - retrying"
+    T=200 q push guest/fsgate-probe.ps1 "$TMP/p5-fsgate-launch.ps1" >/dev/null 2>&1
+    ok=yes
+    for f in fsgate-probe.ps1 p5-fsgate-launch.ps1; do
+      T=90 q run "cmd /c if exist $GUEST\\$f (echo PROBEFILE-OK) else (echo PROBEFILE-MISSING)" \
+          | tr -d '\r' | grep -qa 'PROBEFILE-OK' || ok=no
+    done
+    [ "$ok" = yes ] && return 0
+    log "  probe scripts not on the guest after push attempt $i/3 - retrying"
     sleep 10
   done
   return 1
 }
 if ! ensure_probe_pushed; then
-  log "FATAL: guest/fsgate-probe.ps1 could not be pushed-and-verified after 3 attempts. Every SG"
-  log "       cell would launch a script that is not there and grade INVALID-INSTRUMENT."
+  log "FATAL: guest/fsgate-probe.ps1 + p5-fsgate-launch.ps1 could not be pushed-and-verified after"
+  log "       3 attempts. Every SG cell would launch a script that is not there and grade"
+  log "       INVALID-INSTRUMENT."
   exit 2
 fi
 cat > "$TMP/p5-mark.ps1" <<'PS'
@@ -252,10 +274,23 @@ run_cell(){
   mark=$(echo "$markraw" | awk '{print $2}'); markfile=$(echo "$markraw" | awk '{print $3}')
   local gf="C:\\ProgramData\\Qubes\\fsgate-$id.txt"
   q run "cmd /c del /q $gf 2>nul & exit 0" >/dev/null 2>&1
-  # -WindowStyle Hidden and NO shell redirection: the previous form wrapped the probe in
-  # `cmd /c "... > file"`, whose CONSOLE WINDOW (979x512) is itself mapped by the agent. The harness
-  # counted it and reported SG2/SG4 as FAIL - "a screen-sized window reached dom0" - when the only
-  # extra window was the launcher's own console and the probe had been denied correctly.
+  # LAUNCH VERB: guest/run-as-user.ps1 (schtasks /ru user /it), NOT a detached
+  # `cmd /c start "" powershell -WindowStyle Hidden`. Measured 2026-09-04 on win10-acc (fresh
+  # 4.3.18 standalone, contained 1920x1080 < host): EVERY SG2/SG3/SG4 launch via the detached
+  # hidden-powershell produced "no report file" - the child never ran the probe - while the
+  # IDENTICAL probe invocation in the foreground worked ("visible":true, correct refusal when
+  # uncontained). The task scheduler gives the probe a supervised user-token process instead of a
+  # fire-and-forget `start` child, and it is the launcher the rig already trusts for backgrounded
+  # user-session scripts (rnd-shell-surfaces.sh). Args ride -ArgsB64: -ScriptArgs re-splits on
+  # whitespace at every hop (run-as-user.ps1 header, measured 2026-08-31).
+  #
+  # NO shell redirection and NO visible launcher console, still: an earlier form wrapped the probe
+  # in `cmd /c "... > file"`, whose CONSOLE WINDOW (979x512) is itself mapped by the agent. The
+  # harness counted it and reported SG2/SG4 as FAIL - "a screen-sized window reached dom0" - when
+  # the only extra window was the launcher's own console and the probe had been denied correctly.
+  # run-as-user's own schtasks child DOES get a visible conhost, which is why it runs the
+  # p5-fsgate-launch.ps1 stage (exits in ~1-2 s, probe hidden via Start-Process) and never the
+  # probe directly - see the stage's header above ensure_probe_pushed.
   #
   # BOUNDED RELAUNCH, covering ONLY the "launch never took" instrument gap (wait exit 1: no probe
   # report at all). Measured 2026-09-04 on win10-acc (fresh standalone): SG2/SG3/SG4 each burned the
@@ -265,9 +300,13 @@ run_cell(){
   # retrying a reported window could let a once-only wrong mapping vanish into a clean second
   # attempt. The gate under test is deterministic on styles, so a relaunched window exercises the
   # identical ShouldAcceptWindow decision - a real leak cannot hide behind the retry.
-  local attempt=1 ready
+  local attempt=1 ready ab64 lout
   while :; do
-    q run "cmd /c start \"\" powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File $GUEST\\fsgate-probe.ps1 -Mode $mode -HoldSeconds 220 -HostWidth $HOSTW -HostHeight $HOSTH -OutFile $gf" >/dev/null 2>&1
+    ab64=$(printf '%s' "-Mode $mode -HoldSeconds 220 -HostWidth $HOSTW -HostHeight $HOSTH -OutFile $gf" \
+      | python3 -c "import base64,sys;print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode(),end='')")
+    lout=$(T=120 q pushrun guest/run-as-user.ps1 -Tag "fsg$id" -Script "$GUEST\\p5-fsgate-launch.ps1" -ArgsB64 "$ab64" -NoWait \
+      | tr -d '\r' | grep -ao 'RUNASUSER.*' | head -1)
+    log "  launch(as-user): ${lout:-NO-RESPONSE (qrexec/push failed?)}"   # keep the error text - a discarded transient took a whole cell once
     wait_probe_ready "$gf"; ready=$?
     [ "$ready" -ne 1 ] && break          # 0 = visible; 2 = reported-not-visible: real, grade it
     [ "$attempt" -ge 3 ] && break        # bounded: a silent launch gets exactly two relaunches
@@ -275,7 +314,7 @@ run_cell(){
     # a half-started probe must not double the window under the relaunch; same hammer as post-cell
     q run 'cmd /c taskkill /f /im powershell.exe 2>nul & exit 0' >/dev/null 2>&1
     sleep 5
-    ensure_probe_pushed || log "  WARNING: fsgate-probe.ps1 still not verifiable on the guest"
+    ensure_probe_pushed || log "  WARNING: probe scripts still not verifiable on the guest"
     q run "cmd /c del /q $gf 2>nul & exit 0" >/dev/null 2>&1
     attempt=$((attempt+1))
   done
