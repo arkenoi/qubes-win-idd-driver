@@ -36,7 +36,9 @@ VM="${1:?usage: $0 <vm> [outdir]}"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
 OUT="${2:-$HOME/qwt-accept/20260830-acceptance-4.3.16/FAILPROOF-gates-$VM}"
 mkdir -p "$OUT"
-q(){ QTEST_VM=$VM timeout -k 8 "${T:-300}" ./tools/qtest "$@" 2>/dev/null; }
+QTEST_BIN="${QTEST_BIN:-./tools/qtest}"       # overridable ONLY so the degraded-guest paths are provable off-rig
+P5_RUNNER="${P5_RUNNER:-mgmt/harness/p5-run.sh}"
+q(){ QTEST_VM=$VM timeout -k 8 "${T:-300}" "$QTEST_BIN" "$@" 2>/dev/null; }
 r(){ q run "$1" | tr -d '\r' | grep -avE '^(Microsoft Windows \[Version|\(c\) Microsoft|C:\\)'; }
 psrun(){ local b; b=$(python3 -c "
 import base64,sys; print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode(), end='')" <<< "$1")
@@ -45,10 +47,43 @@ log(){ echo "$(date -u +%H:%M:%S) gates[$VM]: $*" | tee -a "$OUT/failproof.log";
 V="$OUT/verdicts.tsv"; EV=$(basename "$OUT"); rc=0
 KEY='HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent'
 
+# LIVENESS BOUND (2026-09-04). The prove cycles repeat arm + agent-restart, and that cycling can
+# degrade the guest's qrexec/session (measured in the P5 preflight at 0x3 -> 0x14 -> 0x20: by
+# 0x20 the guest stopped answering and the sequence stalled >12 min with no verdict until an
+# external watchdog killed it). A guest that stops answering mid-sequence is a GRADED outcome -
+# INVALID-INSTRUMENT, the failproof is not takeable this run - never a condition to out-wait:
+# without this bound three 28-minute cycles would grind against a dead guest until the step
+# timeout killed the run with NO verdicts.tsv at all (rule 14's worst shape). Nothing here
+# weakens the responsive path: an ALIVE guest still runs every armed->RED->cleared->green flip.
+alive(){ T=30 q run 'cmd /c echo LIVE' | grep -qa LIVE; }
+
+guest_gone(){  # <context> <check-column> - one bounded clear attempt, the verdict row, and OUT (exit 3)
+  log "guest gone - one bounded FaultGateOff=0 clear attempt, then the verdict"
+  T=90 set_gate 0 >/dev/null 2>&1 || true
+  log "-> INVALID-INSTRUMENT: guest unresponsive during the fault-toggle sequence ($1)."
+  log "   The repeated arm+agent-restart cycle degraded the session; a dead guest is a graded"
+  log "   outcome, never a wait state. Failproof not takeable this run - the affected checks'"
+  log "   PASS rows stay PASS-UNPROVEN (P5-7). The subject may be left with FaultGateOff armed"
+  log "   and MUST be restored before it re-enters service."
+  printf 'GATES\t%s\tINVALID-INSTRUMENT\tguest unresponsive during the fault-toggle sequence (arm+agent-restart degraded the session; %s); failproof not takeable this run\t%s\n' \
+    "${2:-sequence}" "$1" "$EV" >> "$V"
+  exit 3
+}
+
+require_alive(){  # <context> <check-column> - 3 bounded probes, then the graded exit
+  local i; for i in 1 2 3; do
+    alive && return 0
+    log "  liveness probe $i/3: guest did not answer ($1)"
+    sleep 5
+  done
+  guest_gone "$1" "${2:-sequence}"
+}
+
 # ---------------------------------------------------------------- the running binary must have the bits
 # `gateoff=` in the startup banner exists only in a build carrying FiGateOff. An older fault build
 # would silently ignore FaultGateOff and every armed run would come back green - which would look
 # like "the gates all hold" and would in fact be "the bypass was never in force".
+require_alive "at sequence entry, before the banner check" gates-entry
 log "=== confirm the RUNNING agent understands FI_GATE_OFF ==="
 BAN=$(psrun '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\").LogDir
 $f=Get-ChildItem $d -Filter gui-agent-*.log | Sort LastWriteTime -Desc | Select -First 1
@@ -72,22 +107,45 @@ Start-Service QubesGuiWatchdog -EA SilentlyContinue; Start-Sleep 25
 Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)" | grep -a GATEOFF | sed 's/^/  /'
 }
 
+# The GATEOFF echo must ROUND-TRIP or the toggle is graded, never assumed. Called only at top
+# level (never in a pipe/substitution) so guest_gone's exit actually terminates the script.
+set_gate_checked(){  # <hex-or-0> <context> <check-column>
+  local out; out=$(set_gate "$1")
+  if ! echo "$out" | grep -qa GATEOFF; then
+    log "  no GATEOFF echo from the guest ($2)"
+    require_alive "$2" "$3"
+    out=$(set_gate "$1")   # answered liveness - one bounded retry, then grade
+    echo "$out" | grep -qa GATEOFF || \
+      guest_gone "$2: guest answers liveness but the FaultGateOff write never round-trips" "$3"
+  fi
+  echo "$out"
+}
+
 # P5 takes the same per-VM lock; QWT_VMLOCK_HELD is already exported, so it passes through.
 p5(){  # <tag> -> "SG4=<v> SG2=<v> SG3=<v> SG9=<v>"
   rm -rf "$OUT/$1"
-  bash mgmt/harness/p5-run.sh "$VM" "$OUT/$1" > "$OUT/$1.out" 2>&1
+  bash "$P5_RUNNER" "$VM" "$OUT/$1" > "$OUT/$1.out" 2>&1
   local f="$OUT/$1/verdicts.tsv"
   [ -s "$f" ] || { echo "NORESULT"; return; }   # rule 14
   awk -F'\t' '{v[$1]=$3} END{printf "SG4=%s SG2=%s SG3=%s SG9=%s", v["SG4"], v["SG2"], v["SG3"], v["SG9"]}' "$f"
+}
+
+# rule 14 refined: an empty suite is DATA only while the guest still answers. NORESULT from a
+# guest that no longer answers liveness is the degraded-session case - grade it and stop.
+noresult_check(){  # <suite-result> <context> <check-column>
+  [ "$1" = NORESULT ] || return 0
+  alive && return 0
+  guest_gone "$2: the p5 suite produced no verdicts and the guest no longer answers" "$3"
 }
 green(){ case "$1" in PASS|PASS-UNPROVEN) return 0;; *) return 1;; esac; }
 field(){ echo "$1" | grep -ao "$2=[A-Za-z-]*" | cut -d= -f2; }
 
 # ---------------------------------------------------------------- baseline, everything gated
 log "=== BASELINE: FaultGateOff=0, all safeguards in force ==="
-set_gate 0
+set_gate_checked 0 "clearing the gate for baseline" baseline
 BASE=$(p5 baseline)
 log "  baseline: $BASE"
+noresult_check "$BASE" "baseline" baseline
 for c in SG4 SG2 SG3 SG9; do
   green "$(field "$BASE" $c)" || { log "ABORTING: $c is not green at baseline, so no later red is attributable."
     printf 'GATES\tbaseline\tINVALID-INSTRUMENT\t%s not green at baseline: %s\t%s\n' "$c" "$BASE" "$EV" >> "$V"; exit 1; }
@@ -106,9 +164,10 @@ prove(){  # <bitname> <hex> <cell> <check> [cells allowed to move too]
   local name="$1" bit="$2" cell="$3" chk="$4"; shift 4
   local allowed=" $* "
   log "=== $name ($bit) -> expect $cell to go RED, the other three to stay green ==="
-  set_gate "$bit"
+  set_gate_checked "$bit" "arming $name" "$chk"
   local A; A=$(p5 "armed-$name")
   log "  armed: $A"
+  noresult_check "$A" "armed run of $name ($bit)" "$chk"
   local tgt others_ok=yes o
   tgt=$(field "$A" "$cell")
   for o in SG4 SG2 SG3 SG9; do
@@ -119,9 +178,10 @@ prove(){  # <bitname> <hex> <cell> <check> [cells allowed to move too]
       *) others_ok=no; log "  NOTE: $o also moved ($(field "$A" $o)) - UNDECLARED, so the bypass is broader than this clause" ;;
     esac
   done
-  set_gate 0
+  set_gate_checked 0 "clearing $name after the armed run" "$chk"
   local B; B=$(p5 "restored-$name")
   log "  restored: $B"
+  noresult_check "$B" "restored run of $name" "$chk"
   local back; back=$(field "$B" "$cell")
 
   if [ "$tgt" = FAIL ] && [ "$others_ok" = yes ] && green "$back"; then
@@ -151,7 +211,7 @@ prove FI_GATE_START_NOCARD 0x14 SG9 start-not-presented
 prove FI_DROP_CAPTIONED   0x20 SG3 windowed-fullscreen-allowed
 
 log "=== clearing FaultGateOff and leaving the subject with every safeguard in force ==="
-set_gate 0
+set_gate_checked 0 "final clear - the subject must not leave this script armed" gates-final-clear
 log "=== finished rc=$rc ==="
 log "REMINDER: the RELEASE binary must be restored before this subject is used for anything else."
 exit $rc
