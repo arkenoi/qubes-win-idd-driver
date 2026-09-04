@@ -75,14 +75,21 @@ geom(){ QTEST_VM=$VM timeout -k 8 200 ./tools/qtest-geom 2>/dev/null; }
 # are in the pre-fire baseline (new_or_window diffs new-vs-baseline), so any-mapped never false-adds.
 ors(){ awk '$6==1' ; }
 
-# Echo the bridge.log line count. Retries a transient read (a cold-boot session can briefly fail the
-# qrun) and returns NONZERO on hard failure - callers MUST NOT default a failed read to 0. (P8 did
-# `blog_len || echo 0`; the cold-boot read failed, L8 became 0, and `blog_since 0` then counted the
-# WHOLE accumulated log - P7's 8 SENT lines - as P8 "fresh" forwards: the sent-lines=8 false-fail.)
+# Echo the bridge.log line count via -EncodedCommand, and NOTHING else. The old
+# `cmd /c "type ...|find /c /v """` idiom was doubly broken (audit 2026-09-05): (1) qrun echoes
+# the cmd banner "Microsoft Windows [Version 10.0.19045...]", so `grep -aoE '[0-9]+' | head -1`
+# matched the banner's "10" and blog_len returned a CONSTANT 10 for the whole run - every
+# blog_since offset was `Skip 10`, so early phases saw nothing (P4a false-FAIL: SENT id=15 hidden)
+# and later ones saw a stale tail (P7 false-PASS, P8 false-FAIL); (2) the \" escaping delivered a
+# literal \" to cmd, so the find count never even ran. Fix mirrors path_state: -EncodedCommand (no
+# banner/self-match, no cmd backslash mangling), output anchored to a whole-line integer. Retries a
+# transient cold-boot read; returns NONZERO on hard failure - callers MUST NOT default to 0.
 blog_len(){
-  local i n
+  local i n ps b64
+  ps="if (Test-Path -LiteralPath '$BLOG') { (@(Get-Content -LiteralPath '$BLOG')).Count } else { 0 }"
+  b64=$(printf '%s' "$ps" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
   for i in 1 2 3; do
-    n=$(qrun "cmd /c \"type \\\"$BLOG\\\" 2>nul | find /c /v \\\"\\\"\"" | grep -aoE '[0-9]+' | head -1)
+    n=$(qrun "powershell -NoProfile -EncodedCommand $b64" | tr -d '\r' | grep -aoxE '[0-9]+' | head -1)
     [ -n "$n" ] && { printf '%s' "$n"; return 0; }
     sleep 2
   done
@@ -135,13 +142,19 @@ fire_raw(){ # $1=extra args to fire-demo-toast.ps1, $2=tag-prefix; echoes output
   done
   return 1
 }
-fire_info(){ fire_raw "-Title '$1'" "a0i$RANDOM"; }
+# Every phase call site pipes these to /dev/null and (historically) ignored the exit status, so a
+# SILENT NO-OP fire flowed into the detector as "nothing happened" and was misattributed to the
+# bridge - P6a graded an UNFIRED toast as "FAIL-CLOSED DEFECT" (audit 2026-09-05). The wrappers now
+# LOG loudly on a fire that never confirmed FIRED; `log` writes to results.log via `tee -a "$R"`, so
+# the warning survives the call site's `>/dev/null` and lands right before the phase verdict. They
+# still return the fire_raw status (0/1) so a caller that wants to gate/skip can check it.
+fire_info(){ fire_raw "-Title '$1'" "a0i$RANDOM" || { log "INSTRUMENT: fire_info '$1' never confirmed FIRED after retries - a FAIL below is an instrument miss, NOT bridge behaviour"; return 1; }; }
 # PERSISTENT informational toast (scenario=reminder) for WINDOW-PATH detection: the rig's
 # whole-desktop capture (geom) is ~59s/call, so a transient ~5s toast is gone before any snapshot
 # aligns and its o-r window is never caught. Use fire_info_p where the check is "an o-r window
 # mapped" (geom); use fire_info where the check is the bridge.log SENT line (fast, no window needed).
-fire_info_p(){ fire_raw "-Persistent -Title '$1'" "a0p$RANDOM"; }
-fire_ctl(){ fire_raw "-RealChoice -Aumid $CTLAUMID -Title '$1'" "a0c$RANDOM"; }
+fire_info_p(){ fire_raw "-Persistent -Title '$1'" "a0p$RANDOM" || { log "INSTRUMENT: fire_info_p '$1' never confirmed FIRED after retries - a FAIL below is an instrument miss, NOT bridge behaviour"; return 1; }; }
+fire_ctl(){ fire_raw "-RealChoice -Aumid $CTLAUMID -Title '$1'" "a0c$RANDOM" || { log "INSTRUMENT: fire_ctl '$1' never confirmed FIRED after retries - a FAIL below is an instrument miss, NOT bridge behaviour"; return 1; }; }
 # Read the CURRENT ShowBanner state for the PS test AUMID (absent|0|1) - read-only introspection,
 # the deciding signal the previous run lacked. P4a: did the warmup earn suppression (=0), making the
 # no-banner CORRECT and isolating the forward as the only failure? P8: is a LEFTOVER ShowBanner=0
