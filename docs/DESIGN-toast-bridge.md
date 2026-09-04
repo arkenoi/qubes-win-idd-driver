@@ -555,3 +555,73 @@ Rough effort (single engineer, excluding rig-time):
   skeleton; best-effort foreground (AUMID → window / `ActivateApplication`) is the only new muscle.
 - **Phase 3:** deferred, ~2+ sessions if ever (wpndatabase reader *or* protocol-launch + per-app
   compatibility), gated on Phase-1 telemetry justifying it.
+
+## Phase 3 — per-toast classifier (the button becomes the discriminator)
+
+Scope written 2026-09-04, grounded in the SHIPPED A0 (`tools/notifhost.cpp --bridge`), to turn §4-C
+Phase 3 from a one-line "maybe" into a concrete, decidable plan. **Not started.** A0 classifies
+per-APP (the allowlist); Phase 3 classifies per-TOAST by reading the toast's real `<actions>`/
+`<input>`/`scenario`, so an informational toast bridges and a real-choice one keeps the o-r window
+path — *within the same app*. This is the "everything without a real choice gets bridged" behaviour.
+
+### 3.1 What it buys, and the hard ceiling it does NOT lift
+- Buys: per-toast routing. A mixed app (mail arrivals = informational, calendar reminders = snooze)
+  can have its informational toasts bridged and its real-choice ones stay windows — impossible with
+  the per-app allowlist, which must keep the whole app on one path.
+- Does NOT buy new bridged *capability*: text-reply and snooze remain structurally untranslatable
+  (no dom0 input field; shell-internal timer). Phase 3 only routes them correctly (to the window
+  path) per-toast instead of by excluding the whole app. `protocol` buttons COULD additionally be
+  bridged (launch the URI in-guest on ActionInvoked) — call that Phase 3b, independent.
+
+### 3.2 Data source (the undocumented part)
+`%LocalAppData%\Microsoft\Windows\Notifications\wpndatabase.db` (SQLite). The `Notification` table's
+`Payload` column holds the FULL toast XML (`<actions>`, `arguments`, `activationType`, `<input>`),
+joined to `NotificationHandler` for the owning AUMID. Read-only, same-user. Use the in-box
+`winsqlite3.dll` (ships since Win10 1803) — NO external dependency, matching notifhost's zero-dep rule.
+Risks, each of which MUST fail-open (unknown/unreadable → window path, never a dropped real choice):
+- **Version-coupled schema** — reverse-engineered by the forensics community; has shifted across
+  builds. The reader detects its expected columns and bails to window-path on any mismatch.
+- **WAL locking** — ShellExperienceHost holds it in WAL mode; a just-arrived row may sit in the
+  `-wal` file. Read-only open works; a fresh row may need a short retry, else treat as "not yet
+  classifiable" → window path.
+- **Correlation ambiguity** — the listener gives {AUMID, Id, text, CreationTime}; the DB row has its
+  own key + AUMID + arrival time + XML, with NO shared key. Correlate by AUMID + arrival-time window
+  + text match; on ANY ambiguity (rapid identical toasts) bias to window-path.
+
+### 3.3 The suppression problem is the real architectural cost (decide FIRST)
+A0 suppresses per-app with `ShowBanner=0` written BEFORE the toast fires — no race, but it commits
+the whole app. Per-toast cannot pre-suppress (you can't know a toast's content before it exists), so
+Phase 3 CANNOT use `ShowBanner`:
+- If you keep A0's per-app `ShowBanner=0` AND then withhold-forward a buttoned toast per-toast, that
+  toast is suppressed-but-unforwarded = LOST from the banner. Unacceptable (violates fail-open).
+- So per-toast suppression must be DEFERRED-MAP, not pre-suppress: the agent CREATEs the toast's o-r
+  window but HOLDS the map ~250 ms while notifhost reads the DB and returns a verdict; informational
+  → drop the held window + bridge; real-choice → map it (window path). This reuses the agent's
+  existing crop-before-show map-defer machinery (CROP_BEFORE_SHOW_TIMEOUT_MS) but COUPLES the agent's
+  map latency to the classifier — a new agent↔notifhost IPC (verdict channel) that A0 does not need.
+  **This coupling is the gating decision: Phase 3 is not "just a DB reader", it is an agent change.**
+
+### 3.4 Plan, validation-first
+1. **PROBE (do this before committing anything else, ~0.5 session):** `notifhost --dump-wpndb` —
+   open the DB read-only via winsqlite3, dump schema + the latest N rows' {AUMID, arrival, Payload
+   XML}. Run on win10, win11 24H2, win11 25H2. DECISION GATE: only proceed if the schema matches
+   across all three, the XML is extractable, and AUMID+time+text correlation is unambiguous in
+   practice. If the schema differs per build, Phase 3's cost multiplies — stop and report.
+2. XML classifier: implement the §2.2 table against the parsed `<toast>` (input→window;
+   system-snooze/selection→window; scenario reminder/incomingCall/alarm→window; `<progress>` or
+   `afterActivationBehavior=pendingUpdate`→window; else informational→bridge). Pure function, unit-
+   testable offline against captured Payload strings from the probe.
+3. Agent verdict channel + deferred-map suppression (§3.3) — the load-bearing new work.
+4. Acceptance: fire buttoned vs buttonless toasts from the SAME AUMID; assert the buttonless one
+   bridges (dom0 native, no o-r window) and the buttoned one stays an o-r window — the discriminator
+   A0 cannot express. Prove the fail-open branches (unreadable DB, schema mismatch, ambiguous
+   correlation → window path) by injection, seen to FAIL.
+
+### 3.5 Effort + recommendation
+Probe ~0.5 session; classifier ~1; agent deferred-map verdict channel ~1.5; acceptance ~1 → ~4
+sessions, carrying real undocumented-DB + agent-coupling risk. **Recommendation: run the PROBE
+(3.4.1) first and decide on data.** Per-app A0 already covers the common case with supported APIs and
+no agent coupling; Phase 3 is justified only if real usage shows allowlisted apps emitting enough
+mixed (informational + real-choice) toasts that per-app routing visibly mis-serves the user. The
+probe is cheap and answers "is the DB even stable enough to build on" before any of the expensive
+agent work.
