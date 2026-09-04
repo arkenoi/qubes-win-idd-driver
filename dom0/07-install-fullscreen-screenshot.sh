@@ -54,7 +54,9 @@ set -uo pipefail
 # same gate the qrexec policy uses. A hardcoded name meant every qube created later got an
 # EMPTY tar with no error - win11-fresh's visual acceptance was lost to exactly that
 # (2026-08-07), and an empty tar is indistinguishable from "the guest has no windows".
-VM="${QREXEC_SERVICE_ARGUMENT:-${1##*+}}"
+# Robust under `set -u`: default $1 to empty before the ##*+ strip, or a direct argless call
+# (the installer self-test) crashes with "1: unbound variable" instead of the clean "no target".
+VM="${QREXEC_SERVICE_ARGUMENT:-${1:-}}"; VM="${VM##*+}"
 [ -n "$VM" ] || { echo "no target: call as local.WinFullScreen+<vm>" >&2; exit 1; }
 if ! qvm-tags "$VM" list 2>/dev/null | grep -qx win-idd-testbed; then
     echo "refused: '$VM' lacks the win-idd-testbed tag" >&2; exit 1
@@ -162,7 +164,22 @@ OUT=$(mktemp -d)
 cleanup() { rm -rf "$OUT"; }
 trap cleanup EXIT
 
-"$SVC" < /dev/null > "$OUT/t.tar" 2>"$OUT/t.err"
+# The service is tag-gated and REQUIRES a target, so the old no-arg `"$SVC" </dev/null` call
+# crashed at the arg parse. Self-test the capture against a RUNNING win-idd-testbed guest; if
+# none is up, SKIP the live check - installing must not require a running guest (the service +
+# policy are already written above, and the arg-parse guard is exercised by real qrexec calls).
+tv=""
+for v in $(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$2=="Running"{print $1}'); do
+    qvm-tags "$v" list 2>/dev/null | grep -qx win-idd-testbed && { tv="$v"; break; }
+done
+if [ -z "$tv" ]; then
+    echo "  --  no running win-idd-testbed guest; skipping the live capture self-test (service installed)"
+    echo
+    echo "Installed $SVC (self-test skipped: no running testbed guest to capture against)."
+    exit 0
+fi
+echo "  self-testing capture against running testbed guest: $tv"
+QREXEC_SERVICE_ARGUMENT="$tv" "$SVC" < /dev/null > "$OUT/t.tar" 2>"$OUT/t.err"
 rc=$?
 if [ $rc -ne 0 ]; then
     echo "  FAIL: service exited $rc"

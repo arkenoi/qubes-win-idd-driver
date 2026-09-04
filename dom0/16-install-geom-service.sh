@@ -44,7 +44,9 @@ cat > "$SVC" <<'EOF'
 # per window owned by the target VM (by _QUBES_VMNAME), INCLUDING override-redirect windows
 # (toasts/menus, absent from _NET_CLIENT_LIST) so the caller can find them without cutting a PNG.
 set -uo pipefail
-VM="${QREXEC_SERVICE_ARGUMENT:-${1##*+}}"
+# Robust under `set -u`: default $1 to empty before the ##*+ strip (an argless direct call would
+# otherwise crash with "1: unbound variable" instead of the clean "no target").
+VM="${QREXEC_SERVICE_ARGUMENT:-${1:-}}"; VM="${VM##*+}"
 [ -n "$VM" ] || { echo "no target: call as local.WinGeom+<vm>" >&2; exit 1; }
 if ! qvm-tags "$VM" list 2>/dev/null | grep -qx win-idd-testbed; then
     echo "refused: '$VM' lacks the win-idd-testbed tag" >&2; exit 1
