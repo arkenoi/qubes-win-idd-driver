@@ -1,16 +1,27 @@
 #!/bin/bash
-# Window list for a VM, WITHOUT looking at the desktop.
+# Window list for a VM, WITHOUT capturing the desktop.
 #
-# local.WinFullScreen returns a tar of screen.png + geometry.txt. The PNG is a capture of the
-# WHOLE dom0 desktop - every other qube's windows, the user's mail, everything - and the
-# window list is the only part any of our diagnostics need. So extract geometry.txt and
-# DELETE the image without reading it. Owner's rule, 2026-08-14: whole-desktop captures stay
-# out of the repo and out of the transcript.
+# FAST PATH: local.WinGeom (dom0/16) returns ONLY the window list (plain text, no image) - ~5s
+# after the per-window-sudo-storm fix (was ~58s). This is what almost every diagnostic wants.
+#
+# FALLBACK: local.WinFullScreen (dom0/07) returns a tar of screen.png + geometry.txt; used only
+# if WinGeom is not installed (older dom0). The PNG is a whole-desktop capture (every other
+# qube's windows) - extract geometry.txt and DELETE the image unread. Owner's rule, 2026-08-14:
+# whole-desktop captures stay out of the repo and out of the transcript.
 set -uo pipefail
 VM="${QTEST_VM:-win-idd-test}"
+
+# Fast path: geometry-only service. Plain text to stdout, first line "# id x y w h ...".
+geom=$(qrexec-client-vm dom0 "local.WinGeom+$VM" </dev/null 2>/dev/null | tr -d '\r')
+if printf '%s\n' "$geom" | head -1 | grep -q '^# id x y w h'; then
+    printf '%s\n' "$geom"
+    exit 0
+fi
+
+# Fallback: whole-desktop service; extract geometry.txt, delete the PNG unread.
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 qrexec-client-vm dom0 "local.WinFullScreen+$VM" </dev/null > "$tmp/f.tar" 2>/dev/null || true
-[ -s "$tmp/f.tar" ] || { echo "no geometry returned for $VM (service refused or no windows)"; exit 1; }
+[ -s "$tmp/f.tar" ] || { echo "no geometry for $VM (WinGeom absent AND WinFullScreen refused/empty)"; exit 1; }
 tar xf "$tmp/f.tar" -C "$tmp" ./geometry.txt 2>/dev/null || tar xf "$tmp/f.tar" -C "$tmp" geometry.txt 2>/dev/null
 rm -f "$tmp"/*.png "$tmp"/./*.png 2>/dev/null
 [ -f "$tmp/geometry.txt" ] && cat "$tmp/geometry.txt" || { echo "no geometry.txt in the response"; exit 1; }
