@@ -188,7 +188,10 @@ snap_or(){ # $1=name-regex $2=save-as ; prints matching ids to stdout
 # only banner-specific tokens; CoreWindow/ShellExperienceHost/ToastHost were speculative and, now
 # that ors accepts mapped=0, broad enough to risk matching an unmapped shell lurker.
 TOASTRE='notification|demo toast|A0T|toast'
-DOMRE='notifyd|notification'
+# NO dom0-bubble regex: qtest-geom only lists windows carrying _QUBES_VMNAME == the subject VM,
+# so a dom0-native bubble is invisible to it by construction. The old DOMRE also overlapped
+# TOASTRE (guest banners are titled "New notification"), so it could only ever match a stray
+# GUEST toast - dom0 delivery is proven by the protocol ack instead (see the P2 detector block).
 
 log "=== A0 toast-bridge acceptance: subject=$VM base=$BASE setup=$SETUP out=$OUT ==="
 
@@ -288,21 +291,25 @@ hb=$(hb_state)
 [ "$hb" = "ABSENT" ] && log "P2: no heartbeat with gate off (expected)" \
   || verdict P2 "FAIL bridge heartbeat present with gate OFF (hb=$hb)"
 
-snap_or "$DOMRE" p2-dom0-base > "$OUT/p2-dom0-base.ids"
-# known-good dom0 bubble: the proven NotifyClient direct send
+# dom0-bubble detection is ACK-ONLY. A geom arm here was STRUCTURALLY IMPOSSIBLE (audit
+# 2026-09-05): qtest-geom filters every window on _QUBES_VMNAME == the subject VM, so a
+# dom0-NATIVE notification bubble (no _QUBES_VMNAME) can NEVER appear in its output - the arm
+# could only ever false-activate on a stray GUEST toast between snapshots, after which P4a's
+# correctly-suppressed toast read domseen=no and false-FAILED. This rig has no dom0-side window
+# instrument; the protocol ack ('OK id=') is the proof the dom0 path delivers.
 nc=$(find "$SETUP" -iname 'NotifyClient.exe' | head -1)
 NCG="$QT\\NotifyClient.exe"
-[ -n "$nc" ] || NCG=""   # fall back to ack-only detector mode if the client is not shipped
+[ -n "$nc" ] || NCG=""   # no dom0 detector at all if the client is not shipped
 DOMDET=none
-if [ -n "$NCG" ] && qrun "cmd /c \"if exist \\\"$NCG\\\" echo HAVE\"" | grep -qa HAVE; then
-  qrun "\"$NCG\" --send \"A0T detector probe\" body --timeout 20" > "$OUT/p2-ncsend.txt" 2>&1 &
-  ncpid=$!
-  if new_or_window "$OUT/p2-dom0-base.ids" "$DOMRE" 2 p2-dom0-probe; then DOMDET=geom
-  else DOMDET=ack; fi
-  wait $ncpid || true
-  grep -qa "OK id=" "$OUT/p2-ncsend.txt" || log "P2 WARN: NotifyClient probe not acked: $(cat "$OUT/p2-ncsend.txt")"
+# presence via path_state, NOT `cmd /c if exist ... echo HAVE`: qrun echoes the command line,
+# which literally contains the marker - the banned self-match idiom (and the \" escaping mangles
+# cmd's `if exist`), so it reported HAVE even with the file absent.
+if [ -n "$NCG" ] && [ "$(path_state "$NCG")" = PRESENT ]; then
+  qrun "\"$NCG\" --send \"A0T detector probe\" body --timeout 20" > "$OUT/p2-ncsend.txt" 2>&1
+  if grep -qa "OK id=" "$OUT/p2-ncsend.txt"; then DOMDET=ack
+  else log "P2 WARN: NotifyClient probe not acked: $(cat "$OUT/p2-ncsend.txt")"; fi
 fi
-log "P2: dom0-bubble detector mode = $DOMDET (geom=window-list visible, ack=protocol-ack only)"
+log "P2: dom0-bubble detector mode = $DOMDET (ack=protocol-ack; no dom0-side window instrument on this rig)"
 
 # baseline toast, gate off: MUST banner in-guest (o-r window), MUST NOT bridge. PERSISTENT so the
 # ~59s geom can catch the o-r window (2 tries is plenty for a toast that stays up).
@@ -351,21 +358,20 @@ for i in $(seq 1 15); do blog_since "$Lw" | grep -qa "SENT id=.*OK" && { warm=1;
 sleep 3
 L0=$(blog_len)
 snap_or "$TOASTRE" p4-guest-base > "$OUT/p4-guest-base.ids"
-snap_or "$DOMRE" p4-dom0-base > "$OUT/p4-dom0-base.ids"
 fire_info "A0T bridged" > /dev/null 2>&1        # toast #2: must be suppressed now
 sent=""
 for i in $(seq 1 15); do
   blog_since "$L0" > "$OUT/p4-blog.txt"
   grep -qa "SENT id=.*OK" "$OUT/p4-blog.txt" && { sent=1; break; }; sleep 2
 done
-domseen="n/a"
-if [ "$DOMDET" = geom ]; then
-  new_or_window "$OUT/p4-dom0-base.ids" "$DOMRE" 2 p4-dom0 && domseen=yes || domseen=no
-fi
+# dom0 side: NOT graded by window list (geom cannot see dom0-native bubbles, see the P2
+# detector block) - the SENT..OK ack above IS the dom0-delivery evidence. Explicit literal so
+# the verdict never looks like a vacuously-passed check.
+domseen='n/a(no-dom0-instrument)'
 guestbanner=no
 new_or_window "$OUT/p4-guest-base.ids" "$TOASTRE" 2 p4-guest && guestbanner=yes
 sb4=$(showbanner); log "P4a introspection: $sb4 (=0 -> warmup earned suppression, so no-banner is CORRECT and only the forward failed; =absent -> nothing was ever forwarded/suppressed)"
-if [ -n "$sent" ] && [ "$guestbanner" = no ] && [ "$domseen" != no ]; then
+if [ -n "$sent" ] && [ "$guestbanner" = no ]; then
   verdict P4a "PASS bridged: SENT OK, no guest banner, dom0=$domseen ($sb4)"
 else
   cap "$OUT" p4a "$R"; verdict P4a "FAIL sent=${sent:-no} guestbanner=$guestbanner dom0=$domseen $sb4"
@@ -465,22 +471,42 @@ else
 fi
 
 log "P6c: kill the relay -> banners restored, then auto-reconnect"
-raspush guest/a0-kill-relay.ps1 "" a0k$RANDOM > "$OUT/p6c-kill.txt" 2>&1
-grep -aoE 'KILLED-RELAY=[0-9]+' "$OUT/p6c-kill.txt" | head -1 | tee -a "$R"
-sleep 8    # reader notices EOF, banners restore; backoff first retry 5s
-L5=$(blog_len)
-recon=""
-for i in $(seq 1 10); do blog_since 0 | tail -8 | grep -qa "connected (server version" && { recon=1; break; }; sleep 3; done
-if [ -n "$recon" ]; then
-  L6=$(blog_len)
-  snap_or "$TOASTRE" p6c-guest-base > "$OUT/p6c-guest-base.ids"
-  fire_info "A0T post-reconnect" > /dev/null 2>&1
-  sent=""
-  for i in $(seq 1 15); do blog_since "$L6" | grep -qa "SENT id=.*OK" && { sent=1; break; }; sleep 2; done
-  [ -n "$sent" ] && verdict P6c "PASS relay killed -> reconnected -> bridged again" \
-    || verdict P6c "FAIL no bridged send after reconnect"
+# Offset BEFORE the kill: the old detector (`blog_since 0 | tail -8 | grep connected`) matched
+# a STALE connected line from P6b and declared reconnect without one happening (audit
+# 2026-09-05). Only lines PAST L5 count, and the bridge must log BOTH its disconnect notice
+# ("connection down - banners restored", notifhost.cpp BridgeMain) and a NEW
+# "connected (server version" to prove the kill->EOF->restore->reconnect path actually ran.
+if ! L5=$(blog_len); then
+  verdict P6c "INSTRUMENT blog_len unreadable before relay kill - no offset to anchor reconnect evidence, NOT graded"
 else
-  verdict P6c "FAIL no reconnect after relay kill: $(blog_since "$L5" | tail -4 | tr '\n' ';')"
+  raspush guest/a0-kill-relay.ps1 "" a0k$RANDOM > "$OUT/p6c-kill.txt" 2>&1
+  killed=$(grep -aoE 'KILLED-RELAY=[0-9]+' "$OUT/p6c-kill.txt" | head -1 | grep -aoE '[0-9]+$')
+  log "P6c: KILLED-RELAY=${killed:-absent} $(grep -aoE 'RELAY-KILL-[A-Z]+=[^[:space:]]*' "$OUT/p6c-kill.txt" | tr '\n' ' ')"
+  if [ "${killed:-0}" -lt 1 ]; then
+    # nothing confirmed dead => the path under test never ran; grading it would be vacuous
+    cap "$OUT" p6c-nokill "$R"
+    verdict P6c "INSTRUMENT relay kill confirmed 0 kills (KILLED-RELAY=${killed:-absent}) - reconnect path never exercised, NOT a bridge verdict"
+  else
+    sleep 8    # reader notices EOF, banners restore; backoff first retry 5s
+    recon=""
+    for i in $(seq 1 10); do
+      blog_since "$L5" > "$OUT/p6c-blog.txt"
+      grep -qa "connection down" "$OUT/p6c-blog.txt" && \
+        grep -qa "connected (server version" "$OUT/p6c-blog.txt" && { recon=1; break; }
+      sleep 3
+    done
+    if [ -n "$recon" ]; then
+      L6=$(blog_len)
+      snap_or "$TOASTRE" p6c-guest-base > "$OUT/p6c-guest-base.ids"
+      fire_info "A0T post-reconnect" > /dev/null 2>&1
+      sent=""
+      for i in $(seq 1 15); do blog_since "$L6" | grep -qa "SENT id=.*OK" && { sent=1; break; }; sleep 2; done
+      [ -n "$sent" ] && verdict P6c "PASS relay killed ($killed) -> disconnect noticed -> reconnected -> bridged again" \
+        || verdict P6c "FAIL no bridged send after reconnect"
+    else
+      verdict P6c "FAIL no NEW disconnect+reconnect after relay kill (since line $L5): $(tail -4 "$OUT/p6c-blog.txt" | tr '\n' ';')"
+    fi
+  fi
 fi
 
 # ---------- P7 politeness ------------------------------------------------------------------
@@ -535,6 +561,10 @@ qvm-features --unset "$VM" service.legacy-toasts 2>/dev/null || true
 cap "$OUT" final "$R" || true
 blog_since 0 > "$OUT/bridge-full.log" 2>/dev/null || true
 log "=== verdicts ==="; cat "$OUT/verdicts.txt" | tee -a "$R"
-fails=$(grep -c "FAIL" "$OUT/verdicts.txt" || true)
-log "=== done: $fails FAIL line(s); evidence in $OUT; subject $VM left running for inspection ==="
+# Count FAIL *and* INSTRUMENT: an INSTRUMENT verdict means a phase was never actually exercised
+# (fire never fired, consent never revoked, blog_len unreadable, 0 relay kills) - "missing data
+# fails", so the overall exit code the caller gates on must NOT read green when a phase was ungraded
+# (audit 2026-09-05: the old `grep -c FAIL` let an unexercised P6c exit 0).
+fails=$(grep -cE 'FAIL|INSTRUMENT' "$OUT/verdicts.txt" || true)
+log "=== done: $fails FAIL/INSTRUMENT line(s); evidence in $OUT; subject $VM left running for inspection ==="
 [ "${fails:-0}" = 0 ]
