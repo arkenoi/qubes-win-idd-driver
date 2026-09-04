@@ -84,13 +84,28 @@ path_state(){ # $1 = guest path
 }
 hb_state(){ path_state "$HBF"; }   # PRESENT = bridge heartbeat file exists (bridge running)
 
-fire_info(){ raspush guest/fire-demo-toast.ps1 "-Title '$1'" "a0i$RANDOM"; }
+# Fire a toast and CONFIRM it actually fired. fire-demo-toast.ps1 prints a `FIRED ...` line via
+# run-as-user; the FIRST run-as-user call right after a COLD boot can silently no-op (Task
+# Scheduler / interactive session not yet ready) - it returns no FIRED line and no toast shows
+# (measured 2026-09-04: this defeated P2 three times while the DETECTION was fine). So verify the
+# FIRED line and retry; the P1d warm-up primes the path so the first TIMED fire is reliable.
+fire_raw(){ # $1=extra args to fire-demo-toast.ps1, $2=tag-prefix; echoes output, returns 0 once FIRED seen
+  local out i
+  for i in 1 2 3 4; do
+    out=$(raspush guest/fire-demo-toast.ps1 "$1" "$2$i")
+    printf '%s\n' "$out"
+    printf '%s' "$out" | grep -qa 'FIRED' && return 0
+    sleep 8
+  done
+  return 1
+}
+fire_info(){ fire_raw "-Title '$1'" "a0i$RANDOM"; }
 # PERSISTENT informational toast (scenario=reminder) for WINDOW-PATH detection: the rig's
 # whole-desktop capture (geom) is ~59s/call, so a transient ~5s toast is gone before any snapshot
 # aligns and its o-r window is never caught. Use fire_info_p where the check is "an o-r window
 # mapped" (geom); use fire_info where the check is the bridge.log SENT line (fast, no window needed).
-fire_info_p(){ raspush guest/fire-demo-toast.ps1 "-Persistent -Title '$1'" "a0p$RANDOM"; }
-fire_ctl(){ raspush guest/fire-demo-toast.ps1 "-RealChoice -Aumid $CTLAUMID -Title '$1'" "a0c$RANDOM"; }
+fire_info_p(){ fire_raw "-Persistent -Title '$1'" "a0p$RANDOM"; }
+fire_ctl(){ fire_raw "-RealChoice -Aumid $CTLAUMID -Title '$1'" "a0c$RANDOM"; }
 # Clear persistent test toasts from the Notification Center so they do not outlive the phase and
 # pollute the next baseline (dismiss-toast.ps1 clears by AppId; default = the PS test AUMID).
 dismiss_toasts(){ # $1 = AUMID (optional; default PS test AUMID)
@@ -160,6 +175,19 @@ else
   verdict P1c "FAIL heartbeat instrument self-test present='$pst_yes' absent='$pst_no' - probe unreliable, aborting"; exit 1
 fi
 
+# P1d WARM the user-session fire path. The FIRST run-as-user call after a cold boot can silently
+# no-op (Task Scheduler / interactive session not yet ready) - it returns no FIRED line and no
+# toast shows, which defeated P2 three times while detection was fine (2026-09-04). fire_raw
+# already verifies FIRED and retries, so this both primes the path AND confirms it before any
+# TIMED detection depends on it (experimenter rule 3: the fire instrument must be shown to work).
+log "P1d: warming + validating the run-as-user fire path"
+if fire_raw "-Title 'A0T warmup-prime'" "warm$RANDOM" | grep -qa FIRED; then
+  log "P1d: fire path confirmed (FIRED)"
+else
+  verdict P1d "FAIL run-as-user fire never confirmed FIRED after retries - fire instrument down, aborting"; exit 1
+fi
+dismiss_toasts
+
 # ---------- P2 instrument validation + gate-OFF baseline -----------------------------------
 log "P2: detectors + baseline (gate off - as-installed default)"
 hb=$(hb_state)
@@ -190,7 +218,7 @@ if new_or_window "$OUT/p2-guest-base.ids" "$TOASTRE" 2 p2-guest-toast; then
   dismiss_toasts
   verdict P2 "PASS gate-off toast banners in guest (window path; detector CAN fire)"
 else
-  cap "$VM" p2-noshow "$OUT"; dismiss_toasts; verdict P2 "FAIL gate-off toast produced no guest o-r banner - baseline broken, aborting"; exit 1
+  cap "$OUT" p2-noshow "$R"; dismiss_toasts; verdict P2 "FAIL gate-off toast produced no guest o-r banner - baseline broken, aborting"; exit 1
 fi
 
 # ---------- P3 enable + cold boot ----------------------------------------------------------
@@ -205,7 +233,7 @@ ok=""
 for i in $(seq 1 30); do   # agent launches bridge on shell-up; 5s supervise cadence
   [ "$(hb_state)" = PRESENT ] && { ok=1; break; }; sleep 5
 done
-[ -n "$ok" ] || { cap "$VM" p3-nobridge "$OUT"; verdict P3 "FAIL bridge never heartbeat after cold boot"; exit 1; }
+[ -n "$ok" ] || { cap "$OUT" p3-nobridge "$R"; verdict P3 "FAIL bridge never heartbeat after cold boot"; exit 1; }
 conn=""
 for i in $(seq 1 15); do
   blog_since 0 > "$OUT/p3-blog.txt"
@@ -245,7 +273,7 @@ new_or_window "$OUT/p4-guest-base.ids" "$TOASTRE" 2 p4-guest && guestbanner=yes
 if [ -n "$sent" ] && [ "$guestbanner" = no ] && [ "$domseen" != no ]; then
   verdict P4a "PASS bridged: SENT OK, no guest banner, dom0=$domseen"
 else
-  cap "$VM" p4a "$OUT"; verdict P4a "FAIL sent=${sent:-no} guestbanner=$guestbanner dom0=$domseen"
+  cap "$OUT" p4a "$R"; verdict P4a "FAIL sent=${sent:-no} guestbanner=$guestbanner dom0=$domseen"
 fi
 L1=$(blog_len)
 snap_or "$TOASTRE" p4c-guest-base > "$OUT/p4c-guest-base.ids"
@@ -259,7 +287,7 @@ dismiss_toasts "$CTLAUMID"   # the control toast is a persistent reminder - clea
 if [ "$ctlbanner" = yes ] && [ "$ctlsent" = 0 ]; then
   verdict P4b "PASS control: guest banner, no bridge send (skip=$ctlskip)"
 else
-  cap "$VM" p4b "$OUT"; verdict P4b "FAIL control banner=$ctlbanner sent-lines=$ctlsent"
+  cap "$OUT" p4b "$R"; verdict P4b "FAIL control banner=$ctlbanner sent-lines=$ctlsent"
 fi
 
 # ---------- P5 expiry keeps the guest record ----------------------------------------------
@@ -293,7 +321,7 @@ if new_or_window "$OUT/p6-guest-base.ids" "$TOASTRE" 2 p6-guest; then
   dismiss_toasts
   verdict P6a "PASS consent revoked => window path (fail-open proven by failure)"
 else
-  cap "$VM" p6a "$OUT"; dismiss_toasts; verdict P6a "FAIL toast lost with consent revoked - FAIL-CLOSED DEFECT"
+  cap "$OUT" p6a "$R"; dismiss_toasts; verdict P6a "FAIL toast lost with consent revoked - FAIL-CLOSED DEFECT"
 fi
 blog_since "$L2" | grep -a "FATAL" > "$OUT/p6-fatal.txt" || true
 
@@ -385,12 +413,12 @@ dismiss_toasts
 if [ -z "$hbseen" ] && [ "$lgwin" = yes ] && [ "${lgsent:-0}" = 0 ]; then
   verdict P8 "PASS legacy-toasts: bridge did NOT run (no heartbeat), toast took the window path, no forward"
 else
-  cap "$VM" p8 "$OUT"; verdict P8 "FAIL legacy-toasts hbseen=${hbseen:-no} windowpath=$lgwin sent-lines=${lgsent:-?}"
+  cap "$OUT" p8 "$R"; verdict P8 "FAIL legacy-toasts hbseen=${hbseen:-no} windowpath=$lgwin sent-lines=${lgsent:-?}"
 fi
 qvm-features --unset "$VM" service.legacy-toasts 2>/dev/null || true
 
 # ---------- wrap ---------------------------------------------------------------------------
-cap "$VM" final "$OUT" || true
+cap "$OUT" final "$R" || true
 blog_since 0 > "$OUT/bridge-full.log" 2>/dev/null || true
 log "=== verdicts ==="; cat "$OUT/verdicts.txt" | tee -a "$R"
 fails=$(grep -c "FAIL" "$OUT/verdicts.txt" || true)
