@@ -189,26 +189,56 @@ static void BLog(const wchar_t* fmt, ...)
 
 // --- config -------------------------------------------------------------------------------
 
+// DEFAULT allowlist - the conservative seed used when NotifyBridgeAllow is unset. The
+// classification IS the list, and fail-open protects UNKNOWN apps but NOT a wrongly-listed one
+// (a mis-listed real-choice app would be suppressed-and-lossy), so every default entry must be
+// an app whose toasts are reliably INFORMATIONAL (click-to-open or dismiss-only) - never a real
+// choice. Exact AUMID match (case-insensitive), so these are the packaged apps' PFN!AppId and
+// the well-known system pseudo-AUMIDs. Stock on Win10/11; an app that is not installed simply
+// never fires (harmless). Verify/extend per real guest with `notifhost --dump-aumids`.
+//
+// DELIBERATELY EXCLUDED (real choice -> MUST stay on the window path, do NOT add):
+//   Windows.SystemToast.WindowsUpdate.Notification  (Restart now / Pick a time)
+//   Microsoft.YourPhone_8wekyb3d8bbwe!App           (Phone Link quick-reply text box)
+//   *.Outlook / Calendar / reminder senders          (Snooze + interval selection)
+//   Microsoft.Windows.Explorer                       (the catch-all shell sender; also the
+//                                                     acceptance control for a real-choice toast)
+static const wchar_t* const DEFAULT_ALLOW[] = {
+    L"Microsoft.ScreenSketch_8wekyb3d8bbwe!App",       // Snipping Tool: "screenshot saved" (open)
+    L"Microsoft.WindowsCamera_8wekyb3d8bbwe!App",      // Camera: photo/video saved
+    L"Microsoft.Windows.Photos_8wekyb3d8bbwe!App",     // Photos: import / edit complete
+    L"Windows.SystemToast.SecurityAndMaintenance",     // Security & Maintenance status (click-to-open)
+    L"Windows.SystemToast.BackupReminder",             // "back up your files" status
+};
+
 // Allowlist of AUMIDs whose toasts are bridged: REG_MULTI_SZ "NotifyBridgeAllow" under the
-// gui-agent's config key. Absent/empty list = the bridge idles (forwards nothing, suppresses
-// nothing); unknown apps always stay on the window path - the classification IS the list.
+// gui-agent's config key. If the value is set (non-empty) it is authoritative; if it is ABSENT
+// the conservative DEFAULT_ALLOW seed is used (so the bridge does something sensible out of the
+// box when gated on). To bridge NOTHING, use service.legacy-toasts / disable notify-bridge -
+// those are the "no bridge" controls; the allowlist is "which apps", not the on/off switch.
 static std::vector<std::wstring> ReadAllowlist()
 {
     std::vector<std::wstring> out;
     HKEY k;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Invisible Things Lab\\Qubes Tools\\gui-agent",
-                      0, KEY_READ | KEY_WOW64_64KEY, &k))
-        return out;
-    DWORD type = 0, cb = 0;
-    if (!RegQueryValueExW(k, L"NotifyBridgeAllow", nullptr, &type, nullptr, &cb) &&
-        type == REG_MULTI_SZ && cb > 2)
+    if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Invisible Things Lab\\Qubes Tools\\gui-agent",
+                       0, KEY_READ | KEY_WOW64_64KEY, &k))
     {
-        std::vector<wchar_t> buf(cb / sizeof(wchar_t) + 2, 0);
-        if (!RegQueryValueExW(k, L"NotifyBridgeAllow", nullptr, &type, (BYTE*)buf.data(), &cb))
-            for (const wchar_t* p = buf.data(); *p; p += wcslen(p) + 1)
-                out.emplace_back(p);
+        DWORD type = 0, cb = 0;
+        if (!RegQueryValueExW(k, L"NotifyBridgeAllow", nullptr, &type, nullptr, &cb) &&
+            type == REG_MULTI_SZ && cb > 2)
+        {
+            std::vector<wchar_t> buf(cb / sizeof(wchar_t) + 2, 0);
+            if (!RegQueryValueExW(k, L"NotifyBridgeAllow", nullptr, &type, (BYTE*)buf.data(), &cb))
+                for (const wchar_t* p = buf.data(); *p; p += wcslen(p) + 1)
+                    out.emplace_back(p);
+        }
+        RegCloseKey(k);
     }
-    RegCloseKey(k);
+    if (out.empty())
+    {
+        for (const wchar_t* a : DEFAULT_ALLOW) out.emplace_back(a);
+        BLog(L"allowlist unset - using the compiled DEFAULT_ALLOW seed (%u apps)", (UINT)out.size());
+    }
     return out;
 }
 
