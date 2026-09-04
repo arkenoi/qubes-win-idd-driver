@@ -25,12 +25,19 @@ CALLER=win-idd-mgmt
 # local.WinScreenshot service, so they are known to be present. `xwininfo` is NOT required:
 # it only adds the per-window geometry listing, and installing extra packages into dom0 to get
 # a debugging nicety is a bad trade. Without it the full-desktop PNG is still produced.
+# `scrot` is PREFERRED for the capture (a full-desktop `import` grab is ~59s here vs ~1-2s for
+# scrot) but OPTIONAL - the service falls back to import if scrot is absent.
 missing=()
 for tool in import xprop; do command -v "$tool" >/dev/null || missing+=("$tool"); done
 if [ ${#missing[@]} -gt 0 ]; then
     echo "Missing in dom0: ${missing[*]}" >&2
     echo "  sudo qubes-dom0-update ImageMagick" >&2
     exit 1
+fi
+if command -v scrot >/dev/null; then
+    echo "scrot present: fast full-desktop capture enabled"
+else
+    echo "scrot absent: falling back to ImageMagick import (slow full-desktop grab; sudo qubes-dom0-update scrot to speed it up)"
 fi
 if command -v xwininfo >/dev/null; then
     echo "xwininfo present: geometry listing enabled"
@@ -77,7 +84,15 @@ chown "$DOMUSER" "$TMP" 2>/dev/null || chmod 0777 "$TMP"
 # version of this script hid the reason and just said "capture failed".
 CAP_ERR="$TMP/cap.err"
 captured=""
-if "${X[@]}" import -screen -window root "$TMP/screen.png" 2>>"$CAP_ERR" && [ -s "$TMP/screen.png" ]; then
+# scrot FIRST: ImageMagick `import -screen -window root` of the full 5120x1440 dom0 desktop is
+# ~59s per call here (measured 2026-09-04); scrot (imlib2/XGetImage) does the same whole-screen
+# grab in a second or two. Kept behind a presence check with import as the fallback, so a dom0
+# without scrot still works. (Detection that only needs the window LIST should use local.WinGeom,
+# which captures nothing at all.)
+if command -v scrot >/dev/null &&
+   "${X[@]}" scrot -o "$TMP/screen.png" 2>>"$CAP_ERR" && [ -s "$TMP/screen.png" ]; then
+    captured="scrot"
+elif "${X[@]}" import -screen -window root "$TMP/screen.png" 2>>"$CAP_ERR" && [ -s "$TMP/screen.png" ]; then
     captured="import -screen -window root"
 elif "${X[@]}" import -window root "$TMP/screen.png" 2>>"$CAP_ERR" && [ -s "$TMP/screen.png" ]; then
     captured="import -window root"
@@ -94,7 +109,7 @@ fi
 if [ -z "$captured" ]; then
     echo "ERROR: every root-window capture method failed. Tool output:" >&2
     sed 's/^/  /' "$CAP_ERR" >&2
-    echo "  tried: import -screen -window root | import -window root | xwd+convert | gnome-screenshot" >&2
+    echo "  tried: scrot | import -screen -window root | import -window root | xwd+convert | gnome-screenshot" >&2
     exit 3
 fi
 echo "capture method: $captured" >&2
