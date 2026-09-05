@@ -108,11 +108,24 @@ if ($NoWait) {
 }
 
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
+# 267009 = 0x41301 "task is currently running"; 267011 = 0x41303 "task has not yet run".
+# schtasks /run is ASYNCHRONOUS: the task this script just created holds LastTaskResult=267011
+# until the scheduler actually STARTS it, and under load that start latency exceeds the first
+# 2s poll. The old loop broke on anything != 267009, so it fired on 267011 while the task was
+# still QUEUED, read the not-yet-written output file, and reported "no_output_file" - a silent
+# no-op of the whole relay (the A0 P6a consent-revoke EMPTY readback, rig 2026-09-06, which
+# cascaded into P6b's 32-minute wait for a reconnect that could never happen). Completion is
+# now: the wrapper's RUNASUSER_CHILD_EXIT marker in the output file (authoritative for
+# -Script; the wrapper appends it after the child exits), or a LastTaskResult that is neither
+# running nor not-yet-run (covers -Command, which writes no marker). A /run that silently
+# never starts the task now waits out $TimeoutSec and reports lastresult=267011 - slower than
+# the old misread, but loud and true instead of a silent no-op.
 while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 2
+    if ($Script -and (Test-Path $outf) -and
+        (Select-String -Path $outf -Pattern 'RUNASUSER_CHILD_EXIT' -Quiet -EA SilentlyContinue)) { break }
     $i = Get-ScheduledTaskInfo -TaskName $tn -EA SilentlyContinue
-    # 267009 = 0x41301 "task is currently running"
-    if ($i -and $i.LastTaskResult -ne 267009) { break }
+    if ($i -and $i.LastTaskResult -ne 267009 -and $i.LastTaskResult -ne 267011) { break }
 }
 $i = Get-ScheduledTaskInfo -TaskName $tn -EA SilentlyContinue
 Write-Output ('RUNASUSER lastresult=' + $(if ($i) { $i.LastTaskResult } else { 'unknown' }))

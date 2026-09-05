@@ -57,6 +57,12 @@
 #     squatter window ~2 min hold + up to ~6 min bounded recovery wait. Total ~100-170 min.
 #     Terminal states: prime TERMINAL/DEADLINE, no-user-session, T2 no-go (STOP
 #     with FALL-TO-DB/KILL). Stall = any bounded poll exhausting its seq loop, always logged.
+#     EVERY poll loop is seq-bounded AND wall-clock capped (owner audit 2026-09-06, after the
+#     a0 P6b 32-minute stall): each guest probe rides a ~55s-hard-capped qrun/enc_run, so
+#     seq*sleep alone understates a loop's ceiling by N*probe-cost. Budgets are sized to the
+#     event's EXPECTED timeline, loops log which exit they took, and waits whose precondition
+#     a prior failed step made impossible (a fire that never confirmed FIRED, an unreadable
+#     offset) SKIP as terminal instead of burning their budget.
 #
 # Evidence: scratchpad/p3a-etw-gate-<UTC>/ (gitignored — internal NEVER enters the repo; the
 # P3A_OUT override must likewise never point inside a tracked path).
@@ -203,23 +209,41 @@ coldboot(){ # $1=phase tag (verbatim the a0-p3-toast-split idiom)
   timeout -k 8 60 ./tools/qtest start >/dev/null 2>&1
   w_usersession "$VM" 900 "$1-session" "$OUT" log
 }
-bridge_up(){ # heartbeat + connected past blog offset $1
-  local i
-  for i in $(seq 1 30); do [ "$(hb_state)" = PRESENT ] && break; sleep 5; done
-  [ "$(hb_state)" = PRESENT ] || return 1
-  for i in $(seq 1 15); do blog_since "$1" | grep -qa "connected (server version" && return 0; sleep 4; done
+bridge_up(){ # heartbeat + connected past blog offset $1; return 0 = up (caller logs success),
+  # nonzero = deadline (logged here). Wall caps 180s/120s: expected heartbeat ~30s after
+  # session-up, connect seconds later; each probe is a ~55s-capped qrun, so the old
+  # seq*sleep-only bounds (150s/60s nominal) could stretch to ~30/15 min (audit 2026-09-06).
+  local i ok="" t0=$SECONDS
+  for i in $(seq 1 30); do
+    [ "$(hb_state)" = PRESENT ] && { ok=1; break; }
+    [ $(( SECONDS - t0 )) -ge 180 ] && break
+    sleep 5
+  done
+  [ -n "$ok" ] || { log "bridge_up: heartbeat wait exit=deadline t=$((SECONDS-t0))s (i=$i/30)"; return 1; }
+  local t1=$SECONDS
+  for i in $(seq 1 15); do
+    blog_since "$1" | grep -qa "connected (server version" && return 0
+    [ $(( SECONDS - t1 )) -ge 120 ] && break
+    sleep 4
+  done
+  log "bridge_up: connected wait exit=deadline t=$((SECONDS-t1))s (i=$i/15; heartbeat was present)"
   return 1
 }
 # ETW tier up: proxy LIVE in etw-proxy.log past $1 + bridge 'ETW IPC connected' past blog $2.
-etw_tier_up(){ # $1=plog offset $2=blog offset
-  local i
+# Wall cap 150s per call (expected: relaunch backoff floor 5s + connect, well under 120s
+# nominal; two ~55s-capped guest reads per turn could otherwise stretch seq 24 to ~48 min).
+# T8r's recovery deliberately calls this 3x for its ~6-8 min post-squat window (TODO(RIG)#7).
+etw_tier_up(){ # $1=plog offset $2=blog offset; 0 = up, nonzero = deadline (logged)
+  local i t0=$SECONDS
   for i in $(seq 1 24); do
     plog_since "$1" > "$OUT/.tierup-plog.txt" 2>/dev/null
     blog_since "$2" > "$OUT/.tierup-blog.txt" 2>/dev/null
     grep -qa 'ETWPROXY LIVE' "$OUT/.tierup-plog.txt" && \
       grep -qa 'ETW IPC connected server_pid=' "$OUT/.tierup-blog.txt" && return 0
+    [ $(( SECONDS - t0 )) -ge 150 ] && break
     sleep 5
   done
+  log "etw_tier_up: exit=deadline t=$((SECONDS-t0))s (i=$i/24)"
   return 1
 }
 med(){ sort -n | awk '{a[NR]=$1} END{if(NR==0){print "NA"; exit} if(NR%2)print a[(NR+1)/2]; else print (a[NR/2]+a[NR/2+1])/2}'; }
@@ -346,12 +370,17 @@ qrun 'cmd /c mkdir C:\ProgramData\Qubes 2>nul & echo P3AMKDIR' >/dev/null 2>&1
 # fire-path readiness (the a0 P1d gate, verbatim rationale: the first run-as-user fire after a
 # fresh prime silently no-ops for MINUTES until `query user` shows Active)
 log "T0r: waiting for an Active interactive session, up to ~20 min"
-t0_active=""
+# Three exits (audit 2026-09-06): Active / terminal guest-halted / 1500s wall deadline (the
+# expected event is the measured ~12+ min fresh-prime settle; per-turn qrun cost would
+# otherwise stretch seq 40 x 30s to ~57 min).
+t0_active=""; t0_term=""; _wt0r=$SECONDS
 for i in $(seq 1 40); do
   qrun 'query user' 2>&1 | tr -d '\r' | grep -qE '[[:space:]]Active([[:space:]]|$)' && { t0_active=1; break; }
+  [ "$(w_state "$VM")" = Halted ] && { t0_term=1; break; }
+  [ $(( SECONDS - _wt0r )) -ge 1500 ] && break
   sleep 30
 done
-[ -n "$t0_active" ] || { verdict T0r "INSTRUMENT no Active session in ~20 min - fire path unusable, aborting"; exit 1; }
+[ -n "$t0_active" ] || { log "T0r: session wait exit=$([ -n "$t0_term" ] && echo terminal-guest-halted || echo deadline) t=$((SECONDS-_wt0r))s (i=$i/40)"; verdict T0r "INSTRUMENT no Active session ($([ -n "$t0_term" ] && echo "guest HALTED mid-wait" || echo "~25 min wall budget spent")) - fire path unusable, aborting"; exit 1; }
 # push toastfire ONCE (per-file push; needs the user session for Filecopy), then prove the tool:
 # --print-xml offline (executes + prints payload_sha256 => the FIRED detector's data source
 # exists) and a bogus flag (usage error, NO FIRED => the detector can fail).
@@ -550,8 +579,15 @@ pexits=$(asince_hits 0 'proxy exited rc=')
 printf '%s\n' "$pexits" > "$OUT/t2-proxy-exits.txt"
 ndll=$(printf '%s' "$pexits" | grep -ca 'rc=3221225794' || true)
 wsready=$(asince_hits 0 'dedicated winsta ready' | tail -1)
-pl2=""
-for i in $(seq 1 12); do pl2=$(plog_len) && [ "${pl2:-0}" -gt 0 ] && break; sleep 5; done
+pl2=""; _wpl=$SECONDS
+for i in $(seq 1 12); do
+  # wall cap 90s (expected: the proxy's first log line lands within seconds of its launch,
+  # backoff floor 5s; plog_len's internal 3-try retry could stretch a turn to ~3 min)
+  pl2=$(plog_len) && [ "${pl2:-0}" -gt 0 ] && break
+  [ $(( SECONDS - _wpl )) -ge 90 ] && break
+  sleep 5
+done
+log "T2l1: proxy-log wait exit=$([ "${pl2:-0}" -gt 0 ] 2>/dev/null && echo success || echo deadline) t=$((SECONDS-_wpl))s (i=$i/12)"
 plog_since 0 | grep -a 'QubesEtwProxyWS' > "$OUT/t2-plog-winsta.txt" 2>/dev/null || true
 t2l1fail=""
 [ "${ndll:-0}" = 0 ] || t2l1fail="$t2l1fail 0xC0000142-exits=$ndll(CONSOLE-SPLIT-REGRESSED)"
@@ -588,19 +624,22 @@ else
     fi
     tf_fire "--fire --method $m --class informational --title $tt --tag t2$m" > "$OUT/t2-fire-$m.txt" 2>&1 \
       || { t2imiss=$((t2imiss+1)); continue; }
-    got=""
+    got=""; _wt2=$SECONDS
     for i in $(seq 1 15); do
+      # wall cap 90s (expected: the signal frame lands within seconds of the fire; two
+      # ~55s-capped guest reads per turn could stretch the nominal 45s to ~30 min per method)
       plog_since "$P2" > "$OUT/t2-plog-$m.txt" 2>/dev/null
       blog_since "$L2" > "$OUT/t2-blog-$m.txt" 2>/dev/null
       if grep -qa "ETWPROXY SIG #.*aumid=${TFAUMID[$m]}" "$OUT/t2-plog-$m.txt" \
          && grep -qa "ETW SIG #.*aumid=${TFAUMID[$m]}" "$OUT/t2-blog-$m.txt"; then got=1; break; fi
+      [ $(( SECONDS - _wt2 )) -ge 90 ] && break
       sleep 3
     done
     if [ -n "$got" ]; then
       t2frames=$((t2frames+1))
       log "T2: method=$m signal delivered ($(grep -a "ETWPROXY SIG #.*${TFAUMID[$m]}" "$OUT/t2-plog-$m.txt" | tail -1 | head -c 160))"
     else
-      log "T2: method=$m NO signal frame within 45s (data for T3's table, not yet a gate fail)"
+      log "T2: method=$m NO signal frame (wait exit=deadline t=$((SECONDS-_wt2))s; data for T3's table, not yet a gate fail)"
     fi
     dismiss_toasts "${TFAUMID[$m]}"
   done
@@ -722,8 +761,11 @@ for m in start-shortcut com-activator bare; do
     if [ "$fired" = yes ]; then
       tfire=$(date +%s)
       for i in $(seq 1 15); do
+        # wall cap 90s (expected: CLASSIFY within the 30s listing floor + WAL retries, <45s;
+        # a ~55s-capped qrun per turn could stretch the nominal 45s to ~15 min per row)
         blog_since "$L3" > "$OUT/t3-blog-$m-$c.txt" 2>/dev/null
         grep -qa 'CLASSIFY id=' "$OUT/t3-blog-$m-$c.txt" && { dt=$(( $(date +%s) - tfire )); break; }
+        [ $(( $(date +%s) - tfire )) -ge 90 ] && break
         sleep 3
       done
       plog_since "$P3" > "$OUT/t3-plog-$m-$c.txt" 2>/dev/null
@@ -874,17 +916,21 @@ else
     verdict T5 "INSTRUMENT no session-0 proxy to kill (tier already down?) - drift relaunch cannot be forced, ungraded"
   else
     qrun "taskkill /f /pid $ppid" >/dev/null 2>&1
-    t5seen=""
-    for i in $(seq 1 24); do   # 120s: 5s backoff floor + census; TODO(RIG)#7
+    t5seen=""; _wt5=$SECONDS
+    for i in $(seq 1 24); do   # nominal 120s: 5s backoff floor + census; TODO(RIG)#7
+      # wall cap 150s (the documented 120s window + margin; asince is a ~55s-capped enc_run
+      # per turn, so seq*sleep alone could stretch this to ~25 min - audit 2026-09-06)
       a5=$(asince "$AM5" 'ETWPROXYSUP')
       printf '%s' "$a5" | grep -qa 'PROVISIONING DRIFT' && printf '%s' "$a5" | grep -qa 'parked for this boot' && { t5seen=1; break; }
+      [ $(( SECONDS - _wt5 )) -ge 150 ] && break
       sleep 5
     done
+    log "T5: drift-park wait exit=$([ -n "$t5seen" ] && echo success || echo deadline) t=$((SECONDS-_wt5))s (i=$i/24)"
     printf '%s\n' "$a5" > "$OUT/t5-agentlines.txt"
     if [ -n "$t5seen" ]; then
       verdict T5 "PASS drift detector FIRED: agent census refused (PROVISIONING DRIFT) and the tier parked ($(printf '%s' "$a5" | grep -a 'parked for this boot' | tail -1 | head -c 160)). Proxy-side refuse machinery proven separately in T4a."
     else
-      verdict T5 "FAIL drift injected + proxy killed but no DRIFT/park within 120s - the detector did NOT fire (agent lines: $(printf '%s' "$a5" | grep -a 'ETWPROXYSUP' | tail -2 | tr '\n' ';' | head -c 240))"
+      verdict T5 "FAIL drift injected + proxy killed but no DRIFT/park within the 150s wall budget - the detector did NOT fire (agent lines: $(printf '%s' "$a5" | grep -a 'ETWPROXYSUP' | tail -2 | tr '\n' ';' | head -c 240))"
     fi
     # src=db CONTROL ARM: tier parked => the shadow ladder must serve from the DB rung. Any
     # src=etw-sig line here means the park LEAKED - a product assert, not just instrumentation.
@@ -893,15 +939,21 @@ else
     if ! L5=$(blog_len); then
       verdict T5db "INSTRUMENT blog_len unreadable before the parked burst - control arm ungraded"
     else
-      tf_fire '--fire --method start-shortcut --class informational --title P3A-t5-db --tag t5db --count 5 --interval-ms 3000' > "$OUT/t5-fire.txt" 2>&1
+      t5fired=""
+      tf_fire '--fire --method start-shortcut --class informational --title P3A-t5-db --tag t5db --count 5 --interval-ms 3000' > "$OUT/t5-fire.txt" 2>&1 && t5fired=1
       sleep 40
       blog_since "$L5" | grep -a 'CLASSIFY id=' > "$OUT/t5-classify.txt" || true
       dismiss_toasts "${TFAUMID[start-shortcut]}"
       t5etw=$(grep -ca 'src=etw-sig' "$OUT/t5-classify.txt" || true)
       t5db=$(grep -ca 'src=db' "$OUT/t5-classify.txt" || true)
       grep -a 'src=db' "$OUT/t5-classify.txt" | grep -aoE 'row_latency=[0-9]+' | cut -d= -f2 > "$OUT/t5-db-lat.txt"
+      # leak check FIRST (valid regardless of fire confirmation: ANY etw-sig line while parked
+      # is a leak); an unconfirmed fire then demotes the thin-arm outcome to INSTRUMENT rather
+      # than misgrading a no-op burst (audit 2026-09-06)
       if [ "${t5etw:-0}" != 0 ]; then
         verdict T5db "FAIL $t5etw src=etw-sig CLASSIFY lines while PARKED - the park leaked live ETW signal frames"
+      elif [ -z "$t5fired" ]; then
+        verdict T5db "INSTRUMENT parked burst never confirmed FIRED (tf_fire logged the miss) - control arm ungraded, NOT a product verdict"
       elif [ "${t5db:-0}" -ge 3 ]; then
         verdict T5db "PASS parked burst served by the DB rung ($t5db src=db rows; latencies banked for T6: $(paste -sd, "$OUT/t5-db-lat.txt"))"
       else
@@ -939,7 +991,8 @@ if ! L6=$(blog_len); then
   verdict T6 "INSTRUMENT blog_len unreadable before the tier-up burst - latency arm ungraded"
 else
   conn6a=$(blog_since 0 | grep -ca "connected (server version" || true)
-  tf_fire '--fire --method start-shortcut --class informational --title P3A-t6-etw --tag t6etw --count 5 --interval-ms 3000' > "$OUT/t6-fire.txt" 2>&1
+  t6fired=""
+  tf_fire '--fire --method start-shortcut --class informational --title P3A-t6-etw --tag t6etw --count 5 --interval-ms 3000' > "$OUT/t6-fire.txt" 2>&1 && t6fired=1
   sleep 40
   blog_since "$L6" > "$OUT/t6-blog.txt" 2>/dev/null
   grep -a 'CLASSIFY id=' "$OUT/t6-blog.txt" > "$OUT/t6-classify.txt" || true
@@ -950,7 +1003,11 @@ else
   m6=$(med < "$OUT/t6-etw-lat.txt")
   m5=$(med < "$OUT/t5-db-lat.txt" 2>/dev/null)
   log "T6: src=etw-sig rows=$n6 median=${m6}ms vs T5 src=db median=${m5}ms (raw: etw-sig=$(paste -sd, "$OUT/t6-etw-lat.txt") db=$(paste -sd, "$OUT/t5-db-lat.txt" 2>/dev/null))"
-  if [ "${n6:-0}" -lt 3 ] || [ "$m6" = NA ]; then
+  if [ -z "$t6fired" ]; then
+    # an unconfirmed burst cannot produce rows - grading the empty window as "tier not
+    # serving" would be a dishonest cascade (audit 2026-09-06; tf_fire logged the miss)
+    verdict T6 "INSTRUMENT tier-up burst never confirmed FIRED - latency arm ungraded, NOT a product verdict"
+  elif [ "${n6:-0}" -lt 3 ] || [ "$m6" = NA ]; then
     verdict T6 "FAIL only ${n6:-0} src=etw-sig rows from a 5-burst with the tier up - signal+targeted-read tier not serving ($(grep -a 'etw=' "$OUT/t6-classify.txt" | tail -2 | tr '\n' ';' | head -c 240))"
   elif [ "$m5" = NA ] || [ -z "$m5" ]; then
     verdict T6 "INSTRUMENT no src=db control distribution from T5 - etw-sig median=${m6}ms recorded, comparison ungraded"
@@ -998,15 +1055,25 @@ fi
 if ! Lw=$(blog_len); then
   verdict T7b "INSTRUMENT blog_len unreadable - allowlisted-forward arm ungraded"
 else
-  fire_info "A0T p3a-warmup" > /dev/null 2>&1      # toast #1 earns lazy suppression
-  # POSITIVE delivered assert -> fwd_count: a collision-dropped SENT line must not false-FAIL
-  # a toast that WAS delivered (FWD_RTT ok=1 records it) - the a0-lib dropped-SENT fix.
+  # Forward waits: seq 15 AND wall cap 90s each (expected ack within seconds; blog_since is a
+  # ~55s-capped qrun per turn). A fire that never confirmed FIRED is TERMINAL for its wait -
+  # skip and grade INSTRUMENT, never burn the budget then misgrade (audit 2026-09-06).
+  t7binst=""
   w7=""
-  for i in $(seq 1 15); do
-    blog_since "$Lw" > "$OUT/t7b-warm-blog.txt" 2>/dev/null
-    [ "$(fwd_count "$OUT/t7b-warm-blog.txt")" -ge 1 ] && { w7=1; break; }
-    sleep 2
-  done
+  if fire_info "A0T p3a-warmup" > /dev/null 2>&1; then   # toast #1 earns lazy suppression
+    # POSITIVE delivered assert -> fwd_count: a collision-dropped SENT line must not false-FAIL
+    # a toast that WAS delivered (FWD_RTT ok=1 records it) - the a0-lib dropped-SENT fix.
+    _w7a=$SECONDS
+    for i in $(seq 1 15); do
+      blog_since "$Lw" > "$OUT/t7b-warm-blog.txt" 2>/dev/null
+      [ "$(fwd_count "$OUT/t7b-warm-blog.txt")" -ge 1 ] && { w7=1; break; }
+      [ $(( SECONDS - _w7a )) -ge 90 ] && break
+      sleep 2
+    done
+  else
+    t7binst="warmup-never-FIRED"
+    log "T7b: warm-up never confirmed FIRED (terminal - forward wait skipped)"
+  fi
   sleep 3
   if L7=$(blog_len); then
     s7base=0
@@ -1019,22 +1086,33 @@ else
     blog_since "$Lw" > "$OUT/t7b-warm-blog.txt" 2>/dev/null
     s7base=$(fwd_count "$OUT/t7b-warm-blog.txt")
   fi
-  fire_info "A0T p3a-bridged" > /dev/null 2>&1     # toast #2 must forward while suppressed
   s7=""
-  for i in $(seq 1 15); do
-    blog_since "$L7" > "$OUT/t7b-check-blog.txt" 2>/dev/null
-    [ "$(fwd_count "$OUT/t7b-check-blog.txt")" -gt "${s7base:-0}" ] && { s7=1; break; }
-    sleep 2
-  done
+  if fire_info "A0T p3a-bridged" > /dev/null 2>&1; then   # toast #2 must forward while suppressed
+    _w7b=$SECONDS
+    for i in $(seq 1 15); do
+      blog_since "$L7" > "$OUT/t7b-check-blog.txt" 2>/dev/null
+      [ "$(fwd_count "$OUT/t7b-check-blog.txt")" -gt "${s7base:-0}" ] && { s7=1; break; }
+      [ $(( SECONDS - _w7b )) -ge 90 ] && break
+      sleep 2
+    done
+  else
+    t7binst="${t7binst:+$t7binst + }check-never-FIRED"
+    log "T7b: check toast never confirmed FIRED (terminal - delivery wait skipped)"
+  fi
   sb7=$(showbanner)
-  [ -n "$w7" ] && [ -n "$s7" ] \
-    && verdict T7b "PASS allowlisted path forwards (warmup + check both delivered per fwd_count; $sb7)" \
-    || verdict T7b "FAIL allowlisted forward broken: warmup=${w7:-no} check=${s7:-no} $sb7"
+  if [ -n "$t7binst" ]; then
+    verdict T7b "INSTRUMENT fire path failed ($t7binst) - allowlisted-forward arm ungraded, NOT a product verdict ($sb7)"
+  elif [ -n "$w7" ] && [ -n "$s7" ]; then
+    verdict T7b "PASS allowlisted path forwards (warmup + check both delivered per fwd_count; $sb7)"
+  else
+    verdict T7b "FAIL allowlisted forward broken: warmup=${w7:-no} check=${s7:-no} $sb7"
+  fi
 fi
 if ! L7c=$(blog_len); then
   verdict T7c "INSTRUMENT blog_len unreadable - control arm ungraded"
 else
-  fire_ctl "A0T p3a-control" > /dev/null 2>&1
+  c7fired=""
+  fire_ctl "A0T p3a-control" > /dev/null 2>&1 && c7fired=1
   sleep 10
   blog_since "$L7c" > "$OUT/t7-ctl-blog.txt"
   c7skip=$(grep -ca 'skip id=' "$OUT/t7-ctl-blog.txt" || true)
@@ -1042,9 +1120,16 @@ else
   # SENT must not hide a real forward of the control toast (see the T7 header rationale)
   c7fwd=$(fwd_attempts "$OUT/t7-ctl-blog.txt")
   dismiss_toasts "$CTLAUMID"; dismiss_toasts
-  [ "${c7fwd:-0}" = 0 ] && [ "${c7skip:-0}" -ge 1 ] \
-    && verdict T7c "PASS control AUMID skipped, not forwarded (skip=$c7skip fwd_attempts=$c7fwd)" \
-    || verdict T7c "FAIL control routing: skip=$c7skip fwd_attempts=$c7fwd"
+  # forward-leak half is valid regardless of fire confirmation; the skip half needs the fire
+  if [ "${c7fwd:-0}" != 0 ]; then
+    verdict T7c "FAIL control routing: forward attempted (skip=$c7skip fwd_attempts=$c7fwd)"
+  elif [ -z "$c7fired" ]; then
+    verdict T7c "INSTRUMENT control toast never confirmed FIRED - skip-line half ungraded (no forward attempts seen, which IS valid), NOT a product verdict"
+  elif [ "${c7skip:-0}" -ge 1 ]; then
+    verdict T7c "PASS control AUMID skipped, not forwarded (skip=$c7skip fwd_attempts=$c7fwd)"
+  else
+    verdict T7c "FAIL control routing: skip=$c7skip fwd_attempts=$c7fwd"
+  fi
 fi
 
 # ---------- T8 §10.20.5#5 fail-open drills (each failure class DEMONSTRATED) -----------------
@@ -1069,10 +1154,12 @@ for d in 200 500 1000; do
   printf '%s\n' "$o" > "$OUT/t8a-fire-$d.txt"
   printf '%s' "$o" | grep -qa 'FIRED method=' || { log "T8a: delay=${d}ms never FIRED - instrument miss, next rung"; continue; }
   printf '%s' "$o" | grep -qa 'FPWRAP purged=1' || { log "T8a: delay=${d}ms purge did not land ($(printf '%s' "$o" | grep -a 'FPWRAP purged' | head -c 120)) - instrument miss, next rung"; continue; }
-  cl=""
+  cl=""; _w8a=$SECONDS
   for i in $(seq 1 15); do
+    # wall cap 90s (expected: CLASSIFY <45s; ~55s-capped qrun per turn - audit 2026-09-06)
     cl=$(blog_since "$L8" | grep -a 'CLASSIFY id=' | tail -1)
     [ -n "$cl" ] && break
+    [ $(( SECONDS - _w8a )) -ge 90 ] && break
     sleep 3
   done
   printf '%s\n' "$cl" > "$OUT/t8a-classify-$d.txt"
@@ -1112,17 +1199,28 @@ elif ! L8b=$(blog_len); then
   verdict T8b "INSTRUMENT blog_len unreadable before the twin burst - drill ungraded"
 else
   log "T8b: twin drill on non-joining method=$t8m (T3 join=${T3JOIN[$t8m]})"
-  tf_fire "--fire --method $t8m --class informational --title P3A-t8b-twin --tag t8btw1" > "$OUT/t8b-fire1.txt" 2>&1
-  tf_fire "--fire --method $t8m --class informational --title P3A-t8b-twin --tag t8btw2" > "$OUT/t8b-fire2.txt" 2>&1
+  f8b=0
+  tf_fire "--fire --method $t8m --class informational --title P3A-t8b-twin --tag t8btw1" > "$OUT/t8b-fire1.txt" 2>&1 && f8b=$((f8b+1))
+  tf_fire "--fire --method $t8m --class informational --title P3A-t8b-twin --tag t8btw2" > "$OUT/t8b-fire2.txt" 2>&1 && f8b=$((f8b+1))
   ncl=0
-  for i in $(seq 1 15); do
-    blog_since "$L8b" | grep -a 'CLASSIFY id=' > "$OUT/t8b-classify.txt" || true
-    ncl=$(grep -ca 'CLASSIFY id=' "$OUT/t8b-classify.txt" || true)
-    [ "${ncl:-0}" -ge 2 ] && break
-    sleep 3
-  done
+  if [ "$f8b" = 2 ]; then
+    _w8b=$SECONDS
+    for i in $(seq 1 15); do
+      # wall cap 90s (expected: both CLASSIFY lines <45s; ~55s-capped qrun per turn)
+      blog_since "$L8b" | grep -a 'CLASSIFY id=' > "$OUT/t8b-classify.txt" || true
+      ncl=$(grep -ca 'CLASSIFY id=' "$OUT/t8b-classify.txt" || true)
+      [ "${ncl:-0}" -ge 2 ] && break
+      [ $(( SECONDS - _w8b )) -ge 90 ] && break
+      sleep 3
+    done
+  else
+    : > "$OUT/t8b-classify.txt"
+    log "T8b: only $f8b/2 twin fires confirmed FIRED (terminal - CLASSIFY wait skipped)"
+  fi
   dismiss_toasts "${TFAUMID[$t8m]}"
-  if [ "${ncl:-0}" -lt 2 ]; then
+  if [ "$f8b" -lt 2 ]; then
+    verdict T8b "INSTRUMENT only $f8b/2 twin fires confirmed FIRED - drill ungraded (fires that never happened cannot twin)"
+  elif [ "${ncl:-0}" -lt 2 ]; then
     verdict T8b "INSTRUMENT only ${ncl:-0}/2 twin CLASSIFY lines - drill ungraded (t8b-classify.txt)"
   elif grep -qa 'corr=sig-ambiguous' "$OUT/t8b-classify.txt"; then
     amb=$(grep -a 'corr=sig-ambiguous' "$OUT/t8b-classify.txt" | tail -1)
@@ -1159,17 +1257,21 @@ if [ -z "$spid" ]; then
   verdict T8c "INSTRUMENT no session-0 proxy to kill (tier already down?) - squatter drill ungraded"
 else
   qrun "taskkill /f /pid $spid" >/dev/null 2>&1
-  t8cexit=""
+  t8cexit=""; _w8x=$SECONDS
   for i in $(seq 1 24); do   # exit 8 lands within the first relaunch backoffs (floor 5s)
+    # wall cap 150s (the documented 120s window + margin; asince is a ~55s-capped enc_run
+    # per turn - audit 2026-09-06)
     asince_hits "$AM8" 'proxy exited rc=8 after' | grep -qa 'rc=8 after' && { t8cexit=1; break; }
+    [ $(( SECONDS - _w8x )) -ge 150 ] && break
     sleep 5
   done
+  log "T8c: exit-8 wait exit=$([ -n "$t8cexit" ] && echo success || echo deadline) t=$((SECONDS-_w8x))s (i=$i/24)"
   sqstate=$(enc_run 'if (Test-Path C:\ProgramData\Qubes\p3a-squat.txt) { Get-Content C:\ProgramData\Qubes\p3a-squat.txt }' | grep -aoE 'SQUAT-[A-Z]+' | head -1)
   if [ -z "$t8cexit" ]; then
     if [ "$sqstate" != SQUAT-HELD ] && [ "$sqstate" != SQUAT-RELEASED ]; then
       verdict T8c "INSTRUMENT squatter never grabbed the pipe (state=${sqstate:-none}) - drill ungraded ($(asince_hits "$AM8" 'proxy exited' | tail -1 | head -c 160))"
     else
-      verdict T8c "FAIL squatter held the name but no 'proxy exited rc=8' within 120s ($(asince_hits "$AM8" 'ETWPROXYSUP' | tail -2 | tr '\n' ';' | head -c 240))"
+      verdict T8c "FAIL squatter held the name but no 'proxy exited rc=8' within the 150s wall budget ($(asince_hits "$AM8" 'ETWPROXYSUP' | tail -2 | tr '\n' ';' | head -c 240))"
     fi
   else
     log "T8c: proxy exited rc=8 against the squatted pipe (squatter state=${sqstate:-?})"
@@ -1185,13 +1287,19 @@ else
     if ! L8d=$(blog_len); then
       verdict T8c "INSTRUMENT blog_len unreadable for the tier-down fire - DB-serves arm ungraded (the exit-8 half DID pass)"
     else
-      tf_fire '--fire --method start-shortcut --class informational --title P3A-t8c-db --tag t8cdb' > "$OUT/t8c-fire.txt" 2>&1
       cl8=""
-      for i in $(seq 1 15); do
-        cl8=$(blog_since "$L8d" | grep -a 'CLASSIFY id=' | tail -1)
-        [ -n "$cl8" ] && break
-        sleep 3
-      done
+      if tf_fire '--fire --method start-shortcut --class informational --title P3A-t8c-db --tag t8cdb' > "$OUT/t8c-fire.txt" 2>&1; then
+        _w8d=$SECONDS
+        for i in $(seq 1 15); do
+          # wall cap 90s (expected: CLASSIFY <45s; ~55s-capped qrun per turn)
+          cl8=$(blog_since "$L8d" | grep -a 'CLASSIFY id=' | tail -1)
+          [ -n "$cl8" ] && break
+          [ $(( SECONDS - _w8d )) -ge 90 ] && break
+          sleep 3
+        done
+      else
+        log "T8c: tier-down fire never confirmed FIRED (terminal - CLASSIFY wait skipped; the empty-cl8 INSTRUMENT branch grades it)"
+      fi
       dismiss_toasts "${TFAUMID[start-shortcut]}"
       printf '%s\n' "$cl8" > "$OUT/t8c-classify.txt"
       c_src=$(printf '%s' "$cl8" | grep -aoE 'src=[a-z-]+' | head -1 | cut -d= -f2)

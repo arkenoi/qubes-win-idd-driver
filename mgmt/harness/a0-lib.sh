@@ -19,9 +19,10 @@
 # Used only by the FULL harness's phase code, NOT by anything in this file: verdict(),
 # cap() (e2e-lib), and the e2e-wait.sh waits — the floor defines/sources its own.
 #
-# Defines constants PSAUMID CTLAUMID QT BLOG HBF INCOMING TOASTRE and functions raspush geom
-# ors blog_len blog_since fwd_count fwd_attempts fwd_selftest path_state hb_fresh hb_state
-# fire_raw fire_info fire_info_p fire_ctl showbanner dismiss_toasts new_or_window snap_or.
+# Defines constants PSAUMID CTLAUMID QT BLOG HBF INCOMING TOASTRE and functions raspush
+# consent_ensure geom ors blog_len blog_since fwd_count fwd_attempts fwd_selftest path_state
+# hb_fresh hb_state fire_raw fire_info fire_info_p fire_ctl showbanner dismiss_toasts
+# new_or_window snap_or.
 # blog_len returns NONZERO on hard failure — callers must handle that status, never default
 # the count to 0.
 #
@@ -57,6 +58,40 @@ raspush(){ # $1=repo script path, $2=args string (may be empty), $3=tag
   base=$(basename "$1")
   b64=$(printf '%s' "$2" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
   qrun "powershell -NoProfile -ExecutionPolicy Bypass -File \"$INCOMING\\run-as-user.ps1\" -Tag $3 -Script \"$INCOMING\\$base\" ${b64:+-ArgsB64 $b64}"
+}
+
+# Set the UserNotificationListener consent value IN THE USER SESSION and VERIFY it landed -
+# bounded retry-with-verify. WHY (rig 2026-09-06, the P6 cascade): ONE raspush of
+# a0-consent.ps1 can silently no-op - run-as-user's task-start race (fixed at the source in
+# run-as-user.ps1 the same day: the wait loop broke on LastTaskResult=267011 "has not yet run"
+# and read a not-yet-written output file) plus the genuinely transient class (a momentary
+# no-Active-session miss, a qtest push/qrexec hiccup) - returning output with NO CONSENT-NOW
+# line. The one-shot callers then diverged: P6a correctly went INSTRUMENT, but P6b's
+# Allow-restore DISCARDED its output entirely, so a no-op'd Deny left the bridge connected and
+# P6b waited 32 real minutes for a reconnect that could never happen. a0-consent.ps1 is
+# idempotent (set + registry readback), so re-attempting is safe and the echoed readback IS
+# the verification. A retry that saves the attempt is still an ANOMALY and is logged loudly
+# (fallbacks-are-anomalies); per-attempt raw output is kept in $OUT/consent-<tag>.txt so a
+# recurrence can be classified (deterministic relay bug vs transient) instead of re-guessed.
+# Sets CONSENT_LAST to the last observed CONSENT-NOW=... (empty if none was ever read).
+# Returns 0 iff CONSENT-NOW=<value> was read back. NOTE: a0-selftest.sh defines its own local
+# one-shot consent_set AFTER sourcing this lib (S10 tests the raw roundtrip, no retries) -
+# hence the distinct name; do not rename either into the other.
+consent_ensure(){ # $1=Allow|Deny $2=evidence tag (per-phase, e.g. a0x1)
+  local want="$1" tag="$2" try out
+  CONSENT_LAST=""
+  for try in 1 2 3; do
+    out=$(raspush guest/a0-consent.ps1 "-Value $want" "${tag}t${try}$RANDOM" 2>&1 | tr -d '\r')
+    printf '=== attempt %s want=%s %s ===\n%s\n' "$try" "$want" "$(date -u +%H:%M:%S)" "$out" >> "$OUT/consent-$tag.txt"
+    CONSENT_LAST=$(printf '%s' "$out" | grep -aoE 'CONSENT-NOW=[^ ]+' | tail -1)
+    if [ "$CONSENT_LAST" = "CONSENT-NOW=$want" ]; then
+      [ "$try" -gt 1 ] && log "ANOMALY consent_ensure: $want landed only on attempt $try/3 - the run-as-user no-op flake fired (raw attempts in consent-$tag.txt); diagnose if it recurs"
+      return 0
+    fi
+    log "consent_ensure: attempt $try/3 for $want did not verify (read '${CONSENT_LAST:-nothing}'; relay: $(printf '%s' "$out" | grep -aoE 'RUNASUSER (error|lastresult)=[^ ]*' | tail -1))"
+    [ "$try" -lt 3 ] && sleep 8
+  done
+  return 1
 }
 
 geom(){ QTEST_VM=$VM timeout -k 8 200 ./tools/qtest-geom 2>/dev/null; }
