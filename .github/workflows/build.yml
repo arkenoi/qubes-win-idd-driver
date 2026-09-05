@@ -431,6 +431,37 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "notifhost msbuild failed" }
           Get-ChildItem tools\notifhost\x64\Release\notifhost.exe
 
+      - name: Build etwproxy (GUI-DLL-free) + import-table gate
+        shell: pwsh
+        run: |
+          # tools/notifhost/etwproxy.vcxproj -> etwproxy.exe: the least-privilege ETW signal
+          # proxy the SYSTEM agent launches under the bare qubes-etwproxy batch token in
+          # session 0 (2026-09-05 console split). That token has NO accessible window station,
+          # and user32/gdi32's DllMain connects to one at process init -> 0xC0000142
+          # STATUS_DLL_INIT_FAILED before main. The binary therefore MUST NOT import
+          # user32.dll or gdi32.dll - enforced here on every build, not assumed.
+          & "${{ steps.vs.outputs.msbuild }}" tools\notifhost\etwproxy.vcxproj `
+              /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "etwproxy msbuild failed" }
+          $exe = 'tools\notifhost\x64\Release\etwproxy.exe'
+          Get-ChildItem $exe
+          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse `
+                       -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+                     Where-Object FullName -match 'Hostx64\\x64' | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin.exe not found - cannot verify the etwproxy import table' }
+          $imports = (& $dumpbin.FullName /imports $exe) -join "`n"
+          if ($imports -match '(?im)^\s*(user32|gdi32)\.dll\s*$') {
+            throw 'etwproxy.exe imports user32/gdi32 - the GUI-DLL-free guarantee is BROKEN (it would die 0xC0000142 under the winsta-less qubes-etwproxy token)'
+          }
+          Write-Host 'etwproxy.exe import table clean: no user32.dll, no gdi32.dll'
+          # Seen-to-fail proof (autonomy rule 5): the SAME check against notifhost.exe - which
+          # legitimately imports user32 for its WinRT bridge - must TRIP, or the regex is dead.
+          $ni = (& $dumpbin.FullName /imports tools\notifhost\x64\Release\notifhost.exe) -join "`n"
+          if (-not ($ni -match '(?im)^\s*user32\.dll\s*$')) {
+            throw 'import-gate selftest FAILED: user32.dll not detected in notifhost.exe - the gate cannot fail and proves nothing'
+          }
+          Write-Host 'import-gate selftest OK: the same check detects user32.dll in notifhost.exe'
+
       - name: Toast classifier unit suite (P3b)
         shell: pwsh
         run: |
@@ -553,6 +584,9 @@ jobs:
           if (Test-Path tools\notifhost\x64\Release\notifhost.exe) {
             Copy-Item tools\notifhost\x64\Release\notifhost.exe package-agent\ -Force
           } else { Write-Warning 'notifhost.exe missing from package-agent' }
+          if (Test-Path tools\notifhost\x64\Release\etwproxy.exe) {
+            Copy-Item tools\notifhost\x64\Release\etwproxy.exe package-agent\ -Force
+          } else { Write-Warning 'etwproxy.exe missing from package-agent' }
           if (Test-Path tools\wgcprobe\x64\Release\wgcprobe.exe) {
             Copy-Item tools\wgcprobe\x64\Release\wgcprobe.exe package-agent\ -Force
           } else { Write-Warning 'wgcprobe.exe missing from package-agent' }

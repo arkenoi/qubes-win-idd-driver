@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  etwproxy - the GUI-DLL-FREE least-privilege ETW signal proxy (split out of notifhost,
+  2026-09-05, owner-chosen Option 2). Standalone x64 console EXE, same build discipline
+  as notifhost.vcxproj (v143, /MT, SDK-only, no WDK/nuget) with ONE load-bearing delta:
+
+    THE LINK LINE MUST NEVER CONTAIN user32.lib, gdi32.lib, windowsapp.lib, d3d11.lib
+    or dxgi.lib. The proxy runs under the bare qubes-etwproxy batch token in session 0,
+    which has NO accessible window station; user32/gdi32's DllMain connects to the
+    process winsta at init, so any import of them = 0xC0000142 STATUS_DLL_INIT_FAILED
+    before main. The whole point of this project is that the failure is impossible by
+    construction:
+      * the ONLY TU compiled is etwproxy.cpp (+ the pure-Win32 qtb_shared.h) - no WinRT
+        headers, no UserNotificationListener, no window/GDI API anywhere in them;
+      * AdditionalDependencies lists ONLY kernel32/advapi32/tdh (all winsta-free);
+      * IgnoreAllDefaultLibraries stays OFF (/MT CRT needs kernel32 etc.) but the CRT of
+        a /SUBSYSTEM:CONSOLE app imports no GUI DLL;
+      * CI verifies the outcome: dumpbin /imports etwproxy.exe must not name
+        user32.dll/gdi32.dll, and the same check run against notifhost.exe MUST trip
+        (the seen-to-fail proof for the gate itself).
+
+  Build in CI with:
+    msbuild tools\notifhost\etwproxy.vcxproj /p:Configuration=Release /p:Platform=x64
+  Output is pinned to  tools\notifhost\x64\Release\etwproxy.exe  by OutDir below (same
+  dir as notifhost.exe; IntDir is separated so the two projects never share objs).
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{A41C7E02-9B6D-4F33-B7A1-6C0D2E8F4A19}</ProjectGuid>
+    <RootNamespace>etwproxy</RootNamespace>
+    <ProjectName>etwproxy</ProjectName>
+    <!-- "10.0" = whichever Windows 10 SDK the runner has installed. -->
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>false</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+
+  <!-- Deterministic, solution-independent output locations. Same OutDir as notifhost
+       (the collect/sign steps take both exes from one directory); separate IntDir. -->
+  <PropertyGroup>
+    <OutDir>$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(ProjectDir)$(Platform)\$(Configuration)\obj-etwproxy\</IntDir>
+    <TargetName>etwproxy</TargetName>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <!-- NO user32/gdi32/windowsapp/d3d11/dxgi - see the header comment. DELIBERATELY no
+           %(AdditionalDependencies): the inherited MSBuild default lib list contains
+           user32.lib+gdi32.lib, which would let a stray GUI-API reference resolve and link
+           silently (caught only by the CI dumpbin gate). With the explicit list a stray
+           reference is an unresolved external = LINK FAILURE, the by-construction layer. -->
+      <AdditionalDependencies>advapi32.lib;tdh.lib;kernel32.lib</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <SDLCheck>false</SDLCheck>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <!-- NO user32/gdi32/windowsapp/d3d11/dxgi - see the header comment. No
+           %(AdditionalDependencies) (inherits user32/gdi32 via the MSBuild defaults):
+           stray GUI references must FAIL the link, not resolve silently. -->
+      <AdditionalDependencies>advapi32.lib;tdh.lib;kernel32.lib</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="etwproxy.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="qtb_shared.h" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

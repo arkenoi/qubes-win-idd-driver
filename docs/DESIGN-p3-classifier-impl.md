@@ -1273,12 +1273,14 @@ the notifhost proxy change (§10.18) and main.c's uncommitted slice-map-hold edi
   `QubesEtwProxyGuard` rotation task, and the rotation-vs-retrieve TOCTOU are all GONE
   (§10.17.5 closed by removal); the password lives in one stack frame and is zeroed before
   return. Then `CreateProcessAsUserW` of
-  `notifhost.exe --etw-proxy --client-sid <console-user SID>` with
+  `etwproxy.exe --client-sid <console-user SID>` (UPDATED by the §10.20.6 console split;
+  was `notifhost.exe --etw-proxy`) with
   `CREATE_SUSPENDED|CREATE_NO_WINDOW` → `AssignProcessToJobObject` → `ResumeThread`.
   Job: 64 MB ProcessMemoryLimit, ActiveProcessLimit=1, KILL_ON_JOB_CLOSE, all
   JOB_OBJECT_UILIMIT_* set. Session 0 (token born in the service's session), no
-  LoadUserProfile, `lpDesktop="QubesEtwProxyWS\default"` — the dedicated private
-  winsta/desktop of §10.20.3. (The original `lpDesktop=""` belief — "the batch logon
+  LoadUserProfile, `lpDesktop=NULL` — no window station of any kind (§10.20.6:
+  etwproxy.exe links no user32/gdi32, so the field is inert; the §10.20.3 dedicated
+  winsta is deleted). (The original `lpDesktop=""` belief — "the batch logon
   session's own window station" — was WRONG: a bare batch token in session 0 has no
   winsta at all, which was the rig-measured 0xC0000142 launch failure.) The
   client SID comes from `WTSQueryUserToken(WTSGetActiveConsoleSessionId())` → TokenUser.
@@ -1399,7 +1401,14 @@ CLASSIFY line: `etw=` gains sig-hit|sig-none (plus the existing down|off|miss);
 `src=` values become etw-sig|db|none — `verdict=bridge` is earned ONLY by corr∈{id-ok,
 sig-unique, ok}.
 
-### 10.20.3 Layer-1 fix — the 0xC0000142 launch (etwproxy.c:707-724)
+### 10.20.3 Layer-1 fix — the 0xC0000142 launch
+
+**SUPERSEDED 2026-09-05 (owner-chosen Option 2, the CONSOLE SPLIT — see §10.20.6).** The
+dedicated-winsta mechanism below was implemented, then replaced the same day: the proxy
+is now `etwproxy.exe`, a separate console binary that links NO user32/gdi32/WinRT, so
+user32's process-init winsta connect never happens and 0xC0000142 is impossible by
+construction. The agent creates NO window station of any kind (all of the machinery below
+is deleted from etwproxy.c, not disabled). Kept for the record of what was measured:
 
 Measured: the proxy dies STATUS_DLL_INIT_FAILED in ~31 ms, before its own code
 (etw-proxy.log never appears). Cause: `si.lpDesktop = L""` — for a plain BATCH logon in
@@ -1448,9 +1457,12 @@ additionally issue ControlTrace(EVENT_TRACE_CONTROL_FLUSH) before grading.
    notifIdNum per toast, run `--dump-wpndb`, assert notifIdNum == `ROW id=` for the same
    toast. Record join-rate per method; a non-joining method must be SEEN taking
    corr=sig-unique.
-2. **L1**: proxy no longer exits 0xC0000142; etw-proxy.log appears; census lines print;
-   uptime >10 min; a proxy-logged `GetProcessWindowStation` name == QubesEtwProxyWS; a
-   negative probe shows the proxy token cannot open WinSta0.
+2. **L1** (revised for the §10.20.6 console split): proxy no longer exits 0xC0000142;
+   etw-proxy.log appears; census lines print; uptime >10 min; NO winsta-era lines exist
+   anywhere ('dedicated winsta ready' in the agent log, 'QubesEtwProxyWS' in the proxy
+   log — either present means an old agent/binary pairing is running). The former
+   GetProcessWindowStation census / WinSta0 negative probe are MOOT: the binary imports
+   no user32, holds no winsta rights, and is CI-gated to stay that way.
 3. **L2**: --dump-etw events>0 within ≤2 s of a fired toast; proxy captured>0 and
    bridge `ETW REC` lines within ≤2 s; per-method AUMID hits match the broadcap counts;
    ProcessTrace rc line present.
@@ -1460,3 +1472,51 @@ additionally issue ControlTrace(EVENT_TRACE_CONTROL_FLUSH) before grading.
 5. **Fail-open drills** (seen-to-fail): kill the proxy mid-run → src=db; fire+purge the
    row before the read → corr=id-norow → window; pipe squatter → proxy exit 8, tier
    down, DB serves.
+
+### 10.20.6 CONSOLE SPLIT (2026-09-05, owner-chosen Option 2) — etwproxy.exe, GUI-DLL-free
+
+Supersedes §10.20.3's dedicated-winsta mechanism entirely, with ZERO isolation change
+(the option chosen precisely over any winsta-rights widening).
+
+**The finding that forced it (rig-proven):** the `--etw-proxy` launch failed 0xC0000142
+STATUS_DLL_INIT_FAILED ONLY because notifhost.exe statically imports user32.dll+gdi32.dll
+(their DllMain connects the process to a window station at startup) while the bare
+qubes-etwproxy batch token in session 0 has no accessible station. Isolation test: the
+SAME binary as SYSTEM (which reaches WinSta0) initialized fine and hit the never-SYSTEM
+guard — the imports were the sole cause. The imports come from the WinRT `--bridge` code
+(UserNotificationListener, ShowBanner, the legacy GDI toast windows); the proxy path is a
+pure ETW/pipe consumer with zero UI need.
+
+**The split:**
+* `etwproxy.exe` (tools/notifhost/etwproxy.cpp + etwproxy.vcxproj): the proxy, alone.
+  Compiles ONLY the consumer code — PxHarvest/EtwProxyEventCb/PxWrite, the OUTBOUND pipe
+  server + client-SID DACL, the never-SYSTEM guard (exit 9), the token-drift census
+  (exit 9), EtwProxyShedAllPrivileges, EtwProxyMain — plus the pure-Win32 shared header.
+  Links ONLY kernel32/advapi32/tdh; no WinRT header, no user32/gdi32 pragma or lib, no
+  d3d11/dxgi/windowsapp, /SUBSYSTEM:CONSOLE. It never touches a window station, so
+  0xC0000142 is structurally impossible. Exit codes 0/5/7/8/9 unchanged.
+* `tools/notifhost/qtb_shared.h`: the shared pure-Win32 layer both binaries include —
+  BLog/QwtLogDir/StateDir/Utf8/CurrentUserSid/BridgeCrashFilter, PutU32/64+GetU32/64,
+  CsGuard, the 'QTS1' wire contract + kEtwProxyPipe + kEtwBridgeSession (the
+  change-both-or-neither pairs now have ONE definition), EtwOpen/EtwBufferCb/
+  EtwProcessTraceThread. Restricted by rule to kernel32/advapi32/tdh surface.
+* `notifhost.exe`: keeps --bridge/--relay/--dump-* (still WinRT+user32); its --etw-proxy
+  flag now REFUSES loudly with exit 9 (an old agent that still invokes it parks its ETW
+  tier on one line — never a silent no-op, never a winsta death).
+* The proxy needs NO classifier: it forwards {AUMID, notificationId, tag, group, ft}
+  only; toastclassify.h stays bridge-side.
+* Agent (etwproxy.c): launches `etwproxy.exe --client-sid <SID>`; the ENTIRE winsta
+  apparatus (EtwProxyEnsureWinstaLocked, EtwProxyObjectSd, QubesEtwProxyWS creation,
+  lpDesktop) is DELETED — si.lpDesktop stays NULL and is inert for a no-user32 process.
+  Everything else is unchanged: session controller (StartTrace/EnableTraceEx2/
+  EventAccessControl grant), in-memory creds, agent-side census refuse-on-drift, job
+  sandbox (64MB/1-proc/UI-restricted/kill-on-close, CREATE_SUSPENDED→assign→resume),
+  exit-wait supervision, park on 5/9.
+
+**Enforcement (not discipline):** CI (build.yml + qwt-full.yml) runs
+`dumpbin /imports etwproxy.exe` and FAILS if user32.dll or gdi32.dll appears; the gate
+self-proves by asserting the same regex DOES detect user32.dll in notifhost.exe
+(seen-to-fail). Packaging: etwproxy.exe rides helper-bins → signed → setup bin\ →
+bin-overlay next to gui-agent.exe; make-setup.ps1 THROWS if absent and
+packaging/ours-wins.psd1 carries `bin/etwproxy.exe` Required (anti-inert, the 2026-09-04
+lesson).

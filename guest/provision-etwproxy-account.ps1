@@ -1,12 +1,15 @@
-# PROVISION the least-privilege account for `notifhost --etw-proxy` (P3 toast classifier,
-# docs/DESIGN-p3-classifier-impl.md sec 10.14, REVISED by the 2026-09-05 capability-grant split;
-# as-implemented proxy record sec 10.18, agent-side launch sec 10.19 / agent/gui-agent/etwproxy.c).
+# PROVISION the least-privilege account for `etwproxy.exe` (P3 toast classifier,
+# docs/DESIGN-p3-classifier-impl.md sec 10.14, REVISED by the 2026-09-05 capability-grant split
+# and the same-day CONSOLE SPLIT - the proxy is its own GUI-DLL-free binary now, no longer a
+# notifhost.exe mode; as-implemented proxy record sec 10.18, agent-side launch sec 10.19 /
+# agent/gui-agent/etwproxy.c).
 #
 # WHY. All real-time ETW consumption + TDH parsing of attacker-influenceable event bytes for the
-# notification bridge runs in `notifhost.exe --etw-proxy` (notifhost.cpp EtwProxyMain), a process
-# the SYSTEM gui-agent launches under a DEDICATED account so a parser bug hands an attacker that
-# token - not SYSTEM, not admin, not the interactive user. This script creates and locks down
-# that account.
+# notification bridge runs in `etwproxy.exe` (tools/notifhost/etwproxy.cpp EtwProxyMain), a
+# process the SYSTEM gui-agent launches under a DEDICATED account so a parser bug hands an
+# attacker that token - not SYSTEM, not admin, not the interactive user. This script creates and
+# locks down that account. (etwproxy.exe links no user32/gdi32/WinRT, so it needs NO window
+# station: the account requires no winsta rights anywhere, and none are granted.)
 #
 # THE CAPABILITY-GRANT SPLIT (supersedes the PLU design this script previously implemented):
 # the SYSTEM agent is the ETW session CONTROLLER (StartTraceW + EnableTraceEx2 +
@@ -41,7 +44,7 @@
 #     actual membership census is verified empty.
 #   * one outbound-Block Windows Firewall rule scoped to this account's SID.
 #   * LOG: the proxy logs to the STANDARD QWT log directory (HKLM ...\Qubes Tools:LogDir, else
-#     %SystemDrive%\Qubes Logs - notifhost.cpp QwtLogDir), file etw-proxy.log, rotated to
+#     %SystemDrive%\Qubes Logs - qtb_shared.h QwtLogDir), file etw-proxy.log, rotated to
 #     etw-proxy.log.old at ~1MB. The ACE is scoped to the proxy's OWN log only:
 #       - Modify on the two pre-created files etw-proxy.log / etw-proxy.log.old (append, and
 #         the rotation rename needs DELETE on both);
@@ -415,11 +418,11 @@ try {
 }
 
 # ---- 10. standard log location: an ACE scoped to the proxy's OWN log ---------------------
-# notifhost --etw-proxy logs to <QwtLogDir>\etw-proxy.log (notifhost.cpp QwtLogDir + g_logName):
+# etwproxy.exe logs to <QwtLogDir>\etw-proxy.log (qtb_shared.h QwtLogDir + g_logName):
 # HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools : LogDir if set, else %SystemDrive%\Qubes Logs
 # - the STANDARD QWT log location (windows-utils LogInitDefault convention), NOT the bridge
 # state dir. Resolve it the same way (this elevated 64-bit PowerShell reads the same 64-bit
-# view notifhost opens with KEY_WOW64_64KEY). The grant must survive the proxy's own rotation
+# view the proxy opens with KEY_WOW64_64KEY). The grant must survive the proxy's own rotation
 # (BLog: rename etw-proxy.log -> etw-proxy.log.old with REPLACE, then re-create via OPEN_ALWAYS):
 #   file ACEs (Modify) on both names cover append + the renames; folder-only WD covers the
 #   re-create; CREATOR OWNER (inherit-only) keeps the re-created file writable by its creator

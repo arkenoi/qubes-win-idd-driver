@@ -1960,8 +1960,9 @@ function Invoke-Stage2 {
 
     # --- ETW-proxy least-privilege account (notification bridge, ETW tier) --------------
     # Provisions the dedicated qubes-etwproxy account the SYSTEM gui-agent will use to
-    # launch `notifhost.exe --etw-proxy` (DESIGN-p3-classifier-impl.md sec 10.14, revised
-    # by the capability-grant split): NO group memberships at all (the agent grants the
+    # launch `etwproxy.exe` (the GUI-DLL-free console proxy, 2026-09-05 split;
+    # DESIGN-p3-classifier-impl.md sec 10.14, revised by the capability-grant split):
+    # NO group memberships at all (the agent grants the
     # consumer TRACELOG_ACCESS_REALTIME on the one trace session instead of PLU), explicit
     # SeBatchLogonRight, batch logon only (interactive/remote/network DENIED), a throwaway
     # random password VALIDATED with a real batch LogonUser then DISCARDED (no secret at
@@ -1969,7 +1970,7 @@ function Invoke-Stage2 {
     # firewall rule, a log ACE scoped to the proxy's own etw-proxy.log in the standard QWT
     # log dir, a deny-write ACE on the bridge state dir, and removal of the retired LSA
     # secret + QubesEtwProxyGuard boot task on upgrade.
-    # Runs AFTER the bin overlay so notifhost.exe is already next to gui-agent.exe.
+    # Runs AFTER the bin overlay so etwproxy.exe is already next to gui-agent.exe.
     # THE SCRIPT NEVER FAILS THE INSTALL: on a managed/hardened image that refuses any step
     # it logs, reports provisioned=0 in its trailer, and exits 0 - the bridge's ETW tier
     # then simply stays down and the classifier serves from the listener/DB rungs

@@ -305,23 +305,45 @@ jobs:
               "-p:TreatWarningAsError=false" "-p:QgaFaultInjection=$fi"
           if ($LASTEXITCODE -ne 0) { throw "gui-agent build failed" }
 
-      # User-session HELPERS the agent launches via Task Scheduler: wgcbroker.exe (WGC capture
-      # broker - the de-slice broker path) and notifhost.exe (the notification bridge). These are
-      # standalone tools\*.vcxproj, NOT part of gui-agent-windows.sln and NOT in the stock MSI, so
-      # they have to be built and staged EXPLICITLY - the gap that shipped the de-slice broker with
-      # no wgcbroker.exe on the guest (packaging finding 2026-09-04). Plain v143, /MT, C++/WinRT.
-      - name: Build user-session helpers (wgcbroker, notifhost)
+      # Helper EXES the agent launches: wgcbroker.exe (WGC capture broker - the de-slice broker
+      # path) and notifhost.exe (the notification bridge) in the user session via Task Scheduler,
+      # plus etwproxy.exe (the GUI-DLL-free ETW signal proxy, 2026-09-05 console split) as the
+      # qubes-etwproxy account in session 0. These are standalone tools\*.vcxproj, NOT part of
+      # gui-agent-windows.sln and NOT in the stock MSI, so they have to be built and staged
+      # EXPLICITLY - the gap that shipped the de-slice broker with no wgcbroker.exe on the guest
+      # (packaging finding 2026-09-04). Plain v143, /MT; wgcbroker/notifhost use C++/WinRT,
+      # etwproxy deliberately does NOT (see the import gate below).
+      - name: Build user-session helpers (wgcbroker, notifhost, etwproxy)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $mb = "${{ steps.vs.outputs.msbuild }}"
-          foreach ($proj in 'wgcbroker', 'notifhost') {
-            & $mb "tools\$proj\$proj.vcxproj" /p:Configuration=Release /p:Platform=x64 /t:Build
-            if ($LASTEXITCODE -ne 0) { throw "$proj msbuild failed" }
-            $exe = "tools\$proj\x64\Release\$proj.exe"
-            if (-not (Test-Path $exe)) { throw "$proj built but $exe is missing" }
-            Get-ChildItem $exe
+          foreach ($p in @(@('wgcbroker','tools\wgcbroker\wgcbroker.vcxproj','tools\wgcbroker\x64\Release\wgcbroker.exe'),
+                           @('notifhost','tools\notifhost\notifhost.vcxproj','tools\notifhost\x64\Release\notifhost.exe'),
+                           @('etwproxy', 'tools\notifhost\etwproxy.vcxproj', 'tools\notifhost\x64\Release\etwproxy.exe'))) {
+            & $mb $p[1] /p:Configuration=Release /p:Platform=x64 /t:Build
+            if ($LASTEXITCODE -ne 0) { throw "$($p[0]) msbuild failed" }
+            if (-not (Test-Path $p[2])) { throw "$($p[0]) built but $($p[2]) is missing" }
+            Get-ChildItem $p[2]
           }
+          # IMPORT-TABLE GATE on the SHIPPING etwproxy.exe: it runs under the bare
+          # qubes-etwproxy batch token in session 0, which has no window station; a user32 or
+          # gdi32 import means 0xC0000142 STATUS_DLL_INIT_FAILED before main (the rig-proven
+          # failure the console split removed). Refuse to ship a binary that regressed it.
+          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse `
+                       -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+                     Where-Object FullName -match 'Hostx64\\x64' | Select-Object -First 1
+          if (-not $dumpbin) { throw 'dumpbin.exe not found - cannot verify the etwproxy import table' }
+          $imports = (& $dumpbin.FullName /imports tools\notifhost\x64\Release\etwproxy.exe) -join "`n"
+          if ($imports -match '(?im)^\s*(user32|gdi32)\.dll\s*$') {
+            throw 'etwproxy.exe imports user32/gdi32 - would die 0xC0000142 winsta-less; NOT shipping it'
+          }
+          # Seen-to-fail proof: the same check against notifhost.exe (which imports user32) must trip.
+          $ni = (& $dumpbin.FullName /imports tools\notifhost\x64\Release\notifhost.exe) -join "`n"
+          if (-not ($ni -match '(?im)^\s*user32\.dll\s*$')) {
+            throw 'import-gate selftest FAILED: user32.dll not detected in notifhost.exe'
+          }
+          Write-Host 'etwproxy.exe import table clean (no user32/gdi32); gate selftest OK'
 
       # core-agent-windows (our fork) carries the qrexec-wrapper drain-race fix: do not report the
       # exit code before the i/o pumps have drained (ac33bc9), drain the vchan before leaving on
@@ -403,6 +425,7 @@ jobs:
           New-Item -ItemType Directory -Force helper-bins | Out-Null
           Copy-Item 'tools\wgcbroker\x64\Release\wgcbroker.exe' helper-bins\
           Copy-Item 'tools\notifhost\x64\Release\notifhost.exe' helper-bins\
+          Copy-Item 'tools\notifhost\x64\Release\etwproxy.exe'  helper-bins\
           [IO.File]::WriteAllBytes('cert.pfx', [Convert]::FromBase64String($env:PFX_B64))
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
               Where-Object FullName -match 'x64' | Select-Object -First 1
@@ -417,9 +440,10 @@ jobs:
           $toSign += @(Get-ChildItem helper-bins -Filter *.exe)
           $toSign += @(Get-ChildItem core-agent-bins -Filter *.exe)
           $toSign += @(Get-ChildItem deps-bins\* -Include *.exe, *.dll)
-          # 2 gui-agent + 2 helpers + 15 core-agent + 5 deps: fewer means a bins dir went missing
-          # or a copy loop silently shrank - fail here, not with an unsigned binary shipping.
-          if ($toSign.Count -lt 24) { throw "expected at least 24 binaries to sign, found $($toSign.Count)" }
+          # 2 gui-agent + 3 helpers (wgcbroker, notifhost, etwproxy) + 15 core-agent + 5 deps:
+          # fewer means a bins dir went missing or a copy loop silently shrank - fail here,
+          # not with an unsigned binary shipping.
+          if ($toSign.Count -lt 25) { throw "expected at least 25 binaries to sign, found $($toSign.Count)" }
           foreach ($f in $toSign) {
             & $signtool.FullName sign /fd sha256 /f cert.pfx /p $env:PFX_PASS $f.FullName
             if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($f.Name)" }
@@ -571,11 +595,12 @@ jobs:
           # old order hashed first and copied after, so the loose agent exes and the whole
           # core-agent-bins dir shipped UNHASHED - the standing MANIFEST gap.
           Copy-Item agent-bins\gui-agent.exe, agent-bins\gui-watchdog.exe, agent-bins\sign.crt package-qwt-full\
-          # SIGNED user-session helpers -> their own dir. make-setup.ps1 stages these into the
-          # setup tree's bin\ so Install-QwtImproved installs wgcbroker.exe/notifhost.exe next to
-          # gui-agent.exe (the de-slice broker + notification bridge; previously shipped NOWHERE).
+          # SIGNED helpers -> their own dir. make-setup.ps1 stages these into the setup tree's
+          # bin\ so Install-QwtImproved installs wgcbroker.exe/notifhost.exe/etwproxy.exe next to
+          # gui-agent.exe (de-slice broker + notification bridge + ETW signal proxy; a helper
+          # missing from this list ships NOWHERE - the 2026-09-04 packaging lesson).
           New-Item -ItemType Directory -Force package-qwt-full\helper-bins | Out-Null
-          Copy-Item helper-bins\wgcbroker.exe, helper-bins\notifhost.exe package-qwt-full\helper-bins\ -Force
+          Copy-Item helper-bins\wgcbroker.exe, helper-bins\notifhost.exe, helper-bins\etwproxy.exe package-qwt-full\helper-bins\ -Force
           # SIGNED fork core-agent binaries -> their own dir (signed in place by the signing
           # step). release-package points make-setup.ps1 -CoreAgentBins at it; make-setup
           # stages ONLY qrexec-wrapper.exe into the payload bin\ (recorded policy), the rest

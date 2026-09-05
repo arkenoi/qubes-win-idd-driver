@@ -148,7 +148,7 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\set-autologon.ps1') 'autologon armin
 # split): creates the least-privilege qubes-etwproxy account (ZERO group memberships - no
 # Performance Log Users; explicit SeBatchLogonRight; batch logon only; NO credential at rest,
 # the SYSTEM agent sets a fresh in-memory password per launch) that the agent uses to launch
-# `notifhost --etw-proxy`. Invoked by Install-QwtImproved.ps1 stage 2; ALWAYS exits 0
+# `etwproxy.exe` (the GUI-DLL-free console proxy). Invoked by Install-QwtImproved.ps1 stage 2; ALWAYS exits 0
 # (a managed image that refuses it degrades to the listener/DB rung, never fails the
 # install). Staged here because a provisioning step that is not on the medium runs on NO
 # guest - the exact 4.3.18 de-slice-broker inert-clean-install gap, in script form; the
@@ -236,14 +236,19 @@ if ($CoreAgentBins -and (Test-Path -LiteralPath $CoreAgentBins)) {
 # must not create the condition in the first place.
 $helperSrc = Join-Path $MsiArtifact 'helper-bins'
 if (-not (Test-Path -LiteralPath $helperSrc)) {
-    throw "helper-bins missing from the qwt-full artifact ($helperSrc) - wgcbroker.exe/notifhost.exe would ship NOWHERE (de-slice broker + notification bridge dead on the guest)"
+    throw "helper-bins missing from the qwt-full artifact ($helperSrc) - wgcbroker.exe/notifhost.exe/etwproxy.exe would ship NOWHERE (de-slice broker + notification bridge + ETW signal proxy dead on the guest)"
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $OutDir 'bin') | Out-Null
+$helperRole = @{
+    'wgcbroker.exe' = 'de-slice broker'
+    'notifhost.exe' = 'notification bridge'
+    'etwproxy.exe'  = 'ETW signal proxy (GUI-DLL-free console split - the agent launches it by this shipped path; absent = the toast ETW tier is stillborn on every install)'
+}
 $helpersStaged = @()
-foreach ($h in 'wgcbroker.exe', 'notifhost.exe') {
+foreach ($h in 'wgcbroker.exe', 'notifhost.exe', 'etwproxy.exe') {
     $p = Join-Path $helperSrc $h
     if (-not (Test-Path -LiteralPath $p)) {
-        throw "$h missing from helper-bins - the $(if ($h -eq 'wgcbroker.exe') {'de-slice broker'} else {'notification bridge'}) would ship NOWHERE"
+        throw "$h missing from helper-bins - the $($helperRole[$h]) would ship NOWHERE"
     }
     Copy-Item -LiteralPath $p (Join-Path $OutDir 'bin') -Force
     $helpersStaged += $h

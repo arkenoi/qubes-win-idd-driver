@@ -141,6 +141,12 @@
         # 2026-09-04 gap that shipped the de-slice broker with no wgcbroker.exe on the guest.
         @{ Package = 'bin/wgcbroker.exe';          NoStock = $true;             Required = $true }
         @{ Package = 'bin/notifhost.exe';          NoStock = $true;             Required = $true }
+        # etwproxy.exe (2026-09-05 console split): the GUI-DLL-free ETW signal proxy the
+        # SYSTEM agent launches as qubes-etwproxy (session 0, no winsta). The agent launches
+        # it by this shipped path - absent means the toast ETW tier is stillborn on every
+        # clean install (silently: the tier fail-opens to the DB rung), the anti-inert case
+        # this guard exists for.
+        @{ Package = 'bin/etwproxy.exe';           NoStock = $true;             Required = $true }
 
         # -- inside the built MSI (stage-qwt-repo.ps1 substitution table) -----------------
         # Our gui-agent fork - the original substitution the table replicates.
