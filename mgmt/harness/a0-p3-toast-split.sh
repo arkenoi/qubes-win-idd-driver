@@ -183,14 +183,16 @@ qrun "reg delete \"$GACFG\" /v NotifyBridgeMixed /f" >/dev/null 2>&1   # ensure 
 coldboot q1 || { log "FATAL no session after Q1 cold boot"; exit 1; }
 bridge_up 0 || { verdict Q1 "FAIL bridge never up+connected after Q1 cold boot"; exit 1; }
 
-# A0 subset: warmup earns lazy suppression, check toast bridges with no guest banner
+# A0 subset: warmup earns lazy suppression, check toast bridges with no guest banner.
+# Delivery graded by fwd_count/fwd_attempts (a0-lib.sh), NOT bare `SENT id=.*OK` greps: BLog's
+# write race drops SENT lines (2026-09-05 A0 false-FAILs); FWD_RTT ok=1 is the dom0 ack.
 Lw=$(blog_len) || Lw=0
 fire_info "P3T q1-warmup" > /dev/null 2>&1
-for i in $(seq 1 15); do blog_since "$Lw" | grep -qa "SENT id=.*OK" && break; sleep 2; done
+for i in $(seq 1 15); do blog_since "$Lw" > "$OUT/q1-warm.txt"; [ "$(fwd_count "$OUT/q1-warm.txt")" -ge 1 ] && break; sleep 2; done
 sleep 3; L0=$(blog_len) || L0=0
 snap_or "$TOASTRE" q1-base > "$OUT/q1-base.ids"
 fire_info "P3T q1-bridged" > /dev/null 2>&1
-q1sent=""; for i in $(seq 1 15); do blog_since "$L0" | grep -qa "SENT id=.*OK" && { q1sent=1; break; }; sleep 2; done
+q1sent=""; for i in $(seq 1 15); do blog_since "$L0" > "$OUT/q1-blog.txt"; [ "$(fwd_count "$OUT/q1-blog.txt")" -ge 1 ] && { q1sent=1; break; }; sleep 2; done
 q1gb=no; new_or_window "$OUT/q1-base.ids" "$TOASTRE" 2 q1-guest && q1gb=yes
 [ -n "$q1sent" ] && [ "$q1gb" = no ] \
   && verdict Q1a "PASS A0 behaviour intact with mixed absent (SENT OK, no guest banner)" \
@@ -224,7 +226,7 @@ L2=$(blog_len) || L2=0
 AM2=$(amark)
 snap_or "$TOASTRE" q2a-base > "$OUT/q2a-base.ids"
 fire_info "P3T q2-info" > /dev/null 2>&1     # transient informational: detection is log-based
-q2sent=""; for i in $(seq 1 15); do blog_since "$L2" | grep -qa "SENT id=.*OK" && { q2sent=1; break; }; sleep 2; done
+q2sent=""; for i in $(seq 1 15); do blog_since "$L2" > "$OUT/q2a-blog.txt"; [ "$(fwd_count "$OUT/q2a-blog.txt")" -ge 1 ] && { q2sent=1; break; }; sleep 2; done
 classify_since "$L2" > "$OUT/q2a-classify.txt"
 q2cb=$(grep -ca 'verdict=bridge' "$OUT/q2a-classify.txt" || true)
 # TODO(P3C): TOASTDROP is the drop-edge proof (design §3.3/§4) - the window EXISTED and was
@@ -246,7 +248,8 @@ snap_or "$TOASTRE" q2b-base > "$OUT/q2b-base.ids"
 fire_rc_ps "P3T q2-choice" > /dev/null 2>&1
 q2bwin=no; new_or_window "$OUT/q2b-base.ids" "$TOASTRE" 2 q2b-guest && q2bwin=yes
 sleep 6   # let a wrong forward land before asserting none did
-q2bsent=$(blog_since "$L2b" | grep -ca "SENT id=.*OK" || true)
+blog_since "$L2b" > "$OUT/q2b-blog.txt" 2>/dev/null || true
+q2bsent=$(fwd_attempts "$OUT/q2b-blog.txt")   # ANY forward attempt is a split violation here
 classify_since "$L2b" > "$OUT/q2b-classify.txt"
 q2bcw=$(grep -ca 'verdict=window' "$OUT/q2b-classify.txt" || true)
 dismiss_toasts "$PSAUMID"
@@ -279,7 +282,8 @@ else
   fire_long "P3T q3a-dbdenied" > /dev/null 2>&1   # -Long: informational content, ~25s banner
   q3awin=no; new_or_window "$OUT/q3a-base.ids" "$TOASTRE" 1 q3a-guest && q3awin=yes
   sleep 6
-  q3asent=$(blog_since "$L3a" | grep -ca "SENT id=.*OK" || true)
+  blog_since "$L3a" > "$OUT/q3a-blog.txt" 2>/dev/null || true
+  q3asent=$(fwd_attempts "$OUT/q3a-blog.txt")
   classify_since "$L3a" > "$OUT/q3a-classify.txt"
   q3acw=$(grep -ca 'verdict=window' "$OUT/q3a-classify.txt" || true)
   dismiss_toasts "$PSAUMID"
@@ -297,7 +301,7 @@ fi
 qrun "icacls \"$WPNDB\" /remove:d user" >/dev/null 2>&1
 L3r=$(blog_len) || L3r=0
 fire_info "P3T q3a-restored" > /dev/null 2>&1
-q3rok=""; for i in $(seq 1 15); do blog_since "$L3r" | grep -qa "SENT id=.*OK" && { q3rok=1; break; }; sleep 2; done
+q3rok=""; for i in $(seq 1 15); do blog_since "$L3r" > "$OUT/q3a-restore-blog.txt"; [ "$(fwd_count "$OUT/q3a-restore-blog.txt")" -ge 1 ] && { q3rok=1; break; }; sleep 2; done
 [ -n "$q3rok" ] && log "Q3a: ACL restored, bridging again (fault was the cause)" \
   || verdict Q3a-restore "FAIL bridging did not resume after ACL restore - Q3a fault not isolated"
 
@@ -308,7 +312,8 @@ AM3=$(amark); L3b=$(blog_len) || L3b=0
 snap_or "$TOASTRE" q3b-base > "$OUT/q3b-base.ids"
 fire_long "P3T q3b-nobridge" > /dev/null 2>&1
 q3bwin=no; new_or_window "$OUT/q3b-base.ids" "$TOASTRE" 1 q3b-guest && q3bwin=yes
-q3bsent=$(blog_since "$L3b" 2>/dev/null | grep -ca "SENT id=.*OK" || true)
+blog_since "$L3b" > "$OUT/q3b-blog.txt" 2>/dev/null || true
+q3bsent=$(fwd_attempts "$OUT/q3b-blog.txt")
 # TODO(P3C): TOASTVERDICT TIMEOUT is the ceiling-hit proof (design §3.3); exact text at landing.
 q3bto=$(asince "$AM3" 'TOASTVERDICT TIMEOUT')
 dismiss_toasts "$PSAUMID"
@@ -334,7 +339,8 @@ else
   if fire_long "P3T q3c-consent" > /dev/null 2>&1; then fired3c=1; else fired3c=; fi
   q3cwin=no; new_or_window "$OUT/q3c-base.ids" "$TOASTRE" 1 q3c-guest && q3cwin=yes
   sleep 6
-  q3csent=$(blog_since "$L3c" 2>/dev/null | grep -ca "SENT id=.*OK" || true)
+  blog_since "$L3c" > "$OUT/q3c-blog.txt" 2>/dev/null || true
+  q3csent=$(fwd_attempts "$OUT/q3c-blog.txt")
   fatal3c=$(blog_since "$Lpre" 2>/dev/null | grep -ca 'FATAL' || true)
   dismiss_toasts "$PSAUMID"
   if [ -z "$fired3c" ]; then
@@ -364,12 +370,12 @@ fire_info "P3T q4-twin-1" > /dev/null 2>&1
 fire_info "P3T q4-twin-2" > /dev/null 2>&1     # no settle between: this IS the ambiguity window
 sleep 25
 blog_since "$L4" > "$OUT/q4-blog.txt"
-q4sent=$(grep -ca "SENT id=.*OK" "$OUT/q4-blog.txt" || true)
-q4coal=$(grep -aoE 'SENT coalesced x[0-9]+' "$OUT/q4-blog.txt" | grep -aoE '[0-9]+$' | paste -sd+ | bc 2>/dev/null || echo 0)
+# fwd_count: distinct acked ids + acked coalesced items (replaces the SENT-only count, whose
+# line BLog's write race drops, AND the `paste|bc` coalesced sum - bc is not installed here)
 q4cl=$(grep -ca 'CLASSIFY ' "$OUT/q4-blog.txt" || true)
 q4drop=$(asince "$AM4" 'TOASTDROP' | grep -ca 'TOASTDROP' || true)
 q4win=no; new_or_window "$OUT/q4-base.ids" "$TOASTRE" 1 q4-guest && q4win=yes
-q4bridged=$(( ${q4sent:-0} + ${q4coal:-0} ))
+q4bridged=$(fwd_count "$OUT/q4-blog.txt")
 dismiss_toasts
 # Accounting: 2 classified; delivery = both bridged (2 SENT/coalesced) or both windowed
 # (0 sent + window evidence). Exactly-one-of-two bridged with the other invisible = the lost
@@ -388,14 +394,12 @@ conn0=$(blog_since 0 | grep -ca "connected (server version" || true)
 for i in 1 2 3 4 5; do fire_info "P3T q4-burst $i" > /dev/null 2>&1; done
 sleep 25
 blog_since "$L4b" > "$OUT/q4b-blog.txt"
-b_coal=$(grep -aoE 'SENT coalesced x[0-9]+' "$OUT/q4b-blog.txt" | grep -aoE '[0-9]+$' | paste -sd+ | bc 2>/dev/null || echo 0)
-b_ind=$(grep -ca "SENT id=.*OK" "$OUT/q4b-blog.txt" || true)
 b_cl=$(grep -ca 'CLASSIFY ' "$OUT/q4b-blog.txt" || true)
-b_tot=$(( ${b_coal:-0} + ${b_ind:-0} ))
+b_tot=$(fwd_count "$OUT/q4b-blog.txt")   # distinct acked ids + acked coalesced items
 conn1=$(blog_since 0 | grep -ca "connected (server version" || true)
 dismiss_toasts
 if [ "$b_tot" -ge 5 ] && [ "${b_cl:-0}" -ge 5 ] && [ "$conn0" = "$conn1" ]; then
-  verdict Q4b "PASS burst: $b_tot delivered (coal=$b_coal ind=$b_ind), $b_cl classified, connection reused"
+  verdict Q4b "PASS burst: $b_tot delivered (distinct acked ids + coalesced), $b_cl classified, connection reused"
 else
   verdict Q4b "FAIL burst tot=$b_tot classified=$b_cl conns $conn0->$conn1"
 fi
@@ -406,7 +410,7 @@ coldboot q5a || { verdict Q5a "FAIL no session after Q5a cold boot"; exit 1; }
 bridge_up 0 || verdict Q5a "FAIL bridge not up after Q5a cold boot"
 L5=$(blog_len) || L5=0
 fire_info "P3T q5-persist" > /dev/null 2>&1
-q5sent=""; for i in $(seq 1 15); do blog_since "$L5" | grep -qa "SENT id=.*OK" && { q5sent=1; break; }; sleep 2; done
+q5sent=""; for i in $(seq 1 15); do blog_since "$L5" > "$OUT/q5a-blog.txt"; [ "$(fwd_count "$OUT/q5a-blog.txt")" -ge 1 ] && { q5sent=1; break; }; sleep 2; done
 q5cb=$(classify_since "$L5" | grep -ca 'verdict=bridge' || true)
 [ -n "$q5sent" ] && [ "${q5cb:-0}" -ge 1 ] \
   && verdict Q5a "PASS mixed routing survives cold boot (SENT OK + CLASSIFY verdict=bridge)" \
@@ -426,7 +430,8 @@ L5b=$(blog_len) || L5b=1000000000
 snap_or "$TOASTRE" q5b-base > "$OUT/q5b-base.ids"
 fire_long "P3T q5-legacy" > /dev/null 2>&1
 q5bwin=no; new_or_window "$OUT/q5b-base.ids" "$TOASTRE" 1 q5b-guest && q5bwin=yes
-q5bsent=$(blog_since "$L5b" 2>/dev/null | grep -ca "SENT" || true)
+blog_since "$L5b" > "$OUT/q5b-blog.txt" 2>/dev/null || true
+q5bsent=$(fwd_attempts "$OUT/q5b-blog.txt")
 sb5=$(showbanner)
 dismiss_toasts "$PSAUMID"
 if [ -z "$hb5" ] && [ -z "$q5arm" ] && [ "$q5bwin" = yes ] && [ "${q5bsent:-0}" = 0 ]; then

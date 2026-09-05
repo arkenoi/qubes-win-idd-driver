@@ -20,9 +20,10 @@
 # cap() (e2e-lib), and the e2e-wait.sh waits — the floor defines/sources its own.
 #
 # Defines constants PSAUMID CTLAUMID QT BLOG HBF INCOMING TOASTRE and functions raspush geom
-# ors blog_len blog_since path_state hb_fresh hb_state fire_raw fire_info fire_info_p fire_ctl
-# showbanner dismiss_toasts new_or_window snap_or. blog_len returns NONZERO on hard failure —
-# callers must handle that status, never default the count to 0.
+# ors blog_len blog_since fwd_count fwd_attempts fwd_selftest path_state hb_fresh hb_state
+# fire_raw fire_info fire_info_p fire_ctl showbanner dismiss_toasts new_or_window snap_or.
+# blog_len returns NONZERO on hard failure — callers must handle that status, never default
+# the count to 0.
 #
 # Everything below the guard is MOVED VERBATIM from a0-toast-bridge.sh (2026-09-05 extraction);
 # the comments carry the audit history of each instrument bug and stay with the code they fixed.
@@ -91,6 +92,73 @@ blog_since(){ # $1 = old line count
   qrun "powershell -NoProfile -Command \"if (Test-Path '$BLOG') { Get-Content '$BLOG' | Select-Object -Skip $1 }\""
 }
 
+# --- delivered-toast detectors (audit 2026-09-05, the dropped-SENT false-FAILs) --------------
+# WHY NOT `grep "SENT id=.*OK"`: BLog opens bridge.log share-READ-only and SILENTLY DROPS a
+# line when two writers collide (qtb_shared.h BLog: CreateFileW(FILE_APPEND_DATA,
+# FILE_SHARE_READ) -> INVALID_HANDLE_VALUE -> return). The 5133293 shadow worker writes its
+# CLASSIFY line from a second thread at exactly toast-processing time, so the SENT line
+# adjacent to it is the usual casualty (2026-09-05 run: ids 15/20/22 had FWD_RTT ok=1 AND a
+# dom0 Dismissed-callback for their bubble, but no SENT line -> P4a/P6b/P7 false-FAILed on
+# SENT-only greps). The authoritative delivery marker is `FWD_RTT guest_id=N ... ok=1`:
+# ForwardText logs it ONLY after the dom0 qubes.Notifications server's ack frame for that seq
+# (notifhost.cpp ReaderThread tag=0 -> g_awaitOk=1), i.e. dom0 accepted and id-assigned the
+# notification. SENT is the human-readable record of the same event. Counting the DISTINCT id
+# union of BOTH lines survives a single-line drop in either direction and stays correct after
+# the BLog share-mode fix. All patterns are ANCHORED at the HH:MM:SS line start so guest-
+# controlled toast TITLES embedded in SENT lines can never forge a match.
+fwd_count(){ # $1 = FILE holding a bridge.log window -> echoes the number of DISTINCT toasts
+             # PROVEN delivered to dom0 in that window (per-id forwards, deduped across the
+             # FWD_RTT/SENT pair, plus the item counts of acked coalesced batches)
+  local f="$1" n c
+  n=$( { sed -n 's/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9] FWD_RTT guest_id=\([1-9][0-9]*\) seq=[0-9][0-9]* ms=[0-9][0-9]* ok=1\r*$/\1/p' "$f"
+         sed -n "s/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9] SENT id=\([0-9][0-9]*\) .*: OK\r*\$/\1/p" "$f"
+       } | sort -un | wc -l )
+  # coalesced batches (guest_id=0) carry no per-id lines; only an ACKED batch counts (the old
+  # `SENT coalesced x[0-9]+` grep counted FAILed batches as delivered - latent overcount).
+  # Summed with awk, NOT `paste|bc`: bc is NOT INSTALLED on this rig, so the old harness's
+  # coalesced sum was silently always empty (caught by fwd_selftest 2026-09-05).
+  c=$( sed -n 's/^[0-9][0-9]:[0-9][0-9]:[0-9][0-9] SENT coalesced x\([0-9][0-9]*\): OK\r*$/\1/p' "$f" | awk '{s+=$1} END{print s+0}' )
+  echo $(( ${n:-0} + ${c:-0} ))
+}
+fwd_attempts(){ # $1 = FILE; counts lines evidencing ANY dom0-forward ATTEMPT (SENT any
+                # outcome, FWD_RTT any ok=) - for the must-be-ZERO negative assertions
+                # (P4b control / P6a consent-revoked / P8 legacy-off). An attempted-but-
+                # rejected forward there is just as much a leak as an acked one.
+  grep -caE '^[0-9]{2}:[0-9]{2}:[0-9]{2} (SENT |FWD_RTT )' "$1" || true
+}
+# Seen-to-fail proof (autonomy rule 5), pure text, no VM contact: fwd_count must count the
+# dropped-SENT shape (FWD_RTT ok=1, no SENT - THE 2026-09-05 regression), dedupe the pair,
+# take only ACKED coalesced batches, and read 0 on a genuinely undelivered window; fwd_attempts
+# must fire on any attempt and stay 0 on a forward-free window with embedded forgeries.
+fwd_selftest(){
+  local d="$OUT/fwd-selftest"; mkdir -p "$d"
+  printf '%s\r\n' \
+    '22:25:59 FWD_RTT guest_id=15 seq=2 ms=9 ok=1' \
+    "22:34:39 SENT id=21 app='Windows PowerShell' title='A0T burst 1': OK" \
+    '22:34:39 FWD_RTT guest_id=21 seq=3 ms=17 ok=1' \
+    '22:36:00 FWD_RTT guest_id=0 seq=4 ms=3 ok=1' \
+    '22:36:00 SENT coalesced x3: OK' > "$d/delivered.txt"
+  printf '%s\r\n' \
+    '22:26:00 FWD_RTT guest_id=17 seq=9 ms=15000 ok=-2' \
+    '22:26:00 send seq=9: ack timeout' \
+    "22:26:15 SENT id=17 app='x' title='y': FAIL (unseen, retried)" \
+    '22:26:30 SENT coalesced x4: FAIL (unseen, retried)' \
+    "22:26:45 SENT id=88 app='x' title='FWD_RTT guest_id=999 seq=1 ms=1 ok=1': FAIL (unseen, retried)" > "$d/undelivered.txt"
+  printf '%s\r\n' \
+    '22:28:04 skip id=16 aumid=Microsoft.Windows.Explorer (window path)' \
+    '22:29:00 skip id=99 aumid=Evil SENT id=77 t: OK' \
+    '22:25:12 connected (server version 1.0)' \
+    '22:25:44 Dismissed id=2 reason=1 (not user-dismissed - guest record kept)' > "$d/clean.txt"
+  local a b c au ac
+  a=$(fwd_count "$d/delivered.txt"); b=$(fwd_count "$d/undelivered.txt"); c=$(fwd_count "$d/clean.txt")
+  au=$(fwd_attempts "$d/undelivered.txt"); ac=$(fwd_attempts "$d/clean.txt")
+  if [ "$a" = 5 ] && [ "$b" = 0 ] && [ "$c" = 0 ] && [ "${au:-0}" -ge 1 ] && [ "${ac:-0}" = 0 ]; then
+    return 0
+  fi
+  log "INSTRUMENT fwd_selftest MISMATCH: delivered=$a (want 5) undelivered=$b (want 0) clean=$c (want 0) attempts-undelivered=$au (want >=1) attempts-clean=$ac (want 0)"
+  return 1
+}
+
 # --- heartbeat / file-presence probe (SELF-MATCH-SAFE) --------------------------------------
 # The old `cmd /c "if exist ... echo YESHB else echo NOHB"` idiom SELF-MATCHED: qtest run echoes
 # the command line, which literally contains both markers, so a grep for them always hit the echo,
@@ -144,7 +212,7 @@ fire_info(){ fire_raw "-Title '$1'" "a0i$RANDOM" || { log "INSTRUMENT: fire_info
 # PERSISTENT informational toast (scenario=reminder) for WINDOW-PATH detection: the rig's
 # whole-desktop capture (geom) is ~59s/call, so a transient ~5s toast is gone before any snapshot
 # aligns and its o-r window is never caught. Use fire_info_p where the check is "an o-r window
-# mapped" (geom); use fire_info where the check is the bridge.log SENT line (fast, no window needed).
+# mapped" (geom); use fire_info where the check is the bridge.log delivery ack, fwd_count (fast, no window needed).
 fire_info_p(){ fire_raw "-Persistent -Title '$1'" "a0p$RANDOM" || { log "INSTRUMENT: fire_info_p '$1' never confirmed FIRED after retries - a FAIL below is an instrument miss, NOT bridge behaviour"; return 1; }; }
 fire_ctl(){ fire_raw "-RealChoice -Aumid $CTLAUMID -Title '$1'" "a0c$RANDOM" || { log "INSTRUMENT: fire_ctl '$1' never confirmed FIRED after retries - a FAIL below is an instrument miss, NOT bridge behaviour"; return 1; }; }
 # Read the CURRENT ShowBanner state for the PS test AUMID (absent|0|1) - read-only introspection,

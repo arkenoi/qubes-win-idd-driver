@@ -6,7 +6,8 @@
 #
 # Experiment plan (the experimenter five lines):
 #   HYPOTHESIS: with service.notify-bridge=1 + NotifyBridgeAllow=[PS AUMID], an informational
-#     toast from the PS AUMID is bridged (dom0-native bubble, bridge.log SENT OK, NO guest o-r
+#     toast from the PS AUMID is bridged (dom0-native bubble, bridge.log delivery ack — fwd_count
+#     on FWD_RTT ok=1 / SENT OK, see a0-lib.sh — NO guest o-r
 #     banner) and a real-choice toast from a non-allowlisted AUMID stays a guest o-r banner
 #     with no dom0 send. Gate off, consent revoked, or connection down => EVERY toast banners
 #     in-guest (fail-open). Refuted if an allowlisted toast is ever lost (neither bannered nor
@@ -103,6 +104,15 @@ if [ "$hbf_fresh" = PRESENT ] && [ "$hbf_stale" = ABSENT ]; then
   log "P1c: heartbeat FRESHNESS self-test OK (fresh->$hbf_fresh stale->$hbf_stale)"
 else
   verdict P1c "INSTRUMENT heartbeat freshness self-test fresh='$hbf_fresh' stale='$hbf_stale' - mtime probe unreliable, aborting (instrument-class, not a bridge verdict)"; exit 1
+fi
+# fwd_count/fwd_attempts delivery-detector self-test (seen-to-fail, pure text - no VM contact).
+# Covers THE 2026-09-05 regression shape: a toast whose SENT line was dropped by BLog's
+# share-mode write race (FWD_RTT ok=1 present, SENT absent) must still count as delivered,
+# an unacked window must count 0, and anchored patterns must resist title-embedded forgeries.
+if fwd_selftest; then
+  log "P1c: fwd delivery-detector self-test OK (delivered->5 undelivered->0 clean->0)"
+else
+  verdict P1c "INSTRUMENT fwd delivery-detector self-test failed (see fwd_selftest MISMATCH line above) - delivery counting unreliable, aborting (instrument-class, not a bridge verdict)"; exit 1
 fi
 
 # P1d READINESS GATE for the user-session fire path. The FIRST run-as-user fire after a cold boot
@@ -202,14 +212,20 @@ done
 # ---------- P4 the split -------------------------------------------------------------------
 # NOTE lazy suppression (notifhost fail-open fix): an app's banner is suppressed only AFTER its
 # first successful forward, so toast #1 per app double-shows (banner + dom0) and toast #2+ is
-# suppressed. So P4a fires a WARM-UP toast to earn suppression (expect SENT OK), then the real
-# check toast (expect SENT OK + NO new guest banner). This is the fail-open invariant made
-# visible: a bridge that never forwards never suppresses.
+# suppressed. So P4a fires a WARM-UP toast to earn suppression (expect a delivery ack), then the
+# real check toast (expect a delivery ack + NO new guest banner). This is the fail-open invariant
+# made visible: a bridge that never forwards never suppresses.
+# Delivery is graded by fwd_count (a0-lib.sh), NOT a bare `SENT id=.*OK` grep: BLog's write race
+# drops the SENT line ~1/3 of the time since the 5133293 shadow worker (2026-09-05: ids 15/20/22
+# had FWD_RTT ok=1 + a dom0 Dismissed callback but no SENT -> P4a/P6b/P7 false-FAILed).
 log "P4: split - allowlisted bridges (lazy suppression), control stays windowed"
 Lw=$(blog_len)
 fire_info "A0T warmup" > /dev/null 2>&1        # toast #1: earns suppression (double-shows)
 warm=""
-for i in $(seq 1 15); do blog_since "$Lw" | grep -qa "SENT id=.*OK" && { warm=1; break; }; sleep 2; done
+for i in $(seq 1 15); do
+  blog_since "$Lw" > "$OUT/p4-warm.txt"
+  [ "$(fwd_count "$OUT/p4-warm.txt")" -ge 1 ] && { warm=1; break; }; sleep 2
+done
 [ -n "$warm" ] && log "P4: warm-up forwarded (suppression earned)" || log "P4: WARN warm-up not forwarded"
 sleep 3
 L0=$(blog_len)
@@ -218,17 +234,18 @@ fire_info "A0T bridged" > /dev/null 2>&1        # toast #2: must be suppressed n
 sent=""
 for i in $(seq 1 15); do
   blog_since "$L0" > "$OUT/p4-blog.txt"
-  grep -qa "SENT id=.*OK" "$OUT/p4-blog.txt" && { sent=1; break; }; sleep 2
+  [ "$(fwd_count "$OUT/p4-blog.txt")" -ge 1 ] && { sent=1; break; }; sleep 2
 done
 # dom0 side: NOT graded by window list (geom cannot see dom0-native bubbles, see the P2
-# detector block) - the SENT..OK ack above IS the dom0-delivery evidence. Explicit literal so
+# detector block) - the FWD_RTT ok=1 ack fwd_count keys on IS the dom0-delivery evidence
+# (logged only after the dom0 server's ack frame for that seq). Explicit literal so
 # the verdict never looks like a vacuously-passed check.
 domseen='n/a(no-dom0-instrument)'
 guestbanner=no
 new_or_window "$OUT/p4-guest-base.ids" "$TOASTRE" 2 p4-guest && guestbanner=yes
 sb4=$(showbanner); log "P4a introspection: $sb4 (=0 -> warmup earned suppression, so no-banner is CORRECT and only the forward failed; =absent -> nothing was ever forwarded/suppressed)"
 if [ -n "$sent" ] && [ "$guestbanner" = no ]; then
-  verdict P4a "PASS bridged: SENT OK, no guest banner, dom0=$domseen ($sb4)"
+  verdict P4a "PASS bridged: delivery acked (FWD_RTT ok=1/SENT OK), no guest banner, dom0=$domseen ($sb4)"
 else
   cap "$OUT" p4a "$R"; verdict P4a "FAIL sent=${sent:-no} guestbanner=$guestbanner dom0=$domseen $sb4"
 fi
@@ -239,7 +256,7 @@ ctlbanner=no
 new_or_window "$OUT/p4c-guest-base.ids" "$TOASTRE" 2 p4c-guest && ctlbanner=yes
 blog_since "$L1" > "$OUT/p4c-blog.txt"
 ctlskip=$(grep -ca "skip id=" "$OUT/p4c-blog.txt" || true)
-ctlsent=$(grep -ca "SENT" "$OUT/p4c-blog.txt" || true)
+ctlsent=$(fwd_attempts "$OUT/p4c-blog.txt")   # ANY forward attempt (SENT or FWD_RTT) is a leak here
 dismiss_toasts "$CTLAUMID"   # the control toast is a persistent reminder - clear it
 if [ "$ctlbanner" = yes ] && [ "$ctlsent" = 0 ]; then
   verdict P4b "PASS control: guest banner, no bridge send (skip=$ctlskip)"
@@ -285,7 +302,10 @@ else
   if fire_info_p "A0T consent-revoked" > /dev/null 2>&1; then fired6=1; else fired6=; fi
   win6=no; new_or_window "$OUT/p6-guest-base.ids" "$TOASTRE" 2 p6-guest && win6=yes
   sleep 6   # let a (wrongly) forwarded toast reach dom0 before asserting NONE did
-  sent6=$(blog_since "$L2" 2>/dev/null | grep -ca "SENT id=.*OK" || true)
+  # fwd_attempts, not `SENT id=.*OK`: (a) a dropped SENT line (BLog write race) must not hide a
+  # leaked forward, (b) an attempted-but-rejected forward under Deny is just as much a leak.
+  blog_since "$L2" > "$OUT/p6a-blog.txt" 2>/dev/null || true
+  sent6=$(fwd_attempts "$OUT/p6a-blog.txt")
   blog_since "$Lpre" 2>/dev/null | grep -a "FATAL" > "$OUT/p6-fatal.txt" || true
   fatal6=$(grep -ca 'FATAL' "$OUT/p6-fatal.txt" || true)
   dismiss_toasts
@@ -334,13 +354,19 @@ grep -qaE "FATAL access=|connection down" "$OUT/p6b-blog.txt" && disc=1 || disc=
 if [ -n "$rec" ] && [ -n "$disc" ]; then
   # recovery cleared suppression (reconnect), so re-earn it with a warm-up (lazy suppression)
   Lw2=$(blog_len); fire_info "A0T recov-warmup" > /dev/null 2>&1
-  for i in $(seq 1 15); do blog_since "$Lw2" | grep -qa "SENT id=.*OK" && break; sleep 2; done
+  for i in $(seq 1 15); do
+    blog_since "$Lw2" > "$OUT/p6b-warm.txt"
+    [ "$(fwd_count "$OUT/p6b-warm.txt")" -ge 1 ] && break; sleep 2
+  done
   sleep 3
   L4=$(blog_len)
   snap_or "$TOASTRE" p6b-guest-base > "$OUT/p6b-guest-base.ids"
   fire_info "A0T recovered" > /dev/null 2>&1
   sent=""
-  for i in $(seq 1 15); do blog_since "$L4" | grep -qa "SENT id=.*OK" && { sent=1; break; }; sleep 2; done
+  for i in $(seq 1 15); do
+    blog_since "$L4" > "$OUT/p6b-check.txt"
+    [ "$(fwd_count "$OUT/p6b-check.txt")" -ge 1 ] && { sent=1; break; }; sleep 2
+  done
   gb=no; new_or_window "$OUT/p6b-guest-base.ids" "$TOASTRE" 2 p6b-guest && gb=yes
   [ -n "$sent" ] && [ "$gb" = no ] \
     && verdict P6b "PASS reconnect: disconnect (consent cycle) -> NEW 'connected (server version' past line $Ldis -> bridged again + re-suppressed" \
@@ -358,13 +384,14 @@ conncount0=$(blog_since 0 | grep -ca "connected (server version" || true)
 for i in 1 2 3 4 5; do fire_info "A0T burst $i" > /dev/null 2>&1; done
 sleep 25
 blog_since "$L7" > "$OUT/p7-blog.txt"
-tot=0
-coal=$(grep -aoE 'SENT coalesced x[0-9]+' "$OUT/p7-blog.txt" | grep -aoE '[0-9]+$' | paste -sd+ | bc 2>/dev/null || echo 0)
-ind=$(grep -ca "SENT id=" "$OUT/p7-blog.txt" || true)
-tot=$(( ${coal:-0} + ${ind:-0} ))
+# fwd_count = distinct acked per-toast forwards (FWD_RTT ok=1 / SENT OK, deduped) + acked
+# coalesced batch items. Replaces the SENT-only count (dropped-SENT false-FAIL, 2026-09-05:
+# id=22 was acked+dom0-dismissed but its SENT line was lost -> tot=4) AND the old
+# `paste|bc` coalesced sum, which was silently ALWAYS empty on this rig (bc not installed).
+tot=$(fwd_count "$OUT/p7-blog.txt")
 conncount1=$(blog_since 0 | grep -ca "connected (server version" || true)
 if [ "$tot" -ge 5 ] && [ "$conncount1" = "$conncount0" ]; then
-  verdict P7 "PASS burst: $tot accounted (coalesced=$coal individual=$ind), connection reused"
+  verdict P7 "PASS burst: $tot accounted (distinct acked ids + acked coalesced items), connection reused"
 else
   verdict P7 "FAIL burst tot=$tot conns $conncount0->$conncount1"
 fi
@@ -401,7 +428,8 @@ L8=$(blog_len) || { log "P8 WARN: blog_len unreadable after retries - using a hi
 snap_or "$TOASTRE" p8-guest-base > "$OUT/p8-guest-base.ids"
 fire_info_p "A0T legacy" > /dev/null 2>&1   # persistent: geom must catch the o-r window
 lgwin=no; new_or_window "$OUT/p8-guest-base.ids" "$TOASTRE" 2 p8-guest && lgwin=yes
-lgsent=$(blog_since "$L8" 2>/dev/null | grep -ca "SENT" || true)
+blog_since "$L8" > "$OUT/p8-blog.txt" 2>/dev/null || true
+lgsent=$(fwd_attempts "$OUT/p8-blog.txt")   # ANY forward attempt while the bridge must be off
 sb8=$(showbanner); log "P8 introspection: $sb8 (=0 with no bridge -> a LEFTOVER suppression the disabled bridge never restored, a REAL product bug; =absent -> legacy toast took the window path or did not fire)"
 dismiss_toasts
 if [ -z "$hbseen" ] && [ "$lgwin" = yes ] && [ "${lgsent:-0}" = 0 ]; then

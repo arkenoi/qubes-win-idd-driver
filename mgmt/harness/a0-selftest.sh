@@ -91,6 +91,17 @@ done
 running=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$2!="Halted" && $1 ~ /^(win(10|11)|prime-)/ {print $1}')
 [ -z "${running// /}" ] || fatal "not all Halted: $running (VM-mutating jobs run serially)"
 
+# ---------- S0b fwd delivery detectors (pure text, no VM contact) ---------------------------
+# fwd_count/fwd_attempts seen-to-fail proof (a0-lib.sh fixtures): must count the dropped-SENT
+# shape (FWD_RTT ok=1 with no SENT - the 2026-09-05 BLog write-race regression), dedupe the
+# FWD_RTT/SENT pair, take only ACKED coalesced batches, read 0 on undelivered/clean windows,
+# and resist title-embedded forgeries. Runs before any VM cost so a broken detector aborts cheap.
+if fwd_selftest; then
+  st fwd_detectors PASS "fixtures: delivered->5 undelivered->0 clean->0, attempts fire only on real attempt lines"
+else
+  fatal "fwd_selftest failed (see MISMATCH line above) - delivery counting unreliable, full run would grade blind"
+fi
+
 # ---------- S1 prime ONE guest --------------------------------------------------------------
 log "S1: prime-run $BASE -> $VM (job ours, payload $SETUP)"
 ./mgmt/harness/prime-run.sh "$BASE" "$VM" ours --payload "$SETUP" > "$OUT/prime.log" 2>&1
@@ -191,18 +202,19 @@ printf '%s\n' "$fout" > "$OUT/s7-fire.txt"
 fired=no
 printf '%s' "$fout" | grep -a 'FIRED' | grep -qav 'never confirmed FIRED' && fired=yes
 
-# fire_confirms: rc==0, FIRED captured, and the forward proven end to end by a SENT..OK line
-# VISIBLE PAST the pre-fire offset (this also proves blog_since's Skip semantics against the
-# same offset blog_len produced - the pairing the constant-10 bug silently broke).
+# fire_confirms: rc==0, FIRED captured, and the forward proven end to end by a delivery ack
+# (fwd_count >= 1: FWD_RTT ok=1 or SENT..OK - NOT the bare SENT grep, whose line BLog's write
+# race can drop) VISIBLE PAST the pre-fire offset (this also proves blog_since's Skip semantics
+# against the same offset blog_len produced - the pairing the constant-10 bug silently broke).
 sent=no
 if [ -n "$Lpre" ]; then
   for i in $(seq 1 15); do
     blog_since "$Lpre" > "$OUT/s7-blog.txt"
-    grep -qa "SENT id=.*OK" "$OUT/s7-blog.txt" && { sent=yes; break; }; sleep 2
+    [ "$(fwd_count "$OUT/s7-blog.txt")" -ge 1 ] && { sent=yes; break; }; sleep 2
   done
 fi
 if [ "$frc" -eq 0 ] && [ "$fired" = yes ] && [ "$sent" = yes ]; then
-  st fire_confirms PASS "fire rc=0, FIRED line captured ($OUT/s7-fire.txt), SENT id..OK visible past offset ${Lpre}"
+  st fire_confirms PASS "fire rc=0, FIRED line captured ($OUT/s7-fire.txt), delivery ack (fwd_count>=1) visible past offset ${Lpre}"
 else
   st fire_confirms FAIL "rc=$frc fired=$fired sent=$sent offset=${Lpre:-unreadable} (fire transcript: $(printf '%s' "$fout" | tr '\n' ';' | head -c 160))"
 fi
@@ -218,16 +230,17 @@ else
 fi
 
 # blog_len_is_real: the count must have GROWN by a plausible small amount across the confirmed
-# fire, and the just-counted SENT line must sit BEHIND the new offset. A constant reading (the
-# old banner-matched 10) cannot grow; an overcount hides the SENT line from blog_since (caught
-# above); an undercount re-shows it past the post offset (caught here). Both directions bite.
+# fire, and the just-counted forward evidence must sit BEHIND the new offset (fwd_attempts, so
+# a surviving FWD_RTT line counts even where the SENT line was drop-raced). A constant reading
+# (the old banner-matched 10) cannot grow; an overcount hides the forward from blog_since
+# (caught above); an undercount re-shows it past the post offset (caught here). Both bite.
 if [ -n "$Lpre" ]; then
   if Lpost=$(blog_len); then
     delta=$((Lpost - Lpre))
     blog_since "$Lpost" > "$OUT/s7-blogpost.txt"
-    resent=$(grep -ca "SENT id=" "$OUT/s7-blogpost.txt" || true)
+    resent=$(fwd_attempts "$OUT/s7-blogpost.txt")
     if [ "$delta" -ge 1 ] && [ "$delta" -le 40 ] && [ "${resent:-0}" = 0 ]; then
-      st blog_len_is_real PASS "pre=$Lpre post=$Lpost delta=$delta, counted SENT line hidden behind post offset - a constant/banner-matched count cannot produce this"
+      st blog_len_is_real PASS "pre=$Lpre post=$Lpost delta=$delta, counted forward evidence hidden behind post offset - a constant/banner-matched count cannot produce this"
     else
       st blog_len_is_real FAIL "pre=$Lpre post=$Lpost delta=$delta resent-past-offset=${resent:-?} (delta=0 => constant reading a la the 10-bug; delta>40 => miscount; resent>0 => undercount; NOTE if fire_confirms also failed, the bridge may have written nothing - fix that first)"
     fi
@@ -250,7 +263,7 @@ fi
 # process on this guest to kill (one notifhost.exe = the --bridge; the vchan rides a
 # WMI-unidentifiable qrexec-wrapper.exe, and killing all wrappers would sever qtest's own
 # qrexec). The reconnect capability is now asserted by the full harness's P6b (consent
-# Deny->exit->Allow->reconnect), whose only instruments are blog_since/hb_state/SENT-line greps
+# Deny->exit->Allow->reconnect), whose only instruments are blog_since/hb_state/fwd_count greps
 # - already validated here by blog_len_is_real, hb_state_up and fire_confirms. Nothing new to
 # floor-validate, so no replacement check is added (no orphaned st line).
 

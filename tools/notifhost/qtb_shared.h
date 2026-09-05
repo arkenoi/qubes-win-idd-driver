@@ -126,8 +126,23 @@ inline void BLog(const wchar_t* fmt, ...)
     WIN32_FILE_ATTRIBUTE_DATA fad;
     if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fad) && fad.nFileSizeLow > 1024 * 1024)
         MoveFileExW(path.c_str(), (path + L".old").c_str(), MOVEFILE_REPLACE_EXISTING);
-    HANDLE f = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
-                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    // FILE_SHARE_WRITE + bounded retry (2026-09-05): with share-READ-only, two concurrent
+    // writers (the main loop's SENT vs the shadow worker's CLASSIFY since 5133293, or a
+    // second notifhost process: --restore-banners / relay) collide in ERROR_SHARING_VIOLATION
+    // and the losing line was SILENTLY DROPPED. Proven in the 2026-09-05 A0 run: ids 15/20/22
+    // were forwarded+acked (FWD_RTT ok=1, dom0 Dismissed callback) but their SENT lines never
+    // landed, false-failing P4a/P6b/P7 on SENT-keyed detectors. FILE_APPEND_DATA keeps each
+    // WriteFile an atomic append, so write-sharing is safe; the short retry covers an external
+    // reader holding a deny-write handle for a moment. A drop after retries still exits
+    // silently - logging cannot be allowed to fail the caller.
+    HANDLE f = INVALID_HANDLE_VALUE;
+    for (int attempt = 0; attempt < 5; attempt++)
+    {
+        f = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (f != INVALID_HANDLE_VALUE || GetLastError() != ERROR_SHARING_VIOLATION) break;
+        Sleep(2);
+    }
     if (f == INVALID_HANDLE_VALUE) return;
     std::string u = Utf8(line);
     DWORD wr; WriteFile(f, u.data(), (DWORD)u.size(), &wr, nullptr);
