@@ -236,7 +236,7 @@ try {
     $existing = Get-LocalUser -Name $AccountName -ErrorAction SilentlyContinue
     if ($null -eq $existing) {
         New-LocalUser -Name $AccountName -Password $secPw `
-            -Description 'Qubes Tools: least-privilege ETW consumer proxy (notifhost --etw-proxy). No group memberships; batch logon only; password set in-memory by the gui-agent at each launch.' `
+            -Description 'Qubes Tools least-privilege ETW proxy' `
             -PasswordNeverExpires -AccountNeverExpires -UserMayNotChangePassword -ErrorAction Stop | Out-Null
         Say "ok     created local account $AccountName (no implicit groups)"
     } else {
