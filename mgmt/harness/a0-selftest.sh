@@ -250,12 +250,15 @@ fi
 if ! Lk=$(blog_len); then
   st killrelay_truthful FAIL "blog_len unreadable before the kill - no offset to anchor reconnect evidence"
 else
-  raspush guest/a0-kill-relay.ps1 "" "ak$RANDOM" > "$OUT/s9-kill.txt" 2>&1
+  # AS SYSTEM (pushrun -> qubes.VMShell), NOT run-as-user: only SYSTEM sees notifhost.exe and its
+  # --relay command line (the identification key). run-as-user's limited token returned an empty
+  # list, making KILLED-RELAY=0 vacuous (audit 2026-09-05).
+  QTEST_VM=$VM timeout -k 8 90 ./tools/qtest pushrun guest/a0-kill-relay.ps1 > "$OUT/s9-kill.txt" 2>&1
   killed=$(grep -aoE 'KILLED-RELAY=[0-9]+' "$OUT/s9-kill.txt" | head -1 | grep -aoE '[0-9]+$')
   if [ -z "$killed" ]; then
     log "TRANSIENT: kill-relay returned no KILLED-RELAY line (raw: $(head -c 200 "$OUT/s9-kill.txt" | tr '\n' ';')); retrying once in 10s"
     sleep 10
-    raspush guest/a0-kill-relay.ps1 "" "ak$RANDOM" > "$OUT/s9-kill2.txt" 2>&1
+    QTEST_VM=$VM timeout -k 8 90 ./tools/qtest pushrun guest/a0-kill-relay.ps1 > "$OUT/s9-kill2.txt" 2>&1
     killed=$(grep -aoE 'KILLED-RELAY=[0-9]+' "$OUT/s9-kill2.txt" | head -1 | grep -aoE '[0-9]+$')
   fi
   recon=no
@@ -271,7 +274,7 @@ else
   if [ "${killed:-0}" -ge 1 ] 2>/dev/null && [ "$recon" = yes ]; then
     st killrelay_truthful PASS "KILLED-RELAY=$killed + NEW 'connection down' + fresh 'connected (server version' past offset $Lk"
   else
-    st killrelay_truthful FAIL "killed='${killed:-absent}' recon=$recon (0/absent = role-based kill found no relay, vacuous; no down+reconnect past $Lk = kill did not sever the live connection) markers: $(grep -haoE 'RELAY-KILL-[A-Z]+=[^[:space:]]*' "$OUT"/s9-kill*.txt 2>/dev/null | tr '\n' ' ' | head -c 200)"
+    st killrelay_truthful FAIL "killed='${killed:-absent}' recon=$recon (0/absent = SYSTEM cmdline kill found no --relay proc, or enumeration blind; no down+reconnect past $Lk = kill did not sever the live connection) markers: $(grep -haoE 'RELAY-KILL-[A-Z]+=[^[:space:]]*' "$OUT"/s9-kill*.txt 2>/dev/null | tr '\n' ' ' | head -c 200)"
   fi
 fi
 

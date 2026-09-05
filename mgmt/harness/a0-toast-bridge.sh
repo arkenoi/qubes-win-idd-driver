@@ -330,7 +330,11 @@ log "P6c: kill the relay -> banners restored, then auto-reconnect"
 if ! L5=$(blog_len); then
   verdict P6c "INSTRUMENT blog_len unreadable before relay kill - no offset to anchor reconnect evidence, NOT graded"
 else
-  raspush guest/a0-kill-relay.ps1 "" a0k$RANDOM > "$OUT/p6c-kill.txt" 2>&1
+  # Run the relay-kill AS SYSTEM (pushrun -> qubes.VMShell), NOT run-as-user: only SYSTEM can
+  # enumerate notifhost.exe AND read its --relay command line, which is how the relay is now
+  # identified (guest/a0-kill-relay.ps1). run-as-user's limited token returned an empty process
+  # list, making KILLED-RELAY=0 a vacuous pass (audit 2026-09-05).
+  QTEST_VM=$VM timeout -k 8 90 ./tools/qtest pushrun guest/a0-kill-relay.ps1 > "$OUT/p6c-kill.txt" 2>&1
   killed=$(grep -aoE 'KILLED-RELAY=[0-9]+' "$OUT/p6c-kill.txt" | head -1 | grep -aoE '[0-9]+$')
   log "P6c: KILLED-RELAY=${killed:-absent} $(grep -aoE 'RELAY-KILL-[A-Z]+=[^[:space:]]*' "$OUT/p6c-kill.txt" | tr '\n' ' ')"
   if [ "${killed:-0}" -lt 1 ]; then

@@ -1,47 +1,51 @@
-# a0-kill-relay.ps1 — kill the toast-bridge's --relay child (the qrexec/vchan splice) without
-# touching the resident --bridge, to prove the bridge notices the dropped connection, restores
-# banners, and auto-reconnects. Run as the user (both processes live in the user session).
+# a0-kill-relay.ps1 — kill the toast-bridge's --relay child(ren) WITHOUT touching the resident
+# --bridge, to prove the bridge notices the dropped connection, restores banners, and reconnects.
 #
-# Do NOT select by CommandLine: the relay is spawned by the qrexec-agent service, so its
-# Win32_Process CommandLine reads NULL from this limited-token session — a `-match '--relay'`
-# filter matches nothing and KILLED-RELAY=0 let P6c pass vacuously (audit 2026-09-05).
-# Discriminate by ROLE instead, from facts in tools/notifhost/notifhost.cpp:
-#   - only BridgeMain holds the named mutex 'Local\QubesToastBridgeSingleton' (and rewrites
-#     the heartbeat); the relay holds no mutex and touches no files;
-#   - the bridge strictly PREDATES any relay — the relay is spawned by the bridge's own
-#     ConnUp (via qrexec-client-vm -> qrexec-agent), so with the bridge mutex live the OLDEST
-#     notifhost.exe is the bridge and everything younger is relay(s).
-# Kill the non-bridge processes, then RE-CHECK they are gone and report only CONFIRMED kills
-# (the old `$n++` after `Stop-Process -EA SilentlyContinue` counted failed kills too).
+# RUN AS SYSTEM (qtest pushrun -> qubes.VMShell), NOT run-as-user. Rationale (audit 2026-09-05):
+#   - Under the old run-as-user LIMITED token, Get-CimInstance/Get-Process returned an empty or
+#     CommandLine=NULL process list, so RELAY-KILL-PROCS was empty and KILLED-RELAY=0 was VACUOUS
+#     (the harness then passed P6c/killrelay without ever severing a connection).
+#   - As SYSTEM the FULL process list and every process CommandLine are visible, so the relay is
+#     identified DIRECTLY and robustly: the notifhost.exe whose command line contains "--relay"
+#     (spawned per-connection by ConnUp via qrexec-client-vm; see tools/notifhost/notifhost.cpp).
+#     The resident bridge's command line contains "--bridge --agent-pid" instead, so the two never
+#     collide and no age/mutex heuristic is needed.
+#   - The Local\ singleton mutex is PER-SESSION and invisible from SYSTEM's session 0, so the old
+#     mutex heuristic cannot be used from this context — CommandLine matching replaces it.
 $ErrorActionPreference = 'Continue'
 
-# CIM for enumeration + CreationDate (the WMI provider fills these even where a direct
-# process-handle StartTime query would be refused); Stop-Process for the kill itself.
+# CIM enumeration (as SYSTEM this fills ProcessId + CommandLine for every notifhost.exe).
 $procs = @(Get-CimInstance Win32_Process -Filter "Name='notifhost.exe'" |
+           Select-Object ProcessId, CommandLine, CreationDate |
            Sort-Object CreationDate)
 Write-Output ("RELAY-KILL-PROCS=" + (($procs | ForEach-Object { $_.ProcessId }) -join ','))
 
-$bridgeUp = $false
-$m = $null
-try {
-    if ([System.Threading.Mutex]::TryOpenExisting('Local\QubesToastBridgeSingleton', [ref]$m)) {
-        $bridgeUp = $true; $m.Dispose()
-    }
-} catch { $bridgeUp = $true }   # open failed but the mutex EXISTS => a bridge is alive
-Write-Output ("RELAY-KILL-BRIDGEMUTEX=" + $(if ($bridgeUp) { 'live' } else { 'absent' }))
+# Direct role identification from the command line (visible as SYSTEM). Substring match via -like
+# so the '--' is treated literally, not as a regex.
+$relays  = @($procs | Where-Object { $_.CommandLine -like '*--relay*' })
+$bridges = @($procs | Where-Object { $_.CommandLine -like '*--bridge*' })
+Write-Output ("RELAY-KILL-RELAYS=" + (($relays  | ForEach-Object { $_.ProcessId }) -join ','))
+Write-Output ("RELAY-KILL-BRIDGE=" + (($bridges | ForEach-Object { $_.ProcessId }) -join ','))
 
 $victims = @()
-if ($bridgeUp -and $procs.Count -ge 2) {
-    $victims = @($procs | Select-Object -Skip 1)   # spare the oldest: that is the bridge
-    Write-Output ("RELAY-KILL-SPARED=" + $procs[0].ProcessId)
-} elseif (-not $bridgeUp) {
-    # no live bridge => nothing is safely identifiable as ITS relay; report 0 truthfully
-    # (the harness turns KILLED-RELAY=0 into an INSTRUMENT verdict, not a pass)
-    Write-Output "RELAY-KILL-NOTE=no-bridge-mutex"
+if ($relays.Count -ge 1) {
+    $victims = $relays                                   # the normal, direct path
+} elseif (@($procs | Where-Object { $_.CommandLine }).Count -eq 0 -and $procs.Count -ge 2) {
+    # FALLBACK — should NOT happen as SYSTEM. No CommandLine on any notifhost at all: the bridge
+    # strictly predates its relay (the relay is spawned by the bridge's own ConnUp), so spare the
+    # OLDEST and treat the rest as relay. Logged distinctly so a fallback kill is never mistaken
+    # for a direct one, and never fires when there is only one notifhost (nothing safe to kill).
+    $victims = @($procs | Select-Object -Skip 1)
+    Write-Output ("RELAY-KILL-NOTE=cmdline-unavailable-age-fallback-spared=" + $procs[0].ProcessId)
+} elseif ($procs.Count -lt 2) {
+    Write-Output "RELAY-KILL-NOTE=no-relay-present"      # bridge only / not connected -> truthful 0
+} else {
+    Write-Output "RELAY-KILL-NOTE=no-relay-cmdline-match"
 }
 
 foreach ($v in $victims) { Stop-Process -Id $v.ProcessId -Force -EA SilentlyContinue }
 Start-Sleep -Milliseconds 1500
+# Report only CONFIRMED kills (re-check each victim is actually gone), never the attempt count.
 $n = 0
 foreach ($v in $victims) {
     if (Get-Process -Id $v.ProcessId -EA SilentlyContinue) {
