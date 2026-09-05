@@ -113,7 +113,7 @@ elif ! python3 protocol/run.py verdicts --campaign "$cid" | grep -q '^VERDICT: '
   fail=1
 else
   v=$(python3 protocol/run.py verdicts --campaign "$cid" | grep '^VERDICT: ')
-  echo "ok: whole campaign (spine+P2..P5) walked judge-free to '$v' - zero operator input,"
+  echo "ok: whole campaign (spine+P2..P6) walked judge-free to '$v' - zero operator input,"
   echo "    no --auto-answer-truth (EXECUTED WITH GAPS is the honest autonomous ceiling: the"
   echo "    BLOCKED/ATTENDED-PENDING declares and the live-fail-proof rule stay untouched)"
 fi
