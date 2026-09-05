@@ -105,6 +105,15 @@
             Source  = 'guest/VMExec.ps1'
             Package = 'msi-image/PFiles64/Qubes Tools/qubes-rpc-services/VMExec.ps1'
         }
+        @{
+            # ETW-proxy account provisioning (DESIGN-p3-classifier-impl.md sec 10.14):
+            # Install-QwtImproved.ps1 stage 2 runs it from the payload root. Listed so CI
+            # FAILS the moment make-setup.ps1 stops staging it - a provisioning script that
+            # exists but does not ship provisions NO guest (the 4.3.18 de-slice-broker
+            # inert-clean-install class).
+            Source  = 'guest/provision-etwproxy-account.ps1'
+            Package = 'provision-etwproxy-account.ps1'
+        }
     )
 
     # --------------------------------------------------------------------------- Binaries

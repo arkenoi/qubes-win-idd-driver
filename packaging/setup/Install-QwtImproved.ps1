@@ -1958,6 +1958,49 @@ function Invoke-Stage2 {
         $script:Result.detail.qrexec_bins = 'not-in-payload'
     }
 
+    # --- ETW-proxy least-privilege account (notification bridge, ETW tier) --------------
+    # Provisions the dedicated qubes-etwproxy account the SYSTEM gui-agent will use to
+    # launch `notifhost.exe --etw-proxy` (DESIGN-p3-classifier-impl.md sec 10.14, revised
+    # by the capability-grant split): NO group memberships at all (the agent grants the
+    # consumer TRACELOG_ACCESS_REALTIME on the one trace session instead of PLU), explicit
+    # SeBatchLogonRight, batch logon only (interactive/remote/network DENIED), a throwaway
+    # random password VALIDATED with a real batch LogonUser then DISCARDED (no secret at
+    # rest - the agent sets a fresh in-memory password at every launch), outbound-block
+    # firewall rule, a log ACE scoped to the proxy's own etw-proxy.log in the standard QWT
+    # log dir, a deny-write ACE on the bridge state dir, and removal of the retired LSA
+    # secret + QubesEtwProxyGuard boot task on upgrade.
+    # Runs AFTER the bin overlay so notifhost.exe is already next to gui-agent.exe.
+    # THE SCRIPT NEVER FAILS THE INSTALL: on a managed/hardened image that refuses any step
+    # it logs, reports provisioned=0 in its trailer, and exits 0 - the bridge's ETW tier
+    # then simply stays down and the classifier serves from the listener/DB rungs
+    # (fail-open). Absence of the script from the payload is loud for the same reason the
+    # qrexec-bins warning above is: a provisioning step that does not ship runs on NO guest
+    # (the 4.3.18 de-slice-broker inert-clean-install gap).
+    $etwProv = Join-Path $Root 'provision-etwproxy-account.ps1'
+    if (Test-Path -LiteralPath $etwProv) {
+        Write-Log 'provisioning the least-privilege ETW proxy account (qubes-etwproxy)'
+        try {
+            $po = & $etwProv 2>&1
+            foreach ($l in @($po | Select-Object -Last 8)) { Write-Log "  $l" }
+            $tr = @($po) | Where-Object { $_ -match '=== RESULT === provisioned=(\d)' } | Select-Object -Last 1
+            if ($tr -match 'provisioned=1') {
+                $script:Result.detail.etwproxy_account = 'provisioned'
+                Write-Log 'ETW proxy account provisioned (zero-groups, batch-validated, no credential at rest)'
+            } else {
+                $reason = if ($tr -match 'reason=([A-Za-z0-9-]+)') { $Matches[1] } else { 'unknown' }
+                $script:Result.detail.etwproxy_account = "skipped:$reason"
+                Write-Log "ETW proxy account NOT provisioned ($reason) - the notification bridge's" 'WARN'
+                Write-Log '  ETW tier stays down; toasts still classify via the listener/DB path' 'WARN'
+            }
+        } catch {
+            Write-Log "ETW proxy provisioning failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+            $script:Result.detail.etwproxy_account = "error: $($_.Exception.Message)"
+        }
+    } else {
+        Write-Log 'provision-etwproxy-account.ps1 not in payload - ETW proxy account not provisioned' 'WARN'
+        $script:Result.detail.etwproxy_account = 'not in payload'
+    }
+
     # --- reboot audit: keep the evidence of WHY a restart happened ----------------------
     # An AppVM's System log is on the volatile C:, so Event 1074 - the record naming who asked
     # for a restart - is destroyed by the restart it describes. Without it a guest that reboots

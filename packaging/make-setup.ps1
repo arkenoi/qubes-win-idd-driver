@@ -144,6 +144,16 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\disable-session-lock.ps1') 'session-
 # screen: no qrexec session for dom0 to use, and in seamless mode nothing displayed at all.
 # Validates the credentials before writing anything and stores the password as an LSA secret.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\set-autologon.ps1') 'autologon arming script') $OutDir -Force
+# ETW-proxy account provisioning (DESIGN-p3-classifier-impl.md sec 10.14, capability-grant
+# split): creates the least-privilege qubes-etwproxy account (ZERO group memberships - no
+# Performance Log Users; explicit SeBatchLogonRight; batch logon only; NO credential at rest,
+# the SYSTEM agent sets a fresh in-memory password per launch) that the agent uses to launch
+# `notifhost --etw-proxy`. Invoked by Install-QwtImproved.ps1 stage 2; ALWAYS exits 0
+# (a managed image that refuses it degrades to the listener/DB rung, never fails the
+# install). Staged here because a provisioning step that is not on the medium runs on NO
+# guest - the exact 4.3.18 de-slice-broker inert-clean-install gap, in script form; the
+# ours-wins guard (packaging/ours-wins.psd1) fails CI if this line and that entry disagree.
+Copy-Item (Need (Join-Path $RepoRoot 'guest\provision-etwproxy-account.ps1') 'ETW proxy account provisioning') $OutDir -Force
 # Reboot audit: on an AppVM the System log dies with every restart, taking Event 1074 (who asked
 # for it) with it - so an unattended reboot cannot be told apart from a dom0-requested one after
 # the fact. Event-triggered tasks copy those records onto the private volume as they are written.
