@@ -44,7 +44,9 @@ VM="${2:-win10-a0tb-floor}"
 BASE="${3:-win10-base}"
 
 TS=$(date -u +%Y%m%d-%H%M%S)
-OUT="scratchpad/a0-selftest-$TS"; mkdir -p "$OUT"
+# A0_OUT: optional evidence-dir override for the protocol wrapper (see a0-toast-bridge.sh).
+# Default stays the gitignored scratchpad dir; A0_OUT must never point inside a tracked path.
+OUT="${A0_OUT:-scratchpad/a0-selftest-$TS}"; mkdir -p "$OUT"
 R="$OUT/results.log"; : > "$R"
 log(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$R"; }
 

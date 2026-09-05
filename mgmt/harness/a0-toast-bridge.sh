@@ -34,7 +34,11 @@ VM="${2:-win10-a0tb}"
 BASE="${3:-win10-base}"
 
 TS=$(date -u +%Y%m%d-%H%M%S)
-OUT="scratchpad/a0-toast-bridge-$TS"; mkdir -p "$OUT"
+# A0_OUT: optional evidence-dir override for the protocol wrapper (protocol/steps/p6-toast-bridge.json
+# points it under the campaign's ACCEPT_OUT, outside the repo, so the follow-up probes can address
+# verdicts.txt deterministically). Default stays the gitignored scratchpad dir; A0_OUT must likewise
+# never point inside a tracked path - captures never enter the repo.
+OUT="${A0_OUT:-scratchpad/a0-toast-bridge-$TS}"; mkdir -p "$OUT"
 R="$OUT/results.log"; : > "$R"
 log(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$R"; }
 verdict(){ log "VERDICT $1: $2"; echo "$1|$2" >> "$OUT/verdicts.txt"; }
@@ -85,7 +89,7 @@ pst_no=$(path_state 'C:\ProgramData\qubes-toast-bridge\__nope_selftest_marker__'
 if [ "$pst_yes" = PRESENT ] && [ "$pst_no" = ABSENT ]; then
   log "P1c: heartbeat instrument self-test OK (present->$pst_yes absent->$pst_no)"
 else
-  verdict P1c "FAIL heartbeat instrument self-test present='$pst_yes' absent='$pst_no' - probe unreliable, aborting"; exit 1
+  verdict P1c "INSTRUMENT heartbeat self-test present='$pst_yes' absent='$pst_no' - probe unreliable, aborting (instrument-class, not a bridge verdict)"; exit 1
 fi
 # hb_fresh's FRESHNESS discriminator must ALSO be shown both ways (the P8 hbseen=1 false-fail was a
 # STALE heartbeat read as "running"): a just-written file reads PRESENT (fresh); an old-but-existing
@@ -98,7 +102,7 @@ qrun "cmd /c del C:\\ProgramData\\__hbself__" >/dev/null 2>&1
 if [ "$hbf_fresh" = PRESENT ] && [ "$hbf_stale" = ABSENT ]; then
   log "P1c: heartbeat FRESHNESS self-test OK (fresh->$hbf_fresh stale->$hbf_stale)"
 else
-  verdict P1c "FAIL heartbeat freshness self-test fresh='$hbf_fresh' stale='$hbf_stale' - mtime probe unreliable, aborting"; exit 1
+  verdict P1c "INSTRUMENT heartbeat freshness self-test fresh='$hbf_fresh' stale='$hbf_stale' - mtime probe unreliable, aborting (instrument-class, not a bridge verdict)"; exit 1
 fi
 
 # P1d READINESS GATE for the user-session fire path. The FIRST run-as-user fire after a cold boot
@@ -126,14 +130,14 @@ for i in $(seq 1 40); do
 done
 if [ -z "$p1d_active" ]; then
   printf '%s\n' "$qu" > "$OUT/p1d-lastquser.txt"
-  verdict P1d "FAIL no Active interactive session in ~20 min (install still settling?); last query user: $(printf '%s' "$qu" | tr '\n' '|' | head -c 300)"; exit 1
+  verdict P1d "INSTRUMENT no Active interactive session in ~20 min (install still settling?) - fire path never became usable, not a bridge verdict; last query user: $(printf '%s' "$qu" | tr '\n' '|' | head -c 300)"; exit 1
 fi
 # Confirm the fire path actually works now, and keep the run-as-user output for the record.
 fout=$(fire_raw "-Title 'A0T warmup-prime'" "warm$RANDOM"); printf '%s\n' "$fout" > "$OUT/p1d-fire.txt"
 if printf '%s' "$fout" | grep -qa FIRED; then
   log "P1d: fire path READY (Active session + confirmed FIRED)"
 else
-  verdict P1d "FAIL session Active but fire still not FIRED: $(printf '%s' "$fout" | grep -a 'RUNASUSER\|error' | head -1)"; exit 1
+  verdict P1d "INSTRUMENT session Active but fire still not FIRED (fire instrument unusable, not a bridge verdict): $(printf '%s' "$fout" | grep -a 'RUNASUSER\|error' | head -1)"; exit 1
 fi
 dismiss_toasts
 

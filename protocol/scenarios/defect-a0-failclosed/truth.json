@@ -1,0 +1,24 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "DONE",
+  "ledger": [
+   {
+    "check": "a0-instrument-floor",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "a0-no-instrument-misses",
+    "verdict": "PASS(-UNPROVEN)?"
+   },
+   {
+    "check": "a0-failopen-proven",
+    "verdict": "FAIL"
+   }
+  ],
+  "ledger_absent": [
+   "a0-suite-verdicts",
+   "a0-dom0-visual"
+  ]
+ }
+}

@@ -1,0 +1,123 @@
+{
+  "part": "p6-toast-bridge",
+  "comment": "P6 - toast-bridge A0 acceptance (docs/DESIGN-toast-bridge.md Proposal C: notifhost --bridge, agent NotifyBridge gate/supervision, service.notify-bridge default OFF), wrapped per the established external-suite pattern (p4-bench-suite / p4-shell-run): the protocol invokes the COMMITTED standalone suite mgmt/harness/a0-toast-bridge.sh (phases P1-P8: prime from the release payload, build identity, instrument self-tests + fire-path readiness, gate-OFF baseline, cold-boot enable, allowlist split with lazy suppression, dom0-expiry record survival, consent-revoke fail-open + reconnect, burst politeness, legacy-toasts opt-out) and grades from its verdicts.txt - it never re-implements the phases as step commands. H0 applies in the decomposition direction too: the suite carries shared instrument state in a0-lib.sh (bridge.log offsets threaded P6a->P6b, lazy-suppression warm-up choreography), mid-phase cold boots via the e2e-wait three-exit primitives with kill-fallback, and per-fire retry loops - none of which a stateless single-command step can express; splitting P1-P8 into steps would hand-roll that machinery inline. GRADING ORDER mechanises V2/V3: the suite step itself asserts only a terminal line (a crash/timeout is INVALID-INSTRUMENT - nothing was graded); p6-a0-instrument-clean then routes any INSTRUMENT verdict row (an unexercised phase: a consent revoke that never landed, a fire never confirmed FIRED, blog_len unreadable, no Active session) to INVALID-INSTRUMENT, never FAIL; only then do the product checks read the rows. The fail-open safety property (gate off / consent revoked / bridge forced off => EVERY toast banners in-guest) is graded BEFORE the aggregate because a fail-closed bridge silently loses all Windows notifications - the one defect class here that is worse than no bridge. The FLOOR (a0-selftest.sh) runs FIRST and gates everything: it exercises every instrument in a0-lib.sh in BOTH directions on a primed subject - the SAME sourced code the full suite runs, one copy on purpose - and it has already caught a real crash regression live (AgentGone Toolhelp-snapshot stall, bisected b5bd232 -> fixed 71d609c). The dom0-native bubble is proven mechanically by protocol ack only (qtest-geom filters on _QUBES_VMNAME and is structurally blind to dom0 windows - audit 2026-09-05); its visual half is the ATTENDED-PENDING declare. VARS: A0SETUP = the release setup tree (the Gate-0-verified pinned payload - our code enters ONLY from the release package; in a whole campaign point it at {MATRIX_WORK}/dl/qwt-improved-setup), A0VM/A0FLOOR = suite/floor subjects (DISTINCT names: the floor leaves its subject running by contract and the full suite's P0 gate demands all win*/prime-* guests Halted, hence the release step between), A0BASE = the pristine golden the primer clones from. Evidence lands under {ACCEPT_OUT}/a0* via the harnesses' A0_OUT override (outside the repo - captures never enter a tracked path). VMLOCK: run.py holds the per-guest lock in live mode; QWT_VMLOCK_HELD={A0FLOOR}/{A0VM} lets the harness's own re-entrant vm_lock pass through instead of refusing its parent (vmlock.sh line 27, the p4 idiom).",
+  "steps": [
+    {
+      "id": "p6-outdir",
+      "kind": "action",
+      "title": "Create the part's evidence directory (evidence lands under ACCEPT_OUT, never session tmp, never a tracked path)",
+      "vars_in": ["ACCEPT_OUT"],
+      "command": "mkdir -p {ACCEPT_OUT} && echo \"OUTDIR-READY {ACCEPT_OUT}\"",
+      "expect": {"exit": 0, "stdout_re": "^OUTDIR-READY "},
+      "on_fail": {"action": "HALT_PART", "msg": "cannot create the evidence directory; fix ACCEPT_OUT and start a new campaign"}
+    },
+    {
+      "id": "p6-floor",
+      "kind": "wait",
+      "title": "A0 instrument-validation FLOOR (a0-selftest.sh): every instrument in a0-lib.sh exercised in BOTH directions on a primed subject - the SAME sourced code the full suite runs - before any bridge verdict is attempted. An instrument bug costs this run, not the marathon",
+      "requires": ["p6-outdir"],
+      "guest": "A0FLOOR",
+      "vars_in": ["A0FLOOR", "A0SETUP", "A0BASE", "ACCEPT_OUT"],
+      "command": "set -o pipefail; QWT_VMLOCK_HELD={A0FLOOR} A0_OUT={ACCEPT_OUT}/a0-floor bash mgmt/harness/a0-selftest.sh {A0SETUP} {A0FLOOR} {A0BASE} 2>&1 | tee {ACCEPT_OUT}/a0-floor-run.log",
+      "timeout_s": 4000,
+      "expect": {"exit": 0, "stdout_re": "=== done: 0 FAIL line\\(s\\)", "stdout_absent_re": "SELFTEST \\S+ FAIL|\\] FATAL "},
+      "check": "a0-instrument-floor",
+      "detail": "The floor validates INSTRUMENTS ONLY (renders no bridge verdicts): path_state/hb_fresh against ground-truth subjects both directions, the Active-session fire-path readiness, one confirmed first fire proving blog_len growth + blog_since offset pairing + the o-r window detector, showbanner readback, and the consent write-read roundtrip. Each check is ABLE to fail and its raw captures are kept. A red here means the full suite's readings would be uninterpretable in either direction - INVALID-INSTRUMENT, never a product claim (V2/V3).",
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-INSTRUMENT", "msg": "An a0-lib.sh instrument failed its own both-directions validation (or the floor crashed/timed out). Do NOT run the full suite: every downstream verdict would be a reading from an unvalidated probe - the exact 2026-09-04/05 marathon failure mode. Fix the instrument, prove it in a new floor run, then start a NEW campaign. The floor subject is evidence (G-0)."},
+      "defect": "2026-09-04/05: a full acceptance run burned ~1 h with THREE broken instruments at once - blog_len returned a CONSTANT 10 matched off the cmd.exe version banner (every blog_since offset stale: P4a false-FAIL, P7 false-PASS), heartbeat probes self-matched their own echoed command line (false P2/P3/P6/P8 verdicts), and unconfirmed fires were graded as bridge behaviour (P6a graded an UNFIRED toast 'FAIL-CLOSED DEFECT') - and nobody noticed until the post-mortem audit (f45a65e/3f6bffa/72f1903). The floor (4a0ff74) exists so an instrument bug costs one floor run; run live 2026-09-05 it caught a REAL crash regression: the bridge silently terminated on ~2/3 of forward->dismiss cycles (AgentGone's per-5s CreateToolhelp32Snapshot stalled the sole worker loop past the agent supervisor's 15 s heartbeat deadline; supervisor relaunch deletes the task first, killing the live bridge artifact-free), bisected against pre-regression 250b007f (8/8 clean) and fixed by snapshot-free OpenProcess liveness in 71d609c",
+      "falsified_by": "defect-a0-floor-fail"
+    },
+    {
+      "id": "p6-floor-release",
+      "kind": "action",
+      "title": "Release the floor subject cleanly (the floor LEAVES it running by contract; the full suite's P0 gate demands every win*/prime-* guest Halted)",
+      "requires": ["p6-floor"],
+      "guest": "A0FLOOR",
+      "vars_in": ["A0FLOOR"],
+      "command": "qvm-shutdown --wait --timeout 300 {A0FLOOR} && echo FLOOR-RELEASED",
+      "timeout_s": 400,
+      "expect": {"exit": 0, "stdout_re": "^FLOOR-RELEASED$"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The floor subject did not shut down cleanly - the full suite's own P0 all-Halted gate would refuse anyway. A guest that flips back to Transient is queued qrexec restarting it: drain per the runbook (TEMPORARY qrexec_timeout 15 -> kill -> Halted CONTINUOUSLY -> restore 6000; 15 is never left in place)."}
+    },
+    {
+      "id": "p6-a0-suite",
+      "kind": "wait",
+      "title": "The A0 toast-bridge acceptance suite (a0-toast-bridge.sh P1-P8, ~60-90 min + prime, 3 cold boots). This step does NOT grade: it asserts only that the suite reached a terminal state; the probes below classify from {ACCEPT_OUT}/a0/verdicts.txt (the p4-shell-run pattern)",
+      "requires": ["p6-floor-release"],
+      "guest": "A0VM",
+      "vars_in": ["A0VM", "A0SETUP", "A0BASE", "ACCEPT_OUT"],
+      "command": "QWT_VMLOCK_HELD={A0VM} A0_OUT={ACCEPT_OUT}/a0 bash mgmt/harness/a0-toast-bridge.sh {A0SETUP} {A0VM} {A0BASE} 2>&1 | tee {ACCEPT_OUT}/a0-run.log",
+      "timeout_s": 10800,
+      "expect": {"stdout_re": "(?s)(=== done: [0-9]+ FAIL/INSTRUMENT line\\(s\\)|\\] FATAL )"},
+      "detail": "Terminal states accepted here: the '=== done: N FAIL/INSTRUMENT line(s)' wrap (any N - the probes grade N's composition) or one of the suite's own timestamped 'FATAL ...' aborts (prime failure, no session, all-Halted refused - the probes then read the missing/partial verdicts.txt as INVALID-INSTRUMENT via V3, never as a product verdict). Only a run with NO terminal line at all - timeout or crash - fails THIS step. The suite holds the phase choreography: gate-OFF baseline FIRST on the same primed guest, one variable per phase, persistent toasts for the ~59 s/call geom, warm-up fires to earn lazy suppression before each graded fire, and the suite's own overall watchdog contract (>=130 min) is this step's timeout_s.",
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-INSTRUMENT", "msg": "The suite produced no terminal line (timeout or crash). NOTHING about the bridge was graded - this is missing data (V3), not a bridge verdict in either direction. The subject's state is evidence (G-0): leave it up, read {ACCEPT_OUT}/a0-run.log and the suite's own results.log before anything else."},
+      "defect": "a suite that dies mid-phase leaves verdicts.txt partial, and grading partial data as product behaviour is the missing-data class (V3): the 2026-09-05 crash regression killed the bridge mid-run repeatedly, and the 2026-09-04 instrument-broken runs aborted at P2 - in both shapes the un-emitted later phases must read as UNGRADED, never as passed or failed",
+      "falsified_by": "defect-a0-suite-crash"
+    },
+    {
+      "id": "p6-a0-instrument-clean",
+      "kind": "probe",
+      "title": "V2/V3 gate: NO phase was left unexercised - an INSTRUMENT verdict row (consent revoke never landed, fire never confirmed FIRED, blog_len unreadable, no Active session) is a broken instrument, routed to INVALID-INSTRUMENT here and NEVER folded into a product FAIL",
+      "requires": ["p6-a0-suite"],
+      "guest": "A0VM",
+      "vars_in": ["ACCEPT_OUT"],
+      "command": "awk '/\\|INSTRUMENT/ {n++; print \"INSTRUMENT-ROW \" $0} END{print \"INSTRUMENT-ROWS \" n+0}' {ACCEPT_OUT}/a0/verdicts.txt",
+      "expect": {"exit": 0, "stdout_re": "^INSTRUMENT-ROWS 0$", "stdout_absent_re": "^INSTRUMENT-ROW "},
+      "check": "a0-no-instrument-misses",
+      "detail": "The suite's phases emit '<phase>|INSTRUMENT ...' when the stimulus or probe itself failed (72f1903 made the exit gate count these; the P1c/P1d self-test aborts emit the same word). A verdicts.txt that cannot be read at all also fails here (awk error output, never a silent default). An INSTRUMENT row means that phase's product behaviour is UNKNOWN - the campaign must not proceed to grade the aggregate as if the phase had run.",
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-INSTRUMENT", "msg": "At least one suite phase was never actually exercised (or verdicts.txt is unreadable). Missing data fails the INSTRUMENT, never the product (V3), and is never folded into FAIL (V2). Read the printed INSTRUMENT-ROW lines: each names what failed to land (consent revoke, fire, blog_len). Fix the instrument, new campaign; the subject is evidence (G-0)."},
+      "defect": "audit 2026-09-05: P6a graded an UNFIRED toast as 'FAIL-CLOSED DEFECT' (the fire had silently no-oped) and a silently-failed consent revoke let P6a false-PASS - both were instrument misses masquerading as product verdicts until the phases learned to emit INSTRUMENT rows and the exit gate learned to count them (abd6276/72f1903); folding those rows into FAIL misattributes the instrument to the product, ignoring them reads an ungraded phase as green",
+      "falsified_by": "defect-a0-instrument-verdict"
+    },
+    {
+      "id": "p6-a0-failopen",
+      "kind": "probe",
+      "title": "THE safety property, graded before the aggregate: fail-open in all three arms - gate OFF banners in-guest (P2), consent REVOKED banners in-guest with ZERO dom0 forward (P6a), legacy-toasts opt-out forces the bridge off and the toast takes the window path (P8). A fail-closed bridge silently loses every Windows notification",
+      "requires": ["p6-a0-instrument-clean"],
+      "guest": "A0VM",
+      "vars_in": ["ACCEPT_OUT"],
+      "command": "grep -aE '^(P2|P6a|P8)\\|' {ACCEPT_OUT}/a0/verdicts.txt",
+      "expect": {"exit": 0, "stdout_re": "(?s)^P2\\|PASS gate-off.*^P6a\\|PASS fail-open.*^P8\\|PASS legacy-toasts", "stdout_absent_re": "FAIL-CLOSED|^P2\\|FAIL|^P6a\\|FAIL|^P8\\|FAIL"},
+      "check": "a0-failopen-proven",
+      "detail": "Fail-open is the design's load-bearing promise (DESIGN-toast-bridge.md Proposal C): the bridge may only ever ADD a dom0 copy, never subtract the guest banner without a successful forward. P2 proves the as-installed default (gate off => window path); P6a proves the revocation path (consent=Deny => bridge exits FATAL, banners restored, zero forwards); P8 proves the override (service.legacy-toasts beats service.notify-bridge across a cold boot). All three are negatives whose detectors were seen to fire: the P2 baseline itself validates the o-r window detector on a known-good fire in the same session (G-7).",
+      "on_fail": {"action": "HALT_PART", "verdict": "FAIL", "msg": "A fail-open arm failed: a toast was LOST (neither bannered in-guest nor legitimately bridged) or a revoked/disabled bridge still forwarded. FAIL-CLOSED means every Windows notification silently disappears for the user - worse than no bridge at all. The subject is evidence (G-0): leave it up; bridge.log and the phase geom dumps under {ACCEPT_OUT}/a0 are the record."},
+      "defect": "the fail-closed class the notifhost lazy-suppression fix (294d351) exists to prevent: suppression is only ever EARNED by a successful forward, because a bridge that suppresses banners up-front and then fails to forward eats the notification entirely; the suite's own P6a red branch prints 'FAIL toast lost with consent revoked ... - FAIL-CLOSED DEFECT' for exactly this, and confirmed pre-fix losses were observed and fixed in 294d351",
+      "falsified_by": "defect-a0-failclosed"
+    },
+    {
+      "id": "p6-a0-verdicts",
+      "kind": "probe",
+      "title": "The aggregate: every suite phase P1-P8 present and green in verdicts.txt (11 rows: P1 P1b P2 P3 P4a P4b P5 P6a P6b P7 P8) - re-asserted from the evidence file the runner archives, not from the suite's exit code alone",
+      "requires": ["p6-a0-failopen"],
+      "guest": "A0VM",
+      "vars_in": ["ACCEPT_OUT"],
+      "command": "cat {ACCEPT_OUT}/a0/verdicts.txt",
+      "expect": {"exit": 0, "stdout_re": "(?s)^P1\\|.*^P1b\\|.*^P2\\|PASS.*^P3\\|PASS.*^P4a\\|PASS.*^P4b\\|PASS.*^P5\\|PASS.*^P6a\\|PASS.*^P6b\\|PASS.*^P7\\|PASS.*^P8\\|PASS", "stdout_absent_re": "\\|FAIL|\\|INSTRUMENT"},
+      "check": "a0-suite-verdicts",
+      "detail": "Positive presence of every row is the point: a truncated verdicts.txt (suite aborted after a mid-run FAIL exit) fails this check by ABSENCE of the later rows, so a partial run can never read as green. The rows carry their own evidence sentences (SENT-ack for dom0 delivery, o-r window ids for the window path, boot-relative bridge.log offsets for reconnect) - the detail column of this ledger row names the first divergent phase.",
+      "on_fail": {"action": "HALT_PART", "verdict": "FAIL", "msg": "A bridge phase failed (or its row is missing from a truncated verdicts.txt after a mid-run abort - read the last emitted row for where it stopped). Classify from the row text: forward failures (P4a), split inversions (P4b), record-expiry deletion (P5), reconnect failures (P6b), burst accounting (P7). The subject is evidence (G-0): leave it up, diagnose on a clone."},
+      "defect": "a phase-level bridge defect: the 2026-09-05 crash regression would surface here as P3/P4a red (bridge dead ~87 s in - heartbeat absent, no SENT ack; bisected to AgentGone's per-5s Toolhelp snapshot, fixed 71d609c), and the P8 stale pre-boot-heartbeat race read a surviving heartbeat file as a wrongly-running bridge until the post-boot delete landed (c8012e2) - each is a FAIL row in the suite's verdicts.txt",
+      "falsified_by": "defect-a0-phase-fail"
+    },
+    {
+      "id": "p6-a0-dom0-visual",
+      "kind": "declare",
+      "check": "a0-dom0-visual",
+      "verdict": "ATTENDED-PENDING",
+      "title": "dom0-native bubble: VISUAL confirmation (owner glance)",
+      "detail": "WHY attended: qtest-geom lists only windows carrying _QUBES_VMNAME == the subject VM, so a dom0-NATIVE notification bubble is structurally invisible to every instrument on this rig (audit 2026-09-05: the old geom arm could only ever false-match a stray guest toast, and was removed for it). The mechanical proof of dom0 delivery is the protocol ack ('OK id=' / 'SENT id=..OK'), which P4a and P6b grade; the missing half is one owner glance at a bridged toast rendering as a native dom0 bubble with sane origin labelling. Closes with a single attended observation."
+    },
+    {
+      "id": "p6-shutdown-subject",
+      "kind": "action",
+      "title": "Release the suite subject cleanly (H3.6; green path only - a halted part deliberately leaves the guest up as evidence, and the suite itself leaves it running for inspection)",
+      "requires": ["p6-a0-verdicts"],
+      "guest": "A0VM",
+      "vars_in": ["A0VM"],
+      "command": "qvm-shutdown --wait --timeout 300 {A0VM} && echo SUBJECT-HALTED",
+      "timeout_s": 400,
+      "expect": {"exit": 0, "stdout_re": "^SUBJECT-HALTED$"},
+      "on_fail": {"action": "HALT_PART", "verdict": "INVALID-PRECONDITION", "msg": "The subject did not shut down cleanly. A guest that flips back to Transient is queued qrexec restarting it - drain per the runbook (TEMPORARY qrexec_timeout 15 -> kill -> Halted CONTINUOUSLY -> restore 6000; 15 is never left in place)."}
+    }
+  ]
+}

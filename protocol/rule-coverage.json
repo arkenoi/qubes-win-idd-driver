@@ -5,9 +5,10 @@
    "rule": "instrument-1",
    "statement": "qtest run echoes the command back - strip the echo before counting or parsing guest output.",
    "enforcement": [
-    {"point": "steps data (p3-g0c-disarm)", "how": "protocol steps anchor their parses to structured ^-prefixed lines (grep -aE '^(SCAN_BEFORE|...)'), so the echoed command line cannot satisfy them - compliance by construction in the step commands"}
+    {"point": "steps data (p3-g0c-disarm)", "how": "protocol steps anchor their parses to structured ^-prefixed lines (grep -aE '^(SCAN_BEFORE|...)'), so the echoed command line cannot satisfy them - compliance by construction in the step commands"},
+    {"point": "steps data (p6-floor)", "how": "the toast-bridge part refuses to run its suite until a0-selftest.sh has proven the base64 -EncodedCommand probes (path_state/hb_fresh/blog_len in mgmt/harness/a0-lib.sh) against ground truth in BOTH directions - the echo-safe rebuild of the probes that self-matched their own echoed command line (the constant-10 blog_len and heartbeat false-verdict incidents, 2026-09-04/05); a red floor is INVALID-INSTRUMENT and halts the part before any verdict"}
    ],
-   "residual": "No lint checks new harness/guest-driving code for echo-safe parsing; the rule is applied per-script (e.g. mgmt/reprovision-usb.sh's -ge 2 compensation), not enforced anywhere."
+   "residual": "No lint checks new harness/guest-driving code for echo-safe parsing; the rule is applied per-script (e.g. mgmt/reprovision-usb.sh's -ge 2 compensation), not enforced anywhere - the a0-lib.sh probe family is the one instrument set re-proven per campaign (p6-floor), everything else stays per-script discipline."
   },
   {
    "rule": "instrument-2",
@@ -27,7 +28,7 @@
    "rule": "instrument-4",
    "statement": "Every guest script a harness calls must live in the repo, and the harness must REFUSE to run without it.",
    "enforcement": [],
-   "residual": "Enforced only inside individual harnesses via require_scripts (verified present in 10 mgmt/harness/*.sh), which is harness code, not a protocol-level mechanism; no lint asserts that a harness calling guest scripts uses require_scripts."
+   "residual": "Enforced only inside individual harnesses via require_scripts (verified present in 10 mgmt/harness/*.sh), which is harness code, not a protocol-level mechanism; no lint asserts that a harness calling guest scripts uses require_scripts. a0-toast-bridge.sh/a0-selftest.sh implement the same refusal with their own P0/S0 preflight loops (hard exit on any missing guest script/tool) - same harness-code status."
   },
   {
    "rule": "instrument-5",
@@ -46,7 +47,8 @@
    "statement": "A vacuity guard must be specific to the stimulus - a guard any other surface can satisfy is not a guard.",
    "enforcement": [
     {"point": "steps data (p4-rnd3-stimulus)", "how": "the RND-3 vacuity gate keys on the #32768 menu class specifically ('a guard any other ovr=1 surface can satisfy is not a vacuity guard'), gating check p4-rnd3-stimulus-established"},
-    {"point": "steps data (p4-rnd4-toast)", "how": "the toast probe requires the toast's own two-path evidence (p4-rnd4-toast-two-path), not any-surface counting"}
+    {"point": "steps data (p4-rnd4-toast)", "how": "the toast probe requires the toast's own two-path evidence (p4-rnd4-toast-two-path), not any-surface counting"},
+    {"point": "steps data (p6-a0-instrument-clean)", "how": "toast-bridge phases whose stimulus never existed (fire never confirmed FIRED, consent revoke that read back unchanged) surface as |INSTRUMENT verdict rows, and this probe halts the part INVALID-INSTRUMENT on any of them - an unexercised phase can never be graded in either direction (the P6a unfired-toast 'FAIL-CLOSED' misgrade, audit 2026-09-05)"}
    ],
    "residual": "Rule holds only where a step encodes it; nothing forces stimulus-specific guards onto new checks."
   },
@@ -57,7 +59,7 @@
     {"point": "run.py:load_steps", "how": "execution order is data (file order); `requires` may only reference earlier steps and load is refused otherwise, so a declared ordering cannot be silently violated"},
     {"point": "run.py:runnable", "how": "a step runs only when every `requires` is GREEN, mechanising the declared cell ordering"}
    ],
-   "residual": "Nothing verifies the chosen ordering actually isolates scenes, and per-cell starting-scene assertions are not mandated."
+   "residual": "Nothing verifies the chosen ordering actually isolates scenes, and per-cell starting-scene assertions are not mandated. The a0 suite's scene hygiene (dismiss_toasts at phase boundaries, lazy-suppression warm-up before each graded fire, P8's stale-heartbeat delete placed AFTER the gate-off boot) is harness-internal - same unverified status."
   },
   {
    "rule": "instrument-9",
@@ -177,9 +179,10 @@
    "enforcement": [
     {"point": "run.py:load_steps", "how": "no verdict-emitting step loads without a `falsified_by` scenario in which the detector is seen to fire (selftest executes them)"},
     {"point": "run.py:emit_verdict", "how": "V1: plain PASS - including a 'nothing happened' PASS - requires a recorded fail-proof, else PASS-UNPROVEN"},
-    {"point": "steps data (p4-rnd5-verdict)", "how": "the canonical negative ('Start is NOT presented') demands TWO WITNESSES plus the vacuity proof (p4-rnd5-nomap-two-witness)"}
+    {"point": "steps data (p4-rnd5-verdict)", "how": "the canonical negative ('Start is NOT presented') demands TWO WITNESSES plus the vacuity proof (p4-rnd5-nomap-two-witness)"},
+    {"point": "steps data (p6-floor)", "how": "the toast-bridge part's floor gate is a per-campaign, in-session detector proof for the whole a0 instrument family (both-direction ground-truth reads, a confirmed fire, the o-r window detector seen firing) hours before the negatives they guard - the closest any part comes to closing this rule's 'IN THAT SESSION' residual; the suite's own P2 baseline additionally re-proves the window detector on a known-good fire in the graded session"}
    ],
-   "residual": "'IN THAT SESSION' is weakened to 'on record': the fail-proof registry is historical, so a detector broken since its proof still upgrades a PASS; same-run detector validation stays judgement."
+   "residual": "'IN THAT SESSION' is weakened to 'on record': the fail-proof registry is historical, so a detector broken since its proof still upgrades a PASS; same-run detector validation stays judgement everywhere except the p6 floor gate."
   },
   {
    "rule": "G-8",
@@ -281,7 +284,8 @@
    "statement": "INVALID-* is never folded into FAIL - a broken instrument is not a product defect.",
    "enforcement": [
     {"point": "run.py:handle_red", "how": "INVALID-INSTRUMENT / INVALID-PRECONDITION / step-declared INVALID-* verdicts are emitted as themselves, end to end distinct from FAIL"},
-    {"point": "campaign-verdict.sh", "how": "collects 'FAIL (product defect)' and 'INVALID (cell did not run)' as separate blocker categories, never summed"}
+    {"point": "campaign-verdict.sh", "how": "collects 'FAIL (product defect)' and 'INVALID (cell did not run)' as separate blocker categories, never summed"},
+    {"point": "steps data (p6-a0-instrument-clean)", "how": "the wrapped a0 suite's internal INSTRUMENT rows are routed to INVALID-INSTRUMENT BEFORE any product check reads verdicts.txt, so an external harness's instrument misses cannot surface as protocol FAIL - the wrap pattern that keeps V2 intact across the harness boundary (contrast the matrix.sh conflation in this rule's residual)"}
    ],
    "residual": "Inside matrix.sh (reached via s6-matrix) INVALID-* and product FAIL share one FAIL counter; the distinction survives only in the per-line message text, so the step's MATRIX_FAILED variable conflates them."
   },
@@ -290,7 +294,8 @@
    "statement": "Missing data is INVALID-INSTRUMENT, never FAIL and never a default - ${x:-0} on an unanswered query is forbidden.",
    "enforcement": [
     {"point": "run.py:handle_red", "how": "a probe that returns NOTHING becomes INVALID-INSTRUMENT explicitly, 'never a verdict about the product, in either direction'"},
-    {"point": "run.py:advance", "how": "dry mode: a scenario with no fixture for a reached step fails as missing data ('never approximated and never defaulted'); a selftest judgement with no recorded truth is INVALID-INSTRUMENT"}
+    {"point": "run.py:advance", "how": "dry mode: a scenario with no fixture for a reached step fails as missing data ('never approximated and never defaulted'); a selftest judgement with no recorded truth is INVALID-INSTRUMENT"},
+    {"point": "steps data (p6-a0-suite + p6-a0-instrument-clean)", "how": "a wrapped external suite with no terminal line is INVALID-INSTRUMENT (nothing was graded), and a missing/unreadable verdicts.txt fails the instrument-clean probe the same way - partial external-suite evidence is never defaulted and never graded as an aggregate"}
    ],
    "residual": "The ${x:-0} ban is not linted; live-mode guest-side missing data must be caught by each harness itself (cell_fresh's ${prod:-1} fails closed but mislabels a probe failure as product state)."
   },

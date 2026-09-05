@@ -1,0 +1,23 @@
+{
+ "comment": "DEFECT: an a0-lib.sh instrument fails its own both-directions floor validation - the observed 2026-09-04 constant-10 blog_len class (count matched off the cmd.exe banner: delta=0 across a confirmed forwarded fire, counted SENT line re-shown past the post offset). The floor exits 1 -> a0-instrument-floor red as INVALID-INSTRUMENT, part halted BEFORE the full suite: no bridge verdict is ever attempted on unvalidated probes. Trap: 'the other seven instruments passed, run the suite anyway' - the marathon this floor exists to prevent.",
+ "steps": [
+  "p6-toast-bridge.json"
+ ],
+ "vars": {
+  "A0SETUP": "/home/user/qwt-accept/AP-20260905-1/dl/qwt-improved-setup",
+  "A0VM": "win10-a0tb",
+  "A0FLOOR": "win10-a0tb-floor",
+  "A0BASE": "win10-base",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260905-1/p6-toast-bridge"
+ },
+ "results": {
+  "p6-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260905-1/p6-toast-bridge"
+  },
+  "p6-floor": {
+   "exit": 1,
+   "stdout": "[09:10:00] === A0 selftest floor: subject=win10-a0tb-floor base=win10-base setup=/home/user/qwt-accept/AP-20260905-1/dl/qwt-improved-setup out=/home/user/qwt-accept/AP-20260905-1/p6-toast-bridge/a0-floor ===\n[09:19:12] S1: primed and session up\nSELFTEST path_state_both PASS cmd.exe->PRESENT nonexistent->ABSENT\nSELFTEST hb_fresh_both PASS just-written->PRESENT ancient-mtime(max30s)->ABSENT\n[09:40:02] S7: blog_len pre-fire = 10\nSELFTEST fire_confirms PASS fire rc=0, FIRED line captured (s7-fire.txt), SENT id..OK visible past offset 10\nSELFTEST blog_len_is_real FAIL pre=10 post=10 delta=0 resent-past-offset=1 (delta=0 => constant reading a la the 10-bug; delta>40 => miscount; resent>0 => undercount; NOTE if fire_confirms also failed, the bridge may have written nothing - fix that first)\n[09:44:00] === SELFTEST lines ===\nSELFTEST blog_len_is_real FAIL pre=10 post=10 delta=0 resent-past-offset=1\n[09:44:01] === done: 1 FAIL line(s); evidence in /home/user/qwt-accept/AP-20260905-1/p6-toast-bridge/a0-floor; subject win10-a0tb-floor LEFT RUNNING for the full run ==="
+  }
+ }
+}

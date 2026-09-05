@@ -1,0 +1,31 @@
+{
+ "comment": "DEFECT: the suite dies mid-phase with NO terminal line (timeout/kill during P8's cold boot - the shape a wedged boot or a runner kill leaves). verdicts.txt is partial and NOTHING past the death was graded. p6-a0-suite red as INVALID-INSTRUMENT (missing data, V3), part halted; the probes are never reached, so partial rows can never be read as an aggregate verdict. Trap: 'P1-P7 passed, count those' - the un-emitted phases are UNGRADED, not passed.",
+ "steps": [
+  "p6-toast-bridge.json"
+ ],
+ "vars": {
+  "A0SETUP": "/home/user/qwt-accept/AP-20260905-1/dl/qwt-improved-setup",
+  "A0VM": "win10-a0tb",
+  "A0FLOOR": "win10-a0tb-floor",
+  "A0BASE": "win10-base",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260905-1/p6-toast-bridge"
+ },
+ "results": {
+  "p6-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260905-1/p6-toast-bridge"
+  },
+  "p6-floor": {
+   "exit": 0,
+   "stdout": "[10:02:11] === A0 selftest floor: subject=win10-a0tb-floor base=win10-base setup=/home/user/qwt-accept/AP-20260905-1/dl/qwt-improved-setup out=/home/user/qwt-accept/AP-20260905-1/p6-toast-bridge/a0-floor ===\n[10:02:40] S1: prime-run win10-base -> win10-a0tb-floor (job ours, payload /home/user/qwt-accept/AP-20260905-1/dl/qwt-improved-setup)\n[10:11:52] S1: primed and session up\n[10:12:05] S2: path_state + hb_fresh against ground-truth subjects\nSELFTEST path_state_both PASS cmd.exe->PRESENT nonexistent->ABSENT\nSELFTEST hb_fresh_both PASS just-written->PRESENT ancient-mtime(max30s)->ABSENT\n[10:13:10] S3: waiting for an Active interactive session (query user), up to ~20 min\n[10:19:44] S3: Active session after ~390s\n[10:20:31] S3: fire path READY (confirmed FIRED, gate still off)\n[10:21:02] S4: enable gate + allowlist, cold boot (P3 shape)\nSELFTEST hb_state_up PASS heartbeat fresh ~35s after cold-boot session-up\n[10:26:14] S6: bridge connected\n[10:26:20] S7: first allowlisted fire - blog_len_is_real + fire_confirms + window_caught\n[10:26:21] S7: blog_len pre-fire = 41\nSELFTEST fire_confirms PASS fire rc=0, FIRED line captured (s7-fire.txt), SENT id..OK visible past offset 41\nSELFTEST window_caught PASS NEW o-r toast window vs baseline (geom dumps s7-win-base.txt/s7-win.txt)\nSELFTEST blog_len_is_real PASS pre=41 post=44 delta=3, counted SENT line hidden behind post offset - a constant/banner-matched count cannot produce this\nSELFTEST showbanner_reads PASS SHOWBANNER-NOW=0 (after a forwarded first toast, 0 = suppression earned)\nSELFTEST consent_roundtrip PASS Deny read back, then Allow restored\n[10:31:40] S11: bridge heartbeat live\n[10:31:41] === SELFTEST lines ===\nSELFTEST path_state_both PASS cmd.exe->PRESENT nonexistent->ABSENT\nSELFTEST hb_fresh_both PASS just-written->PRESENT ancient-mtime(max30s)->ABSENT\nSELFTEST hb_state_up PASS heartbeat fresh ~35s after cold-boot session-up\nSELFTEST fire_confirms PASS fire rc=0, FIRED line captured (s7-fire.txt), SENT id..OK visible past offset 41\nSELFTEST window_caught PASS NEW o-r toast window vs baseline (geom dumps s7-win-base.txt/s7-win.txt)\nSELFTEST blog_len_is_real PASS pre=41 post=44 delta=3, counted SENT line hidden behind post offset - a constant/banner-matched count cannot produce this\nSELFTEST showbanner_reads PASS SHOWBANNER-NOW=0 (after a forwarded first toast, 0 = suppression earned)\nSELFTEST consent_roundtrip PASS Deny read back, then Allow restored\n[10:31:42] === done: 0 FAIL line(s); evidence in /home/user/qwt-accept/AP-20260905-1/p6-toast-bridge/a0-floor; subject win10-a0tb-floor LEFT RUNNING for the full run ==="
+  },
+  "p6-floor-release": {
+   "exit": 0,
+   "stdout": "FLOOR-RELEASED"
+  },
+  "p6-a0-suite": {
+   "exit": 124,
+   "stdout": "[10:35:02] === A0 toast-bridge acceptance: subject=win10-a0tb base=win10-base setup=/home/user/qwt-accept/AP-20260905-1/dl/qwt-improved-setup out=/home/user/qwt-accept/AP-20260905-1/p6-toast-bridge/a0 ===\n[11:40:12] VERDICT P7: PASS burst: 5 accounted (coalesced=0 individual=5), connection reused\n[11:40:30] P8: legacy-toasts opt-out forces the bridge off (cold boot)"
+  }
+ }
+}

@@ -1,0 +1,43 @@
+{
+ "comment": "DEFECT: a product phase fails while fail-open still holds - the observed forward-failure class (P4a: warmup earned suppression, so no banner is CORRECT, but the graded toast's SENT..OK never appeared: the forward itself is broken; the 2026-09-05 crash regression's surface). instrument-clean and fail-open pass; the aggregate a0-suite-verdicts goes red FAIL on the P4a row and the part halts with the subject preserved as evidence. Trap: 'fail-open held so nothing was lost, ship it' - a bridge that never forwards is not a bridge.",
+ "steps": [
+  "p6-toast-bridge.json"
+ ],
+ "vars": {
+  "A0SETUP": "/home/user/qwt-accept/AP-20260905-1/dl/qwt-improved-setup",
+  "A0VM": "win10-a0tb",
+  "A0FLOOR": "win10-a0tb-floor",
+  "A0BASE": "win10-base",
+  "ACCEPT_OUT": "/home/user/qwt-accept/AP-20260905-1/p6-toast-bridge"
+ },
+ "results": {
+  "p6-outdir": {
+   "exit": 0,
+   "stdout": "OUTDIR-READY /home/user/qwt-accept/AP-20260905-1/p6-toast-bridge"
+  },
+  "p6-floor": {
+   "exit": 0,
+   "stdout": "[10:02:11] === A0 selftest floor: subject=win10-a0tb-floor base=win10-base setup=/home/user/qwt-accept/AP-20260905-1/dl/qwt-improved-setup out=/home/user/qwt-accept/AP-20260905-1/p6-toast-bridge/a0-floor ===\n[10:02:40] S1: prime-run win10-base -> win10-a0tb-floor (job ours, payload /home/user/qwt-accept/AP-20260905-1/dl/qwt-improved-setup)\n[10:11:52] S1: primed and session up\n[10:12:05] S2: path_state + hb_fresh against ground-truth subjects\nSELFTEST path_state_both PASS cmd.exe->PRESENT nonexistent->ABSENT\nSELFTEST hb_fresh_both PASS just-written->PRESENT ancient-mtime(max30s)->ABSENT\n[10:13:10] S3: waiting for an Active interactive session (query user), up to ~20 min\n[10:19:44] S3: Active session after ~390s\n[10:20:31] S3: fire path READY (confirmed FIRED, gate still off)\n[10:21:02] S4: enable gate + allowlist, cold boot (P3 shape)\nSELFTEST hb_state_up PASS heartbeat fresh ~35s after cold-boot session-up\n[10:26:14] S6: bridge connected\n[10:26:20] S7: first allowlisted fire - blog_len_is_real + fire_confirms + window_caught\n[10:26:21] S7: blog_len pre-fire = 41\nSELFTEST fire_confirms PASS fire rc=0, FIRED line captured (s7-fire.txt), SENT id..OK visible past offset 41\nSELFTEST window_caught PASS NEW o-r toast window vs baseline (geom dumps s7-win-base.txt/s7-win.txt)\nSELFTEST blog_len_is_real PASS pre=41 post=44 delta=3, counted SENT line hidden behind post offset - a constant/banner-matched count cannot produce this\nSELFTEST showbanner_reads PASS SHOWBANNER-NOW=0 (after a forwarded first toast, 0 = suppression earned)\nSELFTEST consent_roundtrip PASS Deny read back, then Allow restored\n[10:31:40] S11: bridge heartbeat live\n[10:31:41] === SELFTEST lines ===\nSELFTEST path_state_both PASS cmd.exe->PRESENT nonexistent->ABSENT\nSELFTEST hb_fresh_both PASS just-written->PRESENT ancient-mtime(max30s)->ABSENT\nSELFTEST hb_state_up PASS heartbeat fresh ~35s after cold-boot session-up\nSELFTEST fire_confirms PASS fire rc=0, FIRED line captured (s7-fire.txt), SENT id..OK visible past offset 41\nSELFTEST window_caught PASS NEW o-r toast window vs baseline (geom dumps s7-win-base.txt/s7-win.txt)\nSELFTEST blog_len_is_real PASS pre=41 post=44 delta=3, counted SENT line hidden behind post offset - a constant/banner-matched count cannot produce this\nSELFTEST showbanner_reads PASS SHOWBANNER-NOW=0 (after a forwarded first toast, 0 = suppression earned)\nSELFTEST consent_roundtrip PASS Deny read back, then Allow restored\n[10:31:42] === done: 0 FAIL line(s); evidence in /home/user/qwt-accept/AP-20260905-1/p6-toast-bridge/a0-floor; subject win10-a0tb-floor LEFT RUNNING for the full run ==="
+  },
+  "p6-floor-release": {
+   "exit": 0,
+   "stdout": "FLOOR-RELEASED"
+  },
+  "p6-a0-suite": {
+   "exit": 1,
+   "stdout": "[10:35:02] === A0 toast-bridge acceptance: subject=win10-a0tb base=win10-base setup=/home/user/qwt-accept/AP-20260905-1/dl/qwt-improved-setup out=/home/user/qwt-accept/AP-20260905-1/p6-toast-bridge/a0 ===\n[10:35:10] P1: prime-run win10-base -> win10-a0tb (job ours)\n[10:47:21] VERDICT P1: primed and session up\n[10:48:05] P1b: notifhost.exe identity OK (2f6c1b8e4a5d9c7f0b3a6e2d8c4f1a7b5e9d3c6f2a8b4e0d7c1f5a9b3e6d2c8f)\n[10:48:44] VERDICT P1b: build identity proven\n[12:04:58] === verdicts ===\nP1|primed and session up\nP1b|build identity proven\nP2|PASS gate-off toast banners in guest (window path; detector CAN fire)\nP3|PASS cold boot: bridge up + connected\nP4a|FAIL sent=no guestbanner=yes dom0=n/a(no-dom0-instrument) SHOWBANNER-NOW=0\nP4b|PASS control: guest banner, no bridge send (skip=1)\nP5|PASS record survives dom0 expiry (reason-filter works)\nP6a|PASS fail-open: consent=Deny, window path (o-r window), NO dom0 forward (sent=0, relaunch-FATAL=1)\nP6b|PASS reconnect: disconnect (consent cycle) -> NEW 'connected (server version' past line 187 -> bridged again + re-suppressed\nP7|PASS burst: 5 accounted (coalesced=0 individual=5), connection reused\nP8|PASS legacy-toasts: bridge did NOT run (no heartbeat), toast took the window path, no forward (SHOWBANNER-NOW=absent)\n[12:05:00] === done: 1 FAIL/INSTRUMENT line(s); evidence in /home/user/qwt-accept/AP-20260905-1/p6-toast-bridge/a0; subject win10-a0tb left running for inspection ==="
+  },
+  "p6-a0-instrument-clean": {
+   "exit": 0,
+   "stdout": "INSTRUMENT-ROWS 0"
+  },
+  "p6-a0-failopen": {
+   "exit": 0,
+   "stdout": "P2|PASS gate-off toast banners in guest (window path; detector CAN fire)\nP6a|PASS fail-open: consent=Deny, window path (o-r window), NO dom0 forward (sent=0, relaunch-FATAL=1)\nP8|PASS legacy-toasts: bridge did NOT run (no heartbeat), toast took the window path, no forward (SHOWBANNER-NOW=absent)"
+  },
+  "p6-a0-verdicts": {
+   "exit": 0,
+   "stdout": "P1|primed and session up\nP1b|build identity proven\nP2|PASS gate-off toast banners in guest (window path; detector CAN fire)\nP3|PASS cold boot: bridge up + connected\nP4a|FAIL sent=no guestbanner=yes dom0=n/a(no-dom0-instrument) SHOWBANNER-NOW=0\nP4b|PASS control: guest banner, no bridge send (skip=1)\nP5|PASS record survives dom0 expiry (reason-filter works)\nP6a|PASS fail-open: consent=Deny, window path (o-r window), NO dom0 forward (sent=0, relaunch-FATAL=1)\nP6b|PASS reconnect: disconnect (consent cycle) -> NEW 'connected (server version' past line 187 -> bridged again + re-suppressed\nP7|PASS burst: 5 accounted (coalesced=0 individual=5), connection reused\nP8|PASS legacy-toasts: bridge did NOT run (no heartbeat), toast took the window path, no forward (SHOWBANNER-NOW=absent)"
+  }
+ }
+}

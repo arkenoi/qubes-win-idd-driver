@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Compose scenarios/green-whole-campaign/ — the RELEASE-ACCEPTANCE dry walk of the WHOLE
-campaign (spine + P2 + P3 + P4 + P5) — from the five per-part green scenarios.
+campaign (spine + P2 + P3 + P4 + P5 + P6 toast-bridge) — from the per-part green scenarios.
 
 WHY GENERATED, not hand-written: the whole-campaign fixture must stay byte-coherent with the
 per-part greens (same results, same evidence, same truths); a hand-copied fork would drift the
@@ -27,7 +27,7 @@ from pathlib import Path
 
 SCEN = Path(__file__).resolve().parent.parent / "scenarios"
 PARTS = ["green", "green-p2-network", "green-p3-updates",
-         "green-p4-rendering", "green-p5-safeguards"]
+         "green-p4-rendering", "green-p5-safeguards", "green-p6-toast-bridge"]
 OUT = SCEN / "green-whole-campaign"
 ACCEPT_OUT = "/home/user/qwt-accept/AP-WHOLE/evidence"
 
@@ -79,7 +79,7 @@ def main():
     for fname, src in evidence.items():
         shutil.copy2(SCEN / src / "evidence" / fname, OUT / "evidence" / fname)
     scenario = {
-        "comment": ("GREEN WHOLE-CAMPAIGN walk (spine + P2 + P3 + P4 + P5), composed by "
+        "comment": ("GREEN WHOLE-CAMPAIGN walk (spine + P2 + P3 + P4 + P5 + P6), composed by "
                     "protocol/tests/gen-whole-campaign.py from the per-part greens - regenerate "
                     "there, never edit by hand. Proves the release campaign is judge-free end to "
                     "end: every judgement carries a scorer, so the walk reaches its campaign "
