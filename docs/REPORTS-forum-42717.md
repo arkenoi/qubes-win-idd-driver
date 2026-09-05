@@ -201,7 +201,7 @@ answer-stick payload BEFORE the installer starts. Nothing inside the package cha
 post-install behaviour under test is still 4.3.1's.
 
 Status of the 25H2-only reports (44, 45, 33.3, 33.4): no 25H2 target exists here. Microsoft's
-download connector refuses headless sessions (tools/get-win-iso.sh documents it), so an ISO
-needs a browser step. Cheaper route to try first: 25H2 is an ENABLEMENT PACKAGE over 24H2
+download connector works headlessly again as of 2026-09-05 (tools/get-win-iso.sh completes the
+ov-df challenge), so a 25H2 ISO is one command away. Alternative route: 25H2 is an ENABLEMENT PACKAGE over 24H2
 (26100 -> 26200) and this project has a working Windows Update path plus 24H2 guests at
 26100.9168 - so the upgrade can be driven with the updater instead of downloading media.

@@ -32,8 +32,9 @@ windows, returns a tar of PNGs).
    (`qrexec-client-vm dom0 local.WinScreenshot` — expect "no visible windows" error, which
    proves the path works). Verify kit files present.
 2. **Inputs into `~/win-iso/`:**
-   - Windows ISO: run `~/qubes-win-idd/dom0/01-fetch-win-iso.sh`'s inner logic locally
-     (quickget; Win10 22H2 preferred, never Win11 25H2). Record the ISO's edition/image name.
+   - Windows ISO: `~/qubes-win-idd/dom0/01-fetch-win-iso.sh --local 10` (downloads into
+     `~/win-iso/`; needs curl + python3; Win10 22H2 preferred, never Win11 25H2; quickget is
+     gone - it fails Microsoft's Sentinel check). Record the ISO's edition/image name.
    - QWT installer: fetch per the CURRENT official doc
      (https://doc.qubes-os.org/en/latest/user/templates/windows/qubes-windows-tools.html) —
      the method changed post-QSB-091, do not trust memory. Save as `qwt-installer.exe` or

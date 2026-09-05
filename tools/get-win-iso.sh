@@ -1,55 +1,76 @@
 #!/bin/bash
-# Fetch the official Windows 10 22H2 (multi-edition, retail/non-eval) ISO link from
-# Microsoft's software-download connector API.
+# Resolve the official Microsoft download link(s) for the current consumer Windows ISO
+# (multi-edition, retail/non-eval) headlessly via the software-download-connector API.
 #
-# STATUS (measured 2026-08-01, on a residential exit): steps 1-3 work headlessly - the
-# SKU catalogue comes back fine (English = SKU 16067). The final link call is refused
-# with {"Key":"ErrorSettings.SentinelReject"}: Microsoft's Sentinel rejects the SESSION,
-# not the IP, because a headless client never executes the vlscppe fingerprint
-# JavaScript. quickget and Fido fail the same way for the same reason.
+# Usage: get-win-iso.sh [LANGUAGE] [10|11]          (defaults: English, 10)
+#   LANGUAGE matches the connector's "Language" or "LocalizedLanguage" field, e.g. English,
+#   "English International", German, "Chinese (Simplified)".
+# Prints "<Name><TAB><Uri>" for every architecture Microsoft offers. Links are valid ~24 h.
 #
-# RETESTED 2026-08-15 for Windows 11 25H2, and the "use a real browser engine" idea above
-# was TRIED and does not work either:
-#   * the contentinclude/html controls API that mido.sh and Fido use now returns 404 - it is
-#     retired, so those tools are broken for this page regardless of session handling;
-#   * https://www.microsoft.com/software-download/windows11 GEO-REDIRECTS (302) to the exit
-#     IP's locale, and mido does not follow redirects, so it never finds a product edition id;
-#   * the JSON connector's getskuinformationbyproductedition WORKS headlessly and reports the
-#     current media as "Windows 11 25H2__V2" (product edition id 3321);
-#   * GetProductDownloadLinksBySku answers SentinelReject even from headless Chromium driving
-#     the real page, and even after registering that same session id with vlscppe from inside
-#     the page. Driving the page's own UI gets as far as clicking "Download Now"; the language
-#     dropdown never populates headless, so the flow dead-ends before any link.
-# CONCLUSION: getting an ISO link is a human step (open the page, copy the link, valid ~24h).
-# The alternatives that need no link at all are UUP dump (builds official media from Microsoft
-# packages) and, for 25H2 specifically, the ENABLEMENT PACKAGE over an existing 24H2 guest -
-# 25H2 is 26200 on top of 24H2's 26100, and this project already drives Windows Update.
-set -uo pipefail
+# STATUS (2026-09-05): WORKS headlessly. Notes dated 2026-08-01 and 2026-08-15 in this header
+# used to conclude that the final connector call is refused for any non-browser session and
+# that fetching an ISO is a human step; both predate finding the missing piece. Since Fido
+# commit ea425ffbec (2026-02) a session must also complete the ov-df.microsoft.com challenge
+# (mdt.js hands out a token "w" and server ticks "rticks"; both are echoed back with the
+# client time). Without that step GetProductDownloadLinksBySku answers
+# {"Key":"ErrorSettings.SentinelReject"} - to curl, and to headless Chromium driving the page,
+# whose language dropdown never populates so the page's own script never runs it either.
+# Same flow as ~/mido.sh (patched ElliotKillick/Mido) and dockur/windows src/mido.sh;
+# dom0/01-fetch-win-iso.sh embeds it too. Still true from the 2026-08-15 retest: the old
+# contentinclude/html API is retired (404) and the locale-less page URL geo-redirects (302),
+# hence the /en-us/ URL and --location on the page fetch below.
+# Microsoft bans an IP for ~24 h after a few link requests in quick succession - don't loop it.
+set -euo pipefail
 LANG_NAME="${1:-English}"
-UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-PAGE="https://www.microsoft.com/en-us/software-download/windows10ISO"
-SID=$(cat /proc/sys/kernel/random/uuid)
-JAR=$(mktemp)
-curl -s -c "$JAR" -A "$UA" -o /dev/null "$PAGE"
-curl -s -b "$JAR" -A "$UA" -o /dev/null "https://vlscppe.microsoft.com/fp/tags?org_id=y6jn8c31&session_id=$SID"
+WINVER="${2:-10}"
+case "$WINVER" in 10|11) ;; *) echo "usage: $0 [LANGUAGE] [10|11]" >&2; exit 2;; esac
+
+UA="Mozilla/5.0 (X11; Linux x86_64; rv:100.0) Gecko/20100101 Firefox/100.0"
+PAGE="https://www.microsoft.com/en-us/software-download/windows${WINVER}"
+[ "$WINVER" = 10 ] && PAGE+="ISO"
 API="https://www.microsoft.com/software-download-connector/api"
-sleep 2; SKUS=$(curl -s -b "$JAR" -A "$UA" -H "Referer: $PAGE" \
-  "$API/getskuinformationbyproductedition?profile=606624d44113&ProductEditionId=2618&SKU=undefined&friendlyFileName=undefined&Locale=en-US&sessionID=$SID")
-SKU=$(printf '%s' "$SKUS" | python3 -c "
-import json,sys
-want=sys.argv[1]
-d=json.load(sys.stdin)
-print(next((s['Id'] for s in d['Skus'] if want in (s['Language'], s.get('LocalizedLanguage'))), ''))" "$LANG_NAME")
-[ -n "$SKU" ] || { echo 'no SKU for that language' >&2; exit 1; }
-curl -s -b "$JAR" -A "$UA" -H "Referer: $PAGE" \
-  "$API/GetProductDownloadLinksBySku?profile=606624d44113&productEditionId=undefined&SKU=$SKU&friendlyFileName=undefined&Locale=en-US&sessionID=$SID" \
-  | python3 -c "
-import json,sys
-raw=sys.stdin.read()
-try: d=json.loads(raw)
-except Exception: print('unexpected response:', raw[:300], file=sys.stderr); sys.exit(1)
-errs=(d.get('ValidationContainer') or {}).get('Errors') or []
-if errs: print('API errors:', errs, file=sys.stderr)
-for o in d.get('ProductDownloadOptions') or []:
-    print(o.get('Name'), o.get('Uri'))"
-rm -f "$JAR"
+PROFILE="606624d44113"                               # constant in the page's script (Fido uses the same)
+INSTANCE="560dc9f3-1aa5-4a2f-b63c-9e18f8d0e175"     # ov-df instanceId/CustomerId, likewise constant
+SID=$(cat /proc/sys/kernel/random/uuid)
+
+req() { curl -fsS -A "$UA" -H "Accept:" --proto =https --tlsv1.2 --http1.1 --max-filesize 2M "$@"; }
+
+# 1. product edition id of the current release (first <option> of the page's edition <select>)
+PEID=$(req -L --max-redirs 3 "$PAGE" | grep -Eo '<option value="[0-9]+">Windows' | head -n1 | tr -cd '0-9')
+[ -n "$PEID" ] || { echo "no product edition id found on $PAGE" >&2; exit 1; }
+
+# 2. permit the session id
+req -o /dev/null "https://vlscppe.microsoft.com/tags?org_id=y6jn8c31&session_id=$SID"
+
+# 3. ov-df challenge: fetch token + server ticks, echo them back with the client time (ms since epoch)
+OV=$(req "https://ov-df.microsoft.com/mdt.js?instanceId=$INSTANCE&PageId=si&session_id=$SID")
+W=$(grep -o '[?&]w=[A-Fa-f0-9]*' <<<"$OV" | head -n1 | cut -d= -f2)
+RT=$(grep -o 'rticks="+[0-9]*' <<<"$OV" | head -n1 | tr -cd '0-9')
+[ -n "$W" ] && [ -n "$RT" ] || { echo "ov-df challenge data missing: ${OV:0:200}" >&2; exit 1; }
+req -o /dev/null "https://ov-df.microsoft.com/?session_id=$SID&CustomerId=$INSTANCE&PageId=si&w=$W&mdt=$(date +%s%3N)&rticks=$RT"
+
+# 4. language -> SKU id
+SKU=$(req -e "$PAGE" "$API/getskuinformationbyproductedition?profile=$PROFILE&ProductEditionId=$PEID&SKU=undefined&friendlyFileName=undefined&Locale=en-US&sessionID=$SID" \
+  | python3 -c '
+import json, sys
+want = sys.argv[1]
+d = json.load(sys.stdin)
+errs = d.get("Errors") or (d.get("ValidationContainer") or {}).get("Errors") or []
+if errs:
+    sys.exit("SKU request refused: " + "; ".join(e.get("Value", "?") for e in errs))
+print(next((s["Id"] for s in d.get("Skus", []) if want in (s.get("Language"), s.get("LocalizedLanguage"))), ""))' "$LANG_NAME")
+[ -n "$SKU" ] || { echo "no SKU for language '$LANG_NAME' (product edition $PEID)" >&2; exit 1; }
+
+# 5. download links - the call Sentinel guards
+req -e "$PAGE" "$API/GetProductDownloadLinksBySku?profile=$PROFILE&productEditionId=undefined&SKU=$SKU&friendlyFileName=undefined&Locale=en-US&sessionID=$SID" \
+  | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+errs = d.get("Errors") or (d.get("ValidationContainer") or {}).get("Errors") or []
+if errs:
+    sys.exit("link request refused: " + "; ".join(e.get("Value", "?") for e in errs))
+opts = d.get("ProductDownloadOptions") or []
+if not opts:
+    sys.exit("no download options in response: " + json.dumps(d)[:300])
+for o in opts:
+    print(o.get("Name", ""), o.get("Uri", ""), sep="\t")'
