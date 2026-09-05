@@ -44,7 +44,6 @@
 #define NOMINMAX
 #include <windows.h>
 #include <sddl.h>       // ConvertSidToStringSidW
-#include <tlhelp32.h>   // agent-liveness fallback (CreateToolhelp32Snapshot)
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -72,12 +71,26 @@ static HANDLE g_agent = nullptr;
 static DWORD  g_agentPid = 0;
 static DWORD  g_mySession = 0;
 
-// Agent-liveness check. The SYNCHRONIZE handle is the cheap path, but OpenProcess on the
-// SYSTEM gui-agent is DENIED to this limited user token (the schtasks /ru <user> /it launch
-// gives the bridge no privilege over a SYSTEM process), so g_agent is normally NULL and the
-// fallback does the real work: a toolhelp snapshot scan for the PID, which needs no access to
-// the target at all. Throttled to 5 s - PID reuse inside that window merely defers the exit to
-// the agent's stop-file channel, and the bridge is fail-open throughout, so the race is benign.
+// Agent-liveness check - a BACKUP only. The agent's shutdown writes the ProgramData stop file
+// (NotifBridgeRequestStop), which the main loop polls every pass; THAT is the primary channel.
+// The SYNCHRONIZE handle is the cheap path but OpenProcess(SYNCHRONIZE) on the SYSTEM gui-agent
+// is DENIED to this limited user token, so g_agent is normally NULL and this probe does the work.
+//
+// It MUST be snapshot-free. The previous implementation called CreateToolhelp32Snapshot(
+// TH32CS_SNAPPROCESS) - a whole-process-table walk - on the sole worker thread every 5 s;
+// bisected (2026-09-05) as the forward->dismiss regression: its variable, heavyweight latency,
+// landing inside a 3-forward burst (reader thread busy, dom0 round-trips in flight), intermittently
+// pushed one loop iteration past the agent supervisor's 15 s stale-heartbeat deadline, and the
+// supervisor then TERMINATED the still-alive bridge via schtasks /delete (artifact-free: no WER,
+// no unhandled fault, Task=Running - exactly what was observed; full PageHeap caught nothing,
+// which itself argues against in-process heap corruption).
+//
+// OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) + GetExitCodeProcess is a fixed-cost,
+// non-allocating, non-walking probe. PROCESS_QUERY_LIMITED_INFORMATION is grantable to this
+// limited token for the SYSTEM agent where SYNCHRONIZE is not (that access right exists precisely
+// for cross-context liveness/name queries). EVERY failure path returns "alive" (fail-open) so the
+// probe can never trigger a spurious exit; a reused PID reads as alive and is caught by the stop
+// file / session-change instead. Throttled to 30 s - it is only a backup, so infrequent is fine.
 static bool AgentGone()
 {
     if (g_agent) return WaitForSingleObject(g_agent, 0) == WAIT_OBJECT_0;
@@ -86,15 +99,14 @@ static bool AgentGone()
     static bool gone = false;
     ULONGLONG now = GetTickCount64();
     if (gone || now < next) return gone;
-    next = now + 5000;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snap == INVALID_HANDLE_VALUE) return false;   // cannot tell - stay up (stop file still works)
-    PROCESSENTRY32W pe; pe.dwSize = sizeof(pe);
-    bool found = false;
-    if (Process32FirstW(snap, &pe))
-        do { if (pe.th32ProcessID == g_agentPid) { found = true; break; } } while (Process32NextW(snap, &pe));
-    CloseHandle(snap);
-    gone = !found;
+    next = now + 30000;
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, g_agentPid);
+    if (!h) return false;                     // cannot query (denied/failed) - assume alive
+    DWORD ec = STILL_ACTIVE;
+    BOOL ok = GetExitCodeProcess(h, &ec);
+    CloseHandle(h);
+    if (!ok) return false;                    // cannot tell - assume alive
+    gone = (ec != STILL_ACTIVE);
     return gone;
 }
 
