@@ -50,6 +50,25 @@ JOBDIR="mgmt/prime-jobs/$JOB"
 log(){ echo "$(date -u +%H:%M:%S) prime-run[$CHURN]: $*"; }
 state(){ qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 
+# --- lifecycle (run-lib.sh): a killed prime-run must leave NO orphans and a MARKED subject ---
+# 2026-09-06, observed live: killing the calling harness left THIS script + its `sleep`s
+# orphaned to init for 40+ minutes, churning the guest (and, under the old fd-inheriting
+# vmlock, holding the dead job's guest lock). job_init's traps now TERM/KILL prime-run's own
+# descendant tree on any exit. The abort hook fires ONLY on signals: a TERMINAL/DEADLINE exit
+# still leaves the guest untouched as evidence (H3.5), but a kill mid-prime means the subject
+# is half-built - it gets a CONTAMINATED marker (owner rule: never reuse a killed subject; the
+# next prime-run recreates it from the sealed base and clears the marker after the clone).
+source mgmt/harness/run-lib.sh
+job_init prime-run
+job_on_abort(){
+  [ -n "${CHURN:-}" ] || return 0
+  mkdir -p mgmt/fixtures
+  printf '{"vm":"%s","aborted_utc":"%s","via":"%s","note":"killed mid-prime - CONTAMINATED, never grade or reuse; re-run prime-run to recreate from the base"}\n' \
+      "$CHURN" "$(date -u +%FT%TZ)" "$1" > "mgmt/fixtures/$CHURN.aborted"
+  log "ABORTED mid-prime ($1): $CHURN is CONTAMINATED - marker mgmt/fixtures/$CHURN.aborted written; best-effort shutdown of the churn guest"
+  qvm-shutdown "$CHURN" >/dev/null 2>&1
+}
+
 [ -f "$JOBDIR/onboot.cmd" ] || { log "TERMINAL: no job at $JOBDIR/onboot.cmd"; exit 1; }
 
 # H3.6 — one Windows guest at a time, and a campaign step starts with zero. Concurrent runs have
@@ -113,6 +132,9 @@ for v in ('root', 'private'):
     dst.volumes[v].clone(src.volumes[v])
 PY
 log "cloned"
+# The subject was just recreated from the verified base: any CONTAMINATED marker a previous
+# aborted prime left for this name is now about a qube that no longer exists.
+rm -f "mgmt/fixtures/$CHURN.aborted"
 
 qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' \
   || { log "TERMINAL: could not set qemu-extra-args"; exit 1; }
@@ -199,7 +221,7 @@ done
 # meantime, restart it and wait again. Bounded, and it re-uses the same restart loop's contract.
 if [ "$ready" = 1 ]; then
     log "  qrexec answered - settling ${SETTLE_SECS:-90}s to catch a post-install reboot the job may still do"
-    sleep "${SETTLE_SECS:-90}"
+    rl_fg sleep "${SETTLE_SECS:-90}"   # interruptible: a TERM must not defer teardown by the settle window
     if ! QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY; then
         log "  the guest stopped answering during the settle window - the job rebooted it after install"
         st=$(state "$CHURN")

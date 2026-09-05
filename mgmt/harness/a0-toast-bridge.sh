@@ -53,6 +53,11 @@ verdict(){ log "VERDICT $1: $2"; echo "$1|$2" >> "$OUT/verdicts.txt"; }
 
 export QTEST_VM="$VM"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlock.sh
+# Lifecycle (2026-09-06): on EXIT/TERM/INT/HUP kill the whole descendant tree (prime-run,
+# qtest, sleeps - explicit pids, never pkill -f), release the vm lock LAST, log "TORE DOWN".
+# A kill of this script must leave ZERO orphans churning the guest. job_init owns the EXIT
+# trap - never add another `trap ... EXIT` in this file.
+source mgmt/harness/run-lib.sh; job_init a0-toast-bridge
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/e2e-wait.sh
 source mgmt/harness/a0-lib.sh   # shared toast-bridge instruments (constants + probes) - same code the a0-selftest.sh floor validates
@@ -71,7 +76,7 @@ running=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$2!="Ha
 
 # ---------- P1 prime -----------------------------------------------------------------------
 log "P1: prime-run $BASE -> $VM (job ours)"
-./mgmt/harness/prime-run.sh "$BASE" "$VM" ours --payload "$SETUP" > "$OUT/prime.log" 2>&1
+rl_fg ./mgmt/harness/prime-run.sh "$BASE" "$VM" ours --payload "$SETUP" > "$OUT/prime.log" 2>&1
 rc=$?
 [ $rc -eq 0 ] || { log "FATAL prime-run rc=$rc (see $OUT/prime.log tail: $(tail -3 "$OUT/prime.log" | tr '\n' ' '))"; exit 1; }
 w_usersession "$VM" 900 p1-session "$OUT" log || { log "FATAL no user session after prime"; exit 1; }
@@ -259,7 +264,7 @@ elif fire_info "A0T warmup" > /dev/null 2>&1; then   # toast #1: earns suppressi
   _w4w=$SECONDS
   for i in $(seq 1 15); do
     blog_since "$Lw" > "$OUT/p4-warm.txt"
-    [ "$(fwd_count "$OUT/p4-warm.txt")" -ge 1 ] && { warm=1; break; }
+    [ "$(fwd_count "$OUT/p4-warm.txt")" -ge 1 ] && { warm=1; QTEST_VM=$VM timeout -k 8 45 ./tools/qtest fullshot "$OUT/p4-warm-dom0.tar" >/dev/null 2>&1; break; }  # DOM0 RENDER WITNESS: capture dom0 at the freshest forward ack (READ p4-warm-dom0.tar for the bubble)
     [ $(( SECONDS - _w4w )) -ge 90 ] && break
     sleep 2
   done
@@ -280,7 +285,7 @@ if [ -z "$p4inst" ]; then
   _w4s=$SECONDS
   for i in $(seq 1 15); do
     blog_since "$L0" > "$OUT/p4-blog.txt"
-    [ "$(fwd_count "$OUT/p4-blog.txt")" -ge 1 ] && { sent=1; break; }
+    [ "$(fwd_count "$OUT/p4-blog.txt")" -ge 1 ] && { sent=1; QTEST_VM=$VM timeout -k 8 45 ./tools/qtest fullshot "$OUT/p4a-dom0.tar" >/dev/null 2>&1; break; }  # DOM0 RENDER WITNESS: capture dom0 at the freshest forward ack (READ p4a-dom0.tar for a 'win10-a0tb: A0T bridged' bubble)
     [ $(( SECONDS - _w4s )) -ge 90 ] && break
     sleep 2
   done

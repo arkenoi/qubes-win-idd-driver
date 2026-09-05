@@ -64,6 +64,8 @@ verdict(){ log "VERDICT $1: $2"; echo "$1|$2" >> "$OUT/verdicts.txt"; }
 
 export QTEST_VM="$VM"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"
+# Lifecycle (2026-09-06): kill-safe teardown - see run-lib.sh. job_init owns the EXIT trap.
+source mgmt/harness/run-lib.sh; job_init a0-p3-toast-split
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/e2e-wait.sh
 source mgmt/harness/a0-lib.sh   # PSAUMID CTLAUMID QT BLOG blog_len/blog_since fire_* showbanner geom ors snap_or new_or_window dismiss_toasts
@@ -133,7 +135,7 @@ running=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$2!="Ha
 [ -z "${running// /}" ] || { log "FATAL not all Halted: $running"; exit 1; }
 
 log "Q0: prime-run $BASE -> $VM (job ours)"
-./mgmt/harness/prime-run.sh "$BASE" "$VM" ours --payload "$SETUP" > "$OUT/prime.log" 2>&1 \
+rl_fg ./mgmt/harness/prime-run.sh "$BASE" "$VM" ours --payload "$SETUP" > "$OUT/prime.log" 2>&1 \
   || { log "FATAL prime-run failed: $(tail -3 "$OUT/prime.log" | tr '\n' ' ')"; exit 1; }
 w_usersession "$VM" 900 q0-session "$OUT" log || { log "FATAL no user session after prime"; exit 1; }
 

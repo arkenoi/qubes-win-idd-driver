@@ -412,14 +412,53 @@ def advance(c: Campaign, steps: list[dict], failproofs: dict, auto_truth: bool =
             # mechanical step
             g = guest_of(step, c.st["vars"])
             if g and c.st["mode"] == "live" and g not in live_locks:
+                # Same per-guest lock file as mgmt/harness/vmlock.sh. This fd is CLOEXEC/
+                # non-inheritable (python default, PEP 446) so children can never keep the lock
+                # alive past this process - release on ANY exit is automatic. Dead-holder
+                # awareness (2026-09-06): the bash vmlock holder frees ~2s after its job dies,
+                # so a refusal whose recorded holder is DEAD is retried briefly instead of
+                # bouncing; a LIVE holder still refuses immediately and loudly.
                 lf = os.path.join(os.environ.get("TMPDIR", "/tmp"), f"qwt-vmlock-{g}")
                 fd = os.open(lf, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError:
-                    die(f"REFUSING TO START on {g}: another harness holds the vm lock ({lf}). "
-                        f"Two jobs on one guest fabricate verdicts. Wait, or kill the holder BY PID.")
+                deadline = time.time() + 20
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError:
+                        holder = ""
+                        try:
+                            lines = [l for l in Path(lf).read_text(errors="replace").splitlines()
+                                     if l.startswith("pid=")]
+                            holder = lines[-1] if lines else ""
+                        except OSError:
+                            pass
+                        m = re.match(r"pid=(\d+)", holder)
+                        alive = False
+                        if m:
+                            try:
+                                os.kill(int(m.group(1)), 0)
+                                alive = True
+                            except OSError:
+                                alive = False
+                        if alive:
+                            die(f"REFUSING TO START on {g}: another harness holds the vm lock ({lf}): "
+                                f"{holder or 'no holder record'}. Two jobs on one guest fabricate "
+                                f"verdicts. Wait, or kill the holder BY PID (SIGTERM - its traps "
+                                f"tear down its tree). Never pkill -f.")
+                        if time.time() >= deadline:
+                            die(f"REFUSING TO START on {g}: vm lock {lf} is held but its recorded "
+                                f"job ({holder or 'unknown'}) is DEAD - likely a pre-redesign orphan "
+                                f"still holds an inherited fd. Find it: "
+                                f"ls -l /proc/[0-9]*/fd 2>/dev/null | grep qwt-vmlock-{g}")
+                        print(f"[vmlock] {g}: lock held but recorded holder is dead - waiting for "
+                              f"the ~2s holder self-release before retrying...", flush=True)
+                        time.sleep(2)
                 os.write(fd, f"pid={os.getpid()} cmd=protocol/run.py started={utc()}\n".encode())
+                # verify-started banner: same machine signal the bash harnesses emit, so one
+                # watcher contract (run-lib.sh run_verified) covers both runners.
+                print(f"VMLOCK-ACQUIRED vm={g} pid={os.getpid()} job=protocol/run.py at={utc()}",
+                      flush=True)
                 live_locks[g] = fd
             try:
                 cmd = subst(step["command"], c.st["vars"])

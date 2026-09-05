@@ -114,6 +114,11 @@ verdict(){ log "VERDICT $1: $2"; echo "$1|$2" >> "$OUT/verdicts.txt"; }
 
 export QTEST_VM="$VM"
 source mgmt/harness/vmlock.sh; vm_lock "$VM"
+# Lifecycle (2026-09-06, the live incident was on THIS harness): killing it left prime-run.sh
+# + sleeps orphaned 40+ min holding the guest lock. job_init's traps now kill the descendant
+# tree (explicit pids, never pkill -f), release the vm lock LAST, and log "TORE DOWN" on any
+# exit. job_init owns the EXIT trap - never add another `trap ... EXIT` in this file.
+source mgmt/harness/run-lib.sh; job_init p3a-etw-gate
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/e2e-wait.sh
 source mgmt/harness/a0-lib.sh   # PSAUMID CTLAUMID QT BLOG HBF INCOMING raspush blog_* path_state hb_* fire_* showbanner dismiss_toasts
@@ -307,7 +312,7 @@ Write-Output ("FPWRAP_EXIT " + $rc)
 PSEOF
 
 log "T0: prime-run $BASE -> $VM (job ours; clean install from the RELEASE PACKAGE, no swaps)"
-./mgmt/harness/prime-run.sh "$BASE" "$VM" ours --payload "$SETUP" > "$OUT/prime.log" 2>&1
+rl_fg ./mgmt/harness/prime-run.sh "$BASE" "$VM" ours --payload "$SETUP" > "$OUT/prime.log" 2>&1
 rc=$?
 [ $rc -eq 0 ] || { log "FATAL prime-run rc=$rc (tail: $(tail -3 "$OUT/prime.log" | tr '\n' ' '))"; exit 1; }
 w_usersession "$VM" 900 t0-session "$OUT" log || { log "FATAL no user session after prime"; exit 1; }
