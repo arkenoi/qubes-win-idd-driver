@@ -25,7 +25,7 @@
 # Experiment plan (the experimenter five lines):
 #   HYPOTHESIS: the capability-grant split works end to end UNDER THE §10.20 HYBRID — a
 #     zero-priv, never-PLU qubes-etwproxy token, holding ONLY the agent's per-session
-#     EventAccessControl grant (TRACELOG_ACCESS_REALTIME on QubesToastBridgeEtw), can
+#     EventAccessControl grant (TRACELOG_ACCESS_REALTIME|WMIGUID_QUERY on QubesToastBridgeEtw), can
 #     OpenTrace+ProcessTrace and deliver payload-FREE SIGNAL frames {AUMID, notificationId,
 #     tag, group} (QTS1) to the bridge, whose ONE TARGETED wpndb read then produces the
 #     payload and classifies (corr=id-ok via the notificationId<->row-id join, corr=sig-unique
@@ -566,7 +566,7 @@ printf '%s\n' "$prc" > "$OUT/t2-proxyrc.txt"
 t2rcfail=""
 printf '%s' "$prc" | grep -qa 'api=StartTrace provider=- rc=0' || t2rcfail="$t2rcfail StartTrace!=0"
 printf '%s' "$prc" | grep -qa 'api=EnableTraceEx2 provider=.* rc=0' || t2rcfail="$t2rcfail no-provider-enabled"
-printf '%s' "$prc" | grep -qa 'api=EventAccessControl op=AddDACL principal=consumer rights=TRACELOG_ACCESS_REALTIME rc=0' || t2rcfail="$t2rcfail grant-AddDACL!=0"
+printf '%s' "$prc" | grep -qa 'api=EventAccessControl op=AddDACL principal=consumer rights=TRACELOG_ACCESS_REALTIME|WMIGUID_QUERY rc=0' || t2rcfail="$t2rcfail grant-AddDACL!=0-or-mask-not-realtime+query"
 [ -z "$t2rcfail" ] && log "T2: agent control RCs clean (StartTrace/EnableTraceEx2/EventAccessControl all 0)" \
   || verdict T2rc "FAIL agent control calls:$t2rcfail - record verbatim, the cures are owner decisions (§10.16.3b), not rig improvisation"
 

@@ -20,8 +20,10 @@
 // of the bridge's real-time ETW consumer - a PURE CONSUMER under the two-context split
 // (DESIGN-p3-classifier-impl.md secs 10.18/10.19). The SYSTEM agent
 // (agent/gui-agent/etwproxy.c) is the session CONTROLLER: it starts QubesToastBridgeEtw,
-// enables the providers, and grants this process's account TRACELOG_ACCESS_REALTIME on
-// the session GUID (EventAccessControl) BEFORE launching us. This process does OpenTraceW +
+// enables the providers, and grants this process's account TRACELOG_ACCESS_REALTIME |
+// WMIGUID_QUERY on the session GUID (EventAccessControl, BEFORE StartTrace and BEFORE
+// launching us; QUERY is needed because ProcessTrace's realtime setup implicitly queries
+// the session - sechost!EtwpQueryRealTimeTraceProperties). This process does OpenTraceW +
 // ProcessTrace + TDH property location ONLY, under the dedicated qubes-etwproxy account
 // whose token NEVER held Performance Log Users or SeSystemProfilePrivilege: it cannot
 // (and must not) StartTrace/EnableTrace/ControlTrace, and it NEVER stops the session
@@ -504,10 +506,14 @@ static int EtwProxyMain(const wchar_t* clientSid)
     // --- PURE CONSUMER: the SYSTEM agent (agent/gui-agent/etwproxy.c) is the session
     //     CONTROLLER - it already started QubesToastBridgeEtw (kEtwBridgeSession ==
     //     etwproxy.c's ETWPROXY_SESSION_NAME, a change-both-or-neither contract), enabled
-    //     the providers, and granted this account TRACELOG_ACCESS_REALTIME on the session
-    //     GUID (EventAccessControl) before launching us. This process holds NO session
-    //     control by design: no StartTrace, no EnableTrace, no ControlTrace - OpenTraceW
-    //     by logger name is everything it does with the session.
+    //     the providers, and granted this account TRACELOG_ACCESS_REALTIME | WMIGUID_QUERY
+    //     on the session GUID (EventAccessControl) before launching us. This process holds
+    //     NO session control by design: no StartTrace, no EnableTrace, no ControlTrace
+    //     calls of its own - OpenTraceW by logger name is everything it does with the
+    //     session. (WMIGUID_QUERY is read-only session metadata, not control: sechost's
+    //     realtime setup inside OpenTrace/ProcessTrace implicitly QUERIES the session
+    //     properties, and without that bit ProcessTrace dies ERROR_ACCESS_DENIED - the
+    //     rig-measured exit-5 of 2026-09-06.)
     TRACEHANDLE cons = EtwOpen(kEtwBridgeSession, EtwProxyEventCb);
     if (cons == INVALID_PROCESSTRACE_HANDLE || cons == 0)
     {

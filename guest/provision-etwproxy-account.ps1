@@ -13,7 +13,8 @@
 #
 # THE CAPABILITY-GRANT SPLIT (supersedes the PLU design this script previously implemented):
 # the SYSTEM agent is the ETW session CONTROLLER (StartTraceW + EnableTraceEx2 +
-# EventAccessControl granting TRACELOG_ACCESS_REALTIME on the ONE session GUID to this account);
+# EventAccessControl granting TRACELOG_ACCESS_REALTIME|WMIGUID_QUERY on the ONE session GUID to
+# this account - QUERY because ProcessTrace's realtime setup implicitly queries the session);
 # the proxy is a pure CONSUMER (OpenTraceW + ProcessTrace), authorized solely by that per-session
 # DACL grant. Therefore this account gets **NO group memberships at all** - in particular it is
 # NEVER put in BUILTIN\Performance Log Users. PLU was sec 10.17.2's named residual: it let a

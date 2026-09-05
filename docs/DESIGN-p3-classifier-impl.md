@@ -1258,10 +1258,21 @@ the notifhost proxy change (§10.18) and main.c's uncommitted slice-map-hold edi
   launch the agent, as SYSTEM, reaps any stale session by name, `StartTraceW`s the
   real-time session `QubesToastBridgeEtw` with its FIXED private GUID (`Wnode.Guid` — the
   deterministic grant target), `EnableTraceEx2`s the constant provider list (RCs logged as
-  `PROXY RC` lines), and grants the consumer account `TRACELOG_ACCESS_REALTIME` on the
-  session GUID via `EventAccessControl` — SET (a SYSTEM full-control ACE, replacing the
-  persisted SD so grants never accrete) then ADD (the consumer ACE). None of these control
-  calls parses attacker-influenceable bytes. The proxy then only `OpenTraceW`s that
+  `PROXY RC` lines), and grants the consumer account
+  `TRACELOG_ACCESS_REALTIME | WMIGUID_QUERY` on the session GUID via `EventAccessControl`
+  — SET (a SYSTEM full-control ACE, replacing the persisted SD so grants never accrete)
+  then ADD (the consumer ACE). The grant runs BEFORE `StartTraceW` (the logger snapshots
+  its SD at creation — rig-proven 2026-09-05), and the mask carries BOTH bits because
+  `TRACELOG_ACCESS_REALTIME` alone was rig-refuted 2026-09-06 (grant rc=0, correct order,
+  ProcessTrace still ERROR_ACCESS_DENIED → exit 5): the consumer-side realtime setup
+  implicitly issues `EVENT_TRACE_CONTROL_QUERY` on the session
+  (`sechost!EtwpQueryRealTimeTraceProperties`, called from OpenTrace/ProcessTrace), and a
+  query is gated by `WMIGUID_QUERY` on the session's SD ("Allows the user to query
+  information about the trace session. Set this permission on the session's GUID" —
+  MSDN EventAccessControl). PLU membership — the alternative the same docs offer — works
+  via default-SD ACEs that include `WMIGUID_QUERY`; the pair is the least-privilege
+  consume subset of it (none of PLU's `TRACELOG_CREATE_*`/provider bits). None of these
+  control calls parses attacker-influenceable bytes. The proxy then only `OpenTraceW`s that
   session by name and `ProcessTrace`s it; it holds no session-control capability at any
   instant. This closes §10.17.2: PLU membership is gone outright, and the only token that
   cannot use PLU is one that never held it.

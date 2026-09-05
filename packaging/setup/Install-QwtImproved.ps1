@@ -1963,7 +1963,7 @@ function Invoke-Stage2 {
     # launch `etwproxy.exe` (the GUI-DLL-free console proxy, 2026-09-05 split;
     # DESIGN-p3-classifier-impl.md sec 10.14, revised by the capability-grant split):
     # NO group memberships at all (the agent grants the
-    # consumer TRACELOG_ACCESS_REALTIME on the one trace session instead of PLU), explicit
+    # consumer TRACELOG_ACCESS_REALTIME|WMIGUID_QUERY on the one trace session instead of PLU), explicit
     # SeBatchLogonRight, batch logon only (interactive/remote/network DENIED), a throwaway
     # random password VALIDATED with a real batch LogonUser then DISCARDED (no secret at
     # rest - the agent sets a fresh in-memory password at every launch), outbound-block
