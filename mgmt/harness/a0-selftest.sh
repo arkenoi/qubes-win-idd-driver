@@ -80,7 +80,7 @@ log "=== A0 selftest floor: subject=$VM base=$BASE setup=$SETUP out=$OUT ==="
 
 # ---------- S0 preflight (mirror of the full harness's P0) ---------------------------------
 for f in guest/run-as-user.ps1 guest/fire-demo-toast.ps1 guest/dismiss-toast.ps1 \
-         guest/a0-consent.ps1 guest/a0-showbanner.ps1 guest/a0-kill-relay.ps1 \
+         guest/a0-consent.ps1 guest/a0-showbanner.ps1 \
          tools/qtest tools/qtest-geom mgmt/harness/prime-run.sh; do
   [ -e "$f" ] || fatal "missing $f"
 done
@@ -159,14 +159,14 @@ else
   st hb_state_up FAIL "heartbeat never PRESENT within 150s (last='$hb') - bridge not running with gate on, or probe blind; bridge-dependent checks below will fail dependently"
 fi
 
-# ---------- S6 connected (gating wait, logged; graded via fire_confirms/killrelay) ----------
+# ---------- S6 connected (gating wait, logged; graded via fire_confirms) --------------------
 conn=""
 for i in $(seq 1 15); do
   blog_since 0 > "$OUT/s6-blog.txt"
   grep -qa "connected (server version" "$OUT/s6-blog.txt" && { conn=1; break; }; sleep 4
 done
 [ -n "$conn" ] && log "S6: bridge connected" \
-  || log "S6: WARN no 'connected (server version' in $((15*4))s (tail: $(tail -3 "$OUT/s6-blog.txt" 2>/dev/null | tr '\n' ';' | head -c 200)) - fire_confirms/killrelay below will surface it"
+  || log "S6: WARN no 'connected (server version' in $((15*4))s (tail: $(tail -3 "$OUT/s6-blog.txt" 2>/dev/null | tr '\n' ';' | head -c 200)) - fire_confirms below will surface it"
 
 # ---------- S7 the marquee: ONE persistent first fire serves three checks -------------------
 # Lazy suppression makes toast #1 per app the ONLY toast that both BANNERS and FORWARDS (toast
@@ -243,40 +243,14 @@ else
   st showbanner_reads FAIL "unparseable/empty reading '$sb' - run-as-user no-op or the SHOWBANNER-NOW token drifted"
 fi
 
-# ---------- S9 killrelay_truthful -----------------------------------------------------------
-# The rewritten role-based kill must CONFIRM >=1 kill, and the bridge must log its disconnect
-# ("connection down") plus a FRESH "connected (server version" PAST a pre-kill offset - the
-# vacuous KILLED-RELAY=0 pass and the stale-connected-line pass are both unreachable here.
-if ! Lk=$(blog_len); then
-  st killrelay_truthful FAIL "blog_len unreadable before the kill - no offset to anchor reconnect evidence"
-else
-  # AS SYSTEM (pushrun -> qubes.VMShell), NOT run-as-user: only SYSTEM sees notifhost.exe and its
-  # --relay command line (the identification key). run-as-user's limited token returned an empty
-  # list, making KILLED-RELAY=0 vacuous (audit 2026-09-05).
-  QTEST_VM=$VM timeout -k 8 90 ./tools/qtest pushrun guest/a0-kill-relay.ps1 > "$OUT/s9-kill.txt" 2>&1
-  killed=$(grep -aoE 'KILLED-RELAY=[0-9]+' "$OUT/s9-kill.txt" | head -1 | grep -aoE '[0-9]+$')
-  if [ -z "$killed" ]; then
-    log "TRANSIENT: kill-relay returned no KILLED-RELAY line (raw: $(head -c 200 "$OUT/s9-kill.txt" | tr '\n' ';')); retrying once in 10s"
-    sleep 10
-    QTEST_VM=$VM timeout -k 8 90 ./tools/qtest pushrun guest/a0-kill-relay.ps1 > "$OUT/s9-kill2.txt" 2>&1
-    killed=$(grep -aoE 'KILLED-RELAY=[0-9]+' "$OUT/s9-kill2.txt" | head -1 | grep -aoE '[0-9]+$')
-  fi
-  recon=no
-  if [ "${killed:-0}" -ge 1 ] 2>/dev/null; then
-    sleep 8   # reader notices EOF, banners restore; backoff first retry 5s
-    for i in $(seq 1 12); do
-      blog_since "$Lk" > "$OUT/s9-blog.txt"
-      grep -qa "connection down" "$OUT/s9-blog.txt" && \
-        grep -qa "connected (server version" "$OUT/s9-blog.txt" && { recon=yes; break; }
-      sleep 3
-    done
-  fi
-  if [ "${killed:-0}" -ge 1 ] 2>/dev/null && [ "$recon" = yes ]; then
-    st killrelay_truthful PASS "KILLED-RELAY=$killed + NEW 'connection down' + fresh 'connected (server version' past offset $Lk"
-  else
-    st killrelay_truthful FAIL "killed='${killed:-absent}' recon=$recon (0/absent = SYSTEM cmdline kill found no --relay proc, or enumeration blind; no down+reconnect past $Lk = kill did not sever the live connection) markers: $(grep -haoE 'RELAY-KILL-[A-Z]+=[^[:space:]]*' "$OUT"/s9-kill*.txt 2>/dev/null | tr '\n' ' ' | head -c 200)"
-  fi
-fi
+# ---------- S9 RETIRED: killrelay_truthful ---------------------------------------------------
+# Deleted 2026-09-05 with the P6c relay-kill phase. There is NO separate `notifhost --relay`
+# process on this guest to kill (one notifhost.exe = the --bridge; the vchan rides a
+# WMI-unidentifiable qrexec-wrapper.exe, and killing all wrappers would sever qtest's own
+# qrexec). The reconnect capability is now asserted by the full harness's P6b (consent
+# Deny->exit->Allow->reconnect), whose only instruments are blog_since/hb_state/SENT-line greps
+# - already validated here by blog_len_is_real, hb_state_up and fire_confirms. Nothing new to
+# floor-validate, so no replacement check is added (no orphaned st line).
 
 # ---------- S10 consent_roundtrip -----------------------------------------------------------
 # Both directions must READ BACK (the P6a corruption was a silently-failed revoke). Deny->Allow

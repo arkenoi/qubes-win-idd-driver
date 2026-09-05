@@ -12,7 +12,8 @@
 #     in-guest (fail-open). Refuted if an allowlisted toast is ever lost (neither bannered nor
 #     bridged) or any split direction inverts.
 #   BASELINE: the gate-OFF arm runs FIRST on the same primed guest (P2), before any enable.
-#   VARIABLE: one per phase — gate+allowlist (P3/P4), consent (P6a/b), relay liveness (P6c).
+#   VARIABLE: one per phase — gate+allowlist (P3/P4), consent revoke/restore (P6a fail-open,
+#   P6b reconnect). (The old P6c "kill the relay" phase is retired - see P6b for why.)
 #   INSTRUMENT: qtest-geom o-r window diffs (validated in P2: fires on a known-good
 #     NotifyClient --send, silent on none), bridge.log tail past a per-phase offset (rule 8),
 #     notifhost --dump-aumids for Notification Center records, certutil sha256 of the
@@ -295,16 +296,38 @@ else
   fi
 fi
 
-log "P6b: restore consent -> bridge recovers"
+log "P6b: restore consent -> bridge RECONNECTS and re-forwards (this is the reconnect assertion)"
+# P6b now carries the RECONNECT verdict outright. The old P6c ("kill the relay") is DELETED:
+# empirically this guest runs exactly ONE notifhost.exe (the --bridge) while connected+forwarding
+# - there is NO separate `notifhost --relay` process. The qubes.Notifications vchan is carried by
+# a per-connection qrexec-wrapper.exe (session 1); identifying WHICH wrapper is that relay needs
+# its command line = WMI, and WMI is BROKEN in this guest (Get-CimInstance/wmic/Get-Process return
+# empty; only tasklist works, no command lines), while killing ALL wrappers would also sever
+# qtest's own qrexec. So "find and kill the relay" is impossible here. The disconnect->reconnect->
+# re-forward capability is instead induced and asserted RIGHT HERE by the consent cycle: P6a's
+# Deny forced `FATAL access=2 ... exiting` (bridge exits, connection torn down); the Allow below
+# drives a fresh `connected (server version` + a post-restore `SENT id=..OK`. (owner decision
+# 2026-09-05; the bridge also supports bare in-process reconnect via ConnUp on g_connDead, but
+# there is no guest-side way to drop only the connection without the WMI-unidentifiable wrapper.)
+#
+# $Lpre (set in P6a, before the relaunch) is the offset that anchors the reconnect evidence: the
+# disconnect (P6a's `FATAL access=`, or a `connection down`) AND the NEW `connected (server version`
+# must both appear PAST it, so a stale connected line from before the cycle can never satisfy it.
+Ldis="${Lpre:-0}"
 raspush guest/a0-consent.ps1 "-Value Allow" a0x3$RANDOM >/dev/null 2>&1
 rec=""
 for i in $(seq 1 30); do   # <=150s: supervise 5s + 60s throttle + connect
-  L3=$(blog_len); blog_since 0 > "$OUT/p6b-blog.txt"
-  tail -20 "$OUT/p6b-blog.txt" | grep -qa "connected (server version" && \
+  blog_since "$Ldis" > "$OUT/p6b-blog.txt"
+  # a NEW connected line past the revoke offset AND a heartbeat now = a real reconnect, not P6b's
+  # own stale connected line
+  grep -qa "connected (server version" "$OUT/p6b-blog.txt" && \
     [ "$(hb_state)" = PRESENT ] && { rec=1; break; }
   sleep 5
 done
-if [ -n "$rec" ]; then
+# the tear-down half of the cycle must be present in the same window (FATAL consent exit or an
+# explicit connection-down) - proves a disconnect actually preceded the reconnect
+grep -qaE "FATAL access=|connection down" "$OUT/p6b-blog.txt" && disc=1 || disc=
+if [ -n "$rec" ] && [ -n "$disc" ]; then
   # recovery cleared suppression (reconnect), so re-earn it with a warm-up (lazy suppression)
   Lw2=$(blog_len); fire_info "A0T recov-warmup" > /dev/null 2>&1
   for i in $(seq 1 15); do blog_since "$Lw2" | grep -qa "SENT id=.*OK" && break; sleep 2; done
@@ -315,53 +338,13 @@ if [ -n "$rec" ]; then
   sent=""
   for i in $(seq 1 15); do blog_since "$L4" | grep -qa "SENT id=.*OK" && { sent=1; break; }; sleep 2; done
   gb=no; new_or_window "$OUT/p6b-guest-base.ids" "$TOASTRE" 2 p6b-guest && gb=yes
-  [ -n "$sent" ] && [ "$gb" = no ] && verdict P6b "PASS recovery: bridged again + re-suppressed after consent restore" \
-    || verdict P6b "FAIL recovery sent=${sent:-no} guestbanner=$gb"
+  [ -n "$sent" ] && [ "$gb" = no ] \
+    && verdict P6b "PASS reconnect: disconnect (consent cycle) -> NEW 'connected (server version' past line $Ldis -> bridged again + re-suppressed" \
+    || { cap "$OUT" p6b "$R"; verdict P6b "FAIL recovery sent=${sent:-no} guestbanner=$gb (reconnected but re-forward/suppress wrong)"; }
+elif [ -n "$rec" ]; then
+  cap "$OUT" p6b "$R"; verdict P6b "FAIL reconnected (connected line past $Ldis) but NO preceding disconnect (FATAL/connection-down) in window - reconnect not proven"
 else
-  verdict P6b "FAIL bridge never recovered after consent restore"
-fi
-
-log "P6c: kill the relay -> banners restored, then auto-reconnect"
-# Offset BEFORE the kill: the old detector (`blog_since 0 | tail -8 | grep connected`) matched
-# a STALE connected line from P6b and declared reconnect without one happening (audit
-# 2026-09-05). Only lines PAST L5 count, and the bridge must log BOTH its disconnect notice
-# ("connection down - banners restored", notifhost.cpp BridgeMain) and a NEW
-# "connected (server version" to prove the kill->EOF->restore->reconnect path actually ran.
-if ! L5=$(blog_len); then
-  verdict P6c "INSTRUMENT blog_len unreadable before relay kill - no offset to anchor reconnect evidence, NOT graded"
-else
-  # Run the relay-kill AS SYSTEM (pushrun -> qubes.VMShell), NOT run-as-user: only SYSTEM can
-  # enumerate notifhost.exe AND read its --relay command line, which is how the relay is now
-  # identified (guest/a0-kill-relay.ps1). run-as-user's limited token returned an empty process
-  # list, making KILLED-RELAY=0 a vacuous pass (audit 2026-09-05).
-  QTEST_VM=$VM timeout -k 8 90 ./tools/qtest pushrun guest/a0-kill-relay.ps1 > "$OUT/p6c-kill.txt" 2>&1
-  killed=$(grep -aoE 'KILLED-RELAY=[0-9]+' "$OUT/p6c-kill.txt" | head -1 | grep -aoE '[0-9]+$')
-  log "P6c: KILLED-RELAY=${killed:-absent} $(grep -aoE 'RELAY-KILL-[A-Z]+=[^[:space:]]*' "$OUT/p6c-kill.txt" | tr '\n' ' ')"
-  if [ "${killed:-0}" -lt 1 ]; then
-    # nothing confirmed dead => the path under test never ran; grading it would be vacuous
-    cap "$OUT" p6c-nokill "$R"
-    verdict P6c "INSTRUMENT relay kill confirmed 0 kills (KILLED-RELAY=${killed:-absent}) - reconnect path never exercised, NOT a bridge verdict"
-  else
-    sleep 8    # reader notices EOF, banners restore; backoff first retry 5s
-    recon=""
-    for i in $(seq 1 10); do
-      blog_since "$L5" > "$OUT/p6c-blog.txt"
-      grep -qa "connection down" "$OUT/p6c-blog.txt" && \
-        grep -qa "connected (server version" "$OUT/p6c-blog.txt" && { recon=1; break; }
-      sleep 3
-    done
-    if [ -n "$recon" ]; then
-      L6=$(blog_len)
-      snap_or "$TOASTRE" p6c-guest-base > "$OUT/p6c-guest-base.ids"
-      fire_info "A0T post-reconnect" > /dev/null 2>&1
-      sent=""
-      for i in $(seq 1 15); do blog_since "$L6" | grep -qa "SENT id=.*OK" && { sent=1; break; }; sleep 2; done
-      [ -n "$sent" ] && verdict P6c "PASS relay killed ($killed) -> disconnect noticed -> reconnected -> bridged again" \
-        || verdict P6c "FAIL no bridged send after reconnect"
-    else
-      verdict P6c "FAIL no NEW disconnect+reconnect after relay kill (since line $L5): $(tail -4 "$OUT/p6c-blog.txt" | tr '\n' ';')"
-    fi
-  fi
+  cap "$OUT" p6b "$R"; verdict P6b "FAIL bridge never reconnected after consent restore (no NEW 'connected (server version' past line $Ldis): $(tail -4 "$OUT/p6b-blog.txt" | tr '\n' ';')"
 fi
 
 # ---------- P7 politeness ------------------------------------------------------------------
@@ -393,6 +376,18 @@ timeout -k 8 60 ./tools/qtest shutdown >/dev/null 2>&1
 w_halt "$VM" 300 p8-halt log || { QTEST_VM=$VM timeout -k 8 30 ./tools/qtest kill >/dev/null 2>&1; sleep 5; }
 timeout -k 8 60 ./tools/qtest start >/dev/null 2>&1
 w_usersession "$VM" 900 p8-session "$OUT" log || { verdict P8 "FAIL no session after legacy-toasts cold boot"; }
+# STALE PRE-BOOT HEARTBEAT RACE (confirmed 2026-09-05, P8 false-FAIL hbseen=1). The P6b/P7 bridge
+# wrote C:\ProgramData\qubes-toast-bridge\heartbeat every ~2s right up to this cold shutdown; a
+# FORCED halt kills it before its clean-exit heartbeat-delete (notifhost.cpp:1031) can run, so the
+# file SURVIVES the reboot with an mtime ~= shutdown time. On a fast boot (~25s this run) it is
+# still inside hb_state's 45s freshness window at the poll below => false PRESENT. Deleting it
+# BEFORE the shutdown does NOT help: the bridge is still running and rewrites the file (CREATE_ALWAYS,
+# notifhost.cpp:843) within one ~2s loop before the halt. Delete it HERE, AFTER the gate-off cold
+# boot: the gate is forced off so no bridge launches, and ONLY BridgeMain's loop writes the
+# heartbeat (--restore-banners does not), so nothing recreates it. A subsequent hb_state=PRESENT
+# can then ONLY be a real, wrongly-launched post-boot bridge - the exact regression P8 must catch.
+# Run as SYSTEM (qrun) so the ProgramData file is deletable regardless of the user-session owner.
+qrun "cmd /c del /q /f \"C:\\ProgramData\\qubes-toast-bridge\\heartbeat\" 2>nul" >/dev/null 2>&1
 # bridge must NOT come up (gate forced off); allow a generous window then confirm no heartbeat
 hbseen=""
 for i in $(seq 1 20); do
@@ -417,9 +412,9 @@ cap "$OUT" final "$R" || true
 blog_since 0 > "$OUT/bridge-full.log" 2>/dev/null || true
 log "=== verdicts ==="; cat "$OUT/verdicts.txt" | tee -a "$R"
 # Count FAIL *and* INSTRUMENT: an INSTRUMENT verdict means a phase was never actually exercised
-# (fire never fired, consent never revoked, blog_len unreadable, 0 relay kills) - "missing data
-# fails", so the overall exit code the caller gates on must NOT read green when a phase was ungraded
-# (audit 2026-09-05: the old `grep -c FAIL` let an unexercised P6c exit 0).
+# (fire never fired, consent never revoked, blog_len unreadable) - "missing data fails", so the
+# overall exit code the caller gates on must NOT read green when a phase was ungraded
+# (audit 2026-09-05: the old `grep -c FAIL` let an unexercised phase exit 0).
 fails=$(grep -cE 'FAIL|INSTRUMENT' "$OUT/verdicts.txt" || true)
 log "=== done: $fails FAIL/INSTRUMENT line(s); evidence in $OUT; subject $VM left running for inspection ==="
 [ "${fails:-0}" = 0 ]
