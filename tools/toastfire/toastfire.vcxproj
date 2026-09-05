@@ -1,18 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  notifhost - standalone x64 console EXE. Deliberately NOT a WDK project:
-    * PlatformToolset v143 (plain VS2022 C++), not WindowsApplicationForDrivers10.0, so the
-      build does not depend on the WDK VSIX having been installed successfully.
-    * RuntimeLibrary MultiThreaded (/MT) so the exe has no VC++ redist dependency at all.
-      (win-idd-test does have the 2015-2022 x64 redist from the QWT install, but the probe
-      must also be droppable on a bare guest.)
-    * Only d3d11.lib / dxgi.lib / user32.lib / advapi32.lib / tdh.lib - all in-box Windows
-      SDK import libs, no WDK, no nuget. tdh.lib serves the ETW acquisition tier
-      (TdhGetEventInformation / TdhEnumerateProviders, DESIGN-p3-classifier-impl.md sec 10.3);
-      the evntrace.h session APIs resolve through the already-linked advapi32.lib.
+  toastfire - standalone x64 console EXE: deterministic synthetic unpackaged-toast sender
+  for the toast-bridge tests. Mirrors tools/notifhost/notifhost.vcxproj deliberately:
+    * PlatformToolset v143 (plain VS2022 C++), NOT a WDK project - no dependency on the
+      WDK VSIX having installed successfully.
+    * RuntimeLibrary MultiThreaded (/MT) - no VC++ redist dependency, droppable on a bare
+      guest.
+    * SDK-only C++/WinRT (windowsapp.lib) plus in-box ole32/shell32/advapi32/uuid for the
+      Start-shortcut (.lnk property store) and com-activator (HKCU registry) registration
+      methods. No WDK, no nuget.
   Build in CI with:
-    msbuild tools\notifhost\notifhost.vcxproj /p:Configuration=Release /p:Platform=x64
-  Output is pinned to  tools\notifhost\x64\Release\notifhost.exe  by OutDir below, so the
+    msbuild tools\toastfire\toastfire.vcxproj /p:Configuration=Release /p:Platform=x64
+  Output pinned to  tools\toastfire\x64\Release\toastfire.exe  by OutDir below, so the
   workflow's "Collect package" step can copy it from a known path.
 -->
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
@@ -29,9 +28,9 @@
 
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
-    <ProjectGuid>{3E9B1A77-5C42-4D18-8AeF-1B2C3D4E5F60}</ProjectGuid>
-    <RootNamespace>notifhost</RootNamespace>
-    <ProjectName>notifhost</ProjectName>
+    <ProjectGuid>{7A5D2C91-4B0E-4F3A-9C6D-0E1F2A3B4C5D}</ProjectGuid>
+    <RootNamespace>toastfire</RootNamespace>
+    <ProjectName>toastfire</ProjectName>
     <!-- "10.0" = whichever Windows 10 SDK the runner has installed. -->
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
@@ -67,7 +66,7 @@
   <PropertyGroup>
     <OutDir>$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(ProjectDir)$(Platform)\$(Configuration)\obj\</IntDir>
-    <TargetName>notifhost</TargetName>
+    <TargetName>toastfire</TargetName>
   </PropertyGroup>
 
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -84,7 +83,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;user32.lib;gdi32.lib;advapi32.lib;tdh.lib;kernel32.lib;windowsapp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>windowsapp.lib;ole32.lib;shell32.lib;advapi32.lib;uuid.lib;kernel32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
@@ -106,12 +105,12 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;user32.lib;gdi32.lib;advapi32.lib;tdh.lib;kernel32.lib;windowsapp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>windowsapp.lib;ole32.lib;shell32.lib;advapi32.lib;uuid.lib;kernel32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
-    <ClCompile Include="notifhost.cpp" />
+    <ClCompile Include="toastfire.cpp" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

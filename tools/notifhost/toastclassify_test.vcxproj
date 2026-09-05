@@ -1,19 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  notifhost - standalone x64 console EXE. Deliberately NOT a WDK project:
-    * PlatformToolset v143 (plain VS2022 C++), not WindowsApplicationForDrivers10.0, so the
-      build does not depend on the WDK VSIX having been installed successfully.
-    * RuntimeLibrary MultiThreaded (/MT) so the exe has no VC++ redist dependency at all.
-      (win-idd-test does have the 2015-2022 x64 redist from the QWT install, but the probe
-      must also be droppable on a bare guest.)
-    * Only d3d11.lib / dxgi.lib / user32.lib / advapi32.lib / tdh.lib - all in-box Windows
-      SDK import libs, no WDK, no nuget. tdh.lib serves the ETW acquisition tier
-      (TdhGetEventInformation / TdhEnumerateProviders, DESIGN-p3-classifier-impl.md sec 10.3);
-      the evntrace.h session APIs resolve through the already-linked advapi32.lib.
-  Build in CI with:
-    msbuild tools\notifhost\notifhost.vcxproj /p:Configuration=Release /p:Platform=x64
-  Output is pinned to  tools\notifhost\x64\Release\notifhost.exe  by OutDir below, so the
-  workflow's "Collect package" step can copy it from a known path.
+  toastclassify_test - offline unit suite for the P3b pure toast classifier
+  (toastclassify.h + toastclassify_fixtures.h). Mirrors notifhost.vcxproj's rules:
+  v143 (no WDK), /MT (no redist), Windows SDK only - and needs even less (pure C++17,
+  no WinRT, no d3d). Runs on the CI Windows runner straight after msbuild.
+
+  Build:
+    msbuild tools\notifhost\toastclassify_test.vcxproj /p:Configuration=Release /p:Platform=x64
+  Defect-reintroduction proof (the suite must then FAIL - CI inverts the exit code):
+    msbuild ... /t:Rebuild /p:ToastClassifyDefect=TOASTCLASSIFY_DEFECT_ROW4
+  Output pinned to tools\notifhost\x64\Release\toastclassify_test.exe.
 -->
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
@@ -29,11 +25,13 @@
 
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
-    <ProjectGuid>{3E9B1A77-5C42-4D18-8AeF-1B2C3D4E5F60}</ProjectGuid>
-    <RootNamespace>notifhost</RootNamespace>
-    <ProjectName>notifhost</ProjectName>
-    <!-- "10.0" = whichever Windows 10 SDK the runner has installed. -->
+    <ProjectGuid>{7D24C9F1-0A3B-4E56-9C81-52AEE7B0D144}</ProjectGuid>
+    <RootNamespace>toastclassify_test</RootNamespace>
+    <ProjectName>toastclassify_test</ProjectName>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <!-- empty by default; CI passes /p:ToastClassifyDefect=TOASTCLASSIFY_DEFECT_ROW4
+         for the defect-reintroduction build -->
+    <ToastClassifyDefect Condition="'$(ToastClassifyDefect)'==''"></ToastClassifyDefect>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -55,26 +53,19 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings" />
   <ImportGroup Label="Shared" />
-  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-  </ImportGroup>
-  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
-  </ImportGroup>
   <PropertyGroup Label="UserMacros" />
 
-  <!-- Deterministic, solution-independent output locations. -->
   <PropertyGroup>
     <OutDir>$(ProjectDir)$(Platform)\$(Configuration)\</OutDir>
-    <IntDir>$(ProjectDir)$(Platform)\$(Configuration)\obj\</IntDir>
-    <TargetName>notifhost</TargetName>
+    <IntDir>$(ProjectDir)$(Platform)\$(Configuration)\obj-toastclassify\</IntDir>
+    <TargetName>toastclassify_test</TargetName>
   </PropertyGroup>
 
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level4</WarningLevel>
       <SDLCheck>false</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;$(ToastClassifyDefect);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
@@ -84,7 +75,6 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;user32.lib;gdi32.lib;advapi32.lib;tdh.lib;kernel32.lib;windowsapp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
@@ -94,7 +84,7 @@
       <SDLCheck>false</SDLCheck>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;WIN32_LEAN_AND_MEAN;NOMINMAX;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;_CRT_SECURE_NO_WARNINGS;$(ToastClassifyDefect);%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
@@ -106,12 +96,15 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>d3d11.lib;dxgi.lib;user32.lib;gdi32.lib;advapi32.lib;tdh.lib;kernel32.lib;windowsapp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
-    <ClCompile Include="notifhost.cpp" />
+    <ClCompile Include="toastclassify_test.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="toastclassify.h" />
+    <ClInclude Include="toastclassify_fixtures.h" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

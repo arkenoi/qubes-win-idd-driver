@@ -431,6 +431,32 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "notifhost msbuild failed" }
           Get-ChildItem tools\notifhost\x64\Release\notifhost.exe
 
+      - name: Toast classifier unit suite (P3b)
+        shell: pwsh
+        run: |
+          # tools/notifhost/toastclassify.h: pure per-toast classifier implementing the
+          # DESIGN-toast-bridge.md 2.2 decision table (Phase 3). Offline suite over the
+          # synthetic corpus - no rig, no WinRT. Two passes:
+          #   1. clean build MUST pass;
+          #   2. defect-reintroduction build (row 4 logic deliberately inverted via
+          #      /p:ToastClassifyDefect) MUST FAIL - proves the suite can actually fail
+          #      (a check never seen to fail is decoration).
+          $proj = 'tools\notifhost\toastclassify_test.vcxproj'
+          $exe  = 'tools\notifhost\x64\Release\toastclassify_test.exe'
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
+          if ($LASTEXITCODE -ne 0) { throw "toastclassify_test msbuild failed" }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw "toastclassify_test suite FAILED on the clean build" }
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
+              /t:Rebuild /p:ToastClassifyDefect=TOASTCLASSIFY_DEFECT_ROW4
+          if ($LASTEXITCODE -ne 0) { throw "toastclassify_test defect build failed to compile" }
+          & $exe
+          if ($LASTEXITCODE -eq 0) { throw "defect-reintroduction proof FAILED: suite passed with row-4 logic inverted" }
+          Write-Host 'defect proof OK: suite fails when row 4 is deliberately broken'
+          # leave a clean binary behind (nothing packages it, but never leave a defect build around)
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
+          if ($LASTEXITCODE -ne 0) { throw "toastclassify_test clean rebuild failed" }
+
       - name: Build wgcprobe
         shell: pwsh
         run: |
@@ -440,6 +466,19 @@ jobs:
               /p:Configuration=Release /p:Platform=x64 /t:Build
           if ($LASTEXITCODE -ne 0) { throw "wgcprobe msbuild failed" }
           Get-ChildItem tools\wgcprobe\x64\Release\wgcprobe.exe
+
+      - name: Build toastfire
+        shell: pwsh
+        run: |
+          # tools/toastfire: DETERMINISTIC synthetic unpackaged-toast sender for the toast-bridge
+          # tests (byte-stable payloads + caller-controlled tags, vs fire-demo-toast.ps1's random
+          # per-fire GUID tag; three genuinely distinct unpackaged registration methods:
+          # start-shortcut / com-activator / bare). Plain v143, /MT, SDK-only C++/WinRT - mirrors
+          # tools/notifhost. Self-checks every payload through toastclassify.h before firing.
+          & "${{ steps.vs.outputs.msbuild }}" tools\toastfire\toastfire.vcxproj `
+              /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "toastfire msbuild failed" }
+          Get-ChildItem tools\toastfire\x64\Release\toastfire.exe
 
       # core-agent-windows (our fork) carries the qrexec-wrapper drain-race fix (U15). It needs the
       # SAME dependency set the gui-agent build just staged - libvchan, xencontrol, windows-utils,
@@ -517,6 +556,9 @@ jobs:
           if (Test-Path tools\wgcprobe\x64\Release\wgcprobe.exe) {
             Copy-Item tools\wgcprobe\x64\Release\wgcprobe.exe package-agent\ -Force
           } else { Write-Warning 'wgcprobe.exe missing from package-agent' }
+          if (Test-Path tools\toastfire\x64\Release\toastfire.exe) {
+            Copy-Item tools\toastfire\x64\Release\toastfire.exe package-agent\ -Force
+          } else { Write-Warning 'toastfire.exe missing from package-agent' }
           Get-ChildItem package-agent
 
       - uses: actions/upload-artifact@v4
