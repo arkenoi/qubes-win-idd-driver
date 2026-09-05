@@ -16,10 +16,13 @@
 // supervised by the SYSTEM gui-agent via Task Scheduler (/ru user /it, wgcbroker pattern),
 // gated by registry "NotifyBridge" / qubesdb /qubes-service/notify-bridge, default OFF.
 // P3a shadow instrumentation (MEASURE-ONLY, DESIGN-toast-bridge.md 3.4.1): every new toast
-// is additionally acquired through the ETW-FIRST fail-open ladder (tier 1: ETW push ring,
-// fed over ONE-WAY read-only IPC by the separate --etw-proxy process - NO ETW/TDH code runs
-// in this user-session bridge; tier 2: wpndatabase.db correlate, now on an OFF-THREAD
-// worker paced by a WAL file-watch; tier 3: none -> window; see the P3-ETW section) and
+// is additionally acquired through the HYBRID fail-open ladder (tier 1: an ETW SIGNAL
+// {AUMID, notificationId, tag, group} from the ring - fed over ONE-WAY read-only IPC by the
+// separate --etw-proxy process, NO ETW/TDH code runs in this user-session bridge - answered
+// by ONE TARGETED wpndatabase read for the payload, keyed by notificationId with an
+// AUMID+tag+group+arrival-window fallback; tier 2: the wpndatabase.db correlate when no
+// signal exists, on an OFF-THREAD worker paced by a WAL file-watch; tier 3: none -> window;
+// see the P3-ETW section) and
 // dry-run classified (CLASSIFY + SUPPAPI lines in bridge.log), and each forward's dom0 ack
 // round-trip is timed (FWD_RTT) to size the Phase-3 deferred-map hold budget. None of this
 // can change which toasts banner or forward - the A0 routing is byte-for-byte unchanged.
@@ -68,8 +71,11 @@
 // (and must not) StartTrace/EnableTrace/ControlTrace, and it NEVER stops the session
 // (the agent does, at park/shutdown/job-kill). It is the SERVER of a kernel-enforced
 // one-way pipe (PIPE_ACCESS_OUTBOUND, DACL = the --client-sid bridge user ONLY,
-// read-only) and only PUSHES {AUMID, RAW payload bytes, notif-id,
-// FILETIME} frames; it reads nothing, accepts no control channel, has no stop file. Exit:
+// read-only) and only PUSHES payload-free SIGNAL frames {AUMID, notificationId (string +
+// numeric), tag, group, FILETIME} (design 10.20.1 - the rig proved the <toast> payload is
+// NEVER in ETW on Win10, so the proxy no longer materializes payload bytes at all; the
+// bridge answers each signal with ONE targeted wpndatabase read for the payload); it
+// reads nothing, accepts no control channel, has no stop file. Exit:
 // 0 clean stop, 5 consume denied (OpenTrace/ProcessTrace ERROR_ACCESS_DENIED - the
 // per-session DACL grant did not suffice on this build; the agent parks on this TRUE
 // finding), 7 consumer open/thread/event failure, 8 pipe creation failure (incl. a
@@ -617,11 +623,15 @@ static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summ
 }
 
 // ==================== P3a probe: wpndatabase.db shadow classifier (MEASURE-ONLY) ==========
-// NOW TIER 2 of the acquisition ladder (see the P3-ETW section below): WpnCorrelate runs
-// only when the ETW push tier yields nothing for a toast, and remains the floor above
-// "none -> window". Since the 2026-09-05 proxy refactor it runs ONLY on the off-thread
-// shadow worker (never the poll thread), and its retry pacing is event-driven when the
-// WAL file-watch is armed. Nothing else in this section changed semantics.
+// NOW TIER 2 of the acquisition ladder (see the P3-ETW section below): WpnCorrelate is
+// the ETW-DOWN fallback - it runs only when NO ETW signal exists for a toast (tier
+// down/off, or the providers were silent for this app), and remains the floor above
+// "none -> window". When a signal DOES exist, the worker instead answers it with the
+// precise targeted read (WpnTargetedRead), which reuses this section's helpers
+// (kWpnSelectSql, WpnOpen, WpnFirstTextW, ...). Since the 2026-09-05 proxy refactor all
+// of it runs ONLY on the off-thread shadow worker (never the poll thread), and its retry
+// pacing is event-driven when the WAL file-watch is armed. Nothing else in this section
+// changed semantics.
 // DESIGN-toast-bridge.md Phase 3 / 3.4.1. Everything in this section OBSERVES and LOGS;
 // none of it may influence which toasts banner or forward - the A0 routing stays
 // byte-for-byte unchanged (ShadowClassify is called before the unchanged skip/forward
@@ -895,22 +905,28 @@ static std::wstring WpnSignalSlug(ToastClass const& k)
     return s;
 }
 
-// ==================== P3-ETW: push acquisition tier (ETW-FIRST ladder, MEASURE-ONLY) ======
-// The Phase-3 acquisition LADDER. Per new toast, in order:
-//   tier 1  ETW ring lookup  - push: {AUMID, RAW payload bytes} captured AT SOURCE by the
-//                              LEAST-PRIVILEGE --etw-proxy process (separate token, below)
-//                              and pushed over a one-way pipe into an in-memory ring here;
-//                              the lookup is a non-blocking ring scan. No DB open, no WAL
-//                              retry, ~0 ms.
-//   tier 2  WpnCorrelate     - the wpndatabase.db correlate above (bounded, WAL-watch-paced
-//                              retry) - now run ONLY on the off-thread shadow worker.
-//   tier 3  none             - shadow verdict "window" (today's exact behaviour).
-// Every rung degrades to the next on ANY gap - proxy not running, pipe absent/closed, event
-// without a payload, record oversize/undecodable - and a bridge verdict is only ever EARNED
-// by a clean {AUMID, payload} + classifier match on some rung. The rig has NOT yet
-// validated that any notification ETW provider carries the toast payload; --dump-etw (and
-// the proxy's own logs) answer that, and until they say yes the tier is EXPECTED to sit in
-// state=down with the ladder serving everything from tier 2.
+// ==================== P3-ETW: push acquisition tier (HYBRID ladder, MEASURE-ONLY) ========
+// The Phase-3 acquisition LADDER (design 10.20 - the 2026-09-05 rig verdict: the 732-event
+// broadcap over these exact provider GUIDs + mask proved the notification providers emit
+// {AppUserModelId, notificationId, tag, group, timing} but NEVER the <toast> payload XML,
+// so ETW is a SIGNAL and wpndatabase is the payload source). Per new toast, in order:
+//   tier 1  ETW signal        - push: {AUMID, notificationId (string + numeric), tag,
+//           + targeted read     group, event FILETIME} captured AT SOURCE by the
+//                               LEAST-PRIVILEGE --etw-proxy process (separate token, below)
+//                               and pushed over a one-way pipe into an in-memory ring here.
+//                               EtwTierLookup is a non-blocking ring scan returning up to 4
+//                               candidate SIGNALS (never a payload); the shadow worker then
+//                               answers each with ONE TARGETED wpndatabase read - primary
+//                               key n.Id = notificationId (cross-checked against the signal
+//                               AUMID), fallback AUMID + tag/group + eventFt-anchored
+//                               arrival window - and classifies the row's payload.
+//   tier 2  WpnCorrelate      - the wpndatabase.db correlate above (bounded, WAL-watch-
+//                               paced retry) when NO signal exists for the toast (tier
+//                               down/off/silent) - the ETW-DOWN fallback, unchanged.
+//   tier 3  none              - shadow verdict "window" (today's exact behaviour).
+// Every rung degrades on ANY gap - proxy not running, pipe absent/closed, no wpndb row for
+// a signal, id/AUMID mismatch, ambiguity - and a bridge verdict is only ever EARNED by a
+// clean acquisition: corr in {id-ok, sig-unique} on tier 1, corr=ok on tier 2.
 //
 // PRIVILEGE SPLIT (the 2026-09-05 refactor): the ETW consumer + TDH decode parse
 // attacker-influenceable event data (any same-session process can emit events under a
@@ -931,7 +947,8 @@ static std::wstring WpnSignalSlug(ToastClass const& k)
 // file: variable latency in the hot loop once pushed an iteration past the supervisor's
 // 15 s deadline and got the live bridge TERMINATED). The poll thread's ONLY acquisition
 // work is a fixed-cost enqueue to the shadow worker; the pipe read loop blocks its own
-// thread, WpnCorrelate blocks the worker, and EtwTierLookup is a critical-section-guarded
+// thread, the DB reads (WpnTargetedRead / WpnCorrelate) block the worker, and
+// EtwTierLookup is a critical-section-guarded
 // deque scan (the IPC thread holds that lock for a push_back only, microseconds). No
 // acquisition failure can feed failStreak/FATAL: every fault parks a tier in down/dead and
 // the ladder falls through.
@@ -967,23 +984,32 @@ struct CsGuard
     CsGuard& operator=(CsGuard const&) = delete;
 };
 
-// One-way wire protocol, proxy -> bridge, over a byte pipe. One frame per captured event,
-// little-endian, every length bound-checked on receive:
-//   u32 magic 'QTE1' | u32 aumidBytes | u32 payloadBytes | u32 notifBytes |
-//   u64 eventFiletime | aumid (UTF-16LE) | payload (RAW event property bytes - the
-//   defensive XML parse stays in toastclassify.h on the bridge side) | notifId (UTF-16LE)
-#define ETW_WIRE_MAGIC        0x31455451u          // 'Q','T','E','1' read LE
-#define ETW_WIRE_HDR_BYTES    24u
+// One-way wire protocol, proxy -> bridge, over a byte pipe. 'QTS1' SIGNAL frame (design
+// 10.20.1; replaces the 'QTE1' payload frame - the payload field is DELETED because the
+// payload is not in ETW on Win10, proven by the 732-event broadcap). One frame per
+// AUMID-bearing event, little-endian, every length bound-checked on receive:
+//   off  0  u32 magic 'QTS1'
+//        4  u32 aumidBytes    (UTF-16LE, <= 1024; 0 allowed only when notifIdNum != 0)
+//        8  u32 notifIdBytes  (UTF-16LE raw string form, <= 64; may be 0)
+//       12  u32 tagBytes      (UTF-16LE, <= 256; may be 0)
+//       16  u32 groupBytes    (UTF-16LE, <= 256; may be 0)
+//       20  u64 notifIdNum    (the notificationId as an integer when its TDH intype was
+//                              integral or the string is all-decimal; 0 = no id join)
+//       28  u64 eventFiletime (EVENT_RECORD FILETIME)
+//       36  aumid | notifId | tag | group bytes, in that order
+#define ETW_WIRE_MAGIC        0x31535451u          // 'Q','T','S','1' read LE
+#define ETW_WIRE_HDR_BYTES    36u
 #define ETW_MAX_AUMID_BYTES   1024u
-#define ETW_MAX_PAYLOAD_BYTES (64u * 1024u)        // per-entry ring byte cap (review must-fix):
-                                                   // a real toast payload is a few KB; anything
-                                                   // bigger is not one and must not balloon the ring
-#define ETW_MAX_NOTIF_BYTES   256u
+#define ETW_MAX_NOTIF_BYTES   64u
+#define ETW_MAX_TAG_BYTES     256u
+#define ETW_MAX_GROUP_BYTES   256u
+#define ETW_MAX_FRAME_BYTES   2048u                // total frame cap (down from 64 KB: no payload)
 static const wchar_t* const kEtwProxyPipe = L"\\\\.\\pipe\\qubes-toast-etw";
 
-struct EtwToastRec
+struct EtwToastRec                          // one SIGNAL (design 10.20.1) - never a payload
 {
-    std::wstring aumid, payload, notifId;   // whatever the event actually carried
+    std::wstring aumid, notifId, tag, group;   // whatever the event actually carried
+    uint64_t notifIdNum;                    // 0 = "does not join by id"
     long long eventFt;                      // EVENT_RECORD FILETIME (no RAW_TIMESTAMP mode)
     ULONGLONG tick;                         // receipt tick, for pruning
 };
@@ -995,7 +1021,7 @@ static struct
     HANDLE thread = nullptr, stopEvt = nullptr;   // the IPC client thread
     CRITICAL_SECTION lock;                  // guards ring (valid once armed); CsGuard only
     std::deque<EtwToastRec> ring;           // newest at back; capped 64 entries / 120 s /
-                                            // ETW_MAX_PAYLOAD_BYTES per entry (checked on receive)
+                                            // per-field byte caps (checked on receive)
     volatile LONG recTotal = 0, recBad = 0; // IPC records accepted / rejected
 } g_etw;
 
@@ -1009,13 +1035,15 @@ static const wchar_t* const kEtwBridgeSession = L"QubesToastBridgeEtw";   // STA
                                                                           // only OpenTraceW's it
 static const wchar_t* const kEtwDumpSession   = L"QubesToastEtwDump";     // owned by --dump-etw
 
-// Candidate notification providers - CANDIDATES, not facts. hashName=true marks a
+// Candidate notification providers - since the 2026-09-05 broadcap, two are RIG-PROVEN
+// signal sources on Win10 19045: {EB3540F2} Shell.NotificationController (29 AUMID hits)
+// and {88CD9180} PushNotifications-Platform (5 hits) - they carry {AppUserModelId,
+// notificationId, tag, group, timing}, NEVER the payload. hashName=true marks a
 // TraceLogging provider whose GUID is derived from the name at runtime (the standard
 // EventSource/TraceLogging name hash); if such a name is actually manifest-registered the
-// hash yields a GUID nobody writes to = zero events, harmless. The one hardcoded GUID is
-// from public provider inventories (`logman query providers`) and is UNVERIFIED ON THE RIG.
-// --dump-etw confirms per guest which (if any) carry {AUMID, payload} unprivileged; extend
-// this table from its output, never from blog posts.
+// hash yields a GUID nobody writes to = zero events, harmless. --dump-etw confirms per
+// guest which carry the SIGNAL fields unprivileged; extend this table from its output,
+// never from blog posts.
 struct EtwProv { const wchar_t* name; GUID guid; bool hashName; };
 static EtwProv g_etwProviders[] = {
     { L"Microsoft-Windows-PushNotifications-Platform",
@@ -1107,6 +1135,14 @@ static ULONG EtwSessionStart(const wchar_t* name, TRACEHANDLE* out)
                                            // FILETIME (no PROCESS_TRACE_MODE_RAW_TIMESTAMP)
     p->LogFileMode = EVENT_TRACE_REAL_TIME_MODE;
     p->BufferSize = 64;                    // KB/buffer - notification traffic is tiny
+    // L2 FIX (design 10.20.4, the measured events=0): a real-time session delivers to
+    // ProcessTrace on BUFFER FLUSH. With 64 KB buffers per CPU and ~200 B sparse
+    // notification events, no buffer ever fills inside an observation window, so the
+    // callback received NOTHING - while the file-mode logman capture of the SAME
+    // GUIDs+mask got its 732 events because file sessions flush all buffers to the ETL
+    // at stop. FlushTimer=1 forces a per-second flush => <= 1 s delivery. The agent-side
+    // session start (etwproxy.c EtwCtlSessionStart) needs the SAME fix - change both.
+    p->FlushTimer = 1;
     p->LoggerNameOffset = sizeof(EVENT_TRACE_PROPERTIES);
     EtwSessionStop(name);                  // reap a crashed prior run's leftover
     *out = 0;
@@ -1143,12 +1179,35 @@ static int EtwEnableProviders(TRACEHANDLE session, int logMode)   // 0=BLog 1=st
     return enabled;
 }
 
+// Per-delivery buffer instrumentation (design 10.20.4 hardening): logs BuffersRead /
+// EventsLost so "no events" is distinguishable as "no deliveries at all" (pacing/session
+// problem) vs "deliveries with zero events" (provider silence). Rate-bounded: always on
+// loss, else first 3 deliveries and every 100th. Both stdout (the --dump-etw / proxy
+// console) and BLog. Returning TRUE continues ProcessTrace.
+static volatile LONG g_etwBufCount = 0;
+static ULONG WINAPI EtwBufferCb(PEVENT_TRACE_LOGFILEW lf)
+{
+    LONG n = InterlockedIncrement(&g_etwBufCount);
+    if (lf && (lf->EventsLost > 0 || n <= 3 || (n % 100) == 0))
+    {
+        printf("ETWBUF delivery=%ld buffers_read=%lu events_lost=%lu\n",
+               n, lf->BuffersRead, lf->EventsLost);
+        BLog(L"ETWBUF delivery=%ld buffers_read=%lu events_lost=%lu",
+             n, lf->BuffersRead, lf->EventsLost);
+    }
+    return TRUE;
+}
+
+// The real-time consume setup (verified correct per design 10.20.4: LoggerName - not
+// LogFileName - plus REAL_TIME|EVENT_RECORD and the record callback; the events=0 datum
+// was delivery pacing, fixed by FlushTimer above, not this struct).
 static TRACEHANDLE EtwOpen(const wchar_t* name, PEVENT_RECORD_CALLBACK cb)
 {
     EVENT_TRACE_LOGFILEW lf = {};
     lf.LoggerName = const_cast<LPWSTR>(name);
     lf.ProcessTraceMode = PROCESS_TRACE_MODE_REAL_TIME | PROCESS_TRACE_MODE_EVENT_RECORD;
     lf.EventRecordCallback = cb;
+    lf.BufferCallback = EtwBufferCb;
     return OpenTraceW(&lf);
 }
 
@@ -1306,23 +1365,6 @@ static std::wstring EtwWireToW(std::vector<BYTE> const& b)   // UTF-16LE wire fi
     return w;
 }
 
-// RAW payload bytes -> wstring for the ring. The proxy forwards the event property's raw
-// bytes verbatim: TraceLogging UNICODESTRINGs are UTF-16LE without a BOM; BOM'd UTF-16/
-// UTF-8 also occur in the wild. Detect cheaply; on any doubt decode as UTF-8 - a wrong
-// guess yields a string that never text-matches, i.e. a fail-open miss, never a wrong hit.
-static std::wstring EtwRawPayloadToW(std::vector<BYTE> const& b)
-{
-    if (b.size() >= 2 && ((b[0] == 0xFF && b[1] == 0xFE) || (b[1] == 0x00 && b[0] != 0x00)))
-    {
-        size_t off = (b[0] == 0xFF && b[1] == 0xFE) ? 2 : 0;
-        std::wstring w((b.size() - off) / 2, 0);
-        if (!w.empty()) memcpy(&w[0], b.data() + off, w.size() * sizeof(wchar_t));
-        while (!w.empty() && w.back() == 0) w.pop_back();
-        return w;
-    }
-    return WpnPayloadToW(std::string((const char*)b.data(), b.size()));
-}
-
 static bool EtwIpcReadN(HANDLE pipe, void* buf, DWORD n)
 {
     BYTE* p = (BYTE*)buf; DWORD done = 0;
@@ -1335,34 +1377,44 @@ static bool EtwIpcReadN(HANDLE pipe, void* buf, DWORD n)
     return true;
 }
 
-// One frame -> ring. FALSE = EOF or protocol violation: the caller drops the connection
-// (a desynced byte stream cannot be re-synced safely; reconnect restarts clean).
+// One 'QTS1' signal frame -> ring. FALSE = EOF or protocol violation (bad magic, a cap
+// exceeded - a header desync): the caller drops the connection (a desynced byte stream
+// cannot be re-synced safely; reconnect restarts clean). A well-framed record that merely
+// carries nothing usable (no AUMID and no numeric id) is counted recBad and SKIPPED with
+// the connection kept - it is not a desync.
 static bool EtwIpcReadRecord(HANDLE pipe)
 {
     BYTE hdr[ETW_WIRE_HDR_BYTES];
     if (!EtwIpcReadN(pipe, hdr, sizeof(hdr))) return false;
     if (GetU32(hdr) != ETW_WIRE_MAGIC) return false;
-    uint32_t na = GetU32(hdr + 4), np = GetU32(hdr + 8), nn = GetU32(hdr + 12);
-    long long ft = (long long)GetU64(hdr + 16);
-    if (na > ETW_MAX_AUMID_BYTES || np == 0 || np > ETW_MAX_PAYLOAD_BYTES ||
-        nn > ETW_MAX_NOTIF_BYTES)
-    { InterlockedIncrement(&g_etw.recBad); return false; }   // byte caps (review must-fix)
-    std::vector<BYTE> aumid(na), payload(np), notif(nn);
+    uint32_t na = GetU32(hdr + 4), nn = GetU32(hdr + 8);
+    uint32_t nt = GetU32(hdr + 12), ng = GetU32(hdr + 16);
+    uint64_t idn = GetU64(hdr + 20);
+    long long ft = (long long)GetU64(hdr + 28);
+    if (na > ETW_MAX_AUMID_BYTES || nn > ETW_MAX_NOTIF_BYTES ||
+        nt > ETW_MAX_TAG_BYTES || ng > ETW_MAX_GROUP_BYTES ||
+        (ULONGLONG)ETW_WIRE_HDR_BYTES + na + nn + nt + ng > ETW_MAX_FRAME_BYTES)
+    { InterlockedIncrement(&g_etw.recBad); return false; }   // byte caps: treat as desync
+    std::vector<BYTE> aumid(na), notif(nn), tag(nt), group(ng);
     if ((na && !EtwIpcReadN(pipe, aumid.data(), na)) ||
-        !EtwIpcReadN(pipe, payload.data(), np) ||
-        (nn && !EtwIpcReadN(pipe, notif.data(), nn))) return false;
+        (nn && !EtwIpcReadN(pipe, notif.data(), nn)) ||
+        (nt && !EtwIpcReadN(pipe, tag.data(), nt)) ||
+        (ng && !EtwIpcReadN(pipe, group.data(), ng))) return false;
     std::wstring la = EtwWireToW(aumid), ln = EtwWireToW(notif);
-    std::wstring lp = EtwRawPayloadToW(payload);
-    if (lp.empty()) { InterlockedIncrement(&g_etw.recBad); return true; }   // undecodable: skip, keep conn
+    std::wstring lt = EtwWireToW(tag), lg = EtwWireToW(group);
+    if (la.empty() && idn == 0)                               // joins by neither aumid nor id
+    { InterlockedIncrement(&g_etw.recBad); return true; }     // skip, keep conn
     LONG n = InterlockedIncrement(&g_etw.recTotal);
     {
         CsGuard g(&g_etw.lock);              // RAII: no lock leak if push_back throws (must-fix)
-        g_etw.ring.push_back({ la, lp, ln, ft, GetTickCount64() });
+        g_etw.ring.push_back({ la, ln, lt, lg, idn, ft, GetTickCount64() });
         while (g_etw.ring.size() > 64) g_etw.ring.pop_front();
     }
     if (n <= 50 || (n % 20) == 0)            // human-rate log even if the proxy goes chatty
-        BLog(L"ETW REC #%ld aumid=%s payload_chars=%u notif=%s", n,
-             la.empty() ? L"-" : la.c_str(), (UINT)lp.size(), ln.empty() ? L"-" : ln.c_str());
+        BLog(L"ETW SIG #%ld aumid=%s idnum=%llu notif=%s tag=%s group=%s", n,
+             la.empty() ? L"-" : la.c_str(), (ULONGLONG)idn,
+             ln.empty() ? L"-" : ln.c_str(), lt.empty() ? L"-" : lt.c_str(),
+             lg.empty() ? L"-" : lg.c_str());
     return true;
 }
 
@@ -1445,56 +1497,216 @@ static void EtwTierStop()
     InterlockedExchange(&g_etw.state, ETW_STATE_DEAD);
 }
 
-// Rung 1 (called from the shadow worker; safe from any thread): NON-BLOCKING ring lookup.
-// A hit requires the clean pair a bridge verdict must be earned by: AUMID equality
-// (case-insensitive, as the allowlist matches) AND first-<text> equality with the listener
-// title (the same equality the DB rung uses), plus a +/-60 s FILETIME sanity window when
-// both timestamps exist. Returns:
-//   "hit"           EXACTLY ONE matching payload out - tier 1 satisfied, no DB touch
-//   "ambiguous"     >1 DIFFERING same-AUMID text-matching candidates (review must-fix):
-//                   never guess between two payloads - the caller fails open straight to
-//                   "window", WITHOUT consulting the DB (the same two toasts would collide
-//                   in its text match too). Byte-identical duplicates (a re-emitted event)
-//                   do NOT count as ambiguity.
-//   "text-mismatch" the AUMID was captured but no entry text-matched - degrade, don't trust
-//   "miss"          nothing captured for this AUMID (provider silent / payload not carried)
-//   "down"          tier armed but not live (proxy absent / pipe closed / thread dead)
-//   "off"           never armed (non-bridge modes)
+// Rung 1 (called from the shadow worker; safe from any thread): NON-BLOCKING ring scan
+// returning up to 4 candidate SIGNALS - never a payload (design 10.20.2). A candidate is
+// a ring entry with AUMID equality (case-insensitive, as the allowlist matches) inside a
+// +/-60 s FILETIME window against the listener CreationTime (when both timestamps exist).
+// Newest first; duplicate signals (a re-emitted event: same id/notifId/tag/group) are
+// collapsed. The payload acquisition happens AFTER this, on the shadow worker, as ONE
+// targeted wpndatabase read per candidate (WpnTargetedRead below). Returns:
+//   "sig-hit"   >=1 candidate signal out - the worker runs the targeted read
+//   "sig-none"  tier live but no signal for this toast (provider silent for this app,
+//               listener AUMID empty, or outside the time window) - DB rung serves
+//   "down"      tier armed but not live (proxy absent / pipe closed / thread dead)
+//   "off"       never armed (non-bridge modes)
 // ETW is push: by the time the listener notices a toast, its event was delivered long ago -
 // so there is deliberately NO wait here. Waiting would reintroduce exactly the variable
 // latency class this tier exists to remove (the AgentGone lesson).
-static const char* EtwTierLookup(std::wstring const& aumid, std::wstring const& title,
-                                 long long creationFt, std::wstring* payload)
+static const char* EtwTierLookup(std::wstring const& aumid, long long creationFt,
+                                 std::vector<EtwToastRec>* out)
 {
     const long long kEtwFtWindow = 60LL * 10000000LL;   // +/- 60 s in FILETIME ticks
     if (!g_etw.armed) return "off";
     if (g_etw.state != ETW_STATE_LIVE) return "down";
-    if (aumid.empty()) return "miss";
-    std::wstring want = WpnTrimW(title);
-    bool sawAumid = false;
-    int matches = 0;
-    std::wstring first;
+    if (aumid.empty()) return "sig-none";
     ULONGLONG now = GetTickCount64();
     {
         CsGuard g(&g_etw.lock);                          // RAII (review must-fix)
         while (!g_etw.ring.empty() && now - g_etw.ring.front().tick > 120000)
             g_etw.ring.pop_front();
-        for (auto it = g_etw.ring.rbegin(); it != g_etw.ring.rend(); ++it)
+        for (auto it = g_etw.ring.rbegin(); it != g_etw.ring.rend() && out->size() < 4; ++it)
         {
             if (it->aumid.empty() || _wcsicmp(it->aumid.c_str(), aumid.c_str()) != 0) continue;
             if (creationFt && it->eventFt &&
                 (it->eventFt - creationFt > kEtwFtWindow || creationFt - it->eventFt > kEtwFtWindow))
                 continue;
-            sawAumid = true;
-            if (want.empty() || WpnFirstTextW(it->payload) != want) continue;
-            if (matches == 0) { first = it->payload; matches = 1; }
-            else if (it->payload != first) { matches = 2; break; }   // differing candidate
-            // else: byte-identical duplicate - not ambiguity
+            bool dup = false;                            // re-emitted event: same identity
+            for (auto const& c : *out)
+                if (c.notifIdNum == it->notifIdNum && c.notifId == it->notifId &&
+                    c.tag == it->tag && c.group == it->group) { dup = true; break; }
+            if (!dup) out->push_back(*it);
         }
     }
-    if (matches > 1) return "ambiguous";
-    if (matches == 1) { *payload = first; return "hit"; }
-    return sawAumid ? "text-mismatch" : "miss";
+    return out->empty() ? "sig-none" : "sig-hit";
+}
+
+// The tier-1 payload acquisition (design 10.20.2): ONE targeted wpndatabase read per
+// candidate signal, on the SHADOW WORKER only (never the poll thread - heartbeat rule).
+// PRIMARY id join (plausible-not-proven until the rig confirms per 10.20.5: the ETW
+// notificationId is numeric and wpndb Notification.Id is the integer PK that --dump-wpndb
+// prints as `ROW id=`): WHERE n.Id = notifIdNum AND n.Type='toast'. The returned row is
+// cross-checked h.PrimaryId == the listener AUMID (NOCASE) - never trust a row the id
+// reached but the app does not own - and first-<text> vs the listener title as an
+// ADVISORY check: a text mismatch logs and falls through to the signal fallback rather
+// than earning corr=id-ok. FALLBACK (id absent/no row after retries/mismatch): AUMID
+// (NOCASE) + Type='toast' + ArrivalTime in eventFt +/- 60 s, narrowed by Tag/"Group" when
+// the signal carried them, LIMIT 16 - exactly one row => sig-unique; several => the
+// existing first-<text>-vs-title disambiguation; still >1 => sig-ambiguous => WINDOW,
+// never guess. RACE: the ETW event fires at emission while WNS commits the row
+// asynchronously, so ZERO rows on attempt 1 is the EXPECTED case - served by the bounded
+// WAL-watch retry (3 attempts, walEvt-paced, worst ~1.5 s, worker thread only). For an
+// id-bearing signal the fallback query runs only on the FINAL attempt: while the row is
+// still uncommitted, an arrival-window query could match an OLDER same-app row and a
+// lone stale row would read as sig-unique - the id path must exhaust its retries first.
+// corr out: id-ok | id-aumid-mismatch | id-norow | sig-unique | sig-ambiguous |
+// sig-norow | db-fail (payload only on id-ok / sig-unique; everything else fails open).
+struct WpnTarget
+{
+    const char* corr;
+    std::string payload;   // only on id-ok / sig-unique
+    DWORD latencyMs;
+};
+
+static WpnTarget WpnTargetedRead(std::vector<EtwToastRec> const& sigs,
+                                 std::wstring const& aumid, std::wstring const& title,
+                                 HANDLE walEvt)
+{
+    const int   kAttempts = 3;
+    const DWORD kRetrySleepMs = 150, kWalWaitMs = 400;
+    const long long kFtWindow = 60LL * 10000000LL;        // +/- 60 s in FILETIME ticks
+    ULONGLONG t0 = GetTickCount64();
+    WpnTarget r{ "sig-norow", std::string(), 0 };
+    auto done = [&](const char* c) { r.corr = c; r.latencyMs = (DWORD)(GetTickCount64() - t0); return r; };
+    WpnSql* q = WpnSqlGet();
+    if (!q) return done("db-fail");
+    std::string aumid8 = Utf8(aumid);
+    std::wstring want = WpnTrimW(title);
+    bool anyId = false, sawMismatch = false, sawIdNoRow = false, sawDbFail = false;
+    for (auto const& s : sigs) if (s.notifIdNum) anyId = true;
+    for (int att = 0; att < kAttempts; att++)
+    {
+        if (att)
+        {
+            if (walEvt) WaitForSingleObject(walEvt, kWalWaitMs);   // WAL-append paced, bounded
+            else Sleep(kRetrySleepMs);
+        }
+        std::string err;
+        sqlite3* db = WpnOpen(q, &err);
+        if (!db) { sawDbFail = true; continue; }          // transient lock: retry
+        bool lastAtt = (att == kAttempts - 1);
+        for (auto const& s : sigs)                        // newest first (ring scan order)
+        {
+            bool tryFallback = (s.notifIdNum == 0);       // id-less: fallback every attempt
+            if (s.notifIdNum)
+            {
+                std::string sql = std::string(kWpnSelectSql) +
+                    "WHERE n.Id = ?1 AND n.Type = 'toast'";
+                sqlite3_stmt* st = nullptr;
+                if (q->prepare_v2(db, sql.c_str(), -1, &st, nullptr) != WPN_SQLITE_OK)
+                {
+                    BLog(L"WPNDB SCHEMA MISMATCH (targeted): %hs - fail-open", q->errmsg(db));
+                    q->close_v2(db);
+                    return done("db-fail");
+                }
+                q->bind_int64(st, 1, (long long)s.notifIdNum);
+                int rc = q->step(st);
+                if (rc == WPN_SQLITE_ROW)
+                {
+                    std::string rowAumid = WpnColStr(q, st, 1);
+                    std::string rowPayload = WpnColStr(q, st, 5);
+                    q->finalize(st);
+                    if (_stricmp(rowAumid.c_str(), aumid8.c_str()) != 0)
+                    {
+                        // never trust a row the id reached but the app doesn't own
+                        sawMismatch = true;
+                        tryFallback = true;               // row committed: race is over
+                    }
+                    else
+                    {
+                        // advisory text check: mismatch logs + falls through, never id-ok
+                        if (!want.empty() &&
+                            WpnFirstTextW(WpnPayloadToW(rowPayload)) != want)
+                        {
+                            BLog(L"WPNTGT id=%llu advisory text mismatch - falling to signal fallback",
+                                 (ULONGLONG)s.notifIdNum);
+                            tryFallback = true;
+                        }
+                        else
+                        {
+                            q->close_v2(db);
+                            r.payload = std::move(rowPayload);
+                            return done("id-ok");
+                        }
+                    }
+                }
+                else
+                {
+                    q->finalize(st);
+                    if (rc != WPN_SQLITE_DONE) sawDbFail = true;   // busy/IO: retry
+                    else { sawIdNoRow = true; tryFallback = lastAtt; }   // WAL race: retry id first
+                }
+            }
+            if (!tryFallback) continue;
+            // signal fallback: AUMID + eventFt-anchored window (+ tag/group when carried)
+            std::string sql = std::string(kWpnSelectSql) +
+                "WHERE h.PrimaryId = ?1 COLLATE NOCASE AND n.Type = 'toast' "
+                "AND n.ArrivalTime BETWEEN ?2 AND ?3";
+            int next = 4;
+            int tagIdx = 0, grpIdx = 0;
+            if (!s.tag.empty())   { tagIdx = next++; sql += " AND n.Tag = ?4"; }
+            if (!s.group.empty())
+            {
+                grpIdx = next++;
+                sql += (grpIdx == 4) ? " AND n.\"Group\" = ?4" : " AND n.\"Group\" = ?5";
+            }
+            sql += " ORDER BY n.ArrivalTime DESC LIMIT 16";
+            sqlite3_stmt* st = nullptr;
+            if (q->prepare_v2(db, sql.c_str(), -1, &st, nullptr) != WPN_SQLITE_OK)
+            {
+                BLog(L"WPNDB SCHEMA MISMATCH (targeted-fallback): %hs - fail-open", q->errmsg(db));
+                q->close_v2(db);
+                return done("db-fail");
+            }
+            q->bind_text(st, 1, aumid8.c_str(), -1, WPN_SQLITE_TRANSIENT);
+            q->bind_int64(st, 2, s.eventFt - kFtWindow);
+            q->bind_int64(st, 3, s.eventFt + kFtWindow);
+            std::string tag8 = Utf8(s.tag), grp8 = Utf8(s.group);
+            if (tagIdx) q->bind_text(st, tagIdx, tag8.c_str(), -1, WPN_SQLITE_TRANSIENT);
+            if (grpIdx) q->bind_text(st, grpIdx, grp8.c_str(), -1, WPN_SQLITE_TRANSIENT);
+            std::vector<std::string> rows;
+            int rc;
+            while ((rc = q->step(st)) == WPN_SQLITE_ROW && rows.size() < 16)
+                rows.push_back(WpnColStr(q, st, 5));
+            q->finalize(st);
+            if (rc != WPN_SQLITE_DONE && rc != WPN_SQLITE_ROW) { sawDbFail = true; continue; }
+            if (rows.size() == 1)
+            {
+                q->close_v2(db);
+                r.payload = std::move(rows[0]);
+                return done("sig-unique");
+            }
+            if (rows.size() > 1)
+            {
+                std::vector<size_t> match;
+                for (size_t i = 0; i < rows.size(); i++)
+                    if (!want.empty() && WpnFirstTextW(WpnPayloadToW(rows[i])) == want)
+                        match.push_back(i);
+                q->close_v2(db);
+                if (match.size() == 1)
+                {
+                    r.payload = std::move(rows[match[0]]);
+                    return done("sig-unique");
+                }
+                return done("sig-ambiguous");             // never guess -> window
+            }
+            // 0 rows: WAL race - next attempt retries
+        }
+        q->close_v2(db);
+    }
+    if (sawMismatch) return done("id-aumid-mismatch");
+    if (sawIdNoRow) return done("id-norow");
+    if (sawDbFail) return done("db-fail");
+    return done(anyId ? "id-norow" : "sig-norow");
 }
 
 // --- --dump-etw: the rig's payload-availability instrument --------------------------------
@@ -1578,13 +1790,26 @@ static int DumpEtwMain(int seconds)
     Sleep((DWORD)seconds * 1000);
     EtwSessionStop(kEtwDumpSession);       // ends the session; ProcessTrace returns
     WaitForSingleObject(t, 5000);
+    // Surface ProcessTrace's rc (design 10.20.4 hardening): a silently-failing
+    // ProcessTrace printed events=0 indistinguishable from provider silence - the very
+    // ambiguity that let the Layer-2 consume bug masquerade as "no events on this guest".
+    DWORD ptrc = (DWORD)-1;
+    GetExitCodeThread(t, &ptrc);           // EtwDumpProcessThread returns ProcessTrace's rc
     CloseHandle(t);
     CloseTrace(cons);
+    printf("ETWDUMP processtrace rc=%lu%s\n", ptrc,
+           ptrc == STILL_ACTIVE ? " (thread still draining)" : "");
     printf("ETWDUMP done events=%ld payload_events=%ld aumid_events=%ld\n",
            g_etwDumpEvents, g_etwDumpPayload, g_etwDumpAumid);
-    printf("ETWDUMP verdict: %s\n", g_etwDumpPayload > 0
-           ? "payload XML observed - ETW tier viable on this guest"
-           : "NO payload-bearing events - the ladder will serve this guest from the DB rung");
+    // HYBRID-era reading (design 10.20): the tier needs a SIGNAL, not a payload -
+    // aumid_events>0 makes the signal + targeted-read tier viable; payload-bearing
+    // events would exceed the proven Win10 behaviour (payload is NOT in ETW there).
+    printf("ETWDUMP verdict: %s\n",
+           g_etwDumpPayload > 0
+           ? "payload XML observed (exceeds the Win10 broadcap finding) - signal tier viable"
+           : (g_etwDumpAumid > 0
+              ? "AUMID signals observed, no payload (the proven Win10 shape) - signal + targeted wpndb read viable"
+              : "NO signal-bearing events - the ladder will serve this guest from the DB rung"));
     return 0;
 }
 
@@ -1608,8 +1833,12 @@ static int DumpEtwMain(int seconds)
 //     stops when its ETW session is stopped externally, on console ctrl, or when the
 //     agent terminates it.
 //   * MINIMAL parsing: TdhGetEventInformation to locate properties BY NAME, raw property
-//     bytes via TdhGetProperty. No TdhFormatProperty, no XML parse - payload bytes are
-//     forwarded RAW; the defensive parse stays in toastclassify.h on the bridge side.
+//     bytes via TdhGetProperty - NAME-GATED to the four signal fields {AUMID,
+//     notificationId, tag, group}, each markup-rejected and length-capped. No
+//     TdhFormatProperty, no XML parse, and NO payload handling at all (design 10.20.1:
+//     the payload is not in ETW on Win10 and is never materialized here; the defensive
+//     payload parse stays in toastclassify.h on the bridge side, fed by its targeted
+//     wpndatabase read).
 // Exit codes (header comment at top of file): 0/5/7/8/9.
 
 static struct
@@ -1620,21 +1849,36 @@ static struct
     volatile LONG captured = 0, dropped = 0, sent = 0;
 } g_px;
 
-struct PxRec { std::wstring aumid, notifId; std::vector<BYTE> payload; long long ft = 0; };
-
-// Cheap, allocation-free "is this a toast payload" sniff over raw bytes - the ONLY content
-// inspection the proxy does. Both encodings a WPN payload appears in: UTF-8/ASCII and
-// UTF-16LE, "<toast" anywhere in the first 512 bytes (leading <?xml ...?> covered).
-static bool PxLooksLikeToastXml(const BYTE* b, size_t n)
+struct PxRec
 {
-    static const BYTE a8[] = { '<', 't', 'o', 'a', 's', 't' };
-    static const BYTE a16[] = { '<', 0, 't', 0, 'o', 0, 'a', 0, 's', 0, 't', 0 };
-    size_t lim = n < 512 ? n : 512;
-    for (size_t i = 0; i + sizeof(a8) <= lim; i++)
-        if (memcmp(b + i, a8, sizeof(a8)) == 0) return true;
-    for (size_t i = 0; i + sizeof(a16) <= lim; i++)
-        if (memcmp(b + i, a16, sizeof(a16)) == 0) return true;
-    return false;
+    std::wstring aumid, notifId, tag, group;   // the SIGNAL metadata - never a payload
+    uint64_t notifIdNum = 0;                   // 0 = "does not join by id"
+    long long ft = 0;
+};
+
+// The old PxLooksLikeToastXml payload SELECTOR, INVERTED into a REJECT (design 10.20.1):
+// the rig proved the payload is never in ETW on Win10, so the proxy must not materialize
+// payload bytes at all - any markup-bearing property value is skipped, never copied. A
+// legitimate AUMID / notification id / tag / group never contains markup, so rejection
+// can only fail open (missing field -> the bridge ladder degrades toward the DB rung).
+static bool PxLooksLikeMarkup(std::wstring const& v)
+{
+    return v.find(L'<') != std::wstring::npos || v.find(L'>') != std::wstring::npos;
+}
+
+// "notificationId as an integer": PxRawToName renders integral intypes (psz 4/8) as
+// decimal, so one all-decimal parse covers BOTH spec cases (integral intype, or a string
+// that is all-decimal). Non-decimal / empty / oversized -> 0 = "does not join by id".
+static uint64_t PxAllDecimalToU64(std::wstring const& v)
+{
+    if (v.empty() || v.size() > 20) return 0;
+    uint64_t n = 0;
+    for (wchar_t c : v)
+    {
+        if (c < L'0' || c > L'9') return 0;
+        n = n * 10 + (uint64_t)(c - L'0');
+    }
+    return n;
 }
 
 // Raw property bytes -> short identifier string (AUMID / notif-id fields only; the payload
@@ -1662,8 +1906,14 @@ static std::wstring PxRawToName(const BYTE* raw, ULONG psz, USHORT inType)
     return L"";
 }
 
-// TDH-locate {payload, AUMID, notif-id} in one event; raw bytes only. Every failure path
-// returns false = "this event carries nothing" - the ladder in the bridge degrades.
+// TDH-locate the SIGNAL metadata {AUMID, notificationId (string + numeric), tag, group}
+// in one event; raw bytes only, NAME-GATED: a property whose name matches none of the
+// wanted fields is never even fetched, so payload bytes are never materialized in this
+// process (design 10.20.1 - the untrusted-parse surface SHRINKS: metadata fields only,
+// each markup-rejected and length-capped). Every failure path returns false = "this
+// event carries nothing" - the ladder in the bridge degrades. Emission rule: an event is
+// worth a frame iff it carries an AUMID or a numeric notificationId (the old
+// !payload.empty() rule was ZERO frames forever on Win10 - the latent proxy-killer).
 static bool PxHarvest(EVENT_RECORD* er, PxRec* out)
 {
     out->ft = er->EventHeader.TimeStamp.QuadPart;    // FILETIME (no RAW_TIMESTAMP mode)
@@ -1680,61 +1930,68 @@ static bool PxHarvest(EVENT_RECORD* er, PxRec* out)
         EVENT_PROPERTY_INFO const& epi = ti->EventPropertyInfoArray[i];
         if (epi.Flags & (PropertyStruct | PropertyParamCount)) continue;
         std::wstring name = EtwLower(EtwTiString(ti, epi.NameOffset));
+        // name gate FIRST - unwanted fields (incl. anything payload-shaped) never fetched
+        bool wantAumid = out->aumid.empty() &&
+            (name.find(L"aumid") != std::wstring::npos ||
+             name.find(L"appusermodelid") != std::wstring::npos ||
+             name.find(L"appid") != std::wstring::npos ||
+             name.find(L"primaryid") != std::wstring::npos);
+        bool wantNotif = out->notifId.empty() && out->notifIdNum == 0 &&
+            (name.find(L"notificationid") != std::wstring::npos || name == L"id" ||
+             name.find(L"trackingid") != std::wstring::npos);
+        bool wantTag   = out->tag.empty() && name.find(L"tag") != std::wstring::npos;
+        bool wantGroup = out->group.empty() && name.find(L"group") != std::wstring::npos;
+        if (!wantAumid && !wantNotif && !wantTag && !wantGroup) continue;
         PROPERTY_DATA_DESCRIPTOR pdd = {};
         pdd.PropertyName = (ULONGLONG)((BYTE*)ti + epi.NameOffset);
         pdd.ArrayIndex = (ULONG)-1;
         ULONG psz = 0;
         if (TdhGetPropertySize(er, 0, nullptr, 1, &pdd, &psz) != ERROR_SUCCESS ||
-            psz == 0 || psz > ETW_MAX_PAYLOAD_BYTES)   // per-entry byte cap AT SOURCE
+            psz == 0 || psz > ETW_MAX_AUMID_BYTES)   // metadata-sized values only, AT SOURCE
             continue;
         std::vector<BYTE> raw(psz);
         if (TdhGetProperty(er, 0, nullptr, 1, &pdd, psz, raw.data()) != ERROR_SUCCESS) continue;
-        USHORT inType = epi.nonStructType.InType;
-        if (out->payload.empty() && PxLooksLikeToastXml(raw.data(), raw.size()))
-        { out->payload = std::move(raw); continue; }
-        if (out->aumid.empty() && psz <= ETW_MAX_AUMID_BYTES &&
-            (name.find(L"aumid") != std::wstring::npos ||
-             name.find(L"appusermodelid") != std::wstring::npos ||
-             name.find(L"appid") != std::wstring::npos ||
-             name.find(L"primaryid") != std::wstring::npos))
+        std::wstring v = PxRawToName(raw.data(), psz, epi.nonStructType.InType);
+        if (v.empty() || PxLooksLikeMarkup(v)) continue;   // markup: REJECT, never copy
+        if (wantAumid && v.size() * sizeof(wchar_t) <= ETW_MAX_AUMID_BYTES)
+            out->aumid = v;
+        else if (wantNotif)
         {
-            std::wstring v = PxRawToName(raw.data(), psz, inType);
-            if (!v.empty() && v.size() < 512 && v.find(L'<') == std::wstring::npos)
-                out->aumid = v;
-            continue;
+            out->notifIdNum = PxAllDecimalToU64(v);        // 0 = does not join by id
+            if (v.size() * sizeof(wchar_t) <= ETW_MAX_NOTIF_BYTES) out->notifId = v;
         }
-        if (out->notifId.empty() && psz <= ETW_MAX_NOTIF_BYTES &&
-            (name.find(L"notificationid") != std::wstring::npos || name == L"id" ||
-             name.find(L"trackingid") != std::wstring::npos))
-        {
-            std::wstring v = PxRawToName(raw.data(), psz, inType);
-            if (!v.empty() && v.size() < 64) out->notifId = v;
-        }
+        else if (wantTag && v.size() * sizeof(wchar_t) <= ETW_MAX_TAG_BYTES)
+            out->tag = v;
+        else if (wantGroup && v.size() * sizeof(wchar_t) <= ETW_MAX_GROUP_BYTES)
+            out->group = v;
     }
-    return !out->payload.empty();
+    return !out->aumid.empty() || out->notifIdNum != 0;
 }
 
-// ProcessTrace callback (proxy). Exception-tight; queues one encoded frame per payload-
-// bearing event and never blocks (a full queue drops the OLDEST - the bridge tier misses
-// that toast and its ladder degrades: fail-open, never a wedged consumer).
+// ProcessTrace callback (proxy). Exception-tight; queues one encoded 'QTS1' SIGNAL frame
+// per AUMID-or-id-bearing event and never blocks (a full queue drops the OLDEST - the
+// bridge tier misses that toast's signal and its ladder degrades: fail-open, never a
+// wedged consumer).
 static void CALLBACK EtwProxyEventCb(EVENT_RECORD* er)
 {
     try
     {
         PxRec r;
-        if (!PxHarvest(er, &r)) return;
+        if (!PxHarvest(er, &r)) return;      // emission rule: !aumid.empty() || notifIdNum
         std::vector<BYTE> f;
-        f.reserve(ETW_WIRE_HDR_BYTES + r.aumid.size() * 2 + r.payload.size() + r.notifId.size() * 2);
+        f.reserve(ETW_WIRE_HDR_BYTES +
+                  (r.aumid.size() + r.notifId.size() + r.tag.size() + r.group.size()) * 2);
         PutU32(f, ETW_WIRE_MAGIC);
         PutU32(f, (uint32_t)(r.aumid.size() * sizeof(wchar_t)));
-        PutU32(f, (uint32_t)r.payload.size());
         PutU32(f, (uint32_t)(r.notifId.size() * sizeof(wchar_t)));
+        PutU32(f, (uint32_t)(r.tag.size() * sizeof(wchar_t)));
+        PutU32(f, (uint32_t)(r.group.size() * sizeof(wchar_t)));
+        PutU64(f, r.notifIdNum);
         PutU64(f, (uint64_t)r.ft);
-        f.insert(f.end(), (const BYTE*)r.aumid.data(),
-                 (const BYTE*)(r.aumid.data() + r.aumid.size()));
-        f.insert(f.end(), r.payload.begin(), r.payload.end());
-        f.insert(f.end(), (const BYTE*)r.notifId.data(),
-                 (const BYTE*)(r.notifId.data() + r.notifId.size()));
+        auto putw = [&f](std::wstring const& s) {
+            f.insert(f.end(), (const BYTE*)s.data(), (const BYTE*)(s.data() + s.size()));
+        };
+        putw(r.aumid); putw(r.notifId); putw(r.tag); putw(r.group);
         LONG n = InterlockedIncrement(&g_px.captured);
         {
             CsGuard g(&g_px.lock);           // RAII (review must-fix applies here too)
@@ -1743,9 +2000,11 @@ static void CALLBACK EtwProxyEventCb(EVENT_RECORD* er)
         }
         SetEvent(g_px.evt);
         if (n <= 50 || (n % 20) == 0)        // human-rate log
-            BLog(L"ETWPROXY TOAST #%ld aumid=%s payload_bytes=%u notif=%s", n,
-                 r.aumid.empty() ? L"-" : r.aumid.c_str(), (UINT)r.payload.size(),
-                 r.notifId.empty() ? L"-" : r.notifId.c_str());
+            BLog(L"ETWPROXY SIG #%ld aumid=%s idnum=%llu notif=%s tag=%s group=%s", n,
+                 r.aumid.empty() ? L"-" : r.aumid.c_str(), (ULONGLONG)r.notifIdNum,
+                 r.notifId.empty() ? L"-" : r.notifId.c_str(),
+                 r.tag.empty() ? L"-" : r.tag.c_str(),
+                 r.group.empty() ? L"-" : r.group.c_str());
     }
     catch (...) {}
 }
@@ -2199,17 +2458,19 @@ static int EtwProxyMain(const wchar_t* clientSid)
 
 // Shadow-classify ONE new toast and BLog EXACTLY one CLASSIFY line (plus one SUPPAPI line):
 //   CLASSIFY id=%u src=%s etw=%s verdict=%s row_latency=%lums signals=%s corr=%s
-//     src      which ladder rung actually produced the payload: etw|db|none
-//     etw      rung-1 outcome: hit|ambiguous|miss|text-mismatch|down|off - measures ETW
-//              payload availability per toast; the rig gate's ETW-viability number comes
-//              from this field (all-down/all-miss = tier not viable, DB rung serving)
+//     src      which ladder rung actually produced the payload: etw-sig (targeted wpndb
+//              read answering an ETW signal) | db (the ETW-down WpnCorrelate rung) | none
+//     etw      rung-1 outcome: sig-hit|sig-none|down|off - measures ETW SIGNAL
+//              availability per toast; the rig gate's ETW-viability number comes from
+//              this field (all-down/all-sig-none = tier not viable, DB rung serving)
 //     verdict  what Phase-3 per-toast ROUTING would decide; "bridge" only on a CLEAN
-//              acquisition (etw=hit, or db corr=ok) - every failure class (ambiguous,
-//              text-mismatch, ...) is fail-open "window"
+//              acquisition (corr in {id-ok, sig-unique, ok}) - every failure class
+//              (mismatch, ambiguous, norow, ...) is fail-open "window"
 //     signals  rowN:<reason-slug> from toastclassify.h's decision-table match ("none" when
 //              no payload XML was obtained)
-//     corr     "ok" for an ETW hit; "ambiguous" for an ETW ring collision; otherwise the
-//              DB rung's WpnCorr class, plus probe-threw
+//     corr     tier-1 targeted-read outcome (id-ok|id-aumid-mismatch|id-norow|sig-unique|
+//              sig-ambiguous|sig-norow|db-fail); otherwise the DB rung's WpnCorr class,
+//              plus probe-threw
 //   SUPPAPI id=%u template=%s hints=%s
 //     the supported-API windfall probe: what the ToastGeneric binding exposes beyond
 //     GetTextElements (Template()/Hints()) - if a hint ever surfaces actions, Phase 3
@@ -2218,11 +2479,12 @@ static int EtwProxyMain(const wchar_t* clientSid)
 // SPLIT since 2026-09-05 (heartbeat-safety refactor): ShadowClassify (poll thread) only
 // dedupes, logs SUPPAPI, captures {id, aumid, title, creationFt} - all cheap WinRT reads
 // that already happen on that thread - and enqueues; ShadowWorkerThread (off-thread) runs
-// the acquisition ladder (EtwTierLookup ring scan -> WpnCorrelate with WAL-watch pacing)
-// and emits the CLASSIFY line ASYNCHRONOUSLY. The poll thread's per-toast cost is now a
-// fixed-size enqueue: WpnCorrelate's ~1050-1550 ms worst case can no longer stack across
-// a burst toward the supervisor's 15 s heartbeat deadline. MEASURE-ONLY and exception-
-// tight at every layer: nothing here can feed failStreak/FATAL or touch the A0 routing.
+// the acquisition ladder (EtwTierLookup ring scan -> WpnTargetedRead answering a signal,
+// or WpnCorrelate as the ETW-down fallback, both WAL-watch paced) and emits the CLASSIFY
+// line ASYNCHRONOUSLY. The poll thread's per-toast cost is now a fixed-size enqueue: the
+// DB reads' ~1050-1550 ms worst case can no longer stack across a burst toward the
+// supervisor's 15 s heartbeat deadline. MEASURE-ONLY and exception-tight at every layer:
+// nothing here can feed failStreak/FATAL or touch the A0 routing.
 
 struct ShadowJob { uint32_t id = 0; std::wstring aumid, title; long long creationFt = 0; };
 
@@ -2287,31 +2549,38 @@ static void ShadowClassifyWork(ShadowJob const& j)
 {
     try
     {
-        // tier 1 ETW ring (push, non-blocking) -> tier 2 wpndatabase correlate (bounded,
+        // tier 1 ETW signal (non-blocking ring scan) + ONE targeted wpndb read per
+        // candidate -> tier 2 wpndatabase correlate (the ETW-down fallback, bounded,
         // WAL-watch paced) -> tier 3 none. Fail-open at every rung; a "bridge" verdict is
-        // earned only by a clean {AUMID,payload}+classifier match (etw=hit or db corr=ok).
+        // earned only by a clean acquisition + classifier match: corr in {id-ok,
+        // sig-unique} on tier 1, corr=ok on tier 2 (design 10.20.2).
         ULONGLONG t0 = GetTickCount64();
-        const char* src = "none";                     // etw|db|none
+        const char* src = "none";                     // etw-sig|db|none
         const char* corr = "none";
         const wchar_t* verdict = L"window";           // fail-open default (tier 3)
         std::wstring signals = L"none";
-        std::wstring etwPayload;
-        const char* etw = EtwTierLookup(j.aumid, j.title, j.creationFt, &etwPayload);
-        if (strcmp(etw, "hit") == 0)
+        std::vector<EtwToastRec> sigs;
+        const char* etw = EtwTierLookup(j.aumid, j.creationFt, &sigs);
+        if (strcmp(etw, "sig-hit") == 0)
         {
-            src = "etw"; corr = "ok";                 // hit IS the clean correlation
-            ToastClass k = ClassifyToastXml(etwPayload);
-            signals = WpnSignalSlug(k);
-            verdict = ToastRouteName(k.route);
+            // A signal EXISTS for this toast: the targeted read answers it - and owns the
+            // outcome. On any non-clean corr (norow, mismatch, ambiguous, db-fail) the
+            // verdict stays the fail-open window WITHOUT falling to WpnCorrelate: the DB
+            // rung is the ETW-DOWN fallback, not a second guess at a row the precise
+            // signal-keyed read already failed to pin (rig drill 10.20.5#5 asserts
+            // exactly this: fire+purge-the-row => corr=id-norow => window, not db).
+            WpnTarget t = WpnTargetedRead(sigs, j.aumid, j.title, g_shadow.walEvt);
+            corr = t.corr;
+            if (!t.payload.empty())                   // only on id-ok / sig-unique
+            {
+                src = "etw-sig";
+                ToastClass k = ClassifyToastXmlBytes(t.payload.data(), t.payload.size());
+                signals = WpnSignalSlug(k);
+                if (strcmp(t.corr, "id-ok") == 0 || strcmp(t.corr, "sig-unique") == 0)
+                    verdict = ToastRouteName(k.route);
+            }
         }
-        else if (strcmp(etw, "ambiguous") == 0)
-        {
-            // Review must-fix: >1 differing same-AUMID candidates - never guess, and do
-            // not consult the DB either (the same two toasts collide in its text match
-            // too): straight to the fail-open floor.
-            corr = "ambiguous";
-        }
-        else                                          // any other ETW gap: the DB rung
+        else                                          // no signal (sig-none/down/off): DB rung
         {
             WpnCorr c = WpnCorrelate(j.aumid, j.creationFt, j.title, g_shadow.walEvt);
             corr = c.corr;

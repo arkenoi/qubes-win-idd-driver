@@ -1277,7 +1277,10 @@ the notifhost proxy change (§10.18) and main.c's uncommitted slice-map-hold edi
   `CREATE_SUSPENDED|CREATE_NO_WINDOW` → `AssignProcessToJobObject` → `ResumeThread`.
   Job: 64 MB ProcessMemoryLimit, ActiveProcessLimit=1, KILL_ON_JOB_CLOSE, all
   JOB_OBJECT_UILIMIT_* set. Session 0 (token born in the service's session), no
-  LoadUserProfile, `lpDesktop=""` (the batch logon session's own window station). The
+  LoadUserProfile, `lpDesktop="QubesEtwProxyWS\default"` — the dedicated private
+  winsta/desktop of §10.20.3. (The original `lpDesktop=""` belief — "the batch logon
+  session's own window station" — was WRONG: a bare batch token in session 0 has no
+  winsta at all, which was the rig-measured 0xC0000142 launch failure.) The
   client SID comes from `WTSQueryUserToken(WTSGetActiveConsoleSessionId())` → TokenUser.
   If the job cannot be built or assigned, the launch is REFUSED (never unsandboxed).
 - **Refuse-on-drift (secure default, both sides)**: before any session control, the agent
@@ -1323,3 +1326,137 @@ the notifhost proxy change (§10.18) and main.c's uncommitted slice-map-hold edi
 Still design-only: §10.15 (BRIDGE supervision exit-wait + 180 s backstop — the shipped
 heartbeat-poll `NotifBridgeSupervise` is unchanged) and the §10.14.5 per-boot random
 pipe name (proxy and bridge still pair on the fixed name, §10.18 delta table).
+
+## 10.20 HYBRID pivot (2026-09-05 rig verdict): ETW is the SIGNAL, wpndatabase is the PAYLOAD
+
+Rig-proven on Win10 19045 (broad `logman` capture over our exact provider GUIDs + mask,
+732 events, 41 AUMID hits; evidence summarized in memory `etw-payload-not-in-etw-win10`):
+the notification providers ({EB3540F2} Shell.NotificationController, {88CD9180}
+PushNotifications-Platform) emit **AppUserModelId, notificationId, tag, group,
+toastStatus, wpnToastFlags, arrival/expiry, packageFullName — and NEVER the `<toast>`
+payload XML**. The payload exists only in `wpndatabase.db`. §10.10-§10.19's *plumbing*
+(never-PLU account, capability grant, job sandbox, one-way pipe) survives unchanged; the
+*cargo* changes: the proxy pushes a **metadata signal**, and the bridge answers it with
+**one targeted wpndb read**. The DB-poll rung (WpnCorrelate, WAL-watch paced) REMAINS as
+the ETW-down fallback. Everything stays MEASURE-ONLY / fail-open: A0 routing byte-for-byte
+unchanged; every gap lands on the window floor; no bannerless-and-unforwarded is possible
+(suppression stays lazy-after-first-forward and untouched by any of this).
+
+### 10.20.1 New proxy→bridge frame: 'QTS1' signal (replaces the 'QTE1' payload frame)
+
+One frame per AUMID-bearing event, little-endian, one-way (proxy = PIPE_ACCESS_OUTBOUND
+server, DACL = --client-sid only — all §10.11 properties unchanged):
+
+    off  size  field
+    0    4     magic 'QTS1' (0x31535451)
+    4    4     aumidBytes    UTF-16LE, <= 1024        (0 allowed only if notifIdNum != 0)
+    8    4     notifIdBytes  UTF-16LE, <= 64          (raw string form, may be 0)
+    12   4     tagBytes      UTF-16LE, <= 256         (may be 0)
+    16   4     groupBytes    UTF-16LE, <= 256         (may be 0)
+    20   8     notifIdNum    u64; the notificationId when its intype was integral or the
+                             string is all-decimal; 0 = "does not join by id"
+    28   8     eventFiletime EVENT_RECORD FILETIME
+    36   ...   aumid | notifId | tag | group bytes, in that order
+
+Total frame cap 2 KB (was 64 KB — the payload field is DELETED). Bridge-side receive
+validation as §10.11.4: magic, per-field caps, total cap, at least one of
+{aumid, notifIdNum} present, else recBad++ and (on header desync) drop the connection.
+`PxHarvest` emission rule changes from `!payload.empty()` (which is ZERO frames forever on
+Win10 — the latent proxy-killer, notifhost.cpp:1714) to `!aumid.empty() || notifIdNum`;
+`PxLooksLikeToastXml` is retired as a selector and inverted into a REJECT: any property
+value carrying markup is skipped, never copied — the proxy must not materialize payload
+bytes at all. Ring entry: {aumid, notifId, notifIdNum, tag, group, eventFt, tick},
+64 entries / 120 s prune as today.
+
+### 10.20.2 Bridge: the targeted wpndb read (worker-thread only, §10.13 unchanged)
+
+`EtwTierLookup` becomes a non-blocking ring scan returning up to 4 candidate SIGNALS
+(AUMID equality + ±60 s vs listener CreationTime), never a payload. The shadow worker
+then does ONE targeted read per candidate, newest first:
+
+- **id path** (primary; rig must confirm the join, §10.20.5):
+  `kWpnSelectSql + "WHERE n.Id = ?1 AND n.Type='toast'"` with ?1 = notifIdNum.
+  Cross-checks on the row: `h.PrimaryId` == signal AUMID (NOCASE) else corr=
+  `id-aumid-mismatch` (never trust a row the id reached but the app doesn't own);
+  first-`<text>` == listener title else advisory mismatch → fall through. Clean row →
+  corr=`id-ok`, classify.
+- **signal-fallback path** (id absent / non-numeric / no row after retries / mismatch):
+  `WHERE h.PrimaryId=?1 COLLATE NOCASE AND n.Type='toast' AND n.ArrivalTime BETWEEN ?2
+  AND ?3` (eventFt ± 60 s) plus `AND n.Tag=?4` / `AND n."Group"=?5` when the signal
+  carried them; LIMIT 16. Exactly one row → corr=`sig-unique`; several → the existing
+  first-`<text>`-vs-title disambiguation; still >1 → `sig-ambiguous` → window (never
+  guess).
+- **Signal-then-row race**: the ETW event fires at emission, the WNS writer commits the
+  row asynchronously — zero rows on the first attempt is the EXPECTED case, served by the
+  existing bounded WAL-watch retry (3 attempts, walEvt-paced, worst ~1.5 s, worker thread
+  only; poll thread still does nothing but a fixed-cost enqueue — §10.13/AgentGone rule
+  intact).
+- **ETW-down fallback**: no signal for this toast (tier down/miss/parked) → the unchanged
+  `WpnCorrelate` rung (AUMID + arrival window + title text). Tier 3 stays `none → window`.
+
+CLASSIFY line: `etw=` gains sig-hit|sig-none (plus the existing down|off|miss);
+`corr=` gains id-ok|id-aumid-mismatch|sig-unique|sig-ambiguous|id-norow.
+`src=` values become etw-sig|db|none — `verdict=bridge` is earned ONLY by corr∈{id-ok,
+sig-unique, ok}.
+
+### 10.20.3 Layer-1 fix — the 0xC0000142 launch (etwproxy.c:707-724)
+
+Measured: the proxy dies STATUS_DLL_INIT_FAILED in ~31 ms, before its own code
+(etw-proxy.log never appears). Cause: `si.lpDesktop = L""` — for a plain BATCH logon in
+session 0 the empty string resolves to no accessible window station; user32.dll (linked
+by notifhost) fails process init. Fix — a DEDICATED winsta/desktop, never an interactive
+grant:
+1. Once per boot (SYSTEM agent): `CreateWindowStationW(L"QubesEtwProxyWS", ...)`,
+   `SetProcessWindowStation` to it, `CreateDesktopW(L"default", ...)`, restore the
+   original winsta. Keep both handles open for the agent's lifetime.
+2. DACLs: SYSTEM full; the qubes-etwproxy SID (already in hand from
+   EtwProxyCensusAndSid) gets the minimal connect set — winsta
+   WINSTA_ACCESSGLOBALATOMS|WINSTA_READATTRIBUTES, desktop
+   DESKTOP_READOBJECTS|DESKTOP_CREATEWINDOW. If user32 init still refuses on some build,
+   widen ONLY within these private objects (they contain nothing but the proxy).
+3. `si.lpDesktop = L"QubesEtwProxyWS\\default"`.
+4. Creation failure → PARK (one line), never fall back to WinSta0/interactive: granting
+   the untrusted decode the interactive winsta (atoms, clipboard adjacency, input
+   desktop) is exactly the over-grant the split forbids. The job's
+   JOB_OBJECT_UILIMIT_DESKTOP/HANDLES restrictions stay and keep the proxy from reaching
+   any OTHER winsta object even with a leaked handle.
+
+### 10.20.4 Layer-2 fix — real-time consume delivering events=0
+
+Two layers, both fixed:
+1. **Delivery pacing (the measured datum)**: neither session start sets `FlushTimer`
+   (agent EtwCtlSessionStart etwproxy.c:194-206; notifhost EtwSessionStart :1099-1114).
+   A real-time session delivers on buffer flush; with 64 KB buffers per CPU and ~200 B
+   notification events, no buffer fills inside an observation window → ProcessTrace's
+   callback receives nothing, while file-mode logman (flushed to the ETL at stop) shows
+   732. Fix: `FlushTimer = 1` on BOTH session starts (≤1 s delivery). The
+   EVENT_TRACE_LOGFILE setup itself (:1146-1153 — LoggerName, REAL_TIME|EVENT_RECORD,
+   EventRecordCallback) is verified correct and unchanged.
+2. **The frame filter (the latent proxy-killer)**: PxHarvest requires a payload
+   (:1714) that Win10 never emits → zero frames forever even with delivery fixed.
+   Fixed by §10.20.1's emission rule.
+Hardening with it: DumpEtwMain must surface ProcessTrace's rc (GetExitCodeThread after
+the join — today only --etw-proxy reads it, so a silently-failing ProcessTrace printed
+`events=0` indistinguishable from provider silence), and both consumers gain an
+EVENT_TRACE_BUFFER_CALLBACK logging BuffersRead/EventsLost per delivery; the harness may
+additionally issue ControlTrace(EVENT_TRACE_CONTROL_FLUSH) before grading.
+
+### 10.20.5 What the rig must verify (Opus)
+
+1. **The id join** (decides primary vs fallback): fire per-method (toastfire
+   start-shortcut / appid-reg / ps-toast / packaged), capture the proxy's QTS1
+   notifIdNum per toast, run `--dump-wpndb`, assert notifIdNum == `ROW id=` for the same
+   toast. Record join-rate per method; a non-joining method must be SEEN taking
+   corr=sig-unique.
+2. **L1**: proxy no longer exits 0xC0000142; etw-proxy.log appears; census lines print;
+   uptime >10 min; a proxy-logged `GetProcessWindowStation` name == QubesEtwProxyWS; a
+   negative probe shows the proxy token cannot open WinSta0.
+3. **L2**: --dump-etw events>0 within ≤2 s of a fired toast; proxy captured>0 and
+   bridge `ETW REC` lines within ≤2 s; per-method AUMID hits match the broadcap counts;
+   ProcessTrace rc line present.
+4. **End-to-end + invariants**: CLASSIFY src=etw-sig corr=id-ok with row_latency well
+   under the DB rung's (47 ms baseline, cap-fire-blog); A0 routing regression (T7)
+   unchanged; heartbeat cadence flat through a 3-toast burst.
+5. **Fail-open drills** (seen-to-fail): kill the proxy mid-run → src=db; fire+purge the
+   row before the read → corr=id-norow → window; pipe squatter → proxy exit 8, tier
+   down, DB serves.
