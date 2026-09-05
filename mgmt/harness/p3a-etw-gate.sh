@@ -117,8 +117,8 @@ log "=== P3a ETW proxy gate: subject=$VM base=$BASE setup=$SETUP out=$OUT ==="
 # ---------- constants (spellings read from the shipped sources — see file header) ------------
 ACCT='qubes-etwproxy'
 FWRULE='QubesEtwProxy-BlockOutbound'                       # provision-etwproxy-account.ps1:86
-ETWPIPE='qubes-toast-etw'                                  # notifhost.cpp:982 (fixed name, §10.18 delta)
-ETWSESS='QubesToastBridgeEtw'                              # notifhost.cpp:1002 / etwproxy.c
+ETWPIPE='qubes-toast-etw'                                  # qtb_shared.h kEtwProxyPipe (fixed name, §10.18 delta)
+ETWSESS='QubesToastBridgeEtw'                              # qtb_shared.h kEtwBridgeSession / etwproxy.c ETWPROXY_SESSION_NAME
 STATEDIR='C:\ProgramData\qubes-toast-bridge'
 ILOG='C:\qwt-improved-install.log'
 # toastfire default AUMIDs per registration method (tools/toastfire/README.md)
@@ -175,7 +175,7 @@ asince_hits(){ asince "$1" "$2" | grep -a -- "$2"; }
 
 # toastfire, run IN THE INTERACTIVE USER SESSION via run-as-user (toasts need one; per-user
 # registration only). The exe is NOT in the installed package (make-setup stages only
-# wgcbroker/notifhost into bin\) — T0 pushes it from $SETUP to QubesIncoming and this wrapper
+# wgcbroker/notifhost/etwproxy into bin\) — T0 pushes it from $SETUP to QubesIncoming and this wrapper
 # runs it from there. Args are space-free slugs BY CONTRACT: they ride run-as-user's ArgsB64 and
 # are then re-split by `powershell -File wrapper.ps1 <tokens>`, where single quotes do NOT
 # protect spaces — so no argument this harness passes may contain one.
@@ -288,8 +288,12 @@ rc=$?
 [ $rc -eq 0 ] || { log "FATAL prime-run rc=$rc (tail: $(tail -3 "$OUT/prime.log" | tr '\n' ' '))"; exit 1; }
 w_usersession "$VM" 900 t0-session "$OUT" log || { log "FATAL no user session after prime"; exit 1; }
 
-# build identity (rule 1): the artefact under test is what is actually installed
-for exe in notifhost.exe gui-agent.exe; do
+# build identity (rule 1): the artefact under test is what is actually installed.
+# etwproxy.exe ADDED 2026-09-05 with the console split: the proxy code this gate grades no
+# longer lives inside notifhost.exe, so without its own hash check a bin-overlay miss or a
+# stale proxy binary would be graded as product behaviour (the helpers-must-be-explicitly-
+# packaged trap; make-setup.ps1 hard-requires it in helper-bins, so any valid package has it).
+for exe in notifhost.exe gui-agent.exe etwproxy.exe; do
   pk=$(find "$SETUP" -name "$exe" | head -1)
   if [ -n "$pk" ]; then
     want=$(sha256sum "$pk" | awk '{print tolower($1)}')
@@ -327,7 +331,14 @@ fi
 gy=$(gflen 'C:\Windows\win.ini') || gy=ERR; gn=$(gflen 'C:\ProgramData\__p3a_nofile__') || gn=ERR
 { [ "$gy" != ERR ] && [ "${gy:-0}" -gt 0 ] && [ "$gn" = 0 ]; } \
   || { verdict T0i "INSTRUMENT gflen exists='$gy' missing='$gn' - aborting"; exit 1; }
-log "T0i: probes OK (path_state both ways, amark=$am, asince hit/miss, gflen $gy/$gn)"
+# fwd detectors (T7's forward asserts lean on them): a0-lib's pure-text self-test, no VM
+# contact - fwd_count must count the dropped-SENT delivered shape and read 0 on undelivered/
+# forgery-laden windows; fwd_attempts must fire on any attempt and stay 0 on a forward-free
+# window. This is the NAMED seen-to-fail proof for T7a/T7c's must-be-zero asserts and T7b's
+# delivered counts (same call a0-toast-bridge.sh P1c makes - reused, not reinvented).
+fwd_selftest \
+  || { verdict T0i "INSTRUMENT fwd_count/fwd_attempts self-test failed (see the MISMATCH line above) - T7's forward asserts would grade blind, aborting"; exit 1; }
+log "T0i: probes OK (path_state both ways, amark=$am, asince hit/miss, gflen $gy/$gn, fwd_selftest clean)"
 # guest scratch dir for redirected outputs (secedit export, sampler, T4 redirects) - created
 # HERE so no later phase depends on run-as-user having incidentally created its parent first
 qrun 'cmd /c mkdir C:\ProgramData\Qubes 2>nul & echo P3AMKDIR' >/dev/null 2>&1
@@ -490,16 +501,20 @@ grep -ai "$ACCT" "$OUT/t1-acl-statedir.txt" | grep -qai 'deny' || aclfail="$aclf
 [ -z "$aclfail" ] && verdict T1i "PASS ACLs: $ACCT ACE on its own log, deny on $STATEDIR" \
   || verdict T1i "FAIL ACLs:$aclfail (see t1-acl-*.txt)"
 
-# T1j the RUNNING proxy's owner: session-0 notifhost owned by the proxy account, never SYSTEM.
+# T1j the RUNNING proxy's owner: session-0 etwproxy.exe owned by the proxy account, never
+# SYSTEM. RIG-RECONCILED 2026-09-05: the console split renamed the proxy BINARY to
+# etwproxy.exe (agent line 'ETWPROXYSUP launched etwproxy.exe pid=' confirms); a notifhost.exe
+# filter here false-FAILed the last run while the proxy ran fine (notifhost.exe is the
+# USER-SESSION bridge and never the session-0 proxy).
 # tasklist, not WMI/Get-Process (both broken on this guest — only tasklist works).
-enc_run 'tasklist /v /fo csv /fi "imagename eq notifhost.exe"' | tr -d '\r' > "$OUT/t1-tasklist.csv"
+enc_run 'tasklist /v /fo csv /fi "imagename eq etwproxy.exe"' | tr -d '\r' > "$OUT/t1-tasklist.csv"
 prow=$(awk -F'","' '$4 == "0" {print}' "$OUT/t1-tasklist.csv" | head -1)
 if [ -z "$prow" ]; then
-  verdict T1j "FAIL no session-0 notifhost.exe running (proxy not launched; agent lines: $(asince_hits 0 'ETWPROXYSUP' | tail -2 | tr '\n' ';'))"
+  verdict T1j "FAIL no session-0 etwproxy.exe running (proxy not launched; agent lines: $(asince_hits 0 'ETWPROXYSUP' | tail -2 | tr '\n' ';'))"
 elif printf '%s' "$prow" | grep -qai "$ACCT"; then
   verdict T1j "PASS proxy runs as $ACCT in session 0 ($(printf '%s' "$prow" | head -c 160))"
 else
-  verdict T1j "FAIL session-0 notifhost owner is NOT $ACCT (TODO(RIG)#2 check CSV rendering): $(printf '%s' "$prow" | head -c 160)"
+  verdict T1j "FAIL session-0 etwproxy.exe owner is NOT $ACCT (TODO(RIG)#2 check CSV rendering): $(printf '%s' "$prow" | head -c 160)"
 fi
 
 # ---------- T2 DECISIVE: the proxy ARMS (L1) and SIGNAL frames arrive ------------------------
@@ -561,9 +576,10 @@ else
   # one informational fire per registration method; ANY method's SIGNAL frame proves the
   # grant. Offsets captured PER METHOD, and both greps pinned to the method's AUMID -
   # otherwise a later method could satisfy its detector with an EARLIER method's SIG line.
-  # Spellings (source-read 2026-09-05): proxy 'ETWPROXY SIG #n aumid=... idnum=...'
-  # (notifhost.cpp PxEventRecordCb), bridge 'ETW SIG #n aumid=... idnum=...'
-  # (EtwIpcReadRecord). The old 'ETWPROXY TOAST'/'ETW REC #' payload-frame lines are GONE.
+  # Spellings (source-RE-read 2026-09-05 post console split): proxy 'ETWPROXY SIG #n
+  # aumid=... idnum=...' (etwproxy.cpp EtwProxyEventCb), bridge 'ETW SIG #n aumid=...
+  # idnum=...' (notifhost.cpp EtwIpcReadRecord). The old 'ETWPROXY TOAST'/'ETW REC #'
+  # payload-frame lines are GONE.
   t2frames=0; t2imiss=0
   for m in start-shortcut com-activator bare; do
     tt="P3A-t2-$m"
@@ -849,9 +865,10 @@ if ! grep -qai "$ACCT" "$OUT/t5-plu-after-add.txt"; then
 else
   log "T5: drift injected AND seen by the T1d probe (its fail direction is now proven)"
   AM5=$(amark); [ -n "$AM5" ] || AM5=0   # amark's pipeline exits 0 even when empty - test output
-  # kill the running proxy (session-0 notifhost, BY PID - never the user-session bridge);
-  # the agent's exit-wait relaunches it, and THAT launch's census meets the drifted token.
-  enc_run 'tasklist /nh /fo csv /fi "imagename eq notifhost.exe"' | tr -d '\r' > "$OUT/t5-tasklist.csv"
+  # kill the running proxy (session-0 etwproxy.exe, BY PID - never the user-session notifhost
+  # bridge); the agent's exit-wait relaunches it, and THAT launch's census meets the drifted
+  # token. (Filter RIG-RECONCILED 2026-09-05: the console split renamed the proxy binary.)
+  enc_run 'tasklist /nh /fo csv /fi "imagename eq etwproxy.exe"' | tr -d '\r' > "$OUT/t5-tasklist.csv"
   ppid=$(awk -F'","' '$4 == "0" {gsub(/"/,"",$2); print $2}' "$OUT/t5-tasklist.csv" | head -1)
   if [ -z "$ppid" ]; then
     verdict T5 "INSTRUMENT no session-0 proxy to kill (tier already down?) - drift relaunch cannot be forced, ungraded"
@@ -957,16 +974,24 @@ else
 fi
 
 # ---------- T7 A0 regression: the shadow probe is MEASURE-ONLY -------------------------------
-# Routing must be exactly A0's per-app split: allowlisted PS AUMID forwards (SENT..OK) and
-# earns lazy suppression; non-allowlisted control stays windowed with 'skip id='; the toastfire
-# bursts above produced ZERO SENT lines (their AUMIDs are not allowlisted - the classifier
-# WATCHED them, it must not have ROUTED them); and no supervisor relaunch happened.
-log "T7: A0 regression slice - SENT/skip/SHOWBANNER unchanged, shadow measure-only"
+# Routing must be exactly A0's per-app split: allowlisted PS AUMID forwards (delivered per
+# fwd_count) and earns lazy suppression; non-allowlisted control stays windowed with
+# 'skip id='; the toastfire bursts above produced ZERO forward attempts (their AUMIDs are not
+# allowlisted - the classifier WATCHED them, it must not have ROUTED them); and no supervisor
+# relaunch happened. Forward detectors are a0-lib's fwd_count/fwd_attempts (audit 2026-09-05):
+# NEGATIVE must-be-zero asserts use fwd_attempts (ANY anchored SENT line, any outcome, or ANY
+# FWD_RTT line) because BLog's share-mode collision can DROP a SENT line while the forward
+# happened and FWD_RTT ok=1 still records it - a SENT-only grep can HIDE a real forward, the
+# exact leak-safety hole the a0 fix closed. POSITIVE delivered asserts use fwd_count (distinct
+# ids across the FWD_RTT ok=1 / SENT..OK union + acked coalesced batches), which survives the
+# same dropped-SENT shape without false-FAILing. Both proven both directions by fwd_selftest
+# in T0i - that is the named seen-to-fail proof for every T7 assert below.
+log "T7: A0 regression slice - forward/skip/SHOWBANNER unchanged, shadow measure-only"
 if [ -s "$OUT/t6-blog.txt" ]; then
-  t6sent=$(grep -ca 'SENT id=' "$OUT/t6-blog.txt" || true)
-  [ "${t6sent:-0}" = 0 ] \
-    && verdict T7a "PASS measure-only: 0 SENT lines for the (non-allowlisted) toastfire burst - shadow classification did not route" \
-    || verdict T7a "FAIL $t6sent SENT lines during the toastfire burst - the shadow probe ROUTED a toast it may only measure"
+  t6fwd=$(fwd_attempts "$OUT/t6-blog.txt")
+  [ "${t6fwd:-0}" = 0 ] \
+    && verdict T7a "PASS measure-only: 0 forward-attempt lines (SENT/FWD_RTT, fwd_attempts) for the (non-allowlisted) toastfire burst - shadow classification did not route" \
+    || verdict T7a "FAIL $t6fwd forward-attempt line(s) (SENT/FWD_RTT) during the toastfire burst - the shadow probe ROUTED (or attempted to route) a toast it may only measure"
 else
   verdict T7a "INSTRUMENT no T6 burst window on record (T6 was ungraded) - measure-only assert has nothing to judge, NOT a vacuous pass"
 fi
@@ -974,14 +999,36 @@ if ! Lw=$(blog_len); then
   verdict T7b "INSTRUMENT blog_len unreadable - allowlisted-forward arm ungraded"
 else
   fire_info "A0T p3a-warmup" > /dev/null 2>&1      # toast #1 earns lazy suppression
-  w7=""; for i in $(seq 1 15); do blog_since "$Lw" | grep -qa 'SENT id=.*OK' && { w7=1; break; }; sleep 2; done
+  # POSITIVE delivered assert -> fwd_count: a collision-dropped SENT line must not false-FAIL
+  # a toast that WAS delivered (FWD_RTT ok=1 records it) - the a0-lib dropped-SENT fix.
+  w7=""
+  for i in $(seq 1 15); do
+    blog_since "$Lw" > "$OUT/t7b-warm-blog.txt" 2>/dev/null
+    [ "$(fwd_count "$OUT/t7b-warm-blog.txt")" -ge 1 ] && { w7=1; break; }
+    sleep 2
+  done
   sleep 3
-  L7=$(blog_len) || L7=$Lw   # fall back to the warmup offset: same boot, only over-scans OUR window
+  if L7=$(blog_len); then
+    s7base=0
+  else
+    # fall back to the warmup offset: same boot, only over-scans OUR window - but then the
+    # warmup's OWN forward sits inside the check window, so the check must EXCEED the count
+    # banked at fallback time (the old SENT grep was vacuously satisfied by the warmup's
+    # already-present line here - the fallback could never fail)
+    L7=$Lw
+    blog_since "$Lw" > "$OUT/t7b-warm-blog.txt" 2>/dev/null
+    s7base=$(fwd_count "$OUT/t7b-warm-blog.txt")
+  fi
   fire_info "A0T p3a-bridged" > /dev/null 2>&1     # toast #2 must forward while suppressed
-  s7=""; for i in $(seq 1 15); do blog_since "$L7" | grep -qa 'SENT id=.*OK' && { s7=1; break; }; sleep 2; done
+  s7=""
+  for i in $(seq 1 15); do
+    blog_since "$L7" > "$OUT/t7b-check-blog.txt" 2>/dev/null
+    [ "$(fwd_count "$OUT/t7b-check-blog.txt")" -gt "${s7base:-0}" ] && { s7=1; break; }
+    sleep 2
+  done
   sb7=$(showbanner)
   [ -n "$w7" ] && [ -n "$s7" ] \
-    && verdict T7b "PASS allowlisted path forwards (warmup + check both SENT OK; $sb7)" \
+    && verdict T7b "PASS allowlisted path forwards (warmup + check both delivered per fwd_count; $sb7)" \
     || verdict T7b "FAIL allowlisted forward broken: warmup=${w7:-no} check=${s7:-no} $sb7"
 fi
 if ! L7c=$(blog_len); then
@@ -991,11 +1038,13 @@ else
   sleep 10
   blog_since "$L7c" > "$OUT/t7-ctl-blog.txt"
   c7skip=$(grep -ca 'skip id=' "$OUT/t7-ctl-blog.txt" || true)
-  c7sent=$(grep -ca 'SENT id=' "$OUT/t7-ctl-blog.txt" || true)
+  # NEGATIVE must-not-forward assert -> fwd_attempts (any SENT or FWD_RTT line): a dropped
+  # SENT must not hide a real forward of the control toast (see the T7 header rationale)
+  c7fwd=$(fwd_attempts "$OUT/t7-ctl-blog.txt")
   dismiss_toasts "$CTLAUMID"; dismiss_toasts
-  [ "${c7sent:-0}" = 0 ] && [ "${c7skip:-0}" -ge 1 ] \
-    && verdict T7c "PASS control AUMID skipped, not forwarded (skip=$c7skip sent=$c7sent)" \
-    || verdict T7c "FAIL control routing: skip=$c7skip sent=$c7sent"
+  [ "${c7fwd:-0}" = 0 ] && [ "${c7skip:-0}" -ge 1 ] \
+    && verdict T7c "PASS control AUMID skipped, not forwarded (skip=$c7skip fwd_attempts=$c7fwd)" \
+    || verdict T7c "FAIL control routing: skip=$c7skip fwd_attempts=$c7fwd"
 fi
 
 # ---------- T8 §10.20.5#5 fail-open drills (each failure class DEMONSTRATED) -----------------
@@ -1103,8 +1152,8 @@ enc_run 'Remove-Item C:\ProgramData\Qubes\p3a-squat.txt -Force -EA SilentlyConti
 qrun "cmd /c start /b powershell -NoProfile -EncodedCommand $(_ps_enc "$sq")" >/dev/null 2>&1
 AM8=$(amark); [ -n "$AM8" ] || AM8=0
 L8c=$(blog_len) || L8c=""
-# kill the session-0 proxy BY PID (never the user-session bridge) - the T5 idiom
-enc_run 'tasklist /nh /fo csv /fi "imagename eq notifhost.exe"' | tr -d '\r' > "$OUT/t8c-tasklist.csv"
+# kill the session-0 proxy (etwproxy.exe) BY PID (never the user-session bridge) - the T5 idiom
+enc_run 'tasklist /nh /fo csv /fi "imagename eq etwproxy.exe"' | tr -d '\r' > "$OUT/t8c-tasklist.csv"
 spid=$(awk -F'","' '$4 == "0" {gsub(/"/,"",$2); print $2}' "$OUT/t8c-tasklist.csv" | head -1)
 if [ -z "$spid" ]; then
   verdict T8c "INSTRUMENT no session-0 proxy to kill (tier already down?) - squatter drill ungraded"
