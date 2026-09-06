@@ -158,7 +158,10 @@ rm -f "mgmt/fixtures/$CHURN.aborted"
 # disposable by construction.
 qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' \
   || { log "TERMINAL: could not set qemu-extra-args"; exit 1; }
-qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$CHURN" "$HOLDER:$STICKLOOP" \
+# read-only=false: Qubes block devices attach READ-ONLY by default, and that (not the qemu
+# -drive flag, which was fixed first) is what kept the guest from writing prime-progress.log.
+# Both had to go for the stall instrument to work at all.
+qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk -o read-only=false "$CHURN" "$HOLDER:$STICKLOOP" \
   || { log "TERMINAL: could not assign the stick"; exit 1; }
 
 OUT="$HERE/evidence/prime-$JOB-$CHURN-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
