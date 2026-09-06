@@ -2257,6 +2257,72 @@ static bool ForwardText(std::wstring const& title, std::wstring const& body, uin
     return g_awaitOk == 1;
 }
 
+// --- one-shot notification (--notify) ------------------------------------------------------
+//
+// AGENT-ORIGINATED diagnostic, not guest content: the gui-agent uses this to put a failure in
+// FRONT OF THE USER when it cannot show a window at all (owner 2026-09-06 - a suppressed window
+// needs "something user sees", not only a log line). It reuses the bridge's proven wire path -
+// spawn a --relay child on qubes.Notifications, handshake, send one frame, wait for the ack -
+// and then exits, so nothing stays resident and no banner suppression is involved.
+//
+// DELIBERATELY NOT gated by the notify-bridge feature: that gate governs FORWARDING THE GUEST'S
+// OWN TOASTS (per-AUMID allowlist, content from apps). This message is the agent reporting its
+// own inability to render, which is exactly what must not be silently swallowed. dom0 still owns
+// origin labelling and sanitisation, and a dom0 policy that denies qubes.Notifications simply
+// makes this fail - logged, never fatal, never retried in a loop (the agent throttles).
+//
+// Exit: 0 sent+acked, 3 could not connect (policy refusal / no session), 4 sent but not acked.
+// Read the message from a FILE rather than the command line. The agent launches this helper
+// through the Task Scheduler (NotifRunInSession), whose /tr string cannot carry quoted,
+// space-bearing text without being mangled - so the agent writes the text and passes only a
+// path. Line 1 = summary, the rest = body. UTF-16LE (BOM) or UTF-8. The file is deleted after
+// reading: it is a one-shot message, never state.
+static bool ReadNotifyFile(std::wstring const& path, std::wstring& summary, std::wstring& body)
+{
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    std::vector<BYTE> buf(64 * 1024);
+    DWORD rd = 0;
+    BOOL ok = ReadFile(h, buf.data(), (DWORD)buf.size() - 2, &rd, nullptr);
+    CloseHandle(h);
+    DeleteFileW(path.c_str());
+    if (!ok || rd == 0) return false;
+    std::wstring all;
+    if (rd >= 2 && buf[0] == 0xFF && buf[1] == 0xFE)
+        all.assign((wchar_t*)(buf.data() + 2), (rd - 2) / sizeof(wchar_t));
+    else
+    {
+        int n = MultiByteToWideChar(CP_UTF8, 0, (char*)buf.data(), (int)rd, nullptr, 0);
+        if (n <= 0) return false;
+        all.resize(n);
+        MultiByteToWideChar(CP_UTF8, 0, (char*)buf.data(), (int)rd, &all[0], n);
+    }
+    while (!all.empty() && (all.back() == L'\0')) all.pop_back();
+    size_t nl = all.find_first_of(L"\r\n");
+    if (nl == std::wstring::npos) { summary = all; body.clear(); return !summary.empty(); }
+    summary = all.substr(0, nl);
+    size_t b = all.find_first_not_of(L"\r\n", nl);
+    body = (b == std::wstring::npos) ? L"" : all.substr(b);
+    return !summary.empty();
+}
+
+static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body)
+{
+    ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
+    InitializeCriticalSection(&g_corrLock);
+    g_rdEvt    = CreateEventW(nullptr, TRUE,  FALSE, nullptr);
+    g_wrEvt    = CreateEventW(nullptr, TRUE,  FALSE, nullptr);
+    g_connStop = CreateEventW(nullptr, TRUE,  FALSE, nullptr);
+    g_ackEvt   = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!g_rdEvt || !g_wrEvt || !g_connStop || !g_ackEvt) return 3;
+    if (!ConnUp()) { BLog(L"NOTIFY one-shot: no connection (policy refusal? no dom0 session?)"); return 3; }
+    bool ok = ForwardText(summary, body, 0);
+    BLog(L"NOTIFY one-shot: sent ok=%d summary=%s", ok ? 1 : 0, summary.c_str());
+    ConnDown();
+    return ok ? 0 : 4;
+}
+
 // --- bridge main --------------------------------------------------------------------------
 
 static int BridgeMain()
@@ -2728,6 +2794,8 @@ int wmain(int argc, wchar_t** argv)
     bool bridge = false, dump = false, stop = false, restore = false, dumpdb = false, dumpetw = false;
     bool etwproxy = false;
     int dumpdbN = 20, dumpEtwSecs = 30;
+    std::wstring notifySummary, notifyBody;
+    const wchar_t* notifyFile = nullptr;
     for (int i = 1; i < argc; i++)
     {
         if (_wcsicmp(argv[i], L"--agent-pid") == 0 && i + 1 < argc)
@@ -2754,6 +2822,12 @@ int wmain(int argc, wchar_t** argv)
             if (i + 1 < argc && argv[i + 1][0] >= L'0' && argv[i + 1][0] <= L'9')
                 dumpEtwSecs = _wtoi(argv[++i]);
         }
+        else if (_wcsicmp(argv[i], L"--notify-file") == 0 && i + 1 < argc) notifyFile = argv[++i];
+        else if (_wcsicmp(argv[i], L"--notify") == 0 && i + 1 < argc)
+        {
+            notifySummary = argv[++i];
+            if (i + 1 < argc && argv[i + 1][0] != L'-') notifyBody = argv[++i];
+        }
         else if (_wcsicmp(argv[i], L"--etw-proxy") == 0) etwproxy = true;
         else if (_wcsicmp(argv[i], L"--client-sid") == 0 && i + 1 < argc) i++;   // consumed by etwproxy.exe
     }
@@ -2772,6 +2846,14 @@ int wmain(int argc, wchar_t** argv)
         return 9;
     }
     if (relayPipe) return RelayMain(relayPipe);
+    if (notifyFile)
+    {
+        std::wstring fs, fb;
+        if (!ReadNotifyFile(notifyFile, fs, fb))
+        { BLog(L"NOTIFY one-shot: unreadable/empty %s", notifyFile); return 3; }
+        return NotifyOnceMain(fs, fb);
+    }
+    if (!notifySummary.empty()) return NotifyOnceMain(notifySummary, notifyBody);
     if (dumpdb) return DumpWpnDbMain(dumpdbN);
     if (dumpetw) return DumpEtwMain(dumpEtwSecs);
     if (stop)
