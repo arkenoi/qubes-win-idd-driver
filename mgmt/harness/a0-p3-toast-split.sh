@@ -69,6 +69,7 @@ source mgmt/harness/run-lib.sh; job_init a0-p3-toast-split
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/e2e-wait.sh
 source mgmt/harness/a0-lib.sh   # PSAUMID CTLAUMID QT BLOG blog_len/blog_since fire_* showbanner geom ors snap_or new_or_window dismiss_toasts
+source mgmt/harness/verdict-lib.sh   # verdict_aggregate - the three-class (FAIL / ungraded / PASS-DATUM) wrap
 
 log "=== P3 toast-split acceptance: subject=$VM base=$BASE setup=$SETUP out=$OUT ==="
 
@@ -448,7 +449,12 @@ cap "$OUT" final "$R" || true
 blog_since 0 > "$OUT/bridge-full.log" 2>/dev/null || true
 asince 0 'TOAST' > "$OUT/agent-toast-lines.log" 2>/dev/null || true
 log "=== verdicts ==="; cat "$OUT/verdicts.txt" | tee -a "$R"
-# FAIL *and* INSTRUMENT both gate: an ungraded phase must never read green (a0 wrap rationale).
-fails=$(grep -cE 'FAIL|INSTRUMENT' "$OUT/verdicts.txt" || true)
-log "=== done: $fails FAIL/INSTRUMENT line(s); evidence in $OUT; subject $VM left running ==="
-[ "${fails:-0}" = 0 ]
+# THREE-CLASS AGGREGATION (mgmt/harness/verdict-lib.sh, 2026-09-06) - the same fold as the a0
+# wrap it copied (`grep -cE 'FAIL|INSTRUMENT'`, the 2026-09-05 overcorrection of `grep -c FAIL`):
+# a product FAIL gates (exit 2); an INSTRUMENT row is "ungraded - re-run" (exit 1, never green,
+# never reported as a product defect - V2/V3, the 2026-08-30 campaign-verdict discipline);
+# PASS-DATUM is a pass. Wire format unchanged.
+verdict_aggregate "$OUT/verdicts.txt"
+p3_rc=$VS_RC
+log "$(verdict_done_line "evidence in $OUT; subject $VM left running")"
+exit "$p3_rc"

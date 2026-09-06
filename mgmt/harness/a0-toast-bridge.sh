@@ -58,6 +58,7 @@ source mgmt/harness/vmlock.sh; vm_lock "$VM"   # one harness per guest; see vmlo
 # A kill of this script must leave ZERO orphans churning the guest. job_init owns the EXIT
 # trap - never add another `trap ... EXIT` in this file.
 source mgmt/harness/run-lib.sh; job_init a0-toast-bridge
+source mgmt/harness/verdict-lib.sh   # verdict_aggregate - the three-class (FAIL / ungraded / PASS-DATUM) wrap
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/e2e-wait.sh
 source mgmt/harness/a0-lib.sh   # shared toast-bridge instruments (constants + probes) - same code the a0-selftest.sh floor validates
@@ -594,10 +595,22 @@ qvm-features --unset "$VM" service.legacy-toasts 2>/dev/null || true
 cap "$OUT" final "$R" || true
 blog_since 0 > "$OUT/bridge-full.log" 2>/dev/null || true
 log "=== verdicts ==="; cat "$OUT/verdicts.txt" | tee -a "$R"
-# Count FAIL *and* INSTRUMENT: an INSTRUMENT verdict means a phase was never actually exercised
-# (fire never fired, consent never revoked, blog_len unreadable) - "missing data fails", so the
-# overall exit code the caller gates on must NOT read green when a phase was ungraded
-# (audit 2026-09-05: the old `grep -c FAIL` let an unexercised phase exit 0).
-fails=$(grep -cE 'FAIL|INSTRUMENT' "$OUT/verdicts.txt" || true)
-log "=== done: $fails FAIL/INSTRUMENT line(s); evidence in $OUT; subject $VM left running for inspection ==="
-[ "${fails:-0}" = 0 ]
+# THREE-CLASS AGGREGATION (mgmt/harness/verdict-lib.sh, 2026-09-06). History of this line:
+#   `grep -c FAIL`                 -> an unexercised phase exited 0 (audit 2026-09-05)
+#   `grep -cE 'FAIL|INSTRUMENT'`   -> closed that hole by folding every ungraded phase into the
+#                                     same blocking integer as a product FAIL - the 2026-08-30
+#                                     campaign-verdict incident's V2 violation ("INVALID-* is never
+#                                     folded into FAIL"), reintroduced one level down.
+# Now: FAIL gates (exit 2, BROKEN); INSTRUMENT rows are "ungraded - re-run" on their own channel
+# (exit 1, EXECUTED-WITH-GAPS - still never green); PASS-DATUM counts as a pass. The P1c/P1d/P2
+# instrument SELF-TEST aborts above are unchanged and stay hard `exit 1`s: "do not run a test
+# whose instrument is broken" is a different thing from "a drill could not stage". The P7/P8
+# INSTRUMENT rows (a burst/legacy toast never confirmed FIRED) are ungraded caveats - their real
+# product FAILs (a heartbeat with the opt-out set, a forward leak, a lost toast) still emit FAIL
+# from their own branches and still block. The wire format ('<phase>|INSTRUMENT ...' rows, the
+# '=== done: N FAIL/INSTRUMENT line(s)' marker) is unchanged: protocol/steps/p6-toast-bridge.json
+# reads both and does its own V2/V3 routing (p6-a0-instrument-clean).
+verdict_aggregate "$OUT/verdicts.txt"
+a0_rc=$VS_RC
+log "$(verdict_done_line "evidence in $OUT; subject $VM left running for inspection")"
+exit "$a0_rc"

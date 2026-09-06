@@ -81,9 +81,17 @@ source "$(dirname "${BASH_SOURCE[0]}")/e2e-wait.sh"
 M="${MATRIX_OUT:-$HOME/qwt-matrix/$(date -u +%Y%m%d-%H%M%S)}"; mkdir -p "$M"
 R=$M/matrix.log; : > "$R"
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$R"; }
-PASS=0; FAIL=0
+PASS=0; FAIL=0; INVALID=0
 ok(){ PASS=$((PASS+1)); say "PASS  $*"; }
-no(){ FAIL=$((FAIL+1)); say "FAIL  $*"; }
+# INVALID-* messages (a cell that did not run: precondition not met, instrument gave no data) are
+# counted TWICE on purpose: into FAIL, because the footer '=== MATRIX: N passed, M failed ===' and
+# the exit code are a machine-read contract (campaign.json s6-matrix + its defect-cell-fail
+# fixture) that must keep meaning "not clean"; and into INVALID, so the classes line below tells
+# a reader how many of the M are product defects and how many are ungraded cells - V2 ("INVALID-*
+# is never folded into FAIL") applied additively, without touching the contract. The TSV ledger
+# campaign-verdict.sh reads keeps the classes distinct already; this only stops the LOG from
+# conflating them (the residual recorded in protocol/rule-coverage.json).
+no(){ FAIL=$((FAIL+1)); case "$*" in *INVALID*) INVALID=$((INVALID+1)) ;; esac; say "FAIL  $*"; }
 # qvm-start BLOCKS until qrexec connects (up to qrexec_timeout). On a guest that never boots
 # that is dead silence for the whole timeout - measured today: 15 minutes of a harness that
 # looked hung was simply sitting inside qvm-start. Fire it and poll the state ourselves.
@@ -1364,6 +1372,7 @@ say ""
 # '^=== MATRIX: N passed, M failed ===$' and s6-nonvacuous greps the same anchor in matrix.log).
 # A timestamped footer matches neither - measured as exactly the book<->code divergence class
 # this file was reconciled for on 2026-09-03.
+say "classes: product-FAIL=$((FAIL-INVALID)) INVALID-*(cell did not run, ungraded)=$INVALID - the footer's 'failed' is both (contract kept; see mgmt/harness/verdict-lib.sh for the three-class rule)"
 echo "=== MATRIX: $PASS passed, $FAIL failed ===" | tee -a "$R"
 # Parks are campaign-scoped: pool cost grows as content diverges, so remove them when the
 # campaign is DONE (not per cell - later cells unpark them). NEVER park or remove a golden.

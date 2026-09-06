@@ -287,7 +287,7 @@
     {"point": "campaign-verdict.sh", "how": "collects 'FAIL (product defect)' and 'INVALID (cell did not run)' as separate blocker categories, never summed"},
     {"point": "steps data (p6-a0-instrument-clean)", "how": "the wrapped a0 suite's internal INSTRUMENT rows are routed to INVALID-INSTRUMENT BEFORE any product check reads verdicts.txt, so an external harness's instrument misses cannot surface as protocol FAIL - the wrap pattern that keeps V2 intact across the harness boundary (contrast the matrix.sh conflation in this rule's residual)"}
    ],
-   "residual": "Inside matrix.sh (reached via s6-matrix) INVALID-* and product FAIL share one FAIL counter; the distinction survives only in the per-line message text, so the step's MATRIX_FAILED variable conflates them."
+   "residual": "Inside matrix.sh (reached via s6-matrix) INVALID-* and product FAIL still share the FAIL counter that feeds the '=== MATRIX: N passed, M failed ===' footer and the exit code, so the step's MATRIX_FAILED variable conflates them - the footer is a machine-read contract (this step + defect-cell-fail) and was left intact. Since 2026-09-06 matrix.sh additionally counts INVALID-* rows into a separate INVALID counter and prints a 'classes: product-FAIL=X INVALID-*=Y' line before the footer, so the log no longer hides the split; the LABEL|TEXT harnesses (a0-toast-bridge.sh, a0-p3-toast-split.sh, p3a-etw-gate.sh) moved off their `grep -cE 'FAIL|INSTRUMENT'` fold onto mgmt/harness/verdict-lib.sh (FAIL gates; INSTRUMENT = ungraded, exit 1 never green; PASS-DATUM = pass)."
   },
   {
    "rule": "V3",
