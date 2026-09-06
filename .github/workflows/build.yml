@@ -446,6 +446,33 @@ jobs:
           & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
           if ($LASTEXITCODE -ne 0) { throw "toastcrop_pick_test clean rebuild failed" }
 
+      - name: Slice-paint readiness unit suite
+        shell: pwsh
+        run: |
+          # agent/gui-agent/slicepaint.h: the pure "is this per-window buffer actually painted"
+          # predicate behind the slice-content map-hold (PwNoteSliceContent). Offline suite over
+          # synthetic BGRA buffers - zeroed slab, transparent WGC first frame, dark-theme card,
+          # fade-in, raw toast with shadow margin, sub-ceiling content, padded rows. Two passes:
+          #   1. clean build MUST pass;
+          #   2. defect-reintroduction build (any copy counts as content - the pre-fix
+          #      semantics that released the hold onto a black toast, rig 2026-09-06, via
+          #      /p:SlicePaintDefect) MUST FAIL - a check never seen to fail is decoration.
+          $proj = 'agent\vs2022\slicepaint-test\slicepaint-test.vcxproj'
+          $exe  = 'agent\vs2022\slicepaint-test\x64\Release\slicepaint_test.exe'
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
+          if ($LASTEXITCODE -ne 0) { throw "slicepaint_test msbuild failed" }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw "slicepaint_test suite FAILED on the clean build" }
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
+              /t:Rebuild /p:SlicePaintDefect=SLICEPAINT_DEFECT_ANYCOPY
+          if ($LASTEXITCODE -ne 0) { throw "slicepaint_test defect build failed to compile" }
+          & $exe
+          if ($LASTEXITCODE -eq 0) { throw "defect-reintroduction proof FAILED: suite passed with any-copy-is-content semantics" }
+          Write-Host 'defect proof OK: suite fails when any copy counts as painted content'
+          # leave a clean binary behind (nothing packages it, but never leave a defect build around)
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
+          if ($LASTEXITCODE -ne 0) { throw "slicepaint_test clean rebuild failed" }
+
       - name: Build wgcbroker
         shell: pwsh
         run: |
