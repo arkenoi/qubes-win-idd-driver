@@ -433,6 +433,15 @@ jobs:
           & $exe
           if ($LASTEXITCODE -eq 0) { throw "defect-reintroduction proof FAILED: suite passed with toasts on the union rule" }
           Write-Host 'defect proof OK: suite fails when toasts are forced onto the union rule'
+          #   3. second defect: the mid-slide guard (TcInsetsMidSlide) disabled - the state that
+          #      latched a sliding toast's card as its crop (l=209 r=1, 186 px wide, buttons cut,
+          #      measured 2026-09-06). MUST FAIL too.
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
+              /t:Rebuild /p:ToastCropPickDefect=TOASTCROP_PICK_DEFECT_NOGUARD
+          if ($LASTEXITCODE -ne 0) { throw "toastcrop_pick_test NOGUARD defect build failed to compile" }
+          & $exe
+          if ($LASTEXITCODE -eq 0) { throw "defect-reintroduction proof FAILED: suite passed with the mid-slide guard disabled" }
+          Write-Host 'defect proof OK: suite fails when the mid-slide guard is disabled'
           # leave a clean binary behind (nothing packages it, but never leave a defect build around)
           & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
           if ($LASTEXITCODE -ne 0) { throw "toastcrop_pick_test clean rebuild failed" }
