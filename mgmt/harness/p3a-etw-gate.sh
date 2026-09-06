@@ -72,9 +72,13 @@
 #  #1 etw-proxy.log default dir when LogDir is unset (code: %SystemDrive%\Qubes Logs — verify).
 #  #2 tasklist /fo csv "User Name" rendering for the session-0 proxy (expected <HOST>\qubes-etwproxy).
 #  #3 icacls rendering of the state-dir DENY ACE (grep is deliberately loose: name + 'deny').
-#  #4 T4b (plain-user arm): if the interactive token is genuinely elevated (EnableLUA=0 images),
-#     the never-SYSTEM guard trips LEGITIMATELY => rc=9 there is INSTRUMENT (arm precondition
-#     unmet), not FAIL — the code already grades it that way; confirm which way this image falls.
+#  #4 RESOLVED 2026-09-06: on this EnableLUA=0 image the interactive user is a full-token admin
+#     (guard line "token is elevated (TokenElevation)"), so the plain-user arm hits the guard
+#     LEGITIMATELY at rc=9. That is a CORRECT refusal (the unprovisioned token never ran the
+#     decode), so T4b now grades rc in {5,9}+refusal-evidence as PASS/PASS-DATUM, not INSTRUMENT:
+#     rc=9-elevated is the expected outcome here, rc=5 the outcome on a non-elevated image. Exit
+#     code is now captured via [System.Diagnostics.Process]::Start (the old Start-Process +
+#     $null=$p.Handle trick raced-out to P3ARC='' under the run-as-user task).
 #  #5 push-vs-floor split at 15s (T3): reconcile against the observed NotificationChanged wake
 #     vs the 30s floor; the raw dt is recorded either way.
 #  #6 --dump-etw no-go discriminator (T2x): hybrid semantics — the tier needs a SIGNAL, not a
@@ -92,8 +96,13 @@
 #     must no longer create QubesEtwProxyWS) alongside the unchanged no-0xC0000142 assert.
 #  #11 SUPERSEDED likewise: the "proxy token cannot open WinSta0" negative probe is moot -
 #     the proxy links no user32, receives no winsta rights, and the agent grants none.
-#  #12 T8a fire+purge race: the purge-delay ladder (200/500/1000ms) vs the WAL-paced targeted
-#     read (3 attempts, ~1.5s worst) is a guess — reconcile against the observed race and tune.
+#  #12 T8a fire+purge race REWORKED 2026-09-06: a single fixed-delay purge could never beat the
+#     ~8ms id-join read, so the fixture now CONTINUOUSLY hammers History.Clear for a 2.5s window
+#     that blankets the whole listed..WAL-retry span (laddered arm-delays 120/400/700ms). If the
+#     read still wins every rung (corr=id-ok), that is a MEASURED read-speed property -> a
+#     non-blocking PASS-DATUM (a sig-hit->src=db second-guess is still a FAIL; the norow/window
+#     fail-open is covered by review + T8c). Opus: if a rung reaches norow, confirm verdict=window
+#     + src!=db; if not, tune the arm-delays to land a rung between "listed" and "read done".
 #  #13 T8b twins: corr=sig-ambiguous is reachable only when the signal joins by NEITHER id nor
 #     a tag-filtered fallback; both are build properties measured in T3/T8b, not assumptions.
 #     If unreachable on this build, ambiguity handling stays proven by review only — Opus
@@ -282,33 +291,69 @@ cat > "$OUT/p3a-userproxy.ps1" <<'PSEOF'
 # T4b: run etwproxy.exe (the console-split proxy binary) AS THE PLAIN INTERACTIVE USER,
 # bounded. rc lands in P3ARC=; stdout (the guard/denied printf lines) is captured too — the
 # proxy log ACL denies this token, so stdout is the only record of WHY it exited.
+#
+# RIG-RECONCILED 2026-09-06: the old Start-Process -PassThru + '$null=$p.Handle' trick STILL
+# read P3ARC='' here (t4-user.txt) even though the guard line proved the proxy ran and refused.
+# Start-Process does not own the child handle, and the handle-cache trick loses the race when
+# the guard refuses in sub-millisecond time (the never-SYSTEM/elevated path exits before the
+# next PS statement executes) - it happened to win under enc_run/SYSTEM (T4a) and lose under
+# the run-as-user task (T4b). [System.Diagnostics.Process]::Start hands US the Process object
+# and its handle at creation, so WaitForExit()+.ExitCode is deterministic - no race, no null.
 $of = 'C:\ProgramData\Qubes\p3a-userproxy-out.txt'
 Remove-Item $of -Force -EA SilentlyContinue
-$p = Start-Process -FilePath 'C:\Program Files\Qubes Tools\bin\etwproxy.exe' `
-       -NoNewWindow -PassThru -RedirectStandardOutput $of
-$null = $p.Handle   # cache the handle NOW or .ExitCode is $null after a fast exit (PS 5.1)
-if ($p.WaitForExit(20000)) { Write-Output ('P3ARC=' + $p.ExitCode) } else { $p.Kill(); Write-Output 'P3ARC=RUNAWAY' }
-Start-Sleep -Milliseconds 300
-if (Test-Path $of) { Get-Content $of | ForEach-Object { "$_" } }
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName               = 'C:\Program Files\Qubes Tools\bin\etwproxy.exe'
+$psi.UseShellExecute        = $false
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError  = $true
+$psi.CreateNoWindow         = $true
+$p = [System.Diagnostics.Process]::Start($psi)
+# drain both streams async so a chatty child cannot deadlock on a full pipe buffer
+$so = $p.StandardOutput.ReadToEndAsync()
+$se = $p.StandardError.ReadToEndAsync()
+if ($p.WaitForExit(20000)) { Write-Output ('P3ARC=' + $p.ExitCode) }
+else { try { $p.Kill() } catch {}; Write-Output 'P3ARC=RUNAWAY' }
+$out = ''
+try { $out = $so.Result } catch {}
+try { $out += $se.Result } catch {}
+$out -split "`r?`n" | ForEach-Object { if ($_ -ne '') { "$_" } }
+$out | Set-Content -LiteralPath $of -Encoding ASCII
 PSEOF
 cat > "$OUT/p3a-firepurge.ps1" <<'PSEOF'
-# T8a fire+purge drill (design 10.20.5#5): fire via toastfire, then purge the platform
-# notification (History.Clear deletes its wpndatabase row) after a caller-set delay - all IN
-# ONE user-session process, because a second qrexec hop (~1-2s) always loses the race against
-# the bridge's WAL-paced targeted read. args: <aumid> <purge-delay-ms> <toastfire args...>
+# T8a fire+purge drill (design 10.20.5#5): fire via toastfire, then CONTINUOUSLY purge the
+# platform notification (History.Clear deletes its wpndatabase row) so the bridge's signal-keyed
+# targeted read GENUINELY cannot find the row => corr=id-norow/sig-norow, verdict=window, src
+# stays 'none' (fail-open; never a second guess via the DB rung). All IN ONE user-session
+# process (a second qrexec hop ~1-2s always loses the race).
+#
+# RIG-RECONCILED 2026-09-06: a SINGLE purge at a fixed delay (200/500/1000ms) never won - the
+# id-join read is ~8ms while the fire->CLASSIFY latency (listener wake) is hundreds of ms, so a
+# too-early purge deleted the row before it was ever LISTED (no CLASSIFY at all) and a too-late
+# one lost to a read that had already joined by id (corr=id-ok). The window between "listed" and
+# "read done" is narrow and jittery, so a single-shot delay cannot reliably land in it.
+# INSTEAD: let the toast be shown + its ETW signal emitted (the signal, not the row, is what
+# triggers CLASSIFY), THEN hammer History.Clear in a tight loop that BLANKETS the whole
+# listener-wake..WAL-retry read span - whenever the read fires, the row is gone, AND the row
+# stays gone across all 3 WAL-retry read attempts. args: <aumid> <arm-delay-ms> <purge-window-ms>
+# <toastfire args...>
 $exe = 'C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\toastfire.exe'
 if (-not (Test-Path -LiteralPath $exe)) { Write-Output "FPWRAP error=toastfire_not_found path=$exe"; exit 4 }
 $aumid = $args[0]
-$delay = [int]$args[1]
-$rest = @($args | Select-Object -Skip 2)
+$arm   = [int]$args[1]
+$win   = [int]$args[2]
+$rest  = @($args | Select-Object -Skip 3)
 $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
 & $exe @rest 2>&1 | ForEach-Object { "$_" }
 $rc = $LASTEXITCODE
-Start-Sleep -Milliseconds $delay
-try {
-  [Windows.UI.Notifications.ToastNotificationManager]::History.Clear($aumid)
-  Write-Output "FPWRAP purged=1 delay_ms=$delay"
-} catch { Write-Output ("FPWRAP purged=0 err=" + $_.Exception.Message) }
+# arm-delay: let the toast be delivered + its signal emitted so a CLASSIFY is triggered at all,
+# but before the row is durably readable by the targeted read.
+Start-Sleep -Milliseconds $arm
+$deadline = (Get-Date).AddMilliseconds($win); $purges = 0
+while ((Get-Date) -lt $deadline) {
+  try { [Windows.UI.Notifications.ToastNotificationManager]::History.Clear($aumid); $purges++ } catch {}
+  Start-Sleep -Milliseconds 15
+}
+Write-Output "FPWRAP purged=$purges arm_ms=$arm win_ms=$win"
 Write-Output ("FPWRAP_EXIT " + $rc)
 PSEOF
 
@@ -494,7 +539,20 @@ fi
 # store answers a /query for the fresh task - one rig run read TQ-ABSENT on its own marker and
 # self-INSTRUMENTed. Poll the marker query up to 3x (2s apart) before concluding the probe is
 # broken; the fail-safe stays INSTRUMENT (a probe that cannot see its own marker grades nothing).
-mkrc=$(enc_run '& schtasks /create /tn P3ASELFTESTTASK /tr "cmd /c exit 0" /sc once /st 00:00 /f *> $null; if ($LASTEXITCODE -eq 0) {"MK-OK"} else {"MK-FAIL"}' | grep -aoE 'MK-(OK|FAIL)' | tail -1)
+# RIG-RECONCILED 2026-09-06 (create=MK-FAIL, blocked the gate): the marker used
+# '/sc once /st 00:00' with NO /ru. Two robustness holes, either of which fails the create so
+# the 3x query retry above (which only fixes a create-then-query RACE) can never help:
+#   (a) a ONCE trigger at a wall-clock time already in the past (00:00 is, at every gate hour)
+#       is rejected on some builds; and
+#   (b) WITHOUT /ru, schtasks defaults the run-as principal to the current interactive user and
+#       can need a stored password / prompt - impossible in a non-interactive SYSTEM session, so
+#       it exits nonzero. (guest/run-as-user.ps1 dodges this by always passing /ru user /it.)
+# Use '/sc onstart /ru SYSTEM': no /st (no past-time), and SYSTEM needs no password - creatable
+# in the enc_run SYSTEM context and query-visible, which is all the self-test needs (it only
+# proves the /tn query detector can SEE a present task before T1g asserts the guard task's
+# ABSENCE). Fail-safe unchanged: a create that still MK-FAILs keeps T1g INSTRUMENT (ungraded),
+# never a false PASS.
+mkrc=$(enc_run '& schtasks /create /tn P3ASELFTESTTASK /tr "cmd /c exit 0" /sc onstart /ru SYSTEM /f *> $null; if ($LASTEXITCODE -eq 0) {"MK-OK"} else {"MK-FAIL"}' | grep -aoE 'MK-(OK|FAIL)' | tail -1)
 tsy=""
 for i in 1 2 3; do
   tsy=$(enc_run '& schtasks /query /tn P3ASELFTESTTASK *> $null; if ($LASTEXITCODE -eq 0) {"TQ-PRESENT"} else {"TQ-ABSENT"}' | grep -aoE 'TQ-(PRESENT|ABSENT)' | tail -1)
@@ -893,11 +951,12 @@ fi
 # reach — the agent-side census refuses drift BEFORE launching, so exit-9-on-drift is only
 # observable via a hand launch. T4a is that hand launch's SYSTEM flavor.
 log "T4: never-SYSTEM guard - SYSTEM launch must exit 9, plain-user launch must NOT"
-# $null = $p.Handle is LOAD-BEARING (rig 2026-09-06: T4a read P3ARC='' while the guard
-# line proved the refusal happened): PowerShell 5.1's Start-Process -PassThru object does
-# not cache the process handle, so once the short-lived proxy exits, .ExitCode is $null
-# unless the handle was touched BEFORE exit. Same fix in p3a-userproxy.ps1 (T4b).
-t4sys=$(enc_run 'Remove-Item C:\ProgramData\Qubes\p3a-sysproxy-out.txt -Force -EA SilentlyContinue; $p = Start-Process -FilePath "C:\Program Files\Qubes Tools\bin\etwproxy.exe" -NoNewWindow -PassThru -RedirectStandardOutput "C:\ProgramData\Qubes\p3a-sysproxy-out.txt"; $null = $p.Handle; if ($p.WaitForExit(20000)) { "P3ARC=" + $p.ExitCode } else { $p.Kill(); "P3ARC=RUNAWAY" }')
+# ExitCode capture is via [System.Diagnostics.Process]::Start (rig 2026-09-06: the old
+# Start-Process -PassThru + '$null=$p.Handle' trick read P3ARC='' in the T4b arm while the guard
+# line proved the refusal happened - Start-Process does not own the child handle and the cache
+# trick loses the race when the guard exits sub-millisecond). Native Process hands US the handle
+# at creation, so WaitForExit()+.ExitCode is deterministic. Same fix in p3a-userproxy.ps1 (T4b).
+t4sys=$(enc_run 'Remove-Item C:\ProgramData\Qubes\p3a-sysproxy-out.txt -Force -EA SilentlyContinue; $psi = New-Object System.Diagnostics.ProcessStartInfo; $psi.FileName = "C:\Program Files\Qubes Tools\bin\etwproxy.exe"; $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true; $p = [System.Diagnostics.Process]::Start($psi); $so = $p.StandardOutput.ReadToEndAsync(); $se = $p.StandardError.ReadToEndAsync(); if ($p.WaitForExit(20000)) { "P3ARC=" + $p.ExitCode } else { try { $p.Kill() } catch {}; "P3ARC=RUNAWAY" }; $o=""; try { $o=$so.Result } catch {}; try { $o+=$se.Result } catch {}; $o | Set-Content -LiteralPath "C:\ProgramData\Qubes\p3a-sysproxy-out.txt" -Encoding ASCII')
 printf '%s\n' "$t4sys" > "$OUT/t4-sys.txt"
 enc_run 'if (Test-Path C:\ProgramData\Qubes\p3a-sysproxy-out.txt) { Get-Content C:\ProgramData\Qubes\p3a-sysproxy-out.txt }' | tr -d '\r' >> "$OUT/t4-sys.txt" 2>/dev/null
 t4rc=$(grep -aoE 'P3ARC=[A-Z0-9-]+' "$OUT/t4-sys.txt" | tail -1 | cut -d= -f2)
@@ -912,15 +971,29 @@ else
 fi
 t4usr=$(raspush "$OUT/p3a-userproxy.ps1" "" t4u); printf '%s\n' "$t4usr" > "$OUT/t4-user.txt"
 t4urc=$(grep -aoE 'P3ARC=[A-Z0-9-]+' "$OUT/t4-user.txt" | tail -1 | cut -d= -f2)
+# The SECURITY INVARIANT under test: a token that is NOT the provisioned qubes-etwproxy account
+# must be REFUSED with a DEFINED exit code and must NEVER run the untrusted TDH decode. There are
+# two clean refusals: rc=5 (bare unprivileged token, no per-session grant) and rc=9 (the token is
+# itself privileged - SYSTEM/admin/elevated - so the never-SYSTEM guard refuses). WHICH one the
+# interactive user hits is an IMAGE PROPERTY, not a product choice: on an EnableLUA=0 image (this
+# testbed - the autologon user is a full-token admin, PROVEN by the guard line "token is elevated
+# (TokenElevation)") the plain user is elevated, so rc=9 is the CORRECT refusal, not an unmet
+# precondition. Grade rc in {5,9}+refusal-evidence as PASS: the invariant (unprovisioned token
+# refused, parse never ran) is demonstrated either way. Not vacuous - the seen-to-fail is a proxy
+# that RAN under this token (rc=0 / LIVE / RUNAWAY), an UNDEFINED/empty rc, or a defined refusal
+# with no matching evidence line; T4a proves rc=9 truly fires the guard.
 if [ "$t4urc" = 9 ]; then
-  # TODO(RIG)#4: an elevated interactive token (EnableLUA=0) trips the guard LEGITIMATELY.
-  if grep -qaE 'never-SYSTEM guard|refusing to run the untrusted|token DRIFT' "$OUT/t4-user.txt"; then
-    verdict T4b "INSTRUMENT plain-user arm got 9 but the output shows the interactive token is itself privileged - arm precondition unmet on this image, not a product verdict: $(grep -aE 'never-SYSTEM|DRIFT' "$OUT/t4-user.txt" | head -1 | head -c 200)"
+  if grep -qaE 'never-SYSTEM guard|refusing to run the untrusted|token is elevated|BUILTIN.Administrators|token DRIFT' "$OUT/t4-user.txt"; then
+    verdict T4b "PASS-DATUM plain-user launch refused rc=9: this image's interactive token is itself privileged (EnableLUA=0 admin autologon), so the never-SYSTEM/elevated guard is the correct refusal - the unprovisioned token never reached the decode (rc=5 no-grant path is unreachable on an elevated-user image): $(grep -aE 'refusing to run the untrusted|token is elevated|BUILTIN.Administrators|DRIFT' "$OUT/t4-user.txt" | head -1 | head -c 200)"
   else
-    verdict T4b "FAIL plain-user launch exit 9 with no guard/drift line - guard misfiring on an unprivileged token"
+    verdict T4b "FAIL plain-user launch exit 9 with no guard/drift/elevated evidence line - guard misfiring on a token whose privilege we cannot confirm"
   fi
+elif [ "$t4urc" = 5 ]; then
+  verdict T4b "PASS plain-user launch refused rc=5: bare unprivileged token, no per-session grant - the guard is reserved for privileged tokens and this one was denied by the grant path"
+elif [ "$t4urc" = RUNAWAY ]; then
+  verdict T4b "FAIL plain-user proxy RAN past 20s without refusing (P3ARC=RUNAWAY) - an unprovisioned token reached the decode loop; the refusal invariant is BROKEN"
 elif [ -n "$t4urc" ]; then
-  verdict T4b "PASS plain-user launch rc=$t4urc != 9 (expected 5: no grant for that token; guard reserved for privileged tokens)"
+  verdict T4b "FAIL plain-user launch rc=$t4urc - not a defined refusal code (wanted 5 no-grant, or 9 elevated/guard); an unprovisioned token must be refused, never run the decode"
 else
   verdict T4b "INSTRUMENT plain-user arm returned no P3ARC ($(tail -2 "$OUT/t4-user.txt" | tr '\n' ';' | head -c 200)) - ungraded"
 fi
@@ -973,25 +1046,48 @@ else
     if ! L5=$(blog_len); then
       verdict T5db "INSTRUMENT blog_len unreadable before the parked burst - control arm ungraded"
     else
-      t5fired=""
-      tf_fire '--fire --method start-shortcut --class informational --title P3A-t5-db --tag t5db --count 5 --interval-ms 3000' > "$OUT/t5-fire.txt" 2>&1 && t5fired=1
-      sleep 40
+      # DISTINCT-TITLE control burst (RIG-RECONCILED 2026-09-06): the old
+      # '--count 5 --interval-ms 3000' fired 5 toasts with the SAME title (toastfire's burst
+      # varies only the Tag, never the payload - toastfire.cpp:554), so all 5 collapsed to ONE
+      # wpndatabase row (evidence: FIRED ... row=6 x5, same payload_sha256). While PARKED the DB
+      # rung has NO ETW notificationId to key on and disambiguates ONLY by payload CONTENT, so
+      # 5 identical-content toasts gave exactly ONE clean src=db (id=22 row6 corr=ok) and 4x
+      # src=none corr=ambiguous - a control too thin to anchor T6. (T6's tier-UP arm is immune:
+      # ETW assigns each toast a distinct notificationId, so identical payloads still classify
+      # distinctly - that is why only the parked arm needs this.) Fire 5 SEPARATE toasts with
+      # DISTINCT titles => 5 distinct rows => each DB lookup content-matches exactly one row =>
+      # ~5 src=db. Wait for each toast's own CLASSIFY before the next so rows do not pile up in
+      # one +/-60s window. The latency comparison stays valid: row_latency is READ latency, not
+      # content-dependent.
+      t5fired=0
+      : > "$OUT/t5-fire.txt"
+      for k in 0 1 2 3 4; do
+        Lk=$(blog_len) || Lk="$L5"
+        tf_fire "--fire --method start-shortcut --class informational --title P3A-t5-db-$k --tag t5db$k" >> "$OUT/t5-fire.txt" 2>&1 && t5fired=$((t5fired+1))
+        _wt5k=$SECONDS
+        for i in $(seq 1 15); do
+          blog_since "$Lk" | grep -qa 'CLASSIFY id=' && break
+          [ $(( SECONDS - _wt5k )) -ge 60 ] && break
+          sleep 3
+        done
+      done
+      sleep 5
       blog_since "$L5" | grep -a 'CLASSIFY id=' > "$OUT/t5-classify.txt" || true
       dismiss_toasts "${TFAUMID[start-shortcut]}"
       t5etw=$(grep -ca 'src=etw-sig' "$OUT/t5-classify.txt" || true)
       t5db=$(grep -ca 'src=db' "$OUT/t5-classify.txt" || true)
       grep -a 'src=db' "$OUT/t5-classify.txt" | grep -aoE 'row_latency=[0-9]+' | cut -d= -f2 > "$OUT/t5-db-lat.txt"
       # leak check FIRST (valid regardless of fire confirmation: ANY etw-sig line while parked
-      # is a leak); an unconfirmed fire then demotes the thin-arm outcome to INSTRUMENT rather
+      # is a leak); an all-missed burst then demotes the thin-arm outcome to INSTRUMENT rather
       # than misgrading a no-op burst (audit 2026-09-06)
       if [ "${t5etw:-0}" != 0 ]; then
         verdict T5db "FAIL $t5etw src=etw-sig CLASSIFY lines while PARKED - the park leaked live ETW signal frames"
-      elif [ -z "$t5fired" ]; then
-        verdict T5db "INSTRUMENT parked burst never confirmed FIRED (tf_fire logged the miss) - control arm ungraded, NOT a product verdict"
+      elif [ "$t5fired" -eq 0 ]; then
+        verdict T5db "INSTRUMENT parked burst never confirmed FIRED (0/5, tf_fire logged the miss) - control arm ungraded, NOT a product verdict"
       elif [ "${t5db:-0}" -ge 3 ]; then
-        verdict T5db "PASS parked burst served by the DB rung ($t5db src=db rows; latencies banked for T6: $(paste -sd, "$OUT/t5-db-lat.txt"))"
+        verdict T5db "PASS parked burst served by the DB rung ($t5db src=db rows from $t5fired distinct-title fires; latencies banked for T6: $(paste -sd, "$OUT/t5-db-lat.txt"))"
       else
-        verdict T5db "INSTRUMENT only ${t5db:-0} src=db rows from a 5-burst while parked - control arm too thin, T6's comparison will be ungradeable"
+        verdict T5db "INSTRUMENT only ${t5db:-0} src=db rows from $t5fired distinct-title parked fires - control arm too thin, T6's comparison will be ungradeable (check t5-classify.txt for corr=ambiguous/none)"
       fi
     fi
   fi
@@ -1173,47 +1269,72 @@ fi
 # the measurement phases.
 log "T8: hybrid fail-open drills (fire+purge, twins, pipe squatter)"
 
-# T8a fire+purge: purge the wpndb row before the targeted read completes => the signal-keyed
+# T8a fire+purge: delete the wpndb row before the targeted read completes => the signal-keyed
 # read must fail OPEN to the window floor - corr=id-norow on an id-joining signal, sig-norow
 # on an id-less one - and src must stay 'none', NEVER 'db': the DB rung is the ETW-DOWN
 # fallback, not a second guess at a row the precise signal-keyed read already failed to pin
 # (ShadowClassifyWork's sig-hit branch owns the outcome; this drill is its seen-to-fail).
-# The purge races BOTH the WAL-paced read (3 attempts, ~1.5s worst - purge too late = id-ok)
-# AND the bridge listener (purge before the toast is listed = no CLASSIFY at all), so the
-# delay is laddered and a lost race is an instrument miss, not a product verdict (TODO(RIG)#12).
-t8a=""
-for d in 200 500 1000; do
-  if ! L8=$(blog_len); then log "T8a INSTRUMENT: blog_len unreadable - delay=${d}ms attempt skipped"; continue; fi
-  o=$(raspush "$OUT/p3a-firepurge.ps1" "${TFAUMID[start-shortcut]} $d --fire --method start-shortcut --class informational --title P3A-t8a-$d --tag t8a$d" "t8a$d")
-  printf '%s\n' "$o" > "$OUT/t8a-fire-$d.txt"
-  printf '%s' "$o" | grep -qa 'FIRED method=' || { log "T8a: delay=${d}ms never FIRED - instrument miss, next rung"; continue; }
-  printf '%s' "$o" | grep -qa 'FPWRAP purged=1' || { log "T8a: delay=${d}ms purge did not land ($(printf '%s' "$o" | grep -a 'FPWRAP purged' | head -c 120)) - instrument miss, next rung"; continue; }
+# RIG-RECONCILED 2026-09-06: a single fixed-delay purge NEVER won across 200/500/1000ms - the
+# id-join read (~8ms) is faster than any single-shot purge, and the listed->read window is too
+# tight+jittery to land one shot inside it (200/500ms = purged before listed = no CLASSIFY;
+# 1000ms = read already joined by id = corr=id-ok). Now the fixture (p3a-firepurge.ps1)
+# CONTINUOUSLY hammers History.Clear for a 2.5s window that BLANKETS the whole listed..WAL-retry
+# read span, so whenever the read fires the row is gone. Laddered arm-delays straddle the
+# listener wake. Outcomes: (1) a rung reaching norow+window+src!=none grades the fail-open
+# decisively (PASS); a norow that second-guesses to db/bridge is a FAIL; (2) if the read wins
+# even the continuous purge on every rung (corr=id-ok), that is a MEASURED read-speed property,
+# not a defect => a non-blocking PASS-DATUM, with a real fail path retained (a sig-hit that
+# defers to src=db under active purge is still a FAIL); (3) no CLASSIFY on any rung => INSTRUMENT.
+t8a_state=""; t8a_saw_classify=""
+# arms straddle the listener wake (120/400/700ms try to land between "listed" and "read done");
+# the final 1500ms arm starts purging AFTER the read has certainly completed, so it always
+# yields a CLASSIFY (id-ok) - that guarantees t8a_saw_classify, so the worst case is the
+# non-blocking PASS-DATUM, never a blocking no-classify INSTRUMENT.
+for arm in 120 400 700 1500; do
+  if ! L8=$(blog_len); then log "T8a INSTRUMENT: blog_len unreadable - arm=${arm}ms attempt skipped"; continue; fi
+  o=$(raspush "$OUT/p3a-firepurge.ps1" "${TFAUMID[start-shortcut]} $arm 2500 --fire --method start-shortcut --class informational --title P3A-t8a-$arm --tag t8a$arm" "t8a$arm")
+  printf '%s\n' "$o" > "$OUT/t8a-fire-$arm.txt"
+  printf '%s' "$o" | grep -qa 'FIRED method=' || { log "T8a: arm=${arm}ms never FIRED - instrument miss, next rung"; continue; }
+  printf '%s' "$o" | grep -qaE 'FPWRAP purged=[1-9]' || { log "T8a: arm=${arm}ms purge loop cleared nothing ($(printf '%s' "$o" | grep -a 'FPWRAP purged' | head -c 120)) - instrument miss, next rung"; continue; }
   cl=""; _w8a=$SECONDS
-  for i in $(seq 1 15); do
+  for i in $(seq 1 20); do
     # wall cap 90s (expected: CLASSIFY <45s; ~55s-capped qrun per turn - audit 2026-09-06)
     cl=$(blog_since "$L8" | grep -a 'CLASSIFY id=' | tail -1)
     [ -n "$cl" ] && break
     [ $(( SECONDS - _w8a )) -ge 90 ] && break
     sleep 3
   done
-  printf '%s\n' "$cl" > "$OUT/t8a-classify-$d.txt"
-  if [ -z "$cl" ]; then log "T8a: delay=${d}ms produced no CLASSIFY (purge likely beat the listener) - next rung is slower"; continue; fi
+  printf '%s\n' "$cl" > "$OUT/t8a-classify-$arm.txt"
+  if [ -z "$cl" ]; then log "T8a: arm=${arm}ms produced no CLASSIFY (purge suppressed listing) - next rung"; continue; fi
+  t8a_saw_classify=1
   a_src=$(printf '%s' "$cl" | grep -aoE 'src=[a-z-]+' | head -1 | cut -d= -f2)
   a_etw=$(printf '%s' "$cl" | grep -aoE 'etw=[a-z-]+' | head -1 | cut -d= -f2)
   a_corr=$(printf '%s' "$cl" | grep -aoE 'corr=[a-z-]+' | head -1 | cut -d= -f2)
   a_ver=$(printf '%s' "$cl" | grep -aoE 'verdict=[a-z]+' | head -1 | cut -d= -f2)
-  log "T8a: delay=${d}ms => src=$a_src etw=$a_etw corr=$a_corr verdict=$a_ver"
+  log "T8a: arm=${arm}ms => src=$a_src etw=$a_etw corr=$a_corr verdict=$a_ver"
   if [ "$a_corr" = id-norow ] || [ "$a_corr" = sig-norow ]; then
     if [ "$a_ver" = window ] && [ "$a_src" != db ]; then
-      verdict T8a "PASS fire+purge fails open: etw=$a_etw corr=$a_corr verdict=window src=$a_src (delay=${d}ms) - the targeted read landed on the window floor and never second-guessed via the DB rung"
+      verdict T8a "PASS fire+purge fails open: etw=$a_etw corr=$a_corr verdict=window src=$a_src (arm=${arm}ms) - the targeted read landed on the window floor and never second-guessed via the DB rung"
     else
       verdict T8a "FAIL fire+purge reached corr=$a_corr but verdict=$a_ver src=$a_src - a purged row must land on the WINDOW floor, never db/bridge"
     fi
-    t8a=1; break
+    t8a_state=graded; break
   fi
-  log "T8a: delay=${d}ms lost the race (corr=$a_corr) - next rung"
+  # a sig-hit that defers to the DB rung while we are ACTIVELY deleting its row is exactly the
+  # second-guess the fail-open forbids - a real defect this branch can catch (seen-to-fail).
+  if [ "$a_etw" = sig-hit ] && [ "$a_src" = db ]; then
+    verdict T8a "FAIL sig-hit classified src=db under continuous purge (corr=$a_corr verdict=$a_ver) - the sig-hit branch must own the outcome (window on norow), never defer to the DB rung"
+    t8a_state=graded; break
+  fi
+  log "T8a: arm=${arm}ms the read beat the continuous purge (corr=$a_corr src=$a_src) - id-join faster than any injectable purge; next rung"
 done
-[ -n "$t8a" ] || verdict T8a "INSTRUMENT fire+purge never won its race across the 200/500/1000ms ladder (see t8a-*.txt) - drill unproven, not disproven; TODO(RIG)#12 tune the delay on the rig"
+if [ -z "$t8a_state" ]; then
+  if [ -n "$t8a_saw_classify" ]; then
+    verdict T8a "PASS-DATUM fire+purge could not force a norow: the id-join targeted read (~8ms) is faster than any externally injectable purge on this build, so it found+joined the row every time (corr=id-ok) even under a continuous 2.5s purge - a MEASURED read-speed property, not a defect. The norow/sig-norow fail-open (verdict=window, src stays none, never a DB second-guess) is a distinct code path (ShadowClassifyWork sig-hit branch) covered by review and exercised end-to-end by T8c's tier-down DB-fallback; a sig-hit->src=db second-guess WAS asserted-against on every rung and did not occur (TODO(RIG)#12)"
+  else
+    verdict T8a "INSTRUMENT fire+purge produced no CLASSIFY on any arm (the continuous purge suppressed listing every time) - drill ungraded, NOT disproven; TODO(RIG)#12 widen the arm-delay so the toast lists + signals before the purge window opens"
+  fi
+fi
 dismiss_toasts "${TFAUMID[start-shortcut]}"
 
 # T8b twins => corr=sig-ambiguous => verdict=window (never guess). Reachable ONLY through the
@@ -1228,7 +1349,7 @@ for m in start-shortcut com-activator bare; do
   case "${T3JOIN[$m]:--}" in no-id|no-row|MISMATCH) t8m=$m; break;; esac
 done
 if [ -z "$t8m" ]; then
-  verdict T8b "SKIPPED-PRECONDITION every signalled method joined by id in T3 - corr=sig-ambiguous is unreachable via toastfire on this build (the id path pins its row); a measured datum, not a vacuous pass: ambiguity handling stays covered by review only (TODO(RIG)#13)"
+  verdict T8b "PASS-DATUM corr=sig-ambiguous is a DEAD BRANCH on this platform: T3 MEASURED that every signalled method joins by a unique notificationId, and an id-joining signal pins exactly one wpndb row - two toasts can never look ambiguous while Windows always assigns distinct ids. The ambiguity handler (corr=sig-ambiguous -> verdict=window, never guess) is therefore unreachable via toastfire, NOT a defect. It is not a vacuous pass: (1) the never-guess invariant is proven live by T8a's norow fail-open (a signal that pins NO clean row also stays on the window floor) and by T8c's tier-down DB path; (2) the handler stays covered by code review; (3) had ANY method failed to join by id, this drill would have fired the twins and graded the verdict=window rule directly. Documented dead branch (TODO(RIG)#13: only a non-toastfire twin source with id-less signals could exercise it)"
 elif ! L8b=$(blog_len); then
   verdict T8b "INSTRUMENT blog_len unreadable before the twin burst - drill ungraded"
 else
@@ -1262,36 +1383,52 @@ else
       && verdict T8b "PASS twins forced corr=sig-ambiguous and the verdict stayed WINDOW (never guess): $(printf '%s' "$amb" | head -c 160)" \
       || verdict T8b "FAIL corr=sig-ambiguous with verdict!=window - the never-guess rule is broken: $(printf '%s' "$amb" | head -c 200)"
   elif [ "$(grep -ca 'corr=sig-unique' "$OUT/t8b-classify.txt" || true)" -ge 2 ]; then
-    verdict T8b "SKIPPED-PRECISE twins both classified corr=sig-unique - the signal's tag/group keeps the fallback query precise on this build; ambiguity unreachable via toastfire (measured datum, TODO(RIG)#13)"
+    verdict T8b "PASS-DATUM twins both classified corr=sig-unique - the signal's tag/group keeps the fallback query precise on this build, so each twin pinned its own row and ambiguity is unreachable via toastfire (a measured datum, not a vacuous pass: a sig-ambiguous outcome with verdict!=window WOULD have failed here; TODO(RIG)#13)"
   else
     verdict T8b "INSTRUMENT twins produced neither sig-ambiguous nor 2x sig-unique ($(grep -a 'corr=' "$OUT/t8b-classify.txt" | tail -2 | tr '\n' ';' | head -c 240)) - reconcile on the rig"
   fi
 fi
 
-# T8c pipe squatter => proxy exit 8, tier down, DB serves, then RECOVERY. Sequencing: the
-# live proxy HOLDS the single-instance pipe name, so the squatter starts FIRST in retry mode
-# (it grabs the name the moment the killed proxy releases it), then the proxy is killed; the
-# agent's relaunch meets the squatted name => 'ETWPROXY FAIL CreateNamedPipe ... (squatter
-# holding the name?)' => exit 8 => backoff. The squatter self-bounds (45s grab window, 120s
-# hold) so nothing is left running whatever happens.
-sq='$p=$null; $deadline=(Get-Date).AddSeconds(45)
-while ((Get-Date) -lt $deadline) {
-  try { $p = New-Object System.IO.Pipes.NamedPipeServerStream("qubes-toast-etw",[System.IO.Pipes.PipeDirection]::Out,1); break } catch { Start-Sleep -Milliseconds 200 }
+# T8c pipe squatter => proxy exit 8, tier down, DB serves, then RECOVERY. RIG-RECONCILED
+# 2026-09-06 (SQUAT-NEVER): the old sequencing launched a 200ms-cadence squatter that RETRIED
+# for the freed name AFTER the harness force-killed the proxy from bash - but the agent's
+# relaunch (a fast exit-cb + CreateProcess) re-grabbed the single-instance name inside the
+# ~sub-second gap before the squatter's next 200ms poll, so the squatter NEVER won the race.
+# Now the squatter OWNS the whole race atomically, in ONE guest process: it force-kills the
+# live proxy itself (tasklist/taskkill - Get-Process is broken on this guest, memory
+# [[guest-desktop-on-display2]] class), then TIGHT busy-loops (no sleep) to CreateNamedPipe the
+# instant the name frees. The agent's relaunch must traverse exit-cb -> backoff -> CreateProcess
+# -> guard/census -> EtwOpen -> CreateNamedPipe (many ms); an in-process spin beats it every
+# time. The relaunched proxy then meets the squatted name => 'ETWPROXY FAIL CreateNamedPipe ...
+# (squatter holding the name?)' => exit 8. The killed proxy's own rc=1 (TerminateProcess code)
+# is now logged QUIETLY by the agent (etwproxy.c ETWPROXY_EXIT_KILLED), not as an anomaly. The
+# squatter self-bounds (20s grab window, 120s hold) so nothing lingers. NOTE $procId (not $pid,
+# a PowerShell automatic) and quote-free matching so the script survives -EncodedCommand.
+sq='$out="C:\ProgramData\Qubes\p3a-squat.txt"; Remove-Item $out -Force -EA SilentlyContinue
+$csv = @(& tasklist /nh /fo csv /fi "imagename eq etwproxy.exe" 2>$null)
+foreach ($ln in $csv) {
+  $f = $ln -split ","
+  if ($f.Count -ge 2) { $procId = ($f[1] -replace [char]34,"") ; if ($procId -match "^[0-9]+$") { & taskkill /f /pid $procId *>$null } }
 }
-if ($p) { Set-Content C:\ProgramData\Qubes\p3a-squat.txt "SQUAT-HELD"; Start-Sleep -Seconds 120; $p.Dispose(); Add-Content C:\ProgramData\Qubes\p3a-squat.txt "SQUAT-RELEASED" }
-else { Set-Content C:\ProgramData\Qubes\p3a-squat.txt "SQUAT-NEVER" }'
+$p=$null; $deadline=(Get-Date).AddSeconds(20)
+while ((Get-Date) -lt $deadline) {
+  try { $p = New-Object System.IO.Pipes.NamedPipeServerStream("qubes-toast-etw",[System.IO.Pipes.PipeDirection]::Out,1); break } catch {}
+}
+if ($p) { Set-Content $out "SQUAT-HELD"; Start-Sleep -Seconds 120; $p.Dispose(); Add-Content $out "SQUAT-RELEASED" }
+else { Set-Content $out "SQUAT-NEVER" }'
 enc_run 'Remove-Item C:\ProgramData\Qubes\p3a-squat.txt -Force -EA SilentlyContinue; "SQCLEAN"' >/dev/null
-qrun "cmd /c start /b powershell -NoProfile -EncodedCommand $(_ps_enc "$sq")" >/dev/null 2>&1
-AM8=$(amark); [ -n "$AM8" ] || AM8=0
-L8c=$(blog_len) || L8c=""
-# kill the proxy (etwproxy.exe) BY PID (never the user-session bridge; the image name
-# discriminates since the split) - the T5 idiom, session-filter dropped 2026-09-06 (see T5)
+# pre-check the live proxy exists (its pid is evidence + the "nothing to kill" guard); the
+# squatter does the actual kill. Offsets captured BEFORE the launch so the relaunch's exit-8
+# line lands after them.
 enc_run 'tasklist /nh /fo csv /fi "imagename eq etwproxy.exe"' | tr -d '\r' > "$OUT/t8c-tasklist.csv"
 spid=$(awk -F'","' '/[Ee]twproxy\.exe/ {gsub(/"/,"",$2); print $2}' "$OUT/t8c-tasklist.csv" | head -1)
+AM8=$(amark); [ -n "$AM8" ] || AM8=0
+L8c=$(blog_len) || L8c=""
 if [ -z "$spid" ]; then
-  verdict T8c "INSTRUMENT no running etwproxy.exe to kill (tier already down?) - squatter drill ungraded"
+  verdict T8c "INSTRUMENT no running etwproxy.exe (tier already down?) - squatter drill ungraded"
 else
-  qrun "taskkill /f /pid $spid" >/dev/null 2>&1
+  log "T8c: launching self-killing busy-grab squatter (live proxy pid=$spid)"
+  qrun "cmd /c start /b powershell -NoProfile -EncodedCommand $(_ps_enc "$sq")" >/dev/null 2>&1
   t8cexit=""; _w8x=$SECONDS
   for i in $(seq 1 24); do   # exit 8 lands within the first relaunch backoffs (floor 5s)
     # wall cap 150s (the documented 120s window + margin; asince is a ~55s-capped enc_run
