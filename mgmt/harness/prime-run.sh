@@ -149,7 +149,14 @@ log "cloned"
 # aborted prime left for this name is now about a qube that no longer exists.
 rm -f "mgmt/fixtures/$CHURN.aborted"
 
-qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' \
+# The answer stick is attached READ-WRITE (2026-09-06). It used to be readonly=on, which silently
+# defeated the only instrument that can observe a stalled prime: setup.cmd writes stage markers to
+# the stick (prime-progress.log) because on a pristine base there is no QWT, hence no qrexec, no
+# gui-agent and no xencons to ask. Proven on a KNOWN-GOOD run - the install completed and the
+# marker file was still absent, which would have read as "FirstLogonCommands never ran". The stick
+# is rebuilt from scratch by build-answer-stick.sh on every run, so guest writes to it are
+# disposable by construction.
+qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' \
   || { log "TERMINAL: could not set qemu-extra-args"; exit 1; }
 qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$CHURN" "$HOLDER:$STICKLOOP" \
   || { log "TERMINAL: could not assign the stick"; exit 1; }
