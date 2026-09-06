@@ -71,6 +71,9 @@ struct Channel {
     HBITMAP pwBmp  = nullptr;  // top-down 32bpp DIB section (BGRX)
     void*   pwBits = nullptr;  // pixels of pwBmp
     int     pwW = 0, pwH = 0;  // current DIB dimensions
+    // WGC pool size, tracked so FrameArrived can follow the window's CONTENT size instead of
+    // the agent's requested (possibly CROPPED) size - see the FrameArrived comment.
+    int     poolW = 0, poolH = 0;
 };
 static std::vector<Channel> g_ch(WGCBRK_MAX_SLOTS);
 static bool g_anyPw = false;   // any PrintWindow channel active -> poll the loop faster
@@ -115,8 +118,21 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
         com_ptr<ID3D11Texture2D> tex;
         if (FAILED(access->GetInterface(guid_of<ID3D11Texture2D>(), tex.put_void()))) break;
         D3D11_TEXTURE2D_DESC td; tex->GetDesc(&td);
-        int w = (int)td.Width, h = (int)td.Height;
-        if (w <= 0 || h <= 0) break;
+        const int texW = (int)td.Width, texH = (int)td.Height;
+        if (texW <= 0 || texH <= 0) break;
+        // Publish the agent's REQUESTED (card) rect, lifted from the full-window capture at the
+        // agent's crop offset - exactly what the PrintWindow path does. Before this the WGC path
+        // published the whole texture and FrameArrived dropped every frame whose ContentSize did
+        // not equal ReqWidth/ReqHeight, so a WGC-capturable window with a nonzero crop (a shell
+        // toast/menu whose shadow margin the agent trims) could NEVER publish: pool recreate,
+        // drop, repeat. That was survivable only because the agent silently sliced the
+        // whole-desktop composite instead; with the composite fallback removed on eligible
+        // guests (owner 2026-09-06, "no fallback ... fail hard") it would freeze the window for
+        // ever, so the crop is implemented here rather than worked around there.
+        int w = s->ReqWidth, h = s->ReqHeight;
+        const int cropX = s->ReqCropX, cropY = s->ReqCropY;
+        if (w <= 0 || h <= 0 || cropX < 0 || cropY < 0) break;
+        if (cropX + w > texW || cropY + h > texH) break;   // capture does not cover the card yet
         if ((LONGLONG)w * h * 4 > s->BufBytes) break;   // agent sized for ReqW*ReqH*4; skip oversize
 
         td.Usage = D3D11_USAGE_STAGING; td.BindFlags = 0;
@@ -130,7 +146,7 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
         int wbuf = 1 - s->ActiveBuffer;             // spare (RING==2)
         if (wbuf < 0 || wbuf >= WGCBRK_RING) wbuf = 0;
         BYTE* dst = WGCBRK_ARENA(g_base, s->BufOffset[wbuf]);
-        const BYTE* src = (const BYTE*)map.pData;
+        const BYTE* src = (const BYTE*)map.pData + (size_t)cropY * map.RowPitch + (size_t)cropX * 4;
         for (int y = 0; y < h; y++)
             memcpy(dst + (size_t)y * w * 4, src + (size_t)y * map.RowPitch, (size_t)w * 4);
         g_ctx->Unmap(stg.get(), 0);
@@ -295,16 +311,26 @@ static void OpenChannel(int i) {
         try { session.IsBorderRequired(false); } catch (...) {}   // borderDisableOk proven on 26100
         c.hwnd = monitor ? (HWND)(ULONG_PTR)WGCBRK_MONITOR_HWND : hwnd;
         c.item = item; c.pool = pool; c.session = session; c.slot = i;
+        c.poolW = size.Width; c.poolH = size.Height;   // FrameArrived tracks content-size changes
         c.rev = pool.FrameArrived(auto_revoke,
             [i](Direct3D11CaptureFramePool const& sender, auto const&) {
                 auto f = sender.TryGetNextFrame();
                 if (!f) return;
                 auto cs = f.ContentSize();
-                WGCBRK_SLOT* sl = &g_slots[i];
-                if (cs.Width != sl->ReqWidth || cs.Height != sl->ReqHeight) {
-                    try { g_ch[i].pool.Recreate(g_rtDev,
-                            DirectXPixelFormat::B8G8R8A8UIntNormalized, 2,
-                            { sl->ReqWidth, sl->ReqHeight }); } catch (...) {}
+                // Follow the window's CONTENT size, not the agent's request. ContentSize is the
+                // window's own size; the agent's ReqWidth/ReqHeight is the CARD (post-crop) rect
+                // it wants published, and those are equal only for an uncropped window. Comparing
+                // against the request therefore recreated the pool and dropped the frame on every
+                // arrival for any cropped window - a permanent feed loss that only looked benign
+                // while the agent could silently slice the desktop composite instead. The crop
+                // itself now happens in PublishFrame, from a full-size capture.
+                Channel& ch = g_ch[i];
+                if (cs.Width != ch.poolW || cs.Height != ch.poolH) {
+                    try {
+                        ch.pool.Recreate(g_rtDev,
+                            DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, cs);
+                        ch.poolW = cs.Width; ch.poolH = cs.Height;
+                    } catch (...) {}
                     return;
                 }
                 PublishFrame(i, f);
