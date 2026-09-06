@@ -164,10 +164,22 @@ def main():
                 print("qcon: NEEDS_LOGIN - console is at the login prompt; set "
                       "QCON_USER/QCON_PASS", file=sys.stderr)
                 return 3
+            # PROVEN SEQUENCE (2026-09-06). Two things made this look like a dead write path
+            # when it is not: a fresh pty has no scrollback, so the prompt must be woken with a
+            # bare CR before anything is typed; and the waits must be generous, because a
+            # Windows login takes seconds. Without the CR the first send lands before any prompt
+            # exists and the old 10 s "assword" wait then expired, whose only symptom was
+            # "markers not seen (pump exit: stall)" - indistinguishable from a console that does
+            # not accept input. It does: this yields a full shell on a guest with no qrexec.
+            ld = float(os.environ.get("QCON_LOGIN_DEADLINE", "45"))
+            c.send("\r")                       # wake the prompt - REQUIRED, see above
+            c.pump(until="login:", deadline=ld, stall=ld)
             c.send(user + "\r")
-            c.pump(until="assword", deadline=10, stall=8)
+            if c.pump(until="assword", deadline=ld, stall=ld) != "hit":
+                print("qcon: no password prompt after the user name "
+                      "(raise QCON_LOGIN_DEADLINE)", file=sys.stderr)
             c.send((pw or "") + "\r")
-            c.pump(until=">", deadline=15, stall=10)
+            c.pump(until=">", deadline=ld, stall=ld)
 
         # Token built in the guest so the ECHOED input line can never contain the literal
         # marker - otherwise the terminal's echo of what we typed is mistaken for output.
