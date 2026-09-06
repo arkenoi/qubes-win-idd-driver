@@ -42,7 +42,10 @@ qvm-features --unset "$GOLD" qemu-extra-args 2>/dev/null || true
 st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$GOLD" '$1==v{print $2}')
 [ "$st" = Halted ] || { qvm-shutdown --wait "$GOLD" >/dev/null 2>&1 || qvm-kill "$GOLD" >/dev/null 2>&1; }
 
-# record the sealed version so quick-upgrade can advise on the ordering
+# SEAL it as a proper golden (mgmt/goldens/<vm>.json) - prime-run REQUIRES `golden.sh verify` to
+# pass on its base, a fixture record is not enough.
+./mgmt/golden.sh seal "$GOLD" "QWT $relver golden for quick-upgrade" || { log "FATAL: golden.sh seal failed"; exit 1; }
+# also record the version so quick-upgrade can advise on the ordering
 mkdir -p mgmt/fixtures
 printf '{"golden":"%s","base":"%s","sealed_version":"%s","sealed_utc":"%s"}\n' \
   "$GOLD" "$BASE" "${relver:-unknown}" "$(date -u +%FT%TZ)" > "mgmt/fixtures/$GOLD.json"
