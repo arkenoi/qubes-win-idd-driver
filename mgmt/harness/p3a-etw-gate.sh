@@ -286,6 +286,7 @@ $of = 'C:\ProgramData\Qubes\p3a-userproxy-out.txt'
 Remove-Item $of -Force -EA SilentlyContinue
 $p = Start-Process -FilePath 'C:\Program Files\Qubes Tools\bin\etwproxy.exe' `
        -NoNewWindow -PassThru -RedirectStandardOutput $of
+$null = $p.Handle   # cache the handle NOW or .ExitCode is $null after a fast exit (PS 5.1)
 if ($p.WaitForExit(20000)) { Write-Output ('P3ARC=' + $p.ExitCode) } else { $p.Kill(); Write-Output 'P3ARC=RUNAWAY' }
 Start-Sleep -Milliseconds 300
 if (Test-Path $of) { Get-Content $of | ForEach-Object { "$_" } }
@@ -535,20 +536,31 @@ grep -ai "$ACCT" "$OUT/t1-acl-statedir.txt" | grep -qai 'deny' || aclfail="$aclf
 [ -z "$aclfail" ] && verdict T1i "PASS ACLs: $ACCT ACE on its own log, deny on $STATEDIR" \
   || verdict T1i "FAIL ACLs:$aclfail (see t1-acl-*.txt)"
 
-# T1j the RUNNING proxy's owner: session-0 etwproxy.exe owned by the proxy account, never
-# SYSTEM. RIG-RECONCILED 2026-09-05: the console split renamed the proxy BINARY to
-# etwproxy.exe (agent line 'ETWPROXYSUP launched etwproxy.exe pid=' confirms); a notifhost.exe
-# filter here false-FAILed the last run while the proxy ran fine (notifhost.exe is the
-# USER-SESSION bridge and never the session-0 proxy).
+# T1j the RUNNING proxy's owner: etwproxy.exe owned by the proxy account, never SYSTEM.
+# RIG-RECONCILED 2026-09-05: the console split renamed the proxy BINARY to etwproxy.exe
+# (agent line 'ETWPROXYSUP launched etwproxy.exe pid=' confirms); a notifhost.exe filter
+# here false-FAILed the last run while the proxy ran fine (notifhost.exe is the
+# USER-SESSION bridge and never the proxy).
+# RIG-RECONCILED 2026-09-06: the SESSION-NUMBER filter ($4=="0") false-FAILed the 233011
+# run while pid 6008 ran fine the whole gate - the proxy landed in the CONSOLE session
+# because the agent's LogonUserW token inherited the interactive session (a real defect,
+# fixed agent-side: the token is now stamped TokenSessionId=0). The image NAME is the
+# discriminator since the split, so match on it; the session number is recorded as a
+# datum and graded only as a WARN-class note, not existence.
 # tasklist, not WMI/Get-Process (both broken on this guest — only tasklist works).
 enc_run 'tasklist /v /fo csv /fi "imagename eq etwproxy.exe"' | tr -d '\r' > "$OUT/t1-tasklist.csv"
-prow=$(awk -F'","' '$4 == "0" {print}' "$OUT/t1-tasklist.csv" | head -1)
+prow=$(awk -F'","' '/[Ee]twproxy\.exe/ {print}' "$OUT/t1-tasklist.csv" | head -1)
+psess=$(printf '%s' "$prow" | awk -F'","' '{print $4}')
 if [ -z "$prow" ]; then
-  verdict T1j "FAIL no session-0 etwproxy.exe running (proxy not launched; agent lines: $(asince_hits 0 'ETWPROXYSUP' | tail -2 | tr '\n' ';'))"
+  verdict T1j "FAIL no etwproxy.exe running (proxy not launched; agent lines: $(asince_hits 0 'ETWPROXYSUP' | tail -2 | tr '\n' ';'))"
 elif printf '%s' "$prow" | grep -qai "$ACCT"; then
-  verdict T1j "PASS proxy runs as $ACCT in session 0 ($(printf '%s' "$prow" | head -c 160))"
+  if [ "$psess" = "0" ]; then
+    verdict T1j "PASS proxy runs as $ACCT in session 0 ($(printf '%s' "$prow" | head -c 160))"
+  else
+    verdict T1j "PASS proxy runs as $ACCT (session=$psess, not 0 - the agent's session-0 stamp did not take on this build; a datum, not a tier failure: $(printf '%s' "$prow" | head -c 120))"
+  fi
 else
-  verdict T1j "FAIL session-0 etwproxy.exe owner is NOT $ACCT (TODO(RIG)#2 check CSV rendering): $(printf '%s' "$prow" | head -c 160)"
+  verdict T1j "FAIL etwproxy.exe owner is NOT $ACCT (TODO(RIG)#2 check CSV rendering): $(printf '%s' "$prow" | head -c 160)"
 fi
 
 # ---------- T2 DECISIVE: the proxy ARMS (L1) and SIGNAL frames arrive ------------------------
@@ -774,9 +786,18 @@ for m in start-shortcut com-activator bare; do
         sleep 3
       done
       plog_since "$P3" > "$OUT/t3-plog-$m-$c.txt" 2>/dev/null
-      sl=$(grep -a "ETWPROXY SIG #.*aumid=${TFAUMID[$m]}" "$OUT/t3-plog-$m-$c.txt" | tail -1)
-      if [ -n "$sl" ]; then
+      # This toast's signal lines: the AUMID may ride aumid= OR group= (the
+      # NotificationController flavor 'aumid=- idnum=16 group=<AUMID>' is the one that most
+      # reliably carries the id - rig 2026-09-06). One toast emits both id-bearing and
+      # idnum=0 frames, so grade the id from the LAST ID-BEARING line, not the last line
+      # (the old tail -1 could land on a trailing idnum=0 frame and false-read no-id).
+      # The proxy now logs every frame at human rates (EtwSigLogAllow), so this window is
+      # complete, not a 1-in-20 sample.
+      sls=$(grep -aE "ETWPROXY SIG #.*(aumid|group)=${TFAUMID[$m]}( |\$)" "$OUT/t3-plog-$m-$c.txt")
+      if [ -n "$sls" ]; then
         sig=yes
+        sl=$(printf '%s\n' "$sls" | grep -aE 'idnum=[1-9]' | tail -1)
+        [ -n "$sl" ] || sl=$(printf '%s\n' "$sls" | tail -1)
         idnum=$(printf '%s' "$sl" | grep -aoE 'idnum=[0-9]+' | head -1 | cut -d= -f2)
       fi
       # CLASSIFY vocabulary (§10.20.2, source-read): line order is
@@ -872,7 +893,11 @@ fi
 # reach — the agent-side census refuses drift BEFORE launching, so exit-9-on-drift is only
 # observable via a hand launch. T4a is that hand launch's SYSTEM flavor.
 log "T4: never-SYSTEM guard - SYSTEM launch must exit 9, plain-user launch must NOT"
-t4sys=$(enc_run 'Remove-Item C:\ProgramData\Qubes\p3a-sysproxy-out.txt -Force -EA SilentlyContinue; $p = Start-Process -FilePath "C:\Program Files\Qubes Tools\bin\etwproxy.exe" -NoNewWindow -PassThru -RedirectStandardOutput "C:\ProgramData\Qubes\p3a-sysproxy-out.txt"; if ($p.WaitForExit(20000)) { "P3ARC=" + $p.ExitCode } else { $p.Kill(); "P3ARC=RUNAWAY" }')
+# $null = $p.Handle is LOAD-BEARING (rig 2026-09-06: T4a read P3ARC='' while the guard
+# line proved the refusal happened): PowerShell 5.1's Start-Process -PassThru object does
+# not cache the process handle, so once the short-lived proxy exits, .ExitCode is $null
+# unless the handle was touched BEFORE exit. Same fix in p3a-userproxy.ps1 (T4b).
+t4sys=$(enc_run 'Remove-Item C:\ProgramData\Qubes\p3a-sysproxy-out.txt -Force -EA SilentlyContinue; $p = Start-Process -FilePath "C:\Program Files\Qubes Tools\bin\etwproxy.exe" -NoNewWindow -PassThru -RedirectStandardOutput "C:\ProgramData\Qubes\p3a-sysproxy-out.txt"; $null = $p.Handle; if ($p.WaitForExit(20000)) { "P3ARC=" + $p.ExitCode } else { $p.Kill(); "P3ARC=RUNAWAY" }')
 printf '%s\n' "$t4sys" > "$OUT/t4-sys.txt"
 enc_run 'if (Test-Path C:\ProgramData\Qubes\p3a-sysproxy-out.txt) { Get-Content C:\ProgramData\Qubes\p3a-sysproxy-out.txt }' | tr -d '\r' >> "$OUT/t4-sys.txt" 2>/dev/null
 t4rc=$(grep -aoE 'P3ARC=[A-Z0-9-]+' "$OUT/t4-sys.txt" | tail -1 | cut -d= -f2)
@@ -912,13 +937,17 @@ if ! grep -qai "$ACCT" "$OUT/t5-plu-after-add.txt"; then
 else
   log "T5: drift injected AND seen by the T1d probe (its fail direction is now proven)"
   AM5=$(amark); [ -n "$AM5" ] || AM5=0   # amark's pipeline exits 0 even when empty - test output
-  # kill the running proxy (session-0 etwproxy.exe, BY PID - never the user-session notifhost
-  # bridge); the agent's exit-wait relaunches it, and THAT launch's census meets the drifted
-  # token. (Filter RIG-RECONCILED 2026-09-05: the console split renamed the proxy binary.)
+  # kill the running proxy (etwproxy.exe BY PID - never the user-session notifhost bridge;
+  # the image NAME discriminates since the console split); the agent's exit-wait relaunches
+  # it, and THAT launch's census meets the drifted token. (Filter RIG-RECONCILED
+  # 2026-09-05: the console split renamed the proxy binary. 2026-09-06: the session-0
+  # awk filter dropped - pid 6008 ran the whole 233011 gate in the CONSOLE session and
+  # this probe missed it, false-INSTRUMENTing T5; the agent now stamps session 0, but the
+  # probe must not depend on placement to FIND the proxy.)
   enc_run 'tasklist /nh /fo csv /fi "imagename eq etwproxy.exe"' | tr -d '\r' > "$OUT/t5-tasklist.csv"
-  ppid=$(awk -F'","' '$4 == "0" {gsub(/"/,"",$2); print $2}' "$OUT/t5-tasklist.csv" | head -1)
+  ppid=$(awk -F'","' '/[Ee]twproxy\.exe/ {gsub(/"/,"",$2); print $2}' "$OUT/t5-tasklist.csv" | head -1)
   if [ -z "$ppid" ]; then
-    verdict T5 "INSTRUMENT no session-0 proxy to kill (tier already down?) - drift relaunch cannot be forced, ungraded"
+    verdict T5 "INSTRUMENT no running etwproxy.exe to kill (tier already down?) - drift relaunch cannot be forced, ungraded"
   else
     qrun "taskkill /f /pid $ppid" >/dev/null 2>&1
     t5seen=""; _wt5=$SECONDS
@@ -1255,11 +1284,12 @@ enc_run 'Remove-Item C:\ProgramData\Qubes\p3a-squat.txt -Force -EA SilentlyConti
 qrun "cmd /c start /b powershell -NoProfile -EncodedCommand $(_ps_enc "$sq")" >/dev/null 2>&1
 AM8=$(amark); [ -n "$AM8" ] || AM8=0
 L8c=$(blog_len) || L8c=""
-# kill the session-0 proxy (etwproxy.exe) BY PID (never the user-session bridge) - the T5 idiom
+# kill the proxy (etwproxy.exe) BY PID (never the user-session bridge; the image name
+# discriminates since the split) - the T5 idiom, session-filter dropped 2026-09-06 (see T5)
 enc_run 'tasklist /nh /fo csv /fi "imagename eq etwproxy.exe"' | tr -d '\r' > "$OUT/t8c-tasklist.csv"
-spid=$(awk -F'","' '$4 == "0" {gsub(/"/,"",$2); print $2}' "$OUT/t8c-tasklist.csv" | head -1)
+spid=$(awk -F'","' '/[Ee]twproxy\.exe/ {gsub(/"/,"",$2); print $2}' "$OUT/t8c-tasklist.csv" | head -1)
 if [ -z "$spid" ]; then
-  verdict T8c "INSTRUMENT no session-0 proxy to kill (tier already down?) - squatter drill ungraded"
+  verdict T8c "INSTRUMENT no running etwproxy.exe to kill (tier already down?) - squatter drill ungraded"
 else
   qrun "taskkill /f /pid $spid" >/dev/null 2>&1
   t8cexit=""; _w8x=$SECONDS

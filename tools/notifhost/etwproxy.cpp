@@ -40,7 +40,10 @@
 //   0 clean stop, 5 consume denied (OpenTrace/ProcessTrace ERROR_ACCESS_DENIED - the
 //   per-session DACL grant did not suffice on this build; the agent parks on this TRUE
 //   finding), 7 consumer open/thread/event failure, 8 pipe creation failure (incl. a
-//   squatter), 9 REFUSED: SYSTEM/admin/elevated token (the never-SYSTEM guard) or a
+//   squatter) or 5 CONSECUTIVE connect failures (a lone transient - ERROR_NO_DATA from a
+//   client that came and went, a failed connect completion - re-listens instead of
+//   exiting: the 2026-09-06 startup-flap hardening), 9 REFUSED: SYSTEM/admin/elevated
+//   token (the never-SYSTEM guard) or a
 //   DRIFTED token carrying Performance Log Users / SeSystemProfilePrivilege (running the
 //   hostile TDH decode with machine-wide trace capability is forbidden, and group SIDs
 //   cannot be shed in-process - the untrusted parse runs on a bare token or not at all).
@@ -171,11 +174,27 @@ static bool PxHarvest(EVENT_RECORD* er, PxRec* out)
              name.find(L"appusermodelid") != std::wstring::npos ||
              name.find(L"appid") != std::wstring::npos ||
              name.find(L"primaryid") != std::wstring::npos);
-        bool wantNotif = out->notifId.empty() && out->notifIdNum == 0 &&
-            (name.find(L"notificationid") != std::wstring::npos || name == L"id" ||
-             name.find(L"trackingid") != std::wstring::npos);
-        bool wantTag   = out->tag.empty() && name.find(L"tag") != std::wstring::npos;
-        bool wantGroup = out->group.empty() && name.find(L"group") != std::wstring::npos;
+        // notificationId: a *notificationid*-named property stays wanted until a NUMERIC id
+        // is in hand - it may OVERWRITE a weaker earlier harvest. The old "first id-ish
+        // property wins" rule let a non-decimal TrackingId (GUID-shaped, earlier in the
+        // property array) occupy notifId and then BLOCK the event's real notificationId,
+        // leaving idnum=0 on frames whose event carried the exact row key (rig p3a
+        // 2026-09-06: id-bearing and idnum=0 frames from the SAME toast burst).
+        bool nameIsNotifId = name.find(L"notificationid") != std::wstring::npos;
+        bool wantNotif = out->notifIdNum == 0 &&
+            (nameIsNotifId ||
+             (out->notifId.empty() &&
+              (name == L"id" || name.find(L"trackingid") != std::wstring::npos)));
+        // tag/group: EXACT names only. The old substring gates ("tag"/"group" anywhere in
+        // the name) harvested unrelated properties - rig-proven: toastfire fired
+        // tag=t3start-shortcutinformational group=toastfire, yet NO frame ever carried
+        // those values; frames showed tag=0/16777216/50331648 and group=<the AUMID>
+        // instead. Those polluted values then poisoned the bridge fallback's
+        // "AND n.Tag = ?" narrowing into guaranteed 0-row queries. A missed real tag only
+        // widens the fallback window (fail-open); a WRONG tag falsifies it.
+        bool wantTag   = out->tag.empty() && (name == L"tag" || name == L"notificationtag");
+        bool wantGroup = out->group.empty() &&
+            (name == L"group" || name == L"notificationgroup" || name == L"groupid");
         if (!wantAumid && !wantNotif && !wantTag && !wantGroup) continue;
         PROPERTY_DATA_DESCRIPTOR pdd = {};
         pdd.PropertyName = (ULONGLONG)((BYTE*)ti + epi.NameOffset);
@@ -192,8 +211,15 @@ static bool PxHarvest(EVENT_RECORD* er, PxRec* out)
             out->aumid = v;
         else if (wantNotif)
         {
-            out->notifIdNum = PxAllDecimalToU64(v);        // 0 = does not join by id
-            if (v.size() * sizeof(wchar_t) <= ETW_MAX_NOTIF_BYTES) out->notifId = v;
+            uint64_t idn = PxAllDecimalToU64(v);           // 0 = does not join by id
+            // A decimal id always lands; a non-decimal value (TrackingId GUID) fills the
+            // string slot only while it is empty, and can no longer block a later
+            // notificationId property of the same event (wantNotif stays true above).
+            if (idn != 0 || out->notifId.empty())
+            {
+                out->notifIdNum = idn;
+                if (v.size() * sizeof(wchar_t) <= ETW_MAX_NOTIF_BYTES) out->notifId = v;
+            }
         }
         else if (wantTag && v.size() * sizeof(wchar_t) <= ETW_MAX_TAG_BYTES)
             out->tag = v;
@@ -234,7 +260,7 @@ static void CALLBACK EtwProxyEventCb(EVENT_RECORD* er)
             while (g_px.q.size() > 64) { g_px.q.pop_front(); InterlockedIncrement(&g_px.dropped); }
         }
         SetEvent(g_px.evt);
-        if (n <= 50 || (n % 20) == 0)        // human-rate log
+        if (EtwSigLogAllow(n))               // every frame at human rates; 1-in-20 in a burst
             BLog(L"ETWPROXY SIG #%ld aumid=%s idnum=%llu notif=%s tag=%s group=%s", n,
                  r.aumid.empty() ? L"-" : r.aumid.c_str(), (ULONGLONG)r.notifIdNum,
                  r.notifId.empty() ? L"-" : r.notifId.c_str(),
@@ -615,7 +641,15 @@ static int EtwProxyMain(const wchar_t* clientSid)
 
     // Serve loop: wait for the (single) client, push frames, on client loss disconnect
     // and wait again. Ends when the ETW session dies (etwThread signaled) or on ctrl/stop.
+    // TRANSIENT connect faults are tolerated, never fatal (startup-flap hardening,
+    // 2026-09-06): at boot the bridge client itself restarts under its own supervision, and
+    // a client that connects and drops between our DisconnectNamedPipe and the next
+    // ConnectNamedPipe surfaces here as ERROR_NO_DATA (or a failed connect completion).
+    // The old code exited the WHOLE PROXY on those (rc 8 / a silent rc 0), which tore down
+    // and restarted the agent-owned ETW session per bounce - a tier flap that costs every
+    // in-flight signal. Only a PERSISTENT connect failure (5 consecutive) still exits 8.
     int exitCode = 0;
+    int connFails = 0;
     for (;;)
     {
         OVERLAPPED ov = {}; ov.hEvent = connEvt; ResetEvent(connEvt);
@@ -634,10 +668,36 @@ static int EtwProxyMain(const wchar_t* clientSid)
             DWORD x;
             if (!GetOverlappedResult(pipe, &ov, &x, FALSE) &&
                 GetLastError() != ERROR_PIPE_CONNECTED)
-            { BLog(L"ETWPROXY connect completion failed %lu", GetLastError()); break; }
+            {
+                BLog(L"ETWPROXY connect completion failed %lu - transient, re-listening (%d/5)",
+                     GetLastError(), ++connFails);
+                DisconnectNamedPipe(pipe);
+                if (connFails >= 5) { exitCode = 8; break; }
+                if (WaitForSingleObject(g_px.stopEvt, 0) == WAIT_OBJECT_0 ||
+                    WaitForSingleObject(etwThread, 0) == WAIT_OBJECT_0) break;
+                continue;
+            }
+        }
+        else if (ce == ERROR_NO_DATA)
+        {
+            // A client connected and already disconnected before we listened again -
+            // the normal bridge-restart race, not a fault. Reset and listen again.
+            BLog(L"ETWPROXY client came and went before accept (ERROR_NO_DATA) - re-listening");
+            DisconnectNamedPipe(pipe);
+            if (WaitForSingleObject(g_px.stopEvt, 0) == WAIT_OBJECT_0 ||
+                WaitForSingleObject(etwThread, 0) == WAIT_OBJECT_0) break;
+            continue;
         }
         else if (ce != ERROR_PIPE_CONNECTED)
-        { BLog(L"ETWPROXY ConnectNamedPipe failed %lu", ce); exitCode = 8; break; }
+        {
+            BLog(L"ETWPROXY ConnectNamedPipe failed %lu (%d/5)", ce, ++connFails);
+            DisconnectNamedPipe(pipe);
+            if (connFails >= 5) { exitCode = 8; break; }
+            if (WaitForSingleObject(g_px.stopEvt, 0) == WAIT_OBJECT_0 ||
+                WaitForSingleObject(etwThread, 0) == WAIT_OBJECT_0) break;
+            continue;
+        }
+        connFails = 0;
         ULONG cp = 0;
         GetNamedPipeClientProcessId(pipe, &cp);
         BLog(L"ETWPROXY CLIENT connected pid=%lu", cp);

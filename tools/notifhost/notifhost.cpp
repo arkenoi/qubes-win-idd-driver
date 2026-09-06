@@ -106,6 +106,7 @@
 #include <unordered_map>
 #include <vector>
 #include <deque>
+#include <algorithm>    // stable_sort: id-bearing signal candidates first (EtwTierLookup)
 #include <cstdio>
 #include <cstdarg>
 #include "toastclassify.h"   // P3b pure decision-table classifier (P3a logs its verdicts)
@@ -856,6 +857,9 @@ static struct
     std::deque<EtwToastRec> ring;           // newest at back; capped 64 entries / 120 s /
                                             // per-field byte caps (checked on receive)
     volatile LONG recTotal = 0, recBad = 0; // IPC records accepted / rejected
+    HANDLE sigEvt = nullptr;                // auto-reset: "a frame just entered the ring" -
+                                            // paces the shadow worker's bounded catch-up
+                                            // over the session's 1 s FlushTimer delivery
 } g_etw;
 
 // kEtwBridgeSession (the agent-owned QubesToastBridgeEtw session name): MOVED to
@@ -1201,7 +1205,8 @@ static bool EtwIpcReadRecord(HANDLE pipe)
         g_etw.ring.push_back({ la, ln, lt, lg, idn, ft, GetTickCount64() });
         while (g_etw.ring.size() > 64) g_etw.ring.pop_front();
     }
-    if (n <= 50 || (n % 20) == 0)            // human-rate log even if the proxy goes chatty
+    if (g_etw.sigEvt) SetEvent(g_etw.sigEvt);   // wake a worker waiting out the flush pacing
+    if (EtwSigLogAllow(n))                   // every frame at human rates; 1-in-20 in a burst
         BLog(L"ETW SIG #%ld aumid=%s idnum=%llu notif=%s tag=%s group=%s", n,
              la.empty() ? L"-" : la.c_str(), (ULONGLONG)idn,
              ln.empty() ? L"-" : ln.c_str(), lt.empty() ? L"-" : lt.c_str(),
@@ -1263,6 +1268,7 @@ static void EtwTierStart()
 {
     InitializeCriticalSection(&g_etw.lock);
     g_etw.stopEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    g_etw.sigEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);   // auto-reset; null-tolerated
     if (!g_etw.stopEvt) { InterlockedExchange(&g_etw.state, ETW_STATE_DEAD); return; }
     g_etw.armed = true;
     InterlockedExchange(&g_etw.state, ETW_STATE_DOWN);   // down until the proxy pipe answers
@@ -1289,27 +1295,39 @@ static void EtwTierStop()
 }
 
 // Rung 1 (called from the shadow worker; safe from any thread): NON-BLOCKING ring scan
-// returning up to 4 candidate SIGNALS - never a payload (design 10.20.2). A candidate is
-// a ring entry with AUMID equality (case-insensitive, as the allowlist matches) inside a
-// +/-60 s FILETIME window against the listener CreationTime (when both timestamps exist).
-// Newest first; duplicate signals (a re-emitted event: same id/notifId/tag/group) are
-// collapsed. The payload acquisition happens AFTER this, on the shadow worker, as ONE
-// targeted wpndatabase read per candidate (WpnTargetedRead below). Returns:
+// returning up to 4 candidate SIGNALS - never a payload (design 10.20.2). Candidate
+// admission, strongest key first (revised 2026-09-06 from the p3a T3 rig matrix):
+//   1. ID JOIN: the signal's notificationId equals the listener's toast id (rowId) - the
+//      exact design-10.20.5#1 key, admitted REGARDLESS of which field carried the app
+//      identity. Rig-proven necessity: the NotificationController event flavor that most
+//      reliably carries the id has NO aumid-named property (its app id rides a
+//      group-named one - 'SIG #80 aumid=- idnum=16 group=QubesToastfire.StartShortcut'
+//      for wpndb row 16); the old aumid-only admission dropped exactly those frames and
+//      degraded precise joins to sig-unique/no-listener-key.
+//   2. AUMID equality (case-insensitive, as the allowlist matches) inside a +/-60 s
+//      FILETIME window against the listener CreationTime - the original rule.
+//   3. GROUP-as-app: the signal's aumid is empty and its group equals the listener AUMID
+//      (same controller flavor when its id did not match or rowId is 0); the group copy
+//      is CLEARED on admission - it is the app id, not a toast group, and must not feed
+//      the targeted read's "AND n.\"Group\" = ?" narrowing.
+// Newest first; duplicates (a re-emitted event: same id/notifId/tag/group) collapse;
+// id-bearing candidates SORT FIRST so the 4-slot cap cannot crowd them out with idnum=0
+// frames (rig-measured: one toast emits ~15-25 frames, many id-less). Returns:
 //   "sig-hit"   >=1 candidate signal out - the worker runs the targeted read
 //   "sig-none"  tier live but no signal for this toast (provider silent for this app,
-//               listener AUMID empty, or outside the time window) - DB rung serves
+//               no key at all, or outside the time window) - DB rung serves
 //   "down"      tier armed but not live (proxy absent / pipe closed / thread dead)
 //   "off"       never armed (non-bridge modes)
-// ETW is push: by the time the listener notices a toast, its event was delivered long ago -
-// so there is deliberately NO wait here. Waiting would reintroduce exactly the variable
-// latency class this tier exists to remove (the AgentGone lesson).
-static const char* EtwTierLookup(std::wstring const& aumid, long long creationFt,
-                                 std::vector<EtwToastRec>* out)
+// ETW is push, so there is no wait HERE; but the session delivers on a 1 s FlushTimer
+// (agent EtwCtlSessionStart), so the caller runs a bounded sigEvt-paced catch-up when
+// this returns sig-none while the tier is live (see ShadowClassifyWork).
+static const char* EtwTierLookup(uint32_t rowId, std::wstring const& aumid,
+                                 long long creationFt, std::vector<EtwToastRec>* out)
 {
     const long long kEtwFtWindow = 60LL * 10000000LL;   // +/- 60 s in FILETIME ticks
     if (!g_etw.armed) return "off";
     if (g_etw.state != ETW_STATE_LIVE) return "down";
-    if (aumid.empty()) return "sig-none";
+    if (aumid.empty() && rowId == 0) return "sig-none";  // no key at all (bare + no id)
     ULONGLONG now = GetTickCount64();
     {
         CsGuard g(&g_etw.lock);                          // RAII (review must-fix)
@@ -1317,33 +1335,52 @@ static const char* EtwTierLookup(std::wstring const& aumid, long long creationFt
             g_etw.ring.pop_front();
         for (auto it = g_etw.ring.rbegin(); it != g_etw.ring.rend() && out->size() < 4; ++it)
         {
-            if (it->aumid.empty() || _wcsicmp(it->aumid.c_str(), aumid.c_str()) != 0) continue;
-            if (creationFt && it->eventFt &&
+            bool idJoin = rowId != 0 && it->notifIdNum == (uint64_t)rowId;
+            bool aumidJoin = !aumid.empty() && !it->aumid.empty() &&
+                             _wcsicmp(it->aumid.c_str(), aumid.c_str()) == 0;
+            bool groupJoin = !aumid.empty() && it->aumid.empty() && !it->group.empty() &&
+                             _wcsicmp(it->group.c_str(), aumid.c_str()) == 0;
+            if (!idJoin && !aumidJoin && !groupJoin) continue;
+            if (!idJoin && creationFt && it->eventFt &&   // time-gate the weaker keys only
                 (it->eventFt - creationFt > kEtwFtWindow || creationFt - it->eventFt > kEtwFtWindow))
                 continue;
+            EtwToastRec r = *it;
+            // A group that IS the app id (the controller flavor) is not a toast group and
+            // must not feed the targeted read's "AND n.\"Group\" = ?" narrowing. Cleared
+            // BEFORE the dup collapse so a raw and an already-cleared copy of the same
+            // re-emitted event still collapse.
+            if (!r.group.empty() && !aumid.empty() &&
+                _wcsicmp(r.group.c_str(), aumid.c_str()) == 0)
+                r.group.clear();
             bool dup = false;                            // re-emitted event: same identity
             for (auto const& c : *out)
-                if (c.notifIdNum == it->notifIdNum && c.notifId == it->notifId &&
-                    c.tag == it->tag && c.group == it->group) { dup = true; break; }
-            if (!dup) out->push_back(*it);
+                if (c.notifIdNum == r.notifIdNum && c.notifId == r.notifId &&
+                    c.tag == r.tag && c.group == r.group) { dup = true; break; }
+            if (!dup) out->push_back(std::move(r));
         }
     }
+    std::stable_sort(out->begin(), out->end(),
+                     [](EtwToastRec const& a, EtwToastRec const& b)
+                     { return (a.notifIdNum != 0) > (b.notifIdNum != 0); });
     return out->empty() ? "sig-none" : "sig-hit";
 }
 
 // The tier-1 payload acquisition (design 10.20.2): ONE targeted wpndatabase read per
 // candidate signal, on the SHADOW WORKER only (never the poll thread - heartbeat rule).
-// PRIMARY id join (plausible-not-proven until the rig confirms per 10.20.5: the ETW
-// notificationId is numeric and wpndb Notification.Id is the integer PK that --dump-wpndb
-// prints as `ROW id=`): WHERE n.Id = notifIdNum AND n.Type='toast'. The returned row is
-// cross-checked h.PrimaryId == the listener AUMID (NOCASE) - never trust a row the id
-// reached but the app does not own - and first-<text> vs the listener title as an
-// ADVISORY check: a text mismatch logs and falls through to the signal fallback rather
-// than earning corr=id-ok. FALLBACK (id absent/no row after retries/mismatch): AUMID
-// (NOCASE) + Type='toast' + ArrivalTime in eventFt +/- 60 s, narrowed by Tag/"Group" when
-// the signal carried them, LIMIT 16 - exactly one row => sig-unique; several => the
-// existing first-<text>-vs-title disambiguation; still >1 => sig-ambiguous => WINDOW,
-// never guess. RACE: the ETW event fires at emission while WNS commits the row
+// PRIMARY id join (RIG-PROVEN 2026-09-06, p3a T3: idnum==row_id whenever both were read -
+// ids 20 and 22 - so the 10.20.5 premise holds): WHERE n.Id = notifIdNum AND
+// n.Type='toast'. The returned row is cross-checked for app ownership against the
+// strongest available witness - the listener AUMID, else the SIGNAL's aumid (the listener
+// reports unregistered-app toasts with an empty aumid), else the two-source id agreement
+// signal.notifIdNum == listener rowId (the listener id comes from WinRT, not the pipe) -
+// never trust a row the id reached but the app does not own; with no witness at all the
+// row is refused. first-<text> vs the listener title stays an ADVISORY check: a text
+// mismatch logs and falls through to the signal fallback rather than earning corr=id-ok.
+// FALLBACK (id absent/no row after retries/mismatch): app key (listener aumid, else the
+// signal's; NOCASE) + Type='toast' + ArrivalTime in eventFt +/- 60 s, narrowed by
+// Tag/"Group" when the signal carried them, LIMIT 16 - exactly one row => sig-unique;
+// several => the existing first-<text>-vs-title disambiguation; still >1 =>
+// sig-ambiguous => WINDOW, never guess. RACE: the ETW event fires at emission while WNS commits the row
 // asynchronously, so ZERO rows on attempt 1 is the EXPECTED case - served by the bounded
 // WAL-watch retry (3 attempts, walEvt-paced, worst ~1.5 s, worker thread only). For an
 // id-bearing signal the fallback query runs only on the FINAL attempt: while the row is
@@ -1358,7 +1395,7 @@ struct WpnTarget
     DWORD latencyMs;
 };
 
-static WpnTarget WpnTargetedRead(std::vector<EtwToastRec> const& sigs,
+static WpnTarget WpnTargetedRead(uint32_t rowId, std::vector<EtwToastRec> const& sigs,
                                  std::wstring const& aumid, std::wstring const& title,
                                  HANDLE walEvt)
 {
@@ -1406,7 +1443,27 @@ static WpnTarget WpnTargetedRead(std::vector<EtwToastRec> const& sigs,
                     std::string rowAumid = WpnColStr(q, st, 1);
                     std::string rowPayload = WpnColStr(q, st, 5);
                     q->finalize(st);
-                    if (_stricmp(rowAumid.c_str(), aumid8.c_str()) != 0)
+                    // App-ownership cross-check for the row the id reached, strongest
+                    // available witness first (2026-09-06, from the p3a T3 bare rows):
+                    //   1. the LISTENER aumid, when it has one;
+                    //   2. else the SIGNAL's aumid (the listener reports unregistered-app
+                    //      toasts with an EMPTY aumid - AppInfo resolution fails for them -
+                    //      which used to make every id hit for those toasts unverifiable);
+                    //   3. else, when the signal's id EQUALS the listener's toast id
+                    //      (s.notifIdNum == rowId), accept on that two-source agreement:
+                    //      the listener id comes from WinRT, not the pipe, so a forged
+                    //      frame cannot steer the read to a row the platform did not
+                    //      assign this very toast.
+                    // With NO witness at all the row is still refused (fail-open).
+                    std::string sigAumid8 = Utf8(s.aumid);
+                    bool owned;
+                    if (!aumid8.empty())
+                        owned = _stricmp(rowAumid.c_str(), aumid8.c_str()) == 0;
+                    else if (!sigAumid8.empty())
+                        owned = _stricmp(rowAumid.c_str(), sigAumid8.c_str()) == 0;
+                    else
+                        owned = rowId != 0 && s.notifIdNum == (uint64_t)rowId;
+                    if (!owned)
                     {
                         // never trust a row the id reached but the app doesn't own
                         sawMismatch = true;
@@ -1438,7 +1495,11 @@ static WpnTarget WpnTargetedRead(std::vector<EtwToastRec> const& sigs,
                 }
             }
             if (!tryFallback) continue;
-            // signal fallback: AUMID + eventFt-anchored window (+ tag/group when carried)
+            // signal fallback: AUMID + eventFt-anchored window (+ tag/group when carried).
+            // The app key is the listener aumid, else the signal's own (bare/unregistered
+            // toasts have no listener aumid); with neither there is no sound window query.
+            std::string keyAumid8 = !aumid8.empty() ? aumid8 : Utf8(s.aumid);
+            if (keyAumid8.empty()) continue;
             std::string sql = std::string(kWpnSelectSql) +
                 "WHERE h.PrimaryId = ?1 COLLATE NOCASE AND n.Type = 'toast' "
                 "AND n.ArrivalTime BETWEEN ?2 AND ?3";
@@ -1458,7 +1519,7 @@ static WpnTarget WpnTargetedRead(std::vector<EtwToastRec> const& sigs,
                 q->close_v2(db);
                 return done("db-fail");
             }
-            q->bind_text(st, 1, aumid8.c_str(), -1, WPN_SQLITE_TRANSIENT);
+            q->bind_text(st, 1, keyAumid8.c_str(), -1, WPN_SQLITE_TRANSIENT);
             q->bind_int64(st, 2, s.eventFt - kFtWindow);
             q->bind_int64(st, 3, s.eventFt + kFtWindow);
             std::string tag8 = Utf8(s.tag), grp8 = Utf8(s.group);
@@ -1712,7 +1773,22 @@ static void ShadowClassifyWork(ShadowJob const& j)
         const wchar_t* verdict = L"window";           // fail-open default (tier 3)
         std::wstring signals = L"none";
         std::vector<EtwToastRec> sigs;
-        const char* etw = EtwTierLookup(j.aumid, j.creationFt, &sigs);
+        const char* etw = EtwTierLookup(j.id, j.aumid, j.creationFt, &sigs);
+        // FlushTimer catch-up (2026-09-06): the agent's session delivers to the proxy on a
+        // 1 s FlushTimer (EtwCtlSessionStart), so a listener/WAL-triggered classify can
+        // outrun the toast's own signal batch (rig p3a T3: com-activator informational
+        // classified src=db in the very second its frames landed). Bounded and
+        // event-paced - sigEvt fires per frame entering the ring - on the WORKER thread
+        // only, so the heartbeat contract holds; worst added cost 2 x 800 ms before the
+        // DB rung serves, comparable to that rung's own WAL retry budget.
+        for (int w = 0; w < 2 && strcmp(etw, "sig-none") == 0 &&
+                        g_etw.state == ETW_STATE_LIVE; w++)
+        {
+            if (g_etw.sigEvt) WaitForSingleObject(g_etw.sigEvt, 800);
+            else Sleep(400);                          // no event: blind but still bounded
+            sigs.clear();
+            etw = EtwTierLookup(j.id, j.aumid, j.creationFt, &sigs);
+        }
         if (strcmp(etw, "sig-hit") == 0)
         {
             // A signal EXISTS for this toast: the targeted read answers it - and owns the
@@ -1721,7 +1797,7 @@ static void ShadowClassifyWork(ShadowJob const& j)
             // rung is the ETW-DOWN fallback, not a second guess at a row the precise
             // signal-keyed read already failed to pin (rig drill 10.20.5#5 asserts
             // exactly this: fire+purge-the-row => corr=id-norow => window, not db).
-            WpnTarget t = WpnTargetedRead(sigs, j.aumid, j.title, g_shadow.walEvt);
+            WpnTarget t = WpnTargetedRead(j.id, sigs, j.aumid, j.title, g_shadow.walEvt);
             corr = t.corr;
             if (!t.payload.empty())                   // only on id-ok / sig-unique
             {

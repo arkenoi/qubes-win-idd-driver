@@ -1381,24 +1381,61 @@ value carrying markup is skipped, never copied — the proxy must not materializ
 bytes at all. Ring entry: {aumid, notifId, notifIdNum, tag, group, eventFt, tick},
 64 entries / 120 s prune as today.
 
+**PxHarvest property gates (REVISED 2026-09-06 from the first joined T3 run):**
+- *notificationId*: a `*notificationid*`-named property stays wanted until a NUMERIC id
+  is harvested and may overwrite a weaker hit — the old first-id-ish-property-wins rule
+  let a non-decimal TrackingId occupy the slot and BLOCK the same event's real
+  notificationId (rig: id-bearing and idnum=0 frames from one toast burst).
+- *tag*/*group*: EXACT names only (`tag`/`notificationtag`, `group`/`notificationgroup`/
+  `groupid`). The substring gates harvested unrelated properties — rig-proven: toastfire
+  fired tag=`t3…` group=`toastfire`, yet no frame ever carried those values; frames
+  showed tag=0/16777216/50331648 and group=`<the AUMID>` instead, and those polluted
+  values turned the bridge fallback's `AND n.Tag = ?` narrowing into guaranteed 0-row
+  queries. (The group=`<AUMID>` flavor is real and useful — the bridge now matches on it,
+  §10.20.2 — but it is an app id, not a toast group.)
+- *logging*: SIG lines log EVERY frame at human rates, 1-in-20 only during a >60-frames/
+  30 s burst (`EtwSigLogAllow`, both binaries). The old process-lifetime `n<=50 || n%20`
+  rule left per-toast log windows holding one arbitrary 1-in-20 sample, which is exactly
+  what made the first T3 matrix read `sig=no idnum=0` for toasts whose id was on the wire
+  (SIG #80 idnum=16 for ROW id=16, invisible to the per-toast grep).
+
 ### 10.20.2 Bridge: the targeted wpndb read (worker-thread only, §10.13 unchanged)
 
-`EtwTierLookup` becomes a non-blocking ring scan returning up to 4 candidate SIGNALS
-(AUMID equality + ±60 s vs listener CreationTime), never a payload. The shadow worker
-then does ONE targeted read per candidate, newest first:
+`EtwTierLookup` is a non-blocking ring scan returning up to 4 candidate SIGNALS, never a
+payload. **Candidate admission (REVISED 2026-09-06 from the first joined T3 matrix —
+the aumid-only rule measurably dropped the very frames that carry the id):**
+1. **id join**: signal `notifIdNum` == the listener's toast id — the exact key, admitted
+   regardless of which field carried the app identity (the NotificationController flavor
+   `aumid=- idnum=16 group=<AUMID>` has no aumid-named property at all, and is the flavor
+   that most reliably carries the id);
+2. **AUMID equality** (NOCASE) inside ±60 s vs listener CreationTime — the original rule;
+3. **group-as-app**: signal aumid empty, signal group == listener AUMID (same controller
+   flavor); the group copy is cleared on admission (it is the app id, not a toast group).
+Id-bearing candidates sort first (a toast emits ~15-25 frames, many id-less; the 4-slot
+cap must not crowd the id out). The session delivers on a 1 s FlushTimer, so on
+`sig-none` with the tier live the worker does a bounded sigEvt-paced catch-up
+(2 × 800 ms) before falling to the DB rung — rig-measured: a WAL-triggered classify beat
+the toast's own signal batch inside the same second. The shadow worker then does ONE
+targeted read per candidate, newest first:
 
-- **id path** (primary; rig must confirm the join, §10.20.5):
+- **id path** (primary; join RIG-CONFIRMED 2026-09-06: notifIdNum == `ROW id=` on every
+  toast where both were read):
   `kWpnSelectSql + "WHERE n.Id = ?1 AND n.Type='toast'"` with ?1 = notifIdNum.
-  Cross-checks on the row: `h.PrimaryId` == signal AUMID (NOCASE) else corr=
-  `id-aumid-mismatch` (never trust a row the id reached but the app doesn't own);
-  first-`<text>` == listener title else advisory mismatch → fall through. Clean row →
-  corr=`id-ok`, classify.
+  Cross-checks on the row — app-ownership witness chain, strongest available: listener
+  AUMID, else signal AUMID (the listener reports unregistered-app toasts with an EMPTY
+  aumid — AppInfo fails for them — which used to make their id hits unverifiable and
+  no-listener-key'd the whole tier), else the two-source id agreement
+  signal.notifIdNum == listener toast id (the listener id comes from WinRT, not the
+  pipe); no witness at all → refuse. Mismatch → corr=`id-aumid-mismatch` (never trust a
+  row the id reached but the app doesn't own); first-`<text>` == listener title else
+  advisory mismatch → fall through. Clean row → corr=`id-ok`, classify.
 - **signal-fallback path** (id absent / non-numeric / no row after retries / mismatch):
   `WHERE h.PrimaryId=?1 COLLATE NOCASE AND n.Type='toast' AND n.ArrivalTime BETWEEN ?2
-  AND ?3` (eventFt ± 60 s) plus `AND n.Tag=?4` / `AND n."Group"=?5` when the signal
-  carried them; LIMIT 16. Exactly one row → corr=`sig-unique`; several → the existing
-  first-`<text>`-vs-title disambiguation; still >1 → `sig-ambiguous` → window (never
-  guess).
+  AND ?3` (eventFt ± 60 s; ?1 = listener AUMID, else the signal's own — with neither
+  there is no sound window query and the candidate is skipped) plus `AND n.Tag=?4` /
+  `AND n."Group"=?5` when the signal carried them; LIMIT 16. Exactly one row →
+  corr=`sig-unique`; several → the existing first-`<text>`-vs-title disambiguation;
+  still >1 → `sig-ambiguous` → window (never guess).
 - **Signal-then-row race**: the ETW event fires at emission, the WNS writer commits the
   row asynchronously — zero rows on the first attempt is the EXPECTED case, served by the
   existing bounded WAL-watch retry (3 attempts, walEvt-paced, worst ~1.5 s, worker thread

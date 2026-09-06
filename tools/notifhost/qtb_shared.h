@@ -168,6 +168,33 @@ inline LONG WINAPI BridgeCrashFilter(EXCEPTION_POINTERS* ep)
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
+// SIG-frame log rate gate, shared by the proxy's EtwProxyEventCb and the bridge's
+// EtwIpcReadRecord. The old rule (n <= 50 || n % 20 == 0) went 1-in-20 after the 50th
+// frame of the PROCESS LIFETIME - and one toast emits ~15-25 signal-worthy events, so by
+// the third toast a per-toast log window held at most one arbitrary sample. That sampling
+// is what made the p3a T3 matrix read sig=no / idnum=0 for toasts whose id was plainly on
+// the wire (rig 2026-09-06: SIG #80 idnum=16 for wpndb row 16, invisible to the per-toast
+// grep). Toasts are sparse, so log EVERY frame while the rate is human; suppress only
+// under a genuine burst so a chatty or hostile provider still cannot eat the disk:
+// up to 60 lines per rolling 30 s window, then 1-in-20 with one loud marker per window.
+// CONTRACT: call from ONE thread only (each binary's single consumer thread) - the
+// statics are deliberately unsynchronized.
+inline bool EtwSigLogAllow(LONG n)
+{
+    static ULONGLONG winStart = 0;
+    static LONG winCount = 0;
+    static bool marked = false;
+    ULONGLONG now = GetTickCount64();
+    if (winStart == 0 || now - winStart > 30000) { winStart = now; winCount = 0; marked = false; }
+    if (++winCount <= 60) return true;
+    if (!marked)
+    {
+        marked = true;
+        BLog(L"ETW SIG burst: >60 frames in 30 s - sampling 1-in-20 until the window turns");
+    }
+    return (n % 20) == 0;
+}
+
 inline std::wstring CurrentUserSid()
 {
     HANDLE tok = nullptr;
