@@ -73,8 +73,12 @@ job_on_abort(){
 
 # H3.6 — one Windows guest at a time, and a campaign step starts with zero. Concurrent runs have
 # rebooted each other's guests and destroyed hours of results.
+# THE CHURN ITSELF IS EXCLUDED (2026-09-06): this script is about to `qvm-remove -f` it and
+# recreate it from the base, so a subject a previous run left Running is not a concurrent job -
+# it is the thing being discarded. Refusing on it made every leftover a manual unblock. Every
+# OTHER running win*/prime- guest still refuses.
 running=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null \
-          | awk -F'|' '$2!="Halted" && $1 ~ /^(win(10|11)|prime-)/ {print $1}' | tr '\n' ' ')
+          | awk -F'|' -v churn="$CHURN" '$2!="Halted" && $1!=churn && $1 ~ /^(win(10|11)|prime-)/ {print $1}' | tr '\n' ' ')
 [ -z "${running// /}" ] || { log "TERMINAL: refusing, these are not Halted: $running"; exit 1; }
 
 # Golden custody (0.4). An unsealed or drifted base fails CLOSED: every clone would inherit
@@ -115,6 +119,15 @@ log "stick on /dev/$STICKLOOP"
 
 # --- clone the base --------------------------------------------------------------------------
 log "recreating $CHURN from $BASE"
+# A leftover churn that is still Running cannot be removed; kill it first. This is the one place
+# a kill is permitted: its state is being discarded (volumes replaced by the clone below), so
+# nothing that will be graded can be corrupted by it. It is NOT a way to stop a run.
+if [ -n "$(state "$CHURN")" ] && [ "$(state "$CHURN")" != Halted ]; then
+    log "leftover $CHURN is $(state "$CHURN") - killing it (being discarded, not reused)"
+    qvm-kill "$CHURN" >/dev/null 2>&1
+    for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do [ "$(state "$CHURN")" = Halted ] && break; sleep 10; done
+    [ "$(state "$CHURN")" = Halted ] || { log "TERMINAL: leftover $CHURN would not halt after qvm-kill"; exit 1; }
+fi
 qvm-remove -f "$CHURN" >/dev/null 2>&1
 # create -> TAG -> copy volumes, in that order. A single qvm-clone copies volumes before the tags
 # exist, and dom0 policy here is TAG-based, so the volume call lands on a qube policy does not yet

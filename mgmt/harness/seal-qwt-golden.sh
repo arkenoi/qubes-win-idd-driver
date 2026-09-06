@@ -22,7 +22,8 @@ log(){ echo "[$(date +%H:%M:%S)] seal-qwt-golden: $*"; }
 # preconditions: base present+Halted, nothing else running
 [ "$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$BASE" '$1==v{print $2}')" = Halted ] \
   || { log "FATAL: $BASE is not present+Halted"; exit 1; }
-running=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$2!="Halted" && $1 ~ /^(win(10|11)|prime-)/ {print $1}')
+# The golden-to-be is excluded: prime-run kills+recreates its churn (a leftover is discarded).
+running=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v me="$GOLD" '$2!="Halted" && $1!=me && $1 ~ /^(win(10|11)|prime-)/ {print $1}')
 [ -z "${running// /}" ] || { log "FATAL: not all Halted: $running"; exit 1; }
 
 # install the release cleanly onto <os>-qwt (prime-run recreates the guest from base)
@@ -32,11 +33,19 @@ rc=$?; [ $rc -eq 0 ] || { log "FATAL: prime-run rc=$rc"; exit 1; }
 
 # turn the churn into a clean clone-SOURCE: drop the answer stick + qemu-extra-args, so booting the
 # golden (or cloning it) never drags the one-shot install stick along.
-log "sealing $GOLD as a clone source (detach stick, clear qemu-extra-args)"
-for bd in $(qvm-device block list "$GOLD" 2>/dev/null | awk 'NR>0{print $1}'); do
-  qvm-device block detach "$GOLD" "$bd" >/dev/null 2>&1 || true
-done
-qvm-device block detach "$GOLD" >/dev/null 2>&1 || true   # best-effort blanket detach
+log "sealing $GOLD as a clone source (unassign stick, clear qemu-extra-args)"
+# prime-run ASSIGNS the stick (`qvm-device block assign --required`), so the verb that clears it
+# is `unassign`, not `detach` - matrix.sh clear_prime_leftovers does exactly this by the loop
+# backing answer-usb.img (`block list` is policy-refused here, so the assignment cannot be read).
+stickloop=$(losetup -l 2>/dev/null | awk '$6 ~ /answer-usb\.img$/{sub("/dev/","",$1); print $1; exit}')
+if [ -n "$stickloop" ]; then
+  qvm-device block unassign "$GOLD" "win-idd-mgmt:$stickloop" >/dev/null 2>&1 \
+    && log "primer stick unassigned (win-idd-mgmt:$stickloop)" \
+    || log "WARNING: could not unassign the primer stick from $GOLD (a --required assignment left on a golden ties it to this qube's loop layout)"
+else
+  log "WARNING: no loop backing answer-usb.img found - primer stick assignment not cleared for $GOLD"
+fi
+qvm-device block detach "$GOLD" "win-idd-mgmt:${stickloop:-loop0}" >/dev/null 2>&1 || true   # best-effort
 qvm-features --unset "$GOLD" qemu-extra-args 2>/dev/null || true
 # make sure it is Halted (prime leaves it running or halted depending on the job)
 st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$GOLD" '$1==v{print $2}')
