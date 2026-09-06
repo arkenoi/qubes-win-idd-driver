@@ -294,11 +294,17 @@ if [ -z "$p4inst" ]; then
 else
   log "P4a: delivery wait SKIPPED (terminal: $p4inst)"
 fi
-# dom0 side: NOT graded by window list (geom cannot see dom0-native bubbles, see the P2
-# detector block) - the FWD_RTT ok=1 ack fwd_count keys on IS the dom0-delivery evidence
-# (logged only after the dom0 server's ack frame for that seq). Explicit literal so
-# the verdict never looks like a vacuously-passed check.
-domseen='n/a(no-dom0-instrument)'
+# dom0 side: geom cannot see dom0-native bubbles (see the P2 detector block), so the MECHANICAL
+# delivery is graded by the FWD_RTT ok=1 ack (fwd_count keys on it - logged only after the dom0
+# server's ack frame for that seq). The PIXEL half is the fullshot captured at the ack above
+# (p4a-dom0.tar) and graded operator-side in P4w (mirrors p3a-etw-gate's T7b+T7w split); domseen
+# reflects whether that capture exists, never a vacuous 'n/a' (owner: DONE = pixels, not acks).
+if [ -n "$sent" ]; then
+  n4w=$(tar tf "$OUT/p4a-dom0.tar" 2>/dev/null | grep -c '\.png$'); n4w=${n4w:-0}
+  [ "$n4w" -ge 1 ] && domseen="captured($n4w-png,graded-in-P4w)" || domseen="capture-empty(see-P4w)"
+else
+  n4w=0; domseen="no-forward-ack"
+fi
 guestbanner=no
 new_or_window "$OUT/p4-guest-base.ids" "$TOASTRE" 2 p4-guest && guestbanner=yes
 sb4=$(showbanner); log "P4a introspection: $sb4 (=0 -> warmup earned suppression, so no-banner is CORRECT and only the forward failed; =absent -> nothing was ever forwarded/suppressed)"
@@ -308,6 +314,21 @@ elif [ -n "$sent" ] && [ "$guestbanner" = no ]; then
   verdict P4a "PASS bridged: delivery acked (FWD_RTT ok=1/SENT OK), no guest banner, dom0=$domseen ($sb4)"
 else
   cap "$OUT" p4a "$R"; verdict P4a "FAIL sent=${sent:-no} guestbanner=$guestbanner dom0=$domseen $sb4"
+fi
+# P4w - the dom0 RENDER WITNESS row (owner north-star 2026-09-06: DONE = pixels, not acks;
+# mirrors p3a-etw-gate's T7w). qtest-geom is structurally blind to dom0-native bubbles, so the
+# pixel half cannot be auto-graded: ATTENDED-PENDING hands the operator a capture taken at the
+# bridged forward ack (the protocol's declared class for exactly that - counted, printed on every
+# branch, never a silent gap, never blocks a CLEAN run). No capture at an ack = a missing datum =
+# ungraded (INVALID -> EXECUTED-WITH-GAPS, re-run), never a vacuous pass.
+if [ -n "$sent" ]; then
+  if [ "${n4w:-0}" -ge 1 ]; then
+    verdict P4w "ATTENDED-PENDING dom0 render witness captured at the bridged forward ack ($n4w PNG in p4a-dom0.tar) - READ IT: a '$VM: A0T bridged' bubble must be in the dom0 pixels; P4a is the mechanical ack, this capture is the pixel half and only an operator grades it"
+  else
+    verdict P4w "INSTRUMENT dom0 render witness capture returned no PNG (p4a-dom0.tar) - the delivery ack is on record (P4a) but the pixel half is UNGRADED; re-run"
+  fi
+else
+  verdict P4w "INSTRUMENT no bridged forward ack to witness (P4a did not reach delivered) - pixel half ungraded, graded by P4a's own row"
 fi
 p4binst=""
 L1=$(blog_len) || { p4binst="blog_len unreadable"; L1=1000000000; }
