@@ -451,6 +451,49 @@ function Clear-BootResume {
 }
 
 # --------------------------------------------------------------- gui-agent registry seed
+function Set-QubesServiceRecovery {
+    # SELF-HEALING FOR THE CONTROL CHANNEL (2026-09-06, measured).
+    #
+    # A primed guest intermittently came up with NO qrexec: Windows fully booted, xencons
+    # serving a console login, the domain Running - and qtest, the gui-agent log and the event
+    # log all unreachable, because every one of them rides qrexec. A plain restart cured it in
+    # 25 s, so nothing was corrupt; the service simply had not started on that boot.
+    #
+    # The reason it stayed dead is visible in the service's own configuration as the MSI leaves
+    # it:
+    #     SERVICE_NAME: QrexecAgent
+    #       START_TYPE   : 2  AUTO_START
+    #       ERROR_CONTROL: 0  IGNORE
+    #       DEPENDENCIES : QdbDaemon
+    #       RESET_PERIOD : 0          <- sc qfailure: NO failure actions at all
+    # No recovery actions, and ERROR_CONTROL=IGNORE, so a transient start failure - or a failure
+    # of its QdbDaemon dependency, which the post-install reboot makes far more likely - is
+    # simply accepted and never retried. The guest is then permanently unreachable until a human
+    # reboots it, which for a Windows qube means its control channel is gone with no diagnosis.
+    #
+    # Give both services ordinary Windows recovery: restart after 5 s, 15 s, then every 60 s,
+    # with the counter reset daily. FAILURE_ACTIONS_FLAG=1 is what makes the actions apply when
+    # the service exits with an error rather than only when it crashes - without it a failed
+    # START is still not retried, which is exactly the case that bit us.
+    foreach ($svc in 'QdbDaemon', 'QrexecAgent') {
+        try {
+            & sc.exe failure $svc reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
+            $rc1 = $LASTEXITCODE
+            & sc.exe failureflag $svc 1 | Out-Null
+            $rc2 = $LASTEXITCODE
+            if ($rc1 -eq 0 -and $rc2 -eq 0) {
+                Write-Log "service recovery armed for $svc (restart 5s/15s/60s, flag on)"
+            } else {
+                # Not fatal: the install is still good, the guest just keeps the old
+                # no-recovery behaviour. Say so at WARN rather than failing the install.
+                Write-Log "could not arm service recovery for ${svc}: sc failure=$rc1 failureflag=$rc2" 'WARN'
+            }
+        } catch {
+            Write-Log "could not arm service recovery for ${svc}: $_" 'WARN'
+        }
+    }
+}
+
 function Set-GuiAgentRegistryDefaults {
     # The MSI only seeds these when its AppSearch does NOT already find them (conditions
     # NOT GUI_SEAMLESS_SET / NOT GUI_CURSOR_SET / NOT LOG_DIR_SET), so writing them first
@@ -1375,6 +1418,10 @@ function Invoke-Stage2 {
     # Re-assert AFTER the install too: the MSI lays the service down fresh (auto-start, new
     # service key), losing both the disable and the AutoReboot value written before it.
     Disable-XenbusMonitor -Why 'after msiexec: MSI re-registered the service'
+
+    # The MSI has just (re)registered QdbDaemon/QrexecAgent with no failure actions, so this has
+    # to run AFTER it, every time - see Set-QubesServiceRecovery for the measurement.
+    Set-QubesServiceRecovery
 
     # --- prove the install put OUR agent on disk ------------------------------------
     # Without this the script would report success for an install that silently kept a
