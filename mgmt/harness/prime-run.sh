@@ -173,6 +173,14 @@ qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$CHURN"
 DIAGIMG=/home/user/win-iso/answer-usb-413.img
 DIAGLOOP=$(losetup -l | awk -v f="$DIAGIMG" '$6==f{sub("/dev/","",$1); print $1; exit}')
 if [ -n "$DIAGLOOP" ]; then
+    # ARCHIVE BEFORE WIPING. The markers are the only evidence a stalled prime leaves, and this
+    # reformat would destroy the previous run's set - the same "discard the evidence" mistake that
+    # already cost two failure states. Keep every set on disk, timestamped, before wiping.
+    mkdir -p "$HERE/evidence/diag-archive"
+    if mcopy -n -i "$DIAGIMG" ::/prime-progress.log \
+         "$HERE/evidence/diag-archive/$(date -u +%Y%m%d-%H%M%S)-$CHURN.log" 2>/dev/null; then
+        log "previous diag markers archived to evidence/diag-archive/"
+    fi
     mkfs.fat -F 32 -n DIAG "$DIAGIMG" >/dev/null 2>&1   # fresh per run: markers are per-prime
     if qvm-device block assign --required -o frontend-dev=xvdj -o devtype=disk -o read-only=false \
            "$CHURN" "$HOLDER:$DIAGLOOP" 2>/dev/null; then
@@ -331,10 +339,15 @@ PY
 fi
 
 if [ "$ready" != 1 ]; then
+    mcopy -n -i "${DIAGIMG:-/nonexistent}" ::/prime-progress.log "$OUT/diag-markers.log" 2>/dev/null \
+        && log "  diag markers saved to $OUT/diag-markers.log" \
+        || log "  NO diag markers - the primer hook never ran the job"
     log "DEADLINE: ${DEADLINE}s elapsed with no qrexec after $restarts restart(s)."
     log "  Guest LEFT RUNNING and NOT removed - its state is the evidence (H3.5). Read $OUT."
     exit 2
 fi
+mcopy -n -i "${DIAGIMG:-/nonexistent}" ::/prime-progress.log "$OUT/diag-markers.log" 2>/dev/null \
+    && log "diag markers saved to $OUT/diag-markers.log"
 log "OK: $CHURN is up. Evidence in $OUT. The stick is still assigned --required and"
 log "  qemu-extra-args is still set - clear both before using this guest as a cell subject."
 exit 0
