@@ -147,8 +147,19 @@
           <Description>disable GPU/hardware acceleration for known software (no GPU in this guest)</Description>
           <Order>8</Order>
         </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <CommandLine>cmd /c if exist C:\payload\setup.cmd (call C:\payload\setup.cmd) else (for %d in (D E F G H I J K L M N O P Q R S T U V) do @if exist %d:\payload\setup.cmd call %d:\payload\setup.cmd)</CommandLine>
+                <!-- RETRY, DO NOT SCAN ONCE (2026-09-07, measured). The payload lives on a USB stick
+             (nec-usb-xhci + usb-storage). This command used to scan the drive letters exactly
+             ONCE at first logon: if no letter had been enumerated by that instant, every
+             `if exist` failed, cmd exited 0, and THE INSTALL NEVER RAN - no retry, no error, no
+             trace. The guest then sat logged in and idle for ever with no QWT, hence no qrexec,
+             hence no qtest / no gui-agent log / no xencons: every instrument dead at once, which
+             is why this took so long to see. Captured on win10-a0tb: prime-run DEADLINE with no
+             qrexec, console silent (xencons absent -> QWT never installed), no stick marker
+             (setup.cmd never started), yet the stick image's mtime was LATER than its build -
+             Windows did mount it, just after the scan had already given up.
+             Now it retries for ~90 s (45 x ~2 s) and exits the moment it finds the payload. -->
+<SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c for /l %i in (1,1,45) do @(if exist C:\payload\setup.cmd (call C:\payload\setup.cmd &amp; exit) else (for %d in (D E F G H I J K L M N O P Q R S T U V) do @if exist %d:\payload\setup.cmd (call %d:\payload\setup.cmd &amp; exit)) &amp; ping -n 3 127.0.0.1 &gt;nul)</CommandLine>
           <Description>qubes-win-idd payload</Description>
           <Order>9</Order>
         </SynchronousCommand>
