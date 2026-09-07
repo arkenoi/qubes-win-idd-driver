@@ -154,7 +154,12 @@ rm -f "mgmt/fixtures/$CHURN.aborted"
 # which is what this line did for a day - changes the configuration being tested and lets a guest
 # write corrupt the FAT the next run reads. Stage markers go on a SEPARATE writable DIAG stick
 # (xvdj, below), so observing the prime cannot alter it.
-qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' \
+# The DIAG volume rides the SAME xhci controller as a second REMOVABLE usb-storage device. It has
+# to be removable: both images are "superfloppies" (a FAT filesystem at sector 0, no partition
+# table), and Windows mounts that layout on REMOVABLE media only. Attached as a plain Xen block
+# disk it showed up as disk4, Online and writable, with NO volume and NO drive letter - so the
+# job's label scan found nothing and wrote no markers (measured 2026-09-07 on win11-2stk).
+qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99 -drive file=/dev/xvdj,format=host_device,if=none,id=diagdrv -device usb-storage,bus=ansusb.0,drive=diagdrv,removable=on' \
   || { log "TERMINAL: could not set qemu-extra-args"; exit 1; }
 qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$CHURN" "$HOLDER:$STICKLOOP" \
   || { log "TERMINAL: could not assign the stick"; exit 1; }
