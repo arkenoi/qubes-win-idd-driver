@@ -39,6 +39,17 @@ rem ============================================================================
 set LOG=C:\qubes-prime\ours.log
 echo === ours (clean install) prime job %DATE% %TIME% >> %LOG%
 
+rem STAGE MARKERS ON THE STICK (2026-09-07). %LOG% is on C:, reachable only over qrexec - and on a
+rem pristine base qrexec exists only AFTER this job succeeds. So when a prime stalls there is
+rem nothing to read: no qrexec, no gui-agent log, and no xencons either (QWT never installed), which
+rem is why two such failures went unattributed. The stick is FAT and the HOST reads it back with
+rem mtools needing nothing from the guest, so the same stages are echoed there.
+rem   marker ABSENT  -> the primer hook never ran this job (it scans D..Z once per boot for
+rem                     \qubes-prime\onboot.cmd and exits SILENTLY if the stick has no letter yet)
+rem   START, no rc   -> the job ran and the installer did not finish
+rem %~d0 is the stick this script was invoked from, which is exactly the drive the hook found.
+echo [%DATE% %TIME%] onboot START on %~d0 >> %~d0\prime-progress.log
+
 rem Stage to C: first. The stick's drive letter is not stable across the installer's own reboot,
 rem and the stick may not be attached at all by stage 2 - the old stock route lost its stage 2
 rem exactly this way.
@@ -84,4 +95,5 @@ rem itself, the guest Halts, and prime-run's restart-on-Halt fires within one po
 echo --- stage 1 /auto /reboot [arms the resume task, reboots, stage 2 follows and reboots itself] >> %LOG%
 call C:\qwtsetup\install.cmd /auto /reboot /autologon:qubes >> %LOG% 2>&1
 echo installer rc=%ERRORLEVEL% >> %LOG%
+echo [%DATE% %TIME%] installer rc=%ERRORLEVEL% >> %~d0\prime-progress.log
 exit /b %ERRORLEVEL%
