@@ -47,8 +47,16 @@ rem mtools needing nothing from the guest, so the same stages are echoed there.
 rem   marker ABSENT  -> the primer hook never ran this job (it scans D..Z once per boot for
 rem                     \qubes-prime\onboot.cmd and exits SILENTLY if the stick has no letter yet)
 rem   START, no rc   -> the job ran and the installer did not finish
-rem %~d0 is the stick this script was invoked from, which is exactly the drive the hook found.
-echo [%DATE% %TIME%] onboot START on %~d0 >> %~d0\prime-progress.log
+rem The markers go on the separate DIAG volume, NEVER on the answer stick: the answer stick is the
+rem medium under test and is attached READ-ONLY, exactly as a primed guest gets it. Writing
+rem diagnostics onto it would change the configuration being tested (and a guest write can corrupt
+rem the FAT the next run reads). DIAG is found by LABEL, not by letter, because letters are not
+rem stable across the installer's own reboot.
+set "DIAGDRV="
+for %%d in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
+    if not defined DIAGDRV if exist "%%d:\" for /f "tokens=*" %%v in ('cmd /c vol %%d: 2^>nul ^| findstr /i "DIAG"') do set "DIAGDRV=%%d"
+)
+if defined DIAGDRV echo [%DATE% %TIME%] onboot START from %~d0 >> %DIAGDRV%:\prime-progress.log
 
 rem Stage to C: first. The stick's drive letter is not stable across the installer's own reboot,
 rem and the stick may not be attached at all by stage 2 - the old stock route lost its stage 2
@@ -95,5 +103,5 @@ rem itself, the guest Halts, and prime-run's restart-on-Halt fires within one po
 echo --- stage 1 /auto /reboot [arms the resume task, reboots, stage 2 follows and reboots itself] >> %LOG%
 call C:\qwtsetup\install.cmd /auto /reboot /autologon:qubes >> %LOG% 2>&1
 echo installer rc=%ERRORLEVEL% >> %LOG%
-echo [%DATE% %TIME%] installer rc=%ERRORLEVEL% >> %~d0\prime-progress.log
+if defined DIAGDRV echo [%DATE% %TIME%] installer rc=%ERRORLEVEL% >> %DIAGDRV%:\prime-progress.log
 exit /b %ERRORLEVEL%

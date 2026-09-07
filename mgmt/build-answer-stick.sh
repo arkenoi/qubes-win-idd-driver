@@ -119,21 +119,10 @@ if [ -n "${RELEASE_SETUP:-}" ]; then
 @echo off
 rem Found by the FirstLogonCommands drive-letter scan: <drive>:\payload\setup.cmd
 rem
-rem STAGE MARKERS ON THE STICK (2026-09-06). Everything below logs to C:\qubes-win-idd-setup.log,
-rem which is reachable only over qrexec - and on a PRISTINE base qrexec exists only AFTER this
-rem install succeeds. So when priming stalls (measured twice: guest Running, idle, no qrexec, for
-rem 15+ minutes) there is nothing to read and the failure cannot be attributed. The stick is FAT
-rem and writable by the guest, and the host reads it back with mtools needing NOTHING from the
-rem guest, so the same lines are echoed here. Absent START marker = FirstLogonCommands never ran
-rem (logon/unattend path); START without rc = install.cmd stalled (installer path). That one bit
-rem splits the hypothesis space.
 echo === answer-stick payload === >> C:\qubes-win-idd-setup.log
-echo [%DATE% %TIME%] setup.cmd START >> %~d0\prime-progress.log
 $_prereg
-echo [%DATE% %TIME%] calling install.cmd >> %~d0\prime-progress.log
 call "%~dp0release\install.cmd" /auto ${INSTALL_FLAGS-/idd} >> C:\qubes-win-idd-setup.log 2>&1
 echo install.cmd rc=%ERRORLEVEL% >> C:\qubes-win-idd-setup.log
-echo [%DATE% %TIME%] install.cmd rc=%ERRORLEVEL% >> %~d0\prime-progress.log
 EOF
     echo "payload: release package staged, install flags ${INSTALL_FLAGS-/idd}"
 fi

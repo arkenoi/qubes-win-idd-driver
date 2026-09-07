@@ -149,20 +149,35 @@ log "cloned"
 # aborted prime left for this name is now about a qube that no longer exists.
 rm -f "mgmt/fixtures/$CHURN.aborted"
 
-# The answer stick is attached READ-WRITE (2026-09-06). It used to be readonly=on, which silently
-# defeated the only instrument that can observe a stalled prime: setup.cmd writes stage markers to
-# the stick (prime-progress.log) because on a pristine base there is no QWT, hence no qrexec, no
-# gui-agent and no xencons to ask. Proven on a KNOWN-GOOD run - the install completed and the
-# marker file was still absent, which would have read as "FirstLogonCommands never ran". The stick
-# is rebuilt from scratch by build-answer-stick.sh on every run, so guest writes to it are
-# disposable by construction.
-qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' \
+# TWO STICKS, ONE JOB EACH (owner, 2026-09-07). The ANSWER stick is the medium under test and is
+# attached READ-ONLY, exactly as a primed guest gets it. Making it writable to carry diagnostics -
+# which is what this line did for a day - changes the configuration being tested and lets a guest
+# write corrupt the FAT the next run reads. Stage markers go on a SEPARATE writable DIAG stick
+# (xvdj, below), so observing the prime cannot alter it.
+qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99' \
   || { log "TERMINAL: could not set qemu-extra-args"; exit 1; }
-# read-only=false: Qubes block devices attach READ-ONLY by default, and that (not the qemu
-# -drive flag, which was fixed first) is what kept the guest from writing prime-progress.log.
-# Both had to go for the stall instrument to work at all.
-qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk -o read-only=false "$CHURN" "$HOLDER:$STICKLOOP" \
+qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$CHURN" "$HOLDER:$STICKLOOP" \
   || { log "TERMINAL: could not assign the stick"; exit 1; }
+
+# --- DIAG stick: the instrument, kept off the medium under test --------------------------------
+# A pristine base has no QWT, so a stalled prime has no qrexec, no gui-agent log and no xencons -
+# every channel dies together and two such failures went unattributed. The job writes its stages to
+# this small FAT volume (label DIAG) instead, and the HOST reads them back with mtools needing
+# nothing from the guest. It is attached READ-WRITE because it is scratch; the answer stick above
+# stays read-only because it is the thing being tested.
+DIAGIMG=/home/user/win-iso/answer-usb-413.img
+DIAGLOOP=$(losetup -l | awk -v f="$DIAGIMG" '$6==f{sub("/dev/","",$1); print $1; exit}')
+if [ -n "$DIAGLOOP" ]; then
+    mkfs.fat -F 32 -n DIAG "$DIAGIMG" >/dev/null 2>&1   # fresh per run: markers are per-prime
+    if qvm-device block assign --required -o frontend-dev=xvdj -o devtype=disk -o read-only=false \
+           "$CHURN" "$HOLDER:$DIAGLOOP" 2>/dev/null; then
+        log "diag stick on /dev/$DIAGLOOP -> xvdj (writable, markers only)"
+    else
+        log "WARNING: diag stick could not be assigned - a stall will be undiagnosable, not fatal"
+    fi
+else
+    log "WARNING: $DIAGIMG is not on a loop device - no diag stick this run"
+fi
 
 OUT="$HERE/evidence/prime-$JOB-$CHURN-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
 log "evidence -> $OUT"
