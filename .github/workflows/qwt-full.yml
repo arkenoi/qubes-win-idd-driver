@@ -437,15 +437,20 @@ jobs:
             if ($name -eq 'relocate-dir') {
               $extra += "-p:WindowsTargetPlatformVersion=$env:WDK_KM_VERSION"
               $kmInc = Split-Path $ntifs.FullName -Parent
-              $kits  = (Get-Item $kmInc).Parent.Parent.Parent.FullName
-              $kmLib = Join-Path $kits "Lib\$env:WDK_KM_VERSION\km\x64"
-              if (-not (Test-Path (Join-Path $kmLib 'ntdllp.lib'))) {
-                throw "ntdllp.lib not found under $kmLib - relocate-dir cannot link"
+              # FIND ntdllp.lib, do not assume where it lives. Assuming Lib\<ver>\km\x64 was wrong
+              # (measured 2026-09-08: the guard fired) - it is a private ntdll import library and the
+              # WDK does not file it with the kernel-mode libs. Locate it the same way ntifs.h was
+              # located, from the file itself, so the layout can change without breaking this again.
+              $ntdllp = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits" -Recurse -Filter ntdllp.lib -ErrorAction SilentlyContinue |
+                        Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1
+              if (-not $ntdllp) {
+                throw "ntdllp.lib not found anywhere under Windows Kits (x64) - relocate-dir cannot link"
               }
+              $kmLib = $ntdllp.Directory.FullName
               $env:CL  = "/I`"$kmInc`""
               $env:LIB = "$kmLib;$env:LIB"
               Write-Host "relocate-dir: CL=$env:CL"
-              Write-Host "relocate-dir: km lib = $kmLib"
+              Write-Host "relocate-dir: ntdllp.lib at $($ntdllp.FullName)"
             }
             & "${{ steps.vs.outputs.msbuild }}" $vcx `
                 -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
