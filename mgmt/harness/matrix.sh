@@ -338,17 +338,26 @@ detach_release_iso(){ # $1=vm $2=label - best effort. The CD is a start-time att
 clear_prime_leftovers(){ # $1=vm - prime-run's own exit text: "The stick is still assigned
   # --required and qemu-extra-args is still set - clear both before using this guest as a cell
   # subject." Without this, every later boot of the subject depends on this qube's loop layout.
-  local vm=$1 stickloop
-  stickloop=$(losetup -l 2>/dev/null | awk '$6 ~ /answer-usb\.img$/{sub("/dev/","",$1); print $1; exit}')
-  if [ -n "$stickloop" ]; then
-    if qvm-device block unassign "$vm" "win-idd-mgmt:$stickloop" >/dev/null 2>&1; then
-      say "  $vm: primer stick unassigned (win-idd-mgmt:$stickloop)"
+  # BOTH STICKS. prime-run assigns TWO removable volumes - the answer stick on xvdi and, since
+  # 2026-09-08, a writable DIAG stick on xvdj - and this only ever cleared the first.
+  # MEASURED COST, acceptance 2026-09-08 cell 4: the DIAG volume was still attached when the guest
+  # was graded, Windows gave it the drive letter the PRIVATE volume normally takes, and
+  # user_data_on_private + agent_log_healthy both failed on a guest whose install was perfect -
+  # pv_disk_bound was True the whole time. It passed on the next run, because which volume wins
+  # the letter is a race. A leftover from priming must never be able to decide a cell's verdict.
+  local vm=$1 stickloop img
+  for img in 'answer-usb\.img$' 'answer-usb-413\.img$'; do
+    stickloop=$(losetup -l 2>/dev/null | awk -v pat="$img" '$6 ~ pat {sub("/dev/","",$1); print $1; exit}')
+    if [ -n "$stickloop" ]; then
+      if qvm-device block unassign "$vm" "win-idd-mgmt:$stickloop" >/dev/null 2>&1; then
+        say "  $vm: prime stick unassigned (win-idd-mgmt:$stickloop)"
+      else
+        say "  WARNING: could not unassign win-idd-mgmt:$stickloop from $vm - its boots depend on this qube's loop layout until cleared"
+      fi
     else
-      say "  WARNING: could not unassign the primer stick from $vm - its boots depend on this qube's loop layout until cleared"
+      say "  note: no loop backing ${img%%\\*} for $vm (not assigned this run)"
     fi
-  else
-    say "  WARNING: no loop backing answer-usb.img found - primer stick assignment not cleared for $vm"
-  fi
+  done
   qvm-features --unset "$vm" qemu-extra-args 2>/dev/null
 }
 
