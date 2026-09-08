@@ -389,9 +389,19 @@ jobs:
                     Select-Object -First 1
             Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -Wait
           }
-          if (-not (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Include" -Recurse -Filter ntifs.h -ErrorAction SilentlyContinue)) {
-            throw "WDK install did not deliver ntifs.h - relocate-dir cannot build"
-          }
+          # PIN relocate-dir TO THE SDK VERSION THAT ACTUALLY HAS THE KM HEADERS.
+          # Measured 2026-09-08: with the WDK installed and the toolset resolving
+          # ("Building 'relocate-dir' with toolset 'WindowsApplicationForDrivers10.0'"), the compile
+          # still died on C1083 ntifs.h. The vcxproj asks for $(LatestTargetPlatformVersion), which
+          # resolves to the SDK version Visual Studio ships - and that directory has no km\ subtree.
+          # ntifs.h lives under the version CHOCO installed. Find the version that owns the header
+          # and build this one project against it.
+          $ntifs = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Include" -Recurse -Filter ntifs.h -ErrorAction SilentlyContinue |
+                   Select-Object -First 1
+          if (-not $ntifs) { throw "WDK install did not deliver ntifs.h - relocate-dir cannot build" }
+          # .../Include/<version>/km/ntifs.h  ->  <version> is two levels up from the file
+          $env:WDK_KM_VERSION = $ntifs.Directory.Parent.Name
+          Write-Host "WDK km headers: $($ntifs.FullName)  (WindowsTargetPlatformVersion=$env:WDK_KM_VERSION)"
           # build ORDER cannot decide whether the build works.
           & powershell "$env:QB_SCRIPTS\set-version.ps1" "$ws\core-agent\version" "$ws\core-agent\qwt_version.h"
           if (-not (Test-Path "$ws\core-agent\qwt_version.h")) { throw 'failed to generate qwt_version.h' }
@@ -411,9 +421,13 @@ jobs:
             $name = Split-Path $proj -Leaf
             $vcx = "$ws\core-agent\vs2022\$proj\$name.vcxproj"
             if (-not (Test-Path $vcx)) { throw "core-agent project not found: $vcx" }
+            # relocate-dir is the only project here that needs the WDK's km headers, so it is the
+            # only one pinned to the version that owns them; everything else keeps the default.
+            $extra = @()
+            if ($name -eq 'relocate-dir') { $extra += "-p:WindowsTargetPlatformVersion=$env:WDK_KM_VERSION" }
             & "${{ steps.vs.outputs.msbuild }}" $vcx `
                 -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
-                "-p:TreatWarningAsError=false"
+                "-p:TreatWarningAsError=false" @extra
             if ($LASTEXITCODE -ne 0) { throw "core-agent: $name build failed ($LASTEXITCODE)" }
           }
           $caOut = "$ws\core-agent\vs2022\x64\$env:CONFIG"
