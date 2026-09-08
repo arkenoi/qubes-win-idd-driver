@@ -60,8 +60,11 @@ msiexec is driven with ADDLOCAL=PvDriversCore,Core,Gui[,PvDriversNetwork]:
 It also, before msiexec runs:
   * trusts the six ITL QWT signing certificates and our throwaway test-signing
     certificate in LocalMachine\Root and LocalMachine\TrustedPublisher;
-  * REMOVES an already-installed Qubes Windows Tools (see UPGRADING) and
-    deletes the gui-agent.exe / gui-watchdog.exe it leaves behind;
+  * on the ONLY path that still removes a previously installed QWT -- an
+    installed version STRICTLY NEWER than this package, which a MajorUpgrade
+    cannot replace -- deletes the gui-agent.exe / gui-watchdog.exe the removal
+    leaves behind. Any OLDER or equal QWT is upgraded/repaired in place and
+    nothing is removed; see UPGRADING;
   * pre-seeds HKLM\Software\Invisible Things Lab\Qubes Tools with
     SeamlessMode=1, DisableCursor=1, LogDir=C:\Program Files\Qubes Tools\log
     (the MSI only writes these when they are absent, so ours win);
@@ -114,10 +117,13 @@ From the ISO (recommended -- no networking needed):
      stock Qubes Windows Tools leaves a qube too. Pass /reboot if you would rather
      have that end state immediately.
 
-  If the guest already had QWT, removing it can itself require a reboot. The
-  script then stops with exit code 10 after the removal and tells you to reboot
-  and run install.cmd once more; that run continues with the install. So on an
-  upgrade you may see one more reboot / one more run than the three steps above.
+  An upgrade over an OLDER (or equal) QWT is one MSI transaction and adds no
+  reboot and no extra run: the three steps above are the whole procedure. Only
+  a DOWNGRADE -- an installed version strictly newer than this package -- is
+  removed first, and that removal can itself require a reboot: the script then
+  stops with exit code 10, tells you to reboot and run install.cmd once more,
+  and that run continues with the install. So one more reboot / one more run
+  than the three steps above, on that path only.
 
 Unattended (no second logon needed):
 

@@ -14,14 +14,20 @@
 
       stage 1  copy payload to disk, verify hashes, trust the signing certificates,
                seed the gui-agent registry defaults, enable testsigning, reboot
-      stage 2  verify testsigning is active, REMOVE any previously installed QWT,
-               install vc_redist, run msiexec, optionally install AND ACTIVATE the
-               IddCx display driver, reboot
+      stage 2  verify testsigning is active, decide the upgrade mode for any previously
+               installed QWT (in place for older/equal, remove-first ONLY for a genuine
+               downgrade - see the branch at 'IN-PLACE MSI MAJOR UPGRADE'), install
+               vc_redist, run msiexec, optionally install AND ACTIVATE the IddCx display
+               driver, reboot
 
     The stage is DETECTED, not remembered: if testsigning is not active in the current
     boot we are in stage 1, otherwise stage 2. Re-running the script is safe.
 
-    WHY STAGE 2 UNINSTALLS FIRST (measured 2026-08-06, FINDINGS.md): on a guest that
+    WHY THE UNINSTALL-FIRST PATH EXISTS AT ALL (measured 2026-08-06, FINDINGS.md). It is
+    NOT the normal upgrade path - since the 4.3.0 version bump an older or equal QWT is an
+    in-place MajorUpgrade/reinstall and nothing is removed, because removal reverts the boot
+    disk toward emulated IDE and can bugcheck 0x7B. Uninstall-first survives only for an
+    installed version STRICTLY NEWER than this package. What it was built for: on a guest that
     already had QWT, msiexec returned 3010 "success" and every component updated EXCEPT
     gui-agent.exe, which kept the pre-existing build - verified across a reboot, so it is
     not deferred file replacement. It is the Windows Installer file-versioning rule: an
