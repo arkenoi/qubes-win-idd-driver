@@ -1507,9 +1507,13 @@ function Invoke-Stage2 {
         Write-Log ("could not stop QubesGuiWatchdog: $($_.Exception.Message) - the stage-2 device " +
                    'work below will run under a live capture agent') 'WARN'
     }
-    # The watchdog launches the agent and the broker INTO THE USER SESSION, so stopping the service
-    # does not necessarily take them with it. Kill what actually holds a capture or a notification.
-    foreach ($pn in 'gui-agent', 'wgcbroker', 'notifhost') {
+    # KILL THE RESPAWNER FIRST, then what it respawns. gui-watchdog.exe relaunches gui-agent.exe
+    # about a second after it dies, so killing only the agent does not quiesce anything: if
+    # Stop-Service above threw (SCM busy right after the MSI's StartServices is exactly when it
+    # does), the watchdog is still alive and the 3 s settle below GUARANTEES the agent is back
+    # before the display surgery runs. That was the shape of the original 2026-09-08 freeze and
+    # the first version of this quiesce did not prevent it. Order matters: watchdog, then agent.
+    foreach ($pn in 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost') {
         foreach ($pr in @(Get-Process -Name $pn -ErrorAction SilentlyContinue)) {
             try   { $pr.Kill(); $script:GuiQuiesced = $true; Write-Log "  stopped $pn (pid $($pr.Id))" }
             catch { Write-Log "  could not stop $pn (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
@@ -1519,6 +1523,15 @@ function Invoke-Stage2 {
     # under them: the agent re-grants on resolution change, and that path reaches into the kernel
     # (xeniface gnttab IOCTLs).
     if ($script:GuiQuiesced) { Start-Sleep -Seconds 3 }
+    # ASSERT IT HELD. A quiesce that quietly failed leaves the display surgery running under a live
+    # capture agent - the condition it exists to remove - while the log says it was quiesced.
+    $stillUp = @(Get-Process -Name 'gui-watchdog', 'gui-agent', 'wgcbroker' -ErrorAction SilentlyContinue)
+    if ($stillUp.Count -gt 0) {
+        Write-Log ('QUIESCE DID NOT HOLD: still running after the settle - ' +
+                   (($stillUp | ForEach-Object { "$($_.ProcessName)/$($_.Id)" }) -join ', ') +
+                   '. The device work below will run under a live capture agent.') 'ERROR'
+        $script:Result.detail.gui_quiesce_failed = (($stillUp | ForEach-Object { $_.ProcessName }) -join ',')
+    }
     $script:Result.detail.gui_quiesced_for_stage2 = $script:GuiQuiesced
 
     # --- Start Menu qube-app shortcut: NOT INSTALLED (see docs/PLAN-start-menu.md) ------
@@ -2425,6 +2438,28 @@ public static class QdbPrime {
     #
     # -RebootAtEnd restores the old behaviour for a caller that wants the finished state
     # immediately (our own acceptance harness reboots by itself and does not need it).
+    # PUT THE AGENT BACK IF NOTHING IS GOING TO REBOOT THIS GUEST.
+    # The quiesce earlier in this stage was written on the premise that "stage 2 always ends in a
+    # reboot". That is FALSE: Result.reboot_needed is a REPORT, and the actual restart happens only
+    # under -RebootAtEnd. On the documented interactive path (install.cmd, or install.cmd /auto) the
+    # stage exits 0 having killed the agent, stopped the watchdog AND disabled the emulated VGA
+    # adapter - so the qube maps ZERO windows in dom0, with no agent to map them and no watchdog to
+    # respawn one, until a human happens to reboot it. Found by the 2026-09-08 audit; it is a
+    # regression introduced by the quiesce, not a pre-existing condition.
+    # Restarting the watchdog here is safe: the display topology is already in its final state (the
+    # IDD is active and the VGA adapter is disabled), which is exactly what the agent would come up
+    # to after the reboot anyway.
+    if ($script:GuiQuiesced -and -not ($Auto -and $RebootAtEnd)) {
+        try {
+            Start-Service -Name 'QubesGuiWatchdog' -ErrorAction Stop
+            Write-Log 'gui-agent restarted: this stage quiesced it and is NOT rebooting from here'
+            $script:Result.detail.gui_restored = $true
+        } catch {
+            Write-Log ("could not restart QubesGuiWatchdog: $($_.Exception.Message) - THIS QUBE WILL " +
+                       'MAP NO WINDOWS until it is rebooted') 'ERROR'
+            $script:Result.detail.gui_restored = "FAILED: $($_.Exception.Message)"
+        }
+    }
     if ($Auto -and $RebootAtEnd) {
         Write-Log 'rebooting in 2 s (-RebootAtEnd)'
         Emit-ResultThenReboot 0
