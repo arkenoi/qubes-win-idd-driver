@@ -1,8 +1,10 @@
 ===========================================================================
  QWT-NG 4.3 -- Qubes Windows Tools rebuilt from upstream 4.2.2 sources
  with the improved GUI agent
- Self-contained installer for a Windows 10 x64 guest, clean or with QWT
- already installed (an existing QWT is REMOVED first -- see UPGRADING).
+ Self-contained installer for a Windows 10 or Windows 11 x64 guest, clean or
+ with QWT already installed. An OLDER QWT -- including stock 4.2.2 -- is
+ upgraded IN PLACE and is NOT removed first; see UPGRADING before you touch
+ an existing install.
 ===========================================================================
 
 WHAT THIS IS
