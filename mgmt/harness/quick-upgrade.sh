@@ -335,17 +335,29 @@ log "run marker $E2E_MARK"
 grun "cmd /c start \"\" /min $RELDISC\\install.cmd /auto /autologon:qubes" 60 >/dev/null
 log "install.cmd /auto launched from $RELDISC - waiting (deadline ${DEADLINE}s, stall ${STALL_SECS}s)"
 
-# Exits: RESULT (trailer after the marker) | HALTED (guest rebooted itself) | QUIET (qrexec gone
-# - the MSI replaces the agent - and CPU quiet 3 reads in a row, i.e. the install finished) |
-# RECOVERY (terminal) | STALLED (no new log lines for STALL_SECS while alive) | DEADLINE.
-phase=""; t0=$(date +%s); last=-1; lastchange=$t0; quiet=0; shots=0
+# Exits: RESULT (trailer after the marker) | HALTED (guest rebooted itself) | RECOVERY (terminal)
+# | STALLED (no new log lines for STALL_SECS while alive, OR qrexec unanswering for STALL_SECS)
+# | DEADLINE.
+# There is deliberately NO "QUIET" exit (audit 2026-09-08, finding at the old line 373). It used
+# to read "qrexec gone + CPU < 15 for 3 reads" as "the install finished" and went straight into
+# the cold boots. That state is indistinguishable from an installer parked on a modal inside
+# msiexec (driver-trust prompt, a reboot prompt that slipped the suppressor, a PnP dialog): CPU
+# idle, qrexec down, nobody clicking - Install-QwtImproved.ps1 documents exactly that case
+# (27.9 min idle on a 'Windows Security' prompt). Rebooting there is the mid-install restart the
+# installer spends hundreds of lines avoiding, the post-boot grading then blames the instrument
+# (no RESULT trailer -> INVALID-INSTRUMENT) and the dialog - the evidence - is gone. Measured on
+# this rig (11/11 upgrade runs, 2026-09-06..08): qrexec drops for ~60 s while the MSI replaces
+# the agent and COMES BACK on its own, and the RESULT trailer is then read over it - so the
+# positive-evidence exit is the real completion path and QUIET never fired. CPU is now logged
+# only; a guest that stays unreachable for STALL_SECS is a STALL with the guest LEFT RUNNING.
+phase=""; t0=$(date +%s); last=-1; lastchange=$t0; lastalive=$t0; quiet=0; shots=0
 while :; do
   sleep 20
   el=$(( $(date +%s) - t0 ))
   st=$(w_state "$SUBJECT")
   if [ "$st" = Halted ]; then log "  t+${el}s guest HALTED (rebooted itself)"; phase=HALTED; break; fi
   if w_alive "$SUBJECT"; then
-    quiet=0
+    quiet=0; lastalive=$(date +%s)
     n=$(grun "cmd /c powershell -NoProfile -Command \"if(Test-Path '$GLOG'){(Get-Content '$GLOG').Count}else{0}\"" 90 | grep -aE '^[0-9]+$' | head -1)
     n=${n:-0}
     if [ "$n" -ne "$last" ]; then
@@ -366,11 +378,20 @@ while :; do
     cpu=$(printf '' | timeout 10 qrexec-client-vm "$SUBJECT" admin.vm.Stats 2>/dev/null | tr '\0' '\n' \
           | awk '/^cpu_usage_raw$/{getline v; if(v+0>m)m=v+0; n++} END{if(n==0)print 9999; else print m}')
     if [ "${cpu:-9999}" -lt 15 ] 2>/dev/null; then quiet=$((quiet+1)); else quiet=0; fi
-    log "  t+${el}s no qrexec (agent being replaced?) cpu=${cpu} quiet=$quiet"
-    # No stall exit here: an unreachable guest is judged by CPU (QUIET), by its screen each
-    # minute (RECOVERY) and by the deadline - the log-count clock stopped when qrexec went, so
-    # a stall test on it would fire on the MSI's silent window rather than on a real hang.
-    if [ "$quiet" -ge 3 ] && [ "$el" -ge 180 ]; then phase=QUIET; break; fi
+    unreach=$(( $(date +%s) - lastalive ))
+    # cpu/quiet are LOGGING AIDS ONLY - never an exit (see the block comment above the loop).
+    log "  t+${el}s no qrexec for ${unreach}s (agent being replaced?) cpu=${cpu} quiet=$quiet"
+    # The stall clock for an unreachable guest runs from the last qrexec ANSWER, not from the
+    # last log-line change, so it cannot fire on the MSI's ~60 s silent window (STALL_SECS is
+    # 300 by default); the same rule w_install applies for matrix.sh. A guest that answers
+    # nothing for that long is left RUNNING as evidence - the modal, if that is what it is, is
+    # still on its screen and its msiexec log tail is still in $OUT/msi.log.
+    if [ "$unreach" -ge "$STALL_SECS" ]; then
+      sc=$(w_screen "$SUBJECT" "unreachable-stall" "$OUT")
+      log "  STALLED - qrexec unanswering for ${unreach}s (cpu=${cpu} quiet=$quiet), screen=$sc"
+      [ "$sc" = RECOVERY ] && { phase=RECOVERY; break; }
+      phase=STALLED; break
+    fi
   fi
   if [ $(( el / 60 )) -gt "$shots" ]; then
     shots=$(( el / 60 ))
@@ -382,9 +403,8 @@ done
 case "$phase" in
   RESULT)   log "install wrote its RESULT trailer at t+${el}s" ;;
   HALTED)   log "guest halted during the install - its log is read after the boots below" ;;
-  QUIET)    log "qrexec gone and CPU quiet - the install has finished working; grading after the boots below" ;;
   RECOVERY) finish 1 "TERMINAL: guest went to the recovery screen during the install - LEFT AS IS (evidence in $OUT)" ;;
-  STALLED)  finish 1 "TERMINAL: install STALLED (no progress for ${STALL_SECS}s) - guest LEFT RUNNING as evidence ($OUT)" ;;
+  STALLED)  finish 1 "TERMINAL: install STALLED (no progress or no qrexec answer for ${STALL_SECS}s) - guest LEFT RUNNING as evidence ($OUT); NOT rebooted: a parked modal would look exactly like this" ;;
   DEADLINE) finish 2 "DEADLINE: ${DEADLINE}s with no install conclusion - guest LEFT RUNNING as evidence ($OUT)" ;;
 esac
 

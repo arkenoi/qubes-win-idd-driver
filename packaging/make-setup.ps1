@@ -488,20 +488,29 @@ $manifest = [ordered]@{
         ref         = $env:GITHUB_REF
         sha         = $env:GITHUB_SHA
     }
+    # These lists MUST mirror Install-QwtImproved.ps1's defaults ($features build-up, the
+    # default-on IDD block, the autologon arming). They are free text and drifted once: the
+    # manifest claimed PvDriversDisk/MoveUsers were never installed and the IDD was opt-in, while
+    # the installer had shipped all three by default for weeks - so someone triaging a 0x7B PV-boot
+    # guest or a profile-on-root guest from the package's own (hash-verified) manifest was told the
+    # opposite of what had been done to the machine. Change the installer defaults -> change these.
     installs = [ordered]@{
-        msi_features   = @('PvDriversCore', 'Core', 'Gui', 'PvDriversNetwork (unless /nonet)')
+        msi_features   = @('PvDriversCore', 'Core', 'Gui',
+                           'PvDriversNetwork (unless /nonet)',
+                           'PvDriversDisk (unless /nodisk)',
+                           'MoveUsers (unless -NoMoveUsers is passed to Install-QwtImproved.ps1; install.cmd has no switch for it)')
         also           = @('6 self-signed "Qubes Windows Tools" certs (upstream QWT signs with these; they are trusted only because they are installed here) + our test cert, into Root and TrustedPublisher',
                            'VC++ 2015-2022 x64 runtime',
                            'bcdedit /set testsigning on',
                            'gui-agent registry defaults: SeamlessMode=1, DisableCursor=1, LogDir',
                            'OUR qubes-rpc handler scripts + service definitions over the stock MSI copies (payload rpc\, stock kept as *.qwt-stock); fork qrexec binaries from payload bin\ when built',
+                           'idd-driver/ (unless /noidd): the IddCx driver is installed AND ACTIVATED by default - the IDD becomes the display and the emulated VGA adapter is disabled; non-fatal, a failed activation leaves the guest on the Basic Display Adapter',
+                           'autologon (unless /noautologon): set-autologon.ps1 validates the credentials and stores the password as an LSA secret',
                            'Windows Update agent (unless /noupdates): reports availability via qubes.NotifyUpdates, answers dom0 qubes-vm-update so the Qubes Update GUI can drive the qube, and sets NoAutoUpdate=1 - dom0 owns installs')
     }
-    never_installs = @('reference/', 'PvDriversDisk', 'MoveUsers', 'Autologon',
-                       'any WDDM/video driver (QWT 4.2.2 has none)',
-                       'the dom0-side resize service',
-                       'idd-driver/ unless install.cmd /idd is passed; with /idd the driver is installed AND ACTIVATED (the IDD becomes the display, the emulated VGA adapter is disabled)')
-    known_issues = @('Attaching a netvm makes the guest unusable on Qubes 4.3: xenvif installs but never starts, ~2 vCPUs burn, qrexec stops answering. Not yet attributed to this package vs the upstream PV drivers. Use this build on an offline qube.')
+    never_installs = @('reference/',
+                       'any WDDM/video driver other than our IddCx driver (QWT 4.2.2 itself has none)',
+                       'the dom0-side resize service')
     idd_driver_included = $iddIncluded
     idd_driver_files    = $iddFiles
     reference_binaries  = $refHashes

@@ -26,6 +26,15 @@ param(
 $ErrorActionPreference = 'Stop'
 function Log($m){ Write-Output ((Get-Date -Format 'HH:mm:ss') + ' ' + $m) }
 
+# INITIALISED HERE, NOT AT THE MUTEX BLOCK, because `trap` is hoisted to the whole script block:
+# a throw from the SetupRoot recovery or the csc/source existence checks below fires the trap long
+# before the mutex is created. Under the installer's inherited Set-StrictMode 1.0 the trap's read
+# of an unset $haveUpdMutex raises "the variable cannot be retrieved because it has not been set",
+# REPLACING the real message - so 'relay source not found at X' was reported as a StrictMode error
+# and the actual cause never reached the log.
+$updMutex     = $null
+$haveUpdMutex = $false
+
 # $PSScriptRoot arrives EMPTY in some invocation contexts (measured 2026-08-19 via the
 # qrexec->cmd->powershell -File chain on win11-fresh: the param default bound '', and the
 # first Join-Path then died on 'Cannot bind argument to parameter Path' - which, under
@@ -45,6 +54,30 @@ $src = Join-Path $SetupRoot 'qubes-updates-relay.cs'
 $exe = Join-Path $BinDir 'qubes-updates-relay.exe'
 if (-not (Test-Path $csc)) { throw "in-box csc not found at $csc" }
 if (-not (Test-Path $src)) { throw "relay source not found at $src" }
+# Serialise with the updater itself. On an UPGRADE the previous install's QubesWindowsUpdateScan
+# (boot+2 min) overlaps the resumed stage 2 (boot+1 min): the scan sets the machine-wide proxy and
+# starts the relay, then the Stop-Process below kills that relay mid-fetch and its task is rewritten
+# under it - the pass dies 0x80072EFD through a dead proxy and dom0 gets no availability answer until
+# the next 6-hourly scan. qubes-windows-update.ps1 serialises its passes on this mutex; take it here
+# too, so a running pass finishes first and one starting later yields (its scan uses WaitOne(0)).
+$updMutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
+$haveUpdMutex = $false
+try {
+    $haveUpdMutex = $updMutex.WaitOne(0)
+    if (-not $haveUpdMutex) {
+        Log 'an updater pass holds Global\QubesWindowsUpdate - waiting for it (up to 15 min) before touching the relay or its tasks'
+        $haveUpdMutex = $updMutex.WaitOne(900000)   # same bound as the updater's real-work passes
+    }
+} catch [System.Threading.AbandonedMutexException] { $haveUpdMutex = $true }   # holder died; we own it now
+if (-not $haveUpdMutex) {
+    # Not a licence to go quiet: a pass holding the mutex past 15 min is hung or past its own
+    # ExecutionTimeLimit. Say so and proceed (the previous behaviour) rather than leave an upgraded
+    # guest on the old relay/tasks forever.
+    Log 'ANOMALY: Global\QubesWindowsUpdate still held after 15 min - proceeding to replace the relay/tasks under a stuck updater pass'
+}
+# Every failure below throws. Without this the installer process (which runs us with `&`) would keep
+# the mutex until it exits - skipping every scan and stalling dom0-driven passes for that long.
+trap { if ($haveUpdMutex -and $updMutex) { try { $updMutex.ReleaseMutex() } catch { } }; break }
 # On an UPGRADE the previous relay can be RUNNING (an updater task mid-pass) and holds the
 # exe open, so csc fails with rc=1 (measured on the 4.3.6->4.3.7 upgrade e2e, 2026-08-25).
 # Stop it, clear the target, and retry through the handle-release window - and keep csc's
@@ -186,6 +219,10 @@ if ((Test-Path $handlerDir) -and (Test-Path $svcDir)) {
 #     lose autologon at most once instead of permanently. SYSTEM/HighestAvailable, so it does
 #     not itself need a logged-on user - which is the whole point.
 $alPath = Join-Path $handlerDir 'ensure-autologon.ps1'
+# The guard is load-bearing (the "at most once" guarantee above), so its absence is a deploy
+# failure, not a skipped step: a task pointing at a script that is not there registers fine,
+# does nothing at every boot, and the installer would still record updater_agent='deployed'.
+if (-not (Test-Path $alPath)) { throw "autologon guard script missing at $alPath (qubes-rpc dirs absent or ensure-autologon.ps1 not in payload) - QubesAutologonGuard not registered" }
 $alXml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -207,6 +244,10 @@ $fa = Join-Path $env:TEMP 'qubes-autologon-guard.xml'
 [IO.File]::WriteAllText($fa, $alXml, [Text.Encoding]::Unicode)
 $o = & schtasks /create /tn QubesAutologonGuard /xml "$fa" /f 2>&1
 Log ("REGISTER QubesAutologonGuard rc=$LASTEXITCODE : " + ($o -join ' '))
+# Checked like the three sibling registrations: an unregistered guard otherwise surfaced as one
+# rc= line nobody parses while the install reported 'deployed', and the first cumulative update
+# that rewrote Winlogon left the qube at a sign-in screen for good (rc=117 over qrexec).
+if ($LASTEXITCODE -ne 0) { throw "schtasks register (autologon guard) failed (rc=$LASTEXITCODE)" }
 
 # Assert it once now, so a guest that is ALREADY one update away from losing autologon is fixed
 # before that update rather than after it.
@@ -244,6 +285,8 @@ $fd = Join-Path $env:TEMP 'qubes-wu-dl.xml'
 $o = & schtasks /create /tn QubesWindowsUpdateDownload /xml "$fd" /f 2>&1
 Log ("REGISTER QubesWindowsUpdateDownload rc=$LASTEXITCODE : " + ($o -join ' '))
 if ($LASTEXITCODE -ne 0) { throw "schtasks register (download task) failed (rc=$LASTEXITCODE)" }
+# Relay/proxy/task mutations end here - hand the updater back its mutex (steps 8-9 touch neither).
+if ($haveUpdMutex) { try { $updMutex.ReleaseMutex() } catch { }; $haveUpdMutex = $false }
 
 # 8. The updater workdir, pre-created ON PURPOSE - do not delete it.
 #

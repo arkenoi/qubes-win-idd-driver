@@ -131,6 +131,22 @@ set "ARG=%~1"
 if /i "!ARG:~0,11!"=="/autologon:" (
   REM  substring compare, not echo|findstr: a password containing & | > must not break parsing
   set "ALPW=!ARG:*:=!"
+  REM  Quotes cannot be carried: the password rides inside a cmd-quoted argv token here and inside a
+  REM  single-quoted PowerShell string on the UAC relaunch. A double quote in it closes the token
+  REM  early, so -AutologonPassword binds the prefix plus a stray positional -> binding error, exit 1;
+  REM  a single quote closes the relaunch -Command string before RunAs -> parse error, exit 1. Either
+  REM  way autologon was NOT armed, the guest could come back at a sign-in screen, and nothing named
+  REM  the password as the cause. Refuse it here, before the relaunch, with the cause named.
+  REM  Strip-and-compare via delayed expansion, so the quote never re-enters the parser.
+  set "ALQ="
+  if defined ALPW set ALQ=!ALPW:"=!
+  if defined ALQ set ALQ=!ALQ:'=!
+  if not "!ALQ!"=="!ALPW!" (
+    echo ERROR: the /autologon: password contains a double or single quote, which this
+    echo        installer cannot pass through cmd and PowerShell intact. Change the password,
+    echo        or omit /autologon: and type it at the installer's prompt instead.
+    exit /b 87
+  )
   set "PSARGS=!PSARGS! -AutologonPassword "!ALPW!""
   shift & goto parse
 )
@@ -147,8 +163,21 @@ REM our hardware - which is exactly how the %~f0 defect shipped in three release
 REM twice from the field. With QWT_ELEVATE_DRYRUN=1 the probe is skipped and the relaunch is PRINTED
 REM instead of run, so the row can be asserted on a UAC-off guest. Inert unless that variable is set.
 if defined QWT_ELEVATE_DRYRUN goto notelevated
-net session >nul 2>&1
+REM fltmc, not `net session`: `net session` needs the Server service (LanmanServer). On an image with
+REM it disabled it fails (errorlevel 2) in an ELEVATED console too, so the script relaunched itself
+REM through RunAs, the child failed the same probe and relaunched again - with UAC off an unbounded
+REM chain of cmd windows each -Wait'ing on the next, and no exit code ever reaching the caller.
+REM fltmc needs only admin rights (Filter Manager is a boot-start driver) and works as SYSTEM too.
+fltmc >nul 2>&1
 if not errorlevel 1 goto elevated
+REM Recursion guard: at most ONE relaunch. If the elevated child STILL fails the probe, do not hop
+REM again - fall through and let Install-QwtImproved.ps1's Assert-Elevated fail cleanly (exit 1,
+REM named cause) instead of looping. QWT_ELEVATE_CHILD is set for the child below.
+if defined QWT_ELEVATE_CHILD (
+  echo WARNING: already relaunched once and the elevation probe still fails - not relaunching
+  echo          again; the installer will refuse on its own if it is really not elevated.
+  goto elevated
+)
 :notelevated
 echo Not elevated - requesting administrator rights...
 REM -Wait -PassThru and propagate the child's code: this used to `exit /b 0` unconditionally, so a
@@ -160,6 +189,8 @@ if defined QWT_ELEVATE_DRYRUN (
   echo ELEVATE-ARGS=[%RAWARGS%]
   exit /b 0
 )
+REM Mark the child so it cannot relaunch a third copy (see the guard above the :notelevated label).
+set "QWT_ELEVATE_CHILD=1"
 if defined RAWARGS (
   powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Start-Process -FilePath '%SELF%' -ArgumentList '%RAWARGS%' -Verb RunAs -Wait -PassThru; exit $p.ExitCode"
 ) else (
@@ -195,7 +226,9 @@ set RC=%errorlevel%
 echo.
 if %RC%==0  echo Done. Reboot if the script asked you to.
 if %RC%==10 echo Stage complete - REBOOT NOW, then run install.cmd again.
-if %RC% GTR 10 echo FAILED with %RC% - see C:\qwt-improved-install.log
+REM NEQ, not GTR 10: every Fail/catch in Install-QwtImproved.ps1 exits 1, which the old `GTR 10`
+REM never matched - a failed install ended in a blank line and `pause` with no verdict at all.
+if %RC% NEQ 0 if %RC% NEQ 10 echo FAILED with %RC% - see C:\qwt-improved-install.log
 REM Keep the window open so a double-click user can read the outcome. With /auto the
 REM machine is rebooting on a timer, so pausing there would be actively unhelpful.
 if not defined AUTO pause

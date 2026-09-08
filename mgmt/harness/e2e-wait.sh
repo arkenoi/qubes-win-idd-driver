@@ -103,7 +103,11 @@ w_usersession(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
       $log "  $lbl: DEADLINE ${dl}s - qrexec answers (SYSTEM pre-session channel) but the interactive user session never came up (screen=$(w_screen "$vm" "$lbl-usr-dl" "$dir")); autologon broken or not settled - every pushrun-based step would return NOTHING"
       return 2
     fi
-    if QTEST_VM=$vm timeout -k 5 60 ./tools/qtest run 'cmd /c tasklist /fi "imagename eq explorer.exe" /nh' 2>/dev/null | grep -qai 'explorer\.exe'; then
+    # Use the SELF-MATCH-SAFE probe (defined below; this file is sourced whole, so it resolves at
+    # call time). The inline grep it replaces matched the echoed prompt line carrying the command
+    # text itself, so signal (a) read true on a shell-less guest every poll, the "no explorer.exe"
+    # branch was unreachable, and the deadline blamed Filecopy for what was a missing shell.
+    if _shell_probe_explorer "$vm"; then
       out=$(QTEST_VM=$vm timeout -k 8 150 ./tools/qtest pushrun "$probe" 2>/dev/null | tr -d '\r')
       if grep -qa 'USERSESSION-MARKER-OK' <<<"$out"; then
         $log "  $lbl: user session up at t+${now}s (explorer running, marker pushrun round-tripped)"

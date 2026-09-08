@@ -78,6 +78,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/e2e-wait.sh"
 # the only copy of the 2026-08-28 matrix evidence came within a GC of being lost, and why the cell
 # logs now live in evidence/2026-08-29-fresh-cell-contamination/. Default somewhere durable and let
 # a caller override; never write a run's only record to a path that disappears with the session.
+# HERE was USED (the fallback agent-hash check, and now the boot-to-qrexec probe) but never
+# DEFINED. Under `set -u` the reference aborts the surrounding $(...) subshell, so `fhash` came
+# back empty and the fallback hash check silently degraded into its "could not hash" branch - a
+# verification step that could never actually verify. Found 2026-09-08 while instrumenting boots.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 M="${MATRIX_OUT:-$HOME/qwt-matrix/$(date -u +%Y%m%d-%H%M%S)}"; mkdir -p "$M"
 R=$M/matrix.log; : > "$R"
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a "$R"; }
@@ -95,7 +100,30 @@ no(){ FAIL=$((FAIL+1)); case "$*" in *INVALID*) INVALID=$((INVALID+1)) ;; esac; 
 # qvm-start BLOCKS until qrexec connects (up to qrexec_timeout). On a guest that never boots
 # that is dead silence for the whole timeout - measured today: 15 minutes of a harness that
 # looked hung was simply sitting inside qvm-start. Fire it and poll the state ourselves.
-start_vm(){ timeout -k 10 150 qvm-start "$1" >/dev/null 2>&1 & disown; sleep 8; }
+start_vm(){
+  # BOOT-TO-QREXEC IS MEASURED HERE, at the one choke point every cold boot in this matrix goes
+  # through. It is the number that actually matters for "how long until dom0 can talk to this
+  # qube", and until now nothing recorded it: the cells logged "desktop shell up at t+16s", which
+  # is a DIFFERENT quantity (autologon + profile + explorer) and says nothing about the control
+  # channel. Measured out-of-band in the background so it cannot perturb what it measures and
+  # cannot delay the caller - the caller's own w_session wait is untouched.
+  local vm="$1" t0; t0=$(date +%s)
+  timeout -k 10 150 qvm-start "$vm" >/dev/null 2>&1 & disown
+  (
+    for i in $(seq 1 150); do          # 150 x 4s = 10 min ceiling, then give up and SAY so
+      sleep 4
+      if QTEST_VM="$vm" timeout -k 5 20 "$HERE/tools/qtest" run 'cmd /c echo QREADY' 2>/dev/null \
+           | grep -qa QREADY; then
+        printf '%s\t%s\t%s\n' "$vm" "$(( $(date +%s) - t0 ))" "answered" >> "$M/boot-to-qrexec.tsv"
+        exit 0
+      fi
+    done
+    # NEVER record a missing measurement as a number. A boot that did not reach qrexec inside the
+    # ceiling is recorded as such, so an absent guest cannot masquerade as a fast one.
+    printf '%s\t%s\t%s\n' "$vm" "-" "no-qrexec-within-600s" >> "$M/boot-to-qrexec.tsv"
+  ) & disown
+  sleep 8
+}
 
 GLOG='C:\qwt-improved-install.log'
 INC='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'

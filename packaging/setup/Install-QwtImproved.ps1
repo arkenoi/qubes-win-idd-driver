@@ -152,6 +152,20 @@ $script:Result  = [ordered]@{
     error        = $null
     detail       = [ordered]@{}
 }
+# Whether -AutologonPassword was given on THIS command line. Read here, at script scope, because
+# inside a function $PSBoundParameters is that function's own, and because an unbound [string]
+# parameter is '' - not $null - so the value alone cannot tell "passed empty" from "not passed"
+# (the stage-1 prompt was gated on $null and therefore never ran; an unattended run silently
+# tried '' labelled 'parameter').
+$script:AutologonPasswordBound = $PSBoundParameters.ContainsKey('AutologonPassword')
+$script:AutologonArmFailed = $null
+# Binaries the leftover sweep moved aside for the MSI, and whether that MSI then completed.
+# A Fail between the two restores them - see Restore-SweptBinaries.
+$script:SweptAside = @()
+$script:MsiInstallCompleted = $false
+$script:AutoRuns = 0
+$script:GuiQuiesced = $false
+$script:GuiQuiesceHeld = $false
 
 function Write-Log {
     param([string]$Message, [string]$Level = 'INFO')
@@ -174,6 +188,16 @@ function Fail {
     Write-Log $Message 'FATAL'
     $script:Result.ok = $false
     $script:Result.error = $Message
+    # A Fail is a TERMINAL state, so it must leave nothing armed to run again and nothing half
+    # torn down. Best-effort each, never masking the original failure:
+    #  - the -Auto resume task: left armed it would re-run the failed install on every boot;
+    #  - the -Auto run counter: this cycle is over, a deliberate retry starts fresh;
+    #  - the old gui binaries the sweep moved aside: if msiexec never completed, the OLD product is
+    #    still registered but its gui-agent.exe/gui-watchdog.exe were gone - a guest with qrexec and
+    #    no GUI at all, and nothing said so. Put them back and restart the watchdog.
+    try { Clear-BootResume } catch { }
+    try { Reset-AutoRunCounter } catch { }
+    try { Restore-SweptBinaries } catch { }
     Emit-Result 1
 }
 
@@ -276,7 +300,11 @@ function Start-XenbusPromptSuppressor {
     $job = $null
     try {
     $job = Start-Job -ScriptBlock {
-        for ($i = 0; $i -lt 1800; $i++) {
+        # UNBOUNDED: it runs until Stop-XenbusPromptSuppressor stops it. It used to be 1800 ticks,
+        # and an msiexec has been measured hanging 27.9 min inside this window - a tail past 30 min
+        # would have run with the guard silently gone, the MSI's freshly re-registered monitor up,
+        # and xenvbd's Request key waiting for it: the mid-install restart this loop exists to stop.
+        while ($true) {
             & sc.exe config xenbus_monitor start= disabled *>$null
             $svc = Get-Service xenbus_monitor -ErrorAction SilentlyContinue
             if ($svc -and $svc.Status -ne 'Stopped') { & sc.exe stop xenbus_monitor *>$null }
@@ -313,14 +341,27 @@ function Stop-XenbusPromptSuppressor {
     param($Job)
     if (-not $Job) { return }
     try {
+        # Record whether the guard was still up when asked to stop. A job that ended on its own
+        # (crashed, or was killed) left part of the msiexec window uncovered, and until now that
+        # lapse was invisible: this function only ever said "stopped".
+        $state = "$($Job.State)"
+        if ($state -ne 'Running') {
+            Write-Log "xenbus reboot-prompt suppressor was NOT running when stopped (state $state) - part of the install window ran without the guard" 'WARN'
+            $script:Result.detail.xenbus_suppressor_lapsed = $state
+        }
         Stop-Job $Job -ErrorAction SilentlyContinue
         Remove-Job $Job -Force -ErrorAction SilentlyContinue
-        Write-Log 'xenbus reboot-prompt suppressor stopped'
+        Write-Log "xenbus reboot-prompt suppressor stopped (was $state)"
     } catch { }
 }
 
 function Disable-XenbusMonitor {
-    param([string]$Why = '')
+    # -FatalIfSurvives: the call sites that are about to run msiexec pass it. A monitor process
+    # that outlives the kill answers the reboot request the PV driver install files and restarts
+    # the guest mid-MSI (Automatic Repair / headless, reproduced 5/5 - see below). Continuing
+    # past a survivor into msiexec on a WARN was doing exactly that with a log line attached; an
+    # install can be retried, a bricked guest cannot.
+    param([string]$Why = '', [switch]$FatalIfSurvives)
     # The xenbus_monitor service (xenbus/src/monitor/monitor.c PromptForReboot) pops a modal
     # Yes/No - "... needs to restart the system to complete installation" - whenever a PV
     # driver install wants a reboot. It hangs an unattended install, and on a seamless guest
@@ -375,7 +416,10 @@ function Disable-XenbusMonitor {
         & sc.exe config xenbus_monitor start= disabled 2>&1 | Out-Null
         if ($svc.Status -ne 'Stopped') {
             & sc.exe stop xenbus_monitor 2>&1 | Out-Null
-            Start-Sleep -Milliseconds 500
+            # Wait on the SCM state rather than 500 ms: the timing decided whether the process kill
+            # below saw a stopping service or a stopped one, and neither outcome was recorded.
+            try { $svc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(10)) }
+            catch { Write-Log "xenbus_monitor service did not reach Stopped within 10 s - killing the process regardless" 'WARN' }
         }
     }
     # KILL THE PROCESS UNCONDITIONALLY - this is what actually bricks guests.
@@ -397,16 +441,34 @@ function Disable-XenbusMonitor {
     foreach ($p in @(Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue)) {
         $killed += "$($p.Name)($($p.Id))"
         try { $p | Stop-Process -Force -ErrorAction Stop } catch { Write-Log "could not kill $($p.Name) ($($p.Id)): $($_.Exception.Message)" 'WARN' }
+        # Wait on the handle we already hold. The 300 ms re-enumeration that replaced this was a coin
+        # toss: a process mid-exit at 300 ms read as a survivor, one gone at 301 ms as clean.
+        try { [void]$p.WaitForExit(5000) } catch { }
     }
     if ($killed.Count) { Write-Log "killed running monitor process(es): $($killed -join ', ')" }
     # And VERIFY, because a survivor here is the difference between an install and a brick.
-    Start-Sleep -Milliseconds 300
     $alive = @(Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue)
     if ($alive.Count) {
-        Write-Log ("xenbus_monitor STILL RUNNING after the kill: " +
-                   (($alive | ForEach-Object { "$($_.Name)($($_.Id))" }) -join ', ') +
-                   ' - it can restart the guest during the install') 'WARN'
+        # Second attempt with the hammer that also takes the process tree, then WAIT on the handles
+        # instead of re-enumerating after a fixed sleep - Stop-Process returning is not the process
+        # being gone.
+        foreach ($p in $alive) {
+            try { & taskkill.exe /F /T /PID $p.Id *>$null } catch { }
+            try { [void]$p.WaitForExit(5000) } catch { }
+        }
+        $alive = @(Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue)
+    }
+    if ($alive.Count) {
+        $who = (($alive | ForEach-Object { "$($_.Name)($($_.Id))" }) -join ', ')
         $script:Result.detail.xenbus_monitor_survivors = @($alive | ForEach-Object { $_.Id })
+        if ($FatalIfSurvives) {
+            Fail ("xenbus_monitor STILL RUNNING after two kill attempts: $who - REFUSING to start " +
+                  'msiexec under it. That process answers the reboot request the PV driver install ' +
+                  'files and restarts the guest mid-install (Automatic Repair / headless, reproduced ' +
+                  "5/5). Stop it and re-run. [$Why]")
+        }
+        Write-Log ("xenbus_monitor STILL RUNNING after the kill: $who" +
+                   ' - it can restart the guest during the install') 'WARN'
     }
     $state = if ($svc) { "was $($svc.StartType)/$($svc.Status)" } else { 'service not present yet' }
     $reason = if ($Why) { " [$Why]" } else { '' }
@@ -433,9 +495,18 @@ function Set-BootResume {
     # Same native-stderr trap as Clear-BootResume: schtasks can warn on stderr (e.g.
     # overwriting an existing task with /F) and that would terminate under
     # ErrorActionPreference='Stop'. Judge the EXIT CODE, never the stream.
+    # $LASTEXITCODE is cleared FIRST: when the stderr record throws, PS 5.1 has not yet assigned the
+    # exit code, so the catch left the PREVIOUS native command's 0 (bcdedit's, here) in place and a
+    # failed /Create passed as armed - the -Auto path then rebooted with nothing to run stage 2.
+    # $null reads as failure below.
+    $global:LASTEXITCODE = $null
     try { & schtasks.exe /Create /TN $script:TaskName /SC ONSTART /DELAY 0001:00 `
                    /RU SYSTEM /RL HIGHEST /F /TR $cmd *>&1 | Out-Null } catch { }
-    if ($LASTEXITCODE -ne 0) { Fail "schtasks /Create failed ($LASTEXITCODE) - cannot arm the post-reboot resume" }
+    if ($LASTEXITCODE -ne 0) { Fail "schtasks /Create failed (rc '$LASTEXITCODE') - cannot arm the post-reboot resume" }
+    # And PROVE the task exists - the reboot that follows depends on nothing else.
+    $global:LASTEXITCODE = $null
+    try { & schtasks.exe /Query /TN $script:TaskName *>&1 | Out-Null } catch { }
+    if ($LASTEXITCODE -ne 0) { Fail "schtasks /Create reported success but '$script:TaskName' does not exist (query rc '$LASTEXITCODE') - cannot arm the post-reboot resume" }
     Write-Log "boot resume armed as SYSTEM task '$script:TaskName': $cmd"
 }
 
@@ -475,6 +546,10 @@ function Set-QubesServiceRecovery {
     # with the counter reset daily. FAILURE_ACTIONS_FLAG=1 is what makes the actions apply when
     # the service exits with an error rather than only when it crashes - without it a failed
     # START is still not retried, which is exactly the case that bit us.
+    # Outcome per service goes into Result.detail as well as the log: a WARN in the text log alone
+    # let a guest ship with the stock no-recovery configuration under ok:true, graded by the harness
+    # identically to a correctly armed one.
+    $recov = [ordered]@{}
     foreach ($svc in 'QdbDaemon', 'QrexecAgent') {
         try {
             & sc.exe failure $svc reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
@@ -483,15 +558,19 @@ function Set-QubesServiceRecovery {
             $rc2 = $LASTEXITCODE
             if ($rc1 -eq 0 -and $rc2 -eq 0) {
                 Write-Log "service recovery armed for $svc (restart 5s/15s/60s, flag on)"
+                $recov[$svc] = 'armed'
             } else {
                 # Not fatal: the install is still good, the guest just keeps the old
                 # no-recovery behaviour. Say so at WARN rather than failing the install.
                 Write-Log "could not arm service recovery for ${svc}: sc failure=$rc1 failureflag=$rc2" 'WARN'
+                $recov[$svc] = "failed: sc failure=$rc1 failureflag=$rc2"
             }
         } catch {
             Write-Log "could not arm service recovery for ${svc}: $_" 'WARN'
+            $recov[$svc] = "error: $($_.Exception.Message)"
         }
     }
+    $script:Result.detail.service_recovery = $recov
 }
 
 function Set-GuiAgentRegistryDefaults {
@@ -595,29 +674,51 @@ function Get-InstalledQwt {
     return $found
 }
 
-function Stop-QwtRuntime {
-    # Graceful first: the agent owns Global\QGA_SHUTDOWN and exits cleanly on it, which
-    # lets it drop the framebuffer grants instead of leaving them held by a killed process.
-    # Then the service (the watchdog respawns gui-agent.exe, so it has to go before the
-    # process), then the hammer.
+function Request-GuiAgentExit {
+    # Graceful exit of gui-agent.exe: take the process handles FIRST, then signal Global\QGA_SHUTDOWN
+    # (a fatal exit request the agent honours by dropping its framebuffer grants), then WAIT ON THE
+    # HANDLES - a fixed 5 s sleep was both too long for the sub-second normal exit and unable to
+    # say whether the agent had actually gone. Returns the processes still alive afterwards.
+    # CALL ONLY AFTER THE WATCHDOG SERVICE IS STOPPED: gui-watchdog.exe holds the agent's handle and
+    # relaunches it the instant it exits (watchdog.c WatchdogThread, backoff only on quick deaths),
+    # so signalled under a live watchdog the graceful exit produced a fresh agent - which then
+    # re-granted the framebuffer and was the one force-killed, grants held. The opposite of the point.
+    param([int]$WaitMs = 5000)
+    $agents = @(Get-Process -Name 'gui-agent' -ErrorAction SilentlyContinue)
+    if ($agents.Count -eq 0) { return @() }
     try {
         $ev = [System.Threading.EventWaitHandle]::OpenExisting('Global\QGA_SHUTDOWN')
         [void]$ev.Set()
         $ev.Close()
-        Write-Log 'signalled Global\QGA_SHUTDOWN - waiting 5 s for a graceful agent exit'
-        Start-Sleep -Seconds 5
+        Write-Log "signalled Global\QGA_SHUTDOWN - waiting up to $WaitMs ms for $($agents.Count) gui-agent.exe to exit"
     } catch {
-        Write-Log 'Global\QGA_SHUTDOWN not open (no running agent, or no access) - continuing'
+        Write-Log 'Global\QGA_SHUTDOWN not open (agent not listening, or no access) - no graceful exit possible'
+        return $agents
     }
+    $left = @()
+    foreach ($a in $agents) {
+        $gone = $false
+        try { $gone = $a.WaitForExit($WaitMs) } catch { $gone = $false }
+        if ($gone) { Write-Log "  gui-agent.exe (pid $($a.Id)) exited gracefully" }
+        else { Write-Log "  gui-agent.exe (pid $($a.Id)) did NOT exit within $WaitMs ms of QGA_SHUTDOWN" 'WARN'; $left += $a }
+    }
+    return $left
+}
 
+function Stop-QwtRuntime {
+    # ORDER: the watchdog SERVICE first, then the graceful agent exit, then the hammer on survivors.
+    # The service stop is synchronous (STOPPED is reported only once the respawn loop has exited),
+    # so after it nothing relaunches the agent and QGA_SHUTDOWN can do what it is for - the agent
+    # drops the framebuffer grants itself instead of leaving them held by a killed process. The old
+    # order (signal, sleep 5 s, then stop the service) had the watchdog respawn the agent within a
+    # second of its graceful exit and force-killed the respawn.
     $s = Get-Service -Name $script:GuiWatchdogSvc -ErrorAction SilentlyContinue
     if ($s) {
         try { Stop-Service -Name $script:GuiWatchdogSvc -Force -ErrorAction SilentlyContinue } catch { }
-        for ($i = 0; $i -lt 20; $i++) {
-            $s = Get-Service -Name $script:GuiWatchdogSvc -ErrorAction SilentlyContinue
-            if (-not $s -or $s.Status -eq 'Stopped') { break }
-            Start-Sleep -Seconds 1
-        }
+        # Wait on the SCM state, not a 1 s poll: the terminal state is what the next step depends on.
+        try { $s.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(20)) }
+        catch { Write-Log "service $script:GuiWatchdogSvc did not reach Stopped within 20 s ($($_.Exception.Message))" 'WARN' }
+        $s = Get-Service -Name $script:GuiWatchdogSvc -ErrorAction SilentlyContinue
         $state = 'absent'
         if ($s) { $state = [string]$s.Status }
         Write-Log "service $script:GuiWatchdogSvc is $state"
@@ -625,14 +726,23 @@ function Stop-QwtRuntime {
         Write-Log "service $script:GuiWatchdogSvc not installed"
     }
 
+    [void](Request-GuiAgentExit -WaitMs 5000)
+
+    # Survivors: a watchdog process outside SCM control, or an agent that ignored QGA_SHUTDOWN.
+    # Kill and WAIT ON EACH HANDLE - Stop-Process returns before the image is torn down, and the
+    # leftover sweep that follows renames these very files; a fixed 2 s was the only ordering.
     foreach ($proc in 'gui-agent', 'gui-watchdog') {
         $ps = @(Get-Process -Name $proc -ErrorAction SilentlyContinue)
         if ($ps.Count -gt 0) {
             Write-Log "force-terminating $($ps.Count) x $proc.exe"
-            $ps | Stop-Process -Force -ErrorAction SilentlyContinue
+            foreach ($pr in $ps) {
+                try { $pr | Stop-Process -Force -ErrorAction Stop } catch { Write-Log "  could not kill $proc (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
+                $gone = $false
+                try { $gone = $pr.WaitForExit(5000) } catch { $gone = $false }
+                if (-not $gone) { Write-Log "  $proc (pid $($pr.Id)) still not gone 5 s after the kill" 'WARN' }
+            }
         }
     }
-    Start-Sleep -Seconds 2
 }
 
 function Remove-QwtLeftovers {
@@ -640,30 +750,74 @@ function Remove-QwtLeftovers {
     # MEASURED 2026-08-06: `msiexec /x` of the old QWT leaves gui-agent.exe on disk. A file
     # left behind is exactly what the installer's file-versioning rule then refuses to
     # overwrite, so removal here is what makes the reinstall deliver our binary.
+    # MOVED ASIDE, not deleted. This sweep runs BEFORE vc_redist and msiexec on every path,
+    # including the in-place upgrade of a working guest, and every Fail on that stretch (1618,
+    # 1603, the trust-dialog hang) used to leave the OLD product registered with its
+    # gui-agent.exe/gui-watchdog.exe gone - qrexec answering, no GUI, and the FATAL line only said
+    # "msiexec failed with N". Renaming gets the name out of the installer's way just as well
+    # (Windows Installer keys on the file NAME) and is allowed on an open image, so it also covers
+    # the locked case in one motion. Fail restores from the list (Restore-SweptBinaries); a completed
+    # msiexec deletes the aside copies (Remove-SweptAside).
     $deleted = @(); $stuck = @(); $absent = @()
     foreach ($f in $Files) {
         $p = Join-Path $BinDir $f
         if (-not (Test-Path -LiteralPath $p)) { $absent += $f; continue }
+        $side = "$p.qwt-prev"
+        $moved = $false
         for ($i = 1; $i -le 5; $i++) {
-            try { Remove-Item -LiteralPath $p -Force -ErrorAction Stop; break }
-            catch { Start-Sleep -Seconds 2 }
+            try {
+                if (Test-Path -LiteralPath $side) { Remove-Item -LiteralPath $side -Force -ErrorAction Stop }
+                Rename-Item -LiteralPath $p -NewName (Split-Path -Leaf $side) -Force -ErrorAction Stop
+                $moved = $true; break
+            } catch { Start-Sleep -Seconds 2 }
         }
-        if (Test-Path -LiteralPath $p) {
-            # Still locked (a process we could not kill holds the image). Renaming an open
-            # image file IS allowed on Windows and gets the name out of the installer's way.
-            $side = "$p.replaced-{0}" -f (Get-Date -Format 'yyyyMMddHHmmss')
-            try { Rename-Item -LiteralPath $p -NewName (Split-Path -Leaf $side) -Force -ErrorAction Stop
-                  Write-Log "could not delete $f - renamed it to $(Split-Path -Leaf $side)" 'WARN'
-                  $deleted += "$f (renamed)" }
-            catch { Write-Log "could not delete OR rename $f - the install may not replace it" 'WARN'
-                    $stuck += $f }
-        } else {
+        if ($moved) {
+            $script:SweptAside += [pscustomobject]@{ Path = $p; Aside = $side }
             $deleted += $f
+        } else {
+            Write-Log "could not move $f aside - the install may not replace it" 'WARN'
+            $stuck += $f
         }
     }
-    Write-Log ("leftover sweep in {0}: removed [{1}] absent [{2}] stuck [{3}]" -f `
+    Write-Log ("leftover sweep in {0}: moved aside [{1}] absent [{2}] stuck [{3}]" -f `
         $BinDir, ($deleted -join ' '), ($absent -join ' '), ($stuck -join ' '))
     return [ordered]@{ removed = $deleted; absent = $absent; stuck = $stuck }
+}
+
+function Restore-SweptBinaries {
+    # Called from Fail. Only meaningful while the MSI has NOT completed: after that the new product
+    # owns the files and the aside copies are just leftovers (Remove-SweptAside removes them).
+    if ($script:MsiInstallCompleted -or $script:SweptAside.Count -eq 0) { return }
+    $back = @(); $lost = @()
+    foreach ($e in $script:SweptAside) {
+        try {
+            if ((Test-Path -LiteralPath $e.Aside) -and -not (Test-Path -LiteralPath $e.Path)) {
+                Move-Item -LiteralPath $e.Aside -Destination $e.Path -Force -ErrorAction Stop
+                $back += (Split-Path -Leaf $e.Path)
+            }
+        } catch { $lost += "$(Split-Path -Leaf $e.Path): $($_.Exception.Message)" }
+    }
+    $script:SweptAside = @()
+    $script:Result.detail.swept_binaries_restored = $back
+    if ($lost.Count) { $script:Result.detail.swept_binaries_lost = $lost }
+    if ($back.Count) {
+        Write-Log ("msiexec did not complete - the previous gui binaries were put back: " + ($back -join ' ')) 'WARN'
+        try {
+            if (Get-Service -Name $script:GuiWatchdogSvc -ErrorAction SilentlyContinue) {
+                Start-Service -Name $script:GuiWatchdogSvc -ErrorAction Stop
+                Write-Log "restarted $script:GuiWatchdogSvc on the restored binaries"
+            }
+        } catch { Write-Log "could not restart $($script:GuiWatchdogSvc): $($_.Exception.Message)" 'WARN' }
+    }
+    if ($lost.Count) { Write-Log ("previous gui binaries NOT restored: " + ($lost -join '; ')) 'ERROR' }
+}
+
+function Remove-SweptAside {
+    foreach ($e in $script:SweptAside) {
+        try { if (Test-Path -LiteralPath $e.Aside) { Remove-Item -LiteralPath $e.Aside -Force -ErrorAction Stop } }
+        catch { Write-Log "could not remove $($e.Aside): $($_.Exception.Message) (harmless leftover)" 'WARN' }
+    }
+    $script:SweptAside = @()
 }
 
 function Get-InstalledPvDiskDriverVersion {
@@ -723,17 +877,23 @@ function Test-BootDiskOnPvPath {
     # HONESTY: this detection has NOT been validated against a live reproduction - that
     # needs stock QWT with the PV disk active on a test guest, which has not been run yet.
     # It is a conservative gate on a plausible-and-reported failure mode, not a proven
-    # check. Defensive on purpose: any probe error returns $false with a warning, because
-    # a broken probe must never block an install.
+    # check.
+    # TRI-STATE: $true / $false / $null = UNKNOWN. A probe error used to return $false, and $false
+    # is the one value that lets the uninstall-first branch remove the PV disk driver - so a Storage
+    # provider not answering 60 s into a boot-resume run (or any transient) would have unlocked the
+    # 0x7B path on a PV-booted guest and the domain is destroyed at the bugcheck. Only an explicit
+    # "not SCSI" / "xenvbd not boot-start" is $false; the in-place paths never consult the gate, so
+    # UNKNOWN blocks nothing but the operation the gate exists for.
     try {
         $disk = Get-Partition -DriveLetter C -ErrorAction Stop | Get-Disk -ErrorAction Stop
         if (-not $disk -or [string]$disk.BusType -ne 'SCSI') { return $false }
         $svc = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\xenvbd' `
-                                -ErrorAction Stop
+                                -ErrorAction SilentlyContinue
+        if (-not $svc) { return $false }   # no xenvbd service at all: not on the PV path
         return ($svc.PSObject.Properties.Name -contains 'Start' -and $svc.Start -eq 0)
     } catch {
-        Write-Log "PV boot-disk probe failed ($($_.Exception.Message)) - assuming NOT on the PV path" 'WARN'
-        return $false
+        Write-Log "PV boot-disk probe failed ($($_.Exception.Message)) - result UNKNOWN (treated as 'may be on the PV path' where it matters)" 'WARN'
+        return $null
     }
 }
 
@@ -796,18 +956,68 @@ $script:StageFlagFile = 'C:\qwt-improved-stage1.json'
 $script:CarriedFlags  = @('NoIddDriver','NoPvNetwork','NoPvDisk','NoMoveUsers',
                           'AcceptPvDiskUpgrade','NoAppTweaks','NoUpdaterAgent','RebootAtEnd')
 
+function Get-StageFlagRecord {
+    # The flag file as a hashtable, or an empty one. Shared by the switch carry and the -Auto run
+    # counter so neither overwrites the other's keys.
+    $rec = @{}
+    if (-not (Test-Path -LiteralPath $script:StageFlagFile)) { return $rec }
+    try {
+        $saved = Get-Content -LiteralPath $script:StageFlagFile -Raw | ConvertFrom-Json
+        foreach ($p in @($saved.PSObject.Properties)) { $rec[$p.Name] = $p.Value }
+    } catch { }
+    return $rec
+}
+
+function Step-AutoRunCounter {
+    # -AUTO RUNS ARE COUNTED, so an unattended cycle that never reaches a terminal state is
+    # caught instead of repeating for the life of the guest. Two loop shapes were possible with
+    # nothing counting: stage 1 re-detected on every boot when testsigning never became active
+    # (bcdedit wrote an entry the boot manager did not boot) - re-arm, reboot, forever; and a
+    # stage 2 cut short on every boot (a survivor rebooting the guest mid-MSI) re-run by the still
+    # armed task, forever. The counter lives in the stage-flag file, which already crosses the
+    # reboot; Fail resets it (a Fail IS terminal) and the success tail deletes the file.
+    $rec = Get-StageFlagRecord
+    $n = 0
+    if ($rec.ContainsKey('auto_runs')) { try { $n = [int]$rec['auto_runs'] } catch { $n = 0 } }
+    $n++
+    $rec['auto_runs'] = $n
+    try { ($rec | ConvertTo-Json -Compress) | Set-Content -LiteralPath $script:StageFlagFile -Encoding ASCII }
+    catch { Write-Log "could not record the -Auto run count ($($_.Exception.Message))" 'WARN' }
+    $script:AutoRuns = $n
+    Write-Log "-Auto run $n of this install cycle"
+    return $n
+}
+
+function Reset-AutoRunCounter {
+    $rec = Get-StageFlagRecord
+    if (-not $rec.ContainsKey('auto_runs')) { return }
+    $rec.Remove('auto_runs')
+    try { ($rec | ConvertTo-Json -Compress) | Set-Content -LiteralPath $script:StageFlagFile -Encoding ASCII } catch { }
+}
+
 function Save-StageFlags {
     $set = @{}
     foreach ($n in $script:CarriedFlags) {
         $v = Get-Variable -Name $n -Scope Script -ValueOnly -EA SilentlyContinue
         if ($v) { $set[$n] = $true }
     }
+    # Keep the -Auto run counter the file may already carry - this write used to replace the file.
+    $prev = Get-StageFlagRecord
+    if ($prev.ContainsKey('auto_runs')) { $set['auto_runs'] = $prev['auto_runs'] }
+    # STAMPED with the package the switches were given to. Restore-StageFlags applies them only to
+    # that package: the file used to be removed on stage-2 success alone, so `/nonet /nodisk` given
+    # to package A that then hit the PV refusal was restored weeks later into a bare run of package B
+    # - a guest on emulated NIC and IDE that the user believed was a default install.
+    $set['package_version'] = "$($script:Result.detail.package_version)"
     try {
         ($set | ConvertTo-Json -Compress) | Set-Content -LiteralPath $script:StageFlagFile -Encoding ASCII
-        $names = if ($set.Keys.Count) { ($set.Keys | Sort-Object) -join ' ' } else { '(none)' }
+        $flagNames = @($set.Keys | Where-Object { $_ -notin 'auto_runs', 'package_version' } | Sort-Object)
+        $names = if ($flagNames.Count) { $flagNames -join ' ' } else { '(none)' }
         Write-Log "stage-2 switches recorded in $($script:StageFlagFile): $names"
     } catch {
-        Write-Log "WARNING: could not record stage-2 switches ($($_.Exception.Message)) - a manual stage 2 will use defaults"
+        # WARN, not INFO: on the manual path this is the loss of every switch the user gave (an
+        # /noidd run then activates the IDD), and an INFO line is not how that gets noticed.
+        Write-Log "could not record stage-2 switches ($($_.Exception.Message)) - a manual stage 2 will use DEFAULTS; pass the switches again on the stage-2 command line" 'WARN'
     }
 }
 
@@ -816,6 +1026,25 @@ function Restore-StageFlags {
     if (-not (Test-Path -LiteralPath $script:StageFlagFile)) { return }
     try { $saved = Get-Content -LiteralPath $script:StageFlagFile -Raw | ConvertFrom-Json }
     catch { Write-Log 'stage-1 switch file is unreadable - stage 2 continues with what was passed'; return }
+    # Only a record stamped with THIS package applies (see Save-StageFlags). A record without a
+    # stamp, or stamped with another package, is a leftover from an earlier install cycle: its
+    # switches are dropped from the file (the -Auto run counter it may carry is kept - that belongs
+    # to this cycle) and stage 2 continues with what was passed.
+    $carried = @($script:CarriedFlags | Where-Object { ($saved.PSObject.Properties.Name -contains $_) -and $saved.$_ })
+    if ($carried.Count) {
+        $stamp = ''
+        if ($saved.PSObject.Properties.Name -contains 'package_version') { $stamp = "$($saved.package_version)" }
+        $ours = "$($script:Result.detail.package_version)"
+        if (-not $stamp -or $stamp -ne $ours) {
+            Write-Log ("stale stage-1 switch record ignored: it was written for package '$stamp', this is '$ours' " +
+                       "(switches dropped: " + ($carried -join ' ') + ')') 'WARN'
+            $rec = Get-StageFlagRecord
+            foreach ($n in $script:CarriedFlags) { $rec.Remove($n) }
+            $rec.Remove('package_version')
+            try { ($rec | ConvertTo-Json -Compress) | Set-Content -LiteralPath $script:StageFlagFile -Encoding ASCII } catch { }
+            return
+        }
+    }
     $restored = @()
     foreach ($n in $script:CarriedFlags) {
         if ($Bound.ContainsKey($n)) { continue }        # explicit argument wins over the record
@@ -832,6 +1061,45 @@ function Invoke-Stage1 {
     param([Parameter(Mandatory)][string]$Root)
 
     $script:Result.stage = 'stage1-prepare'
+
+    $self = Join-Path $Root 'Install-QwtImproved.ps1'
+    if ($Auto) {
+        # A SECOND -Auto run that still finds itself in stage 1 is the loop, not a retry: stage 1
+        # ran, enabled testsigning for the next boot, rebooted, and this boot does not have it. The
+        # old code re-ran bcdedit (rc 0 again), re-armed the task and rebooted - identically, on
+        # every boot, with a fresh 'STAGE 1 COMPLETE' block each time and nothing ever reporting it.
+        if ($script:AutoRuns -ge 2) {
+            $diag = @()
+            try { $diag += @(& bcdedit.exe /enum '{current}' 2>&1 | ForEach-Object { "$_" }) } catch { }
+            $sso = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control' -Name SystemStartOptions -ErrorAction SilentlyContinue).SystemStartOptions
+            Fail ("testsigning was enabled for the next boot by the previous -Auto run, but this boot does " +
+                  "not have it (SystemStartOptions='$sso'). bcdedit wrote an entry other than the one the " +
+                  'boot manager booted, or the option was reverted between the write and the boot (Secure ' +
+                  'Boot / policy / a BCD rollback). NOT re-arming: that would reboot forever. (If an earlier ' +
+                  'unattended install was interrupted and never finished, this count is stale - this failure ' +
+                  'resets it, so simply start install.cmd /auto again.) ' +
+                  "bcdedit /enum {current}: " + (($diag | Where-Object { $_.Trim() }) -join ' | '))
+        }
+        # ARM THE RESUME TASK FIRST - before bcdedit, before the autologon prompt, before anything
+        # that takes time. The task used to be armed LAST, after an up-to-120 s password prompt: a
+        # reboot from elsewhere in that window (the xenbus_monitor survivor warned about above, a
+        # dom0 qvm-shutdown, a pending Windows Update restart) came back with testsigning ACTIVE, no
+        # task, and no RESULT - an idle desktop with no QWT that the unattended caller cannot read.
+        # Armed now, the same premature reboot simply re-runs the script, which re-DETECTS its stage
+        # and converges. The switches are carried on the task command line (explicit args win over the
+        # stage-flag record in stage 2). Stage 2 retires the task when it reaches a terminal state.
+        $extra = @()
+        if ($NoIddDriver)      { $extra += '-NoIddDriver' }
+        if ($NoPvNetwork)      { $extra += '-NoPvNetwork' }
+        if ($NoPvDisk)         { $extra += '-NoPvDisk' }
+        if ($NoMoveUsers)      { $extra += '-NoMoveUsers' }
+        if ($AcceptPvDiskUpgrade) { $extra += '-AcceptPvDiskUpgrade' }
+        if ($NoAppTweaks)      { $extra += '-NoAppTweaks' }
+        if ($NoUpdaterAgent)   { $extra += '-NoUpdaterAgent' }
+        if ($RebootAtEnd)      { $extra += '-RebootAtEnd' }
+        $extra += '-Auto'
+        Set-BootResume -ScriptPath $self -ExtraArgs $extra
+    }
 
     # Earliest possible point: a guest that ALREADY has PV drivers can raise the
     # xenbus_monitor reboot prompt during stage 1's uninstall of a previous QWT, long before
@@ -852,15 +1120,46 @@ function Invoke-Stage1 {
     if ($LASTEXITCODE -ne 0) { Fail 'bcdedit /set testsigning on failed (Secure Boot enabled?)' }
     Write-Log 'testsigning enabled for the NEXT boot'
 
-    # AUTOLOGON IS ARMED HERE, IN STAGE 1, AND NOT IN STAGE 2.
-    #
-    # Stage 2 resumes after a reboot from a scheduled task whose arguments are rebuilt from a
-    # fixed list, so anything not in that list is lost - including the password. Carrying it
-    # across would mean writing the user's password into a task command line on disk, which is a
-    # worse exposure than the registry value this whole thing exists to avoid. Stage 1 has the
-    # password in hand, so arm it now: the guest then comes back by itself from the install's OWN
-    # reboot, which is the first moment it needs to.
     # --- autologon: the qube must be able to come back by itself ------------------------
+    # Armed here with the password in hand (never carried across the reboot on the task command
+    # line); stage 2 verifies it, and arms it itself when it is the first stage to run - see
+    # Invoke-AutologonArming.
+    [void](Invoke-AutologonArming -Root $Root)
+    # Nothing is installed yet, so a password that was given and refused stops here, loudly, rather
+    # than rebooting into a sign-in screen and a stage 2 that no longer has the password.
+    if ($script:AutologonArmFailed) { Fail $script:AutologonArmFailed }
+
+    $script:Result.ok = $true
+    $script:Result.reboot_needed = $true
+    $script:Result.detail.next = 'reboot, then stage 2 installs QWT'
+
+    # Record the switches for stage 2 on BOTH paths. -Auto also passes them on the resume task's
+    # command line (belt and braces, and those win because they arrive as explicit arguments);
+    # the manual path has nothing else, and used to silently lose them.
+    Save-StageFlags
+
+    if ($Auto) {
+        # The resume task was armed as the first act of this stage.
+        Write-Log 'STAGE 1 COMPLETE - rebooting in 2 s, installation resumes automatically'
+        Emit-ResultThenReboot 10
+    }
+    Write-Log 'STAGE 1 COMPLETE'
+    Write-Log "Now REBOOT, then run again elevated:  $self"
+    Write-Log 'The switches you gave stage 1 are remembered - running it bare above is correct. Passing a switch again overrides the remembered one.'
+    Emit-Result 10
+}
+
+function Invoke-AutologonArming {
+    # Returns $true when autologon ended up ARMED AND VERIFIED by set-autologon.ps1.
+    #
+    # Called from stage 1 (the normal place: the password is in hand and the guest must come back
+    # from the install's own reboot) AND from stage 2 when its verification finds autologon unarmed.
+    # It used to be stage-1-only, with the reasoning "the password cannot cross the reboot". True
+    # for the task-resumed run - but on a guest that arrives with testsigning already on, or on an
+    # upgrade, stage 2 is the ONLY stage that runs, and `install.cmd /auto /autologon:PW` there
+    # accepted the password, used it for nothing, and reported ok=true with a WARN. A guest whose
+    # account has a password then came back at the sign-in screen: unreachable over qrexec and
+    # blank in seamless mode - the state autologon is enforced to prevent.
     #
     # A Windows guest that stops at the sign-in screen is not merely inconvenient, it is GONE:
     # qrexec service calls have no session to run in, so dom0 cannot run apps in it, update it or
@@ -872,6 +1171,8 @@ function Invoke-Stage1 {
     # then an interactive prompt, then an EMPTY password (which is correct for the many guests
     # that have no password at all - set-autologon.ps1 validates with LogonUser before writing,
     # so a wrong guess is refused rather than stranding the guest). Skipping is always reported.
+    param([Parameter(Mandatory)][string]$Root)
+    $armed = $false
     if ($NoAutologon) {
         Write-Log 'autologon SKIPPED (/noautologon) - if this account needs a password, the qube will'
         Write-Log '  come back at the sign-in screen, unreachable over qrexec and blank in dom0' 'WARN'
@@ -884,8 +1185,12 @@ function Invoke-Stage1 {
                 $cs = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
                 if ($cs) { $alUser = $cs.Split('\')[-1] }
             }
-            $alPass = $AutologonPassword
+            # "Was it passed" is a fact about the command line, not the value: an unbound [string]
+            # parameter is '' and the old `$null -eq` test never saw the difference, so the prompt
+            # below never ran and '' was tried under the label 'parameter'.
+            $alPass = $null
             $alSource = 'parameter'
+            if ($script:AutologonPasswordBound) { $alPass = $AutologonPassword }
             if ($null -eq $alPass) {
                 $canPrompt = $false
                 try { $canPrompt = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected } catch { $canPrompt = $false }
@@ -935,6 +1240,7 @@ function Invoke-Stage1 {
                 foreach ($l in @($alOut | Select-Object -Last 6)) { Write-Log "  $l" }
                 $tr = @($alOut) | Where-Object { $_ -match '=== RESULT === armed=(\d)' } | Select-Object -Last 1
                 if ($tr -match 'armed=1') {
+                    $armed = $true
                     $script:Result.detail.autologon = 'armed'
                     Write-Log 'autologon armed and verified - this qube can come back on its own'
                 } else {
@@ -955,37 +1261,13 @@ function Invoke-Stage1 {
             $script:Result.detail.autologon = 'not in payload'
         }
     }
-
-
-    $script:Result.ok = $true
-    $script:Result.reboot_needed = $true
-    $script:Result.detail.next = 'reboot, then stage 2 installs QWT'
-
-    # Record the switches for stage 2 on BOTH paths. -Auto also passes them on the resume task's
-    # command line (belt and braces, and those win because they arrive as explicit arguments);
-    # the manual path has nothing else, and used to silently lose them.
-    Save-StageFlags
-
-    $self = Join-Path $Root 'Install-QwtImproved.ps1'
-    if ($Auto) {
-        $extra = @()
-        if ($NoIddDriver)      { $extra += '-NoIddDriver' }
-        if ($NoPvNetwork)      { $extra += '-NoPvNetwork' }
-        if ($NoPvDisk)         { $extra += '-NoPvDisk' }
-        if ($NoMoveUsers)      { $extra += '-NoMoveUsers' }
-        if ($AcceptPvDiskUpgrade) { $extra += '-AcceptPvDiskUpgrade' }
-        if ($NoAppTweaks)      { $extra += '-NoAppTweaks' }
-        if ($NoUpdaterAgent)   { $extra += '-NoUpdaterAgent' }
-        if ($RebootAtEnd)      { $extra += '-RebootAtEnd' }
-        $extra += '-Auto'
-        Set-BootResume -ScriptPath $self -ExtraArgs $extra
-        Write-Log 'STAGE 1 COMPLETE - rebooting in 2 s, installation resumes automatically'
-        Emit-ResultThenReboot 10
+    # A password that was PASSED and had no effect is not a WARN: the caller asked for an
+    # unattended guest that comes back by itself and is getting one that may not. Recorded here,
+    # acted on (Fail) by stage 2's tail once everything else is in place.
+    if ($script:AutologonPasswordBound -and -not $NoAutologon -and -not $armed) {
+        $script:AutologonArmFailed = "autologon was requested with -AutologonPassword but could not be armed ($($script:Result.detail.autologon))"
     }
-    Write-Log 'STAGE 1 COMPLETE'
-    Write-Log "Now REBOOT, then run again elevated:  $self"
-    Write-Log 'The switches you gave stage 1 are remembered - running it bare above is correct. Passing a switch again overrides the remembered one.'
-    Emit-Result 10
+    return $armed
 }
 
 function Emit-ResultThenReboot {
@@ -998,18 +1280,119 @@ function Emit-ResultThenReboot {
     # `if ($Auto)`. Nobody is watching a countdown, so a 15 s dialog was pure dead wait between
     # stages. The RESULT is already flushed to the log above, so reboot near-immediately; a 2 s
     # margin just lets this process exit cleanly before the machine goes down.
-    & shutdown.exe /r /t 2 /c 'Qubes Windows Tools setup' | Out-Null
+    # JUDGED, not fired and forgotten. shutdown.exe returns non-zero without rebooting - 1190 (a
+    # shutdown is already scheduled), 1115/5 (denied during a shutdown transition) - and the exit
+    # above then left the unattended flow at 'reboot promised, reboot not coming': RESULT ok=true
+    # reboot_needed=true flushed, the resume task armed for a boot nobody triggers, install.cmd gone.
+    # A failed request is a FAILURE the caller must see. Stderr is captured (a native stderr line is
+    # a terminating error under ErrorActionPreference=Stop) and the exit code is cleared first so a
+    # stale one is never judged (see Set-BootResume).
+    $global:LASTEXITCODE = $null
+    try { & shutdown.exe /r /t 2 /c 'Qubes Windows Tools setup' 2>&1 | Out-Null } catch { }
+    if ($LASTEXITCODE -ne 0) {
+        $msg = ("shutdown.exe /r was REFUSED (rc '$LASTEXITCODE') - the guest is NOT rebooting on its own. " +
+                'Another shutdown may already be scheduled, or the request was denied. The resume task ' +
+                'stays armed: a manual reboot of this qube resumes the install; until then it is stalled.')
+        Write-Log $msg 'FATAL'
+        $script:Result.ok = $false
+        $script:Result.error = $msg
+        $script:Result.detail.shutdown_rc = $LASTEXITCODE
+        # Second RESULT trailer on purpose: a consumer reading the LAST trailer sees the failure.
+        Emit-Result 1
+    }
     exit $ExitCode
 }
 
 # --------------------------------------------------------------------- IDD device lookup
-function Get-IddPnpDevice {
+function Get-IddPnpDevices {
     param([Parameter(Mandatory)][string]$HardwareId)
-    # Win32_PnPEntity rather than Get-PnpDevice: ConfigManagerErrorCode is a first-class
-    # property there, and the bind poll below is exactly a wait for it to reach 0.
-    return (Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
-        Where-Object { $_.HardwareID -and (@($_.HardwareID) -contains $HardwareId) } |
-        Select-Object -First 1)
+    # ALL nodes carrying the hardware id. Win32_PnPEntity rather than Get-PnpDevice:
+    # ConfigManagerErrorCode is a first-class property there, and the bind poll is exactly a
+    # wait for it to reach 0.
+    return @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
+        Where-Object { $_.HardwareID -and (@($_.HardwareID) -contains $HardwareId) })
+}
+
+function Get-IddPnpDevice {
+    param([Parameter(Mandatory)][string]$HardwareId, [string]$InstanceId = '')
+    # With -InstanceId: THAT node, or nothing. Without it, the first node by hardware id - which
+    # is arbitrary when two exist, and two DO exist on a re-run over a broken node whose removal
+    # was deferred to the reboot: the bind wait then watched the old dead node while the new one
+    # was healthy, and the fail branch tore both down. The create path passes the instance id it
+    # created; the reuse path passes the healthy one it found.
+    $all = Get-IddPnpDevices -HardwareId $HardwareId
+    if ($InstanceId) { return ($all | Where-Object { $_.PNPDeviceID -eq $InstanceId } | Select-Object -First 1) }
+    return ($all | Select-Object -First 1)
+}
+
+# ------------------------------------------------------- readiness waits before msiexec
+# The -Auto resume task is ONSTART +60 s: a timer, not a readiness signal. On a slow first boot
+# of a clone the machine is still in post-boot servicing (CBS finishing a pending operation) or
+# Windows Installer is mid-reconfiguration at T+60 s, and msiexec then returns 1618 - which was a
+# Fail, inside a SYSTEM task nobody watches, with the resume task already gone. These two waits
+# turn the timer into the concrete conditions the /DELAY comment names; the delay stays as the
+# floor for Task Scheduler itself.
+function Wait-PnpSettled {
+    param([int]$TimeoutSec = 300)
+    # CMP_WaitNoPendingInstallEvents blocks until PnP has no device installs in flight - exactly
+    # "PnP settled". 0 = WAIT_OBJECT_0, 0x102 = WAIT_TIMEOUT.
+    try {
+        if (-not ('QwtCfgMgr' -as [type])) {
+            Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class QwtCfgMgr {
+    [DllImport("cfgmgr32.dll")] public static extern uint CMP_WaitNoPendingInstallEvents(uint dwTimeout);
+}
+'@
+        }
+        $rc = [QwtCfgMgr]::CMP_WaitNoPendingInstallEvents([uint32]($TimeoutSec * 1000))
+        if ($rc -eq 0) { Write-Log 'PnP: no pending device installs'; return $true }
+        Write-Log "PnP still has pending device installs after $TimeoutSec s (rc $rc) - continuing anyway" 'WARN'
+        $script:Result.detail.pnp_settle = "timeout rc=$rc"
+        return $false
+    } catch {
+        Write-Log "could not wait for PnP to settle: $($_.Exception.Message) - continuing without that check" 'WARN'
+        $script:Result.detail.pnp_settle = "unavailable: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Wait-WindowsInstallerIdle {
+    param([int]$TimeoutSec = 600)
+    # msiexec holds Global\_MSIExecute for the duration of an install; while it can be opened,
+    # another installation is in progress and ours would return 1618.
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $waited = $false
+    while ($true) {
+        $busy = $false
+        try {
+            $mx = [System.Threading.Mutex]::OpenExisting('Global\_MSIExecute')
+            $mx.Close()
+            $busy = $true
+        } catch { $busy = $false }   # cannot be opened = not held = idle (or no access, treated as idle)
+        if (-not $busy) { break }
+        if (-not $waited) { Write-Log 'another Windows Installer operation is in progress (Global\_MSIExecute held) - waiting for it' 'WARN'; $waited = $true }
+        if ((Get-Date) -ge $deadline) {
+            Write-Log "Windows Installer still busy after $TimeoutSec s" 'WARN'
+            return $false
+        }
+        Start-Sleep -Seconds 5
+    }
+    if ($waited) { Write-Log 'Windows Installer is idle now' }
+    return $true
+}
+
+function Get-QwtFeatureStates {
+    # Windows Installer's own record of each feature's state for an installed product:
+    # INSTALLSTATE_LOCAL = 3, ABSENT = 2, UNKNOWN = -1 (product/feature not known). This is the
+    # outcome, as opposed to the ADDLOCAL we asked for.
+    param([Parameter(Mandatory)][string]$ProductCode, [Parameter(Mandatory)][string[]]$Features)
+    $states = [ordered]@{}
+    $wi = New-Object -ComObject WindowsInstaller.Installer
+    foreach ($f in $Features) {
+        $states[$f] = [int]$wi.GetType().InvokeMember('FeatureState', 'GetProperty', $null, $wi, @($ProductCode, $f))
+    }
+    return $states
 }
 
 # ------------------------------------------------------------------------------- stage 2
@@ -1018,9 +1401,16 @@ function Invoke-Stage2 {
 
     $script:Result.stage = 'stage2-install'
 
-    # If we got here from the -Auto boot task, retire it first: a task left armed would
-    # re-run the whole install on every subsequent boot.
-    Clear-BootResume
+    # The -Auto resume task is retired at a TERMINAL state - the success tail, Fail, or the main
+    # catch - not here. Retiring it as stage 2's first act meant any interruption of stage 2 (a dom0
+    # shutdown, the harness rescue, a mid-install restart by a xenbus_monitor survivor, or a hard
+    # Fail 60 s into boot) was final and unreported: testsigning on, the old QWT possibly already
+    # gone, no QWT installed, no task, nothing running on the next boot. Kept armed, an interrupted
+    # -Auto stage 2 is re-run by the next boot (stage 2 is idempotent by design), and the -Auto run
+    # counter in main bounds how often that can happen.
+    # A MANUAL run (no -Auto) is the user overriding the automatic cycle, so a task some earlier
+    # -Auto cycle left behind is cleared here as before.
+    if (-not $Auto) { Clear-BootResume }
 
     # Certs again: stage 1 may have run from the CD in a previous boot, and re-adding is
     # idempotent. Cheap insurance against a half-prepared machine - and NOT optional: on a guest
@@ -1048,8 +1438,8 @@ function Invoke-Stage2 {
     # Probe once per stage-2 run and always record it, so the trailer says which disk
     # path the upgrade decision below was made on.
     $pvBoot = Test-BootDiskOnPvPath
-    $script:Result.detail.pv_boot_disk = $pvBoot
-    Write-Log "PV boot-disk probe: C: on the PV path = $pvBoot"
+    $script:Result.detail.pv_boot_disk = if ($null -eq $pvBoot) { 'UNKNOWN' } else { $pvBoot }
+    Write-Log "PV boot-disk probe: C: on the PV path = $($script:Result.detail.pv_boot_disk)"
 
     if ($ResumeAfterUninstall) {
         # Resumed by the boot task armed below: the previous QWT is already gone, so the
@@ -1106,7 +1496,16 @@ function Invoke-Stage2 {
                     $script:SameVersionReinstall = @($olds | Where-Object { $_ -eq $ours }).Count -gt 0
                 }
             } catch {
-                Write-Log "version comparison failed ($($_.Exception.Message)) - falling back to the uninstall-first flow" 'WARN'
+                # A comparison that cannot be made must not SELECT the destructive branch. Falling
+                # through here left $inPlace=$false, i.e. uninstall-first - the path guarded only by
+                # the PV probe, and the one that removes the disk driver serving C: (0x7B, domain
+                # destroyed). In-place is the supported upgrade; 'unknown' never routes to removal.
+                Fail ("cannot compare the installed QWT version(s) [" +
+                      (($existing | ForEach-Object { "'$($_.Version)'" }) -join ', ') +
+                      "] with this package ('$($script:Result.detail.package_version)'): " +
+                      "$($_.Exception.Message). REFUSING to guess - a wrong guess here removes the " +
+                      'PV disk driver from a booted guest. Fix the DisplayVersion of the registered ' +
+                      'product (or uninstall it from a guest that can still boot without it) and re-run.')
             }
             # THE PV DISK DRIVER ONLY GOES UP, OR STAYS THE SAME.
             # An in-place upgrade is safe precisely because it does not disturb the disk driver
@@ -1163,7 +1562,17 @@ function Invoke-Stage2 {
                 # Fall through to the install phase below - msiexec /i does the rest.
             } else {
 
-            if ($pvBoot) {
+            # $null = the probe could not tell. FAIL CLOSED here: this is the one branch whose
+            # mistake is unrecoverable, so 'unknown' is treated exactly like 'on the PV path'.
+            if ($pvBoot -or $null -eq $pvBoot) {
+                if ($null -eq $pvBoot) {
+                    Fail ('REFUSING to remove the installed QWT: the PV boot-disk probe FAILED (see the WARN ' +
+                          'above), so whether C: is served by the Xen PV disk driver is UNKNOWN - and if it ' +
+                          'is, removing QWT leaves this guest with NO boot disk (0x7B INACCESSIBLE BOOT ' +
+                          'DEVICE, domain destroyed, not recoverable from inside). Fix the probe failure or ' +
+                          "install a package whose version is HIGHER than the installed $($existing[0].Version), " +
+                          'which upgrades in place and never consults this gate.')
+                }
                 # HARD REFUSAL. This used to be an overridable warning, and /AcceptPvDiskUpgrade
                 # let a user proceed. It is not overridable any more, because the failure it
                 # guards against was reproduced on 2026-08-15 and NO recovery performed from
@@ -1198,6 +1607,9 @@ function Invoke-Stage2 {
                       'in README.txt.)')
             }
             Stop-QwtRuntime
+            # msiexec /x re-touches the PV drivers too, so a monitor survivor here restarts the guest
+            # mid-uninstall exactly as it would mid-install. Fatal, same as before the install msiexec.
+            Disable-XenbusMonitor -Why 'before msiexec /x' -FatalIfSurvives | Out-Null
             $needReboot = Uninstall-ExistingQwt -Products $existing
             # Only products we actually tried to remove count here: a non-MSI Uninstall key
             # is logged and skipped above, and must not turn into a hard failure.
@@ -1370,7 +1782,9 @@ function Invoke-Stage2 {
     # 2026-08-14: the dialog was sitting on the dom0 desktop mid-install, which is the field
     # report in forum 42717 post 33 ("the PV disk driver installer prompt is not clickable").
     # A monitor that is stopped and disabled before msiexec starts can never show it.
-    Disable-XenbusMonitor -Why 'before msiexec'
+    # -FatalIfSurvives: a process that outlives the kill is what restarts the guest mid-MSI; the
+    # WARN-and-continue this used to be started msiexec into the state the comments above call a brick.
+    Disable-XenbusMonitor -Why 'before msiexec' -FatalIfSurvives
 
     # RE-ARM THE INBOX STORAGE DRIVERS before the MSI touches the PV disk driver.
     # MEASURED 2026-08-15, upgrading a genuine stock QWT 4.2.2 guest to this package: the boot
@@ -1388,32 +1802,91 @@ function Invoke-Stage2 {
     # emulated_storage_rearmed) - that one covers the remove-then-install upgrade, this one
     # covers the IN-PLACE major upgrade, which is the path a version-bumped MSI actually takes
     # and where the disk was measured leaving the PV path. Both are cheap and idempotent.
+    # GO/NO-GO, not telemetry, whenever C: may be on the PV path ($pvBoot true or UNKNOWN): that is
+    # the only case in which the intermediate boot can lose its disk, and there a failed or missing
+    # re-arm used to be a WARN followed by msiexec - crossing a documented brick precondition with a
+    # log line the user then cannot reach. The uninstall-first branch already treats the identical
+    # hazard as a hard refusal; this path did not. With $pvBoot explicitly $false the transition
+    # cannot strand the disk, so WARN-and-continue stays correct there.
+    $diskAtRisk = ($pvBoot -or $null -eq $pvBoot)
     $rearm = Join-Path $Root 'rearm-inbox-disk-controllers.ps1'
     if (Test-Path -LiteralPath $rearm) {
         try {
             $out = & $rearm 2>&1
             foreach ($l in @($out | Select-Object -Last 2)) { Write-Log "  rearm: $l" }
-            $script:Result.detail.inbox_disk_rearm = 'done'
+            # VERIFY the state, do not trust the script's exit: the inbox IDE drivers Windows boots
+            # emulated disks with must read back Start=0 now. (storahci is not required - absent on
+            # many images; the three below are what an IDE-presented QEMU disk needs.)
+            $notBoot = @()
+            foreach ($svc in 'atapi', 'intelide', 'pciide') {
+                $k = "HKLM:\SYSTEM\CurrentControlSet\Services\$svc"
+                if (-not (Test-Path -LiteralPath $k)) { continue }
+                $st = (Get-ItemProperty -LiteralPath $k -Name Start -ErrorAction SilentlyContinue).Start
+                if ($st -ne 0) { $notBoot += "$svc=Start:$st" }
+            }
+            if ($notBoot.Count) {
+                $script:Result.detail.inbox_disk_rearm = "incomplete: " + ($notBoot -join ' ')
+                if ($diskAtRisk) {
+                    Fail ("REFUSING to run msiexec: the inbox storage drivers are not boot-start after the re-arm (" +
+                          ($notBoot -join ', ') + ") and C: is on (or may be on) the PV path - the upgrade moves " +
+                          'the boot disk off the PV path for one boot, and without a boot-start IDE driver that ' +
+                          'boot is 0x7B INACCESSIBLE_BOOT_DEVICE (domain destroyed under Qubes).')
+                }
+                Write-Log ("inbox storage re-arm incomplete (" + ($notBoot -join ', ') + ") - C: is not on the PV path, so the intermediate boot does not depend on it") 'WARN'
+            } else {
+                $script:Result.detail.inbox_disk_rearm = 'done'
+            }
         } catch {
-            Write-Log "inbox storage re-arm failed: $($_.Exception.Message) (continuing)" 'WARN'
             $script:Result.detail.inbox_disk_rearm = "failed: $($_.Exception.Message)"
+            if ($diskAtRisk) {
+                Fail ("REFUSING to run msiexec: the inbox storage re-arm FAILED ($($_.Exception.Message)) and C: is on " +
+                      '(or may be on) the PV path - the intermediate boot of an in-place upgrade needs a boot-start ' +
+                      'IDE driver or it is 0x7B INACCESSIBLE_BOOT_DEVICE (domain destroyed under Qubes).')
+            }
+            Write-Log "inbox storage re-arm failed: $($_.Exception.Message) - C: is not on the PV path, continuing" 'WARN'
         }
     } else {
-        Write-Log 'rearm-inbox-disk-controllers.ps1 not in payload - the intermediate boot relies on whatever Windows left boot-start' 'WARN'
         $script:Result.detail.inbox_disk_rearm = 'not shipped'
+        if ($diskAtRisk) {
+            Fail ('REFUSING to run msiexec: rearm-inbox-disk-controllers.ps1 is not in the payload (packaging ' +
+                  'regression) and C: is on (or may be on) the PV path - the intermediate boot of an in-place ' +
+                  'upgrade relies on a boot-start inbox IDE driver that nothing here re-armed (0x7B risk).')
+        }
+        Write-Log 'rearm-inbox-disk-controllers.ps1 not in payload - C: is not on the PV path, so the intermediate boot does not depend on it' 'WARN'
     }
 
-    # The prompt appears INSIDE this call - see Start-XenbusPromptSuppressor.
-    $promptGuard = Start-XenbusPromptSuppressor
-    try {
-        $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $msiArgs
-    } finally {
-        Stop-XenbusPromptSuppressor $promptGuard
+    # Readiness, not a timer: see the two helpers. Then 1618 (another installation in progress) is
+    # a BOUNDED RETRY, not a Fail - at T+60 s into a boot it is the common transient, and a Fail
+    # here used to kill the unattended install for good.
+    [void](Wait-PnpSettled -TimeoutSec 300)
+    [void](Wait-WindowsInstallerIdle -TimeoutSec 600)
+    $msiTries = 0
+    while ($true) {
+        $msiTries++
+        # The prompt appears INSIDE this call - see Start-XenbusPromptSuppressor.
+        $promptGuard = Start-XenbusPromptSuppressor
+        try {
+            $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $msiArgs
+        } finally {
+            Stop-XenbusPromptSuppressor $promptGuard
+        }
+        if ($p.ExitCode -eq 1618 -and $msiTries -lt 4) {
+            Write-Log "msiexec returned 1618 (another installation in progress) on attempt $msiTries - waiting for Windows Installer and retrying" 'WARN'
+            $script:Result.detail.msiexec_1618_retries = $msiTries
+            Start-Sleep -Seconds 15
+            [void](Wait-WindowsInstallerIdle -TimeoutSec 600)
+            continue
+        }
+        break
     }
     if ($p.ExitCode -notin 0, 3010) { Fail "msiexec failed with $($p.ExitCode) - see $msiLog" }
     Write-Log "QWT_INSTALL_OK rc=$($p.ExitCode)"
     $script:Result.detail.msiexec_rc = $p.ExitCode
     $script:Result.detail.addlocal = $addlocal
+    # The new product owns the bin directory from here: the old binaries the sweep moved aside are
+    # no longer a rollback target (Fail after this point leaves the NEW product in place).
+    $script:MsiInstallCompleted = $true
+    Remove-SweptAside
 
     # Re-assert AFTER the install too: the MSI lays the service down fresh (auto-start, new
     # service key), losing both the disable and the AutoReboot value written before it.
@@ -1427,7 +1900,35 @@ function Invoke-Stage2 {
     # Without this the script would report success for an install that silently kept a
     # previously present stock binary.
     $installed = 'C:\Program Files\Qubes Tools\bin\gui-agent.exe'
-    if (-not (Test-Path -LiteralPath $installed)) {
+    # VERIFY THE OUTCOME, NOT THE INPUT. detail.addlocal above is what we ASKED for. On the
+    # same-version path REINSTALL=ALL overrides ADDLOCAL and skips every feature recorded Absent, so
+    # a guest installed with /nodisk and re-run without it kept PvDriversDisk absent while msiexec
+    # exited 0 and gui-agent.exe (feature Gui, Installed) passed the only check there was. Ask
+    # Windows Installer which requested features are actually LOCAL (3).
+    $featureCheck = {
+        param([string[]]$Want)
+        $missing = @(); $states = [ordered]@{}
+        try {
+            $prods = @(Get-InstalledQwt | Where-Object { $_.IsMsi })
+            $code = $null
+            foreach ($pc in $prods) {
+                $probe = Get-QwtFeatureStates -ProductCode $pc.ProductCode -Features @('Core')
+                if ($probe['Core'] -ne -1) { $code = $pc.ProductCode; break }
+            }
+            if (-not $code) { throw "no registered QWT product answers FeatureState (codes: $(($prods | ForEach-Object { $_.ProductCode }) -join ' '))" }
+            $states = Get-QwtFeatureStates -ProductCode $code -Features $Want
+            foreach ($f in $Want) { if ($states[$f] -ne 3) { $missing += "$f=$($states[$f])" } }
+        } catch {
+            # Missing data FAILS the check rather than passing it: an unanswerable query is reported
+            # as such and treated like a missing feature below.
+            $missing += "query-error: $($_.Exception.Message)"
+        }
+        return @{ missing = $missing; states = $states }
+    }
+    $fc = & $featureCheck $features
+    $script:Result.detail.features_installed = $fc.states
+    if ($fc.missing.Count) { Write-Log ("requested features NOT installed (LOCAL=3): " + ($fc.missing -join ', ')) 'WARN' }
+    if (-not (Test-Path -LiteralPath $installed) -or $fc.missing.Count -gt 0) {
         # SAME-VERSION REINSTALL RECOVERY (measured 2026-08-29 on win10-clean, 4.3.15 over 4.3.15).
         #
         # REINSTALL=ALL acts ONLY on features Windows Installer records as already installed. If a
@@ -1442,20 +1943,33 @@ function Invoke-Stage2 {
         # Absent feature is installed normally. Bounded to ONE retry, and the same existence test
         # decides afterwards - a retry that does not produce the binary still Fails.
         if ($script:SameVersionReinstall) {
-            Write-Log ("gui-agent.exe absent after REINSTALL=ALL - the MSI records a feature as " +
-                       "Absent, which REINSTALL skips. Retrying ONCE with ADDLOCAL only.") 'WARN'
+            Write-Log ("gui-agent.exe absent or requested features not LOCAL after REINSTALL=ALL - the MSI " +
+                       "records a feature as Absent, which REINSTALL skips. Retrying ONCE with ADDLOCAL only.") 'WARN'
             $retryArgs = @('/i', "`"$msi`"", '/qn', '/norestart', "ADDLOCAL=$addlocal",
                            'REBOOT=ReallySuppress', 'REINSTALLMODE=amus', 'MSIFASTINSTALL=7',
                            '/l*v+!', "`"$msiLog`"")
-            $rp = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $retryArgs
+            $retryGuard = Start-XenbusPromptSuppressor
+            try { $rp = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $retryArgs }
+            finally { Stop-XenbusPromptSuppressor $retryGuard }
             Write-Log "  ADDLOCAL-only retry exit=$($rp.ExitCode)"
             $script:Result.detail.same_version_addlocal_retry = $rp.ExitCode
+            # Judged on its own: a retry that returned 1603/1618 used to fall through to the existence
+            # test and be reported as 'msiexec reported success but gui-agent.exe does not exist' -
+            # the wrong cause, in the one line the reader gets.
+            if ($rp.ExitCode -notin 0, 3010) { Fail "the ADDLOCAL-only retry failed with $($rp.ExitCode) - see $msiLog" }
+            $fc = & $featureCheck $features
+            $script:Result.detail.features_installed = $fc.states
         }
         if (-not (Test-Path -LiteralPath $installed)) {
             Fail "msiexec reported success but $installed does not exist"
         }
-        Write-Log 'gui-agent.exe recovered by the ADDLOCAL-only retry'
+        if ($fc.missing.Count -gt 0) {
+            Fail ("msiexec reported success but these requested features are NOT installed: " +
+                  ($fc.missing -join ', ') + " (ADDLOCAL=$addlocal) - see $msiLog")
+        }
+        Write-Log 'gui-agent.exe / requested features recovered by the ADDLOCAL-only retry'
     }
+    Write-Log ("requested features verified LOCAL: " + (($fc.states.Keys | ForEach-Object { "$_=$($fc.states[$_])" }) -join ' '))
     $haveHash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
     $wantHash = $null
     $mf = Join-Path $Root 'MANIFEST.json'
@@ -1472,6 +1986,25 @@ function Invoke-Stage2 {
             Fail "installed gui-agent.exe is $haveHash but the package was built with $wantHash - the MSI did not deliver our agent"
         }
         Write-Log "installed gui-agent.exe matches the package manifest ($haveHash)"
+        # EVERY reference binary, not just gui-agent.exe. The leftover sweep moves gui-watchdog.exe
+        # aside too, and a sweep that could not (locked image) leaves the OLD one for the MSI's
+        # file-versioning rule to keep - a stale watchdog under a verified agent passed as success.
+        $binRoot = Split-Path -Parent $installed
+        $refMismatch = @()
+        foreach ($rb in @($m.reference_binaries.PSObject.Properties)) {
+            if ($rb.Name -eq 'gui-agent.exe') { continue }   # checked above
+            $rbPath = Join-Path $binRoot $rb.Name
+            if (-not (Test-Path -LiteralPath $rbPath)) { $refMismatch += "$($rb.Name): MISSING"; continue }
+            $rbHave = (Get-FileHash -LiteralPath $rbPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($rbHave -ne "$($rb.Value)".ToLowerInvariant()) { $refMismatch += "$($rb.Name): installed $rbHave, package $($rb.Value)" }
+            else { Write-Log "installed $($rb.Name) matches the package manifest ($rbHave)" }
+        }
+        if ($refMismatch.Count) {
+            Fail ("the MSI did not deliver every reference binary: " + ($refMismatch -join '; '))
+        }
+        # Set on the success path too - it was only ever set to $false, so a consumer of the RESULT
+        # could not tell 'verified' from 'field absent'.
+        $script:Result.detail.agent_hash_verified = $true
     } else {
         Write-Log 'MANIFEST.json has no reference_binaries - cannot verify the installed agent' 'WARN'
         $script:Result.detail.agent_hash_verified = $false
@@ -1489,23 +2022,41 @@ function Invoke-Stage2 {
     # a state anything was designed for, and on 2026-09-08 a clean install stopped dead inside it.
     # There is no defined behaviour to fall back on there, so the state is removed instead: the
     # agent does not run during the second half of its own installation.
-    # NOT restarted in-session, deliberately - stage 2 sets Result.reboot_needed unconditionally and
-    # always ends in a reboot, and the service start types are untouched, so the agent comes back on
-    # the next boot with the device topology already final. That boot is also the first moment it
-    # could capture the IDD rather than the adapter about to be disabled.
+    # Brought back at the end of this stage when nothing is going to reboot the guest (see the tail:
+    # Result.reboot_needed is a REPORT, the restart itself happens only under -Auto -RebootAtEnd);
+    # on the rebooting path the untouched service start types bring it back on the next boot, with
+    # the device topology already final.
     $script:GuiQuiesced = $false
     try {
         $wd = Get-Service -Name 'QubesGuiWatchdog' -ErrorAction SilentlyContinue
         if ($wd -and $wd.Status -ne 'Stopped') {
-            Write-Log 'stopping QubesGuiWatchdog for the rest of stage 2 (the reboot this stage ends in brings it back)'
+            Write-Log 'stopping QubesGuiWatchdog for the rest of stage 2 (restarted at the end of the stage, or by the reboot)'
             Stop-Service -Name 'QubesGuiWatchdog' -Force -ErrorAction Stop
             $script:GuiQuiesced = $true
         } else {
             Write-Log 'QubesGuiWatchdog not running - nothing to quiesce before the stage-2 device work'
         }
     } catch {
-        Write-Log ("could not stop QubesGuiWatchdog: $($_.Exception.Message) - the stage-2 device " +
-                   'work below will run under a live capture agent') 'WARN'
+        Write-Log ("could not stop QubesGuiWatchdog: $($_.Exception.Message) - killing its process below; " +
+                   'if that does not hold either, the IDD activation refuses to run') 'WARN'
+    }
+    # CLOSE THE ASYNC LAUNCH WINDOW before killing anything. The agent starts wgcbroker/notifhost
+    # through Task Scheduler (`schtasks /run`, asynchronous) and its supervisors re-issue that every
+    # few seconds; a /run already queued when the agent dies still starts the helper into the session
+    # a moment later - a capture broker holding a WGC session on the monitor exactly while the IDD is
+    # created and the adapter disabled. The agent recreates these tasks on every launch (delete +
+    # create + run), so deleting the definitions costs nothing and makes a queued start impossible.
+    foreach ($tn in 'Qubes-WgcBroker', 'Qubes-NotifBridge', 'Qubes-NotifRestore', 'Qubes-NotifDirect') {
+        try { & schtasks.exe /End /TN $tn *>$null } catch { }
+        try { & schtasks.exe /Delete /TN $tn /F *>$null } catch { }
+    }
+    $global:LASTEXITCODE = 0
+    # GRACEFUL FIRST, now that the respawner is stopped: QGA_SHUTDOWN lets the agent drop its
+    # framebuffer grants itself. This quiesce used to go straight to Kill(), leaving the grants held
+    # by a killed process for the device surgery to run under. Only if the watchdog process is
+    # provably not respawning - the service stop succeeded - or a respawn would defeat it.
+    if ($script:GuiQuiesced -and -not @(Get-Process -Name 'gui-watchdog' -ErrorAction SilentlyContinue).Count) {
+        [void](Request-GuiAgentExit -WaitMs 5000)
     }
     # KILL THE RESPAWNER FIRST, then what it respawns. gui-watchdog.exe relaunches gui-agent.exe
     # about a second after it dies, so killing only the agent does not quiesce anything: if
@@ -1513,9 +2064,11 @@ function Invoke-Stage2 {
     # does), the watchdog is still alive and the 3 s settle below GUARANTEES the agent is back
     # before the display surgery runs. That was the shape of the original 2026-09-08 freeze and
     # the first version of this quiesce did not prevent it. Order matters: watchdog, then agent.
+    # WaitForExit on each handle: Kill() returns before the process is gone, and a fixed sleep was
+    # the only ordering guarantee.
     foreach ($pn in 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost') {
         foreach ($pr in @(Get-Process -Name $pn -ErrorAction SilentlyContinue)) {
-            try   { $pr.Kill(); $script:GuiQuiesced = $true; Write-Log "  stopped $pn (pid $($pr.Id))" }
+            try   { $pr.Kill(); [void]$pr.WaitForExit(5000); $script:GuiQuiesced = $true; Write-Log "  stopped $pn (pid $($pr.Id))" }
             catch { Write-Log "  could not stop $pn (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
         }
     }
@@ -1524,12 +2077,16 @@ function Invoke-Stage2 {
     # (xeniface gnttab IOCTLs).
     if ($script:GuiQuiesced) { Start-Sleep -Seconds 3 }
     # ASSERT IT HELD. A quiesce that quietly failed leaves the display surgery running under a live
-    # capture agent - the condition it exists to remove - while the log says it was quiesced.
-    $stillUp = @(Get-Process -Name 'gui-watchdog', 'gui-agent', 'wgcbroker' -ErrorAction SilentlyContinue)
+    # capture agent - the condition it exists to remove - while the log says it was quiesced. The
+    # IDD activation below REFUSES to run when this did not hold (it throws into its loud failure
+    # path, VGA untouched) - the surgery under a live agent is the 2026-09-08 freeze, and entering it
+    # knowingly with an ERROR line attached is not a defined path either.
+    $stillUp = @(Get-Process -Name 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost' -ErrorAction SilentlyContinue)
+    $script:GuiQuiesceHeld = ($stillUp.Count -eq 0)
     if ($stillUp.Count -gt 0) {
         Write-Log ('QUIESCE DID NOT HOLD: still running after the settle - ' +
                    (($stillUp | ForEach-Object { "$($_.ProcessName)/$($_.Id)" }) -join ', ') +
-                   '. The device work below will run under a live capture agent.') 'ERROR'
+                   '. The IDD activation will refuse to run under a live capture agent.') 'ERROR'
         $script:Result.detail.gui_quiesce_failed = (($stillUp | ForEach-Object { $_.ProcessName }) -join ',')
     }
     $script:Result.detail.gui_quiesced_for_stage2 = $script:GuiQuiesced
@@ -1545,40 +2102,9 @@ function Invoke-Stage2 {
     Write-Log 'Start Menu appmenu shortcut intentionally NOT installed (Start is hidden in seamless mode)'
     $script:Result.detail.start_menu_shortcut = 'not-installed-by-design'
 
-    # --- netvm hotplug: re-apply Qubes addressing when an interface appears ----------
-    # QWT applies the qubesdb-driven static IP with network-setup.exe at BOOT, and nothing
-    # re-runs it when a vif is hot-plugged, so `qvm-prefs <vm> netvm <net>` on a running
-    # guest leaves it on APIPA (169.254.*) with no gateway until a reboot (measured
-    # 2026-08-07). This registers a SYSTEM task triggered by NetworkProfile event 10000
-    # ("network connected"), which fires on vif arrival. VERIFIED end to end: detach ->
-    # attach restored 10.137.0.70 by itself within 15 s, no manual step, no reboot.
-    $netExe = 'C:\Program Files\Qubes Tools\bin\network-setup.exe'
-    if (Test-Path -LiteralPath $netExe) {
-        $taskXml = Join-Path $env:TEMP 'qubes-netreapply.xml'
-        $sub = '&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"&gt;' +
-               '&lt;Select Path="Microsoft-Windows-NetworkProfile/Operational"&gt;*[System[EventID=10000]]' +
-               '&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;'
-        $xml = @"
-<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo><Description>Re-apply Qubes network config when an interface appears</Description></RegistrationInfo>
-  <Triggers><EventTrigger><Enabled>true</Enabled><Subscription>$sub</Subscription><Delay>PT3S</Delay></EventTrigger></Triggers>
-  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
-  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT2M</ExecutionTimeLimit><AllowHardTerminate>true</AllowHardTerminate></Settings>
-  <Actions Context="Author"><Exec><Command>"$netExe"</Command></Exec></Actions>
-</Task>
-"@
-        [IO.File]::WriteAllText($taskXml, $xml, [Text.Encoding]::Unicode)
-        try { $out = & schtasks /create /tn QubesNetworkReapply /xml $taskXml /f 2>&1 } catch { $out = "$_" }
-        Remove-Item $taskXml -ErrorAction SilentlyContinue
-        if ($LASTEXITCODE -eq 0) {
-            Write-Log 'registered QubesNetworkReapply (netvm hotplug re-applies addressing automatically)'
-            $script:Result.detail.net_reapply_task = 'registered'
-        } else {
-            Write-Log "could not register QubesNetworkReapply ($LASTEXITCODE) - netvm hotplug will need network-setup.exe by hand" 'WARN'
-            $script:Result.detail.net_reapply_task = "failed rc=$LASTEXITCODE"
-        }
-    }
+    # (The netvm-hotplug re-apply task, QubesNetworkReapply, is decided AFTER pvnic-selfprime has
+    # run - see the block below the PV NIC priming - because that step deletes the stock
+    # network-setup.exe the task would point at.)
 
     # --- PV network fix: xenvif that can actually bind xennet -----------------------
     # SHIPPED BY DEFAULT (not optional): QWT 4.2.2's own xenvif tops out at VIF interface
@@ -1605,6 +2131,7 @@ function Invoke-Stage2 {
             Write-Log 'pv-drivers/xenvif-signer.cer missing - the driver store add will likely fail' 'WARN'
         }
         Write-Log 'installing xenvif (PV network interface fix)'
+        $global:LASTEXITCODE = $null   # stale-exit-code trap, see Set-BootResume
         try { $out = & pnputil.exe /add-driver $pvInf /install 2>&1 } catch { $out = "$_" }
         $out | ForEach-Object { Write-Log "  pnputil(xenvif): $_" }
         # 259 = no more items (nothing to do); 3010 = success, reboot required - stage 2
@@ -1644,6 +2171,7 @@ function Invoke-Stage2 {
             Write-Log 'pv-drivers/xencons-signer.cer missing - the xencons store add will likely fail' 'WARN'
         }
         Write-Log 'installing xencons (PV console - diagnostic channel)'
+        $global:LASTEXITCODE = $null   # stale-exit-code trap, see Set-BootResume
         try { $out = & pnputil.exe /add-driver $consInf /install 2>&1 } catch { $out = "$_" }
         $out | ForEach-Object { Write-Log "  pnputil(xencons): $_" }
         if ($LASTEXITCODE -notin 0, 259, 3010) {
@@ -1681,10 +2209,10 @@ function Invoke-Stage2 {
       # finds a live agent, something restarted it and the display surgery below would once again
       # run under a live capture path - so that is recorded, not silently tolerated.
       $reappeared = @()
-      foreach ($pn in 'gui-agent', 'wgcbroker', 'notifhost') {
+      foreach ($pn in 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost') {
           foreach ($pr in @(Get-Process -Name $pn -ErrorAction SilentlyContinue)) {
               $reappeared += $pn
-              try   { $pr.Kill(); Write-Log "  re-stopped $pn (pid $($pr.Id)) before the display surgery" 'WARN' }
+              try   { $pr.Kill(); [void]$pr.WaitForExit(5000); Write-Log "  re-stopped $pn (pid $($pr.Id)) before the display surgery" 'WARN' }
               catch { Write-Log "  could not re-stop $pn (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
           }
       }
@@ -1692,10 +2220,35 @@ function Invoke-Stage2 {
           Write-Log ("the gui-agent came back during stage 2 (" + ($reappeared -join ', ') +
                      ") - the quiesce is not holding, investigate") 'WARN'
           $script:Result.detail.idd_gui_reappeared = ($reappeared -join ',')
-          Start-Sleep -Seconds 3
       }
+      # The display surgery runs ONLY under a quiesce that is proven to hold, here and again right
+      # before the adapter is disabled (60+ s later, after two bind waits). A live agent/broker at
+      # either point throws into the loud 'IDD ACTIVATION FAILED' path with the VGA untouched, rather
+      # than entering the state that froze the VM on 2026-09-08 with a WARN attached. The kill above
+      # does not count as quiescing: gui-watchdog.exe respawns the agent within ~1 s when the
+      # service stop failed, which is exactly the case this catches.
+      $assertQuiesced = {
+          param([string]$When)
+          $live = @(Get-Process -Name 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost' -ErrorAction SilentlyContinue)
+          if ($live.Count -gt 0) {
+              throw ("gui-agent quiesce is NOT holding $When (" +
+                     (($live | ForEach-Object { "$($_.ProcessName)/$($_.Id)" }) -join ', ') +
+                     ') - refusing to do display surgery under a live capture agent. Stop QubesGuiWatchdog by hand and re-run.')
+          }
+      }
+      # Known to the catch below, so a throw ANYWHERE after the device is created can tear it down
+      # again - initialised here because StrictMode 1.0 refuses a read of a never-assigned variable.
+      $createdByThisRun = $false
+      $iddInstance = ''
+      $iddRemovedByThisRun = $false
+      $devcon = $null
       try {
         $script:Result.detail.idd_driver = 'requested'
+        if (-not $script:GuiQuiesceHeld) {
+            throw ("the gui-agent quiesce after msiexec did not hold ($($script:Result.detail.gui_quiesce_failed)) - " +
+                   'refusing to do display surgery under a live capture agent. Stop QubesGuiWatchdog by hand and re-run.')
+        }
+        & $assertQuiesced 'before staging the driver'
         $iddDir  = Join-Path $Root 'idd-driver'
         $iddHwId = 'root\iddsampledriver'
         $devcon  = Join-Path $iddDir 'devcon.exe'
@@ -1712,7 +2265,11 @@ function Invoke-Stage2 {
         # $LASTEXITCODE - under $ErrorActionPreference='Stop' PS 5.1 turns native stderr
         # into a terminating error (the schtasks lesson in Clear-BootResume, measured
         # 2026-08-06), which would skip the tailored diagnostics below.
+        # $LASTEXITCODE is cleared before every native call here: when the stderr record throws,
+        # the catch runs BEFORE the exit code is assigned, and the stale code of the previous native
+        # command would be judged instead (a failed pnputil passing on certutil's 0). $null = failure.
         Write-Log "staging driver package $($inf[0].Name) into the driver store"
+        $global:LASTEXITCODE = $null
         try { $out = & pnputil.exe /add-driver $inf[0].FullName /install 2>&1 } catch { $out = "$_" }
         $out | ForEach-Object { Write-Log "  pnputil: $_" }
         # 3010 = success, reboot required: LIKELY here on upgrade, because replacing the
@@ -1730,23 +2287,46 @@ function Invoke-Stage2 {
         # it runs, so a healthy existing device is reused; a BROKEN existing device is
         # removed and recreated (otherwise every re-run polls a permanently dead node).
         $createdByThisRun = $false
-        $dev = Get-IddPnpDevice -HardwareId $iddHwId
-        if ($dev -and $dev.ConfigManagerErrorCode -eq 0) {
-            Write-Log "IDD device already exists and is healthy ($($dev.PNPDeviceID)) - reusing it"
+        # THE NODE THIS RUN WORKS ON IS IDENTIFIED BY INSTANCE ID from here on. By hardware id
+        # alone, a re-run over a broken node whose removal devcon deferred to the reboot (rc 1)
+        # watched an arbitrary one of two nodes - the old dead one - through 30 s of 'devnode error
+        # N' while the new one was healthy, and the fail branch's remove-by-hardware-id then tore
+        # down BOTH, reporting FAILED for an activation that had succeeded.
+        $iddInstance = ''
+        $existingIdd = @(Get-IddPnpDevices -HardwareId $iddHwId)
+        $dev = $existingIdd | Where-Object { $_.ConfigManagerErrorCode -eq 0 } | Select-Object -First 1
+        if ($dev) {
+            $iddInstance = $dev.PNPDeviceID
+            Write-Log "IDD device already exists and is healthy ($iddInstance) - reusing it"
         } else {
-            if ($dev) {
-                Write-Log "IDD device exists but is broken (ConfigManagerErrorCode $($dev.ConfigManagerErrorCode)) - removing and recreating" 'WARN'
-                try { $out = & $devcon remove $iddHwId 2>&1 } catch { $out = "$_" }
+            foreach ($broken in $existingIdd) {
+                Write-Log "IDD device exists but is broken ($($broken.PNPDeviceID), ConfigManagerErrorCode $($broken.ConfigManagerErrorCode)) - removing before recreating" 'WARN'
+                $global:LASTEXITCODE = $null
+                try { $out = & $devcon remove "@$($broken.PNPDeviceID)" 2>&1 } catch { $out = "$_" }
                 $out | ForEach-Object { Write-Log "  devcon remove: $_" }
+                # devcon remove: 0 = removed, 1 = removed but a REBOOT is required first (the node is
+                # still present until then), 2 = failed. Creating a second node next to a node that is
+                # still there is the two-node state described above, so neither 1 nor 2 proceeds.
+                if ($LASTEXITCODE -eq 1) {
+                    throw ("the broken IDD device $($broken.PNPDeviceID) can only be removed by a reboot (devcon remove rc 1) - " +
+                           'NOT creating a second node beside it; reboot and re-run the install to activate the IDD')
+                }
+                if ($LASTEXITCODE -ne 0) { throw "devcon remove $($broken.PNPDeviceID) failed (rc '$LASTEXITCODE') - NOT creating a second node beside it" }
             }
+            $before = @(Get-IddPnpDevices -HardwareId $iddHwId | ForEach-Object { $_.PNPDeviceID })
             Write-Log "creating the IDD device: devcon install $($inf[0].Name) $iddHwId"
+            $global:LASTEXITCODE = $null
             try { $out = & $devcon install $inf[0].FullName $iddHwId 2>&1 } catch { $out = "$_" }
             $out | ForEach-Object { Write-Log "  devcon: $_" }
             # devcon: 0 = done, 1 = done but a reboot is required - and stage 2 always
             # ends in a reboot anyway.
-            if ($LASTEXITCODE -notin 0, 1) { throw "devcon install $iddHwId failed ($LASTEXITCODE)" }
+            if ($LASTEXITCODE -notin 0, 1) { throw "devcon install $iddHwId failed (rc '$LASTEXITCODE')" }
             $createdByThisRun = $true
-            $script:Result.detail.idd_driver = 'device created, waiting for bind'
+            # The node this run created = the one that was not there before it.
+            $after = @(Get-IddPnpDevices -HardwareId $iddHwId | Where-Object { $before -notcontains $_.PNPDeviceID })
+            if ($after.Count -ge 1) { $iddInstance = $after[0].PNPDeviceID }
+            if ($after.Count -gt 1) { Write-Log ("devcon install produced $($after.Count) new nodes - watching $iddInstance") 'WARN' }
+            $script:Result.detail.idd_driver = "device created ($iddInstance), waiting for bind"
         }
 
         # Never disable the VGA adapter until the replacement display is demonstrably up.
@@ -1755,10 +2335,16 @@ function Invoke-Stage2 {
         # fail while the devnode stays at code 0. The second gate requires an actual
         # VIDEO CONTROLLER attributable to the IDD devnode - the same evidence the
         # FINDINGS topology snapshots use ('IddSampleDriver Device' controller).
-        Write-Log 'waiting up to 30 s for the IDD device to bind (ConfigManagerErrorCode 0)'
+        Write-Log "waiting up to 30 s for the IDD device to bind (ConfigManagerErrorCode 0)$(if ($iddInstance) { ": $iddInstance" })"
         $deadline = (Get-Date).AddSeconds(30)
         while ($true) {
-            $dev = Get-IddPnpDevice -HardwareId $iddHwId
+            if (-not $iddInstance -and $createdByThisRun) {
+                # The new node had not been enumerated yet when devcon returned - keep looking for it.
+                $new = @(Get-IddPnpDevices -HardwareId $iddHwId | Where-Object { $before -notcontains $_.PNPDeviceID })
+                if ($new.Count -ge 1) { $iddInstance = $new[0].PNPDeviceID; Write-Log "IDD node created by this run: $iddInstance" }
+            }
+            $dev = $null
+            if ($iddInstance) { $dev = Get-IddPnpDevice -HardwareId $iddHwId -InstanceId $iddInstance }
             if ($dev -and $dev.ConfigManagerErrorCode -eq 0) { break }
             if ((Get-Date) -ge $deadline) { break }
             Start-Sleep -Seconds 2
@@ -1783,11 +2369,16 @@ function Invoke-Stage2 {
             $state = if (-not $dev) { 'device never appeared' }
                      elseif ($dev.ConfigManagerErrorCode -ne 0) { "devnode error $($dev.ConfigManagerErrorCode)" }
                      else { 'devnode up but no display adapter materialized' }
-            if ($createdByThisRun) {
-                Write-Log "activation failed ($state) - removing the device this run created" 'WARN'
-                try { $out = & $devcon remove $iddHwId 2>&1 } catch { $out = "$_" }
+            if ($createdByThisRun -and $iddInstance) {
+                # By INSTANCE id, never by hardware id: the latter also removes any other node.
+                Write-Log "activation failed ($state) - removing the device this run created ($iddInstance)" 'WARN'
+                $global:LASTEXITCODE = $null
+                try { $out = & $devcon remove "@$iddInstance" 2>&1 } catch { $out = "$_" }
                 $out | ForEach-Object { Write-Log "  devcon remove: $_" }
-                $script:Result.detail.idd_driver = "activation failed ($state); device removed, VGA untouched"
+                $iddRemovedByThisRun = $true
+                $script:Result.detail.idd_driver = "activation failed ($state); device $iddInstance removed (devcon rc '$LASTEXITCODE'), VGA untouched"
+            } elseif ($createdByThisRun) {
+                $script:Result.detail.idd_driver = "activation failed ($state); devcon install returned but no new node was ever enumerated, VGA untouched"
             } else {
                 $script:Result.detail.idd_driver = "activation failed ($state); pre-existing device LEFT IN PLACE, VGA untouched"
             }
@@ -1808,14 +2399,33 @@ function Invoke-Stage2 {
         if (-not $infVer) {
             Write-Log 'could not parse DriverVer from the payload INF - bind-version assertion skipped' 'WARN'
         } else {
-            $boundVer = (Get-PnpDeviceProperty -InstanceId $dev.PNPDeviceID -KeyName DEVPKEY_Device_DriverVersion -ErrorAction SilentlyContinue).Data
-            if ($boundVer -ne $infVer) {
+            # UNREADABLE is not MISMATCHED. Get-PnpDeviceProperty returns nothing while the property
+            # store is still being populated seconds after the bind, and $null -ne '1.2.3' is true -
+            # so a healthy, correctly bound device was force-rebound and then thrown as an
+            # 'agent/driver mismatch' with an empty version, and the guest shipped on the BDA. Retry
+            # the read briefly; if it stays empty, skip the assertion the way the infVer-null case
+            # above does, and say so. Only a value that is READ and DIFFERENT triggers the rebind.
+            $readBoundVer = {
+                param([string]$Inst)
+                $v = $null
+                for ($rv = 0; $rv -lt 5 -and -not $v; $rv++) {
+                    if ($rv -gt 0) { Start-Sleep -Seconds 2 }
+                    try { $v = (Get-PnpDeviceProperty -InstanceId $Inst -KeyName DEVPKEY_Device_DriverVersion -ErrorAction Stop).Data } catch { $v = $null }
+                }
+                return $v
+            }
+            $boundVer = & $readBoundVer $dev.PNPDeviceID
+            if (-not $boundVer) {
+                Write-Log 'DEVPKEY_Device_DriverVersion unreadable after 5 tries - bind-version assertion skipped (device stays as bound)' 'WARN'
+                $script:Result.detail.idd_bound = 'unreadable'
+            } elseif ($boundVer -ne $infVer) {
                 Write-Log "bound driver $boundVer != payload $infVer - forcing rebind (devcon update; ranking never rebinds downward)" 'WARN'
+                $global:LASTEXITCODE = $null
                 try { $out = & $devcon update $inf[0].FullName $iddHwId 2>&1 } catch { $out = "$_" }
                 $out | ForEach-Object { Write-Log "  devcon update: $_" }
                 $deadline = (Get-Date).AddSeconds(30)
                 while ($true) {
-                    $dev = Get-IddPnpDevice -HardwareId $iddHwId
+                    $dev = Get-IddPnpDevice -HardwareId $iddHwId -InstanceId $iddInstance
                     if ($dev -and $dev.ConfigManagerErrorCode -eq 0) { break }
                     if ((Get-Date) -ge $deadline) { break }
                     Start-Sleep -Seconds 2
@@ -1823,13 +2433,19 @@ function Invoke-Stage2 {
                 if (-not ($dev -and $dev.ConfigManagerErrorCode -eq 0)) {
                     throw "IDD device did not come back healthy after the forced rebind to $infVer - NOT disabling the VGA adapter"
                 }
-                $boundVer = (Get-PnpDeviceProperty -InstanceId $dev.PNPDeviceID -KeyName DEVPKEY_Device_DriverVersion -ErrorAction SilentlyContinue).Data
-                if ($boundVer -ne $infVer) {
+                $boundVer = & $readBoundVer $dev.PNPDeviceID
+                if (-not $boundVer) {
+                    # Same rule after the rebind: an empty read is not evidence of a mismatch.
+                    Write-Log 'DEVPKEY_Device_DriverVersion unreadable after the rebind - cannot confirm the bound version, continuing' 'WARN'
+                    $script:Result.detail.idd_bound = 'unreadable-after-rebind'
+                } elseif ($boundVer -ne $infVer) {
                     throw "bound driver is $boundVer but this package ships $infVer - agent/driver mismatch, refusing to activate"
                 }
             }
-            Write-Log "bound driver version $boundVer matches the payload"
-            $script:Result.detail.idd_bound = $boundVer
+            if ($boundVer) {
+                Write-Log "bound driver version $boundVer matches the payload"
+                $script:Result.detail.idd_bound = $boundVer
+            }
         }
 
         # Disable the emulated VGA adapter so the next boot comes up on the IDD. Match by
@@ -1859,6 +2475,9 @@ function Invoke-Stage2 {
             # The live console may switch to the IDD the moment this executes - warn
             # BEFORE it happens so an interactive user is not left staring at a frozen
             # window with no explanation.
+            # Re-verified HERE, not only before devcon: two 30 s bind waits sit between the two, and
+            # the adapter the desktop runs on is the one thing below that cannot be undone in-session.
+            & $assertQuiesced 'right before disabling the VGA adapter'
             Write-Log "disabling emulated VGA adapter: $($vgaDev.InstanceId) ($($vgaDev.FriendlyName)) - the display may switch or blank until the reboot"
             Disable-PnpDevice -InstanceId $vgaDev.InstanceId -Confirm:$false -ErrorAction Stop | Out-Null
         }
@@ -1880,6 +2499,25 @@ function Invoke-Stage2 {
         if ("$($script:Result.detail.idd_driver)" -notlike 'activated*') {
             $script:Result.detail.idd_driver = "FAILED (on Basic Display Adapter): $($_.Exception.Message)"
             $script:Result.detail.idd_failed = $true
+            # RESTORE THE PRE-RUN TOPOLOGY for EVERY throw after the device was created, not only the
+            # bind-failure branch above. A throw past it - Disable-PnpDevice refused, the quiesce
+            # assertion before the VGA disable, the rebind check - left a created, HEALTHY IddCx device
+            # beside an ENABLED VGA: on the next boot it can come up as an active second monitor, the
+            # seamless-coordinate breakage this whole block says must never be left behind, while the
+            # log said 'on Basic Display Adapter'. Best effort; failure to remove is recorded too.
+            if ($createdByThisRun -and $iddInstance -and -not $iddRemovedByThisRun) {
+                if ($devcon -and (Test-Path -LiteralPath $devcon)) {
+                    Write-Log "removing the IDD device this run created ($iddInstance) so the guest does not boot with two display adapters" 'WARN'
+                    $global:LASTEXITCODE = $null
+                    try { $out = & $devcon remove "@$iddInstance" 2>&1 } catch { $out = "$_" }
+                    $out | ForEach-Object { Write-Log "  devcon remove: $_" }
+                    $iddRemovedByThisRun = $true
+                    $script:Result.detail.idd_driver += "; device $iddInstance removed (devcon rc '$LASTEXITCODE'), VGA untouched"
+                } else {
+                    Write-Log "IDD device $iddInstance created by this run could NOT be removed (no devcon.exe) - the next boot may have TWO display adapters" 'ERROR'
+                    $script:Result.detail.idd_driver += "; device $iddInstance LEFT IN PLACE (no devcon)"
+                }
+            }
         }
       }
     }
@@ -2160,11 +2798,26 @@ function Invoke-Stage2 {
                 if ([int]$Matches[1] -eq 0) {
                     $script:Result.detail.autologon = 'armed'
                     Write-Log 'autologon verified - this qube can come back on its own'
+                } elseif (-not $NoAutologon) {
+                    # NOT ARMED, so ARM IT FROM HERE. When stage 2 is the first (and only) stage to
+                    # run - a guest whose boot ISO already enabled testsigning, or any upgrade - the
+                    # -AutologonPassword on this command line was accepted and used for nothing, and
+                    # the run reported ok=true with this WARN. The password is in hand on exactly the
+                    # runs that matter (a task-resumed run had a stage 1, which armed it already);
+                    # a run without one tries the empty-password guess the same way stage 1 does.
+                    Write-Log 'autologon is NOT armed - arming it from stage 2 (this run has the password if one was passed)'
+                    $armedNow = Invoke-AutologonArming -Root $Root
+                    if (-not $armedNow) {
+                        # Cite the RECORDED reason, not 'no password': ensure-autologon also counts a
+                        # missing DefaultUserName as a warning, and telling that user to supply a
+                        # password is the wrong repair.
+                        Write-Log "autologon is NOT usable ($($script:Result.detail.autologon)). This qube will come" 'WARN'
+                        Write-Log '  back at a sign-in screen, which seamless mode does not display - arm it with' 'WARN'
+                        Write-Log '  set-autologon.ps1 (a password, or -User if the account name is unset), or reinstall passing /autologon:PASSWORD.' 'WARN'
+                    }
                 } else {
-                    $script:Result.detail.autologon = 'not-armed:no-password'
-                    Write-Log 'autologon is NOT usable: no password is set for it. This qube will come' 'WARN'
-                    Write-Log '  back at a sign-in screen, which seamless mode does not display - arm it with' 'WARN'
-                    Write-Log '  set-autologon.ps1, or reinstall passing /autologon:PASSWORD.' 'WARN'
+                    $script:Result.detail.autologon = 'skipped'
+                    Write-Log 'autologon is NOT armed and /noautologon was given - leaving it' 'WARN'
                 }
             } else { $script:Result.detail.autologon = 'verify: no result trailer' }
         } catch {
@@ -2323,19 +2976,47 @@ public static class QdbPrime {
     # The class no longer gates anything - it is recorded for the log only.
     if ($primeIndeterminate) { Write-Log 'qubesdb /type unreadable - priming anyway (it is unconditional)' 'WARN' }
     if ($true) {
+        $primeOk = $false
         $deployPrime = Join-Path $Root 'pvnic-selfprime.ps1'
         if (Test-Path -LiteralPath $deployPrime) {
             Write-Log "class='$(if ($primeIndeterminate) { 'indeterminate' } else { $primeClass })': seeding PV NIC priming latch UNCONDITIONALLY (pvnic-selfprime.ps1)"
             try {
+                $global:LASTEXITCODE = $null
                 $pp = & $deployPrime 2>&1
+                $primeRc = $LASTEXITCODE
                 foreach ($l in @($pp | Select-Object -Last 4)) { Write-Log "  $l" }
-                $script:Result.detail.pvnic_prime = if ($primeIndeterminate) { 'seeded-indeterminate-class' } else { 'seeded' }
+                # JUDGE THE SCRIPT'S VERDICT, not the fact that it returned. pvnic-selfprime.ps1
+                # reports through its MARKJSON trailer (ok / rolled_back / errors) and exit 1 on
+                # rollback; this used to record 'seeded' unconditionally, and then ARM THE LATCH
+                # below - on a rolled-back priming (csc missing, sc create 1072, task registration
+                # refused) that shipped a template LATCHED WITH NO APPLIER: every AppVM completes its
+                # PV NIC install in one boot and sits on APIPA, silently, while the RESULT said
+                # pvnic_prime=seeded. Exactly the state the script is transactional to forbid.
+                $lines = @($pp | ForEach-Object { "$_" })
+                $mj = $null
+                for ($li = 0; $li -lt $lines.Count; $li++) {
+                    if ($lines[$li].Trim() -eq 'MARKJSON' -and ($li + 1) -lt $lines.Count) { $mj = $lines[$li + 1] }
+                }
+                $verdict = $null
+                if ($mj) { try { $verdict = $mj | ConvertFrom-Json } catch { $verdict = $null } }
+                if ($verdict -and ($verdict.PSObject.Properties.Name -contains 'ok') -and [bool]$verdict.ok -and ($primeRc -eq 0 -or $null -eq $primeRc)) {
+                    $primeOk = $true
+                    $script:Result.detail.pvnic_prime = if ($primeIndeterminate) { 'seeded-indeterminate-class' } else { 'seeded' }
+                } else {
+                    $why = if (-not $mj) { 'no MARKJSON trailer' }
+                           elseif (-not $verdict) { 'MARKJSON trailer unparseable' }
+                           else { "ok=$($verdict.ok) rolled_back=$($verdict.rolled_back) errors=$(($verdict.errors | ConvertTo-Json -Compress -Depth 3))" }
+                    Write-Log "PV NIC PRIMING FAILED (exit '$primeRc'; $why) - the latch will NOT be armed; AppVMs from this template will demand a restart on their first netvm boot (the loud state) instead of running applier-less" 'ERROR'
+                    $script:Result.detail.pvnic_prime = "FAILED: exit '$primeRc'; $why"
+                    $script:Result.detail.pvnic_prime_failed = $true
+                }
             } catch {
-                Write-Log "pvnic priming failed: $($_.Exception.Message) (non-fatal)" 'WARN'
+                Write-Log "PV NIC PRIMING FAILED: $($_.Exception.Message) - the latch will NOT be armed" 'ERROR'
                 $script:Result.detail.pvnic_prime = "error: $($_.Exception.Message)"
+                $script:Result.detail.pvnic_prime_failed = $true
             }
         } else {
-            Write-Log 'pvnic-selfprime.ps1 not in payload - PV NIC priming unavailable' 'WARN'
+            Write-Log 'pvnic-selfprime.ps1 not in payload - PV NIC priming unavailable, latch NOT armed (no applier to arm it for)' 'WARN'
             $script:Result.detail.pvnic_prime = 'not in payload'
         }
         # ARM THE LATCH NOW, as the last act before this installer shuts the guest down.
@@ -2352,11 +3033,24 @@ public static class QdbPrime {
         # half-finished install, and Qubes halts the qube. That is the "AppVM shuts down a couple of
         # seconds after starting" report from the field (forum posts 56, 70, 89).
         #
-        # Arming here is safe in both directions: the tasks are already registered above, so the
-        # forbidden latched-without-applier state cannot arise, and an AppVM re-arms per boot anyway.
+        # Arming here is safe ONLY under the precondition the sentence used to assert as a given:
+        # "the tasks are already registered above". That was false whenever pvnic-selfprime rolled
+        # back (it deletes the tasks AND the payload), so it is now CHECKED, twice: the script's own
+        # ok=true verdict above, and the QubesPvNic task actually present right now. Without both,
+        # the latch stays unset - the known LOUD crash state (an AppVM demands a restart on its
+        # first netvm boot), never the silent applier-less one. An AppVM re-arms per boot anyway.
         # (The xenbus_monitor shipping state - disabled, AutoReboot=0 - is asserted below for EVERY
         # qube class, not just templates; 4.3.6 had it in this branch only, which left StandaloneVMs
         # with silent-AutoReboot permanently armed.)
+        $global:LASTEXITCODE = $null
+        try { & schtasks.exe /Query /TN QubesPvNic *>$null } catch { }
+        $pvnicTaskPresent = ($LASTEXITCODE -eq 0)
+        $global:LASTEXITCODE = 0
+        if (-not $primeOk -or -not $pvnicTaskPresent) {
+            Write-Log ("PV NIC unplug latch NOT armed: priming ok=$primeOk, QubesPvNic task present=$pvnicTaskPresent - arming without the " +
+                       'applier would put every AppVM on APIPA silently') 'ERROR'
+            $script:Result.detail.pvnic_latch = "not-armed: prime_ok=$primeOk task_present=$pvnicTaskPresent"
+        } else {
         try {
             reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v NICS /t REG_DWORD /d 1 /f | Out-Null
             reg add "HKLM\SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001&DEV_VIF" /f | Out-Null
@@ -2371,6 +3065,65 @@ public static class QdbPrime {
         } catch {
             Write-Log "arming the PV NIC unplug latch failed: $($_.Exception.Message)" 'WARN'
             $script:Result.detail.pvnic_latch = "error: $($_.Exception.Message)"
+        }
+        } # end: latch armed only under a verified applier
+    }
+
+    # --- netvm hotplug: re-apply Qubes addressing when an interface appears ----------
+    # QWT applies the qubesdb-driven static IP with network-setup.exe at BOOT, and nothing
+    # re-runs it when a vif is hot-plugged, so `qvm-prefs <vm> netvm <net>` on a running
+    # guest leaves it on APIPA (169.254.*) with no gateway until a reboot (measured
+    # 2026-08-07). This registers a SYSTEM task triggered by NetworkProfile event 10000
+    # ("network connected"), which fires on vif arrival. VERIFIED end to end: detach ->
+    # attach restored 10.137.0.70 by itself within 15 s, no manual step, no reboot.
+    #
+    # DECIDED HERE, AFTER pvnic-selfprime, AND ONLY IF THE STOCK APPLIER IS STILL THERE. This block
+    # used to run right after msiexec, when network-setup.exe had just been installed - and then
+    # pvnic-selfprime, later in this same stage, DELETED that binary (its QwtngNetSetup service and
+    # QubesPvNic task, itself on event 10000, own the job now). Every default install therefore
+    # shipped a SYSTEM event task whose action no longer existed, failing 0x80070002 on every vif
+    # arrival while the RESULT said net_reapply_task='registered'; and on a guest where selfprime
+    # rolled back, two mechanisms fired on one event. One event, one consumer: the stock task is
+    # registered only when the stock applier was kept, and removed when the applier is gone.
+    $netExe = 'C:\Program Files\Qubes Tools\bin\network-setup.exe'
+    if (-not (Test-Path -LiteralPath $netExe)) {
+        # Applier retired by pvnic-selfprime: retire the task too, including one left by an earlier
+        # install of this package (upgrade path). Absence of the task is the desired state, so a
+        # 'cannot find' from schtasks is not an error.
+        try { & schtasks.exe /Delete /TN QubesNetworkReapply /F *>$null } catch { }
+        $global:LASTEXITCODE = 0
+        Write-Log 'QubesNetworkReapply not registered: network-setup.exe is retired, QubesPvNic owns NetworkProfile event 10000 (any older task removed)'
+        $script:Result.detail.net_reapply_task = 'not-needed (stock applier retired; QubesPvNic owns event 10000)'
+    } else {
+        # The stock applier survived - pvnic-selfprime was not shipped or rolled back (already an ERROR
+        # above). The stock task is the only hotplug cover left, so it is registered, and said so.
+        Write-Log 'network-setup.exe still present (pvnic-selfprime did not replace it) - registering the STOCK hotplug re-apply task' 'WARN'
+        $taskXml = Join-Path $env:TEMP 'qubes-netreapply.xml'
+        $sub = '&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"&gt;' +
+               '&lt;Select Path="Microsoft-Windows-NetworkProfile/Operational"&gt;*[System[EventID=10000]]' +
+               '&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;'
+        $xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Re-apply Qubes network config when an interface appears</Description></RegistrationInfo>
+  <Triggers><EventTrigger><Enabled>true</Enabled><Subscription>$sub</Subscription><Delay>PT3S</Delay></EventTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><StartWhenAvailable>true</StartWhenAvailable><ExecutionTimeLimit>PT2M</ExecutionTimeLimit><AllowHardTerminate>true</AllowHardTerminate></Settings>
+  <Actions Context="Author"><Exec><Command>"$netExe"</Command></Exec></Actions>
+</Task>
+"@
+        [IO.File]::WriteAllText($taskXml, $xml, [Text.Encoding]::Unicode)
+        # Cleared first: a swallowed stderr throw leaves the PREVIOUS native command's exit code in
+        # $LASTEXITCODE, and this site judged it as its own. $null reads as failure below.
+        $global:LASTEXITCODE = $null
+        try { $out = & schtasks /create /tn QubesNetworkReapply /xml $taskXml /f 2>&1 } catch { $out = "$_" }
+        Remove-Item $taskXml -ErrorAction SilentlyContinue
+        if ($LASTEXITCODE -eq 0) {
+            Write-Log 'registered QubesNetworkReapply (stock applier; netvm hotplug re-applies addressing automatically)'
+            $script:Result.detail.net_reapply_task = 'registered (stock applier kept)'
+        } else {
+            Write-Log "could not register QubesNetworkReapply ($LASTEXITCODE) - netvm hotplug will need network-setup.exe by hand" 'WARN'
+            $script:Result.detail.net_reapply_task = "failed rc=$LASTEXITCODE"
         }
     }
 
@@ -2417,6 +3170,9 @@ public static class QdbPrime {
 
     $script:Result.ok = $true
     $script:Result.reboot_needed = $true
+    # TERMINAL STATE: the -Auto resume task is retired here (and in Fail), not at stage-2 entry -
+    # see the note at the top of this function.
+    Clear-BootResume
     # The install cycle is over - the carried switches have done their job. Leaving the file would
     # silently re-apply them to any later re-run of this script on this guest.
     Remove-Item -LiteralPath $script:StageFlagFile -Force -EA SilentlyContinue
@@ -2460,6 +3216,11 @@ public static class QdbPrime {
             $script:Result.detail.gui_restored = "FAILED: $($_.Exception.Message)"
         }
     }
+    # A PASSED password that could not be armed is a failure of the install, not a WARN inside
+    # detail: the caller asked for a guest that comes back by itself and would otherwise read ok=true
+    # for one that stops at a sign-in screen. Placed after the agent restore above so the guest is
+    # at least visible while the failure is reported.
+    if ($script:AutologonArmFailed) { Fail $script:AutologonArmFailed }
     if ($Auto -and $RebootAtEnd) {
         Write-Log 'rebooting in 2 s (-RebootAtEnd)'
         Emit-ResultThenReboot 0
@@ -2510,6 +3271,65 @@ function Import-PayloadCerts {
     return $certs.Count
 }
 
+function Assert-Stage1Preflight {
+    # THE TERMINAL REFUSALS, EVALUATED BEFORE STAGE 1 MUTATES ANYTHING. Stage 2 refuses to proceed
+    # on (a) an installed QWT whose version it cannot compare, (b) a package carrying an OLDER PV
+    # disk driver than the running one, (c) an installed QWT NEWER than the package (uninstall-first)
+    # while C: is - or may be - on the PV disk path. Every input to those decisions is read-only and
+    # available now. Evaluated only in stage 2, the same install had by then trusted a throwaway CI
+    # cert as a machine ROOT CA, enabled testsigning, rewritten the gui-agent registry, armed
+    # autologon and REBOOTED - and only then said 'REFUSING', leaving a permanently altered guest
+    # for an install that was never going to run. Stage 2 keeps its own checks as the second belt;
+    # the decisions and messages here mirror them.
+    param([Parameter(Mandatory)][string]$Root)
+    $existing = @(Get-InstalledQwt)
+    if ($existing.Count -eq 0) { return }
+    Write-Log "pre-flight: $($existing.Count) installed QWT product(s) - checking stage 2's refusals before touching the guest"
+    $inPlace = $false
+    try {
+        $oursStr = "$($script:Result.detail.package_version)" -split '\+' | Select-Object -First 1
+        $ov = [version]$oursStr
+        $ours = [version]::new($ov.Major, $ov.Minor, [math]::Max([int]$ov.Build, 0))
+        $olds = @($existing | ForEach-Object {
+            $iv = [version]$_.Version
+            [version]::new($iv.Major, $iv.Minor, [math]::Max([int]$iv.Build, 0)) })
+        $inPlace = ($olds.Count -gt 0 -and @($olds | Where-Object { $_ -gt $ours }).Count -eq 0)
+    } catch {
+        Fail ("pre-flight: cannot compare the installed QWT version(s) [" +
+              (($existing | ForEach-Object { "'$($_.Version)'" }) -join ', ') +
+              "] with this package ('$($script:Result.detail.package_version)'): $($_.Exception.Message). " +
+              'Stage 2 would refuse for the same reason, so nothing is changed on this guest. Fix the ' +
+              'DisplayVersion of the registered product (or uninstall it from a guest that can still boot ' +
+              'without it) and re-run.')
+    }
+    $pkgVbd = Get-PackagePvDiskDriverVersion -MsiPath (Join-Path $Root 'msi\installer.msi')
+    $insVbd = Get-InstalledPvDiskDriverVersion
+    if ($insVbd -and $pkgVbd) {
+        try {
+            $iv = [version]($insVbd -replace '[^0-9.].*$', '')
+            $pv = [version]($pkgVbd -replace '[^0-9.].*$', '')
+            if ($pv -lt $iv) {
+                Fail ("pre-flight REFUSAL (nothing changed on this guest): this package carries an OLDER Xen PV disk " +
+                      "driver ($pv) than the one running ($iv). Stage 2 refuses a disk-driver downgrade (0x7B " +
+                      'INACCESSIBLE BOOT DEVICE on a PV-booted guest), so stage 1 does not start it. To go back ' +
+                      'deliberately, uninstall Qubes Windows Tools first on a guest that can still boot without it.')
+            }
+        } catch { Write-Log "pre-flight: PV disk driver version comparison failed ($($_.Exception.Message)) - stage 2 re-checks" 'WARN' }
+    }
+    if (-not $inPlace) {
+        $pvBoot = Test-BootDiskOnPvPath
+        if ($pvBoot -or $null -eq $pvBoot) {
+            $probe = if ($null -eq $pvBoot) { 'the PV boot-disk probe FAILED (UNKNOWN, treated as on the PV path)' } else { 'C: is served by the Xen PV disk driver' }
+            Fail ("pre-flight REFUSAL (nothing changed on this guest): the installed QWT ($($existing[0].Version)) is NEWER than " +
+                  "this package, which needs the uninstall-first path, and $probe - removing QWT there leaves the guest with " +
+                  'NO boot disk (0x7B INACCESSIBLE BOOT DEVICE, domain destroyed). Stage 2 refuses this, so stage 1 does ' +
+                  "not enable testsigning or trust certificates for it. Install a package whose version is HIGHER than " +
+                  "$($existing[0].Version) instead; it upgrades in place.")
+        }
+    }
+    Write-Log 'pre-flight: no stage-2 refusal applies - proceeding with stage 1'
+}
+
 function Write-PreconditionSnapshot {
     # The FIRST act of the installer, before anything mutates. Records the guest state THE
     # INSTALLER ITSELF SEES, read through the same helpers the install decisions are made with.
@@ -2544,7 +3364,10 @@ function Write-PreconditionSnapshot {
         $snap.installed_qwt_count = $q.Count
     } catch { $snap.installed_qwt = 'ERROR'; $snap.installed_qwt_count = -1 }
 
-    try { $snap.pv_boot_disk = [bool](Test-BootDiskOnPvPath) } catch { $snap.pv_boot_disk = 'ERROR' }
+    # Tri-state kept as such: a [bool] cast turned the probe's UNKNOWN ($null) into 'not PV', so the
+    # record of record said 'not on the PV path' about a probe that had not answered.
+    try { $pvp = Test-BootDiskOnPvPath; $snap.pv_boot_disk = if ($null -eq $pvp) { 'UNKNOWN' } else { [bool]$pvp } }
+    catch { $snap.pv_boot_disk = 'ERROR' }
 
     # xenbus_monitor: service state AND live processes. These differ - 81d2b79 exists because the
     # service was Disabled while the process was still running and acting. Recorded separately so
@@ -2578,8 +3401,12 @@ function Write-PreconditionSnapshot {
         }
     } catch {}
     $snap.pending_request = $req
+    # Services\xenbus_monitor\Parameters - the key Disable-XenbusMonitor writes and the monitor
+    # reads. This used to read HKLM\SOFTWARE\Xen\XenBusMonitor, which nothing here writes, so every
+    # snapshot said auto_reboot:null whether or not AutoReboot=1 (the field's AppVM reboot loop) was
+    # armed on entry - the one fact the suppressor design hinges on was never on the record.
     try {
-        $ar = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Xen\XenBusMonitor' -Name 'AutoReboot' -ErrorAction SilentlyContinue
+        $ar = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' -Name 'AutoReboot' -ErrorAction SilentlyContinue
         if ($ar) { $snap.auto_reboot = $ar.AutoReboot } else { $snap.auto_reboot = $null }
     } catch { $snap.auto_reboot = $null }
 
@@ -2624,10 +3451,12 @@ function Write-PreconditionSnapshot {
 
     $json = ($snap | ConvertTo-Json -Compress -Depth 6)
     Write-Log ('=== PRECONDITION === ' + $json)
+    # Beside the log on C:, NOT in $WorkDir: Copy-Payload wipes $WorkDir (Remove-Item -Recurse) and
+    # recopies it from the medium on every run that does not already execute from it, so a file
+    # written there survived only on task-resumed runs - its presence encoded the launch path, not
+    # whether the snapshot was taken. Per run id, so a resumed run does not overwrite stage 1's.
     try {
-        $dir = Split-Path $WorkDir -Parent
-        if (-not (Test-Path -LiteralPath $WorkDir)) { New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null }
-        Set-Content -LiteralPath (Join-Path $WorkDir 'precondition.json') -Value $json -Encoding ASCII
+        Set-Content -LiteralPath "C:\qwt-improved-precondition-$RunId.json" -Value $json -Encoding ASCII
     } catch {
         Write-Log ("precondition snapshot file could not be written: $($_.Exception.Message) " +
                    '- the log line above is the record') 'WARN'
@@ -2641,6 +3470,49 @@ try {
     Write-Log '================================================================'
     Write-Log 'Qubes Windows Tools (improved GUI agent) - setup'
     Assert-Elevated
+
+    # SINGLE INSTANCE. The -Auto resume task fires at boot+60 s; a user following install.cmd's
+    # 'REBOOT NOW, then run install.cmd again' or a harness with qrexec up at ~40 s starts a second
+    # instance from the medium, whose Copy-Payload removes C:\qwt-improved-setup recursively while
+    # the task's instance is executing from it (msi/, certs/, idd-driver/ vanish mid-run), then both
+    # reach msiexec and both run the quiesce against each other's state. Reproduced with the stock
+    # task on win10-clean 2026-08-06 (two stacked setup dialogs, guest wedged). Held for the life of
+    # this process; released by exit. Global\ so a SYSTEM task instance and an elevated user instance
+    # see the same object.
+    try {
+        $script:InstanceMutex = New-Object System.Threading.Mutex($false, 'Global\QwtImprovedSetup')
+        $gotIt = $false
+        try { $gotIt = $script:InstanceMutex.WaitOne(0) }
+        catch [System.Threading.AbandonedMutexException] { $gotIt = $true }   # a previous holder died: ours now
+        if (-not $gotIt) {
+            # NOT Fail: Fail retires the resume task and resets the run counter, and both belong to
+            # the instance that IS running. This one just reports and leaves.
+            $msg = ('another instance of this installer is already running (Global\QwtImprovedSetup is held) - ' +
+                    'most likely the -Auto boot-resume task. Do not start install.cmd again while it runs; ' +
+                    'follow C:\qwt-improved-install.log instead.')
+            Write-Log $msg 'FATAL'
+            $script:Result.ok = $false
+            $script:Result.error = $msg
+            Emit-Result 1
+        }
+    } catch {
+        Write-Log "could not take the single-instance mutex: $($_.Exception.Message) - continuing without it" 'WARN'
+    }
+
+    # -Auto runs are counted (Step-AutoRunCounter) and BOUNDED: an unattended cycle that starts
+    # again and again without reaching a terminal state - a stage 2 cut short on every boot and
+    # re-run by the still-armed task, or the stage-1 loop Invoke-Stage1 diagnoses - stops here with
+    # a FATAL instead of repeating for the life of the guest. Normal cycles use 2 runs (stage 1,
+    # stage 2), 3 with an uninstall reboot.
+    if ($Auto) {
+        [void](Step-AutoRunCounter)
+        if ($script:AutoRuns -gt 4) {
+            Fail ("this unattended install has started $script:AutoRuns times without reaching a terminal state - " +
+                  'something keeps interrupting it (a mid-install restart, a boot that never gets far enough). ' +
+                  'NOT continuing: the resume task is retired so the guest stops re-running this on every boot. ' +
+                  'Read C:\qwt-improved-install.log for what each run got to, fix that, and start install.cmd again.')
+        }
+    }
 
     # FIRST, before anything mutates - see the function header. A run whose log has no
     # '=== PRECONDITION ===' line did not get this far, and its scenario is therefore unknown:
@@ -2684,6 +3556,8 @@ try {
         Invoke-Stage2 -Root $WorkDir
     } else {
         Write-Log 'testsigning is NOT active in this boot -> stage 1'
+        # Stage 2's terminal refusals, checked BEFORE stage 1 arms, trusts, or reboots anything.
+        Assert-Stage1Preflight -Root $WorkDir
         Invoke-Stage1 -Root $WorkDir
     }
 } catch {
@@ -2692,5 +3566,10 @@ try {
     Write-Log ($_.ScriptStackTrace) 'FATAL'
     $script:Result.ok = $false
     $script:Result.error = $msg
+    # Same terminal-state duties as Fail: an unexpected exception must not leave the resume task
+    # armed (it would re-run this on every boot) or the swept-aside gui binaries missing.
+    try { Clear-BootResume } catch { }
+    try { Reset-AutoRunCounter } catch { }
+    try { Restore-SweptBinaries } catch { }
     Emit-Result 1
 }

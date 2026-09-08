@@ -242,16 +242,30 @@ qvm-start "$CHURN" >/dev/null 2>&1
 # into the qrexec-carrying boot within one poll. Measured cost of relying on the rescue instead:
 # the 2026-09-03 prove-ours run sat at "state=Running (no qrexec yet)" from t+134s onward with the
 # rescue never firing by t+1083s - the install itself was long finished. The rescue therefore
-# exists ONLY for a job that fails its own contract: it fires at most ONCE, after RESCUE_AFTER
-# seconds AND 3 consecutive CPU-quiet reads (so it can never interrupt an install still working),
+# exists ONLY for a job that fails its own contract: it fires at most ONCE, RESCUE_AFTER seconds
+# after the LAST start AND after RESCUE_QUIET consecutive CPU-quiet reads (see below: 3 reads could
+# land inside the resume task's own idle window and interrupt an install still working),
 # and the cpu value is logged on every poll line so a rescue that cannot fire is visible in the
 # log instead of being discovered after the deadline.
 RESCUE_AFTER=${RESCUE_AFTER:-420}
+# RESCUE GATES ARE MEASURED FROM THE LAST START, NOT FROM t0, AND NEED 8 QUIET READS (160 s), NOT 3
+# (audit 2026-09-08, prime-run.sh:266). The guest is legitimately CPU-quiet for 60 s on the boot
+# after stage 1: the resume task is `/SC ONSTART /DELAY 0001:00`, and stage 2 deletes that task the
+# moment it starts (Clear-BootResume). When stage 1 + its reboot ran long, that idle window began
+# after t0+420 s, three 20 s polls read cpu<15 while nothing was running yet, and the rescue
+# `qvm-shutdown` landed exactly as stage 2 started - task already gone, so the restarted guest never
+# ran stage 2 and the run polled "no qrexec yet" to DEADLINE: a false "install never completed" for a
+# build that was fine (or a half-installed fixture if it landed mid-msiexec). Stage 2 itself also
+# idles 2x30 s on the IDD bind polls. The DIAG marker is no help here: `installer rc=` is written
+# when stage 1 RETURNS, i.e. right before its own `shutdown /r`, so it is present throughout the
+# very window that must not be interrupted. Hence: no rescue within RESCUE_AFTER of the most
+# recent qvm-start, and a quiet streak longer than every known idle window.
+RESCUE_QUIET=8
 # Terminal, not deadline, when the guest crash-loops: stage1 + stage2 + post-install is at most a
 # handful of reboots; a guest that halts more than 8 times is cycling, and restarting it for the
 # rest of the budget would just shred the evidence of why.
 MAX_RESTARTS=${MAX_RESTARTS:-8}
-t0=$(date +%s); restarts=0; ready=0; rescued=0; quiet=0; cpu=-
+t0=$(date +%s); restarts=0; ready=0; rescued=0; quiet=0; cpu=-; t_start=$t0
 while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     sleep 20
     el=$(( $(date +%s) - t0 ))
@@ -263,11 +277,33 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
         cpu=$(printf '' | timeout 10 qrexec-client-vm "$CHURN" admin.vm.Stats 2>/dev/null | tr '\0' '\n' \
               | awk '/^cpu_usage_raw$/{getline v; if(v+0>m)m=v+0; n++} END{if(n==0)print 9999; else print m}')
         if [ "${cpu:-9999}" -lt 15 ] 2>/dev/null; then quiet=$((quiet+1)); else quiet=0; fi
-        if [ "$rescued" = 0 ] && [ "$el" -ge "$RESCUE_AFTER" ] && [ "$quiet" -ge 3 ]; then
+        since_start=$(( $(date +%s) - t_start ))
+        if [ "$rescued" = 0 ] && [ "$since_start" -ge "$RESCUE_AFTER" ] && [ "$quiet" -ge "$RESCUE_QUIET" ]; then
             rescued=1
-            log "  t+${el}s no qrexec for ${RESCUE_AFTER}s and CPU quiet (${cpu}) - the install has"
-            log "    finished but the job did not reboot the guest as its contract requires (a fresh"
-            log "    PV install cannot produce qrexec in this boot). Rebooting ONCE as backup."
+            log "  t+${el}s ANOMALY: no qrexec ${since_start}s after the last start and CPU quiet (${cpu})"
+            log "    for $((quiet*20))s - the install has finished but the job did not reboot the guest as"
+            log "    its contract requires (a fresh PV install cannot produce qrexec in this boot)."
+            # EVIDENCE BEFORE THE DESTRUCTIVE ACT (audit 2026-09-08, prime-run.sh:271). This state
+            # is also what a "QrexecAgent started, then exited after WaitForQdb" guest looks like -
+            # Running, quiet, no qrexec - and findings/install.md says that state must be PRESERVED
+            # and interrogated, never restarted: two of them were destroyed exactly this way, and
+            # the intermittent "never reproduced" in 13 cycles because this reboot cured and erased
+            # it. The rescue stays (a job that forgot its reboot must not cost a whole deadline),
+            # but it no longer fires blind: the screen, the DIAG markers and - where xencons is
+            # already bound - the service state and SCM event log go to $OUT first, all bounded.
+            log "    capturing rescue evidence: screen=$(screen_probe "rescue-t${el}")"
+            mcopy -n -i "${DIAGIMG:-/nonexistent}" ::/prime-progress.log "$OUT/diag-markers-at-rescue.log" 2>/dev/null \
+                && log "    diag markers at rescue -> $OUT/diag-markers-at-rescue.log" \
+                || log "    no diag markers readable at rescue"
+            if timeout -k 5 150 ./tools/qcon "$CHURN" \
+                   'sc query QrexecAgent & sc query QdbDaemon & sc qfailure QrexecAgent & wevtutil qe System /c:40 /rd:true /f:text /q:"*[System[Provider[@Name='"'"'Service Control Manager'"'"']]]"' \
+                   >"$OUT/rescue-console.txt" 2>"$OUT/rescue-console.err"; then
+                log "    PV-console service dump -> $OUT/rescue-console.txt ($(wc -l <"$OUT/rescue-console.txt") lines)"
+            else
+                qrc=$?
+                log "    PV console gave nothing (rc=$qrc, $(tail -c 200 "$OUT/rescue-console.err" | tr '\n' ' ')) - expected when xencons is not yet bound"
+            fi
+            log "    Rebooting ONCE as backup. This run will be stamped rescued=1 - it is NOT a clean pass."
             qvm-shutdown "$CHURN" >/dev/null 2>&1
         fi
     fi
@@ -280,7 +316,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
         fi
         log "  t+${el}s guest halted (the job rebooted it) - restart #$restarts"
         qvm-start "$CHURN" >/dev/null 2>&1
-        quiet=0
+        quiet=0; t_start=$(date +%s)   # the rescue clock runs from THIS boot, see RESCUE_QUIET
         continue
     fi
     if QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null \
@@ -346,6 +382,9 @@ QTEST_VM=$CHURN timeout -k 5 90 ./tools/qtest shot "$OUT/screen.tar" >/dev/null 
   && tar -xf "$OUT/screen.tar" -C "$OUT" 2>/dev/null
 
 echo "restarts=$restarts" > "$OUT/prime-run.meta"
+# `rescued` is recorded, not just `restarts`: a job that honoured its reboot contract and one that
+# had to be rescue-rebooted by this script were indistinguishable in the meta (audit 2026-09-08).
+echo "rescued=$rescued" >> "$OUT/prime-run.meta"
 echo "job=$JOB base=$BASE churn=$CHURN" >> "$OUT/prime-run.meta"
 
 # --- fixture provenance record ----------------------------------------------------------------
@@ -388,6 +427,14 @@ if [ "$ready" != 1 ]; then
 fi
 mcopy -n -i "${DIAGIMG:-/nonexistent}" ::/prime-progress.log "$OUT/diag-markers.log" 2>/dev/null \
     && log "diag markers saved to $OUT/diag-markers.log"
+if [ "$rescued" = 1 ]; then
+    # Not a clean pass: qrexec only appeared because THIS script rebooted the guest. Either the job
+    # broke its reboot contract or the guest's qrexec died after starting - both are defects, and
+    # the pre-rescue evidence in $OUT is the only record of which. Exit stays 0 (the guest IS up,
+    # which is all this script promises); the caller reads rescued=1 from prime-run.meta.
+    log "OK-WITH-RESCUE: $CHURN is up ONLY because of the one-shot rescue reboot (rescued=1 in prime-run.meta)."
+    log "  ANOMALY - grade the job's reboot contract / qrexec startup from $OUT/rescue-* before trusting this fixture."
+fi
 log "OK: $CHURN is up. Evidence in $OUT. The stick is still assigned --required and"
 log "  qemu-extra-args is still set - clear both before using this guest as a cell subject."
 exit 0

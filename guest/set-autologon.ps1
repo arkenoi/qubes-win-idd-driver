@@ -128,11 +128,40 @@ public static class QubesLsa {
 function Get-WL($n) { (Get-ItemProperty -Path $WL -Name $n -ErrorAction SilentlyContinue).$n }
 
 # ---- 1. who ----------------------------------------------------------------
+$userSource = 'parameter'
 if (-not $User) {
     # The console session's user, not ours: this script is normally run elevated or as SYSTEM.
     $cs = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
-    if ($cs) { $User = $cs.Split('\')[-1] }
-    elseif ($env:USERNAME -and $env:USERNAME -ne 'SYSTEM') { $User = $env:USERNAME }
+    if ($cs) { $User = $cs.Split('\')[-1]; $userSource = 'console-session' }
+    elseif ($env:USERNAME -and $env:USERNAME -ne 'SYSTEM') { $User = $env:USERNAME; $userSource = 'environment' }
+}
+if (-not $User) {
+    # No interactive session yet. Win32_ComputerSystem.UserName is null until a logon has
+    # COMPLETED, and the installer's stage 1 runs from a SYSTEM ONSTART task that reaches this
+    # point within seconds of boot - before autologon has produced a session. Failing 'no-user'
+    # there loses the arming to a timing accident and reports it as a configuration problem.
+    # Resolve the account from state that exists without any session instead; a wrong pick is
+    # harmless because LogonUser validates the pair before anything is written.
+    $dun = Get-WL 'DefaultUserName'
+    if ($dun) { $User = [string]$dun; $userSource = 'winlogon-DefaultUserName' }
+}
+if (-not $User) {
+    # Who signed in last (written by LogonUI at every interactive logon, survives reboot).
+    $llu = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Authentication\LogonUI' -Name 'LastLoggedOnUser' -ErrorAction SilentlyContinue).LastLoggedOnUser
+    if ($llu) { $User = ([string]$llu).Split('\')[-1]; $userSource = 'LogonUI-LastLoggedOnUser' }
+}
+if (-not $User) {
+    # A pristine base has exactly one real user profile; use it only if it is unambiguous.
+    $names = @()
+    foreach ($p in @(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList' -ErrorAction SilentlyContinue)) {
+        if ($p.PSChildName -notlike 'S-1-5-21-*') { continue }
+        try {
+            $acct = (New-Object System.Security.Principal.SecurityIdentifier($p.PSChildName)).Translate([System.Security.Principal.NTAccount]).Value
+            if ($acct) { $names += $acct.Split('\')[-1] }
+        } catch { }   # orphaned profile of a deleted account - not a candidate
+    }
+    if ($names.Count -eq 1) { $User = $names[0]; $userSource = 'single-profile' }
+    elseif ($names.Count -gt 1) { Write-Output "info   $($names.Count) user profiles, none selectable without a session: $($names -join ', ')" }
 }
 if (-not $User) {
     Write-Output 'FAIL   no user to arm autologon for (pass -User)'
@@ -140,7 +169,7 @@ if (-not $User) {
     exit 2
 }
 if (-not $Domain) { $Domain = $env:COMPUTERNAME }
-Write-Output "info   arming autologon for $Domain\$User"
+Write-Output "info   arming autologon for $Domain\$User (user from: $userSource)"
 
 # ---- 2. validate BEFORE writing anything -----------------------------------
 # A blank password is legitimate (a local account with none): Windows autologs in with an empty

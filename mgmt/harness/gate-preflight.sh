@@ -19,7 +19,8 @@
 #
 # Exit: 0 = CLEAR TO RUN; 1 = do not spend the 28 min (the bit blinds the harness - a GRADED
 # outcome); 2 = refusing (no control even unarmed); 3 = INVALID-INSTRUMENT, guest unresponsive
-# mid-sequence (also graded - this script must ALWAYS return a verdict, never hang).
+# mid-sequence or the watchdog service not Running after a toggle (also graded - this script
+# must ALWAYS return a verdict, never hang).
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 VM="${1:?usage: $0 <vm> <hex-bits>}"
@@ -46,7 +47,7 @@ alive(){ T=30 q run 'cmd /c echo LIVE' | grep -qa LIVE; }
 
 guest_gone(){  # <context> - one bounded restore attempt, the verdict row, and OUT (exit 3)
   log "guest gone - one bounded FaultGateOff=0 restore attempt, then the verdict"
-  T=90 set_bits 0 >/dev/null 2>&1 || true
+  T=120 set_bits 0 >/dev/null 2>&1 || true   # 120: set_bits may now poll up to 45 s for the agent PID
   log "-> INVALID-INSTRUMENT: guest unresponsive during the fault-toggle sequence"
   log "   (arm+agent-restart degraded the session at bit $BITS; $1)."
   log "   The failproof is NOT TAKEABLE this run - a graded, honest outcome: the SG rows it"
@@ -80,12 +81,45 @@ import struct,sys; b=open(sys.argv[1],'rb').read(); w,h=struct.unpack('>II',b[16
   rm -f "$t"; echo "$n|$d"
 }
 
+# AGENT RESTART WAITS ON A FACT, NOT A TIMER (audit 2026-09-08). This used to be `Start-Service;
+# Start-Sleep 22`. Start-Service returning says nothing about the agent: the watchdog reports
+# RUNNING at once and spawns gui-agent from its own loop, so a slow session (cold AppVM, IDD
+# re-bind) had no agent yet at 22 s and the toggle was graded against a stale state, while a
+# fast guest idled ~20 s per toggle. Worse, -EA SilentlyContinue hid a watchdog that never
+# started, and any gui-agent left over from before the kill then stood in for the "restarted"
+# one. Now: the pre-kill PIDs are recorded and only a gui-agent NOT among them counts (bounded
+# 45 s poll), the service status is echoed for the caller to grade, and the window-map witness
+# is control_up's own outcome poll below.
 set_bits(){ psrun "New-Item -Path '$KEY' -Force | Out-Null
 Set-ItemProperty -Path '$KEY' -Name FaultGateOff -Value $1 -Type DWord
+\$old = @(Get-Process gui-agent -EA SilentlyContinue | ForEach-Object Id)
 Stop-Service QubesGuiWatchdog -Force -EA SilentlyContinue; Start-Sleep 3
 Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 2
-Start-Service QubesGuiWatchdog -EA SilentlyContinue; Start-Sleep 22
-Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)" | grep -a GATEOFF; }
+\$wdErr = ''
+try { Start-Service QubesGuiWatchdog -EA Stop } catch { \$wdErr = \$_.Exception.Message }
+\$wd = (Get-Service QubesGuiWatchdog -EA SilentlyContinue).Status
+Write-Output ('WDSTART ' + \$wd + ' ' + \$wdErr)
+\$new = 0; \$sw = [Diagnostics.Stopwatch]::StartNew()
+while (\$sw.Elapsed.TotalSeconds -lt 45) {
+  \$p = @(Get-Process gui-agent -EA SilentlyContinue | Where-Object { \$old -notcontains \$_.Id })
+  if (\$p.Count -gt 0) { \$new = \$p[0].Id; break }
+  Start-Sleep -Milliseconds 500
+}
+Write-Output ('AGENTPID ' + \$new + ' after ' + [int]\$sw.Elapsed.TotalSeconds + 's')
+Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)" | grep -aE 'GATEOFF|WDSTART|AGENTPID'; }
+
+watchdog_failed(){  # <context> - the watchdog service is not Running after Start-Service: the
+                    # toggle never restarted the agent, so nothing downstream measures the bit.
+                    # Graded INVALID-INSTRUMENT (exit 3), never a silent proceed.
+  log "watchdog did not start - one bounded FaultGateOff=0 restore attempt, then the verdict"
+  T=120 set_bits 0 >/dev/null 2>&1 || true
+  log "-> INVALID-INSTRUMENT: QubesGuiWatchdog not Running after Start-Service ($1)."
+  log "   The agent was never restarted under bit $BITS, so any control reading would grade a"
+  log "   leftover state, not the bit. The failproof is NOT TAKEABLE this run."
+  printf 'PREFLIGHT\t%s\t%s\tINVALID-INSTRUMENT\tQubesGuiWatchdog not Running after Start-Service (%s); failproof not takeable this run\n' \
+    "$VM" "$BITS" "$1"
+  exit 3
+}
 
 # The GATEOFF echo must ROUND-TRIP or the toggle is graded, never assumed. Called only at top
 # level (never in a pipe/substitution) so guest_gone's exit actually terminates the script.
@@ -99,6 +133,13 @@ set_bits_checked(){  # <value> <context>
       guest_gone "$2: guest answers liveness but the FaultGateOff write never round-trips"
   fi
   echo "$out" | sed 's/^/  /'
+  # A watchdog that is not Running is an instrument failure, graded here (see set_bits). A
+  # Running watchdog with no NEW gui-agent inside the bound is an anomaly worth a loud line, but
+  # not a verdict: control_up grades the OUTCOME (windows or none) against a live guest.
+  echo "$out" | grep -qa 'WDSTART Running' || \
+    watchdog_failed "$2: $(echo "$out" | grep -a WDSTART | head -1)"
+  echo "$out" | grep -qa 'AGENTPID 0 ' && \
+    log "  ANOMALY: watchdog Running but no NEW gui-agent PID within 45 s ($2) - grading the control poll, not a guess"
 }
 
 # POLL for the control, never a fixed sleep. A fixed settle is how P5 once scored SG3 as FAIL
@@ -110,7 +151,11 @@ control_up(){  # -> echoes the window list once the control appears, or after th
                #    rc 3 = the guest stopped answering (caller grades it, never out-waits it)
   T=60 q run 'cmd /c taskkill /f /im notepad.exe 2>nul & start "" notepad.exe' >/dev/null 2>&1
   local i w n dead=0
-  for i in $(seq 1 12); do
+  # 16 polls (96 s), was 12: set_bits no longer sleeps a fixed 22 s after Start-Service, so the
+  # time a cold guest needs to init the agent AND draw the control is all spent here, on the
+  # outcome poll. Keeps the worst-case window budget where it was (22 + 72 s) instead of
+  # shrinking it and re-creating the "0 windows for a healthy agent" false REFUSING above.
+  for i in $(seq 1 16); do
     sleep 6
     w=$(windows); n=${w%%|*}
     [ "${n:-0}" -gt 0 ] && { echo "$w"; return 0; }

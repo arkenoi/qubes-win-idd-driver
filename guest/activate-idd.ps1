@@ -20,6 +20,33 @@ $ErrorActionPreference = 'Stop'
 $log = 'C:\qwt-idd-activate.log'
 function Log($m,$lvl='INFO'){ $line=('{0} [{1}] {2}' -f (Get-Date -Format 'HH:mm:ss'),$lvl,$m); Write-Host $line; try{Add-Content -LiteralPath $log -Value $line}catch{} }
 $result = [ordered]@{ ok=$false; idd=$null; reboot_needed=$false; error=$null }
+$script:GuiQuiesced = $false
+
+# Bring the gui-agent back when THIS run is not rebooting the guest (-NoReboot, or a failure before
+# the reboot line). Without it a quiesced run that exits maps ZERO windows in dom0 - no agent, no
+# watchdog to respawn one - until somebody reboots by hand. On the rebooting path the untouched
+# service start type brings it back with the topology already final, so nothing is restarted there.
+function Restore-Gui {
+    if (-not $script:GuiQuiesced) { return }
+    try {
+        Start-Service -Name 'QubesGuiWatchdog' -ErrorAction Stop
+        Log 'gui-agent restarted: this run quiesced it and is NOT rebooting from here'
+        $result['gui_restored'] = $true
+    } catch {
+        Log "could not restart QubesGuiWatchdog: $($_.Exception.Message) - THIS QUBE WILL MAP NO WINDOWS until it is rebooted" 'ERROR'
+        $result['gui_restored'] = "FAILED: $($_.Exception.Message)"
+    }
+}
+# Re-checked before every device operation (not only once): gui-watchdog.exe respawns the agent
+# within ~1 s if the service stop did not hold, and two 30 s bind waits sit between the driver
+# staging and the VGA disable.
+function Assert-GuiQuiesced([string]$When) {
+    $live = @(Get-Process -Name 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost' -ErrorAction SilentlyContinue)
+    if ($live.Count -gt 0) {
+        throw ("gui-agent quiesce is NOT holding $When (" + (($live | ForEach-Object { "$($_.ProcessName)/$($_.Id)" }) -join ', ') +
+               ') - refusing to do display surgery under a live capture agent. Stop QubesGuiWatchdog by hand and re-run.')
+    }
+}
 
 function Emit($code){
     $result.idd = "$($script:idd)"
@@ -78,6 +105,47 @@ try {
     $inf = @(Get-ChildItem -LiteralPath $iddDir -Filter *.inf -ErrorAction SilentlyContinue)
     if ($inf.Count -ne 1) { throw "$iddDir holds $($inf.Count) .inf files (expected exactly 1)" }
     if (-not (Test-Path -LiteralPath $devcon)) { throw "devcon.exe missing from $iddDir" }
+
+    # ---- QUIESCE THE GUI-AGENT before any device work (audit 2026-09-08) -----------------------
+    # This script runs on a guest whose gui-agent is LIVE and capturing the VGA adapter. Everything
+    # below - pnputil, devcon create, Disable-PnpDevice on the adapter the duplication is bound to -
+    # is the display surgery the installer's stage 2 stopped doing under a live agent on 2026-09-08
+    # (a clean install froze dead inside that state); /iddonly reached the same state through this
+    # entry point, which the installer's fix did not cover, and the 5 s reboot at the end never
+    # arrives if the guest wedges first. Same recipe as the installer: watchdog first (it respawns
+    # the agent ~1 s after it dies), then the agent and the helpers it launches; the helpers'
+    # scheduled tasks are deleted so a `schtasks /run` already queued cannot start a WGC broker into
+    # the session mid-surgery (the agent recreates them on every launch). WaitForExit on each handle
+    # - Kill() returns before the process is gone.
+    try {
+        $wd = Get-Service -Name 'QubesGuiWatchdog' -ErrorAction SilentlyContinue
+        if ($wd -and $wd.Status -ne 'Stopped') {
+            Log 'stopping QubesGuiWatchdog for the device work (back after the reboot, or restarted if this run does not reboot)'
+            Stop-Service -Name 'QubesGuiWatchdog' -Force -ErrorAction Stop
+            $script:GuiQuiesced = $true
+        } else {
+            Log 'QubesGuiWatchdog not running - nothing to quiesce before the device work'
+        }
+    } catch {
+        Log "could not stop QubesGuiWatchdog: $($_.Exception.Message) - killing its process below; if that does not hold either, the activation refuses to run" 'WARN'
+    }
+    foreach ($tn in 'Qubes-WgcBroker', 'Qubes-NotifBridge', 'Qubes-NotifRestore', 'Qubes-NotifDirect') {
+        try { & schtasks.exe /End /TN $tn *>$null } catch { }
+        try { & schtasks.exe /Delete /TN $tn /F *>$null } catch { }
+    }
+    $global:LASTEXITCODE = 0
+    foreach ($pn in 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost') {
+        foreach ($pr in @(Get-Process -Name $pn -ErrorAction SilentlyContinue)) {
+            try   { $pr.Kill(); [void]$pr.WaitForExit(5000); $script:GuiQuiesced = $true; Log "  stopped $pn (pid $($pr.Id))" }
+            catch { Log "  could not stop $pn (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
+        }
+    }
+    # let an in-flight AcquireNextFrame and the framebuffer grant go away before a device moves under them
+    if ($script:GuiQuiesced) { Start-Sleep -Seconds 3 }
+    $result['gui_quiesced'] = $script:GuiQuiesced
+    # A quiesce that quietly failed leaves the surgery running under a live agent while the log says
+    # it was quiesced - refuse (loud failure path, VGA untouched) rather than enter the freeze knowingly.
+    Assert-GuiQuiesced 'before staging the driver'
 
     # ---- identical-bytes guard + self-heal (FINDINGS 2026-08-27, the withdrawn 4.3.8) --------
     # Staging a package whose DLL is BYTE-IDENTICAL to the one already running re-binds the
@@ -213,6 +281,8 @@ public static class QiddProbe {
     if ($vgaCim -and $vgaCim.ConfigManagerErrorCode -eq 22) {
         Log "VGA $($vgaDev.InstanceId) already disabled - nothing to do"
     } else {
+        # re-verified HERE: the adapter the desktop runs on is the one thing below that cannot be undone in-session
+        Assert-GuiQuiesced 'right before disabling the VGA adapter'
         Log "disabling emulated VGA: $($vgaDev.InstanceId) - display may blank until reboot"
         Disable-PnpDevice -InstanceId $vgaDev.InstanceId -Confirm:$false -ErrorAction Stop | Out-Null
     }
@@ -220,9 +290,11 @@ public static class QiddProbe {
     $result.ok = $true; $result.reboot_needed = $true
     Log 'IDD ACTIVATED - reboot required so it comes up primary'
     if (-not $NoReboot) { Log 'rebooting in 5 s'; & shutdown.exe /r /t 5 /c 'Qubes IDD activation' | Out-Null }
+    else { Restore-Gui }
     Emit 0
 } catch {
     $result.error = "$($_.Exception.Message)"
     Log "IDD ACTIVATION FAILED: $($result.error)" 'ERROR'
+    Restore-Gui
     Emit 1
 }

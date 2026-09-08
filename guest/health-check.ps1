@@ -552,13 +552,34 @@ if ($nics.Count -eq 0) {
 # On a latch-seeded template the PV adapter is INSTALLED FRESH EVERY BOOT and the QubesPvNic
 # task must land the qubesdb IP each time. Latched-without-applier is the forbidden SILENT
 # state (survives with APIPA only, measured 2026-08-18) - pv_drivers_bound PASSES it, so this
-# check exists to fail it. NA on guests without the M1 deployment (task not registered).
+# check exists to fail it.
+#
+# An ABSENT deployment is a HARD FAIL, never 'na' (audit 2026-09-08). It used to be 'na', and every
+# template is graded offline (netvm='') under ALLOW_NA=1, so a template whose priming rolled back
+# (csc missing, sc create 1072, task registration refused) - or that was latched with no applier -
+# passed accept_grade and the harness reported ACCEPT=PASS for a package whose AppVMs boot to silent
+# APIPA: a false verdict at the exact check written to catch that state. There is no legitimate
+# 'not registered' on a guest carrying our package: the installer seeds the latch UNCONDITIONALLY for
+# every qube class, and pvnic-selfprime.ps1 is all-or-nothing (task + payload + QwtngNetSetup service,
+# rolled back together), so all three are asserted. The stock-QWT sentinel is the same one selfprime
+# keys on (qrexec-agent.exe) and is recorded as evidence only.
 schtasks /query /tn QubesPvNic 2>$null | Out-Null
 $pvnicTask = ($LASTEXITCODE -eq 0)
 $pvnicMarker = Test-Path 'C:\ProgramData\QubesPvNic-FAILED.txt'
-if (-not $pvnicTask) {
-    Check 'pvnic_applier' $false @{ na = 'QubesPvNic task not registered - M1 latch deployment absent' }
-    $r.checks['pvnic_applier'].na = $true
+$qwtBin = 'C:\Program Files\Qubes Tools\bin'
+$qwtInstalled = Test-Path (Join-Path $qwtBin 'qrexec-agent.exe')
+$pvnicPayload = Test-Path (Join-Path $qwtBin 'pvnic-boot.ps1')
+$pvnicSvc = [bool](Get-Service QwtngNetSetup -ErrorAction SilentlyContinue)
+if (-not ($pvnicTask -and $pvnicPayload -and $pvnicSvc)) {
+    # Message text kept verbatim: protocol/steps/p2-network.json NET-1 greps for it.
+    Check 'pvnic_applier' $false `
+        @{ error = $(if (-not $pvnicTask) { 'QubesPvNic task not registered - M1 latch deployment absent' }
+                     else { 'QubesPvNic task registered but the applier deployment is INCOMPLETE - selfprime is all-or-nothing, this state must not exist' })
+           task_registered = $pvnicTask
+           payload_present = $pvnicPayload
+           netsetup_service_registered = $pvnicSvc
+           qwt_installed = $qwtInstalled
+           failure_marker_present = $pvnicMarker }
 } elseif ($nics.Count -eq 0) {
     # Offline guest: the applier must have stayed quiet (no marker); nothing else assertable.
     Check 'pvnic_applier' (-not $pvnicMarker) @{ offline = $true; failure_marker_present = $pvnicMarker }

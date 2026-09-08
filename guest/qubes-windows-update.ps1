@@ -1103,12 +1103,54 @@ function Install-Msus($files){
   # is real; if RebootPending never appears, the loss was this race and serialising was treating a
   # symptom.
   if ($reboot) {
-    $rp = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+    $cbsRel = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing'
+    $rp = "HKLM:\$cbsRel\RebootPending"
     $deadline = (Get-Date).AddMinutes(10)
-    $seen = $false
-    while ((Get-Date) -lt $deadline) {
-      if (Test-Path $rp) { $seen = $true; break }
-      Start-Sleep -Seconds 5
+    # PUSH, not poll (audit 2026-09-08): this used to Test-Path every 5 s, adding up to 5 s of dead
+    # time to every dom0-driven pass. RebootPending is a SUBKEY of the CBS key, so a
+    # REG_NOTIFY_CHANGE_NAME notification on the parent wakes us the instant CBS creates it. The
+    # notification only says "a subkey under CBS changed", so re-Test and re-arm until the key is
+    # there or the 10 min are up. Arm BEFORE testing so a key created between the two is not missed.
+    $seen = [bool](Test-Path $rp)
+    if (-not $seen) {
+      try {
+        if (-not ('CbsRegNotify' -as [type])) {
+          Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class CbsRegNotify {
+    [DllImport("advapi32.dll")]
+    public static extern int RegNotifyChangeKeyValue(IntPtr hKey, bool bWatchSubtree, uint dwNotifyFilter, IntPtr hEvent, bool fAsynchronous);
+}
+'@
+        }
+        $cbsKey = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($cbsRel,
+                    [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadSubTree,
+                    ([System.Security.AccessControl.RegistryRights]::Notify -bor [System.Security.AccessControl.RegistryRights]::ReadKey))
+        if (-not $cbsKey) { throw 'CBS key not openable' }
+        $ev = New-Object System.Threading.ManualResetEvent($false)
+        try {
+          while (-not $seen -and (Get-Date) -lt $deadline) {
+            [void]$ev.Reset()
+            # 0x1 = REG_NOTIFY_CHANGE_NAME (subkey add/delete); 0x10000000 = REG_NOTIFY_THREAD_AGNOSTIC
+            # so the registration is not tied to the calling thread's lifetime.
+            $nrc = [CbsRegNotify]::RegNotifyChangeKeyValue($cbsKey.Handle.DangerousGetHandle(), $false, 0x10000001,
+                                                            $ev.SafeWaitHandle.DangerousGetHandle(), $true)
+            if ($nrc -ne 0) { throw "RegNotifyChangeKeyValue rc=$nrc" }
+            if (Test-Path $rp) { $seen = $true; break }
+            $ms = [int][Math]::Max(0, ($deadline - (Get-Date)).TotalMilliseconds)
+            [void]$ev.WaitOne($ms)
+            if (Test-Path $rp) { $seen = $true }
+          }
+        } finally { $ev.Dispose(); $cbsKey.Dispose() }
+      } catch {
+        # A working registry notification is the instrument here; losing it is an anomaly, not a
+        # mode. Say so, then keep the bounded poll so the settle verdict is still reached.
+        Log "  WARNING: RebootPending registry notification unavailable ($($_.Exception.Message)) - polling every 5 s instead"
+        while (-not $seen -and (Get-Date) -lt $deadline) {
+          if (Test-Path $rp) { $seen = $true; break }
+          Start-Sleep -Seconds 5
+        }
+      }
     }
     $ti = @(Get-Process TiWorker, TrustedInstaller -EA SilentlyContinue).Count
     Log ("  settle: CBS RebootPending={0} after staging, servicing processes still up={1}" -f $seen, $ti)
@@ -1117,8 +1159,22 @@ function Install-Msus($files){
       Log '  WARNING: staged but CBS never reported RebootPending - a reboot now would lose it'
     }
     # Let TiWorker finish its post-DISM work; rebooting mid-registration is what loses a package.
+    # Wait ON the process, not for it (audit 2026-09-08): the 10 s Get-Process poll re-listed every
+    # process for as long as TiWorker ran (minutes) and overshot its exit by up to 10 s. WaitForExit
+    # returns the moment it is gone. The loop re-lists only when an instance actually exited, so a
+    # TiWorker that TrustedInstaller respawns is still waited for, as the poll did.
     $q = (Get-Date).AddMinutes(10)
-    while ((Get-Date) -lt $q -and @(Get-Process TiWorker -EA SilentlyContinue).Count -gt 0) { Start-Sleep -Seconds 10 }
+    while ((Get-Date) -lt $q) {
+      $tiw = @(Get-Process TiWorker -EA SilentlyContinue)
+      if ($tiw.Count -eq 0) { break }
+      $ms = [int][Math]::Max(1, ($q - (Get-Date)).TotalMilliseconds)
+      try { [void]$tiw[0].WaitForExit($ms) }
+      catch {
+        # Cannot open the process for SYNCHRONIZE - an anomaly on the SYSTEM task this runs as.
+        Log "  WARNING: WaitForExit on TiWorker failed ($($_.Exception.Message)) - polling every 10 s instead"
+        Start-Sleep -Seconds 10
+      }
+    }
     Log ("  settle: TiWorker idle={0}" -f (@(Get-Process TiWorker -EA SilentlyContinue).Count -eq 0))
   }
   return $rows

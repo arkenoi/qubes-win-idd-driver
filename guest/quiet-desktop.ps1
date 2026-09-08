@@ -150,6 +150,58 @@ function Set-PerUserValues([string]$HiveRoot, [string]$Label) {
 
 Set-PerUserValues 'HKCU:' 'current user'
 
+# A hive we reg-load is locked for as long as it stays mounted; a failed unload leaves it locked
+# for the rest of the boot, and that user's next logon then fails ("User Profile Service failed
+# the sign-in", temp profile, no shell). The old code discarded the unload result and still
+# reported failed=0. Retry once or twice (the provider handles need a GC to go away) and count a
+# final failure so the trailer is honest.
+function Dismount-Hive([string]$Mount, [string]$Label) {
+    for ($try = 0; $try -lt 3; $try++) {
+        [gc]::Collect(); [gc]::WaitForPendingFinalizers()
+        & reg unload "HKU\$Mount" *> $null
+        if ($LASTEXITCODE -eq 0) { return }
+        Start-Sleep -Seconds 1
+    }
+    $script:failed++
+    Write-Output "FAIL   ${Label}: reg unload HKU\$Mount failed - hive stays locked until reboot, that user's next logon will fail"
+}
+
+# NEVER reg-load an offline hive while a logon may be in flight. This script runs as SYSTEM at
+# boot (installer stage 2 from its ONSTART task, and the QubesQuietDesktopGuard task at PT1M),
+# and autologon is armed on every image we ship - so on a slow first boot (pending driver
+# packages, or an AppVM's FIRST boot where the profile is still being created by copying
+# C:\Users\Default\NTUSER.DAT) the autologon user's hive is not loaded yet at t+60s. Loading
+# their NTUSER.DAT, or the Default hive it is being copied from, as SYSTEM at that moment makes
+# Winlogon's LoadUserProfile find the file in use: temp profile, no usable shell - the symptom
+# the harness has been attributing to a stale private volume. So: if autologon is armed, wait
+# (bounded) until that user's hive is loaded by Winlogon before touching anything offline; if it
+# never appears, SKIP the offline hives and say so loudly. Hives already under HKEY_USERS are
+# written in place regardless - nothing is mounted for those.
+$offlineSafe = $false
+$wl = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -ErrorAction SilentlyContinue
+if ("$($wl.AutoAdminLogon)" -ne '1' -or -not $wl.DefaultUserName) {
+    $offlineSafe = $true
+    Write-Output 'ok     no autologon armed - no logon expected in flight, offline hives allowed'
+} else {
+    $acct = if ($wl.DefaultDomainName) { "$($wl.DefaultDomainName)\$($wl.DefaultUserName)" } else { "$($wl.DefaultUserName)" }
+    $autoSid = $null
+    try { $autoSid = ([System.Security.Principal.NTAccount]$acct).Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { }
+    if (-not $autoSid) {
+        $script:failed++
+        Write-Output "FAIL   autologon user '$acct' does not resolve to a SID - cannot tell whether a logon is in flight, offline hives SKIPPED"
+    } else {
+        $deadline = (Get-Date).AddSeconds(120)
+        while (-not (Test-Path "Registry::HKEY_USERS\$autoSid") -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
+        if (Test-Path "Registry::HKEY_USERS\$autoSid") {
+            $offlineSafe = $true
+            Write-Output "ok     autologon user '$acct' hive is loaded - logon complete, offline hives allowed"
+        } else {
+            $script:failed++
+            Write-Output "FAIL   autologon user '$acct' ($autoSid) has no loaded hive after 120s - logon may still be in flight, offline hives SKIPPED this run"
+        }
+    }
+}
+
 $profileList = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
 foreach ($prof in (Get-ChildItem $profileList -ErrorAction SilentlyContinue |
                    Where-Object { $_.PSChildName -match '^S-1-5-21-' })) {
@@ -158,22 +210,25 @@ foreach ($prof in (Get-ChildItem $profileList -ErrorAction SilentlyContinue |
     if (Test-Path "Registry::HKEY_USERS\$sid") {
         Set-PerUserValues "Registry::HKEY_USERS\$sid" "profile $sid (loaded)"
     } elseif ($path -and (Test-Path "$path\NTUSER.DAT")) {
+        if (-not $offlineSafe) { Write-Output "SKIP   profile $sid (offline): not touched, a logon may be in flight"; continue }
         $mount = 'QWTNG_' + $sid.Substring($sid.Length - 6)
         & reg load "HKU\$mount" "$path\NTUSER.DAT" *> $null
         if ($LASTEXITCODE -eq 0) {
             Set-PerUserValues "Registry::HKEY_USERS\$mount" "profile $sid (offline)"
-            [gc]::Collect()
-            & reg unload "HKU\$mount" *> $null
+            Dismount-Hive $mount "profile $sid (offline)"
         }
     }
 }
 
 if (Test-Path 'C:\Users\Default\NTUSER.DAT') {
-    & reg load 'HKU\QWTNG_DEF' 'C:\Users\Default\NTUSER.DAT' *> $null
-    if ($LASTEXITCODE -eq 0) {
-        Set-PerUserValues 'Registry::HKEY_USERS\QWTNG_DEF' 'default profile'
-        [gc]::Collect()
-        & reg unload 'HKU\QWTNG_DEF' *> $null
+    if (-not $offlineSafe) {
+        Write-Output 'SKIP   default profile: not touched, a first logon may be copying it right now'
+    } else {
+        & reg load 'HKU\QWTNG_DEF' 'C:\Users\Default\NTUSER.DAT' *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Set-PerUserValues 'Registry::HKEY_USERS\QWTNG_DEF' 'default profile'
+            Dismount-Hive 'QWTNG_DEF' 'default profile'
+        }
     }
 }
 

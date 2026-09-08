@@ -55,8 +55,18 @@ else { Write-Output "ok     DefaultUserName=$user" }
 # set-autologon.ps1 puts it, because an LSA secret is not consumed by AutoLogonCount and is not
 # world-readable plaintext. Winlogon reads it when the registry value is absent, so a guest with
 # only the secret is correctly armed and must NOT be reported as broken.
+#
+# The query outcome is tracked SEPARATELY from the answer: "could not ask LSA" is not "no
+# password". set-autologon.ps1 stores ONLY the secret, so on every correctly armed guest the
+# verdict rests on this query alone - and a probe fault (Add-Type failing, LsaOpenPolicy denied)
+# used to print 'NO autologon password' and exit 2, which made the updater withhold every reboot
+# of a fully armed guest until a human intervened (audit 2026-09-08).
 $lsa = $null
+$lsaKnown = $false
 try {
+    # A long-lived host that already compiled this type (the installer dot-runs us in-process)
+    # must not fail the whole probe on "type name already exists".
+    if (-not ('QubesLsaRead' -as [type])) {
     Add-Type -ErrorAction Stop @'
 using System;
 using System.Runtime.InteropServices;
@@ -71,16 +81,23 @@ public static class QubesLsaRead {
     static extern uint LsaRetrievePrivateData(IntPtr policy, ref LSA_UNICODE_STRING key, out IntPtr data);
     [DllImport("advapi32.dll")] static extern uint LsaClose(IntPtr policy);
     [DllImport("advapi32.dll")] static extern uint LsaFreeMemory(IntPtr p);
+    // true/false ONLY for a definitive answer. A failed LsaOpenPolicy or an unexpected
+    // LsaRetrievePrivateData status THROWS, so the caller records "unknown" - it used to return
+    // false and be reported as "no password set" (exit 2, reboot withheld) on an armed guest.
     public static bool Present(string key) {
         LSA_OBJECT_ATTRIBUTES a = new LSA_OBJECT_ATTRIBUTES();
         a.Length = Marshal.SizeOf(typeof(LSA_OBJECT_ATTRIBUTES));
         IntPtr pol, data = IntPtr.Zero;
-        if (LsaOpenPolicy(IntPtr.Zero, ref a, 0x00000004 /* GET_PRIVATE_INFORMATION */, out pol) != 0) return false;
+        uint st = LsaOpenPolicy(IntPtr.Zero, ref a, 0x00000004 /* GET_PRIVATE_INFORMATION */, out pol);
+        if (st != 0) throw new InvalidOperationException("LsaOpenPolicy failed, NTSTATUS 0x" + st.ToString("X8"));
         LSA_UNICODE_STRING k = new LSA_UNICODE_STRING();
         k.Buffer = Marshal.StringToHGlobalUni(key);
         k.Length = (ushort)(key.Length * 2); k.MaximumLength = (ushort)(k.Length + 2);
         try {
-            if (LsaRetrievePrivateData(pol, ref k, out data) != 0 || data == IntPtr.Zero) return false;
+            st = LsaRetrievePrivateData(pol, ref k, out data);
+            if (st == 0xC0000034) return false; /* STATUS_OBJECT_NAME_NOT_FOUND: definitively absent */
+            if (st != 0) throw new InvalidOperationException("LsaRetrievePrivateData failed, NTSTATUS 0x" + st.ToString("X8"));
+            if (data == IntPtr.Zero) return false;
             LSA_UNICODE_STRING v = (LSA_UNICODE_STRING)Marshal.PtrToStructure(data, typeof(LSA_UNICODE_STRING));
             return v.Length > 0 && v.Buffer != IntPtr.Zero;
         } finally {
@@ -90,11 +107,14 @@ public static class QubesLsaRead {
     }
 }
 '@
+    }
     $lsa = [QubesLsaRead]::Present('DefaultPassword')
+    $lsaKnown = $true
 } catch {
-    Write-Output "note   could not query the LSA secret ($($_.Exception.Message.Split([char]10)[0]))"
+    Write-Output "WARN   could not query the LSA secret ($($_.Exception.Message.Split([char]10)[0]))"
 }
 
+$unknown = 0
 if ($lsa) {
     Write-Output 'ok     password present as the LSA secret (not consumable, not plaintext)'
     if ($pass) {
@@ -102,6 +122,14 @@ if ($lsa) {
     }
 } elseif ($pass) {
     Write-Output 'ok     DefaultPassword present (plaintext registry value - consumable)'
+} elseif (-not $lsaKnown) {
+    # Probe fault, not a verdict: the secret may well be there. Loud (a probe that fails on an
+    # eligible guest is a defect to diagnose), but NOT the "password consumed" finding - that one
+    # withholds reboots, and a transient LSA/Add-Type error must not do that to an armed guest.
+    Write-Output 'WARN   cannot tell whether an autologon password is set: the LSA secret could not be'
+    Write-Output 'WARN   queried and there is no registry DefaultPassword. Autologon is UNVERIFIED, not'
+    Write-Output 'WARN   known-broken - diagnose the LSA query failure above.'
+    $unknown++
 } else {
     Write-Output 'WARN   NO autologon password is set: neither the LSA secret nor DefaultPassword.'
     Write-Output 'WARN   Autologon will NOT happen, this qube will come back at the sign-in screen,'
@@ -110,10 +138,17 @@ if ($lsa) {
     $warn++
 }
 
+$lsaState = if (-not $lsaKnown) { 'unknown' } elseif ($lsa) { 'present' } else { 'absent' }
 Write-Output ''
-Write-Output ("=== RESULT === changed=$changed warnings=$warn")
+# warnings= counts the unverified case too, so a caller that only reads the trailer (the
+# installer's stage-2 verify) does not log "armed" for a state it could not check; lsa= says which
+# case it was.
+Write-Output ("=== RESULT === changed=$changed warnings=$($warn + $unknown) lsa=$lsaState")
 # EXIT CODE IS A CONTRACT: 0 = autologon will happen on the next boot, 2 = it will NOT and the
-# qube would come back unreachable. The updater refuses to reboot on 2 rather than knowingly
-# stranding the qube - see wu-update.ps1.
+# qube would come back unreachable, 3 = it could not be VERIFIED (the LSA probe itself failed; no
+# positive finding either way). The updater refuses to reboot on 2 rather than knowingly stranding
+# the qube - see wu-update.ps1; 3 is deliberately not 2, so a probe fault cannot block every
+# dom0-driven update of an armed guest.
 if ($warn -gt 0) { exit 2 }
+if ($unknown -gt 0) { exit 3 }
 exit 0

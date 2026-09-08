@@ -93,6 +93,7 @@ if (-not $csc) { $fail['netsetup_no_csc'] = 'csc.exe not found' }
 else {
     @'
 using System; using System.Diagnostics; using System.Runtime.InteropServices;
+using System.Collections.Generic;
 using System.ServiceProcess; using System.Net.NetworkInformation; using Microsoft.Win32;
 
 public class QwtngNetSetup : ServiceBase {
@@ -114,6 +115,19 @@ public class QwtngNetSetup : ServiceBase {
     const string LOG   = @"C:\ProgramData\QubesNetSetup.log";
     const string STAMP = @"C:\ProgramData\QubesNetSetup.applied";
     const string CACHE = @"Q:\qwtng-netcfg.txt";
+    // Machine-readable anomaly marker, same shape as the task's QubesPvNic-FAILED.txt. Written when a
+    // fallback fires (qubesdb never opened -> cache) or a bounded wait ends without its adapter. A
+    // log line alone let the harness's network cell PASS on stale addressing.
+    const string MARK  = @"C:\ProgramData\QubesNetSetup-FAILED.txt";
+
+    static void Loud(string why) {
+        Log("ERROR " + why);
+        try { System.IO.File.WriteAllText(MARK, "QubesNetSetup FAILED: " + why + " at " + DateTime.Now.ToString("o") + "\r\n"); } catch { }
+        try {
+            if (!EventLog.SourceExists("QubesNetSetup")) EventLog.CreateEventSource("QubesNetSetup", "Application");
+            EventLog.WriteEntry("QubesNetSetup", "PV NIC applier: " + why, EventLogEntryType.Error, 1000);
+        } catch { }
+    }
 
     static void Log(string m) {
         // PREFER the private volume: an AppVM's C: is volatile, so a guest that dies mid-boot takes
@@ -130,8 +144,15 @@ public class QwtngNetSetup : ServiceBase {
         try { return len == 0 ? null : Marshal.PtrToStringAnsi(p, (int)len); }
         finally { qdb_free(p); }
     }
+    static string xenGuidLastReport = null;
     static string XenGuid() {
         const string cls = @"SYSTEM\CurrentControlSet\Control\Class\{4D36E972-E325-11CE-BFC1-08002BE10318}";
+        // ALL matching class entries, not the first. A persistent root (StandaloneVM, template with a
+        // reinstalled PV package) accumulates a second 'Xen PV Network Device' entry; the dead one
+        // sorts first, Work() then waits 180 s for an adapter that never comes and Reconcile() ticks
+        // forever believing the config is right (ConfigIsRight defaults true on an absent guid) - a
+        // live netvm change is then never repaired by this service, with nothing loud anywhere.
+        List<string> cands = new List<string>();
         using (RegistryKey k = Registry.LocalMachine.OpenSubKey(cls)) {
             if (k == null) return null;
             foreach (string sub in k.GetSubKeyNames())
@@ -141,10 +162,28 @@ public class QwtngNetSetup : ServiceBase {
                     string i = x.GetValue("NetCfgInstanceId") as string;
                     if (d != null && i != null &&
                         d.IndexOf("Xen", StringComparison.OrdinalIgnoreCase) >= 0 &&
-                        d.IndexOf("Net", StringComparison.OrdinalIgnoreCase) >= 0) return i;
+                        d.IndexOf("Net", StringComparison.OrdinalIgnoreCase) >= 0) cands.Add(i);
                 }
         }
-        return null;
+        if (cands.Count == 0) return null;
+        if (cands.Count == 1) return cands[0];
+        // >1 candidate: the one that is a PRESENT interface wins. Fall back to the highest-numbered
+        // class subkey (the newest instance; subkeys enumerate sorted 0000..NNNN) and say so ONCE
+        // per distinct situation - this runs every reconcile tick, so it must not spam.
+        string pick = null; int presentCount = 0;
+        try {
+            foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
+                foreach (string c in cands)
+                    if (string.Equals(ni.Id, c, StringComparison.OrdinalIgnoreCase)) { presentCount++; if (pick == null) pick = c; }
+        } catch { }
+        if (pick == null) pick = cands[cands.Count - 1];
+        string report = cands.Count + " Xen net class entries, " + presentCount + " present, using " + pick;
+        if (report != xenGuidLastReport) {
+            xenGuidLastReport = report;
+            if (presentCount == 1) Log(report);
+            else Log("ERROR " + report + " (ambiguous - a stale class entry on this root; reconciler may target the wrong adapter)");
+        }
+        return pick;
     }
     static void Netsh(string args) {
         try {
@@ -183,26 +222,38 @@ public class QwtngNetSetup : ServiceBase {
 
     static void Work() {
         ArmLatch();
+        // The marker describes THIS boot: clear the previous boot's verdict on a persistent root.
+        try { System.IO.File.Delete(MARK); } catch { }
         string ip = null, mask = null, gw = null, d1 = null, d2 = null;
-        // qubesdb is authoritative but not up early; retry briefly, then fall back to the cache
-        // on the PRIVATE volume, which survives an AppVM reboot.
+        bool qdbOpened = false;
+        // qubesdb is authoritative but not up early. Wait for it as long as the adapter wait below
+        // (180 s): the old 30 s gave up on exactly the boot this latch exists for (first PV boot,
+        // xeniface slow, QdbDaemon still syncing) and configured from the previous boot's cache -
+        // or, on a fresh AppVM with no cache, left the PV NIC unaddressed - as normal flow. The
+        // cache is a FALLBACK; when it fires it is reported as an anomaly, not logged as routine.
         try {
             SetDllDirectory(@"C:\Program Files\Qubes Tools\bin");
             IntPtr h = IntPtr.Zero;
-            for (int i = 0; i < 60 && h == IntPtr.Zero; i++) {
+            int waited = 0;
+            for (; waited < 360 && h == IntPtr.Zero; waited++) {
                 h = qdb_open(IntPtr.Zero);
                 if (h == IntPtr.Zero) System.Threading.Thread.Sleep(500);
             }
             if (h != IntPtr.Zero) {
+                qdbOpened = true;
+                if (waited >= 60) Log("qubesdb opened late (" + (waited / 2) + " s) - QdbDaemon slow on this boot");
                 try {
                     ip = Rd(h, "/qubes-ip"); mask = Rd(h, "/qubes-netmask"); gw = Rd(h, "/qubes-gateway");
                     d1 = Rd(h, "/qubes-primary-dns"); d2 = Rd(h, "/qubes-secondary-dns");
                     Log("qubesdb ip=" + ip + " gw=" + gw);
                 } finally { qdb_close(h); }
-            } else Log("qubesdb never opened; using cache");
+            } else Loud("qubesdb never opened within 180 s (QdbDaemon late or absent) - falling back to the Q: cache, which may be another boot's or lineage's addressing");
         } catch (Exception e) { Log("qdb EXCEPTION " + e.Message); }
 
-        if (ip == null || mask == null || gw == null) {
+        // The cache stands in for a qubesdb that did not ANSWER. A qubesdb that answered with no
+        // /qubes-ip means NO NETVM: applying a cached address from an earlier netvm there would be
+        // a stale config on a guest dom0 says has none.
+        if (!qdbOpened && (ip == null || mask == null || gw == null)) {
             try {
                 if (System.IO.File.Exists(CACHE)) {
                     string[] c = System.IO.File.ReadAllLines(CACHE);
@@ -214,16 +265,20 @@ public class QwtngNetSetup : ServiceBase {
                     }
                 }
             } catch (Exception e) { Log("cache read EXCEPTION " + e.Message); }
-        } else {
+        } else if (ip != null && mask != null && gw != null) {
             try {
                 System.IO.File.WriteAllText(CACHE, ip + "\r\n" + mask + "\r\n" + gw + "\r\n" +
                                                    (d1 ?? "") + "\r\n" + (d2 ?? "") + "\r\n");
             } catch { }
         }
-        if (ip == null || mask == null || gw == null) { Log("no settings from qubesdb or cache"); return; }
+        if (ip == null || mask == null || gw == null) {
+            Log(qdbOpened ? "qubesdb up, /qubes-ip absent: no netvm, nothing to apply" : "no settings from qubesdb or cache");
+            return;
+        }
 
+        // The class entry may not exist yet on the first PV boot (install in flight); the wait loop
+        // below re-resolves it each pass, so do not bail here - only a null AFTER the wait is final.
         string guid = XenGuid();
-        if (guid == null) { Log("no Xen adapter class entry"); return; }
         string tag = ip + "|" + mask + "|" + gw;
         if (AppliedThisBoot(tag)) { Log("already applied this boot"); return; }
 
@@ -231,11 +286,17 @@ public class QwtngNetSetup : ServiceBase {
         // makes the AppVM halt itself (measured). Bounded so a guest with no vif just exits.
         string ifname = null;
         for (int i = 0; i < 360; i++) {
+            // Re-resolve every pass: the adapter is born with a NEW NetCfgInstanceId each AppVM boot,
+            // and a guid resolved before the entry existed (or from a stale entry) would otherwise be
+            // waited on for the full 180 s while the real adapter came up unnoticed.
+            string g = XenGuid();
+            if (g != null) guid = g;
             try {
-                foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces()) {
-                    if (string.Equals(ni.Id, guid, StringComparison.OrdinalIgnoreCase) &&
-                        ni.OperationalStatus == OperationalStatus.Up) { ifname = ni.Name; break; }
-                }
+                if (guid != null)
+                    foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces()) {
+                        if (string.Equals(ni.Id, guid, StringComparison.OrdinalIgnoreCase) &&
+                            ni.OperationalStatus == OperationalStatus.Up) { ifname = ni.Name; break; }
+                    }
             } catch { }
             if (ifname != null) break;
             // Inventory every 10 s while waiting. An AppVM that resets takes its C: logs with it,
@@ -251,7 +312,9 @@ public class QwtngNetSetup : ServiceBase {
             }
             System.Threading.Thread.Sleep(500);
         }
-        if (ifname == null) { Log("PV NIC never came up - not applying"); return; }
+        // qubesdb (or the cache) named a netvm, so a vif is expected; an adapter that never reaches Up in
+        // 180 s is the 'needs a second boot' defect the latch exists to remove - a log line alone hid it.
+        if (ifname == null) { Loud("PV NIC " + (guid ?? "<no class entry>") + " never came up within 180 s - not applying (ip " + ip + " gw " + gw + " wanted)"); return; }
         Log("adapter up as '" + ifname + "'");
         Apply(ifname, ip, mask, gw, d1, d2, tag);
     }
@@ -356,6 +419,18 @@ public class QwtngNetSetup : ServiceBase {
     else {
         try {
             & sc.exe stop QwtngNetSetup 2>&1 | Out-Null
+            # WAIT for the old service to be STOPPED and its PROCESS gone before touching the exe.
+            # On an upgrade the service is resident (auto-start, reconciles forever), and 'sc stop'
+            # returns while qwtng-netsetup.exe is still tearing down (worker inside a 2 s sleep);
+            # the Copy-Item below then throws 'being used by another process' -> netsetup_install
+            # -> full rollback -> template shipped un-latched. Intermittent on CLR shutdown latency.
+            $old = Get-Service QwtngNetSetup -EA SilentlyContinue
+            if ($old) { try { $old.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(30)) } catch { } }
+            foreach ($p in @(Get-Process -Name 'qwtng-netsetup' -EA SilentlyContinue)) {
+                # It is our own binary being replaced; a process that outlives its service's
+                # Stopped state by 15 s is not going to finish on its own.
+                if (-not $p.WaitForExit(15000)) { try { $p.Kill(); [void]$p.WaitForExit(5000) } catch { } }
+            }
             & sc.exe delete QwtngNetSetup 2>&1 | Out-Null
             Copy-Item $svcOut $svcExe -Force -EA Stop
             # 'sc delete' on a service that is still stopping only MARKS it for delete, and
@@ -471,16 +546,51 @@ try {
     } else { L 'xenbus_monitor service not present' }
 } catch { L "xenbus_monitor enforcement failed: $($_.Exception.Message)" }
 
+function Diagnose {
+    # Classify the terminal failure from the bus, not just announce it. 'PV adapter never
+    # appeared' after 300 s told the user nothing about the one cause this whole file exists
+    # for: a template shipped un-latched -> the NET child sits at ConfigManagerErrorCode 14
+    # (restart required) with the emulated PCI NIC still plugged. The fix for that is re-seeding
+    # the template, which nobody can know from 'never appeared'. Read-only; never throws out.
+    $short = 'unclassified'; $detail = ''
+    try {
+        $pnp = @(Get-PnpDevice -PresentOnly -EA SilentlyContinue)
+        $vif = @($pnp | Where-Object { $_.InstanceId -like 'XENVIF\*' })
+        $pdo = @($pnp | Where-Object { $_.InstanceId -like 'XENBUS\VEN_XP0001&DEV_VIF*' })
+        # The emulated NIC is a PCI device; XENVIF/XENNET are not. Loopback/test adapters are
+        # neither, so 'PCI\' is the discriminator, not 'anything non-Xen'.
+        $pci = @(Get-NetAdapter -EA SilentlyContinue | Where-Object { $_.PnPDeviceID -like 'PCI\*' })
+        $codes = @($vif | ForEach-Object { [int]$_.ConfigManagerErrorCode })
+        if ($codes -contains 14) {
+            $short = 'XENVIF NET child at problem 14 (restart required): the unplug latch was NOT armed when this boot started - template shipped un-latched, re-seed it'
+        } elseif ($vif.Count -eq 0 -and $pdo.Count -eq 0) {
+            $short = 'no XENBUS VIF PDO and no XENVIF devnode: a vif never arrived at this boot'
+        } elseif ($pci.Count -gt 0) {
+            $short = 'emulated PCI NIC still present alongside the vif: the boot-time unplug did not happen'
+        } elseif ($vif.Count -gt 0) {
+            $short = 'XENVIF devnode present but not a usable adapter (problem ' + ($codes -join ',') + ')'
+        } else {
+            $short = 'XENBUS VIF PDO present, no XENVIF devnode: xenvif never bound'
+        }
+        $detail = ("XENVIF=" + (@($vif | ForEach-Object { "$($_.InstanceId):problem$($_.ConfigManagerErrorCode)" }) -join ',') +
+                   " PDO=" + $pdo.Count + " PCI-NICs=" + (@($pci | ForEach-Object { "$($_.Name)/$($_.Status)" }) -join ','))
+    } catch { $detail = "diagnosis failed: $($_.Exception.Message)" }
+    @{ short = $short; detail = $detail }
+}
+
 function Loud($why) {
+    $dx = Diagnose
     L "FAILED: $why"
-    Set-Content $mark ("QubesPvNic FAILED: {0} at {1}" -f $why, (Get-Date -Format o))
+    L "diagnosis: $($dx.short) [$($dx.detail)]"
+    Set-Content $mark ("QubesPvNic FAILED: {0} at {1}`r`ndiagnosis: {2} [{3}]" -f $why, (Get-Date -Format o), $dx.short, $dx.detail)
     New-EventLog -LogName Application -Source QubesPvNic -EA SilentlyContinue
-    Write-EventLog -LogName Application -Source QubesPvNic -EntryType Error -EventId 1000 -Message "PV NIC: $why" -EA SilentlyContinue
+    Write-EventLog -LogName Application -Source QubesPvNic -EntryType Error -EventId 1000 -Message "PV NIC: $why`r`ndiagnosis: $($dx.short) [$($dx.detail)]" -EA SilentlyContinue
     # Interactive alert (amendment A4): dom0 sees no guest network state, an in-guest file is
     # a marker nobody reads - put pixels in front of the human. Console session ONLY (msg *
     # also targets session 0; suspected - unproven - of wedging qrexec on the D2 test boot),
     # and persistent (default msg timeout is ~60 s, which made the D2 pixel capture miss it).
-    & msg.exe console /time:86400 "Qubes PV network configuration FAILED: $why (see C:\ProgramData\QubesPvNic-FAILED.txt)" 2>$null
+    # File pointer BEFORE the diagnosis: msg.exe truncates long text, and the pointer must survive.
+    & msg.exe console /time:86400 "Qubes PV network configuration FAILED: $why (see C:\ProgramData\QubesPvNic-FAILED.txt). $($dx.short)" 2>$null
     exit 1
 }
 
@@ -656,7 +766,13 @@ else { Loud 'PV adapter never appeared within the deadline' }
 '@
 Set-Content -Path $payload -Value $body -Encoding ASCII
 if (-not (Test-Path $payload)) { $fail.payload = 'could not write payload' }
-$payloadHash = (Get-FileHash $payload -Algorithm SHA256).Hash.ToLower()
+# Resolve defensively: the line above has just recorded "could not write payload", and chaining
+# .Hash off a Get-FileHash that returns $null throws on exactly that defective state - replacing
+# the recorded reason with a PowerShell exception. The hash is reported in the MARKJSON trailer
+# (payload_sha256), so an unresolvable one must travel as a value, not as a crash. (lint L6)
+$payloadHash = 'unavailable'
+$ph = Get-FileHash $payload -Algorithm SHA256 -ErrorAction SilentlyContinue
+if ($ph -and $ph.Hash) { $payloadHash = $ph.Hash.ToLower() }
 
 # ---------------- tasks (registered and verified BEFORE any latch exists) ----------------
 function Register-Xml($name, $xml) {
@@ -739,7 +855,7 @@ if ($fail.Count -gt 0) {
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Network\NewNetworkWindowOff" /f | Out-Null
 reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\DriverSearching" /v SearchOrderConfig /t REG_DWORD /d 0 /f | Out-Null
 powercfg /h off 2>$null | Out-Null
-# QWT logging on (Info), and LogDir on the PRIVATE volume.
+# QWT logging on (Info). LogDir belongs on the PRIVATE volume - seeded by the installer, see below.
 #
 # An AppVM's C: is VOLATILE, so anything written to C:\ProgramData\QubesLogs is gone at the next
 # boot - which makes a boot-time failure impossible to post-mortem, the exact class of bug being
@@ -750,10 +866,16 @@ powercfg /h off 2>$null | Out-Null
 # QWT's own location Q:\Qubes Logs is on the private volume and survives; it already holds 1140
 # files, the newest 2026-08-21 - the day this seed moved logging off it. Seeding C: here was
 # incidental to seeding LogDir at all, and it cost the ability to debug any AppVM boot.
-$logDir = if (Test-Path 'Q:\') { 'Q:\Qubes Logs' } else { 'C:\ProgramData\QubesLogs' }
-New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-reg add "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogDir /t REG_SZ /d "$logDir" /f | Out-Null
-Write-Output "LogDir -> $logDir" 
+#
+# LogDir is NOT written here any more. The installer (Set-GuiAgentRegistryDefaults) seeds
+# 'Q:\Qubes Logs' unconditionally, twice, and owns that value; this script used to re-write it
+# from `if (Test-Path 'Q:\')`, which on an install boot where the private volume has not yet
+# taken the Q: letter (the PV disk path binds at the guest's NEXT start) silently flipped a
+# template's LogDir back to the volatile C:\ProgramData\QubesLogs - every AppVM then logged into
+# the discarded overlay and the next boot-time failure had no evidence, the exact regression the
+# paragraph above was written to end. Which value won depended on mount timing. One writer now.
+# The directory is still pre-created when Q: is already there (harmless, no policy in it).
+if (Test-Path 'Q:\') { New-Item -ItemType Directory -Path 'Q:\Qubes Logs' -Force | Out-Null }
 reg add "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogLevel /t REG_DWORD /d 3 /f | Out-Null
 # Updates are dom0-owned (standing project rule): guest auto-update OFF. This matters more
 # with the latch, because AppVMs now have working network every boot and WU would pull
@@ -765,10 +887,18 @@ reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpd
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v ExcludeWUDriversInQualityUpdate /t REG_DWORD /d 1 /f | Out-Null
 
 # ---------------- arm now, via the task itself, and verify ----------------
-& schtasks /run /tn QubesPvNic | Out-Null
+# The REARM task, not the full applier. The transactional property ('the latch is only ever
+# armed BY the task') holds either way - same payload, same SYSTEM principal - but the full
+# QubesPvNic run drags a 300 s apply loop into the INSTALL boot, and the installer leaves that
+# boot up ('No reboot from here'). On a StandaloneVM with a netvm whose xenvif child does not
+# bind until the next start, that loop ends in a 'network configuration FAILED' popup, an Error
+# event and a QubesPvNic-FAILED.txt marker (which health-check then reports) in the middle of a
+# successful install. -RearmOnly arms and exits in ~2 s, so the readback below polls at 1 s
+# instead of waiting a fixed 5 s before its first look; the 60 s deadline is unchanged.
+& schtasks /run /tn QubesPvNicRearm | Out-Null
 $armed = $false
-foreach ($i in 1..12) {
-    Start-Sleep -Seconds 5
+foreach ($i in 1..60) {
+    Start-Sleep -Seconds 1
     $n = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug' -EA SilentlyContinue).NICS
     $k = Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Enum\XENBUS\VEN_XP0001&DEV_VIF'
     if ($n -eq 1 -and $k) { $armed = $true; break }
