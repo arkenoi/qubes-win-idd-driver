@@ -4,6 +4,19 @@ An audit release. The headline is not a feature: it is that a class of defect th
 paying for — *a fix that compiles, passes CI, and reaches no guest* — now has three independent
 guards against it, and one long-standing P1 was root-caused and actually shipped.
 
+## Downloads
+
+**Install from `qwt-improved-setup.iso`** (attach it to the Windows qube as a CD), or from
+`qubes-windows-tools-ng-*.noarch.rpm` in dom0, which installs that same ISO — byte-identical, checked —
+at `/usr/lib/qubes/qubes-windows-tools.iso`, so `qvm-start <vm> --install-windows-tools` works the
+way the official Qubes instructions describe.
+
+`qubes-tools-4.3.21.exe` is **not** a standalone installer. It is the small bootstrap that already
+lives inside the ISO, the CD entry point equivalent to stock's `qubes-tools-4.2.2.exe`; on its own,
+away from the rest of the tree, it cannot install anything. It appears here because
+`SHA256SUMS.txt` is the setup tree's own manifest — the file the installer verifies before it will
+run — so the tree is published intact rather than pruned. Ignore it unless you know you want it.
+
 ## The qrexec P1: diagnosed, and this time delivered
 
 `findings/install.md` has carried "qrexec can go missing for good after a clean install" with
