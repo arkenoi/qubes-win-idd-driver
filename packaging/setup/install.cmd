@@ -131,23 +131,23 @@ set "ARG=%~1"
 if /i "!ARG:~0,11!"=="/autologon:" (
   REM  substring compare, not echo|findstr: a password containing & | > must not break parsing
   set "ALPW=!ARG:*:=!"
-  REM  Quotes cannot be carried: the password rides inside a cmd-quoted argv token here and inside a
-  REM  single-quoted PowerShell string on the UAC relaunch. A double quote in it closes the token
-  REM  early, so -AutologonPassword binds the prefix plus a stray positional -> binding error, exit 1;
-  REM  a single quote closes the relaunch -Command string before RunAs -> parse error, exit 1. Either
-  REM  way autologon was NOT armed, the guest could come back at a sign-in screen, and nothing named
-  REM  the password as the cause. Refuse it here, before the relaunch, with the cause named.
-  REM  Strip-and-compare via delayed expansion, so the quote never re-enters the parser.
-  set "ALQ="
-  if defined ALPW set ALQ=!ALPW:"=!
-  if defined ALQ set ALQ=!ALQ:'=!
-  if not "!ALQ!"=="!ALPW!" (
-    echo ERROR: the /autologon: password contains a double or single quote, which this
-    echo        installer cannot pass through cmd and PowerShell intact. Change the password,
-    echo        or omit /autologon: and type it at the installer's prompt instead.
-    exit /b 87
+  REM  THE PASSWORD NEVER RIDES ON powershell.exe's COMMAND LINE. It used to be an argv token
+  REM  (-AutologonPassword "pw") of a process that lives for the whole stage - readable by any local
+  REM  process through Win32_Process.CommandLine and written into process-creation audit records,
+  REM  which is what set-autologon.ps1 stores it as an LSA secret to avoid. It goes through the
+  REM  environment instead: QWT_AUTOLOGON_PW, inherited by the child, read once at its start and
+  REM  scrubbed before it spawns anything. That also removes the quoting problem an argv token had:
+  REM  a password containing a quote is carried intact here, so the old refusal of quoted passwords
+  REM  is gone. (This caller's OWN command line still shows what was typed - that is the caller's,
+  REM  e.g. the harness's, choice and cannot be hidden from here.)
+  REM  An EMPTY password cannot be an environment variable (cmd cannot hold an empty one), and it is
+  REM  not a secret: it is passed as a literal empty argument, exactly as before.
+  if defined ALPW (
+    set "QWT_AUTOLOGON_PW=!ALPW!"
+    set "PSARGS=!PSARGS! -AutologonPasswordFromEnv"
+  ) else (
+    set "PSARGS=!PSARGS! -AutologonPassword """
   )
-  set "PSARGS=!PSARGS! -AutologonPassword "!ALPW!""
   shift & goto parse
 )
 if /i "%~1"=="/autologon" ( shift & goto parse )
@@ -179,6 +179,21 @@ if defined QWT_ELEVATE_CHILD (
   goto elevated
 )
 :notelevated
+REM A password cannot follow us through a UAC relaunch without going back onto a command line:
+REM AppInfo builds the elevated child's environment from the user's profile, not from ours, so
+REM QWT_AUTOLOGON_PW would not arrive - and the only other carrier is RAWARGS, re-quoted into the
+REM elevated child's argv (visible) and inside a single-quoted PowerShell string (a quote in the
+REM password breaks it). Neither is acceptable, so this combination is refused with the fix named.
+REM Unattended callers (qrexec as SYSTEM, the qubes-tools-*.exe bootstrap) are already elevated
+REM and never reach this label; it is the interactive non-admin console case only.
+if defined ALPW (
+  echo ERROR: /autologon:PASSWORD was given but this console is not elevated, and the password
+  echo        is not carried through a UAC elevation ^(it would have to go onto the elevated
+  echo        copy's command line^). Start install.cmd from an elevated ^("Run as administrator"^)
+  echo        prompt, or omit /autologon:... and type the password at the installer's prompt.
+  if not defined AUTO pause
+  exit /b 87
+)
 echo Not elevated - requesting administrator rights...
 REM -Wait -PassThru and propagate the child's code: this used to `exit /b 0` unconditionally, so a
 REM failed elevation - and any failure of the elevated run - was reported to the caller as SUCCESS.
@@ -199,6 +214,14 @@ if defined RAWARGS (
 exit /b %errorlevel%
 
 :elevated
+REM The password-bearing variables of THIS shell are dropped before any powershell.exe below is
+REM started: a child inherits cmd's whole environment, so leaving ALPW/ARG/RAWARGS set would hand
+REM the password to the installer under three more names than the one it scrubs
+REM (QWT_AUTOLOGON_PW), and on to every process the installer starts. RAWARGS has done its only
+REM job (the relaunch decision above) by this point.
+set "ALPW="
+set "ARG="
+set "RAWARGS="
 REM Every branch below runs a script that must be PRESENT on this medium. A missing one used
 REM to surface as a raw PowerShell "file not found" / InvalidOperationException with no hint
 REM about which file or why (field report, forum 42717 post 35) - so each is checked here and

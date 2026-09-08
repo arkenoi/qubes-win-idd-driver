@@ -449,6 +449,80 @@ if ($ConsArtifact -and (Test-Path $ConsArtifact)) {
     Write-Warning 'no xencons artifact supplied; DEV_CONS stays at CM code 28 and a wedged guest keeps no out-of-band channel'
 }
 
+# ------------------------------------------------ MSI feature list: GENERATED, never typed
+# Install-QwtImproved.ps1 owns $script:MsiFeatureTable (feature -> opt-out switch) and builds
+# ADDLOCAL from it; install.cmd owns the switch names a user actually types. Both are read here
+# from the SAME files this package ships, so the manifest can only describe what the shipped code
+# does. It used to be free text and drifted: for weeks it claimed PvDriversDisk and MoveUsers were
+# never installed and the IDD was opt-in while the installer shipped all three by default - so a
+# 0x7B / profile-on-root triage read the opposite of what had been done to the guest from the
+# package's own hash-verified record. Every mismatch below THROWS: a manifest this build cannot
+# derive from the source is not shipped.
+function Get-InstallerFeatureTable {
+    param([Parameter(Mandatory)][string]$InstallerPath)
+    $tokens = $null; $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($InstallerPath, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors -and $parseErrors.Count) { throw "cannot parse ${InstallerPath}: $($parseErrors[0].Message)" }
+    $assign = $ast.Find({ param($n)
+        $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+        $n.Left.Extent.Text -eq '$script:MsiFeatureTable' }, $true)
+    if (-not $assign) { throw 'Install-QwtImproved.ps1 no longer assigns $script:MsiFeatureTable - MANIFEST.json installs.msi_features is generated from it' }
+    # SafeGetValue evaluates constant literals only (array of hashtables of strings here) and
+    # throws on anything executable, which is the point: the table is data, read as data.
+    # Right is a PipelineAst under Windows PowerShell 5.1 and a bare CommandExpressionAst under
+    # PowerShell 7 - the CI runner has used both. Accept either, refuse anything else.
+    $rhs = $assign.Right
+    $expr = $null
+    if ($rhs -is [System.Management.Automation.Language.PipelineAst]) { $expr = $rhs.GetPureExpression() }
+    elseif ($rhs -is [System.Management.Automation.Language.CommandExpressionAst]) { $expr = $rhs.Expression }
+    if (-not $expr) { throw '$script:MsiFeatureTable must be assigned a plain literal (no pipeline)' }
+    $rows = @($expr.SafeGetValue())
+    if ($rows.Count -lt 3) { throw "`$script:MsiFeatureTable has only $($rows.Count) rows - implausible (the three always-on features alone are 3)" }
+    # The opt-out switches must be real parameters of the installer, or stage 2's lookup of them
+    # (-ErrorAction Stop) fails every install of this package.
+    $params = @($ast.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+    $out = @()
+    foreach ($r in $rows) {
+        if (-not ($r -is [hashtable]) -or -not $r.ContainsKey('Feature') -or -not $r.ContainsKey('OptOut')) {
+            throw "`$script:MsiFeatureTable row is not @{ Feature=..; OptOut=.. }: $($r | ConvertTo-Json -Compress)"
+        }
+        $feature = [string]$r.Feature; $optOut = [string]$r.OptOut
+        if (-not $feature) { throw '$script:MsiFeatureTable row with an empty Feature' }
+        if ($optOut -and ($params -notcontains $optOut)) {
+            throw "`$script:MsiFeatureTable names opt-out switch '$optOut' for $feature, but Install-QwtImproved.ps1 has no such parameter"
+        }
+        $out += [pscustomobject]@{ Feature = $feature; OptOut = $optOut }
+    }
+    return $out
+}
+
+function Get-InstallCmdSwitchMap {
+    # install.cmd parse-loop lines of the shape:  if /i "%~1"=="/nonet"  ( set "PSARGS=!PSARGS! -NoPvNetwork" ...
+    # -> @{ NoPvNetwork = '/nonet' }. The shape is the contract; if the loop is rewritten this parse
+    # finds too few entries and the build fails here rather than shipping a wrong manifest.
+    param([Parameter(Mandatory)][string]$CmdPath)
+    $text = Get-Content -LiteralPath $CmdPath -Raw
+    $map = @{}
+    foreach ($m in [regex]::Matches($text, '(?im)^if /i "%~1"=="(/[a-z]+)"\s*\(\s*set "PSARGS=!PSARGS! -(\w+)"')) {
+        $map[$m.Groups[2].Value] = $m.Groups[1].Value
+    }
+    if ($map.Count -lt 5) { throw "install.cmd switch map parsed only $($map.Count) entries - its parse loop changed shape; update Get-InstallCmdSwitchMap in make-setup.ps1" }
+    return $map
+}
+
+$featureRows = Get-InstallerFeatureTable -InstallerPath (Join-Path $setupSrc 'Install-QwtImproved.ps1')
+$switchFor   = Get-InstallCmdSwitchMap  -CmdPath      (Join-Path $setupSrc 'install.cmd')
+$msiFeatures = @()
+foreach ($row in $featureRows) {
+    if (-not $row.OptOut) { $msiFeatures += $row.Feature; continue }
+    if ($switchFor.ContainsKey($row.OptOut)) {
+        $msiFeatures += "$($row.Feature) (unless $($switchFor[$row.OptOut]))"
+    } else {
+        $msiFeatures += "$($row.Feature) (unless -$($row.OptOut) is passed to Install-QwtImproved.ps1; install.cmd has no switch for it)"
+    }
+}
+Write-Host ("msi_features (from the installer's feature table): " + ($msiFeatures -join ', '))
+
 # ------------------------------------------------------------------------------ manifest
 $outFull = (Resolve-Path -LiteralPath $OutDir).Path
 
@@ -488,17 +562,13 @@ $manifest = [ordered]@{
         ref         = $env:GITHUB_REF
         sha         = $env:GITHUB_SHA
     }
-    # These lists MUST mirror Install-QwtImproved.ps1's defaults ($features build-up, the
-    # default-on IDD block, the autologon arming). They are free text and drifted once: the
-    # manifest claimed PvDriversDisk/MoveUsers were never installed and the IDD was opt-in, while
-    # the installer had shipped all three by default for weeks - so someone triaging a 0x7B PV-boot
-    # guest or a profile-on-root guest from the package's own (hash-verified) manifest was told the
-    # opposite of what had been done to the machine. Change the installer defaults -> change these.
+    # msi_features is GENERATED from Install-QwtImproved.ps1's $script:MsiFeatureTable and
+    # install.cmd's switch table (see Get-InstallerFeatureTable above) - the very lists the code
+    # installs from - after the hand-typed version drifted for weeks. `also` and `never_installs`
+    # remain prose describing the installer's other default blocks (the default-on IDD block, the
+    # autologon arming, the updater deploy); change those defaults -> change these lines.
     installs = [ordered]@{
-        msi_features   = @('PvDriversCore', 'Core', 'Gui',
-                           'PvDriversNetwork (unless /nonet)',
-                           'PvDriversDisk (unless /nodisk)',
-                           'MoveUsers (unless -NoMoveUsers is passed to Install-QwtImproved.ps1; install.cmd has no switch for it)')
+        msi_features   = $msiFeatures
         also           = @('6 self-signed "Qubes Windows Tools" certs (upstream QWT signs with these; they are trusted only because they are installed here) + our test cert, into Root and TrustedPublisher',
                            'VC++ 2015-2022 x64 runtime',
                            'bcdedit /set testsigning on',

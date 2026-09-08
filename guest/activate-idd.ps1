@@ -289,7 +289,28 @@ public static class QiddProbe {
     $script:idd = "activated: device up ($($dev.InstanceId)), VGA disabled ($($vgaDev.InstanceId))"
     $result.ok = $true; $result.reboot_needed = $true
     Log 'IDD ACTIVATED - reboot required so it comes up primary'
-    if (-not $NoReboot) { Log 'rebooting in 5 s'; & shutdown.exe /r /t 5 /c 'Qubes IDD activation' | Out-Null }
+    if (-not $NoReboot) {
+        Log 'rebooting in 5 s'
+        # JUDGED, not fired and forgotten (audit 2026-09-08 #23). shutdown.exe returns non-zero
+        # WITHOUT rebooting - 1190 (a shutdown is already scheduled), 1115/5 (denied during a
+        # shutdown transition) - and this line used to `| Out-Null` it and Emit 0 with
+        # reboot_needed=true: 'rebooting' reported, guest left at a desktop with the VGA disabled,
+        # the IDD not primary, and the agent this run quiesced never brought back. Stderr is
+        # captured (a native stderr line is a terminating error under ErrorActionPreference=Stop)
+        # and the exit code is cleared first so a stale one is never judged.
+        $global:LASTEXITCODE = $null
+        try { & shutdown.exe /r /t 5 /c 'Qubes IDD activation' 2>&1 | Out-Null } catch { }
+        if ($LASTEXITCODE -ne 0) {
+            $result['shutdown_rc'] = $LASTEXITCODE
+            Log "shutdown.exe /r was REFUSED (rc '$LASTEXITCODE') - the guest is NOT rebooting on its own; the IDD is activated but will not be primary until this qube is rebooted BY HAND" 'FATAL'
+            # Same situation as -NoReboot: this run is not rebooting, so the agent it quiesced must
+            # come back or the qube maps no windows until that manual reboot.
+            Restore-Gui
+            $result.ok = $false
+            $result.error = "reboot request refused by shutdown.exe (rc $LASTEXITCODE) - reboot this qube by hand to bring the IDD up primary"
+            Emit 1
+        }
+    }
     else { Restore-Gui }
     Emit 0
 } catch {

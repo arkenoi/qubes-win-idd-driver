@@ -139,11 +139,22 @@ if ($lsa) {
 }
 
 $lsaState = if (-not $lsaKnown) { 'unknown' } elseif ($lsa) { 'present' } else { 'absent' }
+# reason= names the ONE thing to repair, in the same token form set-autologon.ps1 uses, so a caller
+# reading only the trailer can record it instead of guessing. Before this token every warning was
+# reported by the installer as 'not-armed:no-password' - including a guest whose Winlogon
+# DefaultUserName had been wiped by servicing while its LSA secret was intact, which sent the user
+# to supply a password that was not the problem (audit 2026-09-08 #16). Precedence: a missing user
+# name first (nothing logs on without it, whatever the password state - lsa= still carries that),
+# then a positively absent password, then the unverified probe; 'none' when autologon will happen.
+$reason = if (-not $user) { 'no-user' }
+          elseif ($warn -gt 0) { 'no-password' }
+          elseif ($unknown -gt 0) { 'lsa-unverified' }
+          else { 'none' }
 Write-Output ''
 # warnings= counts the unverified case too, so a caller that only reads the trailer (the
 # installer's stage-2 verify) does not log "armed" for a state it could not check; lsa= says which
-# case it was.
-Write-Output ("=== RESULT === changed=$changed warnings=$($warn + $unknown) lsa=$lsaState")
+# case it was, reason= which repair applies.
+Write-Output ("=== RESULT === changed=$changed warnings=$($warn + $unknown) lsa=$lsaState reason=$reason")
 # EXIT CODE IS A CONTRACT: 0 = autologon will happen on the next boot, 2 = it will NOT and the
 # qube would come back unreachable, 3 = it could not be VERIFIED (the LSA probe itself failed; no
 # positive finding either way). The updater refuses to reboot on 2 rather than knowingly stranding

@@ -132,6 +132,13 @@ param(
     # installer therefore arms autologon: pass the account password here for an unattended
     # install, or let it prompt. -NoAutologon opts out and says what that costs.
     [string]$AutologonPassword,
+    # INTERNAL - set by install.cmd, never by a user. The password arrives in the environment
+    # variable QWT_AUTOLOGON_PW of THIS process instead of on the command line: an argv token of a
+    # long-lived powershell.exe is readable by any local process (Win32_Process.CommandLine,
+    # process-creation auditing), which is exactly what set-autologon.ps1 stores it as an LSA secret
+    # to avoid. The variable is read once, at script start, and scrubbed from the environment before
+    # any child process (certutil, msiexec, ...) could inherit it.
+    [switch]$AutologonPasswordFromEnv,
     [string]$AutologonUser,
     [switch]$NoAutologon,
 
@@ -158,6 +165,20 @@ $script:Result  = [ordered]@{
 # (the stage-1 prompt was gated on $null and therefore never ran; an unattended run silently
 # tried '' labelled 'parameter').
 $script:AutologonPasswordBound = $PSBoundParameters.ContainsKey('AutologonPassword')
+# The environment channel (install.cmd -> here, see -AutologonPasswordFromEnv). Read and SCRUBBED
+# here, before anything else runs: the first native child this script spawns would otherwise
+# inherit the variable. An empty channel is recorded, not guessed at, and Fails in main (Fail is
+# not defined yet at this point in the file): install.cmd sets the variable whenever it passes the
+# switch, so "switch given, variable absent" is a broken hand-off, and treating it as an empty
+# password would arm the wrong credential silently.
+$script:AutologonEnvChannelEmpty = $false
+if ($AutologonPasswordFromEnv) {
+    $envPw = [Environment]::GetEnvironmentVariable('QWT_AUTOLOGON_PW')
+    [Environment]::SetEnvironmentVariable('QWT_AUTOLOGON_PW', $null)
+    if ($null -eq $envPw) { $script:AutologonEnvChannelEmpty = $true }
+    else { $AutologonPassword = $envPw; $script:AutologonPasswordBound = $true }
+    $envPw = $null
+}
 $script:AutologonArmFailed = $null
 # Binaries the leftover sweep moved aside for the MSI, and whether that MSI then completed.
 # A Fail between the two restores them - see Restore-SweptBinaries.
@@ -489,9 +510,16 @@ function Set-BootResume {
     }
     $argline = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath) + $ExtraArgs
     $cmd = 'powershell.exe ' + ($argline -join ' ')
-    # /DELAY: ONSTART fires very early. msiexec needs the Windows Installer service, and
-    # the PV driver install needs PnP settled; a minute of slack costs nothing and avoids
-    # a class of "worked when I ran it by hand" failures.
+    # /DELAY 0000:30 is THE FLOOR, not the readiness wait. ONSTART fires when the Task Scheduler
+    # service starts - inside the auto-start wave, before Winmgmt and the Storage provider answer
+    # and before an upgrade's still-registered QubesGuiWatchdog has started - so a small fixed
+    # delay stays for SCM/WMI to be usable. Everything that actually varies from boot to boot is
+    # waited on BY NAME at stage-2 entry and again before msiexec (Wait-PnpSettled =
+    # CMP_WaitNoPendingInstallEvents, Wait-WindowsInstallerIdle = the Global\_MSIExecute mutex,
+    # plus the bounded 1618 retry). Until those existed this was 0001:00 as a stand-in for them;
+    # with them in place the extra 30 s were dead time on EVERY install reboot (two reboots on an
+    # uninstall-first upgrade). mmmm:ss is the form schtasks documents for ONSTART; a rejected
+    # value Fails loudly below (rc check + /Query proof), it cannot arm nothing silently.
     # Same native-stderr trap as Clear-BootResume: schtasks can warn on stderr (e.g.
     # overwriting an existing task with /F) and that would terminate under
     # ErrorActionPreference='Stop'. Judge the EXIT CODE, never the stream.
@@ -500,7 +528,7 @@ function Set-BootResume {
     # failed /Create passed as armed - the -Auto path then rebooted with nothing to run stage 2.
     # $null reads as failure below.
     $global:LASTEXITCODE = $null
-    try { & schtasks.exe /Create /TN $script:TaskName /SC ONSTART /DELAY 0001:00 `
+    try { & schtasks.exe /Create /TN $script:TaskName /SC ONSTART /DELAY 0000:30 `
                    /RU SYSTEM /RL HIGHEST /F /TR $cmd *>&1 | Out-Null } catch { }
     if ($LASTEXITCODE -ne 0) { Fail "schtasks /Create failed (rc '$LASTEXITCODE') - cannot arm the post-reboot resume" }
     # And PROVE the task exists - the reboot that follows depends on nothing else.
@@ -880,21 +908,35 @@ function Test-BootDiskOnPvPath {
     # check.
     # TRI-STATE: $true / $false / $null = UNKNOWN. A probe error used to return $false, and $false
     # is the one value that lets the uninstall-first branch remove the PV disk driver - so a Storage
-    # provider not answering 60 s into a boot-resume run (or any transient) would have unlocked the
+    # provider not answering 30 s into a boot-resume run (or any transient) would have unlocked the
     # 0x7B path on a PV-booted guest and the domain is destroyed at the bugcheck. Only an explicit
     # "not SCSI" / "xenvbd not boot-start" is $false; the in-place paths never consult the gate, so
     # UNKNOWN blocks nothing but the operation the gate exists for.
-    try {
-        $disk = Get-Partition -DriveLetter C -ErrorAction Stop | Get-Disk -ErrorAction Stop
-        if (-not $disk -or [string]$disk.BusType -ne 'SCSI') { return $false }
-        $svc = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\xenvbd' `
-                                -ErrorAction SilentlyContinue
-        if (-not $svc) { return $false }   # no xenvbd service at all: not on the PV path
-        return ($svc.PSObject.Properties.Name -contains 'Start' -and $svc.Start -eq 0)
-    } catch {
-        Write-Log "PV boot-disk probe failed ($($_.Exception.Message)) - result UNKNOWN (treated as 'may be on the PV path' where it matters)" 'WARN'
-        return $null
+    # RETRIED, because the -Auto resume task now fires 30 s after boot (Set-BootResume) and the
+    # Storage cmdlets ride a WMI provider that may not answer yet that early: a single failed probe
+    # on the boot-resume run would turn the whole run's record (and the uninstall-first gate) into
+    # UNKNOWN for what is a transient. Three tries, 5 s apart; a probe that fails all three stays
+    # UNKNOWN, as before.
+    for ($try = 1; $try -le 3; $try++) {
+        try {
+            $disk = Get-Partition -DriveLetter C -ErrorAction Stop | Get-Disk -ErrorAction Stop
+            if (-not $disk -or [string]$disk.BusType -ne 'SCSI') { return $false }
+            $svc = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\xenvbd' `
+                                    -ErrorAction SilentlyContinue
+            if (-not $svc) { return $false }   # no xenvbd service at all: not on the PV path
+            return ($svc.PSObject.Properties.Name -contains 'Start' -and $svc.Start -eq 0)
+        } catch {
+            $probeErr = $_.Exception.Message
+            if ($try -lt 3) {
+                Write-Log "PV boot-disk probe failed ($probeErr) - retrying in 5 s (attempt $try of 3)" 'WARN'
+                Start-Sleep -Seconds 5
+                continue
+            }
+            Write-Log "PV boot-disk probe failed 3 times ($probeErr) - result UNKNOWN (treated as 'may be on the PV path' where it matters)" 'WARN'
+            return $null
+        }
     }
+    return $null
 }
 
 function Uninstall-ExistingQwt {
@@ -1326,12 +1368,13 @@ function Get-IddPnpDevice {
 }
 
 # ------------------------------------------------------- readiness waits before msiexec
-# The -Auto resume task is ONSTART +60 s: a timer, not a readiness signal. On a slow first boot
+# The -Auto resume task is ONSTART +30 s: a timer, not a readiness signal. On a slow first boot
 # of a clone the machine is still in post-boot servicing (CBS finishing a pending operation) or
-# Windows Installer is mid-reconfiguration at T+60 s, and msiexec then returns 1618 - which was a
+# Windows Installer is mid-reconfiguration when it fires, and msiexec then returns 1618 - which was a
 # Fail, inside a SYSTEM task nobody watches, with the resume task already gone. These two waits
 # turn the timer into the concrete conditions the /DELAY comment names; the delay stays as the
-# floor for Task Scheduler itself.
+# floor for Task Scheduler itself (30 s, see Set-BootResume). Called at stage-2 entry, so the
+# uninstall-first msiexec /x and vc_redist are covered too, and again right before msiexec /i.
 function Wait-PnpSettled {
     param([int]$TimeoutSec = 300)
     # CMP_WaitNoPendingInstallEvents blocks until PnP has no device installs in flight - exactly
@@ -1395,6 +1438,25 @@ function Get-QwtFeatureStates {
     return $states
 }
 
+# ------------------------------------------------------------- MSI feature table (ADDLOCAL)
+# THE SINGLE SOURCE for which MSI features this installer requests and which switch omits each.
+# Stage 2 builds ADDLOCAL from it, and packaging/make-setup.ps1 reads this very assignment (by
+# AST, at package build time) to generate MANIFEST.json installs.msi_features - so the shipped,
+# hash-verified manifest cannot say anything other than what the code does. It did once: the
+# manifest was a hand-written list that kept claiming PvDriversDisk and MoveUsers were never
+# installed for weeks after both became default, misdirecting a 0x7B / profile-on-root triage
+# from the package's own record. A row here with no such switch means the feature is always on.
+# Keep every row a constant literal: make-setup.ps1 evaluates it with SafeGetValue and fails the
+# build on anything else, rather than shipping a manifest it could not derive.
+$script:MsiFeatureTable = @(
+    @{ Feature = 'PvDriversCore';    OptOut = '' },
+    @{ Feature = 'Core';             OptOut = '' },
+    @{ Feature = 'Gui';              OptOut = '' },
+    @{ Feature = 'PvDriversNetwork'; OptOut = 'NoPvNetwork' },
+    @{ Feature = 'PvDriversDisk';    OptOut = 'NoPvDisk' },
+    @{ Feature = 'MoveUsers';        OptOut = 'NoMoveUsers' }
+)
+
 # ------------------------------------------------------------------------------- stage 2
 function Invoke-Stage2 {
     param([Parameter(Mandatory)][string]$Root)
@@ -1404,13 +1466,23 @@ function Invoke-Stage2 {
     # The -Auto resume task is retired at a TERMINAL state - the success tail, Fail, or the main
     # catch - not here. Retiring it as stage 2's first act meant any interruption of stage 2 (a dom0
     # shutdown, the harness rescue, a mid-install restart by a xenbus_monitor survivor, or a hard
-    # Fail 60 s into boot) was final and unreported: testsigning on, the old QWT possibly already
+    # Fail 30 s into boot) was final and unreported: testsigning on, the old QWT possibly already
     # gone, no QWT installed, no task, nothing running on the next boot. Kept armed, an interrupted
     # -Auto stage 2 is re-run by the next boot (stage 2 is idempotent by design), and the -Auto run
     # counter in main bounds how often that can happen.
     # A MANUAL run (no -Auto) is the user overriding the automatic cycle, so a task some earlier
     # -Auto cycle left behind is cleared here as before.
     if (-not $Auto) { Clear-BootResume }
+
+    # READINESS BEFORE THE FIRST INSTALLER RUNS, not only before msiexec /i. The resume task fires
+    # 30 s after boot (Set-BootResume); vc_redist.x64.exe (a Burn bundle driving MSIs) and the
+    # uninstall-first msiexec /x both run BEFORE the pre-msiexec waits further down, and at T+30 s a
+    # device install still in flight or a busy Windows Installer is precisely what the old 60 s
+    # blanket delay (now 30 s, since the named waits below carry the boot-variable part) hoped to
+    # timer was guessing at. Both return at once when the condition already holds, so a manual
+    # stage 2 pays nothing here.
+    [void](Wait-PnpSettled -TimeoutSec 300)
+    [void](Wait-WindowsInstallerIdle -TimeoutSec 600)
 
     # Certs again: stage 1 may have run from the CD in a previous boot, and re-adding is
     # idempotent. Cheap insurance against a half-prepared machine - and NOT optional: on a guest
@@ -1743,10 +1815,16 @@ function Invoke-Stage2 {
     # otherwise destroy the profile). It is BOOT-CRITICAL - it registers relocate-dir.exe
     # under Session Manager!BootExecute - so it was tested on a throwaway guest before being
     # enabled here. /nousers is the escape hatch if a guest ever fails to boot after it.
-    $features = @('PvDriversCore', 'Core', 'Gui')
-    if (-not $NoPvNetwork) { $features += 'PvDriversNetwork' }
-    if (-not $NoPvDisk)    { $features += 'PvDriversDisk' }
-    if (-not $NoMoveUsers) { $features += 'MoveUsers' }
+    # Built from $script:MsiFeatureTable (defined above Invoke-Stage2) - the same rows the package
+    # manifest is generated from. -ErrorAction Stop on the switch lookup: a row naming a switch
+    # this script does not have is a coding error and must FAIL the stage, not silently install
+    # the feature.
+    $features = @()
+    foreach ($row in $script:MsiFeatureTable) {
+        $omit = $false
+        if ($row.OptOut) { $omit = [bool](Get-Variable -Name $row.OptOut -Scope Script -ValueOnly -ErrorAction Stop) }
+        if (-not $omit) { $features += $row.Feature }
+    }
     $addlocal = $features -join ','
 
     $msi = Join-Path $Root 'msi\installer.msi'
@@ -2791,21 +2869,45 @@ function Invoke-Stage2 {
     $ea = Join-Path $Root 'ensure-autologon.ps1'
     if (Test-Path -LiteralPath $ea) {
         try {
+            # Cleared first (stale-exit-code trap, see Set-BootResume): ensure-autologon's exit code is
+            # a CONTRACT - 0 armed, 2 definitively NOT armed, 3 could not be VERIFIED (its LSA probe
+            # itself failed; no finding either way). The trailer's lsa= token says the same.
+            $global:LASTEXITCODE = $null
             $eo = & $ea 2>&1
+            $eaRc = $LASTEXITCODE
             foreach ($l in @($eo | Select-Object -Last 6)) { Write-Log "  $l" }
             $tr = @($eo) | Where-Object { $_ -match '=== RESULT === changed=(\d+) warnings=(\d+)' } | Select-Object -Last 1
             if ($tr -match 'warnings=(\d+)') {
-                if ([int]$Matches[1] -eq 0) {
+                $eaWarn = [int]$Matches[1]
+                $eaUnverified = ($eaRc -eq 3) -or ($tr -match 'lsa=unknown')
+                if ($eaWarn -eq 0) {
                     $script:Result.detail.autologon = 'armed'
                     Write-Log 'autologon verified - this qube can come back on its own'
-                } elseif (-not $NoAutologon) {
+                } elseif ($NoAutologon) {
+                    $script:Result.detail.autologon = 'skipped'
+                    Write-Log 'autologon is NOT armed and /noautologon was given - leaving it' 'WARN'
+                } elseif ($eaUnverified -and -not $script:AutologonPasswordBound) {
+                    # UNVERIFIED IS NOT NOT-ARMED. The probe could not ask LSA; the secret may well be
+                    # there. Re-arming here without a password would try the empty guess, and its
+                    # 'bad-credentials' would then be reported as 'NOT usable: no password' - the
+                    # wrong finding for a probe fault (audit 2026-09-08). With no password in hand the
+                    # honest record is 'unverified'; a caller that passed one falls through to the
+                    # arming below, which turns unknown into a verified state.
+                    $script:Result.detail.autologon = 'unverified'
+                    Write-Log ("autologon could NOT be verified: ensure-autologon.ps1 could not query the LSA secret " +
+                               "(exit $eaRc, lsa=unknown). It may well be armed; no password was passed on this command " +
+                               'line, so nothing is re-armed. Diagnose the LSA query failure in the lines above.') 'WARN'
+                } else {
                     # NOT ARMED, so ARM IT FROM HERE. When stage 2 is the first (and only) stage to
                     # run - a guest whose boot ISO already enabled testsigning, or any upgrade - the
                     # -AutologonPassword on this command line was accepted and used for nothing, and
                     # the run reported ok=true with this WARN. The password is in hand on exactly the
                     # runs that matter (a task-resumed run had a stage 1, which armed it already);
                     # a run without one tries the empty-password guess the same way stage 1 does.
-                    Write-Log 'autologon is NOT armed - arming it from stage 2 (this run has the password if one was passed)'
+                    # An UNVERIFIED state with a password in hand lands here too: arming with the
+                    # real password is what settles it.
+                    $why = if ($eaUnverified) { 'could not be verified (LSA probe failed)' } else { 'is NOT armed' }
+                    Write-Log "autologon $why - arming it from stage 2 (this run has the password if one was passed)"
                     $armedNow = Invoke-AutologonArming -Root $Root
                     if (-not $armedNow) {
                         # Cite the RECORDED reason, not 'no password': ensure-autologon also counts a
@@ -2815,9 +2917,6 @@ function Invoke-Stage2 {
                         Write-Log '  back at a sign-in screen, which seamless mode does not display - arm it with' 'WARN'
                         Write-Log '  set-autologon.ps1 (a password, or -User if the account name is unset), or reinstall passing /autologon:PASSWORD.' 'WARN'
                     }
-                } else {
-                    $script:Result.detail.autologon = 'skipped'
-                    Write-Log 'autologon is NOT armed and /noautologon was given - leaving it' 'WARN'
                 }
             } else { $script:Result.detail.autologon = 'verify: no result trailer' }
         } catch {
@@ -2906,7 +3005,21 @@ function Invoke-Stage2 {
             try {
                 $ud = & $deployUpd -SetupRoot $Root 2>&1
                 foreach ($l in @($ud | Select-Object -Last 6)) { Write-Log "  $l" }
-                $script:Result.detail.updater_agent = 'deployed'
+                # JUDGE THE SCRIPT'S OWN LAST LINE, not the fact that it returned. 'deployed' used to be
+                # recorded whenever the call did not throw - so a deploy that stopped short without
+                # throwing (a trap or a non-terminating error swallowing a step) shipped as 'deployed' in
+                # the RESULT. install-updater-agent.ps1 has no '=== RESULT ===' trailer; its final
+                # `Log 'updater agent deployed'` is the completion witness and is only reached when every
+                # registration before it passed (each throws on failure). Widen this match if that
+                # script grows a real trailer.
+                $udDone = @($ud | Where-Object { "$_" -match 'updater agent deployed\s*$' }).Count -gt 0
+                if ($udDone) {
+                    $script:Result.detail.updater_agent = 'deployed'
+                } else {
+                    Write-Log ('install-updater-agent.ps1 returned WITHOUT its completion line ("updater agent deployed") - ' +
+                               'the deploy did not run to its end; recorded as incomplete, not deployed') 'WARN'
+                    $script:Result.detail.updater_agent = 'incomplete: returned without the completion line'
+                }
                 # Two settings live in dom0 and cannot be applied from in here. The RPM's
                 # qwt-ng-prepare-qube does them; say so, because a qube missing them fails to
                 # update in a way that looks like a bug in the guest.
@@ -3470,6 +3583,13 @@ try {
     Write-Log '================================================================'
     Write-Log 'Qubes Windows Tools (improved GUI agent) - setup'
     Assert-Elevated
+    # The install.cmd -> script password hand-off was named but carried nothing (see the read at the
+    # top of the file). Not an empty password: install.cmd passes an empty one as a literal argument.
+    if ($script:AutologonEnvChannelEmpty) {
+        Fail ('-AutologonPasswordFromEnv was given but QWT_AUTOLOGON_PW is not in this process''s environment. ' +
+              'This switch is internal to install.cmd, which sets the variable right before starting this script; ' +
+              'run install.cmd /autologon:PASSWORD instead of passing the switch by hand.')
+    }
 
     # SINGLE INSTANCE. The -Auto resume task fires at boot+60 s; a user following install.cmd's
     # 'REBOOT NOW, then run install.cmd again' or a harness with qrexec up at ~40 s starts a second

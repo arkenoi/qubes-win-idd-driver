@@ -128,7 +128,25 @@ try {
     $result.ok = $true
     Log 'IDD DEACTIVATED - reboot so Windows rebuilds the display topology around the VGA adapter'
     Log 'to go back to the IDD later: install.cmd /iddonly (it clears NoTopologyApply)'
-    if (-not $NoReboot) { Log 'rebooting in 5 s'; & shutdown.exe /r /t 5 /c 'Qubes IDD deactivation' | Out-Null }
+    if (-not $NoReboot) {
+        Log 'rebooting in 5 s'
+        # JUDGED, not fired and forgotten (audit 2026-09-08 #23). shutdown.exe returns non-zero
+        # WITHOUT rebooting - 1190 (a shutdown is already scheduled), 1115/5 (denied during a
+        # shutdown transition) - and this line used to `| Out-Null` it and Emit 0: a stranded user
+        # who ran this over qrexec because the display is black would read 'rebooting', and the
+        # guest would sit there with the VGA re-enabled but the topology never rebuilt. Stderr is
+        # captured (a native stderr line is a terminating error under ErrorActionPreference=Stop)
+        # and the exit code is cleared first so a stale one is never judged.
+        $global:LASTEXITCODE = $null
+        try { & shutdown.exe /r /t 5 /c 'Qubes IDD deactivation' 2>&1 | Out-Null } catch { }
+        if ($LASTEXITCODE -ne 0) {
+            $result['shutdown_rc'] = $LASTEXITCODE
+            Log "shutdown.exe /r was REFUSED (rc '$LASTEXITCODE') - the guest is NOT rebooting on its own; the device changes are made but take effect only at the next boot - reboot this qube from dom0 (qvm-shutdown --wait, then qvm-start)" 'FATAL'
+            $result.ok = $false
+            $result.error = "reboot request refused by shutdown.exe (rc $LASTEXITCODE) - reboot this qube by hand for the VGA topology to be rebuilt"
+            Emit 1
+        }
+    }
     Emit 0
 } catch {
     $result.error = "$($_.Exception.Message)"

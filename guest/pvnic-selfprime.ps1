@@ -453,6 +453,21 @@ public class QwtngNetSetup : ServiceBase {
                 Remove-Item $nsPath -Force -EA SilentlyContinue
                 Remove-Item (Join-Path $bindir 'network-setup.exe.legacy') -Force -EA SilentlyContinue
                 if (Test-Path $nsPath) { $fail['netsetup_delete'] = 'stock binary still present' }
+                # The task that ran this binary goes with it (audit 2026-09-08 #17/#22). The stock
+                # netvm-hotplug task QubesNetworkReapply (NetworkProfile event 10000 -> network-
+                # setup.exe) otherwise outlives its action for the life of the guest: Task Scheduler
+                # logs launch failure 0x80070002 on every vif arrival, and where the binary survived
+                # an earlier rolled-back run it is a SECOND consumer of the event QubesPvNic owns -
+                # the unexplained second 'Deleting IP / Adding IP' pass recorded in the header. One
+                # event, one consumer. The installer also removes it when it finds the binary gone;
+                # this is the copy for a selfprime run outside the installer (prime jobs, upgrades).
+                # A survivor is reported, not rolled back over: losing the whole applier to a stray
+                # task would create the latched-without-applier state this script exists to prevent.
+                & schtasks /delete /tn QubesNetworkReapply /f 2>$null | Out-Null
+                & schtasks /query /tn QubesNetworkReapply 2>$null | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Output 'WARNING: QubesNetworkReapply still registered after delete - a second consumer of NetworkProfile event 10000 remains beside QubesPvNic'
+                }
             } else {
                 $fail['netsetup_register'] = 'sc create failed after retries: ' + $cr.Trim()
             }
@@ -918,6 +933,9 @@ Write-Output 'MARKJSON'
     payload_sha256 = $payloadHash
     task_main    = ((& schtasks /query /tn QubesPvNic 2>&1 | Select-String QubesPvNic | Select-Object -First 1) -replace '\s+',' ')
     task_rearm   = ((& schtasks /query /tn QubesPvNicRearm 2>&1 | Select-String QubesPvNicRearm | Select-Object -First 1) -replace '\s+',' ')
+    # must be $false on the normal path: the stock task is deleted with network-setup.exe above
+    # exit code, not output text: the 'does not exist' error names the task on some builds
+    stock_reapply_task = $(& schtasks /query /tn QubesNetworkReapply 2>&1 | Out-Null; $LASTEXITCODE -eq 0)
     hibernation_off = -not (Test-Path 'C:\hiberfil.sys')
     bootlog      = ("$(Get-Content 'C:\ProgramData\QubesPvNic.log' -Raw -EA SilentlyContinue)" -replace '\s+',' ')
 } | ConvertTo-Json -Compress

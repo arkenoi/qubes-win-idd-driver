@@ -1,5 +1,42 @@
 # Benchmarks
 
+## Addendum 2026-09-08 — every `idle` row below is a POOLED figure; the two idle phases are now reported apart
+
+Until this date `tools/bench-table.py` averaged the harness's two 5-second idle windows
+(`idle-pre`, `idle-post`) into the single `idle` row the tables below carry, and the README's
+idle number is that pooled value. They measure different things and must not be averaged:
+
+- **`idle-pre` = window establishment.** It starts 700 ms after Notepad is created, moved and
+  focused (`instrumentation/drag-harness.ps1`, just before `Phase 'idle-pre'`), so on the
+  per-window path it contains registering the window with the broker and delivering its first
+  frames. That cost is higher than stock's BY DESIGN and is not idle burn.
+- **`idle-post` = settled idle.** 5 s after the last input with no new window - what "idle"
+  is taken to mean.
+
+The table now prints them as `idle-establish` and `idle-settled`. Split values for the runs
+quoted in this file (medians of 3, per-repetition values sorted):
+
+```
+2026-09-01 win10 (…-091217)   idle-establish  stock 2.937 4.573 5.581   ours 0.325 0.328 0.650
+                              idle-settled    stock 5.513 5.532 5.568   ours 0.325 0.328 0.974
+2026-09-01 win11 (…-120938)   idle-establish  stock 0.313 0.657 1.001   ours 0.000 0.330 0.662
+                              idle-settled    stock 0.000 0.331 1.328   ours 0.000 0.000 0.327
+```
+
+The win10 direction survives the split (settled: stock 5.53 vs ours 0.33, disjoint) - the
+pooled `idle 5.053 / 0.328` row below is the per-repetition mean of those two lines. The win11
+rows were already "no verdict" and stay so.
+
+**Quantisation.** `pct_core` is `Get-Process .CPU` sampled at 250 ms; that counter advances
+in 15.625 ms ticks, so over a 5 s window one tick is ~0.33 % of a core and every idle value
+above is a small integer multiple of ~0.33. A percentage delta between such values means
+nothing. Real case, run `…-20260908-141902`: idle-pre read stock 0.326/0.328/0.328 vs ours
+0.662/0.943/0.992 - the disjoint-ranges rule printed **"+187.5 % REAL"** for what is 1 tick vs
+2-3 ticks. `bench-table.py` now withholds the percentage and the verdict when the medians are
+fewer than 3 ticks apart and prints the difference in ticks instead; rows in the tables below
+were produced before that guard and any idle delta under ~1 % of a core should be read as
+unresolved.
+
 ## Addendum 2026-08-12 — the table below is guest-relative; agent verified regression-free
 
 Re-validated on win11-fresh (25H2) at 1920x1080 with the identical phase harness after the

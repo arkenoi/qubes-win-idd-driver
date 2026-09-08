@@ -96,29 +96,89 @@ if [ "$G1" != PASS-UNPROVEN ] && [ "$G1" != PASS ]; then
   exit 1
 fi
 
+# ---------------------------------------------------------------- agent restart, graded
+# AGENT RESTART WAITS ON A FACT, NOT A TIMER (audit 2026-09-08; same shape as gate-preflight.sh's
+# set_bits and failproof-gates.sh's set_gate - do not let them drift). D-6/D-9 used to be
+# `Start-Service; Start-Sleep 25`. Start-Service returning says nothing about the agent: the
+# watchdog reports RUNNING at once and spawns gui-agent from its own 1 s loop, so on a slow
+# session RND-8 started against no agent, while -EA SilentlyContinue hid a watchdog that never
+# started and any gui-agent that survived Stop-Process was ADOPTED by the restarted watchdog
+# (watchdog.c) - the guest then kept running under the PREVIOUS fault values and the "armed" red
+# or "disarmed" green described the old state. Now: pre-kill PIDs recorded, only a gui-agent NOT
+# among them counts (bounded 45 s poll), service status echoed and graded. The pixel witness is
+# RND-8's own shot_hash (NOCAP/NOWIN are graded there).
+restart_agent(){  # <ps-preamble> <marker-echo-line>
+  psrun "$1
+\$old = @(Get-Process gui-agent -EA SilentlyContinue | ForEach-Object Id)
+Stop-Service QubesGuiWatchdog -Force -EA SilentlyContinue; Start-Sleep 3
+Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 2
+\$wdErr = ''
+try { Start-Service QubesGuiWatchdog -EA Stop } catch { \$wdErr = \$_.Exception.Message }
+\$wd = (Get-Service QubesGuiWatchdog -EA SilentlyContinue).Status
+Write-Output ('WDSTART ' + \$wd + ' ' + \$wdErr)
+\$new = 0; \$sw = [Diagnostics.Stopwatch]::StartNew()
+while (\$sw.Elapsed.TotalSeconds -lt 45) {
+  \$p = @(Get-Process gui-agent -EA SilentlyContinue | Where-Object { \$old -notcontains \$_.Id })
+  if (\$p.Count -gt 0) { \$new = \$p[0].Id; break }
+  Start-Sleep -Milliseconds 500
+}
+Write-Output ('AGENTPID ' + \$new + ' after ' + [int]\$sw.Elapsed.TotalSeconds + 's')
+\$stillOld = @(Get-Process gui-agent -EA SilentlyContinue | Where-Object { \$old -contains \$_.Id })
+Write-Output ('OLDALIVE ' + \$stillOld.Count)
+$2" | grep -aE 'WDSTART|AGENTPID|OLDALIVE|ARMED|DISARMED'
+}
+
+DISARM_PS="Remove-ItemProperty -Path '$KEY' -Name FaultCaptureExit -EA SilentlyContinue
+Remove-ItemProperty -Path '$KEY' -Name FaultArmDelaySec -EA SilentlyContinue"
+
+toggle_invalid(){  # <context> <reason> - one bounded disarm+restart so the subject is not left
+                   # armed, the verdict row, and OUT (exit 3). Never a silent proceed: a toggle
+                   # that did not take means every RND-8 pass after it measures the old state.
+  log "-> INVALID-INSTRUMENT: $2 ($1)."
+  log "   The agent was not restarted under the requested fault values, so RND-8 would grade a"
+  log "   leftover state. One bounded disarm attempt, then the verdict; failproof not takeable."
+  T=120 restart_agent "$DISARM_PS" "Write-Output 'DISARMED'" >/dev/null 2>&1 || true
+  printf 'FI\tcapture-failproof\tINVALID-INSTRUMENT\t%s (%s); failproof not takeable this run\t%s\n' \
+    "$2" "$1" "$EV" >> "$V"
+  exit 3
+}
+
+# The marker echo must ROUND-TRIP or the toggle is graded, never assumed. Called only at top
+# level (never in a pipe/substitution) so toggle_invalid's exit actually terminates the script.
+restart_agent_checked(){  # <ps-preamble> <marker-echo-line> <marker> <context>
+  local out; out=$(T=120 restart_agent "$1" "$2")
+  if ! echo "$out" | grep -qa "$3"; then
+    log "  no $3 echo from the guest ($4) - one bounded retry"
+    out=$(T=120 restart_agent "$1" "$2")
+    echo "$out" | grep -qa "$3" || toggle_invalid "$4" "the fault-value write never round-tripped (no $3 echo)"
+  fi
+  echo "$out" | sed 's/^/  /' | tee -a "$OUT/failproof.log"
+  echo "$out" | grep -qa 'WDSTART Running' || \
+    toggle_invalid "$4" "QubesGuiWatchdog not Running after Start-Service ($(echo "$out" | grep -a WDSTART | head -1))"
+  # NO NEW AGENT + THE OLD ONE STILL ALIVE = the watchdog adopted the survivor; the fault values
+  # were never read by a fresh process. Only "no new AND no old" is the benign still-starting case.
+  if echo "$out" | grep -qa 'AGENTPID 0 '; then
+    echo "$out" | grep -qaE 'OLDALIVE [1-9]' && \
+      toggle_invalid "$4" "no new gui-agent within 45 s and the old one survived Stop-Process; the toggle never took"
+    log "  ANOMALY: watchdog Running, no NEW gui-agent within 45 s, and the old one IS gone ($4) - grading RND-8's own capture witness, not a guess"
+  fi
+}
+
 # ---------------------------------------------------------------- D-6: arm the fault, expect RED
 # ArmDelaySec is lowered so the one-shot is live by the time RND-8 drives its first mode change;
 # the default 60 s exists to keep faults out of the daemon handshake, and RND-8 takes longer than
 # that to reach a resize, but relying on that timing coincidence would make the proof flaky.
 log "=== D-6: arm FaultCaptureExit=1 and re-run the SAME instrument ==="
-psrun "Set-ItemProperty -Path '$KEY' -Name FaultCaptureExit -Value 1 -Type DWord
-Set-ItemProperty -Path '$KEY' -Name FaultArmDelaySec -Value 20 -Type DWord
-Stop-Service QubesGuiWatchdog -Force -EA SilentlyContinue; Start-Sleep 3
-Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 2
-Start-Service QubesGuiWatchdog -EA SilentlyContinue; Start-Sleep 25
-Write-Output ('ARMED ' + (Get-ItemProperty '$KEY').FaultCaptureExit)" | grep -a ARMED | sed 's/^/  /'
+restart_agent_checked "Set-ItemProperty -Path '$KEY' -Name FaultCaptureExit -Value 1 -Type DWord
+Set-ItemProperty -Path '$KEY' -Name FaultArmDelaySec -Value 20 -Type DWord" \
+  "Write-Output ('ARMED ' + (Get-ItemProperty '$KEY').FaultCaptureExit)" ARMED "arming FaultCaptureExit"
 R1=$(pass_verdict red)
 log "  ARMED verdict: ${R1:-NONE}   $(detail red)"
 log "  pixels: $(pixels red)"
 
 # ---------------------------------------------------------------- D-9: disarm and prove green again
 log "=== D-9: disarm, restart, and re-run - the paired green must come back ==="
-psrun "Remove-ItemProperty -Path '$KEY' -Name FaultCaptureExit -EA SilentlyContinue
-Remove-ItemProperty -Path '$KEY' -Name FaultArmDelaySec -EA SilentlyContinue
-Stop-Service QubesGuiWatchdog -Force -EA SilentlyContinue; Start-Sleep 3
-Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 2
-Start-Service QubesGuiWatchdog -EA SilentlyContinue; Start-Sleep 25
-Write-Output 'DISARMED'" | grep -a DISARMED | sed 's/^/  /'
+restart_agent_checked "$DISARM_PS" "Write-Output 'DISARMED'" DISARMED "disarming after the armed run"
 G2=$(pass_verdict green-after)
 log "  disarmed verdict: ${G2:-NONE}   $(detail green-after)"
 

@@ -59,7 +59,7 @@ alive(){ T=30 q run 'cmd /c echo LIVE' | grep -qa LIVE; }
 
 guest_gone(){  # <context> <check-column> - one bounded clear attempt, the verdict row, and OUT (exit 3)
   log "guest gone - one bounded FaultGateOff=0 clear attempt, then the verdict"
-  T=90 set_gate 0 >/dev/null 2>&1 || true
+  T=120 set_gate 0 >/dev/null 2>&1 || true   # 120: set_gate may now poll up to 45 s for the agent PID
   log "-> INVALID-INSTRUMENT: guest unresponsive during the fault-toggle sequence ($1)."
   log "   The repeated arm+agent-restart cycle degraded the session; a dead guest is a graded"
   log "   outcome, never a wait state. Failproof not takeable this run - the affected checks'"
@@ -98,13 +98,48 @@ echo "$BAN" | grep -qa 'gateoff=' || {
   exit 2; }
 log "  gate-capable build CONFIRMED running"
 
+# AGENT RESTART WAITS ON A FACT, NOT A TIMER (audit 2026-09-08; same shape as gate-preflight.sh's
+# set_bits - do not let the two drift). This used to be `Start-Service; Start-Sleep 25`.
+# Start-Service returning says nothing about the agent: the watchdog reports RUNNING at once and
+# spawns gui-agent from its own 1 s loop, so a slow session had no agent yet at 25 s and p5 graded
+# a stale state, while a fast guest idled ~20 s per toggle (x7 toggles per run). Worse, -EA
+# SilentlyContinue hid a watchdog that never started, and any gui-agent left over from before the
+# kill then stood in for the "restarted" one. Now: the pre-kill PIDs are recorded and only a
+# gui-agent NOT among them counts (bounded 45 s poll), the service status is echoed for the caller
+# to grade, and the window-map witness is p5-run.sh's own control poll.
 set_gate(){  # <hex-or-0>
   psrun "New-Item -Path '$KEY' -Force | Out-Null
 Set-ItemProperty -Path '$KEY' -Name FaultGateOff -Value $1 -Type DWord
+\$old = @(Get-Process gui-agent -EA SilentlyContinue | ForEach-Object Id)
 Stop-Service QubesGuiWatchdog -Force -EA SilentlyContinue; Start-Sleep 3
 Get-Process gui-agent -EA SilentlyContinue | Stop-Process -Force; Start-Sleep 2
-Start-Service QubesGuiWatchdog -EA SilentlyContinue; Start-Sleep 25
-Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)" | grep -a GATEOFF | sed 's/^/  /'
+\$wdErr = ''
+try { Start-Service QubesGuiWatchdog -EA Stop } catch { \$wdErr = \$_.Exception.Message }
+\$wd = (Get-Service QubesGuiWatchdog -EA SilentlyContinue).Status
+Write-Output ('WDSTART ' + \$wd + ' ' + \$wdErr)
+\$new = 0; \$sw = [Diagnostics.Stopwatch]::StartNew()
+while (\$sw.Elapsed.TotalSeconds -lt 45) {
+  \$p = @(Get-Process gui-agent -EA SilentlyContinue | Where-Object { \$old -notcontains \$_.Id })
+  if (\$p.Count -gt 0) { \$new = \$p[0].Id; break }
+  Start-Sleep -Milliseconds 500
+}
+Write-Output ('AGENTPID ' + \$new + ' after ' + [int]\$sw.Elapsed.TotalSeconds + 's')
+\$stillOld = @(Get-Process gui-agent -EA SilentlyContinue | Where-Object { \$old -contains \$_.Id })
+Write-Output ('OLDALIVE ' + \$stillOld.Count)
+Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)" | grep -aE 'GATEOFF|WDSTART|AGENTPID|OLDALIVE'
+}
+
+watchdog_failed(){  # <context> <check-column> - the watchdog is not Running after Start-Service:
+                    # the toggle never restarted the agent, so p5 would grade a leftover state.
+                    # INVALID-INSTRUMENT (exit 3), never a silent proceed.
+  log "watchdog did not start - one bounded FaultGateOff=0 clear attempt, then the verdict"
+  T=120 set_gate 0 >/dev/null 2>&1 || true
+  log "-> INVALID-INSTRUMENT: QubesGuiWatchdog not Running after Start-Service ($1)."
+  log "   The agent was never restarted under the requested bits, so any cell would grade a"
+  log "   leftover state, not the bit. Failproof not takeable this run."
+  printf 'GATES\t%s\tINVALID-INSTRUMENT\tQubesGuiWatchdog not Running after Start-Service (%s); failproof not takeable this run\t%s\n' \
+    "${2:-sequence}" "$1" "$EV" >> "$V"
+  exit 3
 }
 
 # The GATEOFF echo must ROUND-TRIP or the toggle is graded, never assumed. Called only at top
@@ -118,7 +153,27 @@ set_gate_checked(){  # <hex-or-0> <context> <check-column>
     echo "$out" | grep -qa GATEOFF || \
       guest_gone "$2: guest answers liveness but the FaultGateOff write never round-trips" "$3"
   fi
-  echo "$out"
+  echo "$out" | sed 's/^/  /'
+  echo "$out" | grep -qa 'WDSTART Running' || \
+    watchdog_failed "$2: $(echo "$out" | grep -a WDSTART | head -1)" "$3"
+  # NO NEW AGENT + THE OLD ONE STILL ALIVE IS AN INVALID INSTRUMENT, NOT AN ANOMALY.
+  # Stop-Process is best-effort (-Force, no wait); if the old gui-agent survived it, the
+  # restarted watchdog ADOPTS it (watchdog.c) and the guest keeps running under the PREVIOUS
+  # gate bits. p5 would then grade cells the toggle never reached and this script would report
+  # "armed went red / did not go red" for a measurement of the old state. Only "no new agent
+  # AND no old agent" is the benign still-starting case worth a mere log line.
+  if echo "$out" | grep -qa 'AGENTPID 0 '; then
+    if echo "$out" | grep -qaE 'OLDALIVE [1-9]'; then
+      log "-> INVALID-INSTRUMENT: no NEW gui-agent within 45 s and the OLD one is STILL RUNNING ($2)."
+      log "   The watchdog adopted the surviving agent, so FaultGateOff=$1 was never applied to a"
+      log "   fresh process. Anything graded from here would describe the previous state."
+      T=120 set_gate 0 >/dev/null 2>&1 || true   # bounded clear so the subject is not left armed
+      printf 'GATES\t%s\tINVALID-INSTRUMENT\tno new gui-agent and the old one survived Stop-Process (%s); the toggle never took\t%s\n' \
+        "${3:-sequence}" "$2" "$EV" >> "$V"
+      exit 3
+    fi
+    log "  ANOMALY: watchdog Running, no NEW gui-agent within 45 s, and the old one IS gone ($2) - grading p5's control poll, not a guess"
+  fi
 }
 
 # P5 takes the same per-VM lock; QWT_VMLOCK_HELD is already exported, so it passes through.

@@ -2461,13 +2461,19 @@ static int BridgeMain()
         if (WTSGetActiveConsoleSessionId() != g_mySession) { BLog(L"session changed"); break; }
         if (GetFileAttributesW(stopf.c_str()) != INVALID_FILE_ATTRIBUTES) { BLog(L"stop requested"); break; }
 
-        // heartbeat for the agent supervisor (mtime is the liveness signal)
+        // heartbeat for the agent supervisor: "<GetTickCount64> <pid>\n". The tick is the
+        // hang backstop (compared against the agent's own tick - same boot, same clock); the
+        // PID lets the SYSTEM agent open this process (validated as notifhost.exe in the
+        // console session) and WAIT on it, so an exit is seen the instant it happens instead
+        // of 15 s + a 5 s poll later, and a stale tick with the process still alive is
+        // reported as a HANG rather than guessed at. Same line on purpose: a pid read next to
+        // a fresh tick is the process that wrote it, never a leftover from an earlier instance.
         {
             HANDLE f = CreateFileW(hbf.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
                                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
             if (f != INVALID_HANDLE_VALUE)
             {
-                char t[32]; int n = sprintf_s(t, "%llu\n", now);
+                char t[48]; int n = sprintf_s(t, "%llu %lu\n", now, GetCurrentProcessId());
                 DWORD wr; WriteFile(f, t, (DWORD)n, &wr, nullptr);
                 CloseHandle(f);
             }

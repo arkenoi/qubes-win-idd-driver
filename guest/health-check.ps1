@@ -87,6 +87,62 @@ $badSvc = @($svcs | Where-Object { $_.StartMode -eq 'Auto' -and $_.State -ne 'Ru
 Check 'agent_process' ([bool]$agentProc) @{ pid = if ($agentProc) { $agentProc.Id } else { $null } }
 Check 'qubes_services_running' (@($svcs).Count -gt 0 -and $badSvc.Count -eq 0) $svcs
 
+# --- 2b. SERVICE RECOVERY is CONFIGURED on the two control-channel services -----------
+# The installer arms `sc failure` + `sc failureflag` on QdbDaemon and QrexecAgent after every
+# msiexec (Set-QubesServiceRecovery): the MSI leaves both at RESET_PERIOD 0 - no actions at all -
+# and a QrexecAgent that failed to start on boot stayed dead for the life of that boot with the
+# guest unreachable. Until 2026-09-08 the arming outcome was a WARN in the installer's text log
+# only, so an sc.exe failure shipped a guest with the stock no-recovery configuration under
+# ok:true, graded by the harness identically to an armed one. The installer now records
+# detail.service_recovery; this is the guest-side half, asserting what is actually configured.
+#
+# WHAT A PASS DOES NOT PROVE (standing finding, audit 2026-09-08 #34): both services report
+# SERVICE_STOPPED with win32 exit code 0 when their worker fails, and SCM failure actions - even
+# with FAILURE_ACTIONS_ON_NONCRASH_FAILURES set - fire only on a crash or a non-zero exit. So this
+# asserts "the recovery the installer promised is configured", NOT "recovery works"; the latter
+# needs the service exit-code fix plus a defect-reintroduced proof (forced WaitForQdb timeout ->
+# event 7031 + a restart) before it may be claimed.
+#
+# Read the registry, not sc.exe's text. FailureActions is the raw SERVICE_FAILURE_ACTIONS the SCM
+# consumes (dwResetPeriod; two string offsets; cActions; actions offset; SC_ACTION{Type,Delay}...),
+# while sc.exe's field labels are what a locale can change (see the tr-TR note in 6b). The
+# `sc qfailure` RESET_PERIOD line is kept as corroborating evidence only.
+# Fail-proof: `sc failure QrexecAgent reset= 0 actions= ""` must turn this check red.
+$recovWantReset = 86400; $recovWantRestarts = 3
+$recovEv = [ordered]@{}
+$recovOk = $true
+foreach ($svcName in 'QdbDaemon', 'QrexecAgent') {
+    $ev = [ordered]@{ present = $false; reset_period = $null; actions = @(); restart_actions = 0
+                      noncrash_flag = $null; sc_qfailure_reset = $null; configured = $false }
+    $svcKey = "HKLM:\SYSTEM\CurrentControlSet\Services\$svcName"
+    if (Test-Path $svcKey) {
+        $ev.present = $true
+        $fa = (Get-ItemProperty -Path $svcKey -Name 'FailureActions' -ErrorAction SilentlyContinue).FailureActions
+        if ($fa -and $fa.Count -ge 20) {
+            $ev.reset_period = [BitConverter]::ToUInt32($fa, 0)
+            $cActions = [int][BitConverter]::ToUInt32($fa, 12)
+            $off = [int][BitConverter]::ToUInt32($fa, 16)
+            for ($i = 0; $i -lt $cActions -and ($off + 8 * $i + 8) -le $fa.Count; $i++) {
+                $aType = [BitConverter]::ToUInt32($fa, $off + 8 * $i)
+                $aDelay = [BitConverter]::ToUInt32($fa, $off + 8 * $i + 4)
+                $ev.actions += "type=$aType delay_ms=$aDelay"
+                if ($aType -eq 1) { $ev.restart_actions++ }   # SC_ACTION_RESTART
+            }
+        }
+        $ev.noncrash_flag = (Get-ItemProperty -Path $svcKey -Name 'FailureActionsOnNonCrashFailures' -ErrorAction SilentlyContinue).FailureActionsOnNonCrashFailures
+        $qf = (& sc.exe qfailure $svcName 2>&1 | Out-String)
+        if ($qf -match 'RESET_PERIOD[^:]*:\s*(\d+)') { $ev.sc_qfailure_reset = [int]$Matches[1] }
+    }
+    $ev.configured = ($ev.present -and $ev.reset_period -eq $recovWantReset -and
+                      $ev.restart_actions -ge $recovWantRestarts -and $ev.noncrash_flag -eq 1)
+    if (-not $ev.configured) { $recovOk = $false }
+    $recovEv[$svcName] = $ev
+}
+Check 'service_recovery_configured' $recovOk `
+    @{ services = $recovEv
+       want = "reset_period=$recovWantReset, >=$recovWantRestarts RESTART actions, FailureActionsOnNonCrashFailures=1 (what Set-QubesServiceRecovery arms)"
+       note = 'CONFIGURATION only: the services exit 0 on worker failure, so these actions are known-inert until the service exit code is fixed (audit #34) - a PASS is not evidence that recovery works' }
+
 # --- 3. IDD device present + started + primary ------------------------------------
 # Prefer a bound (Status OK) candidate: devcon install cycles leave phantom
 # ROOT\DISPLAY\000N devnodes behind, and an unordered First-1 can pick one of those

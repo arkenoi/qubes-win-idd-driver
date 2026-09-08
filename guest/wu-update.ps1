@@ -217,6 +217,15 @@ switch ($st.phase) {
             if (Test-Path $al) {
                 foreach ($l in @(& $al 2>&1)) { if ($l -match '^(SET|WARN)') { $Err.WriteLine("autologon: $l") } }
                 if ($LASTEXITCODE -eq 2) { $autologonOk = $false }
+                elseif ($LASTEXITCODE -eq 3) {
+                    # Exit 3 = the LSA probe itself failed; no finding either way. Rebooting is the
+                    # deliberate choice - a probe fault must not withhold every dom0-driven update of
+                    # an armed guest (ensure-autologon.ps1's contract) - but the choice is STATED, not
+                    # implied by treating 3 like 0: if this qube does come back at a sign-in screen,
+                    # this is the line that says autologon was never actually verified before the
+                    # reboot, so the probe (not the password) is what gets diagnosed.
+                    $Err.WriteLine('autologon UNVERIFIED (the LSA probe failed - see the autologon: WARN lines above) - rebooting anyway; a probe fault is not evidence the password is gone')
+                }
             }
             if (-not $autologonOk) {
                 # Rebooting now would leave the qube at a sign-in screen, where qrexec has nobody

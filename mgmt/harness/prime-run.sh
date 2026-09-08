@@ -250,7 +250,9 @@ qvm-start "$CHURN" >/dev/null 2>&1
 RESCUE_AFTER=${RESCUE_AFTER:-420}
 # RESCUE GATES ARE MEASURED FROM THE LAST START, NOT FROM t0, AND NEED 8 QUIET READS (160 s), NOT 3
 # (audit 2026-09-08, prime-run.sh:266). The guest is legitimately CPU-quiet for 60 s on the boot
-# after stage 1: the resume task is `/SC ONSTART /DELAY 0001:00`, and stage 2 deletes that task the
+# after stage 1: the resume task is `/SC ONSTART /DELAY 0000:30` (was 0001:00 until 2026-09-08, when
+# the named readiness waits - PnP settled, Windows Installer idle - took over the boot-variable part
+# of the wait), and stage 2 deletes that task the
 # moment it starts (Clear-BootResume). When stage 1 + its reboot ran long, that idle window began
 # after t0+420 s, three 20 s polls read cpu<15 while nothing was running yet, and the rescue
 # `qvm-shutdown` landed exactly as stage 2 started - task already gone, so the restarted guest never
