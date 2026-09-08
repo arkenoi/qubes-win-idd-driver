@@ -106,7 +106,9 @@ while (\$sw.Elapsed.TotalSeconds -lt 45) {
   Start-Sleep -Milliseconds 500
 }
 Write-Output ('AGENTPID ' + \$new + ' after ' + [int]\$sw.Elapsed.TotalSeconds + 's')
-Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)" | grep -aE 'GATEOFF|WDSTART|AGENTPID'; }
+\$stillOld = @(Get-Process gui-agent -EA SilentlyContinue | Where-Object { \$old -contains \$_.Id })
+Write-Output ('OLDALIVE ' + \$stillOld.Count)
+Write-Output ('GATEOFF ' + (Get-ItemProperty '$KEY').FaultGateOff)" | grep -aE 'GATEOFF|WDSTART|AGENTPID|OLDALIVE'; }
 
 watchdog_failed(){  # <context> - the watchdog service is not Running after Start-Service: the
                     # toggle never restarted the agent, so nothing downstream measures the bit.
@@ -138,8 +140,23 @@ set_bits_checked(){  # <value> <context>
   # not a verdict: control_up grades the OUTCOME (windows or none) against a live guest.
   echo "$out" | grep -qa 'WDSTART Running' || \
     watchdog_failed "$2: $(echo "$out" | grep -a WDSTART | head -1)"
-  echo "$out" | grep -qa 'AGENTPID 0 ' && \
-    log "  ANOMALY: watchdog Running but no NEW gui-agent PID within 45 s ($2) - grading the control poll, not a guess"
+  # NO NEW AGENT + THE OLD ONE STILL ALIVE IS AN INVALID INSTRUMENT, NOT AN ANOMALY.
+  # Stop-Process is best-effort here (-Force, no wait); if the old gui-agent survived it, the
+  # restarted watchdog ADOPTS it (watchdog.c) and the guest keeps running the PREVIOUS binary
+  # under the PREVIOUS gate bits. Everything downstream then grades a control that the toggle
+  # never reached, and the run reports CLEAR TO RUN for a measurement of the old state. Only
+  # "no new agent AND no old agent" is the benign still-starting case worth a mere log line.
+  if echo "$out" | grep -qa 'AGENTPID 0 '; then
+    if echo "$out" | grep -qaE 'OLDALIVE [1-9]'; then
+      log "-> INVALID-INSTRUMENT: no NEW gui-agent within 45 s and the OLD one is STILL RUNNING ($2)."
+      log "   The watchdog adopted the surviving agent, so bit $BITS was never applied to a fresh"
+      log "   process. Anything graded from here would describe the previous state."
+      printf 'PREFLIGHT\t%s\t%s\tINVALID-INSTRUMENT\tno new gui-agent and the old one survived Stop-Process (%s); the toggle never took\n' \
+        "$VM" "$BITS" "$2"
+      exit 3
+    fi
+    log "  ANOMALY: watchdog Running, no NEW gui-agent within 45 s, and the old one IS gone ($2) - grading the control poll, not a guess"
+  fi
 }
 
 # POLL for the control, never a fixed sleep. A fixed settle is how P5 once scored SG3 as FAIL
