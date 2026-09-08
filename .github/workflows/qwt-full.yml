@@ -423,11 +423,34 @@ jobs:
             if (-not (Test-Path $vcx)) { throw "core-agent project not found: $vcx" }
             # relocate-dir is the only project here that needs the WDK's km headers, so it is the
             # only one pinned to the version that owns them; everything else keeps the default.
+            #
+            # PINNING THE VERSION IS NOT ENOUGH. Measured 2026-09-08: with
+            # WindowsTargetPlatformVersion=10.0.26100.0 and ntifs.h confirmed at
+            # ...\Include\10.0.26100.0\km\ntifs.h, the compile STILL failed C1083. The WDK targets
+            # add the km\ include directory only for driver ConfigurationTypes; this is a user-mode
+            # application that merely uses the drivers TOOLSET, so km\ is never put on the include
+            # path at all. Add it (and the matching km lib dir for ntdllp.lib) through the
+            # compiler's own CL/LIB environment levers, which do not fight MSBuild's property
+            # evaluation the way an -p:IncludePath override would.
             $extra = @()
-            if ($name -eq 'relocate-dir') { $extra += "-p:WindowsTargetPlatformVersion=$env:WDK_KM_VERSION" }
+            $savedCL = $env:CL; $savedLIB = $env:LIB
+            if ($name -eq 'relocate-dir') {
+              $extra += "-p:WindowsTargetPlatformVersion=$env:WDK_KM_VERSION"
+              $kmInc = Split-Path $ntifs.FullName -Parent
+              $kits  = (Get-Item $kmInc).Parent.Parent.Parent.FullName
+              $kmLib = Join-Path $kits "Lib\$env:WDK_KM_VERSION\km\x64"
+              if (-not (Test-Path (Join-Path $kmLib 'ntdllp.lib'))) {
+                throw "ntdllp.lib not found under $kmLib - relocate-dir cannot link"
+              }
+              $env:CL  = "/I`"$kmInc`""
+              $env:LIB = "$kmLib;$env:LIB"
+              Write-Host "relocate-dir: CL=$env:CL"
+              Write-Host "relocate-dir: km lib = $kmLib"
+            }
             & "${{ steps.vs.outputs.msbuild }}" $vcx `
                 -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
                 "-p:TreatWarningAsError=false" @extra
+            $env:CL = $savedCL; $env:LIB = $savedLIB   # never leak the km paths into other projects
             if ($LASTEXITCODE -ne 0) { throw "core-agent: $name build failed ($LASTEXITCODE)" }
           }
           $caOut = "$ws\core-agent\vs2022\x64\$env:CONFIG"
