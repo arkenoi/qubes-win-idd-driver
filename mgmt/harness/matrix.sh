@@ -689,8 +689,32 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     return 1
   fi
   say "  $lbl RESULT: $(echo "$j" | cut -c1-300)"
-  echo "$j" | grep -qa "\"installed_gui_agent_sha256\":\"$ASHA" \
-    && ok "$lbl: installed agent == release binary" || no "$lbl: installed agent is NOT the release binary"
+  # JUDGE THE BINARY, NOT THE LAST LOG LINE. This used to demand installed_gui_agent_sha256 in
+  # whatever trailer happened to be last. On the two-stage path the last trailer can be
+  # stage1-prepare, which does not install the agent and therefore has no such field - so a cell
+  # that graded between stage 1 and stage 2 reported "installed agent is NOT the release binary"
+  # for a guest whose gui-agent.exe matched the release byte for byte. Measured 2026-09-08
+  # (win11-clean, reproload-1015): FAIL at 10:26:03 on a stage1-prepare trailer, accept battery
+  # PASS at 10:32:47, and the file on disk hashed 286601ba... == the release reference. It passes
+  # or fails on timing, which is why it looked intermittent.
+  # Order now: the trailer that actually CARRIES the field, else the file on the guest, and only
+  # then a verdict. A guest that cannot be hashed is INVALID-INSTRUMENT, not a product failure.
+  local jhash fhash
+  jhash=$(grep -a '^=== RESULT === {' "$M/$lbl-final.cur" | grep -a 'installed_gui_agent_sha256' | tail -1)
+  if [ -n "$jhash" ] && echo "$jhash" | grep -qa "\"installed_gui_agent_sha256\":\"$ASHA"; then
+    ok "$lbl: installed agent == release binary (installer RESULT)"
+  else
+    fhash=$(QTEST_VM="$vm" timeout -k 8 90 "$HERE/tools/qtest" run \
+              'certutil -hashfile "C:\Program Files\Qubes Tools\bin\gui-agent.exe" SHA256' 2>/dev/null \
+              | tr -d '\r' | grep -aiE '^[0-9a-f]{64}$' | head -1 | tr 'A-F' 'a-f')
+    if [ -z "$fhash" ]; then
+      no "$lbl: could not hash the installed agent on the guest - INVALID-INSTRUMENT, not a product result"
+    elif [ "${fhash:0:${#ASHA}}" = "$(echo "$ASHA" | tr 'A-F' 'a-f')" ]; then
+      ok "$lbl: installed agent == release binary (hashed on the guest; the RESULT trailer was stage-1)"
+    else
+      no "$lbl: installed agent is NOT the release binary (on-disk $fhash != $ASHA)"
+    fi
+  fi
   # DIALOG VERDICT. Read the watcher's own summary rather than inferring from silence: it reports
   # NO SAMPLES / BLIND / COVERAGE GAPS as distinct outcomes, and each of those means "this cell
   # cannot claim the dialog was absent" - not "it was absent".
