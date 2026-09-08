@@ -1620,6 +1620,53 @@ function Invoke-Stage2 {
     # degrades gracefully. detail.idd_driver records how far it got either way.
     $script:Result.detail.idd_driver = 'skipped (/noidd)'
     if (-not $NoIddDriver) {
+      # QUIESCE THE GUI-AGENT BEFORE ANY DISPLAY SURGERY.
+      # Reconstructed 2026-09-08 from the wreckage of a clean install that took the whole VM down.
+      # The guest's last eight seconds, from its own on-disk logs (setupapi.dev.log timestamps,
+      # scheduled-task file mtimes, ProgramData writes):
+      #     08:22:39  msiexec returns 3010
+      #     08:22:41  QubesGuiWatchdog starts gui-agent.exe, which launches wgcbroker.exe
+      #     08:22:44  xenvif added   (pending reboot)
+      #     08:22:46  xencons added  (pending reboot)
+      #     08:22:48  devcon creates and STARTS root\iddsampledriver -> a second display arrives
+      #     08:22:49  the agent writes gui-agent-notify.txt (QGADIRECTSUPPRESS) and schedules notifhost
+      #     ------    nothing is ever written to that disk again; the guest had to be killed, and the
+      #               unflushed registry left the PV stack half-registered: no qrexec, no PV console
+      # The block below hot-adds a display adapter and then DISABLES the adapter the desktop is
+      # running on, while a capture agent is EIGHT SECONDS OLD and mid-broker-launch, with three PV
+      # driver packages pending-reboot. That ordering is indefensible whichever layer actually
+      # deadlocked, so the window is removed rather than argued about.
+      # NOT restarted in-session, deliberately: stage 2 sets Result.reboot_needed unconditionally
+      # and always ends in a reboot, the service start type is left untouched, so the agent comes
+      # back on the next boot with the display topology already settled - which is also the only
+      # moment it can capture the IDD instead of the adapter we are about to disable.
+      $guiQuiesced = $false
+      try {
+          $wd = Get-Service -Name 'QubesGuiWatchdog' -ErrorAction SilentlyContinue
+          if ($wd -and $wd.Status -ne 'Stopped') {
+              Write-Log 'stopping QubesGuiWatchdog for the display surgery (the reboot this stage ends in brings it back)'
+              Stop-Service -Name 'QubesGuiWatchdog' -Force -ErrorAction Stop
+              $guiQuiesced = $true
+          } else {
+              Write-Log 'QubesGuiWatchdog not running - no agent to quiesce before the display surgery'
+          }
+      } catch {
+          Write-Log ("could not stop QubesGuiWatchdog: $($_.Exception.Message) - proceeding, but the " +
+                     'display surgery below runs under a live capture agent') 'WARN'
+      }
+      # The watchdog launches the agent and the broker INTO THE USER SESSION, so stopping the
+      # service does not necessarily take them with it. Kill what is actually holding a capture.
+      foreach ($pn in 'gui-agent', 'wgcbroker', 'notifhost') {
+          foreach ($pr in @(Get-Process -Name $pn -ErrorAction SilentlyContinue)) {
+              try   { $pr.Kill(); $guiQuiesced = $true; Write-Log "  stopped $pn (pid $($pr.Id))" }
+              catch { Write-Log "  could not stop $pn (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
+          }
+      }
+      # Let an in-flight AcquireNextFrame and the framebuffer grant actually go away before the
+      # topology moves under them - the agent re-grants on resolution change, and that path reaches
+      # into the kernel (xeniface gnttab IOCTLs), which is the one place our code could wedge a VM.
+      if ($guiQuiesced) { Start-Sleep -Seconds 3 }
+      $script:Result.detail.idd_gui_quiesced = $guiQuiesced
       try {
         $script:Result.detail.idd_driver = 'requested'
         $iddDir  = Join-Path $Root 'idd-driver'

@@ -194,6 +194,32 @@ fi
 
 OUT="$HERE/evidence/prime-$JOB-$CHURN-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
 log "evidence -> $OUT"
+
+# --- LOOK AT THE SCREEN, do not infer from qrexec silence -------------------------------------
+# Cost of not doing this, measured 2026-09-08: a clean install froze the guest, the wait below saw
+# only "no qrexec" and reported the guest unreachable; I then called the IMAGE permanently broken
+# and said a fresh clone of it failed too. Both were wrong. Booted with a camera on it, that same
+# disk reaches a full Windows desktop in about seven minutes - it is qrexec that is dead, because
+# the interrupted install left the PV stack half-registered. A picture would have said so in one
+# poll. The emulated display is the ONLY boot-phase instrument available here: xencons binds only
+# after a reboot (so it is absent for exactly the mid-install failures), and EMS/SAC is impossible
+# because these HVMs have no UART at all (verified: no Win32_SerialPort, no PnP Ports class, no
+# PNP0500/PNP0501 in the firmware tables).
+# Per-window capture ONLY (local.WinScreenshot). NEVER fullshot: that photographs the whole dom0
+# desktop, every other qube included, and three such captures reached a public repo once already.
+mkdir -p "$OUT/screens"
+screen_probe() {   # $1=tag -> echoes a one-word verdict, keeps the PNG as evidence
+    local tag="$1" tar="$OUT/screens/$tag.tar" v=NOWINDOW p
+    QTEST_VM=$CHURN timeout -k 5 60 ./tools/qtest shot "$tar" >/dev/null 2>&1 || { echo SHOTFAIL; return; }
+    [ -s "$tar" ] || { echo NOWINDOW; return; }
+    tar -xf "$tar" -C "$OUT/screens" 2>/dev/null
+    p=$(ls -1 "$OUT/screens"/win-*.png 2>/dev/null | head -1)
+    [ -n "$p" ] || { echo NOWINDOW; return; }
+    mv -f "$p" "$OUT/screens/$tag.png" 2>/dev/null
+    rm -f "$OUT/screens"/win-*.png 2>/dev/null
+    v=$(python3 tools/winshot.py --png "$OUT/screens/$tag.png" --classify 2>/dev/null | tr -d '\r' | tail -1)
+    echo "${v:-UNKNOWN}"
+}
 log "booting; the job runs as SYSTEM, and its installer reboots - this guest halts on reboot, so"
 log "  restarting it is THIS script's job (protocol 0.8: one owner per guest, watchers stay passive)"
 qvm-start "$CHURN" >/dev/null 2>&1
@@ -257,7 +283,15 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
         log "  t+${el}s QREXEC ANSWERS after $restarts restart(s) - the guest carries a working QWT"
         break
     fi
-    log "  t+${el}s state=$st restarts=$restarts cpu=${cpu} quiet=$quiet (no qrexec yet)"
+    # Every third poll (~60 s) READ THE SCREEN. A verdict here separates the three states the
+    # qrexec probe cannot tell apart: still booting, sitting at a desktop with a dead control
+    # channel, or genuinely frozen/black. Non-fatal and never terminal on its own - it is
+    # evidence, and the PNG is kept next to this log.
+    scr=
+    if [ $(( el / 60 )) -gt "${scrn:-0}" ]; then
+        scrn=$(( el / 60 )); scr=" screen=$(screen_probe "t${el}")"
+    fi
+    log "  t+${el}s state=$st restarts=$restarts cpu=${cpu} quiet=$quiet (no qrexec yet)$scr"
 done
 
 # SETTLE BEFORE DECLARING SUCCESS. First qrexec is not the end of the job: `stock-422` installs,
