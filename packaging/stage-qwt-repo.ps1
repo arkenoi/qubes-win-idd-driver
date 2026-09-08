@@ -87,11 +87,16 @@ $subst = @(
         # qrexec-client-vm.exe remains withheld: its source is unmodified, so shipping it would
         # add forked surface for no benefit. ours-wins.psd1 CompiledSources still fails the build
         # the moment IT diverges - that tripwire is unchanged and is what caught this one.
+        # relocate-dir.exe joins them 2026-09-08: it is the BootExecute step that moves
+        # C:\Users onto the private volume (MoveUsers), it runs before anything can report, and
+        # its failure reporting is the fix. It was previously unbuildable here only because the
+        # runner lacked the WDK - now installed - so the exclusion was a gap, not a policy.
         Match  = { param($comp, $leaf) $comp -eq 'core-agent-windows' -and
-                                       ($leaf -eq 'qrexec-wrapper.exe' -or $leaf -eq 'qrexec-agent.exe') }
+                                       ($leaf -eq 'qrexec-wrapper.exe' -or $leaf -eq 'qrexec-agent.exe' -or
+                                        $leaf -eq 'relocate-dir.exe') }
         Source = { param($leaf) Join-Path $CoreAgentBins $leaf }
         Binary = $true
-        Min    = 2
+        Min    = 3
     }
     @{  Name   = 'VMExec.ps1 (maintained, guest/)'
         # MUST precede the rpc rule below. guest/VMExec.ps1 is the maintained handler

@@ -354,7 +354,11 @@ jobs:
       # migration table's wave 2): the per-invocation rpc tools, wait-for-logon, advertise-tools
       # and autologon - all v143, all against the deps staged above, all outputting to
       # vs2022\x64\<cfg>\<name>\<name>.exe. NOT built, deliberately:
-      #   - relocate-dir: needs the WDK (ntifs.h / ntdllp.lib), which this runner does not have;
+      #   - (relocate-dir USED to be excluded here for want of the WDK. That was a RUNNER gap, not
+      #     a property of the source: the WDK install recipe already existed in build.yml and is
+      #     now run in this workflow too, so relocate-dir is built like everything else. Its
+      #     vcxproj needs PlatformToolset WindowsApplicationForDrivers10.0 - which is the WDK's VS
+      #     integration, delivered by the VSIX - plus ntifs.h and ntdllp.lib.)
       #   - network-setup: our own tooling retires it (pvnic-selfprime deletes it on-guest);
       #     building it would re-ship a defect. End state is deleting its wxs component, not
       #     substituting the binary.
@@ -371,6 +375,23 @@ jobs:
           $env:QB_SCRIPTS = "$ws\deps-src\builderv2\qubesbuilder\plugins\build_windows\scripts"
           # qwt_version.h is GENERATED, and only qrexec-agent.vcxproj's PreBuild event generates
           # it, so building any other project first fails with RC1015. Generate it up front so
+          # WDK, for relocate-dir. Same recipe as build.yml (choco windowsdriverkit11 + the VSIX
+          # into VS2022) - relocate-dir.vcxproj builds with PlatformToolset
+          # WindowsApplicationForDrivers10.0 and links ntdllp.lib, both of which arrive with that
+          # integration. Without it MSBuild fails on an unknown toolset, which is why this project
+          # was excluded rather than fixed. Idempotent: choco is a no-op if already present.
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Windows Kits\10\Include\*\km\ntifs.h")) {
+            choco install windowsdriverkit11 --no-progress -y
+            $vsix = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix" -Recurse -Filter '*.vsix' -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+            if (-not $vsix) { throw "WDK.vsix not found after choco install" }
+            $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse -Filter VSIXInstaller.exe |
+                    Select-Object -First 1
+            Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -Wait
+          }
+          if (-not (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Include" -Recurse -Filter ntifs.h -ErrorAction SilentlyContinue)) {
+            throw "WDK install did not deliver ntifs.h - relocate-dir cannot build"
+          }
           # build ORDER cannot decide whether the build works.
           & powershell "$env:QB_SCRIPTS\set-version.ps1" "$ws\core-agent\version" "$ws\core-agent\qwt_version.h"
           if (-not (Test-Path "$ws\core-agent\qwt_version.h")) { throw 'failed to generate qwt_version.h' }
@@ -379,7 +400,7 @@ jobs:
           # against the pinned installer sources 2026-08-28.
           $projects = @(
             'qrexec-wrapper', 'qrexec-agent', 'qrexec-client-vm',
-            'advertise-tools', 'autologon',
+            'advertise-tools', 'autologon', 'relocate-dir',
             'qubes-rpc-services\clipboard-copy', 'qubes-rpc-services\clipboard-paste',
             'qubes-rpc-services\file-receiver',  'qubes-rpc-services\file-sender',
             'qubes-rpc-services\get-image-rgba', 'qubes-rpc-services\open-in-vm',

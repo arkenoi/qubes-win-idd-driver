@@ -164,6 +164,7 @@
         # dropped): now signed and staged into the MSI. NOT xencontrol.dll (WDK build
         # unproven, wave 3) and NEVER xenagent.dll/xenbus_monitor.dll (catalog-covered by
         # the signed xeniface/xenbus driver packages - permanently stock).
+        @{ Package = 'msi-image/System64/relocate-dir.exe';    Stock = 'relocate-dir.exe';    Required = $true }
         @{ Package = 'msi-image/System64/windows-utils.dll';   Stock = 'windows-utils.dll';   Required = $true }
         @{ Package = 'msi-image/System64/libvchan.dll';        Stock = 'libvchan.dll';        Required = $true }
         @{ Package = 'msi-image/System64/libxenvchan.dll';     Stock = 'libxenvchan.dll';     Required = $true }
@@ -231,6 +232,10 @@
             'src/qrexec-wrapper'   = 'msi-image/PFiles64/Qubes Tools/bin/qrexec-wrapper.exe'
             'src/qrexec-agent'     = 'msi-image/PFiles64/Qubes Tools/bin/qrexec-agent.exe'
             'src/qrexec-client-vm' = 'msi-image/PFiles64/Qubes Tools/bin/qrexec-client-vm.exe'
+            # System64 is this packaging's name for the guest's System32: a failed guest imaged
+            # on 2026-09-08 carried it at Windows\System32\relocate-dir.exe, and BootExecute
+            # names it there ('autocheck autochk * relocate-dir.exe C:\Users Q:\Users').
+            'src/relocate-dir'     = 'msi-image/System64/relocate-dir.exe'
         }
     }
 
