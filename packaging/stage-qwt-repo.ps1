@@ -91,12 +91,14 @@ $subst = @(
         # C:\Users onto the private volume (MoveUsers), it runs before anything can report, and
         # its failure reporting is the fix. It was previously unbuildable here only because the
         # runner lacked the WDK - now installed - so the exclusion was a gap, not a policy.
+        # advertise-tools.exe joins them too: it is what writes /qubes-tools/* so dom0 ever sees
+        # qrexec=1 for the guest, and its fix replaces a poll with the session-logon event.
         Match  = { param($comp, $leaf) $comp -eq 'core-agent-windows' -and
                                        ($leaf -eq 'qrexec-wrapper.exe' -or $leaf -eq 'qrexec-agent.exe' -or
-                                        $leaf -eq 'relocate-dir.exe') }
+                                        $leaf -eq 'relocate-dir.exe'   -or $leaf -eq 'advertise-tools.exe') }
         Source = { param($leaf) Join-Path $CoreAgentBins $leaf }
         Binary = $true
-        Min    = 3
+        Min    = 4
     }
     @{  Name   = 'VMExec.ps1 (maintained, guest/)'
         # MUST precede the rpc rule below. guest/VMExec.ps1 is the maintained handler

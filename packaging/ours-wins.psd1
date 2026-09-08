@@ -165,6 +165,7 @@
         # unproven, wave 3) and NEVER xenagent.dll/xenbus_monitor.dll (catalog-covered by
         # the signed xeniface/xenbus driver packages - permanently stock).
         @{ Package = 'msi-image/System64/relocate-dir.exe';    Stock = 'relocate-dir.exe';    Required = $true }
+        @{ Package = 'msi-image/PFiles64/Qubes Tools/bin/advertise-tools.exe'; Stock = 'advertise-tools.exe'; Required = $true }
         @{ Package = 'msi-image/System64/windows-utils.dll';   Stock = 'windows-utils.dll';   Required = $true }
         @{ Package = 'msi-image/System64/libvchan.dll';        Stock = 'libvchan.dll';        Required = $true }
         @{ Package = 'msi-image/System64/libxenvchan.dll';     Stock = 'libxenvchan.dll';     Required = $true }
@@ -236,6 +237,10 @@
             # on 2026-09-08 carried it at Windows\System32\relocate-dir.exe, and BootExecute
             # names it there ('autocheck autochk * relocate-dir.exe C:\Users Q:\Users').
             'src/relocate-dir'     = 'msi-image/System64/relocate-dir.exe'
+            # Beside qrexec-agent.exe: qrexec-agent launches it as the bare command
+            # 'advertise-tools.exe 1', and CreateProcess searches the calling process's own
+            # directory first - which is the only way that launch resolves today.
+            'src/advertise-tools'  = 'msi-image/PFiles64/Qubes Tools/bin/advertise-tools.exe'
         }
     }
 
