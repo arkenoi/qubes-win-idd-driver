@@ -78,6 +78,21 @@ reported as nothing, or a recovery that happened silently.
   and cannot be fixed here. One of them explains why service recovery actions are inert: the shared
   service harness reports `SERVICE_STOPPED / NO_ERROR` when a worker fails. The reachable half is
   fixed in `core-agent`.
+- **Two stale lines in the ISO's `README.txt`.** The body still says an already-installed QWT is
+  removed first and that the removal can cost an extra reboot. That has not been true since the
+  4.3.0 version bump: an older or equal QWT is an in-place MajorUpgrade (or a same-version repair),
+  and removal happens only on a genuine downgrade. The **header** — the line carrying the 0x7B
+  hazard, and the one a user reads before touching an existing install — is correct in this
+  package. The body lines are fixed in the tree and will ship in the next package; they were not
+  worth invalidating an acceptance run for.
+- **Watchdog lifetime fixes are not in this release.** Token handle leaks, an unbounded `ServiceMain`
+  join and PRESHUTDOWN reporting STOPPED with the respawn loop still live are fixed on the branch
+  `watchdog-lifetime-4322` (agent `550e1da`). Agent commit `a195692`'s message describes all three;
+  `git show --stat` says it touched `gui-agent/main.c` only, so they were never staged and sat
+  uncommitted while this package was built, verified and put through acceptance. Caught by reading
+  `git status` before the release commit, not by any guard. They land next, after CI compiles the
+  file for the first time and a cold shutdown is re-checked for Event 7043 — the PRESHUTDOWN change
+  reverses b51a09f, which was rig-verified against exactly that event.
 - `health-check` now hard-fails a guest whose `QdbDaemon`/`QrexecAgent` lack the armed recovery
   configuration. On a guest installed from a package older than 2026-09-06 and never upgraded, that
   is the intended finding, not noise.
