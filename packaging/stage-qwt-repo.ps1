@@ -71,16 +71,27 @@ $subst = @(
         Binary = $true
         Min    = 2   # gui-agent.exe, gui-watchdog.exe
     }
-    @{  Name   = 'core-agent qrexec-wrapper'
-        # Fork-built wrapper (drain-race fix ac33bc9/e5e94b8). ONLY the wrapper:
-        # qrexec-agent.exe / qrexec-client-vm.exe are built but withheld by recorded
-        # policy — unmodified source means no benefit, and qrexec-agent is the service
-        # dom0 talks to. They fall through to stock ON PURPOSE; ours-wins.psd1
-        # CompiledSources fails the build the moment either source diverges.
-        Match  = { param($comp, $leaf) $comp -eq 'core-agent-windows' -and $leaf -eq 'qrexec-wrapper.exe' }
+    @{  Name   = 'core-agent qrexec-wrapper + qrexec-agent'
+        # Fork-built wrapper (drain-race fix ac33bc9/e5e94b8) AND qrexec-agent.
+        #
+        # qrexec-agent.exe SHIPS FROM THE FORK as of 2026-09-08 (owner-approved). The previous
+        # policy - "built but withheld; unmodified source means no benefit, and qrexec-agent is
+        # the service dom0 talks to" - was correct while the source was unmodified. It is not any
+        # more: the 2026-09-08 audit found that QdbDaemon can take up to 5 minutes to become
+        # usable while QrexecAgent gave up after 60 s and returned ERROR_SUCCESS, so the SCM saw a
+        # clean stop, logged an informational 7036 and never ran the failure actions. That is why
+        # Set-QubesServiceRecovery was inert against the exact failure it was written for, and why
+        # "qrexec permanently missing after a clean install" stayed unidentified for days.
+        # Withholding the fix would leave that P1 diagnosed and unfixed on every guest.
+        #
+        # qrexec-client-vm.exe remains withheld: its source is unmodified, so shipping it would
+        # add forked surface for no benefit. ours-wins.psd1 CompiledSources still fails the build
+        # the moment IT diverges - that tripwire is unchanged and is what caught this one.
+        Match  = { param($comp, $leaf) $comp -eq 'core-agent-windows' -and
+                                       ($leaf -eq 'qrexec-wrapper.exe' -or $leaf -eq 'qrexec-agent.exe') }
         Source = { param($leaf) Join-Path $CoreAgentBins $leaf }
         Binary = $true
-        Min    = 1
+        Min    = 2
     }
     @{  Name   = 'VMExec.ps1 (maintained, guest/)'
         # MUST precede the rpc rule below. guest/VMExec.ps1 is the maintained handler

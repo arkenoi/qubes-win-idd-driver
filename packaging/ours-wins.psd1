@@ -154,6 +154,12 @@
         @{ Package = 'msi-image/PFiles64/Qubes Tools/bin/gui-watchdog.exe';   Stock = 'gui-watchdog.exe';   Required = $true }
         # Fork-built wrapper (drain-race fix), now delivered by the MSI itself.
         @{ Package = 'msi-image/PFiles64/Qubes Tools/bin/qrexec-wrapper.exe'; Stock = 'qrexec-wrapper.exe'; Required = $true }
+        # Ships from the fork since 2026-09-08 (owner-approved): the readiness fix - QrexecAgent
+        # gave up on qubesdb after 60 s and returned ERROR_SUCCESS, so the SCM never ran the
+        # failure actions. Listed here so the differ-from-stock tripwire covers it: if a build
+        # ever produces a qrexec-agent.exe byte-equal to stock, that means the fork's binary did
+        # not get staged and the guest would silently keep the stock one.
+        @{ Package = 'msi-image/PFiles64/Qubes Tools/bin/qrexec-agent.exe';   Stock = 'qrexec-agent.exe';   Required = $true }
         # The user-mode dep DLLs qwt-full builds and used to DISCARD (.libs staged, DLLs
         # dropped): now signed and staged into the MSI. NOT xencontrol.dll (WDK build
         # unproven, wave 3) and NEVER xenagent.dll/xenbus_monitor.dll (catalog-covered by
