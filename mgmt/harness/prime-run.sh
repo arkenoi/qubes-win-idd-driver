@@ -209,7 +209,13 @@ log "evidence -> $OUT"
 # desktop, every other qube included, and three such captures reached a public repo once already.
 mkdir -p "$OUT/screens"
 screen_probe() {   # $1=tag -> echoes a one-word verdict, keeps the PNG as evidence
-    local tag="$1" tar="$OUT/screens/$tag.tar" v=NOWINDOW p
+    # SEPARATE `local` statements on purpose: under `set -u` a variable declared in the SAME
+    # local statement is not yet visible to a later assignment in it, so `local tag="$1"
+    # tar=".../$tag.tar"` aborts the function with "tag: unbound variable" - to stderr, leaving a
+    # silent empty result that looks exactly like "no window". Measured 2026-09-08.
+    local tag="$1"
+    local tar="$OUT/screens/$tag.tar"
+    local v=NOWINDOW p
     QTEST_VM=$CHURN timeout -k 5 60 ./tools/qtest shot "$tar" >/dev/null 2>&1 || { echo SHOTFAIL; return; }
     [ -s "$tar" ] || { echo NOWINDOW; return; }
     tar -xf "$tar" -C "$OUT/screens" 2>/dev/null
