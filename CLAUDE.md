@@ -310,6 +310,26 @@ The rule is now MODE-DEPENDENT, and the safety criterion is geometry, not deskto
 - The agent LOGS a persistent freeze (`QGADESKSTUCK`, after 30 s then every 120 s), which is the
   "distinguish transient from persistent" item the old note asked for.
 
+## Capabilities are decided at START (owner, 2026-09-08)
+
+**System/build capabilities are evaluated ONCE at startup. They never "vanish" mid-run, and there is
+no such thing as a fallback for one disappearing.** Whether this guest can do per-window direct
+capture is a property of the build, the packaged helpers and the feature gates, settled at Init and
+never revisited. Conforming today (verified 2026-09-08): `g_OsBuild`, `g_WgcBroker`, `g_SliceRetire`,
+`g_DeSlice` are assigned once at Init; `PwEnabled()` returns `g_PwOn`, set in `PwInit` and cleared
+only in `PwShutdown`. No capability gate is re-read at runtime - and none may become so, because a
+transient re-read failure would silently downgrade an eligible guest, which is the forbidden silent
+fallback arriving through the back door.
+
+The corollary is the one that keeps being violated: **a component that was working and then stops is
+a FAILURE of an eligible system, never a capability change.** It must be reported loudly and must not
+be quietly recovered from. Conflating the two is what produced the 2026-09-08 broker P1 -
+`WgcBrokerActive()` mixed the latched capability with runtime availability, so "the broker died"
+looked the same as "this guest cannot do direct capture" at every call site, and the relaunch path
+then re-certified a dead broker as alive every 8 s (stale shared heartbeat), suppressing the very
+detection it exists to support. `BrokerState()` now separates them: NOT_ELIGIBLE (start-time, can
+never be entered mid-run) vs STARTING / READY / DOWN (runtime, bounded, always resolving).
+
 ## Upstream policy (set by the user 2026-08-04) — SUPERSEDES the earlier guidance
 
 **Submit NOTHING upstream until this work is finished in full and there is a new, complete QWT
