@@ -43,6 +43,17 @@ $fail = @{}
 if (-not (Test-Path (Join-Path $bindir 'qrexec-agent.exe'))) {
     Write-Output 'MARKJSON'
     [pscustomobject]@{ ok=$false; error='qrexec-agent.exe not found in the QWT bin dir - QWT not installed?' } | ConvertTo-Json -Compress
+
+# EXIT ON OUR OWN VERDICT, NEVER ON WHATEVER RAN LAST.
+# Regression found in acceptance 2026-09-08: the stock_reapply_task probe above is the last
+# external command in this script, and on the NORMAL path that task does not exist - so schtasks
+# leaves $LASTEXITCODE=1 and, with no explicit exit, PowerShell hands that back as the SCRIPT's
+# exit code. A successful priming ("ok":true,"armed":true) therefore reported failure, and the
+# installer's verdict check - correctly honouring the exit code as of today - refused to arm the
+# unplug latch on a guest that had primed perfectly.
+# Two individually-correct changes composing into a defect: a diagnostic probe must never be able
+# to decide the caller's verdict.
+if ($armed) { exit 0 } else { exit 1 }
     exit 1
 }
 
