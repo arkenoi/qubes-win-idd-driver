@@ -78,15 +78,23 @@ reported as nothing, or a recovery that happened silently.
 - **Package content is proven, not assumed.** Each fork binary is located *inside the MSI* by a
   build-identity marker a stock binary cannot contain, in both ASCII and UTF-16LE. `ours-wins` proves
   staging at build time; this proves delivery into the installed artifact.
-- **Boot-to-qrexec is now measured** on every cold boot (n=10: 20–38 s, median ~28 s). Previously the
+- **Boot-to-qrexec is now measured** on every cold boot (n=22 across two campaigns: 15–38 s).
+  A boot that never answers is recorded as `no-qrexec-within-600s` rather than omitted, so a guest
+  that fails to come up cannot silently flatter the distribution. Previously the
   harness only recorded "desktop shell up", which is autologon + profile + explorer and says nothing
   about when dom0 can talk to the qube.
 
 ## Known open
 
-- **Boot-to-qrexec is ~10 s slower on non-clean guests** (clean 20 s vs upgrade/AppVM 28–38 s,
-  disjoint). Not a regression against any baseline — no prior measurement existed. Tracked in
-  `findings/issues.md` with the instrument named (`Diagnostics-Performance` events 100/101–109).
+- **Boot-to-qrexec varies 15–38 s and the cause is unknown.** An earlier reading of this — "~10 s
+  slower on non-clean guests, the sets are disjoint" — was retracted while preparing this release:
+  it was two samples against four from one campaign, and the fuller set (n=22) overlaps completely.
+  A *clean* win11 install produced the slowest standalone number on record (33 s) and a clean win10
+  the fastest (15 s); the spread within one unchanged configuration is as large as the difference
+  the grouping was supposed to explain. Not a regression against any baseline — no prior
+  boot-to-qrexec measurement existed, because the harness used to record only "desktop shell up",
+  which is a different quantity. Next step is the noise floor (repeat boots of one guest) before any
+  comparison, then attribution via `Diagnostics-Performance` events 100/101–109.
 - Two audit findings live in `upstream/ro/**`, a read-only reference checkout with no tracked files,
   and cannot be fixed here. One of them explains why service recovery actions are inert: the shared
   service harness reports `SERVICE_STOPPED / NO_ERROR` when a worker fails. The reachable half is
