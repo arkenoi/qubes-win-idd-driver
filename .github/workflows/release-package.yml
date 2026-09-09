@@ -38,6 +38,10 @@ on:
       # pv-xenvif.yml. A change to either must rebuild the package.
       - '.github/workflows/qwt-full.yml'
       - '.github/workflows/pv-xenvif.yml'
+      - '.github/workflows/pv-xencons.yml'
+      # The ONE version generator: every OURS binary's FILEVERSION and the INF DriverVer come
+      # out of it (packaging/version-stamp), so a change to it changes every shipped byte.
+      - 'tools/stamp-version.ps1'
       # The artifact EMBEDS the driver and the agent (via qwt-full) - a change to either
       # must rebuild it, or the next download quietly ships stale binaries.
       - 'driver/**'
@@ -88,6 +92,12 @@ concurrency:
 # verified only once two independent runs of the same commit are compared and match.
 env:
   LINK: /Brepro
+  # THE fourth FILEVERSION field for every OURS binary in this package (packaging/version-stamp).
+  # One number, from this run, passed EXPLICITLY to the reusable workflows below (GITHUB_RUN_NUMBER
+  # inside a reusable workflow is the caller's by accident of GitHub semantics, not by contract).
+  # tools/stamp-version.ps1 THROWS in CI when this is unset, so every job that builds an OURS
+  # binary must see it: this workflow-level env covers idd and setup; msi/pv/cons get build_rev.
+  QWTNG_BUILD_REV: ${{ github.run_number }}
 
 jobs:
   # ------------------------------------------------------------------ the MSI (reused)
@@ -96,6 +106,8 @@ jobs:
   msi:
     uses: ./.github/workflows/qwt-full.yml
     secrets: inherit
+    with:
+      build_rev: ${{ github.run_number }}
 
   # --------------------------------------------------------------- the IddCx driver
   # Deliberately a slimmed copy of build.yml's idd-driver job: the release payload needs
@@ -118,6 +130,11 @@ jobs:
           }
 
       - uses: actions/checkout@v4
+        with:
+          # agent/version (in the agent submodule) is the ONE release version: the driver's
+          # PreBuildEvent and the INF stamp below both read it. Without the submodule the
+          # stamper fails BAD_VERSION_FILE before anything is built.
+          submodules: true
 
       - name: Install WDK + VS driver targets
         shell: pwsh
@@ -130,21 +147,11 @@ jobs:
                   Select-Object -First 1
           Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -Wait
 
-      - name: Stamp DLL version (unique per build)
-        shell: pwsh
-        run: |
-          # Two consecutive releases built from unchanged driver source produce BYTE-IDENTICAL
-          # DLLs; installing such a pair leaves System32\drivers\UMDF hardlinked to the OLD
-          # store generation and the device never starts cleanly (FINDINGS 2026-08-27, the
-          # withdrawn 4.3.8). A per-minute FILEVERSION makes every build byte-unique.
-          $epochMin = [int][Math]::Floor(([DateTimeOffset]::UtcNow - [DateTimeOffset]::new(2026,1,1,0,0,0,[TimeSpan]::Zero)).TotalMinutes)
-          $build = ($epochMin -shr 16) -band 0x7FFF
-          $rev = $epochMin -band 0xFFFF
-          $ver = "4.3.$build.$rev"
-          $h = "#pragma once`n#define QIDD_VER_MAJOR 4`n#define QIDD_VER_MINOR 3`n#define QIDD_VER_BUILD $build`n#define QIDD_VER_REV $rev`n#define QIDD_VER_STR `"$ver`"`n"
-          Set-Content driver/IddSampleDriver/qidd_version.h $h
-          Get-Content driver/IddSampleDriver/qidd_version.h
-
+      # The driver DLL's FILEVERSION is no longer stamped here: IddSampleDriver.vcxproj's
+      # PreBuildEvent generates qidd_version.h from agent/version + QWTNG_BUILD_REV with the
+      # repo's one stamper, so it reads the same <ver>.<rev> as every other OURS binary (the
+      # per-minute counter this step used to write into a TRACKED header is gone; byte-uniqueness
+      # per build is preserved because the run number differs per build).
       - name: Build driver
         shell: pwsh
         run: |
@@ -176,24 +183,20 @@ jobs:
           if ($dll.Count -lt 1) { throw 'no driver .dll produced' }
           Get-ChildItem idd-package | Format-Table Name, Length
 
-      - name: Pin INF DriverVer version (never a time-of-day number)
+      - name: Stamp INF DriverVer with the release version
         shell: pwsh
         run: |
-          # stampinf's default writes the BUILD TIME as the DriverVer VERSION (HH.MM.SS.ms).
-          # Versions with leading fields like 21.x / 23.x land in the WDDM driver-version
-          # encoding space that graphics-stack compat logic parses - measured 2026-08-27:
-          # packages versioned 21.22.* and 23.53.* never surface the registry modes and
-          # reject the QIDD ioctl, while 15.51.* and 8.1.* work, SAME BYTES. So releases
-          # built in the evening were broken and morning builds worked. Pin to 4.3.min.rev.
-          $inf = Get-ChildItem idd-package -Filter *.inf | Select-Object -First 1
-          $epochMin = [int][Math]::Floor(([DateTimeOffset]::UtcNow - [DateTimeOffset]::new(2026,1,1,0,0,0,[TimeSpan]::Zero)).TotalMinutes)
-          $build = ($epochMin -shr 16) -band 0x7FFF
-          $rev = $epochMin -band 0xFFFF
-          $date = (Get-Date).ToUniversalTime().ToString('MM/dd/yyyy')
-          $txt = Get-Content $inf.FullName -Raw -Encoding Unicode
-          $txt = $txt -replace 'DriverVer\s*=\s*[^\r\n]+', "DriverVer = $date,4.3.$build.$rev"
-          Set-Content $inf.FullName $txt -Encoding Unicode
-          Select-String -Path $inf.FullName -Pattern DriverVer -Encoding Unicode | ForEach-Object Line
+          $ErrorActionPreference = 'Stop'
+          # ONE implementation, two callers (was two copy-pasted epoch-minute blocks). Version =
+          # agent/version + QWTNG_BUILD_REV via tools/stamp-version.ps1 -Print, so INF DriverVer,
+          # the DLL's FILEVERSION and every other OURS binary read the identical <ver>.<rev>, and
+          # activate-idd's bound-DriverVer == INF assertion now proves the RELEASE reached the device.
+          # Stays in the 4.x space measured to work (21.x/23.x broke the WDDM compat parser, 2026-08-27).
+          $inf = @(Get-ChildItem idd-package -Filter *.inf)
+          if ($inf.Count -ne 1) { throw "expected exactly one .inf, got $($inf.Count)" }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File packaging\version-stamp\stamp-inf-driverver.ps1 `
+              -Inf $inf[0].FullName -VersionFile agent\version
+          if ($LASTEXITCODE -ne 0) { throw 'INF stamp failed (see stamp-inf-driverver: FAIL line above)' }
 
       - name: Catalog + test-sign
         shell: pwsh
@@ -253,6 +256,8 @@ jobs:
     # to the emulated Realtek. Built from xenbits master, which has rev 5 (4608bc1
     # "Use UNPLUG v3"). Proven on a clean guest: Realtek -> Xen PV Network Device #0.
     uses: ./.github/workflows/pv-xenvif.yml
+    with:
+      build_rev: ${{ github.run_number }}
 
   # The PV console. Not a feature - an instrument. Both wedges measured on 2026-08-29 killed
   # qrexec, window capture and the event log at the same instant, so nothing we own could see
@@ -260,6 +265,8 @@ jobs:
   # installed: a wedged guest cannot be given one afterwards. Hence: in the release package.
   cons:
     uses: ./.github/workflows/pv-xencons.yml
+    with:
+      build_rev: ${{ github.run_number }}
 
   setup:
     needs: [msi, idd, pv, cons]
@@ -356,6 +363,35 @@ jobs:
           if (-not $exe) { throw 'qubesdb-read.exe not produced' }
           Write-Host $exe.FullName
           "QUBESDB_READ_EXE=$($exe.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      # The two binaries THIS job builds were the only OURS PEs in the package that shipped
+      # unsigned: qwt-full signs everything it builds, the idd job signs the driver, and these
+      # two fell between. Same PFX as the idd job (:201-216 shape). BEFORE make-setup.ps1 on
+      # purpose: it hashes what it stages, so a signature applied afterwards would invalidate
+      # SHA256SUMS.txt and the self-check below would (correctly) fail.
+      - name: Test-sign the setup-job binaries (qwt-bootstrap, qubesdb-read)
+        shell: pwsh
+        env:
+          PFX_B64: ${{ secrets.SIGNING_PFX_B64 }}
+          PFX_PASS: ${{ secrets.SIGNING_PFX_PASS }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [IO.File]::WriteAllBytes('cert.pfx', [Convert]::FromBase64String($env:PFX_B64))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+              Where-Object FullName -match 'x64' | Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe not found' }
+          foreach ($f in @($env:BOOTSTRAP_EXE, $env:QUBESDB_READ_EXE)) {
+            if (-not $f -or -not (Test-Path -LiteralPath $f)) { throw "setup-job binary to sign is missing: '$f'" }
+            & $signtool.FullName sign /fd sha256 /f cert.pfx /p $env:PFX_PASS $f
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed on $f" }
+            # The test cert is not trusted on the runner, so Status is never 'Valid' here; what is
+            # asserted is that a signature by SOME signer is now present (NotSigned would mean
+            # signtool exited 0 without writing one).
+            $sig = Get-AuthenticodeSignature -LiteralPath $f
+            if ($sig.Status -eq 'NotSigned' -or -not $sig.SignerCertificate) { throw "no Authenticode signature on $f after signing (status $($sig.Status))" }
+            Write-Host "signed: $f  signer: $($sig.SignerCertificate.Subject)"
+          }
+          Remove-Item cert.pfx
 
       - name: Assemble qwt-improved-setup
         shell: pwsh

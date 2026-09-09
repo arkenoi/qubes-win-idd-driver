@@ -27,6 +27,11 @@ shots*.tar
 upstream/ro/
 tools/*/x64/
 
+# Generated per build by tools/stamp-version.ps1 (driver PreBuildEvent). It was tracked and CI
+# overwrote it in place, so a local checkout was permanently dirty after any build and the
+# committed defaults ("4.3.0.0-local") could never be what shipped.
+driver/IddSampleDriver/qidd_version.h
+
 # --- dom0 desktop captures: NEVER commit these ---------------------------------------
 # `qtest fullshot` captures the WHOLE dom0 screen, other qubes included - the service's own
 # installer says so. Per-window `qtest shot` output (guest windows only) is a different risk class

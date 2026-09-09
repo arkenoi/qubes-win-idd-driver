@@ -27,18 +27,16 @@ name: pv-xencons
 on:
   workflow_call:
     inputs:
-      build_number:
-        description: 'Override DriverVer build field (default 0).'
+      build_rev:
+        description: 'DriverVer/FILEVERSION fourth field: the release-package run number (packaging/version-stamp). No default.'
         type: string
-        required: false
-        default: ''
+        required: true
   workflow_dispatch:
     inputs:
-      build_number:
-        description: 'Override DriverVer build field (default 0). Needed only to supersede a driver already installed on a test rig.'
+      build_rev:
+        description: 'DriverVer/FILEVERSION fourth field (0..65535). No default: pick one HIGHER than whatever is installed on the test rig, or pnputil keeps the old .sys.'
         type: string
-        required: false
-        default: ''
+        required: true
   push:
     paths:
       - '.github/workflows/pv-xencons.yml'
@@ -134,28 +132,22 @@ jobs:
           $env:PATH = (Split-Path $mb) + ';' + $env:PATH
           Write-Host "msbuild on PATH: $mb"
           $env:VisualStudioVersion = '17.0'
-          # build.ps1 derives DriverVer from BUILD_NUMBER, which defaults to 0 on a fresh
-          # clone - so every build produced DriverVer 9.1.0.0 and a byte-identical INF.
-          # pnputil dedupes on that: it reports "Driver package added successfully (Already
-          # exists in the system)" with rc=0 and SILENTLY KEEPS THE OLD .sys. Measured - the
-          # driver store still held the previous build and the fix under test never ran.
-          # A release build keeps 0, so the same commit still yields the same binary; a
-          # DIAGNOSTIC build takes the run number, so each one is a distinct, higher version
-          # that Windows will actually install over its predecessor.
-          # An explicit override wins: a release build is 9.1.0.0 by design (same commit ->
-          # same binary), but 9.1.0.0 can never supersede a higher-versioned driver already
-          # installed on a test rig, and deleting that one falls back to an OLDER DriverStore
-          # entry. The override exists solely to make a clean build installable over a
-          # diagnostic one.
-          if ('${{ inputs.build_number }}' -ne '') {
-            $env:BUILD_NUMBER = '${{ inputs.build_number }}'
-            Write-Host "::notice title=xencons::DriverVer 9.1.0.$env:BUILD_NUMBER (explicit override)"
-          } elseif ('${{ inputs.diagnostic }}' -eq 'true') {
-            $env:BUILD_NUMBER = '${{ github.run_number }}'
-            Write-Host "::notice title=xencons::diagnostic build - DriverVer 9.1.0.$env:BUILD_NUMBER"
-          } else {
-            $env:BUILD_NUMBER = '0'
+          # DriverVer/FILEVERSION 9.1.0.<build_rev>, monotonic across releases: build.ps1 derives
+          # DriverVer from BUILD_NUMBER, and the old "release build keeps 0 by design" branch
+          # produced byte-identical INFs that pnputil silently deduplicated ("Already exists in
+          # the system", rc=0, OLD .sys kept - measured). No default: a call or a dispatch must
+          # carry build_rev (both declare it required), and an empty value from any other route
+          # FAILS. The one exception is this workflow's own push trigger - a self-validation
+          # build with no caller and nothing that ships - which gets the explicit 0 the overlay
+          # contract reserves for "not a release" (packaging/version-stamp/README.md).
+          $rev = '${{ inputs.build_rev }}'
+          if ($rev -eq '') {
+            if ('${{ github.event_name }}' -eq 'push') { $rev = '0' }
+            else { throw 'MISSING_BUILD_REV: pv-xencons needs build_rev from the caller (release-package passes its run number)' }
           }
+          if ($rev -notmatch '^\d{1,5}$' -or [int]$rev -gt 65535) { throw "MISSING_BUILD_REV: build_rev '$rev' is not an integer in 0..65535 (a VERSIONINFO field is 16-bit)" }
+          $env:BUILD_NUMBER = $rev
+          Write-Host "::notice title=xencons::DriverVer 9.1.0.$env:BUILD_NUMBER"
           .\build.ps1 -Type free -Arch x64
           if ($LASTEXITCODE -ne 0) { throw "xencons build.ps1 failed" }
           Get-ChildItem . -Recurse -Include xencons.sys,xencons.inf,xencons.cat |

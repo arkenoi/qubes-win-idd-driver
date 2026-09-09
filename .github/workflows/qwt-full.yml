@@ -28,6 +28,11 @@ on:
   # Reusable: release-package.yml calls this to get installer.msi + our signed binaries,
   # rather than duplicating 250 lines of toolchain setup that is already proven green.
   workflow_call:
+    inputs:
+      build_rev:
+        description: 'Fourth FILEVERSION field for every binary (the release-package run number)'
+        required: true
+        type: string
   push:
     branches: [main]
     paths:
@@ -69,6 +74,13 @@ jobs:
     runs-on: windows-2022
     env:
       CONFIG: Release
+      # The fourth FILEVERSION field of every OURS binary built here (packaging/version-stamp).
+      # A CALL always carries it (the input is required, so a caller that omits it is rejected
+      # before any job starts). The only way it is empty is a standalone run of THIS workflow
+      # (the push trigger on an agent bump, or a workflow_dispatch fault-injection build) - and
+      # that is never a release, so it gets the explicit 0 the overlay contract uses ("not a
+      # release", the exact shape the release gates reject). The stamper still throws on UNSET.
+      QWTNG_BUILD_REV: ${{ inputs.build_rev || '0' }}
       # Agent-dependency pins — identical to build.yml's gui-agent job (proven).
       WINDOWS_UTILS_REF: v4.2.2
       VCHAN_REF: v4.2.7
@@ -156,6 +168,95 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "installer clone failed" }
           git -C installer-src checkout --quiet $env:INSTALLER_SHA
           if ($LASTEXITCODE -ne 0) { throw "installer checkout failed" }
+
+      - name: Shadow every set-version script with the QWT-NG stamper; wire one version into every shipped binary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = "${{ github.workspace }}"
+          $stamper = "$ws\tools\stamp-version.ps1"
+          # ONE generator for every binary. Upstream's set-version.ps1 / set_version.ps1 emit <ver>.0;
+          # ours emits <ver>.<build_rev> with the IDENTICAL CLI (<versionfile> <header>, positional),
+          # so every PreBuildEvent / target that already calls a version script stamps the release
+          # build number with no source change in those repos.
+          # FOUR scripts, not one. Only windows-utils, gui-agent and core-agent (qwt-version.props) go
+          # through $(QB_SCRIPTS)\set-version.ps1. pvdrivers (libxenvchan), core-vchan-xen (libvchan)
+          # and core-qubesdb (qubesdb-daemon's PreBuildEvent, which the .sln makes qubesdb-client and
+          # qubesdb-cmd depend on) each call their OWN set_version.ps1 - verified against the pinned
+          # refs 2026-09-09. A builderv2-only shadow would never reach those three: their PreBuildEvents
+          # would overwrite any pre-generated header with <ver>.0 and the DLL would ship unstamped
+          # while this log said otherwise. A script missing from where the pin puts it THROWS.
+          $shadows = @(
+            "$ws\deps-src\builderv2\qubesbuilder\plugins\build_windows\scripts\set-version.ps1",
+            "$ws\deps-src\pvdrivers\set_version.ps1",
+            "$ws\deps-src\core-vchan-xen\windows\set_version.ps1",
+            "$ws\deps-src\core-qubesdb\windows\set_version.ps1"
+          )
+          foreach ($s in $shadows) {
+            if (-not (Test-Path -LiteralPath $s -PathType Leaf)) { throw "version script not where the pinned checkout puts it: $s (re-verify the pin's PreBuildEvent before wiring)" }
+            Copy-Item -LiteralPath $stamper -Destination $s -Force
+          }
+          # Prove the shadow took and that the environment carries the run number BEFORE any build:
+          # a MISSING_BUILD_REV must fail here, in a step named for it, not inside some rc.exe log.
+          $v = & powershell -NoProfile -ExecutionPolicy Bypass -File $shadows[0] "$ws\agent\version" -Print
+          if ($LASTEXITCODE -ne 0) { throw 'stamp-version.ps1 -Print failed (see stamp-version: FAIL line above)' }
+          Write-Host "::notice title=version::every OURS binary in this run stamps $v"
+          "QWTNG_FILEVERSION=$v" | Out-File -Append $env:GITHUB_ENV
+          # ONE version file per SHIPPED binary, proven per binary. The check is driven from what
+          # SHIPS - the deps-bins set, the gui-agent pair and the core-agent projects - and every
+          # shipped binary must have a row naming the version file that is overwritten with
+          # agent/version and how its header is generated (which shadowed script its build calls).
+          # A shipped binary without a row THROWS (UNKNOWN_VERSION_PLUMBING); the build steps below
+          # assert their own lists equal the ones wired here, so growing the shipped set without a
+          # row is a failure, not a silent <ver>.0. Fixture: delete any row -> the step throws
+          # naming that binary.
+          $depsShipped = @('libxenvchan.dll','libvchan.dll','windows-utils.dll','qubesdb-client.dll','qubesdb-cmd.exe')
+          $coreAgentProjects = @(
+            'qrexec-wrapper', 'qrexec-agent', 'qrexec-client-vm',
+            'advertise-tools', 'autologon', 'relocate-dir',
+            'qubes-rpc-services\clipboard-copy', 'qubes-rpc-services\clipboard-paste',
+            'qubes-rpc-services\file-receiver',  'qubes-rpc-services\file-sender',
+            'qubes-rpc-services\get-image-rgba', 'qubes-rpc-services\open-in-vm',
+            'qubes-rpc-services\open-url',       'qubes-rpc-services\set-gui-mode',
+            'qubes-rpc-services\vm-file-editor', 'qubes-rpc-services\wait-for-logon'
+          )
+          $wiring = @{
+            'libxenvchan.dll'    = @("$ws\deps-src\pvdrivers\version",      'libxenvchan.vcxproj PreBuildEvent -> pvdrivers\set_version.ps1 (shadow)')
+            'libvchan.dll'       = @("$ws\deps-src\core-vchan-xen\version", 'libvchan.vcxproj PreBuildEvent -> windows\set_version.ps1 (shadow)')
+            'windows-utils.dll'  = @("$ws\deps-src\windows-utils\version",  'windows-utils.vcxproj PreBuildEvent -> $(QB_SCRIPTS)\set-version.ps1 (shadow)')
+            'qubesdb-client.dll' = @("$ws\deps-src\core-qubesdb\version",   '.sln dependency qubesdb-daemon PreBuildEvent -> windows\set_version.ps1 (shadow)')
+            'qubesdb-cmd.exe'    = @("$ws\deps-src\core-qubesdb\version",   'same header as qubesdb-client; version.rc item added below')
+            'gui-agent.exe'      = @("$ws\agent\version",                   'gui-agent.vcxproj PreBuildEvent -> $(QB_SCRIPTS)\set-version.ps1 (shadow)')
+            'gui-watchdog.exe'   = @("$ws\agent\version",                   'same header as gui-agent, generated by the solution build (watchdog PreBuildEvent hardening pending in the agent repo)')
+          }
+          foreach ($p in $coreAgentProjects) { $wiring["$(Split-Path $p -Leaf).exe"] = @("$ws\core-agent\version", 'vs2022\qwt-version.props QwtStampVersion -> set-version.ps1 (shadow or -p:QwtSetVersionScript)') }
+          $shipped = @($depsShipped) + @('gui-agent.exe', 'gui-watchdog.exe') + @($coreAgentProjects | ForEach-Object { "$(Split-Path $_ -Leaf).exe" })
+          foreach ($b in $shipped) {
+            if (-not $wiring.ContainsKey($b)) { throw "UNKNOWN_VERSION_PLUMBING: shipped binary $b has no stamping row - find how it stamps its VERSIONINFO and add it; do not exempt it" }
+            $vf = $wiring[$b][0]
+            if (-not (Test-Path -LiteralPath $vf -PathType Leaf)) { throw "UNKNOWN_VERSION_PLUMBING: $b names version file $vf, which does not exist" }
+            Copy-Item -LiteralPath "$ws\agent\version" -Destination $vf -Force
+            Write-Host "version wired: $b <- $vf ($($wiring[$b][1]))"
+          }
+          # qubesdb-cmd.exe SHIPS with no VERSIONINFO at all: upstream's qubesdb-cmd.vcxproj (v4.3.1)
+          # has no ResourceCompile item, although a version.rc sits next to it unreferenced (the
+          # sibling client/daemon projects compile theirs). The release verifier's OURS_STAMPED gate
+          # fails closed on an unstamped OURS PE, and exempting a shipped binary is what this step
+          # forbids, so the item is added here - anchored on the project's one ClCompile line, and a
+          # moved anchor or an already-present resource THROWS rather than guessing.
+          $cmdDir  = "$ws\deps-src\core-qubesdb\windows\vs2022\qubesdb-cmd"
+          $cmdProj = "$cmdDir\qubesdb-cmd.vcxproj"
+          $cmdTxt  = [System.IO.File]::ReadAllText($cmdProj)
+          $anchor  = '<ClCompile Include="..\..\..\client\qubesdb-cmd.c" />'
+          if (([regex]::Matches($cmdTxt, [regex]::Escape($anchor))).Count -ne 1) { throw "qubesdb-cmd.vcxproj: anchor '$anchor' not found exactly once - re-verify QUBESDB_REF's version plumbing before wiring it" }
+          if ($cmdTxt -match 'ResourceCompile') { throw 'qubesdb-cmd.vcxproj already compiles a resource - drop this patch and re-verify how it stamps' }
+          if (-not (Test-Path -LiteralPath "$cmdDir\version.rc" -PathType Leaf)) { throw "qubesdb-cmd\version.rc is not in the pinned checkout - nothing to compile the VERSIONINFO from" }
+          $cmdTxt = $cmdTxt.Replace($anchor, $anchor + "`r`n" + '    <ResourceCompile Include="version.rc" />')
+          [System.IO.File]::WriteAllText($cmdProj, $cmdTxt)
+          Write-Host 'qubesdb-cmd.vcxproj: ResourceCompile version.rc added'
+          # Hand the wired sets to the build steps so THEY can refuse a list that drifted from this one.
+          "QWTNG_WIRED_DEPS=$($depsShipped -join ',')"           | Out-File -Append $env:GITHUB_ENV
+          "QWTNG_WIRED_COREAGENT=$($coreAgentProjects -join ',')" | Out-File -Append $env:GITHUB_ENV
 
       - name: Synthesize xencontrol import library
         shell: pwsh
@@ -280,6 +381,9 @@ jobs:
           Collect "$ws\deps-src\core-qubesdb\windows\vs2022\x64\$cfg\qubesdb-client\qubesdb-client.dll" "$ws\deps-src\core-qubesdb"
           Collect "$ws\deps-src\core-qubesdb\windows\vs2022\x64\$cfg\qubesdb-cmd\qubesdb-cmd.exe"       "$ws\deps-src\core-qubesdb"
           $expect  = 'libxenvchan.dll','libvchan.dll','windows-utils.dll','qubesdb-client.dll','qubesdb-cmd.exe'
+          # The version-wiring step declared which shipped deps it covered; a dep added here
+          # without a stamping row there must fail, not ship as <ver>.0.
+          if (($expect -join ',') -ne $env:QWTNG_WIRED_DEPS) { throw "deps-bins set '$($expect -join ',')' differs from the set the version-wiring step covered '$env:QWTNG_WIRED_DEPS' - add the row there first" }
           $have    = (Get-ChildItem "$ws\deps-bins" -File).Name
           $absent  = @($expect | Where-Object { $_ -notin $have })
           if ($absent.Count) { throw "deps-bins incomplete: $($absent -join ', ')" }
@@ -373,8 +477,12 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $ws  = "${{ github.workspace }}"
           $env:QB_SCRIPTS = "$ws\deps-src\builderv2\qubesbuilder\plugins\build_windows\scripts"
-          # qwt_version.h is GENERATED, and only qrexec-agent.vcxproj's PreBuild event generates
-          # it, so building any other project first fails with RC1015. Generate it up front so
+          # qwt_version.h is GENERATED PER PROJECT by core-agent's vs2022\qwt-version.props
+          # (target QwtStampVersion, into each project's $(IntDir)). It is deliberately NOT
+          # generated up front here any more: a pre-generated header kept the build green even if
+          # that target never fired, masking exactly the failure it exists to make visible. With
+          # nothing pre-generated, a project whose import is missing fails with RC1015 on
+          # qwt_version.h - that is the load-bearing fixture for the imports.
           # WDK, for relocate-dir. Same recipe as build.yml (choco windowsdriverkit11 + the VSIX
           # into VS2022) - relocate-dir.vcxproj builds with PlatformToolset
           # WindowsApplicationForDrivers10.0 and links ntdllp.lib, both of which arrive with that
@@ -402,9 +510,6 @@ jobs:
           # .../Include/<version>/km/ntifs.h  ->  <version> is two levels up from the file
           $env:WDK_KM_VERSION = $ntifs.Directory.Parent.Name
           Write-Host "WDK km headers: $($ntifs.FullName)  (WindowsTargetPlatformVersion=$env:WDK_KM_VERSION)"
-          # build ORDER cannot decide whether the build works.
-          & powershell "$env:QB_SCRIPTS\set-version.ps1" "$ws\core-agent\version" "$ws\core-agent\qwt_version.h"
-          if (-not (Test-Path "$ws\core-agent\qwt_version.h")) { throw 'failed to generate qwt_version.h' }
           # Relative vcxproj paths under vs2022\ (the rpc tool projects live one level down).
           # Exe name == project leaf name == the wxs leaf stage-qwt-repo parses, verified
           # against the pinned installer sources 2026-08-28.
@@ -417,6 +522,9 @@ jobs:
             'qubes-rpc-services\open-url',       'qubes-rpc-services\set-gui-mode',
             'qubes-rpc-services\vm-file-editor', 'qubes-rpc-services\wait-for-logon'
           )
+          # The version-wiring step declared which core-agent projects it covered; a project added
+          # here without a row there must fail, not ship as <ver>.0.
+          if (($projects -join ',') -ne $env:QWTNG_WIRED_COREAGENT) { throw "core-agent project list differs from the set the version-wiring step covered '$env:QWTNG_WIRED_COREAGENT' - add the row there first" }
           foreach ($proj in $projects) {
             $name = Split-Path $proj -Leaf
             $vcx = "$ws\core-agent\vs2022\$proj\$name.vcxproj"
@@ -452,9 +560,12 @@ jobs:
               Write-Host "relocate-dir: CL=$env:CL"
               Write-Host "relocate-dir: ntdllp.lib at $($ntdllp.FullName)"
             }
+            # -p:QwtSetVersionScript names the repo's stamper DIRECTLY, so this build does not
+            # depend on the builderv2 shadow copy at all (qwt-version.props: an explicit script
+            # wins over $(QB_SCRIPTS)\set-version.ps1).
             & "${{ steps.vs.outputs.msbuild }}" $vcx `
                 -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
-                "-p:TreatWarningAsError=false" @extra
+                "-p:TreatWarningAsError=false" "-p:QwtSetVersionScript=$ws\tools\stamp-version.ps1" @extra
             $env:CL = $savedCL; $env:LIB = $savedLIB   # never leak the km paths into other projects
             if ($LASTEXITCODE -ne 0) { throw "core-agent: $name build failed ($LASTEXITCODE)" }
           }

@@ -10,12 +10,28 @@ on:
     branches: [main]
   workflow_dispatch:
 
+env:
+  # The fourth FILEVERSION field of every OURS binary this DEV OVERLAY builds: ZERO, explicitly,
+  # as a string - never this workflow's run number. build.yml and release-package.yml have
+  # independent run counters, and mapping both into the one field would let an overlay (say
+  # .900) out-number a later release (.517) in the same version namespace; the release that
+  # follows IS MSI'd over the overlaid files. 0 is the one value a run number never takes, so
+  # <ver>.0 = "not a release" is a disjoint namespace and the exact shape the release gates
+  # reject. tools/stamp-version.ps1 accepts an explicit 0 in CI and still throws on UNSET, so
+  # this must be in scope for every job that builds a binary (workflow-level env covers all).
+  QWTNG_BUILD_REV: '0'
+
 jobs:
   # ---------------------------------------------------------------- Track B: IddCx driver
   idd-driver:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          # agent/version (in the agent submodule) is the ONE version file: the driver's
+          # PreBuildEvent and the INF stamp read it, and the stamper fails BAD_VERSION_FILE
+          # without it.
+          submodules: true
 
       - name: Install WDK + VS driver targets
         shell: pwsh
@@ -28,21 +44,10 @@ jobs:
                   Select-Object -First 1
           Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -Wait
 
-      - name: Stamp DLL version (unique per build)
-        shell: pwsh
-        run: |
-          # Two consecutive releases built from unchanged driver source produce BYTE-IDENTICAL
-          # DLLs; installing such a pair leaves System32\drivers\UMDF hardlinked to the OLD
-          # store generation and the device never starts cleanly (FINDINGS 2026-08-27, the
-          # withdrawn 4.3.8). A per-minute FILEVERSION makes every build byte-unique.
-          $epochMin = [int][Math]::Floor(([DateTimeOffset]::UtcNow - [DateTimeOffset]::new(2026,1,1,0,0,0,[TimeSpan]::Zero)).TotalMinutes)
-          $build = ($epochMin -shr 16) -band 0x7FFF
-          $rev = $epochMin -band 0xFFFF
-          $ver = "4.3.$build.$rev"
-          $h = "#pragma once`n#define QIDD_VER_MAJOR 4`n#define QIDD_VER_MINOR 3`n#define QIDD_VER_BUILD $build`n#define QIDD_VER_REV $rev`n#define QIDD_VER_STR `"$ver`"`n"
-          Set-Content driver/IddSampleDriver/qidd_version.h $h
-          Get-Content driver/IddSampleDriver/qidd_version.h
-
+      # The driver DLL's FILEVERSION is no longer stamped here: IddSampleDriver.vcxproj's
+      # PreBuildEvent generates qidd_version.h from agent/version + QWTNG_BUILD_REV (0 in this
+      # workflow) with the repo's one stamper. The per-minute counter this job used to write
+      # into a TRACKED header is gone.
       - name: Build driver
         shell: pwsh
         run: |
@@ -143,24 +148,21 @@ jobs:
           if ($devcon) { Copy-Item $devcon.FullName package\ }
           Get-ChildItem package
 
-      - name: Pin INF DriverVer version (never a time-of-day number)
+      - name: Stamp INF DriverVer with the release version
         shell: pwsh
         run: |
-          # stampinf's default writes the BUILD TIME as the DriverVer VERSION (HH.MM.SS.ms).
-          # Versions with leading fields like 21.x / 23.x land in the WDDM driver-version
-          # encoding space that graphics-stack compat logic parses - measured 2026-08-27:
-          # packages versioned 21.22.* and 23.53.* never surface the registry modes and
-          # reject the QIDD ioctl, while 15.51.* and 8.1.* work, SAME BYTES. So releases
-          # built in the evening were broken and morning builds worked. Pin to 4.3.min.rev.
-          $inf = Get-ChildItem package -Filter *.inf | Select-Object -First 1
-          $epochMin = [int][Math]::Floor(([DateTimeOffset]::UtcNow - [DateTimeOffset]::new(2026,1,1,0,0,0,[TimeSpan]::Zero)).TotalMinutes)
-          $build = ($epochMin -shr 16) -band 0x7FFF
-          $rev = $epochMin -band 0xFFFF
-          $date = (Get-Date).ToUniversalTime().ToString('MM/dd/yyyy')
-          $txt = Get-Content $inf.FullName -Raw -Encoding Unicode
-          $txt = $txt -replace 'DriverVer\s*=\s*[^\r\n]+', "DriverVer = $date,4.3.$build.$rev"
-          Set-Content $inf.FullName $txt -Encoding Unicode
-          Select-String -Path $inf.FullName -Pattern DriverVer -Encoding Unicode | ForEach-Object Line
+          $ErrorActionPreference = 'Stop'
+          # ONE implementation, two callers (was two copy-pasted epoch-minute blocks). Version =
+          # agent/version + QWTNG_BUILD_REV via tools/stamp-version.ps1 -Print, so INF DriverVer,
+          # the DLL's FILEVERSION and every other OURS binary read the identical <ver>.<rev>
+          # (<ver>.0 here: this is the overlay), and activate-idd's bound-DriverVer == INF
+          # assertion proves the build reached the device. Stays in the 4.x space measured to
+          # work (21.x/23.x broke the WDDM compat parser, 2026-08-27).
+          $inf = @(Get-ChildItem package -Filter *.inf)
+          if ($inf.Count -ne 1) { throw "expected exactly one .inf, got $($inf.Count)" }
+          & powershell -NoProfile -ExecutionPolicy Bypass -File packaging\version-stamp\stamp-inf-driverver.ps1 `
+              -Inf $inf[0].FullName -VersionFile agent\version
+          if ($LASTEXITCODE -ne 0) { throw 'INF stamp failed (see stamp-inf-driverver: FAIL line above)' }
 
       - name: Test-sign package
         if: ${{ vars.SIGNING_ENABLED == 'true' }}
@@ -270,6 +272,44 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "xeniface fetch failed" }
           git -C deps-src/pvdrivers/xeniface checkout --quiet FETCH_HEAD
           if (-not (Test-Path deps-src/pvdrivers/xeniface/include/xencontrol.h)) { throw "xencontrol.h missing after checkout" }
+
+      # Same shadow + version unification as qwt-full.yml's release build, so the overlay's
+      # binaries carry <ver>.0 from the same generator (packaging/version-stamp) instead of the
+      # deps' own upstream versions. Reduced to what THIS job builds; the shipped-set gates live
+      # in qwt-full.yml (this is the iteration path).
+      - name: Shadow every set-version script with the QWT-NG stamper; unify version files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = "${{ github.workspace }}"
+          $stamper = "$ws\tools\stamp-version.ps1"
+          # Four scripts, not one: windows-utils / gui-agent / core-agent call $(QB_SCRIPTS)\set-version.ps1,
+          # while pvdrivers (libxenvchan), core-vchan-xen (libvchan) and core-qubesdb (the daemon the
+          # .sln builds qubesdb-client after) each call their OWN set_version.ps1 - same positional CLI.
+          $shadows = @(
+            "$ws\deps-src\builderv2\qubesbuilder\plugins\build_windows\scripts\set-version.ps1",
+            "$ws\deps-src\pvdrivers\set_version.ps1",
+            "$ws\deps-src\core-vchan-xen\windows\set_version.ps1",
+            "$ws\deps-src\core-qubesdb\windows\set_version.ps1"
+          )
+          foreach ($s in $shadows) {
+            if (-not (Test-Path -LiteralPath $s -PathType Leaf)) { throw "version script not where the pinned checkout puts it: $s" }
+            Copy-Item -LiteralPath $stamper -Destination $s -Force
+          }
+          $v = & powershell -NoProfile -ExecutionPolicy Bypass -File $shadows[0] "$ws\agent\version" -Print
+          if ($LASTEXITCODE -ne 0) { throw 'stamp-version.ps1 -Print failed (see stamp-version: FAIL line above)' }
+          Write-Host "::notice title=version::every binary in this overlay stamps $v"
+          "QWTNG_FILEVERSION=$v" | Out-File -Append $env:GITHUB_ENV
+          # One version file per component, overwritten with agent/version (the single source of truth).
+          foreach ($vf in @("$ws\deps-src\pvdrivers\version",
+                            "$ws\deps-src\core-vchan-xen\version",
+                            "$ws\deps-src\windows-utils\version",
+                            "$ws\deps-src\core-qubesdb\version",
+                            "$ws\core-agent\version")) {
+            if (-not (Test-Path -LiteralPath $vf -PathType Leaf)) { throw "version file not where the pinned checkout puts it: $vf" }
+            Copy-Item -LiteralPath "$ws\agent\version" -Destination $vf -Force
+            Write-Host "version wired: $vf"
+          }
 
       - name: Synthesize xencontrol import library
         shell: pwsh
@@ -591,13 +631,12 @@ jobs:
           # includes ntifs.h, a WDK header this runner does not have, and it failed the whole
           # solution build while every qrexec binary we actually want had already compiled. Nothing
           # here needs the WDK, so target the projects directly and keep the WDK out of this job.
-          # qwt_version.h is GENERATED, and only qrexec-agent.vcxproj's PreBuild event generates it
-          # (`set-version.ps1 <version> <qwt_version.h>`). Building a single project therefore fails
-          # with RC1015 "cannot open include file '..\qwt_version.h'" whenever that project is not
-          # qrexec-agent. Generate it up front so build ORDER cannot decide whether the build works.
-          & powershell "$env:QB_SCRIPTS\set-version.ps1" "$ws\core-agent\version" "$ws\core-agent\qwt_version.h"
-          if (-not (Test-Path "$ws\core-agent\qwt_version.h")) { throw "failed to generate qwt_version.h" }
-          Write-Host "generated qwt_version.h: $(Get-Content "$ws\core-agent\qwt_version.h" | Select-Object -First 3)"
+          # qwt_version.h is GENERATED PER PROJECT by core-agent's vs2022\qwt-version.props (target
+          # QwtStampVersion, into each project's $(IntDir)), so build ORDER cannot decide the
+          # version an exe carries. Deliberately NOT generated up front here any more: a
+          # pre-generated header kept the build green even if that target never fired. A project
+          # whose import is missing now fails with RC1015 on qwt_version.h - the visible failure.
+          # -p:QwtSetVersionScript names the repo's stamper directly (independent of the shadow).
 
           $projects = @('qrexec-wrapper','qrexec-agent','qrexec-client-vm')
           foreach ($p in $projects) {
@@ -605,7 +644,7 @@ jobs:
             if (-not (Test-Path $proj)) { throw "core-agent project not found: $proj" }
             & "${{ steps.vs.outputs.msbuild }}" $proj `
                 -nologo -m -v:minimal -p:Platform=x64 "-p:Configuration=$env:CONFIG" `
-                "-p:TreatWarningAsError=false"
+                "-p:TreatWarningAsError=false" "-p:QwtSetVersionScript=$ws\tools\stamp-version.ps1"
             if ($LASTEXITCODE -ne 0) { throw "core-agent: $p build failed ($LASTEXITCODE)" }
           }
 
