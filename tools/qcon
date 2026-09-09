@@ -46,7 +46,15 @@ def vm_running(vm):
     for line in out.splitlines():
         parts = line.split("|")
         if len(parts) >= 2 and parts[0] == vm:
-            return parts[1] == "Running"
+            # TRANSIENT COUNTS AS RUNNING HERE, and getting this wrong made this tool refuse the
+            # exact case it exists for. Qubes reports Transient while it is still WAITING FOR THE
+            # GUEST'S QREXEC; the domain is built, its vCPUs are executing and its console ring is
+            # serviced - only qrexec is missing. That is the definition of "guest alive, qrexec
+            # dead", so gating on Running alone turned the one surviving instrument into
+            # "qcon: <vm> is not Running - a halted guest has no console" on a guest that was very
+            # much alive (measured 2026-09-09 on the parked win10-acc wedge, four attempts).
+            # Halted is still refused: a halted guest really has no console.
+            return parts[1] in ("Running", "Transient")
     return False
 
 
@@ -146,8 +154,18 @@ def main():
                 print(f"qcon: REFUSED by qrexec policy - admin.vm.Console not granted. {err}",
                       file=sys.stderr)
                 return 7
-            print(f"qcon: NOCONSOLE - no bytes from the console (child rc={rc} {err!r}).\n"
-                  "  INCONCLUSIVE, not proof the guest is dead. Check, in order:\n"
+            # NOT EVEN [ATTACHED] IS A STRONGER RESULT THAN "quiet", and worth saying separately.
+            # dom0's console layer prints "[ATTACHED]" as soon as it binds the domain's console,
+            # BEFORE the guest writes anything - a healthy guest shows "\r\n[ATTACHED]\r\n\r\n<host>
+            # login: " within a second or two (measured on win11-nfy, 2026-09-09). Zero bytes means
+            # the ATTACH never completed, which is a domain-level condition, not a guest-software
+            # one: it is not "Windows is busy", it is "dom0 could not bind this domain's console".
+            # Measured the same minute on the parked win10-acc wedge: healthy guest emitted the
+            # banner, wedge emitted nothing at all, with no other attacher present.
+            print(f"qcon: NOCONSOLE - no bytes at all, not even dom0's [ATTACHED] banner "
+                  f"(child rc={rc} {err!r}).\n"
+                  "  A healthy guest emits [ATTACHED] before the guest writes anything, so this\n"
+                  "  points at the ATTACH, not at guest software. Still INCONCLUSIVE alone - check:\n"
                   "   1. is someone else attached? (dom0 `xl console` splits the same pty)\n"
                   "   2. is xencons bound in the guest? (DEV_CONS err=0 svc=xencons)\n"
                   "   3. is the guest wedged at high IRQL? then nothing user-mode answers",
@@ -171,9 +189,20 @@ def main():
             # exists and the old 10 s "assword" wait then expired, whose only symptom was
             # "markers not seen (pump exit: stall)" - indistinguishable from a console that does
             # not accept input. It does: this yields a full shell on a guest with no qrexec.
+            # THE WAKE CR AND THE login: WAIT ARE BOTH GONE, and both were doing harm.
+            # pump(until=X) returns "hit" the moment X is ALREADY in the buffer and never clears
+            # it - and we only reach this branch because "login:" IS in the buffer - so that wait
+            # was a guaranteed no-op that merely looked like synchronisation. The CR before it then
+            # made the guest emit a SECOND login prompt, so the buffer held two, and the first
+            # "assword" wait could match against the wrong exchange.
+            #
+            # MEASURED 2026-09-09 against win11-nfy, driving the console by hand: sending the user
+            # name straight into the prompt that is already there yields "password prompt seen:
+            # True", "shell prompt seen: True", and a command whose output comes back
+            # ("CONSOLE_WORKS" + a C:\Users\user> prompt) - first try, in seconds. The old sequence
+            # was being run with QCON_LOGIN_DEADLINE up to 300 s and still failing, which is the
+            # tell that it was wrong rather than slow.
             ld = float(os.environ.get("QCON_LOGIN_DEADLINE", "45"))
-            c.send("\r")                       # wake the prompt - REQUIRED, see above
-            c.pump(until="login:", deadline=ld, stall=ld)
             c.send(user + "\r")
             if c.pump(until="assword", deadline=ld, stall=ld) != "hit":
                 print("qcon: no password prompt after the user name "

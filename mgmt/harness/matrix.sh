@@ -641,12 +641,27 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
       w_alive "$vm" && { say "  $lbl: qrexec came back on its own at t+$((q*15))s"; break; }
       sleep 15
     done
-    if ! w_alive "$vm"; then
-      say "  $lbl: rebooting the guest, as the installer's contract requires of its caller"
-      qvm-shutdown "$vm" >/dev/null 2>&1
-      w_halt "$vm" 420 "$lbl-postinstall-halt" say || { qvm-kill "$vm" >/dev/null 2>&1; sleep 10; }
-      start_vm "$vm"
-    fi
+    # THE REBOOT IS UNCONDITIONAL, because the installer's contract is unconditional: a stage-2
+    # install returns reboot_needed:true and its caller owns the reboot. This used to be guarded by
+    # `if ! w_alive`, i.e. the contract was honoured only when qrexec had already died - so on the
+    # normal path, where the guest is still answering, the harness skipped the reboot entirely and
+    # then graded the PRE-REBOOT session.
+    #
+    # MEASURED 2026-09-09 (4.3.24 campaign, WIN10-upgrade). The install reported ok:true and
+    # reboot_needed:true at 23:04:01, and one second later the harness logged
+    # "WIN10-upgrade-back: session up at t+0s" and PASSed "guest came back with a session". No guest
+    # reboots in one second: that was the old session, still up. The guest then rebooted on its own
+    # underneath the harness, so the installer-log fetch returned nothing (scored INVALID-INSTRUMENT
+    # at 23:06:03) and the accept battery went on to reboot a guest that was already mid-reboot,
+    # ending in "guest did not answer qrexec after reboot" and a subject that answered neither
+    # qrexec nor ACPI. Every later cell then failed on "refusing, these are not Halted: win10-acc".
+    #
+    # This is the same class as the async-shutdown defect fixed in the feature tests today: a reboot
+    # must be DRIVEN or PROVEN, never inferred from "something answered".
+    say "  $lbl: rebooting the guest, as the installer's contract requires of its caller"
+    qvm-shutdown "$vm" >/dev/null 2>&1
+    w_halt "$vm" 420 "$lbl-postinstall-halt" say || { qvm-kill "$vm" >/dev/null 2>&1; sleep 10; }
+    start_vm "$vm"
   fi
   w_session "$vm" 900 "$lbl-back" "$M" say
   case $? in
