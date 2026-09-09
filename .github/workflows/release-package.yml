@@ -531,10 +531,13 @@ jobs:
         # ISO on "Failed to fetch .../chrome-stable/... Hash Sum mismatch", so an unrelated vendor
         # repo blocked a release. xorriso comes from the Ubuntu archive; nothing here needs those.
         run: |
-          sudo rm -f /etc/apt/sources.list.d/*google*.list /etc/apt/sources.list.d/*chrome*.list \
-                     /etc/apt/sources.list.d/*microsoft*.list /etc/apt/sources.list.d/*mssql*.list || true
-          sudo apt-get update -qq
+          # Update ONLY the main archive: sourceparts=/dev/null ignores every /etc/apt/sources.list.d
+          # entry. Matching those by FILENAME was tried first and did not work - the runner image
+          # carries the Chrome repo as a deb822 .sources file, not a *chrome*.list - which is the
+          # usual lesson that a name match is not a content match. This needs no such guess.
+          sudo apt-get update -qq -o Dir::Etc::sourceparts=/dev/null -o APT::Get::List-Cleanup=0
           sudo apt-get install -y -qq xorriso
+          xorriso -version | head -1
 
       - name: Build + verify the ISO
         env:
