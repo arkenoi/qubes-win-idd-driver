@@ -109,9 +109,12 @@ From the ISO (recommended -- no networking needed):
      the device is "already assigned", unassign it first.
   2. In the guest, open the CD drive, right-click install.cmd -> Run as
      administrator.  (Or from an elevated cmd:  D:\install.cmd )
-  3. The machine reboots. Log back in, run install.cmd again -- from the CD or
-     from C:\qwt-improved-setup\, either works.
-  4. That run finishes WITHOUT rebooting: qrexec answers and the seamless desktop
+  3. The guest asks to restart, which under Qubes HALTS the qube (a guest-initiated
+     restart destroys the domain -- on_reboot=destroy). Start it again from the Qube
+     Manager, log back in, run install.cmd again -- from the CD or from
+     C:\qwt-improved-setup\, either works. Starting a fresh qube here is not a
+     workaround; it is what binds the Xen PV bus.
+  4. That run finishes WITHOUT taking the guest down: qrexec answers and the seamless desktop
      appears in dom0 within about a minute. The Xen PV disk and network drivers
      take over from the emulated ones the next time the qube starts, which is how
      stock Qubes Windows Tools leaves a qube too. Pass /reboot if you would rather
@@ -121,24 +124,32 @@ From the ISO (recommended -- no networking needed):
   reboot and no extra run: the three steps above are the whole procedure. Only
   a DOWNGRADE -- an installed version strictly newer than this package -- is
   removed first, and that removal can itself require a reboot: the script then
-  stops with exit code 10, tells you to reboot and run install.cmd once more,
-  and that run continues with the install. So one more reboot / one more run
+  stops with exit code 10, tells you to restart the qube and run install.cmd once
+  more, and that run continues with the install. So one more restart / one more run
   than the three steps above, on that path only.
 
 Unattended (no second logon needed):
 
      D:\install.cmd /auto
 
-  This arms a SYSTEM scheduled task that resumes the install after the reboot.
-  Total: ONE reboot, no interaction -- two if removing a pre-existing QWT demands
-  its own, which is also resumed automatically by the same task.
+  This arms a SYSTEM scheduled task that resumes the install after the transition.
+  At each stage transition the guest POWERS OFF rather than rebooting, and the
+  caller starts the qube again: on Qubes a guest-initiated restart destroys the
+  domain either way (on_reboot=destroy), and a power-off makes that outcome
+  DETERMINISTIC -- the domain always goes down and the next start is always a fresh
+  domain with the PV bus bound. (A plain guest reboot mostly does the same, but the
+  emulated ACPI reset can occasionally be absorbed by the device model in place, so
+  the domain never dies and the PV bus never rebinds; power-off has no such path.)
+  Total: ONE guest power-off, no interaction -- two if removing a pre-existing QWT
+  demands its own, which is also resumed automatically by the same task.
 
-  One reboot is deliberate. qvm-create-windows-qube restarts a qube exactly once
+  One power-off is deliberate. qvm-create-windows-qube restarts a qube exactly once
   after running the tools installer and then waits for the tools to report in, so
-  an installer that shuts the guest down a second time hangs it.
+  an installer that takes the guest down a second time hangs it.
 
 Options:
-     /auto    reboot and resume automatically
+     /auto    power off at each stage transition and resume automatically once the
+              caller starts the qube again (unattended)
      /idd     accepted and does NOTHING -- the IddCx driver is activated by
               default since 4.3.1. Kept so older command lines still parse.
               (It is an OPTION TO install.cmd, not a program: running
@@ -148,8 +159,9 @@ Options:
               the switches on the SAME command line.)
      /noidd   do NOT activate the IddCx driver; stay on the Basic Display
               Adapter (see below)
-     /reboot  reboot when the install finishes too, instead of leaving the PV
-              driver handover to the qube's next start
+     /reboot  take the guest down when the install finishes too, instead of leaving
+              the PV driver handover to the qube's next start (with /auto this is a
+              power-off, so the caller starts the qube once more to reach that state)
      /iddoff  RECOVERY, on a guest that already has the IDD: put it back on the
               Basic Display Adapter and reboot (see below)
      /iddonly add/activate the IddCx driver on a guest that already has QWT,
@@ -203,8 +215,9 @@ log to  C:\qwt-install.log , and the removal of a pre-existing QWT to
 C:\qwt-uninstall.log . Each stage ends with a machine-readable line:
 === RESULT === {json}
 
-Exit codes:  0 = stage done, 10 = stage done and a reboot is required,
-anything else = failure (the log says why).
+Exit codes:  0 = stage done, 10 = stage done and another boot is required (under
+/auto the guest powers off and the caller starts it; interactively you restart the
+qube), anything else = failure (the log says why).
 
 UPGRADING OVER AN EXISTING QWT
 ------------------------------

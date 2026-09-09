@@ -5,15 +5,23 @@ REM  Run this ELEVATED on a clean Windows guest. It self-elevates if you
 REM  double-click it.
 REM
 REM  Usage:
-REM     install.cmd              two stages, you reboot between them
-REM     install.cmd /auto        reboots and resumes by itself (unattended)
+REM     install.cmd              two stages, you restart the qube between them
+REM     install.cmd /auto        unattended: at each stage transition the guest POWERS OFF (not
+REM                              reboots) and the caller starts the qube again to continue. On
+REM                              Qubes a guest-initiated restart destroys the domain anyway
+REM                              (on_reboot=destroy), so this is the reliable form of that - the
+REM                              next start is always a fresh domain with the PV bus bound. The
+REM                              provisioning caller (qvm-create-windows-qube, or the test harness)
+REM                              starts the qube; a bare guest just goes Halted after each stage.
 REM     (the Qubes IddCx display driver is installed AND ACTIVATED BY DEFAULT -
 REM      it becomes the display, the emulated VGA adapter is disabled.
 REM      /idd is accepted but redundant; /noidd opts out.)
-REM     install.cmd /reboot      reboot when the install finishes as well. The install costs
-REM                              ONE reboot on its own; the PV drivers take over from the
-REM                              emulated disk/NIC at the qube's next start either way. Use
-REM                              this if you want that end state immediately.
+REM     install.cmd /reboot      take the guest down when the install finishes as well (with
+REM                              /auto this is a POWER-OFF, so the caller starts the qube once
+REM                              more to reach the finished state). The install costs ONE guest
+REM                              power-off on its own; the PV drivers take over from the emulated
+REM                              disk/NIC at the qube's next start either way. Use this if you
+REM                              want the PV-bound end state immediately rather than one boot later.
 REM     install.cmd /noidd       do NOT activate the IddCx driver: leave the guest on the
 REM                              emulated Basic Display Adapter. The driver files still ship,
 REM                              nothing touches the driver store, the VGA adapter is left
@@ -247,8 +255,9 @@ if defined IDDONLY (
 )
 set RC=%errorlevel%
 echo.
-if %RC%==0  echo Done. Reboot if the script asked you to.
-if %RC%==10 echo Stage complete - REBOOT NOW, then run install.cmd again.
+if %RC%==0  echo Done. Restart the qube if the script asked you to.
+if %RC%==10 echo Stage complete - RESTART THE QUBE NOW (a guest restart under Qubes halts it;
+if %RC%==10 echo start it again from the Qube Manager), then run install.cmd again.
 REM NEQ, not GTR 10: every Fail/catch in Install-QwtImproved.ps1 exits 1, which the old `GTR 10`
 REM never matched - a failed install ended in a blank line and `pause` with no verdict at all.
 if %RC% NEQ 0 if %RC% NEQ 10 echo FAILED with %RC% - see C:\qwt-improved-install.log

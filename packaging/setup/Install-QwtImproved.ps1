@@ -84,17 +84,25 @@ Omit the Xen PV disk drivers (xenvbd). Leaves the guest on emulated IDE. Diagnos
 .OUTPUTS
     Human-readable progress, plus a machine-readable trailer:
         === RESULT === {json}
-    Exit codes: 0 = this stage completed, 10 = stage completed and a REBOOT is required
+    Exit codes: 0 = this stage completed, 10 = stage completed and another boot is required
     before re-running, anything else = failure.
+    On the -Auto (unattended) path the process POWERS THE GUEST OFF at each transition rather
+    than rebooting it (see Emit-ResultThenPowerOff for why): a Qubes HVM is on_reboot=destroy /
+    on_poweroff=destroy, so the qube goes Halted and the CALLER starts it again to continue
+    (stage 1 -> stage 2) or to reach the finished state (-RebootAtEnd). The interactive path
+    (no -Auto) is unchanged: it exits 10 and asks the operator to restart manually.
 #>
 [CmdletBinding()]
 param(
     [switch]$Auto,
-    # Reboot at the END of the install as well. OFF by default: the install costs ONE guest
-    # shutdown (the testsigning reboot between the two stages) and the PV drivers hand over
-    # from their emulated counterparts at the qube's next start, exactly as stock QWT leaves
-    # it. A second shutdown hangs qvm-create-windows-qube, which restarts the qube once and
-    # then waits forever for os=Windows.
+    # Power the guest off at the END of the install as well (the name is kept for the /reboot
+    # switch's back-compat; on the -Auto path a "reboot" is realised as a power-off - see
+    # Emit-ResultThenPowerOff). OFF by default: the install costs ONE guest power-off (the
+    # testsigning transition between the two stages) and the PV drivers hand over from their
+    # emulated counterparts at the qube's next start, exactly as stock QWT leaves it. A second
+    # power-off means the caller has to start the qube one more time to reach the finished state;
+    # with -RebootAtEnd off, stage 2 instead leaves the guest running (qrexec answers in that
+    # boot; the PV handover completes on the following start).
     [switch]$RebootAtEnd,
     # IDD activation is default-on: the IddCx driver is the display point of this package
     # (arbitrary resolutions following the dom0 window, no Basic-Display-Adapter snapping).
@@ -402,8 +410,9 @@ function Disable-XenbusMonitor {
     # AppVM boot, with the monitor wedged STOP_PENDING behind it.
     #
     # Nothing in the unattended QWT flow needs the monitor at all: this installer performs its
-    # own reboot/shutdown at the right moments (stage 1's shutdown /r, the final install
-    # shutdown), so the service is stopped and DISABLED - no prompt, no surprise reboot. The
+    # own power-off at the right moments (the stage-1 transition, and the final install power-off
+    # under -RebootAtEnd - see Emit-ResultThenPowerOff), so the service is stopped and DISABLED -
+    # no prompt, no surprise reboot. The
     # per-boot payload (pvnic-selfprime) re-asserts this on every boot as the belt for driver
     # package upgrades that re-register the service. AutoReboot=0 stays written as the second
     # belt in case something re-enables the service anyway.
@@ -1152,7 +1161,7 @@ function Invoke-Stage1 {
     # Earliest possible point: a guest that ALREADY has PV drivers can raise the
     # xenbus_monitor reboot prompt during stage 1's uninstall of a previous QWT, long before
     # stage 2 runs. A stopped, disabled monitor cannot prompt (and cannot silently reboot
-    # mid-uninstall either); stage 1 performs its own shutdown /r when it is actually time.
+    # mid-uninstall either); stage 1 performs its own power-off when it is actually time.
     Disable-XenbusMonitor -Why 'stage 1: before uninstall of a previous QWT' | Out-Null
 
     # --- certificates -------------------------------------------------------------
@@ -1167,6 +1176,43 @@ function Invoke-Stage1 {
     & bcdedit.exe /set testsigning on | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail 'bcdedit /set testsigning on failed (Secure Boot enabled?)' }
     Write-Log 'testsigning enabled for the NEXT boot'
+
+    # --- FAST STARTUP OFF, ASSERTED - do not take Windows' default behaviour on trust -------
+    # The stage transition below is a POWER OFF, and the whole point of it is that the guest comes
+    # back as a FRESH BOOT so the Xen PV bus binds. Fast Startup (hiberboot) defeats exactly that:
+    # `shutdown /s` with it enabled is a HYBRID shutdown - the kernel session is hibernated and the
+    # next start RESUMES instead of booting, so the PV bus would be no more bound than before and
+    # this transition would silently buy nothing. Client Windows ships with it ON.
+    #
+    # Windows is documented to force a full shutdown when servicing or driver installs are pending,
+    # which is probably why we have not been bitten. That is exactly the kind of default we do not
+    # get to rely on: we control this guest, so we SET it and then CHECK it, rather than inheriting
+    # whatever the OS felt like doing. (powercfg /h off also runs later in pvnic-selfprime.ps1, but
+    # that is the PV-NIC latch path and it has not necessarily run by the time stage 1 gets here.)
+    & powercfg.exe /hibernate off 2>&1 | Out-Null
+    $hiberboot = 1
+    try {
+        $pk = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power'
+        $hv = Get-ItemProperty -LiteralPath $pk -Name HiberbootEnabled -ErrorAction SilentlyContinue
+        if ($null -ne $hv) { $hiberboot = [int]$hv.HiberbootEnabled }
+        # powercfg alone does not always clear the policy value; make it explicit and re-read.
+        if ($hiberboot -ne 0) {
+            Set-ItemProperty -LiteralPath $pk -Name HiberbootEnabled -Value 0 -Type DWord -ErrorAction Stop
+            $hv = Get-ItemProperty -LiteralPath $pk -Name HiberbootEnabled -ErrorAction SilentlyContinue
+            if ($null -ne $hv) { $hiberboot = [int]$hv.HiberbootEnabled }
+        }
+    } catch {
+        Fail ("could not disable Fast Startup (hiberboot): $($_.Exception.Message). The stage " +
+              'transition powers the guest off expecting a fresh boot; with hiberboot enabled the ' +
+              'next start would RESUME instead and the Xen PV bus would not bind.')
+    }
+    $script:Result.detail.hiberboot = $hiberboot
+    if ($hiberboot -ne 0) {
+        Fail ("Fast Startup (HiberbootEnabled=$hiberboot) is still enabled after disabling it. " +
+              'Refusing to continue: the power-off transition below would hibernate rather than ' +
+              'shut down, the next start would resume, and the Xen PV bus would not bind.')
+    }
+    Write-Log 'Fast Startup (hiberboot) disabled and verified - the power-off transition gets a real boot'
 
     # --- autologon: the qube must be able to come back by itself ------------------------
     # Armed here with the password in hand (never carried across the reboot on the task command
@@ -1188,8 +1234,8 @@ function Invoke-Stage1 {
 
     if ($Auto) {
         # The resume task was armed as the first act of this stage.
-        Write-Log 'STAGE 1 COMPLETE - rebooting in 2 s, installation resumes automatically'
-        Emit-ResultThenReboot 10
+        Write-Log 'STAGE 1 COMPLETE - powering off in 2 s; start the qube again and the install resumes automatically'
+        Emit-ResultThenPowerOff 10
     }
     Write-Log 'STAGE 1 COMPLETE'
     Write-Log "Now REBOOT, then run again elevated:  $self"
@@ -1318,7 +1364,7 @@ function Invoke-AutologonArming {
     return $armed
 }
 
-function Emit-ResultThenReboot {
+function Emit-ResultThenPowerOff {
     param([int]$ExitCode)
     $json = $script:Result | ConvertTo-Json -Depth 6 -Compress
     Write-Host '=== RESULT ==='
@@ -1326,21 +1372,44 @@ function Emit-ResultThenReboot {
     try { Add-Content -LiteralPath $script:LogFile -Value "=== RESULT === $json" -Encoding UTF8 } catch { }
     # This helper is reached ONLY on the -Auto (unattended) path - every caller is inside
     # `if ($Auto)`. Nobody is watching a countdown, so a 15 s dialog was pure dead wait between
-    # stages. The RESULT is already flushed to the log above, so reboot near-immediately; a 2 s
-    # margin just lets this process exit cleanly before the machine goes down.
-    # JUDGED, not fired and forgotten. shutdown.exe returns non-zero without rebooting - 1190 (a
+    # stages. The RESULT is already flushed to the log above, so go down near-immediately; a 2 s
+    # margin just lets this process exit cleanly before the machine does.
+    #
+    # POWER OFF, NOT REBOOT - and this is load-bearing for DETERMINISM, not a style choice.
+    # A Qubes HVM is configured `on_reboot=destroy` / `on_poweroff=destroy` (core-admin's
+    # templates/libvirt/xen.xml), so a guest-initiated restart is SUPPOSED to leave the qube
+    # Halted and let the caller start a fresh domain (that is where the PV bus binds on a base
+    # that installed the PV drivers this boot). But `shutdown /r` does not reliably reach the
+    # toolstack: on this guest, at the inter-stage reboot, the PV drivers are installed-but-not-
+    # yet-bound and the reset arrives over the emulated ACPI/CF9 path, which the device model can
+    # consume as an IN-PLACE machine reset WITHOUT signalling Xen. Measured across 14 win11 clean
+    # installs, `/r` destroyed the domain 8 times (correct) and warm-reset it in place 6 times
+    # (the leak) - and one of those warm resets stranded the guest with the emulated VGA already
+    # gone, the PV bus never rebound, and no qrexec. `shutdown /s` has no in-device-model
+    # equivalent: a poweroff request always terminates the domain (device-model shutdown ->
+    # SHUTDOWN_poweroff -> on_poweroff=destroy), so the qube goes Halted EVERY time and the next
+    # start is ALWAYS a fresh domain with the PV bus binding cleanly. The caller already has to
+    # handle the Halt - it is the dominant outcome even with /r - so this removes the branch, it
+    # does not add a requirement (prime-run restarts on Halt; qvm-create-windows-qube starts the
+    # qube after the tools installer; an interactive Qubes user starts it from the Qube Manager).
+    #
+    # JUDGED, not fired and forgotten. shutdown.exe returns non-zero without acting - 1190 (a
     # shutdown is already scheduled), 1115/5 (denied during a shutdown transition) - and the exit
-    # above then left the unattended flow at 'reboot promised, reboot not coming': RESULT ok=true
-    # reboot_needed=true flushed, the resume task armed for a boot nobody triggers, install.cmd gone.
-    # A failed request is a FAILURE the caller must see. Stderr is captured (a native stderr line is
-    # a terminating error under ErrorActionPreference=Stop) and the exit code is cleared first so a
-    # stale one is never judged (see Set-BootResume).
+    # below would then leave the unattended flow at 'power-off promised, power-off not coming':
+    # RESULT ok=true reboot_needed=true flushed, the resume task armed for a boot nobody triggers,
+    # install.cmd gone. A failed request is a FAILURE the caller must see. Stderr is captured (a
+    # native stderr line is a terminating error under ErrorActionPreference=Stop) and the exit
+    # code is cleared first so a stale one is never judged (see Set-BootResume).
+    # /f (force): close applications without warning. This is an unattended install in session 0
+    # on a freshly-imaged guest - there is no user work to lose and nothing that legitimately needs
+    # to veto the transition, but a stuck app or a "you have unsaved work" prompt CAN block a
+    # /s without /f indefinitely, which would strand the install exactly as a refused shutdown does.
     $global:LASTEXITCODE = $null
-    try { & shutdown.exe /r /t 2 /c 'Qubes Windows Tools setup' 2>&1 | Out-Null } catch { }
+    try { & shutdown.exe /s /f /t 2 /c 'Qubes Windows Tools setup' 2>&1 | Out-Null } catch { }
     if ($LASTEXITCODE -ne 0) {
-        $msg = ("shutdown.exe /r was REFUSED (rc '$LASTEXITCODE') - the guest is NOT rebooting on its own. " +
+        $msg = ("shutdown.exe /s /f was REFUSED (rc '$LASTEXITCODE') - the guest is NOT powering off on its own. " +
                 'Another shutdown may already be scheduled, or the request was denied. The resume task ' +
-                'stays armed: a manual reboot of this qube resumes the install; until then it is stalled.')
+                'stays armed: starting this qube again resumes the install; until then it is stalled.')
         Write-Log $msg 'FATAL'
         $script:Result.ok = $false
         $script:Result.error = $msg
@@ -1768,8 +1837,8 @@ function Invoke-Stage2 {
                     $extra += '-Auto'
                     $extra += '-ResumeAfterUninstall'
                     Set-BootResume -ScriptPath $self -ExtraArgs $extra
-                    Write-Log 'removing the previous QWT requires a reboot - rebooting in 2 s, the install resumes automatically'
-                    Emit-ResultThenReboot 10
+                    Write-Log 'removing the previous QWT requires a restart - powering off in 2 s; start the qube again and the install resumes automatically'
+                    Emit-ResultThenPowerOff 10
                 }
                 Write-Log 'removing the previous QWT requires a reboot'
                 Write-Log "REBOOT NOW, then run again elevated:  $self"
@@ -3297,22 +3366,24 @@ public static class QdbPrime {
     Remove-Item -LiteralPath $script:StageFlagFile -Force -EA SilentlyContinue
     Write-Log 'INSTALL COMPLETE - QWT installed. The PV drivers bind at the guest''s NEXT start.'
 
-    # ONE guest shutdown for the whole install, not two.
+    # ONE guest power-down for the whole install, not two.
     #
     # Everything that needed testsigning ACTIVE has already happened in this boot - the MSI,
     # the PV driver packages, and the IDD activation, which waits for the IddCx device to bind
-    # before it disables the emulated VGA. What the old final reboot bought was the PV disk and
+    # before it disables the emulated VGA. What the old final power-off bought was the PV disk and
     # network drivers taking over from their emulated counterparts, and that is exactly the
     # kind of thing a guest picks up on its next start anyway. Stock QWT hands a qube back the
     # same way.
     #
     # Why it matters beyond tidiness: qvm-create-windows-qube restarts the qube EXACTLY ONCE
-    # after running the tools installer and then waits forever for os=Windows. A second
-    # shutdown leaves it waiting on a halted qube with nobody to start it - the provisioning
-    # run hangs. With one shutdown, an unpatched upstream works.
+    # after running the tools installer and then waits forever for os=Windows. A second guest
+    # power-off leaves it waiting on a halted qube with nobody to start it - the provisioning
+    # run hangs. With one power-off, an unpatched upstream works.
     #
     # -RebootAtEnd restores the old behaviour for a caller that wants the finished state
-    # immediately (our own acceptance harness reboots by itself and does not need it).
+    # immediately - though on Qubes even that is a power-off, not an in-place reboot, so the
+    # caller starts the qube once more (our own acceptance harness restarts on Halt and does
+    # not need it).
     # PUT THE AGENT BACK IF NOTHING IS GOING TO REBOOT THIS GUEST.
     # The quiesce earlier in this stage was written on the premise that "stage 2 always ends in a
     # reboot". That is FALSE: Result.reboot_needed is a REPORT, and the actual restart happens only
@@ -3341,8 +3412,8 @@ public static class QdbPrime {
     # at least visible while the failure is reported.
     if ($script:AutologonArmFailed) { Fail $script:AutologonArmFailed }
     if ($Auto -and $RebootAtEnd) {
-        Write-Log 'rebooting in 2 s (-RebootAtEnd)'
-        Emit-ResultThenReboot 0
+        Write-Log 'powering off in 2 s (-RebootAtEnd); start the qube again for the finished, PV-bound state'
+        Emit-ResultThenPowerOff 0
     }
     Write-Log 'No reboot from here. qrexec answers in this boot; PV drivers and their'
     Write-Log 'emulated-device handover complete the next time the qube starts.'
