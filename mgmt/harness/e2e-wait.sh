@@ -24,12 +24,42 @@ POLL_SECS=${POLL_SECS:-20}
 w_state(){ qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 
 # Classify the guest's screen: RECOVERY | BLACK | DESKTOP | UNKNOWN | NOWINDOW
+#
+# CAPTURE MAY TOUCH THE DESKTOP; THE ARTIFACT MUST NOT KEEP IT.
+#
+# This used `qtest fullshot` and KEPT the tar. fullshot photographs the ENTIRE dom0 desktop - every
+# other qube, the owner's editor, dom0 terminal scrollback - and every periodic screenshot and every
+# stall capture in the harness was doing it. Found 2026-09-09 when a win11-ne stall capture turned
+# out to contain the owner's notes and this session's own text. Three such captures reached a PUBLIC
+# repo once before; that is the class.
+#
+# But a blanket switch to `qtest shot` would BLIND the case that matters most: `shot` only returns
+# windows the gui-agent maps, so a guest with no session - early install, Automatic Repair, a
+# stranded install - is invisible to it, while dom0 still draws that qube's framebuffer as a window
+# the desktop capture can reach. That is documented in stability-e2e.sh and it is correct.
+#
+# So: TRY PER-WINDOW FIRST (local.WinScreenshot+<vm>, tag-gated, only that guest's windows). Only if
+# that yields nothing, take a desktop capture, CROP THE GUEST'S WINDOW OUT OF IT, and DELETE THE
+# DESKTOP TAR before returning. The diagnostic survives; the desktop does not. winshot.py finds the
+# qube's own framebuffer window by its dom0 name, which is what makes the crop possible for a
+# session-less guest.
 w_screen(){ # $1=vm $2=tag $3=outdir
   local vm=$1 tag=$2 dir=$3 out
-  QTEST_VM=$vm timeout -k 8 150 ./tools/qtest fullshot "$dir/$tag.tar" >/dev/null 2>&1
-  [ -s "$dir/$tag.tar" ] || { echo NOWINDOW; return; }
-  out=$(python3 tools/winshot.py "$dir/$tag.tar" "$vm" -o "$dir/$tag.png" --classify 2>/dev/null)
-  case "$out" in *VERDICT=*) echo "${out##*VERDICT=}" ;; *) echo NOWINDOW ;; esac
+  QTEST_VM=$vm timeout -k 8 150 ./tools/qtest shot "$dir/$tag.tar" >/dev/null 2>&1
+  if [ -s "$dir/$tag.tar" ]; then
+    out=$(python3 tools/winshot.py "$dir/$tag.tar" "$vm" -o "$dir/$tag.png" --classify 2>/dev/null)
+    case "$out" in *VERDICT=*) echo "${out##*VERDICT=}"; return ;; esac
+  fi
+  # No mapped window. Fall back to a desktop capture ONLY to crop this guest out of it, then throw
+  # the desktop away. The .tar that remains (if any) is the cropped guest window, never the desktop.
+  QTEST_VM=$vm timeout -k 8 150 ./tools/qtest fullshot "$dir/$tag.desktop.tmp.tar" >/dev/null 2>&1
+  if [ -s "$dir/$tag.desktop.tmp.tar" ]; then
+    out=$(python3 tools/winshot.py "$dir/$tag.desktop.tmp.tar" "$vm" -o "$dir/$tag.png" --classify 2>/dev/null)
+    rm -f "$dir/$tag.desktop.tmp.tar"          # the desktop never becomes evidence
+    case "$out" in *VERDICT=*) echo "${out##*VERDICT=}"; return ;; esac
+  fi
+  rm -f "$dir/$tag.desktop.tmp.tar"
+  echo NOWINDOW
 }
 
 w_alive(){ QTEST_VM=$1 timeout -k 5 40 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY; }
