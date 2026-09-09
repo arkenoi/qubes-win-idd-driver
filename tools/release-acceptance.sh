@@ -101,6 +101,24 @@ say "matrix rc=$MRC (detail: $CAMP/full.out, artefacts: $CAMP/matrix)"
 # These are NOT a substitute for the campaign; they are the per-feature evidence a campaign cell
 # does not cover. Each drives its own throwaway subject over quick-upgrade.
 if [ "$SKIP_FEATURES" -eq 0 ]; then
+  # SETTLE THE RIG FIRST. The campaign's appvm cells leave their AppVM RUNNING, and quick-upgrade
+  # refuses to start while any other Windows guest is up ("REFUSED: these are not Halted") - the
+  # serial-rig rule, working correctly. Without this the feature tests died 7 s after a 45-minute
+  # campaign, reporting a harness collision as a feature failure. Shut them down and WAIT.
+  say "settling the rig before the feature tests"
+  for vm in $(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}'); do
+    say "  shutting down $vm (left running by the campaign)"
+    qvm-shutdown --wait --timeout 180 "$vm" >/dev/null 2>&1 || qvm-kill "$vm" >/dev/null 2>&1
+  done
+  for i in $(seq 1 40); do
+    busy=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}' | tr '\n' ' ')
+    [ -z "$busy" ] && break
+    [ "$i" = 1 ] && say "  waiting for: $busy"
+    sleep 15
+  done
+  busy=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}' | tr '\n' ' ')
+  [ -z "$busy" ] || say "WARNING: still not Halted after 10 min: $busy - the feature tests will likely be refused"
+
   for t in notify-errors-guest-test crop-before-map; do
     say "--- feature test: $t"
     case "$t" in
