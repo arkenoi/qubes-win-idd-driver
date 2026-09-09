@@ -150,9 +150,16 @@ function Get-QwtNotifyBootStamp {
     if ($null -ne $script:QwtNotifyBootStamp) { return [long]$script:QwtNotifyBootStamp }
     if ($null -ne $script:QwtNotifyBootCached) { return [long]$script:QwtNotifyBootCached }
     try {
-        $k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($script:QwtNotifyBootKey, $true)
+        # Registry64 pins the NATIVE view. HKLM\SOFTWARE is WOW64-redirected, so under a 32-bit
+        # PowerShell host this would land in Wow6432Node while the x64 agent used the native key -
+        # two different tokens, and the cross-language dedupe this key exists for would be gone
+        # without any symptom. The C twin passes KEY_WOW64_64KEY for the same reason.
+        $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+                    [Microsoft.Win32.RegistryHive]::LocalMachine,
+                    [Microsoft.Win32.RegistryView]::Registry64)
+        $k = $hklm.OpenSubKey($script:QwtNotifyBootKey, $true)
         if ($null -eq $k) {
-            $k = [Microsoft.Win32.Registry]::LocalMachine.CreateSubKey(
+            $k = $hklm.CreateSubKey(
                     $script:QwtNotifyBootKey,
                     [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
                     [Microsoft.Win32.RegistryOptions]::Volatile)
