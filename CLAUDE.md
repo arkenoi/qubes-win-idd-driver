@@ -61,6 +61,13 @@ interleaved:
   policy refusal, not absence; it exists and serves traffic.
   **Before declaring anything impossible, read `.claude/skills/rig-capabilities/SKILL.md`** — it is
   the measured inventory, and it lists five limitations previously invented and disproven.
+- **Before launching ANY job that installs, boots or reboots a guest, read
+  `.claude/skills/rig-cycle/SKILL.md`.** It picks the harness for you. The rule broken most often:
+  a short test cycle uses `quick-upgrade.sh` over the `win{10,11}-qwt` golden — a clean install from
+  base is for FULL ACCEPTANCE, or for when the clean-install path is itself the thing under test,
+  and nothing else. A broken upgrade harness is a thing to FIX, not a licence to clean-install.
+  (This lived only in memory until 2026-09-09, which is exactly why it kept being walked past:
+  memory arrives as background context, not as a binding instruction.)
 - Never push to QubesOS upstream repos or open upstream PRs/issues without explicit user
   approval of the exact diff/text.
 - The test VM is disposable and assumed hostile; nothing from it gets executed in this qube.
