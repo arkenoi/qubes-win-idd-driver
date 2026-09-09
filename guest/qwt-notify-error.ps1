@@ -27,8 +27,12 @@
 #   severity   ACTION only (the product is not delivering and will not recover by itself; a human
 #              must act). DEGRADED / INFO stay in the log.
 #   dedupe     one notification per (component, id) per BOOT: marker <state>\<component>.<id>
-#              holding "boot=<uptime-derived boot epoch seconds>"; a marker from an earlier boot
-#              does not suppress. Cap: at most 8 per boot across all ids (<state>\.count).
+#              holding "boot=<per-boot token>"; a marker from an earlier boot does not suppress.
+#              Cap: at most 8 per boot across all ids (<state>\.count). The token is minted once
+#              per boot in a VOLATILE registry key shared with the C twin and compared EXACTLY -
+#              it used to be an uptime-derived stamp compared with a +/-120 s tolerance, which made
+#              two boots less than 120 s apart one boot and swallowed the second boot's error.
+#              With no token the route REFUSES and says so; it never guesses one.
 #   redaction  the payload is REFUSED (not masked) if it is longer than 600 bytes, more than 6
 #              lines, has a control character, a credential keyword, a base64-class run >= 40 or
 #              a hex run >= 32. Pass templated text: component, id, one sentence, the log path.
@@ -64,7 +68,11 @@ if (-not $script:QwtNotifyLogged) { $script:QwtNotifyLogged = @{} }
 $script:QwtNotifyMaxText = 600
 $script:QwtNotifyMaxLines = 6
 $script:QwtNotifyCapPerBoot = 8
-$script:QwtNotifyBootToleranceS = 120
+# Same key as QERR_BOOT_KEY in agent/gui-agent/notifyerr.h - the agent and this file must mint and
+# read ONE per-boot token, or a script and the agent would each dedupe against their own idea of
+# "this boot". Created REG_OPTION_VOLATILE, so the kernel drops it at shutdown.
+$script:QwtNotifyBootKey = 'SOFTWARE\Invisible Things Lab\Qubes Tools\NotifyErrBoot'
+$script:QwtNotifyBootCached = $null
 
 # --- qubesdb read (inline mirror of guest/qubesdb-read.ps1 Get-QubesDbValue: this file must be
 #     self-contained on the deployed medium, like the installer and the updater) ----------------
@@ -132,16 +140,46 @@ function Get-QwtNotifyRedactReason {
     return $null
 }
 
+# An opaque token minted once per boot, shared with the C twin through the SAME volatile registry
+# key (QERR_BOOT_KEY in agent/gui-agent/notifyerr.h), so a script and the agent agree on which boot
+# they are in. A volatile key is the OS's own per-boot object - the kernel discards it at shutdown,
+# so its existence IS the boot, with no clock arithmetic and nothing to drift.
+# Returns $null when no token can be established; the caller turns that into a loud failure rather
+# than guessing, because without a boot identity neither dedupe nor the cap can be honoured.
 function Get-QwtNotifyBootStamp {
     if ($null -ne $script:QwtNotifyBootStamp) { return [long]$script:QwtNotifyBootStamp }
-    $up = [math]::Floor([Diagnostics.Stopwatch]::GetTimestamp() / [Diagnostics.Stopwatch]::Frequency)
-    $nowS = [long][math]::Floor(([DateTime]::UtcNow - [DateTime]::new(1970, 1, 1, 0, 0, 0, [DateTimeKind]::Utc)).TotalSeconds)
-    return [long]($nowS - $up)
+    if ($null -ne $script:QwtNotifyBootCached) { return [long]$script:QwtNotifyBootCached }
+    try {
+        $k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($script:QwtNotifyBootKey, $true)
+        if ($null -eq $k) {
+            $k = [Microsoft.Win32.Registry]::LocalMachine.CreateSubKey(
+                    $script:QwtNotifyBootKey,
+                    [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree,
+                    [Microsoft.Win32.RegistryOptions]::Volatile)
+        }
+        if ($null -eq $k) { return $null }
+        $tok = $k.GetValue('Token', $null)
+        if ($null -eq $tok -or [long]$tok -eq 0) {
+            # Mint. Only ever needs to differ from the PREVIOUS boot's token. A mint race costs at
+            # most one duplicate notification - the fail-open direction, deliberately: a duplicate
+            # is a nuisance, a suppressed ACTION error is the defect this route exists to prevent.
+            $tok = [long]([DateTime]::UtcNow.Ticks -bxor ([long]$PID -shl 48))
+            if ($tok -eq 0) { $tok = 1 }
+            $k.SetValue('Token', $tok, [Microsoft.Win32.RegistryValueKind]::QWord)
+        }
+        $k.Close()
+        $script:QwtNotifyBootCached = [long]$tok
+        return [long]$tok
+    } catch { return $null }
 }
 
+# EXACT equality. This was |A-B| -le 120 s over an uptime-derived stamp, which made two boots less
+# than 120 s apart indistinguishable - measured on win11-ne 2026-09-09, a real reboot 73 s apart
+# was swallowed as suppressed:duplicate. See QerrBootMatch in notifyerr.h for the full account.
+# Do not reintroduce a margin: it can only ever turn a distinct boot into a duplicate, silently.
 function Test-QwtNotifyBootMatch {
     param([long]$A, [long]$B)
-    return ([math]::Abs($A - $B) -le $script:QwtNotifyBootToleranceS)
+    return ($A -eq $B)
 }
 
 # "key=value" lines; returns $null when the key is absent or not an integer.
@@ -196,6 +234,12 @@ function Send-QwtError {
         if ($reason) { & $script:QwtNotifyLog "$Component.$Id not sent: rejected:redact ($reason)"; return 'rejected:redact' }   # GUARD:redact
 
         $now = Get-QwtNotifyBootStamp
+        # No boot identity means neither once-per-boot nor the cap can be honoured. Guessing would
+        # either storm dom0 or swallow errors, so this fails LOUDLY - as SYSTEM this cannot happen
+        # by design, so it is a bug of ours, not a condition to degrade around.
+        # ONE LINE on purpose: the selftest proves this guard by DELETING its line, so a guard that
+        # spans several lines would break the parse instead of failing a check.
+        if ($null -eq $now) { Write-QwtNotifyOnce 'boottoken' "no per-boot token (HKLM\$($script:QwtNotifyBootKey)) - dedupe and the per-boot cap cannot be honoured, so nothing is notified; errors are in the log only"; return 'failed:transport' }   # GUARD:boottoken
         $markerPath = Join-Path $script:QwtNotifyStateDir "$Component.$Id"
         $countPath = Join-Path $script:QwtNotifyStateDir '.count'
         $markerBoot = Get-QwtNotifyKv (Read-QwtNotifySmall $markerPath) 'boot'

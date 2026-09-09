@@ -365,7 +365,12 @@ w_halt(){ # $1=vm $2=deadline $3=label $4=logfn
 g_probe(){ # $1=vm $2=key $3=ps $4=timeout
   local vm=$1 key=$2 ps=$3 to=${4:-120} b64
   b64=$(python3 -c "import sys,base64;print(base64.b64encode(sys.argv[1].encode('utf-16-le')).decode())" "$ps") || return 1
-  QTEST_VM=$vm timeout -k 5 "$to" ./tools/qtest run "powershell -NoProfile -EncodedCommand $b64" 2>/dev/null \
+  # -ExecutionPolicy Bypass: without it a probe that DOT-SOURCES a shipped .ps1 dies with
+  # "running scripts is disabled on this system" and returns NOTHING, which reads as "<no output>"
+  # and gets misdiagnosed as the feature being broken. Production launches every guest script as
+  # `-NoProfile -ExecutionPolicy Bypass -File` (Install-QwtImproved.ps1:526), so a probe without it
+  # is not exercising the same thing the product does.
+  QTEST_VM=$vm timeout -k 5 "$to" ./tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64" 2>/dev/null \
     | tr -d '\r' | grep -aoE "^$key=.*" | head -1 | sed "s/^$key=//"
 }
 

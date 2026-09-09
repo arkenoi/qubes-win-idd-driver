@@ -98,8 +98,13 @@ Check "marker: parse C-side 'boot=N\n'" ((Get-QwtNotifyKv "boot=1757400000`n" 'b
 Check 'marker: parse CRLF' ((Get-QwtNotifyKv "boot=1757400000`r`n" 'boot') -eq 1757400000)
 Check 'marker: garbage does not parse' ($null -eq (Get-QwtNotifyKv 'hello' 'boot'))
 Check 'count: both keys' (((Get-QwtNotifyKv "boot=5`ncount=3`n" 'boot') -eq 5) -and ((Get-QwtNotifyKv "boot=5`ncount=3`n" 'count') -eq 3))
-Check 'boot: within tolerance is one boot' (Test-QwtNotifyBootMatch 1000 1120)
-Check 'boot: beyond tolerance is another boot' (-not (Test-QwtNotifyBootMatch 1000 1121))
+Check 'boot: the same token is one boot' (Test-QwtNotifyBootMatch 1000 1000)
+# The 4.3.22 defect: a +/-120 s tolerance made two boots 73 s apart one boot, so the second boot's
+# ACTION error was swallowed. Consecutive boot stamps are (previous uptime + downtime) apart, so
+# that is the ordinary chained-update reboot. Measured on win11-ne 2026-09-09. These FAIL the
+# moment any margin comes back.
+Check 'boot: a token 73 s away is ANOTHER boot (close reboot, the 4.3.22 defect)' (-not (Test-QwtNotifyBootMatch 1000 1073))
+Check 'boot: a token 1 s away is ANOTHER boot' (-not (Test-QwtNotifyBootMatch 1000 1001))
 
 # --- 3. gate off ----------------------------------------------------------------------------------
 Reset-Store
@@ -125,13 +130,17 @@ CheckStatus 'severity: DEGRADED report is rejected' (Send-QwtError -Component 'a
 CheckStatus 'severity: INFO report is rejected' (Send-QwtError -Component 'activate-idd' -Id 'info' -Severity INFO -Summary 'x') 'rejected:severity'
 Check 'severity: rejected event left no marker and no launch' ((-not (Test-Path (Join-Path $stateDir 'activate-idd.degraded'))) -and ($script:launched.Count -eq 2))
 # a marker written by the C side for THIS boot must suppress (cross-language dedupe)
-[IO.File]::WriteAllText((Join-Path $stateDir 'gui-agent.deslicedown'), "boot=$($BOOT + 30)`n", [Text.Encoding]::ASCII)
+[IO.File]::WriteAllText((Join-Path $stateDir 'gui-agent.deslicedown'), "boot=$BOOT`n", [Text.Encoding]::ASCII)
 CheckStatus 'dedupe: C-side marker from this boot suppresses' (Send-QwtError -Component 'gui-agent' -Id 'deslicedown' -Summary 'x') 'suppressed:duplicate'
 [IO.File]::WriteAllText((Join-Path $stateDir 'gui-agent.oldboot'), "boot=$($BOOT - 5000)`n", [Text.Encoding]::ASCII)
 CheckStatus 'dedupe: marker from an earlier boot does not suppress' (Send-QwtError -Component 'gui-agent' -Id 'oldboot' -Summary 'x') 'send'
-# cap: 3 sends so far; distinct ids up to 8
+# The same defect end-to-end, not just in the comparator: a marker left by a boot that ended 73 s
+# ago is a DIFFERENT boot and must not suppress this one.
+[IO.File]::WriteAllText((Join-Path $stateDir 'gui-agent.closeboot'), "boot=$($BOOT - 73)`n", [Text.Encoding]::ASCII)
+CheckStatus 'dedupe: marker from a boot 73 s earlier does not suppress (close reboot)' (Send-QwtError -Component 'gui-agent' -Id 'closeboot' -Summary 'x') 'send'
+# cap: 4 sends so far (the close-reboot case above is the 4th); distinct ids up to 8
 $last = 'send'
-for ($i = 3; $i -lt 8; $i++) { $last = Send-QwtError -Component 'gui-agent' -Id "cap-$i" -Summary 'x' }
+for ($i = 4; $i -lt 8; $i++) { $last = Send-QwtError -Component 'gui-agent' -Id "cap-$i" -Summary 'x' }
 CheckStatus 'cap: the 8th distinct error still sends' $last 'send'
 CheckStatus 'cap: the 9th distinct error is suppressed' (Send-QwtError -Component 'gui-agent' -Id 'cap-9' -Summary 'x') 'suppressed:cap'
 Check 'cap: exactly 8 launches this boot' ($script:launched.Count -eq 8)
@@ -169,6 +178,25 @@ CheckStatus 'fail-open: unwritable store -> no send' (Send-QwtError -Component '
 [void](Send-QwtError -Component 'gui-agent' -Id 'g' -Summary 'x')
 Check 'fail-open: unwritable store launched nothing' ($script:launched.Count -eq 0)
 Check 'fail-open: unwritable store logged ONCE' ((LogCount 'not writable') -eq 1)
+
+# --- 7. no per-boot token -> LOUD failure, never a guess ---------------------------------------
+# Boot identity is a volatile HKLM key (QERR_BOOT_KEY). Unpinning the stamp makes the helper go
+# after it for real, and on this Linux pwsh the registry type throws - which is exactly the
+# "no boot identity" path. Without a boot token neither once-per-boot nor the cap can be honoured,
+# so the route must REFUSE and say so, rather than guess a token (which would either storm dom0 or
+# swallow errors). This is what covers GUARD:boottoken in tools/tests/notifyerr-selftest.sh.
+Reset-Store
+$pinned = $script:QwtNotifyBootStamp
+$script:QwtNotifyBootStamp = $null
+$script:QwtNotifyBootCached = $null
+$threw = $false
+try { $s = Send-QwtError -Component 'gui-agent' -Id 'noboot' -Summary 'x' } catch { $threw = $true; $s = 'THREW' }
+CheckStatus 'boot token: unavailable -> no send' $s 'failed:transport'
+Check 'boot token: no exception reached the caller' (-not $threw)
+Check 'boot token: nothing launched, no marker written' (($script:launched.Count -eq 0) -and -not (Test-Path (Join-Path $stateDir 'gui-agent.noboot')))
+Check 'boot token: the failure is logged' ((LogCount 'no per-boot token') -eq 1)
+$script:QwtNotifyBootStamp = $pinned
+$script:QwtNotifyBootCached = $null
 
 Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ("--- {0} checks, {1} failed" -f $script:run, $script:fail)
