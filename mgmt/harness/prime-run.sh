@@ -59,6 +59,7 @@ state(){ qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 # is half-built - it gets a CONTAMINATED marker (owner rule: never reuse a killed subject; the
 # next prime-run recreates it from the sealed base and clears the marker after the clone).
 source mgmt/harness/run-lib.sh
+source mgmt/harness/prime-rescue-lib.sh   # rescue_quiet_step / rescue_noshow_step / rescue_should_fire
 job_init prime-run
 job_on_abort(){
   [ -n "${CHURN:-}" ] || return 0
@@ -263,11 +264,18 @@ RESCUE_AFTER=${RESCUE_AFTER:-420}
 # very window that must not be interrupted. Hence: no rescue within RESCUE_AFTER of the most
 # recent qvm-start, and a quiet streak longer than every known idle window.
 RESCUE_QUIET=8
+# SECOND, INDEPENDENT RESCUE TRIGGER (2026-09-09): a persistently no-window screen. The CPU-quiet
+# gate alone was defeated once when libxl stats went unreadable in the stuck state (see
+# prime-rescue-lib.sh) - the quiet streak could never build. A screen that stays SHOTFAIL/NOWINDOW
+# is the DIRECT observable of the "IDD activated, emulated VGA gone, PV bus never rebound" stall,
+# needs no cpu stats, and is shotfail=0 in every clean-install PASS on record. RESCUE_NOSHOW
+# consecutive no-window probes (~60 s apart) past RESCUE_AFTER fire the same one-shot rescue.
+RESCUE_NOSHOW=${RESCUE_NOSHOW:-4}
 # Terminal, not deadline, when the guest crash-loops: stage1 + stage2 + post-install is at most a
 # handful of reboots; a guest that halts more than 8 times is cycling, and restarting it for the
 # rest of the budget would just shred the evidence of why.
 MAX_RESTARTS=${MAX_RESTARTS:-8}
-t0=$(date +%s); restarts=0; ready=0; rescued=0; quiet=0; cpu=-; t_start=$t0
+t0=$(date +%s); restarts=0; ready=0; rescued=0; quiet=0; noshow=0; cpu=-; t_start=$t0
 while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     sleep 20
     el=$(( $(date +%s) - t0 ))
@@ -276,14 +284,19 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     # NULL-separated records; stripping the separators runs values together (3 becomes "31") and
     # the quiet test can then never pass - that bug was already found and fixed twice here.
     if [ "$st" = Running ] && [ "$ready" = 0 ]; then
+        # END prints "NA" (not 9999) when there was NO cpu_usage_raw record: an unreadable stat is
+        # NOT a busy guest, and the old 9999 sentinel made every unreadable poll reset the quiet
+        # streak - which is what defeated the rescue in the 2026-09-09 win11-clean DEADLINE (stats
+        # went unreadable at the instant the install stuck). rescue_quiet_step treats NA as quiet.
         cpu=$(printf '' | timeout 10 qrexec-client-vm "$CHURN" admin.vm.Stats 2>/dev/null | tr '\0' '\n' \
-              | awk '/^cpu_usage_raw$/{getline v; if(v+0>m)m=v+0; n++} END{if(n==0)print 9999; else print m}')
-        if [ "${cpu:-9999}" -lt 15 ] 2>/dev/null; then quiet=$((quiet+1)); else quiet=0; fi
+              | awk '/^cpu_usage_raw$/{getline v; if(v+0>m)m=v+0; n++} END{if(n==0)print "NA"; else print m}')
+        [ -n "$cpu" ] || cpu=NA
+        quiet=$(rescue_quiet_step "$quiet" "$cpu")
         since_start=$(( $(date +%s) - t_start ))
-        if [ "$rescued" = 0 ] && [ "$since_start" -ge "$RESCUE_AFTER" ] && [ "$quiet" -ge "$RESCUE_QUIET" ]; then
+        if rescue_should_fire "$rescued" "$since_start" "$RESCUE_AFTER" "$quiet" "$RESCUE_QUIET" "$noshow" "$RESCUE_NOSHOW"; then
             rescued=1
-            log "  t+${el}s ANOMALY: no qrexec ${since_start}s after the last start and CPU quiet (${cpu})"
-            log "    for $((quiet*20))s - the install has finished but the job did not reboot the guest as"
+            log "  t+${el}s ANOMALY: no qrexec ${since_start}s after the last start; trigger: $(rescue_trigger_label "$quiet" "$RESCUE_QUIET" "$noshow" "$RESCUE_NOSHOW") (cpu=${cpu})"
+            log "    - the install has finished but the job did not reboot the guest as"
             log "    its contract requires (a fresh PV install cannot produce qrexec in this boot)."
             # EVIDENCE BEFORE THE DESTRUCTIVE ACT (audit 2026-09-08, prime-run.sh:271). This state
             # is also what a "QrexecAgent started, then exited after WaitForQdb" guest looks like -
@@ -318,7 +331,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
         fi
         log "  t+${el}s guest halted (the job rebooted it) - restart #$restarts"
         qvm-start "$CHURN" >/dev/null 2>&1
-        quiet=0; t_start=$(date +%s)   # the rescue clock runs from THIS boot, see RESCUE_QUIET
+        quiet=0; noshow=0; t_start=$(date +%s)   # the rescue clock runs from THIS boot, see RESCUE_QUIET
         continue
     fi
     if QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null \
@@ -333,9 +346,12 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     # evidence, and the PNG is kept next to this log.
     scr=
     if [ $(( el / 60 )) -gt "${scrn:-0}" ]; then
-        scrn=$(( el / 60 )); scr=" screen=$(screen_probe "t${el}")"
+        scrn=$(( el / 60 )); sv=$(screen_probe "t${el}"); scr=" screen=$sv"
+        # A no-window verdict feeds the screen-based rescue trigger (see RESCUE_NOSHOW). The
+        # probe runs after the rescue check, so it acts on the next poll - a bounded ~60 s lag.
+        noshow=$(rescue_noshow_step "$noshow" "$sv")
     fi
-    log "  t+${el}s state=$st restarts=$restarts cpu=${cpu} quiet=$quiet (no qrexec yet)$scr"
+    log "  t+${el}s state=$st restarts=$restarts cpu=${cpu} quiet=$quiet noshow=$noshow (no qrexec yet)$scr"
 done
 
 # SETTLE BEFORE DECLARING SUCCESS. First qrexec is not the end of the job: `stock-422` installs,
