@@ -658,11 +658,16 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     #
     # This is the same class as the async-shutdown defect fixed in the feature tests today: a reboot
     # must be DRIVEN or PROVEN, never inferred from "something answered".
-    say "  $lbl: rebooting the guest, as the installer's contract requires of its caller"
-    qvm-shutdown "$vm" >/dev/null 2>&1
-    w_halt "$vm" 420 "$lbl-postinstall-halt" say || { qvm-kill "$vm" >/dev/null 2>&1; sleep 10; }
-    start_vm "$vm"
   fi
+  # OUTSIDE the `if ! w_alive` block, deliberately. Putting it inside was the first attempt at this
+  # fix and it changed NOTHING: that whole block only runs when qrexec is ALREADY dead, so on the
+  # normal path - guest still answering - the reboot was still skipped. The instrument said so at
+  # once (back-gap stayed 2 s and "contract requires of its caller" appeared 0 times in the log),
+  # which is exactly why the gap is measured rather than assumed.
+  say "  $lbl: rebooting the guest, as the installer's contract requires of its caller"
+  qvm-shutdown "$vm" >/dev/null 2>&1
+  w_halt "$vm" 420 "$lbl-postinstall-halt" say || { qvm-kill "$vm" >/dev/null 2>&1; sleep 10; }
+  start_vm "$vm"
   w_session "$vm" 900 "$lbl-back" "$M" say
   case $? in
     1) no "$lbl: BRICKED - $(grep -a "$lbl-back: TERMINAL" "$R" | tail -1 | sed 's/.*TERMINAL - //' | cut -c1-120)"; return 1 ;;
