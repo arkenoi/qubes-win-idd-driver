@@ -111,6 +111,14 @@
     <ClCompile Include="qwt-bootstrap.cpp" />
   </ItemGroup>
 
+  <!-- FILEVERSION MAJOR,MINOR,PATCH,BUILD_REV from agent/version + QWTNG_BUILD_REV. This
+       project had NO version resource at all, so the release gates could not ask which
+       release a shipped helper belonged to - and 4.3.18 shipped with a helper missing
+       entirely without anything noticing. See packaging/version-stamp/README.md. -->
+  <PropertyGroup>
+    <QwtNgFileDescription>Qubes Windows Tools NG setup bootstrap</QwtNgFileDescription>
+  </PropertyGroup>
+  <Import Project="$(MSBuildThisFileDirectory)..\..\packaging\version-stamp\qwtng-version.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>
