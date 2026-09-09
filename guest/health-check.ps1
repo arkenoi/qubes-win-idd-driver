@@ -538,6 +538,51 @@ try {
     Check 'boot_events_clean' $false @{ error = "could not read the System log: $($_.Exception.Message)" }
 }
 
+# --- the PREVIOUS SHUTDOWN, which the check above structurally cannot see ---------
+# boot_events_clean filters StartTime=LastBootUpTime. Event 7043 ("did not shut down properly after
+# receiving a preshutdown control") is written DURING SHUTDOWN, i.e. always BEFORE that boundary, so
+# it can never appear there - and line ~531 additionally exempts it from failing. The net effect,
+# found 2026-09-09: acceptance could not detect 7043 AT ALL, on any guest, ever.
+#
+# That is not a hypothetical gap. b51a09f exists because a preshutdown handler that never reported a
+# terminal state stalled EVERY clean shutdown of every guest for ~3 minutes while the SCM waited out
+# its 180 s preshutdown timeout, then logged 7043. A user sees a qube that takes three minutes to
+# stop. It was found by reading a log by hand, because nothing asserted it.
+#
+# So: look in the window ENDING at this boot - from the previous shutdown - and FAIL on 7043 naming
+# one of our services. This is the acceptance evidence required before any change to the watchdog's
+# preshutdown path can ship, since that path is the one that regressed before.
+try {
+    $bootT = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+    # 30 minutes back from this boot covers the previous shutdown with margin. A guest that has
+    # never shut down (first boot after install) simply yields no events, which is a PASS with
+    # evidence saying so - not a silent skip.
+    $winStart = $bootT.AddMinutes(-30)
+    $prevBad = @()
+    foreach ($e in @(Get-WinEvent -FilterHashtable @{
+                         LogName   = 'System'
+                         StartTime = $winStart
+                         EndTime   = $bootT
+                         Id        = 7043, 7031, 7000
+                     } -MaxEvents 100 -ErrorAction SilentlyContinue)) {
+        $pmsg = ($e.Message -replace "`r`n", ' ')
+        if ($pmsg -notmatch 'Qubes|Xen|Qdb|Qrexec') { continue }
+        $prevBad += @{ id = $e.Id; provider = $e.ProviderName
+                       time = $e.TimeCreated.ToUniversalTime().ToString('o')
+                       msg = $pmsg.Substring(0, [Math]::Min(160, $pmsg.Length)) }
+    }
+    $prevNote = 'no 7043/7031/7000 for our services across the previous shutdown'
+    if ($prevBad.Count -gt 0) {
+        $prevNote = 'a Qubes service did not stop cleanly - 7043 means the SCM waited out its preshutdown timeout'
+    }
+    Check 'prev_shutdown_clean' ($prevBad.Count -eq 0) `
+        @{ failing = $prevBad; window_start = $winStart.ToUniversalTime().ToString('o')
+           window_end = $bootT.ToUniversalTime().ToString('o'); note = $prevNote }
+} catch {
+    # Missing data FAILS. A shutdown we could not read is not a shutdown that was clean.
+    Check 'prev_shutdown_clean' $false @{ error = "could not read the previous shutdown window: $($_.Exception.Message)" }
+}
+
 # --- 6b2. the network must actually CARRY TRAFFIC, not merely be bound -------------
 # "PV NIC present" is not "networking works". Assert an IP and a working gateway.
 $ipOk = $false; $gw = $null; $addr = $null
