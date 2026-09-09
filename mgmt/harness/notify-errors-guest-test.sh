@@ -1,0 +1,124 @@
+#!/bin/bash
+# notify-errors: first guest run. QUICK-UPGRADE cycle (.claude/skills/rig-cycle) - this is a feature
+# test, not a clean-install test.
+#
+# WHAT IS ACTUALLY BEING ASSERTED. Send-QwtError returns a contract string, so every check compares
+# against a documented value rather than "did something happen":
+#     send | gated | rejected:severity | rejected:name | rejected:redact | suppressed:duplicate
+#       | suppressed:cap | failed:transport
+# NOTE the success value is 'send', not 'sent' - guest/qwt-notify-error.ps1 header and the C side's
+# QERR_SEND agree. I expected 'sent' on the first run because I took it from a summary instead of
+# the source, and would have reported a working feature as broken.
+#
+# THE ORDER IS DELIBERATE. The NEGATIVE CONTROL runs first: gate ON, healthy guest, nobody calling -
+# ZERO notifications. A route that notifies dom0 when nothing is wrong is worse than no route, and
+# that is the one property no offline test can establish.
+#
+# WHAT THIS CANNOT SHOW, stated rather than implied: dom0 RENDERING. The guest can prove it handed
+# the message to qubes.Notifications and that dom0 accepted the call; whether a bubble was painted
+# is dom0-side and is covered by the existing toast-bridge witness work, not here. A 'sent' means
+# accepted-by-dom0, and is reported as exactly that.
+# Also untested here: the C call sites in gui-agent (they need a real agent fault to fire); this
+# exercises the PowerShell twin, which is the half the .ps1 call sites use.
+set -uo pipefail
+cd /home/user/qubes-win-idd-driver || exit 2
+
+VM=win11-ne
+PKG=/home/user/rel/pkg-bd
+LOG=/home/user/rel/notify-errors-guest-test.log
+say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$LOG"; }
+pass=0; fail=0
+ok(){ say "PASS  $*"; pass=$((pass+1)); }
+no(){ say "FAIL  $*"; fail=$((fail+1)); }
+
+gq(){ QTEST_VM=$VM timeout -k 5 "${2:-90}" ./tools/qtest run "$1" 2>/dev/null | tr -d '\r'; }
+b64(){ python3 -c "import sys,base64;print(base64.b64encode(sys.argv[1].encode('utf-16-le')).decode())" "$1"; }
+# -ExecutionPolicy Bypass, because these probes DOT-SOURCE a shipped .ps1 and the default policy
+# blocks that ("running scripts is disabled"), returning nothing at all. Production runs every guest
+# script as -NoProfile -ExecutionPolicy Bypass -File, so this matches it.
+ps_probe(){ local k="$1"; gq "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $(b64 "$2")" "${3:-120}" \
+            | grep -aoE "^$k=.*" | head -1 | sed "s/^$k=//"; }
+state(){ qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$VM" '$1==v{print $2}'; }
+boot_id(){ ps_probe BOOT 'Write-Host ("BOOT=" + (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString("o"))'; }
+
+# send KEY COMPONENT ID SEVERITY SUMMARY -> the contract string
+send(){
+  local k="$1" comp="$2" id="$3" sev="$4" sum="$5"
+  ps_probe "$k" ". '$HELPER'; Write-Host (\"$k=\" + (Send-QwtError -Component '$comp' -Id '$id' -Severity '$sev' -Summary '$sum'))"
+}
+markers(){ ps_probe MK 'if (Test-Path "$env:ProgramData\Qubes\notify-errors") { Write-Host ("MK=" + (@(Get-ChildItem "$env:ProgramData\Qubes\notify-errors" -File -EA SilentlyContinue)).Count) } else { Write-Host "MK=0" }'; }
+
+reboot_proven(){
+    local label="$1" before after i
+    before=$(boot_id); [ -n "$before" ] || { no "$label: no LastBootUpTime BEFORE"; return 1; }
+    QTEST_VM=$VM timeout -k 5 90 ./tools/qtest shutdown >/dev/null 2>&1
+    for i in $(seq 1 40); do [ "$(state)" = Halted ] && break; sleep 10; done
+    [ "$(state)" = Halted ] || { no "$label: never Halted (state=$(state))"; return 1; }
+    qvm-start "$VM" >/dev/null 2>&1
+    for i in $(seq 1 60); do gq 'cmd /c echo PING=UP' 30 | grep -q 'PING=UP' && break; sleep 10; done
+    gq 'cmd /c echo PING=UP' 30 | grep -q 'PING=UP' || { no "$label: no qrexec within 10 min"; return 1; }
+    after=$(boot_id); [ -n "$after" ] || { no "$label: no LastBootUpTime AFTER"; return 1; }
+    [ "$after" != "$before" ] || { no "$label: boot UNCHANGED ($after)"; return 1; }
+    ok "$label: reboot PROVEN ($before -> $after)"; return 0
+}
+
+for i in $(seq 1 90); do
+  pgrep -f "[a]cceptance-races|[m]gmt/harness/matrix.sh|[p]rime-run.sh|[q]uick-upgrade.sh" >/dev/null 2>&1 || break
+  [ "$i" = 1 ] && say "waiting for the rig"; sleep 30
+done
+say "rig free"
+source mgmt/harness/vmlock.sh
+vm_lock "$VM"
+qvm-kill "$VM" >/dev/null 2>&1; sleep 3; qvm-remove -f "$VM" >/dev/null 2>&1
+
+say "quick-upgrade over win11-qwt with $(python3 -c "import json;m=json.load(open('$PKG/MANIFEST.json'));print(m['package_version'],'rev',m['build_rev'])")"
+./mgmt/harness/quick-upgrade.sh "$PKG" "$VM" win11 >>"$LOG" 2>&1
+prc=$?; say "quick-upgrade rc=$prc"
+[ "$prc" -eq 0 ] || { say "FATAL: upgrade did not complete"; vm_unlock "$VM"; exit 1; }
+
+# The helper lives in the PAYLOAD dir beside activate-idd.ps1 (make-setup.ps1:330 - "dot-sourced by
+# activate-idd.ps1 / deactivate-idd.ps1 from $PSScriptRoot"), which the installer stages to
+# C:\qwt-improved-setup. Probing bin\ called a correctly shipped helper "absent" on the first run.
+HELPER='C:\qwt-improved-setup\qwt-notify-error.ps1'
+v=$(ps_probe H "if (Test-Path '$HELPER') { Write-Host 'H=present' } else { Write-Host 'H=absent' }")
+if [ "$v" = present ]; then ok "qwt-notify-error.ps1 shipped to the guest"; else no "helper not installed (got: ${v:-<none>}) - every PS call site is an inert no-op"; vm_unlock "$VM"; exit 1; fi
+
+# The gate is per-qube state that OUTLIVES a run: an aborted earlier attempt left
+# service.notify-errors set, so "default OFF" would have been tested against a gate someone else
+# turned on. Set the precondition, never inherit it.
+qvm-features --unset "$VM" service.notify-errors >/dev/null 2>&1
+
+# --- 1. GATE DEFAULT OFF -----------------------------------------------------------------------
+v=$(send G1 acceptance gate-off ACTION 'gate default check')
+if [ "$v" = gated ]; then ok "gate is OFF by default: $v"; else no "gate not OFF by default (got: ${v:-<none>})"; fi
+
+# --- 2. NEGATIVE CONTROL: gate ON, healthy guest, nobody calling -> ZERO ------------------------
+qvm-features "$VM" service.notify-errors 1 >/dev/null 2>&1
+say "gate enabled via qvm-features service.notify-errors 1 (dom0 wins over the registry)"
+reboot_proven "reboot 1 (pick up the gate)" || { say "=== notify-errors: $pass passed, $fail failed ==="; vm_unlock "$VM"; exit 1; }
+m=$(markers)
+if [ "${m:-x}" = 0 ]; then ok "NEGATIVE CONTROL: gate ON, healthy guest, 0 notifications sent"; else no "NEGATIVE CONTROL FAILED: $m marker(s) on an idle healthy guest"; fi
+
+# --- 3. an ACTION error is sent, exactly once --------------------------------------------------
+v=$(send S1 acceptance probe-one ACTION 'acceptance probe: a human should act')
+if [ "$v" = send ]; then ok "ACTION error accepted by dom0: $v"; else no "ACTION error not sent (got: ${v:-<none>})"; fi
+v=$(send S2 acceptance probe-one ACTION 'acceptance probe: a human should act')
+if [ "$v" = 'suppressed:duplicate' ]; then ok "same (component,id) again this boot: $v"; else no "dedupe failed (got: ${v:-<none>})"; fi
+
+# --- 4. below-threshold severity is refused ----------------------------------------------------
+v=$(send D1 acceptance degraded-probe DEGRADED 'degraded, should not notify')
+if [ "$v" = 'rejected:severity' ]; then ok "DEGRADED refused: $v"; else no "severity threshold failed (got: ${v:-<none>})"; fi
+
+# --- 5. redaction refuses a secret-shaped summary ----------------------------------------------
+v=$(send R1 acceptance redact-probe ACTION 'failed with password hunter2 in the message')
+if [ "$v" = 'rejected:redact' ]; then ok "credential-shaped summary refused: $v"; else no "redaction failed (got: ${v:-<none>})"; fi
+
+# --- 6. once-per-boot: the marker must NOT survive a reboot ------------------------------------
+reboot_proven "reboot 2 (once-per-boot)" || { say "=== notify-errors: $pass passed, $fail failed ==="; vm_unlock "$VM"; exit 1; }
+v=$(send S3 acceptance probe-one ACTION 'acceptance probe: a human should act')
+if [ "$v" = send ]; then ok "ONCE PER BOOT: the same error sends again after a proven reboot: $v"; else no "once-per-boot failed (got: ${v:-<none>})"; fi
+
+say "=== notify-errors guest test: $pass passed, $fail failed ==="
+qvm-features --unset "$VM" service.notify-errors >/dev/null 2>&1
+vm_unlock "$VM"
+[ "$fail" -eq 0 ] || exit 1
