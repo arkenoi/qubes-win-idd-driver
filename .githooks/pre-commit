@@ -101,6 +101,29 @@ if git diff --cached --name-only --diff-filter=ACM | grep -qE '\.ps1$'; then
       echo "These would otherwise be found by an acceptance cell, on a guest, minutes from now."
       exit 1
     fi
+
+    # THE PARSE CHECK ABOVE IS A FALSE PASS ON ITS OWN. It parses with PowerShell 7, and 7 accepts
+    # syntax 5.1 REJECTS - a ternary, ??, ??=, a && / || pipeline chain. The guests run Windows
+    # PowerShell 5.1 (every invocation in this repo is `powershell`/`powershell.exe`, never pwsh),
+    # so such a file parses clean here and is a syntax error where it actually runs. Owner caught
+    # this 2026-09-09, immediately after the parse gate landed.
+    #
+    # exit 1 = incompatible syntax found -> REFUSE. exit 2 = the check could not run (analyzer not
+    # installed) -> say so and continue, same policy as a missing pwsh: never block a dev over a
+    # missing optional module, never let "did not run" look like "passed".
+    cout=$(TMPDIR="${TMPDIR:-/home/user/tmp}" "$PWSH" -NoProfile -File tools/ps-compat-check.ps1 2>&1)
+    crc=$?
+    if [ $crc -eq 1 ]; then
+      echo "$cout"
+      echo
+      echo "pre-commit REFUSED: syntax not available in Windows PowerShell 5.1"
+      echo "(tools/ps-compat-check.ps1). It parses in this qube's pwsh 7 and FAILS on the guest."
+      exit 1
+    elif [ $crc -ne 0 ]; then
+      echo "NOTE: the 5.1 compatibility check DID NOT RUN (PSScriptAnalyzer missing)."
+      echo "      pwsh 7 accepts syntax 5.1 rejects, so the parse check above does NOT cover it:"
+      echo "        TMPDIR=/home/user/tmp $PWSH -NoProfile -Command \"Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -AcceptLicense\""
+    fi
   fi
 fi
 exit 0
