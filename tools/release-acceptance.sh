@@ -77,7 +77,7 @@ say "package: $PV"
 # A campaign against a package that fails its own identity check measures nothing, and it costs
 # hours to find out the slow way.
 say "--- verifying the release package"
-if bash tools/verify-release-package.sh "$SETUP" >>"$LOG" 2>&1; then
+if bash tools/verify-release-package.sh --tree "$SETUP" --commit "$HEAD" >>"$LOG" 2>&1; then
   say "PASS  release package verified"
 else
   die "verify-release-package.sh FAILED - see $LOG. Nothing below would be meaningful."
