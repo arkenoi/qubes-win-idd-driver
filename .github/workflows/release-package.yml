@@ -524,7 +524,17 @@ jobs:
           path: qwt-improved-setup
 
       - name: Install xorriso
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq xorriso
+        # THIRD-PARTY APT LISTS ARE DROPPED FIRST. The GitHub runner image ships extra sources
+        # (google-chrome, microsoft-prod, ...) that this job does not use, and `apt-get update`
+        # fails the WHOLE step when any one of them serves a bad index. That is not hypothetical:
+        # run 34384073456 - a release build whose every code job had already succeeded - failed the
+        # ISO on "Failed to fetch .../chrome-stable/... Hash Sum mismatch", so an unrelated vendor
+        # repo blocked a release. xorriso comes from the Ubuntu archive; nothing here needs those.
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/*google*.list /etc/apt/sources.list.d/*chrome*.list \
+                     /etc/apt/sources.list.d/*microsoft*.list /etc/apt/sources.list.d/*mssql*.list || true
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xorriso
 
       - name: Build + verify the ISO
         env:
