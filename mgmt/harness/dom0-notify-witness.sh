@@ -44,8 +44,14 @@ cap(){  # cap <name> -> a tar of the dom0 desktop
   [ -s "$OUT/$1.tar" ]
 }
 
-# The largest PNG in a capture is the desktop; compare two of them and report the changed area and
-# the bounding box of the change, so a verdict rests on numbers rather than on an impression.
+# TOTAL changed area is the WRONG measure, and it called a REAL, photographed bubble "not
+# rendered": on a live desktop the operator's own terminal repaints continuously (measured here:
+# 161168 changed pixels with NO trigger at all), which swamps a bubble's ~35000 and makes any
+# ratio-against-ambient test unpassable.
+#
+# A bubble differs by SHAPE, not amount: it is a SOLID BLOCK in one place, while terminal churn is
+# scattered text over a wide area. So this reports the DENSEST bubble-sized window in the diff.
+# Measured on this rig: a real notification fills ~41% of a 420x180 block; ambient churn does not.
 delta(){ python3 - "$OUT/$1.tar" "$OUT/$2.tar" <<'PY'
 import sys, tarfile, io, numpy as np
 from PIL import Image
@@ -58,12 +64,17 @@ def biggest(p):
         return Image.open(io.BytesIO(t.extractfile(best).read())).convert('RGB')
 a,b=biggest(sys.argv[1]),biggest(sys.argv[2])
 if a is None or b is None or a.size!=b.size:
-    print("AREA=-1 BBOX=none"); sys.exit(0)
+    print("DENSE=-1 AREA=-1 AT=none"); sys.exit(0)
 d=(np.abs(np.asarray(a,dtype=np.int16)-np.asarray(b,dtype=np.int16)).sum(axis=2)>30)
 area=int(d.sum())
-if area==0: print("AREA=0 BBOX=none"); sys.exit(0)
-ys,xs=np.nonzero(d)
-print(f"AREA={area} BBOX={xs.min()},{ys.min()},{xs.max()},{ys.max()} W={a.size[0]} H={a.size[1]}")
+H,W=d.shape; bh,bw=180,420
+best=(0,0,0)
+for y in range(0,max(1,H-bh),60):
+    for x in range(0,max(1,W-bw),60):
+        v=int(d[y:y+bh,x:x+bw].sum())
+        if v>best[0]: best=(v,x,y)
+v,x,y=best
+print(f"DENSE={v} FILL={v/(bw*bh):.2f} AT={x},{y} AREA={area} W={W} H={H}")
 PY
 }
 
@@ -71,7 +82,7 @@ PY
 cap amb0 || { echo "WITNESS=capture-failed(amb0)"; exit 1; }
 sleep 4
 cap amb1 || { echo "WITNESS=capture-failed(amb1)"; exit 1; }
-AMB=$(delta amb0 amb1); AMB_AREA=$(printf '%s' "$AMB" | sed -nE 's/.*AREA=(-?[0-9]+).*/\1/p')
+AMB=$(delta amb0 amb1); AMB_AREA=$(printf '%s' "$AMB" | sed -nE 's/.*DENSE=(-?[0-9]+).*/\1/p')
 say "ambient churn with no trigger: $AMB"
 
 # ---- triggered ---------------------------------------------------------------------------------
@@ -81,21 +92,19 @@ say "trigger: $*"
 say "trigger rc=$trc"
 sleep 3
 cap post || { echo "WITNESS=capture-failed(post)"; exit 1; }
-TRG=$(delta pre post); TRG_AREA=$(printf '%s' "$TRG" | sed -nE 's/.*AREA=(-?[0-9]+).*/\1/p')
+TRG=$(delta pre post); TRG_AREA=$(printf '%s' "$TRG" | sed -nE 's/.*DENSE=(-?[0-9]+).*/\1/p')
 say "triggered delta: $TRG"
 
 # ---- verdict ------------------------------------------------------------------------------------
-# A bubble is a large, contiguous new region. Requiring it to beat the ambient churn by a wide
-# margin is what stops desktop repaint from passing as a notification. The floor (a bubble is a few
-# hundred by a hundred-odd pixels, so >= 20000 changed pixels) keeps a tiny clock tick from
-# qualifying even on a perfectly quiet desktop.
+# Graded on DENSITY, still against the ambient control: the triggered capture must contain a
+# markedly fuller bubble-sized block than the same desktop produced with no trigger at all.
 : "${AMB_AREA:=-1}"; : "${TRG_AREA:=-1}"
 if [ "$TRG_AREA" -lt 0 ] || [ "$AMB_AREA" -lt 0 ]; then
   echo "WITNESS=undecidable(capture-unreadable) ambient='$AMB' triggered='$TRG'"; exit 1
 fi
-FLOOR=20000
-if [ "$TRG_AREA" -ge "$FLOOR" ] && [ "$TRG_AREA" -gt $(( AMB_AREA * 3 + 5000 )) ]; then
-  echo "WITNESS=RENDERED triggered=$TRG_AREA ambient=$AMB_AREA evidence=$OUT ($TRG)"; exit 0
+FLOOR=15000
+if [ "$TRG_AREA" -ge "$FLOOR" ] && [ "$TRG_AREA" -gt $(( AMB_AREA + AMB_AREA / 2 )) ]; then
+  echo "WITNESS=RENDERED densest=$TRG_AREA ambient_densest=$AMB_AREA evidence=$OUT ($TRG)"; exit 0
 fi
-echo "WITNESS=NOT-RENDERED triggered=$TRG_AREA ambient=$AMB_AREA floor=$FLOOR evidence=$OUT ($TRG)"
+echo "WITNESS=NOT-RENDERED densest=$TRG_AREA ambient_densest=$AMB_AREA floor=$FLOOR evidence=$OUT ($TRG)"
 exit 1
