@@ -644,9 +644,14 @@ try {
     $dq = (& fsutil.exe dirty query $env:SystemDrive 2>&1 | Out-String).Trim()
     $dirty = ($dq -match 'is\s+Dirty')
     $unknownDirty = -not ($dq -match 'is\s+(NOT\s+)?Dirty')
+    # SEEN TO FAIL, 2026-09-09, which is what makes a PASS here worth anything. A guest was hard
+    # killed mid-write (40 x 32 MB) and this check then reported events:41,6008 - and, importantly,
+    # the NTFS dirty bit still read "NOT Dirty" on that same boot. So the EVENT IDs are the working
+    # detector and fsutil alone would have been a check that cannot fail. Both are kept: the dirty
+    # bit costs nothing and catches the case where the log was lost.
     Check 'prev_shutdown_orderly' (($unclean.Count -eq 0) -and (-not $dirty) -and (-not $unknownDirty)) `
         @{ unclean_events = $unclean; dirty_query = $dq; volume_dirty = $dirty
-           note = 'Kernel-Power 41 / 6008 across the previous shutdown, plus the NTFS dirty bit. A power-off that races on_poweroff=destroy, or a qvm-kill mid-shutdown, shows up here and nowhere else.' }
+           note = 'Kernel-Power 41 / 6008 across the previous shutdown, plus the NTFS dirty bit. A power-off that races on_poweroff=destroy, or a qvm-kill mid-shutdown, shows up here and nowhere else. Validated by injection: a hard kill mid-write reports 41,6008 while fsutil still says NOT Dirty.' }
 } catch {
     Check 'prev_shutdown_orderly' $false @{ error = "could not determine shutdown cleanliness: $($_.Exception.Message)" }
 }
