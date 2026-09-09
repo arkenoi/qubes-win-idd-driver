@@ -222,10 +222,13 @@ EOF
   done
   if [ ! -s "$S/$TAG-install.log" ]; then
     no "$TAG: the guest never came back after the stage-1 reboot"
-    # The ONE instrument that can see a guest with no session: qtest shot only captures windows
-    # the gui-agent maps, so a guest sitting in Automatic Repair is invisible to it. fullshot
-    # captures the whole dom0 desktop, which is where a session-less HVM's framebuffer is drawn.
-    timeout -k 8 150 ./tools/qtest fullshot "$S/$TAG-noreturn.tar" >/dev/null 2>&1
+    # THIS COMMENT USED TO SAY fullshot was "the ONE instrument that can see a guest with no
+    # session". That is FALSE, and believing it kept a whole-desktop capture in the harness for ten
+    # days (see e2e-wait.sh's w_screen). local.WinScreenshot selects by the dom0-set _QUBES_VMNAME
+    # and captures per window with `import -window`; a session-less HVM still has its framebuffer
+    # drawn by the gui-daemon as a window carrying that property, so the per-window service sees
+    # Automatic Repair too. Use the shared helper - it is the only place that should know how.
+    timeout -k 8 150 ./tools/qtest shot "$S/$TAG-noreturn.tar" >/dev/null 2>&1
     if [ -s "$S/$TAG-noreturn.tar" ]; then
       rm -rf "$S/$TAG-noreturn-png"; mkdir -p "$S/$TAG-noreturn-png"
       tar xf "$S/$TAG-noreturn.tar" -C "$S/$TAG-noreturn-png" 2>/dev/null

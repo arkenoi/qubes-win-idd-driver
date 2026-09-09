@@ -74,7 +74,12 @@ def l2_vmlock_required() -> None:
     on one subject and interleave their probes."""
     for f in HARNESS:
         txt = f.read_text(errors="replace")
-        if "tools/qtest" not in txt:
+        # CALLS, not mentions. This matched the substring anywhere, so a static checker or a script
+        # that merely NAMES the tool in a comment was reported as "drives a guest" - which is how
+        # tools/check-capture-callers.sh, a grep, was told to take a VM lock. A call is the tool
+        # named on a line that is not a comment.
+        if not any("tools/qtest" in ln for ln in txt.splitlines()
+                   if ln.lstrip() and not ln.lstrip().startswith("#")):
             continue                                   # not a guest-driving harness
         if "vmlock.sh" in txt and "vm_lock" in txt:
             continue

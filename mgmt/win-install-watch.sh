@@ -22,7 +22,7 @@ while :; do
   fi
   n=$((n+1)); t="$D/shot-$(printf '%03d' $n).tar"
   geo=""
-  if (cd /home/user/qubes-win-idd-driver && QTEST_VM="$VM" tools/qtest fullshot "$t" >/dev/null 2>&1); then
+  if (cd /home/user/qubes-win-idd-driver && QTEST_VM="$VM" tools/qtest shot "$t" >/dev/null 2>&1); then
      # members are stored as ./geometry.txt - match with a wildcard or this silently
      # yields nothing and console-phase changes are never reported.
      geo=$(tar xfO "$t" --wildcards '*geometry.txt' 2>/dev/null | awk '$1!="#"{print $4"x"$5}' | head -1)
