@@ -1,0 +1,72 @@
+// qwtng_version.rc - the ONE VERSIONINFO resource for every binary this repo builds that has no
+// resource script of its own (wgcbroker, notifhost, etwproxy, qwt-bootstrap, qubesdb-read, ...).
+//
+// WHY. Until this file existed those helpers shipped with NO version resource at all. Windows
+// Installer treats such a file under the "nonversioned" rule and the release gates cannot ask it
+// which release it belongs to; a helper left over from an earlier package (the 4.3.18 de-slice
+// broker that never reached a clean install) is indistinguishable on disk from the current one.
+// A project imports packaging/version-stamp/qwtng-version.props, which compiles THIS file with the
+// generated qwtng_version.h (tools/stamp-version.ps1) on its include path - so every helper reads
+// FILEVERSION MAJOR,MINOR,PATCH,BUILD_REV from the same agent/version + run number as the agent,
+// the core-agent exes and the driver.
+//
+// A clone of agent/include/version_common.rc, deliberately: gate PE_SIGNER/OURS_VERSION reads the
+// same VS_VERSION_INFO block shape from every OURS binary, and the guest-side component check
+// (Install-QwtImproved.ps1) does likewise. Differences from the agent copy: the generated header
+// name, and the ProductName/CompanyName, which name THIS fork rather than upstream ITL - a helper
+// that exists only here must not present itself as an Invisible Things Lab product.
+#include <windows.h>
+#ifdef RC_INVOKED
+
+// Generated per build by tools/stamp-version.ps1 into $(IntDir); qwtng-version.props puts that
+// directory on this file's include path. It defines QWT_FILEVERSION(_STR), QWT_PRODUCTVERSION(_STR)
+// and, because the props passes the project's description through, QWT_FILEDESCRIPTION_STR.
+#include "qwtng_version.h"
+
+#ifndef QWT_FILEDESCRIPTION_STR
+// Not a default - a build error. A version block with a blank description is how a resource
+// gets copy-pasted between projects and stops naming what it is stamped on.
+#error QWT_FILEDESCRIPTION_STR is not defined: set <QwtNgFileDescription> in the project before importing qwtng-version.props
+#endif
+
+#if defined(DBG) || defined(DEBUG) || defined(_DEBUG)
+#define VER_DBG VS_FF_DEBUG
+#else
+#define VER_DBG 0
+#endif
+
+// QWT_FILETYPE defaults to VFT_APP; a DLL project defines VFT_DLL before importing the props.
+#ifndef QWT_FILETYPE
+#define QWT_FILETYPE VFT_APP
+#endif
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION QWT_FILEVERSION
+PRODUCTVERSION QWT_PRODUCTVERSION
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS VER_DBG
+FILEOS VOS_NT
+FILETYPE QWT_FILETYPE
+#ifdef QWT_FILESUBTYPE
+FILESUBTYPE QWT_FILESUBTYPE
+#endif
+
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "000004B0" // LANG_NEUTRAL/SUBLANG_NEUTRAL, Unicode CP
+    BEGIN
+      VALUE "FileVersion", QWT_FILEVERSION_STR
+      VALUE "ProductVersion", QWT_PRODUCTVERSION_STR
+      VALUE "FileDescription", QWT_FILEDESCRIPTION_STR
+      VALUE "ProductName", "Qubes Windows Tools NG"
+      VALUE "CompanyName", "QWT-NG (github.com/arkenoi/qubes-win-idd-driver)"
+      VALUE "LegalCopyright", "GPL-2.0 - Invisible Things Lab and QWT-NG contributors"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x0000, 0x04B0
+  END
+END
+#endif

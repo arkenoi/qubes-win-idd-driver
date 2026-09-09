@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  qwtng-version.props - import this into any vcxproj in THIS repo to stamp the binary with
+  FILEVERSION MAJOR,MINOR,PATCH,BUILD_REV from agent/version + QWTNG_BUILD_REV.
+
+  WHY A PROPS FILE AND NOT A PreBuildEvent PER PROJECT. The helpers this repo builds
+  (tools/wgcbroker, tools/notifhost/{notifhost,etwproxy}, tools/qwt-bootstrap, tools/qubesdb-read)
+  had zero ResourceCompile items - no version at all - and each is its own hand-written vcxproj.
+  A copy-pasted PreBuildEvent is exactly the kind of wiring that drifts one project at a time; one
+  import line plus one property per project cannot. The generator is tools/stamp-version.ps1 and the
+  resource is qwtng_version.rc next to this file, so there is nothing per project to keep in sync.
+
+  USAGE (put both BEFORE the Microsoft.Cpp.targets import):
+
+      <PropertyGroup>
+        <QwtNgFileDescription>Qubes WGC capture broker</QwtNgFileDescription>
+      </PropertyGroup>
+      <Import Project="..\..\packaging\version-stamp\qwtng-version.props" />
+
+  QwtNgFileDescription is REQUIRED (the target errors without it) - a VERSIONINFO whose description
+  does not name the binary is how a resource gets pasted between projects and stops meaning anything.
+  Printable ASCII, no quotes/backslashes (it becomes a C string literal via cmd.exe).
+
+  Overridable (msbuild -p:... or a PropertyGroup before the import), each with a fail-closed default:
+      QwtNgRepoRoot      repo root; default derived from this file's location
+      QwtNgVersionFile   default $(QwtNgRepoRoot)agent\version   - the ONE source of truth
+      QwtNgStampScript   default $(QwtNgRepoRoot)tools\stamp-version.ps1
+
+  The generated header goes to $(IntDir)qwtng_version.h - per project, never shared, never in the
+  source tree, so nothing to gitignore and no two projects can race on one file. The fourth field
+  comes from env QWTNG_BUILD_REV; in CI its absence FAILS the build (stamp-version.ps1), locally it is
+  0 with a warning, which is the shape the release gates reject - a local build cannot pass for a
+  release by accident.
+-->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <PropertyGroup>
+    <QwtNgRepoRoot Condition="'$(QwtNgRepoRoot)' == ''">$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)..\..\'))</QwtNgRepoRoot>
+    <QwtNgVersionFile Condition="'$(QwtNgVersionFile)' == ''">$(QwtNgRepoRoot)agent\version</QwtNgVersionFile>
+    <QwtNgStampScript Condition="'$(QwtNgStampScript)' == ''">$(QwtNgRepoRoot)tools\stamp-version.ps1</QwtNgStampScript>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The shared resource. $(IntDir) on its include path is where the target below writes the
+         generated header; item metadata is evaluated after every property, so $(IntDir) is the
+         project's real value here even though this file is imported before the project's own
+         PropertyGroups have necessarily been read. -->
+    <ResourceCompile Include="$(MSBuildThisFileDirectory)qwtng_version.rc">
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+  </ItemGroup>
+
+  <!-- BeforeTargets=ResourceCompile rather than a PreBuildEvent: it composes with any PreBuildEvent
+       the project already has instead of replacing it, and it runs exactly when the header is
+       about to be consumed. It runs on EVERY build (no Inputs/Outputs) because the version is a
+       function of the environment, not of any file msbuild could track; the generator itself
+       leaves an unchanged header untouched so incremental builds stay incremental. -->
+  <Target Name="QwtNgStampVersion" BeforeTargets="ResourceCompile">
+    <Error Condition="'$(QwtNgFileDescription)' == ''"
+           Text="QwtNgStampVersion: $(MSBuildProjectName) must set &lt;QwtNgFileDescription&gt; before importing qwtng-version.props (a version block that does not name its binary is not a stamp)." />
+    <Error Condition="!Exists('$(QwtNgVersionFile)')"
+           Text="QwtNgStampVersion: version file not found: $(QwtNgVersionFile) (agent/version is the single source of truth; is the agent submodule checked out?)" />
+    <Error Condition="!Exists('$(QwtNgStampScript)')"
+           Text="QwtNgStampVersion: generator not found: $(QwtNgStampScript)" />
+    <PropertyGroup>
+      <QwtNgVersionHeader>$(IntDir)qwtng_version.h</QwtNgVersionHeader>
+    </PropertyGroup>
+    <MakeDir Directories="$(IntDir)" />
+    <!-- -File, not -Command: arguments arrive verbatim and an uncaught throw in the script is a
+         non-zero exit, which Exec turns into a build error. -ExecutionPolicy Bypass because a
+         fresh runner's default policy would otherwise refuse the script and the build would fail
+         with a message about policy instead of about versions.
+         No post-check on the header: if the generator exits 0 it wrote (or found) it, and if the
+         header were missing anyway rc.exe fails with RC1015 on qwtng_version.h - a check here
+         could never fire. The three Error tasks above are the ones with concrete fixtures. -->
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(QwtNgStampScript)&quot; &quot;$(QwtNgVersionFile)&quot; &quot;$(QwtNgVersionHeader)&quot; &quot;$(QwtNgFileDescription)&quot;" />
+  </Target>
+
+</Project>
