@@ -90,6 +90,9 @@
 #define NOMINMAX
 #include <windows.h>
 #include <sddl.h>       // ConvertSidToStringSidW
+#include <wtsapi32.h>   // WTSQuerySessionInformation - who owns the interactive session
+#pragma comment(lib, "wtsapi32.lib")   // linked here rather than in the vcxproj: the one call site
+                                       // is NotifyHandoffToSession, so the dependency stays with it
 #include <wincrypt.h>   // CryptoAPI SHA-1 (TraceLogging provider name -> GUID hash)
 #include <wmistr.h>     // WNODE_HEADER (evntrace.h prerequisite)
 #include <evntrace.h>   // StartTrace/EnableTraceEx2/OpenTrace/ProcessTrace (real-time ETW)
@@ -2309,8 +2312,96 @@ static bool ReadNotifyFile(std::wstring const& path, std::wstring& summary, std:
     return !summary.empty();
 }
 
+// Hand a one-shot notification to the INTERACTIVE session and return true if that was arranged.
+//
+// WHY THIS EXISTS - the defect it fixes made the whole error-notify route inert in the only context
+// it actually ships in. ConnUp() spawns the relay through qrexec-client-vm, and qrexec-agent runs
+// that relay in the interactive session; a caller sitting in session 0 never gets a connection back,
+// so every send failed with "relay never connected". EVERY REAL CALLER IS IN SESSION 0: gui-agent is
+// a SYSTEM service, and activate-idd.ps1 / deactivate-idd.ps1 run from the installer as SYSTEM. The
+// route therefore worked only when driven by hand from a user session - which is exactly why it
+// passed every ack-level test (the helper returns 'send' as soon as this process is launched, it
+// does not wait) and had never once been seen to put a bubble on screen.
+//
+// Measured on win11-nfy 2026-09-09, same binary, same guest, same minute:
+//   SYSTEM / session 0        -> "relay never connected" -> nothing on screen
+//   interactive user session  -> "connected" -> FWD_RTT ok=1 -> "sent ok=1" -> bubble photographed
+//
+// The mechanism is the one the agent already uses to launch wgcbroker.exe (WgcLaunch in main.c):
+// resolve the active console session, get its user, and schedule the task /ru <user> /it. The 8.3
+// SHORT path is not decoration - the long path contains spaces and schtasks parses /tr by
+// whitespace, which really does fail with "Invalid argument/option - 'Files\Qubes'".
+// Defined further down (with the NOTIFYERR self-reporting code); declared here because the handoff
+// writes its notify file before that point in the file.
+static bool WriteSmallA(std::wstring const& path, const void* data, DWORD len);
+
+static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring const& body)
+{
+    DWORD mySession = 0;
+    ProcessIdToSessionId(GetCurrentProcessId(), &mySession);
+    DWORD active = WTSGetActiveConsoleSessionId();
+    if (active == 0xFFFFFFFF) { BLog(L"NOTIFY handoff: no active console session"); return false; }
+    if (active == mySession) return false;            // already interactive: send inline, no handoff
+
+    wchar_t* user = nullptr; DWORD userLen = 0;
+    if (!WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, active, WTSUserName, &user, &userLen)
+        || !user || !*user)
+    { if (user) WTSFreeMemory(user); BLog(L"NOTIFY handoff: no user in session %lu", active); return false; }
+    std::wstring who(user); WTSFreeMemory(user);
+
+    // Same UTF-16LE + BOM notify file the inline path reads; deleted by the reader.
+    std::wstring dir = StateDir();
+    std::wstring file = dir + L"\\handoff-" + std::to_wstring(GetTickCount64()) + L".txt";
+    std::wstring text = summary; if (!body.empty()) { text += L"\n"; text += body; }
+    std::vector<BYTE> raw; raw.push_back(0xFF); raw.push_back(0xFE);
+    raw.insert(raw.end(), (const BYTE*)text.data(), (const BYTE*)text.data() + text.size() * sizeof(wchar_t));
+    if (!WriteSmallA(file, raw.data(), (DWORD)raw.size()))
+    { BLog(L"NOTIFY handoff: cannot write %s", file.c_str()); return false; }
+
+    wchar_t self[MAX_PATH] = { 0 };
+    GetModuleFileNameW(nullptr, self, RTL_NUMBER_OF(self));
+    wchar_t shortSelf[MAX_PATH] = { 0 };
+    if (!GetShortPathNameW(self, shortSelf, RTL_NUMBER_OF(shortSelf))) wcscpy_s(shortSelf, self);
+    wchar_t shortFile[MAX_PATH] = { 0 };
+    if (!GetShortPathNameW(file.c_str(), shortFile, RTL_NUMBER_OF(shortFile))) wcscpy_s(shortFile, file.c_str());
+
+    // A unique task name per send: concurrent errors must not delete each other's task.
+    std::wstring task = L"QwtNotifyOnce-" + std::to_wstring(GetTickCount64());
+    wchar_t cmd[MAX_PATH * 3 + 256];
+    swprintf(cmd, RTL_NUMBER_OF(cmd),
+             L"schtasks.exe /create /tn %s /tr \"%s --notify-file %s\" /sc once /st 00:00 /ru %s /it /f",
+             task.c_str(), shortSelf, shortFile, who.c_str());
+    STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    { BLog(L"NOTIFY handoff: schtasks /create failed %lu", GetLastError()); return false; }
+    WaitForSingleObject(pi.hProcess, 15000);
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+
+    swprintf(cmd, RTL_NUMBER_OF(cmd), L"schtasks.exe /run /tn %s", task.c_str());
+    STARTUPINFOW si2 = { sizeof(si2) }; PROCESS_INFORMATION pi2 = {};
+    if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si2, &pi2))
+    { BLog(L"NOTIFY handoff: schtasks /run failed %lu", GetLastError()); return false; }
+    WaitForSingleObject(pi2.hProcess, 15000);
+    CloseHandle(pi2.hThread); CloseHandle(pi2.hProcess);
+
+    // The task must be reaped, or every notification leaves one behind for ever. Give the relaunched
+    // instance time to connect and send before removing its task.
+    Sleep(6000);
+    swprintf(cmd, RTL_NUMBER_OF(cmd), L"schtasks.exe /delete /tn %s /f", task.c_str());
+    STARTUPINFOW si3 = { sizeof(si3) }; PROCESS_INFORMATION pi3 = {};
+    if (CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si3, &pi3))
+    { WaitForSingleObject(pi3.hProcess, 15000); CloseHandle(pi3.hThread); CloseHandle(pi3.hProcess); }
+
+    BLog(L"NOTIFY handoff: ran in session %lu as %s (this process is session %lu)",
+         active, who.c_str(), mySession);
+    return true;
+}
+
 static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body)
 {
+    // SESSION 0 CANNOT DELIVER. Hand off to the interactive session rather than failing there.
+    if (NotifyHandoffToSession(summary, body)) return 0;
+
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
     InitializeCriticalSection(&g_corrLock);
     g_rdEvt    = CreateEventW(nullptr, TRUE,  FALSE, nullptr);
