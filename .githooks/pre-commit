@@ -71,4 +71,36 @@ if git diff --cached --name-only | grep -qE '^(findings/|mgmt/|tools/|guest/|pro
     exit 1
   fi
 fi
+
+# ---- POWERSHELL PARSE GATE. Every .ps1 here is authored on Linux and executed only on a Windows
+# guest, so until 2026-09-09 a syntax error was found by an acceptance cell failing minutes later,
+# or by a stage that swallowed it. PowerShell for linux-x64 is a self-contained tarball (no sudo),
+# so the real parser is available and this costs about a second.
+#
+# NOT SILENT WHEN ABSENT. If pwsh is not installed the gate says so and lets the commit through -
+# it is not reasonable to block a dev who lacks it - but it must never look like a pass, because a
+# gate that quietly does nothing is worse than no gate. See memory: pwsh-runs-on-this-qube.
+if git diff --cached --name-only --diff-filter=ACM | grep -qE '\.ps1$'; then
+  PWSH=""
+  for c in "$HOME/pwsh/pwsh" "$(command -v pwsh 2>/dev/null)"; do
+    [ -n "$c" ] && [ -x "$c" ] && { PWSH="$c"; break; }
+  done
+  if [ -z "$PWSH" ]; then
+    echo "NOTE: staged .ps1 files were NOT parse-checked - no pwsh found."
+    echo "      Install it (no sudo needed):"
+    echo "        gh release download -R PowerShell/PowerShell -p '*linux-x64.tar.gz' -D ~/pwsh-dl"
+    echo "        mkdir -p ~/pwsh && tar -xzf ~/pwsh-dl/powershell-*-linux-x64.tar.gz -C ~/pwsh"
+  else
+    # Parse the whole tree, not just the staged files: these scripts are copied between
+    # guest/, packaging/setup/ and rpc/, so a break can land in a file this commit does not touch.
+    out=$("$PWSH" -NoProfile -File tools/ps-parse-check.ps1 2>&1)
+    if [ $? -ne 0 ]; then
+      echo "$out"
+      echo
+      echo "pre-commit REFUSED: PowerShell syntax errors (tools/ps-parse-check.ps1)."
+      echo "These would otherwise be found by an acceptance cell, on a guest, minutes from now."
+      exit 1
+    fi
+  fi
+fi
 exit 0
