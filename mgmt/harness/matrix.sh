@@ -655,8 +655,26 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   esac
   ok "$lbl: guest came back with a session"
   _assert_not_primed "$vm" "$lbl"
-  QTEST_VM=$vm timeout -k 5 120 ./tools/qtest run "cmd /c type \"$GLOG\"" 2>/dev/null \
-    | tr -d '\r' | grep -av 'system32>' > "$M/$lbl-final.log"
+  # RETRY, never fail a cell on ONE slow call. `type` on an ~18 KB log takes about two seconds, so
+  # a call that burns its whole timeout means the guest was not answering qrexec at all - and
+  # re-issuing gets a fresh connection, where simply waiting longer in one call sits on a dead one.
+  # MEASURED 2026-09-09 (4.3.24 campaign): WIN10-upgrade's fetch returned 0 bytes after exactly its
+  # 120 s timeout, on the guest that had just completed an MSI major upgrade - the busiest
+  # post-reboot moment of any cell - and the cell was scored INVALID-INSTRUMENT even though the
+  # install had already reported ok:true. The other two cells in the SAME run fetched fine, one of
+  # them byte-identical to the previous release's, so the mechanism was never broken: this was a
+  # transient, and a transient must be retried with backoff and its error KEPT, not turned into a
+  # verdict.
+  for _fa in 1 2 3; do
+    QTEST_VM=$vm timeout -k 5 90 ./tools/qtest run "cmd /c type \"$GLOG\"" 2>"$M/$lbl-final.err" \
+      | tr -d '\r' | grep -av 'system32>' > "$M/$lbl-final.log"
+    # EMPTY IS A FAILURE, not a short answer. A killed call can exit non-zero OR simply write
+    # nothing, so the exit status alone would let a zero-byte log through as if it had been read -
+    # which is exactly how this produced an INVALID cell instead of a retry.
+    [ -s "$M/$lbl-final.log" ] && break
+    say "  $lbl: installer-log fetch attempt $_fa/3 returned nothing: $(head -c 100 "$M/$lbl-final.err" 2>/dev/null | tr -d '\n') - retrying"
+    sleep $((_fa * 15))
+  done
   # Same discriminator as w_install: 111 guest scripts emit "=== RESULT ===" banners and the
   # installer logs their output, so `grep -ao '=== RESULT === .*'` can pick up a nested one
   # (e.g. "=== RESULT === changed=0 warnings=0") and every json check then fails against a
