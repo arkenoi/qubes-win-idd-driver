@@ -1404,6 +1404,50 @@ function Emit-ResultThenPowerOff {
     # on a freshly-imaged guest - there is no user work to lose and nothing that legitimately needs
     # to veto the transition, but a stuck app or a "you have unsaved work" prompt CAN block a
     # /s without /f indefinitely, which would strand the install exactly as a refused shutdown does.
+    # FLUSH AND SETTLE BEFORE SIGNALLING S5 - the transition happens straight after an MSI has been
+    # writing, and shutting down with writes still in flight produces a shutdown Windows itself
+    # calls unclean. MEASURED 2026-09-09 on win11-nfy with a validated instrument (Kernel-Power
+    # 41/6008; the check was proven by injection - a hard kill mid-write reports 41,6008):
+    #
+    #                       idle            under ~2 GB of writes in flight
+    #   shutdown /s /f      clean 3/3       UNCLEAN 3/3
+    #   host ACPI (control) clean 3/3       UNCLEAN 3/3
+    #
+    # Note both arms fail together: this is NOT a property of choosing power-off over reboot, and
+    # switching the verb back would fix nothing. The variable is IN-FLIGHT WRITES. An unclean
+    # shutdown here hands the next boot a volume to repair, and Startup Repair is precisely where
+    # there is no qrexec, no xencons and no mapped window - the "guest never came back from its
+    # post-install reboot" fingerprint that cost two subjects that day.
+    #
+    # HONEST LIMIT: the measured load (~2 GB continuous) is heavier than an MSI's tail, so this is a
+    # demonstrated HAZARD, not a demonstrated cause of those stalls. It is cheap insurance either
+    # way - a few seconds against a guest that needs Startup Repair.
+    #
+    # Write-VolumeCache is the supported flush (Windows 8+/2012+). If it is unavailable the settle
+    # wait still runs: never let a missing cmdlet turn this into a silent no-op.
+    try {
+        if (Get-Command Write-VolumeCache -ErrorAction SilentlyContinue) {
+            Write-VolumeCache -DriveLetter ($env:SystemDrive.TrimEnd(':')) -ErrorAction Stop
+            Write-Log 'flushed the system volume write cache before power-off'
+        } else {
+            Write-Log 'Write-VolumeCache unavailable - relying on the settle wait alone'
+        }
+    } catch { Write-Log "volume flush failed (continuing to the settle wait): $($_.Exception.Message)" }
+    # Settle: wait for the disk to go quiet rather than guessing a fixed sleep, bounded so a busy
+    # guest can never stall the install here. Idle is judged over consecutive quiet samples, because
+    # one quiet sample is just a gap between writes.
+    try {
+        $quiet = 0
+        for ($i = 0; $i -lt 30; $i++) {
+            $busy = 0
+            try { $busy = [int]((Get-Counter '\PhysicalDisk(_Total)\% Disk Time' -ErrorAction Stop).CounterSamples[0].CookedValue) } catch { $busy = 0 }
+            if ($busy -lt 10) { $quiet++ } else { $quiet = 0 }
+            if ($quiet -ge 3) { break }
+            Start-Sleep -Milliseconds 500
+        }
+        Write-Log "disk settled before power-off (quiet_samples=$quiet)"
+    } catch { Write-Log "disk settle check failed (continuing): $($_.Exception.Message)" }
+
     $global:LASTEXITCODE = $null
     try { & shutdown.exe /s /f /t 2 /c 'Qubes Windows Tools setup' 2>&1 | Out-Null } catch { }
     if ($LASTEXITCODE -ne 0) {
