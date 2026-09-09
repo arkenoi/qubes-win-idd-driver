@@ -93,6 +93,14 @@ function EnvOr {
 $repoSha   = EnvOr 'QWT_REPO_SHA'  $um.repo_sha
 $agentSha  = $um.agent_sha
 $agentDesc = if ($um.PSObject.Properties.Name -contains 'agent_describe') { $um.agent_describe } else { $agentSha }
+# qwt-full records this (its manifest step, 'core_agent_sha'); it is REQUIRED here because
+# core-agent binaries ship inside the MSI and nothing else in the package identifies their source.
+# Absent = the qwt-full artifact predates that field, which means the two halves of the build
+# disagree about what was built - a hard failure, not a field to leave null.
+if (-not ($um.PSObject.Properties.Name -contains 'core_agent_sha') -or -not $um.core_agent_sha) {
+    throw 'qwt-full MANIFEST.json records no core_agent_sha - cannot say which core-agent produced the shipped qrexec-agent.exe/relocate-dir.exe/advertise-tools.exe'
+}
+$coreAgentSha = $um.core_agent_sha
 $baseQwt   = '4.2.2'   # upstream QWT release these sources were rebuilt from (compat field)
 # SINGLE SOURCE OF TRUTH for the deliverable version: agent/version - the SAME file qwt-full.yml
 # reads (line ~311) to stamp the MSI ProductVersion. Reading it here instead of a second hardcoded
@@ -568,6 +576,11 @@ $manifest = [ordered]@{
     source = [ordered]@{
         driver_repo_commit         = $repoSha
         agent_commit               = $agentSha
+        # WHICH core-agent PRODUCED THE SHIPPED core-agent BINARIES. qwt-full has always recorded
+        # this in its own manifest and make-setup never propagated it, so the package could not say
+        # which core-agent built the qrexec-agent.exe inside it - and that is where 4.3.21's qrexec
+        # P1 fix lives. agent_commit is a DIFFERENT submodule and cannot answer for it.
+        core_agent_commit          = $coreAgentSha
         agent_describe             = $agentDesc
         agent_upstream             = 'https://github.com/QubesOS/qubes-gui-agent-windows'
         installer_upstream_commit  = $um.installer_sha
