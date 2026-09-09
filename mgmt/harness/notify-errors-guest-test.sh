@@ -121,6 +121,41 @@ reboot_proven "reboot 2 (once-per-boot)" || { say "=== notify-errors: $pass pass
 v=$(send S3 acceptance probe-one ACTION 'acceptance probe: a human should act')
 if [ "$v" = send ]; then ok "ONCE PER BOOT: the same error sends again after a proven reboot: $v"; else no "once-per-boot failed (got: ${v:-<none>})"; fi
 
+# --- 7. THE ONLY CHECK THAT MATTERS: DID A HUMAN SEE IT? ---------------------------------------
+# Every check above is an ACK. Send-QwtError returns 'send' the moment notifhost is LAUNCHED - it
+# deliberately does not wait - so 'send' means "a process started", not "dom0 drew anything". This
+# suite was fully green for a route that had NEVER delivered a single notification: notifhost's
+# relay needs the interactive session and every caller is SYSTEM in session 0, so it failed with
+# "relay never connected" every time and no check here could see it.
+#
+# So the run now ends on PIXELS. The witness photographs the dom0 desktop around a real send and
+# requires a bubble-shaped block that the same desktop does not produce with no trigger at all.
+# THE SEND MUST *BE* THE WITNESS'S TRIGGER. Sending first and witnessing afterwards would put the
+# bubble on screen before the 'pre' capture, so the delta would be empty and a WORKING route would
+# read as a failure. The trigger takes its parameters from the environment - interpolating them into
+# a heredoc is how this got miswritten the first time.
+TRIG="${TMPDIR:-/tmp}/notify-render-trigger-$$.sh"
+cat >"$TRIG" <<'TRIGEOF'
+#!/bin/bash
+# Fires ONE ACTION error through the shipped helper. NV_ID is unique per run because the route
+# deliberately sends a given (component,id) only once per boot.
+cd "$NV_ROOT" || exit 2
+b64(){ python3 -c "import sys,base64;print(base64.b64encode(sys.argv[1].encode('utf-16-le')).decode())" "$1"; }
+PS=". '$NV_HELPER'; Write-Host ('W=' + (Send-QwtError -Component 'acceptance' -Id '$NV_ID' -Severity ACTION -Summary 'render witness: a human should see this'))"
+QTEST_VM="$NV_VM" timeout -k 5 120 ./tools/qtest run \
+  "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $(b64 "$PS")" 2>/dev/null \
+  | tr -d '\r' | grep -aoE '^W=.*'
+TRIGEOF
+chmod +x "$TRIG"
+if NV_ROOT="$(pwd)" NV_VM="$VM" NV_HELPER="$HELPER" NV_ID="render$(date -u +%H%M%S)" \
+   ./mgmt/harness/dom0-notify-witness.sh "$VM" notifyerr-acceptance "$TRIG" 2>&1 \
+   | tee -a "$LOG" | grep -q 'WITNESS=RENDERED'; then
+  ok "RENDERED: the notification was PHOTOGRAPHED on the dom0 desktop"
+else
+  no "NOT RENDERED: nothing visible appeared. Check C:\ProgramData\qubes-toast-bridge\bridge.log on the guest for 'relay never connected' - that is the session-0 defect"
+fi
+rm -f "$TRIG"
+
 say "=== notify-errors guest test: $pass passed, $fail failed ==="
 qvm-features --unset "$VM" service.notify-errors >/dev/null 2>&1
 vm_unlock "$VM"
