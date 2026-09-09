@@ -8,18 +8,25 @@
 # 2026-09-09. The cause was structural: the budget was a flat 400 ms while ONE UIA operation was
 # allowed 500 ms (TOAST_CROP_UIA_TIMEOUT_MS), so a slow measurement could never make the budget.
 #
-# THE CONTROL IS REAL, NOT HYPOTHETICAL. On agent 4.3.22 (the shipped build with the defect) this
-# check FAILS: four held windows in one boot measured 188, 407, 484 and 1843 ms against a 400 ms
-# budget - three of four over. That is what makes it evidence rather than decoration. Re-verify by
-# pointing it at a 4.3.22 guest.
+# RETRACTED CLAIM, KEPT SO IT IS NOT RE-DERIVED. This file first said: "on 4.3.22 four held windows
+# measured 188/407/484/1843 ms against a 400 ms budget - three of four over", and concluded toasts
+# were being mapped uncropped. THAT CONCLUSION WAS NOT SUPPORTED BY THAT MEASUREMENT. held_ms covers
+# two unrelated holds - waiting for the shadow-crop, and waiting for the window's first PAINTED frame
+# (QGADIRECTWAIT / QGASLICECONTENT) - and the slow windows were console windows (CASCADIA_HOSTING_
+# WINDOW_CLASS, opened by the harness's own `qtest run` probes) waiting for CONTENT, not toasts
+# waiting for a crop. No class information was recorded at the time; the line that prints it is
+# QGACROPLATE, added afterwards. The owner's own observation of a real violation stands - only this
+# file's attribution of it was wrong.
 #
 # WHAT IT ASSERTS, from the agent's OWN instrument rather than from pixels:
-#   QGASLICEMAP held_ms  - how long the map was held, per window
-#   TcApplyResult        - the crop measurement landing (and WHEN, relative to the map)
-#   QGACROPLATE          - the agent naming the uncropped-map fallback out loud (added with the
-#                          fix; on a build that predates it, absence proves nothing and the
-#                          held_ms comparison is the operative check)
-# A toast is CROPPED-BEFORE-MAP when its hold ended within budget and no QGACROPLATE names it.
+#   QGACROPLATE          - the agent stating that it mapped a window UNCROPPED. It fires exactly on
+#                          the timedOut && !cropReady arm, so it IS the defect. THE criterion.
+#   TcApplyResult        - a crop measurement landing. Zero of them means nothing about cropping was
+#                          exercised, so a clean QGACROPLATE count would prove nothing: that FAILS.
+#   QGASLICEMAP held_ms  - reported for context ONLY. Do not grade it against the crop budget; that
+#                          is the mistake above.
+# NOTE this needs a build carrying QGACROPLATE (4.3.23+). On an older agent the line cannot appear,
+# so its absence is not evidence and this check must not be pointed at one.
 #
 # NOT A PIXEL WITNESS. This proves what the agent did, not what dom0 painted. A toast bubble in
 # dom0 is override-redirect and cannot be captured per-window, and this harness will NOT reach for
@@ -87,25 +94,38 @@ if [ -z "$EV" ]; then
 fi
 printf '%s\n' "$EV" | sed 's/^/    /' | tee -a "$LOG" >/dev/null
 
-# held_ms per window, from the agent's own line.
+# GRADE THE CROP PATH, NOT held_ms. This is the correction to how this check first worked, and it
+# had already produced a wrong conclusion: held_ms covers TWO different holds - waiting for the
+# shadow-crop, and waiting for the window's first PAINTED frame (QGADIRECTWAIT / QGASLICECONTENT) -
+# and only the first is this test's subject. Grading held_ms called a run a crop failure when four
+# windows were merely waiting for pixels, and earlier it supported a claim that toasts were mapped
+# uncropped when the slow windows were console windows waiting for content.
+#
+# QGACROPLATE is the agent saying, itself, "I mapped this window uncropped" - it fires exactly on
+# the timedOut && !cropReady arm. That is the defect, so that is the criterion.
+late=$(printf '%s\n' "$EV" | grep -c 'QGACROPLATE')
 held=$(printf '%s\n' "$EV" | grep -ao 'held_ms=[0-9-]*' | sed 's/held_ms=//')
 n_held=$(printf '%s\n' "$held" | grep -c '[0-9]')
-over=$(printf '%s\n' "$held" | awk -v b="$BUDGET_MS" 'NF && $1+0 > b' | wc -l)
-late=$(printf '%s\n' "$EV" | grep -c 'QGACROPLATE')
+crops=$(printf '%s\n' "$EV" | grep -c 'TcApplyResult')
 
-say "held windows: $n_held; holds: $(printf '%s' "$held" | tr '\n' ' ')"
+say "held windows: $n_held; holds (crop AND content, not comparable to the budget): $(printf '%s' "$held" | tr '\n' ' ')"
+say "crop measurements that landed: $crops; uncropped maps reported: $late"
+
 if [ "$n_held" -eq 0 ]; then
   no "no held windows at all - the crop-before-show path did not engage, so this run graded nothing"
-elif [ "$over" -eq 0 ]; then
-  ok "every hold ($n_held) finished within the ${BUDGET_MS} ms budget"
-else
-  no "$over of $n_held holds exceeded the ${BUDGET_MS} ms budget - those windows were mapped UNCROPPED and snapped"
-fi
-
-if [ "$late" -eq 0 ]; then
-  ok "no QGACROPLATE: the agent did not report mapping anything uncropped"
+elif [ "$late" -eq 0 ]; then
+  ok "no QGACROPLATE: the agent mapped nothing uncropped"
 else
   no "QGACROPLATE fired $late time(s) - the agent itself reports mapping a window uncropped"
+  printf '%s\n' "$EV" | grep -a 'QGACROPLATE' | sed 's/^/    /' | tee -a "$LOG" >/dev/null
+fi
+
+# A run in which no crop measurement ever landed graded nothing about cropping, however green the
+# line above looks - missing data fails.
+if [ "$crops" -eq 0 ]; then
+  no "no TcApplyResult at all: no crop was ever measured, so 'no QGACROPLATE' proves nothing here"
+else
+  ok "$crops crop measurement(s) landed - the crop path really ran"
 fi
 
 say "=== crop-before-map: $pass passed, $fail failed ==="

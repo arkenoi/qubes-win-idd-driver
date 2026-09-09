@@ -28,6 +28,12 @@ PAT_LINE="^[[:space:]]*[^#[:space:]].*${Q}[[:space:]]+${VERB}"
 declare -A ALLOW=(
   ["mgmt/harness/a0-toast-bridge.sh"]="dom0 render witness: notification bubble is override-redirect"
   ["mgmt/harness/p3a-etw-gate.sh"]="dom0 render witness: notification bubble is override-redirect"
+  # Added 2026-09-09. The notify-errors route had only ever been graded on ACKS - "dom0 accepted the
+  # call" - and the owner pointed out it had therefore never once been SEEN to work. Grading it on
+  # pixels needs a desktop capture for the same unavoidable reason as the two above: the bubble is
+  # override-redirect, absent from _NET_CLIENT_LIST, and per-window capture cannot see it at all.
+  # Captures go to scratchpad/ (gitignored) and are read, never kept.
+  ["mgmt/harness/dom0-notify-witness.sh"]="dom0 render witness: notification bubble is override-redirect"
 )
 
 bad=0; n=0
