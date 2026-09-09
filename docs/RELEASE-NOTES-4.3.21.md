@@ -73,8 +73,12 @@ reported as nothing, or a recovery that happened silently.
 
 ## Verification
 
-- **Full acceptance: 6/6 cell-groups clean** — win11-clean, win10-clean, win11-upgrade,
-  win11-clean+win11-reinstall, win11-appvm, win10-appvm.
+- **Full acceptance: 6/6 cell-groups clean, 0 failures**, on a package built from this exact
+  source — win11-clean 12/0, win10-clean 12/0, win11-upgrade 11/0, win11-clean+win11-reinstall
+  22/0, win11-appvm 3/0, win10-appvm 3/0.
+- **The installed binary is proven to be the packaged one**, not assumed: every cell recorded
+  `installed_gui_agent_sha256 == expected_gui_agent_sha256`. A harness that proceeds on a failed
+  install reports results for a build that was never running.
 - **Package content is proven, not assumed.** Each fork binary is located *inside the MSI* by a
   build-identity marker a stock binary cannot contain, in both ASCII and UTF-16LE. `ours-wins` proves
   staging at build time; this proves delivery into the installed artifact.
