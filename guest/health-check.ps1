@@ -617,6 +617,40 @@ try {
     Check 'prev_shutdown_clean' $false @{ error = "could not read the previous shutdown window: $($_.Exception.Message)" }
 }
 
+# --- 6a2. WAS THE LAST SHUTDOWN ORDERLY, AND IS THE VOLUME CLEAN? -------------------------------
+# prev_shutdown_clean above only asks whether OUR SERVICES stopped without complaint. It says
+# nothing about whether the machine went down in an orderly way at all, so a guest that was cut off
+# mid-flush passes it. That is a blind spot with teeth here, because the installer's inter-stage
+# transition is a POWER-OFF (Emit-ResultThenPowerOff) and a Qubes HVM is on_poweroff=destroy: the
+# domain is torn down the moment the guest signals S5. The harness also hard-kills a guest whose
+# ACPI shutdown outruns its halt deadline (matrix.sh: w_halt ... || qvm-kill). Either route can end
+# a boot without a clean dismount, and the consequence - a dirty volume whose next boot runs a long
+# repair pass with no qrexec, no console and no windows - looks exactly like the "guest never came
+# back from its post-install reboot" stalls seen on 2026-09-09.
+#
+# Kernel-Power 41 is the OS's own statement that it "rebooted without cleanly shutting down first",
+# and the NTFS dirty bit is the filesystem's. Both are cheap and neither was being asked.
+try {
+    $unclean = @()
+    foreach ($e in @(Get-WinEvent -FilterHashtable @{
+                         LogName = 'System'; StartTime = $winStart; EndTime = $bootT
+                         Id      = 41, 6008
+                     } -MaxEvents 20 -ErrorAction SilentlyContinue)) {
+        $unclean += @{ id = $e.Id; provider = $e.ProviderName
+                       time = $e.TimeCreated.ToUniversalTime().ToString('o') }
+    }
+    # fsutil reports "is Dirty" / "is NOT Dirty"; anything else means we could not tell, and
+    # "could not tell" is not "clean".
+    $dq = (& fsutil.exe dirty query $env:SystemDrive 2>&1 | Out-String).Trim()
+    $dirty = ($dq -match 'is\s+Dirty')
+    $unknownDirty = -not ($dq -match 'is\s+(NOT\s+)?Dirty')
+    Check 'prev_shutdown_orderly' (($unclean.Count -eq 0) -and (-not $dirty) -and (-not $unknownDirty)) `
+        @{ unclean_events = $unclean; dirty_query = $dq; volume_dirty = $dirty
+           note = 'Kernel-Power 41 / 6008 across the previous shutdown, plus the NTFS dirty bit. A power-off that races on_poweroff=destroy, or a qvm-kill mid-shutdown, shows up here and nowhere else.' }
+} catch {
+    Check 'prev_shutdown_orderly' $false @{ error = "could not determine shutdown cleanliness: $($_.Exception.Message)" }
+}
+
 # --- 6b2. the network must actually CARRY TRAFFIC, not merely be bound -------------
 # "PV NIC present" is not "networking works". Assert an IP and a working gateway.
 $ipOk = $false; $gw = $null; $addr = $null
