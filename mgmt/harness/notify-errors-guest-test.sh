@@ -23,9 +23,12 @@
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver || exit 2
 
-VM=win11-ne
-PKG=/home/user/rel/pkg-bd
-LOG=/home/user/rel/notify-errors-guest-test.log
+# Parameterised so a campaign can point it at its own subject and package. Defaults are the
+# throwaway subject this test was written against.
+VM="${VM:-win11-ne}"
+PKG="${PKG:?set PKG to the release setup tree under test}"
+LOG="${LOG:-/home/user/rel/notify-errors-guest-test-$VM.log}"
+OS_FAMILY="${OS_FAMILY:-win11}"   # which golden quick-upgrade.sh upgrades over
 say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$LOG"; }
 pass=0; fail=0
 ok(){ say "PASS  $*"; pass=$((pass+1)); }
@@ -72,7 +75,7 @@ vm_lock "$VM"
 qvm-kill "$VM" >/dev/null 2>&1; sleep 3; qvm-remove -f "$VM" >/dev/null 2>&1
 
 say "quick-upgrade over win11-qwt with $(python3 -c "import json;m=json.load(open('$PKG/MANIFEST.json'));print(m['package_version'],'rev',m['build_rev'])")"
-./mgmt/harness/quick-upgrade.sh "$PKG" "$VM" win11 >>"$LOG" 2>&1
+./mgmt/harness/quick-upgrade.sh "$PKG" "$VM" "$OS_FAMILY" >>"$LOG" 2>&1
 prc=$?; say "quick-upgrade rc=$prc"
 [ "$prc" -eq 0 ] || { say "FATAL: upgrade did not complete"; vm_unlock "$VM"; exit 1; }
 
