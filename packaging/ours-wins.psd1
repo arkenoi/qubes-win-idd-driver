@@ -241,6 +241,22 @@
             # 'advertise-tools.exe 1', and CreateProcess searches the calling process's own
             # directory first - which is the only way that launch resolves today.
             'src/advertise-tools'  = 'msi-image/PFiles64/Qubes Tools/bin/advertise-tools.exe'
+            # SHARED version resource (packaging/version-stamp): included by every core-agent
+            # project so each exe carries FILEVERSION == the release. It is not a per-binary
+            # directory like the entries above, so DirBinaries - which is 1:1 by construction -
+            # cannot express "feeds all five". It is mapped to qrexec-agent.exe as the
+            # representative: that is the binary this release's P1 fix lives in, so if it ever
+            # stops shipping the build must fail loudly. The other four staged binaries are each
+            # covered by their own mapping above plus their own Binaries entry, so nothing is
+            # unguarded by this choice.
+            #
+            # HONEST SCOPE: version_common.rc is compiled into all 16 core-agent projects, but only
+            # the five above are staged from our build - the rest of core-agent still ships from the
+            # stock image and always has. Stamping therefore reaches five binaries, not sixteen.
+            # That is pre-existing and NOT a regression introduced by stamping; closing it means
+            # deciding to ship the other eleven, which is a scope change and an owner call, not
+            # something to smuggle in behind a version resource.
+            'src/version_common.rc' = 'msi-image/PFiles64/Qubes Tools/bin/qrexec-agent.exe'
         }
     }
 
