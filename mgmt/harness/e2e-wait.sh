@@ -349,3 +349,49 @@ w_halt(){ # $1=vm $2=deadline $3=label $4=logfn
     sleep 10
   done
 }
+
+# ---------------------------------------------------------------------------------------------
+# GUEST PROBES. Use these; do not hand-roll them. Each exists because hand-rolling it produced a
+# FALSE result on 2026-09-09, in three separate tests, none of which were product defects.
+
+# g_probe <vm> <KEY> <powershell> [timeout] -> the value after KEY=, or empty
+#
+# `qtest run` output carries the cmd.exe banner and prompt, so a probe that greps the raw capture
+# compares against "Microsoft Windows [Version ...]" - one such check FAILED on noise and another
+# PASSED on it, in the same run. And nested quoting through `qtest run` mangles PowerShell silently:
+# a config write became `-Value binds+=( ... )` unquoted and died, reported as "<no output>".
+# So: the script goes in base64 -EncodedCommand (no quoting to survive), it must Write-Host "KEY=…",
+# and only a line matching ^KEY= is read.
+g_probe(){ # $1=vm $2=key $3=ps $4=timeout
+  local vm=$1 key=$2 ps=$3 to=${4:-120} b64
+  b64=$(python3 -c "import sys,base64;print(base64.b64encode(sys.argv[1].encode('utf-16-le')).decode())" "$ps") || return 1
+  QTEST_VM=$vm timeout -k 5 "$to" ./tools/qtest run "powershell -NoProfile -EncodedCommand $b64" 2>/dev/null \
+    | tr -d '\r' | grep -aoE "^$key=.*" | head -1 | sed "s/^$key=//"
+}
+
+# g_boot_id <vm> -> LastBootUpTime, the identity of the CURRENT boot
+g_boot_id(){ g_probe "$1" BOOT 'Write-Host ("BOOT=" + (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString("o"))'; }
+
+# g_reboot_proven <vm> [label] -> 0 only if the guest DEMONSTRABLY rebooted
+#
+# `qtest shutdown` is ASYNCHRONOUS. A test that issued it and then polled for "is the guest up"
+# declared success 34 seconds later and ran every post-reboot assertion against the STILL-RUNNING
+# pre-reboot guest - including an assertion that PASSED by re-reading a file written 30 seconds
+# earlier. Assuming a reboot is how a test reports green for something it never exercised.
+# This requires: a boot identity BEFORE, the guest OBSERVED Halted, and a DIFFERENT boot identity
+# after. Any of those missing is a failure, not a retry.
+g_reboot_proven(){ # $1=vm $2=label
+  local vm=$1 label=${2:-reboot} before after i st
+  before=$(g_boot_id "$vm"); [ -n "$before" ] || { echo "$label: no boot id BEFORE" >&2; return 1; }
+  QTEST_VM=$vm timeout -k 5 90 ./tools/qtest shutdown >/dev/null 2>&1
+  for i in $(seq 1 40); do [ "$(w_state "$vm")" = Halted ] && break; sleep 10; done
+  st=$(w_state "$vm")
+  [ "$st" = Halted ] || { echo "$label: never reached Halted (state=$st) - it did not reboot" >&2; return 1; }
+  qvm-start "$vm" >/dev/null 2>&1
+  for i in $(seq 1 60); do w_alive "$vm" && break; sleep 10; done
+  w_alive "$vm" || { echo "$label: no qrexec within 10 min of start - TERMINAL" >&2; return 1; }
+  after=$(g_boot_id "$vm"); [ -n "$after" ] || { echo "$label: no boot id AFTER" >&2; return 1; }
+  [ "$after" != "$before" ] || { echo "$label: boot id UNCHANGED ($after) - it did not reboot" >&2; return 1; }
+  echo "$before -> $after"
+  return 0
+}

@@ -68,6 +68,31 @@ def l1_no_double_background() -> None:
                         "nohup ... & backgrounds a runner the caller cannot wait on")
 
 
+# --------------------------------------------------------------------------- L2b
+def l2b_reboot_must_be_proven() -> None:
+    """A harness that reboots a guest must PROVE the reboot happened, not assume it.
+
+    `qtest shutdown` is asynchronous. On 2026-09-09 a test issued it, polled "is the guest up",
+    declared success 34 seconds later, and ran every post-reboot assertion against the still-running
+    pre-reboot guest - one of which PASSED by re-reading a file written 30 seconds earlier. The only
+    honest evidence is a boot identity that CHANGED (Win32_OperatingSystem.LastBootUpTime), which is
+    what mgmt/harness/e2e-wait.sh's g_reboot_proven does. Use it."""
+    for f in HARNESS:
+        txt = f.read_text(errors="replace")
+        lines = [ln for ln in txt.splitlines()
+                 if ln.lstrip() and not ln.lstrip().startswith("#")]
+        body = "\n".join(lines)
+        if "qtest shutdown" not in body:
+            continue
+        if "qvm-start" not in body:
+            continue                                   # shuts down but never brings it back
+        if "g_reboot_proven" in body or "LastBootUpTime" in body:
+            continue                                   # the boot identity is checked
+        finding("L2b-unproven-reboot", f.name,
+                "reboots a guest (qtest shutdown + qvm-start) without checking the boot identity "
+                "changed - use g_reboot_proven from e2e-wait.sh")
+
+
 # --------------------------------------------------------------------------- L2
 def l2_vmlock_required() -> None:
     """RULE 15. Any harness that drives a guest must take the per-VM lock, or two of them can run
@@ -288,6 +313,7 @@ def main() -> int:
 
     l1_no_double_background()
     l2_vmlock_required()
+    l2b_reboot_must_be_proven()
     l3_no_nested_quote_powershell()
     l4_every_check_can_fail()
     l5_injector_string_collision()
