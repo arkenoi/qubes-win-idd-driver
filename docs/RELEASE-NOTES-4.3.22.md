@@ -74,6 +74,17 @@ unreadable window fails, because a shutdown that could not be read is not a shut
 
 ## Known open
 
+- **The install's stage-1 reboot is not deterministic, and ~1 clean install in 14 strands the guest.**
+  Measured across 14 recorded clean installs: the guest-initiated reboot leaves the Xen domain
+  **halted** in 8 runs (the next start is a fresh domain, the PV bus binds, all fine) and
+  **warm-resets it in place** in 6. A warm reset usually still rebinds the PV bus — but in one of
+  those six it did not, and that guest was left booting to a desktop with **no qrexec and no window**:
+  from outside, indistinguishable from a hang. Stage 2's activation of the IddCx driver disables the
+  emulated VGA adapter, so the last means of seeing the guest goes away exactly when it is needed.
+  This is **not new in 4.3.22** — 4.3.21 shipped with the same behaviour and the same odds; it is
+  newly *measured*. If you hit it: the resume task is still armed, so shutting the qube down and
+  starting it again resumes the install. Root-causing the halt-vs-warm-reset split, and deferring IDD
+  activation to a boot where qrexec is already up, are both under active investigation.
 - **Only 5 of 16 core-agent binaries ship from our build.** The rest still come from the stock image
   and always have, so stamping reaches five of them. Pre-existing, not a regression; closing it means
   deciding to ship eleven more binaries, which is a scope change rather than a packaging detail.
