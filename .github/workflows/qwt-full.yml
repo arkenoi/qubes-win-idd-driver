@@ -235,8 +235,19 @@ jobs:
             if (-not $wiring.ContainsKey($b)) { throw "UNKNOWN_VERSION_PLUMBING: shipped binary $b has no stamping row - find how it stamps its VERSIONINFO and add it; do not exempt it" }
             $vf = $wiring[$b][0]
             if (-not (Test-Path -LiteralPath $vf -PathType Leaf)) { throw "UNKNOWN_VERSION_PLUMBING: $b names version file $vf, which does not exist" }
-            Copy-Item -LiteralPath "$ws\agent\version" -Destination $vf -Force
-            Write-Host "version wired: $b <- $vf ($($wiring[$b][1]))"
+            # A binary whose version file IS agent/version needs no copy - and Copy-Item refuses a
+            # self-copy ("Cannot overwrite the item ... with itself"), which failed the first run of
+            # this step. Compare RESOLVED paths, not the strings: $vf is built by string
+            # concatenation from $ws while the source is a separate literal, so they can name one
+            # file without being equal as text.
+            $srcVer = (Resolve-Path -LiteralPath "$ws\agent\version").ProviderPath
+            $dstVer = (Resolve-Path -LiteralPath $vf).ProviderPath
+            if ($srcVer -eq $dstVer) {
+              Write-Host "version wired: $b <- $vf (IS agent/version - no copy needed)"
+            } else {
+              Copy-Item -LiteralPath $srcVer -Destination $dstVer -Force
+              Write-Host "version wired: $b <- $vf ($($wiring[$b][1]))"
+            }
           }
           # qubesdb-cmd.exe SHIPS with no VERSIONINFO at all: upstream's qubesdb-cmd.vcxproj (v4.3.1)
           # has no ResourceCompile item, although a version.rc sits next to it unreferenced (the

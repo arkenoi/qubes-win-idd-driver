@@ -18,6 +18,8 @@ on:
     paths:
       - 'guest/**'
       - 'packaging/**'
+      - 'tools/**'
+      - 'rpc/**'
       - '.github/workflows/test.yml'
   pull_request:
   workflow_dispatch:
@@ -92,22 +94,29 @@ jobs:
           exit 0   # the non-zero rc above is the PASS condition; do not leak it as the step's status
 
       # ---------------------------------------------------------------- 3. PowerShell parse
+      # This step used to inline its own parse loop over guest/ + packaging/ only. It now calls the
+      # same checker the pre-commit hook runs, so local and CI cannot drift apart, and it covers the
+      # whole repo (tools/, rpc/, mgmt/ were never parsed by anything before).
       - name: PowerShell - parse every shipped script
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/ps-parse-check.ps1
+
+      # PARSING WITH PowerShell 7 IS A FALSE PASS ON ITS OWN, and the step above has always done
+      # exactly that (shell: pwsh). 7 ACCEPTS SYNTAX 5.1 REJECTS - a ternary, ??, ??=, a && / ||
+      # pipeline chain - and the guests run Windows PowerShell 5.1: every invocation in this repo is
+      # `powershell`/`powershell.exe`, never pwsh. So a script using any of those parses green here
+      # and is a SYNTAX ERROR where it actually runs. PSUseCompatibleSyntax knows each version's
+      # grammar instead of inferring it from whichever parser happens to be present.
+      - name: PowerShell - syntax must be valid in Windows PowerShell 5.1, not just 7
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $files = Get-ChildItem guest, packaging -Recurse -Filter *.ps1 -EA SilentlyContinue
-          $bad = 0
-          foreach ($f in $files) {
-            $errors = $null
-            [void][System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors)
-            if (@($errors).Count) {
-              $bad++
-              Write-Host "::error file=$($f.FullName)::$(@($errors).Count) parse error(s): $($errors[0].Message)"
-            }
+          if (-not (Get-Module -ListAvailable -Name PSScriptAnalyzer)) {
+            Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -AcceptLicense
           }
-          Write-Host "::notice title=powershell parse::$($files.Count) scripts, $bad with errors"
-          if ($bad) { throw "$bad script(s) do not parse" }
+          # The checker exits 2 when the analyzer is unavailable - "did not run", never a pass.
+          pwsh -NoProfile -File tools/ps-compat-check.ps1
+          if ($LASTEXITCODE -ne 0) { throw "5.1 compatibility check failed (exit $LASTEXITCODE)" }
 
       # ---------------------------------------------------------------- 4. cheap invariants
       - name: Invariants that are expensive to get wrong
