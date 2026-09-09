@@ -213,7 +213,7 @@ jobs:
           $depsShipped = @('libxenvchan.dll','libvchan.dll','windows-utils.dll','qubesdb-client.dll','qubesdb-cmd.exe')
           $coreAgentProjects = @(
             'qrexec-wrapper', 'qrexec-agent', 'qrexec-client-vm',
-            'advertise-tools', 'autologon', 'relocate-dir',
+            'advertise-tools', 'autologon', 'relocate-dir', 'bind-dirs',
             'qubes-rpc-services\clipboard-copy', 'qubes-rpc-services\clipboard-paste',
             'qubes-rpc-services\file-receiver',  'qubes-rpc-services\file-sender',
             'qubes-rpc-services\get-image-rgba', 'qubes-rpc-services\open-in-vm',
@@ -526,7 +526,7 @@ jobs:
           # against the pinned installer sources 2026-08-28.
           $projects = @(
             'qrexec-wrapper', 'qrexec-agent', 'qrexec-client-vm',
-            'advertise-tools', 'autologon', 'relocate-dir',
+            'advertise-tools', 'autologon', 'relocate-dir', 'bind-dirs',
             'qubes-rpc-services\clipboard-copy', 'qubes-rpc-services\clipboard-paste',
             'qubes-rpc-services\file-receiver',  'qubes-rpc-services\file-sender',
             'qubes-rpc-services\get-image-rgba', 'qubes-rpc-services\open-in-vm',
@@ -540,8 +540,10 @@ jobs:
             $name = Split-Path $proj -Leaf
             $vcx = "$ws\core-agent\vs2022\$proj\$name.vcxproj"
             if (-not (Test-Path $vcx)) { throw "core-agent project not found: $vcx" }
-            # relocate-dir is the only project here that needs the WDK's km headers, so it is the
-            # only one pinned to the version that owns them; everything else keeps the default.
+            # relocate-dir and bind-dirs (a second NATIVE BootExecute image sharing relocate-dir's
+            # io.c - see docs/BIND-DIRS.md) are the only projects here that need the WDK's km
+            # headers, so they are the only ones pinned to the version that owns them; everything
+            # else keeps the default.
             #
             # PINNING THE VERSION IS NOT ENOUGH. Measured 2026-09-08: with
             # WindowsTargetPlatformVersion=10.0.26100.0 and ntifs.h confirmed at
@@ -553,7 +555,7 @@ jobs:
             # evaluation the way an -p:IncludePath override would.
             $extra = @()
             $savedCL = $env:CL; $savedLIB = $env:LIB
-            if ($name -eq 'relocate-dir') {
+            if ($name -eq 'relocate-dir' -or $name -eq 'bind-dirs') {
               $extra += "-p:WindowsTargetPlatformVersion=$env:WDK_KM_VERSION"
               $kmInc = Split-Path $ntifs.FullName -Parent
               # FIND ntdllp.lib, do not assume where it lives. Assuming Lib\<ver>\km\x64 was wrong
@@ -563,13 +565,13 @@ jobs:
               $ntdllp = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits" -Recurse -Filter ntdllp.lib -ErrorAction SilentlyContinue |
                         Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1
               if (-not $ntdllp) {
-                throw "ntdllp.lib not found anywhere under Windows Kits (x64) - relocate-dir cannot link"
+                throw "ntdllp.lib not found anywhere under Windows Kits (x64) - $name cannot link"
               }
               $kmLib = $ntdllp.Directory.FullName
               $env:CL  = "/I`"$kmInc`""
               $env:LIB = "$kmLib;$env:LIB"
-              Write-Host "relocate-dir: CL=$env:CL"
-              Write-Host "relocate-dir: ntdllp.lib at $($ntdllp.FullName)"
+              Write-Host "${name}: CL=$env:CL"
+              Write-Host "${name}: ntdllp.lib at $($ntdllp.FullName)"
             }
             # -p:QwtSetVersionScript names the repo's stamper DIRECTLY, so this build does not
             # depend on the builderv2 shadow copy at all (qwt-version.props: an explicit script
@@ -625,10 +627,10 @@ jobs:
           $toSign += @(Get-ChildItem helper-bins -Filter *.exe)
           $toSign += @(Get-ChildItem core-agent-bins -Filter *.exe)
           $toSign += @(Get-ChildItem deps-bins\* -Include *.exe, *.dll)
-          # 2 gui-agent + 3 helpers (wgcbroker, notifhost, etwproxy) + 15 core-agent + 5 deps:
+          # 2 gui-agent + 3 helpers (wgcbroker, notifhost, etwproxy) + 16 core-agent + 5 deps:
           # fewer means a bins dir went missing or a copy loop silently shrank - fail here,
           # not with an unsigned binary shipping.
-          if ($toSign.Count -lt 25) { throw "expected at least 25 binaries to sign, found $($toSign.Count)" }
+          if ($toSign.Count -lt 26) { throw "expected at least 26 binaries to sign, found $($toSign.Count)" }
           foreach ($f in $toSign) {
             & $signtool.FullName sign /fd sha256 /f cert.pfx /p $env:PFX_PASS $f.FullName
             if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($f.Name)" }

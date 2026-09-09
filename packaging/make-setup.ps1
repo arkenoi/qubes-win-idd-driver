@@ -162,6 +162,10 @@ Copy-Item (Need (Join-Path $RepoRoot 'guest\set-autologon.ps1') 'autologon armin
 # guest - the exact 4.3.18 de-slice-broker inert-clean-install gap, in script form; the
 # ours-wins guard (packaging/ours-wins.psd1) fails CI if this line and that entry disagree.
 Copy-Item (Need (Join-Path $RepoRoot 'guest\provision-etwproxy-account.ps1') 'ETW proxy account provisioning') $OutDir -Force
+# bind-dirs (docs/BIND-DIRS.md): README for Q:\config\qubes-bind-dirs.d (not a .conf, so never
+# parsed) and the status instrument (reads the result record, verifies each junction).
+Copy-Item (Need (Join-Path $RepoRoot 'guest\bind-dirs-README.txt') 'bind-dirs config README') $OutDir -Force
+Copy-Item (Need (Join-Path $RepoRoot 'guest\bind-dirs-status.ps1') 'bind-dirs status') $OutDir -Force
 # Reboot audit: on an AppVM the System log dies with every restart, taking Event 1074 (who asked
 # for it) with it - so an unattended reboot cannot be told apart from a dom0-requested one after
 # the fact. Event-triggered tasks copy those records onto the private volume as they are written.
@@ -215,13 +219,20 @@ if ($CoreAgentBins -and (Test-Path -LiteralPath $CoreAgentBins)) {
     if (-not (Test-Path -LiteralPath (Join-Path $CoreAgentBins 'qrexec-wrapper.exe'))) {
         throw '-CoreAgentBins given but qrexec-wrapper.exe is not in it - that binary carries the drain-race fix and is the reason this channel exists'
     }
+    # bind-dirs.exe (docs/BIND-DIRS.md): the BootExecute image for persistent directories. Not in
+    # the MSI's wxs, so this channel is the ONLY way it reaches a guest - REQUIRED, like the
+    # user-session helpers below: a package without it registers nothing and the feature is
+    # silently absent on every install.
+    if (-not (Test-Path -LiteralPath (Join-Path $CoreAgentBins 'bind-dirs.exe'))) {
+        throw '-CoreAgentBins given but bind-dirs.exe is not in it - persistent directories (bind-dirs) would ship NOWHERE'
+    }
     # ONLY the wrapper. qrexec-agent.exe and qrexec-client-vm.exe build from sources that are
     # unmodified against the 4.2.2 base, so shipping our copies would be a functionally identical
     # swap of - in qrexec-agent's case - the service dom0 talks to, where a bad swap costs the
     # guest's manageability outright. No benefit, real risk: leave them stock until their source
     # actually diverges (the guard's CompiledSources check fails the build the moment it does).
     $binStaged = @()
-    foreach ($b in 'qrexec-wrapper.exe') {
+    foreach ($b in 'qrexec-wrapper.exe', 'bind-dirs.exe') {
         $p = Join-Path $CoreAgentBins $b
         if (Test-Path -LiteralPath $p) {
             Copy-Item -LiteralPath $p (Join-Path $OutDir 'bin') -Force
@@ -315,7 +326,9 @@ foreach ($u in 'install-updater-agent.ps1', 'qubes-windows-update.ps1', 'qubes-u
 #   * qwt-state.ps1 reads the precondition through the same signals the installer branches on. It
 #     ships so the state can be read without a working push path, e.g. after a failed install.
 foreach ($g in 'pvnic-selfprime.ps1', 'qubesdb-read.ps1', 'health-check.ps1',
-               'reboot-dialog-watch.ps1', 'qwt-state.ps1') {
+               'reboot-dialog-watch.ps1', 'qwt-state.ps1',
+               'qwt-notify-error.ps1') {   # secondary error route helper (docs/DESIGN-error-notify.md);
+                                           # dot-sourced by activate-idd.ps1 / deactivate-idd.ps1 from $PSScriptRoot
     Copy-Item (Need (Join-Path $RepoRoot "guest\$g") "guest payload ($g)") $OutDir -Force
 }
 

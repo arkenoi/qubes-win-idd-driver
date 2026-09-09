@@ -22,6 +22,15 @@ function Log($m,$lvl='INFO'){ $line=('{0} [{1}] {2}' -f (Get-Date -Format 'HH:mm
 $result = [ordered]@{ ok=$false; idd=$null; reboot_needed=$false; error=$null }
 $script:GuiQuiesced = $false
 
+# Secondary error route (docs/DESIGN-error-notify.md): ACTION-severity failures below are ALSO sent
+# to dom0 as a notification, in addition to the Log line - never instead of it. The helper ships
+# next to this script; if it is absent this stays a no-op (fail-open), and Send-QwtError itself
+# never throws. Gated by service.notify-errors (default OFF); rides qrexec, so it delivers nothing
+# on a guest whose qrexec is down.
+$script:QwtNotifyLog = { param($m) Log "NOTIFYERR $m" 'WARN' }
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'qwt-notify-error.ps1')) { . (Join-Path $PSScriptRoot 'qwt-notify-error.ps1') }
+else { function Send-QwtError { return 'unavailable:helper-absent' } }
+
 # Bring the gui-agent back when THIS run is not rebooting the guest (-NoReboot, or a failure before
 # the reboot line). Without it a quiesced run that exits maps ZERO windows in dom0 - no agent, no
 # watchdog to respawn one - until somebody reboots by hand. On the rebooting path the untouched
@@ -303,6 +312,7 @@ public static class QiddProbe {
         if ($LASTEXITCODE -ne 0) {
             $result['shutdown_rc'] = $LASTEXITCODE
             Log "shutdown.exe /r was REFUSED (rc '$LASTEXITCODE') - the guest is NOT rebooting on its own; the IDD is activated but will not be primary until this qube is rebooted BY HAND" 'FATAL'
+            [void](Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Severity ACTION -Summary 'the reboot after IDD activation was refused by Windows; the display driver will not be primary until this qube is rebooted by hand' -LogPath $log)
             # Same situation as -NoReboot: this run is not rebooting, so the agent it quiesced must
             # come back or the qube maps no windows until that manual reboot.
             Restore-Gui
@@ -316,6 +326,8 @@ public static class QiddProbe {
 } catch {
     $result.error = "$($_.Exception.Message)"
     Log "IDD ACTIVATION FAILED: $($result.error)" 'ERROR'
+    # Templated text only: the exception message is in the log, not in the notification.
+    [void](Send-QwtError -Component 'activate-idd' -Id 'activation-failed' -Severity ACTION -Summary 'IDD display driver activation failed; the guest keeps its previous display configuration' -LogPath $log)
     Restore-Gui
     Emit 1
 }

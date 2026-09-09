@@ -2870,6 +2870,74 @@ function Invoke-Stage2 {
         $script:Result.detail.qrexec_bins = 'not-in-payload'
     }
 
+    # --- bind-dirs: persistent directories on the private volume (BootExecute) -----------
+    # bind-dirs.exe is a NATIVE image (ntdll only, like relocate-dir.exe) that Session Manager
+    # runs from %SystemRoot%\System32 at EVERY boot, after relocate-dir.exe and before any
+    # service, replacing each configured C: directory with a junction onto Q:\bind-dirs\<path>
+    # (the Windows qubes-bind-dirs; docs/BIND-DIRS.md). It rides in the payload bin\ because the
+    # MSI's file set is upstream's .wxs; BootExecute images MUST live in System32, so it is
+    # copied there rather than left under Qubes Tools\bin. With no *.conf it is a no-op that
+    # writes Q:\Qubes Logs\bind-dirs-result.txt (result=ok reason=no-config) - so a registered
+    # guest with NO record has a broken boot step, which health-check.ps1 asserts.
+    $bdSrc = Join-Path $Root 'bin\bind-dirs.exe'
+    if (Test-Path -LiteralPath $bdSrc) {
+        try {
+            $bdDst = Join-Path $env:SystemRoot 'System32\bind-dirs.exe'
+            try {
+                Copy-Item -LiteralPath $bdSrc -Destination $bdDst -Force
+            } catch {
+                # Never running at this point (BootExecute only), but stay symmetric with the bin
+                # overlay: move the old image aside and retry.
+                Move-Item -LiteralPath $bdDst -Destination "$bdDst.qwt-prev" -Force
+                Copy-Item -LiteralPath $bdSrc -Destination $bdDst -Force
+            }
+            $smKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
+            $be = @((Get-ItemProperty -LiteralPath $smKey -Name BootExecute -ErrorAction Stop).BootExecute)
+            if ($be.Count -eq 0) { throw 'BootExecute is empty - refusing to guess at its contents' }
+            $ours = @($be | Where-Object { $_ -match '(?i)^bind-dirs\.exe' })
+            if ($ours.Count -eq 0) {
+                # Right after relocate-dir's entry when present (C:\Users must already be a link
+                # when bind-dirs evaluates ancestors), else at the end - never before autochk.
+                # relocate-dir removes only ITS OWN entry when it is done (IsOwnBootExecuteEntry),
+                # so this one survives that first boot.
+                $new = @()
+                $placed = $false
+                foreach ($e in $be) {
+                    $new += $e
+                    if (-not $placed -and $e -match '(?i)relocate-dir') {
+                        $new += 'bind-dirs.exe'
+                        $placed = $true
+                    }
+                }
+                if (-not $placed) { $new += 'bind-dirs.exe' }
+                Set-ItemProperty -LiteralPath $smKey -Name BootExecute -Value ([string[]]$new) -Type MultiString -ErrorAction Stop
+                Write-Log ('bind-dirs: registered in BootExecute (' + ($new -join ' | ') + ')')
+            } else {
+                Write-Log 'bind-dirs: BootExecute entry already present'
+            }
+            # The user config directory (Linux: /rw/config/qubes-bind-dirs.d), with a README
+            # that is NOT a .conf and so is never parsed. Only when the private volume is there.
+            $bdCfg = 'Q:\config\qubes-bind-dirs.d'
+            if (Test-Path -LiteralPath 'Q:\') {
+                New-Item -ItemType Directory -Force -Path $bdCfg | Out-Null
+                $bdReadme = Join-Path $Root 'bind-dirs-README.txt'
+                if (Test-Path -LiteralPath $bdReadme) {
+                    Copy-Item -LiteralPath $bdReadme -Destination (Join-Path $bdCfg 'README.txt') -Force
+                }
+                $script:Result.detail.bind_dirs = 'installed'
+            } else {
+                Write-Log 'bind-dirs: Q:\ not present - config dir not created; bind-dirs.exe will report private-volume at boot' 'WARN'
+                $script:Result.detail.bind_dirs = 'installed-no-private-volume'
+            }
+        } catch {
+            Write-Log "bind-dirs: install FAILED: $($_.Exception.Message)" 'WARN'
+            $script:Result.detail.bind_dirs = "error: $($_.Exception.Message)"
+        }
+    } else {
+        Write-Log 'no bin\bind-dirs.exe in payload - persistent directories (bind-dirs) NOT installed' 'WARN'
+        $script:Result.detail.bind_dirs = 'not-in-payload'
+    }
+
     # --- ETW-proxy least-privilege account (notification bridge, ETW tier) --------------
     # Provisions the dedicated qubes-etwproxy account the SYSTEM gui-agent will use to
     # launch `etwproxy.exe` (the GUI-DLL-free console proxy, 2026-09-05 split;

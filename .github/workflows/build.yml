@@ -513,6 +513,33 @@ jobs:
           & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
           if ($LASTEXITCODE -ne 0) { throw "slicepaint_test clean rebuild failed" }
 
+      - name: notifyerr_test - secondary error route policy core (clean + 5 defect proofs)
+        shell: pwsh
+        run: |
+          # agent/gui-agent/notifyerr.h + notifyerr.c through their plain-C test layer
+          # (NOTIFYERR_TEST_LAYER, set by the vcxproj): severity threshold, per-boot dedupe,
+          # per-boot cap, redaction, fail-open. Clean build MUST pass; each defect build MUST fail
+          # (docs/DESIGN-error-notify.md sec 11; the same suite runs with gcc on the dev qube via
+          # tools/tests/notifyerr-selftest.sh).
+          $proj = 'agent\vs2022\notifyerr-test\notifyerr-test.vcxproj'
+          $exe  = 'agent\vs2022\notifyerr-test\x64\Release\notifyerr_test.exe'
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
+          if ($LASTEXITCODE -ne 0) { throw "notifyerr_test msbuild failed" }
+          $env:NOTIFYERR_TEST_DIR = $env:RUNNER_TEMP
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw "notifyerr_test suite FAILED on the clean build" }
+          foreach ($d in 'SEVERITY', 'RATELIMIT', 'CAP', 'REDACT', 'FAILOPEN') {
+            & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
+                /t:Rebuild "/p:NotifyErrDefect=NOTIFYERR_DEFECT_$d"
+            if ($LASTEXITCODE -ne 0) { throw "notifyerr_test defect $d build failed to compile" }
+            & $exe
+            if ($LASTEXITCODE -eq 0) { throw "defect-reintroduction proof FAILED: suite passed without the $d guard" }
+            Write-Host "defect proof OK: suite fails without the $d guard"
+          }
+          # leave a clean binary behind
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
+          if ($LASTEXITCODE -ne 0) { throw "notifyerr_test clean rebuild failed" }
+
       - name: Build wgcbroker
         shell: pwsh
         run: |

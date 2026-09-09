@@ -20,6 +20,7 @@ on:
       - 'packaging/**'
       - 'tools/**'
       - 'rpc/**'
+      - 'core-agent/**'
       - '.github/workflows/test.yml'
   pull_request:
   workflow_dispatch:
@@ -158,3 +159,20 @@ jobs:
                 'without it the installer cannot seed PV NIC priming'
 
           if ($bad) { throw "$bad invariant(s) violated" }
+
+  bind-dirs-offline:
+    # The bind-dirs core (core-agent/src/bind-dirs/bind-dirs.c, docs/BIND-DIRS.md) is portable C
+    # built with gcc against an in-memory fake FS: config grammar, path refusals, the
+    # seed/junction state machine with failure injection. failproof.sh then re-introduces eight
+    # defects one at a time and requires the suite to go red for each - a suite that has not been
+    # seen to fail is not evidence (CLAUDE.md). Linux runner: this is the one job here that needs
+    # gcc, not MSVC, and the core must stay buildable on both.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: bind-dirs core - offline tests
+        run: tools/tests/bind-dirs/run.sh
+      - name: bind-dirs core - the suite must fail on re-introduced defects
+        run: tools/tests/bind-dirs/failproof.sh

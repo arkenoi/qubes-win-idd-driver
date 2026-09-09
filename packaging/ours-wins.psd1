@@ -147,6 +147,11 @@
         # clean install (silently: the tier fail-opens to the DB rung), the anti-inert case
         # this guard exists for.
         @{ Package = 'bin/etwproxy.exe';           NoStock = $true;             Required = $true }
+        # bind-dirs.exe (docs/BIND-DIRS.md): NATIVE BootExecute image for persistent directories
+        # (the Windows qubes-bind-dirs). Built by the core-agent step, staged by make-setup
+        # -CoreAgentBins into bin\, copied to System32 + registered in BootExecute by the
+        # installer. Not in upstream's wxs, so this entry is the only proof it shipped.
+        @{ Package = 'bin/bind-dirs.exe';          NoStock = $true;             Required = $true }
 
         # -- inside the built MSI (stage-qwt-repo.ps1 substitution table) -----------------
         # Our gui-agent fork - the original substitution the table replicates.
@@ -237,6 +242,11 @@
             # on 2026-09-08 carried it at Windows\System32\relocate-dir.exe, and BootExecute
             # names it there ('autocheck autochk * relocate-dir.exe C:\Users Q:\Users').
             'src/relocate-dir'     = 'msi-image/System64/relocate-dir.exe'
+            # bind-dirs.exe compiles src/bind-dirs PLUS src/relocate-dir/io.c (shared by reference,
+            # not copied). DirBinaries is 1:1, so io.c stays mapped to relocate-dir.exe above (the
+            # same representative-binary reasoning as version_common.rc below); a change under
+            # src/bind-dirs is covered here. Staged path = the setup tree's bin\, not the MSI image.
+            'src/bind-dirs'        = 'bin/bind-dirs.exe'
             # Beside qrexec-agent.exe: qrexec-agent launches it as the bare command
             # 'advertise-tools.exe 1', and CreateProcess searches the calling process's own
             # directory first - which is the only way that launch resolves today.

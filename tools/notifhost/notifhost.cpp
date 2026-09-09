@@ -113,6 +113,8 @@
 #include "qtb_shared.h"      // shared with etwproxy.exe: log/BLog, wire contract, CsGuard,
                              // EtwOpen/EtwBufferCb/EtwProcessTraceThread (pure Win32 only -
                              // NOTHING GUI-adjacent may move into that header)
+#include "../../agent/gui-agent/notifyerr.h"   // secondary error route: policy core shared with
+                                                // the agent (wgcbroker_ipc.h include convention)
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -2323,6 +2325,102 @@ static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body)
     return ok ? 0 : 4;
 }
 
+// --- secondary error route: this helper's OWN faults (notifyerr.h) ------------------------
+//
+// The bridge has two FATAL exits that recur for the life of the guest (the agent relaunches it
+// about once a minute and it dies the same way each time): listener access DENIED for this user,
+// and listener init throwing. Each is logged here in bridge.log and as QGANOTIFBRIDGEEXIT in the
+// agent log, and nothing else ever tells a human that the bridge they turned on is doing nothing.
+// So each is also reported through the same one-shot `--notify-file` path the agent uses, with
+// the SAME per-boot marker files (state dir shared with notifyerr.c), so the once-per-boot rule
+// holds across the relaunches and across the two binaries.
+//
+// Gate: --notify-errors N on the command line, resolved by the agent (the single reader of the
+// service.notify-errors gate); absent = off. Fail-open: nothing here can affect the exit path
+// that calls it; every failure is one BLog line. A FRESH instance of this exe is spawned for the
+// send rather than calling NotifyOnceMain in-process: the FATAL paths run before the bridge's
+// connection state exists, and a diagnostic must not borrow the state of the thing that failed.
+// SAME HONEST LIMIT as everywhere else: this rides qrexec-agent and delivers nothing without it.
+static int g_notifyErrorsGate = 0;
+
+static bool ReadSmallA(std::wstring const& path, std::string& out)
+{
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    char buf[256]; DWORD rd = 0;
+    BOOL ok = ReadFile(h, buf, sizeof(buf) - 1, &rd, nullptr);
+    CloseHandle(h);
+    if (!ok) return false;
+    out.assign(buf, rd);
+    return true;
+}
+static bool WriteSmallA(std::wstring const& path, const void* data, DWORD len)
+{
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    DWORD wr = 0;
+    BOOL ok = WriteFile(h, data, len, &wr, nullptr);
+    CloseHandle(h);
+    return ok && wr == len;
+}
+
+static void ReportErrorSelf(const char* id, const char* summary)
+{
+    if (!g_notifyErrorsGate) return;
+    char text[QERR_MAX_TEXT + 256];
+    if (!QerrComposeNotifyText(text, sizeof(text), "notifhost", id, summary,
+                               "bridge.log in ProgramData\\qubes-toast-bridge")) return;
+
+    wchar_t pd[MAX_PATH];
+    if (!GetEnvironmentVariableW(L"ProgramData", pd, RTL_NUMBER_OF(pd))) wcscpy_s(pd, L"C:\\ProgramData");
+    std::wstring qdir = std::wstring(pd) + L"\\Qubes";
+    std::wstring dir = qdir + L"\\notify-errors";
+    CreateDirectoryW(qdir.c_str(), nullptr);
+    CreateDirectoryW(dir.c_str(), nullptr);
+
+    wchar_t wid[QERR_MAX_ID + 1] = { 0 };
+    MultiByteToWideChar(CP_UTF8, 0, id, -1, wid, (int)RTL_NUMBER_OF(wid));
+    std::wstring marker = dir + L"\\notifhost." + wid;
+    std::wstring countPath = dir + L"\\.count";
+
+    FILETIME ft; GetSystemTimeAsFileTime(&ft);
+    ULARGE_INTEGER u; u.LowPart = ft.dwLowDateTime; u.HighPart = ft.dwHighDateTime;
+    long long now = (long long)(u.QuadPart / 10000000ULL) - 11644473600LL - (long long)(GetTickCount64() / 1000ULL);
+
+    std::string s; long long mb = 0, cb = 0; unsigned cnt = 0, newCnt = 0;
+    int mp = ReadSmallA(marker, s) && QerrParseMarker(s.c_str(), &mb);
+    int cp = ReadSmallA(countPath, s) && QerrParseCount(s.c_str(), &cb, &cnt);
+    QerrDecision d = QerrDecide(QERR_SEV_ACTION, "notifhost", id, text, mp, mb, cp, cb, cnt, now, &newCnt);
+    if (d != QERR_SEND) { BLog(L"NOTIFYERR notifhost.%S not sent: %S", id, QerrDecisionName(d)); return; }
+
+    char kv[64];
+    if (!QerrFormatMarker(kv, sizeof(kv), now) || !WriteSmallA(marker, kv, (DWORD)strlen(kv)) ||
+        !QerrFormatCount(kv, sizeof(kv), now, newCnt) || !WriteSmallA(countPath, kv, (DWORD)strlen(kv)))
+    { BLog(L"NOTIFYERR state dir not writable - not sent (no once-per-boot record, so no send)"); return; }
+
+    // UTF-16LE + BOM, what ReadNotifyFile reads; a unique name per send (it is deleted after reading).
+    std::wstring file = dir + L"\\out-notifhost-" + std::to_wstring(GetTickCount64()) + L".txt";
+    std::wstring wtext; int n = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
+    if (n <= 1) return;
+    wtext.resize(n - 1);
+    MultiByteToWideChar(CP_UTF8, 0, text, -1, &wtext[0], n);
+    std::vector<BYTE> body; body.push_back(0xFF); body.push_back(0xFE);
+    body.insert(body.end(), (const BYTE*)wtext.data(), (const BYTE*)wtext.data() + wtext.size() * sizeof(wchar_t));
+    if (!WriteSmallA(file, body.data(), (DWORD)body.size())) { BLog(L"NOTIFYERR cannot write notify file - not sent"); return; }
+
+    wchar_t self[MAX_PATH] = { 0 };
+    GetModuleFileNameW(nullptr, self, RTL_NUMBER_OF(self));
+    wchar_t cmd[MAX_PATH * 2 + 64];
+    swprintf(cmd, RTL_NUMBER_OF(cmd), L"\"%s\" --notify-file \"%s\"", self, file.c_str());
+    STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
+    if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    { BLog(L"NOTIFYERR CreateProcess(self --notify-file) failed %lu - not sent", GetLastError()); return; }
+    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);   // fire and forget
+    BLog(L"NOTIFYERR notifhost.%S sent to dom0 (#%u this boot)", id, newCnt);
+}
+
 // --- bridge main --------------------------------------------------------------------------
 
 static int BridgeMain()
@@ -2357,8 +2455,21 @@ static int BridgeMain()
         listener = UserNotificationListener::Current();
         auto st = listener.RequestAccessAsync().get();
         if (st != UserNotificationListenerAccessStatus::Allowed)
-        { BLog(L"FATAL access=%d - window path preserved, exiting", (int)st); return 2; }
-    } catch (...) { BLog(L"FATAL listener init threw"); return 3; }
+        {
+            BLog(L"FATAL access=%d - window path preserved, exiting", (int)st);
+            ReportErrorSelf("listener-denied",
+                "the notification bridge cannot read toasts (notification access is denied for this "
+                "user), so bridged apps keep the plain window path; allow notification access in "
+                "Settings, or turn service.notify-bridge off");
+            return 2;
+        }
+    } catch (...) {
+        BLog(L"FATAL listener init threw");
+        ReportErrorSelf("listener-init",
+            "the notification bridge cannot start its toast listener, so bridged apps keep the "
+            "plain window path");
+        return 3;
+    }
 
     auto allow = ReadAllowlist();
     {
@@ -2835,6 +2946,7 @@ int wmain(int argc, wchar_t** argv)
             if (i + 1 < argc && argv[i + 1][0] != L'-') notifyBody = argv[++i];
         }
         else if (_wcsicmp(argv[i], L"--etw-proxy") == 0) etwproxy = true;
+        else if (_wcsicmp(argv[i], L"--notify-errors") == 0 && i + 1 < argc) g_notifyErrorsGate = (_wtoi(argv[++i]) != 0);
         else if (_wcsicmp(argv[i], L"--client-sid") == 0 && i + 1 < argc) i++;   // consumed by etwproxy.exe
     }
     if (etwproxy)

@@ -44,6 +44,13 @@ if (-not $Root) {
 $ErrorActionPreference = 'Stop'
 $log = 'C:\qwt-idd-deactivate.log'
 function Log($m,$lvl='INFO'){ $line=('{0} [{1}] {2}' -f (Get-Date -Format 'HH:mm:ss'),$lvl,$m); Write-Host $line; try{Add-Content -LiteralPath $log -Value $line}catch{} }
+
+# Secondary error route (docs/DESIGN-error-notify.md): the ACTION failure below is ALSO sent to dom0
+# as a notification, in addition to the Log line. Absent helper = no-op (fail-open); Send-QwtError
+# never throws. Gated by service.notify-errors (default OFF); rides qrexec.
+$script:QwtNotifyLog = { param($m) Log "NOTIFYERR $m" 'WARN' }
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'qwt-notify-error.ps1')) { . (Join-Path $PSScriptRoot 'qwt-notify-error.ps1') }
+else { function Send-QwtError { return 'unavailable:helper-absent' } }
 $result = [ordered]@{ ok=$false; no_topology_apply=$false; vga=$null; idd=$null; reboot_needed=$false; error=$null }
 
 function Emit($code){
@@ -142,6 +149,7 @@ try {
         if ($LASTEXITCODE -ne 0) {
             $result['shutdown_rc'] = $LASTEXITCODE
             Log "shutdown.exe /r was REFUSED (rc '$LASTEXITCODE') - the guest is NOT rebooting on its own; the device changes are made but take effect only at the next boot - reboot this qube from dom0 (qvm-shutdown --wait, then qvm-start)" 'FATAL'
+            [void](Send-QwtError -Component 'deactivate-idd' -Id 'reboot-refused' -Severity ACTION -Summary 'the reboot after IDD deactivation was refused by Windows; the display change takes effect only after this qube is rebooted by hand' -LogPath $log)
             $result.ok = $false
             $result.error = "reboot request refused by shutdown.exe (rc $LASTEXITCODE) - reboot this qube by hand for the VGA topology to be rebuilt"
             Emit 1

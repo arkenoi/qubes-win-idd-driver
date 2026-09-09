@@ -405,6 +405,40 @@ Check 'user_data_on_private' ($qVol.Count -ge 1 -and $qUsers -and $isLink -and $
        profiles_directory     = $(if ($profDir) { $profDir } else { '<unset>' })
        note = 'MoveUsers must REDIRECT C:\Users to the private image; a mere copy would leave profiles on root' }
 
+# --- 6a3. bind-dirs (persistent directories) ran at this boot and bound every entry ------
+# bind-dirs.exe runs from BootExecute at EVERY boot (docs/BIND-DIRS.md) and overwrites the
+# result record on the private volume even when there is nothing configured (reason=no-config).
+# So: not registered = the installer step did not run; registered but no record = the image
+# never ran (missing from System32, or died before writing); result != ok = a configured path
+# could not be bound (the record's entry= lines say which and why). Strict: all three fail.
+$bdBoot = @()
+try {
+    $bdBoot = @((Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name BootExecute -ErrorAction Stop).BootExecute)
+} catch {
+    $bdBoot = @()
+}
+$bdRegistered = (@($bdBoot | Where-Object { $_ -match '(?i)^bind-dirs\.exe' }).Count -ge 1)
+$bdImage = Test-Path -LiteralPath (Join-Path $env:SystemRoot 'System32\bind-dirs.exe')
+$bdRecord = 'Q:\Qubes Logs\bind-dirs-result.txt'
+$bdResult = 'absent'
+$bdReason = ''
+$bdFailedEntries = @()
+if (Test-Path -LiteralPath $bdRecord) {
+    foreach ($l in @(Get-Content -LiteralPath $bdRecord -ErrorAction SilentlyContinue)) {
+        if ($l -match '^result=(.*)$') { $bdResult = $Matches[1].Trim() }
+        if ($l -match '^reason=(.*)$') { $bdReason = $Matches[1].Trim() }
+        if ($l -match '^entry=(.+?) result=failed reason=(\S+)') { $bdFailedEntries += ($Matches[1] + ':' + $Matches[2]) }
+    }
+}
+Check 'bind_dirs_boot' ($bdRegistered -and $bdImage -and $bdResult -eq 'ok') `
+    @{ registered      = $bdRegistered
+       image_in_system32 = $bdImage
+       result          = $bdResult
+       reason          = $bdReason
+       failed_entries  = ($bdFailedEntries -join ',')
+       record          = $bdRecord
+       note = 'bind-dirs.exe must be in BootExecute, in System32, and its result record (rewritten every boot) must say ok; see Q:\Qubes Logs\bind-dirs.log' }
+
 # --- 6b1. PV DISK: the boot disk must be off emulated IDE ---------------------------
 # Added 2026-08-07 after discovering we shipped a package that dropped PvDriversDisk (which
 # STOCK QWT installs by default) on an unsourced "BSOD risk" claim, leaving every guest on

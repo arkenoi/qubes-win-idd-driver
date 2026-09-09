@@ -373,6 +373,14 @@ or a window inside the desktop window in non-seamless mode. Windows' secure desk
 shown to dom0 in any mode; a prompt drawn there would be one nobody could see or answer (that
 was the "unclosable black window").
 
+One thing is configured **inside the guest**, because it is about the guest's own file system:
+**persistent directories**. An AppVM's `C:` is restored from its template at every boot; list
+the directories that must survive in `Q:\config\qubes-bind-dirs.d\50_user.conf` — same syntax
+and same names as Linux Qubes' `qubes-bind-dirs`, with Windows paths — and they are copied to
+the private volume once and re-attached as junctions at every boot, before any service starts.
+See [docs/BIND-DIRS.md](docs/BIND-DIRS.md) for the syntax, the exact differences from the Linux
+feature and what it refuses.
+
 Two settings are required rather than optional, and the dom0 RPM applies them for you
 (`qwt-ng-prepare-qube <vm>` applies them to a qube created later): the `vmexec` feature, without
 which dom0's update commands arrive at `cmd.exe` as shell text and the run aborts, and a raised
