@@ -537,12 +537,33 @@ Get-ChildItem -LiteralPath $outFull -Recurse -File | Sort-Object FullName | ForE
     }
 }
 
+# MISSING DATA FAILS, AT BUILD TIME. Emitting a null build_rev would produce a package the verifier
+# can only accept in --legacy mode - i.e. one whose version gates are unprovable - and it would look
+# like a normal package while doing it. In CI the revision is mandatory; locally it is not, because a
+# local make-setup run is not a release.
+if ($env:GITHUB_ACTIONS -eq 'true' -and [string]::IsNullOrWhiteSpace($env:QWTNG_BUILD_REV)) {
+    throw ('QWTNG_BUILD_REV is unset in CI: the package would declare no build_rev and every ' +
+           'per-component version gate would be unprovable. Export it from the release-package ' +
+           'run number in this job (see packaging/version-stamp/README.md).')
+}
+
 $manifest = [ordered]@{
     package         = 'qwt-improved-setup'
     package_kind    = 'full-installer'
     package_version = $version
     description     = 'QWT-NG 4.3 full install for a clean Windows guest: the upstream QWT 4.2.2 WiX MSI rebuilt from source with our gui-agent, plus certs, VC++ runtime and a two-stage install script. Not an overlay.'
     targets_qwt_version = $baseQwt
+    # WHAT EVERY OURS BINARY IN THIS PACKAGE WAS STAMPED WITH (packaging/version-stamp).
+    # package_version alone cannot identify a package: it is <release>+agent.<agentsha>, so two
+    # builds from different driver-repo commits read IDENTICALLY when the agent sha did not move -
+    # which is exactly how a stale 4.3.21 asset directory nearly shipped on 2026-09-09. The pair
+    # below is what tools/verify-release-package.sh asserts each shipped PE's FILEVERSION against;
+    # without them it can only run in --legacy mode, where the version gates are unprovable by
+    # construction. build_rev must equal ci.run_number - the verifier fails
+    # BUILD_REV_RUN_NUMBER_MISMATCH otherwise, which is what catches a package stamped 0 because
+    # QWTNG_BUILD_REV was not plumbed into some job.
+    release_version = $version.Split('+')[0]
+    build_rev       = $env:QWTNG_BUILD_REV
     built_utc       = (Get-Date).ToUniversalTime().ToString('o')
     source = [ordered]@{
         driver_repo_commit         = $repoSha

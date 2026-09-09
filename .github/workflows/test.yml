@@ -32,7 +32,14 @@ jobs:
   test:
     runs-on: windows-2022
     steps:
+      # submodules: the .ps1 checkers walk the whole tree, and without the submodules CI examines
+      # 243 files where a local run sees 543 - so "local and CI cannot drift apart" would have been
+      # false by 300 files. Every SHIPPED guest script lives in the superproject, so this widens
+      # coverage rather than fixing a hole, but a checker whose scope silently differs from the one
+      # developers run is how a gap goes unnoticed.
       - uses: actions/checkout@v4
+        with:
+          submodules: true
 
       # ---------------------------------------------------------------- 1. relay selftest
       # The relay compiles with the in-box C# compiler exactly as it does on a guest, so CI builds
