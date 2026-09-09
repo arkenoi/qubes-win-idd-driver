@@ -154,9 +154,17 @@ git merge-base --is-ancestor "$BUILDSHA" HEAD 2>/dev/null \
 # Run on the FETCHED bytes, not on a directory someone named. Failure here is fatal: an unverified
 # package is exactly what shipped as 4.3.18 (broker missing, inert on every clean install, invisible
 # because the guest still rendered).
+# VERIFY THE PURE SETUP TREE, NOT THE ASSEMBLED ASSET DIRECTORY. assets/ is the tree PLUS the ISO
+# and RPM staged in for publishing, and MANIFEST.files legitimately does not list those - so
+# verifying assets/ fails MANIFEST_FILES with FILE_UNLISTED on our own staging. Measured on the
+# first real run of this script, 2026-09-09: the gate was right and the layout was wrong.
 say "verifying the fetched package"
 VOUT="$WORK/verify.log"
-if ! bash tools/verify-release-package.sh --tree "$WORK/assets" >"$VOUT" 2>&1; then
+# --commit is the BUILD commit, not HEAD. HEAD moves between the build and the cut (release notes,
+# a doc fix), and the verifier rightly refuses to assume they are the same - it failed exactly that
+# way here. Passing $BUILDSHA weakens nothing: it was proven equal to the run head above, from the
+# run's own metadata, before this point.
+if ! bash tools/verify-release-package.sh --tree "$WORK/qwt-improved-setup" --commit "$BUILDSHA" >"$VOUT" 2>&1; then
   tail -40 "$VOUT" >&2
   die "verify-release-package FAILED on the fetched package (full log: $VOUT)"
 fi
