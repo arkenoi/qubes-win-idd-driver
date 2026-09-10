@@ -196,6 +196,25 @@ round(){                              # $1=arm (load|idle) $2=round number
   for i in $(seq 1 60); do w_alive "$VM" && break; sleep 10; done
   w_alive "$VM" || { say "  TERMINAL: no qrexec 10 min after start - leaving the guest as it stands"; return 2; }
 
+  # SETTLE, AND THEN CONFIRM IT STAYED UP. CLAUDE.md says it outright - "Do not grade immediately
+  # after qrexec comes up. Allow ~90 s" - and this harness ignored it, which cost the first ACPI run
+  # (2026-09-10): the guest answered the boot-id probe and had stopped answering by the time the
+  # read-out ran a few seconds later, so round 1 VOIDed on the load arm and round 1's idle arm VOIDed
+  # at "not answering qrexec at round start". The first qrexec response is not the guest being ready;
+  # it is the agent's first breath, and on the ACPI route under load the session is still coming up
+  # behind it. So wait, then require a SECOND, SEPARATE liveness answer, and treat a guest that
+  # answered once and then went quiet as the transient it is - retry with backoff rather than
+  # failing the run (experimenter rule 11), logging every attempt so a flapping guest is visible in
+  # the record instead of being smoothed away.
+  sleep "${SETTLE_S:-90}"
+  local ok=0
+  for i in 1 2 3; do
+    if w_alive "$VM"; then ok=1; break; fi
+    say "  guest answered, then went quiet (settle attempt $i/3) - waiting $((i*30))s and retrying"
+    sleep $((i * 30))
+  done
+  [ "$ok" = 1 ] || { say "  TERMINAL: guest will not stay up after three settle attempts - left as it stands"; return 2; }
+
   local after; after=$(psp BOOT 'Write-Host ("BOOT=" + (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString("o"))')
   [ "$after" != "$before" ] || { say "  VOID: boot id unchanged ($before) - it did not actually reboot"; return 1; }
 
