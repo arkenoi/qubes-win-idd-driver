@@ -645,6 +645,12 @@ try {
     # minutes back would capture the PREVIOUS boot's markers and report them as this cycle's - the
     # accumulating-state trap that voided the 2026-09-09 load measurement. Each event's offset from
     # boot is recorded so a reader can see for themselves which boot it belongs to.
+    # STEP MARKERS. This block is four separate queries under ONE try/catch, and when my rewrite
+    # of the window threw on 2026-09-10 every install round reported the unattributable 'could not
+    # determine shutdown cleanliness: The parameter is incorrect' - in a release-gating check. A
+    # catch that cannot say WHICH step failed is the same class of defect as a check that cannot
+    # fail, so the catch now names the step.
+    $step = 'unclean-events-41-6008'
     $unclean = @()
     foreach ($e in @(Get-WinEvent -FilterHashtable @{
                          LogName = 'System'; StartTime = $bootT.AddSeconds(-30)
@@ -684,6 +690,7 @@ try {
     }
     # fsutil reports "is Dirty" / "is NOT Dirty"; anything else means we could not tell, and
     # "could not tell" is not "clean".
+    $step = 'dirty-bit'
     $dq = (& fsutil.exe dirty query $env:SystemDrive 2>&1 | Out-String).Trim()
     $dirty = ($dq -match 'is\s+Dirty')
     $unknownDirty = -not ($dq -match 'is\s+(NOT\s+)?Dirty')
@@ -710,6 +717,7 @@ try {
                           # and any repair are written AT MOUNT, i.e. at or after LastBootUpTime, so
                           # an EndTime of $bootT excluded every one of them. As written this morning
                           # these two queries could never have returned anything.
+    $step = 'ntfs-health-98'
                           LogName = 'System'; StartTime = $bootT.AddSeconds(-30)
                           ProviderName = 'Microsoft-Windows-Ntfs'
                       } -MaxEvents 60 -ErrorAction SilentlyContinue)) {
@@ -723,6 +731,7 @@ try {
         }
     }
     foreach ($ev in @(Get-WinEvent -FilterHashtable @{
+    $step = 'autochk-1001'
                           LogName = 'Application'; StartTime = $bootT.AddSeconds(-30)
                           ProviderName = 'Microsoft-Windows-Wininit'; Id = 1001
                       } -MaxEvents 10 -ErrorAction SilentlyContinue)) {
@@ -733,7 +742,7 @@ try {
         @{ unclean_events = $unclean; dirty_query = $dq; volume_dirty = $dirty; volume_repairs = $repairs
            note = 'Kernel-Power 41 / 6008 across the previous shutdown, the NTFS dirty bit, and the NTFS per-mount volume health verdict (event 98) plus any repair that actually ran (Wininit 1001, Ntfs 130/131). A power-off that races on_poweroff=destroy, or a qvm-kill mid-shutdown, shows up here and nowhere else. Validated by injection: a hard kill mid-write reports 41,6008 while fsutil still says NOT Dirty - which is why event 98 was added, it is the only one of the three that positively asserts a clean volume and can still say otherwise.' }
 } catch {
-    Check 'prev_shutdown_orderly' $false @{ error = "could not determine shutdown cleanliness: $($_.Exception.Message)" }
+    Check 'prev_shutdown_orderly' $false @{ error = "could not determine shutdown cleanliness at step '$step': $($_.Exception.Message)"; failed_step = $step }
 }
 
 # --- 6b2. the network must actually CARRY TRAFFIC, not merely be bound -------------
