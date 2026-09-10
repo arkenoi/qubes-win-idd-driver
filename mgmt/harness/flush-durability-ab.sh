@@ -1,9 +1,17 @@
 #!/bin/bash
-# WHY IS A LOADED GUEST'S SHUTDOWN UNCLEAN? Load vs idle, interleaved, read out by MECHANISM.
+# IS A LOADED GUEST'S SHUTDOWN UNCLEAN? Load vs idle, interleaved, read out by MECHANISM. ANSWER: NO.
 #
-# THE QUESTION. A guest under ~2 GB of writes reports Kernel-Power 41 / 6008 on the next boot, 3/3,
-# while an idle guest is 3/3 clean (findings/issues.md). That establishes the OUTCOME and says
-# nothing about the mechanism. Two mechanisms are on the table and they need opposite fixes:
+# THE QUESTION AS ORIGINALLY POSED - and it has since been ANSWERED IN THE NEGATIVE, 2026-09-10:
+# a guest under ~2 GB of writes was reported to log Kernel-Power 41 / 6008 on the next boot, 3/3,
+# while an idle guest was 3/3 clean. That measurement is VOID (its probe could not tell this round's
+# events from the previous round's) and does NOT reproduce: this harness measured 0/6 loaded rounds
+# unclean across both load shapes, idle 0/6. The script is kept because the question is still worth
+# being able to ask, and because it is the instrument that produced the negative result.
+#
+# THE TWO MECHANISMS IT WAS BUILT TO SEPARATE, kept because the reasoning is what made the negative
+# result readable - and (A) is now refuted on architecture as well as on measurement (an acked write
+# cannot be lost while dom0 lives: blkback responds only after the bio completes, and that data is in
+# dom0's block stack, which outlives the guest):
 #   (A) A WRITE WAS LOST. Windows finished shutdown believing its last writes were durable, and they
 #       were not. In our stack that has a source-level candidate: xenvbd's TargetSyncCache
 #       (src/xenvbd/target.c) completes SCSIOP_SYNCHRONIZE_CACHE with SRB_STATUS_SUCCESS *without

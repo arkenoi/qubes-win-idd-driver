@@ -658,9 +658,28 @@ try {
                        # shutdown-phase bugcheck ends in a reset and, under on_reboot=destroy, looks
                        # identical to a clean S5 from dom0 - so without this a crash masquerades as
                        # a power-off race.
+                       # BY NAME, NOT BY POSITION. The first version of this read
+                       # ($e.Properties | Select-Object -Skip 2 -First 2) assumed a recalled
+                       # EventData template order and was simply wrong - BugcheckCode is the FIRST
+                       # element of Kernel-Power 41's template, so skipping two returned
+                       # BugcheckParameter2/3 and labelled them "bugcheck". A positional read of an
+                       # event template in a release-gating instrument is a guess dressed as a
+                       # measurement, and this field exists precisely to separate a crash from a
+                       # power cut - getting it wrong inverts that answer. The rendered XML carries
+                       # the names, so ask for them.
                        bugcheck = $(if ($e.Id -eq 41) {
-                                        try { ($e.Properties | Select-Object -Skip 2 -First 2 |
-                                               ForEach-Object { $_.Value }) -join ',' } catch { $null }
+                                        try {
+                                            $x = [xml]$e.ToXml()
+                                            $get = {
+                                                param($n)
+                                                ($x.Event.EventData.Data |
+                                                 Where-Object { $_.Name -eq $n } |
+                                                 Select-Object -First 1).'#text'
+                                            }
+                                            $bc = & $get 'BugcheckCode'
+                                            if ($null -eq $bc) { 'field-absent' }
+                                            else { "code=$bc;p1=$(& $get 'BugcheckParameter1');sleep=$(& $get 'SleepInProgress')" }
+                                        } catch { "unreadable: $($_.Exception.Message)" }
                                     } else { $null }) }
     }
     # fsutil reports "is Dirty" / "is NOT Dirty"; anything else means we could not tell, and
