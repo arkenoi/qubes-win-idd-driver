@@ -2341,13 +2341,31 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     ProcessIdToSessionId(GetCurrentProcessId(), &mySession);
     DWORD active = WTSGetActiveConsoleSessionId();
     if (active == 0xFFFFFFFF) { BLog(L"NOTIFY handoff: no active console session"); return false; }
-    if (active == mySession) return false;            // already interactive: send inline, no handoff
 
     wchar_t* user = nullptr; DWORD userLen = 0;
     if (!WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, active, WTSUserName, &user, &userLen)
         || !user || !*user)
     { if (user) WTSFreeMemory(user); BLog(L"NOTIFY handoff: no user in session %lu", active); return false; }
     std::wstring who(user); WTSFreeMemory(user);
+
+    // THE TEST IS THE ACCOUNT, NOT THE SESSION - and getting that wrong is why the first version of
+    // this fix was inert. It compared sessions and returned "already interactive" whenever they
+    // matched. But qrexec-agent runs a guest command AS SYSTEM IN THE INTERACTIVE SESSION, so the
+    // sessions DO match (measured on win11-nfy: MYSESSION=1, ACTIVECONSOLE=1) and the handoff
+    // no-opped - while the send still failed with "relay never connected".
+    //
+    // The real discriminator, measured the same day: notifhost run as SYSTEM fails; run as the
+    // logged-on user - same session, same binary, same minute - it connects, acks FWD_RTT ok=1 and
+    // puts a bubble on the dom0 desktop. ConnUp() passes GetUserNameW() as the qrexec-client-vm
+    // local-user field ("@default|qubes.Notifications|<user>|..."), so under SYSTEM that field is
+    // SYSTEM and the relay spawned for it never connects back.
+    //
+    // So: hand off whenever this process is not already running AS the console user, whatever
+    // session it is in.
+    wchar_t me[256] = { 0 }; DWORD meLen = RTL_NUMBER_OF(me);
+    if (!GetUserNameW(me, &meLen)) { BLog(L"NOTIFY handoff: cannot read own user (%lu)", GetLastError()); return false; }
+    if (_wcsicmp(me, who.c_str()) == 0 && active == mySession)
+        return false;                                 // genuinely the console user: send inline
 
     // Same UTF-16LE + BOM notify file the inline path reads; deleted by the reader.
     std::wstring dir = StateDir();
