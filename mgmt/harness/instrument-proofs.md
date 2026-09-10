@@ -191,3 +191,26 @@ gate as the worked example.
 **Note for whoever picks this up:** the fault injector was found only after hand-editing a diag
 branch. Check whether the product already ships the toggle before writing one — the relay's
 `--selftest` turned out the same way, carrying the entire `relay-transport-clean` proof.
+
+## 2026-09-10 — instruments built for the two guest-stall classes
+
+Recorded here for the backlog with their **honest** validation state, because several were written
+in a session whose conclusions were repeatedly wrong and the difference between "validated" and
+"looks right" is the only thing that stopped that being worse.
+
+| instrument | what it decides | fail-proof on record? |
+|---|---|---|
+| `tools/resolve-guest-rip.py` | a captured guest RIP → module + RVA, scoped to one boot | **YES**, 2026-09-10: refuses an address below every recorded base (`UNRESOLVED`, rc=1) and flags an implausible >32 MB offset. Seen to fail on a synthetic table. |
+| `mgmt/harness/xenvbd-flush-probe.sh` | did the storage stack lose a write across a shutdown | **PARTIAL.** Four false-result modes were found by running it against a known-good control and fixed (unregistered-provider query wipeout, `disk`/`Disk` double count, non-boot-disk attribution, a refutation printed on a guest with nothing to explain). But the Ntfs 137/140 arm has NEVER been seen to fire, so its ability to detect a genuine flush failure is **UNPROVEN** — and the kernel phase of shutdown is structurally blind (the Event Log service is already stopped), so absence of those events is not evidence. |
+| `mgmt/harness/flush-durability-ab.sh` | load vs idle shutdown cleanliness, per-round scoped | **PARTIAL.** Produced the negative that voided the original claim, and its load injection is verified live (byte count required to be growing). Never seen to produce a positive, because the defect does not exist. |
+| `mgmt/harness/ioreq-stall-repro.sh` | Class A on a permanently-emulated boot disk | **NO.** 0/20. Asserts its precondition on the boot disk's own bus type (verified BusType 3), but was aimed at the wrong condition — see the register: specimen 1 died before msiexec, so bulk write load was never the trigger. |
+| `mgmt/harness/arm-module-bases.sh` | records kernel module bases every boot so a wedge RIP is resolvable | **PARTIAL.** Refuses to report itself armed unless the recorder is proven to have written on this boot (that self-check passed on win10-ioreq). Never yet used to resolve a real wedge — the case it exists for has not recurred. |
+| `e2e-wait.sh` wedge-suspect arm (`QWTWEDGESUSPECT`) | flags a dark + burning + deaf guest and forbids cleanup | **NO**, and it replaced TWO inert attempts of mine the same day: one added the terminal arm to the `BLACK` branch when the wedge returns `NOWINDOW`, the other used "deaf to qrexec" as a discriminator although `w_session` returns success the moment qrexec answers, so every guest reaching that branch is already deaf. It now only reports; it does not claim to classify. |
+| `reboot-loop-wedge.sh` burn classifier | spinning domain vs slow boot | **FIXED, not proven.** It matched `*"% of a core"*` against a string it always produces, so 0% and negative deltas both read as "A SPINNING DOMAIN IS THE WEDGE" — a check that cannot fail, in the harness built to make that one call. Now thresholds a number at 60% with UNREADABLE reported as UNCLASSIFIED. |
+| `health-check.ps1` `prev_shutdown_orderly` | was the previous shutdown clean | **NO — and it was previously worse than unproven.** It windowed with `EndTime=LastBootUpTime`, a window ending at boot, while 41/6008 are written early in the *current* boot: it could never fire. Fixed, plus event 98 (per-mount volume health) added as the one signal there that positively asserts a clean volume and can still say otherwise. The `fsutil` dirty-bit half remains a check that cannot fail. |
+
+**The one-field discriminator that should be reached for first** in any future stall, before any of
+the above: `xl debug-keys q` → `pause_flags=4` means the guest is blocked on the device model
+(Class A), `pause_flags=0` with `[has=T]` means it is running guest code (Class B). Every earlier
+verdict in this area was wrong because the two were pooled.
+
