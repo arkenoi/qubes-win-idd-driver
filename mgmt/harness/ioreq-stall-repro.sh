@@ -84,6 +84,18 @@ fi
 
 w_alive "$VM" || { say "VOID: $VM is not answering qrexec"; exit 2; }
 
+# ARM CLASS B RESOLUTION BEFORE DRIVING ANY LOAD. This harness can trip either class - it says so
+# below - and if it trips Class B the guest becomes unaskable, exactly as specimen 2 did. The module
+# bases needed to name the spinning code exist ONLY during the boot that later wedges, so record
+# them now, while the guest still answers. Failure to arm is logged and does NOT abort: Class A is
+# what this run is for, and it is measurable without the Class B arming.
+if VM="$VM" OUT="$OUT/modbases" ./mgmt/harness/arm-module-bases.sh >"$OUT/arm-modbases.log" 2>&1; then
+  say "Class B resolution ARMED on $VM (module bases recorded this boot)"
+else
+  say "WARNING: could not arm module-base recording (see $OUT/arm-modbases.log). If this run trips"
+  say "         CLASS B instead of Class A, its RIPs will be UNRESOLVABLE - same dead end as specimen 2."
+fi
+
 # ASSERT THE PRECONDITION ON THE SIGNAL THAT MATTERS. "ours-nopvdisk was requested" is not "the boot
 # disk is emulated" - a cell that asserts its precondition on a different signal from the one the
 # mechanism depends on is not a test (experimenter rule 5b). The mechanism needs the BOOT disk to be
