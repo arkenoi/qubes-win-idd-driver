@@ -141,8 +141,21 @@ _halt_other_windows(){ # $1=the guest this cell is about to use
     [ "$v" = "$keep" ] && continue
     say "  H3.6: halting $v before working on $keep"
     qvm-shutdown --wait --timeout 300 "$v" >/dev/null 2>&1
-    echo "$(qvm-ls --raw-data --fields STATE "$v" 2>/dev/null | tail -1)" | grep -qi Halted \
-      || say "  WARNING: $v did not halt - refusing to run two Windows guests is now unenforceable"
+    # POLL; do not trust qvm-shutdown's own wait. Measured 2026-09-10 (4.3.26 campaign): it returned
+    # after ~60 s on a Windows AppVM that needed longer, this guard WARNED and then proceeded into
+    # the prime-run refusal it had just predicted ("TERMINAL: refusing, these are not Halted:
+    # win10-app"), failing WIN11-clean. The acceptance runner shut the same guest down 63 s later
+    # without trouble - so the guest was fine and only the waiting was wrong. A guard that gives up
+    # early and continues anyway is worse than no guard: it converts a rig condition into a
+    # product-FAIL against the release.
+    local _hi
+    for _hi in $(seq 1 60); do
+      [ "$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v n="$v" '$1==n{print $2}')" = Halted ] && break
+      sleep 5
+    done
+    if [ "$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v n="$v" '$1==n{print $2}')" != Halted ]; then
+      say "  WARNING: $v did not halt within 300s - refusing to run two Windows guests is now unenforceable"
+    fi
   done
 }
 
