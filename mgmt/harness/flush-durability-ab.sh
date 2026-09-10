@@ -108,7 +108,7 @@ for (\$i = 0; \$i -lt $((mb/32)); \$i++) {
 Write-Host (\"WROTE=\" + \$total + \"MB|ondisk:\" + [int](\$onDisk/1MB))" 900
 }
 
-clear_load(){ gq "cmd /c del /q /f \"%SystemDrive%\\flushload.stop\" 2>nul & rd /s /q \"%SystemDrive%\\flushload\" 2>nul & exit 0" 120 >/dev/null 2>&1 || true; }
+clear_load(){ gq "cmd /c del /q /f \"%SystemDrive%\\flushload.stop\" 2>nul & del /q /f \"%SystemDrive%\\flushload.progress\" 2>nul & rd /s /q \"%SystemDrive%\\flushload\" 2>nul & exit 0" 120 >/dev/null 2>&1 || true; }
 
 # LOAD_MODE=concurrent: writes still IN FLIGHT when the shutdown is issued.
 #
@@ -140,6 +140,12 @@ while (-not (Test-Path $stop)) {
   $fs.Close()
   $i++
   if ($i -gt 400) { $i = 0 }   # ~12.8 GB ceiling then reuse names, so the volume cannot fill
+  # A MONOTONIC PROGRESS COUNTER, because TOTAL BYTES IS NOT ONE. Names are reused past the ceiling
+  # and [IO.File]::Create TRUNCATES, so the directory size plateaus at ~12.5 GB while this loop is
+  # still writing flat out. The liveness check used to compare total bytes and therefore declared a
+  # perfectly healthy writer dead: it voided 8 of 15 load rounds on 2026-09-10, cutting the load arm
+  # from 15 rounds to 6 and making that run far weaker than its summary suggested.
+  Add-Content -LiteralPath (Join-Path $env:SystemDrive 'flushload.progress') -Value $i -EA SilentlyContinue
 }
 GEN
   QTEST_VM=$VM timeout -k 5 90 ./tools/qtest push "$ps1" >/dev/null 2>&1 || return 1
@@ -148,12 +154,14 @@ GEN
   return 0
 }
 
-# bytes currently in the load directory - the liveness sample
+# The liveness sample is the WRITER'S OWN PROGRESS COUNTER, not the directory size - see the comment
+# in the generator: total bytes stops growing the moment the writer wraps its filenames, so it cannot
+# tell "still writing" from "stopped".
 load_bytes(){ psp SZ '
-$dir = Join-Path $env:SystemDrive "flushload"
-$s = 0
-if (Test-Path $dir) { $s = (Get-ChildItem $dir -File | Measure-Object -Sum Length).Sum }
-Write-Host ("SZ=" + [int64]$s)' 90; }
+$f = Join-Path $env:SystemDrive "flushload.progress"
+$n = 0
+if (Test-Path $f) { $n = @(Get-Content -LiteralPath $f -EA SilentlyContinue).Count }
+Write-Host ("SZ=" + [int64]$n)' 90; }
 
 round(){                              # $1=arm (load|idle) $2=round number
   local arm=$1 n=$2 t0 wrote before st
@@ -170,11 +178,11 @@ round(){                              # $1=arm (load|idle) $2=round number
     local s1 s2
     s1=$(load_bytes); sleep 10; s2=$(load_bytes)
     if [ -z "${s1:-}" ] || [ -z "${s2:-}" ] || [ "${s2:-0}" -le "${s1:-0}" ]; then
-      say "  VOID: the writer is NOT growing the load ($s1 -> $s2 bytes), so nothing would have been"
+      say "  VOID: the writer progress counter is NOT advancing ($s1 -> $s2), so nothing would have been"
       say "        in flight at shutdown - this would be an idle round wearing the load label"
       clear_load; return 1
     fi
-    say "  load IN FLIGHT and verified growing: $s1 -> $s2 bytes ($(( (s2-s1)/1048576 )) MB in 10s)"
+    say "  load IN FLIGHT and verified growing: writer progress $s1 -> $s2 (+$(( s2-s1 )) files of 32 MB in 10s)"
   elif [ "$arm" = load ]; then
     wrote=$(apply_load "$LOAD_MB")
     case "$wrote" in
