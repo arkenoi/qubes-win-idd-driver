@@ -63,21 +63,35 @@ for i in $(seq 1 "$N"); do
     # a spinning domain burns whole cores (measured on the real wedge: 181% of a core, 100% per
     # pegged vCPU), a booting or dead one does not.
     a=$(cput); sleep 20; b=$(cput)
-    burn="unknown"
+    # A NUMBER, NOT A SENTENCE. This used to format the burn as "<n>% of a core" and then classify
+    # with `case "$burn" in *"% of a core"*)`, which matches EVERY value it can produce - 0%, 3%, and
+    # the negative delta a Halted guest yields all took the "A SPINNING DOMAIN IS THE WEDGE" branch,
+    # and "Not spinning" was reachable only when cputime could not be read at all. A check that
+    # cannot fail, guarding the one classification this harness exists to make (found 2026-09-10).
+    burn=unknown
     if [ -n "$a" ] && [ -n "$b" ]; then
-      burn=$(python3 -c "print(f'{(int(\"$b\")-int(\"$a\"))/1e9/20*100:.0f}% of a core')" 2>/dev/null || echo unknown)
+      burn=$(python3 -c "print(f'{(int(\"$b\")-int(\"$a\"))/1e9/20*100:.0f}')" 2>/dev/null || echo unknown)
     fi
     say "REBOOT $i FAILED: $res"
-    say "  state=$(state)  burning=$burn"
+    say "  state=$(state)  burning=${burn}% of a core"
+    # 60% of a core is the threshold: the two measured specimens ran at 181% and 320-410%, while a
+    # booting or dead domain sits near zero. Anything in between is UNCLASSIFIED and says so.
     case "$burn" in
-      *"% of a core"*)
+      unknown)
+        say "  cputime UNREADABLE - this is UNCLASSIFIED. Do not record it as a wedge and do not"
+        say "  record it as healthy; the discriminator was unavailable." ;;
+    esac
+    if [ "$burn" != unknown ] && [ "${burn%%.*}" -ge 60 ] 2>/dev/null; then
         say "  A SPINNING DOMAIN IS THE WEDGE. It is LEFT UNTOUCHED - capture it NOW, before anything"
         say "  else touches it, because every previous specimen was destroyed by being killed:"
         say "    dom0:  sudo ./11-wedge-forensics.sh $VM --nmi"
         say "    dom0:  sudo xl dmesg -c >/dev/null; sudo xl debug-keys d; sudo xl dmesg > ~/wedge-regs.txt"
-        say "           (the CALL TRACE is the whole point - that is what named flush_area_mask)" ;;
-      *) say "  Not spinning, so this is a boot failure of some other kind, not the wedge under test." ;;
-    esac
+        say "           (the CALL TRACE is the whole point, and take TWO dumps with a RECORDED"
+        say "            interval - without that, a frozen host cannot be told from a hot loop)"
+    elif [ "$burn" != unknown ]; then
+        say "  Only ${burn}% of a core - NOT spinning. This is a boot failure of some other kind,"
+        say "  not the wedge under test, and must not be recorded as one."
+    fi
     exit 1
   fi
 done

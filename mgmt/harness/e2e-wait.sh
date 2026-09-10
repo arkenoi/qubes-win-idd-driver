@@ -78,9 +78,29 @@ w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
         cpu=$(printf '' | timeout 20 qrexec-client-vm "$vm" admin.vm.Stats 2>/dev/null | tr -d '\0' \
               | grep -aoE 'cpu_usage_raw[0-9]+' | grep -aoE '[0-9]+' | awk '{t+=$1} END{if(NR)print t; else print "NA"}')
         $log "  $lbl: black #$blacks, cpu_usage_raw=${cpu:-NA}"
-        if [ "$blacks" -ge 3 ] && [ "${cpu:-NA}" != NA ] && [ "$cpu" -gt 0 ] 2>/dev/null; then
-          $log "  $lbl: black but consuming CPU (${cpu}) - the guest is RUNNING HEADLESS, not dead; still waiting"
+        # THE WEDGE SIGNATURE WAS BEING READ AS PROOF OF LIFE (found 2026-09-10). "Black plus burning
+        # CPU" is EXACTLY the measured wedge - Running, deaf, empty capture, 180-410% of a core - and
+        # this branch reset blacks=0 on it, so a wedged guest could never reach TERMINAL and simply
+        # waited out the deadline. The same datum that identifies the wedge was scoring against it,
+        # in the helper nearly every wait site here sources.
+        #
+        # The original concern is real and is kept: a guest running HEADLESS with a half-installed
+        # QWT is alive and must not be declared dead. But CPU burn does not separate those two - the
+        # discriminator is QREXEC. A headless-but-alive guest still answers; a wedged one cannot,
+        # because its vCPU is stuck in the hypervisor (measured: an emulator loop reached from a
+        # nested page fault, interrupts enabled, which is why an NMI produced no dump either).
+        if [ "$blacks" -ge 3 ] && [ "${cpu:-NA}" != NA ] && [ "$cpu" -gt 0 ] 2>/dev/null && w_alive "$vm"; then
+          $log "  $lbl: black, consuming CPU (${cpu}) AND answering qrexec - running HEADLESS, not hung; still waiting"
           blacks=0
+        elif [ "$blacks" -ge 3 ] && [ "${cpu:-NA}" != NA ] && [ "$cpu" -gt 0 ] 2>/dev/null; then
+          $log "  $lbl: TERMINAL - THE WEDGE SIGNATURE: black ${blacks} min, burning cpu_usage_raw=${cpu}, and DEAF to qrexec."
+          $log "  $lbl: DO NOT KILL OR REVERT THIS GUEST. It is the only interrogable form of this defect and"
+          $log "  $lbl: three specimens have already been destroyed by being cleaned up. Capture it in dom0:"
+          $log "  $lbl:   sudo xl dmesg -c >/dev/null; sudo xl debug-keys d; sudo xl dmesg > ~/wedge-regs.txt"
+          $log "  $lbl:   sudo xl debug-keys v; sudo xl dmesg >> ~/wedge-regs.txt   # VM_EXIT reason per vCPU"
+          $log "  $lbl: and take a SECOND dump after a recorded interval - without one, a frozen host cannot"
+          $log "  $lbl: be told apart from two samples of a hot loop, which is the open question."
+          return 1
         elif [ "$blacks" -ge 3 ]; then
           $log "  $lbl: TERMINAL - black for ${blacks} min, cpu=${cpu:-NA}, qvm=$(w_state "$vm") ($dir/$lbl-t${now}.png)"
           return 1
