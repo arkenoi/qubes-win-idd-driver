@@ -84,6 +84,19 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 
+# ---- CELL COVERAGE GATE. The publish gate's required cell set (tools/cut-release.sh) and the
+# campaign that is supposed to produce it (tools/release-acceptance.sh) are two lists in two files.
+# They drifted, and the symptom was a GREEN verdict over an incomplete matrix: a full run reported
+# "51 passed, 0 failed", the acceptance record said CLEAN, and only cut-release caught that
+# win11-reinstall and win11-upgrade had never run. Fixing that instance fixed nothing structural.
+out=$(bash tools/check-cell-coverage.sh 2>&1)
+if [ $? -ne 0 ]; then
+  echo "$out"
+  echo
+  echo "pre-commit REFUSED: the acceptance campaign no longer covers what cut-release requires."
+  exit 1
+fi
+
 # ---- POWERSHELL PARSE GATE. Every .ps1 here is authored on Linux and executed only on a Windows
 # guest, so until 2026-09-09 a syntax error was found by an acceptance cell failing minutes later,
 # or by a stage that swallowed it. PowerShell for linux-x64 is a self-contained tarball (no sudo),

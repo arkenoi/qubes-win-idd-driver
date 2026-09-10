@@ -40,6 +40,22 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$RUN" ] || { echo "ERROR: --run <release-package-run-id> is required" >&2; exit 2; }
 
+# /tmp IS RAM ON THIS QUBE - a 1 GB tmpfs on a 4 GB machine - and a full one gets the acceptance run
+# OOM-killed mid-campaign. That is not hypothetical: this runner was killed twice that way, once
+# after the campaign had already passed. So it puts its own temporary files on real disk and refuses
+# to start when the RAM-backed /tmp is too full to survive a run, instead of dying an hour in.
+export TMPDIR="${TMPDIR:-$HOME/tmp}"
+mkdir -p "$TMPDIR"
+case "$TMPDIR" in
+  /tmp|/tmp/*) echo "ERROR: TMPDIR is under /tmp, which is RAM here. Point it at real disk." >&2; exit 2 ;;
+esac
+_tmpfree=$(df -Pm /tmp 2>/dev/null | awk 'NR==2{print $4}')
+if [ -n "$_tmpfree" ] && [ "$_tmpfree" -lt 200 ]; then
+  echo "ERROR: only ${_tmpfree} MB free on /tmp (a RAM-backed tmpfs). A run needs headroom there" >&2
+  echo "       even with TMPDIR elsewhere; clear it first - this is what OOM-killed earlier runs." >&2
+  exit 2
+fi
+
 WORK="${WORK:-$HOME/qwt-accept/rel-$RUN}"
 mkdir -p "$WORK/dl"
 LOG="$WORK/release-acceptance.log"

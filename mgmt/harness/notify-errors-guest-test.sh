@@ -14,10 +14,14 @@
 # ZERO notifications. A route that notifies dom0 when nothing is wrong is worse than no route, and
 # that is the one property no offline test can establish.
 #
-# WHAT THIS CANNOT SHOW, stated rather than implied: dom0 RENDERING. The guest can prove it handed
-# the message to qubes.Notifications and that dom0 accepted the call; whether a bubble was painted
-# is dom0-side and is covered by the existing toast-bridge witness work, not here. A 'sent' means
-# accepted-by-dom0, and is reported as exactly that.
+# WHAT 'send' MEANS, corrected 2026-09-10. It means notifhost.exe was LAUNCHED - nothing more.
+# Send-QwtError deliberately does not wait, so at that point nothing has heard from dom0. This header
+# used to claim "a 'sent' means accepted-by-dom0", and that claim is exactly why a route which never
+# delivered a single notification reported 10/10 for two consecutive releases: notifhost was failing
+# with "relay never connected" and every check here was blind to it.
+# The run therefore ENDS ON PIXELS - a dom0 render witness that photographs the desktop and requires
+# a bubble-shaped block where the desktop is ambiently quiet. That is the only check in this file
+# that speaks for dom0.
 # Also untested here: the C call sites in gui-agent (they need a real agent fault to fire); this
 # exercises the PowerShell twin, which is the half the .ps1 call sites use.
 set -uo pipefail
@@ -104,7 +108,11 @@ if [ "${m:-x}" = 0 ]; then ok "NEGATIVE CONTROL: gate ON, healthy guest, 0 notif
 
 # --- 3. an ACTION error is sent, exactly once --------------------------------------------------
 v=$(send S1 acceptance probe-one ACTION 'acceptance probe: a human should act')
-if [ "$v" = send ]; then ok "ACTION error accepted by dom0: $v"; else no "ACTION error not sent (got: ${v:-<none>})"; fi
+# NOT "accepted by dom0" - that wording was wrong and is exactly the over-claim that let a route
+# which never delivered anything report 10/10 for two releases. Send-QwtError returns 'send' as soon
+# as notifhost is LAUNCHED; it deliberately does not wait, and nothing here has heard from dom0. The
+# only check in this file that speaks for dom0 is the render witness at the end.
+if [ "$v" = send ]; then ok "ACTION error handed to notifhost (launched, NOT yet delivered): $v"; else no "ACTION error not sent (got: ${v:-<none>})"; fi
 v=$(send S2 acceptance probe-one ACTION 'acceptance probe: a human should act')
 if [ "$v" = 'suppressed:duplicate' ]; then ok "same (component,id) again this boot: $v"; else no "dedupe failed (got: ${v:-<none>})"; fi
 
