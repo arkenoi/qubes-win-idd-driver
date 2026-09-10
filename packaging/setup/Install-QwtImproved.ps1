@@ -111,6 +111,13 @@ param(
     # host. -InstallIddDriver is a harmless no-op kept so /idd still parses.
     [switch]$NoIddDriver,
     [switch]$InstallIddDriver,
+    # UNDER TEST, DEFAULT OFF. Move the emulated-VGA disable off the install-and-reboot window and
+    # into a quiet boot of its own, because that disable makes the device model tear down its
+    # dirty-VRAM tracking - and a live capture (2026-09-10) caught Xen 4.19.4 deadlocked inside that
+    # teardown, stranding the stubdomain and the guest with it. Default OFF so nothing changes until
+    # the A/B (mgmt/harness/idd-vga-ab.sh) shows it actually removes the stall; the flag is what that
+    # A/B toggles. Costs one extra reboot when on - see the deferral block for why it must reboot.
+    [switch]$DeferVgaDisable,
     [switch]$NoPvNetwork,
 
     # INERT since 2026-08-15. It used to override the PV-boot-disk gate; that gate is now a
@@ -2675,8 +2682,44 @@ function Invoke-Stage2 {
             # Re-verified HERE, not only before devcon: two 30 s bind waits sit between the two, and
             # the adapter the desktop runs on is the one thing below that cannot be undone in-session.
             & $assertQuiesced 'right before disabling the VGA adapter'
-            Write-Log "disabling emulated VGA adapter: $($vgaDev.InstanceId) ($($vgaDev.FriendlyName)) - the display may switch or blank until the reboot"
-            Disable-PnpDevice -InstanceId $vgaDev.InstanceId -Confirm:$false -ErrorAction Stop | Out-Null
+            if ($DeferVgaDisable) {
+                # DEFERRED (-DeferVgaDisable / defervga). Under test, not default - see the switch's
+                # own comment for the wedge this is aimed at. Disabling the emulated VGA makes the
+                # device model TEAR DOWN its dirty-VRAM tracking, and a live capture on 2026-09-10
+                # caught Xen 4.19.4 deadlocked in exactly that teardown (flush_area_mask <-
+                # map_pages_to_xen <- vunmap <- vfree <- hap_track_dirty_vram <- dm_op), leaving the
+                # stubdomain spinning and the guest unreachable. This arm moves the teardown OFF the
+                # busy install-and-reboot window into a quiet boot of its own.
+                #
+                # It disables AND REBOOTS in that boot, deliberately: an ONSTART task races the
+                # gui-agent service, and an agent that is already capturing adapter 0 would see a
+                # LIVE adapter switch - which lands in the known-buggy resolution-change path
+                # (0x887a0026 keyed-mutex freeze). Rebooting immediately means no agent ever sees it.
+                # Cost: one extra reboot during install. Owner's standing rule for install-time
+                # reboots is "on the install process we force", so that cost is acceptable here.
+                $deferScript = Join-Path $script:WorkDir 'defer-vga-disable.ps1'
+                @"
+`$ErrorActionPreference = 'Stop'
+try {
+    Import-Module PnpDevice -ErrorAction SilentlyContinue
+    Disable-PnpDevice -InstanceId '$($vgaDev.InstanceId)' -Confirm:`$false -ErrorAction Stop | Out-Null
+    Add-Content -LiteralPath 'C:\qwt-improved-install.log' -Value ("[deferred] emulated VGA disabled: $($vgaDev.InstanceId)")
+} catch {
+    Add-Content -LiteralPath 'C:\qwt-improved-install.log' -Value ("[deferred] VGA disable FAILED: " + `$_.Exception.Message)
+}
+schtasks.exe /delete /tn QwtDeferVgaDisable /f 2>&1 | Out-Null
+shutdown.exe /r /f /t 3 /c 'Qubes Windows Tools: display handover' 2>&1 | Out-Null
+"@ | Set-Content -LiteralPath $deferScript -Encoding UTF8
+                $deferCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$deferScript`""
+                $global:LASTEXITCODE = $null
+                try { & schtasks.exe /Create /TN QwtDeferVgaDisable /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR $deferCmd *>&1 | Out-Null } catch { }
+                if ($LASTEXITCODE -ne 0) { throw "could not arm the deferred VGA disable (schtasks rc '$LASTEXITCODE')" }
+                Write-Log "emulated VGA disable DEFERRED to the next boot (QwtDeferVgaDisable): $($vgaDev.InstanceId)"
+                $script:Result.detail.idd_vga_deferred = $true
+            } else {
+                Write-Log "disabling emulated VGA adapter: $($vgaDev.InstanceId) ($($vgaDev.FriendlyName)) - the display may switch or blank until the reboot"
+                Disable-PnpDevice -InstanceId $vgaDev.InstanceId -Confirm:$false -ErrorAction Stop | Out-Null
+            }
         }
         # ROOT\BASICDISPLAY appearing after the reboot is EXPECTED (Basic Display DRIVER
         # fallback on another adapter) and harmless - see the block comment above.
