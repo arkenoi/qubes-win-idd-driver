@@ -387,6 +387,49 @@ which dom0's update commands arrive at `cmd.exe` as shell text and the run abort
 `qrexec_timeout`, because a Windows boot that is *applying* an update can take minutes to answer
 qrexec against a 60 s default.
 
+### Persistent directories on an AppVM (`bind-dirs`)
+
+A Windows AppVM's system drive is restored from its template at every boot, so anything an
+application writes under `C:` is gone at the next start. `bind-dirs` is the Windows counterpart of
+Linux `qubes-bind-dirs`: it makes named directories live on the qube's own private volume (`Q:`)
+while still appearing at their normal path on `C:`.
+
+Create `Q:\config\qubes-bind-dirs.d\50_user.conf` **in the AppVM** and reboot:
+
+```bash
+# Keep this application's state across reboots.
+binds+=( 'C:\ProgramData\SomeVendor\SomeApp' )
+binds+=( 'C:\Program Files\SomeVendor\Plugins' "C:\Data\Shared" )
+```
+
+The syntax is the subset of bash the Linux `.conf` files actually use — `binds+=( … )` to append,
+`binds=( … )` to replace, and the documented removal idiom — so a file written for the Linux
+feature reads the same here.
+
+What happens at the next boot, before any service starts: each listed directory is **seeded once**
+(its current content on `C:` is copied to `Q:\bind-dirs\…`, only if no `Q:` copy exists yet), then
+the `C:` path is replaced by an NTFS directory junction pointing at the `Q:` copy. Every later boot
+only re-creates the junction — the copy on `Q:` is never overwritten, whatever the template now
+contains. That is the Linux semantics exactly: first-use seeding from the template, then the
+private copy wins.
+
+| Linux | Windows |
+|---|---|
+| `/rw` (private volume) | `Q:` |
+| template root, reset every boot | `C:` (an AppVM's system volume) |
+| `mount --bind` | NTFS directory junction |
+| `/rw/config/qubes-bind-dirs.d/NAME.conf` | `Q:\config\qubes-bind-dirs.d\NAME.conf` |
+| `/rw/bind-dirs/<path>` | `Q:\bind-dirs\<path without "C:">` |
+| `qubes-bind-dirs.service` (early boot) | Session Manager `BootExecute` (before any service) |
+
+`fsutil reparsepoint query C:\ProgramData\SomeVendor\SomeApp` shows the junction; the data is
+readable at both paths. With **no** config file present nothing is bound and boot is unchanged —
+the binary is registered on every guest but does nothing until you ask it to.
+
+It runs at `BootExecute` because that is the only point before services start, which is what makes
+it work for directories an early service opens. The cost, the failure handling, and every place it
+deliberately differs from the Linux script are in [docs/BIND-DIRS.md](docs/BIND-DIRS.md).
+
 ## Known limitations
 
 - **qrexec runs in the interactive user session.** A logged-off guest loses clipboard and
