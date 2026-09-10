@@ -53,6 +53,19 @@ JOB="${JOB:-ours-nopvdisk}"
 ROUNDS="${ROUNDS:-20}"
 LOAD_MB="${LOAD_MB:-1024}"
 PRIME="${PRIME:-1}"          # 0 = the subject already exists in the right state, do not re-prime
+# FLUSH ARMS. The mechanism blames a long synchronous operation in QEMU's main loop, and with
+# cache=writeback the operation most likely to sit there is the FLUSH - QEMU pushing the stubdom's
+# page cache down to the backing device. So the flush is a VARIABLE, not a fixture:
+#   both  - interleave write+flush and write-only rounds (default). One variable, same guest.
+#   yes   - every round flushes.
+#   no    - no round flushes.
+# WHY THIS MATTERS BEYOND THE MECHANISM: the flush-and-settle shipped in 4.3.25/4.3.26 forces
+# Write-VolumeCache at the inter-stage transition, and that transition runs ON THE EMULATED DISK. If
+# only the flush arm stalls, that shipped change is implicated in the very defect it sits next to -
+# and it was added for a defect since shown void. This tests it without rebuilding anything, because
+# the load issues its own flush.
+FLUSHARM="${FLUSHARM:-both}"
+case "$FLUSHARM" in both|yes|no) ;; *) echo "FLUSHARM must be both|yes|no"; exit 2 ;; esac
 OUT="${OUT:-/home/user/rel/ioreq-repro-$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$OUT"
 say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$OUT/summary.log"; }
@@ -116,7 +129,8 @@ esac
 
 # The write+flush load, in the guest, bounded. Verified: a load that silently wrote nothing would
 # make every round a no-op and the whole run a false negative.
-load_once(){
+load_once(){                     # $1 = do-flush (1|0)
+  local doflush=$1
   psp DID "
 \$ErrorActionPreference='Stop'
 \$dir = Join-Path \$env:SystemDrive 'ioreqload'
@@ -132,26 +146,35 @@ for (\$i = 0; \$i -lt $((LOAD_MB/32)); \$i++) {
 # THE FLUSH IS THE POINT. With cache=writeback the guest's writes sit in the STUBDOM's page cache;
 # this is what forces QEMU to push them down, which is the operation most likely to sit in its main
 # loop. A write-only load was already measured harmless on the PV path.
-\$flushed = 'no'
-try { Write-VolumeCache -DriveLetter (\$env:SystemDrive.TrimEnd(':')) -EA Stop; \$flushed = 'yes' } catch {}
+\$flushed = 'skipped'
+if ($doflush -eq 1) { \$flushed = 'failed'
+try { Write-VolumeCache -DriveLetter (\$env:SystemDrive.TrimEnd(':')) -EA Stop; \$flushed = 'yes' } catch {} }
 Remove-Item (Join-Path \$dir '*') -Force -EA SilentlyContinue
 Write-Host (\"DID=\" + \$mb + \"MB|flushed:\" + \$flushed)" 900
 }
 
-say "=== $ROUNDS rounds of ${LOAD_MB}MB write+flush on the EMULATED boot disk ==="
+say "=== $ROUNDS rounds of ${LOAD_MB}MB on the EMULATED boot disk, flush arm=$FLUSHARM ==="
 stalls=0
 for r in $(seq 1 "$ROUNDS"); do
+  # INTERLEAVED, not blocked: alternating the flush arm round by round means anything drifting on
+  # this rig over the run cannot land entirely in one arm. The project has voided a whole bisect to
+  # exactly that mistake.
+  case "$FLUSHARM" in
+    yes) doflush=1 ;;
+    no)  doflush=0 ;;
+    *)   doflush=$(( r % 2 )) ;;
+  esac
   a=$(cput)
-  res=$(load_once)
+  res=$(load_once "$doflush")
   if [ -n "$res" ]; then
     b=$(cput); d=unknown
     [ -n "$a" ] && [ -n "$b" ] && d=$(python3 -c "print(f'{(int(\"$b\")-int(\"$a\"))/1e9:.1f}')" 2>/dev/null || echo unknown)
-    say "  round $r/$ROUNDS: $res (guest burned ${d}s CPU)"
+    say "  round $r/$ROUNDS flush=$doflush: $res (guest burned ${d}s CPU)"
     continue
   fi
 
   # No answer. CLASSIFY - and the classification is the whole point of this harness.
-  say "  round $r: NO ANSWER from the guest. Classifying by CPU burn, not by the silence."
+  say "  round $r (flush=$doflush): NO ANSWER from the guest. Classifying by CPU burn, not the silence."
   x=$(cput); sleep 20; y=$(cput)
   burn=unknown
   [ -n "$x" ] && [ -n "$y" ] && burn=$(python3 -c "print(f'{(int(\"$y\")-int(\"$x\"))/1e9/20*100:.0f}')" 2>/dev/null || echo unknown)
@@ -160,7 +183,8 @@ for r in $(seq 1 "$ROUNDS"); do
     say "  UNCLASSIFIED - cputime unreadable. Not recording this as either class."
   elif [ "${burn%%.*}" -lt 40 ] 2>/dev/null; then
     stalls=$((stalls+1))
-    say "  *** CLASS A CANDIDATE: deaf and NOT burning (${burn}%) - consistent with vCPUs BLOCKED in"
+    say "  *** CLASS A CANDIDATE on a flush=$doflush round: deaf and NOT burning (${burn}%) -"
+    say "      consistent with vCPUs BLOCKED in"
     say "      wait_for_io while the device model does not answer. THIS IS THE HYPOTHESIS REPRODUCED."
     say "      LEFT UNTOUCHED. Confirm it in dom0 - pause_flags=4 on the blocked vCPUs is decisive:"
     say "        sudo xl dmesg -c >/dev/null; sudo xl debug-keys q; sudo xl dmesg > ~/A-domains.txt"
@@ -176,7 +200,7 @@ for r in $(seq 1 "$ROUNDS"); do
   say "  stopping: the subject is in a terminal state and is being preserved, not restarted."
   exit 1
 done
-say "=== $ROUNDS rounds, $stalls stalls. No Class A stall on the emulated path in this run ==="
+say "=== $ROUNDS rounds (flush arm=$FLUSHARM), $stalls stalls. No Class A stall on the emulated path ==="
 say "    Against the PV-path control (0 stalls) that means the disk path alone has NOT been shown to"
 say "    matter yet. With 0 events in $ROUNDS rounds the 95% upper bound on the per-round rate is"
 say "    about $(python3 -c "print(f'{3/$ROUNDS:.2f}')"), so this run can only exclude rates above that."
