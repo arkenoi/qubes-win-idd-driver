@@ -62,6 +62,20 @@ LOG="$WORK/release-acceptance.log"
 say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$LOG"; }
 die(){ say "FATAL: $*"; exit 1; }
 
+# REFUSE TO START UNDER A STRAY HARNESS PROCESS. An orphaned prime-run kept driving win10-acc after
+# its parents were killed on 2026-09-10 - restarting the guest under a new run, so state readings
+# fought a process that was believed gone, and the next cell refused with "these are not Halted".
+# run-lib.sh already tears down its descendant tree on SIGTERM; that orphan followed a kill -9, which
+# skips traps by definition. So this does not paper over a library defect - it stops the CONSEQUENCE,
+# which is a second driver on the rig that nothing else would notice.
+_stray=$(pgrep -af "[m]gmt/harness/(matrix|prime-run|quick-upgrade)\.sh" 2>/dev/null | head -5)
+if [ -n "$_stray" ]; then
+  echo "ERROR: a harness job is already running - refusing to start a second driver on the rig:" >&2
+  printf '  %s\n' "$_stray" >&2
+  echo "       If it is an orphan, kill it with SIGTERM (not -9, which skips its teardown traps)." >&2
+  exit 2
+fi
+
 say "=== release acceptance for run $RUN (work: $WORK) ==="
 
 # ---- 1. the run must be a GREEN release-package run -------------------------------------------

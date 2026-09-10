@@ -125,6 +125,20 @@ start_vm(){
   sleep 8
 }
 
+# Release the loop THIS run created (never one it merely reused, and never one another run owns).
+# Best-effort: a guest still holding the disc makes the delete fail, which is exactly when reuse
+# above is what keeps the count flat.
+MATRIX_LOOP_CREATED=""
+_matrix_release_loop(){
+  [ -n "${MATRIX_LOOP_CREATED:-}" ] || return 0
+  if udisksctl loop-delete -b "/dev/$MATRIX_LOOP_CREATED" >/dev/null 2>&1; then
+    say "  released /dev/$MATRIX_LOOP_CREATED"
+  else
+    say "  NOTE: /dev/$MATRIX_LOOP_CREATED still in use - left attached (a later run will reuse it)"
+  fi
+}
+trap _matrix_release_loop EXIT
+
 GLOG='C:\qwt-improved-install.log'
 INC='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
 
@@ -247,11 +261,27 @@ ensure_release_loop(){ # resolves RELEASE_LOOP (loopN on THIS qube backing the r
   if [ -z "${RELEASE_LOOP:-}" ]; then
     [ -n "${RELEASE_ISO:-}" ] || { say "FATAL: over-existing cells need RELEASE_ISO (path to qwt-improved-setup.iso) or RELEASE_LOOP (an existing loopN)"; exit 1; }
     [ -s "$RELEASE_ISO" ] || { say "FATAL: RELEASE_ISO=$RELEASE_ISO missing or empty"; exit 1; }
+    # REUSE AN EXISTING LOOP FOR THIS EXACT FILE INSTEAD OF ADDING ANOTHER. This function created a
+    # fresh loop on every call and nothing ever removed it, so they accumulated for as long as the
+    # rig ran: measured 2026-09-10, 45 loop devices, NINE of them backing the same 4.3.24 ISO and six
+    # the same 4.3.21 one. quick-upgrade.sh already deletes its own; this one never did.
+    #
+    # Reuse is the durable half of the fix - it holds even when the delete below cannot run (a killed
+    # run, or a guest still holding the disc). A read-only loop over an unchanged file is safe to
+    # share: the Gate-0 backing-file and "(deleted)" checks below still run against whatever we end
+    # up using, so a stale or wrong-file loop is caught exactly as before.
     local dev
-    dev=$(udisksctl loop-setup -r -f "$RELEASE_ISO" 2>&1 | grep -o '/dev/loop[0-9]*' | head -1)
-    [ -n "$dev" ] || { say "FATAL: udisksctl loop-setup failed for $RELEASE_ISO"; exit 1; }
-    RELEASE_LOOP=${dev#/dev/}
-    say "  release ISO on /dev/$RELEASE_LOOP ($RELEASE_ISO)"
+    dev=$(losetup -l 2>/dev/null | awk -v f="$RELEASE_ISO" '$6==f{print $1; exit}')
+    if [ -n "$dev" ]; then
+      RELEASE_LOOP=${dev#/dev/}
+      say "  release ISO already on /dev/$RELEASE_LOOP - reusing it ($RELEASE_ISO)"
+    else
+      dev=$(udisksctl loop-setup -r -f "$RELEASE_ISO" 2>&1 | grep -o '/dev/loop[0-9]*' | head -1)
+      [ -n "$dev" ] || { say "FATAL: udisksctl loop-setup failed for $RELEASE_ISO"; exit 1; }
+      RELEASE_LOOP=${dev#/dev/}
+      MATRIX_LOOP_CREATED="$RELEASE_LOOP"      # only OURS is released at exit
+      say "  release ISO on /dev/$RELEASE_LOOP ($RELEASE_ISO)"
+    fi
   fi
   local backing
   backing=$(losetup -l 2>/dev/null | awk -v d="/dev/$RELEASE_LOOP" '$1==d{print $6}')
@@ -947,9 +977,23 @@ cell_clean(){ # $1=pristine-base $2=subject $3=tag
   ./mgmt/harness/prime-run.sh "$base" "$vm" ours --payload "$RELEASE_SETUP" >"$M/$tag-clean-prime.log" 2>&1
   local prc=$?
   say "  prime-run tail: $(tail -1 "$M/$tag-clean-prime.log" | cut -c1-180)"
+  # A CELL THE RIG PREVENTED FROM RUNNING IS NOT A PRODUCT FAILURE. prime-run refuses outright when
+  # another Windows guest is still up ("TERMINAL: refusing, these are not Halted: ..."), which is a
+  # rig-state condition - the release was never given a chance to fail. It was nevertheless scored
+  # product-FAIL=1 against the release (measured 2026-09-10: WIN11-clean, after the one-guest guard
+  # gave up early), and a green release can be marked red by a busy rig.
+  #
+  # DELIBERATELY NARROW. Only the precondition refusal is reclassified. rc=2 (the guest never came
+  # back from its post-install reboot) STAYS a product failure - that is the real stall this project
+  # is hunting, and burying it as "ungraded" would be the worse error by far.
+  local _ptail; _ptail=$(tail -3 "$M/$tag-clean-prime.log" 2>/dev/null | tr '\n' ' ')
   case $prc in
     0) ok "$tag-clean: prime-run delivered a qrexec-answering installed guest" ;;
-    1) no "$tag-clean: prime-run TERMINAL (see $M/$tag-clean-prime.log)"; return ;;
+    1) case "$_ptail" in
+         *"refusing, these are not Halted"*|*"could not create"*)
+           no "$tag-clean: INVALID-RIG - prime-run refused before starting (not a product result): $(printf '%s' "$_ptail" | cut -c1-120)" ;;
+         *) no "$tag-clean: prime-run TERMINAL (see $M/$tag-clean-prime.log)" ;;
+       esac; return ;;
     2) no "$tag-clean: prime-run hit its deadline (see $M/$tag-clean-prime.log)"; return ;;
     *) no "$tag-clean: prime-run rc=$prc (see $M/$tag-clean-prime.log)"; return ;;
   esac
