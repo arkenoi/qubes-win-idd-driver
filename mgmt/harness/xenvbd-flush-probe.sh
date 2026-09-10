@@ -75,7 +75,11 @@ SINCE_DECL='$Since = $null'
 
 read -r -d '' PS <<'EOPS'
 $ErrorActionPreference='SilentlyContinue'
-function J($o){ $o | ConvertTo-Json -Depth 4 -Compress }
+# An EMPTY array must serialise as "[]", not as nothing. `@() | ConvertTo-Json` emits an empty
+# string, so KEY= came back blank and every consumer of it broke on parse (measured on win11-nfy,
+# which legitimately had zero events). A blank where a value is expected is also indistinguishable
+# from a query that failed, which is the one confusion this probe must never introduce.
+function J($o){ $a = @($o); if ($a.Count -eq 0) { '[]' } else { ,$a | ConvertTo-Json -Depth 4 -Compress } }
 __SINCE_DECL__
 Write-Host ("SINCE=" + $(if ($Since) { $Since.ToString('o') } else { 'all-history' }))
 # One filter, applied to both queries, so the outcome and the mechanism are read over the SAME
