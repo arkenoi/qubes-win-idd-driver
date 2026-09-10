@@ -55,59 +55,80 @@ w_alive(){ QTEST_VM=$1 timeout -k 5 40 ./tools/qtest run 'cmd /c echo QREADY' 2>
 
 # Wait for a usable session. 0=session 1=terminal 2=deadline
 w_session(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn
-  local vm=$1 dl=$2 lbl=$3 dir=$4 log=$5 t0 now st shots=0 blacks=0
+  local vm=$1 dl=$2 lbl=$3 dir=$4 log=$5 t0 now st shots=0 dark=0 wedgesus=0 cpu
   t0=$(date +%s)
   while :; do
     now=$(( $(date +%s) - t0 ))
-    [ "$now" -ge "$dl" ] && { $log "  $lbl: DEADLINE ${dl}s with no session (screen=$(w_screen "$vm" "$lbl-dl" "$dir"))"; return 2; }
+    if [ "$now" -ge "$dl" ]; then
+      if [ "$wedgesus" = 1 ]; then
+        # Not a bare timeout: the wedge signature was present and persisted to the deadline. Say so,
+        # so a caller and a reader see a CLASSIFIED outcome instead of "something did not answer".
+        $log "  $lbl: DEADLINE ${dl}s - and QWTWEDGESUSPECT held throughout. Treating as TERMINAL, guest LEFT AS IT STANDS."
+        return 1
+      fi
+      $log "  $lbl: DEADLINE ${dl}s with no session (screen=$(w_screen "$vm" "$lbl-dl" "$dir"))"
+      return 2
+    fi
     w_alive "$vm" && { $log "  $lbl: session up at t+${now}s"; return 0; }
     if [ $(( now / 60 )) -gt "$shots" ]; then
       shots=$(( now / 60 )); st=$(w_screen "$vm" "$lbl-t${now}" "$dir")
       $log "  $lbl: t+${now}s qvm=$(w_state "$vm") screen=$st"
       [ "$st" = RECOVERY ] && { $log "  $lbl: TERMINAL - recovery screen, not waiting and not restarting ($dir/$lbl-t${now}.png)"; return 1; }
-      # A guest that is BLACK minute after minute is not booting either. Black is legitimately
-      # transient during early boot, so one sample proves nothing - three consecutive minutes with
-      # no session does. Measured today: a bricked guest stayed black and Transient for 15 minutes
-      # while the harness sat inside qvm-start waiting for a qrexec that was never coming.
-      if [ "$st" = BLACK ]; then
-        blacks=$(( blacks + 1 ))
-        # BLACK ALONE IS NOT TERMINAL. Measured 2026-08-28: a guest that looked dead behind a black
+      # A guest with NO USABLE SCREEN minute after minute is not booting either. Black is
+      # legitimately transient during early boot, so one sample proves nothing - three consecutive
+      # minutes with no session does.
+      #
+      # BLACK *OR* NOWINDOW. Fixed 2026-09-10 after an inert fix: the counter used to increment on
+      # BLACK alone, and w_screen returns NOWINDOW (not BLACK) whenever the tar is EMPTY - which is
+      # exactly the measured wedge signature (specimen 2: 0-byte tar). So a wedged guest fell into
+      # the `else` arm, reset the counter, and waited out the deadline; a terminal arm added to the
+      # BLACK branch could never fire for it. Both verdicts mean "no usable screen"; keep them
+      # distinguishable in the log, but count them together.
+      case "$st" in
+      BLACK|NOWINDOW)
+        dark=$(( dark + 1 ))
+        # DARK ALONE IS NOT TERMINAL. Measured 2026-08-28: a guest that looked dead behind a black
         # screen was consuming CPU steadily (cpu_time 92755 -> 119257 in 40 s, 8 GB resident) - it
-        # was running headless with a half-installed QWT, not hung. Require no CPU as well, or this
-        # rule declares a live guest dead.
+        # was running headless with a half-installed QWT, not hung.
         cpu=$(printf '' | timeout 20 qrexec-client-vm "$vm" admin.vm.Stats 2>/dev/null | tr -d '\0' \
               | grep -aoE 'cpu_usage_raw[0-9]+' | grep -aoE '[0-9]+' | awk '{t+=$1} END{if(NR)print t; else print "NA"}')
-        $log "  $lbl: black #$blacks, cpu_usage_raw=${cpu:-NA}"
-        # THE WEDGE SIGNATURE WAS BEING READ AS PROOF OF LIFE (found 2026-09-10). "Black plus burning
-        # CPU" is EXACTLY the measured wedge - Running, deaf, empty capture, 180-410% of a core - and
-        # this branch reset blacks=0 on it, so a wedged guest could never reach TERMINAL and simply
-        # waited out the deadline. The same datum that identifies the wedge was scoring against it,
-        # in the helper nearly every wait site here sources.
-        #
-        # The original concern is real and is kept: a guest running HEADLESS with a half-installed
-        # QWT is alive and must not be declared dead. But CPU burn does not separate those two - the
-        # discriminator is QREXEC. A headless-but-alive guest still answers; a wedged one cannot,
-        # because its vCPU is stuck in the hypervisor (measured: an emulator loop reached from a
-        # nested page fault, interrupts enabled, which is why an NMI produced no dump either).
-        if [ "$blacks" -ge 3 ] && [ "${cpu:-NA}" != NA ] && [ "$cpu" -gt 0 ] 2>/dev/null && w_alive "$vm"; then
-          $log "  $lbl: black, consuming CPU (${cpu}) AND answering qrexec - running HEADLESS, not hung; still waiting"
-          blacks=0
-        elif [ "$blacks" -ge 3 ] && [ "${cpu:-NA}" != NA ] && [ "$cpu" -gt 0 ] 2>/dev/null; then
-          $log "  $lbl: TERMINAL - THE WEDGE SIGNATURE: black ${blacks} min, burning cpu_usage_raw=${cpu}, and DEAF to qrexec."
-          $log "  $lbl: DO NOT KILL OR REVERT THIS GUEST. It is the only interrogable form of this defect and"
-          $log "  $lbl: three specimens have already been destroyed by being cleaned up. Capture it in dom0:"
-          $log "  $lbl:   sudo xl dmesg -c >/dev/null; sudo xl debug-keys d; sudo xl dmesg > ~/wedge-regs.txt"
-          $log "  $lbl:   sudo xl debug-keys v; sudo xl dmesg >> ~/wedge-regs.txt   # VM_EXIT reason per vCPU"
-          $log "  $lbl: and take a SECOND dump after a recorded interval - without one, a frozen host cannot"
-          $log "  $lbl: be told apart from two samples of a hot loop, which is the open question."
+        $log "  $lbl: dark #$dark (screen=$st), cpu_usage_raw=${cpu:-NA}"
+
+        # WHAT THIS CAN AND CANNOT DECIDE, stated because two earlier attempts got it wrong.
+        # It CANNOT distinguish a wedge from a legitimately busy headless guest:
+        #   - CPU burn does not separate them (the 2026-08-28 headless guest burned CPU too);
+        #   - and qrexec cannot either, because w_session RETURNS 0 at the top of this loop the
+        #     moment qrexec answers, so every guest that reaches here is ALREADY deaf. My first fix
+        #     used "deaf" as the discriminator, which is vacuous here.
+        # Declaring TERMINAL on dark+deaf+burning would also break normal installs, which sit deaf
+        # with no window for many minutes during "Working on updates".
+        # So it does the one useful thing it can: REPORT THE SIGNATURE LOUDLY AND IMMEDIATELY, once,
+        # while the specimen is still alive and interrogable - three specimens were lost because
+        # nothing said "capture this now" - and keep waiting to the deadline rather than guessing.
+        if [ "$dark" -ge 3 ] && [ "${cpu:-NA}" != NA ] && [ "$cpu" -gt 0 ] 2>/dev/null; then
+          if [ "$wedgesus" = 0 ]; then
+            wedgesus=1
+            $log "  $lbl: QWTWEDGESUSPECT vm=$vm dark=${dark}min screen=$st cpu_usage_raw=$cpu qvm=$(w_state "$vm")"
+            $log "  $lbl: This is the measured wedge signature: no usable screen, deaf to qrexec, and BURNING CPU."
+            $log "  $lbl: It may still be a legitimately busy headless guest - this cannot tell them apart."
+            $log "  $lbl: DO NOT KILL, REVERT OR CLONE OVER THIS GUEST. If it is the wedge, it is the only"
+            $log "  $lbl: interrogable form of the defect, and three specimens were already lost to cleanup."
+            $log "  $lbl: Capture it in dom0 NOW, read-only, with a RECORDED interval between the two dumps"
+            $log "  $lbl: (without an interval a frozen host cannot be told from a hot loop - the open question):"
+            $log "  $lbl:   date -u +%FT%T.%NZ; sudo xl dmesg -c >/dev/null; sudo xl debug-keys d; sudo xl dmesg > d1.txt"
+            $log "  $lbl:   sleep 30; date -u +%FT%T.%NZ; sudo xl dmesg -c >/dev/null; sudo xl debug-keys d; sudo xl dmesg > d2.txt"
+            $log "  $lbl:   sudo xl dmesg -c >/dev/null; sudo xl debug-keys v; sudo xl dmesg > v1.txt   # VM_EXIT per vCPU"
+            $log "  $lbl:   sudo xl vcpu-list $vm; sudo xl list -l $vm"
+          fi
+          # deliberately NOT resetting $dark and NOT returning: the signature persists in the log
+          # every minute, and the deadline below classifies the outcome.
+        elif [ "$dark" -ge 3 ]; then
+          $log "  $lbl: TERMINAL - no usable screen for ${dark} min and NOT burning CPU (cpu=${cpu:-NA}), qvm=$(w_state "$vm")"
           return 1
-        elif [ "$blacks" -ge 3 ]; then
-          $log "  $lbl: TERMINAL - black for ${blacks} min, cpu=${cpu:-NA}, qvm=$(w_state "$vm") ($dir/$lbl-t${now}.png)"
-          return 1
-        fi
-      else
-        blacks=0
-      fi
+        fi ;;
+      *)
+        dark=0 ;;
+      esac
     fi
     sleep 15
   done
