@@ -62,9 +62,13 @@ public static class DiskCache {
   // CTL_CODE(FILE_DEVICE_DISK=7, 0x35, METHOD_BUFFERED=0, FILE_READ_ACCESS=1)
   const uint IOCTL_DISK_GET_CACHE_INFORMATION = 0x000740D4;
   public static string Query(int n) {
-    // No GENERIC_READ: the cache IOCTL needs FILE_READ_ACCESS on the device, and asking for data
-    // read access as well makes the open fail on a disk with a mounted volume on some builds.
-    IntPtr h = CreateFileW(@"\\.\PhysicalDrive" + n, 0, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+    // GENERIC_READ (0x80000000), share read+write. The first version of this opened with ZERO
+    // access on the reasoning that a query IOCTL needs no data access - that was wrong and every
+    // disk came back "ioctl-failed:5", ERROR_ACCESS_DENIED (measured on win10-abt 2026-09-10):
+    // IOCTL_DISK_GET_CACHE_INFORMATION is defined with FILE_READ_ACCESS, so the handle has to
+    // carry read access or the I/O manager refuses it before the driver ever sees it. A read-only
+    // handle to a disk with mounted volumes is permitted; it is a WRITE handle that would not be.
+    IntPtr h = CreateFileW(@"\\.\PhysicalDrive" + n, 0x80000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
     if (h == (IntPtr)(-1)) return "open-failed:" + Marshal.GetLastWin32Error();
     try {
       byte[] b = new byte[64]; uint got;
