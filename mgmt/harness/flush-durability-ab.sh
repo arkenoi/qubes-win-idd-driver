@@ -33,13 +33,19 @@
 # * NOTHING IS EVER KILLED. A killed guest is dirty BECAUSE of the kill, and grading that would
 #   manufacture the result under test. A round that cannot halt cleanly is VOID, not a data point.
 #
-# THE LOAD is ~2 GB written and deliberately NOT flushed, immediately before the shutdown, so the
-# cycle begins with the maximum number of dirty pages Windows must deal with. That is the condition
-# the defect was measured under; a "load" that flushed as it went would not be the same experiment.
+# THE LOAD comes in two shapes and they are NOT interchangeable - LOAD_MODE picks one:
+#   complete   - ~2 GB written and every handle closed, then shut down. Maximum dirty pages, but
+#                nothing is being issued any more by the time Windows starts tearing down.
+#   concurrent - a detached writer that is STILL WRITING when the shutdown is issued, verified live
+#                (byte count sampled twice and required to be growing) at that moment.
+# The register describes the original 3/3 as "writes IN FLIGHT", which is 'concurrent'; that
+# measurement was ad hoc and never committed, so it cannot be reproduced from the repo. 'complete'
+# was measured on win10-abt 2026-09-10 and came back CLEAN, which is why the distinction is drawn
+# here rather than assumed away.
 #
 # READ-OUT: mgmt/harness/xenvbd-flush-probe.sh per round, scoped to that round.
 #
-# Usage:  VM=win10-abt ROUNDS=3 ROUTE=poweroff mgmt/harness/flush-durability-ab.sh
+# Usage:  VM=win10-abt ROUNDS=3 ROUTE=poweroff LOAD_MODE=concurrent mgmt/harness/flush-durability-ab.sh
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -47,11 +53,14 @@ VM="${VM:?set VM to an installed guest answering qrexec}"
 ROUNDS="${ROUNDS:-3}"
 ROUTE="${ROUTE:-poweroff}"     # poweroff = the installer's own line; acpi = qvm-shutdown from the host
 LOAD_MB="${LOAD_MB:-2048}"
+LOAD_MODE="${LOAD_MODE:-complete}"   # complete = 2 GB written and closed, then shut down
+                                     # concurrent = still WRITING when the shutdown is issued
 OUT="${OUT:-/home/user/rel/flush-ab-$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$OUT"
 say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$OUT/summary.log"; }
 
 case "$ROUTE" in poweroff|acpi) ;; *) echo "ROUTE must be poweroff or acpi"; exit 2 ;; esac
+case "$LOAD_MODE" in complete|concurrent) ;; *) echo "LOAD_MODE must be complete or concurrent"; exit 2 ;; esac
 
 source mgmt/harness/vmlock.sh
 vm_lock "$VM"
@@ -91,7 +100,52 @@ for (\$i = 0; \$i -lt $((mb/32)); \$i++) {
 Write-Host (\"WROTE=\" + \$total + \"MB|ondisk:\" + [int](\$onDisk/1MB))" 900
 }
 
-clear_load(){ gq "cmd /c rd /s /q \"%SystemDrive%\\flushload\" 2>nul & exit 0" 120 >/dev/null 2>&1 || true; }
+clear_load(){ gq "cmd /c del /q /f \"%SystemDrive%\\flushload.stop\" 2>nul & rd /s /q \"%SystemDrive%\\flushload\" 2>nul & exit 0" 120 >/dev/null 2>&1 || true; }
+
+# LOAD_MODE=concurrent: writes still IN FLIGHT when the shutdown is issued.
+#
+# WHY THIS ARM EXISTS. The register records the original result as "under ~2 GB of writes IN FLIGHT,
+# BOTH UNCLEAN 3/3" - but that measurement was made ad hoc and was never committed, so the exact
+# load is not recoverable from the repo, which is itself a defect in how it was recorded. The
+# 'complete' arm above - write 2 GB, close every handle, then shut down - came back CLEAN on this
+# guest, and the obvious candidate difference is that it is no longer writing by the time shutdown
+# starts. "In flight" and "recently written" are not the same condition, and only one of them is
+# what an MSI's tail looks like.
+#
+# The writer runs DETACHED in the guest and keeps going until a stop file appears, so it is still
+# issuing writes while Windows tears down. Per experimenter rule 5, the injection is verified to be
+# LIVE at the moment the code under test runs: the byte count is sampled twice and must be GROWING,
+# because a "concurrent" arm whose writer had already died would silently be a third idle arm.
+start_load_bg(){
+  local ps1="$OUT/loadgen.ps1"
+  cat > "$ps1" <<'GEN'
+$ErrorActionPreference='SilentlyContinue'
+$dir  = Join-Path $env:SystemDrive 'flushload'
+$stop = Join-Path $env:SystemDrive 'flushload.stop'
+if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+$buf = New-Object byte[] (1MB)
+(New-Object Random 7).NextBytes($buf)
+$i = 0
+while (-not (Test-Path $stop)) {
+  $fs = [IO.File]::Create((Join-Path $dir "g$i.bin"))
+  for ($j = 0; $j -lt 32; $j++) { $fs.Write($buf, 0, $buf.Length) }
+  $fs.Close()
+  $i++
+  if ($i -gt 400) { $i = 0 }   # ~12.8 GB ceiling then reuse names, so the volume cannot fill
+}
+GEN
+  QTEST_VM=$VM timeout -k 5 90 ./tools/qtest push "$ps1" >/dev/null 2>&1 || return 1
+  local inc; inc="${QTEST_INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\$(hostname)}"
+  gq "cmd /c del /q /f \"%SystemDrive%\\flushload.stop\" 2>nul & start /b powershell -NoProfile -ExecutionPolicy Bypass -File \"$inc\\loadgen.ps1\"" 40 >/dev/null 2>&1 || true
+  return 0
+}
+
+# bytes currently in the load directory - the liveness sample
+load_bytes(){ psp SZ '
+$dir = Join-Path $env:SystemDrive "flushload"
+$s = 0
+if (Test-Path $dir) { $s = (Get-ChildItem $dir -File | Measure-Object -Sum Length).Sum }
+Write-Host ("SZ=" + [int64]$s)' 90; }
 
 round(){                              # $1=arm (load|idle) $2=round number
   local arm=$1 n=$2 t0 wrote before st
@@ -102,10 +156,21 @@ round(){                              # $1=arm (load|idle) $2=round number
   before=$(psp BOOT 'Write-Host ("BOOT=" + (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString("o"))')
   [ -n "$before" ] || { say "  VOID: no boot id before"; return 1; }
 
-  if [ "$arm" = load ]; then
+  if [ "$arm" = load ] && [ "$LOAD_MODE" = concurrent ]; then
+    start_load_bg || { say "  VOID: could not start the background writer"; return 1; }
+    sleep 20
+    local s1 s2
+    s1=$(load_bytes); sleep 10; s2=$(load_bytes)
+    if [ -z "${s1:-}" ] || [ -z "${s2:-}" ] || [ "${s2:-0}" -le "${s1:-0}" ]; then
+      say "  VOID: the writer is NOT growing the load ($s1 -> $s2 bytes), so nothing would have been"
+      say "        in flight at shutdown - this would be an idle round wearing the load label"
+      clear_load; return 1
+    fi
+    say "  load IN FLIGHT and verified growing: $s1 -> $s2 bytes ($(( (s2-s1)/1048576 )) MB in 10s)"
+  elif [ "$arm" = load ]; then
     wrote=$(apply_load "$LOAD_MB")
     case "$wrote" in
-      *MB*) say "  load applied: $wrote" ;;
+      *MB*) say "  load applied and closed: $wrote" ;;
       *)    say "  VOID: the load did not run (got '${wrote:-<nothing>}') - without it this is an idle"
             say "        round mislabelled as loaded, which would poison the comparison"; return 1 ;;
     esac
@@ -145,7 +210,7 @@ round(){                              # $1=arm (load|idle) $2=round number
   return 0
 }
 
-say "=== flush durability A/B on $VM: $ROUNDS x (load | idle), route=$ROUTE, load=${LOAD_MB}MB ==="
+say "=== flush durability A/B on $VM: $ROUNDS x (load | idle), route=$ROUTE, load=${LOAD_MB}MB mode=$LOAD_MODE ==="
 printf 'round\tarm\tunclean\tflushfail\treset\tpaging\tretry\tcorrupt\n' > "$OUT/table.tsv"
 for r in $(seq 1 "$ROUNDS"); do
   for arm in load idle; do
