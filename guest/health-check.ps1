@@ -649,9 +649,42 @@ try {
     # the NTFS dirty bit still read "NOT Dirty" on that same boot. So the EVENT IDs are the working
     # detector and fsutil alone would have been a check that cannot fail. Both are kept: the dirty
     # bit costs nothing and catches the case where the log was lost.
-    Check 'prev_shutdown_orderly' (($unclean.Count -eq 0) -and (-not $dirty) -and (-not $unknownDirty)) `
-        @{ unclean_events = $unclean; dirty_query = $dq; volume_dirty = $dirty
-           note = 'Kernel-Power 41 / 6008 across the previous shutdown, plus the NTFS dirty bit. A power-off that races on_poweroff=destroy, or a qvm-kill mid-shutdown, shows up here and nowhere else. Validated by injection: a hard kill mid-write reports 41,6008 while fsutil still says NOT Dirty.' }
+    #
+    # THIRD SIGNAL ADDED 2026-09-10: NTFS EVENT 98, THE PER-MOUNT VOLUME HEALTH VERDICT. Windows
+    # writes one of these per volume per mount - "Volume C: ... is healthy. No action is needed." -
+    # and writes something else when the volume needs work. That makes it the one instrument here
+    # that POSITIVELY asserts a clean volume and is still capable of saying otherwise, which is
+    # exactly what the dirty bit is not: fsutil read NOT Dirty on a provably unclean boot, so every
+    # historical "NOT Dirty" proved nothing in either direction, including in the rounds that were
+    # simultaneously reporting 41,6008. Measured 2026-09-10 on win10-abt: 131 of 131 verdicts across
+    # 50 boots said healthy, and zero autochk/chkdsk runs (Wininit 1001) appeared - so a guest that
+    # shuts down and comes back really does keep a clean volume, and that is now asserted rather
+    # than assumed. A repair actually running (1001, or Ntfs 130/131 "has now been repaired") is the
+    # loud case and fails this check outright.
+    $repairs = @()
+    foreach ($ev in @(Get-WinEvent -FilterHashtable @{
+                          LogName = 'System'; StartTime = $winStart; EndTime = $bootT
+                          ProviderName = 'Microsoft-Windows-Ntfs'
+                      } -MaxEvents 60 -ErrorAction SilentlyContinue)) {
+        if ($ev.Id -eq 98 -and $ev.Message -notmatch 'is healthy') {
+            $repairs += @{ id = $ev.Id; time = $ev.TimeCreated.ToUniversalTime().ToString('o')
+                           msg = ($ev.Message -replace '\s+', ' ') }
+        }
+        if ((130, 131) -contains $ev.Id -and $ev.Message -match 'repaired') {
+            $repairs += @{ id = $ev.Id; time = $ev.TimeCreated.ToUniversalTime().ToString('o')
+                           msg = ($ev.Message -replace '\s+', ' ') }
+        }
+    }
+    foreach ($ev in @(Get-WinEvent -FilterHashtable @{
+                          LogName = 'Application'; StartTime = $winStart; EndTime = $bootT
+                          ProviderName = 'Microsoft-Windows-Wininit'; Id = 1001
+                      } -MaxEvents 10 -ErrorAction SilentlyContinue)) {
+        $repairs += @{ id = 1001; time = $ev.TimeCreated.ToUniversalTime().ToString('o')
+                       msg = 'autochk/chkdsk ran at boot - the volume was dirty' }
+    }
+    Check 'prev_shutdown_orderly' (($unclean.Count -eq 0) -and (-not $dirty) -and (-not $unknownDirty) -and ($repairs.Count -eq 0)) `
+        @{ unclean_events = $unclean; dirty_query = $dq; volume_dirty = $dirty; volume_repairs = $repairs
+           note = 'Kernel-Power 41 / 6008 across the previous shutdown, the NTFS dirty bit, and the NTFS per-mount volume health verdict (event 98) plus any repair that actually ran (Wininit 1001, Ntfs 130/131). A power-off that races on_poweroff=destroy, or a qvm-kill mid-shutdown, shows up here and nowhere else. Validated by injection: a hard kill mid-write reports 41,6008 while fsutil still says NOT Dirty - which is why event 98 was added, it is the only one of the three that positively asserts a clean volume and can still say otherwise.' }
 } catch {
     Check 'prev_shutdown_orderly' $false @{ error = "could not determine shutdown cleanliness: $($_.Exception.Message)" }
 }
