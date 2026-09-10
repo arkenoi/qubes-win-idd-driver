@@ -90,10 +90,50 @@ cap pre || { echo "WITNESS=capture-failed(pre)"; exit 1; }
 say "trigger: $*"
 "$@" >"$OUT/trigger.out" 2>&1; trc=$?
 say "trigger rc=$trc"
-sleep 3
-cap post || { echo "WITNESS=capture-failed(post)"; exit 1; }
-TRG=$(delta pre post); TRG_AREA=$(printf '%s' "$TRG" | sed -nE 's/.*DENSE=(-?[0-9]+).*/\1/p')
-say "triggered delta: $TRG"
+# THE WAIT MUST COVER THE HANDOFF. notifhost, when it is not already the console user, re-runs
+# itself in the interactive session via the Task Scheduler and settles before exiting, so the bubble
+# lands ~10 s after the call - not the 3 s this used to allow. Measured 2026-09-10: with a 3 s wait
+# the pre->post delta was DENSE=1122 (nothing yet) and the bubble turned up in the NEXT interval.
+sleep 10
+cap post  || { echo "WITNESS=capture-failed(post)"; exit 1; }
+
+# THE COMPARISON IS REGION-LOCAL, and that is the whole trick. Find the bubble-sized block that
+# changed between pre and post, then ask how much THAT SAME REGION changed in the ambient pair, with
+# nothing triggered. A notification lands in a screen corner that is ambiently quiet; the operator's
+# terminal churns where the terminal is. Two earlier discriminators failed on real bubbles: whole
+# screen density (ambient 32352 vs a real bubble 30727 on a busy desktop) and persistence (a bubble
+# AUTO-DISMISSES, so its region changes again moments later - measured settled_after=30257).
+read -r TRG_AREA AMB_IN_R FILL AT <<EOF
+$(python3 - "$OUT/pre.tar" "$OUT/post.tar" "$OUT/amb0.tar" "$OUT/amb1.tar" <<'PY'
+import sys, tarfile, io
+import numpy as np
+from PIL import Image
+def big(p):
+    with tarfile.open(p) as t:
+        b=None
+        for m in t.getmembers():
+            if m.name.lower().endswith('.png') and (b is None or m.size>b.size): b=m
+        return Image.open(io.BytesIO(t.extractfile(b).read())).convert('RGB')
+try:
+    a,b,e0,e1 = (np.asarray(big(x), dtype=np.int16) for x in sys.argv[1:5])
+except Exception:
+    print("-1 -1 0 none"); raise SystemExit
+if not (a.shape == b.shape == e0.shape == e1.shape):
+    print("-1 -1 0 none"); raise SystemExit
+d1=(np.abs(a-b).sum(axis=2)>30)            # pre  -> post : the bubble arriving
+d2=(np.abs(e0-e1).sum(axis=2)>30)          # ambient pair: what this desktop does with NO trigger
+H,W=d1.shape; bh,bw=180,420; best=(0,0,0)
+for y in range(0,max(1,H-bh),60):
+    for x in range(0,max(1,W-bw),60):
+        v=int(d1[y:y+bh,x:x+bw].sum())
+        if v>best[0]: best=(v,x,y)
+v,x,y=best
+still=int(d2[y:y+bh,x:x+bw].sum())       # AMBIENT change in THAT SAME region
+print(f"{v} {still} {v/(bw*bh):.2f} {x},{y}")
+PY
+)
+EOF
+say "triggered: densest=$TRG_AREA fill=$FILL at=$AT ; ambient in that same region=$AMB_IN_R"
 
 # ---- verdict ------------------------------------------------------------------------------------
 # Graded on DENSITY, still against the ambient control: the triggered capture must contain a
@@ -103,8 +143,16 @@ if [ "$TRG_AREA" -lt 0 ] || [ "$AMB_AREA" -lt 0 ]; then
   echo "WITNESS=undecidable(capture-unreadable) ambient='$AMB' triggered='$TRG'"; exit 1
 fi
 FLOOR=15000
-if [ "$TRG_AREA" -ge "$FLOOR" ] && [ "$TRG_AREA" -gt $(( AMB_AREA + AMB_AREA / 2 )) ]; then
-  echo "WITNESS=RENDERED densest=$TRG_AREA ambient_densest=$AMB_AREA evidence=$OUT ($TRG)"; exit 0
+: "${AMB_IN_R:=-1}"
+# RENDERED needs BOTH: a bubble-sized block appeared (density over the floor), AND the screen then
+# went quiet where it appeared (persistence). The second term is what a busy desktop cannot fake -
+# churn that big keeps changing between captures, a bubble does not. The ambient figure is still
+# reported, but it no longer decides: it was measured before the trigger and on a live desktop it
+# can legitimately be as large as a bubble.
+# RENDERED: a bubble-sized block appeared where the desktop is ambiently QUIET. A busy region cannot
+# qualify however much it changed, and a quiet corner that changed only when we triggered can.
+if [ "$TRG_AREA" -ge "$FLOOR" ] && [ "$AMB_IN_R" -ge 0 ] && [ "$AMB_IN_R" -lt $(( TRG_AREA / 3 )) ]; then
+  echo "WITNESS=RENDERED densest=$TRG_AREA fill=$FILL at=$AT ambient_here=$AMB_IN_R evidence=$OUT"; exit 0
 fi
-echo "WITNESS=NOT-RENDERED densest=$TRG_AREA ambient_densest=$AMB_AREA floor=$FLOOR evidence=$OUT ($TRG)"
+echo "WITNESS=NOT-RENDERED densest=$TRG_AREA fill=$FILL at=$AT ambient_here=$AMB_IN_R floor=$FLOOR evidence=$OUT"
 exit 1
