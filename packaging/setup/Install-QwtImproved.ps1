@@ -111,13 +111,6 @@ param(
     # host. -InstallIddDriver is a harmless no-op kept so /idd still parses.
     [switch]$NoIddDriver,
     [switch]$InstallIddDriver,
-    # UNDER TEST, DEFAULT OFF. Move the emulated-VGA disable off the install-and-reboot window and
-    # into a quiet boot of its own, because that disable makes the device model tear down its
-    # dirty-VRAM tracking - and a live capture (2026-09-10) caught Xen 4.19.4 deadlocked inside that
-    # teardown, stranding the stubdomain and the guest with it. Default OFF so nothing changes until
-    # the A/B (mgmt/harness/idd-vga-ab.sh) shows it actually removes the stall; the flag is what that
-    # A/B toggles. Costs one extra reboot when on - see the deferral block for why it must reboot.
-    [switch]$DeferVgaDisable,
     [switch]$NoPvNetwork,
 
     # INERT since 2026-08-15. It used to override the PV-boot-disk gate; that gate is now a
@@ -1411,49 +1404,22 @@ function Emit-ResultThenPowerOff {
     # on a freshly-imaged guest - there is no user work to lose and nothing that legitimately needs
     # to veto the transition, but a stuck app or a "you have unsaved work" prompt CAN block a
     # /s without /f indefinitely, which would strand the install exactly as a refused shutdown does.
-    # FLUSH AND SETTLE BEFORE SIGNALLING S5 - the transition happens straight after an MSI has been
-    # writing, and shutting down with writes still in flight produces a shutdown Windows itself
-    # calls unclean. MEASURED 2026-09-09 on win11-nfy with a validated instrument (Kernel-Power
-    # 41/6008; the check was proven by injection - a hard kill mid-write reports 41,6008):
+    # NO FLUSH-AND-SETTLE HERE, AND THAT IS DELIBERATE (reverted 2026-09-10).
+    # A flush + disk-settle wait used to sit at this point, added 2026-09-09 for a measured
+    # "shutting down with writes in flight produces an unclean shutdown" (idle clean 3/3, loaded
+    # UNCLEAN 3/3, both routes). THAT MEASUREMENT IS VOID: its probe read Kernel-Power 41/6008 over
+    # a 20-minute unscoped look-back with no timestamps, 2 minutes after a hard-kill injection that
+    # writes exactly one 41 and one 6008 - and all six loaded rounds printed exactly those two ids,
+    # never four, so no round ever logged a marker of its own. Re-measured with each round scoped to
+    # the guest's own clock: 0/6 loaded unclean across two load shapes, idle 0/6. It also could not
+    # have been the mechanism claimed - a write xenvbd has ACKED cannot be lost while dom0 lives.
     #
-    #                       idle            under ~2 GB of writes in flight
-    #   shutdown /s /f      clean 3/3       UNCLEAN 3/3
-    #   host ACPI (control) clean 3/3       UNCLEAN 3/3
-    #
-    # Note both arms fail together: this is NOT a property of choosing power-off over reboot, and
-    # switching the verb back would fix nothing. The variable is IN-FLIGHT WRITES. An unclean
-    # shutdown here hands the next boot a volume to repair, and Startup Repair is precisely where
-    # there is no qrexec, no xencons and no mapped window - the "guest never came back from its
-    # post-install reboot" fingerprint that cost two subjects that day.
-    #
-    # HONEST LIMIT: the measured load (~2 GB continuous) is heavier than an MSI's tail, so this is a
-    # demonstrated HAZARD, not a demonstrated cause of those stalls. It is cheap insurance either
-    # way - a few seconds against a guest that needs Startup Repair.
-    #
-    # Write-VolumeCache is the supported flush (Windows 8+/2012+). If it is unavailable the settle
-    # wait still runs: never let a missing cmdlet turn this into a silent no-op.
-    try {
-        if (Get-Command Write-VolumeCache -ErrorAction SilentlyContinue) {
-            Write-VolumeCache -DriveLetter ($env:SystemDrive.TrimEnd(':')) -ErrorAction Stop
-            Write-Log 'flushed the system volume write cache before power-off'
-        } else {
-            Write-Log 'Write-VolumeCache unavailable - relying on the settle wait alone'
-        }
-    } catch { Write-Log "volume flush failed (continuing to the settle wait): $($_.Exception.Message)" }
-    # Settle: wait for the disk to go quiet rather than guessing a fixed sleep, bounded so a busy
-    # guest can never stall the install here. Idle is judged over consecutive quiet samples, because
-    # one quiet sample is just a gap between writes.
-    try {
-        $quiet = 0
-        for ($i = 0; $i -lt 30; $i++) {
-            $busy = 0
-            try { $busy = [int]((Get-Counter '\PhysicalDisk(_Total)\% Disk Time' -ErrorAction Stop).CounterSamples[0].CookedValue) } catch { $busy = 0 }
-            if ($busy -lt 10) { $quiet++ } else { $quiet = 0 }
-            if ($quiet -ge 3) { break }
-            Start-Sleep -Milliseconds 500
-        }
-        Write-Log "disk settled before power-off (quiet_samples=$quiet)"
-    } catch { Write-Log "disk settle check failed (continuing): $($_.Exception.Message)" }
+    # It is removed rather than merely disarmed because it is a SUSPECT in the defect that IS real:
+    # this transition runs on the EMULATED IDE disk (no PV driver at stage 1; xenvbd binds only at
+    # the next start), and the captured install stall is guest vCPUs blocked in wait_for_io while
+    # QEMU's main loop sits in a long synchronous operation - which a forced flush is exactly the
+    # shape of. So the "cheap insurance" was insurance against nothing, bought in the one place it
+    # could plausibly cost something. See findings/issues.md, guest-stability, Class A.
 
     $global:LASTEXITCODE = $null
     try { & shutdown.exe /s /f /t 2 /c 'Qubes Windows Tools setup' 2>&1 | Out-Null } catch { }
@@ -2682,44 +2648,8 @@ function Invoke-Stage2 {
             # Re-verified HERE, not only before devcon: two 30 s bind waits sit between the two, and
             # the adapter the desktop runs on is the one thing below that cannot be undone in-session.
             & $assertQuiesced 'right before disabling the VGA adapter'
-            if ($DeferVgaDisable) {
-                # DEFERRED (-DeferVgaDisable / defervga). Under test, not default - see the switch's
-                # own comment for the wedge this is aimed at. Disabling the emulated VGA makes the
-                # device model TEAR DOWN its dirty-VRAM tracking, and a live capture on 2026-09-10
-                # caught Xen 4.19.4 deadlocked in exactly that teardown (flush_area_mask <-
-                # map_pages_to_xen <- vunmap <- vfree <- hap_track_dirty_vram <- dm_op), leaving the
-                # stubdomain spinning and the guest unreachable. This arm moves the teardown OFF the
-                # busy install-and-reboot window into a quiet boot of its own.
-                #
-                # It disables AND REBOOTS in that boot, deliberately: an ONSTART task races the
-                # gui-agent service, and an agent that is already capturing adapter 0 would see a
-                # LIVE adapter switch - which lands in the known-buggy resolution-change path
-                # (0x887a0026 keyed-mutex freeze). Rebooting immediately means no agent ever sees it.
-                # Cost: one extra reboot during install. Owner's standing rule for install-time
-                # reboots is "on the install process we force", so that cost is acceptable here.
-                $deferScript = Join-Path $script:WorkDir 'defer-vga-disable.ps1'
-                @"
-`$ErrorActionPreference = 'Stop'
-try {
-    Import-Module PnpDevice -ErrorAction SilentlyContinue
-    Disable-PnpDevice -InstanceId '$($vgaDev.InstanceId)' -Confirm:`$false -ErrorAction Stop | Out-Null
-    Add-Content -LiteralPath 'C:\qwt-improved-install.log' -Value ("[deferred] emulated VGA disabled: $($vgaDev.InstanceId)")
-} catch {
-    Add-Content -LiteralPath 'C:\qwt-improved-install.log' -Value ("[deferred] VGA disable FAILED: " + `$_.Exception.Message)
-}
-schtasks.exe /delete /tn QwtDeferVgaDisable /f 2>&1 | Out-Null
-shutdown.exe /r /f /t 3 /c 'Qubes Windows Tools: display handover' 2>&1 | Out-Null
-"@ | Set-Content -LiteralPath $deferScript -Encoding UTF8
-                $deferCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$deferScript`""
-                $global:LASTEXITCODE = $null
-                try { & schtasks.exe /Create /TN QwtDeferVgaDisable /SC ONSTART /RU SYSTEM /RL HIGHEST /F /TR $deferCmd *>&1 | Out-Null } catch { }
-                if ($LASTEXITCODE -ne 0) { throw "could not arm the deferred VGA disable (schtasks rc '$LASTEXITCODE')" }
-                Write-Log "emulated VGA disable DEFERRED to the next boot (QwtDeferVgaDisable): $($vgaDev.InstanceId)"
-                $script:Result.detail.idd_vga_deferred = $true
-            } else {
-                Write-Log "disabling emulated VGA adapter: $($vgaDev.InstanceId) ($($vgaDev.FriendlyName)) - the display may switch or blank until the reboot"
-                Disable-PnpDevice -InstanceId $vgaDev.InstanceId -Confirm:$false -ErrorAction Stop | Out-Null
-            }
+            Write-Log "disabling emulated VGA adapter: $($vgaDev.InstanceId) ($($vgaDev.FriendlyName)) - the display may switch or blank until the reboot"
+            Disable-PnpDevice -InstanceId $vgaDev.InstanceId -Confirm:$false -ErrorAction Stop | Out-Null
         }
         # ROOT\BASICDISPLAY appearing after the reboot is EXPECTED (Basic Display DRIVER
         # fallback on another adapter) and harmless - see the block comment above.

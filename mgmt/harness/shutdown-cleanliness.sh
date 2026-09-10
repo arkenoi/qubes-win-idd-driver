@@ -48,10 +48,18 @@ wait_halt(){ for i in $(seq 1 60); do [ "$(state)" = Halted ] && return 0; sleep
 probe(){
   psp CLEAN '
 $b=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime
-$e=@(Get-WinEvent -FilterHashtable @{LogName="System";Id=41,6008;StartTime=$b.AddMinutes(-20)} -MaxEvents 10 -EA SilentlyContinue)
+# THE WINDOW WAS 20 MINUTES AND IT MANUFACTURED A FALSE DEFECT (fixed 2026-09-10). With
+# StartTime=$b.AddMinutes(-20) and rounds 4-5 minutes apart, ONE earlier unclean cycle is re-read by
+# every later round forever - and the round before this harness ran was a hard-kill injection that
+# writes exactly one 41 and one 6008. All six loaded rounds then printed exactly "events:41,6008",
+# never four, i.e. no round ever logged a marker of its own. That reading became a P1, a shipped
+# installer change and a published release-notes table before it was caught. 30 s of slack only,
+# which is under one reboot cycle here, so this round cannot inherit the previous round s markers.
+$e=@(Get-WinEvent -FilterHashtable @{LogName="System";Id=41,6008;StartTime=$b.AddSeconds(-30)} -MaxEvents 10 -EA SilentlyContinue)
+$et=(($e | ForEach-Object { $_.TimeCreated.ToUniversalTime().ToString("o") }) -join ";")
 $ids=($e | ForEach-Object { $_.Id }) -join ","
 $d=(& fsutil.exe dirty query $env:SystemDrive 2>&1 | Out-String).Trim()
-Write-Host ("CLEAN=boot:" + $b.ToUniversalTime().ToString("o") + "|events:" + $(if($ids){$ids}else{"none"}) + "|" + $d)'
+Write-Host ("CLEAN=boot:" + $b.ToUniversalTime().ToString("o") + "|events:" + $(if($ids){$ids}else{"none"}) + "|at:" + $(if($et){$et}else{"-"}) + "|" + $d)'
 }
 
 say "=== shutdown cleanliness on $VM, $ROUNDS round(s) ==="
