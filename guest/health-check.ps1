@@ -631,13 +631,37 @@ try {
 # Kernel-Power 41 is the OS's own statement that it "rebooted without cleanly shutting down first",
 # and the NTFS dirty bit is the filesystem's. Both are cheap and neither was being asked.
 try {
+    # THE WINDOW WAS BACKWARDS AND THE CHECK COULD NEVER FIRE (found 2026-09-10). It queried
+    # StartTime=LastBootUpTime-30min, EndTime=LastBootUpTime - a window that ENDS at boot. But
+    # Kernel-Power 41 and 6008 describe the PREVIOUS shutdown and are written EARLY IN THE CURRENT
+    # BOOT, at or just after LastBootUpTime, so EndTime=$bootT excluded exactly the events this
+    # check exists to find. It was a check that cannot fail, reporting PASS for something it was
+    # structurally incapable of detecting - the precise failure mode CLAUDE.md bans, sitting in the
+    # shipped health check. Note it was never the instrument that was validated by injection: that
+    # was shutdown-cleanliness.sh's own probe, which windowed differently.
+    #
+    # Corrected: start slightly BEFORE boot (clock slack only) and do not bound the end. The slack
+    # is deliberately 30 s, not minutes: a reboot cycle on this rig is ~45-60 s, so a window reaching
+    # minutes back would capture the PREVIOUS boot's markers and report them as this cycle's - the
+    # accumulating-state trap that voided the 2026-09-09 load measurement. Each event's offset from
+    # boot is recorded so a reader can see for themselves which boot it belongs to.
     $unclean = @()
     foreach ($e in @(Get-WinEvent -FilterHashtable @{
-                         LogName = 'System'; StartTime = $winStart; EndTime = $bootT
+                         LogName = 'System'; StartTime = $bootT.AddSeconds(-30)
                          Id      = 41, 6008
                      } -MaxEvents 20 -ErrorAction SilentlyContinue)) {
         $unclean += @{ id = $e.Id; provider = $e.ProviderName
-                       time = $e.TimeCreated.ToUniversalTime().ToString('o') }
+                       time = $e.TimeCreated.ToUniversalTime().ToString('o')
+                       sec_after_boot = [math]::Round(($e.TimeCreated - $bootT).TotalSeconds, 1)
+                       # Kernel-Power 41 carries the fields that separate a CRASH from a power cut,
+                       # and every record so far has reduced this event to its id alone. A
+                       # shutdown-phase bugcheck ends in a reset and, under on_reboot=destroy, looks
+                       # identical to a clean S5 from dom0 - so without this a crash masquerades as
+                       # a power-off race.
+                       bugcheck = $(if ($e.Id -eq 41) {
+                                        try { ($e.Properties | Select-Object -Skip 2 -First 2 |
+                                               ForEach-Object { $_.Value }) -join ',' } catch { $null }
+                                    } else { $null }) }
     }
     # fsutil reports "is Dirty" / "is NOT Dirty"; anything else means we could not tell, and
     # "could not tell" is not "clean".
@@ -663,7 +687,11 @@ try {
     # loud case and fails this check outright.
     $repairs = @()
     foreach ($ev in @(Get-WinEvent -FilterHashtable @{
-                          LogName = 'System'; StartTime = $winStart; EndTime = $bootT
+                          # Same boot-window correction as prev_shutdown_orderly above: event 98
+                          # and any repair are written AT MOUNT, i.e. at or after LastBootUpTime, so
+                          # an EndTime of $bootT excluded every one of them. As written this morning
+                          # these two queries could never have returned anything.
+                          LogName = 'System'; StartTime = $bootT.AddSeconds(-30)
                           ProviderName = 'Microsoft-Windows-Ntfs'
                       } -MaxEvents 60 -ErrorAction SilentlyContinue)) {
         if ($ev.Id -eq 98 -and $ev.Message -notmatch 'is healthy') {
@@ -676,7 +704,7 @@ try {
         }
     }
     foreach ($ev in @(Get-WinEvent -FilterHashtable @{
-                          LogName = 'Application'; StartTime = $winStart; EndTime = $bootT
+                          LogName = 'Application'; StartTime = $bootT.AddSeconds(-30)
                           ProviderName = 'Microsoft-Windows-Wininit'; Id = 1001
                       } -MaxEvents 10 -ErrorAction SilentlyContinue)) {
         $repairs += @{ id = 1001; time = $ev.TimeCreated.ToUniversalTime().ToString('o')
