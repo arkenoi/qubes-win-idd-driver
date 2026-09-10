@@ -19,9 +19,14 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
 RUN=""; SKIP_FEATURES=0
-# The canonical full campaign. Not a default anyone should silently shrink: a release is graded on
-# all of it (memory: full-acceptance-before-release-is-a-GATE).
-CELLS_DEFAULT="win10-clean win10-reinstall win10-upgrade win10-appvm win11-clean win11-appvm"
+# The canonical full campaign, and it must be a SUPERSET of what tools/cut-release.sh requires:
+#   win10-clean win10-appvm win11-clean win11-reinstall win11-upgrade win11-appvm
+# This default used to omit win11-reinstall and win11-upgrade, so a campaign could report "51 passed,
+# 0 failed" and be PARTIAL - which is exactly what happened on 2026-09-10: acceptance came back CLEAN
+# and cut-release refused with "PARTIAL MATRIX - these cells did not run: win11-reinstall,
+# win11-upgrade". The gate caught it; this default should not have needed catching.
+# Not a list anyone should silently shrink (memory: full-acceptance-before-release-is-a-GATE).
+CELLS_DEFAULT="win10-clean win10-reinstall win10-upgrade win10-appvm win11-clean win11-reinstall win11-upgrade win11-appvm"
 CELLS="$CELLS_DEFAULT"
 G10="${G10:-win10-iqi}"; G11="${G11:-win11-iqi}"
 
