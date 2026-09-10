@@ -103,7 +103,18 @@ printf '%s\n' "$EV" | sed 's/^/    /' | tee -a "$LOG" >/dev/null
 #
 # QGACROPLATE is the agent saying, itself, "I mapped this window uncropped" - it fires exactly on
 # the timedOut && !cropReady arm. That is the defect, so that is the criterion.
-late=$(printf '%s\n' "$EV" | grep -c 'QGACROPLATE')
+# SCOPE THE VERDICT TO THIS TEST'S SUBJECT. QGACROPLATE fires for ANY held window that timed out
+# without a crop, and `qtest run` opens a console window (CASCADIA_HOSTING_WINDOW_CLASS) for every
+# probe - so grading every occurrence failed the 4.3.25 run on windows THIS HARNESS created, while
+# the actual toasts cropped correctly (measurements landed 15 ms and 203 ms before their maps).
+# That is the same confusion that produced a retracted claim on 2026-09-09: console windows counted
+# as toasts.
+#
+# The console occurrences are NOT filtered away silently - they are a real finding of their own (the
+# agent defers a console window 700 ms for a shadow-crop that can never resolve, then maps it
+# uncropped: latency and log noise in the defer predicate) and are reported separately below.
+late=$(printf '%s\n' "$EV" | grep 'QGACROPLATE' | grep -vc 'CASCADIA_HOSTING_WINDOW_CLASS')
+console_late=$(printf '%s\n' "$EV" | grep 'QGACROPLATE' | grep -c 'CASCADIA_HOSTING_WINDOW_CLASS')
 held=$(printf '%s\n' "$EV" | grep -ao 'held_ms=[0-9-]*' | sed 's/held_ms=//')
 n_held=$(printf '%s\n' "$held" | grep -c '[0-9]')
 crops=$(printf '%s\n' "$EV" | grep -c 'TcApplyResult')
@@ -118,6 +129,14 @@ elif [ "$late" -eq 0 ]; then
 else
   no "QGACROPLATE fired $late time(s) - the agent itself reports mapping a window uncropped"
   printf '%s\n' "$EV" | grep -a 'QGACROPLATE' | sed 's/^/    /' | tee -a "$LOG" >/dev/null
+fi
+
+# Reported, never hidden: a console window held for a crop it cannot have is the agent deferring
+# something it should not. It does not fail THIS test - cropping toasts is what this grades - but it
+# must be visible, or filtering it out becomes the bug.
+if [ "${console_late:-0}" -gt 0 ]; then
+  say "NOTE  $console_late QGACROPLATE on console windows (CASCADIA_HOSTING_WINDOW_CLASS) - not this"
+  say "      test's subject, but the agent held them ~700 ms for a shadow-crop that cannot resolve."
 fi
 
 # A run in which no crop measurement ever landed graded nothing about cropping, however green the
