@@ -27,10 +27,10 @@
 # flush-ab-concurrent, reboot-loop). If this arm stalls where that one did not, the DISK PATH is the
 # variable and Class A is reproduced.
 #
-# THE LOAD IS WRITE PLUS FLUSH, not write alone. With cache=writeback the interesting event is the
-# FLUSH: QEMU must push the stubdom's page cache down to the backing device, and a flush is the
-# operation most likely to sit in its main loop. Write-without-flush was already measured harmless
-# on the PV path; here each batch is followed by an explicit Write-VolumeCache.
+# THE FLUSH IS AN ARM, NOT A FIXTURE - see FLUSHARM below. With cache=writeback the interesting
+# event is the FLUSH (QEMU pushing the stubdom's page cache down to the backing device, the
+# operation most likely to sit in its main loop), so write+flush and write-only rounds are
+# INTERLEAVED and compared rather than one being assumed to be the trigger.
 #
 # HOW A STALL IS RECOGNISED - and it must be told apart from CLASS B, the Windows PAUSE spin, which
 # looks superficially identical (Running, deaf, no window). The discriminator is CPU:
