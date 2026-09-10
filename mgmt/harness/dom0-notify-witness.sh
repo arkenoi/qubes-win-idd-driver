@@ -79,9 +79,24 @@ PY
 }
 
 # ---- ambient control: two captures, nothing triggered ------------------------------------------
-cap amb0 || { echo "WITNESS=capture-failed(amb0)"; exit 1; }
-sleep 4
-cap amb1 || { echo "WITNESS=capture-failed(amb1)"; exit 1; }
+# THE BASELINE MUST BE ASSERTED NOTIFICATION-FREE, not assumed. Callers fire several notifications
+# before reaching this witness, and a bubble from one of THOSE is still appearing or dismissing in
+# the same screen corner when the ambient pair is taken - which made the ambient region score 30342
+# against a real bubble's 30464 and failed a notification that had rendered correctly (measured
+# 2026-09-10, 4.3.26 acceptance). Wait for the desktop to actually go quiet first, and if it never
+# does, say so instead of grading against a contaminated control.
+_quiet=0
+for _q in $(seq 1 10); do
+  cap amb0 || { echo "WITNESS=capture-failed(amb0)"; exit 1; }
+  sleep 4
+  cap amb1 || { echo "WITNESS=capture-failed(amb1)"; exit 1; }
+  _a=$(delta amb0 amb1); _ad=$(printf '%s' "$_a" | sed -nE 's/.*DENSE=(-?[0-9]+).*/\1/p')
+  say "  baseline attempt $_q: $_a"
+  if [ "${_ad:-999999}" -lt 15000 ]; then _quiet=1; break; fi
+  say "  baseline still busy (a previous notification may still be on screen) - waiting"
+  sleep 8
+done
+[ "$_quiet" = 1 ] || { echo "WITNESS=undecidable(no quiet baseline after 10 attempts - grading against a contaminated control would be worse than no verdict)"; exit 1; }
 AMB=$(delta amb0 amb1); AMB_AREA=$(printf '%s' "$AMB" | sed -nE 's/.*DENSE=(-?[0-9]+).*/\1/p')
 say "ambient churn with no trigger: $AMB"
 
