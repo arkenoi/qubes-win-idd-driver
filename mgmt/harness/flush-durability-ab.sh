@@ -237,6 +237,27 @@ round(){                              # $1=arm (load|idle) $2=round number
   return 0
 }
 
+# ARM CLASS B RESOLUTION ONCE, UP FRONT. This harness produced specimen 2 on its FIRST round, which
+# makes it the cheapest specimen-catcher this project has (~3 min a round against ~11 for a clean
+# install) - and specimen 2's spinning function is STILL unnamed, because a guest RIP is meaningless
+# without THAT boot's module bases and nothing recorded them. arm-module-bases.sh installs an ONSTART
+# task, so arming once here covers every reboot this harness then performs, including the one that
+# wedges. Loud on failure, not fatal: the A/B still measures what it measures.
+#
+# WHY A RATE IS NO LONGER THE POINT (owner, 2026-09-10: "i do not think stall count is THAT useful to
+# be precisely measured"). A rate only earns its cost when something is being compared before and
+# after a change, and there is no such change to test: dom0-side knobs are ruled out, the
+# "install PV storage in stage 1" idea is withdrawn on the installer's own contract, and the
+# remaining candidates are untested. What is missing is the MECHANISM - the name of the Windows
+# primitive spinning, and what the device model's main loop is blocked on. That needs ONE resolvable
+# specimen, not a precise denominator.
+if VM="$VM" OUT="$OUT/modbases" ./mgmt/harness/arm-module-bases.sh >"$OUT/arm.log" 2>&1; then
+  say "module bases ARMED on $VM - a wedge in this run is RESOLVABLE (a first for this project)"
+else
+  say "WARNING: module-base arming FAILED (see $OUT/arm.log). A wedge here would be unresolvable,"
+  say "         which is exactly the dead end all three specimens so far have hit."
+fi
+
 say "=== flush durability A/B on $VM: $ROUNDS x (load | idle), route=$ROUTE, load=${LOAD_MB}MB mode=$LOAD_MODE ==="
 printf 'round\tarm\tunclean\tflushfail\treset\tpaging\tretry\tcorrupt\n' > "$OUT/table.tsv"
 for r in $(seq 1 "$ROUNDS"); do
