@@ -1,0 +1,86 @@
+#!/bin/bash
+# menu-latency.sh - measure how long the agent HOLDS a menu's map before showing it.
+#
+#   mgmt/harness/menu-latency.sh <vm> [count]
+#
+# WHAT IS BEING MEASURED, and what is NOT. A menu/toast is CREATE'd and buffer-attached, but its
+# MAP is DEFERRED (crop-before-show) until the shadow-margin crop resolves - from the broker's
+# measured opaque bounds or the UIA card query - or the CROP_BEFORE_SHOW_TIMEOUT_MS ceiling
+# elapses. The agent logs `QGASLICEMAP hwnd=0x.. held_ms=..` once per first map; held_ms IS that
+# hold. That is the part WE control and the only part this reports.
+#
+# It deliberately does NOT report "time from right-click to menu visible": a large and varying
+# chunk of that is Windows' own WinUI flyout render before the agent ever sees the window, and
+# mixing the two would credit or blame us for someone else's latency. The stimulus polls for the
+# new popup HWND and reports it, so every held_ms here is attributed to a window we know was a menu.
+#
+# Output: the per-sample held_ms values and min/median/max, plus the crop insets actually applied.
+# A sample with no matching QGASLICEMAP line is reported as UNMATCHED, never silently dropped.
+set -uo pipefail
+HERE="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$HERE" || exit 1
+VM="${1:?usage: menu-latency.sh <vm> [count]}"
+N="${2:-12}"
+OUT="${OUT:-/home/user/rel/menu-latency-$VM-$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$OUT"
+say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$OUT/summary.log"; }
+
+source mgmt/harness/vmlock.sh
+source mgmt/harness/e2e-wait.sh
+vm_lock "$VM"
+trap 'vm_unlock "$VM" 2>/dev/null' EXIT
+
+w_alive "$VM" || { say "VOID: $VM is not answering qrexec"; exit 2; }
+say "=== menu map-hold on $VM, $N opens ==="
+
+# Mark the log so only THIS run's lines are read - a previous run's samples in the same file
+# would otherwise be averaged in and the result would not belong to any one build.
+MARK="MENULAT-$(date -u +%s)"
+g_probe "$VM" MARKED "Write-Host ('MARKED=' + '$MARK')" 60 >/dev/null 2>&1
+QTEST_VM=$VM ./tools/qtest run "cmd /c echo $MARK" >/dev/null 2>&1
+
+QTEST_VM=$VM ./tools/qtest push guest/menu-stim.ps1 >/dev/null 2>&1
+say "running the stimulus ($N context-menu opens)"
+QTEST_VM=$VM timeout -k 10 $((N * 12 + 180)) ./tools/qtest run \
+  "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt\\menu-stim.ps1\" -Count $N" \
+  > "$OUT/stim.out" 2>&1
+tr -d '\r' < "$OUT/stim.out" | grep -aE '^POPUP=|=== RESULT ===' > "$OUT/popups.txt"
+opened=$(grep -c '^POPUP=0x' "$OUT/popups.txt" 2>/dev/null || echo 0)
+say "stimulus: $(grep -a '=== RESULT ===' "$OUT/popups.txt" | tail -1)"
+[ "$opened" -gt 0 ] || { say "VOID: no popup was opened - nothing to attribute held_ms to"; exit 2; }
+
+# Pull the agent log and keep only this run's tail.
+LOG=$(g_probe "$VM" LOG 'Write-Host ("LOG=" + (Get-ChildItem "Q:\Qubes Logs\gui-agent-*.log" | Sort-Object LastWriteTime | Select-Object -Last 1).FullName)' 90)
+say "agent log: ${LOG:-<unreadable>}"
+[ -n "$LOG" ] || { say "VOID: could not locate the gui-agent log"; exit 2; }
+b64=$(python3 -c "import sys,base64;print(base64.b64encode(('Get-Content -LiteralPath \"'+sys.argv[1]+'\" -Tail 4000').encode('utf-16-le')).decode())" "$LOG")
+QTEST_VM=$VM timeout -k 5 180 ./tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64" 2>/dev/null | tr -d '\r' > "$OUT/agent.log"
+grep -a 'QGASLICEMAP\|insets l=' "$OUT/agent.log" > "$OUT/maplines.txt" 2>/dev/null
+
+python3 - "$OUT" <<'PY' | tee -a "$OUT/summary.log"
+import re, sys, statistics
+out = sys.argv[1]
+pop = [int(m.group(1), 16) for m in
+       (re.match(r'POPUP=(0x[0-9a-f]+)', l) for l in open(f"{out}/popups.txt")) if m]
+held = {}
+for l in open(f"{out}/maplines.txt", errors="ignore"):
+    m = re.search(r'QGASLICEMAP hwnd=(0x[0-9a-fA-F]+).*held_ms=(-?\d+)', l)
+    if m:
+        held[int(m.group(1), 16)] = int(m.group(2))
+vals, unmatched = [], 0
+for h in pop:
+    if h in held and held[h] >= 0:
+        vals.append(held[h])
+    else:
+        unmatched += 1
+print(f"popups opened      : {len(pop)}")
+print(f"matched QGASLICEMAP: {len(vals)}")
+print(f"UNMATCHED          : {unmatched}  (no held_ms line - not counted, not hidden)")
+if vals:
+    vals.sort()
+    print(f"held_ms samples    : {vals}")
+    print(f"held_ms min/median/max = {vals[0]} / {int(statistics.median(vals))} / {vals[-1]}")
+    ceiling = sum(1 for v in vals if v >= 700)
+    print(f"at or above the 700 ms ceiling: {ceiling}/{len(vals)}")
+else:
+    print("NO held_ms SAMPLES - the measurement failed; do not read a speedup into this.")
+PY
+say "evidence: $OUT"
