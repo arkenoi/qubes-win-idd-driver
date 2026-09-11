@@ -66,7 +66,7 @@ pop = [int(m.group(1), 16) for m in
 # "it started mapping uncropped", which would be a regression dressed as a win.
 held, reason, menus = {}, {}, {}
 for l in open(f"{out}/maplines.txt", errors="ignore"):
-    m = re.search(r'QGAHELDMAP hwnd=(0x[0-9a-fA-F]+).*held_ms=(\d+) reason=(\w+) menu=(\d)', l)
+    m = re.search(r'QGAHELDMAP hwnd=(0x[0-9a-fA-F]+).*held_ms=(\d+) reason=(\S+) menu=(\d)', l)
     if m:
         h = int(m.group(1), 16)
         held[h] = int(m.group(2)); reason[h] = m.group(3); menus[h] = m.group(4) == '1'
@@ -74,12 +74,12 @@ for l in open(f"{out}/maplines.txt", errors="ignore"):
     m = re.search(r'QGASLICEMAP hwnd=(0x[0-9a-fA-F]+).*held_ms=(-?\d+)', l)
     if m and int(m.group(1), 16) not in held:
         held[int(m.group(1), 16)] = int(m.group(2))
-vals, unmatched = [], 0
-for h in pop:
-    if h in held and held[h] >= 0:
-        vals.append(held[h])
-    else:
-        unmatched += 1
+# Attribute by the line's OWN menu= flag, not by HWND. A WinUI context menu is a PAIR of
+# windows - a zero-rect site bridge (which the agent rejects) and the real popup - and the
+# stimulus can only see the bridge, so HWND matching found nothing even when the agent was
+# holding and mapping menus correctly.
+menu_vals = [held[h] for h in held if menus.get(h)]
+vals, unmatched = list(menu_vals), max(0, len(pop) - len(menu_vals))
 print(f"popups opened      : {len(pop)}")
 print(f"matched QGASLICEMAP: {len(vals)}")
 print(f"UNMATCHED          : {unmatched}  (no held_ms line - not counted, not hidden)")
@@ -89,8 +89,8 @@ if vals:
     print(f"held_ms min/median/max = {vals[0]} / {int(statistics.median(vals))} / {vals[-1]}")
     ceiling = sum(1 for v in vals if v >= 700)
     print(f"at or above the 700 ms ceiling: {ceiling}/{len(vals)}")
-    to = sum(1 for h in pop if reason.get(h) == 'timeout')
-    cr = sum(1 for h in pop if reason.get(h) == 'crop')
+    to = sum(1 for h in held if menus.get(h) and reason.get(h) == 'timeout')
+    cr = sum(1 for h in held if menus.get(h) and reason.get(h) == 'crop')
     print(f"released by crop / by timeout: {cr} / {to}   (timeout = mapped UNCROPPED)")
 else:
     print("NO held_ms SAMPLES - the measurement failed; do not read a speedup into this.")

@@ -6,8 +6,9 @@
 # created, so the host side can match on hwnd instead of guessing by time.
 #
 # Output: one `POPUP=<hex> t=<ms-since-start>` per opened menu, then `=== RESULT === {json}`.
-param([int]$Count = 12, [int]$SettleMs = 1500)
+param([int]$Count = 12, [int]$SettleMs = 1500, [int]$HoldMs = 1800)
 $ErrorActionPreference = 'Continue'
+Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type @'
 using System; using System.Runtime.InteropServices; using System.Text; using System.Collections.Generic;
 public class M {
@@ -56,9 +57,12 @@ for($n=1; $n -le $Count; $n++){
   }
   if($new){ $opened++; Write-Host ("POPUP=0x{0:x} t={1} cls={2}" -f [int64]$new.Key, $sw.ElapsedMilliseconds, $new.Value) }
   else { Write-Host ("POPUP=none t={0}" -f $sw.ElapsedMilliseconds) }
-  # dismiss and let the agent settle so the next open is an independent sample
-  [System.Windows.Forms.SendKeys]::SendWait('{ESC}') 2>$null
-  Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+  # HOLD THE MENU OPEN before dismissing. crop-before-show can defer a menu's map for up to
+  # CROP_BEFORE_SHOW_TIMEOUT_MS (700 ms); dismissing the instant the HWND appears destroys the
+  # window while it is STILL DEFERRED, so it never maps, emits no timing line, and the run
+  # measures nothing (observed 2026-09-11: nine opens, one map, zero QGAHELDMAP). $HoldMs must
+  # therefore exceed the ceiling - a real user holding a menu open is the case being measured.
+  Start-Sleep -Milliseconds $HoldMs
   [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
   Start-Sleep -Milliseconds $SettleMs
 }
