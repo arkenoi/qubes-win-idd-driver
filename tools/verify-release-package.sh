@@ -487,6 +487,29 @@ def pdb_paths(data):
         found.extend(m.group(0) for m in PDB_RE_T.finditer(txt))
     return found
 
+def pe_size_of_code(data):
+    try:
+        pe = int.from_bytes(data[0x3c:0x40], "little")
+        return int.from_bytes(data[pe + 24 + 4:pe + 24 + 8], "little")
+    except Exception:
+        return -1
+
+def sibling_sys_version(p):
+    """FileVersion of an OURS-built .sys in the same directory (PDB path names this repo), else None."""
+    d = os.path.dirname(p)
+    for f in sorted(os.listdir(d)):
+        if not f.lower().endswith(".sys"):
+            continue
+        with open(os.path.join(d, f), "rb") as fh:
+            b = fh.read()
+        if not is_pe(b):
+            continue
+        o, _ = classify_pdb(pdb_paths(b))
+        st2, v2, _, _ = pe_fileversion(b)
+        if o and st2 == "OK":
+            return v2
+    return None
+
 def classify_pdb(paths):
     ours = [p for p in paths if "\\qubes-win-idd-driver\\" in p.lower()]
     stockp = [p for p in paths if ":\\builder\\build\\" in p.lower()]
@@ -536,10 +559,18 @@ def add_pe(root, p, channel):
     # second OURS signal: the shared version resource (packaging/version-stamp/qwtng_version.rc)
     # names this fork in CompanyName - the only attribution a binary linked without a PDB path has
     company = (strs.get("CompanyName") or "").lower()
+    # A RESOURCE-ONLY PE (SizeOfCode == 0: an event-message DLL such as xenbus_monitor.dll) is
+    # linked without code and therefore without a PDB path, so it carries neither identity
+    # signal. It is attributed through the driver it ships WITH: same directory, a .sys whose
+    # FileVersion is OURS-stamped, and an identical FileVersion of its own. Anything else under
+    # pv-drivers/ stays UNKNOWN and fails the universe gate as before.
     if sha in stock_sha:
         cls = "STOCK"
     elif ours or "qwt-ng" in company:
         cls = "PVRUN" if (channel == "tree" and rel.lower().startswith("pv-drivers/")) else "OURS"
+    elif (channel == "tree" and rel.lower().startswith("pv-drivers/") and not pdbs
+          and pe_size_of_code(data) == 0 and st == "OK" and sibling_sys_version(p) == ver):
+        cls = "PVRUN"
     elif channel == "tree" and base in MS_FILES:
         cls = "MS"
     elif stockp:
@@ -743,6 +774,38 @@ else:
                     pv_problem = ("PV_MISSING", dict(exe=exe)); break
                 if e["cls"] != "PVRUN" or e["vstatus"] != "OK" or e["ver"] != u["ver"]:
                     pv_problem = ("PV_EXE_SYS_DISAGREE", dict(exe=exe, got=e["ver"], sys=u["ver"], cls=e["cls"])); break
+# xenbus (pv-drivers/xenbus/): OURS-built at the commit Qubes pins plus the bucket-lock fix, so
+# it is versioned against the STOCK xenbus exactly like xenvif: strictly above it, INF == .sys,
+# and every file the INF copies (xen.sys, xenfilt.sys, monitor exe + message dll) == xenbus.sys.
+# Optional in the sense that a package without pv-drivers/xenbus is the pre-fix status quo;
+# a package WITH a half-set fails here rather than shipping a driver whose INF cannot install.
+xenbus = find_tree("pv-drivers/xenbus/xenbus.sys")
+if not pv_problem and xenbus:
+    stock_bus_ver = next((v for _, v, _ in stock_by_stem.get("xenbus", []) if v), None)
+    if stock_bus_ver is None:
+        pv_problem = ("STOCK_DRIVERVER_UNREADABLE", dict(driver="xenbus.sys"))
+    elif xenbus["cls"] != "PVRUN":
+        pv_problem = ("PV_NOT_OURS", dict(driver="xenbus", cls=xenbus["cls"]))
+    elif xenbus["vstatus"] != "OK":
+        pv_problem = ("VERSION_UNSTAMPED", dict(path=xenbus["rel"]))
+    else:
+        inf = os.path.join(tree, "pv-drivers", "xenbus", "xenbus.inf")
+        dv = inf_driverver(inf) if os.path.isfile(inf) else []
+        if len(dv) != 1:
+            pv_problem = ("PV_INF_DRIVERVER_COUNT", dict(inf="xenbus/xenbus.inf", count=len(dv)))
+        elif dv[0][1] != xenbus["ver"]:
+            pv_problem = ("PV_INF_SYS_DRIVERVER_DISAGREE", dict(driver="xenbus", inf=dv[0][1], sys=xenbus["ver"]))
+        elif not vtuple(xenbus["ver"]) > vtuple(stock_bus_ver):
+            pv_problem = ("PV_DRIVERVER_NOT_ABOVE_STOCK", dict(driver="xenbus", got=xenbus["ver"], stock=stock_bus_ver))
+        else:
+            for member in ("xen.sys", "xenfilt.sys", "xenbus_monitor.exe", "xenbus_monitor.dll"):
+                e = find_tree(f"pv-drivers/xenbus/{member}")
+                if not e:
+                    pv_problem = ("PV_MISSING", dict(exe=f"xenbus/{member}")); break
+                if e["cls"] != "PVRUN" or e["vstatus"] != "OK" or e["ver"] != xenbus["ver"]:
+                    pv_problem = ("PV_EXE_SYS_DISAGREE", dict(exe=f"xenbus/{member}", got=e["ver"], sys=xenbus["ver"], cls=e["cls"])); break
+            if not pv_problem:
+                pv_detail["xenbus"] = xenbus["ver"]; pv_detail["stock_xenbus"] = stock_bus_ver
 if pv_problem:
     gate("PV_VERSION", "FAIL", pv_problem[0], **pv_problem[1])
 else:
