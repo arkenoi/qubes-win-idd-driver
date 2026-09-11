@@ -2319,6 +2319,43 @@ function Invoke-Stage2 {
         $script:Result.detail.pv_xenvif = 'not shipped'
     }
 
+    # --- PV bus: xenbus rebuilt with the bucket-lock fix ------------------------------
+    # The MSI's prebuilt xenbus.sys (== stock 4.2.2) can leave a phantom writer bit on a
+    # hash-table bucket lock and then spin forever at HIGH_LEVEL: the "guest never came
+    # back" stall (findings/issues.md). This package carries xenbus rebuilt from the same
+    # pinned commit with the lock fixed, DriverVer 9.1.0.<run> > 9.1.0.0, so pnputil ranks
+    # it above the MSI's and the device re-binds at the reboot stage 2 always performs.
+    $busDir = Join-Path $pvDir 'xenbus'
+    $busInf = Join-Path $busDir 'xenbus.inf'
+    if (Test-Path -LiteralPath $busInf) {
+        $busCer = Join-Path $busDir 'xenbus-signer.cer'
+        if (Test-Path -LiteralPath $busCer) {
+            foreach ($store in 'Root', 'TrustedPublisher') {
+                try { $out = & certutil.exe -addstore -f $store $busCer 2>&1 } catch { $out = "$_" }
+                Write-Log "  certutil ${store}: rc=$LASTEXITCODE"
+            }
+        } else {
+            Write-Log 'pv-drivers/xenbus/xenbus-signer.cer missing - the driver store add will likely fail' 'WARN'
+        }
+        Write-Log 'installing xenbus (bucket-lock fix)'
+        $global:LASTEXITCODE = $null
+        try { $out = & pnputil.exe /add-driver $busInf /install 2>&1 } catch { $out = "$_" }
+        $out | ForEach-Object { Write-Log "  pnputil(xenbus): $_" }
+        # 3010 is the expected outcome: the bus device hosts the boot disk, so the re-bind
+        # pends to the reboot. Anything else is logged loudly; the guest still boots on the
+        # prebuilt driver, which is the pre-fix status quo.
+        if ($LASTEXITCODE -notin 0, 259, 3010) {
+            Write-Log "xenbus install returned $LASTEXITCODE - the guest keeps the prebuilt (wedging) xenbus.sys" 'WARN'
+            $script:Result.detail.pv_xenbus = "failed rc=$LASTEXITCODE"
+        } else {
+            Write-Log 'xenbus installed - the fixed driver binds at the next boot'
+            $script:Result.detail.pv_xenbus = 'installed'
+        }
+    } else {
+        Write-Log 'pv-drivers/xenbus/xenbus.inf not in the payload - the prebuilt xenbus.sys (bucket-lock wedge) stays' 'WARN'
+        $script:Result.detail.pv_xenbus = 'not shipped'
+    }
+
     # --- PV console: an out-of-band channel for diagnosing a wedged guest ------------
     # QWT vendors no xencons, so XENBUS\VEN_XP0001&DEV_CONS has always sat at CM code 28.
     # Installing it gives dom0 `xl console` into the guest. This is DIAGNOSTIC only -

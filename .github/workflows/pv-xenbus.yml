@@ -1,0 +1,173 @@
+# Build xenbus from the SAME commit Qubes pins, plus one fix, because the prebuilt xenbus.sys
+# we ship (byte-identical to stock QWT 4.2.2's) wedges the guest.
+#
+# MEASURED 2026-09-10/11 (findings/issues.md, the stall entry): two independent register
+# captures of a wedged guest, different domains and KASLR bases, both at xenbus+0x1cd5c with
+# the lock word == 1 - a hash-table bucket WRITER bit that nobody holds. __HashTableBucketLock
+# in src/xenbus/hash_table.c derives Old and New from one unlocked read with the writer bit
+# stripped from Old; a writer spinning behind another writer that releases between its read
+# and its compare-exchange "acquires" a word of 0, and its unlock then writes 1. From then on
+# every HashTableRemove (= every event-channel close, i.e. every qrexec connection teardown on
+# Qubes) and the table's free-DPC spin forever at HIGH_LEVEL. The function is unchanged in
+# upstream master (5c07da3, 2026-08-13).
+#
+# This job builds xenbus at the commit qubes-vmm-xen-windows-pvdrivers v4.2.0-1 pins (so every
+# interface revision the other PV drivers bind to is unchanged) with patches/xenbus-hash-table-
+# lock.patch applied, neutralises the xenbus_monitor service exactly as packaging does for the
+# prebuilt INF, and test-signs the package with the same throwaway cert as the rest of our
+# binaries.
+name: pv-xenbus
+
+on:
+  workflow_call:
+    inputs:
+      build_rev:
+        description: 'DriverVer/FILEVERSION fourth field: the release-package run number (packaging/version-stamp). No default.'
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      build_rev:
+        description: 'DriverVer/FILEVERSION fourth field (0..65535). Pick one HIGHER than what is installed on the rig, or pnputil keeps the old .sys.'
+        type: string
+        required: true
+  push:
+    paths:
+      - '.github/workflows/pv-xenbus.yml'
+      - 'patches/xenbus-hash-table-lock.patch'
+
+env:
+  LINK: /Brepro
+  # THE PIN. This is the xenbus submodule commit of qubes-vmm-xen-windows-pvdrivers v4.2.0-1
+  # (== main == release4.3), i.e. the source of the 9.1.0.0 binary in stock QWT 4.2.2 - the
+  # disassembly of the shipped xenbus.sys matches this source instruction for instruction.
+  # Building from the same commit keeps every XENBUS_* interface revision identical, so the
+  # pinned xenvif/xenvbd/xeniface/xennet bind exactly as they do to the prebuilt one.
+  XENBUS_REF: e76d03e37550a0889c08be8e2a2caaf299d588c8
+
+jobs:
+  xenbus:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: repo
+
+      # Copied from pv-xenvif.yml, which copied it verbatim from build.yml's proven step.
+      - name: Install WDK + VS driver targets
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          choco install windowsdriverkit11 --no-progress -y
+          $vsix = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix" -Recurse -Filter '*.vsix' |
+                  Select-Object -First 1
+          if (-not $vsix) { throw "WDK.vsix not found after choco install" }
+          $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\2022" -Recurse -Filter VSIXInstaller.exe |
+                  Select-Object -First 1
+          Start-Process $inst.FullName -ArgumentList '/quiet', $vsix.FullName -Wait
+
+      - name: Fetch xenbus at the pinned SHA
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone --quiet https://xenbits.xen.org/git-http/pvdrivers/win/xenbus.git xenbus
+          if ($LASTEXITCODE -ne 0) { throw "clone of xenbus failed" }
+          git -C xenbus checkout --quiet $env:XENBUS_REF
+          if ($LASTEXITCODE -ne 0) { throw "checkout of $env:XENBUS_REF failed" }
+          $sha = (git -C xenbus rev-parse HEAD).Trim()
+          if ($sha -ne $env:XENBUS_REF) { throw "pin mismatch: wanted $env:XENBUS_REF, got $sha" }
+          Write-Host "xenbus pinned at $sha"
+          "XENBUS_RESOLVED=$sha" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Apply the bucket-lock fix (always)
+        shell: pwsh
+        working-directory: xenbus
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git apply --verbose ..\repo\patches\xenbus-hash-table-lock.patch
+          if ($LASTEXITCODE -ne 0) { throw "bucket-lock fix did not apply" }
+          # A patch that silently no-ops would ship the wedge with a new version number.
+          # Assert the new code is in the source AND the old derivation is gone.
+          $src = Get-Content src\xenbus\hash_table.c -Raw
+          if ($src -notmatch 'InterlockedCompareExchange\(&Bucket->Lock, 0, 1\)') { throw 'fix marker (writer unlock CAS 1->0) missing after patch' }
+          if ($src -match 'Old = Readers << 1;') { throw 'old lock derivation still present after patch' }
+          Write-Host "::notice title=xenbus::bucket-lock fix applied"
+
+      - name: Build xenbus via its own build.ps1
+        shell: pwsh
+        working-directory: xenbus
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $mb = & $vswhere -latest -requires Microsoft.Component.MSBuild `
+                  -find 'MSBuild\**\Bin\MSBuild.exe' | Select-Object -First 1
+          if (-not $mb) { throw "MSBuild.exe not found" }
+          $env:PATH = (Split-Path $mb) + ';' + $env:PATH
+          $env:VisualStudioVersion = '17.0'
+          # DriverVer 9.1.0.<build_rev>: MUST exceed the prebuilt 9.1.0.0 the MSI lays down, or
+          # pnputil keeps the old .sys (measured on xenvif). Same build_rev contract as pv-xenvif.
+          $rev = '${{ inputs.build_rev }}'
+          if ($rev -eq '') {
+            if ('${{ github.event_name }}' -eq 'push') { $rev = '0' }
+            else { throw 'MISSING_BUILD_REV: pv-xenbus needs build_rev from the caller' }
+          }
+          if ($rev -notmatch '^\d{1,5}$' -or [int]$rev -gt 65535) { throw "MISSING_BUILD_REV: build_rev '$rev' is not an integer in 0..65535" }
+          $env:BUILD_NUMBER = $rev
+          Write-Host "::notice title=xenbus::DriverVer 9.1.0.$env:BUILD_NUMBER"
+          .\build.ps1 -Type free -Arch x64
+          if ($LASTEXITCODE -ne 0) { throw "xenbus build.ps1 failed" }
+          Get-ChildItem . -Recurse -Include xenbus.sys,xen.sys,xenfilt.sys,xenbus.inf |
+            ForEach-Object { Write-Host "built: $($_.FullName)" }
+
+      - name: Neutralise xenbus_monitor, test-sign and package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force pv-out | Out-Null
+          # The package project archives the whole driver package (inf + all .sys + the
+          # versioned monitor exe/dll) into ONE directory; take that directory wholesale so
+          # the INF's copy sections always find every file they name.
+          $inf = Get-ChildItem xenbus -Recurse -Filter xenbus.inf |
+                 Where-Object { Test-Path (Join-Path $_.DirectoryName 'xenbus.sys') } |
+                 Select-Object -First 1
+          if (-not $inf) { throw "no built package directory holding xenbus.inf + xenbus.sys" }
+          Get-ChildItem $inf.DirectoryName -File | Where-Object { $_.Extension -in '.sys','.inf','.exe','.dll' } |
+            ForEach-Object { Copy-Item $_.FullName pv-out -Force }
+          foreach ($f in 'xen.sys','xenbus.sys','xenfilt.sys','xenbus.inf') {
+            if (-not (Test-Path "pv-out\$f")) { throw "package is missing $f" }
+          }
+          if (-not (Get-ChildItem pv-out -Filter 'xenbus_monitor_*.exe')) { throw 'package is missing the versioned xenbus_monitor exe the INF copies' }
+          # Same neutralisation packaging applies to the prebuilt INF (event 1074: the monitor
+          # RESTARTS the guest mid-install). No -PfxPath: the catalog is generated and signed
+          # below with the run's own cert, like pv-xenvif does.
+          & .\repo\packaging\patch-xenbus-inf.ps1 -InfPath (Resolve-Path pv-out\xenbus.inf).Path
+          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne $null) { throw "patch-xenbus-inf failed ($LASTEXITCODE)" }
+          Remove-Item pv-out\*.cat -ErrorAction SilentlyContinue
+          $cert = New-SelfSignedCertificate -Subject 'CN=QubesIDD Test Signing' -Type CodeSigningCert `
+                    -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(2)
+          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter Inf2Cat.exe |
+                     Select-Object -First 1
+          & $inf2cat.FullName /driver:pv-out /os:10_x64
+          if ($LASTEXITCODE -ne 0) { throw "Inf2Cat failed" }
+          $st = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+                Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          Get-ChildItem pv-out -Include *.sys,*.cat,*.exe,*.dll -Recurse | ForEach-Object {
+              & $st.FullName sign /fd SHA256 /a /s My /n 'QubesIDD Test Signing' $_.FullName
+              if ($LASTEXITCODE -ne 0) { throw "signtool failed on $($_.Name)" }
+          }
+          Export-Certificate -Cert $cert -FilePath pv-out\xenbus-signer.cer -Type CERT | Out-Null
+          $prov = @(
+            "xenbus built from xenbits $env:XENBUS_REF @ $env:XENBUS_RESOLVED (the commit Qubes v4.2.0-1 pins)",
+            "patch: patches/xenbus-hash-table-lock.patch - __HashTableBucketLock/Unlock rewritten so the",
+            "       writer bit is set and cleared by single compare-exchanges; the original could leave a",
+            "       phantom writer bit and then spin forever at HIGH_LEVEL (the 'guest never came back' stall).",
+            "inf: xenbus_monitor neutralised (packaging/patch-xenbus-inf.ps1), catalog regenerated",
+            "signing: throwaway test cert (guest runs with testsigning enabled by our installer)"
+          )
+          Set-Content pv-out\PROVENANCE.txt -Value $prov
+          Get-ChildItem pv-out | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pv-xenbus
+          path: pv-out/

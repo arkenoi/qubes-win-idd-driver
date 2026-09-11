@@ -81,6 +81,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "chromerepro msbuild failed" }
           Get-ChildItem tools\chromerepro\x64\Release\chromerepro.exe
 
+      - name: Build evtchnstorm
+        shell: pwsh
+        run: |
+          # tools/evtchnstorm: event-channel open/close storm - the reproducer for the xenbus
+          # bucket-lock wedge (findings/issues.md stall entry). Plain v143 + /MT, dynamic-loads
+          # xencontrol.dll on the guest, no WDK or xeniface import lib needed here.
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              Select-Object -First 1
+          & $msbuild tools\evtchnstorm\evtchnstorm.vcxproj /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "evtchnstorm msbuild failed" }
+          Get-ChildItem tools\evtchnstorm\x64\Release\evtchnstorm.exe
+
       - name: Build modeprobe
         shell: pwsh
         run: |
@@ -207,6 +220,9 @@ jobs:
           $qdbr = Get-ChildItem tools\qubesdb-read -Recurse -Filter qubesdb-read.exe -ErrorAction SilentlyContinue |
               Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
           if ($qdbr) { Copy-Item $qdbr.FullName package\ -Force } else { Write-Warning 'qubesdb-read.exe missing from package' }
+          $storm = Get-ChildItem tools\evtchnstorm -Recurse -Filter evtchnstorm.exe -ErrorAction SilentlyContinue |
+              Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
+          if ($storm) { Copy-Item $storm.FullName package\ -Force } else { throw 'evtchnstorm.exe missing from package - the wedge reproducer must ship' }
           Get-ChildItem package
 
       - uses: actions/upload-artifact@v4

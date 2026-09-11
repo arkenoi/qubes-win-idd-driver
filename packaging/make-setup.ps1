@@ -37,6 +37,11 @@ param(
     # the event log simultaneously (measured twice on 2026-08-29), and `xl console` from dom0
     # depends on none of the three. Optional: a package without it installs exactly as before.
     [string]$ConsArtifact,
+    # xenbus rebuilt from the commit Qubes pins + the bucket-lock fix (pv-xenbus.yml). The
+    # prebuilt xenbus.sys in the MSI wedges the guest (findings/issues.md stall entry); this
+    # one is installed by pnputil after the MSI and outranks it by DriverVer. REQUIRED once
+    # supplied: a package that silently dropped it would ship the wedge again.
+    [string]$BusArtifact,
     [Parameter(Mandatory = $true)][string]$MsiArtifact,
     [string]$IddArtifact,
     # Compiled tools\qwt-bootstrap\qwt-bootstrap.exe, staged at the package root as
@@ -436,6 +441,29 @@ if ($PvArtifact -and (Test-Path $PvArtifact)) {
     Write-Host "pv-drivers: $($pvWanted.Name -join ', ')"
 } else {
     Write-Warning 'no PV artifact supplied; pv-drivers/ empty and PV networking will stay on the emulated NIC'
+}
+
+# --- PV bus (xenbus, bucket-lock fix) --------------------------------------------------
+# SHIPPED BY DEFAULT. The MSI's prebuilt xenbus.sys (== stock 4.2.2) can leave a phantom
+# writer bit on a hash-table bucket lock and then spin forever at HIGH_LEVEL - the "guest
+# never came back" stall. Rebuilt from the same pinned commit with the lock fixed; the
+# installer adds it with pnputil after the MSI. The INF names every file below, so demand the
+# whole set or ship none of it.
+if ($BusArtifact -and (Test-Path $BusArtifact)) {
+    $busAll = @(Get-ChildItem $BusArtifact -Recurse -File)
+    foreach ($f in 'xenbus.sys','xen.sys','xenfilt.sys','xenbus.inf','xenbus.cat','xenbus-signer.cer') {
+        if (-not ($busAll.Name -contains $f)) {
+            throw "xenbus artifact is missing $f - refusing to stage a half-complete PV bus package"
+        }
+    }
+    if (-not ($busAll.Name -match '^xenbus_monitor_.*\.exe$')) { throw 'xenbus artifact is missing the versioned xenbus_monitor exe its INF copies' }
+    $busDir = Join-Path $OutDir 'pv-drivers\xenbus'
+    New-Item -ItemType Directory -Force $busDir | Out-Null
+    $busAll | Where-Object { $_.Extension -in '.sys','.inf','.cat','.cer','.exe','.dll' } |
+        ForEach-Object { Copy-Item $_.FullName $busDir -Force }
+    Write-Host "pv-drivers/xenbus: $(@(Get-ChildItem $busDir).Name -join ', ')"
+} else {
+    Write-Warning 'no xenbus artifact supplied; pv-drivers/xenbus absent and the guest keeps the wedging prebuilt xenbus.sys'
 }
 
 # --- PV console (xencons) ------------------------------------------------------------

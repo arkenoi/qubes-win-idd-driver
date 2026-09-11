@@ -1,0 +1,129 @@
+diff --git a/src/xenbus/hash_table.c b/src/xenbus/hash_table.c
+index 66d5ddd..68d57d9 100644
+--- a/src/xenbus/hash_table.c
++++ b/src/xenbus/hash_table.c
+@@ -119,40 +119,59 @@ __HashTableBucketLock(
+ 
+     KeRaiseIrql(HIGH_LEVEL, &Irql);
+ 
++    //
++    // Lock word: bit 0 = a writer holds or is acquiring the bucket,
++    // bits 1.. = reader count.
++    //
++    // Every transition is ONE compare-exchange from a value that was
++    // read and checked for the property the transition depends on, so
++    // a stale read can never "succeed" against a word another CPU
++    // changed in between. A writer moves W:0 -> W:1 (readers already
++    // inside may remain and are waited for below); a reader moves
++    // W:0,R:n -> W:0,R:n+1.
++    //
++    // The previous implementation derived both Old and New
++    // arithmetically from a single unlocked read, with the writer bit
++    // stripped from Old. A writer spinning behind another writer that
++    // released between its read and its exchange therefore exchanged
++    // 0 for 0, left the loop believing it held the lock while the word
++    // was 0, and its unlock then computed ((0 - 1) & 1) = 1: a writer
++    // bit held by nobody, after which every lock attempt on that
++    // bucket spun here forever at HIGH_LEVEL (measured twice on Qubes,
++    // 2026-09-10/11: lock word == 1, zero readers, no holder). A
++    // writer that set its bit while readers were present could also
++    // never exit, since Old never carried its own bit again.
++    //
+     for (;;) {
+-        LONG    Lock;
+-        LONG    Readers;
+-        LONG    Writers;
+         LONG    Old;
+         LONG    New;
+ 
+         KeMemoryBarrier();
+ 
+-        Lock = Bucket->Lock;
+-        Readers = Lock >> 1;
+-        Writers = Lock & 1;
++        Old = *(volatile LONG *)&Bucket->Lock;
+ 
+-        // There must be no existing writer
+-        Old = Readers << 1;
+-
+-        if (Writer) 
+-            Writers++;
+-        else
+-            Readers++;
++        if (Old & 1) {
++            YieldProcessor();
++            continue;
++        }
+ 
+-        New = (Readers << 1) | (Writers & 1);
++        New = (Writer) ? (Old | 1) : (Old + 2);
+ 
+-        if (InterlockedCompareExchange(&Bucket->Lock, New, Old) != Old)
+-            continue;
++        if (InterlockedCompareExchange(&Bucket->Lock, New, Old) == Old)
++            break;
++    }
+ 
++    if (Writer) {
+         //
+-        // We are done if we're not a writer, or there are no readers
+-        // left.
++        // The writer bit is ours, so no new reader can enter. Wait for
++        // the readers that were already inside to leave.
+         //
+-        if (!Writer || Readers == 0)
+-            break;
++        while ((*(volatile LONG *)&Bucket->Lock & ~1) != 0)
++            YieldProcessor();
+     }
+ 
++    KeMemoryBarrier();
++
+     return Irql;
+ }
+ 
+@@ -170,32 +189,20 @@ HashTableBucketUnlock(
+     IN  __drv_restoresIRQL KIRQL    Irql
+     )
+ {
+-    for (;;) {
+-        LONG    Lock;
+-        LONG    Readers;
+-        LONG    Writers;
+-        LONG    Old;
+-        LONG    New;
++    KeMemoryBarrier();
+ 
+-        KeMemoryBarrier();
+-
+-        Lock = Bucket->Lock;
+-        Readers = Lock >> 1;
+-        Writers = Lock & 1;
+-
+-        Old = (Readers << 1) | (Writers & 1);
+-
+-        if (Writer) {
+-            ASSERT(Writers != 0);
+-            --Writers;
+-        } else {
+-            --Readers;
+-        }
+-
+-        New = (Readers << 1) | (Writers & 1);
++    if (Writer) {
++        LONG    Old;
+ 
+-        if (InterlockedCompareExchange(&Bucket->Lock, New, Old) == Old)
+-            break;
++        //
++        // Readers drained before the writer proceeded and none can
++        // have entered since, so the word must be exactly 1.
++        //
++        Old = InterlockedCompareExchange(&Bucket->Lock, 0, 1);
++        ASSERT3S(Old, ==, 1);
++        UNREFERENCED_PARAMETER(Old);
++    } else {
++        (VOID) InterlockedExchangeAdd(&Bucket->Lock, -2);
+     }
+ 
+     KeLowerIrql(Irql);

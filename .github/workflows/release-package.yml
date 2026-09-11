@@ -39,6 +39,7 @@ on:
       - '.github/workflows/qwt-full.yml'
       - '.github/workflows/pv-xenvif.yml'
       - '.github/workflows/pv-xencons.yml'
+      - '.github/workflows/pv-xenbus.yml'
       # The ONE version generator: every OURS binary's FILEVERSION and the INF DriverVer come
       # out of it (packaging/version-stamp), so a change to it changes every shipped byte.
       - 'tools/stamp-version.ps1'
@@ -268,8 +269,18 @@ jobs:
     with:
       build_rev: ${{ github.run_number }}
 
+  # The PV bus driver, rebuilt from the commit Qubes pins plus the bucket-lock fix. The
+  # prebuilt xenbus.sys in the MSI (byte-identical to stock 4.2.2's) carries a lock that can
+  # leave a phantom writer bit and then spin forever at HIGH_LEVEL - the "guest never came
+  # back" stall, proven from two register captures (findings/issues.md). Installed by pnputil
+  # after the MSI with DriverVer 9.1.0.<run>, which outranks the MSI's 9.1.0.0.
+  bus:
+    uses: ./.github/workflows/pv-xenbus.yml
+    with:
+      build_rev: ${{ github.run_number }}
+
   setup:
-    needs: [msi, idd, pv, cons]
+    needs: [msi, idd, pv, cons, bus]
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -298,6 +309,11 @@ jobs:
         with:
           name: pv-xencons
           path: dl/cons
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: pv-xenbus
+          path: dl/bus
 
       # actions/checkout marks the workspace safe inside a TEMPORARY HOME and then restores
       # HOME, so by this point git reports "detected dubious ownership" and provenance
@@ -401,6 +417,7 @@ jobs:
               -IddArtifact dl\idd `
               -PvArtifact dl\pv `
               -ConsArtifact dl\cons `
+              -BusArtifact dl\bus `
               -BootstrapExe "$env:BOOTSTRAP_EXE" `
               -VcRedist    "$env:VC_REDIST" `
               -QubesdbReadExe "$env:QUBESDB_READ_EXE" `
