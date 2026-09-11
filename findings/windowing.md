@@ -46,3 +46,42 @@ forensics only — do not load it into context.
 - Fault-injection bits exist for every windowing gate (FI_GATE_MODE1/MODE2/START/NOCARD/SHELLOVERLAY, plus FI_DROP_*) so acceptance checks can be seen to fail on one binary; FiGateOff compiles to constant FALSE in release builds. MSG_CROSSING now has a real handler (HandleCrossing) — the old "unknown msg type 127, benign" note is obsolete. [verified 2026-09-01]
 - Acceptance state per docs/ACCEPTANCE-4.3.16.md (retained campaign record): SG1 Mode-1 hold across a proven cold boot with a real vacuity guard; SG2/SG4 exercised at 1024x768 containment with their deny discriminators; SG3 windowed-fullscreen maps 6/6; SG9 Start denied x25 with the documented line — all PASS-UNPROVEN per SG11 (feature-ON and owner-attended arms owed; SG10 shell identity/furniture not run). [verified 2026-08-30]
 - Parked by the owner, not open work: distinguishing a genuine lock/UAC LogonUI (persists, awaits input) to log/report it as a bug; suppressing the residual small normal boot window ("probably not now"). [verified 2026-08-19]
+
+## MENU MAP-HOLD (crop-before-show) - measured and materially reduced, 2026-09-11
+
+THE INSTRUMENT CAME FIRST, and it changed the diagnosis twice. Menus emitted NO timing line at
+all (PwNoteSliceFedMap only fires for PwSliceFed windows), so the hold was real but unmeasurable;
+QGAHELDMAP now logs held_ms + reason for EVERY deferred window. Two harness defects had to be
+fixed before any number was trustworthy: the stimulus dismissed each menu the instant its HWND
+appeared - i.e. while still deferred - so the window died unmapped (9 opens, 1 map, 0 samples);
+and samples cannot be matched by HWND, because a WinUI menu is a PAIR of windows and a stimulus
+only sees the site bridge. Attribution is by the log line's own menu= flag.
+
+BASELINE (8 opens, instrumented 4.3.28): held_ms 656/703/703/719/719/719/719/734, median 719,
+7 of 8 at or above the 700 ms CROP_BEFORE_SHOW_TIMEOUT_MS ceiling - i.e. released by TIMEOUT and
+therefore mapped UNCROPPED, with the shadow strip the hold exists to remove. Worst of both.
+
+TWO ROOT CAUSES, both now fixed:
+1. THE CROP CACHE COULD NEVER HIT FOR A MENU. It was keyed on (HWND, size), and a WinUI context
+   menu is created fresh on every open, so the key was new every time and every menu paid a full
+   UIA measurement. The insets are a property of CLASS+SIZE, not the instance - measured
+   identically on every repeat: 287x279 -> 16/6/16/22, 287x68 -> 10/2/10/4 - so menus are keyed
+   by class+size. Fresh measurements per 8 opens fell from 10 to 3.
+2. A DEFERRED MAP WAS ONLY RE-EXAMINED AT THE CEILING. The release happens on the tracking pass,
+   and the wake was armed for MapDeferSince + CROP_BEFORE_SHOW_TIMEOUT_MS, so a crop that was
+   ready early was simply not looked at until the bound expired. Re-check is now a 32 ms tick;
+   the ceiling remains a hard bound instead of the normal case.
+
+AFTER (same harness, same guest, binary verified by hash): held_ms 32/63/312/546/609/609/750/812,
+median 577 (was 719), min 32 (was 656), and 7 of 8 released by CROP - menus now map CORRECTLY
+CROPPED, which is the visible artefact fixed. The shadow-strip defect is gone.
+
+RESIDUAL, stated honestly: the improvement is not uniform. Two menus released in 32-63 ms (one to
+two ticks, the mechanism working as intended); the rest still took 312-812 ms even though they are
+classified menu=1, their insets were cached, and their content had already arrived (lead_ms 46-328
+BEFORE the map). The remaining wait is therefore NOT the measurement - it is when the tracking
+pass actually runs: the wake pokes via QueueWindowEvent, which DEDUPES per window, so a second
+poke while one is pending is dropped and the release waits for the main loop to get to it. The
+named next step is to let the sweep release a ready hold directly (it already runs on the main
+loop thread, the same one as the tracking pass) instead of queueing a poke. Not attempted yet;
+one outlier (812 ms) sits above the ceiling via the +100 ms retry path.
