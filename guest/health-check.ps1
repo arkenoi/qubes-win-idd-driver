@@ -738,11 +738,19 @@ try {
                            msg = ($ev.Message -replace '\s+', ' ') }
         }
     }
+    # NO ProviderName IN THIS FILTER. Measured 2026-09-11 on win11-nfy (PS 5.1.26100): the
+    # 'Microsoft-Windows-Wininit' ETW provider is linked to the System log and its own Diagnostic
+    # channel, NOT to Application, and Get-WinEvent rejects a hashtable that names Application
+    # together with that provider with EventLogException "The parameter is incorrect" - which
+    # is exactly the error every cell of two acceptance campaigns reported (blamed on 'dirty-bit'
+    # while the step name was polluted, then on 'autochk-1001' once it was not). The chkdsk boot
+    # summary in Application carries that name as a classic event SOURCE, so it is matched on
+    # the returned records instead; LogName + Id alone is accepted (count=0 on a clean guest).
     $step = 'autochk-1001'
     foreach ($ev in @(Get-WinEvent -FilterHashtable @{
-                          LogName = 'Application'; StartTime = $bootT.AddSeconds(-30)
-                          ProviderName = 'Microsoft-Windows-Wininit'; Id = 1001
-                      } -MaxEvents 10 -ErrorAction SilentlyContinue)) {
+                          LogName = 'Application'; StartTime = $bootT.AddSeconds(-30); Id = 1001
+                      } -MaxEvents 20 -ErrorAction SilentlyContinue)) {
+        if ($ev.ProviderName -notmatch 'Wininit') { continue }
         $repairs += @{ id = 1001; time = $ev.TimeCreated.ToUniversalTime().ToString('o')
                        msg = 'autochk/chkdsk ran at boot - the volume was dirty' }
     }
