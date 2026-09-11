@@ -67,6 +67,9 @@ busy=$(pgrep -f "[a]cceptance-races|[m]gmt/harness/matrix.sh|[p]rime-run.sh|[q]u
 [ -z "$busy" ] || { say "REFUSED: another VM-driving job is running (pids: $busy)"; exit 3; }
 say "=== evtchn storm A/B: golden=$GOLDEN threads=$THREADS stock-ceiling=${SECS}s poll=${POLL}s out=$OUT ==="
 
+STORM_PGID=""
+stop_storm(){ [ -n "$STORM_PGID" ] && { kill -TERM -- "-$STORM_PGID" 2>/dev/null; sleep 1; kill -KILL -- "-$STORM_PGID" 2>/dev/null; }; STORM_PGID=""; }
+
 # ---- one storm run against a live, session-up subject ------------------------------------
 # storm <vm> <label> <seconds> -> sets STORM_VERDICT (WEDGED|CLEAN|VOID) and STORM_T (seconds)
 storm(){
@@ -75,15 +78,20 @@ storm(){
   QTEST_VM=$vm ./tools/qtest synctime >/dev/null 2>&1
   QTEST_VM=$vm ./tools/qtest push "$STORM" >"$OUT/$lbl-push.out" 2>&1 || { say "  $lbl: push failed: $(tail -1 "$OUT/$lbl-push.out")"; return; }
   say "  $lbl: launching evtchnstorm $THREADS threads for ${secs}s"
-  ( QTEST_VM=$vm timeout -k 10 $((secs + 180)) ./tools/qtest run "\"$GUEST_EXE\" $THREADS $secs 0" > "$OUT/$lbl-storm.out" 2>&1 ) &
+  # setsid: the storm is its own process group so that stopping it kills the qrexec-client-vm
+  # child too. A lingering qrexec call AUTO-STARTS a halted qube (the "queued qrexec restarts
+  # guests" trap): the first run's discard killed the subject and a still-pending call started
+  # it again, so qvm-remove failed and the guest was left Running.
+  setsid bash -c "QTEST_VM=$vm exec timeout -k 10 $((secs + 180)) ./tools/qtest run '\"$GUEST_EXE\" $THREADS $secs 0'" > "$OUT/$lbl-storm.out" 2>&1 &
   local spid=$!
+  STORM_PGID=$spid
   t0=$(date +%s)
   # The storm must PROVE it started: the tool prints a probe line after one successful
   # open/close. Without it a missing xencontrol.dll would read as "did not wedge".
   for i in $(seq 1 12); do sleep 5; grep -qa 'probe: open/close' "$OUT/$lbl-storm.out" && break; done
   if ! grep -qa 'probe: open/close' "$OUT/$lbl-storm.out"; then
     say "  $lbl: VOID - storm never reported its probe line: $(tr -d '\r' < "$OUT/$lbl-storm.out" | tail -2 | tr '\n' ' ')"
-    kill "$spid" 2>/dev/null; return
+    stop_storm; return
   fi
   say "  $lbl: storm running ($(grep -a 'xencontrol:' "$OUT/$lbl-storm.out" | head -1 | tr -d '\r'))"
   while :; do
@@ -104,26 +112,30 @@ storm(){
         STORM_VERDICT=WEDGED; STORM_T=$now
         say "  $lbl: WEDGED at t+${now}s (qrexec dead x2, ${b}% of a core sustained)"
         QTEST_VM=$vm ./tools/qtest wedge "$OUT/$lbl-wedge" >/dev/null 2>&1 && say "  $lbl: dom0 forensics in $OUT/$lbl-wedge" || say "  $lbl: dom0 forensics capture unavailable"
-        kill "$spid" 2>/dev/null; return
+        stop_storm; return
       fi
       if [ "$dead" -ge 4 ]; then
         say "  $lbl: qrexec dead x$dead without the spin signature (burn=${b}%) - UNCLASSIFIED, treated as VOID"
-        kill "$spid" 2>/dev/null; return
+        stop_storm; return
       fi
     fi
     if [ "$now" -ge $((secs + 150)) ]; then
       say "  $lbl: t+${now}s storm overran its window without a result line - VOID"
-      kill "$spid" 2>/dev/null; return
+      stop_storm; return
     fi
     sleep "$POLL"
   done
 }
 
 discard(){ # a stormed subject is never reused: kill (it is being discarded), wait, remove
-  local vm=$1
+  local vm=$1 i
+  stop_storm
+  pkill -f "qrexec-client-vm [${vm:0:1}]${vm:1} " 2>/dev/null; sleep 1   # nothing pending may restart it
   vm_unlock "$vm" 2>/dev/null
   qvm-kill "$vm" >/dev/null 2>&1; w_halt "$vm" 120 "discard-$vm" say >/dev/null 2>&1
-  qvm-remove -f "$vm" >/dev/null 2>&1 && say "  $vm discarded"
+  # Halted must HOLD: a queued call restarts a killed qube within seconds.
+  for i in 1 2 3; do sleep 5; [ "$(w_state "$vm")" = Halted ] || { say "  $vm came back ($(w_state "$vm")) after kill - killing again"; pkill -f "qrexec-client-vm [${vm:0:1}]${vm:1} " 2>/dev/null; qvm-kill "$vm" >/dev/null 2>&1; }; done
+  if qvm-remove -f "$vm" >/dev/null 2>&1; then say "  $vm discarded"; else say "  WARNING: could not remove $vm (state $(w_state "$vm")) - clean it by hand before the next run"; fi
 }
 
 # ==== ARM 1: STOCK ==========================================================================
