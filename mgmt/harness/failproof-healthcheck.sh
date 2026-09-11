@@ -129,6 +129,36 @@ run_proof idd_device_bound \
   "Get-PnpDevice | Where-Object { \$_.InstanceId -like 'ROOT\\DISPLAY*' } | Enable-PnpDevice -Confirm:\$false -ErrorAction Continue; Start-Sleep 8" \
   "disable the indirect display device - with no IDD there is no Qubes display adapter to be bound or primary"
 
+# prev_shutdown_orderly: the plant is an UNCLEAN SHUTDOWN, which cannot be restored on the same
+# boot - it consumes the subject (a killed guest is never reused). So it runs LAST and only when
+# asked (PROVE_KILL=1): start a writer, qvm-kill the domain mid-write, boot it, and require the
+# check to go red on Kernel-Power 41 / 6008. Done by hand 2026-09-11 on win11-nfy after the check
+# had failed two whole acceptance campaigns for INSTRUMENT reasons nobody had seen it fail for;
+# mechanised here so it never goes unproven again. The caller must qvm-remove the subject after.
+if [ "${PROVE_KILL:-0}" = 1 ]; then
+  log "=== prev_shutdown_orderly (PROVE_KILL=1: consumes the subject) ==="
+  psrun "Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile','-Command','for(\$i=0;\$i -lt 400;\$i++){ [IO.File]::WriteAllBytes(\"C:\\Users\\user\\w\$(\$i % 40).bin\", (New-Object byte[] 33554432)) }'" >/dev/null 2>&1
+  sleep 15
+  pkill -f "qrexec-client-vm [${VM:0:1}]${VM:1} " 2>/dev/null; sleep 1
+  qvm-kill "$VM" >/dev/null 2>&1
+  for i in $(seq 1 12); do [ "$(qvm-ls --raw-data --fields state "$VM" 2>/dev/null)" = Halted ] && break; sleep 5; done
+  qvm-start "$VM" >/dev/null 2>&1
+  for i in $(seq 1 60); do q run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY && break; sleep 10; done
+  sleep 30
+  H4=$(health); F4=$(failed_list "$H4")
+  log "  after a hard kill mid-write and a reboot, failed=$F4"
+  if echo ",$F4," | grep -q ",prev_shutdown_orderly,"; then
+    log "  -> PROOF EARNED: prev_shutdown_orderly went red on an unclean shutdown"
+    printf '%s\t%s\t%s\t%s\t%s\n' HEALTH prev_shutdown_orderly PASS "SEEN TO FAIL: qvm-kill mid-write -> failed=[$F4]" "$EV" >> "$V"
+  else
+    log "  -> NOT RED: prev_shutdown_orderly did not fail on a hard kill (failed=[$F4]) - stays UNPROVEN"
+    printf '%s\t%s\t%s\t%s\t%s\n' HEALTH prev_shutdown_orderly PASS-UNPROVEN "hard kill did not turn it red (failed=[$F4])" "$EV" >> "$V"; rc=1
+  fi
+  log "  SUBJECT $VM IS CONSUMED (killed): qvm-remove it before it is used for anything else."
+else
+  log "prev_shutdown_orderly: NOT proven this run (set PROVE_KILL=1 to plant an unclean shutdown; it consumes the subject)"
+fi
+
 log "=== finished rc=$rc ==="
 log "OWED (no safe plant exists): pv_disk_bound (boot disk), user_data_on_private, pnp_no_unexpected_errors, boot_events_clean"
 exit $rc

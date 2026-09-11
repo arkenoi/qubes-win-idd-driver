@@ -1297,10 +1297,23 @@ d=open(sys.argv[1],'rb').read(33); w,h=struct.unpack('>II',d[16:24]); print(w,h)
       say "    $(basename $f) ${w}x${h}"
       [ "$w" -ge $(( 5120 * 99 / 100 )) ] && [ "$h" -ge $(( 1440 * 99 / 100 )) ] && big=1
     done
+    # AN EMPTY dom0 CAPTURE IS NOT "NO WINDOW" (memory rule, and measured 2026-09-11: campaign
+    # 34594988407 graded WIN11-appvm boot 2 a product FAIL on six empty tars while qrexec answered
+    # and the guest took an orderly ACPI shutdown 58 s later - the owner was switching dom0
+    # desktops, and the screenshot service returns only windows on the CURRENT one). So before
+    # grading, ask the GUEST whether notepad has a top-level window. Guest window present + dom0
+    # capture empty = INVALID-INSTRUMENT (ungraded), never a product verdict. Probed BEFORE the
+    # taskkill, or there is nothing left to ask about.
+    local gw=""
+    if [ "$W" -eq 0 ]; then
+      gw=$(g_probe "$app" NPWIN 'Write-Host ("NPWIN=" + ((Get-Process notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Measure-Object).Count))' 60)
+    fi
     QTEST_VM=$app timeout -k 5 45 ./tools/qtest run 'cmd /c taskkill /f /im notepad.exe' >/dev/null 2>&1
     if [ "$big" = 1 ]; then no "$3-appvm boot $b: a FULLSCREEN-SIZED window was mapped"
     elif [ "$W" -gt 0 ]; then ok "$3-appvm boot $b: $W window(s) mapped, none fullscreen-sized"
-    else no "$3-appvm boot $b: notepad opened but dom0 got NO window"; fi
+    elif [ "${gw:-x}" -ge 1 ] 2>/dev/null; then
+      no "$3-appvm boot $b: INVALID-INSTRUMENT - the guest shows $gw notepad window(s) but the dom0 capture returned none on six tries (a dom0 desktop switch or capture fault; not a product verdict)"
+    else no "$3-appvm boot $b: notepad opened but dom0 got NO window (guest-side notepad windows: ${gw:-unreadable})"; fi
   done
 }
 
