@@ -76,12 +76,27 @@ AFTER (same harness, same guest, binary verified by hash): held_ms 32/63/312/546
 median 577 (was 719), min 32 (was 656), and 7 of 8 released by CROP - menus now map CORRECTLY
 CROPPED, which is the visible artefact fixed. The shadow-strip defect is gone.
 
-RESIDUAL, stated honestly: the improvement is not uniform. Two menus released in 32-63 ms (one to
-two ticks, the mechanism working as intended); the rest still took 312-812 ms even though they are
-classified menu=1, their insets were cached, and their content had already arrived (lead_ms 46-328
-BEFORE the map). The remaining wait is therefore NOT the measurement - it is when the tracking
-pass actually runs: the wake pokes via QueueWindowEvent, which DEDUPES per window, so a second
-poke while one is pending is dropped and the release waits for the main loop to get to it. The
-named next step is to let the sweep release a ready hold directly (it already runs on the main
-loop thread, the same one as the tracking pass) instead of queueing a poke. Not attempted yet;
-one outlier (812 ms) sits above the ceiling via the +100 ms retry path.
+RESIDUAL FOUND AND FIXED - it was a third bug, not scheduling. The defer-time size was
+instrumented against the release-time size (QGAHELDDEFER vs QGAHELDMAP) and settled it at once:
+the slow menus were DEFERRED at raw 287x328 and RELEASED at cropped 267x259, while the one fast
+window (47 ms) was released at its RAW size. Applying a crop REPLACES data->Width/Height with the
+cropped size, and the cache is keyed on the size - so the moment a window had been cropped, every
+later CropPending lookup keyed on the CROPPED size, missed the entry stored under the RAW size,
+and reported the crop as still pending. The map then held to the ceiling although the measurement
+had resolved long before. CropPending now reconstructs the raw size from the stored insets
+(Width + CropLeft + CropRight) and finds its entry.
+
+FINAL (same harness, same guest, binary verified by hash):
+    held_ms 15/32/32/47/47/47/47/468   median 47 (was 719)   min 15 (was 656)
+    0 of 8 at the ceiling (was 7 of 8)
+    8 of 8 released BY CROP (was 0 of 8 - every menu used to time out and map UNCROPPED)
+Median menu hold is down ~15x and the uncropped-shadow artefact is gone: menus now map cropped,
+first time. The single 468 ms sample is the first menu of a new shape paying its one real
+measurement, which is expected and not removable - every repeat of that shape is then ~47 ms.
+
+THE THREE BUGS, none of which was the thing that looked obvious at the start:
+  1. the crop cache could never hit for a menu (keyed on a per-open HWND);
+  2. a deferred map was only re-examined at the 700 ms ceiling, never when the crop became ready;
+  3. applying the crop changed the cache key, so a cropped window could never find its own entry.
+NOT YET RE-ACCEPTED: these are shipping agent changes and the full campaign has not been re-run
+on them.
