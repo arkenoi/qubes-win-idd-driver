@@ -100,3 +100,30 @@ THE THREE BUGS, none of which was the thing that looked obvious at the start:
   3. applying the crop changed the cache key, so a cropped window could never find its own entry.
 NOT YET RE-ACCEPTED: these are shipping agent changes and the full campaign has not been re-run
 on them.
+
+## MENU RENDER - WHERE THE TIME ACTUALLY GOES (measured 2026-09-11, owner: "still quite slow on render")
+
+The crop work is done; the remaining latency is NOT the crop. Full timeline for one menu, from
+the agent's own ticks (QGAHELDDEFER t=, QGABROKERREG t=, QGASLICECONTENT t=):
+
+    defer -> broker register : 531 ms   <-- the dominant cost, and it is AGENT-SIDE
+    register -> first PAINTED:  125 ms   <-- the broker is not the problem
+
+So a menu spends half a second between being deferred and being handed to the capture broker.
+The broker's idle reconcile is 250 ms, but the agent already SetEvent()s its control handle on
+register, so that is not the gate - the gate is when the agent's own tracking pass gets round to
+registering the window. THAT is the next thing to attack, not the broker.
+
+AND THE WINDOW RE-REGISTERS, WHICH IS THE VISIBLE "SETTLING". The same hwnd registered THREE
+times in 80 ms at oscillating sizes: 267x259, 263x251, 267x259. Two different inset sets are in
+play - the UIA measurement and the broker's pixel-exact opaque bounds disagree (20/69 vs 24/77 on
+a 287x328 raw window) - so whichever answers first wins that pass and the geometry flips when the
+other lands. Each flip re-registers the broker slot. This is pre-existing but was invisible while
+every menu sat at the 700 ms ceiling; it is what the owner sees as the window settling slowly.
+
+STATE AFTER THE RENDER-THEN-MAP WORK (same harness/guest, binary hash-verified):
+    held_ms 203/203/250/296/422/500/656/1156, median 359 (baseline 719)
+    mapped UNPAINTED: 0 of 8   (was 8 of 8 after the first speedup - the black blink)
+    released by crop: 8 of 8   (baseline 0 of 8 - every menu used to time out and map uncropped)
+Correctness is fixed and the artificial ceiling is gone. Speed is NOT yet good, and the two
+named causes above are why.
