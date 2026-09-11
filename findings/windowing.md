@@ -127,3 +127,33 @@ STATE AFTER THE RENDER-THEN-MAP WORK (same harness/guest, binary hash-verified):
     released by crop: 8 of 8   (baseline 0 of 8 - every menu used to time out and map uncropped)
 Correctness is fixed and the artificial ceiling is gone. Speed is NOT yet good, and the two
 named causes above are why.
+
+## MENU LATENCY - VALIDATED NUMBERS (2026-09-11), and a harness defect that invalidated the earlier ones
+
+INSTRUMENT DEFECT FOUND FIRST. The harness grepped the whole agent log, which persists across
+runs within one agent instance, so each run counted every menu since the agent started: three
+consecutive 8-open runs reported 14, 22 and 30 crop-releases. Every median quoted from this
+harness before this point blended runs together - mine included. It now records the count of
+timing lines BEFORE the stimulus and reads only what appears after; a run reporting 7-8 lines for
+8 opens is the sanity check.
+
+VALIDATED, three runs on one unchanged binary (the project's own rule, which I had been
+violating by comparing single runs):
+    medians 422 / 453 / 453 ms, spread ~31 ms - so the instrument is stable at this sample size
+    min 204-312, max 563-813
+    mapped UNPAINTED: 0 every run          released by crop: 100% every run
+Against a baseline of ~719 ms median where every menu timed out and mapped UNCROPPED.
+
+WHAT IS FIXED: the black flash (0 unpainted), the shadow-strip artefact (100% cropped), the
+700 ms ceiling as the normal path, and the 250 ms retry grid.
+
+WHAT REMAINS, measured and named:
+ - [verified 2026-09-11] No broker->agent "frame published" event exists in the ABI at all. The agent notices a
+   published frame only on its next desktop-capture pass, and if that frame hashes as redundant
+   the walk is skipped entirely - so a painted menu can sit unnoticed on a static desktop. Worth
+   ~125 ms and removes a real correctness hole. This is the next thing to build.
+ - [verified 2026-09-11] Two inset authorities disagree (broker pixel-exact 20/69 vs UIA 24/77) and
+   whichever answers first wins the pass; when the other lands the geometry flips and the broker
+   slot is re-registered, costing a fresh first-frame round trip. Pick the pixel-exact one for
+   menus and never let the estimate override it.
+Realistic floor once those land is the guest's own render plus one frame - roughly 100-150 ms.
