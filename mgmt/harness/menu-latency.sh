@@ -89,6 +89,11 @@ if vals:
     print(f"held_ms min/median/max = {vals[0]} / {int(statistics.median(vals))} / {vals[-1]}")
     ceiling = sum(1 for v in vals if v >= 700)
     print(f"at or above the 700 ms ceiling: {ceiling}/{len(vals)}")
+    # PAINTED IS A PASS/FAIL, NOT A FOOTNOTE. A menu that maps with painted=0 has no pixels yet -
+    # that is the BLACK BLINK the owner saw on 2026-09-11, and it is exactly how a "faster" median
+    # can be a regression. Any unpainted map fails the run regardless of how good held_ms looks.
+    unpainted = len(re.findall(r'QGASLICEMAP.*painted=0', open(f"{out}/maplines.txt", errors="ignore").read()))
+    print(f"mapped UNPAINTED (black flash): {unpainted}   <- must be 0")
     to = sum(1 for h in held if menus.get(h) and reason.get(h) == 'timeout')
     cr = sum(1 for h in held if menus.get(h) and reason.get(h) == 'crop')
     print(f"released by crop / by timeout: {cr} / {to}   (timeout = mapped UNCROPPED)")
