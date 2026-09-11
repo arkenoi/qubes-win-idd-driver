@@ -451,12 +451,13 @@ if ($PvArtifact -and (Test-Path $PvArtifact)) {
 # whole set or ship none of it.
 if ($BusArtifact -and (Test-Path $BusArtifact)) {
     $busAll = @(Get-ChildItem $BusArtifact -Recurse -File)
-    foreach ($f in 'xenbus.sys','xen.sys','xenfilt.sys','xenbus.inf','xenbus.cat','xenbus-signer.cer') {
+    # The INF copies xenbus_monitor.exe/.dll to versioned names at install time; the
+    # package carries the plain names. Every name below is referenced by the INF.
+    foreach ($f in 'xenbus.sys','xen.sys','xenfilt.sys','xenbus.inf','xenbus.cat','xenbus-signer.cer','xenbus_monitor.exe','xenbus_monitor.dll') {
         if (-not ($busAll.Name -contains $f)) {
             throw "xenbus artifact is missing $f - refusing to stage a half-complete PV bus package"
         }
     }
-    if (-not ($busAll.Name -match '^xenbus_monitor_.*\.exe$')) { throw 'xenbus artifact is missing the versioned xenbus_monitor exe its INF copies' }
     $busDir = Join-Path $OutDir 'pv-drivers\xenbus'
     New-Item -ItemType Directory -Force $busDir | Out-Null
     $busAll | Where-Object { $_.Extension -in '.sys','.inf','.cat','.cer','.exe','.dll' } |

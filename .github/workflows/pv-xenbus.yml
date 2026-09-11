@@ -136,7 +136,11 @@ jobs:
           foreach ($f in 'xen.sys','xenbus.sys','xenfilt.sys','xenbus.inf') {
             if (-not (Test-Path "pv-out\$f")) { throw "package is missing $f" }
           }
-          if (-not (Get-ChildItem pv-out -Filter 'xenbus_monitor_*.exe')) { throw 'package is missing the versioned xenbus_monitor exe the INF copies' }
+          # The INF copies xenbus_monitor.exe/.dll to their VERSIONED names at install time
+          # ([Monitor_CopyFiles]: dest,source) - the package carries the plain names.
+          foreach ($f in 'xenbus_monitor.exe','xenbus_monitor.dll') {
+            if (-not (Test-Path "pv-out\$f")) { throw "package is missing $f, which the INF copies" }
+          }
           # Same neutralisation packaging applies to the prebuilt INF (event 1074: the monitor
           # RESTARTS the guest mid-install). No -PfxPath: the catalog is generated and signed
           # below with the run's own cert, like pv-xenvif does.
