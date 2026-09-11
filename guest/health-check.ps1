@@ -712,12 +712,20 @@ try {
     # than assumed. A repair actually running (1001, or Ntfs 130/131 "has now been repaired") is the
     # loud case and fails this check outright.
     $repairs = @()
-    foreach ($ev in @(Get-WinEvent -FilterHashtable @{
-                          # Same boot-window correction as prev_shutdown_orderly above: event 98
-                          # and any repair are written AT MOUNT, i.e. at or after LastBootUpTime, so
-                          # an EndTime of $bootT excluded every one of them. As written this morning
-                          # these two queries could never have returned anything.
+    # Same boot-window correction as prev_shutdown_orderly above: event 98 and any repair are
+    # written AT MOUNT, i.e. at or after LastBootUpTime, so an EndTime of $bootT excluded every
+    # one of them. As written on the morning of 2026-09-10 these two queries could never have
+    # returned anything.
+    #
+    # THE STEP NAME IS SET BEFORE THE STATEMENT, NEVER INSIDE THE @{ } LITERAL. The 2026-09-10
+    # 20:59 rewrite put `$step = 'ntfs-health-98'` inside the FilterHashtable, where PowerShell
+    # parses it as a hashtable ENTRY keyed by the current value of $step ('dirty-bit'). Get-WinEvent
+    # then rejected the polluted filter with "The parameter is incorrect", the error was reported
+    # at step 'dirty-bit', and every cell of the 2026-09-11 acceptance campaign (6/6 on a package
+    # whose only change was a driver) failed on it. Proven at the parser: @{ $step = 'x' } yields
+    # a key named dirty-bit and leaves $step unchanged.
     $step = 'ntfs-health-98'
+    foreach ($ev in @(Get-WinEvent -FilterHashtable @{
                           LogName = 'System'; StartTime = $bootT.AddSeconds(-30)
                           ProviderName = 'Microsoft-Windows-Ntfs'
                       } -MaxEvents 60 -ErrorAction SilentlyContinue)) {
@@ -730,8 +738,8 @@ try {
                            msg = ($ev.Message -replace '\s+', ' ') }
         }
     }
-    foreach ($ev in @(Get-WinEvent -FilterHashtable @{
     $step = 'autochk-1001'
+    foreach ($ev in @(Get-WinEvent -FilterHashtable @{
                           LogName = 'Application'; StartTime = $bootT.AddSeconds(-30)
                           ProviderName = 'Microsoft-Windows-Wininit'; Id = 1001
                       } -MaxEvents 10 -ErrorAction SilentlyContinue)) {
