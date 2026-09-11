@@ -53,17 +53,26 @@ say "agent log: ${LOG:-<unreadable>}"
 [ -n "$LOG" ] || { say "VOID: could not locate the gui-agent log"; exit 2; }
 b64=$(python3 -c "import sys,base64;print(base64.b64encode(('Get-Content -LiteralPath \"'+sys.argv[1]+'\" -Tail 4000').encode('utf-16-le')).decode())" "$LOG")
 QTEST_VM=$VM timeout -k 5 180 ./tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64" 2>/dev/null | tr -d '\r' > "$OUT/agent.log"
-grep -a 'QGASLICEMAP\|insets l=' "$OUT/agent.log" > "$OUT/maplines.txt" 2>/dev/null
+grep -a 'QGAHELDMAP\|QGASLICEMAP\|insets l=' "$OUT/agent.log" > "$OUT/maplines.txt" 2>/dev/null
 
 python3 - "$OUT" <<'PY' | tee -a "$OUT/summary.log"
 import re, sys, statistics
 out = sys.argv[1]
 pop = [int(m.group(1), 16) for m in
        (re.match(r'POPUP=(0x[0-9a-f]+)', l) for l in open(f"{out}/popups.txt")) if m]
-held = {}
+# QGAHELDMAP is the menu-capable line (every deferred window); QGASLICEMAP only fires for
+# slice-fed ones and produced NOTHING for menus - that is why this harness first read zero
+# samples. Prefer QGAHELDMAP and keep its reason=, so "it got faster" can be told apart from
+# "it started mapping uncropped", which would be a regression dressed as a win.
+held, reason, menus = {}, {}, {}
 for l in open(f"{out}/maplines.txt", errors="ignore"):
-    m = re.search(r'QGASLICEMAP hwnd=(0x[0-9a-fA-F]+).*held_ms=(-?\d+)', l)
+    m = re.search(r'QGAHELDMAP hwnd=(0x[0-9a-fA-F]+).*held_ms=(\d+) reason=(\w+) menu=(\d)', l)
     if m:
+        h = int(m.group(1), 16)
+        held[h] = int(m.group(2)); reason[h] = m.group(3); menus[h] = m.group(4) == '1'
+        continue
+    m = re.search(r'QGASLICEMAP hwnd=(0x[0-9a-fA-F]+).*held_ms=(-?\d+)', l)
+    if m and int(m.group(1), 16) not in held:
         held[int(m.group(1), 16)] = int(m.group(2))
 vals, unmatched = [], 0
 for h in pop:
@@ -80,6 +89,9 @@ if vals:
     print(f"held_ms min/median/max = {vals[0]} / {int(statistics.median(vals))} / {vals[-1]}")
     ceiling = sum(1 for v in vals if v >= 700)
     print(f"at or above the 700 ms ceiling: {ceiling}/{len(vals)}")
+    to = sum(1 for h in pop if reason.get(h) == 'timeout')
+    cr = sum(1 for h in pop if reason.get(h) == 'crop')
+    print(f"released by crop / by timeout: {cr} / {to}   (timeout = mapped UNCROPPED)")
 else:
     print("NO held_ms SAMPLES - the measurement failed; do not read a speedup into this.")
 PY
