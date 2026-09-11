@@ -70,7 +70,7 @@ static class NotifyClient
         Console.Error.WriteLine("  NotifyClient --send <summary> [body words...] [--user U] [--target T] [--timeout SEC] [--spool DIR]");
         Console.Error.WriteLine("  NotifyClient --send-file <utf8-file>  (first line = summary, rest = body; same options)");
         Console.Error.WriteLine("  NotifyClient --handler <spool-file>   (internal: spawned by qrexec, stdio = vchan)");
-        Console.Error.WriteLine("defaults: user from QUBES_NOTIFY_USER else 'user' when running as SYSTEM else current");
+        Console.Error.WriteLine("defaults: user from QUBES_NOTIFY_USER else 'SYSTEM' when running as SYSTEM else current");
         Console.Error.WriteLine("          user name; target '@default' (NEVER an explicit dom0 - policy + sys-gui routing");
         Console.Error.WriteLine("          both key on @default); timeout 30; spool %ProgramData%\\qubes-notify-proxy");
         return 2;
@@ -131,11 +131,22 @@ static class NotifyClient
         string u = Environment.GetEnvironmentVariable("QUBES_NOTIFY_USER");
         if (!string.IsNullOrEmpty(u)) return u;
         u = Environment.UserName;
-        // A SYSTEM caller (e.g. qubes.VMShell on the testbed) is not a logon account the agent
-        // can target; the handler runs in the interactive session, so name the desktop account.
+        // This is qrexec pipe-string field 3 (see Send): the LOCAL Windows account the --handler
+        // endpoint is launched as on THIS guest, NOT the Linux target (field 1 = @default). A
+        // desktop-user caller passes its own real account here and exec.c reuses the matching
+        // logged-on token with no LogonUser. A SYSTEM caller (e.g. qubes.VMShell on the testbed) or
+        // a machine account has no per-user name to pass. Do NOT hardcode "user": on a guest whose
+        // local account is not literally "user" (GWeck's field bug, 2026-09-10; the real name is in
+        // qvm-prefs default_user), exec.c's CreatePipedProcessAsUser mismatches "user" against the
+        // real logged-on name and calls LogonUser("user",".","userpass"), which fails (no such
+        // account) - the handler never launches and the notification is never delivered (NOACK).
+        // The --handler endpoint is stdio-only (its stdin/stdout ARE the vchan) and dom0 marks the
+        // notification's origin by the QUBE, not the guest user, so it needs no user identity: pass
+        // "SYSTEM", which qrexec-agent maps to a NULL userName so qrexec-wrapper runs it under the
+        // agent's own (SYSTEM) token with no account-name dependency at all.
         if (string.IsNullOrEmpty(u) || u.Equals("SYSTEM", StringComparison.OrdinalIgnoreCase)
             || u.EndsWith("$", StringComparison.Ordinal))
-            u = "user";
+            u = "SYSTEM";
         return u;
     }
 

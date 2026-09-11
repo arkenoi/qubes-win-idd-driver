@@ -579,7 +579,21 @@ static class Relay
         int port = 8082;
         string target = Environment.GetEnvironmentVariable("QUBES_UPDATES_TARGET");
         if (string.IsNullOrEmpty(target)) target = "@default";
-        string user = "user";
+        // Field 3 of the qrexec pipe-string (see OpenChannel) is the LOCAL Windows account the
+        // --relay connect-back handler is launched as on THIS guest, NOT the Linux target user
+        // (that is resolved by dom0 policy on the netvm). The --relay handler is stdio-only - its
+        // stdin/stdout ARE the vchan (see file header) - so it needs no interactive desktop and no
+        // user identity at all. Default it to "SYSTEM": qrexec-agent maps "SYSTEM"/"root" to a NULL
+        // userName, so qrexec-wrapper runs it under the agent's own (SYSTEM) token with no LogonUser.
+        // The old default "user" assumed the guest's local account is literally named "user"; on
+        // GWeck's field guest (2026-09-10) whose real account differs (qvm-prefs default_user),
+        // exec.c's CreatePipedProcessAsUser compared the requested "user" against the real logged-on
+        // name, mismatched, and called LogonUser("user",".","userpass") which FAILED (no such
+        // account) - so the handler never launched, OpenChannel timed out ("relay never connected
+        // back"), no qubes.UpdatesProxy channel ever opened, and Windows Update reported "no network
+        // / can't find the proxy" (plus the many AUTHENTICATION FAILURES in the qrexec-wrapper log).
+        // SYSTEM sidesteps the account-name dependency entirely. --user still overrides if ever set.
+        string user = "SYSTEM";
         string logDir = @"C:\Users\Public";
         for (int i = 1; i < args.Length; i++)
         {

@@ -293,6 +293,32 @@ jobs:
       # binaries carry <ver>.0 from the same generator (packaging/version-stamp) instead of the
       # deps' own upstream versions. Reduced to what THIS job builds; the shipped-set gates live
       # in qwt-full.yml (this is the iteration path).
+
+      # THE INTERACTIVE-LOGON FIX, always applied. windows-utils is cloned FRESH from upstream at
+      # WINDOWS_UTILS_REF, so an edit to our read-only mirror under upstream/ro/ would NEVER reach a
+      # build - the fix has to be a patch applied here, or it ships as a no-op (the same class of
+      # defect as the user-session helpers that shipped nowhere).
+      # exec.c ran an INTERACTIVE service by string-matching the account name dom0 requested (the
+      # default "user") against the logged-on console user, and on a mismatch discarded the valid
+      # console token and called LogonUser("user", ".", "userpass"). On a guest whose local account
+      # is not named "user" (the real name is in qvm-prefs default_user) that logon fails, so the
+      # updates proxy/relay, toasts and shell helpers never launch: "no network / can't find the
+      # proxy" plus a stream of qrexec-wrapper AUTHENTICATION FAILUREs. Reported by a field tester
+      # 2026-09-10. The patch makes an interactive service run as the actual logged-on console user
+      # whenever we hold its token, and leaves the non-interactive path and the not-logged-on
+      # LogonUser fallback untouched.
+      - name: Apply the windows-utils interactive-logon fix (always)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          git -C "$ws\deps-src\windows-utils" apply --verbose "$ws\patches\windows-utils-interactive-token.patch"
+          if ($LASTEXITCODE -ne 0) { throw "windows-utils interactive-logon patch did not apply" }
+          # A patch that silently no-ops would ship the bug with a new version number.
+          $src = Get-Content "$ws\deps-src\windows-utils\src\exec.c" -Raw
+          if ($src -notmatch '!interactive \&\& wcscmp') { throw 'interactive-logon fix marker missing after patch' }
+          if ($src -match 'if \(!userToken \|\| wcscmp\(loggedUserName, userName\)\)') { throw 'the old name-match gate is still present after patching' }
+          Write-Host "::notice title=windows-utils::interactive-logon fix applied"
       - name: Shadow every set-version script with the QWT-NG stamper; unify version files
         shell: pwsh
         run: |

@@ -1,0 +1,24 @@
+diff --git a/src/exec.c b/src/exec.c
+index be2c2ff..fd8b963 100644
+--- a/src/exec.c
++++ b/src/exec.c
+@@ -173,7 +173,18 @@ DWORD CreatePipedProcessAsUser(
+         if (userToken)
+             LogDebug("logged on user name: '%s'", loggedUserName);
+ 
+-        if (!userToken || wcscmp(loggedUserName, userName))
++        // For an INTERACTIVE service, run as the actual logged-on console user regardless of the
++        // name dom0 requested. dom0 passes the default target user "user"; on a guest whose real
++        // local account is not named "user" (GWeck's field bug, 2026-09-10 - the real name is in
++        // qvm-prefs default_user), the old `wcscmp(loggedUserName, userName)` mismatched, the valid
++        // console token obtained just above was discarded, and LogonUser("user", ".", "userpass")
++        // was attempted for a non-existent account and failed -> the interactive service (updates
++        // proxy/relay, toasts, shell) never launched and the guest reported "no network" with many
++        // AUTHENTICATION FAILURES. The active console session IS the only interactive session and
++        // is who an interactive service must run as, so when we hold its token, use it. The
++        // non-interactive path still honours an explicit different user, and the LogonUser fallback
++        // is preserved for the genuinely-not-logged-on case (!userToken).
++        if (!userToken || (!interactive && wcscmp(loggedUserName, userName)))
+         {
+             if (userToken)
+             {
