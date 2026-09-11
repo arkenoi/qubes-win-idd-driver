@@ -111,7 +111,13 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
     do {
         WGCBRK_SLOT* s = &g_slots[i];
         if (s->ReqState != WGCBRK_REQUESTED && s->AckState != WGCBRK_ACTIVE) break;
-        if (!g_hdr->Producing) break;   // secure desktop: frame arrives, do not publish
+        // LIVE check, not the cached flag. g_hdr->Producing is sampled once per main-loop
+        // iteration, and that loop waits up to 250 ms - but FrameArrived is asynchronous, so a
+        // frame that arrives after the input desktop has left Default (UAC consent, the lock
+        // screen, the secure desktop) would still be published against a flag that is up to a
+        // quarter second stale. The whole point of the gate is that secure-desktop pixels never
+        // leave the guest, so it must be evaluated NOW, at the moment of publishing.
+        if (!g_hdr->Producing || !InputDesktopIsDefault()) break;
 
         auto surf = frame.Surface();
         auto access = surf.as<Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
@@ -194,7 +200,7 @@ static void PublishPrintWindow(int i) {
         Channel& c = g_ch[i];
         if (!c.pw) break;
         if (s->ReqState != WGCBRK_REQUESTED && s->AckState != WGCBRK_ACTIVE) break;
-        if (!g_hdr->Producing) break;                        // secure desktop: do not publish
+        if (!g_hdr->Producing || !InputDesktopIsDefault()) break;   // secure desktop: live check, see PublishFrame
         HWND hwnd = c.hwnd;
         if (!hwnd || !IsWindow(hwnd)) break;
         int w = s->ReqWidth, h = s->ReqHeight;               // published (card) size, agent-sized buffer
@@ -416,6 +422,12 @@ int wmain(int argc, wchar_t** argv) {
     if (g_hdr->AgentPid && (DWORD)g_hdr->AgentPid != g_launcherPid) return 7;
     g_hdr->BrokerPid = (LONG)GetCurrentProcessId();
     g_hCtl = OpenEventW(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, ctlName);
+    // FAIL LOUD. This handle is how the agent WAKES us the instant it registers a window; without
+    // it the wait below falls back to its 250 ms timeout and every window - every menu, every
+    // toast - silently waits up to a quarter second before it is even looked at. A degradation
+    // that is invisible and only shows up as "rendering feels slow" is exactly the kind this
+    // project has resolved to report rather than absorb, so refuse to run half-deaf.
+    if (!g_hCtl) return 8;
 
     for (;;) {
         if (g_hdr->Shutdown) break;
