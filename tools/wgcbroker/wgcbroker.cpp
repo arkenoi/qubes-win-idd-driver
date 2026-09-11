@@ -46,6 +46,13 @@ static BYTE*             g_base = nullptr;
 static WGCBRK_HEADER*    g_hdr  = nullptr;
 static WGCBRK_SLOT*      g_slots= nullptr;
 static HANDLE            g_hCtl = nullptr;
+static HANDLE            g_hFrame = nullptr;   // agent wake: a frame was published (auto-reset)
+
+// Tell the agent a frame is ready. Without this the agent only noticed a published frame on its
+// next DESKTOP-capture pass, and a redundant desktop frame skipped that walk entirely - so a
+// painted window could sit unnoticed on a static desktop. Signal AFTER the sequence bump so the
+// agent that wakes always sees the finished frame.
+static inline void SignalFramePublished() { if (g_hFrame) SetEvent(g_hFrame); }
 static HANDLE            g_agent= nullptr;
 static DWORD             g_mySession = 0;
 static DWORD             g_launcherPid = 0;
@@ -166,6 +173,7 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
         s->CaptureTick = (LONGLONG)GetTickCount64();
         MemoryBarrier();
         _InterlockedExchange(&s->Seq, (q | 1) + 1); // -> next EVEN: complete
+        SignalFramePublished();                     // after the seq bump: a woken agent sees it whole
         s->AckState = WGCBRK_ACTIVE;
     } while (0);
     LeaveCriticalSection(&g_pubCs[i]);
@@ -283,6 +291,7 @@ static void PublishPrintWindow(int i) {
         MemoryBarrier();
         _InterlockedExchange(&s->Seq, (q | 1) + 1);
         s->AckState = WGCBRK_ACTIVE;
+        SignalFramePublished();                     // PrintWindow path: wake the agent too
     } while (0);
     LeaveCriticalSection(&g_pubCs[i]);
 }
@@ -399,6 +408,7 @@ int wmain(int argc, wchar_t** argv) {
 
     const wchar_t* shmName = ArgVal(argc, argv, L"--shm");
     const wchar_t* ctlName = ArgVal(argc, argv, L"--ctl");
+    const wchar_t* frmName = ArgVal(argc, argv, L"--frame");
     const wchar_t* pidStr  = ArgVal(argc, argv, L"--agent-pid");
     if (!shmName || !ctlName || !pidStr) return 1;
     g_launcherPid = (DWORD)_wtoi64(pidStr);
@@ -428,6 +438,9 @@ int wmain(int argc, wchar_t** argv) {
     // that is invisible and only shows up as "rendering feels slow" is exactly the kind this
     // project has resolved to report rather than absorb, so refuse to run half-deaf.
     if (!g_hCtl) return 8;
+    // Optional by design: an older agent does not pass --frame, and the broker must still serve
+    // it (the agent then falls back to noticing frames on its capture pass, as it always did).
+    if (frmName) g_hFrame = OpenEventW(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, frmName);
 
     for (;;) {
         if (g_hdr->Shutdown) break;
