@@ -7,6 +7,10 @@
 #     [os]                         win10 | win11 (default win11; the golden is <os>-qwt)
 #   env: STORM_THREADS=4  STORM_SECONDS=900 (stock arm ceiling)  FIXED_MULT=3  POLL=20
 #        OUT=<dir>  (default /home/user/rel/evtchn-storm-<utc>)
+#        ARMS=both|stock|fixed  (default both). stock: run only the stock arm (package may be "-").
+#        fixed: run only the fixed arm, taking the stock result from STOCK_VERDICT_PRIOR /
+#        STOCK_T_PRIOR (copy them from a stock-only run's verdict.json) so the window is sized
+#        the same way and the verdict is graded the same way.
 #
 # WHAT IT PROVES. The stall is a phantom writer bit on a xenbus hash-table bucket lock, planted
 # when two event-channel closes collide on two CPUs (findings/issues.md, stall entry). Every
@@ -37,6 +41,7 @@ THREADS="${STORM_THREADS:-4}"
 SECS="${STORM_SECONDS:-900}"
 MULT="${FIXED_MULT:-3}"
 POLL="${POLL:-20}"
+ARMS="${ARMS:-both}"
 OUT="${OUT:-/home/user/rel/evtchn-storm-$(date -u +%Y%m%dT%H%M%SZ)}"; mkdir -p "$OUT"
 R="$OUT/summary.log"
 say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$R"; }
@@ -55,7 +60,8 @@ xenbus_ver(){ g_probe "$1" XBV 'Write-Host ("XBV=" + (Get-Item C:\Windows\System
 
 # ---- preconditions -------------------------------------------------------------------------
 [ -f "$STORM" ] || { say "REFUSED: $STORM is not a file"; exit 3; }
-[ -e "$PKG" ] || { say "REFUSED: package $PKG does not exist"; exit 3; }
+[ "$ARMS" = stock ] || [ -e "$PKG" ] || { say "REFUSED: package $PKG does not exist"; exit 3; }
+case "$ARMS" in both|stock|fixed) ;; *) say "REFUSED: ARMS must be both|stock|fixed"; exit 3 ;; esac
 qvm-check --quiet "$GOLDEN" 2>/dev/null || { say "REFUSED: golden $GOLDEN does not exist"; exit 3; }
 busy=$(pgrep -f "[a]cceptance-races|[m]gmt/harness/matrix.sh|[p]rime-run.sh|[q]uick-upgrade.sh" | head -3)
 [ -z "$busy" ] || { say "REFUSED: another VM-driving job is running (pids: $busy)"; exit 3; }
@@ -122,6 +128,8 @@ discard(){ # a stormed subject is never reused: kill (it is being discarded), wa
 
 # ==== ARM 1: STOCK ==========================================================================
 S1="$OS-storm-stock"
+STOCK_VERDICT="${STOCK_VERDICT_PRIOR:-SKIPPED}"; STOCK_T="${STOCK_T_PRIOR:-0}"
+if [ "$ARMS" != fixed ]; then
 say "--- arm STOCK: $S1 from $GOLDEN, prebuilt xenbus ---"
 if qvm-check --quiet "$S1" 2>/dev/null; then
   [ "$(w_state "$S1")" = Halted ] || { qvm-kill "$S1" >/dev/null 2>&1; w_halt "$S1" 120 "leftover-$S1" say >/dev/null; }
@@ -149,6 +157,14 @@ storm "$S1" stock "$SECS"
 STOCK_VERDICT=$STORM_VERDICT; STOCK_T=$STORM_T
 discard "$S1"
 say "--- arm STOCK verdict: $STOCK_VERDICT (t=${STOCK_T}s) ---"
+if [ "$ARMS" = stock ]; then
+  printf '{"golden":"%s","threads":%s,"stock":{"verdict":"%s","t":%s}}\n' "$GOLDEN" "$THREADS" "$STOCK_VERDICT" "$STOCK_T" > "$OUT/verdict.json"
+  say "stock-only run complete: $OUT/verdict.json (feed STOCK_VERDICT_PRIOR=$STOCK_VERDICT STOCK_T_PRIOR=$STOCK_T to ARMS=fixed)"
+  [ "$STOCK_VERDICT" = WEDGED ] && exit 0 || exit 2
+fi
+else
+  say "--- arm STOCK skipped (ARMS=fixed): prior verdict $STOCK_VERDICT t=${STOCK_T}s ---"
+fi
 
 # ==== ARM 2: FIXED ==========================================================================
 S2="$OS-storm-fixed"

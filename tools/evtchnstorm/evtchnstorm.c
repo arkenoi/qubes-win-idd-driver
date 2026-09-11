@@ -78,6 +78,11 @@ static DWORD WINAPI worker(LPVOID arg)
 
 int main(int argc, char **argv)
 {
+    /* stdout is a qrexec PIPE here, so the CRT block-buffers it: without this the probe line
+     * printed below reaches the harness only at exit, minutes later, and a wedged guest and
+     * a tool that never started look identical. Measured 2026-09-11 (first run VOID). */
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
     int threads = argc > 1 ? atoi(argv[1]) : 4;
     int seconds = argc > 2 ? atoi(argv[2]) : 300;
     g_domain    = (USHORT)(argc > 3 ? atoi(argv[3]) : 0);
