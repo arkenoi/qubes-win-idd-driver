@@ -33,10 +33,18 @@ say "=== menu map-hold on $VM, $N opens ==="
 
 # Mark the log so only THIS run's lines are read - a previous run's samples in the same file
 # would otherwise be averaged in and the result would not belong to any one build.
-MARK="MENULAT-$(date -u +%s)"
-g_probe "$VM" MARKED "Write-Host ('MARKED=' + '$MARK')" 60 >/dev/null 2>&1
-QTEST_VM=$VM ./tools/qtest run "cmd /c echo $MARK" >/dev/null 2>&1
+# SLICE TO THIS RUN. The agent log persists across runs within one agent instance, so simply
+# grepping it counts EVERY menu since the agent started - the sample set grows run over run and
+# every median silently blends this run with the last. Found 2026-09-11 when three consecutive
+# runs reported 14, 22 and 30 crop-releases for 8 opens each. There is no usable in-log marker
+# (a qtest echo lands in cmd, not in the agent's own log), so record how many timing lines exist
+# BEFORE the stimulus and read only the ones that appear after.
+prior_held(){ QTEST_VM=$VM timeout -k 5 120 ./tools/qtest run "powershell -NoProfile -Command \"(Select-String -Path '$1' -Pattern 'QGAHELDMAP' -AllMatches | Measure-Object).Count\"" 2>/dev/null | tr -d '\r' | grep -aoE '^[0-9]+$' | head -1; }
 
+LOG=$(g_probe "$VM" LOG 'Write-Host ("LOG=" + (Get-ChildItem "Q:\Qubes Logs\gui-agent-*.log" | Sort-Object LastWriteTime | Select-Object -Last 1).FullName)' 90)
+[ -n "$LOG" ] || { say "VOID: could not locate the gui-agent log"; exit 2; }
+PRIOR=$(prior_held "$LOG"); PRIOR=${PRIOR:-0}
+say "agent log: $LOG (already holds $PRIOR timing lines - they are NOT this run's)"
 QTEST_VM=$VM ./tools/qtest push guest/menu-stim.ps1 >/dev/null 2>&1
 say "running the stimulus ($N context-menu opens)"
 QTEST_VM=$VM timeout -k 10 $((N * 12 + 180)) ./tools/qtest run \
@@ -48,12 +56,12 @@ say "stimulus: $(grep -a '=== RESULT ===' "$OUT/popups.txt" | tail -1)"
 [ "$opened" -gt 0 ] || { say "VOID: no popup was opened - nothing to attribute held_ms to"; exit 2; }
 
 # Pull the agent log and keep only this run's tail.
-LOG=$(g_probe "$VM" LOG 'Write-Host ("LOG=" + (Get-ChildItem "Q:\Qubes Logs\gui-agent-*.log" | Sort-Object LastWriteTime | Select-Object -Last 1).FullName)' 90)
-say "agent log: ${LOG:-<unreadable>}"
-[ -n "$LOG" ] || { say "VOID: could not locate the gui-agent log"; exit 2; }
 b64=$(python3 -c "import sys,base64;print(base64.b64encode(('Get-Content -LiteralPath \"'+sys.argv[1]+'\" -Tail 4000').encode('utf-16-le')).decode())" "$LOG")
 QTEST_VM=$VM timeout -k 5 180 ./tools/qtest run "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64" 2>/dev/null | tr -d '\r' > "$OUT/agent.log"
-grep -a 'QGAHELDMAP\|QGASLICEMAP\|insets l=' "$OUT/agent.log" > "$OUT/maplines.txt" 2>/dev/null
+# keep only the timing lines that appeared AFTER the pre-stimulus baseline
+grep -a 'QGAHELDMAP' "$OUT/agent.log" | tail -n +$((PRIOR + 1)) > "$OUT/maplines.txt" 2>/dev/null
+grep -a 'QGASLICEMAP\|insets l=' "$OUT/agent.log" >> "$OUT/maplines.txt" 2>/dev/null
+say "this run contributed $(grep -ac QGAHELDMAP "$OUT/maplines.txt") timing line(s)"
 
 python3 - "$OUT" <<'PY' | tee -a "$OUT/summary.log"
 import re, sys, statistics
