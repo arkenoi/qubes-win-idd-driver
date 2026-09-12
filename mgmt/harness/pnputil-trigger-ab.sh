@@ -205,10 +205,13 @@ PYV
        2>/dev/null | tr -d '\r\0' | grep -aoE 'TESTSIGNING=.*' | tail -1)
   say "  ${ts:-TESTSIGNING=<unreadable>}"
 
-  # EVERY OBSERVED WEDGE HAPPENED WITH NO CERT IMPORTED (the import was added at 21:39, after
-  # all three). Reproducing the wedge faithfully therefore means being able to SKIP it, so the
-  # comparison runs in the regime where the phenomenon actually occurs rather than in one where
-  # it never did.
+  # IMPORT THE DISC'S OWN SIGNER, ALWAYS. The observed wedges ran with no import, which looked
+  # like the condition to reproduce - but they did not need one: the win11-qwt golden ALREADY
+  # trusts our CI signer from its own QWT install. The pure-upstream build is signed by a
+  # DIFFERENT key (md5 885fdb21... vs ours 839689dc...), so skipping the import would leave the
+  # upstream package REFUSED, scoring ALIVE, and "upstream does not wedge" would be a driver
+  # that never installed. Importing per-disc makes the two arms EQUIVALENT, which is the point
+  # of the comparison; testsigning is already Yes in the golden and is reported per round.
   if [ "$arm" != SAMEOLD ] && [ "${NOCERT:-0}" != 1 ]; then
     QTEST_VM=$SUBJ timeout -k 5 120 ./tools/qtest run \
       'cmd /c certutil -addstore -f Root D:\pv-drivers\xenbus\xenbus-signer.cer & certutil -addstore -f TrustedPublisher D:\pv-drivers\xenbus\xenbus-signer.cer & echo CERTRC=%errorlevel%' \
@@ -222,6 +225,21 @@ PYV
     "cmd /c pnputil /add-driver $cd_inf$flag & echo RC=%errorlevel%" \
     > "$OUT/$arm-$r-pnputil.out" 2>&1
   tr -d '\r' < "$OUT/$arm-$r-pnputil.out" | tail -6 | sed 's/^/    /' | tee -a "$OUT/summary.log"
+
+  # THE PROVOCATION MUST BE PROVEN. This harness graded rounds without ever checking that
+  # pnputil actually installed anything - so a package REFUSED for an untrusted signature, or
+  # one that was already present, would sail through as a healthy survival. That is how a
+  # null result gets manufactured. pnputil states the count; a round that added nothing is
+  # VOID, never ALIVE. (The hang case prints no count at all, and is graded on its own merits.)
+  local addcount
+  addcount=$(tr -d '\r' < "$OUT/$arm-$r-pnputil.out" 2>/dev/null | grep -aoE 'Added driver packages: *[0-9]+' | grep -aoE '[0-9]+' | tail -1)
+  if [ -n "$addcount" ] && [ "$addcount" -lt 1 ] 2>/dev/null; then
+    say "  VOID: pnputil added $addcount package(s) - nothing was provoked, this round grades nothing"
+    tr -d '\r' < "$OUT/$arm-$r-pnputil.out" | grep -aiE "failed|error|already exists" | head -2 | sed 's/^/    /' | tee -a "$OUT/summary.log"
+    printf '%s\t%s\t%s\n' "$arm" "$r" "VOID-NOT-STAGED" >> "$V"
+    return 0
+  fi
+  [ -n "$addcount" ] && say "  provocation confirmed: pnputil added $addcount package(s)"
 
   # The wedge on 2026-09-12 landed ~90 s after the 225 storm, so watch well past that.
   local i
