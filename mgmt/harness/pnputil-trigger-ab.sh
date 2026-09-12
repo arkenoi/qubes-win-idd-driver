@@ -102,8 +102,25 @@ run_round(){ # $1=arm (INJECT|STAGE) $2=round
     w_halt_stable "$SUBJ" 300 "$arm-$r-pre" say >/dev/null 2>&1
     qvm-remove -f "$SUBJ" >/dev/null 2>&1
   }
-  qvm-clone "$GOLDEN" "$SUBJ" >/dev/null 2>&1 || { say "  REFUSED: clone $GOLDEN -> $SUBJ failed"; return 2; }
-  qvm-tags "$SUBJ" add win-idd-testbed >/dev/null 2>&1
+  # CREATE -> TAG -> COPY VOLUMES, in that order, and NOT qvm-clone. Tag-based policy refuses
+  # qvm-clone because it copies volumes before the tag exists - the idiom quick-upgrade.sh
+  # documents at its line 222, which I ignored and had refused back at me.
+  qvm-create --class StandaloneVM --label red --property virt_mode=hvm --property kernel='' "$SUBJ" \
+    >/dev/null 2>&1 || { say "  REFUSED: could not create $SUBJ"; return 2; }
+  qvm-tags "$SUBJ" add win-idd-testbed >/dev/null 2>&1 || { say "  REFUSED: could not tag $SUBJ"; return 2; }
+  qvm-features "$SUBJ" os Windows >/dev/null 2>&1
+  for kv in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do
+    qvm-prefs "$SUBJ" "${kv%%:*}" "${kv##*:}" >/dev/null 2>&1
+  done
+  qvm-prefs "$SUBJ" netvm '' >/dev/null 2>&1
+  cerr=$(python3 - "$GOLDEN" "$SUBJ" 2>&1 <<'PYV'
+import sys, qubesadmin
+app = qubesadmin.Qubes(); src = app.domains[sys.argv[1]]; dst = app.domains[sys.argv[2]]
+for v in ('root', 'private'):
+    dst.volumes[v].clone(src.volumes[v])
+PYV
+  ) || { say "  REFUSED: volume clone failed: $(echo "$cerr" | tail -1 | cut -c1-160)"; return 2; }
+  say "  created and tagged $SUBJ, volumes copied from $GOLDEN"
 
   timeout 300 qvm-start "$SUBJ" --cdrom="win-idd-mgmt:$LOOP" >/dev/null 2>&1
   w_session "$SUBJ" 900 "$arm-$r-boot" "$OUT" say || { say "  VOID: no session"; return 2; }
