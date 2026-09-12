@@ -380,6 +380,54 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
 }
 
 # Wait for a clean halt. 0=halted 2=deadline. Never kills: the caller decides.
+# w_halt_stable <vm> <deadline> <label> <logfn> [hold-seconds]
+#
+# Halted, AND STILL HALTED A MOMENT LATER. Plain w_halt returns on the FIRST sighting of Halted,
+# which cannot tell "the guest shut down" from "the guest shut down and something started it again".
+# That distinction is the whole bug behind "subject would not halt" (2026-09-12): a queued qrexec
+# call restarts a guest seconds after it halts, the state oscillates, and a harness that only ever
+# sees Transient reports the PRODUCT as unable to halt. It is a restarter, and it must be named.
+#
+# Returns 0 halted and stayed halted; 2 deadline with no halt at all; 3 HALTED THEN CAME BACK -
+# an INVALID-INSTRUMENT condition, never a product failure.
+w_halt_stable(){ # $1=vm $2=deadline $3=label $4=logfn $5=hold
+  local vm=$1 dl=$2 lbl=$3 log=$4 hold=${5:-20} t0 now saw=0
+  t0=$(date +%s)
+  while :; do
+    now=$(( $(date +%s) - t0 ))
+    if [ "$(w_state "$vm")" = Halted ]; then
+      saw=1
+      local i held=1
+      for i in $(seq 1 $(( hold / 5 + 1 ))); do
+        sleep 5
+        if [ "$(w_state "$vm")" != Halted ]; then held=0; break; fi
+      done
+      if [ "$held" = 1 ]; then $log "  $lbl: halted and stayed halted at t+${now}s"; return 0; fi
+      $log "  $lbl: HALTED THEN CAME BACK UP - something restarted it (a queued qrexec call is the"
+      $log "  $lbl: usual culprit; drain with a short qrexec_timeout before shutting down). This is"
+      $log "  $lbl: an instrument condition, NOT the guest refusing to halt."
+      return 3
+    fi
+    [ "$now" -ge "$dl" ] && { $log "  $lbl: DEADLINE ${dl}s, still $(w_state "$vm") (never reached Halted at all)"; return 2; }
+    sleep 10
+  done
+}
+
+# Drain queued qrexec calls, then shut down. A call still queued for a guest RESTARTS it after it
+# halts, and with qrexec_timeout at its normal 600 s that restarter outlives any sane halt budget -
+# which is exactly how a park lost the race and blamed the product. Dropping the timeout makes a
+# queued call fail fast instead of holding the guest; it is restored afterwards, always.
+w_drain_and_shutdown(){ # $1=vm $2=logfn
+  local vm=$1 log=$2 prev
+  prev=$(qvm-prefs "$vm" qrexec_timeout 2>/dev/null); prev=${prev:-6000}
+  pkill -f "qrexec-client-vm [${vm:0:1}]${vm:1} " 2>/dev/null
+  qvm-prefs "$vm" qrexec_timeout 15 >/dev/null 2>&1
+  $log "  drain: qrexec_timeout ${prev} -> 15 so a queued call cannot hold or restart $vm"
+  qvm-shutdown "$vm" >/dev/null 2>&1
+  sleep 2
+  qvm-prefs "$vm" qrexec_timeout "$prev" >/dev/null 2>&1
+}
+
 w_halt(){ # $1=vm $2=deadline $3=label $4=logfn
   local vm=$1 dl=$2 lbl=$3 log=$4 t0 now
   t0=$(date +%s)

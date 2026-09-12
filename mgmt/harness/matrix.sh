@@ -460,8 +460,18 @@ park_installed(){ # $1=vm $2=label - halt and park the just-installed subject as
   # release" unpark this in ~2 s instead of reinstalling.
   local vm=$1 lbl=$2 ck="ckpt-$vm-installed"
   if [ "$(w_state "$vm")" != Halted ]; then
-    qvm-shutdown "$vm" >/dev/null 2>&1
-    w_halt "$vm" 420 "$lbl-park-halt" say || { no "$lbl: subject would not halt for parking"; return 1; }
+    # DRAIN FIRST, and give the halt a budget that OUTLASTS the restarter. The old form issued a
+    # bare qvm-shutdown and waited 420 s while qrexec_timeout sat at 600 - so one queued call could
+    # hold or restart the guest for longer than the wait, and the harness then reported the PRODUCT
+    # as unable to halt. That is what failed two cells on 2026-09-12, and nothing in the park path
+    # drained anything. A restart is now named as an instrument condition, never a product failure.
+    w_drain_and_shutdown "$vm" say
+    w_halt_stable "$vm" 660 "$lbl-park-halt" say
+    case $? in
+      0) ;;
+      3) no "$lbl: INVALID-INSTRUMENT - subject halted then was RESTARTED during parking (queued qrexec call), not a product failure"; return 1 ;;
+      *) no "$lbl: subject would not halt for parking"; return 1 ;;
+    esac
   fi
   if qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "$ck"; then
     say "  $lbl: replacing the previous campaign's park $ck"
@@ -481,8 +491,14 @@ unpark_installed(){ # $1=vm $2=label - restore the campaign's 'installed' snapsh
   qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "$vm" \
     || { no "$lbl: subject $vm does not exist - run the clean cell first (it creates, installs and parks)"; return 1; }
   if [ "$(w_state "$vm")" != Halted ]; then
-    qvm-shutdown "$vm" >/dev/null 2>&1
-    w_halt "$vm" 420 "$lbl-unpark-halt" say || { no "$lbl: subject would not halt for unpark"; return 1; }
+    # Same drain as the park path: a queued call restarts the guest after it halts.
+    w_drain_and_shutdown "$vm" say
+    w_halt_stable "$vm" 660 "$lbl-unpark-halt" say
+    case $? in
+      0) ;;
+      3) no "$lbl: INVALID-INSTRUMENT - subject halted then was RESTARTED during unpark (queued qrexec call), not a product failure"; return 1 ;;
+      *) no "$lbl: subject would not halt for unpark"; return 1 ;;
+    esac
   fi
   if ./mgmt/harness/checkpoint.sh unpark "$vm" installed >>"$R" 2>&1; then
     say "  $lbl: unparked $vm from ckpt-$vm-installed (snapshot entry - the release is NOT reinstalled per cell)"
