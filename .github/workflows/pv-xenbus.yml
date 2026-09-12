@@ -35,7 +35,8 @@ on:
     paths:
       - '.github/workflows/pv-xenbus.yml'
       - 'patches/xenbus-hash-table-lock.patch'
-      - 'patches/xenbus-store-submit-bound.patch'
+      - 'patches/xenbus-store-no-lock-while-waiting.patch'
+      - 'patches/xenbus-store-wait-watchdog.patch'
 
 env:
   LINK: /Brepro
@@ -103,8 +104,15 @@ jobs:
           # DISPATCH_LEVEL holding Context->Lock when a xenstore request never completes, so
           # every other xenstore caller is taken down with it. Bounded, it degrades to a
           # recoverable failure that callers already handle (they all NULL-check the response).
-          git apply --verbose ..\repo\patches\xenbus-store-submit-bound.patch
-          if ($LASTEXITCODE -ne 0) { throw "store-submit bound did not apply" }
+          # TWO PATCHES, DELIBERATELY SEPARATE, because this is meant to go upstream later.
+          # Patch 1 is an unarguable bug fix with no policy in it: stop holding Context->Lock
+          # while busy-waiting. Patch 2 is the POLICY half - a deadline and a bugcheck - which
+          # upstream may well want to argue about or make configurable. Keeping them apart means
+          # the series can be offered with patch 1 standing alone.
+          git apply --verbose ..\repo\patches\xenbus-store-no-lock-while-waiting.patch
+          if ($LASTEXITCODE -ne 0) { throw "store lock-drop patch did not apply" }
+          git apply --verbose ..\repo\patches\xenbus-store-wait-watchdog.patch
+          if ($LASTEXITCODE -ne 0) { throw "store wait-watchdog patch did not apply" }
           $store = Get-Content src\xenbus\store.c -Raw
           # One marker per property this patch must keep. Earlier revisions of it fixed one
           # defect and introduced others, so each is asserted separately.
@@ -123,7 +131,7 @@ jobs:
           if ($store -match 'KeDelayExecutionThread') { throw 'the sleep that breaks the suspend interlock is back' }
           # (d) the 1 s DISPATCH deadline that silently broke PV device bring-up.
           if ($store -match 'XENBUS_STORE_DPC_TIMEOUT') { throw 'the short DISPATCH deadline that broke PV bring-up is back' }
-          Write-Host "::notice title=xenbus::store-submit bound applied"
+          Write-Host "::notice title=xenbus::store lock-drop + wait-watchdog applied"
 
       - name: Build xenbus via its own build.ps1
         shell: pwsh

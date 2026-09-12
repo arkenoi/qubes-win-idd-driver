@@ -1,14 +1,21 @@
 --- a/src/xenbus/store.c
 +++ b/src/xenbus/store.c
-@@ -891,23 +891,64 @@
+@@ -891,40 +891,64 @@
  #define TIME_MS(_ms)        (TIME_US((_ms) * 1000))
  #define TIME_S(_s)          (TIME_MS((_s) * 1000))
  #define TIME_RELATIVE(_t)   (-(_t))
  
  #define XENBUS_STORE_POLL_PERIOD 5
  
+-// DO NOT HOLD Context->Lock WHILE WAITING FOR A RESPONSE.
 +// WAITING FOR XENSTORE MUST NOT HOLD THE STORE LOCK, AND MUST NOT WAIT FOREVER IN SILENCE.
-+//
+ //
+-// StoreSubmitRequest waits for its request with Context->Lock held at DISPATCH_LEVEL, and
+-// XENBUS_EVTCHN(Wait) is a pure _mm_pause() busy-spin (evtchn.c), so a slow xenstore round
+-// trip burns a core with the store lock held for up to XENBUS_STORE_POLL_PERIOD seconds at a
+-// stretch. About ten xenstore entry points contend on that lock and every PV path in the guest
+-// goes through xenstore, so one slow request stalls all of them: observed as a guest losing
+-// qrexec, its PV console and even its own event-log writes simultaneously.
 +// Upstream waits for its request while holding Context->Lock at DISPATCH_LEVEL, and
 +// XENBUS_EVTCHN(Wait) is a pure _mm_pause() busy-spin (evtchn.c). So it burns a core with the
 +// lock held for up to XENBUS_STORE_POLL_PERIOD seconds per iteration and, because a timeout
@@ -16,7 +23,13 @@
 +// points contend on that lock and every PV path in the guest goes through xenstore, so ONE
 +// stuck request takes the whole guest down - measured 2026-09-12: qrexec, the PV console and
 +// even the Windows event log went silent together while vCPUs spun, no dump, nothing to read.
-+//
+ //
+-// The lock is not needed to make progress: a request is completed by whoever polls next, and
+-// StoreDpc runs __StorePoll independently of this thread. So poll, drop the lock, stall
+-// briefly, retake it. IRQL stays raised for the whole wait, because the KeRaiseIrql below is
+-// annotated "Make sure we don't suspend" and that is load-bearing - SuspendTrigger ->
+-// SyncCapture needs every CPU to run a DPC, so a thread at DISPATCH_LEVEL is what prevents a
+-// suspend landing while a request is in flight.
 +// TWO CHANGES, AND THEY ARE DELIBERATELY THE ONLY TWO.
 +//
 +// 1. DROP THE LOCK BETWEEN POLLS. That is what stops one slow request freezing everything
@@ -44,9 +57,9 @@
 +// "busy": a xenstore round trip is normally sub-millisecond, and this is four orders of
 +// magnitude above that. It also stays under the ~20 s DPC watchdog, so this bugcheck fires
 +// before the generic 0x133 and the dump names xenstore instead of a nameless DPC.
-+#define XENBUS_STORE_SPIN_US    100 // stall this long per poll, with the lock DROPPED
+ #define XENBUS_STORE_SPIN_US    100 // stall this long per poll, with the lock DROPPED
 +#define XENBUS_STORE_TIMEOUT_S  15  // then bugcheck: loud, dumpable, never silent
-+
+ 
  static PXENBUS_STORE_RESPONSE
  StoreSubmitRequest(
      IN  PXENBUS_STORE_CONTEXT   Context,
@@ -65,45 +78,32 @@
  
      Request->Response = __StoreAllocate(sizeof (XENBUS_STORE_RESPONSE));
  
-@@ -927,24 +968,57 @@
- 
-     Count = StorePollLocked(Context);
- 
-     KeMemoryBarrier();
+@@ -948,13 +972,18 @@
      State = Request->State;
  
--    Timeout.QuadPart = TIME_RELATIVE(TIME_S(XENBUS_STORE_POLL_PERIOD));
-+    // Poll, do not camp: the event-channel wait is a busy-spin, so ask it for nothing and do
-+    // the waiting below with the lock dropped.
-+    Timeout.QuadPart = 0;
-+
+     // Poll, do not camp: the event-channel wait is a busy-spin, so ask it for nothing and do
+     // the waiting below with the lock dropped.
+     Timeout.QuadPart = 0;
+ 
 +    KeQuerySystemTime(&Deadline);
 +    Deadline.QuadPart += TIME_S(XENBUS_STORE_TIMEOUT_S);
- 
++
      while (State != XENBUS_STORE_REQUEST_COMPLETED) {
--        status = XENBUS_EVTCHN(Wait,
--                               &Context->EvtchnInterface,
--                               Context->Channel,
--                               Count + 1,
--                               &Timeout);
--        if (status == STATUS_TIMEOUT)
--            Warning("TIMED OUT\n");
 +        LARGE_INTEGER   Now;
 +
-+        (VOID) XENBUS_EVTCHN(Wait,
-+                             &Context->EvtchnInterface,
-+                             Context->Channel,
-+                             Count + 1,
-+                             &Timeout);
+         (VOID) XENBUS_EVTCHN(Wait,
+                              &Context->EvtchnInterface,
+                              Context->Channel,
+                              Count + 1,
+                              &Timeout);
  
-         Count = StorePollLocked(Context);
-+
-+        KeMemoryBarrier();
-+        State = Request->State;
-+
-+        if (State == XENBUS_STORE_REQUEST_COMPLETED)
-+            break;
-+
+@@ -963,12 +992,30 @@
+         KeMemoryBarrier();
+         State = Request->State;
+ 
+         if (State == XENBUS_STORE_REQUEST_COMPLETED)
+             break;
+ 
 +        KeQuerySystemTime(&Now);
 +        if (Now.QuadPart >= Deadline.QuadPart) {
 +            Error("XENSTORE STUCK: req_id %08x type %08x state %d index %d of %d\n",
@@ -122,12 +122,9 @@
 +        // The change that matters: get off the lock. Another context's StorePollLocked
 +        // completes this request just as well as this thread would, and meanwhile every other
 +        // xenstore caller keeps running instead of piling up behind us.
-+        KeReleaseSpinLockFromDpcLevel(&Context->Lock);
-+        KeStallExecutionProcessor(XENBUS_STORE_SPIN_US);
-+        KeAcquireSpinLockAtDpcLevel(&Context->Lock);
+         KeReleaseSpinLockFromDpcLevel(&Context->Lock);
+         KeStallExecutionProcessor(XENBUS_STORE_SPIN_US);
+         KeAcquireSpinLockAtDpcLevel(&Context->Lock);
  
          KeMemoryBarrier();
          State = Request->State;
-     }
- 
-     KeReleaseSpinLockFromDpcLevel(&Context->Lock);

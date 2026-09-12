@@ -1,0 +1,75 @@
+--- a/src/xenbus/store.c
++++ b/src/xenbus/store.c
+@@ -891,12 +891,29 @@
+ #define TIME_MS(_ms)        (TIME_US((_ms) * 1000))
+ #define TIME_S(_s)          (TIME_MS((_s) * 1000))
+ #define TIME_RELATIVE(_t)   (-(_t))
+ 
+ #define XENBUS_STORE_POLL_PERIOD 5
+ 
++// DO NOT HOLD Context->Lock WHILE WAITING FOR A RESPONSE.
++//
++// StoreSubmitRequest waits for its request with Context->Lock held at DISPATCH_LEVEL, and
++// XENBUS_EVTCHN(Wait) is a pure _mm_pause() busy-spin (evtchn.c), so a slow xenstore round
++// trip burns a core with the store lock held for up to XENBUS_STORE_POLL_PERIOD seconds at a
++// stretch. About ten xenstore entry points contend on that lock and every PV path in the guest
++// goes through xenstore, so one slow request stalls all of them: observed as a guest losing
++// qrexec, its PV console and even its own event-log writes simultaneously.
++//
++// The lock is not needed to make progress: a request is completed by whoever polls next, and
++// StoreDpc runs __StorePoll independently of this thread. So poll, drop the lock, stall
++// briefly, retake it. IRQL stays raised for the whole wait, because the KeRaiseIrql below is
++// annotated "Make sure we don't suspend" and that is load-bearing - SuspendTrigger ->
++// SyncCapture needs every CPU to run a DPC, so a thread at DISPATCH_LEVEL is what prevents a
++// suspend landing while a request is in flight.
++#define XENBUS_STORE_SPIN_US    100 // stall this long per poll, with the lock DROPPED
++
+ static PXENBUS_STORE_RESPONSE
+ StoreSubmitRequest(
+     IN  PXENBUS_STORE_CONTEXT   Context,
+     IN  PXENBUS_STORE_REQUEST   Request
+     )
+ {
+@@ -927,24 +944,34 @@
+ 
+     Count = StorePollLocked(Context);
+ 
+     KeMemoryBarrier();
+     State = Request->State;
+ 
+-    Timeout.QuadPart = TIME_RELATIVE(TIME_S(XENBUS_STORE_POLL_PERIOD));
++    // Poll, do not camp: the event-channel wait is a busy-spin, so ask it for nothing and do
++    // the waiting below with the lock dropped.
++    Timeout.QuadPart = 0;
+ 
+     while (State != XENBUS_STORE_REQUEST_COMPLETED) {
+-        status = XENBUS_EVTCHN(Wait,
+-                               &Context->EvtchnInterface,
+-                               Context->Channel,
+-                               Count + 1,
+-                               &Timeout);
+-        if (status == STATUS_TIMEOUT)
+-            Warning("TIMED OUT\n");
++        (VOID) XENBUS_EVTCHN(Wait,
++                             &Context->EvtchnInterface,
++                             Context->Channel,
++                             Count + 1,
++                             &Timeout);
+ 
+         Count = StorePollLocked(Context);
++
++        KeMemoryBarrier();
++        State = Request->State;
++
++        if (State == XENBUS_STORE_REQUEST_COMPLETED)
++            break;
++
++        KeReleaseSpinLockFromDpcLevel(&Context->Lock);
++        KeStallExecutionProcessor(XENBUS_STORE_SPIN_US);
++        KeAcquireSpinLockAtDpcLevel(&Context->Lock);
+ 
+         KeMemoryBarrier();
+         State = Request->State;
+     }
+ 
+     KeReleaseSpinLockFromDpcLevel(&Context->Lock);
