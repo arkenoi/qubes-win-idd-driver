@@ -106,26 +106,23 @@ jobs:
           git apply --verbose ..\repo\patches\xenbus-store-submit-bound.patch
           if ($LASTEXITCODE -ne 0) { throw "store-submit bound did not apply" }
           $store = Get-Content src\xenbus\store.c -Raw
-          # Every defect this patch exists to prevent gets its own marker, because an adversarial
-          # review found that earlier revisions fixed one and introduced others.
-          if ($store -notmatch 'XENBUS_STORE_TIMEOUT_S') { throw 'fix marker (overall deadline) missing after patch' }
-          if ($store -notmatch 'KeDelayExecutionThread') { throw 'fix marker (sleep instead of spin) missing after patch' }
-          if ($store -notmatch 'KeStallExecutionProcessor') { throw 'fix marker (DISPATCH path drops the lock too) missing after patch' }
-          if ($store -notmatch 'GIVING UP') { throw 'fix marker (give-up path) missing after patch' }
-          # A half-sent request must never be withdrawn - that desynchronises the xenstore ring
-          # permanently, which is worse than the wedge.
-          if ($store -notmatch 'Withdrawable') { throw 'fix marker (half-sent request guard) missing after patch' }
-          if ($store -notmatch 'PARTIALLY SENT') { throw 'fix marker (half-sent wait path) missing after patch' }
-          # A NULL response must still unlink the watch/transaction, or StoreRelease bugchecks
-          # the guest with BUG("OUTSTANDING WATCHES"/"OUTSTANDING TRANSACTIONS").
-          if ($store -notmatch 'UNWATCH FAILED') { throw 'fix marker (watch unlink on NULL) missing after patch' }
-          if ($store -notmatch 'TRANSACTION END FAILED') { throw 'fix marker (transaction unlink on NULL) missing after patch' }
-          # The two defects, asserted gone: the unbounded retry, and the multi-second busy-spin
-          # under Context->Lock. A 60 s cap would have satisfied the first and still frozen the
-          # guest, so the second assertion is the one that matters.
+          # One marker per property this patch must keep. Earlier revisions of it fixed one
+          # defect and introduced others, so each is asserted separately.
+          if ($store -notmatch 'XENBUS_STORE_TIMEOUT_S') { throw 'fix marker (deadline) missing after patch' }
+          if ($store -notmatch 'KeStallExecutionProcessor') { throw 'fix marker (stall with the lock dropped) missing after patch' }
+          if ($store -notmatch 'XENSTORE REQUEST NEVER COMPLETED') { throw 'fix marker (hard loud bugcheck) missing after patch' }
+          if ($store -notmatch 'XENSTORE STUCK') { throw 'fix marker (pre-bugcheck diagnostics) missing after patch' }
+          # THE DEFECTS, ASSERTED GONE.
+          # (a) the unbounded silent retry;
           if ($store -match '(?s)if \(status == STATUS_TIMEOUT\)\s*\r?\n\s*Warning\("TIMED OUT') { throw 'unbounded TIMED OUT retry still present after patch' }
+          # (b) the multi-second busy-spin while HOLDING Context->Lock - the mechanism of the wedge;
           if ($store -match 'Timeout\.QuadPart = TIME_RELATIVE\(TIME_S\(XENBUS_STORE_POLL_PERIOD\)\)') { throw 'multi-second spin under the store lock still present after patch' }
-          if ($store -match 'XENBUS_STORE_DPC_TIMEOUT_MS') { throw 'the 1 s DISPATCH deadline that broke PV bring-up is back' }
+          # (c) sleeping mid-request, which would break the "Make sure we don't suspend" interlock
+          #     (SuspendTrigger -> SyncCapture needs every CPU to run a DPC), and which a
+          #     previous revision of this patch did. IRQL must stay raised for the whole wait.
+          if ($store -match 'KeDelayExecutionThread') { throw 'the sleep that breaks the suspend interlock is back' }
+          # (d) the 1 s DISPATCH deadline that silently broke PV device bring-up.
+          if ($store -match 'XENBUS_STORE_DPC_TIMEOUT') { throw 'the short DISPATCH deadline that broke PV bring-up is back' }
           Write-Host "::notice title=xenbus::store-submit bound applied"
 
       - name: Build xenbus via its own build.ps1

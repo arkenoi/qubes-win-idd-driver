@@ -1,38 +1,51 @@
 --- a/src/xenbus/store.c
 +++ b/src/xenbus/store.c
-@@ -891,23 +891,52 @@
+@@ -891,23 +891,64 @@
  #define TIME_MS(_ms)        (TIME_US((_ms) * 1000))
  #define TIME_S(_s)          (TIME_MS((_s) * 1000))
  #define TIME_RELATIVE(_t)   (-(_t))
  
  #define XENBUS_STORE_POLL_PERIOD 5
  
-+// WAITING FOR XENSTORE MUST NOT FREEZE THE GUEST, AND MUST NOT CORRUPT THE RING.
++// WAITING FOR XENSTORE MUST NOT HOLD THE STORE LOCK, AND MUST NOT WAIT FOREVER IN SILENCE.
 +//
-+// Upstream waits for its request holding Context->Lock at DISPATCH_LEVEL, and
-+// XENBUS_EVTCHN(Wait) is a pure _mm_pause() busy-spin (evtchn.c). So it burned a whole core
-+// with the store lock held for up to XENBUS_STORE_POLL_PERIOD seconds per iteration and, since
-+// a timeout only logged and iterated, forever if the request never completed. ~10 xenstore
-+// entry points contend on that lock, so one stuck request took down every PV path in the guest.
++// Upstream waits for its request while holding Context->Lock at DISPATCH_LEVEL, and
++// XENBUS_EVTCHN(Wait) is a pure _mm_pause() busy-spin (evtchn.c). So it burns a core with the
++// lock held for up to XENBUS_STORE_POLL_PERIOD seconds per iteration and, because a timeout
++// only logs and iterates, forever if the request never completes. About ten xenstore entry
++// points contend on that lock and every PV path in the guest goes through xenstore, so ONE
++// stuck request takes the whole guest down - measured 2026-09-12: qrexec, the PV console and
++// even the Windows event log went silent together while vCPUs spun, no dump, nothing to read.
 +//
-+// THE FIX IS DROPPING THE LOCK, NOT SHORTENING THE WAIT. A request is completed by whoever
-+// polls next (StoreDpc runs __StorePoll independently), so this thread need not hold the lock -
-+// or the CPU - to make progress. Both wait modes now release Context->Lock while waiting:
-+// PASSIVE callers sleep, DISPATCH callers stall briefly. Other xenstore callers keep running
-+// either way, which is the property whose absence produced the wedge.
++// TWO CHANGES, AND THEY ARE DELIBERATELY THE ONLY TWO.
 +//
-+// THE DEADLINES ARE DELIBERATELY GENEROUS, and an earlier revision of this patch got that
-+// badly wrong. A 1 s deadline at DISPATCH_LEVEL breaks PV device bring-up outright:
-+// FrontendSetState (xenvif/frontend.c) holds Frontend->Lock across the whole state machine, so
-+// every xenstore call in xenvif connect/teardown arrives here at DISPATCH_LEVEL, and
-+// FrontendWaitForBackendXenbusStateChange budgets 120 s for a backend transition. Failing its
-+// reads at 1 s makes the vif silently never connect. With the lock dropped the deadline is no
-+// longer what protects the guest, so it is set to bound a pathological case, not a slow one.
-+// The DISPATCH bound stays under the ~20 s DPC watchdog.
-+#define XENBUS_STORE_SPIN_US        100 // stall this long per poll when we cannot sleep
-+#define XENBUS_STORE_SLEEP_MS       5   // sleep this long per poll when we can
-+#define XENBUS_STORE_TIMEOUT_S      30  // deadline when we can sleep
-+#define XENBUS_STORE_DPC_TIMEOUT_S  10  // deadline when we cannot; stays under the DPC watchdog
++// 1. DROP THE LOCK BETWEEN POLLS. That is what stops one slow request freezing everything
++//    else; a request is completed by whoever polls next (StoreDpc runs __StorePoll
++//    independently), so this thread never needed the lock to make progress. IRQL stays at
++//    DISPATCH_LEVEL: the KeRaiseIrql above is annotated "Make sure we don't suspend" and it is
++//    load-bearing - SuspendTrigger -> SyncCapture queues a DPC on every CPU and spins until all
++//    run it, so staying at DISPATCH_LEVEL is what prevents a Xen suspend from landing while a
++//    request is in flight. Nothing re-sends a request across a suspend, and a half-sent one
++//    would have its tail written into a fresh ring, so that interlock is kept.
++//
++// 2. CRASH, LOUDLY, RATHER THAN GIVE UP QUIETLY. The tempting alternative - abandon the
++//    request and return NULL - is worse in three separate ways, all of them verified in this
++//    source: callers such as xenvif's FrontendWaitForBackendXenbusStateChange discard the
++//    status, so the guest would silently never get a network device; StoreWatchRemove and
++//    StoreTransactionEnd skip the cleanup that unlinks them and later reach BUG() anyway, via
++//    a watch whose Event points at a dead stack frame; and a request that is already PARTLY in
++//    the ring cannot be withdrawn at all - the ring is 1024 bytes against a 4096-byte payload,
++//    so xenstored would read the next request's header as this one's tail and the stream would
++//    be desynchronised permanently. A bugcheck has none of those failure modes, and unlike the
++//    silent wedge it leaves a CRASH DUMP naming this site - which is the only reason the
++//    original stall took days to identify.
++//
++// The deadline is therefore set where reaching it can only mean "genuinely broken", not
++// "busy": a xenstore round trip is normally sub-millisecond, and this is four orders of
++// magnitude above that. It also stays under the ~20 s DPC watchdog, so this bugcheck fires
++// before the generic 0x133 and the dump names xenstore instead of a nameless DPC.
++#define XENBUS_STORE_SPIN_US    100 // stall this long per poll, with the lock DROPPED
++#define XENBUS_STORE_TIMEOUT_S  15  // then bugcheck: loud, dumpable, never silent
 +
  static PXENBUS_STORE_RESPONSE
  StoreSubmitRequest(
@@ -46,14 +59,13 @@
      XENBUS_STORE_REQUEST_STATE  State;
      LARGE_INTEGER               Timeout;
 +    LARGE_INTEGER               Deadline;
-+    BOOLEAN                     CanSleep;
      NTSTATUS                    status;
  
      ASSERT3U(Request->State, ==, XENBUS_STORE_REQUEST_PREPARED);
  
      Request->Response = __StoreAllocate(sizeof (XENBUS_STORE_RESPONSE));
  
-@@ -927,24 +956,97 @@
+@@ -927,24 +968,57 @@
  
      Count = StorePollLocked(Context);
  
@@ -61,16 +73,12 @@
      State = Request->State;
  
 -    Timeout.QuadPart = TIME_RELATIVE(TIME_S(XENBUS_STORE_POLL_PERIOD));
-+    // Poll, do not camp: the event-channel wait is a busy-spin, so ask it for almost nothing
-+    // and do the actual waiting below with the lock dropped.
++    // Poll, do not camp: the event-channel wait is a busy-spin, so ask it for nothing and do
++    // the waiting below with the lock dropped.
 +    Timeout.QuadPart = 0;
 +
-+    CanSleep = (BOOLEAN)(Irql == PASSIVE_LEVEL);
-+
 +    KeQuerySystemTime(&Deadline);
-+    Deadline.QuadPart += (CanSleep) ?
-+                         TIME_S(XENBUS_STORE_TIMEOUT_S) :
-+                         TIME_S(XENBUS_STORE_DPC_TIMEOUT_S);
++    Deadline.QuadPart += TIME_S(XENBUS_STORE_TIMEOUT_S);
  
      while (State != XENBUS_STORE_REQUEST_COMPLETED) {
 -        status = XENBUS_EVTCHN(Wait,
@@ -97,61 +105,25 @@
 +            break;
 +
 +        KeQuerySystemTime(&Now);
-+
-+        // ABANDONING A HALF-SENT REQUEST WOULD DESYNCHRONISE THE RING FOREVER, so the deadline
-+        // only applies when this request can be withdrawn cleanly. StoreCopyToRing publishes
-+        // whatever fits (XENSTORE_RING_SIZE is 1024 against a 4096-byte payload) and
-+        // StoreSendRequests leaves a partly-written request on SubmittedList with
-+        // Index < Count. Unlinking THAT means the rest of its bytes are never written, and
-+        // xenstored then reads the next request's header as this one's tail - unrecoverable,
-+        // and a far worse outcome than waiting. Two states are safe: fully sent (PENDING, so a
-+        // late response takes the existing SPURIOUS RESPONSE path), or nothing written at all.
 +        if (Now.QuadPart >= Deadline.QuadPart) {
-+            BOOLEAN Withdrawable;
++            Error("XENSTORE STUCK: req_id %08x type %08x state %d index %d of %d\n",
++                  Request->Header.req_id,
++                  Request->Header.type,
++                  State,
++                  Request->Index,
++                  Request->Count);
 +
-+            Withdrawable = (BOOLEAN)(State == XENBUS_STORE_REQUEST_PENDING ||
-+                                     (Request->Index == 0 &&
-+                                      Request->Segment[0].Offset == 0));
-+
-+            if (Withdrawable) {
-+                Error("GIVING UP\n");
-+
-+                RemoveEntryList(&Request->ListEntry);
-+
-+                KeReleaseSpinLockFromDpcLevel(&Context->Lock);
-+
-+                StoreFreeResponse(Request->Response);
-+                RtlZeroMemory(Request, sizeof (XENBUS_STORE_REQUEST));
-+
-+                KeLowerIrql(Irql);
-+
-+                return NULL;
-+            }
-+
-+            // Keep waiting rather than corrupt the stream. This is survivable now only because
-+            // the lock is dropped below: the guest stays responsive while this one caller waits.
-+            Warning("PARTIALLY SENT - CANNOT WITHDRAW, STILL WAITING\n");
-+            Deadline.QuadPart = Now.QuadPart + TIME_S(XENBUS_STORE_TIMEOUT_S);
++            // Deliberately fatal. See the note above XENBUS_STORE_TIMEOUT_S: every quieter
++            // option either lies to a caller that ignores it, leaks an object into a later
++            // bugcheck anyway, or corrupts the ring beyond recovery. This leaves a dump.
++            BUG("XENSTORE REQUEST NEVER COMPLETED");
 +        }
 +
-+        // Get off the lock either way. Another context's StorePollLocked completes this request
-+        // just as well as this thread would, and meanwhile every other xenstore caller runs.
++        // The change that matters: get off the lock. Another context's StorePollLocked
++        // completes this request just as well as this thread would, and meanwhile every other
++        // xenstore caller keeps running instead of piling up behind us.
 +        KeReleaseSpinLockFromDpcLevel(&Context->Lock);
-+
-+        if (CanSleep) {
-+            LARGE_INTEGER   Delay;
-+
-+            KeLowerIrql(Irql);
-+
-+            Delay.QuadPart = TIME_RELATIVE(TIME_MS(XENBUS_STORE_SLEEP_MS));
-+            (VOID) KeDelayExecutionThread(KernelMode, FALSE, &Delay);
-+
-+            KeRaiseIrql(DISPATCH_LEVEL, &Irql);
-+        } else {
-+            // Cannot sleep at DISPATCH_LEVEL, but can still stop hogging the store lock.
-+            KeStallExecutionProcessor(XENBUS_STORE_SPIN_US);
-+        }
-+
++        KeStallExecutionProcessor(XENBUS_STORE_SPIN_US);
 +        KeAcquireSpinLockAtDpcLevel(&Context->Lock);
  
          KeMemoryBarrier();
@@ -159,93 +131,3 @@
      }
  
      KeReleaseSpinLockFromDpcLevel(&Context->Lock);
-@@ -1595,15 +1697,20 @@
-     KeReleaseSpinLock(&Context->Lock, Irql);
- 
-     ASSERT(NT_SUCCESS(status));
- 
-     Response = StoreSubmitRequest(Context, &Request);
- 
--    status = STATUS_NO_MEMORY;
--    if (Response == NULL)
--        goto fail1;
-+    // Same reasoning as StoreWatchRemove: skipping `done:` leaves the transaction on
-+    // Context->TransactionList, and StoreRelease then hits BUG("OUTSTANDING TRANSACTIONS").
-+    if (Response == NULL) {
-+        Warning("TRANSACTION END FAILED - ending it locally anyway\n");
-+        KeAcquireSpinLock(&Context->Lock, &Irql);
-+        Transaction->Active = FALSE;
-+        goto done;
-+    }
- 
-     status = StoreCheckResponse(Response);
-     if (!NT_SUCCESS(status) && status != STATUS_RETRY)
-         goto fail2;
- 
-     StoreFreeResponse(Response);
-@@ -1630,13 +1737,15 @@
- 
- fail2:
-     ASSERT3U(status, !=, STATUS_RETRY);
- 
-     StoreFreeResponse(Response);
- 
--fail1:
-+    // No `goto fail1` remains in this function - the NULL-response case now unlinks the
-+    // transaction via `done:` instead - so the label would be unreferenced (C4102, an error
-+    // in this build). fail2 falls through to the same cleanup.
-     ASSERT(IsZeroMemory(&Request, sizeof (XENBUS_STORE_REQUEST)));
- 
-     return status;
- }
- 
- static NTSTATUS
-@@ -1816,15 +1925,27 @@
-     KeReleaseSpinLock(&Context->Lock, Irql);
- 
-     ASSERT(NT_SUCCESS(status));
- 
-     Response = StoreSubmitRequest(Context, &Request);
- 
--    status = STATUS_NO_MEMORY;
--    if (Response == NULL)
--        goto fail1;
-+    // A NULL RESPONSE MUST STILL UNLINK AND FREE THE WATCH. Going to fail1 here skips the
-+    // `done:` block below - the only place that clears Active, removes the watch from
-+    // Context->WatchList and frees it - and every caller discards this status. The watch would
-+    // stay on WatchList with Watch->Event pointing at a KEVENT that is often a LOCAL of a
-+    // caller about to return (FrontendWaitForBackendXenbusStateChange), so a later
-+    // StoreProcessWatches signals a dead stack frame; and StoreRelease then finds WatchList
-+    // non-empty and executes BUG("OUTSTANDING WATCHES"), an unconditional KeBugCheckEx.
-+    // Upstream could reach this via an allocation failure; the bounded give-up makes it
-+    // ordinary, so the leak is fixed rather than left as a latent bugcheck.
-+    if (Response == NULL) {
-+        Warning("UNWATCH FAILED - removing the watch locally anyway\n");
-+        KeAcquireSpinLock(&Context->Lock, &Irql);
-+        Watch->Active = FALSE;
-+        goto done;
-+    }
- 
-     status = StoreCheckResponse(Response);
-     if (!NT_SUCCESS(status))
-         goto fail2;
- 
-     StoreFreeResponse(Response);
-@@ -1855,14 +1976,15 @@
- 
- fail2:
-     Error("fail2\n");
- 
-     StoreFreeResponse(Response);
- 
--fail1:
--    Error("fail1 (%08x)\n", status);
-+    // Same as StoreTransactionEnd: the NULL-response case unlinks the watch via `done:`, so
-+    // nothing targets fail1 any more and the label would be an unreferenced-label error.
-+    Error("unwatch failed (%08x)\n", status);
- 
-     ASSERT(IsZeroMemory(&Request, sizeof (XENBUS_STORE_REQUEST)));
- 
-     return status;
- }
- 
