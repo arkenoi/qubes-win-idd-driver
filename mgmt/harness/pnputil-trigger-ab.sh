@@ -102,7 +102,7 @@ run_round(){ # $1=arm (INJECT|STAGE) $2=round
   local arm=$1 r=$2 flag="" verdict g
   [ "$arm" = INJECT ] && flag=" /install"
   case "$arm" in
-    OLD) g="$GOLDEN_OLD" ;;
+    OLD|SAMEOLD) g="$GOLDEN_OLD" ;;
     NEW) g="$GOLDEN_NEW" ;;
     *)   g="$GOLDEN" ;;
   esac
@@ -163,7 +163,24 @@ PYV
           2>/dev/null | tr -d '\r\0' | grep -aoE 'XBVER=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tail -1 | cut -d= -f2)
   say "  xenbus bound in this guest BEFORE the injection: ${bound:-<unreadable>}"
 
+  # WHICH PACKAGE TO STAGE. SAMEOLD re-adds the guest's OWN installed package from the
+  # DriverStore - identical version, so PnP has nothing to rank above what is bound. That is
+  # the control that separates "a driver package arrived" from "a HIGHER-RANKED one arrived",
+  # and it is the question the owner asked: does reinstalling old over old wedge?
   local cd_inf='D:\pv-drivers\xenbus\xenbus.inf'
+  if [ "$arm" = SAMEOLD ]; then
+    local sb64 store
+    sb64=$(python3 -c "import base64;print(base64.b64encode('\$i=Get-ChildItem C:/Windows/System32/DriverStore/FileRepository -Filter xenbus.inf -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; Write-Host (\"XBINF=\" + \$i.FullName)'.encode('utf-16-le')).decode())")
+    store=$(QTEST_VM=$SUBJ timeout -k 5 90 ./tools/qtest run \
+            "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $sb64" \
+            2>/dev/null | tr -d '\r\0' | grep -aoE 'XBINF=[^ ]+xenbus\.inf' | tail -1 | cut -d= -f2)
+    if [ -z "$store" ]; then
+      say "  VOID: could not locate the guest's own xenbus package in the DriverStore"
+      return 2
+    fi
+    cd_inf="$store"
+    say "  re-adding the guest's OWN package: $cd_inf"
+  fi
   local before; before=$(cpu_of "$SUBJ")
   say "  firing: pnputil /add-driver $cd_inf$flag"
   QTEST_VM=$SUBJ timeout -k 10 300 ./tools/qtest run \
