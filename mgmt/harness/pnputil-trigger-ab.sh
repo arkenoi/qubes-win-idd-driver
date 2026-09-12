@@ -32,6 +32,10 @@ cd "$(git rev-parse --show-toplevel)" || exit 2
 ISO="${1:?usage: pnputil-trigger-ab.sh <release.iso> [rounds]}"
 ROUNDS="${2:-3}"
 GOLDEN="${GOLDEN:-win11-qwt}"
+# Which arms to run. The third one is the hypothesis test: the SAME stage-only injection on a
+# golden whose xenbus is ALREADY the patched one, where the prediction is survival or a
+# XENSTORE STUCK bugcheck rather than a silent forever-wedge.
+ARMS="${ARMS:-INJECT STAGE}"
 SUBJ="${SUBJ:-win11-trig}"
 OUT="${OUT:-/home/user/rel/pnputil-trigger-$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$OUT"
@@ -132,6 +136,14 @@ PYV
     say "  WARNING: module-base recorder NOT armed - a wedge here leaves a raw RIP"
   fi
 
+  # WHICH DRIVER IS ACTUALLY UNDER TEST. Without this the arm name is a guess: a golden built
+  # before the patches has the old xenbus bound, one built from our release has the new one.
+  local bound
+  bound=$(QTEST_VM=$SUBJ timeout -k 5 90 ./tools/qtest run \
+          'powershell -NoProfile -Command "(Get-Item C:\Windows\System32\drivers\xenbus.sys).VersionInfo.FileVersion"' \
+          2>/dev/null | tr -d '\r\0' | grep -aoE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  say "  xenbus bound in this guest BEFORE the injection: ${bound:-<unreadable>}"
+
   local cd_inf='D:\pv-drivers\xenbus\xenbus.inf'
   local before; before=$(cpu_of "$SUBJ")
   say "  firing: pnputil /add-driver $cd_inf$flag"
@@ -165,14 +177,14 @@ say "    STAGE  = the shipping behaviour (expected healthy)"
 
 for r in $(seq 1 "$ROUNDS"); do
   # INTERLEAVED, per the evidence rules: never all of one arm then all of the other.
-  for arm in INJECT STAGE; do
+  for arm in $ARMS; do
     run_round "$arm" "$r" || finish 1
   done
 done
 
 say ""
 say "=== RESULT ==="
-for arm in INJECT STAGE; do
+for arm in $ARMS; do
   w=$(awk -F'\t' -v a="$arm" '$1==a && $3=="WEDGED"' "$V" | wc -l)
   n=$(awk -F'\t' -v a="$arm" '$1==a' "$V" | wc -l)
   say "  $arm: $w wedged of $n"
