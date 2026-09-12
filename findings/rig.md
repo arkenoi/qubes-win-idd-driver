@@ -31,3 +31,33 @@ forensics only — do not load it into context.
 - Files under `guest/` cross qrexec as ASCII — keep them ASCII-only (a non-ASCII stem arrived mangled and broke the parse); gate with `tools/ps-parse-gate.sh` before shipping. [verified 2026-08-14]
 - CI, qrexec binaries: the gui-agent job builds core-agent's three qrexec projects DIRECTLY (the whole solution drags in the WDK via relocate-dir) and generates + asserts `qwt_version.h` up front — a build whose success depends on project order is not a build. [verified 2026-08-21]
 - CI, ours-wins guard: `packaging/ours-wins.psd1` + `packaging/check-ours-wins.ps1` in release-package.yml make the stale-payload class (our file shadowed by stock 4.2.2, or not shipped at all) a build failure — validated against 10 seeded defects; real-data green only after `e92ffde` (cite that commit, not the 08-28 entry). Contract: when CI ships core-agent bins, flip `bin/qrexec-wrapper.exe` to Required and delete its KnownGaps entry in the same commit. [verified 2026-08-28]
+
+## "subject would not halt" was a HARNESS failure, not the guest (diagnosed + fixed 2026-09-12)
+
+SYMPTOM: a campaign cell fails `subject would not halt for parking` / `for unpark`, the guest sits
+Transient at ~0% CPU, and a later boot comes up dark with the agent logging `dom0's gui-daemon for
+this qube is gone`. Graded product-FAIL. It cost a campaign, and I compounded it by reverting a
+working agent change on the strength of the misattribution.
+
+CAUSE, and it is arithmetic rather than bad luck:
+every cell subject is given qrexec_timeout=600 (matrix.sh), the park waited 420 s for Halted, and
+NOTHING in the park path drained queued qrexec calls - zero occurrences of the qrexec_timeout-15
+drain this project already documented.
+A queued qrexec call RESTARTS a guest after it halts and can hold it longer than the wait, so
+`w_halt` - which returns on the FIRST sighting of Halted and otherwise only ever observes Transient -
+cannot tell "never shut down" from "shut down and was started again", and blames the product.
+Everything downstream follows: the state oscillates, the restarted guest boots into a dom0 that has
+given up on a qube that kept reappearing, and the agent's gui-daemon complaint is TRUE but is a
+consequence, not the cause.
+
+FIX: `w_drain_and_shutdown` (drops qrexec_timeout to 15, kills pending client calls, shuts down,
+always restores the previous value), a 660 s budget that OUTLASTS the 600 s timeout instead of
+sitting under it, and `w_halt_stable`, which requires Halted to still be Halted a moment later and
+reports "halted then came back" as INVALID-INSTRUMENT naming the restarter.
+
+WHAT IT COST, so the lesson is not lost: four candidate causes were eliminated by evidence (agent
+init completes; the daemon safely ignores damage for an unmapped window; no broker respawn loop;
+6/6 clean reboots on the suspect binary) and a targeted reproduction - clean install then immediate
+shutdown - took 22 s against a 420 s budget. Only then did the arithmetic get checked. THE CHEAPEST
+CHECK WAS LAST: compare the harness's own two constants before theorising about the product.
+[verified 2026-09-12]
