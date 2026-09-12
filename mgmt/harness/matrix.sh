@@ -984,9 +984,15 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   local want got
   want=$(grep -aoiE 'DriverVer[^,]*,[0-9.]+' "$RELEASE_SETUP/pv-drivers/xenbus/xenbus.inf" 2>/dev/null \
          | grep -aoE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  # ENCODED, not quoted: escaped quotes inside -Command fail SILENTLY (tools/lint-harness.py
+  # L3). And a MARKER, not a bare version: `qtest run` echoes cmd's banner - "Microsoft Windows
+  # [Version 10.0.26100.1742]" - so a bare version regex returns the WINDOWS BUILD. Measured
+  # 2026-09-12: the probe reported 10.0.26100.1742 as the bound xenbus version.
+  local b64
+  b64=$(python3 -c "import base64;print(base64.b64encode('Write-Host (\"XBVER=\" + (Get-Item C:\\Windows\\System32\\drivers\\xenbus.sys).VersionInfo.FileVersion)'.encode('utf-16-le')).decode())")
   got=$(QTEST_VM=$vm timeout -k 5 90 ./tools/qtest run \
-        'powershell -NoProfile -Command "(Get-Item C:\Windows\System32\drivers\xenbus.sys).VersionInfo.FileVersion"' \
-        2>/dev/null | tr -d '\r\0' | grep -aoE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+        "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64" \
+        2>/dev/null | tr -d '\r\0' | grep -aoE 'XBVER=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tail -1 | cut -d= -f2)
   say "  $lbl xenbus bound version: ${got:-<unreadable>} (packaged ${want:-<unknown>})"
   if [ -z "$want" ]; then
     no "$lbl: INVALID-INSTRUMENT - could not read the packaged xenbus DriverVer; bound version ungraded"
