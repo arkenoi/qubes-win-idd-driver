@@ -92,9 +92,18 @@ for v in ('root', 'private'):
 PYV
 fi
 [ "$(w_state "$SUBJ")" != Halted ] && { qvm-kill "$SUBJ" >/dev/null 2>&1; until [ "$(w_state "$SUBJ")" = Halted ]; do sleep 5; done; }
+# checkpoint.sh REFUSES to overwrite an existing park, which is right - it will not silently
+# discard someone's restore point. But this label is ours, and a killed run leaves one behind,
+# so remove our own before re-parking. (A previous run died here: "REFUSE: park
+# ckpt-win11-stock-stockprobe already exists".)
+if qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "ckpt-$SUBJ-$PARK"; then
+  say "removing our own stale park ckpt-$SUBJ-$PARK from an earlier run"
+  qvm-remove -f "ckpt-$SUBJ-$PARK" >/dev/null 2>&1 \
+    || { say "REFUSED: stale park ckpt-$SUBJ-$PARK exists and cannot be removed"; exit 2; }
+fi
 QWT_VMLOCK_HELD="$SUBJ" ./mgmt/harness/checkpoint.sh park "$SUBJ" "$PARK" >>"$OUT/checkpoint.log" 2>&1 \
   && say "parked $SUBJ as $PARK (rounds restore from here - seconds, not a rebuild)" \
-  || { say "REFUSED: could not park $SUBJ"; exit 2; }
+  || { say "REFUSED: could not park $SUBJ - see $OUT/checkpoint.log"; tail -2 "$OUT/checkpoint.log" | sed "s/^/  /"; exit 2; }
 
 for r in $(seq 1 "$ROUNDS"); do
   say ""
