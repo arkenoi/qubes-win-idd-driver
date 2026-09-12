@@ -1,6 +1,6 @@
 --- a/src/xenbus/store.c
 +++ b/src/xenbus/store.c
-@@ -37,12 +37,13 @@
+@@ -37,12 +37,14 @@
  #include <xen.h>
  
  #include "store.h"
@@ -8,13 +8,14 @@
  #include "thread.h"
  #include "fdo.h"
 +#include "registry.h"
++#include "driver.h"
  #include "dbg_print.h"
  #include "assert.h"
  #include "util.h"
  
  extern ULONG
  NTAPI
-@@ -146,12 +147,13 @@
+@@ -146,12 +148,22 @@
      XENBUS_GNTTAB_INTERFACE             GnttabInterface;
      PXENBUS_SUSPEND_CALLBACK            SuspendCallbackEarly;
      PXENBUS_SUSPEND_CALLBACK            SuspendCallbackLate;
@@ -22,13 +23,22 @@
      PXENBUS_THREAD                      WatchdogThread;
      BOOLEAN                             Enabled;
 +    ULONG                               RequestTimeout;
++    // A SUB-THRESHOLD STALL MUST NOT GO UNNOTICED. The bugcheck only catches a request that
++    // never completes; a request that blocks for 14 s and then succeeds is invisible, even
++    // though the guest just lost 14 s. These count it and the watchdog thread publishes them
++    // where the guest can read them, so a near-miss is a measurable number instead of a log
++    // line in a sink nobody opens.
++    ULONG                               SlowRequests;   // waits that crossed the warn threshold
++    ULONG                               MaxWaitSeconds; // worst wait seen this boot
++    ULONG                               PublishedMaxWait;
++    ULONG                               PublishedSlow;
  };
  
  C_ASSERT(sizeof (struct xenstore_domain_interface) <= PAGE_SIZE);
  
  #define XENBUS_STORE_TAG    'ROTS'
  
-@@ -908,23 +910,49 @@
+@@ -908,23 +920,50 @@
  // briefly, retake it. IRQL stays raised for the whole wait, because the KeRaiseIrql below is
  // annotated "Make sure we don't suspend" and that is load-bearing - SuspendTrigger ->
  // SyncCapture needs every CPU to run a DPC, so a thread at DISPATCH_LEVEL is what prevents a
@@ -72,13 +82,14 @@
      LARGE_INTEGER               Timeout;
 +    LARGE_INTEGER               Start;
 +    LARGE_INTEGER               NextWarn;
++    BOOLEAN                     Counted;
      NTSTATUS                    status;
  
      ASSERT3U(Request->State, ==, XENBUS_STORE_REQUEST_PREPARED);
  
      Request->Response = __StoreAllocate(sizeof (XENBUS_STORE_RESPONSE));
  
-@@ -948,13 +976,19 @@
+@@ -948,13 +987,20 @@
      State = Request->State;
  
      // Poll, do not camp: the event-channel wait is a busy-spin, so ask it for nothing and do
@@ -87,6 +98,7 @@
  
 +    KeQuerySystemTime(&Start);
 +    NextWarn.QuadPart = Start.QuadPart + TIME_S(XENBUS_STORE_WARN_S);
++    Counted = FALSE;
 +
      while (State != XENBUS_STORE_REQUEST_COMPLETED) {
 +        LARGE_INTEGER   Now;
@@ -98,7 +110,7 @@
                               Count + 1,
                               &Timeout);
  
-@@ -962,12 +996,52 @@
+@@ -962,12 +1008,61 @@
  
          KeMemoryBarrier();
          State = Request->State;
@@ -108,6 +120,15 @@
 +
 +        KeQuerySystemTime(&Now);
 +        Elapsed = (ULONGLONG)(Now.QuadPart - Start.QuadPart) / TIME_S(1);
++
++        // Cheap, and done under the lock we already hold.
++        if ((ULONG)Elapsed > Context->MaxWaitSeconds)
++            Context->MaxWaitSeconds = (ULONG)Elapsed;
++
++        if (!Counted && Elapsed >= XENBUS_STORE_WARN_S) {
++            Context->SlowRequests++;
++            Counted = TRUE;
++        }
 +
 +        if (Now.QuadPart >= NextWarn.QuadPart) {
 +            // Loud well before fatal: this is the line that tells us whether 15 s is the right
@@ -151,7 +172,79 @@
          KeAcquireSpinLockAtDpcLevel(&Context->Lock);
  
          KeMemoryBarrier();
-@@ -2720,12 +2794,14 @@
+@@ -1943,12 +2038,71 @@
+                                      &Timeout);
+         KeClearEvent(Event);
+ 
+         if (ThreadIsAlerted(Self))
+             break;
+ 
++        // PUBLISH THE NEAR-MISS COUNTERS. This thread is at PASSIVE_LEVEL, which is the only
++        // reason it can touch the registry at all - the wait path cannot. Values land under the
++        // driver's Parameters key so anything in the guest (our health check included) can read
++        // them without a debugger and without a dom0 log. Written only when they change.
++        if (Context->MaxWaitSeconds != Context->PublishedMaxWait ||
++            Context->SlowRequests != Context->PublishedSlow) {
++            HANDLE  ParametersKey;
++
++            ParametersKey = DriverGetParametersKey();
++
++            (VOID) RegistryUpdateDwordValue(ParametersKey,
++                                            "StoreMaxWaitSeconds",
++                                            Context->MaxWaitSeconds);
++            (VOID) RegistryUpdateDwordValue(ParametersKey,
++                                            "StoreSlowRequests",
++                                            Context->SlowRequests);
++
++            // THREE SINKS, BECAUSE TWO OF THEM ARE SILENT BY DEFAULT AND I HAVE NOW BEEN
++            // CAUGHT BY BOTH. Warning()/Error() are vDbgPrintExWithPrefix - kernel debugger
++            // only. LogPrintf reaches the Xen/QEMU debug ports that dom0 captures, but
++            // DEFAULT_CONSOLE_LOG_LEVEL is 0 (driver.c), so it is DISCARDED unless
++            // ConsoleLogLevel is set in the registry. Neither is readable on a stock guest.
++            //
++            // So the authoritative record is the two things that need no configuration: the
++            // registry values above, which anything in the guest can read, and this Windows
++            // EVENT LOG entry, which a user can see in Event Viewer and our health check can
++            // read with Get-WinEvent. The LogPrintf below stays because it is the ONLY one of
++            // the three that survives a guest too wedged to query - and in that case the
++            // owner does have to set ConsoleLogLevel and read it in dom0.
++            {
++                PIO_ERROR_LOG_PACKET    Packet;
++                UCHAR                   Size;
++
++                Size = (UCHAR)(sizeof (IO_ERROR_LOG_PACKET) + (2 * sizeof (ULONG)));
++
++                Packet = IoAllocateErrorLogEntry(DriverGetDriverObject(), Size);
++                if (Packet != NULL) {
++                    RtlZeroMemory(Packet, Size);
++
++                    Packet->ErrorCode = IO_ERR_DRIVER_ERROR;
++                    Packet->FinalStatus = STATUS_IO_TIMEOUT;
++                    Packet->UniqueErrorValue = 0x58535357; // 'XSSW' - xenstore slow wait
++                    Packet->DumpDataSize = 2 * sizeof (ULONG);
++                    Packet->DumpData[0] = Context->MaxWaitSeconds;
++                    Packet->DumpData[1] = Context->SlowRequests;
++
++                    IoWriteErrorLogEntry(Packet);
++                }
++            }
++
++            LogPrintf(LOG_LEVEL_WARNING,
++                      "STORE: XENSTORE WAIT HIGH WATER: %u s, %u slow request(s)\n",
++                      Context->MaxWaitSeconds,
++                      Context->SlowRequests);
++
++            Context->PublishedMaxWait = Context->MaxWaitSeconds;
++            Context->PublishedSlow = Context->SlowRequests;
++        }
++
+         KeRaiseIrql(DISPATCH_LEVEL, &Irql);
+         KeAcquireSpinLockAtDpcLevel(&Context->Lock);
+ 
+         if (Context->Enabled) {
+             struct xenstore_domain_interface    *Shared;
+ 
+@@ -2720,12 +2874,14 @@
      IN  PXENBUS_FDO             Fdo,
      OUT PXENBUS_STORE_CONTEXT   *Context
      )
@@ -166,7 +259,7 @@
  
      *Context = __StoreAllocate(sizeof (XENBUS_STORE_CONTEXT));
  
-@@ -2760,12 +2836,30 @@
+@@ -2760,12 +2916,30 @@
                                 sizeof ((*Context)->DebugInterface));
      ASSERT(NT_SUCCESS(status));
      ASSERT((*Context)->DebugInterface.Interface.Context != NULL);
