@@ -1,0 +1,79 @@
+--- a/xenbus/src/xenbus/store.c
++++ b/xenbus/src/xenbus/store.c
+@@ -891,21 +891,29 @@
+ #define TIME_MS(_ms)        (TIME_US((_ms) * 1000))
+ #define TIME_S(_s)          (TIME_MS((_s) * 1000))
+ #define TIME_RELATIVE(_t)   (-(_t))
+ 
+ #define XENBUS_STORE_POLL_PERIOD 5
+ 
++// Give up after this many CONSECUTIVE poll periods with no response. Without a bound the
++// loop below spins forever at DISPATCH_LEVEL holding Context->Lock, so a xenstore request
++// that never completes takes down every other xenstore caller with it - measured as the
++// "guest never came back" stall: qrexec, xencons and the event log all stop together while
++// vCPUs burn. 12 * 5 s = 60 s, far beyond any legitimate xenstore latency.
++#define XENBUS_STORE_POLL_LIMIT  12
++
+ static PXENBUS_STORE_RESPONSE
+ StoreSubmitRequest(
+     IN  PXENBUS_STORE_CONTEXT   Context,
+     IN  PXENBUS_STORE_REQUEST   Request
+     )
+ {
+     PXENBUS_STORE_RESPONSE      Response;
+     KIRQL                       Irql;
+     ULONG                       Count;
++    ULONG                       Timeouts;
+     XENBUS_STORE_REQUEST_STATE  State;
+     LARGE_INTEGER               Timeout;
+     NTSTATUS                    status;
+ 
+     ASSERT3U(Request->State, ==, XENBUS_STORE_REQUEST_PREPARED);
+ 
+@@ -928,21 +936,45 @@
+     Count = StorePollLocked(Context);
+ 
+     KeMemoryBarrier();
+     State = Request->State;
+ 
+     Timeout.QuadPart = TIME_RELATIVE(TIME_S(XENBUS_STORE_POLL_PERIOD));
++
++    Timeouts = 0;
+ 
+     while (State != XENBUS_STORE_REQUEST_COMPLETED) {
+         status = XENBUS_EVTCHN(Wait,
+                                &Context->EvtchnInterface,
+                                Context->Channel,
+                                Count + 1,
+                                &Timeout);
+-        if (status == STATUS_TIMEOUT)
++        if (status == STATUS_TIMEOUT) {
+             Warning("TIMED OUT\n");
++
++            if (++Timeouts > XENBUS_STORE_POLL_LIMIT) {
++                // Bail out instead of spinning here forever. The request is taken off the
++                // list first, so a late response finds no owner and takes the existing
++                // SPURIOUS RESPONSE path rather than touching freed memory.
++                Error("GIVING UP after %u s\n",
++                      XENBUS_STORE_POLL_PERIOD * XENBUS_STORE_POLL_LIMIT);
++
++                RemoveEntryList(&Request->ListEntry);
++
++                KeReleaseSpinLockFromDpcLevel(&Context->Lock);
++
++                StoreFreeResponse(Request->Response);
++                RtlZeroMemory(Request, sizeof (XENBUS_STORE_REQUEST));
++
++                KeLowerIrql(Irql);
++
++                return NULL;
++            }
++        } else {
++            Timeouts = 0;
++        }
+ 
+         Count = StorePollLocked(Context);
+ 
+         KeMemoryBarrier();
+         State = Request->State;
+     }

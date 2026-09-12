@@ -35,6 +35,7 @@ on:
     paths:
       - '.github/workflows/pv-xenbus.yml'
       - 'patches/xenbus-hash-table-lock.patch'
+      - 'patches/xenbus-store-submit-bound.patch'
 
 env:
   LINK: /Brepro
@@ -93,6 +94,22 @@ jobs:
           if ($src -notmatch 'InterlockedCompareExchange\(&Bucket->Lock, 0, 1\)') { throw 'fix marker (writer unlock CAS 1->0) missing after patch' }
           if ($src -match 'Old = Readers << 1;') { throw 'old lock derivation still present after patch' }
           Write-Host "::notice title=xenbus::bucket-lock fix applied"
+
+          # SECOND FIX: bound StoreSubmitRequest's wait. The bucket-lock fix is real but it is
+          # NOT the whole cause - the stall recurred on 2026-09-12 with the patched xenbus
+          # 9.1.0.470 already installed (win11-acc, first boot after a PV-driver reinstall:
+          # 3 vCPUs pause-spinning, qrexec and xencons deaf, the guest not even writing its own
+          # event log, Kernel-Power 41 on the way back). StoreSubmitRequest loops forever at
+          # DISPATCH_LEVEL holding Context->Lock when a xenstore request never completes, so
+          # every other xenstore caller is taken down with it. Bounded, it degrades to a
+          # recoverable failure that callers already handle (they all NULL-check the response).
+          git apply --verbose ..\repo\patches\xenbus-store-submit-bound.patch
+          if ($LASTEXITCODE -ne 0) { throw "store-submit bound did not apply" }
+          $store = Get-Content src\xenbus\store.c -Raw
+          if ($store -notmatch 'XENBUS_STORE_POLL_LIMIT') { throw 'fix marker (XENBUS_STORE_POLL_LIMIT) missing after patch' }
+          if ($store -notmatch 'GIVING UP after') { throw 'fix marker (give-up path) missing after patch' }
+          if ($store -match '(?s)if \(status == STATUS_TIMEOUT\)\s*\r?\n\s*Warning\("TIMED OUT') { throw 'unbounded TIMED OUT retry still present after patch' }
+          Write-Host "::notice title=xenbus::store-submit bound applied"
 
       - name: Build xenbus via its own build.ps1
         shell: pwsh
