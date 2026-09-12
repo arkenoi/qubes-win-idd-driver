@@ -21,6 +21,11 @@ name: pv-xenbus
 on:
   workflow_call:
     inputs:
+      skip_patches:
+        description: Build pure-upstream xenbus with none of our patches (A/B only).
+        required: false
+        default: false
+        type: boolean
       build_rev:
         description: 'DriverVer/FILEVERSION fourth field: the release-package run number (packaging/version-stamp). No default.'
         type: string

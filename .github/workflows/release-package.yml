@@ -15,6 +15,15 @@ name: release-package
 on:
   workflow_dispatch:
     inputs:
+      xenbus_skip_patches:
+        description: >-
+          Build the xenbus in this package from PURE UPSTREAM source - none of our patches -
+          rebuilt and version-bumped so it still outranks the prebuilt 9.1.0.0 and installs
+          normally. Produces a package identical to the release in every other respect, for
+          A/B: does the wedge follow our xenbus code or not. Never used for a real release.
+        required: false
+        default: false
+        type: boolean
       volume_id:
         description: 'ISO volume label'
         required: false
@@ -278,6 +287,7 @@ jobs:
     uses: ./.github/workflows/pv-xenbus.yml
     with:
       build_rev: ${{ github.run_number }}
+      skip_patches: ${{ inputs.xenbus_skip_patches == true }}
 
   setup:
     needs: [msi, idd, pv, cons, bus]
