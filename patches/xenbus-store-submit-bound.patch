@@ -183,7 +183,24 @@
          goto fail2;
  
      StoreFreeResponse(Response);
-@@ -1816,15 +1923,27 @@
+@@ -1630,13 +1737,15 @@
+ 
+ fail2:
+     ASSERT3U(status, !=, STATUS_RETRY);
+ 
+     StoreFreeResponse(Response);
+ 
+-fail1:
++    // No `goto fail1` remains in this function - the NULL-response case now unlinks the
++    // transaction via `done:` instead - so the label would be unreferenced (C4102, an error
++    // in this build). fail2 falls through to the same cleanup.
+     ASSERT(IsZeroMemory(&Request, sizeof (XENBUS_STORE_REQUEST)));
+ 
+     return status;
+ }
+ 
+ static NTSTATUS
+@@ -1816,15 +1925,27 @@
      KeReleaseSpinLock(&Context->Lock, Irql);
  
      ASSERT(NT_SUCCESS(status));
@@ -214,3 +231,21 @@
          goto fail2;
  
      StoreFreeResponse(Response);
+@@ -1855,14 +1976,15 @@
+ 
+ fail2:
+     Error("fail2\n");
+ 
+     StoreFreeResponse(Response);
+ 
+-fail1:
+-    Error("fail1 (%08x)\n", status);
++    // Same as StoreTransactionEnd: the NULL-response case unlinks the watch via `done:`, so
++    // nothing targets fail1 any more and the label would be an unreferenced-label error.
++    Error("unwatch failed (%08x)\n", status);
+ 
+     ASSERT(IsZeroMemory(&Request, sizeof (XENBUS_STORE_REQUEST)));
+ 
+     return status;
+ }
+ 
