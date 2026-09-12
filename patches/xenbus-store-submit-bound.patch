@@ -1,18 +1,35 @@
 --- a/src/xenbus/store.c
 +++ b/src/xenbus/store.c
-@@ -891,21 +891,29 @@
+@@ -891,23 +891,49 @@
  #define TIME_MS(_ms)        (TIME_US((_ms) * 1000))
  #define TIME_S(_s)          (TIME_MS((_s) * 1000))
  #define TIME_RELATIVE(_t)   (-(_t))
  
  #define XENBUS_STORE_POLL_PERIOD 5
  
-+// Give up after this many CONSECUTIVE poll periods with no response. Without a bound the
-+// loop below spins forever at DISPATCH_LEVEL holding Context->Lock, so a xenstore request
-+// that never completes takes down every other xenstore caller with it - measured as the
-+// "guest never came back" stall: qrexec, xencons and the event log all stop together while
-+// vCPUs burn. 12 * 5 s = 60 s, far beyond any legitimate xenstore latency.
-+#define XENBUS_STORE_POLL_LIMIT  12
++// WAITING FOR XENSTORE MUST NOT FREEZE THE GUEST.
++//
++// StoreSubmitRequest below waits for its request to complete while holding Context->Lock at
++// DISPATCH_LEVEL, and XENBUS_EVTCHN(Wait) is a pure _mm_pause() busy-spin (evtchn.c). So the
++// original loop burned a whole core with the store lock held for up to XENBUS_STORE_POLL_PERIOD
++// seconds PER ITERATION - and, because a timeout only logged and iterated again, forever if the
++// request never completed. About ten xenstore entry points contend on that lock, so one stuck
++// request takes down every PV path in the guest: measured as qrexec, the PV console and even the
++// Windows event log all going silent together while vCPUs spun.
++//
++// Two things are wrong there and both are fixed: the unbounded retry, and the fact that waiting
++// costs a spinning core at all. A request is completed by whoever polls next - StoreDpc runs
++// __StorePoll independently - so this thread does NOT have to hold the lock, or the CPU, to make
++// progress. It now spins only long enough for the common fast case and otherwise SLEEPS with the
++// lock dropped, leaving the guest fully responsive.
++//
++// The sleep needs PASSIVE_LEVEL. A caller already at DISPATCH_LEVEL cannot sleep, so that path
++// keeps spinning - but under a tight deadline, which is still shorter than the single timeout
++// the original code allowed itself.
++#define XENBUS_STORE_SPIN_MS        1   // spin this long per poll, then stop burning the core
++#define XENBUS_STORE_SLEEP_MS       5   // sleep this long between polls (lock dropped)
++#define XENBUS_STORE_TIMEOUT_S      30  // overall deadline when we can sleep: no freeze, just waiting
++#define XENBUS_STORE_DPC_TIMEOUT_MS 1000 // overall deadline when we cannot sleep: bounded spin
 +
  static PXENBUS_STORE_RESPONSE
  StoreSubmitRequest(
@@ -23,57 +40,98 @@
      PXENBUS_STORE_RESPONSE      Response;
      KIRQL                       Irql;
      ULONG                       Count;
-+    ULONG                       Timeouts;
      XENBUS_STORE_REQUEST_STATE  State;
      LARGE_INTEGER               Timeout;
++    LARGE_INTEGER               Deadline;
++    BOOLEAN                     CanSleep;
      NTSTATUS                    status;
  
      ASSERT3U(Request->State, ==, XENBUS_STORE_REQUEST_PREPARED);
  
-@@ -928,21 +936,45 @@
+     Request->Response = __StoreAllocate(sizeof (XENBUS_STORE_RESPONSE));
+ 
+@@ -927,27 +953,76 @@
+ 
      Count = StorePollLocked(Context);
  
      KeMemoryBarrier();
      State = Request->State;
  
-     Timeout.QuadPart = TIME_RELATIVE(TIME_S(XENBUS_STORE_POLL_PERIOD));
+-    Timeout.QuadPart = TIME_RELATIVE(TIME_S(XENBUS_STORE_POLL_PERIOD));
++    // Spin only briefly per poll; the waiting itself is done asleep, below.
++    Timeout.QuadPart = TIME_RELATIVE(TIME_MS(XENBUS_STORE_SPIN_MS));
 +
-+    Timeouts = 0;
++    CanSleep = (BOOLEAN)(Irql == PASSIVE_LEVEL);
++
++    KeQuerySystemTime(&Deadline);
++    Deadline.QuadPart += (CanSleep) ?
++                         TIME_S(XENBUS_STORE_TIMEOUT_S) :
++                         TIME_MS(XENBUS_STORE_DPC_TIMEOUT_MS);
  
      while (State != XENBUS_STORE_REQUEST_COMPLETED) {
-         status = XENBUS_EVTCHN(Wait,
-                                &Context->EvtchnInterface,
-                                Context->Channel,
-                                Count + 1,
-                                &Timeout);
+-        status = XENBUS_EVTCHN(Wait,
+-                               &Context->EvtchnInterface,
+-                               Context->Channel,
+-                               Count + 1,
+-                               &Timeout);
 -        if (status == STATUS_TIMEOUT)
-+        if (status == STATUS_TIMEOUT) {
-             Warning("TIMED OUT\n");
+-            Warning("TIMED OUT\n");
++        LARGE_INTEGER   Now;
 +
-+            if (++Timeouts > XENBUS_STORE_POLL_LIMIT) {
-+                // Bail out instead of spinning here forever. The request is taken off the
-+                // list first, so a late response finds no owner and takes the existing
-+                // SPURIOUS RESPONSE path rather than touching freed memory.
-+                Error("GIVING UP after %u s\n",
-+                      XENBUS_STORE_POLL_PERIOD * XENBUS_STORE_POLL_LIMIT);
-+
-+                RemoveEntryList(&Request->ListEntry);
-+
-+                KeReleaseSpinLockFromDpcLevel(&Context->Lock);
-+
-+                StoreFreeResponse(Request->Response);
-+                RtlZeroMemory(Request, sizeof (XENBUS_STORE_REQUEST));
-+
-+                KeLowerIrql(Irql);
-+
-+                return NULL;
-+            }
-+        } else {
-+            Timeouts = 0;
-+        }
++        (VOID) XENBUS_EVTCHN(Wait,
++                             &Context->EvtchnInterface,
++                             Context->Channel,
++                             Count + 1,
++                             &Timeout);
  
          Count = StorePollLocked(Context);
  
          KeMemoryBarrier();
          State = Request->State;
++
++        if (State == XENBUS_STORE_REQUEST_COMPLETED)
++            break;
++
++        KeQuerySystemTime(&Now);
++        if (Now.QuadPart >= Deadline.QuadPart) {
++            // Give up rather than wait forever. The request comes off the list BEFORE the lock
++            // is dropped, so a late response finds no owner and takes the existing SPURIOUS
++            // RESPONSE path instead of touching a Request that lives on the caller's stack.
++            Error("GIVING UP\n");
++
++            RemoveEntryList(&Request->ListEntry);
++
++            KeReleaseSpinLockFromDpcLevel(&Context->Lock);
++
++            StoreFreeResponse(Request->Response);
++            RtlZeroMemory(Request, sizeof (XENBUS_STORE_REQUEST));
++
++            KeLowerIrql(Irql);
++
++            return NULL;
++        }
++
++        if (CanSleep) {
++            LARGE_INTEGER   Delay;
++
++            // Drop the lock and the CPU. Another context's StorePollLocked - StoreDpc's, or
++            // another submitter's - completes this request just as well as this thread would,
++            // and meanwhile every other xenstore caller can make progress.
++            KeReleaseSpinLockFromDpcLevel(&Context->Lock);
++            KeLowerIrql(Irql);
++
++            Delay.QuadPart = TIME_RELATIVE(TIME_MS(XENBUS_STORE_SLEEP_MS));
++            (VOID) KeDelayExecutionThread(KernelMode, FALSE, &Delay);
++
++            KeRaiseIrql(DISPATCH_LEVEL, &Irql);
++            KeAcquireSpinLockAtDpcLevel(&Context->Lock);
++
++            KeMemoryBarrier();
++            State = Request->State;
++        }
      }
+ 
+     KeReleaseSpinLockFromDpcLevel(&Context->Lock);
+ 
+     Response = Request->Response;
+     ASSERT(Response == NULL ||

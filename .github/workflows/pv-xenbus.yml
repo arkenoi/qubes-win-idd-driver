@@ -106,9 +106,14 @@ jobs:
           git apply --verbose ..\repo\patches\xenbus-store-submit-bound.patch
           if ($LASTEXITCODE -ne 0) { throw "store-submit bound did not apply" }
           $store = Get-Content src\xenbus\store.c -Raw
-          if ($store -notmatch 'XENBUS_STORE_POLL_LIMIT') { throw 'fix marker (XENBUS_STORE_POLL_LIMIT) missing after patch' }
-          if ($store -notmatch 'GIVING UP after') { throw 'fix marker (give-up path) missing after patch' }
+          if ($store -notmatch 'XENBUS_STORE_TIMEOUT_S') { throw 'fix marker (overall deadline) missing after patch' }
+          if ($store -notmatch 'KeDelayExecutionThread') { throw 'fix marker (sleep instead of spin) missing after patch' }
+          if ($store -notmatch 'GIVING UP') { throw 'fix marker (give-up path) missing after patch' }
+          # The two defects, asserted gone: the unbounded retry, and the multi-second busy-spin
+          # under Context->Lock. A 60 s cap would have satisfied the first and still frozen the
+          # guest, so the second assertion is the one that matters.
           if ($store -match '(?s)if \(status == STATUS_TIMEOUT\)\s*\r?\n\s*Warning\("TIMED OUT') { throw 'unbounded TIMED OUT retry still present after patch' }
+          if ($store -match 'Timeout\.QuadPart = TIME_RELATIVE\(TIME_S\(XENBUS_STORE_POLL_PERIOD\)\)') { throw 'multi-second spin under the store lock still present after patch' }
           Write-Host "::notice title=xenbus::store-submit bound applied"
 
       - name: Build xenbus via its own build.ps1
