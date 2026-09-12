@@ -1,6 +1,20 @@
 --- a/src/xenbus/store.c
 +++ b/src/xenbus/store.c
-@@ -146,12 +146,13 @@
+@@ -37,12 +37,13 @@
+ #include <xen.h>
+ 
+ #include "store.h"
+ #include "evtchn.h"
+ #include "thread.h"
+ #include "fdo.h"
++#include "registry.h"
+ #include "dbg_print.h"
+ #include "assert.h"
+ #include "util.h"
+ 
+ extern ULONG
+ NTAPI
+@@ -146,12 +147,13 @@
      XENBUS_GNTTAB_INTERFACE             GnttabInterface;
      PXENBUS_SUSPEND_CALLBACK            SuspendCallbackEarly;
      PXENBUS_SUSPEND_CALLBACK            SuspendCallbackLate;
@@ -14,7 +28,7 @@
  
  #define XENBUS_STORE_TAG    'ROTS'
  
-@@ -908,23 +909,49 @@
+@@ -908,23 +910,49 @@
  // briefly, retake it. IRQL stays raised for the whole wait, because the KeRaiseIrql below is
  // annotated "Make sure we don't suspend" and that is load-bearing - SuspendTrigger ->
  // SyncCapture needs every CPU to run a DPC, so a thread at DISPATCH_LEVEL is what prevents a
@@ -64,7 +78,7 @@
  
      Request->Response = __StoreAllocate(sizeof (XENBUS_STORE_RESPONSE));
  
-@@ -948,13 +975,19 @@
+@@ -948,13 +976,19 @@
      State = Request->State;
  
      // Poll, do not camp: the event-channel wait is a busy-spin, so ask it for nothing and do
@@ -84,7 +98,7 @@
                               Count + 1,
                               &Timeout);
  
-@@ -962,12 +995,41 @@
+@@ -962,12 +996,41 @@
  
          KeMemoryBarrier();
          State = Request->State;
@@ -126,7 +140,7 @@
          KeAcquireSpinLockAtDpcLevel(&Context->Lock);
  
          KeMemoryBarrier();
-@@ -2720,12 +2782,14 @@
+@@ -2720,12 +2783,14 @@
      IN  PXENBUS_FDO             Fdo,
      OUT PXENBUS_STORE_CONTEXT   *Context
      )
@@ -141,7 +155,7 @@
  
      *Context = __StoreAllocate(sizeof (XENBUS_STORE_CONTEXT));
  
-@@ -2760,12 +2824,30 @@
+@@ -2760,12 +2825,30 @@
                                 sizeof ((*Context)->DebugInterface));
      ASSERT(NT_SUCCESS(status));
      ASSERT((*Context)->DebugInterface.Interface.Context != NULL);
