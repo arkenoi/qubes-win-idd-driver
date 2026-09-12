@@ -1,65 +1,50 @@
 --- a/src/xenbus/store.c
 +++ b/src/xenbus/store.c
-@@ -891,40 +891,64 @@
- #define TIME_MS(_ms)        (TIME_US((_ms) * 1000))
- #define TIME_S(_s)          (TIME_MS((_s) * 1000))
- #define TIME_RELATIVE(_t)   (-(_t))
+@@ -146,12 +146,13 @@
+     XENBUS_GNTTAB_INTERFACE             GnttabInterface;
+     PXENBUS_SUSPEND_CALLBACK            SuspendCallbackEarly;
+     PXENBUS_SUSPEND_CALLBACK            SuspendCallbackLate;
+     PXENBUS_DEBUG_CALLBACK              DebugCallback;
+     PXENBUS_THREAD                      WatchdogThread;
+     BOOLEAN                             Enabled;
++    ULONG                               RequestTimeout;
+ };
  
- #define XENBUS_STORE_POLL_PERIOD 5
+ C_ASSERT(sizeof (struct xenstore_domain_interface) <= PAGE_SIZE);
  
--// DO NOT HOLD Context->Lock WHILE WAITING FOR A RESPONSE.
-+// WAITING FOR XENSTORE MUST NOT HOLD THE STORE LOCK, AND MUST NOT WAIT FOREVER IN SILENCE.
- //
--// StoreSubmitRequest waits for its request with Context->Lock held at DISPATCH_LEVEL, and
--// XENBUS_EVTCHN(Wait) is a pure _mm_pause() busy-spin (evtchn.c), so a slow xenstore round
--// trip burns a core with the store lock held for up to XENBUS_STORE_POLL_PERIOD seconds at a
--// stretch. About ten xenstore entry points contend on that lock and every PV path in the guest
--// goes through xenstore, so one slow request stalls all of them: observed as a guest losing
--// qrexec, its PV console and even its own event-log writes simultaneously.
-+// Upstream waits for its request while holding Context->Lock at DISPATCH_LEVEL, and
-+// XENBUS_EVTCHN(Wait) is a pure _mm_pause() busy-spin (evtchn.c). So it burns a core with the
-+// lock held for up to XENBUS_STORE_POLL_PERIOD seconds per iteration and, because a timeout
-+// only logs and iterates, forever if the request never completes. About ten xenstore entry
-+// points contend on that lock and every PV path in the guest goes through xenstore, so ONE
-+// stuck request takes the whole guest down - measured 2026-09-12: qrexec, the PV console and
-+// even the Windows event log went silent together while vCPUs spun, no dump, nothing to read.
- //
--// The lock is not needed to make progress: a request is completed by whoever polls next, and
--// StoreDpc runs __StorePoll independently of this thread. So poll, drop the lock, stall
--// briefly, retake it. IRQL stays raised for the whole wait, because the KeRaiseIrql below is
--// annotated "Make sure we don't suspend" and that is load-bearing - SuspendTrigger ->
--// SyncCapture needs every CPU to run a DPC, so a thread at DISPATCH_LEVEL is what prevents a
--// suspend landing while a request is in flight.
-+// TWO CHANGES, AND THEY ARE DELIBERATELY THE ONLY TWO.
-+//
-+// 1. DROP THE LOCK BETWEEN POLLS. That is what stops one slow request freezing everything
-+//    else; a request is completed by whoever polls next (StoreDpc runs __StorePoll
-+//    independently), so this thread never needed the lock to make progress. IRQL stays at
-+//    DISPATCH_LEVEL: the KeRaiseIrql above is annotated "Make sure we don't suspend" and it is
-+//    load-bearing - SuspendTrigger -> SyncCapture queues a DPC on every CPU and spins until all
-+//    run it, so staying at DISPATCH_LEVEL is what prevents a Xen suspend from landing while a
-+//    request is in flight. Nothing re-sends a request across a suspend, and a half-sent one
-+//    would have its tail written into a fresh ring, so that interlock is kept.
-+//
-+// 2. CRASH, LOUDLY, RATHER THAN GIVE UP QUIETLY. The tempting alternative - abandon the
-+//    request and return NULL - is worse in three separate ways, all of them verified in this
-+//    source: callers such as xenvif's FrontendWaitForBackendXenbusStateChange discard the
-+//    status, so the guest would silently never get a network device; StoreWatchRemove and
-+//    StoreTransactionEnd skip the cleanup that unlinks them and later reach BUG() anyway, via
-+//    a watch whose Event points at a dead stack frame; and a request that is already PARTLY in
-+//    the ring cannot be withdrawn at all - the ring is 1024 bytes against a 4096-byte payload,
-+//    so xenstored would read the next request's header as this one's tail and the stream would
-+//    be desynchronised permanently. A bugcheck has none of those failure modes, and unlike the
-+//    silent wedge it leaves a CRASH DUMP naming this site - which is the only reason the
-+//    original stall took days to identify.
-+//
-+// The deadline is therefore set where reaching it can only mean "genuinely broken", not
-+// "busy": a xenstore round trip is normally sub-millisecond, and this is four orders of
-+// magnitude above that. It also stays under the ~20 s DPC watchdog, so this bugcheck fires
-+// before the generic 0x133 and the dump names xenstore instead of a nameless DPC.
+ #define XENBUS_STORE_TAG    'ROTS'
+ 
+@@ -908,23 +909,49 @@
+ // briefly, retake it. IRQL stays raised for the whole wait, because the KeRaiseIrql below is
+ // annotated "Make sure we don't suspend" and that is load-bearing - SuspendTrigger ->
+ // SyncCapture needs every CPU to run a DPC, so a thread at DISPATCH_LEVEL is what prevents a
+ // suspend landing while a request is in flight.
  #define XENBUS_STORE_SPIN_US    100 // stall this long per poll, with the lock DROPPED
-+#define XENBUS_STORE_TIMEOUT_S  15  // then bugcheck: loud, dumpable, never silent
  
++// A REQUEST THAT NEVER COMPLETES MUST NOT BE SILENT, AND MUST NOT BE ENDLESS.
++//
++// With the lock dropped (above) a stuck request no longer freezes the rest of the guest, but
++// the caller itself is stuck at DISPATCH_LEVEL, and you cannot wait indefinitely there: the
++// DPC watchdog will eventually bugcheck with a nameless 0x133 no matter what this code does.
++// So the choice is not crash-or-not, it is OUR bugcheck - which logs the request and leaves a
++// dump naming xenstore - or Windows' anonymous one. The quiet alternative, returning an error,
++// is worse than both: callers such as xenvif's FrontendWaitForBackendXenbusStateChange discard
++// the status, so the guest would silently never get a network device, and a request already
++// partly in the ring cannot be withdrawn without desynchronising the stream permanently.
++//
++// BUT IT IS TUNABLE, BECAUSE THE THRESHOLD IS A GUESS. A normal round trip is sub-millisecond;
++// 15 s is four orders of magnitude above that and should mean "broken, not busy". Should,
++// because a heavily loaded host with a backed-up xenstored is exactly the condition this code
++// exists to survive, and a false positive here costs the user a crashed guest. So:
++//   - warnings start at XENBUS_STORE_WARN_S and repeat every second, naming the request, so a
++//     near-miss is visible in the log LONG before anything dies and real latencies can be
++//     measured in the field rather than guessed at here;
++//   - "StoreRequestTimeout" in the driver's Parameters key overrides the 15 s, and 0 DISABLES
++//     the bugcheck entirely, restoring the original wait-forever behaviour for anyone who
++//     would rather have a hung guest than a crashed one.
++#define XENBUS_STORE_WARN_S             5   // start complaining here
++#define XENBUS_STORE_TIMEOUT_S_DEFAULT  15  // and bugcheck here, unless overridden
++
  static PXENBUS_STORE_RESPONSE
  StoreSubmitRequest(
      IN  PXENBUS_STORE_CONTEXT   Context,
@@ -71,25 +56,27 @@
      ULONG                       Count;
      XENBUS_STORE_REQUEST_STATE  State;
      LARGE_INTEGER               Timeout;
-+    LARGE_INTEGER               Deadline;
++    LARGE_INTEGER               Start;
++    LARGE_INTEGER               NextWarn;
      NTSTATUS                    status;
  
      ASSERT3U(Request->State, ==, XENBUS_STORE_REQUEST_PREPARED);
  
      Request->Response = __StoreAllocate(sizeof (XENBUS_STORE_RESPONSE));
  
-@@ -948,13 +972,18 @@
+@@ -948,13 +975,19 @@
      State = Request->State;
  
      // Poll, do not camp: the event-channel wait is a busy-spin, so ask it for nothing and do
      // the waiting below with the lock dropped.
      Timeout.QuadPart = 0;
  
-+    KeQuerySystemTime(&Deadline);
-+    Deadline.QuadPart += TIME_S(XENBUS_STORE_TIMEOUT_S);
++    KeQuerySystemTime(&Start);
++    NextWarn.QuadPart = Start.QuadPart + TIME_S(XENBUS_STORE_WARN_S);
 +
      while (State != XENBUS_STORE_REQUEST_COMPLETED) {
 +        LARGE_INTEGER   Now;
++        ULONGLONG       Elapsed;
 +
          (VOID) XENBUS_EVTCHN(Wait,
                               &Context->EvtchnInterface,
@@ -97,34 +84,91 @@
                               Count + 1,
                               &Timeout);
  
-@@ -963,12 +992,30 @@
+@@ -962,12 +995,41 @@
+ 
          KeMemoryBarrier();
          State = Request->State;
  
          if (State == XENBUS_STORE_REQUEST_COMPLETED)
              break;
- 
++
 +        KeQuerySystemTime(&Now);
-+        if (Now.QuadPart >= Deadline.QuadPart) {
-+            Error("XENSTORE STUCK: req_id %08x type %08x state %d index %d of %d\n",
++        Elapsed = (ULONGLONG)(Now.QuadPart - Start.QuadPart) / TIME_S(1);
++
++        if (Now.QuadPart >= NextWarn.QuadPart) {
++            // Loud well before fatal: this is the line that tells us whether 15 s is the right
++            // threshold on a real, loaded host, instead of us assuming it is.
++            Warning("XENSTORE SLOW: %I64u s waiting for req_id %08x type %08x state %d sent %d of %d\n",
++                    Elapsed,
++                    Request->Header.req_id,
++                    Request->Header.type,
++                    State,
++                    Request->Index,
++                    Request->Count);
++            NextWarn.QuadPart = Now.QuadPart + TIME_S(1);
++        }
++
++        if (Context->RequestTimeout != 0 &&
++            Elapsed >= (ULONGLONG)Context->RequestTimeout) {
++            Error("XENSTORE STUCK: %I64u s waiting for req_id %08x type %08x state %d sent %d of %d\n",
++                  Elapsed,
 +                  Request->Header.req_id,
 +                  Request->Header.type,
 +                  State,
 +                  Request->Index,
 +                  Request->Count);
 +
-+            // Deliberately fatal. See the note above XENBUS_STORE_TIMEOUT_S: every quieter
-+            // option either lies to a caller that ignores it, leaks an object into a later
-+            // bugcheck anyway, or corrupts the ring beyond recovery. This leaves a dump.
 +            BUG("XENSTORE REQUEST NEVER COMPLETED");
 +        }
-+
-+        // The change that matters: get off the lock. Another context's StorePollLocked
-+        // completes this request just as well as this thread would, and meanwhile every other
-+        // xenstore caller keeps running instead of piling up behind us.
+ 
          KeReleaseSpinLockFromDpcLevel(&Context->Lock);
          KeStallExecutionProcessor(XENBUS_STORE_SPIN_US);
          KeAcquireSpinLockAtDpcLevel(&Context->Lock);
  
          KeMemoryBarrier();
-         State = Request->State;
+@@ -2720,12 +2782,14 @@
+     IN  PXENBUS_FDO             Fdo,
+     OUT PXENBUS_STORE_CONTEXT   *Context
+     )
+ {
+     LARGE_INTEGER               Now;
+     ULONG                       Seed;
++    HANDLE                      ParametersKey;
++    ULONG                       RequestTimeout;
+     NTSTATUS                    status;
+ 
+     Trace("====>\n");
+ 
+     *Context = __StoreAllocate(sizeof (XENBUS_STORE_CONTEXT));
+ 
+@@ -2760,12 +2824,30 @@
+                                sizeof ((*Context)->DebugInterface));
+     ASSERT(NT_SUCCESS(status));
+     ASSERT((*Context)->DebugInterface.Interface.Context != NULL);
+ 
+     KeInitializeSpinLock(&(*Context)->Lock);
+ 
++    // Seconds to wait for a xenstore request before bugchecking; 0 disables the bugcheck and
++    // restores the original wait-forever behaviour. Read once, here, so the wait path never
++    // touches the registry.
++    ParametersKey = DriverGetParametersKey();
++
++    status = RegistryQueryDwordValue(ParametersKey,
++                                     "StoreRequestTimeout",
++                                     &RequestTimeout);
++    if (!NT_SUCCESS(status))
++        RequestTimeout = XENBUS_STORE_TIMEOUT_S_DEFAULT;
++
++    (*Context)->RequestTimeout = RequestTimeout;
++
++    LogPrintf(LOG_LEVEL_INFO,
++              "STORE: REQUEST TIMEOUT %u s%s\n",
++              RequestTimeout,
++              (RequestTimeout == 0) ? " (bugcheck disabled)" : "");
++
+     KeQuerySystemTime(&Now);
+     Seed = Now.LowPart;
+ 
+     (*Context)->RequestId = (USHORT)RtlRandomEx(&Seed);
+     InitializeListHead(&(*Context)->SubmittedList);
+     InitializeListHead(&(*Context)->PendingList);

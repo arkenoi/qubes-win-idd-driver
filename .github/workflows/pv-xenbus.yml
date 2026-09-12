@@ -116,7 +116,9 @@ jobs:
           $store = Get-Content src\xenbus\store.c -Raw
           # One marker per property this patch must keep. Earlier revisions of it fixed one
           # defect and introduced others, so each is asserted separately.
-          if ($store -notmatch 'XENBUS_STORE_TIMEOUT_S') { throw 'fix marker (deadline) missing after patch' }
+          if ($store -notmatch 'XENBUS_STORE_TIMEOUT_S_DEFAULT') { throw 'fix marker (deadline) missing after patch' }
+          if ($store -notmatch 'StoreRequestTimeout') { throw 'fix marker (tunable escape hatch) missing after patch' }
+          if ($store -notmatch 'XENSTORE SLOW') { throw 'fix marker (pre-fatal warnings) missing after patch' }
           if ($store -notmatch 'KeStallExecutionProcessor') { throw 'fix marker (stall with the lock dropped) missing after patch' }
           if ($store -notmatch 'XENSTORE REQUEST NEVER COMPLETED') { throw 'fix marker (hard loud bugcheck) missing after patch' }
           if ($store -notmatch 'XENSTORE STUCK') { throw 'fix marker (pre-bugcheck diagnostics) missing after patch' }
