@@ -28,12 +28,44 @@ Exit codes: 0 output captured / 2 NOCONSOLE / 3 NEEDS_LOGIN / 4 guest not runnin
 """
 import os
 import select
+import signal
 import subprocess
 import sys
 import time
 
 DEADLINE = float(os.environ.get("QCON_DEADLINE", "45"))
 STALL = float(os.environ.get("QCON_STALL", "12"))
+# Overall wall-clock budget for ONE qcon invocation. It exists so no caller ever needs to wrap
+# this tool in `timeout`, which is what kept destroying the instrument - see _install_signal_net.
+BUDGET = float(os.environ.get("QCON_BUDGET", "600"))
+
+
+def _install_signal_net():
+    """Make EVERY exit path run the `finally: c.close()` that detaches the console.
+
+    THIS IS THE BUG THAT KEPT KILLING THE CONSOLE, three separate runs of it. Wrapping qcon in
+    `timeout` sends SIGTERM to the PYTHON, and Python's default SIGTERM handler exits the
+    interpreter WITHOUT unwinding - so `finally` never ran, `Console.close()` never fired, and
+    the `qrexec-client-vm ... admin.vm.Console` CHILD was orphaned STILL ATTACHED. dom0's console
+    is one-attacher-at-a-time, so every later attach returned nothing, and the silence got
+    written up as "the guest lost its console" - a guest-side conclusion drawn from a defect in
+    this file. The guest was fine; the instrument was self-destructing.
+
+    Two changes make that unrepeatable: signals become SystemExit so the finally block runs, and
+    qcon enforces its own BUDGET so there is no reason to reach for `timeout` at all.
+    """
+    def bye(sig, _frame):
+        raise SystemExit(128 + sig)
+    for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP, signal.SIGALRM):
+        try:
+            signal.signal(s, bye)
+        except (ValueError, OSError):
+            pass
+    if BUDGET > 0:
+        try:
+            signal.alarm(int(BUDGET))
+        except (ValueError, OSError):
+            pass
 
 
 def vm_running(vm):
@@ -238,4 +270,5 @@ def main():
 
 
 if __name__ == "__main__":
+    _install_signal_net()
     sys.exit(main())
