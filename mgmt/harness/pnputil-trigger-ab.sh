@@ -40,6 +40,7 @@ ARMS="${ARMS:-INJECT STAGE}"
 # provocation the old one wedges on? - can be run INTERLEAVED in one window instead of as two
 # runs hours apart. Arms OLD and NEW are both stage-only and differ ONLY in which xenbus is
 # bound in the subject.
+ISO2="${ISO2:-}"                        # optional second package, for arm UPSTREAM
 GOLDEN_OLD="${GOLDEN_OLD:-win11-qwt}"   # pre-patch xenbus
 GOLDEN_NEW="${GOLDEN_NEW:-win11-acc}"   # carries our release, patched xenbus bound
 SUBJ="${SUBJ:-win11-trig}"
@@ -61,8 +62,16 @@ trap 'vm_unlock "$SUBJ" 2>/dev/null' EXIT
 dev=$(udisksctl loop-setup -r -f "$ISO" 2>&1 | grep -o '/dev/loop[0-9]*' | head -1)
 [ -n "$dev" ] || { say "REFUSED: udisksctl loop-setup failed for $ISO"; exit 2; }
 LOOP=${dev#/dev/}
-say "release ISO on $dev"
-cleanup_loop(){ udisksctl loop-delete -b "/dev/$LOOP" >/dev/null 2>&1; }
+say "ISO A (arms OURS/OLD/INJECT/STAGE) on $dev: $ISO"
+LOOP2=""
+if [ -n "$ISO2" ]; then
+  dev2=$(udisksctl loop-setup -r -f "$ISO2" 2>&1 | grep -o '/dev/loop[0-9]*' | head -1)
+  [ -n "$dev2" ] || { say "REFUSED: loop-setup failed for $ISO2"; exit 2; }
+  LOOP2=${dev2#/dev/}
+  say "ISO B (arm UPSTREAM) on $dev2: $ISO2"
+fi
+cleanup_loop(){ udisksctl loop-delete -b "/dev/$LOOP" >/dev/null 2>&1
+                [ -n "$LOOP2" ] && udisksctl loop-delete -b "/dev/$LOOP2" >/dev/null 2>&1; }
 
 PRESERVED=""
 finish(){
@@ -102,10 +111,14 @@ run_round(){ # $1=arm (INJECT|STAGE) $2=round
   local arm=$1 r=$2 flag="" verdict g
   [ "$arm" = INJECT ] && flag=" /install"
   case "$arm" in
-    OLD|SAMEOLD) g="$GOLDEN_OLD" ;;
+    OLD|SAMEOLD|OURS|UPSTREAM) g="$GOLDEN_OLD" ;;
     NEW) g="$GOLDEN_NEW" ;;
     *)   g="$GOLDEN" ;;
   esac
+  # Arm UPSTREAM boots ISO B; everything else boots ISO A. Same golden, same CD-attached boot,
+  # same D:\pv-drivers\xenbus\xenbus.inf path - ONLY the package on the disc differs.
+  local useloop="$LOOP"
+  [ "$arm" = UPSTREAM ] && useloop="$LOOP2"
 
   say ""
   say "==== round $r arm $arm (pnputil /add-driver ...\\xenbus.inf${flag:-<none>}) ===="
@@ -137,7 +150,7 @@ PYV
   ) || { say "  REFUSED: volume clone failed: $(echo "$cerr" | tail -1 | cut -c1-160)"; return 2; }
   say "  created and tagged $SUBJ, volumes copied from $g"
 
-  timeout 300 qvm-start "$SUBJ" --cdrom="win-idd-mgmt:$LOOP" >/dev/null 2>&1
+  timeout 300 qvm-start "$SUBJ" --cdrom="win-idd-mgmt:$useloop" >/dev/null 2>&1
   w_session "$SUBJ" 900 "$arm-$r-boot" "$OUT" say || { say "  VOID: no session"; return 2; }
 
   # Armed BEFORE the injection, so a wedge leaves a resolvable RIP.
@@ -192,7 +205,11 @@ PYV
        2>/dev/null | tr -d '\r\0' | grep -aoE 'TESTSIGNING=.*' | tail -1)
   say "  ${ts:-TESTSIGNING=<unreadable>}"
 
-  if [ "$arm" != SAMEOLD ]; then
+  # EVERY OBSERVED WEDGE HAPPENED WITH NO CERT IMPORTED (the import was added at 21:39, after
+  # all three). Reproducing the wedge faithfully therefore means being able to SKIP it, so the
+  # comparison runs in the regime where the phenomenon actually occurs rather than in one where
+  # it never did.
+  if [ "$arm" != SAMEOLD ] && [ "${NOCERT:-0}" != 1 ]; then
     QTEST_VM=$SUBJ timeout -k 5 120 ./tools/qtest run \
       'cmd /c certutil -addstore -f Root D:\pv-drivers\xenbus\xenbus-signer.cer & certutil -addstore -f TrustedPublisher D:\pv-drivers\xenbus\xenbus-signer.cer & echo CERTRC=%errorlevel%' \
       > "$OUT/$arm-$r-cert.out" 2>&1
