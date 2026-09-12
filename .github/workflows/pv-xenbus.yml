@@ -27,6 +27,15 @@ on:
         required: true
   workflow_dispatch:
     inputs:
+      skip_patches:
+        description: >-
+          Build PURE UPSTREAM xenbus with NO patches of ours. Exists to answer one question:
+          does the guest wedge when none of our code is involved? A stock-only build at a
+          DriverVer above 9.1.0.0 can be staged over a stock guest, which is the real install
+          action with nothing of ours in it. Never used by the release path.
+        required: false
+        default: false
+        type: boolean
       build_rev:
         description: 'DriverVer/FILEVERSION fourth field (0..65535). Pick one HIGHER than what is installed on the rig, or pnputil keeps the old .sys.'
         type: string
@@ -87,6 +96,13 @@ jobs:
         working-directory: xenbus
         run: |
           $ErrorActionPreference = 'Stop'
+          # PURE UPSTREAM BUILD. Skips BOTH patches - this must come before the bucket-lock
+          # apply, or the build is not stock and cannot answer "does it wedge without our code".
+          if ('${{ inputs.skip_patches }}' -eq 'true') {
+            Write-Host "::warning title=xenbus::SKIP_PATCHES - PURE UPSTREAM xenbus, none of our fixes"
+            Write-Host "::notice title=xenbus::stock-only build (no patches applied)"
+            exit 0
+          }
           git apply --verbose ..\repo\patches\xenbus-hash-table-lock.patch
           if ($LASTEXITCODE -ne 0) { throw "bucket-lock fix did not apply" }
           # A patch that silently no-ops would ship the wedge with a new version number.
