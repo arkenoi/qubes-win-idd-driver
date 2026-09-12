@@ -388,8 +388,9 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
 # call restarts a guest seconds after it halts, the state oscillates, and a harness that only ever
 # sees Transient reports the PRODUCT as unable to halt. It is a restarter, and it must be named.
 #
-# Returns 0 halted and stayed halted; 2 deadline with no halt at all; 3 HALTED THEN CAME BACK -
-# an INVALID-INSTRUMENT condition, never a product failure.
+# Returns 0 halted and stayed halted; 2 deadline with no halt at all; 3 HALTED THEN CAME BACK
+# WITH A QUEUED CALL OBSERVED (instrument); 4 HALTED THEN CAME BACK WITH NOTHING PENDING - an
+# unexplained restart, graded as a product condition rather than assumed away.
 w_halt_stable(){ # $1=vm $2=deadline $3=label $4=logfn $5=hold
   local vm=$1 dl=$2 lbl=$3 log=$4 hold=${5:-20} t0 now saw=0
   t0=$(date +%s)
@@ -403,10 +404,20 @@ w_halt_stable(){ # $1=vm $2=deadline $3=label $4=logfn $5=hold
         if [ "$(w_state "$vm")" != Halted ]; then held=0; break; fi
       done
       if [ "$held" = 1 ]; then $log "  $lbl: halted and stayed halted at t+${now}s"; return 0; fi
-      $log "  $lbl: HALTED THEN CAME BACK UP - something restarted it (a queued qrexec call is the"
-      $log "  $lbl: usual culprit; drain with a short qrexec_timeout before shutting down). This is"
-      $log "  $lbl: an instrument condition, NOT the guest refusing to halt."
-      return 3
+      $log "  $lbl: HALTED THEN CAME BACK UP at t+${now}s - something restarted it."
+      # ATTRIBUTE ON EVIDENCE, NOT ON HABIT. A queued qrexec call is the known cause, but it is
+      # not the only one: an HVM that reboots itself comes back exactly like this, and that would
+      # be a PRODUCT defect (a guest asked to halt must halt). Only w_drain_and_shutdown knows
+      # whether a restarter was actually present, so use what it saw.
+      if [ "${W_DRAIN_PENDING:-0}" -gt 0 ] 2>/dev/null; then
+        $log "  $lbl: ${W_DRAIN_PENDING} queued qrexec call(s) were observed at drain time, which is"
+        $log "  $lbl: the known restarter. Instrument condition, not the guest refusing to halt."
+        return 3
+      fi
+      $log "  $lbl: NO queued qrexec call was pending when this guest was shut down, so the usual"
+      $log "  $lbl: instrument explanation does NOT apply here. An unexplained restart of a guest"
+      $log "  $lbl: that was asked to halt is a PRODUCT condition until something else is shown."
+      return 4
     fi
     [ "$now" -ge "$dl" ] && { $log "  $lbl: DEADLINE ${dl}s, still $(w_state "$vm") (never reached Halted at all)"; return 2; }
     sleep 10
@@ -418,11 +429,42 @@ w_halt_stable(){ # $1=vm $2=deadline $3=label $4=logfn $5=hold
 # which is exactly how a park lost the race and blamed the product. Dropping the timeout makes a
 # queued call fail fast instead of holding the guest; it is restored afterwards, always.
 w_drain_and_shutdown(){ # $1=vm $2=logfn
-  local vm=$1 log=$2 prev
+  # DIAGNOSE BEFORE DRAINING. This function's first version pkill'd every pending call and said
+  # nothing about it, which was an OVER-CORRECTION: having just proved that a queued call can
+  # restart a halted guest, it went on to treat EVERY pending call as that same benign leftover.
+  # A call can also be pending because THE GUEST STOPPED ANSWERING QREXEC - a product defect, and
+  # a serious one - and killing both cases silently makes a dead-qrexec guest look like a tidy
+  # park. Blaming the instrument by default is the same error as blaming the product by default.
+  local vm=$1 log=$2 prev pend n
   prev=$(qvm-prefs "$vm" qrexec_timeout 2>/dev/null); prev=${prev:-6000}
-  pkill -f "qrexec-client-vm [${vm:0:1}]${vm:1} " 2>/dev/null
+  W_DRAIN_PENDING=0; W_DRAIN_QREXEC_DEAD=0
+
+  pend=$(pgrep -f "qrexec-client-vm [${vm:0:1}]${vm:1} " 2>/dev/null)
+  if [ -n "$pend" ]; then
+    n=$(printf '%s\n' "$pend" | grep -c .)
+    W_DRAIN_PENDING=$n
+    $log "  drain: $n qrexec call(s) STILL PENDING for $vm at park time (ages below)"
+    ps -o etime=,args= -p $(printf '%s' "$pend" | tr '\n' ' ') 2>/dev/null | cut -c1-150 \
+      | while IFS= read -r l; do $log "    pending: $l"; done
+    # The discriminator: does the guest answer a FRESH, short probe right now?
+    if [ "$(w_state "$vm")" != Halted ]; then
+      if w_alive "$vm"; then
+        $log "  drain: the guest answers a fresh qrexec probe, so these are instrument leftovers"
+      else
+        W_DRAIN_QREXEC_DEAD=1
+        $log "  drain: QREXECDEAD vm=$vm pending=$n state=$(w_state "$vm") - qrexec is NOT answering"
+        $log "  drain: while $n call(s) hang. That is a PRODUCT condition, not an instrument one."
+        $log "  drain: It is recorded and graded, NOT drained away. Do not read the park that"
+        $log "  drain: follows as evidence the guest was healthy."
+      fi
+    fi
+    pkill -f "qrexec-client-vm [${vm:0:1}]${vm:1} " 2>/dev/null
+    $log "  drain: killed $n queued call(s) so none can restart $vm after it halts"
+  else
+    $log "  drain: no qrexec call pending for $vm (nothing to drain)"
+  fi
+
   qvm-prefs "$vm" qrexec_timeout 15 >/dev/null 2>&1
-  $log "  drain: qrexec_timeout ${prev} -> 15 so a queued call cannot hold or restart $vm"
   qvm-shutdown "$vm" >/dev/null 2>&1
   sleep 2
   qvm-prefs "$vm" qrexec_timeout "$prev" >/dev/null 2>&1

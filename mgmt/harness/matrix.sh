@@ -466,10 +466,12 @@ park_installed(){ # $1=vm $2=label - halt and park the just-installed subject as
     # as unable to halt. That is what failed two cells on 2026-09-12, and nothing in the park path
     # drained anything. A restart is now named as an instrument condition, never a product failure.
     w_drain_and_shutdown "$vm" say
+    [ "${W_DRAIN_QREXEC_DEAD:-0}" = 1 ] && { no "$lbl: FAIL - qrexec was DEAD on a running guest at park time (QREXECDEAD); the park that followed proves nothing about guest health"; return 1; }
     w_halt_stable "$vm" 660 "$lbl-park-halt" say
     case $? in
       0) ;;
-      3) no "$lbl: INVALID-INSTRUMENT - subject halted then was RESTARTED during parking (queued qrexec call), not a product failure"; return 1 ;;
+      3) no "$lbl: INVALID-INSTRUMENT - subject halted then was RESTARTED during parking by an OBSERVED queued qrexec call, not a product failure"; return 1 ;;
+      4) no "$lbl: subject halted then RESTARTED ITSELF during parking with NO queued call pending - unexplained, graded as PRODUCT until shown otherwise"; return 1 ;;
       *) no "$lbl: subject would not halt for parking"; return 1 ;;
     esac
   fi
@@ -493,10 +495,12 @@ unpark_installed(){ # $1=vm $2=label - restore the campaign's 'installed' snapsh
   if [ "$(w_state "$vm")" != Halted ]; then
     # Same drain as the park path: a queued call restarts the guest after it halts.
     w_drain_and_shutdown "$vm" say
+    [ "${W_DRAIN_QREXEC_DEAD:-0}" = 1 ] && { no "$lbl: FAIL - qrexec was DEAD on a running guest at unpark time (QREXECDEAD); the park that followed proves nothing about guest health"; return 1; }
     w_halt_stable "$vm" 660 "$lbl-unpark-halt" say
     case $? in
       0) ;;
-      3) no "$lbl: INVALID-INSTRUMENT - subject halted then was RESTARTED during unpark (queued qrexec call), not a product failure"; return 1 ;;
+      3) no "$lbl: INVALID-INSTRUMENT - subject halted then was RESTARTED during unpark by an OBSERVED queued qrexec call, not a product failure"; return 1 ;;
+      4) no "$lbl: subject halted then RESTARTED ITSELF during unpark with NO queued call pending - unexplained, graded as PRODUCT until shown otherwise"; return 1 ;;
       *) no "$lbl: subject would not halt for unpark"; return 1 ;;
     esac
   fi
@@ -733,6 +737,25 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     2) no "$lbl: no session within 900s even after the post-install reboot (last screen: $(w_screen "$vm" "$lbl-final" "$M"))"; return 1 ;;
   esac
   ok "$lbl: guest came back with a session"
+
+  # ARM THE MODULE-BASE RECORDER, the moment this guest can answer.
+  #
+  # WHY HERE. findings/issues.md P1's first next-action is "harvest a spinner's module bases":
+  # every one of the stall specimens is a RAW GUEST RIP that nobody can resolve, because KASLR
+  # re-randomises every boot and the bases were never recorded for THAT boot. Arming was wired
+  # into every repro harness (clean-install-repeat, enum-storm-repro, flush-durability-ab,
+  # ioreq-stall-repro, catch-specimen) and into NONE of the acceptance cells - so when the stall
+  # finally happened inside a campaign (win11-acc, WIN11-reinstall, 2026-09-12), it produced the
+  # ninth unresolvable address instead of the first resolved one. The guest went deaf about 60 s
+  # after this very line, which is exactly the window this arming has to beat.
+  #
+  # It is cheap, idempotent, takes its own per-VM lock, and a failure here must never affect the
+  # cell's verdict: this records evidence, it grades nothing.
+  if VM="$vm" OUT="${R%/*}/modbases-$lbl" ./mgmt/harness/arm-module-bases.sh >>"$R" 2>&1; then
+    say "  $lbl: module-base recorder armed (a stall's RIP will resolve to driver+offset)"
+  else
+    say "  $lbl: module-base recorder NOT armed - a stall in this cell will leave a raw, unresolvable RIP"
+  fi
   _assert_not_primed "$vm" "$lbl"
   # RETRY, never fail a cell on ONE slow call. `type` on an ~18 KB log takes about two seconds, so
   # a call that burns its whole timeout means the guest was not answering qrexec at all - and
