@@ -181,6 +181,24 @@ PYV
     cd_inf="$store"
     say "  re-adding the guest's OWN package: $cd_inf"
   fi
+  # TEST MODE AND THE SIGNER CERT - what the real installer does before pnputil, and what this
+  # harness was NOT doing. Our drivers are test-signed, so without testsigning on AND the signer
+  # trusted, pnputil validates the signature and refuses, which would mean the arm stages
+  # NOTHING and every verdict measures the wrong thing. Report the first, do the second.
+  local tsb64 ts
+  tsb64=$(python3 -c "import base64;print(base64.b64encode('Write-Host (\"TESTSIGNING=\" + ((bcdedit /enum | Select-String testsigning) -join \" \"))'.encode('utf-16-le')).decode())")
+  ts=$(QTEST_VM=$SUBJ timeout -k 5 90 ./tools/qtest run \
+       "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $tsb64" \
+       2>/dev/null | tr -d '\r\0' | grep -aoE 'TESTSIGNING=.*' | tail -1)
+  say "  ${ts:-TESTSIGNING=<unreadable>}"
+
+  if [ "$arm" != SAMEOLD ]; then
+    QTEST_VM=$SUBJ timeout -k 5 120 ./tools/qtest run \
+      'cmd /c certutil -addstore -f Root D:\pv-drivers\xenbus\xenbus-signer.cer & certutil -addstore -f TrustedPublisher D:\pv-drivers\xenbus\xenbus-signer.cer & echo CERTRC=%errorlevel%' \
+      > "$OUT/$arm-$r-cert.out" 2>&1
+    say "  signer cert import rc=$(tr -d '\r' < "$OUT/$arm-$r-cert.out" | grep -aoE 'CERTRC=[0-9]+' | tail -1 | sed 's/CERTRC=//')"
+  fi
+
   local before; before=$(cpu_of "$SUBJ")
   say "  firing: pnputil /add-driver $cd_inf$flag"
   QTEST_VM=$SUBJ timeout -k 10 300 ./tools/qtest run \
