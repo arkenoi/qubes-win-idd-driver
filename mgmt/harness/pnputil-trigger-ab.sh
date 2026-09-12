@@ -183,9 +183,22 @@ PYV
   printf '%s\t%s\t%s\n' "$arm" "$r" "$verdict" >> "$V"
 
   if [ "$verdict" = WEDGED ]; then
-    say "  *** WEDGED on arm $arm round $r - preserving this guest and stopping ***"
-    PRESERVED="$SUBJ"
-    return 1
+    # PRESERVE THE FIRST ONE, THEN KEEP MEASURING. Stopping on every wedge yields specimens and
+    # no rate, and a rate is what decides whether the patched driver is better - one wedge on
+    # one arm proves nothing about an intermittent defect. So the first wedged guest is kept
+    # untouched for forensics (it is armed, so its RIP resolves) and later ones are torn down so
+    # the run can continue. KEEP_ALL=1 restores stop-on-first-wedge.
+    if [ -z "$PRESERVED" ]; then
+      say "  *** WEDGED on arm $arm round $r - PRESERVING this guest (first specimen) ***"
+      PRESERVED="$SUBJ"
+      SUBJ="${SUBJ}b"   # later rounds use a new name so the specimen is never reused
+      say "  subsequent rounds use subject $SUBJ"
+      [ "${KEEP_ALL:-0}" = 1 ] && return 1
+    else
+      say "  *** WEDGED on arm $arm round $r - specimen already held, tearing this one down ***"
+      qvm-kill "$SUBJ" >/dev/null 2>&1
+      until [ "$(w_state "$SUBJ")" = Halted ]; do sleep 10; done
+    fi
   fi
   return 0
 }
