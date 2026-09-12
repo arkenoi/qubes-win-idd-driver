@@ -62,9 +62,15 @@ enc(){ python3 -c "import base64,sys;print(base64.b64encode(sys.argv[1].encode('
 say "=== stock-only wedge probe: golden $GOLDEN, $ROUNDS round(s), NOTHING of ours installed ==="
 # ---- the upstream package, pushed once per round (it lands in the session's Documents) ------
 PKGDIR="${ISO%/}"
-for f in xenbus.inf xenbus.sys xenbus.cat xenbus-signer.cer; do
+# EVERY FILE, not the four I first guessed at. xenbus.inf also references xen.sys and
+# xenfilt.sys, and pushing a partial package makes pnputil answer "Failed to add driver
+# package: The system cannot find the file specified" with "Added driver packages: 0" - a
+# round that provokes NOTHING and then reads as a clean survival.
+for f in xenbus.inf xenbus.sys xenbus.cat xenbus-signer.cer xen.sys xenfilt.sys; do
   [ -f "$PKGDIR/$f" ] || { say "REFUSED: $PKGDIR/$f missing - pass the DIRECTORY holding the pure-upstream xenbus package"; exit 2; }
 done
+PKGFILES=$(cd "$PKGDIR" && ls *.inf *.sys *.cat *.cer *.dll *.exe 2>/dev/null | tr '\n' ' ')
+say "package files to push: $PKGFILES"
 UPVER=$(grep -aoE 'DriverVer[^,]*,[0-9.]+' "$PKGDIR/xenbus.inf" | grep -aoE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 say "upstream package to stage: $PKGDIR (DriverVer $UPVER)"
 [ "$UPVER" = "9.1.0.0" ] && { say "REFUSED: the upstream build is 9.1.0.0 - it cannot outrank the bound driver, so it would provoke nothing"; exit 2; }
@@ -110,12 +116,12 @@ for r in $(seq 1 "$ROUNDS"); do
   VM="$SUBJ" OUT="$OUT/modbases-$r" ./mgmt/harness/arm-module-bases.sh >>"$OUT/arm.log" 2>&1 \
     && say "  module-base recorder armed"
 
-  for f in xenbus.inf xenbus.sys xenbus.cat xenbus-signer.cer; do
+  for f in $PKGFILES; do
     QTEST_VM=$SUBJ timeout -k 5 120 ./tools/qtest push "$PKGDIR/$f" >/dev/null 2>&1
   done
   inc='C:\Users\user\Documents\QubesIncoming\win-idd-mgmt'
   QTEST_VM=$SUBJ timeout -k 5 120 ./tools/qtest run \
-    "cmd /c certutil -addstore -f Root $inc\\xenbus-signer.cer & certutil -addstore -f TrustedPublisher $inc\\xenbus-signer.cer & echo CERTRC=%errorlevel%" \
+    "cmd /v:on /c certutil -addstore -f Root $inc\\xenbus-signer.cer & certutil -addstore -f TrustedPublisher $inc\\xenbus-signer.cer & echo CERTRC=!errorlevel!" \
     > "$OUT/r$r-cert.out" 2>&1
   say "  signer cert import rc=$(tr -d '\r' < "$OUT/r$r-cert.out" | grep -aoE 'CERTRC=[0-9]+' | tail -1 | sed 's/CERTRC=//')"
 
@@ -123,8 +129,20 @@ for r in $(seq 1 "$ROUNDS"); do
   # of ours is involved - not the driver, not the INF, not the installer.
   say "  staging PURE UPSTREAM xenbus $UPVER over the bound 9.1.0.0"
   QTEST_VM=$SUBJ timeout -k 10 300 ./tools/qtest run \
-    "cmd /c pnputil /add-driver $inc\\xenbus.inf & echo RC=%errorlevel%" > "$OUT/r$r-stage.out" 2>&1
+    "cmd /v:on /c pnputil /add-driver $inc\\xenbus.inf & echo RC=!errorlevel!" > "$OUT/r$r-stage.out" 2>&1
   tr -d '\r' < "$OUT/r$r-stage.out" | grep -aiE "adding|added|total|RC=|failed|error" | head -4 | sed 's/^/    /' | tee -a "$OUT/summary.log"
+
+  # THE PROVOCATION MUST BE PROVEN TO HAVE HAPPENED. pnputil says so in its own words, and
+  # "Added driver packages: 0" means this round staged nothing - grading it would record a
+  # survival that was never tested. Round 1 of the first attempt did exactly that.
+  added=$(tr -d '\r' < "$OUT/r$r-stage.out" | grep -aoE 'Added driver packages: *[0-9]+' | grep -aoE '[0-9]+' | tail -1)
+  if ! [ "${added:-0}" -ge 1 ] 2>/dev/null; then
+    say "  VOID: pnputil added ${added:-?} package(s) - nothing was provoked, this round grades nothing"
+    tr -d '\r' < "$OUT/r$r-stage.out" | grep -aiE "failed|error" | head -2 | sed 's/^/    /' | tee -a "$OUT/summary.log"
+    printf '%s\t%s\n' "$r" "VOID-NOT-STAGED" >> "$V"
+    continue
+  fi
+  say "  provocation confirmed: pnputil added $added package(s)"
 
   verdict=UNKNOWN
   for i in $(seq 1 10); do
