@@ -2337,19 +2337,36 @@ function Invoke-Stage2 {
         } else {
             Write-Log 'pv-drivers/xenbus/xenbus-signer.cer missing - the driver store add will likely fail' 'WARN'
         }
-        Write-Log 'installing xenbus (bucket-lock fix)'
+        # STAGE ONLY - NO /install. THIS IS THE ONE THAT WEDGED GUESTS.
+        #
+        # /install asks PnP to tear down and restart the bus device NOW. That bus hosts the
+        # BOOT DISK, so the restart cannot succeed: every process in the system vetoes the
+        # removal (Windows logs a Kernel-PnP 225 per process for
+        # XENBUS\VEN_XP0001&DEV_VBD) and pnputil returns 3010 - reboot required. The code here
+        # already documented that outcome as "expected". So the live teardown attempt bought
+        # nothing and cost the hazard: measured 2026-09-12, a guest went deaf ~90 s after that
+        # 225 storm and never came back, and it happened again the same day on a second guest
+        # during an upgrade. Both were running the OLD xenbus at the time - which is the point:
+        # the old driver runs for days untouched and only wedges when we ask PnP to re-enumerate
+        # it underneath the running system. WE were the trigger.
+        #
+        # /add-driver without /install puts the package in the driver store and touches no
+        # running device. The higher DriverVer is then selected when the device is enumerated on
+        # the next boot - the same moment the /install path was deferring to anyway.
+        #
+        # DO NOT "fix" a driver that fails to bind by putting /install back. If the new xenbus
+        # is not bound after the reboot, the staging or the ranking is wrong and that is what to
+        # investigate; the acceptance matrix asserts the bound version for exactly this reason.
+        Write-Log 'staging xenbus (store-wait + bucket-lock fixes) WITHOUT /install - see the comment above'
         $global:LASTEXITCODE = $null
-        try { $out = & pnputil.exe /add-driver $busInf /install 2>&1 } catch { $out = "$_" }
+        try { $out = & pnputil.exe /add-driver $busInf 2>&1 } catch { $out = "$_" }
         $out | ForEach-Object { Write-Log "  pnputil(xenbus): $_" }
-        # 3010 is the expected outcome: the bus device hosts the boot disk, so the re-bind
-        # pends to the reboot. Anything else is logged loudly; the guest still boots on the
-        # prebuilt driver, which is the pre-fix status quo.
         if ($LASTEXITCODE -notin 0, 259, 3010) {
-            Write-Log "xenbus install returned $LASTEXITCODE - the guest keeps the prebuilt (wedging) xenbus.sys" 'WARN'
+            Write-Log "xenbus staging returned $LASTEXITCODE - the guest keeps the prebuilt (wedging) xenbus.sys" 'WARN'
             $script:Result.detail.pv_xenbus = "failed rc=$LASTEXITCODE"
         } else {
-            Write-Log 'xenbus installed - the fixed driver binds at the next boot'
-            $script:Result.detail.pv_xenbus = 'installed'
+            Write-Log 'xenbus staged - it binds when the device is enumerated at the next boot'
+            $script:Result.detail.pv_xenbus = 'staged'
         }
     } else {
         Write-Log 'pv-drivers/xenbus/xenbus.inf not in the payload - the prebuilt xenbus.sys (bucket-lock wedge) stays' 'WARN'

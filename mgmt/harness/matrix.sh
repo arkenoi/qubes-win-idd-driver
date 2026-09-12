@@ -973,6 +973,30 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   else
     no "$lbl: xenbus_monitor is RUNNING ($state) - it can still restart the guest"
   fi
+
+  # IS THE FIXED xenbus ACTUALLY BOUND? This is not a formality. The installer now STAGES
+  # xenbus instead of running pnputil /install, because /install asks PnP to restart the bus
+  # hosting the live boot disk and that is what wedged two guests on 2026-09-12. Staging relies
+  # on the higher DriverVer being selected when the device is enumerated at the next boot. If
+  # that assumption is wrong, the guest silently keeps the OLD, WEDGING driver and every other
+  # check here still passes - which is precisely the kind of silent downgrade this project has
+  # been burned by. So compare the version PnP actually bound against the packaged one.
+  local want got
+  want=$(grep -aoiE 'DriverVer[^,]*,[0-9.]+' "$RELEASE_SETUP/pv-drivers/xenbus/xenbus.inf" 2>/dev/null \
+         | grep -aoE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  got=$(QTEST_VM=$vm timeout -k 5 90 ./tools/qtest run \
+        'powershell -NoProfile -Command "(Get-Item C:\Windows\System32\drivers\xenbus.sys).VersionInfo.FileVersion"' \
+        2>/dev/null | tr -d '\r\0' | grep -aoE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+  say "  $lbl xenbus bound version: ${got:-<unreadable>} (packaged ${want:-<unknown>})"
+  if [ -z "$want" ]; then
+    no "$lbl: INVALID-INSTRUMENT - could not read the packaged xenbus DriverVer; bound version ungraded"
+  elif [ -z "$got" ]; then
+    no "$lbl: INVALID-INSTRUMENT - could not read the guest's xenbus.sys version (missing data never reads as a pass)"
+  elif [ "$got" = "$want" ]; then
+    ok "$lbl: the packaged xenbus ($want) is the one bound - staging without /install did bind"
+  else
+    no "$lbl: xenbus bound is $got but the package ships $want - the guest is running the OLD driver; staging did NOT bind"
+  fi
 }
 
 # GRADE-ONLY CELL. Runs the full verify_installed battery against a guest that is ALREADY
