@@ -98,7 +98,7 @@
                               Count + 1,
                               &Timeout);
  
-@@ -962,12 +996,41 @@
+@@ -962,12 +996,52 @@
  
          KeMemoryBarrier();
          State = Request->State;
@@ -112,25 +112,36 @@
 +        if (Now.QuadPart >= NextWarn.QuadPart) {
 +            // Loud well before fatal: this is the line that tells us whether 15 s is the right
 +            // threshold on a real, loaded host, instead of us assuming it is.
-+            Warning("XENSTORE SLOW: %I64u s waiting for req_id %08x type %08x state %d sent %d of %d\n",
-+                    Elapsed,
-+                    Request->Header.req_id,
-+                    Request->Header.type,
-+                    State,
-+                    Request->Index,
-+                    Request->Count);
++            // LogPrintf, NOT Warning(). Warning()/Error() are vDbgPrintExWithPrefix, i.e.
++            // KERNEL-DEBUGGER ONLY - no file, no event log - so on any real guest this line
++            // would go nowhere and the whole point of warning before the fatal threshold
++            // would be lost. LogPrintf writes the Xen (0xE9) and QEMU (0x12) debug console
++            // ports, which dom0 captures to a file, the same sink as this file's other
++            // "STORE:" lines. A diagnostic nobody can read is not a diagnostic.
++            LogPrintf(LOG_LEVEL_WARNING,
++                      "STORE: XENSTORE SLOW: %u s waiting for req_id %08x type %08x state %d sent %d of %d\n",
++                      (ULONG)Elapsed,
++                      Request->Header.req_id,
++                      Request->Header.type,
++                      State,
++                      Request->Index,
++                      Request->Count);
 +            NextWarn.QuadPart = Now.QuadPart + TIME_S(1);
 +        }
 +
 +        if (Context->RequestTimeout != 0 &&
 +            Elapsed >= (ULONGLONG)Context->RequestTimeout) {
-+            Error("XENSTORE STUCK: %I64u s waiting for req_id %08x type %08x state %d sent %d of %d\n",
-+                  Elapsed,
-+                  Request->Header.req_id,
-+                  Request->Header.type,
-+                  State,
-+                  Request->Index,
-+                  Request->Count);
++            // Same sink as the warning above, and for a stronger reason: this is the last
++            // thing written before the bugcheck, so it is the only record of WHICH request
++            // died. BUG()'s own Error() line is debugger-only and would be lost.
++            LogPrintf(LOG_LEVEL_ERROR,
++                      "STORE: XENSTORE STUCK: %u s waiting for req_id %08x type %08x state %d sent %d of %d\n",
++                      (ULONG)Elapsed,
++                      Request->Header.req_id,
++                      Request->Header.type,
++                      State,
++                      Request->Index,
++                      Request->Count);
 +
 +            BUG("XENSTORE REQUEST NEVER COMPLETED");
 +        }
@@ -140,7 +151,7 @@
          KeAcquireSpinLockAtDpcLevel(&Context->Lock);
  
          KeMemoryBarrier();
-@@ -2720,12 +2783,14 @@
+@@ -2720,12 +2794,14 @@
      IN  PXENBUS_FDO             Fdo,
      OUT PXENBUS_STORE_CONTEXT   *Context
      )
@@ -155,7 +166,7 @@
  
      *Context = __StoreAllocate(sizeof (XENBUS_STORE_CONTEXT));
  
-@@ -2760,12 +2825,30 @@
+@@ -2760,12 +2836,30 @@
                                 sizeof ((*Context)->DebugInterface));
      ASSERT(NT_SUCCESS(status));
      ASSERT((*Context)->DebugInterface.Interface.Context != NULL);

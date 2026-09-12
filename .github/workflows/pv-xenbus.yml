@@ -119,6 +119,12 @@ jobs:
           if ($store -notmatch 'XENBUS_STORE_TIMEOUT_S_DEFAULT') { throw 'fix marker (deadline) missing after patch' }
           if ($store -notmatch 'StoreRequestTimeout') { throw 'fix marker (tunable escape hatch) missing after patch' }
           if ($store -notmatch 'XENSTORE SLOW') { throw 'fix marker (pre-fatal warnings) missing after patch' }
+          # The diagnostics must go to a sink that EXISTS on a real guest. Warning()/Error() are
+          # vDbgPrintExWithPrefix - kernel-debugger only, no file, no event log - so a warning
+          # emitted that way is unreadable in the field and the pre-fatal warning is pointless.
+          # LogPrintf reaches the Xen/QEMU debug console ports, which dom0 captures.
+          if ($store -notmatch 'LogPrintf\(LOG_LEVEL_WARNING,\s*\r?\n?\s*"STORE: XENSTORE SLOW') { throw 'XENSTORE SLOW is not going to a dom0-readable sink' }
+          if ($store -notmatch 'LogPrintf\(LOG_LEVEL_ERROR,\s*\r?\n?\s*"STORE: XENSTORE STUCK') { throw 'XENSTORE STUCK is not going to a dom0-readable sink' }
           if ($store -notmatch 'KeStallExecutionProcessor') { throw 'fix marker (stall with the lock dropped) missing after patch' }
           if ($store -notmatch 'XENSTORE REQUEST NEVER COMPLETED') { throw 'fix marker (hard loud bugcheck) missing after patch' }
           if ($store -notmatch 'XENSTORE STUCK') { throw 'fix marker (pre-bugcheck diagnostics) missing after patch' }
