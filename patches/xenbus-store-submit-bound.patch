@@ -1,5 +1,5 @@
---- a/xenbus/src/xenbus/store.c
-+++ b/xenbus/src/xenbus/store.c
+--- a/src/xenbus/store.c
++++ b/src/xenbus/store.c
 @@ -891,21 +891,29 @@
  #define TIME_MS(_ms)        (TIME_US((_ms) * 1000))
  #define TIME_S(_s)          (TIME_MS((_s) * 1000))
