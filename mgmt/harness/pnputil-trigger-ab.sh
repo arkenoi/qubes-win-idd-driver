@@ -36,6 +36,12 @@ GOLDEN="${GOLDEN:-win11-qwt}"
 # golden whose xenbus is ALREADY the patched one, where the prediction is survival or a
 # XENSTORE STUCK bugcheck rather than a silent forever-wedge.
 ARMS="${ARMS:-INJECT STAGE}"
+# Per-arm golden, so the decisive comparison - does the PATCHED driver survive the same
+# provocation the old one wedges on? - can be run INTERLEAVED in one window instead of as two
+# runs hours apart. Arms OLD and NEW are both stage-only and differ ONLY in which xenbus is
+# bound in the subject.
+GOLDEN_OLD="${GOLDEN_OLD:-win11-qwt}"   # pre-patch xenbus
+GOLDEN_NEW="${GOLDEN_NEW:-win11-acc}"   # carries our release, patched xenbus bound
 SUBJ="${SUBJ:-win11-trig}"
 OUT="${OUT:-/home/user/rel/pnputil-trigger-$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$OUT"
@@ -93,8 +99,13 @@ classify(){ # $1=vm -> WEDGED | ALIVE | HALTED | UNKNOWN
 }
 
 run_round(){ # $1=arm (INJECT|STAGE) $2=round
-  local arm=$1 r=$2 flag="" verdict
+  local arm=$1 r=$2 flag="" verdict g
   [ "$arm" = INJECT ] && flag=" /install"
+  case "$arm" in
+    OLD) g="$GOLDEN_OLD" ;;
+    NEW) g="$GOLDEN_NEW" ;;
+    *)   g="$GOLDEN" ;;
+  esac
 
   say ""
   say "==== round $r arm $arm (pnputil /add-driver ...\\xenbus.inf${flag:-<none>}) ===="
@@ -117,14 +128,14 @@ run_round(){ # $1=arm (INJECT|STAGE) $2=round
     qvm-prefs "$SUBJ" "${kv%%:*}" "${kv##*:}" >/dev/null 2>&1
   done
   qvm-prefs "$SUBJ" netvm '' >/dev/null 2>&1
-  cerr=$(python3 - "$GOLDEN" "$SUBJ" 2>&1 <<'PYV'
+  cerr=$(python3 - "$g" "$SUBJ" 2>&1 <<'PYV'
 import sys, qubesadmin
 app = qubesadmin.Qubes(); src = app.domains[sys.argv[1]]; dst = app.domains[sys.argv[2]]
 for v in ('root', 'private'):
     dst.volumes[v].clone(src.volumes[v])
 PYV
   ) || { say "  REFUSED: volume clone failed: $(echo "$cerr" | tail -1 | cut -c1-160)"; return 2; }
-  say "  created and tagged $SUBJ, volumes copied from $GOLDEN"
+  say "  created and tagged $SUBJ, volumes copied from $g"
 
   timeout 300 qvm-start "$SUBJ" --cdrom="win-idd-mgmt:$LOOP" >/dev/null 2>&1
   w_session "$SUBJ" 900 "$arm-$r-boot" "$OUT" say || { say "  VOID: no session"; return 2; }
@@ -175,7 +186,8 @@ PYV
   return 0
 }
 
-say "=== pnputil /install trigger A/B: golden $GOLDEN, $ROUNDS round(s) per arm ==="
+say "=== xenbus provocation A/B: arms [$ARMS], $ROUNDS round(s) each ==="
+say "    OLD=$GOLDEN_OLD (pre-patch)  NEW=$GOLDEN_NEW (patched)  default golden=$GOLDEN"
 say "    INJECT = the removed /install (expected to wedge if the claim holds)"
 say "    STAGE  = the shipping behaviour (expected healthy)"
 
