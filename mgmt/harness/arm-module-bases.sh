@@ -102,13 +102,39 @@ foreach ($p in $arr) {
 Add-Content -LiteralPath $path -Value $lines -Encoding ASCII
 PS1
 
-QTEST_VM=$VM timeout -k 5 90 ./tools/qtest push "$OUT/record-module-bases.ps1" >/dev/null 2>&1 \
-  || { say "FAIL: could not push the recorder"; exit 2; }
-
-# Park it somewhere that survives, then arm a boot task. QubesIncoming is under the user profile and
-# is not a durable home for something that must run before a session exists.
+# LAND THE RECORDER WITHOUT NEEDING A LOGGED-ON SESSION.
+#
+# `qtest push` is qvm-copy-to-vm, and the Qubes file agent runs inside the USER SESSION - it drops
+# into that profile's QubesIncoming. The acceptance cells arm this the moment the guest answers
+# qrexec after an install, which is BEFORE autologon has produced a session, so the copy simply
+# fails. Measured 2026-09-12 on WIN11-clean: "FAIL: could not push the recorder", cell unarmed -
+# the exact state that makes a later wedge's RIP unresolvable, in the campaign where a wedge was
+# the thing being hunted. qubes.VMShell runs as SYSTEM and needs no session, so the transfer goes
+# over it (base64 on the wire: the payload is ~2.5 KB, far inside cmd's 8191-char line limit) and
+# the file copy is kept only as a fallback.
+#
+# Park it somewhere that survives: QubesIncoming is under the user profile and is not a durable
+# home for something that must run before a session exists.
+DIAGDIR='C:\Qubes Tools\diag'
+DEST="$DIAGDIR\\record-module-bases.ps1"
+_landed(){
+  QTEST_VM=$VM timeout -k 5 120 ./tools/qtest run "cmd /c if exist \"$DEST\" echo LANDEDOK" 2>/dev/null \
+    | tr -d '\r' | grep -ac LANDEDOK
+}
+B64=$(base64 -w0 "$OUT/record-module-bases.ps1")
+QTEST_VM=$VM timeout -k 5 120 ./tools/qtest run \
+  "cmd /c md \"$DIAGDIR\" 2>nul & exit /b 0" >/dev/null 2>&1
 QTEST_VM=$VM timeout -k 5 240 ./tools/qtest run \
-  "cmd /c md \"C:\\Qubes Tools\\diag\" 2>nul & copy /y \"$INC\\record-module-bases.ps1\" \"C:\\Qubes Tools\\diag\\record-module-bases.ps1\"" >/dev/null 2>&1
+  "powershell -NoProfile -ExecutionPolicy Bypass -Command \"[IO.File]::WriteAllBytes('$DEST',[Convert]::FromBase64String('$B64'))\"" >/dev/null 2>&1
+if [ "$(_landed)" = 0 ]; then
+  say "VMShell transfer did not land the recorder - falling back to qvm-copy-to-vm (needs a session)"
+  QTEST_VM=$VM timeout -k 5 90 ./tools/qtest push "$OUT/record-module-bases.ps1" >/dev/null 2>&1 \
+    && QTEST_VM=$VM timeout -k 5 240 ./tools/qtest run \
+         "cmd /c copy /y \"$INC\\record-module-bases.ps1\" \"$DEST\"" >/dev/null 2>&1
+  if [ "$(_landed)" = 0 ]; then
+    say "FAIL: could not land the recorder in the guest (neither VMShell nor Filecopy)"; exit 2
+  fi
+fi
 
 armed=$(QTEST_VM=$VM timeout -k 5 240 ./tools/qtest run \
   "schtasks /create /tn QwtModuleBases /ru SYSTEM /sc onstart /rl HIGHEST /f /tr \"powershell -NoProfile -ExecutionPolicy Bypass -File \\\"C:\\Qubes Tools\\diag\\record-module-bases.ps1\\\"\"" 2>/dev/null | tr -d '\r')
