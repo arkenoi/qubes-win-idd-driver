@@ -296,7 +296,11 @@ ensure_release_loop(){ # resolves RELEASE_LOOP (loopN on THIS qube backing the r
   mnt=$(udisksctl mount --block-device "/dev/$RELEASE_LOOP" 2>/dev/null | sed -n 's/^Mounted .* at //p' | sed 's/\.$//')
   [ -n "$mnt" ] || mnt=$(findmnt -no TARGET "/dev/$RELEASE_LOOP" 2>/dev/null | head -1)
   [ -n "$mnt" ] || { say "FATAL: could not mount /dev/$RELEASE_LOOP to verify the ISO content"; exit 1; }
-  if ./tools/assert-payload.sh "$mnt" "$RELEASE_REF" >"$M/iso-gate0.out" 2>&1; then
+  # $RELEASE_SHA, not $RELEASE_REF: the ref is "HEAD" by default and resolving it HERE would
+  # re-read the worktree, so a commit made while the campaign runs (which happens - a session
+  # keeps working during the ~75 min) would turn this gate into a false FATAL. The SHA was
+  # pinned once at campaign start and is what the whole run is graded against.
+  if ./tools/assert-payload.sh "$mnt" "$RELEASE_SHA" >"$M/iso-gate0.out" 2>&1; then
     say "  Gate-0 (ISO): $(tail -1 "$M/iso-gate0.out")"
   else
     say "FATAL: Gate-0 FAILED on the ISO at /dev/$RELEASE_LOOP:"
@@ -1003,9 +1007,9 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
   elif [ -z "$got" ]; then
     no "$lbl: INVALID-INSTRUMENT - could not read the guest's xenbus.sys version (missing data never reads as a pass)"
   elif [ "$got" = "$want" ]; then
-    ok "$lbl: the packaged xenbus ($want) is the one bound - staging without /install did bind"
+    ok "$lbl: the packaged xenbus ($want) is the one bound - the driver under test is the one running"
   else
-    no "$lbl: xenbus bound is $got but the package ships $want - the guest is running the OLD driver; staging did NOT bind"
+    no "$lbl: xenbus bound is $got but the package ships $want - the guest is running the OLD driver, so anything this cell measures is about a driver the package did not ship"
   fi
 }
 
