@@ -526,9 +526,19 @@ Top risks (ranked):
    If notifhost writes `ShowBanner=0` and then dies, an allowlisted app neither banners nor
    forwards — the one place the "fail-open" promise can break. Mitigations to build into A0:
    notifhost restores `ShowBanner` on clean exit; the agent's existing supervisor treats a stale
-   notifhost heartbeat as a trigger to *not* leave suppression in place; and/or suppress a given
-   AUMID's banner **only after** its first successful forward (lazy suppression), so a bridge that
-   never comes up never suppresses. This must be tested (P.5 step 4), not assumed.
+   notifhost heartbeat as a trigger to *not* leave suppression in place; and suppress a given
+   AUMID's banner only while the qubes.Notifications connection is **proven up**, restoring every
+   banner the instant it dies. This must be tested (P.5 step 4), not assumed.
+
+   **SETTLED 2026-09-13 (owner: "i do not want double notifications, make sure nothing is lost,
+   but no doubles").** The shipped form was *lazy* suppression - `ShowBanner=0` written only after
+   an AUMID's first successful forward - which made the FIRST toast of every app double-show (guest
+   banner AND dom0 notification). Suppression now happens the moment `ConnUp()` succeeds, for the
+   whole allowlist at once, before any of those apps can produce a toast. Fail-open is unchanged
+   and is what keeps "nothing is lost": a send failure or a missing ACK marks the connection dead,
+   which restores every banner and clears the set; markers are written before each suppression, so
+   a crash restores on the next start. Suppression is therefore still tied to a proven-up
+   connection - never to hope - it is just no longer bought at the price of one visible double.
 2. **Listener consent / package identity in an unpackaged guest.** The whole bridge is vacuous if
    `GetNotificationsAsync` silently returns empty (revoked consent, lost identity). notifhost claims
    `Allowed` today — but *why* it is allowed must be pinned (sparse package? pre-seeded consent?),

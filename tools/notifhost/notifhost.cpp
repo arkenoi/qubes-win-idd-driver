@@ -377,8 +377,9 @@ static std::wstring BannerKey(std::wstring const& aumid)
     return L"Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings\\" + aumid;
 }
 
-// Suppress ONE AUMID's banner (lazy: called after its first successful forward), recording the
-// prior state in a SID-scoped marker so it can be restored on any exit path or a later start.
+// Suppress ONE AUMID's banner (applied once the qubes.Notifications connection is proven UP),
+// recording the prior state in a SID-scoped marker so it can be restored on any exit path or a
+// later start.
 static void BannerApplyOne(std::wstring const& a)
 {
     std::wstring marker = MarkerPath(a);
@@ -408,7 +409,7 @@ static void BannerApplyOne(std::wstring const& a)
         RegSetValueExW(k, L"ShowBanner", 0, REG_DWORD, (const BYTE*)&zero, sizeof(zero));
         RegCloseKey(k);
     }
-    BLog(L"ShowBanner=0 for %s (after first successful forward)", a.c_str());
+    BLog(L"ShowBanner=0 for %s (connection proven up)", a.c_str());
 }
 
 // Restores every suppression this user's markers record. A marker found at STARTUP is positive
@@ -2700,9 +2701,20 @@ static int BridgeMain()
         }
 
         // connection maintenance. Down => every suppression RESTORED (fail-open: allowlisted apps
-        // take the window path while dom0 is unreachable) and re-suppression is EARNED again by a
-        // fresh successful forward. Suppression is never applied eagerly on connect - only lazily,
-        // after a forward proves the path works (see below).
+        // take the window path while dom0 is unreachable) and re-suppression is re-applied once a
+        // fresh connection is proven UP.
+        //
+        // NO DOUBLE NOTIFICATIONS (owner, 2026-09-13). Suppression used to be lazy - applied to an
+        // AUMID only after one of its toasts had forwarded - so the FIRST toast of every app
+        // showed twice: the guest banner AND the dom0 notification. It is now applied to the whole
+        // allowlist the moment the connection is established, so no toast is ever both banner and
+        // notification.
+        //
+        // NOTHING IS LOST, and the reason is unchanged: suppression is tied to a PROVEN-UP
+        // connection, never to hope. ConnUp() has succeeded before a single banner is suppressed;
+        // the instant the connection dies, the block below restores every banner and clears the
+        // set, so an app is bannerless only while its toasts are demonstrably being delivered.
+        // Markers are written before each suppression, so a crash restores on next start too.
         if (g_connDead)
         {
             ConnDown();   // reap the reader/pipe of a connection that died mid-flight
@@ -2716,7 +2728,16 @@ static int BridgeMain()
                 // A fresh connection must trigger an immediate listing pass: toasts left
                 // deliberately unseen while disconnected (fail-open retry) forward NOW,
                 // not at the next NotificationChanged / 30 s floor.
-                if (ConnUp()) { backoff = 0; connected = true; toastSignaled = true; }
+                if (ConnUp())
+                {
+                    backoff = 0; connected = true; toastSignaled = true;
+                    // The connection is proven up: suppress the whole allowlist NOW, before any
+                    // of these apps can produce its first toast. This is what removes the double.
+                    for (auto const& a : allow)
+                        if (suppressed.insert(a).second) BannerApplyOne(a);
+                    BLog(L"connection up - %u allowlisted app(s) banner-suppressed up front (no double-show)",
+                         (UINT)allow.size());
+                }
                 else
                 {
                     static const DWORD bo[] = { 5000, 15000, 60000, 300000 };
@@ -2817,9 +2838,10 @@ static int BridgeMain()
                              id, kFwdFailCap);
                     }
                 };
-                // Lazy suppression: an allowlisted app is banner-suppressed ONLY after one of its
-                // toasts forwards successfully. So the first toast per app double-shows (guest
-                // banner + dom0), and a bridge that never forwards never suppresses - fail-open.
+                // Backstop only. The allowlist is suppressed up front on connect (see the
+                // connection-maintenance block), so this normally finds every AUMID already in
+                // `suppressed`. It still covers an AUMID that forwards without being in the set -
+                // e.g. an allowlist edited while the bridge runs.
                 auto suppressNow = [&](std::wstring const& aumid) {
                     if (!aumid.empty() && suppressed.insert(aumid).second) BannerApplyOne(aumid);
                 };

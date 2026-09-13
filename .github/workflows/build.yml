@@ -555,6 +555,33 @@ jobs:
           & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
           if ($LASTEXITCODE -ne 0) { throw "slicepaint_test clean rebuild failed" }
 
+      - name: pwcarry_test - rebuild content carry-over (clean + 3 defect proofs)
+        shell: pwsh
+        run: |
+          # agent/gui-agent/pwcarry.h: the pure screen-space blit that carries a slice-fed window's
+          # pixels across a per-window buffer REBUILD, so the rebuild never announces the freshly
+          # zeroed slab (the black blink, owner 2026-09-13). Clean build MUST pass; each defect
+          # build MUST fail - ZEROOFFSET and NOINTERSECT are the near-miss implementations that
+          # place the carried pixels wrong, SAMEBUFFER drops the self-copy guard. The same suite
+          # runs with gcc on the dev qube via tools/tests/pwcarry-selftest.sh.
+          $proj = 'agent\vs2022\pwcarry-test\pwcarry-test.vcxproj'
+          $exe  = 'agent\vs2022\pwcarry-test\x64\Release\pwcarry_test.exe'
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
+          if ($LASTEXITCODE -ne 0) { throw "pwcarry_test msbuild failed" }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { throw "pwcarry_test suite FAILED on the clean build" }
+          foreach ($d in 'ZEROOFFSET', 'NOINTERSECT', 'SAMEBUFFER') {
+            & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
+                /t:Rebuild "/p:PwCarryDefect=PWCARRY_DEFECT_$d"
+            if ($LASTEXITCODE -ne 0) { throw "pwcarry_test defect $d build failed to compile" }
+            & $exe
+            if ($LASTEXITCODE -eq 0) { throw "defect-reintroduction proof FAILED: suite passed with the $d defect" }
+            Write-Host "defect proof OK: suite fails with the $d defect"
+          }
+          # leave a clean binary behind
+          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
+          if ($LASTEXITCODE -ne 0) { throw "pwcarry_test clean rebuild failed" }
+
       - name: notifyerr_test - secondary error route policy core (clean + 5 defect proofs)
         shell: pwsh
         run: |
