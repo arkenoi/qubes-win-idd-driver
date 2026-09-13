@@ -97,6 +97,12 @@ source mgmt/harness/vmlock.sh
 vm_lock "$VM"
 qvm-kill "$VM" >/dev/null 2>&1; sleep 3; qvm-remove -f "$VM" >/dev/null 2>&1
 
+# UNSET BEFORE THE GUEST BOOTS. qubesdb is populated from the features AT VM START and the helper
+# lets qubesdb WIN over the registry, so a leftover service.notify-errors=1 from an earlier run is
+# still in this boot's qubesdb no matter what we unset afterwards - which is why the registry-based
+# explicit-off leg below reported "explicit off did NOT gate (got: send)" on 2026-09-14. Clearing it
+# here, before quick-upgrade's boots, is what makes the registry the deciding source in this run.
+qvm-features --unset "$VM" service.notify-errors >/dev/null 2>&1
 say "quick-upgrade over win11-qwt with $(python3 -c "import json;m=json.load(open('$PKG/MANIFEST.json'));print(m['package_version'],'rev',m['build_rev'])")"
 ./mgmt/harness/quick-upgrade.sh "$PKG" "$VM" "$OS_FAMILY" >>"$LOG" 2>&1
 prc=$?; say "quick-upgrade rc=$prc"
@@ -136,6 +142,12 @@ if [ "$v" = gated ]; then ok "explicit NotifyErrors=0 gates: $v"; else no "expli
 ps_probe RC 'Remove-ItemProperty -Path "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" -Name NotifyErrors -EA SilentlyContinue; Write-Host "RC=cleared"' >/dev/null
 
 # --- 2. NEGATIVE CONTROL: gate ON, healthy guest, nobody calling -> ZERO ------------------------
+# CLEAR THE STATE DIRECTORY FIRST. The checks ABOVE deliberately send, and with the default now ON
+# they return `send` and WRITE MARKERS - which this control then counted as faults on an "idle
+# healthy guest" (2 of them on 2026-09-14, exactly the two sends above; 1 on the run before). A
+# control that counts the test's own earlier traffic is not a control. Nothing has called the route
+# since the reboot below, so an empty directory here is the correct starting state.
+ps_probe CL '$d="$env:ProgramData\Qubes\notify-errors"; if (Test-Path $d) { Remove-Item "$d\*" -Force -Recurse -EA SilentlyContinue }; Write-Host "CL=cleared"' >/dev/null
 qvm-features "$VM" service.notify-errors 1 >/dev/null 2>&1
 say "gate enabled via qvm-features service.notify-errors 1 (dom0 wins over the registry)"
 reboot_proven "reboot 1 (pick up the gate)" || { say "=== notify-errors: $pass passed, $fail failed ==="; vm_unlock "$VM"; exit 1; }
