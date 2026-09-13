@@ -505,7 +505,22 @@ unpark_installed(){ # $1=vm $2=label - restore the campaign's 'installed' snapsh
       0) ;;
       3) no "$lbl: INVALID-INSTRUMENT - subject halted then was RESTARTED during unpark by an OBSERVED queued qrexec call, not a product failure"; return 1 ;;
       4) no "$lbl: subject halted then RESTARTED ITSELF during unpark with NO queued call pending - unexplained, graded as PRODUCT until shown otherwise"; return 1 ;;
-      *) no "$lbl: subject would not halt for unpark"; return 1 ;;
+      *)
+        # KILL AS THE LAST RESORT, exactly like the park/reclone path above (which says "ignored
+        # ACPI shutdown for 420 s - killing as the last resort"). This arm used to give up, and on
+        # 2026-09-13 one stuck domain therefore cost WIN10-reinstall its whole cell - while
+        # WIN10-upgrade, hitting the IDENTICAL guest minutes later, killed it and then ran clean
+        # 10/10. One frozen guest must cost ONE cell, not every cell that touches it afterwards.
+        # The failure is still reported: the kill is how the cell proceeds, not how it passes.
+        say "  $lbl: subject ignored ACPI shutdown for 660 s (screen=$(w_screen "$vm" "stuck-$vm" "$M")) - killing as the last resort"
+        qvm-kill "$vm" >/dev/null 2>&1
+        if w_halt "$vm" 120 "$lbl-unpark-kill" say; then
+          say "  NOTE: a killed guest leaves a dirty volume; the unpark below may need the start/stop cycle"
+          no "$lbl: subject would not halt for unpark - KILLED so the run can continue (this cell is still a FAIL)"
+        else
+          no "$lbl: subject would not halt for unpark, and did not halt after qvm-kill either"
+        fi
+        return 1 ;;
     esac
   fi
   if ./mgmt/harness/checkpoint.sh unpark "$vm" installed >>"$R" 2>&1; then
