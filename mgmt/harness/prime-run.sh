@@ -369,18 +369,39 @@ if [ "$ready" = 1 ]; then
     rl_fg sleep "${SETTLE_SECS:-90}"   # interruptible: a TERM must not defer teardown by the settle window
     if ! QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY; then
         log "  the guest stopped answering during the settle window - the job rebooted it after install"
+        # WAIT FOR THE POWER-OFF TO LAND before deciding. This used to take ONE state sample, right
+        # here - and a guest that is powering off reads Transient, not Halted, so the restart was
+        # skipped every time. Proof from two runs of this same cell on 2026-09-13: NEITHER printed
+        # "restart #N (post-install reboot)", one recovered in 44 s because its probe happened to
+        # get through, the other sat out the whole 900 s and was written up as a GUEST STALL. The
+        # main restart loop above never had this bug because it POLLS and acts on an OBSERVED
+        # Halted; this block now does the same.
         st=$(state "$CHURN")
+        t0=$(date +%s)
+        while [ "$st" != Halted ] && [ $(( $(date +%s) - t0 )) -lt 120 ]; do
+            sleep 5; st=$(state "$CHURN")
+        done
         [ "$st" = Halted ] && { restarts=$((restarts+1)); log "  restart #$restarts (post-install reboot)"; qvm-start "$CHURN" >/dev/null 2>&1; }
         ready=0
+        # DO NOT LET THE WAIT STARVE ITSELF. `timeout -k 5 45` kills the CLIENT; dom0 keeps the
+        # queued call for qrexec_timeout, which prime-run sets to 600 for this subject. Probing
+        # every 20 s for 900 s therefore parks ~45 calls, each holding a slot for ten minutes, and
+        # later calls - including an operator's, afterwards - wait behind them. "No qrexec" becomes
+        # self-inflicted and self-sustaining: that is the documented queued-qrexec pattern, and it
+        # is what produced a Running/idle/deaf guest that looked exactly like a wedge.
+        # So: drop the timeout for the duration of the wait, and restore the standing 600 after.
+        qvm-prefs "$CHURN" qrexec_timeout 20 2>/dev/null
         t1=$(date +%s)
         while [ $(( $(date +%s) - t1 )) -lt 900 ]; do
             sleep 20
-            [ "$(state "$CHURN")" = Halted ] && { qvm-start "$CHURN" >/dev/null 2>&1; continue; }
-            if QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY; then
+            [ "$(state "$CHURN")" = Halted ] && { log "  guest halted again - starting it"; qvm-start "$CHURN" >/dev/null 2>&1; continue; }
+            [ "$(state "$CHURN")" = Running ] || continue   # Transient: mid-transition, do not probe
+            if QTEST_VM=$CHURN timeout -k 5 30 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null | grep -qa QREADY; then
                 ready=1; log "  qrexec back after the post-install reboot"; break
             fi
         done
-        [ "$ready" = 1 ] || log "  WARNING: guest did not return within 900s of its post-install reboot"
+        qvm-prefs "$CHURN" qrexec_timeout 600 2>/dev/null
+        [ "$ready" = 1 ] || log "  WARNING: guest did not return within 900s of its post-install reboot (state=$(state "$CHURN")); before calling this a guest fault, DRAIN the qrexec queue - qrexec_timeout 15, probe, restore 600"
     else
         log "  still answering after the settle window - the job is genuinely finished"
     fi
