@@ -2140,6 +2140,62 @@ function Invoke-Stage2 {
         Write-Log 'gui-agent.exe / requested features recovered by the ADDLOCAL-only retry'
     }
     Write-Log ("requested features verified LOCAL: " + (($fc.states.Keys | ForEach-Object { "$_=$($fc.states[$_])" }) -join ' '))
+
+    # --- THE PRIVATE IMAGE MUST ACTUALLY EXIST -------------------------------------------------
+    # The stock MSI's PreparePrivateImg custom action is sequenced BEFORE the script it runs is
+    # copied to disk. Measured on a win10 clean install, 2026-09-14, from the MSI's own verbose log:
+    #
+    #   20:17:38:855  Doing action: PreparePrivateImg
+    #                 Action ended 20:17:38: PreparePrivateImg. Return value 1.
+    #   20:17:41:621  Executing op: FileCopy(... DestName=prepare-private-img.ps1 ...)
+    #   20:17:41:636  File: ...\bin\prepare-private-img.ps1;  To be installed;  No existing file
+    #
+    # Three seconds too early, and it returns 1 regardless, so the install reports success while
+    # the private disk stays RAW and nothing ever retries. Win11 wins the same race; win10 loses
+    # it. Everything downstream then fails in a way that does not name the cause: no Q:, so
+    # MoveUsers registers `relocate-dir.exe C:\Users Q:\Users` against nothing, bind-dirs finds no
+    # config dir, and LogDir (seeded to 'Q:\Qubes Logs' on the stated assumption that
+    # PvDriversDisk + MoveUsers guarantee Q:) sends every gui-agent log into the void - measured as
+    # user_data_on_private + bind_dirs_boot + agent_log_healthy all failing at once.
+    #
+    # The step itself is CORRECT - running the very same script by hand on the failed guest created
+    # Q: ("Qubes Private Image", NTFS, 19.93 GB free) immediately. So: run it ourselves if the disk
+    # is still not there, now that the script certainly IS on disk, and FAIL if that does not work.
+    # An ok:true install that leaves a dangling C:\Users redirect is how this reached acceptance.
+    # Upstream's MSI is not ours to re-sequence (we stage it bit-identical); this is the fork doing
+    # what the fork is for.
+    if ($fc.states.ContainsKey('MoveUsers') -or $fc.states.ContainsKey('PvDriversDisk')) {
+        if (Test-Path -LiteralPath 'Q:\') {
+            Write-Log 'private image: Q:\ present after the MSI'
+        } else {
+            $ppi = Join-Path $Root 'bin\prepare-private-img.ps1'
+            if (-not (Test-Path -LiteralPath $ppi)) { $ppi = 'C:\Program Files\Qubes Tools\bin\prepare-private-img.ps1' }
+            if (Test-Path -LiteralPath $ppi) {
+                Write-Log "private image: Q:\ ABSENT after the MSI - PreparePrivateImg ran before its own script was installed; running $ppi now" 'WARN'
+                try {
+                    $pp = Start-Process -FilePath 'powershell.exe' -PassThru -Wait -WindowStyle Hidden `
+                          -ArgumentList '-ExecutionPolicy','Bypass','-NonInteractive','-File',"`"$ppi`""
+                    Write-Log "private image: prepare-private-img.ps1 exited $($pp.ExitCode)"
+                } catch {
+                    Write-Log "private image: prepare-private-img.ps1 threw: $($_.Exception.Message)" 'WARN'
+                }
+            } else {
+                Write-Log "private image: Q:\ ABSENT and prepare-private-img.ps1 not found ($ppi)" 'WARN'
+            }
+            Start-Sleep -Seconds 2
+            if (Test-Path -LiteralPath 'Q:\') {
+                Write-Log 'private image: Q:\ created by the retry'
+                $script:Result.detail.private_image = 'created-by-retry'
+            } else {
+                Fail ('the private image is not available as Q: after the MSI and after running ' +
+                      'prepare-private-img.ps1. MoveUsers would register a C:\Users -> Q:\Users ' +
+                      'redirect with no target and every gui-agent log would be written to a ' +
+                      'volume that does not exist, so this install is NOT usable. Use -NoMoveUsers ' +
+                      'only if you deliberately want the profile left on the root volume.')
+                return
+            }
+        }
+    }
     $haveHash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
     $wantHash = $null
     $mf = Join-Path $Root 'MANIFEST.json'
