@@ -2164,7 +2164,13 @@ function Invoke-Stage2 {
     # An ok:true install that leaves a dangling C:\Users redirect is how this reached acceptance.
     # Upstream's MSI is not ours to re-sequence (we stage it bit-identical); this is the fork doing
     # what the fork is for.
-    if ($fc.states.ContainsKey('MoveUsers') -or $fc.states.ContainsKey('PvDriversDisk')) {
+    # $fc.states is an OrderedDictionary, which has .Contains() and NOT .ContainsKey() - calling
+    # the latter THROWS at runtime, and a PowerShell parse check cannot see it. It did exactly
+    # that on 2026-09-14: the guard threw before it ever looked at Q:, Fail() aborted stage 2,
+    # and everything after it (the PV driver installs, xencons, autologon) was skipped - the
+    # cell then failed with 'xenbus bound is 9.1.0.0'. Test membership on .Keys, which works
+    # for an OrderedDictionary and a Hashtable alike.
+    if (($fc.states.Keys -contains 'MoveUsers') -or ($fc.states.Keys -contains 'PvDriversDisk')) {
         if (Test-Path -LiteralPath 'Q:\') {
             Write-Log 'private image: Q:\ present after the MSI'
         } else {
