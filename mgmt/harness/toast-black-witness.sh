@@ -53,10 +53,16 @@ try:
         for line in geo.splitlines():
             if line.startswith("#") or not line.strip():
                 continue
-            f = line.split(None, 6)
-            if len(f) < 7:
+            # split(None, 7), NOT 6. The name is the only field that may contain spaces
+            # ("New notification"), so splitting at 6 folds `mapped` INTO the name and the
+            # mapped=="1" test can never be true - every toast was silently rejected and the
+            # witness reported NOTOAST for four straight rounds while the agent's own log
+            # proved toasts were on screen. A parser that cannot match is a check that cannot
+            # fail, which is the exact defect this file was rewritten to remove.
+            f = line.split(None, 7)
+            if len(f) < 8:
                 continue
-            x, y, w, h, orr, mapped, name = int(f[1]), int(f[2]), int(f[3]), int(f[4]), f[5], f[6], f[6]
+            x, y, w, h, orr, mapped, name = int(f[1]), int(f[2]), int(f[3]), int(f[4]), f[5], f[6], f[7]
             # A toast: override-redirect, mapped, and named by the shell as a notification.
             if orr == "1" and mapped == "1" and "notification" in name.lower():
                 toast = (x, y, w, h, name)
@@ -77,18 +83,33 @@ PY
 }
 
 INC='C:\Users\user\Documents\QubesIncoming\'$(hostname)
-QTEST_VM=$VM timeout -k 5 120 ./tools/qtest push guest/fire-toast.ps1 >/dev/null 2>&1 \
+QTEST_VM=$VM timeout -k 5 120 ./tools/qtest push guest/fire-toast.ps1 guest/dismiss-toast.ps1 \
+  guest/run-as-user.ps1 >/dev/null 2>&1 \
   || { say "FAIL: could not push the toast trigger"; exit 2; }
+
+# fire-toast raises a `scenario="reminder"` toast, which BY DESIGN stays on screen until dismissed
+# - that is what makes it a stable surface to measure, and it is also why it outlives a round. The
+# per-user notification HISTORY is what has to be cleared, so this runs in the user session; killing
+# ShellExperienceHost does not work, because the platform re-shows a reminder toast when the host
+# respawns (guest/dismiss-toast.ps1 documents both, measured 2026-08-31).
+clear_toasts(){
+  QTEST_VM=$VM timeout -k 5 300 ./tools/qtest pushrun guest/run-as-user.ps1 \
+    -Tag dismiss -Script "$INC\\dismiss-toast.ps1" >/dev/null 2>&1
+  sleep 6
+}
 
 fails=0
 for r in $(seq 1 "$ROUNDS"); do
   say "--- round $r/$ROUNDS"
 
+  clear_toasts
   # BASELINE, ASSERTED. Without this a round where no toast ever appears reads as "never black".
   QTEST_VM=$VM timeout -k 5 90 ./tools/qtest fullshot "$OUT/r$r-base.tar" >/dev/null 2>&1
   base=$(cut_toast "$OUT/r$r-base.tar" "r$r-base")
   if [ "$base" != "NOTOAST" ]; then
-    say "  round $r SKIPPED: a toast is already on screen ($base) - baseline is not toast-free"
+    say "  round $r VOID: a toast is STILL on screen after the dismiss ($base) - refusing to grade"
+    say "                against a dirty scene rather than reporting a delta that cannot mean anything"
+    fails=$((fails+1))
     sleep 12
     continue
   fi
