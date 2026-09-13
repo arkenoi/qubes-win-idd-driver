@@ -11,6 +11,8 @@
 #                inset (a jittering flash instead of a black one)
 #   NOINTERSECT  copy min(w) x min(h) from (0,0) with no intersection at all
 #   SAMEBUFFER   drop the src==dst guard, so a slab handed straight back shreds its own pixels
+#   NOFILL       leave the newly-exposed area of a GROWTH zeroed - which is the owner's "second
+#                one in the same window gets black for a moment"
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="${PWCARRY_OUT:-$(mktemp -d /tmp/pwcarry-selftest-XXXXXX)}"
@@ -33,7 +35,7 @@ else
     say "FAIL  clean build: $(head -3 "$OUT/clean.build.err")"; bad=1
 fi
 
-for d in ZEROOFFSET NOINTERSECT SAMEBUFFER; do
+for d in ZEROOFFSET NOINTERSECT SAMEBUFFER NOFILL; do
     if build "defect-$d" "-DPWCARRY_DEFECT_$d"; then
         "$OUT/defect-$d" >"$OUT/defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/defect-$d.out")

@@ -34,6 +34,14 @@ declare -A ALLOW=(
   # override-redirect, absent from _NET_CLIENT_LIST, and per-window capture cannot see it at all.
   # Captures go to scratchpad/ (gitignored) and are read, never kept.
   ["mgmt/harness/dom0-notify-witness.sh"]="dom0 render witness: notification bubble is override-redirect"
+  # Added 2026-09-13. A GUEST toast is override-redirect too - the agent classifies a caption-less
+  # window as a popup (main.c IsPopup) and maps it that way - so the per-window service cannot see
+  # it either. That is not a theory: the previous toast-black-witness.sh used `qtest shot` and, in
+  # all three runs it ever produced, never once captured a toast-sized window. It was a check that
+  # could not fail. This version locates the toast in fullshot's geometry.txt by its
+  # override_redirect flag, cuts that rect out, and DELETES the desktop capture in the same
+  # function; only the toast PNG survives, in gitignored scratchpad/.
+  ["mgmt/harness/toast-black-witness.sh"]="dom0 render witness: a guest toast is override-redirect"
 )
 
 bad=0; n=0
