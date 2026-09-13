@@ -20,7 +20,8 @@
 # CONTRACT (identical to the C side; the two languages share the marker files and therefore
 # de-duplicate against each other):
 #   gate       registry HKLM\...\Qubes Tools\gui-agent : NotifyErrors (DWORD), then qubesdb
-#              /qubes-service/notify-errors - dom0 wins. Default OFF. A sibling of NotifyBridge,
+#              /qubes-service/notify-errors - dom0 wins. Default ON (2026-09-13; set the
+#              feature or the DWORD to 0 to turn it off). A sibling of NotifyBridge,
 #              not the same gate: that one forwards the guest's APP toasts and suppresses their
 #              banners; an operator who wants error reports must not have to accept that, and
 #              service.legacy-toasts (which forces the bridge off) must not silence errors.
@@ -106,7 +107,12 @@ public static class QwtQdbNotify {
 # Gate, resolved once per process: registry base, qubesdb override (dom0 wins). Absent = OFF.
 function Get-QwtNotifyErrorsGate {
     if ($null -ne $script:QwtNotifyGate) { return [bool]$script:QwtNotifyGate }
-    $on = $false
+    # DEFAULT **ON** (owner, 2026-09-13), and it MUST match the agent's g_NotifyErrors default -
+    # docs/QVM-FEATURES.md states that the C agent and these scripts read the same pair. It did not
+    # match for a few hours on 2026-09-13: the agent flipped to ON and this stayed at $false, so the
+    # two halves of one documented gate disagreed. The acceptance check missed it because that check
+    # still asserted the OLD default and therefore PASSED on the stale behaviour.
+    $on = $true
     try {
         $v = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent' -Name 'NotifyErrors' -ErrorAction SilentlyContinue).NotifyErrors
         if ($null -ne $v) { $on = ([int]$v -ne 0) }

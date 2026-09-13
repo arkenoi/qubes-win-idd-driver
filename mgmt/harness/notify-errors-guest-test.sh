@@ -53,7 +53,26 @@ send(){
   local k="$1" comp="$2" id="$3" sev="$4" sum="$5"
   ps_probe "$k" ". '$HELPER'; Write-Host (\"$k=\" + (Send-QwtError -Component '$comp' -Id '$id' -Severity '$sev' -Summary '$sum'))"
 }
-markers(){ ps_probe MK 'if (Test-Path "$env:ProgramData\Qubes\notify-errors") { Write-Host ("MK=" + (@(Get-ChildItem "$env:ProgramData\Qubes\notify-errors" -File -EA SilentlyContinue)).Count) } else { Write-Host "MK=0" }'; }
+# MARKERS FROM *THIS* BOOT ONLY, and only real ones. Counting every file in the state directory
+# reported "3 marker(s) on an idle healthy guest" on 2026-09-13 when the truth was ONE: the other
+# two were `.count` (the per-boot counter) and `out-gui-agent-1.txt` (captured helper output), and
+# the one real marker it did find - gui-agent.broker-missing - carried a DIFFERENT boot id, i.e. it
+# was left over from an earlier boot. A negative control that counts bookkeeping files and history
+# cannot distinguish "the route fired" from "the directory is not empty".
+# `.count` names the current boot (`boot=<id> count=<n>`), so it is the reference.
+markers(){ ps_probe MK '$d="$env:ProgramData\Qubes\notify-errors"
+if (-not (Test-Path $d)) { Write-Host "MK=0"; exit }
+$c = Join-Path $d ".count"
+if (-not (Test-Path $c)) { Write-Host "MK=0"; exit }
+$b = ((Get-Content $c -Raw) -split "\s+" | Where-Object { $_ -like "boot=*" } | Select-Object -First 1)
+if (-not $b) { Write-Host "MK=0"; exit }
+$n = 0
+foreach ($f in Get-ChildItem $d -File -EA SilentlyContinue) {
+  if ($f.Name -eq ".count" -or $f.Name -like "out-*") { continue }
+  $t = (Get-Content $f.FullName -Raw -EA SilentlyContinue)
+  if ($t -and ($t -split "\s+") -contains $b) { $n++ }
+}
+Write-Host ("MK=" + $n)'; }
 
 reboot_proven(){
     local label="$1" before after i
@@ -96,8 +115,18 @@ if [ "$v" = present ]; then ok "qwt-notify-error.ps1 shipped to the guest"; else
 qvm-features --unset "$VM" service.notify-errors >/dev/null 2>&1
 
 # --- 1. GATE DEFAULT OFF -----------------------------------------------------------------------
-v=$(send G1 acceptance gate-off ACTION 'gate default check')
-if [ "$v" = gated ]; then ok "gate is OFF by default: $v"; else no "gate not OFF by default (got: ${v:-<none>})"; fi
+# DEFAULT IS **ON** since 2026-09-13 (agent 2862c13 + guest/qwt-notify-error.ps1): an ACTION fault
+# that needs a human is worth telling dom0 about, and service.notify-errors=0 turns it off. This
+# check used to assert `gated`, i.e. the OLD default - so when the default flipped it PASSED while
+# the C agent and the PowerShell helper had silently DISAGREED with each other, which is the very
+# thing it is here to catch. It now asserts the shipped default, and the explicit-off case below
+# covers the gate actually gating.
+v=$(send G1 acceptance gate-default ACTION 'gate default check')
+if [ "$v" = send ]; then ok "gate is ON by default: $v"; else no "gate not ON by default (got: ${v:-<none>}) - the C agent and the PS helper must agree, see QVM-FEATURES.md"; fi
+qvm-features "$VM" service.notify-errors 0 >/dev/null 2>&1
+v=$(send G2 acceptance gate-off ACTION 'explicit off must gate')
+if [ "$v" = gated ]; then ok "explicit service.notify-errors=0 gates: $v"; else no "explicit off did NOT gate (got: ${v:-<none>})"; fi
+qvm-features --unset "$VM" service.notify-errors >/dev/null 2>&1
 
 # --- 2. NEGATIVE CONTROL: gate ON, healthy guest, nobody calling -> ZERO ------------------------
 qvm-features "$VM" service.notify-errors 1 >/dev/null 2>&1
