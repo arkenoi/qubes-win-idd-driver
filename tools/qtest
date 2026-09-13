@@ -24,6 +24,21 @@ VM="${QTEST_VM:-win-idd-test}"
 # whole-desktop capture (whose output then reached a public repo). The default below is the
 # original Phase-0 qube and it has not existed for some time, so a bare `tools/qtest` hits this
 # exact path. 0.1s to check; hours to misdiagnose.
+# AND REFUSE A VM NAME HANDED IN AS THE FIRST ARGUMENT. `qtest run win11-x "cmd"` LOOKS like it
+# names a target; it does not - the target is $QTEST_VM - so the VM name became part of the
+# command and the call went to the DEFAULT qube. Measured 2026-09-13: three probes meant for
+# win11-nfy ran against win-idd-test, hung, STARTED that qube (found Transient by the owner), and
+# a "qrexec is deaf" finding was written into the issue register from a guest that was never
+# probed. The existing preflight below cannot catch this, because the default target exists.
+case "${2:-}" in
+    win-idd-test|win1[01]-*|win-*)
+        echo "qtest: '$2' looks like a QUBE NAME, but this tool takes its target from QTEST_VM." >&2
+        echo "       You are about to run it against '$VM' with '$2' as part of the command." >&2
+        echo "       Use: QTEST_VM=$2 $0 $1 <command>" >&2
+        exit 2
+        ;;
+esac
+
 if ! qvm-check --quiet "$VM" 2>/dev/null; then
     echo "qtest: target qube '$VM' does not exist — set QTEST_VM explicitly." >&2
     echo "       (an unset QTEST_VM defaults to '${VM}', which is not a live qube)" >&2

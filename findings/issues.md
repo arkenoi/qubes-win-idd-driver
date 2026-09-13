@@ -23,7 +23,16 @@ of this file.
 - P2 `VchanSendBuffer` spins unbounded when the daemon dies with a full ring, and a window flip-storm can fill the vchan and kill the capture thread (S1b) — last recorded open; re-verify live, then fix with bounded/non-blocking writes. [also: architecture] UNVERIFIED
 - P3 ~3085 of 3445 agent starts once died before StagingEnsure, unexplained (2026-08-20 record; history erased) — re-derive from live telemetry before investigating. UNVERIFIED
 - P3 WUDFRd event 219: recovered-transient today; whether it EVER fails to recover is under observation across acceptance runs (one non-recovery on record, 0xC0000365). [verified 2026-08-29]
-- P2 QREXEC DIES WHILE THE GUEST STAYS ALIVE — n=2 now, and it is DEMONSTRABLY NOT THE WEDGE. Second instance caught live on win11-nfy 2026-09-13, minutes after the owner reported a toast crop that went wrong and self-corrected ~5 s later. Fingerprint, measured rather than inferred: domain Running; `admin.vm.Stats` answers (cpu_usage_raw fluctuating 3586-6348, NOT pinned); `qubes.VMShell` deaf to a trivial `cmd /c echo` at 120 s and again at 60 s; ZERO windows mapped (`w_screen` = NOWINDOW on a correctly `win-idd-testbed`-tagged guest, so not the empty-tar trap); PV console REACHABLE and sitting at `WIN11-IDD-TEST login:` but not accepting input; and — the discriminator — it took ACPI shutdown CLEANLY (`qvm-shutdown --wait` rc=0, Halted). The hard stall does the opposite on all four: empty PV console, cores pinned at 100%, ACPI shutdown ignored, guest stuck below the OS. So these are two different faults that have been carried under one name, and this one is IN-GUEST (session gone + qrexec-agent gone, OS alive enough to shut down on request). NEXT: the guest's own logs survive on its volumes — win11-nfy is left Halted and untouched for exactly that. Read `Q:\Qubes Logs\gui-agent-*.log` and the Windows System/Application logs around the failure (a tail-only read; a full `Select-String` over that log is what timed out live). Do NOT boot it more than necessary: revisions_to_keep=2 and the clean shutdown already burned one. UNVERIFIED
+- P3 win11-24h2 qrexec-agent death while the guest lived — n=1, plausible wedge-class, unproven. [verified 2026-08-29]
+  RETRACTED 2026-09-13, same day it was raised: I briefly recorded this as n=2 from win11-nfy. The "qrexec deaf" half of that
+  fingerprint was MEASURED ON THE WRONG QUBE. `tools/qtest` takes its target from `$QTEST_VM` and defaults to `win-idd-test`;
+  I passed the VM as a positional argument with QTEST_VM unset, so every `qtest run win11-nfy ...` probe went to win-idd-test,
+  hung there, and STARTED that qube (found Transient afterwards by the owner, not by me; drained and halted, qrexec_timeout
+  restored to 6000). win11-nfy's qrexec was never tested. What was really observed on it: zero windows mapped (w_screen,
+  correctly tagged), a PV console sitting at a login prompt, admin.vm.Stats answering, and a CLEAN ACPI shutdown - which is
+  the ordinary no-logged-on-session state, not a fault. No new instance; the count stays 1.
+  LESSON, and the reason this is written down rather than quietly reverted: qtest's positional-looking first argument is not a
+  target. Set QTEST_VM. The preflight that exists to catch a bogus target could not fire, because win-idd-test still exists.
 - P3 sporadic first-boot reset attribution (xenvbd reboot-request) — prompt path removed by monitor-disable; resetter never caught in the act. [also: network] UNVERIFIED
 
 ### graphics-performance
