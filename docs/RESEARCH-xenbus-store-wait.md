@@ -102,6 +102,9 @@ stop succeeding - which the code's own comment says throws exactly when it matte
 (09-13) makes the graceful exit unconditional: respawner first, then QGA_SHUTDOWN, then kill
 whatever remains.
 
-The installer change in `20f1f60` (stage xenbus instead of `pnputil /install`) is also still on
-main. Its original causal claim was retracted in `6e0c308`; it is defensible only as avoiding a
-five-minute install hang, not as wedge prevention.
+`20f1f60` (stage xenbus instead of `pnputil /install`) was REVERTED in `49eeecb`. Acceptance
+proved it prevented the driver from ever binding: six cells failed with "xenbus bound is
+9.1.0.0 but the package ships 9.1.0.494 - staging did NOT bind". That also voided the
+2026-09-12 ours-vs-upstream comparison a second time, since both of its packages carried the
+stage-only installer and therefore both guests ran stock xenbus regardless of what was shipped.
+With `/install` restored the assertion reads "bound 9.1.0.496 (packaged 9.1.0.496)".
