@@ -123,10 +123,17 @@ qvm-features --unset "$VM" service.notify-errors >/dev/null 2>&1
 # covers the gate actually gating.
 v=$(send G1 acceptance gate-default ACTION 'gate default check')
 if [ "$v" = send ]; then ok "gate is ON by default: $v"; else no "gate not ON by default (got: ${v:-<none>}) - the C agent and the PS helper must agree, see QVM-FEATURES.md"; fi
-qvm-features "$VM" service.notify-errors 0 >/dev/null 2>&1
+# EXPLICIT OFF, VIA THE GUEST-LOCAL REGISTRY - not qvm-features. `qvm-features` writes
+# /qubes-service/<name> into qubesdb AT VM START, so setting it on a RUNNING guest changes
+# nothing until the next boot: the first version of this leg set the feature and sent
+# immediately, saw the (correct) default `send`, and reported "explicit off did NOT gate". It
+# also WROTE A REAL MARKER that the negative control below then counted. The registry DWORD is
+# read on every call, so this proves the gate gates without a third reboot and without leaving
+# a marker behind.
+ps_probe RO 'New-ItemProperty -Path "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" -Name NotifyErrors -PropertyType DWord -Value 0 -Force | Out-Null; Write-Host "RO=set"' >/dev/null
 v=$(send G2 acceptance gate-off ACTION 'explicit off must gate')
-if [ "$v" = gated ]; then ok "explicit service.notify-errors=0 gates: $v"; else no "explicit off did NOT gate (got: ${v:-<none>})"; fi
-qvm-features --unset "$VM" service.notify-errors >/dev/null 2>&1
+if [ "$v" = gated ]; then ok "explicit NotifyErrors=0 gates: $v"; else no "explicit off did NOT gate (got: ${v:-<none>})"; fi
+ps_probe RC 'Remove-ItemProperty -Path "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" -Name NotifyErrors -EA SilentlyContinue; Write-Host "RC=cleared"' >/dev/null
 
 # --- 2. NEGATIVE CONTROL: gate ON, healthy guest, nobody calling -> ZERO ------------------------
 qvm-features "$VM" service.notify-errors 1 >/dev/null 2>&1
