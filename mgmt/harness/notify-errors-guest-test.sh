@@ -136,9 +136,23 @@ if [ "$v" = send ]; then ok "gate is ON by default: $v"; else no "gate not ON by
 # also WROTE A REAL MARKER that the negative control below then counted. The registry DWORD is
 # read on every call, so this proves the gate gates without a third reboot and without leaving
 # a marker behind.
-ps_probe RO 'New-ItemProperty -Path "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" -Name NotifyErrors -PropertyType DWord -Value 0 -Force | Out-Null; Write-Host "RO=set"' >/dev/null
+# CREATE THE KEY, THEN READ THE VALUE BACK. New-ItemProperty writes a VALUE and needs the KEY to
+# already exist; on a freshly upgraded guest the gui-agent module key may not, so the write failed
+# silently, the helper saw nothing, used the (new) default, and the leg reported "explicit off did
+# NOT gate" - twice. A probe that writes without reading back cannot tell "the gate ignored me"
+# from "my write never landed", which is the whole question this leg is asking.
+RO=$(ps_probe RO 'New-Item -Path "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" -Force | Out-Null
+New-ItemProperty -Path "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" -Name NotifyErrors -PropertyType DWord -Value 0 -Force | Out-Null
+$v = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" -Name NotifyErrors -EA SilentlyContinue).NotifyErrors
+Write-Host ("RO=" + $(if ($null -eq $v) { "WRITE-FAILED" } else { "$v" }))')
+if [ "$RO" != 0 ]; then
+  say "INVALID-INSTRUMENT  could not write NotifyErrors=0 to the guest registry (read-back: ${RO:-<none>})"
+  say "                    the explicit-off leg below cannot mean anything without it"
+fi
 v=$(send G2 acceptance gate-off ACTION 'explicit off must gate')
-if [ "$v" = gated ]; then ok "explicit NotifyErrors=0 gates: $v"; else no "explicit off did NOT gate (got: ${v:-<none>})"; fi
+if [ "$v" = gated ]; then ok "explicit NotifyErrors=0 gates: $v"
+elif [ "$RO" != 0 ]; then say "SKIPPED explicit-off: the registry write did not land (RO=$RO) - not graded"
+else no "explicit off did NOT gate (got: ${v:-<none>}) with NotifyErrors=0 PROVEN present in the registry"; fi
 ps_probe RC 'Remove-ItemProperty -Path "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools\gui-agent" -Name NotifyErrors -EA SilentlyContinue; Write-Host "RC=cleared"' >/dev/null
 
 # --- 2. NEGATIVE CONTROL: gate ON, healthy guest, nobody calling -> ZERO ------------------------
