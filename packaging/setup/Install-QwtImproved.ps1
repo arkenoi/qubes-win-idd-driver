@@ -2225,9 +2225,7 @@ function Invoke-Stage2 {
     # framebuffer grants itself. This quiesce used to go straight to Kill(), leaving the grants held
     # by a killed process for the device surgery to run under. Only if the watchdog process is
     # provably not respawning - the service stop succeeded - or a respawn would defeat it.
-    if ($script:GuiQuiesced -and -not @(Get-Process -Name 'gui-watchdog' -ErrorAction SilentlyContinue).Count) {
-        [void](Request-GuiAgentExit -WaitMs 5000)
-    }
+    # (moved below the respawner kill - see the note there)
     # KILL THE RESPAWNER FIRST, then what it respawns. gui-watchdog.exe relaunches gui-agent.exe
     # about a second after it dies, so killing only the agent does not quiesce anything: if
     # Stop-Service above threw (SCM busy right after the MSI's StartServices is exactly when it
@@ -2236,7 +2234,35 @@ function Invoke-Stage2 {
     # the first version of this quiesce did not prevent it. Order matters: watchdog, then agent.
     # WaitForExit on each handle: Kill() returns before the process is gone, and a fixed sleep was
     # the only ordering guarantee.
-    foreach ($pn in 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost') {
+    # 1. THE RESPAWNER, unconditionally. gui-watchdog.exe relaunches gui-agent.exe about a second
+    #    after it dies, so nothing below holds while it lives.
+    foreach ($pr in @(Get-Process -Name 'gui-watchdog' -ErrorAction SilentlyContinue)) {
+        try   { $pr.Kill(); [void]$pr.WaitForExit(5000); $script:GuiQuiesced = $true; Write-Log "  stopped gui-watchdog (pid $($pr.Id))" }
+        catch { Write-Log "  could not stop gui-watchdog (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
+    }
+
+    # 2. NOW ASK THE AGENT TO EXIT ITSELF, and do it UNCONDITIONALLY. This request used to be
+    #    gated on the WATCHDOG SERVICE stop having succeeded - and the note above records that that
+    #    stop throws exactly when it matters, "right after the MSI's StartServices". So in the
+    #    common case the gate was false, the graceful request was skipped, and the agent was
+    #    KILLED with its grants still held.
+    #
+    #    That matters because grants are NOT released by process death: capture.c says so at its
+    #    revoke site - "grants are not automatically revoked when the xeniface device handle is
+    #    closed" - and the whole-desktop framebuffer grant plus the staging grant are revoked ONLY
+    #    on the agent's own exit path. Killing it leaves dom0 mapping pages of a dead process while
+    #    stage 2 goes on to install xenvif and xencons, create the IDD device and disable the
+    #    adapter - i.e. re-enumerate xenbus children underneath orphaned grants.
+    #
+    #    The respawner is already dead at this point, so there is nothing left for the gate to
+    #    protect against. If the agent does not go within the budget, the kill below still runs.
+    $null = Request-GuiAgentExit -WaitMs 8000
+    foreach ($pr in @(Get-Process -Name 'gui-agent' -ErrorAction SilentlyContinue)) {
+        Write-Log "  gui-agent (pid $($pr.Id)) did not exit on QGA_SHUTDOWN - killing, grants stay held" 'WARN'
+    }
+
+    # 3. Whatever is still standing.
+    foreach ($pn in 'gui-agent', 'wgcbroker', 'notifhost') {
         foreach ($pr in @(Get-Process -Name $pn -ErrorAction SilentlyContinue)) {
             try   { $pr.Kill(); [void]$pr.WaitForExit(5000); $script:GuiQuiesced = $true; Write-Log "  stopped $pn (pid $($pr.Id))" }
             catch { Write-Log "  could not stop $pn (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
