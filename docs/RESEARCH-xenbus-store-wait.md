@@ -63,11 +63,44 @@ Run the **complete** procedure that produced the failure — `tools/release-acce
 <id>`, all eight cells then the feature tests — not the feature test in isolation. Until the
 wedge reproduces there, no package comparison means anything.
 
-## Related, and NOT reverted
+## The bucket-lock patch is PARKED TOO (owner call, 2026-09-13)
 
-`patches/xenbus-hash-table-lock.patch` stays on main: it fixes a different, independently proven
-defect (lost update in `__HashTableBucketLock`), demonstrated by `mgmt/harness/evtchn-storm-ab.sh`
-— stock wedged in seconds, patched survived 3M open/close pairs. It has shipped since 4.3.27.
+`patches/xenbus-hash-table-lock.patch` is no longer applied and no longer on `main`; it is in
+git history and on this branch. We now ship **stock xenbus**.
+
+The defect it fixes is real — a lost update in `__HashTableBucketLock` — and
+`mgmt/harness/evtchn-storm-ab.sh` proved the patch fixes it: stock wedged at t+81 s at 300% of a
+core, patched survived 2,972,459 open/close pairs, same golden, one variable.
+
+But that storm is four threads hammering event-channel open/close at 6-8k/s. It demonstrated
+that the lock breaks under synthetic pressure; it never showed our wedges came from it. Two
+facts argue they did not:
+
+- the wedge RECURRED on the patched driver (9.1.0.470, 2026-09-12 campaign);
+- a defect in OUR install path was found on 2026-09-13 that leaves the gui-agent's grants
+  orphaned across PV-driver re-enumeration (see below), and its introduction on 09-08 is
+  immediately followed by the wedge cluster.
+
+So the patch was plausibly suppressing a symptom of our own code while a real upstream bug
+provided cover. Carrying it is not free: a patched PV driver must be rebuilt, re-signed and
+version-ranked every release, and on 2026-09-12 an installer change silently stopped it binding
+at all with nothing noticing until an assertion was added.
+
+TO RESURRECT IT: the patch applies to `src/xenbus/hash_table.c` at the pinned commit; the CI
+step that applied it (with its marker assertions) is in this file's history.
+
+## The install-path defect that likely mattered instead
+
+`4d2de2b` (09-08 15:04) quiesced the gui-agent for all of stage 2 by KILLING it. `capture.c`
+states at its own revoke site that "grants are not automatically revoked when the xeniface
+device handle is closed" - the whole-desktop framebuffer grant and the staging grant are
+released ONLY on the agent's exit path. So stage 2 went on to install xenvif and xencons,
+create the IDD device and disable the adapter while dom0 still mapped pages of a dead process.
+
+A graceful request existed from `4a97d97` (09-08 21:21) but was gated on the watchdog SERVICE
+stop succeeding - which the code's own comment says throws exactly when it matters. `1ac052b`
+(09-13) makes the graceful exit unconditional: respawner first, then QGA_SHUTDOWN, then kill
+whatever remains.
 
 The installer change in `20f1f60` (stage xenbus instead of `pnputil /install`) is also still on
 main. Its original causal claim was retracted in `6e0c308`; it is defensible only as avoiding a
