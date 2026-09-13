@@ -102,6 +102,21 @@ stop succeeding - which the code's own comment says throws exactly when it matte
 (09-13) makes the graceful exit unconditional: respawner first, then QGA_SHUTDOWN, then kill
 whatever remains.
 
+**A SECOND, INDEPENDENT MOVE AGAINST THE SAME MECHANISM, and a prediction that can be tested.**
+`SeamlessNoScreenGrant` now defaults ON (agent `2862c13`, 09-13), so a seamless guest never makes
+the whole-desktop grant at all - the staging buffer is filled as a local pixel source and never
+granted, and the window-0 dump is suppressed. If the wedge really is "stage 2 re-enumerates the PV
+bus while dom0 still maps pages of a dead agent's whole-desktop grant", then that grant simply not
+existing removes the largest orphan (7200 pages, one handle, created once per agent start and held
+for the agent's life) while the graceful-exit fix removes the orphaning. The two are independent:
+one stops the agent dying with grants outstanding, the other stops the biggest of those grants
+being made.
+
+The prediction is falsifiable and cheap to state now: a wedge that recurs on a package carrying
+BOTH is not this mechanism, and the candidate list goes back to being open. A guest with
+`service.gui-fullscreen` on keeps the grant (its whole-desktop window's image IS that grant), so
+it remains the configuration to reach for if a wedge has to be reproduced deliberately.
+
 `20f1f60` (stage xenbus instead of `pnputil /install`) was REVERTED in `49eeecb`. Acceptance
 proved it prevented the driver from ever binding: six cells failed with "xenbus bound is
 9.1.0.0 but the package ships 9.1.0.494 - staging did NOT bind". That also voided the
