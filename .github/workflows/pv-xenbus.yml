@@ -49,8 +49,6 @@ on:
     paths:
       - '.github/workflows/pv-xenbus.yml'
       - 'patches/xenbus-hash-table-lock.patch'
-      - 'patches/xenbus-store-no-lock-while-waiting.patch'
-      - 'patches/xenbus-store-wait-watchdog.patch'
 
 env:
   LINK: /Brepro
@@ -116,51 +114,6 @@ jobs:
           if ($src -notmatch 'InterlockedCompareExchange\(&Bucket->Lock, 0, 1\)') { throw 'fix marker (writer unlock CAS 1->0) missing after patch' }
           if ($src -match 'Old = Readers << 1;') { throw 'old lock derivation still present after patch' }
           Write-Host "::notice title=xenbus::bucket-lock fix applied"
-
-          # SECOND FIX: bound StoreSubmitRequest's wait. The bucket-lock fix is real but it is
-          # NOT the whole cause - the stall recurred on 2026-09-12 with the patched xenbus
-          # 9.1.0.470 already installed (win11-acc, first boot after a PV-driver reinstall:
-          # 3 vCPUs pause-spinning, qrexec and xencons deaf, the guest not even writing its own
-          # event log, Kernel-Power 41 on the way back). StoreSubmitRequest loops forever at
-          # DISPATCH_LEVEL holding Context->Lock when a xenstore request never completes, so
-          # every other xenstore caller is taken down with it. Bounded, it degrades to a
-          # recoverable failure that callers already handle (they all NULL-check the response).
-          # TWO PATCHES, DELIBERATELY SEPARATE, because this is meant to go upstream later.
-          # Patch 1 is an unarguable bug fix with no policy in it: stop holding Context->Lock
-          # while busy-waiting. Patch 2 is the POLICY half - a deadline and a bugcheck - which
-          # upstream may well want to argue about or make configurable. Keeping them apart means
-          # the series can be offered with patch 1 standing alone.
-          git apply --verbose ..\repo\patches\xenbus-store-no-lock-while-waiting.patch
-          if ($LASTEXITCODE -ne 0) { throw "store lock-drop patch did not apply" }
-          git apply --verbose ..\repo\patches\xenbus-store-wait-watchdog.patch
-          if ($LASTEXITCODE -ne 0) { throw "store wait-watchdog patch did not apply" }
-          $store = Get-Content src\xenbus\store.c -Raw
-          # One marker per property this patch must keep. Earlier revisions of it fixed one
-          # defect and introduced others, so each is asserted separately.
-          if ($store -notmatch 'XENBUS_STORE_TIMEOUT_S_DEFAULT') { throw 'fix marker (deadline) missing after patch' }
-          if ($store -notmatch 'StoreRequestTimeout') { throw 'fix marker (tunable escape hatch) missing after patch' }
-          if ($store -notmatch 'XENSTORE SLOW') { throw 'fix marker (pre-fatal warnings) missing after patch' }
-          # The diagnostics must go to a sink that EXISTS on a real guest. Warning()/Error() are
-          # vDbgPrintExWithPrefix - kernel-debugger only, no file, no event log - so a warning
-          # emitted that way is unreadable in the field and the pre-fatal warning is pointless.
-          # LogPrintf reaches the Xen/QEMU debug console ports, which dom0 captures.
-          if ($store -notmatch 'LogPrintf\(LOG_LEVEL_WARNING,\s*\r?\n?\s*"STORE: XENSTORE SLOW') { throw 'XENSTORE SLOW is not going to a dom0-readable sink' }
-          if ($store -notmatch 'LogPrintf\(LOG_LEVEL_ERROR,\s*\r?\n?\s*"STORE: XENSTORE STUCK') { throw 'XENSTORE STUCK is not going to a dom0-readable sink' }
-          if ($store -notmatch 'KeStallExecutionProcessor') { throw 'fix marker (stall with the lock dropped) missing after patch' }
-          if ($store -notmatch 'XENSTORE REQUEST NEVER COMPLETED') { throw 'fix marker (hard loud bugcheck) missing after patch' }
-          if ($store -notmatch 'XENSTORE STUCK') { throw 'fix marker (pre-bugcheck diagnostics) missing after patch' }
-          # THE DEFECTS, ASSERTED GONE.
-          # (a) the unbounded silent retry;
-          if ($store -match '(?s)if \(status == STATUS_TIMEOUT\)\s*\r?\n\s*Warning\("TIMED OUT') { throw 'unbounded TIMED OUT retry still present after patch' }
-          # (b) the multi-second busy-spin while HOLDING Context->Lock - the mechanism of the wedge;
-          if ($store -match 'Timeout\.QuadPart = TIME_RELATIVE\(TIME_S\(XENBUS_STORE_POLL_PERIOD\)\)') { throw 'multi-second spin under the store lock still present after patch' }
-          # (c) sleeping mid-request, which would break the "Make sure we don't suspend" interlock
-          #     (SuspendTrigger -> SyncCapture needs every CPU to run a DPC), and which a
-          #     previous revision of this patch did. IRQL must stay raised for the whole wait.
-          if ($store -match 'KeDelayExecutionThread') { throw 'the sleep that breaks the suspend interlock is back' }
-          # (d) the 1 s DISPATCH deadline that silently broke PV device bring-up.
-          if ($store -match 'XENBUS_STORE_DPC_TIMEOUT') { throw 'the short DISPATCH deadline that broke PV bring-up is back' }
-          Write-Host "::notice title=xenbus::store lock-drop + wait-watchdog applied"
 
       - name: Build xenbus via its own build.ps1
         shell: pwsh
