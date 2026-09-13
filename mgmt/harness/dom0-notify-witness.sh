@@ -100,6 +100,41 @@ done
 AMB=$(delta amb0 amb1); AMB_AREA=$(printf '%s' "$AMB" | sed -nE 's/.*DENSE=(-?[0-9]+).*/\1/p')
 say "ambient churn with no trigger: $AMB"
 
+# ---- CAN THE DESKTOP SHOW ANYTHING AT ALL? -----------------------------------------------------
+# A LOCKED OR BLANKED DESKTOP DEFEATS THIS WITNESS IN THE WORST DIRECTION. A screensaver is STATIC,
+# so the ambient control above goes QUIET and the run proceeds happily - then the trigger fires, the
+# bubble cannot be photographed over the lock, and the witness reports a real "nothing appeared":
+# it blames the PRODUCT for the operator's screen lock. Every other not-RENDERED verdict is now
+# routed to INVALID-INSTRUMENT by the caller, so this is the one remaining way an instrument problem
+# can read as a product failure. (Owner, 2026-09-14: a window "may be mapped internally, you just
+# wont see it on actual dom0" - mapped is not visible, and only this witness speaks for visible.)
+#
+# The tell: a lock or blank screen is nearly uniform, a working desktop is not. The threshold only
+# has to separate "a desktop" from "no desktop", not grade anything.
+STRUCTOUT=$(python3 - "$OUT/amb1.tar" <<'WITPY'
+import sys, tarfile, io, numpy as np
+from PIL import Image
+try:
+    with tarfile.open(sys.argv[1]) as t:
+        best = None
+        for m in t.getmembers():
+            if m.name.lower().endswith(".png") and (best is None or m.size > best.size): best = m
+        if best is None:
+            print("STRUCT=-1"); raise SystemExit
+        im = Image.open(io.BytesIO(t.extractfile(best).read())).convert("L")
+    a = np.asarray(im, dtype=np.int16)
+    print("STRUCT=%.5f" % float((np.abs(np.diff(a, axis=1)) > 12).mean()))
+except Exception:
+    print("STRUCT=-1")
+WITPY
+)
+say "desktop structure: $STRUCTOUT"
+_st=$(printf '%s' "$STRUCTOUT" | sed -nE 's/STRUCT=([0-9.-]+)/\1/p')
+if awk -v v="${_st:--1}" 'BEGIN{exit !(v >= 0 && v < 0.004)}'; then
+  echo "WITNESS=undecidable(dom0 desktop blank or locked, structure=${_st} - a bubble cannot be photographed over a screen lock, and calling that 'not rendered' would blame the product for the operator's screensaver)"
+  exit 1
+fi
+
 # ---- triggered ---------------------------------------------------------------------------------
 cap pre || { echo "WITNESS=capture-failed(pre)"; exit 1; }
 say "trigger: $*"
