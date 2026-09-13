@@ -191,12 +191,36 @@ QTEST_VM="$NV_VM" timeout -k 5 120 ./tools/qtest run \
   | tr -d '\r' | grep -aoE '^W=.*'
 TRIGEOF
 chmod +x "$TRIG"
-if NV_ROOT="$(pwd)" NV_VM="$VM" NV_HELPER="$HELPER" NV_ID="render$(date -u +%H%M%S)" \
-   ./mgmt/harness/dom0-notify-witness.sh "$VM" notifyerr-acceptance "$TRIG" 2>&1 \
-   | tee -a "$LOG" | grep -q 'WITNESS=RENDERED'; then
+# THE WITNESS HAS THREE VERDICTS, AND THEY ARE NOT ALL "the product failed".
+# It emits WITNESS=RENDERED, WITNESS=capture-failed(...) or WITNESS=undecidable(...). This used to
+# grep for RENDERED and report EVERYTHING ELSE as "NOT RENDERED: nothing visible appeared", with a
+# hint pointing at the session-0 relay defect. On 2026-09-13 the witness said:
+#   WITNESS=undecidable(no quiet baseline after 10 attempts - grading against a contaminated
+#   control would be worse than no verdict)
+# i.e. it never fired the trigger, because the dom0 desktop would not go quiet (the owner was
+# using it). That was recorded as a product FAIL, and the hint sent me to read bridge.log for a
+# defect that had nothing to do with it. An instrument saying "I cannot tell" must never be
+# graded as "the product is broken" - the same mistake prime-run's settle block produced earlier
+# the same day.
+NV_OUT="$(NV_ROOT="$(pwd)" NV_VM="$VM" NV_HELPER="$HELPER" NV_ID="render$(date -u +%H%M%S)" \
+   ./mgmt/harness/dom0-notify-witness.sh "$VM" notifyerr-acceptance "$TRIG" 2>&1 | tee -a "$LOG")"
+NV_VERDICT="$(printf '%s' "$NV_OUT" | grep -aoE 'WITNESS=[a-z-]+' | tail -1)"
+case "$NV_VERDICT" in
+  WITNESS=undecidable|WITNESS=capture-failed)
+    say "INVALID-INSTRUMENT  render witness could not decide: $(printf '%s' "$NV_OUT" | grep -aoE 'WITNESS=.*' | tail -1)"
+    say "                    This is NOT a product result. The dom0 desktop must be quiet for the"
+    say "                    ambient control; re-run when it is. The route's own legs above still stand."
+    ;;
+esac
+if printf '%s' "$NV_OUT" | grep -q 'WITNESS=RENDERED'; then
   ok "RENDERED: the notification was PHOTOGRAPHED on the dom0 desktop"
 else
-  no "NOT RENDERED: nothing visible appeared. Check C:\ProgramData\qubes-toast-bridge\bridge.log on the guest for 'relay never connected' - that is the session-0 defect"
+  case "$NV_VERDICT" in
+    WITNESS=undecidable|WITNESS=capture-failed)
+      : ;;   # already reported as INVALID-INSTRUMENT above; not counted as a product failure
+    *)
+      no "NOT RENDERED: the witness fired the trigger and NOTHING visible appeared ($NV_VERDICT). Check C:\ProgramData\qubes-toast-bridge\bridge.log on the guest for 'relay never connected' - that is the session-0 defect" ;;
+  esac
 fi
 rm -f "$TRIG"
 
