@@ -386,8 +386,17 @@ while :; do
       log "  t+${el}s $n log lines | $(tail -1 "$OUT/install.log" 2>/dev/null | cut -c1-110)"
       if sed -n "/$E2E_MARK/,\$p" "$OUT/install.log" | grep -qa '^=== RESULT === {'; then phase=RESULT; break; fi
     elif [ $(( $(date +%s) - lastchange )) -ge "$STALL_SECS" ]; then
-      log "  STALLED - $n log lines unchanged for ${STALL_SECS}s, guest alive, screen=$(w_screen "$SUBJECT" stall "$OUT")"
-      phase=STALLED; break
+      # A QUIET LOG IS NOT A DEAD GUEST. cpu_time is cumulative, so flat across the sample means
+      # the domain is not executing; moving means it is working and merely not writing. Without
+      # this, a long silent MSI phase is reported as a wedge. The DEADLINE below still bounds the
+      # loop, so resetting the stall clock cannot hang here.
+      if w_cpu_moving "$SUBJECT" 20; then
+        log "  t+${el}s $n log lines unchanged for ${STALL_SECS}s, but cpu_time is MOVING - EXECUTING, not stalled; stall clock reset"
+        lastchange=$(date +%s)
+      else
+        log "  STALLED - $n log lines unchanged for ${STALL_SECS}s AND cpu_time FLAT, guest alive, screen=$(w_screen "$SUBJECT" stall "$OUT")"
+        phase=STALLED; break
+      fi
     fi
     grun "cmd /c powershell -NoProfile -Command \"if(Test-Path C:\\qwt-install.log){Get-Content C:\\qwt-install.log -Tail 40}\"" 90 > "$OUT/msi.log.new" || true
     [ -s "$OUT/msi.log.new" ] && mv -f "$OUT/msi.log.new" "$OUT/msi.log" || rm -f "$OUT/msi.log.new"
@@ -406,9 +415,20 @@ while :; do
     # still on its screen and its msiexec log tail is still in $OUT/msi.log.
     if [ "$unreach" -ge "$STALL_SECS" ]; then
       sc=$(w_screen "$SUBJECT" "unreachable-stall" "$OUT")
-      log "  STALLED - qrexec unanswering for ${unreach}s (cpu=${cpu} quiet=$quiet), screen=$sc"
-      [ "$sc" = RECOVERY ] && { phase=RECOVERY; break; }
-      phase=STALLED; break
+      # RECOVERY first: that screen is terminal however much CPU the guest burns behind it.
+      [ "$sc" = RECOVERY ] && { log "  RECOVERY screen after ${unreach}s unreachable"; phase=RECOVERY; break; }
+      # Then the same rule as above. qrexec silence is the WEAKEST possible death signal here -
+      # the agent is being REPLACED during this window, so silence is expected. On 2026-09-14 a
+      # guest measured +66935 cpu_time / 20 s (busy, mid-upgrade) while this branch would have
+      # called it wedged. cpu_usage_raw is NOT usable for this: it reads back EMPTY on this rig,
+      # which is why it is a logging aid only. cpu_time is the validated discriminator.
+      if w_cpu_moving "$SUBJECT" 20; then
+        log "  t+${el}s no qrexec for ${unreach}s but cpu_time is MOVING - EXECUTING and merely silent; not a stall, clock reset (screen=$sc)"
+        lastalive=$(date +%s)
+      else
+        log "  STALLED - qrexec unanswering for ${unreach}s AND cpu_time FLAT (cpu=${cpu} quiet=$quiet), screen=$sc"
+        phase=STALLED; break
+      fi
     fi
   fi
   if [ $(( el / 60 )) -gt "$shots" ]; then
