@@ -2052,6 +2052,80 @@ function Invoke-Stage2 {
     }
     Write-Log ("requested features verified LOCAL: " + (($fc.states.Keys | ForEach-Object { "$_=$($fc.states[$_])" }) -join ' '))
 
+    # --- THE PRIVATE IMAGE: THE STOCK SCRIPT ONLY EVER LOOKS AT DISK 1 -------------------------
+    # ROOT CAUSE, read from the stock script itself (C:\Program Files\Qubes Tools\bin\
+    # prepare-private-img.ps1, run by the MSI's deferred PreparePrivateImg action):
+    #
+    #     $disk1 = Get-Disk -Number 1
+    #     $match = ($disk1.FriendlyName -eq 'XENSRC PVDISK') -or ('QEMU HARDDISK')
+    #     $match = $match -and $disk1.PartitionStyle -eq 'RAW'
+    #     if ($match) { Initialize-Disk -Number 1; New-Volume -DiskNumber 1 -DriveLetter Q ... }
+    #
+    # It prepares disk NUMBER 1 and nothing else. A Qubes HVM presents THREE PV disks - root,
+    # private, volatile - and Windows' disk enumeration order is not guaranteed to match the Xen
+    # vbd order. When the private volume is not Number 1 on that boot the condition is false, the
+    # script does nothing, exits 0, and the MSI records success: the guest is left permanently
+    # without Q:, MoveUsers registers `relocate-dir.exe C:\Users Q:\Users` against nothing, and
+    # LogDir - seeded to 'Q:\Qubes Logs' - sends every gui-agent log to a volume that never
+    # existed. Intermittent by construction, which is why it correlates with no package and no OS.
+    #
+    # THIS PROJECT HAS ALREADY SOLVED THIS EXACT HAZARD ONCE: mgmt/diskprep.cmd selects the
+    # install target BY SIZE, not by DiskID, because "WinPE's enumeration order is NOT guaranteed
+    # to match the installed OS's". Same bug, same place, one fence over.
+    #
+    # SELECT BY IDENTITY. Measured on a live guest 2026-09-14 - the serial number carries the Xen
+    # vbd index, and Location's Target matches it:
+    #     #0 80GB MBR Target 0 sn=0000   root      (xvda)
+    #     #1 20GB GPT Target 1 sn=0001   private   (xvdb)
+    #     #2 10GB RAW Target 2 sn=0002   volatile  (xvdc)
+    # so sn='0001' names the private volume whatever Number Windows gave it. NOT "the largest RAW
+    # disk": private and volatile are both RAW on a fresh guest and their relative sizes are
+    # configuration, not invariant - picking by size could format the volatile volume.
+    #
+    # Only ever touches a disk that is still RAW, so an already-prepared guest is left alone.
+    if (($fc.states.Keys -contains 'MoveUsers') -or ($fc.states.Keys -contains 'PvDriversDisk')) {
+        if (Test-Path -LiteralPath 'Q:\') {
+            Write-Log 'private image: Q:\ present after the MSI'
+        } else {
+            try {
+                $priv = Get-Disk | Where-Object { $_.SerialNumber -eq '0001' } | Select-Object -First 1
+                if (-not $priv) {
+                    $priv = Get-Disk | Where-Object { $_.Location -match 'Target 1 :' } | Select-Object -First 1
+                }
+                if (-not $priv) {
+                    Write-Log 'private image: Q:\ absent and NO disk carries the private vbd index (sn 0001 / Target 1)' 'WARN'
+                } elseif ($priv.PartitionStyle -ne 'RAW') {
+                    Write-Log ("private image: Q:\ absent but disk #$($priv.Number) (the private vbd) is " +
+                               "$($priv.PartitionStyle), not RAW - it is prepared but unmounted, NOT ours to format") 'WARN'
+                } else {
+                    # LOUD, because the number it reports is the evidence for how often the stock
+                    # script's hardcoded -Number 1 misses. A silent recovery teaches nothing.
+                    Write-Log ("private image: Q:\ ABSENT after the MSI - the private vbd is disk " +
+                               "#$($priv.Number), and the stock prepare-private-img.ps1 only ever prepares " +
+                               "disk #1, so it did nothing. Preparing #$($priv.Number) by identity.") 'WARN'
+                    Initialize-Disk -Number $priv.Number -ErrorAction Stop
+                    New-Volume -DiskNumber $priv.Number -DriveLetter Q -FriendlyName 'Qubes Private Image' `
+                               -FileSystem NTFS -ErrorAction Stop | Out-Null
+                    $script:Result.detail.private_image_disk_number = $priv.Number
+                }
+            } catch {
+                Write-Log "private image: preparation threw: $($_.Exception.Message)" 'WARN'
+            }
+            Start-Sleep -Seconds 2
+            if (Test-Path -LiteralPath 'Q:\') {
+                Write-Log 'private image: Q:\ created'
+                $script:Result.detail.private_image = 'created-by-identity-select'
+            } else {
+                Fail ('the private image is not available as Q: after the MSI. MoveUsers would register a ' +
+                      'C:\Users -> Q:\Users redirect with no target and every gui-agent log would be written ' +
+                      'to a volume that does not exist, so this install is NOT usable. Use -NoMoveUsers only ' +
+                      'if you deliberately want the profile left on the root volume.')
+                return
+            }
+        }
+    }
+
+
     $haveHash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
     $wantHash = $null
     $mf = Join-Path $Root 'MANIFEST.json'
