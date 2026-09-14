@@ -16,6 +16,33 @@
 # (IPI shootdown, see FINDINGS), so these must not become tight loops.
 
 STALL_SECS=${STALL_SECS:-300}
+
+# IS THE GUEST EXECUTING? cpu_time is CUMULATIVE, so a domain that runs anything at all increases
+# it; a flat reading across a sample means the domain is not executing. This is the discriminator
+# that separates "busy and silent" from "stopped", and every stall verdict in this harness needs
+# it: they all ask "did the guest answer?" and treat no as dead.
+#
+# VALIDATED on this rig 2026-09-14, same metric, same session, three calls:
+#   WIN11-reinstall "STALLED"      cpu_time +135364 / 20 s  -> busy,   the verdict was FALSE
+#   WIN11-reinstall post-reboot    cpu_time       0 / 20 s  -> FROZEN, the verdict was TRUE
+#   win11-nfy "no answer"          cpu_time  +66935 / 20 s  -> busy,   the verdict was FALSE
+# The first and third cost four FAILs across a campaign and both feature tests, on guests that
+# were working the whole time - one of them for 900 s more before rebooting normally.
+#
+# Returns 0 (moving/unknown) or 1 (FLAT). UNREADABLE COUNTS AS MOVING, deliberately: a stats read
+# that fails must never manufacture a stall, which is the same missing-data-fails-closed rule the
+# rest of this file follows.
+w_cpu_time(){ printf '' | timeout 15 qrexec-client-vm "$1" admin.vm.Stats 2>/dev/null \
+              | tr '\0' '\n' | awk '/^cpu_time$/{getline v; print v; exit}'; }
+w_cpu_moving(){ # $1=vm $2=sample seconds (default 20)
+  local a b
+  a=$(w_cpu_time "$1"); [ -n "$a" ] || return 0
+  sleep "${2:-20}"
+  b=$(w_cpu_time "$1"); [ -n "$b" ] || return 0
+  [ "$a" = "$b" ] && return 1
+  return 0
+}
+
 # Poll cadence for w_install. Default 20 s. A run that is EXPECTED to die early can lower it to
 # catch the last lines before the guest goes - but not below ~5 s: qrexec churn wedged a guest
 # once (IPI shootdown), so this is a floor, not a knob to turn down freely.
@@ -363,16 +390,26 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
           $log "  $lbl: RESULT line present at t+${now}s"; return 0
         fi
       elif [ $(( $(date +%s) - lastchange )) -ge "$STALL_SECS" ]; then
-        st=$(w_screen "$vm" "$lbl-stall" "$dir")
-        $log "  $lbl: STALLED - ${n} log lines unchanged for ${STALL_SECS}s, guest alive, screen=$st"
-        return 4
+        if w_cpu_moving "$vm"; then
+          $log "  $lbl: ${n} log lines unchanged for ${STALL_SECS}s but the guest IS EXECUTING (cpu_time moving) - waiting, not a stall"
+          lastchange=$(date +%s)
+        else
+          st=$(w_screen "$vm" "$lbl-stall" "$dir")
+          $log "  $lbl: STALLED - ${n} log lines unchanged for ${STALL_SECS}s AND cpu_time FLAT, screen=$st"
+          return 4
+        fi
       fi
     else
       if [ $(( $(date +%s) - lastchange )) -ge "$STALL_SECS" ]; then
-        st=$(w_screen "$vm" "$lbl-stall" "$dir")
-        $log "  $lbl: STALLED - unreachable for ${STALL_SECS}s, screen=$st"
-        [ "$st" = RECOVERY ] && return 1
-        return 4
+        if w_cpu_moving "$vm"; then
+          $log "  $lbl: unreachable for ${STALL_SECS}s but the guest IS EXECUTING (cpu_time moving) - waiting, not a stall"
+          lastchange=$(date +%s)
+        else
+          st=$(w_screen "$vm" "$lbl-stall" "$dir")
+          $log "  $lbl: STALLED - unreachable for ${STALL_SECS}s AND cpu_time FLAT, screen=$st"
+          [ "$st" = RECOVERY ] && return 1
+          return 4
+        fi
       fi
     fi
     sleep $POLL_SECS
