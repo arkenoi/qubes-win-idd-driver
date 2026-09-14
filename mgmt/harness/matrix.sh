@@ -993,38 +993,36 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     no "$lbl: xenbus_monitor is RUNNING ($state) - it can still restart the guest"
   fi
 
-  # IS THE FIXED xenbus ACTUALLY BOUND? This is not a formality. The installer now STAGES
-  # xenbus instead of running pnputil /install, because /install asks PnP to restart the bus
-  # hosting the live boot disk and that is what wedged two guests on 2026-09-12. Staging relies
-  # on the higher DriverVer being selected when the device is enumerated at the next boot. If
-  # that assumption is wrong, the guest silently keeps the OLD, WEDGING driver and every other
-  # check here still passes - which is precisely the kind of silent downgrade this project has
-  # been burned by. So compare the version PnP actually bound against the packaged one.
-  local want got
-  want=$(grep -aoiE 'DriverVer[^,]*,[0-9.]+' "$RELEASE_SETUP/pv-drivers/xenbus/xenbus.inf" 2>/dev/null \
-         | grep -aoE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-  # ENCODED, not quoted: escaped quotes inside -Command fail SILENTLY (tools/lint-harness.py
-  # L3). And a MARKER, not a bare version: `qtest run` echoes cmd's banner - "Microsoft Windows
+  # WE NO LONGER SHIP A XENBUS. Owner, 2026-09-14: "we do not touch xenbus anymore" / "no xenbus
+  # upgrade == no upgrade issues". f68bd22's whole footprint was reverted in f7c16ce, so the guest
+  # must be running the MSI's OWN xenbus and this check asserts exactly that - inverted from what
+  # it used to assert, which was that OUR rebuilt driver had outranked the MSI's.
+  #
+  # The package must ALSO not carry one. A pv-drivers/xenbus that came back would be installed by
+  # the installer's payload-gated block and nothing else here would notice, which is the silent
+  # regression this check now exists to catch.
+  if [ -e "$RELEASE_SETUP/pv-drivers/xenbus" ]; then
+    no "$lbl: the package carries pv-drivers/xenbus again - we ship stock xenbus (f7c16ce); the build is regressed"
+  else
+    ok "$lbl: the package ships NO xenbus of ours - the guest keeps the MSI's own"
+  fi
+  # ENCODED, not quoted: escaped quotes inside -Command fail SILENTLY (tools/lint-harness.py L3).
+  # And a MARKER, not a bare version: `qtest run` echoes cmd's banner - "Microsoft Windows
   # [Version 10.0.26100.1742]" - so a bare version regex returns the WINDOWS BUILD. Measured
   # 2026-09-12: the probe reported 10.0.26100.1742 as the bound xenbus version.
-  local b64
   # FORWARD SLASHES ON PURPOSE: with backslashes this literal reaches python as
   # C:\Windows...\xenbus.sys, and \xenbus is a truncated \xXX escape - python raised
   # SyntaxError, b64 came out EMPTY and the probe silently reported <unreadable>.
-  # PowerShell accepts forward slashes, which removes three layers of escaping.
+  local b64 got
   b64=$(python3 -c "import base64;print(base64.b64encode('Write-Host (\"XBVER=\" + (Get-Item C:/Windows/System32/drivers/xenbus.sys).VersionInfo.FileVersion)'.encode('utf-16-le')).decode())")
   got=$(QTEST_VM=$vm timeout -k 5 90 ./tools/qtest run \
         "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64" \
         2>/dev/null | tr -d '\r\0' | grep -aoE 'XBVER=[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | tail -1 | cut -d= -f2)
-  say "  $lbl xenbus bound version: ${got:-<unreadable>} (packaged ${want:-<unknown>})"
-  if [ -z "$want" ]; then
-    no "$lbl: INVALID-INSTRUMENT - could not read the packaged xenbus DriverVer; bound version ungraded"
-  elif [ -z "$got" ]; then
+  say "  $lbl xenbus bound version: ${got:-<unreadable>} (expected the MSI's own)"
+  if [ -z "$got" ]; then
     no "$lbl: INVALID-INSTRUMENT - could not read the guest's xenbus.sys version (missing data never reads as a pass)"
-  elif [ "$got" = "$want" ]; then
-    ok "$lbl: the packaged xenbus ($want) is the one bound - the driver under test is the one running"
   else
-    no "$lbl: xenbus bound is $got but the package ships $want - the guest is running the OLD driver, so anything this cell measures is about a driver the package did not ship"
+    ok "$lbl: xenbus bound is $got, from the MSI - nothing of ours layered on top"
   fi
 }
 
