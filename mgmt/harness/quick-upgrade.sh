@@ -324,6 +324,24 @@ grun "cmd /c echo $E2E_MARK >> $GLOG & del /f /q C:\\qwt-install.log 2>nul & ech
 # contains both PRESENT and ABSENT - a bare `grep | head -1` reads PRESENT off the echo every
 # time and can never fail. Strip the echo first, then take the guest's own answer.
 seen=$(grun "cmd /c findstr /c:\"$E2E_MARK\" $GLOG >nul 2>&1 && echo PRESENT || echo ABSENT" 60 | _shell_echo_strip | grep -ao 'PRESENT\|ABSENT' | tail -1)
+# RETRY WHILE THE GUEST IS EXECUTING. A silent guest is not a dead one: on 2026-09-14 this line
+# got 'no answer' and killed the run as TERMINAL while the guest measured cpu_time +66935 / 20 s -
+# busy, mid-upgrade - and that took BOTH feature tests down with it (crop-before-map then reported
+# "no gui-agent log" against a guest whose upgrade had been abandoned). Same defect as the install
+# watcher's 300 s rule, fixed in eef3c5b: a timeout is not a failure until cpu_time is FLAT.
+if [ "$seen" != PRESENT ]; then
+  for _mtry in 1 2 3 4 5 6; do
+    if w_cpu_moving "$VM" 15; then
+      say "  run marker: no answer yet, but the guest IS EXECUTING (cpu_time moving) - retry $_mtry/6"
+    else
+      say "  run marker: no answer and cpu_time FLAT - the guest is not executing"
+      break
+    fi
+    grun "cmd /c echo $E2E_MARK >> $GLOG & echo MARKED" 60 >/dev/null
+    seen=$(grun "cmd /c findstr /c:\"$E2E_MARK\" $GLOG >nul 2>&1 && echo PRESENT || echo ABSENT" 60 | _shell_echo_strip | grep -ao 'PRESENT\|ABSENT' | tail -1)
+    [ "$seen" = PRESENT ] && { say "  run marker: written on retry $_mtry"; break; }
+  done
+fi
 [ "$seen" = PRESENT ] || finish 1 "TERMINAL: could not write the run marker into $GLOG (got '${seen:-no answer}') - this run could not be told apart from the golden's own install"
 # Seed the LOCAL cumulative tail with the marker: the installer emits ~120 lines, so the marker
 # scrolls out of every 15-line sample and would never reach the tail on its own - the slice

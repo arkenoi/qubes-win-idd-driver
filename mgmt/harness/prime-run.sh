@@ -60,6 +60,19 @@ state(){ qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 # next prime-run recreates it from the sealed base and clears the marker after the clone).
 source mgmt/harness/run-lib.sh
 source mgmt/harness/prime-rescue-lib.sh   # rescue_quiet_step / rescue_noshow_step / rescue_should_fire
+
+# cpu_time is CUMULATIVE - flat across a sample means the domain is not executing. Local copy so
+# prime-run stays independent of e2e-wait.sh, which it does not source. UNREADABLE = MOVING: a
+# failed stats read must never manufacture a stall verdict.
+_pr_cpu_time(){ printf '' | timeout 15 qrexec-client-vm "$1" admin.vm.Stats 2>/dev/null \
+                | tr '\0' '\n' | awk '/^cpu_time$/{getline v; print v; exit}'; }
+_pr_cpu_flat(){ local a b
+  a=$(_pr_cpu_time "$1"); [ -n "$a" ] || return 1
+  sleep "${2:-20}"
+  b=$(_pr_cpu_time "$1"); [ -n "$b" ] || return 1
+  [ "$a" = "$b" ]
+}
+
 job_init prime-run
 job_on_abort(){
   [ -n "${CHURN:-}" ] || return 0
@@ -461,6 +474,20 @@ if [ "$ready" != 1 ]; then
         && log "  diag markers saved to $OUT/diag-markers.log" \
         || log "  NO diag markers - the primer hook never ran the job"
     log "DEADLINE: ${DEADLINE}s elapsed with no qrexec after $restarts restart(s)."
+    # SAY WHICH KIND OF FAILURE THIS IS. cpu_time is cumulative: flat across a sample means the
+    # domain is not executing, moving means it is busy and merely silent. Validated on this rig
+    # 2026-09-14 - three calls, twice busy where a stall verdict was FALSE, once frozen (0/20 s)
+    # where it was TRUE. Without this line the next reader has to re-derive it, and this project
+    # has repeatedly written up a busy guest as a wedge for want of exactly this measurement.
+    if _pr_cpu_flat "$CHURN"; then
+        log "  cpu_time is FLAT: the domain is NOT EXECUTING - a genuine stall, not a slow install."
+        log "  The module-base recorder is armed on this guest, so a RIP captured with dom0"
+        log "  debug-keys d/v will resolve to driver+offset (arm-module-bases.sh --dump)."
+    else
+        log "  cpu_time is MOVING: the guest is EXECUTING and merely silent - this deadline is"
+        log "  probably too short for the phase, NOT a stalled guest. Before calling it a wedge,"
+        log "  drain the qrexec queue (qrexec_timeout 15, probe, restore 6000) and re-measure."
+    fi
     log "  Guest LEFT RUNNING and NOT removed - its state is the evidence (H3.5). Read $OUT."
     exit 2
 fi
