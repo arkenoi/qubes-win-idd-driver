@@ -289,6 +289,18 @@ jobs:
           name: release-idd-driver
           path: dl/idd
 
+      - name: Download PV xenvif artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pv-xenvif
+          path: dl/pv
+
+      - name: Download PV xencons artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pv-xencons
+          path: dl/cons
+
 
       # actions/checkout marks the workspace safe inside a TEMPORARY HOME and then restores
       # HOME, so by this point git reports "detected dubious ownership" and provenance
