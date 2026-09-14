@@ -2052,6 +2052,32 @@ function Invoke-Stage2 {
     }
     Write-Log ("requested features verified LOCAL: " + (($fc.states.Keys | ForEach-Object { "$_=$($fc.states[$_])" }) -join ' '))
 
+    # --- DIAGNOSTIC ONLY: what the disks look like AT INSTALL TIME ------------------------------
+    # NO BEHAVIOUR. This exists because two attempted fixes for the missing private image were
+    # built on the wrong machine state and both had to be reverted (91aafb5/b6d7a4b, bd1af0f).
+    #
+    # The stock prepare-private-img.ps1, run by the MSI's deferred PreparePrivateImg action, is:
+    #     $disk1 = Get-Disk -Number 1
+    #     ... -eq 'XENSRC PVDISK' -or -eq 'QEMU HARDDISK' ... -and PartitionStyle -eq 'RAW'
+    #     if ($match) { Initialize-Disk -Number 1; New-Volume -DiskNumber 1 -DriveLetter Q ... }
+    # so it prepares disk NUMBER 1 and nothing else, and whether that is the private volume
+    # depends on how Windows enumerates three PV disks AT THIS MOMENT - not on a booted guest,
+    # where every measurement so far was taken, and where the answer is different because the
+    # guest is still on the EMULATED path here ("PV boot-disk probe: C: on the PV path = False").
+    #
+    # Record it, change nothing, and build the fix from what this says.
+    try {
+        $qNow = Test-Path -LiteralPath 'Q:\'
+        Write-Log "DISKPROBE: Q:\ present=$qNow"
+        foreach ($d in (Get-Disk -ErrorAction SilentlyContinue | Sort-Object Number)) {
+            Write-Log ("DISKPROBE: #{0} '{1}' {2}GB style={3} bus={4} sn='{5}' loc='{6}'" -f `
+                       $d.Number, $d.FriendlyName, [math]::Round($d.Size/1GB,1),
+                       $d.PartitionStyle, $d.BusType, $d.SerialNumber, $d.Location)
+        }
+    } catch {
+        Write-Log "DISKPROBE: threw: $($_.Exception.Message)" 'WARN'
+    }
+
     $haveHash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
     $wantHash = $null
     $mf = Join-Path $Root 'MANIFEST.json'
