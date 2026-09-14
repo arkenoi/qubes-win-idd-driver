@@ -2078,6 +2078,30 @@ function Invoke-Stage2 {
         Write-Log "DISKPROBE: threw: $($_.Exception.Message)" 'WARN'
     }
 
+    # --- DETECTION ONLY. THIS IS NOT THE FIX. ---------------------------------------------------
+    # Two attempted FIXES for the missing private image were built on machine state that turned out
+    # to be wrong, and both were reverted (91aafb5/b6d7a4b, bd1af0f/ca4275f). The fix stays reverted
+    # until the enumeration from a FAILING run says what to key on. Nothing here creates, initialises
+    # or repairs a disk.
+    #
+    # But the revert took the loud failure out along with the retry, and that is its own defect: with
+    # MoveUsers installed and Q: absent, the MSI registers a C:\Users -> Q:\Users redirect whose
+    # target does not exist, and LogDir is seeded to 'Q:\Qubes Logs' (see the registry seed above),
+    # so every gui-agent log is written to a volume that is not there. That install is not usable,
+    # and without this it is reported as a SUCCESS - the guest is graded green and the breakage is
+    # found later, somewhere else, as a missing log. Missing data fails: say so here, loudly, at the
+    # point the evidence is still on screen.
+    #
+    # Only when MoveUsers was actually requested. With -NoMoveUsers the profile stays on the root
+    # volume by design and an absent private image is not this install's problem.
+    if (-not $NoMoveUsers -and -not (Test-Path -LiteralPath 'Q:\')) {
+        Fail ('the private image is not available as Q: after the MSI, and MoveUsers was installed. ' +
+              'The C:\Users -> Q:\Users redirect and LogDir=Q:\Qubes Logs both point at a volume that ' +
+              'does not exist, so this install is NOT usable. The DISKPROBE lines immediately above ' +
+              'are the enumeration at the moment of failure - that is the evidence the fix is waiting ' +
+              'on. Use -NoMoveUsers only if you deliberately want the profile left on the root volume.')
+    }
+
     $haveHash = (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash.ToLowerInvariant()
     $wantHash = $null
     $mf = Join-Path $Root 'MANIFEST.json'
