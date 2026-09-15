@@ -1,14 +1,17 @@
 #!/bin/bash
 # resolve-rip-selftest.sh - prove the RIP resolver works BEFORE the one shot that needs it.
 #
-# WHY THIS EXISTS. The open P1 stall has produced NINE raw guest RIPs that nobody could resolve,
-# because Windows KASLR re-randomises module bases every boot and nothing recorded them for THAT
-# boot. arm-module-bases.sh now records the table; tools/resolve-guest-rip.py does the arithmetic.
-# Neither has ever been shown to resolve an address - the pipeline is armed and UNTESTED.
+# WHY THIS EXISTS. The pipeline WORKS: on 2026-09-11 it resolved specimen 4's two spin sites
+# (SITE P -> ntoskrnl.exe + 0x2bfd00, SITE Q -> xenbus.sys + 0x1cd5c), which is what the xenbus
+# identification rests on. An earlier version of this header claimed it had "never been shown to
+# resolve an address"; that was wrong and is retracted here.
 #
-# When dom0 `debug-keys d/v` finally catches a spinning vCPU, there is ONE capture. If the resolver
-# is wrong then, the specimen is wasted like the previous nine. So it is exercised here, offline,
-# against synthetic tables in the recorder's exact on-disk format.
+# What ONE happy-path success does not exercise is every path where the tool must REFUSE - and
+# those are what turn a specimen into a WRONG answer rather than no answer. The 09-11 resolution
+# depended on scoping to the right boot BY HAND ("scoped to the LAST PRE-REBOOT boot"); nothing
+# had ever checked that the tool refuses when that scoping is wrong. When dom0 `debug-keys d/v`
+# catches the next spinning vCPU there is ONE capture, so the refusals are exercised here,
+# offline, against synthetic tables in the recorder's exact on-disk format.
 #
 # It checks the three REFUSALS the tool's own docstring promises, because those are what stand
 # between "named the code" and "a plausible-looking lie":

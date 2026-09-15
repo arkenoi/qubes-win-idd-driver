@@ -72,6 +72,16 @@ _pr_cpu_flat(){ local a b
   b=$(_pr_cpu_time "$1"); [ -n "$b" ] || return 1
   [ "$a" = "$b" ]
 }
+# Three-way, and it reports the DELTA - same contract as e2e-wait.sh's w_cpu_state, duplicated here
+# because prime-run deliberately does not source that file. "UNREADABLE" must never be logged as a
+# measurement: callers printed "the guest IS EXECUTING" about domains that returned nothing at all.
+# Echoes "FLAT 0" | "MOVING <delta>" | "UNREADABLE -".
+_pr_cpu_state(){ local a b
+  a=$(_pr_cpu_time "$1"); [ -n "$a" ] || { echo "UNREADABLE -"; return 0; }
+  sleep "${2:-20}"
+  b=$(_pr_cpu_time "$1"); [ -n "$b" ] || { echo "UNREADABLE -"; return 0; }
+  if [ "$a" = "$b" ]; then echo "FLAT 0"; else echo "MOVING $(( b - a ))"; fi
+}
 
 job_init prime-run
 job_on_abort(){
@@ -479,15 +489,26 @@ if [ "$ready" != 1 ]; then
     # 2026-09-14 - three calls, twice busy where a stall verdict was FALSE, once frozen (0/20 s)
     # where it was TRUE. Without this line the next reader has to re-derive it, and this project
     # has repeatedly written up a busy guest as a wedge for want of exactly this measurement.
-    if _pr_cpu_flat "$CHURN"; then
-        log "  cpu_time is FLAT: the domain is NOT EXECUTING - a genuine stall, not a slow install."
-        log "  The module-base recorder is armed on this guest, so a RIP captured with dom0"
-        log "  debug-keys d/v will resolve to driver+offset (arm-module-bases.sh --dump)."
-    else
-        log "  cpu_time is MOVING: the guest is EXECUTING and merely silent - this deadline is"
-        log "  probably too short for the phase, NOT a stalled guest. Before calling it a wedge,"
-        log "  drain the qrexec queue (qrexec_timeout 15, probe, restore 6000) and re-measure."
-    fi
+    # CLASSIFY the failure; do NOT excuse it. qrexec has been dead for the whole DEADLINE here, so
+    # a moving cpu_time is not evidence of health - it is the issues.md P1 fingerprint ("AT LEAST
+    # ONE vCPU BURNING 88-101% OF A CORE sustained ... the 8/8 invariant across all eight captured
+    # events"). The first version of this block printed "NOT a stalled guest" for exactly that
+    # state, which would have handed the next reader a confident wrong diagnosis of the very defect
+    # this rig exists to catch. Corrected in review 2026-09-14 before it ran against a real wedge.
+    _pr_cs=$(_pr_cpu_state "$CHURN")
+    case "${_pr_cs%% *}" in
+      FLAT)
+        log "  cpu_time is FLAT over the sample: the domain is NOT EXECUTING - a FROZEN stall." ;;
+      MOVING)
+        log "  cpu_time ADVANCED ${_pr_cs#* } over the sample while qrexec stayed dead for the whole"
+        log "  deadline. That is EXECUTING-BUT-UNREACHABLE = the P1 SPIN fingerprint, NOT a healthy"
+        log "  guest and NOT merely a short deadline. Do not re-run it away." ;;
+      *)
+        log "  cpu_time UNREADABLE: executing-or-not is UNMEASURED. This is not a claim either way -"
+        log "  do not record it as a busy guest or as a frozen one." ;;
+    esac
+    log "  The module-base recorder is armed on this guest, so a RIP captured with dom0"
+    log "  debug-keys d/v will resolve to driver+offset (arm-module-bases.sh --dump)."
     log "  Guest LEFT RUNNING and NOT removed - its state is the evidence (H3.5). Read $OUT."
     exit 2
 fi

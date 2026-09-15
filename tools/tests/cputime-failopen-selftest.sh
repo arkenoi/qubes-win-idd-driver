@@ -123,5 +123,50 @@ for vm in unreadable-vm frozen-vm busy-vm; do
   fi
 done
 
+# ---- 5. EVERY CALL SITE PASSES A VARIABLE THAT EXISTS IN ITS OWN FILE --------------------------
+# THE GAP THIS CLOSES, found in review 2026-09-14: everything above proves the HELPERS, and a
+# helper can be perfect while a call site is broken. quick-upgrade.sh:334 passed "$VM" in a file
+# whose subject variable is $SUBJECT and which runs under `set -u`, so the moment that branch was
+# reached the harness died with "VM: unbound variable" instead of reaching its verdict - in exactly
+# the path the commit was written to fix. The checks above all passed while that shipped.
+#
+# Every harness here runs under `set -u`, so an undefined variable is not a typo, it is a crash.
+SCAN=mgmt/harness
+if [ "${CPUTIME_DEFECT_UNDEFINED_CALLSITE:-0}" = 1 ]; then
+  # Re-introduce the real 2026-09-14 bug in a COPY: quick-upgrade.sh:334 passed "$VM" in a file
+  # whose variable is $SUBJECT. The scan must catch it.
+  SCAN="$STUB/scan"; mkdir -p "$SCAN"; cp mgmt/harness/*.sh "$SCAN/"
+  sed -i '0,/w_cpu_moving "\$SUBJECT" 15/s//w_cpu_moving "$VM" 15/' "$SCAN/quick-upgrade.sh"
+fi
+for f in "$SCAN"/*.sh; do
+  grep -oE 'w_cpu_(moving|state)[[:space:]]+"\$\{?[A-Za-z_][A-Za-z0-9_]*' "$f" 2>/dev/null \
+  | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*$' | tr -d '${' | sort -u \
+  | while read -r v; do
+      [ -n "$v" ] || continue
+      # Assigned in this file, or a loop variable, or a function parameter it was given.
+      if grep -qE "(^|[^A-Za-z0-9_])${v}=|local .*\b${v}\b|for ${v} |read .*\b${v}\b" "$f"; then
+        echo "OKVAR $f \$$v"
+      else
+        echo "BADVAR $f \$$v"
+      fi
+    done
+done > "$STUB/vars.txt"
+# NOTE: `grep -c` exits 1 when the count is zero, so `|| echo 0` would append a SECOND zero and
+# the integer test below would then fail on "0\n0" - which is exactly how this check first
+# reported a bogus FAIL. Take the count without the fallback; this script runs -uo, not -e.
+bad=$(grep -c '^BADVAR' "$STUB/vars.txt" 2>/dev/null); bad=${bad:-0}
+good=$(grep -c '^OKVAR' "$STUB/vars.txt" 2>/dev/null); good=${good:-0}
+if [ "$bad" -eq 0 ] && [ "$good" -gt 0 ]; then
+  # Counted as distinct (file, variable) pairs, not raw call sites: the same variable used five
+  # times in one file is one thing to verify. 2 pairs today = $vm in e2e-wait.sh, $SUBJECT in
+  # quick-upgrade.sh, covering all five calls.
+  ok "every w_cpu_moving/w_cpu_state call site passes a variable defined in its own file ($good distinct file+var pair(s))"
+elif [ "$bad" -eq 0 ]; then
+  no "VACUOUS - this check found NO call sites at all, so it cannot fail. The scan is broken, not the code."
+else
+  no "CALL SITE PASSES AN UNDEFINED VARIABLE - under set -u this CRASHES the harness:"
+  grep '^BADVAR' "$STUB/vars.txt" | sed 's/^BADVAR /      /'
+fi
+
 echo "=== cputime fail-open selftest: $pass passed, $fail failed ==="
 exit $([ "$fail" -eq 0 ] && echo 0 || echo 1)

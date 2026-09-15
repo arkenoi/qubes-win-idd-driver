@@ -43,6 +43,22 @@ w_cpu_moving(){ # $1=vm $2=sample seconds (default 20)
   return 0
 }
 
+# THREE-WAY, and it reports the DELTA. w_cpu_moving collapses "could not read" into "moving",
+# which is the right VERDICT (a failed read must never manufacture a stall) but a LIE in the log:
+# callers printed "the guest IS EXECUTING" about domains that were Halted and simply returned
+# nothing. A fabricated reading in an evidence log is exactly what this project's rules forbid, so
+# the state and the number are exposed and the caller prints what was actually measured.
+#
+# Echoes one of:  "FLAT <delta>"  |  "MOVING <delta>"  |  "UNREADABLE -"
+# Callers MUST treat UNREADABLE as "not proven stopped" - never as a stall.
+w_cpu_state(){ # $1=vm $2=sample seconds (default 20)
+  local a b
+  a=$(w_cpu_time "$1"); [ -n "$a" ] || { echo "UNREADABLE -"; return 0; }
+  sleep "${2:-20}"
+  b=$(w_cpu_time "$1"); [ -n "$b" ] || { echo "UNREADABLE -"; return 0; }
+  if [ "$a" = "$b" ]; then echo "FLAT 0"; else echo "MOVING $(( b - a ))"; fi
+}
+
 # Poll cadence for w_install. Default 20 s. A run that is EXPECTED to die early can lower it to
 # catch the last lines before the guest goes - but not below ~5 s: qrexec churn wedged a guest
 # once (IPI shootdown), so this is a floor, not a knob to turn down freely.
@@ -390,26 +406,50 @@ w_install(){ # $1=vm $2=deadline $3=label $4=outdir $5=logfn $6=guest-log-path
           $log "  $lbl: RESULT line present at t+${now}s"; return 0
         fi
       elif [ $(( $(date +%s) - lastchange )) -ge "$STALL_SECS" ]; then
-        if w_cpu_moving "$vm"; then
-          $log "  $lbl: ${n} log lines unchanged for ${STALL_SECS}s but the guest IS EXECUTING (cpu_time moving) - waiting, not a stall"
-          lastchange=$(date +%s)
-        else
-          st=$(w_screen "$vm" "$lbl-stall" "$dir")
-          $log "  $lbl: STALLED - ${n} log lines unchanged for ${STALL_SECS}s AND cpu_time FLAT, screen=$st"
-          return 4
-        fi
+        # SAFE TO GATE HERE, unlike the unreachable branch below: this arm runs only when the guest
+        # ANSWERS qrexec (w_alive above), so "executing" really does mean working - a spin-wedged
+        # guest answers nothing. A quiet log on a responsive guest is a long MSI phase.
+        cs=$(w_cpu_state "$vm")
+        case "${cs%% *}" in
+          FLAT)
+            st=$(w_screen "$vm" "$lbl-stall" "$dir")
+            $log "  $lbl: STALLED - ${n} log lines unchanged for ${STALL_SECS}s AND cpu_time FLAT over the sample, screen=$st"
+            return 4 ;;
+          MOVING)
+            $log "  $lbl: ${n} log lines unchanged for ${STALL_SECS}s, qrexec answers and cpu_time ADVANCED ${cs#* } - working, not stalled; clock reset"
+            lastchange=$(date +%s) ;;
+          *)
+            # UNREADABLE is not evidence of anything. It must not manufacture a stall, and it must
+            # not be logged as a measurement either.
+            $log "  $lbl: ${n} log lines unchanged for ${STALL_SECS}s; qrexec answers but cpu_time UNREADABLE - not proven stopped, so not called a stall; clock reset"
+            lastchange=$(date +%s) ;;
+        esac
       fi
     else
       if [ $(( $(date +%s) - lastchange )) -ge "$STALL_SECS" ]; then
-        if w_cpu_moving "$vm"; then
-          $log "  $lbl: unreachable for ${STALL_SECS}s but the guest IS EXECUTING (cpu_time moving) - waiting, not a stall"
-          lastchange=$(date +%s)
-        else
-          st=$(w_screen "$vm" "$lbl-stall" "$dir")
-          $log "  $lbl: STALLED - unreachable for ${STALL_SECS}s AND cpu_time FLAT, screen=$st"
-          [ "$st" = RECOVERY ] && return 1
-          return 4
-        fi
+        # QREXEC IS DEAD HERE. cpu_time CLASSIFIES this stall - it must never SUPPRESS it.
+        #
+        # This branch had the same cpu gate as the reachable one above, and on this branch that
+        # gate is INVERTED against the defect it was supposed to help with. issues.md P1: "AT LEAST
+        # ONE vCPU BURNING 88-101% OF A CORE sustained ... the 8/8 invariant across all eight
+        # captured events". A spinning vCPU MOVES domain cpu_time, so every recorded specimen of
+        # the wedge would have been logged "IS EXECUTING - waiting, not a stall" and run to the
+        # 2400 s deadline instead of being called at 300 s, with the stall screenshot never taken.
+        # Caught in review 2026-09-14 before it ever ran against a real wedge.
+        #
+        # The distinction that actually holds: on the branch ABOVE the guest ANSWERS qrexec, so
+        # "executing" genuinely means working. HERE it does not answer, and dead qrexec + burning
+        # CPU IS the register's fingerprint. So both outcomes are a STALL; cpu_time only says which
+        # kind, which is the thing the next reader needs.
+        st=$(w_screen "$vm" "$lbl-stall" "$dir")
+        cs=$(w_cpu_state "$vm")
+        case "${cs%% *}" in
+          FLAT)   $log "  $lbl: STALLED (FROZEN) - unreachable ${STALL_SECS}s AND cpu_time FLAT over the sample: the domain is NOT EXECUTING. screen=$st" ;;
+          MOVING) $log "  $lbl: STALLED (SPINNING) - unreachable ${STALL_SECS}s while cpu_time ADVANCED ${cs#* } over the sample. Dead qrexec + burning CPU is the issues.md P1 fingerprint (8/8 specimens burn 88-101% of a core). screen=$st" ;;
+          *)      $log "  $lbl: STALLED - unreachable ${STALL_SECS}s; cpu_time UNREADABLE, so executing-or-not is UNMEASURED (not a claim either way). screen=$st" ;;
+        esac
+        [ "$st" = RECOVERY ] && return 1
+        return 4
       fi
     fi
     sleep $POLL_SECS
