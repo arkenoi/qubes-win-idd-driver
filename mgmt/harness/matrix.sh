@@ -558,6 +558,59 @@ accept_grade(){ # $1=vm $2=label - the post-install acceptance battery, REUSED n
 # Run the installer and judge the outcome. Sets CELL_RC.
 # $3 is the INSTALL SOURCE the guest runs install.cmd from - under the release-only model that is
 # the CD drive returned by locate_release_disc (e.g. "E:"), never a pushed directory.
+# PRESERVE THE MSI VERBOSE LOG. The installer runs msiexec with /l*v! to C:\qwt-install.log
+# precisely so a failing install can be read afterwards - and this harness DELETED it at the start
+# of every cell (the CLEARED/MARKED lines in run_install) and never fetched it. Measured 2026-09-14
+# while investigating the missing-Q: defect: across 48 campaign directories there is NO verbose log
+# for ANY run, passing or failing - only the 40-line tails quick-upgrade happens to keep.
+#
+# That matters because the deferred custom action which creates Q: (PreparePrivateImg) reports what
+# it did HERE AND NOWHERE ELSE. Two clean installs have now finished with no Q: (2026-09-13 20:16Z
+# ok:true and silent, 2026-09-14 01:47Z FATAL), both cost a cell, and NEITHER could be diagnosed,
+# because the one artifact that would say whether that action ran had been generated on the guest
+# and thrown away. Fetching it costs a single qrexec call.
+#
+# UNCONDITIONAL, not only on failure: the defect is intermittent (2/31 WIN10-clean) and a PASSING
+# run's log is the control the failing one must be read against. Base64 over qubes.VMShell because
+# the log is not clean ASCII and binary-safe transport is the difference between evidence and
+# mojibake. It records; it GRADES NOTHING - a failure here must never change a cell's verdict.
+fetch_msi_verbose(){ # $1=vm $2=label
+  local vm=$1 lbl=$2 b64
+  # ENCODED, NOT QUOTED. This file's own measured rule (see the xenbus version probe below, and
+  # tools/lint-harness.py L3): escaped quotes inside -Command fail SILENTLY, returning empty output
+  # that reads exactly like "the file was not there". A fetch that cannot tell "no log" from "my
+  # quoting broke" is not evidence. Forward slashes for the same reason the probe below uses them.
+  # BOUNDARY MARKERS so a truncated transfer is detectable rather than decoded into a short file.
+  b64=$(python3 -c "import base64;print(base64.b64encode('''\$ErrorActionPreference='Stop'
+if (Test-Path 'C:/qwt-install.log') {
+  Write-Host 'MSIB64BEGIN'
+  Write-Host ([Convert]::ToBase64String([IO.File]::ReadAllBytes('C:/qwt-install.log')))
+  Write-Host 'MSIB64END'
+} else { Write-Host 'MSIB64ABSENT' }'''.encode('utf-16-le')).decode())")
+  QTEST_VM=$vm timeout -k 5 300 ./tools/qtest run \
+      "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64" \
+      2>/dev/null | tr -d '\r\0' > "$M/$lbl-msi-b64.tmp"
+  if grep -qa MSIB64END "$M/$lbl-msi-b64.tmp" 2>/dev/null \
+     && sed -n '/MSIB64BEGIN/,/MSIB64END/p' "$M/$lbl-msi-b64.tmp" | grep -av 'MSIB64' | tr -d '\n' \
+        | base64 -d > "$M/$lbl-msi-verbose.log" 2>/dev/null \
+     && [ -s "$M/$lbl-msi-verbose.log" ]; then
+    rm -f "$M/$lbl-msi-b64.tmp"
+    say "  $lbl: MSI verbose log preserved ($(wc -c <"$M/$lbl-msi-verbose.log") bytes, $M/$lbl-msi-verbose.log)"
+    # Surface the private-image action's own verdict at once - it is the line the Q: hunt needs.
+    grep -aiE 'PreparePrivateImg|prepare-private-img' "$M/$lbl-msi-verbose.log" 2>/dev/null \
+      | tail -4 | sed "s/^/    $lbl msi: /" || true
+  elif grep -qa MSIB64ABSENT "$M/$lbl-msi-b64.tmp" 2>/dev/null; then
+    rm -f "$M/$lbl-msi-verbose.log" "$M/$lbl-msi-b64.tmp"
+    say "  $lbl: no MSI verbose log on the guest (C:\\qwt-install.log absent) - the guest ANSWERED, this is not a transport failure"
+  else
+    # Distinguished on purpose: an empty or truncated transfer is MY failure, not the guest's, and
+    # must not be recorded as "there was no log". The raw capture is kept so it can be told apart.
+    rm -f "$M/$lbl-msi-verbose.log"
+    say "  $lbl: MSI verbose log NOT retrieved (transfer empty/truncated, raw kept at $M/$lbl-msi-b64.tmp) - a failure in this cell cannot be diagnosed from it"
+  fi
+  return 0
+}
+
 run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cmd) $4=extra-args
   local vm=$1 lbl=$2 src=$3 extra=${4:-}
   # Clear BOTH logs. The MSI verbose log lives at a fixed path and survives from earlier installs,
@@ -681,6 +734,9 @@ run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cm
   PROBE_PID=$!
   w_install "$vm" 2400 "$lbl" "$M" say "$GLOG"; CELL_RC=$?
   kill ${PROBE_PID:-0} 2>/dev/null
+
+  fetch_msi_verbose "$vm" "$lbl"
+
   case $CELL_RC in
     0) say "  $lbl: install reported a RESULT" ;;
     1) no "$lbl: guest went to the recovery screen DURING the install" ;;
@@ -1100,7 +1156,13 @@ cell_clean(){ # $1=pristine-base $2=subject $3=tag
   # is hunting, and burying it as "ungraded" would be the worse error by far.
   local _ptail; _ptail=$(tail -3 "$M/$tag-clean-prime.log" 2>/dev/null | tr '\n' ' ')
   case $prc in
-    0) ok "$tag-clean: prime-run delivered a qrexec-answering installed guest" ;;
+    0) ok "$tag-clean: prime-run delivered a qrexec-answering installed guest"
+       # THE CLEAN CELL IS WHERE THE MISSING-Q: DEFECT ACTUALLY HAPPENS - both events (2026-09-13
+       # 20:16Z, 2026-09-14 01:47Z) were WIN10-clean, and upgrade/reinstall cells cannot exercise
+       # it at all (Q: already exists there, so the stock action's RAW test is false and it
+       # correctly no-ops). The clean path does NOT go through run_install, so the fetch there
+       # would have missed this cell entirely - which is the whole point of putting it here too.
+       fetch_msi_verbose "$vm" "$tag-clean" ;;
     1) case "$_ptail" in
          *"refusing, these are not Halted"*|*"could not create"*)
            no "$tag-clean: INVALID-RIG - prime-run refused before starting (not a product result): $(printf '%s' "$_ptail" | cut -c1-120)" ;;
