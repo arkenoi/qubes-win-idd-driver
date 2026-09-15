@@ -598,6 +598,28 @@ run_install(){ # $1=vm $2=label $3=install-source (drive/dir carrying install.cm
   echo "$E2E_MARK" >> "$M/$lbl-install.tail"
   say "  $lbl: run marker $E2E_MARK"
 
+  # ARM THE MODULE-BASE RECORDER HERE, BEFORE THE INSTALL - not only after it.
+  #
+  # There is a second arming call in the post-install path (search "module-base recorder armed"),
+  # and it is TOO LATE for the cell that actually wedges. WIN11-reinstall has stalled twice
+  # (2026-09-12, and 2026-09-14 08:44) INSIDE this function; cell_reinstall does not reach the
+  # post-install arming until line ~1120 returns. So the cell most likely to wedge was the one
+  # guaranteed to be unarmed when it did, and the 09-14 stall produced the ninth unresolvable RIP
+  # despite the wiring being present.
+  #
+  # Here is the right place: every install-running cell (reinstall/upgrade/seeded/stock) funnels
+  # through run_install, and the marker write immediately above has just PROVEN qrexec answers, so
+  # arming cannot be defeated by an unreachable guest. The recorder installs an ONSTART task, so
+  # arming once also covers every later boot - including the post-install reboot, which is where
+  # the stall actually lands.
+  #
+  # Records evidence, grades nothing: a failure here must never change a cell's verdict.
+  if VM="$vm" OUT="$M/modbases-$lbl" ./mgmt/harness/arm-module-bases.sh >>"$M/$lbl-armlog.txt" 2>&1; then
+    say "  $lbl: module-base recorder armed BEFORE the install (a stall in here will resolve to driver+offset)"
+  else
+    say "  $lbl: module-base recorder NOT armed before the install - a stall in here leaves a raw, unresolvable RIP"
+  fi
+
   # ARM THE PREMATURE-REBOOT DIALOG WATCHER, through the install.
   # "premature reboot dialogs are gone" is an acceptance criterion, and until now NOTHING in these
   # cells looked for the dialog: the xenbus_monitor checks measure the MECHANISM (service disabled,
