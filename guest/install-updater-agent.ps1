@@ -60,21 +60,123 @@ if (-not (Test-Path $src)) { throw "relay source not found at $src" }
 # under it - the pass dies 0x80072EFD through a dead proxy and dom0 gets no availability answer until
 # the next 6-hourly scan. qubes-windows-update.ps1 serialises its passes on this mutex; take it here
 # too, so a running pass finishes first and one starting later yields (its scan uses WaitOne(0)).
-$updMutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
-$haveUpdMutex = $false
-try {
-    $haveUpdMutex = $updMutex.WaitOne(0)
-    if (-not $haveUpdMutex) {
-        Log 'an updater pass holds Global\QubesWindowsUpdate - waiting for it (up to 15 min) before touching the relay or its tasks'
-        $haveUpdMutex = $updMutex.WaitOne(900000)   # same bound as the updater's real-work passes
-    }
-} catch [System.Threading.AbandonedMutexException] { $haveUpdMutex = $true }   # holder died; we own it now
-if (-not $haveUpdMutex) {
-    # Not a licence to go quiet: a pass holding the mutex past 15 min is hung or past its own
-    # ExecutionTimeLimit. Say so and proceed (the previous behaviour) rather than leave an upgraded
-    # guest on the old relay/tasks forever.
-    Log 'ANOMALY: Global\QubesWindowsUpdate still held after 15 min - proceeding to replace the relay/tasks under a stuck updater pass'
+#
+# HOW LONG TO WAIT is the holder's property, not a constant of ours. Until 2026-09-16 this waited
+# 15 min - a figure copied from the updater's "real work waits 15 min", which is how long a pass
+# waits to START, not how long it may RUN - then declared the holder hung and PROCEEDED: relay
+# stopped, tasks rewritten, under a pass that QubesWindowsUpdateRun/Download allow to run for PT2H
+# (findings/issues.md installer audit, item 16). A 40-minute cumulative-update install was the
+# ordinary case being misread as the anomaly. Now:
+#   - the bound is the LONGEST ExecutionTimeLimit among the tasks that can hold the mutex: read from
+#     each task AS REGISTERED (on an upgrade, the previous install's - the very pass being waited
+#     on) and from the limits this script is about to register, whichever is longer, plus a grace
+#     for the scheduler's own stop-then-terminate at that limit;
+#   - the wait is the kernel wait on the mutex, not a poll: it returns the moment the holder
+#     releases, and a holder the scheduler kills at its limit ABANDONS the mutex, which wakes the
+#     waiter with AbandonedMutexException (= ours now);
+#   - a mutex still held past that bound is a FAILURE, thrown as QWTUPDMUTEXHELD: nothing below
+#     runs, the installer's catch records the error, a direct run exits non-zero. There is no
+#     "proceed anyway" branch to take.
+# ONE source for the limits this script registers (steps 3, 4, 7); the bound reads them too.
+$ScanTaskLimit = 'PT20M'   # QubesWindowsUpdateScan
+$PassTaskLimit = 'PT2H'    # QubesWindowsUpdateRun and QubesWindowsUpdateDownload
+# At its limit a task is first asked to stop and only then terminated (AllowHardTerminate=true) -
+# minutes, not instantaneous. The grace covers that; it is not a second deadline.
+$UpdMutexGraceSeconds = 300
+
+# ---- UPDMUTEX-WAIT-BEGIN   (tools/tests/updmutex-test.ps1 extracts this region by these markers)
+function ConvertFrom-TaskDuration {
+    # ISO-8601 duration as Task Scheduler writes it (PT2H, PT20M, PT1H30M, PT90S, P1DT2H) -> seconds.
+    # $null for anything else (including a bare P/PT with no component); PT0S (= no limit) comes
+    # back as 0 and the caller treats it as such.
+    param([string]$Duration)
+    if (-not $Duration) { return $null }
+    $m = [regex]::Match($Duration.Trim(), '^P(?=\d|T\d)(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$')
+    if (-not $m.Success) { return $null }
+    $s = [long]0
+    if ($m.Groups[1].Success) { $s += [long]$m.Groups[1].Value * 86400 }
+    if ($m.Groups[2].Success) { $s += [long]$m.Groups[2].Value * 3600 }
+    if ($m.Groups[3].Success) { $s += [long]$m.Groups[3].Value * 60 }
+    if ($m.Groups[4].Success) { $s += [long]$m.Groups[4].Value }
+    return $s
 }
+
+function Get-UpdaterPassBoundSeconds {
+    # The longest ExecutionTimeLimit among the tasks that can hold Global\QubesWindowsUpdate: each
+    # task AS REGISTERED (-ReadTaskLimit, the one Windows dependency and what the offline test
+    # replaces; $null = not registered) and -DeclaredLimits (what this script is about to register).
+    # Longer wins - the holder is either the old task or a pass of the code we ship, and both
+    # ceilings are known. Returns Seconds (0 = nothing found), Source (task name or 'declared'),
+    # and the tasks whose limit was PT0S (Unbounded) or unreadable (Unparsed), for the caller to say.
+    param(
+        [string[]]$TaskNames = @('QubesWindowsUpdateScan', 'QubesWindowsUpdateRun', 'QubesWindowsUpdateDownload'),
+        [scriptblock]$ReadTaskLimit = {
+            param($tn)
+            $t = Get-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
+            if ($t) { [string]$t.Settings.ExecutionTimeLimit } else { $null }
+        },
+        [string[]]$DeclaredLimits = @()
+    )
+    $seconds = [long]0; $source = 'none'; $unbounded = @(); $unparsed = @()
+    foreach ($tn in $TaskNames) {
+        $lim = & $ReadTaskLimit $tn
+        if ($null -eq $lim) { continue }                          # not registered (fresh install)
+        $s = ConvertFrom-TaskDuration $lim
+        if ($null -eq $s) { $unparsed += "$tn=$lim"; continue }
+        if ($s -eq 0)     { $unbounded += $tn; continue }         # PT0S: no limit, so no bound from it
+        if ($s -gt $seconds) { $seconds = $s; $source = $tn }     # GUARD:registered
+    }
+    foreach ($lim in $DeclaredLimits) {
+        $s = ConvertFrom-TaskDuration $lim
+        if ($null -eq $s) { $unparsed += "declared=$lim"; continue }
+        if ($s -gt $seconds) { $seconds = $s; $source = 'declared' }
+    }
+    return [pscustomobject]@{ Seconds = $seconds; Source = $source; Unbounded = $unbounded; Unparsed = $unparsed }
+}
+
+function Wait-UpdaterMutex {
+    # Own Global\QubesWindowsUpdate or throw. -WaitOne is the mutex primitive (one arg: ms; returns
+    # bool; raises AbandonedMutexException when the holder died = ours now). -Bound is evaluated only
+    # once the mutex is seen held and returns Get-UpdaterPassBoundSeconds' object. Returns $true
+    # ONLY: a mutex still held past bound+grace is thrown as QWTUPDMUTEXHELD, so no caller can take
+    # a "proceed anyway" branch - the installer's catch records the error, a direct run exits 1.
+    param([scriptblock]$WaitOne, [scriptblock]$Bound, [int]$GraceSeconds, [scriptblock]$Log)
+    $have = $false
+    try { $have = & $WaitOne 0 } catch [System.Threading.AbandonedMutexException] { return $true }
+    if ($have) { return $true }
+    $b = & $Bound
+    if (@($b.Unparsed).Count -gt 0) {
+        & $Log ('updater task limit(s) unreadable, contributing nothing to the bound: ' + (@($b.Unparsed) -join ', '))
+    }
+    if (@($b.Unbounded).Count -gt 0) {
+        & $Log ('updater task(s) registered with NO ExecutionTimeLimit (PT0S), contributing nothing to the bound: ' + (@($b.Unbounded) -join ', '))
+    }
+    if ($b.Seconds -le 0) {
+        $msg = 'QWTUPDMUTEXHELD: Global\QubesWindowsUpdate is held and no ExecutionTimeLimit is registered or declared to bound the wait - refusing to replace the relay/tasks under a live updater pass; nothing was changed'
+        & $Log $msg
+        throw $msg
+    }
+    $boundMs = ([long]$b.Seconds + $GraceSeconds) * 1000   # GUARD:ownlimit
+    if ($boundMs -gt [int]::MaxValue) { $boundMs = [long][int]::MaxValue }   # WaitOne takes an Int32 (24.8 days)
+    & $Log ('an updater pass holds Global\QubesWindowsUpdate - waiting for it to finish, bounded by its own ExecutionTimeLimit: {0} s ({1}) + {2} s grace = {3} s' -f $b.Seconds, $b.Source, $GraceSeconds, [int]($boundMs / 1000))
+    try { $have = & $WaitOne ([int]$boundMs) }
+    catch [System.Threading.AbandonedMutexException] {
+        & $Log 'the updater pass ended without releasing Global\QubesWindowsUpdate (stopped at its limit) - it is ours now'
+        return $true
+    }
+    if (-not $have) {
+        $msg = ('QWTUPDMUTEXHELD: Global\QubesWindowsUpdate still held after {0} s, past the holder''s own ExecutionTimeLimit ({1} s from {2}) - refusing to stop the relay or rewrite the updater tasks under a live pass; nothing was changed. Let the pass finish (schtasks /query /tn QubesWindowsUpdateRun /v) or end it (schtasks /end /tn <task>) and rerun' -f [int]($boundMs / 1000), $b.Seconds, $b.Source)
+        & $Log $msg
+        throw $msg   # GUARD:failloud
+    }
+    return $have
+}
+# ---- UPDMUTEX-WAIT-END
+
+$updMutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
+$haveUpdMutex = Wait-UpdaterMutex -WaitOne { param($ms) $updMutex.WaitOne($ms) } `
+    -Bound { Get-UpdaterPassBoundSeconds -DeclaredLimits @($ScanTaskLimit, $PassTaskLimit) } `
+    -GraceSeconds $UpdMutexGraceSeconds -Log { param($m) Log $m }
 # Every failure below throws. Without this the installer process (which runs us with `&`) would keep
 # the mutex until it exits - skipping every scan and stalling dom0-driven passes for that long.
 trap { if ($haveUpdMutex -and $updMutex) { try { $updMutex.ReleaseMutex() } catch { } }; break }
@@ -132,7 +234,7 @@ $xml = @"
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <StartWhenAvailable>true</StartWhenAvailable>
-    <ExecutionTimeLimit>PT20M</ExecutionTimeLimit>
+    <ExecutionTimeLimit>$ScanTaskLimit</ExecutionTimeLimit>
     <AllowHardTerminate>true</AllowHardTerminate>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
@@ -164,7 +266,7 @@ $runXml = @"
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <StartWhenAvailable>false</StartWhenAvailable>
-    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>
+    <ExecutionTimeLimit>$PassTaskLimit</ExecutionTimeLimit>
     <AllowHardTerminate>true</AllowHardTerminate>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
