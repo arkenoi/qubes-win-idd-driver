@@ -943,6 +943,25 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
     return 1
   fi
   say "  $lbl RESULT: $(echo "$j" | cut -c1-300)"
+  # ok AND THE ERROR-CLASS DETAIL FLAGS, through the one shared checker (mgmt/harness/result-flags.py).
+  # This battery graded upgrade_mode, the agent hash and autologon and NEVER looked at `ok` - and
+  # nothing anywhere read detail.*: the installer records a failed IDD activation, a failed xenvif
+  # upgrade, a dead gui-agent or an un-primed PV NIC there (idd_failed, pv_xenvif='failed rc=N',
+  # gui_restored='FAILED: ...', pvnic_prime_failed) under ok:true, and the cell graded GREEN (audit
+  # 2026-09-16, the systemic finding). EVERY trailer in the slice is judged, not only the last: the
+  # last one can be stage-1's (see the hash check below for the same trap), and a stage-1 flag would
+  # otherwise be invisible. The flag list lives in result-flags.py only.
+  local rf rrc
+  rf=$(grep -a '^=== RESULT === {' "$M/$lbl-final.cur" | python3 "$HERE/mgmt/harness/result-flags.py" - 2>&1); rrc=$?
+  case $rrc in
+    0) ok "$lbl: installer RESULT ok:true and no error-class detail flags ($(echo "$rf" | grep -c '^\[') trailer(s) judged)" ;;
+    1) no "$lbl: installer RESULT is NOT green - $(echo "$rf" | tail -1)" ;;
+    2) # The trailer exists but its JSON does not parse. Mandated carve-out (2026-09-16): a
+       # missing/unparseable RESULT keeps today's grading, which here never judged ok or flags at
+       # all - so nothing is graded, and the line says so rather than passing quietly.
+       say "  $lbl: result-flags.py could NOT judge the RESULT ($(echo "$rf" | tail -1)) - ok/flags NOT graded (unparseable trailer, today's behaviour)" ;;
+    *) no "$lbl: result-flags.py failed (rc=$rrc: $(echo "$rf" | tail -1)) - INVALID-INSTRUMENT, the RESULT was not judged" ;;
+  esac
   # JUDGE THE BINARY, NOT THE LAST LOG LINE. This used to demand installed_gui_agent_sha256 in
   # whatever trailer happened to be last. On the two-stage path the last trailer can be
   # stage1-prepare, which does not install the agent and therefore has no such field - so a cell

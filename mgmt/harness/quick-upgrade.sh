@@ -505,7 +505,22 @@ if [ -z "$j" ]; then
   no "no installer RESULT trailer after the run marker - INVALID-INSTRUMENT (the install never concluded, or the log was not readable)"
 else
   log "RESULT: $(echo "$j" | cut -c1-300)"
-  echo "$j" | grep -qa '"ok":true' && ok "installer reports ok:true" || no "installer reports ok:false - $(echo "$j" | grep -ao '"error":"[^"]*"' | head -1)"
+  # ok AND THE ERROR-CLASS DETAIL FLAGS, through the one shared checker. '"ok":true' alone graded a
+  # guest with a failed IDD activation, a failed xenvif upgrade or a dead gui-agent GREEN: the
+  # installer records those in detail.* (idd_failed, pv_xenvif='failed rc=N', gui_restored='FAILED:
+  # ...') and nothing here read them (audit 2026-09-16, the systemic finding). EVERY trailer after
+  # the run marker is judged, not only the last - on the two-stage path the last one is stage-2's
+  # but a stage-1 flag would otherwise be invisible. The flag list lives in result-flags.py only.
+  rf=$(grep -a '^=== RESULT === {' "$OUT/final.cur" | python3 "$HERE/mgmt/harness/result-flags.py" - 2>&1); rrc=$?
+  case $rrc in
+    0) ok "installer RESULT: ok:true and no error-class detail flags ($(echo "$rf" | grep -c '^\[') trailer(s) judged)" ;;
+    1) no "installer RESULT is NOT green - $(echo "$rf" | tail -1)" ;;
+    2) # The trailer exists but its JSON does not parse. Mandated carve-out (2026-09-16): a
+       # missing/unparseable RESULT keeps today's grading - the field greps below - and says so.
+       log "result-flags.py could NOT judge the RESULT ($(echo "$rf" | tail -1)) - grading ok by the field grep as before"
+       echo "$j" | grep -qa '"ok":true' && ok "installer reports ok:true (field grep; flags NOT judged)" || no "installer reports ok:false - $(echo "$j" | grep -ao '"error":"[^"]*"' | head -1)" ;;
+    *) no "result-flags.py failed (rc=$rrc: $(echo "$rf" | tail -1)) - INVALID-INSTRUMENT, the RESULT was not judged" ;;
+  esac
   um=$(echo "$j" | grep -ao '"upgrade_mode":"[^"]*"' | head -1 | cut -d'"' -f4)
   [ "$um" = in-place-msi-major-upgrade ] && ok "installer branch = $um" || no "installer branch = '${um:-none}', expected in-place-msi-major-upgrade (INVALID-PRECONDITION if uninstall-first/reinstall)"
   rpv=$(echo "$j" | grep -ao '"package_version":"[^"]*"' | head -1 | cut -d'"' -f4)
