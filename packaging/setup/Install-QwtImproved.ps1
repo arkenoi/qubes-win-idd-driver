@@ -3045,7 +3045,21 @@ function Invoke-Stage2 {
                 $trailer = @($tw) | Where-Object { $_ -match '=== RESULT === changed=(\d+) failed=(\d+)' } | Select-Object -Last 1
                 if ($trailer -match 'changed=(\d+) failed=(\d+)') {
                     $script:Result.detail.app_hwaccel = "changed=$($Matches[1]) failed=$($Matches[2])"
-                    if ([int]$Matches[2] -gt 0) { Write-Log "app HW-accel pre-tweak: $($Matches[2]) writes failed (non-fatal)" 'WARN' }
+                    if ([int]$Matches[2] -gt 0) {
+                        # THE HIVE GUARD SPEAKS THROUGH THIS TRAILER (audit #2, fixed in b473ba4): failed>0 now also
+                        # means "the autologon user's hive never appeared / the account did not resolve / a hive was
+                        # left locked" - i.e. the FIRST LOGON WAS STILL IN FLIGHT or a profile is damaged, which is
+                        # exactly the temp-profile / no-shell outcome. That is an ERROR-CLASS flag the final ok=
+                        # write consults, not a WARN. A plain HKLM policy-write failure (Set-Reg) is still the WARN
+                        # it was; the two are told apart by the script's own FAIL/SKIP lines, not by the count.
+                        $guardLines = @($tw | Where-Object { "$_" -match '^(FAIL|SKIP)\s' -and "$_" -match 'loaded hive|resolve to a SID|PROFILE LEFT LOCKED|NOT loaded' })
+                        if ($guardLines.Count -gt 0) {
+                            foreach ($gl in $guardLines) { Write-Log "  app HW-accel: $gl" 'ERROR' }
+                            $script:Result.detail.app_hwaccel_failed = $true
+                        } else {
+                            Write-Log "app HW-accel pre-tweak: $($Matches[2]) writes failed (non-fatal)" 'WARN'
+                        }
+                    }
                 } else {
                     $script:Result.detail.app_hwaccel = 'ran, no result trailer'
                 }
@@ -3073,6 +3087,18 @@ function Invoke-Stage2 {
             $tr = @($no) | Where-Object { $_ -match '=== RESULT === changed=(\d+) failed=(\d+)' } | Select-Object -Last 1
             if ($tr -match 'changed=(\d+) failed=(\d+)') {
                 $script:Result.detail.session_lock = "changed=$($Matches[1]) failed=$($Matches[2])"
+                # Same hive guard as the HW-accel tweak (audit #2/#15, b473ba4): failed>0 with the guard's own
+                # FAIL/SKIP lines means a logon was in flight or a hive was left locked - error-class, logged,
+                # consulted by the final ok= write. This site used to record the trailer and log NOTHING.
+                if ([int]$Matches[2] -gt 0) {
+                    $guardLines = @($no | Where-Object { "$_" -match '^(FAIL|SKIP)\s' -and "$_" -match 'loaded hive|resolve to a SID|PROFILE LEFT LOCKED|NOT loaded' })
+                    if ($guardLines.Count -gt 0) {
+                        foreach ($gl in $guardLines) { Write-Log "  session-lock: $gl" 'ERROR' }
+                        $script:Result.detail.session_lock_failed = $true
+                    } else {
+                        Write-Log "session-lock prevention: $($Matches[2]) write(s) failed (non-fatal)" 'WARN'
+                    }
+                }
             } else { $script:Result.detail.session_lock = 'ran, no result trailer' }
         } catch {
             Write-Log "session-lock prevention failed: $($_.Exception.Message) (non-fatal)" 'WARN'
@@ -3803,6 +3829,8 @@ public static class QdbPrime {
     if ("$($dd.pnp_settle)" -like 'unavailable*')                   { $errFlags += 'pnp_settle' }
     if ("$($dd.private_disk_gate)" -like 'WARN*')                   { $errFlags += 'private_disk_gate' }
     if ($dd.relocate_dir_disarmed -eq $true)                        { $errFlags += 'relocate_dir_disarmed' }
+    if ($dd.app_hwaccel_failed -eq $true)                           { $errFlags += 'app_hwaccel_failed' }
+    if ($dd.session_lock_failed -eq $true)                          { $errFlags += 'session_lock_failed' }
     if ("$($dd.rpc_overlay_failed)" -ne '' -and "$($dd.rpc_overlay_failed)" -ne 'False') { $errFlags += 'rpc_overlay_failed' }
     if ($errFlags.Count -gt 0) {
         Write-Log ("stage 2 ran to completion but recorded error-class flags: " + ($errFlags -join ', ') +

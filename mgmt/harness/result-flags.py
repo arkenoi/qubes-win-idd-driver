@@ -139,7 +139,11 @@ ERROR_FLAGS = [
     ('swept_binaries_lost',     nonempty,                                 'L771: the old gui binaries could not be put back on the Fail path'),
     ('shutdown_rc',             lambda v: v is not None and _s(v) != '0', 'L1369 FATAL: shutdown.exe /s refused, the guest is not powering off'),
     # -- private volume / overlays / helpers
-    ('relocate_dir_disarmed',   lambda v: v is True or starts('failed')(v), 'L2394 WARN disarmed because Q: is absent / L2405 WARN could NOT disarm'),
+    # -- user-hive guard (audit #2/#15, b473ba4): failed>0 WITH the guard's own FAIL/SKIP lines = the
+    #    first logon was still in flight or a profile was left locked = temp profile / no shell
+    ('app_hwaccel_failed',      is_true,                                  'disable-hw-accel call site ERROR: hive guard reported a logon in flight / hive left locked'),
+    ('session_lock_failed',     is_true,                                  'disable-session-lock call site ERROR: hive guard reported a logon in flight / hive left locked'),
+    ('relocate_dir_disarmed',   lambda v: v is True or starts('failed')(v),'L2394 WARN disarmed because Q: is absent / L2405 WARN could NOT disarm'),
     ('bind_dirs',               starts('installed-no-private-volume', 'error:'), 'L3275 WARN Q: absent at install time / L3279 WARN install threw'),
     ('rpc_overlay_failed',      nonempty,                                 'L3134 WARN: these rpc files stayed STOCK on the guest'),
     ('qrexec_bins',             lambda v: 'FAILED=' in _s(v) or _s(v) == 'target-missing', 'L3205 WARN binaries left STOCK / L3209 WARN bin dir missing'),
