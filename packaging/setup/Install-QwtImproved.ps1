@@ -1081,7 +1081,9 @@ function Invoke-Stage1 {
     # xenbus_monitor reboot prompt during stage 1's uninstall of a previous QWT, long before
     # stage 2 runs. A stopped, disabled monitor cannot prompt (and cannot silently reboot
     # mid-uninstall either); stage 1 performs its own power-off when it is actually time.
-    Disable-XenbusMonitor -Why 'stage 1: before uninstall of a previous QWT' | Out-Null
+    # -FatalIfSurvives: a monitor that outlives this stop can prompt or silently reboot mid-uninstall,
+    # and stage 1 used to WARN and carry on into exactly that. (audit 2026-09-16 #21)
+    Disable-XenbusMonitor -Why 'stage 1: before uninstall of a previous QWT' -FatalIfSurvives | Out-Null
 
     # --- certificates -------------------------------------------------------------
     # Root  : makes the self-signed publisher chain valid.
@@ -1197,6 +1199,21 @@ function Invoke-AutologonArming {
             if (-not $alUser) {
                 $cs = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
                 if ($cs) { $alUser = $cs.Split('\')[-1] }
+            }
+            # NO SESSION DEPENDENCY. Win32_ComputerSystem.UserName is the INTERACTIVE user, which is
+            # $null under the SYSTEM stage task the unattended install actually runs as - so this
+            # used to decide 'not armed' silently, on a guest where autologon is the lockout defence.
+            # The account Windows will autologon is what the registry says it is; read that, and if
+            # nothing resolves, that is a FAILURE to arm, said loudly (stage 1 already Fails on
+            # $script:AutologonArmFailed), with -AutologonUser as the override. (audit 2026-09-16 #8)
+            if (-not $alUser) {
+                $wl = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' -ErrorAction SilentlyContinue
+                if ($wl -and $wl.DefaultUserName) { $alUser = "$($wl.DefaultUserName)".Split('\')[-1]; Write-Log "autologon account resolved from Winlogon\DefaultUserName: '$alUser' (no interactive session to read)" }
+            }
+            if (-not $alUser) {
+                $script:AutologonArmFailed = ('cannot resolve the account to arm autologon for: no interactive user (SYSTEM context) and no ' +
+                                              'Winlogon\DefaultUserName - pass -AutologonUser; a guest without autologon comes back invisible in dom0')
+                Write-Log $script:AutologonArmFailed 'ERROR'
             }
             # "Was it passed" is a fact about the command line, not the value: an unbound [string]
             # parameter is '' and the old `$null -eq` test never saw the difference, so the prompt
@@ -1460,8 +1477,9 @@ function Classify-PrivateDiskState {
     if ($QPresent) { return @{ state = 'READY-Q-PRESENT'; why = 'Q: already exists; the stock action will correctly no-op' } }
     $Disks = @($Disks)
     $d1 = @($Disks | Where-Object { [int]$_.Number -eq 1 }) | Select-Object -First 1
+    # A disk with no Number yet is not "elsewhere", it is not enumerated - wait for it, do not refuse.
     $privRawElsewhere = @($Disks | Where-Object {
-        [int]$_.Number -ne 1 -and $PrivateSerials -contains "$($_.SerialNumber)".Trim() -and "$($_.PartitionStyle)" -eq 'RAW' })
+        $null -ne $_.Number -and [int]$_.Number -ne 1 -and $PrivateSerials -contains "$($_.SerialNumber)".Trim() -and "$($_.PartitionStyle)" -eq 'RAW' })
     if ($null -eq $d1) {
         if ($privRawElsewhere.Count -gt 0) {
             $p = $privRawElsewhere[0]
@@ -1486,7 +1504,18 @@ function Classify-PrivateDiskState {
         return @{ state = 'MISNUMBERED'; why = "disk #1 is '$($d1.FriendlyName)' sn '$sn' ($($d1.PartitionStyle)), while the private disk (sn '$($p.SerialNumber)') is RAW at #$($p.Number)"; disk1 = $d1 }
     }
     if ($nameOk -and $raw) {
-        return @{ state = 'READY-SERIAL-UNKNOWN'; why = "disk #1 is RAW and named '$($d1.FriendlyName)' (stock's precondition holds) but its serial '$sn' matches neither the private nor the volatile list - volatile cross-check NOT applied; record this serial scheme"; disk1 = $d1 }
+        # ONLY when the scheme is genuinely unknown for the WHOLE table. Review 2026-09-16 (A2): with
+        # root QM00001 at #0, an extra RAW 'QEMU HARDDISK' with an unlisted serial at #1, and the
+        # private disk not yet enumerated, this branch returned READY-SERIAL-UNKNOWN and msiexec
+        # would have formatted the extra disk as Q: - the exact wrong-disk outcome the header says
+        # this prevents. If ANY disk in the table carries a known private/volatile/root serial, the
+        # scheme is known, #1 is an interloper, and the right answer is to WAIT for the private disk.
+        $knownSerials = @($PrivateSerials) + @($VolatileSerials) + @('QM00001', '0000')
+        $schemeKnown = @($Disks | Where-Object { $knownSerials -contains "$($_.SerialNumber)".Trim() }).Count -gt 0
+        if ($schemeKnown) {
+            return @{ state = 'NOT-READY'; why = "disk #1 is RAW and named '$($d1.FriendlyName)' but its serial '$sn' is unlisted while sibling disks use the known scheme - an interloper at #1; waiting for the private disk to enumerate"; disk1 = $d1 }
+        }
+        return @{ state = 'READY-SERIAL-UNKNOWN'; why = "disk #1 is RAW and named '$($d1.FriendlyName)' (stock's precondition holds) and NO disk in the table matches a known serial scheme - volatile cross-check NOT applied; record this scheme"; disk1 = $d1 }
     }
     return @{ state = 'NOT-READY'; why = "disk #1 is '$($d1.FriendlyName)' sn '$sn' ($($d1.PartitionStyle)) and the private disk is not enumerated yet"; disk1 = $d1 }
 }
@@ -1513,7 +1542,9 @@ function Wait-PrivateDiskReady {
             Write-Log ("DISKGATE[{0}]: #{1} '{2}' {3}GB style={4} bus={5} sn='{6}' loc='{7}'" -f $tag,
                        $d.Number, $d.FriendlyName, [math]::Round($d.Size/1GB, 1), $d.PartitionStyle, $d.BusType, $d.SerialNumber, $d.Location)
         }
-        if (@($disks).Count -eq 0) { Write-Log "DISKGATE[$tag]: Get-Disk returned NO disks" }
+        # AutomationNull arriving through param() becomes a literal $null, and @($null).Count is 1 -
+        # so the old `@($disks).Count -eq 0` could never fire on the live path (review 2026-09-16).
+        if ($null -eq $disks -or @($disks).Count -eq 0) { Write-Log "DISKGATE[$tag]: Get-Disk returned NO disks" }
     }
     $snap = {
         try { Update-HostStorageCache -ErrorAction SilentlyContinue } catch { }
@@ -1543,13 +1574,30 @@ function Wait-PrivateDiskReady {
             }
             if ($c.state -ne 'NOT-READY') {
                 & $dump $c.state $disks
+                # -NoMoveUsers is documented "recovery use only" - the mode for a guest whose disk state
+                # is already odd, and the post-msiexec Q: check deliberately tolerates an absent private
+                # image there. Refusing here would take recovery mode away exactly when it is needed
+                # (review 2026-09-16, B1). VOLATILE-AT-1 still refuses: an ephemeral Q: with
+                # LogDir=Q:\Qubes Logs is a defect whether or not profiles land on it.
+                if ($NoMoveUsers -and $c.state -ne 'VOLATILE-AT-1') {
+                    Write-Log ("private-disk gate: $($c.state) ($($c.why)) - PROCEEDING because -NoMoveUsers is recovery mode; " +
+                               'the stock action may silently skip and Q: may be absent afterwards, which that mode tolerates') 'WARN'
+                    $script:Result.detail.private_disk_gate = "WARN $($c.state) (NoMoveUsers) t=${el}s checks=$checks events=$events"
+                    return $false
+                }
                 $script:Result.detail.private_disk_gate = "FAIL $($c.state) t=${el}s checks=$checks events=$events"
                 Fail ("private-disk gate: REFUSING to run msiexec - $($c.state): $($c.why). The stock PreparePrivateImg " +
                       "would have $(if ($c.state -eq 'VOLATILE-AT-1') { 'formatted the VOLATILE disk as Q: and lost every profile at the next reboot' } else { 'silently done nothing and the install would have graded ok:true with no Q:' }). " +
-                      'The DISKGATE lines above are the disk table at this instant - the evidence four earlier failures never produced.')
+                      'The DISKGATE lines above are the disk table a few seconds BEFORE the action would have read it, from this process - ' +
+                      'the closest evidence yet, not the decision instant itself.')
             }
             if ($el -ge $TimeoutSec) {
                 & $dump 'deadline' $disks
+                if ($NoMoveUsers) {
+                    Write-Log "private-disk gate: private disk not ready after ${TimeoutSec}s - PROCEEDING because -NoMoveUsers is recovery mode" 'WARN'
+                    $script:Result.detail.private_disk_gate = "WARN NOT-READY-deadline (NoMoveUsers) t=${el}s checks=$checks events=$events"
+                    return $false
+                }
                 $script:Result.detail.private_disk_gate = "FAIL NOT-READY t=${el}s checks=$checks events=$events"
                 Fail ("private-disk gate: the private disk never became RAW disk #1 within ${TimeoutSec}s ($($c.why); $checks checks, $events storage events). " +
                       'A guest that cannot present its private volume in that time is not one to install onto. The DISKGATE lines above are the table at the deadline.')
@@ -1655,8 +1703,20 @@ function Invoke-Stage2 {
     # blanket delay (now 30 s, since the named waits below carry the boot-variable part) hoped to
     # timer was guessing at. Both return at once when the condition already holds, so a manual
     # stage 2 pays nothing here.
-    [void](Wait-PnpSettled -TimeoutSec 300)
-    [void](Wait-WindowsInstallerIdle -TimeoutSec 600)
+    # A TIMED-OUT SETTLE IS A FAILED PRECONDITION, not a WARN. PnP still installing devices five
+    # minutes into a boot is itself a broken-guest signal, and msiexec would then install the PV
+    # drivers onto an unsettled PnP stack. 'unavailable' (the cfgmgr32 P/Invoke could not load) is
+    # left as the logged WARN it was: refusing every install on a compile hiccup would be a false
+    # red of our own. (audit 2026-09-16 #6; both callers used to [void] this result)
+    if (-not (Wait-PnpSettled -TimeoutSec 300) -and "$($script:Result.detail.pnp_settle)" -like 'timeout*') {
+        Fail 'PnP still had device installs in flight after 300 s - refusing to run msiexec onto an unsettled PnP stack; a guest busy that long before the install is not one to install onto'
+    }
+    # Ten minutes of a held Global\_MSIExecute is not a transient; starting msiexec into it yields
+    # 1603/1618 and, on the uninstall/vc_redist paths that have no retry, a Fail that clears the
+    # resume task. Refuse here, with the reason, instead of proceeding into that. (audit #6)
+    if (-not (Wait-WindowsInstallerIdle -TimeoutSec 600)) {
+        Fail 'another Windows Installer operation held Global\_MSIExecute for 600 s - refusing to start msiexec into a busy installer; this is not a transient'
+    }
 
     # Certs again: stage 1 may have run from the CD in a previous boot, and re-adding is
     # idempotent. Cheap insurance against a half-prepared machine - and NOT optional: on a guest
@@ -1953,6 +2013,16 @@ function Invoke-Stage2 {
     # (measured), and that alone is enough to make Windows Installer skip them.
     Stop-QwtRuntime
     $script:Result.detail.leftover_sweep = Remove-QwtLeftovers -BinDir $binDir -Files $deliver
+    # A STUCK LEFTOVER REFUSES msiexec. The sweep's 'stuck' list used to be stored and never read:
+    # a same-named gui-agent.exe left in place is exactly the case Windows Installer's file-
+    # versioning rule keeps the OLD binary while reporting 3010 success - the defect this file's
+    # own header describes. The sha256 check later catches it, but only after MsiInstallCompleted,
+    # when the broken install is already registered. Refuse before, with the names. (audit #7)
+    if (@($script:Result.detail.leftover_sweep.stuck).Count -gt 0) {
+        Fail ("REFUSING to run msiexec: the leftover sweep could not move aside " +
+              (@($script:Result.detail.leftover_sweep.stuck) -join ', ') +
+              " - Windows Installer would keep the OLD binary under a 3010 'success'; this is the stale-binary state the sweep exists to prevent")
+    }
     # The uninstall takes HKLM\Software\Invisible Things Lab\Qubes Tools with it, so the
     # seeded gui-agent defaults have to be rewritten before the MSI's AppSearch runs.
     Set-GuiAgentRegistryDefaults
@@ -2110,8 +2180,20 @@ function Invoke-Stage2 {
     # Readiness, not a timer: see the two helpers. Then 1618 (another installation in progress) is
     # a BOUNDED RETRY, not a Fail - at T+60 s into a boot it is the common transient, and a Fail
     # here used to kill the unattended install for good.
-    [void](Wait-PnpSettled -TimeoutSec 300)
-    [void](Wait-WindowsInstallerIdle -TimeoutSec 600)
+    # A TIMED-OUT SETTLE IS A FAILED PRECONDITION, not a WARN. PnP still installing devices five
+    # minutes into a boot is itself a broken-guest signal, and msiexec would then install the PV
+    # drivers onto an unsettled PnP stack. 'unavailable' (the cfgmgr32 P/Invoke could not load) is
+    # left as the logged WARN it was: refusing every install on a compile hiccup would be a false
+    # red of our own. (audit 2026-09-16 #6; both callers used to [void] this result)
+    if (-not (Wait-PnpSettled -TimeoutSec 300) -and "$($script:Result.detail.pnp_settle)" -like 'timeout*') {
+        Fail 'PnP still had device installs in flight after 300 s - refusing to run msiexec onto an unsettled PnP stack; a guest busy that long before the install is not one to install onto'
+    }
+    # Ten minutes of a held Global\_MSIExecute is not a transient; starting msiexec into it yields
+    # 1603/1618 and, on the uninstall/vc_redist paths that have no retry, a Fail that clears the
+    # resume task. Refuse here, with the reason, instead of proceeding into that. (audit #6)
+    if (-not (Wait-WindowsInstallerIdle -TimeoutSec 600)) {
+        Fail 'another Windows Installer operation held Global\_MSIExecute for 600 s - refusing to start msiexec into a busy installer; this is not a transient'
+    }
     # THE PRIVATE-DISK GATE - last precondition before msiexec, and the only one of these three that
     # cannot proceed on hope: it returns only on a READY state and Fails, with the disk table, on
     # every other. The MSI's own PreparePrivateImg is a single cold `Get-Disk -Number 1` with
@@ -2119,17 +2201,27 @@ function Invoke-Stage2 {
     # establishes FIRST, waiting on the storage stack's own change event if the disk has not been
     # enumerated yet, and refusing outright if #1 is the volatile disk, mis-numbered, or non-RAW.
     # 4 of 28 clean Win10 installs (2026-09-10..14) finished with no Q: through that action; 3 graded
-    # ok:true. The gate's DISKGATE lines are the decision-instant table none of them recorded.
-    [void](Wait-PrivateDiskReady -TimeoutSec 120)
+    # ok:true. The gate's DISKGATE lines are the table a few seconds BEFORE the action reads it, from
+    # this process - the closest evidence any of them left, not the decision instant itself.
+    #
+    # RE-GATED ON EVERY ATTEMPT, inside the loop: the 1618 retry below sleeps and then waits up to
+    # 600 s on the installer mutex before looping, so a READY taken before the first attempt can be
+    # ten minutes stale by the second (review 2026-09-16, C2).
     $msiTries = 0
     while ($true) {
         $msiTries++
+        [void](Wait-PrivateDiskReady -TimeoutSec 120)
         $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList $msiArgs
         if ($p.ExitCode -eq 1618 -and $msiTries -lt 4) {
             Write-Log "msiexec returned 1618 (another installation in progress) on attempt $msiTries - waiting for Windows Installer and retrying" 'WARN'
             $script:Result.detail.msiexec_1618_retries = $msiTries
             Start-Sleep -Seconds 15
-            [void](Wait-WindowsInstallerIdle -TimeoutSec 600)
+            # Ten minutes of a held Global\_MSIExecute is not a transient; starting msiexec into it yields
+    # 1603/1618 and, on the uninstall/vc_redist paths that have no retry, a Fail that clears the
+    # resume task. Refuse here, with the reason, instead of proceeding into that. (audit #6)
+    if (-not (Wait-WindowsInstallerIdle -TimeoutSec 600)) {
+        Fail 'another Windows Installer operation held Global\_MSIExecute for 600 s - refusing to start msiexec into a busy installer; this is not a transient'
+    }
             continue
         }
         break
@@ -2145,7 +2237,9 @@ function Invoke-Stage2 {
 
     # Re-assert AFTER the install too: the MSI lays the service down fresh (auto-start, new
     # service key), losing both the disable and the AutoReboot value written before it.
-    Disable-XenbusMonitor -Why 'after msiexec: MSI re-registered the service'
+    # -FatalIfSurvives here as at the two sites before msiexec: a monitor that outlives this stop is
+    # the process that reboots the guest mid-stage-2, and the WARN-and-continue this was let it.
+    Disable-XenbusMonitor -Why 'after msiexec: MSI re-registered the service' -FatalIfSurvives
 
     # The MSI has just (re)registered QdbDaemon/QrexecAgent with no failure actions, so this has
     # to run AFTER it, every time - see Set-QubesServiceRecovery for the measurement.
@@ -2667,6 +2761,21 @@ function Invoke-Stage2 {
         # down BOTH, reporting FAILED for an activation that had succeeded.
         $iddInstance = ''
         $existingIdd = @(Get-IddPnpDevices -HardwareId $iddHwId)
+        # DO NOT CLASSIFY A PRE-EXISTING NODE FROM ONE COLD READ. pnputil /add-driver /install just
+        # ran and may still be (re)binding the live node; a transient non-zero code read once, cold,
+        # sent it down the 'broken -> devcon remove' path, and on an UPGRADE the VGA is already
+        # disabled, so the next boot could come up with NO display adapter at all. The NEW node is
+        # already polled to code 0 further down; the pre-existing one was not. Same bounded poll
+        # here, before deciding anything. (audit 2026-09-16 #5 - plausible, not measured)
+        if ($existingIdd.Count -gt 0 -and -not ($existingIdd | Where-Object { $_.ConfigManagerErrorCode -eq 0 })) {
+            Write-Log "pre-existing IDD node(s) read non-zero right after pnputil - polling up to 30 s for a settled code 0 before classifying"
+            $settleDeadline = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $settleDeadline) {
+                Start-Sleep -Seconds 2
+                $existingIdd = @(Get-IddPnpDevices -HardwareId $iddHwId)
+                if ($existingIdd | Where-Object { $_.ConfigManagerErrorCode -eq 0 }) { Write-Log 'pre-existing IDD node settled to code 0'; break }
+            }
+        }
         $dev = $existingIdd | Where-Object { $_.ConfigManagerErrorCode -eq 0 } | Select-Object -First 1
         if ($dev) {
             $iddInstance = $dev.PNPDeviceID
@@ -2854,9 +2963,25 @@ function Invoke-Stage2 {
             Write-Log "disabling emulated VGA adapter: $($vgaDev.InstanceId) ($($vgaDev.FriendlyName)) - the display may switch or blank until the reboot"
             Disable-PnpDevice -InstanceId $vgaDev.InstanceId -Confirm:$false -ErrorAction Stop | Out-Null
         }
+        # READ IT BACK. Disable-PnpDevice returning without error proves the request was accepted,
+        # not that the in-use primary adapter is now code 22 - a disable can be pended to the next
+        # reboot. Code 22 was read BEFORE (to skip a re-disable) and never AFTER, so on the
+        # no-reboot path the watchdog was restarted onto TWO live display adapters - the
+        # active-second-monitor seamless breakage - with gui_restored=true, ok=true. (audit #4)
+        $vgaAfter = Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
+                    Where-Object { $_.PNPDeviceID -eq $vgaDev.InstanceId } | Select-Object -First 1
+        $vgaCode = if ($vgaAfter) { [int]$vgaAfter.ConfigManagerErrorCode } else { -1 }
         # ROOT\BASICDISPLAY appearing after the reboot is EXPECTED (Basic Display DRIVER
         # fallback on another adapter) and harmless - see the block comment above.
-        $script:Result.detail.idd_driver = "activated: device up ($($dev.PNPDeviceID)), VGA adapter disabled ($($vgaDev.InstanceId))"
+        if ($vgaCode -eq 22) {
+            $script:Result.detail.idd_driver = "activated: device up ($($dev.PNPDeviceID)), VGA adapter disabled ($($vgaDev.InstanceId), code 22 read back)"
+        } else {
+            Write-Log ("VGA adapter $($vgaDev.InstanceId) is NOT disabled after Disable-PnpDevice (ConfigManagerErrorCode=$vgaCode, expected 22) - " +
+                       'the disable is pending a reboot; NOT recording it as done, and a reboot is now REQUIRED before the gui-agent may run') 'ERROR'
+            $script:Result.detail.idd_driver = "activated-PENDING-REBOOT: device up ($($dev.PNPDeviceID)), VGA disable did not take in-session (code $vgaCode)"
+            $script:Result.detail.idd_vga_disable_pending = $true
+            $script:Result.reboot_needed = $true
+        }
         $script:Result.detail.idd_vga_instance_id = $vgaDev.InstanceId
         $script:Result.detail.idd_recovery = ('if the guest has no usable display after the reboot, run over qrexec: ' +
             "Enable-PnpDevice -InstanceId '$($vgaDev.InstanceId)' -Confirm:" + '$false' +
@@ -3522,7 +3647,16 @@ public static class QdbPrime {
         try { & schtasks.exe /Query /TN QubesPvNic *>$null } catch { }
         $pvnicTaskPresent = ($LASTEXITCODE -eq 0)
         $global:LASTEXITCODE = 0
-        if (-not $primeOk -or -not $pvnicTaskPresent) {
+        # THE LATCH MUST NOT BE ARMED OVER A FAILED xenvif UPGRADE. pnputil's exit code is taken as
+        # the xenvif outcome above, but the bind is async and reboot-deferred; if that upgrade
+        # FAILED, unplugging the emulated NIC at the next boot leaves every AppVM with NO NIC -
+        # stock rev-4 xenvif cannot bind xennet - and the RESULT said ok:true. (audit 2026-09-16 #3)
+        $xenvifFailed = ("$($script:Result.detail.pv_xenvif)" -like 'failed*')
+        if ($xenvifFailed) {
+            Write-Log ("PV NIC unplug latch NOT armed: the xenvif upgrade FAILED ($($script:Result.detail.pv_xenvif)) - " +
+                       'unplugging the emulated NIC with a driver that cannot bind xennet would leave every AppVM with NO NIC') 'ERROR'
+        }
+        if (-not $primeOk -or -not $pvnicTaskPresent -or $xenvifFailed) {
             Write-Log ("PV NIC unplug latch NOT armed: priming ok=$primeOk, QubesPvNic task present=$pvnicTaskPresent - arming without the " +
                        'applier would put every AppVM on APIPA silently') 'ERROR'
             $script:Result.detail.pvnic_latch = "not-armed: prime_ok=$primeOk task_present=$pvnicTaskPresent"
@@ -3644,7 +3778,32 @@ public static class QdbPrime {
         $script:Result.detail.uac_prompt_on_secure_desktop = $psd
     } catch { Write-Log "could not seed PromptOnSecureDesktop: $($_.Exception.Message)" 'WARN' }
 
-    $script:Result.ok = $true
+    # ok MEANS ok. This line used to write ok=true UNCONDITIONALLY, while the warn-and-continue
+    # paths above recorded their failures only in detail.* flags that no harness reads - so an
+    # install with a failed IDD activation, a failed xenvif upgrade, a dead gui-agent or an
+    # un-primed PV NIC graded GREEN (audit 2026-09-16, the systemic finding). The install DID run
+    # to completion, so this is NOT the Fail path (no teardown, no resume-task clearing, the
+    # reboot logic below is unchanged): ok simply reflects the truth, and the RESULT names why.
+    $errFlags = @()
+    $dd = $script:Result.detail
+    if ($dd.idd_failed -eq $true)                                   { $errFlags += 'idd_failed' }
+    if ($dd.idd_vga_disable_pending -eq $true)                      { $errFlags += 'idd_vga_disable_pending' }
+    if ($dd.pvnic_prime_failed -eq $true)                           { $errFlags += 'pvnic_prime_failed' }
+    if ("$($dd.gui_quiesce_failed)" -ne '')                         { $errFlags += 'gui_quiesce_failed' }
+    if ("$($dd.gui_restored)" -like 'FAILED*')                      { $errFlags += 'gui_restored' }
+    if ("$($dd.pv_xenvif)" -like 'failed*')                         { $errFlags += 'pv_xenvif' }
+    if ("$($dd.pnp_settle)" -like 'unavailable*')                   { $errFlags += 'pnp_settle' }
+    if ("$($dd.private_disk_gate)" -like 'WARN*')                   { $errFlags += 'private_disk_gate' }
+    if ($dd.relocate_dir_disarmed -eq $true)                        { $errFlags += 'relocate_dir_disarmed' }
+    if ("$($dd.rpc_overlay_failed)" -ne '' -and "$($dd.rpc_overlay_failed)" -ne 'False') { $errFlags += 'rpc_overlay_failed' }
+    if ($errFlags.Count -gt 0) {
+        Write-Log ("stage 2 ran to completion but recorded error-class flags: " + ($errFlags -join ', ') +
+                   " - this RESULT is ok:false; the flags name what is broken") 'ERROR'
+        $script:Result.ok = $false
+        $script:Result.error = "completed with error-class flags: " + ($errFlags -join ', ')
+    } else {
+        $script:Result.ok = $true
+    }
     $script:Result.reboot_needed = $true
     # TERMINAL STATE: the -Auto resume task is retired here (and in Fail), not at stage-2 entry -
     # see the note at the top of this function.
@@ -3686,8 +3845,22 @@ public static class QdbPrime {
     if ($script:GuiQuiesced -and -not ($Auto -and $RebootAtEnd)) {
         try {
             Start-Service -Name 'QubesGuiWatchdog' -ErrorAction Stop
-            Write-Log 'gui-agent restarted: this stage quiesced it and is NOT rebooting from here'
-            $script:Result.detail.gui_restored = $true
+            # VERIFY THE OUTCOME, not the cmdlet: Start-Service returning proves the WATCHDOG started,
+            # not that it launched gui-agent.exe. Bounded process-arrival wait; the flag is written
+            # from what is actually running. (audit 2026-09-16 #17)
+            $agentUp = $false
+            $wdDeadline = (Get-Date).AddSeconds(30)
+            while ((Get-Date) -lt $wdDeadline) {
+                if (Get-Process -Name 'gui-agent' -ErrorAction SilentlyContinue) { $agentUp = $true; break }
+                Start-Sleep -Seconds 2
+            }
+            if ($agentUp) {
+                Write-Log 'gui-agent restarted: this stage quiesced it and is NOT rebooting from here (gui-agent.exe verified running)'
+                $script:Result.detail.gui_restored = $true
+            } else {
+                Write-Log 'QubesGuiWatchdog started but gui-agent.exe is NOT running 30 s later - THIS QUBE WILL MAP NO WINDOWS until it is rebooted' 'ERROR'
+                $script:Result.detail.gui_restored = 'FAILED: watchdog started, gui-agent.exe not running after 30 s'
+            }
         } catch {
             Write-Log ("could not restart QubesGuiWatchdog: $($_.Exception.Message) - THIS QUBE WILL " +
                        'MAP NO WINDOWS until it is rebooted') 'ERROR'

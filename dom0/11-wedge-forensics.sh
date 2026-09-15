@@ -78,12 +78,16 @@ xl debug-keys q 2>/dev/null; sleep 2
 xl dmesg | tail -200 > "$OUT/xl-dmesg-domains.txt" 2>&1
 
 # 3b. vCPU REGISTERS - THE RIP. This is the capture every stall specimen has been missing.
-#    `d` dumps every vCPU's registers (RIP/RSP/RFLAGS ...) for every domain into the ring;
-#    `v` prints the VMX/SVM state incl. the last exit reason. Nine wedges were recorded with
-#    g/e/q only, so each one's spin site stayed a guess; with the per-boot module bases that
-#    arm-module-bases.sh records, a RIP here resolves to driver+offset via
-#    tools/resolve-guest-rip.py. Same ring discipline as `g` above: clear-and-keep first, and
-#    a SECOND dump a few seconds later so a spin (same RIP twice) can be told from progress.
+#    `d` is dump_registers: it dumps each PHYSICAL CPU's state, and prints a guest's registers
+#    only for a vCPU that is CURRENTLY RUNNING on that pCPU. A spinning vCPU is therefore caught
+#    (it is running); a vCPU that is blocked or descheduled - the waiting side of a lock spin -
+#    is NOT dumped by any key. So "no RIP for dNvM" here means "not running at that instant",
+#    never "not spinning". `v` (vmcs_dump) prints VMX state incl. the last exit reason for EVERY
+#    HVM domain x vCPU, which on a dom0 with many qubes can wrap the ring by itself. Nine wedges
+#    were recorded with g/e/q only, so each one's spin site stayed a guess; with the per-boot
+#    module bases arm-module-bases.sh records, a RIP here resolves to driver+offset via
+#    tools/resolve-guest-rip.py. Same ring discipline as `g` above: clear first, and a SECOND
+#    dump a few seconds later so a spin (same RIP twice) can be told from progress.
 xl dmesg -c > "$OUT/xl-dmesg-before-regs.txt" 2>&1
 xl debug-keys d 2>/dev/null; sleep 2
 xl dmesg > "$OUT/xl-dmesg-vcpu-regs-1.txt" 2>&1
@@ -95,9 +99,16 @@ xl dmesg -c >/dev/null 2>&1
 xl debug-keys v 2>/dev/null; sleep 2
 xl dmesg > "$OUT/xl-dmesg-vmx.txt" 2>&1
 # Pull this domain's RIPs out so the next reader does not have to: one line per vCPU per dump.
+# Xen's _show_registers prints "RIP:    %04x:[<%016lx>]" (xen/arch/x86/x86_64/traps.c) for HVM
+# guests too, under a "guest state (dNvM)" header from dump_execstate. The first version of this
+# used 'RIP:\s*[0-9a-f:]+\s*[0-9a-f]+', which stops at the '[<' and captured ONLY THE CS SELECTOR
+# ("RIP:    0010") - every rip file would have been useless to tools/resolve-guest-rip.py, which
+# is the whole point of the block. And an unanchored "d$DOMID" matched d5 inside d51v0 and inside
+# any GPR hex, letting foreign RIPs land here and silence the CAPTURE-INCOMPLETE marker. Both
+# caught in review 2026-09-16 before any capture was taken with it.
 for n in 1 2; do
-    grep -A40 "d$DOMID" "$OUT/xl-dmesg-vcpu-regs-$n.txt" 2>/dev/null \
-        | grep -oE 'RIP:\s*[0-9a-f:]+\s*[0-9a-f]+' | head -8 > "$OUT/rip-d$DOMID-$n.txt"
+    grep -A24 -E "guest state \(d${DOMID}v[0-9]+\)" "$OUT/xl-dmesg-vcpu-regs-$n.txt" 2>/dev/null \
+        | grep -oE 'RIP:\s*[0-9a-f]+:\[<[0-9a-f]+>\]' | head -8 > "$OUT/rip-d$DOMID-$n.txt"
 done
 if [ ! -s "$OUT/rip-d$DOMID-1.txt" ]; then
     echo "WARNING: no RIP lines for d$DOMID in the register dump - the ring wrapped or the key" \

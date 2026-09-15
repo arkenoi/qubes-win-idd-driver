@@ -73,6 +73,12 @@ Expect 'PV path, ROOT holds #1, private RAW at #0 (mis-numbered)'         @( (D 
 Expect 'PV path, VOLATILE holds #1'                                       @( (D 0 'XENSRC PVDISK' 80 'MBR' '0000'), (D 1 'XENSRC PVDISK' 10 'RAW' '0002'), (D 2 'XENSRC PVDISK' 20 'RAW' '0001') ) $false 'VOLATILE-AT-1'
 Expect 'empty table (Get-Disk returned nothing)'                          @()   $false 'NOT-READY'
 Expect 'serial with surrounding whitespace still matches'                 @( (D 1 'QEMU HARDDISK' 20 'RAW' ' QM00002 ') ) $false 'READY'
+# Review 2026-09-16 (A2): an UNLISTED-serial RAW stock-named disk at #1 while a SIBLING carries the known
+# scheme is an interloper, not an unknown scheme - must WAIT, never proceed (stock would format it as Q:).
+Expect 'interloper at #1 (unlisted serial) with root QM00001 at #0 -> NOT-READY'   @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'QEMU HARDDISK' 20 'RAW' 'QM00004') ) $false 'NOT-READY'
+# Review (B2): a disk whose Number is not assigned yet is not-yet-enumerated - wait, do not call it misnumbered.
+$nullNum = [pscustomobject]@{ Number = $null; FriendlyName = 'QEMU HARDDISK'; Size = [int64](20 * 1GB); PartitionStyle = 'RAW'; SerialNumber = 'QM00002'; BusType = 'x'; Location = 'x' }
+Expect 'private disk with Number=$null (not yet numbered) -> NOT-READY'     @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), $nullNum ) $false 'NOT-READY'
 Write-Host "=== private-disk gate selftest: $pass passed, $fail failed ==="
 exit $(if ($fail -eq 0) { 0 } else { 1 })
 PS
