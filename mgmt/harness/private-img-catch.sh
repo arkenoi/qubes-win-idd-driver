@@ -3,10 +3,21 @@
 # and keep the install-time DISKPROBE from that run.
 #
 # WHY. The missing-Q: defect is intermittent: the stock prepare-private-img.ps1 prepares
-# `Get-Disk -Number 1` and nothing else, and prime-run attaches an answer stick and a diag stick
-# that add four disks a real guest never has - so whether disk #1 is the private volume is a
-# lottery. Two fixes were written from inference about that lottery and BOTH had to be reverted
+# `Get-Disk -Number 1` and nothing else, so it is fragile by construction. Two fixes were written
+# from inference about WHY #1 might not be the private volume and BOTH had to be reverted
 # (91aafb5/b6d7a4b, bd1af0f). The thing nobody has is the enumeration from a run that FAILED.
+#
+# THE "LOTTERY" CLAIM THIS HEADER USED TO MAKE AS FACT IS NOT SUPPORTED. It said prime-run's two
+# extra sticks push the private volume off index 1. Twelve distinct DISKPROBE runs since then show
+# #1 IS the 20 GB private volume every time, on BOTH the emulated (QEMU/ATA, sn QM00002) and PV
+# (XENSRC/SCSI, sn 0001) paths; the sticks land at #3..#6. Stated as a hypothesis, it is
+# refuted-leaning - do not let a harness comment keep asserting it.
+#
+# AND THE ODDS THIS SCRIPT IS PLAYING ARE BAD. Measured 2026-09-14: 2 failures in 31 WIN10-clean
+# installs (6.5%), 0 in 21 WIN11-clean - and both failures sit inside ONE 5.5-hour window with 0 in
+# the 27 installs outside it. That is a CLUSTER, not a per-install coin toss, so repeating clean
+# installs now is an expensive way to sample the wrong thing: 6 attempts have already run and all 6
+# passed, which at 6.5% means nothing. Prefer finding what changed during that window.
 #
 # The DISKPROBE diagnostic (2774243) now ships and logs every disk at the moment the MSI's action
 # decides. So this does not guess: it runs the cell until the defect shows, then preserves the
