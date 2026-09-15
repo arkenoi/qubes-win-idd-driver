@@ -1551,9 +1551,17 @@ function Wait-PrivateDiskReady {
         @(Get-Disk -ErrorAction SilentlyContinue)
     }
     try {
+        # Q: ALREADY THERE = nothing to gate, and no disk table to fetch. Every upgrade and reinstall
+        # takes this exit; the Get-Disk + cache refresh below costs ~4 s on this rig's guests, so
+        # asking the cheap question first keeps the short-cycle path as fast as it was.
+        if (Test-Path -LiteralPath 'Q:\') {
+            Write-Log 'private-disk gate: Q: already present (upgrade/reinstall) - the stock action will correctly no-op; gate skipped'
+            $script:Result.detail.private_disk_gate = 'READY-Q-PRESENT t=0s checks=0 events=0'
+            return $true
+        }
         # First look BEFORE subscribing. If it is already fine, no subscription is ever made.
         $disks = & $snap; $checks++
-        $c = Classify-PrivateDiskState -Disks $disks -QPresent (Test-Path -LiteralPath 'Q:\')
+        $c = Classify-PrivateDiskState -Disks $disks -QPresent $false
         if ($c.state -notlike 'READY*' -and $c.state -eq 'NOT-READY') {
             try {
                 Register-CimIndicationEvent -Namespace 'root/Microsoft/Windows/Storage' -ClassName 'MSFT_StorageEvent' `
