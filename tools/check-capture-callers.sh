@@ -56,10 +56,17 @@ while IFS= read -r f; do
 # CALLS, not mentions. Docs and comments discuss fullshot constantly and must not trip this; a
 # CALL is an uncommented line in an executable script. Match on an invocation, then drop lines whose
 # first non-space character is '#'.
-done < <(grep -rlE "$PAT_CALL" \
-             --include='*.sh' --exclude-dir=.git --exclude-dir=scratchpad --exclude-dir=evidence \
-             --exclude-dir=instrumentation . 2>/dev/null \
-         | sed 's|^\./||' \
+#
+# ENUMERATE WHAT CAN BE COMMITTED, NOT THE FILESYSTEM. This gate exists to keep captures out of the
+# REPO, and only tracked or staged files can enter it - so the candidate set is `git ls-files`
+# (the index: tracked files plus anything newly `git add`ed). The previous `grep -r .` walked the
+# whole tree and on 2026-09-16 refused a commit for the four ALLOWLISTED callers a second time,
+# because agent worktrees under .claude/worktrees/ (git-ignored via .git/info/exclude, never part
+# of a commit) carried copies at a path prefix the allowlist keys do not match. A false refusal
+# from a gate with no legitimate bypass is how --no-verify starts looking reasonable; fixing the
+# enumeration keeps the gate honest instead. Scratch dirs are excluded by the index for free.
+done < <(git ls-files -z -- '*.sh' 2>/dev/null \
+         | xargs -0 grep -lE "$PAT_CALL" 2>/dev/null \
          | while IFS= read -r c; do grep -qE "$PAT_LINE" "$c" && echo "$c"; done \
          | sort -u)
 
