@@ -92,6 +92,8 @@ $csc = @(Get-ChildItem 'C:\Windows\Microsoft.NET\Framework64' -Filter csc.exe -R
 if (-not $csc) { $fail['netsetup_no_csc'] = 'csc.exe not found' }
 else {
     @'
+// ---- NETSETUP-CS-BEGIN  (tools/tests/pvnic-netsetup-verdict-selftest.sh extracts this source by marker;
+//      it is compiled on the guest by the .NET Framework csc, i.e. C# 5 - no newer syntax)
 using System; using System.Diagnostics; using System.Runtime.InteropServices;
 using System.Collections.Generic;
 using System.ServiceProcess; using System.Net.NetworkInformation; using Microsoft.Win32;
@@ -111,6 +113,16 @@ public class QwtngNetSetup : ServiceBase {
     // connection per 2 s reconcile tick, in a permanent SYSTEM service.
     [DllImport("qubesdb-client.dll", CallingConvention = CallingConvention.Cdecl)]
     static extern void qdb_free(IntPtr p);
+    // PnP presence, for the vif cross-check (audit 2026-09-16 #11). The payload half asks
+    // Get-PnpDevice -PresentOnly; this is the same question to the same configuration manager,
+    // without pulling WMI into a service that runs 8-12 s into boot. No enumerator filter: with
+    // pszFilter NULL and only the PRESENT flag the list is every present device instance ID, so
+    // it cannot fail on a guest where the XENVIF enumerator does not exist yet.
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+    static extern int CM_Get_Device_ID_List_SizeW(out uint len, string filter, uint flags);
+    [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode)]
+    static extern int CM_Get_Device_ID_ListW(string filter, char[] buffer, uint len, uint flags);
+    const uint CM_GETIDLIST_FILTER_PRESENT = 0x00000100;
 
     const string LOG   = @"C:\ProgramData\QubesNetSetup.log";
     const string STAMP = @"C:\ProgramData\QubesNetSetup.applied";
@@ -185,13 +197,145 @@ public class QwtngNetSetup : ServiceBase {
         }
         return pick;
     }
-    static void Netsh(string args) {
+    // Runs netsh and RETURNS ITS VERDICT (audit 2026-09-16 #10: the exit code was never read, and
+    // the WaitForExit(20000) result was not either, so a failed or hung netsh looked like a
+    // successful one). Exit code, or -1 = could not start, -2 = no exit within netshTimeoutMs
+    // (killed). Both streams are captured - netsh explains itself on stdout - and 'detail'
+    // carries the whole thing to the log line and the failure marker.
+    static int netshTimeoutMs = 20000;
+    static int Netsh(string args, out string detail) {
+        detail = "";
+        var sb = new System.Text.StringBuilder();
         try {
             var psi = new ProcessStartInfo("netsh.exe", args);
             psi.UseShellExecute = false; psi.CreateNoWindow = true;
             psi.RedirectStandardOutput = true; psi.RedirectStandardError = true;
-            var pr = Process.Start(psi); pr.WaitForExit(20000);
-        } catch (Exception e) { Log("netsh failed: " + e.Message); }
+            using (var pr = Process.Start(psi)) {
+                pr.OutputDataReceived += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) lock (sb) sb.Append(e.Data.Trim()).Append(' '); };
+                pr.ErrorDataReceived  += delegate(object s, DataReceivedEventArgs e) { if (e.Data != null) lock (sb) sb.Append(e.Data.Trim()).Append(' '); };
+                pr.BeginOutputReadLine(); pr.BeginErrorReadLine();
+                int rc;
+                if (pr.WaitForExit(netshTimeoutMs)) { pr.WaitForExit(); rc = pr.ExitCode; }   // the second wait drains the async readers
+                else { try { pr.Kill(); } catch { } rc = -2; }
+                detail = "netsh " + args + " rc=" + rc + (sb.Length > 0 ? " [" + sb.ToString().Trim() + "]" : "");
+                if (rc != 0) Log("ERROR " + detail);
+                return rc;
+            }
+        } catch (Exception e) {
+            detail = "netsh " + args + " rc=-1 [" + e.Message + "]";
+            Log("ERROR " + detail);
+            return -1;
+        }
+    }
+
+    // 1 = a PRESENT XENBUS VIF PDO (pre-driver) or XENVIF devnode exists, 0 = none, -1 = the probe
+    // itself failed. PRESENT-filtered on purpose, exactly like the payload's Get-PnpDevice
+    // -PresentOnly: a netvm once attached then removed leaves a GHOST devnode that must not count
+    // as a live vif, or the no-netvm exit would wait out the whole deadline. Called every step of
+    // the keys wait, so it reports only when its answer changes.
+    static string vifLastReport = null;
+    static int VifPresent() {
+        string err = null, ids = ""; int found = 0;
+        try {
+            uint len;
+            int cr = CM_Get_Device_ID_List_SizeW(out len, null, CM_GETIDLIST_FILTER_PRESENT);
+            if (cr != 0) err = "CM_Get_Device_ID_List_Size CR=" + cr;
+            else if (len > 0) {
+                char[] buf = new char[len];
+                cr = CM_Get_Device_ID_ListW(null, buf, len, CM_GETIDLIST_FILTER_PRESENT);
+                if (cr != 0) err = "CM_Get_Device_ID_List CR=" + cr;
+                else foreach (string id in new string(buf).Split(new char[] { '\0' }, StringSplitOptions.RemoveEmptyEntries))
+                    if (id.StartsWith(@"XENBUS\VEN_XP0001&DEV_VIF", StringComparison.OrdinalIgnoreCase) ||
+                        id.StartsWith(@"XENVIF\", StringComparison.OrdinalIgnoreCase)) { found++; ids += id + " "; }
+            }
+        } catch (Exception e) { err = "EXCEPTION " + e.Message; }
+        string report = err != null ? "ERROR vif probe failed: " + err : (found > 0 ? "present vif device(s): " + ids.Trim() : "no present vif device");
+        if (report != vifLastReport) { vifLastReport = report; Log(report); }
+        return err != null ? -1 : (found > 0 ? 1 : 0);
+    }
+
+    // Bounded retry with the vif cross-check, ported from the payload half (its apply loop:
+    // 'qubesdb up, vif present, /qubes-ip not yet published - waiting'). Audit 2026-09-16 #11
+    // found this service deciding 'no netvm' from ONE cold read straight after qdb_open. dom0
+    // writes /qubes-ip before the guest is unpaused, but on the first PV boot qubesdb can answer
+    // before its keys have synced; so a PRESENT vif with no /qubes-ip means 'not yet', and only a
+    // missing vif means 'no netvm'. A probe that cannot answer (-1) is NOT read as 'no vif' -
+    // missing data waits and then fails, it never passes. verdict: keys | no-netvm | exhausted;
+    // the caller Louds on exhausted. The stepMs sleep is a POLL, on purpose: the client has
+    // watches (qdb_watch/qdb_read_watch) but no bounded read, and a thread parked in one forever
+    // is what a permanent SYSTEM service must not accumulate. Ends LOUDLY at deadlineMs.
+    public class NetvmKeys { public string ip, mask, gw, d1, d2; public string verdict = "", why = ""; }
+    static NetvmKeys WaitForNetvmKeys(Func<string, string> rd, Func<int> vif, int deadlineMs, int stepMs) {
+        NetvmKeys k = new NetvmKeys();
+        int t0 = Environment.TickCount, passes = 0;
+        while (true) {
+            passes++;
+            k.ip = rd("/qubes-ip"); k.mask = rd("/qubes-netmask"); k.gw = rd("/qubes-gateway");
+            k.d1 = rd("/qubes-primary-dns"); k.d2 = rd("/qubes-secondary-dns");
+            if (k.ip != null && k.mask != null && k.gw != null) {
+                k.verdict = "keys";
+                if (passes > 1) k.why = "published after " + (Environment.TickCount - t0) + " ms, " + passes + " reads";
+                return k;
+            }
+            int v = vif();
+            if (v == 0) { k.verdict = "no-netvm"; k.why = "no present vif device"; return k; }
+            string state = v > 0 ? "vif present" : "vif probe FAILED";
+            if (passes == 1) Log("qubesdb up, /qubes-ip absent, " + state + " - waiting for the keys (up to " + deadlineMs + " ms)");
+            if (Environment.TickCount - t0 >= deadlineMs) {
+                k.verdict = "exhausted"; k.why = state + " for " + deadlineMs + " ms, " + passes + " reads";
+                return k;
+            }
+            System.Threading.Thread.Sleep(stepMs);
+        }
+    }
+
+    // READ BACK what netsh was asked for, from the stack itself. Strict: false unless the named
+    // adapter is Up AND carries the address AND a default route via that gateway - the payload
+    // half's Applied() in NetworkInterface terms. Nothing here defaults to true; ConfigIsRight's
+    // 'not our moment' default belongs to the reconciler's idle tick, not to a verdict.
+    static bool ReadBack(string ifname, string ip, string gw, out string why) {
+        why = "adapter '" + ifname + "' not found";
+        try {
+            foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces()) {
+                if (!string.Equals(ni.Name, ifname, StringComparison.OrdinalIgnoreCase)) continue;
+                if (ni.OperationalStatus != OperationalStatus.Up) { why = "adapter '" + ifname + "' is " + ni.OperationalStatus; return false; }
+                var p = ni.GetIPProperties();
+                string seenIp = "", seenGw = ""; bool hasIp = false, hasGw = false;
+                foreach (var ua in p.UnicastAddresses) {
+                    if (ua.Address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) continue;
+                    seenIp += ua.Address + " "; if (ua.Address.ToString() == ip) hasIp = true;
+                }
+                foreach (var ga in p.GatewayAddresses) { seenGw += ga.Address + " "; if (ga.Address.ToString() == gw) hasGw = true; }
+                if (hasIp && hasGw) { why = null; return true; }
+                why = "wanted " + ip + " via " + gw + " on '" + ifname + "', adapter has ip=[" + seenIp.Trim() + "] gw=[" + seenGw.Trim() + "]";
+                return false;
+            }
+        } catch (Exception e) { why = "read-back EXCEPTION " + e.Message; }
+        return false;
+    }
+
+    // Verify-after, event-driven with a backstop (the shape audit item #19 rates acceptable):
+    // the stack raises NetworkAddressChanged when an address lands, so re-read on each event.
+    // Route changes are NOT signalled by that event (it is NotifyAddrChange, not
+    // NotifyRouteChange), which is why the wait between re-reads is capped at 1 s - a bounded
+    // POLL, on purpose, ending LOUDLY at deadlineMs. No fixed sleep anywhere.
+    static int verifyDeadlineMs = 10000;
+    static bool VerifyApplied(string ifname, string ip, string gw, int deadlineMs, out string why) {
+        using (var kick = new System.Threading.AutoResetEvent(false)) {
+            NetworkAddressChangedEventHandler h = delegate { try { kick.Set(); } catch { } };
+            bool hooked = false;
+            try { NetworkChange.NetworkAddressChanged += h; hooked = true; }
+            catch (Exception e) { Log("NetworkAddressChanged unavailable (" + e.Message + ") - read-back on the 1 s backstop only"); }
+            try {
+                int t0 = Environment.TickCount;
+                while (true) {
+                    if (ReadBack(ifname, ip, gw, out why)) return true;
+                    int left = deadlineMs - (Environment.TickCount - t0);
+                    if (left <= 0) { why = why + " (after " + deadlineMs + " ms)"; return false; }
+                    kick.WaitOne(Math.Min(left, 1000));
+                }
+            } finally { if (hooked) { try { NetworkChange.NetworkAddressChanged -= h; } catch { } } }
+        }
     }
     static bool AppliedThisBoot(string tag) {
         try {
@@ -226,6 +370,7 @@ public class QwtngNetSetup : ServiceBase {
         try { System.IO.File.Delete(MARK); } catch { }
         string ip = null, mask = null, gw = null, d1 = null, d2 = null;
         bool qdbOpened = false;
+        string keysVerdict = "read EXCEPTION (see log)", keysWhy = "";   // WaitForNetvmKeys' answer once qubesdb opened
         // qubesdb is authoritative but not up early. Wait for it as long as the adapter wait below
         // (180 s): the old 30 s gave up on exactly the boot this latch exists for (first PV boot,
         // xeniface slow, QdbDaemon still syncing) and configured from the previous boot's cache -
@@ -243,9 +388,13 @@ public class QwtngNetSetup : ServiceBase {
                 qdbOpened = true;
                 if (waited >= 60) Log("qubesdb opened late (" + (waited / 2) + " s) - QdbDaemon slow on this boot");
                 try {
-                    ip = Rd(h, "/qubes-ip"); mask = Rd(h, "/qubes-netmask"); gw = Rd(h, "/qubes-gateway");
-                    d1 = Rd(h, "/qubes-primary-dns"); d2 = Rd(h, "/qubes-secondary-dns");
-                    Log("qubesdb ip=" + ip + " gw=" + gw);
+                    // Not one cold read (audit #11): keep the connection and re-read, bounded, while
+                    // a vif is present but /qubes-ip is not yet published - see WaitForNetvmKeys.
+                    IntPtr hh = h;
+                    NetvmKeys k = WaitForNetvmKeys(delegate(string key) { return Rd(hh, key); }, VifPresent, 180000, 2000);
+                    ip = k.ip; mask = k.mask; gw = k.gw; d1 = k.d1; d2 = k.d2;
+                    keysVerdict = k.verdict; keysWhy = k.why;
+                    Log("qubesdb " + k.verdict + ": ip=" + ip + " gw=" + gw + (k.why.Length > 0 ? " (" + k.why + ")" : ""));
                 } finally { qdb_close(h); }
             } else Loud("qubesdb never opened within 180 s (QdbDaemon late or absent) - falling back to the Q: cache, which may be another boot's or lineage's addressing");
         } catch (Exception e) { Log("qdb EXCEPTION " + e.Message); }
@@ -272,7 +421,10 @@ public class QwtngNetSetup : ServiceBase {
             } catch { }
         }
         if (ip == null || mask == null || gw == null) {
-            Log(qdbOpened ? "qubesdb up, /qubes-ip absent: no netvm, nothing to apply" : "no settings from qubesdb or cache");
+            if (!qdbOpened) { Log("no settings from qubesdb or cache"); return; }
+            // 'no netvm' is only ever concluded from the vif cross-check, never from an empty read.
+            if (keysVerdict == "no-netvm") { Log("qubesdb up, /qubes-ip absent, no present vif device: no netvm, nothing to apply"); return; }
+            Loud("qubesdb answered but yielded no L3 config - " + keysVerdict + (keysWhy.Length > 0 ? " (" + keysWhy + ")" : "") + " - not applying");
             return;
         }
 
@@ -321,13 +473,30 @@ public class QwtngNetSetup : ServiceBase {
 
     // The one place that writes L3 config. Called from the boot path and from the reconciler, so a
     // live netvm change takes exactly the same code path as a cold boot.
-    static void Apply(string ifname, string ip, string mask, string gw, string d1, string d2, string tag) {
-        Netsh("interface ipv4 set address name=\"" + ifname + "\" static " + ip + " " + mask);
-        Netsh("interface ipv4 add route prefix=0.0.0.0/0 interface=\"" + ifname + "\" nexthop=" + gw + " store=active");
-        if (d1 != null) Netsh("interface ipv4 set dnsservers name=\"" + ifname + "\" static " + d1 + " primary validate=no");
-        if (d2 != null) Netsh("interface ipv4 add dnsservers name=\"" + ifname + "\" " + d2 + " index=2 validate=no");
+    // THE VERDICT COMES FROM THE STACK, NOT FROM netsh HAVING RETURNED (audit 2026-09-16 #10):
+    // every exit code is read and kept as evidence, the address and route are read back from the
+    // adapter, and the STAMP - what makes the next service start say 'already applied this boot'
+    // - is written only on a verified state. An unverified apply is Loud (marker + event) and
+    // returns false; 'applied' is never logged from the commands merely having returned. A
+    // non-zero netsh on a state that still verifies (e.g. 'object already exists' on a re-apply)
+    // is logged as ERROR by Netsh and repeated on the applied line, but the state decides.
+    static bool Apply(string ifname, string ip, string mask, string gw, string d1, string d2, string tag) {
+        string d, ev = "";
+        if (Netsh("interface ipv4 set address name=\"" + ifname + "\" static " + ip + " " + mask, out d) != 0) ev += d + "; ";
+        if (Netsh("interface ipv4 add route prefix=0.0.0.0/0 interface=\"" + ifname + "\" nexthop=" + gw + " store=active", out d) != 0) ev += d + "; ";
+        if (d1 != null && Netsh("interface ipv4 set dnsservers name=\"" + ifname + "\" static " + d1 + " primary validate=no", out d) != 0) ev += d + "; ";
+        if (d2 != null && Netsh("interface ipv4 add dnsservers name=\"" + ifname + "\" " + d2 + " index=2 validate=no", out d) != 0) ev += d + "; ";
+        string why;
+        if (!VerifyApplied(ifname, ip, gw, verifyDeadlineMs, out why)) {
+            try { System.IO.File.Delete(STAMP); } catch { }
+            Loud("apply of " + ip + "/" + mask + " gw " + gw + " on '" + ifname + "' NOT verified: " + why +
+                 (ev.Length > 0 ? " - " + ev.TrimEnd(' ', ';') : " - every netsh call returned 0"));
+            return false;
+        }
         try { System.IO.File.WriteAllText(STAMP, tag); } catch { }
-        Log("applied " + ip + "/" + mask + " gw " + gw + " on '" + ifname + "'");
+        Log("applied " + ip + "/" + mask + " gw " + gw + " on '" + ifname + "' - verified on the adapter" +
+            (ev.Length > 0 ? " despite: " + ev.TrimEnd(' ', ';') : ""));
+        return true;
     }
 
     // Name of the target adapter if it is currently Up, else null.
@@ -397,7 +566,10 @@ public class QwtngNetSetup : ServiceBase {
                 string ifn = UpIfName(guid);
                 if (ifn == null) continue;
                 Log("reconcile: config missing (" + (tag == lastTag ? "same netvm" : "netvm changed") + ") - reapplying");
-                Apply(ifn, ip, mask, gw, d1, d2, tag);
+                // A failed (unverified) apply is already Loud. Hold off ~30 s before the next
+                // attempt so a state that cannot be applied is reported once per 30 s, not once
+                // per 2 s tick, into the marker and the Application log.
+                if (!Apply(ifn, ip, mask, gw, d1, d2, tag)) System.Threading.Thread.Sleep(28000);
                 lastTag = tag;
             } catch { }
         }
@@ -407,6 +579,7 @@ public class QwtngNetSetup : ServiceBase {
         ServiceBase.Run(new QwtngNetSetup());
     }
 }
+// ---- NETSETUP-CS-END
 '@ | Set-Content -Path $svcSrc -Encoding ASCII
     # A stale exe must not mask a failed compile: $svcOut persists in SYSTEM's TEMP on a template
     # root, and inferring success from Test-Path alone would ship the PREVIOUS build's binary
@@ -527,6 +700,26 @@ Get-Item 'Q:\qwtng-netsetup.log' -EA SilentlyContinue |
 L "--- run start (boot=$((Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')))"
 L "latch re-armed NICS=$((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug').NICS)"
 
+# A step that FAILS must leave the same machine-readable trail as the terminal Loud below (marker +
+# Application event) WITHOUT ending the run - the network apply still has to happen - and a later
+# step's success must not erase it. Fault records it; Ok, the only success exit, keeps the marker
+# and exits 1 when anything faulted, so the task result, the marker and the event all say so
+# (audit 2026-09-16 #20: the xenbus_monitor step used to log 'enforced off' from its PRE-state).
+$script:faulted = $null
+function Fault([string]$why) {
+    $script:faulted = $why
+    L "FAILED: $why"
+    Set-Content $mark ("QubesPvNic FAILED: {0} at {1}" -f $why, (Get-Date -Format o))
+    New-EventLog -LogName Application -Source QubesPvNic -EA SilentlyContinue
+    Write-EventLog -LogName Application -Source QubesPvNic -EntryType Error -EventId 1001 -Message "PV NIC payload: $why" -EA SilentlyContinue
+}
+function Ok([string]$what) {
+    if ($script:faulted) { L "$what - but an earlier step FAILED ($script:faulted): marker kept, exit 1"; exit 1 }
+    L $what
+    Remove-Item $mark -Force -EA SilentlyContinue
+    exit 0
+}
+
 # 1b. KEEP xenbus_monitor OFF - every qube class, every boot, as early as this payload runs.
 #     Reviewed 2026-08-25: xenvbd re-files its reboot request at EVERY AppVM boot (the Request
 #     key's LastWriteTime equals boot time - the template ships one boot short of settled, and a
@@ -542,24 +735,51 @@ L "latch re-armed NICS=$((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Servi
 #     qubesdb was not up yet - exactly the early-boot window this must cover - and it
 #     misclassified StandaloneVMs. No qube class runs an interactive PV-driver install that
 #     would want the prompt; the installer re-enables nothing and needs nothing enabled.
-try {
+# ---- XBM-ENFORCE-BEGIN  (tools/tests/pvnic-xbm-verify-selftest.sh extracts this function by marker)
+function Enforce-XenbusMonitorOff {
+    # Stop + disable + kill, then VERIFY-AFTER (audit 2026-09-16 #20). The verdict is read back
+    # from the SCM, the process list and the registry AFTER the kill; the previous version slept
+    # 500 ms, read the status once, killed without waiting, and logged 'enforced off' from the
+    # PRE-state ($xbm) - a survivor was invisible. The kill is unconditional and waits on the
+    # handle, as the installer's Disable-XenbusMonitor does, because a Stopped SERVICE and a dead
+    # PROCESS are different facts (measured 2026-08-28: Disabled/Stopped with a live monitor
+    # process from an earlier boot) - a verdict that counts processes needs a kill that covers
+    # them. Returns @{ ok; pre; post; why }; nothing here logs or exits, the caller does.
+    $r = @{ ok = $false; pre = 'not present'; post = ''; why = '' }
     reg add "HKLM\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters" /v AutoReboot /t REG_DWORD /d 0 /f | Out-Null
     $xbm = Get-Service xenbus_monitor -EA SilentlyContinue
     if ($xbm) {
+        $r.pre = "$($xbm.StartType)/$($xbm.Status)"
         & sc.exe config xenbus_monitor start= disabled 2>&1 | Out-Null
         if ($xbm.Status -ne 'Stopped') {
             & sc.exe stop xenbus_monitor 2>&1 | Out-Null
-            Start-Sleep -Milliseconds 500
-            if ((Get-Service xenbus_monitor -EA SilentlyContinue).Status -ne 'Stopped') {
-                # Mid-prompt the service cannot stop; kill it. An orphaned dialog, if one was
-                # already up, dies with this boot's session - it never persists across boots.
-                Get-Process -Name 'xenbus_monitor*' -EA SilentlyContinue |
-                    Stop-Process -Force -EA SilentlyContinue
-            }
+            # SCM state wait, not a fixed 500 ms. Mid-prompt the service cannot stop (STOP_PENDING
+            # behind the modal csrss dialog); the timeout is then expected and the kill below is
+            # the remedy. An orphaned dialog dies with this boot's session, never across boots.
+            try { $xbm.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(10)) } catch { }
         }
-        L "xenbus_monitor enforced off (start=disabled, AutoReboot=0, was $($xbm.StartType)/$($xbm.Status))"
-    } else { L 'xenbus_monitor service not present' }
-} catch { L "xenbus_monitor enforcement failed: $($_.Exception.Message)" }
+    }
+    foreach ($p in @(Get-Process -Name 'xenbus_monitor*' -EA SilentlyContinue)) {
+        try { $p | Stop-Process -Force -EA Stop } catch { }
+        try { [void]$p.WaitForExit(5000) } catch { }
+    }
+    # VERIFY-AFTER: re-enumerate everything the claim 'enforced off' rests on. $xbm is history.
+    $svc   = Get-Service xenbus_monitor -EA SilentlyContinue
+    $procs = @(Get-Process -Name 'xenbus_monitor*' -EA SilentlyContinue)
+    $ar    = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\xenbus_monitor\Parameters' -EA SilentlyContinue).AutoReboot
+    $r.post = ('service=' + $(if ($svc) { "$($svc.StartType)/$($svc.Status)" } else { 'not present' }) +
+               ' procs=' + $procs.Count + $(if ($procs.Count) { '(' + (($procs | ForEach-Object { "$($_.Name):$($_.Id)" }) -join ',') + ')' } else { '' }) +
+               ' AutoReboot=' + $(if ($null -eq $ar) { 'unset' } else { $ar }))
+    $survived = ($procs.Count -gt 0) -or ($svc -and ($svc.Status -ne 'Stopped' -or $svc.StartType -ne 'Disabled' -or $ar -ne 0))
+    if ($survived) { $r.why = 'xenbus_monitor SURVIVED enforcement' } else { $r.ok = $true }
+    return $r
+}
+# ---- XBM-ENFORCE-END
+try {
+    $x = Enforce-XenbusMonitorOff
+    if ($x.ok) { L "xenbus_monitor enforced off - verified after: $($x.post) (was $($x.pre))" }
+    else { Fault "$($x.why): $($x.post) (was $($x.pre))" }
+} catch { Fault "xenbus_monitor enforcement threw: $($_.Exception.Message)" }
 
 function Diagnose {
     # Classify the terminal failure from the bus, not just announce it. 'PV adapter never
@@ -706,7 +926,7 @@ function Applied {
 }
 
 # Event-triggered run on an already-correct state: converge fast (self-retrigger guard).
-if (Applied) { L 'already applied on entry'; Remove-Item $mark -Force -EA SilentlyContinue; exit 0 }
+if (Applied) { Ok 'already applied on entry' }
 
 $qdbEverUp = $false
 $sawAdapter = $false
@@ -720,11 +940,7 @@ while ((Get-Date) -lt $deadline) {
     $script:want = QdbValues            # L3 config straight from qubesdb - the ONLY source
     if (-not $script:want) {
         # qubesdb up but /qubes-ip not published. No vif device => no netvm => nothing to apply.
-        if (-not (VifDevicePresent)) {
-            L 'qubesdb up, /qubes-ip absent, no vif device: no netvm, nothing to apply'
-            Remove-Item $mark -Force -EA SilentlyContinue
-            exit 0
-        }
+        if (-not (VifDevicePresent)) { Ok 'qubesdb up, /qubes-ip absent, no vif device: no netvm, nothing to apply' }
         L 'qubesdb up, vif present, /qubes-ip not yet published - waiting'
         Start-Sleep -Seconds 2; continue
     }
@@ -770,10 +986,8 @@ while ((Get-Date) -lt $deadline) {
 
 if ($ok) {
     $echo = [bool](Test-Connection -ComputerName $script:want.gw -Count 1 -Quiet -EA SilentlyContinue)
-    L ("SUCCESS: non-APIPA IP + default route, stable on XENVIF adapter (gateway echo: " +
-       $(if ($echo) { 'yes' } else { 'no - normal for a mirage-firewall netvm' }) + ")")
-    Remove-Item $mark -Force -EA SilentlyContinue
-    exit 0
+    Ok ("SUCCESS: non-APIPA IP + default route, stable on XENVIF adapter (gateway echo: " +
+        $(if ($echo) { 'yes' } else { 'no - normal for a mirage-firewall netvm' }) + ")")
 }
 if (-not $qdbEverUp) { Loud 'qubesdb never became reachable within the deadline' }
 elseif ($sawAdapter) { Loud ("network config never stably applied (last qubesdb ip: " + $(if ($script:want) { $script:want.ip } else { 'none' }) + ")") }
