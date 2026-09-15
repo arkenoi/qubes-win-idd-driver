@@ -2095,6 +2095,49 @@ function Invoke-Stage2 {
     # Only when MoveUsers was actually requested. With -NoMoveUsers the profile stays on the root
     # volume by design and an absent private image is not this install's problem.
     if (-not $NoMoveUsers -and -not (Test-Path -LiteralPath 'Q:\')) {
+        # DISARM THE BOOT-CRITICAL JUNCTION BEFORE FAILING. Failing while leaving this armed is
+        # worse than not checking at all.
+        #
+        # MoveUsers registers relocate-dir.exe under Session Manager!BootExecute, and the MSI does
+        # that during msiexec (above) - BEFORE this check. So by the time we know Q: is missing, the
+        # guest already carries a BOOT-TIME instruction to turn C:\Users into a junction onto a
+        # volume that does not exist. BootExecute images run before the Session Manager brings up
+        # services, ahead of essentially everything, and this one is documented BOOT-CRITICAL. Fail
+        # here without removing it and the next boot executes a boot-critical operation against a
+        # missing target, on the directory holding every user profile.
+        #
+        # Both missing-Q: events rebooted after this point. Whatever ultimately causes Q: to go
+        # missing, THIS is the step that turns it into a damaged guest, and it is ours to not do.
+        # Removing the entry is safe in the other direction too: with no Q: there is nothing for
+        # relocate-dir to move, so the entry has no legitimate work on this boot either way.
+        #
+        # Surgical: only OUR entry, matched the way the bind-dirs block matches its own, leaving
+        # autochk and anything else untouched. A failure to disarm is reported and does not mask
+        # the Fail below.
+        try {
+            $smKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
+            $be = @((Get-ItemProperty -LiteralPath $smKey -Name BootExecute -ErrorAction Stop).BootExecute)
+            $armed = @($be | Where-Object { $_ -match '(?i)relocate-dir' })
+            if ($armed.Count -gt 0) {
+                $kept = @($be | Where-Object { $_ -notmatch '(?i)relocate-dir' })
+                if ($kept.Count -eq 0) { throw 'refusing to write an EMPTY BootExecute' }
+                Set-ItemProperty -LiteralPath $smKey -Name BootExecute -Value ([string[]]$kept) -Type MultiString -ErrorAction Stop
+                Write-Log ("private image: DISARMED the boot-critical C:\Users junction - removed " +
+                           ($armed -join ' | ') + " from BootExecute because its target volume does not exist. " +
+                           "BootExecute is now (" + ($kept -join ' | ') + ")") 'WARN'
+                $script:Result.detail.relocate_dir_disarmed = $true
+            } else {
+                Write-Log 'private image: no relocate-dir entry in BootExecute - nothing to disarm'
+                $script:Result.detail.relocate_dir_disarmed = $false
+            }
+        } catch {
+            # Say so LOUDLY: this is the dangerous outcome - the guest reboots with the junction
+            # still armed - and it must not be buried under the Fail that follows.
+            Write-Log ("private image: COULD NOT DISARM the C:\Users junction ($($_.Exception.Message)). " +
+                       "The guest still carries a BootExecute relocate-dir entry pointing at a volume " +
+                       "that does not exist - do NOT reboot it before clearing that entry by hand.") 'WARN'
+            $script:Result.detail.relocate_dir_disarmed = "failed: $($_.Exception.Message)"
+        }
         Fail ('the private image is not available as Q: after the MSI, and MoveUsers was installed. ' +
               'The C:\Users -> Q:\Users redirect and LogDir=Q:\Qubes Logs both point at a volume that ' +
               'does not exist, so this install is NOT usable. The DISKPROBE lines immediately above ' +
