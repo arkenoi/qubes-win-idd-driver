@@ -77,6 +77,33 @@ xl dmesg | tail -300 > "$OUT/xl-dmesg-evtchn.txt" 2>&1
 xl debug-keys q 2>/dev/null; sleep 2
 xl dmesg | tail -200 > "$OUT/xl-dmesg-domains.txt" 2>&1
 
+# 3b. vCPU REGISTERS - THE RIP. This is the capture every stall specimen has been missing.
+#    `d` dumps every vCPU's registers (RIP/RSP/RFLAGS ...) for every domain into the ring;
+#    `v` prints the VMX/SVM state incl. the last exit reason. Nine wedges were recorded with
+#    g/e/q only, so each one's spin site stayed a guess; with the per-boot module bases that
+#    arm-module-bases.sh records, a RIP here resolves to driver+offset via
+#    tools/resolve-guest-rip.py. Same ring discipline as `g` above: clear-and-keep first, and
+#    a SECOND dump a few seconds later so a spin (same RIP twice) can be told from progress.
+xl dmesg -c > "$OUT/xl-dmesg-before-regs.txt" 2>&1
+xl debug-keys d 2>/dev/null; sleep 2
+xl dmesg > "$OUT/xl-dmesg-vcpu-regs-1.txt" 2>&1
+sleep 5
+xl dmesg -c >/dev/null 2>&1
+xl debug-keys d 2>/dev/null; sleep 2
+xl dmesg > "$OUT/xl-dmesg-vcpu-regs-2.txt" 2>&1
+xl dmesg -c >/dev/null 2>&1
+xl debug-keys v 2>/dev/null; sleep 2
+xl dmesg > "$OUT/xl-dmesg-vmx.txt" 2>&1
+# Pull this domain's RIPs out so the next reader does not have to: one line per vCPU per dump.
+for n in 1 2; do
+    grep -A40 "d$DOMID" "$OUT/xl-dmesg-vcpu-regs-$n.txt" 2>/dev/null \
+        | grep -oE 'RIP:\s*[0-9a-f:]+\s*[0-9a-f]+' | head -8 > "$OUT/rip-d$DOMID-$n.txt"
+done
+if [ ! -s "$OUT/rip-d$DOMID-1.txt" ]; then
+    echo "WARNING: no RIP lines for d$DOMID in the register dump - the ring wrapped or the key" \
+         "printed nothing for this domain. MISSING DATA, not 'no spin'." > "$OUT/rip-CAPTURE-INCOMPLETE.txt"
+fi
+
 # 4. gui-daemon: alive? what did it last say? (log is perishable - copy now)
 ps aux | grep "[g]uid.*$VM" > "$OUT/guid-ps.txt" 2>&1
 cp "/var/log/qubes/guid.$VM.log" "$OUT/" 2>/dev/null

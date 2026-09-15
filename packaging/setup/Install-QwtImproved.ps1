@@ -1411,6 +1411,169 @@ public static class QwtCfgMgr {
     }
 }
 
+# ---- QWT-GATE-BEGIN (pure classifier; tools/tests/private-disk-gate-selftest.sh extracts this block verbatim) ----
+function Classify-PrivateDiskState {
+    # THE STOCK PRECONDITION, MADE EXPLICIT. The MSI's deferred PreparePrivateImg runs upstream's
+    # 8-line prepare-private-img.ps1: ONE cold `Get-Disk -Number 1`, and only if that disk's
+    # FriendlyName is 'XENSRC PVDISK' or 'QEMU HARDDISK' AND its PartitionStyle is RAW does it
+    # Initialize-Disk + New-Volume -DriveLetter Q. Otherwise it does NOTHING, prints nothing, and
+    # the action is Return="ignore" (Package.wxs:74) so msiexec reports success regardless. Measured
+    # 2026-09-16: 4 of 28 clean Win10 installs finished with no Q: that way, 3 of them graded ok:true.
+    # The stock script also cannot tell the private disk from the VOLATILE one - both are RAW and
+    # both are 'QEMU HARDDISK' on the emulated path the action runs on - so a volatile disk at #1
+    # would be formatted as Q: and every user profile lost at the next reboot, with Q: present and
+    # every check green. That has never been observed; it is a consequence of the same defect.
+    #
+    # This function decides, from a disk table, whether launching msiexec is SAFE. It selects and
+    # formats NOTHING. It returns one of:
+    #   READY-Q-PRESENT     Q: already exists (upgrade/reinstall); the stock action correctly no-ops
+    #   READY               disk #1 is the private disk, RAW, correctly named - stock will succeed
+    #   READY-SERIAL-UNKNOWN #1 is RAW + correctly named but its serial matches neither list, so the
+    #                       volatile cross-check cannot be applied; stock's precondition holds, so
+    #                       proceed - and LOG the serial, because a production QEMU may name them
+    #                       differently and refusing here would be a false red of our own making
+    #   NOT-READY           no disk #1 yet, or #1 is held by something else and the private disk is
+    #                       not enumerated at all - WAIT (an arrival can still fix this)
+    #   MISNUMBERED         the private disk IS enumerated, RAW, at some other number - waiting
+    #                       cannot renumber it; refuse, and the table is the evidence
+    #   VOLATILE-AT-1       the volatile disk holds #1 - stock would format the EPHEMERAL disk as Q:
+    #   NONRAW-AT-1         the private disk holds #1 but is not RAW and Q: does not exist - stock
+    #                       would skip; waiting cannot change a partition style
+    #   WRONGNAME-AT-1      the private disk holds #1, RAW, but with a name stock would not match
+    #
+    # DISK IDENTITY, and why it is by SERIAL and not by -Number or by size: Qubes attaches the three
+    # volumes in a fixed order (root, private, volatile). QEMU's emulated IDE serials encode that
+    # order as QM00001/QM00002/QM00003, and the PV path exposes it as serial 0000/0001/0002 (Target
+    # 0/1/2). Both forms were MEASURED by DISKPROBE across every clean and upgrade run on record
+    # (emulated: private = 'QEMU HARDDISK' sn QM00002; PV: 'XENSRC PVDISK' sn 0001). A selector keyed
+    # on the PV form alone (bd1af0f) was reverted because the install runs on the EMULATED path
+    # where those identifiers do not exist; keying on size was rejected because private-volume size
+    # is a per-qube setting (2 GiB default, 20 GiB on this rig). The serial lists are parameters so
+    # the assumption is visible and overridable, not buried.
+    param(
+        [object[]]$Disks,
+        [bool]$QPresent,
+        [string[]]$StockNames      = @('XENSRC PVDISK', 'QEMU HARDDISK'),
+        [string[]]$PrivateSerials  = @('QM00002', '0001'),
+        [string[]]$VolatileSerials = @('QM00003', '0002')
+    )
+    if ($QPresent) { return @{ state = 'READY-Q-PRESENT'; why = 'Q: already exists; the stock action will correctly no-op' } }
+    $Disks = @($Disks)
+    $d1 = @($Disks | Where-Object { [int]$_.Number -eq 1 }) | Select-Object -First 1
+    $privRawElsewhere = @($Disks | Where-Object {
+        [int]$_.Number -ne 1 -and $PrivateSerials -contains "$($_.SerialNumber)".Trim() -and "$($_.PartitionStyle)" -eq 'RAW' })
+    if ($null -eq $d1) {
+        if ($privRawElsewhere.Count -gt 0) {
+            $p = $privRawElsewhere[0]
+            return @{ state = 'MISNUMBERED'; why = "no disk #1, and the private disk (sn '$($p.SerialNumber)') is RAW at #$($p.Number)" }
+        }
+        return @{ state = 'NOT-READY'; why = 'no disk #1 enumerated yet' }
+    }
+    $sn     = "$($d1.SerialNumber)".Trim()
+    $nameOk = $StockNames -contains "$($d1.FriendlyName)"
+    $raw    = ("$($d1.PartitionStyle)" -eq 'RAW')
+    if ($VolatileSerials -contains $sn) {
+        return @{ state = 'VOLATILE-AT-1'; why = "disk #1 is the VOLATILE disk (sn '$sn', $([math]::Round($d1.Size/1GB,1))GB, $($d1.PartitionStyle)) - stock would format the ephemeral disk as Q:"; disk1 = $d1 }
+    }
+    if ($PrivateSerials -contains $sn) {
+        if ($nameOk -and $raw) { return @{ state = 'READY'; why = "disk #1 is the private disk (sn '$sn'), RAW, named '$($d1.FriendlyName)'"; disk1 = $d1 } }
+        if (-not $raw) { return @{ state = 'NONRAW-AT-1'; why = "disk #1 is the private disk (sn '$sn') but PartitionStyle=$($d1.PartitionStyle), not RAW, and Q: does not exist - stock would skip"; disk1 = $d1 } }
+        return @{ state = 'WRONGNAME-AT-1'; why = "disk #1 is the private disk (sn '$sn'), RAW, but named '$($d1.FriendlyName)' which stock does not match"; disk1 = $d1 }
+    }
+    # #1 is something else: a prime stick ('QEMU QEMU HARDDISK'), the root, or an unknown serial scheme.
+    if ($privRawElsewhere.Count -gt 0) {
+        $p = $privRawElsewhere[0]
+        return @{ state = 'MISNUMBERED'; why = "disk #1 is '$($d1.FriendlyName)' sn '$sn' ($($d1.PartitionStyle)), while the private disk (sn '$($p.SerialNumber)') is RAW at #$($p.Number)"; disk1 = $d1 }
+    }
+    if ($nameOk -and $raw) {
+        return @{ state = 'READY-SERIAL-UNKNOWN'; why = "disk #1 is RAW and named '$($d1.FriendlyName)' (stock's precondition holds) but its serial '$sn' matches neither the private nor the volatile list - volatile cross-check NOT applied; record this serial scheme"; disk1 = $d1 }
+    }
+    return @{ state = 'NOT-READY'; why = "disk #1 is '$($d1.FriendlyName)' sn '$sn' ($($d1.PartitionStyle)) and the private disk is not enumerated yet"; disk1 = $d1 }
+}
+# ---- QWT-GATE-END ----
+
+function Wait-PrivateDiskReady {
+    # EVENT-DRIVEN, NOT A TIMER, WITH A BOUNDED BACKSTOP - and it never proceeds on hope. Before
+    # msiexec is allowed to run, the disk table must satisfy the stock precondition above. It waits
+    # ONLY for the one state a wait can fix (NOT-READY: the private disk has not been enumerated
+    # yet), wakes on MSFT_StorageEvent - the Storage Management Provider's own change notification,
+    # i.e. the exact layer Get-Disk reads, so its firing means the view the stock script queries has
+    # changed - re-checks the ACTUAL condition after every wake (an event is a wake-up, not an
+    # answer), and Fails loudly with the full table at the deadline. Every other non-READY state is
+    # refused IMMEDIATELY with the table: waiting cannot renumber a disk or change a partition style,
+    # and the table at that instant is precisely the evidence four failures never produced.
+    #
+    # Check-first, then subscribe: an arrival event never fires for a disk that is already there.
+    # Subscription failure degrades to a bounded poll and SAYS SO; it never becomes a silent skip.
+    param([int]$TimeoutSec = 120)
+    $t0 = Get-Date; $events = 0; $src = 'QwtStorageEvent'; $subscribed = $false; $checks = 0
+    $dump = {
+        param($tag, $disks)
+        foreach ($d in @($disks | Sort-Object Number)) {
+            Write-Log ("DISKGATE[{0}]: #{1} '{2}' {3}GB style={4} bus={5} sn='{6}' loc='{7}'" -f $tag,
+                       $d.Number, $d.FriendlyName, [math]::Round($d.Size/1GB, 1), $d.PartitionStyle, $d.BusType, $d.SerialNumber, $d.Location)
+        }
+        if (@($disks).Count -eq 0) { Write-Log "DISKGATE[$tag]: Get-Disk returned NO disks" }
+    }
+    $snap = {
+        try { Update-HostStorageCache -ErrorAction SilentlyContinue } catch { }
+        @(Get-Disk -ErrorAction SilentlyContinue)
+    }
+    try {
+        # First look BEFORE subscribing. If it is already fine, no subscription is ever made.
+        $disks = & $snap; $checks++
+        $c = Classify-PrivateDiskState -Disks $disks -QPresent (Test-Path -LiteralPath 'Q:\')
+        if ($c.state -notlike 'READY*' -and $c.state -eq 'NOT-READY') {
+            try {
+                Register-CimIndicationEvent -Namespace 'root/Microsoft/Windows/Storage' -ClassName 'MSFT_StorageEvent' `
+                    -SourceIdentifier $src -ErrorAction Stop | Out-Null
+                $subscribed = $true
+                Write-Log 'private-disk gate: not ready - subscribed to MSFT_StorageEvent (event-driven; a 5 s re-check is the backstop)'
+            } catch {
+                Write-Log "private-disk gate: could not subscribe to MSFT_StorageEvent ($($_.Exception.Message)) - falling back to a bounded 5 s poll, which is a POLL and is logged as one" 'WARN'
+            }
+        }
+        while ($true) {
+            $el = [int]((Get-Date) - $t0).TotalSeconds
+            if ($c.state -like 'READY*') {
+                & $dump 'ready' $disks
+                Write-Log "private-disk gate: $($c.state) after ${el}s ($checks check(s), $events storage event(s)) - $($c.why)" $(if ($c.state -eq 'READY-SERIAL-UNKNOWN') { 'WARN' } else { 'INFO' })
+                $script:Result.detail.private_disk_gate = "$($c.state) t=${el}s checks=$checks events=$events"
+                return $true
+            }
+            if ($c.state -ne 'NOT-READY') {
+                & $dump $c.state $disks
+                $script:Result.detail.private_disk_gate = "FAIL $($c.state) t=${el}s checks=$checks events=$events"
+                Fail ("private-disk gate: REFUSING to run msiexec - $($c.state): $($c.why). The stock PreparePrivateImg " +
+                      "would have $(if ($c.state -eq 'VOLATILE-AT-1') { 'formatted the VOLATILE disk as Q: and lost every profile at the next reboot' } else { 'silently done nothing and the install would have graded ok:true with no Q:' }). " +
+                      'The DISKGATE lines above are the disk table at this instant - the evidence four earlier failures never produced.')
+            }
+            if ($el -ge $TimeoutSec) {
+                & $dump 'deadline' $disks
+                $script:Result.detail.private_disk_gate = "FAIL NOT-READY t=${el}s checks=$checks events=$events"
+                Fail ("private-disk gate: the private disk never became RAW disk #1 within ${TimeoutSec}s ($($c.why); $checks checks, $events storage events). " +
+                      'A guest that cannot present its private volume in that time is not one to install onto. The DISKGATE lines above are the table at the deadline.')
+            }
+            if ($subscribed) {
+                $ev = Wait-Event -SourceIdentifier $src -Timeout 5
+                if ($null -ne $ev) {
+                    $events++
+                    Get-Event -SourceIdentifier $src -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
+                }
+            } else {
+                Start-Sleep -Seconds 5
+            }
+            $disks = & $snap; $checks++
+            $c = Classify-PrivateDiskState -Disks $disks -QPresent (Test-Path -LiteralPath 'Q:\')
+        }
+    } finally {
+        if ($subscribed) {
+            Unregister-Event -SourceIdentifier $src -ErrorAction SilentlyContinue
+            Get-Event -SourceIdentifier $src -ErrorAction SilentlyContinue | Remove-Event -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Wait-WindowsInstallerIdle {
     param([int]$TimeoutSec = 600)
     # msiexec holds Global\_MSIExecute for the duration of an install; while it can be opened,
@@ -1949,6 +2112,15 @@ function Invoke-Stage2 {
     # here used to kill the unattended install for good.
     [void](Wait-PnpSettled -TimeoutSec 300)
     [void](Wait-WindowsInstallerIdle -TimeoutSec 600)
+    # THE PRIVATE-DISK GATE - last precondition before msiexec, and the only one of these three that
+    # cannot proceed on hope: it returns only on a READY state and Fails, with the disk table, on
+    # every other. The MSI's own PreparePrivateImg is a single cold `Get-Disk -Number 1` with
+    # Return="ignore"; whether disk #1 is the RAW private volume at that instant is what this gate
+    # establishes FIRST, waiting on the storage stack's own change event if the disk has not been
+    # enumerated yet, and refusing outright if #1 is the volatile disk, mis-numbered, or non-RAW.
+    # 4 of 28 clean Win10 installs (2026-09-10..14) finished with no Q: through that action; 3 graded
+    # ok:true. The gate's DISKGATE lines are the decision-instant table none of them recorded.
+    [void](Wait-PrivateDiskReady -TimeoutSec 120)
     $msiTries = 0
     while ($true) {
         $msiTries++
