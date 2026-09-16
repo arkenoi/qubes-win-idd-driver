@@ -1608,9 +1608,24 @@ function Wait-PrivateDiskReady {
                     $script:Result.detail.private_disk_prepared_by = 'wrapper'
                     return $true
                 } catch {
-                    $script:Result.detail.private_disk_gate = "FAIL PREPARE-$($c.state) disk=$($p.Number) t=${el}s: $($_.Exception.Message)"
-                    Fail ("private-disk gate: could not create Q: on the private disk #$($p.Number) (sn '$($p.SerialNumber)'): $($_.Exception.Message). " +
-                          'Refusing to run msiexec into a guest whose private volume cannot be prepared. The DISKGATE lines above are the table.')
+                    $why = $_.Exception.Message
+                    # LEAVE IT RECOVERABLE. If Initialize-Disk took but New-Volume did not, the disk is now GPT with no
+                    # volume, and the next attempt would classify it NONRAW-AT-1 and refuse - loud, but a wedge that
+                    # needs a hand-run Clear-Disk. Return it to RAW (best effort, THIS disk only - the one we just
+                    # verified by serial - and only if Q: did not land on it), so a retry after the cause is fixed
+                    # can proceed. Never masks the failure: the Fail below still fires with the original reason.
+                    $restored = 'not attempted'
+                    try {
+                        $qOn = try { (Get-Partition -DriveLetter Q -ErrorAction Stop).DiskNumber } catch { $null }
+                        if ($null -eq $qOn -or [int]$qOn -ne [int]$p.Number) {
+                            Clear-Disk -Number $p.Number -RemoveData -RemoveOEM -Confirm:$false -ErrorAction Stop
+                            $restored = "disk #$($p.Number) returned to RAW"
+                        } else { $restored = "Q: is on disk #$qOn - left as is" }
+                    } catch { $restored = "could not return disk #$($p.Number) to RAW: $($_.Exception.Message)" }
+                    Write-Log "private-disk gate: prepare failed ($why); cleanup: $restored" 'ERROR'
+                    $script:Result.detail.private_disk_gate = "FAIL PREPARE-$($c.state) disk=$($p.Number) t=${el}s: $why; cleanup: $restored"
+                    Fail ("private-disk gate: could not create Q: on the private disk #$($p.Number) (sn '$($p.SerialNumber)'): $why. " +
+                          "Cleanup: $restored. Refusing to run msiexec into a guest whose private volume cannot be prepared. The DISKGATE lines above are the table.")
                 }
             }
             if ($c.state -like 'READY*') {
