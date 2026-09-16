@@ -79,6 +79,9 @@ try {
 #   - the window counts from the last COMPLETED pass of ANY kind (that is the point of it being
 #     cross-path); a pass that failed or is mid-flight does not start the clock.
 #   - QUBES_UPDATES_DEBOUNCE_MIN=0 disables it; the default is 30 minutes against a 6-hourly scan.
+#   - a pass that ended REBOOT-PENDING never debounces the scan that follows it (see inside).
+# The marker lines delimit the region tools/tests/wu-reboot-report-test.ps1 extracts and replays.
+# ---- WU-SCAN-DEBOUNCE-BEGIN
 if ($Scheduled -and $Action -eq 'scan') {
     $debounceMin = 30
     $envMin = $env:QUBES_UPDATES_DEBOUNCE_MIN
@@ -93,7 +96,16 @@ if ($Scheduled -and $Action -eq 'scan') {
             # scan is exactly the recovery for a pass whose own rescan failed. Without this the
             # guest could sit up to a full scan interval with no availability answer for dom0.
             $prevAnswered = ($prev.PSObject.Properties.Name -contains 'available') -and ($prev.phase -eq 'done')
-            if ($prev.done_ts -and $prevAnswered) {
+            # A pass that ended REBOOT-PENDING did not scan: it reported a count derived from its own
+            # result rows and logged "boot scan will confirm". That boot scan (BootTrigger + 2 min,
+            # -Scheduled) is THIS pass, and it is the only correction dom0 ever gets - so a
+            # reboot-pending status never counts as an answer that may suppress it. Measured
+            # 2026-09-16 on German Win11 25H2 (4.3.29): the install pass wrote done_ts 22:49:16,
+            # the boot scan fired at 22:54:00 with LastTaskResult 0, exited right here having
+            # written nothing, and dom0 kept "no updates" with a 4.4 GB cumulative downloaded and
+            # unapplied on the guest.
+            $prevGuessed = [bool]$prev.reboot_needed   # GUARD:bootconfirm
+            if ($prev.done_ts -and $prevAnswered -and -not $prevGuessed) {
                 $age = ((Get-Date) - [datetime]$prev.done_ts).TotalMinutes
                 # A negative age means the stamp is in the future (clock moved) - do not trust it
                 # to skip work; run the pass.
@@ -106,6 +118,7 @@ if ($Scheduled -and $Action -eq 'scan') {
         } catch { }   # unreadable/absent status = no reason to skip; fall through and scan
     }
 }
+# ---- WU-SCAN-DEBOUNCE-END
 
 $script:Mutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
 $waitMs = if ($Action -eq 'scan') { 0 } else { 900000 }   # a scan yields; real work waits 15 min
@@ -145,6 +158,18 @@ function Complete-Pass {
     $script:St.action  = $Action
     Save
 }
+# Does a status/result row carry a key? The rows this pass builds are [ordered]@{...}, i.e.
+# OrderedDictionary, and on a dictionary PSObject.Properties.Name lists the .NET MEMBERS (Count,
+# IsReadOnly, Keys, Values, IsFixedSize, SyncRoot, IsSynchronized) - never the keys. Measured on the
+# guest's own Windows PowerShell 5.1.26100 and on pwsh 7.6 alike, so a key test written through it
+# is a filter that matches nothing. A row that came back through ConvertFrom-Json is a PSCustomObject,
+# where the property list IS the key list; both shapes are answered here, by their own contract.
+# ---- WU-ROWKEY-BEGIN
+function Test-RowKey($row, [string]$key) {
+  if ($row -is [System.Collections.IDictionary]) { return [bool]$row.Contains($key) }
+  return (@($row.PSObject.Properties.Name) -contains $key)
+}
+# ---- WU-ROWKEY-END
 # Write-Host alone is lost under the scheduled task, which is why every download failure so far
 # had to be reconstructed from DISM's log instead of ours. Tee to a file.
 function Log($m){
@@ -1712,7 +1737,9 @@ try {
   # reflects reality instead of the pre-install scan. Two cases:
   #  - a reboot is pending: Windows keeps offering the KB until it boots, so any count now would
   #    be a lie. We are rebooting anyway, and the boot scan task (BootTrigger + 2 min) reports
-  #    the truth - the same shape as Linux's upgrades-status-notify after an update.
+  #    the truth - the same shape as Linux's upgrades-status-notify after an update. That boot
+  #    scan is a -Scheduled pass; the debounce at the top of this file exempts it while the
+  #    previous status is reboot-pending, because without the exemption it was skipped every time.
   #  - nothing pending: rescan now and report, or the flag stays set until the next 6-hourly scan.
   if ($Action -in 'install','full') {
     if ($script:St.reboot_needed) {
@@ -1722,11 +1749,19 @@ try {
       # now rather than leaving the qube marked for minutes. Anything that did NOT install is
       # still reported, and the boot scan re-reports the truth either way, so a wrong guess here
       # self-corrects within ~2 minutes of the restart.
+      # COUNT BY KEY (Test-RowKey), never by PSObject.Properties.Name: the rows are [ordered]
+      # dictionaries, and on those that property list never contains 'kb', so the old predicate
+      # matched nothing and this reported 0 on EVERY reboot-pending pass. Measured 2026-09-16 on
+      # German Win11 25H2 (4.3.29): result row kb=KB5129195 ok=false state=deferred (the 4.4 GB
+      # September cumulative, downloaded, waiting for the .NET reboot), "remaining": 0 written,
+      # dom0's updates-available cleared - Qube Manager then showed the qube as up to date.
+      # ---- WU-REBOOT-PENDING-REPORT-BEGIN
       $failedKbs = @($script:St.result |
-                     Where-Object { $_.PSObject.Properties.Name -contains 'kb' -and -not $_.ok -and $_.severity -ne 'info' })
+                     Where-Object { (Test-RowKey $_ 'kb') -and -not $_.ok -and $_.severity -ne 'info' })   # GUARD:rowkey
       $script:St.remaining = $failedKbs.Count; Save
       Log "reboot pending; reporting $($failedKbs.Count) remaining to dom0 (boot scan will confirm)"
       Report-Availability $failedKbs.Count
+      # ---- WU-REBOOT-PENDING-REPORT-END
     } else {
       # Best-effort: this is a REPORT, not the work. It needs the proxy, and if anything has
       # taken the proxy away (measured: a concurrent scan's Remove-Proxy) Get-Available throws
