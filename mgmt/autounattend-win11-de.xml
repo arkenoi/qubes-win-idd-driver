@@ -1,0 +1,282 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Zero-click GERMAN WINDOWS 11 25H2 install (BIOS/MBR boot — Qubes HVM SeaBIOS default).
+
+     Derived from autounattend-win11.xml. The ONLY intended difference is LANGUAGE: this file
+     is for the German vendor media Win11_25H2_German_x64_v2.iso
+     (sha256 4fa6fe9500ce7166b22f8aa1705df89f7e69aa9065bda6535eefe711eed718d1,
+      volume id CCCOMA_X64FRE_DE-DE_DV9, install.wim LANGUAGES=de-DE DEFAULT=de-DE,
+      images BUILD 26200.8037 — i.e. 25H2 baked into the media, NOT an enablement package
+      applied by us). It exists because "a German Windows" cannot be faked with a locale
+      switch or a MUI pack on an English image: the display language has to come from the
+      media, and the media's answer file has to speak the same language or Setup IGNORES it
+      and falls back to the interactive picker, silently.
+
+     THE LANGUAGE IS HARDCODED, not templated. autounattend-win11.xml hardcodes its own
+     language in the same places; build-answer-stick.sh's LOCALE/KEYBOARD env vars substitute
+     the UILANG and INPUTLOCALE placeholders, which this file deliberately does not contain —
+     so it can never be built with the wrong language by forgetting an env var. (Do not write
+     those two placeholder tokens literally anywhere in this file, comments included: the
+     build script sed-substitutes them wherever they appear.) The image-name placeholder and
+     the PRODUCTKEY marker ARE still templated, and still asserted by the build script.
+
+     EDITION: the German ISO is retail multi-edition — 10 images, all named in ENGLISH
+     (verified from install.wim's own XML: index 5 = "Windows 11 Pro"). So IMAGE_NAME is
+     "Windows 11 Pro" exactly as on English media, and WITH_KEY=1 (the default) is required
+     for edition selection.
+
+     THREE DELIBERATE OMISSIONS vs autounattend-win11.xml, all in one place — the benchmark
+     hygiene block. That block exists to keep Windows Update out of a MEASUREMENT run. This
+     image's whole purpose is the opposite: it is the subject for Windows-update testing, and
+     our own updater agent documents the requirement (install-updater-agent.ps1: "The
+     wuauserv/USO services stay ENABLED: the on-demand path needs them; only the automatic
+     behaviour is disabled"). So these three are NOT set here:
+         reg ... DoNotConnectToWindowsUpdateInternetLocations /d 1   (blocks the scan outright)
+         sc config wuauserv start= disabled                          (breaks every driven scan)
+         sc config UsoSvc start= disabled                            (breaks the install flow)
+     NoAutoUpdate=1 IS still set (dom0 owns every install decision), and every other hygiene
+     setting — Store auto-update, idle maintenance, the Store Notepad banner — is kept
+     unchanged, because none of them touches the on-demand update path.
+
+     TIME ZONE is W. Europe Standard Time, not UTC: a German install from German media sits in
+     a German time zone, and the standing rule is to never assume an environment is
+     "diagnostically similar". tools/qtest synctime pushes an absolute ISO timestamp with an
+     explicit +0000 offset, so it is time-zone agnostic and unaffected.
+
+     Local account user/qubes, autologon, OOBE skipped, payload\setup.cmd on first logon —
+     unchanged. The final template's account rename (E4: no account named "user") happens
+     LATER, on the churn subject, not here: the base golden stays a plain vendor install. -->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+        xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <SetupUILanguage><UILanguage>de-DE</UILanguage></SetupUILanguage>
+      <InputLocale>0407:00000407</InputLocale><SystemLocale>de-DE</SystemLocale>
+      <UILanguage>de-DE</UILanguage><UserLocale>de-DE</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+        xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Description>partition the largest disk (size-based, not DiskID-based)</Description>
+          <Path>cmd /c for %d in (C D E F G H I J K L M N O P Q R S T U V) do @if exist %d:\diskprep.cmd call %d:\diskprep.cmd</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+      <!-- NO static DiskConfiguration: WinPE disk order is not guaranteed to match the
+           installed OS's, and a Qubes HVM shows three disks. diskprep.cmd (RunSynchronous
+           order 6) partitions the LARGEST by size and leaves the rest RAW. It drives
+           wmic + diskpart, both of which are present and English-keyword-only in this
+           media's WinPE (verified in sources\boot.wim image 2: /Windows/System32/wbem/WMIC.exe
+           and /Windows/System32/diskpart.exe, de-DE MUI alongside), so a German WinPE changes
+           nothing about it. -->
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add">
+              <Key>/IMAGE/NAME</Key><Value>@IMAGE_NAME@</Value>
+            </MetaData>
+          </InstallFrom>
+          <!-- diskprep.cmd leaves exactly one installable NTFS partition (C:) -->
+          <InstallToAvailablePartition>true</InstallToAvailablePartition>
+        </OSImage>
+      </ImageInstall>
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <!--PRODUCTKEY-->
+      </UserData>
+    </component>
+  </settings>
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <ComputerName>win11de-base</ComputerName>
+      <TimeZone>W. Europe Standard Time</TimeZone>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <!-- Without this component OOBE stalls on the region/keyboard pages; the -WinPE variant
+         above only covers Setup's own UI. de-DE here is what makes the INSTALLED system
+         German — display language, system locale and user locale all come off the media. -->
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <InputLocale>0407:00000407</InputLocale>
+      <SystemLocale>de-DE</SystemLocale>
+      <UILanguage>de-DE</UILanguage>
+      <UserLocale>de-DE</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+        xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <!-- Child ORDER here is cosmetic, not semantic. Do NOT re-add HideLocalAccountScreen or
+           NetworkLocation: Setup rejected the whole file with "could not parse or process
+           unattend answer file" when they were present (see autounattend-win11.xml). -->
+      <AutoLogon>
+        <Enabled>true</Enabled><Username>user</Username><LogonCount>999</LogonCount>
+        <Password><Value>qubes</Value><PlainText>true</PlainText></Password>
+      </AutoLogon>
+      <FirstLogonCommands>
+        <!-- ORDER 1 IS GERMAN-SPECIFIC and it is a CHECK, not a feature. On a German Windows
+             the builtin administrators group is named "Administratoren"; <Group>Administrators
+             </Group> below is the English well-known name. Setup's LocalAccounts handler maps
+             the well-known names to SIDs (which is why German unattend files in the wild use
+             the English spelling), but this rig's rule is that a check that cannot fail is
+             worthless. So: record the group's real localized name and its membership, and
+             attempt a SID-based repair if "user" is somehow not in it. The repair can only work
+             if the account already has an elevated token, so it is a belt, not a substitute —
+             its VALUE is the log line, which says plainly whether the English name resolved.
+             Everything after it needs HKLM write access and will fail loudly if it did not. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c powershell -NoProfile -ExecutionPolicy Bypass -Command "$g=(Get-LocalGroup -SID 'S-1-5-32-544').Name; $m=@(Get-LocalGroupMember -SID 'S-1-5-32-544' -EA SilentlyContinue | ForEach-Object { $_.Name }); Write-Output ('ADMINGROUP=' + $g); Write-Output ('MEMBERS=' + ($m -join ',')); if (-not ($m -match '\\user$')) { Add-LocalGroupMember -SID 'S-1-5-32-544' -Member 'user' -EA SilentlyContinue; Write-Output 'REPAIR=attempted' } else { Write-Output 'REPAIR=not-needed' }" >> C:\qubes-de-firstlogon.log 2>&amp;1</CommandLine>
+          <Description>de: record the localized administrators group and prove 'user' is in it</Description>
+          <Order>1</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c powercfg /h off</CommandLine>
+          <Description>disable hibernation and fast startup</Description>
+          <Order>2</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c powercfg /change monitor-timeout-ac 0 &amp; powercfg /change monitor-timeout-dc 0 &amp; powercfg /change standby-timeout-ac 0 &amp; powercfg /change standby-timeout-dc 0</CommandLine>
+          <Description>never blank the display or sleep</Description>
+          <Order>3</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f</CommandLine>
+          <Description>no lock screen</Description>
+          <Order>4</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v InactivityTimeoutSecs /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>no machine inactivity limit</Description>
+          <Order>5</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>reg add "HKCU\Control Panel\Desktop" /v ScreenSaveActive /t REG_SZ /d 0 /f</CommandLine>
+          <Description>no screensaver</Description>
+          <Order>6</Order>
+        </SynchronousCommand>
+        <!-- A Windows qube must not lock its own session. In Qubes the isolation boundary is
+             the VM, enforced by dom0; a guest lock screen adds no isolation and invites typing
+             a password INTO an untrusted VM. It also breaks things concretely: a locked session
+             makes qrexec unusable, unmaps the guest's windows, and composites the lock screen.
+             NoLockScreen (Order 4) only hides the lock-screen UI; DisableLockWorkstation is
+             what actually prevents locking. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v DisableLockWorkstation /t REG_DWORD /d 1 /f &amp; reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop" /v ScreenSaveActive /t REG_SZ /d 0 /f &amp; reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop" /v ScreenSaverIsSecure /t REG_SZ /d 0 /f</CommandLine>
+          <Description>never lock the workstation (Qubes model: dom0 locks, guests do not)</Description>
+          <Order>7</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c powercfg /setacvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK 0 &amp; powercfg /setdcvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK 0 &amp; powercfg /setactive SCHEME_CURRENT &amp; reg add "HKCU\Control Panel\Desktop" /v ScreenSaverIsSecure /t REG_SZ /d 0 /f &amp; reg add "HKCU\Control Panel\Desktop" /v ScreenSaveTimeOut /t REG_SZ /d 0 /f</CommandLine>
+          <Description>no password on wake, no screensaver timeout</Description>
+          <Order>8</Order>
+        </SynchronousCommand>
+        <!-- The CD is gone by first logon (guest reboot destroys the Qubes domain and the
+             cdrom assignment), so prefer C:\payload staged by $OEM$; scan other letters only
+             as a fallback. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c for %%d in (C D E F G H I J K L M N O P Q R S T U V) do @if exist %%d:\payload\disable-hw-accel.ps1 powershell -NoProfile -ExecutionPolicy Bypass -File %%d:\payload\disable-hw-accel.ps1</CommandLine>
+          <Description>disable GPU/hardware acceleration for known software (no GPU in this guest)</Description>
+          <Order>9</Order>
+        </SynchronousCommand>
+        <!-- RETRY, DO NOT SCAN ONCE (2026-09-07, measured). The payload lives on a USB stick.
+             This command used to scan the drive letters exactly ONCE at first logon: if no
+             letter had been enumerated by that instant, every `if exist` failed, cmd exited 0,
+             and THE INSTALL NEVER RAN - no retry, no error, no trace, and with no QWT there is
+             no qrexec, no gui-agent log and no xencons either. Now it retries for ~90 s. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c for /l %i in (1,1,45) do @(if exist C:\payload\setup.cmd (call C:\payload\setup.cmd &amp; exit) else (for %d in (D E F G H I J K L M N O P Q R S T U V) do @if exist %d:\payload\setup.cmd (call %d:\payload\setup.cmd &amp; exit)) &amp; ping -n 3 127.0.0.1 &gt;nul)</CommandLine>
+          <Description>qubes-win-idd payload</Description>
+          <Order>10</Order>
+        </SynchronousCommand>
+        <!-- AUTOLOGON MUST SURVIVE EVERY REBOOT, and <LogonCount> is why it did not. While
+             AutoLogonCount is present Windows CONSUMES DefaultPassword, deleting it after use;
+             autologon is then left with a username and no password and falls back to the
+             sign-in screen. Deleting AutoLogonCount and re-writing DefaultPassword makes it
+             unlimited. TEST PROVISIONING ONLY - plaintext password in the registry, which the
+             shipped installer must never do (guest/set-autologon.ps1 uses the LSA secret). -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoLogonCount /f &amp; reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 1 /f &amp; reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultUserName /t REG_SZ /d user /f &amp; reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /t REG_SZ /d qubes /f</CommandLine>
+          <Description>autologon unlimited (test rig only - plaintext password)</Description>
+          <Order>11</Order>
+        </SynchronousCommand>
+        <!-- NoAutoUpdate ONLY - see the header. dom0 owns every install decision, but the
+             wuauserv / UsoSvc services and the WU internet locations stay available, because
+             this guest exists to be driven through an actual update pass. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f</CommandLine>
+          <Description>dom0 owns updates: no automatic install (services deliberately left enabled)</Description>
+          <Order>12</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\WindowsStore" /v AutoDownload /t REG_DWORD /d 2 /f &amp; reg add "HKLM\SOFTWARE\Policies\Microsoft\WindowsStore" /v DisableOSUpgrade /t REG_DWORD /d 1 /f &amp; sc config InstallService start= disabled &amp; sc stop InstallService &amp; schtasks /Change /TN "\Microsoft\Windows\TaskScheduler\Idle Maintenance" /Disable &amp; schtasks /Change /TN "\Microsoft\Windows\TaskScheduler\Regular Maintenance" /Disable</CommandLine>
+          <Description>no Store auto-update, no OS upgrade offers (E1 pins 25H2), no idle maintenance</Description>
+          <Order>13</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SilentInstalledAppsEnabled /t REG_DWORD /d 0 /f &amp; reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v PreInstalledAppsEnabled /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>no silently installed Store apps churning the image</Description>
+          <Order>14</Order>
+        </SynchronousCommand>
+        <!-- Launch the restart-prompt dismisser BEFORE the payload, in the background. A PV
+             driver install raises a MODAL "needs to restart the system to complete
+             installation" dialog; it blocks the rest of firstboot and qrexec does not answer
+             while it is up, so the guest becomes unreachable and cannot be clicked from
+             outside. It answers NO (defer): rebooting mid-payload would cut the remaining
+             install steps short. Bounded to 45 minutes so it cannot linger. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c start "" /min powershell -NoProfile -ExecutionPolicy Bypass -File C:\payload\dismiss-restart-prompts.ps1 -Minutes 45</CommandLine>
+          <Description>background: auto-defer driver restart prompts during the payload install</Description>
+          <Order>15</Order>
+        </SynchronousCommand>
+        <!-- TEST RIG ONLY - never ship. Disable UAC so the 'user' account (a member of
+             Administrators) gets an UNFILTERED token at logon. Without this, Win11 hands
+             qrexec a filtered Medium-integrity token and 'schtasks /create /rl HIGHEST' is
+             denied, so guest/run-elevated.ps1's elevation trick fails. Takes effect on the
+             reboot the provisioner already performs after install. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>test rig: disable UAC so the elevated agent swap works (never ship)</Description>
+          <Order>16</Order>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+      <UserAccounts>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Name>user</Name><Group>Administrators</Group>
+            <Password><Value>qubes</Value><PlainText>true</PlainText></Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+    </component>
+  </settings>
+</unattend>
