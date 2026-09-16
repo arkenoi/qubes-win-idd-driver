@@ -1521,7 +1521,11 @@ function Classify-PrivateDiskState {
         if ($schemeKnown) {
             return @{ state = 'NOT-READY'; why = "disk #1 is RAW and named '$($d1.FriendlyName)' but its serial '$sn' is unlisted while sibling disks use the known scheme - an interloper at #1; waiting for the private disk to enumerate"; disk1 = $d1 }
         }
-        return @{ state = 'READY-SERIAL-UNKNOWN'; why = "disk #1 is RAW and named '$($d1.FriendlyName)' (stock's precondition holds) and NO disk in the table matches a known serial scheme - volatile cross-check NOT applied; record this scheme"; disk1 = $d1 }
+        # The stock action is DROPPED from the MSI build (packaging/patch-installer-drop-prepareprivateimg.ps1),
+        # so on an unrecognised serial scheme the wrapper does exactly what stock did: prepare disk #1 when it
+        # is RAW and stock-named. No better than stock there (the volatile cross-check cannot apply), no worse,
+        # and the serial is logged so the scheme can be added.
+        return @{ state = 'READY-SERIAL-UNKNOWN'; why = "disk #1 is RAW and named '$($d1.FriendlyName)' and NO disk in the table matches a known serial scheme - preparing #1 as stock would have; volatile cross-check NOT applied; record serial '$sn'"; disk1 = $d1; priv = $d1 }
     }
     return @{ state = 'NOT-READY'; why = "disk #1 is '$($d1.FriendlyName)' sn '$sn' ($($d1.PartitionStyle)) and the private disk is not enumerated yet"; disk1 = $d1 }
 }
@@ -1588,7 +1592,7 @@ function Wait-PrivateDiskReady {
             # serial - makes stock's action a no-op in every one of those states, exactly as it is on
             # the upgrade path. NONRAW refuses (data we did not put there); unknown scheme leaves it
             # to stock. Owner 2026-09-16: "why is the most important issue NOT solved?" - this is why.
-            if ($c.priv -and $c.state -in @('READY', 'MISNUMBERED', 'VOLATILE-AT-1', 'WRONGNAME-AT-1')) {
+            if ($c.priv -and $c.state -in @('READY', 'READY-SERIAL-UNKNOWN', 'MISNUMBERED', 'VOLATILE-AT-1', 'WRONGNAME-AT-1')) {
                 & $dump "prepare-$($c.state)" $disks
                 $p = $c.priv
                 Write-Log "private-disk gate: $($c.state) after ${el}s - preparing Q: on disk #$($p.Number) (sn '$($p.SerialNumber)', $([math]::Round($p.Size/1GB,1))GB, RAW) ourselves, before msiexec"

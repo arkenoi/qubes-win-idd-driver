@@ -92,7 +92,8 @@ ExpectPriv 'VOLATILE at #1, private RAW at #2: prepare #2, never #1'       @( (D
 ExpectPriv 'VOLATILE at #1, private ABSENT: nothing to prepare (priv null)' @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'QEMU HARDDISK' 10 'RAW' 'QM00003') ) 'VOLATILE-AT-1' $null
 ExpectPriv 'WRONGNAME at #1 (private serial, odd name): prepare #1'         @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'Virtio HARDDISK' 20 'RAW' 'QM00002') ) 'WRONGNAME-AT-1' 1
 ExpectPriv 'NONRAW at #1: priv must be null (refuse, never format data)'   @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'QEMU HARDDISK' 20 'GPT' 'QM00002') ) 'NONRAW-AT-1' $null
-ExpectPriv 'SERIAL-UNKNOWN: priv must be null (leave it to stock)'          @( (D 0 'QEMU HARDDISK' 80 'MBR' 'S1'), (D 1 'QEMU HARDDISK' 20 'RAW' 'S2') ) 'READY-SERIAL-UNKNOWN' $null
+# The stock action is dropped from the MSI build, so on an unknown scheme the wrapper prepares #1 exactly as stock did.
+ExpectPriv 'SERIAL-UNKNOWN: prepare #1 as stock would have (stock action is dropped)' @( (D 0 'QEMU HARDDISK' 80 'MBR' 'S1'), (D 1 'QEMU HARDDISK' 20 'RAW' 'S2') ) 'READY-SERIAL-UNKNOWN' 1
 Write-Host "=== private-disk gate selftest: $pass passed, $fail failed ==="
 exit $(if ($fail -eq 0) { 0 } else { 1 })
 PS

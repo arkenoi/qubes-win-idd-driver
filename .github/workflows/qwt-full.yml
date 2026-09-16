@@ -46,6 +46,7 @@ on:
       - 'vendor/qwt-4.2.2/**'
       - 'packaging/stage-qwt-repo.ps1'
       - 'packaging/patch-xenbus-inf.ps1'
+      - 'packaging/patch-installer-drop-prepareprivateimg.ps1'
       - '.github/workflows/qwt-full.yml'
       # The user-session helpers are BUILT here and staged into the setup tree's bin\ - a
       # source change to either must rebuild them or the shipped helper goes stale (the
@@ -195,6 +196,27 @@ jobs:
           if ($src -notmatch '!interactive \&\& wcscmp') { throw 'interactive-logon fix marker missing after patch' }
           if ($src -match 'if \(!userToken \|\| wcscmp\(loggedUserName, userName\)\)') { throw 'the old name-match gate is still present after patching' }
           Write-Host "::notice title=windows-utils::interactive-logon fix applied"
+
+      # THE PRIVATE VOLUME IS OURS NOW. Stock's PreparePrivateImg custom action is one cold
+      # `Get-Disk -Number 1` with Return="ignore": 4 of 28 clean Win10 installs finished with no Q:
+      # through it (2026-09-16), 3 graded ok:true, and it cannot tell the private disk from the
+      # volatile. Install-QwtImproved.ps1 identifies the private disk by serial and creates Q: on it
+      # BEFORE msiexec, which leaves the stock action a no-op at best and, with the volatile at #1,
+      # a not-quite-no-op that partitions the scratch disk. Owner: "if it is no op, drop it." Same
+      # mechanism as the two patches above: the installer source is cloned fresh at the pinned tag,
+      # so this is the only place the removal can reach a build. The script FAILS the build if any
+      # of the three elements is not found, or if the identifier survives.
+      - name: "Drop the stock PreparePrivateImg action - the wrapper owns Q:"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          & "$ws\packaging\patch-installer-drop-prepareprivateimg.ps1" -WxsPath "$ws\installer-src\vs2022\installer\Package.wxs"
+          # Show what shipped, so the log carries the proof rather than a claim.
+          $n = (Select-String -Path "$ws\installer-src\vs2022\installer\Package.wxs" -Pattern 'PreparePrivateImg' | Measure-Object).Count
+          if ($n -ne 0) { throw "PreparePrivateImg still referenced $n time(s) in Package.wxs" }
+          Select-String -Path "$ws\installer-src\vs2022\installer\Package.wxs" -Pattern '<Custom Action=' | ForEach-Object { "  $($_.Line.Trim())" }
+          Write-Host "::notice title=installer::stock PreparePrivateImg action dropped; Install-QwtImproved.ps1 creates Q:"
       - name: Shadow every set-version script with the QWT-NG stamper; wire one version into every shipped binary
         shell: pwsh
         run: |
