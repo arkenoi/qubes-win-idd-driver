@@ -1,0 +1,32 @@
+{
+  "note": "pristine German Win11 25H2 (Win11_25H2_German_x64_v2.iso, install.wim BUILD 26200.8037, de-DE), primer hook installed, testsigning OFF, no QWT",
+  "props": {
+    "klass": "StandaloneVM",
+    "maxmem": "8192",
+    "memory": "8192",
+    "vcpus": "4",
+    "virt_mode": "hvm"
+  },
+  "sealed_utc": "2026-09-16T18:03:21Z",
+  "vm": "win11de-base",
+  "volumes": {
+    "private": {
+      "revisions": [
+        "1789579953-back",
+        "1789581791-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "21474836480",
+      "usage": "2147483"
+    },
+    "root": {
+      "revisions": [
+        "1789579953-back",
+        "1789581791-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "85899345920",
+      "usage": "15848429322"
+    }
+  }
+}
