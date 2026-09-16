@@ -62,6 +62,17 @@ else
   [ -n "$q" ] || { echo "ENVASSERT FATAL: qvm-ls has no row for $VM" >&2; exit 2; }
   cls=$(echo "$q" | cut -d'|' -f2); nv=$(echo "$q" | cut -d'|' -f3); [ "$nv" = "-" ] && nv=""
   du=$(qvm-prefs "$VM" default_user 2>/dev/null)
+  # NEWLINE-TERMINATE THE GUEST PROBE BEFORE APPENDING HOST FACTS.
+  # Measured 2026-09-16 on win11de-acc, the first live run of this script: `qtest run` ends its
+  # output with the interactive cmd prompt and NO trailing newline, so the first host fact was
+  # glued onto it and the parser - which splits on the first '=' - read the key as
+  # "C:\Windows\System32>qube_class". qube_class therefore reported "<not measured>" on EVERY live
+  # guest, while netvm and default_user (2nd and 3rd lines) parsed fine. The offline self-test
+  # could not catch it: ENVASSERT_FAKE_FACTS is cp'd straight in, so it never exercises this append.
+  # This is the "check that cannot pass" mirror of the defect knob below - it would have turned the
+  # one fact distinguishing a TemplateVM from a StandaloneVM into a permanent exit-2, i.e. a script
+  # that can never certify any environment. Fixed by terminating the file first.
+  [ -s "$FACTS" ] && [ "$(tail -c1 "$FACTS" | od -An -c | tr -d ' ')" != '\n' ] && printf '\n' >> "$FACTS"
   { echo "qube_class=$cls"; echo "netvm=$nv"; echo "default_user=$du"; } >> "$FACTS"
 fi
 
