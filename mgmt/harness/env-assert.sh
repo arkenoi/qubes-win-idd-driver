@@ -58,21 +58,31 @@ else
   enc=$(printf '%s' "$PS" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
   QTEST_VM="$VM" timeout -k 5 150 ./tools/qtest run "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $enc" 2>/dev/null | tr -d '\r' > "$FACTS"
   grep -q '^ENVASSERT-END=1' "$FACTS" || { echo "ENVASSERT FATAL: guest probe on $VM did not complete (qrexec down, or the guest is not up)" >&2; exit 2; }
+fi
+# Qube facts: live from the Admin API, or ENVASSERT_FAKE_QUBE="class|netvm|default_user" so the
+# self-test drives the SAME append path the live run uses (see the newline note below).
+cls=""; nv=""; du=""; append=0
+if [ -n "${ENVASSERT_FAKE_QUBE:-}" ]; then
+  IFS='|' read -r cls nv du <<<"$ENVASSERT_FAKE_QUBE"; append=1
+elif [ -z "${ENVASSERT_FAKE_FACTS:-}" ]; then
   q=$(qvm-ls --raw-data --fields NAME,CLASS,NETVM "$VM" 2>/dev/null | head -1)
   [ -n "$q" ] || { echo "ENVASSERT FATAL: qvm-ls has no row for $VM" >&2; exit 2; }
   cls=$(echo "$q" | cut -d'|' -f2); nv=$(echo "$q" | cut -d'|' -f3); [ "$nv" = "-" ] && nv=""
-  du=$(qvm-prefs "$VM" default_user 2>/dev/null)
+  du=$(qvm-prefs "$VM" default_user 2>/dev/null); append=1
+fi
+if [ "$append" = 1 ]; then
   # NEWLINE-TERMINATE THE GUEST PROBE BEFORE APPENDING HOST FACTS.
   # Measured 2026-09-16 on win11de-acc, the first live run of this script: `qtest run` ends its
   # output with the interactive cmd prompt and NO trailing newline, so the first host fact was
   # glued onto it and the parser - which splits on the first '=' - read the key as
   # "C:\Windows\System32>qube_class". qube_class therefore reported "<not measured>" on EVERY live
-  # guest, while netvm and default_user (2nd and 3rd lines) parsed fine. The offline self-test
-  # could not catch it: ENVASSERT_FAKE_FACTS is cp'd straight in, so it never exercises this append.
-  # This is the "check that cannot pass" mirror of the defect knob below - it would have turned the
-  # one fact distinguishing a TemplateVM from a StandaloneVM into a permanent exit-2, i.e. a script
-  # that can never certify any environment. Fixed by terminating the file first.
-  [ -s "$FACTS" ] && [ "$(tail -c1 "$FACTS" | od -An -c | tr -d ' ')" != '\n' ] && printf '\n' >> "$FACTS"
+  # guest, while netvm and default_user (2nd and 3rd lines) parsed fine - a script that could never
+  # certify any environment, the "check that cannot pass" mirror of the ENVASSERT_DEFECT=1 knob.
+  # The self-test now drives this path (ENVASSERT_FAKE_QUBE + a prompt-terminated guest file) and
+  # ENVASSERT_DEFECT=glue re-introduces the bug so it is seen to fail.   # GUARD:envassert-glue
+  if [ "${ENVASSERT_DEFECT:-}" != "glue" ]; then
+    [ -s "$FACTS" ] && [ "$(tail -c1 "$FACTS" | od -An -c | tr -d ' ')" != '\n' ] && printf '\n' >> "$FACTS"
+  fi
   { echo "qube_class=$cls"; echo "netvm=$nv"; echo "default_user=$du"; } >> "$FACTS"
 fi
 

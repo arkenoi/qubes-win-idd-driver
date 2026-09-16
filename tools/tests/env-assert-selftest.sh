@@ -5,12 +5,15 @@
 # StandaloneVM, default_user still 'user'), and an unmeasurable fact FAILS rather than passing.
 #
 # Per this project's rule a check counts only once it has been seen to FAIL on the defect:
-#   ENVASSERT_DEFECT=1  - the comparison cannot fail (the original bug: a "matched" verdict on a
-#                         24H2 English guest) -> the mismatch cases pass -> THIS TEST MUST FAIL (exit 1)
+#   ENVASSERT_DEFECT=1    - the comparison cannot fail (the original bug: a "matched" verdict on a
+#                           24H2 English guest) -> the mismatch cases pass -> THIS TEST MUST FAIL (exit 1)
+#   ENVASSERT_DEFECT=glue - no newline termination before the appended qube facts (the 2026-09-16
+#                           live defect: qube_class glued to the cmd prompt) -> THIS TEST MUST FAIL (exit 1)
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 S=mgmt/harness/env-assert.sh
 grep -q 'GUARD:envassert-compare' "$S" || { echo "FATAL: defect-knob guard line missing from $S"; exit 2; }
+grep -q 'GUARD:envassert-glue' "$S" || { echo "FATAL: glue-knob guard line missing from $S"; exit 2; }
 T=$(mktemp -d "${TMPDIR:-/tmp}/envassert.XXXXXX"); trap 'rm -rf "$T"' EXIT
 pass=0; fail=0
 good(){ cat <<'EOF'
@@ -46,9 +49,19 @@ run "default_user still user -> MISMATCH"                           3 's/^defaul
 run "Windows 10 build -> MISMATCH"                                  3 's/^current_build=.*/current_build=19045/; s/^display_version=.*/display_version=22H2/'
 run "ui_language not measured at all -> MISSING (exit 2)"           2 '/^ui_language=/d'
 run "class not measured -> MISSING (exit 2)"                        2 '/^qube_class=/d'
+# The live shape (2026-09-16, first run on a guest): qtest ends the guest output with the cmd prompt
+# and NO newline; the host facts are appended after it. Guest-only fake file + ENVASSERT_FAKE_QUBE
+# drives the real append path. ENVASSERT_DEFECT=glue (no newline termination) must make this FAIL.
+run_glue(){ local f="$T/g.txt" rc out
+  good | grep -vE '^(qube_class|netvm|default_user)=' > "$f"; printf 'C:\\Windows\\System32>' >> "$f"
+  out=$(ENVASSERT_FAKE_FACTS="$f" ENVASSERT_FAKE_QUBE="TemplateVM||gerd-test" bash "$S" fake-vm gweck 2>&1); rc=$?
+  if [ "$rc" = 0 ]; then pass=$((pass+1)); echo "ok    prompt-terminated guest output + appended qube facts -> OK (exit 0)"
+  else fail=$((fail+1)); echo "FAIL  prompt-terminated guest output + appended qube facts: expected exit 0, got $rc"; echo "$out" | sed 's/^/      /' | head -14; fi
+}
+run_glue
 
 echo "summary: $pass passed, $fail failed"
-if [ "${ENVASSERT_DEFECT:-}" = "1" ]; then
+if [ -n "${ENVASSERT_DEFECT:-}" ]; then
   [ "$fail" -gt 0 ] && { echo "DEFECT KNOB: the comparison could not fail and this test FAILED on it - the check is proven able to fail"; exit 1; }
   echo "DEFECT KNOB: the test did NOT fail with the comparison disabled - the check is worthless"; exit 1
 fi
