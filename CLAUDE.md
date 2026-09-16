@@ -116,6 +116,14 @@ interleaved:
   5. **The premature reboot dialog is a NETWORK-path event.** It is raised by "Xen PV Network Class"
      and therefore cannot appear on a `netvm=''` guest. Any "no reboot dialog" result measured
      without a vif proves nothing about it.
+- **A field report is reproduced on the REPORTER'S environment - enforced by code, not by this sentence**
+  (owner 2026-09-16, after a day and half the week's Fable budget went to a 24H2/English stand-in for a
+  25H2/German report, and the run was still called "reproduced"): the reporter's measured environment is
+  data in `mgmt/reporters/<name>.json`; `mgmt/harness/env-assert.sh <vm> <name>` measures a guest against
+  it and exits non-zero on any mismatch or unmeasured fact; the PreToolUse hook
+  `tools/hooks/reporter-env-gate.sh` (`.claude/settings.json`) refuses any Workflow/Agent launch that names a
+  registered reporter and touches the rig without that call. "Diagnostically similar" is not an environment;
+  if the environment does not exist on the rig, building it is the first task.
 - Commit early and often; every session appends dated findings to `FINDINGS.md`.
 
 ## Phase 0 — environment convergence (acceptance-gated; do all before any driver work)

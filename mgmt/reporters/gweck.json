@@ -1,0 +1,18 @@
+{
+  "reporter": "GWeck",
+  "aliases": ["gweck", "gerhard weck", "dr. gerhard weck"],
+  "source": "forum.qubes-os.org thread 42717 (fetched 2026-09-16); post numbers cited per fact",
+  "note": "Every asserted fact below is MEASURED by mgmt/harness/env-assert.sh on a guest before a reproduction may run. 'diagnostically similar' is not an environment (owner, 2026-09-16). Facts with assert=false are recorded context, enforced elsewhere or not measurable on the guest.",
+  "environment": {
+    "product":              { "value": "Windows 11",  "assert": true,  "source": "#146 'my Windows 11 template'; derived from CurrentBuild >= 22000 (the registry ProductName says 'Windows 10' on Windows 11)" },
+    "display_version":      { "value": "25H2",        "assert": true,  "source": "#27 'using W11 25H2 as a template'; #49, #55, #64, #79 all 'Windows 11 25H2'" },
+    "current_build":        { "value": "26200",       "assert": true,  "source": "25H2 = build 26200 (an enablement package over 24H2's 26100); a 26100 guest is 24H2, not his" },
+    "ui_language":          { "value": "de-DE",       "assert": true,  "source": "#146 attached qrexec-wrapper log carries the OS error text in German ('Der Benutzername oder das Kennwort ist falsch.'); #30 'safe mode (number 4 in a German system)'. Measured as InstalledUICulture - the language Windows was INSTALLED in, which a locale switch or a MUI pack does not change" },
+    "qube_class":           { "value": "TemplateVM",  "assert": true,  "source": "#146 'my Windows 11 template'; #116 'The template had several short logs'. The updater exits early on any other class" },
+    "netvm":                { "value": "",            "assert": true,  "source": "#79 - his templates run without a netvm; updates go only over qubes.UpdatesProxy" },
+    "account_user_absent":  { "value": "true",        "assert": true,  "source": "#148 'My W11 qube has no user \"user\".'" },
+    "default_user_not_user":{ "value": "true",        "assert": true,  "source": "#148 'It's user name is stored in qvm-prefs' (qvm-prefs default_user is not 'user')" },
+    "qwt_source":           { "value": "release-package", "assert": false, "source": "#153 - he installs the published releases (4.3.28, 4.3.29); enforced by the harness rule that our code enters a guest only from a release package" },
+    "update_level_before":  { "value": "fully updated as of 2026-08 (#85, 2026-08-23)", "assert": false, "source": "#85 'My Windows 10 and 11 templates are both fully updated'; the September 2026 Patch Tuesday cumulative is the first update his Win11 had to take through our path (#146, 2026-09-10)" }
+  }
+}

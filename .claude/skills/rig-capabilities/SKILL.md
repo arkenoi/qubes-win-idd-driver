@@ -52,7 +52,7 @@ before tags exist (hence `mgmt/clone-to-template.sh`'s create → tag → copy o
 | `git push origin` | **PASS** | Public repo `arkenoi/qubes-win-idd-driver` |
 | pwsh 7.4 locally | **PASS** | `/home/user/pwsh74/pwsh` — parse-check `.ps1` before shipping (`tools/ps-parse-gate.sh`) |
 | `7z`, `cabextract`, `python3` | **PASS** | Inspect MSIs, answer-stick images, catalogs |
-| **`losetup` ATTACH** | **FAIL** | Permission denied — needs root. Loop devices must already exist; rebuild the backing IMAGE in place at constant size instead |
+| **`losetup` ATTACH** | **FAIL** (root) — **but `udisksctl loop-setup -r -f <file>` attaches root-free: PASS** | The root-only row cost a Build agent 20 min on 2026-09-16 while `mgmt/harness/matrix.sh:258-280` had been serving every release ISO through udisksctl for two weeks. New backing files: `udisksctl loop-setup` (drop `-r` for read-write); existing sticks may still be rewritten in place at constant size |
 | `losetup -l` (read) | **PASS** | |
 
 ## Environment map
