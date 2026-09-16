@@ -79,6 +79,20 @@ Expect 'interloper at #1 (unlisted serial) with root QM00001 at #0 -> NOT-READY'
 # Review (B2): a disk whose Number is not assigned yet is not-yet-enumerated - wait, do not call it misnumbered.
 $nullNum = [pscustomobject]@{ Number = $null; FriendlyName = 'QEMU HARDDISK'; Size = [int64](20 * 1GB); PartitionStyle = 'RAW'; SerialNumber = 'QM00002'; BusType = 'x'; Location = 'x' }
 Expect 'private disk with Number=$null (not yet numbered) -> NOT-READY'     @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), $nullNum ) $false 'NOT-READY'
+# ---- the disk the WRAPPER prepares ('priv'): must name the private disk wherever it is, and nothing else ----
+function ExpectPriv([string]$label, $disks, [string]$wantState, $wantNum) {
+    $r = Classify-PrivateDiskState -Disks $disks -QPresent $false
+    $got = if ($r.priv) { [int]$r.priv.Number } else { $null }
+    if ($r.state -eq $wantState -and $got -eq $wantNum) { $script:pass++; Write-Host "PASS  $label -> $($r.state) priv=#$got" }
+    else { $script:fail++; Write-Host "FAIL  $label -> got $($r.state) priv=#$got, wanted $wantState priv=#$wantNum" }
+}
+ExpectPriv 'READY: prepare disk #1 itself'                                 $EMU 'READY' 1
+ExpectPriv 'MISNUMBERED (stick at #1, private RAW at #3): prepare #3'      @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'QEMU QEMU HARDDISK' 0.1 'MBR' 'x'), (D 3 'QEMU HARDDISK' 20 'RAW' 'QM00002') ) 'MISNUMBERED' 3
+ExpectPriv 'VOLATILE at #1, private RAW at #2: prepare #2, never #1'       @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'QEMU HARDDISK' 10 'RAW' 'QM00003'), (D 2 'QEMU HARDDISK' 20 'RAW' 'QM00002') ) 'VOLATILE-AT-1' 2
+ExpectPriv 'VOLATILE at #1, private ABSENT: nothing to prepare (priv null)' @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'QEMU HARDDISK' 10 'RAW' 'QM00003') ) 'VOLATILE-AT-1' $null
+ExpectPriv 'WRONGNAME at #1 (private serial, odd name): prepare #1'         @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'Virtio HARDDISK' 20 'RAW' 'QM00002') ) 'WRONGNAME-AT-1' 1
+ExpectPriv 'NONRAW at #1: priv must be null (refuse, never format data)'   @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'QEMU HARDDISK' 20 'GPT' 'QM00002') ) 'NONRAW-AT-1' $null
+ExpectPriv 'SERIAL-UNKNOWN: priv must be null (leave it to stock)'          @( (D 0 'QEMU HARDDISK' 80 'MBR' 'S1'), (D 1 'QEMU HARDDISK' 20 'RAW' 'S2') ) 'READY-SERIAL-UNKNOWN' $null
 Write-Host "=== private-disk gate selftest: $pass passed, $fail failed ==="
 exit $(if ($fail -eq 0) { 0 } else { 1 })
 PS

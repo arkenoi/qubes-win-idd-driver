@@ -1490,18 +1490,24 @@ function Classify-PrivateDiskState {
     $sn     = "$($d1.SerialNumber)".Trim()
     $nameOk = $StockNames -contains "$($d1.FriendlyName)"
     $raw    = ("$($d1.PartitionStyle)" -eq 'RAW')
+    # 'priv' = the RAW private disk WE can prepare, whenever the table proves which one it is. The
+    # caller creates Q: on it itself (Initialize-Disk + New-Volume, exactly stock's two calls) BEFORE
+    # msiexec, so stock's positional action becomes a no-op in every state below - the clean install
+    # then looks to the MSI exactly like the upgrade path, which works. That is what makes the 14%
+    # case INSTALL instead of merely refuse: the wrapper never depends on stock's cold `-Number 1`.
     if ($VolatileSerials -contains $sn) {
-        return @{ state = 'VOLATILE-AT-1'; why = "disk #1 is the VOLATILE disk (sn '$sn', $([math]::Round($d1.Size/1GB,1))GB, $($d1.PartitionStyle)) - stock would format the ephemeral disk as Q:"; disk1 = $d1 }
+        $p = if ($privRawElsewhere.Count -gt 0) { $privRawElsewhere[0] } else { $null }
+        return @{ state = 'VOLATILE-AT-1'; why = "disk #1 is the VOLATILE disk (sn '$sn', $([math]::Round($d1.Size/1GB,1))GB, $($d1.PartitionStyle)) - stock would format the ephemeral disk as Q:$(if ($p) { "; the private disk (sn '$($p.SerialNumber)') is RAW at #$($p.Number) and will be prepared by the wrapper" })"; disk1 = $d1; priv = $p }
     }
     if ($PrivateSerials -contains $sn) {
-        if ($nameOk -and $raw) { return @{ state = 'READY'; why = "disk #1 is the private disk (sn '$sn'), RAW, named '$($d1.FriendlyName)'"; disk1 = $d1 } }
+        if ($nameOk -and $raw) { return @{ state = 'READY'; why = "disk #1 is the private disk (sn '$sn'), RAW, named '$($d1.FriendlyName)'"; disk1 = $d1; priv = $d1 } }
         if (-not $raw) { return @{ state = 'NONRAW-AT-1'; why = "disk #1 is the private disk (sn '$sn') but PartitionStyle=$($d1.PartitionStyle), not RAW, and Q: does not exist - stock would skip"; disk1 = $d1 } }
-        return @{ state = 'WRONGNAME-AT-1'; why = "disk #1 is the private disk (sn '$sn'), RAW, but named '$($d1.FriendlyName)' which stock does not match"; disk1 = $d1 }
+        return @{ state = 'WRONGNAME-AT-1'; why = "disk #1 is the private disk (sn '$sn'), RAW, but named '$($d1.FriendlyName)' which stock does not match - identity is by serial, so the wrapper prepares it"; disk1 = $d1; priv = $d1 }
     }
     # #1 is something else: a prime stick ('QEMU QEMU HARDDISK'), the root, or an unknown serial scheme.
     if ($privRawElsewhere.Count -gt 0) {
         $p = $privRawElsewhere[0]
-        return @{ state = 'MISNUMBERED'; why = "disk #1 is '$($d1.FriendlyName)' sn '$sn' ($($d1.PartitionStyle)), while the private disk (sn '$($p.SerialNumber)') is RAW at #$($p.Number)"; disk1 = $d1 }
+        return @{ state = 'MISNUMBERED'; why = "disk #1 is '$($d1.FriendlyName)' sn '$sn' ($($d1.PartitionStyle)), while the private disk (sn '$($p.SerialNumber)') is RAW at #$($p.Number) - the wrapper prepares it there"; disk1 = $d1; priv = $p }
     }
     if ($nameOk -and $raw) {
         # ONLY when the scheme is genuinely unknown for the WHOLE table. Review 2026-09-16 (A2): with
@@ -1574,6 +1580,35 @@ function Wait-PrivateDiskReady {
         }
         while ($true) {
             $el = [int]((Get-Date) - $t0).TotalSeconds
+            # PREPARE IT OURSELVES whenever the table proves which disk is the private one. Asserting
+            # the precondition only helps when the trigger is "not enumerated yet"; when something
+            # else holds #1 (a prime stick, the root, the volatile) no wait makes stock's `-Number 1`
+            # right, and even on the READY path stock re-reads the table ~6 s later in another
+            # process. Creating Q: here - the same two calls stock makes, on the disk identified by
+            # serial - makes stock's action a no-op in every one of those states, exactly as it is on
+            # the upgrade path. NONRAW refuses (data we did not put there); unknown scheme leaves it
+            # to stock. Owner 2026-09-16: "why is the most important issue NOT solved?" - this is why.
+            if ($c.priv -and $c.state -in @('READY', 'MISNUMBERED', 'VOLATILE-AT-1', 'WRONGNAME-AT-1')) {
+                & $dump "prepare-$($c.state)" $disks
+                $p = $c.priv
+                Write-Log "private-disk gate: $($c.state) after ${el}s - preparing Q: on disk #$($p.Number) (sn '$($p.SerialNumber)', $([math]::Round($p.Size/1GB,1))GB, RAW) ourselves, before msiexec"
+                try {
+                    Initialize-Disk -Number $p.Number -PartitionStyle GPT -PassThru -ErrorAction Stop | Out-Null
+                    $vol = New-Volume -DiskNumber $p.Number -DriveLetter Q -FriendlyName 'Qubes Private Image' -FileSystem NTFS -ErrorAction Stop
+                    $onDisk = (Get-Partition -DriveLetter Q -ErrorAction Stop).DiskNumber
+                    if (-not (Test-Path -LiteralPath 'Q:\') -or [int]$onDisk -ne [int]$p.Number) {
+                        throw "Q: is $(if (Test-Path -LiteralPath 'Q:\') { "present but on disk #$onDisk" } else { 'absent' }) after New-Volume on disk #$($p.Number)"
+                    }
+                    Write-Log "private-disk gate: Q: created on disk #$($p.Number) ($([math]::Round($vol.Size/1GB,2))GB $($vol.FileSystemType)) - the stock action will now correctly no-op$(if ($c.state -eq 'VOLATILE-AT-1') { ' (it may initialise the volatile disk at #1 and fail on the taken letter - harmless, that disk is wiped every boot)' })"
+                    $script:Result.detail.private_disk_gate = "PREPARED-$($c.state) disk=$($p.Number) sn=$($p.SerialNumber) t=${el}s checks=$checks events=$events"
+                    $script:Result.detail.private_disk_prepared_by = 'wrapper'
+                    return $true
+                } catch {
+                    $script:Result.detail.private_disk_gate = "FAIL PREPARE-$($c.state) disk=$($p.Number) t=${el}s: $($_.Exception.Message)"
+                    Fail ("private-disk gate: could not create Q: on the private disk #$($p.Number) (sn '$($p.SerialNumber)'): $($_.Exception.Message). " +
+                          'Refusing to run msiexec into a guest whose private volume cannot be prepared. The DISKGATE lines above are the table.')
+                }
+            }
             if ($c.state -like 'READY*') {
                 & $dump 'ready' $disks
                 Write-Log "private-disk gate: $($c.state) after ${el}s ($checks check(s), $events storage event(s)) - $($c.why)" $(if ($c.state -eq 'READY-SERIAL-UNKNOWN') { 'WARN' } else { 'INFO' })
