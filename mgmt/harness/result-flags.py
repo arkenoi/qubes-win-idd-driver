@@ -164,6 +164,7 @@ ERROR_FLAGS = [
 # Present-and-harmless, or a plain record. Listed so the drift test can prove every installer key is
 # classified one way or the other - a new detail key that lands in neither list fails the selftest.
 INFORMATIONAL = (
+    'private_disk_prepared_by',  # the Q: takeover: who created the private volume ('wrapper'); the verdict lives in private_disk_gate
     'xenbus_monitor',            # L438 'disabled'
     'swept_binaries_restored',   # L770 what the Fail path put back
     'next',                      # L1149/L1942 what the next boot does

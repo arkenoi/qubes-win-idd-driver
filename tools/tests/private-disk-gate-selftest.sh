@@ -34,11 +34,19 @@ grep -q '^function Classify-PrivateDiskState' "$T/classify.ps1" \
   || { echo "FATAL: extracted block does not start with the classifier"; exit 2; }
 
 case "${GATE_DEFECT:-}" in
-  NOVOLATILE) sed -i 's/if (\$VolatileSerials -contains \$sn) {/if ($false) {/' "$T/classify.ps1" ;;
-  NORAW)      sed -i "s/\$raw    = (\"\$(\$d1.PartitionStyle)\" -eq 'RAW')/\$raw    = \$true/" "$T/classify.ps1" ;;
+  NOVOLATILE)  sed -i 's/if (\$VolatileSerials -contains \$sn) {/if ($false) {/' "$T/classify.ps1" ;;
+  NORAW)       sed -i "s/\$raw    = (\"\$(\$d1.PartitionStyle)\" -eq 'RAW')/\$raw    = \$true/" "$T/classify.ps1" ;;
+  # Review 2026-09-16 E: no knob ever made 'priv' NAME THE VOLATILE, so "prepare #2, never #1" had never been seen
+  # to fail. This one makes the VOLATILE-AT-1 return hand back disk #1 - the wrapper would format the scratch disk.
+  PRIVISDISK1) sed -i 's/#1 is never touched"; disk1 = \$d1; priv = \$p }/#1 is never touched"; disk1 = $d1; priv = $d1 }/' "$T/classify.ps1" ;;
   '') ;;
   *) echo "FATAL: unknown GATE_DEFECT '$GATE_DEFECT'"; exit 2 ;;
 esac
+# A knob whose sed matched nothing silently tests the CLEAN code and passes - refuse that (review D).
+if [ -n "${GATE_DEFECT:-}" ]; then
+  awk '/QWT-GATE-BEGIN/{f=1;next} /QWT-GATE-END/{f=0} f' "$SRC" > "$T/classify.orig.ps1"
+  cmp -s "$T/classify.orig.ps1" "$T/classify.ps1" && { echo "FATAL: GATE_DEFECT=$GATE_DEFECT changed NOTHING - the knob's pattern no longer matches the source"; exit 2; }
+fi
 
 cat > "$T/run.ps1" <<'PS'
 param([string]$Classifier)
@@ -89,7 +97,13 @@ function ExpectPriv([string]$label, $disks, [string]$wantState, $wantNum) {
 ExpectPriv 'READY: prepare disk #1 itself'                                 $EMU 'READY' 1
 ExpectPriv 'MISNUMBERED (stick at #1, private RAW at #3): prepare #3'      @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'QEMU QEMU HARDDISK' 0.1 'MBR' 'x'), (D 3 'QEMU HARDDISK' 20 'RAW' 'QM00002') ) 'MISNUMBERED' 3
 ExpectPriv 'VOLATILE at #1, private RAW at #2: prepare #2, never #1'       @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'QEMU HARDDISK' 10 'RAW' 'QM00003'), (D 2 'QEMU HARDDISK' 20 'RAW' 'QM00002') ) 'VOLATILE-AT-1' 2
-ExpectPriv 'VOLATILE at #1, private ABSENT: nothing to prepare (priv null)' @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'QEMU HARDDISK' 10 'RAW' 'QM00003') ) 'VOLATILE-AT-1' $null
+# Review A2: with the private not enumerated yet, a volatile at #1 is a WAIT (an arrival can still fix it), not a refusal.
+ExpectPriv 'VOLATILE at #1, private ABSENT: wait, do not refuse (priv null)'  @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'QEMU HARDDISK' 10 'RAW' 'QM00003') ) 'NOT-READY' $null
+# Review A1: no disk #1 at all, private RAW at #2 - this return used to carry no priv and the wrapper refused.
+ExpectPriv 'no disk #1, private RAW at #2: prepare #2'                        @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 2 'QEMU HARDDISK' 20 'RAW' 'QM00002') ) 'MISNUMBERED' 2
+ExpectPriv 'PV path, root at #1, private RAW at #0: prepare #0'                 @( (D 0 'XENSRC PVDISK' 20 'RAW' '0001'), (D 1 'XENSRC PVDISK' 80 'MBR' '0000'), (D 2 'XENSRC PVDISK' 10 'RAW' '0002') ) 'MISNUMBERED' 0
+# Review B1, the accepted residual, asserted so it is a documented choice: all-empty serials = unknown scheme = prepare #1 as stock did.
+ExpectPriv 'all serials EMPTY (unknown scheme): prepare #1 as stock would have' @( (D 0 'QEMU HARDDISK' 80 'MBR' ''), (D 1 'QEMU HARDDISK' 20 'RAW' ''), (D 2 'QEMU HARDDISK' 10 'RAW' '') ) 'READY-SERIAL-UNKNOWN' 1
 ExpectPriv 'WRONGNAME at #1 (private serial, odd name): prepare #1'         @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'Virtio HARDDISK' 20 'RAW' 'QM00002') ) 'WRONGNAME-AT-1' 1
 ExpectPriv 'NONRAW at #1: priv must be null (refuse, never format data)'   @( (D 0 'QEMU HARDDISK' 80 'MBR' 'QM00001'), (D 1 'QEMU HARDDISK' 20 'GPT' 'QM00002') ) 'NONRAW-AT-1' $null
 # The stock action is dropped from the MSI build, so on an unknown scheme the wrapper prepares #1 exactly as stock did.

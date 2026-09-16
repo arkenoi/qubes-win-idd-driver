@@ -1474,18 +1474,23 @@ function Classify-PrivateDiskState {
         [string[]]$PrivateSerials  = @('QM00002', '0001'),
         [string[]]$VolatileSerials = @('QM00003', '0002')
     )
-    if ($QPresent) { return @{ state = 'READY-Q-PRESENT'; why = 'Q: already exists; the stock action will correctly no-op' } }
+    # Every return carries 'priv' (possibly $null) so a caller under Set-StrictMode 2+ never touches a
+    # missing key (review 2026-09-16, C6).
+    if ($QPresent) { return @{ state = 'READY-Q-PRESENT'; why = 'Q: already exists (upgrade/reinstall) - nothing to prepare'; priv = $null } }
     $Disks = @($Disks)
     $d1 = @($Disks | Where-Object { [int]$_.Number -eq 1 }) | Select-Object -First 1
     # A disk with no Number yet is not "elsewhere", it is not enumerated - wait for it, do not refuse.
+    # Ordered by Number so a duplicate serial (two views of one backing disk) resolves deterministically (B3).
     $privRawElsewhere = @($Disks | Where-Object {
-        $null -ne $_.Number -and [int]$_.Number -ne 1 -and $PrivateSerials -contains "$($_.SerialNumber)".Trim() -and "$($_.PartitionStyle)" -eq 'RAW' })
+        $null -ne $_.Number -and [int]$_.Number -ne 1 -and $PrivateSerials -contains "$($_.SerialNumber)".Trim() -and "$($_.PartitionStyle)" -eq 'RAW' } | Sort-Object { [int]$_.Number })
     if ($null -eq $d1) {
         if ($privRawElsewhere.Count -gt 0) {
+            # Review A1: this return used to carry no 'priv', so the wrapper REFUSED the one shape the
+            # register names as facet (a) - "disk #1 absent at the instant" with the private already there.
             $p = $privRawElsewhere[0]
-            return @{ state = 'MISNUMBERED'; why = "no disk #1, and the private disk (sn '$($p.SerialNumber)') is RAW at #$($p.Number)" }
+            return @{ state = 'MISNUMBERED'; why = "no disk #1, and the private disk (sn '$($p.SerialNumber)') is RAW at #$($p.Number) - the wrapper prepares it there"; disk1 = $null; priv = $p }
         }
-        return @{ state = 'NOT-READY'; why = 'no disk #1 enumerated yet' }
+        return @{ state = 'NOT-READY'; why = 'no disk #1 enumerated yet'; priv = $null }
     }
     $sn     = "$($d1.SerialNumber)".Trim()
     $nameOk = $StockNames -contains "$($d1.FriendlyName)"
@@ -1497,12 +1502,18 @@ function Classify-PrivateDiskState {
     # case INSTALL instead of merely refuse: the wrapper never depends on stock's cold `-Number 1`.
     if ($VolatileSerials -contains $sn) {
         $p = if ($privRawElsewhere.Count -gt 0) { $privRawElsewhere[0] } else { $null }
-        return @{ state = 'VOLATILE-AT-1'; why = "disk #1 is the VOLATILE disk (sn '$sn', $([math]::Round($d1.Size/1GB,1))GB, $($d1.PartitionStyle)) - stock would format the ephemeral disk as Q:$(if ($p) { "; the private disk (sn '$($p.SerialNumber)') is RAW at #$($p.Number) and will be prepared by the wrapper" })"; disk1 = $d1; priv = $p }
+        if ($null -eq $p) {
+            # Review A2: with the private not enumerated yet this used to refuse at once. Now that the
+            # wrapper prepares by serial, a volatile at #1 is only a defect if the private never appears -
+            # the same reasoning that makes "stick at #1, private not enumerated" a bounded WAIT.
+            return @{ state = 'NOT-READY'; why = "disk #1 is the VOLATILE disk (sn '$sn') and the private disk is not enumerated yet - waiting for it (nothing will be formatted at #1)"; disk1 = $d1; priv = $null }
+        }
+        return @{ state = 'VOLATILE-AT-1'; why = "disk #1 is the VOLATILE disk (sn '$sn', $([math]::Round($d1.Size/1GB,1))GB, $($d1.PartitionStyle)); the private disk (sn '$($p.SerialNumber)') is RAW at #$($p.Number) and the wrapper prepares it THERE - #1 is never touched"; disk1 = $d1; priv = $p }
     }
     if ($PrivateSerials -contains $sn) {
         if ($nameOk -and $raw) { return @{ state = 'READY'; why = "disk #1 is the private disk (sn '$sn'), RAW, named '$($d1.FriendlyName)'"; disk1 = $d1; priv = $d1 } }
-        if (-not $raw) { return @{ state = 'NONRAW-AT-1'; why = "disk #1 is the private disk (sn '$sn') but PartitionStyle=$($d1.PartitionStyle), not RAW, and Q: does not exist - stock would skip"; disk1 = $d1 } }
-        return @{ state = 'WRONGNAME-AT-1'; why = "disk #1 is the private disk (sn '$sn'), RAW, but named '$($d1.FriendlyName)' which stock does not match - identity is by serial, so the wrapper prepares it"; disk1 = $d1; priv = $d1 }
+        if (-not $raw) { return @{ state = 'NONRAW-AT-1'; why = "disk #1 is the private disk (sn '$sn') but PartitionStyle=$($d1.PartitionStyle), not RAW, and Q: does not exist - a partition table we did not put there; refusing to format it (if it carries the 'Qubes Private Image' volume under another letter, Set-Partition -NewDriveLetter Q is the recovery)"; disk1 = $d1; priv = $null } }
+        return @{ state = 'WRONGNAME-AT-1'; why = "disk #1 is the private disk (sn '$sn'), RAW, but named '$($d1.FriendlyName)' - identity is by serial, so the wrapper prepares it"; disk1 = $d1; priv = $d1 }
     }
     # #1 is something else: a prime stick ('QEMU QEMU HARDDISK'), the root, or an unknown serial scheme.
     if ($privRawElsewhere.Count -gt 0) {
@@ -1519,7 +1530,7 @@ function Classify-PrivateDiskState {
         $knownSerials = @($PrivateSerials) + @($VolatileSerials) + @('QM00001', '0000')
         $schemeKnown = @($Disks | Where-Object { $knownSerials -contains "$($_.SerialNumber)".Trim() }).Count -gt 0
         if ($schemeKnown) {
-            return @{ state = 'NOT-READY'; why = "disk #1 is RAW and named '$($d1.FriendlyName)' but its serial '$sn' is unlisted while sibling disks use the known scheme - an interloper at #1; waiting for the private disk to enumerate"; disk1 = $d1 }
+            return @{ state = 'NOT-READY'; why = "disk #1 is RAW and named '$($d1.FriendlyName)' but its serial '$sn' is unlisted while sibling disks use the known scheme - an interloper at #1; waiting for the private disk to enumerate"; disk1 = $d1; priv = $null }
         }
         # The stock action is DROPPED from the MSI build (packaging/patch-installer-drop-prepareprivateimg.ps1),
         # so on an unrecognised serial scheme the wrapper does exactly what stock did: prepare disk #1 when it
@@ -1527,7 +1538,7 @@ function Classify-PrivateDiskState {
         # and the serial is logged so the scheme can be added.
         return @{ state = 'READY-SERIAL-UNKNOWN'; why = "disk #1 is RAW and named '$($d1.FriendlyName)' and NO disk in the table matches a known serial scheme - preparing #1 as stock would have; volatile cross-check NOT applied; record serial '$sn'"; disk1 = $d1; priv = $d1 }
     }
-    return @{ state = 'NOT-READY'; why = "disk #1 is '$($d1.FriendlyName)' sn '$sn' ($($d1.PartitionStyle)) and the private disk is not enumerated yet"; disk1 = $d1 }
+    return @{ state = 'NOT-READY'; why = "disk #1 is '$($d1.FriendlyName)' sn '$sn' ($($d1.PartitionStyle)) and the private disk is not enumerated yet"; disk1 = $d1; priv = $null }
 }
 # ---- QWT-GATE-END ----
 
@@ -1549,8 +1560,11 @@ function Wait-PrivateDiskReady {
     $dump = {
         param($tag, $disks)
         foreach ($d in @($disks | Sort-Object Number)) {
-            Write-Log ("DISKGATE[{0}]: #{1} '{2}' {3}GB style={4} bus={5} sn='{6}' loc='{7}'" -f $tag,
-                       $d.Number, $d.FriendlyName, [math]::Round($d.Size/1GB, 1), $d.PartitionStyle, $d.BusType, $d.SerialNumber, $d.Location)
+            # IsOffline / IsReadOnly / OperationalStatus too (review C5): an Initialize-Disk that fails on an
+            # offline or read-only disk must be explicable from the table, not a mystery.
+            Write-Log ("DISKGATE[{0}]: #{1} '{2}' {3}GB style={4} bus={5} sn='{6}' offline={7} ro={8} op={9} loc='{10}'" -f $tag,
+                       $d.Number, $d.FriendlyName, [math]::Round($d.Size/1GB, 1), $d.PartitionStyle, $d.BusType, $d.SerialNumber,
+                       $d.IsOffline, $d.IsReadOnly, $d.OperationalStatus, $d.Location)
         }
         # AutomationNull arriving through param() becomes a literal $null, and @($null).Count is 1 -
         # so the old `@($disks).Count -eq 0` could never fire on the live path (review 2026-09-16).
@@ -1595,36 +1609,75 @@ function Wait-PrivateDiskReady {
             if ($c.priv -and $c.state -in @('READY', 'READY-SERIAL-UNKNOWN', 'MISNUMBERED', 'VOLATILE-AT-1', 'WRONGNAME-AT-1')) {
                 & $dump "prepare-$($c.state)" $disks
                 $p = $c.priv
-                Write-Log "private-disk gate: $($c.state) after ${el}s - preparing Q: on disk #$($p.Number) (sn '$($p.SerialNumber)', $([math]::Round($p.Size/1GB,1))GB, RAW) ourselves, before msiexec"
+                $pSn = "$($p.SerialNumber)".Trim()
+                Write-Log "private-disk gate: $($c.state) after ${el}s - preparing Q: on disk #$($p.Number) (sn '$pSn', $([math]::Round($p.Size/1GB,1))GB, RAW) ourselves, before msiexec"
+                $touched = $false   # set only once Initialize-Disk has been ISSUED on a re-verified disk; the cleanup below keys on it
                 try {
+                    # RE-ASSERT AT THE INSTANT OF THE WRITE (review B2). Everything below binds by -Number, and
+                    # $p came from a snapshot; disk numbers of present disks do not shift, but a Clear-Disk on a
+                    # wrong number would be unrecoverable, so the identity is read again from the live table and
+                    # the write refuses on any mismatch. Also bring the disk online/writable first: a SAN policy
+                    # can leave a non-boot disk offline and Initialize-Disk then throws 'disk is offline' (C5).
+                    $now = Get-Disk -Number $p.Number -ErrorAction Stop
+                    $nowSn = "$($now.SerialNumber)".Trim()
+                    if ($nowSn -ne $pSn -or "$($now.PartitionStyle)" -ne 'RAW') {
+                        throw "disk #$($p.Number) changed under us: now sn '$nowSn' style $($now.PartitionStyle), expected sn '$pSn' RAW - not writing"
+                    }
+                    if ($now.IsOffline)  { Set-Disk -Number $p.Number -IsOffline $false -ErrorAction Stop; Write-Log "  disk #$($p.Number) brought online" }
+                    if ($now.IsReadOnly) { Set-Disk -Number $p.Number -IsReadOnly $false -ErrorAction Stop; Write-Log "  disk #$($p.Number) made writable" }
+                    $touched = $true
                     Initialize-Disk -Number $p.Number -PartitionStyle GPT -PassThru -ErrorAction Stop | Out-Null
                     $vol = New-Volume -DiskNumber $p.Number -DriveLetter Q -FriendlyName 'Qubes Private Image' -FileSystem NTFS -ErrorAction Stop
-                    $onDisk = (Get-Partition -DriveLetter Q -ErrorAction Stop).DiskNumber
-                    if (-not (Test-Path -LiteralPath 'Q:\') -or [int]$onDisk -ne [int]$p.Number) {
-                        throw "Q: is $(if (Test-Path -LiteralPath 'Q:\') { "present but on disk #$onDisk" } else { 'absent' }) after New-Volume on disk #$($p.Number)"
+                    # VERIFY, WITH A BOUNDED RE-CHECK (review C4): a read-back that lags the SMP by a moment must not
+                    # turn a GOOD prepare into a Fail - and since the cleanup below can Clear-Disk, into a wipe.
+                    $onDisk = $null
+                    for ($vtry = 0; $vtry -lt 4; $vtry++) {
+                        $onDisk = try { [int](Get-Partition -DriveLetter Q -ErrorAction Stop).DiskNumber } catch { $null }
+                        if ((Test-Path -LiteralPath 'Q:\') -and $null -ne $onDisk -and $onDisk -eq [int]$p.Number) { break }
+                        Start-Sleep -Seconds 2
                     }
-                    Write-Log "private-disk gate: Q: created on disk #$($p.Number) ($([math]::Round($vol.Size/1GB,2))GB $($vol.FileSystemType)) - the stock action will now correctly no-op$(if ($c.state -eq 'VOLATILE-AT-1') { ' (it may initialise the volatile disk at #1 and fail on the taken letter - harmless, that disk is wiped every boot)' })"
-                    $script:Result.detail.private_disk_gate = "PREPARED-$($c.state) disk=$($p.Number) sn=$($p.SerialNumber) t=${el}s checks=$checks events=$events"
+                    if (-not (Test-Path -LiteralPath 'Q:\') -or $null -eq $onDisk -or $onDisk -ne [int]$p.Number) {
+                        throw "Q: is $(if (Test-Path -LiteralPath 'Q:\') { "present but on disk #$onDisk" } else { 'absent' }) after New-Volume on disk #$($p.Number) (re-checked 4x over 6 s)"
+                    }
+                    Write-Log "private-disk gate: Q: created on disk #$($p.Number) ($([math]::Round($vol.Size/1GB,2))GB $($vol.FileSystemType)); the MSI carries no private-image action any more (dropped at build time)"
+                    # An unrecognised serial scheme means the volatile cross-check could not be applied - the one
+                    # BLIND format the wrapper can perform. It is stock parity, but it must be VISIBLE to the grader
+                    # (review B1): the WARN prefix is what result-flags.py and the final ok= write key on.
+                    $gatePrefix = if ($c.state -eq 'READY-SERIAL-UNKNOWN') { 'WARN PREPARED-' } else { 'PREPARED-' }
+                    $script:Result.detail.private_disk_gate = "${gatePrefix}$($c.state) disk=$($p.Number) sn=$pSn t=${el}s checks=$checks events=$events"
                     $script:Result.detail.private_disk_prepared_by = 'wrapper'
+                    if ($c.state -eq 'READY-SERIAL-UNKNOWN') { Write-Log "private-disk gate: prepared disk #1 on an UNRECOGNISED serial scheme (sn '$pSn') - the volatile cross-check could not be applied; add this scheme to the serial lists" 'WARN' }
                     return $true
                 } catch {
                     $why = $_.Exception.Message
-                    # LEAVE IT RECOVERABLE. If Initialize-Disk took but New-Volume did not, the disk is now GPT with no
-                    # volume, and the next attempt would classify it NONRAW-AT-1 and refuse - loud, but a wedge that
-                    # needs a hand-run Clear-Disk. Return it to RAW (best effort, THIS disk only - the one we just
-                    # verified by serial - and only if Q: did not land on it), so a retry after the cause is fixed
-                    # can proceed. Never masks the failure: the Fail below still fires with the original reason.
-                    $restored = 'not attempted'
-                    try {
-                        $qOn = try { (Get-Partition -DriveLetter Q -ErrorAction Stop).DiskNumber } catch { $null }
-                        if ($null -eq $qOn -or [int]$qOn -ne [int]$p.Number) {
-                            Clear-Disk -Number $p.Number -RemoveData -RemoveOEM -Confirm:$false -ErrorAction Stop
-                            $restored = "disk #$($p.Number) returned to RAW"
-                        } else { $restored = "Q: is on disk #$qOn - left as is" }
-                    } catch { $restored = "could not return disk #$($p.Number) to RAW: $($_.Exception.Message)" }
+                    # LEAVE IT RECOVERABLE - but only touch what we touched. If Initialize-Disk was issued and
+                    # New-Volume did not complete, the disk is GPT with no volume and the next attempt would refuse
+                    # it as NONRAW-AT-1. Return it to RAW, best effort, ONLY if (a) we issued the write on the
+                    # re-verified disk ($touched) and (b) Q: did not land on it. A failure before $touched - the
+                    # re-assert, Set-Disk - leaves the disk exactly as found. The Fail keeps the original reason.
+                    $restored = 'not attempted (nothing was written)'
+                    if ($touched) {
+                        try {
+                            $qOn = try { [int](Get-Partition -DriveLetter Q -ErrorAction Stop).DiskNumber } catch { $null }
+                            if ($null -eq $qOn -or $qOn -ne [int]$p.Number) {
+                                $again = Get-Disk -Number $p.Number -ErrorAction Stop
+                                if ("$($again.SerialNumber)".Trim() -ne $pSn) { throw "disk #$($p.Number) is now sn '$($again.SerialNumber)', not '$pSn' - NOT clearing it" }
+                                Clear-Disk -Number $p.Number -RemoveData -RemoveOEM -Confirm:$false -ErrorAction Stop
+                                $restored = "disk #$($p.Number) (sn '$pSn') returned to RAW"
+                            } else { $restored = "Q: is on disk #$qOn - left as is" }
+                        } catch { $restored = "could not return disk #$($p.Number) to RAW: $($_.Exception.Message)" }
+                    }
                     Write-Log "private-disk gate: prepare failed ($why); cleanup: $restored" 'ERROR'
+                    if ($NoMoveUsers) {
+                        # Recovery mode tolerates an absent private image (the post-msiexec check does too); a failed
+                        # prepare there is a flagged WARN, not a refusal, consistent with the other -NoMoveUsers
+                        # degradations (review C3). The flag still turns the final ok= false.
+                        Write-Log "private-disk gate: -NoMoveUsers is recovery mode - PROCEEDING without Q: after the failed prepare" 'WARN'
+                        $script:Result.detail.private_disk_gate = "WARN PREPARE-FAILED-$($c.state) (NoMoveUsers) disk=$($p.Number) t=${el}s: $why; cleanup: $restored"
+                        return $false
+                    }
                     $script:Result.detail.private_disk_gate = "FAIL PREPARE-$($c.state) disk=$($p.Number) t=${el}s: $why; cleanup: $restored"
-                    Fail ("private-disk gate: could not create Q: on the private disk #$($p.Number) (sn '$($p.SerialNumber)'): $why. " +
+                    Fail ("private-disk gate: could not create Q: on the private disk #$($p.Number) (sn '$pSn'): $why. " +
                           "Cleanup: $restored. Refusing to run msiexec into a guest whose private volume cannot be prepared. The DISKGATE lines above are the table.")
                 }
             }
