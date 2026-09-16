@@ -170,6 +170,43 @@ Do NOT: send pixels; send outside CURSOR_DEFAULT / CURSOR_X11..CURSOR_X11_MAX (V
 6. **1-line spurious updates in the DDA stream** (the stubdom filter's premise, `stubdom-qubes-gui.c:413`) - UNKNOWN. Histogram of dirty-rect heights from QGAPERF over an idle window.
 7. **Any "KVM is faster" claim** - UNGROUNDED in every fetched primary source; not measurable on this rig and structurally moot.
 
+## Addenda - owner Q&A, 2026-09-16
+
+Three follow-up questions, answered from the material above. Claims that rest on the sections above cite them; reasoning of my own is marked INFERRED.
+
+### A. Is RemoteApp's seamless mode "display-per-app"?
+
+No. It is **surface-per-window on top of ONE session display**. There is exactly one remote session with one virtual monitor (the `RdpIdd` IddCx display, §2/§6b), and DWM composes that session's desktop on it like any other. RAIL adds, on top of the composed session:
+
+- **Classic RAIL** (pre-8.1): window orders (owner, style, show-state, window/client rects, `VisibilityRects`, z-order) plus the pixels of each window's *visible* region [MS-RDPERP, §6b]. Occluded parts are not available - a sliced composed desktop, which is what our Win10 path does (mirror sub-rect / `PrintWindow`, §3).
+- **Enhanced RemoteApp** (RDP 8.1+): one MS-RDPEGFX surface per RAIL window, and the client "will always have access to the complete contents of a RAIL window, even if the window is obscured on the server"; the desktop background is not remoted [MS-ERA, §6b]. That behaviour requires an occlusion-independent per-window source. INFERRED, undocumented: DWM's per-window redirection surface - the same buffer `WGC CreateForWindow` captures - which is what our 24H2+ broker path uses (§3).
+
+"Display-per-app" - one IddCx monitor per application, each app maximised on its own virtual monitor - is a different design that neither RDP nor we use. An IDD can expose several monitors, but DWM would then compose N desktops, and application semantics break: multi-window apps, dialogs and menus positioned relative to a parent, cross-window drag, monitor-aware layout. RAIL keeps one desktop and remotes windows *out of* it; our seamless model matches RAIL's, not the per-monitor one. (INFERRED as to cost; the semantics point follows from RAIL's own window-order model.)
+
+### B. Have we already borrowed everything good from it?
+
+At the mechanism level, yes - borrowed or native (§3, §6b): per-window surfaces (WGC broker → per-window slabs), geometry/z-order/show-state as validated metadata (`MSG_CONFIGURE` from `SetWinEventHook`), the client owning the drag (dom0-owned placement + the drag latch = RAIL's local move/resize handshake), the desktop background not remoted (`SeamlessNoScreenGrant` on by default, `main.c:146-170`), and zero pixel bytes on the wire (`MSG_SHMIMAGE` = four ints, `qubes-gui-protocol.h:230-235`) - which RDP cannot match, since it must encode.
+
+Three things are not borrowed; only one of them is borrowable:
+
+1. **Frame source at the driver.** RDP's frames come out of the `RdpIdd` swapchain with DWM's dirty rects. Ours come out of Desktop Duplication running on top of our IDD's monitor - an extra hop with an 8 ms acquire timeout (`instrumentation/PHASE1A-RESULT.md:78`) and the capture-thread frame hold (`capture.c:1324-1342`). §5 item 1; rated a lifecycle win, latency unproven (§8).
+2. **Occlusion-independent per-window content on Windows 10.** Enhanced RemoteApp gets full window contents on any supported Windows through the RDS pipeline's internal reach into the composition surface; we have it only on 24H2+ (WGC). On Win10 we slice the composed mirror or call `PrintWindow` (2.7-40 ms/call, §3). This is privileged access to a primitive, not a design idea - the one RDP advantage that cannot be borrowed, and it is Win10-only.
+3. **Per-window damage pacing.** EGFX paces per-surface updates through its encoder; we send one `MSG_SHMIMAGE` per dirty rect with no throttle (`DESIGN-pure-per-window.md:141`). The latest-wins ~16 ms per-window pacer (§5 item 3) is proposed, not built.
+
+### C. "vchan feedback loops are slow - move closer to 'guest sends, dom0 handles'?"
+
+Partly, and the "or not" half matters: the loop being described mostly does not exist.
+
+**Damage is already fire-and-forget.** `MSG_SHMIMAGE` carries no ack and no readiness signal, and the daemon has no throttle (`DESIGN-pure-per-window.md:141`): it maps the grant read-only and does one `xcb_shm_put_image` per rect (`xside.h:316`, `xside.c:2452-2462`). There is no damage feedback on vchan to remove. The exposure runs the other way - an unthrottled push can flood dom0 with PutImages - which is why the pacer is the open item, not a leaner loop.
+
+**The vchan feedback loop that does exist is `MSG_CONFIGURE`, and it has already bitten us this way.** dom0 owns placement by design, so during a drag the daemon's configure stream feeds back into the agent. The recorded drag-lag root cause (drag-replay work, 2026-08-12) was "daemon configure stream + async apply + coordinate seam", and the fix - the drag latch - made the guest stop reacting to that feedback mid-drag. So the intuition is right about that loop; it is per geometry change, not per frame, and it was cut where it hurt.
+
+**The serialisation that remains is not on vchan.** Inside the guest: the capture thread signals the main loop and BLOCKS until processing finishes (`capture.c:1324-1342`), and Desktop Duplication is a hop with an 8 ms acquire timeout on top of DWM's 16.9 ms frame. Inside dom0: X compositing. A free-running capture into a ring of granted staging buffers would remove the guest-side hold; the IDD as frame source would remove the DDA hop (§5 item 1). Both are guest-internal. Whether they buy latency rather than lifecycle is UNKNOWN, because -
+
+**- the premise is unmeasured.** Input-to-pixel latency has never been measured on this rig (`docs/BENCHMARKS.md:205-215`); the numbers we have are gui-agent CPU share (`tools/bench-phase-cpu.py:10-12`), which says nothing about where a frame waits.
+
+**The instrument (do this before any protocol change):** QPC stamps at input injection → DWM present (`IDDCX_METADATA.PresentDisplayQPCTime`, driver) → `AcquireNextFrame` return (`capture.c:1325`, `signal_qpc`) → `MSG_SHMIMAGE` sent → dom0 receive → PutImage complete, joined per `PresentationFrameNumber` during the existing drag-harness phases. That partitions latency into guest render / capture hop / vchan / dom0 and says whether vchan is even in the top three. Decision rule: if the capture hop (DDA acquire + the hold) is consistently ≥ one frame period (16.9 ms) or drops presents, §5 item 1 becomes a latency win and the free-running ring is worth building; if vchan itself is a small, flat term, "guest sends, dom0 handles" is already what we have and the remaining work is guest-internal.
+
 ## Sources
 
 Repo (`/home/user/qubes-win-idd-driver/`): `agent/gui-agent/capture.c`, `main.c`, `perf.c`, `send.c`, `vchan-handlers.c`; `driver/IddSampleDriver/Driver.cpp`, `IddSampleDriver.vcxproj`; `tools/bench-stock-vs-ours.sh`, `tools/bench-phase-cpu.py`, `tools/wgcbroker/wgcbroker.cpp`; `docs/BENCHMARKS.md`, `docs/PLAN-composition-layer.md`, `docs/RESEARCH-hypervisor-resize.md`; `DESIGN-pure-per-window.md`; `findings/capture.md`, `findings/idd.md`; `instrumentation/PHASE1A-RESULT.md`; `upstream/ro/qubes-gui-daemon/gui-daemon/xside.c`, `xside.h`, `shmoverride/shmoverride.c` (mirror f66fb34c); `upstream/ro/qubes-gui-common/include/qubes-gui-protocol.h`.
