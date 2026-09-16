@@ -343,6 +343,29 @@ static class Relay
             check("U5: pid lookup always identified this process (" + wrong + "/" + iterations + " wrong)", wrong == 0);
         }
 
+        // 10. U6: the service-PID map at the START of a pass, replayed from the field failure
+        //     (GWeck #146/#153, reproduced 2026-09-16 on win11-gwt - see ServicePidMap). The map was
+        //     built for the agent's own CTL fetches while wuauserv was Stopped; wuauserv then started
+        //     for the scan and dialled 3.7 s later, inside the 5 s TTL. The old code answered that
+        //     miss from the stale map and denied Windows Update. Scripted SCM, no service manager.
+        {
+            Dictionary<int, string> scm = new Dictionary<int, string>();
+            ServicePidMap map = new ServicePidMap(
+                delegate { return new string[] { "wuauserv" }; },
+                delegate(string[] names) { return new Dictionary<int, string>(scm); });
+            DateTime t0 = new DateTime(2026, 9, 16, 13, 27, 58, DateTimeKind.Utc);
+            check("U6: a non-service caller on an empty map is a miss", map.HostedBy(4242, t0) == null);
+            scm[8908] = "wuauserv";   // the scan starts wuauserv - AFTER the map was built
+            check("U6: wuauserv started after the map was built is admitted 3.7 s later (a miss re-enumerates)",
+                  map.HostedBy(8908, t0.AddSeconds(3.7)) == "wuauserv");
+            int rounds = map.Enumerations;
+            check("U6: a hit inside the TTL is served from the map (no SCM round)",
+                  map.HostedBy(8908, t0.AddSeconds(4.5)) == "wuauserv" && map.Enumerations == rounds);
+            scm.Remove(8908);   // the service stopped; its PID may be reused by anything
+            check("U6: a hit past the TTL is re-checked, and a stopped service is no longer admitted",
+                  map.HostedBy(8908, t0.AddSeconds(10)) == null);
+        }
+
         Console.WriteLine(failed == 0 ? "=== SELFTEST OK ===" : ("=== SELFTEST FAILED (" + failed + ") ==="));
         return failed == 0 ? 0 : 1;
     }
@@ -532,45 +555,90 @@ static class Relay
     [DllImport("advapi32.dll", SetLastError = true)]
     static extern bool CloseServiceHandle(IntPtr h);
 
-    static readonly object _svcLock = new object();
-    static Dictionary<int, string> _svcPids = new Dictionary<int, string>();
-    static DateTime _svcPidsAt = DateTime.MinValue;
+    // The SCM half: the host PID of every named service as the SCM reports it RIGHT NOW. A service
+    // that is not running has no process, so it is simply absent from the result.
+    static Dictionary<int, string> ScmServicePids(string[] services)
+    {
+        Dictionary<int, string> fresh = new Dictionary<int, string>();
+        IntPtr scm = OpenSCManagerW(null, null, 0x0004 /*SC_MANAGER_ENUMERATE_SERVICE*/);
+        if (scm == IntPtr.Zero) return fresh;
+        try
+        {
+            foreach (string svc in services)
+            {
+                IntPtr h = OpenServiceW(scm, svc, 0x0004 /*SERVICE_QUERY_STATUS*/);
+                if (h == IntPtr.Zero) continue;
+                int needed = 0;
+                int size = 64;   // SERVICE_STATUS_PROCESS
+                IntPtr buf = Marshal.AllocHGlobal(size);
+                try
+                {
+                    if (QueryServiceStatusEx(h, 0 /*SC_STATUS_PROCESS_INFO*/, buf, size, out needed))
+                    {
+                        int servicePid = Marshal.ReadInt32(buf, 28);   // dwProcessId
+                        if (servicePid > 0) fresh[servicePid] = svc;
+                    }
+                }
+                finally { Marshal.FreeHGlobal(buf); CloseServiceHandle(h); }
+            }
+        }
+        finally { CloseServiceHandle(scm); }
+        return fresh;
+    }
+
+    // The POLICY half - what the cache may answer - kept apart from the SCM so the offline suite
+    // (tools/tests/relay-svcmap-test.ps1) can drive it with a scripted enumerator and the selftest
+    // (U6) can replay the field failure without a service control manager.
+    //
+    // A HIT is served from the map while the map is younger than TtlSeconds. A MISS is NEVER served
+    // from the map: a miss cannot tell "not an update service" from "the map predates the service's
+    // start", and the second is the NORMAL case at the start of a pass. Measured 2026-09-16 on
+    // win11-gwt (cold boot, scan at ~30 s uptime - GWeck's #146/#153 reproduced): the map was built
+    // at 13:27:58 for the agent's OWN CTL fetches (PowerShell, not a service) while wuauserv was
+    // Stopped; the scan then started wuauserv as pid 8908, it dialled at 13:28:01.8 - 3.7 s into the
+    // 5 s TTL - and was DENIED on that stale map. Windows Update saw the RST as an unreachable proxy
+    // (0x80072EFE), the pass ended count=0, and dom0 was told nothing. Same boot recipe, allowlist
+    // off: 4 updates, 2 of 2, interleaved with 2 of 2 denials with it on. So a miss re-enumerates
+    // and only then decides; the cost is one SCM round per non-service caller, which a denied
+    // caller was going to cost anyway. A stale HIT is still re-checked after the TTL, so a stopped
+    // service's reused PID is not admitted for ever.
+    internal sealed class ServicePidMap
+    {
+        readonly Func<string[]> _services;
+        readonly Func<string[], Dictionary<int, string>> _enumerate;
+        readonly object _lock = new object();
+        Dictionary<int, string> _map = new Dictionary<int, string>();
+        DateTime _at = DateTime.MinValue;
+        public int TtlSeconds = 5;
+        public int Enumerations;   // how often the SCM was asked: the suite pins the cost, not only the answer
+
+        public ServicePidMap(Func<string[]> services, Func<string[], Dictionary<int, string>> enumerate)
+        {
+            _services = services;
+            _enumerate = enumerate;
+        }
+
+        public string HostedBy(int pid, DateTime nowUtc)
+        {
+            lock (_lock)
+            {
+                string name;
+                bool fresh = (nowUtc - _at).TotalSeconds <= TtlSeconds;
+                if (fresh && _map.TryGetValue(pid, out name)) return name;   // GUARD:svcmap-miss
+                Dictionary<int, string> m = _enumerate(_services());
+                _map = m ?? new Dictionary<int, string>();
+                _at = nowUtc;
+                Enumerations++;
+                return _map.TryGetValue(pid, out name) ? name : null;
+            }
+        }
+    }
+
+    static readonly ServicePidMap _svcMap = new ServicePidMap(delegate { return UpdateServices; }, ScmServicePids);
 
     static string ServiceHostedBy(int pid)
     {
-        lock (_svcLock)
-        {
-            if ((DateTime.UtcNow - _svcPidsAt).TotalSeconds > 5)
-            {
-                Dictionary<int, string> fresh = new Dictionary<int, string>();
-                IntPtr scm = OpenSCManagerW(null, null, 0x0004 /*SC_MANAGER_ENUMERATE_SERVICE*/);
-                if (scm != IntPtr.Zero)
-                {
-                    foreach (string svc in UpdateServices)
-                    {
-                        IntPtr h = OpenServiceW(scm, svc, 0x0004 /*SERVICE_QUERY_STATUS*/);
-                        if (h == IntPtr.Zero) continue;
-                        int needed = 0;
-                        int size = 64;   // SERVICE_STATUS_PROCESS
-                        IntPtr buf = Marshal.AllocHGlobal(size);
-                        try
-                        {
-                            if (QueryServiceStatusEx(h, 0 /*SC_STATUS_PROCESS_INFO*/, buf, size, out needed))
-                            {
-                                int servicePid = Marshal.ReadInt32(buf, 28);   // dwProcessId
-                                if (servicePid > 0) fresh[servicePid] = svc;
-                            }
-                        }
-                        finally { Marshal.FreeHGlobal(buf); CloseServiceHandle(h); }
-                    }
-                    CloseServiceHandle(scm);
-                }
-                _svcPids = fresh;
-                _svcPidsAt = DateTime.UtcNow;
-            }
-            string name;
-            return _svcPids.TryGetValue(pid, out name) ? name : null;
-        }
+        return _svcMap.HostedBy(pid, DateTime.UtcNow);
     }
 
     // ---- listener side (long-running service) --------------------------------------------
