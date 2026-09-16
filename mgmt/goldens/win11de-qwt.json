@@ -1,0 +1,30 @@
+{
+  "note": "German Windows 11 25H2 (26200.8037, de-DE media CCCOMA_X64FRE_DE-DE_DV9) + QWT-NG 4.3.29 from release-package run 35104113559 (ec82353), account gerd-test (stock 'user' renamed legacyuser), autologon armed, TemplateVM netvm='' - GWeck's environment BEFORE any Windows Update pass (env-assert gweck OK on its source win11de-gwt 2026-09-16). Owner 2026-09-16: keep, with QWT, to avoid lengthy reinstalls. Cloned from the pretuesday park, never booted.",
+  "props": {
+    "klass": "TemplateVM",
+    "maxmem": "0",
+    "memory": "8192",
+    "vcpus": "4",
+    "virt_mode": "hvm"
+  },
+  "sealed_utc": "2026-09-16T19:15:11Z",
+  "vm": "win11de-qwt",
+  "volumes": {
+    "private": {
+      "revisions": [
+        "1789586077-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "21474836480",
+      "usage": "970662608"
+    },
+    "root": {
+      "revisions": [
+        "1789586078-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "85899345920",
+      "usage": "15341623181"
+    }
+  }
+}

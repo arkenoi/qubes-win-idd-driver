@@ -13,6 +13,7 @@ is absolute.
 | what you are doing | use | why |
 |---|---|---|
 | testing a feature, a fix, a script, one behaviour | `mgmt/harness/quick-upgrade.sh` over the `win10-qwt` / `win11-qwt` golden | minutes, not 12+; the guest already has QWT and qrexec |
+| reproducing or re-testing a GWeck report (Win11 25H2, GERMAN, TemplateVM, no `user` account) | `qvm-clone win11de-qwt <subject>` (sealed TemplateVM golden: German 25H2 26200.8037 + QWT-NG 4.3.29, account gerd-test, un-updated), then `mgmt/harness/env-assert.sh <subject> gweck` before any test; pristine German base = `win11de-base` | seconds to a subject; never boot the goldens (owner 2026-09-16) |
 | RELEASE acceptance, all 6 cell-groups | `mgmt/harness/matrix.sh` (via the campaign runner) | that is what it is for |
 | the CLEAN-INSTALL PATH ITSELF is the thing under test (stage-1 transition, first-boot behaviour, install ordering) | clean install from `win{10,11}-base` via `prime-run.sh` | and ONLY then |
 
