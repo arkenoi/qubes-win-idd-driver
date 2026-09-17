@@ -59,6 +59,83 @@ function Msg([string]$m) {
     }
 }
 
+# ---- WU-OUTCOME-BEGIN   (tools/tests/wu-update-render-test.ps1 extracts this region by these markers)
+# Judge the OUTCOME of a finished pass, not its phase: `done` only means the pass ran to the end.
+# Results are grouped per KB by qubes-windows-update.ps1 ({kb, ok, state, files} or
+# {kb, ok, files, reason}); every row here came through ConvertFrom-Json, so it is a
+# PSCustomObject whose property list IS its key list (the OrderedDictionary trap of b996dc8 is on
+# the writer's side only).
+#
+# ok=false is NOT "failed". The writer records four ok=false shapes, and only the last is a failure:
+#   state=deferred        the one-staged-package-per-CBS-session rule left this KB for the NEXT pass
+#                         (the pass commits a reboot; the boot scan re-reports it). Its explanation
+#                         is files.why. Measured 2026-09-16 on win11de-gwt (German 25H2, 4.3.29):
+#                         this row was rendered "FAILED KB5129195: DISM rejected every package file"
+#                         + exit 1 while DISM was never handed the file - the code read $row.reason
+#                         (absent on this shape) and fell to a hard-coded fallback, so dom0 showed a
+#                         healthy Patch Tuesday as a DISM failure. Every guest more than one reboot
+#                         behind produces such a row on its first pass.
+#   reason='deferred: ..' the same rule applied to the Windows-Update-native fallback (no state key)
+#   severity=info or      an informational ceiling (not installable on this guest by any path); the
+#   state=informational   writer already excludes it from the count it reports to dom0
+#   anything else         a real failure. Its reason is the row's own record - $row.reason, or per
+#                         file files.why / files.error / files.rc - never a cause invented here.
+function Get-RowWhy($row) {
+    if ("$($row.reason)" -ne '') { return "$($row.reason)" }
+    # files is a list for multi-file KBs and a single object where the writer had one row (as in
+    # the captured status: "files": { "rc": "deferred", "why": ... }); @() answers both.
+    $whys = @()
+    foreach ($f in @($row.files)) {
+        if ($null -eq $f) { continue }
+        if     ("$($f.why)" -ne '')    { $whys += "$($f.why)" }
+        elseif ("$($f.error)" -ne '')  { $whys += "$($f.error)" }
+        elseif ("$($f.reason)" -ne '') { $whys += "$($f.reason)" }
+        elseif ("$($f.rc)" -ne '')     { $whys += "$($f.file) rc=$($f.rc)" }   # glued: never a bare trailing number
+    }
+    $whys = @($whys | Select-Object -Unique)
+    if ($whys.Count) { return ($whys -join '; ') }
+    return 'no reason recorded'
+}
+function Get-Outcome($st) {
+    $ok = @(); $deferred = @(); $info = @(); $failed = @()
+    foreach ($r in @($st.result)) {
+        # per-KB rows only; tolerate the older flat (per-file) shape by skipping what has no kb
+        if ($null -eq $r -or -not (@($r.PSObject.Properties.Name) -contains 'kb')) { continue }
+        if ($r.ok) { $ok += $r; continue }
+        if ($r.state -eq 'deferred' -or "$($r.reason)" -like 'deferred:*') { $deferred += $r; continue }   # GUARD:deferred
+        if ($r.severity -eq 'info' -or $r.state -eq 'informational') { $info += $r; continue }              # GUARD:info
+        $failed += $r
+    }
+    return [pscustomobject]@{ ok = $ok; deferred = $deferred; info = $info; failed = $failed }
+}
+# The outcome is written in two parts around the reboot block: what this pass did (head), then the
+# reboot notice, then what failed (tail, which decides the exit code). After 100.0 every stderr line
+# is shown by dom0 as a message, and a line must never END in a bare number (see Msg).
+function Write-OutcomeHead($o, [bool]$rebootNeeded) {
+    # WORD IT HONESTLY. DISM 3010 means the package is STAGED and applies during the next boot - it
+    # is not proof that it landed. Measured 2026-08-13 on the 24H2 template: kb5121003.msu returned
+    # 3010, the qube rebooted, and the build did NOT move because the boot-time servicing failed
+    # with 0x80070490. The scan after the boot re-offers such an update, so the truth arrives
+    # either way - but this line must not claim more than it knows.
+    if ($o.ok.Count) {
+        $verb = if ($rebootNeeded) { 'staged (completes at restart): ' } else { 'installed: ' }
+        $Err.WriteLine($verb + (@($o.ok | ForEach-Object { $_.kb }) -join ', '))
+    }
+    foreach ($r in $o.deferred) { $Err.WriteLine("deferred $($r.kb): " + ((Get-RowWhy $r) -replace '^deferred:\s*', '')) }
+    if ($o.deferred.Count) { $Err.WriteLine('run this update again after the restart to install what was deferred') }
+    foreach ($r in $o.info) { $Err.WriteLine("informational $($r.kb): " + (Get-RowWhy $r)) }
+}
+function Write-OutcomeTail($o) {
+    if (-not $o.failed.Count) { return 0 }
+    foreach ($r in $o.failed) {
+        $why = Get-RowWhy $r   # GUARD:rowwhy
+        $Err.WriteLine("FAILED $($r.kb): $why")
+    }
+    $Err.WriteLine('see C:\ProgramData\Qubes\update-status.json on the qube for details')
+    return 1
+}
+# ---- WU-OUTCOME-END
+
 # If an update run is already in flight, attach to it instead of clobbering its status file.
 # FRESHNESS GUARD. Deleting the status file is not enough on its own: other tasks write the same
 # file, and one of them finishing can hand us a `done` that belongs to a different operation.
@@ -160,28 +237,15 @@ switch ($st.phase) {
         Prog 100
         if ([int]$st.count -eq 0 -and -not $st.result) { Write-Output 'no updates available'; exit 100 }
 
-        # Judge the OUTCOME, not the phase. `done` only means the pass ran to the end; a KB whose
-        # every .msu failed in DISM is a failed update and dom0 must hear about it, otherwise this
-        # repeats the defect found in QWT's VMExec handler - reporting success regardless.
-        # Results are grouped per KB ({kb, ok, files}); tolerate the older flat shape too.
-        $rows   = @($st.result)
-        $perKb  = @($rows | Where-Object { $_.PSObject.Properties.Name -contains 'kb' })
-        $failed = @($perKb | Where-Object { -not $_.ok } | ForEach-Object { $_.kb })
-        $okKbs  = @($perKb | Where-Object { $_.ok }      | ForEach-Object { $_.kb })
-
+        # A KB whose every .msu failed is a failed update and dom0 must hear about it, otherwise
+        # this repeats the defect found in QWT's VMExec handler - reporting success regardless.
+        # A deferred or informational row is NOT that (see the WU-OUTCOME region): the pass exits 0
+        # and the staged reboot + boot scan carry the remainder.
         # After 100.0 every stderr line is shown as a message, so the outcome goes THERE - on
         # stdout it would only reach the log view, and the operator asked to see which updates
-        # were installed. Ends with a KB id, never a bare number (see Msg).
-        # WORD IT HONESTLY. DISM 3010 means the package is STAGED and applies during the next
-        # boot - it is not proof that it landed. Measured 2026-08-13 on the 24H2 template:
-        # kb5121003.msu returned 3010, the qube rebooted, and the build did NOT move because the
-        # boot-time servicing failed with 0x80070490 (its checkpoint prerequisite had failed).
-        # The scan after the boot re-offers such an update, so the truth arrives either way -
-        # but this line must not claim more than it knows.
-        if ($okKbs.Count) {
-            $verb = if ($st.reboot_needed) { 'staged (completes at restart): ' } else { 'installed: ' }
-            $Err.WriteLine($verb + ($okKbs -join ', '))
-        }
+        # were installed.
+        $outcome = Get-Outcome $st
+        Write-OutcomeHead $outcome ([bool]$st.reboot_needed)
         if ($st.reboot_needed) {
             # An update that needs a reboot is not finished until it gets one, so the pass
             # commits it - for templates AND standalones alike (user direction 2026-08-13:
@@ -244,14 +308,7 @@ switch ($st.phase) {
                 $Err.WriteLine("updates installed - RESTART REQUIRED, but scheduling it failed (shutdown.exe rc=$LASTEXITCODE) - restart this qube yourself")
             }
         }
-        if ($failed.Count) {
-            foreach ($f in @($perKb | Where-Object { -not $_.ok })) {
-                $why = if ($f.reason) { $f.reason } else { "DISM rejected every package file" }
-                $Err.WriteLine("FAILED $($f.kb): $why")
-            }
-            $Err.WriteLine("see C:\ProgramData\Qubes\update-status.json on the qube for details")
-            exit 1
-        }
+        if ((Write-OutcomeTail $outcome) -ne 0) { exit 1 }
         Write-Output ("updates processed: count=" + $st.count)
         exit 0
     }
