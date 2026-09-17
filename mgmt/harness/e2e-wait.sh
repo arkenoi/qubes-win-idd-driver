@@ -523,22 +523,38 @@ w_drain_and_shutdown(){ # $1=vm $2=logfn
     $log "  drain: $n qrexec call(s) STILL PENDING for $vm at park time (ages below)"
     ps -o etime=,args= -p $(printf '%s' "$pend" | tr '\n' ' ') 2>/dev/null | cut -c1-150 \
       | while IFS= read -r l; do $log "    pending: $l"; done
-    # The discriminator: does the guest answer a FRESH, short probe right now?
-    if [ "$(w_state "$vm")" != Halted ]; then
-      if w_alive "$vm"; then
-        $log "  drain: the guest answers a fresh qrexec probe, so these are instrument leftovers"
-      else
-        W_DRAIN_QREXEC_DEAD=1
-        $log "  drain: QREXECDEAD vm=$vm pending=$n state=$(w_state "$vm") - qrexec is NOT answering"
-        $log "  drain: while $n call(s) hang. That is a PRODUCT condition, not an instrument one."
-        $log "  drain: It is recorded and graded, NOT drained away. Do not read the park that"
-        $log "  drain: follows as evidence the guest was healthy."
-      fi
-    fi
     pkill -f "qrexec-client-vm [${vm:0:1}]${vm:1} " 2>/dev/null
     $log "  drain: killed $n queued call(s) so none can restart $vm after it halts"
   else
     $log "  drain: no qrexec call pending for $vm (nothing to drain)"
+  fi
+
+  # THE DEAD-QREXEC PROBE IS NOT CONDITIONAL ON A PENDING CALL. It used to be nested inside the
+  # branch above, so the only guest that could ever be graded QREXECDEAD was one that happened to
+  # have a client process still hanging - and a guest whose qrexec died LONG ago has none, because
+  # every client that was waiting on it has already timed out and exited. Measured 2026-09-17
+  # (release 4.3.29.538, run 35171496552, guest win11-acc): prime-run had just proved qrexec dead
+  # for 1083 s and left the guest Running as evidence; this function then printed "no qrexec call
+  # pending ... (nothing to drain)", never probed, never set the flag, and the caller went on to
+  # spend 660 s asking a wedged guest to shut down and then killed it - grading the cell "subject
+  # would not halt for unpark" when the honest class was "qrexec was DEAD on a running guest".
+  # The discriminator the comment above describes was unreachable in exactly the case it was
+  # written for. Cost: one class of a P1 stall recorded as a shutdown failure.
+  #
+  # So: whenever the guest is not Halted, ask it a FRESH, short question, pending calls or not.
+  if [ "$(w_state "$vm")" != Halted ]; then
+    if w_alive "$vm"; then
+      if [ "${W_DRAIN_PENDING:-0}" -gt 0 ] 2>/dev/null; then
+        $log "  drain: the guest answers a fresh qrexec probe, so those were instrument leftovers"
+      fi
+    else
+      W_DRAIN_QREXEC_DEAD=1
+      $log "  drain: QREXECDEAD vm=$vm pending=$W_DRAIN_PENDING state=$(w_state "$vm") - qrexec is"
+      $log "  drain: NOT answering a fresh probe. That is a PRODUCT condition, not an instrument"
+      $log "  drain: one. It is recorded and graded, NOT drained away. Do not read the park or the"
+      $log "  drain: shutdown that follows as evidence the guest was healthy."
+      $log "  drain: cpu=$(w_cpu_state "$vm") screen=$(w_screen "$vm" "qrexecdead-$vm" "${M:-${TMPDIR:-/tmp}}")"
+    fi
   fi
 
   qvm-prefs "$vm" qrexec_timeout 15 >/dev/null 2>&1

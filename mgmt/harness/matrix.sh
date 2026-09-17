@@ -462,7 +462,12 @@ park_installed(){ # $1=vm $2=label - halt and park the just-installed subject as
   # 'installed' snapshot (owner 2026-09-01: "we do snapshots for optimizations"). The release is
   # installed ONCE per OS per campaign; later cells that merely need "a guest carrying the
   # release" unpark this in ~2 s instead of reinstalling.
-  local vm=$1 lbl=$2 ck="ckpt-$vm-installed"
+  # SEPARATE STATEMENTS, not one `local vm=$1 ... ck="ckpt-$vm-installed"`. Bash expands every word
+  # of a `local` command BEFORE assigning any of them, so `$vm` there is the CALLER's vm under
+  # dynamic scoping - and an unbound-variable abort under `set -u` if the caller has none. It
+  # happened to be correct because every caller names its subject `vm`; it was never guaranteed.
+  local vm=$1 lbl=$2
+  local ck="ckpt-$vm-installed"
   if [ "$(w_state "$vm")" != Halted ]; then
     # DRAIN FIRST, and give the halt a budget that OUTLASTS the restarter. The old form issued a
     # bare qvm-shutdown and waited 420 s while qrexec_timeout sat at 600 - so one queued call could
@@ -493,9 +498,28 @@ park_installed(){ # $1=vm $2=label - halt and park the just-installed subject as
 
 unpark_installed(){ # $1=vm $2=label - restore the campaign's 'installed' snapshot into $vm.
   local vm=$1 lbl=$2
-  _halt_other_windows "$vm"
+  local ck="ckpt-$vm-installed"   # separate statement - see park_installed for why
   qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "$vm" \
     || { no "$lbl: subject $vm does not exist - run the clean cell first (it creates, installs and parks)"; return 1; }
+  # CHECK THE PARK EXISTS BEFORE TOUCHING THE SUBJECT. Measured 2026-09-17 (release 4.3.29.538,
+  # run 35171496552): WIN11-clean hit prime-run's DEADLINE, so cell_clean returned WITHOUT calling
+  # park_installed and ckpt-win11-acc-installed was never created - while prime-run's H3.5 policy
+  # deliberately left the stalled guest RUNNING, "its state is the evidence". One second later
+  # WIN11-reinstall called this function, which in its old form halted the subject FIRST and only
+  # asked about the park afterwards. So it spent 660 s waiting for ACPI on a guest whose qrexec had
+  # been dead for eighteen minutes, then qvm-killed it - to run an unpark that could not have
+  # succeeded, because the snapshot it wanted did not exist. Cost: the preserved specimen of this
+  # project's open P1 stall, and a second product-FAIL that carried no information the first did
+  # not already carry.
+  #
+  # The ordering is the whole fix. A cell that cannot possibly pass must not be the thing that
+  # destroys another cell's evidence, and the check is free. The subject is LEFT AS IT STANDS -
+  # not halted, not killed, not drained - so whatever the clean cell preserved survives this cell.
+  if ! qvm-ls --raw-data --fields NAME 2>/dev/null | grep -qx "$ck"; then
+    no "$lbl: no 'installed' park $ck exists - the clean cell that creates it did not complete, so this cell cannot run. Subject LEFT AS IT STANDS (state=$(w_state "$vm")): it is not touched, because a failed clean cell may be preserving it as evidence (H3.5)."
+    return 1
+  fi
+  _halt_other_windows "$vm"
   if [ "$(w_state "$vm")" != Halted ]; then
     # Same drain as the park path: a queued call restarts the guest after it halts.
     w_drain_and_shutdown "$vm" say
@@ -512,7 +536,16 @@ unpark_installed(){ # $1=vm $2=label - restore the campaign's 'installed' snapsh
         # WIN10-upgrade, hitting the IDENTICAL guest minutes later, killed it and then ran clean
         # 10/10. One frozen guest must cost ONE cell, not every cell that touches it afterwards.
         # The failure is still reported: the kill is how the cell proceeds, not how it passes.
-        say "  $lbl: subject ignored ACPI shutdown for 660 s (screen=$(w_screen "$vm" "stuck-$vm" "$M")) - killing as the last resort"
+        # MEASURE BEFORE DESTROYING. The kill is irreversible and it is the last moment the guest's
+        # live state can be read at all, yet this line used to record only the screen verdict. On
+        # 2026-09-17 that left the WIN11-reinstall non-halt undecidable from the logs: "NOWINDOW"
+        # is equally consistent with the open P1 stall (Running, qrexec dead, empty tar, a vCPU
+        # pegged) and with a merely session-less guest, and the one cheap number that separates
+        # them - a cpu_time delta taken DURING the refusal - was never taken. w_cpu_state costs 20 s
+        # against a 660 s wait that has already elapsed, needs no guest cooperation, and fails open
+        # ("UNREADABLE") rather than manufacturing a verdict.
+        local _cs; _cs=$(w_cpu_state "$vm")
+        say "  $lbl: subject ignored ACPI shutdown for 660 s (screen=$(w_screen "$vm" "stuck-$vm" "$M") cpu=$_cs) - killing as the last resort"
         qvm-kill "$vm" >/dev/null 2>&1
         if w_halt "$vm" 120 "$lbl-unpark-kill" say; then
           say "  NOTE: a killed guest leaves a dirty volume; the unpark below may need the start/stop cycle"
