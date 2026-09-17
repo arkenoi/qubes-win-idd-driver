@@ -160,14 +160,87 @@ if (-not $running) {
 Write-Output "qubes.WindowsUpdate: driving $Task (attach=$running)"
 Prog 0
 
+# ---- WU-POLL-BEGIN   (tools/tests/wu-dead-pass-test.ps1 extracts this region by these markers)
 # Tail the status file. 2h hard bound (a full 5GB cumulative fetch+DISM fits well inside).
+#
+# DEAD-PASS DETECTION, on EVERY poll. Measured 2026-09-17 on the German 25H2 template: the Task
+# Scheduler ended the QubesWindowsUpdateRun instance 90 s into a pass (LastTaskResult 0x41306),
+# the pass process died hard (its finally never ran, the relay kept serving for hours),
+# update-status.json froze at phase=scan, and this loop tailed the corpse for its whole 2 h bound
+# before telling dom0 `update did not complete (last phase: scan)`. The task check that existed
+# sat at the BOTTOM of the loop body, behind four `continue`s (no file yet, unparseable, stale
+# ts, foreign scan) - a poll that took any of them never reached it. The verdict now comes
+# first, needs no status of ours to be taken, and names the task's own result code.
 $deadline = (Get-Date).AddHours(2)
-$st = $null
+$st = $null            # the last status that belongs to OUR pass (passed the guards below)
+$script:Seen = $null   # the last status parsed from disk, ours or not - named in the DIED line
+$script:Polls = 0
+$script:TaskUnreadableSaid = $false
+# The writer's own last phases (qubes-windows-update.ps1): done/error end a pass, scan-failed and
+# skipped-* end it before any work. A task that is not Running while its status shows any of these
+# simply finished; anything else is a pass that stopped writing.
+function Test-TerminalPhase($phase) {
+    return ("$phase" -in 'done', 'error', 'scan-failed' -or "$phase" -like 'skipped-*')
+}
+# The writer's ts is an invariant ISO string; pwsh 7's ConvertFrom-Json (tests, and any future host)
+# hands it back as a DateTime, which would otherwise print culture-formatted.
+function Format-Ts($t) { if ($t -is [datetime]) { return $t.ToString('s') }; return "$t" }
+# LastTaskResult (Get-ScheduledTaskInfo) is the scheduler's own HRESULT for the last instance.
+function Get-TaskResultMeaning([uint32]$r) {
+    switch ($r) {
+        0       { return 'exited normally' }
+        0x41301 { return 'still running' }
+        0x41302 { return 'task is disabled' }
+        0x41303 { return 'has not yet run' }
+        0x41306 { return 'terminated by the scheduler on request - its ExecutionTimeLimit, or somebody''s schtasks /end or Stop-ScheduledTask' }
+        0x41325 { return 'queued' }
+        default { return 'unmapped code' }
+    }
+}
+# What a killed pass leaves behind, torn down the way qubes-windows-update.ps1's Remove-Proxy does
+# it: WinHTTP proxy reset, WinINET proxy disabled, relay process stopped. That script is not
+# dot-sourceable (it IS the pass - loading it runs one) and has no cleanup action, so the steps
+# are mirrored here; keep them in step with Remove-Proxy. Every step reports its own outcome: this
+# handler runs in the rpc caller's context and may lack the right to stop a SYSTEM relay, and a
+# relay left serving is the one leftover that matters (see the temporal-gate comment there).
+function Remove-DeadPassLeftovers {
+    $isKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
+    $done = @(); $failed = @()
+    & netsh winhttp reset proxy 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { $done += 'winhttp proxy reset' } else { $failed += "winhttp proxy reset (netsh rc=$LASTEXITCODE)" }
+    try {
+        New-ItemProperty -Path $isKey -Name 'ProxyEnable' -Value 0 -PropertyType DWord -Force -EA Stop | Out-Null
+        Remove-ItemProperty -Path $isKey -Name 'ProxyServer' -EA SilentlyContinue
+        $done += 'wininet proxy disabled'
+    } catch { $failed += "wininet proxy disable ($($_.Exception.Message))" }
+    foreach ($p in @(Get-Process qubes-updates-relay -EA SilentlyContinue)) {
+        $rp = $p
+        try { $rp.Kill(); $done += "relay pid $($rp.Id) stopped" } catch { $failed += "relay pid $($rp.Id) NOT stopped ($($_.Exception.Message))" }
+    }
+    $left = @(Get-Process qubes-updates-relay -EA SilentlyContinue)
+    if ($left.Count) { $failed += ('relay still running: pid ' + (@($left | ForEach-Object { $_.Id }) -join ', ') + ' - the proxy is still up') }
+    # never end in a bare number (see Msg): the summary closes with a word
+    if ($failed.Count) { $Err.WriteLine('leftovers: ' + (($done + $failed) -join '; ') + ' - CHECK the qube, its offline baseline is NOT restored') }
+    else { $Err.WriteLine('leftovers: ' + ($done -join '; ') + ' - offline baseline restored') }
+}
 while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 3
-    $raw = Get-Content -LiteralPath $Status -Raw -EA SilentlyContinue
-    if (-not $raw) { continue }                       # not written yet, or mid-rewrite
-    try { $st = $raw | ConvertFrom-Json } catch { continue }
+    $script:Polls++
+    # 1. the task, read BEFORE the status: a pass that ends between the two reads has already
+    #    written its final status, so this order can never show "not Running" against a terminal
+    #    status still to come. A task that cannot be read is not evidence of anything - say so
+    #    once, loudly, and keep tailing rather than invent a verdict.
+    $tk = Get-ScheduledTask -TaskName $Task -EA SilentlyContinue   # NOT $task: PowerShell names are case-insensitive, that is $Task
+    $tstate = "$($tk.State)"
+    if (-not $tk -and -not $script:TaskUnreadableSaid) {
+        $script:TaskUnreadableSaid = $true
+        $Err.WriteLine("WUDEADPASSBLIND: cannot read task $Task (Get-ScheduledTask returned nothing) - a dead pass cannot be detected on this qube")
+    }
+    # 2. the status: absent, unparseable, stale or foreign leaves $cur empty - never a skipped verdict
+    $cur = $null
+    $raw = Get-Content -LiteralPath $Status -Raw -EA SilentlyContinue   # empty: not written yet, or mid-rewrite
+    if ($raw) { try { $cur = $raw | ConvertFrom-Json } catch { $cur = $null } }
+    if ($cur) { $script:Seen = $cur }
     # belongs to an older operation - keep waiting for ours
     #
     # $stamp MUST start as a real DateTime. It used to be $null, and that guard NEVER FIRED once:
@@ -184,17 +257,34 @@ while ((Get-Date) -lt $deadline) {
     # TryParseExact against the invariant Gregorian shape the writer emits
     # (qubes-windows-update.ps1:81 uses ToString('s'), measured calendar-invariant), so this guard
     # cannot silently become calendar-sensitive if that format is ever changed.
-    if ($st.ts) {
+    if ($cur -and $cur.ts) {
         $stamp = [datetime]::MinValue
-        if ([datetime]::TryParseExact($st.ts, 'yyyy-MM-ddTHH:mm:ss',
+        if ([datetime]::TryParseExact($cur.ts, 'yyyy-MM-ddTHH:mm:ss',
                 [Globalization.CultureInfo]::InvariantCulture,
-                [Globalization.DateTimeStyles]::None, [ref]$stamp) -and $stamp -lt $script:StartedAt) { continue }
+                [Globalization.DateTimeStyles]::None, [ref]$stamp) -and $stamp -lt $script:StartedAt) { $cur = $null }
     }
     # A SCAN's status never belongs to a dom0-driven run. This is what actually closes the
     # wrong-operation class: the timestamp test cannot, because any foreign writer stamps a FRESH
     # ts by construction and so passes it. A scan reports availability and never a result, so its
     # `done` would be read below as "finished, nothing to do" -> Prog 100 -> exit 100.
-    if ($st.action -eq 'scan') { continue }
+    if ($cur -and $cur.action -eq 'scan') { $cur = $null }
+    if ($cur) { $st = $cur }
+    # 3. the verdict. One poll of grace after the kick: schtasks /run returns before the instance
+    #    exists, so the first poll may legitimately see Ready. From the second poll on, a task
+    #    that is not Running while our status is not terminal is a pass that stopped writing.
+    if ($tk -and $tstate -ne 'Running' -and $script:Polls -gt 1 -and -not (Test-TerminalPhase $st.phase)) {   # GUARD:deadpass
+        $info = Get-ScheduledTaskInfo -TaskName $Task -EA SilentlyContinue
+        $code = [uint32]0   # HRESULTs above 0x7FFFFFFF arrive as negative Int32 on some builds: mask, never truncate
+        try { $code = [uint32]([int64]$info.LastTaskResult -band 0xFFFFFFFF) } catch { $code = [uint32]0 }
+        $what = 'no status was written at all'
+        if ($st) { $what = "status stale since $(Format-Ts $st.ts) at phase $($st.phase)" }
+        elseif ($script:Seen) { $what = "the only status on disk is from an earlier operation (action $($script:Seen.action), ts $(Format-Ts $script:Seen.ts), phase $($script:Seen.phase))" }
+        $Err.WriteLine([string]::Format([Globalization.CultureInfo]::InvariantCulture,
+            'update pass DIED: task {0} is {1}, last result 0x{2:X} ({3}), {4}', $Task, $tstate, $code, (Get-TaskResultMeaning $code), $what))
+        Remove-DeadPassLeftovers
+        exit 1
+    }
+    if (-not $cur) { continue }
     # Announce WHICH updates as soon as the scan knows, independent of phase: the tail polls
     # every 3 s and a short-lived phase can pass between two polls unseen. Msg de-duplicates.
     if ([int]$st.count -gt 0 -and $st.available) {
@@ -220,16 +310,11 @@ while ((Get-Date) -lt $deadline) {
         'done'         { break }
         'error'        { break }
     }
-    if ($st.phase -eq 'done' -or $st.phase -eq 'error') { break }
-    # If the task died without reaching done/error, stop tailing a corpse.
-    $tstate = (Get-ScheduledTask -TaskName $Task -EA SilentlyContinue).State
-    if ($tstate -ne 'Running') {
-        Start-Sleep -Seconds 3   # grace: one final status rewrite may be in flight
-        $raw = Get-Content -LiteralPath $Status -Raw -EA SilentlyContinue
-        if ($raw) { try { $st = $raw | ConvertFrom-Json } catch {} }
-        break
-    }
+    # done/error are rendered below; scan-failed and skipped-* fall to the default branch there
+    # ("update did not complete"), exactly as they did when the old bottom check caught them.
+    if (Test-TerminalPhase $st.phase) { break }
 }
+# ---- WU-POLL-END
 
 if (-not $st) { $Err.WriteLine('no status produced - update task never started'); exit 1 }
 switch ($st.phase) {
