@@ -1212,17 +1212,27 @@ public static class CbsRegNotify {
 # itself - bypassed it). Running the prevention whenever THIS pass staged reboot-requiring
 # work removes the dependency on who reboots afterwards. Prevention only: if the password is
 # already consumed there is nothing this can restore (see ensure-autologon.ps1's header).
+# ---- WU-AUTOLOGON-GUARD-BEGIN   (tools/tests/wu-autologon-guard-test.ps1 extracts this function by these markers)
 function Protect-Autologon {
   # Fire whenever a reboot is pending OR a package was staged this session (a stage can precede the
   # reboot_needed flag, and a throw between the two must not skip re-arming autologon).
   if (-not ($script:St.reboot_needed -or $script:StagedThisSession)) { return }
-  $ea = 'C:\Program Files\Qubes Tools\vmupdate-shim\ensure-autologon.ps1'
-  if (-not (Test-Path $ea)) { Log 'reboot staged but ensure-autologon.ps1 is not deployed - autologon may be consumed by the coming reboots' 'WARN'; return }
+  # The guard is read from where install-updater-agent.ps1 deploys it - <Qubes Tools>\qubes-rpc-services,
+  # the location wu-update.ps1 reads too - derived the same way (QUBES_TOOLS, else the default root).
+  # Until 2026-09-17 this read a `vmupdate-shim\` directory the installer never creates, so on the
+  # task-driven path (QubesWindowsUpdateRun, the boot and 6-hourly scans) the guard was skipped on
+  # EVERY reboot-pending pass while logging that the helper was "not deployed" - measured on
+  # win11de-gwt: the file existed at qubes-rpc-services (10040 B), the WARN appeared on all four
+  # reboot-pending passes. Autologon survived those reboots by luck, not by this guard.
+  $qt = $env:QUBES_TOOLS; if (-not $qt) { $qt = 'C:\Program Files\Qubes Tools' }
+  $ea = Join-Path $qt 'qubes-rpc-services\ensure-autologon.ps1'   # GUARD:alpath
+  if (-not (Test-Path $ea)) { Log "reboot staged but ensure-autologon.ps1 is missing at $ea - autologon may be consumed by the coming reboots" 'WARN'; return }
   try {
     & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ea 2>&1 |
       ForEach-Object { Log "  autologon: $_" }
   } catch { Log "ensure-autologon failed: $($_.Exception.Message)" 'WARN' }
 }
+# ---- WU-AUTOLOGON-GUARD-END
 
 # ---------------------------------------------------------------------- main
 # VM-CLASS CLASSIFICATION, guest-side. The qubes.UpdatesProxy updater is a TEMPLATE-ONLY
