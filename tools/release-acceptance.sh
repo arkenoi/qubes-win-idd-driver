@@ -119,6 +119,23 @@ else
 fi
 
 # ---- 4. the campaign ---------------------------------------------------------------------------
+# ---- 4b. ENTRY FIXTURES EXIST - checked BEFORE the campaign, not discovered by a cell 55 min in.
+# 2026-09-17: a pool prune (protocol RED, 92% used) removed win10-iqi/win11-iqi, the previous-ours
+# 4.3.17 entry images the upgrade cells reclone from; win10-clean and win10-reinstall then ran for
+# 55 min before WIN10-upgrade died with "clone attempt 1 FAILED: KeyError: 'win10-iqi'" and the
+# campaign was PARTIAL by construction. A missing fixture is an infrastructure fact knowable at
+# minute 0, so it is refused here, with the rebuild command, and nothing is graded on its absence.
+for _c in $CELLS; do
+  case "$_c" in
+    win10-upgrade|win10-seeded) _g="$G10"; _b=win10-base ;;
+    win11-upgrade|win11-seeded) _g="$G11"; _b=win11-base ;;
+    *) continue ;;
+  esac
+  if ! qvm-check "$_g" >/dev/null 2>&1; then
+    die "cell $_c needs entry fixture '$_g' and it does NOT EXIST on the rig. Rebuild it from the sealed base with the PREVIOUS release's setup tree (4.3.17: gh release download v4.3.17-agent45e788d -p qwt-improved-setup.iso, extract), e.g.: mgmt/harness/prime-run.sh $_b $_g ours --payload <that tree> ; or pass G10=/G11= naming an existing previous-ours fixture. Refusing to start a campaign that is PARTIAL by construction."
+  fi
+  [ -f "mgmt/fixtures/$_g.json" ] || say "WARNING: $_g exists but has no fixture record mgmt/fixtures/$_g.json - matrix.sh's custody gate may refuse it"
+done
 say "--- matrix campaign: $CELLS"
 CAMP="$WORK/campaign"
 mkdir -p "$CAMP"

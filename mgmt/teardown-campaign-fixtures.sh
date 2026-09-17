@@ -17,6 +17,8 @@ declare -A KEEP=(
   [win10-base]="sealed golden - the only pristine Win10 base; never delete, never boot"
   [win11-base]="sealed golden - the only pristine Win11 base; never delete, never boot"
   [win11de-base]="sealed golden - pristine GERMAN Win11 25H2 (26200.8037), no QWT; the base for GWeck-environment tests; never delete, never boot (owner 2026-09-16)"
+  [win10-iqi]="previous-ours ENTRY FIXTURE (4.3.17) for the win10-upgrade acceptance cell (tools/release-acceptance.sh G10 default); pruned once on 2026-09-17 and the campaign went PARTIAL - rebuild costs ~10 min, keep it"
+  [win11-iqi]="previous-ours ENTRY FIXTURE (4.3.17) for the win11-upgrade acceptance cell (G11 default); same story - keep it"
   [win11de-qwt]="sealed golden - German Win11 25H2 + QWT-NG 4.3.29, account gerd-test, TemplateVM, UN-UPDATED: GWeck's environment before a Windows Update pass. Owner 2026-09-16: keep, with QWT, to avoid lengthy reinstalls; never delete, never boot - clone it"
   [win10-tpl]="TemplateVM - win10-app derives from it, and the named gap 'install has never run on a
                TemplateVM' needs one. NOTE: contaminated by the U1 diagnosis; rebuild from win10-base
