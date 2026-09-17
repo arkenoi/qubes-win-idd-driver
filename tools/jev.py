@@ -30,21 +30,40 @@ def load_key():
         k = open(KEYFILE, encoding="utf-8").read().strip()
     return k
 
-def ask(key, state, questions, retries=4):
-    body = json.dumps({"state": state, "model": MODEL, "questions": questions}).encode()
+# WIRE LOG: every request body and every response (or error) this process sends to TypeSafe is
+# appended, verbatim, to $JEV_WIRE_LOG (default scratchpad/jev-wire.jsonl, gitignored). The owner
+# can open it and see exactly what was asked and answered; a claim about a Jev result that has no
+# matching wire entry is false. The key is never written.
+WIRE = os.environ.get("JEV_WIRE_LOG") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scratchpad", "jev-wire.jsonl")
+
+def _wire(entry):
+    try:
+        os.makedirs(os.path.dirname(WIRE), exist_ok=True)
+        with open(WIRE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+def ask(key, state, questions, retries=4, caller=None):
+    payload = {"state": state, "model": MODEL, "questions": questions}
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(API, data=body, method="POST",
                                  headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
     last = None
+    caller = caller or os.path.basename(sys.argv[0] or "jev")
     for i in range(retries):
         try:
             with urllib.request.urlopen(req, timeout=90) as r:
-                return json.loads(r.read().decode())
+                resp = json.loads(r.read().decode())
+            _wire({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "caller": caller, "request": payload, "response": resp})
+            return resp
         except urllib.error.HTTPError as e:
             last = "HTTP %d %s" % (e.code, e.read()[:300].decode(errors="replace"))
             if e.code not in (429, 529): break
         except Exception as e:
             last = "%s: %s" % (type(e).__name__, e)
         time.sleep(2 ** i)
+    _wire({"ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "caller": caller, "request": payload, "error": str(last)})
     raise RuntimeError("TypeSafe call failed: " + str(last))
 
 def fmt(qid, a):

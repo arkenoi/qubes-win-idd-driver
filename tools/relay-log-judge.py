@@ -35,34 +35,8 @@ from TYPESAFE_API_KEY. It is never printed. Usage:
 import argparse, json, os, re, sys, time, urllib.request, urllib.error
 from datetime import datetime, timedelta
 
-API = "https://api.typesafe.ai/v1/systemone"
-MODEL = "jev-latest"
-KEYFILE = os.path.expanduser("~/.config/qwt-secrets/typesafe.key")
-
-def load_key():
-    k = os.environ.get("TYPESAFE_API_KEY", "").strip()
-    if not k and os.path.exists(KEYFILE):
-        with open(KEYFILE, "r", encoding="utf-8") as f:
-            k = f.read().strip()
-    return k
-
-def ask(key, state, questions, retries=3):
-    body = json.dumps({"state": state, "model": MODEL, "questions": questions}).encode()
-    req = urllib.request.Request(API, data=body, method="POST",
-                                 headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
-    last = None
-    for i in range(retries):
-        try:
-            with urllib.request.urlopen(req, timeout=60) as r:
-                return json.loads(r.read().decode())
-        except urllib.error.HTTPError as e:
-            last = "HTTP %d %s" % (e.code, e.read()[:200].decode(errors="replace"))
-            if e.code in (401, 403, 400):
-                break
-        except Exception as e:
-            last = "%s: %s" % (type(e).__name__, e)
-        time.sleep(1 + i)
-    raise RuntimeError("TypeSafe call failed: " + str(last))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from jev import load_key, ask  # one wire-logged call path for every Jev request
 
 # ---- parsing ----------------------------------------------------------------------------------
 RELAY_TS = re.compile(r"^(\d\d):(\d\d):(\d\d)\.(\d{3})\s+(.*)$")

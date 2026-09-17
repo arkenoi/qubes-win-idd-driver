@@ -26,32 +26,8 @@ Key: ~/.config/qwt-secrets/typesafe.key or TYPESAFE_API_KEY, never printed.
 """
 import json, os, sys, time, urllib.request, urllib.error
 
-API = "https://api.typesafe.ai/v1/systemone"
-MODEL = "jev-latest"
-KEYFILE = os.path.expanduser("~/.config/qwt-secrets/typesafe.key")
-
-def load_key():
-    k = os.environ.get("TYPESAFE_API_KEY", "").strip()
-    if not k and os.path.exists(KEYFILE):
-        k = open(KEYFILE, encoding="utf-8").read().strip()
-    return k
-
-def ask(key, state, questions):
-    body = json.dumps({"state": state, "model": MODEL, "questions": questions}).encode()
-    req = urllib.request.Request(API, data=body, method="POST",
-                                 headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
-    last = None
-    for i in range(3):
-        try:
-            with urllib.request.urlopen(req, timeout=60) as r:
-                return json.loads(r.read().decode())["answers"]
-        except urllib.error.HTTPError as e:
-            last = "HTTP %d %s" % (e.code, e.read()[:200].decode(errors="replace"))
-            if e.code in (400, 401, 403, 422): break
-        except Exception as e:
-            last = "%s: %s" % (type(e).__name__, e)
-        time.sleep(1 + i)
-    raise RuntimeError("TypeSafe: " + str(last))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from jev import load_key, ask  # one wire-logged call path for every Jev request
 
 RULE = ("The relay sits at 127.0.0.1:8082 between the Windows Update client on a guest with NO network "
         "adapter and the update servers. Rule: a sanctioned request (allowlisted host, update process) "
@@ -145,7 +121,7 @@ def main():
     flags = []
     report = {"rows": [], "premise": None}
     for row in ROWS:
-        a = ask(key, {"rule": RULE, "measured": MEASURED, "row": row}, row_questions())
+        a = ask(key, {"rule": RULE, "measured": MEASURED, "row": row}, row_questions())["answers"]
         o, w = a["outcome"], a["can_wait"]
         rec = {"id": row["id"], "intended": row["intended"], "outcome": o["choice"], "confidence": o["confidence"],
                "probabilities": o["probabilities"], "can_wait": w["noul"]}
@@ -158,7 +134,7 @@ def main():
         if why:
             flags.append("%s: %s" % (row["id"], "; ".join(why))); line += "   <-- FLAG"
         print(line)
-    p = ask(key, {"measured": MEASURED, "rule": RULE}, PREMISE_Q)
+    p = ask(key, {"measured": MEASURED, "rule": RULE}, PREMISE_Q)["answers"]
     report["premise"] = {k: v["noul"] for k, v in p.items()}
     print("premise: 403-is-final p=%.2f   rst-for-non-update-peer-is-correct p=%.2f" % (p["final_403"]["noul"], p["rst_bad_peer_ok"]["noul"]))
     if p["final_403"]["noul"] < 0.7: flags.append("PREMISE: 403-is-final only p=%.2f - must be measured on the guest before the fix is called verified" % p["final_403"]["noul"])

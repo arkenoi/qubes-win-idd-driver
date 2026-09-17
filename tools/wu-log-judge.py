@@ -65,6 +65,7 @@ def episodes(rows, follow=6, span_ms=3000):
         for r2 in rows[i + 1:]:
             if r2["tid"] != r["tid"]: continue
             if (r2["t"] - r["t"]).total_seconds() * 1000 > span_ms or len(seq) > follow: break
+            if FAILHEAD.search(r2["msg"]): break   # the NEXT download's failure starts a new episode; never mix two
             seq.append(r2["msg"])
         eps.append({"t": str(r["t"]), "tid": r["tid"], "lines": seq})
     return eps
