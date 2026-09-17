@@ -201,7 +201,9 @@ function Test-RelayListening {
 function Start-Relay {
   if (-not (Test-Path -LiteralPath $RelayExe)) { throw "relay not found at $RelayExe" }
   $env:QUBES_UPDATES_MAXCONN='256'
-  Start-Process -FilePath $RelayExe -ArgumentList '--listen','8082','--target','@default','--log',$WorkDir -WindowStyle Hidden
+  # --parent-pid: the relay exits on its own when THIS process is gone (measured 2026-09-17: a pass
+  # ended hard by the scheduler never reached the Remove-Proxy below, and the relay served for hours)
+  Start-Process -FilePath $RelayExe -ArgumentList '--listen','8082','--target','@default','--log',$WorkDir,'--parent-pid',"$PID" -WindowStyle Hidden
   Start-Sleep -Seconds 2
 }
 function Ensure-Proxy {

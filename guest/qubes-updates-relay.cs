@@ -212,7 +212,7 @@ static class Relay
                 return RunListen(args);
             if (args.Length >= 1 && args[0] == "--selftest")
                 return SelfTest();
-            Console.Error.WriteLine("usage: qubes-updates-relay --listen [port] [--target VM] [--user U] [--log DIR]");
+            Console.Error.WriteLine("usage: qubes-updates-relay --listen [port] [--target VM] [--user U] [--log DIR] [--parent-pid PID]");
             Console.Error.WriteLine("       qubes-updates-relay --selftest                      (response-framing contract)");
             Console.Error.WriteLine("       qubes-updates-relay --relay <controlPort> <token>   (internal; spawned via qrexec)");
             return 2;
@@ -641,6 +641,70 @@ static class Relay
         return _svcMap.HostedBy(pid, DateTime.UtcNow);
     }
 
+    // ---- parent watchdog: the relay must not outlive the pass that started it -------------------
+    // Measured 2026-09-17 on the German 25H2 template: the Task Scheduler ended the updater's
+    // PowerShell instance hard 90 s into a pass (LastTaskResult 0x41306), so its
+    // `finally { Remove-Proxy }` never ran and this relay kept serving 127.0.0.1:8082 for hours -
+    // the temporal gate ("the proxy is up ONLY for the duration of a pass", see the updater's
+    // Ensure-Proxy comment) was then held by nothing. The updater passes its own $PID as
+    // --parent-pid; when that process is gone the relay EXITS. No draining, no grace: the proxy
+    // must go DOWN. A pid can be recycled inside the check interval, so the parent's start time
+    // is captured at arming and a different start time under the same pid counts as gone.
+    // Without the argument nothing changes.
+    const int ParentCheckMs = 5000;
+    internal sealed class ParentWatch
+    {
+        readonly int _pid;
+        readonly DateTime? _start;
+        public ParentWatch(int pid)
+        {
+            _pid = pid;
+            try { _start = Process.GetProcessById(pid).StartTime; } catch { _start = null; }
+        }
+        public bool StartTimeKnown { get { return _start.HasValue; } }
+        // true = the same process still exists; false = gone (no such pid, exited, or recycled).
+        // A check that cannot be made (unexpected exception) is NOT "gone": it is reported and the
+        // parent is presumed alive, so a lookup fault can never take a live pass's proxy away.
+        public bool Alive(out string why)
+        {
+            why = "alive";
+            try
+            {
+                Process p = Process.GetProcessById(_pid);
+                if (p.HasExited) { why = "exited"; return false; }
+                if (_start.HasValue)
+                {
+                    DateTime now;
+                    try { now = p.StartTime; }
+                    catch (Exception e) { why = "alive (start time unreadable now: " + e.GetType().Name + ")"; return true; }
+                    if (now != _start.Value) { why = "pid recycled (start " + _start.Value.ToString("HH:mm:ss.fff") + " -> " + now.ToString("HH:mm:ss.fff") + ")"; return false; }
+                }
+                return true;
+            }
+            catch (ArgumentException) { why = "no such process"; return false; }
+            catch (InvalidOperationException) { why = "exited"; return false; }
+            catch (Exception e) { why = "check failed (" + e.GetType().Name + ": " + e.Message + ") - presumed alive"; return true; }
+        }
+    }
+    static void StartParentWatchdog(int pid, int intervalMs, string logPath, Action onGone)
+    {
+        ParentWatch w = new ParentWatch(pid);
+        Log(logPath, "parent watchdog armed: pid " + pid + (w.StartTimeKnown ? "" : " (start time unreadable: existence only)")
+                     + ", checked every " + intervalMs + " ms");
+        Thread t = new Thread(delegate()
+        {
+            while (true)
+            {
+                Thread.Sleep(intervalMs);
+                string why;
+                if (!w.Alive(out why)) { Log(logPath, "parent pid " + pid + " is gone (" + why + ") - exiting so the proxy goes down"); onGone(); return; }   // GUARD:parent-gone
+            }
+        });
+        t.IsBackground = true;
+        t.Name = "parent-watchdog";
+        t.Start();
+    }
+
     // ---- listener side (long-running service) --------------------------------------------
     static int RunListen(string[] args)
     {
@@ -663,19 +727,24 @@ static class Relay
         // SYSTEM sidesteps the account-name dependency entirely. --user still overrides if ever set.
         string user = "SYSTEM";
         string logDir = @"C:\Users\Public";
+        int parentPid = 0;   // 0 = not given: no watchdog, the pre-2026-09-17 behaviour (tests, other callers)
         for (int i = 1; i < args.Length; i++)
         {
             if (args[i] == "--target" && i + 1 < args.Length) target = args[++i];
             else if (args[i] == "--user" && i + 1 < args.Length) user = args[++i];
             else if (args[i] == "--log" && i + 1 < args.Length) logDir = args[++i];
+            else if (args[i] == "--parent-pid" && i + 1 < args.Length) { if (!int.TryParse(args[++i], out parentPid)) parentPid = 0; }
             else { int p; if (int.TryParse(args[i], out p)) port = p; }
         }
         string self = Process.GetCurrentProcess().MainModule.FileName;
         string logPath = Path.Combine(logDir, "qubes-updates-relay.log");
-        Log(logPath, "listen 127.0.0.1:" + port + " target=" + target + " user=" + user + " self=" + self);
+        Log(logPath, "listen 127.0.0.1:" + port + " target=" + target + " user=" + user + " self=" + self
+                     + (parentPid > 0 ? " parent=" + parentPid : " parent=none (no watchdog)"));
 
         TcpListener listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
+        if (parentPid > 0)
+            StartParentWatchdog(parentPid, ParentCheckMs, logPath, delegate { Environment.Exit(3); });
 
         // Start warming channels immediately, so the first request does not pay setup either.
         Task filler = Task.Run(delegate { return PoolFiller(self, target, user, logPath); });
