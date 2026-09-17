@@ -23,6 +23,25 @@
 // C# 5 ONLY: the in-box csc (Framework v4.0.30319) is pre-Roslyn - no string interpolation, no
 // 'using var', no out-vars. Keep it that way so it compiles on-guest with no build infra.
 //
+// THE RELAY SERVES OR REFUSES - IT NEVER HANDS WINDOWS UPDATE A TRANSIENT FAILURE (owner rule,
+// 2026-09-17, after findings/issues.md P1 "A KILLED UPDATE PASS COSTS dom0 TWO SILENT HOURS"). On a
+// NIC-less guest NLA always says "not connected", so any socket-level failure this relay produces
+// for a Windows Update request - a reset, a bare close, a 5xx it would retry - becomes "transient
+// error + network not connected -> wait for a network event that never comes": the synchronous COM
+// search then sits until the task's 2 h limit kills the pass. Measured in the decoded WU log:
+// 21 aborted connections (80072EFE, reset by this side), then "A transient error was identified and
+// the network is not connected ... Will retry" and two hours of nothing. Therefore:
+//   - a SANCTIONED request (allowed host, allowed peer) is SERVED: a channel is opened if none is
+//     warm, and the client is never closed for pool, keep-alive, warm-up or drain reasons;
+//   - a sanctioned request the relay genuinely cannot serve (qrexec spawn / connect-back failed) is
+//     answered 403 Forbidden + Connection: close + X-Qubes-Relay: <reason>, which WU treats as
+//     final, plus a CLOSE log line - never 5xx, never Retry-After, never a bare close;
+//   - a relayed plain response always says Connection: close, because this relay serves one request
+//     per connection and a reused socket would meet a reset;
+//   - an unsanctioned host gets 403, an unsanctioned peer gets the RST - both immediate and final;
+//   - every inbound close that is not the normal end of a served response is logged with its
+//     reason and the peer.
+//
 // Target VM: --target (or QUBES_UPDATES_TARGET env), default "@default" so dom0 policy routes it.
 using System;
 using System.Diagnostics;
@@ -243,14 +262,21 @@ static class Relay
 
         // 1. A body past MaxVerifyBytes must arrive WHOLE (spill), not be cut at the mark.
         int big = 20 * 1024 * 1024;
-        byte[] r1in = cat(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: " + big + "\r\n\r\n"), new byte[big]);
+        byte[] r1in = cat(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: " + big + "\r\nConnection: keep-alive\r\n\r\n"), new byte[big]);
         MemoryStream c1 = new MemoryStream();
         HttpResponse r1 = ReadResponse(new MemoryStream(r1in), c1).Result;
         check("large: body delivered whole (" + r1.GotBody + "/" + big + ")", r1.GotBody >= big);
         // NOT "> 16MB": the truncating build still read one 64KB chunk past the mark before breaking,
         // so that comparison passed on a broken binary and proved nothing. Demand the client got the
         // ENTIRE response - headers plus every body byte - which only the spill path can deliver.
-        check("large: client received the whole response (" + c1.Length + "/" + r1in.Length + ")", c1.Length == r1in.Length);
+        // The spill rewrites the header block (Connection: keep-alive -> close, 5 bytes shorter), so
+        // the expected length is r1in's minus those 5, and the delivered header must say close.
+        int r1want = r1in.Length - ("keep-alive".Length - "close".Length);
+        check("large: client received the whole response (" + c1.Length + "/" + r1want + ")", c1.Length == r1want);
+        byte[] c1b = c1.ToArray();
+        string c1hdr = Encoding.ASCII.GetString(c1b, 0, Math.Min(c1b.Length, 200));
+        check("large: the spilled header block says Connection: close, not keep-alive",
+              c1hdr.IndexOf("\r\nConnection: close\r\n") > 0 && c1hdr.IndexOf("keep-alive") < 0);
         check("large: spilled to client", r1.Streamed && c1.Length > 16 * 1024 * 1024);
         check("large: reported complete", r1.Complete);
 
@@ -506,18 +532,124 @@ static class Relay
     }
 
     // A denied client retries, and a log line per retry buries everything else. One line per
-    // distinct caller per minute keeps the signal ("who was refused") without the noise.
-    static readonly Dictionary<string, DateTime> _denyLogged = new Dictionary<string, DateTime>();
-    static void DenyLog(string logPath, string who)
+    // distinct caller per minute keeps the signal ("who was refused") without the noise - but the
+    // repeats are COUNTED and the count is written when the window closes, so a burst of resets can
+    // never leave zero lines. 2026-09-17 (findings/issues.md P1 "A KILLED UPDATE PASS COSTS dom0 TWO
+    // SILENT HOURS"): Windows Update logged 21 aborted connections (80072EFE = reset by this relay's
+    // side) and this log had NO line for any of them, so which path reset them could not be answered.
+    // The suppression stays ONLY here, for the policy RST of a non-update caller.
+    class DenyWindow { public DateTime Since; public int Suppressed; }
+    static readonly Dictionary<string, DenyWindow> _denyLogged = new Dictionary<string, DenyWindow>();
+    const int DenyWindowSeconds = 60;
+    static Timer _denyFlushTimer;   // RunListen's periodic DenyFlush; a field so the GC cannot collect it
+    // `peerPid` names the denied process by EVERY service it hosts (HostedSuffix) - looked up only
+    // when a line is actually written, so a storm of suppressed repeats costs no SCM rounds.
+    static void DenyLog(string logPath, string who, int peerPid, DateTime now)
     {
         lock (_denyLogged)
         {
-            DateTime last;
-            if (_denyLogged.TryGetValue(who, out last) && (DateTime.UtcNow - last).TotalSeconds < 60) return;
-            _denyLogged[who] = DateTime.UtcNow;
+            DenyWindow w;
+            if (_denyLogged.TryGetValue(who, out w) && (now - w.Since).TotalSeconds < DenyWindowSeconds) { w.Suppressed++; return; }
+            if (w != null && w.Suppressed > 0) Log(logPath, DenySuppressedLine(who, w.Suppressed));   // GUARD:deny-count
+            _denyLogged[who] = new DenyWindow { Since = now, Suppressed = 0 };
         }
-        Log(logPath, "DENY " + who + " - not part of the update. The proxy serves the update process only; "
+        Log(logPath, "DENY " + who + HostedSuffix(peerPid) + " - not part of the update. The proxy serves the update process only; "
                      + "this caller sees an unreachable proxy, exactly as it would on an offline guest.");
+    }
+    // A denied svchost used to be logged as "svchost (pid N)" and nothing more - so whether pid 3468
+    // (denied on the German 25H2 template, 2026-09-17) ran a piece of the update stack could not be
+    // read from the log. Name ALL the services the SCM says the pid hosts, not only the policy names
+    // the allowlist compares against. The enumerator is a field so the offline suite can script it.
+    static Func<int, string[]> _servicesOfPid = ScmServicesOfPid;
+    static string HostedSuffix(int pid)
+    {
+        if (pid <= 0) return "";
+        try
+        {
+            string[] s = _servicesOfPid(pid);
+            if (s != null && s.Length > 0) return " hosting [" + string.Join(", ", s) + "]";
+            return "";
+        }
+        catch (Exception e) { return " (hosted services unreadable: " + e.GetType().Name + ")"; }
+    }
+    static string DenySuppressedLine(string who, int n)
+    {
+        return "DENY " + who + " x" + n + " suppressed - repeats within " + DenyWindowSeconds + " s of the last DENY line for this caller";
+    }
+    // A window nobody follows (a burst, then silence) would never be counted by DenyLog alone;
+    // RunListen calls this periodically so the count is written anyway.
+    static void DenyFlush(string logPath, DateTime now)
+    {
+        List<string> lines = new List<string>();
+        lock (_denyLogged)
+        {
+            List<string> closed = new List<string>();
+            foreach (KeyValuePair<string, DenyWindow> kv in _denyLogged)
+                if ((now - kv.Value.Since).TotalSeconds >= DenyWindowSeconds) closed.Add(kv.Key);
+            foreach (string who in closed)
+            {
+                DenyWindow w = _denyLogged[who];
+                if (w.Suppressed > 0) lines.Add(DenySuppressedLine(who, w.Suppressed));   // GUARD:deny-count
+                _denyLogged.Remove(who);
+            }
+        }
+        foreach (string l in lines) Log(logPath, l);
+    }
+
+    // AN INBOUND CONNECTION IS NEVER CLOSED SILENTLY, AND NEVER WITH A TRANSIENT (see the file
+    // header). Where the relay cannot serve a request it has read, the client gets a HARD, FINAL
+    // answer - 403 Forbidden, Connection: close, X-Qubes-Relay: <reason> so any capture says why -
+    // and the log names the reason and the peer. A bare close is what Windows Update classifies as a
+    // NETWORK transient (80072EFE / WinHTTP 12030) and then waits on; a 5xx is what it retries.
+    static string Refused403(string reason)
+    {
+        return "HTTP/1.1 403 Forbidden\r\nX-Qubes-Relay: " + reason + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    }
+    static async Task<bool> TrySend(Stream s, string response)
+    {
+        try
+        {
+            byte[] b = Encoding.ASCII.GetBytes(response);
+            await s.WriteAsync(b, 0, b.Length);
+            await s.FlushAsync();
+            return true;
+        }
+        catch { return false; }
+    }
+
+    // WinHTTP reuses a proxy connection whose response said keep-alive - or said nothing, since
+    // HTTP/1.1 is persistent by default. The plain path serves ONE request per inbound connection
+    // and disposes the socket (HandlePlainHttp), so a reused connection meets a RESET on its next
+    // request, with no response and no log line here. Say what is true in the header block handed to
+    // the client: Connection: close. The upstream request and the body are untouched.
+    static readonly Encoding Latin1 = Encoding.GetEncoding("iso-8859-1");   // byte-transparent, unlike ASCII
+    static byte[] ForceConnectionClose(byte[] resp)
+    {
+        int headerEnd = -1;
+        for (int i = 3; i < resp.Length; i++)
+            if (resp[i - 3] == 13 && resp[i - 2] == 10 && resp[i - 1] == 13 && resp[i] == 10) { headerEnd = i + 1; break; }
+        if (headerEnd <= 0) return resp;   // no header block: nothing to say it in
+        string[] lines = Latin1.GetString(resp, 0, headerEnd).Split(new string[] { "\r\n" }, StringSplitOptions.None);
+        StringBuilder sb = new StringBuilder();
+        bool said = false;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string l = lines[i];
+            if (l.Length == 0) break;   // the blank line: end of the header block
+            if (i > 0 && l.StartsWith("Connection:", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!said) { sb.Append("Connection: close\r\n"); said = true; }
+                continue;
+            }
+            sb.Append(l).Append("\r\n");
+        }
+        if (!said) sb.Append("Connection: close\r\n");
+        sb.Append("\r\n");
+        byte[] hdr = Latin1.GetBytes(sb.ToString());
+        byte[] o = new byte[hdr.Length + resp.Length - headerEnd];
+        Buffer.BlockCopy(hdr, 0, o, 0, hdr.Length);
+        Buffer.BlockCopy(resp, headerEnd, o, hdr.Length, resp.Length - headerEnd);
+        return o;
     }
 
     static bool PeerIsUpdate(int pid, out string why)
@@ -584,6 +716,52 @@ static class Relay
         }
         finally { CloseServiceHandle(scm); }
         return fresh;
+    }
+
+    // EVERY running Win32 service hosted by one pid (for HostedSuffix - naming a denied svchost).
+    // One SCM round, only when a DENY line is written. ENUM_SERVICE_STATUS_PROCESSW is two pointers
+    // (name, display name) followed by SERVICE_STATUS_PROCESS (9 DWORDs, dwProcessId the 8th), the
+    // whole entry pointer-aligned - laid out by hand because this file has no marshalling helpers
+    // and may run as a 32-bit process.
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool EnumServicesStatusExW(IntPtr scm, int infoLevel, uint serviceType, uint serviceState,
+                                             IntPtr buf, int bufSize, out int bytesNeeded, out int servicesReturned,
+                                             ref int resumeHandle, string groupName);
+    static string[] ScmServicesOfPid(int pid)
+    {
+        List<string> names = new List<string>();
+        IntPtr scm = OpenSCManagerW(null, null, 0x0004 /*SC_MANAGER_ENUMERATE_SERVICE*/);
+        if (scm == IntPtr.Zero) return names.ToArray();
+        IntPtr buf = IntPtr.Zero;
+        try
+        {
+            int needed = 0, returned = 0, resume = 0;
+            EnumServicesStatusExW(scm, 0 /*SC_ENUM_PROCESS_INFO*/, 0x30 /*SERVICE_WIN32*/, 1 /*SERVICE_ACTIVE*/,
+                                  IntPtr.Zero, 0, out needed, out returned, ref resume, null);
+            if (needed <= 0) return names.ToArray();
+            buf = Marshal.AllocHGlobal(needed);
+            resume = 0;
+            if (!EnumServicesStatusExW(scm, 0, 0x30, 1, buf, needed, out needed, out returned, ref resume, null))
+                return names.ToArray();
+            int entry = 2 * IntPtr.Size + 36;
+            entry = (entry + IntPtr.Size - 1) / IntPtr.Size * IntPtr.Size;
+            for (int i = 0; i < returned; i++)
+            {
+                IntPtr e = new IntPtr(buf.ToInt64() + (long)i * entry);
+                int servicePid = Marshal.ReadInt32(e, 2 * IntPtr.Size + 28);   // dwProcessId
+                if (servicePid != pid) continue;
+                IntPtr namePtr = Marshal.ReadIntPtr(e, 0);
+                string n = namePtr == IntPtr.Zero ? null : Marshal.PtrToStringUni(namePtr);
+                if (!string.IsNullOrEmpty(n)) names.Add(n);
+            }
+        }
+        finally
+        {
+            if (buf != IntPtr.Zero) Marshal.FreeHGlobal(buf);
+            CloseServiceHandle(scm);
+        }
+        names.Sort(StringComparer.OrdinalIgnoreCase);
+        return names.ToArray();
     }
 
     // The POLICY half - what the cache may answer - kept apart from the SCM so the offline suite
@@ -749,16 +927,24 @@ static class Relay
         // Start warming channels immediately, so the first request does not pay setup either.
         Task filler = Task.Run(delegate { return PoolFiller(self, target, user, logPath); });
         GC.KeepAlive(filler);
+        // A DENY burst that nothing follows is counted by this flush (DenyFlush), not by the next caller.
+        _denyFlushTimer = new Timer(delegate { DenyFlush(logPath, DateTime.UtcNow); }, null, 10000, 10000);
         while (true)
         {
             TcpClient inbound = listener.AcceptTcpClient();
+            // The peer, for every CLOSE line this connection may produce: the process (when the
+            // allowlist identified it) or at least the port.
+            int peerPort = 0;
+            try { peerPort = ((IPEndPoint)inbound.Client.RemoteEndPoint).Port; } catch { peerPort = 0; }
+            string peer = "port " + peerPort;
             if (!"off".Equals(Environment.GetEnvironmentVariable("QUBES_UPDATES_PEER_ALLOWLIST"),
                               StringComparison.OrdinalIgnoreCase))
             {
-                int peerPort = ((IPEndPoint)inbound.Client.RemoteEndPoint).Port;
                 int peerPid = PidForLocalPort(peerPort);
                 string who;
-                if (!PeerIsUpdate(peerPid, out who))
+                bool allowed = PeerIsUpdate(peerPid, out who);
+                peer = who;
+                if (!allowed)
                 {
                     // Say WHICH kind of denial this is. A lookup that never completed is an
                     // infrastructure failure denying a possibly-legitimate caller, not a policy
@@ -774,30 +960,39 @@ static class Relay
                     // that half-answers. It also fails FAST: never a hang waiting for a timeout.
                     try { inbound.Client.LingerState = new LingerOption(true, 0); } catch { }
                     try { inbound.Close(); } catch { }
-                    DenyLog(logPath, who);
+                    DenyLog(logPath, who, peerPid, DateTime.UtcNow);
                     continue;
                 }
             }
             TcpClient captured = inbound;
-            Task.Run(delegate { HandleInbound(captured, self, target, user, logPath).Wait(); });
+            string capturedPeer = peer;
+            Task.Run(delegate { HandleInbound(captured, capturedPeer, self, target, user, logPath).Wait(); });
         }
     }
 
-    static async Task HandleInbound(TcpClient inbound, string self, string target, string user, string logPath)
+    static async Task HandleInbound(TcpClient inbound, string peer, string self, string target, string user, string logPath)
     {
         NetworkStream a = inbound.GetStream();
 
         // READ-FIRST: buffer the client's initial request before spending a qrexec spawn.
         // DO's speculative connections close without sending anything - drop them for free.
+        // ONLY a connection that sent NOTHING is closed here, and even that is logged (one line,
+        // reason and peer): a request that arrived is served or answered, never dropped.
         byte[] head = new byte[65536];
         int hlen = 0;
+        string readErr = null;
         try
         {
             a.ReadTimeout = 10000;
             hlen = await a.ReadAsync(head, 0, head.Length);
         }
-        catch { hlen = 0; }
-        if (hlen <= 0) { inbound.Close(); return; }   // abandoned/empty: NO spawn, NO log spam
+        catch (Exception e) { hlen = 0; readErr = e.GetType().Name; }
+        if (hlen <= 0)
+        {
+            Log(logPath, "CLOSE reason=" + (readErr == null ? "read-first-empty" : "read-error:" + readErr) + " peer=" + peer);   // GUARD:close-readfirst
+            inbound.Close();
+            return;
+        }
 
         // Enforce the allowlist BEFORE spending a channel or a gate slot: a denied request must
         // cost nothing but a 403 and a log line.
@@ -842,7 +1037,7 @@ static class Relay
         // this same transport, and is opaque to us by construction.
         if (!IsConnect(head, hlen))
         {
-            await HandlePlainHttp(inbound, head, hlen, self, target, user, logPath);
+            await HandlePlainHttp(inbound, peer, head, hlen, self, target, user, logPath);
             return;
         }
 
@@ -858,10 +1053,35 @@ static class Relay
         Func<string> endReasons = null;   // set once the pumps exist; reports WHY each direction stopped
         try
         {
+            // Record the request LINE and the time to first byte back: without splitting
+            // those out, a slow connection cannot be told apart from a slow START, and the
+            // warm pool proved that guessing which one it is wastes hours.
+            // Keep-alive evidence: what the CLIENT asked for, and which side ends first.
+            // If the client says "close", it never wanted reuse and the keep-alive hypothesis
+            // dies. If it asks for keep-alive and the TUNNEL side EOFs first, the close is
+            // imposed on it - which is the mechanism under test.
+            string headTxt = Encoding.ASCII.GetString(head, 0, Math.Min(hlen, 2048));
+            int ci = headTxt.IndexOf("Connection:", StringComparison.OrdinalIgnoreCase);
+            if (ci >= 0) {
+                int ce = headTxt.IndexOf('\n', ci);
+                connHdr = headTxt.Substring(ci, (ce < 0 ? Math.Min(headTxt.Length, ci + 40) : ce) - ci).Trim();
+            }
+            int nl = Array.IndexOf(head, (byte)'\n', 0, Math.Min(hlen, 200));
+            if (nl < 0) nl = Math.Min(hlen, 60);
+            reqLine = Encoding.ASCII.GetString(head, 0, Math.Max(0, Math.Min(nl, 120))).Trim();
+
+            // A sanctioned request is SERVED: warm channel if there is one, a fresh one otherwise.
             Ready ch = TakeWarm(logPath);
             if (ch != null) { warm = true; }
             else { ch = await OpenChannel(self, target, user, logPath); }
-            if (ch == null) { inbound.Close(); return; }
+            if (ch == null)
+            {
+                // The relay itself cannot reach the proxy (spawn / connect-back failed): a hard,
+                // final, logged refusal - never a bare close (see the file header).
+                await TrySend(a, Refused403("no-channel")); Log(logPath, "CLOSE reason=no-channel peer=" + peer + " - 403 to client req=[" + reqLine + "]");   // GUARD:close-nochannel
+                inbound.Close();
+                return;
+            }
             token = ch.Token;
             TcpClient relay = ch.Relay;
             NetworkStream rs = ch.Stream;
@@ -870,22 +1090,6 @@ static class Relay
             using (relay)
             {
                 // Replay the buffered request head into the tunnel first, then pump both ways.
-                // Record the request LINE and the time to first byte back: without splitting
-                // those out, a slow connection cannot be told apart from a slow START, and the
-                // warm pool proved that guessing which one it is wastes hours.
-                // Keep-alive evidence: what the CLIENT asked for, and which side ends first.
-                // If the client says "close", it never wanted reuse and the keep-alive hypothesis
-                // dies. If it asks for keep-alive and the TUNNEL side EOFs first, the close is
-                // imposed on it - which is the mechanism under test.
-                string headTxt = Encoding.ASCII.GetString(head, 0, Math.Min(hlen, 2048));
-                int ci = headTxt.IndexOf("Connection:", StringComparison.OrdinalIgnoreCase);
-                if (ci >= 0) {
-                    int ce = headTxt.IndexOf('\n', ci);
-                    connHdr = headTxt.Substring(ci, (ce < 0 ? Math.Min(headTxt.Length, ci + 40) : ce) - ci).Trim();
-                }
-                int nl = Array.IndexOf(head, (byte)'\n', 0, Math.Min(hlen, 200));
-                if (nl < 0) nl = Math.Min(hlen, 60);
-                reqLine = Encoding.ASCII.GetString(head, 0, Math.Max(0, Math.Min(nl, 120))).Trim();
                 await rs.WriteAsync(head, 0, hlen); await rs.FlushAsync();
                 a.ReadTimeout = Timeout.Infinite;
                 string upEnd = "-", downEnd = "-";
@@ -1086,7 +1290,7 @@ static class Relay
             if (!spilled && headerEnd > 0 && buf.Length > MaxVerifyBytes)
             {
                 if (client == null) break;   // nowhere to spill: stop rather than grow unbounded
-                byte[] all = buf.ToArray();
+                byte[] all = ForceConnectionClose(buf.ToArray());   // GUARD:conn-close-spill
                 await client.WriteAsync(all, 0, all.Length);
                 await client.FlushAsync();
                 TailPush(tail, ref tailLen, all, all.Length);
@@ -1113,7 +1317,7 @@ static class Relay
     // Plain-HTTP path: send the request, verify the response is whole, and re-issue on a FRESH
     // channel if the transport lost part of it. Nothing is written to the client until a complete
     // response is in hand, so a short body is never handed to Windows as if it were the file.
-    static async Task HandlePlainHttp(TcpClient inbound, byte[] head, int hlen,
+    static async Task HandlePlainHttp(TcpClient inbound, string peer, byte[] head, int hlen,
                                       string self, string target, string user, string logPath)
     {
         NoteDemand();   // allowed plain-HTTP demand (read-first + allowlist already passed in HandleInbound)
@@ -1146,12 +1350,13 @@ static class Relay
                 int deadChannels = 0;
                 const int MaxDeadChannels = 8;   // the pool target; cannot outlive the pool
                 bool avoidWarm = false;
+                bool noChannel = false;   // OpenChannel itself failed: the relay cannot reach the proxy at all
                 for (attempts = 1; attempts <= maxTries; )
                 {
                     Ready ch = avoidWarm ? null : TakeWarm(logPath);
                     bool wasWarm = ch != null;
                     if (ch == null) ch = await OpenChannel(self, target, user, logPath);
-                    if (ch == null) break;
+                    if (ch == null) { noChannel = true; break; }
                     HttpResponse r = null;
                     using (ch.Relay)
                     {
@@ -1210,16 +1415,24 @@ static class Relay
                 }
                 else if (best != null && best.HeadersFound && best.Complete && best.Bytes.Length > 0)
                 {
-                    await a.WriteAsync(best.Bytes, 0, best.Bytes.Length);
+                    // Say Connection: close in what the client sees - this socket is disposed below.
+                    byte[] outb = ForceConnectionClose(best.Bytes);   // GUARD:conn-close
+                    await a.WriteAsync(outb, 0, outb.Length);
                     await a.FlushAsync();
+                }
+                else if (best == null && noChannel)
+                {
+                    // Nothing came back because no channel could be opened at all: the relay cannot
+                    // reach the proxy. Hard, final, logged - never a bare close (see the file header).
+                    await TrySend(a, Refused403("no-channel")); Log(logPath, "CLOSE reason=no-channel peer=" + peer + " - 403 to client req=[" + reqLine + "]");   // GUARD:close-nochannel-plain
                 }
                 else
                 {
-                    byte[] err = Encoding.ASCII.GetBytes(
-                        "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
-                    await a.WriteAsync(err, 0, err.Length);
-                    await a.FlushAsync();
-                    Log(logPath, "PLAIN REFUSED after " + attempts + " attempt(s) - 502 to client"
+                    // 403, not 5xx: a 5xx is what Windows Update RETRIES, and this relay never hands
+                    // it a transient (file header). The log text stays 'PLAIN REFUSED' - the updater's
+                    // give-up count reads it.
+                    await TrySend(a, Refused403("incomplete"));
+                    Log(logPath, "PLAIN REFUSED after " + attempts + " attempt(s) - 403 to client"
                                + " bytes=" + (best == null ? 0 : best.Bytes.Length)
                                + " body=" + (best == null ? 0 : best.GotBody)
                                + "/" + (best == null ? -1 : best.Expected)
