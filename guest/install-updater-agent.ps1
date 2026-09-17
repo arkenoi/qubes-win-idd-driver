@@ -280,6 +280,28 @@ $o = & schtasks /create /tn QubesWindowsUpdateRun /xml "$fr" /f 2>&1
 Log ("REGISTER QubesWindowsUpdateRun rc=$LASTEXITCODE : " + ($o -join ' '))
 if ($LASTEXITCODE -ne 0) { throw "schtasks register (run task) failed (rc=$LASTEXITCODE)" }
 
+# ---- WU-TASKSCHED-OPLOG   (tools/tests/wu-autologon-guard-test.ps1 asserts this block is shipped)
+# Enable the Task Scheduler operational log, so the NEXT terminated pass names its requester.
+# Measured 2026-09-17 on the German 25H2 template: a QubesWindowsUpdateRun instance was ended by
+# the scheduler on request (LastTaskResult 0x41306) 90 s into a pass, and nothing on the guest
+# recorded by whom - Microsoft-Windows-TaskScheduler/Operational is disabled by default
+# (`wevtutil gl` -> enabled: false), so the scheduler's own record of the stop did not exist.
+# Idempotent. A failure to enable is a WARN, never fatal: nothing the deploy does depends on it.
+# wevtutil writes to stderr on failure and this script runs under ErrorActionPreference=Stop, so
+# the calls sit in a try - a redirected stderr line is a terminating error here (see the XML note).
+function Get-TaskSchedLogEnabled {
+    $o = @(& wevtutil gl 'Microsoft-Windows-TaskScheduler/Operational' 2>&1)
+    foreach ($line in $o) { if ("$line" -match '^\s*enabled:\s*(\S+)') { return $Matches[1] } }
+    return 'unknown'
+}
+try {
+    $tsBefore = Get-TaskSchedLogEnabled
+    & wevtutil sl 'Microsoft-Windows-TaskScheduler/Operational' /e:true 2>&1 | Out-Null
+    $tsAfter = Get-TaskSchedLogEnabled
+    Log "task scheduler operational log: enabled $tsBefore -> $tsAfter"
+    if ($tsAfter -ne 'true') { Log "WARN: Microsoft-Windows-TaskScheduler/Operational is still enabled: $tsAfter - the next terminated pass will not name its requester" }
+} catch { Log "WARN: could not enable the Task Scheduler operational log ($($_.Exception.Message)) - the next terminated pass will not name its requester" }
+
 $qt = $env:QUBES_TOOLS; if (-not $qt) { $qt = 'C:\Program Files\Qubes Tools' }
 $handlerDir = Join-Path $qt 'qubes-rpc-services'
 $svcDir     = Join-Path $qt 'qubes-rpc'

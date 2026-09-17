@@ -125,6 +125,14 @@ Check 'shipped: the installer deploys the helper to <Qubes Tools>\qubes-rpc-serv
        $installer -match "Copy-Item \(Join-Path \`$SetupRoot 'ensure-autologon\.ps1'\) \(Join-Path \`$handlerDir 'ensure-autologon\.ps1'\)" -and
        $installer -match "\`$alPath = Join-Path \`$handlerDir 'ensure-autologon\.ps1'" -and
        $installer -match 'if \(-not \(Test-Path \$alPath\)\) \{ throw "autologon guard script missing at \$alPath')
+# 2026-09-17: a pass ended by the scheduler (0x41306) had no record of its requester because the
+# Task Scheduler operational log is off by default. The installer must enable it - grep-level, by
+# its marker: the exact wevtutil call, the before/after state logged, and failure kept a WARN.
+Check 'shipped: the installer enables the Task Scheduler operational log (WU-TASKSCHED-OPLOG block: wevtutil sl .../Operational /e:true, before->after logged, failure is a WARN)' `
+      ($installer -match '# ---- WU-TASKSCHED-OPLOG' -and
+       $installer -match "& wevtutil sl 'Microsoft-Windows-TaskScheduler/Operational' /e:true" -and
+       $installer -match 'Log "task scheduler operational log: enabled \$tsBefore -> \$tsAfter"' -and
+       $installer -match 'catch \{ Log "WARN: could not enable the Task Scheduler operational log')
 
 # --- the harness: Log and powershell shadowed, a real <Qubes Tools> layout ------------------------------
 $script:LogLines = @()
