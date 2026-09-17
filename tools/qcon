@@ -118,11 +118,17 @@ def _install_signal_net(budget):
             signal.signal(s, bye)
         except (ValueError, OSError):
             pass
-    if budget > 0:
-        try:
-            signal.alarm(int(budget))
-        except (ValueError, OSError):
-            pass
+    # alarm(0) CANCELS. Arming only when budget>0 left an INHERITED alarm live: the client arms
+    # signal.alarm(QCON_BUDGET) in __main__, the detached session daemon inherits it, and the
+    # daemon's _install_signal_net(0) never cleared it - so every session died exactly QCON_BUDGET
+    # seconds after `open` with reason='signal/exit 142'. Measured on the first live run,
+    # 2026-09-17 (ATTACH 11:09:38Z -> DETACH 11:19:38Z, 600.0 s, guest healthy throughout).
+    if os.environ.get("QCON_DEFECT") == "alarm" and budget <= 0:   # GUARD:alarm (self-test knob)
+        return
+    try:
+        signal.alarm(int(budget) if budget > 0 else 0)
+    except (ValueError, OSError):
+        pass
 
 
 def vm_running(vm):
@@ -337,9 +343,27 @@ def login(c, user, pw, ld=None):
         return RC_NEEDS_LOGIN, "login-sent", (f"no password prompt within {ld:.0f} s after the "
                                               "user name - session LEFT OPEN (see the transcript)")
     c.send((pw or "") + "\r")
-    why = c.pump(until=">", deadline=ld, stall=ld)
-    if why == "hit":
-        return RC_OK, "shell", "logged in - shell prompt seen"
+    n0 = len(c.buf)
+    t0 = time.time()
+    why = "deadline"
+    while True:
+        left = ld - (time.time() - t0)
+        if left <= 0:
+            break
+        why = c.pump(until=">", deadline=left, stall=min(4.0, left))
+        if why == "hit":
+            return RC_OK, "shell", "logged in - shell prompt seen"
+        # A REJECTED credential is NOT silence. Measured 2026-09-17 on a healthy win11de-gwt: the
+        # guest echoed the user name, printed "Password:", and answered the (wrong) password with a
+        # FRESH login prompt - the old code waited the whole deadline and reported "no shell prompt
+        # within 45 s", i.e. the same words a dead console gets. Only bytes AFTER the password count.
+        if os.environ.get("QCON_DEFECT") != "rejected" and b"login:" in c.buf[n0:]:   # GUARD:rejected
+            return RC_NEEDS_LOGIN, "login", (
+                "credential REJECTED - the guest answered the password with a fresh login prompt "
+                "(the console is NOT silent); session LEFT OPEN at the login prompt: "
+                "`qcon login <vm> --user U --pass P` retries through THIS attach, no new attach")
+        if why != "stall":
+            break
     return RC_NEEDS_LOGIN, "password-sent", (f"no shell prompt within {ld:.0f} s after the "
                                              f"password (pump exit: {why}) - session LEFT OPEN")
 

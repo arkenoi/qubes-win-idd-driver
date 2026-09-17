@@ -230,6 +230,41 @@ else
 fi
 $QCON close fakevm3 >/dev/null 2>&1
 
+# ---- 8b. a REJECTED credential is reported as rejected, session kept, retry through the SAME attach
+# Measured 2026-09-17 on a healthy win11de-gwt: username echoed, "Password:", then a fresh login
+# prompt - and the tool said "no shell prompt within 45 s", the words a dead console gets.
+start_fake reject --user tester --pass secret --host WIN-FAKE
+export QCON_TRANSPORT="fake:$SOCK"
+out=$($QCON open fakevm4 --user tester --pass WRONG 2>&1); rc=$?
+if [ $rc -eq 3 ] && printf '%s' "$out" | grep -q 'REJECTED' && printf '%s' "$out" | grep -q 'phase=login' \
+   && [ -d "$QCON_STATE_ROOT/qcon-fakevm4" ] && [ "$(attaches fakevm4)" = 1 ]; then
+  ok "rejected credential -> rc 3, says REJECTED (not silence), session LEFT OPEN at the login prompt"
+else
+  no "rejected credential reported as silence" "rc=$rc attaches=$(attaches fakevm4): $(printf '%s' "$out" | tail -1)"
+fi
+out=$($QCON login fakevm4 --user tester --pass secret 2>&1); rc=$?
+o8b=$($QCON run fakevm4 'echo after-reject' 2>"$T/r8b.err"); r8b=$?
+if [ $rc -eq 0 ] && [ $r8b -eq 0 ] && [ "$o8b" = "after-reject" ] && [ "$(attaches fakevm4)" = 1 ]; then
+  ok "retry with the right credential goes through the SAME attach (ledger still 1) and the session works"
+else
+  no "retry-same-attach" "login rc=$rc run rc=$r8b out=$(printf '%q' "$o8b") attaches=$(attaches fakevm4) err=$(tr '\n' ' ' <"$T/r8b.err")"
+fi
+$QCON close fakevm4 >/dev/null 2>&1
+
+# ---- 8c. the session daemon must OUTLIVE the client's budget (the inherited-alarm defect) -----
+# Measured 2026-09-17: every session died exactly QCON_BUDGET s after open ('signal/exit 142').
+start_fake alarm --user tester --pass secret --host WIN-FAKE
+export QCON_TRANSPORT="fake:$SOCK"
+out=$(QCON_BUDGET=3 $QCON open fakevm5 --user tester --pass secret 2>&1); rc=$?
+sleep 5
+o8c=$($QCON run fakevm5 'echo still-alive' 2>"$T/r8c.err"); r8c=$?
+if [ $rc -eq 0 ] && [ $r8c -eq 0 ] && [ "$o8c" = "still-alive" ] && [ "$(detaches fakevm5)" = 0 ]; then
+  ok "session survives past the client's QCON_BUDGET (no inherited alarm): answers 5 s after a 3 s budget"
+else
+  no "session died on an inherited alarm" "open rc=$rc run rc=$r8c out=$(printf '%q' "$o8c") detaches=$(detaches fakevm5) err=$(tr '\n' ' ' <"$T/r8c.err")"
+fi
+$QCON close fakevm5 >/dev/null 2>&1
+
 # ---- 9. THE DEFECT KNOB IS CAUGHT (clean run only) ----------------------------------------
 if [ $INNER -eq 0 ] && [ -z "${QCON_DEFECT:-}" ]; then
   dout=$(QCON_DEFECT=perattach bash "$0" --inner 2>&1); drc=$?
@@ -241,6 +276,17 @@ if [ $INNER -eq 0 ] && [ -z "${QCON_DEFECT:-}" ]; then
   else
     no "defect-knob" "perattach run rc=$drc; failing checks: $(printf '%s' "$dfail" | tr '\n' ',') - expected exactly the second-command one"
   fi
+  # the two 2026-09-17 live defects, each re-introduced by its own knob, must each fail on exactly its check
+  for knob in rejected alarm; do
+    case $knob in rejected) want="rejected";; alarm) want="session";; esac
+    dout=$(QCON_DEFECT=$knob bash "$0" --inner 2>&1); drc=$?
+    dfail=$(printf '%s\n' "$dout" | grep '^FAIL' | sed 's/^FAIL  //; s/ .*//')
+    if [ $drc -ne 0 ] && [ "$dfail" = "$want" ]; then
+      ok "DEFECT KNOB $knob: the test FAILS on exactly its own check ('$want ...')"
+    else
+      no "defect-knob-$knob" "rc=$drc failing checks: $(printf '%s' "$dfail" | tr '\n' ',') - expected exactly '$want'"
+    fi
+  done
 fi
 
 echo "=== qcon session selftest: $pass passed, $fail failed${QCON_DEFECT:+ (QCON_DEFECT=$QCON_DEFECT: a failure on 'second command returns nothing' is the EXPECTED outcome)} ==="
