@@ -111,6 +111,12 @@ asks, not three times hoping.
 UNKNOWN, and missing data fails. Treating it as "no reboot needed" silently converts a requested
 cycle into none — which is the same accounting lie from the other end.
 
+**A reboot is a COMPLETED CYCLE, not an issued command.** The first implementation of this very
+rule counted `performed` the moment `qvm-shutdown` returned — so a shutdown that *failed* still
+incremented the counter, and a guest left powered off counted a whole cycle for half a one. It was
+caught by its own ledger reading "1 performed" while the guest was Running. Count it only once the
+guest has gone down **and** come back with qrexec answering; anything else is a failure.
+
 **What it cost:** an ad-hoc install driver written the same day looped
 `for r in 1 2 3; do ... qvm-shutdown; qvm-start; done`, rebooting three times to "complete the
 handover" with nothing having asked for any of them.

@@ -167,9 +167,24 @@ PY
   log "round $r: reboot_needed=$reboot_needed"
   if [ "$reboot_needed" = true ]; then
     note_request "update-status.json says reboot_needed=true after round $r"
+    # A REBOOT IS A COMPLETED CYCLE, not an issued command. Counting it at the shutdown was the
+    # same accounting dishonesty this rule exists to stop, in my own implementation of the rule:
+    # a shutdown that FAILED still incremented the counter, and a guest left powered off had only
+    # half a cycle. Measured 2026-09-20: the ledger said "1 performed" while the guest was Running.
     log "round $r: shutting the guest down so the next round starts from the applied state"
-    timeout 600 qvm-shutdown --wait "$VM" >/dev/null 2>&1 || { if stalled; then log "round $r: STALLED during shutdown"; fails=1; break; fi; }
-    note_performed
+    timeout 600 qvm-shutdown --wait "$VM" >/dev/null 2>&1
+    if [ "$(qstate)" != Halted ]; then
+      if stalled; then log "round $r: STALLED during shutdown"; else log "round $r: FAIL - the guest did not power off, so the requested reboot did NOT happen"; fi
+      fails=1; break
+    fi
+    log "round $r: guest is down; bringing it back to complete the requested cycle"
+    timeout 300 qvm-start "$VM" >/dev/null 2>&1
+    if wait_qrexec 900; then
+      note_performed
+    else
+      log "round $r: FAIL - the guest did not come back, so the requested reboot is INCOMPLETE"
+      fails=1; break
+    fi
   elif [ "$reboot_needed" = unknown ]; then
     # Unreadable status is missing data, and missing data fails - it must never be treated as
     # "no reboot needed", because that silently turns a requested cycle into none.
