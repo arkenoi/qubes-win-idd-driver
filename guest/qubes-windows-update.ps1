@@ -2226,19 +2226,41 @@ try {
         # report, one layer further in.
         # Rows with ok=$false stay counted, which is what keeps a DEFERRED cumulative visible - the
         # control that must never be excluded.
-        $infoKbs = @($script:St.result |
-                     Where-Object { $_.severity -eq 'info' -or $_.ok -eq $true } |
-                     ForEach-Object { $_.kb; if($_.PSObject -and (Test-RowKey $_ 'title')){ $_.title } } |
-                     Where-Object { $_ })
         # GUARD:infoalways - informational rows are excluded from dom0's actionable count ALWAYS,
         # not only under the post-end-of-support notice. Before 2026-09-20 the else-branch was a
         # bare $after.Count, so on a current OS every un-actionable offer still counted and dom0
         # could never reach "up to date" - measured on the German 25H2 template, three items
         # re-offered on every pass after the September cumulative was fully applied.
         # ---- WU-INFO-EXCLUDE-BEGIN
+        # WHAT EARNS AN OFFER ITS SILENCE. Two things only: a row classified INFORMATIONAL, and a
+        # row that is genuinely DONE. A STAGED or DEFERRED row is neither - it is work written to
+        # the image that needs a reboot to become real.
+        #
+        # GUARD:stagedpending. Measured 2026-09-21 on the PRE-TUESDAY CONTROL, and only the control
+        # could see it: KB5129195 came back ok=true state=staged with reboot_needed=true, the bare
+        # `$_.ok -eq $true` swept it into the excluded set, remaining went to 0 and dom0 was told
+        # the template was UP TO DATE while a cumulative sat waiting for a reboot. That is the
+        # field report's own defect (ADR section 2), reintroduced through the door opened to fix
+        # its opposite. On an already-updated guest this bug is invisible, which is the whole
+        # argument for running both controls against one build.
+        $doneStates = @('installed','ok','up-to-date','not-actionable')
+        $infoKbs = @($script:St.result |
+                     Where-Object {
+                       ($_.severity -eq 'info') -or
+                       ($_.ok -eq $true -and ((-not (Test-RowKey $_ 'state')) -or ($doneStates -contains [string]$_.state))) } |
+                     ForEach-Object { $_.kb; if($_.PSObject -and (Test-RowKey $_ 'title')){ $_.title } } |
+                     Where-Object { $_ })
         $notInfo = { param($r) ($infoKbs -notcontains $r.kb) -and ($infoKbs -notcontains $r.title) }
         $reportCount = if ($script:St.notice) { @($after | Where-Object { $_.content_class -eq 'self-contained' -and (& $notInfo $_) }).Count }
                        else { @($after | Where-Object { (& $notInfo $_) }).Count }
+        # A PENDING REBOOT IS NOT "UP TO DATE". Whatever the per-row arithmetic concludes, dom0 must
+        # never hear 0 while the guest is holding staged work: the update is not applied until the
+        # cycle completes, and saying otherwise is the untruth this file exists to prevent.
+        if ($script:St.reboot_needed -and $reportCount -lt 1) {
+          $stagedN = @($script:St.result | Where-Object { (Test-RowKey $_ 'state') -and (@('staged','deferred') -contains [string]$_.state) }).Count
+          if ($stagedN -lt 1) { $stagedN = 1 }
+          $reportCount = $stagedN
+        }
         # GUARD:offeridentity - record WHICH OFFERS this pass resolved, by the offer's own identity.
         # A later scan may then exclude the very same offer without weakening the rule right above
         # it ("installed last time" is not evidence a FRESH offer is satisfied): a new revision has

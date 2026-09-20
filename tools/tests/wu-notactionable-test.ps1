@@ -50,7 +50,11 @@ switch ($Defect) {
     'rcinfers'  { $npRegion = $npRegion -replace '(?s)\$mum = \$null.*?\n      \}', '$mum = $null' }
     'trustzero' { $cvRegion = $cvRegion -replace '(?s)if \(\[string\]::IsNullOrWhiteSpace.*?\n  \}', '' }
     'shapeskip' { $nkRegion = $nkRegion -replace '(?s)if\(\$nokbUrls\.Count -gt 0.*?\n        \}', '' }
-    'infoonly'  { $script:InfoOnly = $true }
+    # restores the pre-fix rule: only severity='info' drops out, so an update this pass
+    # actually INSTALLED still counts and dom0 never reaches "up to date".
+    'infoonly'  { $infoRegion = $infoRegion.Replace('($_.ok -eq $true -and ((-not (Test-RowKey $_ ''state'')) -or ($doneStates -contains [string]$_.state)))', '$false') }
+    # treats a STAGED row as done - dom0 then hears 0 while a cumulative waits for a reboot
+    'stageddone'{ $infoRegion = $infoRegion.Replace('($_.ok -eq $true -and ((-not (Test-RowKey $_ ''state'')) -or ($doneStates -contains [string]$_.state)))', '$_.ok -eq $true').Replace('if ($script:St.reboot_needed -and $reportCount -lt 1) {', 'if ($false) {') }
     # Re-introduces the classification corrected on 2026-09-20: a negative probe with rc=0 read as
     # "nothing to do on this image" instead of as a failed install. The two exe checks above must
     # then fail - that is what makes them evidence rather than decoration.
@@ -66,7 +70,7 @@ switch ($Defect) {
     'satdrop'   { $scRegion = $scRegion.Replace('$script:St.satisfied = @($priorSat)', '') }
     'scanall'   { $scRegion = $scRegion -replace '\$reportCount = @\(\$avail \| Where-Object \{ \(& \$notPriorInfo \$_\) \}\)\.Count', '$reportCount = $avail.Count' }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign | satignore | satdrop | failall)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign | satignore | satdrop | failall | stageddone)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -135,16 +139,14 @@ $r = RunExe $null $false $false 1603
 Check "exe: NO probe, nonzero rc -> ok false, still never 'info'" "$($r.ok)/$([string]$r.sev)" 'False/'
 
 # ---------- WU-INFO-EXCLUDE ----------
-function RunCount($after, $result, $notice, $available) {
-    # The shipped $script:St is an [ordered]@{} and the region now also WRITES $script:St.satisfied
-    # (GUARD:offeridentity). A PSCustomObject cannot take a new property, so the stub must be the
-    # real shape - otherwise the test fails for the wrong reason, which is how a stub of the wrong
-    # type already cost a debugging round on this same suite.
-    $script:St = [ordered]@{ notice = $notice; available = @($available); satisfied = @() }
-    # infoonly restores the pre-fix rule: only severity='info' drops out, so an update this pass
-    # actually INSTALLED still counts and dom0 never reaches "up to date".
-    $infoKbs = @($result | Where-Object { $_.severity -eq 'info' -or ((-not $script:InfoOnly) -and $_.ok -eq $true) } |
-                 ForEach-Object { $_.kb; if ($_.title) { $_.title } } | Where-Object { $_ })
+function RunCount($after, $result, $notice, $available, $rebootNeeded = $false) {
+    # The stub must be the REAL shape: the shipped $script:St is an [ordered]@{}, the region writes
+    # $script:St.satisfied, and it now reads $script:St.result and .reboot_needed. A PSCustomObject
+    # cannot take a new property, and a stub missing .result makes the region compute over nothing
+    # - which is how the staged-pending defect went untested: $infoKbs was built HERE, by the test,
+    # so the shipped construction was never exercised at all. It is built inside the region now.
+    $script:St = [ordered]@{ notice = $notice; available = @($available); satisfied = @();
+                             result = @($result); reboot_needed = $rebootNeeded }
     $reportCount = 0
     Invoke-Expression $infoRegion
     return $reportCount
@@ -270,6 +272,33 @@ Check "actioned: everything installed/satisfied/unactionable -> dom0 reaches 0 (
 $afterD = @([pscustomobject]@{ kb = 'KB5129195'; title = 'cumulative'; content_class = 'self-contained' }) + $afterC
 $resultD = $resultC + @([pscustomobject]@{ kb = 'KB5129195'; ok = $false; state = 'deferred' })
 Check "actioned: a DEFERRED cumulative is ok=false and STAYS counted -> dom0 hears 1" (RunCount $afterD $resultD $null) 1
+
+# GUARD:stagedpending. Measured 2026-09-21 on the PRE-TUESDAY CONTROL and invisible on an
+# already-updated guest: a cumulative came back ok=true state=staged with reboot_needed=true, the
+# bare `$_.ok -eq $true` rule swept it into the excluded set, and dom0 was told the template was UP
+# TO DATE while the update sat waiting for a reboot. That is the field report's own defect, let in
+# through the door opened to fix its opposite.
+$afterS = @(
+    [pscustomobject]@{ kb = 'KB5129195'; title = 'Cumulative'; content_class = 'self-contained' },
+    [pscustomobject]@{ kb = 'KB5007651'; title = 'Security platform'; content_class = 'self-contained' }
+)
+$resultS = @(
+    [pscustomobject]@{ kb = 'KB5129195'; title = 'Cumulative'; ok = $true; state = 'staged' },
+    [pscustomobject]@{ kb = 'KB5007651'; title = 'Security platform'; ok = $true; state = 'installed' }
+)
+Check "staged: an ok=true STAGED cumulative is NOT done - dom0 still hears it" `
+      (RunCount $afterS $resultS $null @() $true) 1
+Check "staged: ...and an INSTALLED row beside it is still excluded" `
+      (RunCount $afterS $resultS $null @() $true) 1
+# The floor: whatever the per-row arithmetic says, a pending reboot is never "up to date".
+$resultAllDone = @(
+    [pscustomobject]@{ kb = 'KB5129195'; title = 'Cumulative'; ok = $true; state = 'installed' },
+    [pscustomobject]@{ kb = 'KB5007651'; title = 'Security platform'; ok = $true; state = 'installed' }
+)
+Check "staged: reboot pending and every row done -> dom0 STILL does not hear 0" `
+      (RunCount $afterS $resultAllDone $null @() $true) 1
+Check "staged: no reboot pending and every row done -> dom0 does reach 0" `
+      (RunCount $afterS $resultAllDone $null @() $false) 0
 
 # ---------- WU-SCAN-COUNT: a scan must not re-inflate what a pass already settled ----------
 # Measured on the guest: an install pass drove dom0 to EMPTY, and the very next BOOT SCAN reported
