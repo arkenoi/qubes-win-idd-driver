@@ -128,6 +128,30 @@ truth) and `tools/wu-log-judge.py` (engine level — did the search ever enter t
 `mgmt/harness/wu-e2e.sh` drives repeated passes through dom0's *own* `qubes-vm-update` sequence and
 judges every one.
 
+**THE ARTEFACT UNDER TEST IS NOT WHAT THE INSTALLER SAYS IT IS.** Three times on 2026-09-20 a run
+was about to be graded against code that was not on the guest, and every time `install.cmd`
+reported success:
+
+1. the sealed golden's updater simply **predated the fix** — a pass on it would have graded the old
+   code and been reported as a green end-to-end;
+2. an install was **truncated** when the installer restarted the gui-agent and killed its own qrexec
+   parent — the MSI half succeeded, the script half never ran;
+3. `qvm-copy-to-vm` **silently refuses to overwrite an existing name** in QubesIncoming, so the
+   installer ran the PREVIOUS tree and still printed `INSTALL COMPLETE`.
+
+The only thing that caught all three was comparing the **installed file** against the package —
+byte count and guard markers — before running anything. So: never grade a run without that
+comparison; delete the target before a push (`tools/qtest push` does, a bare `qvm-copy-to-vm` does
+not); run `install.cmd` detached via a SYSTEM scheduled task so it survives the agent restart; and
+never send a copy's output to `/dev/null`.
+
+**And the checker can lie too.** Two of my own probes manufactured a false green in the same hour:
+one matched the literal marker text inside the command `qtest` **echoes back**, declaring success
+30 s after launch; the other used `|` as a field separator, which cmd read as a **pipe**, so the
+probe errored and returned empty — and an empty result was being treated as "not yet" rather than
+"the check did not run". Probe output must exclude the echoed command, avoid shell metacharacters,
+and distinguish *empty* from *negative*.
+
 **Instrument traps already paid for — do not re-learn them:**
 - dom0's `updates-available` is a **flag**, not a count. Compare presence, not numbers.
 - `replay-dom0-update.py` reports each step's rc but **exits 0 regardless**. Grep its own
