@@ -66,7 +66,13 @@ HOLDER=win-idd-mgmt
 DEADLINE="${DEADLINE:-1500}"
 GLOG='C:\qwt-improved-install.log'
 AGENT_PATH='C:\Program Files\Qubes Tools\bin\gui-agent.exe'
-case "$OS" in win10|win11) ;; *) echo "FATAL: os must be win10 or win11 (got '$OS')"; exit 3 ;; esac
+# $OS only names the golden ($OS-qwt) and the default subject ($OS-up). The real gate is
+# downstream and is strictly stronger than a name whitelist: the golden must EXIST, be
+# Halted, and pass golden.sh verify. The old `win10|win11` whitelist therefore blocked
+# perfectly good goldens for no safety gain - measured 2026-09-20, when it refused
+# win11de-qwt (the sealed German 25H2 golden, which verifies intact) and so left the one
+# environment a registered field report must be re-tested on with no upgrade path at all.
+case "$OS" in win[0-9]*) ;; *) echo "FATAL: os must look like win<version> (got '$OS'); the golden \"$OS-qwt\" must exist and pass its seal check"; exit 3 ;; esac
 
 OUT="${QU_OUT:-$HOME/qwt-quick-upgrade}/$SUBJECT-$(date -u +%Y%m%d-%H%M%S)"; mkdir -p "$OUT"
 R="$OUT/quick-upgrade.log"; : > "$R"
@@ -256,6 +262,20 @@ rm -f "mgmt/fixtures/$SUBJECT.aborted" "mgmt/fixtures/$SUBJECT.json"
 # =============================================================================================
 log "booting $SUBJECT with the release ISO as CD (qvm-start --cdrom=$HOLDER:$LOOP)"
 timeout -k 10 150 qvm-start "$SUBJECT" --cdrom="$HOLDER:$LOOP" >"$OUT/cdboot.out" 2>&1 & disown
+# A START THAT FAILED IS NOT A DARK BOOT. Measured 2026-09-20: qvm-start returned
+# "libxenlight failed to create new domain" into cdboot.out immediately, and because nothing
+# read that file the session watcher below went on reporting "dark #1 ... dark #2 ... screen=
+# NOWINDOW" for 190 s and would have burned its full 900 s deadline before saying anything
+# useful. The error was sitting in the harness's own evidence directory the whole time.
+# Surface it the moment it appears; the domain is not coming up and waiting cannot help.
+for _i in 1 2 3 4 5 6 7 8 9 10; do
+  sleep 2
+  if grep -qiE 'Start failed|failed to create new domain|Domain .* already (running|exists)' "$OUT/cdboot.out" 2>/dev/null; then
+    sed 's/^/    /' "$OUT/cdboot.out" | head -5 | tee -a "$R"
+    finish 1 "TERMINAL: qvm-start refused to create the domain - this is a HOST-side failure, not a dark boot (see $OUT/cdboot.out)"
+  fi
+  [ "$(qstate_of "$SUBJECT")" = Halted ] || break   # it came up; hand over to the session watcher
+done
 CD_BOOTED=1
 sleep 8
 w_session "$SUBJECT" 900 "cdboot" "$OUT" log
