@@ -1940,7 +1940,20 @@ try {
         # Key on kb AND title. A no-KB offer (GUARD:nokbinfo) is recorded under its TITLE because it
         # has no KB, so a kb-only match would silently fail to exclude exactly the rows that most
         # need excluding - the ones that can never be actioned.
-        $infoKbs = @($script:St.result | Where-Object { $_.severity -eq 'info' } |
+        # GUARD:actioned - dom0's count is what the ADMIN still has to do, not what Windows Update
+        # still feels like offering. Two kinds of row drop out of it:
+        #   severity='info'  - the guest can never action it (no route, no package, nothing to do);
+        #   ok=$true         - THIS PASS actioned or satisfied it (installed, staged, already
+        #                      current), and Windows Update re-offering it changes nothing the
+        #                      admin can act on.
+        # Measured 2026-09-20 on the German 25H2 guest: after a pass that INSTALLED KB5007651 and
+        # found the Defender signatures current, both were still offered and both still counted, so
+        # dom0 sat at "updates available" for work already done - the same untruth as the field
+        # report, one layer further in.
+        # Rows with ok=$false stay counted, which is what keeps a DEFERRED cumulative visible - the
+        # control that must never be excluded.
+        $infoKbs = @($script:St.result |
+                     Where-Object { $_.severity -eq 'info' -or $_.ok -eq $true } |
                      ForEach-Object { $_.kb; if($_.PSObject -and (Test-RowKey $_ 'title')){ $_.title } } |
                      Where-Object { $_ })
         # GUARD:infoalways - informational rows are excluded from dom0's actionable count ALWAYS,

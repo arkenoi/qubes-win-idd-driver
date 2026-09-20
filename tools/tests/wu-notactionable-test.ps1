@@ -47,8 +47,9 @@ switch ($Defect) {
     'rcinfers'  { $npRegion = $npRegion -replace '(?s)\$mum = \$null.*?\n      \}', '$mum = $null' }
     'trustzero' { $cvRegion = $cvRegion -replace '(?s)if \(\[string\]::IsNullOrWhiteSpace.*?\n  \}', '' }
     'shapeskip' { $nkRegion = $nkRegion -replace '(?s)if\(\$nokbUrls\.Count -gt 0.*?\n        \}', '' }
+    'infoonly'  { $script:InfoOnly = $true }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -94,7 +95,9 @@ Check "exe: NO probe, nonzero rc -> ok false, still never 'info'" "$($r.ok)/$([s
 # ---------- WU-INFO-EXCLUDE ----------
 function RunCount($after, $result, $notice) {
     $script:St = [pscustomobject]@{ notice = $notice }
-    $infoKbs = @($result | Where-Object { $_.severity -eq 'info' } |
+    # infoonly restores the pre-fix rule: only severity='info' drops out, so an update this pass
+    # actually INSTALLED still counts and dom0 never reaches "up to date".
+    $infoKbs = @($result | Where-Object { $_.severity -eq 'info' -or ((-not $script:InfoOnly) -and $_.ok -eq $true) } |
                  ForEach-Object { $_.kb; if ($_.title) { $_.title } } | Where-Object { $_ })
     $reportCount = 0
     Invoke-Expression $infoRegion
@@ -203,5 +206,24 @@ Check "nokb: has a URL but the action is only 'resolve' -> not installed, not ex
       (NoKb 'Some driver' @('https://dl.example/x.exe') 'resolve') 'False/not-actionable/info'
 
 if ($pass + $fail -eq 0) { Write-Output "INSTRUMENT: no checks ran at all"; exit 2 }
+# ---------- GUARD:actioned: what the ADMIN must still do, not what WU keeps offering ----------
+# Measured on the guest: a pass INSTALLED KB5007651 and found the Defender signatures current, both
+# were still offered, both still counted, and dom0 sat at "updates available" for finished work.
+$afterC = @(
+    [pscustomobject]@{ kb = 'KB5007651'; title = 'Security platform'; content_class = 'self-contained' },
+    [pscustomobject]@{ kb = 'KB2267602'; title = 'Defender defs';     content_class = 'self-contained' },
+    [pscustomobject]@{ kb = '';          title = 'AudioProcessingObject Driver Update'; content_class = 'none' }
+)
+$resultC = @(
+    [pscustomobject]@{ kb = 'KB5007651'; ok = $true;  state = 'installed' },
+    [pscustomobject]@{ kb = 'KB2267602'; ok = $true;  severity = 'ok' },
+    [pscustomobject]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; ok = $true; severity = 'info' }
+)
+Check "actioned: everything installed/satisfied/unactionable -> dom0 reaches 0 (up to date)" (RunCount $afterC $resultC $null) 0
+# ...and the control that must survive it: a DEFERRED cumulative is ok=false and stays counted.
+$afterD = @([pscustomobject]@{ kb = 'KB5129195'; title = 'cumulative'; content_class = 'self-contained' }) + $afterC
+$resultD = $resultC + @([pscustomobject]@{ kb = 'KB5129195'; ok = $false; state = 'deferred' })
+Check "actioned: a DEFERRED cumulative is ok=false and STAYS counted -> dom0 hears 1" (RunCount $afterD $resultD $null) 1
+
 Write-Output "checks: $pass passed, $fail failed"
 if ($fail -eq 0) { exit 0 } else { exit 1 }
