@@ -145,6 +145,10 @@ comparison; delete the target before a push (`tools/qtest push` does, a bare `qv
 not); run `install.cmd` detached via a SYSTEM scheduled task so it survives the agent restart; and
 never send a copy's output to `/dev/null`.
 
+**A WAIT WHOSE EXIT CONDITION THE OLD ARTEFACT ALREADY SATISFIES IS NOT A WAIT.** Fourth instance, 2026-09-20, on `win11de-fresh`: the install loop polled for a GUARD MARKER and broke the moment it saw one — but the previous build contains that marker too, so it broke at the first poll, 30 s after launching an installer that needs minutes, logged `GUARD INSTALLED`, and the byte assertion immediately below then failed the run for an install that had simply not happened yet. The installer was still running its `/auto` stages, unwatched, while the harness reported a refusal. Wait for the thing that DISTINGUISHES the new artefact from the old one — here, the byte count — never for a property both share.
+
+**And an exit code read after a command substitution is the SUBSTITUTION's.** The same run printed `win11de-fresh exit=0` for a leg that had just refused to grade, because `$?` was read after `$(date ...)` had run. A harness that reports success for its own failure is the instrument trap in its purest form.
+
 **And the checker can lie too.** Two of my own probes manufactured a false green in the same hour:
 one matched the literal marker text inside the command `qtest` **echoes back**, declaring success
 30 s after launch; the other used `|` as a field separator, which cmd read as a **pipe**, so the
@@ -170,7 +174,22 @@ and distinguish *empty* from *negative*.
   all count actionable, so dom0 never clears. One of them is a genuine silent install failure
   (§3), one is perpetual by nature (Defender signatures), one is skipped for having no KB and the
   reason never reaches dom0.
-- `GUARD:effectprobe` is written but **not yet proven on a guest** — it needs a package build, an
-  install, and a pass in which the negative result actually appears.
+- `GUARD:effectprobe` **has now fired on a guest** (win11de-ctlb, 2026-09-20, KB5007651): the probe
+  ran, saw nothing move, and wrote `verified_by_effect=false`. But the guard then drew the WRONG
+  CONCLUSION from its own negative. It classifies rc=0 + no effect as `severity=info`, reason
+  "nothing to do on this image" — and the offered installer, fetched through the proxy and unpacked
+  in the dev qube, is an APPX payload declaring `Microsoft.SecHealthUI` version **1000.29628.1000.0**
+  while the guest's probe logged the installed package at **1000.26100.8036.0**: same scheme, lower
+  build. The installer carries something NEWER than the image has and changes nothing. Jev:
+  concealed-failure 0.65, correct-exclusion 0.01, `reason_fits` 0.20. This inverts §3 — a negative
+  probe read as "nothing to do" instead of "this update is failing". The measurement that decides
+  WHICH fix is right, whether `Get-AppxProvisionedPackage` moved while `Get-AppxPackage -AllUsers`
+  (what the probe reads) did not, is still outstanding.
+- **The aggregate bar cannot answer the exclusion question by itself.** Jev graded the two-control
+  design's ability to discriminate correct exclusion from genuine failure at **0.24**, naming the
+  reason at 0.93: it grades dom0's flag and never checks WHICH reason was applied to WHICH item.
+  `tools/wu-exclusion-audit.py` is the missing half — per-item judgment, with the updater's own
+  reason string refused as evidence for itself. NOT yet wired into `mgmt/harness/wu-e2e.sh`, so a
+  run can still be called green without it.
 - The release **disc** path is untested since `qvm-start --cdrom` broke on this rig
   (`findings/rig.md`); the reporter installs from the published ISO.

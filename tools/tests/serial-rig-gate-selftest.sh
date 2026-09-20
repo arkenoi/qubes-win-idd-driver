@@ -78,6 +78,9 @@ check "C7t bash -c (the EXECUTING form) with -n too -> BLOCKED"        2 "$(jb '
 # class was refused because one of the staged files is called mgmt/harness/matrix.sh.
 check "C7u git add of rig-named FILES -> allowed"                      0 "$(jb 'git add mgmt/harness/matrix.sh tools/release-acceptance.sh')"
 check "C7v git bisect run (which DOES run a command) -> BLOCKED"       2 "$(jb 'git bisect run mgmt/harness/prime-run.sh')"
+# C7w: mgmt/harness/shutdown-lib.sh wraps the power-off in a FUNCTION, so the verb list stopped
+# seeing it - a blind spot created by the very fix that removed the kills.
+check "C7w qwt_shutdown (the wrapper) -> BLOCKED"                      2 "$(jb 'qwt_shutdown win11-acc 600')"
 check "C8 DEFECT RE-INTRODUCED: C1 must NOT be blocked (proves load-bearing)" 0 "$(jb 'prime-run.sh win10-base')" SERIAL_GATE_DEFECT=1
 # C8b: knob 2 re-introduces the OVER-strip (help flag matched anywhere, substitutions not read).
 # Each counterpart must then stop being blocked - that is what makes C7l/C7m evidence.

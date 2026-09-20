@@ -196,6 +196,7 @@ else:
 mut = re.compile(
     r'\bqvm-(create|start|run|clone|remove|shutdown|kill|volume\s+import|volume\s+revert|features\s+\S+\s+\S|tags\s+\S+\s+(add|set))\b'
     r'|\bqtest\s+(run|push|pushrun|start|kill|shutdown)\b'
+    r'|\bqwt_shutdown\b'                      # shutdown-lib.sh's wrapper is a power cycle too
     r'|\bprime-run|\bquick-upgrade|\bmatrix\.sh|\bcheckpoint\.sh\s+(unpark|park)|\breprovision|\brelease-acceptance'
     r'|qubes\.WindowsUpdate|qubes\.VMShell|qubes\.VMExec', re.I)
 hit = mut.search(text)
