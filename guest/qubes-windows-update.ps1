@@ -545,6 +545,24 @@ function Resolve-Catalog($kb){
   $hdr = @{}
   if ($AcceptLanguage) { $hdr['Accept-Language'] = $AcceptLanguage }
   $r=Invoke-WebRequest "https://www.catalog.update.microsoft.com/Search.aspx?q=$kb" -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr
+  # ---- WU-CATALOG-VALID-BEGIN
+  # GUARD:catalogvalid - ZERO RESULTS AND A BROKEN RESPONSE LOOK IDENTICAL, and they must not.
+  # Everything downstream reads "0 catalog .msu" as "the catalog has no package for this KB", which
+  # sends the KB to the informational ceiling dom0 excludes from its count - a class this code logs
+  # as "terminally classified". But a truncated body (relay truncation on large responses is a
+  # KNOWN failure mode on this path), an error or interstitial page, or a garbled encoding all
+  # produce zero regex matches too, so a transient transport fault would permanently hide a real
+  # installable update from dom0 - the field defect this product already shipped once.
+  # Jev: is_defect 0.94, severity high-silently-hides-real-updates 1.00, self_corrects 0.21.
+  # Believe a zero count ONLY from a response that is demonstrably the catalog's own results page.
+  $script:CatalogUnresolved = $false
+  $body = [string]$r.Content
+  if ([string]::IsNullOrWhiteSpace($body) -or ($body -notmatch '(?i)catalogBody|updateMatches|catalog\.update\.microsoft\.com')) {
+    $script:CatalogUnresolved = $true
+    Log ("  " + $kb + " : catalog response is not a results page (" + $body.Length + " bytes) - UNRESOLVED, not 'no package'")
+    return @()
+  }
+  # ---- WU-CATALOG-VALID-END
   $rx=[regex]"(?is)id='([0-9a-fA-F\-]{36})_link'[^>]*>(.*?)</a>"
   $digits = $kb -replace '\D',''
 
@@ -1790,8 +1808,17 @@ try {
       # severity='info': on a netvm-free guest there is NO route by which these could install (no catalog
       # .msu, no static file, and DO/BITS refuse routeless), so this is a deterministic INFORMATIONAL
       # ceiling. Not a failure, and excluded from the actionable/remaining count reported to dom0.
+      # GUARD:catalogvalid - but ONLY when the catalog actually answered. If the search response
+      # could not be validated as a results page then "no catalog .msu" is an UNKNOWN, not a fact,
+      # and an unknown must never buy a permanent exclusion from dom0's count.
+      if ($script:CatalogUnresolved) {
+        Log ("  " + $kb + " : NOT classified informational - the catalog search was UNRESOLVED, so 'no package' is unproven")
+        $script:St.result += [ordered]@{ kb=$kb; ok=$false; files=@()
+          reason='catalog search did not return a valid results page - resolution UNRESOLVED, so this KB stays outstanding rather than being excluded' }
+      } else {
       $script:St.result += [ordered]@{ kb=$kb; ok=$false; severity='info'; files=@()
         reason='not installable on a netvm-free guest: no catalog .msu and no self-contained static installer (delivered only via Delivery Optimization / a delta patch). INFORMATIONAL - not a failure' }
+      }
     }
     Save
     Log ("Windows Update native installer SKIPPED (informational) for " + ($script:WuFallbackKbs -join ',') +

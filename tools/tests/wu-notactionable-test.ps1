@@ -28,6 +28,7 @@ function Region([string]$name) {
 
 $exeRegion  = Region 'WU-EXE-EFFECT'
 $npRegion   = Region 'WU-NOTPACKAGE'
+$cvRegion   = Region 'WU-CATALOG-VALID'
 $infoRegion = Region 'WU-INFO-EXCLUDE'
 
 # Defect knobs rewrite the SHIPPED text back to its pre-fix form.
@@ -37,8 +38,9 @@ switch ($Defect) {
     'noticeonly'{ $infoRegion = $infoRegion -replace '(?s)else \{ @\(\$after \| Where-Object \{ \(& \$notInfo \$_\) \}\)\.Count \}', 'else { $after.Count }' }
     'kbonly'    { $infoRegion = $infoRegion -replace '-and \(\$infoKbs -notcontains \$r\.title\)', '' }
     'rcinfers'  { $npRegion = $npRegion -replace '(?s)\$mum = \$null.*?\n      \}', '$mum = $null' }
+    'trustzero' { $cvRegion = $cvRegion -replace '(?s)if \(\[string\]::IsNullOrWhiteSpace.*?\n  \}', '' }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -148,6 +150,23 @@ Check "notpkg: DISM file-not-found but the file CONTAINS update.mum -> NOT infor
 Check "notpkg: CBS_E_INVALID_PACKAGE on a real package -> NOT informational"                               (NotPackage -2146498555 $realPkg) 'False'
 Check "notpkg: expand produced nothing readable -> NOT informational (unreadable is corruption)"           (NotPackage 13 '')       'False'
 Check "notpkg: a success code is never reclassified"                                                       (NotPackage 0  $blob)    'False'
+
+# ---------- WU-CATALOG-VALID: a broken response is not "no package" ----------
+# Jev: is_defect 0.94, severity high-silently-hides-real-updates 1.00, self_corrects 0.21.
+function CatalogUnresolved($content) {
+    $r = [pscustomobject]@{ Content = $content }
+    $kb = 'KB5129195'
+    $script:CatalogUnresolved = $false
+    try { Invoke-Expression $cvRegion } catch { }
+    return $script:CatalogUnresolved
+}
+$realPage  = "<html><body><table id='ctl00_catalogBody_updateMatches'>...</table></body></html>"
+$noResults = "<html><body><div id='ctl00_catalogBody_noResultText'>We did not find any results</div></body></html>"
+Check "catalog: a real results page -> resolved (a zero count there is believable)"      (CatalogUnresolved $realPage)  'False'
+Check "catalog: the catalog's own no-results page -> resolved (genuinely zero)"          (CatalogUnresolved $noResults) 'False'
+Check "catalog: EMPTY body -> UNRESOLVED (truncated, not 'no package')"                  (CatalogUnresolved '')         'True'
+Check "catalog: a truncated fragment -> UNRESOLVED"                                       (CatalogUnresolved '<html><body>') 'True'
+Check "catalog: a proxy error page -> UNRESOLVED"                                         (CatalogUnresolved '<html><h1>502 Bad Gateway</h1></html>') 'True'
 
 Write-Output "checks: $pass passed, $fail failed"
 if ($fail -eq 0) { exit 0 } else { exit 1 }
