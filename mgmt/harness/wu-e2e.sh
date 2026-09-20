@@ -68,6 +68,23 @@ stalled(){ [ "$(qstate)" != Halted ] && ! wait_qrexec 120; }
 [ -x tools/wu-pass-judge.py ] || { echo "INSTRUMENT: tools/wu-pass-judge.py missing"; exit 2; }
 [ -f tools/replay-dom0-update.py ] || { echo "INSTRUMENT: tools/replay-dom0-update.py missing"; exit 2; }
 
+# PREFLIGHT: the updates proxy. A netvm-less guest reaches Windows Update ONLY through
+# qubes.UpdatesProxy, which on this rig is a symlink to 127.0.0.1:8082 in THIS qube. Found dead on
+# 2026-09-20, down since this qube's session died two days earlier, with the symlink and config
+# still in place - so every pass would have failed on network and the failures would have read as
+# guest defects. Nothing restarts it, so check it here and PROVE egress rather than assume it.
+if ! ss -ltn 2>/dev/null | grep -q ':8082'; then
+  log "updates proxy is DOWN - starting tinyproxy"
+  rm -f /home/user/updates-tinyproxy.pid
+  tinyproxy -c /home/user/updates-tinyproxy.conf >/dev/null 2>&1
+  sleep 2
+fi
+ss -ltn 2>/dev/null | grep -q ':8082' || { echo "INSTRUMENT: no updates proxy on 127.0.0.1:8082 and it would not start"; exit 2; }
+pcode=$(timeout 40 curl -sS -o /dev/null -w '%{http_code}' -x http://127.0.0.1:8082 \
+        http://download.windowsupdate.com/ 2>/dev/null)
+[ "$pcode" = 200 ] || { echo "INSTRUMENT: updates proxy is listening but does not reach Windows Update (http=$pcode) - a run now would blame the guest for a network failure"; exit 2; }
+log "updates proxy OK (egress proven, http=$pcode)"
+
 fails=0
 for r in $(seq 1 "$ROUNDS"); do
   RD="$OUT/round$r"; mkdir -p "$RD"
