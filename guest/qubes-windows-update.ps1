@@ -1121,9 +1121,25 @@ function Install-SelfContained($kb,$urls){
       $sev=$null; $why=$null
       if($probe -and $probeRan -and -not $eff){
         if($p.ExitCode -eq 0){
-          $sev='info'; $ok=$true
-          $why='installer exited 0 and changed nothing measurable - nothing to do on this image'
-          Log ("  $name : exe rc=0 $detail -> NOT ACTIONABLE ($why)")
+          # CORRECTED 2026-09-20, SAME DAY, ON EVIDENCE. This branch used to set severity=info,
+          # ok=$true, reason "nothing to do on this image" - i.e. it read its own NEGATIVE probe as
+          # proof the image was already current. That inference is not supported, and for the item
+          # it was written for it is FALSE. Measured: the offered securityhealthsetup.exe was
+          # fetched and unpacked off-guest; it is an APPX payload declaring Microsoft.SecHealthUI
+          # 1000.29628.1000.0, while this guest carries 1000.26100.8036.0 in BOTH the installed and
+          # the PROVISIONED package (read directly, so "the probe watches the wrong artefact" is
+          # refuted), and the payload's TargetDeviceFamily MinVersion 10.0.22000.1 is far below this
+          # build, so inapplicability is refuted too. The installer carries something NEWER,
+          # applicable, and lands nothing. Jev: concealed-failure 0.87.
+          #
+          # "rc=0 and nothing moved" is therefore a FAILED INSTALL, and it stays ACTIONABLE. The
+          # temptation to keep it informational is that an item which can never install holds dom0
+          # at "updates available" forever - but dom0's job is to report the TRUTH (ADR section 2),
+          # and the truth is that this update is outstanding. Making dom0 look settled by calling a
+          # failure benign is the field report's untruth wearing a different hat.
+          $ok=$false
+          $why='installer exited 0 but the probe measured no change - this update did NOT install'
+          Log ("  $name : exe rc=0 $detail -> FAILED ($why)")
           if($probe -eq 'security-platform'){ Log ("    security platform stayed at $shBefore (SecHealthUI|SecurityHealthService)") }
         } else {
           Log ("  $name : exe rc=$($p.ExitCode) $detail -> FAILED (nonzero rc and the probe saw no effect)")

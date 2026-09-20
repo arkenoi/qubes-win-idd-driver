@@ -41,17 +41,23 @@ $infoRegion = Region 'WU-INFO-EXCLUDE'
 
 # Defect knobs rewrite the SHIPPED text back to its pre-fix form.
 switch ($Defect) {
-    'rcalone'   { $exeRegion  = $exeRegion  -replace '\$ok = \$eff', '$ok = ($p.ExitCode -eq 0) -or $eff'
-                  $exeRegion  = $exeRegion  -replace "\`$sev='info'", "`$sev=`$null" }
+    # Literal .Replace, not -replace: '$' is regex end-of-anchor and PowerShell also interpolates it
+    # inside double quotes, and between them the old pattern silently matched NOTHING once the code
+    # it targeted moved. A knob that matches nothing reports the guard as decoration.
+    'rcalone'   { $exeRegion  = $exeRegion.Replace('$ok = $eff', '$ok = ($p.ExitCode -eq 0) -or $eff').Replace('$ok=$false', '$ok=($p.ExitCode -eq 0)') }
     'noticeonly'{ $infoRegion = $infoRegion -replace '(?s)else \{ @\(\$after \| Where-Object \{ \(& \$notInfo \$_\) \}\)\.Count \}', 'else { $after.Count }' }
     'kbonly'    { $infoRegion = $infoRegion -replace '-and \(\$infoKbs -notcontains \$r\.title\)', '' }
     'rcinfers'  { $npRegion = $npRegion -replace '(?s)\$mum = \$null.*?\n      \}', '$mum = $null' }
     'trustzero' { $cvRegion = $cvRegion -replace '(?s)if \(\[string\]::IsNullOrWhiteSpace.*?\n  \}', '' }
     'shapeskip' { $nkRegion = $nkRegion -replace '(?s)if\(\$nokbUrls\.Count -gt 0.*?\n        \}', '' }
     'infoonly'  { $script:InfoOnly = $true }
+    # Re-introduces the classification corrected on 2026-09-20: a negative probe with rc=0 read as
+    # "nothing to do on this image" instead of as a failed install. The two exe checks above must
+    # then fail - that is what makes them evidence rather than decoration.
+    'infobenign'{ $exeRegion  = $exeRegion.Replace('$ok=$false', '$sev=''info''; $ok=$true') }
     'scanall'   { $scRegion = $scRegion -replace '\$reportCount = @\(\$avail \| Where-Object \{ \(& \$notPriorInfo \$_\) \}\)\.Count', '$reportCount = $avail.Count' }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -78,8 +84,14 @@ function RunExe($probe, $probeRan, $eff, $rc) {
 
 # The measured case: securityhealthsetup.exe, rc=0, probe ran, nothing changed.
 $r = RunExe 'security-platform' $true $false 0
-Check "exe: rc=0 + probe ran + no effect -> severity 'info' (not actionable)" $r.sev 'info'
-Check "exe: rc=0 + probe ran + no effect -> ok stays true (it is satisfied, not failed)" $r.ok 'True'
+# CORRECTED 2026-09-20 - these two checks encoded the WRONG behaviour and passed on it. The
+# shipped code used to read its own negative probe as "the image is already current" and mark the
+# row info/ok. For the item this was written for that inference is false: the offered installer
+# carries Microsoft.SecHealthUI 1000.29628.1000.0, the guest has 1000.26100.8036.0 in both the
+# installed AND the provisioned package, and the payload is applicable to this build. rc=0 with
+# nothing moved is a FAILED INSTALL and stays actionable. (Jev: concealed-failure 0.87.)
+Check "exe: rc=0 + probe ran + no effect -> NOT informational (a silent failure)" $r.sev ''
+Check "exe: rc=0 + probe ran + no effect -> ok FALSE (nothing landed, so nothing succeeded)" $r.ok 'False'
 # A real failure must NOT be laundered into 'info'.
 $r = RunExe 'security-platform' $true $false 1603
 Check "exe: rc<>0 + probe ran + no effect -> NOT info (a real failure)" ([string]$r.sev) ''
