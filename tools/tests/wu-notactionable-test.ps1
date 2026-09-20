@@ -36,6 +36,7 @@ $exeRegion  = Region 'WU-EXE-EFFECT'
 $npRegion   = Region 'WU-NOTPACKAGE'
 $cvRegion   = Region 'WU-CATALOG-VALID'
 $nkRegion   = Region 'WU-NOKB'
+$scRegion   = Region 'WU-SCAN-COUNT'
 $infoRegion = Region 'WU-INFO-EXCLUDE'
 
 # Defect knobs rewrite the SHIPPED text back to its pre-fix form.
@@ -48,11 +49,18 @@ switch ($Defect) {
     'trustzero' { $cvRegion = $cvRegion -replace '(?s)if \(\[string\]::IsNullOrWhiteSpace.*?\n  \}', '' }
     'shapeskip' { $nkRegion = $nkRegion -replace '(?s)if\(\$nokbUrls\.Count -gt 0.*?\n        \}', '' }
     'infoonly'  { $script:InfoOnly = $true }
+    'scanall'   { $scRegion = $scRegion -replace '\$reportCount = @\(\$avail \| Where-Object \{ \(& \$notPriorInfo \$_\) \}\)\.Count', '$reportCount = $avail.Count' }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
+# The SHIPPED Test-RowKey, extracted from the same file rather than re-implemented here - the
+# regions call it, and without it they throw straight into their own catch and silently behave as
+# if there were no prior state at all. That is how a passing-looking suite can test nothing.
+$rkRegion = [regex]::Match($src, "function Test-RowKey.*?# ---- WU-ROWKEY-END", 'Singleline').Value
+if (-not $rkRegion) { Write-Output "INSTRUMENT: Test-RowKey not found in the shipped script"; exit 2 }
+Invoke-Expression ($rkRegion -replace '# ---- WU-ROWKEY-END', '')
 $pass = 0; $fail = 0
 function Check($label, $got, $want) {
     if ("$got" -eq "$want") { Write-Output "PASS  $label"; $script:pass++ }
@@ -224,6 +232,32 @@ Check "actioned: everything installed/satisfied/unactionable -> dom0 reaches 0 (
 $afterD = @([pscustomobject]@{ kb = 'KB5129195'; title = 'cumulative'; content_class = 'self-contained' }) + $afterC
 $resultD = $resultC + @([pscustomobject]@{ kb = 'KB5129195'; ok = $false; state = 'deferred' })
 Check "actioned: a DEFERRED cumulative is ok=false and STAYS counted -> dom0 hears 1" (RunCount $afterD $resultD $null) 1
+
+# ---------- WU-SCAN-COUNT: a scan must not re-inflate what a pass already settled ----------
+# Measured on the guest: an install pass drove dom0 to EMPTY, and the very next BOOT SCAN reported
+# 3 again - the no-route driver plus two offers WU re-presents forever. dom0 oscillated 0 -> 3.
+function ScanCount($avail, $prevResult) {
+    $script:St = [pscustomobject]@{ notice = $null }
+    $StatusFile = Join-Path ([IO.Path]::GetTempPath()) ("wuscan-" + [guid]::NewGuid().ToString() + ".json")
+    if ($null -ne $prevResult) { (@{ result = $prevResult } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile }
+    $reportCount = -1
+    Invoke-Expression $scRegion
+    Remove-Item $StatusFile -EA SilentlyContinue
+    return $reportCount
+}
+$scanAvail = @(
+    [pscustomobject]@{ kb = 'KB5007651'; title = 'Security platform'; content_class = 'self-contained' },
+    [pscustomobject]@{ kb = 'KB2267602'; title = 'Defender defs';     content_class = 'self-contained' },
+    [pscustomobject]@{ kb = '';          title = 'AudioProcessingObject Driver Update'; content_class = 'none' }
+)
+$priorNoRoute = @(
+    [pscustomobject]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; severity = 'info' }
+)
+Check "scan: no prior status -> every offer counts (a fresh guest must not be silenced)" (ScanCount $scanAvail $null) 3
+Check "scan: a KB a previous pass proved NOT ACTIONABLE is excluded"                      (ScanCount $scanAvail $priorNoRoute) 2
+# The conservative half: 'installed last time' must NOT silence a fresh offer on a scan.
+$priorInstalled = @([pscustomobject]@{ kb = 'KB5007651'; ok = $true; state = 'installed' })
+Check "scan: a KB merely INSTALLED last pass still counts on a scan (only a pass may judge that)" (ScanCount $scanAvail $priorInstalled) 3
 
 Write-Output "checks: $pass passed, $fail failed"
 if ($fail -eq 0) { exit 0 } else { exit 1 }

@@ -1546,10 +1546,38 @@ try {
   # dom0's "updates available" marker should reflect ACTIONABLE updates. Under the ESU notice, the
   # express/ESU-gated offers are informational (in St.notice), not installable - do not count them, or
   # dom0 would show a permanent "updates available" for a phantom the guest can never apply.
-  $reportCount = $avail.Count
+  # ---- WU-SCAN-COUNT-BEGIN
+  # GUARD:scanactioned - a SCAN must not re-inflate what an install pass already settled.
+  # Measured 2026-09-20 on the German 25H2 guest: an install pass correctly drove dom0 to EMPTY,
+  # and the very next boot scan reported 3 again - the no-route driver plus two offers Windows
+  # Update re-presents forever. dom0 oscillated 0 -> 3 and the admin was told there was work when
+  # there was none. GUARD:actioned and GUARD:infoalways only govern the post-install rescan; this
+  # is the same rule for the scan path, using the DURABLE knowledge the last pass wrote down.
+  # Conservative on purpose: only a KB the previous pass recorded as severity='info' (structurally
+  # not actionable - no route, no package, nothing to do) is dropped here. An ok=$true row is NOT
+  # dropped on a scan, because "installed last time" is not evidence that a fresh offer of the same
+  # KB is already satisfied - that judgement belongs to a pass that actually tries.
+  # Read the PREVIOUS status from disk - $script:St is this pass's own, freshly reset. The file is
+  # written with a UTF-8 BOM, so read it raw and let ConvertFrom-Json handle it.
+  $priorInfo = @()
+  try {
+    $prevStatus = $null
+    if (Test-Path $StatusFile) { $prevStatus = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json }
+    if ($prevStatus -and $prevStatus.result) {
+      $priorInfo = @($prevStatus.result | Where-Object { $_.severity -eq 'info' } |
+                     ForEach-Object { $_.kb; if($_.PSObject -and (Test-RowKey $_ 'title')){ $_.title } } |
+                     Where-Object { $_ })
+    }
+  } catch { $priorInfo = @() }
+  $notPriorInfo = { param($r) ($priorInfo -notcontains $r.kb) -and ($priorInfo -notcontains $r.title) }
+  $reportCount = @($avail | Where-Object { (& $notPriorInfo $_) }).Count
+  if ($priorInfo.Count -gt 0 -and $reportCount -ne $avail.Count) {
+    Log ("scan: excluding " + ($avail.Count - $reportCount) + " offer(s) a previous pass proved not actionable: " + ($priorInfo -join ', '))
+  }
   # Under the ESU notice (netvm-free, post-EOS): only SELF-CONTAINED updates are actionable - express
   # (ESU-gated phantom) and 'none' (Defender delta / DO-only) cannot install routeless and are informational.
-  if ($script:St.notice) { $reportCount = @($avail | Where-Object { $_.content_class -eq 'self-contained' }).Count }
+  if ($script:St.notice) { $reportCount = @($avail | Where-Object { $_.content_class -eq 'self-contained' -and (& $notPriorInfo $_) }).Count }
+  # ---- WU-SCAN-COUNT-END
   $script:St.remaining = $reportCount; Save
   Log ("scan: $($avail.Count) update(s) offered" + $(if($script:St.notice){ "; $reportCount actionable (" + ($avail.Count - $reportCount) + " ESU-gated/express informational - see notice)" }else{ '' }))
   if ($script:St.notice) { Log ("SERVICING NOTICE: " + $script:St.notice) }
