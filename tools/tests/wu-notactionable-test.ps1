@@ -58,9 +58,12 @@ switch ($Defect) {
     # Ignores the offer identity entirely - the state before GUARD:offeridentity, where a scan
     # re-counted an offer the previous pass had resolved and proved.
     'satignore' { $scRegion = $scRegion.Replace('-and (& $notPriorSat $r)', '') }
+    # Drops the carry-forward: the scan consumes the identities and writes an empty list back, so
+    # the knowledge lasts exactly one scan.
+    'satdrop'   { $scRegion = $scRegion.Replace('$script:St.satisfied = @($priorSat)', '') }
     'scanall'   { $scRegion = $scRegion -replace '\$reportCount = @\(\$avail \| Where-Object \{ \(& \$notPriorInfo \$_\) \}\)\.Count', '$reportCount = $avail.Count' }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign | satignore)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign | satignore | satdrop)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -318,6 +321,21 @@ Check "scan: a NEW REVISION of that offer counts again (only the identity is tru
       (ScanCountId $idAvail @('aaaa-1111:203')) 2
 Check "scan: an identity for a DIFFERENT offer excludes nothing here" (ScanCountId $idAvail @('zzzz-9999:1')) 2
 Check "scan: offers with NO identity fall back to counting" (ScanCountId $scanAvail @('aaaa-1111:204')) 3
+# DURABILITY. A scan writes its own status; if it does not write `satisfied` back, the knowledge
+# survives exactly one scan and the next one re-counts. Measured on the guest 2026-09-21: the pass
+# wrote two identities and the consuming scan wrote satisfied=[] straight back.
+function ScanCarry($avail, $satisfied) {
+    $script:St = [ordered]@{ notice = $null; not_actionable = @(); satisfied = @() }
+    $StatusFile = Join-Path ([IO.Path]::GetTempPath()) ("wuscan4-" + [guid]::NewGuid().ToString() + ".json")
+    (@{ result = @(); not_actionable = @(); satisfied = $satisfied } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile
+    $script:PrevStatus = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json
+    $reportCount = -1
+    Invoke-Expression $scRegion
+    Remove-Item $StatusFile -EA SilentlyContinue
+    return (@($script:St.satisfied) -join ',')
+}
+Check "scan: the identities are CARRIED FORWARD, so a second scan still excludes" `
+      (ScanCarry $idAvail @('aaaa-1111:204')) 'aaaa-1111:204' 
 
 Write-Output "checks: $pass passed, $fail failed"
 if ($fail -eq 0) { exit 0 } else { exit 1 }

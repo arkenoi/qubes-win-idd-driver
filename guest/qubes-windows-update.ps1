@@ -1625,6 +1625,12 @@ try {
       $priorSat = @($script:PrevStatus.satisfied | Where-Object { $_ })
     }
   } catch { $priorSat = @() }
+  # DURABLE, for the same reason not_actionable is. A scan writes its OWN status, so knowledge
+  # taken only from the previous file and not written back survives exactly ONE scan - and scans
+  # run at every boot and on a timer, so the steady state re-inflates anyway. Measured on the
+  # guest 2026-09-21: the pass wrote satisfied=[2 identities] and the scan that consumed it wrote
+  # satisfied=[] straight back, so a SECOND scan would have re-counted them. Carry it forward.
+  $script:St.satisfied = @($priorSat)
   $notPriorSat = { param($r)
       if (-not ($r -and (Test-RowKey $r 'uid') -and $r.uid)) { return $true }   # no identity -> count it
       return ($priorSat -notcontains "$($r.uid):$($r.rev)") }
