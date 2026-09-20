@@ -12,11 +12,17 @@
 #
 # -Defect <knob> re-introduces a specific defect so the suite MUST fail on the check that knob
 # targets. A guard never seen to fail is decoration.
-param([string]$Defect = '')
+param([string]$Defect = '', [string]$ScriptPath = '')
 
 $ErrorActionPreference = 'Stop'
-$root   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$script = Join-Path $root 'guest/qubes-windows-update.ps1'
+# -ScriptPath lets the SAME suite run against the file that is actually INSTALLED ON A GUEST, not
+# only the repo copy - which is the difference between "the logic is right" and "the artefact that
+# shipped executes it".
+if ($ScriptPath) { $script = $ScriptPath }
+else {
+  $root   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+  $script = Join-Path $root 'guest/qubes-windows-update.ps1'
+}
 if (-not (Test-Path $script)) { Write-Output "INSTRUMENT: $script not found"; exit 2 }
 $src = Get-Content -Raw $script
 
