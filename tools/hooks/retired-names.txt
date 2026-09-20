@@ -1,0 +1,15 @@
+# retired-names.txt - one Python regex per line; '#' lines are comments.
+# A component or approach the owner has RETIRED or PARKED. Naming one of these in CLAUDE.md,
+# findings/, FINDINGS.md, docs/ or the memory dir is refused by tools/hooks/retired-names-gate.sh
+# unless the same edit carries the word RETIRED (you are recording that it is retired) or
+# REOPENED-BY-OWNER (the owner reopened it in writing - quote them). See CLAUDE.md,
+# "RETIRED AND PARKED LINES". Patterns are deliberately narrow: xenbus_monitor and the INF
+# start-type fix STAY (f7c16ce) and must not trip this.
+bucket[- ]?lock
+xenbus[^\n]{0,60}(patch|fix|ship|stag|pnputil|9\.1\.0\.[1-9][0-9]{2})
+pv-drivers/xenbus
+KB5071959
+KM-TEST
+express[- ]URL[^\n]{0,20}harvest
+NLA/NCSI[^\n]{0,20}flip
+checkpoint-cumulative

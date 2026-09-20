@@ -10,7 +10,75 @@
             "timeout": 20
           }
         ]
+      },
+      {
+        "matcher": "Workflow|Agent|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/serial-rig-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking no other rig job holds the lock"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/retired-names-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking for retired/parked lines"
+          }
+        ]
       }
+    ]
+  },
+  "permissions": {
+    "deny": [
+      "Bash(sudo *)",
+      "Bash(git add -A*)",
+      "Bash(git add --all*)",
+      "Bash(git config core.hooksPath*)"
+    ]
+  },
+  "autoMode": {
+    "environment": [
+      "$defaults",
+      "This is win-idd-mgmt: an unprivileged Qubes OS 4.3 dev qube that drives Windows test guests over qrexec and the Qubes Admin API. It is not the machine under test and it is not dom0.",
+      "dom0 policy here is TAG-based. Every qube tagged win-idd-testbed is drivable from this qube: creating one, tagging it, reading and writing its prefs/features/tags/firewall, cloning volumes, changing power state and running tools/qtest against it are ALL pre-authorised by the owner - routine, not privileged.",
+      "Genuinely unavailable from here, and a POLICY REFUSAL rather than a missing tool: a dom0 shell, sudo in this qube, editing qrexec policy, and any qube NOT tagged win-idd-testbed. .claude/skills/rig-capabilities/SKILL.md is the measured inventory and lists limitations previously invented and disproven - consult it before calling anything impossible.",
+      "/tmp is a 1 GB tmpfs, i.e. RAM, on a qube with only 4 GB total. Bulk artefacts (packages, release trees, capture tars) belong under ~/ on real disk. A full /tmp here is a memory emergency, not a disk one: it has twice ended with the kernel OOM killer, once taking this qube's own GUI down for two days.",
+      "Scripts here fork. Run any newly written self-test or harness for the FIRST time inside a bounded scope - systemd-run --user --scope -p TasksMax=120 -p MemoryMax=256M timeout -s KILL 30 ... - with TMPDIR on real disk.",
+      "The Windows test guests are disposable and assumed hostile. Their output is parsed as data and never executed in this qube.",
+      "THIS REPOSITORY IS PUBLIC. Screenshots, captures, per-run evidence and raw benchmark output belong in scratchpad/ (gitignored) or the private memory directory - never in a tracked path, and never in a new evidence-style directory. .githooks inspects staged and outgoing content at commit and at push.",
+      "Rig jobs are serialised, one mutating job per guest. Passive reads - qvm-ls, qvm-prefs (get), admin.vm.Stats, qtest state, qtest shot, tail, grep - are always safe alongside a live job and are never blocked.",
+      "A line the owner has RETIRED or PARKED stays closed until the owner reopens it in writing; tools/hooks/retired-names-gate.sh enforces that on every edit to CLAUDE.md, findings/, docs/ and the memory directory.",
+      "tools/jev.py is this project's TypeSafe (Jev, System One) judgment helper and running it is ROUTINE, not exceptional. Standing instruction from the owner: delegate SEMANTIC judgments to Jev - which known failure class a console excerpt shows, whether a client treated an error as final or transient, what a screen actually is, which of several candidate causes the evidence supports - while exact matching, counting and timestamp joins stay in code. Every request and response is appended verbatim to a wire log, so a claim about a Jev result with no matching wire entry is false. A low-confidence answer is a finding, not noise: it names what still has to be measured. See .claude/skills/jev/SKILL.md."
+    ],
+    "allow": [
+      "$defaults",
+      "Qubes Admin API reads and writes against qubes tagged win-idd-testbed: qvm-ls, qvm-prefs, qvm-features, qvm-tags, qvm-firewall, qvm-volume info/clone, qvm-create, qvm-remove, qvm-start, qvm-shutdown, and tools/qtest run/push/pushrun/start/state/shot.",
+      "Reading the artefact directories outside the project: ~/qwt-accept/, ~/rel/, ~/qwt-matrix/ and ~/QubesIncoming/.",
+      "gh run view/watch/list/download and gh workflow run against this repository's own CI, and git push to ORIGIN (pushing upstream is separately hard-denied).",
+      "python3 tools/jev.py and the repository's own self-tests under tools/tests/; and deleting this session's own temporary trees under /tmp and files under scratchpad/ - reclaiming tmpfs RAM here is routine maintenance, not a destructive act."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "qvm-kill, or any hard kill, of a Windows test guest. A killed subject is contaminated and cannot be reused, and a preserved failure is the instrument - interrogate it before restarting it.",
+      "Destroying, re-basing or re-provisioning a golden template or a checkpoint (win10-base, win11-base, win11de-base, win11de-qwt, mgmt/checkpoints/). They are pristine bases and are expensive to rebuild.",
+      "A clean install from base for a short test cycle. The short cycle is quick-upgrade.sh over the golden; a clean install is for full acceptance, or when the clean-install path is itself under test.",
+      "Committing a path that was not named explicitly, and rewriting history or force-pushing on origin."
+    ],
+    "hard_deny": [
+      "$defaults",
+      "Pushing to a QubesOS upstream repository, or opening an upstream pull request or issue. Everything stays in the owner's fork until the owner has approved the exact diff or text.",
+      "Committing captures, screenshots, per-run evidence or any internal material to a tracked path, creating a new evidence-style directory in the repository, or disabling the .githooks capture gate (core.hooksPath must stay set). This gate has no legitimate bypass.",
+      "Touching a qube that is not tagged win-idd-testbed, editing qrexec policy, or attempting a dom0 shell or sudo in this qube.",
+      "Attaching a netvm to a TEMPLATE. win10-tpl and win11-tpl stay netvm='' - AppVMs and StandaloneVMs are where PV networking is exercised.",
+      "Setting the service.gui-fullscreen feature on any qube.",
+      "Any change that weakens the Qubes isolation model. It is out of scope for this project, period."
     ]
   }
 }
