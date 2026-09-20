@@ -237,5 +237,39 @@ if [ "$reboots_performed" != "$reboots_requested" ]; then
 else
   log "reboot accounting OK: $reboots_performed performed = $reboots_requested requested"
 fi
+# THE AGGREGATE FLAG IS NOT THE WHOLE ANSWER. Every round above judges what dom0 was TOLD. It
+# cannot see WHICH items the guest stopped counting, or why - so an item excluded for the wrong
+# reason still produces a correct-looking dom0 flag and a green run. Jev graded this design's
+# ability to tell a correct exclusion from a concealed failure at 0.24 for exactly that reason
+# (2026-09-20, confidence 0.93), and the very first run carrying the grade had such an item in it
+# (KB5007651, findings/issues.md). So: COUNT them here in code, and refuse to call the run green
+# while they are unjudged. The judging itself is tools/wu-exclusion-audit.py - deliberately NOT
+# called from here, because a harness must not need an external API to finish.
+excl=$(python3 - "$OUT" <<'PYEOF' 2>/dev/null
+import sys
+sys.path.insert(0, "tools")
+from pathlib import Path
+import importlib.util
+spec = importlib.util.spec_from_file_location("a", "tools/wu-exclusion-audit.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+seen = {}
+for rnd, r in m.rows(Path(sys.argv[1])):
+    if m.excluded(r):
+        seen.setdefault(m.key(r), []).append(rnd)
+for k, v in seen.items():
+    print(f"{k}\t{','.join(v)}")
+PYEOF
+)
+if [ -n "$excl" ]; then
+  log "EXCLUDED ITEMS dom0 was never told about ($(printf '%s\n' "$excl" | wc -l)):"
+  printf '%s\n' "$excl" | sed 's/^/    /' | tee -a "$OUT/run.log"
+  log "NOT GREEN YET: run  tools/wu-exclusion-audit.py $OUT  and judge each one. An exclusion that"
+  log "               has not been judged against evidence OUTSIDE the updater is an open question,"
+  log "               not a pass - see docs/ADR-updater.md section 2."
+  printf '%s\n' "$excl" > "$OUT/excluded-items.tsv"
+else
+  log "no excluded items in any round - dom0 was told about everything the guest saw"
+fi
+
 log "DONE: rounds=$ROUNDS fails=$fails out=$OUT"
 [ "$fails" = 0 ] && exit 0 || exit 3
