@@ -163,7 +163,7 @@ $POL='HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings
 # which writes an empty result. (GUARD:scanactioned / GUARD:prevstatus.)
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; count=0; available=@();
                          downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null;
-                         not_actionable=@() }
+                         not_actionable=@(); satisfied=@() }
 function Save { $script:St.ts=(Get-Date).ToString('s'); ($script:St | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile -Encoding UTF8 }
 
 # A pass FINISHED. Distinct from Save, which also runs on every progress tick - `ts` therefore
@@ -389,7 +389,14 @@ function Get-Available {
   foreach($u in $r.Updates){
     $kb=@($u.KBArticleIDs)|Select-Object -First 1; $kb= if($kb){"KB$kb"}else{'(no KB)'}
     $cls = Get-WuContentClass $u    # content class + any static URLs, computed while the IUpdate is live
-    $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($u.MaxDownloadSize/1MB,1); downloaded=[bool]$u.IsDownloaded; content_class=$cls.class; direct_urls=@($cls.urls) }
+    # THE OFFER'S OWN IDENTITY. Without it a scan cannot tell "the same offer the last pass already
+    # resolved" from "a genuinely new one", and so it must count both - which is why dom0 went from
+    # empty back to 1 thirty seconds after a pass installed a Defender signature AND PROVED it by
+    # effect (win11de-fresh, 2026-09-20). UpdateID+RevisionNumber is structured data straight off
+    # the COM object: no title parsing, no locale dependence (ADR section 6).
+    $uid=$null; $rev=$null
+    try { $uid=[string]$u.Identity.UpdateID; $rev=[int]$u.Identity.RevisionNumber } catch {}
+    $out += [ordered]@{ kb=$kb; title="$($u.Title)"; size_mb=[math]::Round($u.MaxDownloadSize/1MB,1); downloaded=[bool]$u.IsDownloaded; content_class=$cls.class; direct_urls=@($cls.urls); uid=$uid; rev=$rev }
   }
   return ,$out
 }
@@ -1608,7 +1615,20 @@ try {
     }
   } catch { $priorInfo = @() }
   $script:St.not_actionable = @($priorInfo)
-  $notPriorInfo = { param($r) ($priorInfo -notcontains $r.kb) -and ($priorInfo -notcontains $r.title) }
+  # GUARD:offeridentity, the consuming half. An offer whose OWN identity a previous pass recorded
+  # as resolved is not a fresh offer, whatever its KB says. This is what lets a scan stop
+  # re-raising dom0 for a package that was installed and proven installed thirty seconds earlier,
+  # without touching the conservative rule above: a NEW revision carries a new identity and counts.
+  $priorSat = @()
+  try {
+    if ($script:PrevStatus -and (Test-RowKey $script:PrevStatus 'satisfied')) {
+      $priorSat = @($script:PrevStatus.satisfied | Where-Object { $_ })
+    }
+  } catch { $priorSat = @() }
+  $notPriorSat = { param($r)
+      if (-not ($r -and (Test-RowKey $r 'uid') -and $r.uid)) { return $true }   # no identity -> count it
+      return ($priorSat -notcontains "$($r.uid):$($r.rev)") }
+  $notPriorInfo = { param($r) ($priorInfo -notcontains $r.kb) -and ($priorInfo -notcontains $r.title) -and (& $notPriorSat $r) }
   $reportCount = @($avail | Where-Object { (& $notPriorInfo $_) }).Count
   if ($priorInfo.Count -gt 0 -and $reportCount -ne $avail.Count) {
     Log ("scan: excluding " + ($avail.Count - $reportCount) + " offer(s) a previous pass proved not actionable: " + ($priorInfo -join ', '))
@@ -2032,6 +2052,16 @@ try {
         $notInfo = { param($r) ($infoKbs -notcontains $r.kb) -and ($infoKbs -notcontains $r.title) }
         $reportCount = if ($script:St.notice) { @($after | Where-Object { $_.content_class -eq 'self-contained' -and (& $notInfo $_) }).Count }
                        else { @($after | Where-Object { (& $notInfo $_) }).Count }
+        # GUARD:offeridentity - record WHICH OFFERS this pass resolved, by the offer's own identity.
+        # A later scan may then exclude the very same offer without weakening the rule right above
+        # it ("installed last time" is not evidence a FRESH offer is satisfied): a new revision has
+        # a different identity and is counted again. An offer with no identity records nothing, so
+        # the fallback is always "count it".
+        $script:St.satisfied = @($script:St.available | Where-Object {
+                                   ($infoKbs -contains $_.kb) -or ($infoKbs -contains $_.title) } |
+                                 ForEach-Object {
+                                   if ($_ -and (Test-RowKey $_ 'uid') -and $_.uid) { "$($_.uid):$($_.rev)" } } |
+                                 Where-Object { $_ })
         # ---- WU-INFO-EXCLUDE-END
         $script:St.remaining = $reportCount; Save
         Log ("post-install rescan: $($after.Count) offered; $reportCount actionable to dom0" + $(if($script:St.notice){ ' (ESU-gated informational - see notice)' }else{ '' }))

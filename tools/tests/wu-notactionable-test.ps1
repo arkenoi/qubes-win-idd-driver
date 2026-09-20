@@ -55,9 +55,12 @@ switch ($Defect) {
     # "nothing to do on this image" instead of as a failed install. The two exe checks above must
     # then fail - that is what makes them evidence rather than decoration.
     'infobenign'{ $exeRegion  = $exeRegion.Replace('$ok=$false', '$sev=''info''; $ok=$true') }
+    # Ignores the offer identity entirely - the state before GUARD:offeridentity, where a scan
+    # re-counted an offer the previous pass had resolved and proved.
+    'satignore' { $scRegion = $scRegion.Replace('-and (& $notPriorSat $r)', '') }
     'scanall'   { $scRegion = $scRegion -replace '\$reportCount = @\(\$avail \| Where-Object \{ \(& \$notPriorInfo \$_\) \}\)\.Count', '$reportCount = $avail.Count' }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign | satignore)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -113,8 +116,12 @@ $r = RunExe $null $false $false 1603
 Check "exe: NO probe, nonzero rc -> ok false, still never 'info'" "$($r.ok)/$([string]$r.sev)" 'False/'
 
 # ---------- WU-INFO-EXCLUDE ----------
-function RunCount($after, $result, $notice) {
-    $script:St = [pscustomobject]@{ notice = $notice }
+function RunCount($after, $result, $notice, $available) {
+    # The shipped $script:St is an [ordered]@{} and the region now also WRITES $script:St.satisfied
+    # (GUARD:offeridentity). A PSCustomObject cannot take a new property, so the stub must be the
+    # real shape - otherwise the test fails for the wrong reason, which is how a stub of the wrong
+    # type already cost a debugging round on this same suite.
+    $script:St = [ordered]@{ notice = $notice; available = @($available); satisfied = @() }
     # infoonly restores the pre-fix rule: only severity='info' drops out, so an update this pass
     # actually INSTALLED still counts and dom0 never reaches "up to date".
     $infoKbs = @($result | Where-Object { $_.severity -eq 'info' -or ((-not $script:InfoOnly) -and $_.ok -eq $true) } |
@@ -287,6 +294,30 @@ function ScanCount2($avail, $notActionable) {
 }
 Check "scan: the SECOND scan still excludes - the classification is durable, not one-shot" `
       (ScanCount2 $scanAvail @('AudioProcessingObject Driver Update')) 2
+
+# GUARD:offeridentity. The oscillation that failed the bar on 2026-09-20: a pass installed a
+# Defender signature and PROVED it by effect, dom0 went empty, and a scan 30 seconds later counted
+# the very same offer again and put dom0 back to 1. A KB cannot decide this (signatures really are
+# republished under one KB), so the offer's own UpdateID+RevisionNumber decides it.
+function ScanCountId($avail, $satisfied) {
+    $script:St = [ordered]@{ notice = $null; not_actionable = @() }
+    $StatusFile = Join-Path ([IO.Path]::GetTempPath()) ("wuscan3-" + [guid]::NewGuid().ToString() + ".json")
+    (@{ result = @(); not_actionable = @(); satisfied = $satisfied } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile
+    $script:PrevStatus = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json
+    $reportCount = -1
+    Invoke-Expression $scRegion
+    Remove-Item $StatusFile -EA SilentlyContinue
+    return $reportCount
+}
+$idAvail = @(
+    [pscustomobject]@{ kb='KB2267602'; title='Defender defs'; content_class='self-contained'; uid='aaaa-1111'; rev=204 },
+    [pscustomobject]@{ kb='KB5007651'; title='Security platform'; content_class='self-contained'; uid='bbbb-2222'; rev=7 }
+)
+Check "scan: the SAME offer identity a pass resolved is excluded" (ScanCountId $idAvail @('aaaa-1111:204')) 1
+Check "scan: a NEW REVISION of that offer counts again (only the identity is trusted)" `
+      (ScanCountId $idAvail @('aaaa-1111:203')) 2
+Check "scan: an identity for a DIFFERENT offer excludes nothing here" (ScanCountId $idAvail @('zzzz-9999:1')) 2
+Check "scan: offers with NO identity fall back to counting" (ScanCountId $scanAvail @('aaaa-1111:204')) 3
 
 Write-Output "checks: $pass passed, $fail failed"
 if ($fail -eq 0) { exit 0 } else { exit 1 }
