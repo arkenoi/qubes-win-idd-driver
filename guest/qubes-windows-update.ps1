@@ -1595,18 +1595,38 @@ try {
   if ($Action -in 'resolve','download','full','install') {
     foreach($u in $avail){
       if($u.kb -notmatch '^KB\d+'){
+        # ---- WU-NOKB-BEGIN
         # GUARD:nokbinfo - an offer with no KB (a vendor driver, e.g. "Microsoft Corporation
-        # AudioProcessingObject Driver Update") is not resolvable through the catalog and this path
-        # never attempts it. Until 2026-09-20 it was logged and dropped, so it left no row, could
-        # not be excluded from dom0's actionable count, and held the guest at "updates available"
-        # with no reason anywhere. Record it as INFORMATIONAL with its reason instead: still
-        # visible, no longer counted as something the admin can act on.
+        # AudioProcessingObject Driver Update") cannot be resolved through the update CATALOG,
+        # because the catalog search is keyed on the KB number. That much is structural.
+        #
+        # BUT THE CATALOG IS NOT THE ONLY ROUTE, and this is where it was wrong. Get-Available
+        # computes content_class and direct_urls for EVERY offer from the live IUpdate, so a no-KB
+        # offer can perfectly well be 'self-contained' WITH a working download URL - installable
+        # through the proxy with no catalog involved. The old code skipped on the SHAPE of the KB
+        # field before ever looking at direct_urls, and so threw away an update it was holding the
+        # means to install, then told dom0 it was not actionable. Jev put 0.80 on a genuinely
+        # installable update legitimately lacking a KB; this is that case, in this code.
+        # So: look for a route before declaring there is none.
         $nokb = if($u.title){ [string]$u.title } else { 'untitled offer' }
-        Log "skip (no KB): $nokb - recorded as informational (not resolvable without a KB)"
+        $nokbUrls = @(@($u.direct_urls) | Where-Object { $_ })
+        if($nokbUrls.Count -gt 0 -and $Action -in 'install','full'){
+          Log "no KB but $($nokbUrls.Count) direct URL(s) - INSTALLING self-contained: $nokb"
+          $nokbRows = Install-SelfContained $nokb $nokbUrls
+          $nokbOk = @($nokbRows | Where-Object { $_.ok }).Count -gt 0
+          $script:St.result += [ordered]@{ kb=$nokb; ok=$nokbOk
+                                           state=$(if($nokbOk){'installed'}else{'failed'}); files=$nokbRows }
+          Save
+          continue
+        }
+        # No KB and no self-contained URL: there is genuinely no route from here. THAT is the
+        # measured reason, and it is what the row now says.
+        Log "skip (no KB, no direct URL): $nokb - informational, no route from this path"
         $script:St.result += [ordered]@{ kb=$nokb; ok=$true; state='not-actionable'; severity='info';
-                                         info_reason='offer carries no KB - not resolvable through the catalog and not attempted by this path' }
+                                         info_reason='offer carries no KB AND no self-contained URL: the catalog is keyed on KB so it cannot be resolved there, and there is no direct installer to fetch' }
         Save
         continue
+        # ---- WU-NOKB-END
       }
       $script:St.phase='resolve'; Save
       $urls = Resolve-Catalog $u.kb

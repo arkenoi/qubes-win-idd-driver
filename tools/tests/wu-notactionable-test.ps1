@@ -29,6 +29,7 @@ function Region([string]$name) {
 $exeRegion  = Region 'WU-EXE-EFFECT'
 $npRegion   = Region 'WU-NOTPACKAGE'
 $cvRegion   = Region 'WU-CATALOG-VALID'
+$nkRegion   = Region 'WU-NOKB'
 $infoRegion = Region 'WU-INFO-EXCLUDE'
 
 # Defect knobs rewrite the SHIPPED text back to its pre-fix form.
@@ -39,8 +40,9 @@ switch ($Defect) {
     'kbonly'    { $infoRegion = $infoRegion -replace '-and \(\$infoKbs -notcontains \$r\.title\)', '' }
     'rcinfers'  { $npRegion = $npRegion -replace '(?s)\$mum = \$null.*?\n      \}', '$mum = $null' }
     'trustzero' { $cvRegion = $cvRegion -replace '(?s)if \(\[string\]::IsNullOrWhiteSpace.*?\n  \}', '' }
+    'shapeskip' { $nkRegion = $nkRegion -replace '(?s)if\(\$nokbUrls\.Count -gt 0.*?\n        \}', '' }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -168,5 +170,32 @@ Check "catalog: EMPTY body -> UNRESOLVED (truncated, not 'no package')"         
 Check "catalog: a truncated fragment -> UNRESOLVED"                                       (CatalogUnresolved '<html><body>') 'True'
 Check "catalog: a proxy error page -> UNRESOLVED"                                         (CatalogUnresolved '<html><h1>502 Bad Gateway</h1></html>') 'True'
 
+# ---------- WU-NOKB: a no-KB offer with a URL is INSTALLABLE, not 'not actionable' ----------
+# Jev put 0.80 on a genuinely installable update legitimately lacking a KB. Get-Available computes
+# direct_urls for EVERY offer, so a no-KB offer can be self-contained with a working URL - the old
+# code skipped on the SHAPE of the KB field before looking, and threw that away.
+$script:installCalled = $false
+function Install-SelfContained($kb, $urls) { $script:installCalled = $true; return @(@{ ok = $true }) }
+function NoKb($title, $urls, $action) {
+    $script:installCalled = $false
+    $script:St = [pscustomobject]@{ result = @() }
+    $u = [pscustomobject]@{ kb = '(no KB)'; title = $title; direct_urls = $urls }
+    $Action = $action
+    function Save { }
+    # The extracted region ends with `continue`. OUTSIDE A LOOP THAT SILENTLY TERMINATES THE
+    # SCRIPT - the suite exited here with rc=0 before printing its own tally, and every defect knob
+    # then reported "did not break the suite". Give `continue` a loop to belong to.
+    foreach ($once in 1) { Invoke-Expression $nkRegion }
+    $row = @($script:St.result)[0]
+    return "$($script:installCalled)/$($row.state)/$([string]$row.severity)"
+}
+Check "nokb: HAS a direct URL on an install action -> INSTALLED, never excluded" `
+      (NoKb 'AudioProcessingObject Driver Update' @('https://dl.example/x.exe') 'install') 'True/installed/'
+Check "nokb: NO direct URL -> informational, with a measured reason" `
+      (NoKb 'AudioProcessingObject Driver Update' @() 'install') 'False/not-actionable/info'
+Check "nokb: has a URL but the action is only 'resolve' -> not installed, not excluded as a lie" `
+      (NoKb 'Some driver' @('https://dl.example/x.exe') 'resolve') 'False/not-actionable/info'
+
+if ($pass + $fail -eq 0) { Write-Output "INSTRUMENT: no checks ran at all"; exit 2 }
 Write-Output "checks: $pass passed, $fail failed"
 if ($fail -eq 0) { exit 0 } else { exit 1 }
