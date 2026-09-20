@@ -32,7 +32,28 @@ try:
 except Exception:
     sys.exit(0)  # not our JSON - never block on a parse problem of our own
 ti = hook.get('tool_input') or {}
-text = json.dumps(ti, ensure_ascii=False)
+
+# WHAT WE MATCH ON. Naively this was json.dumps(tool_input) - every byte of the call, including
+# text that cannot possibly be a command. Measured 2026-09-20: that blocked a plain `git commit`
+# because the COMMIT MESSAGE described work on one of the harnesses, so the gate read its own
+# subject line as a launch. A message, a heredoc body and a -m argument are prose; a command is a
+# command. Strip the prose, keep everything else - in particular do NOT strip ordinary quoting, or
+# `bash -c "qvm-kill x"` would walk straight through. (# GUARD:prose)
+def strip_prose(cmd):
+    # heredoc bodies: <<EOF ... EOF, <<'EOF' ... EOF, <<-"EOF" ... EOF
+    cmd = re.sub(r"<<-?\s*(['\"]?)(\w+)\1.*?^\s*\2\s*$", " ", cmd, flags=re.S | re.M)
+    # A commit/tag message argument: -m '...', -m "...", --message=... . The double-quoted arm
+    # MUST understand backslash escapes: a message that itself quotes a command ( \"qvm-kill x\" )
+    # ends the naive [^"]* at the first inner quote and leaves the rest of the message exposed,
+    # which is exactly how this blocked its own fix commit on 2026-09-20.
+    cmd = re.sub(r"(?:^|\s)(?:-m|--message)(?:=|\s+)('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")", " ", cmd, flags=re.S)
+    # `git commit -F -` style: the body arrives on stdin, already covered by the heredoc rule
+    return cmd
+
+if hook.get('tool_name') in ('Bash', 'BashOutput') and isinstance(ti.get('command'), str):
+    text = strip_prose(ti['command'])
+else:
+    text = json.dumps(ti, ensure_ascii=False)
 
 # MUTATING verbs only. Passive reads (qvm-ls, admin.vm.Stats, qvm-prefs get, qtest state/shot)
 # are deliberately absent so monitoring a running job is never blocked.
