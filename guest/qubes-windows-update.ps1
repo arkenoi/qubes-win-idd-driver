@@ -1068,17 +1068,36 @@ function Install-SelfContained($kb,$urls){
         else { $eff = $eff -or ($shAfter -ne $shBefore) }
       }
       # A probe we ran and that showed nothing is a NEGATIVE result, not a missing one.
+      # ---- WU-EXE-EFFECT-BEGIN
       if($probe -and $probeRan){ $ok = $eff } else { $ok = ($p.ExitCode -eq 0) }
       $detail = if($probe -and $probeRan){ "probe=$probe verified_by_effect=$eff" }
                 elseif($probe){ "probe=$probe DID NOT RUN (artefact unreadable) - ok from rc only" }
                 else { 'probe=none (ok from rc only)' }
+      # GUARD:notactionable - what the probe tells us apart.
+      #   rc=0 AND the probe ran AND nothing changed -> the installer SELF-DETERMINED it has
+      #     nothing to do on this image. Measured 2026-09-20: securityhealthsetup.exe, 22 MB,
+      #     exits 0 in ONE SECOND, writes no log anywhere, and moves neither the SecHealthUI appx
+      #     nor SecurityHealthService.exe - on four consecutive passes. Windows Update re-offers it
+      #     regardless. That is an offer this guest can NEVER action, exactly the shape the
+      #     express/ESU phantoms already carry, so it is INFORMATIONAL: still reported and still
+      #     visible with its reason, but it must not hold dom0 at "updates available" forever.
+      #   rc<>0 AND the probe ran AND nothing changed -> a real failure. Stays actionable.
+      # Without the probe these two are indistinguishable, which is how one of them sat unnoticed.
+      $sev=$null; $why=$null
       if($probe -and $probeRan -and -not $eff){
-        Log ("  $name : exe rc=$($p.ExitCode) $detail -> NOT INSTALLED (rc says success, the probe says nothing changed)")
-        if($probe -eq 'security-platform'){ Log ("    security platform stayed at $shBefore (SecHealthUI|SecurityHealthService)") }
+        if($p.ExitCode -eq 0){
+          $sev='info'; $ok=$true
+          $why='installer exited 0 and changed nothing measurable - nothing to do on this image'
+          Log ("  $name : exe rc=0 $detail -> NOT ACTIONABLE ($why)")
+          if($probe -eq 'security-platform'){ Log ("    security platform stayed at $shBefore (SecHealthUI|SecurityHealthService)") }
+        } else {
+          Log ("  $name : exe rc=$($p.ExitCode) $detail -> FAILED (nonzero rc and the probe saw no effect)")
+        }
       } else {
         Log ("  $name : exe rc=$($p.ExitCode) $detail")
       }
-      $rows += [ordered]@{ kb=$kb; file=$name; rc=$p.ExitCode; ok=$ok; verified_by_effect=$eff; probe=$probe }
+      # ---- WU-EXE-EFFECT-END
+      $rows += [ordered]@{ kb=$kb; file=$name; rc=$p.ExitCode; ok=$ok; verified_by_effect=$eff; probe=$probe; severity=$sev; info_reason=$why }
     } elseif($ext -eq '.msu' -or $ext -eq '.cab'){
       # DISM decides. Three DETERMINISTIC outcomes, each classified honestly:
       #  - OK_RC (0/3010/2359302): installed/staged.
@@ -1525,7 +1544,20 @@ try {
   }
   if ($Action -in 'resolve','download','full','install') {
     foreach($u in $avail){
-      if($u.kb -notmatch '^KB\d+'){ Log "skip (no KB): $($u.title)"; continue }
+      if($u.kb -notmatch '^KB\d+'){
+        # GUARD:nokbinfo - an offer with no KB (a vendor driver, e.g. "Microsoft Corporation
+        # AudioProcessingObject Driver Update") is not resolvable through the catalog and this path
+        # never attempts it. Until 2026-09-20 it was logged and dropped, so it left no row, could
+        # not be excluded from dom0's actionable count, and held the guest at "updates available"
+        # with no reason anywhere. Record it as INFORMATIONAL with its reason instead: still
+        # visible, no longer counted as something the admin can act on.
+        $nokb = if($u.title){ [string]$u.title } else { 'untitled offer' }
+        Log "skip (no KB): $nokb - recorded as informational (not resolvable without a KB)"
+        $script:St.result += [ordered]@{ kb=$nokb; ok=$true; state='not-actionable'; severity='info';
+                                         info_reason='offer carries no KB - not resolvable through the catalog and not attempted by this path' }
+        Save
+        continue
+      }
       $script:St.phase='resolve'; Save
       $urls = Resolve-Catalog $u.kb
       Log "$($u.kb): $($urls.Count) catalog .msu"
@@ -1826,8 +1858,22 @@ try {
         # Exclude KBs this pass proved informational (a self-contained artifact DISM rejected as
         # not-a-package, e.g. KB5001716) - they are self-contained by shape but never installable, so
         # they must not leave dom0 marked "updates available" forever.
-        $infoKbs = @($script:St.result | Where-Object { $_.severity -eq 'info' } | ForEach-Object { $_.kb })
-        $reportCount = if ($script:St.notice) { @($after | Where-Object { $_.content_class -eq 'self-contained' -and $infoKbs -notcontains $_.kb }).Count } else { $after.Count }
+        # Key on kb AND title. A no-KB offer (GUARD:nokbinfo) is recorded under its TITLE because it
+        # has no KB, so a kb-only match would silently fail to exclude exactly the rows that most
+        # need excluding - the ones that can never be actioned.
+        $infoKbs = @($script:St.result | Where-Object { $_.severity -eq 'info' } |
+                     ForEach-Object { $_.kb; if($_.PSObject -and (Test-RowKey $_ 'title')){ $_.title } } |
+                     Where-Object { $_ })
+        # GUARD:infoalways - informational rows are excluded from dom0's actionable count ALWAYS,
+        # not only under the post-end-of-support notice. Before 2026-09-20 the else-branch was a
+        # bare $after.Count, so on a current OS every un-actionable offer still counted and dom0
+        # could never reach "up to date" - measured on the German 25H2 template, three items
+        # re-offered on every pass after the September cumulative was fully applied.
+        # ---- WU-INFO-EXCLUDE-BEGIN
+        $notInfo = { param($r) ($infoKbs -notcontains $r.kb) -and ($infoKbs -notcontains $r.title) }
+        $reportCount = if ($script:St.notice) { @($after | Where-Object { $_.content_class -eq 'self-contained' -and (& $notInfo $_) }).Count }
+                       else { @($after | Where-Object { (& $notInfo $_) }).Count }
+        # ---- WU-INFO-EXCLUDE-END
         $script:St.remaining = $reportCount; Save
         Log ("post-install rescan: $($after.Count) offered; $reportCount actionable to dom0" + $(if($script:St.notice){ ' (ESU-gated informational - see notice)' }else{ '' }))
         if ($script:St.notice) { Log ("SERVICING NOTICE: " + $script:St.notice) }
