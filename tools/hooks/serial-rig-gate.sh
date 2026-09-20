@@ -48,7 +48,26 @@ def strip_prose(cmd):
     # which is exactly how this blocked its own fix commit on 2026-09-20.
     cmd = re.sub(r"(?:^|\s)(?:-m|--message)(?:=|\s+)('(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\")", " ", cmd, flags=re.S)
     # `git commit -F -` style: the body arrives on stdin, already covered by the heredoc rule
-    return cmd
+    #
+    # COMMAND POSITION. A rig verb is a launch only when something RUNS it. As an argument to a
+    # read-only inspector it is a search pattern - and the gate's own refusal text tells you to
+    # watch a running job with passive reads, so blocking `ps ... | grep quick-upgrade.sh` refuses
+    # the very thing it recommends (measured 2026-09-20, the third shape of this same over-match).
+    # Drop any pipeline segment whose FIRST token is an inspector that cannot start a guest.
+    # Deliberately NOT in this list: find and xargs (-exec runs things) and python3 (subprocess).
+    passive = re.compile(r'^(ps|grep|egrep|fgrep|pgrep|tail|head|cat|less|awk|sed|echo|printf'
+                         r'|date|ls|wc|sort|uniq|cut|tr|jq|stat|df|du|basename|dirname|realpath)$')
+    kept = []
+    for seg in re.split(r'\|\||&&|[|;\n]', cmd):
+        first = seg.strip().split()
+        # step over leading env assignments (FOO=bar cmd ...) and sudo-less prefixes
+        i = 0
+        while i < len(first) and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', first[i]):
+            i += 1
+        if i < len(first) and passive.match(os.path.basename(first[i])):
+            continue
+        kept.append(seg)
+    return ' ; '.join(kept)
 
 if hook.get('tool_name') in ('Bash', 'BashOutput') and isinstance(ti.get('command'), str):
     text = strip_prose(ti['command'])

@@ -38,8 +38,12 @@ check "C7c heredoc BODY naming a rig verb -> allowed"                   0 "$(jb 
 # C7e: a message that QUOTES a command inside itself. The naive "[^"]* arm ends at the first
 # inner quote and leaves the rest of the message exposed - this blocked its own fix commit.
 check "C7e message containing an ESCAPED-quoted verb -> allowed"        0 "$(jb 'git commit -m "gate: bash -c \"qvm-kill x\" must still be caught, and prime-run too"')"
-# ...and the counterpart that must still be CAUGHT, or the strip went too far.
+# C7f: watching the running job is what the refusal text TELLS you to do; it must not be blocked.
+check "C7f ps|grep for the running harness -> allowed"                  0 "$(jb "ps -eo pid,args --no-headers | grep -E 'quick-upgrade\\.sh' | grep -v grep")"
+check "C7g tail of a harness log -> allowed"                            0 "$(jb 'tail -5 scratchpad/prime-run.log')"
+# ...and the counterparts that must still be CAUGHT, or the strip went too far.
 check "C7d a real command inside quotes -> BLOCKED"                     2 "$(jb 'bash -c "qvm-kill win11-acc"')"
+check "C7h a real launch AFTER a passive segment -> BLOCKED"            2 "$(jb 'grep foo bar | cat; qvm-start win11-acc')"
 check "C8 DEFECT RE-INTRODUCED: C1 must NOT be blocked (proves load-bearing)" 0 "$(jb 'prime-run.sh win10-base')" SERIAL_GATE_DEFECT=1
 
 # C9: only a STALE lock present (dead holder) -> a mutating launch is allowed.
