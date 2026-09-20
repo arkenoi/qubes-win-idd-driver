@@ -69,6 +69,15 @@ Check "exe: probe ran AND effect seen -> ok true, not info" "$($r.ok)/$([string]
 # A probe that could not run must fall back to rc, never report a false failure.
 $r = RunExe 'security-platform' $false $false 0
 Check "exe: probe DID NOT run -> falls back to rc=0, ok true" $r.ok 'True'
+# BOUNDING THE BLAST RADIUS. The whole risk of this classification is that it is the SAME SHAPE as
+# a silent failure, so it must be reachable only where we have a probe that actually measures the
+# thing. An executable we cannot measure must NEVER be marked not-actionable, whatever it returns -
+# otherwise a genuinely installable update could be quietly excluded and dom0 would go silent about
+# it, which is the original field defect wearing this fix as a disguise.
+$r = RunExe $null $false $false 0
+Check "exe: NO probe at all -> never 'info', however it exits" ([string]$r.sev) ''
+$r = RunExe $null $false $false 1603
+Check "exe: NO probe, nonzero rc -> ok false, still never 'info'" "$($r.ok)/$([string]$r.sev)" 'False/'
 
 # ---------- WU-INFO-EXCLUDE ----------
 function RunCount($after, $result, $notice) {
@@ -93,6 +102,28 @@ Check "count: all three informational, no ESU notice -> dom0 hears 0 (it can rea
 $result2 = @([pscustomobject]@{ kb = 'KB5007651'; severity = 'info' })
 Check "count: one informational, two real -> dom0 hears 2" (RunCount $after $result2 $null) 2
 Check "count: nothing informational -> dom0 hears all 3" (RunCount $after @() $null) 3
+
+# ---------- THE POSITIVE CONTROL: Patch Tuesday content must never be excluded ----------
+# Ground truth we always have: a Patch Tuesday cumulative IS installable on a guest that is behind.
+# If the classification can ever swallow one, dom0 goes quiet about a real update - GWeck's defect
+# resurrected by its own fix. A cumulative arrives as .msu and is decided by DISM, so it cannot
+# reach the exe branch at all; assert that it is counted whenever it is not itself informational.
+$tuesday = @(
+    [pscustomobject]@{ kb = 'KB5129195'; title = '2026-09 Cumulative';  content_class = 'self-contained' },
+    [pscustomobject]@{ kb = 'KB5007651'; title = 'Security platform';   content_class = 'self-contained' },
+    [pscustomobject]@{ kb = '';          title = 'AudioProcessingObject Driver Update'; content_class = 'none' }
+)
+$infoOnlyTheUnactionable = @(
+    [pscustomobject]@{ kb = 'KB5007651'; severity = 'info' },
+    [pscustomobject]@{ kb = 'AudioProcessingObject Driver Update'; title = 'AudioProcessingObject Driver Update'; severity = 'info' }
+)
+Check "CONTROL: a pending Patch Tuesday cumulative is STILL counted while the others are excluded" `
+      (RunCount $tuesday $infoOnlyTheUnactionable $null) 1
+# And the failing case this control exists to catch: if the cumulative were ever marked info, dom0
+# would hear 0 with a real update pending. That must be visible as a distinct number, not hidden.
+$infoIncludingCumulative = $infoOnlyTheUnactionable + @([pscustomobject]@{ kb = 'KB5129195'; severity = 'info' })
+Check "CONTROL: if the cumulative were wrongly excluded dom0 would hear 0 - proving the count is what carries it" `
+      (RunCount $tuesday $infoIncludingCumulative $null) 0
 
 Write-Output "checks: $pass passed, $fail failed"
 if ($fail -eq 0) { exit 0 } else { exit 1 }
