@@ -3,6 +3,7 @@
 # update bar on it.
 #
 #   mgmt/harness/wu-bar.sh <vm> <out-dir> [package-dir]      (or PKG=... in the environment)
+#   ROUNDS=<n> repeats the pass; one round proves the mechanism, repeats prove it is not a one-shot
 #
 # THE BAR: dom0 is settled by the pass AND unchanged by the NON-DEBOUNCED scan that follows it.
 # A pass that clears dom0 and a scan that puts it straight back is not a pass - that is exactly
@@ -115,4 +116,6 @@ fi
 
 case "$(inst)" in *"bytes=$PKGBYTES"*) : ;; *) log "FAIL: installed bytes != package bytes - refusing to grade"; exit 1;; esac
 log "=== THE BAR: dom0 settled by the pass AND unchanged by the following scan ==="
-exec bash mgmt/harness/wu-e2e.sh "$VM" 1 "$OUT"
+# ROUNDS: one pass proves the mechanism, repeated passes prove it is not a one-shot. The goal
+# record requires repeated stall-free cycles, so this is a knob, not a constant.
+exec bash mgmt/harness/wu-e2e.sh "$VM" "${ROUNDS:-1}" "$OUT"
