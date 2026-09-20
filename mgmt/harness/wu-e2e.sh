@@ -172,7 +172,17 @@ PY
     # a shutdown that FAILED still incremented the counter, and a guest left powered off had only
     # half a cycle. Measured 2026-09-20: the ledger said "1 performed" while the guest was Running.
     log "round $r: shutting the guest down so the next round starts from the applied state"
-    timeout 600 qvm-shutdown --wait "$VM" >/dev/null 2>&1
+    # NEVER `qvm-shutdown --wait`. Its --timeout is "timeout after which domains are KILLED"
+    # (default 60 s), so --wait is a hard-kill on a timer - and a guest applying a staged
+    # cumulative on shutdown legitimately takes many minutes. That is how this harness came to
+    # hold a latent guest-killer aimed at the exact moment a guest is least safe to kill: mid
+    # servicing apply. Measured 2026-09-20: it returned at 61 s with the guest still Running and
+    # qrexec still answering - not a stall, an impatient harness with a kill attached.
+    # Request the shutdown, then WATCH. A guest that will not halt is reported, never killed.
+    log "round $r: requested shutdown; waiting for the guest to power off on its own (no kill)"
+    timeout 120 qvm-shutdown "$VM" >/dev/null 2>&1
+    _sd=$(( $(date +%s) + 1800 ))
+    while [ "$(date +%s)" -lt "$_sd" ] && [ "$(qstate)" != Halted ]; do sleep 20; done
     if [ "$(qstate)" != Halted ]; then
       if stalled; then log "round $r: STALLED during shutdown"; else log "round $r: FAIL - the guest did not power off, so the requested reboot did NOT happen"; fi
       fails=1; break
