@@ -156,6 +156,30 @@ for r in $(seq 1 "$ROUNDS"); do
     log "round $r: JUDGE FAIL"; sed 's/^/    /' "$RD/judge.out" | head -12 | tee -a "$OUT/run.log"; fails=1
   fi
 
+  # OSCILLATION CHECK. An install pass settling dom0 is not enough: the very next SCAN must not
+  # re-inflate the count. Measured 2026-09-20 - a pass drove dom0 to EMPTY and the following boot
+  # scan reported 3 again, so the admin was told there was work when there was none. This is the
+  # bar the reporter actually lives at, because a scan runs at every boot and on a timer.
+  log "round $r: oscillation check - running a SCAN-only pass, dom0 must not change"
+  dom0_before_scan="$after"
+  timeout -k 10 900 tools/qtest run 'cmd /c schtasks /run /tn QubesWindowsUpdateScan' >/dev/null 2>&1
+  _sc=$(( $(date +%s) + 900 )); scan_seen=0
+  while [ "$(date +%s)" -lt "$_sc" ]; do
+    sleep 30
+    st_now=$(guest_file 'C:\ProgramData\Qubes\update-status.json' | tr -d '\r')
+    case "$st_now" in *'"action"'*'scan'*) scan_seen=1; break;; esac
+  done
+  dom0_after_scan=$(dom0_avail)
+  if [ "$scan_seen" = 0 ]; then
+    log "round $r: FAIL - the scan never ran, so the oscillation check did not happen (missing data fails)"
+    fails=1
+  elif [ "${dom0_before_scan:-}" != "${dom0_after_scan:-}" ]; then
+    log "round $r: FAIL OSCILLATION - dom0 was '${dom0_before_scan:-<empty>}' after the pass and '${dom0_after_scan:-<empty>}' after the scan"
+    fails=1
+  else
+    log "round $r: oscillation OK - dom0 stayed '${dom0_after_scan:-<empty>}' across the pass and the scan"
+  fi
+
   reboot_needed=$(python3 - "$RD/update-status.json" <<'PY' 2>/dev/null
 import json,sys
 # The guest writes update-status.json with a UTF-8 BOM; plain utf-8 raises and reboot_needed
