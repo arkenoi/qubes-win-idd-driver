@@ -1030,16 +1030,55 @@ function Install-SelfContained($kb,$urls){
     if($ext -eq '.exe'){
       # Verify BY EFFECT, not by exit code: Defender mpam-fe advances AntivirusSignatureVersion; MSRT
       # advances HKLM\...\RemovalTools\MRT\Version. rc=0 alone has read as success on a no-op before.
-      $sigBefore=''; $mrtBefore=''
+      #
+      # GUARD:effectprobe - and it read as success on a no-op AGAIN, measured 2026-09-20 on the
+      # German 25H2 template. securityhealthsetup.exe (the "Windows Security platform" offer,
+      # KB5007651, offered as 10.0.29628.1000) ran with rc=0 on EVERY pass while
+      # SecurityHealthService.exe stayed at the inbox 10.0.26100.9278 - nothing moved. There was no
+      # probe for that executable, so $eff was structurally false for it and `rc -eq 0` alone
+      # decided ok=$true. dom0 was therefore told "offered, still pending" forever instead of
+      # "this update is FAILING", which is the same untruth as the field report in a new place.
+      # Now: if we KNOW how to measure an executable's effect, rc=0 without that effect is NOT
+      # success. Where we have no probe, say so in the row rather than implying verification.
+      $probe = $null
+      if    ($name -match 'securityhealthsetup') { $probe = 'security-platform' }
+      elseif($name -match 'kb890830|mrt')        { $probe = 'mrt-version' }
+      elseif($name -match 'mpam|mpas|nis_full')  { $probe = 'defender-signature' }
+      $sigBefore=''; $mrtBefore=''; $shBefore=''
       try{ $sigBefore=(Get-MpComputerStatus).AntivirusSignatureVersion }catch{}
       try{ $mrtBefore=(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\RemovalTools\MRT' -Name Version -EA SilentlyContinue).Version }catch{}
+      # The file calls itself "Windows Security app UNDOCKED setup": what it updates is the
+      # SecHealthUI APPX PACKAGE, not SecurityHealthService.exe in System32. Probing only the
+      # System32 binary would report a false FAILURE for a correct install, so take both and
+      # treat either moving as the effect. (Caught before shipping, 2026-09-20.)
+      try{ $pkB=Get-AppxPackage -AllUsers -Name Microsoft.SecHealthUI -EA SilentlyContinue | Select-Object -First 1; if($pkB){ $shBefore=[string]$pkB.Version } }catch{}
+      try{ $itB=Get-Item 'C:\Windows\System32\SecurityHealthService.exe' -EA SilentlyContinue; if($itB){ $shBefore="$shBefore|" + $itB.VersionInfo.ProductVersion } }catch{}
       $p = Start-Process $dst -ArgumentList '/q' -Wait -PassThru -WindowStyle Hidden
       $eff=$false
       try{ if($sigBefore){ $eff = $eff -or ((Get-MpComputerStatus).AntivirusSignatureVersion -ne $sigBefore) } }catch{}
       try{ if($name -match 'kb890830'){ $eff = $eff -or ((Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\RemovalTools\MRT' -Name Version -EA SilentlyContinue).Version -ne $mrtBefore) } }catch{}
-      $ok = ($p.ExitCode -eq 0) -or $eff
-      Log ("  $name : exe rc=$($p.ExitCode) verified_by_effect=$eff")
-      $rows += [ordered]@{ kb=$kb; file=$name; rc=$p.ExitCode; ok=$ok; verified_by_effect=$eff }
+      $shAfter=''
+      try{ $pkA=Get-AppxPackage -AllUsers -Name Microsoft.SecHealthUI -EA SilentlyContinue | Select-Object -First 1; if($pkA){ $shAfter=[string]$pkA.Version } }catch{}
+      try{ $itA=Get-Item 'C:\Windows\System32\SecurityHealthService.exe' -EA SilentlyContinue; if($itA){ $shAfter="$shAfter|" + $itA.VersionInfo.ProductVersion } }catch{}
+      # If neither artefact could be read at all, the probe did not RUN - that is unknown, not a
+      # negative, and must not be reported as a failed install.
+      $probeRan = $true
+      if($probe -eq 'security-platform'){
+        if(-not $shBefore -and -not $shAfter){ $probeRan = $false }
+        else { $eff = $eff -or ($shAfter -ne $shBefore) }
+      }
+      # A probe we ran and that showed nothing is a NEGATIVE result, not a missing one.
+      if($probe -and $probeRan){ $ok = $eff } else { $ok = ($p.ExitCode -eq 0) }
+      $detail = if($probe -and $probeRan){ "probe=$probe verified_by_effect=$eff" }
+                elseif($probe){ "probe=$probe DID NOT RUN (artefact unreadable) - ok from rc only" }
+                else { 'probe=none (ok from rc only)' }
+      if($probe -and $probeRan -and -not $eff){
+        Log ("  $name : exe rc=$($p.ExitCode) $detail -> NOT INSTALLED (rc says success, the probe says nothing changed)")
+        if($probe -eq 'security-platform'){ Log ("    security platform stayed at $shBefore (SecHealthUI|SecurityHealthService)") }
+      } else {
+        Log ("  $name : exe rc=$($p.ExitCode) $detail")
+      }
+      $rows += [ordered]@{ kb=$kb; file=$name; rc=$p.ExitCode; ok=$ok; verified_by_effect=$eff; probe=$probe }
     } elseif($ext -eq '.msu' -or $ext -eq '.cab'){
       # DISM decides. Three DETERMINISTIC outcomes, each classified honestly:
       #  - OK_RC (0/3010/2359302): installed/staged.
