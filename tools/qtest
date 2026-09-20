@@ -101,6 +101,14 @@ case "${1:-}" in
            # the only way to see override-redirect windows and dom0-side rendering
            # defects - per-window shots cannot show either.
            qrexec-client-vm dom0 "local.WinFullScreen+$VM" </dev/null > "$out" && echo "saved $out" ;;
+  dumpcore) # dumpcore — a guest MEMORY IMAGE, the one instrument that named the multi-vCPU wedge.
+           # Needs dom0/17-install-wedge-core-service.sh installed once. NOT destructive: the
+           # domain is PAUSED while xl dump-core writes, then left exactly as it was. The image
+           # stays in dom0 (~8 GB); this prints its path and size. Read it with
+           # tools/xen-core-rip.py once it has been copied across.
+           qrexec-client-vm dom0 "local.WinWedgeCore+$VM" </dev/null
+           ;;
+
   wedge)   # wedge [out-dir] — dom0-side capture at the moment of a wedge, no human needed.
            # Needs dom0/13-install-wedge-forensics-service.sh installed once. Never fires
            # the NMI: bugchecking a guest stays a deliberate human action.

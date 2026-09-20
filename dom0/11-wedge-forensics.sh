@@ -5,8 +5,18 @@
 # spinning code. Nothing here is destructive except --nmi, which deliberately
 # bugchecks the guest (it reboots itself afterwards and the dump survives).
 #
-#   sudo ./11-wedge-forensics.sh <vm>            # capture only
-#   sudo ./11-wedge-forensics.sh <vm> --nmi      # capture, then NMI (guest bugchecks)
+#   sudo ./11-wedge-forensics.sh <vm>              # capture only
+#   sudo ./11-wedge-forensics.sh <vm> --nmi        # capture, then NMI (guest bugchecks)
+#   sudo ./11-wedge-forensics.sh <vm> --dump-core  # capture, then a full guest memory image
+#
+# --dump-core (added 2026-09-20) is the ONLY remaining route to name the spinning code of the
+# multi-vCPU wedge: the NMI route was tried on 2026-09-10 and produced NO bugcheck and no dump,
+# for a self-consistent reason - a bugcheck must freeze the other processors with IPIs, so if IPI
+# delivery is what is wedged, the crash path deadlocks too. `xl dump-core` needs no guest
+# cooperation at all. It is NOT destructive (the domain is paused for the write, not killed), but
+# it writes roughly the guest's RAM to disk - about 8 GB for an 8192 MB guest - so it checks for
+# free space first and REFUSES rather than filling dom0's root. The image STAYS IN DOM0 and is
+# never copied to the dev qube: 8 GB would not fit there, and the dev qube does not need it.
 #
 # THE VM IS AN ARGUMENT NOW. It used to be `VM="${VM:-win-idd-test}"` with no way to pass one
 # except an environment variable that sudo often refuses to forward - so during a LIVE wedge on
@@ -19,16 +29,18 @@
 set -u
 DEV="${DEV:-win-idd-mgmt}"
 NMI=0
+DUMPCORE=0
 VM="${VM:-}"
 for a in "$@"; do
     case "$a" in
         --nmi) NMI=1 ;;
+        --dump-core) DUMPCORE=1 ;;
         -*)    echo "unknown option: $a" >&2; exit 2 ;;
         *)     VM="$a" ;;
     esac
 done
 if [ -z "$VM" ]; then
-    echo "usage: $0 <vm> [--nmi]     (or VM=<vm> $0 [--nmi])" >&2
+    echo "usage: $0 <vm> [--nmi] [--dump-core]     (or VM=<vm> $0 ...)" >&2
     echo "running domains:" >&2
     xl list 2>/dev/null | awk 'NR>1 && $1!="Domain-0" {print "  " $1}' >&2
     exit 2
@@ -145,6 +157,35 @@ virsh -c xen:/// dumpxml "$VM" 2>/dev/null | grep -E '<(console|serial)|@?tty=' 
 echo "--- summary ---" | tee -a "$OUT/grant-summary.txt"
 grep -E "Mem|VCPUs|state" "$OUT/xentop.txt" 2>/dev/null | tail -2
 cat "$OUT/grant-summary.txt"
+
+# The memory image comes BEFORE the NMI: the NMI reboots the guest, and a rebooted guest is not
+# the specimen any more. If both are asked for, the image is the one that survives the mistake.
+if [ "$DUMPCORE" = 1 ]; then
+    CORE="$OUT/../${VM}-${DOMID}-$(date +%Y%m%d-%H%M%S).core"
+    # Guest RAM in KiB, from the toolstack rather than from the qube's configured maxmem.
+    MEM_KB=$(xl list "$VM" 2>/dev/null | awk 'NR==2 {print $3*1024}')
+    [ -z "${MEM_KB:-}" ] && MEM_KB=$((8192*1024))
+    FREE_KB=$(df -Pk "$(dirname "$CORE")" | awk 'NR==2 {print $4}')
+    NEED_KB=$(( MEM_KB + MEM_KB/10 + 1048576 ))   # RAM + 10% + 1 GiB headroom
+    echo "dump-core: guest RAM ${MEM_KB} KiB, need ~${NEED_KB} KiB, free ${FREE_KB} KiB"
+    if [ "$FREE_KB" -lt "$NEED_KB" ]; then
+        # Refusing loudly beats half-writing an image and filling dom0's root.
+        echo "dump-core REFUSED: not enough free space for the image (need ~$((NEED_KB/1048576)) GiB, have $((FREE_KB/1048576)) GiB)" \
+            | tee -a "$OUT/domid.txt" >&2
+    else
+        echo "dump-core: writing $CORE (the domain is PAUSED while this runs, not killed)"
+        t0=$(date +%s)
+        if xl dump-core "$DOMID" "$CORE" 2>>"$OUT/dump-core.err"; then
+            sz=$(stat -c %s "$CORE" 2>/dev/null || echo 0)
+            echo "dump-core: OK $CORE ($((sz/1048576)) MiB in $(( $(date +%s) - t0 )) s)" | tee -a "$OUT/domid.txt"
+        else
+            # A dump-core that fails ON A WEDGE IS ITSELF A DATUM - record it, never swallow it.
+            echo "dump-core: FAILED (see dump-core.err) - on a wedge this deep that is itself evidence" \
+                | tee -a "$OUT/domid.txt" >&2
+            rm -f "$CORE"
+        fi
+    fi
+fi
 
 if [ "$NMI" = 1 ]; then
     echo "firing NMI -> guest will bugcheck and write C:\\Windows\\MEMORY.DMP, then reboot"
