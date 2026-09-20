@@ -86,6 +86,18 @@ pcode=$(timeout 40 curl -sS -o /dev/null -w '%{http_code}' -x http://127.0.0.1:8
 log "updates proxy OK (egress proven, http=$pcode)"
 
 fails=0
+# REBOOT ACCOUNTING (owner, 2026-09-20: "there should be no forced reboots in 'hope to settle'.
+# amount of reboots performed must match amount of reboots requested").
+# A harness that reboots speculatively is unfalsifiable - reboot often enough and something
+# settles - and every state that needed an unrequested reboot is a defect it just hid. So every
+# power cycle here must trace to a REQUEST: either the guest powered itself off (an /auto stage
+# transition, which IS the guest asking), or update-status.json said reboot_needed=true. The two
+# counters are compared at the end and a mismatch FAILS the run.
+reboots_requested=0
+reboots_performed=0
+note_request(){ reboots_requested=$((reboots_requested+1)); log "REBOOT REQUESTED (#$reboots_requested): $*"; }
+note_performed(){ reboots_performed=$((reboots_performed+1)); log "reboot performed (#$reboots_performed)"; }
+
 for r in $(seq 1 "$ROUNDS"); do
   RD="$OUT/round$r"; mkdir -p "$RD"
   # Rounds are independent passes, not a burst. Fired back to back they hammer qrexec - measured
@@ -97,8 +109,11 @@ for r in $(seq 1 "$ROUNDS"); do
 
   if ! wait_qrexec 900; then
     if stalled; then log "round $r: STALLED (Running, qrexec dead) - stopping, the guest must be interrogated"; fails=1; break; fi
+    # The guest powered ITSELF off - that is the guest requesting the cycle, not us forcing one.
+    note_request "the guest powered itself off before round $r"
     log "round $r: guest is Halted - starting it"
     timeout 240 qvm-start "$VM" >/dev/null 2>&1
+    note_performed
     wait_qrexec 900 || { log "round $r: guest never came up"; fails=1; break; }
   fi
 
@@ -151,10 +166,23 @@ PY
 )
   log "round $r: reboot_needed=$reboot_needed"
   if [ "$reboot_needed" = true ]; then
+    note_request "update-status.json says reboot_needed=true after round $r"
     log "round $r: shutting the guest down so the next round starts from the applied state"
     timeout 600 qvm-shutdown --wait "$VM" >/dev/null 2>&1 || { if stalled; then log "round $r: STALLED during shutdown"; fails=1; break; fi; }
+    note_performed
+  elif [ "$reboot_needed" = unknown ]; then
+    # Unreadable status is missing data, and missing data fails - it must never be treated as
+    # "no reboot needed", because that silently turns a requested cycle into none.
+    log "round $r: FAIL - update-status.json unreadable, so reboot_needed is UNKNOWN (missing data fails)"
+    fails=1
   fi
 done
 
+if [ "$reboots_performed" != "$reboots_requested" ]; then
+  log "FAIL REBOOT ACCOUNTING: $reboots_performed performed vs $reboots_requested requested - a power cycle happened that nobody asked for (or a requested one was skipped)"
+  fails=1
+else
+  log "reboot accounting OK: $reboots_performed performed = $reboots_requested requested"
+fi
 log "DONE: rounds=$ROUNDS fails=$fails out=$OUT"
 [ "$fails" = 0 ] && exit 0 || exit 3

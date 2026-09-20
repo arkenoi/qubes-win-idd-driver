@@ -92,7 +92,30 @@ outstanding-KB filter therefore matched nothing and `remaining` was 0 on every r
 guest against them and any mismatch or unmeasured fact is a non-zero exit. "Diagnostically similar"
 is not an environment.
 
-## 8. The test is the product
+## 8. Reboots are COUNTED: performed must equal requested
+
+**No speculative reboots. Ever.** Owner, 2026-09-20: *"there should be no forced reboots in 'hope
+to settle'. amount of reboots performed must match amount of reboots requested."*
+
+Every power cycle a harness performs must trace to a request — either the guest powered **itself**
+off (an `/auto` stage transition is the guest asking), or `update-status.json` said
+`reboot_needed=true`. `mgmt/harness/wu-e2e.sh` counts both sides and **fails the run on a
+mismatch**, in either direction: an extra cycle nobody asked for, or a requested one skipped.
+
+**Why:** a harness that reboots until things settle is unfalsifiable — reboot often enough and
+something eventually works — and every state that needed an unrequested reboot is a real defect it
+just concealed. It also stops reproducing what the user gets, since a user reboots when Windows
+asks, not three times hoping.
+
+**And `unknown` is not `false`.** If `update-status.json` cannot be read, `reboot_needed` is
+UNKNOWN, and missing data fails. Treating it as "no reboot needed" silently converts a requested
+cycle into none — which is the same accounting lie from the other end.
+
+**What it cost:** an ad-hoc install driver written the same day looped
+`for r in 1 2 3; do ... qvm-shutdown; qvm-start; done`, rebooting three times to "complete the
+handover" with nothing having asked for any of them.
+
+## 9. The test is the product
 
 Passes are judged, not read: `tools/wu-pass-judge.py` (workflow level — did each pass tell dom0 the
 truth) and `tools/wu-log-judge.py` (engine level — did the search ever enter the transient wait).
