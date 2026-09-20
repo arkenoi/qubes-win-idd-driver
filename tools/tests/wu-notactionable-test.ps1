@@ -237,9 +237,12 @@ Check "actioned: a DEFERRED cumulative is ok=false and STAYS counted -> dom0 hea
 # Measured on the guest: an install pass drove dom0 to EMPTY, and the very next BOOT SCAN reported
 # 3 again - the no-route driver plus two offers WU re-presents forever. dom0 oscillated 0 -> 3.
 function ScanCount($avail, $prevResult) {
-    $script:St = [pscustomobject]@{ notice = $null }
+    # the shipped $script:St is an [ordered]@{} - the region ADDS a key to it, which a
+    # PSCustomObject cannot take. Match the real shape or the test fails for the wrong reason.
+    $script:St = [ordered]@{ notice = $null; not_actionable = @() }
     $StatusFile = Join-Path ([IO.Path]::GetTempPath()) ("wuscan-" + [guid]::NewGuid().ToString() + ".json")
     if ($null -ne $prevResult) { (@{ result = $prevResult } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile }
+    $script:PrevStatus = if (Test-Path $StatusFile) { Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json } else { $null }
     $reportCount = -1
     Invoke-Expression $scRegion
     Remove-Item $StatusFile -EA SilentlyContinue
@@ -258,6 +261,20 @@ Check "scan: a KB a previous pass proved NOT ACTIONABLE is excluded"            
 # The conservative half: 'installed last time' must NOT silence a fresh offer on a scan.
 $priorInstalled = @([pscustomobject]@{ kb = 'KB5007651'; ok = $true; state = 'installed' })
 Check "scan: a KB merely INSTALLED last pass still counts on a scan (only a pass may judge that)" (ScanCount $scanAvail $priorInstalled) 3
+# DURABLE: a scan writes result=[], so knowledge kept only in result rows survives one scan. The
+# carry-forward field must keep it. Simulate the SECOND scan: no result rows, but not_actionable set.
+function ScanCount2($avail, $notActionable) {
+    $script:St = [ordered]@{ notice = $null; not_actionable = @() }
+    $StatusFile = Join-Path ([IO.Path]::GetTempPath()) ("wuscan2-" + [guid]::NewGuid().ToString() + ".json")
+    (@{ result = @(); not_actionable = $notActionable } | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile
+    $script:PrevStatus = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json
+    $reportCount = -1
+    Invoke-Expression $scRegion
+    Remove-Item $StatusFile -EA SilentlyContinue
+    return $reportCount
+}
+Check "scan: the SECOND scan still excludes - the classification is durable, not one-shot" `
+      (ScanCount2 $scanAvail @('AudioProcessingObject Driver Update')) 2
 
 Write-Output "checks: $pass passed, $fail failed"
 if ($fail -eq 0) { exit 0 } else { exit 1 }

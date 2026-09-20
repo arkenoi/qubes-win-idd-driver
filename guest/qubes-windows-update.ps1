@@ -50,6 +50,19 @@ param(
 $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force (Split-Path $StatusFile) | Out-Null
 
+# ---- WU-PREVSTATUS-BEGIN
+# GUARD:prevstatus - snapshot the PREVIOUS pass's status BEFORE anything in this run can Save over
+# it. Save() rewrites $StatusFile from $script:St, which this run resets, and it is called early
+# and often - so a guard that reads the file later reads THIS run's freshly blanked state and
+# concludes there is no prior knowledge at all. Measured 2026-09-20: GUARD:scanactioned read
+# `action=scan, rows=0` - its own output - and therefore excluded nothing, and dom0 went from empty
+# back to 1 on the very next scan. Read it once, here, where it is still the previous pass's.
+$script:PrevStatus = $null
+try {
+  if (Test-Path $StatusFile) { $script:PrevStatus = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json }
+} catch { $script:PrevStatus = $null }
+# ---- WU-PREVSTATUS-END
+
 # CONNECT-tunnel keep-alive (2026-08-20): one tunnel through the relay = one backend qrexec channel, so
 # every tunnel .NET drops early is a vchan channel churned (each open/close = a grant permit/revoke, the
 # suspected relay-wedge trigger). .NET already reuses one tunnel per host within this process (Fetch-Msu
@@ -145,8 +158,12 @@ $OsArch  = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64'
 $IS='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
 $POL='HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
 
+# not_actionable is declared here so it always exists and always serialises: it is the DURABLE
+# record of what a previous pass proved the guest cannot action, and it has to survive a scan,
+# which writes an empty result. (GUARD:scanactioned / GUARD:prevstatus.)
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; count=0; available=@();
-                         downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null }
+                         downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null;
+                         not_actionable=@() }
 function Save { $script:St.ts=(Get-Date).ToString('s'); ($script:St | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $StatusFile -Encoding UTF8 }
 
 # A pass FINISHED. Distinct from Save, which also runs on every progress tick - `ts` therefore
@@ -1557,18 +1574,24 @@ try {
   # not actionable - no route, no package, nothing to do) is dropped here. An ok=$true row is NOT
   # dropped on a scan, because "installed last time" is not evidence that a fresh offer of the same
   # KB is already satisfied - that judgement belongs to a pass that actually tries.
-  # Read the PREVIOUS status from disk - $script:St is this pass's own, freshly reset. The file is
-  # written with a UTF-8 BOM, so read it raw and let ConvertFrom-Json handle it.
+  # Use the startup snapshot (GUARD:prevstatus). Re-reading the file HERE is too late: this run has
+  # already Saved over it, so the read returns our own empty result and excludes nothing.
   $priorInfo = @()
   try {
-    $prevStatus = $null
-    if (Test-Path $StatusFile) { $prevStatus = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json }
+    $prevStatus = $script:PrevStatus
     if ($prevStatus -and $prevStatus.result) {
       $priorInfo = @($prevStatus.result | Where-Object { $_.severity -eq 'info' } |
                      ForEach-Object { $_.kb; if($_.PSObject -and (Test-RowKey $_ 'title')){ $_.title } } |
                      Where-Object { $_ })
     }
+    # DURABLE. A scan writes its own status with an EMPTY result, so knowledge taken only from
+    # result rows survives exactly ONE scan - and scans run at every boot and on a timer, so the
+    # steady state would re-inflate anyway. Carry the classification forward in its own field.
+    if ($prevStatus -and (Test-RowKey $prevStatus 'not_actionable')) {
+      $priorInfo = @(@($priorInfo) + @($prevStatus.not_actionable) | Where-Object { $_ } | Sort-Object -Unique)
+    }
   } catch { $priorInfo = @() }
+  $script:St.not_actionable = @($priorInfo)
   $notPriorInfo = { param($r) ($priorInfo -notcontains $r.kb) -and ($priorInfo -notcontains $r.title) }
   $reportCount = @($avail | Where-Object { (& $notPriorInfo $_) }).Count
   if ($priorInfo.Count -gt 0 -and $reportCount -ne $avail.Count) {
@@ -1650,7 +1673,7 @@ try {
         # No KB and no self-contained URL: there is genuinely no route from here. THAT is the
         # measured reason, and it is what the row now says.
         Log "skip (no KB, no direct URL): $nokb - informational, no route from this path"
-        $script:St.result += [ordered]@{ kb=$nokb; ok=$true; state='not-actionable'; severity='info';
+        $script:St.result += [ordered]@{ kb=$nokb; title=$nokb; ok=$true; state='not-actionable'; severity='info';
                                          info_reason='offer carries no KB AND no self-contained URL: the catalog is keyed on KB so it cannot be resolved there, and there is no direct installer to fetch' }
         Save
         continue

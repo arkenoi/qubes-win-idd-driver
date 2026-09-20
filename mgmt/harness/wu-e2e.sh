@@ -162,7 +162,11 @@ for r in $(seq 1 "$ROUNDS"); do
   # bar the reporter actually lives at, because a scan runs at every boot and on a timer.
   log "round $r: oscillation check - running a SCAN-only pass, dom0 must not change"
   dom0_before_scan="$after"
-  timeout -k 10 900 tools/qtest run 'cmd /c schtasks /run /tn QubesWindowsUpdateScan' >/dev/null 2>&1
+  # Run the scan WITHOUT -Scheduled. The scheduled-scan debounce legitimately skips any -Scheduled
+  # scan whose previous completed pass is younger than 30 minutes, and it exits BEFORE logging - so
+  # firing the task here tests the debounce, not the scan, and leaves no trace either way.
+  # Measured 2026-09-20: the check waited 15 minutes for a scan that had correctly declined to run.
+  timeout -k 10 900 tools/qtest run 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\Qubes Tools\bin\qubes-windows-update.ps1" -Action scan -RelayExe "C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe"' >/dev/null 2>&1
   _sc=$(( $(date +%s) + 900 )); scan_seen=0
   while [ "$(date +%s)" -lt "$_sc" ]; do
     sleep 30
