@@ -26,7 +26,7 @@ cd "${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}" || exit 0
 if [ "${SERIAL_GATE_DEFECT:-}" = "1" ]; then exit 0; fi   # GUARD:serial-gate
 input=$(cat)
 LOCKDIR="${TMPDIR:-/tmp}" python3 - "$input" <<'PY'
-import glob, json, os, re, sys
+import glob, json, os, re, shlex, sys
 try:
     hook = json.loads(sys.argv[1])
 except Exception:
@@ -39,6 +39,125 @@ ti = hook.get('tool_input') or {}
 # subject line as a launch. A message, a heredoc body and a -m argument are prose; a command is a
 # command. Strip the prose, keep everything else - in particular do NOT strip ordinary quoting, or
 # `bash -c "qvm-kill x"` would walk straight through. (# GUARD:prose)
+SEP = re.compile(r'^[|&;()<>]+$')
+PASSIVE = re.compile(r'^(ps|grep|egrep|fgrep|pgrep|tail|head|cat|less|awk|sed|echo|printf'
+                     r'|date|ls|wc|sort|uniq|cut|tr|jq|stat|df|du|basename|dirname|realpath'
+                     r'|which|type|hash|whereis|file)$')
+HELPFLAG = ('--help', '-h', '--version')
+
+def pull_subs(cmd):
+    """Lift $(...) and `...` bodies OUT of the line. A command substitution RUNS its body, so it
+    is a launch site even inside double quotes - where the segment splitter below would otherwise
+    never see it. Innermost first, so nesting resolves."""
+    subs = []
+    for pat in (re.compile(r'\$\(([^()]*)\)'), re.compile(r'`([^`]*)`')):
+        while True:
+            m = pat.search(cmd)
+            if not m:
+                break
+            subs.append(m.group(1))
+            cmd = cmd[:m.start()] + ' ' + cmd[m.end():]
+    return cmd, subs
+
+def nl_to_sep(cmd):
+    """Turn UNQUOTED newlines into `;`. A newline ends a command exactly as `;` does, but shlex
+    treats it as ordinary whitespace and throws it away, so line 2 of a script merges into line 1's
+    segment and inherits ITS command word. Measured 2026-09-20: a two-line edit whose second line
+    was a read-only `for` loop over harness filenames was refused, because the merged segment began
+    with `python3` and the `for`-list rule therefore never looked at it. shlex.lineno does not
+    survive punctuation_chars mode reliably, so the boundary is found here, by scanning. A newline
+    INSIDE quotes stays a newline - it is part of one argument, not a command break.
+    (# GUARD:newline)"""
+    out, q, esc = [], None, False
+    for ch in cmd:
+        if esc:
+            out.append(ch); esc = False; continue
+        if ch == '\\' and q != "'":
+            out.append(ch); esc = True; continue
+        if q:
+            if ch == q:
+                q = None
+            out.append(ch); continue
+        if ch in ('"', "'"):
+            q = ch; out.append(ch); continue
+        out.append(' ; ' if ch in '\r\n' else ch)
+    return ''.join(out)
+
+def segments(cmd):
+    """Split into pipeline/subshell segments WITHOUT splitting inside quotes.
+
+    The first version split with a bare regex on | ; && - which is quote-BLIND, so a `\\|`
+    inside a grep PATTERN ended the segment and the pattern's tail landed in command position
+    with the passive `grep` in front of it discarded. Measured 2026-09-20: that refused
+    `grep -n 'a\\|b' "$(command -v qvm-shutdown)"`, a pure read, while a run held a lock.
+    shlex knows about quoting; ValueError (unbalanced quotes) falls back to the whole line,
+    which is the STRICT direction - it may block, it cannot silently allow. (# GUARD:quoting)"""
+    lex = shlex.shlex(nl_to_sep(cmd), posix=False, punctuation_chars=True)
+    lex.whitespace_split = True
+    lex.commenters = ''
+    segs, cur = [], []
+    for t in lex:
+        if SEP.match(t):
+            segs.append(cur); cur = []
+        else:
+            cur.append(t)
+    segs.append(cur)
+    return segs
+
+# Shell KEYWORDS are not commands. Two kinds:
+#   PREFIX  - what follows is still a command      (`if qvm-kill x`, `time qvm-start y`)
+#   DATA    - what follows is a word LIST, not a command. `for f in a.sh b.sh` names FILES;
+#             reading one of those names as an invocation is how this gate refused a plain
+#             `for f in ... mgmt/reprovision-usb.sh ...; do grep ...; done` on 2026-09-20.
+KW_PREFIX = {'if', 'elif', 'while', 'until', 'do', 'then', 'else', '!', 'time', '{', '}',
+             'nohup', 'exec', 'source', '.'}
+KW_DATA = {'for', 'select', 'case', 'in', 'esac', 'fi', 'done', 'local', 'declare', 'export',
+           'readonly', 'return', 'exit', 'break', 'continue', 'shift', 'set', 'unset', 'trap'}
+
+def is_launch(toks, overstrip):
+    """Does this segment RUN something that mutates? toks is one segment, already split."""
+    i = 0
+    while i < len(toks) and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', toks[i]):
+        i += 1                      # step over leading env assignments
+    while i < len(toks) and toks[i] in KW_PREFIX:
+        i += 1                      # `if`/`time`/`nohup` - the command is what comes after
+    if i < len(toks) and toks[i] in KW_DATA:
+        return False                # (# GUARD:keyword) the rest is a word list, not a command
+    if i >= len(toks):
+        return False
+    name = os.path.basename(toks[i].strip('\'"'))
+    rest = toks[i + 1:]
+    if PASSIVE.match(name):
+        return False
+    if name in ('command', 'builtin') and rest and rest[0] in ('-v', '-V'):
+        return False                # `command -v qvm-shutdown` LOOKS UP a path, runs nothing
+    # `bash -n script.sh` PARSES and exits - it is the syntax check you run after editing a
+    # harness, and it executes not one line of it. Measured 2026-09-20: refused while a run held a
+    # lock, because the FILENAME was tools/release-acceptance.sh. -c is the executing form, so its
+    # presence disqualifies the exemption. (# GUARD:syntaxcheck)
+    if name in ('bash', 'sh', 'dash', 'zsh', 'ksh') and '-n' in rest and '-c' not in rest:
+        return False
+    # `git add mgmt/harness/matrix.sh` names a PATH. git cannot start a qube, so for these
+    # subcommands its arguments are filenames, not invocations - measured 2026-09-20, staging the
+    # very fix for this class was refused. `bisect run` and `submodule foreach` DO run commands and
+    # are deliberately absent from the list. (# GUARD:git)
+    if name == 'git' and rest:
+        sub = next((t for t in rest if not t.startswith('-')), '')
+        if sub in ('add', 'rm', 'mv', 'status', 'diff', 'log', 'show', 'commit', 'checkout',
+                   'switch', 'restore', 'stash', 'reset', 'tag', 'config', 'ls-files', 'blame',
+                   'apply', 'fetch', 'pull', 'push', 'branch', 'remote', 'rev-parse', 'grep',
+                   'cat-file', 'clean', 'describe', 'shortlog', 'worktree'):
+            return False
+    # A qvm-* verb asked for its own USAGE is documentation: argparse prints and exits before
+    # any action. The flag must be its OWN token - inside a quoted argument it belongs to the
+    # GUEST's command line, not to qvm-run. (# GUARD:usage)
+    if name.startswith('qvm-'):
+        if overstrip:
+            return not any(f in ' '.join(rest) for f in HELPFLAG)
+        if any(t in HELPFLAG for t in rest):
+            return False
+    return True
+
 def strip_prose(cmd):
     # heredoc bodies: <<EOF ... EOF, <<'EOF' ... EOF, <<-"EOF" ... EOF
     cmd = re.sub(r"<<-?\s*(['\"]?)(\w+)\1.*?^\s*\2\s*$", " ", cmd, flags=re.S | re.M)
@@ -53,20 +172,18 @@ def strip_prose(cmd):
     # read-only inspector it is a search pattern - and the gate's own refusal text tells you to
     # watch a running job with passive reads, so blocking `ps ... | grep quick-upgrade.sh` refuses
     # the very thing it recommends (measured 2026-09-20, the third shape of this same over-match).
-    # Drop any pipeline segment whose FIRST token is an inspector that cannot start a guest.
-    # Deliberately NOT in this list: find and xargs (-exec runs things) and python3 (subprocess).
-    passive = re.compile(r'^(ps|grep|egrep|fgrep|pgrep|tail|head|cat|less|awk|sed|echo|printf'
-                         r'|date|ls|wc|sort|uniq|cut|tr|jq|stat|df|du|basename|dirname|realpath)$')
+    # Deliberately NOT passive: find and xargs (-exec runs things) and python3 (subprocess).
+    overstrip = os.environ.get('SERIAL_GATE_DEFECT') == '2'   # GUARD:overstrip
+    body, subs = (cmd, []) if overstrip else pull_subs(cmd)
     kept = []
-    for seg in re.split(r'\|\||&&|[|;\n]', cmd):
-        first = seg.strip().split()
-        # step over leading env assignments (FOO=bar cmd ...) and sudo-less prefixes
-        i = 0
-        while i < len(first) and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', first[i]):
-            i += 1
-        if i < len(first) and passive.match(os.path.basename(first[i])):
-            continue
-        kept.append(seg)
+    for piece in [body] + subs:
+        try:
+            segs = segments(piece)
+        except ValueError:
+            kept.append(piece); continue      # unparseable quoting -> keep it all (strict)
+        for toks in segs:
+            if is_launch(toks, overstrip):
+                kept.append(' '.join(toks))
     return ' ; '.join(kept)
 
 if hook.get('tool_name') in ('Bash', 'BashOutput') and isinstance(ti.get('command'), str):
@@ -81,8 +198,14 @@ mut = re.compile(
     r'|\bqtest\s+(run|push|pushrun|start|kill|shutdown)\b'
     r'|\bprime-run|\bquick-upgrade|\bmatrix\.sh|\bcheckpoint\.sh\s+(unpark|park)|\breprovision|\brelease-acceptance'
     r'|qubes\.WindowsUpdate|qubes\.VMShell|qubes\.VMExec', re.I)
-if not mut.search(text):
+hit = mut.search(text)
+if not hit:
     sys.exit(0)
+# WHAT was matched, and in which surviving segment. A refusal that only says "something matched"
+# cost three wrong guesses on 2026-09-20 about which shape had tripped it; the gate knows, so it
+# says. (# GUARD:explain)
+lo, hi = max(0, hit.start() - 40), min(len(text), hit.end() + 40)
+why = 'matched %r in: ...%s...' % (hit.group(0), text[lo:hi])
 
 # If this very launch already owns a guest lock, it is the running job, not a second one.
 if os.environ.get('QWT_VMLOCK_HELD'):
@@ -117,7 +240,11 @@ for lf in sorted(glob.glob(os.path.join(lockdir, 'qwt-vmlock-*'))):
             f"Only one mutating job per guest runs at a time - two interleave their probes and fabricate verdicts "
             f"(CLAUDE.md 'Run VM-mutating jobs serially'). WATCH the running job with passive reads (qvm-ls, "
             f"admin.vm.Stats, qtest state/shot) instead, or wait for it to finish / stop it BY PID with SIGTERM "
-            f"(never pkill -f). If that lock is stale, its holder pid would be dead - it is not.\n")
+            f"(never pkill -f). If that lock is stale, its holder pid would be dead - it is not.\n"
+            f"The gate {why}\n"
+            f"If that is not a launch, it is an over-match: tools/tests/gate-explain.py '<the line>' "
+            f"shows the segmentation, and tools/tests/serial-rig-gate-selftest.sh is where the fix "
+            f"gets a check.\n")
         sys.exit(2)
 sys.exit(0)
 PY
