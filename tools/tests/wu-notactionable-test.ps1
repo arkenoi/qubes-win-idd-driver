@@ -27,6 +27,7 @@ function Region([string]$name) {
 }
 
 $exeRegion  = Region 'WU-EXE-EFFECT'
+$npRegion   = Region 'WU-NOTPACKAGE'
 $infoRegion = Region 'WU-INFO-EXCLUDE'
 
 # Defect knobs rewrite the SHIPPED text back to its pre-fix form.
@@ -35,8 +36,9 @@ switch ($Defect) {
                   $exeRegion  = $exeRegion  -replace "\`$sev='info'", "`$sev=`$null" }
     'noticeonly'{ $infoRegion = $infoRegion -replace '(?s)else \{ @\(\$after \| Where-Object \{ \(& \$notInfo \$_\) \}\)\.Count \}', 'else { $after.Count }' }
     'kbonly'    { $infoRegion = $infoRegion -replace '-and \(\$infoKbs -notcontains \$r\.title\)', '' }
+    'rcinfers'  { $npRegion = $npRegion -replace '(?s)\$mum = \$null.*?\n      \}', '$mum = $null' }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -124,6 +126,28 @@ Check "CONTROL: a pending Patch Tuesday cumulative is STILL counted while the ot
 $infoIncludingCumulative = $infoOnlyTheUnactionable + @([pscustomobject]@{ kb = 'KB5129195'; severity = 'info' })
 Check "CONTROL: if the cumulative were wrongly excluded dom0 would hear 0 - proving the count is what carries it" `
       (RunCount $tuesday $infoIncludingCumulative $null) 0
+
+# ---------- WU-NOTPACKAGE: a corrupt download must never become 'informational' ----------
+# Jev's defect hunt, 2026-09-20: ERROR_FILE_NOT_FOUND / ERROR_INVALID_DATA / CBS_E_INVALID_PACKAGE
+# are NOT exclusive to WU-client blobs - a TRUNCATED download produces them too, and relay
+# truncation on large files is a known failure mode on this path. Inferring "informational" from
+# the code alone let a corrupt cumulative be filed as nothing-to-worry-about.
+$script:expandOut = ''
+function expand.exe { param([Parameter(ValueFromRemainingArguments=$true)]$a) $script:expandOut }
+function NotPackage($rc, $expandOutput) {
+    $script:expandOut = $expandOutput
+    $dst = 'C:\x.msu'; $name = 'x.msu'; $OK_RC = @(0, 3010, 2359302); $notPackage = $false; $mum = $null
+    Invoke-Expression $npRegion
+    return $notPackage
+}
+$realPkg = "Microsoft (R) File Expansion Utility`nupdate.mum`nupdate.cat`npackage.cab"
+$blob    = "Microsoft (R) File Expansion Utility`nwuclient.dll`nsetup.xml"
+Check "notpkg: DISM invalid-data but the file CONTAINS update.mum -> NOT informational (corrupt download)" (NotPackage 13 $realPkg) 'False'
+Check "notpkg: DISM invalid-data and NO update.mum -> informational (a genuine WU-client blob)"            (NotPackage 13 $blob)    'True'
+Check "notpkg: DISM file-not-found but the file CONTAINS update.mum -> NOT informational"                  (NotPackage 2  $realPkg) 'False'
+Check "notpkg: CBS_E_INVALID_PACKAGE on a real package -> NOT informational"                               (NotPackage -2146498555 $realPkg) 'False'
+Check "notpkg: expand produced nothing readable -> NOT informational (unreadable is corruption)"           (NotPackage 13 '')       'False'
+Check "notpkg: a success code is never reclassified"                                                       (NotPackage 0  $blob)    'False'
 
 Write-Output "checks: $pass passed, $fail failed"
 if ($fail -eq 0) { exit 0 } else { exit 1 }

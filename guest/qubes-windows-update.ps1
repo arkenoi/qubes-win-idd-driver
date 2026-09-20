@@ -1108,13 +1108,45 @@ function Install-SelfContained($kb,$urls){
       #  - anything else: a genuine install failure.
       $rc = Add-PackageCompat $dst
       Log ("  $name : DISM rc=$rc")
+      # ---- WU-NOTPACKAGE-BEGIN
+      # GUARD:mumcheck - PROVE it is not a package; do not infer it from the return code.
+      # Those three codes are NOT exclusive to WU-client blobs: a TRUNCATED OR CORRUPT DOWNLOAD
+      # produces ERROR_INVALID_DATA / CBS_E_INVALID_PACKAGE too, and relay truncation on large
+      # files is a known failure mode on this very path. Inferring "informational" from the code
+      # alone therefore let a corrupt cumulative be filed as "nothing to worry about" and dom0 was
+      # told all was well - the field defect exactly, reached from a different direction.
+      # The real discriminator is the one the comment above always named: a servicing package
+      # CONTAINS update.mum. Look, do not assume. If the artifact HAS update.mum it IS a package,
+      # so one of these codes means something went wrong with THIS copy of it - a failure, and a
+      # retryable one - never informational. If expand cannot read the file at all, that is itself
+      # evidence of corruption, so it fails too.
       $notPackage = ($rc -eq 2 -or $rc -eq 13 -or $rc -eq -2146498555)   # -2146498555 = 0x800f0805
+      $mum = $null
+      if ($notPackage) {
+        try {
+          $lst = & expand.exe -D "$dst" 2>&1 | Out-String
+          # EMPTY output is not "no update.mum" - it is "we could not read the artifact", which is
+          # evidence of corruption and must fail. Caught by the suite: '' -match ... is $false, not
+          # $null, so an unreadable file was falling through to INFORMATIONAL - the very case this
+          # guard exists to stop.
+          if ([string]::IsNullOrWhiteSpace($lst)) { $mum = $null }
+          else { $mum = [bool]($lst -match '(?i)update\.mum') }
+        } catch { $mum = $null }
+        if ($mum -eq $true) {
+          Log ("  $name : DISM rc=$rc BUT the artifact CONTAINS update.mum - it IS a servicing package, so this is a FAILURE (corrupt or truncated download), not informational")
+          $notPackage = $false
+        } elseif ($mum -eq $null) {
+          Log ("  $name : DISM rc=$rc and expand could not read the artifact - treating as a FAILURE (unreadable is evidence of corruption, not of being a non-package)")
+          $notPackage = $false
+        }
+      }
+      # ---- WU-NOTPACKAGE-END
       if ($rc -in $OK_RC) {
         $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=$true }
         if($rc -eq 3010){ $script:St.reboot_needed=$true; $script:StagedThisSession=$true }
       } elseif ($notPackage) {
-        $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=$false; severity='info'
-          reason='not a DISM-installable CBS package (no update.mum) - a Windows Update client/orchestrator blob that Windows installs itself; not applicable to offline servicing. INFORMATIONAL - not a failure' }
+        $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=$false; severity='info'; mum_present=$false
+          reason='not a DISM-installable CBS package - VERIFIED to contain no update.mum, i.e. a Windows Update client/orchestrator blob that Windows installs itself; not applicable to offline servicing. INFORMATIONAL - not a failure' }
       } else {
         $rows += [ordered]@{ kb=$kb; file=$name; rc=$rc; ok=$false }
       }
