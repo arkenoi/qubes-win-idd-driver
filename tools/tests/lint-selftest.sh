@@ -52,6 +52,11 @@ r 'cmd /c powershell -NoProfile -Command "$x=(Get-Item \"C:\a\").Name; Write-Out
 EOS
 expect_fires L3-nested-quote-powershell "$D" "escaped quotes inside -Command"
 
+# ---------------------------------------------------------------- L9 shutdown --wait kills
+D="$TMP/l9"; mk "$D"
+printf '#!/bin/bash\n# a COMMENT naming qvm-shutdown --wait must NOT fire\ntimeout 300 qvm-shutdown --wait "$VM"\n' > "$D/mgmt/harness/bad.sh"
+expect_fires L9-shutdown-wait-kills "$D" "timeout 300 qvm-shutdown --wait (kills at 60)"
+
 # ---------------------------------------------------------------- L4 check that cannot fail
 D="$TMP/l4"; mk "$D"
 cat > "$D/mgmt/harness/bad.sh" <<'EOS'

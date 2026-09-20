@@ -23,6 +23,7 @@
 #   mgmt/harness/sg1-u2-coldboot.sh <vm> [outdir]
 #
 # Exit 0 = graded PASS. 1 = a cell failed or was void. 2 = precondition not established.
+. "$(dirname "$0")/shutdown-lib.sh"
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 require_scripts(){ local m=""; for s in "$@"; do [ -f "$s" ] || m="$m $s"; done
@@ -83,9 +84,9 @@ BOOT_BEFORE=$(bootid); log "  LastBootUpTime before: ${BOOT_BEFORE:-unknown}"
 # RESULT block at all - which is exactly what happened on the first attempt.
 log "  arming U2 (wu-boot-acceptance-arm.ps1) before the reboot"
 T=300 q pushrun guest/wu-boot-acceptance-arm.ps1 2>/dev/null | tr -d '\r' | grep -aE '^(ARMED|=== RESULT|\{)' | head -2 | sed 's/^/    /'
-timeout -k 10 320 qvm-shutdown --wait --timeout 260 "$VM" >/dev/null 2>&1; sleep 4
+qwt_shutdown "$VM" 600; sleep 4
 st=$(qvm-ls --raw-data --fields STATE "$VM" | tail -1)
-[ "$st" = Halted ] || { log "FATAL: $VM is $st after qvm-shutdown --wait; this cell REQUIRES a cold boot"; exit 2; }
+[ "$st" = Halted ] || { log "FATAL: $VM is $st after a clean shutdown request; this cell REQUIRES a cold boot"; exit 2; }
 log "  guest is Halted - the shutdown took"
 timeout -k 10 200 qvm-start "$VM" >/dev/null 2>&1 & disown
 

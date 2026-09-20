@@ -15,6 +15,7 @@
 #
 # The run id must be a `release-package` workflow run: that is the only workflow that produces a
 # full installable setup tree. `build` produces an overlay and is NOT a release package.
+. "$(dirname "$0")/../mgmt/harness/shutdown-lib.sh"
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
@@ -160,7 +161,7 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
   say "settling the rig before the feature tests"
   for vm in $(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}'); do
     say "  shutting down $vm (left running by the campaign)"
-    qvm-shutdown --wait --timeout 180 "$vm" >/dev/null 2>&1 || qvm-kill "$vm" >/dev/null 2>&1
+    qwt_shutdown "$vm" 600 || { say "  $vm did not halt in 600s - killing it; the next clone from its volume may be dirty"; timeout 60 qvm-kill "$vm" >/dev/null 2>&1; }
   done
   for i in $(seq 1 40); do
     busy=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' '$1 ~ /^win1/ && $2!="Halted"{print $1}' | tr '\n' ' ')

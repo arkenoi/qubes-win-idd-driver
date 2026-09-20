@@ -55,6 +55,7 @@
 #
 # Each cell states its own verdict. Cells are selected with CELLS="..." and run SERIALLY -
 # concurrent VM-mutating jobs reboot each other, which has destroyed results here before.
+. "$(dirname "$0")/shutdown-lib.sh"
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 # e2e-lib.sh hard-stops if QTEST_VM is unset, deliberately: a DEFAULT target once routed a whole
@@ -154,7 +155,9 @@ _halt_other_windows(){ # $1=the guest this cell is about to use
   for v in $(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | grep -E '^win1' | grep -v '|Halted' | cut -d'|' -f1); do
     [ "$v" = "$keep" ] && continue
     say "  H3.6: halting $v before working on $keep"
-    qvm-shutdown --wait --timeout 300 "$v" >/dev/null 2>&1
+    # ACPI only, and NOTHING here kills: `--wait --timeout 300` was a kill AT 300 (see
+    # shutdown-lib.sh), i.e. this guard violated the rule its own comment states.
+    qwt_shutdown "$v" 300
     # POLL; do not trust qvm-shutdown's own wait. Measured 2026-09-10 (4.3.26 campaign): it returned
     # after ~60 s on a Windows AppVM that needed longer, this guard WARNED and then proceeded into
     # the prime-run refusal it had just predicted ("TERMINAL: refusing, these are not Halted:

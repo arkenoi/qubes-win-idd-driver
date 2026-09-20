@@ -15,6 +15,7 @@
 # It copies volumes, the prefs that decide whether a Windows HVM can boot at all (a fresh qube's
 # defaults are Linux-shaped - without virt_mode=hvm and an EMPTY kernel the guest never reaches its
 # own bootloader), and the features dom0 uses to decide how to talk to it.
+. "$(dirname "$0")/harness/shutdown-lib.sh"
 set -u
 
 SRC="${1:?usage: $0 <src> <dst>}"
@@ -32,7 +33,7 @@ CLASS=$(qvm-ls --raw-data --fields class "$SRC" 2>/dev/null)
 
 if qvm-check "$DST" >/dev/null 2>&1; then
     log "removing existing $DST"
-    timeout 120 qvm-shutdown --wait "$DST" >/dev/null 2>&1
+    qwt_shutdown "$DST" 600 || { log "$DST did not halt in 600s - killing it (it is being removed anyway)"; timeout 60 qvm-kill "$DST" >/dev/null 2>&1; }
     timeout 300 qvm-remove -f "$DST" >/dev/null 2>&1 || { log "FAIL: could not remove $DST"; exit 1; }
 fi
 

@@ -294,6 +294,34 @@ NOT_LINTED = [
 ]
 
 
+# --------------------------------------------------------------------------- L9
+def l9_no_shutdown_wait() -> None:
+    """`qvm-shutdown --wait` is a KILL ON A TIMER, not a wait. From qubesadmin 4.3.33:
+
+        parser.add_argument('--timeout', ..., default=60,
+            help='timeout after which domains are killed when using --wait')
+
+    So the bare form hard-kills a Windows guest 60 s in, and `timeout 300 qvm-shutdown --wait`
+    does NOT buy 300 s - the kill lands at 60, inside the wrapper, silently, with rc=0.
+
+    Measured 2026-09-20 across ten call sites: every poll loop written UNDER one of these was
+    dead code (the guest was already dead when the loop started), stability-e2e.sh's comment
+    promised "8 min covers a guest applying updates", matrix.sh's guard killed while its own
+    comment said "ACPI only - a killed guest leaves a dirty volume", and seal-qwt-golden.sh
+    sealed a GOLDEN from a killed guest, which every clone then inherits.
+
+    Use mgmt/harness/shutdown-lib.sh's qwt_shutdown, which asks and then polls and never kills.
+    A mention in a comment is not a call (see L2)."""
+    for f in HARNESS:
+        for i, ln in enumerate(f.read_text(errors="replace").splitlines(), 1):
+            if not ln.lstrip() or ln.lstrip().startswith("#"):
+                continue
+            if re.search(r"qvm-shutdown\b[^|;&]*--wait", ln):
+                finding("L9-shutdown-wait-kills", f"{f.name}:{i}",
+                        "`qvm-shutdown --wait` KILLS after --timeout (default 60s); "
+                        "use qwt_shutdown from mgmt/harness/shutdown-lib.sh")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
@@ -319,6 +347,7 @@ def main() -> int:
     l5_injector_string_collision()
     l6_probe_null_deref()
     l8_findings_current_state()
+    l9_no_shutdown_wait()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

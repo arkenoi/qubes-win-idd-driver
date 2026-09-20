@@ -8,6 +8,7 @@
 #
 #   mgmt/teardown-campaign-fixtures.sh          # dry run: list, size, and reason
 #   mgmt/teardown-campaign-fixtures.sh --go     # actually remove
+. "$(dirname "$0")/harness/shutdown-lib.sh"
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 GO=0; [ "${1:-}" = --go ] && GO=1
@@ -83,7 +84,7 @@ for v in "${targets[@]}"; do
   st=$(qvm-ls --raw-data --fields STATE "$v" 2>/dev/null | tail -1)
   if [ "$st" != Halted ]; then
     echo "  $v is $st - shutting down first"
-    timeout -k 10 320 qvm-shutdown --wait --timeout 260 "$v" >/dev/null 2>&1
+    qwt_shutdown "$v" 600
   fi
   if timeout -k 10 300 qvm-remove -f "$v" >/dev/null 2>&1; then
     echo "  removed $v"

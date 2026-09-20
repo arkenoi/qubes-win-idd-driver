@@ -18,6 +18,7 @@
 # itself, which is ordinary product behaviour on every boot.
 #
 #   mgmt/harness/u2-coldboot.sh <template-vm> [outdir]
+. "$(dirname "$0")/shutdown-lib.sh"
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 require_scripts(){ local m=""; for s in "$@"; do [ -f "$s" ] || m="$m $s"; done
@@ -72,7 +73,7 @@ bootid(){ psrun 'Write-Output (Get-CimInstance Win32_OperatingSystem).LastBootUp
 B0=$(bootid); log "  LastBootUpTime before: ${B0:-unknown}"
 
 log "=== COLD BOOT ==="
-timeout -k 10 320 qvm-shutdown --wait --timeout 260 "$VM" >/dev/null 2>&1; sleep 4
+qwt_shutdown "$VM" 600; sleep 4
 [ "$(qvm-ls --raw-data --fields STATE "$VM" | tail -1)" = Halted ] || { log "FATAL: $VM did not halt"; exit 2; }
 timeout -k 10 200 qvm-start "$VM" >/dev/null 2>&1 & disown
 sleep 45

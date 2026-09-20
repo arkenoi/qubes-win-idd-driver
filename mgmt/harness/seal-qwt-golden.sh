@@ -10,6 +10,7 @@
 #
 # Refresh whenever the dev line bumps (the golden must stay strictly below dev's ProductVersion so
 # the upgrade is a fast MajorUpgrade, not an uninstall-first). This is a rig op; run it serially.
+. "$(dirname "$0")/shutdown-lib.sh"
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$HERE" || exit 1
 OS="${1:?usage: seal-qwt-golden.sh <win10|win11> <release-setup-dir>}"
@@ -49,7 +50,10 @@ qvm-device block detach "$GOLD" "win-idd-mgmt:${stickloop:-loop0}" >/dev/null 2>
 qvm-features --unset "$GOLD" qemu-extra-args 2>/dev/null || true
 # make sure it is Halted (prime leaves it running or halted depending on the job)
 st=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$GOLD" '$1==v{print $2}')
-[ "$st" = Halted ] || { qvm-shutdown --wait "$GOLD" >/dev/null 2>&1 || qvm-kill "$GOLD" >/dev/null 2>&1; }
+# NEVER kill here: whatever state a kill leaves behind gets SEALED into the golden and is
+# then inherited by every clone made from it. A golden that will not stop cleanly is a
+# finding, not a thing to seal.
+[ "$st" = Halted ] || qwt_shutdown "$GOLD" 1800 || { echo "FAIL: $GOLD did not shut down cleanly in 1800s - refusing to seal a golden from a killed guest"; exit 1; }
 
 # SEAL it as a proper golden (mgmt/goldens/<vm>.json) - prime-run REQUIRES `golden.sh verify` to
 # pass on its base, a fixture record is not enough.

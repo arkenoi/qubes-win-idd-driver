@@ -9,6 +9,7 @@
 # qvm-clone in one shot FAILS on this testbed: policy is tag-based, and qvm-clone creates
 # the qube and copies volumes into it BEFORE the tags are applied, so the volume call hits
 # a qube policy does not yet cover. Create, tag, then copy - that order satisfies policy.
+. "$(dirname "$0")/harness/shutdown-lib.sh"
 set -u
 HINT_NETVM=""
 SRC="${1:?usage: $0 <src-standalone> <new-template> <new-appvm>}"
@@ -25,7 +26,7 @@ state() { qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
 for v in "$APP" "$TPL"; do
     if qvm-check "$v" >/dev/null 2>&1; then
         log "removing existing $v"
-        timeout 120 qvm-shutdown --wait "$v" >/dev/null 2>&1
+        qwt_shutdown "$v" 600
         timeout 300 qvm-remove -f "$v" >/dev/null 2>&1 || { log "FAIL: could not remove $v"; exit 1; }
     fi
 done
@@ -203,7 +204,7 @@ prime_latch() {
     qvm-start "$vm" >/dev/null 2>&1
     wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec on its settle boot"; return 1; }
     sleep 90
-    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1 || { log "FAIL: settle boot did not shut down cleanly"; return 1; }
+    qwt_shutdown "$vm" 1800 || { log "FAIL: settle boot did not shut down cleanly"; return 1; }
 
     log "installer boot"
     qvm-start "$vm" >/dev/null 2>&1
@@ -221,7 +222,7 @@ prime_latch() {
     # "unreadable" belief was a P/Invoke marshaling bug; see guest/qubesdb-read.ps1). This template
     # therefore needs no class/identity stamp: it, and any AppVM derived from it, are classified
     # correctly at every updater run. Nothing to seed here anymore.
-    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1 || { log "FAIL: clean shutdown after seeding"; return 1; }
+    qwt_shutdown "$vm" 1800 || { log "FAIL: clean shutdown after seeding"; return 1; }
 
     # The consume->re-arm cycle must be PROVEN on this template, not assumed: boot once more,
     # confirm the boot task re-wrote NICS=1 (xen.sys consumed it seconds into the boot), then
@@ -250,10 +251,10 @@ prime_latch() {
             *'scan: '*update*) log "  updater scan ok: ${scanout#*] }" ;;
             *)  log "WARNING: updater scan did not complete (${scanout:-no scan output})."
                 log "         Dom0-driven updates may not work on this deployment (proxy policy?)."
-                [ "${UPDATE_SCAN:-soft}" = hard ] && { timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1; return 1; } ;;
+                [ "${UPDATE_SCAN:-soft}" = hard ] && { qwt_shutdown "$vm" 1800; return 1; } ;;
         esac
     fi
-    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    qwt_shutdown "$vm" 1800
     if ! latch_ok "$rb"; then
         log "FAIL: latch readback after a full boot cycle: ${rb:-<unreachable>}"
         log "      (need nics:1 + vif_enum_key:true + task_main:true) Template would ship latched-broken. Not shipping it."
@@ -296,7 +297,7 @@ install_patched_xenvif() {
         return 0
     fi
     log "installing patched xenvif from $pkg"
-    [ "$(state "$vm")" = Halted ] || timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    [ "$(state "$vm")" = Halted ] || qwt_shutdown "$vm" 1800
     wait_halted "$vm" 300 || return 1
     qvm-start "$vm" >/dev/null 2>&1
     wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec for the xenvif install"; return 1; }
@@ -349,7 +350,7 @@ install_patched_xenvif() {
         return 1
     fi
     log "  patched xenvif installed and verified in the DriverStore (sha256 match)"
-    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    qwt_shutdown "$vm" 1800
 }
 
 scrub_net_identity() {
@@ -370,7 +371,7 @@ scrub_net_identity() {
     local vm="$1"
     log "scrubbing network identity from $vm (offline)"
     qvm-prefs "$vm" netvm '' >/dev/null 2>&1
-    [ "$(state "$vm")" = Halted ] || timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    [ "$(state "$vm")" = Halted ] || qwt_shutdown "$vm" 1800
     wait_halted "$vm" 300 || return 1
     qvm-start "$vm" >/dev/null 2>&1
     wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec for the scrub boot"; return 1; }
@@ -477,7 +478,7 @@ PS
         | timeout 120 qrexec-client-vm "$vm" qubes.VMShell 2>/dev/null | tr -d '\0' | grep -qE 'NICS.*0x1' \
         && log "  latch re-armed after the scrub boot (NICS=1)" \
         || { log "FAIL: could not re-arm the unplug latch after the scrub"; return 1; }
-    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    qwt_shutdown "$vm" 1800
     [ -n "$residue" ] || { log "FAIL: scrub verification produced no reading from $vm"; return 1; }
     [ "$residue" = 0 ] || { log "FAIL: $residue network-identity item(s) survived the scrub"; return 1; }
     log "  verified: no lease, no static DNS, no NetworkList profile, DHCP off on every interface"
@@ -496,7 +497,7 @@ prime_pv_nic() {
     qvm-prefs "$vm" netvm '' >/dev/null 2>&1
     qvm-start "$vm" >/dev/null 2>&1
     wait_alive "$vm" 420 || { log "FAIL: $vm never answered qrexec on its offline settle boot"; return 1; }
-    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    qwt_shutdown "$vm" 1800
 
     log "installing PV network device on $vm via $net (all traffic blocked)"
     qvm-prefs "$vm" netvm "$net" || return 1
@@ -518,11 +519,11 @@ prime_pv_nic() {
         done
         log "  boot $boot: PV NIC problem code = ${prob:-<unreachable>}"
         [ "$prob" = 0 ] && break
-        timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1 || qvm-kill "$vm" >/dev/null 2>&1
+        qwt_shutdown "$vm" 1800 || { log "FAIL: $vm did not halt between PV-NIC boots - refusing to kill a guest that is about to become a template"; return 1; }
         wait_halted "$vm" 120 || true
     done
 
-    timeout 300 qvm-shutdown --wait "$vm" >/dev/null 2>&1
+    qwt_shutdown "$vm" 1800
     qvm-prefs "$vm" netvm '' || true
     qvm-firewall "$vm" reset >/dev/null 2>&1
 

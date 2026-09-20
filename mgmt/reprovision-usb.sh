@@ -8,6 +8,7 @@
 #   e.g. mgmt/reprovision-usb.sh win10-clean loop0 loop9
 # Build the stick first: mgmt/build-answer-stick.sh (keep SIZE_MB constant so the loop
 # device's cached capacity stays valid - it is rewritten in place, no root needed).
+. "$(dirname "$0")/harness/shutdown-lib.sh"
 set -u
 VM="${1:?usage: $0 <vm> <iso-loop> <stick-loop>}"
 ISOLOOP="${2:?}"
@@ -36,8 +37,7 @@ log "answer stick verified: /dev/$STICKLOOP -> $backing ($actual bytes)"
 
 if [ -n "$(state)" ]; then
     log "shutting down $VM"
-    timeout 200 qvm-shutdown --wait "$VM" >/dev/null 2>&1
-    for _ in $(seq 1 40); do [ "$(state)" = Halted ] && break; sleep 5; done
+    qwt_shutdown "$VM" 600
     [ "$(state)" = Halted ] || { log "force kill"; timeout 60 qvm-kill "$VM" >/dev/null 2>&1; sleep 5; }
     # Clean slate: the disk must be EMPTY or SeaBIOS falls through to a diskless boot.
     log "removing $VM"

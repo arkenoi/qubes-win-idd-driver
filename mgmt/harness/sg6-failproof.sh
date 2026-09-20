@@ -44,6 +44,7 @@
 #
 # Exit 0 = the checker went RED as required (fail-proof earned). 1 = it did NOT go red. 2 = could
 # not run, or the subject did not come back (reported loudly, with the repair commands).
+. "$(dirname "$0")/shutdown-lib.sh"
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 VM="${1:?usage: $0 <standalone-vm>}"
@@ -80,7 +81,7 @@ boot_and_wait(){
   done
   return 1
 }
-shutdown_now(){ timeout -k 10 320 qvm-shutdown --wait --timeout 260 "$VM" >/dev/null 2>&1; sleep 5; }
+shutdown_now(){ qwt_shutdown "$VM" 600; sleep 5; }
 
 # "<count>|<capture_ok>" - capture_ok annotates, it never decides (rule 2).
 windows_mapped(){

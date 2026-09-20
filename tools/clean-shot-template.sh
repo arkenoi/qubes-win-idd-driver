@@ -15,6 +15,7 @@
 #   6. the next boot COMMITS the servicing - the build number must MOVE
 #
 # Usage: clean-shot-template.sh [source-qube] [template-name]
+. "$(dirname "$0")/../mgmt/harness/shutdown-lib.sh"
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 
@@ -27,8 +28,8 @@ die() { el; echo "FAILED: $*"; exit 1; }
 echo "=== clean shot: $SRC -> $TPL ==="
 
 el; echo "halting both qubes"
-qvm-shutdown --wait "$TPL" 2>/dev/null
-qvm-shutdown --wait "$SRC" 2>/dev/null
+qwt_shutdown "$TPL" 600 || echo "  WARNING: $TPL did not halt in 600s"
+qwt_shutdown "$SRC" 600 || echo "  WARNING: $SRC did not halt in 600s"
 
 el; echo "removing the old template"
 qvm-remove -f "$TPL" 2>&1 | tail -1
