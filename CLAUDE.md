@@ -46,6 +46,7 @@ interleaved:
 | Screenshot | `tools/qtest shot out.tar` → tar of PNGs of the VM's windows (dom0 service, this VM only) |
 | Signing | CI test-signs with a throwaway cert (secrets already set); guest trusts it via `guest/firstboot-setup.ps1` |
 | Agent fork | `agent/` submodule; `upstream` remote = QubesOS. Commit there, bump submodule here |
+| Judge it | `tools/jev.py` — TypeSafe/Jev. **Delegate every SEMANTIC judgment to it** (which failure class, final vs transient, which candidate cause, is this draft load-bearing); exact matching, counting and timestamp joins stay in code. See `.claude/skills/jev/SKILL.md`. Low confidence is a FINDING; the wire log is the receipt |
 
 **Hard rules:**
 - **You control every qube TAGGED `win-idd-testbed`, and you may CREATE more.** (Corrected
@@ -252,13 +253,23 @@ file pushed via qrexec; later: xenstore/qubesdb), dirty-rect-limited processing 
 swapchain loop, hardware cursor enablement, measured comparison vs Basic Display Adapter
 baseline using 1A's harness + ddaprobe.
 
-## Track C — Windows update reporting/management: NOT IN THIS REPO
+## Track C — Windows update management: IN THIS REPO, a first-class deliverable
 
-Windows-update integration (`qubes.NotifyUpdates` reporting, a `qubes.WindowsUpdate` guest
-service, a `qvm-windows-update` dom0 wrapper) is a **Qubes Windows Tools** concern and has
-nothing to do with the indirect display driver. It is tracked separately and deliberately
-kept out of this repository so the scope here stays: Track A (gui-agent performance) and
-Track B (the IddCx display driver). Do not add Track C code or docs here.
+(Corrected 2026-09-17. This section said "NOT IN THIS REPO ... do not add Track C code or docs
+here" from 2026-07-30 until tonight, while the repo carried the entire updater for weeks and the
+owner had to ask "what the actual fuck does it say about track C". Stale binding text is how the
+xenbus and Win10 dead ends got re-derived; this one was worse because it was in the binding file.)
+
+Track C is the dom0-owned Windows update path for netvm-less guests and it lives HERE:
+`guest/qubes-windows-update.ps1` (the pass), `guest/wu-update.ps1` (the Qube Manager /
+`qubes-vm-update` handler), `guest/qubes-updates-relay.cs` (the allowlisted HTTP relay over
+qrexec), `guest/install-updater-agent.ps1`, the scan/availability tasks, autologon re-assertion,
+and dom0's updates-available reporting. Record: `findings/updates.md` (standing facts and
+retracted approaches), `findings/issues.md` (the open P1s on the reporter's update path), the
+memory notes `updater-agent-north-star` and `updates-dom0-owned-guest-au-off`. Guest auto-update
+is OFF (NoAutoUpdate=1); dom0 drives every install; the relay serves sanctioned hosts or refuses
+with a final 403, never a transient answer (owner rule, 2026-09-17, no timeouts). Win10 22H2 ESU
+items are informational by design - see RETIRED AND PARKED LINES below.
 
 ## Phase 3 — integration/protocol work
 
@@ -364,6 +375,30 @@ Currently qualifying under the exception (see `DESIGN-gui-daemon-restart-surviva
   main loop keeps dereferencing it).
 NOT qualifying (ours, stays in the fork): everything in `agent/` — `aaa8c37`, `66fc670`,
 `d6ab61c`, `98eed30`, the wild-pointer fix, the mask sort, the framebuffer invalidation.
+
+## RETIRED AND PARKED LINES — binding, because memory notes failed at this three times
+
+A memory note is background context and was walked past every time. This list is an instruction.
+**Before naming ANY component as a cause or a gap, run `git log --oneline -S<name> -- .` and read the
+newest commits FIRST.** A line the owner has retired is closed until the owner reopens it in writing.
+
+- **xenbus (the bucket-lock patch).** Built and shipped f68bd22 (2026-09-11), A/B'd a056cd6,
+  PARKED 8376f69 (2026-09-13: the wedge recurred on the patched driver; the lead moved to a defect in
+  OUR install path that orphans the agent's grants across PV-driver re-enumeration), REVERTED
+  ENTIRELY f7c16ce (2026-09-14). Owner, verbatim: "we do not touch xenbus anymore, this change was
+  reverted." Stock xenbus 9.1.0.0 in a guest is the INTENDED state, not a packaging gap. Re-derived
+  by me on 2026-09-17 anyway, hours lost, owner: "xenbus my ass". Do not name xenbus in a finding.
+- **Win10 22H2 parked updates (record: `findings/updates.md` lines 23-25, verified 2026-08-20).**
+  Win10 22H2 is end-of-life. Its "missing" updates are PARKED AS INFORMATIONAL BY DESIGN, not a
+  bug: KB5071959 is a WU-only express phantom out-of-band update with no security content,
+  terminally classified, never chased; the real 2025-11 security CU KB5068781 resolves from the
+  catalog and its ONLY gate is CBS ESU entitlement, which is the owner's MAK/licensing decision.
+  Get-ServicingNotice reports these as severity=info, excluded from the actionable count and from
+  dom0's updates-available marker. Also RETRACTED and dead there: express-URL harvesting, NLA/NCSI
+  flipping, the KM-TEST loopback adapter, "checkpoint-cumulative" as the Win10 catalog-gap cause.
+  I re-opened this parked line as if it were a defect and burned a budget on it (owner,
+  2026-09-17: "like you did with fucking win10 parked updates"). A Win10 22H2 guest reporting
+  0 actionable updates with ESU items as info is CORRECT. Do not chase it.
 
 ## Escalate to the user when
 
