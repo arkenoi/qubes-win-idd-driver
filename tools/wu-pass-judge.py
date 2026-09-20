@@ -187,12 +187,21 @@ def main():
     for p in contradictory:
         fails.append("CONTRADICTORY pass at %s: reported %d to dom0 AND logged %s"
                      % (p["t"], p["reported"], "; ".join(p["errors"])[:60]))
+    # dom0's `updates-available` is a FLAG, not a count: it reads empty/0 for "none" and 1 for
+    # "some", whatever number the guest reported. Comparing it to the guest's count produced a
+    # FALSE FAIL on 2026-09-20 (guest reported 6, dom0 held 1, called a disagreement) and a PASS
+    # one round earlier only because the count happened to BE 1. Compare PRESENCE, which is the
+    # only thing the two sides actually agree to talk about. (# GUARD:dom0flag)
     if a.dom0_reported is not None:
+        dom0_has = a.dom0_reported > 0
         if facts["last_reported"] is None:
-            fails.append("DISAGREEMENT: dom0 holds %d but no pass in this log ever reported" % a.dom0_reported)
-        elif a.dom0_reported != facts["last_reported"]:
-            fails.append("DISAGREEMENT: dom0 holds %d, the last pass reported %d"
-                         % (a.dom0_reported, facts["last_reported"]))
+            if dom0_has:
+                fails.append("DISAGREEMENT: dom0 says updates are available but no pass in this log ever reported")
+        else:
+            guest_has = facts["last_reported"] > 0
+            if dom0_has != guest_has:
+                fails.append("DISAGREEMENT: dom0 says %s, the last pass reported %d update(s)"
+                             % ("updates ARE available" if dom0_has else "NO updates", facts["last_reported"]))
 
     if not a.no_judge and errored:
         key = load_key()

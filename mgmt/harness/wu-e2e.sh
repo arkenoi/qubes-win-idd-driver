@@ -88,6 +88,11 @@ log "updates proxy OK (egress proven, http=$pcode)"
 fails=0
 for r in $(seq 1 "$ROUNDS"); do
   RD="$OUT/round$r"; mkdir -p "$RD"
+  # Rounds are independent passes, not a burst. Fired back to back they hammer qrexec - measured
+  # 2026-09-20, round 3 started 5 s after round 2 and EVERY replay step came back rc=46, i.e. no
+  # pass ran at all. This is a settle between independent passes, not a timeout standing in for a
+  # fix: nothing in the field runs two update passes five seconds apart.
+  if [ "$r" -gt 1 ]; then log "settling ${SETTLE:-60}s before round $r"; sleep "${SETTLE:-60}"; fi
   before=$(dom0_avail); log "round $r: dom0 updates-available BEFORE='${before:-<empty>}'"
 
   if ! wait_qrexec 900; then
@@ -97,14 +102,32 @@ for r in $(seq 1 "$ROUNDS"); do
     wait_qrexec 900 || { log "round $r: guest never came up"; fails=1; break; }
   fi
 
+  # agent.log is CUMULATIVE - it carries every pass this image has ever run, including the
+  # golden's history. Judging the whole file each round re-judges the past and lets an old pass
+  # decide this round's verdict. Snapshot it BEFORE, and judge only what this round appended.
+  guest_file 'C:\ProgramData\Qubes\wu\agent.log' > "$RD/agent-before.log"
+
   log "round $r: driving a pass the Qube Manager way (replay-dom0-update.py --with-entrypoint)"
   timeout -k 20 3600 python3 tools/replay-dom0-update.py "$VM" --with-entrypoint \
       > "$RD/replay.out" 2>&1
   rc=$?
+  # replay-dom0-update.py reports each STEP's rc in its output but exits 0 regardless, so its
+  # exit code is not a verdict. Measured 2026-09-20: every step returned rc=46 and the driver
+  # still logged "replay rc=0" and judged a round in which no pass had run at all.
+  if grep -q -- '<-- UNEXPECTED' "$RD/replay.out"; then
+    log "round $r: INSTRUMENT - the dom0 replay's own steps failed, so NO pass ran; not a result"
+    grep -- '<-- UNEXPECTED' "$RD/replay.out" | sed 's/^/    /' | head -6 | tee -a "$OUT/run.log"
+    fails=1; break
+  fi
   log "round $r: replay rc=$rc (dom0 contract: 0 ok, 100 no updates, else error)"
 
-  guest_file 'C:\ProgramData\Qubes\wu\agent.log'        > "$RD/agent.log"
-  guest_file 'C:\ProgramData\Qubes\wu\update-status.json' > "$RD/update-status.json"
+  guest_file 'C:\ProgramData\Qubes\wu\agent.log'        > "$RD/agent-after.log"
+  # The delta is what this round did. comm needs sorted input, so use the line count instead:
+  # the log only ever grows, so everything past the before-snapshot's length is this round's.
+  bl=$(wc -l < "$RD/agent-before.log" 2>/dev/null || echo 0)
+  tail -n +$((bl + 1)) "$RD/agent-after.log" > "$RD/agent.log"
+  log "round $r: agent.log grew by $(wc -l < "$RD/agent.log") line(s)"
+  guest_file 'C:\ProgramData\Qubes\update-status.json'  > "$RD/update-status.json"
   guest_file 'C:\ProgramData\Qubes\vmupdate-shim.log'   > "$RD/vmupdate-shim.log" 2>/dev/null
 
   after=$(dom0_avail); log "round $r: dom0 updates-available AFTER='${after:-<empty>}'"
