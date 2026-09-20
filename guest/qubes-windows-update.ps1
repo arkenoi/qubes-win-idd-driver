@@ -456,7 +456,7 @@ function Get-EmbeddedAppx {
 # <PackageDependency> entries naming them. No filename matching, no size ordering.
 function Install-EmbeddedAppx {
     param([string]$ExePath, [string]$WorkRoot)
-    $res = [ordered]@{ attempted = $false; count = 0; ok = $false; detail = '' }
+    $res = [ordered]@{ attempted = $false; count = 0; ok = $false; detail = ''; mainVersion = $null }
     try {
         $dir = Join-Path $WorkRoot ('appx-' + [IO.Path]::GetFileNameWithoutExtension($ExePath))
         Remove-Item $dir -Recurse -Force -EA SilentlyContinue
@@ -482,6 +482,7 @@ function Install-EmbeddedAppx {
             if ($isFw) { $deps += $pk.Path } else { $main += $pk.Path }
         }
         if ($main.Count -ne 1) { $res.detail = "expected exactly one non-framework package, found $($main.Count)"; return $res }
+        $res.mainVersion = @($pkgs | Where-Object { $_.Path -eq $main[0] } | Select-Object -First 1).Version
         if ($deps.Count -gt 0) { Add-AppxProvisionedPackage -Online -PackagePath $main[0] -DependencyPackagePath $deps -SkipLicense -EA Stop | Out-Null }
         else                   { Add-AppxProvisionedPackage -Online -PackagePath $main[0] -SkipLicense -EA Stop | Out-Null }
         $res.ok = $true; $res.detail = "provisioned $([IO.Path]::GetFileName($main[0])) with $($deps.Count) dependency package(s)"
@@ -1237,6 +1238,7 @@ function Install-SelfContained($kb,$urls){
       #
       # Gated to the ONE probe whose effect we can measure. A fallback whose result cannot be
       # verified must not fire silently (fallbacks are anomalies: they are logged loudly).
+      $alreadyCurrent = $false
       if($probe -eq 'security-platform' -and $probeRan -and -not $eff -and $p.ExitCode -eq 0){
         $ax = Install-EmbeddedAppx -ExePath $dst -WorkRoot $WorkDir
         if($ax.attempted){
@@ -1254,7 +1256,20 @@ function Install-SelfContained($kb,$urls){
             try{ $itA3=Get-Item 'C:\Windows\System32\SecurityHealthService.exe' -EA SilentlyContinue; if($itA3){ $shAfter="$shAfter|" + $itA3.VersionInfo.ProductVersion } }catch{}
             # The EFFECT is still the only thing that counts - a successful call is not a result.
             if($shAfter -ne $shBefore){ $eff=$true; Log ("    security platform moved $shBefore -> $shAfter (SecHealthUI|provisioned)") }
-            else { Log ("    provisioning reported success but NOTHING MOVED - still not actionable-clean") }
+            else {
+              # NOTHING MOVED - which is success or failure depending on a fact we can check: the
+              # version the PAYLOAD carries, read from its own manifest. If the image is already at
+              # it there was genuinely nothing to do, which is exactly what a SECOND pass sees once
+              # this fallback has provisioned it while Windows Update keeps offering the same
+              # revision. Measured 2026-09-21: without this, a pass that had succeeded an hour
+              # earlier reported the very same item as a failed install.
+              if($ax.mainVersion -and $prA3 -and ([string]$prA3.Version) -eq [string]$ax.mainVersion){
+                $alreadyCurrent = $true
+                Log ("    nothing moved, and the image is ALREADY at the version this offer carries ($($ax.mainVersion))")
+              } else {
+                Log ("    provisioning reported success but NOTHING MOVED, and the image is not at the offered version")
+              }
+            }
           }
         }
       }
@@ -1293,9 +1308,26 @@ function Install-SelfContained($kb,$urls){
           # at "updates available" forever - but dom0's job is to report the TRUTH (ADR section 2),
           # and the truth is that this update is outstanding. Making dom0 look settled by calling a
           # failure benign is the field report's untruth wearing a different hat.
-          $ok=$false
-          $why='installer exited 0 but the probe measured no change - this update did NOT install'
-          Log ("  $name : exe rc=0 $detail -> FAILED ($why)")
+          # NARROWED 2026-09-21, and this matters in BOTH directions. The rule above is right only
+          # where we can establish what the offer CARRIES. Where we can (the appx payload declares
+          # its version), "not at it and nothing moved" is a failure and "already at it" is simply
+          # done. Where we cannot - a Defender signature, say - asserting a failure turned an
+          # already-current item into a permanent "updates available", which is the very defect
+          # this file exists to prevent, re-introduced by me from the other side. So: assert
+          # neither, report it, and keep it out of dom0's count.
+          if($alreadyCurrent){
+            $ok=$true
+            $why='the image is already at the version this offer carries - nothing to do'
+            Log ("  $name : exe rc=0 $detail -> ALREADY CURRENT ($why)")
+          } elseif($probe -eq 'security-platform'){
+            $ok=$false
+            $why='installer exited 0 but the probe measured no change - this update did NOT install'
+            Log ("  $name : exe rc=0 $detail -> FAILED ($why)")
+          } else {
+            $sev='info'; $ok=$true
+            $why='installer exited 0 and changed nothing, and this probe cannot establish the version the offer carries - reported as informational rather than asserting an install or a failure'
+            Log ("  $name : exe rc=0 $detail -> NOT ACTIONABLE ($why)")
+          }
           if($probe -eq 'security-platform'){ Log ("    security platform stayed at $shBefore (SecHealthUI|SecurityHealthService)") }
         } else {
           Log ("  $name : exe rc=$($p.ExitCode) $detail -> FAILED (nonzero rc and the probe saw no effect)")

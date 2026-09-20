@@ -54,7 +54,10 @@ switch ($Defect) {
     # Re-introduces the classification corrected on 2026-09-20: a negative probe with rc=0 read as
     # "nothing to do on this image" instead of as a failed install. The two exe checks above must
     # then fail - that is what makes them evidence rather than decoration.
-    'infobenign'{ $exeRegion  = $exeRegion.Replace('$ok=$false', '$sev=''info''; $ok=$true') }
+    'infobenign'{ $exeRegion  = $exeRegion.Replace("`$ok=`$false`n            `$why='installer exited 0 but the probe measured no change", "`$sev='info'; `$ok=`$true`n            `$why='nothing to do on this image") }
+    # Treats every negative probe as a failure again - which is what made an already-current
+    # Defender signature a permanent 'updates available'.
+    'failall'   { $exeRegion  = $exeRegion.Replace("} else {`n            `$sev='info'; `$ok=`$true", "} else {`n            `$sev=`$null; `$ok=`$false") }
     # Ignores the offer identity entirely - the state before GUARD:offeridentity, where a scan
     # re-counted an offer the previous pass had resolved and proved.
     'satignore' { $scRegion = $scRegion.Replace('-and (& $notPriorSat $r)', '') }
@@ -63,7 +66,7 @@ switch ($Defect) {
     'satdrop'   { $scRegion = $scRegion.Replace('$script:St.satisfied = @($priorSat)', '') }
     'scanall'   { $scRegion = $scRegion -replace '\$reportCount = @\(\$avail \| Where-Object \{ \(& \$notPriorInfo \$_\) \}\)\.Count', '$reportCount = $avail.Count' }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign | satignore | satdrop)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign | satignore | satdrop | failall)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -80,7 +83,7 @@ function Check($label, $got, $want) {
 }
 
 # ---------- WU-EXE-EFFECT ----------
-function RunExe($probe, $probeRan, $eff, $rc) {
+function RunExe($probe, $probeRan, $eff, $rc, $alreadyCurrent = $false) {
     $p = [pscustomobject]@{ ExitCode = $rc }
     $name = 'securityhealthsetup_x.exe'; $shBefore = 'a|b'; $detail = ''
     $ok = $false; $sev = $null; $why = $null
@@ -98,6 +101,19 @@ $r = RunExe 'security-platform' $true $false 0
 # nothing moved is a FAILED INSTALL and stays actionable. (Jev: concealed-failure 0.87.)
 Check "exe: rc=0 + probe ran + no effect -> NOT informational (a silent failure)" $r.sev ''
 Check "exe: rc=0 + probe ran + no effect -> ok FALSE (nothing landed, so nothing succeeded)" $r.ok 'False'
+# NARROWED 2026-09-21, in both directions, and each case is checked separately.
+#  * ALREADY CURRENT: the payload declares the version the image already has, so nothing to do is
+#    a result, not a failure - this is what a second pass sees after the fallback provisioned it.
+$r = RunExe 'security-platform' $true $false 0 $true
+Check "exe: rc=0, nothing moved, but already AT the offered version -> ok TRUE" $r.ok 'True'
+Check "exe: ...and not laundered into 'info' either" $r.sev ''
+#  * NO WAY TO KNOW: a probe that cannot establish what the offer carries must assert NEITHER.
+#    Asserting a failure here turned an already-current Defender signature into a permanent
+#    "updates available" - the defect this file exists to prevent, from the other side.
+$r = RunExe 'defender-signature' $true $false 0
+Check "exe: probe cannot establish the offered version -> informational, not a failure" $r.sev 'info'
+Check "exe: ...and ok TRUE, so it stays out of dom0's count" $r.ok 'True'
+
 # A real failure must NOT be laundered into 'info'.
 $r = RunExe 'security-platform' $true $false 1603
 Check "exe: rc<>0 + probe ran + no effect -> NOT info (a real failure)" ([string]$r.sev) ''
