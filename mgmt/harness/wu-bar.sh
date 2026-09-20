@@ -31,9 +31,6 @@ cd "$(dirname "$0")/../.." || exit 2
 PKG="${3:-${PKG:?package dir: pass it as $3 or in PKG}}"
 PKGBYTES=$(wc -c < "$PKG/qubes-windows-update.ps1") || exit 2
 export QTEST_VM=$VM
-: "${QTEST_INCOMING:=C:\\Users\\gerd-test\\Documents\\QubesIncoming\\win-idd-mgmt}"
-export QTEST_INCOMING
-TREE="$QTEST_INCOMING\\qwt-improved-setup"
 
 source mgmt/harness/vmlock.sh
 source mgmt/harness/shutdown-lib.sh
@@ -57,17 +54,42 @@ if (Test-Path $p) { $c = Get-Content -Raw $p
 else { Write-Output "RESULT absent" }'
 inst(){ psrun "$INST_PS" | grep -E '^RESULT' | tail -1; }
 
-PUSHED_PS="\$f = \"$TREE\\qubes-windows-update.ps1\"
-if (Test-Path \$f) { Write-Output (\"PUSHED \" + (Get-Content -Raw \$f).Length) } else { Write-Output \"PUSHED absent\" }"
 
 [ "$(qstate)" = Halted ] && timeout 300 qvm-start "$VM" >/dev/null 2>&1
 wait_q 900 || { log "FAIL: no qrexec"; exit 1; }
+
+# DISCOVER QubesIncoming FROM THE GUEST. Never inherit it: QTEST_INCOMING is commonly exported in
+# a shell (and from ~/.bashrc) pointing at C:\Users\user\..., while this guest's account is
+# gerd-test. Measured 2026-09-20 on the first run of this file: the pre-push delete then targeted a
+# path that does not exist, `rmdir` reported nothing, and qvm-copy-to-vm refused with "a file named
+# qwt-improved-setup/msi/installer.msi already exists" - i.e. the delete silently missed and the
+# run would have graded the PREVIOUS build if the byte assertion had not stopped it.
+INC=$(psrun 'Get-ChildItem C:\Users -Directory -EA SilentlyContinue |
+  ForEach-Object { Join-Path $_.FullName "Documents\QubesIncoming\win-idd-mgmt" } |
+  Where-Object { Test-Path $_ } | ForEach-Object { "INC " + $_ }' | grep -E '^INC ' | sed 's/^INC //' | tr -d '\r')
+case "$(printf '%s' "$INC" | grep -c .)" in
+  1) : ;;
+  0) log "FAIL: no QubesIncoming\win-idd-mgmt on $VM - nothing was ever pushed here"; exit 1;;
+  *) log "FAIL: more than one QubesIncoming candidate, refusing to guess:"; printf '%s\n' "$INC" | sed 's/^/      /'; exit 1;;
+esac
+export QTEST_INCOMING="$INC"
+TREE="$INC\qwt-improved-setup"
+log "QubesIncoming on this guest: $INC"
+
+PUSHED_PS="\$f = \"$TREE\\qubes-windows-update.ps1\"
+if (Test-Path \$f) { Write-Output (\"PUSHED \" + (Get-Content -Raw \$f).Length) } else { Write-Output \"PUSHED absent\" }"
 log "installed BEFORE: $(inst)   package is $PKGBYTES bytes"
 
 if inst | grep -q "bytes=$PKGBYTES"; then
   log "installed script already matches the package ($PKGBYTES bytes) - skipping push+install"
 else
   timeout 200 tools/qtest run "cmd /c rmdir /s /q \"$TREE\"" >/dev/null 2>&1
+  # ASSERT the delete took. qvm-copy-to-vm silently refuses to overwrite, so a delete that missed
+  # means the installer runs the PREVIOUS tree and still prints INSTALL COMPLETE (ADR section 9).
+  case "$(timeout 120 tools/qtest run "cmd /c if exist \"$TREE\" (echo STILL_PRESENT) else (echo GONE)" 2>/dev/null | tr -d '\r' | grep -oE 'STILL_PRESENT|GONE' | tail -1)" in
+    GONE) : ;;
+    *) log "FAIL: could not remove the previous tree at $TREE - refusing to push over it"; exit 1;;
+  esac
   timeout 900 qvm-copy-to-vm "$VM" "$PKG" 2>&1 | tail -1
   pushed=$(psrun "$PUSHED_PS" | grep -E '^PUSHED' | tail -1)
   log "$pushed"
