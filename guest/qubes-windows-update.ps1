@@ -1245,6 +1245,13 @@ function Install-SelfContained($kb,$urls){
             $shAfter=''
             try{ $pkA3=Get-AppxPackage -AllUsers -Name Microsoft.SecHealthUI -EA SilentlyContinue | Select-Object -First 1; if($pkA3){ $shAfter=[string]$pkA3.Version } }catch{}
             try{ $prA3=Get-AppxProvisionedPackage -Online -EA SilentlyContinue | Where-Object { $_.DisplayName -like '*SecHealthUI*' } | Select-Object -First 1; if($prA3){ $shAfter="$shAfter|" + [string]$prA3.Version } }catch{}
+            # The re-probe must read the SAME artefacts IN THE SAME ORDER as $shBefore, or the
+            # comparison below is apples-to-oranges and reports a change that did not happen.
+            # Measured 2026-09-21: $shBefore was installed|provisioned|service (three fields) while
+            # this re-probe built only two, so `$shAfter -ne $shBefore` was ALWAYS true and the
+            # fallback would have certified itself even when nothing moved. It happened to be right
+            # on the run that exposed it, which is exactly how an unsound check survives.
+            try{ $itA3=Get-Item 'C:\Windows\System32\SecurityHealthService.exe' -EA SilentlyContinue; if($itA3){ $shAfter="$shAfter|" + $itA3.VersionInfo.ProductVersion } }catch{}
             # The EFFECT is still the only thing that counts - a successful call is not a result.
             if($shAfter -ne $shBefore){ $eff=$true; Log ("    security platform moved $shBefore -> $shAfter (SecHealthUI|provisioned)") }
             else { Log ("    provisioning reported success but NOTHING MOVED - still not actionable-clean") }
@@ -1858,7 +1865,7 @@ try {
         # measured reason, and it is what the row now says.
         Log "skip (no KB, no direct URL): $nokb - informational, no route from this path"
         $script:St.result += [ordered]@{ kb=$nokb; title=$nokb; ok=$true; state='not-actionable'; severity='info';
-                                         info_reason='offer carries no KB AND no self-contained URL: the catalog is keyed on KB so it cannot be resolved there, and there is no direct installer to fetch' }
+                                         info_reason='offer carries no KB and no self-contained URL, and THIS UPDATER resolves the catalog by KB only - so it has no route to fetch this item. The catalog itself DOES hold offers like this under their title (measured 2026-09-21: this exact item, with a downloadable .cab), so the gap is in our resolver, not in the catalog' }
         Save
         continue
         # ---- WU-NOKB-END
