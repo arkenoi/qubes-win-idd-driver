@@ -381,6 +381,116 @@ function Get-WuContentClass($u){
   return @{ class='none'; urls=@() }
 }
 
+# ---- WU-APPX-CARVE-BEGIN
+# A "self-contained" vendor installer may be a CONTAINER, not an installer: securityhealthsetup.exe
+# holds its .appx packages as ZIP64 members of the PE and, on a netvm-less guest invoked directly
+# rather than by the Windows Update engine, it exits 0 in under a second and does nothing at all -
+# with no extract switch that works either (/x, /extract, /q /x all rc=0, nothing written).
+# Measured 2026-09-21: the packages carve out intact, signatures included, and install in eleven
+# seconds via Add-AppxProvisionedPackage. So carve and provision, the same way this updater already
+# resolves .msu content itself instead of relying on BITS/DO, which cannot work here.
+function Get-EmbeddedAppx {
+    param([string]$ExePath, [string]$OutDir)
+    $bytes = [IO.File]::ReadAllBytes($ExePath)
+    New-Item -ItemType Directory -Force $OutDir | Out-Null
+    $out = @()
+    # ZIP64 end-of-central-directory: 'P','K',6,6. The classic EOCD that follows carries the
+    # archive's true end; the ZIP64 record carries the central directory's size and offset, and
+    # the archive therefore STARTS at (record position - size - offset).
+    # Walk the CLASSIC end-of-central-directory records ('P','K',5,6). Each one ends an archive
+    # and carries the central directory's size and offset, so the archive STARTS at
+    # (eocd - size - offset). When those fields are 0xFFFFFFFF the archive is ZIP64 and the real
+    # values live in the ZIP64 EOCD ('P','K',6,6) immediately before it. Handling BOTH matters:
+    # keying only on the ZIP64 record would silently skip any ordinary-sized embedded package,
+    # and "found nothing" is indistinguishable from "there was nothing".
+    for ($i = 0; $i -lt $bytes.Length - 22; $i++) {
+        if ($bytes[$i] -ne 0x50 -or $bytes[$i+1] -ne 0x4B -or $bytes[$i+2] -ne 0x05 -or $bytes[$i+3] -ne 0x06) { continue }
+        $cdsize = [BitConverter]::ToUInt32($bytes, $i + 12)
+        $cdoff  = [BitConverter]::ToUInt32($bytes, $i + 16)
+        $end    = $i + 22 + [BitConverter]::ToUInt16($bytes, $i + 20)
+        # [uint32]::MaxValue, NOT 0xFFFFFFFF: PowerShell parses that literal as Int32 -1, so
+        # `4294967295 -eq 0xFFFFFFFF` is FALSE and the ZIP64 branch never runs. Measured
+        # 2026-09-21 - it silently found zero packages in a file holding three.
+        if ($cdsize -eq [uint32]::MaxValue -or $cdoff -eq [uint32]::MaxValue) {
+            $z64 = -1
+            for ($j = $i - 4; $j -ge 0 -and $j -gt $i - 8192; $j--) {
+                if ($bytes[$j] -eq 0x50 -and $bytes[$j+1] -eq 0x4B -and $bytes[$j+2] -eq 0x06 -and $bytes[$j+3] -eq 0x06) { $z64 = $j; break }
+            }
+            if ($z64 -lt 0 -or $z64 + 56 -gt $bytes.Length) { continue }
+            $start = [int64]$z64 - [int64][BitConverter]::ToUInt64($bytes, $z64 + 40) - [int64][BitConverter]::ToUInt64($bytes, $z64 + 48)
+        } else {
+            $start = [int64]$i - [int64]$cdsize - [int64]$cdoff
+        }
+        if ($start -lt 0 -or $end -le $start -or $end -gt $bytes.Length) { continue }
+        $blob = New-Object byte[] ($end - $start)
+        [Array]::Copy($bytes, $start, $blob, 0, $blob.Length)
+        $tmp = Join-Path $OutDir ("member-" + $start + ".appx")
+        [IO.File]::WriteAllBytes($tmp, $blob)
+        # Identify it by its OWN manifest - never by filename or by size order.
+        $name = $null; $ver = $null
+        try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -EA SilentlyContinue
+            $zip = [IO.Compression.ZipFile]::OpenRead($tmp)
+            $ent = $zip.Entries | Where-Object { $_.FullName -eq 'AppxManifest.xml' } | Select-Object -First 1
+            if ($ent) {
+                $sr = New-Object IO.StreamReader($ent.Open())
+                $xml = [xml]$sr.ReadToEnd(); $sr.Close()
+                $name = $xml.Package.Identity.Name; $ver = $xml.Package.Identity.Version
+            }
+            $zip.Dispose()
+        } catch {}
+        if ($name) {
+            $final = Join-Path $OutDir ($name + ".appx")
+            Move-Item -Force $tmp $final
+            $out += [pscustomobject]@{ Path = $final; Name = $name; Version = $ver; Bytes = $blob.Length }
+        } else {
+            Remove-Item -Force $tmp -EA SilentlyContinue
+        }
+    }
+    return ,$out
+}
+# ---- WU-APPX-CARVE-END
+
+# Provision what the wrapper would not. Main package vs frameworks is decided STRUCTURALLY, from
+# each manifest: a framework declares <Framework>true</Framework> and the main package declares
+# <PackageDependency> entries naming them. No filename matching, no size ordering.
+function Install-EmbeddedAppx {
+    param([string]$ExePath, [string]$WorkRoot)
+    $res = [ordered]@{ attempted = $false; count = 0; ok = $false; detail = '' }
+    try {
+        $dir = Join-Path $WorkRoot ('appx-' + [IO.Path]::GetFileNameWithoutExtension($ExePath))
+        Remove-Item $dir -Recurse -Force -EA SilentlyContinue
+        # NOT @(Get-EmbeddedAppx ...): the function returns `,$out` so the array survives the
+        # pipeline intact, and wrapping it again yields a one-element array CONTAINING the
+        # array - so the count is always 1 and the main/framework split sees one object with
+        # every Name at once. Caught by tools/tests/wu-appx-carve-selftest.sh on its first run.
+        $pkgs = Get-EmbeddedAppx -ExePath $ExePath -OutDir $dir
+        $pkgs = @($pkgs)
+        $res.count = $pkgs.Count
+        if ($pkgs.Count -eq 0) { $res.detail = 'no embedded packages'; return $res }
+        $res.attempted = $true
+        $main = @(); $deps = @()
+        foreach ($pk in $pkgs) {
+            $isFw = $false
+            try {
+                $zip = [IO.Compression.ZipFile]::OpenRead($pk.Path)
+                $ent = $zip.Entries | Where-Object { $_.FullName -eq 'AppxManifest.xml' } | Select-Object -First 1
+                if ($ent) { $sr = New-Object IO.StreamReader($ent.Open()); $x = [xml]$sr.ReadToEnd(); $sr.Close()
+                            $isFw = ("$($x.Package.Properties.Framework)" -eq 'true') }
+                $zip.Dispose()
+            } catch {}
+            if ($isFw) { $deps += $pk.Path } else { $main += $pk.Path }
+        }
+        if ($main.Count -ne 1) { $res.detail = "expected exactly one non-framework package, found $($main.Count)"; return $res }
+        if ($deps.Count -gt 0) { Add-AppxProvisionedPackage -Online -PackagePath $main[0] -DependencyPackagePath $deps -SkipLicense -EA Stop | Out-Null }
+        else                   { Add-AppxProvisionedPackage -Online -PackagePath $main[0] -SkipLicense -EA Stop | Out-Null }
+        $res.ok = $true; $res.detail = "provisioned $([IO.Path]::GetFileName($main[0])) with $($deps.Count) dependency package(s)"
+    } catch {
+        $res.detail = $_.Exception.Message -replace '\s+',' '
+    }
+    return $res
+}
+
 function Get-Available {
   $s=New-Object -ComObject Microsoft.Update.Session
   $se=$s.CreateUpdateSearcher(); $se.ServerSelection=2; $se.Online=$true
@@ -1094,6 +1204,12 @@ function Install-SelfContained($kb,$urls){
       # System32 binary would report a false FAILURE for a correct install, so take both and
       # treat either moving as the effect. (Caught before shipping, 2026-09-20.)
       try{ $pkB=Get-AppxPackage -AllUsers -Name Microsoft.SecHealthUI -EA SilentlyContinue | Select-Object -First 1; if($pkB){ $shBefore=[string]$pkB.Version } }catch{}
+      # ...and the PROVISIONED package, which is a THIRD artefact and the one that moves when the
+      # payload is provisioned rather than installed into a user profile. Measured 2026-09-21:
+      # provisioning takes the version from 1000.26100.8036.0 to 1000.29628.1000.0 while
+      # Get-AppxPackage -AllUsers stays put, so a probe blind to this reports a correct install as
+      # a failure - the same "probe the wrong artefact" trap, one artefact further on.
+      try{ $prB=Get-AppxProvisionedPackage -Online -EA SilentlyContinue | Where-Object { $_.DisplayName -like '*SecHealthUI*' } | Select-Object -First 1; if($prB){ $shBefore="$shBefore|" + [string]$prB.Version } }catch{}
       try{ $itB=Get-Item 'C:\Windows\System32\SecurityHealthService.exe' -EA SilentlyContinue; if($itB){ $shBefore="$shBefore|" + $itB.VersionInfo.ProductVersion } }catch{}
       $p = Start-Process $dst -ArgumentList '/q' -Wait -PassThru -WindowStyle Hidden
       $eff=$false
@@ -1101,6 +1217,7 @@ function Install-SelfContained($kb,$urls){
       try{ if($name -match 'kb890830'){ $eff = $eff -or ((Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\RemovalTools\MRT' -Name Version -EA SilentlyContinue).Version -ne $mrtBefore) } }catch{}
       $shAfter=''
       try{ $pkA=Get-AppxPackage -AllUsers -Name Microsoft.SecHealthUI -EA SilentlyContinue | Select-Object -First 1; if($pkA){ $shAfter=[string]$pkA.Version } }catch{}
+      try{ $prA=Get-AppxProvisionedPackage -Online -EA SilentlyContinue | Where-Object { $_.DisplayName -like '*SecHealthUI*' } | Select-Object -First 1; if($prA){ $shAfter="$shAfter|" + [string]$prA.Version } }catch{}
       try{ $itA=Get-Item 'C:\Windows\System32\SecurityHealthService.exe' -EA SilentlyContinue; if($itA){ $shAfter="$shAfter|" + $itA.VersionInfo.ProductVersion } }catch{}
       # If neither artefact could be read at all, the probe did not RUN - that is unknown, not a
       # negative, and must not be reported as a failed install.
@@ -1108,6 +1225,31 @@ function Install-SelfContained($kb,$urls){
       if($probe -eq 'security-platform'){
         if(-not $shBefore -and -not $shAfter){ $probeRan = $false }
         else { $eff = $eff -or ($shAfter -ne $shBefore) }
+      }
+      # THE WRAPPER RAN AND CHANGED NOTHING. Before reporting an outstanding update, check whether
+      # it is a CONTAINER we can service ourselves. Measured 2026-09-21 on the German 25H2
+      # template: securityhealthsetup.exe exits 0 in under a second and does nothing, with no
+      # extract switch that works (/x, /extract, /q /x all rc=0, nothing written), while the .appx
+      # packages inside it provision cleanly in eleven seconds. That is this path's problem, not a
+      # vendor bug: Windows Update normally installs this through its own engine, and we invoke the
+      # wrapper standalone because the guest is routeless - the same reason .msu content is
+      # resolved from the catalog here instead of through BITS/DO.
+      #
+      # Gated to the ONE probe whose effect we can measure. A fallback whose result cannot be
+      # verified must not fire silently (fallbacks are anomalies: they are logged loudly).
+      if($probe -eq 'security-platform' -and $probeRan -and -not $eff -and $p.ExitCode -eq 0){
+        $ax = Install-EmbeddedAppx -ExePath $dst -WorkRoot $WorkDir
+        if($ax.attempted){
+          Log ("  $name : wrapper exited 0 and changed nothing; carved $($ax.count) embedded package(s) -> $($ax.detail)")
+          if($ax.ok){
+            $shAfter=''
+            try{ $pkA3=Get-AppxPackage -AllUsers -Name Microsoft.SecHealthUI -EA SilentlyContinue | Select-Object -First 1; if($pkA3){ $shAfter=[string]$pkA3.Version } }catch{}
+            try{ $prA3=Get-AppxProvisionedPackage -Online -EA SilentlyContinue | Where-Object { $_.DisplayName -like '*SecHealthUI*' } | Select-Object -First 1; if($prA3){ $shAfter="$shAfter|" + [string]$prA3.Version } }catch{}
+            # The EFFECT is still the only thing that counts - a successful call is not a result.
+            if($shAfter -ne $shBefore){ $eff=$true; Log ("    security platform moved $shBefore -> $shAfter (SecHealthUI|provisioned)") }
+            else { Log ("    provisioning reported success but NOTHING MOVED - still not actionable-clean") }
+          }
+        }
       }
       # A probe we ran and that showed nothing is a NEGATIVE result, not a missing one.
       # ---- WU-EXE-EFFECT-BEGIN
