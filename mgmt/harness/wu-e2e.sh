@@ -143,7 +143,9 @@ for r in $(seq 1 "$ROUNDS"); do
 
   reboot_needed=$(python3 - "$RD/update-status.json" <<'PY' 2>/dev/null
 import json,sys
-try: print(str(json.load(open(sys.argv[1])).get('reboot_needed', False)).lower())
+# The guest writes update-status.json with a UTF-8 BOM; plain utf-8 raises and reboot_needed
+# then read 'unknown' every round (measured 2026-09-20).
+try: print(str(json.load(open(sys.argv[1], encoding='utf-8-sig')).get('reboot_needed', False)).lower())
 except Exception: print('unknown')
 PY
 )
