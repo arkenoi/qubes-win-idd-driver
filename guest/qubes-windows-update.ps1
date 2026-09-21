@@ -48,6 +48,21 @@ param(
   [switch]$Scheduled
 )
 $ErrorActionPreference = 'Continue'
+# ---- WU-PROXY-SANE-BEGIN
+# GUARD:proxysane - the proxy must be an ABSOLUTE URI, checked before anything uses it.
+# Measured 2026-09-21: `-Action full -OnlyKb KB2267602 KB5007651` bound the first KB to -OnlyKb and
+# the SECOND to the first free positional parameter, which is -Proxy. The pass then ran with
+# Proxy='KB5007651' and died deep inside the catalog search with "This operation is not supported
+# for a relative URI" - a message that names neither the parameter nor the value, and cost a guest
+# run and a code read to place. A positional mis-bind is a caller error, and it is cheap to catch
+# here where the value is still recognisable.
+if ($Proxy -and -not ([Uri]::IsWellFormedUriString($Proxy, [UriKind]::Absolute))) {
+    Write-Host "FATAL: -Proxy '$Proxy' is not an absolute URI (expected e.g. http://127.0.0.1:8082)."
+    Write-Host "       If you passed several KBs, -OnlyKb takes a COMMA-separated list: -OnlyKb KB1,KB2"
+    Write-Host "       A bare second value binds to -Proxy, which is how this usually happens."
+    exit 2
+}
+# ---- WU-PROXY-SANE-END
 New-Item -ItemType Directory -Force (Split-Path $StatusFile) | Out-Null
 
 # ---- WU-PREVSTATUS-BEGIN
@@ -1489,7 +1504,11 @@ function Install-SelfContained($kb,$urls){
         Log ("  $name : exe rc=$($p.ExitCode) $detail")
       }
       # ---- WU-EXE-EFFECT-END
-      $rows += [ordered]@{ kb=$kb; file=$name; rc=$p.ExitCode; ok=$ok; verified_by_effect=$eff; probe=$probe; severity=$sev; info_reason=$why }
+      # already_current is STRUCTURED, not a phrase to be matched later: the caller that builds the
+      # Defender row needs to know this outcome, and ADR section 6 forbids keying logic on text.
+      # Measured 2026-09-21: a first attempt matched the words "ALREADY CURRENT", which appear only
+      # in the log line and never in info_reason, so it could not have fired at all.
+      $rows += [ordered]@{ kb=$kb; file=$name; rc=$p.ExitCode; ok=$ok; verified_by_effect=$eff; probe=$probe; severity=$sev; info_reason=$why; already_current=[bool]$alreadyCurrent }
     } elseif($ext -eq '.msu' -or $ext -eq '.cab'){
       # DISM decides. Three DETERMINISTIC outcomes, each classified honestly:
       #  - OK_RC (0/3010/2359302): installed/staged.
@@ -2291,10 +2310,26 @@ try {
           Log "Defender $kb : resolved the full signature package, installing it directly (netvm-free)"
           $defRows = Install-SelfContained $kb @($defUrl)
           $defOk = (@($defRows | Where-Object { $_.ok }).Count -gt 0)
-          $script:St.result += [ordered]@{ kb=$kb; ok=$defOk; severity=$(if($defOk){'ok'}else{'info'})
+          # ---- WU-DEFENDER-ROW-BEGIN
+          # THE ROW MUST SAY WHAT HAPPENED, because dom0 reads the ROW and never the log. Measured
+          # 2026-09-21 on win11de-fb9: a repeat pass whose own log read
+          #   "signature 1.459.324.0 is already at or past the offered 1.459.324.0 - nothing to do"
+          #   "rc=0 probe=defender-signature verified_by_effect=False -> ALREADY CURRENT"
+          # still wrote the row "full signature package installed directly (VERIFIED BY EFFECT)".
+          # Nothing was installed and nothing was verified by effect on that pass: the row claimed a
+          # proof the pass had explicitly declined to make. Three outcomes, three sentences.
+          $defEff     = (@($defRows | Where-Object { $_.verified_by_effect }).Count -gt 0)
+          $defCurrent = (@($defRows | Where-Object { $_.already_current }).Count -gt 0)
+          $defReason  = if ($defCurrent) { 'the image is already at the version this offer carries - nothing to do (compared the offer''s version with the installed one)' }
+                        elseif ($defOk -and $defEff) { 'full signature package installed directly (verified by effect)' }
+                        elseif ($defOk) { 'full signature package installed directly; the effect could NOT be verified on this pass' }
+                        else { 'full signature package resolved but did not apply - INFORMATIONAL, not a failure' }
+          $script:St.result += [ordered]@{ kb=$kb; ok=$defOk
+            severity=$(if($defCurrent){'ok'} elseif($defOk){'ok'} else {'info'})
             files=@($defRows)
-            reason=$(if($defOk){'full signature package installed directly (verified by effect)'}
-                     else{'full signature package resolved but did not apply - INFORMATIONAL, not a failure'}) }
+            verified_by_effect=$defEff
+            reason=$defReason }
+          # ---- WU-DEFENDER-ROW-END
           Save
           continue
         }
@@ -2508,6 +2543,17 @@ try {
 } catch {
   $script:St.phase='error'; $script:St.error="$($_.Exception.Message)"; Save
   Log "ERROR: $($script:St.error)"
+  # WHERE it threw, not just what it said. Measured 2026-09-21: an install pass died with
+  # "Dieser Vorgang wird fuer einen relativen URI nicht unterstuetzt" and the log named no line,
+  # no function and no call path - so locating a one-line defect needed a second guest run and a
+  # code read. The message alone is not a diagnosis; the site is free to record and the exception
+  # already carries it.
+  try {
+    $ii = $_.InvocationInfo
+    if ($ii) { Log ("ERROR-SITE line $($ii.ScriptLineNumber): " + (("$($ii.Line)" -replace '\s+',' ').Trim())) }
+    $st = "$($_.ScriptStackTrace)"
+    if ($st) { foreach($l in ($st -split "`n" | Select-Object -First 4)) { Log ("ERROR-STACK " + $l.Trim()) } }
+  } catch { }
   $msg = "$($_.Exception.Message)"
   $probeResult = if ($msg -match '8024402C') { Test-ProxyServesWu } else { '' }
 # ---- WU-DIAGNOSE-REASON-BEGIN

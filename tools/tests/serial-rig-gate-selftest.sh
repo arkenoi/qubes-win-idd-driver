@@ -52,6 +52,8 @@ check "C6b remove of an UNRELATED halted guest while a lock is held -> allowed" 
 check "C6c remove of the LOCKED guest -> BLOCKED"                       2 "$(jb 'qvm-remove -f win11-acc')"
 check "C6d a launch naming NO guest while a lock is held -> BLOCKED"    2 "$(jb 'prime-run.sh --resume')"
 check "C6e DEFECT RE-INTRODUCED (knob 4): C6b must be BLOCKED again" 2 "$(jb 'qvm-remove -f win11de-wus')" SERIAL_GATE_DEFECT=4
+# D-series counterpart: naming THIS dev qube in a path is not touching a second guest.
+check "C6f the local qube named in a QubesIncoming PATH -> allowed" 0 "$(jb 'FBVM=win11de-wus qtest run "cmd /c dir C:\Users\x\Documents\QubesIncoming\'"$(hostname -s)"'"')"
 check "C7 non-rig command -> allowed"                                   0 "$(jb 'git status && grep foo bar')"
 # C7b/C7c: PROSE is not a launch. Measured 2026-09-20 - the gate blocked a real `git commit`
 # because its MESSAGE described harness work, so it read its own subject line as an invocation.

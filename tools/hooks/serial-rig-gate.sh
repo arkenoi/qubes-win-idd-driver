@@ -330,7 +330,13 @@ running = {r[0]: r[1] for r in rows if len(r) > 1 and r[1] != 'Halted' and r[0] 
 if not running:
     sys.exit(0)
 # Which guests does this launch name? Qube names contain '-', so \b is useless here.
-named = {n for n in known if re.search(r'(?<![\w.-])' + re.escape(n) + r'(?![\w.-])', text)}
+# The local qube and dom0 are excluded from NAMED as well as from RUNNING. Measured 2026-09-21: a
+# launch was refused because the string 'win-idd-mgmt' appeared in a QubesIncoming PATH
+# (C:\Users\...\QubesIncoming\win-idd-mgmt) - naming this dev qube in a path is not touching a
+# second guest, and `running` already excludes it, so it could never satisfy the subset test.
+named = {n for n in known
+         if n not in ('dom0', me)
+         and re.search(r'(?<![\w.-])' + re.escape(n) + r'(?![\w.-])', text)}
 if named and named <= set(running):
     sys.exit(0)
 up = ', '.join(f"{v} ({s})" for v, s in sorted(running.items()))
