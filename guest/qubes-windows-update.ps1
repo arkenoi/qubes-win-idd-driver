@@ -705,6 +705,92 @@ function Install-ViaWU {
 #
 # Nothing here is pinned to a Windows version: arch, build, version and product family are all read
 # from the running guest. Hardcoding "x64 + 24H2|26100" once made KB5120708 unresolvable on 25H2.
+# ---- WU-DRIVER-TITLE-BEGIN
+# RESOLVE A KB-LESS OFFER BY ITS TITLE, AND CHOOSE BY WHAT THE PACKAGE DECLARES.
+#
+# Some offers carry no KB and no self-contained URL - measured on GWeck's environment:
+# "Microsoft Corporation AudioProcessingObject Driver Update (1.0.4.7057)", content_class=none,
+# direct_urls=[]. Resolve-Catalog is keyed on the KB, so it has no handle on them, and the row used
+# to say so and stop. But the catalog DOES hold the item, under its title, and serves a real .cab.
+#
+# THE TRAP, and the reason this cannot be done on title text alone: that offer matches TWO catalog
+# entries with byte-identical titles AND identical product strings. Title, order and size cannot
+# tell them apart - one package declares `[Manufacturer] ... NTARM64` and the other `NTamd64`, and
+# that is the only difference. So each candidate is DOWNLOADED and its INF read, and the choice is
+# made on the architecture THE PACKAGE ITSELF DECLARES. Judge the artefact, never the label:
+# the same rule as verify-by-effect, and the reason title language (nondeterministic here) is
+# irrelevant to the decision.
+function Get-PackageArch($cab){
+  $d = Join-Path $WorkDir ('drvinsp-' + [IO.Path]::GetFileNameWithoutExtension($cab))
+  Remove-Item $d -Recurse -Force -EA SilentlyContinue
+  New-Item -ItemType Directory -Force $d | Out-Null
+  & expand.exe "$cab" -F:*.inf "$d" 2>&1 | Out-Null
+  foreach($inf in @(Get-ChildItem (Join-Path $d '*.inf') -EA SilentlyContinue)){
+    $txt = Get-Content -Raw -LiteralPath $inf.FullName -EA SilentlyContinue
+    if(-not $txt){ continue }
+    $m = [regex]::Match($txt, '(?ms)^\[Manufacturer\](.*?)^\[')
+    $blob = if($m.Success){ $m.Groups[1].Value } else { $txt }
+    $a = @([regex]::Matches($blob, 'NT(amd64|arm64|x86)', 'IgnoreCase') | ForEach-Object { $_.Groups[1].Value.ToLower() } | Sort-Object -Unique)
+    if($a.Count){ return ($a -join ',') }
+  }
+  return 'unknown'
+}
+
+function Resolve-DriverByTitle($title){
+  $want = ($env:PROCESSOR_ARCHITECTURE).ToLower()          # AMD64 -> amd64, ARM64 -> arm64
+  $q = [uri]::EscapeDataString(($title -replace '\s*\(Version [^)]*\)\s*$','').Trim())
+  $hdr = @{}; if ($AcceptLanguage) { $hdr['Accept-Language'] = $AcceptLanguage }
+  $r = Invoke-WebRequest "https://www.catalog.update.microsoft.com/Search.aspx?q=$q" -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr
+  $rows = [regex]::Matches($r.Content, "id='([0-9a-f-]{36})_link'[^>]*>\s*(.*?)\s*</a>", 'Singleline')
+  $cands = @()
+  foreach($m in $rows){
+    $t = ($m.Groups[2].Value -replace '\s+',' ').Trim()
+    if($t -eq $title.Trim()){ $cands += $m.Groups[1].Value }
+  }
+  if($cands.Count -eq 0){ Log "  title resolve: no catalog entry titled exactly '$title'"; return $null }
+  Log "  title resolve: $($cands.Count) candidate(s); choosing by the architecture each PACKAGE declares (want $want)"
+  foreach($uid in $cands){
+    $json = '[{"size":0,"languages":"","uidInfo":"' + $uid + '","updateID":"' + $uid + '"}]'
+    try { $dl = Invoke-WebRequest 'https://www.catalog.update.microsoft.com/DownloadDialog.aspx' -Method POST -Body @{updateIDs=$json} -Proxy $Proxy -UseBasicParsing -TimeoutSec 60 -Headers $hdr } catch { continue }
+    $url = @([regex]::Matches($dl.Content, "https?://[^'`"]+\.cab") | ForEach-Object { $_.Value } | Sort-Object -Unique)[0]
+    if(-not $url){ continue }
+    $f = Join-Path $WorkDir ([IO.Path]::GetFileName(($url -split '\?')[0]))
+    if(-not (Test-Path $f)){ Fetch-Msu $url $f | Out-Null }
+    if(-not (Test-Path $f)){ continue }
+    $arch = Get-PackageArch $f
+    Log "    $uid arch=$arch"
+    if($arch -split ',' -contains $want){ return @{ uid=$uid; url=$url; file=$f; arch=$arch } }
+  }
+  Log "  title resolve: no candidate declares $want - this offer is not installable on this architecture"
+  return $null
+}
+
+# INSTALL a driver package and VERIFY BY EFFECT. pnputil's own exit code is not the answer: the
+# question is whether the driver is in the store afterwards, which /enum-drivers states.
+function Install-DriverCab($cab, $label){
+  $d = Join-Path $WorkDir ('drv-' + [IO.Path]::GetFileNameWithoutExtension($cab))
+  Remove-Item $d -Recurse -Force -EA SilentlyContinue
+  New-Item -ItemType Directory -Force $d | Out-Null
+  & expand.exe "$cab" -F:* "$d" 2>&1 | Out-Null
+  $inf = @(Get-ChildItem (Join-Path $d '*.inf') -EA SilentlyContinue | Select-Object -First 1)
+  if($inf.Count -eq 0){ return [ordered]@{ file=[IO.Path]::GetFileName($cab); ok=$false; reason='no .inf inside the package' } }
+  $name = $inf[0].Name
+  $before = (& pnputil.exe /enum-drivers 2>&1 | Out-String)
+  $p = Start-Process pnputil.exe -ArgumentList @('/add-driver', $inf[0].FullName, '/install') -Wait -PassThru -WindowStyle Hidden
+  $after = (& pnputil.exe /enum-drivers 2>&1 | Out-String)
+  # EFFECT: the original INF name appears in the driver store now and did not before, or it was
+  # already there (a re-offer of something installed). rc alone decides nothing.
+  $was = $before -match [regex]::Escape($name)
+  $now = $after  -match [regex]::Escape($name)
+  $row = [ordered]@{ file=$name; rc=$p.ExitCode; ok=$now; verified_by_effect=$now
+                     probe='pnputil-enum'; severity=$null; info_reason=$null }
+  if($now -and -not $was){ Log "  $label : driver added to the store (pnputil rc=$($p.ExitCode), verified by /enum-drivers)" }
+  elseif($now -and $was){ $row.severity=$null; Log "  $label : already present in the driver store - nothing to do" }
+  else { Log "  $label : pnputil rc=$($p.ExitCode) but $name is NOT in the driver store - did NOT install" }
+  return $row
+}
+# ---- WU-DRIVER-TITLE-END
+
 function Resolve-Catalog($kb){
   $hdr = @{}
   if ($AcceptLanguage) { $hdr['Accept-Language'] = $AcceptLanguage }
@@ -1948,11 +2034,26 @@ try {
           Save
           continue
         }
-        # No KB and no self-contained URL: there is genuinely no route from here. THAT is the
-        # measured reason, and it is what the row now says.
-        Log "skip (no KB, no direct URL): $nokb - informational, no route from this path"
+        # No KB and no self-contained URL - but the CATALOG may still hold it under its title.
+        # Resolve-DriverByTitle downloads each identically-titled candidate and picks on the
+        # architecture the package declares, because that is the only thing that differs between
+        # them. Only on an install action: a resolve/download pass must not change the guest.
+        if($Action -in 'install','full'){
+          Log "no KB and no direct URL - trying the catalog by title: $nokb"
+          $drv = Resolve-DriverByTitle $nokb
+          if($drv){
+            $drow = Install-DriverCab $drv.file $nokb
+            $script:St.result += [ordered]@{ kb=$nokb; title=$nokb; ok=[bool]$drow.ok
+                                             state=$(if($drow.ok){'installed'}else{'failed'}); files=@($drow) }
+            Save
+            continue
+          }
+        }
+        # Genuinely no route from here - and now that is a MEASURED statement, not an assumption
+        # about the catalog.
+        Log "skip (no KB, no direct URL, no catalog match for this architecture): $nokb"
         $script:St.result += [ordered]@{ kb=$nokb; title=$nokb; ok=$true; state='not-actionable'; severity='info';
-                                         info_reason='offer carries no KB and no self-contained URL, and THIS UPDATER resolves the catalog by KB only - so it has no route to fetch this item. The catalog itself DOES hold offers like this under their title (measured 2026-09-21: this exact item, with a downloadable .cab), so the gap is in our resolver, not in the catalog' }
+                                         info_reason='offer carries no KB and no self-contained URL, and the catalog holds no entry with this exact title whose package declares this guest architecture - so there is no route to it from here. Checked, not assumed: the title search runs and each identically-titled candidate is inspected.' }
         Save
         continue
         # ---- WU-NOKB-END

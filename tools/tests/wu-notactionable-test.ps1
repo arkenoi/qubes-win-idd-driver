@@ -49,6 +49,9 @@ switch ($Defect) {
     'kbonly'    { $infoRegion = $infoRegion -replace '-and \(\$infoKbs -notcontains \$r\.title\)', '' }
     'rcinfers'  { $npRegion = $npRegion -replace '(?s)\$mum = \$null.*?\n      \}', '$mum = $null' }
     'trustzero' { $cvRegion = $cvRegion -replace '(?s)if \(\[string\]::IsNullOrWhiteSpace.*?\n  \}', '' }
+    # drops the catalog-by-title route - the state before 2026-09-21, where a KB-less offer with
+    # no direct URL was always excluded even when the catalog held a package for this architecture.
+    'notitle'   { $nkRegion = $nkRegion.Replace('$drv = Resolve-DriverByTitle $nokb', '$drv = $null') }
     'shapeskip' { $nkRegion = $nkRegion -replace '(?s)if\(\$nokbUrls\.Count -gt 0.*?\n        \}', '' }
     # restores the pre-fix rule: only severity='info' drops out, so an update this pass
     # actually INSTALLED still counts and dom0 never reaches "up to date".
@@ -70,7 +73,7 @@ switch ($Defect) {
     'satdrop'   { $scRegion = $scRegion.Replace('$script:St.satisfied = @($priorSat)', '') }
     'scanall'   { $scRegion = $scRegion -replace '\$reportCount = @\(\$avail \| Where-Object \{ \(& \$notPriorInfo \$_\) \}\)\.Count', '$reportCount = $avail.Count' }
     ''          { }
-    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign | satignore | satdrop | failall | stageddone)"; exit 2 }
+    default     { Write-Output "INSTRUMENT: unknown -Defect '$Defect' (rcalone | noticeonly | kbonly | rcinfers | trustzero | shapeskip | infoonly | scanall | infobenign | satignore | satdrop | failall | stageddone | notitle)"; exit 2 }
 }
 
 function Log($m) { }   # the regions log; the suite does not care what they print
@@ -233,8 +236,19 @@ Check "catalog: a proxy error page -> UNRESOLVED"                               
 # code skipped on the SHAPE of the KB field before looking, and threw that away.
 $script:installCalled = $false
 function Install-SelfContained($kb, $urls) { $script:installCalled = $true; return @(@{ ok = $true }) }
+# The no-KB region now also tries the CATALOG BY TITLE when there is no direct URL, so the suite
+# has to supply those two. $script:DrvFound decides whether the catalog has a package for this
+# guest's architecture; $script:drvInstalled records that the driver path was taken.
+function Resolve-DriverByTitle($title) {
+    if ($script:DrvFound) { return @{ uid = 'test-uid'; url = 'https://dl.example/x.cab'; file = 'x.cab'; arch = 'amd64' } }
+    return $null
+}
+function Install-DriverCab($cab, $label) {
+    $script:drvInstalled = $true
+    return [ordered]@{ file = 'x.inf'; rc = 0; ok = $true; verified_by_effect = $true; probe = 'pnputil-enum' }
+}
 function NoKb($title, $urls, $action) {
-    $script:installCalled = $false
+    $script:installCalled = $false; $script:drvInstalled = $false
     $script:St = [pscustomobject]@{ result = @() }
     $u = [pscustomobject]@{ kb = '(no KB)'; title = $title; direct_urls = $urls }
     $Action = $action
@@ -246,10 +260,18 @@ function NoKb($title, $urls, $action) {
     $row = @($script:St.result)[0]
     return "$($script:installCalled)/$($row.state)/$([string]$row.severity)"
 }
+function NoKbDrv($title, $found) { $script:DrvFound = $found; $r = NoKb $title @() 'install'; return "$r/drv=$($script:drvInstalled)" }
 Check "nokb: HAS a direct URL on an install action -> INSTALLED, never excluded" `
       (NoKb 'AudioProcessingObject Driver Update' @('https://dl.example/x.exe') 'install') 'True/installed/'
-Check "nokb: NO direct URL -> informational, with a measured reason" `
-      (NoKb 'AudioProcessingObject Driver Update' @() 'install') 'False/not-actionable/info'
+$script:DrvFound = $false
+Check "nokb: NO direct URL and no catalog match -> informational, with a MEASURED reason" `
+      (NoKbDrv 'AudioProcessingObject Driver Update' $false) 'False/not-actionable/info/drv=False'
+# The gap this closes: the catalog does hold such offers under their title, in per-architecture
+# variants whose titles and product strings are byte-identical. When one matches THIS guest's
+# architecture the item is installed, not excluded - and the row says installed, not info.
+Check "nokb: no direct URL but the CATALOG has a package for this arch -> INSTALLED via the driver path" `
+      (NoKbDrv 'AudioProcessingObject Driver Update' $true) 'False/installed//drv=True'
+$script:DrvFound = $false
 Check "nokb: has a URL but the action is only 'resolve' -> not installed, not excluded as a lie" `
       (NoKb 'Some driver' @('https://dl.example/x.exe') 'resolve') 'False/not-actionable/info'
 
