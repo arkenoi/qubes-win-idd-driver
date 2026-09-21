@@ -54,3 +54,10 @@ __pycache__/
 # not to make, and they would go stale the moment the fixture is torn down. The durable record is
 # the campaign ledger and FINDINGS.
 mgmt/fixtures/
+
+# Park receipts (mgmt/harness/checkpoint.sh) and the stick-build log (prime-run.sh). Both describe
+# TRANSIENT rig state - a parked checkpoint that exists only until the campaign ends, and the last
+# answer-stick build - so committing them would publish rig state and go stale immediately. Same
+# reasoning as mgmt/fixtures/ above.
+mgmt/checkpoints/
+.prime-stick.log
