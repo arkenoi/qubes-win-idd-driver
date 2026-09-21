@@ -201,7 +201,18 @@ rm -f "mgmt/fixtures/$CHURN.aborted"
 # job's label scan found nothing and wrote no markers (measured 2026-09-07 on win11-2stk).
 qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99 -drive file=/dev/xvdj,format=host_device,if=none,id=diagdrv -device usb-storage,bus=ansusb.0,drive=diagdrv,removable=on' \
   || { log "TERMINAL: could not set qemu-extra-args"; exit 1; }
-qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$CHURN" "$HOLDER:$STICKLOOP" \
+# NOT --required, MEASURED 2026-09-21. A `--required` assignment cannot be satisfied at domain
+# creation on this rig at present: with one the domain is not created at all (6/6, across two
+# subjects, a loop the guest had never seen, a different frontend slot, a different devtype, and a
+# BRAND-NEW loop from a fresh backing file), while with nothing assigned it is created (4/4) and a
+# LIVE attach of the same device to the same running guest is accepted. That failure is NOT
+# understood - the reason is in dom0's libxl-driver.log, unreadable from here (findings/rig.md) -
+# so this is a WORKAROUND, not a fix, and it must not be read as one.
+# A plain assign auto-attaches: measured on win11-once, the domain is CREATED and the device is
+# genuinely ATTACHED. What it gives up is --required's guarantee that the guest will not start
+# WITHOUT its medium, and a stickless boot is exactly what makes a provisioning run look like a
+# product failure - so that guarantee is re-imposed below, after the start, by assertion.
+qvm-device block assign -o frontend-dev=xvdi -o devtype=disk "$CHURN" "$HOLDER:$STICKLOOP" \
   || { log "TERMINAL: could not assign the stick"; exit 1; }
 
 # --- DIAG stick: the instrument, kept off the medium under test --------------------------------
@@ -222,7 +233,7 @@ if [ -n "$DIAGLOOP" ]; then
         log "previous diag markers archived to evidence/diag-archive/"
     fi
     mkfs.fat -F 32 -n DIAG "$DIAGIMG" >/dev/null 2>&1   # fresh per run: markers are per-prime
-    if qvm-device block assign --required -o frontend-dev=xvdj -o devtype=disk -o read-only=false \
+    if qvm-device block assign -o frontend-dev=xvdj -o devtype=disk -o read-only=false \
            "$CHURN" "$HOLDER:$DIAGLOOP" 2>/dev/null; then
         log "diag stick on /dev/$DIAGLOOP -> xvdj (writable, markers only)"
     else
@@ -269,6 +280,25 @@ screen_probe() {   # $1=tag -> echoes a one-word verdict, keeps the PNG as evide
 log "booting; the job runs as SYSTEM, and its installer reboots - this guest halts on reboot, so"
 log "  restarting it is THIS script's job (protocol 0.8: one owner per guest, watchers stay passive)"
 qvm-start "$CHURN" >/dev/null 2>&1
+
+# --- THE MEDIUM MUST ACTUALLY BE THERE --------------------------------------------------------
+# This assertion replaces what `--required` used to guarantee (see the assign above). Without it a
+# plain assign that failed to attach would boot the guest with NO answer stick, the job would sit
+# waiting for a medium that is not there, and the run would look like a hung or broken guest - which
+# is precisely the misreading that cost 2026-09-21. Assert it, name it, and stop.
+sleep 15
+_attached=$(timeout 90 python3 -c "
+import qubesadmin
+q=qubesadmin.Qubes(); me=q.domains['$HOLDER']
+print(','.join(d.port_id for d in me.devices['block']
+                if getattr(getattr(d,'attachment',None),'name','')=='$CHURN') or 'NONE')" 2>/dev/null)
+case "$_attached" in
+  *"$STICKLOOP"*) log "  answer stick $STICKLOOP is ATTACHED to $CHURN (asserted, not assumed)" ;;
+  *) log "TERMINAL: the guest started but the answer stick is NOT attached (attached: ${_attached:-unreadable})."
+     log "  A plain assign auto-attaches and this one did not, so the guest is booting with no medium."
+     log "  It would sit waiting for a stick that is absent - NOT a guest defect, and not gradeable."
+     exit 1 ;;
+esac
 
 # --- drive it to a qrexec-answering state -----------------------------------------------------
 # The terminating signal is a POSITIVE fact - the guest answers qrexec - not a timer. Polling is
