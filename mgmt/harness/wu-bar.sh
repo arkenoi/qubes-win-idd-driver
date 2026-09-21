@@ -59,53 +59,60 @@ inst(){ psrun "$INST_PS" | grep -E '^RESULT' | tail -1; }
 [ "$(qstate)" = Halted ] && timeout 300 qvm-start "$VM" >/dev/null 2>&1
 wait_q 900 || { log "FAIL: no qrexec"; exit 1; }
 
-# DISCOVER QubesIncoming FROM THE GUEST. Never inherit it: QTEST_INCOMING is commonly exported in
-# a shell (and from ~/.bashrc) pointing at C:\Users\user\..., while this guest's account is
-# gerd-test. Measured 2026-09-20 on the first run of this file: the pre-push delete then targeted a
-# path that does not exist, `rmdir` reported nothing, and qvm-copy-to-vm refused with "a file named
-# qwt-improved-setup/msi/installer.msi already exists" - i.e. the delete silently missed and the
-# run would have graded the PREVIOUS build if the byte assertion had not stopped it.
-INC=$(psrun 'Get-ChildItem C:\Users -Directory -EA SilentlyContinue |
-  ForEach-Object { Join-Path $_.FullName "Documents\QubesIncoming\win-idd-mgmt" } |
-  Where-Object { Test-Path $_ } | ForEach-Object { "INC " + $_ }' | grep -E '^INC ' | sed 's/^INC //' | tr -d '\r')
-case "$(printf '%s' "$INC" | grep -c .)" in
-  1) : ;;
-  0) # A guest nobody has pushed to yet has NO QubesIncoming at all - the normal state of a fresh
-     # clone, not an error. qvm-copy-to-vm creates it, so derive the path from the guest's own user
-     # profile and let the push make it. Measured 2026-09-21: this aborted the staged-pending proof
-     # on a clone four minutes old.
-     INC=$(psrun 'Get-ChildItem C:\Users -Directory -EA SilentlyContinue |
-       Where-Object { $_.Name -notin @("Default","Default User","Public","All Users") } |
-       Where-Object { Test-Path (Join-Path $_.FullName "Documents") } |
-       ForEach-Object { "INC " + (Join-Path $_.FullName "Documents\QubesIncoming\win-idd-mgmt") }' \
-       | grep -E '^INC ' | sed 's/^INC //' | tr -d '\r')
-     case "$(printf '%s' "$INC" | grep -c .)" in
-       1) log "no QubesIncoming yet (fresh guest) - the push will create it" ;;
-       0) log "FAIL: $VM has no usable user profile to push into"; exit 1;;
-       *) log "FAIL: more than one user profile, refusing to guess:"; printf '%s\n' "$INC" | sed 's/^/      /'; exit 1;;
-     esac ;;
-  *) log "FAIL: more than one QubesIncoming candidate, refusing to guess:"; printf '%s\n' "$INC" | sed 's/^/      /'; exit 1;;
+# DISCOVER QubesIncoming FROM THE GUEST, WITH cmd - never inherit it, never use PowerShell for it.
+# Two measured reasons:
+#   * QTEST_INCOMING is commonly exported in a shell (and from ~/.bashrc) pointing at
+#     C:\Users\user\..., while this guest's account is gerd-test. On 2026-09-20 that made the
+#     pre-push delete target a path that does not exist, so qvm-copy-to-vm refused with "a file
+#     named qwt-improved-setup/msi/installer.msi already exists" and the run would have graded the
+#     PREVIOUS build if the byte assertion had not caught it.
+#   * On a FRESHLY CLONED guest PowerShell does not answer for minutes while cmd does (measured
+#     2026-09-21: every psrun returned empty and a direct EncodedCommand timed out at 120 s on a
+#     guest whose `dir C:\Users` answered instantly). A discovery that depends on the slowest
+#     interpreter reports "nothing here" when the truth is "not yet".
+discover_inc(){
+  timeout -k 5 120 tools/qtest run 'cmd /c for /d %d in (C:\Users\*) do @if exist "%d\Documents\QubesIncoming\win-idd-mgmt" echo INC %d\Documents\QubesIncoming\win-idd-mgmt' 2>/dev/null \
+    | tr -d '\000\r' | grep -a '^INC ' | sed 's/^INC //'
+}
+set_tree(){ export QTEST_INCOMING="$1"; TREE="$1\qwt-improved-setup"; }
+# cmd, not PowerShell, for the same reason discovery uses cmd: this runs minutes after a fresh
+# clone booted, when PowerShell still is not answering. %~zf is the file size.
+pushed_bytes(){
+  timeout -k 5 150 tools/qtest run "cmd /c for %f in (\"$TREE\\qubes-windows-update.ps1\") do @echo PUSHED %~zf" 2>/dev/null \
+    | tr -d '\000\r' | grep -a '^PUSHED ' | tail -1
+}
+INC=$(discover_inc); ninc=$(printf '%s' "$INC" | grep -c .)
+case "$ninc" in
+  1) set_tree "$INC"; log "QubesIncoming on this guest: $INC" ;;
+  0) # Nobody has pushed here yet - the normal state of a fresh clone, not an error, and NOT
+     # something to guess a profile for: this guest carries both gerd-test and user.
+     # qvm-copy-to-vm creates the directory under whichever account qrexec runs as, so PUSH FIRST
+     # and then find where it actually landed. No guessing at any point.
+     TREE=''; log "no QubesIncoming yet (fresh guest) - pushing first, then finding where it landed" ;;
+  *) log "FAIL: more than one QubesIncoming, refusing to guess:"; printf '%s\n' "$INC" | sed 's/^/      /'; exit 1 ;;
 esac
-export QTEST_INCOMING="$INC"
-TREE="$INC\qwt-improved-setup"
-log "QubesIncoming on this guest: $INC"
 
-PUSHED_PS="\$f = \"$TREE\\qubes-windows-update.ps1\"
-if (Test-Path \$f) { Write-Output (\"PUSHED \" + (Get-Content -Raw \$f).Length) } else { Write-Output \"PUSHED absent\" }"
 log "installed BEFORE: $(inst)   package is $PKGBYTES bytes"
 
 if inst | grep -q "bytes=$PKGBYTES"; then
   log "installed script already matches the package ($PKGBYTES bytes) - skipping push+install"
 else
-  timeout 200 tools/qtest run "cmd /c rmdir /s /q \"$TREE\"" >/dev/null 2>&1
+  if [ -n "$TREE" ]; then
+    timeout 200 tools/qtest run "cmd /c rmdir /s /q \"$TREE\"" >/dev/null 2>&1
   # ASSERT the delete took. qvm-copy-to-vm silently refuses to overwrite, so a delete that missed
   # means the installer runs the PREVIOUS tree and still prints INSTALL COMPLETE (ADR section 9).
-  case "$(timeout 120 tools/qtest run "cmd /c if exist \"$TREE\" (echo STILL_PRESENT) else (echo GONE)" 2>/dev/null | tr -d '\r' | grep -oE 'STILL_PRESENT|GONE' | tail -1)" in
-    GONE) : ;;
-    *) log "FAIL: could not remove the previous tree at $TREE - refusing to push over it"; exit 1;;
-  esac
+    case "$(timeout 120 tools/qtest run "cmd /c if exist \"$TREE\" (echo STILL_PRESENT) else (echo GONE)" 2>/dev/null | tr -d '\r' | grep -oE 'STILL_PRESENT|GONE' | tail -1)" in
+      GONE) : ;;   # on a fresh guest there was nothing to remove
+      *) log "FAIL: could not remove the previous tree at $TREE - refusing to push over it"; exit 1;;
+    esac
+  fi
   timeout 900 qvm-copy-to-vm "$VM" "$PKG" 2>&1 | tail -1
-  pushed=$(psrun "$PUSHED_PS" | grep -E '^PUSHED' | tail -1)
+  if [ -z "$TREE" ]; then
+    INC=$(discover_inc); ninc=$(printf '%s' "$INC" | grep -c .)
+    [ "$ninc" = 1 ] || { log "FAIL: after the push there are $ninc QubesIncoming candidates, expected 1"; exit 1; }
+    set_tree "$INC"; log "the push landed in: $INC"
+  fi
+  pushed=$(pushed_bytes)
   log "$pushed"
   case "$pushed" in *"$PKGBYTES"*) : ;; *) log "FAIL: push mismatch - refusing to grade"; exit 1;; esac
   # Detached, as SYSTEM: install.cmd restarts the gui-agent and would otherwise kill its own
