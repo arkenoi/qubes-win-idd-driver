@@ -92,9 +92,19 @@ if ! ss -ltn 2>/dev/null | grep -q ':8082'; then
   sleep 2
 fi
 ss -ltn 2>/dev/null | grep -q ':8082' || { echo "INSTRUMENT: no updates proxy on 127.0.0.1:8082 and it would not start"; exit 2; }
-pcode=$(timeout 40 curl -sS -o /dev/null -w '%{http_code}' -x http://127.0.0.1:8082 \
-        http://download.windowsupdate.com/ 2>/dev/null)
-[ "$pcode" = 200 ] || { echo "INSTRUMENT: updates proxy is listening but does not reach Windows Update (http=$pcode) - a run now would blame the guest for a network failure"; exit 2; }
+# RETRY: the FIRST request through this proxy after it has been idle regularly hangs the whole
+# timeout and returns nothing, while the next one answers instantly. Measured 2026-09-21: probe 1
+# empty after 40 s, probes 2 and 3 http=200 in under a second - and the single-shot version of this
+# check aborted two runs in a row on a rig whose egress was fine. An empty result is NO ANSWER, not
+# proof of no egress; only a real non-200, or three no-answers, is a reason to refuse.
+pcode=''
+for _pt in 1 2 3; do
+  pcode=$(timeout 40 curl -sS -o /dev/null -w '%{http_code}' -x http://127.0.0.1:8082 \
+          http://download.windowsupdate.com/ 2>/dev/null)
+  [ "$pcode" = 200 ] && break
+  [ "$_pt" -lt 3 ] && sleep 3
+done
+[ "$pcode" = 200 ] || { echo "INSTRUMENT: updates proxy is listening but does not reach Windows Update after 3 attempts (last http=$pcode) - a run now would blame the guest for a network failure"; exit 2; }
 log "updates proxy OK (egress proven, http=$pcode)"
 
 fails=0
