@@ -9,7 +9,7 @@
 # Evidence lands in <outdir>; verdict is the last line: ACCEPT=PASS|FAIL reason=...
 #
 # Usage: tools/accept-clean.sh <vm> <loopN> [outdir]
-#   The loop device must already carry the release ISO (sudo losetup in this qube).
+#   The loop device must already carry the release ISO: `udisksctl loop-setup -r -f <iso>` (ROOT-FREE; sudo losetup is neither available nor needed - capability table in CLAUDE.md).
 set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 VM="${1:?usage: $0 <vm> <loopN> [outdir]}"

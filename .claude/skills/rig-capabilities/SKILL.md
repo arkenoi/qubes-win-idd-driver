@@ -54,12 +54,44 @@ before tags exist (hence `mgmt/clone-to-template.sh`'s create → tag → copy o
 | `git push origin` | **PASS** | Public repo `arkenoi/qubes-win-idd-driver` |
 | pwsh 7.4 locally | **PASS** | `/home/user/pwsh74/pwsh` — parse-check `.ps1` before shipping (`tools/ps-parse-gate.sh`) |
 | `7z`, `cabextract`, `python3` | **PASS** | Inspect MSIs, answer-stick images, catalogs |
-| **`losetup` ATTACH** | **FAIL** (root) — **but `udisksctl loop-setup -r -f <file>` attaches root-free: PASS** | The root-only row cost a Build agent 20 min on 2026-09-16 while `mgmt/harness/matrix.sh:258-280` had been serving every release ISO through udisksctl for two weeks. New backing files: `udisksctl loop-setup` (drop `-r` for read-write); existing sticks may still be rewritten in place at constant size |
-| `losetup -l` (read) | **PASS** | |
+| **BLOCK-DEVICE BINDING** (loop-setup, attach, assign, USB emulation) | **PASS, root-free, every step** | See the explicit table in the Block-device binding section below. `sudo losetup` is the ONE spelling that fails; `udisksctl loop-setup` is the one we use, in `matrix.sh`/`prime-run.sh`/`quick-upgrade.sh`/`build-media.sh`. Six agents have read the failing spelling as a missing capability |
+| `losetup -l` (read) | **PASS** | Reading loop state never needed root |
+
+## Block-device binding
+
+**BLOCK-DEVICE BINDING — THE CAPABILITIES, EXPLICITLY.** Every row is ROOT-FREE and already in
+daily use in this repo. Do not infer any of them from a `sudo` rule, and never report one as
+missing without running it first:
+
+| what you need | the command that works HERE | already used at |
+|---|---|---|
+| file -> loop device | `udisksctl loop-setup -f <img>` (`-r` = read-only) | `prime-run.sh:143`, `quick-upgrade.sh:154`, `build-media.sh:65` |
+| release the loop | `udisksctl loop-delete -b /dev/loopN` | `matrix.sh:135`, `quick-upgrade.sh:116` |
+| mount it in THIS qube | `udisksctl mount --block-device /dev/loopN` | `quick-upgrade.sh:164` |
+| which file backs a loop | `losetup -l` (READ is unprivileged) | everywhere |
+| disc into a RUNNING guest | `qvm-device block attach --ro --option devtype=cdrom <vm> win-idd-mgmt:loopN` | ACCEPTANCE-PROTOCOL 0.5 Route A |
+| disk into a guest BEFORE start (survives Setup's own reboots) | `qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk <vm> win-idd-mgmt:loopN` | `prime-run.sh:204`, `reprovision-usb.sh:78` |
+| emulated USB stick (WinPE has no PV drivers, so a CD is invisible) | that same assign + `qvm-features <vm> qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99'` | `prime-run.sh` |
+| drop a claim | `qvm-device block unassign <vm> win-idd-mgmt:loopN` | `seal-qwt-golden.sh:43` |
+
+`sudo losetup`, `losetup -d`, `mount` and a dom0 shell are what you do NOT have. Each has a
+root-free equivalent in the table above, so needing root for ONE SPELLING never means the
+capability is absent — that inversion has been made six times and cost hours each time.
+
+REAL traps here, none of them permission problems:
+- `qvm-device block list` is POLICY-REFUSED from this qube. Assert an assignment by re-issuing
+  `assign` and reading "already assigned", or in python via `vm.devices['block'].get_assigned_devices()`.
+- `--persistent` on *attach* is an ALIAS for `assign --required`: applied at the NEXT start, so
+  against a running guest it succeeds and changes nothing the guest can see.
+- `assign --required` PERSISTS while loop numbers are TRANSIENT (recycled on reboot and by every
+  `loop-delete`). A stale claim makes the guest unstartable with only `internal error: libxenlight
+  failed to create new domain` — check assignments FIRST when a guest will not create (`findings/rig.md`).
+- `qvm-start --cdrom=` is BROKEN from this qube and poisons the guest (`findings/rig.md`); use the
+  attach/assign rows instead.
 
 ## Environment map
 
-**Loop devices** (attachment needs root; the backing file may be rewritten in place at constant size):
+**Loop devices** (attach them ROOT-FREE with `udisksctl loop-setup`; the backing file may be rewritten in place at constant size):
 
 | Loop | Backing file | Role |
 |---|---|---|

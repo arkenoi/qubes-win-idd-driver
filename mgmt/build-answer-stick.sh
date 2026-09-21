@@ -336,7 +336,7 @@ MTOOLS_SKIP_CHECK=1 mdir -i "$OUT" ::/ 2>/dev/null | grep -qi "AUTOUNA" \
 echo "built $OUT ($(du -h "$OUT" | cut -f1))"
 echo
 echo "Present it to the guest as an emulated USB stick (vendor ISO stays untouched):"
-echo "  sudo losetup --show -f $OUT                 # -> /dev/loopN"
+echo "  udisksctl loop-setup -f $OUT                # -> /dev/loopN  (ROOT-FREE; never sudo losetup)"
 echo "  qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk <vm> win-idd-mgmt:loopN"
 echo "  qvm-features <vm> qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99'"
 echo "  qvm-start <vm> --cdrom=win-idd-mgmt:<vendor-iso-loop>"

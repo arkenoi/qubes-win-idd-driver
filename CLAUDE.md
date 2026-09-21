@@ -60,11 +60,39 @@ interleaved:
   **Still genuinely off-limits:** a dom0 SHELL, `sudo` in this qube, editing
   qrexec policy, and qubes that are NOT tagged.
   **`losetup` attach WAS the example here and it was WRONG — corrected 2026-09-21 after it misled a
-  second agent into inventing the same limitation the skill already retired.** Needing root for
-  `sudo losetup` does NOT mean loop attachment is unavailable: `udisksctl loop-setup -f <file>`
-  (add `-r` for read-only) attaches root-free, and `mgmt/harness/matrix.sh` has served every release
-  ISO that way for months. A capability that one command cannot reach is not a capability the qube
-  lacks.
+  second agent into inventing the same limitation the skill already retired, and again on 2026-09-21
+  when the owner ordered every block-binding instruction to carry its capabilities explicitly.**
+
+  **BLOCK-DEVICE BINDING — THE CAPABILITIES, EXPLICITLY.** Every row is ROOT-FREE and already in
+  daily use in this repo. Do not infer any of them from a `sudo` rule, and never report one as
+  missing without running it first:
+
+  | what you need | the command that works HERE | already used at |
+  |---|---|---|
+  | file -> loop device | `udisksctl loop-setup -f <img>` (`-r` = read-only) | `prime-run.sh:143`, `quick-upgrade.sh:154`, `build-media.sh:65` |
+  | release the loop | `udisksctl loop-delete -b /dev/loopN` | `matrix.sh:135`, `quick-upgrade.sh:116` |
+  | mount it in THIS qube | `udisksctl mount --block-device /dev/loopN` | `quick-upgrade.sh:164` |
+  | which file backs a loop | `losetup -l` (READ is unprivileged) | everywhere |
+  | disc into a RUNNING guest | `qvm-device block attach --ro --option devtype=cdrom <vm> win-idd-mgmt:loopN` | ACCEPTANCE-PROTOCOL 0.5 Route A |
+  | disk into a guest BEFORE start (survives Setup's own reboots) | `qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk <vm> win-idd-mgmt:loopN` | `prime-run.sh:204`, `reprovision-usb.sh:78` |
+  | emulated USB stick (WinPE has no PV drivers, so a CD is invisible) | that same assign + `qvm-features <vm> qemu-extra-args -- '-drive file=/dev/xvdi,format=host_device,if=none,readonly=on,id=ansdrv -device nec-usb-xhci,id=ansusb -device usb-storage,bus=ansusb.0,drive=ansdrv,removable=on,bootindex=99'` | `prime-run.sh` |
+  | drop a claim | `qvm-device block unassign <vm> win-idd-mgmt:loopN` | `seal-qwt-golden.sh:43` |
+
+  `sudo losetup`, `losetup -d`, `mount` and a dom0 shell are what you do NOT have. Each has a
+  root-free equivalent in the table above, so needing root for ONE SPELLING never means the
+  capability is absent — that inversion has been made six times and cost hours each time.
+
+  REAL traps here, none of them permission problems:
+  - `qvm-device block list` is POLICY-REFUSED from this qube. Assert an assignment by re-issuing
+    `assign` and reading "already assigned", or in python via `vm.devices['block'].get_assigned_devices()`.
+  - `--persistent` on *attach* is an ALIAS for `assign --required`: applied at the NEXT start, so
+    against a running guest it succeeds and changes nothing the guest can see.
+  - `assign --required` PERSISTS while loop numbers are TRANSIENT (recycled on reboot and by every
+    `loop-delete`). A stale claim makes the guest unstartable with only `internal error: libxenlight
+    failed to create new domain` — check assignments FIRST when a guest will not create (`findings/rig.md`).
+  - `qvm-start --cdrom=` is BROKEN from this qube and poisons the guest (`findings/rig.md`); use the
+    attach/assign rows instead.
+
   **THEREFORE, BINDING: never write a limitation into code, a comment, a finding, a commit message
   or a reply until you have (a) grepped this repo for something already doing it, and (b) run the
   cheapest probe that would disprove it.** Both take under a minute. "X needs sudo / needs dom0 /

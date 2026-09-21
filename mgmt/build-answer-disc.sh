@@ -19,7 +19,7 @@
 # logon. A Qubes guest reboot destroys the domain and `qvm-start --cdrom` assignment does
 # not survive it - hence the answer disc must be attached PERSISTENTLY:
 #
-#   qvm-device block attach --persistent --option devtype=cdrom --ro \
+#   qvm-device block attach --ro --option devtype=cdrom \   # NEVER --persistent: it is an alias for assign --required
 #       <vm> win-idd-mgmt:<loopN>
 #
 # With that, the disc is present at every boot including first logon, and the drive-letter
@@ -142,8 +142,8 @@ ls -sh "$OUT"
 cat <<EOF
 
 Attach both discs (boot from the STOCK ISO, answers from this one):
-  losetup --show -f /path/to/stock-windows.iso        # -> loopA, in win-idd-mgmt
-  losetup --show -f $OUT                              # -> loopB
-  qvm-device block attach --persistent --option devtype=cdrom --ro <vm> win-idd-mgmt:loopB
+  udisksctl loop-setup -r -f /path/to/stock-windows.iso   # -> /dev/loopA, ROOT-FREE (never sudo losetup)
+  udisksctl loop-setup -r -f $OUT                         # -> /dev/loopB
+  qvm-device block attach --ro --option devtype=cdrom <vm> win-idd-mgmt:loopB   # --persistent would be assign --required, applied only at NEXT start
   qvm-start <vm> --cdrom=win-idd-mgmt:loopA
 EOF

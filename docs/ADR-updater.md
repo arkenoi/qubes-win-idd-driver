@@ -192,4 +192,8 @@ and distinguish *empty* from *negative*.
   reason string refused as evidence for itself. NOT yet wired into `mgmt/harness/wu-e2e.sh`, so a
   run can still be called green without it.
 - The release **disc** path is untested since `qvm-start --cdrom` broke on this rig
-  (`findings/rig.md`); the reporter installs from the published ISO.
+  (`findings/rig.md`); the reporter installs from the published ISO. **That is one command being
+  broken, not the disc path being impossible:** `udisksctl loop-setup -r -f <iso>` (root-free) plus
+  `qvm-device block attach --ro --option devtype=cdrom <running-vm> win-idd-mgmt:loopN`, or
+  `assign --required` before start, both work from here — see the block-device capability table in
+  `CLAUDE.md`. Test it that way before recording the path as unavailable.
