@@ -353,7 +353,18 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
             exit 1
         fi
         log "  t+${el}s guest halted (the job rebooted it) - restart #$restarts"
-        qvm-start "$CHURN" >/dev/null 2>&1
+        # A START THAT FAILS IS NOT A REBOOT. Measured 2026-09-21: every one of nine "restarts"
+        # was `libxenlight failed to create new domain` - the domain never came up at all - and
+        # this loop reported it as the guest rebooting, then concluded "crash-looping, not
+        # installing". That is a confident wrong diagnosis of a product from a toolstack error,
+        # and it cost a campaign cell plus the two cells that cascade off its park. Capture the
+        # start's own error and say what actually happened.
+        if ! _startout=$(qvm-start "$CHURN" 2>&1); then
+            log "  TERMINAL: the DOMAIN WOULD NOT START (this is not the guest rebooting):"
+            log "    ${_startout}"
+            log "    Nothing is inferred about the install from this - the guest never ran."
+            return 1
+        fi
         quiet=0; noshow=0; t_start=$(date +%s)   # the rescue clock runs from THIS boot, see RESCUE_QUIET
         continue
     fi
