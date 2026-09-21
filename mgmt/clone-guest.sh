@@ -64,6 +64,24 @@ for f in ('os', 'gui', 'qrexec', 'stubdom-qrexec', 'vmexec', 'audio-model', 'tim
         dst.features[f] = src.features[f]
     except KeyError:
         pass
+# A PARKED SOURCE MUST NOT PARK THE CLONE. Checkpoints are stored with their resources wound
+# down to save host RAM - ckpt-win11de-gwt-pretuesday sits at memory=400, vcpus=2 - and copying
+# prefs verbatim hands that to a guest which then has to BOOT WINDOWS. Measured 2026-09-21:
+# win11de-ctlc came up with 400 MB and no ballooning (maxmem=0), went deaf during its install,
+# and cost a staged-pending proof plus an incorrect self-diagnosis about host pressure. A clone
+# is made to RUN, so give it runnable resources whenever the source's are below what a Windows
+# guest needs. Override with CLONE_MEMORY / CLONE_VCPUS.
+import os
+want_mem = int(os.environ.get('CLONE_MEMORY') or 8192)
+want_cpu = int(os.environ.get('CLONE_VCPUS') or 4)
+try:
+    if int(getattr(dst, 'memory', 0) or 0) < want_mem:
+        print('  source is PARKED at memory=%s - raising the clone to %d' % (getattr(src, 'memory', '?'), want_mem))
+        dst.memory = want_mem
+    if int(getattr(dst, 'vcpus', 0) or 0) < want_cpu:
+        dst.vcpus = want_cpu
+except Exception as e:
+    print('  note: could not raise resources (%s)' % e)
 print('  prefs and features copied')
 PY
 
