@@ -135,7 +135,13 @@ for r in $(seq 1 "$ROUNDS"); do
   guest_file 'C:\ProgramData\Qubes\wu\agent.log' > "$RD/agent-before.log"
 
   log "round $r: driving a pass the Qube Manager way (replay-dom0-update.py --with-entrypoint)"
-  timeout -k 20 3600 python3 tools/replay-dom0-update.py "$VM" --with-entrypoint \
+  # A FIRST PASS ON AN UN-UPDATED TEMPLATE IS NOT AN HOUR'S WORK. Measured 2026-09-21 on
+  # win11de-ctld: this returned rc=124 - killed, not finished - while the guest was still
+  # installing a 4.4 GB cumulative it had already downloaded. The guest-side task survives the
+  # kill, so the harness then graded a pass that was still running and ran its oscillation scan
+  # against a busy guest, where the updater's mutex makes a scan exit at once. Default raised,
+  # and overridable per run.
+  timeout -k 20 "${WU_REPLAY_TIMEOUT:-10800}" python3 tools/replay-dom0-update.py "$VM" --with-entrypoint \
       > "$RD/replay.out" 2>&1
   rc=$?
   # replay-dom0-update.py reports each STEP's rc in its output but exits 0 regardless, so its
