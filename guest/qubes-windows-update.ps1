@@ -34,6 +34,12 @@ param(
   # multi-gigabyte cumulative and a small package can be tested one at a time rather than as an
   # all-or-nothing batch - the batch is precisely what made the 24H2 failure unattributable.
   [string[]]$OnlyKb   = @(),
+  # Restrict a pass to specific offers BY IDENTITY (the UpdateID the offer itself carries, with or
+  # without ":rev"). Diagnostic control, same family as -OnlyKb, and the only way to name an offer
+  # that HAS NO KB - a vendor driver, for instance. Added 2026-09-21 because the KB-less
+  # AudioProcessingObject driver could not be exercised on a guest at all: -OnlyKb cannot select it,
+  # so its resolve-by-title path was verified off-guest only. Identity, never title text (ADR 6).
+  [string[]]$OnlyUid  = @(),
   # Force the catalog to answer in a given language, e.g. -AcceptLanguage de-DE. Diagnostic.
   # Exists because the catalog's response language is NOT under our control and has been measured
   # varying by itself (same KB, same guest, German at 09:54 and English at 10:21 on 2026-08-14),
@@ -2036,6 +2042,15 @@ try {
 
   # Applied AFTER reporting: dom0 must always hear the true number of available updates. -OnlyKb
   # narrows what THIS pass acts on, it does not narrow what the guest admits to.
+  if ($OnlyUid.Count -gt 0) {
+    $before = $avail.Count
+    # Match on the UpdateID, and accept either "uid" or "uid:rev" - the identity is structured, so
+    # this compares fields rather than parsing a string the catalog may return in any language.
+    $avail = @($avail | Where-Object {
+                 $u = "$($_.uid)"; $ur = "$($_.uid):$($_.rev)"
+                 @($OnlyUid | Where-Object { $_ -eq $u -or $_ -eq $ur }).Count -gt 0 })
+    Log ("-OnlyUid " + ($OnlyUid -join ',') + ": acting on $($avail.Count) of $before offered update(s)")
+  }
   if ($OnlyKb.Count -gt 0) {
     $before = $avail.Count
     $avail = @($avail | Where-Object { $k = $_.kb; @($OnlyKb | Where-Object { $k -match $_ }).Count -gt 0 })
@@ -2107,8 +2122,16 @@ try {
           $drv = Resolve-DriverByTitle $nokb
           if($drv){
             $drow = Install-DriverCab $drv.file $nokb
+            # The row carries WHAT WAS MEASURED, the same rule the Defender row was corrected under
+            # on 2026-09-21: this install is verified by `pnputil /enum-drivers` seeing the package
+            # in the store afterwards, so the row says so instead of leaving dom0 to infer it from
+            # ok=True. Verified on a guest the same day: store matches 0 before, 2 after.
             $script:St.result += [ordered]@{ kb=$nokb; title=$nokb; ok=[bool]$drow.ok
-                                             state=$(if($drow.ok){'installed'}else{'failed'}); files=@($drow) }
+                                             state=$(if($drow.ok){'installed'}else{'failed'})
+                                             verified_by_effect=[bool]$drow.verified_by_effect
+                                             reason=$(if($drow.ok){'driver resolved from the catalog by title, architecture chosen from the package''s own INF, and seen in the driver store afterwards (pnputil /enum-drivers)'}
+                                                      else{'driver resolved from the catalog but pnputil did not put it in the driver store - did NOT install'})
+                                             files=@($drow) }
             Save
             continue
           }
