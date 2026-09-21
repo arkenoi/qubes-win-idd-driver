@@ -16,9 +16,23 @@ printf 'pid=%s holder=%s sentinel=%s started=x cmd=prime-run.sh vm=win11-acc\n' 
 DEAD=$(( SLEEPER + 100000 ))
 printf 'pid=%s holder=%s sentinel=%s started=x cmd=dead.sh vm=win10-acc\n' "$DEAD" "$DEAD" "$DEAD" > "$LD/qwt-vmlock-win10-acc"
 
+# A FAKE `qvm-ls` on PATH. GUARD:rigstate reads the rig's real power state, so without this every
+# case below would depend on which guests happen to be up - and the two cases that matter (a guest
+# IS up / the state is unreadable) could not be staged at all. $LD/rigstate is what it prints;
+# rc comes from $LD/rigrc, so the unreadable-state arm is testable too.
+mkdir -p "$LD/bin"
+cat > "$LD/bin/qvm-ls" <<'FAKE'
+#!/bin/bash
+cat "$LD/rigstate"; exit "$(cat "$LD/rigrc" 2>/dev/null || echo 0)"
+FAKE
+chmod +x "$LD/bin/qvm-ls"
+export LD
+printf 'dom0|Running\nwin-idd-mgmt|Running\nwin11-acc|Halted\nwin10-acc|Halted\nwin11de-wus|Halted\n' > "$LD/rigstate"
+echo 0 > "$LD/rigrc"
+
 pass=0; failn=0
 check(){ # $1=label $2=want-rc $3=json  [$4..=extra env KEY=VAL]
-  local rc; rc=$(printf '%s' "$3" | env TMPDIR="$LD" "${@:4}" bash "$H" >/dev/null 2>&1; echo $?)
+  local rc; rc=$(printf '%s' "$3" | env TMPDIR="$LD" LD="$LD" PATH="$LD/bin:$PATH" "${@:4}" bash "$H" >/dev/null 2>&1; echo $?)
   if [ "$rc" = "$2" ]; then echo "PASS  $1 (rc=$rc)"; pass=$((pass+1)); else echo "FAIL  $1 (rc=$rc, want $2)"; failn=$((failn+1)); fi
 }
 jb(){ python3 -c 'import json,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1"; }
@@ -90,6 +104,30 @@ check "C8c OVER-STRIP: C7m2 must NOT be blocked"                       0 "$(jb '
 # C9: only a STALE lock present (dead holder) -> a mutating launch is allowed.
 rm -f "$LD/qwt-vmlock-win11-acc"
 check "C9 mutating launch with only a STALE lock present -> allowed"    0 "$(jb 'prime-run.sh win10-base')"
+
+# ---------------------------------------------------------------------------------------------
+# D: GUARD:rigstate - one GUEST at a time, enforced from the rig's own state rather than from the
+# presence of a lock. Every case here is staged through the fake qvm-ls; the live rig is untouched.
+# The hole these prove closed: on 2026-09-21 two, then three, guests ran at once because the
+# launches were scratch probes that take no vmlock, so the lock loop above had nothing to see.
+printf 'dom0|Running\nwin-idd-mgmt|Running\nwin11de-wus|Running\nwin11-acc|Halted\n' > "$LD/rigstate"
+check "D1 start a DIFFERENT guest while one is up -> BLOCKED"          2 "$(jb 'qvm-start win11-acc')"
+check "D2 touch the guest that is ALREADY up -> allowed"               0 "$(jb 'qtest run whoami win11de-wus')"
+check "D3 qvm-shutdown of the running guest -> allowed"                0 "$(jb 'qvm-shutdown win11de-wus')"
+check "D3b qvm-kill / qvm-remove while one is up -> allowed"           0 "$(jb 'qvm-kill win11-acc; qvm-remove -f win11-acc')"
+check "D4 a harness naming NO guest while one is up -> BLOCKED"        2 "$(jb 'mgmt/harness/quick-upgrade.sh --cell x')"
+check "D5 this launch holds the lock -> allowed"                       0 "$(jb 'qvm-start win11-acc')" QWT_VMLOCK_HELD=win11-acc
+check "D6 a qrexec service call to a HALTED guest (autostarts it) -> BLOCKED" 2 "$(jb 'qrexec-client-vm win11-acc qubes.VMShell')"
+# MISSING DATA FAILS: an unreadable power state is not an idle rig.
+echo 1 > "$LD/rigrc"; : > "$LD/rigstate"
+check "D7 rig state UNREADABLE -> BLOCKED, not assumed idle"           2 "$(jb 'qvm-start win11-acc')"
+echo 0 > "$LD/rigrc"
+# Nothing up: the check must get out of the way entirely.
+printf 'dom0|Running\nwin-idd-mgmt|Running\nwin11-acc|Halted\n' > "$LD/rigstate"
+check "D8 nothing running -> start allowed"                            0 "$(jb 'qvm-start win11-acc')"
+# ...and with the hole re-introduced, D1 must stop being blocked. This is what makes D1 evidence.
+printf 'dom0|Running\nwin-idd-mgmt|Running\nwin11de-wus|Running\nwin11-acc|Halted\n' > "$LD/rigstate"
+check "D9 DEFECT RE-INTRODUCED (knob 3): D1 must NOT be blocked"       0 "$(jb 'qvm-start win11-acc')" SERIAL_GATE_DEFECT=3
 
 echo "checks: $pass passed, $failn failed"
 [ "$failn" = 0 ] && exit 0 || exit 1

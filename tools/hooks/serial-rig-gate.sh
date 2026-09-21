@@ -247,5 +247,68 @@ for lf in sorted(glob.glob(os.path.join(lockdir, 'qwt-vmlock-*'))):
             f"shows the segmentation, and tools/tests/serial-rig-gate-selftest.sh is where the fix "
             f"gets a check.\n")
         sys.exit(2)
+
+# ---------------------------------------------------------------------------------------------
+# SECOND INVARIANT: ONE GUEST AT A TIME, whether or not anybody took a lock. (# GUARD:rigstate)
+#
+# Measured 2026-09-21, twice in one session 5.5 hours apart: every launch that produced two
+# concurrent guests was a hand-written scratch probe run straight from Bash. Those take no
+# vmlock, so the loop above found nothing to conflict with and allowed all of them - the gate
+# was enforcing the rule only against the harnesses that were ALREADY obeying it. Owner:
+# "you were expected to run one test guest at a time, no?" and, hours later, "you are running
+# two concurrent guests again, whats the actual fuck". Jev classified both episodes
+# mechanized-but-bypassable (0.99, 1.00) and rated this class the likeliest to recur (0.42).
+#
+# So the RIG's state decides, not the presence of a lock file: a launch that could START a guest
+# is refused while some OTHER guest is already up. Verbs that REDUCE concurrency - shutdown,
+# kill, remove - are never refused here. A launch naming only guests that are already up is the
+# running job being worked on, and passes.
+START = re.compile(r'\bqvm-(start|run)\b'
+                   r'|\bqtest\s+(run|push|pushrun|start)\b'
+                   r'|\bprime-run|\bquick-upgrade|\bmatrix\.sh|\bcheckpoint\.sh\s+unpark'
+                   r'|\breprovision|\brelease-acceptance'
+                   r'|qubes\.WindowsUpdate|qubes\.VMShell|qubes\.VMExec', re.I)
+if os.environ.get('SERIAL_GATE_DEFECT') == '3':   # re-introduces the 2026-09-21 hole
+    sys.exit(0)
+if not START.search(text):
+    sys.exit(0)
+
+import subprocess, socket
+def refuse(msg):
+    sys.stderr.write("BLOCKED by tools/hooks/serial-rig-gate.sh (one guest at a time): " + msg + "\n")
+    sys.exit(2)
+
+# MISSING DATA FAILS - an unreadable rig state must not read as "nothing is running". qvm-ls is
+# called through PATH so a test can put a fake one in front of it.
+try:
+    ls = subprocess.run(['qvm-ls', '--raw-data', '--fields', 'name,state'],
+                        capture_output=True, text=True, timeout=45)
+    if ls.returncode != 0 or not ls.stdout.strip():
+        raise RuntimeError((ls.stderr or '').strip()[:200] or 'empty listing')
+except Exception as e:
+    refuse(f"the rig's power state could not be read ({e}), so this launch cannot be shown to be "
+           f"the only one. Fix the read or stop the other job; an unreadable state is not an idle rig.")
+
+rows = [l.split('|') for l in ls.stdout.splitlines() if '|' in l]
+me = socket.gethostname().split('.')[0]
+known = {r[0] for r in rows if r[0]}
+running = {r[0]: r[1] for r in rows if len(r) > 1 and r[1] != 'Halted' and r[0] not in ('dom0', me)}
+if not running:
+    sys.exit(0)
+# Which guests does this launch name? Qube names contain '-', so \b is useless here.
+named = {n for n in known if re.search(r'(?<![\w.-])' + re.escape(n) + r'(?![\w.-])', text)}
+if named and named <= set(running):
+    sys.exit(0)
+up = ', '.join(f"{v} ({s})" for v, s in sorted(running.items()))
+tgt = ', '.join(sorted(named)) if named else 'a guest it does not name'
+refuse(
+    f"{len(running)} guest(s) are already up ({up}) and this launch would touch {tgt}.\n"
+    f"  Two rig jobs at once interleave their probes and fabricate verdicts (CLAUDE.md 'Run VM-mutating "
+    f"jobs serially'; .claude/skills/rig-cycle #2). The gate above only sees jobs that TAKE a vmlock - "
+    f"this check sees the rig itself, which is how two guests got up twice on 2026-09-21.\n"
+    f"  To proceed: stop the other guest first (qvm-shutdown / qvm-kill / qvm-remove are never refused "
+    f"here), or, if this launch IS the job that owns it, take the lock - "
+    f"`source mgmt/harness/vmlock.sh; vm_lock <vm>` - which exempts it.\n"
+    f"  The gate {why}")
 sys.exit(0)
 PY
