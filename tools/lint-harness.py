@@ -29,6 +29,7 @@ from pathlib import Path
 ROOT = Path(os.environ.get("LINT_ROOT") or Path(__file__).resolve().parent.parent)
 HARNESS: list[Path] = []
 GUEST_PS: list[Path] = []
+PY_TOOLS: list[Path] = []
 FAULTINJECT = ROOT / "agent" / "gui-agent" / "faultinject.c"
 
 def _rescan() -> None:
@@ -45,6 +46,11 @@ def _rescan() -> None:
     HARNESS = sorted((ROOT / "mgmt" / "harness").glob("*.sh")) + \
               [p for p in sorted((ROOT / "tools").glob("*.sh")) if "tests" not in p.parts]
     GUEST_PS = sorted((ROOT / "guest").glob("*.ps1"))
+    # L11 also has to see the python tools: the boot-time read that shipped broken on 2026-09-21
+    # lived in tools/guest-state-judge.py, which no lint was looking at.
+    global PY_TOOLS
+    PY_TOOLS = [p for p in sorted((ROOT / "tools").glob("*.py"))
+                if "tests" not in p.parts and p.name != "lint-harness.py"]
     FAULTINJECT = ROOT / "agent" / "gui-agent" / "faultinject.c"
 
 _rescan()
@@ -331,6 +337,43 @@ def l10_no_default_target_guest() -> None:
                         f"defaults a target to '{m.group(1)}' - name it explicitly or refuse")
 
 
+# --------------------------------------------------------------------------- L11
+# Commands MEASURED ABSENT on the guests this repo drives. Each entry carries the measurement
+# that retired it and what replaces it. This list grows only from a measurement, never from a
+# recollection.
+ABSENT_ON_GUEST = {
+    "wmic": ("removed from Windows 11 24H2+; on this rig's German 25H2 image it answers "
+             "'konnte nicht gefunden werden' (measured 2026-09-21) - use "
+             "Get-CimInstance Win32_OperatingSystem"),
+}
+_ABSENT_RE = re.compile(r"(?<![\w.-])(" + "|".join(ABSENT_ON_GUEST) + r")(?![\w.-])")
+
+
+def l11_absent_guest_command() -> None:
+    """A probe built on a command the target OS does not have is not a weak check - it is a check
+    that CANNOT PASS, and every verdict resting on it is decoration.
+
+    Measured 2026-09-21: a boot-time classifier was committed as THE fix for a whole class of
+    wrong shutdown verdicts, in two places (mgmt/harness/shutdown-lib.sh and
+    tools/guest-state-judge.py), reading boot time with `wmic`. wmic is gone from Windows 11
+    24H2+ and the reporter's image is German 25H2, so both would have returned empty on every
+    modern guest and fallen into UNKNOWN forever. It was never driven against a guest before the
+    commit; it was found an hour later, by accident, in unrelated output.
+
+    CLAUDE.md: "A check counts as evidence only once it has been seen to FAIL." This lint cannot
+    prove a probe was driven - it can refuse the one class where the answer is knowable from the
+    source alone: the command does not exist where it is sent."""
+    for f in HARNESS + GUEST_PS + PY_TOOLS:
+        for n, line in enumerate(f.read_text(errors="replace").splitlines(), 1):
+            s = line.lstrip()
+            if s.startswith("#") or s.startswith("//"):
+                continue
+            m = _ABSENT_RE.search(line)
+            if m:
+                finding("L11-absent-guest-command", f"{f.name}:{n}",
+                        f"'{m.group(1)}' {ABSENT_ON_GUEST[m.group(1)]}")
+
+
 def l9_no_shutdown_wait() -> None:
     """`qvm-shutdown --wait` is a KILL ON A TIMER, not a wait. From qubesadmin 4.3.33:
 
@@ -385,6 +428,7 @@ def main() -> int:
     l8_findings_current_state()
     l9_no_shutdown_wait()
     l10_no_default_target_guest()
+    l11_absent_guest_command()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

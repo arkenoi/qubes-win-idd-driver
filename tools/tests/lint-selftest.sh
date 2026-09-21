@@ -95,6 +95,17 @@ else
   no "L7-orphan-ledger-check did NOT fire  <-- the lint cannot detect its own target"
 fi
 
+# ---------------------------------------------------------------- L11 absent guest command
+# 2026-09-21: a boot-time classifier shipped reading `wmic`, which Windows 11 24H2+ does not have,
+# so it could never have returned a value and every verdict on it was decoration.
+D="$TMP/l11"; mk "$D"
+printf '#!/bin/bash\nVM=$1\nsource mgmt/harness/vmlock.sh; vm_lock "$VM"\nb=$(tools/qtest run "cmd /c wmic os get lastbootuptime /value")\n' > "$D/mgmt/harness/bad.sh"
+expect_fires L11-absent-guest-command "$D" "a guest probe built on wmic"
+# ...and in a python tool, which is where the second copy lived and where no lint was looking.
+D="$TMP/l11b"; mk "$D"; mkdir -p "$D/tools"
+printf 'cmd = ["tools/qtest", "run", "cmd /c wmic os get lastbootuptime /value"]\n' > "$D/tools/judge.py"
+expect_fires L11-absent-guest-command "$D" "the same command inside a python tool"
+
 # ---------------------------------------------------------------- the NEGATIVE control
 # A lint that fires on everything is as useless as one that never fires. A clean tree must be
 # silent, or every finding above is meaningless.
