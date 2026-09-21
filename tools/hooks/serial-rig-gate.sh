@@ -188,8 +188,14 @@ def strip_prose(cmd):
 
 if hook.get('tool_name') in ('Bash', 'BashOutput') and isinstance(ti.get('command'), str):
     text = strip_prose(ti['command'])
+    # The UNNARROWED command, kept for GUARD:lockscope only. strip_prose keeps command-position
+    # segments and drops the rest - so in `for vm in a b c; do qvm-remove $vm; done` the guest
+    # NAMES are dropped and only the loop body survives. Deciding WHICH guests a launch touches
+    # from that text answers "none" for exactly the shape that most needs the answer.
+    full_text = ti['command']
 else:
     text = json.dumps(ti, ensure_ascii=False)
+    full_text = text
 
 # MUTATING verbs only. Passive reads (qvm-ls, admin.vm.Stats, qvm-prefs get, qtest state/shot)
 # are deliberately absent so monitoring a running job is never blocked.
@@ -213,6 +219,24 @@ if os.environ.get('QWT_VMLOCK_HELD'):
     sys.exit(0)
 
 lockdir = os.environ.get('LOCKDIR', '/tmp')
+
+# Which guests does this launch NAME? Needed by GUARD:lockscope below, and by the rig-state
+# invariant further down, so it is read once. MISSING DATA FAILS: if the rig cannot be listed,
+# named_guests stays empty and every lock refuses, which is the conservative direction.
+import subprocess as _sp
+_known = set()
+try:
+    _ls = _sp.run(['qvm-ls', '--raw-data', '--fields', 'name,state'],
+                  capture_output=True, text=True, timeout=45)
+    if _ls.returncode == 0 and _ls.stdout.strip():
+        _known = {l.split('|')[0] for l in _ls.stdout.splitlines() if '|' in l and l.split('|')[0]}
+except Exception:
+    _known = set()
+named_guests = {n for n in _known
+                if re.search(r'(?<![\w.-])' + re.escape(n) + r'(?![\w.-])', full_text)}
+if os.environ.get('SERIAL_GATE_DEFECT') == '4':   # re-introduces the over-match this guard fixes
+    named_guests = set()
+
 def alive(pid):
     try:
         os.kill(int(pid), 0); return True
@@ -235,6 +259,16 @@ for lf in sorted(glob.glob(os.path.join(lockdir, 'qwt-vmlock-*'))):
             live_pid = m.group(1); break
     if live_pid:
         vm = os.path.basename(lf).replace('qwt-vmlock-', '')
+        # ---- GUARD:lockscope
+        # A lock is PER GUEST, so it may only refuse a launch that touches THAT guest. Measured
+        # 2026-09-21: removing six halted, unrelated leftovers was refused because a live job held
+        # win11de-fb6 - a launch that could not have interleaved with it by any mechanism. An
+        # over-match teaches people to route around the gate, which is how gates die.
+        # The hole this must NOT open: a launch that names NO guest can still be driving the locked
+        # one through QTEST_VM, which is exactly the 2026-09-21 mis-targeting. So the exemption
+        # requires the launch to name at least one known guest AND not to name this locked one.
+        if named_guests and vm not in named_guests:
+            continue
         sys.stderr.write(
             f"BLOCKED by tools/hooks/serial-rig-gate.sh: a rig-mutating launch was refused because guest '{vm}' is "
             f"already held by a LIVE job (lock {lf}, holder pid {live_pid} alive):\n  {last}\n"

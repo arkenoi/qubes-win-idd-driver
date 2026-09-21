@@ -44,6 +44,14 @@ check "C3 passive monitor (qvm-ls) while a LIVE lock is held -> allowed" 0 "$(jb
 check "C4 passive admin.vm.Stats while a LIVE lock is held -> allowed"  0 "$(jb 'qrexec-client-vm win11-acc admin.vm.Stats')"
 check "C5 qtest state/shot (read) while a LIVE lock is held -> allowed" 0 "$(jb 'qtest state win11-acc; qtest shot out.tar')"
 check "C6 this launch already holds the lock -> allowed"                0 "$(jb 'prime-run.sh win11-acc')" QWT_VMLOCK_HELD=win11-acc
+# C6b-C6d: GUARD:lockscope. A lock is per GUEST. It must refuse a launch that touches THAT guest,
+# and must NOT refuse one that touches only others - measured 2026-09-21, six halted leftovers could
+# not be removed because an unrelated guest was held. The hole to keep shut: a launch naming NO
+# guest may be driving the locked one through QTEST_VM, so it stays refused.
+check "C6b remove of an UNRELATED halted guest while a lock is held -> allowed" 0 "$(jb 'qvm-remove -f win11de-wus')"
+check "C6c remove of the LOCKED guest -> BLOCKED"                       2 "$(jb 'qvm-remove -f win11-acc')"
+check "C6d a launch naming NO guest while a lock is held -> BLOCKED"    2 "$(jb 'prime-run.sh --resume')"
+check "C6e DEFECT RE-INTRODUCED (knob 4): C6b must be BLOCKED again" 2 "$(jb 'qvm-remove -f win11de-wus')" SERIAL_GATE_DEFECT=4
 check "C7 non-rig command -> allowed"                                   0 "$(jb 'git status && grep foo bar')"
 # C7b/C7c: PROSE is not a launch. Measured 2026-09-20 - the gate blocked a real `git commit`
 # because its MESSAGE described harness work, so it read its own subject line as an invocation.
