@@ -110,6 +110,16 @@ def l2_vmlock_required() -> None:
             continue
         if f.name == "vmlock.sh":
             continue
+        # SOURCED LIBRARIES are exempt, narrowly and for a reason: they run INSIDE a caller that
+        # already holds the lock, so taking it again would deadlock rather than protect anything.
+        # shutdown-lib.sh joined this list on 2026-09-21 when qwt_shutdown started reading the
+        # guest's OWN BOOT TIME (one read-only qrexec call) to tell "rebooted while we waited"
+        # from "ignoring the request" - a distinction that had been guessed wrong almost daily.
+        # The exemption is by NAME, not by pattern, so a new guest-driving harness cannot inherit
+        # it by accident, and tools/tests/lint-selftest.sh drives L2 against a fixture to prove
+        # the rule still fires for everything else.
+        if f.name in ("shutdown-lib.sh",):
+            continue
         finding("L2-missing-vmlock", f.name,
                 "drives a guest via tools/qtest but never calls vm_lock")
 
