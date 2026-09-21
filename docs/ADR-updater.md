@@ -143,3 +143,44 @@ qube Halted, and only dom0 can start it again. So when the guest needs a boot, i
 
 **Why:** a guest that halts itself to fix its own problem takes the machine away from the admin
 without being asked, and §8's accounting cannot tell that cycle from a requested one.
+
+## 11. A cause outside our code, with a measured remedy, is CLOSED BY DECISION - and the decision is recorded here
+
+We chase a cause until either it is NAMED, or it is BOUNDED to a component that is not ours **and**
+a remedy is measured. In the second case we stop deliberately, and the stop is recorded here rather
+than left in the issue register.
+
+- A decision to stop must state four things: what is ESTABLISHED, what is NOT, the REMEDY that makes
+  the residue tolerable, and what would REOPEN it.
+- An item parked this way does not remain in `findings/issues.md` as open work. "Still open" there
+  reads as unfinished work and invites the next session to re-derive it, which this project has paid
+  for more than once.
+- The remedy must be in the product and must FAIL LOUDLY if it stops working. A parked cause with no
+  remedy is not parked, it is ignored.
+
+**Applied: Windows Update's own proxy selection (`0x8024402C` on a routeless guest).**
+
+*Established.* On a guest whose updater was installed and which has not restarted since, Windows
+Update's request omits the proxy configuration (WebIO request option 10, `ProxyConfig`), goes to an
+endpoint with `Proxyendpunkt: 0x0`, resolves the hostname itself and gets `11001` - which surfaces
+as `0x8024402C`. Both polarities were traced on one guest and reproduced on a second. Everything
+outside Windows Update is excluded by measurement: the relay and qrexec path, .NET *and* WinHTTP
+through the same proxy at the same instant, the machine WinHTTP configuration (re-applied), the
+service account's WinINET configuration (populated), WPAD (off), the autoproxy inputs and the proxy
+arbiter's answers (identical on both sides), the update datastore (moved aside), network adapters,
+servicing state, and nine services actually cycled.
+
+*Not established.* Why Windows Update omits it early and attaches it later. Jev:
+`wu-internal-state` 0.80, `trigger_known` 0.11. A fixed delay must NOT be claimed - subjects only
+bracket a quarter of an hour (`timer_claim` 0.25).
+
+*Remedy (`GUARD:proxystateremedy`).* The pass reports the reason it MEASURED in that same pass -
+WinHTTP through our proxy reaching the same endpoint, with the HTTP status carried in the message -
+and requests the restart that is measured to clear the state, once per boot, through the existing
+`reboot_needed` channel that section 8 counts and section 10 keeps a request. dom0 is told no
+availability number either way.
+
+*Reopens if* the state survives a restart on any guest (the pass already says so, and stops asking
+rather than looping), if the once-per-boot guard is seen to fire twice in the field, or if a Windows
+change makes the state persist. Reporting it outside this project is the other live option, since
+this is Windows Update declining a proxy the system is handing it.
