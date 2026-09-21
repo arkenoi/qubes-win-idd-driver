@@ -1268,6 +1268,32 @@ function Install-SelfContained($kb,$urls){
       # Gated to the ONE probe whose effect we can measure. A fallback whose result cannot be
       # verified must not fire silently (fallbacks are anomalies: they are logged loudly).
       $alreadyCurrent = $false
+      # DEFENDER SIGNATURES: the offer DOES state the version it carries, in its own title as
+      # "(Version 1.459.317.0)", and Get-MpComputerStatus states the installed one. Comparing the
+      # two turns "the probe cannot establish the offered version" - which was true, and which made
+      # this item unjudgeable - into a plain answer. Digits only: the title's LANGUAGE is
+      # nondeterministic here (the same KB comes back German, English or French) but a dotted quad
+      # is a dotted quad, and this is an EFFECT comparison, never accept/reject, which still runs
+      # on the filename. Jev rated this measurement decisive at 1.00 for this item.
+      if($probe -eq 'defender-signature' -and -not $eff -and $p.ExitCode -eq 0){
+        $offeredVer = $null
+        try {
+          $off = @($script:St.available | Where-Object { $_.kb -eq $kb } | Select-Object -First 1)
+          if($off -and $off[0].title -match '(\d+\.\d+\.\d+\.\d+)'){ $offeredVer = $Matches[1] }
+        } catch {}
+        $sigNow = ''
+        try { $sigNow = [string](Get-MpComputerStatus).AntivirusSignatureVersion } catch {}
+        if($offeredVer -and $sigNow){
+          try {
+            if([version]$sigNow -ge [version]$offeredVer){
+              $alreadyCurrent = $true
+              Log ("    signature $sigNow is already at or past the offered $offeredVer - nothing to do")
+            } else {
+              Log ("    signature $sigNow is BEHIND the offered $offeredVer and nothing moved - this update did not install")
+            }
+          } catch { Log ("    could not compare signature versions ('$sigNow' vs '$offeredVer')") }
+        }
+      }
       if($probe -eq 'security-platform' -and $probeRan -and -not $eff -and $p.ExitCode -eq 0){
         $ax = Install-EmbeddedAppx -ExePath $dst -WorkRoot $WorkDir
         if($ax.attempted){
