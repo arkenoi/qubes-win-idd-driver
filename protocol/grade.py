@@ -16,7 +16,7 @@ observed to fail on its defect-armed fixture. Dry-grade proofs upgrade dry-mode 
 live campaign still demands a live-grade proof (diag build / real defect).
 """
 from __future__ import annotations
-import json, sys, time
+import json, re, sys, time
 from pathlib import Path
 
 PROTO = Path(__file__).resolve().parent
@@ -59,18 +59,52 @@ def main() -> int:
         dev.append(f"halt point: expected {expect['halted_at']}, got "
                    f"{halted['at'] if halted else 'no halt'}")
 
-    # 2. nothing ran past the expected halt point (file order is execution order)
-    if expect.get("halted_at") and halted and halted["at"] == expect["halted_at"]:
-        past = False
-        for s in order:
-            if s["id"] == expect["halted_at"]:
-                past = True
+    # 2. nothing ran past the expected halt point. "Past" is judged on the TRACE, not on file
+    #    order alone: a step that does not require the halted one legitimately completes BEFORE
+    #    the halt occurs (s2-golden-* run while s1-download is still retrying), and file order
+    #    alone called that "ran after the halt". The trace is the execution record, in order.
+    trace_events = []
+    tp = cdir / "trace.jsonl"
+    if tp.exists():
+        for line in tp.read_text().splitlines():
+            if not line.strip():
                 continue
-            if past and (st["steps"].get(s["id"]) or {}).get("status") == "GREEN":
-                dev.append(f"step {s['id']} ran GREEN after the campaign should have halted")
+            try:
+                trace_events.append(json.loads(line))
+            except ValueError:
+                pass
+    if expect.get("halted_at") and halted and halted["at"] == expect["halted_at"]:
+        halt_ix = max((i for i, e in enumerate(trace_events)
+                       if e.get("event") == "step" and e.get("step") == expect["halted_at"]),
+                      default=len(trace_events))
+        for i, e in enumerate(trace_events):
+            if i > halt_ix and e.get("event") == "step" and e.get("status") == "GREEN":
+                dev.append(f"step {e['step']} ran GREEN after the campaign should have halted")
+
+    # 2a. HOW the campaign ended, not only where. The attempt-budget scenario is graded on this:
+    #     a bounded retry ends through the step's own on_fail.exhausted route, while a broken
+    #     accounting ends through the runner's RUNNER-ERROR invariant at the same step id. Halt
+    #     POINT alone cannot tell those apart - and the whole point of the fixture is to tell
+    #     them apart.
+    if expect.get("halted_verdict"):
+        got_hv = (halted or {}).get("verdict", "")
+        if not re.fullmatch(expect["halted_verdict"], got_hv or ""):
+            dev.append(f"halt verdict: expected /{expect['halted_verdict']}/, got "
+                       f"{got_hv or 'no halt'}")
+    if expect.get("halted_why_re"):
+        got_w = (halted or {}).get("why", "")
+        if not re.search(expect["halted_why_re"], got_w or ""):
+            dev.append(f"halt reason: expected /{expect['halted_why_re']}/, got {got_w!r}")
+
+    # 2b. the attempt budget is BOUNDED: a step under RETRY is executed retries+1 times, no more.
+    #     An unbounded retry never reaches a verdict at all, which is worse than a wrong one.
+    for sid, want_n in (expect.get("attempts") or {}).items():
+        got_n = sum(1 for e in trace_events
+                    if e.get("event") == "step" and e.get("step") == sid)
+        if got_n != int(want_n):
+            dev.append(f"attempts: step {sid} was executed {got_n} time(s), expected {want_n}")
 
     # 3. ledger rows: every expected check present with the expected verdict (regex)
-    import re
     ledger = []
     lp = cdir / "verdicts.tsv"
     if lp.exists():

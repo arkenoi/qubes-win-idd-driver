@@ -7,7 +7,8 @@
       "kind": "action",
       "title": "Download the CI artifacts for the pinned release",
       "vars_in": ["RUNID", "MATRIX_WORK"],
-      "command": "gh run download {RUNID} -D {MATRIX_WORK}/dl",
+      "command": "rm -rf {MATRIX_WORK}/dl && gh run download {RUNID} -D {MATRIX_WORK}/dl",
+  "note": "the rm is load-bearing: gh run download REFUSES to overwrite an existing file, so any partially-extracted tree from a previous attempt makes every RETRY fail with 'file exists' forever. A command under RETRY must be idempotent or the retry policy is a lie.",
       "timeout_s": 1800,
       "expect": {"exit": 0},
       "on_fail": {"action": "RETRY", "retries": 2, "exhausted": "HALT_CAMPAIGN", "msg": "artifact download failed 3x - fix gh/network, then start a new campaign"}

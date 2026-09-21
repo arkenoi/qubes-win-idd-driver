@@ -1,0 +1,23 @@
+{
+ "truth": {},
+ "expect": {
+  "final": "HALTED",
+  "halted_at": "s1-download",
+  "attempts": {
+   "s1-download": 3
+  },
+  "ledger": [
+   {
+    "check": "s1-download",
+    "verdict": "INVALID-PRECONDITION"
+   }
+  ],
+  "ledger_absent": [
+   "gate0-payload",
+   "p0-stage-inputs",
+   "p1-matrix-run"
+  ],
+  "halted_verdict": "INVALID-PRECONDITION",
+  "halted_why_re": "exit 1 != expected 0"
+ }
+}

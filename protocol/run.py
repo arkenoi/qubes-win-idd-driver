@@ -300,10 +300,15 @@ def handle_red(c: Campaign, step: dict, why: str, out: str, failproofs: dict) ->
         # step that declares `restores` for it completes. No plausibility argument can lift this.
         c.st["guests"][g] = {"status": "OUT_OF_SERVICE", "since": step["id"], "why": verdict}
         c.trace("guest_out_of_service", guest=g, step=step["id"])
-    mark(c, step, RED, verdict=verdict, why=why)
+    # The attempt count must be read BEFORE mark(), and carried THROUGH it. mark() replaces the
+    # step record wholesale, so reading `tries` from it afterwards always read 0 and the budget
+    # never exhausted: s1-download retried 7 times in 3 minutes on 2026-09-21 with retries=2, and
+    # `exhausted` (HALT_CAMPAIGN) was unreachable. An unbounded retry is not a lenient retry - it
+    # is a campaign that never reaches a verdict.
+    tries = (c.st["steps"].get(step["id"]) or {}).get("tries") or 0
+    mark(c, step, RED, verdict=verdict, why=why, tries=tries)
     act = of.get("action", "HALT_PART")
     if act == "RETRY":
-        tries = (c.st["steps"][step["id"]].get("tries") or 0)
         if tries < int(of.get("retries", 2)):
             c.st["steps"][step["id"]] = {"status": "PENDING", "tries": tries + 1}
             return "retry"
@@ -345,11 +350,28 @@ def advance(c: Campaign, steps: list[dict], failproofs: dict, auto_truth: bool =
     """Run mechanical steps in order until a judgement needs an operator, nothing is runnable,
     or the campaign halts. Returns the waiting judgement step or None."""
     live_locks: dict[str, int] = {}
+    attempts: dict[str, int] = {}
     progressed = True
     while progressed and not c.st.get("halted"):
         progressed = False
         for step in steps:
             ok, why = runnable(c, step)
+            if ok:
+                # INVARIANT (2026-09-21): a step is attempted at most retries+1 times, counted
+                # here from executions rather than from the persisted `tries` - so an accounting
+                # regression in handle_red() halts LOUDLY instead of spinning. The defect this
+                # guards: mark() replaced the step record and dropped `tries`, so a RETRY budget
+                # of 2 produced an unbounded loop and the campaign never reached a verdict.
+                attempts[step["id"]] = attempts.get(step["id"], 0) + 1
+                cap = int(((step.get("on_fail") or {}).get("retries", 2))) + 1
+                if attempts[step["id"]] > cap:
+                    c.st["halted"] = {"at": step["id"], "why": (
+                        f"RUNNER-ERROR: step attempted {attempts[step['id']]} times, budget is "
+                        f"{cap} - the retry accounting is broken, not the step"),
+                        "verdict": "INVALID-INSTRUMENT", "msg": ""}
+                    c.trace("runner_error", step=step["id"], attempts=attempts[step["id"]], cap=cap)
+                    c.save()
+                    return None
             if not ok:
                 if step_status(c, step["id"]) == "PENDING" and why.startswith("guest"):
                     if not (c.st["steps"].get(step["id"]) or {}).get("blocked_noted"):
