@@ -266,6 +266,51 @@ function Ensure-Proxy {
     Start-Relay
     if (-not (Test-RelayListening)) { throw 'relay still not accepting connections on 127.0.0.1:8082 after respawn' }
   }
+  Reset-WuSession   # GUARD:wusession
+}
+
+# GUARD:wusession - A FRESHLY INSTALLED UPDATER CANNOT SEARCH UNTIL THE WU SERVICE IS RESTARTED.
+#
+# The measurement (findings/issues.md, P1 2026-09-21): win11de-ctld, a fresh clone of the sealed
+# German golden carrying the current package, failed BOTH rounds at
+# `0x8024402C` (WU_E_PT_WINHTTP_NAME_NOT_RESOLVED) while OUR OWN fetches through the relay
+# succeeded in the same pass (Sync-Revocation refreshed 3/3 CTLs). One deliberate reboot and the
+# very next pass completed - phase=done count=6. Subjects with install/pass history behind them
+# never showed it.
+#
+# THE CANDIDATE CAUSE this code acts on: `netsh winhttp set proxy` changes the MACHINE WinHTTP
+# configuration, but a WinHTTP session reads that configuration when it is created. wuauserv is
+# demand-start; if it is ALREADY RUNNING when Ensure-Proxy first sets the proxy - which is exactly
+# what a just-installed package leaves behind, its own scan task having woken the service - then
+# WU's session still holds the routeless "direct" configuration, and with no DNS on this guest a
+# direct lookup can only fail to RESOLVE A NAME. A reboot fixes it because the service is then
+# started fresh, after the proxy exists. If that is the mechanism, a reboot is a very expensive way
+# to restart one service.
+#
+# THIS IS A CANDIDATE, NOT A PROVEN CAUSE. It predicts the error code, the "works after one boot"
+# shape, and the fresh-subject-only incidence, but it has NOT been demonstrated against a control.
+# The knob exists so it can be: on ONE never-booted clone, run a pass with
+# QWU_NO_WU_SERVICE_RESET=1 (must fail 0x8024402C), then a pass without it (must complete) - no
+# reboot between, so the boot cannot be what changed. Until that A/B is on the record, do not
+# describe the first-boot requirement as fixed.
+function Reset-WuSession {
+  if ($env:QWU_NO_WU_SERVICE_RESET -eq '1') { Log 'WU service reset SUPPRESSED by QWU_NO_WU_SERVICE_RESET=1 (defect knob)' 'WARN'; return }
+  try {
+    $svc = Get-Service wuauserv -EA Stop
+    if ($svc.Status -ne 'Running') { Log 'WU service not running - it will start fresh and read the proxy we just set'; return }
+    # Stop, do not Restart: the search starts it on demand, and a stopped service cannot be holding
+    # a stale WinHTTP session. Bounded - a service that will not stop is REPORTED, never forced,
+    # because a running scan is exactly the thing we must not kill under.
+    Log 'WU service is already running and may hold a WinHTTP session predating our proxy - stopping it'
+    Stop-Service wuauserv -Force -EA Stop
+    $t0 = Get-Date
+    while (((Get-Service wuauserv).Status -ne 'Stopped') -and ((Get-Date) - $t0).TotalSeconds -lt 60) { Start-Sleep -Milliseconds 500 }
+    $st = (Get-Service wuauserv).Status
+    if ($st -ne 'Stopped') { Log "WU service did not stop within 60 s (status=$st) - continuing; a stale session may still fail the search 0x8024402C" 'WARN' }
+    else { Log 'WU service stopped - the search will start it against the proxy now in effect' }
+  } catch {
+    Log "could not reset the WU service: $($_.Exception.Message)" 'WARN'
+  }
 }
 
 # REVOCATION SYNC - without this, every pass on a guest whose CTL cache has expired dies at
