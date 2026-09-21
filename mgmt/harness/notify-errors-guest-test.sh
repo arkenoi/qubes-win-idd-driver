@@ -29,7 +29,11 @@ cd /home/user/qubes-win-idd-driver || exit 2
 
 # Parameterised so a campaign can point it at its own subject and package. Defaults are the
 # throwaway subject this test was written against.
-VM="${VM:-win11-ne}"
+# NO DEFAULT TARGET (owner, 2026-09-21: "no attempts to target dom0 or self as default target
+# qube where explicit target is required"). A default turns "I forgot to name the guest" into
+# "silently drive a different guest" - which sent both arms of an A/B to the wrong VM and left
+# three guests running at once. Name it or be refused.
+if [ -z "${VM:-}" ]; then echo "notify-errors-guest-test: VM is not set and there is NO default target." >&2; exit 2; fi
 PKG="${PKG:?set PKG to the release setup tree under test}"
 LOG="${LOG:-/home/user/rel/notify-errors-guest-test-$VM.log}"
 OS_FAMILY="${OS_FAMILY:-win11}"   # which golden quick-upgrade.sh upgrades over

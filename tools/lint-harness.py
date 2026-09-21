@@ -305,6 +305,32 @@ NOT_LINTED = [
 
 
 # --------------------------------------------------------------------------- L9
+# --------------------------------------------------------------------------- L10
+# Only variables that NAME A DRIVE TARGET. A default BASE IMAGE to clone from (B10, BASE, G10)
+# is a different thing: it selects a source, it does not silently send commands somewhere. Flagging
+# those too would bury the real rule in noise and it would be baselined away, which is how a lint
+# stops mattering.
+TARGET_VARS = r'(?:QTEST_VM|VM|SUBJ|SUBJECT|CHURN|TARGET|GUEST|TPL|DEST|HOLDER)'
+DEFAULT_TARGET_RE = re.compile(r'\$\{' + TARGET_VARS + r':-(dom0|win[0-9a-z-]*)\}')
+
+def l10_no_default_target_guest() -> None:
+    """RULE 21 (owner, 2026-09-21: "no attempts to target dom0 or self as default target qube
+    where explicit target is required"). A defaulted target turns "I forgot to name the guest"
+    into "silently drive a different guest". tools/qtest defaulted to win-idd-test, which sent
+    BOTH arms of an A/B to a halted VM, recorded "Request refused" where a pass result belongs,
+    started that VM twice, and left three Windows guests running at once against the one-guest
+    rule. Name the target or be refused - there is no safe default."""
+    for f in HARNESS:
+        for n, line in enumerate(f.read_text(errors="replace").splitlines(), 1):
+            s = line.lstrip()
+            if s.startswith("#"):
+                continue
+            m = DEFAULT_TARGET_RE.search(line)
+            if m:
+                finding("L10-default-target-guest", f"{f.name}:{n}",
+                        f"defaults a target to '{m.group(1)}' - name it explicitly or refuse")
+
+
 def l9_no_shutdown_wait() -> None:
     """`qvm-shutdown --wait` is a KILL ON A TIMER, not a wait. From qubesadmin 4.3.33:
 
@@ -358,6 +384,7 @@ def main() -> int:
     l6_probe_null_deref()
     l8_findings_current_state()
     l9_no_shutdown_wait()
+    l10_no_default_target_guest()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

@@ -4,7 +4,12 @@
 # restart, qrexec-up, or a stall (no cpu/disk/geometry movement for N samples).
 # Needs feature gui-emulated=1 on the VM, else there is no console to look at.
 set -u
-VM="${1:-win-idd-test}"; D="${2:-/tmp/wininstall}"; mkdir -p "$D"
+# NO DEFAULT TARGET (owner, 2026-09-21: "no attempts to target dom0 or self as default target
+# qube where explicit target is required"). A default turns "I forgot to name the guest" into
+# "silently drive a different guest" - which sent both arms of an A/B to the wrong VM and left
+# three guests running at once. Name it or be refused.
+if [ -z "${1:-}" ]; then echo "win-install-watch: name the guest - there is NO default target." >&2; exit 2; fi
+VM="$1"; D="${2:-/tmp/wininstall}"; mkdir -p "$D"
 BUDGET=$((90*60)); t0=$(date +%s); n=0; stall=0; prevgeo=""; prevcpu=0; prevuse=0
 st() { qvm-ls --raw-data --fields STATE "$VM" 2>/dev/null; }
 cpu() { cd /home/user/qubes-win-idd-driver && QTEST_VM="$VM" tools/qtest state 2>/dev/null | grep -oP 'cputime=\K[0-9]+'; }

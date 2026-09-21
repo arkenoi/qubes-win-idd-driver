@@ -10,7 +10,12 @@
 set -uo pipefail
 LABEL="${1:?usage: $0 <label> [max-seconds]}"
 MAX="${2:-900}"
-VM="${QTEST_VM:-win-idd-test}"
+# NO DEFAULT TARGET (owner, 2026-09-21: "no attempts to target dom0 or self as default target
+# qube where explicit target is required"). A default turns "I forgot to name the guest" into
+# "silently drive a different guest" - which sent both arms of an A/B to the wrong VM and left
+# three guests running at once. Name it or be refused.
+if [ -z "${QTEST_VM:-}" ]; then echo "netvm-bootwatch: QTEST_VM is not set and there is NO default target." >&2; exit 2; fi
+VM="$QTEST_VM"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$HERE/instrumentation/qwtfull-w10/netvm-$LABEL.csv"
 mkdir -p "$(dirname "$OUT")"

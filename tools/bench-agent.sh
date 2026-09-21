@@ -10,7 +10,7 @@
 set -uo pipefail
 
 LABEL="${1:?usage: $0 <label>   e.g. before / after}"
-VM="${QTEST_VM:-win-idd-test}"
+[ -n "${QTEST_VM:-}" ] || { echo "bench-agent: QTEST_VM is not set and there is NO default target." >&2; exit 2; }; VM="$QTEST_VM"
 IN="${QTEST_INCOMING:-C:\\Users\\user\\Documents\\QubesIncoming\\win-idd-mgmt}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$HERE/instrumentation/bench-$LABEL.txt"
