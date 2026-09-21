@@ -272,8 +272,10 @@ function Ensure-Proxy {
 # the proxy, on the theory that WU held a WinHTTP session created before the proxy existed. It was
 # MEASURED on win11de-wus (fresh clone of the sealed German golden, env-assert gweck passed,
 # artefact byte-verified, install ledger requested=0 performed=0 so never cycled) and it DOES NOT
-# WORK: the reset ran and the pass still died at 0x8024402C, twice. Restarting the WHOLE update
-# service set - wuauserv, UsoSvc, DoSvc, BITS, cryptsvc, WaaSMedicSvc - did not help either.
+# WORK: the reset ran and the pass still died at 0x8024402C, twice. Cycling the update services -
+# wuauserv, UsoSvc, DoSvc, BITS, WaaSMedicSvc - did not help either. NOT cryptsvc: `net stop`
+# declined it at an interactive dependency prompt, so it ran throughout and that arm says nothing
+# about it.
 # ONE REBOOT DID: the very next pass got past the search and downloaded a 4.4 GB cumulative.
 # So the first-boot requirement is NOT a service-session problem, and a change with no measured
 # effect does not stay in the shipped script (owner's rule, the 30f2393 flush precedent).
@@ -1841,10 +1843,13 @@ if ($vmClassLive -eq 'TemplateVM') {
 # fetches through the relay succeed in that same pass (Sync-Revocation refreshed 3/3 CTLs) and the
 # dev-qube proxy preflight proves egress. One deliberate cycle of the same guest and the very next
 # pass completed: phase=done count=6, then it staged the cumulative. Restarting the ENTIRE update
-# service set - wuauserv, UsoSvc, DoSvc, BITS, cryptsvc, WaaSMedicSvc, each confirmed stopped and
-# started in the guest's own output - does NOT cure it; only a boot does.
+# services that were actually cycled - wuauserv, UsoSvc, DoSvc, BITS, WaaSMedicSvc, each confirmed
+# stopped and started in the guest's own output - does NOT cure it, and one boot does. READ THAT
+# ARM PRECISELY: `net stop cryptsvc` hit an interactive dependency prompt (Smartlocker /
+# Anwendungsidentitaet), received no answer, and DECLINED - `net start cryptsvc` then reported it
+# was already running. So cryptsvc ran throughout and is NOT excluded by that result.
 #
-# WHAT a boot establishes that a full service restart does not is UNKNOWN. This guard therefore
+# WHAT a boot establishes that the cycled services do not is UNKNOWN. This guard therefore
 # makes the state HONEST; it does not claim to fix it, and it must be removed, not kept as
 # decoration, if the cause is ever found and addressed.
 #

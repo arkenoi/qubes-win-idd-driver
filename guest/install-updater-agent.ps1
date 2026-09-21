@@ -455,7 +455,8 @@ Log 'set NoAutoUpdate=1 (dom0 owns updates; guest never installs on its own)'
 #     Measured 2026-09-21 on GWeck's environment: a guest carrying a freshly installed updater and
 #     never booted since cannot run a Windows Update search at all - it dies ~2 s in at 0x8024402C
 #     (WU_E_PT_WINHTTP_NAME_NOT_RESOLVED) while our own relay fetches in the same pass succeed, and
-#     one deliberate restart cures it. Restarting every update service does not. The default
+#     one deliberate restart cures it; cycling the update services that could be cycled does not
+#     (cryptsvc was never actually stopped - `net stop` declined at a dependency prompt). The default
 #     install leaves the guest RUNNING (the end-of-install power-off is behind -RebootAtEnd), so
 #     this is the state a user is in when they click Update straight after installing the tools.
 #     The updater compares this stamp with the live LastBootUpTime and, while they are the same

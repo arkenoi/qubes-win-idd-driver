@@ -398,8 +398,9 @@ switch ($st.phase) {
         exit 0
     }
     # GUARD:firstboot. The updater refused the pass because Windows Update cannot search in the
-    # same boot the agent was installed in (measured 0x8024402C, cured by exactly one restart and
-    # by nothing else - see the WU-FIRSTBOOT region in qubes-windows-update.ps1). Nothing was
+    # same boot the agent was installed in (measured 0x8024402C, cured by one restart; no service
+    # restart tried so far cures it - see the WU-FIRSTBOOT region in qubes-windows-update.ps1, which
+    # records which service that arm did NOT actually cycle). Nothing was
     # searched, so dom0 is told no count: a pass that could not look is not a guest with no
     # updates. It is a FAILED update (exit 1), because the update the admin asked for did not
     # happen and they have to act - and the action is one restart, which the message names.
