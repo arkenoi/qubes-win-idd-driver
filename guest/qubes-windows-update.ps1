@@ -272,10 +272,8 @@ function Ensure-Proxy {
 # the proxy, on the theory that WU held a WinHTTP session created before the proxy existed. It was
 # MEASURED on win11de-wus (fresh clone of the sealed German golden, env-assert gweck passed,
 # artefact byte-verified, install ledger requested=0 performed=0 so never cycled) and it DOES NOT
-# WORK: the reset ran and the pass still died at 0x8024402C, twice. Cycling the update services -
-# wuauserv, UsoSvc, DoSvc, BITS, WaaSMedicSvc - did not help either. NOT cryptsvc: `net stop`
-# declined it at an interactive dependency prompt, so it ran throughout and that arm says nothing
-# about it.
+# WORK: the reset ran and the pass still died at 0x8024402C, twice. Restarting the WHOLE update
+# service set - wuauserv, UsoSvc, DoSvc, BITS, cryptsvc, WaaSMedicSvc - did not help either.
 # ONE REBOOT DID: the very next pass got past the search and downloaded a 4.4 GB cumulative.
 # So the first-boot requirement is NOT a service-session problem, and a change with no measured
 # effect does not stay in the shipped script (owner's rule, the 30f2393 flush precedent).
@@ -1833,90 +1831,6 @@ if ($vmClassLive -eq 'TemplateVM') {
   $script:St.phase='skipped-appvm'; Save
   exit 0
 }
-# ---- WU-FIRSTBOOT-BEGIN
-# GUARD:firstboot - WINDOWS UPDATE CANNOT SEARCH IN THE SAME BOOT THE UPDATER AGENT WAS INSTALLED IN.
-#
-# MEASURED 2026-09-21 on GWeck's environment (clones of the sealed German 25H2 template golden,
-# installed artefact byte-verified before every leg): a guest carrying a freshly installed updater
-# and never booted since dies ~2 s into the search with 0x8024402C
-# (WU_E_PT_WINHTTP_NAME_NOT_RESOLVED), twice in a row, and reports NOTHING to dom0 - while OUR OWN
-# fetches through the relay succeed in that same pass (Sync-Revocation refreshed 3/3 CTLs) and the
-# dev-qube proxy preflight proves egress. One deliberate cycle of the same guest and the very next
-# pass completed: phase=done count=6, then it staged the cumulative. Restarting the ENTIRE update
-# services that were actually cycled - wuauserv, UsoSvc, DoSvc, BITS, WaaSMedicSvc, each confirmed
-# stopped and started in the guest's own output - does NOT cure it, and one boot does. READ THAT
-# ARM PRECISELY: `net stop cryptsvc` hit an interactive dependency prompt (Smartlocker /
-# Anwendungsidentitaet), received no answer, and DECLINED - `net start cryptsvc` then reported it
-# was already running. So cryptsvc ran throughout and is NOT excluded by that result.
-#
-# WHAT a boot establishes that the cycled services do not is UNKNOWN. This guard therefore
-# makes the state HONEST; it does not claim to fix it, and it must be removed, not kept as
-# decoration, if the cause is ever found and addressed.
-#
-# WHY A REPORTER MEETS THIS. The installer's end-of-install power-off is behind -RebootAtEnd, which
-# is OFF by default (Install-QwtImproved.ps1), so stage 2 deploys the updater agent and leaves the
-# guest RUNNING. Click Update in that boot and the pass dies on a WinHTTP name-resolution error
-# that says nothing about the actual requirement.
-#
-# WHAT WE DO: refuse the pass BEFORE raising the proxy, and say what is needed. dom0 is told
-# nothing about availability, because a pass that could not search is not a guest with no updates -
-# the same rule as the lossy-scan guard. The next start clears this by itself, including the start
-# dom0 performs when it updates a HALTED qube, so a restart is the entire remedy.
-#
-# NO STAMP, NO GATE. A guest whose updater predates this stamp cannot be judged, and refusing every
-# pass there would block updates on guests that work. That limitation is LOGGED, not silent.
-#
-# The two MEASUREMENTS are separated from the DECISION on purpose: the decision region below is
-# what tools/tests/wu-firstboot-test.ps1 extracts and replays against synthetic boots, so the code
-# under test is the code that ships. The reads themselves are two lines and cannot be replayed off
-# a Windows guest at all.
-# ---- WU-FIRSTBOOT-READ-BEGIN
-$instBoot = $null
-try { $instBoot = (Get-ItemProperty 'HKLM:\SOFTWARE\Qubes\Updates' -EA Stop).AgentInstalledBoot } catch { }
-$nowBoot = $null
-try { $nowBoot = (Get-CimInstance Win32_OperatingSystem -EA Stop).LastBootUpTime.ToUniversalTime() } catch { }
-# ---- WU-FIRSTBOOT-READ-END
-# ---- WU-FIRSTBOOT-DECIDE-BEGIN
-$script:FirstBootGate = 'inactive'
-if ($env:QUBES_UPDATES_SKIP_FIRSTBOOT_GATE -eq '1') {
-  Log 'QUBES_UPDATES_SKIP_FIRSTBOOT_GATE=1 - the first-boot gate is DISABLED for this pass (diagnostic knob)'
-} elseif (-not $instBoot) {
-  Log 'first-boot gate INACTIVE: no install stamp on this guest (updater deployed before the stamp existed) - a pass in the install boot can still fail at 0x8024402C'
-} elseif (-not $nowBoot) {
-  # Say it out loud rather than assuming either answer: an unreadable boot time is a fault in the
-  # instrument, and a guard that quietly passes when it cannot measure is not a guard.
-  Log 'first-boot gate COULD NOT BE EVALUATED: Win32_OperatingSystem.LastBootUpTime is unreadable - proceeding with the pass' 'WARN'
-  $script:FirstBootGate = 'unmeasured'
-} else {
-  $ib = [datetime]::MinValue
-  # Invariant round-trip parse. The stamp is written with 'o' precisely because a culture-formatted
-  # timestamp is unparseable on the German guests this path exists for.
-  $parsed = [datetime]::TryParse($instBoot, [Globalization.CultureInfo]::InvariantCulture,
-                                 [Globalization.DateTimeStyles]::RoundtripKind, [ref]$ib)
-  if (-not $parsed) {
-    Log "first-boot gate COULD NOT BE EVALUATED: install stamp '$instBoot' is not a round-trip timestamp - proceeding with the pass" 'WARN'
-    $script:FirstBootGate = 'unmeasured'
-  } else {
-    # Tolerance, not equality: LastBootUpTime jitters by a second or so between reads on the same
-    # boot. Two DIFFERENT boots are minutes apart - a Windows restart cannot complete in 120 s -
-    # so this cannot merge two boots, and it cannot split one.
-    $sameBoot = ([math]::Abs((($nowBoot - $ib)).TotalSeconds) -lt 120)
-    if ($sameBoot) {
-      $script:FirstBootGate = 'blocked'
-      Log ('RESTART REQUIRED before Windows Update can search: the updater agent was installed in THIS boot ' +
-           "(boot $instBoot) and Windows Update fails at 0x8024402C until the qube has started once since. " +
-           'Nothing was searched and dom0 was told nothing. Restart this qube and run the update again.') 'WARN'
-      $script:St.phase='needs-restart'
-      $script:St.reboot_needed=$true
-      $script:St.error='a restart is required before Windows Update can search (the updater agent was installed in this boot)'
-      Save
-      exit 0
-    }
-    Log "first-boot gate OK: this guest has booted since the updater was installed (install boot $instBoot)"
-  }
-}
-# ---- WU-FIRSTBOOT-DECIDE-END
-# ---- WU-FIRSTBOOT-END
 try {
   $script:St.phase='ensure-proxy'; Save; Ensure-Proxy
   $script:St.phase='sync-revocation'; Save; Sync-Revocation

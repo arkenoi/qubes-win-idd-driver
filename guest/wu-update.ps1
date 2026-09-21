@@ -180,7 +180,7 @@ $script:TaskUnreadableSaid = $false
 # skipped-* end it before any work. A task that is not Running while its status shows any of these
 # simply finished; anything else is a pass that stopped writing.
 function Test-TerminalPhase($phase) {
-    return ("$phase" -in 'done', 'error', 'scan-failed', 'needs-restart' -or "$phase" -like 'skipped-*')
+    return ("$phase" -in 'done', 'error', 'scan-failed' -or "$phase" -like 'skipped-*')
 }
 # The writer's ts is an invariant ISO string; pwsh 7's ConvertFrom-Json (tests, and any future host)
 # hands it back as a DateTime, which would otherwise print culture-formatted.
@@ -396,18 +396,6 @@ switch ($st.phase) {
         if ((Write-OutcomeTail $outcome) -ne 0) { exit 1 }
         Write-Output ("updates processed: count=" + $st.count)
         exit 0
-    }
-    # GUARD:firstboot. The updater refused the pass because Windows Update cannot search in the
-    # same boot the agent was installed in (measured 0x8024402C, cured by one restart; no service
-    # restart tried so far cures it - see the WU-FIRSTBOOT region in qubes-windows-update.ps1, which
-    # records which service that arm did NOT actually cycle). Nothing was
-    # searched, so dom0 is told no count: a pass that could not look is not a guest with no
-    # updates. It is a FAILED update (exit 1), because the update the admin asked for did not
-    # happen and they have to act - and the action is one restart, which the message names.
-    'needs-restart' {
-        Prog 100
-        $Err.WriteLine('this qube must be RESTARTED before Windows Update can search: the updater agent was installed in this boot. Nothing was searched and no update state was reported. Restart the qube and run the update again')
-        exit 1
     }
     'error' { Prog 100; $Err.WriteLine("update failed: " + $st.error); exit 1 }
     default { Prog 100; $Err.WriteLine("update did not complete (last phase: " + $st.phase + ")"); exit 1 }

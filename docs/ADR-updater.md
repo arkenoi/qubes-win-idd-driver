@@ -142,6 +142,4 @@ qube Halted, and only dom0 can start it again. So when the guest needs a boot, i
   is announced, never assumed in either direction.
 
 **Why:** a guest that halts itself to fix its own problem takes the machine away from the admin
-without being asked, and §8's accounting cannot tell that cycle from a requested one. Reporting the
-requirement keeps dom0's state true (§2), and the next start — including the start dom0 performs
-when it updates a halted qube — clears it by itself.
+without being asked, and §8's accounting cannot tell that cycle from a requested one.
