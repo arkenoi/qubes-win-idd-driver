@@ -212,7 +212,17 @@ qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_devi
 # genuinely ATTACHED. What it gives up is --required's guarantee that the guest will not start
 # WITHOUT its medium, and a stickless boot is exactly what makes a provisioning run look like a
 # product failure - so that guarantee is re-imposed below, after the start, by assertion.
-qvm-device block assign -o frontend-dev=xvdi -o devtype=disk "$CHURN" "$HOLDER:$STICKLOOP" \
+# MECHANIZED, not hand-rolled. PRIME_ASSIGN_MODE=required restores the historical `--required`
+# so the question "does --required still work through THIS path" is answerable by running the
+# harness, not by reconstructing it in a scratch script. That distinction is the whole lesson of
+# 2026-09-21: --required succeeded through this harness at 12:07:17 and failed in every hand-built
+# test afterwards, and I compared my reconstruction against itself and concluded dom0 had changed.
+# Jev rated that claim 0.28 and the leading reading 'state accumulated after the first start' at
+# 0.56 (conf 0.45) - i.e. still open. Default stays `plain`, which is measured to work.
+PRIME_ASSIGN_MODE="${PRIME_ASSIGN_MODE:-plain}"
+_req=(); [ "$PRIME_ASSIGN_MODE" = required ] && _req=(--required)
+log "stick assignment mode: $PRIME_ASSIGN_MODE${_req:+ (--required)}"
+qvm-device block assign "${_req[@]}" -o frontend-dev=xvdi -o devtype=disk "$CHURN" "$HOLDER:$STICKLOOP" \
   || { log "TERMINAL: could not assign the stick"; exit 1; }
 
 # --- DIAG stick: the instrument, kept off the medium under test --------------------------------
@@ -233,7 +243,7 @@ if [ -n "$DIAGLOOP" ]; then
         log "previous diag markers archived to evidence/diag-archive/"
     fi
     mkfs.fat -F 32 -n DIAG "$DIAGIMG" >/dev/null 2>&1   # fresh per run: markers are per-prime
-    if qvm-device block assign -o frontend-dev=xvdj -o devtype=disk -o read-only=false \
+    if qvm-device block assign "${_req[@]}" -o frontend-dev=xvdj -o devtype=disk -o read-only=false \
            "$CHURN" "$HOLDER:$DIAGLOOP" 2>/dev/null; then
         log "diag stick on /dev/$DIAGLOOP -> xvdj (writable, markers only)"
     else
