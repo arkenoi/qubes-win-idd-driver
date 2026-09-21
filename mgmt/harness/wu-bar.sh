@@ -42,9 +42,17 @@ qstate(){ qvm-ls --raw-data --fields state "$VM" 2>/dev/null; }
 enc(){ printf '%s' "$1" | iconv -f utf-8 -t utf-16le | base64 -w0; }
 psrun(){ timeout -k 5 "${2:-150}" tools/qtest run "powershell -NoProfile -NonInteractive -EncodedCommand $(enc "$1")" 2>/dev/null | tr -d '\r'; }
 
-wait_q(){ local d=$(( $(date +%s) + ${1:-900} ))
+# STABLY up, not just up - three consecutive answers, any failure resets the count. Measured
+# 2026-09-21: this returned on the FIRST answer from a guest that had just been started, and the
+# 31 MB package copy that followed died with `sent 0/31684 KB` and an EOF. The identical defect was
+# fixed in wu-e2e.sh an hour earlier and left here, which is how a class of bug survives: fixed in
+# the file where it was noticed, not in the file that shares it.
+wait_q(){ local d=$(( $(date +%s) + ${1:-900} )) ok=0
   while [ "$(date +%s)" -lt "$d" ]; do
-    case "$(timeout -k 5 45 tools/qtest run 'cmd /c echo UP' 2>/dev/null | tr -d '\r\n')" in *UP*) return 0;; esac
+    case "$(timeout -k 5 45 tools/qtest run 'cmd /c echo UP' 2>/dev/null | tr -d '\r\n')" in
+      *UP*) ok=$((ok+1)); [ "$ok" -ge 3 ] && return 0;;
+      *)    [ "$ok" -gt 0 ] && log "qrexec answered $ok time(s) then stopped - not settled yet"; ok=0;;
+    esac
     [ "$(qstate)" = Halted ] && return 1
     sleep 15
   done; return 2; }
@@ -106,7 +114,12 @@ else
       *) log "FAIL: could not remove the previous tree at $TREE - refusing to push over it"; exit 1;;
     esac
   fi
-  timeout 900 qvm-copy-to-vm "$VM" "$PKG" 2>&1 | tail -1
+  # A copy that moves ZERO bytes is a FAILED TRANSFER, not a wrong package - retry it before
+  # concluding anything about the artefact. (Measured 2026-09-21: `sent 0/31684 KB` + EOF.)
+  for _cp in 1 2 3; do
+    out=$(timeout 900 qvm-copy-to-vm "$VM" "$PKG" 2>&1 | tail -1); log "$out"
+    case "$out" in *"sent 0/"*) log "copy moved 0 bytes - retrying ($_cp/3)"; sleep 20;; *) break;; esac
+  done
   if [ -z "$TREE" ]; then
     INC=$(discover_inc); ninc=$(printf '%s' "$INC" | grep -c .)
     [ "$ninc" = 1 ] || { log "FAIL: after the push there are $ninc QubesIncoming candidates, expected 1"; exit 1; }
