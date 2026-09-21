@@ -70,7 +70,20 @@ INC=$(psrun 'Get-ChildItem C:\Users -Directory -EA SilentlyContinue |
   Where-Object { Test-Path $_ } | ForEach-Object { "INC " + $_ }' | grep -E '^INC ' | sed 's/^INC //' | tr -d '\r')
 case "$(printf '%s' "$INC" | grep -c .)" in
   1) : ;;
-  0) log "FAIL: no QubesIncoming\win-idd-mgmt on $VM - nothing was ever pushed here"; exit 1;;
+  0) # A guest nobody has pushed to yet has NO QubesIncoming at all - the normal state of a fresh
+     # clone, not an error. qvm-copy-to-vm creates it, so derive the path from the guest's own user
+     # profile and let the push make it. Measured 2026-09-21: this aborted the staged-pending proof
+     # on a clone four minutes old.
+     INC=$(psrun 'Get-ChildItem C:\Users -Directory -EA SilentlyContinue |
+       Where-Object { $_.Name -notin @("Default","Default User","Public","All Users") } |
+       Where-Object { Test-Path (Join-Path $_.FullName "Documents") } |
+       ForEach-Object { "INC " + (Join-Path $_.FullName "Documents\QubesIncoming\win-idd-mgmt") }' \
+       | grep -E '^INC ' | sed 's/^INC //' | tr -d '\r')
+     case "$(printf '%s' "$INC" | grep -c .)" in
+       1) log "no QubesIncoming yet (fresh guest) - the push will create it" ;;
+       0) log "FAIL: $VM has no usable user profile to push into"; exit 1;;
+       *) log "FAIL: more than one user profile, refusing to guess:"; printf '%s\n' "$INC" | sed 's/^/      /'; exit 1;;
+     esac ;;
   *) log "FAIL: more than one QubesIncoming candidate, refusing to guess:"; printf '%s\n' "$INC" | sed 's/^/      /'; exit 1;;
 esac
 export QTEST_INCOMING="$INC"
