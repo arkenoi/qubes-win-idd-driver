@@ -31,7 +31,13 @@ switch ($Defect) {
     # difference between a measured reason and a story
     'assertwithoutprobe' { $region = $region.Replace("if (`$probeResult -match '^reachable status=(\d+)')", 'if ($true)') }
     # re-introduces a duration claim, which three subjects do not support (Jev timer_claim 0.25)
-    'claimtimer' { $region = $region.Replace('This clears by itself; the next pass searches normally', 'This clears by itself within 15 minutes; the next pass searches normally') }
+    'claimtimer' { $region = $region.Replace('the pass after the restart searches normally', 'the pass after the restart searches normally within 15 minutes') }
+    # asks for a restart every time, including when one was already asked for in this boot - a
+    # reboot loop dressed as a remedy
+    'rebootloop' { $region = $region.Replace('} elseif ($askedFor -eq $bootNow) {', '} elseif ($false) {') }
+    # reports the reason but requests nothing, which is where this started: the admin is told what
+    # happened and given nothing to do
+    'noremedy'   { $region = $region.Replace('$script:St.reboot_needed = $true', '$null = $true') }
     ''          { }
     default     { Write-Output "INSTRUMENT: unknown defect knob '$Defect'"; exit 2 }
 }
@@ -42,10 +48,19 @@ function Check([string]$what, [bool]$ok) {
     if ($ok) { Write-Output "  ok   $what" } else { Write-Output "  FAIL $what"; $script:fails++ }
 }
 function Run([string]$msg, [string]$probeResult) {
-    $script:St = [ordered]@{ phase='error'; error=$msg }
+    $script:St = [ordered]@{ phase='error'; error=$msg; reboot_needed=$false }
     $Proxy = 'http://127.0.0.1:8082'
     function Save {}
     function Log($m) {}
+    # Stand-ins for the two reads the remedy makes. The BOOT time is fixed, and the stamp either
+    # matches it (a restart was already asked for in this boot) or does not.
+    function Get-CimInstance { param($ClassName,[switch]$EA) [pscustomobject]@{ LastBootUpTime = [datetime]'2026-09-21T09:00:00Z' } }
+    function Get-ItemProperty { param($Path,$Name,$EA)
+        if ($script:AlreadyAsked) { return [pscustomobject]@{ ProxyStateRestartAskedBoot = ([datetime]'2026-09-21T09:00:00Z').ToUniversalTime().ToString('o') } }
+        return [pscustomobject]@{} }
+    function Set-ItemProperty { param($Path,$Name,$Value,$Type) }
+    function Test-Path { param($Path) $true }
+    function New-Item { param($Path,[switch]$Force) }
     Invoke-Expression $region
     return [string]$script:St.error
 }
@@ -56,7 +71,22 @@ Check 'names Windows Update as not having used the proxy' ($e -match 'did not us
 Check 'carries the MEASUREMENT that proves it (the HTTP status)' ($e -match 'HTTP 200')
 Check 'says dom0 was told nothing about availability'          ($e -match 'no update state was reported to dom0')
 Check 'claims NO duration - three subjects do not support one' (-not ($e -match '\d+\s*(minutes|minute|min)\b'))
-Check 'promises no retry loop, just the next pass'             ($e -match 'next pass searches normally')
+Check 'promises no retry loop, just the next pass'             ($e -match 'searches normally')
+
+Write-Output 'CASE the remedy: a restart is REQUESTED, once, and recorded'
+$script:FakeReg = @{}
+$e = Run 'Ausnahme von HRESULT: 0x8024402C' 'reachable status=200'
+Check 'asks for the restart that is measured to clear it' ($e -match 'RESTART CLEARS THIS IMMEDIATELY')
+Check 'and sets reboot_needed so the existing accounting performs it' ($script:St.reboot_needed -eq $true)
+Check 'still claims no duration'                        (-not ($e -match '\d+\s*(minutes|minute|min)\b'))
+
+Write-Output 'CASE a restart was ALREADY requested in this boot - no loop'
+$script:AlreadyAsked = $true
+$e = Run 'Ausnahme von HRESULT: 0x8024402C' 'reachable status=200'
+Check 'does NOT ask again'                              ($e -match 'not asking again')
+Check 'names it as the remedy having stopped working'   ($e -match 'remedy has stopped working')
+Check 'and does not set reboot_needed a second time'    (-not $script:St.reboot_needed)
+$script:AlreadyAsked = $false
 
 Write-Output 'CASE 0x8024402C, and the proxy was NOT usable either'
 $e = Run 'Ausnahme von HRESULT: 0x8024402C' 'unreachable Der Remoteserver antwortet nicht'

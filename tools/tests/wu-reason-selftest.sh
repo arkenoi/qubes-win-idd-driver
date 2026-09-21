@@ -4,7 +4,7 @@
 #
 #   no env          full matrix: the clean leg passes and each knob makes the suite fail on its
 #                   own check. Exit 0 only if every leg came out as required.
-#   WUR_DEFECT=x    run only that knob (rawerror | assertwithoutprobe | claimtimer)
+#   WUR_DEFECT=x    run only that knob (rawerror | assertwithoutprobe | claimtimer | rebootloop | noremedy)
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PWSH="${PWSH:-/home/user/bin/pwsh7/pwsh}"
@@ -17,10 +17,12 @@ target_of() {
         rawerror)            printf '%s' "names Windows Update as not having used the proxy" ;;
         assertwithoutprobe)  printf '%s' "does NOT blame Windows Update" ;;
         claimtimer)          printf '%s' "claims NO duration - three subjects do not support one" ;;
+        rebootloop)          printf '%s' "does NOT ask again" ;;
+        noremedy)            printf '%s' "and sets reboot_needed so the existing accounting performs it" ;;
         *)                   printf '%s' "" ;;
     esac
 }
-KNOBS="rawerror assertwithoutprobe claimtimer"
+KNOBS="rawerror assertwithoutprobe claimtimer rebootloop noremedy"
 if [ -n "${WUR_DEFECT:-}" ]; then "$PWSH" -NoProfile -File "$SUITE" -Defect "$WUR_DEFECT"; exit $?; fi
 rc=0
 say "== clean leg (the shipped code) =="

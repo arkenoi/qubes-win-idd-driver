@@ -2522,10 +2522,45 @@ try {
   # the reporting model, not a loop that hides the state from dom0.
   if ($msg -match '8024402C') {
     if ($probeResult -match '^reachable status=(\d+)') {
+      $httpStatus = $matches[1]
+      # ---- WU-PROXYSTATE-REMEDY-BEGIN
+      # GUARD:proxystateremedy - REPORTING THE REASON IS NOT HANDLING IT. The admin asked for an
+      # update and got none, and "it clears by itself" gives them nothing to do. One remedy IS
+      # measured: a RESTART clears this immediately - two subjects searched normally at 62 s and
+      # ~150 s of uptime after a reboot, while the same guests failed for a quarter of an hour
+      # before it. So this asks for the restart through the channel that already exists and is
+      # already accounted (reboot_needed; ADR section 8 counts performed against requested), and
+      # section 10 governs the rest: the guest REQUESTS, it never takes.
+      #
+      # ONCE PER BOOT, and the stamp is what makes that true rather than hoped. If a restart has
+      # already been requested for this reason in THIS boot and the state is still here, asking
+      # again would be a reboot loop dressed as a remedy - so the second time it reports and stops.
+      # That is also the honest answer if the remedy ever stops working.
+      $bootNow = $null
+      try { $bootNow = (Get-CimInstance Win32_OperatingSystem -EA Stop).LastBootUpTime.ToUniversalTime().ToString('o') } catch { }
+      $askedFor = $null
+      try { $askedFor = (Get-ItemProperty 'HKLM:\SOFTWARE\Qubes\Updates' -EA Stop).ProxyStateRestartAskedBoot } catch { }
+      $remedy = ''
+      if (-not $bootNow) {
+        $remedy = ' A restart clears this state, but this pass could not read the boot time, so it is NOT requesting one.'
+      } elseif ($askedFor -eq $bootNow) {
+        $remedy = (' A restart was ALREADY requested for this in the current boot and the state is still here, so this pass ' +
+                   'is not asking again - that would be a reboot loop, not a remedy. Report this: the remedy has stopped working')
+      } else {
+        try {
+          if (-not (Test-Path 'HKLM:\SOFTWARE\Qubes\Updates')) { New-Item -Path 'HKLM:\SOFTWARE\Qubes\Updates' -Force | Out-Null }
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Qubes\Updates' -Name ProxyStateRestartAskedBoot -Value $bootNow -Type String
+          $script:St.reboot_needed = $true
+          $remedy = ' A RESTART CLEARS THIS IMMEDIATELY (measured), so this pass requests one; the pass after the restart searches normally'
+        } catch {
+          $remedy = ' A restart clears this state, but the request could not be recorded (' + ($_.Exception.Message -replace "`r|`n",' ') + '), so none is being made'
+        }
+      }
+      # ---- WU-PROXYSTATE-REMEDY-END
       $script:St.error = ("Windows Update failed with 0x8024402C - it could not resolve its service-registration host - " +
         "while this pass PROVED the update proxy usable at that same moment: WinHTTP through $Proxy reached the same " +
-        "endpoint and returned HTTP $($matches[1]). So Windows Update did not use the configured proxy for that call. " +
-        "Nothing was searched and no update state was reported to dom0. This clears by itself; the next pass searches normally")
+        "endpoint and returned HTTP $httpStatus. So Windows Update did not use the configured proxy for that call. " +
+        "Nothing was searched and no update state was reported to dom0." + $remedy)
     } elseif ($probeResult -match '^unreachable') {
       $script:St.error = ("Windows Update failed with 0x8024402C AND the update proxy was not usable from this guest " +
         "either - WinHTTP through ${Proxy}: " + ($probeResult -replace '^unreachable ','') + ". That is a transport " +
