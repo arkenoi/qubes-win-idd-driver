@@ -289,7 +289,17 @@ screen_probe() {   # $1=tag -> echoes a one-word verdict, keeps the PNG as evide
 }
 log "booting; the job runs as SYSTEM, and its installer reboots - this guest halts on reboot, so"
 log "  restarting it is THIS script's job (protocol 0.8: one owner per guest, watchers stay passive)"
-qvm-start "$CHURN" >/dev/null 2>&1
+# THE RC OF THIS START IS EVIDENCE. It was discarded here (only the RESTART loop below captured
+# it, fixed in 0edc9af), so when the domain failed to be created the script walked on to the
+# assertion below and reported "the guest started but the answer stick is NOT attached" - naming
+# the wrong thing entirely, in two live campaigns. Measured 2026-09-21: the guest had not started
+# at all. Capture it, and say what libxl actually said.
+if ! _bootout=$(qvm-start "$CHURN" 2>&1); then
+    log "TERMINAL: the DOMAIN WOULD NOT START - the guest never ran, so nothing about the stick,"
+    log "  the payload or the product is inferable from this:"
+    log "    ${_bootout}"
+    exit 1
+fi
 
 # --- THE MEDIUM MUST ACTUALLY BE THERE --------------------------------------------------------
 # This assertion replaces what `--required` used to guarantee (see the assign above). Without it a
