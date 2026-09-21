@@ -164,6 +164,15 @@ else
 fi
 
 case "$(inst)" in *"bytes=$PKGBYTES"*) : ;; *) log "FAIL: installed bytes != package bytes - refusing to grade"; exit 1;; esac
+# INSTALL_ONLY=1 stops HERE, with the artefact proven present and the guest NOT rebooted. That
+# state - freshly installed, never booted since - is itself a test subject: it is the shape a
+# reporter gets on a fresh template install, and the condition under which a pass dies at
+# 0x8024402C (findings/issues.md). A caller testing it needs this harness's install guards
+# (idempotence, wait-for-bytes, the byte assertion above) without wu-e2e's rounds on top.
+if [ "${INSTALL_ONLY:-0}" = 1 ]; then
+  log "INSTALL_ONLY=1: artefact proven installed, guest NOT rebooted - stopping here by request"
+  exit 0
+fi
 log "=== THE BAR: dom0 settled by the pass AND unchanged by the following scan ==="
 # ROUNDS: one pass proves the mechanism, repeated passes prove it is not a one-shot. The goal
 # record requires repeated stall-free cycles, so this is a knob, not a constant.
