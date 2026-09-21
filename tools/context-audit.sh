@@ -76,6 +76,21 @@ done
 sd=0; n=0
 for s in .claude/skills/*/SKILL.md; do [ -f "$s" ] || continue; n=$((n+1)); sd=$((sd+$(awk '/^description:/{print length($0); exit}' "$s"))); done
 printf '  %-58s %6s items %7s bytes\n' "skill descriptions (always listed)" "$n" "$sd"; a=$((a+sd))
+# .claude/settings.json's autoMode.environment is ALSO injected into every session and was NOT
+# counted here - measured 2026-09-21, 11 entries / 2908 bytes, which is why the always-on figure
+# was understated by that much. An audit that misses an always-on source understates exactly the
+# thing it exists to bound.
+envb=$(python3 - <<'PYEOF' 2>/dev/null
+import json
+try:
+    e=json.load(open('.claude/settings.json')).get('autoMode',{}).get('environment',[])
+    print(sum(len(x.encode()) for x in e if isinstance(x,str)))
+except Exception:
+    print(0)
+PYEOF
+)
+envn=$(python3 -c "import json;print(len(json.load(open('.claude/settings.json')).get('autoMode',{}).get('environment',[])))" 2>/dev/null || echo 0)
+printf '  %-58s %6s items %7s bytes\n' ".claude/settings.json autoMode.environment" "${envn:-0}" "${envb:-0}"; a=$((a+${envb:-0}))
 if [ "$a" -gt "$ALWAYS_ON_MAX" ]; then printf '  always-on total %s bytes: OVER BUDGET (max %s)\n' "$a" "$ALWAYS_ON_MAX"; fail=1; else printf '  always-on total %s bytes (budget %s) OK\n' "$a" "$ALWAYS_ON_MAX"; fi
 
 echo "=== ON DEMAND (never in the prompt until read) ==="
