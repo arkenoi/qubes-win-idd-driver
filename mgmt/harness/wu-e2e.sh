@@ -50,8 +50,20 @@ qstate(){ qvm-ls --raw-data --fields state "$VM" 2>/dev/null; }
 dom0_avail(){ qvm-features "$VM" updates-available 2>/dev/null | tr -d '\r\n'; }
 
 guest_file(){  # $1 = windows path -> stdout, without the cmd banner
-  timeout -k 5 180 tools/qtest run "cmd /c type \"$1\"" 2>/dev/null | tr -d '\r' \
-    | sed -e '/^Microsoft Windows \[/d' -e '/^(c) Microsoft/d' -e '/^$/d' -e '/^C:\\Windows\\System32>/d'
+  # RETRY ON EMPTY. `type` fails outright when the guest holds the file open, and the updater
+  # rewrites its status file constantly while a pass runs. Measured 2026-09-21 on win11de-ctlb: the
+  # round-1 capture came back 0 BYTES, which made reboot_needed read 'unknown' and left the
+  # oscillation check waiting the full 15 minutes for a scan it could not see - a whole run spent
+  # failing on the harness's own inability to collect its evidence. An empty read is MISSING DATA,
+  # and missing data gets retried before it is believed.
+  local i out
+  for i in 1 2 3 4 5 6; do
+    out=$(timeout -k 5 180 tools/qtest run "cmd /c type \"$1\"" 2>/dev/null | tr -d '\r' \
+      | sed -e '/^Microsoft Windows \[/d' -e '/^(c) Microsoft/d' -e '/^$/d' -e '/^C:\\Windows\\System32>/d')
+    if [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
+    sleep 5
+  done
+  return 1
 }
 
 wait_qrexec(){ local d=$(( $(date +%s) + ${1:-900} ))
