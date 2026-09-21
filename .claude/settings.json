@@ -33,6 +33,18 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/claim-receipt-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking every capability limit and guest state named this turn carries a measurement"
+          }
+        ]
+      }
     ]
   },
   "permissions": {
