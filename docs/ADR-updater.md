@@ -157,6 +157,14 @@ probe errored and returned empty — and an empty result was being treated as "n
 and distinguish *empty* from *negative*.
 
 **Instrument traps already paid for — do not re-learn them:**
+- **a harness that does not `export QTEST_VM` silently drives `win-idd-test`.** `tools/qtest:17` reads
+  `VM="${QTEST_VM:-win-idd-test}"`. `wu-bar.sh` and `wu-e2e.sh` both export it; a scratch script that
+  calls `tools/qtest run` from its own shell does not inherit their export. Measured 2026-09-21: the
+  GUARD:wusession A/B aimed BOTH arms at a halted `win-idd-test`, got `Request refused` (policy
+  declining to autostart it), and that string landed in the pass-output file where a pass result
+  belongs — it also started that VM. Two defences, both now in the script: export the target, and
+  PROVE it answers (`echo TARGET_OK`) before any arm runs, so a mis-aimed probe refuses instead of
+  returning something that reads like a result.
 - dom0's `updates-available` is a **flag**, not a count. Compare presence, not numbers.
 - `replay-dom0-update.py` reports each step's rc but **exits 0 regardless**. Grep its own
   `<-- UNEXPECTED` markers.
