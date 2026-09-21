@@ -57,8 +57,21 @@ interleaved:
   immediately, and it is drivable. Verified 2026-08-29 with a brand-new name.
   Pre-authorised without asking: qube create/remove, `qvm-prefs` read+write (incl. `netvm`),
   `qvm-tags`, `qvm-firewall`, `qvm-volume` info/clone, power state, `qtest` run/push/shot.
-  **Still genuinely off-limits:** a dom0 SHELL, `sudo` in this qube (e.g. `losetup` attach), editing
-  qrexec policy, and qubes that are NOT tagged. `fw-net` cannot be started from here — that is a
+  **Still genuinely off-limits:** a dom0 SHELL, `sudo` in this qube, editing
+  qrexec policy, and qubes that are NOT tagged.
+  **`losetup` attach WAS the example here and it was WRONG — corrected 2026-09-21 after it misled a
+  second agent into inventing the same limitation the skill already retired.** Needing root for
+  `sudo losetup` does NOT mean loop attachment is unavailable: `udisksctl loop-setup -f <file>`
+  (add `-r` for read-only) attaches root-free, and `mgmt/harness/matrix.sh` has served every release
+  ISO that way for months. A capability that one command cannot reach is not a capability the qube
+  lacks.
+  **THEREFORE, BINDING: never write a limitation into code, a comment, a finding, a commit message
+  or a reply until you have (a) grepped this repo for something already doing it, and (b) run the
+  cheapest probe that would disprove it.** Both take under a minute. "X needs sudo / needs dom0 /
+  needs the owner" asserted without those two steps is a fabricated constraint, and it is the single
+  most repeated error in this project's history — six times now, each one written down afterwards as
+  if it were knowledge. The list in `rig-capabilities` is not background reading; it is the record of
+  this exact mistake, and being unaware of it is not an excuse for adding to it. `fw-net` cannot be started from here — that is a
   policy refusal, not absence; it exists and serves traffic.
   **Before declaring anything impossible, read `.claude/skills/rig-capabilities/SKILL.md`** — it is
   the measured inventory, and it lists five limitations previously invented and disproven.

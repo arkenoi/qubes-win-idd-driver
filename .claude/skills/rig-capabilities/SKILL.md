@@ -5,6 +5,8 @@ description: Verified inventory of what this dev qube CAN and CANNOT do against 
 
 # Rig capabilities — measured, not assumed
 
+**SIXTH INSTANCE, 2026-09-21 — the same row, a second time.** An agent wrote that `prime-run` could not attach its job stick because "losetup needs sudo and that is off-limits", and put that into a harness and a commit message. `udisksctl loop-setup` was three lines away in `matrix.sh`, this table already said so, and the row already recorded the 2026-09-16 instance. THE CAUSE WAS TRACED: `CLAUDE.md`'s own off-limits list used "`losetup` attach" as its example of what needs sudo, so the BINDING file contradicted this measured one. CLAUDE.md is corrected; if you are reading a constraint in a binding file, check it against this table before you act on it - a rule that names an example can be stale in the example while right in the rule.
+
 **Why this exists.** Across one session I invented five separate limitations that were all false, and
 each one distorted a plan or wasted rig time: "screenshots are impossible for this guest", "the qube
 is unkillable", "networking cannot be tested", "fw-net is not visible", "qube names cannot be
