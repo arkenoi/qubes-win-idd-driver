@@ -2544,8 +2544,14 @@ try {
       if (-not $bootNow) {
         $remedy = ' A restart clears this state, but this pass could not read the boot time, so it is NOT requesting one.'
       } elseif ($askedFor -eq $bootNow) {
-        $remedy = (' A restart was ALREADY requested for this in the current boot and the state is still here, so this pass ' +
-                   'is not asking again - that would be a reboot loop, not a remedy. Report this: the remedy has stopped working')
+        # WHAT THE MATCHING STAMP ACTUALLY PROVES: the restart has NOT HAPPENED. A restart moves the
+        # boot time, and the stamp carries the boot it was asked in - so a match means the request
+        # is still outstanding, NOT that restarting failed to help. Saying "the remedy stopped
+        # working" here would be false in precisely the case that triggers it. (Measured on a guest
+        # 2026-09-21: two passes back to back, no restart between them, and the first wording
+        # claimed the remedy had failed when nothing had been tried.)
+        $remedy = (' A restart was already requested for this in the current boot and has NOT been performed yet, so this pass ' +
+                   'is not asking again - the request stands and the pass after the restart searches normally')
       } else {
         try {
           if (-not (Test-Path 'HKLM:\SOFTWARE\Qubes\Updates')) { New-Item -Path 'HKLM:\SOFTWARE\Qubes\Updates' -Force | Out-Null }

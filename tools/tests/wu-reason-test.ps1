@@ -84,7 +84,8 @@ Write-Output 'CASE a restart was ALREADY requested in this boot - no loop'
 $script:AlreadyAsked = $true
 $e = Run 'Ausnahme von HRESULT: 0x8024402C' 'reachable status=200'
 Check 'does NOT ask again'                              ($e -match 'not asking again')
-Check 'names it as the remedy having stopped working'   ($e -match 'remedy has stopped working')
+Check 'says the restart has NOT been performed, not that it failed' ($e -match 'has NOT been performed yet')
+Check 'does not claim the remedy stopped working'      (-not ($e -match 'stopped working'))
 Check 'and does not set reboot_needed a second time'    (-not $script:St.reboot_needed)
 $script:AlreadyAsked = $false
 
