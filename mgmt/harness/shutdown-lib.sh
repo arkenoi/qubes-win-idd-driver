@@ -38,6 +38,13 @@
 # tools/guest-state-judge.py, because naming a case is a classifier and classifiers belong to Jev
 # (owner, 2026-09-21: "when you need to GUESS, ask fucking Jev").
 _qwt_boottime() {
+    # NEVER PROBE A GUEST THAT IS NOT ALREADY RUNNING. A qrexec call to a halted or Transient qube
+    # makes the toolstack START it, so this probe - added to a function whose entire job is to
+    # STOP a guest - restarted win-idd-test while qwt_shutdown was trying to shut it down
+    # (measured 2026-09-21, and the owner caught it, not me). A shutdown helper that can start a
+    # guest is worse than no helper. Refuse unless the state read says Running.
+    local _s; _s=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$1" '$1==v{print $2}')
+    [ "$_s" = Running ] || return 0
     # Anchored to the repo root on purpose: a caller with a different cwd would find no qtest,
     # get an empty answer, and land in the UNKNOWN branch for a reason that has nothing to do
     # with the guest - a missing instrument reading as a guest state is the trap this file exists
@@ -63,7 +70,7 @@ qwt_shutdown() {
         [ "$st" = Halted ] && return 0
         sleep 10
     done
-    b1=$(_qwt_boottime "$vm")
+    b1=$(_qwt_boottime "$vm")   # same guard: returns empty unless it is still Running
     if [ -n "$b0" ] && [ -n "$b1" ] && [ "$b0" != "$b1" ]; then
         echo "qwt_shutdown: $vm REBOOTED while we waited (boot time $b0 -> $b1). It is NOT ignoring" >&2
         echo "  the request - it went down and came back, and is now waiting for something. Find out" >&2
