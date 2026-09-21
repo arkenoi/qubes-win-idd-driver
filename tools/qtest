@@ -14,7 +14,18 @@
 #   resize <WxH|query>    resize the VM's dom0 window / read geometry (local.WinResize)
 set -uo pipefail
 
-VM="${QTEST_VM:-win-idd-test}"
+# NO DEFAULT TARGET. Owner, 2026-09-21: "can you fucking kill your mistargeted calls forever? like,
+# no default target?" - after a mis-aimed call sent both arms of an A/B to a halted win-idd-test,
+# recorded "Request refused" where a pass result belongs, and STARTED that VM twice, which is how
+# three Windows guests ended up running at once against the one-guest rule.
+# A default target turns "I forgot to say which guest" into "silently drive a different guest".
+# There is no safe default, so there is none.
+if [ -z "${QTEST_VM:-}" ]; then
+    echo "qtest: QTEST_VM is not set, and there is NO default target." >&2
+    echo "       Name the guest explicitly:  QTEST_VM=<vm> $0 $*" >&2
+    exit 2
+fi
+VM="$QTEST_VM"
 # PREFLIGHT: refuse a target that does not exist, instead of calling dom0 about it.
 #
 # The dom0 screenshot services gate on the win-idd-testbed tag and, for an unknown or untagged
