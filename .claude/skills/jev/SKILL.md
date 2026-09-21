@@ -60,6 +60,31 @@ an answer. Never paper over a 2.
    that has no matching wire entry is false.** Quote the numbers as printed.
 6. Rubrics and states are working material: they go in `scratchpad/`, never a tracked path.
 
+## Review every PROBE before you trust it - `tools/probe-review.py`
+
+Owner, 2026-09-21: *"review all probes consistency with Jev before using! Correctness is a simple
+verdict you can catch in advance."*
+
+A probe is any function that samples the guest or the rig and returns a verdict about it. On
+2026-09-20/21 almost every "failure" on the rig was a probe defect, and every one was found by
+RUNNING it rather than by reading it - which costs a run each time. They are not subtle and they
+repeat: a fixed sleep standing in for an observable condition; one sample treated as a stable
+state; a transient no-answer treated as a definitive negative; an empty result used as a value; a
+wait whose exit condition the OLD artefact already satisfies; a before/after comparison built from
+different things.
+
+`tools/probe-review.py` extracts every such function (brace-counted, not regex-truncated) and has
+Jev classify it against exactly those failure modes, plus a `load_bearing` question - does a
+product verdict depend on this answer. Run it after touching a harness and before grading anything
+with it. Rank the work by confidence x load_bearing: the first pass flagged all ten probes, and the
+one worth fixing first was `dom0_avail` at no-retry 0.88 / load_bearing 0.65 - the read of the
+marker the whole bar is about, where a transient failure returns empty and empty IS the "up to
+date" verdict.
+
+Not every flag is worth chasing. A bounded `timeout` on a call is legitimate and will still read as
+`timed-not-proven`; say so and move on rather than making every poll slow. The point is that the
+verdict is available in advance, cheaply, instead of after a wasted run.
+
 ## Worked shape
 
 ```bash

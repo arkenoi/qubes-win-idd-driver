@@ -38,7 +38,23 @@ source mgmt/harness/shutdown-lib.sh
 vm_lock "$VM" || { echo "wu-bar: another job holds $VM - refusing to interleave"; exit 1; }
 
 log(){ echo "$(date -u +%H:%M:%S) bar[$VM]: $*"; }
-qstate(){ qvm-ls --raw-data --fields state "$VM" 2>/dev/null; }
+# RETRY, and never let a failed CALL look like a STATE. `qvm-ls` can fail transiently (qubesd
+# busy, a call racing a domain transition) and then this returned the empty string, which every
+# caller reads as "not Halted" or "not Running" - so a shutdown loop, a reboot ledger and a stall
+# test all take their verdict from a call that never answered. Jev flagged it no-retry 0.67-0.69
+# with load_bearing 0.60-0.66 (tools/probe-review.py, 2026-09-21). Three attempts; if the toolstack
+# still will not answer, say UNKNOWN out loud rather than returning something that reads as a state.
+# TWO AGREEING READS, not one: re-judged after the first fix, Jev called a single successful
+# sample single-sample 0.55 with load_bearing 0.68 - a state read that races a domain
+# transition can return a value that was true for an instant and is not the state.
+qstate(){ local i a b
+  for i in 1 2 3; do
+    a=$(timeout 30 qvm-ls --raw-data --fields state "$VM" 2>/dev/null | tr -d ' \r\n')
+    b=$(timeout 30 qvm-ls --raw-data --fields state "$VM" 2>/dev/null | tr -d ' \r\n')
+    [ -n "$a" ] && [ "$a" = "$b" ] && { printf '%s' "$a"; return 0; }
+    sleep 3
+  done
+  printf 'UNKNOWN'; return 1; }
 enc(){ printf '%s' "$1" | iconv -f utf-8 -t utf-16le | base64 -w0; }
 psrun(){ timeout -k 5 "${2:-150}" tools/qtest run "powershell -NoProfile -NonInteractive -EncodedCommand $(enc "$1")" 2>/dev/null | tr -d '\r'; }
 

@@ -46,8 +46,37 @@ export QTEST_VM="$VM"
 export QTEST_INCOMING
 
 log(){ echo "$(date -u +%H:%M:%S) wu-e2e[$VM]: $*" | tee -a "$OUT/run.log"; }
-qstate(){ qvm-ls --raw-data --fields state "$VM" 2>/dev/null; }
-dom0_avail(){ qvm-features "$VM" updates-available 2>/dev/null | tr -d '\r\n'; }
+# RETRY, and never let a failed CALL look like a STATE. `qvm-ls` can fail transiently (qubesd
+# busy, a call racing a domain transition) and then this returned the empty string, which every
+# caller reads as "not Halted" or "not Running" - so a shutdown loop, a reboot ledger and a stall
+# test all take their verdict from a call that never answered. Jev flagged it no-retry 0.67-0.69
+# with load_bearing 0.60-0.66 (tools/probe-review.py, 2026-09-21). Three attempts; if the toolstack
+# still will not answer, say UNKNOWN out loud rather than returning something that reads as a state.
+# TWO AGREEING READS, not one: re-judged after the first fix, Jev called a single successful
+# sample single-sample 0.55 with load_bearing 0.68 - a state read that races a domain
+# transition can return a value that was true for an instant and is not the state.
+qstate(){ local i a b
+  for i in 1 2 3; do
+    a=$(timeout 30 qvm-ls --raw-data --fields state "$VM" 2>/dev/null | tr -d ' \r\n')
+    b=$(timeout 30 qvm-ls --raw-data --fields state "$VM" 2>/dev/null | tr -d ' \r\n')
+    [ -n "$a" ] && [ "$a" = "$b" ] && { printf '%s' "$a"; return 0; }
+    sleep 3
+  done
+  printf 'UNKNOWN'; return 1; }
+# THE NUMBER EVERY VERDICT RESTS ON. dom0's updates-available marker is what the whole bar is
+# about, and an EMPTY answer here is indistinguishable from the marker legitimately being empty -
+# which is the "up to date" verdict. A transient qvm-features failure would therefore manufacture a
+# clean result, or a fake oscillation. Jev: no-retry 0.88, load_bearing 0.65, the worst of the ten
+# probes reviewed. So: read it three times and require two reads to AGREE before believing either.
+dom0_avail(){ local i a b
+  for i in 1 2 3; do
+    a=$(timeout 30 qvm-features "$VM" updates-available 2>/dev/null | tr -d ' \r\n')
+    b=$(timeout 30 qvm-features "$VM" updates-available 2>/dev/null | tr -d ' \r\n')
+    [ "$a" = "$b" ] && { printf '%s' "$a"; return 0; }
+    sleep 2
+  done
+  log "WARNING: dom0's updates-available never read the same twice - reporting the last value '$a'"
+  printf '%s' "$a"; }
 
 guest_file(){  # $1 = windows path -> stdout, without the cmd banner
   # RETRY ON EMPTY. `type` fails outright when the guest holds the file open, and the updater
