@@ -1718,6 +1718,39 @@ function Protect-Autologon {
 }
 # ---- WU-AUTOLOGON-GUARD-END
 
+# ---- WU-PROXY-PROBE-BEGIN
+# GUARD:reasonmeasured - the probe half. When a pass dies at 0x8024402C, dom0 is owed the REASON,
+# and the reason has to be MEASURED IN THAT PASS rather than asserted from what a rig run once
+# showed. This runs inside the pass-level catch, where the proxy and the relay are still up
+# (Remove-Proxy is in the finally, after it).
+#
+# It uses WINHTTP - the stack Windows Update itself uses - deliberately. Measured 2026-09-21 on
+# three clones of the German 25H2 golden: while WU fails 0x8024402C, WinHttpRequest.5.1 through the
+# same 127.0.0.1:8082 fetches the same service-registration endpoint (HTTP 200, 36310 bytes), as
+# does .NET. Re-applying the machine WinHTTP proxy and populating the service account's WinINET
+# proxy both change nothing. So the failure is WU's own proxy selection, and this probe is what
+# lets the pass SAY so with evidence instead of with a story.
+#
+# ANY HTTP status counts as reachable, including 404: the question is whether the request reached
+# the endpoint through our proxy, not what the endpoint thought of it. Only a transport failure is
+# 'unreachable'. Bounded timeouts, one attempt, no retry loop - this is a diagnosis on an error
+# path, not a wait standing in for an answer.
+function Test-ProxyServesWu {
+  $target = "https://tas02.sls.update.microsoft.com/SLS/{9482F4B4-E343-43B6-B170-9A65BC822C77}/$OsArch/$OsBuild/0"
+  $hostport = $Proxy -replace '^[a-zA-Z]+://',''
+  try {
+    $w = New-Object -ComObject 'WinHttp.WinHttpRequest.5.1'
+    $w.SetProxy(2, $hostport, '<local>')
+    $w.SetTimeouts(15000,15000,15000,30000)
+    $w.Open('GET', $target, $false)
+    $w.Send()
+    return "reachable status=$($w.Status)"
+  } catch {
+    return "unreachable " + ($_.Exception.Message -replace "`r|`n",' ')
+  }
+}
+# ---- WU-PROXY-PROBE-END
+
 # ---------------------------------------------------------------------- main
 # VM-CLASS CLASSIFICATION, guest-side. The qubes.UpdatesProxy updater is a TEMPLATE-ONLY
 # mechanism: dom0-driven updates for a VM that is otherwise offline. It must run ONLY on a
@@ -2475,6 +2508,37 @@ try {
 } catch {
   $script:St.phase='error'; $script:St.error="$($_.Exception.Message)"; Save
   Log "ERROR: $($script:St.error)"
+  $msg = "$($_.Exception.Message)"
+  $probeResult = if ($msg -match '8024402C') { Test-ProxyServesWu } else { '' }
+# ---- WU-DIAGNOSE-REASON-BEGIN
+  # GUARD:reasonmeasured - the decision half. 0x8024402C is WU_E_PT_WINHTTP_NAME_NOT_RESOLVED, and
+  # on a routeless guest it has TWO very different causes that dom0 must not be left to guess
+  # between: our proxy was genuinely not usable, or Windows Update did not use it. The probe above
+  # separates them, and each branch reports only what was measured.
+  #
+  # NO DURATION IS CLAIMED. Three subjects cleared this state at uptimes that only bracket a
+  # quarter of an hour; Jev graded a fixed-delay claim at 0.25, so the text says it clears by
+  # itself and stops there. And no retry happens here: the next pass searches normally, which is
+  # the reporting model, not a loop that hides the state from dom0.
+  if ($msg -match '8024402C') {
+    if ($probeResult -match '^reachable status=(\d+)') {
+      $script:St.error = ("Windows Update failed with 0x8024402C - it could not resolve its service-registration host - " +
+        "while this pass PROVED the update proxy usable at that same moment: WinHTTP through $Proxy reached the same " +
+        "endpoint and returned HTTP $($matches[1]). So Windows Update did not use the configured proxy for that call. " +
+        "Nothing was searched and no update state was reported to dom0. This clears by itself; the next pass searches normally")
+    } elseif ($probeResult -match '^unreachable') {
+      $script:St.error = ("Windows Update failed with 0x8024402C AND the update proxy was not usable from this guest " +
+        "either - WinHTTP through ${Proxy}: " + ($probeResult -replace '^unreachable ','') + ". That is a transport " +
+        "failure in this pass, not the Windows Update proxy-selection state. Nothing was searched and no update state " +
+        "was reported to dom0")
+    } else {
+      $script:St.error = ("Windows Update failed with 0x8024402C and the proxy-reachability probe did not run, so the " +
+        "cause is UNMEASURED in this pass. Nothing was searched and no update state was reported to dom0")
+    }
+    Save
+    Log $script:St.error
+  }
+# ---- WU-DIAGNOSE-REASON-END
 } finally {
   # Re-arm autologon on ANY exit path that staged a reboot - INCLUDING a throw AFTER staging (e.g.
   # Resolve-Catalog/Fetch failing once a package was already applied rc=3010). Previously this ran
