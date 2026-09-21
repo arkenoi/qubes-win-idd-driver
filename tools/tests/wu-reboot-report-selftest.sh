@@ -25,7 +25,7 @@ if [ ! -x "$PWSH" ]; then say "FAIL  pwsh not found at $PWSH - nothing ran"; exi
 # The check each knob must break - the failure has to land on the replayed case, not just anywhere.
 target_of() {
     case "$1" in
-        deadfilter) printf '%s' "report: pass-1 replay - remaining is 1 (KB5129195 ok=false state=deferred); the guest wrote 0" ;;
+        deadfilter) printf '%s' "report: pass-1 replay - BOTH the deferred and the staged row count; the guest wrote 0" ;;
         debounce)   printf '%s' "debounce: boot scan at 22:54:00 after the reboot-pending pass (done_ts 22:49:16) RUNS" ;;
         *)          return 1 ;;
     esac

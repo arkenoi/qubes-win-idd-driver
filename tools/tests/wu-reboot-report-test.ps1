@@ -395,7 +395,7 @@ function Invoke-Report($rows) {
     $script:Saves = 0; $script:LogLines = @(); $script:Reported = @()
     $script:St = [ordered]@{ action = 'full'; phase = 'install'; result = @($rows); reboot_needed = $true }
     . $reportFile
-    return [pscustomobject]@{ remaining = $script:St.remaining; reported = @($script:Reported); failed = @($failedKbs); log = @($script:LogLines) }
+    return [pscustomobject]@{ remaining = $script:St.remaining; reported = @($script:Reported); failed = @($pendingKbs); log = @($script:LogLines) }
 }
 
 $pass1 = $Pass1Json | ConvertFrom-Json
@@ -408,30 +408,46 @@ Check   'report: the captured file says "remaining": 0 - the number under test' 
 Check   'report: the captured German title is intact (codepoints of "für")' `
         (([int[]][char[]]'für' -join ',') -eq '102,252,114' -and $pass1.available[0].title -like 'Update für Windows Security platform*')
 $r = Invoke-Report $pass1Rows
-CheckEq 'report: pass-1 replay - remaining is 1 (KB5129195 ok=false state=deferred); the guest wrote 0' $r.remaining 1
-CheckEq 'report: pass-1 replay - dom0 is told 1, exactly once' ($r.reported -join ',') '1'
-Check   'report: pass-1 replay - the one outstanding KB is KB5129195' ($r.failed.Count -eq 1 -and $r.failed[0].kb -eq 'KB5129195')
-Check   'report: pass-1 replay - the log line says "reporting 1 remaining"' (@($r.log | Where-Object { $_ -like 'reboot pending; reporting 1 remaining*' }).Count -eq 1)
-Check   'report: pass-1 replay - the status was saved' ($r.remaining -eq 1 -and $script:Saves -ge 1)
+# 1 -> 2, same reversal as pass-2 below: this captured pass holds BOTH a staged row
+# (KB5126052 ok=true state=staged) and a deferred one (KB5129195 ok=false state=deferred), and
+# the staged one is no more applied than the deferred one. The old expectation counted only the
+# deferred row because the staged rule did not exist yet.
+CheckEq 'report: pass-1 replay - BOTH the deferred and the staged row count; the guest wrote 0' $r.remaining 2
+CheckEq 'report: pass-1 replay - dom0 is told 2, exactly once' ($r.reported -join ',') '2'
+Check   'report: pass-1 replay - the outstanding KBs are the STAGED and the DEFERRED one' `
+        ($r.failed.Count -eq 2 -and (@($r.failed | ForEach-Object { $_.kb }) -join ',') -eq 'KB5126052,KB5129195')
+Check   'report: pass-1 replay - the log line says "reporting 2 remaining"' (@($r.log | Where-Object { $_ -like 'reboot pending; reporting 2 remaining*' }).Count -eq 1)
+Check   'report: pass-1 replay - the status was saved' ($r.remaining -eq 2 -and $script:Saves -ge 1)
 
 $pass2Rows = @(foreach ($e in ($Pass2ResultJson | ConvertFrom-Json).result) { ConvertTo-GuestRow $e })
 Check   'report: pass-2 row 3 is kb=KB5129195 ok=true state=staged (the captured shape)' `
         ($pass2Rows[2].kb -eq 'KB5129195' -and $pass2Rows[2].ok -eq $true -and $pass2Rows[2].state -eq 'staged')
 $r2 = Invoke-Report $pass2Rows
-CheckEq 'report: pass-2 replay - remaining is 0 (KB5129195 staged, ok=true): no over-report' $r2.remaining 0
-CheckEq 'report: pass-2 replay - dom0 is told 0' ($r2.reported -join ',') '0'
+# REVERSED 2026-09-21. This expected 0 for a STAGED package, on the rationale that the apply
+# happens at the reboot which follows immediately. Measured on the reporter's environment that
+# produced a real defect: the pass reported 0, dom0 went empty, and the very next scan - nothing
+# changed on the guest - reported 1, because GUARD:stagedpending correctly counts staged work.
+# One unchanged state, two contradictory reports a minute apart. Jev, given both rationales and
+# the measurement: count-staged 0.97, 'the inconsistency IS the defect' 0.79, and under-reporting
+# is the worse error at 0.99 - which is this project's own history. A staged package is not
+# applied until the guest restarts, and nothing may assume the restart happens.
+CheckEq 'report: pass-2 replay - a STAGED package still counts (reboot not yet performed)' $r2.remaining 1
+CheckEq 'report: pass-2 replay - dom0 is told 1 (the staged package)' ($r2.reported -join ',') '1'
 
 # An informational row in the shipped shape (qubes-windows-update.ps1, the wu-only-express record):
 # excluded from the count by severity, exactly as before the fix.
 $infoRow = [ordered]@{ kb = 'KB5071959'; ok = $false; severity = 'info'; reason = 'wu-only-express (test copy of the shipped shape)' }
 $r3 = Invoke-Report ($pass1Rows + ,$infoRow)
-CheckEq 'report: pass-1 rows + a severity=info row - still 1 (informational stays excluded)' $r3.remaining 1
+CheckEq 'report: pass-1 rows + a severity=info row - still 2 (informational stays excluded)' $r3.remaining 2
 
 # The same rows in their JSON shape (PSCustomObject): the helper answers both shapes the same way.
 $r4 = Invoke-Report @($pass1.result)
-CheckEq 'report: pass-1 rows as PSCustomObjects (JSON shape) - still 1' $r4.remaining 1
+CheckEq 'report: pass-1 rows as PSCustomObjects (JSON shape) - still 2' $r4.remaining 2
 $r5 = Invoke-Report @()
-CheckEq 'report: no rows - 0' $r5.remaining 0
+# This one is load-bearing in the other direction: with a reboot pending and NOTHING staged or
+# deferred, dom0 must still hear 0. An earlier draft of this fix forced >=1 here, which would pin
+# a guest carrying a stale CBS RebootPending at 'updates available' forever - the inverse defect.
+CheckEq 'report: no rows, reboot pending - still 0 (no blanket floor)' $r5.remaining 0
 
 # --- 3. the scheduled-scan debounce, replayed at the captured timestamps ----------------------------
 # The region reads $Scheduled/$Action/$StatusFile and calls Get-Date; the replay shadows Get-Date so

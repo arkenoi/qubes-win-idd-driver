@@ -54,7 +54,7 @@ switch ($Defect) {
     # actually INSTALLED still counts and dom0 never reaches "up to date".
     'infoonly'  { $infoRegion = $infoRegion.Replace('($_.ok -eq $true -and ((-not (Test-RowKey $_ ''state'')) -or ($doneStates -contains [string]$_.state)))', '$false') }
     # treats a STAGED row as done - dom0 then hears 0 while a cumulative waits for a reboot
-    'stageddone'{ $infoRegion = $infoRegion.Replace('($_.ok -eq $true -and ((-not (Test-RowKey $_ ''state'')) -or ($doneStates -contains [string]$_.state)))', '$_.ok -eq $true').Replace('if ($script:St.reboot_needed -and $reportCount -lt 1) {', 'if ($false) {') }
+    'stageddone'{ $infoRegion = $infoRegion.Replace('($_.ok -eq $true -and ((-not (Test-RowKey $_ ''state'')) -or ($doneStates -contains [string]$_.state)))', '$_.ok -eq $true').Replace('if ($stagedN -gt $reportCount) { $reportCount = $stagedN }', '') }
     # Re-introduces the classification corrected on 2026-09-20: a negative probe with rc=0 read as
     # "nothing to do on this image" instead of as a failed install. The two exe checks above must
     # then fail - that is what makes them evidence rather than decoration.
@@ -295,8 +295,11 @@ $resultAllDone = @(
     [pscustomobject]@{ kb = 'KB5129195'; title = 'Cumulative'; ok = $true; state = 'installed' },
     [pscustomobject]@{ kb = 'KB5007651'; title = 'Security platform'; ok = $true; state = 'installed' }
 )
-Check "staged: reboot pending and every row done -> dom0 STILL does not hear 0" `
-      (RunCount $afterS $resultAllDone $null @() $true) 1
+# WITHDRAWN 2026-09-21: an earlier draft forced >=1 whenever a reboot was pending, even with every
+# row done. That would pin a guest carrying a stale CBS RebootPending at "updates available"
+# forever - the inverse defect the owner reported. The rule is exactly "count what is not applied".
+Check "staged: reboot pending but every row DONE -> dom0 still reaches 0 (no blanket floor)" `
+      (RunCount $afterS $resultAllDone $null @() $true) 0
 Check "staged: no reboot pending and every row done -> dom0 does reach 0" `
       (RunCount $afterS $resultAllDone $null @() $false) 0
 

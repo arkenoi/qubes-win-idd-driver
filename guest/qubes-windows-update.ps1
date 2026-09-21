@@ -2221,11 +2221,31 @@ try {
       # September cumulative, downloaded, waiting for the .NET reboot), "remaining": 0 written,
       # dom0's updates-available cleared - Qube Manager then showed the qube as up to date.
       # ---- WU-REBOOT-PENDING-REPORT-BEGIN
-      $failedKbs = @($script:St.result |
-                     Where-Object { (Test-RowKey $_ 'kb') -and -not $_.ok -and $_.severity -ne 'info' })   # GUARD:rowkey
-      $script:St.remaining = $failedKbs.Count; Save
-      Log "reboot pending; reporting $($failedKbs.Count) remaining to dom0 (boot scan will confirm)"
-      Report-Availability $failedKbs.Count
+      # A STAGED OR DEFERRED ROW IS NOT APPLIED. The comment above says "everything offered was
+      # applied", and for a row that INSTALLED that is true - but a staged package has been written
+      # to the image and needs exactly the reboot that is pending, and a deferred one has not been
+      # installed at all. Both carry ok=$true or ok=$false with a `state`, and the old predicate
+      # counted only `-not $_.ok`, so a staged cumulative reported ZERO.
+      #
+      # Measured 2026-09-21 on win11de-ctld, GWeck's environment: KB5129195 came back
+      # `ok=true state=staged` with reboot_needed=true and this path reported 0 to dom0, which then
+      # showed the template as up to date - the ORIGINAL field report, surviving in a THIRD code
+      # path after GUARD:rowkey fixed it here and GUARD:stagedpending fixed it in the post-install
+      # rescan. The oscillation check caught it independently: dom0 '<empty>' after the pass and
+      # '1' after the very next scan. (# GUARD:stagedpending, reboot-pending half.)
+      $doneStates = @('installed','ok','up-to-date','not-actionable')
+      $pendingKbs = @($script:St.result |
+                     Where-Object { (Test-RowKey $_ 'kb') -and $_.severity -ne 'info' -and ((-not $_.ok) -or ((Test-RowKey $_ 'state') -and ($doneStates -notcontains [string]$_.state))) })   # GUARD:rowkey
+      # NO FLOOR. An earlier version of this fix forced at least 1 whenever a reboot was pending,
+      # even with nothing staged or deferred - which would pin dom0 at "updates available" forever
+      # on a guest carrying a stale CBS RebootPending and nothing to install. That is the inverse
+      # defect the owner reported (a template that can never show as up to date), so the rule is
+      # exactly "count what is not applied" and nothing more. Jev ruled on staged packages
+      # (count-staged 0.97); the floor was mine and is withdrawn.
+      $pendingCount = $pendingKbs.Count
+      $script:St.remaining = $pendingCount; Save
+      Log "reboot pending; reporting $pendingCount remaining to dom0 (staged and deferred work is NOT applied)"
+      Report-Availability $pendingCount
       # ---- WU-REBOOT-PENDING-REPORT-END
     } else {
       # Best-effort: this is a REPORT, not the work. It needs the proxy, and if anything has
@@ -2282,14 +2302,13 @@ try {
         $notInfo = { param($r) ($infoKbs -notcontains $r.kb) -and ($infoKbs -notcontains $r.title) }
         $reportCount = if ($script:St.notice) { @($after | Where-Object { $_.content_class -eq 'self-contained' -and (& $notInfo $_) }).Count }
                        else { @($after | Where-Object { (& $notInfo $_) }).Count }
-        # A PENDING REBOOT IS NOT "UP TO DATE". Whatever the per-row arithmetic concludes, dom0 must
-        # never hear 0 while the guest is holding staged work: the update is not applied until the
-        # cycle completes, and saying otherwise is the untruth this file exists to prevent.
-        if ($script:St.reboot_needed -and $reportCount -lt 1) {
-          $stagedN = @($script:St.result | Where-Object { (Test-RowKey $_ 'state') -and (@('staged','deferred') -contains [string]$_.state) }).Count
-          if ($stagedN -lt 1) { $stagedN = 1 }
-          $reportCount = $stagedN
-        }
+        # STAGED WORK STILL COUNTS even when Windows has stopped offering it - it is written to the
+        # image and not applied until the restart. Counted from the RESULT rows, not from what the
+        # rescan still offers. No blanket floor on reboot_needed: forcing >=1 with nothing staged
+        # would pin dom0 at "updates available" on a stale CBS RebootPending, which is the inverse
+        # defect. (Jev: count-staged 0.97; under-reporting is the worse error at 0.99.)
+        $stagedN = @($script:St.result | Where-Object { (Test-RowKey $_ 'state') -and (@('staged','deferred') -contains [string]$_.state) }).Count
+        if ($stagedN -gt $reportCount) { $reportCount = $stagedN }
         # GUARD:offeridentity - record WHICH OFFERS this pass resolved, by the offer's own identity.
         # A later scan may then exclude the very same offer without weakening the rule right above
         # it ("installed last time" is not evidence a FRESH offer is satisfied): a new revision has
