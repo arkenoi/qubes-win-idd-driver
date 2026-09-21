@@ -129,6 +129,22 @@ fi
 for stale in "$JOBDIR"/*.flag; do [ -e "$stale" ] && { rm -f "$stale"; log "cleared stale flag: $(basename "$stale")"; }; done
 for f in ${FLAGS+"${FLAGS[@]}"}; do : > "$JOBDIR/$f"; log "flag set: $f"; done
 
+# ATTACH A LOOP WITHOUT ROOT. This script used to REQUIRE the image to be on a loop already and
+# die with "is not on a loop device" otherwise - a state a human had to fix with sudo losetup. But
+# mgmt/harness/matrix.sh has done it root-free for months via udisksctl, and the blocker was only
+# ever a missing call here. Measured 2026-09-21: /dev/loop0 backing the answer stick disappeared
+# between campaigns, so the churn guest kept the assignment, libxenlight could not create the
+# domain, and the restart loop above blamed the PRODUCT for "crash-looping" nine times over.
+ensure_loop(){ # $1=image, $2=ro|rw -> prints loopN
+    local img=$1 mode=${2:-rw} dev
+    dev=$(losetup -l 2>/dev/null | awk -v f="$img" '$6==f{sub("/dev/","",$1); print $1; exit}')
+    if [ -n "$dev" ] && [ -e "/dev/$dev" ]; then printf '%s' "$dev"; return 0; fi
+    local ro=(); [ "$mode" = ro ] && ro=(-r)
+    dev=$(udisksctl loop-setup "${ro[@]}" -f "$img" 2>&1 | grep -o '/dev/loop[0-9]*' | head -1)
+    [ -n "$dev" ] || return 1
+    printf '%s' "${dev#/dev/}"
+}
+
 # --- build the job stick ---------------------------------------------------------------------
 # The loop device caches the backing file's capacity, so the image size must not change or the
 # guest sees a stale geometry.
@@ -137,8 +153,8 @@ log "building the '$JOB' stick into $STICKIMG (${STICKSIZE}M)"
 PRIME_JOB="$JOBDIR" OUT="$STICKIMG" SIZE_MB="$STICKSIZE" \
     ./mgmt/build-answer-stick.sh >"$HERE/.prime-stick.log" 2>&1 || {
     log "TERMINAL: stick build failed - $(tail -3 "$HERE/.prime-stick.log")"; exit 1; }
-STICKLOOP=$(losetup -l | awk -v f="$STICKIMG" '$6==f{sub("/dev/","",$1); print $1; exit}')
-[ -n "$STICKLOOP" ] || { log "TERMINAL: $STICKIMG is not on a loop device"; exit 1; }
+STICKLOOP=$(ensure_loop "$STICKIMG" ro)
+[ -n "$STICKLOOP" ] || { log "TERMINAL: could not attach $STICKIMG to a loop device"; exit 1; }
 log "stick on /dev/$STICKLOOP"
 
 # --- clone the base --------------------------------------------------------------------------
@@ -195,7 +211,7 @@ qvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$CHURN"
 # nothing from the guest. It is attached READ-WRITE because it is scratch; the answer stick above
 # stays read-only because it is the thing being tested.
 DIAGIMG=/home/user/win-iso/answer-usb-413.img
-DIAGLOOP=$(losetup -l | awk -v f="$DIAGIMG" '$6==f{sub("/dev/","",$1); print $1; exit}')
+DIAGLOOP=$(ensure_loop "$DIAGIMG" rw)
 if [ -n "$DIAGLOOP" ]; then
     # ARCHIVE BEFORE WIPING. The markers are the only evidence a stalled prime leaves, and this
     # reformat would destroy the previous run's set - the same "discard the evidence" mistake that
@@ -363,7 +379,9 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
             log "  TERMINAL: the DOMAIN WOULD NOT START (this is not the guest rebooting):"
             log "    ${_startout}"
             log "    Nothing is inferred about the install from this - the guest never ran."
-            return 1
+            # exit, not return: this loop is at script level, and `return` there is a no-op that
+            # printed an error and let the loop carry on to the wrong conclusion anyway.
+            exit 1
         fi
         quiet=0; noshow=0; t_start=$(date +%s)   # the rescue clock runs from THIS boot, see RESCUE_QUIET
         continue
