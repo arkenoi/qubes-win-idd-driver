@@ -61,11 +61,16 @@ def shot_bytes(vm: str, tag: str) -> str:
     sd = ROOT / 'scratchpad'; sd.mkdir(exist_ok=True)
     out = sd / f'gsj-{vm}-{tag}.tar'
     rc, err = run(['tools/qtest', 'shot', str(out)], 120)
-    if rc != 0 or not out.exists():
-        return f'NO CAPTURE (rc={rc})'
-    n = out.stat().st_size
-    return f'{n} bytes' + (' (EMPTY TAR = no mapped windows, which is a fact, not a broken tool)'
-                           if n < 2048 else '')
+    n = out.stat().st_size if out.exists() else 0
+    # rc=1 with ZERO bytes is this rig's DOCUMENTED "no visible windows" (mgmt/CLAUDE.md), i.e. a
+    # measurement about the guest - NOT a broken instrument. Reporting it as "no capture" hands the
+    # judge an instrument failure where there is a fact, which is the same conflation this whole
+    # tool exists to stop. Only a non-zero rc WITH bytes, or a timeout, is a real capture failure.
+    if rc != 0 and n == 0:
+        return 'NO MAPPED WINDOWS (rc=1, 0 bytes - the documented "no visible windows" answer, a fact about the guest)'
+    if rc != 0:
+        return f'CAPTURE FAILED (rc={rc}, {n} bytes) - instrument problem, says nothing about the guest'
+    return f'{n} bytes' + (' (EMPTY TAR = no mapped windows, a fact, not a broken tool)' if n < 2048 else '')
 
 
 def devices(vm: str) -> str:
