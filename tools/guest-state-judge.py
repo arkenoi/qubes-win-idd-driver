@@ -49,12 +49,17 @@ def power(vm: str) -> str:
 def uptime(vm: str) -> str:
     """The guest's own boot time. This is the ONLY fact that distinguishes 'still up' from 'came
     back up'. No qrexec means no answer - which is itself reported, never treated as 'no reboot'."""
+    # NOT wmic - removed from Windows 11 24H2+; on this rig's 25H2 image it answers "could not be
+    # found", so the first version of this probe could never return a boot time and every verdict
+    # would have been UNKNOWN. Measured 2026-09-21.
     rc, out = run(['tools/qtest', 'run',
-                   'cmd /c wmic os get lastbootuptime /value'], 120)
-    for ln in out.replace('\r', '').splitlines():
-        if 'LastBootUpTime=' in ln:
-            return ln.split('=', 1)[1].strip()
-    return f'UNAVAILABLE (qrexec did not answer; rc={rc})'
+                   "powershell -NoProfile -Command "
+                   "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')"], 120)
+    import re as _re
+    m = _re.search(r'\d{4}-\d{2}-\d{2}T[\d:.]+', out.replace('\r', ''))
+    if m:
+        return m.group(0)
+    return f'UNAVAILABLE (no boot time came back; rc={rc})'
 
 
 def shot_bytes(vm: str, tag: str) -> str:

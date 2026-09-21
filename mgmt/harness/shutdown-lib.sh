@@ -43,8 +43,14 @@ _qwt_boottime() {
     # with the guest - a missing instrument reading as a guest state is the trap this file exists
     # to close.
     local root; root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-    QTEST_VM="$1" timeout 60 "$root/tools/qtest" run 'cmd /c wmic os get lastbootuptime /value' 2>/dev/null \
-        | tr -d '\r' | sed -n 's/^LastBootUpTime=//p' | head -1
+    # NOT wmic: it is REMOVED from Windows 11 24H2+ and this rig's reporter image is 25H2, where it
+    # answers "konnte nicht gefunden werden". Measured 2026-09-21 - the first version of this
+    # function used wmic, so it returned empty on every modern guest and the classification below
+    # would have fallen into UNKNOWN every single time. A guard that can never succeed is
+    # decoration, and this one was committed without being driven against a real guest.
+    QTEST_VM="$1" timeout 60 "$root/tools/qtest" run \
+        "powershell -NoProfile -Command (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')" 2>/dev/null \
+        | tr -d '\r' | grep -aoE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+' | head -1
 }
 qwt_shutdown() {
     local vm="$1" deadline="${2:-1800}" end st b0 b1
