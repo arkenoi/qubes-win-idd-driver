@@ -326,16 +326,58 @@ for k, v in seen.items():
     print(f"{k}\t{','.join(v)}")
 PYEOF
 )
+unjudged=0
 if [ -n "$excl" ]; then
   log "EXCLUDED ITEMS dom0 was never told about ($(printf '%s\n' "$excl" | wc -l)):"
   printf '%s\n' "$excl" | sed 's/^/    /' | tee -a "$OUT/run.log"
-  log "NOT GREEN YET: run  tools/wu-exclusion-audit.py $OUT  and judge each one. An exclusion that"
-  log "               has not been judged against evidence OUTSIDE the updater is an open question,"
-  log "               not a pass - see docs/ADR-updater.md section 2."
   printf '%s\n' "$excl" > "$OUT/excluded-items.tsv"
+  # Until 2026-09-21 this printed "NOT GREEN YET" and then exited 0 anyway, so a run WITH unjudged
+  # exclusions was indistinguishable from a clean one to every caller - the precise hole
+  # docs/ADR-updater.md listed as open. The harness still does not call Jev (it must be able to
+  # finish without an external API), but it no longer PRETENDS the question was settled:
+  #   * WU_EXCLUSION_VERDICT=<answers.json>, produced by `tools/wu-exclusion-audit.py --out`, is
+  #     replayed here through that tool's OWN gate function - pure local code, no API - and must
+  #     cover EVERY item in excluded-items.tsv. Green only if the gate passes on all of them.
+  #   * no verdict file => exit 4 UNJUDGED. Not a pass, not a defect: an open question.
+  if [ -n "${WU_EXCLUSION_VERDICT:-}" ] && [ -f "$WU_EXCLUSION_VERDICT" ]; then
+    gate_out=$(python3 - "$OUT/excluded-items.tsv" "$WU_EXCLUSION_VERDICT" <<'PYEOF'
+import json, sys, importlib.util
+spec = importlib.util.spec_from_file_location("a", "tools/wu-exclusion-audit.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+items = [l.split("\t")[0] for l in open(sys.argv[1], encoding="utf-8").read().splitlines() if l.strip()]
+try:
+    v = json.load(open(sys.argv[2], encoding="utf-8"))
+except Exception as e:
+    print("VERDICT FILE UNREADABLE: %s" % e); sys.exit(2)
+missing = [k for k in items if k not in v]
+if missing:
+    # A verdict that does not cover an item says nothing about it. Never let coverage be implied.
+    print("VERDICT DOES NOT COVER: " + ", ".join(missing)); sys.exit(2)
+stale = [k for k in v if k not in items]
+if stale:
+    print("note: verdict also covers items not in this run: " + ", ".join(stale))
+sys.exit(m.gate({k: v[k] for k in items}))
+PYEOF
+    ); grc=$?
+    printf '%s\n' "$gate_out" | sed 's/^/    /' | tee -a "$OUT/run.log"
+    if [ "$grc" = 0 ]; then
+      log "exclusion audit REPLAYED from $WU_EXCLUSION_VERDICT: every excluded item positively judged"
+    else
+      log "FAIL EXCLUSION AUDIT (rc=$grc): an excluded item is a concealed failure, unproven, or uncovered"
+      fails=1
+    fi
+  else
+    unjudged=1
+    log "UNJUDGED EXCLUSIONS: run  tools/wu-exclusion-audit.py $OUT --out <answers.json>  and judge each"
+    log "               one, then re-run with WU_EXCLUSION_VERDICT=<answers.json> to grade this run."
+    log "               An exclusion not judged against evidence OUTSIDE the updater is an open"
+    log "               question, not a pass - see docs/ADR-updater.md section 2."
+  fi
 else
   log "no excluded items in any round - dom0 was told about everything the guest saw"
 fi
 
-log "DONE: rounds=$ROUNDS fails=$fails out=$OUT"
-[ "$fails" = 0 ] && exit 0 || exit 3
+log "DONE: rounds=$ROUNDS fails=$fails unjudged_exclusions=$unjudged out=$OUT"
+[ "$fails" = 0 ] || exit 3
+[ "$unjudged" = 0 ] || exit 4   # passed every round, but exclusions are unjudged: NOT green
+exit 0

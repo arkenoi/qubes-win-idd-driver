@@ -189,8 +189,18 @@ and distinguish *empty* from *negative*.
   design's ability to discriminate correct exclusion from genuine failure at **0.24**, naming the
   reason at 0.93: it grades dom0's flag and never checks WHICH reason was applied to WHICH item.
   `tools/wu-exclusion-audit.py` is the missing half — per-item judgment, with the updater's own
-  reason string refused as evidence for itself. NOT yet wired into `mgmt/harness/wu-e2e.sh`, so a
-  run can still be called green without it.
+  reason string refused as evidence for itself. **WIRED 2026-09-21.** The harness still never calls
+  Jev (it must finish without an external API), but it no longer exits 0 on an unjudged run. The
+  contract is now: **0** = every round passed and either nothing was excluded or a supplied verdict
+  positively judged every excluded item; **3** = a round failed; **4** = every round passed but
+  exclusions are UNJUDGED — an open question, not a pass. To grade them, run
+  `tools/wu-exclusion-audit.py <run-dir> --out answers.json` (optionally `--evidence` with facts
+  measured on the guest outside the updater) and re-run with `WU_EXCLUSION_VERDICT=answers.json`;
+  the harness replays that file through the audit's own gate in pure local code and requires it to
+  cover **every** item in `excluded-items.tsv` — a verdict that omits an item says nothing about it.
+  The gate fails a run on a concealed failure, on `insufficient-evidence` (missing data fails), and
+  on a benign class resting on a reason Jev judged not to fit the item. It is driven with each of
+  those defects present by `tools/tests/wu-exclusion-gate-selftest.py`.
 - The release **disc** path is untested since `qvm-start --cdrom` broke on this rig
   (`findings/rig.md`); the reporter installs from the published ISO. **That is one command being
   broken, not the disc path being impossible:** `udisksctl loop-setup -r -f <iso>` (root-free) plus

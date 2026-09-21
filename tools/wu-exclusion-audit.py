@@ -62,6 +62,54 @@ def key(r: dict) -> str:
     return str(r.get('kb') or r.get('title') or '<no id>')
 
 
+def gate(verdicts: dict) -> int:
+    """0 = every excluded item positively judged benign; 1 = a concealed failure or an unproven
+    exclusion. Separated from main() so tools/tests/wu-exclusion-gate-selftest.py can drive it with
+    the defect present - a gate never seen to fail is not evidence (CLAUDE.md)."""
+    # ---- THE GATE ------------------------------------------------------------------------------
+    # This tool exists because the aggregate bar cannot tell a correct exclusion from a concealed
+    # failure (Jev graded that design 0.24). A gate that only PRINTS leaves the same hole: the run
+    # would still be green while an item was silently failing. So the exit code is the verdict.
+    #
+    # PASS requires every excluded item to be positively judged benign. `insufficient-evidence`
+    # FAILS - not because the item is bad, but because nothing here established that dom0's silence
+    # about it is true, and missing data fails (CLAUDE.md). The remedy is named in the output:
+    # collect the decisive measurement Jev asked for and re-run with --evidence.
+    bad, unproven = [], []
+    for k, v in verdicts.items():
+        c = v['answers'].get('classification') or {}
+        choice, conf = c.get('choice'), float(c.get('confidence') or 0.0)
+        probs = c.get('probabilities') or {}
+        concealed = float(probs.get('concealed-failure') or 0.0)
+        dm = ((v['answers'].get('decisive_measurement') or {}).get('choice')) or 'unspecified'
+        if choice == 'concealed-failure' or concealed >= 0.5:
+            bad.append((k, choice, conf, concealed, dm))
+        elif choice in (None, 'insufficient-evidence'):
+            unproven.append((k, conf, dm, v['evidence']))
+        else:
+            rf_ = v['answers'].get('reason_fits') or {}
+            # A benign class resting on a reason Jev judged not to fit the item is not proven either.
+            if float(rf_.get('noul') or 1.0) < 0.5:
+                unproven.append((k, conf, dm, v['evidence']))
+
+    print()
+    print('EXCLUSION AUDIT: %d excluded item(s); %d judged a concealed failure, %d unproven'
+          % (len(verdicts), len(bad), len(unproven)))
+    for k, choice, conf, concealed, dm in bad:
+        print('  CONCEALED FAILURE  %s  (choice=%s conf=%.2f, P(concealed)=%.2f) '
+              '-> decisive measurement: %s' % (k, choice, conf, concealed, dm))
+    for k, conf, dm, had_ev in unproven:
+        print('  UNPROVEN           %s  (no positive judgment%s) -> collect: %s, then re-run '
+              'with --evidence' % (k, '' if had_ev else '; NO independent evidence was supplied', dm))
+    if bad:
+        return 1
+    if unproven:
+        return 1
+    print('  every excluded item positively judged correct-exclusion or perpetual-by-nature')
+    return 0
+
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('run_dir', type=Path)
@@ -146,8 +194,9 @@ def main() -> int:
         rf = sdir / f'jev-excl-{safe}-rubric.json'
         sf.write_text('\n'.join(state), encoding='utf-8')
         rf.write_text(json.dumps(rubric), encoding='utf-8')
-        p = subprocess.run([sys.executable, str(ROOT / 'tools' / 'jev.py'), str(rf), str(sf)],
-                           capture_output=True, text=True)
+        af = sdir / f'jev-excl-{safe}-answers.json'
+        p = subprocess.run([sys.executable, str(ROOT / 'tools' / 'jev.py'), str(rf), str(sf),
+                            '--out', str(af)], capture_output=True, text=True)
         if p.returncode != 0:
             # exit 2 means the INSTRUMENT did not run. Never paper over it as an answer.
             print(f'JEV DID NOT RUN for {k}: rc={p.returncode} {p.stderr.strip()[:300]}', file=sys.stderr)
@@ -155,11 +204,18 @@ def main() -> int:
         print(f'=== {k}  (rounds: {", ".join(it["rounds"])}, independent evidence: '
               f'{"yes" if k in ev else "NONE"})')
         print('\n'.join('    ' + l for l in p.stdout.strip().splitlines()))
-        verdicts[k] = p.stdout.strip()
+        try:
+            ans = json.loads(af.read_text(encoding='utf-8')).get('answers', {})
+        except Exception as e:
+            print(f'INSTRUMENT: answers for {k} unreadable ({e})', file=sys.stderr)
+            return 2
+        verdicts[k] = {'lines': p.stdout.strip(), 'answers': ans,
+                       'rounds': it['rounds'], 'evidence': k in ev}
 
     if a.out:
         a.out.write_text(json.dumps(verdicts, indent=1), encoding='utf-8')
-    return 0
+
+    return gate(verdicts)
 
 
 if __name__ == '__main__':

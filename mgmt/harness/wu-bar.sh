@@ -167,4 +167,6 @@ case "$(inst)" in *"bytes=$PKGBYTES"*) : ;; *) log "FAIL: installed bytes != pac
 log "=== THE BAR: dom0 settled by the pass AND unchanged by the following scan ==="
 # ROUNDS: one pass proves the mechanism, repeated passes prove it is not a one-shot. The goal
 # record requires repeated stall-free cycles, so this is a knob, not a constant.
+# Exit code comes straight from wu-e2e.sh: 0 green, 3 a round failed, 4 every round passed but
+# items were excluded from what dom0 was told and nothing has judged them yet (see its DONE block).
 exec bash mgmt/harness/wu-e2e.sh "$VM" "${ROUNDS:-1}" "$OUT"
