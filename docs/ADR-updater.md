@@ -128,3 +128,20 @@ reproducing what a user gets, because a user reboots when Windows asks.
 **Why:** every wrong verdict in this track came from an instrument, not from the code under test.
 Known instrument traps are recorded in `findings/rig.md` and `findings/updates.md`, and are kept
 out of this file on purpose — they are observations, and they change.
+
+## 10. The guest cannot restart itself; a restart is REQUESTED, never taken
+
+A Qubes HVM is `on_reboot=destroy` / `on_poweroff=destroy`. A guest-initiated restart leaves the
+qube Halted, and only dom0 can start it again. So when the guest needs a boot, it cannot take one.
+
+- A state the guest cannot leave on its own is REPORTED as a request (`reboot_needed=true`) with a
+  message naming the action, and the pass stops there. It is not worked around by powering the
+  guest off, and not hidden by retrying.
+- The guest powers itself off only where an admin-driven install or update pass asked for it (§8).
+- A guard that cannot measure what it needs says so and lets the pass proceed. An unmeasured guard
+  is announced, never assumed in either direction.
+
+**Why:** a guest that halts itself to fix its own problem takes the machine away from the admin
+without being asked, and §8's accounting cannot tell that cycle from a requested one. Reporting the
+requirement keeps dom0's state true (§2), and the next start — including the start dom0 performs
+when it updates a halted qube — clears it by itself.

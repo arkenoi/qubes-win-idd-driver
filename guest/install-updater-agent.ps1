@@ -451,4 +451,29 @@ Log 'set NoAutoUpdate=1 (dom0 owns updates; guest never installs on its own)'
 #     template as 'TemplateVM'. The guest reads its own vm-type fine (the old "unreadable" belief
 #     was a P/Invoke marshaling bug; see guest/qubesdb-read.ps1). Nothing is stamped here anymore.
 
+# 11. STAMP THE BOOT WE WERE INSTALLED IN (GUARD:firstboot, consumed by qubes-windows-update.ps1).
+#     Measured 2026-09-21 on GWeck's environment: a guest carrying a freshly installed updater and
+#     never booted since cannot run a Windows Update search at all - it dies ~2 s in at 0x8024402C
+#     (WU_E_PT_WINHTTP_NAME_NOT_RESOLVED) while our own relay fetches in the same pass succeed, and
+#     one deliberate restart cures it. Restarting every update service does not. The default
+#     install leaves the guest RUNNING (the end-of-install power-off is behind -RebootAtEnd), so
+#     this is the state a user is in when they click Update straight after installing the tools.
+#     The updater compares this stamp with the live LastBootUpTime and, while they are the same
+#     boot, refuses the pass and says a restart is required instead of failing on an opaque
+#     WinHTTP error. Written 'o' (invariant round-trip): a culture-formatted timestamp is
+#     unparseable on the German guests this path exists for.
+$qUpd = 'HKLM:\SOFTWARE\Qubes\Updates'
+try {
+    $bootUtc = (Get-CimInstance Win32_OperatingSystem -EA Stop).LastBootUpTime.ToUniversalTime()
+    New-Item -Path $qUpd -Force | Out-Null
+    Set-ItemProperty -Path $qUpd -Name AgentInstalledBoot -Value $bootUtc.ToString('o') -Type String
+    Set-ItemProperty -Path $qUpd -Name AgentInstalledAt   -Value ((Get-Date).ToUniversalTime().ToString('o')) -Type String
+    Log ("stamped AgentInstalledBoot=" + $bootUtc.ToString('o') + " (a Windows Update search needs one restart after this install)")
+} catch {
+    # Non-fatal, and SAID: without the stamp the updater cannot tell the install boot from a later
+    # one, so it leaves the gate inactive and a pass run in this boot will fail at 0x8024402C with
+    # its own opaque message. That is worse diagnostics, not a broken install.
+    Log ("WARN could not stamp AgentInstalledBoot (" + $_.Exception.Message + ") - the first-boot gate will be inactive on this guest")
+}
+
 Log 'updater agent deployed'

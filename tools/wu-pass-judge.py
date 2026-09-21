@@ -22,6 +22,9 @@ CODE (load-bearing, fixed strings the updater emits - counted over EVERY pass, n
   errored       a pass whose last substantive line is "ERROR: ...".
   noop          a pass that declined by design ("Doing nothing" - e.g. a StandaloneVM, which is
                 template-only by design and is NOT a failure).
+  needs_restart a pass GUARD:firstboot refused because the guest has not restarted since the
+                updater was installed. It searched nothing and reported nothing, deliberately, and
+                says so - not a silent pass, and not a healthy one either.
   SILENT        errored AND never reported: dom0 was left holding a stale number. Any is a FAIL.
   contradictory reported AND errored in the same pass: the number dom0 got is not trustworthy. FAIL.
   --dom0-reported N, when given, is what dom0 actually holds; it must equal the last reported value,
@@ -57,6 +60,10 @@ OFFERED = re.compile(r"scan:\s+(\d+)\s+update\(s\) offered")
 ERROR = re.compile(r"^ERROR:\s*(.+)$")
 HRESULT = re.compile(r"(0x[0-9A-Fa-f]{8})")
 NOOP = "Doing nothing"
+# GUARD:firstboot's decline. A pass that refuses because the guest has not restarted since the
+# updater was installed did not search and did not report - and that is CORRECT, not silent. It is
+# counted in its own right so it can never be read as either a healthy pass or a stale-dom0 one.
+NEEDS_RESTART = "RESTART REQUIRED before Windows Update can search"
 
 QUESTIONS = {
     "outcome": {
@@ -119,6 +126,7 @@ def classify(p):
     """Code facts for one pass - fixed strings only, no interpretation."""
     reported, offered, errors = None, None, []
     noop = False
+    needs_restart = False
     for line in p["lines"]:
         msg = line.split(" ", 1)[1] if " " in line else line
         m = REPORTED.search(msg)
@@ -132,14 +140,17 @@ def classify(p):
             errors.append(m.group(1))
         if NOOP in msg:
             noop = True
+        if NEEDS_RESTART in msg:
+            needs_restart = True
     hres = [h for e in errors for h in HRESULT.findall(e)]
-    p.update(reported=reported, offered=offered, errors=errors, hresults=hres, noop=noop)
+    p.update(reported=reported, offered=offered, errors=errors, hresults=hres, noop=noop,
+             needs_restart=needs_restart)
     # GUARD:silent - the load-bearing rule. WUPASS_DEFECT=silent re-introduces the original state
     # in which an errored pass that never reported was indistinguishable from a healthy one.
     if os.environ.get("WUPASS_DEFECT") == "silent":
         p["silent"] = False
     else:
-        p["silent"] = bool(errors) and reported is None and not noop
+        p["silent"] = bool(errors) and reported is None and not noop and not needs_restart
     p["contradictory"] = bool(errors) and reported is not None
     return p
 
@@ -174,6 +185,7 @@ def main():
         "reported": len(reported),
         "errored": len(errored),
         "noop": sum(1 for p in passes if p["noop"]),
+        "needs_restart": sum(1 for p in passes if p["needs_restart"]),
         "silent": len(silent),
         "contradictory": len(contradictory),
         "hresults": codes,
