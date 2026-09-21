@@ -66,10 +66,19 @@ guest_file(){  # $1 = windows path -> stdout, without the cmd banner
   return 1
 }
 
-wait_qrexec(){ local d=$(( $(date +%s) + ${1:-900} ))
+# STABLY up, not just up. A single successful probe proves the agent answered ONCE. Measured
+# 2026-09-21 on win11de-ctld: 60 s after a reboot that applied a cumulative, one probe succeeded -
+# so the reboot counted and the next pass was driven - and that pass then got rc=46 on nearly every
+# step, because the agent was still coming and going while Windows finished its boot-time
+# servicing. The harness refused to call it a result, correctly, but it should never have driven a
+# pass into a booting guest. Three consecutive answers, and any failure resets the count.
+wait_qrexec(){ local d=$(( $(date +%s) + ${1:-900} )) ok=0
   while [ "$(date +%s)" -lt "$d" ]; do
     o=$(timeout -k 5 45 tools/qtest run "cmd /c echo UP" 2>/dev/null | tr -d '\r\n')
-    case "$o" in *UP*) return 0;; esac
+    case "$o" in
+      *UP*) ok=$((ok+1)); [ "$ok" -ge 3 ] && return 0; sleep 15; continue;;
+      *)    [ "$ok" -gt 0 ] && log "qrexec answered $ok time(s) then stopped - the guest is not settled yet"; ok=0;;
+    esac
     [ "$(qstate)" = Halted ] && return 1
     sleep 15
   done; return 2; }
