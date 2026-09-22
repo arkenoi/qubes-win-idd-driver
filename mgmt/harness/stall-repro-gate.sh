@@ -43,6 +43,10 @@ RUBRIC="$OUT/jev-stallgate-rubric.json"
   echo "THE REFERENCE FAILURE (machine-extracted from its own artefacts, tools/stall-reference.py):"
   cat "$REF"
   echo
+  echo "HOW THIS CANDIDATE PASS IS BEING INVOKED: ${STALL_REPRO_INVOKED_BY:-a bare quick-upgrade, NOT through any feature test}"
+  echo "(The reference failure's own invoked_by field says which harness called quick-upgrade there."
+  echo " A pass invoked differently has already deviated, however similar the guest is.)"
+  echo
   echo "THE CANDIDATE PASS, measured now on $VM (tools/guest-config-snapshot.sh):"
   sed -n '1,120p' "$CAND"
   echo
@@ -59,14 +63,18 @@ RUBRIC="$OUT/jev-stallgate-rubric.json"
 
 cat > "$RUBRIC" <<'JSON'
 {"questions":{
- "same_situation":{"type":"noul",
-  "instructions":{"judge":"Is the candidate pass the SAME SITUATION as the reference failure on every dimension the reference actually recorded - so that a null result from it would be informative? Judge only from `state`. Unknown-on-the-reference-side is NOT a match; it is an unknown."},
-  "criteria":{"true":"every recorded dimension of the reference is matched by the candidate","false":"at least one recorded dimension differs, or too much of the reference is unknown for the comparison to mean anything"}},
+ "matches_recorded":{"type":"noul",
+  "instructions":{"judge":"On every dimension the reference ACTUALLY RECORDED, does the candidate match it? Judge only those dimensions; the reference's unrecorded fields are handled by the next question and must not lower this one."},
+  "criteria":{"true":"every recorded dimension of the reference is matched","false":"at least one recorded dimension differs"}},
+ "is_one_to_one":{"type":"noul",
+  "instructions":{"judge":"Separately: would a null result from this pass be informative about the reference failure - i.e. is this a FAITHFUL 1:1 reproduction? Unknown-on-the-reference-side is not a match; it is an unknown, and it belongs in this answer."},
+  "criteria":{"true":"faithful enough that a null result would mean something","false":"too much of the reference is unknown, so a null result would prove nothing"}},
  "worst_mismatch":{"type":"choice",
   "instructions":{"judge":"Which difference or unknown most undermines this as a reproduction?"},
   "criteria":{
    "entry-build-differs":"The guest does not carry the reference's entry QWT build.",
    "delivery-differs":"The payload does not reach the guest the way it did in the reference.",
+   "invoked-differently":"The pass is invoked by a different caller than the reference run was.",
    "reference-unknowns":"Too much of the reference was never recorded to establish a match.",
    "nothing-material":"No difference or unknown materially undermines it."}}}}
 JSON
@@ -79,7 +87,7 @@ if ! timeout 300 python3 tools/jev.py "$RUBRIC" "$STATE" --out "$OUTJ" > "$OUT/j
 fi
 cat "$OUT/jev-stallgate.out"
 
-SAME=$(python3 - "$OUTJ" <<'PYEOF'
+read -r SAME ONE1 <<< "$(python3 - "$OUTJ" <<'PYEOF'
 import json, sys
 # jev.py --out writes {"model":..,"answers":{"<q>":{"type":"noul","noul":0.03}},..} - read THAT
 # shape. The first version guessed at the keys, found nothing, and reported "gate could not run"
@@ -93,9 +101,11 @@ q = (d.get("answers") or {}).get("same_situation") or {}
 v = q.get("noul")
 print("" if not isinstance(v, (int, float)) else v)
 PYEOF
-)
+)"
 [ -n "$SAME" ] || { say "GATE COULD NOT RUN: no same_situation value in $OUTJ"; exit 2; }
-say "jev same_situation=$SAME"
+say "jev matches_recorded=$SAME is_one_to_one=${ONE1:-?}"
+echo "matches_recorded=$SAME is_one_to_one=${ONE1:-?}" > "$OUT/REPRO-FIDELITY.txt"
+awk -v v="${ONE1:-0}" 'BEGIN{exit !(v+0 < 0.70)}' && say "NOTE: this pass is NOT a faithful 1:1 reproduction (is_one_to_one=${ONE1:-?}) - a null result from it proves nothing about the reference; recorded in $OUT/REPRO-FIDELITY.txt"
 awk -v v="$SAME" 'BEGIN{exit !(v+0 >= 0.70)}' && { say "PASS MAY RUN: judged the same situation"; exit 0; }
-say "ABORT: this pass is NOT the reference situation (same_situation=$SAME) - correct it rather than spending the run"
+say "ABORT: the candidate differs from the reference on a RECORDED dimension (matches_recorded=$SAME) - correct it rather than spending the run"
 exit 1

@@ -35,8 +35,27 @@ prof = {
     "launch_line_utc": find(r"^(\d\d:\d\d:\d\d) .*install\.cmd /auto launch", 1) or None,
     "installer_output_lines": None,
     "last_answered_call": "run-marker write",
+    # PROVENANCE. The 2026-09-22 failure did not happen under a bare quick-upgrade: it happened
+    # inside a feature test that calls quick-upgrade as its setup step. A reproduction that invokes
+    # quick-upgrade directly has already deviated, which is what 16 A/B runs did without anyone
+    # noticing. Detected, not assumed: the caller is the log that names this subject and window.
+    "invoked_by": None,
     "unrecorded_at_reference_time": [],
 }
+subj = find(r"quick-upgrade\[(\S+?)\]")
+if subj:
+    for cand in glob.glob("/home/user/qwt-accept/*/*.log") + glob.glob("/home/user/qubes-win-idd-driver/scratchpad/*.log"):
+        if os.path.basename(cand).startswith("quick-upgrade"):
+            continue
+        try:
+            t = open(cand, errors="replace").read()
+        except OSError:
+            continue
+        if subj in t and "quick-upgrade" in t:
+            prof["invoked_by"] = os.path.basename(cand)
+            break
+prof["subject"] = subj
+
 tail = os.path.join(run, "install.tail")
 if os.path.exists(tail):
     prof["installer_output_lines"] = sum(1 for _ in open(tail, errors="replace"))

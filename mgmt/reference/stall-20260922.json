@@ -12,6 +12,7 @@
  "launch_line_utc": "11:17:36",
  "installer_output_lines": 1,
  "last_answered_call": "run-marker write",
+ "invoked_by": "notify-errors-guest-test.log",
  "unrecorded_at_reference_time": [
   {
    "field": "guest_config_snapshot",
@@ -29,5 +30,6 @@
    "field": "event_channel_state_before_launch",
    "why": "never captured by any harness"
   }
- ]
+ ],
+ "subject": "win11-nfy"
 }

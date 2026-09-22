@@ -95,11 +95,8 @@ rem Return the media to RAW so the product's private-disk gate sees the disk it 
 rem by volume LABEL, never by number, and never the system or boot disk.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
  "$ErrorActionPreference='Stop';" ^
- "$v=Get-Volume -FileSystemLabel QPRIME -ErrorAction SilentlyContinue;" ^
- "if(-not $v){'no QPRIME volume - nothing to wipe' ; exit 0};" ^
- "$p=Get-Partition | Where-Object { $_.AccessPaths -and ($_.DriveLetter -eq $v.DriveLetter) } | Select-Object -First 1;" ^
- "if(-not $p){'QPRIME has no partition object'; exit 3};" ^
- "$d=Get-Disk -Number $p.DiskNumber;" ^
+ "$d=Get-Disk | Where-Object { $_ | Get-Partition -ErrorAction SilentlyContinue | Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.FileSystemLabel -eq 'QPRIME' } } | Select-Object -First 1;" ^
+ "if(-not $d){'no disk carries a QPRIME volume - nothing to wipe'; exit 0};" ^
  "if($d.IsSystem -or $d.IsBoot -or $d.Number -eq 0){'REFUSING: QPRIME is on the system/boot disk ' + $d.Number; exit 4};" ^
  "Clear-Disk -Number $d.Number -RemoveData -RemoveOEM -Confirm:$false;" ^
  "$after=Get-Disk -Number $d.Number;" ^

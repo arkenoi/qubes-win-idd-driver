@@ -400,6 +400,20 @@ log "run marker $E2E_MARK"
 # nothing-in-this-corpus 0.85, what_to_record=guest-config-snapshot 1.00). Without this, the next
 # occurrence is as incomparable as the last one. Non-fatal: a snapshot that fails is logged, not
 # treated as a reason to abandon the run.
+# STALL_REPRO=1 marks a pass whose purpose is to reproduce a recorded failure. Such a pass is
+# gated: if the candidate differs from the reference on a dimension the reference actually
+# recorded, it is ABORTED rather than spent (owner, 2026-09-22 - 49 attempts were spent without
+# anyone checking). The gate also records how faithful the pass can claim to be at all.
+if [ "${STALL_REPRO:-0}" = 1 ]; then
+  if ./mgmt/harness/stall-repro-gate.sh "$SUBJECT" "$OUT" "${STALL_REF:-mgmt/reference/stall-20260922.json}" >>"$OUT/stall-gate.log" 2>&1; then
+    log "stall-repro gate: PASS MAY RUN - $(cat "$OUT/REPRO-FIDELITY.txt" 2>/dev/null)"
+  else
+    grc=$?
+    log "stall-repro gate REFUSED (rc=$grc): $(tail -2 "$OUT/stall-gate.log" | tr '\n' ' ')"
+    finish 3 "REFUSED: this pass is not the reference situation - correct it instead of spending the run (see $OUT/stall-gate.log)"
+  fi
+fi
+
 ./tools/guest-config-snapshot.sh "$SUBJECT" "$OUT" entry >>"$OUT/snapshot.log" 2>&1 \
   && log "entry guest-config snapshot: $OUT/guest-config-entry.txt" \
   || log "WARNING: entry guest-config snapshot failed - see $OUT/snapshot.log (the run continues)"
