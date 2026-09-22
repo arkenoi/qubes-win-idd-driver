@@ -135,11 +135,17 @@ there, with the in-guest banner suppressed — so a guest toast reaches you the 
 notification from any other qube does. It is on by default as of 4.3.30 (it existed earlier but
 shipped switched off).
 
-It forwards **allowlisted applications only**. With no allowlist configured a conservative built-in
-seed is used — Snipping Tool, Camera, Photos, Security & Maintenance, the backup reminder — and you
-can see what a guest actually emits with `notifhost --dump-aumids`, then extend the list per guest.
-Everything else, and everything at all while the bridge is unhealthy, keeps the ordinary window
-path: fail-open by construction. `qvm-features <vm> service.legacy-toasts 1` forces the old
+Since 4.3.31 the decision is made **per notification**, not per application: a notification that
+needs no answer from you is forwarded, and one carrying buttons stays a guest window so the buttons
+still work. An allowlist (`NotifyBridgeAllow`) remains as a shortcut for applications whose
+notifications are known to be informational, and with none configured a conservative built-in seed
+is used — Snipping Tool, Camera, Photos, Security & Maintenance, the backup reminder. See what a
+guest actually emits with `notifhost --dump-aumids`.
+
+Anything undecided keeps the ordinary window path: an unhealthy bridge, a notification the
+classifier cannot place within about six seconds, or a Windows build whose notification database
+does not match what the classifier expects. Fail-open by construction — a notification may lose its
+dom0 rendering, never its delivery. `qvm-features <vm> service.legacy-toasts 1` forces the old
 behaviour regardless.
 
 Notification cards no longer show black bars between them when several stack up.
