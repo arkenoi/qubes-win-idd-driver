@@ -37,12 +37,22 @@ for i in $(seq 1 "$N"); do
   # A boot that never reaches a session is itself worth knowing about, but it is not a stall of the
   # kind under study: record and carry on rather than aborting the aging.
   if w_session "$VM" 420 "age$i" "$OUT" say; then sess=ok; else sess=NO-SESSION; fi
+  # PARK NEEDS A LABEL AND A HALTED GUEST. The first version passed neither, so every park failed
+  # silently into a status word and the checkpoint churn a campaign really does was MISSING from
+  # the aging - the one thing this script exists to reproduce. The error text is kept now, too.
+  qwt_shutdown "$VM" 300 >/dev/null 2>&1 || timeout 120 qvm-kill "$VM" >/dev/null 2>&1
   if [ $((i % 3)) = 0 ]; then
-    bash mgmt/harness/checkpoint.sh park "$VM" >/dev/null 2>&1 && \
-    bash mgmt/harness/checkpoint.sh unpark "$VM" >/dev/null 2>&1 && ck=parked || ck=park-failed
+    ckl="age$i"
+    if bash mgmt/harness/checkpoint.sh park "$VM" "$ckl" >>"$OUT/checkpoint.log" 2>&1 \
+       && bash mgmt/harness/checkpoint.sh unpark "$VM" "$ckl" >>"$OUT/checkpoint.log" 2>&1; then
+      ck=parked
+    else
+      ck="park-FAILED(see checkpoint.log)"
+    fi
+    timeout 300 qvm-remove -f "ckpt-$VM-$ckl" >/dev/null 2>&1
+    qwt_shutdown "$VM" 300 >/dev/null 2>&1 || timeout 120 qvm-kill "$VM" >/dev/null 2>&1
   else ck=-; fi
   say "cycle $i/$N: domid=$(domid) session=$sess checkpoint=$ck pool=$(pool)% elapsed=$(( ($(date +%s)-t0)/60 ))m"
-  qwt_shutdown "$VM" 300 >/dev/null 2>&1 || timeout 120 qvm-kill "$VM" >/dev/null 2>&1
   timeout 300 qvm-remove -f "$VM" >/dev/null 2>&1
 done
 say "aged $N cycles in $(( ($(date +%s)-t0)/60 )) minutes; pool now $(pool)%"
