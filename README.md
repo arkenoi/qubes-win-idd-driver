@@ -381,7 +381,7 @@ overrides, is [docs/QVM-FEATURES.md](docs/QVM-FEATURES.md). The short version:
 |---|---|
 | `qvm-features <vm> service.enableWinKey 1` | let the Windows key through, so Start (or a third-party shell) opens. Default: blocked in seamless mode |
 | `qvm-features <vm> service.gui-fullscreen 1` | allow the whole guest desktop to be shown in **one** dom0 window (non-seamless), and a borderless true-fullscreen app window. A maximized app with a title bar is always allowed; the boot/shutdown screen is never allowed, feature or not |
-| `qvm-features <vm> service.hideGuestTitleBar 1` | strip the guest's own title bars so only dom0's decoration shows. **Experimental — leave it alone:** the restyle makes windows minimize themselves |
+| `qvm-features <vm> service.hideGuestTitleBar ""` | keep the guest's own title bars. Stripping them so only dom0's decoration shows is the **default since 4.3.21** — set the feature to an empty value to opt out |
 | `qvm-features <vm> service.notify-bridge 0` | turn **off** the forwarding of guest notifications to dom0. Default: **on** since 4.3.30 |
 | `qvm-features <vm> service.notify-errors 0` | turn **off** the agent reporting its own error conditions to dom0. Default: **on** since 4.3.30 |
 | `qvm-features <vm> service.gui-agent-debug 1` | full diagnostic logging in one switch: per-frame performance records, protocol traces and debug level. Set this before collecting a log for a bug report, unset it afterwards — a normal log is tens of KB, a debug log is megabytes |
