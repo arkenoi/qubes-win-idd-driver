@@ -58,7 +58,14 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$HERE" || exit 1
 
-PKG="${1:?usage: quick-upgrade.sh <release-iso-or-setup-tree> [subject] [os]}"
+# --stage-to-c: run install.cmd from a COPY on C: instead of from the disc. It is the single
+# variable of mgmt/harness/stall-ab.sh, which tests the ranked stall hypothesis (Jev 2026-09-22,
+# `medium-pulled-from-reader` 0.56): that the installer's own medium is pulled from under it while
+# the PV storage path is replaced. The disc stays attached in both arms - only WHO READS IT changes.
+STAGE_TO_C=0
+_args=(); for _a in "$@"; do case "$_a" in --stage-to-c) STAGE_TO_C=1 ;; *) _args+=("$_a") ;; esac; done
+set -- ${_args+"${_args[@]}"}
+PKG="${1:?usage: quick-upgrade.sh <release-iso-or-setup-tree> [subject] [os] [--stage-to-c]}"
 OS="${3:-win11}"
 SUBJECT="${2:-$OS-up}"
 GOLDEN="$OS-qwt"
@@ -332,6 +339,17 @@ done
 got=$(grun "cmd /c type $RELDISC\\MANIFEST.json" 60 | grep -a 'driver_repo_commit' | grep -ao '[0-9a-f]\{40\}' | head -1)
 [ "${got:0:12}" = "${RELEASE_SHA:0:12}" ] || finish 1 "TERMINAL: disc at $RELDISC was built from '${got:-unreadable}', expected ${RELEASE_SHA:0:12} - refusing to install from it"
 ok "release disc verified at $RELDISC (driver_repo_commit ${got:0:12})"
+
+if [ "$STAGE_TO_C" = 1 ]; then
+  # The tree goes to C: and install.cmd is run from THERE. Asserted, not assumed: a partial copy
+  # would make this arm fail for a reason that has nothing to do with the hypothesis.
+  grun "cmd /c rmdir /s /q C:\\qwtstage 2>nul & mkdir C:\\qwtstage & xcopy /e /i /y $RELDISC\\* C:\\qwtstage\\" 300 >/dev/null
+  _n=$(grun 'cmd /c dir /s /b C:\qwtstage | find /c ":"' 60 | grep -ao '[0-9]\+' | tail -1)
+  _have=$(grun 'cmd /c if exist C:\qwtstage\install.cmd echo STAGED' 60 | grep -ao STAGED | head -1)
+  [ "$_have" = STAGED ] || finish 1 "TERMINAL: --stage-to-c copied no install.cmd to C:\qwtstage (files seen: ${_n:-0})"
+  log "staged to C:\qwtstage (${_n:-?} files) - install.cmd will run from C:, the disc stays attached but unread"
+  RELDISC='C:\qwtstage'
+fi
 
 # =============================================================================================
 # 4. INSTALL FROM THE DISC, and wait for it with three exits
