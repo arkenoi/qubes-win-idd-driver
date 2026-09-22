@@ -1739,14 +1739,30 @@ static void VerdictStorePut(uint32_t id, int route)
 // verdict never arrives must NOT be deferred for ever - after kVerdictMaxPasses it takes the
 // window path, which is the fail-open direction (the user sees it as a guest window, as today).
 static const int kVerdictMaxPasses = 3;           // ~6 s at the 2 s poll cadence
+// *passes is set to kVerdictMaxPasses when NO VERDICT CAN EVER ARRIVE (the store was never
+// initialised because the shadow worker is not running), so the caller decides immediately instead
+// of deferring for ever. The first version returned false without touching *passes there, which
+// left such a toast undecided on every pass - deferred permanently and re-logged every 2 s. Jev
+// caught it on review (preserves_fail_open 0.58, worst_defect=pass-counter-leak 0.52).
 static bool VerdictLookup(uint32_t id, int* route, int* passes)
 {
-    if (!g_verdict.init) return false;
+    if (!g_verdict.init) { *passes = kVerdictMaxPasses; return false; }
     CsGuard g(&g_verdict.lock);
     auto it = g_verdict.route.find(id);
     if (it != g_verdict.route.end()) { *route = it->second; return true; }
+    if (g_verdict.passes.size() > 4096) g_verdict.passes.clear();   // bounded independently of route
     *passes = ++g_verdict.passes[id];
     return false;
+}
+
+// A decided toast keeps nothing: its id is marked seen by the caller and will never be looked up
+// again, so leaving entries behind is pure growth.
+static void VerdictForget(uint32_t id)
+{
+    if (!g_verdict.init) return;
+    CsGuard g(&g_verdict.lock);
+    g_verdict.route.erase(id);
+    g_verdict.passes.erase(id);
 }
 
 struct ShadowJob { uint32_t id = 0; std::wstring aumid, title; long long creationFt = 0; };
@@ -2868,11 +2884,12 @@ static int BridgeMain()
                         {
                             if (route != ToastRouteBridge)
                             {
-                                seen.insert(id);
+                                seen.insert(id); VerdictForget(id);
                                 BLog(L"skip id=%u aumid=%s (window path; classifier verdict)", id, aumid.c_str());
                                 continue;
                             }
                             BLog(L"route id=%u aumid=%s (bridge; classifier verdict)", id, aumid.c_str());
+                            VerdictForget(id);
                             listed = true;        // fall through to the forward path below
                         }
                         else if (passes < kVerdictMaxPasses)
@@ -2885,7 +2902,7 @@ static int BridgeMain()
                         }
                         else
                         {
-                            seen.insert(id);
+                            seen.insert(id); VerdictForget(id);
                             BLog(L"skip id=%u aumid=%s (window path; no verdict after %d passes)", id, aumid.c_str(), kVerdictMaxPasses);
                             continue;
                         }
