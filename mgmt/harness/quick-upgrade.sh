@@ -409,8 +409,21 @@ if VM="$SUBJECT" OUT="$OUT/modbases" ./mgmt/harness/arm-module-bases.sh >>"$OUT/
 else
   log "WARNING: module-base recorder NOT armed - a stall here would leave a raw, unresolvable RIP"
 fi
+# THIS LINE USED TO LIE. It printed "install.cmd launched" unconditionally, so a run where the
+# guest stopped answering DURING the launch call read as a run where the installer was working -
+# which is exactly how the 2026-09-22 stall was mis-framed all day as a PV-driver-replacement hang,
+# and how 16 A/B runs and 33 aging cycles came to test a premise the evidence never supported.
+# The launch call's own outcome is now stated, because "the call returned" and "the call timed out"
+# are different facts about different failures.
+_lt0=$(date +%s)
 grun "cmd /c start \"\" /min $RELDISC\\install.cmd /auto /autologon:qubes" 60 >/dev/null
-log "install.cmd /auto launched from $RELDISC - waiting (deadline ${DEADLINE}s, stall ${STALL_SECS}s)"
+_lrc=$?
+_lel=$(( $(date +%s) - _lt0 ))
+if [ "$_lrc" = 0 ]; then
+  log "install.cmd /auto launch call RETURNED in ${_lel}s from $RELDISC - the guest was answering when it did (deadline ${DEADLINE}s, stall ${STALL_SECS}s)"
+else
+  log "install.cmd /auto launch call DID NOT RETURN (rc=$_lrc after ${_lel}s) from $RELDISC - the guest stopped answering DURING the launch; NOTHING about whether the installer ran is inferable from here (deadline ${DEADLINE}s, stall ${STALL_SECS}s)"
+fi
 
 # Exits: RESULT (trailer after the marker) | HALTED (guest rebooted itself) | RECOVERY (terminal)
 # | STALLED (no new log lines for STALL_SECS while alive, OR qrexec unanswering for STALL_SECS)
@@ -473,7 +486,7 @@ while :; do
     if [ "${cpu:-9999}" -lt 15 ] 2>/dev/null; then quiet=$((quiet+1)); else quiet=0; fi
     unreach=$(( $(date +%s) - lastalive ))
     # cpu/quiet are LOGGING AIDS ONLY - never an exit (see the block comment above the loop).
-    log "  t+${el}s no qrexec for ${unreach}s (agent being replaced?) cpu=${cpu} quiet=$quiet"
+    log "  t+${el}s no qrexec for ${unreach}s (cause UNKNOWN - this sampler cannot see why) cpu=${cpu} quiet=$quiet"
     # The stall clock for an unreachable guest runs from the last qrexec ANSWER, not from the
     # last log-line change, so it cannot fire on the MSI's ~60 s silent window (STALL_SECS is
     # 300 by default); the same rule w_install applies for matrix.sh. A guest that answers

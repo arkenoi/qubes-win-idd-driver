@@ -1,0 +1,33 @@
+{
+ "reference_run": "/home/user/qwt-quick-upgrade/win11-nfy-20260922-111533",
+ "outcome": "STALLED",
+ "golden": "win11-qwt",
+ "entry_qwt": "4.3.17.0",
+ "entry_agent": "77c4d6906815",
+ "package": "4.3.29+agent.0ca8a70b4eef",
+ "read_from": "D:",
+ "ordering": "4.3.29 > golden 4.3.17",
+ "cd_boot": true,
+ "marker_written_utc": "11:16:36",
+ "launch_line_utc": "11:17:36",
+ "installer_output_lines": 1,
+ "last_answered_call": "run-marker write",
+ "unrecorded_at_reference_time": [
+  {
+   "field": "guest_config_snapshot",
+   "why": "tools/guest-config-snapshot.sh was written after this run (2026-09-22)"
+  },
+  {
+   "field": "module_bases",
+   "why": "arm-module-bases was wired into quick-upgrade after this run (265440b)"
+  },
+  {
+   "field": "guest_side_install_log",
+   "why": "the guest was removed; C:\\qwt-improved-install.log did not survive"
+  },
+  {
+   "field": "event_channel_state_before_launch",
+   "why": "never captured by any harness"
+  }
+ ]
+}
