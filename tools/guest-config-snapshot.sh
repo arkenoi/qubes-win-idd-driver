@@ -40,7 +40,7 @@ gps(){ # <label> <powershell>
   local label="$1"; shift
   local enc; enc=$(printf '%s' "$1" | python3 -c "import sys,base64;print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode())")
   local o; o=$(gp "powershell -NoProfile -EncodedCommand $enc")
-  o=$(printf '%s' "$o" | grep -v '^C:\\' | grep -v '^Microsoft Windows' | grep -v '^(c) Microsoft' | sed '/^$/d')
+  o=$(printf '%s' "$o" | strip)
   if [ -n "$o" ]; then say "--- $label"; printf '%s\n' "$o" >> "$F"
   else say "--- $label: MISSING (no answer from the guest)"; fi
 }
@@ -59,14 +59,23 @@ print('xid', vm.xid, 'state', vm.get_power_state())"
 probe "block-backends-this-qube" timeout 120 bash tools/loopback-health.sh
 
 # --- the guest-side state: what it actually IS at this boot ---
-say "--- os build"; gp 'cmd /c ver' | sed '/^$/d' >> "$F"
+# qtest echoes the cmd banner and prompt back; strip them or they land mid-header and make a
+# section look like it belongs to the previous one.
+# qtest echoes the cmd banner, the prompt AND the command itself back. All three must go, or the
+# echoed command lands in the data and a matcher can score its own invocation (findings/rig.md,
+# harness trap (d)).
+strip(){ grep -v '^Microsoft Windows \[Version' | grep -v '^(c) Microsoft' \
+       | sed 's/^C:\\\\[^>]*>//' \
+       | grep -v 'EncodedCommand' | grep -v '^powershell -NoProfile' | grep -v '^cmd /c ' \
+       | sed '/^$/d'; }
+say "--- os build"; gp 'cmd /c ver' | strip >> "$F"
 gps "qwt products"      'Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\* -EA SilentlyContinue | Where-Object DisplayName -like "*Qubes*" | ForEach-Object { $_.DisplayName + " " + $_.DisplayVersion }'
 gps "qubes services"    'Get-Service | Where-Object Name -like "*Qubes*" | ForEach-Object { $_.Name + " " + $_.Status }'
 gps "xen pnp devices"   'Get-PnpDevice -EA SilentlyContinue | Where-Object { $_.InstanceId -like "XEN*" -or $_.FriendlyName -like "*Xen*" } | ForEach-Object { $_.Status + " " + $_.Class + " " + $_.InstanceId }'
 gps "disks"             'Get-Disk -EA SilentlyContinue | ForEach-Object { $_.Number.ToString() + " " + $_.FriendlyName + " " + $_.SerialNumber + " " + $_.PartitionStyle + " " + $_.Size }'
 gps "pending reboot"    '@((Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending"),(Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired")) -join " "'
 gps "cpus and boot time" '(Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors.ToString() + " cpus, booted " + (Get-CimInstance Win32_OperatingSystem).LastBootUpTime'
-say "--- qubesdb"; gp 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\qubes-qubesdb-read.ps1' | sed '/^$/d' >> "$F"
+say "--- qubesdb"; gp 'powershell -NoProfile -ExecutionPolicy Bypass -File C:\qubes-qubesdb-read.ps1' | strip >> "$F"
 
 say "=== end of snapshot ==="
 echo "$F"

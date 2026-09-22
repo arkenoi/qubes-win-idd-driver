@@ -394,6 +394,16 @@ log "run marker $E2E_MARK"
 # been recorded for THAT boot. matrix.sh has armed this before every install since 2026-09-10;
 # this harness never did, and it is where the stall actually recurs. A raw RIP nobody can resolve
 # is the same as no capture at all.
+# THE ENTRY CONFIGURATION, captured before the install touches anything. A machine-built matrix
+# over all 35 surviving run logs could not tell the stalled run from the 33 clean ones - every
+# recorded field was constant (Jev: corpus_can_discriminate 0.08, necessary_candidate=
+# nothing-in-this-corpus 0.85, what_to_record=guest-config-snapshot 1.00). Without this, the next
+# occurrence is as incomparable as the last one. Non-fatal: a snapshot that fails is logged, not
+# treated as a reason to abandon the run.
+./tools/guest-config-snapshot.sh "$SUBJECT" "$OUT" entry >>"$OUT/snapshot.log" 2>&1 \
+  && log "entry guest-config snapshot: $OUT/guest-config-entry.txt" \
+  || log "WARNING: entry guest-config snapshot failed - see $OUT/snapshot.log (the run continues)"
+
 if VM="$SUBJECT" OUT="$OUT/modbases" ./mgmt/harness/arm-module-bases.sh >>"$OUT/armlog.txt" 2>&1; then
   log "module-base recorder armed BEFORE the install (a stall's RIP will resolve to driver+offset)"
 else
