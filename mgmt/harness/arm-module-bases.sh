@@ -150,8 +150,22 @@ check=$(QTEST_VM=$VM timeout -k 5 240 ./tools/qtest run \
   'cmd /c find /c "MODBASE" "Q:\Qubes Logs\module-bases.txt" 2>nul || find /c "MODBASE" "C:\module-bases.txt" 2>nul' 2>/dev/null | tr -d '\r' | grep -aoE '[0-9]+$' | tail -1)
 if [ -n "${check:-}" ] && [ "$check" -gt 0 ] 2>/dev/null; then
   say "ARMED AND PROVEN: $check module records written on this boot."
-  say "  A later wedge on this guest is now resolvable: capture the RIP with debug-keys d/v, then"
-  say "  VM=$VM mgmt/harness/arm-module-bases.sh --dump  and  tools/resolve-guest-rip.py"
+  # PULL IT NOW, NOT LATER. The table is written INSIDE the guest and --dump retrieves it over
+  # qrexec - which is exactly what is dead when a wedge happens. Specimen 2 (2026-09-22) was armed,
+  # wedged, and its RIPs were STILL unresolvable for this reason: the data existed where nobody
+  # could reach it. A host-side copy taken while the guest is healthy is the whole point.
+  QTEST_VM=$VM timeout -k 5 300 ./tools/qtest run \
+    'cmd /c type "Q:\Qubes Logs\module-bases.txt" 2>nul || type "C:\module-bases.txt" 2>nul' 2>/dev/null \
+    | tr -d '\r' > "$OUT/module-bases.txt"
+  host=$(grep -ac 'MODBASE' "$OUT/module-bases.txt" 2>/dev/null || echo 0)
+  if [ "${host:-0}" -gt 0 ]; then
+    say "HOST COPY TAKEN: $host records in $OUT/module-bases.txt - a wedge is resolvable even with qrexec dead"
+  else
+    say "FAIL: the table is on the guest but the HOST COPY IS EMPTY - a wedge would be unresolvable again."
+    say "  Treat this guest as NOT armed; the copy, not the arming, is what survives the failure."
+    exit 1
+  fi
+  say "  Resolve a captured RIP with: tools/resolve-guest-rip.py $OUT/module-bases.txt 0x<rip>"
 else
   say "FAIL: the recorder wrote NOTHING on this boot (found=${check:-none})."
   say "  Do not treat this guest as armed. An 'armed' guest whose recorder does not run is the exact"
