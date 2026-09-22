@@ -12,7 +12,7 @@
  "launch_line_utc": "11:17:36",
  "installer_output_lines": 1,
  "last_answered_call": "run-marker write",
- "invoked_by": "notify-errors-guest-test.log",
+ "invoked_by": "notify-errors-guest-test.sh",
  "unrecorded_at_reference_time": [
   {
    "field": "guest_config_snapshot",
@@ -31,5 +31,50 @@
    "why": "never captured by any harness"
   }
  ],
- "subject": "win11-nfy"
+ "subject": "win11-nfy",
+ "failure_shape": {
+  "evidence_dir": "/home/user/qubes-win-idd-driver/scratchpad/stall-win11nfy-20260922T112454Z",
+  "vcpu_cputime_delta_between_first_and_last_capture_s": [
+   {
+    "vcpu": 0,
+    "state": "r--",
+    "delta_s": 1009.5
+   },
+   {
+    "vcpu": 1,
+    "state": "-b-",
+    "delta_s": 0.0
+   },
+   {
+    "vcpu": 2,
+    "state": "r--",
+    "delta_s": 1009.6
+   },
+   {
+    "vcpu": 3,
+    "state": "-b-",
+    "delta_s": 0.0
+   }
+  ],
+  "guest_rips": [
+   "0010:fffff8057e25120a",
+   "0010:fffff8051086cd5c",
+   "0010:fffff8057e25120c",
+   "0010:fffff8051086cd35"
+  ],
+  "block_backends_at_stall": [
+   "vbd-9626-51760 dom9626 InitWait",
+   "vbd-9627-51760 dom9627 Connected"
+  ]
+ },
+ "timeline": {
+  "last_answered_call": "run-marker write",
+  "last_answered_utc": "11:16:36",
+  "next_call": "cmd /c start \"\" /min <disc>:\\install.cmd /auto /autologon:qubes",
+  "next_call_outcome": "did NOT return - 60s grun timeout",
+  "next_call_timeout_utc": "11:17:36",
+  "installer_output_lines_produced": 1,
+  "window_seconds_between_the_two_calls": 60,
+  "note": "the harness line saying install.cmd was launched is printed unconditionally and is not evidence the installer ran"
+ }
 }

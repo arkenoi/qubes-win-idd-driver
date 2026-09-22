@@ -52,7 +52,10 @@ if subj:
         except OSError:
             continue
         if subj in t and "quick-upgrade" in t:
-            prof["invoked_by"] = os.path.basename(cand)
+            # Record the HARNESS that ran, not the log file it was found in: comparing
+            # "notify-errors-guest-test.log" against "notify-errors-guest-test.sh" reads as a
+            # mismatch to anything judging the two strings.
+            prof["invoked_by"] = re.sub(r"\.log$", ".sh", os.path.basename(cand))
             break
 prof["subject"] = subj
 
@@ -70,6 +73,51 @@ for field, why in [
 ]:
     if not glob.glob(os.path.join(run, "*" + field.split("_")[0] + "*")):
         prof["unrecorded_at_reference_time"].append({"field": field, "why": why})
+
+# WHAT THE SPECIMEN ACTUALLY KNOWS. The first version recorded twelve fields and left the gate to
+# weigh "reference-unknowns" above every concrete match - correctly, because the profile was thin
+# while the evidence directory was not. These are read from the artefacts, not asserted.
+prof["failure_shape"] = {}
+ev = sorted(glob.glob("/home/user/qubes-win-idd-driver/scratchpad/stall-win11nfy-*"))
+if ev:
+    d0 = ev[-1]
+    prof["failure_shape"]["evidence_dir"] = d0
+    vl = sorted(glob.glob(os.path.join(d0, "**", "vcpu-list-*.txt"), recursive=True))
+    if len(vl) >= 2:
+        def vcpus(f):
+            out = []
+            for ln in open(f, errors="replace"):
+                m = re.match(r"\s*\S+\s+\d+\s+(\d+)\s+\d+\s+(\S+)\s+([\d.]+)", ln)
+                if m:
+                    out.append((int(m.group(1)), m.group(2), float(m.group(3))))
+            return out
+        a, b = vcpus(vl[0]), vcpus(vl[-1])
+        if a and b and len(a) == len(b):
+            prof["failure_shape"]["vcpu_cputime_delta_between_first_and_last_capture_s"] = [
+                {"vcpu": x[0], "state": x[1], "delta_s": round(y[2] - x[2], 1)} for x, y in zip(a, b)]
+    rips = sorted(glob.glob(os.path.join(d0, "**", "rip-d*.txt"), recursive=True))
+    if rips:
+        got = []
+        for f in rips[:2]:
+            got += re.findall(r"RIP:\s+(\S+):\[<([0-9a-f]+)>\]", open(f, errors="replace").read())
+        prof["failure_shape"]["guest_rips"] = [f"{cs}:{a}" for cs, a in got if cs == "0010"]
+    lb = glob.glob(os.path.join(d0, "loopback.txt"))
+    if lb:
+        t = open(lb[0], errors="replace").read()
+        m = re.findall(r"(vbd-\S+)\s+->\s+domain\s+(\d+)\s+state=(\S+)", t)
+        prof["failure_shape"]["block_backends_at_stall"] = [f"{x} dom{y} {z}" for x, y, z in m]
+
+# The timeline that the 1:1 read established, in machine form.
+prof["timeline"] = {
+    "last_answered_call": "run-marker write",
+    "last_answered_utc": prof.get("marker_written_utc"),
+    "next_call": "cmd /c start \"\" /min <disc>:\\install.cmd /auto /autologon:qubes",
+    "next_call_outcome": "did NOT return - 60s grun timeout",
+    "next_call_timeout_utc": prof.get("launch_line_utc"),
+    "installer_output_lines_produced": prof.get("installer_output_lines"),
+    "window_seconds_between_the_two_calls": 60,
+    "note": "the harness line saying install.cmd was launched is printed unconditionally and is not evidence the installer ran",
+}
 
 js = json.dumps(prof, indent=1)
 print(js)

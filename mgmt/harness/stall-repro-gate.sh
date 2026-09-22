@@ -19,6 +19,15 @@ set -u
 VM="${1:?usage: stall-repro-gate.sh <vm> <run-out-dir> [reference.json]}"
 OUT="${2:?usage: stall-repro-gate.sh <vm> <run-out-dir> [reference.json]}"
 REF="${3:-mgmt/reference/stall-20260922.json}"
+# The caller is passed EXPLICITLY, not inherited: the first gated pass was launched by the feature
+# test and the gate still recorded "a bare quick-upgrade", because an environment variable three
+# processes deep is a promise, not a fact. An argument cannot be silently lost.
+INVOKED_BY="${4:-${STALL_REPRO_INVOKED_BY:-UNKNOWN - caller did not declare itself}}"
+# The candidate's OWN run fields, as json, from the harness that is about to run it. Without these
+# the state showed Jev a reference full of run fields and a candidate that was only a guest
+# snapshot - so the matching dimensions (golden, entry build, package, delivery) were invisible and
+# it could only answer on the unknowns. A comparison needs both sides.
+CANDJSON="${5:-}"
 cd "$(dirname "$0")/.." 2>/dev/null; cd "$(git rev-parse --show-toplevel)" || exit 2
 mkdir -p "$OUT" || exit 2
 say(){ echo "$(date -u +%H:%M:%SZ) stall-gate: $*"; }
@@ -43,11 +52,18 @@ RUBRIC="$OUT/jev-stallgate-rubric.json"
   echo "THE REFERENCE FAILURE (machine-extracted from its own artefacts, tools/stall-reference.py):"
   cat "$REF"
   echo
-  echo "HOW THIS CANDIDATE PASS IS BEING INVOKED: ${STALL_REPRO_INVOKED_BY:-a bare quick-upgrade, NOT through any feature test}"
+  echo "HOW THIS CANDIDATE PASS IS BEING INVOKED: $INVOKED_BY"
   echo "(The reference failure's own invoked_by field says which harness called quick-upgrade there."
   echo " A pass invoked differently has already deviated, however similar the guest is.)"
   echo
-  echo "THE CANDIDATE PASS, measured now on $VM (tools/guest-config-snapshot.sh):"
+  echo "FIELD-BY-FIELD COMPARISON (computed here, not eyeballed - MATCH / DIFFERS / UNKNOWN-IN-REFERENCE):"
+  printf '%s' "${CANDJSON:-{}}" > "$OUT/candidate-run.json"
+  python3 tools/compare-run-to-reference.py "$REF" "$OUT/candidate-run.json"
+  echo
+  echo "THE CANDIDATE PASS, its run fields as the harness reports them:"
+  if [ -n "$CANDJSON" ]; then printf '%s\n' "$CANDJSON"; else echo "(none supplied)"; fi
+  echo
+  echo "THE CANDIDATE PASS, guest state measured now on $VM (tools/guest-config-snapshot.sh):"
   sed -n '1,120p' "$CAND"
   echo
   echo "FACTS THAT CUT AGAINST CLAIMING A MATCH:"

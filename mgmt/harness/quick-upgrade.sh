@@ -405,7 +405,9 @@ log "run marker $E2E_MARK"
 # recorded, it is ABORTED rather than spent (owner, 2026-09-22 - 49 attempts were spent without
 # anyone checking). The gate also records how faithful the pass can claim to be at all.
 if [ "${STALL_REPRO:-0}" = 1 ]; then
-  if ./mgmt/harness/stall-repro-gate.sh "$SUBJECT" "$OUT" "${STALL_REF:-mgmt/reference/stall-20260922.json}" >>"$OUT/stall-gate.log" 2>&1; then
+  if ./mgmt/harness/stall-repro-gate.sh "$SUBJECT" "$OUT" "${STALL_REF:-mgmt/reference/stall-20260922.json}" "${STALL_REPRO_INVOKED_BY:-a bare quick-upgrade, not through any feature test}" \
+       "$(printf '{"golden":"%s","entry_qwt":"%s","entry_agent":"%s","package":"%s","read_from":"%s","cd_boot":true,"subject":"%s"}' \
+          "$GOLDEN" "${ENTRY_VERS:-unknown}" "${ENTRY_SHA:0:12}" "${PV:-unknown}" "$RELDISC" "$SUBJECT")" >>"$OUT/stall-gate.log" 2>&1; then
     log "stall-repro gate: PASS MAY RUN - $(cat "$OUT/REPRO-FIDELITY.txt" 2>/dev/null)"
   else
     grc=$?

@@ -111,7 +111,7 @@ say "quick-upgrade over win11-qwt with $(python3 -c "import json;m=json.load(ope
 # Tell the stall-repro gate who is calling, so a pass run through THIS test is not mistaken for a
 # bare quick-upgrade - the 2026-09-22 failure happened here, and 16 reproduction attempts that
 # called quick-upgrade directly had already deviated before they started.
-STALL_REPRO_INVOKED_BY="notify-errors-guest-test.sh" \
+export STALL_REPRO_INVOKED_BY="notify-errors-guest-test.sh"
 ./mgmt/harness/quick-upgrade.sh "$PKG" "$VM" "$OS_FAMILY" >>"$LOG" 2>&1
 prc=$?; say "quick-upgrade rc=$prc"
 [ "$prc" -eq 0 ] || { say "FATAL: upgrade did not complete"; vm_unlock "$VM"; exit 1; }
