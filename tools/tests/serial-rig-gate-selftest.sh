@@ -43,6 +43,9 @@ check "C2 mutating Workflow while a LIVE lock is held -> BLOCKED"       2 "$(jw 
 check "C3 passive monitor (qvm-ls) while a LIVE lock is held -> allowed" 0 "$(jb 'qvm-ls --raw-data --fields NAME,STATE')"
 check "C4 passive admin.vm.Stats while a LIVE lock is held -> allowed"  0 "$(jb 'qrexec-client-vm win11-acc admin.vm.Stats')"
 check "C5 qtest state/shot (read) while a LIVE lock is held -> allowed" 0 "$(jb 'qtest state win11-acc; qtest shot out.tar')"
+check "C5b cd into a path whose NAME contains a harness, then ls -> allowed" 0 "$(jb 'cd /home/user/qwt-quick-upgrade/win11-nfy-1 && ls')"
+check "C5c find over a run tree while a lock is held -> allowed"          0 "$(jb 'find /home/user/qwt-quick-upgrade -name \"*msi*\"')"
+check "C5d find WITH -exec is still a launch -> BLOCKED"                  2 "$(jb 'find /home/user/qwt-quick-upgrade -name x -exec prime-run.sh win10-base {} ;')"
 check "C6 this launch already holds the lock -> allowed"                0 "$(jb 'prime-run.sh win11-acc')" QWT_VMLOCK_HELD=win11-acc
 # C6b-C6d: GUARD:lockscope. A lock is per GUEST. It must refuse a launch that touches THAT guest,
 # and must NOT refuse one that touches only others - measured 2026-09-21, six halted leftovers could

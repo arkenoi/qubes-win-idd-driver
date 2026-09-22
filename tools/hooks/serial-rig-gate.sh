@@ -41,6 +41,10 @@ ti = hook.get('tool_input') or {}
 # `bash -c "qvm-kill x"` would walk straight through. (# GUARD:prose)
 SEP = re.compile(r'^[|&;()<>]+$')
 PASSIVE = re.compile(r'^(ps|grep|egrep|fgrep|pgrep|tail|head|cat|less|awk|sed|echo|printf'
+                     # `cd` executes NOTHING. It was gating every inspection of a directory whose
+                     # NAME contains a harness name (/home/user/qwt-quick-upgrade/...), which is
+                     # exactly the evidence you need while a job runs. Measured 2026-09-22.
+                     r'|cd|pwd'
                      r'|date|ls|wc|sort|uniq|cut|tr|jq|stat|df|du|basename|dirname|realpath'
                      r'|which|type|hash|whereis|file)$')
 HELPFLAG = ('--help', '-h', '--version')
@@ -129,6 +133,12 @@ def is_launch(toks, overstrip):
     rest = toks[i + 1:]
     if PASSIVE.match(name):
         return False
+    # `find` EXECUTES NOTHING unless asked to. Excluding it wholesale blocked reading a run's
+    # evidence tree while another cell held the rig - the one moment that evidence matters. It is
+    # passive unless it carries an action predicate, which is the part that runs commands.
+    # (# GUARD:findaction)
+    if name == 'find' and not any(a in rest for a in ('-exec', '-execdir', '-ok', '-okdir', '-delete')):
+        return False
     if name in ('command', 'builtin') and rest and rest[0] in ('-v', '-V'):
         return False                # `command -v qvm-shutdown` LOOKS UP a path, runs nothing
     # `bash -n script.sh` PARSES and exits - it is the syntax check you run after editing a
@@ -172,7 +182,7 @@ def strip_prose(cmd):
     # read-only inspector it is a search pattern - and the gate's own refusal text tells you to
     # watch a running job with passive reads, so blocking `ps ... | grep quick-upgrade.sh` refuses
     # the very thing it recommends (measured 2026-09-20, the third shape of this same over-match).
-    # Deliberately NOT passive: find and xargs (-exec runs things) and python3 (subprocess).
+    # Deliberately NOT passive: xargs (-exec runs things) and python3 (subprocess).
     overstrip = os.environ.get('SERIAL_GATE_DEFECT') == '2'   # GUARD:overstrip
     body, subs = (cmd, []) if overstrip else pull_subs(cmd)
     kept = []
