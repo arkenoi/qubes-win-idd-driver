@@ -401,6 +401,45 @@ def l9_no_shutdown_wait() -> None:
                         "use qwt_shutdown from mgmt/harness/shutdown-lib.sh")
 
 
+def l12_provisioning_recipe() -> None:
+    """L12: the provisioning recipe is mgmt/harness/provision-recipe.sh, and these are the shapes
+    that broke it.
+
+    (a) a block assignment without --required. Measured 2026-09-22, interleaved 3x3 on one subject:
+        --required + the stick's qemu-extra-args rc=0 3/3; the SAME assignment PLAIN rc=1 3/3 with
+        "libxenlight failed to create new domain". A plain assignment is attached AFTER the domain
+        is created, so it can never be in the stubdomain's initial config and qemu cannot open the
+        path qemu-extra-args names.
+    (b) a default that selects the plain mode (PRIME_ASSIGN_MODE:-plain and friends). One such edit,
+        made as a "workaround" on 2026-09-21, cost a day and a half and produced a void findings
+        entry declaring the rig dead.
+    (c) a LIVE `qvm-device block attach` carrying devtype=cdrom. qubesd refuses it with "Got empty
+        response from qubesd" through both the CLI and the raw API, before AND after a host reboot.
+        The disc goes in at START: qvm-start --cdrom=<holder>:<loop>.
+
+    The recipe file itself is exempt: it owns the constants."""
+    for f in HARNESS:
+        if f.name == "provision-recipe.sh":
+            continue
+        for i, ln in enumerate(f.read_text(errors="replace").splitlines(), 1):
+            if not ln.lstrip() or ln.lstrip().startswith("#"):
+                continue
+            if re.search(r"qvm-device\s+block\s+assign", ln) and "--required" not in ln \
+               and not re.search(r'\$\{?_?req', ln) and "provision_assign_stick" not in ln:
+                finding("L12-provisioning-recipe", f"{f.name}:{i}",
+                        "block assign without --required: the device is then attached AFTER domain "
+                        "creation and never reaches the stubdomain (rc=1 3/3, 2026-09-22). Use "
+                        "provision_assign_stick from mgmt/harness/provision-recipe.sh")
+            if re.search(r"ASSIGN_MODE[^\n]*:-\s*plain", ln):
+                finding("L12-provisioning-recipe", f"{f.name}:{i}",
+                        "a default selecting the PLAIN assignment mode - that exact edit broke "
+                        "provisioning on 2026-09-21; the recipe is --required")
+            if re.search(r"qvm-device\s+block\s+attach", ln) and "devtype=cdrom" in ln:
+                finding("L12-provisioning-recipe", f"{f.name}:{i}",
+                        "a LIVE cdrom attach is refused by qubesd (empty response, measured either "
+                        "side of a host reboot); boot the disc instead - provision_boot_with_disc")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
@@ -429,6 +468,7 @@ def main() -> int:
     l9_no_shutdown_wait()
     l10_no_default_target_guest()
     l11_absent_guest_command()
+    l12_provisioning_recipe()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

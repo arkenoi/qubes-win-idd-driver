@@ -21,6 +21,17 @@ mk(){ # <dir> — a minimal tree the lints can walk
   printf '#!/bin/bash\n: clean\n' > "$1/mgmt/harness/clean.sh"
 }
 
+expect_silent(){ # <lint-id> <fixture-dir> <what was planted> - a lint that fires on the
+  # CORRECT shape is as useless as one that never fires; this is the other half of the proof.
+  local id="$1" dir="$2" what="$3"
+  local out; out=$(python3 "$LINT" --root "$dir" --quiet 2>&1)
+  if echo "$out" | grep -q "^$id"; then
+    no "$id fired on the CORRECT shape: $what  <-- false positive"
+  else
+    ok "$id stays silent on: $what"
+  fi
+}
+
 expect_fires(){ # <lint-id> <fixture-dir> <what was planted>
   local id="$1" dir="$2" what="$3"
   # CAPTURE FIRST. `set -o pipefail` + a linter that EXITS 1 ON FINDINGS means
@@ -130,5 +141,23 @@ else
 fi
 
 echo
+# ---------------------------------------------------------------- L12 provisioning recipe
+# Three ways the recipe was actually broken, each planted on its own so one cannot mask another.
+D="$TMP/l12a"; mk "$D"
+printf '#!/bin/bash\nqvm-device block assign -o frontend-dev=xvdi -o devtype=disk "$VM" holder:loop0\n' > "$D/mgmt/harness/bad.sh"
+expect_fires L12-provisioning-recipe "$D" "a block assign WITHOUT --required"
+
+D="$TMP/l12b"; mk "$D"
+printf '#!/bin/bash\nPRIME_ASSIGN_MODE="${PRIME_ASSIGN_MODE:-plain}"\n' > "$D/mgmt/harness/bad.sh"
+expect_fires L12-provisioning-recipe "$D" "a default selecting the plain assignment mode"
+
+D="$TMP/l12c"; mk "$D"
+printf '#!/bin/bash\nqvm-device block attach --ro -o devtype=cdrom "$VM" holder:loop0\n' > "$D/mgmt/harness/bad.sh"
+expect_fires L12-provisioning-recipe "$D" "a LIVE cdrom attach (qubesd refuses it)"
+
+D="$TMP/l12ok"; mk "$D"
+printf '#!/bin/bash\nqvm-device block assign --required -o frontend-dev=xvdi -o devtype=disk "$VM" holder:loop0\n' > "$D/mgmt/harness/good.sh"
+expect_silent L12-provisioning-recipe "$D" "the recipe shape: assign --required"
+
 echo "  ---- $pass passed, $fail failed"
 exit $(( fail > 0 ? 1 : 0 ))
