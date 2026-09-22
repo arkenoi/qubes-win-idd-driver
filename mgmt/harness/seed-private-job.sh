@@ -1,0 +1,107 @@
+#!/bin/bash
+# seed-private-job.sh - deliver a prime job to a PRISTINE guest WITHOUT any emulated medium.
+#
+#   mgmt/harness/seed-private-job.sh <subject> <job-name-or-dir> [--payload DIR] [--size MB]
+#
+# WHY. Since 2026-09-21 every emulated medium into a guest is dead rig-wide (findings/rig.md):
+# any `qemu-extra-args -drive file=/dev/xvdX` fails domain creation, and `devtype=cdrom` fails
+# inside qubesd. A full host reboot did not clear it and the owner has closed the dom0-side line.
+# What still works is the guest's OWN volumes: the stubdom's qemu command line shows root/private/
+# volatile passed as `if=ide`, i.e. ordinary emulated disks a pristine Windows sees with no PV
+# driver. The primer baked into both base goldens (mgmt/primer/qubes-prime.cmd) scans drive letters
+# d..z for `<letter>:\qubes-prime\onboot.cmd` and cares nothing for bus type or removability.
+# So the job goes INTO the subject's private volume with admin.vm.volume.Import, which this qube is
+# granted for @tag:win-idd-testbed.
+#
+# WHAT THIS IS NOT. `fidelity_cost=install-path-fidelity-lost` 0.92 (Jev, 2026-09-22): the media
+# insertion path is itself part of what a RELEASE acceptance grades, so a run delivered this way
+# CANNOT grade how the field's ISO arrives. Use it for functional work on a guest; say so in the
+# result of anything built on it.
+#
+# It REPLACES the subject's private volume content. Never point it at a golden.
+set -u
+
+SUBJ="${1:?usage: $0 <subject> <job-name-or-dir> [--payload DIR] [--size MB]}"
+JOB="${2:?usage: $0 <subject> <job-name-or-dir> [--payload DIR] [--size MB]}"
+shift 2
+PAYLOAD=""; SIZEMB=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --payload) PAYLOAD="$2"; shift 2 ;;
+    --size)    SIZEMB="$2"; shift 2 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+cd "$(dirname "$0")/../.." || exit 1
+log() { echo "$(date -u +%H:%M:%S) seed-private-job: $*"; }
+
+command -v mkfs.vfat >/dev/null || { log "TERMINAL: need dosfstools (mkfs.vfat)"; exit 1; }
+command -v mcopy     >/dev/null || { log "TERMINAL: need mtools (mcopy) - see the mtools recovery note"; exit 1; }
+command -v sfdisk    >/dev/null || { log "TERMINAL: need util-linux (sfdisk)"; exit 1; }
+
+JOBDIR="$JOB"; [ -d "$JOBDIR" ] || JOBDIR="mgmt/prime-jobs/$JOB"
+[ -f "$JOBDIR/onboot.cmd" ] || { log "TERMINAL: no job at $JOBDIR/onboot.cmd - the primer calls that exact name"; exit 1; }
+
+qvm-check "$SUBJ" >/dev/null 2>&1 || { log "TERMINAL: $SUBJ does not exist"; exit 1; }
+st=$(qvm-ls --raw-data --fields state "$SUBJ" 2>/dev/null)
+[ "$st" = Halted ] || { log "TERMINAL: $SUBJ is $st - the volume can only be replaced while it is Halted"; exit 1; }
+qvm-tags "$SUBJ" list 2>/dev/null | grep -qx win-idd-testbed \
+  || { log "TERMINAL: $SUBJ is not tagged win-idd-testbed - volume.Import would be refused"; exit 1; }
+case "$SUBJ" in
+  *-base|*-qwt|win10-tpl|win11-tpl|win11de-qwt)
+    log "TERMINAL: $SUBJ looks like a golden/template - this REPLACES its private volume"; exit 1 ;;
+esac
+
+# --- stage the job tree -------------------------------------------------------------------------
+STAGE=$(mktemp -d "${TMPDIR:-/tmp}/seedjob.XXXXXX") || exit 1
+trap 'rm -rf "$STAGE"' EXIT          # /tmp here is a 1 GB tmpfs, i.e. RAM - never leave a tree behind
+mkdir -p "$STAGE/qubes-prime" || exit 1
+cp "$JOBDIR/onboot.cmd" "$STAGE/qubes-prime/" || exit 1
+for f in "$JOBDIR"/*; do
+  b=$(basename "$f"); [ "$b" = onboot.cmd ] && continue
+  cp -r "$f" "$STAGE/qubes-prime/" || exit 1
+done
+if [ -n "$PAYLOAD" ]; then
+  [ -d "$PAYLOAD" ] || { log "TERMINAL: --payload $PAYLOAD is not a directory"; exit 1; }
+  [ -f "$PAYLOAD/install.cmd" ] || { log "TERMINAL: payload has no install.cmd at its root"; exit 1; }
+  rm -rf "$STAGE/qubes-prime/setup"
+  cp -r "$PAYLOAD" "$STAGE/qubes-prime/setup" || exit 1
+fi
+FILES=$(find "$STAGE/qubes-prime" -type f | wc -l)
+KB=$(du -sk "$STAGE/qubes-prime" | cut -f1)
+[ -z "$SIZEMB" ] && SIZEMB=$(( KB/1024 + 96 ))      # slack for FAT32 metadata and the 1 MiB gap
+[ "$SIZEMB" -lt 128 ] && SIZEMB=128                  # FAT32 needs room; below this mkfs picks FAT16
+log "job $JOBDIR -> $FILES files, $KB KiB; image $SIZEMB MiB"
+
+# --- build an MBR + FAT32 image ------------------------------------------------------------------
+# A FIXED emulated disk needs a partition table (the superfloppy the answer STICK uses is only
+# mounted by Windows on REMOVABLE media). The filesystem is made in a plain file and dd'd into the
+# partition, because a udisks-created loop partition is not writable by this user.
+IMG="$STAGE/private.img"
+FAT="$STAGE/fat.img"
+truncate -s "${SIZEMB}M" "$IMG" || exit 1
+printf 'label: dos\nstart=2048, type=0c\n' | sfdisk "$IMG" >/dev/null 2>&1 \
+  || { log "TERMINAL: sfdisk failed"; exit 1; }
+truncate -s "$(( SIZEMB - 1 ))M" "$FAT" || exit 1
+mkfs.vfat -F 32 -n QPRIME "$FAT" >/dev/null || { log "TERMINAL: mkfs.vfat failed"; exit 1; }
+dd if="$FAT" of="$IMG" bs=1M seek=1 conv=notrunc status=none || exit 1
+rm -f "$FAT"
+MTOOLS_SKIP_CHECK=1 mcopy -Q -i "$IMG@@1M" -s "$STAGE/qubes-prime" ::/ \
+  || { log "TERMINAL: mcopy failed"; exit 1; }
+MTOOLS_SKIP_CHECK=1 mdir -i "$IMG@@1M" ::/qubes-prime | grep -qi onboot \
+  || { log "TERMINAL: onboot.cmd is not in the built image"; exit 1; }
+# Count what actually landed. mcopy -Q stops on the first error, but a partial tree would otherwise
+# reach the guest and fail there as an installer problem - the expensive way to find out.
+INIMG=$(MTOOLS_SKIP_CHECK=1 mdir -i "$IMG@@1M" -b -/ ::/qubes-prime 2>/dev/null | grep -vc '/$')
+[ "$INIMG" = "$FILES" ] \
+  || { log "TERMINAL: image holds $INIMG files, staged $FILES - the copy is incomplete"; exit 1; }
+log "image verified: $INIMG files under \\qubes-prime"
+
+# --- import it over the subject's private volume ---------------------------------------------------
+BYTES=$(stat -c %s "$IMG")
+log "importing $BYTES bytes over $SUBJ:private"
+timeout 900 qvm-volume import --size "$BYTES" "$SUBJ:private" "$IMG" \
+  || { log "TERMINAL: qvm-volume import failed"; exit 1; }
+got=$(qvm-volume info "$SUBJ:private" 2>/dev/null | awk '$1=="size"{print $2}')
+[ "$got" = "$BYTES" ] || { log "TERMINAL: private volume reads $got bytes, expected $BYTES"; exit 1; }
+log "OK: $SUBJ:private now carries \\qubes-prime\\onboot.cmd - start the guest and the primer runs it"
