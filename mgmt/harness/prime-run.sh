@@ -219,7 +219,14 @@ qvm-features "$CHURN" qemu-extra-args -- '-drive file=/dev/xvdi,format=host_devi
 # test afterwards, and I compared my reconstruction against itself and concluded dom0 had changed.
 # Jev rated that claim 0.28 and the leading reading 'state accumulated after the first start' at
 # 0.56 (conf 0.45) - i.e. still open. Default stays `plain`, which is measured to work.
-PRIME_ASSIGN_MODE="${PRIME_ASSIGN_MODE:-plain}"
+# REVERTED 2026-09-22 to `required`, which is what this harness always used and what works.
+# Yesterday's switch to `plain` was the defect, not the workaround: a plain assignment is attached
+# AFTER the domain is created, so the stubdomain's qemu never finds /dev/xvdi at startup, the device
+# model does not start, and libxl aborts the create - exactly the "Could not open '/dev/xvdi'" in the
+# stubdom console and the bare "libxenlight failed to create new domain" outside it. Measured
+# 2026-09-22, interleaved, 3 rounds on one subject: --required + qemu-extra-args rc=0 three times,
+# plain + the same args rc=1 three times, --required with no args rc=0 three times.
+PRIME_ASSIGN_MODE="${PRIME_ASSIGN_MODE:-required}"
 _req=(); [ "$PRIME_ASSIGN_MODE" = required ] && _req=(--required)
 log "stick assignment mode: $PRIME_ASSIGN_MODE${_req:+ (--required)}"
 qvm-device block assign "${_req[@]}" -o frontend-dev=xvdi -o devtype=disk "$CHURN" "$HOLDER:$STICKLOOP" \
