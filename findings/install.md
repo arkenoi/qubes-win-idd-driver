@@ -1,6 +1,7 @@
 # install — findings
 
 ## CURRENT STATE
+- THE DIFx REBOOT WARNING IN THE UPGRADE PATH IS ORDINARY AND HANDLED - do not re-open it as a defect. Measured 2026-09-22 in both upgrade cells of the acceptance campaign (and in none of the four clean/reinstall cells): `DIFXAPP: WARNING: The uninstall phase of this upgrade required a reboot...`, immediately followed by `Doing action: ScheduleReboot`. The drivers in that phase are `xenvbd.inf`, `xenvif.inf`, `xennet.inf` - the PV block, interface and network stack - which is why it LOOKS alarming. The counts say otherwise: 356 DIFXAPP lines, **0 DIFXAPP ERROR lines**, 0 errors after the warning, 12 ScheduleReboot actions; the installer's RESULT carries `reboot_needed:true` and the caller reboots, then two cold boots re-verify. **Jev: `is_it_a_defect=expected-and-handled` 0.98 (latent-defect 0.00, product-defect-to-fix-now 0.00), `bears_on_the_stall` 0.32, `next_action=capture-then-compare` 0.98 (`honour-the-reboot` 0.00).** So: no product change is indicated; when the stall next occurs, compare its DIFx sequence against a passing run's - possible now that quick-upgrade preserves the whole verbose MSI log (it previously kept a 40-line tail, so no run of that harness contained a single DIFXAPP line). [verified 2026-09-22]
 
 AUTHORITATIVE — and the ONLY content of this file. The dated history log was amputated
 2026-09-01 (owner call): the chronological format itself caused stale-first reads and
