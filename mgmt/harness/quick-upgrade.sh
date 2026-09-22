@@ -370,6 +370,17 @@ echo "$E2E_MARK" >> "$OUT/install.tail"
 log "run marker $E2E_MARK"
 # No /reboot: the installer then ends with "No reboot from here" and THIS script owns both cold
 # boots (deterministic, and the RESULT trailer is on disk before anything restarts).
+# ARM THE MODULE-BASE RECORDER FIRST. Measured 2026-09-22: this harness stalled mid-install
+# (qrexec dead 358 s, two vCPUs spinning), dom0's debug-keys capture DID produce guest RIPs - and
+# they were UNRESOLVABLE, because Windows re-randomises module bases every boot and no table had
+# been recorded for THAT boot. matrix.sh has armed this before every install since 2026-09-10;
+# this harness never did, and it is where the stall actually recurs. A raw RIP nobody can resolve
+# is the same as no capture at all.
+if VM="$SUBJECT" OUT="$OUT/modbases" ./mgmt/harness/arm-module-bases.sh >>"$OUT/armlog.txt" 2>&1; then
+  log "module-base recorder armed BEFORE the install (a stall's RIP will resolve to driver+offset)"
+else
+  log "WARNING: module-base recorder NOT armed - a stall here would leave a raw, unresolvable RIP"
+fi
 grun "cmd /c start \"\" /min $RELDISC\\install.cmd /auto /autologon:qubes" 60 >/dev/null
 log "install.cmd /auto launched from $RELDISC - waiting (deadline ${DEADLINE}s, stall ${STALL_SECS}s)"
 
