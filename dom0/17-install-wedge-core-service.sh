@@ -19,12 +19,13 @@
 #   - It is NOT destructive: `xl dump-core` PAUSES the domain while it writes, then leaves it
 #     exactly as it was. The guest is not killed, not bugchecked, not rebooted. (--nmi remains
 #     unreachable from any caller, in both services.)
-#   - The image STAYS IN DOM0 and is never streamed back: ~8 GB for an 8192 MB guest does not fit
-#     on the dev qube, and the dev qube does not need it - tools/xen-core-rip.py reads it in place
-#     once the owner copies it across, or it can be read in dom0.
-#   - It REFUSES rather than filling dom0's root: it checks free space against guest RAM + 10% +
-#     1 GiB first. A half-written image that wedged dom0 would be worse than no image.
-#   - stdout is a few lines of text (path, size, timing) - safe to read as data.
+#   - The image is STREAMED to the caller and never stored in dom0 (changed 2026-09-23, owner:
+#     "core will try to dump 8gb on dom0 fs, which does not have enough space"). dom0 holds only a
+#     FIFO; the dev qube writes the bytes to its own disk, where tools/xen-core-rip.py reads them.
+#     Fetch it with mgmt/harness/fetch-wedge-core.sh, which checks ITS free space before starting.
+#   - It cannot fill dom0's root any more: nothing of the image touches dom0's filesystem.
+#   - STDOUT IS THE RAW ELF CORE. Every message is on stderr. A caller that mixes them corrupts
+#     the image. A SHORT stream means a FAILED capture - check the exit status and stderr.
 #
 # Usage:  sudo ./17-install-wedge-core-service.sh <dev-qube> [vm ...]
 #   e.g.  sudo ./17-install-wedge-core-service.sh win-idd-mgmt
@@ -38,9 +39,6 @@ VMS=("$@")
 
 SVC=/etc/qubes-rpc/local.WinWedgeCore
 POLICY=/etc/qubes/policy.d/29-win-idd-testbed.policy
-CORE_DIR="${CORE_DIR:-/var/tmp/win-wedge-cores}"
-
-mkdir -p "$CORE_DIR"
 
 cat > "$SVC" <<EOF
 #!/bin/bash
@@ -48,7 +46,6 @@ cat > "$SVC" <<EOF
 # dom0/17-install-wedge-core-service.sh. Argument = VM name. The image stays in dom0.
 set -u
 ALLOWED="${VMS[*]}"
-CORE_DIR="$CORE_DIR"
 VM="\${QREXEC_SERVICE_ARGUMENT:-}"
 # Tag gate first, identical to local.WinWedgeForensics.
 if qvm-tags "\$VM" list 2>/dev/null | grep -qx win-idd-testbed; then
@@ -68,30 +65,41 @@ esac
 DOMID=\$(xl domid "\$VM" 2>/dev/null) || { echo "refused: '\$VM' is not running" >&2; exit 1; }
 MEM_KB=\$(xl list "\$VM" 2>/dev/null | awk 'NR==2 {print \$3*1024}')
 [ -z "\${MEM_KB:-}" ] && MEM_KB=\$((8192*1024))
-mkdir -p "\$CORE_DIR"
-FREE_KB=\$(df -Pk "\$CORE_DIR" | awk 'NR==2 {print \$4}')
-NEED_KB=\$(( MEM_KB + MEM_KB/10 + 1048576 ))
-echo "vm=\$VM domid=\$DOMID guest_ram_kb=\$MEM_KB need_kb=\$NEED_KB free_kb=\$FREE_KB"
-if [ "\$FREE_KB" -lt "\$NEED_KB" ]; then
-    echo "REFUSED: not enough free space in \$CORE_DIR (need ~\$((NEED_KB/1048576)) GiB, have \$((FREE_KB/1048576)) GiB)" >&2
-    exit 1
-fi
-CORE="\$CORE_DIR/\${VM}-\${DOMID}-\$(date +%Y%m%d-%H%M%S).core"
+
+# THE IMAGE IS STREAMED, NOT STORED. dom0's filesystem on this host does not have 8 GiB to spare,
+# and the previous version wrote the core there first - so the one service that can name a wedge
+# refused exactly when it was needed. `xl dump-core` writes its ELF sequentially, so it can write
+# into a FIFO and the bytes go straight out over qrexec; dom0 holds only the FIFO.
+#
+# STDOUT IS NOW BINARY. Every human-readable line below goes to STDERR - a single stray echo on
+# stdout corrupts the image at exactly the offset it lands, and an 8 GiB corruption found hours
+# later during analysis is the worst possible way to learn that.
+echo "vm=\$VM domid=\$DOMID guest_ram_kb=\$MEM_KB mode=stream" >&2
+TMPD=\$(mktemp -d /var/tmp/wedgecore.XXXXXX) || { echo "REFUSED: cannot create a temp dir" >&2; exit 1; }
+FIFO="\$TMPD/core.fifo"
+mkfifo "\$FIFO" || { echo "REFUSED: cannot create the FIFO" >&2; rm -rf "\$TMPD"; exit 1; }
+cleanup() { rm -rf "\$TMPD"; }
+trap cleanup EXIT
 t0=\$(date +%s)
 # PAUSES the domain while writing; does NOT kill, bugcheck or reboot it.
-if xl dump-core "\$DOMID" "\$CORE" 2>&1; then
-    sz=\$(stat -c %s "\$CORE" 2>/dev/null || echo 0)
-    echo "core=\$CORE bytes=\$sz seconds=\$(( \$(date +%s) - t0 ))"
-    echo "OK - the image stays in dom0; copy it out with: qvm-copy-to-vm $DEV \$CORE"
-else
-    # A dump-core that FAILS on a wedge is itself a datum - say so, never swallow it.
-    echo "FAILED: xl dump-core returned non-zero - on a deep wedge that is itself evidence" >&2
-    rm -f "\$CORE"
+xl dump-core "\$DOMID" "\$FIFO" 2>"\$TMPD/xl.err" &
+XLPID=\$!
+# cat, not a shell redirect: the reader must stay attached for the whole write, and its exit
+# status is what tells us the stream completed.
+cat "\$FIFO"
+CATRC=\$?
+wait \$XLPID; XLRC=\$?
+if [ "\$XLRC" -ne 0 ] || [ "\$CATRC" -ne 0 ]; then
+    # A dump-core that FAILS on a wedge is itself a datum - say so, never swallow it. The caller
+    # sees a SHORT stream plus this line, and must treat a short stream as a failed capture.
+    echo "FAILED: xl dump-core rc=\$XLRC, stream rc=\$CATRC after \$(( \$(date +%s) - t0 ))s" >&2
+    sed 's/^/  xl: /' "\$TMPD/xl.err" >&2 2>/dev/null
     exit 1
 fi
+echo "OK streamed in \$(( \$(date +%s) - t0 ))s (guest_ram_kb=\$MEM_KB - compare against the bytes received)" >&2
 EOF
 chmod 0755 "$SVC"
-echo "installed $SVC (images under $CORE_DIR; allowlist: ${VMS[*]:-<tag only>})"
+echo "installed $SVC (streams the image to $DEV, stores nothing; allowlist: ${VMS[*]:-<tag only>})"
 
 if [ ! -f "$POLICY" ] || ! grep -q 'local.WinWedgeCore' "$POLICY" 2>/dev/null; then
     printf 'local.WinWedgeCore * %s dom0 allow\n' "$DEV" >> "$POLICY"
@@ -101,4 +109,4 @@ else
 fi
 
 echo
-echo "Verify from $DEV:  tools/qtest dumpcore <vm>"
+echo "Fetch from $DEV:  mgmt/harness/fetch-wedge-core.sh <vm>"
