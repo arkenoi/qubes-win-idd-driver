@@ -147,12 +147,54 @@ say "schtasks: ${armed:-<no output>}"
 # could only say "wrote NOTHING (found=none)" with no reason - measured 2026-09-22 in WIN11-reinstall,
 # where arming SUCCEEDED before the install and FAILED on the post-install re-arm. A discarded error
 # is how a fixable instrument failure becomes a mystery.
-runout=$(QTEST_VM=$VM timeout -k 5 300 ./tools/qtest run \
-  "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Qubes Tools\\diag\\record-module-bases.ps1\"" 2>&1 | tr -d '\r')
+# ARM_DEFECT=firstrun-noop makes the first run write nothing, so the retry below can be SEEN to
+# rescue an arming rather than assumed to. A check that has never been watched working is decoration.
+_recorder_run(){
+  if [ "${ARM_DEFECT:-}" = firstrun-noop ] && [ "${1:-}" = first ]; then
+    QTEST_VM=$VM timeout -k 5 60 ./tools/qtest run "cmd /c exit 0" 2>&1 | tr -d '\r'
+    return
+  fi
+  QTEST_VM=$VM timeout -k 5 300 ./tools/qtest run \
+    "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Qubes Tools\\diag\\record-module-bases.ps1\"" 2>&1 | tr -d '\r'
+}
+# CLEAR THE TABLE FIRST, AND PROVE IT IS GONE. Measured 2026-09-22: with the first run replaced by
+# a no-op (ARM_DEFECT=firstrun-noop), the arming still reported "ARMED AND PROVEN: 1293 records" -
+# because the check only asks whether a table EXISTS, and a table written by an earlier arming on
+# the same boot satisfies it. "Records written on this boot" was never verified. A check that
+# passes on someone else's data is not a check.
+QTEST_VM=$VM timeout -k 5 120 ./tools/qtest run \
+  'cmd /c del /f /q "Q:\Qubes Logs\module-bases.txt" & del /f /q "C:\module-bases.txt" & exit /b 0' >/dev/null 2>&1
+_gone=$(QTEST_VM=$VM timeout -k 5 120 ./tools/qtest run \
+  'cmd /c if exist "Q:\Qubes Logs\module-bases.txt" (echo STILL-THERE) else (if exist "C:\module-bases.txt" (echo STILL-THERE) else (echo GONE))' 2>/dev/null \
+  | tr -d '\r' | grep -aoE 'STILL-THERE|GONE' | tail -1)
+if [ "${_gone:-}" != GONE ]; then
+  say "FAIL: could not clear the previous module table (got '${_gone:-no answer}') - any count below would be"
+  say "  someone else's data, so this arming cannot be proven and is not claimed."
+  exit 2
+fi
+
+runout=$(_recorder_run first)
 printf '%s\n' "$runout" > "$OUT/recorder-run.out"
 
-check=$(QTEST_VM=$VM timeout -k 5 240 ./tools/qtest run \
-  'cmd /c find /c "MODBASE" "Q:\Qubes Logs\module-bases.txt" 2>nul || find /c "MODBASE" "C:\module-bases.txt" 2>nul' 2>/dev/null | tr -d '\r' | grep -aoE '[0-9]+$' | tail -1)
+_count(){
+  QTEST_VM=$VM timeout -k 5 240 ./tools/qtest run \
+    'cmd /c find /c "MODBASE" "Q:\Qubes Logs\module-bases.txt" 2>nul || find /c "MODBASE" "C:\module-bases.txt" 2>nul' 2>/dev/null \
+    | tr -d '\r' | grep -aoE '[0-9]+$' | tail -1
+}
+check=$(_count)
+# RETRY ONCE. Measured 2026-09-22 in WIN11-reinstall: arming succeeded BEFORE an install and wrote
+# nothing on the re-arm immediately after it, at t+0s from the session coming back - and the same
+# arming succeeds on a settled guest and on a freshly booted one. A guest that has just finished
+# replacing its own PV drivers is the least settled it ever is, so one transient must not leave the
+# cell unarmed; and if the retry also writes nothing, the recorder's own output now says why.
+if [ -z "${check:-}" ] || [ "${check:-0}" -eq 0 ] 2>/dev/null; then
+  say "first run wrote nothing - settling 15s and retrying once (a guest that just replaced its PV stack is not settled)"
+  sleep 15
+  runout2=$(_recorder_run retry)
+  printf '%s\n' "$runout2" >> "$OUT/recorder-run.out"
+  check=$(_count)
+  [ -n "${check:-}" ] && [ "${check:-0}" -gt 0 ] 2>/dev/null && say "the retry rescued the arming: $check records"
+fi
 if [ -n "${check:-}" ] && [ "$check" -gt 0 ] 2>/dev/null; then
   say "ARMED AND PROVEN: $check module records written on this boot."
   # PULL IT NOW, NOT LATER. The table is written INSIDE the guest and --dump retrieves it over
