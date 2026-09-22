@@ -20,20 +20,23 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.18-agentd45428e](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.18-agentd45428e)** — agent `d45428e` (code `9379eb3`), package `4.3.18`. See
-[`docs/RELEASE-NOTES-4.3.18.md`](docs/RELEASE-NOTES-4.3.18.md) for what changed and what was
-verified — the full install/upgrade matrix (clean install, reinstall, upgrade, AppVM) passed 94/94.
+Release **[v4.3.30-agentddb9dd3](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.30-agentddb9dd3)** — agent `ddb9dd3`, package `4.3.30`, built from commit `44939ef`. See
+[`docs/RELEASE-NOTES-4.3.30.md`](docs/RELEASE-NOTES-4.3.30.md) for what changed and what was
+verified: the full matrix — clean install, same-version reinstall, in-place major upgrade from
+4.3.28, and template→AppVM derivation with three cold boots, on **both Windows 10 and Windows 11** —
+passed 90/90 with 0 cells ungraded, against this exact package.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.18-1.agentd45428e87210.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.18-agentd45428e/qubes-windows-tools-ng-4.3.18-1.agentd45428e87210.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
-| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.18-agentd45428e/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.18-agentd45428e/SHA256SUMS.txt) | checksums for both |
+| [`qubes-windows-tools-ng-4.3.30-1.agentddb9dd3de991.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.30-agentddb9dd3/qubes-windows-tools-ng-4.3.30-1.agentddb9dd3de991.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.30-agentddb9dd3/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qubes-tools-4.3.30.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.30-agentddb9dd3/qubes-tools-4.3.30.exe) | the installer on its own, if you already have a way to get a file into the guest |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.30-agentddb9dd3/SHA256SUMS.txt) | checksums for all of them |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.18-1.agentd45428e87210.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.30-1.agentddb9dd3de991.noarch.rpm
 ```
 
 With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
@@ -42,26 +45,30 @@ hands the guest exactly this ISO as a CD.
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction. Validated end to end for an upgrade **from an older
-build of this package** — 4.3.18's acceptance ran clean install, reinstall, upgrade and
-AppVM cells, 94/94 passed. An upgrade from **stock QWT 4.2.2** uses the same unchanged
+build of this package** — 4.3.30's acceptance ran clean install, same-version reinstall,
+in-place major upgrade from 4.3.28 and template→AppVM cells on both Windows 10 and Windows 11,
+90/90 passed with none ungraded. An upgrade from **stock QWT 4.2.2** uses the same unchanged
 MSI machinery but has not been exercised on our testbed since August 2026, because the
 test images themselves carry a newer build.
 
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
-**What changed in 4.3.18 — menus rendered whole.** Seamless menus and shell surfaces are now
-mapped as a single pixel-accurate surface instead of stitched slices — the completion of the
-menu pixel-perfect work (edge-trim, crop-before-show) followed by the de-slice plan, with the
-WGC capture broker **default-on for Windows 11 24H2+** and the legacy slice knobs removed.
-Verified with the full acceptance protocol — all five parts (install/upgrade matrix 94/94,
-network, updates, rendering, safeguards), zero product-defect failures — and re-benchmarked
-against stock on Windows 10 with every workload's ranges disjoint ("Performance" below). One
-pre-existing Windows 11 24H2 issue on the resolution-change path is tracked separately in the
-notes. Full story in [`docs/RELEASE-NOTES-4.3.18.md`](docs/RELEASE-NOTES-4.3.18.md).
+**What changed in 4.3.30 — guest notifications reach dom0.** The notification bridge forwards a
+Windows application's toast to dom0's own notification service and suppresses the in-guest banner;
+it existed in earlier builds but shipped switched off, so it had never run for anyone. It is on by
+default now, along with the agent reporting its own error conditions to dom0 and the seamless
+per-window grant path. Toast stacks no longer show black bars between cards, and windows no longer
+blink black when their capture buffer is rebuilt. This build also carries substantial work on the
+dom0-driven Windows Update path for guests with no network of their own. Verified against this
+exact package: the full matrix — clean install, same-version reinstall, in-place major upgrade
+from 4.3.28, and template→AppVM derivation with three cold boots, on both Windows 10 and Windows 11
+— 90/90 with zero cells ungraded, plus both feature tests. One intermittent stall on the in-place
+upgrade path is known, unexplained, and did not occur in this acceptance; it is described in the
+notes. Full story in [`docs/RELEASE-NOTES-4.3.30.md`](docs/RELEASE-NOTES-4.3.30.md).
 
 **Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
-commit; the agent is `d45428e` on
+commit; the agent is `ddb9dd3` on
 [arkenoi/qubes-gui-agent-windows](https://github.com/arkenoi/qubes-gui-agent-windows). The
 Windows build is not timestamp-reproducible, so binary hashes differ across rebuilds of identical
 source; `MANIFEST.json` inside each asset records the exact source commits the build came from.
@@ -120,6 +127,21 @@ run-to-run spread and none carries a verdict. Stock is an order of magnitude che
 Windows 11 than on Windows 10 to begin with, so there is far less to recover there. Its
 working set stays flat where stock's grows ~87 MB per workload. Numbers, method and
 caveats: "Performance" below.
+
+### Guest notifications appear in dom0
+
+A Windows application's notification is forwarded to dom0's own notification service and shown
+there, with the in-guest banner suppressed — so a guest toast reaches you the same way a
+notification from any other qube does. It is on by default as of 4.3.30 (it existed earlier but
+shipped switched off). It is per-application and fail-open: an application that is not on the
+forward list keeps the ordinary window path, unchanged.
+
+Notification cards no longer show black bars between them when several stack up.
+
+### Windows no longer blink black when they are resized
+
+Rebuilding a window's capture buffer — on a resize or a mode change — used to paint the newly
+exposed area black for a frame or two. The previous pixels are now carried across the rebuild.
 
 ### One mouse cursor instead of two
 
@@ -360,6 +382,8 @@ overrides, is [docs/QVM-FEATURES.md](docs/QVM-FEATURES.md). The short version:
 | `qvm-features <vm> service.enableWinKey 1` | let the Windows key through, so Start (or a third-party shell) opens. Default: blocked in seamless mode |
 | `qvm-features <vm> service.gui-fullscreen 1` | allow the whole guest desktop to be shown in **one** dom0 window (non-seamless), and a borderless true-fullscreen app window. A maximized app with a title bar is always allowed; the boot/shutdown screen is never allowed, feature or not |
 | `qvm-features <vm> service.hideGuestTitleBar 1` | strip the guest's own title bars so only dom0's decoration shows. **Experimental — leave it alone:** the restyle makes windows minimize themselves |
+| `qvm-features <vm> service.notify-bridge 0` | turn **off** the forwarding of guest notifications to dom0. Default: **on** since 4.3.30 |
+| `qvm-features <vm> service.notify-errors 0` | turn **off** the agent reporting its own error conditions to dom0. Default: **on** since 4.3.30 |
 | `qvm-features <vm> service.gui-agent-debug 1` | full diagnostic logging in one switch: per-frame performance records, protocol traces and debug level. Set this before collecting a log for a bug report, unset it afterwards — a normal log is tens of KB, a debug log is megabytes |
 | `qvm-features <vm> service.uac-disable 1` | turn UAC **off** in the guest — the Windows equivalent of passwordless sudo, so use with care: anything running in the qube reaches admin/kernel without asking, and that is the surface facing the hypervisor. Reboot required. Only an explicit `1` acts; clearing the feature puts UAC back. **Set it on the TEMPLATE** — an AppVM's system drive is restored from its template at every boot and Windows reads this setting at boot, so a value applied inside an AppVM can never take effect |
 
