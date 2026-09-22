@@ -1705,6 +1705,50 @@ static int DumpEtwMain(int seconds)
 // supervisor's 15 s heartbeat deadline. MEASURE-ONLY and exception-tight at every layer:
 // nothing here can feed failStreak/FATAL or touch the A0 routing.
 
+// CLASSIFIER-DRIVEN ROUTING (owner, 2026-09-23). The classifier has shipped since 5133293 in
+// MEASURE-ONLY shadow: it produced a verdict per toast and the verdict was logged and discarded,
+// while routing stayed byte-for-byte A0 (allowlist or window path). This is the store that lets a
+// verdict decide the route.
+//
+// Why a store and not a wait: the poll thread must never block on acquisition (the heartbeat
+// contract; P3AQ_DEFECT_HOTWAIT exists to prove a stall there breaks the harness's cadence bound).
+// So the worker records id -> route, and the poll thread decides on a later pass - which costs
+// nothing, because an unforwarded toast is already left unseen and re-examined every 2 s.
+// Jev graded the alternatives 2026-09-23: verdict-map-retry 0.73, stay-in-shadow 0.24,
+// bounded-wait 0.01, per-app-learning 0.00.
+struct VerdictStore
+{
+    CRITICAL_SECTION lock{};
+    bool init = false;
+    std::unordered_map<uint32_t, int> route;      // id -> ToastRoute
+    std::unordered_map<uint32_t, int> passes;     // id -> poll passes spent waiting
+} g_verdict;
+
+static void VerdictInit()
+{
+    if (!g_verdict.init) { InitializeCriticalSection(&g_verdict.lock); g_verdict.init = true; }
+}
+static void VerdictStorePut(uint32_t id, int route)
+{
+    if (!g_verdict.init) return;
+    CsGuard g(&g_verdict.lock);
+    if (g_verdict.route.size() > 4096) { g_verdict.route.clear(); g_verdict.passes.clear(); }
+    g_verdict.route[id] = route;
+}
+// Returns true and sets *route when a verdict exists. Otherwise counts this pass: a toast whose
+// verdict never arrives must NOT be deferred for ever - after kVerdictMaxPasses it takes the
+// window path, which is the fail-open direction (the user sees it as a guest window, as today).
+static const int kVerdictMaxPasses = 3;           // ~6 s at the 2 s poll cadence
+static bool VerdictLookup(uint32_t id, int* route, int* passes)
+{
+    if (!g_verdict.init) return false;
+    CsGuard g(&g_verdict.lock);
+    auto it = g_verdict.route.find(id);
+    if (it != g_verdict.route.end()) { *route = it->second; return true; }
+    *passes = ++g_verdict.passes[id];
+    return false;
+}
+
 struct ShadowJob { uint32_t id = 0; std::wstring aumid, title; long long creationFt = 0; };
 
 static struct
@@ -1829,6 +1873,9 @@ static void ShadowClassifyWork(ShadowJob const& j)
         }
         BLog(L"CLASSIFY id=%u src=%hs etw=%hs verdict=%s row_latency=%lums signals=%s corr=%hs",
              j.id, src, etw, verdict, (DWORD)(GetTickCount64() - t0), signals.c_str(), corr);
+        // Record exactly what was logged, so the route a later poll pass takes is the verdict an
+        // operator can read in the log - not a second, separately-derived opinion.
+        VerdictStorePut(j.id, (wcscmp(verdict, L"bridge") == 0) ? ToastRouteBridge : ToastRouteWindow);
     }
     catch (...)
     {
@@ -1860,6 +1907,7 @@ static DWORD WINAPI ShadowWorkerThread(LPVOID)
 static void ShadowWorkerStart()
 {
     InitializeCriticalSection(&g_shadow.lock);
+    VerdictInit();
     g_shadow.evt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g_shadow.stopEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_shadow.walEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -2810,7 +2858,38 @@ static int BridgeMain()
                     // FAIL on this build or it is decoration.
                     if (g_etw.state != ETW_STATE_LIVE) listed = false;
 #endif
-                    if (!listed) { seen.insert(id); BLog(L"skip id=%u aumid=%s (window path)", id, aumid.c_str()); continue; }
+                    if (!listed)
+                    {
+                        // CLASSIFIER-DRIVEN ROUTING. An app nobody allowlisted is no longer skipped
+                        // outright: its toast takes the route the classifier gave it. Every rung
+                        // below fails OPEN to the window path, which is what shipped before this.
+                        int route = ToastRouteWindow, passes = 0;
+                        if (VerdictLookup(id, &route, &passes))
+                        {
+                            if (route != ToastRouteBridge)
+                            {
+                                seen.insert(id);
+                                BLog(L"skip id=%u aumid=%s (window path; classifier verdict)", id, aumid.c_str());
+                                continue;
+                            }
+                            BLog(L"route id=%u aumid=%s (bridge; classifier verdict)", id, aumid.c_str());
+                            listed = true;        // fall through to the forward path below
+                        }
+                        else if (passes < kVerdictMaxPasses)
+                        {
+                            // No verdict yet. Leave it UNSEEN so the next pass reconsiders it; this
+                            // is the same retry that already stops a failed forward from dropping a
+                            // toast. Nothing blocks and nothing is lost.
+                            BLog(L"await id=%u aumid=%s (verdict pending, pass %d/%d)", id, aumid.c_str(), passes, kVerdictMaxPasses);
+                            continue;
+                        }
+                        else
+                        {
+                            seen.insert(id);
+                            BLog(L"skip id=%u aumid=%s (window path; no verdict after %d passes)", id, aumid.c_str(), kVerdictMaxPasses);
+                            continue;
+                        }
+                    }
                     // allowlisted: DEFER marking seen until a forward succeeds, so a failed/absent
                     // forward is retried and never silently drops a toast (P.2 fail-open invariant).
                     auto tb = FirstTexts(un);
