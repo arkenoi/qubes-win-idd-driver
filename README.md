@@ -133,8 +133,14 @@ caveats: "Performance" below.
 A Windows application's notification is forwarded to dom0's own notification service and shown
 there, with the in-guest banner suppressed — so a guest toast reaches you the same way a
 notification from any other qube does. It is on by default as of 4.3.30 (it existed earlier but
-shipped switched off). It is per-application and fail-open: an application that is not on the
-forward list keeps the ordinary window path, unchanged.
+shipped switched off).
+
+It forwards **allowlisted applications only**. With no allowlist configured a conservative built-in
+seed is used — Snipping Tool, Camera, Photos, Security & Maintenance, the backup reminder — and you
+can see what a guest actually emits with `notifhost --dump-aumids`, then extend the list per guest.
+Everything else, and everything at all while the bridge is unhealthy, keeps the ordinary window
+path: fail-open by construction. `qvm-features <vm> service.legacy-toasts 1` forces the old
+behaviour regardless.
 
 Notification cards no longer show black bars between them when several stack up.
 
@@ -383,6 +389,7 @@ overrides, is [docs/QVM-FEATURES.md](docs/QVM-FEATURES.md). The short version:
 | `qvm-features <vm> service.gui-fullscreen 1` | allow the whole guest desktop to be shown in **one** dom0 window (non-seamless), and a borderless true-fullscreen app window. A maximized app with a title bar is always allowed; the boot/shutdown screen is never allowed, feature or not |
 | `qvm-features <vm> service.hideGuestTitleBar ""` | keep the guest's own title bars. Stripping them so only dom0's decoration shows is the **default since 4.3.21** — set the feature to an empty value to opt out |
 | `qvm-features <vm> service.notify-bridge 0` | turn **off** the forwarding of guest notifications to dom0. Default: **on** since 4.3.30 |
+| `qvm-features <vm> service.legacy-toasts 1` | keep the old in-guest toast windows for this qube. It **wins over** `service.notify-bridge`, so it holds even if the bridge is enabled or becomes default-on later |
 | `qvm-features <vm> service.notify-errors 0` | turn **off** the agent reporting its own error conditions to dom0. Default: **on** since 4.3.30 |
 | `qvm-features <vm> service.gui-agent-debug 1` | full diagnostic logging in one switch: per-frame performance records, protocol traces and debug level. Set this before collecting a log for a bug report, unset it afterwards — a normal log is tens of KB, a debug log is megabytes |
 | `qvm-features <vm> service.uac-disable 1` | turn UAC **off** in the guest — the Windows equivalent of passwordless sudo, so use with care: anything running in the qube reaches admin/kernel without asking, and that is the surface facing the hypervisor. Reboot required. Only an explicit `1` acts; clearing the feature puts UAC back. **Set it on the TEMPLATE** — an AppVM's system drive is restored from its template at every boot and Windows reads this setting at boot, so a value applied inside an AppVM can never take effect |
