@@ -97,12 +97,14 @@ try:
     d = json.load(open(sys.argv[1]))
 except Exception:
     print(""); raise SystemExit
-q = (d.get("answers") or {}).get("same_situation") or {}
-v = q.get("noul")
-print("" if not isinstance(v, (int, float)) else v)
+a = d.get("answers") or {}
+m = (a.get("matches_recorded") or {}).get("noul")
+o = (a.get("is_one_to_one") or {}).get("noul")
+# Both numbers or nothing: a half-read verdict is missing data, not a partial pass.
+print("" if not isinstance(m, (int, float)) else m, "" if not isinstance(o, (int, float)) else o)
 PYEOF
 )"
-[ -n "$SAME" ] || { say "GATE COULD NOT RUN: no same_situation value in $OUTJ"; exit 2; }
+[ -n "$SAME" ] || { say "GATE COULD NOT RUN: no matches_recorded value in $OUTJ"; exit 2; }
 say "jev matches_recorded=$SAME is_one_to_one=${ONE1:-?}"
 echo "matches_recorded=$SAME is_one_to_one=${ONE1:-?}" > "$OUT/REPRO-FIDELITY.txt"
 awk -v v="${ONE1:-0}" 'BEGIN{exit !(v+0 < 0.70)}' && say "NOTE: this pass is NOT a faithful 1:1 reproduction (is_one_to_one=${ONE1:-?}) - a null result from it proves nothing about the reference; recorded in $OUT/REPRO-FIDELITY.txt"
