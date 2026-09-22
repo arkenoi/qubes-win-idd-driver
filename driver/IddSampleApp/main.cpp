@@ -30,12 +30,12 @@ int __cdecl main(int argc, wchar_t *argv[])
     HANDLE hEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     HSWDEVICE hSwDevice;
     SW_DEVICE_CREATE_INFO createInfo = { 0 };
-    PCWSTR description = L"Idd Sample Driver";
+    PCWSTR description = L"Qubes Idd";
 
     // These match the Pnp id's in the inf file so OS will load the driver when the device is created    
-    PCWSTR instanceId = L"IddSampleDriver";
-    PCWSTR hardwareIds = L"IddSampleDriver\0\0";
-    PCWSTR compatibleIds = L"IddSampleDriver\0\0";
+    PCWSTR instanceId = L"QubesIdd";
+    PCWSTR hardwareIds = L"QubesIdd\0\0";
+    PCWSTR compatibleIds = L"QubesIdd\0\0";
 
     createInfo.cbSize = sizeof(createInfo);
     createInfo.pszzCompatibleIds = compatibleIds;
@@ -48,7 +48,7 @@ int __cdecl main(int argc, wchar_t *argv[])
                                  SWDeviceCapabilitiesDriverRequired;
 
     // Create the device
-    HRESULT hr = SwDeviceCreate(L"IddSampleDriver",
+    HRESULT hr = SwDeviceCreate(L"QubesIdd",
                                 L"HTREE\\ROOT\\0",
                                 &createInfo,
                                 0,

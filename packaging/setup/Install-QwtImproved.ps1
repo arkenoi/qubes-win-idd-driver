@@ -57,7 +57,8 @@
 .PARAMETER InstallIddDriver
     Deprecated no-op (IDD is default-on). Kept so old command lines and /idd still parse.
     Also install and ACTIVATE the Qubes IddCx display driver: the package is staged with
-    pnputil, the root-enumerated device (root\iddsampledriver) is created with devcon,
+    pnputil, the root-enumerated device (root\qubesidd; root\iddsampledriver on a guest
+    installed before 4.3.31) is created with devcon,
     and once it binds the emulated VGA adapter (PCI display class CC_0300) is DISABLED,
     so the desktop comes up on the IDD after the final reboot. The gui-agent installed
     by this same stage publishes the mode list to HKLM\SOFTWARE\QubesIDD\Modes at
@@ -1375,16 +1376,22 @@ function Emit-ResultThenPowerOff {
 
 # --------------------------------------------------------------------- IDD device lookup
 function Get-IddPnpDevices {
-    param([Parameter(Mandatory)][string]$HardwareId)
+    param([Parameter(Mandatory)][string[]]$HardwareId)
     # ALL nodes carrying the hardware id. Win32_PnPEntity rather than Get-PnpDevice:
     # ConfigManagerErrorCode is a first-class property there, and the bind poll is exactly a
     # wait for it to reach 0.
+    # $HardwareId is a LIST since 4.3.31: the IDD's hardware id was rebranded to
+    # root\qubesidd, and a guest installed before 4.3.31 keeps its node on the legacy
+    # root\iddsampledriver id (the shipped INF declares BOTH, so one package serves either).
+    # "Does this guest have an IDD node?" must ask about the family, never about one id - by
+    # one id an upgraded guest reads as having none, and the caller then creates a SECOND node
+    # beside the live one.
     return @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue |
-        Where-Object { $_.HardwareID -and (@($_.HardwareID) -contains $HardwareId) })
+        Where-Object { $_.HardwareID -and (@($_.HardwareID) | Where-Object { $HardwareId -contains $_ }) })
 }
 
 function Get-IddPnpDevice {
-    param([Parameter(Mandatory)][string]$HardwareId, [string]$InstanceId = '')
+    param([Parameter(Mandatory)][string[]]$HardwareId, [string]$InstanceId = '')
     # With -InstanceId: THAT node, or nothing. Without it, the first node by hardware id - which
     # is arbitrary when two exist, and two DO exist on a re-run over a broken node whose removal
     # was deferred to the reboot: the bind wait then watched the old dead node while the new one
@@ -2832,7 +2839,20 @@ function Invoke-Stage2 {
         }
         & $assertQuiesced 'before staging the driver'
         $iddDir  = Join-Path $Root 'idd-driver'
-        $iddHwId = 'root\iddsampledriver'
+        # THE IDD HARDWARE ID WAS REBRANDED IN 4.3.31: root\iddsampledriver -> root\qubesidd.
+        # The shipped INF declares BOTH models lines, so ONE driver package serves a legacy node
+        # and a new one alike. Hence two variables:
+        #   $iddHwIds - the family, for every LOOKUP ("is there an IDD node on this guest?");
+        #   $iddHwId  - the id THIS guest's IDD uses, for devcon create/update/remove. A guest
+        #               installed before 4.3.31 stays on the legacy id: its devnode is the one
+        #               the desktop is currently on, and destroying it merely to rename it is
+        #               exactly the headless-desktop risk resolution.c documents. The rename
+        #               reaches that node through the rebind instead.
+        $iddHwIds = @('root\qubesidd', 'root\iddsampledriver')
+        $iddHwId  = if (@(Get-IddPnpDevices -HardwareId 'root\iddsampledriver').Count -gt 0) {
+                        'root\iddsampledriver'
+                    } else { 'root\qubesidd' }
+        Write-Log "IDD hardware id for this guest: $iddHwId"
         $devcon  = Join-Path $iddDir 'devcon.exe'
         $inf = @(Get-ChildItem -LiteralPath $iddDir -Filter *.inf -ErrorAction SilentlyContinue)
         if ($inf.Count -ne 1) {
@@ -2875,7 +2895,7 @@ function Invoke-Stage2 {
         # N' while the new one was healthy, and the fail branch's remove-by-hardware-id then tore
         # down BOTH, reporting FAILED for an activation that had succeeded.
         $iddInstance = ''
-        $existingIdd = @(Get-IddPnpDevices -HardwareId $iddHwId)
+        $existingIdd = @(Get-IddPnpDevices -HardwareId $iddHwIds)
         # DO NOT CLASSIFY A PRE-EXISTING NODE FROM ONE COLD READ. pnputil /add-driver /install just
         # ran and may still be (re)binding the live node; a transient non-zero code read once, cold,
         # sent it down the 'broken -> devcon remove' path, and on an UPGRADE the VGA is already
@@ -2887,7 +2907,7 @@ function Invoke-Stage2 {
             $settleDeadline = (Get-Date).AddSeconds(30)
             while ((Get-Date) -lt $settleDeadline) {
                 Start-Sleep -Seconds 2
-                $existingIdd = @(Get-IddPnpDevices -HardwareId $iddHwId)
+                $existingIdd = @(Get-IddPnpDevices -HardwareId $iddHwIds)
                 if ($existingIdd | Where-Object { $_.ConfigManagerErrorCode -eq 0 }) { Write-Log 'pre-existing IDD node settled to code 0'; break }
             }
         }
@@ -2910,7 +2930,7 @@ function Invoke-Stage2 {
                 }
                 if ($LASTEXITCODE -ne 0) { throw "devcon remove $($broken.PNPDeviceID) failed (rc '$LASTEXITCODE') - NOT creating a second node beside it" }
             }
-            $before = @(Get-IddPnpDevices -HardwareId $iddHwId | ForEach-Object { $_.PNPDeviceID })
+            $before = @(Get-IddPnpDevices -HardwareId $iddHwIds | ForEach-Object { $_.PNPDeviceID })
             Write-Log "creating the IDD device: devcon install $($inf[0].Name) $iddHwId"
             $global:LASTEXITCODE = $null
             try { $out = & $devcon install $inf[0].FullName $iddHwId 2>&1 } catch { $out = "$_" }
@@ -2920,7 +2940,7 @@ function Invoke-Stage2 {
             if ($LASTEXITCODE -notin 0, 1) { throw "devcon install $iddHwId failed (rc '$LASTEXITCODE')" }
             $createdByThisRun = $true
             # The node this run created = the one that was not there before it.
-            $after = @(Get-IddPnpDevices -HardwareId $iddHwId | Where-Object { $before -notcontains $_.PNPDeviceID })
+            $after = @(Get-IddPnpDevices -HardwareId $iddHwIds | Where-Object { $before -notcontains $_.PNPDeviceID })
             if ($after.Count -ge 1) { $iddInstance = $after[0].PNPDeviceID }
             if ($after.Count -gt 1) { Write-Log ("devcon install produced $($after.Count) new nodes - watching $iddInstance") 'WARN' }
             $script:Result.detail.idd_driver = "device created ($iddInstance), waiting for bind"
@@ -2931,17 +2951,18 @@ function Invoke-Stage2 {
         # STARTED: IddCx adapter/monitor init completes asynchronously afterwards and can
         # fail while the devnode stays at code 0. The second gate requires an actual
         # VIDEO CONTROLLER attributable to the IDD devnode - the same evidence the
-        # FINDINGS topology snapshots use ('IddSampleDriver Device' controller).
+        # FINDINGS topology snapshots use (the ROOT\DISPLAY controller - named
+        # 'IddSampleDriver Device' before 4.3.31, 'Qubes Idd' since).
         Write-Log "waiting up to 30 s for the IDD device to bind (ConfigManagerErrorCode 0)$(if ($iddInstance) { ": $iddInstance" })"
         $deadline = (Get-Date).AddSeconds(30)
         while ($true) {
             if (-not $iddInstance -and $createdByThisRun) {
                 # The new node had not been enumerated yet when devcon returned - keep looking for it.
-                $new = @(Get-IddPnpDevices -HardwareId $iddHwId | Where-Object { $before -notcontains $_.PNPDeviceID })
+                $new = @(Get-IddPnpDevices -HardwareId $iddHwIds | Where-Object { $before -notcontains $_.PNPDeviceID })
                 if ($new.Count -ge 1) { $iddInstance = $new[0].PNPDeviceID; Write-Log "IDD node created by this run: $iddInstance" }
             }
             $dev = $null
-            if ($iddInstance) { $dev = Get-IddPnpDevice -HardwareId $iddHwId -InstanceId $iddInstance }
+            if ($iddInstance) { $dev = Get-IddPnpDevice -HardwareId $iddHwIds -InstanceId $iddInstance }
             if ($dev -and $dev.ConfigManagerErrorCode -eq 0) { break }
             if ((Get-Date) -ge $deadline) { break }
             Start-Sleep -Seconds 2
@@ -3022,7 +3043,7 @@ function Invoke-Stage2 {
                 $out | ForEach-Object { Write-Log "  devcon update: $_" }
                 $deadline = (Get-Date).AddSeconds(30)
                 while ($true) {
-                    $dev = Get-IddPnpDevice -HardwareId $iddHwId -InstanceId $iddInstance
+                    $dev = Get-IddPnpDevice -HardwareId $iddHwIds -InstanceId $iddInstance
                     if ($dev -and $dev.ConfigManagerErrorCode -eq 0) { break }
                     if ((Get-Date) -ge $deadline) { break }
                     Start-Sleep -Seconds 2

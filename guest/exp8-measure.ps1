@@ -16,7 +16,7 @@ $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
 $devs = @()
 $idd = 0
 Get-WmiObject Win32_PnPEntity -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match 'IddSample|Indirect' } | ForEach-Object { $idd++; $devs += $_.Name }
+    Where-Object { $_.Name -match 'IddSample|Indirect|Qubes Idd' } | ForEach-Object { $idd++; $devs += $_.Name }
 
 # Video controllers
 $vcs = @(Get-WmiObject Win32_VideoController -ErrorAction SilentlyContinue)

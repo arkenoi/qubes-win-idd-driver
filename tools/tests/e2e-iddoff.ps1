@@ -12,7 +12,10 @@ function Adapters {
     Get-CimInstance Win32_VideoController | ForEach-Object { "$($_.Name)=$($_.Status)" }
 }
 $before = @(Adapters) -join ";"
-$iddBefore = [bool](Get-PnpDevice -Class Display -EA SilentlyContinue | Where-Object { $_.FriendlyName -match "IddSample" })
+# Keyed on the device path, not the friendly name: the INF's %DeviceName% is a
+# rebrandable display string (it became "Qubes Idd" in 4.3.31), while
+# ROOT\DISPLAY is what the device actually is - the same key health-check.ps1 uses.
+$iddBefore = [bool](Get-PnpDevice -Class Display -EA SilentlyContinue | Where-Object { $_.InstanceId -match '^ROOT\\DISPLAY' })
 
 # the banner (Gate 0) and the run itself
 $out = & cmd.exe /c "`"$dir\install.cmd`" /iddoff" 2>&1 | Out-String

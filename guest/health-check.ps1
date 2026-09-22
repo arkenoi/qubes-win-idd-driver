@@ -175,6 +175,29 @@ if ($NoIddExpected) {
     $otherActive = @($active | Where-Object { $_.PNPDeviceID -notmatch '^ROOT\\DISPLAY' })
     Check 'desktop_on_idd' ($iddActive.Count -ge 1 -and $otherActive.Count -eq 0) `
         @{ controllers = $ctrls; non_idd_active = $otherActive.Count }
+
+    # --- 3b. the 4.3.31 identity rename ------------------------------------------
+    # Two failures this pair exists to catch, both invisible to the checks above:
+    #  * A SECOND IDD DEVNODE. The hardware id was rebranded (root\iddsampledriver ->
+    #    root\qubesidd) and the INF declares both, so a caller that looks up the IDD by
+    #    ONE id reads an upgraded guest as having none and creates a node beside the live
+    #    one. Two IDD nodes mean an extended desktop and broken seamless coordinates.
+    #  * THE NAME NOT REACHING AN UPGRADED NODE. The rename arrives at a pre-4.3.31 node
+    #    only through the driver rebind. If that does not rewrite DeviceDesc, the device
+    #    keeps reading 'IddSampleDriver Device' in Device Manager - the rename then works
+    #    on clean installs and silently misses every existing one.
+    # The agent matches the adapter BY THIS STRING (resolution.c IsQubesIddAdapter), so it
+    # is load-bearing, not cosmetic.
+    $iddNodes = @($iddAll | Where-Object { $_.InstanceId -match '^ROOT\\DISPLAY' })
+    Check 'idd_single_node' ($iddNodes.Count -eq 1) `
+        @{ nodes = @($iddNodes | ForEach-Object { @{ instance = $_.InstanceId; name = $_.FriendlyName; status = "$($_.Status)" } })
+           note  = 'more than one ROOT\DISPLAY node = an extended desktop and broken seamless coordinates' }
+    $iddName = if ($idd) { "$($idd.FriendlyName)" } else { '' }
+    $r.idd_name = $iddName
+    $r.idd_hwids = if ($idd) { @($idd.HardwareID) } else { @() }
+    Check 'idd_device_name' ($iddName -eq 'Qubes Idd') `
+        @{ name = $iddName; want = 'Qubes Idd'
+           note = "the agent's IsQubesIddAdapter still accepts the legacy 'IddSampleDriver Device', so a FAIL here is a rename that did not reach this node - not a broken display" }
 }
 
 # --- 4. agent<->driver mode loop -------------------------------------------------
@@ -286,6 +309,32 @@ if ($boot) {
            still_writing = $grew
            badmode_lines = $badmode
            prior_instance_exited_on_vchan_disconnect = $benignExit }
+}
+
+# --- 3c. the agent IDENTIFIED the adapter (4.3.31 rename) -------------------------
+# idd_device_name asserts what Device Manager shows; this asserts that the AGENT matched
+# it. The agent finds the IDD by comparing DISPLAY_DEVICE.DeviceString against the names
+# it knows (resolution.c IsQubesIddAdapter), and EnsureQubesIddSoloWaiting runs at every
+# agent start - so on a guest with an IDD, this boot's log carries the 'found IDD adapter'
+# line. Its ABSENCE is the rename's silent failure mode: an agent that matches no name
+# manages no topology, logs only at Debug level, and every other check here still passes.
+if (-not $NoIddExpected -and $boot) {
+    $soloLines = @()
+    if ($logsThisBoot) {
+        $soloLines = @($logsThisBoot | ForEach-Object {
+            Select-String -Path $_.FullName -Pattern "IDD solo: found IDD adapter" -ErrorAction SilentlyContinue } |
+            ForEach-Object { $_.Line })
+    }
+    $soloName = ''
+    if ($soloLines.Count -gt 0) {
+        # LogInfo("IDD solo: found IDD adapter '%s' ('%s'), attached=.. primary=..")
+        $m = [regex]::Match($soloLines[-1], "found IDD adapter '[^']*' \('([^']*)'\)")
+        if ($m.Success) { $soloName = $m.Groups[1].Value }
+    }
+    $r.idd_agent_match_name = $soloName
+    Check 'idd_agent_identified' ($soloLines.Count -gt 0 -and $soloName) `
+        @{ lines = $soloLines.Count; device_string = $soloName
+           note  = 'no line = the agent matched NO adapter name and is managing no display topology' }
 }
 
 # --- 6b. PV DRIVERS actually bound and CARRYING traffic ----------------------------

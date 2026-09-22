@@ -64,7 +64,10 @@ function Emit($code){
     try { Add-Content -LiteralPath $log -Value "=== RESULT === $json" } catch {}
     exit $code
 }
-function Get-IddDev($hwid){ Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.HardwareID -contains $hwid -or $_.InstanceId -like "*$hwid*" } | Select-Object -First 1 }
+# $hwid is a LIST since 4.3.31 (root\qubesidd, plus the legacy root\iddsampledriver that
+# every guest installed before 4.3.31 carries): one INF declares both, so "the IDD node"
+# is a family, and asking by a single id would miss an upgraded guest entirely.
+function Get-IddDev([string[]]$hwid){ Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $d = $_; (@($d.HardwareID) | Where-Object { $hwid -contains $_ }) -or ($hwid | Where-Object { $d.InstanceId -like "*$_*" }) } | Select-Object -First 1 }
 
 try {
     Log '=== IDD-only activation ==='
@@ -109,7 +112,12 @@ try {
     }
 
     $iddDir  = Join-Path $Root 'idd-driver'
-    $iddHwId = 'root\iddsampledriver'
+    # LOOKUPS use the family; devcon create/update/remove use the id THIS guest's node has.
+    # A pre-4.3.31 guest stays on the legacy id: its devnode is the one the desktop is on,
+    # and the rename reaches it by rebinding, never by destroying it.
+    $iddHwIds = @('root\qubesidd', 'root\iddsampledriver')
+    $iddHwId  = if (Get-IddDev 'root\iddsampledriver') { 'root\iddsampledriver' } else { 'root\qubesidd' }
+    Log "IDD hardware id for this guest: $iddHwId"
     $devcon  = Join-Path $iddDir 'devcon.exe'
     $inf = @(Get-ChildItem -LiteralPath $iddDir -Filter *.inf -ErrorAction SilentlyContinue)
     if ($inf.Count -ne 1) { throw "$iddDir holds $($inf.Count) .inf files (expected exactly 1)" }
@@ -191,7 +199,7 @@ public static class QiddProbe {
     $skipStage = $false
     $payloadDll = Join-Path $iddDir 'IddSampleDriver.dll'
     $umdfCopy = Join-Path $env:SystemRoot 'System32\drivers\UMDF\IddSampleDriver.dll'
-    $dev0 = Get-IddDev $iddHwId
+    $dev0 = Get-IddDev $iddHwIds
     if ($dev0 -and $dev0.ConfigManagerErrorCode -eq 0 -and (Test-Path $payloadDll) -and (Test-Path $umdfCopy)) {
         $newHash = (Get-FileHash -LiteralPath $payloadDll -Algorithm SHA256).Hash
         $runHash = (Get-FileHash -LiteralPath $umdfCopy -Algorithm SHA256).Hash
@@ -228,7 +236,7 @@ public static class QiddProbe {
     } # -not $skipStage
 
     $createdByThisRun = $false
-    $dev = Get-IddDev $iddHwId
+    $dev = Get-IddDev $iddHwIds
     if ($dev -and $dev.ConfigManagerErrorCode -eq 0) {
         Log "IDD device already present and healthy ($($dev.InstanceId)) - reusing"
     } else {
@@ -242,7 +250,7 @@ public static class QiddProbe {
 
     Log 'waiting up to 30s for the IDD devnode (ConfigManagerErrorCode 0)'
     $deadline = (Get-Date).AddSeconds(30)
-    do { $dev = Get-IddDev $iddHwId; if ($dev -and $dev.ConfigManagerErrorCode -eq 0) { break }; Start-Sleep 2 } while ((Get-Date) -lt $deadline)
+    do { $dev = Get-IddDev $iddHwIds; if ($dev -and $dev.ConfigManagerErrorCode -eq 0) { break }; Start-Sleep 2 } while ((Get-Date) -lt $deadline)
     $ctrl = $null
     if ($dev -and $dev.ConfigManagerErrorCode -eq 0) {
         $deadline = (Get-Date).AddSeconds(30)
@@ -272,7 +280,7 @@ public static class QiddProbe {
             Log "bound driver $boundVer != payload $infVer - forcing rebind (devcon update; ranking never rebinds downward)" 'WARN'
             try { & $devcon update $inf[0].FullName $iddHwId 2>&1 | ForEach-Object { Log "  devcon update: $_" } } catch { Log "  devcon update failed: $_" 'WARN' }
             $deadline = (Get-Date).AddSeconds(30)
-            do { $dev = Get-IddDev $iddHwId; if ($dev -and $dev.ConfigManagerErrorCode -eq 0) { break }; Start-Sleep 2 } while ((Get-Date) -lt $deadline)
+            do { $dev = Get-IddDev $iddHwIds; if ($dev -and $dev.ConfigManagerErrorCode -eq 0) { break }; Start-Sleep 2 } while ((Get-Date) -lt $deadline)
             if (-not ($dev -and $dev.ConfigManagerErrorCode -eq 0)) { throw "device did not come back healthy after the forced rebind to $infVer" }
             $boundVer = (Get-PnpDeviceProperty -InstanceId $dev.InstanceId -KeyName DEVPKEY_Device_DriverVersion -EA SilentlyContinue).Data
             if ($boundVer -ne $infVer) { throw "bound driver is $boundVer but the payload ships $infVer - agent/driver mismatch, refusing to continue" }

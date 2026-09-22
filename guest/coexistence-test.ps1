@@ -10,7 +10,7 @@
 #   tools/qtest ps "& '<incoming>\coexistence-test.ps1'"
 param(
     [string]$Dir = "$(Split-Path $MyInvocation.MyCommand.Path)",
-    [string]$HwId = 'Root\IddSampleDriver'
+    [string]$HwId = 'Root\QubesIdd'   # legacy guests: Root\IddSampleDriver (both are in the INF)
 )
 $ErrorActionPreference = 'Continue'
 $r = [ordered]@{}
