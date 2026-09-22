@@ -447,6 +447,27 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
          | grep -qa QREADY; then
         ready=1
         log "  t+${el}s QREXEC ANSWERS after $restarts restart(s) - the guest carries a working QWT"
+        # ARM THE MODULE-BASE RECORDER, HERE, WHILE THE GUEST STILL ANSWERS.
+        # Until 2026-09-23 this script's failure banner PROMISED the recorder was armed - "a RIP
+        # captured with dom0 debug-keys d/v will resolve to driver+offset" - and nothing in this
+        # script ever called arm-module-bases.sh. The promise cost a specimen the same day: a
+        # clean-install stall on win10-acc was captured live, with one vCPU spinning at guest RIP
+        # fffff8015d6bfa60, and that RIP could not be resolved to a driver because Windows KASLR
+        # re-randomises the bases every boot and no table had been taken from THIS boot. Jev
+        # ranked that table the single measurement that would most change the verdict (0.73).
+        # The arming needs qrexec, which is exactly what a wedge takes away, so it happens at the
+        # only moment it can: the first time the guest answers. It also takes the HOST-SIDE copy
+        # (the script does that itself), because a table readable only over qrexec is unreadable
+        # when it matters. Non-fatal: a run must not fail because its instrument did not arm - but
+        # it says so LOUDLY, and the failure banner below no longer claims what it cannot know.
+        MB_OUT="$OUT/modbases"
+        if VM="$CHURN" OUT="$MB_OUT" bash mgmt/harness/arm-module-bases.sh >>"$OUT/arm-module-bases.log" 2>&1; then
+            MB_ARMED=1
+            log "  module-base recorder ARMED and host copy taken ($MB_OUT/module-bases.txt) - a wedge RIP is resolvable"
+        else
+            MB_ARMED=0
+            log "  WARNING: module-base arming FAILED (see $OUT/arm-module-bases.log) - a wedge RIP on this boot will NOT resolve to a driver"
+        fi
         break
     fi
     # Every third poll (~60 s) READ THE SCREEN. A verdict here separates the three states the
@@ -593,8 +614,18 @@ if [ "$ready" != 1 ]; then
         log "  cpu_time UNREADABLE: executing-or-not is UNMEASURED. This is not a claim either way -"
         log "  do not record it as a busy guest or as a frozen one." ;;
     esac
-    log "  The module-base recorder is armed on this guest, so a RIP captured with dom0"
-    log "  debug-keys d/v will resolve to driver+offset (arm-module-bases.sh --dump)."
+    # SAY WHAT IS TRUE OF THIS RUN, not what the instrument is supposed to do. This banner used to
+    # assert the recorder was armed while nothing in this script armed it (fixed 2026-09-23, after
+    # a live specimen's RIP turned out to be unresolvable for exactly that reason).
+    if [ "${MB_ARMED:-0}" = 1 ]; then
+        log "  Module bases for THIS boot were recorded and copied host-side to $OUT/modbases/module-bases.txt,"
+        log "  so a captured RIP resolves: tools/resolve-guest-rip.py $OUT/modbases/module-bases.txt 0x<rip>"
+    else
+        log "  NO module-base table was taken on this boot (arming never ran or failed), so a captured"
+        log "  RIP will NOT resolve to a driver - Windows KASLR re-randomises the bases every boot."
+    fi
+    log "  Capture the rest NOW, while it is still running, from this qube:"
+    log "    qrexec-client-vm dom0 local.WinWedgeForensics+$CHURN </dev/null > forensics.tar"
     log "  Guest LEFT RUNNING and NOT removed - its state is the evidence (H3.5). Read $OUT."
     exit 2
 fi
