@@ -547,6 +547,43 @@ case "$phase" in
   DEADLINE) finish 2 "DEADLINE: ${DEADLINE}s with no install conclusion - guest LEFT RUNNING as evidence ($OUT)" ;;
 esac
 
+# Only when the install actually concluded with a RESULT is there a complete log to keep.
+if [ "$phase" = RESULT ]; then
+  # PRESERVE THE MSI VERBOSE LOG, WHOLE. The installer already runs msiexec with /l*v! to
+  # C:\qwt-install.log; this harness kept only a 40-line TAIL, so no run here contains a single
+  # DIFXAPP line - measured 2026-09-22 across 18 runs. That turned a comparison against matrix's
+  # upgrade cells (where the DIFx "uninstall phase required a reboot" warning appears in 2 of 2)
+  # into MISSING DATA rather than a difference. Same fetch matrix.sh uses: encoded (escaped quotes
+  # inside -Command fail silently) and boundary-marked, so a truncated transfer is detectable and
+  # "no log" is distinguishable from broken quoting.
+  _msips=$(printf '%s\n' \
+    "\$ErrorActionPreference='Stop'" \
+    "if (Test-Path 'C:/qwt-install.log') {" \
+    "  Write-Host 'MSIB64BEGIN'" \
+    "  Write-Host ([Convert]::ToBase64String([IO.File]::ReadAllBytes('C:/qwt-install.log')))" \
+    "  Write-Host 'MSIB64END'" \
+    "} else { Write-Host 'MSIB64ABSENT' }")
+  _b64=$(printf '%s' "$_msips" | python3 -c "import sys,base64;print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode())")
+  QTEST_VM=$SUBJECT timeout -k 5 300 ./tools/qtest run \
+      "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $_b64" \
+      2>/dev/null | tr -d '\r\0' > "$OUT/msi-b64.tmp"
+  if grep -qa MSIB64END "$OUT/msi-b64.tmp" 2>/dev/null \
+     && sed -n '/MSIB64BEGIN/,/MSIB64END/p' "$OUT/msi-b64.tmp" | grep -av 'MSIB64' | tr -d '\n' \
+        | base64 -d > "$OUT/msi-verbose.log" 2>/dev/null \
+     && [ -s "$OUT/msi-verbose.log" ]; then
+    rm -f "$OUT/msi-b64.tmp"
+    log "MSI verbose log preserved ($(wc -c <"$OUT/msi-verbose.log") bytes, $(grep -ac DIFXAPP "$OUT/msi-verbose.log") DIFXAPP lines)"
+    if grep -qa "uninstall phase of this upgrade required a reboot" "$OUT/msi-verbose.log"; then
+      log "  DIFx: the uninstall phase REQUIRED A REBOOT and the install phase continued anyway"
+    fi
+  elif grep -qa MSIB64ABSENT "$OUT/msi-b64.tmp" 2>/dev/null; then
+    rm -f "$OUT/msi-b64.tmp"
+    log "no MSI verbose log on the guest (C:\\qwt-install.log absent) - the guest ANSWERED, so this is not a transport failure"
+  else
+    log "WARNING: could not fetch the MSI verbose log - kept $OUT/msi-b64.tmp for inspection"
+  fi
+fi
+
 # =============================================================================================
 # 5. TWO REAL COLD BOOTS - boot #1 runs on the emulated disk, boot #2 re-binds xenvbd
 #    (findings/install.md); a pending file swap also lands on #1. Never a live restart.

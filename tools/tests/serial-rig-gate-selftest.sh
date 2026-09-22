@@ -46,6 +46,8 @@ check "C5 qtest state/shot (read) while a LIVE lock is held -> allowed" 0 "$(jb 
 check "C5b cd into a path whose NAME contains a harness, then ls -> allowed" 0 "$(jb 'cd /home/user/qwt-quick-upgrade/win11-nfy-1 && ls')"
 check "C5c find over a run tree while a lock is held -> allowed"          0 "$(jb 'find /home/user/qwt-quick-upgrade -name \"*msi*\"')"
 check "C5d find WITH -exec is still a launch -> BLOCKED"                  2 "$(jb 'find /home/user/qwt-quick-upgrade -name x -exec prime-run.sh win10-base {} ;')"
+check "C5e cp/diff of a harness FILE while a lock is held -> allowed"     0 "$(jb 'cp mgmt/harness/quick-upgrade.sh /tmp/x.sh && diff /tmp/x.sh mgmt/harness/quick-upgrade.sh')"
+check "C5f bash mgmt/harness/quick-upgrade.sh IS a launch -> BLOCKED"     2 "$(jb 'bash mgmt/harness/quick-upgrade.sh pkg win11-nfy win11')"
 check "C6 this launch already holds the lock -> allowed"                0 "$(jb 'prime-run.sh win11-acc')" QWT_VMLOCK_HELD=win11-acc
 # C6b-C6d: GUARD:lockscope. A lock is per GUEST. It must refuse a launch that touches THAT guest,
 # and must NOT refuse one that touches only others - measured 2026-09-21, six halted leftovers could

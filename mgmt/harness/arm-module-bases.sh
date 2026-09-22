@@ -143,8 +143,13 @@ say "schtasks: ${armed:-<no output>}"
 # RUN IT NOW TOO, so this boot is recorded rather than only future ones - and so the arming is
 # PROVEN to work rather than assumed. A task that was created but silently cannot run is exactly the
 # kind of "armed" that turns out to be absent when it is finally needed.
-QTEST_VM=$VM timeout -k 5 300 ./tools/qtest run \
-  "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Qubes Tools\\diag\\record-module-bases.ps1\"" >/dev/null 2>&1
+# KEEP THE ERROR. This ran with >/dev/null 2>&1, so when the recorder wrote nothing the harness
+# could only say "wrote NOTHING (found=none)" with no reason - measured 2026-09-22 in WIN11-reinstall,
+# where arming SUCCEEDED before the install and FAILED on the post-install re-arm. A discarded error
+# is how a fixable instrument failure becomes a mystery.
+runout=$(QTEST_VM=$VM timeout -k 5 300 ./tools/qtest run \
+  "powershell -NoProfile -ExecutionPolicy Bypass -File \"C:\\Qubes Tools\\diag\\record-module-bases.ps1\"" 2>&1 | tr -d '\r')
+printf '%s\n' "$runout" > "$OUT/recorder-run.out"
 
 check=$(QTEST_VM=$VM timeout -k 5 240 ./tools/qtest run \
   'cmd /c find /c "MODBASE" "Q:\Qubes Logs\module-bases.txt" 2>nul || find /c "MODBASE" "C:\module-bases.txt" 2>nul' 2>/dev/null | tr -d '\r' | grep -aoE '[0-9]+$' | tail -1)
@@ -168,6 +173,9 @@ if [ -n "${check:-}" ] && [ "$check" -gt 0 ] 2>/dev/null; then
   say "  Resolve a captured RIP with: tools/resolve-guest-rip.py $OUT/module-bases.txt 0x<rip>"
 else
   say "FAIL: the recorder wrote NOTHING on this boot (found=${check:-none})."
+  say "  what the recorder itself said (kept now, instead of discarded):"
+  printf '%s\n' "$runout" | grep -viE '^(Microsoft Windows|\(c\) Microsoft|$)' | head -12 | sed 's/^/    /' | tee -a "$OUT/summary.log"
+  say "  full output: $OUT/recorder-run.out"
   say "  Do not treat this guest as armed. An 'armed' guest whose recorder does not run is the exact"
   say "  failure that left specimen 2 unresolvable - the whole point is that the data must exist"
   say "  BEFORE the wedge, and it does not."

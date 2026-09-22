@@ -45,6 +45,11 @@ PASSIVE = re.compile(r'^(ps|grep|egrep|fgrep|pgrep|tail|head|cat|less|awk|sed|ec
                      # NAME contains a harness name (/home/user/qwt-quick-upgrade/...), which is
                      # exactly the evidence you need while a job runs. Measured 2026-09-22.
                      r'|cd|pwd'
+                     # These take FILENAMES and execute nothing. Copying a harness to inspect or
+                     # patch it, or diffing two versions of it, was refused because the FILE was
+                     # named mgmt/harness/quick-upgrade.sh - the same shape as the git exemption
+                     # below, measured again 2026-09-22 while patching a harness during a run.
+                     r'|cp|mv|diff|cmp|patch|chmod|touch|mkdir|ln'
                      r'|date|ls|wc|sort|uniq|cut|tr|jq|stat|df|du|basename|dirname|realpath'
                      r'|which|type|hash|whereis|file)$')
 HELPFLAG = ('--help', '-h', '--version')
