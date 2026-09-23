@@ -93,3 +93,58 @@ Owner, watching live: "i see major difference visually!"
   0.47 round-robin / 0.46 "the app genuinely paints over seconds" - i.e. it is **not established**
   that changing the sweep would help. Needs its own measurement before any change.
 - `PWDECIDE` showed the DDA producer is alive and prolific: 554 consecutive frames judged changed.
+
+## 2026-09-24 - the empty-window flash, and where a context menu's time actually goes
+
+**Black flash (owner, same day): REAL MECHANISM, FIXED.** Yesterday's prefill change announced a
+new window immediately, but `PwSlabAcquire` zeroes every slab - so dom0 was told to show a window
+holding nothing until the engine's capture landed, i.e. for exactly the 32-438 ms the synchronous
+prefill used to occupy. The existing `DirectWouldShowBlack` guard did NOT cover it: it requires
+`PwSliceFed`, and these are the non-slice-fed windows. Fixed by routing such a window through the
+SAME map-defer machinery everything else uses (`PwAwaitFirstCap` + new `WcHasCaptured`), bounded by
+`CROP_BEFORE_SHOW_TIMEOUT_MS`. Jev: mechanism 0.90, revert 0.27 (no), this fix 1.00.
+A/B after the fix, interleaved, hash-verified: CREATE->MAP **49.0 ms** (51/45/51) vs control
+**130.7 ms** (66/256/70) - the win survives AND the spread collapses, because the announce no
+longer blocks on the application's UI thread.
+
+**"Every second window comes slower" (owner): that was my A/B.** An interleaved experiment was
+swapping the agent binary every ~40 s on the guest the owner was watching, and six cells ran with
+the agent deliberately STOPPED. Jev had already attributed the flash sighting to the procedure at
+0.81. **Tell the owner before running an A/B on a guest they are using.**
+
+**Context menu - the budget, measured.** Click -> menu visible in dom0 is ~1.1 s, split:
+| stage | cost | whose |
+|---|---|---|
+| Windows produces the XAML menu | ~560-580 ms | the GUEST |
+| agent notices the window | ~135 ms (n=1) | ours, unexplained |
+| agent holds the map | 375-640 ms | ours, by design |
+
+The guest share is proven by an **agent-off control**: agent stopped, mean 560 ms (646/486/547) vs
+agent running 582 ms (574/577/594). Jev: "the agent inflates it" **0.17**. The guest is a 4-vCPU
+HVM with no GPU, so the XAML menu is software-composited. (Jev also rated more runs worthwhile at
+0.72 - the off-arm spread, 160 ms, exceeds the 22 ms between arms.)
+
+**The hold has no slack (Jev 0.85).** New `HOLDTERMS` probe reports when each term of
+`(BrokerOpaqueInsets || !CropPending) && SliceChromeContentReady` first becomes true:
+```
+menu1: held=640  insets=593  nopend=422  chrome=640  checks=13
+menu2: held=375  insets=375  nopend=16   chrome=375  checks=9
+menu3: held=500  insets=297  nopend=0    chrome=500  checks=5
+```
+`chrome_ms == held_ms` in all three - the crop terms resolve early and the wait is entirely on the
+menu's own first PAINTED frame. That is the render-before-show guarantee the owner asked for on
+2026-09-11, when menus mapped in 15-47 ms with `painted=0` on 8 of 8 - empty. So the menu can be
+sped up **only by making its first frame arrive sooner** (Jev 0.96); changing the hold just buys
+latency with a black frame again.
+
+**Two constraints I checked instead of asserting:**
+- the broker's 250 ms `Reconcile` loop is NOT a floor on first capture - `BrokerRegister` does
+  `SetEvent(g_WgcCtl)` and the broker waits on it, so it wakes immediately;
+- the resize churn does NOT reset `PwSliceContentTick`, so it does not extend the hold - which
+  weakens my own churn hypothesis. It is still worth removing on its own merits (Jev 0.81): the
+  menu oscillates between two sizes up to 8 times and each one does a full detach + re-attach +
+  fresh MSG_WINDOW_DUMP + full-window damage + BrokerRegister, while every size fits the SAME
+  already-granted 256-page slab (145/96/99).
+
+**Next (Jev 0.98):** instrument the chain BrokerRegister -> CreateForWindow -> first FrameArrived ->
+PublishFrame -> `PwSliceContentTick` to find where the 375-640 ms goes. Not yet done.
