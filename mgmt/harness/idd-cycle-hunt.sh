@@ -90,13 +90,32 @@ timeout -k 8 60 ./tools/qtest run "cmd /c mkdir $I\\idd-driver 2>nul & move /y $
 # push output and never checked: the push did not land, `powershell -File` then ran against a
 # missing file, printed its banner, and the harness logged "cycle complete, guest healthy" for a
 # cycle in which NOTHING HAPPENED. A cycle that cannot fail is not a cycle.
-miss=$(timeout -k 8 90 ./tools/qtest run \
-  "cmd /c for %F in ($I\\activate-idd.ps1 $I\\deactivate-idd.ps1 $I\\idd-driver\\IddSampleDriver.inf $I\\idd-driver\\devcon.exe) do @if not exist %F echo MISSING %F" 2>/dev/null | grep -ac MISSING)
-if [ "${miss:-1}" != 0 ]; then
-  say "TERMINAL: the payload did not land on the guest ($miss file(s) missing) - see $OUT/push.log"
+# VIA -EncodedCommand, because `qtest run` ECHOES THE COMMAND BACK: a probe that greps for a
+# marker present in its own command line counts its own echo. The first version of this assertion
+# did exactly that and reported "1 file(s) missing" against a guest that had all four
+# (findings/rig.md already records the class: a probe must exclude the command qtest echoes back).
+assert_ps=$(cat <<'PSX'
+# LITERAL paths, never $env:USERPROFILE: qtest runs as SYSTEM, where that expands to
+# config\systemprofile and every file reads as absent (measured: absent=4 on a guest holding all
+# four of them).
+$miss = @()
+foreach ($f in @("C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\activate-idd.ps1",
+                 "C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\deactivate-idd.ps1",
+                 "C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\idd-driver\IddSampleDriver.inf",
+                 "C:\Users\user\Documents\QubesIncoming\win-idd-mgmt\idd-driver\devcon.exe")) {
+  if (-not (Test-Path -LiteralPath $f)) { $miss += $f }
+}
+Write-Output ("PAYLOAD" + "CHECK absent=" + $miss.Count)
+foreach ($m in $miss) { Write-Output ("  absent: " + $m) }
+PSX
+)
+b64=$(printf '%s' "$assert_ps" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+chk=$(timeout -k 8 120 ./tools/qtest run "powershell -NoProfile -EncodedCommand $b64" 2>/dev/null | tr -d '\r' | grep -aoE 'absent=[0-9]+' | tail -1)
+if [ "$chk" != "absent=0" ]; then
+  say "TERMINAL: the payload did not land on the guest ($chk) - see $OUT/push.log"
   exit 2
 fi
-say "payload asserted present on the guest"
+say "payload asserted present on the guest (absent=0)"
 
 wedged=0
 for c in $(seq 1 "$N"); do
