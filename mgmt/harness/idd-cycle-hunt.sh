@@ -81,10 +81,22 @@ else
   cp guest/activate-idd.ps1 "$OUT/payload/activate-idd.ps1"
 fi
 say "arm=$ARM payload from $TREE"
-timeout -k 8 180 ./tools/qtest push "$OUT/payload/activate-idd.ps1" "$OUT/payload/deactivate-idd.ps1" >/dev/null 2>&1
-timeout -k 8 300 ./tools/qtest push "$OUT/payload"/idd-driver/* >/dev/null 2>&1
+timeout -k 8 180 ./tools/qtest push "$OUT/payload/activate-idd.ps1" "$OUT/payload/deactivate-idd.ps1" >>"$OUT/push.log" 2>&1
+timeout -k 8 300 ./tools/qtest push "$OUT/payload"/idd-driver/* >>"$OUT/push.log" 2>&1
 # activate-idd expects -Root <dir> holding idd-driver\ ; QubesIncoming is flat, so rebuild it there
-timeout -k 8 60 ./tools/qtest run "cmd /c mkdir $I\\idd-driver 2>nul & move /y $I\\IddSampleDriver.* $I\\idd-driver\\ & move /y $I\\devcon.exe $I\\idd-driver\\ & move /y $I\\iddsampledriver.cat $I\\idd-driver\\" >/dev/null 2>&1
+timeout -k 8 60 ./tools/qtest run "cmd /c mkdir $I\\idd-driver 2>nul & move /y $I\\IddSampleDriver.* $I\\idd-driver\\ & move /y $I\\devcon.exe $I\\idd-driver\\ & move /y $I\\iddsampledriver.cat $I\\idd-driver\\" >>"$OUT/push.log" 2>&1
+
+# ASSERT THE PAYLOAD LANDED. The first run of this harness pushed the two scripts, discarded the
+# push output and never checked: the push did not land, `powershell -File` then ran against a
+# missing file, printed its banner, and the harness logged "cycle complete, guest healthy" for a
+# cycle in which NOTHING HAPPENED. A cycle that cannot fail is not a cycle.
+miss=$(timeout -k 8 90 ./tools/qtest run \
+  "cmd /c for %F in ($I\\activate-idd.ps1 $I\\deactivate-idd.ps1 $I\\idd-driver\\IddSampleDriver.inf $I\\idd-driver\\devcon.exe) do @if not exist %F echo MISSING %F" 2>/dev/null | grep -ac MISSING)
+if [ "${miss:-1}" != 0 ]; then
+  say "TERMINAL: the payload did not land on the guest ($miss file(s) missing) - see $OUT/push.log"
+  exit 2
+fi
+say "payload asserted present on the guest"
 
 wedged=0
 for c in $(seq 1 "$N"); do
