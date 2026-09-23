@@ -2884,6 +2884,10 @@ function Invoke-Stage2 {
         if ($LASTEXITCODE -notin 0, 3010, 259) { throw "pnputil /add-driver failed ($LASTEXITCODE)" }
         $script:Result.detail.idd_driver = 'driver staged'
 
+        # Let the install events pnputil just raised drain before creating a devnode on top of
+        # them - same reasoning as the wait before the VGA disable below.
+        Wait-PnpSettled -TimeoutSec 120 | Out-Null
+
         # Create the root-enumerated software device - the same pnputil+devcon two-step
         # guest/deploy-and-test.ps1 uses. devcon install creates a NEW device every time
         # it runs, so a healthy existing device is reused; a BROKEN existing device is
@@ -3096,6 +3100,19 @@ function Invoke-Stage2 {
             # Re-verified HERE, not only before devcon: two 30 s bind waits sit between the two, and
             # the adapter the desktop runs on is the one thing below that cannot be undone in-session.
             & $assertQuiesced 'right before disabling the VGA adapter'
+            # SERIALISE THE DEVICE WORK (2026-09-23). Everything above this line is PnP activity we
+            # just caused - pnputil /add-driver /install, devcon install, a driver binding - and
+            # this call DISABLES a device while those installs may still be in flight. The wedge
+            # specimen of 2026-09-23 was a processor waiting forever at a cross-processor-call
+            # barrier (ntoskrnl polling KPRCB+0x2d80, the field KeIpiGenericCall touches) with
+            # other processors inside usbehci.sys and xen.sys, on the boot right after this
+            # sequence ran; a deliberate TLB-shootdown storm of ~10^9 page events did NOT
+            # reproduce it, while Jev ranks device load/unload as the trigger class at 1.00 and
+            # "serialise our device work" as the leading fix at 0.66.
+            # CMP_WaitNoPendingInstallEvents is already used at stage-2 entry and before msiexec;
+            # it was simply never used around the device surgery, which is the one place this
+            # installer causes concurrent PnP work. It only waits, and it is bounded.
+            Wait-PnpSettled -TimeoutSec 120 | Out-Null
             Write-Log "disabling emulated VGA adapter: $($vgaDev.InstanceId) ($($vgaDev.FriendlyName)) - the display may switch or blank until the reboot"
             Disable-PnpDevice -InstanceId $vgaDev.InstanceId -Confirm:$false -ErrorAction Stop | Out-Null
         }

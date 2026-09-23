@@ -67,6 +67,33 @@ function Emit($code){
 # $hwid is a LIST since 4.3.31 (root\qubesidd, plus the legacy root\iddsampledriver that
 # every guest installed before 4.3.31 carries): one INF declares both, so "the IDD node"
 # is a family, and asking by a single id would miss an upgraded guest entirely.
+# Wait for PnP to have no device installs in flight. The installer has used this at stage-2 entry
+# and before msiexec for a while; it was never used around the DEVICE SURGERY below, which is the
+# one place this script causes concurrent PnP work (pnputil install, devcon create, then disabling
+# a live adapter). The 2026-09-23 wedge specimen was a processor stuck forever at a
+# cross-processor-call barrier on the boot right after that sequence, with other processors inside
+# usbehci.sys and xen.sys. It only waits, and it is bounded.
+function Wait-PnpSettled {
+    param([int]$TimeoutSec = 120)
+    try {
+        if (-not ('QwtCfgMgr2' -as [type])) {
+            Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class QwtCfgMgr2 {
+    [DllImport("cfgmgr32.dll")] public static extern uint CMP_WaitNoPendingInstallEvents(uint dwTimeout);
+}
+'@
+        }
+        $rc = [QwtCfgMgr2]::CMP_WaitNoPendingInstallEvents([uint32]($TimeoutSec * 1000))
+        if ($rc -eq 0) { Log 'PnP: no pending device installs'; return $true }
+        Log "PnP still has pending device installs after $TimeoutSec s (rc $rc) - continuing anyway" 'WARN'
+        return $false
+    } catch {
+        Log "could not wait for PnP to settle: $($_.Exception.Message) - continuing without that check" 'WARN'
+        return $false
+    }
+}
+
 function Get-IddDev([string[]]$hwid){ Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $d = $_; (@($d.HardwareID) | Where-Object { $hwid -contains $_ }) -or ($hwid | Where-Object { $d.InstanceId -like "*$_*" }) } | Select-Object -First 1 }
 
 try {
@@ -232,6 +259,8 @@ public static class QiddProbe {
     # 259 = ERROR_NO_MORE_ITEMS: package already in the store and up-to-date ("Added driver
     # packages: 0"). That is the NORMAL /iddonly re-activation case - success, not failure.
     if ($LASTEXITCODE -notin 0,3010,259) { throw "pnputil /add-driver failed ($LASTEXITCODE)" }
+    # let pnputil's install events drain before creating a devnode on top of them
+    Wait-PnpSettled -TimeoutSec 120 | Out-Null
     if ($LASTEXITCODE -eq 3010) { $result.reboot_needed = $true }
     } # -not $skipStage
 
@@ -300,6 +329,7 @@ public static class QiddProbe {
     } else {
         # re-verified HERE: the adapter the desktop runs on is the one thing below that cannot be undone in-session
         Assert-GuiQuiesced 'right before disabling the VGA adapter'
+        Wait-PnpSettled -TimeoutSec 120 | Out-Null
         Log "disabling emulated VGA: $($vgaDev.InstanceId) - display may blank until reboot"
         Disable-PnpDevice -InstanceId $vgaDev.InstanceId -Confirm:$false -ErrorAction Stop | Out-Null
     }
