@@ -154,14 +154,98 @@ if ($Scheduled -and $Action -eq 'scan') {
 }
 # ---- WU-SCAN-DEBOUNCE-END
 
-$script:Mutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
-$waitMs = if ($Action -eq 'scan') { 0 } else { 900000 }   # a scan yields; real work waits 15 min
-$script:HaveMutex = $false
-try { $script:HaveMutex = $script:Mutex.WaitOne($waitMs) } catch [System.Threading.AbandonedMutexException] { $script:HaveMutex = $true }
-if (-not $script:HaveMutex) {
-    Write-Host "another Qubes update operation is in progress - skipping this $Action"
-    exit 0
+# ---- WU-MUTEX-DEFINED-BEGIN
+# NO UNDEFINED PATH AROUND THIS MUTEX. Three things were undefined before, and all three are here:
+#
+# 1. THE WAIT. This blocked up to 15 minutes for anything but a scan, writing nothing while it
+#    waited, so a guest doing exactly what it should looked wedged to every watcher (measured
+#    2026-09-23: an upgrade went silent and was graded STALLED at 300 s). A timed wait is a guess
+#    about someone else's progress; taking the lock or refusing is a fact. WaitOne(0) only.
+# 2. THE ABANDONED BRANCH. It said "it is ours now" and ran the pass on top of whatever the dead
+#    holder had been doing. Worse, it is not even the mechanism it looks like: MEASURED 3/3 on
+#    win10-acc (Windows 10 19045), killing a process that owns a named mutex does NOT raise
+#    AbandonedMutexException in the next waiter - WaitOne(0) simply returns $true. So this branch
+#    is not the detector for a killed pass; it is only a safety net, and it refuses.
+# 3. THE KILLED PASS, which is what actually happens (Task Scheduler stops a task at its
+#    ExecutionTimeLimit; a guest is shut down mid-pass). The mutex keeps no trace of it, so the
+#    detection is the status file this pass already writes: a NON-TERMINAL phase whose owner
+#    process is gone means the last pass stopped at an unknown point. Checked BEFORE the mutex is
+#    touched, refused loudly, nothing changed.
+#
+# Why the status file and not a new lease file: it already exists, dom0 already reads it, and it
+# already distinguishes the case that would otherwise need extra machinery - a pass that ends
+# intending a reboot sets phase='done' BEFORE the handler reboots, so a planned servicing reboot
+# is already a terminal phase and needs no reboot flag, no boot identity, nothing.
+# RESIDUAL, stated rather than hidden: a kill between WaitOne(0) returning and the save below
+# leaves no record - but no work has been done in that window, so there is nothing unknown to
+# inherit. A killed DEPLOY is likewise not recorded here; its work (compile-and-swap, schtasks /f)
+# is redone wholesale by the next deploy.
+$WU_TERMINAL_PHASES = @('done','error','skipped-unknown','skipped-standalone','skipped-appvm')
+
+function Test-WuOwnerAlive([int]$ownerPid, [string]$ownerStart) {
+    if ($ownerPid -le 0) { return $false }
+    $p = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+    if (-not $p) { return $false }
+    # A pid is reused; the start time is what makes it the SAME process.
+    if ($ownerStart) { try { if ($p.StartTime.ToString('s') -ne $ownerStart) { return $false } } catch { return $false } }
+    return $true
 }
+
+# THE GATE: an interrupted previous pass, refused before the mutex is touched.
+$wuPrev = $null
+try { if (Test-Path -LiteralPath $StatusFile) { $wuPrev = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json } } catch { $wuPrev = $null }
+if ($wuPrev -and $wuPrev.phase -and ($WU_TERMINAL_PHASES -notcontains $wuPrev.phase)) {
+    $prevPid   = 0; $prevStart = ''
+    if ($wuPrev.PSObject.Properties.Name -contains 'owner_pid')       { $prevPid   = [int]$wuPrev.owner_pid }
+    if ($wuPrev.PSObject.Properties.Name -contains 'owner_pid_start') { $prevStart = "$($wuPrev.owner_pid_start)" }
+    if (-not (Test-WuOwnerAlive $prevPid $prevStart)) {
+        $m = ("QWTUPDSTATEUNKNOWN: the last update pass ('$($wuPrev.action)') stopped at phase " +
+              "'$($wuPrev.phase)' and its process ($prevPid) is gone - it was terminated partway, so what it " +
+              "was doing is unknown; refusing to start a $Action on top of it, nothing was changed. " +
+              "Read $StatusFile and the agent log, then let a full pass run to completion (it rewrites " +
+              "this state) or re-run once you know the guest is consistent.")
+        Write-Host $m
+        exit 1
+    }
+    # owner alive = a pass really is running; that is ordinary contention and the mutex below says so.
+}
+
+$script:Mutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
+$script:HaveMutex = $false
+try {
+    $script:HaveMutex = $script:Mutex.WaitOne(0)   # NEVER a timed wait: take it or refuse
+} catch [System.Threading.AbandonedMutexException] {
+    # .NET hands us the mutex with this exception; give it back before refusing, or this process
+    # exits owning it and every later run inherits the same abandonment.
+    try { $script:Mutex.ReleaseMutex() } catch { }
+    Write-Host ("QWTUPDMUTEXABANDONED: a previous update operation was terminated without releasing " +
+                "Global\QubesWindowsUpdate, so what it was doing is unknown; refusing to start a $Action " +
+                "on top of it, nothing was changed.")
+    exit 1
+}
+if (-not $script:HaveMutex) {
+    if ($Scheduled -and $Action -eq 'scan') {
+        # A scheduled scan yields to a running pass - it changes nothing - but the contention is on
+        # the record rather than looking like an ordinary skip.
+        Write-Host "QWTUPDMUTEXHELD: another Qubes update operation is in progress - skipping this scheduled scan"
+        exit 0
+    }
+    Write-Host ("QWTUPDMUTEXHELD: another Qubes update operation is in progress - refusing to run this " +
+                "$Action under it; nothing was changed. Let it finish (schtasks /query /tn QubesWindowsUpdateRun /v) " +
+                "or end it (schtasks /end /tn <task>) and retry.")
+    exit 1
+}
+# OWNERSHIP ON THE RECORD, IMMEDIATELY - before any work, so a kill from here on is detectable by
+# the gate above on the next start.
+$script:St.owner_pid = $PID
+$script:St.owner_pid_start = ''
+# Guarded, not chained: Get-Process returns $null rather than throwing under
+# -ErrorAction SilentlyContinue, and a chain on $null is exactly the class the linter refuses.
+$meProc = Get-Process -Id $PID -ErrorAction SilentlyContinue
+if ($meProc) { try { $script:St.owner_pid_start = $meProc.StartTime.ToString('s') } catch { } }
+$script:St.phase = 'init'
+Save
+# ---- WU-MUTEX-DEFINED-END
 New-Item -ItemType Directory -Force $WorkDir | Out-Null
 # Legacy flat layout: .msu directly in the work dir. They are what DISM dragged into an unrelated
 # servicing session, and they belong to no known KB now, so drop them once.
@@ -182,7 +266,7 @@ $POL='HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings
 # not_actionable is declared here so it always exists and always serialises: it is the DURABLE
 # record of what a previous pass proved the guest cannot action, and it has to survive a scan,
 # which writes an empty result. (GUARD:scanactioned / GUARD:prevstatus.)
-$script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; count=0; available=@();
+$script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; owner_pid_start=''; count=0; available=@();
                          downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null;
                          not_actionable=@(); satisfied=@() }
 # ---- WU-SAVE-ATOMIC-BEGIN
