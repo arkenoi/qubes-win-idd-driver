@@ -23,6 +23,11 @@ cat > "$POLICY" <<EOF
 qubes.VMShell         *  $DEV  @tag:win-idd-testbed  allow
 qubes.VMExec          *  $DEV  @tag:win-idd-testbed  allow
 qubes.Filecopy        *  $DEV  @tag:win-idd-testbed  allow
+# The GUI-mode knob dom0 itself uses: Qube Manager's seamless-mode button calls
+# run_service_for_stdio("qubes.SetGuiMode", input=b"FULLSCREEN"/b"SEAMLESS"). Without this rule the
+# dev qube gets "Request refused" and the knob can only be exercised by hand from inside the guest,
+# which tests the agent but NOT the path a user actually takes. Same tag scope as everything else.
+qubes.SetGuiMode      *  $DEV  @tag:win-idd-testbed  allow
 admin.vm.Start        *  $DEV  @tag:win-idd-testbed  allow target=dom0
 admin.vm.Shutdown     *  $DEV  @tag:win-idd-testbed  allow target=dom0
 admin.vm.Kill         *  $DEV  @tag:win-idd-testbed  allow target=dom0
