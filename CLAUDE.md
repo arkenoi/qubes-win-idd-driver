@@ -436,6 +436,20 @@ newest commits FIRST.** A line the owner has retired is closed until the owner r
   ENTIRELY f7c16ce (2026-09-14). Owner, verbatim: "we do not touch xenbus anymore, this change was
   reverted." Stock xenbus 9.1.0.0 in a guest is the INTENDED state, not a packaging gap. Re-derived
   by me on 2026-09-17 anyway, hours lost, owner: "xenbus my ass". Do not name xenbus in a finding.
+- **set-gui-mode's "stale GetLastError", and "exit status 46".** BOTH CLOSED. `SetEvent(event);
+  return GetLastError();` looks like it returns a stale error on success; it does not in practice.
+  Claimed 2026-08-28, blamed on upstream, KILLED BY MEASUREMENT the same day (`43019f5`): stock
+  binary, harness validated with a known-46 control first, success path returned 0 three times,
+  FULLSCREEN 0, garbage 87. The retraction's own words: "I asserted a runtime defect from source
+  reading alone, on a binary I could have run in two minutes", and blaming upstream for it "is
+  worse than the original mistake because it invites everyone else to stop looking". **I asserted
+  the identical thing again on 2026-09-24, from code reading, and again proposed an upstream
+  report** - the second time, and the `git log -S` rule above exists to prevent exactly it.
+  "Exit status 46" is likewise EXPLAINED, not open (owner, 2026-09-24: "we chased status 46 months
+  ago, it is not 46 and not unexplained"): `qrexec-wrapper` sends a WIN32 ERROR CODE as the exit
+  code when child setup fails, proven by renaming a service file away and seeing rc=2, rc=0 when
+  restored - so the service never ran. Do not name set-gui-mode as a cause, and **there is no
+  "upstream agent" to report anything to** (owner, 2026-09-24).
 - **Win10 22H2 parked updates (record: `findings/updates.md` lines 23-25, verified 2026-08-20).**
   Win10 22H2 is end-of-life. Its "missing" updates are PARKED AS INFORMATIONAL BY DESIGN, not a
   bug: KB5071959 is a WU-only express phantom out-of-band update with no security content,
