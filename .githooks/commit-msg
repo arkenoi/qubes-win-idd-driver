@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Retired topics must not come back as open defects THROUGH THE COMMIT MESSAGE.
+#
+# The pre-commit hook lints files; a commit message is not a file it sees. But the message is
+# where a retired line gets re-opened in practice - "fix the xenbus wedge", "set-gui-mode returns
+# a stale error code" - and the findings head is then written to match. L14 in lint-harness.py
+# judges the message as one blob (wrapping otherwise splits the topic from the word that re-opens
+# it, which is how the real sentence slipped past the first two versions of the check).
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+[ -f tools/lint-harness.py ] || exit 0
+out=$(LINT_COMMIT_MSG_FILE="$1" python3 tools/lint-harness.py --quiet --baseline tools/lint-baseline.txt 2>&1 || true)
+if printf '%s' "$out" | grep -q 'L14-retired-topic-reopened'; then
+  printf '%s\n' "$out" | sed -n '/L14-retired-topic-reopened/,/^$/p'
+  echo
+  echo "commit-msg REFUSED: this message re-opens a RETIRED line."
+  echo "Read CLAUDE.md 'RETIRED AND PARKED LINES' and run: git log --oneline -S<name> -- ."
+  echo "If you are RETRACTING or CLOSING it, say so in the message (retract / CLOSED / RETIRED)."
+  exit 1
+fi
+exit 0

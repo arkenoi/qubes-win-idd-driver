@@ -440,6 +440,70 @@ def l12_provisioning_recipe() -> None:
                         "side of a host reboot); boot the disc instead - provision_boot_with_disc")
 
 
+# Topics the owner has RETIRED. Each was closed by measurement, written down, and then re-opened
+# anyway from code reading - twice for set-gui-mode, and the retired list in CLAUDE.md was added
+# after xenbus and the Win10 parked updates suffered the same. Prose did not stop it: the list is
+# already written as a binding instruction and was still walked past, which is why this is code.
+# Jev, asked what would prevent a THIRD recurrence, put an automated check at 0.55 and the binding
+# list alone at 0.14.
+#
+# A mention is fine. RE-ASSERTING one as open/unexplained/a defect is not. A line that is doing
+# the retiring (or the retracting) says so, and is allowed.
+# topic -> (what names it, what the RETIRED CLAIM about it looks like). Both must match, so the
+# topic can still be discussed: set-gui-mode being fire-and-forget with no back-channel is a live,
+# true fact about it; "it returns a stale error code" is the claim that was measured and closed.
+RETIRED_TOPICS = {
+    "set-gui-mode return code": (
+        r"set[- ]?gui[- ]?mode",
+        r"GetLastError|stale|garbage|exit\s+(code|status)|returns?\s+\S*\s*(error|nonzero|non-zero)",
+    ),
+    "exit status 46": (r"exit status 46|status\s+46\b", r".",),
+    "xenbus": (r"\bxenbus\b", r".",),
+    "win10 22h2 parked updates": (r"KB5071959|parked updates", r".",),
+}
+REOPEN_WORDS = r"\b(open|unexplained|unknown|defect|bug|broken|regression|root cause|needs? (a )?fix|report(ing)? upstream)\b"
+# Word boundaries matter: without them "explained" matched inside "UNexplained", which excused
+# the exact sentence this check exists to catch. Found by driving the check with that sentence.
+RETIRE_MARKERS = r"\bRETIRED\b|\bCLOSED\b|DO NOT RE-?OPEN|\bretract\w*\b|\bPARKED\b|do not chase|\bexplained\b"
+
+def l14_retired_topics_not_reopened() -> None:
+    """A retired line must not come back as an open defect.
+
+    Scope: findings/*.md CURRENT STATE bullets, plus the commit message when one is being made.
+    The check fires only when a retired topic and re-opening language share a line AND the line
+    carries no retirement/retraction marker.
+    """
+    targets: list[tuple[str, str]] = []
+    fdir = ROOT / "findings"
+    if fdir.is_dir():
+        for p in sorted(fdir.glob("*.md")):
+            for line in p.read_text(errors="replace").splitlines():
+                st = line.strip()
+                if st.startswith(("- ", "* ")):
+                    targets.append((p.name, st))
+    # A commit message is wrapped at arbitrary columns, so matching it LINE BY LINE splits the
+    # topic from the word that re-opens it - which is exactly how the sentence this check was
+    # built from slipped through on the first two attempts. Judge it as one blob.
+    msg = os.environ.get("LINT_COMMIT_MSG_FILE", "")
+    if msg and Path(msg).exists():
+        blob = " ".join(Path(msg).read_text(errors="replace").split())
+        if blob:
+            targets.append(("commit message", blob))
+
+    for where, line in targets:
+        if re.search(RETIRE_MARKERS, line, re.I):
+            continue
+        if not re.search(REOPEN_WORDS, line, re.I):
+            continue
+        for topic, (pat, claim) in RETIRED_TOPICS.items():
+            if re.search(pat, line, re.I) and re.search(claim, line, re.I):
+                finding("L14-retired-topic-reopened", f"{where}: {line[:70]}",
+                        f"names the RETIRED topic '{topic}' as open/defective. It was closed by "
+                        f"measurement - read CLAUDE.md RETIRED AND PARKED LINES and run "
+                        f"`git log --oneline -S<name> -- .` before asserting this again")
+                break
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
@@ -465,6 +529,7 @@ def main() -> int:
     l5_injector_string_collision()
     l6_probe_null_deref()
     l8_findings_current_state()
+    l14_retired_topics_not_reopened()
     l9_no_shutdown_wait()
     l10_no_default_target_guest()
     l11_absent_guest_command()
