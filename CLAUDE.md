@@ -361,7 +361,14 @@ The rule is now MODE-DEPENDENT, and the safety criterion is geometry, not deskto
   general rule: no fullscreen unless dom0-initiated, no override-redirects."* The guards that
   matter are unchanged and live in `SetSeamlessMode`: window 0 is shrunk on entry (1280x800) and
   refused at host size unless `g_ResolutionFromDom0`, so a guest can never promote itself to
-  fullscreen; entering the mode still needs `service.gui-fullscreen`.
+  fullscreen; entering the mode NO LONGER needs `service.gui-fullscreen` (owner, 2026-09-24: "we should honor
+  the switch" / "we just plug and unplug a new monitor if we grant the switch. at same moment we
+  map and unmap what we need"). dom0's `qubes.SetGuiMode` is honoured on any guest: the desktop
+  surface is PLUGGED like a monitor on the way in (grant made, window 0 mapped) and UNPLUGGED on
+  the way out, so a seamless guest still never holds a whole-desktop grant and P2 is kept. The
+  refusal it replaces was invisible — `set-gui-mode.exe` is fire-and-forget and never learns the
+  outcome — which is why it read as "the setting is ignored" in the field (forum 42717 post 160).
+  `service.gui-fullscreen` now governs ONLY Mode 2.
 - **WHY it changed**: hiding it unconditionally was believed to be lockout-safe because every
   testbed here has autologon. It is not. Measured 2026-08-28: with autologon off, a guest maps
   **0 windows** while qrexec still answers — running, reachable, and completely invisible, with
