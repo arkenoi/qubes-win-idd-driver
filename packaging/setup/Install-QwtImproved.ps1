@@ -210,6 +210,49 @@ function Write-Log {
     try { Add-Content -LiteralPath $script:LogFile -Value $line -Encoding UTF8 } catch { }
 }
 
+function Warn-DisplayBlackout {
+    # THE INSTALLER IS ABOUT TO DELETE ITS OWN WINDOW.
+    #
+    # Forum 42717 post 160 (Starbyte, 2026-09-16). Our documented interactive flow is TWO stages
+    # with a reboot between them ("install.cmd  two stages, you reboot between them"), so after
+    # stage 1 the guest comes back UP IN SEAMLESS MODE - the MSI registers and starts
+    # QubesGuiWatchdog. Stage 2 then stops that agent on purpose, because it has to install
+    # xenvif/xencons, create the IDD device and disable the adapter the desktop is running on.
+    # In seamless mode stopping the agent removes EVERY guest window from dom0 - including this
+    # console. So the user is told to run a step that blinds them the instant they run it.
+    #
+    # He waited "a few minutes", guessed, rebooted, ran it again, got the same blackout, and
+    # concluded he might be half-installed. He was not: he was watching the documented flow work.
+    # Jev rated warn-before-blackout the single highest-value fix here at 0.90 (against
+    # make-/auto-the-default 0.08 and docs-only 0.02).
+    #
+    # The warning is printed AND logged BEFORE the stop (the console dies with the agent, the log
+    # does not), then held on screen long enough to be read.
+    param([int]$HoldSeconds = 12)
+    $bar = '=' * 72
+    foreach ($l in @(
+        '',
+        $bar,
+        '  THE SCREEN IS ABOUT TO GO DARK. THIS IS EXPECTED - DO NOT INTERRUPT.',
+        $bar,
+        '  The Qubes GUI agent is being stopped so the installer can replace its files and',
+        '  finish the display/PV driver work. While it is stopped this qube shows NO windows',
+        '  in dom0 - including this installer window. Nothing has crashed.',
+        '',
+        '  DO NOT reboot the qube, and DO NOT run the installer again. It is still working.',
+        '  The windows come back by themselves when this stage finishes, or after the reboot',
+        '  the installer asks for.',
+        '',
+        "  Progress is written to: $($script:LogFile)",
+        '  Read it from dom0 at any time - it survives the blackout.',
+        $bar,
+        '')) { Write-Log $l }
+    if ($HoldSeconds -gt 0) {
+        Write-Log "  (continuing in $HoldSeconds seconds)"
+        Start-Sleep -Seconds $HoldSeconds
+    }
+}
+
 function Emit-Result {
     param([int]$ExitCode)
     $json = $script:Result | ConvertTo-Json -Depth 6 -Compress
@@ -1986,6 +2029,7 @@ function Invoke-Stage2 {
                     Write-Log ("installed QWT (" + (($existing | ForEach-Object { $_.Version }) -join ', ') +
                                ") is older than this package ($oursStr) - IN-PLACE MSI major upgrade, no uninstall, no intermediate reboot")
                 }
+                Warn-DisplayBlackout
                 Stop-QwtRuntime   # the agent holds files the MSI is about to replace
                 # Fall through to the install phase below - msiexec /i does the rest.
             } else {
@@ -2593,6 +2637,7 @@ function Invoke-Stage2 {
     try {
         $wd = Get-Service -Name 'QubesGuiWatchdog' -ErrorAction SilentlyContinue
         if ($wd -and $wd.Status -ne 'Stopped') {
+            Warn-DisplayBlackout
             Write-Log 'stopping QubesGuiWatchdog for the rest of stage 2 (restarted at the end of the stage, or by the reboot)'
             Stop-Service -Name 'QubesGuiWatchdog' -Force -ErrorAction Stop
             $script:GuiQuiesced = $true
