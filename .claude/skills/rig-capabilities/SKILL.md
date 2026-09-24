@@ -18,7 +18,7 @@ Everything below was executed and recorded on 2026-08-29 unless marked otherwise
 
 ## Policy model — TAG-based, not name-based
 
-`dom0/03-install-policy.sh` and `dom0/12-install-policy-tagged.sh` grant on **`@tag:win-idd-testbed`**:
+`dom0/12-install-policy-tagged.sh` grants on **`@tag:win-idd-testbed`**:
 
     qubes.VMShell          *  win-idd-mgmt  @tag:win-idd-testbed  allow
     qubes.VMExec           *  win-idd-mgmt  @tag:win-idd-testbed  allow
