@@ -301,6 +301,8 @@ static void OpenChannel(int i) {
     WGCBRK_SLOT* s = &g_slots[i];
     Channel& c = g_ch[i];
     // First-frame attribution (ABI 2). Cleared here so each open is measured on its own.
+    s->TickHwnd  = s->Hwnd;          // WHOSE open these ticks describe - slots are recycled
+    s->TickOpenOk = 0;               // not past CreateForWindow yet
     s->OpenTick = (LONGLONG)GetTickCount64();
     s->ItemTick = s->PoolTick = s->StartTick = 0;
     s->FirstArrivedTick = s->FirstPublishTick = 0;
@@ -324,6 +326,7 @@ static void OpenChannel(int i) {
             check_hresult(interop->CreateForWindow(hwnd, guid_of<GraphicsCaptureItem>(),
                           reinterpret_cast<void**>(put_abi(item))));
         s->ItemTick = (LONGLONG)GetTickCount64();
+        s->TickOpenOk = 1;               // this open reached a real capture item
         auto size = item.Size();
         auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             g_rtDev, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
