@@ -173,7 +173,7 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
         s->CaptureTick = (LONGLONG)GetTickCount64();
         MemoryBarrier();
         _InterlockedExchange(&s->Seq, (q | 1) + 1); // -> next EVEN: complete
-        if (!s->FirstPublishTick) s->FirstPublishTick = (LONGLONG)GetTickCount64();
+        if (!s->FirstPublishTick) s->FirstPublishTick = QpcNow();
         SignalFramePublished();                     // after the seq bump: a woken agent sees it whole
         s->AckState = WGCBRK_ACTIVE;
     } while (0);
@@ -235,11 +235,11 @@ static void PublishPrintWindow(int i) {
         // worth publishing - which is how "the app had not painted yet" shows up.
         const bool ticksMine = (s->TickPw && s->TickHwnd == (UINT64)(ULONG_PTR)hwnd);
         if (ticksMine) {
-            if (!s->StartTick) s->StartTick = (LONGLONG)GetTickCount64();
+            if (!s->StartTick) s->StartTick = QpcNow();
             if (s->PollCount < 0x7FFFFFFF) s->PollCount++;
         }
         if (!PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT)) break;
-        if (ticksMine && !s->FirstArrivedTick) s->FirstArrivedTick = (LONGLONG)GetTickCount64();
+        if (ticksMine && !s->FirstArrivedTick) s->FirstArrivedTick = QpcNow();
         const BYTE* rend = (const BYTE*)c.pwBits;
         const int fstride = fullW * 4;
         const BYTE* card = rend + (size_t)cropY * fstride + (size_t)cropX * 4; // card top-left (agent crop)
@@ -303,10 +303,18 @@ static void PublishPrintWindow(int i) {
         MemoryBarrier();
         _InterlockedExchange(&s->Seq, (q | 1) + 1);
         s->AckState = WGCBRK_ACTIVE;
-        if (ticksMine && !s->FirstPublishTick) s->FirstPublishTick = (LONGLONG)GetTickCount64();
+        if (ticksMine && !s->FirstPublishTick) s->FirstPublishTick = QpcNow();
         SignalFramePublished();                     // PrintWindow path: wake the agent too
     } while (0);
     LeaveCriticalSection(&g_pubCs[i]);
+}
+
+// First-frame stage ticks are QPC (ABI 5): the components they separate are 16-31 ms and
+// GetTickCount64's step is ~15.6 ms, so on that clock the split was quantisation noise. Only the
+// six stage ticks move; heartbeats and CaptureTick stay on GetTickCount64, which they are
+// compared against elsewhere.
+static inline LONGLONG QpcNow() {
+    LARGE_INTEGER q; QueryPerformanceCounter(&q); return q.QuadPart;
 }
 
 static void OpenChannel(int i) {
@@ -318,7 +326,7 @@ static void OpenChannel(int i) {
     // open that was still serving frames - it reported last-open-failed-early while a frame from
     // the earlier open was being consumed. So the block is claimed only once this open has a real
     // capture item, and a failed open now leaves the working one's record intact.
-    const LONGLONG openT = (LONGLONG)GetTickCount64();
+    const LONGLONG openT = QpcNow();
     bool monitor = (s->Hwnd == WGCBRK_MONITOR_HWND);
     HWND hwnd = monitor ? nullptr : (HWND)(ULONG_PTR)s->Hwnd;
     if (!monitor && (!hwnd || !IsWindow(hwnd))) { s->AckState = WGCBRK_FAILED; s->FailHr = E_HANDLE; return; }
@@ -346,14 +354,14 @@ static void OpenChannel(int i) {
         s->OpenTick  = openT;
         s->PoolTick = s->StartTick = 0;
         s->FirstArrivedTick = s->FirstPublishTick = 0;
-        s->ItemTick = (LONGLONG)GetTickCount64();
+        s->ItemTick = QpcNow();
         MemoryBarrier();
         s->TickOpenOk = 1;               // published last: a reader sees a complete record
         auto size = item.Size();
         auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             g_rtDev, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
         auto session = pool.CreateCaptureSession(item);
-        s->PoolTick = (LONGLONG)GetTickCount64();
+        s->PoolTick = QpcNow();
         try { session.IsCursorCaptureEnabled(false); } catch (...) {}
         try { session.IsBorderRequired(false); } catch (...) {}   // borderDisableOk proven on 26100
         c.hwnd = monitor ? (HWND)(ULONG_PTR)WGCBRK_MONITOR_HWND : hwnd;
@@ -362,7 +370,7 @@ static void OpenChannel(int i) {
         c.rev = pool.FrameArrived(auto_revoke,
             [i](Direct3D11CaptureFramePool const& sender, auto const&) {
                 if (!g_slots[i].FirstArrivedTick)
-                    g_slots[i].FirstArrivedTick = (LONGLONG)GetTickCount64();
+                    g_slots[i].FirstArrivedTick = QpcNow();
                 auto f = sender.TryGetNextFrame();
                 if (!f) return;
                 auto cs = f.ContentSize();
@@ -385,7 +393,7 @@ static void OpenChannel(int i) {
                 PublishFrame(i, f);
             });
         session.StartCapture();
-        s->StartTick = (LONGLONG)GetTickCount64();
+        s->StartTick = QpcNow();
         s->AckState = WGCBRK_ACTIVE; s->FailHr = 0;
         return;
     } catch (hresult_error const& e) {
@@ -412,7 +420,7 @@ static void OpenChannel(int i) {
         // succeed: WGC rejects override-redirect popups by rule, so this cost is spent on every
         // single menu to learn something already known. Measured as part of a 31-78 ms
         // "first poll" that the loop structure says contains no waiting at all.
-        s->ItemTick = (LONGLONG)GetTickCount64();
+        s->ItemTick = QpcNow();
         s->PoolTick = s->StartTick = 0;
         s->FirstArrivedTick = s->FirstPublishTick = 0;
         MemoryBarrier();
