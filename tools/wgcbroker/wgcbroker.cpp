@@ -173,6 +173,7 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
         s->CaptureTick = (LONGLONG)GetTickCount64();
         MemoryBarrier();
         _InterlockedExchange(&s->Seq, (q | 1) + 1); // -> next EVEN: complete
+        if (!s->FirstPublishTick) s->FirstPublishTick = (LONGLONG)GetTickCount64();
         SignalFramePublished();                     // after the seq bump: a woken agent sees it whole
         s->AckState = WGCBRK_ACTIVE;
     } while (0);
@@ -299,6 +300,10 @@ static void PublishPrintWindow(int i) {
 static void OpenChannel(int i) {
     WGCBRK_SLOT* s = &g_slots[i];
     Channel& c = g_ch[i];
+    // First-frame attribution (ABI 2). Cleared here so each open is measured on its own.
+    s->OpenTick = (LONGLONG)GetTickCount64();
+    s->ItemTick = s->PoolTick = s->StartTick = 0;
+    s->FirstArrivedTick = s->FirstPublishTick = 0;
     bool monitor = (s->Hwnd == WGCBRK_MONITOR_HWND);
     HWND hwnd = monitor ? nullptr : (HWND)(ULONG_PTR)s->Hwnd;
     if (!monitor && (!hwnd || !IsWindow(hwnd))) { s->AckState = WGCBRK_FAILED; s->FailHr = E_HANDLE; return; }
@@ -318,10 +323,12 @@ static void OpenChannel(int i) {
         else
             check_hresult(interop->CreateForWindow(hwnd, guid_of<GraphicsCaptureItem>(),
                           reinterpret_cast<void**>(put_abi(item))));
+        s->ItemTick = (LONGLONG)GetTickCount64();
         auto size = item.Size();
         auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             g_rtDev, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
         auto session = pool.CreateCaptureSession(item);
+        s->PoolTick = (LONGLONG)GetTickCount64();
         try { session.IsCursorCaptureEnabled(false); } catch (...) {}
         try { session.IsBorderRequired(false); } catch (...) {}   // borderDisableOk proven on 26100
         c.hwnd = monitor ? (HWND)(ULONG_PTR)WGCBRK_MONITOR_HWND : hwnd;
@@ -329,6 +336,8 @@ static void OpenChannel(int i) {
         c.poolW = size.Width; c.poolH = size.Height;   // FrameArrived tracks content-size changes
         c.rev = pool.FrameArrived(auto_revoke,
             [i](Direct3D11CaptureFramePool const& sender, auto const&) {
+                if (!g_slots[i].FirstArrivedTick)
+                    g_slots[i].FirstArrivedTick = (LONGLONG)GetTickCount64();
                 auto f = sender.TryGetNextFrame();
                 if (!f) return;
                 auto cs = f.ContentSize();
@@ -351,6 +360,7 @@ static void OpenChannel(int i) {
                 PublishFrame(i, f);
             });
         session.StartCapture();
+        s->StartTick = (LONGLONG)GetTickCount64();
         s->AckState = WGCBRK_ACTIVE; s->FailHr = 0;
         return;
     } catch (hresult_error const& e) {
