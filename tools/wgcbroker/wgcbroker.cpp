@@ -300,12 +300,13 @@ static void PublishPrintWindow(int i) {
 static void OpenChannel(int i) {
     WGCBRK_SLOT* s = &g_slots[i];
     Channel& c = g_ch[i];
-    // First-frame attribution (ABI 2). Cleared here so each open is measured on its own.
-    s->TickHwnd  = s->Hwnd;          // WHOSE open these ticks describe - slots are recycled
-    s->TickOpenOk = 0;               // not past CreateForWindow yet
-    s->OpenTick = (LONGLONG)GetTickCount64();
-    s->ItemTick = s->PoolTick = s->StartTick = 0;
-    s->FirstArrivedTick = s->FirstPublishTick = 0;
+    // First-frame attribution. The tick block is NOT touched yet: a slot is recycled, and this
+    // open may fail below on a window that has already been destroyed (menus are short-lived).
+    // Overwriting the block first is what made this probe destroy the record of the SUCCESSFUL
+    // open that was still serving frames - it reported last-open-failed-early while a frame from
+    // the earlier open was being consumed. So the block is claimed only once this open has a real
+    // capture item, and a failed open now leaves the working one's record intact.
+    const LONGLONG openT = (LONGLONG)GetTickCount64();
     bool monitor = (s->Hwnd == WGCBRK_MONITOR_HWND);
     HWND hwnd = monitor ? nullptr : (HWND)(ULONG_PTR)s->Hwnd;
     if (!monitor && (!hwnd || !IsWindow(hwnd))) { s->AckState = WGCBRK_FAILED; s->FailHr = E_HANDLE; return; }
@@ -325,8 +326,15 @@ static void OpenChannel(int i) {
         else
             check_hresult(interop->CreateForWindow(hwnd, guid_of<GraphicsCaptureItem>(),
                           reinterpret_cast<void**>(put_abi(item))));
+        // This open has a real capture item: claim the tick block for it, in order.
+        s->TickHwnd  = s->Hwnd;
+        s->TickOpenOk = 0;
+        s->OpenTick  = openT;
+        s->PoolTick = s->StartTick = 0;
+        s->FirstArrivedTick = s->FirstPublishTick = 0;
         s->ItemTick = (LONGLONG)GetTickCount64();
-        s->TickOpenOk = 1;               // this open reached a real capture item
+        MemoryBarrier();
+        s->TickOpenOk = 1;               // published last: a reader sees a complete record
         auto size = item.Size();
         auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             g_rtDev, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
