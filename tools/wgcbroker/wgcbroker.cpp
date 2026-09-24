@@ -407,7 +407,13 @@ static void OpenChannel(int i) {
         s->TickPw = 1;
         s->PollCount = 0;
         s->OpenTick = openT;
-        s->ItemTick = s->PoolTick = s->StartTick = 0;
+        // ItemTick on this path = the moment the WGC attempt was abandoned and we fell back. The
+        // gap OpenTick->ItemTick is therefore what a menu PAYS for a CreateForWindow that cannot
+        // succeed: WGC rejects override-redirect popups by rule, so this cost is spent on every
+        // single menu to learn something already known. Measured as part of a 31-78 ms
+        // "first poll" that the loop structure says contains no waiting at all.
+        s->ItemTick = (LONGLONG)GetTickCount64();
+        s->PoolTick = s->StartTick = 0;
         s->FirstArrivedTick = s->FirstPublishTick = 0;
         MemoryBarrier();
         s->TickOpenOk = 1;                // published last
