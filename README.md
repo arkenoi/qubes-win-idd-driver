@@ -20,23 +20,27 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.30-agentddb9dd3](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.30-agentddb9dd3)** — agent `ddb9dd3`, package `4.3.30`, built from commit `44939ef`. See
-[`docs/RELEASE-NOTES-4.3.30.md`](docs/RELEASE-NOTES-4.3.30.md) for what changed and what was
-verified: the full matrix — clean install, same-version reinstall, in-place major upgrade from
-4.3.28, and template→AppVM derivation with three cold boots, on **both Windows 10 and Windows 11** —
-passed 90/90 with 0 cells ungraded, against this exact package.
+Release **[v4.3.32-agent3d9bc42](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.32-agent3d9bc42)** — agent `3d9bc42`, package `4.3.32`, built from commit `55278b5`. See
+[`docs/RELEASE-NOTES-4.3.32.md`](docs/RELEASE-NOTES-4.3.32.md) for what changed and what was
+verified: windows are announced when they are created rather than after the agent has rendered
+them (create-to-announce 130.7 ms → 8.7 ms), and a window in the background stops costing the
+application it belongs to (with two Explorer windows open, captures of the first fell from ~118 to
+~30 and the second window finished drawing in 1.4 s instead of 11.6 s). The full matrix — clean
+install, same-version reinstall, in-place upgrade from the previous release, and template→AppVM
+derivation with cold boots, on **both Windows 10 and Windows 11** — passed 90/90 with 0 cells
+ungraded, against this exact package.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.30-1.agentddb9dd3de991.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.30-agentddb9dd3/qubes-windows-tools-ng-4.3.30-1.agentddb9dd3de991.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
-| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.30-agentddb9dd3/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qubes-tools-4.3.30.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.30-agentddb9dd3/qubes-tools-4.3.30.exe) | the installer on its own, if you already have a way to get a file into the guest |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.30-agentddb9dd3/SHA256SUMS.txt) | checksums for all of them |
+| [`qubes-windows-tools-ng-4.3.32-1.agent3d9bc42ea39e.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.32-agent3d9bc42/qubes-windows-tools-ng-4.3.32-1.agent3d9bc42ea39e.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and installs `qvm-windows-update` and `qwt-ng-prepare-qube` |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.32-agent3d9bc42/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qubes-tools-4.3.32.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.32-agent3d9bc42/qubes-tools-4.3.32.exe) | the installer on its own, if you already have a way to get a file into the guest |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.32-agent3d9bc42/SHA256SUMS.txt) | checksums for all of them |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.30-1.agentddb9dd3de991.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.32-1.agent3d9bc42ea39e.noarch.rpm
 ```
 
 With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
@@ -45,30 +49,35 @@ hands the guest exactly this ISO as a CD.
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction. Validated end to end for an upgrade **from an older
-build of this package** — 4.3.30's acceptance ran clean install, same-version reinstall,
-in-place major upgrade from 4.3.28 and template→AppVM cells on both Windows 10 and Windows 11,
-90/90 passed with none ungraded. An upgrade from **stock QWT 4.2.2** uses the same unchanged
+build of this package** — 4.3.32's acceptance ran clean install, same-version reinstall,
+in-place upgrade from the previous release and template→AppVM cells on both Windows 10 and
+Windows 11, 90/90 passed with none ungraded. An upgrade from **stock QWT 4.2.2** uses the same unchanged
 MSI machinery but has not been exercised on our testbed since August 2026, because the
 test images themselves carry a newer build.
 
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
 
-**What changed in 4.3.30 — guest notifications reach dom0.** The notification bridge forwards a
-Windows application's toast to dom0's own notification service and suppresses the in-guest banner;
-it existed in earlier builds but shipped switched off, so it had never run for anyone. It is on by
-default now, along with the agent reporting its own error conditions to dom0 and the seamless
-per-window grant path. Toast stacks no longer show black bars between cards, and windows no longer
-blink black when their capture buffer is rebuilt. This build also carries substantial work on the
-dom0-driven Windows Update path for guests with no network of their own. Verified against this
-exact package: the full matrix — clean install, same-version reinstall, in-place major upgrade
-from 4.3.28, and template→AppVM derivation with three cold boots, on both Windows 10 and Windows 11
-— 90/90 with zero cells ungraded, plus both feature tests. One intermittent stall on the in-place
-upgrade path is known, unexplained, and did not occur in this acceptance; it is described in the
-notes. Full story in [`docs/RELEASE-NOTES-4.3.30.md`](docs/RELEASE-NOTES-4.3.30.md).
+**What changed in 4.3.32 — windows appear when they are created, and a background window stops
+costing its application.** Opening a window used to stall before dom0 was told it existed: the
+agent rendered it first with a call Windows runs on the *application's own UI thread*, and that
+call was the entire delay (438/32/329 ms measured, every other step 0–15 ms). The window is now
+announced at once — create-to-announce fell from a mean of 130.7 ms to 8.7 ms — while a rebuild or
+a window that already existed keeps the old ordering, so the black blink does not return. And a
+window that is merely not in front is no longer re-rendered every frame: the agent now compares
+only the part of a window you can see, so a change *on top of* a window no longer counts as a
+change *to* it. With two Explorer windows open, captures of the first fell from 117/119/118 to
+26/28/35, the time those captures took from its own UI thread fell from ~5.5 s to ~2.1 s, and the
+second window finished drawing in 1.4 s instead of 11.6 s. Verified against this exact package:
+the full matrix — clean install, same-version reinstall, in-place upgrade, and template→AppVM
+derivation with cold boots, on both Windows 10 and Windows 11 — 90/90 with zero cells ungraded,
+plus both feature tests. How long a *menu* takes to appear is still unexplained and is recorded as
+such. Full story in [`docs/RELEASE-NOTES-4.3.32.md`](docs/RELEASE-NOTES-4.3.32.md); 4.3.31's
+notification routing and 4.3.30's notification bridge are carried forward unchanged
+([4.3.31](docs/RELEASE-NOTES-4.3.31.md), [4.3.30](docs/RELEASE-NOTES-4.3.30.md)).
 
 **Provenance.** Every asset above is built by GitHub Actions from this repository at the tagged
-commit; the agent is `ddb9dd3` on
+commit; the agent is `3d9bc42` on
 [arkenoi/qubes-gui-agent-windows](https://github.com/arkenoi/qubes-gui-agent-windows). The
 Windows build is not timestamp-reproducible, so binary hashes differ across rebuilds of identical
 source; `MANIFEST.json` inside each asset records the exact source commits the build came from.
