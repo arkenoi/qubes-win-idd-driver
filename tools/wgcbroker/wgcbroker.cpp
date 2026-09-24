@@ -228,7 +228,18 @@ static void PublishPrintWindow(int i) {
         if (fullH < cropY + h) fullH = cropY + h;
         if (fullW <= 0 || fullH <= 0) break;
         if (!EnsurePwDib(c, fullW, fullH)) break;
+        // Stage ticks (ABI 4), diagnostic only - the broker never decides on them. StartTick is the
+        // first poll ENTERED (so OpenTick->StartTick is the wait before this window is first looked
+        // at), FirstArrivedTick is the first PrintWindow RETURN (so the gap is the synchronous call
+        // on the menu's own UI thread), and PollCount says how many polls it took to get a frame
+        // worth publishing - which is how "the app had not painted yet" shows up.
+        const bool ticksMine = (s->TickPw && s->TickHwnd == (UINT64)(ULONG_PTR)hwnd);
+        if (ticksMine) {
+            if (!s->StartTick) s->StartTick = (LONGLONG)GetTickCount64();
+            if (s->PollCount < 0x7FFFFFFF) s->PollCount++;
+        }
         if (!PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT)) break;
+        if (ticksMine && !s->FirstArrivedTick) s->FirstArrivedTick = (LONGLONG)GetTickCount64();
         const BYTE* rend = (const BYTE*)c.pwBits;
         const int fstride = fullW * 4;
         const BYTE* card = rend + (size_t)cropY * fstride + (size_t)cropX * 4; // card top-left (agent crop)
@@ -292,6 +303,7 @@ static void PublishPrintWindow(int i) {
         MemoryBarrier();
         _InterlockedExchange(&s->Seq, (q | 1) + 1);
         s->AckState = WGCBRK_ACTIVE;
+        if (ticksMine && !s->FirstPublishTick) s->FirstPublishTick = (LONGLONG)GetTickCount64();
         SignalFramePublished();                     // PrintWindow path: wake the agent too
     } while (0);
     LeaveCriticalSection(&g_pubCs[i]);
@@ -329,6 +341,8 @@ static void OpenChannel(int i) {
         // This open has a real capture item: claim the tick block for it, in order.
         s->TickHwnd  = s->Hwnd;
         s->TickOpenOk = 0;
+        s->TickPw = 0;                   // this record describes the WGC path
+        s->PollCount = 0;
         s->OpenTick  = openT;
         s->PoolTick = s->StartTick = 0;
         s->FirstArrivedTick = s->FirstPublishTick = 0;
@@ -385,6 +399,18 @@ static void OpenChannel(int i) {
     // PublishPrintWindow marks FAILED (agent slices) for the classes PrintWindow also cannot do.
     if (!monitor && hwnd && IsWindow(hwnd)) {
         c.hwnd = hwnd; c.slot = i; c.pw = true; s->FailHr = 0;
+        // Claim the tick block for the PrintWindow path (ABI 4). Until this existed, a menu - which
+        // ALWAYS lands here, because WGC rejects override-redirect popups - left the block holding
+        // the last WGC window's ticks, and the agent reported a false "slot reopened" for it.
+        s->TickHwnd  = s->Hwnd;
+        s->TickOpenOk = 0;
+        s->TickPw = 1;
+        s->PollCount = 0;
+        s->OpenTick = openT;
+        s->ItemTick = s->PoolTick = s->StartTick = 0;
+        s->FirstArrivedTick = s->FirstPublishTick = 0;
+        MemoryBarrier();
+        s->TickOpenOk = 1;                // published last
         s->AckState = WGCBRK_REQUESTED;   // pending until the first PrintWindow poll publishes
     } else {
         s->AckState = WGCBRK_FAILED;
