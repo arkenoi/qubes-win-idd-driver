@@ -113,6 +113,14 @@ static bool InputDesktopIsDefault() {
 }
 
 // publish one WGC frame into slot i (per-slot CS + seqlock + double buffer)
+// First-frame stage ticks are QPC (ABI 5): the components they separate are 16-31 ms and
+// GetTickCount64's step is ~15.6 ms, so on that clock the split was quantisation noise. Only the
+// six stage ticks move; heartbeats and CaptureTick stay on GetTickCount64, which they are
+// compared against elsewhere.
+static inline LONGLONG QpcNow() {
+    LARGE_INTEGER q; QueryPerformanceCounter(&q); return q.QuadPart;
+}
+
 static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
     EnterCriticalSection(&g_pubCs[i]);
     do {
@@ -307,14 +315,6 @@ static void PublishPrintWindow(int i) {
         SignalFramePublished();                     // PrintWindow path: wake the agent too
     } while (0);
     LeaveCriticalSection(&g_pubCs[i]);
-}
-
-// First-frame stage ticks are QPC (ABI 5): the components they separate are 16-31 ms and
-// GetTickCount64's step is ~15.6 ms, so on that clock the split was quantisation noise. Only the
-// six stage ticks move; heartbeats and CaptureTick stay on GetTickCount64, which they are
-// compared against elsewhere.
-static inline LONGLONG QpcNow() {
-    LARGE_INTEGER q; QueryPerformanceCounter(&q); return q.QuadPart;
 }
 
 static void OpenChannel(int i) {
