@@ -36,6 +36,7 @@
 #include <windows.graphics.directx.direct3d11.interop.h>
 #include <stdio.h>
 #include <set>
+#include <vector>
 #include <string>
 
 #pragma comment(lib, "d3d11.lib")
@@ -147,12 +148,87 @@ static HWND MakeDest(int w, int h, int x, int y, DWORD exStyle)
                            WS_POPUP, x, y, w, h, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
 }
 
+// --sweep: try the relay on EVERY rogue-class window currently up, and report per class. The single
+// -class form proved the mechanism on one NRB window; the classes that actually justify the relay are
+// the shell CoreWindow toast (must-keep by project rule) and the override-redirect popup, and those
+// cannot be named in advance - they appear and vanish. So enumerate and report what was found, which
+// also makes "this class was not present" distinguishable from "the relay failed for it".
+struct Found { HWND h; std::wstring cls; DWORD ex; const char* why; };
+static std::vector<Found>* g_found;
+
+static BOOL CALLBACK SweepProc(HWND h, LPARAM)
+{
+    if (!IsWindowVisible(h)) return TRUE;
+    RECT r{}; if (!GetWindowRect(h, &r)) return TRUE;
+    if ((r.right - r.left) < 32 || (r.bottom - r.top) < 24) return TRUE;
+    DWORD ex = (DWORD)GetWindowLongPtrW(h, GWL_EXSTYLE);
+    WCHAR cls[160] = {}; GetClassNameW(h, cls, 160);
+    const char* why = nullptr;
+    // The agent's own ineligibility reasons, as closely as an out-of-process probe can see them.
+    if (ex & 0x00200000L /* WS_EX_NOREDIRECTIONBITMAP */)          why = "NRB";
+    else if (wcsstr(cls, L"Windows.UI.Core.CoreWindow"))           why = "CoreWindow";
+    else if (ex & WS_EX_LAYERED) {
+        COLORREF k; BYTE a; DWORD f;
+        if (!GetLayeredWindowAttributes(h, &k, &a, &f))            why = "ULW";
+        else if (f & LWA_COLORKEY)                                 why = "COLORKEY";
+    }
+    if (!why) return TRUE;
+    g_found->push_back(Found{ h, cls, ex, why });
+    return TRUE;
+}
+
+// One relay attempt against one source, destination OFF-SCREEN (the state the probe proved usable
+// and the only one that is invisible to dom0 without being hidden).
+static void RelayOnce(const Found& f)
+{
+    RECT sr{}; GetWindowRect(f.h, &sr);
+    int w = (int)(sr.right - sr.left), h = (int)(sr.bottom - sr.top);
+    HWND dest = MakeDest(w, h, -9000, -9000, 0);
+    if (!dest) { printf("RESULT=SWEEP class=%ls why=%s dest=FAIL\n", f.cls.c_str(), f.why); return; }
+    ShowWindow(dest, SW_SHOWNA);
+    HTHUMBNAIL th = nullptr;
+    HRESULT hr = DwmRegisterThumbnail(dest, f.h, &th);
+    if (FAILED(hr) || !th) {
+        printf("RESULT=SWEEP class=%ls why=%s register=FAIL hr=0x%08lx\n", f.cls.c_str(), f.why,
+               (unsigned long)hr);
+        DestroyWindow(dest); return;
+    }
+    SIZE ss{}; DwmQueryThumbnailSourceSize(th, &ss);
+    // 1:1 THIS TIME: size the destination rect to the thumbnail's own source size, not to the
+    // window rect. The first run scaled 1115x628 into 1129x635 and so could say nothing about
+    // pixel exactness.
+    DWM_THUMBNAIL_PROPERTIES p{};
+    p.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY;
+    p.rcDestination = RECT{ 0, 0, ss.cx ? ss.cx : w, ss.cy ? ss.cy : h };
+    p.fVisible = TRUE; p.opacity = 255;
+    HRESULT hu = DwmUpdateThumbnailProperties(th, &p);
+    Shot s = CaptureWindow(dest, 900);
+    printf("RESULT=SWEEP class=%ls why=%s ex=0x%08lx src=%dx%d srcsize=%ldx%ld update=0x%08lx "
+           "capture=%s frames=%d colours=%d nonBlack=%d cap=%dx%d oneToOne=%d\n",
+           f.cls.c_str(), f.why, (unsigned long)f.ex, w, h, ss.cx, ss.cy, (unsigned long)hu,
+           s.ok ? "ok" : "none", s.frames, s.colours, s.nonBlack, s.w, s.h,
+           (ss.cx == s.w && ss.cy == s.h) ? 1 : 0);
+    DwmUnregisterThumbnail(th);
+    DestroyWindow(dest);
+}
+
 int wmain(int argc, wchar_t** argv)
 {
     // The source window: by class name, or the foreground window. A rogue-class source is the point,
     // but the mechanism must first be shown to work at all on an ordinary one.
     HWND src = nullptr;
     std::wstring want = (argc > 1) ? argv[1] : L"";
+    if (want == L"--sweep")
+    {
+        if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
+        std::vector<Found> found; g_found = &found;
+        EnumWindows(SweepProc, 0);
+        printf("RESULT=SWEEPFOUND count=%d\n", (int)found.size());
+        for (auto& f : found) RelayOnce(f);
+        int ok = 0; for (auto& f : found) { (void)f; }
+        printf("RESULT=SWEEPDONE count=%d\n", (int)found.size());
+        return 0;
+    }
     if (!want.empty()) src = FindWindowW(want.c_str(), nullptr);
     if (!src) src = GetForegroundWindow();
     if (!src) { printf("RESULT=FAIL reason=no-source-window\n"); return 2; }
