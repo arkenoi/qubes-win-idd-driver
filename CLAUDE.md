@@ -92,8 +92,14 @@ interleaved:
   - `assign --required` PERSISTS while loop numbers are TRANSIENT (recycled on reboot and by every
     `loop-delete`). A stale claim makes the guest unstartable with only `internal error: libxenlight
     failed to create new domain` — check assignments FIRST when a guest will not create (`findings/rig.md`).
-  - `qvm-start --cdrom=` is BROKEN from this qube and poisons the guest (`findings/rig.md`); use the
-    attach/assign rows instead.
+  - **`qvm-start <vm> --cdrom=<holder>:<loopN>` WORKS - corrected 2026-09-25.** This line said it was
+    "BROKEN from this qube and poisons the guest" and cited `findings/rig.md`, where the claim it points at
+    (line 59, 2026-09-20) is itself flagged **STALE - not re-measured since the host reboot**, and where a
+    LATER entry (line 23, 2026-09-22) records the opposite as measured: the start-time disc was verified
+    inside the guest during that campaign, disc at D: with the expected commit. `matrix.sh` uses it every
+    reinstall cell. What IS broken is the **live** `devtype=cdrom` attach/detach against a RUNNING guest -
+    an uncaught `libvirtError` in qubesd ("device type 'cdrom' cannot hot unplugged") that returns an empty
+    response; `lint-harness.py` rule L12 already refuses a live cdrom attach. The disc goes in AT START.
 
   **THEREFORE, BINDING: never write a limitation into code, a comment, a finding, a commit message
   or a reply until you have (a) grepped this repo for something already doing it, and (b) run the
