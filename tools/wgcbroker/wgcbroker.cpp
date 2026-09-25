@@ -87,6 +87,13 @@ struct Channel {
     ULONGLONG xprocTick = 0;
     // Current adaptive interval between PrintWindow renders, grown while renders change nothing.
     ULONGLONG pwBackoffMs = 0;
+    // BEHAVIOURAL DETECTION. When this WGC channel opened, and when it last delivered a frame.
+    // A visible window whose feed has been silent since it opened is one WGC is not serving.
+    ULONGLONG openTick = 0;
+    ULONGLONG lastArrivalTick = 0;
+    bool      forcePw = false;   // reopen straight onto the PrintWindow path
+    bool      probing = false;   // this PrintWindow channel is a TEST, not yet a commitment
+    ULONGLONG noProbeUntil = 0;  // hysteresis: do not re-test this window before this tick
 };
 static std::vector<Channel> g_ch(WGCBRK_MAX_SLOTS);
 static bool g_anyPw = false;   // any PrintWindow channel active -> poll the loop faster
@@ -388,7 +395,16 @@ static void OpenChannel(int i) {
     // for it (measured: the retarget build came up pw=1, which is only reachable from the catch
     // below) - so these windows go to the PrintWindow path deliberately and up front, rather than
     // arriving there via an exception after a session that was never going to produce anything.
-    const bool xprocContent = (!monitor && hwnd && HasCrossProcessContentChild(hwnd));
+    c.openTick = GetTickCount64();
+    c.lastArrivalTick = 0;
+    // The STRUCTURAL test is kept only as a fast path: it spares a known-bad window the quiet
+    // period below. It is NOT the detector any more - it was rated reliable at 0.12, its 80%
+    // threshold is a guess from one sample, and its worst failure is routing a WGC-capable
+    // window to PrintWindow for nothing (0.73). The behavioural test in the main loop is what
+    // decides, because it keys on the symptom rather than on a proxy for it.
+    const bool xprocContent = c.forcePw ||
+                              (!monitor && hwnd && HasCrossProcessContentChild(hwnd));
+    c.forcePw = false;
     if (!xprocContent) try {
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{ nullptr };
@@ -444,6 +460,7 @@ static void OpenChannel(int i) {
                 // ABI 6 accounting: record what every arrival did, so a slot that stops
                 // publishing can be told apart from a slot that never receives anything.
                 g_slots[i].FramesArrived++;
+                ch.lastArrivalTick = GetTickCount64();   // behavioural detector: the feed is alive
                 g_slots[i].LastContentW = cs.Width; g_slots[i].LastContentH = cs.Height;
                 g_slots[i].PoolW = ch.poolW;        g_slots[i].PoolH = ch.poolH;
                 if (cs.Width != ch.poolW || cs.Height != ch.poolH) {
@@ -537,6 +554,39 @@ static void Reconcile() {
         Channel& c = g_ch[i];
         if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); OpenChannel(i); }
         else if (!wantOpen && c.hwnd)   { CloseChannel(i); }
+        else if (wantOpen && c.hwnd == want && !c.pw &&
+                 IsWindow(want) && IsWindowVisible(want) && !IsIconic(want) &&
+                 GetTickCount64() >= c.noProbeUntil &&
+                 (GetTickCount64() - (c.lastArrivalTick ? c.lastArrivalTick : c.openTick))
+                     >= WGCBRK_WGC_QUIET_MS) {
+            // BEHAVIOURAL DETECTION - this, not the structural test, is what decides.
+            //
+            // A visible, unminimised window whose WGC feed has said NOTHING since it opened is a
+            // window WGC is not serving. That is the SYMPTOM, measured directly, rather than a
+            // guess about why: FramesArrived frozen at 3 while a control slot ran 637 -> 678 in
+            // the same 23 s. Keying on it cannot misclassify a window WGC is in fact serving,
+            // needs no threshold, and catches causes nobody has seen yet. Jev rated it 0.94
+            // against the structural test at 0.00, and rated the structural test's reliability
+            // 0.12 - it holds on the one instance measured and its 80% coverage threshold is a
+            // guess from a single sample.
+            //
+            // It can afford to be liberal because a WRONG re-route is now cheap: the adaptive
+            // backoff renders such a window once and then decays to the 8 s ceiling. A genuinely
+            // static window costs one render to misjudge. That trade only became available once
+            // the backoff existed.
+            // The re-route is a TEST, not a commitment. A window that is merely STATIC produces
+            // no WGC arrivals either - there is nothing to send - so keying on silence alone would
+            // re-route every quiet window on the desktop and leave each costing a render per 8 s
+            // once the backoff decayed. Ten such windows would be about 4% of a core, the same
+            // order as the single-window cost already called unacceptable. Jev rated that
+            // blocking at 0.87 and this refinement at 0.96.
+            g_slots[i].Reroutes++;
+            g_slots[i].QuietReroutes++;
+            c.forcePw = true;
+            c.probing = true;
+            CloseChannel(i);
+            OpenChannel(i);
+        }
         else if (wantOpen && c.hwnd == want && !c.pw) {
             // RE-CHECK THE ROUTING. A UWP-style frame exists BEFORE the app creates the
             // cross-process child that carries its content, so the routing decision taken in
@@ -688,6 +738,28 @@ int wmain(int argc, wchar_t** argv) {
             g_ch[i].pwLastTick = nowTick;
             ps->PollsServiced++;
             const bool produced = PublishPrintWindow(i);
+            if (g_ch[i].probing) {
+                // THE TEST'S ANSWER. PublishPrintWindow returns false when the card it rendered is
+                // identical to the frame already published - which, on the first render after a
+                // quiet re-route, is the last frame WGC delivered. Identical therefore means WGC
+                // was serving this window correctly and it is simply static: give it back to WGC,
+                // which costs nothing while nothing changes. Different means WGC was NOT serving
+                // it and the re-route was right.
+                //
+                // The hysteresis matters as much as the test: without it a static window would be
+                // re-tested every WGCBRK_WGC_QUIET_MS for ever, which is a churn loop costing a
+                // render every couple of seconds - worse than what it replaces. Jev flagged that
+                // hazard at 0.71 as needing handling rather than noting.
+                g_ch[i].probing = false;
+                if (!produced) {
+                    g_slots[i].ProbeBounces++;
+                    g_ch[i].noProbeUntil = nowTick + WGCBRK_WGC_PROBE_BACKOFF_MS;
+                    g_ch[i].forcePw = false;
+                    CloseChannel(i);
+                    OpenChannel(i);      // back to WGC, which was right all along
+                    continue;
+                }
+            }
             if (produced || changed) {
                 g_ch[i].pwBackoffMs = WGCBRK_POKE_SAFETY_MS;   // something happened: stay attentive
             } else {
