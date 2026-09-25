@@ -37,6 +37,21 @@ say "$VM has ${ram_mb} MiB RAM; need ~$(( need_kb/1048576 )) GiB, free $(( free_
 if [ "$free_kb" -lt "$need_kb" ]; then
   say "REFUSED: not enough free space. Free some first - an image half-written into a full disk is"
   say "  worse than no image, and the guest stays paused for the whole write."
+  # ...and SAY WHAT TO FREE. On 2026-09-25 this refused with 8.7 GiB free against ~9 GiB needed,
+  # I read it as "a core cannot be taken here", and destroyed the specimen. Under 1 GiB of
+  # re-downloadable CI artefacts and build scratch was sitting next to it; reclaiming it took one
+  # command and would have bought the image. A refusal that does not name the remedy invites
+  # exactly that reading, so it now names it.
+  short_kb=$(( need_kb - free_kb ))
+  say "  SHORT BY $(( short_kb / 1024 )) MiB. Largest REGENERABLE candidates (all re-downloadable"
+  say "  from CI or rebuildable - this list deliberately excludes wedge-cores and win-iso):"
+  for c in "$HOME/qwt-accept"/rel-* "$HOME/qubes-win-idd-driver/scratchpad/dl" \
+           "$HOME/tmp/dotnet" "$HOME/tmp"/tmp.* ; do
+    [ -e "$c" ] || continue
+    printf '    %8s  %s\n' "$(du -sh "$c" 2>/dev/null | cut -f1)" "$c"
+  done | sort -rh -k1 | head -8
+  say "  THE SPECIMEN IS STILL ALIVE AND MUST NOT BE DISCARDED until this is resolved: the memory"
+  say "  image is the one measurement that has ever named this failure class (issues.md P1)."
   exit 1
 fi
 
