@@ -85,6 +85,8 @@ struct Channel {
     ULONGLONG pwLastTick = 0;
     // Last time this WGC channel was re-checked for a cross-process content child.
     ULONGLONG xprocTick = 0;
+    // Current adaptive interval between PrintWindow renders, grown while renders change nothing.
+    ULONGLONG pwBackoffMs = 0;
 };
 static std::vector<Channel> g_ch(WGCBRK_MAX_SLOTS);
 static bool g_anyPw = false;   // any PrintWindow channel active -> poll the loop faster
@@ -214,7 +216,13 @@ static bool EnsurePwDib(Channel& c, int w, int h) {
 
 // Poll one PrintWindow-mode channel: render the window into its DIB and publish if the pixels
 // changed. Non-black check filters the classes PrintWindow cannot capture (they slice instead).
-static void PublishPrintWindow(int i) {
+// Returns true if this render produced a CHANGED card (i.e. it was worth doing). The adaptive
+// backoff in the main loop keys on that: a window whose renders keep coming back identical is a
+// window nobody is looking at changing, and rendering it is pure waste - measured 2026-09-25 at
+// 30 renders per 30 s producing ZERO published frames on an idle window, about 3.2% of a core
+// spent inside the captured application for nothing.
+static bool PublishPrintWindow(int i) {
+    bool changed = false;
     EnterCriticalSection(&g_pubCs[i]);
     do {
         WGCBRK_SLOT* s = &g_slots[i];
@@ -280,7 +288,7 @@ static void PublishPrintWindow(int i) {
         if (s->AckState == WGCBRK_ACTIVE && s->ActiveBuffer >= 0 && s->ActiveBuffer < WGCBRK_RING &&
             s->FrameWidth == w && s->FrameHeight == h) {
             const BYTE* cur = WGCBRK_ARENA(g_base, s->BufOffset[s->ActiveBuffer]);
-            if (memcmp(cur, dst, (size_t)w * h * 4) == 0) break;
+            if (memcmp(cur, dst, (size_t)w * h * 4) == 0) break;   // changed stays false
         }
 
         // Changed frame: measure the OPAQUE bounding box across the full render (one pass, non-black
@@ -305,6 +313,7 @@ static void PublishPrintWindow(int i) {
             }
         }
 
+        changed = true;
         s->FrameWidth = w; s->FrameHeight = h; s->Stride = w * 4;
         LONG q = s->Seq;
         _InterlockedExchange(&s->Seq, q | 1);
@@ -319,6 +328,7 @@ static void PublishPrintWindow(int i) {
         SignalFramePublished();                     // PrintWindow path: wake the agent too
     } while (0);
     LeaveCriticalSection(&g_pubCs[i]);
+    return changed;
 }
 // Does this window's visible content come from a child window owned by ANOTHER PROCESS that
 // covers its client area? That is the shape whose own surface stays empty, so WGC captures
@@ -642,9 +652,29 @@ int wmain(int argc, wchar_t** argv) {
             if (!g_ch[i].pw || !g_ch[i].hwnd) continue;
             anyPw = true;
             WGCBRK_SLOT* ps = &g_slots[i];
+            // VISIBILITY GATE. A window dom0 is not showing - minimised, or gone - is not worth
+            // rendering at all. Cheap, and it composes with the backoff below rather than
+            // replacing it (Jev: combine 0.73).
+            if (!IsWindow(g_ch[i].hwnd) || !IsWindowVisible(g_ch[i].hwnd) || IsIconic(g_ch[i].hwnd)) {
+                ps->PollsSkipped++;
+                continue;
+            }
             const LONG poke = ps->PokeSeq;
             const bool changed = (poke != ps->PokeAck);
-            const bool stale = (nowTick - g_ch[i].pwLastTick) >= WGCBRK_POKE_SAFETY_MS;
+            // ADAPTIVE BACKOFF. The backstop exists so a window that changes WITHOUT dom0 input
+            // does not freeze. But measured idle, it rendered 30 times in 30 s and published
+            // NOTHING - about 3.2% of a core spent inside the captured application to discover
+            // that nothing had changed, per window, for as long as it stays open.
+            //
+            // So let the render result drive the interval, which the broker already computes in
+            // order to skip republishing an identical card: a render that changes nothing doubles
+            // the interval, a render that changes something (or any poke) snaps it back to the
+            // floor. A static window decays to almost no polling; a window that genuinely updates
+            // on its own keeps its rate automatically, because its renders keep coming back
+            // changed - which is why Jev rated the "this re-freezes self-updating windows" risk
+            // at only 0.20 and this gate at 1.00.
+            if (g_ch[i].pwBackoffMs < WGCBRK_POKE_SAFETY_MS) g_ch[i].pwBackoffMs = WGCBRK_POKE_SAFETY_MS;
+            const bool stale = (nowTick - g_ch[i].pwLastTick) >= g_ch[i].pwBackoffMs;
             // Coalesce: however many pokes arrived, render at most every
             // WGCBRK_POKE_MIN_INTERVAL_MS. Input pokes arrive at input rate, and this render is
             // not cheap and not ours to spend - it runs on the captured application's UI thread.
@@ -657,7 +687,15 @@ int wmain(int argc, wchar_t** argv) {
             ps->PokeAck = poke;              // before rendering: damage during the render re-pokes
             g_ch[i].pwLastTick = nowTick;
             ps->PollsServiced++;
-            PublishPrintWindow(i);
+            const bool produced = PublishPrintWindow(i);
+            if (produced || changed) {
+                g_ch[i].pwBackoffMs = WGCBRK_POKE_SAFETY_MS;   // something happened: stay attentive
+            } else {
+                g_ch[i].pwBackoffMs *= 2;                      // nothing to show: ask less often
+                if (g_ch[i].pwBackoffMs > WGCBRK_POKE_BACKOFF_MAX_MS)
+                    g_ch[i].pwBackoffMs = WGCBRK_POKE_BACKOFF_MAX_MS;
+            }
+            ps->BackoffMs = (LONG)g_ch[i].pwBackoffMs;
         }
         g_anyPw = anyPw;
     }

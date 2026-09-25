@@ -38,7 +38,7 @@ print('printf("HDRSIZE %zu\\n", sizeof(HDR)); printf("SLOTSIZE %zu\\n", sizeof(S
 for f in ("AckState","FrameWidth","FrameHeight","Seq","FrameId","CaptureTick","TickPw","PollCount",
           "ReqWidth","ReqHeight","ReqState","ControlSeq","FailHr","FramesArrived","FramesPublished",
           "FramesDropSize","RecreateOk","RecreateFail","LastContentW","LastContentH","PoolW","PoolH",
-          "PokeSeq","PokeAck","PollsServiced","PollsSkipped","SafetyPolls","Reroutes"):
+          "PokeSeq","PokeAck","PollsServiced","PollsSkipped","SafetyPolls","Reroutes","BackoffMs"):
     print(f'printf("SLOT.{f} %zu\\n", offsetof(SLOT,{f}));')
 print('return 0;}')
 PY
