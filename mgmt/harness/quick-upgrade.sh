@@ -66,7 +66,7 @@ STAGE_TO_C=0
 _args=(); for _a in "$@"; do case "$_a" in --stage-to-c) STAGE_TO_C=1 ;; *) _args+=("$_a") ;; esac; done
 set -- ${_args+"${_args[@]}"}
 PKG="${1:?usage: quick-upgrade.sh <release-iso-or-setup-tree> [subject] [os] [--stage-to-c]}"
-OS="${3:-win11}"
+OS="${3:?usage: $0 <iso> <subject> <win10|win11> - name the OS family; it selects the golden and there is no default target}"
 SUBJECT="${2:-$OS-up}"
 GOLDEN="$OS-qwt"
 HOLDER=win-idd-mgmt
@@ -290,6 +290,25 @@ case $? in
   1) finish 1 "TERMINAL: clone reached a terminal state before any session (see $OUT/cdboot*.png; start log $OUT/cdboot.out)" ;;
   2) finish 2 "DEADLINE: clone gave no session within 900 s (start log $OUT/cdboot.out)" ;;
 esac
+
+# CLOCK, BEFORE ANYTHING IS INSTALLED. The guest's virtual RTC carries UTC while Windows reads it
+# as LOCAL time unless RealTimeIsUniversal is set, so a guest with a real timezone computes a UTC
+# that is behind by its offset. Windows validates driver catalogs against that clock: measured
+# 2026-09-25 on the German 25H2 image (UTC+2), the xenvif catalog was rejected as NOT YET VALID
+# (setupapi.dev.log, 0x800B0101) because the CI signing certificate - minted fresh per build - was
+# younger than the offset, and drvinst then sat at 0.125 s of CPU until this harness's 1500 s
+# deadline fired. It stayed invisible for six weeks because the English images pin TimeZone=UTC,
+# where the skew is exactly zero.
+#
+# qtest synctime has existed since 2026-08-11 with "call this after every VM start" in its own
+# comment and had NO callers. This is the caller. The installer now also refuses a package its
+# clock says is not yet valid, so a skew here fails fast and named instead of hanging - but the
+# harness should not be handing it a broken clock in the first place.
+if QTEST_VM="$SUBJECT" "$HERE/tools/qtest" synctime >/dev/null 2>&1; then
+  log "guest clock synced to this qube before install (see findings/issues.md: 0x800B0101 skew)"
+else
+  log "WARNING: could not sync the guest clock - a driver catalog may be refused as not-yet-valid" 
+fi
 
 # ENTRY PRECONDITIONS, asserted on the SAME signals the verify uses (experimenter 5b), so that
 # "it changed" is decidable afterwards. Missing data fails - never reads as "absent".
@@ -529,6 +548,23 @@ while :; do
         MOVING) log "  STALLED (SPINNING) - qrexec unanswering ${unreach}s while cpu_time ADVANCED ${cs#* } over the sample: dead qrexec + burning CPU is the issues.md P1 fingerprint (cpu=${cpu} quiet=$quiet), screen=$sc" ;;
         *)      log "  STALLED - qrexec unanswering ${unreach}s; cpu_time UNREADABLE, so executing-or-not is UNMEASURED (cpu=${cpu} quiet=$quiet), screen=$sc" ;;
       esac
+      # CAPTURE IT NOW, while the guest is still up and before anything reclones it. On
+      # 2026-09-23 a wedge caught inside an acceptance campaign survived only because a human
+      # stopped the campaign within minutes; an unattended run has no such human. Only on the
+      # SPIN fingerprint - a frozen domain has nothing to image, and an image is ~8.6 GB.
+      if [ "${cs%% *}" = MOVING ]; then
+        log "  capturing the specimen automatically (dom0 forensics, then a memory image)"
+        timeout 300 qrexec-client-vm dom0 "local.WinWedgeForensics+$SUBJECT" </dev/null \
+          > "$OUT/forensics.tar" 2>"$OUT/forensics.err" \
+          && log "    forensics -> $OUT/forensics.tar" \
+          || log "    WARNING: dom0 forensics capture failed - see $OUT/forensics.err"
+        if bash mgmt/harness/fetch-wedge-core.sh "$SUBJECT" "$OUT/guest.core" >>"$OUT/core.log" 2>&1; then
+          log "    memory image -> $OUT/guest.core"
+          log "    name the code: tools/core-module-list.py $OUT/guest.core --contains 0x<rip>"
+        else
+          log "    memory image NOT taken (see $OUT/core.log) - the forensics above still stand"
+        fi
+      fi
       phase=STALLED; break
     fi
   fi
