@@ -165,7 +165,15 @@ static BOOL CALLBACK SweepProc(HWND h, LPARAM)
     WCHAR cls[160] = {}; GetClassNameW(h, cls, 160);
     const char* why = nullptr;
     // The agent's own ineligibility reasons, as closely as an out-of-process probe can see them.
+    DWORD st = (DWORD)GetWindowLongPtrW(h, GWL_STYLE);
+    // OVERRIDE-REDIRECT, by the AGENT'S OWN test (IsPopup, main.c:1518): visible and NOT
+    // (WS_CAPTION, or WS_SYSMENU+WS_EX_APPWINDOW, or WS_EX_APPWINDOW alone) - a caption-less window
+    // that does not ask for the taskbar. The first sweep checked only NRB / CoreWindow / layered and
+    // so could not see this class AT ALL, which is why a sweep that found three windows found no
+    // popup: a gap in the probe, not an absence in the guest.
+    const bool orLike = !((st & WS_CAPTION) || (ex & WS_EX_APPWINDOW));
     if (ex & 0x00200000L /* WS_EX_NOREDIRECTIONBITMAP */)          why = "NRB";
+    else if (orLike)                                              why = "OR";
     else if (wcsstr(cls, L"Windows.UI.Core.CoreWindow"))           why = "CoreWindow";
     else if (ex & WS_EX_LAYERED) {
         COLORREF k; BYTE a; DWORD f;
@@ -183,7 +191,22 @@ static void RelayOnce(const Found& f)
 {
     RECT sr{}; GetWindowRect(f.h, &sr);
     int w = (int)(sr.right - sr.left), h = (int)(sr.bottom - sr.top);
-    HWND dest = MakeDest(w, h, -9000, -9000, 0);
+    // The destination must be the THUMBNAIL'S source size, not the window rect: the first sweep
+    // created it at window size (1129x635) while the thumbnail source was the client area
+    // (1115x628), so the content was 1:1 inside a larger surface and oneToOne read 0 for a reason
+    // that had nothing to do with DWM. Registering on a scratch destination first is the only way
+    // to learn that size, so the real destination is created after the query.
+    HWND probe0 = MakeDest(16, 16, -9200, -9200, 0);
+    SIZE q{ w, h };
+    if (probe0) {
+        HTHUMBNAIL t0 = nullptr;
+        if (SUCCEEDED(DwmRegisterThumbnail(probe0, f.h, &t0)) && t0) {
+            SIZE qq{}; if (SUCCEEDED(DwmQueryThumbnailSourceSize(t0, &qq)) && qq.cx && qq.cy) q = qq;
+            DwmUnregisterThumbnail(t0);
+        }
+        DestroyWindow(probe0);
+    }
+    HWND dest = MakeDest(q.cx, q.cy, -9000, -9000, 0);
     if (!dest) { printf("RESULT=SWEEP class=%ls why=%s dest=FAIL\n", f.cls.c_str(), f.why); return; }
     ShowWindow(dest, SW_SHOWNA);
     HTHUMBNAIL th = nullptr;
@@ -199,7 +222,7 @@ static void RelayOnce(const Found& f)
     // pixel exactness.
     DWM_THUMBNAIL_PROPERTIES p{};
     p.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY;
-    p.rcDestination = RECT{ 0, 0, ss.cx ? ss.cx : w, ss.cy ? ss.cy : h };
+    p.rcDestination = RECT{ 0, 0, ss.cx ? ss.cx : q.cx, ss.cy ? ss.cy : q.cy };
     p.fVisible = TRUE; p.opacity = 255;
     HRESULT hu = DwmUpdateThumbnailProperties(th, &p);
     Shot s = CaptureWindow(dest, 900);
