@@ -645,6 +645,13 @@ int wmain(int argc, wchar_t** argv) {
             const LONG poke = ps->PokeSeq;
             const bool changed = (poke != ps->PokeAck);
             const bool stale = (nowTick - g_ch[i].pwLastTick) >= WGCBRK_POKE_SAFETY_MS;
+            // Coalesce: however many pokes arrived, render at most every
+            // WGCBRK_POKE_MIN_INTERVAL_MS. Input pokes arrive at input rate, and this render is
+            // not cheap and not ours to spend - it runs on the captured application's UI thread.
+            // The poke is NOT acknowledged here, so the render still happens at the next tick.
+            if (changed && (nowTick - g_ch[i].pwLastTick) < WGCBRK_POKE_MIN_INTERVAL_MS && !stale) {
+                ps->PollsSkipped++; continue;
+            }
             if (!changed && !stale) { ps->PollsSkipped++; continue; }
             if (!changed && stale) ps->SafetyPolls++;
             ps->PokeAck = poke;              // before rendering: damage during the render re-pokes

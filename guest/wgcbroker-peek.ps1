@@ -55,8 +55,8 @@ if ($abi -ne $ABI) {
 
 for ($n = 0; $n -lt $Samples; $n++) {
   if ($n -gt 0) { Start-Sleep -Seconds $IntervalSec }
-  Write-Output ("S{0} HDR shutdown={1} producing={2} agentHB={3} brokerHB={4} agentPid={5} brokerPid={6} ctlgen={7}" -f `
-    $n,(RdI 12),(RdI 16),(RdL 40),(RdL 48),(RdI 56),(RdI 60),(RdI 64))
+  Write-Output ("S{0} HDR shutdown={1} producing={2} agentHB={3} brokerHB={4} agentPid={5} brokerPid={6} ctlgen={7} pokeLockMiss={8}" -f `
+    $n,(RdI 12),(RdI 16),(RdL 40),(RdL 48),(RdI 56),(RdI 60),(RdI 64),(RdI 68))
   for ($i = 0; $i -lt $SLOTS; $i++) {
     $b = $HDR + $i*$STRIDE
     $hw = RdL $b
