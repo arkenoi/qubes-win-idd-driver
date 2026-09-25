@@ -768,6 +768,26 @@ int wmain(int argc, wchar_t** argv) {
             }
             if (produced || changed) {
                 g_ch[i].pwBackoffMs = WGCBRK_POKE_SAFETY_MS;   // something happened: stay attentive
+            } else if (ps->PokeSeq == 0) {
+                // NEVER BACK OFF A SLOT THAT HAS NO DAMAGE SIGNAL. Backoff assumes the safety poll
+                // is a backstop and that pokes carry interactive updates. When PokeSeq has never
+                // advanced there are no pokes, so this poll is the slot's ONLY render driver AND
+                // the only source of the behavioural no-frames signal that decides routing at all.
+                // Doubling it to the 8 s ceiling then makes the window unusable and blinds the
+                // detector at the same time.
+                //
+                // Measured 2026-09-25 on win11de-ctl: slot0, an ApplicationFrameWindow, sat at
+                // backoffMs=8000 with seq=0, serviced==safety==polls (every render from the
+                // backstop, none from damage) and polls advancing by 1 per 6 s - a window
+                // repainting once every 6-8 seconds, which is what the owner saw and reported.
+                // Jev: backing off a slot's only render driver is unsafe (0.15), the defect is
+                // real independent of which window it is (0.75), and the behavioural detector
+                // must back the structural one and must not be throttled (1.00).
+                //
+                // Slots that DO get pokes are unaffected, so the idle-cost win this backoff was
+                // added for - a 1 Hz safety poll costing 3.2% of a core - is kept for exactly the
+                // case it was meant for.
+                g_ch[i].pwBackoffMs = WGCBRK_POKE_SAFETY_MS;
             } else {
                 g_ch[i].pwBackoffMs *= 2;                      // nothing to show: ask less often
                 if (g_ch[i].pwBackoffMs > WGCBRK_POKE_BACKOFF_MAX_MS)
