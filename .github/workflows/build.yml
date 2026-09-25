@@ -81,6 +81,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "chromerepro msbuild failed" }
           Get-ChildItem tools\chromerepro\x64\Release\chromerepro.exe
 
+      - name: Build thumbprobe
+        shell: pwsh
+        run: |
+          # tools/thumbprobe: does a DWM thumbnail give the ROGUE window classes a per-window pixel
+          # source? Those classes (override-redirect popups, NOREDIRECTIONBITMAP incl. every UWP app
+          # and Windows Terminal, ULW/colourkey, and toasts) have no per-window source today, which
+          # is the reason the in-guest desktop capture cannot be deleted. DwmRegisterThumbnail is
+          # the one candidate the design survey does not reject. The probe answers the single
+          # decisive question - whether DWM composites a thumbnail whose destination window is
+          # hidden or off-screen - and reports numbers, never a verdict.
+          $msbuild = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" `
+              -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe |
+              Select-Object -First 1
+          & $msbuild tools\thumbprobe\thumbprobe.vcxproj /p:Configuration=Release /p:Platform=x64 /t:Build
+          if ($LASTEXITCODE -ne 0) { throw "thumbprobe msbuild failed" }
+          Get-ChildItem tools\thumbprobe\x64\Release\thumbprobe.exe
+
       - name: Build modeprobe
         shell: pwsh
         run: |
@@ -195,6 +212,9 @@ jobs:
           $repro = Get-ChildItem tools\chromerepro -Recurse -Filter chromerepro.exe -ErrorAction SilentlyContinue |
               Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
           if ($repro) { Copy-Item $repro.FullName package\ -Force } else { Write-Warning 'chromerepro.exe missing from package' }
+          $thumb = Get-ChildItem tools\thumbprobe -Recurse -Filter thumbprobe.exe -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+          if ($thumb) { Copy-Item $thumb.FullName package\ -Force } else { Write-Warning 'thumbprobe.exe missing from package' }
           $mode = Get-ChildItem tools\modeprobe -Recurse -Filter modeprobe.exe -ErrorAction SilentlyContinue |
               Where-Object FullName -match 'x64.*Release' | Select-Object -First 1
           if ($mode) { Copy-Item $mode.FullName package\ -Force } else { Write-Warning 'modeprobe.exe missing from package' }
