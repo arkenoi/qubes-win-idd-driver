@@ -32,6 +32,19 @@
 #define CLASS_SHADOW  L"QubesChromeReproShadow"
 #define CLASS_POPUP   L"QubesChromeReproPopup"
 #define CLASS_GHOST   L"QubesChromeReproGhost"
+// ---- STAGE-1 LEDGER FIXTURES: one window per INELIGIBLE class -------------------------------
+// PwWindowEligible routes a window away from its own per-window capture for exactly four reasons,
+// and until now this tool could only produce one of them (layered with alpha). Without fixtures
+// for the other three, the provenance ledger's NRB / ULW / COLORKEY rows are empty on every run
+// and "this class never appeared" is indistinguishable from "this class is never captured".
+// These three exist to make each class appear on demand, on any guest, with no application
+// installed and nothing to click.
+#ifndef WS_EX_NOREDIRECTIONBITMAP
+#define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
+#endif
+#define CLASS_NRB     L"QubesChromeReproNrb"      // WS_EX_NOREDIRECTIONBITMAP: no GDI surface
+#define CLASS_ULW     L"QubesChromeReproUlw"      // UpdateLayeredWindow-style layered
+#define CLASS_KEY     L"QubesChromeReproKey"      // layered with LWA_COLORKEY
 #define CLASS_CONTROL L"QubesChromeReproControl"
 
 // --mso: the strips exactly as a real Microsoft 365 install creates them, measured with
@@ -99,6 +112,8 @@ static int g_Thickness = 160;
 
 static BOOL g_WantPopup;
 static BOOL g_WantGhost;
+static BOOL g_WantClasses;   // --classes: the three ineligible-class fixtures
+static HWND g_Nrb, g_Ulw, g_Key;
 static BOOL g_WantControl;
 static BOOL g_WantMso;
 static BOOL g_WantMsoThin;
@@ -335,6 +350,21 @@ static BOOL RegisterClasses(void)
     if (!RegisterClassExW(&wc))
         return FALSE;
 
+    wc.lpfnWndProc = DefWindowProcW;
+    wc.lpszClassName = CLASS_NRB;
+    if (!RegisterClassExW(&wc))
+        return FALSE;
+
+    wc.lpfnWndProc = DefWindowProcW;
+    wc.lpszClassName = CLASS_ULW;
+    if (!RegisterClassExW(&wc))
+        return FALSE;
+
+    wc.lpfnWndProc = DefWindowProcW;
+    wc.lpszClassName = CLASS_KEY;
+    if (!RegisterClassExW(&wc))
+        return FALSE;
+
     wc.lpfnWndProc = ShadowProc;
     wc.lpszClassName = CLASS_SHADOW;
     if (!RegisterClassExW(&wc))
@@ -423,6 +453,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
 
     g_WantPopup = (wcsstr(args, L"--popup") != NULL);
     g_WantGhost = (wcsstr(args, L"--ghost") != NULL);
+    g_WantClasses = (wcsstr(args, L"--classes") != NULL);
     g_WantControl = (wcsstr(args, L"--control") != NULL);
     g_WantMsoThin = (wcsstr(args, L"--mso-thin") != NULL);
     g_WantMso = g_WantMsoThin || (wcsstr(args, L"--mso") != NULL);
@@ -530,6 +561,40 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
         {
             SetLayeredWindowAttributes(g_Ghost, 0, 0, LWA_ALPHA);
             ShowWindow(g_Ghost, SW_SHOWNA);
+        }
+    }
+
+    // One window per ineligible class, so the ledger's rows can be exercised deliberately.
+    if (g_WantClasses)
+    {
+        // (b) NOREDIRECTIONBITMAP: no GDI redirection surface at all, so PrintWindow has nothing
+        // to read no matter how it is called. Content is drawn by DirectComposition in real apps;
+        // here the window simply exists, which is enough to be CLASSIFIED - the ledger records the
+        // class and the route, and an empty surface is the honest state of this class.
+        g_Nrb = CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, CLASS_NRB,
+            L"chromerepro - noredirectionbitmap", WS_OVERLAPPEDWINDOW,
+            work.left + 40, work.top + 360, 360, 240, NULL, NULL, g_Instance, NULL);
+        if (g_Nrb) ShowWindow(g_Nrb, SW_SHOWNA);
+
+        // (c) ULW-style: layered with NO SetLayeredWindowAttributes call, so
+        // GetLayeredWindowAttributes FAILS - which is exactly how the router detects this class.
+        // Deliberately not calling UpdateLayeredWindow either: the router never looks at content,
+        // only at whether the attributes can be read.
+        g_Ulw = CreateWindowExW(WS_EX_LAYERED, CLASS_ULW,
+            L"chromerepro - ulw layered", WS_OVERLAPPEDWINDOW,
+            work.left + 420, work.top + 360, 360, 240, NULL, NULL, g_Instance, NULL);
+        if (g_Ulw) ShowWindow(g_Ulw, SW_SHOWNA);
+
+        // (d) LWA_COLORKEY: the key colour is transparent, and the GUI protocol carries no
+        // per-window alpha - so even a delivered frame is probably the wrong pixels. That is the
+        // outcome the programme expects to record for this class rather than fix here.
+        g_Key = CreateWindowExW(WS_EX_LAYERED, CLASS_KEY,
+            L"chromerepro - colorkey layered", WS_OVERLAPPEDWINDOW,
+            work.left + 800, work.top + 360, 360, 240, NULL, NULL, g_Instance, NULL);
+        if (g_Key)
+        {
+            SetLayeredWindowAttributes(g_Key, RGB(255, 0, 255), 0, LWA_COLORKEY);
+            ShowWindow(g_Key, SW_SHOWNA);
         }
     }
 
