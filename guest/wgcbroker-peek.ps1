@@ -9,15 +9,15 @@
 # It reads ONLY. It never writes the section, never signals the broker, and takes nothing from the
 # guest but numbers.
 #
-# ABI: the layout below is WGCBRK_ABI_VERSION 6 (agent/gui-agent/wgcbroker_ipc.h). The header's
+# ABI: the layout below is WGCBRK_ABI_VERSION 7 (agent/gui-agent/wgcbroker_ipc.h). The header's
 # AbiVersion is ASSERTED, not assumed - on any other version this refuses and prints what it found,
 # because a silently-misparsed struct prints plausible nonsense, and plausible nonsense is worse
 # than no reading at all. Slot stride and every offset are derived from that header in one place.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$ABI    = 6
+$ABI    = 7
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 232     # sizeof(WGCBRK_SLOT) at ABI 6
+$STRIDE = 256     # sizeof(WGCBRK_SLOT) at ABI 7
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -65,6 +65,8 @@ for ($n = 0; $n -lt $Samples; $n++) {
       $n,$i,$hw,(RdI ($b+24)),(RdI ($b+28)),(RdI ($b+56)),(RdI ($b+60)),(RdI ($b+8)),(RdI ($b+12)),(RdI ($b+64)),(RdI ($b+68)),(RdI ($b+80)),(RdL ($b+88)),(RdL ($b+96)))
     Write-Output ("S{0} slot{1} FRAMES arrived={2} published={3} dropsize={4} recreateOk={5} recreateFail={6} lastContent={7}x{8} pool={9}x{10} pw={11} polls={12}" -f `
       $n,$i,(RdI ($b+192)),(RdI ($b+196)),(RdI ($b+200)),(RdI ($b+204)),(RdI ($b+208)),(RdI ($b+212)),(RdI ($b+216)),(RdI ($b+220)),(RdI ($b+224)),(RdI ($b+132)),(RdI ($b+184)))
+    Write-Output ("S{0} slot{1} POKE seq={2} ack={3} serviced={4} skipped={5} safety={6}" -f `
+      $n,$i,(RdI ($b+232)),(RdI ($b+236)),(RdI ($b+240)),(RdI ($b+244)),(RdI ($b+248)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)

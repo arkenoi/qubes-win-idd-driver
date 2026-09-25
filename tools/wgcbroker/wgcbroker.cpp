@@ -81,6 +81,8 @@ struct Channel {
     // WGC pool size, tracked so FrameArrived can follow the window's CONTENT size instead of
     // the agent's requested (possibly CROPPED) size - see the FrameArrived comment.
     int     poolW = 0, poolH = 0;
+    // Last PrintWindow render, for the staleness bound on the damage-driven path.
+    ULONGLONG pwLastTick = 0;
 };
 static std::vector<Channel> g_ch(WGCBRK_MAX_SLOTS);
 static bool g_anyPw = false;   // any PrintWindow channel active -> poll the loop faster
@@ -316,6 +318,37 @@ static void PublishPrintWindow(int i) {
     } while (0);
     LeaveCriticalSection(&g_pubCs[i]);
 }
+// Does this window's visible content come from a child window owned by ANOTHER PROCESS that
+// covers its client area? That is the shape whose own surface stays empty, so WGC captures
+// nothing from it. Measured on a UWP host: the frame is owned by ApplicationFrameHost while a
+// Windows.UI.Core.CoreWindow child in the app's process covers the client area.
+//
+// Walks DESCENDANTS, not immediate children: an earlier attempt used FindWindowEx on the frame
+// and missed the CoreWindow entirely on one guest while EnumChildWindows found it, so a fix keyed
+// on the immediate-child test would have been flaky.
+struct XProcScan { DWORD ownPid; RECT client; bool found; };
+
+static BOOL CALLBACK XProcChildProc(HWND child, LPARAM lp) {
+    XProcScan* sc = (XProcScan*)lp;
+    if (!IsWindowVisible(child)) return TRUE;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(child, &pid);
+    if (pid == 0 || pid == sc->ownPid) return TRUE;   // same process: an ordinary child control
+    RECT r;
+    if (!GetWindowRect(child, &r)) return TRUE;
+    // "Covers the client area" is deliberately generous: the child need only span most of it,
+    // because a frame host keeps a caption strip of its own outside the child.
+    const LONG cw = sc->client.right - sc->client.left, chh = sc->client.bottom - sc->client.top;
+    const LONG w = r.right - r.left, h = r.bottom - r.top;
+    if (cw <= 0 || chh <= 0) return TRUE;
+    if (w * 100 >= cw * 80 && h * 100 >= chh * 80) { sc->found = true; return FALSE; }
+    return TRUE;
+}
+
+
+// Defined below, next to CloseChannel: does this window's content come from a child owned by
+// another process? Declared here because OpenChannel routes on it.
+static bool HasCrossProcessContentChild(HWND window);
 
 static void OpenChannel(int i) {
     WGCBRK_SLOT* s = &g_slots[i];
@@ -330,7 +363,21 @@ static void OpenChannel(int i) {
     bool monitor = (s->Hwnd == WGCBRK_MONITOR_HWND);
     HWND hwnd = monitor ? nullptr : (HWND)(ULONG_PTR)s->Hwnd;
     if (!monitor && (!hwnd || !IsWindow(hwnd))) { s->AckState = WGCBRK_FAILED; s->FailHr = E_HANDLE; return; }
-    try {
+    // A window whose visible content is rendered by a child in ANOTHER PROCESS has an empty
+    // surface of its own, so a WGC session on it delivers a couple of frames and then nothing at
+    // all - it is capturing a surface that never changes again. Measured 2026-09-25 on Settings:
+    // PrintWindow(flags=0), which excludes child composition, returned ONE distinct colour over
+    // 1216x941 while PW_RENDERFULLCONTENT returned 191 and the complete page; the slot's arrivals
+    // froze at 3 while a control slot ran 637 -> 678 over 23 s.
+    //
+    // Detect the SHAPE, not the class name: ApplicationFrameWindow is only today's example, and
+    // Jev put the right detector at cross-process-child-covering-the-client-area 0.91 against the
+    // class name at 0.01. Retargeting the capture at that child does not work either - WGC throws
+    // for it (measured: the retarget build came up pw=1, which is only reachable from the catch
+    // below) - so these windows go to the PrintWindow path deliberately and up front, rather than
+    // arriving there via an exception after a session that was never going to produce anything.
+    const bool xprocContent = (!monitor && hwnd && HasCrossProcessContentChild(hwnd));
+    if (!xprocContent) try {
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{ nullptr };
         if (monitor)
@@ -449,6 +496,14 @@ static void OpenChannel(int i) {
     }
 }
 
+static bool HasCrossProcessContentChild(HWND window) {
+    XProcScan sc{};
+    GetWindowThreadProcessId(window, &sc.ownPid);
+    if (!GetWindowRect(window, &sc.client)) return false;
+    EnumChildWindows(window, XProcChildProc, (LPARAM)&sc);
+    return sc.found;
+}
+
 static void CloseChannel(int i) {
     EnterCriticalSection(&g_pubCs[i]);          // serialize with any in-flight PublishFrame
     Channel& c = g_ch[i];
@@ -546,10 +601,38 @@ int wmain(int argc, wchar_t** argv) {
             if (g_agent && wr == WAIT_OBJECT_0 + (g_hCtl ? 1 : 0)) break; // agent exited
         }
         Reconcile();
-        // Service PrintWindow-mode channels and recompute whether any is active.
+        // Service PrintWindow-mode channels, DAMAGE-DRIVEN (ABI 7).
+        //
+        // PrintWindow is not cheap and it is not ours to pay: it renders the full window
+        // SYNCHRONOUSLY ON THE CAPTURED APPLICATION'S UI THREAD. Measured 2026-09-25 on the
+        // Settings window, p50 31.7 ms (p90 38.9, max 53.3, n=40), against this loop's old fixed
+        // 33 ms tick - about 43% of one core, for one window, whether or not anything changed.
+        // Jev on those numbers: unacceptable-as-is 1.00, damage-driven-polling 0.87.
+        //
+        // The agent already computes per-window damage by intersecting the desktop's dirty rects
+        // with each window rect, so it bumps PokeSeq when this window's pixels actually changed
+        // and signals the control event. Render only for a window that says it changed.
+        //
+        // SafetyPolls is a BOUND on staleness, not a fallback: if the poke path is broken this
+        // still repaints once a second, and the counter says it happened. A SafetyPolls that
+        // climbs in normal use means the damage signal is wrong and must be diagnosed - it is not
+        // something to leave running quietly.
+        const ULONGLONG nowTick = GetTickCount64();
         bool anyPw = false;
-        for (int i = 0; i < WGCBRK_MAX_SLOTS; i++)
-            if (g_ch[i].pw && g_ch[i].hwnd) { anyPw = true; PublishPrintWindow(i); }
+        for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) {
+            if (!g_ch[i].pw || !g_ch[i].hwnd) continue;
+            anyPw = true;
+            WGCBRK_SLOT* ps = &g_slots[i];
+            const LONG poke = ps->PokeSeq;
+            const bool changed = (poke != ps->PokeAck);
+            const bool stale = (nowTick - g_ch[i].pwLastTick) >= WGCBRK_POKE_SAFETY_MS;
+            if (!changed && !stale) { ps->PollsSkipped++; continue; }
+            if (!changed && stale) ps->SafetyPolls++;
+            ps->PokeAck = poke;              // before rendering: damage during the render re-pokes
+            g_ch[i].pwLastTick = nowTick;
+            ps->PollsServiced++;
+            PublishPrintWindow(i);
+        }
         g_anyPw = anyPw;
     }
     for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) if (g_ch[i].hwnd) CloseChannel(i);
