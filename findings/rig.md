@@ -1,6 +1,7 @@
 # rig — findings
 
 ## CURRENT STATE
+- **DOM0 DOES NOT MIRROR THIS REPO, AND ITS COPIES ARE OFTEN STALE.** Every dom0 service in `dom0/` was installed by hand at some point and then diverged: `local.WinResize` was still running the build with `win-idd-test` baked in long after that qube ceased to exist, so it answered `GEOM ok=0 err=no_window` for a guest that was up with a window - and I read the dead default as a MISSING CAPABILITY and wrote it into a finding. Before telling anyone to "re-run `dom0/<script>`", the current file has to REACH dom0 first: `qvm-run --pass-io <dev-qube> 'cat /home/user/qubes-win-idd-driver/dom0/<script>' > /tmp/<script>` then run it there - the same idiom `dom0/11-win-idd-all-addendum.policy` documents for itself. **And do not prescribe `sudo`:** these scripts state their own usage (`./10-install-resize-service.sh <dev-qube>`), they elevate internally where they need to, and inventing a `sudo` prefix has now been corrected by the owner twice. [verified 2026-09-25]
 
 AUTHORITATIVE — and the ONLY content of this file. The dated history log was amputated
 2026-09-01 (owner call): the chronological format itself caused stale-first reads and
