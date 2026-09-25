@@ -2758,55 +2758,11 @@ function Invoke-Stage2 {
     # is worse than the hang it prevents.
     $global:QwtClockSkewRefusal = $false
 
-    # ---- CLOCK SANITY, CHECKED BEFORE ANY DRIVER IS TOUCHED -----------------------------
-    # A driver package is validated against the SYSTEM CLOCK. If the guest's idea of UTC is
-    # behind the signing certificate's NotBefore, the catalog is "not yet valid", the driver
-    # store refuses it, and - measured 2026-09-25 on a German 25H2 guest - drvinst then sits
-    # at 0.125 s of CPU for twenty-five minutes until something outside gives up. The log said
-    # only "installing xenvif"; the real answer was in setupapi.dev.log as
-    # "Catalog = xenvif.cat, Error = 0x800B0101".
-    #
-    # WHY THE GUEST CLOCK IS WRONG: Xen presents the RTC as UTC while Windows reads it as LOCAL
-    # time unless RealTimeIsUniversal is set, so a guest in UTC+N computes a UTC N hours behind.
-    # It stayed invisible for six weeks because our test images pin TimeZone=UTC, where the skew
-    # is exactly zero; only a guest with a real timezone can ever show it.
-    #
-    # This REFUSES and REPORTS rather than adjusting the machine's clock. Silently rewriting a
-    # user's system time to make our install proceed is not ours to do, and this project's rule
-    # is that a broken component is reported loudly, not quietly worked around.
-    function Test-SigningClockSane {
-        param([string]$CerPath, [string]$What)
-        if (-not (Test-Path -LiteralPath $CerPath)) { return $true }   # absence is handled elsewhere
-        try {
-            $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $CerPath
-        } catch {
-            Write-Log "  clock check: cannot read $What signer ($($_.Exception.Message)) - not blocking on it" 'WARN'
-            return $true
-        }
-        $nowUtc = [DateTime]::UtcNow
-        $nbUtc  = $c.NotBefore.ToUniversalTime()
-        $naUtc  = $c.NotAfter.ToUniversalTime()
-        if ($nowUtc -lt $nbUtc) {
-            $skew = [int]($nbUtc - $nowUtc).TotalMinutes
-            Write-Log "REFUSING to install $What - THIS GUEST'S CLOCK IS BEHIND." 'ERROR'
-            Write-Log "  guest UTC now      : $($nowUtc.ToString('o'))" 'ERROR'
-            Write-Log "  signer valid from  : $($nbUtc.ToString('o'))  ($skew min in this guest's future)" 'ERROR'
-            Write-Log "  Windows validates driver catalogs against the system clock, so the package" 'ERROR'
-            Write-Log "  would be rejected as not-yet-valid (0x800B0101) and the driver install would" 'ERROR'
-            Write-Log "  hang rather than fail. Refusing instead of hanging." 'ERROR'
-            Write-Log "  FIX, from dom0:  qvm-sync-clock   (or set the guest clock to real UTC)" 'ERROR'
-            Write-Log "  Cause is usually RealTimeIsUniversal being unset while the guest is not in UTC:" 'ERROR'
-            Write-Log "  Windows then reads the UTC hardware clock as local time." 'ERROR'
-            return $false
-        }
-        if ($nowUtc -gt $naUtc) {
-            Write-Log "REFUSING to install $What - its signing certificate EXPIRED at $($naUtc.ToString('o'))" 'ERROR'
-            Write-Log "  guest UTC now: $($nowUtc.ToString('o')). Either the package is stale or this" 'ERROR'
-            Write-Log "  guest's clock is ahead of real time. Refusing instead of hanging." 'ERROR'
-            return $false
-        }
-        return $true
-    }
+    # Clock sanity is checked for the WHOLE PAYLOAD in Assert-PayloadClockSane, called from
+    # Assert-Stage1Preflight (terminal, before anything mutates) and from Import-PayloadCerts
+    # (both stages, before msiexec installs its own drivers). The per-driver calls below are the
+    # SECOND BELT, in the same spirit as the other stage-2 re-checks: the clock can change
+    # between the preflight and here, and stage 2 runs on a later boot than stage 1.
 
     $pvDir = Join-Path $Root 'pv-drivers'
     $pvInf = Join-Path $pvDir 'xenvif.inf'
@@ -2871,11 +2827,18 @@ function Invoke-Stage2 {
                 $global:QwtClockSkewRefusal = $true
                 $script:Result.detail.pv_xencons = 'refused: guest clock skew'
                 Write-Log 'skipping xencons too - the clock must be fixed first' 'ERROR'
-                $consCer = $null
             }
         } else {
             Write-Log 'pv-drivers/xencons-signer.cer missing - the xencons store add will likely fail' 'WARN'
         }
+        if ($global:QwtClockSkewRefusal) {
+            # The refusal has to SKIP THE INSTALL. The first version of this gate merely set the
+            # signer path to $null, which nothing downstream re-reads, so pnputil ran anyway and
+            # hung exactly as before - the gate looked present and did nothing. Found by auditing
+            # this change rather than by another deploy (Jev: fix_sufficient 0.26,
+            # audit-the-change-first 0.98).
+            $script:Result.detail.pv_xencons = 'refused: guest clock skew'
+        } else {
         Write-Log 'installing xencons (PV console - diagnostic channel)'
         $global:LASTEXITCODE = $null   # stale-exit-code trap, see Set-BootResume
         try { $out = & pnputil.exe /add-driver $consInf /install 2>&1 } catch { $out = "$_" }
@@ -2886,6 +2849,7 @@ function Invoke-Stage2 {
         } else {
             Write-Log 'xencons installed - DEV_CONS should bind after the reboot'
             $script:Result.detail.pv_xencons = 'installed'
+        }
         }
     } else {
         Write-Log 'pv-drivers/xencons.inf not in the payload - no PV console (diagnostic only)'
@@ -2950,6 +2914,14 @@ function Invoke-Stage2 {
       $devcon = $null
       try {
         $script:Result.detail.idd_driver = 'requested'
+        # Second belt, same as xenvif/xencons: a skewed clock makes THIS catalog not-yet-valid
+        # too, and pnputil below would hang on it rather than fail. Throwing lands in the
+        # 'IDD ACTIVATION FAILED' catch, which leaves the VGA untouched and the guest on the
+        # Basic Display Adapter - the documented non-fatal degradation for this whole block.
+        if ($global:QwtClockSkewRefusal) {
+            throw ("the guest clock cannot validate driver catalogs (see the PV driver refusal " +
+                   'above) - refusing to stage the IddCx driver, it would hang the same way')
+        }
         if (-not $script:GuiQuiesceHeld) {
             throw ("the gui-agent quiesce after msiexec did not hold ($($script:Result.detail.gui_quiesce_failed)) - " +
                    'refusing to do display surgery under a live capture agent. Stop QubesGuiWatchdog by hand and re-run.')
@@ -4179,6 +4151,91 @@ public static class QdbPrime {
     Emit-Result 0
 }
 
+# ---- CLOCK SANITY, CHECKED BEFORE ANY DRIVER IS TOUCHED -----------------------------
+# A driver package is validated against the SYSTEM CLOCK. If the guest's idea of UTC is
+# behind the signing certificate's NotBefore, the catalog is "not yet valid", the driver
+# store refuses it, and - measured 2026-09-25 on a German 25H2 guest - drvinst then sits
+# at 0.125 s of CPU for twenty-five minutes until something outside gives up. The log said
+# only "installing xenvif"; the real answer was in setupapi.dev.log as
+# "Catalog = xenvif.cat, Error = 0x800B0101".
+#
+# WHY THE GUEST CLOCK IS WRONG: Xen presents the RTC as UTC while Windows reads it as LOCAL
+# time unless RealTimeIsUniversal is set, so a guest in UTC+N computes a UTC N hours behind.
+# It stayed invisible for six weeks because our test images pin TimeZone=UTC, where the skew
+# is exactly zero; only a guest with a real timezone can ever show it.
+#
+# This REFUSES and REPORTS rather than adjusting the machine's clock. Silently rewriting a
+# user's system time to make our install proceed is not ours to do, and this project's rule
+# is that a broken component is reported loudly, not quietly worked around.
+function Test-SigningClockSane {
+    param([string]$CerPath, [string]$What)
+    if (-not (Test-Path -LiteralPath $CerPath)) { return $true }   # absence is handled elsewhere
+    try {
+        $c = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $CerPath
+    } catch {
+        Write-Log "  clock check: cannot read $What signer ($($_.Exception.Message)) - not blocking on it" 'WARN'
+        return $true
+    }
+    $nowUtc = [DateTime]::UtcNow
+    $nbUtc  = $c.NotBefore.ToUniversalTime()
+    $naUtc  = $c.NotAfter.ToUniversalTime()
+    if ($nowUtc -lt $nbUtc) {
+        $skew = [int]($nbUtc - $nowUtc).TotalMinutes
+        Write-Log "REFUSING to install $What - THIS GUEST'S CLOCK IS BEHIND." 'ERROR'
+        Write-Log "  guest UTC now      : $($nowUtc.ToString('o'))" 'ERROR'
+        Write-Log "  signer valid from  : $($nbUtc.ToString('o'))  ($skew min in this guest's future)" 'ERROR'
+        Write-Log "  Windows validates driver catalogs against the system clock, so the package" 'ERROR'
+        Write-Log "  would be rejected as not-yet-valid (0x800B0101) and the driver install would" 'ERROR'
+        Write-Log "  hang rather than fail. Refusing instead of hanging." 'ERROR'
+        Write-Log "  FIX, from dom0:  qvm-sync-clock   (or set the guest clock to real UTC)" 'ERROR'
+        Write-Log "  Cause is usually RealTimeIsUniversal being unset while the guest is not in UTC:" 'ERROR'
+        Write-Log "  Windows then reads the UTC hardware clock as local time." 'ERROR'
+        return $false
+    }
+    if ($nowUtc -gt $naUtc) {
+        Write-Log "REFUSING to install $What - its signing certificate EXPIRED at $($naUtc.ToString('o'))" 'ERROR'
+        Write-Log "  guest UTC now: $($nowUtc.ToString('o')). Either the package is stale or this" 'ERROR'
+        Write-Log "  guest's clock is ahead of real time. Refusing instead of hanging." 'ERROR'
+        return $false
+    }
+    return $true
+}
+
+function Assert-PayloadClockSane {
+    # THE WHOLE-PAYLOAD CLOCK GATE. Every driver this package installs is validated against the
+    # guest's system clock, so ONE skewed clock poisons ALL of them - not just the one site the
+    # skew was first measured on.
+    #
+    # WHY THIS IS NOT PER-DRIVER (audit, 2026-09-25). The first version of this gate guarded
+    # exactly one pnputil call (xenvif), because that is where the German 25H2 guest was seen to
+    # hang. Auditing the change rather than deploying it found THREE more sites that would hang
+    # identically: xencons, the IddCx driver, and - the one no per-driver gate could ever have
+    # covered - msiexec's own ADDLOCAL InstallDriverPackages, which installs the PV drivers from
+    # inside the MSI. Jev graded the per-driver fix fix_sufficient 0.26 and told me to audit
+    # before deploying; this function is that audit's result.
+    #
+    # It refuses TERMINALLY and EARLY. A refusal here happens before the installer has trusted a
+    # throwaway CI certificate as a machine root CA, enabled testsigning, armed autologon or
+    # rebooted - the same reasoning Assert-Stage1Preflight already documents for its other
+    # refusals. Refusing late leaves a permanently altered guest for an install that was never
+    # going to run.
+    param([Parameter(Mandatory)][string]$Root, [string]$Why = '')
+
+    $offenders = @()
+    foreach ($d in @('certs', 'pv-drivers', 'idd-driver')) {
+        $dir = Join-Path $Root $d
+        foreach ($c in @(Get-ChildItem -LiteralPath $dir -Filter *.cer -ErrorAction SilentlyContinue)) {
+            if (-not (Test-SigningClockSane $c.FullName "$d\$($c.Name)")) { $offenders += "$d\$($c.Name)" }
+        }
+    }
+    if ($offenders.Count -gt 0) {
+        $script:Result.detail.clock_skew_refusal = $true
+        $script:Result.detail.clock_skew_certs = ($offenders -join ',')
+        $script:Result.detail.guest_utc_at_refusal = ([DateTime]::UtcNow).ToString('o')
+    }
+    return $offenders
+}
+
 function Import-PayloadCerts {
     # Trust EVERY publisher whose driver this payload will install, BEFORE anything installs one.
     #
@@ -4196,6 +4253,18 @@ function Import-PayloadCerts {
     # between builds, because CI test-signs with a throwaway key. Matching by name is therefore
     # useless; every .cer the payload ships must be imported.
     param([Parameter(Mandatory)][string]$Root, [string]$Why = '')
+
+    # The clock gate runs HERE too, not only in the stage-1 preflight: this function is called in
+    # BOTH stages, and stage 2 runs on a later boot - a guest whose clock was sane at preflight can
+    # be skewed by the time msiexec installs the PV drivers out of the MSI.
+    $skewed = Assert-PayloadClockSane -Root $Root -Why $Why
+    if ($skewed.Count -gt 0) {
+        Fail ("REFUSING to install: this guest's clock cannot validate the payload's driver " +
+              "catalogs ($($skewed -join ', ')). Windows would reject them as not-yet-valid " +
+              '(0x800B0101) and the driver install would HANG rather than fail. ' +
+              'FIX, from dom0:  qvm-sync-clock   then re-run this installer. ' +
+              'See the per-certificate detail above.')
+    }
 
     $dirs = @((Join-Path $Root 'certs'), (Join-Path $Root 'pv-drivers'))
     $certs = @()
@@ -4231,6 +4300,21 @@ function Assert-Stage1Preflight {
     # for an install that was never going to run. Stage 2 keeps its own checks as the second belt;
     # the decisions and messages here mirror them.
     param([Parameter(Mandatory)][string]$Root)
+
+    # (d) A GUEST CLOCK THAT CANNOT VALIDATE THE PAYLOAD'S DRIVER CATALOGS. Checked FIRST and
+    # ahead of the fresh-guest early return below, because this refusal is not about an installed
+    # QWT: a clean install hangs on it exactly as an upgrade does - msiexec's own ADDLOCAL installs
+    # the PV drivers, and drvinst waits on a not-yet-valid catalog rather than failing it. Measured
+    # 2026-09-25 on a German 25H2 guest: 25 minutes at 0.125 s of CPU, the install log saying only
+    # 'installing xenvif', the answer only in setupapi.dev.log as Error = 0x800B0101.
+    $skewed = Assert-PayloadClockSane -Root $Root -Why 'stage 1 pre-flight'
+    if ($skewed.Count -gt 0) {
+        Fail ("pre-flight REFUSAL (nothing changed on this guest): this guest's clock cannot " +
+              "validate the payload's driver catalogs ($($skewed -join ', ')). The driver installs " +
+              'would HANG rather than fail (0x800B0101, not-yet-valid catalog). ' +
+              'FIX, from dom0:  qvm-sync-clock   then re-run this installer.')
+    }
+
     $existing = @(Get-InstalledQwt)
     if ($existing.Count -eq 0) { return }
     Write-Log "pre-flight: $($existing.Count) installed QWT product(s) - checking stage 2's refusals before touching the guest"
