@@ -91,11 +91,17 @@ struct Channel {
     // A visible window whose feed has been silent since it opened is one WGC is not serving.
     ULONGLONG openTick = 0;
     ULONGLONG lastArrivalTick = 0;
-    bool      forcePw = false;   // reopen straight onto the PrintWindow path
     bool      probing = false;   // this PrintWindow channel is a TEST, not yet a commitment
-    ULONGLONG noProbeUntil = 0;  // hysteresis: do not re-test this window before this tick
 };
 static std::vector<Channel> g_ch(WGCBRK_MAX_SLOTS);
+// These two MUST outlive a channel. CloseChannel does `c = Channel{}`, so anything kept in the
+// Channel is erased by the very close that precedes a re-open - measured 2026-09-25: forcePw was
+// set, then wiped by CloseChannel, so the re-route reopened on WGC and did nothing, the probe
+// never ran (probeBounces stayed 0) and the hysteresis never applied, leaving an idle window's
+// channel closed and reopened every quiet period for ever - 38 times on a window whose feed was
+// perfectly healthy. Per-slot, not per-channel.
+static bool      g_forcePw[WGCBRK_MAX_SLOTS]      = {};
+static ULONGLONG g_noProbeUntil[WGCBRK_MAX_SLOTS] = {};
 static bool g_anyPw = false;   // any PrintWindow channel active -> poll the loop faster
 
 static bool InitD3D() {
@@ -402,9 +408,9 @@ static void OpenChannel(int i) {
     // threshold is a guess from one sample, and its worst failure is routing a WGC-capable
     // window to PrintWindow for nothing (0.73). The behavioural test in the main loop is what
     // decides, because it keys on the symptom rather than on a proxy for it.
-    const bool xprocContent = c.forcePw ||
+    const bool xprocContent = g_forcePw[i] ||
                               (!monitor && hwnd && HasCrossProcessContentChild(hwnd));
-    c.forcePw = false;
+    g_forcePw[i] = false;
     if (!xprocContent) try {
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{ nullptr };
@@ -556,7 +562,7 @@ static void Reconcile() {
         else if (!wantOpen && c.hwnd)   { CloseChannel(i); }
         else if (wantOpen && c.hwnd == want && !c.pw &&
                  IsWindow(want) && IsWindowVisible(want) && !IsIconic(want) &&
-                 GetTickCount64() >= c.noProbeUntil &&
+                 GetTickCount64() >= g_noProbeUntil[i] &&
                  (GetTickCount64() - (c.lastArrivalTick ? c.lastArrivalTick : c.openTick))
                      >= WGCBRK_WGC_QUIET_MS) {
             // BEHAVIOURAL DETECTION - this, not the structural test, is what decides.
@@ -582,10 +588,10 @@ static void Reconcile() {
             // blocking at 0.87 and this refinement at 0.96.
             g_slots[i].Reroutes++;
             g_slots[i].QuietReroutes++;
-            c.forcePw = true;
-            c.probing = true;
-            CloseChannel(i);
+            CloseChannel(i);          // wipes the Channel - so set the survivors AFTER it
+            g_forcePw[i] = true;
             OpenChannel(i);
+            g_ch[i].probing = true;   // OpenChannel re-made the Channel; mark the new one
         }
         else if (wantOpen && c.hwnd == want && !c.pw) {
             // RE-CHECK THE ROUTING. A UWP-style frame exists BEFORE the app creates the
@@ -753,9 +759,9 @@ int wmain(int argc, wchar_t** argv) {
                 g_ch[i].probing = false;
                 if (!produced) {
                     g_slots[i].ProbeBounces++;
-                    g_ch[i].noProbeUntil = nowTick + WGCBRK_WGC_PROBE_BACKOFF_MS;
-                    g_ch[i].forcePw = false;
+                    g_noProbeUntil[i] = nowTick + WGCBRK_WGC_PROBE_BACKOFF_MS;
                     CloseChannel(i);
+                    g_forcePw[i] = false;
                     OpenChannel(i);      // back to WGC, which was right all along
                     continue;
                 }
