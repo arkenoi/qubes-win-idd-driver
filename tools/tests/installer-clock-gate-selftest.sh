@@ -77,6 +77,25 @@ chk "NOT-YET-VALID certificate refused" False "$(run "$T/future.cer")"
 chk "EXPIRED certificate refused"       False "$(run "$T/past.cer")"
 chk "missing file does not block"       True  "$(run "$T/does-not-exist.cer")"
 
+# STRICTMODE GUARD. The installer runs under Set-StrictMode, where READING a variable that was
+# never set is a terminating error. The first version of this gate set $global:QwtClockSkewRefusal
+# only in the refusal branch, so on a guest with a HEALTHY clock the xencons gate read an undefined
+# variable and failed the entire install - a guard that breaks the good path is worse than the hang
+# it prevents. Assert the assignment comes before any read.
+# The check must demand the UNCONDITIONAL initialiser, not merely "some assignment first":
+# the buggy version assigned $true inside the refusal branch, which precedes the read and would
+# satisfy a naive ordering test while leaving the good path throwing. Measured: the first version
+# of this check PASSED with the defect re-introduced, i.e. it was decoration.
+first_init=$(grep -n '\$global:QwtClockSkewRefusal *= *\$false' "$SRC" | head -1 | cut -d: -f1)
+first_read=$(grep -n '\$global:QwtClockSkewRefusal' "$SRC" | grep -v '\$global:QwtClockSkewRefusal *=' | head -1 | cut -d: -f1)
+if [ -z "${first_init:-}" ]; then
+  echo "  FAIL QwtClockSkewRefusal has no unconditional '= \$false' initialiser - under StrictMode the good path throws"; fail=1
+elif [ -n "${first_read:-}" ] && [ "$first_read" -lt "$first_init" ]; then
+  echo "  FAIL QwtClockSkewRefusal is READ at line $first_read before its initialiser at line $first_init"; fail=1
+else
+  echo "  OK   QwtClockSkewRefusal initialised (line $first_init) before any read${first_read:+ (line $first_read)}"
+fi
+
 if [ "$fail" = 0 ]; then echo "PASS: the gate refuses exactly the clock-broken cases"; exit 0; fi
 echo "FAIL: the installer would not refuse a clock-broken driver package"
 exit 1

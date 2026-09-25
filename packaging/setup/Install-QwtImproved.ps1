@@ -2750,6 +2750,14 @@ function Invoke-Stage2 {
     # upgrades the one the MSI just laid down.
     # Proven on win10-clean: Realtek RTL8139C+ -> Xen PV Network Device #0, gateway
     # reachable.
+    # The refusal flag must EXIST before anything reads it: this script runs under
+    # Set-StrictMode, where reading an unset variable is a terminating error. Measured
+    # 2026-09-25 - the first version set it only in the refusal branch, so on a guest with a
+    # HEALTHY clock the xencons gate read an undefined variable and failed the whole install
+    # with "Die Variable ... kann nicht abgerufen werden". A guard that breaks the good path
+    # is worse than the hang it prevents.
+    $global:QwtClockSkewRefusal = $false
+
     # ---- CLOCK SANITY, CHECKED BEFORE ANY DRIVER IS TOUCHED -----------------------------
     # A driver package is validated against the SYSTEM CLOCK. If the guest's idea of UTC is
     # behind the signing certificate's NotBefore, the catalog is "not yet valid", the driver
