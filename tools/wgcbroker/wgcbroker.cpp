@@ -396,22 +396,15 @@ static void OpenChannel(int i) {
                         ch.poolW = cs.Width; ch.poolH = cs.Height;
                         ok = true;
                     } catch (...) {}
-                    if (ok) { g_slots[i].RecreateOk++; }
-                    else {
-                        // A swallowed Recreate failure leaves poolW/poolH stale, so EVERY later
-                        // frame mismatches and is dropped here: the feed is gone for good while
-                        // the slot still reads ACTIVE after a clean open. Retry a BOUNDED number
-                        // of times (a genuine transient deserves that), then stop pretending and
-                        // mark the slot FAILED with an HRESULT the agent already reads. Retrying
-                        // for ever would be the quiet recovery this project forbids, and sitting
-                        // stale would be worse: both hide a dead feed behind an ACTIVE slot.
-                        g_slots[i].RecreateFail++;
-                        ch.poolW = 0; ch.poolH = 0;      // force a fresh attempt next arrival
-                        if (g_slots[i].RecreateFail > WGCBRK_RECREATE_TRIES) {
-                            g_slots[i].AckState = WGCBRK_FAILED;
-                            g_slots[i].FailHr = (LONG)E_FAIL;
-                        }
-                    }
+                    if (ok) g_slots[i].RecreateOk++; else g_slots[i].RecreateFail++;
+                    // BEHAVIOUR DELIBERATELY UNCHANGED HERE. A swallowed Recreate failure leaves
+                    // poolW/poolH stale, so every later frame mismatches and is dropped - a
+                    // permanent feed loss wearing an ACTIVE slot, and a real defect. It is NOT
+                    // fixed in this commit: this build exists to MEASURE which mechanism stops
+                    // the Settings feed, and a fix on the same path could alter or mask the very
+                    // state being measured (Jev, asked directly: should-have-been-separate 0.98,
+                    // against my own argument that they were separable). The counters above
+                    // record what happened; the fix lands once they have spoken.
                     return;
                 }
                 g_slots[i].FramesPublished++;
