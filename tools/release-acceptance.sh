@@ -31,6 +31,13 @@ CELLS_DEFAULT="win10-clean win10-reinstall win10-upgrade win10-appvm win11-clean
 CELLS="$CELLS_DEFAULT"
 G10="${G10:?set G10 to the Win10 entry image - there is no default target}"
 G11="${G11:?set G11 to the Win11 entry image - there is no default target}"
+# The BASE goldens the campaign clones its cells from. matrix.sh requires them - it used to
+# default them to win10-base/win11-base and the owner retired every default target ("wrong 99% of
+# runs"), so the runner has to name them too rather than silently re-introduce the default one
+# level up. Measured 2026-09-25: without this the campaign died in one second with
+# "matrix.sh: line 1628: B10: set B10 to the Win10 base golden".
+B10="${B10:?set B10 to the Win10 base golden - there is no default target}"
+B11="${B11:?set B11 to the Win11 base golden - there is no default target}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -146,7 +153,7 @@ mkdir -p "$CAMP"
 # group that did not finish. Writing this to runner.log instead would make the run unrecordable.
 # matrix.sh takes its own output dir from MATRIX_OUT, not OUT.
 MATRIX_WORK="$WORK" RELEASE_SETUP="$SETUP" RELEASE_ISO="$ISO" RELEASE_COMMIT="$HEAD" \
-  CELLS="$CELLS" G10="$G10" G11="$G11" MATRIX_OUT="$CAMP/matrix" \
+  CELLS="$CELLS" G10="$G10" G11="$G11" B10="$B10" B11="$B11" MATRIX_OUT="$CAMP/matrix" \
   ./mgmt/harness/matrix.sh 2>&1 | tee -a "$CAMP/full.out" >>"$CAMP/runner.log"
 MRC=${PIPESTATUS[0]}
 say "matrix rc=$MRC (detail: $CAMP/full.out, artefacts: $CAMP/matrix)"
