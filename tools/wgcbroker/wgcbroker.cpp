@@ -382,14 +382,39 @@ static void OpenChannel(int i) {
                 // while the agent could silently slice the desktop composite instead. The crop
                 // itself now happens in PublishFrame, from a full-size capture.
                 Channel& ch = g_ch[i];
+                // ABI 6 accounting: record what every arrival did, so a slot that stops
+                // publishing can be told apart from a slot that never receives anything.
+                g_slots[i].FramesArrived++;
+                g_slots[i].LastContentW = cs.Width; g_slots[i].LastContentH = cs.Height;
+                g_slots[i].PoolW = ch.poolW;        g_slots[i].PoolH = ch.poolH;
                 if (cs.Width != ch.poolW || cs.Height != ch.poolH) {
+                    g_slots[i].FramesDropSize++;
+                    bool ok = false;
                     try {
                         ch.pool.Recreate(g_rtDev,
                             DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, cs);
                         ch.poolW = cs.Width; ch.poolH = cs.Height;
+                        ok = true;
                     } catch (...) {}
+                    if (ok) { g_slots[i].RecreateOk++; }
+                    else {
+                        // A swallowed Recreate failure leaves poolW/poolH stale, so EVERY later
+                        // frame mismatches and is dropped here: the feed is gone for good while
+                        // the slot still reads ACTIVE after a clean open. Retry a BOUNDED number
+                        // of times (a genuine transient deserves that), then stop pretending and
+                        // mark the slot FAILED with an HRESULT the agent already reads. Retrying
+                        // for ever would be the quiet recovery this project forbids, and sitting
+                        // stale would be worse: both hide a dead feed behind an ACTIVE slot.
+                        g_slots[i].RecreateFail++;
+                        ch.poolW = 0; ch.poolH = 0;      // force a fresh attempt next arrival
+                        if (g_slots[i].RecreateFail > WGCBRK_RECREATE_TRIES) {
+                            g_slots[i].AckState = WGCBRK_FAILED;
+                            g_slots[i].FailHr = (LONG)E_FAIL;
+                        }
+                    }
                     return;
                 }
+                g_slots[i].FramesPublished++;
                 PublishFrame(i, f);
             });
         session.StartCapture();
