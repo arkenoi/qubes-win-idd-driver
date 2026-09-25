@@ -83,6 +83,8 @@ struct Channel {
     int     poolW = 0, poolH = 0;
     // Last PrintWindow render, for the staleness bound on the damage-driven path.
     ULONGLONG pwLastTick = 0;
+    // Last time this WGC channel was re-checked for a cross-process content child.
+    ULONGLONG xprocTick = 0;
 };
 static std::vector<Channel> g_ch(WGCBRK_MAX_SLOTS);
 static bool g_anyPw = false;   // any PrintWindow channel active -> poll the loop faster
@@ -525,6 +527,23 @@ static void Reconcile() {
         Channel& c = g_ch[i];
         if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); OpenChannel(i); }
         else if (!wantOpen && c.hwnd)   { CloseChannel(i); }
+        else if (wantOpen && c.hwnd == want && !c.pw) {
+            // RE-CHECK THE ROUTING. A UWP-style frame exists BEFORE the app creates the
+            // cross-process child that carries its content, so the routing decision taken in
+            // OpenChannel is usually taken too early and says "WGC". Without this the window
+            // stays on a session that will never deliver another frame - which is precisely how
+            // the previous attempt at this fix failed, silently, and why Jev rated that risk
+            // blocking at 0.85 before this was written.
+            const ULONGLONG nowX = GetTickCount64();
+            if (nowX - c.xprocTick >= 500) {      // bounded: EnumChildWindows is not free
+                c.xprocTick = nowX;
+                if (HasCrossProcessContentChild(want)) {
+                    g_slots[i].Reroutes++;
+                    CloseChannel(i);
+                    OpenChannel(i);               // now takes the PrintWindow path
+                }
+            }
+        }
     }
 }
 

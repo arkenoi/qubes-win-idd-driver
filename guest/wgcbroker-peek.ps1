@@ -65,8 +65,8 @@ for ($n = 0; $n -lt $Samples; $n++) {
       $n,$i,$hw,(RdI ($b+24)),(RdI ($b+28)),(RdI ($b+56)),(RdI ($b+60)),(RdI ($b+8)),(RdI ($b+12)),(RdI ($b+64)),(RdI ($b+68)),(RdI ($b+80)),(RdL ($b+88)),(RdL ($b+96)))
     Write-Output ("S{0} slot{1} FRAMES arrived={2} published={3} dropsize={4} recreateOk={5} recreateFail={6} lastContent={7}x{8} pool={9}x{10} pw={11} polls={12}" -f `
       $n,$i,(RdI ($b+192)),(RdI ($b+196)),(RdI ($b+200)),(RdI ($b+204)),(RdI ($b+208)),(RdI ($b+212)),(RdI ($b+216)),(RdI ($b+220)),(RdI ($b+224)),(RdI ($b+132)),(RdI ($b+184)))
-    Write-Output ("S{0} slot{1} POKE seq={2} ack={3} serviced={4} skipped={5} safety={6}" -f `
-      $n,$i,(RdI ($b+232)),(RdI ($b+236)),(RdI ($b+240)),(RdI ($b+244)),(RdI ($b+248)))
+    Write-Output ("S{0} slot{1} POKE seq={2} ack={3} serviced={4} skipped={5} safety={6} reroutes={7}" -f `
+      $n,$i,(RdI ($b+232)),(RdI ($b+236)),(RdI ($b+240)),(RdI ($b+244)),(RdI ($b+248)),(RdI ($b+252)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)
