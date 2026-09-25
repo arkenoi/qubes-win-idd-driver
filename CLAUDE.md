@@ -487,6 +487,18 @@ external dependency is hit (dom0 action, a credential, an explicit approval CLAU
 requires). "Here is what I found, what next?" is not a stopping point - continue to the next
 diagnostic or fix. If several things are open, work them in order without checking in.
 
+**Operator intervention is JEV-BOUND (owner, 2026-09-25: "make operator intervention jev-bound. if you want
+to stop and ask something, ask jev first if you should").** Before stopping to put a question to the owner,
+ask Jev whether you should: state what you are blocked on, what you would do with no answer, and what it
+costs if you guess wrong. Then act on the verdict - if Jev says decide it yourself, decide it yourself and
+surface the point in your next report instead. Enforced, not written: `tools/hooks/ask-operator-gate.sh`
+(PreToolUse on `AskUserQuestion|ExitPlanMode`) refuses the call unless the wire log carries a recent Jev
+question whose id contains `ask_operator`/`should_ask`/`operator_intervention`/`escalate_to_owner`/
+`interrupt_the_owner`/`blocking_question`. The gate checks the question was ASKED, never which way it was
+answered - deciding that in a script would just move the judgement back out of Jev. Driven both ways before
+it shipped. The approval gates this file already mandates (upstream submission, dom0/policy changes) remain
+real gates; asking Jev first costs one call.
+
 **Never ask what to do next.** Choose, act, and say what was chosen. Questions are for
 approval gates that CLAUDE.md actually mandates (upstream submission, dom0/policy changes),
 not for direction.

@@ -32,6 +32,17 @@
             "statusMessage": "Checking for retired/parked lines"
           }
         ]
+      },
+      {
+        "matcher": "AskUserQuestion|ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/ask-operator-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking Jev was asked whether the operator should be involved"
+          }
+        ]
       }
     ],
     "Stop": [
