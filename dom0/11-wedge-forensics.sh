@@ -30,6 +30,7 @@ set -u
 DEV="${DEV:?set DEV to the dev qube - there is no default target}"
 NMI=0
 DUMPCORE=0
+SPINSHAPE=0
 VM="${VM:-}"
 for a in "$@"; do
     case "$a" in
@@ -110,6 +111,31 @@ xl dmesg > "$OUT/xl-dmesg-vcpu-regs-2.txt" 2>&1
 xl dmesg -c >/dev/null 2>&1
 xl debug-keys v 2>/dev/null; sleep 2
 xl dmesg > "$OUT/xl-dmesg-vmx.txt" 2>&1
+
+# --- The Xen-side half, EXTRACTED so it gets read rather than archived (added 2026-09-25).
+#     `xl debug-keys v` prints, per vCPU, the VMCS guest-interrupt-status field: RVI in the low
+#     byte - a vector LATCHED for delivery - and SVI in the high. That is the direct answer to
+#     "did the IPI ever reach the target's vLAPIC", which findings/wedge.md had recorded for weeks
+#     as THE open link and as "invisible from any guest dump by construction". It was never
+#     invisible: four bundles sat unread on the dev qube with the field in them, one of them
+#     showing RVI=0xE1 - the Windows IPI vector - pending on a vCPU that never took it while three
+#     others spun in nt!KiIpiSendRequestEx waiting for exactly that acknowledgement. An 1800-line
+#     hypervisor log that nobody opens is not evidence, so pull this domain's block out here.
+awk -v d=">>> Domain $DOMID <<<" '$0~d{f=1;next} f&&/>>> Domain/{f=0} f' \
+    "$OUT/xl-dmesg-vmx.txt" > "$OUT/vmcs-d$DOMID.txt" 2>/dev/null
+if [ ! -s "$OUT/vmcs-d$DOMID.txt" ]; then
+    echo "WARNING: no VMCS block for d$DOMID - the hypervisor ring wrapped before \`xl dmesg\` ran." \
+         "MISSING DATA: nothing about interrupt delivery may be concluded from this capture." \
+         > "$OUT/vmcs-CAPTURE-INCOMPLETE.txt"
+else
+    grep -E 'VCPU|InterruptStatus|reason=' "$OUT/vmcs-d$DOMID.txt" > "$OUT/vmcs-summary.txt" 2>/dev/null
+    # SPIN shape = a PAUSE-loop exit (reason 0x28), or any vector latched and not being taken.
+    if grep -qE 'reason=00000028' "$OUT/vmcs-d$DOMID.txt" 2>/dev/null \
+       || grep -E 'InterruptStatus = [0-9a-f]+' "$OUT/vmcs-d$DOMID.txt" 2>/dev/null \
+          | grep -qvE 'InterruptStatus = 0000'; then
+        SPINSHAPE=1
+    fi
+fi
 # Pull this domain's RIPs out so the next reader does not have to: one line per vCPU per dump.
 # Xen's _show_registers prints "RIP:    %04x:[<%016lx>]" (xen/arch/x86/x86_64/traps.c) for HVM
 # guests too, under a "guest state (dNvM)" header from dump_execstate. The first version of this
@@ -160,6 +186,16 @@ cat "$OUT/grant-summary.txt"
 
 # The memory image comes BEFORE the NMI: the NMI reboots the guest, and a rebooted guest is not
 # the specimen any more. If both are asked for, the image is the one that survives the mistake.
+# A SPIN-shaped wedge is precisely the one that NEEDS a memory image. The Xen side can say a
+# vector is latched; only a core can say which MODULE the vCPU that refuses to take it is running,
+# by walking its stack (tools/core-module-list.py) and naming the frames (tools/pdb-symbolize.py).
+# Those two halves have never been captured from the SAME instance, which is the whole reason the
+# case is still open - so take the image here instead of leaving it to whoever opens the bundle.
+if [ "${SPINSHAPE:-0}" = 1 ] && [ "$DUMPCORE" = 0 ] && [ "${NOAUTOCORE:-0}" = 0 ]; then
+    echo "SPIN shape in the VMCS - taking a memory image automatically (set NOAUTOCORE=1 to skip)"
+    DUMPCORE=1
+fi
+
 if [ "$DUMPCORE" = 1 ]; then
     CORE="$OUT/../${VM}-${DOMID}-$(date +%Y%m%d-%H%M%S).core"
     # Guest RAM in KiB, from the toolstack rather than from the qube's configured maxmem.
