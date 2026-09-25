@@ -29,7 +29,8 @@ RUN=""; SKIP_FEATURES=0
 # Not a list anyone should silently shrink (memory: full-acceptance-before-release-is-a-GATE).
 CELLS_DEFAULT="win10-clean win10-reinstall win10-upgrade win10-appvm win11-clean win11-reinstall win11-upgrade win11-appvm"
 CELLS="$CELLS_DEFAULT"
-G10="${G10:-win10-iqi}"; G11="${G11:-win11-iqi}"
+G10="${G10:?set G10 to the Win10 entry image - there is no default target}"
+G11="${G11:?set G11 to the Win11 entry image - there is no default target}"
 
 while [ $# -gt 0 ]; do
   case "$1" in

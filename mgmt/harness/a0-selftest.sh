@@ -40,8 +40,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$HERE" || exit 1
 
 SETUP="${1:?usage: a0-selftest.sh <release-setup-dir> [subject] [base]}"
-VM="${2:-win10-a0tb-floor}"
-BASE="${3:-win10-base}"
+VM="${2:?usage: $0 <pkg> <vm> <base> - name the subject; there is no default target}"
+BASE="${3:?usage: $0 <pkg> <vm> <base> - name the base; there is no default target}"
 
 TS=$(date -u +%Y%m%d-%H%M%S)
 # A0_OUT: optional evidence-dir override for the protocol wrapper (see a0-toast-bridge.sh).

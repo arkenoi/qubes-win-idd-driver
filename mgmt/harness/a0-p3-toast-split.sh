@@ -53,8 +53,8 @@ if [ "${P3C_READY:-0}" != 1 ]; then
 fi
 
 SETUP="${1:?usage: a0-p3-toast-split.sh <release-setup-dir> [subject] [base]}"
-VM="${2:-win10-p3ts}"
-BASE="${3:-win10-base}"
+VM="${2:?usage: $0 <pkg> <vm> <base> - name the subject; there is no default target}"
+BASE="${3:?usage: $0 <pkg> <vm> <base> - name the base; there is no default target}"
 
 TS=$(date -u +%Y%m%d-%H%M%S)
 OUT="${P3_OUT:-scratchpad/a0-p3-toast-split-$TS}"; mkdir -p "$OUT"

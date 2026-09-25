@@ -316,8 +316,12 @@ NOT_LINTED = [
 # is a different thing: it selects a source, it does not silently send commands somewhere. Flagging
 # those too would bury the real rule in noise and it would be baselined away, which is how a lint
 # stops mattering.
-TARGET_VARS = r'(?:QTEST_VM|VM|SUBJ|SUBJECT|CHURN|TARGET|GUEST|TPL|DEST|HOLDER)'
-DEFAULT_TARGET_RE = re.compile(r'\$\{' + TARGET_VARS + r':-(dom0|win[0-9a-z-]*)\}')
+TARGET_VARS = r'(?:QTEST_VM|VM|SUBJ|SUBJECT|CHURN|TARGET|GUEST|TPL|DEST|HOLDER|BASE|SRC|GOLDEN|MGMT|DEV|B10|B11|G10|G11|OS|OS_FAMILY)'
+# Also catches the unbraced `X=${1:-win...}` form and the OS-FAMILY selectors, which pick
+# WHICH golden gets driven and so target the wrong guest just as surely as a qube name.
+DEFAULT_TARGET_RE = re.compile(
+    r'(?:\$\{' + TARGET_VARS + r'|\b' + TARGET_VARS + r'="?\$\{\d+)'
+    r'[^}]*:-(dom0|win[0-9a-z-]*)\}')
 
 def l10_no_default_target_guest() -> None:
     """RULE 21 (owner, 2026-09-21: "no attempts to target dom0 or self as default target qube
@@ -326,7 +330,16 @@ def l10_no_default_target_guest() -> None:
     BOTH arms of an A/B to a halted VM, recorded "Request refused" where a pass result belongs,
     started that VM twice, and left three Windows guests running at once against the one-guest
     rule. Name the target or be refused - there is no safe default."""
-    for f in HARNESS:
+    # dom0/ and tools/ too. They were NOT scanned, which is how dom0's resize service kept
+    # win-idd-test baked in long after that qube stopped existing: it answered every request with
+    # GEOM ok=0 err=no_window, and the capability looked absent rather than misconfigured.
+    scanned = list(HARNESS)
+    for sub in ("dom0", "tools"):
+        d = ROOT / sub
+        if d.is_dir():
+            scanned += sorted(p for p in d.iterdir()
+                              if p.is_file() and (p.suffix == ".sh" or p.name == "qtest"))
+    for f in scanned:
         for n, line in enumerate(f.read_text(errors="replace").splitlines(), 1):
             s = line.lstrip()
             if s.startswith("#"):

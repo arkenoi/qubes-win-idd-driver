@@ -1625,8 +1625,8 @@ PV=$(python3 -c "import json;print(json.load(open('$RELEASE_SETUP/MANIFEST.json'
 # such as win10-iqi; stock: a stock-422 fixture). NO DEFAULT (2026-08-30): the old default
 # carried the release under test, which silently turned every upgrade cell into a same-version
 # reinstall. Name it explicitly or the run does not start.
-B10="${B10:-win10-base}"
-B11="${B11:-win11-base}"
+B10="${B10:?set B10 to the Win10 base golden - there is no default target}"
+B11="${B11:?set B11 to the Win11 base golden - there is no default target}"
 
 # A10/A11 = the DISPOSABLE per-OS churn subjects EVERY install cell targets (TARGET MODEL above).
 # Fixed names, deliberately not knobs ("do not complicate the controls"): prime-run recreates

@@ -19,8 +19,8 @@
 set -uo pipefail
 cd /home/user/qubes-win-idd-driver
 
-SRC=${1:-win11-24h2}
-TPL=${2:-win11-tpl}
+SRC=${1:?usage: $0 <src-qube> <template> - name the source; there is no default target}
+TPL=${2:?usage: $0 <src-qube> <template> - name the template; there is no default target}
 export QTEST_VM="$TPL"
 t0=$(date +%s); el() { printf 't+%ss ' "$(( $(date +%s) - t0 ))"; }
 die() { el; echo "FAILED: $*"; exit 1; }

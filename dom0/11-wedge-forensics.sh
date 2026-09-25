@@ -27,7 +27,7 @@
 #
 # Results land in ~/wedge-<timestamp>/ and are copied to the dev qube at the end.
 set -u
-DEV="${DEV:-win-idd-mgmt}"
+DEV="${DEV:?set DEV to the dev qube - there is no default target}"
 NMI=0
 DUMPCORE=0
 VM="${VM:-}"

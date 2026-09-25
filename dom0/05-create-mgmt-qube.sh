@@ -6,7 +6,7 @@ set -euo pipefail
 # Template is REQUIRED: it must be the one where you installed the mgmt packages
 # (qubes-core-admin-client, p7zip, xorriso, ...) — guessing default_template here
 # would silently produce a broken mgmt qube.
-VM="${1:-win-idd-mgmt}"
+VM="${1:?usage: $0 <mgmt-qube-name> - name the qube; there is no default target}"
 TEMPLATE="${2:?usage: $0 [mgmt-qube-name] <template-with-mgmt-packages>}"
 qvm-ls --raw-list | grep -qx "$TEMPLATE" || { echo "no such template: $TEMPLATE" >&2; exit 1; }
 

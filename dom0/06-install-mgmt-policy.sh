@@ -6,8 +6,8 @@
 # Usage: ./06-install-mgmt-policy.sh [mgmt-qube] [test-qube]
 set -euo pipefail
 
-MGMT="${1:-win-idd-mgmt}"
-VM="${2:-win-idd-test}"
+MGMT="${1:?usage: $0 <mgmt-qube> <test-qube> - name both; there is no default target}"
+VM="${2:?usage: $0 <mgmt-qube> <test-qube> - name both; there is no default target}"
 TAG="created-by-$MGMT"
 POLICY=/etc/qubes/policy.d/31-win-idd-mgmt.policy
 

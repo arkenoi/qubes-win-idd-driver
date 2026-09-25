@@ -3,7 +3,7 @@
 # Standalone HVM, no network, generous disk. Windows itself installed manually once.
 set -euo pipefail
 
-VM="${1:-win-idd-test}"
+VM="${1:?usage: $0 <qube-name> - name the qube; there is no default target}"
 
 if qvm-ls --raw-list | grep -qx "$VM"; then
     echo "$VM already exists; not touching it." >&2; exit 1

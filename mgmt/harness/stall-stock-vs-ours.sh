@@ -29,7 +29,7 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 OURS="${1:?usage: stall-stock-vs-ours.sh <ours-setup-tree> [runs-per-arm]}"
 N="${2:-6}"
-BASE="${BASE:-win10-base}"
+BASE="${BASE:?set BASE to the base golden - there is no default target}"
 # NO DEFAULT TARGET (lint L-target): a harness that defaults its subject runs against whatever
 # that name happens to be today. Name it: VM=<qube> ... - it is created and destroyed per run.
 VM="${VM:?set VM to the churn qube this hunt may create and destroy, e.g. VM=win10-hunt}"

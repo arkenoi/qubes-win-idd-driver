@@ -36,7 +36,7 @@ cd /home/user/qubes-win-idd-driver || exit 2
 if [ -z "${VM:-}" ]; then echo "notify-errors-guest-test: VM is not set and there is NO default target." >&2; exit 2; fi
 PKG="${PKG:?set PKG to the release setup tree under test}"
 LOG="${LOG:-/home/user/rel/notify-errors-guest-test-$VM.log}"
-OS_FAMILY="${OS_FAMILY:-win11}"   # which golden quick-upgrade.sh upgrades over
+OS_FAMILY="${OS_FAMILY:?set OS_FAMILY (win10|win11) - it selects the golden quick-upgrade.sh upgrades over and there is no default target}"
 say(){ echo "[$(date -u +%H:%M:%S)] $*" | tee -a "$LOG"; }
 pass=0; fail=0
 ok(){ say "PASS  $*"; pass=$((pass+1)); }

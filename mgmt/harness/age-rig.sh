@@ -18,7 +18,7 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 . mgmt/harness/shutdown-lib.sh
 . mgmt/harness/e2e-wait.sh
-N="${1:-25}"; GOLDEN="${2:-win11-qwt}"
+N="${1:-25}"; GOLDEN="${2:?usage: $0 [n] <golden> - name the golden; there is no default target}"
 VM=win11-age
 OUT="scratchpad/age-$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$OUT"
 say(){ echo "$(date -u +%H:%M:%SZ) age-rig: $*" | tee -a "$OUT/age.log"; }

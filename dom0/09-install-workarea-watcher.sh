@@ -34,7 +34,7 @@ if [ "${1:-}" = "--uninstall" ]; then
     exit 0
 fi
 
-VM="${1:-win-idd-test}"
+VM="${1:?usage: $0 <qube-name> - name the qube; there is no default target}"
 BIN=~/.local/bin/qubes-win-workarea-watch.sh
 AUTOSTART=~/.config/autostart/qubes-win-workarea.desktop
 
@@ -43,7 +43,7 @@ mkdir -p ~/.local/bin ~/.config/autostart
 cat > "$BIN" <<'EOF'
 #!/bin/bash
 # Mirror dom0 work area + frame extents into a VM's QubesDB. See installer header.
-VM="${1:-win-idd-test}"
+VM="${1:?usage: $0 <qube-name> - name the qube; there is no default target}"
 
 current_value() {
     local desk wa idx x y w h fx
