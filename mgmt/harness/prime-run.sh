@@ -176,6 +176,12 @@ qvm-create --class StandaloneVM --label red --property virt_mode=hvm --property 
   || { log "TERMINAL: could not create $CHURN"; exit 1; }
 qvm-tags "$CHURN" add win-idd-testbed || { log "TERMINAL: could not tag $CHURN"; exit 1; }
 qvm-features "$CHURN" os Windows
+# timezone: without it the RTC holds TRUE UTC while Windows reads it as LOCAL, so a
+# non-UTC guest computes a UTC behind real UTC by its own offset and CI-minted driver
+# catalogs come out not-yet-valid (0x800B0101, a 25-minute silent drvinst hang,
+# measured 2026-09-25). The goldens carry timezone=localtime; a create path that copies
+# only the volumes did not, so the subject differed from its golden in exactly that.
+qvm-features "$CHURN" timezone "$(qvm-features "$BASE" timezone 2>/dev/null || echo localtime)"
 for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do qvm-prefs "$CHURN" "${p%%:*}" "${p##*:}"; done
 qvm-prefs "$CHURN" netvm '' 2>/dev/null
 python3 - "$BASE" "$CHURN" <<'PY' || { log "TERMINAL: volume clone failed"; exit 1; }
@@ -614,6 +620,31 @@ if [ "$ready" != 1 ]; then
         log "  cpu_time UNREADABLE: executing-or-not is UNMEASURED. This is not a claim either way -"
         log "  do not record it as a busy guest or as a frozen one." ;;
     esac
+    # CAPTURE THE SPECIMEN NOW, AUTOMATICALLY. Leaving the guest running is not enough: on
+    # 2026-09-23 a wedge was caught inside an acceptance campaign, and the campaign's NEXT cell
+    # would have recloned the guest and destroyed it - the specimen survived only because a human
+    # stopped the campaign by hand within minutes. Unattended runs have no such human, so the
+    # evidence is taken here, while the guest is still up, and survives whatever happens next.
+    #
+    # Only on the SPIN fingerprint (cpu_time advancing while qrexec is dead): a frozen or
+    # unreadable domain has nothing to image, and a memory image is ~8.6 GB.
+    if [ "${_pr_cs%% *}" = MOVING ]; then
+        log "  capturing the specimen automatically (dom0 forensics, then a memory image)"
+        if timeout 300 qrexec-client-vm dom0 "local.WinWedgeForensics+$CHURN" </dev/null \
+             > "$OUT/forensics.tar" 2>"$OUT/forensics.err"; then
+            log "    forensics -> $OUT/forensics.tar"
+        else
+            log "    WARNING: dom0 forensics capture failed - see $OUT/forensics.err"
+        fi
+        # fetch-wedge-core.sh refuses before writing a byte unless this qube has guest-RAM + 1 GiB
+        # free, so a full disk costs a log line here rather than a half-written image.
+        if bash mgmt/harness/fetch-wedge-core.sh "$CHURN" "$OUT/guest.core" >>"$OUT/core.log" 2>&1; then
+            log "    memory image -> $OUT/guest.core"
+            log "    name the code: tools/core-module-list.py $OUT/guest.core --contains 0x<rip>"
+        else
+            log "    memory image NOT taken (see $OUT/core.log) - the forensics above still stand"
+        fi
+    fi
     # SAY WHAT IS TRUE OF THIS RUN, not what the instrument is supposed to do. This banner used to
     # assert the recorder was armed while nothing in this script armed it (fixed 2026-09-23, after
     # a live specimen's RIP turned out to be unresolvable for exactly that reason).

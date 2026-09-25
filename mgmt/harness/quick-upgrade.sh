@@ -13,6 +13,8 @@
 #     [os]                         win10 | win11 (default: win11)
 #   env: RELEASE_COMMIT=<sha>  pin Gate-0 (default: the MANIFEST's own driver_repo_commit)
 #        DEADLINE=<s>          install-phase budget (default 1500)
+#        SKEW_CLOCK_HOURS=<n>  TEST INJECTION: push the guest clock n hours back right before
+#                              the launch, to exercise the installer's clock refusal. 0 = off.
 #        QU_OUT=<dir>          evidence root (default $HOME/qwt-quick-upgrade)
 #
 # WHY THIS IS NOT prime-run.sh ANY MORE (2026-09-06, proven on the rig). The first version of
@@ -251,6 +253,14 @@ qvm-create --class StandaloneVM --label red --property virt_mode=hvm --property 
   || finish 1 "TERMINAL: could not create $SUBJECT"
 qvm-tags "$SUBJECT" add win-idd-testbed || finish 1 "TERMINAL: could not tag $SUBJECT"
 qvm-features "$SUBJECT" os Windows
+# TIMEZONE. Without it libvirt's clock offset defaults to utc, so the emulated RTC holds TRUE UTC
+# while Windows (RealTimeIsUniversal unset, as every image here is) reads it as LOCAL - and the
+# guest computes a UTC behind real UTC by its own timezone offset. Measured 2026-09-25: the German
+# subject sat 2 h behind, the CI-minted xenvif catalog was therefore not-yet-valid (0x800B0101),
+# and drvinst blocked for 25 minutes. The golden it was cloned from had timezone=localtime all
+# along; this create path copied the VOLUMES and not the features, so the subject differed from
+# its own golden in exactly the variable that decides the failure.
+qvm-features "$SUBJECT" timezone "$(qvm-features "$GOLDEN" timezone 2>/dev/null || echo localtime)"
 for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do qvm-prefs "$SUBJECT" "${p%%:*}" "${p##*:}"; done
 qvm-prefs "$SUBJECT" netvm '' 2>/dev/null
 cerr=$(python3 - "$GOLDEN" "$SUBJECT" 2>&1 <<'PY'
@@ -450,6 +460,28 @@ fi
 # and how 16 A/B runs and 33 aging cycles came to test a premise the evidence never supported.
 # The launch call's own outcome is now stated, because "the call returned" and "the call timed out"
 # are different facts about different failures.
+# ---- DELIBERATE CLOCK SKEW (test injection, OFF by default) -------------------------------
+# SKEW_CLOCK_HOURS=<n> pushes the guest's clock n hours BACKWARDS immediately before the launch,
+# to exercise the installer's refusal path on purpose. It exists because the sync above means the
+# healthy path will never reach that refusal again: a guard that is only ever run on the good path
+# is a guard nobody has seen work (Jev, 2026-09-25: deploy the clock gate, but
+# "build-and-deploy-but-force-the-refusal", 0.92).
+#
+# It is an INJECTION and it is switchable, per the experimenter rule: 0/unset runs the control.
+# The guest's own clock is read before and after, so the injection is timestamped by the same
+# clock the code under test consults - a previous campaign was voided by an injection timestamped
+# on the wrong clock and fired before the code under test even started.
+if [ "${SKEW_CLOCK_HOURS:-0}" != "0" ]; then
+  _before=$(grun "powershell -NoProfile -Command \"[DateTime]::UtcNow.ToString('o')\"" 60 | tr -d '\r' | grep -aoE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z?' | tail -1)
+  grun "powershell -NoProfile -Command \"Set-Date (Get-Date).AddHours(-${SKEW_CLOCK_HOURS})\"" 60 >/dev/null
+  _after=$(grun "powershell -NoProfile -Command \"[DateTime]::UtcNow.ToString('o')\"" 60 | tr -d '\r' | grep -aoE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z?' | tail -1)
+  if [ -z "$_before" ] || [ -z "$_after" ] || [ "$_before" = "$_after" ]; then
+    finish 3 "REFUSED: SKEW_CLOCK_HOURS=$SKEW_CLOCK_HOURS was requested but the guest clock did not move (before='$_before' after='$_after') - the cell would have measured the HEALTHY path and called it the skewed one"
+  fi
+  log "INJECTED clock skew -${SKEW_CLOCK_HOURS}h: guest UTC $_before -> $_after (this cell tests the REFUSAL path)"
+  echo "SKEW_INJECTED hours=$SKEW_CLOCK_HOURS before=$_before after=$_after" > "$OUT/clock-skew-injection.txt"
+fi
+
 _lt0=$(date +%s)
 grun "cmd /c start \"\" /min $RELDISC\\install.cmd /auto /autologon:qubes" 60 >/dev/null
 _lrc=$?

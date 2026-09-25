@@ -456,6 +456,12 @@ ensure_churn_target(){ # $1=vm - create the disposable churn StandaloneVM if it 
     || { no "could not create churn target $vm"; return 1; }
   qvm-tags "$vm" add win-idd-testbed || { no "could not tag churn target $vm"; return 1; }
   qvm-features "$vm" os Windows
+  # timezone: without it the RTC holds TRUE UTC while Windows reads it as LOCAL, so a
+  # non-UTC guest computes a UTC behind real UTC by its own offset and CI-minted driver
+  # catalogs come out not-yet-valid (0x800B0101, a 25-minute silent drvinst hang,
+  # measured 2026-09-25). The goldens carry timezone=localtime; a create path that copies
+  # only the volumes did not, so the subject differed from its golden in exactly that.
+  qvm-features "$vm" timezone localtime
   for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do qvm-prefs "$vm" "${p%%:*}" "${p##*:}"; done
   qvm-prefs "$vm" netvm '' 2>/dev/null
   return 0
@@ -1472,6 +1478,7 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
   qvm-tags "$app" add win-idd-testbed \
     || { no "$3-appvm: could not TAG $app win-idd-testbed - dom0 policy will refuse every call to it; not proceeding"; return; }
   qvm-features "$app" os Windows >/dev/null 2>&1
+  qvm-features "$app" timezone localtime >/dev/null 2>&1   # see the timezone note above
   qvm-prefs "$app" memory 8192 >/dev/null 2>&1; qvm-prefs "$app" maxmem 0 >/dev/null 2>&1
   qvm-prefs "$app" vcpus 4 >/dev/null 2>&1; qvm-prefs "$app" qrexec_timeout 6000 >/dev/null 2>&1
   if [ "$had_app" = 1 ]; then
