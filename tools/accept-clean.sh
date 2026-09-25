@@ -136,7 +136,32 @@ else
 fi
 
 # --- 4. activity + health assertion -------------------------------------------------
-qq ps 'Start-Process notepad' >/dev/null 2>&1; sleep 5
+# A VISIBLE window must exist before step 5 photographs one, and its absence must be
+# distinguishable from "the guest maps nothing". WIN10-upgrade failed on 2026-09-25 with
+# "screenshot service returned empty tar (no mapped windows?)" and the artefacts could NOT say
+# which it was: the launch discarded its own errors, nothing asserted notepad was running, and
+# the marker script printed TYPED regardless because AppActivate on a missing process raises a
+# NON-terminating error. Three outcomes were indistinguishable - no session, no notepad, or a
+# real mapping failure - so the cell could not be graded from what it recorded.
+qq ps 'Start-Process notepad' >/dev/null 2>&1
+npsess=""
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 2
+    nprow=$(qq run 'tasklist /fi "imagename eq notepad.exe" /nh /fo csv' 2>/dev/null \
+            | tr -d '\r' | grep -ai '^"notepad.exe"' | head -1)
+    npsess=$(cut -d, -f3 <<<"$nprow" | tr -d '"')
+    npnum=$(cut -d, -f4 <<<"$nprow" | tr -d '"')
+    [ -n "$npsess" ] && break
+done
+whoson=$(qq run 'query user' 2>/dev/null | tr -d '\r' | grep -aiE 'active|disc' | head -2 | tr '\n' ';')
+log "visible-window precondition: notepad session=${npsess:-ABSENT}#${npnum:-?} ; sessions=${whoson:-NONE}"
+[ -n "$npsess" ] || fail "INSTRUMENT: notepad never started (sessions: ${whoson:-none}) - this cell cannot photograph a window, so it grades nothing. Not a product verdict."
+# Session 0 ("Services") is the non-interactive session: a window there is rendered for nobody
+# and could never be captured, so treating it as a satisfied precondition would turn an
+# instrument failure into a false product verdict. Measured 2026-09-25: a notepad started over
+# qrexec on this testbed lands in "Console"#1, the logged-on user's session - which is why this
+# is an assertion and not an assumption.
+[ "$npsess" != "Services" ] || fail "INSTRUMENT: notepad started in session 0 (Services) - that window is rendered for nobody and can never be captured. Not a product verdict."
 log "running health-check.ps1"
 # HEALTH_ARGS: pass -NoIddExpected ONLY for a deliberate Basic-Display-Adapter control run.
 # It is not the default and must not become one: the IDD topology apply landed in the agent
@@ -175,17 +200,26 @@ qq shot "$OUT/shot1.tar" >/dev/null 2>&1
 # quoting, and a silently-unexecuted SendKeys would make the two shots identical -
 # failing the run with a misleading reason.
 cat > "$OUT/type-marker.ps1" <<'PSEOF'
+$ErrorActionPreference = 'Stop'
+# Report a missing notepad instead of typing into nothing and still printing TYPED: on a
+# missing process Get-Process raises a NON-terminating error, so the old script reported
+# success whether or not a window existed, and the caller could not tell the two apart.
+$np = Get-Process notepad -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $np) { Write-Output 'NONOTEPAD'; exit 0 }
 $w = New-Object -ComObject WScript.Shell
-$null = $w.AppActivate((Get-Process notepad | Select-Object -First 1).Id)
+$null = $w.AppActivate($np.Id)
 Start-Sleep -Milliseconds 500
 $w.SendKeys('QUBES ACCEPTANCE ' + (Get-Date -Format 'HH:mm:ss'))
 Write-Output 'TYPED'
 PSEOF
 typed=$(QT=60 qq pushrun "$OUT/type-marker.ps1" 2>&1 | tr -d '\r')
+grep -q NONOTEPAD <<<"$typed" && fail "INSTRUMENT: notepad vanished between the precondition check and typing"
 grep -q TYPED <<<"$typed" || fail "marker typing never executed in the guest"
 sleep 4
 qq shot "$OUT/shot2.tar" >/dev/null 2>&1
-[ -s "$OUT/shot1.tar" ] && [ -s "$OUT/shot2.tar" ] || fail "screenshot service returned empty tar (no mapped windows?)"
+# By here a notepad window is PROVEN to exist in a real session, so an empty tar is no longer
+# ambiguous: the guest has a window and dom0 did not receive it. That is a product verdict.
+[ -s "$OUT/shot1.tar" ] && [ -s "$OUT/shot2.tar" ] || fail "notepad is running in session $npsess and the marker typed, but dom0 received NO windows - the guest is not presenting its windows"
 h1=$(sha256sum "$OUT/shot1.tar" | cut -d' ' -f1); h2=$(sha256sum "$OUT/shot2.tar" | cut -d' ' -f1)
 [ "$h1" != "$h2" ] || fail "shots identical - guest pixels are not reaching dom0"
 log "pixels change confirmed (tars differ)"
