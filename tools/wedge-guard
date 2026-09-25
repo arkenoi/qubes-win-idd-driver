@@ -56,6 +56,25 @@ while :; do
                 || log "screenshot unavailable (guest may have no mapped windows)"
             if QTEST_VM="$VM" "$HERE/qtest" wedge "$dir"; then
                 log "dom0 forensics captured"
+                # Both halves, from THIS instance. The bundle's VMCS can say a vector is latched;
+                # only a core can name the module the stuck vCPU is in, and the two have never yet
+                # been captured from the same wedge - which is exactly why the case stayed open.
+                # dom0 marks the SPIN shape rather than dumping a core itself, because dom0 has no
+                # room for one; the core comes over the streaming route, which writes nothing there.
+                # The guest is still up at this point, which is the only time this can be taken.
+                if find "$dir" -name SPIN-SHAPE-TAKE-A-CORE.txt -print -quit | grep -q .; then
+                    log "SPIN shape - streaming a memory image while the guest is still up"
+                    if "$HERE/../mgmt/harness/fetch-wedge-core.sh" "$VM" >>"$dir/fetch-core.log" 2>&1; then
+                        log "core streamed (see $dir/fetch-core.log)"
+                    else
+                        # A refusal here is a datum, not a reason to move on: the specimen is still
+                        # alive and the refusal names what to free. NEVER discard the guest over it.
+                        log "core fetch FAILED - read $dir/fetch-core.log; the guest is STILL ALIVE"
+                        log "and must not be killed or removed: it is the only copy of this state."
+                    fi
+                else
+                    log "no SPIN marker - either an IDLE-shaped wedge or dom0 runs the old kit"
+                fi
             else
                 log "dom0 forensics FAILED - is dom0/13-install-wedge-forensics-service.sh installed?"
             fi

@@ -186,14 +186,32 @@ cat "$OUT/grant-summary.txt"
 
 # The memory image comes BEFORE the NMI: the NMI reboots the guest, and a rebooted guest is not
 # the specimen any more. If both are asked for, the image is the one that survives the mistake.
-# A SPIN-shaped wedge is precisely the one that NEEDS a memory image. The Xen side can say a
-# vector is latched; only a core can say which MODULE the vCPU that refuses to take it is running,
-# by walking its stack (tools/core-module-list.py) and naming the frames (tools/pdb-symbolize.py).
-# Those two halves have never been captured from the SAME instance, which is the whole reason the
-# case is still open - so take the image here instead of leaving it to whoever opens the bundle.
-if [ "${SPINSHAPE:-0}" = 1 ] && [ "$DUMPCORE" = 0 ] && [ "${NOAUTOCORE:-0}" = 0 ]; then
-    echo "SPIN shape in the VMCS - taking a memory image automatically (set NOAUTOCORE=1 to skip)"
-    DUMPCORE=1
+# A SPIN-shaped wedge is precisely the one that NEEDS a memory image: the Xen side can say a vector
+# is latched, but only a core can say which MODULE the vCPU refusing to take it is running, by
+# walking its stack (tools/core-module-list.py) and naming the frames (tools/pdb-symbolize.py).
+# Those two halves have never been captured from the SAME instance, which is why the case is open.
+#
+# It is NOT taken here, and that is deliberate. `--dump-core` writes the image to DOM0's disk, and
+# dom0 on this rig does not have room for one - that is the whole reason `local.WinWedgeCore`
+# (dom0/17) exists and STREAMS the core through a FIFO to the dev qube instead, writing nothing
+# locally. Auto-setting DUMPCORE here would have quietly reintroduced the exact footprint that
+# service was built to avoid. So leave a loud marker and let the dev qube pull the core over the
+# streaming route while the guest is still up; tools/wedge-guard acts on this file automatically.
+if [ "${SPINSHAPE:-0}" = 1 ]; then
+    cat > "$OUT/SPIN-SHAPE-TAKE-A-CORE.txt" <<EOM
+SPIN shape detected in the VMCS for d$DOMID: a PAUSE-loop exit and/or a vector latched but not
+taken. This is the shape whose stuck vCPU can only be attributed to a module from a memory image.
+
+THE GUEST IS STILL UP AND MUST NOT BE KILLED OR RESTARTED. Take the core NOW, over the streaming
+route that writes nothing to dom0's disk:
+
+    mgmt/harness/fetch-wedge-core.sh $VM
+
+Then: tools/core-module-list.py <core> --contains 0x<rip> --stack 0x<rsp>
+      tools/pdb-symbolize.py ident <core> --base <hex>   (then fetch / sym / field)
+      tools/wedge-vmcs.py <this bundle>
+EOM
+    echo "SPIN shape - wrote SPIN-SHAPE-TAKE-A-CORE.txt (core NOT written to dom0 disk; stream it)"
 fi
 
 if [ "$DUMPCORE" = 1 ]; then
