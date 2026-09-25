@@ -4159,10 +4159,23 @@ public static class QdbPrime {
 # only "installing xenvif"; the real answer was in setupapi.dev.log as
 # "Catalog = xenvif.cat, Error = 0x800B0101".
 #
-# WHY THE GUEST CLOCK IS WRONG: Xen presents the RTC as UTC while Windows reads it as LOCAL
-# time unless RealTimeIsUniversal is set, so a guest in UTC+N computes a UTC N hours behind.
-# It stayed invisible for six weeks because our test images pin TimeZone=UTC, where the skew
-# is exactly zero; only a guest with a real timezone can ever show it.
+# WHY THE GUEST CLOCK IS WRONG. Windows with RealTimeIsUniversal unset - which is every image
+# here - reads the hardware clock AS LOCAL TIME, so guest_UTC = RTC_content - guest_TZ_offset.
+# What the RTC holds is decided by the qube's `timezone` feature, and the two branches have
+# OPPOSITE SIGNS. Both measured on this rig, 2026-09-25, on clones of one golden:
+#   timezone=localtime -> RTC holds DOM0 LOCAL -> guest_UTC - real_UTC = dom0_off - guest_off
+#                         (dom0 +3, guest +2: the guest reads 1 h AHEAD)
+#   timezone UNSET     -> RTC holds TRUE UTC   -> guest_UTC - real_UTC = -guest_off
+#                         (guest +2: the guest reads 2 h BEHIND)  <-- the failing case
+# Only the second branch can put a guest behind real UTC, and only a guest behind real UTC can
+# see a certificate as not-yet-valid. The certificates are minted on the CI runner at true UTC;
+# the guest plays no part in them.
+#
+# AN EARLIER VERSION OF THIS COMMENT gave the second branch as the whole story ("Xen presents the
+# RTC as UTC while Windows reads it as local"). That is one branch of two, and stating it as
+# universal was wrong: a guest with timezone=localtime is AHEAD and cannot trip this at all.
+# It stayed invisible for six weeks because our test images pin TimeZone=UTC, where guest_off is
+# 0 and the error is dom0_off or zero - never a guest behind its own certificates.
 #
 # This REFUSES and REPORTS rather than adjusting the machine's clock. Silently rewriting a
 # user's system time to make our install proceed is not ours to do, and this project's rule
@@ -4188,8 +4201,10 @@ function Test-SigningClockSane {
         Write-Log "  would be rejected as not-yet-valid (0x800B0101) and the driver install would" 'ERROR'
         Write-Log "  hang rather than fail. Refusing instead of hanging." 'ERROR'
         Write-Log "  FIX, from dom0:  qvm-sync-clock   (or set the guest clock to real UTC)" 'ERROR'
-        Write-Log "  Cause is usually RealTimeIsUniversal being unset while the guest is not in UTC:" 'ERROR'
-        Write-Log "  Windows then reads the UTC hardware clock as local time." 'ERROR'
+        Write-Log "  Cause: RealTimeIsUniversal is unset, so Windows reads the hardware clock as LOCAL" 'ERROR'
+        Write-Log "  time; if that clock holds true UTC (a Qubes qube with no 'timezone' feature) the" 'ERROR'
+        Write-Log "  guest's UTC lands behind real UTC by its own timezone offset. On Qubes check:" 'ERROR'
+        Write-Log "  qvm-features <vm> timezone    (the goldens here carry 'localtime')" 'ERROR'
         return $false
     }
     if ($nowUtc -gt $naUtc) {

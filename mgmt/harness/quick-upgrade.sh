@@ -301,14 +301,23 @@ case $? in
   2) finish 2 "DEADLINE: clone gave no session within 900 s (start log $OUT/cdboot.out)" ;;
 esac
 
-# CLOCK, BEFORE ANYTHING IS INSTALLED. The guest's virtual RTC carries UTC while Windows reads it
-# as LOCAL time unless RealTimeIsUniversal is set, so a guest with a real timezone computes a UTC
-# that is behind by its offset. Windows validates driver catalogs against that clock: measured
-# 2026-09-25 on the German 25H2 image (UTC+2), the xenvif catalog was rejected as NOT YET VALID
-# (setupapi.dev.log, 0x800B0101) because the CI signing certificate - minted fresh per build - was
-# younger than the offset, and drvinst then sat at 0.125 s of CPU until this harness's 1500 s
-# deadline fired. It stayed invisible for six weeks because the English images pin TimeZone=UTC,
-# where the skew is exactly zero.
+# CLOCK, BEFORE ANYTHING IS INSTALLED. Windows with RealTimeIsUniversal unset reads the hardware
+# clock as LOCAL time, so guest_UTC = RTC_content - guest_TZ_offset. What the RTC holds depends on
+# the qube's `timezone` feature, and the branches have opposite signs (both measured 2026-09-25):
+# localtime -> RTC is dom0 local -> dom0_off - guest_off; UNSET -> RTC is true UTC -> -guest_off.
+# Only the UNSET branch puts a guest BEHIND real UTC, which is what makes a CI-minted catalog
+# not-yet-valid. Measured that day on the German 25H2 subject (guest +2, feature unset): 2 h
+# behind, the xenvif catalog rejected as NOT YET VALID (setupapi.dev.log, 0x800B0101), drvinst at
+# 0.125 s of CPU until this harness's 1500 s deadline fired.
+#
+# THE ROOT CAUSE WAS THIS SCRIPT: the create path above set only `os Windows` and cloned the
+# VOLUMES, so the subject never inherited the golden's timezone=localtime and differed from its
+# own golden in exactly the variable that decides the failure. That is fixed at the create path;
+# this sync stays as the belt, because a right clock is cheap to assert and a wrong one costs 25
+# silent minutes. An earlier version of this comment stated the UNSET branch as the whole
+# mechanism, which is wrong - a guest with timezone=localtime is AHEAD and cannot trip it.
+# It stayed invisible for six weeks because the English images pin TimeZone=UTC, where guest_off
+# is 0 and no branch can put the guest behind its own certificates.
 #
 # qtest synctime has existed since 2026-08-11 with "call this after every VM start" in its own
 # comment and had NO callers. This is the caller. The installer now also refuses a package its
