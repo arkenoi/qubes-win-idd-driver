@@ -824,6 +824,13 @@ static void OpenChannel(int i) {
             });
         session.StartCapture();
         s->StartTick = QpcNow();
+        // ABI 14: a session is now live on this slot, and this is which one. ChanGen lets a reader
+        // tell whether the frame counters it is looking at belong to the CURRENT session or to a
+        // previous one on the same slot - the ambiguity that made a closed-and-never-reopened channel
+        // indistinguishable from a channel that stopped delivering.
+        InterlockedIncrement(&s->ChanOpens);
+        InterlockedIncrement(&s->ChanGen);
+        s->SessionLive = 1;
         // WHICH WRITER IS FEEDING THIS SLOT (ABI 8). Both of these are arrival-driven; only
         // WGCBRK_ROUTE_PW below is polled. "How many slots are still on PW" is the number that says
         // whether the fallback is going away, and it cannot be read if the two are collapsed.
@@ -895,6 +902,12 @@ static void CloseChannel(int i) {
     g_slots[i].AckState = WGCBRK_FREE;
     g_slots[i].Route = WGCBRK_ROUTE_WGC;   // a free slot claims no writer
     g_slots[i].RelayDest = 0;
+    // ABI 14: the session is gone. The FRAME counters are deliberately left alone - their history is
+    // useful - but without this flag a slot showing FramesArrived=53 and no movement was
+    // indistinguishable from a slot whose session had been closed and never reopened. Jev rated that
+    // confusion plausible at 0.81 and a DIFFERENT defect at 0.83.
+    InterlockedIncrement(&g_slots[i].ChanCloses);
+    g_slots[i].SessionLive = 0;
 }
 
 static void Reconcile() {

@@ -15,9 +15,9 @@
 # than no reading at all. Slot stride and every offset are derived from that header in one place.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$ABI    = 13
+$ABI    = 14
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3392    # sizeof(WGCBRK_SLOT) at ABI 13 (PubTiles[3072] at 316 - a BYTE array needs no alignment, so it follows PubColours immediately; 316+3072=3388, padded to 3392)
+$STRIDE = 3408    # sizeof(WGCBRK_SLOT) at ABI 14 (PubTiles[3072] at 316; ChanOpens/Closes/SessionLive/ChanGen at 3388..3400)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -97,6 +97,11 @@ for ($n = 0; $n -lt $Samples; $n++) {
     $tl = New-Object byte[] 3072
     [Runtime.InteropServices.Marshal]::Copy([IntPtr]::Add($base,$b+316), $tl, 0, 3072)
     Write-Output ("S{0} slot{1} PUBTILES {2}" -f $n,$i,[Convert]::ToBase64String($tl))
+    # ABI 14. sessionLive=0 on a slot whose frame counters are not moving means the channel was CLOSED
+    # and never reopened - a different defect from a live session that stopped delivering, and one the
+    # frame counters alone could never distinguish. chanGen says which session those counters belong to.
+    Write-Output ("S{0} slot{1} SESSION opens={2} closes={3} live={4} gen={5}" -f `
+      $n,$i,(RdI ($b+3388)),(RdI ($b+3392)),(RdI ($b+3396)),(RdI ($b+3400)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)
