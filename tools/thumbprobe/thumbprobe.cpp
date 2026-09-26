@@ -74,7 +74,20 @@ static bool InitD3D()
 
 // Count distinct sampled colours and how many pixels are non-black. Same shape of measure the
 // window-truth survey used, so the numbers are comparable with it.
-struct Shot { int frames = 0; int colours = 0; int nonBlack = 0; int w = 0, h = 0; bool ok = false; };
+struct Shot {
+    int frames = 0; int colours = 0; int nonBlack = 0; int w = 0, h = 0; bool ok = false;
+    // ALPHA, which the first version of this probe THREW AWAY by masking with 0x00FFFFFF while
+    // counting colours - so every statement anyone could make about blending was unmeasured. The
+    // relay's whole claim is that DWM hands us pre-blended pixels; whether the alpha channel is
+    // uniformly opaque, meaningfully graded, or premultiplied garbage is the thing that decides how
+    // wrong the blend is. Jev: measure-the-relay-alpha-first 0.93, alpha_is_blocking only 0.28 -
+    // a fidelity question, and this is what quantifies it.
+    int alphaDistinct = 0;      // how many distinct alpha values appear
+    int alphaMin = 255, alphaMax = 0;
+    int alphaPartial = 0;       // samples with 0 < a < 255: genuine translucency
+    int alphaZero = 0;          // fully transparent samples
+    int samples = 0;
+};
 
 static Shot CaptureWindow(HWND hwnd, int settleMs)
 {
@@ -113,16 +126,26 @@ static Shot CaptureWindow(HWND hwnd, int settleMs)
                     if (SUCCEEDED(g_ctx->Map(stg.get(), 0, D3D11_MAP_READ, 0, &m)))
                     {
                         std::set<uint32_t> cols;
+                        std::set<int> alphas;
                         for (UINT y = 0; y < d.Height; y += 9)
                         {
                             auto row = (const uint32_t*)((const BYTE*)m.pData + (size_t)y * m.RowPitch);
                             for (UINT x = 0; x < d.Width; x += 9)
                             {
-                                uint32_t p = row[x] & 0x00FFFFFF;
+                                uint32_t raw = row[x];
+                                uint32_t p = raw & 0x00FFFFFF;
+                                int a = (int)((raw >> 24) & 0xFF);
                                 cols.insert(p);
                                 if (p) s.nonBlack++;
+                                alphas.insert(a);
+                                if (a < s.alphaMin) s.alphaMin = a;
+                                if (a > s.alphaMax) s.alphaMax = a;
+                                if (a == 0) s.alphaZero++;
+                                else if (a < 255) s.alphaPartial++;
+                                s.samples++;
                             }
                         }
+                        s.alphaDistinct = (int)alphas.size();
                         s.colours = (int)cols.size();
                         s.ok = true;
                         g_ctx->Unmap(stg.get(), 0);
@@ -227,10 +250,12 @@ static void RelayOnce(const Found& f)
     HRESULT hu = DwmUpdateThumbnailProperties(th, &p);
     Shot s = CaptureWindow(dest, 900);
     printf("RESULT=SWEEP class=%ls why=%s ex=0x%08lx src=%dx%d srcsize=%ldx%ld update=0x%08lx "
-           "capture=%s frames=%d colours=%d nonBlack=%d cap=%dx%d oneToOne=%d\n",
+           "capture=%s frames=%d colours=%d nonBlack=%d cap=%dx%d oneToOne=%d "
+           "alphaDistinct=%d alphaMin=%d alphaMax=%d alphaPartial=%d alphaZero=%d samples=%d\n",
            f.cls.c_str(), f.why, (unsigned long)f.ex, w, h, ss.cx, ss.cy, (unsigned long)hu,
            s.ok ? "ok" : "none", s.frames, s.colours, s.nonBlack, s.w, s.h,
-           (ss.cx == s.w && ss.cy == s.h) ? 1 : 0);
+           (ss.cx == s.w && ss.cy == s.h) ? 1 : 0,
+           s.alphaDistinct, s.alphaMin, s.alphaMax, s.alphaPartial, s.alphaZero, s.samples);
     DwmUnregisterThumbnail(th);
     DestroyWindow(dest);
 }
@@ -334,9 +359,11 @@ int wmain(int argc, wchar_t** argv)
 
         Shot s = CaptureWindow(dest, 900);
         printf("RESULT=%s register=ok update=0x%08lx srcsize=%ldx%ld capture=%s "
-               "frames=%d colours=%d nonBlack=%d size=%dx%d\n",
+               "frames=%d colours=%d nonBlack=%d size=%dx%d "
+               "alphaDistinct=%d alphaMin=%d alphaMax=%d alphaPartial=%d alphaZero=%d samples=%d\n",
                c.name, (unsigned long)hu, ss.cx, ss.cy, s.ok ? "ok" : "none",
-               s.frames, s.colours, s.nonBlack, s.w, s.h);
+               s.frames, s.colours, s.nonBlack, s.w, s.h,
+               s.alphaDistinct, s.alphaMin, s.alphaMax, s.alphaPartial, s.alphaZero, s.samples);
         // "Usable" = the capture of OUR destination carries content. One colour means the thumbnail
         // did not reach the composed tree; that is the death condition for this state.
         if (s.ok && s.colours > 2) usable++;
