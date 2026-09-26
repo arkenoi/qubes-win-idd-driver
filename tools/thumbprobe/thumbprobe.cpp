@@ -287,6 +287,34 @@ static void RelayOnce(const Found& f)
 // arrivals from a changing source. So the difference is in the destination's styles or position, and
 // this flag turns that into a one-run A/B instead of a guess.
 static bool g_noClose = false;   // see --no-close in HoldAndCount's handler
+static bool g_pwSource = false;  // see --pw-source below
+
+// Render a window exactly as the broker's DEMOTION PROBE does. The broker decides whether to demote a
+// quiet relay by PrintWindow(PW_RENDERFULLCONTENT)-ing the relay's SOURCE and hashing it. An A/B on one
+// guest showed the relay delivers a driven change when that rule is DISABLED (delivered moved 20.6,
+// matched the new source 1.4) and delivers NOTHING when it is enabled (0.0 while the source moved 21.8)
+// - Jev rated the rule responsible at 0.91, with the mechanism itself only 0.53, so this reproduces the
+// suspected mechanism here, with no broker involved: if PrintWindowing a thumbnail's SOURCE suppresses
+// DWM's recomposition of that thumbnail, this probe's own arrivals will stop when --pw-source is on.
+static void PwRenderSource(HWND src)
+{
+    RECT r{};
+    if (!GetWindowRect(src, &r)) return;
+    int w = r.right - r.left, h = r.bottom - r.top;
+    if (w <= 0 || h <= 0 || w > 4096 || h > 4096) return;
+    HDC screen = GetDC(nullptr);
+    HDC mem = CreateCompatibleDC(screen);
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = w; bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bmp = CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (bmp && bits) { SelectObject(mem, bmp); PrintWindow(src, mem, PW_RENDERFULLCONTENT); }
+    if (bmp) DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+}
 static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
 {
     HTHUMBNAIL th = nullptr; int w = 0, h = 0;
@@ -296,8 +324,9 @@ static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
         ? (WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)
         : WS_EX_LAYERED;
     const int destX = brokerDest ? 0 : 40, destY = brokerDest ? 0 : 40;
-    printf("RESULT=HOLDDEST brokerDest=%d ex=0x%08lx pos=%d,%d noClose=%d\n",
-           brokerDest ? 1 : 0, (unsigned long)destEx, destX, destY, g_noClose ? 1 : 0);
+    printf("RESULT=HOLDDEST brokerDest=%d ex=0x%08lx pos=%d,%d noClose=%d pwSource=%d\n",
+           brokerDest ? 1 : 0, (unsigned long)destEx, destX, destY, g_noClose ? 1 : 0,
+           g_pwSource ? 1 : 0);
     HWND dest = MakeDest(w, h, destX, destY, destEx);
     if (!dest) { printf("RESULT=HOLD dest=FAIL\n"); return 2; }
     SetLayeredWindowAttributes(dest, 0, 0, LWA_ALPHA);
@@ -354,6 +383,10 @@ static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
         // Report per second, so "a burst then silence" is visibly different from "steady".
         for (int t = 0; t < secs; t++) {
             LONG before = arrivals;
+            // --pw-source: render the SOURCE the way the broker's demotion probe does, twice a second,
+            // which is that probe's most aggressive cadence (it resets to 500 ms whenever it sees a
+            // change, so a changing window gets it hardest - matching the observed inversion).
+            if (g_pwSource) PwRenderSource(src);
             ULONGLONG until = GetTickCount64() + 1000;
             while (GetTickCount64() < until) {
                 if (pump) {
@@ -362,6 +395,7 @@ static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
                 }
                 Sleep(10);
             }
+            if (g_pwSource) PwRenderSource(src);
             printf("RESULT=HOLDSEC t=%d arrivals=%ld delta=%ld\n", t + 1, (long)arrivals, (long)(arrivals - before));
             fflush(stdout);
         }
@@ -661,6 +695,7 @@ int wmain(int argc, wchar_t** argv)
             if (!wcscmp(argv[a], L"--pump")) pump = true;
             else if (!wcscmp(argv[a], L"--broker-dest")) brokerDest = true;
             else if (!wcscmp(argv[a], L"--no-close")) g_noClose = true;
+            else if (!wcscmp(argv[a], L"--pw-source")) g_pwSource = true;
             else srcCls = argv[a];
         }
         HWND src = srcCls.empty() ? nullptr : FindWindowW(srcCls.c_str(), nullptr);
