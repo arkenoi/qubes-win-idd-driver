@@ -36,6 +36,7 @@ public class WT {
  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr p, EnumProc cb, IntPtr l);
  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
  [DllImport("user32.dll")] public static extern int GetClassName(IntPtr h, StringBuilder s, int m);
  [DllImport("user32.dll")] public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int m);
@@ -59,9 +60,13 @@ function Render([IntPtr]$h,[int]$w,[int]$ht,[uint32]$flag) {
   return @{ colours=$colors.Count; hash=$acc }
 }
 $out = New-Object System.Collections.ArrayList
-$cb = [WT+EnumProc]{
-  param($h,$l)
-  $isForced = $forced.ContainsKey([int64]$h)
+# MEASURE ONE WINDOW. Factored out of the enumeration callback so a FORCED window can be measured
+# DIRECTLY when EnumWindows never reaches it. Forcing previously bypassed only the FILTERS, not the
+# enumeration, so a window the enumerator does not yield was reported `TRUTHMISSING
+# reason=not-enumerated` and could not be graded at all - measured 2026-09-26 on the toast
+# (Windows.UI.Core.CoreWindow), the run's only override-redirect representative, whose frames the
+# broker was demonstrably publishing (PUBSIG colours=16) while the guest side reported nothing.
+function Measure-Window([IntPtr]$h, [bool]$isForced) {
   if ($isForced) { $forced[[int64]$h] = $true }
   if (-not $isForced) {
     if (-not [WT]::IsWindowVisible($h) -or [WT]::IsIconic($h)) { return $true }
@@ -114,7 +119,20 @@ $cb = [WT+EnumProc]{
     $ownC,$fullC,$starves,$fullH,$ti.ToString().Substring(0,[Math]::Min(30,$ti.Length))))
   return $true
 }
+$cb = [WT+EnumProc]{
+  param($h,$l)
+  $null = Measure-Window $h ($forced.ContainsKey([int64]$h))
+  return $true
+}
 [void][WT]::EnumWindows($cb,[IntPtr]::Zero)
+
+# DIRECT PASS over anything the enumerator did not yield. IsWindow is the only precondition: if the
+# handle is still valid the window can be rendered and measured exactly as an enumerated one is.
+foreach ($k in @($forced.Keys)) {
+  if ($forced[$k]) { continue }
+  $hh = [IntPtr]$k
+  if ([WT]::IsWindow($hh)) { $null = Measure-Window $hh $true }
+}
 # Absence must be explicit: a forced hwnd EnumWindows never reached is named, not omitted.
 foreach ($k in $forced.Keys) {
   if (-not $forced[$k]) { [void]$out.Add(("TRUTHMISSING`thwnd=0x{0:x}`treason=not-enumerated" -f $k)) }
