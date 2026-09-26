@@ -278,12 +278,26 @@ static void RelayOnce(const Found& f)
 // --pump runs a message loop on the thread that owns the destination. A window belongs to its
 // creating thread, and the broker's main thread never pumps; if arrivals depend on that pump, this
 // A/B says so in one run and the fix is structural rather than guessed.
-static int HoldAndCount(HWND src, int secs, bool pump)
+// --broker-dest replicates the BROKER's destination EXACTLY - same extended styles (adding
+// WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT) and the same position (0,0) instead of
+// this probe's own (40,40) with WS_EX_LAYERED alone. WHY: measured 2026-09-26, a relay slot in the
+// broker received ZERO arrivals across a source repaint while a direct-WGC control on the same window
+// class received several, and the destination window itself was verified alive, visible, uncloaked,
+// on-screen and at alpha 0. This probe's destination, with the same alpha 0, receives CONTINUOUS
+// arrivals from a changing source. So the difference is in the destination's styles or position, and
+// this flag turns that into a one-run A/B instead of a guess.
+static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
 {
     HTHUMBNAIL th = nullptr; int w = 0, h = 0;
     RECT sr{}; GetWindowRect(src, &sr);
     w = sr.right - sr.left; h = sr.bottom - sr.top;
-    HWND dest = MakeDest(w, h, 40, 40, WS_EX_LAYERED);
+    const DWORD destEx = brokerDest
+        ? (WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)
+        : WS_EX_LAYERED;
+    const int destX = brokerDest ? 0 : 40, destY = brokerDest ? 0 : 40;
+    printf("RESULT=HOLDDEST brokerDest=%d ex=0x%08lx pos=%d,%d\n",
+           brokerDest ? 1 : 0, (unsigned long)destEx, destX, destY);
+    HWND dest = MakeDest(w, h, destX, destY, destEx);
     if (!dest) { printf("RESULT=HOLD dest=FAIL\n"); return 2; }
     SetLayeredWindowAttributes(dest, 0, 0, LWA_ALPHA);
     ShowWindow(dest, SW_SHOWNA);
@@ -438,15 +452,18 @@ int wmain(int argc, wchar_t** argv)
         int secs = (argc > 2) ? _wtoi(argv[2]) : 15;
         bool pump = false;
         std::wstring srcCls;
+        bool brokerDest = false;
         for (int a = 3; a < argc; a++) {
-            if (!wcscmp(argv[a], L"--pump")) pump = true; else srcCls = argv[a];
+            if (!wcscmp(argv[a], L"--pump")) pump = true;
+            else if (!wcscmp(argv[a], L"--broker-dest")) brokerDest = true;
+            else srcCls = argv[a];
         }
         HWND src = srcCls.empty() ? nullptr : FindWindowW(srcCls.c_str(), nullptr);
         if (!src) src = GetForegroundWindow();
         if (!src) { printf("RESULT=FAIL reason=no-source\n"); return 2; }
         WCHAR cls[128] = {}; GetClassNameW(src, cls, 128);
         printf("RESULT=SOURCE hwnd=0x%llx class=%ls\n", (unsigned long long)(ULONG_PTR)src, cls);
-        return HoldAndCount(src, secs, pump);
+        return HoldAndCount(src, secs, pump, brokerDest);
     }
     if (want == L"--watch")
     {
