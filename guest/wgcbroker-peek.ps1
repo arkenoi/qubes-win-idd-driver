@@ -15,9 +15,9 @@
 # than no reading at all. Slot stride and every offset are derived from that header in one place.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$ABI    = 8
+$ABI    = 9
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 288     # sizeof(WGCBRK_SLOT) at ABI 8
+$STRIDE = 296     # sizeof(WGCBRK_SLOT) at ABI 9
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -74,6 +74,10 @@ for ($n = 0; $n -lt $Samples; $n++) {
     $rn = switch ($rt) { 0 { 'WGC' } 1 { 'RELAY' } 2 { 'PW' } default { "?$rt" } }
     Write-Output ("S{0} slot{1} ROUTE {2} ({3}) relayOk={4} relayFail={5} relayDest=0x{6:x}" -f `
       $n,$i,$rt,$rn,(RdI ($b+272)),(RdI ($b+276)),(RdL ($b+280)))
+    # ABI 9. arrivalRaw climbing while FRAMES arrived stays flat = the guard is throwing frames away,
+    # which the quiet detector then reads as a dead feed. Flat arrivalRaw = the event really stopped.
+    Write-Output ("S{0} slot{1} ARRIVALS raw={2} rejected={3}" -f `
+      $n,$i,(RdI ($b+288)),(RdI ($b+292)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)

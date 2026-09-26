@@ -593,11 +593,19 @@ static void OpenChannel(int i) {
                 //
                 // g_pubCs[i] is the lock CloseChannel already holds across the wipe, and a Windows
                 // CRITICAL_SECTION is recursive, so PublishFrame taking it again below is safe.
+                // COUNT THE RAW INVOCATION FIRST, before any guard and before the lock. If the
+                // event stops firing this stays flat; if the guard throws arrivals away this keeps
+                // climbing while FramesArrived does not. Those two were indistinguishable and cost a
+                // whole diagnosis round.
+                _InterlockedIncrement(&g_slots[i].ArrivalRaw);
                 PubLock arrivalLock(i);   // recursive: PublishFrame below takes it again, safely
                 // Re-validate under the lock: a wiped or recycled channel has no pool, or has been
                 // rebuilt around a different sender. Either way this arrival belongs to a session
                 // that is gone, and publishing it would publish another window's pixels.
-                if (!g_ch[i].pool || g_ch[i].pool != sender) return;
+                if (!g_ch[i].pool || g_ch[i].pool != sender) {
+                    _InterlockedIncrement(&g_slots[i].ArrivalRejected);
+                    return;
+                }
                 if (!g_slots[i].FirstArrivedTick)
                     g_slots[i].FirstArrivedTick = QpcNow();
                 auto f = sender.TryGetNextFrame();
