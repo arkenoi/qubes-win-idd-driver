@@ -94,6 +94,12 @@ struct Channel {
     ULONGLONG openTick = 0;
     ULONGLONG lastArrivalTick = 0;
     bool      probing = false;   // this PrintWindow channel is a TEST, not yet a commitment
+    // ABI 10: the source-change test used before demoting a RELAY. A hash of the SOURCE window's
+    // own pixels at the moment of the last demotion question, plus when it was taken, so the test
+    // is throttled rather than run on every loop tick.
+    unsigned long long srcHash     = 0;
+    ULONGLONG          srcHashTick = 0;
+    bool               srcHashSeen = false;
     // ---- THE DWM-THUMBNAIL RELAY (ABI 8) ----------------------------------------------------
     // A window whose own surface is empty has nothing for WGC to capture, and PrintWindow is a PULL
     // api, so a slot that falls back to it has no arrival event and must be driven by an invented
@@ -347,6 +353,52 @@ static bool EnsurePwDib(Channel& c, int w, int h) {
 // window nobody is looking at changing, and rendering it is pure waste - measured 2026-09-25 at
 // 30 renders per 30 s producing ZERO published frames on an idle window, about 3.2% of a core
 // spent inside the captured application for nothing.
+// CONTROL KNOB. `QubesWgcRelayNoDemote=1` (same registry key as the other broker switches) stops a
+// relay channel being demoted at all. It exists because Jev required a CONTROL before the demotion
+// rule was changed (needs_a_control 0.74): with it set, a relay that would have been demoted keeps
+// running, which is what shows the relay WOULD have kept delivering these classes. It is not a
+// product setting and defaults OFF.
+static bool g_relayNoDemote = false;
+
+// DID THE SOURCE ACTUALLY CHANGE? A poke only says something repainted inside this window's screen
+// rectangle; it does not say this window's own content moved. Before demoting a relay we render the
+// SOURCE once and compare a hash of its pixels with the last one we took. Unchanged => the relay is
+// correctly delivering nothing and must be left alone; changed => damage really did occur with no
+// frame behind it, which is the founding symptom the detector exists for.
+//
+// Cost is one PrintWindow per decision, not per frame, and it is throttled: the demotion question
+// is only asked after WGCBRK_WGC_QUIET_MS of silence anyway. On the FIRST call for a channel there
+// is no previous hash, so it records one and reports NO change - a relay is never demoted on the
+// strength of a measurement that has no baseline.
+static bool RelaySourceChanged(int i) {
+    Channel& c = g_ch[i];
+    HWND hwnd = c.hwnd;
+    if (!hwnd || !IsWindow(hwnd)) return true;     // gone: let the normal paths deal with it
+    const ULONGLONG now = GetTickCount64();
+    if (c.srcHashSeen && (now - c.srcHashTick) < 250) return false;   // throttle: too soon to retest
+    RECT r{};
+    if (!GetWindowRect(hwnd, &r)) return true;
+    int w = r.right - r.left, h = r.bottom - r.top;
+    if (w <= 0 || h <= 0) return true;
+    if (w > 4096) w = 4096;
+    if (h > 4096) h = 4096;
+    if (!EnsurePwDib(c, w, h)) return true;        // cannot measure => do not suppress a demotion
+    if (!PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT)) return true;
+    const unsigned char* p = (const unsigned char*)c.pwBits;
+    if (!p) return true;
+    // FNV-1a over a strided sample: every 64th pixel is ample to notice a window repainting, and
+    // hashing 2.6 Mpx in full on every decision would cost more than the demotion it is guarding.
+    unsigned long long hsh = 1469598103934665603ull;
+    const size_t stride = 64 * 4, bytes = (size_t)w * (size_t)h * 4;
+    for (size_t off = 0; off + 4 <= bytes; off += stride) {
+        for (int b = 0; b < 4; ++b) { hsh ^= p[off + b]; hsh *= 1099511628211ull; }
+    }
+    const bool first = !c.srcHashSeen;
+    const bool changed = !first && hsh != c.srcHash;
+    c.srcHash = hsh; c.srcHashTick = now; c.srcHashSeen = true;
+    return changed;
+}
+
 static bool PublishPrintWindow(int i) {
     bool changed = false;
     PubLock pubLock(i);   // RAII, same reason
@@ -754,8 +806,16 @@ static void Reconcile() {
                  // Jev: silent-while-the-window-is-changing 0.63, demotion-of-idle-is-backwards 0.84,
                  // and "has never delivered" alone only 0.25 because it never fires for the founding
                  // case.
+                 // ABI 10: a poke is NOT evidence the source changed - see wgcbroker_ipc.h. For a
+                 // RELAY that has already delivered, confirm the SOURCE actually moved before
+                 // demoting it; otherwise a healthy relay on a static window is demoted for ever.
+                 // Jev: quiet-rule-demotes-healthy-static-relays 1.00, require-evidence-the-source-
+                 // changed 0.76. g_relayNoDemote is the control, not a product setting.
+                 !(c.relay && g_relayNoDemote) &&
                  (g_slots[i].FramesArrived == 0 ||
-                  g_slots[i].PokeSeq != c.pokeAtLastArrival)) {
+                  (g_slots[i].PokeSeq != c.pokeAtLastArrival &&
+                   (!c.relay || g_slots[i].FramesArrived == 0 || RelaySourceChanged(i) ||
+                    (InterlockedIncrement(&g_slots[i].RelayStaticHolds), false))))) {
             // BEHAVIOURAL DETECTION - this, not the structural test, is what decides.
             //
             // A visible, unminimised window whose WGC feed has said NOTHING since it opened is a
@@ -876,6 +936,15 @@ int wmain(int argc, wchar_t** argv) {
             if (RegQueryValueExW(k, L"QubesWgcRelay", nullptr, &ty, (BYTE*)&v, &cb) == ERROR_SUCCESS
                 && ty == REG_DWORD && v == 0)
                 g_RelayOn = false;
+            // THE CONTROL, read the same way and latched the same way: QubesWgcRelayNoDemote = 1
+            // stops a relay channel being demoted at all. Jev required a control run before the
+            // demotion rule was changed (needs_a_control 0.74) - with this set, a relay that the old
+            // rule would have demoted keeps running, which is what shows it WOULD have kept
+            // delivering. Not a product setting; defaults off; never read again after start.
+            DWORD nd = 0; DWORD cbnd = sizeof(nd); DWORD tynd = 0;
+            if (RegQueryValueExW(k, L"QubesWgcRelayNoDemote", nullptr, &tynd, (BYTE*)&nd, &cbnd) == ERROR_SUCCESS
+                && tynd == REG_DWORD && nd == 1)
+                g_relayNoDemote = true;
             RegCloseKey(k);
         }
         g_RelayBuild = build;   // published below, once the section is mapped

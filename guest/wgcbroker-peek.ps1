@@ -15,9 +15,9 @@
 # than no reading at all. Slot stride and every offset are derived from that header in one place.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$ABI    = 9
+$ABI    = 10
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 296     # sizeof(WGCBRK_SLOT) at ABI 9
+$STRIDE = 304     # sizeof(WGCBRK_SLOT) at ABI 10 (RelayStaticHolds at 296, padded to 8)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -78,6 +78,9 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # which the quiet detector then reads as a dead feed. Flat arrivalRaw = the event really stopped.
     Write-Output ("S{0} slot{1} ARRIVALS raw={2} rejected={3}" -f `
       $n,$i,(RdI ($b+288)),(RdI ($b+292)))
+    # ABI 10. relayStaticHolds = demotions DECLINED because the source had not changed. If a relay
+    # slot is alive and this never moves, the new rule is not firing and any pass is unproven.
+    Write-Output ("S{0} slot{1} RELAYHOLD staticHolds={2}" -f $n,$i,(RdI ($b+296)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)
