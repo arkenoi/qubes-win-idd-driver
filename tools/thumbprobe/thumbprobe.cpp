@@ -241,6 +241,41 @@ int wmain(int argc, wchar_t** argv)
     // but the mechanism must first be shown to work at all on an ordinary one.
     HWND src = nullptr;
     std::wstring want = (argc > 1) ? argv[1] : L"";
+    // --watch <seconds>: the toast race, removed. A guest toast under the generic PowerShell AUMID
+    // lives about five seconds; every one-shot sweep enumerated either before its window existed or
+    // after it had gone, and I twice read that as "no toast window exists" when the owner could see
+    // the notification. This baselines the rogue set, then polls for NEW rogue windows and relays
+    // each the instant it appears - so a transient window is caught rather than missed.
+    if (want == L"--watch")
+    {
+        int secs = (argc > 2) ? _wtoi(argv[2]) : 30;
+        if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
+        std::vector<Found> base; g_found = &base;
+        EnumWindows(SweepProc, 0);
+        std::set<HWND> seen;
+        for (auto& f : base) seen.insert(f.h);
+        printf("RESULT=WATCHBASE count=%d secs=%d\n", (int)base.size(), secs);
+        fflush(stdout);
+        ULONGLONG until = GetTickCount64() + (ULONGLONG)secs * 1000;
+        int caught = 0;
+        while (GetTickCount64() < until)
+        {
+            std::vector<Found> now; g_found = &now;
+            EnumWindows(SweepProc, 0);
+            for (auto& f : now)
+            {
+                if (seen.count(f.h)) continue;
+                seen.insert(f.h);
+                caught++;
+                printf("RESULT=WATCHNEW class=%ls why=%s\n", f.cls.c_str(), f.why); fflush(stdout);
+                RelayOnce(f);   // relay it NOW, while it is still up
+                fflush(stdout);
+            }
+            Sleep(120);
+        }
+        printf("RESULT=WATCHDONE caught=%d\n", caught);
+        return 0;
+    }
     if (want == L"--sweep")
     {
         if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
