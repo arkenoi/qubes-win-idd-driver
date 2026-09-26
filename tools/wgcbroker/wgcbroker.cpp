@@ -444,6 +444,39 @@ static int RelaySourceChanged(int i) {
 // spurious difference costs the relay for the rest of that window's life.
 #define WGCBRK_RELAY_CHANGE_STREAK 3
 
+// REPAIR A RELAY WHOSE THUMBNAIL HAS GONE DEAF, instead of abandoning it. A channel opened by the
+// broker instance a guest COLD BOOT produces emits its opening frame and then never follows the source
+// again; restarting the agent on the same boot fixes it, and the primitive is sound standalone. Jev's
+// reading (0.93) is that the thumbnail is registered while DWM is still coming up - accepted, but never
+// recomposed thereafter. Nothing re-registered it, and nothing demoted it either (a relay that has
+// delivered is left alone while its source is static), so the channel stayed deaf for ever.
+//
+// This re-registers the thumbnail in place: same destination window, same session, same pool - only the
+// DWM registration is renewed. It is attempted ONCE per unbroken run of "the source moved and no frame
+// came", before that run is allowed to demote anything.
+static bool RelayReregister(int i, Channel& c) {
+    if (!c.relay || !c.relayDest || !IsWindow(c.relayDest)) return false;
+    HWND src = c.hwnd;
+    if (!src || !IsWindow(src)) return false;
+    if (c.relayThumb) { DwmUnregisterThumbnail(c.relayThumb); c.relayThumb = nullptr; }
+    HTHUMBNAIL th = nullptr;
+    if (FAILED(DwmRegisterThumbnail(c.relayDest, src, &th)) || !th) return false;
+    SIZE ss{};
+    DwmQueryThumbnailSourceSize(th, &ss);
+    RECT dr{};
+    GetClientRect(c.relayDest, &dr);
+    DWM_THUMBNAIL_PROPERTIES p{};
+    p.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY;
+    p.rcDestination = RECT{ 0, 0,
+                            ss.cx ? ss.cx : (dr.right - dr.left),
+                            ss.cy ? ss.cy : (dr.bottom - dr.top) };
+    p.fVisible = TRUE; p.opacity = 255;
+    DwmUpdateThumbnailProperties(th, &p);
+    c.relayThumb = th;
+    InterlockedIncrement(&g_slots[i].RelayReregs);
+    return true;
+}
+
 static bool RelaySrcDecides(int i) {
     Channel& c = g_ch[i];
     const int r = RelaySourceChanged(i);
@@ -451,8 +484,12 @@ static bool RelaySrcDecides(int i) {
                                InterlockedIncrement(&g_slots[i].RelayStaticHolds);    return false; }
     if (r == SRC_UNMEASURED) { InterlockedIncrement(&g_slots[i].RelaySrcUnmeasured);  return false; }
     InterlockedIncrement(&g_slots[i].RelaySrcChanged);
-    // Measured change with no frame behind it. Only an UNBROKEN RUN of these demotes.
-    return (++c.srcChangeStreak) >= WGCBRK_RELAY_CHANGE_STREAK;
+    // Measured change with no frame behind it. Before an unbroken run of these is allowed to demote,
+    // try REPAIRING the channel once: a thumbnail registered while DWM was still coming up is accepted
+    // but never recomposed, which is exactly this symptom on a cold-booted guest.
+    const int streak = ++c.srcChangeStreak;
+    if (streak == 1) RelayReregister(i, c);
+    return streak >= WGCBRK_RELAY_CHANGE_STREAK;
 }
 
 // ABI 12: a signature of the frame we just published, sampled EXACTLY as the guest samples its own

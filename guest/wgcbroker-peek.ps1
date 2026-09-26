@@ -15,9 +15,9 @@
 # than no reading at all. Slot stride and every offset are derived from that header in one place.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$ABI    = 15
+$ABI    = 16
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3408    # sizeof(WGCBRK_SLOT) at ABI 15 (PubTiles[3072] at 316; lifecycle+GenFrames at 3388..3404)
+$STRIDE = 3416    # sizeof(WGCBRK_SLOT) at ABI 16 (PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; RelayReregs 3408)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -105,6 +105,13 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # however large its cumulative count - the ambiguity that forced a set of results to be withdrawn.
     Write-Output ("S{0} slot{1} SESSION opens={2} closes={3} live={4} gen={5} genFrames={6}" -f `
       $n,$i,(RdI ($b+3388)),(RdI ($b+3392)),(RdI ($b+3396)),(RdI ($b+3400)),(RdI ($b+3404)))
+    # ABI 16. reregs = DWM thumbnail RE-REGISTRATIONS. A relay channel opened by the broker instance a
+    # guest COLD BOOT produces delivered its opening frame and then never followed the source again,
+    # while the same code restarted on the same boot delivered - a thumbnail registered before DWM was
+    # ready, accepted and never recomposed. The channel is now repaired in place instead of abandoned.
+    # If a cold-boot relay slot delivers and this counter never moves, the repair is NOT what fixed it
+    # and the pass is unproven; if it moves and genFrames still does not, the repair does not work.
+    Write-Output ("S{0} slot{1} REPAIR reregs={2}" -f $n,$i,(RdI ($b+3408)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)
