@@ -15,9 +15,9 @@
 # than no reading at all. Slot stride and every offset are derived from that header in one place.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$ABI    = 10
+$ABI    = 11
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 304     # sizeof(WGCBRK_SLOT) at ABI 10 (RelayStaticHolds at 296, padded to 8)
+$STRIDE = 312     # sizeof(WGCBRK_SLOT) at ABI 11 (holds 296, changed 300, unmeasured 304, pwfail 308)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -80,7 +80,11 @@ for ($n = 0; $n -lt $Samples; $n++) {
       $n,$i,(RdI ($b+288)),(RdI ($b+292)))
     # ABI 10. relayStaticHolds = demotions DECLINED because the source had not changed. If a relay
     # slot is alive and this never moves, the new rule is not firing and any pass is unproven.
-    Write-Output ("S{0} slot{1} RELAYHOLD staticHolds={2}" -f $n,$i,(RdI ($b+296)))
+    # ABI 11. The four outcomes of the source-change test, so "why was this relay kept or dropped"
+    # is answerable without a rebuild: holds=measured-same (kept), changed=measured-different
+    # (demoted), unmeasured=throttled (neither), pwFail=could not render the source at all.
+    Write-Output ("S{0} slot{1} RELAYHOLD staticHolds={2} srcChanged={3} srcUnmeasured={4} pwFail={5}" -f `
+      $n,$i,(RdI ($b+296)),(RdI ($b+300)),(RdI ($b+304)),(RdI ($b+308)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)

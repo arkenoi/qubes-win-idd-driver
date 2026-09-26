@@ -397,7 +397,12 @@ static int RelaySourceChanged(int i) {
     if (w > 4096) w = 4096;
     if (h > 4096) h = 4096;
     if (!EnsurePwDib(c, w, h)) return SRC_CHANGED;      // cannot measure => do not suppress a demotion
-    if (!PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT)) return SRC_CHANGED;
+    if (!PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT)) {
+        // ABI 11: counted separately. "The test could not render the source" and "the source
+        // changed" are different facts that this function used to collapse into one return value.
+        InterlockedIncrement(&g_slots[i].RelayPwFail);
+        return SRC_CHANGED;
+    }
     const unsigned char* p = (const unsigned char*)c.pwBits;
     if (!p) return SRC_CHANGED;
     // FNV-1a over a strided sample: every 64th pixel is ample to notice a window repainting, and
@@ -421,8 +426,10 @@ static int RelaySourceChanged(int i) {
 // nor counts - it simply waits for the next test.
 static bool RelaySrcDecides(int i) {
     const int r = RelaySourceChanged(i);
-    if (r == SRC_SAME) { InterlockedIncrement(&g_slots[i].RelayStaticHolds); return false; }
-    return r == SRC_CHANGED;
+    if (r == SRC_SAME)       { InterlockedIncrement(&g_slots[i].RelayStaticHolds);    return false; }
+    if (r == SRC_UNMEASURED) { InterlockedIncrement(&g_slots[i].RelaySrcUnmeasured);  return false; }
+    InterlockedIncrement(&g_slots[i].RelaySrcChanged);
+    return true;
 }
 
 static bool PublishPrintWindow(int i) {
