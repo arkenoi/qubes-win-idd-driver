@@ -286,6 +286,7 @@ static void RelayOnce(const Found& f)
 // on-screen and at alpha 0. This probe's destination, with the same alpha 0, receives CONTINUOUS
 // arrivals from a changing source. So the difference is in the destination's styles or position, and
 // this flag turns that into a one-run A/B instead of a guess.
+static bool g_noClose = false;   // see --no-close in HoldAndCount's handler
 static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
 {
     HTHUMBNAIL th = nullptr; int w = 0, h = 0;
@@ -295,8 +296,8 @@ static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
         ? (WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)
         : WS_EX_LAYERED;
     const int destX = brokerDest ? 0 : 40, destY = brokerDest ? 0 : 40;
-    printf("RESULT=HOLDDEST brokerDest=%d ex=0x%08lx pos=%d,%d\n",
-           brokerDest ? 1 : 0, (unsigned long)destEx, destX, destY);
+    printf("RESULT=HOLDDEST brokerDest=%d ex=0x%08lx pos=%d,%d noClose=%d\n",
+           brokerDest ? 1 : 0, (unsigned long)destEx, destX, destY, g_noClose ? 1 : 0);
     HWND dest = MakeDest(w, h, destX, destY, destEx);
     if (!dest) { printf("RESULT=HOLD dest=FAIL\n"); return 2; }
     SetLayeredWindowAttributes(dest, 0, 0, LWA_ALPHA);
@@ -330,8 +331,20 @@ static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
             g_rtDev, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
         auto session = pool.CreateCaptureSession(item);
         try { session.IsBorderRequired(false); } catch (...) {}
-        auto rev = pool.FrameArrived(auto_revoke, [](auto const& sender, auto const&) {   // static: no capture
-            if (auto f = sender.TryGetNextFrame()) { InterlockedIncrement(&arrivals); f.Close(); }
+        // --no-close DELIBERATELY OMITS f.Close(), which is the ONE difference left between this probe
+        // and the broker's arrival handler. The broker never closes its frame; it relies on the local
+        // being destroyed at handler exit. Its relay slots freeze after a handful of frames - one
+        // stopped at exactly 2, which is the pool's buffer count - while this probe, which DOES close,
+        // delivered 437 arrivals over 240 s against the same kind of destination. If Direct3D11Capture-
+        // Frame only returns its buffer on Close() rather than on release of the last reference, a
+        // handler that never closes exhausts a 2-buffer pool and stops receiving events. This flag
+        // settles that in the instrument I control instead of guessing about the product.
+        const bool noClose = g_noClose;
+        auto rev = pool.FrameArrived(auto_revoke, [noClose](auto const& sender, auto const&) {
+            if (auto f = sender.TryGetNextFrame()) {
+                InterlockedIncrement(&arrivals);
+                if (!noClose) f.Close();
+            }
         });
         session.StartCapture();
         printf("RESULT=HOLD start src=0x%llx dest=0x%llx %dx%d pump=%d secs=%d\n",
@@ -456,6 +469,7 @@ int wmain(int argc, wchar_t** argv)
         for (int a = 3; a < argc; a++) {
             if (!wcscmp(argv[a], L"--pump")) pump = true;
             else if (!wcscmp(argv[a], L"--broker-dest")) brokerDest = true;
+            else if (!wcscmp(argv[a], L"--no-close")) g_noClose = true;
             else srcCls = argv[a];
         }
         HWND src = srcCls.empty() ? nullptr : FindWindowW(srcCls.c_str(), nullptr);
