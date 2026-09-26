@@ -459,6 +459,110 @@ int wmain(int argc, wchar_t** argv)
         }
         return 0;
     }
+    // --holdn <count> <secs> [apart] : hold COUNT relays of one source at once, STACKED at (0,0) by
+    // default, exactly as the broker does - it creates one destination per relay slot, all at (0,0),
+    // all sized to their source, so they overlap almost completely. Destinations are created STAGGERED
+    // (one every 3 s) and each relay's per-second delta is printed, so an earlier relay going quiet the
+    // moment a new destination appears over it is visible directly rather than inferred.
+    //
+    // WHY: the broker's relay slots freeze after a VARYING handful of frames (2, 3, 12, 25, 89) while
+    // direct-WGC slots in the same process keep delivering and a SINGLE-relay probe delivers
+    // indefinitely (437 arrivals over 240 s). After eliminating the destination's styles and position,
+    // settling, per-pixel-alpha specificity, cloaking, stale counters, a closed channel, a required
+    // message pump and a required f.Close(), the remaining structural difference is that the broker
+    // holds MANY overlapping destinations. Jev: many-overlapping-destinations 0.91,
+    // probe-holds-many-stacked 0.84. `apart` is the control.
+    if (want == L"--holdn")
+    {
+        if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
+        int count = (argc > 2) ? _wtoi(argv[2]) : 4;
+        int secs  = (argc > 3) ? _wtoi(argv[3]) : 40;
+        bool apart = false;
+        std::wstring srcCls;
+        for (int a = 4; a < argc; a++) {
+            if (!wcscmp(argv[a], L"apart")) apart = true; else srcCls = argv[a];
+        }
+        if (count < 1) count = 1;
+        const int MAXN = 12;
+        if (count > MAXN) count = MAXN;
+        HWND src = srcCls.empty() ? nullptr : FindWindowW(srcCls.c_str(), nullptr);
+        if (!src) src = GetForegroundWindow();
+        if (!src) { printf("RESULT=FAIL reason=no-source\n"); return 2; }
+        RECT sr{}; GetWindowRect(src, &sr);
+        int w = sr.right - sr.left, h = sr.bottom - sr.top;
+        printf("RESULT=HOLDN mode=%ls count=%d src=0x%llx %dx%d secs=%d\n",
+               apart ? L"apart" : L"stacked", count,
+               (unsigned long long)(ULONG_PTR)src, w, h, secs);
+        fflush(stdout);
+        struct One { HWND dest; HTHUMBNAIL th; Direct3D11CaptureFramePool pool{ nullptr };
+                     GraphicsCaptureSession sess{ nullptr };
+                     Direct3D11CaptureFramePool::FrameArrived_revoker rev; };
+        static volatile LONG ncnt[MAXN];
+        for (int k = 0; k < MAXN; k++) ncnt[k] = 0;
+        static One ones[MAXN]{};
+        int made = 0;
+        for (int t = 0; t < secs; t++) {
+            // Stagger: bring one more relay up every 3 s until `count` are running.
+            if (made < count && (t % 3) == 0) {
+                int k = made;
+                int x = apart ? (k * 40) : 0, y = apart ? (k * 40) : 0;
+                ones[k].dest = MakeDest(w, h, x, y,
+                    WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT);
+                if (ones[k].dest) {
+                    SetLayeredWindowAttributes(ones[k].dest, 0, 0, LWA_ALPHA);
+                    ShowWindow(ones[k].dest, SW_SHOWNA);
+                    if (SUCCEEDED(DwmRegisterThumbnail(ones[k].dest, src, &ones[k].th)) && ones[k].th) {
+                        SIZE ss{}; DwmQueryThumbnailSourceSize(ones[k].th, &ss);
+                        DWM_THUMBNAIL_PROPERTIES p{};
+                        p.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY;
+                        p.rcDestination = RECT{ 0, 0, ss.cx ? ss.cx : w, ss.cy ? ss.cy : h };
+                        p.fVisible = TRUE; p.opacity = 255;
+                        DwmUpdateThumbnailProperties(ones[k].th, &p);
+                        try {
+                            auto interop = get_activation_factory<GraphicsCaptureItem, ::IGraphicsCaptureItemInterop>();
+                            GraphicsCaptureItem item{ nullptr };
+                            if (SUCCEEDED(interop->CreateForWindow(ones[k].dest, guid_of<GraphicsCaptureItem>(),
+                                          reinterpret_cast<void**>(put_abi(item)))) && item) {
+                                auto size = item.Size();
+                                ones[k].pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
+                                    g_rtDev, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
+                                ones[k].sess = ones[k].pool.CreateCaptureSession(item);
+                                try { ones[k].sess.IsBorderRequired(false); } catch (...) {}
+                                int idx = k;
+                                ones[k].rev = ones[k].pool.FrameArrived(auto_revoke,
+                                    [idx](auto const& sender, auto const&) {
+                                        if (auto f = sender.TryGetNextFrame()) {
+                                            InterlockedIncrement(&ncnt[idx]); f.Close(); }
+                                    });
+                                ones[k].sess.StartCapture();
+                                printf("RESULT=HOLDN up k=%d dest=0x%llx t=%d\n",
+                                       k, (unsigned long long)(ULONG_PTR)ones[k].dest, t);
+                                fflush(stdout);
+                            } else printf("RESULT=HOLDN k=%d createForWindow=FAIL\n", k);
+                        } catch (...) { printf("RESULT=HOLDN k=%d threw=1\n", k); }
+                    } else printf("RESULT=HOLDN k=%d register=FAIL\n", k);
+                } else printf("RESULT=HOLDN k=%d dest=FAIL\n", k);
+                made++;
+            }
+            LONG before[MAXN];
+            for (int k = 0; k < count; k++) before[k] = ncnt[k];
+            Sleep(1000);
+            printf("RESULT=HOLDNSEC t=%d", t + 1);
+            for (int k = 0; k < count; k++)
+                printf(" a%d=%ld d%d=%ld", k, (long)ncnt[k], k, (long)(ncnt[k] - before[k]));
+            printf("\n"); fflush(stdout);
+        }
+        printf("RESULT=HOLDNDONE mode=%ls", apart ? L"apart" : L"stacked");
+        for (int k = 0; k < count; k++) printf(" a%d=%ld", k, (long)ncnt[k]);
+        printf("\n");
+        for (int k = 0; k < count; k++) {
+            if (ones[k].sess) { try { ones[k].sess.Close(); } catch (...) {} }
+            if (ones[k].pool) { try { ones[k].pool.Close(); } catch (...) {} }
+            if (ones[k].th)   DwmUnregisterThumbnail(ones[k].th);
+            if (ones[k].dest) DestroyWindow(ones[k].dest);
+        }
+        return 0;
+    }
     if (want == L"--hold")
     {
         if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
