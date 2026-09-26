@@ -788,7 +788,7 @@ int wmain(int argc, wchar_t** argv) {
             RegCloseKey(k);
         }
         g_RelayBuild = build;   // published below, once the section is mapped
-    }    }
+    }
 
     HANDLE hMap = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, shmName);
     if (!hMap) return 4;
