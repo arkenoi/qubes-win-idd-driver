@@ -465,11 +465,26 @@ static bool RelaySrcDecides(int i) {
 // Throttled to once per second per slot: this walks 1/81 of the frame, which is cheap per call but
 // pointless per frame on an arrival-driven feed, and the number it produces is a property of the
 // content, not of any individual frame.
-static ULONGLONG g_pubSigTick[WGCBRK_MAX_SLOTS] = {};
+static ULONGLONG g_pubSigTick[WGCBRK_MAX_SLOTS] = {};   // when the signature was last COMPUTED
+static ULONGLONG g_pubSigLast[WGCBRK_MAX_SLOTS] = {};   // when a frame last ARRIVED, to spot a post-gap one
 static void PublishSignature(int i, const BYTE* buf, int w, int h) {
     if (!buf || w <= 0 || h <= 0) return;
+    // THE THROTTLE MUST NEVER SKIP A POST-GAP FRAME, AND THIS ONE DID. A plain once-per-second rule
+    // manufactured the very failure it was used to report: an arrival-driven feed on a STATIC window
+    // delivers exactly ONE frame per discrete source change, and if that frame landed within a second
+    // of the previous hash it was skipped - then no further frame arrived, so the published fingerprint
+    // never reflected the change AT ALL, for ever. That is precisely the "delivered-vs-before 0.0 /
+    // delivered-vs-source 21.8" staleness failure, which was recorded as a product P1 and has since
+    // been withdrawn (Jev: p1_withdrawn 0.90, fix-the-throttle-and-rerun 1.00, and
+    // throttle_is_the_defect_class 0.86 - a check whose own design can produce the fault it reports).
+    //
+    // So: a frame that ENDS A QUIET PERIOD is ALWAYS hashed, because it is the only frame that will
+    // ever carry that change. Only a continuous stream is thinned, and there the next frame is along
+    // in milliseconds anyway.
     const ULONGLONG now = GetTickCount64();
-    if (g_pubSigTick[i] && (now - g_pubSigTick[i]) < 1000) return;
+    const bool postGap = (g_pubSigLast[i] == 0) || ((now - g_pubSigLast[i]) > 500);
+    g_pubSigLast[i] = now;
+    if (!postGap && g_pubSigTick[i] && (now - g_pubSigTick[i]) < 1000) return;
     g_pubSigTick[i] = now;
     std::set<unsigned int> seen;
     for (int y = 0; y < h; y += 9) {
