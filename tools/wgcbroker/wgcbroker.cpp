@@ -14,6 +14,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
+#include <dwmapi.h>
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Graphics.Capture.h>
@@ -27,6 +28,7 @@
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -92,6 +94,19 @@ struct Channel {
     ULONGLONG openTick = 0;
     ULONGLONG lastArrivalTick = 0;
     bool      probing = false;   // this PrintWindow channel is a TEST, not yet a commitment
+    // ---- THE DWM-THUMBNAIL RELAY (ABI 8) ----------------------------------------------------
+    // A window whose own surface is empty has nothing for WGC to capture, and PrintWindow is a PULL
+    // api, so a slot that falls back to it has no arrival event and must be driven by an invented
+    // clock. DWM will draw a live copy of ANY window it composites into a destination window we
+    // own; capturing THAT destination is arrival-driven again. Measured with tools/thumbprobe on
+    // win11de-led (German 25H2), 11/11 rogue windows at oneToOne=1, including the toast
+    // (Windows.UI.Core.CoreWindow) that CreateForWindow refuses outright.
+    //
+    // The destination is WS_EX_LAYERED at alpha 0, NOT off-screen: both composite, but off-screen
+    // returned alphaZero=511/2640 where alpha-0 and on-screen both returned a uniform 255.
+    HWND        relayDest  = nullptr;   // the window we own that carries the thumbnail
+    HTHUMBNAIL  relayThumb = nullptr;
+    bool        relay      = false;     // this channel captures relayDest, not c.hwnd
 };
 static std::vector<Channel> g_ch(WGCBRK_MAX_SLOTS);
 // These two MUST outlive a channel. CloseChannel does `c = Channel{}`, so anything kept in the
@@ -103,6 +118,77 @@ static std::vector<Channel> g_ch(WGCBRK_MAX_SLOTS);
 static bool      g_forcePw[WGCBRK_MAX_SLOTS]      = {};
 static ULONGLONG g_noProbeUntil[WGCBRK_MAX_SLOTS] = {};
 static bool g_anyPw = false;   // any PrintWindow channel active -> poll the loop faster
+// LATCHED AT STARTUP, never re-read. Capabilities are decided at START here: a runtime re-read that
+// failed transiently would silently downgrade an eligible guest, which is the forbidden silent
+// fallback arriving by the back door.
+static bool g_RelayOn = false;
+
+// ---- THE RELAY ------------------------------------------------------------------------------
+// Give a window whose own surface WGC cannot capture a per-window source anyway: let DWM draw a live
+// copy of it into a destination window we own, and capture THAT. Returns the destination, or null.
+//
+// Destination properties are not arbitrary - each was measured with tools/thumbprobe:
+//   * WS_EX_LAYERED at alpha 0. It must be a real top-level window DWM composites; SW_HIDE yields
+//     nothing at all. Off-screen also works but returned alphaZero=511/2640 where alpha-0 returned a
+//     uniform 255, so alpha-0 is the one that hands the agent fully blended pixels.
+//   * sized to DwmQueryThumbnailSourceSize, not to the source's window rect. Sizing it to the window
+//     rect made the content land 1:1 inside a larger surface and misreported as scaled.
+//   * WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE so it never takes focus or appears in the taskbar, and
+//     WS_EX_TRANSPARENT so it cannot swallow a click meant for what is underneath.
+// The agent refuses to MAP any window owned by this process (ShouldAcceptWindow, keyed on the
+// validated broker pid), which is what keeps these destinations out of dom0.
+static HWND RelayOpenDest(HWND src, HTHUMBNAIL* outThumb, int* outW, int* outH)
+{
+    static bool reg = false;
+    if (!reg) {
+        WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = DefWindowProcW;
+        wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"QubesWgcRelayDest";
+        wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+        RegisterClassExW(&wc); reg = true;
+    }
+    if (!src || !IsWindow(src)) return nullptr;
+    // The source size is only knowable from a registration, so a scratch destination is registered
+    // purely to ask, then thrown away. Cheap, and it removes the sizing guess.
+    RECT sr{}; if (!GetWindowRect(src, &sr)) return nullptr;
+    int w = sr.right - sr.left, h = sr.bottom - sr.top;
+    if (w < 8 || h < 8) return nullptr;
+    HWND probe = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                                 L"QubesWgcRelayDest", L"", WS_POPUP, 0, 0, 16, 16,
+                                 nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (probe) {
+        HTHUMBNAIL t0 = nullptr;
+        if (SUCCEEDED(DwmRegisterThumbnail(probe, src, &t0)) && t0) {
+            SIZE q{};
+            if (SUCCEEDED(DwmQueryThumbnailSourceSize(t0, &q)) && q.cx > 0 && q.cy > 0) { w = q.cx; h = q.cy; }
+            DwmUnregisterThumbnail(t0);
+        }
+        DestroyWindow(probe);
+    }
+    HWND dest = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+                                L"QubesWgcRelayDest", L"", WS_POPUP, 0, 0, w, h,
+                                nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (!dest) return nullptr;
+    SetLayeredWindowAttributes(dest, 0, 0, LWA_ALPHA);   // invisible to a human, still composited
+    ShowWindow(dest, SW_SHOWNA);
+    HTHUMBNAIL th = nullptr;
+    if (FAILED(DwmRegisterThumbnail(dest, src, &th)) || !th) { DestroyWindow(dest); return nullptr; }
+    DWM_THUMBNAIL_PROPERTIES p{};
+    p.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY;
+    p.rcDestination = RECT{ 0, 0, w, h };
+    p.fVisible = TRUE; p.opacity = 255;
+    if (FAILED(DwmUpdateThumbnailProperties(th, &p))) {
+        DwmUnregisterThumbnail(th); DestroyWindow(dest); return nullptr;
+    }
+    *outThumb = th; *outW = w; *outH = h;
+    return dest;
+}
+
+static void RelayCloseDest(Channel& c)
+{
+    if (c.relayThumb) { DwmUnregisterThumbnail(c.relayThumb); c.relayThumb = nullptr; }
+    if (c.relayDest)  { DestroyWindow(c.relayDest);           c.relayDest  = nullptr; }
+    c.relay = false;
+}
 
 static bool InitD3D() {
     D3D_FEATURE_LEVEL fl;
@@ -411,7 +497,24 @@ static void OpenChannel(int i) {
     const bool xprocContent = g_forcePw[i] ||
                               (!monitor && hwnd && HasCrossProcessContentChild(hwnd));
     g_forcePw[i] = false;
-    if (!xprocContent) try {
+    // THE RELAY IS TRIED WHERE THE PRINTWINDOW FALLBACK WOULD BE USED, and nowhere else. This slot's
+    // window has no capturable surface of its own, so instead of dropping to a polled pull API we
+    // give DWM a destination we own and capture that - arrival-driven, like any other WGC channel.
+    // Routing is otherwise UNCHANGED: a window WGC can capture directly still is. Jev put this as
+    // the first step at 0.98 precisely because it replaces a path rather than displacing one.
+    HWND target = hwnd;
+    if (xprocContent && g_RelayOn && !monitor && hwnd) {
+        int rw = 0, rh = 0; HTHUMBNAIL th = nullptr;
+        HWND dest = RelayOpenDest(hwnd, &th, &rw, &rh);
+        if (dest) {
+            c.relayDest = dest; c.relayThumb = th; c.relay = true;
+            target = dest;
+            s->RelayOk++; s->RelayDest = (UINT64)(ULONG_PTR)dest;
+        } else {
+            s->RelayFail++;
+        }
+    }
+    if (!xprocContent || c.relay) try {
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{ nullptr };
         if (monitor)
@@ -425,7 +528,7 @@ static void OpenChannel(int i) {
                           guid_of<GraphicsCaptureItem>(), reinterpret_cast<void**>(put_abi(item))));
         }
         else
-            check_hresult(interop->CreateForWindow(hwnd, guid_of<GraphicsCaptureItem>(),
+            check_hresult(interop->CreateForWindow(target, guid_of<GraphicsCaptureItem>(),
                           reinterpret_cast<void**>(put_abi(item))));
         // This open has a real capture item: claim the tick block for it, in order.
         s->TickHwnd  = s->Hwnd;
@@ -494,6 +597,10 @@ static void OpenChannel(int i) {
             });
         session.StartCapture();
         s->StartTick = QpcNow();
+        // WHICH WRITER IS FEEDING THIS SLOT (ABI 8). Both of these are arrival-driven; only
+        // WGCBRK_ROUTE_PW below is polled. "How many slots are still on PW" is the number that says
+        // whether the fallback is going away, and it cannot be read if the two are collapsed.
+        s->Route = c.relay ? WGCBRK_ROUTE_RELAY : WGCBRK_ROUTE_WGC;
         s->AckState = WGCBRK_ACTIVE; s->FailHr = 0;
         return;
     } catch (hresult_error const& e) {
@@ -505,6 +612,10 @@ static void OpenChannel(int i) {
     // back to polled PrintWindow instead of giving up - redirected & modern XAML menus render that
     // way, so they leave the slice. The monitor slot never falls back here. Non-black check in
     // PublishPrintWindow marks FAILED (agent slices) for the classes PrintWindow also cannot do.
+    // A relay that opened but whose capture failed leaks its destination and thumbnail unless it is
+    // closed here: the PrintWindow fallback below never touches them, and CloseChannel is not
+    // reached on this path. One leaked top-level window per failed open, for the broker's lifetime.
+    if (c.relay) { RelayCloseDest(c); s->RelayFail++; }
     if (!monitor && hwnd && IsWindow(hwnd)) {
         c.hwnd = hwnd; c.slot = i; c.pw = true; s->FailHr = 0;
         // Claim the tick block for the PrintWindow path (ABI 4). Until this existed, a menu - which
@@ -513,6 +624,7 @@ static void OpenChannel(int i) {
         s->TickHwnd  = s->Hwnd;
         s->TickOpenOk = 0;
         s->TickPw = 1;
+        s->Route = WGCBRK_ROUTE_PW;   // the polled fallback - the thing the relay exists to retire
         s->PollCount = 0;
         s->OpenTick = openT;
         // ItemTick on this path = the moment the WGC attempt was abandoned and we fell back. The
@@ -547,8 +659,15 @@ static void CloseChannel(int i) {
     if (c.pool)    { try { c.pool.Close();    } catch (...) {} }
     if (c.pwBmp)   { DeleteObject(c.pwBmp); }
     if (c.pwDC)    { DeleteDC(c.pwDC); }
+    // The relay's destination is a real top-level window and its thumbnail is a DWM handle; `c =
+    // Channel{}` below would forget both and leak them for the broker's lifetime. Released BEFORE
+    // the struct is wiped, for the same reason g_forcePw had to be set after it (that assignment
+    // erased state the re-route depended on and cost 38 needless re-routes on a healthy window).
+    RelayCloseDest(c);
     c = Channel{};
     g_slots[i].AckState = WGCBRK_FREE;
+    g_slots[i].Route = WGCBRK_ROUTE_WGC;   // a free slot claims no writer
+    g_slots[i].RelayDest = 0;
     LeaveCriticalSection(&g_pubCs[i]);
 }
 
@@ -636,6 +755,31 @@ int wmain(int argc, wchar_t** argv) {
     init_apartment(apartment_type::multi_threaded);
     if (!WgcSupported()) return 2;
     if (!InitD3D())      return 3;
+
+    // THE RELAY CAPABILITY, LATCHED HERE AND NEVER RE-READ. Decided once, at start, from the build
+    // and an explicit opt-out - the project's rule, because a runtime re-read that failed
+    // transiently would silently downgrade an eligible guest, and a silent downgrade is exactly the
+    // fallback this work exists to remove. Default ON where it is known to work: the relay was
+    // measured on 26200 and every WGC prerequisite it leans on (border removal, DirtyRegions) needs
+    // 24H2+ anyway. Never on Win10, where WGC cannot serve a per-window path at all.
+    {
+        g_RelayOn = false;
+        OSVERSIONINFOEXW vi{}; vi.dwOSVersionInfoSize = sizeof(vi);
+        DWORDLONG cond = 0;
+        VER_SET_CONDITION(cond, VER_BUILDNUMBER, VER_GREATER_EQUAL);
+        vi.dwBuildNumber = 26100;
+        if (VerifyVersionInfoW(&vi, VER_BUILDNUMBER, cond))
+            g_RelayOn = true;
+        // Explicit opt-out, read ONCE: HKLM\SOFTWARE\Qubes\GuiAgent : QubesWgcRelay = 0.
+        HKEY k = nullptr;
+        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Qubes\\GuiAgent", 0, KEY_READ, &k) == ERROR_SUCCESS) {
+            DWORD v = 1, cb = sizeof(v), ty = 0;
+            if (RegQueryValueExW(k, L"QubesWgcRelay", nullptr, &ty, (BYTE*)&v, &cb) == ERROR_SUCCESS
+                && ty == REG_DWORD && v == 0)
+                g_RelayOn = false;
+            RegCloseKey(k);
+        }
+    }
 
     HANDLE hMap = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, shmName);
     if (!hMap) return 4;

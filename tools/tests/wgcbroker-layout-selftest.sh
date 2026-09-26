@@ -35,10 +35,13 @@ print('typedef struct {'+body('WGCBRK_HEADER')+'} HDR;')
 print('typedef struct {'+body('WGCBRK_SLOT')+'} SLOT;')
 print('int main(void){')
 print('printf("HDRSIZE %zu\\n", sizeof(HDR)); printf("SLOTSIZE %zu\\n", sizeof(SLOT));')
-for f in ("AckState","FrameWidth","FrameHeight","Seq","FrameId","CaptureTick","TickPw","PollCount",
-          "ReqWidth","ReqHeight","ReqState","ControlSeq","FailHr","FramesArrived","FramesPublished",
-          "FramesDropSize","RecreateOk","RecreateFail","LastContentW","LastContentH","PoolW","PoolH",
-          "PokeSeq","PokeAck","PollsServiced","PollsSkipped","SafetyPolls","Reroutes","BackoffMs","QuietReroutes","ProbeBounces"):
+# THE FIELD LIST IS DERIVED, NOT HARDCODED. It used to be a literal tuple, so every ABI bump made
+# this check report the new fields as "not any field in WGCBRK_SLOT" - which is a false FAIL that
+# looks exactly like a real misparse. ABI 8 hit it immediately. Parsing the struct means the check
+# learns a new field the moment the header gains one.
+fields = re.findall(r'\b(?:LONG|UINT64|LONGLONG|BYTE)\s+(\w+)\s*(?:\[[^\]]*\])?\s*;',
+                    body('WGCBRK_SLOT'))
+for f in fields:
     print(f'printf("SLOT.{f} %zu\\n", offsetof(SLOT,{f}));')
 print('return 0;}')
 PY

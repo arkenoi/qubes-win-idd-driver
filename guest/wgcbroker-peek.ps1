@@ -9,15 +9,15 @@
 # It reads ONLY. It never writes the section, never signals the broker, and takes nothing from the
 # guest but numbers.
 #
-# ABI: the layout below is WGCBRK_ABI_VERSION 7 (agent/gui-agent/wgcbroker_ipc.h). The header's
+# ABI: the layout below is WGCBRK_ABI_VERSION 8 (agent/gui-agent/wgcbroker_ipc.h). The header's
 # AbiVersion is ASSERTED, not assumed - on any other version this refuses and prints what it found,
 # because a silently-misparsed struct prints plausible nonsense, and plausible nonsense is worse
 # than no reading at all. Slot stride and every offset are derived from that header in one place.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$ABI    = 7
+$ABI    = 8
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 272     # sizeof(WGCBRK_SLOT) at ABI 7
+$STRIDE = 288     # sizeof(WGCBRK_SLOT) at ABI 8
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -67,6 +67,13 @@ for ($n = 0; $n -lt $Samples; $n++) {
       $n,$i,(RdI ($b+192)),(RdI ($b+196)),(RdI ($b+200)),(RdI ($b+204)),(RdI ($b+208)),(RdI ($b+212)),(RdI ($b+216)),(RdI ($b+220)),(RdI ($b+224)),(RdI ($b+132)),(RdI ($b+184)))
     Write-Output ("S{0} slot{1} POKE seq={2} ack={3} serviced={4} skipped={5} safety={6} reroutes={7} backoffMs={8} quietReroutes={9} probeBounces={10}" -f `
       $n,$i,(RdI ($b+232)),(RdI ($b+236)),(RdI ($b+240)),(RdI ($b+244)),(RdI ($b+248)),(RdI ($b+252)),(RdI ($b+256)),(RdI ($b+260)),(RdI ($b+264)))
+    # ABI 8. route: 0=WGC on the window, 1=RELAY (WGC on a destination carrying a DWM thumbnail),
+    # 2=polled PrintWindow. Routes 0 and 1 are arrival-driven; 2 is the fallback the relay exists to
+    # retire, so "how many slots are still on route 2" is the number that measures progress.
+    $rt = RdI ($b+268)
+    $rn = switch ($rt) { 0 { 'WGC' } 1 { 'RELAY' } 2 { 'PW' } default { "?$rt" } }
+    Write-Output ("S{0} slot{1} ROUTE {2} ({3}) relayOk={4} relayFail={5} relayDest=0x{6:x}" -f `
+      $n,$i,$rt,$rn,(RdI ($b+272)),(RdI ($b+276)),(RdL ($b+280)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)
