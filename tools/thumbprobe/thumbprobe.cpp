@@ -212,6 +212,12 @@ static BOOL CALLBACK SweepProc(HWND h, LPARAM)
 // and the only one that is invisible to dom0 without being hidden).
 static void RelayOnce(const Found& f)
 {
+    // A window can vanish between enumeration and relay - chromerepro's fixtures and any menu do
+    // exactly that. Without this the whole sweep dies and, because stdout was buffered, prints
+    // NOTHING: the first run with the class fixtures up returned exit 1 with an empty output and no
+    // indication of how far it got.
+    if (!IsWindow(f.h)) { printf("RESULT=SWEEP class=%ls why=%s gone=1\n", f.cls.c_str(), f.why);
+                          fflush(stdout); return; }
     RECT sr{}; GetWindowRect(f.h, &sr);
     int w = (int)(sr.right - sr.left), h = (int)(sr.bottom - sr.top);
     // The destination must be the THUMBNAIL'S source size, not the window rect: the first sweep
@@ -236,7 +242,7 @@ static void RelayOnce(const Found& f)
     HRESULT hr = DwmRegisterThumbnail(dest, f.h, &th);
     if (FAILED(hr) || !th) {
         printf("RESULT=SWEEP class=%ls why=%s register=FAIL hr=0x%08lx\n", f.cls.c_str(), f.why,
-               (unsigned long)hr);
+               (unsigned long)hr); fflush(stdout);
         DestroyWindow(dest); return;
     }
     SIZE ss{}; DwmQueryThumbnailSourceSize(th, &ss);
@@ -256,6 +262,7 @@ static void RelayOnce(const Found& f)
            s.ok ? "ok" : "none", s.frames, s.colours, s.nonBlack, s.w, s.h,
            (ss.cx == s.w && ss.cy == s.h) ? 1 : 0,
            s.alphaDistinct, s.alphaMin, s.alphaMax, s.alphaPartial, s.alphaZero, s.samples);
+    fflush(stdout);
     DwmUnregisterThumbnail(th);
     DestroyWindow(dest);
 }
@@ -306,8 +313,13 @@ int wmain(int argc, wchar_t** argv)
         if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
         std::vector<Found> found; g_found = &found;
         EnumWindows(SweepProc, 0);
-        printf("RESULT=SWEEPFOUND count=%d\n", (int)found.size());
-        for (auto& f : found) RelayOnce(f);
+        printf("RESULT=SWEEPFOUND count=%d\n", (int)found.size()); fflush(stdout);
+        for (auto& f : found) {
+            // One bad window must not take the sweep with it: the point of a sweep is the set.
+            try { RelayOnce(f); }
+            catch (...) { printf("RESULT=SWEEP class=%ls why=%s threw=1\n", f.cls.c_str(), f.why); }
+            fflush(stdout);
+        }
         int ok = 0; for (auto& f : found) { (void)f; }
         printf("RESULT=SWEEPDONE count=%d\n", (int)found.size());
         return 0;
