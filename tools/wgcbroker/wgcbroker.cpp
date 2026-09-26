@@ -377,22 +377,29 @@ static bool g_relayNoDemote = false;
 // is only asked after WGCBRK_WGC_QUIET_MS of silence anyway. On the FIRST call for a channel there
 // is no previous hash, so it records one and reports NO change - a relay is never demoted on the
 // strength of a measurement that has no baseline.
-static bool RelaySourceChanged(int i) {
+// Returns SRC_CHANGED / SRC_SAME / SRC_UNMEASURED. The three are NOT interchangeable: SRC_SAME is
+// a measurement that says the window is static, while SRC_UNMEASURED means the test was throttled
+// or could not run. Collapsing them was a defect in the first cut of this function - the throttled
+// case returned "no change", so RelayStaticHolds counted a hold on every loop tick and the counter
+// that is supposed to be the EVIDENCE for this rule would have been inflated by orders of
+// magnitude. A counter that cannot be read is not instrumentation.
+enum { SRC_CHANGED = 1, SRC_SAME = 0, SRC_UNMEASURED = 2 };
+static int RelaySourceChanged(int i) {
     Channel& c = g_ch[i];
     HWND hwnd = c.hwnd;
-    if (!hwnd || !IsWindow(hwnd)) return true;     // gone: let the normal paths deal with it
+    if (!hwnd || !IsWindow(hwnd)) return SRC_CHANGED;   // gone: let the normal paths deal with it
     const ULONGLONG now = GetTickCount64();
-    if (c.srcHashSeen && (now - c.srcHashTick) < c.srcHashMs) return false;  // too soon to retest
+    if (c.srcHashSeen && (now - c.srcHashTick) < c.srcHashMs) return SRC_UNMEASURED;  // too soon
     RECT r{};
-    if (!GetWindowRect(hwnd, &r)) return true;
+    if (!GetWindowRect(hwnd, &r)) return SRC_CHANGED;
     int w = r.right - r.left, h = r.bottom - r.top;
-    if (w <= 0 || h <= 0) return true;
+    if (w <= 0 || h <= 0) return SRC_CHANGED;
     if (w > 4096) w = 4096;
     if (h > 4096) h = 4096;
-    if (!EnsurePwDib(c, w, h)) return true;        // cannot measure => do not suppress a demotion
-    if (!PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT)) return true;
+    if (!EnsurePwDib(c, w, h)) return SRC_CHANGED;      // cannot measure => do not suppress a demotion
+    if (!PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT)) return SRC_CHANGED;
     const unsigned char* p = (const unsigned char*)c.pwBits;
-    if (!p) return true;
+    if (!p) return SRC_CHANGED;
     // FNV-1a over a strided sample: every 64th pixel is ample to notice a window repainting, and
     // hashing 2.6 Mpx in full on every decision would cost more than the demotion it is guarding.
     unsigned long long hsh = 1469598103934665603ull;
@@ -405,7 +412,17 @@ static bool RelaySourceChanged(int i) {
     c.srcHash = hsh; c.srcHashTick = now; c.srcHashSeen = true;
     if (changed) c.srcHashMs = 500;
     else if (c.srcHashMs < 8000) { c.srcHashMs *= 2; if (c.srcHashMs > 8000) c.srcHashMs = 8000; }
-    return changed;
+    return changed ? SRC_CHANGED : SRC_SAME;
+}
+
+// Should a RELAY that has delivered be demoted now? Only on a MEASURED change of the source: damage
+// was signalled and no frame followed, which is the founding symptom. A measured SAME is a static
+// window and is counted, so the rule's effect is visible. UNMEASURED (throttled) neither demotes
+// nor counts - it simply waits for the next test.
+static bool RelaySrcDecides(int i) {
+    const int r = RelaySourceChanged(i);
+    if (r == SRC_SAME) { InterlockedIncrement(&g_slots[i].RelayStaticHolds); return false; }
+    return r == SRC_CHANGED;
 }
 
 static bool PublishPrintWindow(int i) {
@@ -823,8 +840,7 @@ static void Reconcile() {
                  !(c.relay && g_relayNoDemote) &&
                  (g_slots[i].FramesArrived == 0 ||
                   (g_slots[i].PokeSeq != c.pokeAtLastArrival &&
-                   (!c.relay || g_slots[i].FramesArrived == 0 || RelaySourceChanged(i) ||
-                    (InterlockedIncrement(&g_slots[i].RelayStaticHolds), false))))) {
+                   (!c.relay || RelaySrcDecides(i))))) {
             // BEHAVIOURAL DETECTION - this, not the structural test, is what decides.
             //
             // A visible, unminimised window whose WGC feed has said NOTHING since it opened is a
