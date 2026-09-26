@@ -104,6 +104,12 @@ struct Channel {
     //
     // The destination is WS_EX_LAYERED at alpha 0, NOT off-screen: both composite, but off-screen
     // returned alphaZero=511/2640 where alpha-0 and on-screen both returned a uniform 255.
+    // PokeSeq as it stood when this channel last delivered a frame. The difference against the live
+    // PokeSeq is "damage the agent saw since our last frame" - the only thing that separates an IDLE
+    // arrival-driven channel from a BROKEN one. Without it the quiet detector demoted channels that
+    // had delivered thousands of frames and simply gone quiet (measured: 2934 on one slot), and
+    // demoting idle to polled is backwards on cost (Jev 0.84).
+    LONG        pokeAtLastArrival = 0;
     HWND        relayDest  = nullptr;   // the window we own that carries the thumbnail
     HTHUMBNAIL  relayThumb = nullptr;
     bool        relay      = false;     // this channel captures relayDest, not c.hwnd
@@ -608,6 +614,7 @@ static void OpenChannel(int i) {
                 }
                 if (!g_slots[i].FirstArrivedTick)
                     g_slots[i].FirstArrivedTick = QpcNow();
+                g_ch[i].pokeAtLastArrival = g_slots[i].PokeSeq;   // damage seen as of this frame
                 auto f = sender.TryGetNextFrame();
                 if (!f) return;
                 auto cs = f.ContentSize();
@@ -735,7 +742,20 @@ static void Reconcile() {
                  IsWindow(want) && IsWindowVisible(want) && !IsIconic(want) &&
                  GetTickCount64() >= g_noProbeUntil[i] &&
                  (GetTickCount64() - (c.lastArrivalTick ? c.lastArrivalTick : c.openTick))
-                     >= WGCBRK_WGC_QUIET_MS) {
+                     >= WGCBRK_WGC_QUIET_MS &&
+                 // SILENCE IS NOT ENOUGH. An arrival-driven feed produces nothing when its source is
+                 // not changing, and that is CORRECT. Re-route only when the agent has seen damage
+                 // for this window since our last frame - damage happened, no frame followed - or
+                 // when we have never delivered at all, which is the case this detector was built
+                 // for (its founding measurement had FramesArrived frozen at 3 while a control ran
+                 // 637 -> 678). Measured 2026-09-26: without this, a relay that delivered 2934
+                 // frames and went idle was demoted to POLLING, which costs a render per backoff
+                 // interval for a window nobody is touching - the exact idle cost this work removes.
+                 // Jev: silent-while-the-window-is-changing 0.63, demotion-of-idle-is-backwards 0.84,
+                 // and "has never delivered" alone only 0.25 because it never fires for the founding
+                 // case.
+                 (g_slots[i].FramesArrived == 0 ||
+                  g_slots[i].PokeSeq != c.pokeAtLastArrival)) {
             // BEHAVIOURAL DETECTION - this, not the structural test, is what decides.
             //
             // A visible, unminimised window whose WGC feed has said NOTHING since it opened is a
