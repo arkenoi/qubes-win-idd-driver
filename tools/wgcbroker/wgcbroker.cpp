@@ -122,6 +122,7 @@ static bool g_anyPw = false;   // any PrintWindow channel active -> poll the loo
 // failed transiently would silently downgrade an eligible guest, which is the forbidden silent
 // fallback arriving by the back door.
 static bool g_RelayOn = false;
+static DWORD g_RelayBuild = 0;   // the build the decision was made from, published for the record
 
 // ---- THE RELAY ------------------------------------------------------------------------------
 // Give a window whose own surface WGC cannot capture a per-window source anyway: let DWM draw a live
@@ -763,13 +764,20 @@ int wmain(int argc, wchar_t** argv) {
     // measured on 26200 and every WGC prerequisite it leans on (border removal, DirtyRegions) needs
     // 24H2+ anyway. Never on Win10, where WGC cannot serve a per-window path at all.
     {
-        g_RelayOn = false;
-        OSVERSIONINFOEXW vi{}; vi.dwOSVersionInfoSize = sizeof(vi);
-        DWORDLONG cond = 0;
-        VER_SET_CONDITION(cond, VER_BUILDNUMBER, VER_GREATER_EQUAL);
-        vi.dwBuildNumber = 26100;
-        if (VerifyVersionInfoW(&vi, VER_BUILDNUMBER, cond))
-            g_RelayOn = true;
+        // RtlGetVersion, NOT VerifyVersionInfo/GetVersionEx. Those are subject to the compatibility
+        // manifest shim and report an older build unless the binary declares supportedOS - the agent
+        // documents exactly this at main.c:11652 and uses RtlGetVersion for the same gate. The first
+        // R1 build used VerifyVersionInfo and the relay NEVER ENGAGED on a 26200.8037 guest: two
+        // slots sat on the polled fallback with relayOk=0 AND relayFail=0, i.e. not even attempted,
+        // and nothing said why. A capability that fails to latch has to be visible.
+        DWORD build = 0;
+        if (HMODULE nt = GetModuleHandleW(L"ntdll.dll")) {
+            typedef LONG (WINAPI *PFN_RTLGETVERSION)(OSVERSIONINFOW*);
+            auto pRtlGetVersion = (PFN_RTLGETVERSION)GetProcAddress(nt, "RtlGetVersion");
+            OSVERSIONINFOW ovi{}; ovi.dwOSVersionInfoSize = sizeof(ovi);
+            if (pRtlGetVersion && pRtlGetVersion(&ovi) == 0) build = ovi.dwBuildNumber;
+        }
+        g_RelayOn = (build >= 26100);
         // Explicit opt-out, read ONCE: HKLM\SOFTWARE\Qubes\GuiAgent : QubesWgcRelay = 0.
         HKEY k = nullptr;
         if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Qubes\\GuiAgent", 0, KEY_READ, &k) == ERROR_SUCCESS) {
@@ -779,7 +787,8 @@ int wmain(int argc, wchar_t** argv) {
                 g_RelayOn = false;
             RegCloseKey(k);
         }
-    }
+        g_RelayBuild = build;   // published below, once the section is mapped
+    }    }
 
     HANDLE hMap = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, shmName);
     if (!hMap) return 4;
@@ -794,6 +803,13 @@ int wmain(int argc, wchar_t** argv) {
     // adversary (c): a stale broker must not serve a newer agent's section.
     if (g_hdr->AgentPid && (DWORD)g_hdr->AgentPid != g_launcherPid) return 7;
     g_hdr->BrokerPid = (LONG)GetCurrentProcessId();
+    // PUBLISH THE LATCHED CAPABILITY AND THE BUILD IT WAS DECIDED FROM. Without this the first R1
+    // build's silent off was indistinguishable from "no rogue window appeared": every slot read
+    // relayOk=0 relayFail=0 and nothing said whether the relay was disabled or simply unused. Now
+    // guest/wgcbroker-peek.ps1 prints it, so "did the capability even latch" is answered before any
+    // route is interpreted.
+    g_hdr->RelayCapable = g_RelayOn ? 1 : 0;
+    g_hdr->RelayOsBuild = (LONG)g_RelayBuild;
     g_hCtl = OpenEventW(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, ctlName);
     // FAIL LOUD. This handle is how the agent WAKES us the instant it registers a window; without
     // it the wait below falls back to its 250 ms timeout and every window - every menu, every
