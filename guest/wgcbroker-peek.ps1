@@ -9,13 +9,26 @@
 # It reads ONLY. It never writes the section, never signals the broker, and takes nothing from the
 # guest but numbers.
 #
-# ABI: the layout below is WGCBRK_ABI_VERSION 8 (agent/gui-agent/wgcbroker_ipc.h). The header's
+# ABI: the layout below is WGCBRK_ABI_VERSION (agent/gui-agent/wgcbroker_ipc.h). The header's
 # AbiVersion is ASSERTED, not assumed - on any other version this refuses and prints what it found,
 # because a silently-misparsed struct prints plausible nonsense, and plausible nonsense is worse
 # than no reading at all. Slot stride and every offset are derived from that header in one place.
+#
+# THAT ASSERTION WAS DEAD FROM THE DAY IT WAS WRITTEN UNTIL 2026-09-27, and it is the reason this
+# comment is now long. It read:
+#     $ABI = 16                 # what this script parses
+#     $abi = RdI 4              # what the section says
+#     if ($abi -ne $ABI) { refuse }
+# PowerShell variable names are CASE-INSENSITIVE, so `$abi` and `$ABI` are one variable: the read
+# overwrote the constant and the test compared the section's version with itself. It could never fire.
+# Measured consequence the same day: this script at ABI 16 read an ABI-15 section without a murmur -
+# slot0 parsed correctly (offset 128) and every later slot drifted by the 8-byte stride difference,
+# yielding hwnd=0x2, hwnd=0xa, req=17410688x0 - and a census built on it graded "1 slot" and reported
+# staleness NO DATA, which reads exactly like a product failure. The constant is now $WANT_ABI and the
+# section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$ABI    = 16
+$WANT_ABI = 16
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
 $STRIDE = 3416    # sizeof(WGCBRK_SLOT) at ABI 16 (PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; RelayReregs 3408)
 $SLOTS  = 32
@@ -45,10 +58,10 @@ if ($base -eq [IntPtr]::Zero) { Write-Output ("PEEK-FAIL: MapViewOfFile err=" + 
 function RdI([int]$o){ [Runtime.InteropServices.Marshal]::ReadInt32($base,$o) }
 function RdL([int]$o){ [Runtime.InteropServices.Marshal]::ReadInt64($base,$o) }
 
-$magic = RdI 0; $abi = RdI 4
+$magic = RdI 0; $secAbi = RdI 4
 if ($magic -ne 0x4257434B) { Write-Output ("PEEK-FAIL: bad magic 0x{0:x} - not the broker section" -f $magic); exit 1 }
-if ($abi -ne $ABI) {
-  Write-Output ("PEEK-FAIL: section is ABI {0}, this script parses ABI {1}. REFUSING to print a" -f $abi,$ABI)
+if ($secAbi -ne $WANT_ABI) {
+  Write-Output ("PEEK-FAIL: section is ABI {0}, this script parses ABI {1}. REFUSING to print a" -f $secAbi,$WANT_ABI)
   Write-Output  "           misparsed struct. Update the offsets from wgcbroker_ipc.h first."
   exit 1
 }
