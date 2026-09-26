@@ -52,10 +52,26 @@ function Render([IntPtr]$h,[int]$w,[int]$ht,[uint32]$flag) {
   $g = [System.Drawing.Graphics]::FromImage($bmp); $dc = $g.GetHdc()
   $ok = [WT]::PrintWindow($h,$dc,$flag); $g.ReleaseHdc($dc); $g.Dispose()
   if (-not $ok) { $bmp.Dispose(); return $null }
-  # distinct colours + a coarse hash, both sampled: enough to say "empty" and to compare renders
+  # ONE LockBits READ INSTEAD OF PER-PIXEL GetPixel. The tile grid below samples on the order of
+  # 100k points on a large window, and GetPixel crosses into GDI+ on every call - measured cost on a
+  # 1115x628 window would be seconds per render, several windows and two renders each, against a 340 s
+  # census budget. Reading the bitmap once into a byte array makes the whole pass arithmetic.
+  $rect = New-Object System.Drawing.Rectangle 0,0,$w,$ht
+  $data = $bmp.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::ReadOnly,
+                        [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+  $stride = $data.Stride
+  $buf = New-Object byte[] ([Math]::Abs($stride) * $ht)
+  [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $buf, 0, $buf.Length)
+  $bmp.UnlockBits($data)
+  # distinct colours + a coarse hash, both sampled: enough to say "empty" and to compare renders.
+  # BGRA in memory; the hash keeps using the ARGB int so it stays comparable with earlier records.
   $colors=@{}; $acc=0
-  for ($y=0; $y -lt $ht; $y+=9) { for ($x=0; $x -lt $w; $x+=9) {
-    $c=$bmp.GetPixel($x,$y).ToArgb(); $colors[$c]=1; $acc = ($acc*33 -bxor $c) -band 0x7FFFFFFF } }
+  for ($y=0; $y -lt $ht; $y+=9) {
+    $ro = $y*$stride
+    for ($x=0; $x -lt $w; $x+=9) {
+      $o = $ro + $x*4
+      $c = ([int]$buf[$o+3] -shl 24) -bor ([int]$buf[$o+2] -shl 16) -bor ([int]$buf[$o+1] -shl 8) -bor [int]$buf[$o]
+      $colors[$c]=1; $acc = ($acc*33 -bxor $c) -band 0x7FFFFFFF } }
   # A 32x32 GRID OF PER-TILE MEAN RGB, the same reduction the broker publishes for the frame it
   # actually delivered (ABI 13 PubTiles). Both sides normalise to this fixed grid regardless of their
   # own dimensions, which is what makes them comparable at all: the guest measures the WHOLE window
@@ -73,8 +89,11 @@ function Render([IntPtr]$h,[int]$w,[int]$ht,[uint32]$flag) {
       $x0 = [int]([int64]$tx*$w/$T); $x1 = [int]([int64]($tx+1)*$w/$T)
       if ($x1 -le $x0) { $x1 = $x0+1 }; if ($x1 -gt $w) { $x1 = $w }
       $sr=0; $sg=0; $sb=0; $n=0
-      for ($yy=$y0; $yy -lt $y1; $yy+=2) { for ($xx=$x0; $xx -lt $x1; $xx+=2) {
-        $px = $bmp.GetPixel($xx,$yy); $sr+=$px.R; $sg+=$px.G; $sb+=$px.B; $n++ } }
+      for ($yy=$y0; $yy -lt $y1; $yy+=2) {
+        $ro2 = $yy*$stride
+        for ($xx=$x0; $xx -lt $x1; $xx+=2) {
+          $o2 = $ro2 + $xx*4
+          $sb += [int]$buf[$o2]; $sg += [int]$buf[$o2+1]; $sr += [int]$buf[$o2+2]; $n++ } }
       $o = (($ty*$T)+$tx)*3
       if ($n -gt 0) { $tiles[$o]=[byte]($sr/$n); $tiles[$o+1]=[byte]($sg/$n); $tiles[$o+2]=[byte]($sb/$n) }
     }
