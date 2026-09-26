@@ -107,6 +107,15 @@ struct Channel {
     // than the polled fallback this work exists to remove. Unchanged doubles it to the ceiling;
     // a change resets it, so detection stays prompt exactly when something is happening.
     ULONG              srcHashMs   = 500;
+    // CONSECUTIVE measured source changes with no frame in between. A SINGLE change must not demote:
+    // measured 2026-09-26 on win11de-led4, the one class that still fell back did so on
+    // srcChanged=1 pwFail=0 - one differing render, permanently onto the polled path, while the
+    // control (demotion disabled) held every class on an arrival-driven route. The founding symptom
+    // this detector exists for was FramesArrived frozen at 3 while a control ran 637->678 over 23 s,
+    // i.e. damage repeatedly with NO frames at all - not one sample. Jev:
+    // require-repeated-changes-with-no-frames 0.93. Reset by any arriving frame and by any measured
+    // SAME, so the streak only ever counts an unbroken run of "the source moved and nothing came".
+    int                srcChangeStreak = 0;
     // ---- THE DWM-THUMBNAIL RELAY (ABI 8) ----------------------------------------------------
     // A window whose own surface is empty has nothing for WGC to capture, and PrintWindow is a PULL
     // api, so a slot that falls back to it has no arrival event and must be driven by an invented
@@ -424,12 +433,20 @@ static int RelaySourceChanged(int i) {
 // was signalled and no frame followed, which is the founding symptom. A measured SAME is a static
 // window and is counted, so the rule's effect is visible. UNMEASURED (throttled) neither demotes
 // nor counts - it simply waits for the next test.
+// How many CONSECUTIVE measured source changes, with no frame arriving in between, before a relay
+// is demoted. One is far too few (see Channel::srcChangeStreak); demotion is one-way, so a single
+// spurious difference costs the relay for the rest of that window's life.
+#define WGCBRK_RELAY_CHANGE_STREAK 3
+
 static bool RelaySrcDecides(int i) {
+    Channel& c = g_ch[i];
     const int r = RelaySourceChanged(i);
-    if (r == SRC_SAME)       { InterlockedIncrement(&g_slots[i].RelayStaticHolds);    return false; }
+    if (r == SRC_SAME)       { c.srcChangeStreak = 0;
+                               InterlockedIncrement(&g_slots[i].RelayStaticHolds);    return false; }
     if (r == SRC_UNMEASURED) { InterlockedIncrement(&g_slots[i].RelaySrcUnmeasured);  return false; }
     InterlockedIncrement(&g_slots[i].RelaySrcChanged);
-    return true;
+    // Measured change with no frame behind it. Only an UNBROKEN RUN of these demotes.
+    return (++c.srcChangeStreak) >= WGCBRK_RELAY_CHANGE_STREAK;
 }
 
 static bool PublishPrintWindow(int i) {
@@ -715,6 +732,7 @@ static void OpenChannel(int i) {
                 // publishing can be told apart from a slot that never receives anything.
                 g_slots[i].FramesArrived++;
                 ch.lastArrivalTick = GetTickCount64();   // behavioural detector: the feed is alive
+                ch.srcChangeStreak = 0;                  // a frame arrived: the run of "no frames" is broken
                 g_slots[i].LastContentW = cs.Width; g_slots[i].LastContentH = cs.Height;
                 g_slots[i].PoolW = ch.poolW;        g_slots[i].PoolH = ch.poolH;
                 if (cs.Width != ch.poolW || cs.Height != ch.poolH) {
