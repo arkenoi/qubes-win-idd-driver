@@ -684,6 +684,50 @@ int wmain(int argc, wchar_t** argv)
         }
         return 0;
     }
+    // --capture <hwnd-hex> <secs>: WGC-capture an EXISTING window, by handle, once a second, and report
+    // whether its frames carry content. This exists to answer ONE question that nothing else here can.
+    //
+    // A relay channel that has gone deaf (no FrameArrived at all, while the broker's own source-change
+    // detector records that the source moved) has two very different possible causes, and they need
+    // opposite fixes: either DWM has stopped compositing the thumbnail into the broker's destination
+    // window - so there is genuinely nothing to capture - or DWM is still compositing it and the
+    // BROKER's own capture session died, in which case renewing the thumbnail would change nothing and
+    // the session must be recreated. Jev put those at 0.24 and 0.40 with the mechanism as a whole at
+    // insufficient-evidence 0.43, and named this measurement (0.53) as the one that separates them.
+    //
+    // Point it at the destination hwnd the broker publishes (slot relayDest). A FRESH session each
+    // second is deliberate: it asks "can anyone capture content from this window right now", which is
+    // exactly the DWM question, and it cannot be answered by the broker's own frozen counters.
+    //   colours>1 and nonBlack>0  -> DWM IS compositing; the broker's own session is the dead part.
+    //   frames>0 but blank/black  -> the window is composited but the thumbnail is not in it.
+    //   frames==0                 -> WGC cannot serve this window for anyone.
+    if (want == L"--capture")
+    {
+        if (argc < 3) { printf("RESULT=FAIL reason=usage --capture <hwnd-hex> [secs]\n"); return 2; }
+        HWND h = (HWND)(ULONG_PTR)_wcstoui64(argv[2], nullptr, 16);
+        int secs = (argc > 3) ? _wtoi(argv[3]) : 10;
+        if (!h || !IsWindow(h)) { printf("RESULT=FAIL reason=not-a-window hwnd=%ls\n", argv[2]); return 2; }
+        if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
+        WCHAR cls[128] = {}; GetClassNameW(h, cls, 128);
+        RECT r{}; GetWindowRect(h, &r);
+        LONG ex = GetWindowLongW(h, GWL_EXSTYLE);
+        BYTE alpha = 0; DWORD lwaFlags = 0; COLORREF key = 0;
+        const bool lw = GetLayeredWindowAttributes(h, &key, &alpha, &lwaFlags) ? true : false;
+        printf("RESULT=CAPTURE target=0x%llx class=%ls rect=%ld,%ld,%ld,%ld ex=0x%08lx layered=%d alpha=%d visible=%d iconic=%d secs=%d\n",
+               (unsigned long long)(ULONG_PTR)h, cls, r.left, r.top, r.right, r.bottom,
+               (unsigned long)ex, lw ? 1 : 0, lw ? (int)alpha : -1,
+               IsWindowVisible(h) ? 1 : 0, IsIconic(h) ? 1 : 0, secs);
+        fflush(stdout);
+        for (int t = 0; t < secs; t++) {
+            Shot s = CaptureWindow(h, 700);
+            printf("RESULT=CAPTURESEC t=%d ok=%d %dx%d frames=%d colours=%d nonBlack=%d/%d alphaMin=%d alphaMax=%d\n",
+                   t + 1, s.ok ? 1 : 0, s.w, s.h, s.frames, s.colours, s.nonBlack, s.samples,
+                   s.samples ? s.alphaMin : -1, s.samples ? s.alphaMax : -1);
+            fflush(stdout);
+        }
+        printf("RESULT=CAPTUREDONE\n");
+        return 0;
+    }
     if (want == L"--hold")
     {
         if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
