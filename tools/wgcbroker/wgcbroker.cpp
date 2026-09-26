@@ -481,6 +481,35 @@ static void PublishSignature(int i, const BYTE* buf, int w, int h) {
         }
     }
     g_slots[i].PubColours = (LONG)seen.size();
+
+    // ABI 13: the same frame reduced to a fixed WGCBRK_TILES x WGCBRK_TILES grid of per-tile MEAN
+    // RGB. Alpha is deliberately not touched (the two sides need not agree on it, and the protocol
+    // carries none). Each tile averages a SUBSAMPLE of its own pixels - every other row and column -
+    // because the mean of a subsample is what is being compared on both sides, not a checksum, and
+    // this keeps the pass linear and cheap enough for the publish path.
+    for (int ty = 0; ty < WGCBRK_TILES; ++ty) {
+        const int y0 = (int)((LONGLONG)ty * h / WGCBRK_TILES);
+        int y1 = (int)((LONGLONG)(ty + 1) * h / WGCBRK_TILES);
+        if (y1 <= y0) y1 = y0 + 1;
+        if (y1 > h) y1 = h;
+        for (int tx = 0; tx < WGCBRK_TILES; ++tx) {
+            const int x0 = (int)((LONGLONG)tx * w / WGCBRK_TILES);
+            int x1 = (int)((LONGLONG)(tx + 1) * w / WGCBRK_TILES);
+            if (x1 <= x0) x1 = x0 + 1;
+            if (x1 > w) x1 = w;
+            unsigned long long sr = 0, sg = 0, sb = 0, n = 0;
+            for (int y = y0; y < y1; y += 2) {
+                const BYTE* row = buf + (size_t)y * (size_t)w * 4;
+                for (int x = x0; x < x1; x += 2) {
+                    const BYTE* p = row + (size_t)x * 4;   // BGRA
+                    sb += p[0]; sg += p[1]; sr += p[2]; ++n;
+                }
+            }
+            BYTE* out = (BYTE*)&g_slots[i].PubTiles[((size_t)ty * WGCBRK_TILES + tx) * 3];
+            if (n) { out[0] = (BYTE)(sr / n); out[1] = (BYTE)(sg / n); out[2] = (BYTE)(sb / n); }
+            else   { out[0] = out[1] = out[2] = 0; }
+        }
+    }
 }
 
 static bool PublishPrintWindow(int i) {

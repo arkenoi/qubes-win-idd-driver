@@ -15,9 +15,9 @@
 # than no reading at all. Slot stride and every offset are derived from that header in one place.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$ABI    = 12
+$ABI    = 13
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 320     # sizeof(WGCBRK_SLOT) at ABI 12 (PubColours at 312, padded to 8)
+$STRIDE = 3392    # sizeof(WGCBRK_SLOT) at ABI 13 (PubTiles[3072] at 316 - a BYTE array needs no alignment, so it follows PubColours immediately; 316+3072=3388, padded to 3392)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -90,6 +90,13 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # window's fullColours. This is the only route to the DELIVERED pixels for an override-redirect
     # window, which dom0's per-window capture cannot see at all.
     Write-Output ("S{0} slot{1} PUBSIG colours={2}" -f $n,$i,(RdI ($b+312)))
+    # ABI 13. The delivered frame as a 32x32 grid of per-tile mean RGB, base64 so it survives one log
+    # line. This is the only route to the DELIVERED pixels' spatial layout: dom0's per-window capture
+    # cannot see an override-redirect window at all, and a distinct-colour count cannot tell a correct
+    # frame from the same palette arranged wrongly.
+    $tl = New-Object byte[] 3072
+    [Runtime.InteropServices.Marshal]::Copy([IntPtr]::Add($base,$b+316), $tl, 0, 3072)
+    Write-Output ("S{0} slot{1} PUBTILES {2}" -f $n,$i,[Convert]::ToBase64String($tl))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)

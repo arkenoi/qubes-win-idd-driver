@@ -30,7 +30,14 @@ def body(name):
     return b.replace('volatile ', '')
 print('#include <stdio.h>\n#include <stddef.h>\n#include <stdint.h>')
 print('typedef int32_t LONG; typedef uint64_t UINT64; typedef int64_t LONGLONG; typedef uint8_t BYTE;')
+# The struct's array bounds come from #defines in the header. Hardcoding them here is what made
+# this test brittle across ABI bumps, so they are LIFTED FROM THE HEADER: any new sizing #define is
+# picked up automatically, and a missing one is a compile error rather than a silent wrong offset.
 print('#define WGCBRK_RING 2\n#define WGCBRK_MAX_SLOTS 32')
+for _m in re.finditer(r"^#define\s+(WGCBRK_[A-Z_]*(?:TILES|BYTES|LEN|SIZE|COUNT)[A-Z_]*)\s+(\(?[^/\n]+?)\s*(?:/\*.*)?$", h, re.M):
+    if _m.group(1) in ('WGCBRK_HEADER_BYTES',):
+        continue
+    print('#define %s %s' % (_m.group(1), _m.group(2).strip()))
 print('typedef struct {'+body('WGCBRK_HEADER')+'} HDR;')
 print('typedef struct {'+body('WGCBRK_SLOT')+'} SLOT;')
 print('int main(void){')
@@ -72,7 +79,9 @@ used=$(grep -oE '\$b\+[0-9]+' "$P" | grep -oE '[0-9]+$' | sort -un)
 for o in $used; do
   case " $valid " in
     *" $o "*) ;;
-    *) echo "  FAIL offset +$o is not any field in WGCBRK_SLOT"; fail=1 ;;
+    *) echo "  FAIL offset +$o is not any field in WGCBRK_SLOT"
+       echo "       derived field offsets: $valid"
+       fail=1 ;;
   esac
 done
 [ -n "$used" ] || { echo "  FAIL the script reads no slot offsets - did its shape change?"; fail=1; }

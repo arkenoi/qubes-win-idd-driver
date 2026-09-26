@@ -125,13 +125,26 @@ static BOOL g_WantPopup;
 static BOOL g_WantGhost;
 static BOOL g_WantClasses;   // --classes: the three ineligible-class fixtures
 static HWND g_Nrb, g_Ulw, g_Key, g_UlwC;
+static int  g_UlwPhase = 0;
+
+// THE STALENESS TRIGGER. A static image comparison cannot tell a live frame from a stale one: both
+// sides can agree perfectly while the relay is replaying something from minutes ago. Jev:
+// `stale_frame_needs_more` **0.83** - staleness needs a change driven ON PURPOSE, with the delivered
+// fingerprint required to follow it. So the content of the per-pixel-alpha window can be advanced on
+// command, and the census can then demand that what the broker publishes CHANGES with it.
+//
+// The trigger is a sentinel FILE rather than a window message or a named event: the census reaches
+// this process through a scheduled task in the interactive session, where posting a message would
+// need a P/Invoke and a named object would need the right session and privileges. A file needs
+// neither and cannot half-work.
+#define ULW_ADVANCE_FILE L"C:\\Users\\Public\\qwt-chromerepro-advance"
 
 // Give a layered window REAL per-pixel-alpha content. Premultiplied BGRA, as ULW_ALPHA requires:
 // a recognisable pattern (opaque bands over a semi-transparent field) so a captured frame can be told
 // apart from an empty one by colour count alone. Returns FALSE if the surface could not be supplied,
 // which the caller reports rather than swallowing - a fixture that silently supplies nothing is the
 // exact defect this window exists to correct.
-static BOOL UlwContentSupply(HWND hwnd, int w, int h)
+static BOOL UlwContentSupply(HWND hwnd, int w, int h, int phase)
 {
     BITMAPINFO bi;
     HDC screen, mem;
@@ -169,8 +182,8 @@ static BOOL UlwContentSupply(HWND hwnd, int w, int h)
             unsigned char* px = (unsigned char*)bits + ((size_t)y * w + x) * 4;
             // Alpha 255 in horizontal bands, 128 between them, so the window has both fully opaque
             // and genuinely semi-transparent pixels - the property that makes this class hard.
-            unsigned char a = ((y / 24) % 2) ? 255 : 128;
-            unsigned char r = (unsigned char)((x * 255) / (w ? w : 1));
+            unsigned char a = (((y + phase * 8) / 24) % 2) ? 255 : 128;
+            unsigned char r = (unsigned char)((((x + phase * 40) % (w ? w : 1)) * 255) / (w ? w : 1));
             unsigned char g = (unsigned char)((y * 255) / (h ? h : 1));
             unsigned char b = 64;
             // Premultiply, as ULW_ALPHA requires.
@@ -342,6 +355,24 @@ static LRESULT CALLBACK MainProc(HWND window, UINT message, WPARAM wParam, LPARA
 {
     switch (message)
     {
+    case WM_TIMER:
+        // Poll the sentinel. Deleting it before re-supplying means a single request advances the
+        // phase exactly once, so the census knows how many changes it asked for.
+        if (GetFileAttributesW(ULW_ADVANCE_FILE) != INVALID_FILE_ATTRIBUTES)
+        {
+            DeleteFileW(ULW_ADVANCE_FILE);
+            if (g_UlwC)
+            {
+                WCHAR t[96];
+                g_UlwPhase++;
+                BOOL ok = UlwContentSupply(g_UlwC, 360, 240, g_UlwPhase);
+                StringCchPrintfW(t, ARRAYSIZE(t),
+                    L"chromerepro - ulw content supplied=%d phase=%d", ok ? 1 : 0, g_UlwPhase);
+                SetWindowTextW(g_UlwC, t);
+            }
+        }
+        return 0;
+
     case WM_PAINT:
         PaintFilled(window, RGB(245, 245, 250),
             L"\r\n\r\nchromerepro - Office compound-window repro\r\n\r\n"
@@ -592,6 +623,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
     g_Main = CreateWindowExW(0, CLASS_MAIN, L"chromerepro - main window",
         WS_OVERLAPPEDWINDOW, mainX, mainY, mainW, mainH,
         NULL, NULL, g_Instance, NULL);
+    if (g_Main)
+    {
+        // 1 Hz, only to poll the staleness sentinel (see ULW_ADVANCE_FILE). Idle cost is one
+        // GetFileAttributesW per second, which is nothing next to what this fixture exists to test.
+        SetTimer(g_Main, 1, 1000, NULL);
+    }
     if (!g_Main)
     {
         MessageBoxW(NULL, L"CreateWindowEx(main) failed", L"chromerepro", MB_ICONERROR);
@@ -683,7 +720,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
             // stdout to report on. The outcome goes in the WINDOW TITLE, which the census's pixel
             // survey already reads back - so "did UpdateLayeredWindow actually take" is answerable
             // from the same capture, with no new channel and nothing to go silently missing.
-            BOOL supplied = UlwContentSupply(g_UlwC, 360, 240);
+            BOOL supplied = UlwContentSupply(g_UlwC, 360, 240, 0);
             WCHAR title[96];
             StringCchPrintfW(title, ARRAYSIZE(title), L"chromerepro - ulw content supplied=%d",
                              supplied ? 1 : 0);

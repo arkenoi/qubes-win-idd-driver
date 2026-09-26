@@ -56,8 +56,31 @@ function Render([IntPtr]$h,[int]$w,[int]$ht,[uint32]$flag) {
   $colors=@{}; $acc=0
   for ($y=0; $y -lt $ht; $y+=9) { for ($x=0; $x -lt $w; $x+=9) {
     $c=$bmp.GetPixel($x,$y).ToArgb(); $colors[$c]=1; $acc = ($acc*33 -bxor $c) -band 0x7FFFFFFF } }
+  # A 32x32 GRID OF PER-TILE MEAN RGB, the same reduction the broker publishes for the frame it
+  # actually delivered (ABI 13 PubTiles). Both sides normalise to this fixed grid regardless of their
+  # own dimensions, which is what makes them comparable at all: the guest measures the WHOLE window
+  # while the broker publishes the CONTENT it was handed, and they differ by the window frame plus a
+  # crop the guest cannot see. A distinct-colour count cannot tell a correct frame from the same
+  # palette arranged wrongly, a shifted image, or a blank region; 1024 tile means can. ALPHA IS
+  # EXCLUDED deliberately - the two sides need not agree on it and the GUI protocol carries none.
+  # Jev chose this instrument at confidence 1.00.
+  $T = 32
+  $tiles = New-Object byte[] ($T*$T*3)
+  for ($ty=0; $ty -lt $T; $ty++) {
+    $y0 = [int]([int64]$ty*$ht/$T); $y1 = [int]([int64]($ty+1)*$ht/$T)
+    if ($y1 -le $y0) { $y1 = $y0+1 }; if ($y1 -gt $ht) { $y1 = $ht }
+    for ($tx=0; $tx -lt $T; $tx++) {
+      $x0 = [int]([int64]$tx*$w/$T); $x1 = [int]([int64]($tx+1)*$w/$T)
+      if ($x1 -le $x0) { $x1 = $x0+1 }; if ($x1 -gt $w) { $x1 = $w }
+      $sr=0; $sg=0; $sb=0; $n=0
+      for ($yy=$y0; $yy -lt $y1; $yy+=2) { for ($xx=$x0; $xx -lt $x1; $xx+=2) {
+        $px = $bmp.GetPixel($xx,$yy); $sr+=$px.R; $sg+=$px.G; $sb+=$px.B; $n++ } }
+      $o = (($ty*$T)+$tx)*3
+      if ($n -gt 0) { $tiles[$o]=[byte]($sr/$n); $tiles[$o+1]=[byte]($sg/$n); $tiles[$o+2]=[byte]($sb/$n) }
+    }
+  }
   $bmp.Dispose()
-  return @{ colours=$colors.Count; hash=$acc }
+  return @{ colours=$colors.Count; hash=$acc; tiles=[Convert]::ToBase64String($tiles) }
 }
 $out = New-Object System.Collections.ArrayList
 # MEASURE ONE WINDOW. Factored out of the enumeration callback so a FORCED window can be measured
@@ -112,11 +135,15 @@ function Measure-Window([IntPtr]$h, [bool]$isForced) {
   $ownC  = if ($own)  { $own.colours }  else { -1 }
   $fullC = if ($full) { $full.colours } else { -1 }
   $fullH = if ($full) { $full.hash }    else { 0 }
+  # The COMPOSITED render's tile grid is what gets compared against the broker's delivered frame.
+  # Emitted as its own tab field so the row stays parseable, and omitted (not faked) when the render
+  # failed - a missing grid must read as missing, never as a match.
+  $fullT = if ($full) { $full.tiles }   else { '' }
   # "starves WGC": its own surface carries (almost) nothing while the composited render does
   $starves = if ($ownC -ge 0 -and $fullC -ge 0 -and $ownC -le 2 -and $fullC -gt 8) { 'yes' } else { 'no' }
-  [void]$out.Add(("TRUTH`thwnd=0x{0:x}`texe={1}`tclass={2}`t{3}x{4}`tA={5}`tB={6}`tC={7}`tD={8}`tE={9}`townColours={10}`tfullColours={11}`tstarvesWgc={12}`thash={13}`ttitle={14}" -f `
+  [void]$out.Add(("TRUTH`thwnd=0x{0:x}`texe={1}`tclass={2}`t{3}x{4}`tA={5}`tB={6}`tC={7}`tD={8}`tE={9}`townColours={10}`tfullColours={11}`tstarvesWgc={12}`thash={13}`ttilesFull={15}`ttitle={14}" -f `
     $h.ToInt64(),$exe,$cl.ToString(),$w,$ht,$script:xproc,$script:anyx,$script:corew,$isAfw,$predE,`
-    $ownC,$fullC,$starves,$fullH,$ti.ToString().Substring(0,[Math]::Min(30,$ti.Length))))
+    $ownC,$fullC,$starves,$fullH,$ti.ToString().Substring(0,[Math]::Min(30,$ti.Length)),$fullT))
   return $true
 }
 $cb = [WT+EnumProc]{
