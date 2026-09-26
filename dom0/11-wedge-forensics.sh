@@ -27,7 +27,15 @@
 #
 # Results land in ~/wedge-<timestamp>/ and are copied to the dev qube at the end.
 set -u
-DEV="${DEV:?set DEV to the dev qube - there is no default target}"
+# DEV is OPTIONAL and must stay that way. It is used for ONE thing - the convenience copy-back at
+# the very end - but it used to be `${DEV:?...}`, which aborted this script on line 30, before a
+# single byte was collected. The qrexec service wrapper (dom0/13-...) sets VM but NOT DEV and
+# returns the tar on ITS OWN stdout, so the copy-back is redundant there: the requirement did
+# nothing except guarantee that the one capture path that fires automatically, during a live
+# wedge, collected only its own error message. Measured 2026-09-26 on win11de-led - the tar held
+# nothing but "capture.log: set DEV to the dev qube". A forensics tool that refuses at the only
+# moment it matters is worse than no tool (the same lesson as the VM default, just above).
+DEV="${DEV:-}"
 NMI=0
 DUMPCORE=0
 SPINSHAPE=0
@@ -248,5 +256,9 @@ if [ "$NMI" = 1 ]; then
 fi
 
 tar czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")" 2>/dev/null
-qvm-copy-to-vm "$DEV" "$OUT.tar.gz" 2>/dev/null && echo "sent $OUT.tar.gz to $DEV"
+if [ -n "$DEV" ]; then
+    qvm-copy-to-vm "$DEV" "$OUT.tar.gz" 2>/dev/null && echo "sent $OUT.tar.gz to $DEV"
+else
+    echo "DEV unset - no copy-back; the caller collects $OUT.tar.gz (the qrexec service returns it on stdout)"
+fi
 echo "done: $OUT"

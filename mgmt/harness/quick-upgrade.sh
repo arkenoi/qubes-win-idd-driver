@@ -491,15 +491,64 @@ if [ "${SKEW_CLOCK_HOURS:-0}" != "0" ]; then
   echo "SKEW_INJECTED hours=$SKEW_CLOCK_HOURS before=$_before after=$_after" > "$OUT/clock-skew-injection.txt"
 fi
 
-_lt0=$(date +%s)
-grun "cmd /c start \"\" /min $RELDISC\\install.cmd /auto /autologon:qubes" 60 >/dev/null
-_lrc=$?
-_lel=$(( $(date +%s) - _lt0 ))
-if [ "$_lrc" = 0 ]; then
-  log "install.cmd /auto launch call RETURNED in ${_lel}s from $RELDISC - the guest was answering when it did (deadline ${DEADLINE}s, stall ${STALL_SECS}s)"
-else
-  log "install.cmd /auto launch call DID NOT RETURN (rc=$_lrc after ${_lel}s) from $RELDISC - the guest stopped answering DURING the launch; NOTHING about whether the installer ran is inferable from here (deadline ${DEADLINE}s, stall ${STALL_SECS}s)"
-fi
+# ---- THE LAUNCH, HARDENED (2026-09-26) -------------------------------------------------------
+# A fire-and-forget `start /min` should return in well under a second. On 2026-09-26 it did not:
+# the guest wedged DURING the call, the call timed out at 60 s, and this harness's own words were
+# "NOTHING about whether the installer ran is inferable from here" - so a full cycle bought no
+# information at all, against a fault that is known to be INTERMITTENT and has been open for weeks.
+#
+# It IS inferable. $E2E_MARK was appended to $GLOG immediately before this point, so "did
+# install.cmd start" is exactly "does $GLOG carry installer lines AFTER that marker". This block
+# therefore launches, and if the CALL does not return it waits (bounded by STALL_SECS) for qrexec
+# to answer again, ASKS the installer's own log, and relaunches only when the answer is a measured
+# no. A guest that never answers again is left to the watch loop below, which captures the
+# specimen - that path is deliberately unchanged.
+#
+# Jev, 2026-09-26, on what to do after the wedge: harden-the-launch-path 0.74, ahead of
+# retry-unchanged-fresh-clone 0.15 and retry-at-2-vcpus 0.06 (changing the guest's vCPU count was
+# separately judged to CONFOUND the acceptance, 0.72).
+LAUNCH_TRIES=${LAUNCH_TRIES:-3}
+
+# Pure text predicate so it can be driven offline, both ways, without a guest:
+# tools/tests/launch-determination-selftest.sh. Marker on $1, log body on stdin.
+log_has_progress_after(){ sed -n "/$1/,\$p" | grep -qaE '^[0-9]{4}-[0-9]{2}-[0-9]{2}|^=== RESULT ==='; }
+
+# 0 = installer has written past the marker; 1 = it has not; 2 = cannot tell (guest not answering)
+installer_started(){
+  w_alive "$SUBJECT" || return 2
+  local body
+  body=$(grun "cmd /c powershell -NoProfile -Command \"if(Test-Path '$GLOG'){Get-Content '$GLOG' -Tail 400}\"" 90)
+  [ -n "$body" ] || return 1
+  printf '%s\n' "$body" | log_has_progress_after "$E2E_MARK" && return 0
+  return 1
+}
+
+_lrc=1; _att=0
+while [ "$_att" -lt "$LAUNCH_TRIES" ]; do
+  _att=$(( _att + 1 ))
+  _lt0=$(date +%s)
+  grun "cmd /c start \"\" /min $RELDISC\\install.cmd /auto /autologon:qubes" 60 >/dev/null
+  _lrc=$?
+  _lel=$(( $(date +%s) - _lt0 ))
+  if [ "$_lrc" = 0 ]; then
+    log "install.cmd /auto launch call RETURNED in ${_lel}s from $RELDISC (attempt $_att/$LAUNCH_TRIES) - the guest was answering when it did (deadline ${DEADLINE}s, stall ${STALL_SECS}s)"
+    break
+  fi
+  log "install.cmd /auto launch call DID NOT RETURN (rc=$_lrc after ${_lel}s, attempt $_att/$LAUNCH_TRIES) from $RELDISC - the guest stopped answering DURING the launch; determining whether it ran anyway"
+  _w0=$(date +%s); _verdict=2
+  while [ $(( $(date +%s) - _w0 )) -lt "$STALL_SECS" ]; do
+    installer_started; _verdict=$?
+    [ "$_verdict" != 2 ] && break
+    sleep 20
+  done
+  case "$_verdict" in
+    0) log "  DETERMINED: the installer IS running - $GLOG carries lines past $E2E_MARK. The CALL timed out; the install did not. Proceeding to the watch loop."
+       _lrc=0; break ;;
+    1) log "  DETERMINED: the installer did NOT start (no lines past $E2E_MARK) and the guest answers again - relaunching" ;;
+    *) log "  qrexec did not answer within ${STALL_SECS}s - this is the stall, not a launch failure; handing to the watch loop, which captures the specimen"
+       break ;;
+  esac
+done
 
 # Exits: RESULT (trailer after the marker) | HALTED (guest rebooted itself) | RECOVERY (terminal)
 # | STALLED (no new log lines for STALL_SECS while alive, OR qrexec unanswering for STALL_SECS)
