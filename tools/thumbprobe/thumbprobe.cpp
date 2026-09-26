@@ -316,7 +316,7 @@ static int HoldAndCount(HWND src, int secs, bool pump)
             g_rtDev, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
         auto session = pool.CreateCaptureSession(item);
         try { session.IsBorderRequired(false); } catch (...) {}
-        auto rev = pool.FrameArrived(auto_revoke, [&arrivals](auto const& sender, auto const&) {
+        auto rev = pool.FrameArrived(auto_revoke, [](auto const& sender, auto const&) {   // static: no capture
             if (auto f = sender.TryGetNextFrame()) { InterlockedIncrement(&arrivals); f.Close(); }
         });
         session.StartCapture();
