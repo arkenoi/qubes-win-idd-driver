@@ -15,9 +15,9 @@
 # than no reading at all. Slot stride and every offset are derived from that header in one place.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$ABI    = 11
+$ABI    = 12
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 312     # sizeof(WGCBRK_SLOT) at ABI 11 (holds 296, changed 300, unmeasured 304, pwfail 308)
+$STRIDE = 320     # sizeof(WGCBRK_SLOT) at ABI 12 (PubColours at 312, padded to 8)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -85,6 +85,11 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # (demoted), unmeasured=throttled (neither), pwFail=could not render the source at all.
     Write-Output ("S{0} slot{1} RELAYHOLD staticHolds={2} srcChanged={3} srcUnmeasured={4} pwFail={5}" -f `
       $n,$i,(RdI ($b+296)),(RdI ($b+300)),(RdI ($b+304)),(RdI ($b+308)))
+    # ABI 12. Distinct colours in the frame the broker actually published, sampled every 9th pixel -
+    # the same sampling window-truth-survey.ps1 uses - so this is directly comparable with that
+    # window's fullColours. This is the only route to the DELIVERED pixels for an override-redirect
+    # window, which dom0's per-window capture cannot see at all.
+    Write-Output ("S{0} slot{1} PUBSIG colours={2}" -f $n,$i,(RdI ($b+312)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)

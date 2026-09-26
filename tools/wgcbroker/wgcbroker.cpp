@@ -22,7 +22,12 @@
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
+#include <set>
 #include "../../agent/gui-agent/wgcbroker_ipc.h"
+
+// ABI 12 frame signature - defined further down (it needs g_slots), used by the WGC publish path
+// above that definition. Declared here so the call site compiles.
+static void PublishSignature(int i, const BYTE* buf, int w, int h);
 #include <intrin.h>
 #include <vector>
 
@@ -326,6 +331,7 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
         for (int y = 0; y < h; y++)
             memcpy(dst + (size_t)y * w * 4, src + (size_t)y * map.RowPitch, (size_t)w * 4);
         g_ctx->Unmap(stg.get(), 0);
+        PublishSignature(i, dst, w, h);
 
         s->FrameWidth = w; s->FrameHeight = h; s->Stride = w * 4;
         LONG q = s->Seq;                            // even
@@ -449,6 +455,34 @@ static bool RelaySrcDecides(int i) {
     return (++c.srcChangeStreak) >= WGCBRK_RELAY_CHANGE_STREAK;
 }
 
+// ABI 12: a signature of the frame we just published, sampled EXACTLY as the guest samples its own
+// render (guest/window-truth-survey.ps1 walks y += 9 { x += 9 } and counts distinct colours). Same
+// sampling means the two numbers are directly comparable, per slot, with the slot's Hwnd giving an
+// exact mapping - which dom0's per-window capture cannot provide for override-redirect windows
+// because they are absent from _NET_CLIENT_LIST. Jev preferred this (0.63) to photographing the
+// whole desktop (0.22).
+//
+// Throttled to once per second per slot: this walks 1/81 of the frame, which is cheap per call but
+// pointless per frame on an arrival-driven feed, and the number it produces is a property of the
+// content, not of any individual frame.
+static ULONGLONG g_pubSigTick[WGCBRK_MAX_SLOTS] = {};
+static void PublishSignature(int i, const BYTE* buf, int w, int h) {
+    if (!buf || w <= 0 || h <= 0) return;
+    const ULONGLONG now = GetTickCount64();
+    if (g_pubSigTick[i] && (now - g_pubSigTick[i]) < 1000) return;
+    g_pubSigTick[i] = now;
+    std::set<unsigned int> seen;
+    for (int y = 0; y < h; y += 9) {
+        const BYTE* row = buf + (size_t)y * (size_t)w * 4;
+        for (int x = 0; x < w; x += 9) {
+            const BYTE* p = row + (size_t)x * 4;      // BGRA
+            seen.insert(((unsigned int)p[2] << 16) | ((unsigned int)p[1] << 8) | (unsigned int)p[0]);
+            if (seen.size() > 100000u) { y = h; break; }   // pathological guard
+        }
+    }
+    g_slots[i].PubColours = (LONG)seen.size();
+}
+
 static bool PublishPrintWindow(int i) {
     bool changed = false;
     PubLock pubLock(i);   // RAII, same reason
@@ -509,6 +543,7 @@ static bool PublishPrintWindow(int i) {
         // Copy the card sub-rect (source stride fstride) into the contiguous w*h arena buffer.
         for (int y = 0; y < h; y++)
             memcpy(dst + (size_t)y * w * 4, card + (size_t)y * fstride, (size_t)w * 4);
+        PublishSignature(i, dst, w, h);
 
         // Skip republish if the card is unchanged vs the active buffer (menus are static once open;
         // republishing would flood dom0 with damage). The sub-rect copy has strides, so compare the
