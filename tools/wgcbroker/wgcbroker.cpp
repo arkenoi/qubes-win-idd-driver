@@ -117,6 +117,27 @@ static std::vector<Channel> g_ch(WGCBRK_MAX_SLOTS);
 // perfectly healthy. Per-slot, not per-channel.
 static bool      g_forcePw[WGCBRK_MAX_SLOTS]      = {};
 static ULONGLONG g_noProbeUntil[WGCBRK_MAX_SLOTS] = {};
+// A RELAY THAT WENT QUIET MUST BE ABLE TO REACH PRINTWINDOW. The quiet re-route sets g_forcePw and
+// reopens, but g_forcePw only means "do not try WGC on the window itself" - the reopen then chose the
+// RELAY again, so a relay delivering nothing looped back onto itself for ever and the polled fallback
+// was unreachable. This veto is what lets the ladder finish: WGC -> relay -> PrintWindow.
+// Set AFTER CloseChannel, never before: CloseChannel wipes the Channel, which is exactly how the
+// earlier g_forcePw assignment got erased and cost 38 needless re-routes on a healthy window.
+static bool      g_noRelay[WGCBRK_MAX_SLOTS] = {};
+
+// RAII for g_pubCs. Both long regions below call C++/WinRT methods that THROW - frame.Surface() on a
+// closed frame is the obvious one - while sitting between a bare Enter and a bare Leave. A throw
+// there leaves the section owned by a WGC threadpool thread for ever, and the main loop blocks on it
+// at the next Reconcile: a hang, not a crash, with no log line. The review flagged it as collateral
+// on the teardown race it was verifying rather than as its own finding, which is exactly the kind of
+// thing that never gets its own commit.
+struct PubLock {
+    int i;
+    explicit PubLock(int idx) : i(idx) { EnterCriticalSection(&g_pubCs[i]); }
+    ~PubLock() { LeaveCriticalSection(&g_pubCs[i]); }
+    PubLock(const PubLock&) = delete;
+    PubLock& operator=(const PubLock&) = delete;
+};
 static bool g_anyPw = false;   // any PrintWindow channel active -> poll the loop faster
 // LATCHED AT STARTUP, never re-read. Capabilities are decided at START here: a runtime re-read that
 // failed transiently would silently downgrade an eligible guest, which is the forbidden silent
@@ -228,7 +249,7 @@ static inline LONGLONG QpcNow() {
 }
 
 static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
-    EnterCriticalSection(&g_pubCs[i]);
+    PubLock pubLock(i);   // RAII: a throw inside must not strand the section (see PubLock)
     do {
         WGCBRK_SLOT* s = &g_slots[i];
         if (s->ReqState != WGCBRK_REQUESTED && s->AckState != WGCBRK_ACTIVE) break;
@@ -291,7 +312,6 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
         SignalFramePublished();                     // after the seq bump: a woken agent sees it whole
         s->AckState = WGCBRK_ACTIVE;
     } while (0);
-    LeaveCriticalSection(&g_pubCs[i]);
 }
 
 // (re)create the channel's top-down 32bpp DIB section to match w x h.
@@ -323,7 +343,7 @@ static bool EnsurePwDib(Channel& c, int w, int h) {
 // spent inside the captured application for nothing.
 static bool PublishPrintWindow(int i) {
     bool changed = false;
-    EnterCriticalSection(&g_pubCs[i]);
+    PubLock pubLock(i);   // RAII, same reason
     do {
         WGCBRK_SLOT* s = &g_slots[i];
         Channel& c = g_ch[i];
@@ -427,7 +447,6 @@ static bool PublishPrintWindow(int i) {
         if (ticksMine && !s->FirstPublishTick) s->FirstPublishTick = QpcNow();
         SignalFramePublished();                     // PrintWindow path: wake the agent too
     } while (0);
-    LeaveCriticalSection(&g_pubCs[i]);
     return changed;
 }
 // Does this window's visible content come from a child window owned by ANOTHER PROCESS that
@@ -504,7 +523,9 @@ static void OpenChannel(int i) {
     // Routing is otherwise UNCHANGED: a window WGC can capture directly still is. Jev put this as
     // the first step at 0.98 precisely because it replaces a path rather than displacing one.
     HWND target = hwnd;
-    if (xprocContent && g_RelayOn && !monitor && hwnd) {
+    const bool relayVetoed = g_noRelay[i];
+    g_noRelay[i] = false;            // one-shot, same discipline as g_forcePw
+    if (xprocContent && g_RelayOn && !relayVetoed && !monitor && hwnd) {
         int rw = 0, rh = 0; HTHUMBNAIL th = nullptr;
         HWND dest = RelayOpenDest(hwnd, &th, &rw, &rh);
         if (dest) {
@@ -554,6 +575,29 @@ static void OpenChannel(int i) {
         c.poolW = size.Width; c.poolH = size.Height;   // FrameArrived tracks content-size changes
         c.rev = pool.FrameArrived(auto_revoke,
             [i](Direct3D11CaptureFramePool const& sender, auto const&) {
+                // SERIALIZE AGAINST TEARDOWN, FIRST THING. This runs on a WGC threadpool thread
+                // while CloseChannel can be executing `c = Channel{}` on the main thread. After that
+                // wipe poolW and poolH are 0, so the size comparison below ALWAYS takes the Recreate
+                // branch - the dangerous path becomes the only reachable one - and Recreate on a
+                // wiped (null) C++/WinRT handle dereferences null for its vtable. That is an access
+                // violation, and the catch(...) around it CANNOT catch it: this project builds with
+                // /EHsc, which does not map SEH into C++ exceptions, and the file installs no
+                // vectored or unhandled-exception filter. The broker dies, and on an eligible guest
+                // that is not cosmetic - the agent withholds toasts, menus and WinUI surfaces rather
+                // than falling back to the composite (QGABROKERDIED), for about 8 s until relaunch.
+                //
+                // The race is PRE-EXISTING - the handler is byte-identical in 5cb2dd9^ - but the
+                // relay is what put an HWND and a DWM thumbnail handle inside the struct being
+                // wiped, so it is no longer only pixels at stake. Jev: is_real 0.85,
+                // crashes-or-hangs 0.96.
+                //
+                // g_pubCs[i] is the lock CloseChannel already holds across the wipe, and a Windows
+                // CRITICAL_SECTION is recursive, so PublishFrame taking it again below is safe.
+                PubLock arrivalLock(i);   // recursive: PublishFrame below takes it again, safely
+                // Re-validate under the lock: a wiped or recycled channel has no pool, or has been
+                // rebuilt around a different sender. Either way this arrival belongs to a session
+                // that is gone, and publishing it would publish another window's pixels.
+                if (!g_ch[i].pool || g_ch[i].pool != sender) return;
                 if (!g_slots[i].FirstArrivedTick)
                     g_slots[i].FirstArrivedTick = QpcNow();
                 auto f = sender.TryGetNextFrame();
@@ -653,7 +697,7 @@ static bool HasCrossProcessContentChild(HWND window) {
 }
 
 static void CloseChannel(int i) {
-    EnterCriticalSection(&g_pubCs[i]);          // serialize with any in-flight PublishFrame
+    PubLock closeLock(i);                       // serialize with any in-flight PublishFrame
     Channel& c = g_ch[i];
     c.rev.revoke();
     if (c.session) { try { c.session.Close(); } catch (...) {} }
@@ -669,7 +713,6 @@ static void CloseChannel(int i) {
     g_slots[i].AckState = WGCBRK_FREE;
     g_slots[i].Route = WGCBRK_ROUTE_WGC;   // a free slot claims no writer
     g_slots[i].RelayDest = 0;
-    LeaveCriticalSection(&g_pubCs[i]);
 }
 
 static void Reconcile() {
@@ -708,12 +751,32 @@ static void Reconcile() {
             // blocking at 0.87 and this refinement at 0.96.
             g_slots[i].Reroutes++;
             g_slots[i].QuietReroutes++;
+            const bool wasRelay = c.relay;   // read BEFORE CloseChannel wipes it
             CloseChannel(i);          // wipes the Channel - so set the survivors AFTER it
             g_forcePw[i] = true;
+            // A quiet WGC channel becomes a relay; a quiet RELAY has already had that chance and
+            // must go to PrintWindow instead, or the ladder has no last rung.
+            if (wasRelay) g_noRelay[i] = true;
             OpenChannel(i);
             g_ch[i].probing = true;   // OpenChannel re-made the Channel; mark the new one
         }
-        else if (wantOpen && c.hwnd == want && !c.pw) {
+        else if (wantOpen && c.hwnd == want && !c.pw && !c.relay) {
+            // `&& !c.relay` IS LOAD-BEARING, and its absence was a regression I introduced with the
+            // relay. This re-check exists for a channel that WGC opened on the window itself and
+            // that should move to the fallback once the cross-process child appears. A RELAYED
+            // channel has already made that move - it IS the fallback, just an arrival-driven one -
+            // and it keeps c.pw false, so without this guard the branch stayed armed for ever:
+            //   * HasCrossProcessContentChild(want) still tests the SOURCE, and the relay's
+            //     destination is a separate top-level window that EnumChildWindows(source) cannot
+            //     see, so the predicate remains true;
+            //   * the 500 ms throttle could not bound it either, because c.xprocTick is erased by
+            //     `c = Channel{}` inside CloseChannel, so the next pass always reads 0;
+            //   * before the relay the re-open fell through to c.pw = true, which disarmed this
+            //     branch after one pass. The relay removed that disarm without replacing it.
+            // Result: two CreateWindowExW plus two DwmRegisterThumbnail plus a fresh frame pool,
+            // session and StartCapture, torn down and rebuilt EVERY main-loop pass - 250 ms idle,
+            // 33 ms with any PrintWindow channel active. Jev: is_real 0.90, wrong-pixels 0.70.
+            // The same churn shape as the 38 needless re-routes this file was bitten by before.
             // RE-CHECK THE ROUTING. A UWP-style frame exists BEFORE the app creates the
             // cross-process child that carries its content, so the routing decision taken in
             // OpenChannel is usually taken too early and says "WGC". Without this the window
