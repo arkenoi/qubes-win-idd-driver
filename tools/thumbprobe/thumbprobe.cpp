@@ -267,6 +267,80 @@ static void RelayOnce(const Found& f)
     DestroyWindow(dest);
 }
 
+// --hold <secs> [--pump]: DOES A RELAY KEEP DELIVERING? The four-state and sweep modes captured each
+// destination ONCE, after a fixed settle, and reported frames=1 or 2. That established that a
+// thumbnail destination is CAPTURABLE. It said nothing about whether arrivals CONTINUE as the source
+// changes - and the broker can only use an ongoing feed. Measured on the rig afterwards: five relay
+// slots opened (relayOk=1) and were demoted to polled PrintWindow because no arrival landed within
+// the 2 s quiet window. Jev rated my "all four classes relay" claim overstated at 0.93 and put this
+// measurement at 0.93 as the cheapest way to find out why.
+//
+// --pump runs a message loop on the thread that owns the destination. A window belongs to its
+// creating thread, and the broker's main thread never pumps; if arrivals depend on that pump, this
+// A/B says so in one run and the fix is structural rather than guessed.
+static int HoldAndCount(HWND src, int secs, bool pump)
+{
+    HTHUMBNAIL th = nullptr; int w = 0, h = 0;
+    RECT sr{}; GetWindowRect(src, &sr);
+    w = sr.right - sr.left; h = sr.bottom - sr.top;
+    HWND dest = MakeDest(w, h, 40, 40, WS_EX_LAYERED);
+    if (!dest) { printf("RESULT=HOLD dest=FAIL\n"); return 2; }
+    SetLayeredWindowAttributes(dest, 0, 0, LWA_ALPHA);
+    ShowWindow(dest, SW_SHOWNA);
+    if (FAILED(DwmRegisterThumbnail(dest, src, &th)) || !th) {
+        printf("RESULT=HOLD register=FAIL\n"); DestroyWindow(dest); return 2; }
+    SIZE ss{}; DwmQueryThumbnailSourceSize(th, &ss);
+    DWM_THUMBNAIL_PROPERTIES p{};
+    p.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY;
+    p.rcDestination = RECT{ 0, 0, ss.cx ? ss.cx : w, ss.cy ? ss.cy : h };
+    p.fVisible = TRUE; p.opacity = 255;
+    DwmUpdateThumbnailProperties(th, &p);
+
+    // A REAL FrameArrived handler, not TryGetNextFrame polling: the broker is event-driven and the
+    // question is whether the event fires at all.
+    volatile LONG arrivals = 0;
+    try {
+        auto interop = get_activation_factory<GraphicsCaptureItem, ::IGraphicsCaptureItemInterop>();
+        GraphicsCaptureItem item{ nullptr };
+        if (FAILED(interop->CreateForWindow(dest, guid_of<GraphicsCaptureItem>(),
+                                            reinterpret_cast<void**>(put_abi(item)))) || !item) {
+            printf("RESULT=HOLD createForWindow=FAIL\n");
+            DwmUnregisterThumbnail(th); DestroyWindow(dest); return 2;
+        }
+        auto size = item.Size();
+        auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
+            g_rtDev, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
+        auto session = pool.CreateCaptureSession(item);
+        try { session.IsBorderRequired(false); } catch (...) {}
+        auto rev = pool.FrameArrived(auto_revoke, [&arrivals](auto const& sender, auto const&) {
+            if (auto f = sender.TryGetNextFrame()) { InterlockedIncrement(&arrivals); f.Close(); }
+        });
+        session.StartCapture();
+        printf("RESULT=HOLD start src=0x%llx dest=0x%llx %dx%d pump=%d secs=%d\n",
+               (unsigned long long)(ULONG_PTR)src, (unsigned long long)(ULONG_PTR)dest,
+               (int)size.Width, (int)size.Height, pump ? 1 : 0, secs);
+        fflush(stdout);
+        // Report per second, so "a burst then silence" is visibly different from "steady".
+        for (int t = 0; t < secs; t++) {
+            LONG before = arrivals;
+            ULONGLONG until = GetTickCount64() + 1000;
+            while (GetTickCount64() < until) {
+                if (pump) {
+                    MSG m;
+                    while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&m); DispatchMessageW(&m); }
+                }
+                Sleep(10);
+            }
+            printf("RESULT=HOLDSEC t=%d arrivals=%ld delta=%ld\n", t + 1, (long)arrivals, (long)(arrivals - before));
+            fflush(stdout);
+        }
+        session.Close(); pool.Close();
+    } catch (...) { printf("RESULT=HOLD threw=1\n"); }
+    printf("RESULT=HOLDDONE arrivals=%ld pump=%d\n", (long)arrivals, pump ? 1 : 0);
+    DwmUnregisterThumbnail(th); DestroyWindow(dest);
+    return 0;
+}
+
 int wmain(int argc, wchar_t** argv)
 {
     // The source window: by class name, or the foreground window. A rogue-class source is the point,
@@ -278,6 +352,22 @@ int wmain(int argc, wchar_t** argv)
     // after it had gone, and I twice read that as "no toast window exists" when the owner could see
     // the notification. This baselines the rogue set, then polls for NEW rogue windows and relays
     // each the instant it appears - so a transient window is caught rather than missed.
+    if (want == L"--hold")
+    {
+        if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
+        int secs = (argc > 2) ? _wtoi(argv[2]) : 15;
+        bool pump = false;
+        std::wstring srcCls;
+        for (int a = 3; a < argc; a++) {
+            if (!wcscmp(argv[a], L"--pump")) pump = true; else srcCls = argv[a];
+        }
+        HWND src = srcCls.empty() ? nullptr : FindWindowW(srcCls.c_str(), nullptr);
+        if (!src) src = GetForegroundWindow();
+        if (!src) { printf("RESULT=FAIL reason=no-source\n"); return 2; }
+        WCHAR cls[128] = {}; GetClassNameW(src, cls, 128);
+        printf("RESULT=SOURCE hwnd=0x%llx class=%ls\n", (unsigned long long)(ULONG_PTR)src, cls);
+        return HoldAndCount(src, secs, pump);
+    }
     if (want == L"--watch")
     {
         int secs = (argc > 2) ? _wtoi(argv[2]) : 30;
