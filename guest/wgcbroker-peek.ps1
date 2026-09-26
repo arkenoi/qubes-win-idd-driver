@@ -15,9 +15,9 @@
 # than no reading at all. Slot stride and every offset are derived from that header in one place.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$ABI    = 14
+$ABI    = 15
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3408    # sizeof(WGCBRK_SLOT) at ABI 14 (PubTiles[3072] at 316; ChanOpens/Closes/SessionLive/ChanGen at 3388..3400)
+$STRIDE = 3408    # sizeof(WGCBRK_SLOT) at ABI 15 (PubTiles[3072] at 316; lifecycle+GenFrames at 3388..3404)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -100,8 +100,11 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # ABI 14. sessionLive=0 on a slot whose frame counters are not moving means the channel was CLOSED
     # and never reopened - a different defect from a live session that stopped delivering, and one the
     # frame counters alone could never distinguish. chanGen says which session those counters belong to.
-    Write-Output ("S{0} slot{1} SESSION opens={2} closes={3} live={4} gen={5}" -f `
-      $n,$i,(RdI ($b+3388)),(RdI ($b+3392)),(RdI ($b+3396)),(RdI ($b+3400)))
+    # ABI 15. genFrames is what THIS session delivered; FRAMES arrived is cumulative across every
+    # session the slot has ever had. A relay slot at gen=2 with genFrames=0 delivered NOTHING itself,
+    # however large its cumulative count - the ambiguity that forced a set of results to be withdrawn.
+    Write-Output ("S{0} slot{1} SESSION opens={2} closes={3} live={4} gen={5} genFrames={6}" -f `
+      $n,$i,(RdI ($b+3388)),(RdI ($b+3392)),(RdI ($b+3396)),(RdI ($b+3400)),(RdI ($b+3404)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)

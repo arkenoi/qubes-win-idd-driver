@@ -795,6 +795,7 @@ static void OpenChannel(int i) {
                 // ABI 6 accounting: record what every arrival did, so a slot that stops
                 // publishing can be told apart from a slot that never receives anything.
                 g_slots[i].FramesArrived++;
+                InterlockedIncrement(&g_slots[i].GenFrames);   // ABI 15: attributable to THIS session
                 ch.lastArrivalTick = GetTickCount64();   // behavioural detector: the feed is alive
                 ch.srcChangeStreak = 0;                  // a frame arrived: the run of "no frames" is broken
                 g_slots[i].LastContentW = cs.Width; g_slots[i].LastContentH = cs.Height;
@@ -831,6 +832,7 @@ static void OpenChannel(int i) {
         InterlockedIncrement(&s->ChanOpens);
         InterlockedIncrement(&s->ChanGen);
         s->SessionLive = 1;
+        s->GenFrames = 0;   // ABI 15: this session's own frame count starts here
         // WHICH WRITER IS FEEDING THIS SLOT (ABI 8). Both of these are arrival-driven; only
         // WGCBRK_ROUTE_PW below is polled. "How many slots are still on PW" is the number that says
         // whether the fallback is going away, and it cannot be read if the two are collapsed.
