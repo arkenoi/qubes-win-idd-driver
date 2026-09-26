@@ -100,6 +100,13 @@ struct Channel {
     unsigned long long srcHash     = 0;
     ULONGLONG          srcHashTick = 0;
     bool               srcHashSeen = false;
+    // ADAPTIVE INTERVAL between source-change tests, same philosophy as the PrintWindow backoff
+    // below and for the same reason. The demotion question is asked on EVERY loop tick once a
+    // channel is quiet, so a fixed short throttle would run PrintWindow several times a second per
+    // static window - at a measured p50 of 31-49 ms on the target's own UI thread that is worse
+    // than the polled fallback this work exists to remove. Unchanged doubles it to the ceiling;
+    // a change resets it, so detection stays prompt exactly when something is happening.
+    ULONG              srcHashMs   = 500;
     // ---- THE DWM-THUMBNAIL RELAY (ABI 8) ----------------------------------------------------
     // A window whose own surface is empty has nothing for WGC to capture, and PrintWindow is a PULL
     // api, so a slot that falls back to it has no arrival event and must be driven by an invented
@@ -375,7 +382,7 @@ static bool RelaySourceChanged(int i) {
     HWND hwnd = c.hwnd;
     if (!hwnd || !IsWindow(hwnd)) return true;     // gone: let the normal paths deal with it
     const ULONGLONG now = GetTickCount64();
-    if (c.srcHashSeen && (now - c.srcHashTick) < 250) return false;   // throttle: too soon to retest
+    if (c.srcHashSeen && (now - c.srcHashTick) < c.srcHashMs) return false;  // too soon to retest
     RECT r{};
     if (!GetWindowRect(hwnd, &r)) return true;
     int w = r.right - r.left, h = r.bottom - r.top;
@@ -396,6 +403,8 @@ static bool RelaySourceChanged(int i) {
     const bool first = !c.srcHashSeen;
     const bool changed = !first && hsh != c.srcHash;
     c.srcHash = hsh; c.srcHashTick = now; c.srcHashSeen = true;
+    if (changed) c.srcHashMs = 500;
+    else if (c.srcHashMs < 8000) { c.srcHashMs *= 2; if (c.srcHashMs > 8000) c.srcHashMs = 8000; }
     return changed;
 }
 
