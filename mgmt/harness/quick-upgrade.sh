@@ -507,19 +507,53 @@ fi
 # Jev, 2026-09-26, on what to do after the wedge: harden-the-launch-path 0.74, ahead of
 # retry-unchanged-fresh-clone 0.15 and retry-at-2-vcpus 0.06 (changing the guest's vCPU count was
 # separately judged to CONFOUND the acceptance, 0.72).
-LAUNCH_TRIES=${LAUNCH_TRIES:-3}
+# ONE relaunch, not three. The relaunch branch fired for the first time on 2026-09-26 and was WRONG:
+# it hit a healthy installer's mutex, the installer refused the second instance, and the deploy FAILED
+# because of the recovery meant to save it. A recovery that can damage the thing it recovers gets one
+# chance, after two independent confirmations, not three attempts.
+LAUNCH_TRIES=${LAUNCH_TRIES:-2}
 
 # Pure text predicate so it can be driven offline, both ways, without a guest:
 # tools/tests/launch-determination-selftest.sh. Marker on $1, log body on stdin.
 log_has_progress_after(){ sed -n "/$1/,\$p" | grep -qaE '^[0-9]{4}-[0-9]{2}-[0-9]{2}|^=== RESULT ==='; }
 
-# 0 = installer has written past the marker; 1 = it has not; 2 = cannot tell (guest not answering)
+# 0 = the installer is running; 1 = it is not; 2 = cannot tell (guest not answering)
 installer_started(){
   w_alive "$SUBJECT" || return 2
+  # THE MUTEX IS THE AUTHORITATIVE ANSWER, AND IT IS CHECKED FIRST. The installer holds
+  # Global\QwtImprovedSetup for its whole run INCLUDING its startup, before it has written a single
+  # line past the marker. Checking only the log therefore returned "not started" during that window,
+  # and the relaunch below then hit the mutex; the installer refused the second instance, wrote
+  # RESULT ok:false, and the deploy FAILED - caused by the very recovery meant to save one. Measured
+  # 2026-09-26 on win11de-led6: 8 passed, 1 failed, with the installed agent hash nevertheless
+  # matching the package. An empty or unreadable answer falls through to the log check rather than
+  # being read as "not running", because that is the mistake this whole block exists to stop making.
+  local held
+  held=$(grun "powershell -NoProfile -Command \"try{[void][System.Threading.Mutex]::OpenExisting('Global\\QwtImprovedSetup');'MUTEXHELD'}catch{'MUTEXFREE'}\"" 60 | grep -aoE 'MUTEXHELD|MUTEXFREE' | head -1)
+  if [ "$held" = MUTEXHELD ]; then
+    log "  the installer holds Global\\QwtImprovedSetup - it IS running"
+    return 0
+  fi
+  # A PROCESS IS ALSO EVIDENCE, and the mutex alone is not enough: the installer may not have created
+  # it yet at the instant we look, which is the same race in a different place. Jev rated the
+  # mutex-only fix `harness_fix_sufficient` **0.38**, so all three signals must agree before this
+  # function will say "not running".
+  local proc
+  proc=$(grun "powershell -NoProfile -Command \"if(Get-Process msiexec,powershell,cmd -ErrorAction SilentlyContinue | Where-Object { \$_.Path -and \$_.Path -notmatch 'run-in-session' } ){'PROCBUSY'}else{'PROCIDLE'}\"" 60 | grep -aoE 'PROCBUSY|PROCIDLE' | head -1)
+  if [ "$proc" = PROCBUSY ]; then
+    log "  an installer-capable process is running - treating the installer as RUNNING"
+    return 0
+  fi
   local body
   body=$(grun "cmd /c powershell -NoProfile -Command \"if(Test-Path '$GLOG'){Get-Content '$GLOG' -Tail 400}\"" 90)
-  [ -n "$body" ] || return 1
   printf '%s\n' "$body" | log_has_progress_after "$E2E_MARK" && return 0
+  # NOT STARTED is only returned when ALL THREE say so: no mutex, no installer-capable process, and
+  # no log progress past this run's marker. An unreadable probe leaves at least one of them silent,
+  # and the caller confirms a second time 30 s later before acting on it.
+  if [ -z "$proc" ]; then
+    log "  the process probe returned nothing - cannot tell, not calling this 'not started'"
+    return 2
+  fi
   return 1
 }
 
@@ -544,7 +578,16 @@ while [ "$_att" -lt "$LAUNCH_TRIES" ]; do
   case "$_verdict" in
     0) log "  DETERMINED: the installer IS running - $GLOG carries lines past $E2E_MARK. The CALL timed out; the install did not. Proceeding to the watch loop."
        _lrc=0; break ;;
-    1) log "  DETERMINED: the installer did NOT start (no lines past $E2E_MARK) and the guest answers again - relaunching" ;;
+    1) # CONFIRM IT TWICE, 30 s APART, before touching anything. A single negative observation is
+       # what produced the wrong relaunch; the installer's own startup window is seconds wide.
+       log "  the installer appears absent - confirming again in 30 s before any relaunch"
+       sleep 30
+       installer_started; _second=$?
+       if [ "$_second" != 1 ]; then
+         log "  DETERMINED on the second look: the installer IS running (or unreadable) - NOT relaunching"
+         _lrc=0; break
+       fi
+       log "  DETERMINED TWICE: the installer did NOT start (no mutex, no installer process, no lines past $E2E_MARK) - relaunching once" ;;
     *) log "  qrexec did not answer within ${STALL_SECS}s - this is the stall, not a launch failure; handing to the watch loop, which captures the specimen"
        break ;;
   esac
