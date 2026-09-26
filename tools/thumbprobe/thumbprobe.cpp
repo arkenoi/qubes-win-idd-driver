@@ -472,6 +472,93 @@ int wmain(int argc, wchar_t** argv)
     // message pump and a required f.Close(), the remaining structural difference is that the broker
     // holds MANY overlapping destinations. Jev: many-overlapping-destinations 0.91,
     // probe-holds-many-stacked 0.84. `apart` is the control.
+    // --holdmulti <secs> <class1> <class2> ... : hold ONE relay per NAMED SOURCE CLASS, all at once,
+    // and print each source's per-second delta. This exists to explain a measured INVERSION that no
+    // mechanism guess has accounted for: in the broker, relay slots for two windows ADVANCED while
+    // three did not, at the same moment in the same process - and the frozen ones were the windows
+    // whose content had definitely just changed (a terminal being typed into, a per-pixel-alpha window
+    // whose content was advanced on purpose), while the advancing ones were static by construction.
+    //
+    // If this probe reproduces the same split across the same five sources, the behaviour belongs to
+    // the SOURCE WINDOWS and not to the broker. If all five advance here, it is broker-specific. Either
+    // answer is decisive, which is more than any of the four refuted mechanisms offered.
+    if (want == L"--holdmulti")
+    {
+        if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
+        int secs = (argc > 2) ? _wtoi(argv[2]) : 30;
+        const int MAXS = 8;
+        std::wstring cls[MAXS];
+        int n = 0;
+        for (int a = 3; a < argc && n < MAXS; a++) cls[n++] = argv[a];
+        if (!n) { printf("RESULT=FAIL reason=no-classes\n"); return 2; }
+        struct One { HWND src; HWND dest; HTHUMBNAIL th; Direct3D11CaptureFramePool pool{ nullptr };
+                     GraphicsCaptureSession sess{ nullptr };
+                     Direct3D11CaptureFramePool::FrameArrived_revoker rev; };
+        static volatile LONG mcnt[MAXS];
+        for (int k = 0; k < MAXS; k++) mcnt[k] = 0;
+        static One ms[MAXS]{};
+        for (int k = 0; k < n; k++) {
+            ms[k].src = FindWindowW(cls[k].c_str(), nullptr);
+            if (!ms[k].src) { printf("RESULT=HOLDMULTI k=%d class=%ls src=NOTFOUND\n", k, cls[k].c_str()); continue; }
+            RECT sr{}; GetWindowRect(ms[k].src, &sr);
+            int w = sr.right - sr.left, h = sr.bottom - sr.top;
+            // The broker's destination exactly: same extended styles, same (0,0), alpha 0.
+            ms[k].dest = MakeDest(w, h, 0, 0,
+                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT);
+            if (!ms[k].dest) { printf("RESULT=HOLDMULTI k=%d dest=FAIL\n", k); continue; }
+            SetLayeredWindowAttributes(ms[k].dest, 0, 0, LWA_ALPHA);
+            ShowWindow(ms[k].dest, SW_SHOWNA);
+            if (FAILED(DwmRegisterThumbnail(ms[k].dest, ms[k].src, &ms[k].th)) || !ms[k].th) {
+                printf("RESULT=HOLDMULTI k=%d register=FAIL\n", k); continue; }
+            SIZE ss{}; DwmQueryThumbnailSourceSize(ms[k].th, &ss);
+            printf("RESULT=HOLDMULTI k=%d class=%ls src=0x%llx srcSize=%dx%d thumbSize=%dx%d\n",
+                   k, cls[k].c_str(), (unsigned long long)(ULONG_PTR)ms[k].src, w, h,
+                   (int)ss.cx, (int)ss.cy);
+            DWM_THUMBNAIL_PROPERTIES p{};
+            p.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY;
+            p.rcDestination = RECT{ 0, 0, ss.cx ? ss.cx : w, ss.cy ? ss.cy : h };
+            p.fVisible = TRUE; p.opacity = 255;
+            DwmUpdateThumbnailProperties(ms[k].th, &p);
+            try {
+                auto interop = get_activation_factory<GraphicsCaptureItem, ::IGraphicsCaptureItemInterop>();
+                GraphicsCaptureItem item{ nullptr };
+                if (FAILED(interop->CreateForWindow(ms[k].dest, guid_of<GraphicsCaptureItem>(),
+                              reinterpret_cast<void**>(put_abi(item)))) || !item) {
+                    printf("RESULT=HOLDMULTI k=%d createForWindow=FAIL\n", k); continue; }
+                auto size = item.Size();
+                ms[k].pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
+                    g_rtDev, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
+                ms[k].sess = ms[k].pool.CreateCaptureSession(item);
+                try { ms[k].sess.IsBorderRequired(false); } catch (...) {}
+                int idx = k;
+                ms[k].rev = ms[k].pool.FrameArrived(auto_revoke,
+                    [idx](auto const& sender, auto const&) {
+                        if (auto f = sender.TryGetNextFrame()) { InterlockedIncrement(&mcnt[idx]); f.Close(); }
+                    });
+                ms[k].sess.StartCapture();
+            } catch (...) { printf("RESULT=HOLDMULTI k=%d threw=1\n", k); }
+        }
+        fflush(stdout);
+        for (int t = 0; t < secs; t++) {
+            LONG before[MAXS];
+            for (int k = 0; k < n; k++) before[k] = mcnt[k];
+            Sleep(1000);
+            printf("RESULT=HOLDMULTISEC t=%d", t + 1);
+            for (int k = 0; k < n; k++)
+                printf(" a%d=%ld d%d=%ld", k, (long)mcnt[k], k, (long)(mcnt[k] - before[k]));
+            printf("\n"); fflush(stdout);
+        }
+        printf("RESULT=HOLDMULTIDONE");
+        for (int k = 0; k < n; k++) printf(" %ls=%ld", cls[k].c_str(), (long)mcnt[k]);
+        printf("\n");
+        for (int k = 0; k < n; k++) {
+            if (ms[k].sess) { try { ms[k].sess.Close(); } catch (...) {} }
+            if (ms[k].pool) { try { ms[k].pool.Close(); } catch (...) {} }
+            if (ms[k].th)   DwmUnregisterThumbnail(ms[k].th);
+            if (ms[k].dest) DestroyWindow(ms[k].dest);
+        }
+        return 0;
+    }
     if (want == L"--holdn")
     {
         if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
