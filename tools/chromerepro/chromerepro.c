@@ -45,6 +45,17 @@
 #define CLASS_NRB     L"QubesChromeReproNrb"      // WS_EX_NOREDIRECTIONBITMAP: no GDI surface
 #define CLASS_ULW     L"QubesChromeReproUlw"      // UpdateLayeredWindow-style layered
 #define CLASS_KEY     L"QubesChromeReproKey"      // layered with LWA_COLORKEY
+// A REAL per-pixel-alpha layered window: WS_EX_LAYERED whose content is supplied by
+// UpdateLayeredWindow. The CLASS_ULW window above deliberately supplies NO content, because it
+// exists to exercise the ROUTER's classification (GetLayeredWindowAttributes failing). That makes it
+// useless for accepting CAPTURE of this class: a layered window that never received
+// UpdateLayeredWindow has no layered surface, so DWM has nothing of it to compose and a relay has
+// nothing to carry. Measured 2026-09-26: both attribute-only ULW slots stayed on the polled
+// fallback while the other three rogue classes held arrival-driven relay routes, and Jev rated that
+// fixture `fixture_is_adequate` 0.10 and the result `result_is_fixture_artefact` 0.62 - the fix
+// being to add a fixture that can actually exhibit the behaviour (0.82), not to accept or dismiss
+// the cell. Both windows are kept: one classifies, this one carries pixels.
+#define CLASS_ULWC    L"QubesChromeReproUlwContent" // layered, content via UpdateLayeredWindow
 #define CLASS_CONTROL L"QubesChromeReproControl"
 
 // --mso: the strips exactly as a real Microsoft 365 install creates them, measured with
@@ -113,7 +124,75 @@ static int g_Thickness = 160;
 static BOOL g_WantPopup;
 static BOOL g_WantGhost;
 static BOOL g_WantClasses;   // --classes: the three ineligible-class fixtures
-static HWND g_Nrb, g_Ulw, g_Key;
+static HWND g_Nrb, g_Ulw, g_Key, g_UlwC;
+
+// Give a layered window REAL per-pixel-alpha content. Premultiplied BGRA, as ULW_ALPHA requires:
+// a recognisable pattern (opaque bands over a semi-transparent field) so a captured frame can be told
+// apart from an empty one by colour count alone. Returns FALSE if the surface could not be supplied,
+// which the caller reports rather than swallowing - a fixture that silently supplies nothing is the
+// exact defect this window exists to correct.
+static BOOL UlwContentSupply(HWND hwnd, int w, int h)
+{
+    BITMAPINFO bi;
+    HDC screen, mem;
+    HBITMAP bmp;
+    void* bits = NULL;
+    POINT src = { 0, 0 };
+    SIZE sz;
+    BLENDFUNCTION bf;
+    BOOL ok;
+    int x, y;
+
+    ZeroMemory(&bi, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;          // top-down
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    screen = GetDC(NULL);
+    mem = CreateCompatibleDC(screen);
+    bmp = CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    if (!bmp || !bits)
+    {
+        if (mem) DeleteDC(mem);
+        ReleaseDC(NULL, screen);
+        return FALSE;
+    }
+    SelectObject(mem, bmp);
+
+    for (y = 0; y < h; y++)
+    {
+        for (x = 0; x < w; x++)
+        {
+            unsigned char* px = (unsigned char*)bits + ((size_t)y * w + x) * 4;
+            // Alpha 255 in horizontal bands, 128 between them, so the window has both fully opaque
+            // and genuinely semi-transparent pixels - the property that makes this class hard.
+            unsigned char a = ((y / 24) % 2) ? 255 : 128;
+            unsigned char r = (unsigned char)((x * 255) / (w ? w : 1));
+            unsigned char g = (unsigned char)((y * 255) / (h ? h : 1));
+            unsigned char b = 64;
+            // Premultiply, as ULW_ALPHA requires.
+            px[0] = (unsigned char)((b * a) / 255);
+            px[1] = (unsigned char)((g * a) / 255);
+            px[2] = (unsigned char)((r * a) / 255);
+            px[3] = a;
+        }
+    }
+
+    sz.cx = w; sz.cy = h;
+    ZeroMemory(&bf, sizeof(bf));
+    bf.BlendOp = AC_SRC_OVER;
+    bf.SourceConstantAlpha = 255;
+    bf.AlphaFormat = AC_SRC_ALPHA;
+    ok = UpdateLayeredWindow(hwnd, screen, NULL, &sz, mem, &src, 0, &bf, ULW_ALPHA);
+
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(NULL, screen);
+    return ok;
+}
 static BOOL g_WantControl;
 static BOOL g_WantMso;
 static BOOL g_WantMsoThin;
@@ -365,6 +444,11 @@ static BOOL RegisterClasses(void)
     if (!RegisterClassExW(&wc))
         return FALSE;
 
+    wc.lpfnWndProc = DefWindowProcW;
+    wc.lpszClassName = CLASS_ULWC;
+    if (!RegisterClassExW(&wc))
+        return FALSE;
+
     wc.lpfnWndProc = ShadowProc;
     wc.lpszClassName = CLASS_SHADOW;
     if (!RegisterClassExW(&wc))
@@ -584,6 +668,30 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
             L"chromerepro - ulw layered", WS_OVERLAPPEDWINDOW,
             work.left + 420, work.top + 360, 360, 240, NULL, NULL, g_Instance, NULL);
         if (g_Ulw) ShowWindow(g_Ulw, SW_SHOWNA);
+
+        // (c2) ULW WITH REAL CONTENT - the window that can actually be accepted for this class.
+        // WS_POPUP, not WS_OVERLAPPEDWINDOW: UpdateLayeredWindow replaces the ENTIRE window surface,
+        // so a caption would be overwritten by our bitmap and the fixture would be lying about what
+        // it is. The supply is reported, because a fixture that silently provides no surface is the
+        // defect that made the plain ULW cell unacceptable (Jev: fixture_is_adequate 0.10).
+        g_UlwC = CreateWindowExW(WS_EX_LAYERED, CLASS_ULWC,
+            L"chromerepro - ulw content", WS_POPUP,
+            work.left + 800, work.top + 620, 360, 240, NULL, NULL, g_Instance, NULL);
+        if (g_UlwC)
+        {
+            // This is a /SUBSYSTEM:WINDOWS app on purpose (see the file header), so there is no
+            // stdout to report on. The outcome goes in the WINDOW TITLE, which the census's pixel
+            // survey already reads back - so "did UpdateLayeredWindow actually take" is answerable
+            // from the same capture, with no new channel and nothing to go silently missing.
+            BOOL supplied = UlwContentSupply(g_UlwC, 360, 240);
+            WCHAR title[96];
+            StringCchPrintfW(title, ARRAYSIZE(title), L"chromerepro - ulw content supplied=%d",
+                             supplied ? 1 : 0);
+            SetWindowTextW(g_UlwC, title);
+            ShowWindow(g_UlwC, SW_SHOWNA);
+            OutputDebugStringW(supplied ? L"chromerepro: ULW content supplied\n"
+                                        : L"chromerepro: ULW content NOT supplied\n");
+        }
 
         // (d) LWA_COLORKEY: the key colour is transparent, and the GUI protocol carries no
         // per-window alpha - so even a delivered frame is probably the wrong pixels. That is the
