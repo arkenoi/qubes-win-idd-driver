@@ -775,10 +775,9 @@ static void OpenChannel(int i) {
         // destination a FRESH session (another process) captured fine, every second, with the source's
         // own content. This records whether Closed is what happened, and changes nothing: Jev put
         // observe-first at 0.96 and any repair in the same build at 0.00.
-        c.closedRev = item.Closed(auto_revoke, [i](auto const&, auto const&) {
-            InterlockedIncrement(&g_slots[i].ItemClosed);
-            g_slots[i].ItemClosedTick = (LONGLONG)GetTickCount64();
-        });
+        // PROOF BUILD ONLY (branch proof/no-closed-handler, never to be merged): the Closed handler
+        // registration is REMOVED here and nothing else changes, to show the cold-boot relay goes deaf
+        // without it (single-variable proof, Jev 0.68).
         c.poolW = size.Width; c.poolH = size.Height;   // FrameArrived tracks content-size changes
         c.rev = pool.FrameArrived(auto_revoke,
             [i](Direct3D11CaptureFramePool const& sender, auto const&) {
