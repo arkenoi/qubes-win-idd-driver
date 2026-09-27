@@ -169,6 +169,14 @@ static bool      g_noRelay[WGCBRK_MAX_SLOTS] = {};
 // thumbnail, pool and session through the ordinary Close/OpenChannel path. Once per window: set here,
 // cleared when the slot is given a different window; after it, the 3-change demotion applies as before.
 static bool      g_relayReopened[WGCBRK_MAX_SLOTS] = {};
+// THE SAME, ONE RUNG HIGHER (2026-09-27). A cold boot makes the broker's FIRST sessions deaf, plain-WGC
+// ones included, and the ladder then moved a quiet plain-WGC window down to the relay for good. For a
+// shell toast that is the wrong rung: warm, the toast is served on plain WGC and matches (MAD 2.2); on
+// every cold boot it ended on the relay, whose thumbnail renders it with 15 colours against the guest's
+// 28 (MAD 17.7), every time. So a quiet plain-WGC channel gets ONE fresh plain-WGC session before it is
+// re-routed; windows plain WGC never serves (the rogue classes) lose one quiet period on the way to the
+// relay. Jev: relay-renders-the-toast-unfaithfully 0.83, this fix 0.85, low risk 0.71.
+static bool      g_wgcReopened[WGCBRK_MAX_SLOTS] = {};
 
 // RAII for g_pubCs. Both long regions below call C++/WinRT methods that THROW - frame.Surface() on a
 // closed frame is the obvious one - while sitting between a bare Enter and a bare Leave. A throw
@@ -1015,8 +1023,8 @@ static void Reconcile() {
         HWND want = (HWND)(ULONG_PTR)s->Hwnd;
         bool wantOpen = (s->ReqState == WGCBRK_REQUESTED) && want;
         Channel& c = g_ch[i];
-        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; OpenChannel(i); }
-        else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; }
+        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; OpenChannel(i); }
+        else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; }
         else if (wantOpen && c.hwnd == want && !c.pw &&
                  IsWindow(want) && IsWindowVisible(want) && !IsIconic(want) &&
                  GetTickCount64() >= g_noProbeUntil[i] &&
@@ -1066,8 +1074,12 @@ static void Reconcile() {
             g_slots[i].Reroutes++;
             g_slots[i].QuietReroutes++;
             const bool wasRelay = c.relay;   // read BEFORE CloseChannel wipes it
+            const bool wasPlainWgc = !c.relay && !c.pw;
             CloseChannel(i);          // wipes the Channel - so set the survivors AFTER it
-            g_forcePw[i] = true;
+            // A quiet plain-WGC channel first gets one fresh plain-WGC session (g_wgcReopened); only a
+            // second quiet period sends it down the ladder.
+            if (wasPlainWgc && !g_wgcReopened[i]) { g_wgcReopened[i] = true; g_forcePw[i] = false; }
+            else                                  { g_forcePw[i] = true; }
             // A quiet WGC channel becomes a relay; a quiet RELAY first gets ONE fresh re-open (its own
             // capture session is what dies after a cold boot - see g_relayReopened), and only a relay
             // that goes quiet again goes to PrintWindow, or the ladder has no last rung.
