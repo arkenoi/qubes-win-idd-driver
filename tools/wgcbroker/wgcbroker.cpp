@@ -1451,10 +1451,25 @@ int wmain(int argc, wchar_t** argv) {
         DWORD n = 0; HANDLE compact[2];
         if (g_hCtl) compact[n++] = g_hCtl;
         if (g_agent) compact[n++] = g_agent;
-        if (n == 0) { Sleep(timeout); }
+        // THIS THREAD OWNS WINDOWS, SO IT MUST PUMP. The relay's destination windows are created here,
+        // and a window-owning thread that retrieves no messages for 5 s is HUNG by Windows' definition
+        // (IsHungAppWindow): Windows ghosted every relay destination - a "Ghost"-class twin of the exact
+        // size of each relayed window, which the agent then mapped and the broker relayed in turn
+        // (measured 2026-09-27, win11de-v7: five relayed windows, five Ghosts, same sizes; every census
+        // today had them) - and the owner's drag of an override-redirect window raised Windows' own
+        // not-responding warning for the broker (Jev: ghosts are ours 0.94, the warning 0.88). The wait
+        // now also wakes for input, and the queue is drained every pass.
+        if (n == 0) { MsgWaitForMultipleObjects(0, nullptr, FALSE, timeout, QS_ALLINPUT); }
         else {
-            DWORD wr = WaitForMultipleObjects(n, compact, FALSE, timeout);
+            DWORD wr = MsgWaitForMultipleObjects(n, compact, FALSE, timeout, QS_ALLINPUT);
             if (g_agent && wr == WAIT_OBJECT_0 + (g_hCtl ? 1 : 0)) break; // agent exited
+        }
+        {
+            MSG msg;
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
         }
         Reconcile();
         RepublishRetained();   // after Reconcile: a slot whose window changed is closed by now
