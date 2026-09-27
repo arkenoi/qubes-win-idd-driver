@@ -158,6 +158,15 @@ static ULONGLONG g_noProbeUntil[WGCBRK_MAX_SLOTS] = {};
 // Set AFTER CloseChannel, never before: CloseChannel wipes the Channel, which is exactly how the
 // earlier g_forcePw assignment got erased and cost 38 needless re-routes on a healthy window.
 static bool      g_noRelay[WGCBRK_MAX_SLOTS] = {};
+// ONE FRESH SESSION BEFORE THE LADDER DROPS A RELAY (2026-09-27). After a cold boot, with the full
+// window set and an all-window PrintWindow sweep, a relay's OWN capture session stops delivering while
+// DWM keeps compositing its destination - measured: a fresh session on that destination captures the
+// source every second, restarting the broker cures it, and the capture item is never Closed. Demoting
+// such a relay to PrintWindow (the old and only answer) fails the arrival-driven acceptance bar, so the
+// first "source changed, no frame" on a relay RE-OPENS it as a relay instead - new destination,
+// thumbnail, pool and session through the ordinary Close/OpenChannel path. Once per window: set here,
+// cleared when the slot is given a different window; after it, the 3-change demotion applies as before.
+static bool      g_relayReopened[WGCBRK_MAX_SLOTS] = {};
 
 // RAII for g_pubCs. Both long regions below call C++/WinRT methods that THROW - frame.Surface() on a
 // closed frame is the obvious one - while sitting between a bare Enter and a bare Leave. A throw
@@ -462,7 +471,9 @@ static bool RelaySrcDecides(int i) {
     // Jev: brokers-own-capture-session-died 0.82, re-registration as the right repair 0.32, and
     // "recreate the session now" 0.00 against "subscribe to item.Closed and OBSERVE" 0.96. The
     // observation lands first (see ItemClosed in wgcbroker_ipc.h); the repair waits for it to speak.
-    return (++c.srcChangeStreak) >= WGCBRK_RELAY_CHANGE_STREAK;
+    // A relay not yet re-opened needs ONE measured change: what follows is a re-open, which is cheap
+    // and reversible. Demotion is one-way, so it keeps the full streak (see g_relayReopened).
+    return (++c.srcChangeStreak) >= (g_relayReopened[i] ? WGCBRK_RELAY_CHANGE_STREAK : 1);
 }
 
 // ABI 12: a signature of the frame we just published, sampled EXACTLY as the guest samples its own
@@ -953,8 +964,8 @@ static void Reconcile() {
         HWND want = (HWND)(ULONG_PTR)s->Hwnd;
         bool wantOpen = (s->ReqState == WGCBRK_REQUESTED) && want;
         Channel& c = g_ch[i];
-        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); OpenChannel(i); }
-        else if (!wantOpen && c.hwnd)   { CloseChannel(i); }
+        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; OpenChannel(i); }
+        else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; }
         else if (wantOpen && c.hwnd == want && !c.pw &&
                  IsWindow(want) && IsWindowVisible(want) && !IsIconic(want) &&
                  GetTickCount64() >= g_noProbeUntil[i] &&
@@ -1006,9 +1017,13 @@ static void Reconcile() {
             const bool wasRelay = c.relay;   // read BEFORE CloseChannel wipes it
             CloseChannel(i);          // wipes the Channel - so set the survivors AFTER it
             g_forcePw[i] = true;
-            // A quiet WGC channel becomes a relay; a quiet RELAY has already had that chance and
-            // must go to PrintWindow instead, or the ladder has no last rung.
-            if (wasRelay) g_noRelay[i] = true;
+            // A quiet WGC channel becomes a relay; a quiet RELAY first gets ONE fresh re-open (its own
+            // capture session is what dies after a cold boot - see g_relayReopened), and only a relay
+            // that goes quiet again goes to PrintWindow, or the ladder has no last rung.
+            if (wasRelay) {
+                if (!g_relayReopened[i]) g_relayReopened[i] = true;   // re-open as a relay, once
+                else                     g_noRelay[i] = true;         // it went deaf again: demote
+            }
             OpenChannel(i);
             g_ch[i].probing = true;   // OpenChannel re-made the Channel; mark the new one
         }
