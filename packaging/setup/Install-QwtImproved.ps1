@@ -2373,6 +2373,42 @@ function Invoke-Stage2 {
     # RE-GATED ON EVERY ATTEMPT, inside the loop: the 1618 retry below sleeps and then waits up to
     # 600 s on the installer mutex before looping, so a READY taken before the first attempt can be
     # ten minutes stale by the second (review 2026-09-16, C2).
+    # STOP OUR VCHAN HOLDERS ONE AT A TIME, BEFORE MSIEXEC (2026-09-27). Measured on a stalled upgrade
+    # with the MSI log flushed line by line: its LAST line was "RESTART MANAGER: Successfully shut down
+    # all applications that held files in use", and the guest wedged within about a second. The Restart
+    # Manager had torn down, together, every process still holding our files - the qrexec agent with its
+    # live wrappers and the qubesdb daemon - each closing its vchan and event channel at the same moment.
+    # This installer never stopped those two services itself (its own stop step covers the GUI parts
+    # only), so the bulk teardown was the MSI's. Stopped here, cleanly and in dependency order, the
+    # Restart Manager finds none of them. A clean stop exits 0, so the recovery actions armed after the
+    # MSI do not fire. Jev: trigger established 0.73; this fix 0.80 over disabling the Restart Manager.
+    # A wait that runs out is an ERROR-CLASS detail (vchan_prestop), graded by the harness - never a
+    # quiet fall-back to the bulk teardown.
+    $prestop = [ordered]@{}
+    foreach ($svc in 'QrexecAgent', 'QdbDaemon') {
+        $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
+        if (-not $s) { $prestop[$svc] = 'absent'; continue }
+        if ($s.Status -eq 'Stopped') { $prestop[$svc] = 'already-stopped'; continue }
+        $svcPid = (Get-CimInstance Win32_Service -Filter "Name='$svc'" -ErrorAction SilentlyContinue).ProcessId
+        try { Stop-Service -Name $svc -Force -ErrorAction Stop } catch { Write-Log "Stop-Service $svc threw: $($_.Exception.Message)" 'WARN' }
+        $t0 = Get-Date; $done = $false
+        while (((Get-Date) - $t0).TotalSeconds -lt 60) {
+            $st = (Get-Service -Name $svc -ErrorAction SilentlyContinue).Status
+            $alive = $svcPid -and (Get-Process -Id $svcPid -ErrorAction SilentlyContinue)
+            if ($st -eq 'Stopped' -and -not $alive) { $done = $true; break }
+            Start-Sleep -Milliseconds 250
+        }
+        $el = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+        if ($done) {
+            $prestop[$svc] = "stopped:${el}s"
+            Write-Log "pre-msiexec: $svc stopped and its process exited in ${el}s"
+        } else {
+            $prestop[$svc] = "TIMEOUT:${el}s"
+            $script:Result.detail.vchan_prestop_failed = $true
+            Write-Log "pre-msiexec: $svc did NOT stop within 60 s - the Restart Manager will tear it down in bulk (the measured stall trigger)" 'ERROR'
+        }
+    }
+    $script:Result.detail.vchan_prestop = (($prestop.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
     $msiTries = 0
     while ($true) {
         $msiTries++
@@ -4057,6 +4093,7 @@ public static class QdbPrime {
     if ($dd.idd_failed -eq $true)                                   { $errFlags += 'idd_failed' }
     if ($dd.idd_vga_disable_pending -eq $true)                      { $errFlags += 'idd_vga_disable_pending' }
     if ($dd.pvnic_prime_failed -eq $true)                           { $errFlags += 'pvnic_prime_failed' }
+    if ($dd.vchan_prestop_failed -eq $true)                         { $errFlags += 'vchan_prestop_failed' }
     if ("$($dd.gui_quiesce_failed)" -ne '')                         { $errFlags += 'gui_quiesce_failed' }
     if ("$($dd.gui_restored)" -like 'FAILED*')                      { $errFlags += 'gui_restored' }
     if ("$($dd.pv_xenvif)" -like 'failed*')                         { $errFlags += 'pv_xenvif' }
