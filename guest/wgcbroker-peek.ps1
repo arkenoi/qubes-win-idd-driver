@@ -28,9 +28,9 @@
 # section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$WANT_ABI = 16
+$WANT_ABI = 17
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3424    # sizeof(WGCBRK_SLOT) at ABI 16 (PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, ItemClosedTick 3416)
+$STRIDE = 3424    # sizeof(WGCBRK_SLOT) at ABI 17 (PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, Republished 3412 (was padding), ItemClosedTick 3416)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -74,8 +74,8 @@ for ($n = 0; $n -lt $Samples; $n++) {
     $b = $HDR + $i*$STRIDE
     $hw = RdL $b
     if ($hw -eq 0) { continue }
-    Write-Output ("S{0} slot{1} hwnd=0x{2:x} req={3} ctlseq={4} ack={5} failhr=0x{6:x} req={7}x{8} frame={9}x{10} seq={11} fid={12} captick={13}" -f `
-      $n,$i,$hw,(RdI ($b+24)),(RdI ($b+28)),(RdI ($b+56)),(RdI ($b+60)),(RdI ($b+8)),(RdI ($b+12)),(RdI ($b+64)),(RdI ($b+68)),(RdI ($b+80)),(RdL ($b+88)),(RdL ($b+96)))
+    Write-Output ("S{0} slot{1} hwnd=0x{2:x} req={3} ctlseq={4} ack={5} failhr=0x{6:x} req={7}x{8} frame={9}x{10} seq={11} fid={12} captick={13} crop={14},{15}" -f `
+      $n,$i,$hw,(RdI ($b+24)),(RdI ($b+28)),(RdI ($b+56)),(RdI ($b+60)),(RdI ($b+8)),(RdI ($b+12)),(RdI ($b+64)),(RdI ($b+68)),(RdI ($b+80)),(RdL ($b+88)),(RdL ($b+96)),(RdI ($b+16)),(RdI ($b+20)))
     Write-Output ("S{0} slot{1} FRAMES arrived={2} published={3} dropsize={4} recreateOk={5} recreateFail={6} lastContent={7}x{8} pool={9}x{10} pw={11} polls={12}" -f `
       $n,$i,(RdI ($b+192)),(RdI ($b+196)),(RdI ($b+200)),(RdI ($b+204)),(RdI ($b+208)),(RdI ($b+212)),(RdI ($b+216)),(RdI ($b+220)),(RdI ($b+224)),(RdI ($b+132)),(RdI ($b+184)))
     Write-Output ("S{0} slot{1} POKE seq={2} ack={3} serviced={4} skipped={5} safety={6} reroutes={7} backoffMs={8} quietReroutes={9} probeBounces={10}" -f `
@@ -124,7 +124,10 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # on the same window, from another process, delivered the source's content every second. If a slot is
     # deaf (FRAMES arrived frozen across a confirmed source change) and this is 0, the item was NOT
     # closed and the mechanism is still unknown; if it moved, closedTick orders it against captick.
-    Write-Output ("S{0} slot{1} ITEM closed={2} closedTick={3}" -f $n,$i,(RdI ($b+3408)),(RdL ($b+3416)))
+    # ABI 17. republished = cards the broker served from its RETAINED capture because the agent's registration
+    # changed and no arrival answered it (a static window whose card moved). crop (above) = ReqCropX/Y, the
+    # card's offset inside the window - what a truth render must be cut at to compare with the card.
+    Write-Output ("S{0} slot{1} ITEM closed={2} closedTick={3} republished={4}" -f $n,$i,(RdI ($b+3408)),(RdL ($b+3416)),(RdI ($b+3412)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)

@@ -13,6 +13,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <d3d11.h>
+#include <d3d11_4.h>   // ID3D11Multithread (see InitD3D)
 #include <dxgi.h>
 #include <dwmapi.h>
 #include <winrt/base.h>
@@ -141,6 +142,25 @@ struct Channel {
     HWND        relayDest  = nullptr;   // the window we own that carries the thumbnail
     HTHUMBNAIL  relayThumb = nullptr;
     bool        relay      = false;     // this channel captures relayDest, not c.hwnd
+    // ---- THE LAST FULL-WINDOW CAPTURE, KEPT FOR REPUBLISHING --------------------------------
+    // WGC and the relay publish only inside FrameArrived, and a static window sends no arrival.
+    // Every agent (re-)registration or retarget writes a new card geometry, fresh buffers and a
+    // reset Seq/Ack, and bumps ControlSeq - so a static window whose card moved was never served
+    // again. Measured 2026-09-27 on win11de-v5, three cold boots: the toast host re-registered at
+    // 364x157 crop 16,199 after a second toast grew it, and the slot sat at ack=0 seq=0 with the
+    // old 364x326 frame for the rest of the census while the agent rejected every frame (Jev:
+    // product defect 0.99, mechanism 0.91, this fix over a session re-open 1.00 - a fresh session
+    // is exactly what goes deaf after a cold boot). lastFull is the CPU copy PublishFrame already
+    // makes of each arrival; pubCtlSeq is the slot's ControlSeq when a frame was last published
+    // from it. Both are touched only under g_pubCs[i], which CloseChannel holds across the wipe.
+    com_ptr<ID3D11Texture2D> lastFull;
+    int         lastFullW = 0, lastFullH = 0;
+    LONG        pubCtlSeq = 0;
+    // The ControlSeq a republish from THIS lastFull already failed for (the card does not fit it, or the
+    // copy failed): not retried until the agent asks again or a new arrival replaces lastFull, so a card
+    // that cannot be cut costs one attempt, not an attempt per loop pass.
+    LONG        triedCtlSeq = 0;
+    bool        triedValid  = false;
 };
 static std::vector<Channel> g_ch(WGCBRK_MAX_SLOTS);
 // These two MUST outlive a channel. CloseChannel does `c = Channel{}`, so anything kept in the
@@ -269,6 +289,12 @@ static bool InitD3D() {
         D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
         g_d3d.put(), &fl, g_ctx.put());
     if (FAILED(hr)) return false;
+    // ONE immediate context, several threads. PublishFrame runs on WGC threadpool threads - one
+    // FrameArrived per slot, and free-threaded pools deliver different slots concurrently - under a
+    // PER-SLOT lock, so two slots could already run CopyResource/Map on g_ctx at once; and
+    // RepublishRetained now maps from the main loop too. ID3D11DeviceContext is not thread-safe by
+    // itself; this serialises every call on it inside the runtime.
+    if (auto mt = g_ctx.try_as<ID3D11Multithread>()) mt->SetMultithreadProtected(TRUE);
     com_ptr<IDXGIDevice> dxgi = g_d3d.as<IDXGIDevice>();
     com_ptr<::IInspectable> insp;
     if (FAILED(CreateDirect3D11DeviceFromDXGIDevice(dxgi.get(), insp.put()))) return false;
@@ -299,18 +325,88 @@ static inline LONGLONG QpcNow() {
     LARGE_INTEGER q; QueryPerformanceCounter(&q); return q.QuadPart;
 }
 
+// The gate every arrival-driven publish passes, the retained-capture republish included.
+static bool PublishAllowed(WGCBRK_SLOT* s) {
+    if (s->ReqState != WGCBRK_REQUESTED && s->AckState != WGCBRK_ACTIVE) return false;
+    // LIVE check, not the cached flag. g_hdr->Producing is sampled once per main-loop
+    // iteration, and that loop waits up to 250 ms - but FrameArrived is asynchronous, so a
+    // frame that arrives after the input desktop has left Default (UAC consent, the lock
+    // screen, the secure desktop) would still be published against a flag that is up to a
+    // quarter second stale. The whole point of the gate is that secure-desktop pixels never
+    // leave the guest, so it must be evaluated NOW, at the moment of publishing.
+    return g_hdr->Producing && InputDesktopIsDefault();
+}
+
+// Crop the agent's CURRENT card out of a CPU-readable full-window copy and publish it into slot i.
+// Caller holds g_pubCs[i] and has passed PublishAllowed. Returns true if a frame was published.
+static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH) {
+    WGCBRK_SLOT* s = &g_slots[i];
+    // ControlSeq is read BEFORE the geometry. The agent writes the geometry and buffers, fences, then
+    // bumps ControlSeq, so what is read below is at least as new as `ctl`; a registration landing
+    // mid-copy is caught by the re-check after the copy.
+    const LONG ctl = s->ControlSeq;
+    MemoryBarrier();
+    // The slot must still be THIS channel's window: a registration for another window re-points
+    // BufOffset before Reconcile has closed this channel, and those are that window's buffers.
+    if ((HWND)(ULONG_PTR)s->Hwnd != g_ch[i].hwnd) return false;
+    // Publish the agent's REQUESTED (card) rect, lifted from the full-window capture at the
+    // agent's crop offset - exactly what the PrintWindow path does. Before this the WGC path
+    // published the whole texture and FrameArrived dropped every frame whose ContentSize did
+    // not equal ReqWidth/ReqHeight, so a WGC-capturable window with a nonzero crop (a shell
+    // toast/menu whose shadow margin the agent trims) could NEVER publish: pool recreate,
+    // drop, repeat. That was survivable only because the agent silently sliced the
+    // whole-desktop composite instead; with the composite fallback removed on eligible
+    // guests (owner 2026-09-06, "no fallback ... fail hard") it would freeze the window for
+    // ever, so the crop is implemented here rather than worked around there.
+    const int w = s->ReqWidth, h = s->ReqHeight;
+    const int cropX = s->ReqCropX, cropY = s->ReqCropY;
+    if (w <= 0 || h <= 0 || cropX < 0 || cropY < 0) return false;
+    if (cropX + w > texW || cropY + h > texH) return false;   // capture does not cover the card yet
+    if ((LONGLONG)w * h * 4 > s->BufBytes) return false;      // agent sized for ReqW*ReqH*4; skip oversize
+
+    D3D11_MAPPED_SUBRESOURCE map;
+    if (FAILED(g_ctx->Map(full, 0, D3D11_MAP_READ, 0, &map))) return false;
+    int wbuf = 1 - s->ActiveBuffer;             // spare (RING==2)
+    if (wbuf < 0 || wbuf >= WGCBRK_RING) wbuf = 0;
+    BYTE* dst = WGCBRK_ARENA(g_base, s->BufOffset[wbuf]);
+    const BYTE* src = (const BYTE*)map.pData + (size_t)cropY * map.RowPitch + (size_t)cropX * 4;
+    for (int y = 0; y < h; y++)
+        memcpy(dst + (size_t)y * w * 4, src + (size_t)y * map.RowPitch, (size_t)w * 4);
+    g_ctx->Unmap(full, 0);
+    MemoryBarrier();
+    // A registration during the copy may have moved the card or the buffers: this frame answers a
+    // request that no longer exists. Drop it UNPUBLISHED (Seq untouched, so the agent never sees
+    // it); ControlSeq now differs from pubCtlSeq, so the main loop serves the new one next pass.
+    if (s->ControlSeq != ctl) return false;
+    PublishSignature(i, dst, w, h);
+
+    // THE SEQLOCK, COMPARE-AND-SWAPPED. An agent registration resets Seq to 0 with plain stores; the
+    // blind exchanges this used to do overwrote such a reset and advertised a frame in buffers this
+    // copy never wrote. With CAS, a reset that lands anywhere in here makes the matching CAS fail and
+    // the frame is simply not published (the main loop serves the new registration next pass).
+    // FrameWidth/Height/Stride are written INSIDE the odd window: they used to be written before it,
+    // where a reader could pair the new size with the previous buffer.
+    const LONG q = s->Seq;                      // even: one writer per slot, under g_pubCs[i]
+    if ((q & 1) || _InterlockedCompareExchange(&s->Seq, q | 1, q) != q) return false;   // -> ODD
+    MemoryBarrier();
+    s->FrameWidth = w; s->FrameHeight = h; s->Stride = w * 4;
+    s->ActiveBuffer = wbuf;
+    s->FrameId++;
+    s->CaptureTick = (LONGLONG)GetTickCount64();
+    MemoryBarrier();
+    if (_InterlockedCompareExchange(&s->Seq, (q | 1) + 1, q | 1) != (q | 1)) return false;  // -> EVEN
+    if (!s->FirstPublishTick) s->FirstPublishTick = QpcNow();
+    SignalFramePublished();                     // after the seq bump: a woken agent sees it whole
+    s->AckState = WGCBRK_ACTIVE;
+    g_ch[i].pubCtlSeq = ctl;
+    return true;
+}
+
 static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
     PubLock pubLock(i);   // RAII: a throw inside must not strand the section (see PubLock)
     do {
         WGCBRK_SLOT* s = &g_slots[i];
-        if (s->ReqState != WGCBRK_REQUESTED && s->AckState != WGCBRK_ACTIVE) break;
-        // LIVE check, not the cached flag. g_hdr->Producing is sampled once per main-loop
-        // iteration, and that loop waits up to 250 ms - but FrameArrived is asynchronous, so a
-        // frame that arrives after the input desktop has left Default (UAC consent, the lock
-        // screen, the secure desktop) would still be published against a flag that is up to a
-        // quarter second stale. The whole point of the gate is that secure-desktop pixels never
-        // leave the guest, so it must be evaluated NOW, at the moment of publishing.
-        if (!g_hdr->Producing || !InputDesktopIsDefault()) break;
+        if (!PublishAllowed(s)) break;
 
         auto surf = frame.Surface();
         auto access = surf.as<Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
@@ -319,51 +415,45 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
         D3D11_TEXTURE2D_DESC td; tex->GetDesc(&td);
         const int texW = (int)td.Width, texH = (int)td.Height;
         if (texW <= 0 || texH <= 0) break;
-        // Publish the agent's REQUESTED (card) rect, lifted from the full-window capture at the
-        // agent's crop offset - exactly what the PrintWindow path does. Before this the WGC path
-        // published the whole texture and FrameArrived dropped every frame whose ContentSize did
-        // not equal ReqWidth/ReqHeight, so a WGC-capturable window with a nonzero crop (a shell
-        // toast/menu whose shadow margin the agent trims) could NEVER publish: pool recreate,
-        // drop, repeat. That was survivable only because the agent silently sliced the
-        // whole-desktop composite instead; with the composite fallback removed on eligible
-        // guests (owner 2026-09-06, "no fallback ... fail hard") it would freeze the window for
-        // ever, so the crop is implemented here rather than worked around there.
-        int w = s->ReqWidth, h = s->ReqHeight;
-        const int cropX = s->ReqCropX, cropY = s->ReqCropY;
-        if (w <= 0 || h <= 0 || cropX < 0 || cropY < 0) break;
-        if (cropX + w > texW || cropY + h > texH) break;   // capture does not cover the card yet
-        if ((LONGLONG)w * h * 4 > s->BufBytes) break;   // agent sized for ReqW*ReqH*4; skip oversize
 
         td.Usage = D3D11_USAGE_STAGING; td.BindFlags = 0;
         td.CPUAccessFlags = D3D11_CPU_ACCESS_READ; td.MiscFlags = 0;
         com_ptr<ID3D11Texture2D> stg;
         if (FAILED(g_d3d->CreateTexture2D(&td, nullptr, stg.put()))) break;
         g_ctx->CopyResource(stg.get(), tex.get());
-        D3D11_MAPPED_SUBRESOURCE map;
-        if (FAILED(g_ctx->Map(stg.get(), 0, D3D11_MAP_READ, 0, &map))) break;
-
-        int wbuf = 1 - s->ActiveBuffer;             // spare (RING==2)
-        if (wbuf < 0 || wbuf >= WGCBRK_RING) wbuf = 0;
-        BYTE* dst = WGCBRK_ARENA(g_base, s->BufOffset[wbuf]);
-        const BYTE* src = (const BYTE*)map.pData + (size_t)cropY * map.RowPitch + (size_t)cropX * 4;
-        for (int y = 0; y < h; y++)
-            memcpy(dst + (size_t)y * w * 4, src + (size_t)y * map.RowPitch, (size_t)w * 4);
-        g_ctx->Unmap(stg.get(), 0);
-        PublishSignature(i, dst, w, h);
-
-        s->FrameWidth = w; s->FrameHeight = h; s->Stride = w * 4;
-        LONG q = s->Seq;                            // even
-        _InterlockedExchange(&s->Seq, q | 1);       // -> ODD: write in progress
-        MemoryBarrier();
-        s->ActiveBuffer = wbuf;
-        s->FrameId++;
-        s->CaptureTick = (LONGLONG)GetTickCount64();
-        MemoryBarrier();
-        _InterlockedExchange(&s->Seq, (q | 1) + 1); // -> next EVEN: complete
-        if (!s->FirstPublishTick) s->FirstPublishTick = QpcNow();
-        SignalFramePublished();                     // after the seq bump: a woken agent sees it whole
-        s->AckState = WGCBRK_ACTIVE;
+        // KEEP THIS CAPTURE, whether or not the current card can be cut from it: it is the window's
+        // content until the next arrival, and the only source a static window's re-registered card
+        // can be served from (see Channel::lastFull and RepublishRetained).
+        g_ch[i].lastFull = stg; g_ch[i].lastFullW = texW; g_ch[i].lastFullH = texH;
+        g_ch[i].triedValid = false;             // a new capture may cover a card the old one could not
+        PublishCard(i, stg.get(), texW, texH);
     } while (0);
+}
+
+// SERVE A REGISTRATION NO ARRIVAL WILL ANSWER. For every arrival-driven channel whose slot's
+// ControlSeq moved since the broker last published into it (an agent register, re-register or
+// retarget), cut the new card from the retained full-window capture now. A window that is still
+// changing is served by its next arrival anyway; this is for the one that is not - the toast
+// host after a second toast grew it (measured 2026-09-27, win11de-v5: ack=0 seq=0 for the whole
+// census, the agent rejecting every frame). No new capture session is opened: a fresh session is
+// what goes deaf after a cold boot. Runs on the main loop after Reconcile, so a slot whose window
+// changed has already had its channel (and its retained capture) closed.
+static void RepublishRetained() {
+    for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) {
+        if (!g_ch[i].hwnd || g_ch[i].pw) continue;          // hwnd/pw are written on this thread only
+        PubLock lk(i);                                       // lastFull is written by FrameArrived
+        Channel& c = g_ch[i];
+        WGCBRK_SLOT* s = &g_slots[i];
+        if (!c.hwnd || c.pw || !c.lastFull) continue;
+        const LONG ctl = s->ControlSeq;
+        if (ctl == c.pubCtlSeq) continue;                    // nothing asked that was not served
+        if (c.triedValid && ctl == c.triedCtlSeq) continue;  // already failed for this request and capture
+        if (s->ReqState != WGCBRK_REQUESTED) continue;       // freed: never write to its buffers
+        if (!PublishAllowed(s)) continue;                    // secure desktop: NOT marked tried - retry later
+        if (PublishCard(i, c.lastFull.get(), c.lastFullW, c.lastFullH))
+            InterlockedIncrement(&s->Republished);
+        else { c.triedCtlSeq = ctl; c.triedValid = true; }
+    }
 }
 
 // (re)create the channel's top-down 32bpp DIB section to match w x h.
@@ -1197,6 +1287,7 @@ int wmain(int argc, wchar_t** argv) {
             if (g_agent && wr == WAIT_OBJECT_0 + (g_hCtl ? 1 : 0)) break; // agent exited
         }
         Reconcile();
+        RepublishRetained();   // after Reconcile: a slot whose window changed is closed by now
         // Service PrintWindow-mode channels, DAMAGE-DRIVEN (ABI 7).
         //
         // PrintWindow is not cheap and it is not ours to pay: it renders the full window
