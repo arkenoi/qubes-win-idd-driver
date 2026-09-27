@@ -862,6 +862,22 @@ QTEST_VM=$SUBJECT timeout -k 5 90 ./tools/qtest shot "$OUT/screen.tar" >/dev/nul
   && tar -xf "$OUT/screen.tar" -C "$OUT" 2>/dev/null
 grun 'cmd /c powershell -NoProfile -Command "if(Test-Path C:\qwt-install.log){Get-Content C:\qwt-install.log -Tail 60}"' 90 > "$OUT/msi-final.log" 2>/dev/null
 
+# POST-RUN LIVENESS (2026-09-27). This script graded a run PASS 9/9 while the guest stalled seconds
+# after its last check: the guest's own logs stop in the middle of these checks' qrexec calls and
+# nothing was written for 8 h. A verdict issued before the guest is shown to be still alive is not a
+# verdict, so the guest must still answer qrexec a minute after the last check.
+sleep 60
+live=0
+for attempt in 1 2; do
+  if grun 'cmd /c echo PONG' 45 | grep -qa PONG; then live=1; break; fi
+  sleep 15
+done
+if [ "$live" = 1 ]; then
+  ok "post-run liveness: the guest still answers qrexec 60 s after the last check"
+else
+  no "post-run liveness: the guest STOPPED ANSWERING after the last check - left running as evidence"
+fi
+
 if [ "$FAIL" -eq 0 ]; then
   # Fixture receipt (golden.sh fixture re-checks the base's seal later), same shape prime-run writes.
   mkdir -p mgmt/fixtures
