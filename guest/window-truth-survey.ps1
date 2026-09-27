@@ -28,10 +28,12 @@ $forced = @{}
 # offset and rescaled against it wherever the card is cropped: measured 2026-09-27, the toast host (card
 # 364x326 at 16,~29 of 396x369) scored MAD 13.7 whole-window and 6.3 once re-aligned on the same data. The
 # card grid is cut from the SAME render as the full one, so the stability test below covers both.
-$cards = @{}
+# NOT $cards: PowerShell variable names are case-INSENSITIVE, so a table named $cards IS the -Cards
+# parameter and assigning it erased the string before it was parsed (every card came back cardFit=none).
+$cardMap = @{}
 foreach ($t in ($Cards -split "[, ]+")) {
   if ($t -match "^0?[xX]?([0-9a-fA-F]+):(\d+):(\d+):(\d+):(\d+)$") {
-    try { $cards[[int64]("0x" + $matches[1])] = @([int]$matches[2],[int]$matches[3],[int]$matches[4],[int]$matches[5]) } catch {}
+    try { $cardMap[[int64]("0x" + $matches[1])] = @([int]$matches[2],[int]$matches[3],[int]$matches[4],[int]$matches[5]) } catch {}
   }
 }
 foreach ($t in ($Hwnds -split "[, ]+")) {
@@ -117,15 +119,23 @@ function Render([IntPtr]$h,[int]$w,[int]$ht,[uint32]$flag,$card = $null) {
   $full = TileGrid $buf $stride 0 0 $w $ht
   # The card grid, when the agent's card for this window is known and lies inside the render. A card
   # outside it is reported as such (cardFit=no), never silently replaced by the whole-window grid.
-  $cardT = ''; $cardFit = 'none'
+  $cardT = ''; $cardFit = 'none'; $cardC = -1
   if ($card) {
     $cx,$cy,$cw,$ch = $card
     if ($cw -gt 0 -and $ch -gt 0 -and $cx -ge 0 -and $cy -ge 0 -and ($cx+$cw) -le $w -and ($cy+$ch) -le $ht) {
       $cardT = TileGrid $buf $stride $cx $cy $cw $ch; $cardFit = 'yes'
+      # The card's distinct-colour count, sampled exactly as the broker samples the card it publishes
+      # (every 9th pixel from the card's own origin) - the whole-window count this was compared with
+      # passed the toast's stale two-card frame (26 vs 28) and failed its correct card (15 vs 28).
+      $cc=@{}
+      for ($y=$cy; $y -lt $cy+$ch; $y+=9) { $ro = $y*$stride
+        for ($x=$cx; $x -lt $cx+$cw; $x+=9) { $o = $ro + $x*4
+          $cc[(([int]$buf[$o+3] -shl 24) -bor ([int]$buf[$o+2] -shl 16) -bor ([int]$buf[$o+1] -shl 8) -bor [int]$buf[$o])]=1 } }
+      $cardC = $cc.Count
     } else { $cardFit = 'no' }
   }
   $bmp.Dispose()
-  return @{ colours=$colors.Count; hash=$acc; tiles=$full; cardTiles=$cardT; cardFit=$cardFit }
+  return @{ colours=$colors.Count; hash=$acc; tiles=$full; cardTiles=$cardT; cardFit=$cardFit; cardColours=$cardC }
 }
 $out = New-Object System.Collections.ArrayList
 # MEASURE ONE WINDOW. Factored out of the enumeration callback so a FORCED window can be measured
@@ -186,7 +196,7 @@ function Measure-Window([IntPtr]$h, [bool]$isForced) {
   # window grid graded against the cropped card, see -Cards. The check stays as a precaution.) Up to three attempts; the row
   # carries tilesStable so the caller can refuse to grade an unstable surface rather than score noise.
   # Jev chose this over best-of-N sampling and a timestamped grid (0.76).
-  $card = $cards[[int64]$h]
+  $card = $cardMap[[int64]$h]
   $full = Render $h $w $ht 2 $card
   $stable = 0
   for ($try = 0; $try -lt 3 -and $stable -eq 0; $try++) {
@@ -203,11 +213,12 @@ function Measure-Window([IntPtr]$h, [bool]$isForced) {
   $fullT = if ($full) { $full.tiles }   else { '' }
   $cardTiles = if ($full) { $full.cardTiles } else { '' }
   $cardFit   = if ($full) { $full.cardFit }   else { 'none' }
+  $cardColours = if ($full) { $full.cardColours } else { -1 }
   # "starves WGC": its own surface carries (almost) nothing while the composited render does
   $starves = if ($ownC -ge 0 -and $fullC -ge 0 -and $ownC -le 2 -and $fullC -gt 8) { 'yes' } else { 'no' }
-  [void]$out.Add(("TRUTH`thwnd=0x{0:x}`texe={1}`tclass={2}`t{3}x{4}`tA={5}`tB={6}`tC={7}`tD={8}`tE={9}`townColours={10}`tfullColours={11}`tstarvesWgc={12}`thash={13}`ttilesFull={15}`ttilesStable={16}`ttilesCard={17}`tcardFit={18}`ttitle={14}" -f `
+  [void]$out.Add(("TRUTH`thwnd=0x{0:x}`texe={1}`tclass={2}`t{3}x{4}`tA={5}`tB={6}`tC={7}`tD={8}`tE={9}`townColours={10}`tfullColours={11}`tstarvesWgc={12}`thash={13}`ttilesFull={15}`ttilesStable={16}`ttilesCard={17}`tcardFit={18}`tcardColours={19}`ttitle={14}" -f `
     $h.ToInt64(),$exe,$cl.ToString(),$w,$ht,$script:xproc,$script:anyx,$script:corew,$isAfw,$predE,`
-    $ownC,$fullC,$starves,$fullH,$ti.ToString().Substring(0,[Math]::Min(30,$ti.Length)),$fullT,$stable,$cardTiles,$cardFit))
+    $ownC,$fullC,$starves,$fullH,$ti.ToString().Substring(0,[Math]::Min(30,$ti.Length)),$fullT,$stable,$cardTiles,$cardFit,$cardColours))
   return $true
 }
 $cb = [WT+EnumProc]{
