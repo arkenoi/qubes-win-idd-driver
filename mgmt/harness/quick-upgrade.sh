@@ -561,7 +561,11 @@ _lrc=1; _att=0
 while [ "$_att" -lt "$LAUNCH_TRIES" ]; do
   _att=$(( _att + 1 ))
   _lt0=$(date +%s)
-  grun "cmd /c start \"\" /min $RELDISC\\install.cmd /auto /autologon:qubes" 60 >/dev/null
+  # STDIO TO NUL (2026-09-27): without it install.cmd inherits this call's stdout pipe, so the launch's
+# qrexec-wrapper stays alive for the WHOLE install - a live vchan that exists only on this rig (a user
+# double-clicks the installer) and that the MSI's Restart Manager then tore down mid-install, alongside
+# the services, at the measured stall moment. With nul handles the call returns at once.
+grun "cmd /c start \"\" /min $RELDISC\\install.cmd /auto /autologon:qubes <nul >nul 2>nul" 60 >/dev/null
   _lrc=$?
   _lel=$(( $(date +%s) - _lt0 ))
   if [ "$_lrc" = 0 ]; then
