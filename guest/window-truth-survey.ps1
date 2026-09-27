@@ -21,8 +21,19 @@
 # NO pixel row, and the acceptance rule is that missing data FAILS, so the pixel half could not be
 # graded at all. A forced hwnd bypasses the filters; any forced hwnd that is never reached is
 # reported as TRUTHMISSING so its absence is explicit rather than silent.
-param([string]$Hwnds = "")
+param([string]$Hwnds = "", [string]$Cards = "")
 $forced = @{}
+# -Cards "0x1234:x:y:w:h,..." = the CARD the agent requested for each window (the broker peek's crop=x,y and
+# req=wxh). The broker publishes only that sub-rect of the window, so a truth grid over the WHOLE window is
+# offset and rescaled against it wherever the card is cropped: measured 2026-09-27, the toast host (card
+# 364x326 at 16,~29 of 396x369) scored MAD 13.7 whole-window and 6.3 once re-aligned on the same data. The
+# card grid is cut from the SAME render as the full one, so the stability test below covers both.
+$cards = @{}
+foreach ($t in ($Cards -split "[, ]+")) {
+  if ($t -match "^0?[xX]?([0-9a-fA-F]+):(\d+):(\d+):(\d+):(\d+)$") {
+    try { $cards[[int64]("0x" + $matches[1])] = @([int]$matches[2],[int]$matches[3],[int]$matches[4],[int]$matches[5]) } catch {}
+  }
+}
 foreach ($t in ($Hwnds -split "[, ]+")) {
   if ($t -match "^0?[xX]?[0-9a-fA-F]+$" -and $t.Trim() -ne "") {
     try { $forced[[int64]("0x" + ($t -replace "^0[xX]",""))] = $false } catch {}
@@ -47,7 +58,29 @@ public class WT {
  [StructLayout(LayoutKind.Sequential)] public struct RC { public int L,T,R,B; }
 }
 "@
-function Render([IntPtr]$h,[int]$w,[int]$ht,[uint32]$flag) {
+# A 32x32 grid of per-tile mean RGB over the sub-rect (rx,ry,rw,rh) of a BGRA buffer.
+function TileGrid([byte[]]$buf,[int]$stride,[int]$rx,[int]$ry,[int]$rw,[int]$rh) {
+  $T = 32
+  $tiles = New-Object byte[] ($T*$T*3)
+  for ($ty=0; $ty -lt $T; $ty++) {
+    $y0 = $ry + [int]([int64]$ty*$rh/$T); $y1 = $ry + [int]([int64]($ty+1)*$rh/$T)
+    if ($y1 -le $y0) { $y1 = $y0+1 }; if ($y1 -gt $ry+$rh) { $y1 = $ry+$rh }
+    for ($tx=0; $tx -lt $T; $tx++) {
+      $x0 = $rx + [int]([int64]$tx*$rw/$T); $x1 = $rx + [int]([int64]($tx+1)*$rw/$T)
+      if ($x1 -le $x0) { $x1 = $x0+1 }; if ($x1 -gt $rx+$rw) { $x1 = $rx+$rw }
+      $sr=0; $sg=0; $sb=0; $n=0
+      for ($yy=$y0; $yy -lt $y1; $yy+=2) {
+        $ro2 = $yy*$stride
+        for ($xx=$x0; $xx -lt $x1; $xx+=2) {
+          $o2 = $ro2 + $xx*4
+          $sb += [int]$buf[$o2]; $sg += [int]$buf[$o2+1]; $sr += [int]$buf[$o2+2]; $n++ } }
+      $o = (($ty*$T)+$tx)*3
+      if ($n -gt 0) { $tiles[$o]=[byte]($sr/$n); $tiles[$o+1]=[byte]($sg/$n); $tiles[$o+2]=[byte]($sb/$n) }
+    }
+  }
+  return [Convert]::ToBase64String($tiles)
+}
+function Render([IntPtr]$h,[int]$w,[int]$ht,[uint32]$flag,$card = $null) {
   $bmp = New-Object System.Drawing.Bitmap($w,$ht)
   $g = [System.Drawing.Graphics]::FromImage($bmp); $dc = $g.GetHdc()
   $ok = [WT]::PrintWindow($h,$dc,$flag); $g.ReleaseHdc($dc); $g.Dispose()
@@ -74,32 +107,25 @@ function Render([IntPtr]$h,[int]$w,[int]$ht,[uint32]$flag) {
       $colors[$c]=1; $acc = ($acc*33 -bxor $c) -band 0x7FFFFFFF } }
   # A 32x32 GRID OF PER-TILE MEAN RGB, the same reduction the broker publishes for the frame it
   # actually delivered (ABI 13 PubTiles). Both sides normalise to this fixed grid regardless of their
-  # own dimensions, which is what makes them comparable at all: the guest measures the WHOLE window
-  # while the broker publishes the CONTENT it was handed, and they differ by the window frame plus a
-  # crop the guest cannot see. A distinct-colour count cannot tell a correct frame from the same
+  # own dimensions - but that makes them comparable only where the two cover the SAME region. The
+  # broker publishes the agent's CARD, a crop of the window; against a cropped card the whole-window
+  # grid is offset and rescaled (measured 2026-09-27: toast host MAD 13.7 whole-window, 6.3 re-aligned).
+  # So the card is now passed in (-Cards) and graded on its own grid; the full grid stays for the rest. A distinct-colour count cannot tell a correct frame from the same
   # palette arranged wrongly, a shifted image, or a blank region; 1024 tile means can. ALPHA IS
   # EXCLUDED deliberately - the two sides need not agree on it and the GUI protocol carries none.
   # Jev chose this instrument at confidence 1.00.
-  $T = 32
-  $tiles = New-Object byte[] ($T*$T*3)
-  for ($ty=0; $ty -lt $T; $ty++) {
-    $y0 = [int]([int64]$ty*$ht/$T); $y1 = [int]([int64]($ty+1)*$ht/$T)
-    if ($y1 -le $y0) { $y1 = $y0+1 }; if ($y1 -gt $ht) { $y1 = $ht }
-    for ($tx=0; $tx -lt $T; $tx++) {
-      $x0 = [int]([int64]$tx*$w/$T); $x1 = [int]([int64]($tx+1)*$w/$T)
-      if ($x1 -le $x0) { $x1 = $x0+1 }; if ($x1 -gt $w) { $x1 = $w }
-      $sr=0; $sg=0; $sb=0; $n=0
-      for ($yy=$y0; $yy -lt $y1; $yy+=2) {
-        $ro2 = $yy*$stride
-        for ($xx=$x0; $xx -lt $x1; $xx+=2) {
-          $o2 = $ro2 + $xx*4
-          $sb += [int]$buf[$o2]; $sg += [int]$buf[$o2+1]; $sr += [int]$buf[$o2+2]; $n++ } }
-      $o = (($ty*$T)+$tx)*3
-      if ($n -gt 0) { $tiles[$o]=[byte]($sr/$n); $tiles[$o+1]=[byte]($sg/$n); $tiles[$o+2]=[byte]($sb/$n) }
-    }
+  $full = TileGrid $buf $stride 0 0 $w $ht
+  # The card grid, when the agent's card for this window is known and lies inside the render. A card
+  # outside it is reported as such (cardFit=no), never silently replaced by the whole-window grid.
+  $cardT = ''; $cardFit = 'none'
+  if ($card) {
+    $cx,$cy,$cw,$ch = $card
+    if ($cw -gt 0 -and $ch -gt 0 -and $cx -ge 0 -and $cy -ge 0 -and ($cx+$cw) -le $w -and ($cy+$ch) -le $ht) {
+      $cardT = TileGrid $buf $stride $cx $cy $cw $ch; $cardFit = 'yes'
+    } else { $cardFit = 'no' }
   }
   $bmp.Dispose()
-  return @{ colours=$colors.Count; hash=$acc; tiles=[Convert]::ToBase64String($tiles) }
+  return @{ colours=$colors.Count; hash=$acc; tiles=$full; cardTiles=$cardT; cardFit=$cardFit }
 }
 $out = New-Object System.Collections.ArrayList
 # MEASURE ONE WINDOW. Factored out of the enumeration callback so a FORCED window can be measured
@@ -150,7 +176,24 @@ function Measure-Window([IntPtr]$h, [bool]$isForced) {
   $isAfw = if ($cl.ToString() -eq 'ApplicationFrameWindow') { 'yes' } else { 'no' }
   $predE = if ($script:corew -eq 'yes' -or $isAfw -eq 'yes') { 'yes' } else { 'no' }
   $own  = Render $h $w $ht 0
-  $full = Render $h $w $ht 2
+  # FREEZE-THEN-COMPARE. A transient surface - a toast above all - can change WHILE it is being measured,
+  # and the broker's grid is sampled at a different instant, so a fidelity comparison against a single
+  # render of a moving surface measures the motion, not the delivery. Rendering twice and requiring the
+  # two reductions to be IDENTICAL establishes that the surface was momentarily STILL, which is the only
+  # state in which comparing it to a frame captured at another instant says anything. (CORRECTED
+  # 2026-09-27: this was first justified by the toast's MAD 13.7. That score was NOT motion - it repeated
+  # to the decimal on three cold boots with the surface proven still (tilesStable=1); it was the whole-
+  # window grid graded against the cropped card, see -Cards. The check stays as a precaution.) Up to three attempts; the row
+  # carries tilesStable so the caller can refuse to grade an unstable surface rather than score noise.
+  # Jev chose this over best-of-N sampling and a timestamped grid (0.76).
+  $card = $cards[[int64]$h]
+  $full = Render $h $w $ht 2 $card
+  $stable = 0
+  for ($try = 0; $try -lt 3 -and $stable -eq 0; $try++) {
+    $again = Render $h $w $ht 2 $card
+    if ($full -and $again -and $full.tiles -eq $again.tiles) { $stable = 1 }
+    if ($again) { $full = $again }
+  }
   $ownC  = if ($own)  { $own.colours }  else { -1 }
   $fullC = if ($full) { $full.colours } else { -1 }
   $fullH = if ($full) { $full.hash }    else { 0 }
@@ -158,11 +201,13 @@ function Measure-Window([IntPtr]$h, [bool]$isForced) {
   # Emitted as its own tab field so the row stays parseable, and omitted (not faked) when the render
   # failed - a missing grid must read as missing, never as a match.
   $fullT = if ($full) { $full.tiles }   else { '' }
+  $cardTiles = if ($full) { $full.cardTiles } else { '' }
+  $cardFit   = if ($full) { $full.cardFit }   else { 'none' }
   # "starves WGC": its own surface carries (almost) nothing while the composited render does
   $starves = if ($ownC -ge 0 -and $fullC -ge 0 -and $ownC -le 2 -and $fullC -gt 8) { 'yes' } else { 'no' }
-  [void]$out.Add(("TRUTH`thwnd=0x{0:x}`texe={1}`tclass={2}`t{3}x{4}`tA={5}`tB={6}`tC={7}`tD={8}`tE={9}`townColours={10}`tfullColours={11}`tstarvesWgc={12}`thash={13}`ttilesFull={15}`ttitle={14}" -f `
+  [void]$out.Add(("TRUTH`thwnd=0x{0:x}`texe={1}`tclass={2}`t{3}x{4}`tA={5}`tB={6}`tC={7}`tD={8}`tE={9}`townColours={10}`tfullColours={11}`tstarvesWgc={12}`thash={13}`ttilesFull={15}`ttilesStable={16}`ttilesCard={17}`tcardFit={18}`ttitle={14}" -f `
     $h.ToInt64(),$exe,$cl.ToString(),$w,$ht,$script:xproc,$script:anyx,$script:corew,$isAfw,$predE,`
-    $ownC,$fullC,$starves,$fullH,$ti.ToString().Substring(0,[Math]::Min(30,$ti.Length)),$fullT))
+    $ownC,$fullC,$starves,$fullH,$ti.ToString().Substring(0,[Math]::Min(30,$ti.Length)),$fullT,$stable,$cardTiles,$cardFit))
   return $true
 }
 $cb = [WT+EnumProc]{
@@ -178,6 +223,15 @@ foreach ($k in @($forced.Keys)) {
   if ($forced[$k]) { continue }
   $hh = [IntPtr]$k
   if ([WT]::IsWindow($hh)) { $null = Measure-Window $hh $true }
+  else {
+    # MEASURED, NOT ASSUMED. A handle the enumerator did not yield AND which IsWindow now rejects is a
+    # window that was DESTROYED between the route census reading the slots and this survey running - a
+    # transient, not a statement about the relay. Reporting that as plain missing data made a closed
+    # Terminal window read as a fidelity failure. The distinction is only ever drawn from IsWindow
+    # returning false here; a handle that is still valid is never called "gone" (Jev 0.64, on the
+    # explicit condition that it be measured).
+    [void]$out.Add(("TRUTHMISSING`thwnd=0x{0:x}`treason=window-gone" -f $k))
+  }
 }
 # Absence must be explicit: a forced hwnd EnumWindows never reached is named, not omitted.
 foreach ($k in $forced.Keys) {
