@@ -14,6 +14,10 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <d3d11_4.h>   // ID3D11Multithread (see InitD3D)
+#include <thread>
+#include <memory>
+#include <future>
+#include <chrono>
 #include <dxgi.h>
 #include <dwmapi.h>
 #include <winrt/base.h>
@@ -229,6 +233,8 @@ struct StageScope {
 // PrintWindow into a hung window 0.98). IsHungAppWindow catches a window hung for >= 5 s; the WM_NULL probe
 // one that is not answering right now, bounded to 100 ms. Unresponsive = skip this pass, counted in
 // HungSkips: a window that stays hung costs one bounded probe per pass, never the loop.
+static void WaitSameWindowTeardown(int i, HWND hwnd);   // defined with CloseChannel; used by OpenChannel
+
 static bool WindowResponsive(int i, HWND hwnd) {
     StageScope st(WGCBRK_STG_PROBE, i);
     DWORD_PTR res = 0;
@@ -866,6 +872,7 @@ static bool HasCrossProcessContentChild(HWND window);
 
 static void OpenChannel(int i) {
     StageScope stage(WGCBRK_STG_OPEN, i);
+    WaitSameWindowTeardown(i, (HWND)(ULONG_PTR)g_slots[i].Hwnd);
     WGCBRK_SLOT* s = &g_slots[i];
     Channel& c = g_ch[i];
     // First-frame attribution. The tick block is NOT touched yet: a slot is recycled, and this
@@ -1110,8 +1117,47 @@ static bool HasCrossProcessContentChild(HWND window) {
     return sc.found;
 }
 
+// EVERYTHING A CLOSED WGC CHANNEL STILL OWNS, torn down OFF THE MAIN LOOP. Measured 2026-09-27 (build
+// 3be5415, win11de-v7): with PrintWindow no longer able to hang the loop (the guard fired ~90 times in one
+// census), the two remaining broker deaths were both named by BrokerStage as close-channel, one on a slot
+// whose window was hung - and moving revoke/Close out of the slot lock had not helped, so the teardown call
+// itself blocks (Jev: WGC teardown 0.62). Each teardown gets its own detached thread: one that never
+// returns (a window that never answers) pins only itself, not the loop and not the next close.
+struct DoomedCapture {
+    Direct3D11CaptureFramePool::FrameArrived_revoker rev;
+    GraphicsCaptureItem::Closed_revoker closedRev;
+    GraphicsCaptureSession session{ nullptr };
+    Direct3D11CaptureFramePool pool{ nullptr };
+    GraphicsCaptureItem item{ nullptr };
+    com_ptr<ID3D11Texture2D> lastFull;
+};
+// The last teardown handed off per slot, and which window it was for. A quiet re-open of the SAME window
+// waits (bounded) for it: before the teardown thread the old session was always closed before the new one
+// opened, and the re-open exists precisely because a first session can go deaf - an old session still
+// closing beside the new one is a state this code has never run in. 250 ms covers a healthy teardown; a
+// hung one costs the loop at most that, then the new session opens anyway.
+static std::shared_future<void> g_teardownDone[WGCBRK_MAX_SLOTS];
+static HWND                     g_teardownHwnd[WGCBRK_MAX_SLOTS] = {};
+static void WaitSameWindowTeardown(int i, HWND hwnd) {
+    if (!g_teardownDone[i].valid()) return;
+    if (g_teardownHwnd[i] == hwnd) {
+        StageScope st(WGCBRK_STG_CLOSE_REAP, i);
+        (void)g_teardownDone[i].wait_for(std::chrono::milliseconds(250));
+    }
+    g_teardownDone[i] = std::shared_future<void>();
+    g_teardownHwnd[i] = nullptr;
+}
+
+static void TearDown(std::unique_ptr<DoomedCapture> d) {
+    if (!d) return;
+    d->rev.revoke();
+    if (d->session) { try { d->session.Close(); } catch (...) {} }
+    if (d->pool)    { try { d->pool.Close();    } catch (...) {} }
+    d.reset();                                   // Closed revoker, item, lastFull released here
+}
+
 static void CloseChannel(int i) {
-    StageScope stage(WGCBRK_STG_CLOSE, i);      // declared first: covers the teardown and the final releases
+    StageScope stage(WGCBRK_STG_CLOSE, i);      // declared first: restores the caller's stage at the end
     // WGC TEARDOWN HAPPENS OUTSIDE THE LOCK. This used to revoke FrameArrived and Close the session
     // and pool while holding g_pubCs[i] - the very lock an in-flight FrameArrived takes first thing.
     // If the teardown waits for that callback, neither can proceed: the main loop stops, the heartbeat
@@ -1121,21 +1167,22 @@ static void CloseChannel(int i) {
     // this deadlock 1.00). So under the lock only DETACH: move the WinRT objects out and wipe the
     // channel - an in-flight handler then sees `g_ch[i].pool != sender` and returns - and only then,
     // with the lock released, revoke and Close, which may wait for that handler as long as they like.
-    Direct3D11CaptureFramePool::FrameArrived_revoker rev;
-    GraphicsCaptureItem::Closed_revoker closedRev;
-    GraphicsCaptureSession session{ nullptr };
-    Direct3D11CaptureFramePool pool{ nullptr };
-    GraphicsCaptureItem item{ nullptr };
-    com_ptr<ID3D11Texture2D> lastFull;
+    auto d = std::make_unique<DoomedCapture>();
+    HWND closedHwnd = nullptr;
     {
+    // The lock wait is its own stage: a FrameArrived handler holding this slot's lock and stuck would
+    // stop the loop HERE, which the teardown thread below cannot help with - so it must be told apart.
+    if (g_hdr) g_hdr->BrokerStage = (LONG)((WGCBRK_STG_CLOSE_LOCK << 8) | ((unsigned)i & 0xFFu));
     PubLock closeLock(i);                       // serialize with any in-flight PublishFrame
+    if (g_hdr) g_hdr->BrokerStage = (LONG)((WGCBRK_STG_CLOSE << 8) | ((unsigned)i & 0xFFu));
     Channel& c = g_ch[i];
-    rev = std::move(c.rev);
-    closedRev = std::move(c.closedRev);
-    session = c.session; c.session = nullptr;
-    pool = c.pool;       c.pool = nullptr;
-    item = c.item;       c.item = nullptr;
-    lastFull = std::move(c.lastFull);
+    closedHwnd = c.hwnd;
+    d->rev = std::move(c.rev);
+    d->closedRev = std::move(c.closedRev);
+    d->session = c.session; c.session = nullptr;
+    d->pool = c.pool;       c.pool = nullptr;
+    d->item = c.item;       c.item = nullptr;
+    d->lastFull = std::move(c.lastFull);
     g_pubSigPending[i] = false;                 // nothing of this channel is left to sign
     if (c.pwBmp)   { DeleteObject(c.pwBmp); }
     if (c.pwDC)    { DeleteDC(c.pwDC); }
@@ -1155,10 +1202,26 @@ static void CloseChannel(int i) {
     InterlockedIncrement(&g_slots[i].ChanCloses);
     g_slots[i].SessionLive = 0;
     }   // PubLock released: an in-flight FrameArrived can now take it, see the wiped pool and return
-    rev.revoke();
-    if (session) { try { session.Close(); } catch (...) {} }
-    if (pool)    { try { pool.Close();    } catch (...) {} }
-    // item, closedRev, lastFull and the moved-out objects are released here, outside the lock too.
+    if (!d->session && !d->pool && !d->item && !d->lastFull) return;   // PrintWindow channel: nothing to reap
+    StageScope reap(WGCBRK_STG_CLOSE_REAP, i);
+    std::promise<void> done;
+    g_teardownDone[i] = done.get_future().share();
+    g_teardownHwnd[i] = closedHwnd;
+    try {
+        std::thread([](std::unique_ptr<DoomedCapture> dd, std::promise<void> fin) {
+            // NOTHING MAY ESCAPE THIS THREAD: an exception here is std::terminate - the broker dies,
+            // which is the very outcome this thread exists to prevent.
+            bool com = false;
+            try { init_apartment(apartment_type::multi_threaded); com = true; } catch (...) {}
+            try { TearDown(std::move(dd)); } catch (...) {}
+            if (com) { try { uninit_apartment(); } catch (...) {} }
+            try { fin.set_value(); } catch (...) {}
+        }, std::move(d), std::move(done)).detach();
+    } catch (...) {
+        TearDown(std::move(d));                  // no thread (exceptional): the old in-line teardown
+        g_teardownDone[i] = std::shared_future<void>();
+        g_teardownHwnd[i] = nullptr;
+    }
 }
 
 static void Reconcile() {
