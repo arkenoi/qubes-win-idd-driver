@@ -586,6 +586,14 @@ static bool RelaySrcDecides(int i) {
 // content, not of any individual frame.
 static ULONGLONG g_pubSigTick[WGCBRK_MAX_SLOTS] = {};   // when the signature was last COMPUTED
 static ULONGLONG g_pubSigLast[WGCBRK_MAX_SLOTS] = {};   // when a frame last ARRIVED, to spot a post-gap one
+// A publish whose signature the throttle SKIPPED and no later one has replaced. The throttle keeps a
+// post-gap frame but still drops the LAST frame of a burst, and a static window publishes nothing after
+// it - so the published signature stayed on the frame BEFORE, for ever. A republish lands exactly there
+// (<=250 ms after the arrival burst): measured 2026-09-27, win11de-v6 run 2, the toast was served its
+// correct card (req=frame 364x157, republished=1) while its signature still read the previous two-card
+// frame (26 colours, MAD 20.6). FlushPendingSignatures signs the active buffer once the burst is over.
+static bool      g_pubSigPending[WGCBRK_MAX_SLOTS] = {};
+static void SignFrame(int i, const BYTE* buf, int w, int h);
 static void PublishSignature(int i, const BYTE* buf, int w, int h) {
     if (!buf || w <= 0 || h <= 0) return;
     // THE THROTTLE MUST NEVER SKIP A POST-GAP FRAME, AND THIS ONE DID. A plain once-per-second rule
@@ -603,8 +611,14 @@ static void PublishSignature(int i, const BYTE* buf, int w, int h) {
     const ULONGLONG now = GetTickCount64();
     const bool postGap = (g_pubSigLast[i] == 0) || ((now - g_pubSigLast[i]) > 500);
     g_pubSigLast[i] = now;
-    if (!postGap && g_pubSigTick[i] && (now - g_pubSigTick[i]) < 1000) return;
+    if (!postGap && g_pubSigTick[i] && (now - g_pubSigTick[i]) < 1000) { g_pubSigPending[i] = true; return; }
     g_pubSigTick[i] = now;
+    g_pubSigPending[i] = false;
+    SignFrame(i, buf, w, h);
+}
+
+// The signature itself (distinct colours + the tile grid), unthrottled. Callers hold g_pubCs[i].
+static void SignFrame(int i, const BYTE* buf, int w, int h) {
     std::set<unsigned int> seen;
     for (int y = 0; y < h; y += 9) {
         const BYTE* row = buf + (size_t)y * (size_t)w * 4;
@@ -643,6 +657,34 @@ static void PublishSignature(int i, const BYTE* buf, int w, int h) {
             if (n) { out[0] = (BYTE)(sr / n); out[1] = (BYTE)(sg / n); out[2] = (BYTE)(sb / n); }
             else   { out[0] = out[1] = out[2] = 0; }
         }
+    }
+}
+
+// SIGN THE LAST FRAME OF A BURST. For every slot whose most recent publish was throttled, once no publish
+// has followed for 500 ms, sign the frame the agent actually holds (the ACTIVE buffer) - under the slot's
+// lock, so no publish can swap it mid-read. Only a frame published into the CURRENT registration is
+// signed (FrameId > 0: the agent zeroes it on every registration), and a registration landing during
+// the read discards the result rather than sign one window's pixels with another's geometry.
+static void FlushPendingSignatures() {
+    const ULONGLONG now = GetTickCount64();
+    for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) {
+        if (!g_pubSigPending[i]) continue;                  // set/cleared under the lock; re-checked below
+        if (now - g_pubSigLast[i] <= 500) continue;         // the burst may still be running
+        PubLock lk(i);
+        if (!g_pubSigPending[i]) continue;
+        WGCBRK_SLOT* s = &g_slots[i];
+        if (s->ReqState != WGCBRK_REQUESTED) { g_pubSigPending[i] = false; continue; }
+        const LONG ctl = s->ControlSeq;
+        MemoryBarrier();
+        const LONG q = s->Seq;
+        const int b = s->ActiveBuffer, w = s->FrameWidth, h = s->FrameHeight;
+        if ((q & 1) || q == 0 || s->FrameId == 0) continue;
+        if (b < 0 || b >= WGCBRK_RING || w <= 0 || h <= 0 || (LONGLONG)w * h * 4 > s->BufBytes) continue;
+        SignFrame(i, WGCBRK_ARENA(g_base, s->BufOffset[b]), w, h);
+        MemoryBarrier();
+        if (s->ControlSeq != ctl) continue;                 // re-registered mid-read: stays pending
+        g_pubSigTick[i] = now;
+        g_pubSigPending[i] = false;
     }
 }
 
@@ -1032,11 +1074,31 @@ static bool HasCrossProcessContentChild(HWND window) {
 }
 
 static void CloseChannel(int i) {
+    // WGC TEARDOWN HAPPENS OUTSIDE THE LOCK. This used to revoke FrameArrived and Close the session
+    // and pool while holding g_pubCs[i] - the very lock an in-flight FrameArrived takes first thing.
+    // If the teardown waits for that callback, neither can proceed: the main loop stops, the heartbeat
+    // stops, and the agent reaps the broker as dead (QGABROKERDIED). Measured 2026-09-27 on
+    // win11de-v6: the heartbeat stopped within 0.1 s of the agent unmapping a window (this close), and
+    // the older build died the same way 45 s after a census, when the census closes its windows (Jev:
+    // this deadlock 1.00). So under the lock only DETACH: move the WinRT objects out and wipe the
+    // channel - an in-flight handler then sees `g_ch[i].pool != sender` and returns - and only then,
+    // with the lock released, revoke and Close, which may wait for that handler as long as they like.
+    Direct3D11CaptureFramePool::FrameArrived_revoker rev;
+    GraphicsCaptureItem::Closed_revoker closedRev;
+    GraphicsCaptureSession session{ nullptr };
+    Direct3D11CaptureFramePool pool{ nullptr };
+    GraphicsCaptureItem item{ nullptr };
+    com_ptr<ID3D11Texture2D> lastFull;
+    {
     PubLock closeLock(i);                       // serialize with any in-flight PublishFrame
     Channel& c = g_ch[i];
-    c.rev.revoke();
-    if (c.session) { try { c.session.Close(); } catch (...) {} }
-    if (c.pool)    { try { c.pool.Close();    } catch (...) {} }
+    rev = std::move(c.rev);
+    closedRev = std::move(c.closedRev);
+    session = c.session; c.session = nullptr;
+    pool = c.pool;       c.pool = nullptr;
+    item = c.item;       c.item = nullptr;
+    lastFull = std::move(c.lastFull);
+    g_pubSigPending[i] = false;                 // nothing of this channel is left to sign
     if (c.pwBmp)   { DeleteObject(c.pwBmp); }
     if (c.pwDC)    { DeleteDC(c.pwDC); }
     // The relay's destination is a real top-level window and its thumbnail is a DWM handle; `c =
@@ -1054,6 +1116,11 @@ static void CloseChannel(int i) {
     // confusion plausible at 0.81 and a DIFFERENT defect at 0.83.
     InterlockedIncrement(&g_slots[i].ChanCloses);
     g_slots[i].SessionLive = 0;
+    }   // PubLock released: an in-flight FrameArrived can now take it, see the wiped pool and return
+    rev.revoke();
+    if (session) { try { session.Close(); } catch (...) {} }
+    if (pool)    { try { pool.Close();    } catch (...) {} }
+    // item, closedRev, lastFull and the moved-out objects are released here, outside the lock too.
 }
 
 static void Reconcile() {
@@ -1288,6 +1355,7 @@ int wmain(int argc, wchar_t** argv) {
         }
         Reconcile();
         RepublishRetained();   // after Reconcile: a slot whose window changed is closed by now
+        FlushPendingSignatures();   // sign a burst's last frame once the burst is over
         // Service PrintWindow-mode channels, DAMAGE-DRIVEN (ABI 7).
         //
         // PrintWindow is not cheap and it is not ours to pay: it renders the full window
