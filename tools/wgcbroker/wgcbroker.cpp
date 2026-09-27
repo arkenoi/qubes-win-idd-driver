@@ -30,8 +30,6 @@
 static void PublishSignature(int i, const BYTE* buf, int w, int h);
 #include <intrin.h>
 #include <vector>
-#include <cstdlib>   // abs (DeliveredIsStale)
-#include <cstring>   // memcpy (DeliveredIsStale)
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -418,46 +416,7 @@ static bool g_relayNoDemote = false;
 // case returned "no change", so RelayStaticHolds counted a hold on every loop tick and the counter
 // that is supposed to be the EVIDENCE for this rule would have been inflated by orders of
 // magnitude. A counter that cannot be read is not instrumentation.
-enum { SRC_CHANGED = 1, SRC_SAME = 0, SRC_UNMEASURED = 2, SRC_STALE = 3 };
-
-// IS THE FRAME WE DELIVERED STILL THE SOURCE? (2026-09-27) The change test above compares a source render
-// with the PREVIOUS source render, so a relay that went deaf before its source's LAST change - a toast
-// that stopped delivering during its fade-in and then sat still - reads SAME for ever while dom0 shows the
-// stale frame (measured: guest 28 colours vs delivered 15, spatial MAD 17.7, identical on every cold boot
-// that hit it). This compares the same PrintWindow render with the frame we last PUBLISHED, reduced exactly
-// as PublishSignature reduces it (32x32 mean RGB, every other row and column; both buffers top-down BGRA,
-// the grid scale-normalised), over the central 24x24 tiles - the acceptance census's own measure and its
-// own limit, MAD 12/255. Healthy relays measured 0.0-2.2, stale ones 17.7-21.8.
-static bool DeliveredIsStale(int i, const BYTE* buf, int w, int h) {
-    if (g_slots[i].PubColours <= 0) return false;              // nothing delivered yet: nothing to compare
-    BYTE pub[WGCBRK_TILES * WGCBRK_TILES * 3];
-    memcpy(pub, (const void*)g_slots[i].PubTiles, sizeof(pub));   // the frame thread may be writing it
-    const int lo = (WGCBRK_TILES - 24) / 2, hi = lo + 24;
-    unsigned long long sum = 0, n = 0;
-    for (int ty = lo; ty < hi; ++ty) {
-        const int y0 = (int)((LONGLONG)ty * h / WGCBRK_TILES);
-        int y1 = (int)((LONGLONG)(ty + 1) * h / WGCBRK_TILES);
-        if (y1 <= y0) y1 = y0 + 1;
-        if (y1 > h) y1 = h;
-        for (int tx = lo; tx < hi; ++tx) {
-            const int x0 = (int)((LONGLONG)tx * w / WGCBRK_TILES);
-            int x1 = (int)((LONGLONG)(tx + 1) * w / WGCBRK_TILES);
-            if (x1 <= x0) x1 = x0 + 1;
-            if (x1 > w) x1 = w;
-            unsigned long long sr = 0, sg = 0, sb = 0, k = 0;
-            for (int y = y0; y < y1; y += 2) {
-                const BYTE* row = buf + (size_t)y * (size_t)w * 4;
-                for (int x = x0; x < x1; x += 2) { const BYTE* q = row + (size_t)x * 4; sb += q[0]; sg += q[1]; sr += q[2]; ++k; }
-            }
-            if (!k) continue;
-            const BYTE* d = &pub[((size_t)ty * WGCBRK_TILES + tx) * 3];
-            const int r = (int)(sr / k), g = (int)(sg / k), b = (int)(sb / k);
-            sum += (unsigned long long)(abs(r - d[0]) + abs(g - d[1]) + abs(b - d[2]));
-            n += 3;
-        }
-    }
-    return n && (sum / n) > 12;
-}
+enum { SRC_CHANGED = 1, SRC_SAME = 0, SRC_UNMEASURED = 2 };
 static int RelaySourceChanged(int i) {
     Channel& c = g_ch[i];
     HWND hwnd = c.hwnd;
@@ -491,7 +450,6 @@ static int RelaySourceChanged(int i) {
     c.srcHash = hsh; c.srcHashTick = now; c.srcHashSeen = true;
     if (changed) c.srcHashMs = 500;
     else if (c.srcHashMs < 8000) { c.srcHashMs *= 2; if (c.srcHashMs > 8000) c.srcHashMs = 8000; }
-    if (!changed && DeliveredIsStale(i, (const BYTE*)c.pwBits, w, h)) return SRC_STALE;
     return changed ? SRC_CHANGED : SRC_SAME;
 }
 
@@ -510,15 +468,6 @@ static bool RelaySrcDecides(int i) {
     if (r == SRC_SAME)       { c.srcChangeStreak = 0;
                                InterlockedIncrement(&g_slots[i].RelayStaticHolds);    return false; }
     if (r == SRC_UNMEASURED) { InterlockedIncrement(&g_slots[i].RelaySrcUnmeasured);  return false; }
-    // A stale delivered frame on a static source may trigger ONLY the one-time re-open. It never counts
-    // toward demotion: a class PrintWindow renders differently from DWM would otherwise read stale on a
-    // healthy relay and be pushed to the polled route. Demotion still needs 3 genuinely measured changes.
-    if (r == SRC_STALE) {
-        if (!g_relayReopened[i]) return true;
-        c.srcChangeStreak = 0;
-        InterlockedIncrement(&g_slots[i].RelayStaticHolds);
-        return false;
-    }
     InterlockedIncrement(&g_slots[i].RelaySrcChanged);
     // Measured change with no frame behind it. Before an unbroken run of these is allowed to demote,
     // try REPAIRING the channel once: a thumbnail registered while DWM was still coming up is accepted
