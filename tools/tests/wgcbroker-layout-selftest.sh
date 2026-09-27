@@ -61,7 +61,10 @@ abi=$(grep -oE '#define WGCBRK_ABI_VERSION[[:space:]]+[0-9]+' "$H" | grep -oE '[
 
 pHDR=$(grep -oE '^\$HDR[[:space:]]*=[[:space:]]*[0-9]+' "$P" | grep -oE '[0-9]+$')
 pSTR=$(grep -oE '^\$STRIDE[[:space:]]*=[[:space:]]*[0-9]+' "$P" | grep -oE '[0-9]+$')
-pABI=$(grep -oE '^\$ABI[[:space:]]*=[[:space:]]*[0-9]+' "$P" | grep -oE '[0-9]+$')
+# $WANT_ABI, not $ABI: the constant was RENAMED on 2026-09-27 because `$ABI` collided case-insensitively
+# with `$abi`, the value read from the section, which disabled the version assertion entirely. Reading the
+# old name here would report "<unset>" and fail for the wrong reason.
+pABI=$(grep -oE '^\$WANT_ABI[[:space:]]*=[[:space:]]*[0-9]+' "$P" | grep -oE '[0-9]+$')
 
 fail=0
 chk(){ # name expected actual

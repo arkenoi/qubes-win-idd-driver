@@ -30,7 +30,7 @@ param([int]$Samples = 2, [int]$IntervalSec = 6)
 
 $WANT_ABI = 16
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3416    # sizeof(WGCBRK_SLOT) at ABI 16 (PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; RelayReregs 3408)
+$STRIDE = 3424    # sizeof(WGCBRK_SLOT) at ABI 16 (PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, ItemClosedTick 3416)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -118,13 +118,13 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # however large its cumulative count - the ambiguity that forced a set of results to be withdrawn.
     Write-Output ("S{0} slot{1} SESSION opens={2} closes={3} live={4} gen={5} genFrames={6}" -f `
       $n,$i,(RdI ($b+3388)),(RdI ($b+3392)),(RdI ($b+3396)),(RdI ($b+3400)),(RdI ($b+3404)))
-    # ABI 16. reregs = DWM thumbnail RE-REGISTRATIONS. A relay channel opened by the broker instance a
-    # guest COLD BOOT produces delivered its opening frame and then never followed the source again,
-    # while the same code restarted on the same boot delivered - a thumbnail registered before DWM was
-    # ready, accepted and never recomposed. The channel is now repaired in place instead of abandoned.
-    # If a cold-boot relay slot delivers and this counter never moves, the repair is NOT what fixed it
-    # and the pass is unproven; if it moves and genFrames still does not, the repair does not work.
-    Write-Output ("S{0} slot{1} REPAIR reregs={2}" -f $n,$i,(RdI ($b+3408)))
+    # ABI 16. itemClosed = WGC CLOSED THE CAPTURE ITEM for this slot. Until 2026-09-27 the broker never
+    # subscribed to GraphicsCaptureItem.Closed, so a closed item looked exactly like a window whose
+    # content had stopped changing: no error, no counter, the slot still ACTIVE - while a FRESH session
+    # on the same window, from another process, delivered the source's content every second. If a slot is
+    # deaf (FRAMES arrived frozen across a confirmed source change) and this is 0, the item was NOT
+    # closed and the mechanism is still unknown; if it moved, closedTick orders it against captick.
+    Write-Output ("S{0} slot{1} ITEM closed={2} closedTick={3}" -f $n,$i,(RdI ($b+3408)),(RdL ($b+3416)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)

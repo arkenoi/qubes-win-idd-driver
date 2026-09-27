@@ -74,6 +74,7 @@ struct Channel {
     Direct3D11CaptureFramePool    pool{ nullptr };
     GraphicsCaptureSession        session{ nullptr };
     Direct3D11CaptureFramePool::FrameArrived_revoker rev;
+    GraphicsCaptureItem::Closed_revoker closedRev;   // ABI 16: see ItemClosed in wgcbroker_ipc.h
     int slot = -1;
     // PrintWindow fallback: WGC CreateForWindow rejects override-redirect menus/popups
     // (itemCreated fails), but PrintWindow(PW_RENDERFULLCONTENT) captures them from THIS user
@@ -444,39 +445,6 @@ static int RelaySourceChanged(int i) {
 // spurious difference costs the relay for the rest of that window's life.
 #define WGCBRK_RELAY_CHANGE_STREAK 3
 
-// REPAIR A RELAY WHOSE THUMBNAIL HAS GONE DEAF, instead of abandoning it. A channel opened by the
-// broker instance a guest COLD BOOT produces emits its opening frame and then never follows the source
-// again; restarting the agent on the same boot fixes it, and the primitive is sound standalone. Jev's
-// reading (0.93) is that the thumbnail is registered while DWM is still coming up - accepted, but never
-// recomposed thereafter. Nothing re-registered it, and nothing demoted it either (a relay that has
-// delivered is left alone while its source is static), so the channel stayed deaf for ever.
-//
-// This re-registers the thumbnail in place: same destination window, same session, same pool - only the
-// DWM registration is renewed. It is attempted ONCE per unbroken run of "the source moved and no frame
-// came", before that run is allowed to demote anything.
-static bool RelayReregister(int i, Channel& c) {
-    if (!c.relay || !c.relayDest || !IsWindow(c.relayDest)) return false;
-    HWND src = c.hwnd;
-    if (!src || !IsWindow(src)) return false;
-    if (c.relayThumb) { DwmUnregisterThumbnail(c.relayThumb); c.relayThumb = nullptr; }
-    HTHUMBNAIL th = nullptr;
-    if (FAILED(DwmRegisterThumbnail(c.relayDest, src, &th)) || !th) return false;
-    SIZE ss{};
-    DwmQueryThumbnailSourceSize(th, &ss);
-    RECT dr{};
-    GetClientRect(c.relayDest, &dr);
-    DWM_THUMBNAIL_PROPERTIES p{};
-    p.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY;
-    p.rcDestination = RECT{ 0, 0,
-                            ss.cx ? ss.cx : (dr.right - dr.left),
-                            ss.cy ? ss.cy : (dr.bottom - dr.top) };
-    p.fVisible = TRUE; p.opacity = 255;
-    DwmUpdateThumbnailProperties(th, &p);
-    c.relayThumb = th;
-    InterlockedIncrement(&g_slots[i].RelayReregs);
-    return true;
-}
-
 static bool RelaySrcDecides(int i) {
     Channel& c = g_ch[i];
     const int r = RelaySourceChanged(i);
@@ -487,9 +455,14 @@ static bool RelaySrcDecides(int i) {
     // Measured change with no frame behind it. Before an unbroken run of these is allowed to demote,
     // try REPAIRING the channel once: a thumbnail registered while DWM was still coming up is accepted
     // but never recomposed, which is exactly this symptom on a cold-booted guest.
-    const int streak = ++c.srcChangeStreak;
-    if (streak == 1) RelayReregister(i, c);
-    return streak >= WGCBRK_RELAY_CHANGE_STREAK;
+    // NO REPAIR HERE. A thumbnail re-registration was built on this line and is REVERTED unrun: the
+    // measurement that followed showed the DWM thumbnail and the destination window are both fine - a
+    // fresh WGC session on that same destination delivers the source's content every second - and that
+    // the broker's OWN capture session is the dead part, which re-registering a thumbnail cannot touch.
+    // Jev: brokers-own-capture-session-died 0.82, re-registration as the right repair 0.32, and
+    // "recreate the session now" 0.00 against "subscribe to item.Closed and OBSERVE" 0.96. The
+    // observation lands first (see ItemClosed in wgcbroker_ipc.h); the repair waits for it to speak.
+    return (++c.srcChangeStreak) >= WGCBRK_RELAY_CHANGE_STREAK;
 }
 
 // ABI 12: a signature of the frame we just published, sampled EXACTLY as the guest samples its own
@@ -796,6 +769,16 @@ static void OpenChannel(int i) {
         try { session.IsBorderRequired(false); } catch (...) {}   // borderDisableOk proven on 26100
         c.hwnd = monitor ? (HWND)(ULONG_PTR)WGCBRK_MONITOR_HWND : hwnd;
         c.item = item; c.pool = pool; c.session = session; c.slot = i;
+        // OBSERVATION ONLY. WGC can CLOSE a capture item, after which FrameArrived never fires again for
+        // that session - and until now nothing here subscribed, so that state looked exactly like a
+        // window whose content had stopped changing. Measured 2026-09-27: a deaf relay channel whose
+        // destination a FRESH session (another process) captured fine, every second, with the source's
+        // own content. This records whether Closed is what happened, and changes nothing: Jev put
+        // observe-first at 0.96 and any repair in the same build at 0.00.
+        c.closedRev = item.Closed(auto_revoke, [i](auto const&, auto const&) {
+            InterlockedIncrement(&g_slots[i].ItemClosed);
+            g_slots[i].ItemClosedTick = (LONGLONG)GetTickCount64();
+        });
         c.poolW = size.Width; c.poolH = size.Height;   // FrameArrived tracks content-size changes
         c.rev = pool.FrameArrived(auto_revoke,
             [i](Direct3D11CaptureFramePool const& sender, auto const&) {
