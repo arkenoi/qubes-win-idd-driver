@@ -516,6 +516,9 @@ LAUNCH_TRIES=${LAUNCH_TRIES:-2}
 # Pure text predicate so it can be driven offline, both ways, without a guest:
 # tools/tests/launch-determination-selftest.sh. Marker on $1, log body on stdin.
 log_has_progress_after(){ sed -n "/$1/,\$p" | grep -qaE '^[0-9]{4}-[0-9]{2}-[0-9]{2}|^=== RESULT ==='; }
+# The lines after the LAST occurrence of this run's marker in a file (nothing if it never occurs).
+# Byte-wise (LC_ALL=C): the German guest's log is not UTF-8.
+after_last_mark(){ LC_ALL=C awk -v m="$E2E_MARK" 'index($0, m) { buf = ""; seen = 1; next } seen { buf = buf $0 "\n" } END { printf "%s", buf }' "$1"; }
 
 # 0 = the installer is running; 1 = it is not; 2 = cannot tell (guest not answering)
 installer_started(){
@@ -631,7 +634,16 @@ while :; do
         | grep -aE '^[0-9]{4}-[0-9]{2}-[0-9]{2}|^=== RESULT ===|^E2EMARK-' >> "$OUT/install.tail" || true
       awk '!seen[$0]++' "$OUT/install.tail" > "$OUT/install.log.tmp" && mv -f "$OUT/install.log.tmp" "$OUT/install.log"
       log "  t+${el}s $n log lines | $(tail -1 "$OUT/install.log" 2>/dev/null | cut -c1-110)"
-      if sed -n "/$E2E_MARK/,\$p" "$OUT/install.log" | grep -qa '^=== RESULT === {'; then phase=RESULT; break; fi
+      # AFTER THE LAST MARKER, NOT THE FIRST (2026-09-27). install.tail is seeded with $E2E_MARK as a
+      # local header, and each poll appends the guest log's last 15 lines - which on the first poll still
+      # hold the golden's OWN earlier lines, ending in its old RESULT, and then the guest's copy of the
+      # marker. Sliced from the FIRST marker (the header), that old RESULT counted as this run's: on
+      # win11de-v7 the harness declared the install done at t+20s on a trailer dated 2026-09-16 and
+      # rebooted the guest mid-install. The old launch hid it (its call hung ~55 s, so the first window
+      # was already all new lines); the Start-Process launch returns in 3 s. The guest's marker is the
+      # LAST occurrence, and any window holding old lines holds it too. Checked on v5/v6/v7 evidence:
+      # 1/1/0 RESULTs found (the v7 one was the stale trailer).
+      if after_last_mark "$OUT/install.log" | grep -qa '^=== RESULT === {'; then phase=RESULT; break; fi
     elif [ $(( $(date +%s) - lastchange )) -ge "$STALL_SECS" ]; then
       # A QUIET LOG IS NOT A DEAD GUEST. Gating is sound on THIS branch and only here: it runs
       # under w_alive, so the guest ANSWERS qrexec and "executing" genuinely means working - a
