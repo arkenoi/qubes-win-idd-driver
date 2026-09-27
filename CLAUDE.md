@@ -1,70 +1,45 @@
-# CLAUDE.md — Qubes Windows display performance: agent fixes (Track A) + IddCx driver (Track B)
+# CLAUDE.md — Qubes Windows Tools: agent (Track A), IddCx driver (Track B), updates (Track C)
 
-You are Claude Code running in a **dev qube on Qubes OS 4.3**, orchestrating driver/agent
-development against a dedicated Windows test qube. You have a clean context; this file plus
-`FINDINGS.md` (create it, append to it religiously) are your persistent memory.
+Binding rules for every session. The incidents behind them are in `findings/rules.md`; measured state is in
+the `findings/*.md` CURRENT STATE heads; procedures are in `.claude/skills/`. Keep this file to rules.
 
 ## Mission
 
-Radically improve Windows-guest 2D desktop responsiveness (window drag, scroll, typing
-latency) in the QWT seamless model, with zero security-model changes. Two tracks, run
-interleaved:
-
-- **Track A** — instrument and fix `agent/` (fork of QubesOS/qubes-gui-agent-windows):
-  replace per-frame `EnumWindows` polling with `SetWinEventHook`, decide move-rects and
-  damage batching **from measurements**, upstream via PR.
-- **Track B** — evolve `driver/` (vendored Microsoft IddSampleDriver) into a Qubes IddCx
-  indirect display driver replacing the Basic Display Adapter as the guest monitor.
-
-## Established facts (verified against source 2026-07-30 — do not re-derive, do re-verify if stale)
-
-1. Transport is already zero-copy: agent grants the whole desktop framebuffer read-only
-   ONCE (`XcGnttabPermitForeignAccess2`, `MSG_WINDOW_DUMP` win 0); per frame only
-   `MSG_SHMIMAGE` dirty-rect metadata crosses the vchan. Do NOT build transport replacements.
-2. `capture.c:176-183` **hard-fails** if `DesktopImageInSystemMemory` is FALSE. Anything
-   that takes the desktop off the Basic Display Adapter kills QWT capture (incl. fullscreen).
-   This is the pivotal constraint for Track B: test early whether an IDD-backed desktop
-   keeps that flag TRUE (then the existing capture path just works) or not (then the IDD
-   must feed its own grant path — bigger project, flag to the user before starting it).
-3. Causality of drag lag is UNVERIFIED: `EnumWindows`-per-frame and the missing
-   move-rects are real code TODOs (`main.c` ~"use window hooks", `capture.c:441`), but the
-   in-code note says move-rects "seem to always be empty when testing". **Instrument before
-   implementing.** omeg's old #1045 blamed input simulation, not enumeration.
-4. Upstream (omeg + marmarek, ITL) pre-invited this work: README TODOs + qubes-issues #1861
-   ("seamless mode optimization — moving windows looks laggy"). Small, measured, reviewable
-   PRs; single-maintainer latency expected.
-5. Test qube runs 4 vCPUs, which per #10932/#10427 may itself glitch seamless rendering.
-   If artifacts confound measurements, `qvm-prefs` it to 2 (ask the user — that's dom0).
+Radically improve Windows-guest desktop responsiveness and fidelity in the QWT seamless model, with ZERO
+security-model changes.
+- **Track A** — `agent/` (fork of QubesOS/qubes-gui-agent-windows): window tracking, capture, the per-window
+  de-slice broker (`tools/wgcbroker/`).
+- **Track B** — `driver/`: the QubesIDD IddCx indirect display driver (arbitrary modes, behind `/idd`).
+- **Track C** — the dom0-owned Windows update path, a first-class deliverable IN THIS REPO:
+  `guest/qubes-windows-update.ps1`, `guest/wu-update.ps1`, `guest/qubes-updates-relay.cs`,
+  `guest/install-updater-agent.ps1` and the scan/availability tasks; record in `findings/updates.md`. Guest
+  auto-update is OFF (NoAutoUpdate=1); dom0 drives every install; the relay serves sanctioned hosts or refuses
+  with a FINAL 403, never a transient answer, never a timeout as a fix.
 
 ## Environment
 
 | Thing | Value |
 |---|---|
-| Test VM | `win-idd-test` — standalone Win10 HVM, offline, QWT 4.2.2, testsigning on |
-| Drive it | `tools/qtest` — `run`/`ps`/`push`/`pushrun`/`start`/`shutdown`/`kill`/`state`/`shot` |
-| Builds | GitHub Actions (`.github/workflows/build.yml`); `gh run watch`, `gh run download -n idd-driver-package -D artifacts/` |
-| Screenshot | `tools/qtest shot out.tar` → tar of PNGs of the VM's windows (dom0 service, this VM only) |
-| Signing | CI test-signs with a throwaway cert (secrets already set); guest trusts it via `guest/firstboot-setup.ps1` |
-| Agent fork | `agent/` submodule; `upstream` remote = QubesOS. Commit there, bump submodule here |
-| Judge it | `tools/jev.py` — TypeSafe/Jev. **Delegate every SEMANTIC judgment to it** (which failure class, final vs transient, which candidate cause, is this draft load-bearing); exact matching, counting and timestamp joins stay in code. See `.claude/skills/jev/SKILL.md`. Low confidence is a FINDING; the wire log is the receipt |
+| Test guests | every qube TAGGED `win-idd-testbed`; goldens `win{10,11}-qwt` and `win11de-qwt` (German 25H2), bases `win{10,11}-base`, `win11de-base` - see the rig-cycle skill |
+| Drive a guest | `tools/qtest` (`QTEST_VM=<vm>`): `run`/`ps`/`push`/`pushrun`/`start`/`shutdown`/`kill`/`state`/`shot`; console `tools/qcon` (ONE attach per session) |
+| Builds | GitHub Actions (`.github/workflows/`); `gh run watch`; the driver package is `build`'s `idd-driver-package`, the installable ISO is `release-package`'s `qwt-improved-iso` |
+| Screenshots | `qtest shot out.tar` -> per-window PNGs of that qube's windows (dom0 service, tagged qubes only); when a whole-desktop capture is justified is in the experimenter skill |
+| Signing | CI test-signs with a throwaway cert (secrets already set); guests trust it via `guest/firstboot-setup.ps1` |
+| Agent fork | `agent/` submodule, `origin` = the owner's fork, `upstream` = QubesOS: commit there, bump the submodule here |
+| Judge | `tools/jev.py` - every SEMANTIC judgment (which class, final vs transient, which cause, is a draft load-bearing); exact matching, counting and timestamp joins stay in code. `.claude/skills/jev/SKILL.md`. Low confidence is a finding; the wire log is the receipt |
 
-**Hard rules:**
-- **You control every qube TAGGED `win-idd-testbed`, and you may CREATE more.** (Corrected
-  2026-08-29: this rule used to read "You control ONLY `win-idd-test`… anything needing dom0 → ask
-  the user", which was obsolete and actively harmful — it had me handing the owner work the Admin
-  API already grants, and inventing a "policied name roster" that does not exist.) dom0 policy is
-  **tag-based** (`@tag:win-idd-testbed`, see `dom0/12-install-policy-tagged.sh` - the ONLY policy
-  installer; the per-NAME `03-install-policy.sh` was deleted 2026-09-24 because this line pointed at
-  it while describing tag-based rules), so: create a qube, tag it
-  immediately, and it is drivable. Verified 2026-08-29 with a brand-new name.
-  Pre-authorised without asking: qube create/remove, `qvm-prefs` read+write (incl. `netvm`),
-  `qvm-tags`, `qvm-firewall`, `qvm-volume` info/clone, power state, `qtest` run/push/shot.
-  **Still genuinely off-limits:** a dom0 SHELL, `sudo` in this qube, editing
-  qrexec policy, and qubes that are NOT tagged.
-  **`losetup` attach WAS the example here and it was WRONG — corrected 2026-09-21 after it misled a
-  second agent into inventing the same limitation the skill already retired, and again on 2026-09-21
-  when the owner ordered every block-binding instruction to carry its capabilities explicitly.**
+## The rig (binding)
 
+- **You control every qube TAGGED `win-idd-testbed` and may CREATE more**: create, tag immediately, and it is
+  drivable (policy is tag-based: `dom0/12-install-policy-tagged.sh`). Pre-authorised without asking: qube
+  create/remove, `qvm-prefs` read+write (incl. `netvm`), `qvm-tags`, `qvm-firewall`, `qvm-volume` info/clone,
+  power state, `qtest` run/push/shot. **Off-limits:** a dom0 shell, `sudo` in this qube, editing qrexec policy,
+  qubes that are NOT tagged.
+- **Never write a limitation** into code, a comment, a finding, a commit message or a reply until you have
+  (a) grepped this repo for something already doing it and (b) run the cheapest probe that would disprove it.
+  Before declaring anything impossible, read `.claude/skills/rig-capabilities/SKILL.md` - its list is the record
+  of this exact mistake. `fw-net` cannot be started from here: that is a policy refusal, not absence; it exists
+  and serves traffic.
   **BLOCK-DEVICE BINDING — THE CAPABILITIES, EXPLICITLY.** Every row is ROOT-FREE and already in
   daily use in this repo. Do not infer any of them from a `sudo` rule, and never report one as
   missing without running it first:
@@ -100,448 +75,139 @@ interleaved:
     reinstall cell. What IS broken is the **live** `devtype=cdrom` attach/detach against a RUNNING guest -
     an uncaught `libvirtError` in qubesd ("device type 'cdrom' cannot hot unplugged") that returns an empty
     response; `lint-harness.py` rule L12 already refuses a live cdrom attach. The disc goes in AT START.
+- **Before launching ANY job that installs, boots or reboots a guest, read `.claude/skills/rig-cycle/SKILL.md`.**
+  A short test cycle is `mgmt/harness/quick-upgrade.sh` over a golden; a clean install from base is for FULL
+  acceptance, or when the clean-install path is itself under test. A broken upgrade harness is a thing to FIX,
+  not a licence to clean-install.
+- **Run VM-mutating jobs serially** (`mgmt/harness/vmlock.sh`): concurrent jobs reboot the guest underneath each
+  other and destroy each other's results.
+- The test guest is disposable and assumed hostile: nothing from it is executed here, its output is parsed as
+  data. If it wedges: `qtest kill`, then `qtest start`.
 
-  **THEREFORE, BINDING: never write a limitation into code, a comment, a finding, a commit message
-  or a reply until you have (a) grepped this repo for something already doing it, and (b) run the
-  cheapest probe that would disprove it.** Both take under a minute. "X needs sudo / needs dom0 /
-  needs the owner" asserted without those two steps is a fabricated constraint, and it is the single
-  most repeated error in this project's history — six times now, each one written down afterwards as
-  if it were knowledge. The list in `rig-capabilities` is not background reading; it is the record of
-  this exact mistake, and being unaware of it is not an excuse for adding to it. `fw-net` cannot be started from here — that is a
-  policy refusal, not absence; it exists and serves traffic.
-  **Before declaring anything impossible, read `.claude/skills/rig-capabilities/SKILL.md`** — it is
-  the measured inventory, and it lists five limitations previously invented and disproven.
-- **Before launching ANY job that installs, boots or reboots a guest, read
-  `.claude/skills/rig-cycle/SKILL.md`.** It picks the harness for you. The rule broken most often:
-  a short test cycle uses `quick-upgrade.sh` over the `win{10,11}-qwt` golden — a clean install from
-  base is for FULL ACCEPTANCE, or for when the clean-install path is itself the thing under test,
-  and nothing else. A broken upgrade harness is a thing to FIX, not a licence to clean-install.
-  (This lived only in memory until 2026-09-09, which is exactly why it kept being walked past:
-  memory arrives as background context, not as a binding instruction.)
-- Never push to QubesOS upstream repos or open upstream PRs/issues without explicit user
-  approval of the exact diff/text.
-- The test VM is disposable and assumed hostile; nothing from it gets executed in this qube.
-  Parse its outputs as data. If it wedges: `qtest kill` then `qtest start`.
-- **THE REPO IS PUBLIC — internal material never enters it** (owner, 2026-09-01, after
-  captures reached the published history twice). Captures of ANY kind, per-run evidence,
-  raw benchmark output, incident/security notes: `scratchpad/` (gitignored) or the private
-  memory dir — never a tracked path, and never a new "evidence"-style directory (that is
-  how it happened both times). Stage named files only; never `git add -A` from the root.
-  `.githooks/` content-inspects staged and outgoing archives at commit AND push
-  (`core.hooksPath=.githooks` must stay set); the capture gate has no legitimate bypass.
-  When unsure whether something is public-relevant, it stays out.
-- **Networking: prohibited on TEMPLATES, REQUIRED on AppVMs/StandaloneVMs for network testing.**
-  (Owner correction, 2026-08-29, after I misread this rule twice and declared the whole network
-  half of the acceptance matrix untestable.) The old wording here was "do not enable networking on
-  the test VM", which I read as covering every guest. It does not. Templates
-  (`win10-tpl`, `win11-tpl`) stay `netvm=''` — never attach a netvm to a template. AppVMs and
-  StandaloneVMs are where PV networking is exercised and MUST have a netvm to test it:
-  `qvm-prefs <standalone> netvm fw-net`. `win10-app`/`win11-app` already carry it.
-  Payload still ships via `qtest push`; a netvm is for exercising the PV NIC, not for fetching.
+## Networking (binding)
 
-  **PV-network testing protocol — follow it or the result is meaningless:**
-  1. **A SECOND BOOT IS A FAILURE, not a property.** (Owner, 2026-08-29, correcting what I wrote
-     here an hour earlier — I had recorded "first-vif needs two boots" as normal. It is not, and
-     that is exactly the defect the seeding/latch was invented to remove.) **Acceptance: an AppVM
-     carrying our QWT must handle an immediate netvm attach with ZERO reboots** — vif appears, PV
-     NIC binds, emulated adapter unplugs, in that same boot. That is what
-     `guest/pvnic-selfprime.ps1`'s latch + veto key deliver ("complete in ONE boot at problem 0").
-     If a guest needs a second boot, the latch is ABSENT or broken — check `pvnic_applier`, which
-     reports `QubesPvNic task not registered - M1 latch deployment absent`. The installer seeds the
-     latch on TEMPLATES (AppVMs inherit it); a bare StandaloneVM has no latch, so a StandaloneVM
-     needing two boots means the latch was never there — it does NOT license two boots as normal,
-     and it is not the configuration to accept against.
-  2. **Do not grade immediately after qrexec comes up.** Allow ~90 s. Measured: the same guest read
-     `dns_resolves=False, rx=153,487` instantly and `dns_resolves=True, rx=9,463,443` 90 s later.
-  3. **Never assert traffic by pinging the gateway.** A Qubes netvm is a routing endpoint and does
-     not answer ICMP. Assert with an actual **FILE TRANSFER** (owner, 2026-08-29: "not ping the gw
-     (not working), but file transfer (also checks if stack is sane)") — a few MB fetched over the
-     PV NIC, cross-checked against that adapter's own `rx_bytes` delta so the bytes are proven to
-     have crossed IT and not something else. DNS resolution / a TCP connect are acceptable as a
-     cheap smoke test; a transfer is what proves the stack.
-  4. **A guest that has already seen a vif cannot test first-vif behaviour.** Once `XENVIF\...DEV_NET`
-     exists and the PV NIC is bound, the PV-network-class install has already happened and a reboot
-     will not re-arm it. To test the reboot prompt you need a guest that has NEVER had a vif, with
-     the watcher armed BEFORE the vif appears.
-  5. **The premature reboot dialog is a NETWORK-path event.** It is raised by "Xen PV Network Class"
-     and therefore cannot appear on a `netvm=''` guest. Any "no reboot dialog" result measured
-     without a vif proves nothing about it.
-- **A field report is reproduced on the REPORTER'S environment - enforced by code, not by this sentence**
-  (owner 2026-09-16, after a day and half the week's Fable budget went to a 24H2/English stand-in for a
-  25H2/German report, and the run was still called "reproduced"): the reporter's measured environment is
-  data in `mgmt/reporters/<name>.json`; `mgmt/harness/env-assert.sh <vm> <name>` measures a guest against
-  it and exits non-zero on any mismatch or unmeasured fact; the PreToolUse hook
-  `tools/hooks/reporter-env-gate.sh` (`.claude/settings.json`) refuses any Workflow/Agent launch that names a
-  registered reporter and touches the rig without that call. "Diagnostically similar" is not an environment;
-  if the environment does not exist on the rig, building it is the first task.
-- Commit early and often; every session appends dated findings to `FINDINGS.md`.
+- Templates (`win10-tpl`, `win11-tpl`) stay `netvm=''`. AppVMs/StandaloneVMs that exercise PV networking MUST
+  have a netvm (`qvm-prefs <vm> netvm fw-net`). Payload still ships via `qtest push`; the netvm exercises the PV NIC.
+- **PV-network testing protocol:**
+  1. **A second boot is a FAILURE.** An AppVM with our QWT must take an immediate netvm attach with ZERO
+     reboots (vif appears, PV NIC binds, emulated adapter unplugs, same boot) - that is what
+     `guest/pvnic-selfprime.ps1`'s latch + veto key deliver. Needing a second boot means the latch is absent or
+     broken (`pvnic_applier` reports it); a bare StandaloneVM has no latch and is not the configuration to accept against.
+  2. Grade no sooner than ~90 s after qrexec comes up.
+  3. Assert traffic with a FILE TRANSFER (a few MB over the PV NIC, cross-checked against that adapter's
+     `rx_bytes` delta), never by pinging the gateway (a Qubes netvm does not answer ICMP). DNS or a TCP connect
+     is only a smoke test.
+  4. A guest that has already seen a vif cannot test first-vif behaviour; that needs a guest that never had
+     one, with the watcher armed before the vif appears.
+  5. The premature reboot dialog is a network-path event ("Xen PV Network Class"): a `netvm=''` result proves
+     nothing about it.
 
-## Phase 0 — environment convergence (acceptance-gated; do all before any driver work)
+## Field reports (binding)
 
-1. `qtest state` / `start` / `shutdown` round-trip works; record raw response formats.
-2. `qtest run "echo ok"` and a `qtest ps` one-liner return output. Record actual
-   `QubesIncoming` path → fix `QTEST_INCOMING` (env or edit `tools/qtest`), verify `pushrun`.
-3. `qtest shot`: returns PNGs with the VM visible. (VM must have a window open.)
-4. CI convergence: push a trivial commit; make the `idd-driver` job green. Expected friction:
-   choco WDK package name/version, WDK.vsix location, sample solution path under `driver/`.
-   Iterate via `gh run view --log-failed`. Record the working recipe in FINDINGS.md.
-5. Deploy round-trip with the UNMODIFIED sample: download artifact, `qtest push` package
-   files, run `guest/deploy-and-test.ps1` via `pushrun`, parse the `=== RESULT ===` JSON.
-6. Add `tools/ddaprobe` to the repo (small C++/D3D11 console tool, built by CI into the
-   package): for each DXGI output print adapter/output name, `DesktopImageInSystemMemory`,
-   and 100-frame `AcquireNextFrame` latency stats. This tool answers Track B's key question.
+A field report is reproduced on the REPORTER'S environment, enforced by code: the environment is data in
+`mgmt/reporters/<name>.json`; `mgmt/harness/env-assert.sh <vm> <name>` must pass before the rig is used for it;
+the PreToolUse hook `tools/hooks/reporter-env-gate.sh` refuses a launch that names a registered reporter
+without it. If that environment does not exist on the rig, building it is the first task.
 
-## Phase 1A — agent instrumentation (Track A, do first: cheapest data, biggest de-risk)
+## The public repo and upstream (binding)
 
-1. Converge the `gui-agent` CI job (repo var `AGENT_BUILD=true`): build the fork's user-mode
-   agent per `agent/README.md`. If EWDK-in-CI is unavoidable, cache it; if the build system
-   fights you for >1 session, report options to the user instead of burning tokens.
-2. Patch: timing instrumentation in `ProcessNewFrame`/`GetFrame` splitting (a) window
-   enumeration/tracking, (b) dirty-rect extraction, (c) message send; plus log whether
-   `GetFrameMoveRects` is EVER non-empty during a window drag. Log to a rotating file.
-3. Deploy: discover QWT agent service name (`firstboot-setup.ps1` printed it), stop service,
-   swap binary (keep `.orig` backup), start, verify seamless still works (`qtest shot`).
-4. Measure: scripted drag via PowerShell `SendInput` (drag a Notepad window in circles for
-   10 s), scripted scroll, idle typing cadence. Pull the log, compute per-phase costs.
-5. **Decision point** (write to FINDINGS.md, tell the user): does tracking/enumeration
-   dominate, or repaint/dirty-rect volume? This picks Phase 2A scope and re-ranks Track B's
-   expected gain, per the research report.
+- **The repo is PUBLIC.** Captures of any kind, per-run evidence, raw benchmark output and incident/security
+  notes go to `scratchpad/` (gitignored) or the private memory dir - never a tracked path, never a new
+  "evidence"-style directory. Stage named files only; never `git add -A`. `.githooks/` inspects commits and
+  pushes (`core.hooksPath=.githooks` stays set); no bypass, no `--no-verify`. When unsure, it stays out.
+- **Submit NOTHING upstream** until the work is finished and a complete new QWT exists: no PRs, no issues for our
+  own agent work, no "small reviewable PRs" proposed, never a push to QubesOS repositories. The one exception: defects in components that are NOT
+  ours (`qubes-gui-daemon`, vchan/libvchan, `qubes-core-admin` tooling) are reported when found - only with the
+  owner's approval of the exact text. Currently qualifying (see `DESIGN-gui-daemon-restart-survival.md` §3):
+  gui-daemon's `handle_vchan_error` never consults `vchan_at_eof`; a use-after-free if `execv` fails in
+  `restart_guid`. Everything in `agent/` stays in the fork.
+- Anything touching the GUI protocol, gui-daemon or the grant lifecycle: design writeup first, owner review,
+  upstream design issue (referencing #1861) before code. Never start it unilaterally.
 
-## Phase 1B — stock IDD scoping (Track B)
+## Product decisions (binding)
 
-Strategy: coexistence first, in three stages — (1) IDD installed but IGNORED by QWT (agent
-keeps duplicating the Basic Display Adapter output), (2) agent duplicates the IDD output
-instead, (3) IDD feeds frames directly and DDA drops out. Only stage 1 is Phase 1B.
+**Fullscreen: two independent modes - never conflate them.**
+- **Mode 1, the boot/shutdown/logon screen: UNCONDITIONALLY OFF**, not governed by any feature. Enforced in
+  `ShouldAcceptWindow` by class (the per-window LogonUI window) AND by PHASE: a fullscreen-sized window is denied
+  while no shell window exists (boot, logon, shutdown), while the input desktop is secure, and for
+  `FS_BOOT_SETTLE_MS` after it stops being secure; override-redirect + fullscreen is rejected unconditionally.
+- **Mode 2, a borderless true-fullscreen app window** (>= ~99% of the guest screen, no `WS_CAPTION`): mapped only
+  when opted in via `qvm-features <vm> service.gui-fullscreen 1` (qubesdb `/qubes-service/gui-fullscreen` wins over
+  the registry `ShowFullscreenScreen`), read once at agent Init. A maximized window WITH a title bar is always
+  allowed. The feature governs ONLY Mode 2.
+- **Secure desktop** - mode-dependent; the safety criterion is geometry, not desktop identity: SEAMLESS - never
+  mapped, since each secure surface would become its own standalone dom0 window indistinguishable from dom0's own
+  UI (the frame path freezes while the input desktop is not Default, enforced in `ProcessNewFrame`; `QGADESKSTUCK`
+  logs a persistent freeze). NON-SEAMLESS - shown, secure or not:
+  window 0 is shrunk on entry (1280x800) and refused at host size unless `g_ResolutionFromDom0`, so a guest can
+  never promote itself to fullscreen; `qubes.SetGuiMode` is honoured on any guest - the desktop surface is plugged
+  in on entry (grant made, window 0 mapped) and unplugged on exit, so a seamless guest never holds a
+  whole-desktop grant.
+- **Autologon is enforced** (`guest/set-autologon.ps1`: credentials validated with `LogonUser` before writing,
+  password as the LSA secret `DefaultPassword`, re-asserted by a boot-time SYSTEM task) - it is how lockouts are
+  handled. UAC runs with `PromptOnSecureDesktop=0`.
+- **Controls: ONE feature.** `service.gui-fullscreen` is the single control for guest-originated fullscreen and the
+  top-level README's feature table is its specification. Do not invent knobs, modes or behaviours around it; when
+  behaviour and README disagree, the README wins and the code changes.
 
-CRITICAL for stage 1: the IDD monitor must be connected but **INACTIVE** (do not extend the
-desktop — `SetDisplayConfig`). An active second monitor enlarges the desktop bounding box
-the agent maps as the screen, so Windows can place windows in a region dom0 never sees and
-seamless coordinates break. "Ignored" must mean inactive, not merely uncaptured.
+**Capabilities are decided at START.** System/build capabilities (`g_OsBuild`, `g_WgcBroker`, `g_SliceRetire`,
+`g_DeSlice`, `PwEnabled()`) are latched once at Init and never re-read at runtime. A component that was working
+and stops is a FAILURE of an eligible system - reported loudly, never quietly recovered from, never treated as
+a capability change (`BrokerState()`: NOT_ELIGIBLE is start-time only; STARTING/READY/DOWN are runtime).
 
-Deploy the unmodified IddSampleDriver alongside QWT and answer, in FINDINGS.md:
-1. Does it coexist with the Basic Display Adapter? (Which becomes primary? Can you keep the
-   IDD inactive, and force primary via `SetDisplayConfig`/registry?) Confirm seamless is
-   unchanged with the IDD present-but-inactive: same `qtest shot` output as baseline.
-2. With the IDD monitor primary, does Desktop Duplication still work, and — decisive — is
-   `DesktopImageInSystemMemory` still TRUE (ddaprobe)? Does the QWT agent keep streaming
-   (does `qtest shot` still show a live desktop)?
-3. What are the sample's mode list, cursor behavior, and dirty-rect quality (instrument its
-   `SwapChainProcessor` with the same logging style as 1A)?
-Outcome A (flag stays TRUE): the IDD can slide under the existing capture path — proceed to
-Phase 2B as incremental work. Outcome B (FALSE/broken): IDD needs its own grant path (staging
-copy in the swapchain loop + xeniface gnttab IOCTLs) — STOP and present the plan to the user.
+**Window filtering.** Chrome fragments that are not windows (Office shadow strips: layered + transparent +
+no-activate owned windows, alpha 0 via `GetLayeredWindowAttributes`, DWM-cloaked) are dropped; popups, tooltips
+and toasts are sent as override-redirect, like the Linux agent does for menus, and toasts must STAY mapped. The
+same predicate owns the Win11 25H2 "double windows" class - `tools/winenum` dumps every top-level HWND's
+attributes to find the discriminator. Any change to the predicate is tested against BOTH `tools/chromerepro`
+(main window + layered shadow strips + a popup) and a live toast (`Windows.UI.Notifications`). Never weaken
+daemon-side bordering - the fix is to stop presenting chrome fragments as windows. Real-Office validation happens
+in the owner's Office qube: ask first.
 
-## Phase 2A — agent fixes (guided strictly by 1A data)
+**Displays (IDD).** Never let a monitor dom0 does not see extend the desktop: an active second monitor enlarges
+the desktop bounding box the agent maps as the screen, Windows places windows where dom0 never looks, and seamless
+coordinates break. A monitor that must be "ignored" is INACTIVE (`SetDisplayConfig`), not merely uncaptured. If
+the IDD ever has to feed frames through its own grant path (a staging copy in the swapchain loop + xeniface gnttab
+IOCTLs) rather than the existing capture, STOP and present that plan to the owner before starting it.
 
-`SetWinEventHook` (`EVENT_OBJECT_LOCATIONCHANGE/CREATE/DESTROY/...`) window tracking sending
-`MSG_CONFIGURE` at input rate; damage coalescing; kill full-screen-damage fallback; move-rects
-only if 1A showed them non-empty. Each fix = separate branch + before/after numbers from the
-same scripted-drag harness. Present diffs to the user for upstream submission.
+## Retired and parked lines (binding)
 
-**2A-chrome — compound-window (Office) border fix.** Post-2013 Office creates shadow-strip
-HWNDs (`WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_TOOLWINDOW`, click-through, owned) around the
-main frame; the agent maps each, guid borders each → visually broken. Fix in the agent's
-window-acceptance predicate (build it into the SetWinEventHook rework):
-1. Skip unmappable chrome: layered+transparent+noactivate owned windows, alpha==0
-   (`GetLayeredWindowAttributes`), and DWM-cloaked (`DwmGetWindowAttribute(DWMWA_CLOAKED)`).
-2. Verify popups/tooltips (`WS_POPUP`, toolwindows) are sent with `override_redirect` like
-   the Linux agent does for menus; fix classification if not.
-3. Test WITHOUT Office: add `tools/chromerepro` to the repo — a small Win32 app creating a
-   main window + 4 layered transparent "shadow" HWNDs + a popup. Verify via `qtest shot`:
-   before = 5 bordered windows, after = 1 bordered window (+1px-bordered popup when open).
-3b. Same bug class: the Win11 25H2 "double windows" artifact (QWT docs) is almost certainly
-   a companion HWND the filter should drop. Build `tools/winenum` (dump every top-level
-   HWND: class, styles, exstyles, DWMWA_CLOAKED, owner, rect, layered alpha) — run it on
-   Win10 now as the 2A-chrome baseline; when a Win11 25H2 target exists later, one winenum
-   run while duplicates are visible identifies the distinguishing attribute → extend the
-   same predicate. (Per-window WGC capture, Phase 2/#6, kills this class structurally.)
-3c. **Toast notifications are a REQUIRED test case, not a separate feature.** Windows
-   Action Center toasts are rendered by shell processes (`ShellExperienceHost` et al.) using
-   topmost + layered + frequently DWM-CLOAKED windows — the very attributes step 1 uses to
-   DROP Office shadows. Same predicate, opposite desired outcome:
-     Office shadow strips -> must be DROPPED
-     Toast popups         -> must be KEPT, mapped override_redirect
-   A naive cloak/layered filter will silently kill all Windows notifications. Acceptance for
-   2A-chrome therefore includes: trigger a toast (PowerShell + `Windows.UI.Notifications`,
-   no extra software needed), `qtest shot`, confirm it still appears after the filter lands.
-   Run `winenum` while a toast is visible to get its real attributes first — if cloak state
-   alone cannot separate the two, the discriminator is likely ownership + zero alpha.
-4. NEVER weaken daemon-side bordering — the fix is to stop presenting chrome fragments as
-   windows, not to let the guest opt out of borders. Real-Office validation happens later in
-   the user's Office qube (ask first).
+Before naming ANY component as a cause or a gap, run `git log --oneline -S<name> -- .` and read the newest
+commits first. A line the owner has retired stays closed until the owner reopens it in writing.
+- **The xenbus bucket-lock line - RETIRED** (reverted entirely f7c16ce). Stock xenbus 9.1.0.0 in a guest is the
+  INTENDED state. Do not name xenbus in a finding.
+- **set-gui-mode's "stale GetLastError" and "exit status 46" - both CLOSED** (43019f5: measured, the success path
+  returns 0; 46 is `qrexec-wrapper` passing a Win32 error when child setup fails). Do not name set-gui-mode as a
+  cause; there is no "upstream agent" to report anything to.
+- **Win10 22H2 parked updates - informational BY DESIGN** (`findings/updates.md`): KB5071959 is never chased;
+  KB5068781's only gate is the owner's ESU licensing. A Win10 22H2 guest reporting 0 actionable updates with ESU
+  items as info is CORRECT.
 
-## Phase 2B-resize — dynamic resolution following the dom0 window (fullscreen mode)
+## Working rules (binding)
 
-Goal: resizing the qube's window in dom0 changes the GUEST resolution to match, instead of
-scaling/clipping a fixed-size desktop. Blocked today by the Basic Display Adapter's FIXED
-mode list — arbitrary sizes (e.g. 2566x1022) are simply not offered, so this is unreachable
-without the IDD. With IddCx, reporting arbitrary modes on demand is the driver's core
-capability, making this a natural deliverable of Phase 2B rather than separate work.
-
-Chain to build (verify each link in source before designing):
-1. dom0 -> guest: determine which channel actually carries a fullscreen-window resize —
-   `MSG_CONFIGURE` on the screen window, or the `qubes.SetMonitorLayout` RPC (the channel
-   the LINUX agent consumes to drive xrandr; the Windows counterpart is the missing piece).
-   Read qubes-gui-daemon + qubes-gui-agent-linux to see which fires, then mirror it.
-2. agent -> driver: pass requested geometry to the IDD (IOCTL or named pipe); driver adds
-   the mode and signals a monitor mode change.
-3. Windows switches resolution; DWM re-lays out.
-4. agent re-grants the framebuffer at the new size + fresh `MSG_WINDOW_DUMP`. Partially
-   exists already (the agent re-grants on resolution change).
-
-PREREQUISITE BUG, found in the gui-agent log during provisioning (see mgmt/PROVISION-LOG.md):
-on seamless-mode switch / resolution change, `AcquireNextFrame` fails with 0x887a0026
-"The keyed mutex was abandoned" and the capture thread dies. The resolution-change path is
-therefore already broken in the shipped build — diagnose and fix it (worth an upstream issue
-regardless) before or alongside this feature, since resize exercises exactly that path.
-
-## Phase 2B — QubesIDD driver (only after 1B verdict)
-
-Rebrand sample (`root\qubesidd`), dynamic mode list (start: read desired modes from a config
-file pushed via qrexec; later: xenstore/qubesdb), dirty-rect-limited processing in the
-swapchain loop, hardware cursor enablement, measured comparison vs Basic Display Adapter
-baseline using 1A's harness + ddaprobe.
-
-## Track C — Windows update management: IN THIS REPO, a first-class deliverable
-
-(Corrected 2026-09-17. This section said "NOT IN THIS REPO ... do not add Track C code or docs
-here" from 2026-07-30 until tonight, while the repo carried the entire updater for weeks and the
-owner had to ask "what the actual fuck does it say about track C". Stale binding text is how the
-xenbus and Win10 dead ends got re-derived; this one was worse because it was in the binding file.)
-
-Track C is the dom0-owned Windows update path for netvm-less guests and it lives HERE:
-`guest/qubes-windows-update.ps1` (the pass), `guest/wu-update.ps1` (the Qube Manager /
-`qubes-vm-update` handler), `guest/qubes-updates-relay.cs` (the allowlisted HTTP relay over
-qrexec), `guest/install-updater-agent.ps1`, the scan/availability tasks, autologon re-assertion,
-and dom0's updates-available reporting. Record: `findings/updates.md` (standing facts and
-retracted approaches), `findings/issues.md` (the open P1s on the reporter's update path), the
-memory notes `updater-agent-north-star` and `updates-dom0-owned-guest-au-off`. Guest auto-update
-is OFF (NoAutoUpdate=1); dom0 drives every install; the relay serves sanctioned hosts or refuses
-with a final 403, never a transient answer (owner rule, 2026-09-17, no timeouts). Win10 22H2 ESU
-items are informational by design - see RETIRED AND PARKED LINES below.
-
-## Phase 3 — integration/protocol work
-
-Anything touching the GUI protocol, gui-daemon, or grant lifecycle: design writeup first,
-user review, upstream design issue (referencing #1861) before code. Do not start unilaterally.
-
-## Architecture decision (owner, 2026-08-19) — TWO INDEPENDENT FULLSCREEN MODES
-
-These are SEPARATE and must never be conflated (conflating them was a real bug: enabling
-fullscreen apps wrongly brought the boot/shutdown screen back):
-
-**Mode 1 — the boot/shutdown/logon SCREEN: UNCONDITIONALLY OFF, always.** Not gated by any
-feature. Measured 2026-08-19: this is a per-window **LogonUI** window (class "LogonUI Logon
-Window"), fullscreen — Windows renders login, lock, "shutting down", and the initial desktop
-through it. Enforced in `ShouldAcceptWindow` (gui-agent main.c). (It is NOT the whole-screen
-window-0 path — that was an early wrong theory.)
-
-MATCHED BY **PHASE**, not only by class (2026-08-28, after class matching leaked and a
-fullscreen boot surface reached the owner's display with `service.gui-fullscreen` on): a
-fullscreen-sized window is denied outright while there is no shell window (boot, logon, and
-shutdown once explorer has gone), while the input desktop is secure, and for
-`FS_BOOT_SETTLE_MS` after it stops being secure — in addition to the LogonUI-class and
-override-redirect tests. In those phases nothing fullscreen-sized is an app the user asked for,
-whatever its class, and the feature does not apply.
-
-**Mode 2 — a BORDERLESS true-fullscreen window: CONDITIONALLY allowed.** Only a fullscreen-sized
-window with NO title bar (no `WS_CAPTION` — a game/video/presentation taking over the screen) is
-gated, mapped only when opted in via `qvm-features <vm> service.gui-fullscreen 1` (guest-local
-override: registry `ShowFullscreenScreen` DWORD under the gui-agent config key). A **windowed**
-fullscreen — a maximized normal app that has a title bar (`WS_CAPTION`) — is ALWAYS allowed,
-regardless of the feature (owner refinement 2026-08-19): it is just a large normal window.
-Enforced in `ShouldAcceptWindow` by SIZE (>= ~99% of the guest screen) + the caption test.
-Override-redirect + fullscreen is rejected **unconditionally** (never mapped, even feature on).
-
-The feature is read once at agent Init from qubesdb `/qubes-service/gui-fullscreen` (dom0 wins)
-over the registry base, and governs ONLY Mode 2. Do NOT let it affect Mode 1.
-
-**The "secure desktop" rule — REVISED by the owner 2026-08-28. Read this version, not the old one.**
-
-The rule is now MODE-DEPENDENT, and the safety criterion is geometry, not desktop identity:
-- **SEAMLESS: never granted.** Each secure surface would become its own standalone dom0 window —
-  a consent box or a full-screen dimming backdrop indistinguishable from dom0's own UI (that
-  backdrop WAS GWeck's black window). The frame path freezes while the input desktop is not
-  Default; enforced in `ProcessNewFrame`.
-- **NON-SEAMLESS: shown, secure or not.** The guest desktop is ONE bounded window there, so the
-  sign-in screen appears inside it like any other guest content. Owner, 2026-08-28: *"in
-  non-seamless mode we may show desktop irregardless if it is 'secure' or not, just the same
-  general rule: no fullscreen unless dom0-initiated, no override-redirects."* The guards that
-  matter are unchanged and live in `SetSeamlessMode`: window 0 is shrunk on entry (1280x800) and
-  refused at host size unless `g_ResolutionFromDom0`, so a guest can never promote itself to
-  fullscreen; entering the mode NO LONGER needs `service.gui-fullscreen` (owner, 2026-09-24: "we should honor
-  the switch" / "we just plug and unplug a new monitor if we grant the switch. at same moment we
-  map and unmap what we need"). dom0's `qubes.SetGuiMode` is honoured on any guest: the desktop
-  surface is PLUGGED like a monitor on the way in (grant made, window 0 mapped) and UNPLUGGED on
-  the way out, so a seamless guest still never holds a whole-desktop grant and P2 is kept. The
-  refusal it replaces was invisible — `set-gui-mode.exe` is fire-and-forget and never learns the
-  outcome — which is why it read as "the setting is ignored" in the field (forum 42717 post 160).
-  `service.gui-fullscreen` now governs ONLY Mode 2.
-- **WHY it changed**: hiding it unconditionally was believed to be lockout-safe because every
-  testbed here has autologon. It is not. Measured 2026-08-28: with autologon off, a guest maps
-  **0 windows** while qrexec still answers — running, reachable, and completely invisible, with
-  no password box anywhere. Two field reports (forum posts 98/101) were exactly this. Upstream
-  QWT has no such filter and defaults to the windowed desktop, so this was our regression.
-- **AUTOLOGON IS ENFORCED** (owner, 2026-08-28: "this is the way we deal with lockouts"). The
-  installer arms it: `guest/set-autologon.ps1` validates the credentials with `LogonUser` before
-  writing anything, stores the password as the LSA secret `DefaultPassword` (not consumed by
-  `AutoLogonCount`, not world-readable plaintext), and a boot-time SYSTEM task re-asserts it.
-  Managed / domain / Windows-Hello images cannot be armed this way — deferred, task #31.
-- **UAC**: already solved differently — `PromptOnSecureDesktop=0` moves the elevation prompt off
-  the secure desktop entirely, so it is an ordinary window in both modes.
-- The agent LOGS a persistent freeze (`QGADESKSTUCK`, after 30 s then every 120 s), which is the
-  "distinguish transient from persistent" item the old note asked for.
-
-## Capabilities are decided at START (owner, 2026-09-08)
-
-**System/build capabilities are evaluated ONCE at startup. They never "vanish" mid-run, and there is
-no such thing as a fallback for one disappearing.** Whether this guest can do per-window direct
-capture is a property of the build, the packaged helpers and the feature gates, settled at Init and
-never revisited. Conforming today (verified 2026-09-08): `g_OsBuild`, `g_WgcBroker`, `g_SliceRetire`,
-`g_DeSlice` are assigned once at Init; `PwEnabled()` returns `g_PwOn`, set in `PwInit` and cleared
-only in `PwShutdown`. No capability gate is re-read at runtime - and none may become so, because a
-transient re-read failure would silently downgrade an eligible guest, which is the forbidden silent
-fallback arriving through the back door.
-
-The corollary is the one that keeps being violated: **a component that was working and then stops is
-a FAILURE of an eligible system, never a capability change.** It must be reported loudly and must not
-be quietly recovered from. Conflating the two is what produced the 2026-09-08 broker P1 -
-`WgcBrokerActive()` mixed the latched capability with runtime availability, so "the broker died"
-looked the same as "this guest cannot do direct capture" at every call site, and the relaunch path
-then re-certified a dead broker as alive every 8 s (stale shared heartbeat), suppressing the very
-detection it exists to support. `BrokerState()` now separates them: NOT_ELIGIBLE (start-time, can
-never be entered mid-run) vs STARTING / READY / DOWN (runtime, bounded, always resolving).
-
-## Upstream policy (set by the user 2026-08-04) — SUPERSEDES the earlier guidance
-
-**Submit NOTHING upstream until this work is finished in full and there is a new, complete QWT
-with all the features.** Until then everything stays in the user's fork. Do not open PRs, do not
-open feature/fix issues for our own agent work, and do not propose "small reviewable PRs" for
-Track A changes — that earlier framing in this file is withdrawn.
-
-**The one exception: bugs OUTSIDE QWT scope get reported.** Defects we find in components that
-are not ours — `qubes-gui-daemon`, the vchan/libvchan layer, `qubes-core-admin` tooling — are
-reported upstream when found, because withholding them helps nobody and they are not part of the
-QWT deliverable. Still subject to the standing rule that the user approves the exact text first.
-
-Currently qualifying under the exception (see `DESIGN-gui-daemon-restart-survival.md` §3):
-- gui-daemon's `handle_vchan_error` never consults `vchan_at_eof`, so a disconnect noticed on the
-  WRITE path skips the restart the daemon otherwise implements;
-- a use-after-free if `execv` fails in `restart_guid` (the vchan handle is already freed and the
-  main loop keeps dereferencing it).
-NOT qualifying (ours, stays in the fork): everything in `agent/` — `aaa8c37`, `66fc670`,
-`d6ab61c`, `98eed30`, the wild-pointer fix, the mask sort, the framebuffer invalidation.
-
-## RETIRED AND PARKED LINES — binding, because memory notes failed at this three times
-
-A memory note is background context and was walked past every time. This list is an instruction.
-**Before naming ANY component as a cause or a gap, run `git log --oneline -S<name> -- .` and read the
-newest commits FIRST.** A line the owner has retired is closed until the owner reopens it in writing.
-
-- **xenbus (the bucket-lock patch).** Built and shipped f68bd22 (2026-09-11), A/B'd a056cd6,
-  PARKED 8376f69 (2026-09-13: the wedge recurred on the patched driver; the lead moved to a defect in
-  OUR install path that orphans the agent's grants across PV-driver re-enumeration), REVERTED
-  ENTIRELY f7c16ce (2026-09-14). Owner, verbatim: "we do not touch xenbus anymore, this change was
-  reverted." Stock xenbus 9.1.0.0 in a guest is the INTENDED state, not a packaging gap. Re-derived
-  by me on 2026-09-17 anyway, hours lost, owner: "xenbus my ass". Do not name xenbus in a finding.
-- **set-gui-mode's "stale GetLastError", and "exit status 46".** BOTH CLOSED. `SetEvent(event);
-  return GetLastError();` looks like it returns a stale error on success; it does not in practice.
-  Claimed 2026-08-28, blamed on upstream, KILLED BY MEASUREMENT the same day (`43019f5`): stock
-  binary, harness validated with a known-46 control first, success path returned 0 three times,
-  FULLSCREEN 0, garbage 87. The retraction's own words: "I asserted a runtime defect from source
-  reading alone, on a binary I could have run in two minutes", and blaming upstream for it "is
-  worse than the original mistake because it invites everyone else to stop looking". **I asserted
-  the identical thing again on 2026-09-24, from code reading, and again proposed an upstream
-  report** - the second time, and the `git log -S` rule above exists to prevent exactly it.
-  "Exit status 46" is likewise EXPLAINED, not open (owner, 2026-09-24: "we chased status 46 months
-  ago, it is not 46 and not unexplained"): `qrexec-wrapper` sends a WIN32 ERROR CODE as the exit
-  code when child setup fails, proven by renaming a service file away and seeing rc=2, rc=0 when
-  restored - so the service never ran. Do not name set-gui-mode as a cause, and **there is no
-  "upstream agent" to report anything to** (owner, 2026-09-24).
-- **Win10 22H2 parked updates (record: `findings/updates.md` lines 23-25, verified 2026-08-20).**
-  Win10 22H2 is end-of-life. Its "missing" updates are PARKED AS INFORMATIONAL BY DESIGN, not a
-  bug: KB5071959 is a WU-only express phantom out-of-band update with no security content,
-  terminally classified, never chased; the real 2025-11 security CU KB5068781 resolves from the
-  catalog and its ONLY gate is CBS ESU entitlement, which is the owner's MAK/licensing decision.
-  Get-ServicingNotice reports these as severity=info, excluded from the actionable count and from
-  dom0's updates-available marker. Also RETRACTED and dead there: express-URL harvesting, NLA/NCSI
-  flipping, the KM-TEST loopback adapter, "checkpoint-cumulative" as the Win10 catalog-gap cause.
-  I re-opened this parked line as if it were a defect and burned a budget on it (owner,
-  2026-09-17: "like you did with fucking win10 parked updates"). A Win10 22H2 guest reporting
-  0 actionable updates with ESU items as info is CORRECT. Do not chase it.
-
-## Escalate to the user when
-
-- A dom0/sudo/policy/vCPU change is needed; upstream contact is warranted; a phase's
-  acceptance can't be met after ~3 focused iterations; test VM needs reinstall; or a
-  security-relevant tradeoff appears (anything weakening isolation is out of scope, period).
-
-## Autonomy enforcement (added 2026-07-31 at the user's instruction)
-
-The repeated failure in this project has not been the bugs. It has been stopping to report,
-declaring work finished on whichever checks happened to pass, and making the user act as the
-loop that finds what the checks could not see. These rules are binding.
-
-**Do not stop to report.** A turn ends when the goal is met or when a genuinely blocking
-external dependency is hit (dom0 action, a credential, an explicit approval CLAUDE.md
-requires). "Here is what I found, what next?" is not a stopping point - continue to the next
-diagnostic or fix. If several things are open, work them in order without checking in.
-
-**Operator intervention is JEV-BOUND (owner, 2026-09-25: "make operator intervention jev-bound. if you want
-to stop and ask something, ask jev first if you should").** Before stopping to put a question to the owner,
-ask Jev whether you should: state what you are blocked on, what you would do with no answer, and what it
-costs if you guess wrong. Then act on the verdict - if Jev says decide it yourself, decide it yourself and
-surface the point in your next report instead. Enforced, not written: `tools/hooks/ask-operator-gate.sh`
-(PreToolUse on `AskUserQuestion|ExitPlanMode`) refuses the call unless the wire log carries a recent Jev
-question whose id contains `ask_operator`/`should_ask`/`operator_intervention`/`escalate_to_owner`/
-`interrupt_the_owner`/`blocking_question`. The gate checks the question was ASKED, never which way it was
-answered - deciding that in a script would just move the judgement back out of Jev. Driven both ways before
-it shipped. The approval gates this file already mandates (upstream submission, dom0/policy changes) remain
-real gates; asking Jev first costs one call.
-
-**Never ask what to do next.** Choose, act, and say what was chosen. Questions are for
-approval gates that CLAUDE.md actually mandates (upstream submission, dom0/policy changes),
-not for direction.
-
-**Absence of a regression is not evidence of intended behaviour.** "No worse than stock" only
-clears a regression check. A fix is done when its *intended effect* is demonstrated - the
-defect is gone, measured, against a control.
-
-**No result counts until the instrument is validated.**
-1. A metric must be shown stable on ONE unchanged binary, at least 3 runs, before any verdict.
-   (A bimodal metric repeatable within a run looked trustworthy and inverted when interleaved -
-   it was measuring scene state, not the build. A whole bisect was voided by this.)
-2. Every build comparison runs at least 3 times per side, interleaved with the control.
-3. Verify the artefact under test is actually installed - compare the running binary's hash to
-   the manifest. A harness that proceeds on a failed install reports results for a build that
-   was never running.
-4. Missing data fails. Never substitute an approximation, never skip silently: a check that
-   cannot fail is worthless, and several here passed only because the data needed to fail them
-   was absent.
-5. A check counts as evidence only once it has been seen to FAIL on a build with the defect
-   deliberately re-introduced. Otherwise record its PASS as unproven.
-
-**Judge output, not logs.** `RecreateDuplication: recovered - windows kept` was logged while
-every dom0 window was frozen. The criterion is whether the pixels changed.
-
-**Test the boot path.** Every check restarted the agent in a live session; a restart *clears*
-the fault the user then hit on a cold boot. A reboot is part of acceptance.
-
-**Run VM-mutating jobs serially.** Concurrent bisects rebooted the test VM underneath each
-other and destroyed hours of results.
-
-**Retract loudly and immediately.** When a claim turns out to be wrong, say so plainly in the
-next message and in the doc, and remove it from any status summary.
-
-## Controls: ONE feature, and follow the README (owner, 2026-08-28)
-
-`service.gui-fullscreen` is the single control for guest-originated fullscreen, and the top-level
-README's feature table is its specification: it allows the whole guest desktop in one dom0 window
-(non-seamless) AND a borderless true-fullscreen app window; a maximized app with a title bar is
-always allowed; **the boot/shutdown screen is never allowed, feature or not**. Do not invent
-additional knobs, modes or behaviours around it — "do not complicate the controls". When
-behaviour and README disagree, the README wins and the code is what changes.
-
-I violated the last clause of that table on 2026-08-28 by enabling the feature on a test qube: a
-fullscreen boot-phase surface reached the owner's display because Mode 1 was matched by class
-alone. The fix was to enforce the documented rule by phase, not to add a control.
+- **Escalate to the owner only** when: a dom0/sudo/policy/vCPU change is needed; upstream contact is warranted;
+  an acceptance cannot be met after ~3 focused iterations; a test guest needs a reinstall; or a security-relevant
+  tradeoff appears (anything weakening isolation is out of scope, period).
+- **Operator intervention is Jev-bound.** Before stopping to put a question to the owner, ask Jev whether you
+  should (what you are blocked on, what you would do with no answer, the cost of guessing wrong) and act on the
+  verdict - if Jev says decide it yourself, decide and surface the point in the next report. Enforced:
+  `tools/hooks/ask-operator-gate.sh` refuses `AskUserQuestion`/`ExitPlanMode` unless the wire log carries a recent
+  Jev question whose id contains `ask_operator`, `should_ask`, `operator_intervention`, `escalate_to_owner`,
+  `interrupt_the_owner` or `blocking_question` (it checks that the question was asked, not the answer). The
+  mandated approval gates above stay real.
+- **Do not stop to report and never ask what to do next.** A turn ends when the goal is met or a genuinely
+  blocking external dependency is hit (a dom0 action, a credential, an approval this file mandates). If several
+  things are open, work them in order without checking in. Choose, act, and say what was chosen; questions are
+  for the approval gates this file mandates (upstream submission, dom0/policy changes), not for direction.
+- **Evidence.** Absence of a regression is not evidence of intended behaviour: a fix is done when its intended
+  effect is demonstrated - the defect gone, measured, against a control. No result counts until the instrument is
+  validated:
+  1. a metric is shown stable on ONE unchanged binary over >= 3 runs before any verdict;
+  2. build comparisons run >= 3 times per side, interleaved with the control;
+  3. the artefact under test is verified installed (running binary hash vs the manifest);
+  4. missing data FAILS - never an approximation, never a silent skip;
+  5. a check counts as evidence only once it has been seen to FAIL with the defect present.
+- **Judge output, not logs** (the pixels changed, not "recovered" in a log). **Test the boot path** - a reboot is
+  part of acceptance. **Retract loudly and immediately** when a claim turns out wrong: say so plainly in the next
+  message and in the doc, and remove it from any status summary.
+- Commit early and often; record findings in the `findings/*.md` CURRENT STATE heads.
