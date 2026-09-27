@@ -209,6 +209,34 @@ struct PubLock {
     PubLock(const PubLock&) = delete;
     PubLock& operator=(const PubLock&) = delete;
 };
+// ABI 18: WHAT THE MAIN LOOP IS DOING NOW, for the agent's hang report (WGCBRK_STG_*). Scoped: the
+// innermost active stage is published, and the enclosing one comes back when it ends. A hang stops the
+// heartbeat with this still naming the call it is blocked in.
+struct StageScope {
+    LONG prev;
+    StageScope(unsigned code, int slot) : prev(g_hdr ? g_hdr->BrokerStage : 0) {
+        if (g_hdr) g_hdr->BrokerStage = (LONG)((code << 8) | ((unsigned)slot & 0xFFu));
+    }
+    ~StageScope() { if (g_hdr) g_hdr->BrokerStage = prev; }
+    StageScope(const StageScope&) = delete;
+    StageScope& operator=(const StageScope&) = delete;
+};
+
+// A HUNG TARGET BLOCKS PrintWindow WITH NO TIMEOUT, and both PrintWindow calls run on this main loop - so
+// one hung window stopped the heartbeat and the agent reaped the whole broker (QGABROKERDIED). Measured
+// 2026-09-27: every death began within seconds of a window disappearing, DWM "Ghost" stand-ins for hung
+// windows were in the same censuses, and moving the WGC teardown out of the slot lock changed nothing (Jev:
+// PrintWindow into a hung window 0.98). IsHungAppWindow catches a window hung for >= 5 s; the WM_NULL probe
+// one that is not answering right now, bounded to 100 ms. Unresponsive = skip this pass, counted in
+// HungSkips: a window that stays hung costs one bounded probe per pass, never the loop.
+static bool WindowResponsive(int i, HWND hwnd) {
+    StageScope st(WGCBRK_STG_PROBE, i);
+    DWORD_PTR res = 0;
+    if (!IsHungAppWindow(hwnd) &&
+        SendMessageTimeoutW(hwnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &res)) return true;
+    InterlockedIncrement(&g_slots[i].HungSkips);
+    return false;
+}
 static bool g_anyPw = false;   // any PrintWindow channel active -> poll the loop faster
 // LATCHED AT STARTUP, never re-read. Capabilities are decided at START here: a runtime re-read that
 // failed transiently would silently downgrade an eligible guest, which is the forbidden silent
@@ -450,6 +478,7 @@ static void RepublishRetained() {
         if (c.triedValid && ctl == c.triedCtlSeq) continue;  // already failed for this request and capture
         if (s->ReqState != WGCBRK_REQUESTED) continue;       // freed: never write to its buffers
         if (!PublishAllowed(s)) continue;                    // secure desktop: NOT marked tried - retry later
+        StageScope st(WGCBRK_STG_REPUBLISH, i);
         if (PublishCard(i, c.lastFull.get(), c.lastFullW, c.lastFullH))
             InterlockedIncrement(&s->Republished);
         else { c.triedCtlSeq = ctl; c.triedValid = true; }
@@ -520,7 +549,10 @@ static int RelaySourceChanged(int i) {
     if (w > 4096) w = 4096;
     if (h > 4096) h = 4096;
     if (!EnsurePwDib(c, w, h)) return SRC_CHANGED;      // cannot measure => do not suppress a demotion
-    if (!PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT)) {
+    if (!WindowResponsive(i, hwnd)) return SRC_UNMEASURED;   // hung: PrintWindow would block this loop
+    BOOL pwOk;
+    { StageScope st(WGCBRK_STG_SRC_PW, i); pwOk = PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT); }
+    if (!pwOk) {
         // ABI 11: counted separately. "The test could not render the source" and "the source
         // changed" are different facts that this function used to collapse into one return value.
         InterlockedIncrement(&g_slots[i].RelayPwFail);
@@ -680,7 +712,7 @@ static void FlushPendingSignatures() {
         const int b = s->ActiveBuffer, w = s->FrameWidth, h = s->FrameHeight;
         if ((q & 1) || q == 0 || s->FrameId == 0) continue;
         if (b < 0 || b >= WGCBRK_RING || w <= 0 || h <= 0 || (LONGLONG)w * h * 4 > s->BufBytes) continue;
-        SignFrame(i, WGCBRK_ARENA(g_base, s->BufOffset[b]), w, h);
+        { StageScope st(WGCBRK_STG_SIGN, i); SignFrame(i, WGCBRK_ARENA(g_base, s->BufOffset[b]), w, h); }
         MemoryBarrier();
         if (s->ControlSeq != ctl) continue;                 // re-registered mid-read: stays pending
         g_pubSigTick[i] = now;
@@ -725,7 +757,10 @@ static bool PublishPrintWindow(int i) {
             if (!s->StartTick) s->StartTick = QpcNow();
             if (s->PollCount < 0x7FFFFFFF) s->PollCount++;
         }
-        if (!PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT)) break;
+        if (!WindowResponsive(i, hwnd)) break;               // hung: no publish this pass (polled anyway)
+        BOOL pwOk;
+        { StageScope st(WGCBRK_STG_POLL_PW, i); pwOk = PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT); }
+        if (!pwOk) break;
         if (ticksMine && !s->FirstArrivedTick) s->FirstArrivedTick = QpcNow();
         const BYTE* rend = (const BYTE*)c.pwBits;
         const int fstride = fullW * 4;
@@ -830,6 +865,7 @@ static BOOL CALLBACK XProcChildProc(HWND child, LPARAM lp) {
 static bool HasCrossProcessContentChild(HWND window);
 
 static void OpenChannel(int i) {
+    StageScope stage(WGCBRK_STG_OPEN, i);
     WGCBRK_SLOT* s = &g_slots[i];
     Channel& c = g_ch[i];
     // First-frame attribution. The tick block is NOT touched yet: a slot is recycled, and this
@@ -875,7 +911,8 @@ static void OpenChannel(int i) {
     g_noRelay[i] = false;            // one-shot, same discipline as g_forcePw
     if (xprocContent && g_RelayOn && !relayVetoed && !monitor && hwnd) {
         int rw = 0, rh = 0; HTHUMBNAIL th = nullptr;
-        HWND dest = RelayOpenDest(hwnd, &th, &rw, &rh);
+        HWND dest;
+        { StageScope st(WGCBRK_STG_RELAY_DWM, i); dest = RelayOpenDest(hwnd, &th, &rw, &rh); }
         if (dest) {
             c.relayDest = dest; c.relayThumb = th; c.relay = true;
             target = dest;
@@ -1074,6 +1111,7 @@ static bool HasCrossProcessContentChild(HWND window) {
 }
 
 static void CloseChannel(int i) {
+    StageScope stage(WGCBRK_STG_CLOSE, i);      // declared first: covers the teardown and the final releases
     // WGC TEARDOWN HAPPENS OUTSIDE THE LOCK. This used to revoke FrameArrived and Close the session
     // and pool while holding g_pubCs[i] - the very lock an in-flight FrameArrived takes first thing.
     // If the teardown waits for that callback, neither can proceed: the main loop stops, the heartbeat
@@ -1105,7 +1143,7 @@ static void CloseChannel(int i) {
     // Channel{}` below would forget both and leak them for the broker's lifetime. Released BEFORE
     // the struct is wiped, for the same reason g_forcePw had to be set after it (that assignment
     // erased state the re-route depended on and cost 38 needless re-routes on a healthy window).
-    RelayCloseDest(c);
+    { StageScope st(WGCBRK_STG_RELAY_DWM, i); RelayCloseDest(c); }
     c = Channel{};
     g_slots[i].AckState = WGCBRK_FREE;
     g_slots[i].Route = WGCBRK_ROUTE_WGC;   // a free slot claims no writer
@@ -1124,6 +1162,7 @@ static void CloseChannel(int i) {
 }
 
 static void Reconcile() {
+    StageScope stage(WGCBRK_STG_RECONCILE, 0);
     for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) {
         WGCBRK_SLOT* s = &g_slots[i];
         HWND want = (HWND)(ULONG_PTR)s->Hwnd;
@@ -1341,6 +1380,7 @@ int wmain(int argc, wchar_t** argv) {
 
         g_hdr->Producing = InputDesktopIsDefault() ? 1 : 0;
         g_hdr->BrokerHeartbeat = (LONGLONG)GetTickCount64();
+        g_hdr->BrokerStage = (LONG)(WGCBRK_STG_LOOP << 8);
 
         // PrintWindow channels are polled (no FrameArrived), so tighten the wait while any is
         // active so menus refresh at ~30 Hz; otherwise stay lazy (WGC is event-driven).

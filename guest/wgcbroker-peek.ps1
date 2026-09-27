@@ -28,9 +28,9 @@
 # section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$WANT_ABI = 17
+$WANT_ABI = 18
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3424    # sizeof(WGCBRK_SLOT) at ABI 17 (PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, Republished 3412 (was padding), ItemClosedTick 3416)
+$STRIDE = 3424    # sizeof(WGCBRK_SLOT) at ABI 18 (HungSkips 84 (was padding); PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, Republished 3412 (was padding), ItemClosedTick 3416); header BrokerStage at 20 (was padding)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -68,8 +68,8 @@ if ($secAbi -ne $WANT_ABI) {
 
 for ($n = 0; $n -lt $Samples; $n++) {
   if ($n -gt 0) { Start-Sleep -Seconds $IntervalSec }
-  Write-Output ("S{0} HDR shutdown={1} producing={2} agentHB={3} brokerHB={4} agentPid={5} brokerPid={6} ctlgen={7} pokeLockMiss={8} relayCapable={9} relayOsBuild={10}" -f `
-    $n,(RdI 12),(RdI 16),(RdL 40),(RdL 48),(RdI 56),(RdI 60),(RdI 64),(RdI 68),(RdI 72),(RdI 76))
+  Write-Output ("S{0} HDR shutdown={1} producing={2} agentHB={3} brokerHB={4} agentPid={5} brokerPid={6} ctlgen={7} pokeLockMiss={8} relayCapable={9} relayOsBuild={10} brokerStage=0x{11:x}" -f `
+    $n,(RdI 12),(RdI 16),(RdL 40),(RdL 48),(RdI 56),(RdI 60),(RdI 64),(RdI 68),(RdI 72),(RdI 76),(RdI 20))
   for ($i = 0; $i -lt $SLOTS; $i++) {
     $b = $HDR + $i*$STRIDE
     $hw = RdL $b
@@ -127,7 +127,7 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # ABI 17. republished = cards the broker served from its RETAINED capture because the agent's registration
     # changed and no arrival answered it (a static window whose card moved). crop (above) = ReqCropX/Y, the
     # card's offset inside the window - what a truth render must be cut at to compare with the card.
-    Write-Output ("S{0} slot{1} ITEM closed={2} closedTick={3} republished={4}" -f $n,$i,(RdI ($b+3408)),(RdL ($b+3416)),(RdI ($b+3412)))
+    Write-Output ("S{0} slot{1} ITEM closed={2} closedTick={3} republished={4} hungSkips={5}" -f $n,$i,(RdI ($b+3408)),(RdL ($b+3416)),(RdI ($b+3412)),(RdI ($b+84)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)
