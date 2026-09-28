@@ -27,6 +27,8 @@
 #           ONE call at qrexec-up launches scratchpad-built localchurn.ps1 detached (SOAKERS loops each creating
 #           and reaping a trivial cmd.exe every LC_PAUSE_MS for the window) and the window then stays qrexec-quiet.
 #           Splits "process lifecycle churn" from "qrexec/vchan churn" (Jev 2026-09-28: next step 0.96).
+#   two     the SAME SOAK on TWO subjects, alternating (VM = arm A, VM2 = arm B) - e.g. stock QWT vs our
+#           release on the same Windows base; each subject restores from its own park.
 #   harness BURST = ROUNDS rounds of PUSHES concurrent file copies + CALLS concurrent short calls
 #           right after the session appears; QUIET = none. The updater is left as installed.
 #   The window starts when qvm-start RETURNS, which dom0 signals only once the guest's qrexec agent
@@ -57,7 +59,8 @@
 #   and RE-CLONED from its park - a killed subject is never reused. No memory image, no forensics
 #   (owner, 2026-09-27).
 #
-#   VM=<subject> PARK=<ckpt-qube> [VARIANT=scan|harness|soak|local] mgmt/harness/burst-quiet-ab.sh
+#   VM=<subject> PARK=<ckpt-qube> [VARIANT=scan|harness|soak|local|two] mgmt/harness/burst-quiet-ab.sh
+#   VARIANT=two: VM2=<second subject> PARK2=<its park> ARM_A=<label> ARM_B=<label>
 #   env: CYCLES (per arm, 20)  WINDOW (240 scan / 180 harness / 420 soak)  SETTLE (60)  BOOT_DL (300)  SOAKERS (6)
 #        ROUNDS (4)  PUSHES (6)  CALLS (16)  VALIDATE=1  OUT=<evidence dir>
 set -u
@@ -70,7 +73,9 @@ case "$VARIANT" in
   harness) ARMS=(BURST QUIET);    WINDOW=${WINDOW:-180} ;;
   soak)    ARMS=(SOAK QUIET);     WINDOW=${WINDOW:-420} ;;
   local)   ARMS=(SOAK LOCAL);     WINDOW=${WINDOW:-420} ;;
-  *) echo "VARIANT must be scan, harness, soak or local" >&2; exit 3 ;;
+  two)     ARMS=("${ARM_A:-A}" "${ARM_B:-B}"); WINDOW=${WINDOW:-420}
+           : "${VM2:?VARIANT=two needs VM2}" "${PARK2:?VARIANT=two needs PARK2}" ;;
+  *) echo "VARIANT must be scan, harness, soak, local or two" >&2; exit 3 ;;
 esac
 CYCLES=${CYCLES:-20}; SETTLE=${SETTLE:-60}; BOOT_DL=${BOOT_DL:-300}
 ROUNDS=${ROUNDS:-4}; PUSHES=${PUSHES:-6}; CALLS=${CALLS:-16}; SOAKERS=${SOAKERS:-6}; LC_PAUSE_MS=${LC_PAUSE_MS:-400}
@@ -86,10 +91,41 @@ qvm-check --quiet "$PARK" 2>/dev/null || { log "REFUSED: park $PARK does not exi
 [ "$(w_state "$PARK")" = Halted ] || { log "REFUSED: park $PARK is not Halted"; exit 3; }
 head -c 1048576 /dev/urandom > "$OUT/push/base.bin"
 QTO=6000   # the rig's standard; a park carries 60, and dom0 may kill a guest whose qrexec misses it
-# The subject's network as provisioned, re-applied after every restore: a park created with dom0's default
-# prefs carried netvm=fw-net and handed it to every re-clone (measured 2026-09-28, the first soak run).
-NETVM=$(qvm-prefs "$VM" netvm 2>/dev/null)
+# THE SUBJECT AS PROVISIONED, snapshotted once and re-applied after every restore. A park is created with
+# dom0's default prefs and no features, and clone-guest.sh copies prefs from it: measured 2026-09-28, re-clones
+# came back with netvm=fw-net (the first soak run) and maxmem=4000 instead of 8192 (both runs). Everything that
+# decides how dom0 starts and treats the guest is pinned here instead.
+PINNED_PREFS='memory maxmem vcpus netvm'
+PINNED_FEATURES='os gui qrexec stubdom-qrexec audio-model timezone no-monitor-layout rpc-clipboard gui-emulated'
+snapshot_subject(){ # $1=vm $2=snapshot file
+  local p f
+  : > "$2"
+  for p in $PINNED_PREFS; do printf 'P %s %s\n' "$p" "$(qvm-prefs "$1" "$p" 2>/dev/null)" >> "$2"; done
+  for f in $PINNED_FEATURES; do qvm-features "$1" "$f" >/dev/null 2>&1 && printf 'F %s %s\n' "$f" "$(qvm-features "$1" "$f")" >> "$2"; done
+}
+apply_subject(){ # $1=vm $2=snapshot file
+  local kind k v
+  while read -r kind k v; do
+    case "$kind" in
+      P) qvm-prefs "$1" "$k" "$v" || return 1 ;;
+      F) qvm-features "$1" "$k" "$v" || return 1 ;;
+    esac
+  done < "$2"
+  qvm-prefs "$1" qrexec_timeout "$QTO"
+}
+snapshot_subject "$VM" "$OUT/subject-A.pinned" || { log "REFUSED: could not snapshot $VM"; exit 3; }
 qvm-prefs "$VM" qrexec_timeout "$QTO" || { log "REFUSED: could not set qrexec_timeout on $VM"; exit 3; }
+if [ "$VARIANT" = two ]; then
+  vm_lock "$VM2" || { log "REFUSED: another job holds $VM2"; exit 3; }
+  qvm-check --quiet "$PARK2" 2>/dev/null || { log "REFUSED: park $PARK2 does not exist"; exit 3; }
+  [ "$(w_state "$PARK2")" = Halted ] || { log "REFUSED: park $PARK2 is not Halted"; exit 3; }
+  snapshot_subject "$VM2" "$OUT/subject-B.pinned" || { log "REFUSED: could not snapshot $VM2"; exit 3; }
+  qvm-prefs "$VM2" qrexec_timeout "$QTO" || { log "REFUSED: could not set qrexec_timeout on $VM2"; exit 3; }
+fi
+VM_A=$VM; PARK_A=$PARK; PIN=$OUT/subject-A.pinned
+use_subject(){ # $1=A|B - the globals every function reads
+  if [ "$1" = B ]; then VM=$VM2; PARK=$PARK2; PIN=$OUT/subject-B.pinned; else VM=$VM_A; PARK=$PARK_A; PIN=$OUT/subject-A.pinned; fi
+}
 
 # One burst round: PUSHES copies + CALLS calls, all concurrent, each bounded. Echoes
 # "ok=<n>/<total> max=<s>s" - a round whose calls start hanging dates the onset.
@@ -233,9 +269,8 @@ restore_subject(){
   done
   [ "$(w_state "$VM")" = Halted ] || { log "TERMINAL: $VM will not stay halted - no subject"; exit 1; }
   ./mgmt/clone-guest.sh "$PARK" "$VM" >> "$LOG" 2>&1 || { log "TERMINAL: re-clone from $PARK failed - no subject"; exit 1; }
-  qvm-prefs "$VM" qrexec_timeout "$QTO" || { log "TERMINAL: could not set qrexec_timeout on the re-clone"; exit 1; }
-  qvm-prefs "$VM" netvm "$NETVM" || { log "TERMINAL: could not restore netvm '$NETVM' on the re-clone"; exit 1; }
-  log "  restore: $VM re-cloned from $PARK (qrexec_timeout $QTO, netvm '$NETVM')"
+  apply_subject "$VM" "$PIN" || { log "TERMINAL: could not re-apply the pinned prefs/features to the re-clone"; exit 1; }
+  log "  restore: $VM re-cloned from $PARK, pinned prefs/features re-applied ($(tr '\n' ' ' < "$PIN" | cut -c1-160))"
   NEXT_SCAN=unknown     # the park's state, never assumed
 }
 
@@ -319,10 +354,10 @@ fi
 # $1=cycle label $2=arm $3=next-state(on|off|keep). Appends a TSV row; updates NEXT_SCAN.
 run_boot(){
   local c=$1 arm=$2 next=$3 start t0 end now r due res bursts=- pre=$NEXT_SCAN
-  log "--- $c arm=$arm (scan state going in: $pre) ---"
+  log "--- $c arm=$arm subject=$VM (scan state going in: $pre) ---"
   start=$(date +%H:%M:%S)
   if ! boot; then
-    probe_alive; READ_RAN=; READ_CALLS=; READ_SVC=; READ_SET=
+    probe_alive; READ_RAN=; READ_CALLS=; READ_SVC=; READ_SET=; READ_LC=
     [ "$ALIVE" = alive ] && end_read "$next"
     shut_and_classify "$c"; CLS="BOOT-$CLS"
   else
@@ -336,7 +371,7 @@ run_boot(){
         log "  burst round $r: $res"
       done
       bursts=${bursts# }
-    elif [ "$arm" = SOAK ]; then
+    elif [ "$arm" = SOAK ] || [ "$VARIANT" = two ]; then
       bursts=$(soak_window "$c")
       log "  soak: $bursts"
     elif [ "$arm" = LOCAL ]; then
@@ -347,7 +382,7 @@ run_boot(){
     fi
     end=$(( t0 + WINDOW + SETTLE ))
     case "$bursts" in *early=1*) end=$(( $(date +%s) + SETTLE )) ;; esac; now=$(date +%s); [ "$now" -lt "$end" ] && sleep $(( end - now ))
-    probe_alive; READ_RAN=; READ_CALLS=; READ_SVC=; READ_SET=
+    probe_alive; READ_RAN=; READ_CALLS=; READ_SVC=; READ_SET=; READ_LC=
     if [ "$ALIVE" = alive ]; then
       end_read "$next" || log "  end-of-window read returned NOTHING (missing data - this boot's product profile is unknown)"
     fi
@@ -367,6 +402,7 @@ total=$((CYCLES * 2))
 for cyc in $(seq 1 "$total"); do
   ARM=${ARMS[$(( (cyc + 1) % 2 ))]}
   NXT=${ARMS[$(( cyc % 2 ))]}
+  if [ "$VARIANT" = two ]; then [ $(( cyc % 2 )) = 1 ] && use_subject A || use_subject B; fi
   if [ "$VARIANT" = scan ] && [ "$NEXT_SCAN" != "$(want_state "$ARM")" ]; then
     # The state this boot needs was not set and read back by the previous boot (first cycle, a
     # restore, a dead previous boot): a PREP boot sets it. Graded and recorded, never counted.
