@@ -18,6 +18,11 @@
 #           read. The state for boot N is set AND read back at the end of boot N-1 (or by a PREP
 #           boot), and whether the scan RAN in boot N is measured from the task's own LastRunTime,
 #           so an arm is a measurement, not an intention.
+#   soak    SOAK = SOAKERS serial loops of trivial qubes.VMShell calls for the whole WINDOW from
+#           session-up (the 2026-08-29 wedge-hunt dose: 6 loops, ~2,000 calls in 7 min) - a HEAVY dose, so
+#           that a real effect shows in ~10 boots per arm (Jev 2026-09-28, complete record: first
+#           experiment 0.90; no natural-rate A/B has the power in a day). QUIET = none. If no loop has had
+#           an answer for 120 s the window ends early - the guest has stopped answering - and it is graded.
 #   harness BURST = ROUNDS rounds of PUSHES concurrent file copies + CALLS concurrent short calls
 #           right after the session appears; QUIET = none. The updater is left as installed.
 #   Session-up is read from dom0's per-window capture (local.WinScreenshot runs in dom0 and never
@@ -43,8 +48,8 @@
 #   and RE-CLONED from its park - a killed subject is never reused. No memory image, no forensics
 #   (owner, 2026-09-27).
 #
-#   VM=<subject> PARK=<ckpt-qube> [VARIANT=scan|harness] mgmt/harness/burst-quiet-ab.sh
-#   env: CYCLES (per arm, 20)  WINDOW (240 scan / 180 harness)  SETTLE (60)  BOOT_DL (300)
+#   VM=<subject> PARK=<ckpt-qube> [VARIANT=scan|harness|soak] mgmt/harness/burst-quiet-ab.sh
+#   env: CYCLES (per arm, 20)  WINDOW (240 scan / 180 harness / 420 soak)  SETTLE (60)  BOOT_DL (300)  SOAKERS (6)
 #        ROUNDS (4)  PUSHES (6)  CALLS (16)  VALIDATE=1  OUT=<evidence dir>
 set -u
 cd "$(dirname "$0")/../.." || exit 3
@@ -54,10 +59,11 @@ VARIANT=${VARIANT:-scan}
 case "$VARIANT" in
   scan)    ARMS=(SCANON SCANOFF); WINDOW=${WINDOW:-240} ;;
   harness) ARMS=(BURST QUIET);    WINDOW=${WINDOW:-180} ;;
-  *) echo "VARIANT must be scan or harness" >&2; exit 3 ;;
+  soak)    ARMS=(SOAK QUIET);     WINDOW=${WINDOW:-420} ;;
+  *) echo "VARIANT must be scan, harness or soak" >&2; exit 3 ;;
 esac
 CYCLES=${CYCLES:-20}; SETTLE=${SETTLE:-60}; BOOT_DL=${BOOT_DL:-300}
-ROUNDS=${ROUNDS:-4}; PUSHES=${PUSHES:-6}; CALLS=${CALLS:-16}
+ROUNDS=${ROUNDS:-4}; PUSHES=${PUSHES:-6}; CALLS=${CALLS:-16}; SOAKERS=${SOAKERS:-6}
 OUT=${OUT:-$HOME/qwt-burst-quiet/$VM-$VARIANT-$(date +%Y%m%d-%H%M%S)}
 mkdir -p "$OUT/push" "$OUT/shots" || exit 3
 LOG="$OUT/ab.log"; TSV="$OUT/cycles.tsv"
@@ -111,6 +117,40 @@ burst_round(){ # $1=cycle $2=round
   tot=$((PUSHES + CALLS))
   rm -f "$OUT/push"/bq-c"$c"-r"$r"-*.bin
   echo "ok=$ok/$tot max=${mx}s"
+}
+
+# The SOAK arm: SOAKERS serial loops of trivial qubes.VMShell calls until t0+WINDOW, each call a bridge
+# process that maps its grant region and exits. Echoes "calls=<n> ok=<n> lastok=+<s>s early=<0|1>". Ends the window
+# early when no loop has had an answer for 120 s (after the first 60 s): the guest has stopped answering, and the
+# remaining minutes would only burn the budget. Every call is bounded; a lost one counts as a call, not an answer.
+soak_window(){ # $1=cycle label; uses t0
+  local c=$1 i pids=() stop="$OUT/push/.soakstop" t_end=$(( t0 + WINDOW )) early=0 f n ok lo newest calls=0 oks=0
+  rm -f "$stop" "$OUT/push"/soak-*
+  for i in $(seq 1 "$SOAKERS"); do
+    ( n=0; ok=0; lastok=0
+      while [ ! -f "$stop" ] && [ "$(date +%s)" -lt "$t_end" ]; do
+        n=$((n + 1))
+        if QTEST_VM="$VM" timeout -k 5 45 ./tools/qtest run "echo BQS$i.$n" 2>/dev/null | tr -d '\r' | grep -qx "BQS$i\.$n"; then
+          ok=$((ok + 1)); lastok=$(date +%s)
+        fi
+        echo "$n $ok $lastok" > "$OUT/push/soak-$i"
+      done ) & pids+=($!)
+  done
+  while [ "$(date +%s)" -lt "$t_end" ]; do
+    sleep 15
+    newest=0
+    for f in "$OUT/push"/soak-*; do read -r n ok lo < "$f" 2>/dev/null || continue; [ "${lo:-0}" -gt "$newest" ] && newest=$lo; done
+    if [ $(( $(date +%s) - t0 )) -gt 60 ] && [ $(( $(date +%s) - (newest > 0 ? newest : t0) )) -gt 120 ]; then
+      early=1; break
+    fi
+  done
+  touch "$stop"; wait "${pids[@]}"
+  newest=0
+  for f in "$OUT/push"/soak-*; do
+    read -r n ok lo < "$f" 2>/dev/null || continue
+    calls=$((calls + n)); oks=$((oks + ok)); [ "${lo:-0}" -gt "$newest" ] && newest=$lo
+  done
+  echo "calls=$calls ok=$oks lastok=+$(( newest > 0 ? newest - t0 : -1 ))s early=$early"
 }
 
 alive_twice(){ w_alive "$VM" && return 0; sleep 20; w_alive "$VM"; }
@@ -262,8 +302,12 @@ run_boot(){
         log "  burst round $r: $res"
       done
       bursts=${bursts# }
+    elif [ "$arm" = SOAK ]; then
+      bursts=$(soak_window "$c")
+      log "  soak: $bursts"
     fi
-    end=$(( t0 + WINDOW + SETTLE )); now=$(date +%s); [ "$now" -lt "$end" ] && sleep $(( end - now ))
+    end=$(( t0 + WINDOW + SETTLE ))
+    case "$bursts" in *early=1*) end=$(( $(date +%s) + SETTLE )) ;; esac; now=$(date +%s); [ "$now" -lt "$end" ] && sleep $(( end - now ))
     probe_alive; READ_RAN=; READ_CALLS=; READ_SVC=; READ_SET=
     if [ "$ALIVE" = alive ]; then
       end_read "$next" || log "  end-of-window read returned NOTHING (missing data - this boot's product profile is unknown)"
