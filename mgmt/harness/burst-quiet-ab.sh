@@ -25,9 +25,14 @@
 #           an answer for 120 s the window ends early - the guest has stopped answering - and it is graded.
 #   harness BURST = ROUNDS rounds of PUSHES concurrent file copies + CALLS concurrent short calls
 #           right after the session appears; QUIET = none. The updater is left as installed.
-#   Session-up is read from dom0's per-window capture (local.WinScreenshot runs in dom0 and never
-#   touches the guest). Same subject, same build, same boot, same end-of-window read, same ACPI
-#   shutdown. Arms alternate so rig drift and time of day are shared.
+#   The window starts when qvm-start RETURNS, which dom0 signals only once the guest's qrexec agent
+#   has connected - no call into the guest. (Corrected 2026-09-28 by the VALIDATE run: the first
+#   version waited for a rendered window in dom0's per-window capture, and a seamless guest with
+#   nothing open maps NO window at all - it read NOWINDOW for 300 s on a healthy guest.) The
+#   subject's qrexec_timeout is pinned to 6000 at start and after every restore (a park carries 60),
+#   so dom0 never kills a slow boot mid-grade and only BOOT_DL decides. Same subject, same build,
+#   same boot, same end-of-window read, same ACPI shutdown. Arms alternate so rig drift and time of
+#   day are shared.
 # INSTRUMENT: after WINDOW+SETTLE, qrexec liveness (two tries, 20 s apart) and the cpu delta; if it
 #   answers, ONE read that counts the product's own qrexec calls this boot from the guest's qrexec
 #   agent log and sets the next boot's scan state; then an ACPI shutdown with a 180 s halt deadline
@@ -39,7 +44,7 @@
 #     SHUTDOWN-HANG        still answers, but ACPI ignored         <- secondary (the 09-21 shape)
 #     QREXEC-DEAD-ACPI-OK  dead but halted - the qrexec-not-started defect of findings/install.md,
 #                          NOT the stall, counted apart
-#     BOOT-*               no session within BOOT_DL - graded, but kept apart
+#     BOOT-*               qrexec not up within BOOT_DL of the start - graded, but kept apart
 #   Validate before trusting it: VALIDATE=1 drives the DEAD branch (QrexecAgent stopped in the
 #   guest -> must read QREXEC-DEAD-ACPI-OK) and the STALL branch (domain paused across the ACPI
 #   request -> must read STALL).
@@ -74,24 +79,8 @@ vm_lock "$VM" || { log "REFUSED: another job holds $VM"; exit 3; }
 qvm-check --quiet "$PARK" 2>/dev/null || { log "REFUSED: park $PARK does not exist"; exit 3; }
 [ "$(w_state "$PARK")" = Halted ] || { log "REFUSED: park $PARK is not Halted"; exit 3; }
 head -c 1048576 /dev/urandom > "$OUT/push/base.bin"
-
-# Session-up WITHOUT touching the guest's qrexec: dom0's per-window capture until a window shows
-# rendered content, on TWO consecutive samples (Jev probe review: one sample is not a stable
-# state). 0 = session (SESS_T = seconds to the first of the two), 1 = none by BOOT_DL.
-wait_session_quietly(){ # $1=tag
-  local t0 st=none seen=; t0=$(date +%s)
-  while :; do
-    SESS_T=$(( $(date +%s) - t0 ))
-    [ "$SESS_T" -ge "$BOOT_DL" ] && { SESS_T="none-by-${BOOT_DL}s(last=$st)"; return 1; }
-    st=$(w_screen "$VM" "$1-t$SESS_T" "$OUT/shots")
-    case "$st" in
-      DESKTOP)  [ -n "$seen" ] && { SESS_T=$seen; return 0; }; seen=$SESS_T ;;
-      RECOVERY) SESS_T=RECOVERY; return 1 ;;
-      *)        seen= ;;
-    esac
-    sleep 10
-  done
-}
+QTO=6000   # the rig's standard; a park carries 60, and dom0 may kill a guest whose qrexec misses it
+qvm-prefs "$VM" qrexec_timeout "$QTO" || { log "REFUSED: could not set qrexec_timeout on $VM"; exit 3; }
 
 # One burst round: PUSHES copies + CALLS calls, all concurrent, each bounded. Echoes
 # "ok=<n>/<total> max=<s>s" - a round whose calls start hanging dates the onset.
@@ -210,7 +199,8 @@ restore_subject(){
   done
   [ "$(w_state "$VM")" = Halted ] || { log "TERMINAL: $VM will not stay halted - no subject"; exit 1; }
   ./mgmt/clone-guest.sh "$PARK" "$VM" >> "$LOG" 2>&1 || { log "TERMINAL: re-clone from $PARK failed - no subject"; exit 1; }
-  log "  restore: $VM re-cloned from $PARK"
+  qvm-prefs "$VM" qrexec_timeout "$QTO" || { log "TERMINAL: could not set qrexec_timeout on the re-clone"; exit 1; }
+  log "  restore: $VM re-cloned from $PARK (qrexec_timeout $QTO)"
   NEXT_SCAN=unknown     # the park's state, never assumed
 }
 
@@ -246,7 +236,7 @@ shut_and_classify(){ # $1=label
   esac
 }
 
-boot(){ # -> 0 started
+boot(){ # -> 0 = qrexec up (SESS_T = seconds from the start call), 1 = not up by BOOT_DL
   local st; st=$(w_state "$VM")
   if [ "$st" != Halted ]; then
     # Something started it (a queued call can) - shut it down cleanly first; only a subject that
@@ -255,14 +245,19 @@ boot(){ # -> 0 started
     timeout 60 qvm-shutdown "$VM" >/dev/null 2>&1
     w_halt "$VM" 300 "preboot-halt" log >/dev/null || restore_subject
   fi
-  timeout 180 qvm-start "$VM" >/dev/null 2>&1 || { log "TERMINAL: qvm-start $VM failed"; exit 1; }
+  local tb rc; tb=$(date +%s)
+  timeout "$BOOT_DL" qvm-start "$VM" >/dev/null 2>&1; rc=$?
+  if [ "$rc" = 0 ]; then SESS_T=$(( $(date +%s) - tb )); return 0; fi
+  # A start that failed with the domain never up is a rig fault, not a guest verdict.
+  [ "$(w_state "$VM")" = Halted ] && { log "TERMINAL: qvm-start $VM failed (rc=$rc) and the domain is not up"; exit 1; }
+  SESS_T="no-qrexec-by-${BOOT_DL}s(rc=$rc)"; return 1
 }
 
 want_state(){ case "$1" in SCANON) echo on ;; SCANOFF) echo off ;; *) echo keep ;; esac; }
 
 if [ "${VALIDATE:-0}" = 1 ]; then
   log "=== VALIDATE: each branch must be seen to return its class ==="
-  boot; wait_session_quietly v1 || { log "VALIDATE: no session (${SESS_T}) - cannot validate"; exit 1; }
+  boot || { log "VALIDATE: qrexec not up (${SESS_T}) - cannot validate"; exit 1; }
   w_alive "$VM" || { log "VALIDATE FAIL: a healthy session did not answer the liveness probe"; exit 1; }
   end_read keep && log "  healthy session answers; end-of-window read: ran=$READ_RAN state=$READ_STATE calls=$READ_CALLS svc=$READ_SVC log=$READ_LOG" \
     || { log "VALIDATE FAIL: the end-of-window read returned nothing on a healthy guest"; exit 1; }
@@ -270,7 +265,7 @@ if [ "${VALIDATE:-0}" = 1 ]; then
   sleep 15; probe_alive; shut_and_classify v1
   log "  QrexecAgent stopped -> $CLS (expected QREXEC-DEAD-ACPI-OK) alive=$ALIVE halt=$HALT cpu=$CPU"
   [ "$CLS" = QREXEC-DEAD-ACPI-OK ] || { log "VALIDATE FAIL: the DEAD branch returned $CLS"; case "$HALT" in halted*) ;; *) restore_subject ;; esac; exit 1; }
-  boot; wait_session_quietly v2 || { log "VALIDATE: no session on the second boot (${SESS_T})"; exit 1; }
+  boot || { log "VALIDATE: qrexec not up on the second boot (${SESS_T})"; exit 1; }
   qvm-pause "$VM" >/dev/null 2>&1 || { log "VALIDATE: qvm-pause refused"; exit 1; }
   probe_alive; shut_and_classify v2
   log "  domain paused across the ACPI request -> $CLS (expected STALL) alive=$ALIVE halt=$HALT"
@@ -286,13 +281,13 @@ fi
 run_boot(){
   local c=$1 arm=$2 next=$3 start t0 end now r due res bursts=- pre=$NEXT_SCAN
   log "--- $c arm=$arm (scan state going in: $pre) ---"
-  boot; start=$(date +%H:%M:%S)
-  if ! wait_session_quietly "$c"; then
+  start=$(date +%H:%M:%S)
+  if ! boot; then
     probe_alive; READ_RAN=; READ_CALLS=; READ_SVC=; READ_SET=
     [ "$ALIVE" = alive ] && end_read "$next"
     shut_and_classify "$c"; CLS="BOOT-$CLS"
   else
-    log "  session at +${SESS_T}s (dom0 window capture; no guest qrexec yet)"
+    log "  qrexec up at +${SESS_T}s (qvm-start returned; no call into the guest yet)"
     t0=$(date +%s)
     if [ "$arm" = BURST ]; then
       bursts=""
@@ -318,7 +313,6 @@ run_boot(){
   log "  => $CLS (alive=$ALIVE halt=$HALT cpu=$CPU) scan-ran=${READ_RAN:-UNREAD} product-calls=${READ_CALLS:-UNREAD} [${READ_SVC}] next-scan=$NEXT_SCAN"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$c" "$arm" "$pre" "$start" "$SESS_T" "$bursts" \
     "$ALIVE" "$CPU" "$HALT" "$CLS" "${READ_RAN:-UNREAD}" "${READ_CALLS:-UNREAD}" "${READ_SVC:--}" >> "$TSV"
-  rm -f "$OUT/shots"/"$c"-*          # the per-window captures served their purpose; keep the table
   case "$HALT" in halted*) ;; *) restore_subject ;; esac
 }
 
