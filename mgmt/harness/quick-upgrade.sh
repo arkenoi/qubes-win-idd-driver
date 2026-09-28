@@ -261,6 +261,20 @@ qvm-features "$SUBJECT" os Windows
 # along; this create path copied the VOLUMES and not the features, so the subject differed from
 # its own golden in exactly the variable that decides the failure.
 qvm-features "$SUBJECT" timezone "$(qvm-features "$GOLDEN" timezone 2>/dev/null || echo localtime)"
+# THE REST OF THE GOLDEN'S FEATURES - the same list mgmt/clone-guest.sh copies. The timezone fix
+# above closed one feature of this gap and left the others: measured 2026-09-28, every subject this
+# path created (win11de-v5, -v7, -sub, -bq ...) carried os+timezone only, while the golden carries
+# gui=1, qrexec=1, stubdom-qrexec=1 and more. Without qrexec=1 dom0 does not hold qvm-start until
+# the guest's qrexec agent has connected, so every probe this harness issues during the boot
+# queues in dom0 and they all land in the same second the agent comes up - a burst at qrexec-up,
+# the onset shape of the stall under investigation - on a configuration no real guest has.
+python3 - "$GOLDEN" "$SUBJECT" <<'PY' || finish 1 "TERMINAL: could not copy the golden's features to $SUBJECT"
+import sys, qubesadmin
+app = qubesadmin.Qubes(); src = app.domains[sys.argv[1]]; dst = app.domains[sys.argv[2]]
+for f in ('gui', 'qrexec', 'stubdom-qrexec', 'vmexec', 'audio-model', 'no-monitor-layout', 'rpc-clipboard', 'gui-emulated'):
+    if f in src.features:
+        dst.features[f] = src.features[f]
+PY
 for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do qvm-prefs "$SUBJECT" "${p%%:*}" "${p##*:}"; done
 qvm-prefs "$SUBJECT" netvm '' 2>/dev/null
 cerr=$(python3 - "$GOLDEN" "$SUBJECT" 2>&1 <<'PY'
