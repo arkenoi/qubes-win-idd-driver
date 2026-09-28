@@ -80,6 +80,9 @@ qvm-check --quiet "$PARK" 2>/dev/null || { log "REFUSED: park $PARK does not exi
 [ "$(w_state "$PARK")" = Halted ] || { log "REFUSED: park $PARK is not Halted"; exit 3; }
 head -c 1048576 /dev/urandom > "$OUT/push/base.bin"
 QTO=6000   # the rig's standard; a park carries 60, and dom0 may kill a guest whose qrexec misses it
+# The subject's network as provisioned, re-applied after every restore: a park created with dom0's default
+# prefs carried netvm=fw-net and handed it to every re-clone (measured 2026-09-28, the first soak run).
+NETVM=$(qvm-prefs "$VM" netvm 2>/dev/null)
 qvm-prefs "$VM" qrexec_timeout "$QTO" || { log "REFUSED: could not set qrexec_timeout on $VM"; exit 3; }
 
 # One burst round: PUSHES copies + CALLS calls, all concurrent, each bounded. Echoes
@@ -200,7 +203,8 @@ restore_subject(){
   [ "$(w_state "$VM")" = Halted ] || { log "TERMINAL: $VM will not stay halted - no subject"; exit 1; }
   ./mgmt/clone-guest.sh "$PARK" "$VM" >> "$LOG" 2>&1 || { log "TERMINAL: re-clone from $PARK failed - no subject"; exit 1; }
   qvm-prefs "$VM" qrexec_timeout "$QTO" || { log "TERMINAL: could not set qrexec_timeout on the re-clone"; exit 1; }
-  log "  restore: $VM re-cloned from $PARK (qrexec_timeout $QTO)"
+  qvm-prefs "$VM" netvm "$NETVM" || { log "TERMINAL: could not restore netvm '$NETVM' on the re-clone"; exit 1; }
+  log "  restore: $VM re-cloned from $PARK (qrexec_timeout $QTO, netvm '$NETVM')"
   NEXT_SCAN=unknown     # the park's state, never assumed
 }
 

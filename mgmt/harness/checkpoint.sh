@@ -65,6 +65,12 @@ case "$CMD" in
     qvm-ls --raw-data --fields NAME | grep -qx "$CK" && die "park $CK already exists - qvm-remove it first if you mean to replace it"
     qvm-create --class StandaloneVM --label gray --property virt_mode=hvm --property kernel='' "$CK" || die "create $CK failed"
     qvm-tags "$CK" add win-idd-testbed || die "tag $CK failed"
+    # A park is storage and is never booted, but mgmt/clone-guest.sh copies a source's prefs INTO a
+    # re-clone - so a park created with dom0's DEFAULT prefs hands its netvm to every guest cloned
+    # from it. Measured 2026-09-28: ckpt-win11de-bq-bq carried netvm=fw-net and every re-clone of a
+    # netvm-less subject came back networked (and its updater re-enabled Windows' own auto-updates).
+    # The park carries the parked guest's netvm instead.
+    qvm-prefs "$CK" netvm "$(qvm-prefs "$VM" netvm 2>/dev/null)" || die "could not copy netvm from $VM to $CK"
     python3 - "$VM" "$CK" <<'EOF' || die "volume clone into park failed"
 import sys, qubesadmin
 app = qubesadmin.Qubes(); src = app.domains[sys.argv[1]]; dst = app.domains[sys.argv[2]]
