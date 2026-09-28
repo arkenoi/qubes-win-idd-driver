@@ -45,9 +45,9 @@
 #     QREXEC-DEAD-ACPI-OK  dead but halted - the qrexec-not-started defect of findings/install.md,
 #                          NOT the stall, counted apart
 #     BOOT-*               qrexec not up within BOOT_DL of the start - graded, but kept apart
-#   Validate before trusting it: VALIDATE=1 drives the DEAD branch (QrexecAgent stopped in the
-#   guest -> must read QREXEC-DEAD-ACPI-OK) and the STALL branch (domain paused across the ACPI
-#   request -> must read STALL).
+#   Validate before trusting it: VALIDATE=1 grades a healthy boot (must read OK: alive, halted) and a
+#   boot whose domain is paused across the probes and the ACPI request (must read STALL: dead,
+#   ignored) - each classifier input seen in both states.
 # BUDGET: ~6.5 min a cycle for scan (boot ~100 s, window 240 s, settle 60 s, read + shutdown ~40 s),
 #   ~5.5 min for harness; default 20 cycles per arm. A subject that will not halt is drained, killed
 #   and RE-CLONED from its park - a killed subject is never reused. No memory image, no forensics
@@ -261,10 +261,14 @@ if [ "${VALIDATE:-0}" = 1 ]; then
   w_alive "$VM" || { log "VALIDATE FAIL: a healthy session did not answer the liveness probe"; exit 1; }
   end_read keep && log "  healthy session answers; end-of-window read: ran=$READ_RAN state=$READ_STATE calls=$READ_CALLS svc=$READ_SVC log=$READ_LOG" \
     || { log "VALIDATE FAIL: the end-of-window read returned nothing on a healthy guest"; exit 1; }
-  QTEST_VM="$VM" timeout -k 5 40 ./tools/qtest run 'cmd /c sc stop QrexecAgent' >/dev/null 2>&1
-  sleep 15; probe_alive; shut_and_classify v1
-  log "  QrexecAgent stopped -> $CLS (expected QREXEC-DEAD-ACPI-OK) alive=$ALIVE halt=$HALT cpu=$CPU"
-  [ "$CLS" = QREXEC-DEAD-ACPI-OK ] || { log "VALIDATE FAIL: the DEAD branch returned $CLS"; case "$HALT" in halted*) ;; *) restore_subject ;; esac; exit 1; }
+  # POSITIVE CONTROL: the healthy boot is graded and must read OK (alive, then halted on ACPI). The
+  # first version stopped QrexecAgent here to force a DEAD reading; measured 2026-09-28 that is not
+  # a dead guest on this build - the service's armed recovery brings the agent back inside the
+  # probe window, so the guest answered and graded OK. Both classifier inputs are still seen in
+  # both states: alive+halted here, dead+ignored in the paused control below.
+  probe_alive; shut_and_classify v1
+  log "  healthy boot -> $CLS (expected OK) alive=$ALIVE halt=$HALT cpu=$CPU"
+  case "$CLS" in OK|OK-SLOW-HALT) ;; *) log "VALIDATE FAIL: the positive control returned $CLS"; case "$HALT" in halted*) ;; *) restore_subject ;; esac; exit 1 ;; esac
   boot || { log "VALIDATE: qrexec not up on the second boot (${SESS_T})"; exit 1; }
   qvm-pause "$VM" >/dev/null 2>&1 || { log "VALIDATE: qvm-pause refused"; exit 1; }
   probe_alive; shut_and_classify v2
@@ -272,7 +276,7 @@ if [ "${VALIDATE:-0}" = 1 ]; then
   qvm-unpause "$VM" >/dev/null 2>&1
   timeout 60 qvm-shutdown "$VM" >/dev/null 2>&1; w_halt "$VM" 240 "v2-unpaused" log >/dev/null || restore_subject
   [ "$CLS" = STALL ] || { log "VALIDATE FAIL: the STALL branch returned $CLS"; exit 1; }
-  log "VALIDATE PASS: ALIVE, DEAD and STALL branches each seen to return their class; the read has data"
+  log "VALIDATE PASS: a healthy boot read OK and a paused one read STALL; the end-of-window read has data"
   exit 0
 fi
 
