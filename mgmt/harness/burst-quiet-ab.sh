@@ -23,6 +23,10 @@
 #           that a real effect shows in ~10 boots per arm (Jev 2026-09-28, complete record: first
 #           experiment 0.90; no natural-rate A/B has the power in a day). QUIET = none. If no loop has had
 #           an answer for 120 s the window ends early - the guest has stopped answering - and it is graded.
+#   local   SOAK as above vs LOCAL = the same order of process churn created INSIDE the guest with no qrexec:
+#           ONE call at qrexec-up launches scratchpad-built localchurn.ps1 detached (SOAKERS loops each creating
+#           and reaping a trivial cmd.exe every LC_PAUSE_MS for the window) and the window then stays qrexec-quiet.
+#           Splits "process lifecycle churn" from "qrexec/vchan churn" (Jev 2026-09-28: next step 0.96).
 #   harness BURST = ROUNDS rounds of PUSHES concurrent file copies + CALLS concurrent short calls
 #           right after the session appears; QUIET = none. The updater is left as installed.
 #   The window starts when qvm-start RETURNS, which dom0 signals only once the guest's qrexec agent
@@ -53,7 +57,7 @@
 #   and RE-CLONED from its park - a killed subject is never reused. No memory image, no forensics
 #   (owner, 2026-09-27).
 #
-#   VM=<subject> PARK=<ckpt-qube> [VARIANT=scan|harness|soak] mgmt/harness/burst-quiet-ab.sh
+#   VM=<subject> PARK=<ckpt-qube> [VARIANT=scan|harness|soak|local] mgmt/harness/burst-quiet-ab.sh
 #   env: CYCLES (per arm, 20)  WINDOW (240 scan / 180 harness / 420 soak)  SETTLE (60)  BOOT_DL (300)  SOAKERS (6)
 #        ROUNDS (4)  PUSHES (6)  CALLS (16)  VALIDATE=1  OUT=<evidence dir>
 set -u
@@ -65,10 +69,12 @@ case "$VARIANT" in
   scan)    ARMS=(SCANON SCANOFF); WINDOW=${WINDOW:-240} ;;
   harness) ARMS=(BURST QUIET);    WINDOW=${WINDOW:-180} ;;
   soak)    ARMS=(SOAK QUIET);     WINDOW=${WINDOW:-420} ;;
-  *) echo "VARIANT must be scan, harness or soak" >&2; exit 3 ;;
+  local)   ARMS=(SOAK LOCAL);     WINDOW=${WINDOW:-420} ;;
+  *) echo "VARIANT must be scan, harness, soak or local" >&2; exit 3 ;;
 esac
 CYCLES=${CYCLES:-20}; SETTLE=${SETTLE:-60}; BOOT_DL=${BOOT_DL:-300}
-ROUNDS=${ROUNDS:-4}; PUSHES=${PUSHES:-6}; CALLS=${CALLS:-16}; SOAKERS=${SOAKERS:-6}
+ROUNDS=${ROUNDS:-4}; PUSHES=${PUSHES:-6}; CALLS=${CALLS:-16}; SOAKERS=${SOAKERS:-6}; LC_PAUSE_MS=${LC_PAUSE_MS:-400}
+LC_SCRIPT=${LC_SCRIPT:-scratchpad/localchurn.ps1}
 OUT=${OUT:-$HOME/qwt-burst-quiet/$VM-$VARIANT-$(date +%Y%m%d-%H%M%S)}
 mkdir -p "$OUT/push" "$OUT/shots" || exit 3
 LOG="$OUT/ab.log"; TSV="$OUT/cycles.tsv"
@@ -145,13 +151,34 @@ soak_window(){ # $1=cycle label; uses t0
   echo "calls=$calls ok=$oks lastok=+$(( newest > 0 ? newest - t0 : -1 ))s early=$early"
 }
 
+# The LOCAL arm: ONE call launches the local churn detached and returns; nothing else crosses qrexec in the window.
+# Echoes "launched" or "LAUNCH-FAILED" - a failed launch makes the cycle's arm unverified, and it is reported so.
+local_launch(){
+  local body b64 cmd out
+  [ -f "$LC_SCRIPT" ] || { echo "LAUNCH-FAILED(no $LC_SCRIPT)"; return; }
+  body=$(printf '& {\n%s\n} -Seconds %s -Loops %s -PauseMs %s\n' "$(cat "$LC_SCRIPT")" "$WINDOW" "$SOAKERS" "$LC_PAUSE_MS")
+  b64=$(python3 -c "import sys,base64;print(base64.b64encode(sys.argv[1].encode('utf-16-le')).decode())" "$body")
+  cmd="powershell -NoProfile -Command \"Start-Process powershell -WindowStyle Hidden -ArgumentList '-NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64'; 'LCLAUNCHED'\""
+  [ ${#cmd} -lt 8000 ] || { echo "LAUNCH-FAILED(command line ${#cmd} chars)"; return; }
+  out=$(QTEST_VM="$VM" timeout -k 5 60 ./tools/qtest run "$cmd" 2>/dev/null | tr -d '\r')
+  grep -qx LCLAUNCHED <<<"$out" && { echo launched; return; }
+  # One retry (probe review: a transient no-answer must not void the arm) - but only after checking the
+  # churn's own marker file, since a lost ANSWER can hide a launch that happened, and a second launch would
+  # double the dose.
+  sleep 10
+  out=$(QTEST_VM="$VM" timeout -k 5 40 ./tools/qtest run 'cmd /c if exist C:\ProgramData\qwt-localchurn.txt echo LCEXISTS' 2>/dev/null | tr -d '\r')
+  grep -qx LCEXISTS <<<"$out" && { echo "launched(confirmed-by-marker)"; return; }
+  out=$(QTEST_VM="$VM" timeout -k 5 60 ./tools/qtest run "$cmd" 2>/dev/null | tr -d '\r')
+  grep -qx LCLAUNCHED <<<"$out" && echo "launched(retry)" || echo "LAUNCH-FAILED"
+}
+
 alive_twice(){ w_alive "$VM" && return 0; sleep 20; w_alive "$VM"; }
 
 # ONE call at the end of a boot: what the product did over qrexec this boot, whether the scan ran,
 # and (SET=on|off|keep) the scan state for the NEXT boot, read back. Sets READ_* ; empty = unread.
 end_read(){ # $1=on|off|keep
   local set=$1 ps b64 out
-  READ_RAN=; READ_STATE=; READ_SET=; READ_CALLS=; READ_SVC=; READ_LOG=
+  READ_RAN=; READ_STATE=; READ_SET=; READ_CALLS=; READ_SVC=; READ_LOG=; READ_LC=
   ps=$(cat <<PSEOF
 \$ErrorActionPreference='SilentlyContinue'
 \$boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime
@@ -167,6 +194,9 @@ Write-Output ('BQ|CALLS=' + \$m.Count)
 Write-Output ('BQ|SVC=' + ((\$m | ForEach-Object { if(\$_.Line -match "service '([^']+)'"){ \$matches[1] } } | Group-Object | ForEach-Object { \$_.Name + ':' + \$_.Count }) -join ','))
 if('$set' -eq 'on'){ Enable-ScheduledTask -TaskName \$t | Out-Null }
 if('$set' -eq 'off'){ Disable-ScheduledTask -TaskName \$t | Out-Null }
+\$lc='C:\ProgramData\qwt-localchurn.txt'
+Write-Output ('BQ|LC=' + ((Get-Content -LiteralPath \$lc -EA SilentlyContinue) -join ' ; '))
+Remove-Item -LiteralPath \$lc -Force -EA SilentlyContinue
 Write-Output ('BQ|SET=' + (Get-ScheduledTask -TaskName \$t).State)
 PSEOF
 )
@@ -183,6 +213,7 @@ PSEOF
   READ_CALLS=$(sed -n 's/^BQ|CALLS=//p' <<<"$out" | head -1)
   READ_SVC=$(sed -n 's/^BQ|SVC=//p' <<<"$out" | head -1)
   READ_SET=$(sed -n 's/^BQ|SET=//p' <<<"$out" | head -1)
+  READ_LC=$(sed -n 's/^BQ|LC=//p' <<<"$out" | head -1)
   [ -n "$READ_SET" ]
 }
 
@@ -308,6 +339,11 @@ run_boot(){
     elif [ "$arm" = SOAK ]; then
       bursts=$(soak_window "$c")
       log "  soak: $bursts"
+    elif [ "$arm" = LOCAL ]; then
+      bursts="local:$(local_launch)"
+      log "  local churn: $bursts (window stays qrexec-quiet)"
+      # A LOCAL cycle whose churn never started is not a LOCAL cycle: its row carries its own arm label.
+      case "$bursts" in *LAUNCH-FAILED*) arm=LOCAL-NOLAUNCH ;; esac
     fi
     end=$(( t0 + WINDOW + SETTLE ))
     case "$bursts" in *early=1*) end=$(( $(date +%s) + SETTLE )) ;; esac; now=$(date +%s); [ "$now" -lt "$end" ] && sleep $(( end - now ))
@@ -318,7 +354,7 @@ run_boot(){
     shut_and_classify "$c"
   fi
   case "$READ_SET" in Ready) NEXT_SCAN=on ;; Disabled) NEXT_SCAN=off ;; *) [ "$next" = keep ] || NEXT_SCAN=unknown ;; esac
-  log "  => $CLS (alive=$ALIVE halt=$HALT cpu=$CPU) scan-ran=${READ_RAN:-UNREAD} product-calls=${READ_CALLS:-UNREAD} [${READ_SVC}] next-scan=$NEXT_SCAN"
+  log "  => $CLS (alive=$ALIVE halt=$HALT cpu=$CPU) scan-ran=${READ_RAN:-UNREAD} product-calls=${READ_CALLS:-UNREAD} [${READ_SVC}] next-scan=$NEXT_SCAN${READ_LC:+ localchurn=[$READ_LC]}"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$c" "$arm" "$pre" "$start" "$SESS_T" "$bursts" \
     "$ALIVE" "$CPU" "$HALT" "$CLS" "${READ_RAN:-UNREAD}" "${READ_CALLS:-UNREAD}" "${READ_SVC:--}" >> "$TSV"
   case "$HALT" in halted*) ;; *) restore_subject ;; esac
