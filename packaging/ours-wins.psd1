@@ -165,6 +165,10 @@
         # ever produces a qrexec-agent.exe byte-equal to stock, that means the fork's binary did
         # not get staged and the guest would silently keep the stock one.
         @{ Package = 'msi-image/PFiles64/Qubes Tools/bin/qrexec-agent.exe';   Stock = 'qrexec-agent.exe';   Required = $true }
+        # Ships from the fork with the qrexec v4 change: qrexec-client-vm speaks the v4 pipe format (magic, target,
+        # full service name) to the fork's agent, which refuses any other format - a stock qrexec-client-vm.exe on a
+        # guest would fail every guest-initiated call, so a build that stages the stock one must fail here.
+        @{ Package = 'msi-image/PFiles64/Qubes Tools/bin/qrexec-client-vm.exe'; Stock = 'qrexec-client-vm.exe'; Required = $true }
         # The user-mode dep DLLs qwt-full builds and used to DISCARD (.libs staged, DLLs
         # dropped): now signed and staged into the MSI. NOT xencontrol.dll (WDK build
         # unproven, wave 3) and NEVER xenagent.dll/xenbus_monitor.dll (catalog-covered by
