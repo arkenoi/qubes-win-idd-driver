@@ -148,8 +148,13 @@ best every 250 ms, at worst every 2 s or one 250 ms slot per swept window, which
 **Decision.** The engine treats its own PrintWindow as a possible CAUSE of damage, never as a neutral read.
 
 **Why.** Measured on w11-ds (26100.1742), with no agent running: a bare PrintWindow loop on a Windows 11
-Notepad made it re-present its whole visible area about 4 times per call, a 19x18 px element changing each
-time. With our agent, two overlapping Notepads kept the engine re-rendering them about 15 times a second for
+Notepad made DWM report its whole visible area dirty about 4 times per call. With our agent, the agent's own
+hash of that Notepad's visible desktop pixels had changed before every capture it requested in the burn
+window (per-minute counters: capture decisions = hash changes) - so the repaint changes the pixels on screen,
+at least while it is drawn. NOT MEASURED: whether it settles back to the same picture (a flicker sampled
+mid-repaint) or leaves different pixels. (An earlier wording here, "a 19x18 px element changing each time", read a
+dirty rect as a pixel change; a dirty rect only says an area was re-presented.) A repaint of identical pixels is
+not a change - the detector compares pixels (§5) - so only a repaint that changes them can feed a loop. With our agent, two overlapping Notepads kept the engine re-rendering them about 15 times a second for
 about 29 minutes after they opened - DWM, the agent and the Notepads at about 150% of one core, on a desktop
 nobody touched.
 
@@ -234,3 +239,85 @@ for 10 s after the last pause.
 **Why rejected.** No measurable effect in a 3+3 interleaved A/B on the same scene; reverted (agent 301cf6f).
 
 **Jev 2026-09-30.** reject 0.84, accept 0.06; cost bounded 0.18; conflicts with the owner's direction 0.19; a user-visible regression possible 0.55.
+
+## 14. At rest, zero work — ACCEPTED (owner, 2026-09-30)
+
+**Decision.** The owner: *"idle load should GO, not just be reduced"*, *"anything pause-driven is meh. avoid
+whenever possible"*, *"change does not occur on idle desktop"*, and *"while window moves you can do whatever
+fuck you want. i want zero idle polls while it is stopped and no pixel changes."* When no window moves and no
+pixel changes, the agent and the broker do NOTHING: no PrintWindow, no thread woken by a timer, no heartbeat.
+Every wait is on an event, or on a deadline that exists only while work is pending. While a window moves,
+anything goes, including timers, dwells and PrintWindow.
+
+**Why.** On a desktop at rest nothing changes, so every cost measured there is our own: a timer acting without
+a change, or a PrintWindow manufacturing the change it then reacts to (§8). Reducing it - the echo guard cut it
+about 4x (§9) - leaves a desktop that is never at rest while our agent runs. The bar is the agent-stopped floor.
+
+**Consequence - what wakes today at rest, and must not.** Measured by reading the code, 2026-09-30:
+- the agent's desktop-duplication thread: `AcquireNextFrame` with a 1 s timeout, and a stale-grant sweep on
+  every pass (1/s);
+- the capture engine's worker: waits of at most 250 ms for the sweep (4/s), plus the sweep's PrintWindows;
+- the agent's main loop: a 1 s timeout whenever the broker or the notification bridge is up (1/s);
+- the broker's main loop: 250 ms, or 33 ms while any window is on its PrintWindow route (4/s or 30/s); agent and
+  broker heartbeats (each gives up after 10 s of silence); input-desktop and console-session polls;
+- the broker's backstop render (§4) and the echo loop (§8) wherever PrintWindow serves a window at rest.
+
+**Bound.** None at rest: zero wakeups, zero PrintWindow. Measured as per-thread context switches of our
+processes and DWM CPU on a static multi-window desktop, against the same desktop with our agent stopped.
+
+**Jev 2026-09-30.** accept-measure-owed 0.50, accept 0.47; cost bounded 0.72; conflicts with the owner's direction 0.14; a user-visible regression possible 0.58.
+
+## 15. A window at rest is copied from the desktop, whatever covers it; PrintWindow only establishes — PROPOSED
+
+**Proposal.** Supersedes §3, §10 and §11. A window that is not moving, and that nothing moving overlaps, takes
+its changes from the desktop duplication frame: every damaged sub-rect, minus the rectangles of the tracked
+windows above it, is copied into its buffer - the §2 path, clipped by occlusion instead of refused by it. The
+change detector already reads exactly those pixels (§5); nothing asks the application to paint. PrintWindow runs
+only to establish a buffer: first capture, a resize, and the settle after motion (§14 allows anything then),
+which also brings the covered part up to date.
+
+**Why.** §14. A read that does not perturb the application gives an idle desktop nothing to react to: a Windows
+11 Notepad's repaint after the settle PrintWindow is copied from the desktop once and the desktop is at rest
+again - no loop, no guard, no pause. The skew that made §3 reject mixed buffers (the window list newer than the
+frame, so an occluder that just moved leaks its pixels into the window below) exists only while something
+moves, and §14 hands motion to PrintWindow.
+
+**Cost.**
+- The covered part of a window at rest is as old as its last establish or its last uncovering: stale in dom0
+  wherever dom0 shows it (§6, §7). Today it is refreshed by the next whole-window PrintWindow or the sweep.
+- A window above casts its shadow onto the one below, and the desktop holds the shadow: the copy bakes it in, as
+  §2 already does for a window beside one above it. A translucent window above (layered, not opaque) is treated
+  as covering.
+- A window that cannot be copied at all (translucent itself, off the desktop) stays on PrintWindow, and an
+  application whose repaint changes its visible pixels (even only while it is drawn) would loop there - it must show up in §14's measurement and be moved to a
+  non-perturbing source (WGC, §7a), never guarded with a pause.
+
+**Jev 2026-09-30.** accept-measure-owed 0.90; cost bounded 0.15; conflicts with the owner's direction 0.23; a user-visible regression possible 0.83.
+
+## 16. The echo guard is retired — PROPOSED
+
+**Proposal.** Remove §9's guard once §15 holds.
+
+**Why.** §14: it is pause-driven, and it cannot tell an echo from a window that animates on its own (§9), so
+it throttles the latter. With §15 no stationary window is captured with PrintWindow because it changed, so
+nothing echoes into the capture path.
+
+**Cost.** Any window still captured with PrintWindow at rest (§15, last point) loses its only protection
+against an echo loop; §14's measurement is what finds one.
+
+**Jev 2026-09-30.** accept-measure-owed 0.97; cost bounded 0.12; conflicts with the owner's direction 0.17; a user-visible regression possible 0.81.
+
+## 17. Liveness from process handles and system notifications, not heartbeats — PROPOSED
+
+**Proposal.** The agent and the broker watch each other through process handles only; the broker learns of an
+input-desktop switch and a console-session change from system notifications (`EVENT_SYSTEM_DESKTOPSWITCH`,
+`WTSRegisterSessionNotification`), not by polling. The desktop-duplication thread waits without a timeout and
+is stopped by an event of its own; the stale-grant sweep, the arena reap and every other deferred job arm a
+one-shot deadline only while they have work.
+
+**Why.** §14. A heartbeat is a timer on both sides; a process handle signals the exit it exists to detect.
+
+**Cost.** A process that is alive but hung is no longer noticed by its peer: the broker keeps serving a hung
+agent (it is idle then), and the agent's existing broker stage/hang diagnostics become the only record.
+
+**Jev 2026-09-30.** accept-measure-owed 0.84, owner-decision 0.06; cost bounded 0.27; conflicts with the owner's direction 0.14; a user-visible regression possible 0.58.
