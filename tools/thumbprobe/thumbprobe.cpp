@@ -306,6 +306,11 @@ static bool g_driveSettings = false;
 // animate on their own (measured 2026-09-30: two 19x14 px elements changing ~46 times a second with our agent and broker
 // STOPPED) - so arrivals during that drive cannot show that a session tracks CHANGE. Two static pages can.
 static std::wstring g_driveA = L"ms-settings:display", g_driveB = L"ms-settings:sound";
+// --dest-ex <hex> / --dest-pos x,y: override the relay destination's extended style and position. On 26100.1742 WGC
+// refuses the broker's destination (WS_EX_LAYERED|TOOLWINDOW|NOACTIVATE|TRANSPARENT at 0,0) with E_INVALIDARG for ANY
+// source, while a plain WS_EX_LAYERED destination at 40,40 captures (2026-09-30) - these isolate which attribute it is.
+static bool g_destExSet = false, g_destPosSet = false;
+static DWORD g_destEx = 0; static int g_destX = 0, g_destY = 0;
 
 // Render a window exactly as the broker's DEMOTION PROBE does. The broker decides whether to demote a
 // quiet relay by PrintWindow(PW_RENDERFULLCONTENT)-ing the relay's SOURCE and hashing it. An A/B on one
@@ -345,10 +350,11 @@ static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
            g_direct ? 1 : 0, g_driveSettings ? 1 : 0, g_forceWarp ? 1 : 0);
     HWND dest = nullptr;
     if (!g_direct) {
-        const DWORD destEx = brokerDest
+        const DWORD destEx = g_destExSet ? g_destEx : (brokerDest
             ? (WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)
-            : WS_EX_LAYERED;
-        const int destX = brokerDest ? 0 : 40, destY = brokerDest ? 0 : 40;
+            : WS_EX_LAYERED);
+        const int destX = g_destPosSet ? g_destX : (brokerDest ? 0 : 40);
+        const int destY = g_destPosSet ? g_destY : (brokerDest ? 0 : 40);
         printf("RESULT=HOLDDEST brokerDest=%d ex=0x%08lx pos=%d,%d noClose=%d pwSource=%d\n",
                brokerDest ? 1 : 0, (unsigned long)destEx, destX, destY, g_noClose ? 1 : 0,
                g_pwSource ? 1 : 0);
@@ -800,6 +806,13 @@ int wmain(int argc, wchar_t** argv)
             else if (!wcscmp(argv[a], L"--pw-source")) g_pwSource = true;
             else if (!wcscmp(argv[a], L"--direct")) g_direct = true;
             else if (!wcscmp(argv[a], L"--drive-settings")) g_driveSettings = true;
+            else if (!wcscmp(argv[a], L"--dest-ex") && a + 1 < argc) {
+                g_destEx = (DWORD)wcstoul(argv[++a], nullptr, 16); g_destExSet = true;
+            }
+            else if (!wcscmp(argv[a], L"--dest-pos") && a + 1 < argc) {
+                if (swscanf_s(argv[++a], L"%d,%d", &g_destX, &g_destY) != 2) { printf("RESULT=FAIL reason=usage --dest-pos x,y\n"); return 2; }
+                g_destPosSet = true;
+            }
             else if (!wcscmp(argv[a], L"--drive-uris") && a + 1 < argc) {
                 std::wstring v = argv[++a]; const size_t c = v.find(L',');
                 if (c == std::wstring::npos) { printf("RESULT=FAIL reason=usage --drive-uris a,b\n"); return 2; }
