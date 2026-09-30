@@ -98,6 +98,8 @@ struct Channel {
     ULONGLONG pwLastTick = 0;
     // Current adaptive interval between PrintWindow renders, grown while renders change nothing.
     ULONGLONG pwBackoffMs = 0;
+    // Consecutive POKE-driven renders that published nothing new; stretches the poke coalescing interval.
+    int       pwFutile = 0;
     // BEHAVIOURAL DETECTION. When this WGC channel opened, and when it last delivered a frame.
     // A visible window whose feed has been silent since it opened is one WGC is not serving.
     ULONGLONG openTick = 0;
@@ -1533,7 +1535,17 @@ int wmain(int argc, wchar_t** argv) {
             // WGCBRK_POKE_MIN_INTERVAL_MS. Input pokes arrive at input rate, and this render is
             // not cheap and not ours to spend - it runs on the captured application's UI thread.
             // The poke is NOT acknowledged here, so the render still happens at the next tick.
-            if (changed && (nowTick - g_ch[i].pwLastTick) < WGCBRK_POKE_MIN_INTERVAL_MS && !stale) {
+            //
+            // A POKE THAT KEEPS BUYING NOTHING IS TRUSTED LESS (2026-09-30). A poke-driven render that publishes nothing
+            // new is futile, and some renders CAUSE the damage that pokes the next one: measured on w11-ds (26100.1742),
+            // Settings on this route re-rendered 288-314 times in 20 idle seconds, published nothing new, and held DWM at
+            // 47-53% of a core; a bare PrintWindow loop on a Windows 11 Notepad makes the app re-render and re-present on
+            // every call. So each futile poke-driven render doubles the coalescing interval, up to the safety interval
+            // (100, 200, 400, 800, 1000 ms), and one render that DOES publish something resets it: a window that really
+            // changes is back at the floor on its first changed frame.
+            const ULONGLONG pokeIv = (ULONGLONG)WGCBRK_POKE_MIN_INTERVAL_MS << (g_ch[i].pwFutile < 4 ? g_ch[i].pwFutile : 4);
+            const ULONGLONG minIv = pokeIv < WGCBRK_POKE_SAFETY_MS ? pokeIv : WGCBRK_POKE_SAFETY_MS;
+            if (changed && (nowTick - g_ch[i].pwLastTick) < minIv && !stale) {
                 ps->PollsSkipped++; continue;
             }
             if (!changed && !stale) { ps->PollsSkipped++; continue; }
@@ -1542,6 +1554,8 @@ int wmain(int argc, wchar_t** argv) {
             g_ch[i].pwLastTick = nowTick;
             ps->PollsServiced++;
             const bool produced = PublishPrintWindow(i);
+            if (produced)       g_ch[i].pwFutile = 0;                       // it changed: back to the floor
+            else if (changed)   { if (g_ch[i].pwFutile < 16) g_ch[i].pwFutile++; }   // a poke that bought nothing
             if (g_ch[i].probing) {
                 // THE TEST'S ANSWER. PublishPrintWindow returns false when the card it rendered is
                 // identical to the frame already published - which, on the first render after a
