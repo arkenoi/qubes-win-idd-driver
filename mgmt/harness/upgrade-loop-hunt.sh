@@ -26,31 +26,41 @@ set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 2
 ISO="${1:?usage: upgrade-loop-hunt.sh <release-iso> [runs] [subject]}"
 N="${2:-20}"
-SUBJECT="${3:-win10-up}"
+SUBJECT="${3:?usage: $0 <pkg> <os> <subject> - name the subject; there is no default target}"
 # Hold the guest lock for the WHOLE loop: quick-upgrade takes the same lock per run and is
 # re-entrant when an ancestor holds it, so this keeps anything else off the subject between
 # runs - including the window where a wedged specimen is being captured.
+export QTEST_VM="$SUBJECT"   # e2e-lib.sh refuses to load without it - there is no default target
+. .claude/skills/win-guest-e2e/e2e-lib.sh
+. mgmt/harness/e2e-wait.sh
 . mgmt/harness/vmlock.sh
 vm_lock "$SUBJECT"
 OUT="scratchpad/upgradeloop-$(date -u +%Y%m%dT%H%M%SZ)"; mkdir -p "$OUT"
 say(){ echo "$(date -u +%H:%M:%SZ) uploop: $*" | tee -a "$OUT/run.log"; }
 
 state(){ qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$SUBJECT" '$1==v{print $2}'; }
-cpu(){ python3 - "$SUBJECT" <<'PY'
-import sys
-try:
-    import qubesadmin
-    print(int(qubesadmin.Qubes().domains[sys.argv[1]].get_cputime() or 0))
-except Exception:
-    print(0)
-PY
+# w_cpu_state FROM THE SHARED WAIT LIBRARY, never a hand-rolled reader. The first version called
+# qubesadmin's get_cputime, which DOES NOT EXIST on this toolstack (QubesNoSuchPropertyError):
+# the exception was swallowed, 0 was returned twice, and "0 > 0" made a LIVE WEDGE read as
+# healthy. Run 7 of the 2026-09-23 loop was a real SPINNING stall, correctly identified by the
+# upgrade harness itself, and this oracle discarded it; the next run recloned the guest and the
+# specimen was lost. MISSING DATA MUST FAIL, never read as a negative.
+wedge_now(){ # 0 = spin fingerprint, 1 = not it, 2 = UNMEASURED; reason in $WEDGE_WHY
+  local cs
+  if alive; then WEDGE_WHY="guest answers qrexec"; return 1; fi
+  cs=$(w_cpu_state "$SUBJECT" 20)
+  case "${cs%% *}" in
+    MOVING) WEDGE_WHY="unreachable while cpu_time advanced ${cs#* }"; return 0 ;;
+    FLAT)   WEDGE_WHY="unreachable but cpu_time FLAT - a frozen domain, not the spin"; return 1 ;;
+    *)      WEDGE_WHY="cpu_time UNREADABLE - executing-or-not UNMEASURED, which is NOT a negative"; return 2 ;;
+  esac
 }
 alive(){ QTEST_VM="$SUBJECT" timeout -k 5 45 ./tools/qtest run 'cmd /c echo PONG' 2>/dev/null | grep -qa PONG; }
 
 stalls=0; fails=0; clean=0; core_taken=0
 for r in $(seq 1 "$N"); do
   say "run $r/$N (clean=$clean stalls=$stalls other-failures=$fails)"
-  bash mgmt/harness/quick-upgrade.sh "$ISO" "$SUBJECT" "${OS:-win10}" >"$OUT/run-$r.log" 2>&1
+  bash mgmt/harness/quick-upgrade.sh "$ISO" "$SUBJECT" "${OS:?set OS (win10|win11)}" >"$OUT/run-$r.log" 2>&1
   rc=$?
   if [ "$rc" = 0 ]; then
     clean=$((clean+1)); say "  run $r: clean (rc=0)"
@@ -58,11 +68,12 @@ for r in $(seq 1 "$N"); do
     # A NON-ZERO RC IS NOT AUTOMATICALLY THE WEDGE. Check the fingerprint independently: the guest
     # unreachable while its cpu_time still advances. Anything else is counted as an ordinary
     # failure and kept, not credited to the hunt.
-    if [ "$(state)" = Running ] && ! alive; then
-      c1=$(cpu); sleep 20; c2=$(cpu)
-      if [ "${c2:-0}" -gt "${c1:-0}" ]; then
+    if [ "$(state)" = Running ]; then
+      wedge_now; w=$?
+      [ "$w" = 2 ] && say "  run $r: UNMEASURED - $WEDGE_WHY (not counted clean)"
+      if [ "$w" = 0 ]; then
         stalls=$((stalls+1))
-        say "  run $r: WEDGE (rc=$rc) - unreachable while cpu_time advances ($c1 -> $c2)"
+        say "  run $r: WEDGE (rc=$rc) - $WEDGE_WHY"
         d="$OUT/wedge-$r"; mkdir -p "$d"
         timeout 300 qrexec-client-vm dom0 "local.WinWedgeForensics+$SUBJECT" </dev/null > "$d/forensics.tar" 2>"$d/err" \
           && say "    forensics -> $d"
