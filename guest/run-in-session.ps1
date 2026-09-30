@@ -16,7 +16,7 @@ param([Parameter(Mandatory)][string]$Command, [int]$TimeoutSec = 90)
 # this repo documents the same trap. Native calls here are judged ONLY by $LASTEXITCODE.
 $ErrorActionPreference = 'Continue'
 $tn  = 'QwtRunInSession'
-$RIS_MARKER = 'RIS-V8'   # pushed-copy identity, so a stale copy cannot be mistaken for this one
+$RIS_MARKER = 'RIS-V9'   # pushed-copy identity, so a stale copy cannot be mistaken for this one
 # C:\Users\Public, not C:\ProgramData\Qubes: the task runs AS THE USER, who cannot write there.
 # Measured - the task ran and produced nothing, which looked identical to 'never ran'.
 #
@@ -55,7 +55,13 @@ Set-Content -LiteralPath $cmdFile -Encoding ASCII -Value @(
     "$Command > `"$out`" 2>&1"
 )
 $global:LASTEXITCODE = 0
-$mk = (& schtasks.exe /create /tn $tn /tr $cmdFile /sc once /st 23:59 /ru $user /it /f 2>&1 | Out-String)
+# HEADLESS (V9). Run as the task's action, the .cmd got a console of its own - and on Windows 11 with Windows Terminal as
+# the default terminal that console is a visible, ELEVATED Terminal window ("Administrator: C:\WINDOWS\SYSTEM32\cmd.exe")
+# on the user's desktop for the length of every call. Measured 2026-09-30 on w11-ds: the agent mapped each one, gave it a
+# broker slot and a WGC session, and every scene listing counted it as a Terminal - the harness was perturbing the very
+# desktop it measured. conhost --headless gives the command a console with no window; its output goes to the file as before.
+$tr = "$env:WINDIR\System32\conhost.exe --headless $env:WINDIR\System32\cmd.exe /c $cmdFile"
+$mk = (& schtasks.exe /create /tn $tn /tr $tr /sc once /st 23:59 /ru $user /it /f 2>&1 | Out-String)
 if ($LASTEXITCODE -ne 0) { Write-Output "RIS-FAIL: schtasks /create rc=$LASTEXITCODE :: $mk"; exit 4 }
 try {
     $global:LASTEXITCODE = 0
