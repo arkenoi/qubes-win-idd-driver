@@ -267,7 +267,7 @@ processes and DWM CPU on a static multi-window desktop, against the same desktop
 
 **Jev 2026-09-30.** accept-measure-owed 0.50, accept 0.47; cost bounded 0.72; conflicts with the owner's direction 0.14; a user-visible regression possible 0.58.
 
-## 15. A window at rest is copied from the desktop, whatever covers it; PrintWindow only establishes — PROPOSED
+## 15. A window at rest is copied from the desktop, whatever covers it; PrintWindow only establishes — REJECTED (owner, 2026-09-30)
 
 **Proposal.** Supersedes §3, §10 and §11. A window that is not moving, and that nothing moving overlaps, takes
 its changes from the desktop duplication frame: every damaged sub-rect, minus the rectangles of the tracked
@@ -293,6 +293,13 @@ moves, and §14 hands motion to PrintWindow.
   non-perturbing source (WGC, §7a), never guarded with a pause.
 
 **Jev 2026-09-30.** accept-measure-owed 0.90; cost bounded 0.15; conflicts with the owner's direction 0.23; a user-visible regression possible 0.83.
+
+**Why rejected.** The owner: *"desktop-copy is slicing in disguise, right?"* / *"the exact design we tried to
+retire?"* It is. The source is the composited desktop picture - what slicing used, and what the de-slice retired
+as a window source. Cutting around the windows above removes only the most visible artifact of that source; the
+copy still carries the composite's others (the shadow a window above casts, what shows behind rounded corners, the
+window list being newer than the picture). Written down here so it is not proposed again; the non-slicing route to
+§14 is §18. Built as agent 2b47ae3 on experiment branch `rest-zero` and never measured.
 
 ## 16. The echo guard is retired — PROPOSED
 
@@ -321,3 +328,34 @@ one-shot deadline only while they have work.
 agent (it is idle then), and the agent's existing broker stage/hang diagnostics become the only record.
 
 **Jev 2026-09-30.** accept-measure-owed 0.84, owner-decision 0.06; cost bounded 0.27; conflicts with the owner's direction 0.14; a user-visible regression possible 0.58.
+
+## 18. Every ordinary window on 26100+ is captured with WGC through the broker — PROPOSED
+
+**Proposal.** On build 26100 and later, where the broker is eligible (§1), an ordinary window gets a broker WGC
+session like the classes §1 already sends there, and its buffer is filled from the broker's frames. On those builds
+the composited desktop stops being a window source altogether: §2's desktop copy retires there as the de-slice
+retired the cut-outs. PrintWindow stays only where WGC refuses a window or the broker is down. Below 26100 (no
+broker) nothing changes.
+
+**Why.** §14 without slicing (§15). WGC hands over the window's own surface: an application is never asked to paint
+(no echo, no storm, no guard, no pause); a frame arrives only when that window's content changed (nothing at rest);
+no other window's pixels or shadows are in it; and a covered window's content stays live, which closes §7 on the
+target builds.
+
+**Cost.**
+- Capacity: 32 broker slots, shared with menus, toasts and the other classes; a pixel arena budgeted at 128 MB,
+  which two maximized windows at 5120x1440 (29.5 MB per buffer, two buffers each) nearly fill. Both must grow, or
+  the overflow needs a policy.
+- 26100.1742's WGC refuses some windows when a session is created (E_INVALIDARG, measured for disabled, tool and
+  no-activate windows as relay destinations; not yet measured as capture targets). Those need a fallback, and the
+  only other own-content source is PrintWindow, with its echo.
+- WGC sessions have gone deaf after a cold boot (the de-slice census); the quiet ladder's last rung is the
+  broker's PrintWindow route, whose backstop render is itself a timer (§4).
+- The agent copies the whole window per broker frame (the slice-fed path), not only the changed rows: more copying
+  per change than a desktop copy, nothing at rest.
+- The agent picks broker frames up in its desktop frame loop, which runs only when the desktop changes or its 1 s
+  timeout fires: a covered window's frame needs its own wake-up from the broker, the same work §17 needs.
+- Typing latency on the foreground window moves from the desktop copy (§2) to WGC arrival plus two copies: not
+  measured.
+
+**Jev 2026-09-30.** accept-measure-owed 0.93, owner-decision 0.03; cost bounded 0.46; conflicts with the owner's direction 0.39; a user-visible regression possible 0.86.
