@@ -53,6 +53,8 @@
 #   3. the installer's own RESULT (sliced after this run's marker): ok:true,
 #      upgrade_mode:in-place-msi-major-upgrade, installed_gui_agent_sha256 == the reference;
 #   4. gui-agent.exe is running.
+#   5. no console/Terminal window mapped since boot (console-window-check.sh) - a window nobody
+#      asked for is ours or the harness's, never the user's.
 # Any miss is a loud FAIL with the subject LEFT RUNNING as evidence (H3.5).
 #
 # Exits: 0 = upgraded and verified; 1 = TERMINAL/FAIL (verify failed, guest died, clone/boot
@@ -888,6 +890,16 @@ if grun 'cmd /c tasklist /fi "imagename eq gui-agent.exe" /nh' 60 | _shell_echo_
 else
   no "gui-agent.exe is NOT running after boot #2"
 fi
+
+# (e) NO WINDOW NOBODY ASKED FOR (2026-09-30). The toast bridge put a blank Windows Terminal window on
+# every Win11 boot for four weeks and no check here could see it; seen to FAIL on the release that
+# carried it (36652188404) and to pass on the fix, same recipe (console-window-check.sh header).
+cw=$("$HERE/mgmt/harness/console-window-check.sh" "$SUBJECT" 2>&1); cwrc=$?
+case $cwrc in
+  0) ok "$cw" ;;
+  1) no "a console/Terminal window was mapped on this boot - $cw" ;;
+  *) no "console-window check could not judge - INVALID-INSTRUMENT: $cw" ;;
+esac
 
 # Evidence: the guest's windows as dom0 sees them (the pixels are the judge for anything beyond
 # this script's claims), the MSI log tail, the sliced install log - all already in $OUT.

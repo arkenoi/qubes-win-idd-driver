@@ -1030,6 +1030,15 @@ verify_installed(){ # $1=vm $2=label   - the guest must be healthy and carry OUR
       no "$lbl: installed agent is NOT the release binary (on-disk $fhash != $ASHA)"
     fi
   fi
+  # NO WINDOW NOBODY ASKED FOR (2026-09-30): a console/Terminal window our agent mapped since this boot is
+  # ours or the harness's - the toast bridge shipped one on every Win11 boot for four weeks unseen.
+  local cw cwrc
+  cw=$("$HERE/mgmt/harness/console-window-check.sh" "$vm" 2>&1); cwrc=$?
+  case $cwrc in
+    0) ok "$lbl: $cw" ;;
+    1) no "$lbl: a console/Terminal window was mapped on this boot - $cw" ;;
+    *) no "$lbl: console-window check could not judge - INVALID-INSTRUMENT: $cw" ;;
+  esac
   # DIALOG VERDICT. Read the watcher's own summary rather than inferring from silence: it reports
   # NO SAMPLES / BLIND / COVERAGE GAPS as distinct outcomes, and each of those means "this cell
   # cannot claim the dialog was absent" - not "it was absent".
