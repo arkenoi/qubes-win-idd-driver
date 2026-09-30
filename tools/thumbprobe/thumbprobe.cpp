@@ -25,6 +25,7 @@
 // colours and frame counts and lets the caller judge.
 #include <windows.h>
 #include <dwmapi.h>
+#include <shellapi.h>
 #include <d3d11.h>
 #include <dxgi.h>
 #include <winrt/base.h>
@@ -43,6 +44,7 @@
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "windowsapp.lib")
 
 using namespace winrt;
@@ -54,9 +56,12 @@ static com_ptr<ID3D11Device>        g_dev;
 static com_ptr<ID3D11DeviceContext> g_ctx;
 static IDirect3DDevice              g_rtDev{ nullptr };
 
+// --warp: create the device the way the BROKER does (D3D_DRIVER_TYPE_WARP), instead of hardware-first. A probe
+// that disagrees with the broker must not differ from it in a way nobody chose.
+static bool g_forceWarp = false;
 static bool InitD3D()
 {
-    if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
+    if (g_forceWarp || FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr,
             D3D11_CREATE_DEVICE_BGRA_SUPPORT, nullptr, 0, D3D11_SDK_VERSION,
             g_dev.put(), nullptr, g_ctx.put())))
     {
@@ -288,6 +293,15 @@ static void RelayOnce(const Found& f)
 // this flag turns that into a one-run A/B instead of a guess.
 static bool g_noClose = false;   // see --no-close in HoldAndCount's handler
 static bool g_pwSource = false;  // see --pw-source below
+// --direct: capture the SOURCE window itself, with no thumbnail and no destination. The broker never tries this for a
+// window whose content comes from a child in another process (a UWP frame): it goes to the relay, and when the relay's
+// capture fails, to polled PrintWindow. Whether a plain WGC session on such a frame delivers a frame when the content
+// changes was concluded from one broker session that "froze at 3 arrivals" - with no record that the content changed
+// during it. This asks the question directly.
+static bool g_direct = false;
+// --drive-settings: navigate the Settings app between two pages every 2 s, so its content genuinely changes while the
+// session is held. Without a driven change, "no arrivals" cannot tell a deaf session from a static window.
+static bool g_driveSettings = false;
 
 // Render a window exactly as the broker's DEMOTION PROBE does. The broker decides whether to demote a
 // quiet relay by PrintWindow(PW_RENDERFULLCONTENT)-ing the relay's SOURCE and hashing it. An A/B on one
@@ -320,25 +334,37 @@ static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
     HTHUMBNAIL th = nullptr; int w = 0, h = 0;
     RECT sr{}; GetWindowRect(src, &sr);
     w = sr.right - sr.left; h = sr.bottom - sr.top;
-    const DWORD destEx = brokerDest
-        ? (WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)
-        : WS_EX_LAYERED;
-    const int destX = brokerDest ? 0 : 40, destY = brokerDest ? 0 : 40;
-    printf("RESULT=HOLDDEST brokerDest=%d ex=0x%08lx pos=%d,%d noClose=%d pwSource=%d\n",
-           brokerDest ? 1 : 0, (unsigned long)destEx, destX, destY, g_noClose ? 1 : 0,
-           g_pwSource ? 1 : 0);
-    HWND dest = MakeDest(w, h, destX, destY, destEx);
-    if (!dest) { printf("RESULT=HOLD dest=FAIL\n"); return 2; }
-    SetLayeredWindowAttributes(dest, 0, 0, LWA_ALPHA);
-    ShowWindow(dest, SW_SHOWNA);
-    if (FAILED(DwmRegisterThumbnail(dest, src, &th)) || !th) {
-        printf("RESULT=HOLD register=FAIL\n"); DestroyWindow(dest); return 2; }
-    SIZE ss{}; DwmQueryThumbnailSourceSize(th, &ss);
-    DWM_THUMBNAIL_PROPERTIES p{};
-    p.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY;
-    p.rcDestination = RECT{ 0, 0, ss.cx ? ss.cx : w, ss.cy ? ss.cy : h };
-    p.fVisible = TRUE; p.opacity = 255;
-    DwmUpdateThumbnailProperties(th, &p);
+    BOOL cloaked = FALSE; DwmGetWindowAttribute(src, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+    printf("RESULT=HOLDSRC hwnd=0x%llx rect=%ld,%ld,%ld,%ld visible=%d iconic=%d cloaked=%d direct=%d drive=%d warp=%d\n",
+           (unsigned long long)(ULONG_PTR)src, sr.left, sr.top, sr.right, sr.bottom,
+           IsWindowVisible(src) ? 1 : 0, IsIconic(src) ? 1 : 0, cloaked ? 1 : 0,
+           g_direct ? 1 : 0, g_driveSettings ? 1 : 0, g_forceWarp ? 1 : 0);
+    HWND dest = nullptr;
+    if (!g_direct) {
+        const DWORD destEx = brokerDest
+            ? (WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT)
+            : WS_EX_LAYERED;
+        const int destX = brokerDest ? 0 : 40, destY = brokerDest ? 0 : 40;
+        printf("RESULT=HOLDDEST brokerDest=%d ex=0x%08lx pos=%d,%d noClose=%d pwSource=%d\n",
+               brokerDest ? 1 : 0, (unsigned long)destEx, destX, destY, g_noClose ? 1 : 0,
+               g_pwSource ? 1 : 0);
+        dest = MakeDest(w, h, destX, destY, destEx);
+        if (!dest) { printf("RESULT=HOLD dest=FAIL\n"); return 2; }
+        SetLayeredWindowAttributes(dest, 0, 0, LWA_ALPHA);
+        ShowWindow(dest, SW_SHOWNA);
+        const HRESULT rhr = DwmRegisterThumbnail(dest, src, &th);
+        if (FAILED(rhr) || !th) {
+            printf("RESULT=HOLD register=FAIL hr=0x%08lx\n", (unsigned long)rhr); DestroyWindow(dest); return 2; }
+        SIZE ss{}; const HRESULT qhr = DwmQueryThumbnailSourceSize(th, &ss);
+        DWM_THUMBNAIL_PROPERTIES p{};
+        p.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY;
+        p.rcDestination = RECT{ 0, 0, ss.cx ? ss.cx : w, ss.cy ? ss.cy : h };
+        p.fVisible = TRUE; p.opacity = 255;
+        const HRESULT uhr = DwmUpdateThumbnailProperties(th, &p);
+        printf("RESULT=HOLDTHUMB srcSize=%ldx%ld query=0x%08lx update=0x%08lx dest=0x%llx\n", ss.cx, ss.cy,
+               (unsigned long)qhr, (unsigned long)uhr, (unsigned long long)(ULONG_PTR)dest);
+    }
+    const HWND target = g_direct ? src : dest;
 
     // A REAL FrameArrived handler, not TryGetNextFrame polling: the broker is event-driven and the
     // question is whether the event fires at all.
@@ -347,18 +373,30 @@ static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
     // (stack buffer overrun) AFTER printing correct results. The numbers were right, the exit was not.
     static volatile LONG arrivals;
     arrivals = 0;
+    // WHICH STEP FAILED, AND WITH WHAT. The first version printed "threw=1" and nothing else, and the broker's own
+    // fallback resets its FailHr on the way to PrintWindow - so on 2026-09-30 every Settings relay on w11-ds read
+    // relayOk=1 relayFail=1 with the cause unrecoverable from either.
+    const char* stage = "createForWindow";
     try {
         auto interop = get_activation_factory<GraphicsCaptureItem, ::IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{ nullptr };
-        if (FAILED(interop->CreateForWindow(dest, guid_of<GraphicsCaptureItem>(),
-                                            reinterpret_cast<void**>(put_abi(item)))) || !item) {
-            printf("RESULT=HOLD createForWindow=FAIL\n");
-            DwmUnregisterThumbnail(th); DestroyWindow(dest); return 2;
+        const HRESULT chr = interop->CreateForWindow(target, guid_of<GraphicsCaptureItem>(),
+                                                     reinterpret_cast<void**>(put_abi(item)));
+        if (FAILED(chr) || !item) {
+            printf("RESULT=HOLD createForWindow=FAIL hr=0x%08lx\n", (unsigned long)chr);
+            if (th) DwmUnregisterThumbnail(th);
+            if (dest) DestroyWindow(dest);
+            return 2;
         }
+        stage = "size";
         auto size = item.Size();
+        printf("RESULT=HOLDITEM size=%dx%d\n", (int)size.Width, (int)size.Height);
+        stage = "pool";
         auto pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
             g_rtDev, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size);
+        stage = "session";
         auto session = pool.CreateCaptureSession(item);
+        stage = "border";
         try { session.IsBorderRequired(false); } catch (...) {}
         // --no-close DELIBERATELY OMITS f.Close(), which is the ONE difference left between this probe
         // and the broker's arrival handler. The broker never closes its frame; it relies on the local
@@ -369,20 +407,29 @@ static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
         // handler that never closes exhausts a 2-buffer pool and stops receiving events. This flag
         // settles that in the instrument I control instead of guessing about the product.
         const bool noClose = g_noClose;
+        stage = "frameArrived";
         auto rev = pool.FrameArrived(auto_revoke, [noClose](auto const& sender, auto const&) {
             if (auto f = sender.TryGetNextFrame()) {
                 InterlockedIncrement(&arrivals);
                 if (!noClose) f.Close();
             }
         });
+        stage = "start";
         session.StartCapture();
-        printf("RESULT=HOLD start src=0x%llx dest=0x%llx %dx%d pump=%d secs=%d\n",
-               (unsigned long long)(ULONG_PTR)src, (unsigned long long)(ULONG_PTR)dest,
+        stage = "hold";
+        printf("RESULT=HOLD start src=0x%llx target=0x%llx %dx%d pump=%d secs=%d\n",
+               (unsigned long long)(ULONG_PTR)src, (unsigned long long)(ULONG_PTR)target,
                (int)size.Width, (int)size.Height, pump ? 1 : 0, secs);
         fflush(stdout);
         // Report per second, so "a burst then silence" is visibly different from "steady".
         for (int t = 0; t < secs; t++) {
             LONG before = arrivals;
+            // --drive-settings: a page change every 2 s, alternating, logged so an arrival can be matched to it.
+            if (g_driveSettings && (t % 2) == 1) {
+                const wchar_t* uri = ((t / 2) % 2) ? L"ms-settings:sound" : L"ms-settings:display";
+                const HINSTANCE r = ShellExecuteW(nullptr, L"open", uri, nullptr, nullptr, SW_SHOWNOACTIVATE);
+                printf("RESULT=HOLDDRIVE t=%d uri=%ls rc=%lld\n", t + 1, uri, (long long)(INT_PTR)r);
+            }
             // --pw-source: render the SOURCE the way the broker's demotion probe does, twice a second,
             // which is that probe's most aggressive cadence (it resets to 500 ms whenever it sees a
             // change, so a changing window gets it hardest - matching the observed inversion).
@@ -400,9 +447,13 @@ static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
             fflush(stdout);
         }
         session.Close(); pool.Close();
-    } catch (...) { printf("RESULT=HOLD threw=1\n"); }
+    } catch (hresult_error const& e) {
+        printf("RESULT=HOLD threw=1 stage=%s hr=0x%08lx msg=%ls\n", stage, (unsigned long)e.code().value,
+               e.message().c_str());
+    } catch (...) { printf("RESULT=HOLD threw=1 stage=%s hr=unknown\n", stage); }
     printf("RESULT=HOLDDONE arrivals=%ld pump=%d\n", (long)arrivals, pump ? 1 : 0);
-    DwmUnregisterThumbnail(th); DestroyWindow(dest);
+    if (th) DwmUnregisterThumbnail(th);
+    if (dest) DestroyWindow(dest);
     return 0;
 }
 
@@ -730,19 +781,29 @@ int wmain(int argc, wchar_t** argv)
     }
     if (want == L"--hold")
     {
-        if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
         int secs = (argc > 2) ? _wtoi(argv[2]) : 15;
         bool pump = false;
         std::wstring srcCls;
         bool brokerDest = false;
+        HWND srcHwnd = nullptr;
+        // --warp must be known BEFORE the device is made, so the flags are read first.
+        for (int a = 3; a < argc; a++) if (!wcscmp(argv[a], L"--warp")) g_forceWarp = true;
+        if (!InitD3D()) { printf("RESULT=FAIL reason=d3d-init\n"); return 2; }
         for (int a = 3; a < argc; a++) {
             if (!wcscmp(argv[a], L"--pump")) pump = true;
             else if (!wcscmp(argv[a], L"--broker-dest")) brokerDest = true;
             else if (!wcscmp(argv[a], L"--no-close")) g_noClose = true;
             else if (!wcscmp(argv[a], L"--pw-source")) g_pwSource = true;
+            else if (!wcscmp(argv[a], L"--direct")) g_direct = true;
+            else if (!wcscmp(argv[a], L"--drive-settings")) g_driveSettings = true;
+            else if (!wcscmp(argv[a], L"--warp")) g_forceWarp = true;
+            else if (!wcscmp(argv[a], L"--hwnd") && a + 1 < argc) srcHwnd = (HWND)(ULONG_PTR)_wcstoui64(argv[++a], nullptr, 16);
             else srcCls = argv[a];
         }
-        HWND src = srcCls.empty() ? nullptr : FindWindowW(srcCls.c_str(), nullptr);
+        // --hwnd <hex> names the source exactly: FindWindow by class returns the first window of the class, which for
+        // ApplicationFrameWindow can be a hidden frame of another app.
+        HWND src = srcHwnd ? srcHwnd : (srcCls.empty() ? nullptr : FindWindowW(srcCls.c_str(), nullptr));
+        if (srcHwnd && !IsWindow(srcHwnd)) { printf("RESULT=FAIL reason=not-a-window\n"); return 2; }
         if (!src) src = GetForegroundWindow();
         if (!src) { printf("RESULT=FAIL reason=no-source\n"); return 2; }
         WCHAR cls[128] = {}; GetClassNameW(src, cls, 128);
