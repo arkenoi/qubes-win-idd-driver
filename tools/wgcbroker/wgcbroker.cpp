@@ -96,8 +96,6 @@ struct Channel {
     int     poolW = 0, poolH = 0;
     // Last PrintWindow render, for the staleness bound on the damage-driven path.
     ULONGLONG pwLastTick = 0;
-    // Last time this WGC channel was re-checked for a cross-process content child.
-    ULONGLONG xprocTick = 0;
     // Current adaptive interval between PrintWindow renders, grown while renders change nothing.
     ULONGLONG pwBackoffMs = 0;
     // BEHAVIOURAL DETECTION. When this WGC channel opened, and when it last delivered a frame.
@@ -859,38 +857,6 @@ static bool PublishPrintWindow(int i) {
     } while (0);
     return changed;
 }
-// Does this window's visible content come from a child window owned by ANOTHER PROCESS that
-// covers its client area? That is the shape whose own surface stays empty, so WGC captures
-// nothing from it. Measured on a UWP host: the frame is owned by ApplicationFrameHost while a
-// Windows.UI.Core.CoreWindow child in the app's process covers the client area.
-//
-// Walks DESCENDANTS, not immediate children: an earlier attempt used FindWindowEx on the frame
-// and missed the CoreWindow entirely on one guest while EnumChildWindows found it, so a fix keyed
-// on the immediate-child test would have been flaky.
-struct XProcScan { DWORD ownPid; RECT client; bool found; };
-
-static BOOL CALLBACK XProcChildProc(HWND child, LPARAM lp) {
-    XProcScan* sc = (XProcScan*)lp;
-    if (!IsWindowVisible(child)) return TRUE;
-    DWORD pid = 0;
-    GetWindowThreadProcessId(child, &pid);
-    if (pid == 0 || pid == sc->ownPid) return TRUE;   // same process: an ordinary child control
-    RECT r;
-    if (!GetWindowRect(child, &r)) return TRUE;
-    // "Covers the client area" is deliberately generous: the child need only span most of it,
-    // because a frame host keeps a caption strip of its own outside the child.
-    const LONG cw = sc->client.right - sc->client.left, chh = sc->client.bottom - sc->client.top;
-    const LONG w = r.right - r.left, h = r.bottom - r.top;
-    if (cw <= 0 || chh <= 0) return TRUE;
-    if (w * 100 >= cw * 80 && h * 100 >= chh * 80) { sc->found = true; return FALSE; }
-    return TRUE;
-}
-
-
-// Defined below, next to CloseChannel: does this window's content come from a child owned by
-// another process? Declared here because OpenChannel routes on it.
-static bool HasCrossProcessContentChild(HWND window);
-
 static void OpenChannel(int i) {
     StageScope stage(WGCBRK_STG_OPEN, i);
     WaitSameWindowTeardown(i, (HWND)(ULONG_PTR)g_slots[i].Hwnd);
@@ -906,38 +872,32 @@ static void OpenChannel(int i) {
     bool monitor = (s->Hwnd == WGCBRK_MONITOR_HWND);
     HWND hwnd = monitor ? nullptr : (HWND)(ULONG_PTR)s->Hwnd;
     if (!monitor && (!hwnd || !IsWindow(hwnd))) { s->AckState = WGCBRK_FAILED; s->FailHr = E_HANDLE; return; }
-    // A window whose visible content is rendered by a child in ANOTHER PROCESS has an empty
-    // surface of its own, so a WGC session on it delivers a couple of frames and then nothing at
-    // all - it is capturing a surface that never changes again. Measured 2026-09-25 on Settings:
-    // PrintWindow(flags=0), which excludes child composition, returned ONE distinct colour over
-    // 1216x941 while PW_RENDERFULLCONTENT returned 191 and the complete page; the slot's arrivals
-    // froze at 3 while a control slot ran 637 -> 678 over 23 s.
-    //
-    // Detect the SHAPE, not the class name: ApplicationFrameWindow is only today's example, and
-    // Jev put the right detector at cross-process-child-covering-the-client-area 0.91 against the
-    // class name at 0.01. Retargeting the capture at that child does not work either - WGC throws
-    // for it (measured: the retarget build came up pw=1, which is only reachable from the catch
-    // below) - so these windows go to the PrintWindow path deliberately and up front, rather than
-    // arriving there via an exception after a session that was never going to produce anything.
+    // A UWP-STYLE FRAME IS CAPTURED ON THE WINDOW ITSELF, like any other window (2026-09-30). Until now a window whose
+    // content comes from a child in ANOTHER process (ApplicationFrameWindow + its CoreWindow) was routed up front to the
+    // relay and, when that failed, to polled PrintWindow, on the 2026-09-25 reading that a WGC session on such a frame
+    // "delivers a couple of frames and then nothing". That reading was taken on a Settings window nobody was changing.
+    // Measured 2026-09-30 on w11-ds (26100.1742) with our agent and broker STOPPED, so no render of ours was involved: a
+    // direct session on the Settings frame returns the full page (126-130 colours, 13933/13936 samples non-black),
+    // delivers `1 0 0 0 0 0 0 0 0 0` frames/s left alone, and bursts of 17-22 right after each navigation when driven.
+    // The frame is an ordinary WGC target, and the up-front re-route took its arrival-driven path away: on 26100.1742 the
+    // relay cannot even open (that build refuses a WS_EX_TOOLWINDOW or WS_EX_NOACTIVATE destination), so Settings sat on
+    // the polled route, re-rendered on its own UI thread up to ten times a second. A window WGC genuinely does not serve is
+    // still caught - by the behavioural ladder in Reconcile (quiet while the agent says it changed: one fresh session,
+    // then the relay, then PrintWindow), which keys on the symptom rather than on a shape.
     c.openTick = GetTickCount64();
     c.lastArrivalTick = 0;
-    // The STRUCTURAL test is kept only as a fast path: it spares a known-bad window the quiet
-    // period below. It is NOT the detector any more - it was rated reliable at 0.12, its 80%
-    // threshold is a guess from one sample, and its worst failure is routing a WGC-capable
-    // window to PrintWindow for nothing (0.73). The behavioural test in the main loop is what
-    // decides, because it keys on the symptom rather than on a proxy for it.
-    const bool xprocContent = g_forcePw[i] ||
-                              (!monitor && hwnd && HasCrossProcessContentChild(hwnd));
+    // Set only by that ladder: this window has already been found not to be served by a session on itself.
+    const bool fallback = g_forcePw[i];
     g_forcePw[i] = false;
-    // THE RELAY IS TRIED WHERE THE PRINTWINDOW FALLBACK WOULD BE USED, and nowhere else. This slot's
-    // window has no capturable surface of its own, so instead of dropping to a polled pull API we
-    // give DWM a destination we own and capture that - arrival-driven, like any other WGC channel.
+    // THE RELAY IS TRIED WHERE THE PRINTWINDOW FALLBACK WOULD BE USED, and nowhere else. The ladder has
+    // found that a session on this slot's window does not serve it, so instead of dropping to a polled pull
+    // API we give DWM a destination we own and capture that - arrival-driven, like any other WGC channel.
     // Routing is otherwise UNCHANGED: a window WGC can capture directly still is. Jev put this as
     // the first step at 0.98 precisely because it replaces a path rather than displacing one.
     HWND target = hwnd;
     const bool relayVetoed = g_noRelay[i];
     g_noRelay[i] = false;            // one-shot, same discipline as g_forcePw
-    if (xprocContent && g_RelayOn && !relayVetoed && !monitor && hwnd) {
+    if (fallback && g_RelayOn && !relayVetoed && !monitor && hwnd) {
         int rw = 0, rh = 0; HTHUMBNAIL th = nullptr;
         HWND dest;
         { StageScope st(WGCBRK_STG_RELAY_DWM, i); dest = RelayOpenDest(hwnd, &th, &rw, &rh); }
@@ -950,7 +910,7 @@ static void OpenChannel(int i) {
             s->RelayFail++;
         }
     }
-    if (!xprocContent || c.relay) try {
+    if (!fallback || c.relay) try {
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{ nullptr };
         if (monitor)
@@ -1129,14 +1089,6 @@ static void OpenChannel(int i) {
     } else {
         s->AckState = WGCBRK_FAILED;
     }
-}
-
-static bool HasCrossProcessContentChild(HWND window) {
-    XProcScan sc{};
-    GetWindowThreadProcessId(window, &sc.ownPid);
-    if (!GetWindowRect(window, &sc.client)) return false;
-    EnumChildWindows(window, XProcChildProc, (LPARAM)&sc);
-    return sc.found;
 }
 
 // EVERYTHING A CLOSED WGC CHANNEL STILL OWNS, torn down OFF THE MAIN LOOP. Measured 2026-09-27 (build
@@ -1345,39 +1297,6 @@ static void Reconcile() {
             }
             OpenChannel(i);
             g_ch[i].probing = true;   // OpenChannel re-made the Channel; mark the new one
-        }
-        else if (wantOpen && c.hwnd == want && !c.pw && !c.relay) {
-            // `&& !c.relay` IS LOAD-BEARING, and its absence was a regression I introduced with the
-            // relay. This re-check exists for a channel that WGC opened on the window itself and
-            // that should move to the fallback once the cross-process child appears. A RELAYED
-            // channel has already made that move - it IS the fallback, just an arrival-driven one -
-            // and it keeps c.pw false, so without this guard the branch stayed armed for ever:
-            //   * HasCrossProcessContentChild(want) still tests the SOURCE, and the relay's
-            //     destination is a separate top-level window that EnumChildWindows(source) cannot
-            //     see, so the predicate remains true;
-            //   * the 500 ms throttle could not bound it either, because c.xprocTick is erased by
-            //     `c = Channel{}` inside CloseChannel, so the next pass always reads 0;
-            //   * before the relay the re-open fell through to c.pw = true, which disarmed this
-            //     branch after one pass. The relay removed that disarm without replacing it.
-            // Result: two CreateWindowExW plus two DwmRegisterThumbnail plus a fresh frame pool,
-            // session and StartCapture, torn down and rebuilt EVERY main-loop pass - 250 ms idle,
-            // 33 ms with any PrintWindow channel active. Jev: is_real 0.90, wrong-pixels 0.70.
-            // The same churn shape as the 38 needless re-routes this file was bitten by before.
-            // RE-CHECK THE ROUTING. A UWP-style frame exists BEFORE the app creates the
-            // cross-process child that carries its content, so the routing decision taken in
-            // OpenChannel is usually taken too early and says "WGC". Without this the window
-            // stays on a session that will never deliver another frame - which is precisely how
-            // the previous attempt at this fix failed, silently, and why Jev rated that risk
-            // blocking at 0.85 before this was written.
-            const ULONGLONG nowX = GetTickCount64();
-            if (nowX - c.xprocTick >= 500) {      // bounded: EnumChildWindows is not free
-                c.xprocTick = nowX;
-                if (HasCrossProcessContentChild(want)) {
-                    g_slots[i].Reroutes++;
-                    CloseChannel(i);
-                    OpenChannel(i);               // now takes the PrintWindow path
-                }
-            }
         }
     }
 }
