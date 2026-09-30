@@ -507,6 +507,26 @@ jobs:
             throw 'import-gate selftest FAILED: user32.dll not detected in notifhost.exe'
           }
           Write-Host 'etwproxy.exe import table clean (no user32/gdi32); gate selftest OK'
+          # SUBSYSTEM GATE on the helpers the agent starts in the USER'S session (schtasks /it):
+          # wgcbroker.exe and notifhost.exe must be WINDOWS-subsystem programs. A console program
+          # started there gets a console window - on Windows 11 a Windows Terminal window, which the
+          # agent maps to dom0 as a blank black window; notifhost shipped that way from 2026-09-04
+          # to 2026-09-30. etwproxy.exe is started by the agent itself with CREATE_NO_WINDOW and
+          # stays a console program - which is what makes it the seen-to-fail proof below.
+          function Get-PeSubsystem([string]$path) {
+            $b = [IO.File]::ReadAllBytes($path)
+            $pe = [BitConverter]::ToInt32($b, 0x3c)
+            if ([BitConverter]::ToUInt32($b, $pe) -ne 0x4550) { throw "$path is not a PE image" }
+            return [BitConverter]::ToUInt16($b, $pe + 24 + 68)   # optional header +68, PE32 and PE32+
+          }
+          foreach ($h in 'tools\wgcbroker\x64\Release\wgcbroker.exe', 'tools\notifhost\x64\Release\notifhost.exe') {
+            $ss = Get-PeSubsystem $h
+            if ($ss -ne 2) { throw "$h is subsystem $ss, not WINDOWS (2): started in the user's session it opens a console window - NOT shipping it" }
+          }
+          if ((Get-PeSubsystem 'tools\notifhost\x64\Release\etwproxy.exe') -ne 3) {
+            throw 'subsystem-gate selftest FAILED: etwproxy.exe did not read as CONSOLE (3)'
+          }
+          Write-Host 'user-session helpers are WINDOWS-subsystem programs; gate selftest OK'
 
       # core-agent-windows (our fork) carries the qrexec-wrapper drain-race fix: do not report the
       # exit code before the i/o pumps have drained (ac33bc9), drain the vchan before leaving on

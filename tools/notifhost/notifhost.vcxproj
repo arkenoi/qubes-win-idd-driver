@@ -82,7 +82,12 @@
       <TreatWarningAsError>false</TreatWarningAsError>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <!-- WINDOWS, not Console: the agent starts this in the user's session with schtasks /it, and a
+           console program started there gets a console window - on Windows 11 a Windows Terminal
+           window, which the agent then maps to dom0 as a blank black window (2026-09-30). stdout/stdin
+           still work when a caller passes handles (pipes, redirected output). -->
+      <SubSystem>Windows</SubSystem>
+      <EntryPointSymbol>wmainCRTStartup</EntryPointSymbol>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>d3d11.lib;dxgi.lib;user32.lib;gdi32.lib;advapi32.lib;tdh.lib;kernel32.lib;windowsapp.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
@@ -102,7 +107,12 @@
       <TreatWarningAsError>false</TreatWarningAsError>
     </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <!-- WINDOWS, not Console: the agent starts this in the user's session with schtasks /it, and a
+           console program started there gets a console window - on Windows 11 a Windows Terminal
+           window, which the agent then maps to dom0 as a blank black window (2026-09-30). stdout/stdin
+           still work when a caller passes handles (pipes, redirected output). -->
+      <SubSystem>Windows</SubSystem>
+      <EntryPointSymbol>wmainCRTStartup</EntryPointSymbol>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
