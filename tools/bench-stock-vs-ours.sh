@@ -87,7 +87,7 @@ run_side() {  # run_side <side> <exe> <expected-hash> <round>
     echo "-- $tag"
 
     qt push "$exe" >/dev/null 2>&1
-    local swap; swap="$(qt run "powershell -NoProfile -ExecutionPolicy Bypass -File $IN\\swap-agent.ps1 -NewAgent $IN\\$(basename "$exe")" 2>&1)"
+    local swap; swap="$(qt run "powershell -NoProfile -ExecutionPolicy Bypass -File $IN\\swap-agent.ps1 -StopHelpers -NewAgent $IN\\$(basename "$exe")" 2>&1)"
     printf '%s\n' "$swap" > "$OUTDIR/$tag.swap"
     local got; got="$(printf '%s\n' "$swap" | grep -oE 'HASH_RUNNING=[0-9A-F]+' | cut -d= -f2)"
     if [ "$got" != "$want" ]; then

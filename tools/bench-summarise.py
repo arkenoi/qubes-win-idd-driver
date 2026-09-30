@@ -31,45 +31,29 @@ def load(outdir):
         except Exception as e:                       # noqa: BLE001
             o = {"valid": False, "why": [f"unreadable: {e}"]}
         side = "ours" if tag.endswith("-ours") else "stock"
+        # The stock agent launches none of our helpers. One counted on the stock side is a leftover of
+        # ours: it competed for the CPU and its cost would be charged to stock - the repetition is void.
+        extra = sorted({n.split(":")[0] for n in (o.get("family") or [])} - {"gui-agent"})
+        if side == "stock" and extra and o.get("valid"):
+            o["valid"] = False
+            o.setdefault("why", []).append(f"helpers of ours ran during a STOCK repetition: {', '.join(extra)}")
         runs.append((tag, side, o))
     return runs
 
 
-def main(outdir):
-    runs = load(outdir)
-    if not runs:
-        print("NO RUNS FOUND in", outdir)
-        return 1
+METRICS = (("pct_core", "the canonical metric"),
+           ("pct_core_agent", "gui-agent alone - comparable with numbers from before 2026-09-30"),
+           ("pct_core_dwm", "DWM - where the broker's relay and capture surfaces are composed"),
+           ("pct_core_system", "the whole guest, every process and the kernel"))
 
-    valid = [(t, s, o) for t, s, o in runs if o.get("valid")]
-    invalid = [(t, s, o) for t, s, o in runs if not o.get("valid")]
 
-    print(f"repetitions: {len(runs)} total, {len(valid)} valid, {len(invalid)} INVALID")
-    for t, s, o in invalid:
-        print(f"  INVALID {t}: {'; '.join(o.get('why', ['(no reason recorded)']))}")
-    if invalid:
-        print("  (invalid repetitions carry no number and are excluded from every figure below)")
-
-    hashes = {}
-    for _, s, o in valid:
-        hashes.setdefault(s, set()).add(o.get("bin_sha256"))
-    print("\nbinaries actually measured (from the guest, per repetition):")
-    for s, hs in sorted(hashes.items()):
-        print(f"  {s:5s} {', '.join(sorted(x or '?' for x in hs))}"
-              + ("   <-- MORE THAN ONE BINARY ON THIS SIDE, the comparison is void" if len(hs) > 1 else ""))
-
-    phases = []
-    for _, _, o in valid:
-        for p in o.get("phases", {}):
-            if p not in phases:
-                phases.append(p)
-
+def metric_table(valid, phases, key):
     print(f"\n{'phase':12s} {'stock (n)':>18s} {'ours (n)':>18s} {'delta':>10s}  verdict")
     table = {}
     for p in phases:
         vals = {"stock": [], "ours": []}
         for _, s, o in valid:
-            v = o.get("phases", {}).get(p, {}).get("pct_core")
+            v = o.get("phases", {}).get(p, {}).get(key)
             if v is not None:
                 vals[s].append(v)
         st, ou = sorted(vals["stock"]), sorted(vals["ours"])
@@ -105,12 +89,63 @@ def main(outdir):
     print("\nper-repetition values (% of one core):")
     for p in phases:
         for s in ("stock", "ours"):
-            vals = [(t, o["phases"][p]["pct_core"]) for t, ss, o in valid
-                    if ss == s and o.get("phases", {}).get(p, {}).get("pct_core") is not None]
+            vals = [(t, o["phases"][p][key]) for t, ss, o in valid
+                    if ss == s and o.get("phases", {}).get(p, {}).get(key) is not None]
             if vals:
                 print(f"  {p:12s} {s:5s} " + "  ".join(f"{t.split('-')[0]}={v:.3f}" for t, v in vals))
 
-    json.dump(table, open(os.path.join(outdir, "summary.json"), "w"), indent=2)
+    return table
+
+
+def main(outdir):
+    runs = load(outdir)
+    if not runs:
+        print("NO RUNS FOUND in", outdir)
+        return 1
+
+    valid = [(t, s, o) for t, s, o in runs if o.get("valid")]
+    invalid = [(t, s, o) for t, s, o in runs if not o.get("valid")]
+
+    print(f"repetitions: {len(runs)} total, {len(valid)} valid, {len(invalid)} INVALID")
+    for t, s, o in invalid:
+        print(f"  INVALID {t}: {'; '.join(o.get('why', ['(no reason recorded)']))}")
+    if invalid:
+        print("  (invalid repetitions carry no number and are excluded from every figure below)")
+
+    hashes = {}
+    for _, s, o in valid:
+        hashes.setdefault(s, set()).add(o.get("bin_sha256"))
+    print("\nbinaries actually measured (from the guest, per repetition):")
+    for s, hs in sorted(hashes.items()):
+        print(f"  {s:5s} {', '.join(sorted(x or '?' for x in hs))}"
+              + ("   <-- MORE THAN ONE BINARY ON THIS SIDE, the comparison is void" if len(hs) > 1 else ""))
+
+    phases = []
+    for _, _, o in valid:
+        for p in o.get("phases", {}):
+            if p not in phases:
+                phases.append(p)
+
+    # ONE METRIC PER COMPARISON. pct_core was gui-agent alone before 2026-09-30 and is the whole GUI
+    # process family since (bench-phase-cpu.py); a side measured one way against a side measured the
+    # other would put the broker's cost on one side of the scale only.
+    kinds = sorted({o.get("metric", "agent") for _, _, o in valid})
+    if len(kinds) > 1:
+        print(f"\nVOID: the valid repetitions were measured with different samplers ({', '.join(kinds)}) - no comparison")
+        return 1
+    tables = {"metric": kinds[0] if kinds else None}
+    # The canonical table prints FIRST: tools/bench-gate.py takes the first "scroll" row it finds.
+    for key, what in METRICS:
+        if not any(o.get("phases", {}).get(p, {}).get(key) is not None for _, _, o in valid for p in phases):
+            continue
+        label = f"{key}: {what}" + (f" (= {kinds[0]})" if key == "pct_core" and kinds else "")
+        print(f"\n=== {label}")
+        tables[key] = metric_table(valid, phases, key)
+    fams = {s: sorted({tuple(sorted(n.split(':')[0] for n in (o.get('family') or []))) for _, ss, o in valid if ss == s})
+            for s in ("stock", "ours")}
+    print("\nprocesses counted per side (names; from the guest, per repetition): "
+          + "; ".join(f"{s}: {' | '.join(','.join(t) for t in v) or '-'}" for s, v in fams.items()))
+    json.dump(tables, open(os.path.join(outdir, "summary.json"), "w"), indent=2)
     return 0
 
 

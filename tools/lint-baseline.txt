@@ -30,10 +30,6 @@ L6-probe-null-deref|deploy-gui-agent.ps1:31
 L6-probe-null-deref|deploy-relay-fix.ps1:36
 L6-probe-null-deref|pvnic-latch-readback.ps1:17
 L6-probe-null-deref|pvnic-selfprime.ps1:659
-L6-probe-null-deref|swap-agent.ps1:26
-L6-probe-null-deref|swap-agent.ps1:28
-L6-probe-null-deref|swap-agent.ps1:46
-L6-probe-null-deref|swap-agent.ps1:54
 L6-probe-null-deref|verify-running-agent.ps1:16
 L6-probe-null-deref|verify-running-agent.ps1:8
 L6-probe-null-deref|verify-running-agent.ps1:9
