@@ -3,4 +3,6 @@
 # quoted command line has to survive the qtest->cmd->powershell hops.
 $exe = 'C:\Program Files\Qubes Tools\bin\notifhost.exe'
 if (-not (Test-Path $exe)) { Write-Output 'DUMP-ERR notifhost.exe missing'; exit 1 }
-& $exe --dump-aumids
+# Piped, not bare: notifhost is a windowed program, and PowerShell neither waits for one nor hands it
+# stdout unless its output is captured - a bare call returned at once and printed nothing.
+& $exe --dump-aumids | ForEach-Object { "$_" }
