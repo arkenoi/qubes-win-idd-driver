@@ -163,8 +163,21 @@ static Shot CaptureWindow(HWND hwnd, int settleMs)
     return s;
 }
 
+// --dest-owner: make the destination an OWNED window (owner = a never-shown popup). An owned window without
+// WS_EX_APPWINDOW gets no taskbar button and no Alt-Tab entry - the job WS_EX_TOOLWINDOW does for the broker's relay
+// destination today, and WS_EX_TOOLWINDOW (like WS_EX_NOACTIVATE) is what 26100.1742's WGC refuses (E_INVALIDARG).
+static bool g_wantOwner = false;
+static HWND g_destOwner = nullptr;
 static HWND MakeDest(int w, int h, int x, int y, DWORD exStyle)
 {
+    if (g_wantOwner && !g_destOwner) {
+        WNDCLASSEXW oc{}; oc.cbSize = sizeof(oc); oc.lpfnWndProc = DefWindowProcW;
+        oc.hInstance = GetModuleHandleW(nullptr); oc.lpszClassName = L"QubesThumbProbeOwner";
+        RegisterClassExW(&oc);
+        g_destOwner = CreateWindowExW(0, L"QubesThumbProbeOwner", L"", WS_POPUP, 0, 0, 0, 0,
+                                      nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        printf("RESULT=HOLDOWNER owner=0x%llx\n", (unsigned long long)(ULONG_PTR)g_destOwner);
+    }
     static bool reg = false;
     if (!reg) {
         WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = DefWindowProcW;
@@ -173,7 +186,7 @@ static HWND MakeDest(int w, int h, int x, int y, DWORD exStyle)
         RegisterClassExW(&wc); reg = true;
     }
     return CreateWindowExW(exStyle, L"QubesThumbProbeDest", L"thumbprobe destination",
-                           WS_POPUP, x, y, w, h, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+                           WS_POPUP, x, y, w, h, g_destOwner, nullptr, GetModuleHandleW(nullptr), nullptr);
 }
 
 // --sweep: try the relay on EVERY rogue-class window currently up, and report per class. The single
@@ -806,6 +819,7 @@ int wmain(int argc, wchar_t** argv)
             else if (!wcscmp(argv[a], L"--pw-source")) g_pwSource = true;
             else if (!wcscmp(argv[a], L"--direct")) g_direct = true;
             else if (!wcscmp(argv[a], L"--drive-settings")) g_driveSettings = true;
+            else if (!wcscmp(argv[a], L"--dest-owner")) g_wantOwner = true;
             else if (!wcscmp(argv[a], L"--dest-ex") && a + 1 < argc) {
                 g_destEx = (DWORD)wcstoul(argv[++a], nullptr, 16); g_destExSet = true;
             }
