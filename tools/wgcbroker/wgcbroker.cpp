@@ -146,6 +146,7 @@ struct Channel {
     HWND        relayDest  = nullptr;   // the window we own that carries the thumbnail
     HTHUMBNAIL  relayThumb = nullptr;
     bool        relay      = false;     // this channel captures relayDest, not c.hwnd
+    int         relayW = 0, relayH = 0; // relayDest's size = the thumbnail source size when it was opened
     // ---- THE LAST FULL-WINDOW CAPTURE, KEPT FOR REPUBLISHING --------------------------------
     // WGC and the relay publish only inside FrameArrived, and a static window sends no arrival.
     // Every agent (re-)registration or retarget writes a new card geometry, fresh buffers and a
@@ -182,6 +183,26 @@ static ULONGLONG g_noProbeUntil[WGCBRK_MAX_SLOTS] = {};
 // Set AFTER CloseChannel, never before: CloseChannel wipes the Channel, which is exactly how the
 // earlier g_forcePw assignment got erased and cost 38 needless re-routes on a healthy window.
 static bool      g_noRelay[WGCBRK_MAX_SLOTS] = {};
+// A RELAY DESTINATION IS SIZED ONCE (2026-09-30). RelayOpenDest sizes it to the thumbnail source size at open, and
+// DWM draws the source scaled into it. When the source window later changes size, the agent retargets the card (a
+// new ControlSeq) but the destination never followed: a LARGER card can never be cut from it (PublishCard and the
+// retained republish both refuse a card the capture does not cover, and a static window brings no arrival), and a
+// smaller one would be cut from a scaled image. Measured on a German 25H2 cold boot: a relay window grew 346x233 ->
+// 348x234 when its caption was restyled, the agent retargeted at once, and its frames were rejected for 16.4 s until
+// the agent's stuck detector forced a full re-registration - whose re-open served the new size 3 ms later. So a relay
+// whose thumbnail source size no longer equals its destination is re-opened through the ordinary Close/OpenChannel
+// path. AT MOST ONCE PER (AGENT REQUEST, SOURCE SIZE): the ControlSeq and the live source size a size re-open was done
+// for survive the close, so even if the open-time probe and the live thumbnail were ever to disagree about the size,
+// this cannot re-open every pass - while a source that changes size AGAIN (with or without a new request) still is.
+// SETTLED, NOT EVERY STEP: a drag-resize makes the agent retarget on every step, and re-opening per step would be the
+// tear-down-and-rebuild-every-pass churn this file has paid for before. The new size must hold for
+// RELAY_SIZE_SETTLE_MS (tracked below, across passes) before the re-open.
+static LONG      g_relaySizeCtl[WGCBRK_MAX_SLOTS]      = {};
+static bool      g_relaySizeCtlValid[WGCBRK_MAX_SLOTS] = {};
+static LONG      g_relayReopenW[WGCBRK_MAX_SLOTS] = {}, g_relayReopenH[WGCBRK_MAX_SLOTS] = {};
+static LONG      g_relaySeenW[WGCBRK_MAX_SLOTS] = {}, g_relaySeenH[WGCBRK_MAX_SLOTS] = {};
+static ULONGLONG g_relaySeenTick[WGCBRK_MAX_SLOTS] = {};
+#define RELAY_SIZE_SETTLE_MS 150
 // ONE FRESH SESSION BEFORE THE LADDER DROPS A RELAY (2026-09-27). After a cold boot, with the full
 // window set and an all-window PrintWindow sweep, a relay's OWN capture session stops delivering while
 // DWM keeps compositing its destination - measured: a fresh session on that destination captures the
@@ -922,6 +943,7 @@ static void OpenChannel(int i) {
         { StageScope st(WGCBRK_STG_RELAY_DWM, i); dest = RelayOpenDest(hwnd, &th, &rw, &rh); }
         if (dest) {
             c.relayDest = dest; c.relayThumb = th; c.relay = true;
+            c.relayW = rw; c.relayH = rh;
             target = dest;
             s->RelayOk++; s->RelayDest = (UINT64)(ULONG_PTR)dest;
         } else {
@@ -1224,6 +1246,23 @@ static void CloseChannel(int i) {
     }
 }
 
+// True when the relay on slot i should be re-opened because its thumbnail source no longer has the destination's
+// size (see g_relaySizeCtl). Main thread only: the thumbnail was registered here, in OpenChannel.
+static bool RelayOutgrown(int i, const Channel& c, const WGCBRK_SLOT* s, SIZE* live) {
+    SIZE q{};
+    if (FAILED(DwmQueryThumbnailSourceSize(c.relayThumb, &q)) || q.cx <= 0 || q.cy <= 0) return false;
+    if (q.cx == c.relayW && q.cy == c.relayH) { g_relaySeenTick[i] = 0; return false; }   // in step
+    if (g_relaySizeCtlValid[i] && g_relaySizeCtl[i] == s->ControlSeq &&
+        q.cx == g_relayReopenW[i] && q.cy == g_relayReopenH[i]) return false;              // done for this request+size
+    *live = q;
+    const ULONGLONG now = GetTickCount64();
+    if (!g_relaySeenTick[i] || q.cx != g_relaySeenW[i] || q.cy != g_relaySeenH[i]) {    // a new size: start its clock
+        g_relaySeenW[i] = q.cx; g_relaySeenH[i] = q.cy; g_relaySeenTick[i] = now;
+        return false;
+    }
+    return now - g_relaySeenTick[i] >= RELAY_SIZE_SETTLE_MS;                             // settled: re-open
+}
+
 static void Reconcile() {
     StageScope stage(WGCBRK_STG_RECONCILE, 0);
     for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) {
@@ -1231,8 +1270,17 @@ static void Reconcile() {
         HWND want = (HWND)(ULONG_PTR)s->Hwnd;
         bool wantOpen = (s->ReqState == WGCBRK_REQUESTED) && want;
         Channel& c = g_ch[i];
-        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; OpenChannel(i); }
-        else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; }
+        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; OpenChannel(i); }
+        else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; }
+        else if (SIZE live{}; wantOpen && c.hwnd == want && c.relay && c.relayThumb && RelayOutgrown(i, c, s, &live)) {
+            g_slots[i].Reroutes++;                          // visible in the peek; RelayOk counts the re-open
+            const LONG ctl = s->ControlSeq;
+            CloseChannel(i);                                // wipes the Channel - survivors are set after it
+            g_relaySizeCtl[i] = ctl; g_relaySizeCtlValid[i] = true; g_relaySeenTick[i] = 0;
+            g_relayReopenW[i] = live.cx; g_relayReopenH[i] = live.cy;
+            g_forcePw[i] = true;                            // OpenChannel tries the relay where PrintWindow would be
+            OpenChannel(i);
+        }
         else if (wantOpen && c.hwnd == want && !c.pw &&
                  IsWindow(want) && IsWindowVisible(want) && !IsIconic(want) &&
                  GetTickCount64() >= g_noProbeUntil[i] &&
