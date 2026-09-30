@@ -141,6 +141,9 @@ struct Channel {
     // had delivered thousands of frames and simply gone quiet (measured: 2934 on one slot), and
     // demoting idle to polled is backwards on cost (Jev 0.84).
     LONG        pokeAtLastArrival = 0;
+    // When the broker first saw damage that no frame has answered yet (0 = none pending). The quiet test times the
+    // silence from HERE, not from the last arrival - see the pending-damage tracker in Reconcile.
+    ULONGLONG   pokePendingSince = 0;
     HWND        relayDest  = nullptr;   // the window we own that carries the thumbnail
     HTHUMBNAIL  relayThumb = nullptr;
     bool        relay      = false;     // this channel captures relayDest, not c.hwnd
@@ -1234,25 +1237,33 @@ static void Reconcile() {
         HWND want = (HWND)(ULONG_PTR)s->Hwnd;
         bool wantOpen = (s->ReqState == WGCBRK_REQUESTED) && want;
         Channel& c = g_ch[i];
-        // A POKE THAT TRAILS A FRAME IS THAT FRAME'S (2026-09-30). The agent pokes from its desktop-duplication pass,
-        // which sees a change tens of milliseconds AFTER WGC has already delivered it here - so the poke for a change
-        // that WAS delivered lands after pokeAtLastArrival was taken, and when the window then goes still the quiet
-        // test below reads "damage since our last frame, and 2 s with nothing" and demotes a HEALTHY session. Measured
-        // on w11-ds (26100.1742) with Settings on plain WGC: driven through 6 page changes it delivered 58 and 25 frames
-        // in two runs and was demoted to polled PrintWindow at the end of both (quietReroutes=2), where idle it then
-        // re-rendered Settings up to 15 times a second. So a poke first seen within WGCBRK_POKE_TRAIL_MS of the last
-        // arrival is absorbed into that arrival; a poke that comes later, with no frame behind it, still counts.
-        // A separate statement ahead of the chain: it changes no routing by itself, only what the quiet test sees.
-        // Under the slot's PubLock, because the FrameArrived handler writes the same two fields under it. NOT for a
-        // channel whose capture item Windows has CLOSED since it opened (measured: the first item on a UWP frame closed
-        // as the app launched, `ITEM closed=1`, 2026-09-30): a closed item delivers nothing more, so every poke after
-        // it is undelivered damage and must reach the quiet test - which re-opens the session.
-        if (wantOpen && c.hwnd == want && !c.pw && c.lastArrivalTick &&
-            g_slots[i].PokeSeq != c.pokeAtLastArrival &&
-            g_closedGen[i] != g_slots[i].ChanGen) {
-            PubLock trail(i);
-            if (c.lastArrivalTick && GetTickCount64() - c.lastArrivalTick < WGCBRK_POKE_TRAIL_MS)
-                c.pokeAtLastArrival = g_slots[i].PokeSeq;
+        // PENDING DAMAGE, TIMED FROM THE POKE (2026-09-30). The quiet test below demotes a channel when damage has gone
+        // unanswered by a frame. It used to time that silence from the LAST ARRIVAL - so on a window that had been still
+        // for 2 s the very first poke of its next change satisfied "damage, and 2 s without a frame" at once, before WGC
+        // had had tens of milliseconds to deliver that change. Traced every 50 ms on w11-ds (26100.1742), Settings on
+        // plain WGC: both re-routes of each round fired in the SAME sample as the first poke after >= 2.1 s of stillness,
+        // on a session that went on to deliver 26 frames in between; that explains all 12 demotions of 12 driven runs.
+        // So the broker notes when it first sees a poke no frame has answered (pokePendingSince), and the quiet test
+        // times from there. Two refinements, both measured:
+        //   * a poke first seen within WGCBRK_POKE_TRAIL_MS of an arrival is THAT arrival's - the agent pokes from its
+        //     desktop-duplication pass, tens of milliseconds behind WGC, so a delivered change's poke can land after it;
+        //   * except on a channel whose own capture item Windows CLOSED (the first item on a UWP frame closed as the app
+        //     launched, `ITEM closed=1`): a closed item delivers nothing more, so its pokes are always pending.
+        // A separate statement ahead of the chain - it changes no routing itself, only what the quiet test sees - and
+        // under the slot's PubLock, because the FrameArrived handler writes pokeAtLastArrival/lastArrivalTick under it.
+        if (wantOpen && c.hwnd == want && !c.pw) {
+            PubLock pend(i);
+            const LONG pk = g_slots[i].PokeSeq;
+            const ULONGLONG nowP = GetTickCount64();
+            if (pk == c.pokeAtLastArrival)
+                c.pokePendingSince = 0;                               // every poke is answered by a frame
+            else if (g_closedGen[i] != g_slots[i].ChanGen && c.lastArrivalTick &&
+                     nowP - c.lastArrivalTick < WGCBRK_POKE_TRAIL_MS) {
+                c.pokeAtLastArrival = pk;                             // it trails a frame: that frame's
+                c.pokePendingSince = 0;
+            }
+            else if (!c.pokePendingSince)
+                c.pokePendingSince = nowP;                            // the first unanswered poke
         }
         if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; OpenChannel(i); }
         else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; }
@@ -1288,7 +1299,7 @@ static void Reconcile() {
                  // changed 0.76. g_relayNoDemote is the control, not a product setting.
                  !(c.relay && g_relayNoDemote) &&
                  (g_slots[i].FramesArrived == 0 ||
-                  (g_slots[i].PokeSeq != c.pokeAtLastArrival &&
+                  (c.pokePendingSince && GetTickCount64() - c.pokePendingSince >= WGCBRK_WGC_QUIET_MS &&
                    (!c.relay || RelaySrcDecides(i))))) {
             // BEHAVIOURAL DETECTION - this, not the structural test, is what decides.
             //
