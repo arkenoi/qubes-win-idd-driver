@@ -218,6 +218,9 @@ static bool      g_relayReopened[WGCBRK_MAX_SLOTS] = {};
 // re-routed; windows plain WGC never serves (the rogue classes) lose one quiet period on the way to the
 // relay. Jev: relay-renders-the-toast-unfaithfully 0.83, this fix 0.85, low risk 0.71.
 static bool      g_wgcReopened[WGCBRK_MAX_SLOTS] = {};
+// The channel generation (WGCBRK_SLOT::ChanGen) whose capture item Windows CLOSED last, per slot; 0 = none. Written by the
+// item.Closed handler (a WGC thread), read by Reconcile: a channel whose own item closed gets no trailing-poke absorption.
+static volatile LONG g_closedGen[WGCBRK_MAX_SLOTS] = {};
 
 // RAII for g_pubCs. Both long regions below call C++/WinRT methods that THROW - frame.Surface() on a
 // closed frame is the obvious one - while sitting between a bare Enter and a bare Leave. A throw
@@ -608,6 +611,10 @@ static int RelaySourceChanged(int i) {
 // is demoted. One is far too few (see Channel::srcChangeStreak); demotion is one-way, so a single
 // spurious difference costs the relay for the rest of that window's life.
 #define WGCBRK_RELAY_CHANGE_STREAK 3
+// How long after a frame arrived a poke still belongs to it (see the trailing-poke absorption in Reconcile): the agent
+// pokes from its desktop-duplication pass, tens of milliseconds behind WGC; 500 ms is an order of magnitude of margin
+// and still far inside WGCBRK_WGC_QUIET_MS, so a change that really went undelivered is caught one poke later.
+#define WGCBRK_POKE_TRAIL_MS 500
 
 static bool RelaySrcDecides(int i) {
     Channel& c = g_ch[i];
@@ -952,9 +959,14 @@ static void OpenChannel(int i) {
         // destination a FRESH session (another process) captured fine, every second, with the source's
         // own content. This records whether Closed is what happened, and changes nothing: Jev put
         // observe-first at 0.96 and any repair in the same build at 0.00.
-        c.closedRev = item.Closed(auto_revoke, [i](auto const&, auto const&) {
+        // The generation this channel will have once the open completes (ChanGen is bumped at the end of this try, and
+        // only on this main thread): the Closed handler records it, so a Closed that belongs to an EARLIER item - its
+        // teardown runs on another thread and can end after this open - is never taken for this channel's.
+        const LONG closeGen = g_slots[i].ChanGen + 1;
+        c.closedRev = item.Closed(auto_revoke, [i, closeGen](auto const&, auto const&) {
             InterlockedIncrement(&g_slots[i].ItemClosed);
             g_slots[i].ItemClosedTick = (LONGLONG)GetTickCount64();
+            InterlockedExchange(&g_closedGen[i], closeGen);
         });
         c.poolW = size.Width; c.poolH = size.Height;   // FrameArrived tracks content-size changes
         c.rev = pool.FrameArrived(auto_revoke,
@@ -1222,6 +1234,26 @@ static void Reconcile() {
         HWND want = (HWND)(ULONG_PTR)s->Hwnd;
         bool wantOpen = (s->ReqState == WGCBRK_REQUESTED) && want;
         Channel& c = g_ch[i];
+        // A POKE THAT TRAILS A FRAME IS THAT FRAME'S (2026-09-30). The agent pokes from its desktop-duplication pass,
+        // which sees a change tens of milliseconds AFTER WGC has already delivered it here - so the poke for a change
+        // that WAS delivered lands after pokeAtLastArrival was taken, and when the window then goes still the quiet
+        // test below reads "damage since our last frame, and 2 s with nothing" and demotes a HEALTHY session. Measured
+        // on w11-ds (26100.1742) with Settings on plain WGC: driven through 6 page changes it delivered 58 and 25 frames
+        // in two runs and was demoted to polled PrintWindow at the end of both (quietReroutes=2), where idle it then
+        // re-rendered Settings up to 15 times a second. So a poke first seen within WGCBRK_POKE_TRAIL_MS of the last
+        // arrival is absorbed into that arrival; a poke that comes later, with no frame behind it, still counts.
+        // A separate statement ahead of the chain: it changes no routing by itself, only what the quiet test sees.
+        // Under the slot's PubLock, because the FrameArrived handler writes the same two fields under it. NOT for a
+        // channel whose capture item Windows has CLOSED since it opened (measured: the first item on a UWP frame closed
+        // as the app launched, `ITEM closed=1`, 2026-09-30): a closed item delivers nothing more, so every poke after
+        // it is undelivered damage and must reach the quiet test - which re-opens the session.
+        if (wantOpen && c.hwnd == want && !c.pw && c.lastArrivalTick &&
+            g_slots[i].PokeSeq != c.pokeAtLastArrival &&
+            g_closedGen[i] != g_slots[i].ChanGen) {
+            PubLock trail(i);
+            if (c.lastArrivalTick && GetTickCount64() - c.lastArrivalTick < WGCBRK_POKE_TRAIL_MS)
+                c.pokeAtLastArrival = g_slots[i].PokeSeq;
+        }
         if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; OpenChannel(i); }
         else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; }
         else if (SIZE live{}; wantOpen && c.hwnd == want && c.relay && c.relayThumb && RelayOutgrown(i, c, s, &live)) {
