@@ -167,6 +167,7 @@ static Shot CaptureWindow(HWND hwnd, int settleMs)
 // WS_EX_APPWINDOW gets no taskbar button and no Alt-Tab entry - the job WS_EX_TOOLWINDOW does for the broker's relay
 // destination today, and WS_EX_TOOLWINDOW (like WS_EX_NOACTIVATE) is what 26100.1742's WGC refuses (E_INVALIDARG).
 static bool g_wantOwner = false;
+static bool g_destDisabled = false;   // --dest-disabled, see HoldAndCount
 static HWND g_destOwner = nullptr;
 static HWND MakeDest(int w, int h, int x, int y, DWORD exStyle)
 {
@@ -375,6 +376,9 @@ static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
         if (!dest) { printf("RESULT=HOLD dest=FAIL\n"); return 2; }
         SetLayeredWindowAttributes(dest, 0, 0, LWA_ALPHA);
         ShowWindow(dest, SW_SHOWNA);
+        // --dest-disabled: a DISABLED window is never activated (Windows' "activate the next window" fallback skips it),
+        // which is what WS_EX_NOACTIVATE did for the broker's destination - and 26100.1742 refuses that style.
+        if (g_destDisabled) printf("RESULT=HOLDDISABLED was=%d\n", EnableWindow(dest, FALSE) ? 1 : 0);
         const HRESULT rhr = DwmRegisterThumbnail(dest, src, &th);
         if (FAILED(rhr) || !th) {
             printf("RESULT=HOLD register=FAIL hr=0x%08lx\n", (unsigned long)rhr); DestroyWindow(dest); return 2; }
@@ -820,6 +824,7 @@ int wmain(int argc, wchar_t** argv)
             else if (!wcscmp(argv[a], L"--direct")) g_direct = true;
             else if (!wcscmp(argv[a], L"--drive-settings")) g_driveSettings = true;
             else if (!wcscmp(argv[a], L"--dest-owner")) g_wantOwner = true;
+            else if (!wcscmp(argv[a], L"--dest-disabled")) g_destDisabled = true;
             else if (!wcscmp(argv[a], L"--dest-ex") && a + 1 < argc) {
                 g_destEx = (DWORD)wcstoul(argv[++a], nullptr, 16); g_destExSet = true;
             }
