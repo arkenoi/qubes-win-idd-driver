@@ -41,7 +41,7 @@ A capability re-read at runtime turns a failure into a silent mode change.
 
 **Jev 2026-09-30.** accept 0.79, accept-measure-owed 0.19; cost bounded 0.09; conflicts with the owner's direction 0.11; a user-visible regression possible 0.71.
 
-## 2. An unoccluded window is copied from the composited desktop - established once, then left alone — ACCEPTED
+## 2. An unoccluded window is copied from the composited desktop - established once, then left alone — ACCEPTED, TO RETIRE (owner, 2026-09-30)
 
 **Decision.** While a window is unoccluded and otherwise eligible (`PwDdaEligible`: not moving, geometry
 matches, fully on screen, not layered, nothing tracked above it), its damaged sub-rects are copied from the
@@ -56,6 +56,11 @@ difference between the two sources into a visible content swap at about 0.5 Hz (
 transition instead of being corrected.
 
 **Jev 2026-09-30.** accept 0.83, accept-measure-owed 0.16; cost bounded 0.31; conflicts with the owner's direction 0.09; a user-visible regression possible 0.73.
+
+**To retire.** This is slicing: the source is the composited desktop picture, which the owner is removing as a
+window source entirely (*"i desperately try to fully get rid of it"*, 2026-09-30; see §15). On 26100+ it retires
+with §18; the desktop duplication stays only as a damage signal. Below 26100 there is no per-window source that does
+not ask the application to paint, so it stays there until the owner decides otherwise.
 
 ## 3. A partly covered window is captured whole - never a mixed buffer — ACCEPTED
 
