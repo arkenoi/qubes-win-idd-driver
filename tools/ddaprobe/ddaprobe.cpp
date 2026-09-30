@@ -46,7 +46,7 @@
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "advapi32.lib")
 
-#define DDAPROBE_VERSION "1.0"
+#define DDAPROBE_VERSION "1.1"
 
 // ---------------------------------------------------------------- small helpers
 
@@ -384,6 +384,10 @@ struct Options
     bool     do_map = true;     // exercise MapDesktopSurface once per output
     bool     quiet = false;     // suppress the human table, JSON only
     std::string json_path;      // also write the JSON object to this file
+    // --rects: print every frame's dirty rects (RECTS <ms> <n> l,t,r,b ...). The totals say HOW MUCH of the desktop
+    // changes; only coordinates say WHICH window's area it is. Added 2026-09-30 for the idle burn, where the agent saw
+    // ~1.3 Mpx of damage per frame at 12-24 frames/s on a desktop where nothing visibly changed.
+    bool     rects = false;
 };
 
 static void Usage()
@@ -401,6 +405,7 @@ static void Usage()
         "  --no-map       skip the MapDesktopSurface probe\n"
         "  --json FILE    also write the JSON object to FILE\n"
         "  --quiet        suppress the human-readable table (JSON only)\n"
+        "  --rects        print every frame's dirty rects: RECTS <ms> <n> l,t,r,b ...\n"
         "  --help         this text\n"
         "\n"
         "Exit codes: 0 = at least one output duplicated; 1 = no output could be duplicated;\n"
@@ -659,6 +664,13 @@ static void RunCaptureLoop(ProbeResult& r, const Options& opt,
                             reinterpret_cast<const RECT*>(meta.data() + usedByMove);
                         for (UINT i = 0; i < dirtyCount; i++)
                             r.dirty_area_total += RectArea(drs[i]);
+                        if (opt.rects)
+                        {
+                            printf("RECTS %.1f %u", r.elapsed_ms, dirtyCount);
+                            for (UINT i = 0; i < dirtyCount; i++)
+                                printf(" %ld,%ld,%ld,%ld", drs[i].left, drs[i].top, drs[i].right, drs[i].bottom);
+                            printf("\n");
+                        }
                         r.dirty_rect_total += dirtyCount;
                         r.frames_with_dirty++;
                         if (dirtyCount > r.max_dirty_in_frame)
@@ -947,6 +959,10 @@ int main(int argc, char** argv)
         else if (_stricmp(a, "--quiet") == 0)
         {
             opt.quiet = true;
+        }
+        else if (_stricmp(a, "--rects") == 0)
+        {
+            opt.rects = true;
         }
         else if (a[0] == '-')
         {
