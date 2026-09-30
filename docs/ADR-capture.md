@@ -334,33 +334,37 @@ agent (it is idle then), and the agent's existing broker stage/hang diagnostics 
 
 **Jev 2026-09-30.** accept-measure-owed 0.84, owner-decision 0.06; cost bounded 0.27; conflicts with the owner's direction 0.14; a user-visible regression possible 0.58.
 
-## 18. Every ordinary window on 26100+ is captured with WGC through the broker — PROPOSED
+## 18. Every window on 26100+ is captured with WGC through the broker; at rest nothing runs — ACCEPTED, MEASUREMENT OWED
 
-**Proposal.** On build 26100 and later, where the broker is eligible (§1), an ordinary window gets a broker WGC
-session like the classes §1 already sends there, and its buffer is filled from the broker's frames. On those builds
-the composited desktop stops being a window source altogether: §2's desktop copy retires there as the de-slice
-retired the cut-outs. PrintWindow stays only where WGC refuses a window or the broker is down. Below 26100 (no
-broker) nothing changes.
+**Decision.** Where `DirectRequired()` holds (26100+, broker enabled, decided at start), every window - ordinary ones
+too - is a broker WGC session; broker frames are copied when the broker signals, by WGC's dirty regions; in seamless
+mode the desktop image is never copied (its dirty-rect metadata remains the damage/liveness signal); every wait on
+both sides is event-driven, with a one-shot deadline only while a request is pending; heartbeats become request
+deadlines; a deaf session is recreated once and then fails loudly; registration failures and WGC refusals hold
+loudly; the relay is skipped where its destination cannot open; menus come only from their own frame. Below 26100 and
+under the explicit opt-out nothing changes. The full design, its stages (S0 instruments, then S1-S5) and its
+measurement plan: `docs/DESIGN-rest-zero-capture.md`.
 
-**Why.** §14 without slicing (§15). WGC hands over the window's own surface: an application is never asked to paint
-(no echo, no storm, no guard, no pause); a frame arrives only when that window's content changed (nothing at rest);
-no other window's pixels or shadows are in it; and a covered window's content stays live, which closes §7 on the
-target builds.
+**How it was decided.** Jev first: four premise-framed calls on distilled facts (owner rules R1-R4 as the premise)
+decided the forks - WGC for ordinary windows 0.87, broker-event delivery 0.97, dirty regions 0.87, every timed wake
+replaced by events 0.92-0.99, request deadlines for hangs 0.97, own-change pokes 0.92, recreate-then-loud 0.77, relay
+skip 0.87, the 2026-09-02 concessions retired (drag attribution 0.95, repair tick 1.00, menus from their own frame
+0.92). Then one Fable agent wrote the design from those verdicts. Then Jev validated it: no decision rejected; meets
+R1-R4 once complete 0.75; reintroduces a 2026-09-02 concession 0.23; ready for S0 0.66; the shutdown "kick window"
+rejected (0.66) and replaced by proving every stop path is released by an existing event or process exit.
+
+**Why.** §14 without slicing (§15, §2). This closes the premises that made the 2026-09-02 study settle for
+concessions: the broker's FrameArrived is the per-window paint signal a SYSTEM agent could not have, and a WGC frame
+costs the application no paint.
 
 **Cost.**
-- Capacity: 32 broker slots, shared with menus, toasts and the other classes; a pixel arena budgeted at 128 MB,
-  which two maximized windows at 5120x1440 (29.5 MB per buffer, two buffers each) nearly fill. Both must grow, or
-  the overflow needs a policy.
-- 26100.1742's WGC refuses some windows when a session is created (E_INVALIDARG, measured for disabled, tool and
-  no-activate windows as relay destinations; not yet measured as capture targets). Those need a fallback, and the
-  only other own-content source is PrintWindow, with its echo.
-- WGC sessions have gone deaf after a cold boot (the de-slice census); the quiet ladder's last rung is the
-  broker's PrintWindow route, whose backstop render is itself a timer (§4).
-- The agent copies the whole window per broker frame (the slice-fed path), not only the changed rows: more copying
-  per change than a desktop copy, nothing at rest.
-- The agent picks broker frames up in its desktop frame loop, which runs only when the desktop changes or its 1 s
-  timeout fires: a covered window's frame needs its own wake-up from the broker, the same work §17 needs.
-- Typing latency on the foreground window moves from the desktop copy (§2) to WGC arrival plus two copies: not
-  measured.
-
-**Jev 2026-09-30.** accept-measure-owed 0.93, owner-decision 0.03; cost bounded 0.46; conflicts with the owner's direction 0.39; a user-visible regression possible 0.86.
+- Capacity (32 slots, 128 MiB committed arena today): OPEN (Jev 0.55 insufficient evidence) until a window census and a
+  per-allocation-commit probe; S2 ships measured constants.
+- Windows WGC refuses at session creation: OPEN (hold-loudly 0.49 vs retry-on-state-change 0.40) until a capture-target
+  probe on 26100.1742 and 26200; hold-loudly first.
+- Foreground typing/scroll latency without the desktop copy: measured before any mitigation (a3); proposed bar p50 no
+  worse than the candidate by 10 ms - the owner's to confirm.
+- A hang at rest surfaces at the next request, not within seconds; a lost wakeup is no longer masked by a timeout
+  (every converted wait gets a signal-before-wait test).
+- A menu's first paint waits for its own frame (~109 ms first content measured) - accepted by Jev 0.65.
+- Builds below 26100: unchanged; whether they change is the owner's decision (d7).
