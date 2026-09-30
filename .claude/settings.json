@@ -6,6 +6,17 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/jev-first-gate.sh\"",
+            "timeout": 15,
+            "statusMessage": "Checking Jev was consulted first (JEV FIRST)"
+          }
+        ]
+      },
+      {
+        "matcher": "Workflow|Agent",
+        "hooks": [
+          {
+            "type": "command",
             "command": "bash \"$CLAUDE_PROJECT_DIR/tools/hooks/reporter-env-gate.sh\"",
             "timeout": 20
           }
