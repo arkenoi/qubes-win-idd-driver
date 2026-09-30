@@ -302,6 +302,10 @@ static bool g_direct = false;
 // --drive-settings: navigate the Settings app between two pages every 2 s, so its content genuinely changes while the
 // session is held. Without a driven change, "no arrivals" cannot tell a deaf session from a static window.
 static bool g_driveSettings = false;
+// --drive-uris <a,b>: the two pages to alternate between. The default pair includes ms-settings:sound, whose level meters
+// animate on their own (measured 2026-09-30: two 19x14 px elements changing ~46 times a second with our agent and broker
+// STOPPED) - so arrivals during that drive cannot show that a session tracks CHANGE. Two static pages can.
+static std::wstring g_driveA = L"ms-settings:display", g_driveB = L"ms-settings:sound";
 
 // Render a window exactly as the broker's DEMOTION PROBE does. The broker decides whether to demote a
 // quiet relay by PrintWindow(PW_RENDERFULLCONTENT)-ing the relay's SOURCE and hashing it. An A/B on one
@@ -426,7 +430,7 @@ static int HoldAndCount(HWND src, int secs, bool pump, bool brokerDest)
             LONG before = arrivals;
             // --drive-settings: a page change every 2 s, alternating, logged so an arrival can be matched to it.
             if (g_driveSettings && (t % 2) == 1) {
-                const wchar_t* uri = ((t / 2) % 2) ? L"ms-settings:sound" : L"ms-settings:display";
+                const wchar_t* uri = ((t / 2) % 2) ? g_driveB.c_str() : g_driveA.c_str();
                 const HINSTANCE r = ShellExecuteW(nullptr, L"open", uri, nullptr, nullptr, SW_SHOWNOACTIVATE);
                 printf("RESULT=HOLDDRIVE t=%d uri=%ls rc=%lld\n", t + 1, uri, (long long)(INT_PTR)r);
             }
@@ -796,6 +800,11 @@ int wmain(int argc, wchar_t** argv)
             else if (!wcscmp(argv[a], L"--pw-source")) g_pwSource = true;
             else if (!wcscmp(argv[a], L"--direct")) g_direct = true;
             else if (!wcscmp(argv[a], L"--drive-settings")) g_driveSettings = true;
+            else if (!wcscmp(argv[a], L"--drive-uris") && a + 1 < argc) {
+                std::wstring v = argv[++a]; const size_t c = v.find(L',');
+                if (c == std::wstring::npos) { printf("RESULT=FAIL reason=usage --drive-uris a,b\n"); return 2; }
+                g_driveA = v.substr(0, c); g_driveB = v.substr(c + 1); g_driveSettings = true;
+            }
             else if (!wcscmp(argv[a], L"--warp")) g_forceWarp = true;
             else if (!wcscmp(argv[a], L"--hwnd") && a + 1 < argc) srcHwnd = (HWND)(ULONG_PTR)_wcstoui64(argv[++a], nullptr, 16);
             else srcCls = argv[a];
