@@ -481,10 +481,13 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $mb = "${{ steps.vs.outputs.msbuild }}"
+          # The broker's fault knobs ride the same input as the agent's (TEST builds only): rest-zero M7's deaf-session test.
+          $bfi = if ('${{ inputs.fault_injection }}' -eq 'true') { '1' } else { '0' }
+          Write-Host "WGCBRK_FAULT_INJECTION=$bfi"
           foreach ($p in @(@('wgcbroker','tools\wgcbroker\wgcbroker.vcxproj','tools\wgcbroker\x64\Release\wgcbroker.exe'),
                            @('notifhost','tools\notifhost\notifhost.vcxproj','tools\notifhost\x64\Release\notifhost.exe'),
                            @('etwproxy', 'tools\notifhost\etwproxy.vcxproj', 'tools\notifhost\x64\Release\etwproxy.exe'))) {
-            & $mb $p[1] /p:Configuration=Release /p:Platform=x64 /t:Build
+            & $mb $p[1] /p:Configuration=Release /p:Platform=x64 /t:Build "/p:WgcbrkFaultInjection=$bfi"
             if ($LASTEXITCODE -ne 0) { throw "$($p[0]) msbuild failed" }
             if (-not (Test-Path $p[2])) { throw "$($p[0]) built but $($p[2]) is missing" }
             Get-ChildItem $p[2]

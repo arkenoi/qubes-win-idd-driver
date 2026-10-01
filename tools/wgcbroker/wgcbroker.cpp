@@ -94,6 +94,31 @@ static HANDLE            g_agent= nullptr;
 // REST-ZERO S1: GraphicsCaptureSession.DirtyRegionMode and Direct3D11CaptureFrame.DirtyRegions are present (24H2+),
 // latched once at start like every capability (CLAUDE.md: decided at START). Absent, every arrival is read whole.
 static bool              g_dirtyApi = false;
+#ifndef WGCBRK_FAULT_INJECTION
+#define WGCBRK_FAULT_INJECTION 0
+#endif
+#if WGCBRK_FAULT_INJECTION
+// TEST BUILDS ONLY (qwt-full fault_injection=true; a release broker has none of this). rest-zero M7's deaf-session test:
+// every WGC arrival of the window whose HWND (hex) is written in C:\Users\Public\qwt-fi-deaf-hwnd.txt is dropped before
+// the broker counts it as delivered - so its quiet test sees a session that stopped delivering, recreates it, sees the
+// fresh one deliver nothing, and declares DEAF (QGAWGCRECREATE, then QGAWGCDEAF in the agent's log). Re-read at most twice
+// a second, and only when an arrival asks (no timer). Arrivals of different slots run on different WGC threadpool threads
+// under different locks: one caller wins the refresh, the others return the last value it published.
+static HWND FiDeafHwnd() {
+    static volatile LONG64 at = 0; static HWND volatile h = nullptr;
+    const LONG64 now = (LONG64)GetTickCount64(), last = at;
+    if (now - last >= 500 && _InterlockedCompareExchange64(&at, now, last) == last) {
+        HWND v = nullptr;
+        if (FILE* f = _wfopen(L"C:\\Users\\Public\\qwt-fi-deaf-hwnd.txt", L"r")) {
+            unsigned long long x = 0;
+            if (fscanf_s(f, "%llx", &x) == 1) v = (HWND)(ULONG_PTR)x;
+            fclose(f);
+        }
+        h = v;
+    }
+    return h;
+}
+#endif
 static DWORD             g_mySession = 0;
 static DWORD             g_launcherPid = 0;
 static com_ptr<ID3D11Device>        g_d3d;
@@ -1263,6 +1288,15 @@ static void OpenChannel(int i) {
                     _InterlockedIncrement(&g_slots[i].ArrivalRejected);
                     return;
                 }
+#if WGCBRK_FAULT_INJECTION
+                if (g_ch[i].hwnd && g_ch[i].hwnd == FiDeafHwnd()) {   // the injected deaf session (test builds only)
+                    auto dropped = sender.TryGetNextFrame();          // released, so the pool keeps delivering
+                    // In a test build ArrivalRejected also counts these drops; the deaf test reads QuietReroutes/DeafHolds
+                    // and the agent's QGAWGCRECREATE/QGAWGCDEAF lines, timed against when the harness armed the knob.
+                    _InterlockedIncrement(&g_slots[i].ArrivalRejected);
+                    return;
+                }
+#endif
                 if (!g_slots[i].FirstArrivedTick)
                     g_slots[i].FirstArrivedTick = QpcNow();
                 g_ch[i].pokeAtLastArrival = g_slots[i].PokeSeq;   // damage seen as of this frame
@@ -1664,7 +1698,11 @@ int wmain(int argc, wchar_t** argv) {
     {
         typedef HRESULT (WINAPI *PFN_STD)(HANDLE, PCWSTR);
         if (auto p = (PFN_STD)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadDescription"))
+#if WGCBRK_FAULT_INJECTION
+            p(GetCurrentThread(), L"wgcbroker: main [FAULT-INJECTION build]");   // a test binary says so where it runs
+#else
             p(GetCurrentThread(), L"wgcbroker: main");
+#endif
     }
     HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Global\\QubesWgcBrokerSingleton");
     if (mtx) { DWORD w = WaitForSingleObject(mtx, 0);
