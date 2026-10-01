@@ -1537,6 +1537,12 @@ static const wchar_t* ArgVal(int argc, wchar_t** argv, const wchar_t* key) {
 }
 
 int wmain(int argc, wchar_t** argv) {
+    // rest-zero M1 attribution: the main thread names itself (thread-who reads it); the WGC pool threads are the system's.
+    {
+        typedef HRESULT (WINAPI *PFN_STD)(HANDLE, PCWSTR);
+        if (auto p = (PFN_STD)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadDescription"))
+            p(GetCurrentThread(), L"wgcbroker: main");
+    }
     HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Global\\QubesWgcBrokerSingleton");
     if (mtx) { DWORD w = WaitForSingleObject(mtx, 0);
         if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) return 0; }

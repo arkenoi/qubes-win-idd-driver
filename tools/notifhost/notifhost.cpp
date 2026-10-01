@@ -1235,8 +1235,19 @@ static bool EtwIpcReadRecord(HANDLE pipe)
     return true;
 }
 
+// rest-zero M1 attribution: each long-lived thread names itself, so a per-thread wake count (restwatch / thread-who's
+// GetThreadDescription) says WHICH of ours woke - the 2026-10-01 toast tail had one thread at ~128 wakes/s and no symbols
+// to name it. Looked up at run time: SetThreadDescription needs Windows 10 1607.
+static void NameThisThread(const wchar_t* name)
+{
+    typedef HRESULT (WINAPI *PFN_STD)(HANDLE, PCWSTR);
+    static PFN_STD p = (PFN_STD)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadDescription");
+    if (p) p(GetCurrentThread(), name);
+}
+
 static DWORD WINAPI EtwIpcThread(LPVOID)
 {
+    NameThisThread(L"notifhost: etw-ipc");
     try
     {
         static const DWORD bo[] = { 2000, 5000, 15000, 60000 };   // bounded reconnect backoff
@@ -1806,6 +1817,7 @@ static volatile LONG g_walArmed = 0;
 // the old blind retry had. This thread signals; it never reads file content.
 static DWORD WINAPI WalWatchThread(LPVOID)
 {
+    NameThisThread(L"notifhost: wal-watch");
     wchar_t la[MAX_PATH] = { 0 };
     if (!GetEnvironmentVariableW(L"LOCALAPPDATA", la, RTL_NUMBER_OF(la))) return 0;
     std::wstring dir = std::wstring(la) + L"\\Microsoft\\Windows\\Notifications";
@@ -1924,6 +1936,7 @@ static void ShadowClassifyWork(ShadowJob const& j)
 
 static DWORD WINAPI ShadowWorkerThread(LPVOID)
 {
+    NameThisThread(L"notifhost: shadow-worker");
     for (;;)
     {
         HANDLE hs[2] = { g_shadow.stopEvt, g_shadow.evt };
@@ -2145,6 +2158,7 @@ static BOOL PipeXfer(BOOL rd, void* buf, DWORD n, DWORD timeoutMs)
 
 static DWORD WINAPI ReaderThread(LPVOID)
 {
+    NameThisThread(L"notifhost: reader");
     // DIAGNOSTIC guard (2026-09-05): this thread had NO exception handler, so any C++ throw
     // here (bad_alloc in the frame vector / pendingDismiss push_back / BLog's Utf8, ...) was
     // an instant std::terminate with no log line - a prime suspect for the silent vanish.
@@ -2623,6 +2637,7 @@ static void ReportErrorSelf(const char* id, const char* summary)
 
 static int BridgeMain()
 {
+    NameThisThread(L"notifhost: bridge-main");
     SetUnhandledExceptionFilter(BridgeCrashFilter);   // crash breadcrumb (see BridgeCrashFilter)
     HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Local\\QubesToastBridgeSingleton");
     if (mtx) { DWORD w = WaitForSingleObject(mtx, 0); if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) return 0; }
@@ -3196,6 +3211,7 @@ static BOOL RelayOne(BOOL doRead, HANDLE h, BOOL overlapped, HANDLE evt,
 
 static DWORD WINAPI RelayPump(LPVOID p)
 {
+    NameThisThread(L"notifhost: relay-pump");
     RelayDir* d = (RelayDir*)p;
     BYTE buf[16384]; DWORD n, wr;
     for (;;)
