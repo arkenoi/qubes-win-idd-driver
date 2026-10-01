@@ -28,9 +28,9 @@
 # section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$WANT_ABI = 21
+$WANT_ABI = 22
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3424    # sizeof(WGCBRK_SLOT) at ABI 19 (unchanged from 18: CtlAck took _padTick2 at 188, DeafHolds _padAbi6 at 228; header AgentFrameWakes 80, AgentStalls 84, AgentStallTick 88 from _pad2) - ABI 18 (HungSkips 84 (was padding); PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, Republished 3412 (was padding), ItemClosedTick 3416); header BrokerStage at 20 (was padding)
+$STRIDE = 3440    # sizeof(WGCBRK_SLOT) at ABI 22 (DirtyPublishes 3424, DirtyFullCopies 3428, DirtyBytes 3432 appended); 3424 at ABI 19 (unchanged from 18: CtlAck took _padTick2 at 188, DeafHolds _padAbi6 at 228; header AgentFrameWakes 80, AgentStalls 84, AgentStallTick 88 from _pad2) - ABI 18 (HungSkips 84 (was padding); PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, Republished 3412 (was padding), ItemClosedTick 3416); header BrokerStage at 20 (was padding)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -88,6 +88,8 @@ for ($n = 0; $n -lt $Samples; $n++) {
       $n,$i,(RdI ($b+192)),(RdI ($b+196)),(RdI ($b+200)),(RdI ($b+204)),(RdI ($b+208)),(RdI ($b+212)),(RdI ($b+216)),(RdI ($b+220)),(RdI ($b+224)),(RdI ($b+132)),(RdI ($b+184)))
     Write-Output ("S{0} slot{1} POKE seq={2} ack={3} serviced={4} skipped={5} safety={6} reroutes={7} sameFrames={8} quietReroutes={9} probeBounces={10}" -f `
       $n,$i,(RdI ($b+232)),(RdI ($b+236)),(RdI ($b+240)),(RdI ($b+244)),(RdI ($b+248)),(RdI ($b+252)),(RdI ($b+256)),(RdI ($b+260)),(RdI ($b+264)))
+    # ABI 22, rest-zero S1 / M9(b): frames published from WGC dirty regions, arrivals read whole, bytes written to the ring.
+    Write-Output ("S{0} slot{1} DIRTY publishes={2} fullCopies={3} bytes={4}" -f $n,$i,(RdI ($b+3424)),(RdI ($b+3428)),(RdL ($b+3432)))
     # ABI 8. route: 0=WGC on the window, 1=RELAY (WGC on a destination carrying a DWM thumbnail),
     # 2=polled PrintWindow. Routes 0 and 1 are arrival-driven; 2 is the fallback the relay exists to
     # retire, so "how many slots are still on route 2" is the number that measures progress.

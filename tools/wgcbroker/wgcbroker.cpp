@@ -24,6 +24,8 @@
 #include <wtsapi32.h>   // WTSRegisterSessionNotification (rest-zero S4: the console-session check is an event)
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>   // Direct3D11CaptureFrame::DirtyRegions (rest-zero S1)
+#include <winrt/Windows.Foundation.Metadata.h>      // ApiInformation: the dirty-region API, latched at start
 #include <winrt/Windows.Graphics.Capture.h>
 #include <winrt/Windows.Graphics.DirectX.h>
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
@@ -89,6 +91,9 @@ static inline void SignalFramePublished() {
     }
 }
 static HANDLE            g_agent= nullptr;
+// REST-ZERO S1: GraphicsCaptureSession.DirtyRegionMode and Direct3D11CaptureFrame.DirtyRegions are present (24H2+),
+// latched once at start like every capability (CLAUDE.md: decided at START). Absent, every arrival is read whole.
+static bool              g_dirtyApi = false;
 static DWORD             g_mySession = 0;
 static DWORD             g_launcherPid = 0;
 static com_ptr<ID3D11Device>        g_d3d;
@@ -188,6 +193,20 @@ struct Channel {
     com_ptr<ID3D11Texture2D> lastFull;
     int         lastFullW = 0, lastFullH = 0;
     LONG        pubCtlSeq = 0;
+    // REST-ZERO S1, DIRTY REGIONS (docs/DESIGN-rest-zero-capture.md A, Jev a2 0.84; forks 2026-10-01: a persistent copy +
+    // the union of two frames' regions 0.95, the agent's row compare kept). A direct WGC session runs in DirtyRegionMode
+    // ReportOnly: every surface is complete and WGC says which regions changed, and lastFull - now ONE persistent CPU
+    // copy per channel - is kept current by reading only those. ReportOnly, not ReportAndRender (Jev's review: under
+    // ReportAndRender an arrival dropped before its regions are read - the pool-recreate return - or a whole read of a
+    // surface rendered only partly leaves the copy stale with no way back; complete surfaces make one whole read the
+    // repair for any doubt, which needWhole requests). The ring stays whole by one invariant: the SPARE buffer differs from the ACTIVE
+    // one only inside prevRegs (card-relative; everywhere while prevFull) - so writing prevRegs plus this frame's regions
+    // from lastFull makes the spare current. Measured first (M9(b), wgcprobe dirty on w11-ds): typing into a 3804x998
+    // Notepad, every arrival's regions were 2.1% of the frame and only a session's first frame was whole.
+    bool              dirty    = false;   // this session reports dirty regions (ReportOnly set)
+    bool              needWhole = false;  // an arrival was dropped or failed before its regions were read: read the next whole
+    std::vector<RECT> prevRegs;           // the last publish's regions: the spare still has the frame before them
+    bool              prevFull = true;    // the spare is not known to match the active buffer anywhere
     // The ControlSeq a republish from THIS lastFull already failed for (the card does not fit it, or the
     // copy failed): not retried until the agent asks again or a new arrival replaces lastFull, so a card
     // that cannot be cut costs one attempt, not an attempt per loop pass.
@@ -499,8 +518,11 @@ static bool PublishAllowed(WGCBRK_SLOT* s) {
 
 // Crop the agent's CURRENT card out of a CPU-readable full-window copy and publish it into slot i.
 // Caller holds g_pubCs[i] and has passed PublishAllowed. Returns true if a frame was published.
-static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH) {
+// regs (rest-zero S1): this arrival's dirty regions in texture coordinates - only those (and the previous publish's,
+// which the spare buffer lacks) are written; nullptr = the whole card.
+static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const std::vector<RECT>* regs = nullptr) {
     WGCBRK_SLOT* s = &g_slots[i];
+    Channel& ch = g_ch[i];
     // ControlSeq is read BEFORE the geometry. The agent writes the geometry and buffers, fences, then
     // bumps ControlSeq, so what is read below is at least as new as `ctl`; a registration landing
     // mid-copy is caught by the re-check after the copy.
@@ -524,30 +546,83 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH) {
     if (cropX + w > texW || cropY + h > texH) return false;   // capture does not cover the card yet
     if ((LONGLONG)w * h * 4 > s->BufBytes) return false;      // agent sized for ReqW*ReqH*4; skip oversize
 
+    // WHOLE CARD unless this is a steady-state arrival with regions: a registration to answer (the card or the buffers
+    // may be new), a spare not known to match the active buffer, or a geometry the active frame does not have.
+    const bool regAnswer = (ch.pubCtlSeq != ctl);
+    // deltaKnown: the active buffer is a complete frame of THIS card geometry and this arrival's regions say exactly
+    // where the window changed since it - the condition for writing regions, and for knowing afterwards what the spare
+    // (that frame) lacks against the new one. Every published buffer is complete, so after a publish with a known delta
+    // the spare lacks exactly this arrival's regions, whatever was written this time.
+    const bool deltaKnown = regs && !regAnswer && s->AckState == WGCBRK_ACTIVE &&
+                            s->FrameWidth == w && s->FrameHeight == h &&
+                            s->ActiveBuffer >= 0 && s->ActiveBuffer < WGCBRK_RING;
+    const bool whole = !deltaKnown || ch.prevFull;
+    std::vector<RECT> cur;                      // this arrival's regions, card-relative
+    if (regs) {
+        const RECT card = { 0, 0, w, h };
+        for (const RECT& r : *regs) {
+            const RECT q = { r.left - cropX, r.top - cropY, r.right - cropX, r.bottom - cropY };
+            RECT k;
+            if (IntersectRect(&k, &q, &card)) cur.push_back(k);
+        }
+        // Everything this arrival changed lies outside the card (the cropped shadow margin): nothing to publish, and the
+        // spare is no more stale than it was.
+        if (cur.empty() && !whole) { InterlockedIncrement(&s->SameFrames); return false; }
+    }
     D3D11_MAPPED_SUBRESOURCE map;
     if (FAILED(g_ctx->Map(full, 0, D3D11_MAP_READ, 0, &map))) return false;
     int wbuf = 1 - s->ActiveBuffer;             // spare (RING==2)
     if (wbuf < 0 || wbuf >= WGCBRK_RING) wbuf = 0;
     BYTE* dst = WGCBRK_ARENA(g_base, s->BufOffset[wbuf]);
     const BYTE* src = (const BYTE*)map.pData + (size_t)cropY * map.RowPitch + (size_t)cropX * 4;
-    for (int y = 0; y < h; y++)
-        memcpy(dst + (size_t)y * w * 4, src + (size_t)y * map.RowPitch, (size_t)w * 4);
+    LONGLONG bytes = 0;
+    ch.prevFull = true;                         // the spare is being written: unknown until this publish settles
+    if (whole) {
+        for (int y = 0; y < h; y++)
+            memcpy(dst + (size_t)y * w * 4, src + (size_t)y * map.RowPitch, (size_t)w * 4);
+        bytes = (LONGLONG)w * h * 4;
+    } else {
+        auto copyRect = [&](const RECT& k) {
+            const size_t rb = (size_t)(k.right - k.left) * 4;
+            for (int y = k.top; y < k.bottom; y++)
+                memcpy(dst + (size_t)y * w * 4 + (size_t)k.left * 4, src + (size_t)y * map.RowPitch + (size_t)k.left * 4, rb);
+            bytes += (LONGLONG)rb * (k.bottom - k.top);
+        };
+        for (const RECT& k : ch.prevRegs) copyRect(k);   // the spare holds the frame before the active one
+        for (const RECT& k : cur) copyRect(k);
+    }
     g_ctx->Unmap(full, 0);
     MemoryBarrier();
+    InterlockedExchangeAdd64(&s->DirtyBytes, bytes);
     // A registration during the copy may have moved the card or the buffers: this frame answers a
     // request that no longer exists. Drop it UNPUBLISHED (Seq untouched, so the agent never sees
     // it); ControlSeq now differs from pubCtlSeq, so the main loop serves the new one next pass.
-    if (s->ControlSeq != ctl) return false;
+    if (s->ControlSeq != ctl) return false;     // prevFull stays set: the spare is half-written
     // THE SAME PIXELS ARE NOT A CHANGE (owner, 2026-09-30: "if you repaint the same pixels it is not a change"). A window
     // that presents again without changing - at rest on w11-ds an Explorer window published ~15 frames a minute - still
     // costs a WGC arrival here, but its card is not republished and the agent is not woken to compare it again.
     // Steady state only: an arrival that answers a registration (ControlSeq moved since this channel last published) is
     // published whatever it holds - that is the frame the agent waits for. The quiet/deaf test keys on arrivals
     // (lastArrivalTick), not on publishes, so a window that keeps repainting the same pixels is not judged deaf.
-    if (g_ch[i].pubCtlSeq == ctl && s->AckState == WGCBRK_ACTIVE && s->FrameWidth == w && s->FrameHeight == h &&
+    if (!regAnswer && s->AckState == WGCBRK_ACTIVE && s->FrameWidth == w && s->FrameHeight == h &&
         s->ActiveBuffer >= 0 && s->ActiveBuffer < WGCBRK_RING && s->ActiveBuffer != wbuf) {
-        const BYTE* cur = WGCBRK_ARENA(g_base, s->BufOffset[s->ActiveBuffer]);
-        if (memcmp(cur, dst, (size_t)w * h * 4) == 0) { InterlockedIncrement(&s->SameFrames); return false; }
+        const BYTE* act = WGCBRK_ARENA(g_base, s->BufOffset[s->ActiveBuffer]);
+        bool same = true;
+        if (whole)
+            same = (memcmp(act, dst, (size_t)w * h * 4) == 0);
+        else
+            for (size_t n = 0; same && n < cur.size(); n++)
+                for (int y = cur[n].top; same && y < cur[n].bottom; y++)
+                    same = (memcmp(act + (size_t)y * w * 4 + (size_t)cur[n].left * 4,
+                                   dst + (size_t)y * w * 4 + (size_t)cur[n].left * 4,
+                                   (size_t)(cur[n].right - cur[n].left) * 4) == 0);
+        if (same) {
+            // The spare now equals the active buffer everywhere: it lacked only prevRegs (rewritten just now with pixels
+            // equal to the active frame's) and this arrival changed nothing (or the whole card was just compared equal).
+            ch.prevRegs.clear(); ch.prevFull = false;
+            InterlockedIncrement(&s->SameFrames);
+            return false;
+        }
     }
     PublishSignature(i, dst, w, h);
 
@@ -570,6 +645,11 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH) {
     SignalFramePublished();                     // after the seq bump: a woken agent sees it whole
     s->AckState = WGCBRK_ACTIVE;
     g_ch[i].pubCtlSeq = ctl;
+    // The buffer that just became the spare holds the frame before this one: it differs from the new active buffer
+    // only inside this arrival's regions - or, after a whole write, anywhere.
+    if (deltaKnown) { ch.prevRegs.swap(cur); ch.prevFull = false; }
+    else { ch.prevRegs.clear(); ch.prevFull = true; }
+    if (!whole) InterlockedIncrement(&s->DirtyPublishes);
     return true;
 }
 
@@ -577,27 +657,64 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
     PubLock pubLock(i);   // RAII: a throw inside must not strand the section (see PubLock)
     do {
         WGCBRK_SLOT* s = &g_slots[i];
-        if (!PublishAllowed(s)) break;
+        Channel& c = g_ch[i];
 
         auto surf = frame.Surface();
         auto access = surf.as<Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
         com_ptr<ID3D11Texture2D> tex;
-        if (FAILED(access->GetInterface(guid_of<ID3D11Texture2D>(), tex.put_void()))) break;
+        if (FAILED(access->GetInterface(guid_of<ID3D11Texture2D>(), tex.put_void()))) { c.needWhole = true; break; }
         D3D11_TEXTURE2D_DESC td; tex->GetDesc(&td);
         const int texW = (int)td.Width, texH = (int)td.Height;
-        if (texW <= 0 || texH <= 0) break;
+        if (texW <= 0 || texH <= 0) { c.needWhole = true; break; }
 
-        td.Usage = D3D11_USAGE_STAGING; td.BindFlags = 0;
-        td.CPUAccessFlags = D3D11_CPU_ACCESS_READ; td.MiscFlags = 0;
-        com_ptr<ID3D11Texture2D> stg;
-        if (FAILED(g_d3d->CreateTexture2D(&td, nullptr, stg.put()))) break;
-        g_ctx->CopyResource(stg.get(), tex.get());
-        // KEEP THIS CAPTURE, whether or not the current card can be cut from it: it is the window's
-        // content until the next arrival, and the only source a static window's re-registered card
-        // can be served from (see Channel::lastFull and RepublishRetained).
-        g_ch[i].lastFull = stg; g_ch[i].lastFullW = texW; g_ch[i].lastFullH = texH;
-        g_ch[i].triedValid = false;             // a new capture may cover a card the old one could not
-        PublishCard(i, stg.get(), texW, texH);
+        // KEEP THE WINDOW'S PIXELS CURRENT, whether or not this arrival is published (the secure-desktop gate below): it
+        // is the window's content until the next arrival, and the only source a static window's re-registered card can be
+        // served from (RepublishRetained). ONE persistent copy per channel (it was a new texture per arrival); with dirty
+        // regions only the changed rectangles are read. A whole read when the copy is new, the size changed, or an earlier
+        // arrival never reached it (needWhole) - the surface is always complete (ReportOnly).
+        bool wholeRead = !c.dirty || c.needWhole || !c.lastFull || c.lastFullW != texW || c.lastFullH != texH;
+        std::vector<RECT> regs;
+        if (!wholeRead) {
+            try {
+                auto dr = frame.DirtyRegions();
+                const RECT texR = { 0, 0, texW, texH };
+                for (uint32_t k = 0; k < dr.Size(); k++) {
+                    auto r = dr.GetAt(k);
+                    const RECT q = { r.X, r.Y, r.X + r.Width, r.Y + r.Height };
+                    RECT x;
+                    if (IntersectRect(&x, &q, &texR)) regs.push_back(x);
+                }
+            } catch (...) { wholeRead = true; }
+            // An arrival that reports NO region: nothing is known about what changed (none were seen in M9(b)'s 51 typing
+            // arrivals, but a skipped change would stay stale) - read it whole; the identical-frame check keeps an
+            // unchanged one from being published.
+            if (!wholeRead && regs.empty()) wholeRead = true;
+            if (!wholeRead && regs.size() > 64) {    // many small rects: one bounding box, a superset
+                RECT b = regs[0];
+                for (const RECT& r : regs) UnionRect(&b, &b, &r);
+                regs.assign(1, b);
+            }
+        }
+        if (wholeRead) {
+            if (!c.lastFull || c.lastFullW != texW || c.lastFullH != texH) {
+                td.Usage = D3D11_USAGE_STAGING; td.BindFlags = 0;
+                td.CPUAccessFlags = D3D11_CPU_ACCESS_READ; td.MiscFlags = 0;
+                com_ptr<ID3D11Texture2D> stg;
+                if (FAILED(g_d3d->CreateTexture2D(&td, nullptr, stg.put()))) { c.lastFull = nullptr; c.needWhole = true; break; }
+                c.lastFull = stg; c.lastFullW = texW; c.lastFullH = texH;
+            }
+            g_ctx->CopyResource(c.lastFull.get(), tex.get());
+            c.needWhole = false;
+            InterlockedIncrement(&s->DirtyFullCopies);
+        } else {
+            for (const RECT& r : regs) {
+                const D3D11_BOX b = { (UINT)r.left, (UINT)r.top, 0, (UINT)r.right, (UINT)r.bottom, 1 };
+                g_ctx->CopySubresourceRegion(c.lastFull.get(), 0, (UINT)r.left, (UINT)r.top, 0, tex.get(), 0, &b);
+            }
+        }
+        c.triedValid = false;                   // a new capture may cover a card the old one could not
+        if (!PublishAllowed(s)) break;
+        PublishCard(i, c.lastFull.get(), texW, texH, wholeRead ? nullptr : &regs);
     } while (0);
 }
 
@@ -1090,6 +1207,11 @@ static void OpenChannel(int i) {
         s->PoolTick = QpcNow();
         try { session.IsCursorCaptureEnabled(false); } catch (...) {}
         try { session.IsBorderRequired(false); } catch (...) {}   // borderDisableOk proven on 26100
+        // DIRTY REGIONS (rest-zero S1) on a direct window session only: the relay's destination and the monitor keep the
+        // whole-frame path. ReportOnly: complete surfaces, regions reported; PublishFrame reads only the regions.
+        if (g_dirtyApi && !monitor && !c.relay) {
+            try { session.DirtyRegionMode(GraphicsCaptureDirtyRegionMode::ReportOnly); c.dirty = true; } catch (...) {}
+        }
         c.hwnd = monitor ? (HWND)(ULONG_PTR)WGCBRK_MONITOR_HWND : hwnd;
         c.item = item; c.pool = pool; c.session = session; c.slot = i;
         // OBSERVATION ONLY. WGC can CLOSE a capture item, after which FrameArrived never fires again for
@@ -1165,6 +1287,7 @@ static void OpenChannel(int i) {
                 g_slots[i].PoolW = ch.poolW;        g_slots[i].PoolH = ch.poolH;
                 if (cs.Width != ch.poolW || cs.Height != ch.poolH) {
                     g_slots[i].FramesDropSize++;
+                    ch.needWhole = true;                 // this arrival's regions never reach lastFull (rest-zero S1)
                     bool ok = false;
                     try {
                         ch.pool.Recreate(g_rtDev,
@@ -1559,6 +1682,11 @@ int wmain(int argc, wchar_t** argv) {
 
     init_apartment(apartment_type::multi_threaded);
     if (!WgcSupported()) return 2;
+    try {
+        namespace meta = winrt::Windows::Foundation::Metadata;
+        g_dirtyApi = meta::ApiInformation::IsPropertyPresent(L"Windows.Graphics.Capture.GraphicsCaptureSession", L"DirtyRegionMode") &&
+                     meta::ApiInformation::IsPropertyPresent(L"Windows.Graphics.Capture.Direct3D11CaptureFrame", L"DirtyRegions");
+    } catch (...) { g_dirtyApi = false; }
     if (!InitD3D())      return 3;
 
     // THE RELAY CAPABILITY, LATCHED HERE AND NEVER RE-READ. Decided once, at start, from the build
