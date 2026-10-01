@@ -21,28 +21,43 @@ set LOG=X:\diskprep.log
 echo === diskprep %DATE% %TIME% === > %LOG%
 
 REM --- find the largest disk -------------------------------------------------
-REM 'wmic diskdrive' reports Size in BYTES. Compare in MB to stay inside cmd's
-REM 32-bit signed arithmetic (80 GiB in bytes overflows it).
+REM diskpart's own "list disk", NOT wmic. WMIC is GONE from the WinPE of Win11 build 26300
+REM (retail 26300.9457, measured 2026-10-01: 0 wmic.exe in its boot.wim against 10 in the German
+REM 25H2 one), and with it this script found no disk, partitioned nothing, and Setup stopped on its
+REM "Select location to install Windows 11" page for good. diskpart is in every WinPE.
+REM Its output is LOCALISED ("Disk"/"Datentraeger", the status words), so a row is recognised by
+REM POSITION, never by a word: token 2 a disk number, token 4 a size number, token 5 its unit
+REM (KB/MB/GB/TB, not localised). Header, separator and banner lines fail the number tests. A
+REM two-word status ("No Media") shifts the tokens and its row is skipped - no install target.
+REM The number tests use the FOR variables (%%b, %%d): a !delayed! variable is NOT expanded on the
+REM left of a pipe, which runs in a child cmd without delayed expansion.
 set BEST=
 set BESTMB=0
-for /f "skip=1 tokens=1,2" %%a in ('wmic diskdrive get Index^,Size 2^>nul') do (
-    if not "%%b"=="" (
-        set IDX=%%a
-        set SZ=%%b
-        REM strip to MB by chopping the last 6 digits (bytes -> ~MB, close enough
-        REM to rank disks; exactness is irrelevant, only the ordering matters)
-        set SZMB=!SZ:~0,-6!
-        if "!SZMB!"=="" set SZMB=0
-        echo candidate disk !IDX! size !SZ! bytes ~!SZMB! MB >> %LOG%
-        if !SZMB! GTR !BESTMB! (
-            set BESTMB=!SZMB!
-            set BEST=!IDX!
+echo list disk > X:\diskprep-ld.txt
+diskpart /s X:\diskprep-ld.txt > X:\diskprep-ld.out 2>&1
+type X:\diskprep-ld.out >> %LOG%
+for /f "tokens=1-5" %%a in (X:\diskprep-ld.out) do (
+    set NUM=1
+    echo %%b| findstr /r "^[0-9][0-9]*$" >nul || set NUM=0
+    echo %%d| findstr /r "^[0-9][0-9]*$" >nul || set NUM=0
+    if "!NUM!"=="1" (
+        set SZMB=
+        if /i "%%e"=="TB" set /a SZMB=%%d*1048576
+        if /i "%%e"=="GB" set /a SZMB=%%d*1024
+        if /i "%%e"=="MB" set /a SZMB=%%d
+        if /i "%%e"=="KB" set SZMB=0
+        if defined SZMB (
+            echo candidate disk %%b size %%d %%e ~!SZMB! MB >> %LOG%
+            if !SZMB! GTR !BESTMB! (
+                set BESTMB=!SZMB!
+                set BEST=%%b
+            )
         )
     )
 )
 
 if "%BEST%"=="" (
-    echo FATAL: no disks reported by wmic >> %LOG%
+    echo FATAL: no disk recognised in diskpart list disk - see the listing above >> %LOG%
     exit /b 1
 )
 REM A Windows 10/11 install needs ~20 GB. Refusing here produces a clear log line
