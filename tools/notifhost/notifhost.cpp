@@ -145,7 +145,21 @@ static HANDLE g_mainWake = nullptr;     // auto-reset: the reader / shadow threa
 // The WAL watcher does NOT trigger a listing: a listing makes the platform touch its own database (wpndatabase.db-wal/-shm),
 // so a watcher-triggered listing can re-trigger itself. Measured 2026-10-01 (rz2, w11-ds) with both triggers: in the 60 s
 // from 30 s after a 10-toast burst this process switched 9358 times (one thread 8600); before the burst, 0-5 a minute.
-static volatile LONG g_etwHit = 0;      // an ETW record naming an AUMID arrived since the main loop last looked
+static volatile LONG g_etwHit = 0;      // an ETW record naming an AUMID but NO id arrived (only while g_etwIdsSeen is 0)
+// THE LISTING IS TRIGGERED BY A NOTIFICATION ID THE BRIDGE HAS NOT SEEN, not by every record (2026-10-01, w11-ds). A
+// listing costs 60-400 ms and works a system thread in this process hundreds of times (a process that merely holds a
+// listener woke 0 times while ours woke 9889 times in 20 s); after a 10-toast burst every record of the ~90 s tail named a
+// toast already listed, or none, and each cost a listing plus two retries (~45 in 85 s, all new=0). Every toast's arrival
+// carries its own id in 5+ events (ETW dump of a burst: NotificationLifetimeActivity, ProcessNewNotificationActivity,
+// ToastInfo, ...; the same numbers as the listener's ids). So an id-bearing record queues its id and wakes the main loop,
+// which lists only if one of them is not in `seen`; an id-less record triggers only until the first id ever arrives (a
+// platform that sends no ids keeps listing on every record). Jev: this rule 0.97 over the alternatives.
+static volatile LONG g_etwIdsSeen = 0;  // an ETW record carrying a notification id has arrived in this bridge's life
+static SRWLOCK g_etwIdLock = SRWLOCK_INIT;
+static std::vector<uint32_t> g_etwIds;  // ids from ETW records since the main loop last looked (bounded)
+// A wake that asks for a listing (a verdict landed, a dismissal to apply, the push source or the connection changed).
+// The ETW thread's wake does NOT: the main loop decides from the queued ids.
+static volatile LONG g_listWanted = 0;
 
 // Agent-liveness check - a BACKUP only. The agent's shutdown writes the ProgramData stop file
 // (NotifBridgeRequestStop), which the main loop polls every pass; THAT is the primary channel.
@@ -1226,7 +1240,22 @@ static bool EtwIpcReadRecord(HANDLE pipe)
         while (g_etw.ring.size() > 64) g_etw.ring.pop_front();
     }
     if (g_etw.sigEvt) SetEvent(g_etw.sigEvt);   // wake a worker waiting out the flush pacing
-    if (!la.empty()) { InterlockedExchange(&g_etwHit, 1); if (g_mainWake) SetEvent(g_mainWake); }   // a toast: list now
+    if (!la.empty())
+    {
+        if (idn != 0)
+        {
+            InterlockedExchange(&g_etwIdsSeen, 1);
+            AcquireSRWLockExclusive(&g_etwIdLock);
+            if (g_etwIds.size() < 512) g_etwIds.push_back((uint32_t)idn);
+            ReleaseSRWLockExclusive(&g_etwIdLock);
+            if (g_mainWake) SetEvent(g_mainWake);   // the main loop lists if this id is new to it (see g_etwIdsSeen)
+        }
+        else if (!g_etwIdsSeen)
+        {
+            InterlockedExchange(&g_etwHit, 1);      // no ids from this platform (yet): every record lists, as before
+            if (g_mainWake) SetEvent(g_mainWake);
+        }
+    }
     if (EtwSigLogAllow(n))                   // every frame at human rates; 1-in-20 in a burst
         BLog(L"ETW SIG #%ld aumid=%s idnum=%llu notif=%s tag=%s group=%s", n,
              la.empty() ? L"-" : la.c_str(), (ULONGLONG)idn,
@@ -1277,6 +1306,7 @@ static DWORD WINAPI EtwIpcThread(LPVOID)
             GetNamedPipeServerProcessId(pipe, &spid);
             InterlockedExchange(&g_etw.state, ETW_STATE_LIVE);
             BLog(L"ETW IPC connected server_pid=%lu - push tier armed", spid);
+            InterlockedExchange(&g_listWanted, 1);
             if (g_mainWake) SetEvent(g_mainWake);   // the listing now has a push source: the main loop drops its floor
             while (EtwIpcReadRecord(pipe))
                 if (WaitForSingleObject(g_etw.stopEvt, 0) == WAIT_OBJECT_0) break;
@@ -1285,6 +1315,7 @@ static DWORD WINAPI EtwIpcThread(LPVOID)
             InterlockedExchange(&g_etw.state, ETW_STATE_DOWN);
             BLog(L"ETW IPC disconnected (recs=%ld bad=%ld) - tier down, DB fallback, reconnecting",
                  g_etw.recTotal, g_etw.recBad);
+            InterlockedExchange(&g_listWanted, 1);
             if (g_mainWake) SetEvent(g_mainWake);   // the listing may have lost its only push source: floor back on
         }
     }
@@ -1762,6 +1793,7 @@ static void VerdictStorePut(uint32_t id, int route)
     CsGuard g(&g_verdict.lock);
     if (g_verdict.route.size() > 4096) { g_verdict.route.clear(); g_verdict.passes.clear(); }
     g_verdict.route[id] = route;
+    InterlockedExchange(&g_listWanted, 1);
     if (g_mainWake) SetEvent(g_mainWake);   // a toast may be waiting for this verdict: re-list now, not on a tick
 }
 // Returns true and sets *route when a verdict exists. Otherwise counts this pass: a toast whose
@@ -2129,7 +2161,7 @@ static CRITICAL_SECTION g_corrLock;
 static std::vector<CorrEntry> g_corr;                 // small: capped, human-rate
 static std::vector<uint32_t> g_pendingDismiss;        // guest ids queued by the reader thread
 
-static void MarkConnDead() { InterlockedExchange(&g_connDead, 1); if (g_mainWake) SetEvent(g_mainWake); }
+static void MarkConnDead() { InterlockedExchange(&g_connDead, 1); InterlockedExchange(&g_listWanted, 1); if (g_mainWake) SetEvent(g_mainWake); }
 
 static BOOL PipeXfer(BOOL rd, void* buf, DWORD n, DWORD timeoutMs)
 {
@@ -2211,7 +2243,7 @@ static DWORD WINAPI ReaderThread(LPVOID)
                     }
             }
             if (reason != 2) BLog(L"Dismissed id=%u reason=%u (not user-dismissed - guest record kept)", id, reason);
-            else if (g_mainWake) SetEvent(g_mainWake);   // the main loop applies queued dismissals on its next pass
+            else { InterlockedExchange(&g_listWanted, 1); if (g_mainWake) SetEvent(g_mainWake); }   // the main loop applies queued dismissals on its next pass
         }
         else if (tag == 4)                            // ActionInvoked - phase 2 consumes this
             BLog(L"reader: ActionInvoked (ignored in A0)");
@@ -2927,7 +2959,15 @@ static int BridgeMain()
                  pushArmed ? L"NotificationChanged" : L"ETW proxy pipe");
             lastAnyPush = anyPush;
         }
-        const bool pushHit = (InterlockedExchange(&g_etwHit, 0) != 0);
+        bool pushHit = (InterlockedExchange(&g_etwHit, 0) != 0);   // an id-less record on a platform that sends no ids
+        {
+            std::vector<uint32_t> ids;
+            AcquireSRWLockExclusive(&g_etwIdLock);
+            ids.swap(g_etwIds);
+            ReleaseSRWLockExclusive(&g_etwIdLock);
+            for (uint32_t id : ids)
+                if (!seen.count(id)) { pushHit = true; break; }   // a notification this bridge has not listed yet
+        }
         if (pushHit) { walRetries = 0; walRetryAt = 0; toastSignaled = true; }
         const bool walRetryDue = (walRetryAt != 0 && now >= walRetryAt);
         const bool walTriggered = pushHit || walRetryDue;
@@ -3156,7 +3196,9 @@ static int BridgeMain()
                               : (Sleep(timeout == INFINITE ? 2000 : timeout), WAIT_TIMEOUT);
             const DWORD k = (w >= WAIT_ABANDONED_0 && w < WAIT_ABANDONED_0 + n) ? (w - WAIT_ABANDONED_0)
                           : (w >= WAIT_OBJECT_0 && w < WAIT_OBJECT_0 + n) ? (w - WAIT_OBJECT_0) : n;
-            toastSignaled = (k == iToast && toastEvt) || (k == iWake && g_mainWake);   // a push, or queued work: list
+            // A push, or queued work that asked for a listing (g_listWanted). The ETW thread's wake alone does not: the
+            // queued ids decide at the top of the next pass.
+            toastSignaled = (k == iToast && toastEvt) || (InterlockedExchange(&g_listWanted, 0) != 0);
             if (k == iStop && stopChg) FindNextChangeNotification(stopChg);           // the stop file is read at the top
             if (k == iCons && consentEvt) consentChanged = true;
             MSG msg;
