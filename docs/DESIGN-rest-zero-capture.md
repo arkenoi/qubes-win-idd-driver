@@ -371,9 +371,12 @@ two overlapping unfocused Notepads, Explorer, Settings, one dialog, one open men
   single WARP context's cost per arrival with 8 and 16 sessions. Result -> `SlotCount` and the arena policy S2 ships
   (grow-reserve-commit-on-demand if (ii) passes, else grow-committed), and c5's confidence (the frequency of
   `QGABROKERREGFAIL` on the census desktops).
-  **Status 2026-10-01:** not run. As built: 32 slots, a 128 MiB committed arena; the acceptance desktop uses 9 slots and
-  never logged QGABROKERREGFAIL (loud if it happens). The census that sizes it belongs on the owner's own desktop (their
-  Office qube - asked first, per CLAUDE.md).
+  **Status 2026-10-01:** not run. As built: 32 slots, a 128 MiB committed arena. **CORRECTED 2026-10-01 21:14 - the line
+  that stood here ("the acceptance desktop ... never logged QGABROKERREGFAIL") is no longer true:** the burn scene at
+  5120x1440 holds ~125.5 MB of the 134.2 MB arena (two buffers per window), and a Calculator at 1202x934 launched over it was
+  refused (`QGABROKERREGFAIL`, then `QGADIRECTSUPPRESS` - NOT SHOWN, held until another window unregisters). A maximized
+  5120x1440 window needs 59 MB, so about two fit. c4 is therefore a measured P1, not a sizing nicety (findings/issues.md).
+  The census that sizes it belongs on the owner's own desktop (their Office qube - asked first, per CLAUDE.md).
 - **a3 — foreground typing/scroll latency (measure-first 0.44).** M5 is the probe: candidate (desktop copy for the
   unoccluded foreground window, ADR §2) vs S2 (WGC arrival + broker copy + agent dirty copy), 3 interleaved runs per
   side, p50/p90 for key -> damage and wheel -> damage, plus scroll CPU. No mitigation is designed until the numbers
