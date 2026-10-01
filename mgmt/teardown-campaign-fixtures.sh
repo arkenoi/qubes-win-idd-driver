@@ -16,7 +16,8 @@ GO=0; [ "${1:-}" = --go ] && GO=1
 # ------------------------------------------------------------------ KEEP, with the reason
 declare -A KEEP=(
   [win10-base]="sealed golden - the only pristine Win10 base; never delete, never boot"
-  [win11-base]="sealed golden - the only pristine Win11 base; never delete, never boot"
+  [win11-base]="sealed golden - the pristine Win11 24H2 Enterprise EVALUATION base (expired licence: guests from it shut down an hour after boot - superseded by win11r-base for Win11 work, owner 2026-10-01); never delete, never boot"
+  [win11r-base]="sealed golden - pristine RETAIL Win11 Pro 26300.9457 en-US, no QWT; THE Win11 base since 2026-10-01 (owner: no time-limited eval); never delete, never boot"
   [win11de-base]="sealed golden - pristine GERMAN Win11 25H2 (26200.8037), no QWT; the base for GWeck-environment tests; never delete, never boot (owner 2026-09-16)"
   [win11de-gwt]="GERMAN Win11 25H2 TemplateVM with the non-user account (gerd-test) - GWeck's environment; owner 2026-09-17: keep it for more GWeck testing; restore its pre-update state with checkpoint.sh unpark win11de-gwt pretuesday"
   [ckpt-win11de-gwt-pretuesday]="the pre-update park of win11de-gwt (German 25H2 + QWT, no Windows Update pass) - the entry state for every GWeck update test; keep (owner 2026-09-17)"

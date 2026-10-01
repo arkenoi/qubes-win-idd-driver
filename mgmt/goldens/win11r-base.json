@@ -1,0 +1,32 @@
+{
+  "note": "pristine RETAIL Win11 Pro 26300.9457 en-US (Win11_26300_English_x64.iso, Microsoft download 2026-09-30), primer hook from the answer stick, testsigning OFF, no QWT; installed 2026-10-01 with a STATIC DiskConfiguration + InstallTo Disk 0 (RunSynchronous partitioning + InstallToAvailablePartition fails 0x800700FF-0x40030 on 26300; its WinPE has no WMIC)",
+  "props": {
+    "klass": "StandaloneVM",
+    "maxmem": "8192",
+    "memory": "8192",
+    "vcpus": "4",
+    "virt_mode": "hvm"
+  },
+  "sealed_utc": "2026-10-01T14:11:47Z",
+  "vm": "win11r-base",
+  "volumes": {
+    "private": {
+      "revisions": [
+        "1790862099-back",
+        "1790863893-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "21474836480",
+      "usage": "2147483"
+    },
+    "root": {
+      "revisions": [
+        "1790862099-back",
+        "1790863893-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "85899345920",
+      "usage": "14027363188"
+    }
+  }
+}
