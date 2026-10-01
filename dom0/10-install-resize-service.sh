@@ -37,7 +37,7 @@ done
 
 cat > "$SVC" <<EOF
 #!/bin/bash
-# Resize the dom0 window of $VM. qubes-win-idd kit (10-install-resize-service.sh v2).
+# Resize the dom0 window of the running win-idd-testbed guest. qubes-win-idd kit (10-install-resize-service.sh v5).
 # Arg: WxH (client area) or "query". Output: one GEOM line. Selects by _QUBES_VMNAME.
 set -u
 REQ="\${QREXEC_SERVICE_ARGUMENT:-\${1#*+}}"
@@ -128,8 +128,10 @@ if [ "\$REQ" != "query" ]; then
     read -r efl efr eft efb <<< "\${fx:-0 0 0 0}"
     wa=\$(X xprop -root -notype _NET_WORKAREA 2>/dev/null | sed 's/.*= //; s/,//g')
     read -r wax way _ _ <<< "\${wa:-0 0 0 0}"
-    geom() { X xwininfo -id "\$best" 2>/dev/null | awk '/Absolute upper-left X:/{x=\$4} /Absolute upper-left Y:/{y=\$4} END{print x, y}'; }
-    read -r cx cy <<< "\$(geom)"
+    # v5: its own name - this used to be a second geom() that replaced the one above, so the readback below printed a
+    # stray "x y" line and reported empty geometry after every resize (found 2026-10-01 by running the service on stubs).
+    clientpos() { X xwininfo -id "\$best" 2>/dev/null | awk '/Absolute upper-left X:/{x=\$4} /Absolute upper-left Y:/{y=\$4} END{print x, y}'; }
+    read -r cx cy <<< "\$(clientpos)"
     nx=\$cx; ny=\$cy
     [ "\$((cx - efl))" -lt "\$wax" ] && nx=\$((wax + efl))
     [ "\$((cy - eft))" -lt "\$way" ] && ny=\$((way + eft))
