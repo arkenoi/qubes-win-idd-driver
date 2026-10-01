@@ -142,3 +142,27 @@ guest is bounded by design - its text reaches dom0 only over a service dom0 poli
 and it is rendered by dom0 under the treatment dom0 gives every qube. Putting the list in dom0
 would dress it up as a control it is not, and would make a per-guest, per-application list a
 policy edit.
+
+## 10. The guest banner is suppressed by not mapping it, never by ShowBanner — PROPOSED (Jev), 2026-10-01
+
+**Decision.** For a toast the bridge forwards, the agent keeps that toast's banner window unmapped until the toast's
+verdict arrives: `verdict=bridge` - never mapped (the guest banner times out unseen); `verdict=window` - mapped at once;
+no verdict within §2's bound - mapped (fail open). The per-application `ShowBanner=0` switch is retired: the bridge no
+longer writes it at all.
+
+**Why.** Two defects measured on 2026-10-01 come from the per-application switch. It is set only when a toast is
+forwarded, so the first classified toast of an app is already on screen and reaches dom0 twice (guest banner + dom0
+notification). And it stays set until the bridge exits, so a later toast of the same app whose own verdict sends it to
+the window path - an interactive one - is shown nowhere: a misroute that fails CLOSED, against §3. In seamless mode the
+user sees a guest banner only because the agent maps its window into dom0, so not mapping it is the whole suppression;
+nothing in Windows' settings has to change, and every uncertain case (no verdict, unhealthy bridge, a window the agent
+cannot tie to a toast) falls to mapping the window - the behaviour that shipped. Owner: an occasional ~3 s delay on a
+first toast is fine, a flash of the guest banner before it disappears is not; Win10 may take the delay (its classifier
+reads the payload from the notification database, 11 has it in the ETW record). Jev: agent-side hold 1.00 against
+per-toast ShowBanner toggling (racy with concurrent toasts) and RemoveNotification after forwarding (deletes the guest's
+Notification Center copy, §5) 0.00; fails open by construction 0.89.
+
+**Open before design detail.** How a banner window corresponds to a notification on the target build (one window per
+toast or a shared one; whether the agent can tie the window to the bridge's notification id by timing or by content) is
+NOT measured on retail 26300 (Jev: measure first, 0.58). That measurement precedes the agent change, after the current
+acceptance.
