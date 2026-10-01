@@ -618,3 +618,23 @@ Review: a stale record 0.24, an uncommitted touch 0.21, correct-as-a-whole 0.56 
 **Cost:** 1 GiB of address space in the agent and in the broker (64-bit); the commit charge never falls below its peak for the
 agent's life. The census that would size the slot count (c4 (i), on the owner's desktop) is still owed; 32 slots stay.
 **Seen to fail / pass:** the scene + Calculator registration refused on rz17/rz18 (twice each); the same on rz19 owed.
+
+## 26. No liveness poke from damage that also covers the desktop — ACCEPTED (Jev), 2026-10-01
+
+**Decided:** a dirty rect with at least 32x32 px on no tracked visible window (each inflated by the shadow margin) - the
+wallpaper - pokes no WGC slot (`QGAPOKEDESK`); it is a desktop change, a reveal or an occlusion, never solely a window's own
+change. Classified once per rect per frame; every undecidable case pokes as before. Liveness slots only. Agent 1bd902e.
+
+**Why:** the "band" class of false pokes, cause established 2026-10-01 on retail 26300: changing the desktop wallpaper (as
+Windows Spotlight does by itself, and as it does when it loads after login) gave DDA's coarse rects over the desktop's
+uncovered top band and left strip; resting windows whose backdrop is tinted from the wallpaper differed on screen from their WGC
+frames, were poked, and 3 sessions per change were recreated - and the recreated first frames were IDENTICAL to the old ones at
+32x32 tile level (title band and centre 0.0): the backdrop is not in a WGC frame, so no session ever delivers it and the
+recreate bought nothing. Jev: false recreates 1.00; this rule 0.85 over recording the residual 0.15 and a time window after the
+wallpaper broadcast 0.00 (a timer). Review rev 2: one fallback direction, slivers below 32x32 not counted, the residual within
+design E's accepted cost (0.26 that it matters), fit 0.73.
+
+**Cost:** a window's own change that DDA merges with a real piece of desktop into one rect loses its liveness hint (its next
+change confined to the window pokes; input pokes every slot; WGC delivers content regardless). What dom0 shows of a window's
+backdrop stays as its WGC frames have it - a capture property this rule neither causes nor fixes. **Seen to fail / pass:**
+band-1 and band-tint-1 on rz18 (3 recreates per change); on rz21 owed.
