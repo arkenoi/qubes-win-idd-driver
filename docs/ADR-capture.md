@@ -451,7 +451,17 @@ instruments that found these are in §19's measurement plan; each fix was review
   broker's quiet/deaf test keys on arrivals, not publishes. Jev: fits the rule 0.84, registration-safe 0.91.
 - **The notification bridge's database watcher is not a listing trigger.** A listing is served from the database the
   watcher watches, so a watcher-triggered listing can re-trigger itself; on this build the watcher never fired for a toast
-  arrival anyway. Removing the trigger did NOT remove the toast-tail load (below), so it was not that load's cause.
+  arrival anyway. Removing the trigger did NOT remove the toast-tail load (next item), so it was not that load's cause.
+- **The bridge lists for a notification id it has not seen, not for every ETW record.** In the ~90 s after a toast burst
+  every record named a toast already listed (or none) and each cost a full listing plus two retries; a listing works a
+  system thread inside the bridge (start shcore.dll+0x259c0) hundreds of times - 3500-9900 wakes per 20 s, while a process
+  merely HOLDING a listener woke 0 times in the same tail (so the platform does not push; our listings were the cost).
+  An ETW dump of a burst shows every toast's arrival carrying its own id in 5+ events, the same numbers as the listener's.
+  An id-bearing record now queues its id; the main loop lists only if one is unseen; an id-less record lists only until
+  the first id ever arrives. Jev: this rule 0.97. Measured (rz5): the tail went from 7475-9358 bridge switches to 21 in
+  40 s, the shcore thread silent, all 10 toasts still listed (<= 1.8 s), the proxy-down toasts 2/2.
+- **S5 is moot on 26100+.** Synthesis needs an owner that is not slice-fed, and every window there is; a menu is its own
+  override-redirect window on a PrintWindow slot, whose rest behaviour is the pixel-checked poke above.
 
 **Measured, rz3b (build 362b761):** at rest, per minute, the agent wakes 8-24 times (main and hooks, following the
 guest's window events and one Explorer window's 10-15 frames a minute; capture 0), the broker 0-3, the bridge 0-2, the
@@ -459,5 +469,7 @@ ETW proxy 0; our family CPU 0.00 in every arm, attributed CPU (DWM + ours) 0.00-
 0.03-0.05, five arms interleaved with three floors. Toasts 10/10 listed within 1.2 s;
 with the ETW proxy killed the bridge said so and recovered in 7 s (2/2 listed). Hangs: the broker hung and asked is
 reaped in 2 s (back in 625 ms), hung and not asked is left alone (by design); the agent hung while a window published
-moved the broker's AgentStalls. **Still open:** in the minute after a 10-toast burst - while the burst's own toasts
-expire - one bridge thread wakes ~128 times a second (7683 of the bridge's 8340); 150 s after the burst it is back to 2.
+moved the broker's AgentStalls. **rz5 (cf46ea0, the quiet-folder scene, ABI 21 wake counters):** in three of four rest
+samples the agent's named threads (main, hooks, capture, toastcrop) woke 0 times (2-4 switches of a pool thread remain),
+broker 0-2, bridge 0-2, proxy 0; the main loop's wakes between two peeks were all window events (the instrument's own
+PowerShell windows) - deadline 0, desktop frame 0, broker frame 0 - and five consecutive decay minutes ended at 0/0/0/0.

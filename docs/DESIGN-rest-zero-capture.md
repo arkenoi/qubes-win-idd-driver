@@ -288,6 +288,10 @@ is invisible until the next request (accepted by b4).
 - M `PwSliceCopyAndDamageSrc`: mask rects (from `SynthUpdateMask`, M:2290-2339) excluded from the owner's copy as
   row segments (pattern W:288-346). Child registration stays on the tracking pass (M:6566-6605).
 **At rest after S5:** a static desktop with an open menu produces no owner damage and no copy (H's bound).
+**Status 2026-10-01: MOOT on 26100+ as built.** Synthesis needs an owner that is NOT slice-fed (SynthOwnerQualifies
+refuses `PwSliceFed`), and after S2 every window there is slice-fed - so no popup is synthesized (0 SYNTH lines in every
+26100+ agent log of the rz2-rz3b runs); a menu is its own override-redirect window on a PrintWindow slot. H's bound is met
+by that slot instead: ADR-capture §20's pixel-checked poke - a held menu navigated three times rendered 4 times, then 0.
 **Risk:** a menu that repaints its hover highlight produces child arrivals (guest activity, correct); a child frame
 that never arrives leaves the owner showing through — loud via R2's deadline (`QGAWGCDEAF`/`QGAWGCREFUSED`).
 
@@ -346,6 +350,12 @@ two overlapping unfocused Notepads, Explorer, Settings, one dialog, one open men
   hold-loudly stands; if refusals exist and flip with state, retry-on-state-change is added to S3 (a WinEvent-driven
   retry, no timer); if refusals are static, hold-loudly stands and the class is documented. Also census the owner's
   real apps with `tools/winenum.cs` for those styles to know how many windows the answer touches.
+  **Status 2026-10-01, as built:** a window WGC refuses at its first open takes the broker's PrintWindow route - it
+  renders on open and on its own pokes only (S3), and since ADR-capture §20 a damage poke on that route needs the window's
+  on-screen pixels to have changed, so a refused window cannot loop at rest; no pixel comes from the desktop and nothing
+  is timed. That meets the owner's rules without the hold, so c3's question (hold vs retry) is moot for rest-zero; which
+  styles 26100.1742 refuses is known in part from the relay work (findings/issues.md: a disabled window and
+  WS_EX_NOACTIVATE are refused, E_INVALIDARG) and stays informational.
 - **c4 — capacity (insufficient-evidence 0.55).** Probe (during S1): (i) `winenum` census on the acceptance
   desktops and the owner's session: peak count of ordinary + slice-fed + synth-child windows and their WxH -> slots and
   arena bytes needed at 256 KiB classes (two buffers each); (ii) a two-process test: agent-side
@@ -355,6 +365,9 @@ two overlapping unfocused Notepads, Explorer, Settings, one dialog, one open men
   single WARP context's cost per arrival with 8 and 16 sessions. Result -> `SlotCount` and the arena policy S2 ships
   (grow-reserve-commit-on-demand if (ii) passes, else grow-committed), and c5's confidence (the frequency of
   `QGABROKERREGFAIL` on the census desktops).
+  **Status 2026-10-01:** not run. As built: 32 slots, a 128 MiB committed arena; the acceptance desktop uses 9 slots and
+  never logged QGABROKERREGFAIL (loud if it happens). The census that sizes it belongs on the owner's own desktop (their
+  Office qube - asked first, per CLAUDE.md).
 - **a3 — foreground typing/scroll latency (measure-first 0.44).** M5 is the probe: candidate (desktop copy for the
   unoccluded foreground window, ADR §2) vs S2 (WGC arrival + broker copy + agent dirty copy), 3 interleaved runs per
   side, p50/p90 for key -> damage and wheel -> damage, plus scroll CPU. No mitigation is designed until the numbers
