@@ -105,6 +105,10 @@ render trigger. A poke unanswered for 2 s (R3) or a first frame missing (R2): th
 once (today's first rung, `g_wgcReopened`, B:1334); if the new session is also deaf, the slot goes `WGCBRK_FAILED`
 with a new `FailHr = WGCBRK_E_DEAF`, the agent holds last content and logs `QGAWGCDEAF` once (ERROR) + a harness flag.
 The `g_forcePw` rung (B:1335) and `printwindow-route` remedy are gone on 26100+ (c2: 0.05).
+**AMENDED 2026-10-01 (ADR-capture §19, measured):** "recreate once, then deaf" froze a healthy Notepad when its system
+menu poked it after its one recreate was spent at startup. As built: a session that has delivered is recreated on
+every unanswered-poke episode (loud, QGAWGCRECREATE); DEAF only when a fresh session delivers nothing at all; and for a
+WGC slot's poke every window above counts as an occluder (a popup with a 24 px shadow margin). Jev: both 0.64.
 **Why.** The 2026-09-30 field demotion of a healthy session came from reveal damage (jevC state); the ladder's last
 rungs are the timed PrintWindow route (§C). **Cost.** A deaf session on a window that receives no own-change damage
 and no input is not seen until it does (c1 accepts this: 0.92 over wgc-events-only 0.03). **Bound.** False

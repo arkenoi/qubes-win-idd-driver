@@ -368,3 +368,45 @@ costs the application no paint.
   (every converted wait gets a signal-before-wait test).
 - A menu's first paint waits for its own frame (~109 ms first content measured) - accepted by Jev 0.65.
 - Builds below 26100: unchanged; whether they change is the owner's decision (d7).
+
+## 19. Rest-zero S3/S4 as built: the choices the design left open, and one it got wrong — ACCEPTED (Jev), MEASUREMENT IN PROGRESS
+
+Recorded while implementing §18's stages S3 (own-change pokes, deaf hold, no PrintWindow backstop) and S4 (no timed
+wake on either side), 2026-10-01. Each changes what fails, and how loudly.
+
+- **A quiet WGC session that has delivered is recreated, every time; DEAF only when a fresh session delivers nothing.**
+  This REPLACES design E's "recreate once, then deaf". Measured on w11-ds the same day: a system menu opened over a
+  focused Notepad - its drawing, its appearance, its drop shadow - poked Notepad 273 times; WGC correctly delivered
+  nothing (Notepad had not changed); Notepad had already used its one recreate at startup, so E declared the healthy
+  window deaf and froze it (QGAWGCDEAF). DDA's dirty rects are coarser than a window's own change, so any poke-based
+  deafness detector sees false pokes; a recreate makes one cost a session open and a frame, a freeze makes it cost the
+  window. Jev: both this and the occluder fix below, 0.64 (keep E 0.01); recreates at rest 0.21 (there are no pokes at
+  rest), recreates every ~2 s under content WGC misses 0.79, acceptable 0.62. Every recreate is said (QGAWGCRECREATE).
+- **For a WGC slot every window above counts as an occluder for its poke, a popup with a 24 px shadow margin.** Its
+  poke is only a liveness hint. A PrintWindow slot (a menu) keeps the opaque-only rule: there the poke is the render
+  trigger, and a change beneath a translucent popup must render.
+- **Requests are acknowledged by sequence.** The broker writes `CtlAck` = the ControlSeq its main loop last handled per
+  slot; the agent's hang deadline (2 s) and its arena reclaim key on it. E's "AckState leaves REQUESTED" would have read
+  a PrintWindow popup whose first render is black as a hung broker.
+- **The agent's death reaches the helpers through a mutex it owns.** The broker and the notification bridge run with
+  the interactive user's limited token, denied SYNCHRONIZE on the SYSTEM agent; they relied on a heartbeat and a pid
+  poll. The agent's main thread owns a nonce-named mutex per helper for its life; abandoned = the agent died.
+- **The relay capability is probed at the first ladder descent, not at process start** (§18/G said "at start"): the
+  agent tells a broker window from a user window only by the broker's validated pid, and a destination-shaped window
+  from a broker not yet validated was measured (2026-09-26) to be mapped to dom0.
+- **A PrintWindow popup's first frame is retried at 0/50/100/200/400 ms after its open**, then only its own pokes render
+  it: a popup rendered before it painted comes back black, and its own paint can land in the pass the agent attributes
+  to its appearance. Bounded; armed by the open, ended by the first published frame.
+- **The diagnostic signature of a burst's last frame keeps a one-shot 500 ms deadline** armed by the burst; without it a
+  static window's published signature stays on the frame before its last change (measured 2026-09-27).
+- **A measured SAME on a relay's source answers its pending poke** (26200); left pending, the quiet test re-ran a source
+  PrintWindow every 0.5-8 s for as long as nothing changed.
+- **Held maps on 26100+ get one deadline per window** (the crop ceiling, then the declaration once both graces end), not
+  a 32/100 ms re-check; a consumed frame and a completed crop measurement queue that window for the tracking pass.
+
+**Measured so far (S3/S4b, w11-ds 26100.1742, burn scene, 3 interleaved arms each with the agent-stopped floor):** the
+broker's wakes at rest fell from ~6/s to 0-9 per 60 s (an Explorer window that repaints itself ~1/15 s accounts for
+them); its CPU 0; our family CPU 0.31-0.41% of a core vs 0.03-0.08% for the floor, all of it the notification bridge
+(S4c); every window's delivered frame matched the guest's own render (MAD <= 1.5/255). Still open: the bridge (a
+system-started thread inside it wakes ~20.7/s; its 30 s listing floor), and the false-deafness fix above, built, not
+yet re-measured.
