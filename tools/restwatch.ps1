@@ -9,13 +9,50 @@
 # Output (one line each; missing data is explicit, never a 0):
 #   RESTWATCH|secs=<n>|proc=<name>|pid=<pid>|threads=<n>|cs=<total>|busiest_tid=<tid>|busiest_cs=<n>
 #   RESTWATCH|secs=<n>|proc=<name>|found=0
-#   RESTWATCH-T|proc=<name>|tid=<tid>|cs=<n>          (every thread with cs > 0)
+#   RESTWATCH-T|proc=<name>|tid=<tid>|cs=<n>|start=<module+0xoff>|name=<description>   (every thread with cs > 0)
 #   RESTWATCH-END|secs=<n>|total_cs=<n>|procs_found=<n>
 #   RESTWATCH-W|from=<HH:mm:ss.fff>|to=<HH:mm:ss.fff>   (the window's wall-clock bounds, guest time)
 # -Windows N: N consecutive windows of -Seconds each, back to back (one snapshot ends a window and starts the next); every
 # line above then carries |win=<k> (k from 1). A periodic timer wakes at the same rate in every window; activity that
 # happened before the sample decays - that is how a residual is told apart from a poll.
 param([int]$Seconds = 60, [string[]]$Names = @('gui-agent', 'wgcbroker', 'notifhost', 'etwproxy'), [int]$Windows = 1)
+
+# WHO WOKE (2026-10-01): a window's wakes on UNNAMED threads could not be told apart - an OS thread-pool worker woken by a
+# system-wide notification looks like our own code. Every RESTWATCH-T line now carries the thread's Win32 start address as
+# module+offset and its thread description (our threads name themselves); a thread that has exited by the snapshot says gone.
+Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class RwThread {
+    [DllImport("kernel32.dll")] static extern IntPtr OpenThread(uint a, bool i, uint id);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("ntdll.dll")] static extern int NtQueryInformationThread(IntPtr h, int c, out IntPtr v, int l, IntPtr r);
+    [DllImport("kernel32.dll")] static extern int GetThreadDescription(IntPtr h, out IntPtr d);
+    [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr p);
+    public static string Ident(uint tid, out long start) {
+        start = 0; string desc = "";
+        IntPtr h = OpenThread(0x0040, false, tid);   // THREAD_QUERY_INFORMATION
+        if (h == IntPtr.Zero) return null;
+        IntPtr sa; if (NtQueryInformationThread(h, 9, out sa, IntPtr.Size, IntPtr.Zero) == 0) start = (long)sa;
+        IntPtr dp; if (GetThreadDescription(h, out dp) >= 0 && dp != IntPtr.Zero) { desc = Marshal.PtrToStringUni(dp); LocalFree(dp); }
+        CloseHandle(h);
+        return desc;
+    }
+}
+'@
+function Who([int]$procId, [string]$tid) {
+    $st = [long]0
+    $desc = [RwThread]::Ident([uint32]$tid, [ref]$st)
+    if ($null -eq $desc) { return '|start=gone|name=' }
+    $where = '0x{0:x}' -f $st
+    $mods = $script:modCache[$procId]
+    if ($null -eq $mods) {
+        $mods = @(try { (Get-Process -Id $procId -ErrorAction Stop).Modules | ForEach-Object { [pscustomobject]@{ N = $_.ModuleName; B = [int64]$_.BaseAddress; E = [int64]$_.BaseAddress + $_.ModuleMemorySize } } } catch { })
+        $script:modCache[$procId] = $mods
+    }
+    foreach ($m in $mods) { if ($st -ge $m.B -and $st -lt $m.E) { $where = '{0}+0x{1:x}' -f $m.N, ($st - $m.B); break } }
+    return "|start=$where|name=$desc"
+}
+$script:modCache = @{}
 
 function Snap([int[]]$pids) {
     $h = @{}
@@ -40,6 +77,7 @@ for ($w = 1; $w -le $Windows; $w++) {
     $a = $b; $ta = $tb
     Start-Sleep -Seconds $Seconds
     $b = Snap $pids; $tb = Get-Date
+    $script:modCache = @{}   # modules load and unload: resolve each window's start addresses against that window's list
     $wt = if ($Windows -gt 1) { "|win=$w" } else { '' }
     # The window's wall-clock bounds (each stamp taken as its snapshot returns), so a window joins with event traces and logs.
     "RESTWATCH-W|from=$($ta.ToString('HH:mm:ss.fff'))|to=$($tb.ToString('HH:mm:ss.fff'))$wt"
@@ -57,7 +95,7 @@ for ($w = 1; $w -le $Windows; $w++) {
             $d = if ($a.ContainsKey($k)) { $b[$k] - $a[$k] } else { $b[$k] }   # a thread born mid-window counts from 0
             $sum += $d
             if ($d -gt $busyCs) { $busyCs = $d; $busy = [int]$parts[1] }
-            if ($d -gt 0) { $lines += "RESTWATCH-T|proc=$n|tid=$($parts[1])|cs=$d$wt" }
+            if ($d -gt 0) { $lines += "RESTWATCH-T|proc=$n|tid=$($parts[1])|cs=$d$wt$(Who $procId $parts[1])" }
         }
         $total += $sum
         "RESTWATCH|secs=$Seconds|proc=$n|pid=$procId|threads=$threads|cs=$sum|busiest_tid=$busy|busiest_cs=$busyCs$wt"
