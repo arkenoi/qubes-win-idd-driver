@@ -807,6 +807,14 @@ static bool EnsurePwDib(Channel& c, int w, int h) {
 // running, which is what shows the relay WOULD have kept delivering these classes. It is not a
 // product setting and defaults OFF.
 static bool g_relayNoDemote = false;
+// TEST SWITCHES for the typing-latency regression (2026-10-01: key -> damage p90 ~190-200 ms from the build that brought
+// DirtyRegionMode, against ~20 ms before it; bisected to that range). Read ONCE at start like QubesWgcRelay, never again:
+//   QubesWgcDirtyMode = 0     direct sessions are NOT put in DirtyRegionMode (whole frames, as before S1b)
+//   QubesWgcMinUpdateMs = N   GraphicsCaptureSession.MinUpdateInterval = N ms on every direct session (absent: left alone)
+// Not product settings; absent = the shipped behaviour.
+static bool g_dirtyModeOn = true;
+static LONG g_minUpdateMs = -1;
+static bool g_minUpdateApi = false;
 
 // DID THE SOURCE ACTUALLY CHANGE? A poke only says something repainted inside this window's screen
 // rectangle; it does not say this window's own content moved. Before demoting a relay we render the
@@ -1239,7 +1247,10 @@ static void OpenChannel(int i) {
         // DIRTY REGIONS (rest-zero S1) on a direct window session only: the relay's destination and the monitor keep the
         // whole-frame path. ReportOnly: complete surfaces, regions reported; PublishFrame reads only the regions.
         if (g_dirtyApi && !monitor && !c.relay) {
-            try { session.DirtyRegionMode(GraphicsCaptureDirtyRegionMode::ReportOnly); c.dirty = true; } catch (...) {}
+            if (g_dirtyModeOn) { try { session.DirtyRegionMode(GraphicsCaptureDirtyRegionMode::ReportOnly); c.dirty = true; } catch (...) {} }
+            if (g_minUpdateApi && g_minUpdateMs >= 0) {
+                try { session.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{ std::chrono::milliseconds(g_minUpdateMs) }); } catch (...) {}
+            }
         }
         c.hwnd = monitor ? (HWND)(ULONG_PTR)WGCBRK_MONITOR_HWND : hwnd;
         c.item = item; c.pool = pool; c.session = session; c.slot = i;
@@ -1742,6 +1753,7 @@ int wmain(int argc, wchar_t** argv) {
     if (!WgcSupported()) return 2;
     try {
         namespace meta = winrt::Windows::Foundation::Metadata;
+        g_minUpdateApi = meta::ApiInformation::IsPropertyPresent(L"Windows.Graphics.Capture.GraphicsCaptureSession", L"MinUpdateInterval");
         g_dirtyApi = meta::ApiInformation::IsPropertyPresent(L"Windows.Graphics.Capture.GraphicsCaptureSession", L"DirtyRegionMode") &&
                      meta::ApiInformation::IsPropertyPresent(L"Windows.Graphics.Capture.Direct3D11CaptureFrame", L"DirtyRegions");
     } catch (...) { g_dirtyApi = false; }
@@ -1784,6 +1796,12 @@ int wmain(int argc, wchar_t** argv) {
             if (RegQueryValueExW(k, L"QubesWgcRelayNoDemote", nullptr, &tynd, (BYTE*)&nd, &cbnd) == ERROR_SUCCESS
                 && tynd == REG_DWORD && nd == 1)
                 g_relayNoDemote = true;
+            DWORD dm = 1, cbdm = sizeof(dm), tydm = 0;
+            if (RegQueryValueExW(k, L"QubesWgcDirtyMode", nullptr, &tydm, (BYTE*)&dm, &cbdm) == ERROR_SUCCESS && tydm == REG_DWORD && dm == 0)
+                g_dirtyModeOn = false;
+            DWORD mu = 0, cbmu = sizeof(mu), tymu = 0;
+            if (RegQueryValueExW(k, L"QubesWgcMinUpdateMs", nullptr, &tymu, (BYTE*)&mu, &cbmu) == ERROR_SUCCESS && tymu == REG_DWORD)
+                g_minUpdateMs = (LONG)mu;
             RegCloseKey(k);
         }
         g_RelayBuild = build;   // published below, once the section is mapped
