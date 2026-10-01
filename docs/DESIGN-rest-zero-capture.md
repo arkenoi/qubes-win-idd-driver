@@ -317,6 +317,12 @@ two overlapping unfocused Notepads, Explorer, Settings, one dialog, one open men
   side interleaved; the instrument validated by the 50 ms injection. Bar: proposed p50 not worse than the candidate
   by more than 10 ms (owner to confirm, a3). Same for scroll (wheel -> damage) and scroll CPU via
   `tools/bench-stock-vs-ours.sh`'s scroll phase.
+  **AMENDED 2026-10-01 (measured):** the harness drifted from this definition - it stamped each key AFTER SendKeys.SendWait
+  returned, so a delivery faster than SendWait was charged to the NEXT key; it reported a "regression" (rz8 p90 ~190 ms) that
+  inverted the true ranking. M5 is now anchored at the INJECTION (a stamp before SendWait), keys 1 s apart so a damage can
+  only be its own key's, with the broker's per-arrival trace giving the stage split (scratchpad/design-wf/drive2.ps1,
+  m5diag.py); validated by the 50 ms injection (+46..+63 ms). On retail Win11 26300: injection -> damage p50 27-35 ms with
+  S1b (broker 3-5 ms) vs 43-59 ms without dirty regions (broker 18-22 ms); ~30 ms of it is Windows (key -> composed frame).
 - **M6 covered-window update latency**: a fixture window advancing a counter every second while covered in the GUEST
   by `SetWindowPos` of another (dom0 stacking follows focus only, so dom0 still shows it); latency = fixture paint tick
   -> agent damage send tick for that hwnd, and the per-window `qtest shot` must show the new value. Candidate: 2-4 s
