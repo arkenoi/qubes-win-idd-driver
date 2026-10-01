@@ -7,7 +7,8 @@ Decisions about how the agent and dom0's gui-daemon agree on where a window is. 
 **Decided:** windows the agent re-creates in a bulk pass (its own start; seamless re-entry) are marked; the first configure dom0
 sends for such a window within 2 s that only MOVES it is ACKed by byte-echo as every configure is, and then answered with the
 guest's own position instead of being applied to the guest window. Everything else - an echo, a resize, a later move, a dom0 that
-answers with the offset again - takes the existing path. Agent 05492e5 (`RestartPlacementTick`, `QGAPLACEKEEP`).
+answers with the offset again - takes the existing path. Agent 05492e5 (`RestartPlacementTick`, `QGAPLACEKEEP`); for a window held
+for its first frame the 2 s start at its map, where dom0's WM places it (b4c4fda, Jev 0.85).
 
 **Why:** measured 2026-10-01: nine consecutive agent restarts moved every guest window by (+5,+25) each - dom0's window-manager
 border and title bar (owner). From the daemon's source: a created window is placed with size hints only (`mkwindow`: PSize, no
