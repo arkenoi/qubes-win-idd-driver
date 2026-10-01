@@ -94,6 +94,18 @@ python3 -c "import xml.dom.minidom,sys; xml.dom.minidom.parse('$WORK/Autounatten
     || { echo "ERROR: answer file is not well-formed XML" >&2; exit 1; }
 echo "answer file: all placeholders substituted, XML well-formed"
 
+# A WINDOWS 11 STICK NEEDS THE WIN11 TEMPLATE. Without its windowsPE LabConfig keys (no TPM, no Secure Boot on a Qubes
+# HVM) Setup refuses the install - and it does not say so up front: 2026-10-01 a retail 26300 stick built from the generic
+# template ran 4 min, then "Windows installation encountered an unexpected error. Error code: 0x800700FF - 0x40030"
+# (ACCEPTANCE-PROTOCOL.md already listed the trap; the recipe copied from an old log did not name the template).
+case "$IMG_NAME" in
+    *"Windows 11"*)
+        grep -q 'LabConfig' "$WORK/Autounattend.xml" || {
+            echo "ERROR: '$IMG_NAME' stick without LabConfig bypasses - build it with UNATTEND=$HERE/autounattend-win11.xml" >&2
+            echo "       (or the -de variant); the generic template makes Setup fail 0x800700FF - 0x40030 minutes in" >&2
+            exit 1; } ;;
+esac
+
 cp "$HERE/diskprep.cmd" "$WORK/" 2>/dev/null || true
 
 mkdir -p "$WORK/payload"
