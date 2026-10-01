@@ -28,9 +28,9 @@
 # section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$WANT_ABI = 18
+$WANT_ABI = 19
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
-$STRIDE = 3424    # sizeof(WGCBRK_SLOT) at ABI 18 (HungSkips 84 (was padding); PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, Republished 3412 (was padding), ItemClosedTick 3416); header BrokerStage at 20 (was padding)
+$STRIDE = 3424    # sizeof(WGCBRK_SLOT) at ABI 19 (unchanged from 18: CtlAck took _padTick2 at 188, DeafHolds _padAbi6 at 228; header AgentFrameWakes 80, AgentStalls 84, AgentStallTick 88 from _pad2) - ABI 18 (HungSkips 84 (was padding); PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, Republished 3412 (was padding), ItemClosedTick 3416); header BrokerStage at 20 (was padding)
 $SLOTS  = 32
 
 $proc = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*QubesWgcBrk*' } | Select-Object -First 1
@@ -48,6 +48,7 @@ public class WgcPeek {
   public static extern IntPtr MapViewOfFile(IntPtr h,uint a,uint hi,uint lo,UIntPtr n);
   [DllImport("kernel32.dll")] public static extern bool UnmapViewOfFile(IntPtr p);
   [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+  [DllImport("kernel32.dll")] public static extern ulong GetTickCount64();
 }
 "@
 $h = [WgcPeek]::OpenFileMappingW(0x0004,$false,$name)     # FILE_MAP_READ
@@ -68,8 +69,12 @@ if ($secAbi -ne $WANT_ABI) {
 
 for ($n = 0; $n -lt $Samples; $n++) {
   if ($n -gt 0) { Start-Sleep -Seconds $IntervalSec }
-  Write-Output ("S{0} HDR shutdown={1} producing={2} agentHB={3} brokerHB={4} agentPid={5} brokerPid={6} ctlgen={7} pokeLockMiss={8} relayCapable={9} relayOsBuild={10} brokerStage=0x{11:x}" -f `
-    $n,(RdI 12),(RdI 16),(RdL 40),(RdL 48),(RdI 56),(RdI 60),(RdI 64),(RdI 68),(RdI 72),(RdI 76),(RdI 20))
+  # ABI 19: no heartbeats (agentHB/brokerHB read 0 and are kept only so old parsers fail visibly rather than silently).
+  # now = THIS reader's GetTickCount64 at the reading - the clock frame ages are taken against (tools/frame-age.py),
+  # the guest's own, with none of the rig's polling latency in it. agentFrameWakes/agentStalls: R5, the broker's
+  # deadline on the agent waking for its frames.
+  Write-Output ("S{0} HDR shutdown={1} producing={2} agentHB={3} brokerHB={4} agentPid={5} brokerPid={6} ctlgen={7} pokeLockMiss={8} relayCapable={9} relayOsBuild={10} brokerStage=0x{11:x} now={12} agentFrameWakes={13} agentStalls={14} agentStallTick={15}" -f `
+    $n,(RdI 12),(RdI 16),(RdL 40),(RdL 48),(RdI 56),(RdI 60),(RdI 64),(RdI 68),(RdI 72),(RdI 76),(RdI 20),[WgcPeek]::GetTickCount64(),(RdI 80),(RdI 84),(RdL 88))
   for ($i = 0; $i -lt $SLOTS; $i++) {
     $b = $HDR + $i*$STRIDE
     $hw = RdL $b
@@ -128,6 +133,9 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # changed and no arrival answered it (a static window whose card moved). crop (above) = ReqCropX/Y, the
     # card's offset inside the window - what a truth render must be cut at to compare with the card.
     Write-Output ("S{0} slot{1} ITEM closed={2} closedTick={3} republished={4} hungSkips={5}" -f $n,$i,(RdI ($b+3408)),(RdL ($b+3416)),(RdI ($b+3412)),(RdI ($b+84)))
+    # ABI 19. ctlAck = the ControlSeq the broker last HANDLED for this slot (the agent's request deadline keys on it);
+    # deafHolds = times the slot went FAILED with WGCBRK_E_DEAF (failhr 0xa057deaf above) - must be 0 (M7).
+    Write-Output ("S{0} slot{1} ACK ctlAck={2} deafHolds={3}" -f $n,$i,(RdI ($b+188)),(RdI ($b+228)))
   }
 }
 [void][WgcPeek]::UnmapViewOfFile($base); [void][WgcPeek]::CloseHandle($h)
