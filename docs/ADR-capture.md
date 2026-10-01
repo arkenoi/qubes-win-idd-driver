@@ -510,3 +510,36 @@ Windows Terminals and Paint every earlier pass had silently lacked (§20 correct
 - **Not changed, measured:** Windows Terminal reports its WHOLE surface dirty on every present, so S1b's dirty regions give it nothing
   (a frame costs two whole-card copies: 6.7 MB typing, 4.5 MB per blink). Cheaper per frame would be a diff of the readback; with the
   focus fix a Terminal repaints at rest only while it really has focus (a blinking cursor is a change).
+
+## 22. Windows' composition is not bypassed: dom0 already composes the windows, and the rest is Windows' own — ACCEPTED (Jev), 2026-10-01
+
+**Asked (owner):** "this is all side effects of windows doing the compositing before dom0 does its own compositing ... evaluate if it
+is feasible to skip some windows part and delegate it to dom0 entirely." Constraints in force: zero security-model changes, no new
+dom0 services, no GUI-protocol / gui-daemon / grant-lifecycle change without a design writeup, owner review and an upstream issue.
+
+**Decided:** keep the per-window WGC path (§18). The composition dom0 can own - putting the windows on the screen - it already owns:
+each guest window is its own granted buffer, damage is fire-and-forget, gui-daemon puts the rects, dom0's compositor composes, and
+on 26100+ seamless no longer copies or grants the composited desktop at all (§20). What Windows still does first is Windows' own:
+DWM is always on (since Windows 8) and composes its desktop; a DirectX/DirectComposition app's pixels (UWP/WinUI/XAML, Windows
+Terminal, browsers) exist outside the app only inside DWM, so every out-of-process route to them - WGC, Desktop Duplication,
+PrintWindow PW_RENDERFULLCONTENT - is a DWM render. Jev: dom0 already owns the movable part 0.96; skipping Windows' composition
+within the constraints - not feasible 0.59, for legacy GDI windows only 0.41, for all windows 0.00; any bypass for modern apps
+changes the security model 0.95.
+
+**Rejected, with why:**
+- Reading a legacy GDI window's redirection surface directly (BitBlt / PrintWindow, or the undocumented DwmGetDxSharedSurface): it
+  exists before composition, but no out-of-process per-window paint signal exists on Windows (the 2026-09-02 pure-per-window study),
+  so it would be read on a timer - the polling the rest-zero work removed - and covers only the legacy class.
+- Hooking each app's Present in-process: process injection into every user app (anti-cheat/AV conflict, a security-model change).
+- Granting apps' raw graphics buffers to dom0: kernel-level access to DWM/graphics-kernel allocations plus a protocol and
+  grant-lifecycle change, and dom0 cannot compose DirectComposition visual trees anyway.
+- Detecting a change before it is rendered (we inject the key; accessibility events precede the frame): it cannot deliver pixels
+  earlier, and nothing in the event-driven path waits on a timer it could skip (Jev 0.22 that it helps).
+
+**What is left to win, and how it is measured first:** at most one composition interval (~16 ms at 60 Hz; Jev 0.63 for "up to one
+refresh"). The controllable lever there is the composition rate of the guest's display, which the project's IDD can raise
+(untested). Before any of it: the guest-side stage split per key - injection, the WGC arrival with the frame's age (its composition
+time), the broker's publish, the agent's damage - Jev 0.95 as the next step; m5diag.sh with the s4-m5diag trace broker. The M5 number
+that prompted the question is itself retracted (findings/issues.md, 2026-10-01): its post-SendWait anchor charges a delivery faster
+than SendWait to the next key. For whole-surface-dirty windows (Terminal), a self-diff of the readback is marginal (Jev 0.56) until
+the per-frame cost split (readback vs copies) is measured.
