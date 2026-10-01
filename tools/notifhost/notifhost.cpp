@@ -137,6 +137,12 @@ static DWORD  g_mySession = 0;
 static HANDLE g_agentAlive = nullptr;   // --alive: a mutex the agent's main thread owns for its life - ABANDONED = died
 static HANDLE g_readyEvt = nullptr;     // --ready: set once our pid is published, so the agent takes it on that wake
 static HANDLE g_mainWake = nullptr;     // auto-reset: the reader / shadow threads queued work for the main loop
+// THE LISTING'S PUSH SOURCES besides NotificationChanged (rest-zero S4c). Measured 2026-10-01 on 26100.1742:
+// NotificationChanged throws for this unpackaged process, and the notification platform does NOT write its database
+// when a toast arrives (wpndatabase.db-wal untouched across 10 toasts), so the WAL watcher never fires for them - while
+// the ETW tier's proxy delivered every toast's records within the second (Jev: ETW push 0.73). Each hit sets its flag and
+// the main loop's wake; the loop lists, and retries a listing that found nothing new (bounded).
+static volatile LONG g_etwHit = 0;      // an ETW record naming an AUMID arrived since the main loop last looked
 
 // Agent-liveness check - a BACKUP only. The agent's shutdown writes the ProgramData stop file
 // (NotifBridgeRequestStop), which the main loop polls every pass; THAT is the primary channel.
@@ -1217,6 +1223,7 @@ static bool EtwIpcReadRecord(HANDLE pipe)
         while (g_etw.ring.size() > 64) g_etw.ring.pop_front();
     }
     if (g_etw.sigEvt) SetEvent(g_etw.sigEvt);   // wake a worker waiting out the flush pacing
+    if (!la.empty()) { InterlockedExchange(&g_etwHit, 1); if (g_mainWake) SetEvent(g_mainWake); }   // a toast: list now
     if (EtwSigLogAllow(n))                   // every frame at human rates; 1-in-20 in a burst
         BLog(L"ETW SIG #%ld aumid=%s idnum=%llu notif=%s tag=%s group=%s", n,
              la.empty() ? L"-" : la.c_str(), (ULONGLONG)idn,
@@ -1256,6 +1263,7 @@ static DWORD WINAPI EtwIpcThread(LPVOID)
             GetNamedPipeServerProcessId(pipe, &spid);
             InterlockedExchange(&g_etw.state, ETW_STATE_LIVE);
             BLog(L"ETW IPC connected server_pid=%lu - push tier armed", spid);
+            if (g_mainWake) SetEvent(g_mainWake);   // the listing now has a push source: the main loop drops its floor
             while (EtwIpcReadRecord(pipe))
                 if (WaitForSingleObject(g_etw.stopEvt, 0) == WAIT_OBJECT_0) break;
             CloseHandle(pipe);
@@ -1263,6 +1271,7 @@ static DWORD WINAPI EtwIpcThread(LPVOID)
             InterlockedExchange(&g_etw.state, ETW_STATE_DOWN);
             BLog(L"ETW IPC disconnected (recs=%ld bad=%ld) - tier down, DB fallback, reconnecting",
                  g_etw.recTotal, g_etw.recBad);
+            if (g_mainWake) SetEvent(g_mainWake);   // the listing may have lost its only push source: floor back on
         }
     }
     catch (...)
@@ -2720,6 +2729,7 @@ static int BridgeMain()
     // most twice (+250 ms, +1 s), armed by the write and ended by a find - bounded, never at rest.
     int walRetries = 0;
     ULONGLONG walRetryAt = 0;
+    bool lastAnyPush = false;   // the floor state last logged (LISTING lines)
 
     // baseline: everything already in the center predates us - never forwarded. If the FIRST read
     // throws we must NOT proceed with an empty set (that would forward the whole backlog to dom0);
@@ -2896,8 +2906,17 @@ static int BridgeMain()
 
         // toast listing: push-gated (NotificationChanged and/or the WAL watcher); the floor only without either.
         // Body deliberately NOT re-indented (diff minimalism, the file's guard precedent).
-        const bool anyPush = pushArmed || g_walArmed;
-        const bool walHit = InterlockedExchange(&g_walHit, 0) != 0;
+        // A live push source: NotificationChanged, or the ETW proxy's pipe (the one that works on 26100.1742). The WAL
+        // watcher still triggers listings when it fires, but it is NOT counted as a push source: measured, it does not
+        // fire for toast arrivals on that build.
+        const bool anyPush = pushArmed || (g_etw.state == ETW_STATE_LIVE);
+        if (anyPush != lastAnyPush)
+        {
+            BLog(anyPush ? L"LISTING push-driven (%s) - no floor" : L"LISTING NO PUSH SOURCE (%s) - listing every 2 s until one is back",
+                 pushArmed ? L"NotificationChanged" : L"ETW proxy pipe");
+            lastAnyPush = anyPush;
+        }
+        const bool walHit = (InterlockedExchange(&g_walHit, 0) != 0) | (InterlockedExchange(&g_etwHit, 0) != 0);
         if (walHit) { walRetries = 0; walRetryAt = 0; toastSignaled = true; }
         const bool walRetryDue = (walRetryAt != 0 && now >= walRetryAt);
         const bool walTriggered = walHit || walRetryDue;
@@ -3107,7 +3126,7 @@ static int BridgeMain()
             };
             if (g_connDead && !allow.empty()) dueAt(nextReconnect);
             if (retryPending) dueAt(lastListTick + 2000);
-            if (!(pushArmed || g_walArmed)) dueAt(nextFloorList);
+            if (!(pushArmed || g_etw.state == ETW_STATE_LIVE)) dueAt(nextFloorList);
             if (walRetryAt) dueAt(walRetryAt);
             HANDLE hs[5]; DWORD n = 0;
             const DWORD iToast = n; if (toastEvt) hs[n++] = toastEvt;
