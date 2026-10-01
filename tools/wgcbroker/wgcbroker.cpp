@@ -266,12 +266,14 @@ struct PubLock {
 // ABI 18: WHAT THE MAIN LOOP IS DOING NOW, for the agent's hang report (WGCBRK_STG_*). Scoped: the
 // innermost active stage is published, and the enclosing one comes back when it ends. A hang leaves the agent's
 // request unacknowledged (CtlAck) with this still naming the call it is blocked in.
+// ABI 19: every stage entered and left also bumps BrokerProgress - the agent's hang deadline (R1) requires NO progress
+// as well as no acknowledgement, so a broker that is busy (eight session opens in one pass) is not reaped as hung.
 struct StageScope {
     LONG prev;
     StageScope(unsigned code, int slot) : prev(g_hdr ? g_hdr->BrokerStage : 0) {
-        if (g_hdr) g_hdr->BrokerStage = (LONG)((code << 8) | ((unsigned)slot & 0xFFu));
+        if (g_hdr) { g_hdr->BrokerStage = (LONG)((code << 8) | ((unsigned)slot & 0xFFu)); InterlockedIncrement(&g_hdr->BrokerProgress); }
     }
-    ~StageScope() { if (g_hdr) g_hdr->BrokerStage = prev; }
+    ~StageScope() { if (g_hdr) { g_hdr->BrokerStage = prev; InterlockedIncrement(&g_hdr->BrokerProgress); } }
     StageScope(const StageScope&) = delete;
     StageScope& operator=(const StageScope&) = delete;
 };
@@ -1359,6 +1361,7 @@ static void Reconcile() {
     for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) {
         WGCBRK_SLOT* s = &g_slots[i];
         // R1/R4 (rest-zero D): the request this pass answers, acknowledged in CtlAck once the slot has been handled below.
+        InterlockedIncrement(&g_hdr->BrokerProgress);
         const LONG ctl0 = s->ControlSeq;
         MemoryBarrier();
         HWND want = (HWND)(ULONG_PTR)s->Hwnd;

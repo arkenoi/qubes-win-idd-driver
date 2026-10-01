@@ -1782,6 +1782,10 @@ static struct
     HANDLE walEvt = nullptr;                // auto-reset: "wpndatabase.db* just changed"
     bool armed = false;
 } g_shadow;
+// REST-ZERO S4c: the WAL watcher armed - the bridge's push source where NotificationChanged is unavailable (see the main
+// loop). Set by WalWatchThread once its directory handle is open.
+static volatile LONG g_walArmed = 0;
+static volatile LONG g_walHit = 0;     // the WAL watcher saw a database write since the main loop last looked
 
 // Push replacement for WpnCorrelate's blind retry sleep (owner directive: prefer push over
 // poll): watch the notification store's directory and signal walEvt whenever
@@ -1800,6 +1804,7 @@ static DWORD WINAPI WalWatchThread(LPVOID)
     if (h == INVALID_HANDLE_VALUE)
     { BLog(L"WALWATCH unavailable (%lu) - timed-retry fallback", GetLastError()); return 0; }
     BLog(L"WALWATCH armed dir=%s", dir.c_str());
+    InterlockedExchange(&g_walArmed, 1);
     std::vector<BYTE> buf(8192);
     for (;;)
     {
@@ -1822,7 +1827,14 @@ static DWORD WINAPI WalWatchThread(LPVOID)
             if (!fi->NextEntryOffset) break;
             p += fi->NextEntryOffset;
         }
-        if (hit) SetEvent(g_shadow.walEvt);
+        if (hit) {
+            SetEvent(g_shadow.walEvt);
+            // ...and THE LISTING'S PUSH SOURCE (rest-zero S4c): the notification platform persists every toast in this
+            // database, so a write here is how the bridge learns a toast arrived where NotificationChanged is
+            // unavailable (it throws for this unpackaged process on 26100.1742) - instead of listing every 2 s.
+            InterlockedExchange(&g_walHit, 1);
+            if (g_mainWake) SetEvent(g_mainWake);
+        }
     }
     CloseHandle(h);
     return 0;
@@ -2690,16 +2702,24 @@ static int BridgeMain()
                 [toastEvt](UserNotificationListener const&, auto const&)
                 { SetEvent(toastEvt); });
             pushArmed = true;
-            BLog(L"PUSH NotificationChanged armed - listing runs on signal + 30 s floor");
+            BLog(L"PUSH NotificationChanged armed - listing runs on its signal and the WAL watcher's");
         }
         catch (...)
         {
-            BLog(L"PUSH NotificationChanged unavailable - keeping the 2 s listing floor");
+            BLog(L"PUSH NotificationChanged unavailable - the WAL watcher's signal drives the listing (2 s floor only if "
+                 L"it is not armed either)");
         }
     }
-    const DWORD kFloorMs = pushArmed ? 30000 : 2000;
+    // THE LISTING FLOOR (rest-zero S4c): only while the bridge has NO push source at all. With NotificationChanged armed,
+    // or the WAL watcher armed (it is the push source on 26100.1742, where the subscription throws), a listing runs on
+    // their signals and never on a clock - the 30 s / 2 s floors were idle polls (owner rule: zero wakes at rest).
+    const DWORD kFloorMs = 2000;
     ULONGLONG nextFloorList = 0;                       // 0: first pass always lists
     bool toastSignaled = true;
+    // A WAL write can land before its toast is listable: a WAL-triggered listing that finds nothing new is retried at
+    // most twice (+250 ms, +1 s), armed by the write and ended by a find - bounded, never at rest.
+    int walRetries = 0;
+    ULONGLONG walRetryAt = 0;
 
     // baseline: everything already in the center predates us - never forwarded. If the FIRST read
     // throws we must NOT proceed with an empty set (that would forward the whole backlog to dom0);
@@ -2874,15 +2894,22 @@ static int BridgeMain()
             } catch (...) {}
         }
 
-        // toast listing: push-gated (NotificationChanged) with the bounded floor pass.
+        // toast listing: push-gated (NotificationChanged and/or the WAL watcher); the floor only without either.
         // Body deliberately NOT re-indented (diff minimalism, the file's guard precedent).
-        bool doList = !pushArmed || toastSignaled || now >= nextFloorList;
+        const bool anyPush = pushArmed || g_walArmed;
+        const bool walHit = InterlockedExchange(&g_walHit, 0) != 0;
+        if (walHit) { walRetries = 0; walRetryAt = 0; toastSignaled = true; }
+        const bool walRetryDue = (walRetryAt != 0 && now >= walRetryAt);
+        const bool walTriggered = walHit || walRetryDue;
+        bool sawNew = false;
+        bool doList = !anyPush || toastSignaled || walRetryDue;
         if (doList)
         {
         nextFloorList = now + kFloorMs;
         toastSignaled = false;
         retryPending = false;
         lastListTick = now;
+        walRetryAt = 0;
         try
         {
             auto list = listener.GetNotificationsAsync(NotificationKinds::Toast).get();
@@ -2909,6 +2936,7 @@ static int BridgeMain()
                 {
                     uint32_t id = un.Id();
                     if (seen.count(id)) continue;
+                    sawNew = true;
                     std::wstring aumid, app;
                     try { aumid = un.AppInfo().AppUserModelId().c_str(); } catch (...) {}
                     try { app = un.AppInfo().DisplayInfo().DisplayName().c_str(); } catch (...) {}
@@ -3044,6 +3072,13 @@ static int BridgeMain()
             BLog(L"poll error (%d)", failStreak);
             if (failStreak >= 30) { BLog(L"FATAL 30 consecutive poll errors"); rc = 3; break; }
         }
+        // A WAL-triggered listing that found nothing new may have run before its toast became listable: retry it, twice
+        // at most, then rest (see walRetries).
+        if (walTriggered)
+        {
+            if (sawNew || walRetries >= 2) { walRetries = 0; walRetryAt = 0; }
+            else { walRetryAt = now + (walRetries ? 1000 : 250); walRetries++; }
+        }
         }   // doList
 
         // dom0 dismissals queued by the reader: keep the guest Notification Center in sync
@@ -3072,7 +3107,8 @@ static int BridgeMain()
             };
             if (g_connDead && !allow.empty()) dueAt(nextReconnect);
             if (retryPending) dueAt(lastListTick + 2000);
-            dueAt(nextFloorList);
+            if (!(pushArmed || g_walArmed)) dueAt(nextFloorList);
+            if (walRetryAt) dueAt(walRetryAt);
             HANDLE hs[5]; DWORD n = 0;
             const DWORD iToast = n; if (toastEvt) hs[n++] = toastEvt;
             const DWORD iWake = n;  if (g_mainWake) hs[n++] = g_mainWake;
