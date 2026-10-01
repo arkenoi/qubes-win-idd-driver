@@ -293,6 +293,10 @@ static bool      g_wgcReopened[WGCBRK_MAX_SLOTS] = {};
 // The channel generation (WGCBRK_SLOT::ChanGen) whose capture item Windows CLOSED last, per slot; 0 = none. Written by the
 // item.Closed handler (a WGC thread), read by Reconcile: a channel whose own item closed gets no trailing-poke absorption.
 static volatile LONG g_closedGen[WGCBRK_MAX_SLOTS] = {};
+// A CLOSED ITEM IS REPAIRED AT ONCE (2026-10-01): set when Reconcile reopened a channel because Windows closed its capture
+// item; a reopened item that is closed again before it delivered anything goes DEAF instead (no loop). Cleared with the
+// other per-registration flags.
+static bool      g_closedReopened[WGCBRK_MAX_SLOTS] = {};
 
 // RAII for g_pubCs. Both long regions below call C++/WinRT methods that THROW - frame.Surface() on a
 // closed frame is the obvious one - while sitting between a bare Enter and a bare Leave. A throw
@@ -1253,6 +1257,7 @@ static void OpenChannel(int i) {
             InterlockedIncrement(&g_slots[i].ItemClosed);
             g_slots[i].ItemClosedTick = (LONGLONG)GetTickCount64();
             InterlockedExchange(&g_closedGen[i], closeGen);
+            if (g_hWake) SetEvent(g_hWake);   // the repair is Reconcile's, now - not at the next poke (see g_closedReopened)
         });
         c.poolW = size.Width; c.poolH = size.Height;   // FrameArrived tracks content-size changes
         c.rev = pool.FrameArrived(auto_revoke,
@@ -1564,8 +1569,23 @@ static void Reconcile() {
             else if (!c.pokePendingSince)
                 c.pokePendingSince = nowP;                            // the first unanswered poke
         }
-        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; OpenChannel(i); }
-        else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; }
+        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_closedReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; OpenChannel(i); }
+        else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_closedReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; }
+        // WINDOWS CLOSED THIS SESSION'S CAPTURE ITEM: reopen at once. Observed first (2026-09-30, Jev 0.96 observe-first) and
+        // now measured: on 26100.1742 a UWP app's first item is closed as it launches - Settings (2026-09-30) and Calculator
+        // (rz8, 2026-10-01: 3 frames, the splash, then ITEM closed=1) - and a closed item delivers nothing more, so the window
+        // stayed on its splash in dom0 until something poked it (the owner watched Calculator do it for a minute, and found its
+        // first menu render slow). The Closed handler wakes this loop; the reopen costs one session. A reopened item closed
+        // again before it delivered anything is not reopened again: DEAF, loud (Jev: repair now 0.99, loop risk bounded 0.30).
+        else if (wantOpen && c.hwnd == want && !c.pw && !c.relay && g_closedGen[i] == g_slots[i].ChanGen &&
+                 IsWindow(want) && IsWindowVisible(want) && !IsIconic(want)) {
+            const bool delivered = (c.lastArrivalTick != 0);
+            g_slots[i].Reroutes++;
+            CloseChannel(i);          // wipes the Channel - survivors are set after it
+            if (g_closedReopened[i] && !delivered)
+                DeclareDeaf(i);
+            else { g_closedReopened[i] = true; g_forcePw[i] = false; OpenChannel(i); }
+        }
         else if (SIZE live{}; wantOpen && c.hwnd == want && c.relay && c.relayThumb && RelayOutgrown(i, c, s, &live)) {
             g_slots[i].Reroutes++;                          // visible in the peek; RelayOk counts the re-open
             const LONG ctl = s->ControlSeq;
