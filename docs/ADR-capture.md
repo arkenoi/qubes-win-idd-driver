@@ -543,3 +543,23 @@ time), the broker's publish, the agent's damage - Jev 0.95 as the next step; m5d
 that prompted the question is itself retracted (findings/issues.md, 2026-10-01): its post-SendWait anchor charges a delivery faster
 than SendWait to the next key. For whole-surface-dirty windows (Terminal), a self-diff of the readback is marginal (Jev 0.56) until
 the per-frame cost split (readback vs copies) is measured.
+
+## 23. Pointer motion is not a promise of change: it pokes only the slots the broker renders on request — ACCEPTED (Jev), 2026-10-01
+
+**Decided:** dom0 pointer motion pokes a window's broker slot only when that slot is on the PrintWindow route (menus and the
+other classes WGC cannot capture), where the poke is the render trigger - a menu's highlight follows the pointer. A WGC or
+relay slot is not poked on motion; keys and buttons still poke every slot. Agent 6d87b48 (`BrokerPokeWindowMotion`).
+
+**Why:** on a WGC slot the input poke only asks a liveness question ("a change is coming - did the session see it?"), and the
+broker answers an unanswered poke after 2 s by recreating the session (§19 E). Motion makes no promise of change. Measured on
+retail 26300 (w11r-ds), the owner hovering: over a focused Notepad (no hover effect; the caret stops blinking 5 s after the
+last key) its slot took +2555 pokes and 3 QGAWGCRECREATE in ~75 s, while the damage path's pixel compare (§21's QGAPOKESAME)
+refused all 2304 pointer damages - the input path's unconditional motion poke was the only source left. Over Paint, whose
+status bar follows the pointer, every poke was answered and nothing was recreated. The automated M7 cells drive input inside
+the guest, which produces no dom0 motion, so they could not see it. Jev: chain established 0.64; this fix 0.94, PrintWindow
+renders kept 0.97.
+
+**Cost:** on classes desktop-duplication damage does not cover (Settings being driven reported a two-pixel dirty area), a
+session that is already deaf during hover-only interaction is caught at the next key or click, which still arms the quiet
+test, instead of on motion - a highlight late by one click (Jev: acceptable trade 0.81). **Seen to fail / pass:** the
+owner's hover over a focused Notepad on the build before (3 recreates) and on this one (to be measured before acceptance).
