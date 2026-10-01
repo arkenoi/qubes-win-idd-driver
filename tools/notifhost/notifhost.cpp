@@ -2933,6 +2933,11 @@ static int BridgeMain()
         const bool walTriggered = pushHit || walRetryDue;
         bool sawNew = false;
         bool doList = !anyPush || toastSignaled || walRetryDue;
+        // What asked for this listing (rest-zero M1: in the ~90 s after a toast burst a system thread in this process woke
+        // ~80/s; the LIST lines say how many listings ran then and why). One line per listing - none at rest.
+        const wchar_t* listTrig = pushHit ? L"etw" : walRetryDue ? L"retry" : toastSignaled ? L"wake" : L"floor";
+        UINT listN = 0;
+        const ULONGLONG listT0 = GetTickCount64();
         if (doList)
         {
         nextFloorList = now + kFloorMs;
@@ -2943,6 +2948,7 @@ static int BridgeMain()
         try
         {
             auto list = listener.GetNotificationsAsync(NotificationKinds::Toast).get();
+            listN = list.Size();
             failStreak = 0;
             // First good poll after a failed baseline: seed `seen` with the whole current center
             // and forward NOTHING this pass (the backlog predates us). This is the legacy `primed`
@@ -3102,6 +3108,7 @@ static int BridgeMain()
             BLog(L"poll error (%d)", failStreak);
             if (failStreak >= 30) { BLog(L"FATAL 30 consecutive poll errors"); rc = 3; break; }
         }
+        BLog(L"LIST trig=%s n=%u new=%d ms=%llu", listTrig, listN, sawNew ? 1 : 0, GetTickCount64() - listT0);
         // A WAL-triggered listing that found nothing new may have run before its toast became listable: retry it, twice
         // at most, then rest (see walRetries).
         if (walTriggered)
