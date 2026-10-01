@@ -538,6 +538,17 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH) {
     // request that no longer exists. Drop it UNPUBLISHED (Seq untouched, so the agent never sees
     // it); ControlSeq now differs from pubCtlSeq, so the main loop serves the new one next pass.
     if (s->ControlSeq != ctl) return false;
+    // THE SAME PIXELS ARE NOT A CHANGE (owner, 2026-09-30: "if you repaint the same pixels it is not a change"). A window
+    // that presents again without changing - at rest on w11-ds an Explorer window published ~15 frames a minute - still
+    // costs a WGC arrival here, but its card is not republished and the agent is not woken to compare it again.
+    // Steady state only: an arrival that answers a registration (ControlSeq moved since this channel last published) is
+    // published whatever it holds - that is the frame the agent waits for. The quiet/deaf test keys on arrivals
+    // (lastArrivalTick), not on publishes, so a window that keeps repainting the same pixels is not judged deaf.
+    if (g_ch[i].pubCtlSeq == ctl && s->AckState == WGCBRK_ACTIVE && s->FrameWidth == w && s->FrameHeight == h &&
+        s->ActiveBuffer >= 0 && s->ActiveBuffer < WGCBRK_RING && s->ActiveBuffer != wbuf) {
+        const BYTE* cur = WGCBRK_ARENA(g_base, s->BufOffset[s->ActiveBuffer]);
+        if (memcmp(cur, dst, (size_t)w * h * 4) == 0) { InterlockedIncrement(&s->SameFrames); return false; }
+    }
     PublishSignature(i, dst, w, h);
 
     // THE SEQLOCK, COMPARE-AND-SWAPPED. An agent registration resets Seq to 0 with plain stores; the
