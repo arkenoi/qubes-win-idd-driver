@@ -403,6 +403,17 @@ wake on either side), 2026-10-01. Each changes what fails, and how loudly.
   PrintWindow every 0.5-8 s for as long as nothing changed.
 - **Held maps on 26100+ get one deadline per window** (the crop ceiling, then the declaration once both graces end), not
   a 32/100 ms re-check; a consumed frame and a completed crop measurement queue that window for the tracking pass.
+- **A busy broker is not a hung one.** The hang deadline (2 s without an ack) also requires the broker's progress counter
+  (`BrokerProgress`, bumped at every call it starts or finishes) not to have moved: a fresh broker opening eight sessions
+  in one pass was reaped as hung (measured). Jev: fixes it 0.94, still detects a real hang 0.94 - confirmed by
+  suspending the broker: QGABROKERHUNG 2 s after the next request, reaped, back in 594 ms.
+- **The notification bridge lists on the ETW proxy's records, not on a clock.** On 26100.1742 NotificationChanged throws
+  for the unpackaged bridge, which therefore listed the Notification Center every 2 s for ever (~25 wakes/s, the last
+  rest load of the stack). The notification database is NOT written when a toast arrives on that build (wpndatabase.db-wal
+  untouched across 10 toasts), so a file-watch push saw none of them - with it alone an allowlisted app's toast would
+  have been banner-suppressed and never forwarded. The ETW tier's proxy delivered every toast's records within the
+  second. Jev (re-asked with that measurement): ETW push 0.73; verify every toast listed promptly and a dead proxy falling
+  back loudly to the 2 s floor (both 0.77).
 
 **Measured so far (S3/S4b, w11-ds 26100.1742, burn scene, 3 interleaved arms each with the agent-stopped floor):** the
 broker's wakes at rest fell from ~6/s to 0-9 per 60 s (an Explorer window that repaints itself ~1/15 s accounts for
@@ -410,3 +421,43 @@ them); its CPU 0; our family CPU 0.31-0.41% of a core vs 0.03-0.08% for the floo
 (S4c); every window's delivered frame matched the guest's own render (MAD <= 1.5/255). Still open: the bridge (a
 system-started thread inside it wakes ~20.7/s; its 30 s listing floor), and the false-deafness fix above, built, not
 yet re-measured.
+
+## 20. Rest-zero S2 and the three loops the acceptance found — ACCEPTED (Jev), MEASURED 2026-10-01
+
+Recorded while running the rest-zero acceptance passes rz2-rz3b on w11-ds (26100.1742, burn scene), 2026-10-01. The
+instruments that found these are in §19's measurement plan; each fix was reviewed by Jev before commit.
+
+- **On 26100+ in seamless nothing is copied out of the desktop image (S2, as designed).** The capture thread copied every
+  desktop frame into the staging buffer although no window took a pixel from it (QGACOMPOSITECOPY 0 over whole runs).
+  It now copies only while window 0 shows the desktop (non-seamless, or on its way there); otherwise a desktop frame is a
+  damage signal with no framebuffer at all, and the buffer is refilled whole - on any next frame, delivered even with no
+  dirty rects, whole-screen damage - when window 0 wants it again. A non-seamless entry asks Windows for that frame with
+  one asynchronous RedrawWindow of every window: measured, it made desktop duplication deliver 44 and 29 frames against 0
+  and 0 for the same launch without it. A fence on each side keeps a skip racing an entry from losing both.
+  **Found by the acceptance, not the review:** a broker frame was clipped to the published image's size, now 0 - every
+  window stayed black and was declared (8 of 8, rz3). The S2 audit had listed the image pointer's readers and not its
+  dimensions'. A broker frame is clipped to the screen now. rz3b: QGADESKCOPY off on every agent start, never on;
+  QGACOMPOSITECOPY 0; every window's delivered frame matched the guest's render (MAD <= 1.6/255).
+- **A PrintWindow slot's own render is not a change.** Rendering a window makes Windows present it again with the same
+  pixels - a desktop dirty rect, a poke, the next render. A held, untouched system menu looped at ~11 renders and ~46
+  desktop frames a second at rest (rz2); with the broker merely suspended, 0. Both PrintWindow paths echo (WM_PRINT: one
+  present per render; PW_RENDERFULLCONTENT: more). The damage poke on a PrintWindow slot now carries a signature of the
+  window's on-screen pixels for that frame (the desktop surface mapped READ-ONLY for the frame being processed - DDA stays
+  a damage signal, nothing copied, nothing sent) and pokes only if they changed; input pokes are unchanged. Jev chose this
+  over "converge, then input only" (0.80 vs 0.16: async content such as a suggestion list filling must still render).
+  rz3b: the held menu, navigated three times, rendered 4 times (fid 4) and was then silent - capture, main and broker 0.
+- **A WGC arrival whose card equals the published one is not republished** (the same rule on the WGC path; ABI 20 counts
+  them as SameFrames). Only in steady state: an arrival answering a registration is published whatever it holds, and the
+  broker's quiet/deaf test keys on arrivals, not publishes. Jev: fits the rule 0.84, registration-safe 0.91.
+- **The notification bridge's database watcher is not a listing trigger.** A listing is served from the database the
+  watcher watches, so a watcher-triggered listing can re-trigger itself; on this build the watcher never fired for a toast
+  arrival anyway. Removing the trigger did NOT remove the toast-tail load (below), so it was not that load's cause.
+
+**Measured, rz3b (build 362b761):** at rest, per minute, the agent wakes 8-24 times (main and hooks, following the
+guest's window events and one Explorer window's 10-15 frames a minute; capture 0), the broker 0-3, the bridge 0-2, the
+ETW proxy 0; our family CPU 0.00 in every arm, attributed CPU (DWM + ours) 0.00-0.03 against the agent-stopped floor's
+0.03-0.05, five arms interleaved with three floors. Toasts 10/10 listed within 1.2 s;
+with the ETW proxy killed the bridge said so and recovered in 7 s (2/2 listed). Hangs: the broker hung and asked is
+reaped in 2 s (back in 625 ms), hung and not asked is left alone (by design); the agent hung while a window published
+moved the broker's AgentStalls. **Still open:** in the minute after a 10-toast burst - while the burst's own toasts
+expire - one bridge thread wakes ~128 times a second (7683 of the bridge's 8340); 150 s after the burst it is back to 2.

@@ -317,6 +317,12 @@ two overlapping unfocused Notepads, Explorer, Settings, one dialog, one open men
   by `SetWindowPos` of another (dom0 stacking follows focus only, so dom0 still shows it); latency = fixture paint tick
   -> agent damage send tick for that hwnd, and the per-window `qtest shot` must show the new value. Candidate: 2-4 s
   (sweep + backoff) -> FAIL at a 250 ms bar. Target after S1+S2: p90 < 100 ms.
+  **Measured 2026-10-01 (m56a, w11-ds, 3 rounds interleaved, ProtoTrace on):** M5 key->damage p50 6/18/14 ms (p90
+  26/42/28) on the rest-zero build vs 180/181/21 (p90 203/200/199) on the candidate - a3's proposed bar met with room.
+  M6 paint->damage p90 40/50/46 ms (bar 100). **M6's premise above did not hold:** the candidate is NOT 2-4 s here
+  (p90 45-52 ms), so the candidate is no seen-to-fail subject; the fault-injection arm is (FaultDamageDelayMs=50, test
+  build): M5 +53..+64 ms and M6 +53..+59 ms against the same build without it, M6 p90 99-105. One fixture paint per
+  rest-zero round had no damage: always the last, painted in the tick that closed the window (fixture fixed).
 - **M7 deafness false positives** (`QuietReroutes`, pokes per slot): Calculator over Store + typing into
   Calculator; a window dragged off another (reveal); a menu opened over a window. Candidate: pokes on the revealed
   window (FAIL). Target: 0 pokes on covered/revealed windows, 0 reroutes; and a fault-injected deaf session (the
