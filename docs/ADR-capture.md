@@ -589,3 +589,32 @@ damage beneath it from the liveness hint, exactly as the tracked rule already do
 harness focus step (5 recreates; Jev: measure its cause first, 0.65). **Seen to fail / pass:** owed - the geomlive resize and
 launch measurement (false pokes must become QGAPOKELIVE, recreates must stop), the M7 deaf cell (the topmost window's poke must
 still go out) and the M7 phases.
+**Margin, 2026-10-01 (agent 14901dc):** 34 px, not 33. On the first build of this section (rz18) the live check found a launched
+Calculator above the windows beneath and still left a 1-px sliver: its damage ran 34 px past its DWM frame on the left, right
+and bottom (27 at the top) in both launches, so both windows beneath were poked and recreated. Jev: 34 px 0.50 over 40 px 0.45.
+Not DPI-scaled - the agent is DPI-unaware, so its rects are 96-DPI units. **Seen on rz18** (interleaved with rz17, 3 resize runs
+a side, windows' z-order as the swaps left it): recreates 5/5/3 on rz17, 2/0/0 on rz18; every withheld poke was logged as
+QGAPOKELIVE; the remaining rz18 recreates were on a Terminal whose occluder count places it above the resized window (its
+pixels changed with the window beneath it; z-order and cause NOT measured - open).
+
+## 25. The broker arena is reserved and committed per allocation; the agent reads only what it committed — ACCEPTED (Jev), 2026-10-01
+
+**Decided:** the shared section is `SEC_RESERVE` with 1 GiB of arena address space; the header is committed at creation and each
+arena region on the agent's view when it is allocated, so the commit charge is the high-water mark of what windows use
+(committed section pages are never decommitted; a reused region is already committed). A failed commit refuses the registration
+like a full arena (`QGABROKERREGFAIL` now names the committed frontier and the commit error). The agent keeps its own record of
+each slot's two buffers and reads frames, frees regions and sizes the keep test from that record, never from the section.
+Agent f0d03b6. This is the design's c4 decision (S2: "arena either SEC_RESERVE + per-allocation commit ... or a larger
+SEC_COMMIT arena"), never taken until now.
+
+**Why:** the fixed 128 MiB committed arena was full with the 8-window burn scene at 5120x1440 (two buffers per window; a
+maximized 5120x1440 window needs 59 MB, so about two fit), and a Calculator launched over the scene was refused and never shown
+(measured 2026-10-01, retail 26300). c4's probe (ii), run on the guest the same day with the agent's own name pattern and DACL:
+a 1 GiB reserve charged ~4 MB, a 16 MiB commit on the SYSTEM side's view charged exactly 16 MiB, and the user-session side's
+view saw MEM_COMMIT there and MEM_RESERVE elsewhere, read the creator's data and wrote its own, which the creator read back.
+Jev: reserve+commit 0.98 over a larger committed arena 0.02, in scope of the approved plan 0.91, probe first 0.76 (done).
+Review: a stale record 0.24, an uncommitted touch 0.21, correct-as-a-whole 0.56 (the plateau a run settles).
+
+**Cost:** 1 GiB of address space in the agent and in the broker (64-bit); the commit charge never falls below its peak for the
+agent's life. The census that would size the slot count (c4 (i), on the owner's desktop) is still owed; 32 slots stay.
+**Seen to fail / pass:** the scene + Calculator registration refused on rz17/rz18 (twice each); the same on rz19 owed.
