@@ -68,6 +68,19 @@ if %BESTMB% LSS 25000 (
 )
 echo selected disk %BEST% (~%BESTMB% MB) >> %LOG%
 
+REM CHECK0 MODE (mgmt/autounattend-win11-static.xml): Setup partitions Disk 0 itself there, so only VERIFY that Disk 0 is
+REM the largest disk - the root volume - and power WinPE off at once if it is not, rather than let Setup install to a small
+REM disk (Jev 2026-10-01: an unguarded static DiskID was the blocker, 0.91). No argument = the partitioning below, unchanged.
+if /i "%~1"=="CHECK0" (
+    if not "%BEST%"=="0" (
+        echo FATAL: the largest disk is %BEST%, not 0 - a static Disk 0 layout would miss the root volume >> %LOG%
+        wpeutil shutdown
+        exit /b 1
+    )
+    echo CHECK0 OK: disk 0 is the largest >> %LOG%
+    exit /b 0
+)
+
 REM --- partition it ----------------------------------------------------------
 REM MBR + one active primary spanning the disk: Qubes HVMs boot BIOS/SeaBIOS.
 (

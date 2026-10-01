@@ -1,0 +1,305 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Zero-click WINDOWS 11 install for win11-idd-test (BIOS/MBR boot — Qubes HVM SeaBIOS
+     default). Derived from autounattend.xml (Win10); the only functional additions are the
+     windowsPE RunSynchronous LabConfig registry keys, which disable Win11 Setup's
+     TPM 2.0 / Secure Boot / RAM / CPU-family compliance checks — a Qubes HVM presents
+     neither a TPM nor UEFI Secure Boot. RunSynchronous in the windowsPE pass runs before
+     the compliance appraisal AND before disk configuration, so this is the right slot.
+     @IMAGE_NAME@ is replaced by build-unattended-iso.sh: e.g. "Windows 10 Pro" (retail ISO)
+     or "Windows 10 Enterprise Evaluation" (eval ISO). Retail Pro may additionally need the
+     generic install key (activates nothing) - see PRODUCTKEY marker below.
+     Local account user/qubes, autologon, OOBE skipped, payload\setup.cmd on first logon. -->
+<!-- autounattend-win11-static.xml - the Win11 template with a STATIC disk layout (Setup partitions Disk 0 itself; no
+     RunSynchronous diskprep, no InstallToAvailablePartition). MEASURED 2026-10-01 on retail Win11 26300.9457: the diskprep +
+     InstallToAvailablePartition flow failed "0x800700FF - 0x40030" ~4 min in, twice (with and without the LabConfig keys; the
+     install.wim verified intact); a stick from this file - the same single active MBR NTFS partition - installed cleanly
+     (win11r-base). WHY the other flow fails on 26300 is NOT established. Disk 0 was the 80 GB root in the one 26300 WinPE disk
+     list seen; the generic templates avoid a static DiskID because one 2026-08-07 run (another build) ordered the disks
+     differently. On a freshly created guest every disk is empty, so a wrong DiskID costs a failed install, not data.
+     Use: UNATTEND=mgmt/autounattend-win11-static.xml PRIMER=1 LOCALE=en-US mgmt/build-answer-stick.sh "Windows 11 Pro" -->
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+        xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
+      <InputLocale>en-US</InputLocale><SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+        xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>reg.exe add HKLM\SYSTEM\Setup\LabConfig /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Description>verify Disk 0 is the largest disk (the static layout below targets it); power off if not</Description>
+          <Path>cmd /c for %d in (C D E F G H I J K L M N O P Q R S T U V) do @if exist %d:\diskprep.cmd call %d:\diskprep.cmd CHECK0</Path>
+        </RunSynchronousCommand>
+      </RunSynchronous>
+      <!-- NO static DiskConfiguration: WinPE disk order is not guaranteed to match the
+           installed OS's, and a Qubes HVM shows three disks. diskprep.cmd (RunSynchronous
+           order 6) partitions the LARGEST by size and leaves the rest RAW. See the Win10
+           answer file for the incident this prevents. -->
+      <DiskConfiguration>
+        <WillShowUI>OnError</WillShowUI>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <CreatePartition wcm:action="add">
+              <Order>1</Order><Type>Primary</Type><Extend>true</Extend>
+            </CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add">
+              <Order>1</Order><PartitionID>1</PartitionID><Active>true</Active>
+              <Format>NTFS</Format><Label>Windows</Label><Letter>C</Letter>
+            </ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom>
+            <MetaData wcm:action="add">
+              <Key>/IMAGE/NAME</Key><Value>@IMAGE_NAME@</Value>
+            </MetaData>
+          </InstallFrom>
+          <!-- diskprep.cmd leaves exactly one installable NTFS partition (C:) -->
+          <InstallTo><DiskID>0</DiskID><PartitionID>1</PartitionID></InstallTo>
+        </OSImage>
+      </ImageInstall>
+      <!-- No RunSynchronous payload copy here: windowsPE answer-file settings execute
+           BEFORE disk configuration and image apply, so no target volume exists yet and
+           the copy could only ever no-op. The payload reaches C:\payload via
+           sources\$OEM$\$1\payload, which Setup copies while applying the image. -->
+      <UserData>
+        <AcceptEula>true</AcceptEula>
+        <!--PRODUCTKEY-->
+      </UserData>
+    </component>
+  </settings>
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <ComputerName>win11-idd-test</ComputerName>
+      <TimeZone>UTC</TimeZone>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <!-- Without this component OOBE stalls on the region/keyboard pages (Win10 1803+);
+         the -WinPE variant above only covers Setup's own UI. -->
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <InputLocale>0409:00000409</InputLocale>
+      <SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage>
+      <UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+        publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+        xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <!-- Child ORDER here is cosmetic, not semantic: component children are validated
+           by the Component Platform Interface against each component's WinSxS manifest,
+           not by an XSD (the ADK autounattend.xsd declares component contents as
+           <xsd:any processContents="lax">). Known-good Microsoft and community answer
+           files use mutually incompatible orders.
+           What DID matter: an earlier revision added HideLocalAccountScreen (and
+           NetworkLocation) here and Setup rejected the whole file with "could not parse
+           or process unattend answer file". Removing them fixed it. Both were redundant
+           anyway - the VM has no NIC, and UserAccounts + AutoLogon already suppress
+           account creation. Do NOT re-add them without a full install test. -->
+      <AutoLogon>
+        <Enabled>true</Enabled><Username>user</Username><LogonCount>999</LogonCount>
+        <Password><Value>qubes</Value><PlainText>true</PlainText></Password>
+      </AutoLogon>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c powercfg /h off</CommandLine>
+          <Description>disable hibernation and fast startup</Description>
+          <Order>1</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c powercfg /change monitor-timeout-ac 0 &amp; powercfg /change monitor-timeout-dc 0 &amp; powercfg /change standby-timeout-ac 0 &amp; powercfg /change standby-timeout-dc 0</CommandLine>
+          <Description>never blank the display or sleep</Description>
+          <Order>2</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f</CommandLine>
+          <Description>no lock screen</Description>
+          <Order>3</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v InactivityTimeoutSecs /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>no machine inactivity limit</Description>
+          <Order>4</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>reg add "HKCU\Control Panel\Desktop" /v ScreenSaveActive /t REG_SZ /d 0 /f</CommandLine>
+          <Description>no screensaver</Description>
+          <Order>5</Order>
+        </SynchronousCommand>
+        <!-- A Windows qube must not lock its own session. In Qubes the isolation boundary is
+             the VM, enforced by dom0; a guest lock screen adds no isolation and invites typing
+             a password INTO an untrusted VM. Linux qubes have no lock screen for this reason.
+             It also breaks things concretely: a locked session makes qrexec unusable, unmaps
+             the guest's windows, and composites the lock screen - whose clock and Spotlight
+             image repaint on their own and silently corrupt capture measurements.
+             NoLockScreen (Order 3) only hides the lock-screen UI; DisableLockWorkstation is
+             what actually prevents locking. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\System" /v DisableLockWorkstation /t REG_DWORD /d 1 /f &amp; reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop" /v ScreenSaveActive /t REG_SZ /d 0 /f &amp; reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Control Panel\Desktop" /v ScreenSaverIsSecure /t REG_SZ /d 0 /f</CommandLine>
+          <Description>never lock the workstation (Qubes model: dom0 locks, guests do not)</Description>
+          <Order>6</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c powercfg /setacvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK 0 &amp; powercfg /setdcvalueindex SCHEME_CURRENT SUB_NONE CONSOLELOCK 0 &amp; powercfg /setactive SCHEME_CURRENT &amp; reg add "HKCU\Control Panel\Desktop" /v ScreenSaverIsSecure /t REG_SZ /d 0 /f &amp; reg add "HKCU\Control Panel\Desktop" /v ScreenSaveTimeOut /t REG_SZ /d 0 /f</CommandLine>
+          <Description>no password on wake, no screensaver timeout</Description>
+          <Order>7</Order>
+        </SynchronousCommand>
+        <!-- The CD is gone by first logon (guest reboot destroys the Qubes domain and
+             the cdrom assignment), so prefer C:\payload staged by $OEM$; scan other
+             letters only as a fallback. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c for %%d in (C D E F G H I J K L M N O P Q R S T U V) do @if exist %%d:\payload\disable-hw-accel.ps1 powershell -NoProfile -ExecutionPolicy Bypass -File %%d:\payload\disable-hw-accel.ps1</CommandLine>
+          <Description>disable GPU/hardware acceleration for known software (no GPU in this guest)</Description>
+          <Order>8</Order>
+        </SynchronousCommand>
+                <!-- RETRY, DO NOT SCAN ONCE (2026-09-07, measured). The payload lives on a USB stick
+             (nec-usb-xhci + usb-storage). This command used to scan the drive letters exactly
+             ONCE at first logon: if no letter had been enumerated by that instant, every
+             `if exist` failed, cmd exited 0, and THE INSTALL NEVER RAN - no retry, no error, no
+             trace. The guest then sat logged in and idle for ever with no QWT, hence no qrexec,
+             hence no qtest / no gui-agent log / no xencons: every instrument dead at once, which
+             is why this took so long to see. Captured on win10-a0tb: prime-run DEADLINE with no
+             qrexec, console silent (xencons absent -> QWT never installed), no stick marker
+             (setup.cmd never started), yet the stick image's mtime was LATER than its build -
+             Windows did mount it, just after the scan had already given up.
+             Now it retries for ~90 s (45 x ~2 s) and exits the moment it finds the payload. -->
+<SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c for /l %i in (1,1,45) do @(if exist C:\payload\setup.cmd (call C:\payload\setup.cmd &amp; exit) else (for %d in (D E F G H I J K L M N O P Q R S T U V) do @if exist %d:\payload\setup.cmd (call %d:\payload\setup.cmd &amp; exit)) &amp; ping -n 3 127.0.0.1 &gt;nul)</CommandLine>
+          <Description>qubes-win-idd payload</Description>
+          <Order>9</Order>
+        </SynchronousCommand>
+        <!-- AUTOLOGON MUST SURVIVE EVERY REBOOT, and <LogonCount> is why it did not.
+             Observed: after a reboot - and again after a clean kill+start - the guest sat at
+             "Windows sign-in" with a password box. LogonCount makes Windows write
+             AutoLogonCount, and while that value is present Windows CONSUMES DefaultPassword,
+             deleting it after use. Autologon is then left with a username and no password and
+             falls back to the sign-in screen. Deleting AutoLogonCount and re-writing
+             DefaultPassword makes autologon unlimited.
+             This is TEST PROVISIONING ONLY: it stores a plaintext password in the registry,
+             which must never be done by the shipped installer. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg delete "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoLogonCount /f &amp; reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 1 /f &amp; reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultUserName /t REG_SZ /d user /f &amp; reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v DefaultPassword /t REG_SZ /d qubes /f</CommandLine>
+          <Description>autologon unlimited (test rig only - plaintext password)</Description>
+          <Order>10</Order>
+        </SynchronousCommand>
+        <!-- MEASUREMENT HYGIENE, TEST RIG ONLY - never ship this.
+             Benchmark reps came back BIMODAL: five reps in two clusters, type {5.2,5.3,6.2}
+             and {20.4,20.5}, every metric jumping ~4x together. Per-rep counters showed the
+             DDA share steady across both clusters (62% vs 77%), so the episodes were NOT the
+             agent thrashing - they were the guest doing background work underneath the
+             measurement. Windows Update, Store auto-update and the maintenance scheduler are
+             the obvious sources on a freshly installed Win11.
+             A qube that never updates is wrong for a USER and right for a measurement rig. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f &amp; reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate" /v DoNotConnectToWindowsUpdateInternetLocations /t REG_DWORD /d 1 /f &amp; sc config wuauserv start= disabled &amp; sc config UsoSvc start= disabled</CommandLine>
+          <Description>test rig: no Windows Update during measurements</Description>
+          <Order>11</Order>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Policies\Microsoft\WindowsStore" /v AutoDownload /t REG_DWORD /d 2 /f &amp; reg add "HKLM\SOFTWARE\Policies\Microsoft\WindowsStore" /v DisableOSUpgrade /t REG_DWORD /d 1 /f &amp; sc config InstallService start= disabled &amp; sc stop InstallService &amp; schtasks /Change /TN "\Microsoft\Windows\WindowsUpdate\Scheduled Start" /Disable &amp; schtasks /Change /TN "\Microsoft\Windows\TaskScheduler\Idle Maintenance" /Disable &amp; schtasks /Change /TN "\Microsoft\Windows\TaskScheduler\Regular Maintenance" /Disable</CommandLine>
+          <Description>test rig: no Store auto-update, no idle maintenance</Description>
+          <Order>12</Order>
+        </SynchronousCommand>
+        <!-- The benchmark types into Notepad, and Notepad is a STORE app on Windows 11. It
+             showed "A new version of Notepad is available" during a measurement run - an
+             in-app banner that repaints and changes the damage pattern of the very window
+             being measured. AutoDownload=2 stops the download; this also stops the Store
+             install machinery that surfaces the notice at all. TEST RIG ONLY. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c schtasks /Change /TN "\Microsoft\Windows\WindowsUpdate\Automatic App Update" /Disable &amp; schtasks /Change /TN "\Microsoft\Windows\Shell\UpdateUserPictureTask" /Disable &amp; reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SilentInstalledAppsEnabled /t REG_DWORD /d 0 /f &amp; reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v PreInstalledAppsEnabled /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>test rig: no Store app-update notices (Notepad banner confounds the benchmark)</Description>
+          <Order>13</Order>
+        </SynchronousCommand>
+        <!-- The benchmark types into Notepad. On Windows 11 that is a STORE app which
+             displays "A new version of Notepad is available" - an in-app banner inside the
+             exact window being measured, on the exact metric (typing) under test. Disabling
+             the Store update machinery does NOT stop it: the banner is the app's own UI.
+             Removing the package leaves the classic Win32 notepad.exe, which still launches
+             and is a better benchmark target anyway - deterministic, no XAML, no updates.
+             TEST RIG ONLY. Note this changes absolute numbers vs any baseline measured
+             against the Store app; attribution across conditions is unaffected. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-AppxPackage -Name '*WindowsNotepad*' -EA SilentlyContinue | Remove-AppxPackage -EA SilentlyContinue"</CommandLine>
+          <Description>test rig: remove Store Notepad (its update banner confounds the typing benchmark)</Description>
+          <Order>14</Order>
+        </SynchronousCommand>
+        <!-- Launch the restart-prompt dismisser BEFORE the payload, in the background.
+             Stock QWT's PV driver install raises a MODAL "needs to restart the system to
+             complete installation" dialog. It blocks the rest of firstboot, and qrexec does
+             not answer while it is up - the guest becomes unreachable, so it cannot be clicked
+             from outside. A run simply stops, and the only way out is destroying the domain
+             from dom0. Observed on the stock re-measure, which wedged the guest in Transient.
+             It answers NO (defer), not Yes: rebooting mid-payload would cut the remaining
+             install steps short. The harness reboots deliberately afterwards, as it already
+             does. Bounded to 45 minutes so it cannot linger. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c start "" /min powershell -NoProfile -ExecutionPolicy Bypass -File C:\payload\dismiss-restart-prompts.ps1 -Minutes 45</CommandLine>
+          <Description>background: auto-defer driver restart prompts during the payload install</Description>
+          <Order>15</Order>
+        </SynchronousCommand>
+        <!-- TEST RIG ONLY - never ship. Disable UAC so the 'user' account (a member of
+             Administrators) gets an UNFILTERED token at logon. Without this, Win11 hands
+             qrexec a filtered Medium-integrity token: 'schtasks /create /rl HIGHEST' is
+             denied, so guest/run-elevated.ps1's scheduled-task elevation trick fails and the
+             in-place agent swap (swap-agent.ps1: stop service, overwrite Program Files,
+             restart) cannot run. The swap was only ever verified on Win10, whose default UAC
+             posture let it through; Win11 needs this. Takes effect on the reboot the
+             provisioner already performs after install. Retracts the false 2026-08-09
+             HANDOVER claim that win11-idd-test was swappable. -->
+        <SynchronousCommand wcm:action="add">
+          <CommandLine>cmd /c reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" /v EnableLUA /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>test rig: disable UAC so the elevated agent swap works (never ship)</Description>
+          <Order>16</Order>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
+        <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
+        <ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+      <UserAccounts>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add">
+            <Name>user</Name><Group>Administrators</Group>
+            <Password><Value>qubes</Value><PlainText>true</PlainText></Password>
+          </LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+    </component>
+  </settings>
+</unattend>
