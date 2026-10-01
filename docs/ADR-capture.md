@@ -415,7 +415,7 @@ wake on either side), 2026-10-01. Each changes what fails, and how loudly.
   second. Jev (re-asked with that measurement): ETW push 0.73; verify every toast listed promptly and a dead proxy falling
   back loudly to the 2 s floor (both 0.77).
 
-**Measured so far (S3/S4b, w11-ds 26100.1742, burn scene, 3 interleaved arms each with the agent-stopped floor):** the
+**Measured so far (S3/S4b, w11-ds 26100.1742, "burn scene" - NOT the burn scene: no Terminal, no Paint, see the §20 correction; 3 interleaved arms each with the agent-stopped floor):** the
 broker's wakes at rest fell from ~6/s to 0-9 per 60 s (an Explorer window that repaints itself ~1/15 s accounts for
 them); its CPU 0; our family CPU 0.31-0.41% of a core vs 0.03-0.08% for the floor, all of it the notification bridge
 (S4c); every window's delivered frame matched the guest's own render (MAD <= 1.5/255). Still open: the bridge (a
@@ -426,6 +426,16 @@ yet re-measured.
 
 Recorded while running the rest-zero acceptance passes rz2-rz3b on w11-ds (26100.1742, burn scene), 2026-10-01. The
 instruments that found these are in §19's measurement plan; each fix was reviewed by Jev before commit.
+
+**CORRECTED 2026-10-01: "the burn scene" in this section and in §19 was NOT the burn scene.** Every pass from rz1 to rz7
+ran on 2 Notepad 3816x1004, Settings, the quiet Explorer folder, two shell "File Explorer" windows and two "Location is
+not available" error dialogs. The two Windows Terminals and Paint that the scene names never opened, and nothing said so:
+the launches threw nothing, and the harness only counted windows (>= 7), so the dialogs and stray Explorer windows made
+up the number. This had been RECORDED on 2026-09-30 (findings/issues.md, the DWM P1: "the opener must assert what it
+opened") and was not acted on until the owner asked whether Paint was there. The rest results below therefore cover
+Notepad, Settings (a UWP frame), Explorer and the dialogs. **They do not cover Terminal or Paint**, which draw through
+their own swap chains rather than GDI. Re-measurement is pending on a scene opener that checks every intended window by
+class and owning process, and fails on anything else.
 
 - **On 26100+ in seamless nothing is copied out of the desktop image (S2, as designed).** The capture thread copied every
   desktop frame into the staging buffer although no window took a pixel from it (QGACOMPOSITECOPY 0 over whole runs).
