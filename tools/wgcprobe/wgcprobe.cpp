@@ -11,6 +11,7 @@
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Metadata.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Graphics.h>
 #include <winrt/Windows.Graphics.Capture.h>
 #include <winrt/Windows.Graphics.DirectX.h>
@@ -87,8 +88,66 @@ static HWND MakeOwnWindow(){
 static void Pump(DWORD ms){ DWORD end=GetTickCount()+ms; MSG msg;
   for(;;){ while(PeekMessageW(&msg,nullptr,0,0,PM_REMOVE)){TranslateMessage(&msg);DispatchMessageW(&msg);}
     if((LONG)(GetTickCount()-end)>=0) break; Sleep(4); } }
+// ---- M9(b), docs/DESIGN-rest-zero-capture.md: "dirty <hexhwnd|notepad> <seconds>" - ONE WGC session on the window with
+//      DirtyRegionMode ReportAndRender, every arrival printed with its dirty regions; the probe itself never touches the
+//      window (no SetWindowPos, no redraw), so at rest the arrivals are the window's own. Run it in the user's session.
+//      ARR|t=<ms>|content=<w>x<h>|n=<rects>|area=<px>|full=<px>|rects=x,y,w,h;...      (first 4 rects)
+//      DIRTY-END|arrivals=<n>|per_s=<x>|mean_dirty_frac=<x>
+static int DirtyMode(int argc, char** argv){
+#if defined(NTDDI_WIN11_GE)   // the SDK's own marker for 26100 (24H2), where DirtyRegionMode/DirtyRegions appeared
+  HWND hwnd=nullptr;
+  if(argc>=3){ unsigned long long v=_strtoui64(argv[2],nullptr,16); if(v) hwnd=(HWND)(uintptr_t)v; }
+  if(!hwnd) hwnd=FindWindowW(L"Notepad",nullptr);
+  int secs=(argc>=4)?atoi(argv[3]):20; if(secs<=0) secs=20;
+  if(!hwnd||!IsWindow(hwnd)){ printf("DIRTY|target=0\n"); return 1; }
+  bool dirtyModeApi=false, dirtyApi=false;
+  try{ dirtyModeApi=meta::ApiInformation::IsPropertyPresent(kSess,L"DirtyRegionMode");
+       dirtyApi=meta::ApiInformation::IsPropertyPresent(kFrame,L"DirtyRegions"); }catch(...){}
+  D3D d; if(!MakeD3D(d)){ printf("DIRTY|d3d=0\n"); return 1; }
+  GraphicsCaptureItem item{nullptr};
+  try{ item=ItemForWindow(hwnd); }catch(...){ printf("DIRTY|item=0\n"); return 1; }
+  SizeInt32 isz=item.Size();
+  Direct3D11CaptureFramePool pool{nullptr}; GraphicsCaptureSession session{nullptr};
+  try{ pool=Direct3D11CaptureFramePool::CreateFreeThreaded(d.rt,DirectXPixelFormat::B8G8R8A8UIntNormalized,2,isz);
+       session=pool.CreateCaptureSession(item); }catch(...){ printf("DIRTY|pool=0\n"); return 1; }
+  try{ session.IsCursorCaptureEnabled(false); }catch(...){}
+  try{ session.IsBorderRequired(false); }catch(...){}
+  bool modeSet=false;
+  if(dirtyModeApi){ try{ session.DirtyRegionMode(GraphicsCaptureDirtyRegionMode::ReportAndRender); modeSet=true; }catch(...){} }
+  printf("DIRTY|hwnd=0x%llx|size=%dx%d|dirtyModeApi=%d|dirtyApi=%d|modeSet=%d|secs=%d\n",
+      (unsigned long long)(uintptr_t)hwnd,isz.Width,isz.Height,dirtyModeApi,dirtyApi,modeSet,secs);
+  std::mutex mtx; long arrivals=0; double fracSum=0; const ULONGLONG t0=GetTickCount64();
+  event_token token{};
+  try{ token=pool.FrameArrived([&](Direct3D11CaptureFramePool const& s, winrt::Windows::Foundation::IInspectable const&){
+      auto f=s.TryGetNextFrame(); if(!f) return;
+      auto cs=f.ContentSize(); const long long full=(long long)cs.Width*cs.Height; long long area=0; int n=0;
+      char rb[256]; rb[0]=0; size_t rbl=0;
+      if(dirtyApi){
+        try{ auto regs=f.DirtyRegions(); n=(int)regs.Size();
+             for(uint32_t k=0;k<regs.Size();k++){ auto r=regs.GetAt(k); area+=(long long)r.Width*r.Height;
+               if(k<4 && rbl<sizeof(rb)-48) rbl+=(size_t)sprintf_s(rb+rbl,sizeof(rb)-rbl,"%d,%d,%d,%d;",r.X,r.Y,r.Width,r.Height); } }
+        catch(...){ n=-1; }
+      }
+      std::lock_guard<std::mutex> lk(mtx); arrivals++; if(full>0 && n>=0) fracSum+=(double)area/(double)full;
+      printf("ARR|t=%llu|content=%dx%d|n=%d|area=%lld|full=%lld|rects=%s\n",GetTickCount64()-t0,cs.Width,cs.Height,n,area,full,rb);
+    }); }catch(...){ printf("DIRTY|handler=0\n"); return 1; }
+  try{ session.StartCapture(); }catch(...){ printf("DIRTY|start=0\n"); return 1; }
+  Sleep((DWORD)secs*1000);
+  try{ pool.FrameArrived(token); }catch(...){}
+  try{ session.Close(); }catch(...){} Sleep(50); try{ pool.Close(); }catch(...){}
+  std::lock_guard<std::mutex> lk(mtx);
+  printf("DIRTY-END|arrivals=%ld|per_s=%.2f|mean_dirty_frac=%.4f\n",arrivals,arrivals/(double)secs,arrivals?fracSum/arrivals:0.0);
+  return 0;
+#else
+  (void)argc; (void)argv;
+  printf("DIRTY|sdk=too-old (built without NTDDI_WIN11_GE: no DirtyRegionMode in the projection)\n");
+  return 3;
+#endif
+}
+
 int main(int argc, char** argv){
   setvbuf(stdout,nullptr,_IONBF,0);   // qrexec pipe is fully-buffered; a crash must not eat output
+  if(argc>=2 && _stricmp(argv[1],"dirty")==0){ init_apartment(apartment_type::multi_threaded); return DirtyMode(argc,argv); }
   SetProcessDPIAware();
   init_apartment(apartment_type::multi_threaded);   // MTA required for CreateFreeThreaded; NO pump
   // ---- context proof ----
