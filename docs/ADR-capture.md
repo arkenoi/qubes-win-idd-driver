@@ -563,3 +563,29 @@ renders kept 0.97.
 session that is already deaf during hover-only interaction is caught at the next key or click, which still arms the quiet
 test, instead of on motion - a highlight late by one click (Jev: acceptable trade 0.81). **Seen to fail / pass:** the
 owner's hover over a focused Notepad on the build before (+2555 pokes, 3 recreates) and on this one (repo 468a351, 18:53-18:56: +8 pokes - four clicks - and the damage path refused 1280 pointer damages; Jev: seen to pass 0.89). **Residual, accepted:** one recreate followed a click (18:54:30) - keys and buttons still poke every slot, and a click that changes nothing leaves its poke unanswered. A false recreate now costs one session reopen (a few ms, one full first frame), invisible in dom0 and zero at rest (rest-zero E: no demotion, nothing persistent). A render-and-compare check at the quiet deadline would remove it, but the relay's baseline check would miss a single real change followed by stillness and a PrintWindow-vs-WGC comparison needs a tolerance of its own (Jev: accept the residual 0.70 against fix-first 0.30).
+
+## 24. A liveness poke is checked against the windows above as they are now, not as last reported — PROPOSED (Jev), 2026-10-01
+
+**Decided:** before a WGC (liveness) slot is poked for desktop damage, the damage's hit on the window is checked against the
+windows the agent tracks that sit above it in the LIVE z-order (`GetWindow(GW_HWNDPREV)` from the window), at their live DWM
+frame bounds plus §21's 33 px margin, if visible and uncloaked and not on their way out. Covered -> no poke (`QGAPOKELIVE`).
+The tracked rule (§21) runs first and is unchanged; the live check runs only where a poke would otherwise go out, before the
+pixel compare. PrintWindow-route slots keep their opaque-only rule. Agent branch fix/livegeom (`PwHitCoveredLive`).
+
+**Why:** the tracked occluder rects lag the screen. Measured on retail 26300 (w11r-ds, geomlive sampler, 2026-10-01): growing
+a 3816-px Notepad moved its live rect 39 ms into `SetWindowPos`; the agent attributed the new area's damage 4 ms later and
+poked the three windows beneath (6 of 6 logged pokes inside the live rect + 33 px); the window's LOCATIONCHANGE reached a hook
+thread only after the call returned, >= 90 ms on. Six session recreates per four-step resize, eight in the acceptance's resize
+cell. A Calculator launched over the scene was no occluder 0.7 s after its UNCLOAK (held for a first frame): three recreates.
+Jev: live geometry 0.63 over a visible-region settle (0.19), a deferred poke (0.16) and a broker PrintWindow check (0.01).
+The membership is the tracked rule's - counting every visible window above (revision 1) over-suppresses (Jev 0.59). Review of
+the final diff: no new blocking risk (0.17), the GW_HWNDPREV walk complete 0.75, no suppression with current state 0.54;
+correct-as-a-whole 0.48, the plateau that per-claim questions and a measurement resolve.
+
+**Cost:** a short z-order walk plus one or two DWM attribute reads per tracked window above, only on a liveness-poke
+candidate; nothing at rest. A tracked window above that is visible but draws little (a mostly transparent popup) hides the
+damage beneath it from the liveness hint, exactly as the tracked rule already does. **Not covered:** the reveal-phase poke
+(damage in the area an occluder just left; Jev 0.30 that this fixes it - its cause is unmeasured) and the band damage after a
+harness focus step (5 recreates; Jev: measure its cause first, 0.65). **Seen to fail / pass:** owed - the geomlive resize and
+launch measurement (false pokes must become QGAPOKELIVE, recreates must stop), the M7 deaf cell (the topmost window's poke must
+still go out) and the M7 phases.
