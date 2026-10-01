@@ -810,11 +810,26 @@ static bool g_relayNoDemote = false;
 // TEST SWITCHES for the typing-latency regression (2026-10-01: key -> damage p90 ~190-200 ms from the build that brought
 // DirtyRegionMode, against ~20 ms before it; bisected to that range). Read ONCE at start like QubesWgcRelay, never again:
 //   QubesWgcDirtyMode = 0     direct sessions are NOT put in DirtyRegionMode (whole frames, as before S1b)
+//   QubesWgcDirtyMode = 2     direct sessions ARE put in DirtyRegionMode ReportOnly, but its regions are ignored (every
+//                             arrival read whole): separates what the mode does to delivery from what reading regions does
 //   QubesWgcMinUpdateMs = N   GraphicsCaptureSession.MinUpdateInterval = N ms on every direct session (absent: left alone)
+//   QubesWgcDrain = 1         an arrival takes EVERY frame queued in the pool and publishes the newest (read whole when it
+//                             skipped any: their regions never reached lastFull) - tests "the pool is a frame behind"
+//   QubesWgcArrivalTrace = 1  one line per arrival to C:\Users\Public\qwt-arrtrace.txt: wall clock, the frame's age (now
+//                             minus its SystemRelativeTime), frames drained, its dirty regions, published or skipped as same
 // Not product settings; absent = the shipped behaviour.
-static bool g_dirtyModeOn = true;
+static DWORD g_dirtyMode = 1;
 static LONG g_minUpdateMs = -1;
 static bool g_minUpdateApi = false;
+static bool g_drainPool = false;
+static FILE* g_arrTrace = nullptr;
+// The trace's file I/O never runs on an arrival: ArrTrace formats its line on the stack and appends it to g_arrBuf under
+// g_arrCs, held for the append only; ArrWriter (its own thread) swaps the buffer out under the same lock and writes and
+// flushes it outside every lock (Jev review: I/O under the publish lock could slow the very arrivals it measures, 0.51;
+// a lock-free ring left a hole on overflow that stalled its writer, 0.39 - this shape has neither).
+static CRITICAL_SECTION g_arrCs;
+static std::string g_arrBuf;
+static HANDLE g_arrEvent = nullptr;
 
 // DID THE SOURCE ACTUALLY CHANGE? A poke only says something repainted inside this window's screen
 // rectangle; it does not say this window's own content moved. Before demoting a relay we render the
@@ -1153,6 +1168,53 @@ static bool PublishPrintWindow(int i) {
     } while (0);
     return changed;
 }
+// THE ARRIVAL TRACE (test switch QubesWgcArrivalTrace, read once at start). The typing-latency regression delivered each
+// key's change only when the NEXT key's frame came (2026-10-01, m56f: every key ~190 ms late, i.e. one key period). Three
+// mechanisms give that same shape in every counter - Windows delivering frame k only when frame k+1 is composed, the pool a
+// frame behind (each event takes the older frame), or the regions read a frame late - and they differ in what this line
+// carries: the frame's AGE when the broker gets it (an old frame = delivery or pool; a fresh frame = the regions), how many
+// frames were queued behind it (drained, with QubesWgcDrain), and whether its publish happened or was skipped as same.
+static void ArrTrace(int i, Direct3D11CaptureFrame const& f, const SYSTEMTIME& st, LONGLONG qArr, int drained,
+                     UINT64 fid0, LONG same0) {
+    LARGE_INTEGER fq; QueryPerformanceFrequency(&fq);
+    const LONGLONG q100 = (qArr / fq.QuadPart) * 10000000LL + (qArr % fq.QuadPart) * 10000000LL / fq.QuadPart;
+    LONGLONG ageUs = -1;
+    try { ageUs = (q100 - f.SystemRelativeTime().count()) / 10; } catch (...) {}
+    int n = -1; RECT bb = { 0, 0, 0, 0 };
+    if (g_dirtyApi) {
+        try {
+            auto dr = f.DirtyRegions(); n = (int)dr.Size();
+            for (uint32_t k = 0; k < dr.Size(); k++) {
+                auto r = dr.GetAt(k); const RECT q = { r.X, r.Y, r.X + r.Width, r.Y + r.Height };
+                if (k == 0) bb = q; else UnionRect(&bb, &bb, &q);
+            }
+        } catch (...) { n = -2; }
+    }
+    const WGCBRK_SLOT* s = &g_slots[i];
+    const int pub = (s->FrameId != fid0) ? 1 : 0, same = (s->SameFrames != same0) ? 1 : 0;
+    const LONGLONG pubUs = (QpcNow() - qArr) * 1000000LL / fq.QuadPart;
+    char line[256];
+    _snprintf_s(line, sizeof(line), _TRUNCATE,
+            "ARR|t=%02u:%02u:%02u.%03u|slot=%d|hwnd=0x%llx|ageUs=%lld|drained=%d|regs=%d|bbox=%ld,%ld,%ld,%ld|pub=%d|same=%d|pubUs=%lld\n",
+            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, i, (unsigned long long)(ULONG_PTR)g_ch[i].hwnd, ageUs, drained, n,
+            bb.left, bb.top, bb.right, bb.bottom, pub, same, pubUs);
+    EnterCriticalSection(&g_arrCs);
+    try { g_arrBuf.append(line); } catch (...) {}   // a throw here must not leave the lock held (the arrival would hang)
+    LeaveCriticalSection(&g_arrCs);
+    SetEvent(g_arrEvent);
+}
+
+static DWORD WINAPI ArrWriter(LPVOID) {
+    std::string out;
+    for (;;) {
+        WaitForSingleObject(g_arrEvent, INFINITE);
+        EnterCriticalSection(&g_arrCs);
+        out.swap(g_arrBuf);
+        LeaveCriticalSection(&g_arrCs);
+        if (!out.empty()) { fputs(out.c_str(), g_arrTrace); fflush(g_arrTrace); out.clear(); }
+    }
+}
+
 static void OpenChannel(int i) {
     StageScope stage(WGCBRK_STG_OPEN, i);
     WaitSameWindowTeardown(i, (HWND)(ULONG_PTR)g_slots[i].Hwnd);
@@ -1247,7 +1309,7 @@ static void OpenChannel(int i) {
         // DIRTY REGIONS (rest-zero S1) on a direct window session only: the relay's destination and the monitor keep the
         // whole-frame path. ReportOnly: complete surfaces, regions reported; PublishFrame reads only the regions.
         if (g_dirtyApi && !monitor && !c.relay) {
-            if (g_dirtyModeOn) { try { session.DirtyRegionMode(GraphicsCaptureDirtyRegionMode::ReportOnly); c.dirty = true; } catch (...) {} }
+            if (g_dirtyMode != 0) { try { session.DirtyRegionMode(GraphicsCaptureDirtyRegionMode::ReportOnly); c.dirty = (g_dirtyMode == 1); } catch (...) {} }
             if (g_minUpdateApi && g_minUpdateMs >= 0) {
                 try { session.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{ std::chrono::milliseconds(g_minUpdateMs) }); } catch (...) {}
             }
@@ -1316,8 +1378,15 @@ static void OpenChannel(int i) {
                 if (!g_slots[i].FirstArrivedTick)
                     g_slots[i].FirstArrivedTick = QpcNow();
                 g_ch[i].pokeAtLastArrival = g_slots[i].PokeSeq;   // damage seen as of this frame
+                SYSTEMTIME trSt = {}; const LONGLONG trQ = g_arrTrace ? QpcNow() : 0;
+                if (g_arrTrace) GetLocalTime(&trSt);
                 auto f = sender.TryGetNextFrame();
                 if (!f) return;
+                int drained = 0;
+                if (g_drainPool) {                       // test switch: the newest queued frame, the older ones released
+                    for (;;) { auto g = sender.TryGetNextFrame(); if (!g) break; f = g; drained++; }
+                    if (drained) g_ch[i].needWhole = true;   // the skipped frames' regions never reached lastFull
+                }
                 auto cs = f.ContentSize();
                 // Follow the window's CONTENT size, not the agent's request. ContentSize is the
                 // window's own size; the agent's ReqWidth/ReqHeight is the CARD (post-crop) rect
@@ -1357,7 +1426,9 @@ static void OpenChannel(int i) {
                     return;
                 }
                 g_slots[i].FramesPublished++;
+                const UINT64 trFid = g_slots[i].FrameId; const LONG trSame = g_slots[i].SameFrames;
                 PublishFrame(i, f);
+                if (g_arrTrace) ArrTrace(i, f, trSt, trQ, drained, trFid, trSame);
             });
         session.StartCapture();
         s->StartTick = QpcNow();
@@ -1797,8 +1868,24 @@ int wmain(int argc, wchar_t** argv) {
                 && tynd == REG_DWORD && nd == 1)
                 g_relayNoDemote = true;
             DWORD dm = 1, cbdm = sizeof(dm), tydm = 0;
-            if (RegQueryValueExW(k, L"QubesWgcDirtyMode", nullptr, &tydm, (BYTE*)&dm, &cbdm) == ERROR_SUCCESS && tydm == REG_DWORD && dm == 0)
-                g_dirtyModeOn = false;
+            if (RegQueryValueExW(k, L"QubesWgcDirtyMode", nullptr, &tydm, (BYTE*)&dm, &cbdm) == ERROR_SUCCESS && tydm == REG_DWORD && dm <= 2)
+                g_dirtyMode = dm;
+            DWORD dr = 0, cbdr = sizeof(dr), tydr = 0;
+            if (RegQueryValueExW(k, L"QubesWgcDrain", nullptr, &tydr, (BYTE*)&dr, &cbdr) == ERROR_SUCCESS && tydr == REG_DWORD && dr == 1)
+                g_drainPool = true;
+            DWORD at = 0, cbat = sizeof(at), tyat = 0;
+            if (RegQueryValueExW(k, L"QubesWgcArrivalTrace", nullptr, &tyat, (BYTE*)&at, &cbat) == ERROR_SUCCESS && tyat == REG_DWORD && at == 1) {
+                InitializeCriticalSection(&g_arrCs);
+                g_arrTrace = _wfopen(L"C:\\Users\\Public\\qwt-arrtrace.txt", L"a");
+                g_arrEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+                if (g_arrTrace && (!g_arrEvent || !CreateThread(nullptr, 0, ArrWriter, nullptr, 0, nullptr))) { fclose(g_arrTrace); g_arrTrace = nullptr; }
+                if (g_arrTrace) {
+                    SYSTEMTIME st; GetLocalTime(&st);
+                    fprintf(g_arrTrace, "TRACE-START|t=%02u:%02u:%02u.%03u|pid=%lu|dirtyMode=%lu|drain=%d|minUpdateMs=%ld\n",
+                            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, GetCurrentProcessId(), g_dirtyMode, g_drainPool ? 1 : 0, g_minUpdateMs);
+                    fflush(g_arrTrace);
+                }
+            }
             DWORD mu = 0, cbmu = sizeof(mu), tymu = 0;
             if (RegQueryValueExW(k, L"QubesWgcMinUpdateMs", nullptr, &tymu, (BYTE*)&mu, &cbmu) == ERROR_SUCCESS && tymu == REG_DWORD)
                 g_minUpdateMs = (LONG)mu;
