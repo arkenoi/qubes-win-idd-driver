@@ -142,6 +142,9 @@ static HANDLE g_mainWake = nullptr;     // auto-reset: the reader / shadow threa
 // when a toast arrives (wpndatabase.db-wal untouched across 10 toasts), so the WAL watcher never fires for them - while
 // the ETW tier's proxy delivered every toast's records within the second (Jev: ETW push 0.73). Each hit sets its flag and
 // the main loop's wake; the loop lists, and retries a listing that found nothing new (bounded).
+// The WAL watcher does NOT trigger a listing: a listing makes the platform touch its own database (wpndatabase.db-wal/-shm),
+// so a watcher-triggered listing can re-trigger itself. Measured 2026-10-01 (rz2, w11-ds) with both triggers: in the 60 s
+// from 30 s after a 10-toast burst this process switched 9358 times (one thread 8600); before the burst, 0-5 a minute.
 static volatile LONG g_etwHit = 0;      // an ETW record naming an AUMID arrived since the main loop last looked
 
 // Agent-liveness check - a BACKUP only. The agent's shutdown writes the ProgramData stop file
@@ -1791,10 +1794,9 @@ static struct
     HANDLE walEvt = nullptr;                // auto-reset: "wpndatabase.db* just changed"
     bool armed = false;
 } g_shadow;
-// REST-ZERO S4c: the WAL watcher armed - the bridge's push source where NotificationChanged is unavailable (see the main
-// loop). Set by WalWatchThread once its directory handle is open.
+// The WAL watcher armed (set by WalWatchThread once its directory handle is open). It paces WpnCorrelate's retries only;
+// it never triggers a listing (see g_etwHit).
 static volatile LONG g_walArmed = 0;
-static volatile LONG g_walHit = 0;     // the WAL watcher saw a database write since the main loop last looked
 
 // Push replacement for WpnCorrelate's blind retry sleep (owner directive: prefer push over
 // poll): watch the notification store's directory and signal walEvt whenever
@@ -1836,14 +1838,8 @@ static DWORD WINAPI WalWatchThread(LPVOID)
             if (!fi->NextEntryOffset) break;
             p += fi->NextEntryOffset;
         }
-        if (hit) {
-            SetEvent(g_shadow.walEvt);
-            // ...and THE LISTING'S PUSH SOURCE (rest-zero S4c): the notification platform persists every toast in this
-            // database, so a write here is how the bridge learns a toast arrived where NotificationChanged is
-            // unavailable (it throws for this unpackaged process on 26100.1742) - instead of listing every 2 s.
-            InterlockedExchange(&g_walHit, 1);
-            if (g_mainWake) SetEvent(g_mainWake);
-        }
+        if (hit)
+            SetEvent(g_shadow.walEvt);   // NOT the listing's trigger: a listing writes this database too (see g_etwHit)
     }
     CloseHandle(h);
     return 0;
@@ -2715,18 +2711,18 @@ static int BridgeMain()
         }
         catch (...)
         {
-            BLog(L"PUSH NotificationChanged unavailable - the WAL watcher's signal drives the listing (2 s floor only if "
-                 L"it is not armed either)");
+            BLog(L"PUSH NotificationChanged unavailable - the ETW proxy's records drive the listing (2 s floor only while "
+                 L"the proxy is not live)");
         }
     }
     // THE LISTING FLOOR (rest-zero S4c): only while the bridge has NO push source at all. With NotificationChanged armed,
-    // or the WAL watcher armed (it is the push source on 26100.1742, where the subscription throws), a listing runs on
-    // their signals and never on a clock - the 30 s / 2 s floors were idle polls (owner rule: zero wakes at rest).
+    // or the ETW proxy live (the push source on 26100.1742, where the subscription throws), a listing runs on their
+    // signals and never on a clock - the 30 s / 2 s floors were idle polls (owner rule: zero wakes at rest).
     const DWORD kFloorMs = 2000;
     ULONGLONG nextFloorList = 0;                       // 0: first pass always lists
     bool toastSignaled = true;
-    // A WAL write can land before its toast is listable: a WAL-triggered listing that finds nothing new is retried at
-    // most twice (+250 ms, +1 s), armed by the write and ended by a find - bounded, never at rest.
+    // An ETW record can arrive before its toast is listable: a push-triggered listing that finds nothing new is retried at
+    // most twice (+250 ms, +1 s), armed by the record and ended by a find - bounded, never at rest.
     int walRetries = 0;
     ULONGLONG walRetryAt = 0;
     bool lastAnyPush = false;   // the floor state last logged (LISTING lines)
@@ -2907,8 +2903,8 @@ static int BridgeMain()
         // toast listing: push-gated (NotificationChanged and/or the WAL watcher); the floor only without either.
         // Body deliberately NOT re-indented (diff minimalism, the file's guard precedent).
         // A live push source: NotificationChanged, or the ETW proxy's pipe (the one that works on 26100.1742). The WAL
-        // watcher still triggers listings when it fires, but it is NOT counted as a push source: measured, it does not
-        // fire for toast arrivals on that build.
+        // watcher is neither a push source nor a trigger (measured: it does not fire for toast arrivals on that build, and
+        // a listing it triggered re-triggered itself).
         const bool anyPush = pushArmed || (g_etw.state == ETW_STATE_LIVE);
         if (anyPush != lastAnyPush)
         {
@@ -2916,10 +2912,10 @@ static int BridgeMain()
                  pushArmed ? L"NotificationChanged" : L"ETW proxy pipe");
             lastAnyPush = anyPush;
         }
-        const bool walHit = (InterlockedExchange(&g_walHit, 0) != 0) | (InterlockedExchange(&g_etwHit, 0) != 0);
-        if (walHit) { walRetries = 0; walRetryAt = 0; toastSignaled = true; }
+        const bool pushHit = (InterlockedExchange(&g_etwHit, 0) != 0);
+        if (pushHit) { walRetries = 0; walRetryAt = 0; toastSignaled = true; }
         const bool walRetryDue = (walRetryAt != 0 && now >= walRetryAt);
-        const bool walTriggered = walHit || walRetryDue;
+        const bool walTriggered = pushHit || walRetryDue;
         bool sawNew = false;
         bool doList = !anyPush || toastSignaled || walRetryDue;
         if (doList)
