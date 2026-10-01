@@ -3129,6 +3129,39 @@ static int DumpMain()
     return 0;
 }
 
+// --probe-push <seconds> [--sub] (rest-zero S4c diagnostic). Holds a UserNotificationListener for <seconds> - subscribed
+// to NotificationChanged with --sub - and does NOTHING else, so a thread that wakes in this process is the listener's
+// own. Measured 2026-10-01 on w11-ds: the resident bridge has a thread started in shcore.dll waking ~20.7 times a second
+// at rest (66 ms after process start), while a PowerShell process holding the listener, its access and a listing has
+// none; this separates the subscription from everything else the bridge runs.
+static int ProbePushMain(int secs, bool sub)
+{
+    init_apartment(apartment_type::multi_threaded);
+    try {
+        auto listener = UserNotificationListener::Current();
+        if (listener.RequestAccessAsync().get() != UserNotificationListenerAccessStatus::Allowed)
+        { wprintf(L"PROBEPUSH access denied\n"); return 2; }
+        HANDLE e = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        if (!e) { wprintf(L"PROBEPUSH event failed\n"); return 4; }
+        winrt::event_token tok{};
+        if (sub) tok = listener.NotificationChanged([e](UserNotificationListener const&, auto const&) { SetEvent(e); });
+        wprintf(L"PROBEPUSH armed sub=%d pid=%lu\n", sub ? 1 : 0, GetCurrentProcessId());
+        fflush(stdout);
+        const ULONGLONG end = GetTickCount64() + (ULONGLONG)secs * 1000;
+        unsigned changes = 0;
+        for (;;)
+        {
+            const ULONGLONG now = GetTickCount64();
+            if (now >= end) break;
+            if (WaitForSingleObject(e, (DWORD)(end - now)) == WAIT_OBJECT_0) changes++;
+        }
+        if (sub) listener.NotificationChanged(tok);
+        wprintf(L"PROBEPUSH done sub=%d changes=%u\n", sub ? 1 : 0, changes);
+        CloseHandle(e);
+    } catch (...) { wprintf(L"PROBEPUSH listener error\n"); return 3; }
+    return 0;
+}
+
 // ==========================================================================================
 
 int wmain(int argc, wchar_t** argv)
@@ -3136,8 +3169,8 @@ int wmain(int argc, wchar_t** argv)
     SetUnhandledExceptionFilter(BridgeCrashFilter);   // every mode: crash leaves a breadcrumb
     const wchar_t* relayPipe = nullptr;
     bool bridge = false, dump = false, stop = false, restore = false, dumpdb = false, dumpetw = false;
-    bool etwproxy = false;
-    int dumpdbN = 20, dumpEtwSecs = 30;
+    bool etwproxy = false, probePush = false, probeSub = false;
+    int dumpdbN = 20, dumpEtwSecs = 30, probeSecs = 30;
     std::wstring notifySummary, notifyBody;
     const wchar_t* notifyFile = nullptr;
     for (int i = 1; i < argc; i++)
@@ -3173,6 +3206,13 @@ int wmain(int argc, wchar_t** argv)
             if (i + 1 < argc && argv[i + 1][0] != L'-') notifyBody = argv[++i];
         }
         else if (_wcsicmp(argv[i], L"--etw-proxy") == 0) etwproxy = true;
+        else if (_wcsicmp(argv[i], L"--probe-push") == 0)
+        {
+            probePush = true;
+            if (i + 1 < argc && argv[i + 1][0] >= L'0' && argv[i + 1][0] <= L'9')
+                probeSecs = _wtoi(argv[++i]);
+        }
+        else if (_wcsicmp(argv[i], L"--sub") == 0) probeSub = true;
         else if (_wcsicmp(argv[i], L"--notify-errors") == 0 && i + 1 < argc) g_notifyErrorsGate = (_wtoi(argv[++i]) != 0);
         else if (_wcsicmp(argv[i], L"--client-sid") == 0 && i + 1 < argc) i++;   // consumed by etwproxy.exe
     }
@@ -3222,6 +3262,7 @@ int wmain(int argc, wchar_t** argv)
         return 0;
     }
     if (dump) return DumpMain();
+    if (probePush) return ProbePushMain(probeSecs, probeSub);
     if (bridge) return BridgeMain();
 
     // ---- legacy in-guest toast interceptor (default mode) ----
