@@ -11,6 +11,7 @@
 #   RESTWATCH|secs=<n>|proc=<name>|found=0
 #   RESTWATCH-T|proc=<name>|tid=<tid>|cs=<n>          (every thread with cs > 0)
 #   RESTWATCH-END|secs=<n>|total_cs=<n>|procs_found=<n>
+#   RESTWATCH-W|from=<HH:mm:ss.fff>|to=<HH:mm:ss.fff>   (the window's wall-clock bounds, guest time)
 # -Windows N: N consecutive windows of -Seconds each, back to back (one snapshot ends a window and starts the next); every
 # line above then carries |win=<k> (k from 1). A periodic timer wakes at the same rate in every window; activity that
 # happened before the sample decays - that is how a residual is told apart from a poll.
@@ -34,12 +35,14 @@ foreach ($n in $Names) {
     if ($p) { $procs[$n] = [int]$p.ProcessId; "RESTWATCH-P|proc=$n|pid=$($p.ProcessId)|image=$($p.Name)|path=$($p.ExecutablePath)" }
 }
 $pids = @($procs.Values | ForEach-Object { [int]$_ })
-$b = Snap $pids
+$b = Snap $pids; $tb = Get-Date
 for ($w = 1; $w -le $Windows; $w++) {
-    $a = $b
+    $a = $b; $ta = $tb
     Start-Sleep -Seconds $Seconds
-    $b = Snap $pids
+    $b = Snap $pids; $tb = Get-Date
     $wt = if ($Windows -gt 1) { "|win=$w" } else { '' }
+    # The window's wall-clock bounds (each stamp taken as its snapshot returns), so a window joins with event traces and logs.
+    "RESTWATCH-W|from=$($ta.ToString('HH:mm:ss.fff'))|to=$($tb.ToString('HH:mm:ss.fff'))$wt"
 
     $total = [uint64]0
     foreach ($n in $Names) {
