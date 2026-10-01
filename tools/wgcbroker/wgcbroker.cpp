@@ -30,6 +30,7 @@
 #include <windows.graphics.capture.interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
 #include <set>
+#include <string>
 #include "../../agent/gui-agent/wgcbroker_ipc.h"
 
 // ABI 12 frame signature - defined further down (it needs g_slots), used by the WGC publish path
@@ -1616,6 +1617,20 @@ int wmain(int argc, wchar_t** argv) {
     // request deadlines now (CtlAck for the agent's requests, R5 for the agent's answer to ours).
     g_hWake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!g_hWake) return 9;                  // without it a deadline armed off this thread is never seen: refuse
+    // THE AGENT'S DEATH (rest-zero S4c). This process cannot open the SYSTEM agent for SYNCHRONIZE (its limited token
+    // is denied), so g_agent is normally NULL; it used to exit on the agent's heartbeat going 10 s stale. The agent's
+    // main thread OWNS a mutex named after the section (..._shm -> ..._alive) for its whole life: when the agent dies
+    // the mutex is ABANDONED and this wait returns at once. Refuse to run without it - a broker that cannot tell its
+    // agent died would serve a dead section until the next agent's launch killed it.
+    HANDLE agentAlive = nullptr;
+    {
+        std::wstring an(shmName);
+        if (an.size() > 4 && an.compare(an.size() - 4, 4, L"_shm") == 0) {
+            an.replace(an.size() - 4, 4, L"_alive");
+            agentAlive = OpenMutexW(SYNCHRONIZE, FALSE, an.c_str());
+        }
+    }
+    if (!agentAlive && !g_agent) return 11;
     HWND msgWnd = nullptr;
     {
         WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = DefWindowProcW;
@@ -1648,11 +1663,13 @@ int wmain(int argc, wchar_t** argv) {
             const ULONGLONG now = GetTickCount64();
             timeout = (g_nextDue > now) ? (DWORD)((g_nextDue - now) < 0x7FFFFFFFull ? (g_nextDue - now) : 0x7FFFFFFFull) : 0;
         }
-        DWORD n = 0; HANDLE compact[3];
+        DWORD n = 0; HANDLE compact[4];
         if (g_hCtl) compact[n++] = g_hCtl;
         compact[n++] = g_hWake;
         const DWORD agentIdx = n;
         if (g_agent) compact[n++] = g_agent;
+        const DWORD aliveIdx = n;
+        if (agentAlive) compact[n++] = agentAlive;
         // THIS THREAD OWNS WINDOWS, SO IT MUST PUMP. The relay's destination windows are created here,
         // and a window-owning thread that retrieves no messages for 5 s is HUNG by Windows' definition
         // (IsHungAppWindow): Windows ghosted every relay destination - a "Ghost"-class twin of the exact
@@ -1664,6 +1681,7 @@ int wmain(int argc, wchar_t** argv) {
         // is drained every pass.
         DWORD wr = MsgWaitForMultipleObjects(n, compact, FALSE, timeout, QS_ALLINPUT);
         if (g_agent && wr == WAIT_OBJECT_0 + agentIdx) break; // agent exited
+        if (agentAlive && (wr == WAIT_ABANDONED_0 + aliveIdx || wr == WAIT_OBJECT_0 + aliveIdx)) break;   // agent died
         {
             MSG msg;
             while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
