@@ -1654,7 +1654,6 @@ static void Reconcile() {
             // order as the single-window cost already called unacceptable. Jev rated that
             // blocking at 0.87 and this refinement at 0.96.
             g_slots[i].Reroutes++;
-            g_slots[i].QuietReroutes++;
             const bool wasRelay = c.relay;   // read BEFORE CloseChannel wipes it
             const bool wasPlainWgc = !c.relay && !c.pw;
             // A SESSION THAT DELIVERED IS NOT DEAF. This one produced at least its StartCapture frame, so WGC does serve
@@ -1671,10 +1670,16 @@ static void Reconcile() {
             // g_relayReopened); past that the window is DEAF: FAILED + WGCBRK_E_DEAF, held until the agent asks again
             // (DeclareDeaf). The PrintWindow rung and its probe are gone - a polled render was the last rung, and on a
             // window that is merely static it rendered for ever (c2: 0.05).
+            // QuietReroutes counts SESSIONS RECREATED - the agent reports each one as QGAWGCRECREATE - so it moves only on a
+            // rung that reopens, and only if that open did not itself end in the deaf hold (OpenChannel declares DEAF when a
+            // ladder open fails). It used to move before the ladder decided, and a deaf rung (no new session) was then
+            // reported as a recreate that never happened, next to its QGAWGCDEAF (rest-zero M7 deaf cell, 2026-10-01).
+            bool reopened = true;
             if (wasPlainWgc && (!g_wgcReopened[i] || delivered)) { g_wgcReopened[i] = true; g_forcePw[i] = false; OpenChannel(i); }
             else if (wasPlainWgc && RelayUsable())     { g_forcePw[i] = true; OpenChannel(i); }   // the relay, or deaf
             else if (wasRelay && (!g_relayReopened[i] || delivered)) { g_relayReopened[i] = true; g_forcePw[i] = true; OpenChannel(i); }
-            else                                       DeclareDeaf(i);
+            else                                       { reopened = false; DeclareDeaf(i); }
+            if (reopened && !g_deafHold[i]) g_slots[i].QuietReroutes++;   // an open that itself ended DEAF recreated nothing
         }
         // THE NEXT MOMENT THIS SLOT'S ANSWER CAN CHANGE WITHOUT A NEW REQUEST (rest-zero D) - armed only while something
         // is owed: a first frame (R2), an unanswered poke (R3), a throttled relay source test, a relay size settling. At
