@@ -483,3 +483,30 @@ moved the broker's AgentStalls. **rz5 (cf46ea0, the quiet-folder scene, ABI 21 w
 samples the agent's named threads (main, hooks, capture, toastcrop) woke 0 times (2-4 switches of a pool thread remain),
 broker 0-2, bridge 0-2, proxy 0; the main loop's wakes between two peeks were all window events (the instrument's own
 PowerShell windows) - deadline 0, desktop frame 0, broker frame 0 - and five consecutive decay minutes ended at 0/0/0/0.
+
+## 21. What the real burn scene found: liveness pokes need a margin and the event order, and a refused focus is not a no-op — ACCEPTED (Jev), MEASUREMENT IN PROGRESS
+
+Found by the first rest-zero passes on the ASSERTED burn scene (rz8 and the probes after it, w11-ds 26100.1742, 2026-10-01), whose two
+Windows Terminals and Paint every earlier pass had silently lacked (§20 correction).
+
+- **A WGC slot's liveness poke treats every window above with a 24 px margin, and a desktop frame is judged after the window events
+  queued before it.** M7 failed twice (rz7, rz8): a window beneath Calculator was recreated. A phase probe on one fixed pair showed focus
+  flips and a reveal poke nothing; typing into Calculator put damage 9 px PAST Calculator's edge over the window beneath (poked,
+  recreated 2 s later, nothing of its own changed); and a new window's first pixels were judged before the window was tracked (no
+  occluder). Jev: margin plus event order 0.54 over the margin alone 0.34, 24 px 0.76 (the popup margin since §19), mechanism
+  established 0.69. **Cost:** a session that stops delivering is noticed only by damage outside a 24 px band around windows above, or
+  by input - a delay, not a loss, since WGC still delivers real changes there. **Bound:** liveness only - a PrintWindow slot's render
+  trigger keeps bare rects. Agent 02b4f72.
+- **A dom0 focus request is made allowed - one zero-distance mouse move before SetForegroundWindow - instead of left refused.** In one
+  of rz8's rest arms both Terminals repainted ~2.2 times a second for the whole minute (ours ~2% of a core, Terminal 2%, DWM 3.5%):
+  only that arm's restarted agent had received dom0 focus requests (one per window as it mapped them), all refused by the foreground
+  lock. Replayed guest-side: a refused SetForegroundWindow activates the window inside its own thread's queue, Windows Terminal's
+  cursor then blinks for ever with nobody using it, and neither FLASHW_STOP nor a posted deactivation undoes it; AttachThreadInput
+  alone does nothing; with the zero move first the call succeeds and the window that later loses the foreground goes quiet. Jev:
+  conditional move 0.60, not "intercepting focus" 0.22, decide and report 0.27. **Cost:** dom0 focus requests that silently failed
+  before now move the guest foreground (dom0 deciding guest focus is HandleFocus's stated intent); one synthetic WM_MOUSEMOVE at the
+  cursor's own position per request. **Bound:** only when the window is not already the foreground; the non-seamless window-0 path is
+  untouched. Surfaced to the owner for veto. Agent b4d1153.
+- **Not changed, measured:** Windows Terminal reports its WHOLE surface dirty on every present, so S1b's dirty regions give it nothing
+  (a frame costs two whole-card copies: 6.7 MB typing, 4.5 MB per blink). Cheaper per frame would be a diff of the readback; with the
+  focus fix a Terminal repaints at rest only while it really has focus (a blinking cursor is a change).
