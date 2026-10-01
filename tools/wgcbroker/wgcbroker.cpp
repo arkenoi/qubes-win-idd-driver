@@ -1455,6 +1455,13 @@ static void Reconcile() {
             g_slots[i].QuietReroutes++;
             const bool wasRelay = c.relay;   // read BEFORE CloseChannel wipes it
             const bool wasPlainWgc = !c.relay && !c.pw;
+            // A SESSION THAT DELIVERED IS NOT DEAF. This one produced at least its StartCapture frame, so WGC does serve
+            // this window; an unanswered poke after that is either a false poke (DWM recomposed the window's area without
+            // its content changing - DDA's dirty rects are coarser than a window's own change) or a session that stopped
+            // delivering. Either way a fresh session costs one open and one current frame, and freezing the window would
+            // cost its content for as long as it lives. So the deaf hold is reserved for a FRESH session that delivered
+            // nothing at all; each recreate is counted (QuietReroutes) and reported by the agent (QGAWGCRECREATE).
+            const bool delivered = (c.lastArrivalTick != 0);
             CloseChannel(i);          // wipes the Channel - so set the survivors AFTER it
             // THE LADDER ON 26100+ (rest-zero E, c2). A quiet plain-WGC channel gets ONE fresh plain-WGC session
             // (g_wgcReopened); then the relay, only where the probe showed its destination can be captured
@@ -1462,9 +1469,9 @@ static void Reconcile() {
             // g_relayReopened); past that the window is DEAF: FAILED + WGCBRK_E_DEAF, held until the agent asks again
             // (DeclareDeaf). The PrintWindow rung and its probe are gone - a polled render was the last rung, and on a
             // window that is merely static it rendered for ever (c2: 0.05).
-            if (wasPlainWgc && !g_wgcReopened[i])      { g_wgcReopened[i] = true; g_forcePw[i] = false; OpenChannel(i); }
+            if (wasPlainWgc && (!g_wgcReopened[i] || delivered)) { g_wgcReopened[i] = true; g_forcePw[i] = false; OpenChannel(i); }
             else if (wasPlainWgc && RelayUsable())     { g_forcePw[i] = true; OpenChannel(i); }   // the relay, or deaf
-            else if (wasRelay && !g_relayReopened[i])  { g_relayReopened[i] = true; g_forcePw[i] = true; OpenChannel(i); }
+            else if (wasRelay && (!g_relayReopened[i] || delivered)) { g_relayReopened[i] = true; g_forcePw[i] = true; OpenChannel(i); }
             else                                       DeclareDeaf(i);
         }
         // THE NEXT MOMENT THIS SLOT'S ANSWER CAN CHANGE WITHOUT A NEW REQUEST (rest-zero D) - armed only while something
