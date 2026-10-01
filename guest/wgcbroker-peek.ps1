@@ -28,7 +28,7 @@
 # section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
 param([int]$Samples = 2, [int]$IntervalSec = 6)
 
-$WANT_ABI = 20
+$WANT_ABI = 21
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
 $STRIDE = 3424    # sizeof(WGCBRK_SLOT) at ABI 19 (unchanged from 18: CtlAck took _padTick2 at 188, DeafHolds _padAbi6 at 228; header AgentFrameWakes 80, AgentStalls 84, AgentStallTick 88 from _pad2) - ABI 18 (HungSkips 84 (was padding); PubTiles[3072] at 316; lifecycle+GenFrames 3388..3404; ItemClosed 3408, Republished 3412 (was padding), ItemClosedTick 3416); header BrokerStage at 20 (was padding)
 $SLOTS  = 32
@@ -75,6 +75,9 @@ for ($n = 0; $n -lt $Samples; $n++) {
   # deadline on the agent waking for its frames.
   Write-Output ("S{0} HDR shutdown={1} producing={2} agentHB={3} brokerHB={4} agentPid={5} brokerPid={6} ctlgen={7} pokeLockMiss={8} relayCapable={9} relayOsBuild={10} brokerStage=0x{11:x} now={12} agentFrameWakes={13} agentStalls={14} agentStallTick={15}" -f `
     $n,(RdI 12),(RdI 16),(RdL 40),(RdL 48),(RdI 56),(RdI 60),(RdI 64),(RdI 68),(RdI 72),(RdI 76),(RdI 20),[WgcPeek]::GetTickCount64(),(RdI 80),(RdI 84),(RdL 88))
+  # ABI 21: the agent's main-loop wakes by what woke it (rest-zero M1 attribution).
+  Write-Output ("S{0} WAKES frame={1} vchan={2} winevent={3} broker={4} deadline={5} helper={6} other={7}" -f `
+    $n,(RdI 100),(RdI 104),(RdI 108),(RdI 112),(RdI 116),(RdI 120),(RdI 124))
   for ($i = 0; $i -lt $SLOTS; $i++) {
     $b = $HDR + $i*$STRIDE
     $hw = RdL $b
