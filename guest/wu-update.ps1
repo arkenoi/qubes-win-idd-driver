@@ -206,7 +206,23 @@ function Get-FreshRefusal {
 # Starts dom0's pass. Only ever called once no live pass holds the updater, so clearing the status cannot hit a live one.
 function Start-RunTask {
     $script:StartedAt = (Get-Date).AddSeconds(-2)   # 2 s of slack for clock granularity
-    Remove-Item -LiteralPath $Status -Force -EA SilentlyContinue    # baseline: never read a stale run
+    # KEEP A CUT-OFF PASS'S RECORD. A status left at a NON-terminal phase now (the updater lock is free, so its owner is gone) is the
+    # record of a pass that was cut off, and the pass about to start reads it in its start gate (qubes-windows-update.ps1
+    # WU-PREVPASS-GATE) to apply the owner's D3 decision: refuse once + request a restart when it was cut off in this boot. Deleting
+    # it here - as this kick always did, "baseline: never read a stale run" - left that gate blind on exactly the dom0 path: measured
+    # 2026-10-02 on GWeck's environment (rz33), a dom0 update in the same boot ran straight over a pass cut off a minute earlier. The
+    # tail below does not need the deletion: it already ignores any status older than this run (StartedAt) and any scan's.
+    $prev = $null
+    try { $prev = Get-Content -LiteralPath $Status -Raw -EA Stop | ConvertFrom-Json } catch { $prev = $null }
+    if (-not $prev -or -not $prev.phase -or (Test-TerminalPhase $prev.phase)) {   # GUARD:keepcutoff
+        Remove-Item -LiteralPath $Status -Force -EA SilentlyContinue    # a finished (or unreadable) status: baseline, never read a stale run
+    } else {
+        # The kept record must stay OLDER than this run, or the tail would take it for this run's status: StartedAt has 2 s of slack,
+        # so move it past the record's own ts when the record is that recent (Jev review 2026-10-02).
+        $kt = [datetime]::MinValue
+        if ([datetime]::TryParseExact((Format-Ts $prev.ts), 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::None, [ref]$kt) -and $kt -ge $script:StartedAt) { $script:StartedAt = $kt.AddSeconds(1) }
+    }
     Remove-Item -LiteralPath $Refusal -Force -EA SilentlyContinue   # ...nor an earlier refusal
     & schtasks /run /tn $Task 2>&1 | Out-Null
     return $LASTEXITCODE

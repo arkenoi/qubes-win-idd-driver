@@ -49,6 +49,7 @@
       2   the `# GUARD:holdercleanup` guard is disabled - the teardown runs under a live holder (the 2026-10-02 relay kill).
       3   the `# GUARD:refusal` read is disabled - a refusal reads as a death again (the 2026-10-02 "update pass DIED").
       4   the `# GUARD:holderwait` wait is disabled - dom0's pass starts on top of the holder again (the 2026-10-02 collision).
+      5   the `# GUARD:keepcutoff` keep is disabled - the kick deletes a cut-off pass's record again and the start gate goes blind.
     tools/tests/wu-dead-pass-selftest.sh runs the clean leg and the knob and requires each outcome.
 #>
 [CmdletBinding()]
@@ -127,7 +128,12 @@ switch ($Defect) {
         if ($hit.Count -ne 1) { Write-Host "FAIL defect 4: expected exactly 1 '# GUARD:holderwait' line, found $($hit.Count)"; exit 1 }
         $holder = @($holder | ForEach-Object { if ($_ -match '# GUARD:holderwait$') { '        if ($true) { return $true }   # DEFECT: before 2026-10-02 - dom0''s pass started on top of the holder' } else { $_ } })
     }
-    default { Write-Host "FAIL unknown -Defect '$Defect' (1|2|3|4)"; exit 1 }
+    '5' {
+        $hit = @($holder | Where-Object { $_ -match '# GUARD:keepcutoff$' })
+        if ($hit.Count -ne 1) { Write-Host "FAIL defect 5: expected exactly 1 '# GUARD:keepcutoff' line, found $($hit.Count)"; exit 1 }
+        $holder = @($holder | ForEach-Object { if ($_ -match '# GUARD:keepcutoff$') { '    if ($true) {   # DEFECT: before 2026-10-02 - the kick deleted every status' } else { $_ } })
+    }
+    default { Write-Host "FAIL unknown -Defect '$Defect' (1|2|3|4|5)"; exit 1 }
 }
 
 $tmpRoot = Join-Path ([IO.Path]::GetTempPath()) ('wu-deadpass-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -363,6 +369,25 @@ Check 'holder-wait: a holder that saved a terminal phase but still holds the loc
        @($r.err | Where-Object { $_ -like 'waiting for another Qubes update operation to finish first: another Qubes update operation (it holds the updater lock)' }).Count -eq 1)
 $r = Run-Scenario 'holder-gone' @((StepB 'Ready' 0 $holderStatus $false)) 4 -body $waitBody
 Check 'holder-wait: a status that still names a pass, with no lock held, holds nothing (returns at once)' (@($r.out | Where-Object { $_ -eq 'WAITED ok=True tick=0' }).Count -eq 1)
+
+# --- 12b. keep-cutoff: Start-RunTask keeps a NON-terminal status (a cut-off pass's record, for the start gate's D3 rule) and clears a finished one
+$keepBody = @('Write-Status $script:Plan[0].status', '$null = Start-RunTask', '[Console]::Out.WriteLine("KEPT=" + (Test-Path -LiteralPath $Status))', 'exit 0')
+$cutoff = Status 'scan' 'full' $freshTs
+$KEEPCUT = 'keep-cutoff: Start-RunTask keeps a non-terminal status (a cut-off pass''s record the start gate reads) and still starts the task'
+$r = Run-Scenario 'keep-cutoff' @((Step 'Ready' 0 $cutoff)) 2 -body $keepBody
+Check $KEEPCUT (@($r.out | Where-Object { $_ -eq 'KEPT=True' }).Count -eq 1 -and $r.calls -contains 'schtasks /run /tn QubesWindowsUpdateRun')
+$r = Run-Scenario 'clear-finished' @((Step 'Ready' 0 (Status 'done' 'full' $freshTs))) 2 -body $keepBody
+Check 'keep-cutoff control: a finished status is still cleared at the kick (baseline: never read a stale run)' (@($r.out | Where-Object { $_ -eq 'KEPT=False' }).Count -eq 1)
+# a kept record written "now" (inside StartedAt's 2 s of slack) must still be OLDER than the run
+$nowTs = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
+$recentBody = @(
+    'Write-Status $script:Plan[0].status',
+    '$null = Start-RunTask',
+    ('$k = [datetime]::ParseExact("' + $nowTs + '", "yyyy-MM-ddTHH:mm:ss", [Globalization.CultureInfo]::InvariantCulture)'),
+    '[Console]::Out.WriteLine("OLDER=" + ($k -lt $script:StartedAt))',
+    'exit 0')
+$r = Run-Scenario 'keep-recent' @((Step 'Ready' 0 (Status 'scan' 'full' $nowTs))) 2 -body $recentBody
+Check 'keep-cutoff: a kept record written inside StartedAt''s slack is still OLDER than the run (the tail cannot take it for this run''s)' (@($r.out | Where-Object { $_ -eq 'OLDER=True' }).Count -eq 1)
 
 # --- 13. the REAL lock test (no stub): the named mutex exists exactly while a handle to it is open ----------------------------
 $lockBody = @(

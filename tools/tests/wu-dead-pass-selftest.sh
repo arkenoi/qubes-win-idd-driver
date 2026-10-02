@@ -39,7 +39,7 @@ fi
 bad=0
 "$PWSH" -NoProfile -File "$SUITE" >"$OUT/clean.out" 2>&1; rc=$?
 n=$(grep -c '^ok' "$OUT/clean.out"); f=$(grep -c '^FAIL' "$OUT/clean.out")
-if [ $rc -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -ge 30 ]; then say "PASS  clean: rc=0 ok=$n fail=0"
+if [ $rc -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -ge 34 ]; then say "PASS  clean: rc=0 ok=$n fail=0"
 else say "FAIL  clean: rc=$rc ok=$n fail=$f ($(grep -m1 -E '^FAIL' "$OUT/clean.out" || grep -m1 -iE 'exception|error' "$OUT/clean.out" | cut -c1-140))"; bad=1; fi
 
 "$PWSH" -NoProfile -File "$SUITE" -Defect 1 >"$OUT/defect-1.out" 2>&1; rc=$?
@@ -69,6 +69,8 @@ leg(){ # $1 knob, $2 target check, $3 allowed-failures regex
 leg 2 'live-holder: our pass died while another pass holds the updater lock -> DIED, but the leftovers are NOT touched (no proxy reset, no relay kill)' '^FAIL live-holder'
 leg 3 'refused-held: a mutex-held refusal is no death - no DIED, no teardown; the task is started again and the pass completes (exit 0, phase done)' '^FAIL (refused-held|refused-unknown|contract: the refusal)'
 leg 4 'holder-wait: waits while the updater lock is held and returns when it is gone (ok, after 3 ticks), telling dom0 once what it waits for' '^FAIL holder-wait'
+
+leg 5 "keep-cutoff: Start-RunTask keeps a non-terminal status (a cut-off pass's record the start gate reads) and still starts the task" '^FAIL keep-cutoff'
 
 say "--- outputs in $OUT"
 exit $bad
