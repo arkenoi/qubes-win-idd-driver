@@ -693,9 +693,12 @@ stage 1 (the visible-region signature and the covered-damage test) when the z-or
 stage 2 (the live re-check, section 24) always. The PrintWindow render-trigger path is unchanged. Agent 5d3ab77 (rz27).
 **Why:** an Alt tap in a XAML app (the harness focuses that way; so can a user) shows access-key badges, ~35-48 x 46 px, owned by
 the app; the agent drops them as sub-floor popups without a synthesis owner, and both stages counted only tracked windows. Measured
-(calc-popup-2, rz25, a fresh agent per arm): focus by an Alt tap - Calculator 2/2 arms recreated, Paint 3 recreates; focus with no
-key - 0/2 and 0; the debug log names each badge "sub-floor popup ... dropping silently"; Paint kept 27 badges on screen for 6+
-minutes. The M7 phases cell's uncounted Calculator recreate on rz24 and rz25 was one (Jev: root cause 0.99; this fix 0.78 over
+(calc-popup-2, rz25, a fresh agent per arm): focus by an Alt tap - Calculator poked for a badge's own pixels in 2/2 arms and
+recreated in 1 (typing frames answered the other arm's poke within 2 s), Paint 3 recreates; focus with no key - no badge, no badge
+poke, 0 recreates; the debug log names each badge "sub-floor popup ... dropping silently"; Paint kept 27 badges on screen for 6+
+minutes. **CORRECTED 2026-10-02 08:50:** this text first said "Calculator 2/2 arms recreated" - the second arm's recreate was the
+harness counting its own echoed command line (the counts now take only timestamped agent lines); Jev re-asked on the corrected
+fact: root cause 1.00, this fix 0.79. The M7 phases cell's uncounted Calculator recreate on rz24 and rz25 was one (Jev: root cause 0.99; this fix 0.78 over
 remembering the dropped handles 0.18). **Cost:** damage wholly inside a badge (+4 px), and the pass in which one appears or
 vanishes, loses its liveness hint while the badge stands - including the app's own change behind a badge's transparent margin;
 the poke is only a hint, WGC still delivers. Not covered: no valid z-order capture leaves stage 1 as it was (a limitation, Jev
