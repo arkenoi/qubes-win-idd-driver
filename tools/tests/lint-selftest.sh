@@ -118,6 +118,24 @@ printf 'cmd = ["tools/qtest", "run", "cmd /c wmic os get lastbootuptime /value"]
 expect_fires L11-absent-guest-command "$D" "the same command inside a python tool"
 
 # ---------------------------------------------------------------- the NEGATIVE control
+# L16: a catch-block local that differs only in case from a $script: name (the 2026-10-02 `$st` that silenced the updater's remedy)
+D="$TMP/l16"; mk "$D"
+cat > "$D/guest/upd.ps1" <<'EOS'
+$script:St = [ordered]@{ phase='init' }
+try { throw 'x' } catch {
+  $st = "$($_.ScriptStackTrace)"
+}
+EOS
+expect_fires L16-ps-script-scope-case-collision "$D" 'a local $st beside $script:St'
+D="$TMP/l16ok"; mk "$D"
+cat > "$D/guest/upd.ps1" <<'EOS'
+$script:St = [ordered]@{ phase='init' }
+$warn = 0
+function Bump { $script:warn++ }
+try { throw 'x' } catch { $stackText = "$($_.ScriptStackTrace)" }
+EOS
+expect_silent L16-ps-script-scope-case-collision "$D" 'same-case script-level reuse and a distinct local name'
+
 # A lint that fires on everything is as useless as one that never fires. A clean tree must be
 # silent, or every finding above is meaningless.
 D="$TMP/clean"; mk "$D"

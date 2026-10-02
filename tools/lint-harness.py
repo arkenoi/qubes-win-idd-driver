@@ -550,6 +550,37 @@ def l15_ps_function_named_like_alias() -> None:
                         f"(aliases win over functions) - rename it")
 
 
+def l16_ps_script_scope_case_collision() -> None:
+    """A PowerShell variable may not be written under a name that differs only in CASE from a $script: variable of the same file.
+
+    PowerShell names are case-insensitive, so at script scope `$st = ...` IS `$script:St`. Incident 2026-10-02: the updater's
+    error-site logging (e6037f5d, 2026-09-21) wrote `$st = "$($_.ScriptStackTrace)"` inside the main catch, turned the status
+    object into a string, and silenced the 0x8024402C remedy committed one hour earlier - in every release for eleven days. The
+    differing case is the tell that the author meant a DIFFERENT variable; same-case reuse is the ordinary script-level idiom and is
+    left alone. Generated copies under mgmt/prime-jobs are skipped (they are refreshed from guest/, not edited).
+    """
+    files = [p for d in ("guest", "packaging", "tools", "mgmt") for p in sorted((ROOT / d).rglob("*.ps1"))
+             if "tests" not in p.parts and "prime-jobs" not in p.parts]
+    for p in files:
+        txt = p.read_text(errors="replace")
+        scoped = {}
+        for m in re.finditer(r"\$script:([A-Za-z_][A-Za-z0-9_]*)", txt, re.I):
+            scoped.setdefault(m.group(1).lower(), set()).add(m.group(1))
+        if not scoped:
+            continue
+        for i, line in enumerate(txt.splitlines(), 1):
+            code = line.split("#", 1)[0]
+            pats = (r"(?<![:\w$])\$([A-Za-z_][A-Za-z0-9_]*)\s*[+\-]?=(?!=)", r"foreach\s*\(\s*\$([A-Za-z_][A-Za-z0-9_]*)\s+in")
+            for pat in pats:
+                for m in re.finditer(pat, code, re.I):
+                    name = m.group(1)
+                    spellings = scoped.get(name.lower())
+                    if spellings and name not in spellings:
+                        finding("L16-ps-script-scope-case-collision", f"{p.relative_to(ROOT)}:{i}",
+                                f"'${name}' is the same variable as '$script:{sorted(spellings)[0]}' (names are case-insensitive) - "
+                                f"rename the local or write $script:{sorted(spellings)[0]} on purpose")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
@@ -581,6 +612,7 @@ def main() -> int:
     l11_absent_guest_command()
     l12_provisioning_recipe()
     l15_ps_function_named_like_alias()
+    l16_ps_script_scope_case_collision()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 
