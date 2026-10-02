@@ -724,4 +724,4 @@ also took up to 6 cross-process card searches ~2 s apart that could never succee
 **Cost:** dom0 shows no access-key hints; the access keys still work (the guest app receives the keys).
 **Seen to pass (badge-drop-ab, 2026-10-02 11:24-11:29, interleaved, Paint focused by Alt taps, a fresh agent per arm):** rz27 34 and
 27 card-search lines per arm, rz28 (agent 4ffffbe) 0 and 0; badges still dropped, no false recreate on rz28. One rz27 arm recreated
-Paint once for its title-bar corner at an activation change - not a badge (occ=27 counted them) - the class section 32's question is about.
+Paint once for its title-bar corner at an activation change - not a badge (occ=27 counted them): a DWM-drawn part that WGC rightly does not deliver, the false-positive class of the damage-driven liveness pokes.
