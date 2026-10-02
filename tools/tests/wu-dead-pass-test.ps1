@@ -50,6 +50,8 @@
       3   the `# GUARD:refusal` read is disabled - a refusal reads as a death again (the 2026-10-02 "update pass DIED").
       4   the `# GUARD:holderwait` wait is disabled - dom0's pass starts on top of the holder again (the 2026-10-02 collision).
       5   the `# GUARD:keepcutoff` keep is disabled - the kick deletes a cut-off pass's record again and the start gate goes blind.
+      6   the `# GUARD:relayexit` wait is disabled - the teardown re-lists the relay before it has exited and tells dom0 the baseline is NOT restored.
+      7   the `# GUARD:relayexitpid` fallback is disabled - with WaitForExit denied, a killed relay is reported as not exiting.
     tools/tests/wu-dead-pass-selftest.sh runs the clean leg and the knob and requires each outcome.
 #>
 [CmdletBinding()]
@@ -133,7 +135,17 @@ switch ($Defect) {
         if ($hit.Count -ne 1) { Write-Host "FAIL defect 5: expected exactly 1 '# GUARD:keepcutoff' line, found $($hit.Count)"; exit 1 }
         $holder = @($holder | ForEach-Object { if ($_ -match '# GUARD:keepcutoff$') { '    if ($true) {   # DEFECT: before 2026-10-02 - the kick deleted every status' } else { $_ } })
     }
-    default { Write-Host "FAIL unknown -Defect '$Defect' (1|2|3|4|5)"; exit 1 }
+    '6' {
+        $hit = @($region | Where-Object { $_ -match '# GUARD:relayexit$' })
+        if ($hit.Count -ne 1) { Write-Host "FAIL defect 6: expected exactly 1 '# GUARD:relayexit' line, found $($hit.Count)"; exit 1 }
+        $region = @($region | ForEach-Object { if ($_ -match '# GUARD:relayexit$') { '            $exited = $true   # DEFECT: no wait for the exit' } else { $_ } })
+    }
+    '7' {
+        $hit = @($region | Where-Object { $_ -match '# GUARD:relayexitpid$' })
+        if ($hit.Count -ne 1) { Write-Host "FAIL defect 7: expected exactly 1 '# GUARD:relayexitpid' line, found $($hit.Count)"; exit 1 }
+        $region = @($region | ForEach-Object { if ($_ -match '# GUARD:relayexitpid$') { '                # DEFECT: no pid fallback' } else { $_ } })
+    }
+    default { Write-Host "FAIL unknown -Defect '$Defect' (1|2|3|4|5|6|7)"; exit 1 }
 }
 
 $tmpRoot = Join-Path ([IO.Path]::GetTempPath()) ('wu-deadpass-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -167,6 +179,7 @@ $script:Tick = 0
 $script:TaskState = 'Ready'; $script:TaskResult = 0
 $script:LivePid = __LIVEPID__; $script:LiveStart = '__LIVESTART__'; $script:LiveName = '__LIVENAME__'
 $script:Busy = $false   # the updater lock (Test-UpdaterBusy), per plan step
+$script:WfeDenied = __WFEDENIED__   # WaitForExit throws (no SYNCHRONIZE right) - the pid fallback must still see the exit
 function schtasks { Call ('schtasks ' + ($args -join ' ')); $global:LASTEXITCODE = 0 }
 $script:BootTime = [datetime]::ParseExact('2026-10-02T18:30:00', 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
 function Get-CimInstance { [CmdletBinding()] param([Parameter(Position = 0)]$ClassName) return [pscustomobject]@{ LastBootUpTime = $script:BootTime } }
@@ -179,7 +192,8 @@ function Write-Status($obj) {
     if ($null -eq $obj) { Remove-Item -LiteralPath $Status -Force -EA SilentlyContinue; return }
     ($obj | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $Status -Encoding UTF8
 }
-function Start-Sleep { [CmdletBinding()] param($Seconds)
+function Start-Sleep { [CmdletBinding()] param($Seconds, $Milliseconds)
+    if ($PSBoundParameters.ContainsKey('Milliseconds')) { return }   # a sub-second wait inside one poll, not a poll tick
     $script:Tick++
     if ($script:Tick -gt $MaxTicks) { [Console]::Out.WriteLine("SENTINEL still polling after $MaxTicks polls"); exit 42 }
     $step = $script:Plan[[Math]::Min($script:Tick, $script:Plan.Count) - 1]
@@ -211,12 +225,17 @@ function Get-Process { [CmdletBinding()] param([Parameter(Position = 0)]$Name, $
             else { $o | Add-Member -NotePropertyName StartTime -NotePropertyValue ([datetime]::ParseExact($script:LiveStart, 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)) }
             return $o
         }
+        if ([int]$Id -eq 4711) { if ($script:RelayAlive) { return [pscustomobject]@{ Id = 4711; ProcessName = 'qubes-updates-relay' } }; return $null }
         return $null
     }
     Call "Get-Process $Name"
     if (-not $script:RelayAlive) { return @() }
     $p = [pscustomobject]@{ Id = 4711; ProcessName = 'qubes-updates-relay' }
-    $p | Add-Member -MemberType ScriptMethod -Name Kill -Value { $script:RelayAlive = $false; Call 'Kill 4711' }
+    # Kill() is ASYNCHRONOUS on Windows: the process is still listed until it has exited, which WaitForExit observes.
+    $p | Add-Member -MemberType ScriptMethod -Name Kill -Value { $script:KillPending = $true; Call 'Kill 4711' }
+    $p | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { param($ms)
+        if ($script:WfeDenied) { if ($script:KillPending) { $script:RelayAlive = $false }; Call 'WaitForExit 4711 DENIED'; throw 'Zugriff verweigert' }
+        if ($script:KillPending) { $script:RelayAlive = $false }; Call 'WaitForExit 4711'; return (-not $script:RelayAlive) }
     return ,$p
 }
 '@
@@ -242,12 +261,12 @@ function Render($v) {
     return [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0}', $v)
 }
 
-function Run-Scenario([string]$name, [array]$plan, [int]$maxTicks, [int]$livePid = 0, [string]$liveStart = '2026-10-02T18:31:36', [string[]]$body = $null, [string]$liveName = 'powershell', [switch]$realLock) {
+function Run-Scenario([string]$name, [array]$plan, [int]$maxTicks, [int]$livePid = 0, [string]$liveStart = '2026-10-02T18:31:36', [string[]]$body = $null, [string]$liveName = 'powershell', [switch]$realLock, [switch]$wfeDenied) {
     $dir = Join-Path $tmpRoot $name
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     $statusFile = Join-Path $dir 'update-status.json'
     $planSrc = '@(' + (@($plan | ForEach-Object { Render $_ }) -join ', ') + ')'
-    $src = $preamble.Replace('__STATUS__', $statusFile.Replace("'", "''")).Replace('__PLAN__', $planSrc).Replace('__MAXTICKS__', "$maxTicks").Replace('__LIVEPID__', "$livePid").Replace('__LIVESTART__', $liveStart).Replace('__LIVENAME__', $liveName)
+    $src = $preamble.Replace('__STATUS__', $statusFile.Replace("'", "''")).Replace('__PLAN__', $planSrc).Replace('__MAXTICKS__', "$maxTicks").Replace('__LIVEPID__', "$livePid").Replace('__LIVESTART__', $liveStart).Replace('__LIVENAME__', $liveName).Replace('__WFEDENIED__', $(if ($wfeDenied) { '$true' } else { '$false' }))
     if ($null -eq $body) { $body = @($region) + @($postamble) }
     $file = Join-Path $dir 'scenario.ps1'
     $lockStub = @('function Test-UpdaterBusy { Call ''Test-UpdaterBusy''; return [bool]$script:Busy }')   # overrides the region's: no real mutex
@@ -302,6 +321,11 @@ Check 'killed: the leftovers line reports the relay stopped and the baseline res
       ($r.left.Count -eq 1 -and $r.left[0] -like '*relay pid 4711 stopped*' -and $r.left[0] -like '* - offline baseline restored')
 Check 'contract: the DIED and leftovers lines do not end in a bare number (dom0 float-parses the last token)' `
       (@(($r.died + $r.left) | Where-Object { $_ -match '\s[0-9]+([.,][0-9]+)?$' }).Count -eq 0 -and ($r.died.Count + $r.left.Count) -eq 2)
+
+# --- 3b. killed-denied: WaitForExit throws for lack of rights - the pid fallback must still report the relay stopped ------------
+$r = Run-Scenario 'killed-denied' @((Step 'Running' 0x41301 (Status 'scan' 'full' $freshTs)), (Step 'Ready' 0x41306 (Status 'scan' 'full' $freshTs))) 6 -wfeDenied
+Check 'killed-denied: WaitForExit denied -> the pid fallback still sees the exit; the leftovers line reports the relay stopped and the baseline restored' `
+      ($r.left.Count -eq 1 -and $r.left[0] -like '*relay pid 4711 stopped*' -and $r.left[0] -like '* - offline baseline restored' -and $r.calls -contains 'WaitForExit 4711 DENIED')
 
 # --- 4. nostatus: killed before the first Save --------------------------------------------------------------
 $r = Run-Scenario 'nostatus' @((Step 'Ready' 0x41303 $null), (Step 'Ready' 0x41306 $null)) 6
