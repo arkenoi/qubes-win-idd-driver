@@ -702,4 +702,8 @@ fact: root cause 1.00, this fix 0.79. The M7 phases cell's uncounted Calculator 
 remembering the dropped handles 0.18). **Cost:** damage wholly inside a badge (+4 px), and the pass in which one appears or
 vanishes, loses its liveness hint while the badge stands - including the app's own change behind a badge's transparent margin;
 the poke is only a hint, WGC still delivers. Not covered: no valid z-order capture leaves stage 1 as it was (a limitation, Jev
-0.64 commit-and-measure). **Seen to pass:** owed (rz27 A/B: the badge pokes withheld, no recreate).
+0.64 commit-and-measure). **Seen to pass (badge-ab-1, 2026-10-02 08:47-08:59, interleaved rz25/rz27, Alt-tap focus, a fresh agent
+per arm):** rz25, 3 arms - badge pokes in all 3, 4 recreates (Paint, each check region inside a badge); rz27 (agent 8b59ed3, the C4701
+build fix on 5d3ab77), 3 arms - 0 badge pokes, 0 recreates, Paint's one poke listing occ=27 (its 27 badges counted). Jev: chain
+established 0.87, seen to pass 0.86; residual named: other untracked popup classes (not owned, or layered) may still poke (0.90) -
+the acceptance's recreate census is the instrument for that.
