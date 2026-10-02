@@ -707,3 +707,19 @@ per arm):** rz25, 3 arms - badge pokes in all 3, 4 recreates (Paint, each check 
 build fix on 5d3ab77), 3 arms - 0 badge pokes, 0 recreates, Paint's one poke listing occ=27 (its 27 badges counted). Jev: chain
 established 0.87, seen to pass 0.86; residual named: other untracked popup classes (not owned, or layered) may still poke (0.90) -
 the acceptance's recreate census is the instrument for that.
+
+## 31. Alt-nav key-tip badges are dropped fully: not shown in dom0, nothing spent on them — ACCEPTED (owner), 2026-10-02
+
+**Decided:** the Win11 Alt-nav key-tip badges - owned sub-floor WS_POPUP windows of ~35-48 x 46 px (Xaml_WindowedPopupClass,
+Microsoft.UI.Content.PopupWindowSiteBridge) that a XAML app shows while in access-key mode - are not shown in dom0, and the agent
+spends nothing on them. AddWindow keeps dropping them (on 26100+ every owner is broker-served, so no synthesis owner qualifies), and the
+crop gate no longer queues a UI Automation card search for any window smaller than the crop floor, which no such window can pass
+(agent 4ffffbe, rz28). Section 30 stays: a badge still occludes its owner's liveness damage - that is correctness, not display.
+**Why:** the owner first asked to show them, painted into the owner's frame, then ruled: "if keytips slow down menu responsiveness in
+any user facing way, just drop them fully". Painting them means a broker PrintWindow slot per badge, rendered synchronously on the
+app's UI thread right after Alt - exactly while the app opens the menu that Alt+letter asks for - through the same broker loop that
+captures that menu (menus' first content 156-547 ms on that route); Paint shows 27 at once and 32 slots serve everything. Jev: it
+slows menus 0.80, drop fully 0.93; the badges themselves would reach dom0 up to ~0.5 s after Alt 0.94. Before 4ffffbe each badge
+also took up to 6 cross-process card searches ~2 s apart that could never succeed.
+**Cost:** dom0 shows no access-key hints; the access keys still work (the guest app receives the keys).
+**Seen to pass:** owed (rz27/rz28 Paint Alt A/B: no card search for a badge, no false recreate).
