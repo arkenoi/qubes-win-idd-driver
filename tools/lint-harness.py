@@ -517,6 +517,38 @@ def l14_retired_topics_not_reopened() -> None:
                 break
 
 
+# --------------------------------------------------------------------------- L15
+# Windows PowerShell 5.1's built-in aliases (Get-Alias on a stock 5.1). Command resolution is Alias > Function > Cmdlet, so a
+# function with one of these names is never called by its name.
+PS51_ALIASES = set("""% ? ac asnp cat cd chdir clc clear clhy cli clp cls clv cnsn compare copy cp cpi cpp curl cvpa dbp del diff
+dir dnsn ebp echo epal epcsv epsn erase etsn exsn fc fhx fl foreach ft fw gal gbp gc gcb gci gcm gcs gdr ghy gi gjb gl gm gmo gp
+gps gpv group gsn gsnp gsv gu gv gwmi h history icm iex ihy ii ipal ipcsv ipmo ipsn irm ise iwmi iwr kill lp ls man md measure mi
+mount move mp mv nal ndr ni nmo npssc nsn nv ogv oh popd ps pushd pwd r rbp rcjb rcsn rd rdr ren ri rjb rm rmdir rmo rni rnp rp
+rsn rsnp rujb rv rvpa rwmi sajb sal saps sasv sbp sc scb select set shcm si sl sleep sls sort sp spjb spps spsv start sujb sv swmi
+tee trcm type wget where wjb write""".split())
+
+def l15_ps_function_named_like_alias() -> None:
+    """No PowerShell function may be named like a Windows PowerShell 5.1 built-in alias.
+
+    Incident 2026-10-02: an in-session probe defined `function Diff` and called `Diff $snap`; on 5.1 `diff` is an alias of
+    Compare-Object, aliases win over functions, and Compare-Object PROMPTED for its missing -DifferenceObject - the probe hung
+    for good with no CPU, three runs lost. The same sweep found `function H` (h = Get-History) in swap-qrexec-wrapper.ps1, whose
+    hash fields were therefore errors, and `function R` (r = Invoke-History) in install-office-eval.ps1, whose RESULT lines never
+    printed. pwsh 7 on Linux has no `diff` alias, so a local test cannot see it - hence a lint.
+    """
+    files = sorted((ROOT / "guest").glob("*.ps1")) + sorted((ROOT / "tools").glob("*.ps1")) + \
+            sorted((ROOT / "mgmt").rglob("*.ps1"))
+    for p in files:
+        if "tests" in p.parts:
+            continue
+        for i, line in enumerate(p.read_text(errors="replace").splitlines(), 1):
+            m = re.match(r"\s*function\s+([A-Za-z0-9_-]+)", line, re.I)
+            if m and m.group(1).lower() in PS51_ALIASES:
+                finding("L15-ps-function-is-an-alias", f"{p.relative_to(ROOT)}:{i}",
+                        f"function '{m.group(1)}' is shadowed by the PowerShell 5.1 alias '{m.group(1).lower()}' "
+                        f"(aliases win over functions) - rename it")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--ledger", type=Path, default=None, help="verdicts.tsv, enables L7")
@@ -547,6 +579,7 @@ def main() -> int:
     l10_no_default_target_guest()
     l11_absent_guest_command()
     l12_provisioning_recipe()
+    l15_ps_function_named_like_alias()
     if a.ledger:
         l7_orphan_ledger_checks(a.ledger)
 

@@ -20,30 +20,30 @@ $bak  = "$dst.orig"
 $task = 'QwtWrapperRollback'
 $r = [ordered]@{}
 
-function H($p) { if (Test-Path $p) { (Get-FileHash $p -Algorithm SHA256).Hash.Substring(0,16) } else { 'none' } }
+function Hash16($p) { if (Test-Path $p) { (Get-FileHash $p -Algorithm SHA256).Hash.Substring(0,16) } else { 'none' } }
 
 if ($Confirm) {
   & schtasks /delete /tn $task /f 2>&1 | Out-Null
   $r['rollback_cancelled'] = -not [bool](Get-ScheduledTask -TaskName $task -EA SilentlyContinue)
-  $r['in_place'] = H $dst
+  $r['in_place'] = Hash16 $dst
   Write-Output ("=== RESULT === " + ($r | ConvertTo-Json -Compress)); exit 0
 }
 
 if ($Revert) {
   if (Test-Path $bak) { Copy-Item -LiteralPath $bak -Destination $dst -Force }
   & schtasks /delete /tn $task /f 2>&1 | Out-Null
-  $r['reverted_to'] = H $dst
+  $r['reverted_to'] = Hash16 $dst
   Write-Output ("=== RESULT === " + ($r | ConvertTo-Json -Compress)); exit 0
 }
 
 if (-not (Test-Path $New)) { $r['error'] = "new wrapper not pushed: $New"; $r['ok'] = $false
   Write-Output ("=== RESULT === " + ($r | ConvertTo-Json -Compress)); exit 1 }
 
-$r['before'] = H $dst
-$r['new']    = H $New
+$r['before'] = Hash16 $dst
+$r['new']    = Hash16 $New
 if (-not (Test-Path $bak)) { Copy-Item -LiteralPath $dst -Destination $bak -Force; $r['backup_made'] = $true }
 else { $r['backup_made'] = 'already existed (kept)' }
-$r['backup'] = H $bak
+$r['backup'] = Hash16 $bak
 
 # Arm the dead-man BEFORE touching the live binary, so a swap that kills qrexec still gets undone.
 $when = (Get-Date).AddMinutes($RollbackMinutes).ToString('HH:mm')
@@ -54,7 +54,7 @@ $r['rollback_task'] = [bool](Get-ScheduledTask -TaskName $task -EA SilentlyConti
 
 # qrexec-wrapper is spawned per call, not held open, so it can be replaced in place.
 Copy-Item -LiteralPath $New -Destination $dst -Force -EA SilentlyContinue
-$r['after'] = H $dst
+$r['after'] = Hash16 $dst
 $r['swapped'] = ($r['after'] -eq $r['new'])
 $r['ok'] = ($r['swapped'] -and $r['rollback_task'])
 Write-Output ("=== RESULT === " + ($r | ConvertTo-Json -Compress))

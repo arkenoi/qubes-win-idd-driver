@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Continue'
 $dir = 'C:\office-eval'
 New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
-function R($m) { Write-Output "RESULT $m" }
+function Result($m) { Write-Output "RESULT $m" }
 
 # 1. Office Deployment Tool (self-extracting, Microsoft-signed)
 $odtUrl = 'https://officecdn.microsoft.com/pr/wsus/setup.exe'
@@ -24,7 +24,7 @@ try {
 } catch { R "odt_download=FAIL msg=$($_.Exception.Message)"; exit 1 }
 if (-not (Test-Path $setup)) { R 'odt_download=FAIL'; exit 1 }
 $sig = Get-AuthenticodeSignature $setup
-R ("odt_download=OK size=" + (Get-Item $setup).Length + " sig=" + $sig.Status)
+Result ("odt_download=OK size=" + (Get-Item $setup).Length + " sig=" + $sig.Status)
 if ($sig.Status -ne 'Valid') { R 'odt_signature=INVALID - refusing to run'; exit 1 }
 
 # 2. Configuration: 64-bit current channel, Word+Excel+PowerPoint+Outlook, no updates,
@@ -50,18 +50,18 @@ Set-Content $cfg -Value $xml -Encoding ascii
 
 # 3. Download then install (two phases so a network failure is distinguishable)
 $p = Start-Process -FilePath $setup -ArgumentList '/download', $cfg -Wait -PassThru -WorkingDirectory $dir
-R "odt_download_phase=$($p.ExitCode)"
+Result "odt_download_phase=$($p.ExitCode)"
 if ($p.ExitCode -ne 0) { exit 1 }
 
 $p = Start-Process -FilePath $setup -ArgumentList '/configure', $cfg -Wait -PassThru -WorkingDirectory $dir
-R "odt_configure_phase=$($p.ExitCode)"
+Result "odt_configure_phase=$($p.ExitCode)"
 
 # 4. Verify what actually landed
 $winword = 'C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE'
 $excel   = 'C:\Program Files\Microsoft Office\root\Office16\EXCEL.EXE'
-R ("winword_present=" + (Test-Path $winword) + " excel_present=" + (Test-Path $excel))
+Result ("winword_present=" + (Test-Path $winword) + " excel_present=" + (Test-Path $excel))
 if (Test-Path $winword) {
-    R ("winword_version=" + (Get-Item $winword).VersionInfo.ProductVersion)
+    Result ("winword_version=" + (Get-Item $winword).VersionInfo.ProductVersion)
     exit 0
 }
 exit 1
