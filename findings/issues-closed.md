@@ -42,15 +42,11 @@
 [moved 2026-10-02: closed, Jev 0.88]
 - CLOSED (was P3) "exit status 46" on the seamless switch: RETIRED, not open (owner 2026-09-24). It is not a service exit status - qrexec-wrapper sends a Win32 error code as the exit code when child setup fails, proven by renaming a service file away (rc=2, rc=0 restored), so the service never ran on that guest. Do not attribute it to set-gui-mode. [verified 2026-09-24]
 
-### test-framework
-
 [moved 2026-10-02: closed, Jev 0.77]
 - P2 [FIXED 2026-09-09, fail-proofed] THE RESCUE GATE WAS DEFEATED BY MISSING DATA - prime-run's cpu reader printed the sentinel `9999` ("very busy") whenever libxl stats were UNREADABLE, so an unreadable stat and a busy guest were the same value, and it was the one value that disables recovery. Measured: win11-clean, 4.3.22 campaign, `admin.vm.Stats` went unreadable at the instant the install stuck (`cpu=` empty from t+414s to the end), every poll reset the quiet streak, `quiet >= 8` was never reached, the one-shot rescue never fired, and the run polled to the 3600 s DEADLINE. The floor condition held throughout - ONLY the streak was defeated. Fix: `NA` instead of `9999`, an unreadable cpu counts toward quiescence, plus a second INDEPENDENT trigger (`RESCUE_NOSHOW`, four consecutive no-window screen probes) because that is the direct observable of this stall and needs no stats. Fail-proof `mgmt/harness/failproof-prime-rescue.sh` replays the real recorded telemetry: defect re-introduced -> NEVER rescues (reproduces the deadline), fixed -> rescues at t+647s, healthy warm-reboot trace -> does not fire; 12/12. THE UNDERLYING TRIGGER IS NOT OURS AND IS NOT FIXED: a guest-initiated stage-1 reboot on a Xen HVM sometimes HALTS the domain and sometimes warm-resets it in place; on a warm reset the PV bus usually rebinds but occasionally does not, and stage 2's IDD activation then disables the emulated VGA so dom0 sees no window at all. That nondeterminism predates 4.3.22 (4.3.21 passed with it) and is why the harness needs a rescue that works. [verified 2026-09-09]
 
 [moved 2026-10-02: closed, Jev 0.99]
 - P3 legacy lint findings (40) are BASELINED in tools/lint-baseline.txt — not open work; editing a legacy harness re-exposes its findings (line-anchored), so touched code gets fixed and NEW findings still fail the gate. Never add entries to the baseline. [verified 2026-09-01]
-
-### network
 
 [moved 2026-10-02: closed, Jev 0.98]
 - DONE: EMS armed (both templates, AppVM-inherited) and the serial channel proven end-to-end — SERIALMARK x3 land in guest-<vm>-dm.log. EMS/SAC silence on a healthy client boot is expected (SAC is Server-only); the bugcheck-time payoff is unprovable from userspace and EMS won't diagnose the IPI wedge regardless — insurance only. [verified 2026-09-02]
