@@ -91,8 +91,14 @@ show("tar", *vmexec(["tar", "-xzf", ARCH, "-C", WORKDIR]), expect=(0,))
 # 4. the agent run itself (only with --with-entrypoint: it performs a real update pass)
 if "--with-entrypoint" in sys.argv:
     print("[entrypoint] running - this drives a REAL update pass, may take minutes")
-    rc, out, err = vmexec(["/usr/bin/python3", WORKDIR + "agent/entrypoint.py",
-                           "--log", "INFO"], timeout=3600)
+    # The bound sits ABOVE the guest handler's own 2 h tail (guest/wu-update.ps1), so the handler always answers first. It was
+    # 3600 s, under the handler's 2 h: a pass longer than an hour made this script die in a TimeoutExpired traceback with no
+    # [entrypoint] line at all, which no caller's check recognised. A timeout here is now a reported, UNEXPECTED step.
+    try:
+        rc, out, err = vmexec(["/usr/bin/python3", WORKDIR + "agent/entrypoint.py",
+                               "--log", "INFO"], timeout=7800)
+    except subprocess.TimeoutExpired as e:
+        rc, out, err = "TIMEOUT", (e.stdout or b""), (e.stderr or b"")
     # 0 = updated, 100 = nothing to do, 1 = a KB failed. All three are correct protocol
     # outcomes; only something outside this set means the contract is broken.
     show("entrypoint", rc, out, err, expect=(0, 1, 100))

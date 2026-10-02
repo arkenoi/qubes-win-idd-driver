@@ -123,8 +123,9 @@ def l2_vmlock_required() -> None:
         # from "ignoring the request" - a distinction that had been guessed wrong almost daily.
         # The exemption is by NAME, not by pattern, so a new guest-driving harness cannot inherit
         # it by accident, and tools/tests/lint-selftest.sh drives L2 against a fixture to prove
-        # the rule still fires for everything else.
-        if f.name in ("shutdown-lib.sh",):
+        # the rule still fires for everything else. wu-liveness.sh joined on 2026-10-02: the pass-liveness
+        # probe wu-e2e.sh and the killed-pass cell source while they hold the guest's lock.
+        if f.name in ("shutdown-lib.sh", "wu-liveness.sh"):
             continue
         finding("L2-missing-vmlock", f.name,
                 "drives a guest via tools/qtest but never calls vm_lock")

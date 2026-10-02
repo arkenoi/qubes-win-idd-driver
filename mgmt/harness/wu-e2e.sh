@@ -26,7 +26,10 @@
 # A round that ends that way is recorded as STALLED and the run stops - a stalled guest must be
 # interrogated, never silently restarted (see findings/issues.md).
 #
-# Exit 0 every round PASSED, 3 a round FAILED or STALLED, 2 instrument error.
+# PASS LIVENESS IS PART OF THE TEST TOO: a pass that dies (its task no longer Running, its status frozen unfinished) is
+# recorded as DEAD by the harness's own probe (mgmt/harness/wu-liveness.sh), never waited out - see the round loop.
+#
+# Exit 0 every round PASSED, 3 a round FAILED, STALLED or DEAD, 2 instrument error.
 set -u
 
 VM="${1:?usage: $0 <vm> [rounds] [outdir]}"
@@ -38,6 +41,7 @@ ROUNDS="${2:-3}"
 # is how this omission was caught before the first run rather than after a ruined campaign.
 source mgmt/harness/vmlock.sh
 vm_lock "$VM"
+source mgmt/harness/wu-liveness.sh
 
 OUT="${3:-scratchpad/wu-e2e-$VM-$(date -u +%Y%m%dT%H%M%SZ)}"
 mkdir -p "$OUT"
@@ -189,9 +193,66 @@ for r in $(seq 1 "$ROUNDS"); do
   # kill, so the harness then graded a pass that was still running and ran its oscillation scan
   # against a busy guest, where the updater's mutex makes a scan exit at once. Default raised,
   # and overridable per run.
-  timeout -k 20 "${WU_REPLAY_TIMEOUT:-10800}" python3 tools/replay-dom0-update.py "$VM" --with-entrypoint \
-      > "$RD/replay.out" 2>&1
-  rc=$?
+  #
+  # PASS LIVENESS, independent of the product (mgmt/harness/wu-liveness.sh). Measured 2026-09-17: a pass the Task Scheduler
+  # ended 90 s in left this wait tailing a corpse for its full bound, because nothing here looked at the pass itself. The
+  # product's handler now reports a dead pass on its own, but the harness must not need the product's detector to see the
+  # product fail - so while the replay runs, the guest's update task and status file are probed, and a pass that is not Running
+  # while its status has stood still, unfinished, for WU_LIVE_HOLD_S ends the round as DEAD. The guest is left exactly as it
+  # is, to be interrogated, like a stall.
+  timeout -k 20 "${WU_REPLAY_TIMEOUT:-10800}" python3 -u tools/replay-dom0-update.py "$VM" --with-entrypoint \
+      > "$RD/replay.out" 2>&1 &
+  rpid=$!
+  # A probe that gets NO answer is missing data, never a verdict - but three in a row while the replay still runs is how the P1
+  # stall looks from here (Running, qrexec dead), and the replay's own step bound would sit it out for an hour. So the stall test
+  # runs then, and a stalled guest ends the round at once - a stall is examined WHILE it is live, before anything kills it.
+  wu_live_reset; dead=""; noans=0; stall=0
+  while kill -0 "$rpid" 2>/dev/null; do
+    sleep 30
+    kill -0 "$rpid" 2>/dev/null || break
+    grep -q '\[entrypoint\] running' "$RD/replay.out" || continue   # not before the pass exists
+    pl=$(wu_probe)
+    printf '%s %s\n' "$(date -u +%H:%M:%S)" "${pl:-<no answer>}" >> "$RD/liveness.txt"
+    if [ -z "$pl" ]; then
+      noans=$((noans+1))
+      if [ "$noans" -ge 3 ] && stalled; then stall=1; break; fi
+      continue
+    fi
+    noans=0
+    if wu_pass_dead "$pl"; then dead=$WU_LIVE_WHY; break; fi
+  done
+  if [ "$stall" = 1 ]; then
+    log "round $r: STALLED during the pass (Running, qrexec dead) - the host replay is stopped; INTERROGATE the guest now (tools/qtest wedge), never restart it"
+    wu_killtree "$rpid"; wait "$rpid" 2>/dev/null
+    fails=1; break
+  fi
+  if [ -n "$dead" ]; then
+    log "round $r: PASS DEAD (harness liveness, not the product's own report): $dead"
+    wu_killtree "$rpid"; wait "$rpid" 2>/dev/null
+    log "round $r: the host replay was stopped; the guest is left as it is - interrogate it, never restart it blind"
+    fails=1; break
+  fi
+  wait "$rpid"; rc=$?
+  # ...and a pass the PRODUCT reported dead is just as dead. The handler's own verdict (guest/wu-update.ps1 GUARD:deadpass) ends
+  # the replay with rc=1 - which the replay counts as an expected protocol outcome ("a KB failed") - long before the probe's hold
+  # can elapse, so without this the round went on to judge and scan a guest whose pass had died (Jev review 2026-10-02: a likely
+  # miss, 0.68).
+  if grep -q 'update pass DIED' "$RD/replay.out"; then
+    log "round $r: PASS DEAD (the product's own report): $(grep -m1 'update pass DIED' "$RD/replay.out" | sed 's/^ *err: //')"
+    grep -m1 'leftovers:' "$RD/replay.out" | sed 's/^ *err: /    /' | tee -a "$OUT/run.log"
+    log "round $r: the guest is left as it is - interrogate it, never restart it blind"
+    fails=1; break
+  fi
+  # ...and a pass can also die with NO report: the replay ends (its own step bound, a handler that crashed) while the pass's last
+  # picture is unfinished and its task no longer runs (Jev 2026-10-02, the second likeliest miss, 0.27). Nothing waits on the
+  # pass once the replay has ended, so the picture is judged now, with no hold. A guest that does not answer is not judged here
+  # (a pass that committed its reboot is legitimately going down).
+  pl=$(wu_probe); printf '%s %s (after the replay)\n' "$(date -u +%H:%M:%S)" "${pl:-<no answer>}" >> "$RD/liveness.txt"
+  if wu_pass_unfinished "$pl"; then
+    log "round $r: PASS DEAD (found after the replay ended, with no report from the product): task/status $WU_LIVE_PIC"
+    log "round $r: the guest is left as it is - interrogate it, never restart it blind"
+    fails=1; break
+  fi
   # replay-dom0-update.py reports each STEP's rc in its output but exits 0 regardless, so its
   # exit code is not a verdict. Measured 2026-09-20: every step returned rc=46 and the driver
   # still logged "replay rc=0" and judged a round in which no pass had run at all.
