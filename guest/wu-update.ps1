@@ -311,7 +311,23 @@ function Remove-DeadPassLeftovers {
     } catch { $failed += "wininet proxy disable ($($_.Exception.Message))" }
     foreach ($p in @(Get-Process qubes-updates-relay -EA SilentlyContinue)) {
         $rp = $p
-        try { $rp.Kill(); $done += "relay pid $($rp.Id) stopped" } catch { $failed += "relay pid $($rp.Id) NOT stopped ($($_.Exception.Message))" }
+        # Kill() only REQUESTS termination; the process exits a moment later. Re-listing at once still showed the dying relays and told
+        # dom0 "relay still running ... the proxy is still up ... baseline is NOT restored" while it was restored - measured 2026-10-02
+        # on GWeck's environment (rz33/rz34 kill cells). Wait for the exit (the observable event, bounded so a relay that truly
+        # survives is still reported as such) before saying it stopped.
+        try {
+            $rp.Kill()
+            $exited = $null
+            try { $exited = $rp.WaitForExit(10000) } catch { $exited = $null }   # GUARD:relayexit
+            if ($null -eq $exited) {
+                # WaitForExit needs SYNCHRONIZE on the process, which this caller may lack for a SYSTEM relay it could still
+                # terminate (Jev review 2026-10-02) - then watch the pid disappear instead, which needs no rights. Rare path only.
+                $exited = $false
+                for ($i = 0; $i -lt 40 -and -not $exited; $i++) { $exited = -not (Get-Process -Id $rp.Id -EA SilentlyContinue); if (-not $exited) { Start-Sleep -Milliseconds 250 } }   # GUARD:relayexitpid
+            }
+            if ($exited) { $done += "relay pid $($rp.Id) stopped" }
+            else { $failed += "relay pid $($rp.Id) did not exit within 10 s of being killed" }
+        } catch { $failed += "relay pid $($rp.Id) NOT stopped ($($_.Exception.Message))" }
     }
     $left = @(Get-Process qubes-updates-relay -EA SilentlyContinue)
     if ($left.Count) { $failed += ('relay still running: pid ' + (@($left | ForEach-Object { $_.Id }) -join ', ') + ' - the proxy is still up') }

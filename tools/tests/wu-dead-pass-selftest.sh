@@ -39,7 +39,7 @@ fi
 bad=0
 "$PWSH" -NoProfile -File "$SUITE" >"$OUT/clean.out" 2>&1; rc=$?
 n=$(grep -c '^ok' "$OUT/clean.out"); f=$(grep -c '^FAIL' "$OUT/clean.out")
-if [ $rc -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -ge 34 ]; then say "PASS  clean: rc=0 ok=$n fail=0"
+if [ $rc -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -ge 35 ]; then say "PASS  clean: rc=0 ok=$n fail=0"
 else say "FAIL  clean: rc=$rc ok=$n fail=$f ($(grep -m1 -E '^FAIL' "$OUT/clean.out" || grep -m1 -iE 'exception|error' "$OUT/clean.out" | cut -c1-140))"; bad=1; fi
 
 "$PWSH" -NoProfile -File "$SUITE" -Defect 1 >"$OUT/defect-1.out" 2>&1; rc=$?
@@ -71,6 +71,9 @@ leg 3 'refused-held: a mutex-held refusal is no death - no DIED, no teardown; th
 leg 4 'holder-wait: waits while the updater lock is held and returns when it is gone (ok, after 3 ticks), telling dom0 once what it waits for' '^FAIL holder-wait'
 
 leg 5 "keep-cutoff: Start-RunTask keeps a non-terminal status (a cut-off pass's record the start gate reads) and still starts the task" '^FAIL keep-cutoff'
+
+leg 6 'killed: the leftovers line reports the relay stopped and the baseline restored' '^FAIL (killed: the leftovers line|killed-denied|contract: the DIED and leftovers)'   # no wait at all breaks both exit paths
+leg 7 'killed-denied: WaitForExit denied' '^FAIL killed-denied'
 
 say "--- outputs in $OUT"
 exit $bad
