@@ -722,4 +722,6 @@ captures that menu (menus' first content 156-547 ms on that route); Paint shows 
 slows menus 0.80, drop fully 0.93; the badges themselves would reach dom0 up to ~0.5 s after Alt 0.94. Before 4ffffbe each badge
 also took up to 6 cross-process card searches ~2 s apart that could never succeed.
 **Cost:** dom0 shows no access-key hints; the access keys still work (the guest app receives the keys).
-**Seen to pass:** owed (rz27/rz28 Paint Alt A/B: no card search for a badge, no false recreate).
+**Seen to pass (badge-drop-ab, 2026-10-02 11:24-11:29, interleaved, Paint focused by Alt taps, a fresh agent per arm):** rz27 34 and
+27 card-search lines per arm, rz28 (agent 4ffffbe) 0 and 0; badges still dropped, no false recreate on rz28. One rz27 arm recreated
+Paint once for its title-bar corner at an activation change - not a badge (occ=27 counted them) - the class section 32's question is about.
