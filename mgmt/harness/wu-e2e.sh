@@ -243,12 +243,24 @@ for r in $(seq 1 "$ROUNDS"); do
     log "round $r: the guest is left as it is - interrogate it, never restart it blind"
     fails=1; break
   fi
+  # A REFUSAL IS THE PRODUCT'S OWN REPORT TOO (2026-10-02, the owner's D3 decision). The updater refused to start - dom0 printed
+  # "update refused by the qube: ..." - before it owned anything, typically over a pass cut off in this boot (QWTUPDSTATEUNKNOWN), and
+  # requested a restart on that cut-off record. The record stays non-terminal ON PURPOSE, so the post-replay picture below would call
+  # the round DEAD - measured on rz34: the round was cut short there, the requested restart never performed, the next round never run.
+  # A refused round is not a pass (fails=1); it is judged REFUSED - no pass judge and no oscillation scan, no pass ran - and the
+  # restart it requested is honoured below, so the next round tests what comes after it.
+  refused=''
+  if grep -q 'update refused by the qube:' "$RD/replay.out"; then
+    refused=$(grep -m1 'update refused by the qube:' "$RD/replay.out" | sed 's/^ *err: //')
+    log "round $r: REFUSED by the qube (the product's own report): $(printf '%s' "$refused" | cut -c1-300)"
+    fails=1
+  fi
   # ...and a pass can also die with NO report: the replay ends (its own step bound, a handler that crashed) while the pass's last
   # picture is unfinished and its task no longer runs (Jev 2026-10-02, the second likeliest miss, 0.27). Nothing waits on the
   # pass once the replay has ended, so the picture is judged now, with no hold. A guest that does not answer is not judged here
   # (a pass that committed its reboot is legitimately going down).
   pl=$(wu_probe); printf '%s %s (after the replay)\n' "$(date -u +%H:%M:%S)" "${pl:-<no answer>}" >> "$RD/liveness.txt"
-  if wu_pass_unfinished "$pl"; then
+  if [ -z "$refused" ] && wu_pass_unfinished "$pl"; then
     log "round $r: PASS DEAD (found after the replay ended, with no report from the product): task/status $WU_LIVE_PIC"
     log "round $r: the guest is left as it is - interrogate it, never restart it blind"
     fails=1; break
@@ -277,7 +289,9 @@ for r in $(seq 1 "$ROUNDS"); do
 
   jargs=(--agent-log "$RD/agent.log" --json "$RD/verdict.json")
   case "$after" in ''|*[!0-9]*) : ;; *) jargs+=(--dom0-reported "$after") ;; esac
-  if python3 tools/wu-pass-judge.py "${jargs[@]}" > "$RD/judge.out" 2>&1; then
+  if [ -n "$refused" ]; then
+    log "round $r: JUDGE REFUSED (no pass ran - the refusal above is this round's outcome)"
+  elif python3 tools/wu-pass-judge.py "${jargs[@]}" > "$RD/judge.out" 2>&1; then
     log "round $r: JUDGE PASS"
   else
     log "round $r: JUDGE FAIL"; sed 's/^/    /' "$RD/judge.out" | head -12 | tee -a "$OUT/run.log"; fails=1
@@ -287,28 +301,32 @@ for r in $(seq 1 "$ROUNDS"); do
   # re-inflate the count. Measured 2026-09-20 - a pass drove dom0 to EMPTY and the following boot
   # scan reported 3 again, so the admin was told there was work when there was none. This is the
   # bar the reporter actually lives at, because a scan runs at every boot and on a timer.
-  log "round $r: oscillation check - running a SCAN-only pass, dom0 must not change"
-  dom0_before_scan="$after"
-  # Run the scan WITHOUT -Scheduled. The scheduled-scan debounce legitimately skips any -Scheduled
-  # scan whose previous completed pass is younger than 30 minutes, and it exits BEFORE logging - so
-  # firing the task here tests the debounce, not the scan, and leaves no trace either way.
-  # Measured 2026-09-20: the check waited 15 minutes for a scan that had correctly declined to run.
-  timeout -k 10 900 tools/qtest run 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\Qubes Tools\bin\qubes-windows-update.ps1" -Action scan -RelayExe "C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe"' >/dev/null 2>&1
-  _sc=$(( $(date +%s) + 900 )); scan_seen=0
-  while [ "$(date +%s)" -lt "$_sc" ]; do
-    sleep 30
-    st_now=$(guest_file 'C:\ProgramData\Qubes\update-status.json' | tr -d '\r')
-    case "$st_now" in *'"action"'*'scan'*) scan_seen=1; break;; esac
-  done
-  dom0_after_scan=$(dom0_avail)
-  if [ "$scan_seen" = 0 ]; then
-    log "round $r: FAIL - the scan never ran, so the oscillation check did not happen (missing data fails)"
-    fails=1
-  elif [ "${dom0_before_scan:-}" != "${dom0_after_scan:-}" ]; then
-    log "round $r: FAIL OSCILLATION - dom0 was '${dom0_before_scan:-<empty>}' after the pass and '${dom0_after_scan:-<empty>}' after the scan"
-    fails=1
+  if [ -n "$refused" ]; then
+    log "round $r: oscillation check skipped - no pass ran, so there is no report for a scan to contradict"
   else
-    log "round $r: oscillation OK - dom0 stayed '${dom0_after_scan:-<empty>}' across the pass and the scan"
+    log "round $r: oscillation check - running a SCAN-only pass, dom0 must not change"
+    dom0_before_scan="$after"
+    # Run the scan WITHOUT -Scheduled. The scheduled-scan debounce legitimately skips any -Scheduled
+    # scan whose previous completed pass is younger than 30 minutes, and it exits BEFORE logging - so
+    # firing the task here tests the debounce, not the scan, and leaves no trace either way.
+    # Measured 2026-09-20: the check waited 15 minutes for a scan that had correctly declined to run.
+    timeout -k 10 900 tools/qtest run 'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Program Files\Qubes Tools\bin\qubes-windows-update.ps1" -Action scan -RelayExe "C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe"' >/dev/null 2>&1
+    _sc=$(( $(date +%s) + 900 )); scan_seen=0
+    while [ "$(date +%s)" -lt "$_sc" ]; do
+      sleep 30
+      st_now=$(guest_file 'C:\ProgramData\Qubes\update-status.json' | tr -d '\r')
+      case "$st_now" in *'"action"'*'scan'*) scan_seen=1; break;; esac
+    done
+    dom0_after_scan=$(dom0_avail)
+    if [ "$scan_seen" = 0 ]; then
+      log "round $r: FAIL - the scan never ran, so the oscillation check did not happen (missing data fails)"
+      fails=1
+    elif [ "${dom0_before_scan:-}" != "${dom0_after_scan:-}" ]; then
+      log "round $r: FAIL OSCILLATION - dom0 was '${dom0_before_scan:-<empty>}' after the pass and '${dom0_after_scan:-<empty>}' after the scan"
+      fails=1
+    else
+      log "round $r: oscillation OK - dom0 stayed '${dom0_after_scan:-<empty>}' across the pass and the scan"
+    fi
   fi
 
   reboot_needed=$(python3 - "$RD/update-status.json" <<'PY' 2>/dev/null
