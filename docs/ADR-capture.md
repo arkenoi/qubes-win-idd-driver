@@ -725,3 +725,23 @@ also took up to 6 cross-process card searches ~2 s apart that could never succee
 **Seen to pass (badge-drop-ab, 2026-10-02 11:24-11:29, interleaved, Paint focused by Alt taps, a fresh agent per arm):** rz27 34 and
 27 card-search lines per arm, rz28 (agent 4ffffbe) 0 and 0; badges still dropped, no false recreate on rz28. One rz27 arm recreated
 Paint once for its title-bar corner at an activation change - not a badge (occ=27 counted them): a DWM-drawn part that WGC rightly does not deliver, the false-positive class of the damage-driven liveness pokes.
+
+## 32. Liveness from input and Windows' own events only; the damage-comparison detector goes — PROPOSED (Jev), 2026-10-02, owner decision pending
+
+**Proposed:** keep the event-driven reopen of a capture item Windows closes (QGAWGCITEMCLOSED); check liveness only when a key or a
+click is delivered to a window (input is a promise of change); one recreate, then DEAF. Remove the liveness pokes driven by desktop-
+duplication damage for WGC/relay slots and, with them, the filter stack built against their false positives (sections 21, 24, 26-30 for
+those slots; the PrintWindow route for menus keeps damage as its render trigger), and take the relay out of the deaf ladder (kept only as
+a capture route if a window class needs it).
+**Why:** owner 2026-10-02: "do we really need all this heavy machinery around?" and "so session capture fallback covers scenario that is
+valid ONLY if we already have a serious bug elsewhere?" - measured: on the target (retail 26300.9457) no acceptance chain (rz21, rz24,
+rz25, rz27) saw a genuinely silent session - 0 recreate checks found a real stop, 0 item closures, every QGAWGCDEAF came from the fault
+injection - while the detector produced dozens of false recreates (rz21 53, rz24 14, rz25 ~6, rz27 a few) and needed sections 21-30 in two
+days: it compares what changed on the composed screen with what changed in one window's capture, and those legitimately differ (other
+windows' pixels over it - badges, the relay's invisible window, neighbours' shadows - and DWM-drawn parts never in a capture - border,
+corners, backdrop, title-bar activation visuals). The two real stop classes were Windows defects on the 24H2 eval image 26100.1742 (a
+UWP frame's capture froze after 4 frames - solved by the capture route, section 12; a UWP app's first item closed at launch - covered
+by the event-driven reopen). Jev: the machinery is justified on the target 0.19; this option 0.84 (keep all 0.09, events only 0.07).
+**Cost (Jev 0.97):** if Windows' capture ever stops on a window that changes WITHOUT input (a video, an animation), that window stays
+frozen in dom0, unnoticed, until it is re-registered (a resize, an agent restart). The fact that would most change this: the stop rate
+over long real use on 26300 (0.65). Changes the approved design (DESIGN-rest-zero-capture E/G) and M7's deaf-ladder bar.
