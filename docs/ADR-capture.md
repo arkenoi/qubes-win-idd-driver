@@ -753,3 +753,9 @@ wording when the name fails redaction; once per application per boot, at most 8 
 WGC slots; `DeafNotifyUser`) and broker 7eb2bf43 (the relay leaves the deaf ladder, stays a capture route); first shipped in rz29
 (release agent b46db12f88efe256). Measured in rz29's acceptance so far: the activity cell had 0 pokes, 0 recreates, 0 DEAF on every
 window; the M7 phases cell had 0 recreates (bar 0). The ladder and the user notification are graded in the two fault-injection cells.
+**Cleanup done (2026-10-02, agent cda961d, first in rz30):** the code 9c709f5's gate left unreachable is removed - the owned-popup
+occluders (30), the desktop-band skip (26), the live-coverage walk and its previous-rect tracking (24/27), the 8 px edge skip (28),
+the learned-invisible regions and their recreate check (29), the pixel compare and the QGAPOKEWGC instrument, PwCollectOccludersEx's
+popup shadow margin (21). The PrintWindow route is unchanged (Jev 0.84; its own Route re-check kept verbatim). Measured on rz29 with
+the deaf cells' in-guest typing carried by a test-only FI knob (the owner declined a dom0 input service): both deaf cells PASS - one
+reopen, then DEAF and the dom0 notification - with the stated limit that the dom0 -> vchan key hop itself was not exercised.
