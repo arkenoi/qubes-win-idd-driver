@@ -302,13 +302,30 @@ static std::wstring FirstTexts(UserNotification const& un)
 //   *.Outlook / Calendar / reminder senders          (Snooze + interval selection)
 //   Microsoft.Windows.Explorer                       (the catch-all shell sender; also the
 //                                                     acceptance control for a real-choice toast)
+//   Windows.SystemToast.SecurityAndMaintenance       (UAC "Click to restart this computer": the click IS
+//                                                     the action - WINDOW_ONLY below, owner 2026-10-02)
 static const wchar_t* const DEFAULT_ALLOW[] = {
     L"Microsoft.ScreenSketch_8wekyb3d8bbwe!App",       // Snipping Tool: "screenshot saved" (open)
     L"Microsoft.WindowsCamera_8wekyb3d8bbwe!App",      // Camera: photo/video saved
     L"Microsoft.Windows.Photos_8wekyb3d8bbwe!App",     // Photos: import / edit complete
-    L"Windows.SystemToast.SecurityAndMaintenance",     // Security & Maintenance status (click-to-open)
     L"Windows.SystemToast.BackupReminder",             // "back up your files" status
 };
+
+// WINDOW-ONLY apps: never bridged, whatever the allowlist (compiled or NotifyBridgeAllow) or the per-toast classifier says.
+// Owner 2026-10-02: "UAC warning 'click to restart this computer' is actionable" - "we need to pump it through actionable
+// toast (o-r) way bypassing the bridge". The bridge's dom0 notifications carry no action (it sends none, and nothing here
+// would turn a dom0 click into the toast's activation), so a toast whose click IS its action has to stay the guest's own
+// banner, captured as an override-redirect window in dom0, where the click reaches the guest. The classifier cannot tell:
+// the UAC warning has no buttons, only a launch= target, which its table calls informational (row 6). Security and
+// Maintenance raises it, and its other toasts are action prompts too (turn something on, restart, fix something).
+static const wchar_t* const WINDOW_ONLY[] = {
+    L"Windows.SystemToast.SecurityAndMaintenance",
+};
+static bool WindowOnly(std::wstring const& aumid)
+{
+    for (const wchar_t* a : WINDOW_ONLY) if (_wcsicmp(a, aumid.c_str()) == 0) return true;
+    return false;
+}
 
 // Allowlist of AUMIDs whose toasts are bridged: REG_MULTI_SZ "NotifyBridgeAllow" under the
 // gui-agent's config key. If the value is set (non-empty) it is authoritative; if it is ABSENT
@@ -497,8 +514,17 @@ static void BannerRestoreAll(std::vector<std::wstring>* restoredAumids = nullptr
 // PutU32/PutU64/GetU32/GetU64: MOVED to qtb_shared.h (console split) - the same codec
 // frames both the dom0 notify wire below and the proxy pipe's QTS1 frames.
 
+// HOW LONG A FORWARDED NOTIFICATION STAYS (owner 2026-10-02: "current default timeout is too brief, consider increasing
+// (and errors should stay until dismissed)"). The stock proxy hands both fields to dom0's notification daemon unchanged
+// (qubes-notification-proxy lib.rs: only expire_timeout < -1 is refused; urgency becomes the freedesktop hint, no clamp).
+// A bridged toast stays 20 s instead of the daemon's default (Jev 0.56 over 15 s and 30 s). An ERROR - everything sent
+// through the one-shot --notify path: the agent's ACTION errors, the installer's and this bridge's own - is sent with
+// expire_timeout 0, which the freedesktop spec defines as "never expire", AND critical urgency, which daemons that ignore
+// expire_timeout (GNOME) also keep until dismissed.
+static const uint32_t kToastExpireMs = 20000;
+
 // Message { id: u64, Notification::V1 { ... } }, framed with a u32 LE length prefix.
-static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summary, std::string const& body)
+static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summary, std::string const& body, bool persistent)
 {
     std::vector<BYTE> m;
     PutU64(m, seq);             // Message.id (echoed as `sequence` in replies)
@@ -506,13 +532,14 @@ static std::vector<BYTE> EncodeNotifyFrame(uint64_t seq, std::string const& summ
     m.push_back(0);             // suppress_sound = false
     m.push_back(0);             // transient = false
     m.push_back(0);             // resident = false
-    m.push_back(0);             // urgency: Option None
+    if (persistent) { m.push_back(1); PutU32(m, 2); }   // urgency: Some(Critical) - variant index 2 (Low, Normal, Critical)
+    else m.push_back(0);                                 // urgency: Option None
     PutU32(m, 0);               // replaces_id: 0 = new notification
     PutU64(m, summary.size()); m.insert(m.end(), summary.begin(), summary.end());
     PutU64(m, body.size());    m.insert(m.end(), body.begin(), body.end());
     PutU64(m, 0);               // actions: count 0 (phase 2 adds ["default","Open"])
     m.push_back(0);             // category: Option None
-    PutU32(m, 0xFFFFFFFFu);     // expire_timeout: i32 -1 = server default
+    PutU32(m, persistent ? 0u : kToastExpireMs);   // expire_timeout ms: 0 = never expire (errors); else 20 s
     m.push_back(0);             // image: Option None
     std::vector<BYTE> f;
     PutU32(f, (uint32_t)m.size());
@@ -2370,7 +2397,7 @@ static uint64_t g_seq = 0;
 // so the Phase-3 deferred-map hold budget (design 3.3, the ~250 ms hypothesis) is sized from
 // measured dom0 latency, not guessed. QPC-based: GetTickCount64's ~16 ms grain would round a
 // fast ack down to 0.
-static bool ForwardText(std::wstring const& title, std::wstring const& body, uint32_t guestId)
+static bool ForwardText(std::wstring const& title, std::wstring const& body, uint32_t guestId, bool persistent = false)
 {
     if (g_connDead) return false;
     uint64_t seq = ++g_seq;
@@ -2388,7 +2415,7 @@ static bool ForwardText(std::wstring const& title, std::wstring const& body, uin
         while (g_corr.size() > 256) g_corr.erase(g_corr.begin());
     }
 
-    auto frame = EncodeNotifyFrame(seq, Utf8(title.empty() ? L"Notification" : title), Utf8(body));
+    auto frame = EncodeNotifyFrame(seq, Utf8(title.empty() ? L"Notification" : title), Utf8(body), persistent);
     g_awaitSeq = seq; g_awaitOk = 0; ResetEvent(g_ackEvt);
     if (!PipeXfer(FALSE, frame.data(), (DWORD)frame.size(), 15000)) { rtt(-1); MarkConnDead(); return false; }
     if (WaitForSingleObject(g_ackEvt, 15000) != WAIT_OBJECT_0)
@@ -2563,7 +2590,7 @@ static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body)
     g_ackEvt   = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!g_rdEvt || !g_wrEvt || !g_connStop || !g_ackEvt) return 3;
     if (!ConnUp()) { BLog(L"NOTIFY one-shot: no connection (policy refusal? no dom0 session?)"); return 3; }
-    bool ok = ForwardText(summary, body, 0);
+    bool ok = ForwardText(summary, body, 0, true);   // an error: stays until dismissed
     BLog(L"NOTIFY one-shot: sent ok=%d summary=%s", ok ? 1 : 0, summary.c_str());
     ConnDown();
     return ok ? 0 : 4;
@@ -3023,6 +3050,12 @@ static int BridgeMain()
                     // the CLASSIFY line lands asynchronously. Dedupes internally so a
                     // retried allowlisted toast logs exactly once.
                     ShadowClassify(un, id, aumid);
+                    if (WindowOnly(aumid))
+                    {
+                        seen.insert(id); VerdictForget(id);
+                        BLog(L"skip id=%u aumid=%s (window path; window-only app - its click is its action)", id, aumid.c_str());
+                        continue;
+                    }
                     bool listed = false;
                     for (auto const& a : allow) if (_wcsicmp(a.c_str(), aumid.c_str()) == 0) { listed = true; break; }
 #if defined(P3AQ_DEFECT_ROUTE)
