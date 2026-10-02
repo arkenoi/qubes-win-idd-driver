@@ -154,6 +154,47 @@ if ($Scheduled -and $Action -eq 'scan') {
 }
 # ---- WU-SCAN-DEBOUNCE-END
 
+# THE STATUS OBJECT AND Save COME BEFORE THE MUTEX. The ownership record below the mutex writes $script:St and calls Save;
+# until 2026-10-02 both were defined AFTER it, so owner_pid was never recorded (PropertyNotFound + CommandNotFound, swallowed
+# under ErrorActionPreference Continue, seen in a pass's own stderr on GWeck's environment) and the interrupted-pass gate could
+# not tell a running owner from a dead one. Nothing here does work: the previous status is already snapshotted (GUARD:prevstatus).
+# not_actionable is declared here so it always exists and always serialises: it is the DURABLE
+# record of what a previous pass proved the guest cannot action, and it has to survive a scan,
+# which writes an empty result. (GUARD:scanactioned / GUARD:prevstatus.)
+$script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; owner_pid_start=''; count=0; available=@();
+                         downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null;
+                         not_actionable=@(); satisfied=@() }
+# ---- WU-SAVE-ATOMIC-BEGIN
+# ATOMIC, AND NEVER FATAL. The Qube Manager handler TAILS this file while a pass writes it (that is
+# what the mutex comment above describes), and a plain Set-Content fails outright on the sharing
+# violation. Measured 2026-09-21 on win11de-fresh, round 2: the pass died with "Der Prozess kann
+# nicht auf die Datei C:\ProgramData\Qubes\update-status.json zugreifen, da sie von einem anderen
+# Prozess verwendet wird" AFTER it had already reported 3 to dom0 - so dom0 was left holding a
+# number the pass never stood behind, which is the untruth this whole file exists to prevent,
+# arriving by way of a file lock. The judge caught it as a CONTRADICTORY pass.
+#
+# Write a temp file and MOVE it into place: the reader then sees either the old file or the new
+# one, never a half-written one. Retry briefly, and if it still cannot land, LOG and carry on - a
+# status write must never be able to kill the install it is reporting on. (# GUARD:saveatomic)
+function Save {
+    $script:St.ts = (Get-Date).ToString('s')
+    $json = ($script:St | ConvertTo-Json -Depth 6)
+    $tmp  = "$StatusFile.tmp"
+    $err  = $null
+    for ($i = 0; $i -lt 10; $i++) {
+        try {
+            Set-Content -LiteralPath $tmp -Value $json -Encoding UTF8 -EA Stop
+            Move-Item -LiteralPath $tmp -Destination $StatusFile -Force -EA Stop
+            return
+        } catch {
+            $err = $_
+            Start-Sleep -Milliseconds 150
+        }
+    }
+    try { Log ("WARNING: could not update the status file after 10 attempts (" + $err.Exception.Message + ") - continuing") } catch {}
+}
+# ---- WU-SAVE-ATOMIC-END
+
 # ---- WU-MUTEX-DEFINED-BEGIN
 # NO UNDEFINED PATH AROUND THIS MUTEX. Three things were undefined before, and all three are here:
 #
@@ -263,42 +304,6 @@ $OsArch  = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64'
 $IS='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
 $POL='HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
 
-# not_actionable is declared here so it always exists and always serialises: it is the DURABLE
-# record of what a previous pass proved the guest cannot action, and it has to survive a scan,
-# which writes an empty result. (GUARD:scanactioned / GUARD:prevstatus.)
-$script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; owner_pid_start=''; count=0; available=@();
-                         downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null;
-                         not_actionable=@(); satisfied=@() }
-# ---- WU-SAVE-ATOMIC-BEGIN
-# ATOMIC, AND NEVER FATAL. The Qube Manager handler TAILS this file while a pass writes it (that is
-# what the mutex comment above describes), and a plain Set-Content fails outright on the sharing
-# violation. Measured 2026-09-21 on win11de-fresh, round 2: the pass died with "Der Prozess kann
-# nicht auf die Datei C:\ProgramData\Qubes\update-status.json zugreifen, da sie von einem anderen
-# Prozess verwendet wird" AFTER it had already reported 3 to dom0 - so dom0 was left holding a
-# number the pass never stood behind, which is the untruth this whole file exists to prevent,
-# arriving by way of a file lock. The judge caught it as a CONTRADICTORY pass.
-#
-# Write a temp file and MOVE it into place: the reader then sees either the old file or the new
-# one, never a half-written one. Retry briefly, and if it still cannot land, LOG and carry on - a
-# status write must never be able to kill the install it is reporting on. (# GUARD:saveatomic)
-function Save {
-    $script:St.ts = (Get-Date).ToString('s')
-    $json = ($script:St | ConvertTo-Json -Depth 6)
-    $tmp  = "$StatusFile.tmp"
-    $err  = $null
-    for ($i = 0; $i -lt 10; $i++) {
-        try {
-            Set-Content -LiteralPath $tmp -Value $json -Encoding UTF8 -EA Stop
-            Move-Item -LiteralPath $tmp -Destination $StatusFile -Force -EA Stop
-            return
-        } catch {
-            $err = $_
-            Start-Sleep -Milliseconds 150
-        }
-    }
-    try { Log ("WARNING: could not update the status file after 10 attempts (" + $err.Exception.Message + ") - continuing") } catch {}
-}
-# ---- WU-SAVE-ATOMIC-END
 
 # A pass FINISHED. Distinct from Save, which also runs on every progress tick - `ts` therefore
 # means "last activity" and cannot answer "when did a pass last complete". The scheduled-scan
@@ -2077,17 +2082,17 @@ try {
   # already Saved over it, so the read returns our own empty result and excludes nothing.
   $priorInfo = @()
   try {
-    $prevStatus = $script:PrevStatus
-    if ($prevStatus -and $prevStatus.result) {
-      $priorInfo = @($prevStatus.result | Where-Object { $_.severity -eq 'info' } |
+    $prevSnap = $script:PrevStatus
+    if ($prevSnap -and $prevSnap.result) {
+      $priorInfo = @($prevSnap.result | Where-Object { $_.severity -eq 'info' } |
                      ForEach-Object { $_.kb; if($_.PSObject -and (Test-RowKey $_ 'title')){ $_.title } } |
                      Where-Object { $_ })
     }
     # DURABLE. A scan writes its own status with an EMPTY result, so knowledge taken only from
     # result rows survives exactly ONE scan - and scans run at every boot and on a timer, so the
     # steady state would re-inflate anyway. Carry the classification forward in its own field.
-    if ($prevStatus -and (Test-RowKey $prevStatus 'not_actionable')) {
-      $priorInfo = @(@($priorInfo) + @($prevStatus.not_actionable) | Where-Object { $_ } | Sort-Object -Unique)
+    if ($prevSnap -and (Test-RowKey $prevSnap 'not_actionable')) {
+      $priorInfo = @(@($priorInfo) + @($prevSnap.not_actionable) | Where-Object { $_ } | Sort-Object -Unique)
     }
   } catch { $priorInfo = @() }
   $script:St.not_actionable = @($priorInfo)
@@ -2648,6 +2653,7 @@ try {
   $script:St.phase='done'; Complete-Pass
   Log 'done'
 } catch {
+# ---- WU-MAIN-CATCH-BEGIN   (tools/tests/wu-catch-scope-test.ps1 runs this region at SCRIPT scope)
   $script:St.phase='error'; $script:St.error="$($_.Exception.Message)"; Save
   Log "ERROR: $($script:St.error)"
   # WHERE it threw, not just what it said. Measured 2026-09-21: an install pass died with
@@ -2658,8 +2664,12 @@ try {
   try {
     $ii = $_.InvocationInfo
     if ($ii) { Log ("ERROR-SITE line $($ii.ScriptLineNumber): " + (("$($ii.Line)" -replace '\s+',' ').Trim())) }
-    $st = "$($_.ScriptStackTrace)"
-    if ($st) { foreach($l in ($st -split "`n" | Select-Object -First 4)) { Log ("ERROR-STACK " + $l.Trim()) } }
+    # NOT $st: PowerShell names are case-insensitive, and at script scope $st IS $script:St, the status object. Measured 2026-10-02
+    # on GWeck's environment: this line (e6037f5d, 09-21 23:11) turned the status into a string, so the 0x8024402C remedy one hour
+    # older (f81aae77) died on its first $script:St.error assignment - no restart requested, no reason given to dom0, in every
+    # release since. tools/tests/wu-catch-scope-selftest.sh runs this catch at script scope and fails if it comes back.
+    $stackText = "$($_.ScriptStackTrace)"
+    if ($stackText) { foreach($l in ($stackText -split "`n" | Select-Object -First 4)) { Log ("ERROR-STACK " + $l.Trim()) } }
   } catch { }
   $msg = "$($_.Exception.Message)"
   $probeResult = if ($msg -match '8024402C') { Test-ProxyServesWu } else { '' }
@@ -2733,6 +2743,7 @@ try {
     Log $script:St.error
   }
 # ---- WU-DIAGNOSE-REASON-END
+# ---- WU-MAIN-CATCH-END
 } finally {
   # Re-arm autologon on ANY exit path that staged a reboot - INCLUDING a throw AFTER staging (e.g.
   # Resolve-Catalog/Fetch failing once a package was already applied rc=3010). Previously this ran
