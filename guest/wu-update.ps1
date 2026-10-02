@@ -384,6 +384,8 @@ while ((Get-Date) -lt $deadline) {
         exit 1
     }
     if (-not $cur) { continue }
+    # A cut-off earlier pass this one proceeded past (qubes-windows-update.ps1 WU-PREVPASS-GATE) - dom0 is told, once.
+    if ($st.recovered) { Msg ("note: " + $st.recovered) }
     # Announce WHICH updates as soon as the scan knows, independent of phase: the tail polls
     # every 3 s and a short-lived phase can pass between two polls unseen. Msg de-duplicates.
     if ([int]$st.count -gt 0 -and $st.available) {

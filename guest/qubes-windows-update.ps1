@@ -162,7 +162,7 @@ if ($Scheduled -and $Action -eq 'scan') {
 # record of what a previous pass proved the guest cannot action, and it has to survive a scan,
 # which writes an empty result. (GUARD:scanactioned / GUARD:prevstatus.)
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; owner_pid_start=''; count=0; available=@();
-                         downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null;
+                         downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null; recovered='';
                          not_actionable=@(); satisfied=@() }
 # ---- WU-SAVE-ATOMIC-BEGIN
 # ATOMIC, AND NEVER FATAL. The Qube Manager handler TAILS this file while a pass writes it (that is
@@ -259,6 +259,19 @@ function Write-Refusal([string]$reason, [string]$message) {
     } catch { Write-Host "QWTUPDREFUSALUNRECORDED: $($_.Exception.Message)" }
 }
 
+# ---- WU-PREVPASS-GATE-BEGIN   (tools/tests/wu-prevpass-gate-test.ps1 runs this region)
+# AN EARLIER PASS THAT WAS CUT OFF (owner's decision 2026-10-02, D3). A status left at a non-terminal phase whose owner process is gone
+# means a pass was cut off partway - its scheduler time limit, a shutdown or a crash mid-pass. Until 2026-10-02 every later pass
+# refused that forever: only a completed pass rewrites the status, and the refusal itself prevented one. Now:
+#   * a cut-off SCAN never blocks. A scan only searches; it installs nothing, so nothing is unknown. Measured: the scheduled scan's own
+#     PT20M limit cuts off the first scan after a servicing apply on GWeck's template (>25 and >66 min, 2026-09-17);
+#   * a pass cut off before this qube's last restart proceeds. Windows completes or rolls back pending servicing during boot, so after
+#     a restart that work is settled;
+#   * a pass cut off in THIS boot refuses once and requests one restart (reboot_needed, the existing channel - ADR section 8 - on the
+#     cut-off pass's own record, which stays non-terminal): its servicing may still be running (TiWorker carries on after our process
+#     dies), and a new pass could land on a half-applied install. A second attempt in this boot refuses the same way; the first pass
+#     after the restart proceeds.
+# Both proceeding cases say so - in the agent log and to dom0 (status field 'recovered', rendered by guest/wu-update.ps1).
 $wuPrev = $null
 try { if (Test-Path -LiteralPath $StatusFile) { $wuPrev = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json } } catch { $wuPrev = $null }
 if ($wuPrev -and $wuPrev.phase -and ($WU_TERMINAL_PHASES -notcontains $wuPrev.phase)) {
@@ -266,16 +279,50 @@ if ($wuPrev -and $wuPrev.phase -and ($WU_TERMINAL_PHASES -notcontains $wuPrev.ph
     if ($wuPrev.PSObject.Properties.Name -contains 'owner_pid')       { $prevPid   = [int]$wuPrev.owner_pid }
     if ($wuPrev.PSObject.Properties.Name -contains 'owner_pid_start') { $prevStart = "$($wuPrev.owner_pid_start)" }
     if (-not (Test-WuOwnerAlive $prevPid $prevStart)) {
-        $m = ("QWTUPDSTATEUNKNOWN: the last update pass ('$($wuPrev.action)') stopped at phase " +
-              "'$($wuPrev.phase)' and its process ($prevPid) is gone - it was terminated partway, so what it " +
-              "was doing is unknown; refusing to start a $Action on top of it, nothing was changed. " +
-              "Read $StatusFile and the agent log, then let a full pass run to completion (it rewrites " +
-              "this state) or re-run once you know the guest is consistent.")
-        Write-Refusal 'state-unknown' $m
-        exit 1
+        $prevAction = "$($wuPrev.action)"; $prevPhase = "$($wuPrev.phase)"
+        $prevTs = "$($wuPrev.ts)"; if ($wuPrev.ts -is [datetime]) { $prevTs = $wuPrev.ts.ToString('s') }
+        $what = "the previous update pass ('$prevAction', last written $prevTs) was cut off at phase '$prevPhase' (its process $prevPid is gone)"
+        # When did it last write? Before this boot means it ended with an earlier boot - no process survives a restart.
+        $bootT = $null
+        try { $bootT = (Get-CimInstance Win32_OperatingSystem -EA Stop).LastBootUpTime } catch { $bootT = $null }
+        if (-not $bootT) { try { $bootT = (Get-Date).AddMilliseconds(-[double]([Environment]::TickCount -band [int]::MaxValue)) } catch { } }
+        $bootS = ''; if ($bootT) { $bootS = $bootT.ToString('s') }
+        # The boot a refusal below was made in. A DIFFERENT boot now means the requested restart has happened - the answer even when
+        # the cut-off pass's own timing cannot be read (without it that case would refuse in every boot: the dead end this removes).
+        $refusedBoot = ''
+        if ($wuPrev.PSObject.Properties.Name -contains 'refused_boot') {
+            # pwsh 7's ConvertFrom-Json hands an ISO string back as a DateTime; Windows PowerShell 5.1 leaves it a string - compare both as 's'
+            if ($wuPrev.refused_boot -is [datetime]) { $refusedBoot = $wuPrev.refused_boot.ToString('s') } else { $refusedBoot = "$($wuPrev.refused_boot)" }
+        }
+        $lastT = [datetime]::MinValue
+        $lastKnown = [datetime]::TryParseExact($prevTs, 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture,
+                                               [Globalization.DateTimeStyles]::None, [ref]$lastT)
+        if ($prevAction -eq 'scan') {   # GUARD:prevscan
+            $script:St.recovered = "$what - a scan installs nothing, so nothing is unknown; continuing"
+        } elseif ($bootT -and $lastKnown -and $lastT -lt $bootT) {   # GUARD:prevboot
+            $script:St.recovered = ("$what before this qube's last restart ($bootS) - Windows completes or rolls " +
+                                    'back pending servicing during boot, so that work is settled; continuing')
+        } elseif ($refusedBoot -and $bootS -and $refusedBoot -ne $bootS) {   # GUARD:refusedboot
+            $script:St.recovered = ("$what; a pass refused it in an earlier boot ($refusedBoot) and requested a restart, which has " +
+                                    "happened ($bootS) - Windows has settled that servicing during boot; continuing")
+        } else {
+            # In THIS boot - or its timing cannot be read, which is treated the same way: one restart settles it either way.
+            $m = ("QWTUPDSTATEUNKNOWN: $what in THIS boot - its Windows servicing may still be running; refusing to start a $Action " +
+                  'on top of it, nothing was changed. Restart this qube once, then update again (a restart has been requested).')
+            try {
+                if ($wuPrev.PSObject.Properties.Name -contains 'reboot_needed') { $wuPrev.reboot_needed = $true }
+                else { $wuPrev | Add-Member -NotePropertyName reboot_needed -NotePropertyValue $true }
+                if ($bootS -and -not $refusedBoot) { $wuPrev | Add-Member -NotePropertyName refused_boot -NotePropertyValue $bootS -Force }
+                ($wuPrev | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath "$StatusFile.tmp" -Encoding UTF8
+                Move-Item -LiteralPath "$StatusFile.tmp" -Destination $StatusFile -Force
+            } catch { $m += " (The restart request could not be recorded: $($_.Exception.Message) - restart it yourself.)" }
+            Write-Refusal 'state-unknown' $m
+            exit 1   # GUARD:thisboot
+        }
     }
     # owner alive = a pass really is running; that is ordinary contention and the mutex below says so.
 }
+# ---- WU-PREVPASS-GATE-END
 
 $script:Mutex = New-Object System.Threading.Mutex($false, 'Global\QubesWindowsUpdate')
 $script:HaveMutex = $false
@@ -359,6 +406,8 @@ function Log($m){
   Write-Host $line
   try { Add-Content -LiteralPath (Join-Path $WorkDir 'agent.log') -Value $line -EA SilentlyContinue } catch {}
 }
+# The start gate (WU-PREVPASS-GATE) ran before Log existed; what it decided about a cut-off earlier pass goes on the record here.
+if ($script:St.recovered) { Log ("PREVPASS " + $script:St.recovered) }
 function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-Null}; New-ItemProperty -Path $p -Name $n -Value $v -PropertyType $t -Force|Out-Null }
 
 # The proxy is up ONLY for the duration of a pass. Leaving the system-wide WinHTTP proxy set
