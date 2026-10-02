@@ -674,3 +674,29 @@ its maximize glyph at an activation change and a 10x12 px toolbar spot; the deaf
 threshold could do this (Jev: measure first 0.68, learn 0.92; deaf-safe 0.95). A deafened session never delivers a first frame,
 so the ladder learns nothing. Cost (Jev 0.90, bounded): a small region learned from a poke that was false for another reason
 stops hinting liveness there. **Seen to pass:** owed (rz25 acceptance).
+
+**AMENDED 2026-10-02 - THE PREMISE IS RETRACTED; the mechanism stays as a bounded safety net (Jev 0.79 over revert 0.21).** None of
+the regions this section was built on is a WGC-invisible part of the window. Every one examined - Paint's "maximize glyph"
+(4560,276)-(4573,288), its 10x12 "toolbar spot" (940,349)-(950,361), (636,361)-(649,373) and Calculator's 6x12 spot - lies inside an
+Alt-nav key-tip badge: another window (Xaml_WindowedPopupClass / PopupWindowSiteBridge, owned by the app) that the harness's Alt-tap
+focus summons and the agent drops untracked, so its pixels were poked as the app's own change (section 30). Learning hid that
+defect at each badge's position for one agent lifetime and cost one false recreate per position first. Also fixed (agent 042d76d):
+the check compared the region of the LAST poke, and Calculator's recreated session drew a whole-window damage 8-12 ms after the
+report on rz24 and rz25, which replaced the 6x12 px region that went unanswered - now the union of the unanswered pokes, frozen at
+the report, and never on a same-id re-copy (Jev x3: defect none 0.78). Seen on rz25: three learnings, each a badge.
+
+## 30. A window's own untracked popups occlude its liveness damage - the Alt key-tip badges — ACCEPTED (Jev), 2026-10-02
+
+**Decided:** both occluder stages of the liveness poke count a WS_POPUP window OWNED by the poked window (GW_OWNER), visible, not
+minimized, not cloaked, neither click-through nor layered, at its live DWM bounds + 4 px, whether the agent tracks it or not:
+stage 1 (the visible-region signature and the covered-damage test) when the z-order capture is valid and the tracked set fit,
+stage 2 (the live re-check, section 24) always. The PrintWindow render-trigger path is unchanged. Agent 5d3ab77 (rz27).
+**Why:** an Alt tap in a XAML app (the harness focuses that way; so can a user) shows access-key badges, ~35-48 x 46 px, owned by
+the app; the agent drops them as sub-floor popups without a synthesis owner, and both stages counted only tracked windows. Measured
+(calc-popup-2, rz25, a fresh agent per arm): focus by an Alt tap - Calculator 2/2 arms recreated, Paint 3 recreates; focus with no
+key - 0/2 and 0; the debug log names each badge "sub-floor popup ... dropping silently"; Paint kept 27 badges on screen for 6+
+minutes. The M7 phases cell's uncounted Calculator recreate on rz24 and rz25 was one (Jev: root cause 0.99; this fix 0.78 over
+remembering the dropped handles 0.18). **Cost:** damage wholly inside a badge (+4 px), and the pass in which one appears or
+vanishes, loses its liveness hint while the badge stands - including the app's own change behind a badge's transparent margin;
+the poke is only a hint, WGC still delivers. Not covered: no valid z-order capture leaves stage 1 as it was (a limitation, Jev
+0.64 commit-and-measure). **Seen to pass:** owed (rz27 A/B: the badge pokes withheld, no recreate).
