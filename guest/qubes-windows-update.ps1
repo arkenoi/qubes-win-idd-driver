@@ -221,7 +221,12 @@ function Save {
 # leaves no record - but no work has been done in that window, so there is nothing unknown to
 # inherit. A killed DEPLOY is likewise not recorded here; its work (compile-and-swap, schtasks /f)
 # is redone wholesale by the next deploy.
-$WU_TERMINAL_PHASES = @('done','error','skipped-unknown','skipped-standalone','skipped-appvm')
+# 'diagnosing' counts as finished HERE (and only here): it is the main catch's state between the failure and the measured reason
+# (WU-MAIN-CATCH). The pass has already failed and its error is on record; what it still does - a proxy probe, the restart-request
+# stamp - changes no update state, so a pass killed in it leaves nothing unknown to inherit. dom0's handler still treats it as
+# NOT terminal and waits for the final error (guest/wu-update.ps1 Test-TerminalPhase). Jev review 2026-10-02: without this, a kill in
+# that ~3 s window would make every later pass refuse.
+$WU_TERMINAL_PHASES = @('done','error','diagnosing','skipped-unknown','skipped-standalone','skipped-appvm')
 
 function Test-WuOwnerAlive([int]$ownerPid, [string]$ownerStart) {
     if ($ownerPid -le 0) { return $false }
@@ -2654,7 +2659,14 @@ try {
   Log 'done'
 } catch {
 # ---- WU-MAIN-CATCH-BEGIN   (tools/tests/wu-catch-scope-test.ps1 runs this region at SCRIPT scope)
-  $script:St.phase='error'; $script:St.error="$($_.Exception.Message)"; Save
+  # NOT 'error' YET. guest/wu-update.ps1 - dom0's view of this pass - polls this status every 3 s and renders the FIRST terminal
+  # phase it reads. Publishing phase=error here with the bare exception, and the measured reason ~3 s later (after the proxy probe
+  # below), let dom0 print the bare text: measured 2026-10-02 on GWeck's environment (rz31), dom0 got "update failed: Ausnahme von
+  # HRESULT: 0x8024402C" while this status ended with the reason and the restart request. 'diagnosing' is not terminal, so the handler
+  # keeps waiting; a pass that dies in it is still caught by the handler's dead-pass guard. The raw message is saved now so that a
+  # failure inside the diagnosis cannot lose it; the terminal phase is published once, at the end of this region.
+  $script:St.phase='diagnosing'; $script:St.error="$($_.Exception.Message)"; Save
+  try {   # ...finally below: the terminal phase is published exactly once, whatever the diagnosis (or its logging) does
   Log "ERROR: $($script:St.error)"
   # WHERE it threw, not just what it said. Measured 2026-09-21: an install pass died with
   # "Dieser Vorgang wird fuer einen relativen URI nicht unterstuetzt" and the log named no line,
@@ -2743,6 +2755,10 @@ try {
     Log $script:St.error
   }
 # ---- WU-DIAGNOSE-REASON-END
+  } finally {
+    # The ONE terminal publication: the error is final now (the raw message, or the measured reason that replaced it).
+    $script:St.phase='error'; Save
+  }
 # ---- WU-MAIN-CATCH-END
 } finally {
   # Re-arm autologon on ANY exit path that staged a reboot - INCLUDING a throw AFTER staging (e.g.
