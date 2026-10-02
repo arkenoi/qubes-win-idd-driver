@@ -443,7 +443,9 @@ static HWND RelayOpenDest(HWND src, HTHUMBNAIL* outThumb, int* outW, int* outH)
 // first descent the agent has registered windows with this broker, so it has validated it.
 static int g_relayProbe = -1;   // -1 not measured yet, 0 refused, 1 capturable
 static bool RelayDestCapturable();
-static bool RelayUsable() {
+// UNUSED since ADR-capture 32 (the relay left the deaf ladder, its only caller); kept, not deleted, in the same change -
+// removing the probe also removes what publishes RelayCapable=2, which the agent and the harness read.
+[[maybe_unused]] static bool RelayUsable() {
     if (!g_RelayOn) return false;
     if (g_relayProbe < 0) {
         g_relayProbe = RelayDestCapturable() ? 1 : 0;
@@ -1674,9 +1676,13 @@ static void Reconcile() {
             // rung that reopens, and only if that open did not itself end in the deaf hold (OpenChannel declares DEAF when a
             // ladder open fails). It used to move before the ladder decided, and a deaf rung (no new session) was then
             // reported as a recreate that never happened, next to its QGAWGCDEAF (rest-zero M7 deaf cell, 2026-10-01).
+            // ADR-capture 32 (owner 2026-10-02): THE RELAY IS NO LONGER A RUNG OF THIS LADDER. A plain WGC channel that stays
+            // quiet gets ONE fresh session (a session that delivered gets one on every quiet episode); a fresh session that
+            // delivers nothing is DEAF, which the agent now reports to the user. The relay's invisible destination sits over
+            // other windows and its recompositions got a neighbour falsely recreated (rz27 FI cell); the relay remains a
+            // CAPTURE ROUTE for a window opened on it (cross-process content), with its own re-open below.
             bool reopened = true;
             if (wasPlainWgc && (!g_wgcReopened[i] || delivered)) { g_wgcReopened[i] = true; g_forcePw[i] = false; OpenChannel(i); }
-            else if (wasPlainWgc && RelayUsable())     { g_forcePw[i] = true; OpenChannel(i); }   // the relay, or deaf
             else if (wasRelay && (!g_relayReopened[i] || delivered)) { g_relayReopened[i] = true; g_forcePw[i] = true; OpenChannel(i); }
             else                                       { reopened = false; DeclareDeaf(i); }
             if (reopened && !g_deafHold[i]) g_slots[i].QuietReroutes++;   // an open that itself ended DEAF recreated nothing
