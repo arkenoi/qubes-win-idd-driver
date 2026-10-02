@@ -21,7 +21,7 @@
 # from the caller is executed or interpolated into a shell command.
 #
 # Usage:  sudo ./13-install-wedge-forensics-service.sh <dev-qube> [vm ...]
-#   e.g.  sudo ./13-install-wedge-forensics-service.sh win-idd-mgmt win-idd-test win10-clean
+#   e.g.  sudo ./13-install-wedge-forensics-service.sh win-idd-mgmt      (tag-gated; names would NARROW it)
 # Remove: sudo rm /etc/qubes-rpc/local.WinWedgeForensics
 #         and delete the line from /etc/qubes/policy.d/29-win-idd-testbed.policy
 set -euo pipefail
@@ -29,7 +29,10 @@ set -euo pipefail
 DEV="${1:?usage: $0 <dev-qube> [vm ...]}"
 shift || true
 VMS=("$@")
-[ ${#VMS[@]} -eq 0 ] && VMS=(win-idd-test win10-clean win10-e2e win11-idd-test win11-fresh)
+# NO default names (changed 2026-10-02). The default used to be five legacy qube names, and the gate
+# below admitted a name from that list even WITHOUT the tag - the opposite of what the posture note
+# above promises. Every test guest carries the tag, so the default is now the tag alone, exactly as
+# local.WinWedgeCore (dom0/17) has always been; names you pass are enforced IN ADDITION to the tag.
 
 SVC=/etc/qubes-rpc/local.WinWedgeForensics
 KIT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -49,7 +52,7 @@ dom0 must pull BOTH files. In dom0:
   for f in 11-wedge-forensics.sh 13-install-wedge-forensics-service.sh; do
       qvm-run --pass-io $DEV "cat /home/user/qubes-win-idd-driver/dom0/\$f" > "\$f"
   done
-  sudo bash 13-install-wedge-forensics-service.sh $DEV win-idd-test win10-clean win10-e2e
+  sudo bash 13-install-wedge-forensics-service.sh $DEV
 
 (or point this script at the file with FORENSICS=/path/to/11-wedge-forensics.sh)
 EOM
@@ -59,21 +62,21 @@ install -m 0755 "$SRC_FORENSICS" /usr/local/sbin/win-wedge-forensics.sh
 
 cat > "$SVC" <<EOF
 #!/bin/bash
-# qubes-win-idd: capture wedge forensics for one allowlisted VM, return a tar on stdout.
+# qubes-win-idd: capture wedge forensics for one tagged VM, return a tar on stdout.
 # Installed by dom0/13-install-wedge-forensics-service.sh. Argument = VM name.
 set -u
-ALLOWED="${VMS[*]}"
-# Tag gate first: any qube tagged win-idd-testbed is admissible, matching the qrexec policy.
+ALLOWED="${VMS[*]:-}"
 VM="\${QREXEC_SERVICE_ARGUMENT:-}"
-if qvm-tags "\$VM" list 2>/dev/null | grep -qx win-idd-testbed; then
-    :   # tagged testbed qube - admissible
-elif [ -z "\$ALLOWED" ]; then
+# The tag is REQUIRED (the same gate the qrexec policy uses); an explicit name list, if one was
+# given at install time, narrows it further and never widens it.
+if ! qvm-tags "\$VM" list 2>/dev/null | grep -qx win-idd-testbed; then
     echo "refused: '\$VM' lacks the win-idd-testbed tag" >&2; exit 1
-else
-case " \$ALLOWED " in
-    *" \$VM "*) ;;
-    *) echo "refused: '\$VM' lacks the win-idd-testbed tag and is not in the explicit allowlist" >&2; exit 1 ;;
-esac
+fi
+if [ -n "\$ALLOWED" ]; then
+    case " \$ALLOWED " in
+        *" \$VM "*) ;;
+        *) echo "refused: '\$VM' is tagged but not in the explicit allowlist" >&2; exit 1 ;;
+    esac
 fi
 # Refuse anything that is not a plain VM name, belt and braces.
 case "\$VM" in
@@ -83,18 +86,29 @@ esac
 OUT=\$(mktemp -d /var/tmp/wedge-XXXXXX)
 # --nmi is deliberately NOT reachable from the caller: it bugchecks the guest.
 VM="\$VM" /usr/local/sbin/win-wedge-forensics.sh > "\$OUT/capture.log" 2>&1 || true
-# 11-wedge-forensics.sh writes to ~/wedge-<ts>/; collect the newest one.
-# 11-wedge-forensics.sh writes to the INVOKING USER's home. Under qrexec the service runs
-# as root, so ~ is /root while a hand-run capture lands in /home/<dom0-user>. Looking only
-# at ~ returned an empty tar on the first real capture (2026-08-06) even though the run
-# succeeded - search both.
-NEWEST=\$(ls -1dt /home/*/wedge-* /root/wedge-* 2>/dev/null | head -1)
-[ -n "\$NEWEST" ] && cp -r "\$NEWEST"/. "\$OUT/" 2>/dev/null
+# Collect EXACTLY the directory this run reported on its first line ("capturing to <dir>"; under
+# qrexec the service runs as root, so that is /root/wedge-<ts>). This used to collect the NEWEST
+# /home/*/wedge-* or /root/wedge-* entry - but 11 also writes <dir>.tar.gz AFTER the directory, so
+# the newest entry was that archive, copying it as a directory failed silently, and every tar this service
+# returned held capture.log alone (shown on a stubbed dom0, 2026-10-02). That stayed hidden while 11
+# defaulted DEV and copied its own archive to the dev qube; since 8a961ba1 the service leaves DEV
+# unset and this tar is the ONLY route back - and tools/wedge-guard looks in it for the SPIN marker
+# that starts the core fetch. A run that reported no directory returns capture.log plus a
+# COLLECT-FAILED note - never an older capture passed off as this one.
+DIR=\$(sed -n 's/^capturing to //p' "\$OUT/capture.log" | head -1)
+case "\${DIR##*/}" in wedge-[0-9]*) ;; *) DIR="" ;; esac
+if [ -n "\$DIR" ] && [ -d "\$DIR" ]; then
+    cp -r "\$DIR"/. "\$OUT/" 2>"\$OUT/collect.err" \\
+        || echo "collect FAILED from \$DIR (see collect.err)" > "\$OUT/COLLECT-FAILED.txt"
+    [ -s "\$OUT/collect.err" ] || rm -f "\$OUT/collect.err"
+else
+    echo "the capture reported no directory - see capture.log" > "\$OUT/COLLECT-FAILED.txt"
+fi
 tar -C "\$OUT" -cf - . 2>/dev/null
 rm -rf "\$OUT"
 EOF
 chmod 0755 "$SVC"
-echo "installed $SVC (allowlist: ${VMS[*]})"
+echo "installed $SVC (admits: tagged win-idd-testbed${VMS[*]:+, and only: ${VMS[*]}})"
 
 if [ ! -f "$POLICY" ] || ! grep -q 'local.WinWedgeForensics' "$POLICY" 2>/dev/null; then
     printf 'local.WinWedgeForensics * %s dom0 allow\n' "$DEV" >> "$POLICY"
@@ -104,4 +118,4 @@ else
 fi
 
 echo
-echo "Verify from $DEV:  tools/qtest wedge win-idd-test"
+echo "Verify from $DEV:  QTEST_VM=<a running tagged guest> tools/qtest wedge <out-dir>   (the tar must hold vmcs-d<domid>.txt, not capture.log alone)"
