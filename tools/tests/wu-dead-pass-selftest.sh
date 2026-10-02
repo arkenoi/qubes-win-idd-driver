@@ -25,7 +25,9 @@ if [ ! -x "$PWSH" ]; then say "FAIL  pwsh not found at $PWSH - nothing ran"; exi
 # The check the knob must break, and the check-name prefixes its failures are allowed to carry: with
 # the verdict disabled every killed-pass scenario polls to the sentinel, and nothing else may move.
 TARGET='killed: Running+scan then Ready+0x41306 with the status unchanged -> DIED with 0x41306 and exit 1'
-ALLOWED='^FAIL (killed|nostatus|foreign|contract)'   # contract asserts the DIED line's shape, so it fails with it
+ALLOWED='^FAIL (killed|nostatus|foreign|contract|refused-held|refused-unknown|live-holder|died-error)'   # contract asserts the DIED
+# line's shape, so it fails with it; the WU-HOLDER scenarios (refusals, the live-holder teardown guard, the last error) all act INSIDE
+# the verdict, so with the verdict disabled they cannot fire either
 
 if [ -n "${WUDEADPASS_DEFECT:-}" ]; then
     [ "$WUDEADPASS_DEFECT" = "1" ] || { say "FAIL  unknown WUDEADPASS_DEFECT='$WUDEADPASS_DEFECT' (1)"; exit 2; }
@@ -37,7 +39,7 @@ fi
 bad=0
 "$PWSH" -NoProfile -File "$SUITE" >"$OUT/clean.out" 2>&1; rc=$?
 n=$(grep -c '^ok' "$OUT/clean.out"); f=$(grep -c '^FAIL' "$OUT/clean.out")
-if [ $rc -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -ge 16 ]; then say "PASS  clean: rc=0 ok=$n fail=0"
+if [ $rc -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -ge 30 ]; then say "PASS  clean: rc=0 ok=$n fail=0"
 else say "FAIL  clean: rc=$rc ok=$n fail=$f ($(grep -m1 -E '^FAIL' "$OUT/clean.out" || grep -m1 -iE 'exception|error' "$OUT/clean.out" | cut -c1-140))"; bad=1; fi
 
 "$PWSH" -NoProfile -File "$SUITE" -Defect 1 >"$OUT/defect-1.out" 2>&1; rc=$?
@@ -52,6 +54,21 @@ elif [ $rc -ne 0 ] && [ "$f" -gt 0 ]; then
 else
     say "FAIL  defect 1: suite did NOT fail (rc=$rc) - that guard is decoration"; bad=1
 fi
+
+# Knobs 2 and 3 (WU-HOLDER, 2026-10-02): each must fail ITS target, and only within its own scenarios.
+leg(){ # $1 knob, $2 target check, $3 allowed-failures regex
+    "$PWSH" -NoProfile -File "$SUITE" -Defect "$1" >"$OUT/defect-$1.out" 2>&1; local r=$? ff st
+    ff=$(grep -c '^FAIL' "$OUT/defect-$1.out")
+    st=$(grep '^FAIL' "$OUT/defect-$1.out" | grep -vE "$3" | head -3 | cut -c6-120)
+    if [ $r -ne 0 ] && grep -qF "FAIL $2" "$OUT/defect-$1.out" && [ -z "$st" ]; then
+        say "PASS  defect $1: suite FAILED as required on its target and only within its cases (rc=$r, $ff failing checks)"
+    else
+        say "FAIL  defect $1: rc=$r target-failed=$(grep -cF "FAIL $2" "$OUT/defect-$1.out") stray=[$st]"; bad=1
+    fi
+}
+leg 2 'live-holder: our pass died while another pass holds the updater lock -> DIED, but the leftovers are NOT touched (no proxy reset, no relay kill)' '^FAIL live-holder'
+leg 3 'refused-held: a mutex-held refusal is no death - no DIED, no teardown; the task is started again and the pass completes (exit 0, phase done)' '^FAIL (refused-held|refused-unknown|contract: the refusal)'
+leg 4 'holder-wait: waits while the updater lock is held and returns when it is gone (ok, after 3 ticks), telling dom0 once what it waits for' '^FAIL holder-wait'
 
 say "--- outputs in $OUT"
 exit $bad

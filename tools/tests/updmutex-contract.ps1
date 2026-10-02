@@ -23,6 +23,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $deploy = Get-Content (Join-Path $root 'guest/install-updater-agent.ps1') -Raw
 $pass   = Get-Content (Join-Path $root 'guest/qubes-windows-update.ps1')  -Raw
+# UPDMUTEX_DEFECT=refusal puts back the 2026-10-02 shape - the held-mutex refusal on Write-Host only - and the refusal check must FAIL.
+if ($env:UPDMUTEX_DEFECT -eq 'refusal') { $pass = $pass.Replace("Write-Refusal 'mutex-held' (", 'Write-Host (') }
 $fail = 0
 function Check([string]$what, [bool]$ok) {
     if ($ok) { Write-Output "ok   $what" } else { Write-Output "FAIL $what"; $script:fail++ }
@@ -58,5 +60,14 @@ $own = [regex]::Match($pass, '(?s)\$script:HaveMutex = \$script:Mutex\.WaitOne\(
 Check "pass: owner_pid is recorded and saved before any work" ($own.Success -and $own.Value -match '\$script:St\.owner_pid = \$PID' -and $own.Value -match '(?s)owner_pid.{0,400}\bSave\b')
 Check "pass: the status object carries owner fields so every save keeps them" ($pass -match "owner_pid=0; owner_pid_start=''")
 
+# 4. EVERY EARLY REFUSAL IS RECORDED FOR dom0 (2026-10-02). They end the pass before it owns the status file, so Write-Host alone
+#    reached nobody: dom0's handler saw no status, reported a dead pass and tore down the live holder's proxy. Each one now goes
+#    through Write-Refusal, which writes update-refusal.json next to the status and NEVER the status itself (it is the holder's).
+Check "pass: the interrupted-state refusal is recorded (Write-Refusal 'state-unknown')"   ($pass -match "Write-Refusal 'state-unknown' ")
+Check "pass: the abandoned-mutex refusal is recorded (Write-Refusal 'mutex-abandoned')"   ($pass -match "Write-Refusal 'mutex-abandoned' \(`"QWTUPDMUTEXABANDONED")
+Check "pass: the held-mutex refusal is recorded (Write-Refusal 'mutex-held')"             ($pass -match "Write-Refusal 'mutex-held' \(`"QWTUPDMUTEXHELD")
+$wr = [regex]::Match($pass, '(?s)function Write-Refusal\(.{0,2000}?\n\}')
+Check "pass: Write-Refusal writes update-refusal.json and never the status file" ($wr.Success -and $wr.Value -match 'update-refusal\.json' -and
+      $wr.Value -notmatch 'Set-Content -LiteralPath \$StatusFile' -and $wr.Value -notmatch '\bSave\b')
 if ($fail -gt 0) { Write-Output "--- $fail FAILED"; exit 1 }
 Write-Output '--- contract kept'

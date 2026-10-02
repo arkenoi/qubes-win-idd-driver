@@ -136,6 +136,83 @@ function Write-OutcomeTail($o) {
 }
 # ---- WU-OUTCOME-END
 
+# ---- WU-HOLDER-BEGIN   (tools/tests/wu-dead-pass-test.ps1 loads this region ahead of WU-POLL)
+# The writer's own last phases (qubes-windows-update.ps1): done/error end a pass, scan-failed and
+# skipped-* end it before any work. A task that is not Running while its status shows any of these
+# simply finished; anything else is a pass that stopped writing.
+function Test-TerminalPhase($phase) {
+    return ("$phase" -in 'done', 'error', 'scan-failed' -or "$phase" -like 'skipped-*')
+}
+# The writer's ts is an invariant ISO string; pwsh 7's ConvertFrom-Json (tests, and any future host)
+# hands it back as a DateTime, which would otherwise print culture-formatted.
+function Format-Ts($t) { if ($t -is [datetime]) { return $t.ToString('s') }; return "$t" }
+# A LIVE UPDATE PASS OWNS THE UPDATER, and this handler must neither start dom0's pass on top of it nor clean up after it.
+# Measured 2026-10-02 on GWeck's environment (rz31, TemplateVM, right after a requested restart): the boot-triggered scheduled scan
+# held the updater; dom0's Run pass refused (its console-only message reached nobody), this handler read "no status of ours" as a
+# dead pass, and Remove-DeadPassLeftovers reset the proxy and killed every relay - the LIVE scan's - whose search then failed
+# 0x8024402F.
+# LIVENESS IS THE UPDATER'S OWN LOCK. The named mutex Global\QubesWindowsUpdate exists exactly while some updater process holds a
+# handle to it - every pass creates it at start and keeps it to its exit, finally included - and the kernel destroys it when the
+# last holder dies. TryOpenExisting asks whether it exists WITHOUT acquiring it (acquiring an abandoned one would launder the very
+# state the updater refuses to start on), and a caller the mutex's DACL keeps out still learns that it exists. Not the status's
+# owner_pid: a pid can be reused (Jev review 2026-10-02), and polling processes is a process-list query every 3 s - the IPI-sending
+# pattern the owner had removed (2026-10-02 audit).
+function Test-UpdaterBusy {
+    $m = $null
+    try {
+        return [System.Threading.Mutex]::TryOpenExisting('Global\QubesWindowsUpdate', [ref]$m)
+    } catch [System.UnauthorizedAccessException] {
+        return $true    # it exists - only its DACL keeps this caller out
+    } catch {
+        return $false
+    } finally {
+        if ($m) { $m.Dispose() }   # never keep a handle: holding one would keep a dead holder's mutex alive
+    }
+}
+# Who holds it, for dom0's message only - the status is the holder's own account; liveness never rests on it.
+function Format-HolderNow {
+    $h = $null
+    try { $h = Get-Content -LiteralPath $Status -Raw -EA SilentlyContinue | ConvertFrom-Json } catch { $h = $null }
+    if ($h -and $h.phase -and -not (Test-TerminalPhase $h.phase)) { return "a '$($h.action)' pass (pid $($h.owner_pid), started $(Format-Ts $h.owner_pid_start), at phase $($h.phase))" }
+    return 'another Qubes update operation (it holds the updater lock)'
+}
+# Waits while the updater is busy, telling dom0 what it is waiting for. It ends when the lock is gone - observable - or at the
+# handler's overall 2 h bound, which is reported as such and never treated as a release.
+$script:HolderDeadline = (Get-Date).AddHours(2)
+function Wait-NoLiveHolder {
+    while ($true) {
+        if (-not (Test-UpdaterBusy)) { return $true }   # GUARD:holderwait
+        Msg ('waiting for another Qubes update operation to finish first: ' + (Format-HolderNow))
+        if ((Get-Date) -ge $script:HolderDeadline) { return $false }
+        Start-Sleep -Seconds 3
+    }
+}
+# The updater's early refusals (state unknown, mutex abandoned, mutex held) end its process before it owns the status file; each
+# also leaves this record next to it (qubes-windows-update.ps1 Write-Refusal) - never in the status, which belongs to the holder.
+# Only a record written for THIS run counts: the status's own freshness rule, and never a scheduled scan's.
+$Refusal = Join-Path (Split-Path -Parent $Status) 'update-refusal.json'
+function Get-FreshRefusal {
+    $raw = Get-Content -LiteralPath $Refusal -Raw -EA SilentlyContinue
+    if (-not $raw) { return $null }
+    $r = $null
+    try { $r = $raw | ConvertFrom-Json } catch { return $null }
+    if (-not $r -or -not $r.ts -or "$($r.action)" -eq 'scan') { return $null }
+    $stamp = [datetime]::MinValue
+    if (-not [datetime]::TryParseExact((Format-Ts $r.ts), 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture,
+            [Globalization.DateTimeStyles]::None, [ref]$stamp)) { return $null }
+    if ($stamp -lt $script:StartedAt) { return $null }
+    return $r
+}
+# Starts dom0's pass. Only ever called once no live pass holds the updater, so clearing the status cannot hit a live one.
+function Start-RunTask {
+    $script:StartedAt = (Get-Date).AddSeconds(-2)   # 2 s of slack for clock granularity
+    Remove-Item -LiteralPath $Status -Force -EA SilentlyContinue    # baseline: never read a stale run
+    Remove-Item -LiteralPath $Refusal -Force -EA SilentlyContinue   # ...nor an earlier refusal
+    & schtasks /run /tn $Task 2>&1 | Out-Null
+    return $LASTEXITCODE
+}
+# ---- WU-HOLDER-END
+
 # If an update run is already in flight, attach to it instead of clobbering its status file.
 # FRESHNESS GUARD. Deleting the status file is not enough on its own: other tasks write the same
 # file, and one of them finishing can hand us a `done` that belongs to a different operation.
@@ -153,9 +230,14 @@ $script:StartedAt = (Get-Date).AddSeconds(-2)   # 2 s of slack for clock granula
 
 $running = (Get-ScheduledTask -TaskName $Task -EA SilentlyContinue).State -eq 'Running'
 if (-not $running) {
-    Remove-Item -LiteralPath $Status -Force -EA SilentlyContinue   # baseline: never read a stale run
-    & schtasks /run /tn $Task 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { $Err.WriteLine("cannot start $Task (rc=$LASTEXITCODE) - is the updater agent installed?"); exit 1 }
+    # ANOTHER PASS MAY OWN THE UPDATER RIGHT NOW - the boot-triggered or 6-hourly scheduled scan, typically. Wait for it instead of
+    # starting dom0's pass on top of it (it would refuse) or deleting its status (WU-HOLDER).
+    if (-not (Wait-NoLiveHolder)) {
+        $Err.WriteLine('update NOT started: ' + (Format-HolderNow) + ' still owns the updater after 2 hours; nothing was changed')
+        exit 1
+    }
+    $rc = Start-RunTask
+    if ($rc -ne 0) { $Err.WriteLine("cannot start $Task (rc=$rc) - is the updater agent installed?"); exit 1 }
 }
 Write-Output "qubes.WindowsUpdate: driving $Task (attach=$running)"
 Prog 0
@@ -175,16 +257,8 @@ $deadline = (Get-Date).AddHours(2)
 $st = $null            # the last status that belongs to OUR pass (passed the guards below)
 $script:Seen = $null   # the last status parsed from disk, ours or not - named in the DIED line
 $script:Polls = 0
+$script:Rekicks = 0   # dom0's pass restarted after a mutex-held refusal (WU-HOLDER), at most 3 times
 $script:TaskUnreadableSaid = $false
-# The writer's own last phases (qubes-windows-update.ps1): done/error end a pass, scan-failed and
-# skipped-* end it before any work. A task that is not Running while its status shows any of these
-# simply finished; anything else is a pass that stopped writing.
-function Test-TerminalPhase($phase) {
-    return ("$phase" -in 'done', 'error', 'scan-failed' -or "$phase" -like 'skipped-*')
-}
-# The writer's ts is an invariant ISO string; pwsh 7's ConvertFrom-Json (tests, and any future host)
-# hands it back as a DateTime, which would otherwise print culture-formatted.
-function Format-Ts($t) { if ($t -is [datetime]) { return $t.ToString('s') }; return "$t" }
 # LastTaskResult (Get-ScheduledTaskInfo) is the scheduler's own HRESULT for the last instance.
 function Get-TaskResultMeaning([uint32]$r) {
     switch ($r) {
@@ -204,6 +278,12 @@ function Get-TaskResultMeaning([uint32]$r) {
 # handler runs in the rpc caller's context and may lack the right to stop a SYSTEM relay, and a
 # relay left serving is the one leftover that matters (see the temporal-gate comment there).
 function Remove-DeadPassLeftovers {
+    # NEVER UNDER A LIVE PASS (WU-HOLDER): the proxy settings and the relay then belong to it. Measured 2026-10-02: this teardown
+    # killed the boot scan's relay mid-search, and that search failed 0x8024402F.
+    if (Test-UpdaterBusy) {   # GUARD:holdercleanup
+        $Err.WriteLine('leftovers NOT touched: ' + (Format-HolderNow) + ' owns the updater right now, and the proxy and the relay are its own')
+        return
+    }
     $isKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
     $done = @(); $failed = @()
     & netsh winhttp reset proxy 2>&1 | Out-Null
@@ -273,11 +353,30 @@ while ((Get-Date) -lt $deadline) {
     #    exists, so the first poll may legitimately see Ready. From the second poll on, a task
     #    that is not Running while our status is not terminal is a pass that stopped writing.
     if ($tk -and $tstate -ne 'Running' -and $script:Polls -gt 1 -and -not (Test-TerminalPhase $st.phase)) {   # GUARD:deadpass
+        # A REFUSAL IS NOT A DEATH (WU-HOLDER). The pass stood down before it owned anything and recorded why - so no DIED line, and
+        # above all no leftover teardown: what is on the machine belongs to whoever does own the updater.
+        $ref = Get-FreshRefusal   # GUARD:refusal
+        if ($ref) {
+            if ("$($ref.reason)" -eq 'mutex-held' -and $script:Rekicks -lt 3) {
+                $script:Rekicks++
+                Msg "dom0's update pass found another Qubes update operation running and stood down without changing anything - it starts again as soon as that one ends"
+                if (-not (Wait-NoLiveHolder)) { $Err.WriteLine('update NOT started: ' + (Format-HolderNow) + ' still owns the updater after 2 hours; nothing was changed'); exit 1 }
+                $rc = Start-RunTask
+                if ($rc -ne 0) { $Err.WriteLine("cannot start $Task (rc=$rc) - is the updater agent installed?"); exit 1 }
+                $script:Polls = 0; $st = $null; $script:Seen = $null
+                continue
+            }
+            $Err.WriteLine('update refused by the qube: ' + "$($ref.message)")
+            exit 1
+        }
         $info = Get-ScheduledTaskInfo -TaskName $Task -EA SilentlyContinue
         $code = [uint32]0   # HRESULTs above 0x7FFFFFFF arrive as negative Int32 on some builds: mask, never truncate
         try { $code = [uint32]([int64]$info.LastTaskResult -band 0xFFFFFFFF) } catch { $code = [uint32]0 }
         $what = 'no status was written at all'
-        if ($st) { $what = "status stale since $(Format-Ts $st.ts) at phase $($st.phase)" }
+        if ($st) {
+            $what = "status stale since $(Format-Ts $st.ts) at phase $($st.phase)"
+            if ($st.error) { $what += " (its last error: $($st.error))" }   # e.g. killed while diagnosing a failure
+        }
         elseif ($script:Seen) { $what = "the only status on disk is from an earlier operation (action $($script:Seen.action), ts $(Format-Ts $script:Seen.ts), phase $($script:Seen.phase))" }
         $Err.WriteLine([string]::Format([Globalization.CultureInfo]::InvariantCulture,
             'update pass DIED: task {0} is {1}, last result 0x{2:X} ({3}), {4}', $Task, $tstate, $code, (Get-TaskResultMeaning $code), $what))

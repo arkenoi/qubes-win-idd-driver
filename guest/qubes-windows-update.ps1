@@ -238,6 +238,27 @@ function Test-WuOwnerAlive([int]$ownerPid, [string]$ownerStart) {
 }
 
 # THE GATE: an interrupted previous pass, refused before the mutex is touched.
+# REFUSALS dom0 CAN READ. The three refusals below end this process before it owns the status file, so their message went to
+# Write-Host only - the task's console, which nobody reads. dom0's handler (guest/wu-update.ps1) then saw its task end with no status
+# of its own, reported a dead pass, and its leftover cleanup tore down the proxy of whichever pass DID own the updater (measured
+# 2026-10-02, rz31 on GWeck's environment: the boot scan's relay, mid-search). Each refusal now also leaves this record next to the
+# status - never IN it, the status belongs to the holder - and the handler renders it (for 'mutex-held' it waits for the holder and
+# starts this pass again).
+function Write-Refusal([string]$reason, [string]$message) {
+    Write-Host $message
+    try {
+        $holder = $null
+        try { if (Test-Path -LiteralPath $StatusFile) { $holder = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json } } catch { $holder = $null }
+        $hAction = ''; $hPhase = ''; $hPid = ''; $hStart = ''
+        if ($holder) { $hAction = "$($holder.action)"; $hPhase = "$($holder.phase)"; $hPid = "$($holder.owner_pid)"; $hStart = "$($holder.owner_pid_start)" }
+        $rec = [ordered]@{ ts = (Get-Date).ToString('s'); action = $Action; scheduled = [bool]$Scheduled; reason = $reason; message = $message;
+                           holder_action = $hAction; holder_phase = $hPhase; holder_pid = $hPid; holder_start = $hStart }
+        $f = Join-Path (Split-Path -Parent $StatusFile) 'update-refusal.json'
+        ($rec | ConvertTo-Json -Compress) | Set-Content -LiteralPath "$f.tmp" -Encoding UTF8
+        Move-Item -LiteralPath "$f.tmp" -Destination $f -Force
+    } catch { Write-Host "QWTUPDREFUSALUNRECORDED: $($_.Exception.Message)" }
+}
+
 $wuPrev = $null
 try { if (Test-Path -LiteralPath $StatusFile) { $wuPrev = Get-Content -LiteralPath $StatusFile -Raw | ConvertFrom-Json } } catch { $wuPrev = $null }
 if ($wuPrev -and $wuPrev.phase -and ($WU_TERMINAL_PHASES -notcontains $wuPrev.phase)) {
@@ -250,7 +271,7 @@ if ($wuPrev -and $wuPrev.phase -and ($WU_TERMINAL_PHASES -notcontains $wuPrev.ph
               "was doing is unknown; refusing to start a $Action on top of it, nothing was changed. " +
               "Read $StatusFile and the agent log, then let a full pass run to completion (it rewrites " +
               "this state) or re-run once you know the guest is consistent.")
-        Write-Host $m
+        Write-Refusal 'state-unknown' $m
         exit 1
     }
     # owner alive = a pass really is running; that is ordinary contention and the mutex below says so.
@@ -264,7 +285,7 @@ try {
     # .NET hands us the mutex with this exception; give it back before refusing, or this process
     # exits owning it and every later run inherits the same abandonment.
     try { $script:Mutex.ReleaseMutex() } catch { }
-    Write-Host ("QWTUPDMUTEXABANDONED: a previous update operation was terminated without releasing " +
+    Write-Refusal 'mutex-abandoned' ("QWTUPDMUTEXABANDONED: a previous update operation was terminated without releasing " +
                 "Global\QubesWindowsUpdate, so what it was doing is unknown; refusing to start a $Action " +
                 "on top of it, nothing was changed.")
     exit 1
@@ -276,7 +297,7 @@ if (-not $script:HaveMutex) {
         Write-Host "QWTUPDMUTEXHELD: another Qubes update operation is in progress - skipping this scheduled scan"
         exit 0
     }
-    Write-Host ("QWTUPDMUTEXHELD: another Qubes update operation is in progress - refusing to run this " +
+    Write-Refusal 'mutex-held' ("QWTUPDMUTEXHELD: another Qubes update operation is in progress - refusing to run this " +
                 "$Action under it; nothing was changed. Let it finish (schtasks /query /tn QubesWindowsUpdateRun /v) " +
                 "or end it (schtasks /end /tn <task>) and retry.")
     exit 1
