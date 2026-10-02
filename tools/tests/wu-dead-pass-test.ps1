@@ -31,12 +31,24 @@
       blind       Get-ScheduledTask returns nothing              -> one WUDEADPASSBLIND line, no verdict,
                                                                     still polling
       contract    the DIED and leftovers lines never end in a bare number (dom0 float-parses stderr)
+    WU-HOLDER (2026-10-02, rz31 on GWeck's environment: the boot scan held the updater, dom0's pass refused unseen, the handler
+    called it dead and killed the scan's relay mid-search). The WU-HOLDER region is loaded ahead of WU-POLL:
+      refused-held   dom0's pass refused on a held mutex and left a refusal record -> no DIED, no teardown, the
+                     handler waits and starts the task again, and the restarted pass completes normally
+      refused-unknown the pass refused on an unknown earlier state -> "update refused by the qube: ..." exit 1, no teardown
+      live-holder    our pass died while ANOTHER pass holds the updater lock -> DIED, but the leftovers are NOT touched
+      died-error     a pass killed while diagnosing a failure -> the DIED line carries its last error
+      holder-wait    Wait-NoLiveHolder (the pre-kick wait) waits while the updater lock is held and ends when it is gone
+      real-lock      Test-UpdaterBusy against a real named mutex: True while a handle is open, False after
     Exit 0 = every check matched; 1 = at least one FAIL.
 
 .PARAMETER Defect
     Re-introduces the defect in the extracted copy (the shipped file is never modified):
       1   the `# GUARD:deadpass` verdict is disabled - the loop never looks at the task, as before
           2026-09-17. The killed / nostatus / foreign scenarios must then poll to the sentinel.
+      2   the `# GUARD:holdercleanup` guard is disabled - the teardown runs under a live holder (the 2026-10-02 relay kill).
+      3   the `# GUARD:refusal` read is disabled - a refusal reads as a death again (the 2026-10-02 "update pass DIED").
+      4   the `# GUARD:holderwait` wait is disabled - dom0's pass starts on top of the holder again (the 2026-10-02 collision).
     tools/tests/wu-dead-pass-selftest.sh runs the clean leg and the knob and requires each outcome.
 #>
 [CmdletBinding()]
@@ -75,6 +87,11 @@ function Get-Region([string]$name) {
     return ,@($lines[($begins[0] + 1)..($ends[0] - 1)])
 }
 $region = Get-Region 'WU-POLL'
+$holder = Get-Region 'WU-HOLDER'
+Check 'extract: the WU-HOLDER region holds the lock test, the wait, the refusal reader and the task start' `
+      (@($holder | Where-Object { $_ -match '^function (Test-UpdaterBusy|Wait-NoLiveHolder|Get-FreshRefusal|Start-RunTask|Test-TerminalPhase)\b' }).Count -eq 5)
+Check 'extract: the WU-POLL region reads refusals and guards the teardown' `
+      (@($region | Where-Object { $_ -match '# GUARD:refusal$' }).Count -eq 1 -and @($region | Where-Object { $_ -match '# GUARD:holdercleanup$' }).Count -eq 1)
 Check 'extract: the WU-POLL region contains the loop, the verdict guard and the teardown' `
       (@($region | Where-Object { $_ -match '^\s*while \(\(Get-Date\) -lt \$deadline\)' }).Count -eq 1 -and
        @($region | Where-Object { $_ -match '# GUARD:deadpass$' }).Count -eq 1 -and
@@ -91,7 +108,26 @@ switch ($Defect) {
             if ($_ -match '# GUARD:deadpass$') { '    if ($false) {   # DEFECT: pre-2026-09-17 - the loop never looks at the task' }
             else { $_ } })
     }
-    default { Write-Host "FAIL unknown -Defect '$Defect' (1)"; exit 1 }
+    '2' {
+        $hit = @($region | Where-Object { $_ -match '# GUARD:holdercleanup$' })
+        if ($hit.Count -ne 1) { Write-Host "FAIL defect 2: expected exactly 1 '# GUARD:holdercleanup' line, found $($hit.Count)"; exit 1 }
+        $region = @($region | ForEach-Object {
+            if ($_ -match '# GUARD:holdercleanup$') { '    if ($false) {   # DEFECT: before 2026-10-02 - the teardown ran under a live holder' }
+            else { $_ } })
+    }
+    '3' {
+        $hit = @($region | Where-Object { $_ -match '# GUARD:refusal$' })
+        if ($hit.Count -ne 1) { Write-Host "FAIL defect 3: expected exactly 1 '# GUARD:refusal' line, found $($hit.Count)"; exit 1 }
+        $region = @($region | ForEach-Object {
+            if ($_ -match '# GUARD:refusal$') { '        $ref = $null   # DEFECT: before 2026-10-02 - a refusal read as a death' }
+            else { $_ } })
+    }
+    '4' {
+        $hit = @($holder | Where-Object { $_ -match '# GUARD:holderwait$' })
+        if ($hit.Count -ne 1) { Write-Host "FAIL defect 4: expected exactly 1 '# GUARD:holderwait' line, found $($hit.Count)"; exit 1 }
+        $holder = @($holder | ForEach-Object { if ($_ -match '# GUARD:holderwait$') { '        if ($true) { return $true }   # DEFECT: before 2026-10-02 - dom0''s pass started on top of the holder' } else { $_ } })
+    }
+    default { Write-Host "FAIL unknown -Defect '$Defect' (1|2|3|4)"; exit 1 }
 }
 
 $tmpRoot = Join-Path ([IO.Path]::GetTempPath()) ('wu-deadpass-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -123,6 +159,16 @@ $script:Plan = __PLAN__
 $MaxTicks = __MAXTICKS__
 $script:Tick = 0
 $script:TaskState = 'Ready'; $script:TaskResult = 0
+$script:LivePid = __LIVEPID__; $script:LiveStart = '__LIVESTART__'; $script:LiveName = '__LIVENAME__'
+$script:Busy = $false   # the updater lock (Test-UpdaterBusy), per plan step
+function schtasks { Call ('schtasks ' + ($args -join ' ')); $global:LASTEXITCODE = 0 }
+$script:BootTime = [datetime]::ParseExact('2026-10-02T18:30:00', 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)
+function Get-CimInstance { [CmdletBinding()] param([Parameter(Position = 0)]$ClassName) return [pscustomobject]@{ LastBootUpTime = $script:BootTime } }
+function Write-RefusalFile($obj) {
+    $rf = Join-Path (Split-Path -Parent $Status) 'update-refusal.json'
+    if ($null -eq $obj) { Remove-Item -LiteralPath $rf -Force -EA SilentlyContinue; return }
+    ($obj | ConvertTo-Json -Depth 4) | Set-Content -LiteralPath $rf -Encoding UTF8
+}
 function Write-Status($obj) {
     if ($null -eq $obj) { Remove-Item -LiteralPath $Status -Force -EA SilentlyContinue; return }
     ($obj | ConvertTo-Json -Depth 6) | Set-Content -LiteralPath $Status -Encoding UTF8
@@ -133,6 +179,8 @@ function Start-Sleep { [CmdletBinding()] param($Seconds)
     $step = $script:Plan[[Math]::Min($script:Tick, $script:Plan.Count) - 1]
     $script:TaskState = $step.state; $script:TaskResult = $step.result
     Write-Status $step.status
+    if ($step.ContainsKey('refusal')) { Write-RefusalFile $step.refusal }
+    if ($step.ContainsKey('busy')) { $script:Busy = [bool]$step.busy }
 }
 function Get-ScheduledTask { [CmdletBinding()] param($TaskName)
     Call "Get-ScheduledTask $TaskName"
@@ -147,7 +195,18 @@ function netsh { Call ('netsh ' + ($args -join ' ')); $global:LASTEXITCODE = 0 }
 function New-ItemProperty { [CmdletBinding()] param($Path, $Name, $Value, $PropertyType, [switch]$Force) Call "New-ItemProperty $Name=$Value" }
 function Remove-ItemProperty { [CmdletBinding()] param($Path, $Name) Call "Remove-ItemProperty $Name" }
 $script:RelayAlive = $true
-function Get-Process { [CmdletBinding()] param([Parameter(Position = 0)]$Name)
+function Get-Process { [CmdletBinding()] param([Parameter(Position = 0)]$Name, $Id)
+    if ($PSBoundParameters.ContainsKey('Id')) {
+        Call "Get-Process -Id $Id"
+        if ($script:LivePid -and [int]$Id -eq $script:LivePid) {
+            # __LIVESTART__ DENIED = a SYSTEM process whose StartTime the rpc caller may not read (the getter throws)
+            $o = [pscustomobject]@{ Id = $script:LivePid; ProcessName = $script:LiveName }
+            if ($script:LiveStart -eq 'DENIED') { $o | Add-Member -MemberType ScriptProperty -Name StartTime -Value { throw 'Zugriff verweigert' } }
+            else { $o | Add-Member -NotePropertyName StartTime -NotePropertyValue ([datetime]::ParseExact($script:LiveStart, 'yyyy-MM-ddTHH:mm:ss', [Globalization.CultureInfo]::InvariantCulture)) }
+            return $o
+        }
+        return $null
+    }
     Call "Get-Process $Name"
     if (-not $script:RelayAlive) { return @() }
     $p = [pscustomobject]@{ Id = 4711; ProcessName = 'qubes-updates-relay' }
@@ -165,6 +224,8 @@ function Status([string]$phase, [string]$action = 'full', [string]$ts = '') {
     return @{ action = $action; phase = $phase; ts = $ts; count = 0; available = @(); result = @(); reboot_needed = $false; error = $null }
 }
 function Step([string]$state, [uint32]$result, $status) { return @{ state = $state; result = $result; status = $status } }
+function StepR([string]$state, [uint32]$result, $status, $refusal) { return @{ state = $state; result = $result; status = $status; refusal = $refusal } }
+function StepB([string]$state, [uint32]$result, $status, [bool]$busy) { return @{ state = $state; result = $result; status = $status; busy = $busy } }
 # The plan crosses into the child as PowerShell source, so it is rendered as literal hashtables.
 function Render($v) {
     if ($null -eq $v) { return '$null' }
@@ -175,14 +236,17 @@ function Render($v) {
     return [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0}', $v)
 }
 
-function Run-Scenario([string]$name, [array]$plan, [int]$maxTicks) {
+function Run-Scenario([string]$name, [array]$plan, [int]$maxTicks, [int]$livePid = 0, [string]$liveStart = '2026-10-02T18:31:36', [string[]]$body = $null, [string]$liveName = 'powershell', [switch]$realLock) {
     $dir = Join-Path $tmpRoot $name
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     $statusFile = Join-Path $dir 'update-status.json'
     $planSrc = '@(' + (@($plan | ForEach-Object { Render $_ }) -join ', ') + ')'
-    $src = $preamble.Replace('__STATUS__', $statusFile.Replace("'", "''")).Replace('__PLAN__', $planSrc).Replace('__MAXTICKS__', "$maxTicks")
+    $src = $preamble.Replace('__STATUS__', $statusFile.Replace("'", "''")).Replace('__PLAN__', $planSrc).Replace('__MAXTICKS__', "$maxTicks").Replace('__LIVEPID__', "$livePid").Replace('__LIVESTART__', $liveStart).Replace('__LIVENAME__', $liveName)
+    if ($null -eq $body) { $body = @($region) + @($postamble) }
     $file = Join-Path $dir 'scenario.ps1'
-    [IO.File]::WriteAllLines($file, [string[]](@($src) + $region + @($postamble)), [Text.UTF8Encoding]::new($false))
+    $lockStub = @('function Test-UpdaterBusy { Call ''Test-UpdaterBusy''; return [bool]$script:Busy }')   # overrides the region's: no real mutex
+    if ($realLock) { $lockStub = @() }
+    [IO.File]::WriteAllLines($file, [string[]](@($src) + $holder + $lockStub + $body), [Text.UTF8Encoding]::new($false))
     $out = Join-Path $dir 'stdout.txt'; $errf = Join-Path $dir 'stderr.txt'
     $p = Start-Process -FilePath $pwshExe -ArgumentList @('-NoProfile', '-File', $file) -Wait -PassThru -NoNewWindow `
             -RedirectStandardOutput $out -RedirectStandardError $errf
@@ -193,6 +257,8 @@ function Run-Scenario([string]$name, [array]$plan, [int]$maxTicks) {
         rc = $p.ExitCode; out = $so; err = $se
         died = @($se | Where-Object { $_ -like 'update pass DIED:*' })
         left = @($se | Where-Object { $_ -like 'leftovers:*' })
+        untouched = @($se | Where-Object { $_ -like 'leftovers NOT touched:*' })
+        refused = @($se | Where-Object { $_ -like 'update refused by the qube:*' })
         blind = @($se | Where-Object { $_ -like 'WUDEADPASSBLIND:*' })
         taskReads = @($so | Where-Object { $_ -like 'CALL Get-ScheduledTask *' }).Count
         calls = @($so | Where-Object { $_ -like 'CALL *' } | ForEach-Object { $_.Substring(5) })
@@ -250,6 +316,64 @@ Check 'grace: Ready on poll 1 (schtasks /run returned before the instance existe
 $r = Run-Scenario 'blind' @((Step 'ABSENT' 0 (Status 'scan'))) 3
 Check 'blind: Get-ScheduledTask returns nothing -> exactly one WUDEADPASSBLIND line, no verdict, still polling' `
       ($r.rc -eq 42 -and $r.blind.Count -eq 1 -and $r.died.Count -eq 0)
+
+# --- 8. refused-held: dom0's pass found the updater held (the 2026-10-02 boot-scan collision) ----------------------------
+$heldMsg = 'QWTUPDMUTEXHELD: another Qubes update operation is in progress - refusing to run this full under it; nothing was changed. Let it finish and retry.'
+$held = @{ ts = $freshTs; action = 'full'; scheduled = $false; reason = 'mutex-held'; message = $heldMsg; holder_action = 'scan'; holder_phase = 'scan'; holder_pid = '4242'; holder_start = '2026-10-02T18:31:36' }
+$r = Run-Scenario 'refused-held' @((StepR 'Ready' 0x41303 $null $held), (StepR 'Ready' 1 $null $held), (StepR 'Running' 0x41301 (Status 'scan' 'full' $freshTs) $null), (StepR 'Ready' 0 (Status 'done' 'full' $freshTs) $null)) 8
+$REFHELD = 'refused-held: a mutex-held refusal is no death - no DIED, no teardown; the task is started again and the pass completes (exit 0, phase done)'
+Check $REFHELD ($r.rc -eq 0 -and $r.died.Count -eq 0 -and $r.calls -notcontains 'netsh winhttp reset proxy' -and $r.calls -notcontains 'Kill 4711' -and
+                $r.calls -contains 'schtasks /run /tn QubesWindowsUpdateRun' -and $r.post.Count -eq 1 -and $r.post[0] -like 'POSTLOOP phase=done *')
+Check 'refused-held: dom0 is told the pass stood down and starts again' (@($r.err | Where-Object { $_ -like '*stood down without changing anything*' }).Count -eq 1)
+
+# --- 9. refused-unknown: the start gate refused (D3's state) - shown to dom0, nothing torn down --------------------------
+$unkMsg = 'QWTUPDSTATEUNKNOWN: the last update pass (''scan'') stopped at phase ''scan'' and its process (3548) is gone - it was terminated partway, so what it was doing is unknown; refusing to start a full on top of it, nothing was changed. Read the status and the agent log, then let a full pass run to completion or re-run once you know the guest is consistent.'
+$unk = @{ ts = $freshTs; action = 'full'; scheduled = $false; reason = 'state-unknown'; message = $unkMsg; holder_action = 'scan'; holder_phase = 'scan'; holder_pid = '3548'; holder_start = '' }
+$r = Run-Scenario 'refused-unknown' @((StepR 'Ready' 0x41303 $null $unk), (StepR 'Ready' 1 $null $unk)) 6
+Check 'refused-unknown: the refusal reaches dom0 verbatim ("update refused by the qube: QWTUPDSTATEUNKNOWN ..."), exit 1, no DIED, no teardown' `
+      ($r.rc -eq 1 -and $r.refused.Count -eq 1 -and $r.refused[0] -like '*QWTUPDSTATEUNKNOWN*' -and $r.died.Count -eq 0 -and $r.calls -notcontains 'netsh winhttp reset proxy')
+Check 'contract: the refusal line does not end in a bare number' (@($r.refused | Where-Object { $_ -match '\s[0-9]+([.,][0-9]+)?$' }).Count -eq 0)
+
+# --- 10. live-holder: our pass died while ANOTHER pass holds the updater lock - its proxy and relay stay up ---------------------
+$holderStatus = @{ action = 'scan'; phase = 'scan'; ts = $freshTs; owner_pid = 4242; owner_pid_start = '2026-10-02T18:31:36'; count = 0; available = @(); result = @(); reboot_needed = $false; error = $null }
+$r = Run-Scenario 'live-holder' @((StepB 'Running' 0x41301 (Status 'scan' 'full' $freshTs) $false), (StepB 'Ready' 0x41306 $holderStatus $true)) 6
+$LIVEHOLD = 'live-holder: our pass died while another pass holds the updater lock -> DIED, but the leftovers are NOT touched (no proxy reset, no relay kill)'
+Check $LIVEHOLD ($r.rc -eq 1 -and $r.died.Count -eq 1 -and $r.untouched.Count -eq 1 -and $r.untouched[0] -like "*a 'scan' pass (pid 4242*" -and
+                 $r.calls -notcontains 'netsh winhttp reset proxy' -and $r.calls -notcontains 'Kill 4711')
+$r = Run-Scenario 'dead-holder' @((StepB 'Running' 0x41301 (Status 'scan' 'full' $freshTs) $false), (StepB 'Ready' 0x41306 $holderStatus $false)) 6
+Check 'live-holder control: the same status with the lock GONE (its holder exited or died) -> the teardown runs as before' `
+      ($r.rc -eq 1 -and $r.untouched.Count -eq 0 -and $r.calls -contains 'netsh winhttp reset proxy' -and $r.calls -contains 'Kill 4711')
+
+# --- 11. died-error: killed while diagnosing a failure - the DIED line carries the error it had recorded ---------------------
+$diag = Status 'diagnosing' 'full' $freshTs; $diag.error = 'Ausnahme von HRESULT: 0x8024402C'
+$r = Run-Scenario 'died-error' @((Step 'Running' 0x41301 $diag), (Step 'Ready' 0x41306 $diag)) 6
+Check 'died-error: the DIED line names phase diagnosing and carries its last error' `
+      ($r.rc -eq 1 -and $r.died.Count -eq 1 -and $r.died[0] -like '*at phase diagnosing (its last error: Ausnahme von HRESULT: 0x8024402C)')
+
+# --- 12. holder-wait: the pre-kick wait, on the updater lock ---------------------------------------------------------------
+$waitBody = @('Write-Status $script:Plan[0].status', '$script:Busy = [bool]$script:Plan[0].busy', '$ok = Wait-NoLiveHolder', '[Console]::Out.WriteLine("WAITED ok=$ok tick=$($script:Tick)")', 'exit 0')
+$doneStatus = $holderStatus.Clone(); $doneStatus.phase = 'done'
+$HOLDWAIT = 'holder-wait: waits while the updater lock is held and returns when it is gone (ok, after 3 ticks), telling dom0 once what it waits for'
+$r = Run-Scenario 'holder-wait' @((StepB 'Ready' 0 $holderStatus $true), (StepB 'Ready' 0 $holderStatus $true), (StepB 'Ready' 0 $doneStatus $false)) 8 -body $waitBody
+Check $HOLDWAIT (@($r.out | Where-Object { $_ -eq 'WAITED ok=True tick=3' }).Count -eq 1 -and
+                 @($r.err | Where-Object { $_ -like "waiting for another Qubes update operation to finish first: a 'scan' pass (pid 4242*" }).Count -eq 1)
+$r = Run-Scenario 'holder-finally' @((StepB 'Ready' 0 $doneStatus $true), (StepB 'Ready' 0 $doneStatus $true)) 2 -body $waitBody
+Check 'holder-wait: a holder that saved a terminal phase but still holds the lock (its finally) is still waited for' `
+      ($r.rc -eq 42 -and @($r.out | Where-Object { $_ -like 'WAITED*' }).Count -eq 0 -and
+       @($r.err | Where-Object { $_ -like 'waiting for another Qubes update operation to finish first: another Qubes update operation (it holds the updater lock)' }).Count -eq 1)
+$r = Run-Scenario 'holder-gone' @((StepB 'Ready' 0 $holderStatus $false)) 4 -body $waitBody
+Check 'holder-wait: a status that still names a pass, with no lock held, holds nothing (returns at once)' (@($r.out | Where-Object { $_ -eq 'WAITED ok=True tick=0' }).Count -eq 1)
+
+# --- 13. the REAL lock test (no stub): the named mutex exists exactly while a handle to it is open ----------------------------
+$lockBody = @(
+    '$m = New-Object System.Threading.Mutex($false, ''Global\QubesWindowsUpdate'')',
+    '[Console]::Out.WriteLine("BUSY-HELD=$(Test-UpdaterBusy)")',
+    '$m.Dispose()',
+    '[Console]::Out.WriteLine("BUSY-AFTER=$(Test-UpdaterBusy)")',
+    'exit 0')
+$r = Run-Scenario 'real-lock' @((Step 'Ready' 0 $null)) 2 -body $lockBody -realLock
+Check 'real lock: Test-UpdaterBusy is True while an updater handle is open and False once it is closed - and it never acquires it' `
+      (@($r.out | Where-Object { $_ -eq 'BUSY-HELD=True' }).Count -eq 1 -and @($r.out | Where-Object { $_ -eq 'BUSY-AFTER=False' }).Count -eq 1)
 
 Write-Host ("--- {0} checks, {1} failed" -f $script:run, $script:fail)
 if ($script:fail) { exit 1 }
