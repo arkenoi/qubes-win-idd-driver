@@ -638,3 +638,39 @@ design E's accepted cost (0.26 that it matters), fit 0.73.
 change confined to the window pokes; input pokes every slot; WGC delivers content regardless). What dom0 shows of a window's
 backdrop stays as its WGC frames have it - a capture property this rule neither causes nor fixes. **Seen to fail / pass:**
 band-1 and band-tint-1 on rz18 (3 recreates per change); on rz21 owed.
+
+**Amended 2026-10-02 (agent 9d7e1df):** uncovered desktop is measured against BARE frames, not frames inflated by the 34 px
+shadow margin - a window's shadow over the wallpaper re-composes with the wallpaper, so it is desktop content. With the margin,
+the rz21 band check's damage straddling Paint's left edge (the outside part its 16 px shadow strip) counted 0 px2 of desktop and
+Paint was recreated. The margin stays in the occluder tests. Cost accepted (Jev 0.87): an own change spilling >= 32x32 px onto the
+window's shadow over the desktop skips that change's liveness hint. Every QGAPOKEWGC line now carries desk=<bare>/<inflated>.
+(An earlier claim that "QGAPOKEDESK never fired" on rz21 was RETRACTED: band-test.sh's filter did not extract that line.)
+
+## 27. A window that just moved still covers where it was — ACCEPTED (Jev), 2026-10-02
+
+**Decided:** in the live check (§24) every tracked window above covers with its live rect, its tracked rect, and - for 250 ms
+after its tracked rect changed - the rect it had before, all with the shadow margin; minimized windows cover nothing. Agent
+a968855. **Why:** m7-phases B on rz21: a Calculator moved back over a Notepad in steps; the frame read showed its previous step
+plus shadow while its live rect was already 100 px on, so the uncovered strip read as the Notepad's own change (1 poke, 1
+recreate). What a moving window uncovers is the beneath window's unchanged content, already in its last WGC frame. Jev: fix now
+0.98; review: race fixed 0.81, over-suppression 0.17. **Seen to pass:** rz24 m7-phases B 0/0 (F1-F3, R, T also 0/0).
+
+## 28. Damage confined to a window's outer 8 px is DWM chrome, not a reason to poke — ACCEPTED (Jev), 2026-10-02
+
+**Decided:** a hit with no part inside the window inset by 8 px is not poked (QGAPOKEEDGE). Agent 6c8495e. **Why:** DWM draws a
+1 px activation-coloured border and rounds the corners showing what lies behind; neither is in a WGC frame, which is why the pixel
+compare already excluded the same band - but a hit wholly inside it never reached the compare and always poked: Settings 4
+recreates in 25 s at focus flips on its top-left edge band, Paint 2 on a 1x1 px spot 7 px above its bottom edge (rz21). Cost
+(Jev 0.86, accepted): an own change confined to the outer 8 px loses its liveness hint, never its content. **Seen to pass:** rz24
+withheld a Notepad caret at its text area's left edge and Paint's top-edge animation (QGAPOKEEDGE), no recreate from either.
+
+## 29. Regions a window changes invisibly to WGC are learned, not poked forever — ACCEPTED (Jev), 2026-10-02
+
+**Decided:** when the broker reports a recreate, the new session's first frame is compared with the old one over the region of
+the poke that caused it (QGARECREATECHECK). Unchanged and at most 64x64 px: the region is learned for that frame size (four per
+window) and later pokes inside it are withheld (QGAPOKEINVIS); changed: the session had really stopped and nothing is learned.
+Agent d820f35 + 3126e9c. **Why:** on rz24 every false recreate outside the activity cell's own PrintWindow span was WinUI Paint -
+its maximize glyph at an activation change and a 10x12 px toolbar spot; the deaf ladder needs typing-size pokes, so no size
+threshold could do this (Jev: measure first 0.68, learn 0.92; deaf-safe 0.95). A deafened session never delivers a first frame,
+so the ladder learns nothing. Cost (Jev 0.90, bounded): a small region learned from a poke that was false for another reason
+stops hinting liveness there. **Seen to pass:** owed (rz25 acceptance).
