@@ -251,8 +251,14 @@ if [ -n "$sstate" ]; then
   log "leftover $SUBJECT removed"
 fi
 log "recreating $SUBJECT from $GOLDEN"
-qvm-create --class StandaloneVM --label red --property virt_mode=hvm --property kernel='' "$SUBJECT" \
-  || finish 1 "TERMINAL: could not create $SUBJECT"
+# THE GOLDEN'S CLASS AND DEFAULT USER, not a fixed StandaloneVM. The class decides the updater's whole path (the dom0-driven proxied
+# path runs only on a TemplateVM) and the default user decides whom every rpc runs as; a field reporter's environment is defined by
+# both (mgmt/reporters/gweck.json: TemplateVM, default user not 'user'). Measured 2026-10-02: a subject recreated from the TemplateVM
+# golden win11de-qwt came out a StandaloneVM with default_user=user, and env-assert refused it - correctly - as not GWeck's environment.
+gclass=$(qvm-ls --raw-data --fields class "$GOLDEN" 2>/dev/null)
+case "$gclass" in StandaloneVM|TemplateVM) ;; *) finish 1 "TERMINAL: golden $GOLDEN has class '$gclass' - only StandaloneVM or TemplateVM goldens can be recreated here" ;; esac
+qvm-create --class "$gclass" --label red --property virt_mode=hvm --property kernel='' "$SUBJECT" \
+  || finish 1 "TERMINAL: could not create $SUBJECT ($gclass)"
 qvm-tags "$SUBJECT" add win-idd-testbed || finish 1 "TERMINAL: could not tag $SUBJECT"
 qvm-features "$SUBJECT" os Windows
 # TIMEZONE. Without it libvirt's clock offset defaults to utc, so the emulated RTC holds TRUE UTC
@@ -278,6 +284,11 @@ for f in ('gui', 'qrexec', 'stubdom-qrexec', 'vmexec', 'audio-model', 'no-monito
         dst.features[f] = src.features[f]
 PY
 for p in memory:8192 maxmem:8192 vcpus:4 qrexec_timeout:600; do qvm-prefs "$SUBJECT" "${p%%:*}" "${p##*:}"; done
+# default_user always has a value (Qubes defaults it to 'user'), so an EMPTY read is a failed call, not "no user" - missing data fails.
+gduser=$(qvm-prefs "$GOLDEN" default_user 2>/dev/null)
+[ -n "$gduser" ] || finish 1 "TERMINAL: could not read default_user of $GOLDEN (an empty read is a failed call - the property always has a value)"
+qvm-prefs "$SUBJECT" default_user "$gduser" || finish 1 "TERMINAL: could not copy default_user '$gduser' to $SUBJECT"
+log "subject $SUBJECT: class $gclass, default_user $gduser (from $GOLDEN)"
 qvm-prefs "$SUBJECT" netvm '' 2>/dev/null
 cerr=$(python3 - "$GOLDEN" "$SUBJECT" 2>&1 <<'PY'
 import sys, qubesadmin
