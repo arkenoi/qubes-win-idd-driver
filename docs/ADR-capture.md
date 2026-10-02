@@ -726,7 +726,7 @@ also took up to 6 cross-process card searches ~2 s apart that could never succee
 27 card-search lines per arm, rz28 (agent 4ffffbe) 0 and 0; badges still dropped, no false recreate on rz28. One rz27 arm recreated
 Paint once for its title-bar corner at an activation change - not a badge (occ=27 counted them): a DWM-drawn part that WGC rightly does not deliver, the false-positive class of the damage-driven liveness pokes.
 
-## 32. Liveness from input and Windows' own events only; the damage-comparison detector goes — PROPOSED (Jev), 2026-10-02, owner decision pending
+## 32. Liveness from input and Windows' own events only; the damage-comparison detector goes — ACCEPTED (owner), 2026-10-02
 
 **Proposed:** keep the event-driven reopen of a capture item Windows closes (QGAWGCITEMCLOSED); check liveness only when a key or a
 click is delivered to a window (input is a promise of change); one recreate, then DEAF. Remove the liveness pokes driven by desktop-
@@ -745,3 +745,11 @@ by the event-driven reopen). Jev: the machinery is justified on the target 0.19;
 **Cost (Jev 0.97):** if Windows' capture ever stops on a window that changes WITHOUT input (a video, an animation), that window stays
 frozen in dom0, unnoticed, until it is re-registered (a resize, an agent restart). The fact that would most change this: the stop rate
 over long real use on 26300 (0.65). Changes the approved design (DESIGN-rest-zero-capture E/G) and M7's deaf-ladder bar.
+**Decided (owner, 2026-10-02):** "go on. and fail loudly (including user facing message) if capture really goes "deaf" someday. we
+have "no silent regressions" directive". So the cost above is narrowed, not removed: a stop is noticed at the user's next key or click
+into that window; the session is reopened once, and if the fresh session delivers nothing the window is declared DEAF (QGAWGCDEAF) and
+the user is told in dom0 through the error route - "a window of <app> stopped updating ... close and reopen that window" (generic
+wording when the name fails redaction; once per application per boot, at most 8 error notices per boot). Implemented in agent 9c709f5 (damage pokes no longer reach
+WGC slots; `DeafNotifyUser`) and broker 7eb2bf43 (the relay leaves the deaf ladder, stays a capture route); first shipped in rz29
+(release agent b46db12f88efe256). Measured in rz29's acceptance so far: the activity cell had 0 pokes, 0 recreates, 0 DEAF on every
+window; the M7 phases cell had 0 recreates (bar 0). The ladder and the user notification are graded in the two fault-injection cells.
