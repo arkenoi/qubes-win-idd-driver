@@ -66,6 +66,9 @@ local.WinResize       *  $DEV  dom0  allow
 # the service had been installed. Declaring it here makes 12 idempotent w.r.t. 13 (13 checks
 # for the line before appending, so it will not duplicate it).
 local.WinWedgeForensics *  $DEV  dom0  allow
+# The same holds for local.WinWedgeCore: 17-install-wedge-core-service.sh appends its grant to this file too, so a re-run of
+# this script silently revoked the memory-image service that names a stall's spinning code (found 2026-10-02, not yet hit).
+local.WinWedgeCore      *  $DEV  dom0  allow
 EOF
 
 echo "Installed $POLICY"
