@@ -80,7 +80,10 @@ If you ever need to do it by hand (e.g. the script cannot run):
 
 ```powershell
 Stop-Service QubesGuiWatchdog -Force
-Stop-Process -Name gui-agent -Force -ErrorAction SilentlyContinue
+# The stock watchdog leaves gui-agent.exe running. Ask it to exit through its own stop event and
+# wait for it to be gone - never kill a process by name (it may not be the one you think it is).
+$ev = [System.Threading.EventWaitHandle]::OpenExisting('Global\QGA_SHUTDOWN'); [void]$ev.Set(); $ev.Close()
+Get-Process gui-agent -ErrorAction SilentlyContinue | ForEach-Object { [void]$_.WaitForExit(10000) }
 Copy-Item 'C:\Program Files\Qubes Tools\bin\gui-agent.exe.orig' `
           'C:\Program Files\Qubes Tools\bin\gui-agent.exe' -Force
 Start-Service QubesGuiWatchdog

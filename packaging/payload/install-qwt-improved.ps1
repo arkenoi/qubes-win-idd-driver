@@ -292,20 +292,44 @@ if ($needWork.Count -eq 0) {
 }
 
 # ---------------------------------------------------------------- stop
+# ---- OVERLAY-STOP-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this block by marker)
+# THE OWNER STOPS ITS CHILD; this script kills nothing (owner's rule 2026-10-03, docs/ADR-updater.md
+# 12.4 - until then it Stop-Process'ed every process named gui-agent, i.e. any process with that name).
+# The watchdog service is stopped through the SCM first - it respawns gui-agent.exe while it lives -
+# and its own process (the pid the SCM reports for it, read before the stop) is waited on by handle.
+# The STOCK 4.2.2 watchdog this overlay targets does not take its agent down with it, so the agent
+# is then ASKED to exit through its own stop interface, Global\QGA_SHUTDOWN, and waited on by handle.
+# A survivor is reported with its pid and left alone; the copy below then fails on the open image
+# and says so.
 Write-Host "Stopping $SERVICE ..."
+$svcPid = 0
+$svcCim = Get-CimInstance Win32_Service -Filter "Name='$SERVICE'" -ErrorAction SilentlyContinue
+if ($svcCim) { $svcPid = [int]$svcCim.ProcessId }
+$svcProc = $null
+if ($svcPid -gt 0) { $svcProc = Get-Process -Id $svcPid -ErrorAction SilentlyContinue }
 Stop-Service $SERVICE -Force -ErrorAction SilentlyContinue
 for ($i = 0; $i -lt 20; $i++) {
     $s = Get-Service -Name $SERVICE -ErrorAction SilentlyContinue
     if (-not $s -or $s.Status -eq 'Stopped') { break }
     Start-Sleep -Seconds 1
 }
-# The watchdog respawns gui-agent.exe in the interactive session, so it must be gone first.
-Get-Process -Name $AGENTPROC -ErrorAction SilentlyContinue |
-    Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Seconds 2
+if ($svcProc -and -not $svcProc.WaitForExit(20000)) { Warn "$SERVICE process (pid $svcPid) still running 20 s after the service stop - not killed" }
+$agents = @(Get-Process -Name $AGENTPROC -ErrorAction SilentlyContinue)
+if ($agents.Count -gt 0) {
+    try {
+        $ev = [System.Threading.EventWaitHandle]::OpenExisting('Global\QGA_SHUTDOWN')
+        [void]$ev.Set()
+        $ev.Close()
+        foreach ($a in $agents) {
+            if (-not $a.WaitForExit(10000)) { Warn "gui-agent (pid $($a.Id)) did not exit within 10 s of QGA_SHUTDOWN - not killed; file replace may fail" }
+        }
+    } catch { Warn "Global\QGA_SHUTDOWN not open ($($_.Exception.Message)) - no graceful exit possible; nothing is killed" }
+}
+# GUARD:overlaybyname
 Refresh-Runtime
 $result.stopped_service = $result.service
-if ($result.agent_running) { Warn 'gui-agent still running after stop; file replace may fail' }
+if ($result.agent_running) { Warn 'gui-agent still running after the stop - not started by this script, NOT killed; file replace may fail' }
+# ---- OVERLAY-STOP-END
 
 # ---------------------------------------------------------------- copy (with retries: a
 # freshly-exited process can still hold the image file for a moment)

@@ -53,9 +53,71 @@ function Assert-GuiQuiesced([string]$When) {
     $live = @(Get-Process -Name 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost' -ErrorAction SilentlyContinue)
     if ($live.Count -gt 0) {
         throw ("gui-agent quiesce is NOT holding $When (" + (($live | ForEach-Object { "$($_.ProcessName)/$($_.Id)" }) -join ', ') +
-               ') - refusing to do display surgery under a live capture agent. Stop QubesGuiWatchdog by hand and re-run.')
+               ') - refusing to do display surgery under a live capture agent. These processes were not started by this ' +
+               'script and are NOT killed by it: stop the QubesGuiWatchdog service (or reboot the guest) and re-run.')
     }
 }
+# ---- ACTIVATE-SVC-STOP-BEGIN  (tools/tests/procown-sites-test.ps1 extracts these two functions by marker)
+# Stop a service through the SCM and wait for the service's OWN process: the pid the SCM reports for it
+# (Win32_Service.ProcessId), read BEFORE the stop (0 once Stopped) and held by handle. The owner's rule
+# (2026-10-03, docs/ADR-updater.md 12.4): nothing is killed or adopted by process NAME; this script owns
+# no process at all, so it kills nothing - it stops the OWNER (the watchdog service, which since
+# 2026-10-03 stops the agent it started before reporting STOPPED) and counts what is left. A duplicate
+# of the installer's helper, like the rest of this file (see the NOTE at the top).
+function Stop-ServiceProcess {
+    param([Parameter(Mandatory)][string]$Name, [int]$TimeoutSec = 20)
+    $r = [ordered]@{ present = $false; pid = 0; stopped = $false; gone = $true; detail = 'absent' }
+    $s = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    if (-not $s) { return $r }
+    $r.present = $true
+    $svcPid = 0
+    $ci = Get-CimInstance Win32_Service -Filter "Name='$Name'" -ErrorAction SilentlyContinue
+    if ($ci) { $svcPid = [int]$ci.ProcessId }
+    $proc = $null
+    if ($svcPid -gt 0) { $proc = Get-Process -Id $svcPid -ErrorAction SilentlyContinue }
+    $r.pid = $svcPid
+    if ($s.Status -ne 'Stopped') {
+        try { Stop-Service -Name $Name -Force -ErrorAction Stop } catch { Log "Stop-Service $Name threw: $($_.Exception.Message)" 'WARN' }
+        try { $s.WaitForStatus('Stopped', [TimeSpan]::FromSeconds($TimeoutSec)) } catch { }
+    }
+    $s = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    $r.stopped = (-not $s) -or ($s.Status -eq 'Stopped')
+    if ($proc) {
+        $exited = $false
+        try { $exited = $proc.WaitForExit($TimeoutSec * 1000) } catch { $exited = [bool]$proc.HasExited }
+        $r.gone = $exited
+    }
+    $r.detail = ('service=' + $(if ($r.stopped) { 'Stopped' } else { 'NOT stopped' }) + " pid=$svcPid process=" +
+                 $(if ($svcPid -eq 0) { 'none (the SCM reported no pid)' } elseif ($r.gone) { 'gone' } else { 'STILL RUNNING (not killed)' }))
+    return $r
+}
+# Ask gui-agent.exe to exit through its OWN stop interface, Global\QGA_SHUTDOWN (a fatal exit request the
+# agent honours by dropping its framebuffer grants, which process death never releases), then wait on the
+# handles. A request, never a kill: it is what lets a guest whose installed watchdog predates the
+# stop-own-child change quiesce at all. Returns the agents still alive afterwards.
+function Request-GuiAgentExit {
+    param([int]$WaitMs = 5000)
+    $agents = @(Get-Process -Name 'gui-agent' -ErrorAction SilentlyContinue)
+    if ($agents.Count -eq 0) { return @() }
+    try {
+        $ev = [System.Threading.EventWaitHandle]::OpenExisting('Global\QGA_SHUTDOWN')
+        [void]$ev.Set()
+        $ev.Close()
+        Log "signalled Global\QGA_SHUTDOWN - waiting up to $WaitMs ms for $($agents.Count) gui-agent.exe to exit"
+    } catch {
+        Log 'Global\QGA_SHUTDOWN not open (agent not listening, or no access) - no graceful exit possible; nothing is killed'
+        return $agents
+    }
+    $left = @()
+    foreach ($a in $agents) {
+        $gone = $false
+        try { $gone = $a.WaitForExit($WaitMs) } catch { $gone = $false }
+        if ($gone) { Log "  gui-agent.exe (pid $($a.Id)) exited gracefully" }
+        else { Log "  gui-agent.exe (pid $($a.Id)) did NOT exit within $WaitMs ms of QGA_SHUTDOWN - not killed" 'WARN'; $left += $a }
+    }
+    return $left
+}
+# ---- ACTIVATE-SVC-STOP-END
 
 function Emit($code){
     $result.idd = "$($script:idd)"
@@ -156,40 +218,52 @@ try {
     # is the display surgery the installer's stage 2 stopped doing under a live agent on 2026-09-08
     # (a clean install froze dead inside that state); /iddonly reached the same state through this
     # entry point, which the installer's fix did not cover, and the 5 s reboot at the end never
-    # arrives if the guest wedges first. Same recipe as the installer: watchdog first (it respawns
-    # the agent ~1 s after it dies), then the agent and the helpers it launches; the helpers'
-    # scheduled tasks are deleted so a `schtasks /run` already queued cannot start a WGC broker into
-    # the session mid-surgery (the agent recreates them on every launch). WaitForExit on each handle
-    # - Kill() returns before the process is gone.
+    # arrives if the guest wedges first. Same recipe as the installer: the watchdog SERVICE is stopped
+    # through the SCM and its own process waited on (the owner stops its child: since 2026-10-03 the
+    # watchdog takes the agent it started down with it); the helpers' scheduled tasks - ours, the agent
+    # registers them - are deleted so a `schtasks /run` already queued cannot start a WGC broker into
+    # the session mid-surgery; the agent is ASKED to exit through its own stop event (for a guest whose
+    # installed watchdog predates the change); the helpers leave on their own agent-liveness exits and
+    # are waited for, counted by name. NOTHING IS KILLED: until 2026-10-03 this block Kill()ed every
+    # process named gui-watchdog, gui-agent, wgcbroker or notifhost - any process with those names,
+    # none of them started by this script (owner's rule, docs/ADR-updater.md 12.4). A survivor is
+    # named, with its pid, by the assertion below, which refuses the surgery.
+    # ---- ACTIVATE-QUIESCE-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this block by marker)
     try {
         $wd = Get-Service -Name 'QubesGuiWatchdog' -ErrorAction SilentlyContinue
         if ($wd -and $wd.Status -ne 'Stopped') {
             Log 'stopping QubesGuiWatchdog for the device work (back after the reboot, or restarted if this run does not reboot)'
-            Stop-Service -Name 'QubesGuiWatchdog' -Force -ErrorAction Stop
-            $script:GuiQuiesced = $true
+            $wdStop = Stop-ServiceProcess -Name 'QubesGuiWatchdog' -TimeoutSec 30
+            Log "QubesGuiWatchdog: $($wdStop.detail)"
+            $script:GuiQuiesced = [bool]$wdStop.stopped   # the SERVICE reached Stopped (what Restore-Gui restarts)
         } else {
             Log 'QubesGuiWatchdog not running - nothing to quiesce before the device work'
         }
     } catch {
-        Log "could not stop QubesGuiWatchdog: $($_.Exception.Message) - killing its process below; if that does not hold either, the activation refuses to run" 'WARN'
+        Log "could not stop QubesGuiWatchdog: $($_.Exception.Message) - nothing is killed in its place; if the agent is still running, the activation refuses to run" 'WARN'
     }
     foreach ($tn in 'Qubes-WgcBroker', 'Qubes-NotifBridge', 'Qubes-NotifRestore', 'Qubes-NotifDirect') {
         try { & schtasks.exe /End /TN $tn *>$null } catch { }
         try { & schtasks.exe /Delete /TN $tn /F *>$null } catch { }
     }
     $global:LASTEXITCODE = 0
-    foreach ($pn in 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost') {
-        foreach ($pr in @(Get-Process -Name $pn -ErrorAction SilentlyContinue)) {
-            try   { $pr.Kill(); [void]$pr.WaitForExit(5000); $script:GuiQuiesced = $true; Log "  stopped $pn (pid $($pr.Id))" }
-            catch { Log "  could not stop $pn (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
-        }
+    $null = Request-GuiAgentExit -WaitMs 8000
+    # the helpers' own exits: wgcbroker within 10 s of the agent's heartbeat stopping, the bridge on the
+    # agent's stop file or its 30 s agent probe (P3 in findings/issues.md: Get-Process lists them under
+    # their 8.3 names WGCBRO~1 / NOTIFH~1 - a blind spot this change does not alter)
+    $helperDeadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $helperDeadline) {
+        if (@(Get-Process -Name 'gui-agent', 'wgcbroker', 'notifhost' -ErrorAction SilentlyContinue).Count -eq 0) { break }
+        Start-Sleep -Milliseconds 500
     }
+    # GUARD:activatebyname
     # let an in-flight AcquireNextFrame and the framebuffer grant go away before a device moves under them
     if ($script:GuiQuiesced) { Start-Sleep -Seconds 3 }
     $result['gui_quiesced'] = $script:GuiQuiesced
     # A quiesce that quietly failed leaves the surgery running under a live agent while the log says
     # it was quiesced - refuse (loud failure path, VGA untouched) rather than enter the freeze knowingly.
     Assert-GuiQuiesced 'before staging the driver'
+    # ---- ACTIVATE-QUIESCE-END
 
     # ---- identical-bytes guard + self-heal (FINDINGS 2026-08-27, the withdrawn 4.3.8) --------
     # Staging a package whose DLL is BYTE-IDENTICAL to the one already running re-binds the

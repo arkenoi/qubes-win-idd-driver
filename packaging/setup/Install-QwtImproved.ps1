@@ -360,6 +360,55 @@ function Test-TestSigningActive {
     return ($v -and $v -match 'TESTSIGNING')
 }
 
+# ---- SVC-STOP-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this function by marker)
+function Stop-ServiceProcess {
+    # Stop a Windows service through the SCM and wait for the service's OWN process to exit: the pid
+    # the SCM reports for it (Win32_Service.ProcessId), read BEFORE the stop - it is 0 once the service
+    # is Stopped - and held by HANDLE from then on. THE OWNER'S RULE (2026-10-03, docs/ADR-updater.md
+    # 12.4): a component touches only processes it started or owns, by handle; nothing is ever killed
+    # or adopted by process NAME. The SCM is the owner here and its pid is the identity, so that pid is
+    # the only process this function waits on and - with -TerminateSurvivor - the only one it may end.
+    # A process that merely carries the service's exe name is the callers' business: counted and
+    # reported, never touched. A stopped SERVICE and a dead PROCESS are different facts (the SCM reports
+    # Stopped while the image is still being torn down); 'gone' is the one the callers may build on.
+    param([Parameter(Mandatory)][string]$Name, [int]$TimeoutSec = 20, [switch]$TerminateSurvivor)
+    $r = [ordered]@{ present = $false; pid = 0; stopped = $false; gone = $true; survivor = $null; detail = 'absent' }
+    $s = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    if (-not $s) { return $r }
+    $r.present = $true
+    $svcPid = 0
+    try { $svcPid = [int](Get-CimInstance Win32_Service -Filter "Name='$Name'" -ErrorAction SilentlyContinue).ProcessId } catch { $svcPid = 0 }   # GUARD:svcpid
+    $proc = $null
+    if ($svcPid -gt 0) { $proc = Get-Process -Id $svcPid -ErrorAction SilentlyContinue }
+    $r.pid = $svcPid
+    if ($s.Status -ne 'Stopped') {
+        try { Stop-Service -Name $Name -Force -ErrorAction Stop } catch { Write-Log "Stop-Service $Name threw: $($_.Exception.Message)" 'WARN' }
+        # The SCM state, not a fixed sleep - and then the process, below, because this state is not it.
+        try { $s.WaitForStatus('Stopped', [TimeSpan]::FromSeconds($TimeoutSec)) } catch { }
+    }
+    $s = Get-Service -Name $Name -ErrorAction SilentlyContinue
+    $r.stopped = (-not $s) -or ($s.Status -eq 'Stopped')
+    if ($proc) {
+        $exited = $false
+        try { $exited = $proc.WaitForExit($TimeoutSec * 1000) } catch { $exited = [bool]$proc.HasExited }
+        if (-not $exited) {
+            $r.gone = $false
+            $r.survivor = $proc
+            if ($TerminateSurvivor) {
+                Write-Log "$Name service process (pid $svcPid, the pid the SCM reported for it) is still running $TimeoutSec s after the stop - terminating THAT pid" 'WARN'
+                try { $proc.Kill() } catch { Write-Log "  could not terminate pid ${svcPid}: $($_.Exception.Message)" 'WARN' }
+                try { $exited = $proc.WaitForExit(5000) } catch { $exited = [bool]$proc.HasExited }
+                $r.gone = $exited
+                if ($exited) { $r.survivor = $null }
+            }
+        }
+    }
+    $r.detail = ('service=' + $(if ($r.stopped) { 'Stopped' } else { 'NOT stopped' }) + " pid=$svcPid process=" +
+                 $(if ($svcPid -eq 0) { 'none (the SCM reported no pid)' } elseif ($r.gone) { 'gone' } else { 'STILL RUNNING' }))
+    return $r
+}
+# ---- SVC-STOP-END
+
 function Disable-XenbusMonitor {
     # -FatalIfSurvives: the call sites that are about to run msiexec pass it. A monitor process
     # that outlives the kill answers the reboot request the PV driver install files and restarts
@@ -417,65 +466,49 @@ function Disable-XenbusMonitor {
         # Never fatal: not clearing the request costs a prompt, failing here costs the install.
         Write-Log "could not clear xenbus_monitor\Request: $($_.Exception.Message) (continuing)" 'WARN'
     }
+    # ---- XBM-STOP-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this block by marker)
     $svc = Get-Service xenbus_monitor -ErrorAction SilentlyContinue
     if ($svc) {
         & sc.exe config xenbus_monitor start= disabled 2>&1 | Out-Null
-        if ($svc.Status -ne 'Stopped') {
-            & sc.exe stop xenbus_monitor 2>&1 | Out-Null
-            # Wait on the SCM state rather than 500 ms: the timing decided whether the process kill
-            # below saw a stopping service or a stopped one, and neither outcome was recorded.
-            try { $svc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(10)) }
-            catch { Write-Log "xenbus_monitor service did not reach Stopped within 10 s - killing the process regardless" 'WARN' }
-        }
+        # STOP IT THROUGH ITS OWNER AND WAIT FOR ITS PROCESS - this is what actually keeps guests out
+        # of Automatic Repair. A monitor process that outlives the stop answers the reboot request the
+        # PV driver install files during msiexec and restarts the guest mid-install - Windows event
+        # 1074, "xenbus_monitor_9_1_0_0.exe has initiated the restart ... Operating System: Recovery
+        # (Planned)" - leaving a guest that boots to Automatic Repair or runs headless with no qrexec
+        # (measured 2026-08-28, reproduced 5/5). A stopped SERVICE and a dead PROCESS are different
+        # facts, and only the second one is safe to start msiexec on: the SCM reports Stopped while the
+        # process is still exiting, so the wait is on the process the SCM NAMED FOR THE SERVICE
+        # (Win32_Service.ProcessId, read before the stop), by handle. If that process survives the
+        # bound it is terminated - THAT pid, the SCM's own, and nothing else. The by-name kill that
+        # stood here until 2026-10-03 (`Get-Process xenbus_monitor* | Stop-Process`, then taskkill /T
+        # on every match) ended any process with that name, which is a decision about something this
+        # installer did not start and cannot identify (owner's rule, docs/ADR-updater.md 12.4).
+        $xbmStop = Stop-ServiceProcess -Name 'xenbus_monitor' -TimeoutSec 10 -TerminateSurvivor
+        Write-Log "xenbus_monitor: $($xbmStop.detail)"
     }
-    # KILL THE PROCESS UNCONDITIONALLY - this is what actually bricks guests.
-    #
-    # Measured 2026-08-28. On an UPGRADE the service is already `Disabled` (a previous QWT
-    # install disabled it) yet a monitor process from that earlier boot is still RUNNING, and
-    # disabling a service does nothing to a process already in memory. That survivor sees the
-    # reboot request the PV driver install files during msiexec and restarts the guest mid-install
-    # - Windows event 1074, "xenbus_monitor_9_1_0_0.exe has initiated the restart ... Operating
-    # System: Recovery (Planned)" - leaving a guest that boots to Automatic Repair or runs
-    # headless with no qrexec. Reproduced 5/5.
-    #
-    # The previous version could not prevent it: the kill sat behind "if the service STILL is not
-    # Stopped after sc stop", so the moment SCM reported success - which it does while the process
-    # is still exiting, and always for a process that is not under SCM control - the kill was
-    # skipped and the survivor did the damage. A stopped SERVICE and a dead PROCESS are different
-    # facts, and only the second one is safe to start msiexec on.
-    $killed = @()
-    foreach ($p in @(Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue)) {
-        $killed += "$($p.Name)($($p.Id))"
-        try { $p | Stop-Process -Force -ErrorAction Stop } catch { Write-Log "could not kill $($p.Name) ($($p.Id)): $($_.Exception.Message)" 'WARN' }
-        # Wait on the handle we already hold. The 300 ms re-enumeration that replaced this was a coin
-        # toss: a process mid-exit at 300 ms read as a survivor, one gone at 301 ms as clean.
-        try { [void]$p.WaitForExit(5000) } catch { }
-    }
-    if ($killed.Count) { Write-Log "killed running monitor process(es): $($killed -join ', ')" }
-    # And VERIFY, because a survivor here is the difference between an install and a brick.
+    # GUARD:xbmbyname
+    # VERIFY BY COUNTING, because a survivor here is the difference between an install and a brick.
+    # A monitor process the SCM does not own - the shape measured 2026-08-28: a Disabled/Stopped
+    # service (a previous install disabled it) with a monitor process still in memory from before -
+    # is found by name, REPORTED with its pid and NOT killed. With -FatalIfSurvives the installer
+    # refuses to start msiexec under it (an install can be retried, a bricked guest cannot); the
+    # per-boot enforcement in pvnic-selfprime's payload keeps the service from starting again, so a
+    # reboot clears the state.
     $alive = @(Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue)
-    if ($alive.Count) {
-        # Second attempt with the hammer that also takes the process tree, then WAIT on the handles
-        # instead of re-enumerating after a fixed sleep - Stop-Process returning is not the process
-        # being gone.
-        foreach ($p in $alive) {
-            try { & taskkill.exe /F /T /PID $p.Id *>$null } catch { }
-            try { [void]$p.WaitForExit(5000) } catch { }
-        }
-        $alive = @(Get-Process -Name 'xenbus_monitor*' -ErrorAction SilentlyContinue)
-    }
     if ($alive.Count) {
         $who = (($alive | ForEach-Object { "$($_.Name)($($_.Id))" }) -join ', ')
         $script:Result.detail.xenbus_monitor_survivors = @($alive | ForEach-Object { $_.Id })
         if ($FatalIfSurvives) {
-            Fail ("xenbus_monitor STILL RUNNING after two kill attempts: $who - REFUSING to start " +
-                  'msiexec under it. That process answers the reboot request the PV driver install ' +
-                  'files and restarts the guest mid-install (Automatic Repair / headless, reproduced ' +
-                  "5/5). Stop it and re-run. [$Why]")
+            Fail ("xenbus_monitor STILL RUNNING after the service stop: $who - not the pid the SCM reported for the " +
+                  'service, so not a process this installer owns, and it is NOT killed. REFUSING to start msiexec under ' +
+                  'it: that process answers the reboot request the PV driver install files and restarts the guest ' +
+                  'mid-install (Automatic Repair / headless, reproduced 5/5). Reboot the guest (the per-boot enforcement ' +
+                  "keeps the service off) and re-run. [$Why]")
         }
-        Write-Log ("xenbus_monitor STILL RUNNING after the kill: $who" +
-                   ' - it can restart the guest during the install') 'WARN'
+        Write-Log ("xenbus_monitor STILL RUNNING after the service stop: $who - not owned by the SCM, NOT killed; " +
+                   'it can restart the guest during the install') 'WARN'
     }
+    # ---- XBM-STOP-END
     $state = if ($svc) { "was $($svc.StartType)/$($svc.Status)" } else { 'service not present yet' }
     $reason = if ($Why) { " [$Why]" } else { '' }
     Write-Log "xenbus_monitor disabled, AutoReboot=0 ($state)$reason"
@@ -718,45 +751,42 @@ function Request-GuiAgentExit {
     return $left
 }
 
+# ---- QWT-RUNTIME-STOP-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this function by marker)
 function Stop-QwtRuntime {
-    # ORDER: the watchdog SERVICE first, then the graceful agent exit, then the hammer on survivors.
-    # The service stop is synchronous (STOPPED is reported only once the respawn loop has exited),
-    # so after it nothing relaunches the agent and QGA_SHUTDOWN can do what it is for - the agent
-    # drops the framebuffer grants itself instead of leaving them held by a killed process. The old
-    # order (signal, sleep 5 s, then stop the service) had the watchdog respawn the agent within a
-    # second of its graceful exit and force-killed the respawn.
-    $s = Get-Service -Name $script:GuiWatchdogSvc -ErrorAction SilentlyContinue
-    if ($s) {
-        try { Stop-Service -Name $script:GuiWatchdogSvc -Force -ErrorAction SilentlyContinue } catch { }
-        # Wait on the SCM state, not a 1 s poll: the terminal state is what the next step depends on.
-        try { $s.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(20)) }
-        catch { Write-Log "service $script:GuiWatchdogSvc did not reach Stopped within 20 s ($($_.Exception.Message))" 'WARN' }
-        $s = Get-Service -Name $script:GuiWatchdogSvc -ErrorAction SilentlyContinue
-        $state = 'absent'
-        if ($s) { $state = [string]$s.Status }
-        Write-Log "service $script:GuiWatchdogSvc is $state"
-    } else {
-        Write-Log "service $script:GuiWatchdogSvc not installed"
-    }
+    # ORDER: the watchdog SERVICE first - through the SCM, waiting for the service's own process (its
+    # SCM-reported pid, by handle) - then the graceful agent exit request, then a COUNT of what is left.
+    # The service stop is synchronous (STOPPED is reported only once the respawn loop has exited and,
+    # since 2026-10-03, only once the watchdog has stopped the agent IT started - watchdog.c
+    # StopOwnAgent), so after it nothing relaunches the agent and QGA_SHUTDOWN can do what it is for -
+    # the agent drops the framebuffer grants itself instead of leaving them held by a killed process.
+    # The old order (signal, sleep 5 s, then stop the service) had the watchdog respawn the agent within
+    # a second of its graceful exit and force-killed the respawn.
+    # NOTHING IS KILLED BY NAME (owner's rule 2026-10-03, docs/ADR-updater.md 12.4). Until then the
+    # survivors - "a watchdog process outside SCM control, or an agent that ignored QGA_SHUTDOWN" - were
+    # Get-Process -Name'd and Stop-Process'ed here: any process with that name, i.e. something this
+    # installer did not start. A survivor is now REPORTED with its pid (log + gui_runtime_survivors, an
+    # error-class detail the harness grades) and left alone; the leftover sweep that follows renames the
+    # binaries, which Windows allows on an open image. The graceful request stays: on an upgrade the
+    # INSTALLED watchdog predates the stop-own-child change and leaves its agent running when its service
+    # stops, and QGA_SHUTDOWN is the agent's own documented stop interface - a request, not a kill.
+    $wdStop = Stop-ServiceProcess -Name $script:GuiWatchdogSvc -TimeoutSec 20
+    if ($wdStop.present) { Write-Log "service $script:GuiWatchdogSvc`: $($wdStop.detail)" }
+    else { Write-Log "service $script:GuiWatchdogSvc not installed" }
 
     [void](Request-GuiAgentExit -WaitMs 5000)
 
-    # Survivors: a watchdog process outside SCM control, or an agent that ignored QGA_SHUTDOWN.
-    # Kill and WAIT ON EACH HANDLE - Stop-Process returns before the image is torn down, and the
-    # leftover sweep that follows renames these very files; a fixed 2 s was the only ordering.
+    # GUARD:runtimebyname
+    $left = @()
     foreach ($proc in 'gui-agent', 'gui-watchdog') {
-        $ps = @(Get-Process -Name $proc -ErrorAction SilentlyContinue)
-        if ($ps.Count -gt 0) {
-            Write-Log "force-terminating $($ps.Count) x $proc.exe"
-            foreach ($pr in $ps) {
-                try { $pr | Stop-Process -Force -ErrorAction Stop } catch { Write-Log "  could not kill $proc (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
-                $gone = $false
-                try { $gone = $pr.WaitForExit(5000) } catch { $gone = $false }
-                if (-not $gone) { Write-Log "  $proc (pid $($pr.Id)) still not gone 5 s after the kill" 'WARN' }
-            }
-        }
+        foreach ($pr in @(Get-Process -Name $proc -ErrorAction SilentlyContinue)) { $left += "$proc/$($pr.Id)" }
+    }
+    if ($left.Count -gt 0) {
+        $script:Result.detail.gui_runtime_survivors = ($left -join ',')
+        Write-Log ("still running after the service stop and the exit request: " + ($left -join ', ') +
+                   ' - not started by this installer, NOT killed; the sweep renames the binaries around it') 'WARN'
     }
 }
+# ---- QWT-RUNTIME-STOP-END
 
 function Remove-QwtLeftovers {
     param([Parameter(Mandatory)][string]$BinDir, [Parameter(Mandatory)][string[]]$Files)
@@ -2669,79 +2699,66 @@ function Invoke-Stage2 {
     # Result.reboot_needed is a REPORT, the restart itself happens only under -Auto -RebootAtEnd);
     # on the rebooting path the untouched service start types bring it back on the next boot, with
     # the device topology already final.
+    # ---- GUI-QUIESCE-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this block by marker)
     $script:GuiQuiesced = $false
     try {
         $wd = Get-Service -Name 'QubesGuiWatchdog' -ErrorAction SilentlyContinue
         if ($wd -and $wd.Status -ne 'Stopped') {
             Warn-DisplayBlackout
             Write-Log 'stopping QubesGuiWatchdog for the rest of stage 2 (restarted at the end of the stage, or by the reboot)'
-            Stop-Service -Name 'QubesGuiWatchdog' -Force -ErrorAction Stop
-            $script:GuiQuiesced = $true
+            # THE OWNER STOPS ITS CHILD. The watchdog started gui-agent.exe and holds its handle; since
+            # 2026-10-03 (watchdog.c StopOwnAgent) its service stop signals QGA_SHUTDOWN, waits on that
+            # handle, terminates it if it must, and reports STOPPED only once the agent is gone. So the
+            # whole quiesce is: stop the SERVICE and wait for the service's own process (its SCM-reported
+            # pid, by handle). Nothing here finds a process by name and kills it - that was this block
+            # until 2026-10-03 (gui-watchdog, then gui-agent/wgcbroker/notifhost, each Get-Process -Name'd
+            # and Kill()ed: any process with that name, i.e. something this installer did not start;
+            # owner's rule, docs/ADR-updater.md 12.4).
+            $wdStop = Stop-ServiceProcess -Name 'QubesGuiWatchdog' -TimeoutSec 30
+            Write-Log "QubesGuiWatchdog: $($wdStop.detail)"
+            # Quiesced = the SERVICE reached Stopped (a stop that threw inside the helper did not; the
+            # survivor count below says so). This is also what the end of the stage restarts.
+            $script:GuiQuiesced = [bool]$wdStop.stopped
         } else {
             Write-Log 'QubesGuiWatchdog not running - nothing to quiesce before the stage-2 device work'
         }
     } catch {
-        Write-Log ("could not stop QubesGuiWatchdog: $($_.Exception.Message) - killing its process below; " +
-                   'if that does not hold either, the IDD activation refuses to run') 'WARN'
+        Write-Log ("could not stop QubesGuiWatchdog: $($_.Exception.Message) - nothing is killed in its place; " +
+                   'if the agent is still running after the settle, the IDD activation refuses to run') 'WARN'
     }
-    # CLOSE THE ASYNC LAUNCH WINDOW before killing anything. The agent starts wgcbroker/notifhost
-    # through Task Scheduler (`schtasks /run`, asynchronous) and its supervisors re-issue that every
-    # few seconds; a /run already queued when the agent dies still starts the helper into the session
-    # a moment later - a capture broker holding a WGC session on the monitor exactly while the IDD is
-    # created and the adapter disabled. The agent recreates these tasks on every launch (delete +
-    # create + run), so deleting the definitions costs nothing and makes a queued start impossible.
+    # CLOSE THE ASYNC LAUNCH WINDOW. The agent starts wgcbroker/notifhost through Task Scheduler
+    # (`schtasks /run`, asynchronous) and its supervisors re-issue that every few seconds; a /run
+    # already queued when the agent exits still starts the helper into the session a moment later - a
+    # capture broker holding a WGC session on the monitor exactly while the IDD is created and the
+    # adapter disabled. The agent recreates these tasks on every launch (delete + create + run), so
+    # deleting the definitions costs nothing and makes a queued start impossible. These are OUR tasks,
+    # registered by our agent; ending a task we own is not a kill by process name.
     foreach ($tn in 'Qubes-WgcBroker', 'Qubes-NotifBridge', 'Qubes-NotifRestore', 'Qubes-NotifDirect') {
         try { & schtasks.exe /End /TN $tn *>$null } catch { }
         try { & schtasks.exe /Delete /TN $tn /F *>$null } catch { }
     }
     $global:LASTEXITCODE = 0
-    # GRACEFUL FIRST, now that the respawner is stopped: QGA_SHUTDOWN lets the agent drop its
-    # framebuffer grants itself. This quiesce used to go straight to Kill(), leaving the grants held
-    # by a killed process for the device surgery to run under. Only if the watchdog process is
-    # provably not respawning - the service stop succeeded - or a respawn would defeat it.
-    # (moved below the respawner kill - see the note there)
-    # KILL THE RESPAWNER FIRST, then what it respawns. gui-watchdog.exe relaunches gui-agent.exe
-    # about a second after it dies, so killing only the agent does not quiesce anything: if
-    # Stop-Service above threw (SCM busy right after the MSI's StartServices is exactly when it
-    # does), the watchdog is still alive and the 3 s settle below GUARANTEES the agent is back
-    # before the display surgery runs. That was the shape of the original 2026-09-08 freeze and
-    # the first version of this quiesce did not prevent it. Order matters: watchdog, then agent.
-    # WaitForExit on each handle: Kill() returns before the process is gone, and a fixed sleep was
-    # the only ordering guarantee.
-    # 1. THE RESPAWNER, unconditionally. gui-watchdog.exe relaunches gui-agent.exe about a second
-    #    after it dies, so nothing below holds while it lives.
-    foreach ($pr in @(Get-Process -Name 'gui-watchdog' -ErrorAction SilentlyContinue)) {
-        try   { $pr.Kill(); [void]$pr.WaitForExit(5000); $script:GuiQuiesced = $true; Write-Log "  stopped gui-watchdog (pid $($pr.Id))" }
-        catch { Write-Log "  could not stop gui-watchdog (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
-    }
-
-    # 2. NOW ASK THE AGENT TO EXIT ITSELF, and do it UNCONDITIONALLY. This request used to be
-    #    gated on the WATCHDOG SERVICE stop having succeeded - and the note above records that that
-    #    stop throws exactly when it matters, "right after the MSI's StartServices". So in the
-    #    common case the gate was false, the graceful request was skipped, and the agent was
-    #    KILLED with its grants still held.
-    #
-    #    That matters because grants are NOT released by process death: capture.c says so at its
-    #    revoke site - "grants are not automatically revoked when the xeniface device handle is
-    #    closed" - and the whole-desktop framebuffer grant plus the staging grant are revoked ONLY
-    #    on the agent's own exit path. Killing it leaves dom0 mapping pages of a dead process while
-    #    stage 2 goes on to install xenvif and xencons, create the IDD device and disable the
-    #    adapter - i.e. re-enumerate xenbus children underneath orphaned grants.
-    #
-    #    The respawner is already dead at this point, so there is nothing left for the gate to
-    #    protect against. If the agent does not go within the budget, the kill below still runs.
+    # THE GRACEFUL REQUEST, as a belt. With the new watchdog the service stop has already taken the
+    # agent down and this finds nothing. It matters when the watchdog stop above threw (SCM busy right
+    # after the MSI's StartServices is exactly when it does) or when an agent no watchdog owns is
+    # running: QGA_SHUTDOWN is the agent's own stop interface and lets it drop its framebuffer grants
+    # itself. Grants are NOT released by process death - capture.c at its revoke site: "grants are not
+    # automatically revoked when the xeniface device handle is closed" - only on the agent's own exit
+    # path, which is why this quiesce asks and never kills: a killed agent leaves dom0 mapping pages
+    # of a dead process while stage 2 re-enumerates xenbus children under them. Asks and waits by
+    # handle; survivors are counted below.
     $null = Request-GuiAgentExit -WaitMs 8000
-    foreach ($pr in @(Get-Process -Name 'gui-agent' -ErrorAction SilentlyContinue)) {
-        Write-Log "  gui-agent (pid $($pr.Id)) did not exit on QGA_SHUTDOWN - killing, grants stay held" 'WARN'
+    # THE HELPERS LEAVE ON THEIR OWN. wgcbroker exits when the agent's section says Shutdown, when the
+    # agent's process ends, or after 10 s without the agent's heartbeat; the toast bridge polls the
+    # agent's stop file every pass and probes the agent every 30 s. Wait for them, bounded, counting by
+    # name - counting is not a kill. (findings/issues.md P3: Get-Process lists the broker and the bridge
+    # under their 8.3 names WGCBRO~1 / NOTIFH~1, a blind spot this change does not alter.)
+    $helperDeadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $helperDeadline) {
+        if (@(Get-Process -Name 'gui-agent', 'wgcbroker', 'notifhost' -ErrorAction SilentlyContinue).Count -eq 0) { break }
+        Start-Sleep -Milliseconds 500
     }
-
-    # 3. Whatever is still standing.
-    foreach ($pn in 'gui-agent', 'wgcbroker', 'notifhost') {
-        foreach ($pr in @(Get-Process -Name $pn -ErrorAction SilentlyContinue)) {
-            try   { $pr.Kill(); [void]$pr.WaitForExit(5000); $script:GuiQuiesced = $true; Write-Log "  stopped $pn (pid $($pr.Id))" }
-            catch { Write-Log "  could not stop $pn (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
-        }
-    }
+    # GUARD:quiescebyname
     # Let an in-flight AcquireNextFrame and the framebuffer grant go away before any device moves
     # under them: the agent re-grants on resolution change, and that path reaches into the kernel
     # (xeniface gnttab IOCTLs).
@@ -2750,16 +2767,18 @@ function Invoke-Stage2 {
     # capture agent - the condition it exists to remove - while the log says it was quiesced. The
     # IDD activation below REFUSES to run when this did not hold (it throws into its loud failure
     # path, VGA untouched) - the surgery under a live agent is the 2026-09-08 freeze, and entering it
-    # knowingly with an ERROR line attached is not a defined path either.
+    # knowingly with an ERROR line attached is not a defined path either. The survivors are REPORTED
+    # with their pids and NOT killed: they are not this installer's processes.
     $stillUp = @(Get-Process -Name 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost' -ErrorAction SilentlyContinue)
     $script:GuiQuiesceHeld = ($stillUp.Count -eq 0)
     if ($stillUp.Count -gt 0) {
         Write-Log ('QUIESCE DID NOT HOLD: still running after the settle - ' +
                    (($stillUp | ForEach-Object { "$($_.ProcessName)/$($_.Id)" }) -join ', ') +
-                   '. The IDD activation will refuse to run under a live capture agent.') 'ERROR'
+                   ' - not killed (not started by this installer). The IDD activation will refuse to run under a live capture agent.') 'ERROR'
         $script:Result.detail.gui_quiesce_failed = (($stillUp | ForEach-Object { $_.ProcessName }) -join ',')
     }
     $script:Result.detail.gui_quiesced_for_stage2 = $script:GuiQuiesced
+    # ---- GUI-QUIESCE-END
 
     # --- Start Menu qube-app shortcut: NOT INSTALLED (see docs/PLAN-start-menu.md) ------
     # The agent does not present the Start menu in seamless mode (user decision
@@ -2911,28 +2930,28 @@ function Invoke-Stage2 {
     # degrades gracefully. detail.idd_driver records how far it got either way.
     $script:Result.detail.idd_driver = 'skipped (/noidd)'
     if (-not $NoIddDriver) {
+      # ---- GUI-REASSERT-BEGIN  (tools/tests/procown-sites-test.ps1 extracts this block by marker)
       # RE-ASSERT the quiesce done at the end of the MSI phase. It should find nothing; if it
       # finds a live agent, something restarted it and the display surgery below would once again
-      # run under a live capture path - so that is recorded, not silently tolerated.
+      # run under a live capture path - so that is recorded, not silently tolerated. Recorded and
+      # REPORTED, with pids, nothing more: until 2026-10-03 every process found here was Kill()ed by
+      # name, a decision about something this installer did not start (owner's rule, docs/ADR-updater.md
+      # 12.4). The assertion right below refuses the surgery while any of them lives.
       $reappeared = @()
-      foreach ($pn in 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost') {
-          foreach ($pr in @(Get-Process -Name $pn -ErrorAction SilentlyContinue)) {
-              $reappeared += $pn
-              try   { $pr.Kill(); [void]$pr.WaitForExit(5000); Write-Log "  re-stopped $pn (pid $($pr.Id)) before the display surgery" 'WARN' }
-              catch { Write-Log "  could not re-stop $pn (pid $($pr.Id)): $($_.Exception.Message)" 'WARN' }
-          }
+      foreach ($pr in @(Get-Process -Name 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost' -ErrorAction SilentlyContinue)) {
+          $reappeared += "$($pr.ProcessName)/$($pr.Id)"
+          # GUARD:reassertbyname
       }
       if ($reappeared.Count -gt 0) {
           Write-Log ("the gui-agent came back during stage 2 (" + ($reappeared -join ', ') +
-                     ") - the quiesce is not holding, investigate") 'WARN'
+                     ") - the quiesce is not holding; not killed (not started by this installer), investigate") 'WARN'
           $script:Result.detail.idd_gui_reappeared = ($reappeared -join ',')
       }
+      # ---- GUI-REASSERT-END
       # The display surgery runs ONLY under a quiesce that is proven to hold, here and again right
       # before the adapter is disabled (60+ s later, after two bind waits). A live agent/broker at
       # either point throws into the loud 'IDD ACTIVATION FAILED' path with the VGA untouched, rather
-      # than entering the state that froze the VM on 2026-09-08 with a WARN attached. The kill above
-      # does not count as quiescing: gui-watchdog.exe respawns the agent within ~1 s when the
-      # service stop failed, which is exactly the case this catches.
+      # than entering the state that froze the VM on 2026-09-08 with a WARN attached.
       $assertQuiesced = {
           param([string]$When)
           $live = @(Get-Process -Name 'gui-watchdog', 'gui-agent', 'wgcbroker', 'notifhost' -ErrorAction SilentlyContinue)
@@ -4095,6 +4114,7 @@ public static class QdbPrime {
     if ($dd.pvnic_prime_failed -eq $true)                           { $errFlags += 'pvnic_prime_failed' }
     if ($dd.vchan_prestop_failed -eq $true)                         { $errFlags += 'vchan_prestop_failed' }
     if ("$($dd.gui_quiesce_failed)" -ne '')                         { $errFlags += 'gui_quiesce_failed' }
+    if ("$($dd.gui_runtime_survivors)" -ne '')                      { $errFlags += 'gui_runtime_survivors' }
     if ("$($dd.gui_restored)" -like 'FAILED*')                      { $errFlags += 'gui_restored' }
     if ("$($dd.pv_xenvif)" -like 'failed*')                         { $errFlags += 'pv_xenvif' }
     if ("$($dd.pnp_settle)" -like 'unavailable*')                   { $errFlags += 'pnp_settle' }
